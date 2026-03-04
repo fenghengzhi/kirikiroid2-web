@@ -8,6 +8,7 @@
 #include "platform/CCStdC.h"
 
 #include <SDL2/SDL.h>
+#include <set>
 
 NS_CC_BEGIN
 
@@ -46,6 +47,9 @@ protected:
 
     SDL_Window* _sdlWindow;
     SDL_GLContext _sdlGLContext;
+
+    bool _touchActive = false;
+    std::set<intptr_t> _activeTouchIds;
 
     void handleSDLEvents();
     void onMouseEvent(SDL_Event& event);

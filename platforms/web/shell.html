@@ -35,6 +35,7 @@
             height: 100%;
             border: none;
             outline: none;
+            touch-action: none;
         }
 
         #loading {
@@ -120,78 +121,133 @@
             line-height: 1.6;
         }
 
-        #upload-bar {
-            position: fixed;
-            top: 8px;
-            right: 8px;
-            z-index: 300;
-            display: flex;
-            gap: 6px;
-        }
-
-        #upload-bar button {
-            padding: 6px 14px;
-            background: #0f3460;
-            color: #e0e0e0;
-            border: 1px solid #e94560;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 13px;
-        }
-
-        #upload-bar button:hover {
-            background: #e94560;
-            color: #fff;
-        }
-
-        #upload-progress {
+        #file-picker {
             position: fixed;
             top: 0; left: 0;
             width: 100%; height: 100%;
             display: none;
             align-items: center;
             justify-content: center;
-            background: rgba(0,0,0,0.8);
-            z-index: 400;
+            background: #1a1a2e;
+            z-index: 150;
         }
 
-        #upload-progress.visible { display: flex; }
+        #file-picker.visible { display: flex; }
 
-        #upload-progress-box {
-            background: #16213e;
-            padding: 24px 32px;
-            border-radius: 8px;
-            min-width: 340px;
+        #picker-box {
             text-align: center;
+            max-width: 480px;
+            width: 90%;
         }
 
-        #upload-filename {
-            color: #e0e0e0;
-            margin-bottom: 12px;
-            font-size: 14px;
-            word-break: break-all;
-        }
-
-        #upload-bar-outer {
-            width: 100%;
-            height: 6px;
-            background: #0a0a1a;
-            border-radius: 3px;
-            overflow: hidden;
+        #picker-box h1 {
+            font-size: 26px;
+            color: #e94560;
             margin-bottom: 8px;
         }
 
-        #upload-bar-fill {
+        #picker-box .subtitle {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 28px;
+        }
+
+        #drop-zone {
+            border: 2px dashed #0f3460;
+            border-radius: 12px;
+            padding: 48px 24px;
+            margin-bottom: 20px;
+            transition: border-color 0.2s, background 0.2s;
+            cursor: pointer;
+        }
+
+        #drop-zone.dragover {
+            border-color: #e94560;
+            background: rgba(233,69,96,0.08);
+        }
+
+        #drop-zone .icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        #drop-zone .label {
+            font-size: 16px;
+            color: #ccc;
+            margin-bottom: 6px;
+        }
+
+        #drop-zone .hint {
+            font-size: 13px;
+            color: #666;
+        }
+
+        .picker-buttons {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .picker-buttons button {
+            padding: 10px 24px;
+            background: #0f3460;
+            color: #e0e0e0;
+            border: 1px solid #e94560;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .picker-buttons button:hover {
+            background: #e94560;
+            color: #fff;
+        }
+
+        .picker-buttons button.primary {
+            background: #e94560;
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .picker-buttons button.primary:hover {
+            background: #c73652;
+        }
+
+        .picker-divider {
+            width: 100%;
+            text-align: center;
+            color: #555;
+            font-size: 13px;
+            margin: 14px 0 6px;
+        }
+
+        #picker-status {
+            margin-top: 20px;
+            font-size: 14px;
+            color: #888;
+            min-height: 20px;
+        }
+
+        #picker-progress {
+            width: 100%;
+            height: 6px;
+            background: #16213e;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 10px;
+            display: none;
+        }
+
+        #picker-progress.visible { display: block; }
+
+        #picker-progress-fill {
             width: 0%;
             height: 100%;
             background: linear-gradient(90deg, #e94560, #0f3460);
             border-radius: 3px;
             transition: width 0.2s;
-        }
-
-        #upload-pct {
-            color: #888;
-            font-size: 13px;
         }
     </style>
 </head>
@@ -215,42 +271,55 @@
         <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
     </div>
 
-    <div id="upload-bar">
-        <button id="upload-file-btn">Upload .xp3</button>
-        <button id="upload-dir-btn">Upload Folder</button>
-    </div>
-    <input type="file" id="file-input" accept=".xp3,.zip" style="display:none;">
-    <input type="file" id="dir-input" webkitdirectory style="display:none;">
-
-    <div id="upload-progress">
-        <div id="upload-progress-box">
-            <div id="upload-filename"></div>
-            <div id="upload-bar-outer"><div id="upload-bar-fill"></div></div>
-            <div id="upload-pct">0%</div>
+    <div id="file-picker">
+        <div id="picker-box">
+            <h1>KiriKiroid2 Web</h1>
+            <p class="subtitle">Select a game file to start</p>
+            <div id="drop-zone">
+                <div class="icon">&#128193;</div>
+                <div class="label">Drag & drop .xp3 file here</div>
+                <div class="hint">or use the buttons below</div>
+            </div>
+            <div class="picker-buttons">
+                <button id="pick-dir-api-btn" class="primary" style="display:none">Open Game Directory</button>
+                <div id="picker-divider" class="picker-divider" style="display:none">or load a copy into memory</div>
+                <button id="pick-file-btn">Select .xp3 File</button>
+                <button id="pick-dir-btn">Upload Folder</button>
+            </div>
+            <div id="picker-status"></div>
+            <div id="picker-progress"><div id="picker-progress-fill"></div></div>
         </div>
     </div>
+    <input type="file" id="file-input" style="display:none;">
+    <input type="file" id="dir-input" webkitdirectory style="display:none;">
 
     <script>
-        window._xp3Url = 'data.xp3';
         var statusElement = document.getElementById('status');
         var progressFill = document.getElementById('progress-fill');
         var loadingOverlay = document.getElementById('loading');
+        var filePicker = document.getElementById('file-picker');
+        var pickerStatus = document.getElementById('picker-status');
+        var pickerProgress = document.getElementById('picker-progress');
+        var pickerProgressFill = document.getElementById('picker-progress-fill');
+        var gameFileReady = false;
+        var hasFileSystemAPI = typeof window.showDirectoryPicker === 'function';
+
+        // --- File System Access API state ---
+        var hostDirHandle = null;
+        var fileSyncEnabled = false;
+        var fileSnapshot = {};         // path -> mtime at initial load
+        var syncQueue = [];
+        var syncRunning = false;
 
         var Module = {
             preRun: [function() {
-                if (typeof window._xp3Url === 'string') {
-                    FS.createPreloadedFile('/', 'data.xp3', window._xp3Url, true, true);
-                }
+                Module.addRunDependency('user-file');
             }],
             postRun: [function() {
                 loadingOverlay.classList.add('hidden');
             }],
-            print: function(text) {
-                console.log(text);
-            },
-            printErr: function(text) {
-                console.error(text);
-            },
+            print: function(text) { console.log(text); },
+            printErr: function(text) { console.error(text); },
             canvas: (function() {
                 var canvas = document.getElementById('canvas');
                 canvas.addEventListener('webglcontextlost', function(e) {
@@ -262,6 +331,9 @@
             setStatus: function(text) {
                 if (!text) {
                     loadingOverlay.classList.add('hidden');
+                    if (!gameFileReady) {
+                        filePicker.classList.add('visible');
+                    }
                     return;
                 }
                 var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
@@ -281,21 +353,20 @@
             monitorRunDependencies: function(left) {
                 if (left === 0) {
                     Module.setStatus('');
+                } else if (!gameFileReady) {
+                    Module.setStatus('Preparing engine... (' + left + ' remaining)');
                 } else {
-                    Module.setStatus('Preparing... (' + left + ' remaining)');
+                    Module.setStatus('Starting... (' + left + ' remaining)');
                 }
             }
         };
 
-        Module.setStatus('Downloading...');
+        Module.setStatus('Downloading engine...');
 
         window.onerror = function(event) {
             Module.setStatus('Error: see console');
         };
 
-        // Set canvas pixel buffer size once before WASM loads.
-        // After SDL creates GL context, do NOT set canvas.width/height again
-        // as that would reset the WebGL framebuffer.
         (function() {
             var canvas = document.getElementById('canvas');
             var container = document.getElementById('container');
@@ -303,23 +374,13 @@
             canvas.height = container.clientHeight || 720;
         })();
 
-        // --- Game file upload ---
-        var uploadProgress = document.getElementById('upload-progress');
-        var uploadFilename = document.getElementById('upload-filename');
-        var uploadBarFill = document.getElementById('upload-bar-fill');
-        var uploadPct = document.getElementById('upload-pct');
-
-        function showUploadProgress(name, pct) {
-            uploadProgress.classList.add('visible');
-            uploadFilename.textContent = name;
-            uploadBarFill.style.width = pct + '%';
-            uploadPct.textContent = pct + '%';
+        // Show File System API button when supported
+        if (hasFileSystemAPI) {
+            document.getElementById('pick-dir-api-btn').style.display = '';
+            document.getElementById('picker-divider').style.display = '';
         }
 
-        function hideUploadProgress() {
-            uploadProgress.classList.remove('visible');
-        }
-
+        // --- Common helpers ---
         function ensureDir(path) {
             var parts = path.split('/').filter(Boolean);
             var cur = '';
@@ -335,13 +396,20 @@
             FS.writeFile(fullPath, data);
         }
 
-        function readFileAsync(file) {
+        function setPickerProgress(pct, text) {
+            pickerProgress.classList.add('visible');
+            pickerProgressFill.style.width = pct + '%';
+            if (text) pickerStatus.textContent = text;
+        }
+
+        function readFileWithProgress(file) {
             return new Promise(function(resolve, reject) {
                 var reader = new FileReader();
+                var sizeMB = (file.size / 1048576).toFixed(1);
                 reader.onprogress = function(e) {
                     if (e.lengthComputable) {
                         var pct = Math.round(e.loaded / e.total * 100);
-                        showUploadProgress(file.name + ' (' + (e.total / 1048576).toFixed(0) + ' MB)', pct);
+                        setPickerProgress(pct, 'Reading ' + file.name + ' (' + sizeMB + ' MB)... ' + pct + '%');
                     }
                 };
                 reader.onload = function(e) {
@@ -352,53 +420,235 @@
             });
         }
 
-        document.getElementById('upload-file-btn').addEventListener('click', function() {
+        function startGame() {
+            gameFileReady = true;
+            filePicker.classList.remove('visible');
+            loadingOverlay.classList.remove('hidden');
+            statusElement.textContent = 'Starting game...';
+            progressFill.style.width = '100%';
+            Module.removeRunDependency('user-file');
+        }
+
+        // --- File System Access API: directory picker + save sync ---
+        async function enumerateDir(dirHandle, prefix) {
+            var files = [];
+            for await (var entry of dirHandle.values()) {
+                var path = prefix + '/' + entry.name;
+                if (entry.kind === 'directory') {
+                    files = files.concat(await enumerateDir(entry, path));
+                } else {
+                    files.push({ path: path, handle: entry });
+                }
+            }
+            return files;
+        }
+
+        async function handleDirectoryAPI() {
+            try {
+                hostDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            } catch (err) {
+                if (err.name !== 'AbortError')
+                    pickerStatus.textContent = 'Error: ' + err.message;
+                return;
+            }
+
+            try {
+                setPickerProgress(0, 'Scanning directory...');
+                var entries = await enumerateDir(hostDirHandle, '');
+                var total = entries.length;
+                if (total === 0) {
+                    pickerStatus.textContent = 'Directory is empty.';
+                    pickerProgress.classList.remove('visible');
+                    hostDirHandle = null;
+                    return;
+                }
+
+                var totalBytes = 0;
+                var loadedBytes = 0;
+                for (var e of entries) {
+                    var f = await e.handle.getFile();
+                    e._file = f;
+                    totalBytes += f.size;
+                }
+
+                for (var i = 0; i < total; i++) {
+                    var entry = entries[i];
+                    var file = entry._file;
+                    var sizeMB = totalBytes > 0
+                        ? (loadedBytes / 1048576).toFixed(0) + '/' + (totalBytes / 1048576).toFixed(0) + ' MB'
+                        : '';
+                    setPickerProgress(
+                        Math.round(loadedBytes / totalBytes * 100),
+                        'Loading (' + (i + 1) + '/' + total + ') ' + entry.path.substring(1) + '  ' + sizeMB
+                    );
+                    var data = new Uint8Array(await file.arrayBuffer());
+                    writeFileToFS(entry.path, data);
+                    loadedBytes += file.size;
+
+                    fileSnapshot[entry.path] = FS.stat(entry.path).mtime;
+                }
+
+                setPickerProgress(100, 'Starting...');
+                fileSyncEnabled = true;
+                startFileSyncTimer();
+                startGame();
+            } catch (err) {
+                pickerStatus.textContent = 'Error: ' + err.message;
+                pickerProgress.classList.remove('visible');
+                hostDirHandle = null;
+            }
+        }
+
+        // --- Save sync: detect MEMFS changes and write back to host ---
+        function scanMemfsChanges(fsPath) {
+            var changed = [];
+            var SKIP = { '.': 1, '..': 1, dev: 1, proc: 1, tmp: 1 };
+            try {
+                var entries = FS.readdir(fsPath);
+            } catch(e) { return changed; }
+            for (var name of entries) {
+                if (SKIP[name]) continue;
+                var fullPath = fsPath === '/' ? '/' + name : fsPath + '/' + name;
+                try {
+                    var stat = FS.stat(fullPath);
+                    if (FS.isDir(stat.mode)) {
+                        changed = changed.concat(scanMemfsChanges(fullPath));
+                    } else {
+                        var ext = name.split('.').pop().toLowerCase();
+                        if (ext === 'xp3') continue;
+                        var snapMtime = fileSnapshot[fullPath];
+                        if (snapMtime === undefined || stat.mtime !== snapMtime) {
+                            changed.push(fullPath);
+                            fileSnapshot[fullPath] = stat.mtime;
+                        }
+                    }
+                } catch(e) {}
+            }
+            return changed;
+        }
+
+        async function getSubdirHandle(rootHandle, pathParts) {
+            var cur = rootHandle;
+            for (var part of pathParts) {
+                cur = await cur.getDirectoryHandle(part, { create: true });
+            }
+            return cur;
+        }
+
+        async function syncFileToHost(fsPath) {
+            if (!hostDirHandle) return;
+            try {
+                var data = FS.readFile(fsPath);
+                var parts = fsPath.split('/').filter(Boolean);
+                var fileName = parts.pop();
+                var dirHandle = await getSubdirHandle(hostDirHandle, parts);
+                var fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+                var writable = await fileHandle.createWritable();
+                await writable.write(data);
+                await writable.close();
+                console.log('[FileSync] Synced: ' + fsPath);
+            } catch (err) {
+                console.warn('[FileSync] Failed: ' + fsPath + ' - ' + err.message);
+            }
+        }
+
+        async function processSyncQueue() {
+            if (syncRunning || syncQueue.length === 0) return;
+            syncRunning = true;
+            while (syncQueue.length > 0) {
+                var path = syncQueue.shift();
+                await syncFileToHost(path);
+            }
+            syncRunning = false;
+        }
+
+        function doSyncScan() {
+            if (!fileSyncEnabled || !hostDirHandle) return;
+            var changed = scanMemfsChanges('/');
+            for (var p of changed) {
+                if (syncQueue.indexOf(p) === -1) syncQueue.push(p);
+            }
+            processSyncQueue();
+        }
+
+        function startFileSyncTimer() {
+            setInterval(doSyncScan, 3000);
+            window.addEventListener('beforeunload', function() {
+                doSyncScan();
+            });
+        }
+
+        // --- Fallback: .xp3 file picker ---
+        async function handleXp3File(file) {
+            try {
+                setPickerProgress(0, 'Reading ' + file.name + '...');
+                var data = await readFileWithProgress(file);
+                setPickerProgress(100, 'Writing to filesystem...');
+                writeFileToFS('/data.xp3', data);
+                startGame();
+            } catch (err) {
+                pickerStatus.textContent = 'Error: ' + err.message;
+                pickerProgress.classList.remove('visible');
+            }
+        }
+
+        async function handleFolder(files) {
+            var total = files.length;
+            try {
+                for (var i = 0; i < total; i++) {
+                    var file = files[i];
+                    var relPath = '/' + file.webkitRelativePath;
+                    setPickerProgress(Math.round(i / total * 100),
+                        'Loading file ' + (i + 1) + '/' + total + ': ' + file.name);
+                    var data = await readFileWithProgress(file);
+                    writeFileToFS(relPath, data);
+                }
+                startGame();
+            } catch (err) {
+                pickerStatus.textContent = 'Error: ' + err.message;
+                pickerProgress.classList.remove('visible');
+            }
+        }
+
+        // --- Button bindings ---
+        document.getElementById('pick-dir-api-btn').addEventListener('click', handleDirectoryAPI);
+
+        document.getElementById('pick-file-btn').addEventListener('click', function() {
             document.getElementById('file-input').click();
         });
-
-        document.getElementById('upload-dir-btn').addEventListener('click', function() {
+        document.getElementById('pick-dir-btn').addEventListener('click', function() {
             document.getElementById('dir-input').click();
         });
 
-        document.getElementById('file-input').addEventListener('change', async function(e) {
+        document.getElementById('file-input').addEventListener('change', function(e) {
             var file = e.target.files[0];
-            if (!file) return;
-            try {
-                showUploadProgress(file.name, 0);
-                var data = await readFileAsync(file);
-                showUploadProgress('Writing to filesystem...', 100);
-                writeFileToFS('/' + file.name, data);
-                hideUploadProgress();
-                alert(file.name + ' uploaded to /\nNavigate to / in the file browser to open it.');
-            } catch (err) {
-                hideUploadProgress();
-                alert('Upload failed: ' + err.message);
-            }
+            if (file) handleXp3File(file);
             e.target.value = '';
         });
 
-        document.getElementById('dir-input').addEventListener('change', async function(e) {
+        document.getElementById('dir-input').addEventListener('change', function(e) {
             var files = Array.from(e.target.files);
-            if (files.length === 0) return;
-            var total = files.length;
-            var done = 0;
-            try {
-                for (var i = 0; i < files.length; i++) {
-                    var file = files[i];
-                    var relPath = '/' + file.webkitRelativePath;
-                    showUploadProgress(file.name + ' (' + (done + 1) + '/' + total + ')', Math.round(done / total * 100));
-                    var data = await readFileAsync(file);
-                    writeFileToFS(relPath, data);
-                    done++;
-                }
-                hideUploadProgress();
-                var dirName = files[0].webkitRelativePath.split('/')[0];
-                alert('Folder uploaded to /' + dirName + '/\nNavigate there in the file browser.');
-            } catch (err) {
-                hideUploadProgress();
-                alert('Upload failed: ' + err.message);
-            }
+            if (files.length > 0) handleFolder(files);
             e.target.value = '';
+        });
+
+        // Drag & drop
+        var dropZone = document.getElementById('drop-zone');
+        dropZone.addEventListener('click', function() {
+            document.getElementById('file-input').click();
+        });
+        dropZone.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', function() {
+            dropZone.classList.remove('dragover');
+        });
+        dropZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            var file = e.dataTransfer.files[0];
+            if (file) handleXp3File(file);
         });
     </script>
     {{{ SCRIPT }}}

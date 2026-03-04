@@ -262,7 +262,8 @@ void GLViewImpl::handleSDLEvents()
         case SDL_MOUSEBUTTONDOWN:
         case SDL_MOUSEBUTTONUP:
         case SDL_MOUSEMOTION:
-            onMouseEvent(event);
+            if (!_touchActive)
+                onMouseEvent(event);
             break;
         case SDL_KEYDOWN:
         case SDL_KEYUP:
@@ -278,9 +279,11 @@ void GLViewImpl::handleSDLEvents()
             break;
         case SDL_FINGERDOWN:
         {
+            _touchActive = true;
             float x = event.tfinger.x * _screenSize.width;
             float y = event.tfinger.y * _screenSize.height;
             intptr_t id = static_cast<intptr_t>(event.tfinger.fingerId);
+            _activeTouchIds.insert(id);
             handleTouchesBegin(1, &id, &x, &y);
             break;
         }
@@ -289,7 +292,10 @@ void GLViewImpl::handleSDLEvents()
             float x = event.tfinger.x * _screenSize.width;
             float y = event.tfinger.y * _screenSize.height;
             intptr_t id = static_cast<intptr_t>(event.tfinger.fingerId);
+            _activeTouchIds.erase(id);
             handleTouchesEnd(1, &id, &x, &y);
+            if (_activeTouchIds.empty())
+                _touchActive = false;
             break;
         }
         case SDL_FINGERMOTION:
@@ -314,6 +320,12 @@ void GLViewImpl::onMouseEvent(SDL_Event& event)
     _mouseX = cursorX;
     _mouseY = cursorY;
 
+    // Transform screen pixels to GL world coordinates, matching the touch pipeline:
+    //   handleTouchesBegin stores: ((x - vpX) / scaleX, (y - vpY) / scaleY)
+    //   Touch::getLocation() applies: Director::convertToGL → Y = designH - Y
+    float glX = (cursorX - _viewPortRect.origin.x) / _scaleX;
+    float glY = _designResolutionSize.height - (cursorY - _viewPortRect.origin.y) / _scaleY;
+
     switch (event.type) {
     case SDL_MOUSEBUTTONDOWN:
     {
@@ -324,7 +336,7 @@ void GLViewImpl::onMouseEvent(SDL_Event& event)
         }
 
         EventMouse mouseEvent(EventMouse::MouseEventType::MOUSE_DOWN);
-        mouseEvent.setCursorPosition(cursorX, _screenSize.height - cursorY);
+        mouseEvent.setCursorPosition(glX, glY);
         mouseEvent.setMouseButton(static_cast<EventMouse::MouseButton>(event.button.button - 1));
         Director::getInstance()->getEventDispatcher()->dispatchEvent(&mouseEvent);
         break;
@@ -338,7 +350,7 @@ void GLViewImpl::onMouseEvent(SDL_Event& event)
         }
 
         EventMouse mouseEvent(EventMouse::MouseEventType::MOUSE_UP);
-        mouseEvent.setCursorPosition(cursorX, _screenSize.height - cursorY);
+        mouseEvent.setCursorPosition(glX, glY);
         mouseEvent.setMouseButton(static_cast<EventMouse::MouseButton>(event.button.button - 1));
         Director::getInstance()->getEventDispatcher()->dispatchEvent(&mouseEvent);
         break;
@@ -351,7 +363,7 @@ void GLViewImpl::onMouseEvent(SDL_Event& event)
         }
 
         EventMouse mouseEvent(EventMouse::MouseEventType::MOUSE_MOVE);
-        mouseEvent.setCursorPosition(cursorX, _screenSize.height - cursorY);
+        mouseEvent.setCursorPosition(glX, glY);
         Director::getInstance()->getEventDispatcher()->dispatchEvent(&mouseEvent);
         break;
     }

@@ -645,6 +645,9 @@ public:
                     _LastMouseX = nsp.x,
                     _LastMouseY =
                         PrimaryLayerArea->getContentSize().height - nsp.y;
+                    bool nearStart =
+                        _touchPoint.getDistanceSq(touch->getLocation()) <=
+                        _touchMoveThresholdSq;
                     if(!_touchMoved) {
                         TVPPostInputEvent(new tTVPOnMouseMoveInputEvent(
                             TJSNativeInstance, _LastMouseX, _LastMouseY,
@@ -655,6 +658,9 @@ public:
                             TJSNativeInstance, nsp.x,
                             PrimaryLayerArea->getContentSize().height - nsp.y,
                             _mouseBtn, TVPGetCurrentShiftKeyState()));
+                        TVPPostInputEvent(new tTVPOnClickInputEvent(
+                            TJSNativeInstance, _LastMouseX, _LastMouseY));
+                    } else if(nearStart) {
                         TVPPostInputEvent(new tTVPOnClickInputEvent(
                             TJSNativeInstance, _LastMouseX, _LastMouseY));
                     }
