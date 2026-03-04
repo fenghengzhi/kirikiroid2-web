@@ -119,6 +119,80 @@
             color: #ccc;
             line-height: 1.6;
         }
+
+        #upload-bar {
+            position: fixed;
+            top: 8px;
+            right: 8px;
+            z-index: 300;
+            display: flex;
+            gap: 6px;
+        }
+
+        #upload-bar button {
+            padding: 6px 14px;
+            background: #0f3460;
+            color: #e0e0e0;
+            border: 1px solid #e94560;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        #upload-bar button:hover {
+            background: #e94560;
+            color: #fff;
+        }
+
+        #upload-progress {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,0.8);
+            z-index: 400;
+        }
+
+        #upload-progress.visible { display: flex; }
+
+        #upload-progress-box {
+            background: #16213e;
+            padding: 24px 32px;
+            border-radius: 8px;
+            min-width: 340px;
+            text-align: center;
+        }
+
+        #upload-filename {
+            color: #e0e0e0;
+            margin-bottom: 12px;
+            font-size: 14px;
+            word-break: break-all;
+        }
+
+        #upload-bar-outer {
+            width: 100%;
+            height: 6px;
+            background: #0a0a1a;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        #upload-bar-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #e94560, #0f3460);
+            border-radius: 3px;
+            transition: width 0.2s;
+        }
+
+        #upload-pct {
+            color: #888;
+            font-size: 13px;
+        }
     </style>
 </head>
 <body>
@@ -139,6 +213,21 @@
 
     <div id="container">
         <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    </div>
+
+    <div id="upload-bar">
+        <button id="upload-file-btn">Upload .xp3</button>
+        <button id="upload-dir-btn">Upload Folder</button>
+    </div>
+    <input type="file" id="file-input" accept=".xp3,.zip" style="display:none;">
+    <input type="file" id="dir-input" webkitdirectory style="display:none;">
+
+    <div id="upload-progress">
+        <div id="upload-progress-box">
+            <div id="upload-filename"></div>
+            <div id="upload-bar-outer"><div id="upload-bar-fill"></div></div>
+            <div id="upload-pct">0%</div>
+        </div>
     </div>
 
     <script>
@@ -208,6 +297,104 @@
             canvas.width = container.clientWidth || 1280;
             canvas.height = container.clientHeight || 720;
         })();
+
+        // --- Game file upload ---
+        var uploadProgress = document.getElementById('upload-progress');
+        var uploadFilename = document.getElementById('upload-filename');
+        var uploadBarFill = document.getElementById('upload-bar-fill');
+        var uploadPct = document.getElementById('upload-pct');
+
+        function showUploadProgress(name, pct) {
+            uploadProgress.classList.add('visible');
+            uploadFilename.textContent = name;
+            uploadBarFill.style.width = pct + '%';
+            uploadPct.textContent = pct + '%';
+        }
+
+        function hideUploadProgress() {
+            uploadProgress.classList.remove('visible');
+        }
+
+        function ensureDir(path) {
+            var parts = path.split('/').filter(Boolean);
+            var cur = '';
+            for (var i = 0; i < parts.length; i++) {
+                cur += '/' + parts[i];
+                try { FS.mkdir(cur); } catch(e) {}
+            }
+        }
+
+        function writeFileToFS(fullPath, data) {
+            var dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+            if (dir) ensureDir(dir);
+            FS.writeFile(fullPath, data);
+        }
+
+        function readFileAsync(file) {
+            return new Promise(function(resolve, reject) {
+                var reader = new FileReader();
+                reader.onprogress = function(e) {
+                    if (e.lengthComputable) {
+                        var pct = Math.round(e.loaded / e.total * 100);
+                        showUploadProgress(file.name + ' (' + (e.total / 1048576).toFixed(0) + ' MB)', pct);
+                    }
+                };
+                reader.onload = function(e) {
+                    resolve(new Uint8Array(e.target.result));
+                };
+                reader.onerror = function() { reject(reader.error); };
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        document.getElementById('upload-file-btn').addEventListener('click', function() {
+            document.getElementById('file-input').click();
+        });
+
+        document.getElementById('upload-dir-btn').addEventListener('click', function() {
+            document.getElementById('dir-input').click();
+        });
+
+        document.getElementById('file-input').addEventListener('change', async function(e) {
+            var file = e.target.files[0];
+            if (!file) return;
+            try {
+                showUploadProgress(file.name, 0);
+                var data = await readFileAsync(file);
+                showUploadProgress('Writing to filesystem...', 100);
+                writeFileToFS('/' + file.name, data);
+                hideUploadProgress();
+                alert(file.name + ' uploaded to /\nNavigate to / in the file browser to open it.');
+            } catch (err) {
+                hideUploadProgress();
+                alert('Upload failed: ' + err.message);
+            }
+            e.target.value = '';
+        });
+
+        document.getElementById('dir-input').addEventListener('change', async function(e) {
+            var files = Array.from(e.target.files);
+            if (files.length === 0) return;
+            var total = files.length;
+            var done = 0;
+            try {
+                for (var i = 0; i < files.length; i++) {
+                    var file = files[i];
+                    var relPath = '/' + file.webkitRelativePath;
+                    showUploadProgress(file.name + ' (' + (done + 1) + '/' + total + ')', Math.round(done / total * 100));
+                    var data = await readFileAsync(file);
+                    writeFileToFS(relPath, data);
+                    done++;
+                }
+                hideUploadProgress();
+                var dirName = files[0].webkitRelativePath.split('/')[0];
+                alert('Folder uploaded to /' + dirName + '/\nNavigate there in the file browser.');
+            } catch (err) {
+                hideUploadProgress();
+                alert('Upload failed: ' + err.message);
+            }
+            e.target.value = '';
+        });
     </script>
     {{{ SCRIPT }}}
 </body>

@@ -338,6 +338,10 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
         ptr += 2; // skip "./"
         newname.Clear();
     }
+    if(!*ptr) {
+        name = TJS_W("/");
+        return;
+    }
 #if CC_TARGET_PLATFORM == CC_PLATFORM_IOS
     {
         std::string prefix = "/";
