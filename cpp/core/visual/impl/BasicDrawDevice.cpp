@@ -541,7 +541,6 @@ void tTVPBasicDrawDevice::Show() {
         if(form && !Managers.empty()) {
             iTVPBaseBitmap *buf = Managers.back()->GetDrawBuffer();
             if(buf)
-
                 form->UpdateDrawBuffer(buf->GetTexture());
         }
     }

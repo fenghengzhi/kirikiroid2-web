@@ -7631,7 +7631,6 @@ void tTJSNI_BaseLayer::InternalStopTransition() {
                 TransSrc->DecCacheEnabledCount();
         }
 
-        //
         // exchange the layer
         if(TransType == ttExchange) {
             tjs_int tl = this->Rect.left;
@@ -9482,9 +9481,6 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ beginTransition) {
         TJS_GET_NATIVE_INSTANCE(/*var. name*/ _this,
                                 /*var. type*/ tTJSNI_Layer);
-        // parameters are : <name>, [<withchildren>=true],
-        // [<transwith>=nullptr],
-        //                  [<options>]
         if(numparams < 1)
             return TJS_E_BADPARAMCOUNT;
         ttstr name = *param[0];
@@ -9501,8 +9497,9 @@ tTJSNC_Layer::tTJSNC_Layer() : tTJSNativeClass(TJS_W("Layer")) {
                     TVPThrowExceptionMessage(TVPSpecifyLayer);
             }
         }
-        if(!transsrc)
+        if(!transsrc) {
             TVPThrowExceptionMessage(TVPSpecifyLayer);
+        }
 
         tTJSVariantClosure options(nullptr, nullptr);
         if(numparams >= 4 && param[3]->Type() != tvtVoid)

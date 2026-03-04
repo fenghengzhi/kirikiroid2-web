@@ -79,7 +79,6 @@ if(EMSCRIPTEN)
         ${VISUAL_PATH}/LoadWEBP.cpp
         ${VISUAL_PATH}/LoadBPG.cpp
         ${VISUAL_PATH}/LoadJXR.cpp
-        ${VISUAL_PATH}/LoadJPEG.cpp
     )
 endif()
 
@@ -92,7 +91,7 @@ if(NOT EMSCRIPTEN)
     find_package(WebP CONFIG REQUIRED)
     target_link_libraries(${PROJECT_NAME} INTERFACE WebP::webp WebP::webpdecoder WebP::webpdemux)
 else()
-    target_compile_definitions(${PROJECT_NAME} PRIVATE -DKRKR2_NO_BPG -DKRKR2_NO_WEBP -DKRKR2_NO_JPEG -DKRKR2_NO_FFMPEG)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE -DKRKR2_NO_BPG -DKRKR2_NO_WEBP -DKRKR2_NO_FFMPEG)
 endif()
 
 find_package(cocos2dx CONFIG REQUIRED)
@@ -109,12 +108,10 @@ else()
     target_compile_definitions(${PROJECT_NAME} PRIVATE -DKRKR2_NO_JXR)
 endif()
 
-if(NOT EMSCRIPTEN)
-    find_package(libjpeg-turbo CONFIG REQUIRED)
-    target_link_libraries(${PROJECT_NAME} PUBLIC
-        $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
-    )
-endif()
+find_package(libjpeg-turbo CONFIG REQUIRED)
+target_link_libraries(${PROJECT_NAME} PUBLIC
+    $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
+)
 
 if(NOT EMSCRIPTEN)
     set(OpenCV_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")

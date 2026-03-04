@@ -21,6 +21,7 @@
 #include "StorageImpl.h"
 #include "Defer.h"
 #include "ui/MessageBox.h"
+#include "cocos2d/MainScene.h"
 
 void TVPGetMemoryInfo(TVPMemoryInfo &m) {
     size_t heapSize = (size_t)sbrk(0);
@@ -33,7 +34,7 @@ void TVPGetMemoryInfo(TVPMemoryInfo &m) {
 }
 
 #include <sched.h>
-void TVPRelinquishCPU() { emscripten_sleep(0); }
+void TVPRelinquishCPU() { sched_yield(); }
 
 bool TVP_utime(const char *name, time_t modtime) {
     timeval mt[2];
@@ -187,7 +188,10 @@ bool TVP_stat(const tjs_char *name, tTVP_stat &s) {
 }
 
 tjs_uint32 TVPGetRoughTickCount32() {
-    return static_cast<tjs_uint32>(emscripten_get_now());
+    struct timespec ts;
+    if(clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+        return static_cast<tjs_uint32>(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+    return 0;
 }
 
 void TVPExitApplication(int code) {
@@ -195,7 +199,15 @@ void TVPExitApplication(int code) {
     emscripten_force_exit(code);
 }
 
-bool TVPCheckStartupArg() { return false; }
+bool TVPCheckStartupArg() {
+    struct stat st;
+    if (stat("/data.xp3", &st) == 0 && S_ISREG(st.st_mode)) {
+        spdlog::info("Found /data.xp3, auto-starting game");
+        TVPMainScene::GetInstance()->startupFrom("/data.xp3");
+        return true;
+    }
+    return false;
+}
 
 void TVPProcessInputEvents() {}
 

@@ -231,12 +231,17 @@
     </div>
 
     <script>
+        window._xp3Url = 'data.xp3';
         var statusElement = document.getElementById('status');
         var progressFill = document.getElementById('progress-fill');
         var loadingOverlay = document.getElementById('loading');
 
         var Module = {
-            preRun: [],
+            preRun: [function() {
+                if (typeof window._xp3Url === 'string') {
+                    FS.createPreloadedFile('/', 'data.xp3', window._xp3Url, true, true);
+                }
+            }],
             postRun: [function() {
                 loadingOverlay.classList.add('hidden');
             }],

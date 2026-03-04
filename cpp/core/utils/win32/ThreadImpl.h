@@ -65,6 +65,7 @@ public:
 class tTVPThreadEvent {
     std::condition_variable Handle;
     std::mutex Mutex;
+    bool Signaled = false;
 
 public:
     void Set();

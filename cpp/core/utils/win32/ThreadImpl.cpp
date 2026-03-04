@@ -99,6 +99,7 @@ void tTVPThread::Resume() {
 //---------------------------------------------------------------------------
 void tTVPThreadEvent::Set() {
     std::unique_lock lk(Mutex);
+    Signaled = true;
     Handle.notify_one();
 }
 
@@ -109,11 +110,17 @@ void tTVPThreadEvent::WaitFor(tjs_uint timeout) {
     // returns false.
 
     std::unique_lock lk(Mutex);
-    if(timeout != 0) {
-        Handle.wait_for(lk, std::chrono::milliseconds(timeout));
-    } else {
-        Handle.wait(lk);
+    if(Signaled) {
+        Signaled = false;
+        return;
     }
+    if(timeout != 0) {
+        Handle.wait_for(lk, std::chrono::milliseconds(timeout),
+                        [this] { return Signaled; });
+    } else {
+        Handle.wait(lk, [this] { return Signaled; });
+    }
+    Signaled = false;
 }
 //---------------------------------------------------------------------------
 

@@ -1895,7 +1895,6 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
         tTVPGraphicImageHolder *ptr =
             TVPGraphicCache.FindAndTouchWithHash(searchdata, hash);
         if(ptr) {
-            // found in cache
             if(dest)
                 ptr->GetObjectNoAddRef()->AssignToTexture(dest);
             if(provincename)
@@ -1906,11 +1905,6 @@ int TVPLoadGraphic(iTVPBaseBitmap *dest, const ttstr &name, tjs_int32 keyidx,
             return ptr->GetObjectNoAddRef()->GetSize();
         }
     }
-
-    // not found
-#if defined(WIN32) && defined(_DEBUG)
-    TVPAddLog(TJS_W("load graphic: ") + nname);
-#endif
 
     // load into dest
     tTVPGraphicImageData *data = nullptr;

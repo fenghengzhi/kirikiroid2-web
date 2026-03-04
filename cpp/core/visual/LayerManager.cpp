@@ -1049,8 +1049,7 @@ void tTVPLayerManager::AddUpdateRegion(const tTVPRect &rect) {
 //---------------------------------------------------------------------------
 void tTVPLayerManager::UpdateToDrawDevice() {
     // drawdevice -> layer
-    if(!Primary)
-        return;
+    if(!Primary) return;
     Primary->CompleteForWindow(this);
 }
 //---------------------------------------------------------------------------

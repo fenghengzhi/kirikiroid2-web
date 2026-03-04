@@ -625,7 +625,6 @@ void tTJSNI_BaseWindow::NotifyUpdateRegionFixed(
 //---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::UpdateContent() {
     if(DrawDevice) {
-        // is called from event dispatcher
         DrawDevice->Update();
 
         if(!WaitVSync)

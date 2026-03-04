@@ -14,16 +14,6 @@ tTVPArchive *TVPOpen7ZArchive(const ttstr &name, tTJSBinaryStream *st,
     return nullptr;
 }
 
-tTVPJPEGLoadPrecision TVPJPEGLoadPrecision = jlpMedium;
-
-
-void TVPLoadJPEG(void *formatdata, void *callbackdata,
-                 tTVPGraphicSizeCallback sizecallback,
-                 tTVPGraphicScanLineCallback scanlinecallback,
-                 tTVPMetaInfoPushCallback metainfopushcallback,
-                 tTJSBinaryStream *src, tjs_int keyidx,
-                 tTVPGraphicLoadMode mode) {}
-
 void TVPLoadBPG(void *formatdata, void *callbackdata,
                 tTVPGraphicSizeCallback sizecallback,
                 tTVPGraphicScanLineCallback scanlinecallback,
@@ -45,9 +35,6 @@ void TVPLoadJXR(void *formatdata, void *callbackdata,
                 tTJSBinaryStream *src, tjs_int keyidx,
                 tTVPGraphicLoadMode mode) {}
 
-void TVPLoadHeaderJPG(void *formatdata, tTJSBinaryStream *src,
-                      iTJSDispatch2 **dic) {}
-
 void TVPLoadHeaderBPG(void *formatdata, tTJSBinaryStream *src,
                       iTJSDispatch2 **dic) {}
 
@@ -57,18 +44,9 @@ void TVPLoadHeaderWEBP(void *formatdata, tTJSBinaryStream *src,
 void TVPLoadHeaderJXR(void *formatdata, tTJSBinaryStream *src,
                       iTJSDispatch2 **dic) {}
 
-void TVPSaveAsJPG(void *formatdata, tTJSBinaryStream *dst,
-                  const iTVPBaseBitmap *image, const ttstr &mode,
-                  iTJSDispatch2 *meta) {}
-
 void TVPSaveAsJXR(void *formatdata, tTJSBinaryStream *dst,
                   const iTVPBaseBitmap *image, const ttstr &mode,
                   iTJSDispatch2 *meta) {}
-
-bool TVPAcceptSaveAsJPG(void *formatdata, const ttstr &type,
-                        iTJSDispatch2 **dic) {
-    return false;
-}
 
 bool TVPAcceptSaveAsJXR(void *formatdata, const ttstr &type,
                         iTJSDispatch2 **dic) {
