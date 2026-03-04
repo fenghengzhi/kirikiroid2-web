@@ -42,7 +42,6 @@ tTVPThread::tTVPThread(bool suspended) {
         Handle = std::thread([this] { StartProc(this); });
         Handle.detach();
     } catch(const std::system_error &) {
-        // 捕获线程创建失败异常
         TVPThrowInternalError;
     }
 }

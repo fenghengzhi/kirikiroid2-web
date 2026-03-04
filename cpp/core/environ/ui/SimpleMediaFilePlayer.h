@@ -1,7 +1,9 @@
 #pragma once
 #include "BaseForm.h"
 #include "tjsCommHead.h"
+#ifndef KRKR2_NO_FFMPEG
 #include "ffmpeg/VideoPlayer.h"
+#endif
 
 namespace cocos2d {
     class Sprite;

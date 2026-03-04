@@ -94,8 +94,10 @@ if (BUILD_EXT_CURL)
     target_link_libraries(external INTERFACE CURL::libcurl)
 endif (BUILD_EXT_CURL)
 
-find_package(PNG REQUIRED)
-target_link_libraries(external INTERFACE PNG::PNG)
+if (NOT EMSCRIPTEN)
+    find_package(PNG REQUIRED)
+    target_link_libraries(external INTERFACE PNG::PNG)
+endif()
 
 
 if (LINUX)
@@ -155,7 +157,7 @@ if (WINDOWS)
 
 endif ()
 
-if (WINDOWS OR MACOSX OR LINUX)
+if ((WINDOWS OR MACOSX OR LINUX) AND NOT EMSCRIPTEN)
     find_package(glfw3 CONFIG REQUIRED)
     target_link_libraries(external INTERFACE glfw)
 endif ()
@@ -165,6 +167,12 @@ if (BUILD_EXT_ZLIB)
     target_link_libraries(external INTERFACE ZLIB::ZLIB)
     add_library(ext_zlib ALIAS ZLIB::ZLIB)
 endif (BUILD_EXT_ZLIB)
+
+# For Emscripten, zlib is provided via port flags (-s USE_ZLIB=1);
+# create ext_zlib so the unzip subdirectory can link against it.
+if (EMSCRIPTEN AND NOT TARGET ext_zlib)
+    add_library(ext_zlib INTERFACE)
+endif()
 
 # unzip depend on zlib
 if (BUILD_EXT_UNZIP)

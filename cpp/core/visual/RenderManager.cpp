@@ -9,6 +9,7 @@ typedef cocos2d::Texture2D::PixelFormat CCPixelFormat;
 #include <algorithm>
 #include "ThreadIntf.h"
 #include "argb.h"
+#ifndef KRKR2_NO_FFMPEG
 extern "C" {
 #include <stdint.h>
 #ifndef UINT64_C
@@ -19,7 +20,10 @@ extern "C" {
 #endif
 #include "libswscale/swscale.h"
 };
+#endif
+#ifndef KRKR2_NO_OPENCV
 #include "opencv2/opencv.hpp"
+#endif
 #include "Application.h"
 #include "Platform.h"
 #include "ConfigManager/IndividualConfigManager.h"
@@ -2324,10 +2328,15 @@ public:
             (uint8_t *)tar->GetScanLineForWrite(rcdst.top) + rcdst.left * 4;
         int dpitch = tar->GetPitch();
 
+#ifndef KRKR2_NO_OPENCV
         cv::Mat src_img(sh, sw, CV_8UC4, (void *)sdata, spitch);
         cv::Mat dst_img(dh, dw, CV_8UC4, (void *)ddata, dpitch);
         cv::Size areasize(area.get_width() + 1, area.get_height() + 1);
         cv::boxFilter(src_img, dst_img, -1, areasize);
+#else
+        for (int y = 0; y < dh; ++y)
+            memcpy(ddata + y * dpitch, sdata + y * spitch, sw * 4);
+#endif
         // 		if (area_size < 256)
         // 			Func16::DoBoxBlurLoop(rctar, area,
         // _tar->GetWidth(), _tar->GetHeight(), (tjs_uint32*)line,
@@ -2606,12 +2615,14 @@ iTVPRenderManager::GetOrCompileRenderMethod(const char *name, uint32_t *hint,
     return CompileRenderMethod(name, glsl_script, nTex, flags);
 }
 
+#ifndef KRKR2_NO_OPENCV
 static int cvFlags[4] = {
     cv::INTER_NEAREST, // stNearest
     cv::INTER_AREA, // stFastLinear
     cv::INTER_LINEAR, // stLinear
     cv::INTER_CUBIC, // stCubic
 };
+#endif
 
 static double tTVPPointD_distQ(const tTVPPointD &p0, const tTVPPointD &p1) {
     double dx = p0.x - p1.x, dy = p0.y - p1.y;
@@ -3019,10 +3030,8 @@ public:
         switch(id) {
             case eParameters::StretchType:
                 StretchType = (tTVPBBStretchType)Value;
-                if(StretchType > sizeof(cvFlags) / sizeof(cvFlags[0])) {
-                    StretchType = (tTVPBBStretchType)(sizeof(cvFlags) /
-                                                          sizeof(cvFlags[0]) -
-                                                      1);
+                if(StretchType > 3) {
+                    StretchType = (tTVPBBStretchType)3;
                 }
                 break;
             default:
@@ -3091,11 +3100,21 @@ public:
             // assert(img_convert_ctx);
             //  TODO multithreaded
             sws_scale(img_convert_ctx, &sdata, &spitch, 0, sh, &ddata, &dpitch);
-#else
+#elif !defined(KRKR2_NO_OPENCV)
             cv::Size dsize(dw, dh);
             cv::Mat src_img(sh, sw, CV_8UC4, (void *)sdata, spitch);
             cv::Mat dst_img(dh, dw, CV_8UC4, (void *)ddata, dpitch);
             cv::resize(src_img, dst_img, dsize, 0, 0, cvFlags[StretchType]);
+#else
+            for (int dy = 0; dy < dh; ++dy) {
+                int sy = dy * sh / dh;
+                const uint8_t *srow = sdata + sy * spitch;
+                uint8_t *drow = ddata + dy * dpitch;
+                for (int dx = 0; dx < dw; ++dx) {
+                    int sx = dx * sw / dw;
+                    memcpy(drow + dx * 4, srow + sx * 4, 4);
+                }
+            }
 #endif
             tTVPRect rc(0, 0, dw, dh);
             ((tTVPRenderMethod_Software *)method)
@@ -3109,7 +3128,7 @@ public:
     void OperateRect(iTVPRenderMethod *method, iTVPTexture2D *tar,
                      iTVPTexture2D *reftar, const tTVPRect &rctar,
                      const tRenderTexRectArray &textures) override {
-#ifdef _DEBUG
+#if defined(_DEBUG) && !defined(KRKR2_NO_OPENCV)
         static bool check = false;
         cv::Mat _src[3], _tar;
         if(check) {
@@ -3596,6 +3615,7 @@ public:
                 OperateRect(method, target, rcdest, src, refrect);
                 return;
             }
+#ifndef KRKR2_NO_OPENCV
             const uint8_t *sdata;
             int spitch = src->GetPitch();
             sdata = (const uint8_t *)src->GetPixelData();
@@ -3652,49 +3672,13 @@ public:
             cv::Size dst_size(rcclip.get_width(), rcclip.get_height());
 #ifdef USE_CV_AFFINE
             if(isSrcRect && checkQuadSquared(dstpt)) {
-                // #ifdef _DEBUG
-                // 				printf("affine (%d, %d;%d, %d;%d,
-                // %d;%d, %d) ->
-                // (%d, %d;%d, %d;%d, %d;%d, %d)\n",
-                // (int)pts_src[0].x, (int)pts_src[0].y,
-                // (int)pts_src[1].x, (int)pts_src[1].y,
-                // (int)pts_src[2].x, (int)pts_src[2].y,
-                // (int)pts_src[3].x, (int)pts_src[3].y,
-                // (int)pts_dst[0].x, (int)pts_dst[0].y,
-                // (int)pts_dst[1].x, (int)pts_dst[1].y,
-                // (int)pts_dst[2].x, (int)pts_dst[2].y,
-                // (int)pts_dst[3].x, (int)pts_dst[3].y
-                // 					);
-                // #endif
                 cv::Mat affine_matrix =
                     cv::getAffineTransform(pts_src, pts_dst);
-                // 				double affine_check[6] = {
-                // 					affine_matrix.at<double>(0,
-                // 0), 					affine_matrix.at<double>(0,
-                // 1), 					affine_matrix.at<double>(0,
-                // 2), affine_matrix.at<double>(1, 0),
-                // affine_matrix.at<double>(1, 1),
-                // affine_matrix.at<double>(1, 2)
-                // 				};
                 cv::warpAffine(src_img, dst_img, affine_matrix, dst_size,
                                cvFlags[StretchType]);
             } else
 #endif
             {
-                // #ifdef _DEBUG
-                // 				printf("perspective (%d, %d;%d,
-                // %d;%d, %d;%d, %d)
-                // -> (%d, %d;%d, %d;%d, %d;%d, %d)\n",
-                // (int)pts_src[0].x, (int)pts_src[0].y,
-                // (int)pts_src[1].x, (int)pts_src[1].y,
-                // (int)pts_src[2].x, (int)pts_src[2].y,
-                // (int)pts_src[3].x, (int)pts_src[3].y,
-                // (int)pts_dst[0].x, (int)pts_dst[0].y,
-                // (int)pts_dst[1].x, (int)pts_dst[1].y,
-                // (int)pts_dst[2].x, (int)pts_dst[2].y,
-                // (int)pts_dst[3].x, (int)pts_dst[3].y
-                // 					);
-                // #endif
                 cv::Mat perspective_matrix =
                     cv::getPerspectiveTransform(pts_src, pts_dst);
                 cv::warpPerspective(src_img, dst_img, perspective_matrix,
@@ -3705,14 +3689,14 @@ public:
                 dst_img.ptr(0), dst_img.step1(0), dst_size.width,
                 dst_size.height, TVPTextureFormat::RGBA);
             tTVPRect rc(0, 0, dst_size.width, dst_size.height);
-            // 			if (rc.right > dst->GetWidth()) rc.right =
-            // dst->GetWidth(); 			if (rc.bottom >
-            // dst->GetHeight()) rc.bottom = dst->GetHeight();
 
             ((tTVPRenderMethod_Software *)method)
                 ->DoRender(target, rcclip, target, rcclip, tmp, rc, nullptr,
                            rc);
             tmp->Release();
+#else
+            (void)method; (void)target; (void)rcclip; (void)src;
+#endif
         } else {
             // TVPThrowExceptionMessage(TJS_W("OperateTriangles:
             // unsupported
@@ -4811,6 +4795,7 @@ public:
                     }
                 } while(false);
             if(!processed) {
+#ifndef KRKR2_NO_OPENCV
                 const uint8_t *sdata;
                 int spitch = src->GetPitch();
                 sdata = (const uint8_t *)src->GetPixelData();
@@ -4819,7 +4804,6 @@ public:
                 cv::Mat dst_img;
                 cv::Size dst_size(rcclip.get_width(), rcclip.get_height());
 
-                // upper-left, upper-right, bottom-right, bottom-left
                 cv::Point2f pts_src[] = {
                     cv::Point2f(srcpt[0].x, srcpt[0].y),
                     cv::Point2f(srcpt[1].x + 1, srcpt[1].y),
@@ -4850,6 +4834,7 @@ public:
                     ->DoRender(target, rcclip, target, rcclip, tmp, rc, nullptr,
                                rc);
                 tmp->Release();
+#endif
             }
 
             dstpt += 4;

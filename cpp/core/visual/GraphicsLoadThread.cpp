@@ -254,12 +254,11 @@ void tTVPAsyncImageLoader::PushLoadQueue(iTJSDispatch2 *owner,
     cmd->path_ = nname;
     cmd->dest_ = new tTVPTmpBitmapImage();
     cmd->result_.Clear();
+
     {
-        // キューをロックしてプッシュ
         tTJSCriticalSectionHolder cs(CommandQueueCS);
         CommandQueue.push(cmd);
     }
-    // 追加したことをイベントで通知
     PushCommandQueueEvent.Set();
 }
 void tTVPAsyncImageLoader::LoadingThread() {

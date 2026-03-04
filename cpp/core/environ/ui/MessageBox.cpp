@@ -20,6 +20,20 @@ void TVPMessageBoxForm::show(const std::string &caption,
     ret->autorelease();
     ret->init(caption, text, nBtns, btnText, callback);
     TVPMainScene::GetInstance()->pushUIForm(ret, TVPMainScene::eEnterAniNone);
+    ret->rearrangeLayout();
+}
+
+void TVPMessageBoxForm::rearrangeLayout() {
+    cocos2d::Size sceneSize = TVPMainScene::GetInstance()->getUINodeSize();
+    setContentSize(sceneSize);
+    if (RootNode) {
+        cocos2d::Size rootSize = RootNode->getContentSize();
+        float s = std::min(sceneSize.width / rootSize.width,
+                           sceneSize.height / rootSize.height);
+        RootNode->setScale(s);
+        RootNode->setAnchorPoint(Vec2(0.5f, 0.5f));
+        RootNode->setPosition(Vec2(sceneSize.width / 2, sceneSize.height / 2));
+    }
 }
 
 void TVPMessageBoxForm::showYesNo(const std::string &caption,
@@ -42,69 +56,85 @@ void TVPMessageBoxForm::init(const std::string &caption,
     if(_title)
         _title->setString(caption);
     if(_textContent) {
-        _textContent->setString("");
+        float textWidth = _textContainer->getContentSize().width - 40;
         _textContent->ignoreContentAdaptWithSize(true);
+        auto *label = dynamic_cast<Label *>(_textContent->getVirtualRenderer());
+        if (label)
+            label->setMaxLineWidth(textWidth);
         _textContent->setString(text);
-        const cocos2d::Size &textSize = _textContent->getContentSize();
-        const cocos2d::Size &viewSize = _textContainer->getInnerContainerSize();
-        if(textSize.height > viewSize.height) {
-            _textContainer->setInnerContainerSize(textSize);
-            _textContent->setPosition(Vec2(0, textSize.height));
-        }
+
+        const cocos2d::Size textSize = _textContent->getContentSize();
+        const cocos2d::Size viewSize = _textContainer->getInnerContainerSize();
+        float innerHeight = std::max(viewSize.height, textSize.height + 20);
+        _textContainer->setInnerContainerSize(Size(viewSize.width, innerHeight));
+        _textContent->setPosition(Vec2(20, innerHeight));
     }
     _btnModel->retain();
     _btnModel->removeFromParentAndCleanup(false);
 
-    std::vector<Widget *> btns;
+    float containerWidth = _btnList->getContentSize().width;
+    float containerHeight = _btnList->getContentSize().height;
+    float btnGap = 8.0f;
+    float edgePad = 10.0f;
+    float availWidth = containerWidth - edgePad * 2 - btnGap * std::max(0, nBtns - 1);
 
+    std::string fontName = _btnBody->getTitleFontName();
+    cocos2d::Color3B fontColor = _btnBody->getTitleColor();
+    float fontSize = std::min(_btnBody->getTitleFontSize(), 48.0f);
+
+    std::vector<Button *> buttons;
     float totalWidth = 0;
 
-    cocos2d::Size origsize = _btnModel->getContentSize();
-    cocos2d::Size btnSize = _btnBody->getContentSize();
+    for (int i = 0; i < nBtns; ++i) {
+        auto *btn = Button::create("img/empty.png", "img/gray.png", "img/gray.png");
+        btn->setScale9Enabled(true);
+        btn->setTitleText(btnText[i]);
+        btn->setTitleFontName(fontName);
+        btn->setTitleFontSize(fontSize);
+        btn->setTitleColor(fontColor);
+        btn->setZoomScale(0.05f);
 
-    for(int i = 0; i < nBtns; ++i) {
-        _btnBody->setTitleText(btnText[i]);
-        cocos2d::Size textSize = _btnBody->getTitleRenderer()->getContentSize();
-        float fontSize = _btnBody->getTitleFontSize();
-        textSize.width += fontSize;
-        _btnBody->addClickEventListener([this, i](Ref *node) {
+        float textW = btn->getTitleRenderer()->getContentSize().width;
+        float btnWidth = textW + fontSize;
+        btn->setContentSize(Size(btnWidth, containerHeight - 16));
+
+        totalWidth += btnWidth;
+        buttons.push_back(btn);
+    }
+
+    if (totalWidth > availWidth && totalWidth > 0) {
+        float ratio = availWidth / totalWidth;
+        fontSize = std::max(fontSize * ratio, 24.0f);
+        totalWidth = 0;
+        for (int i = 0; i < nBtns; ++i) {
+            buttons[i]->setTitleFontSize(fontSize);
+            float textW = buttons[i]->getTitleRenderer()->getContentSize().width;
+            float btnWidth = textW + fontSize;
+            buttons[i]->setContentSize(Size(btnWidth, containerHeight - 16));
+            totalWidth += btnWidth;
+        }
+    }
+
+    for (int i = 0; i < nBtns; ++i) {
+        buttons[i]->addClickEventListener([this, i](Ref *) {
             retain();
-            TVPMainScene::GetInstance()->popUIForm(this,
-                                                   TVPMainScene::eLeaveAniNone);
-            if(_callback)
+            TVPMainScene::GetInstance()->popUIForm(this, TVPMainScene::eLeaveAniNone);
+            if (_callback)
                 _callback(i);
             release();
         });
-        cocos2d::Size size = _btnModel->getContentSize();
-        if(btnSize.width < textSize.width) {
-            cocos2d::Size size = origsize;
-            size.width += textSize.width - btnSize.width;
-            _btnModel->setContentSize(size);
-            ui::Helper::doLayout(_btnModel);
-        } else if(size.width != origsize.width) {
-            _btnModel->setContentSize(origsize);
-            ui::Helper::doLayout(_btnModel);
-        }
-        Widget *btn = _btnModel->clone();
-        totalWidth += btn->getContentSize().width;
-        btns.emplace_back(btn);
-        _btnList->addChild(btn);
-        btn->setTag(i);
+        _btnList->addChild(buttons[i]);
+        buttons[i]->setTag(i);
     }
-    float gap = _btnList->getContentSize().width - totalWidth;
-    if(gap < 0) {
-        gap /= nBtns + 1;
-    } else {
-        gap /= nBtns + 1;
-    }
-    float x = gap;
 
-    for(Widget *btn : btns) {
-        Vec2 pos = btn->getPosition();
-        pos.x = x;
-        btn->setPosition(pos);
+    float gap = (containerWidth - totalWidth) / (nBtns + 1);
+    float x = gap;
+    for (auto *btn : buttons) {
+        btn->setAnchorPoint(Vec2(0, 0.5f));
+        btn->setPosition(Vec2(x, containerHeight / 2));
         x += btn->getContentSize().width + gap;
     }
+
     _btnModel->release();
     _btnModel = nullptr;
 }

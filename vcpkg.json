@@ -3,7 +3,10 @@
   "name": "krkr2",
   "version-string": "1.5.0",
   "dependencies": [
-    "7zip",
+    {
+      "name": "7zip",
+      "platform": "!emscripten"
+    },
     {
       "name": "argparse",
       "platform": "linux | windows | osx"
@@ -13,7 +16,10 @@
       "name": "boost-locale",
       "default-features": false
     },
-    "bullet3",
+    {
+      "name": "bullet3",
+      "platform": "!emscripten"
+    },
     "boost-phoenix",
     "boost-spirit",
     {
@@ -24,45 +30,61 @@
     {
       "name": "catch2",
       "default-features": false,
-      "platform": "!android & !ios"
+      "platform": "!android & !ios & !emscripten"
     },
     "cocos2dx",
     {
       "name": "dirent",
       "platform": "windows"
     },
-    "ffmpeg",
+    {
+      "name": "ffmpeg",
+      "platform": "!emscripten"
+    },
     "fmt",
     {
       "name": "glfw3",
       "platform": "linux | windows | osx"
     },
-    "jxrlib",
+    {
+      "name": "jxrlib",
+      "platform": "!emscripten"
+    },
     "libarchive",
     {
       "name": "libgdiplus",
-      "platform": "!windows"
+      "platform": "!windows & !emscripten"
     },
-    "libjpeg-turbo",
+    {
+      "name": "libjpeg-turbo",
+      "platform": "!emscripten"
+    },
     {
       "name": "libogg",
       "platform": "android"
     },
     {
       "name": "libpng",
-      "platform": "!linux"
+      "platform": "!linux & !emscripten"
     },
     "libvorbis",
-    "libwebp",
+    {
+      "name": "libwebp",
+      "platform": "!emscripten"
+    },
     "lz4",
     "oniguruma",
-    "openal-soft",
+    {
+      "name": "openal-soft",
+      "platform": "!emscripten"
+    },
     {
       "name": "opencv4",
       "default-features": false,
       "features": [
         "openmp"
-      ]
+      ],
+      "platform": "!emscripten"
     },
     {
       "name": "opus",
@@ -74,7 +96,8 @@
     },
     {
       "name": "sdl2",
-      "default-features": false
+      "default-features": false,
+      "platform": "!emscripten"
     },
     "spdlog",
     "uchardet",

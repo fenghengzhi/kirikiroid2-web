@@ -11,6 +11,8 @@ vcpkg_cmake_configure(
     OPTIONS
         -DENABLE_OPENSSL=OFF
         -DENABLE_TEST=OFF
+        -DENABLE_LIBXML2=OFF
+        -DENABLE_LIBB2=OFF
 )
 
 vcpkg_cmake_install()

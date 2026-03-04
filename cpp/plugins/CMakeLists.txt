@@ -3,12 +3,11 @@ project(krkr2plugin)
 
 add_library(${PROJECT_NAME} STATIC)
 
-target_sources(${PROJECT_NAME} PUBLIC
+set(_PLUGIN_SOURCES
     scriptsEx.cpp
     win32dialog.cpp
     dirlist.cpp
     csvParser.cpp
-    layerExMovie.cpp
     varfile.cpp
     saveStruct.cpp
     getabout.cpp
@@ -21,6 +20,10 @@ target_sources(${PROJECT_NAME} PUBLIC
     LayerExBase.cpp
     xp3filter.cpp
 )
+if(NOT EMSCRIPTEN)
+    list(APPEND _PLUGIN_SOURCES layerExMovie.cpp)
+endif()
+target_sources(${PROJECT_NAME} PUBLIC ${_PLUGIN_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PUBLIC
     ${KRKR2CORE_PATH}/

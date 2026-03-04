@@ -21,6 +21,9 @@ set(ENVIRON_SOURCE_FILES
 
     $<$<BOOL:${MACOS}>:${ENVIRON_PATH}/apple/macos/platform.mm>
 
+    $<$<BOOL:${WEB}>:${ENVIRON_PATH}/web/Platform.cpp>
+    $<$<BOOL:${WEB}>:${ENVIRON_PATH}/web/stubs.cpp>
+
     ${ENVIRON_PATH}/cocos2d/AppDelegate.cpp
     ${ENVIRON_PATH}/cocos2d/CCKeyCodeConv.cpp
     ${ENVIRON_PATH}/cocos2d/CustomFileUtils.cpp
@@ -73,16 +76,24 @@ set(ENVIRON_HEADERS_DIR
     ${ENVIRON_PATH}/sdl
 )
 
+if(EMSCRIPTEN)
+    list(REMOVE_ITEM ENVIRON_SOURCE_FILES ${ENVIRON_PATH}/ui/SimpleMediaFilePlayer.cpp)
+endif()
+
 add_library(${PROJECT_NAME} STATIC ${ENVIRON_SOURCE_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${ENVIRON_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_visual_module core_sound_module core_plugin_module core_movie_module core_utils_module)
 
 find_package(cocos2dx CONFIG REQUIRED)
-find_package(7zip CONFIG REQUIRED)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
         cocos2dx::cocos2d
-
-        7zip::7zip
         minizip
 )
+
+if(NOT EMSCRIPTEN)
+    find_package(7zip CONFIG REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PRIVATE 7zip::7zip)
+else()
+    target_compile_definitions(${PROJECT_NAME} PRIVATE -DKRKR2_NO_7ZIP)
+endif()

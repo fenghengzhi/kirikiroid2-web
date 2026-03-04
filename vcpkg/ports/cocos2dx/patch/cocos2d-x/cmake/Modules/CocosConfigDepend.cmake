@@ -12,6 +12,8 @@ macro(cocos2dx_depend)
         set(THREADS_LIBRARIES ${CMAKE_THREAD_LIBS_INIT})
     elseif(ANDROID)
         list(APPEND PLATFORM_SPECIFIC_LIBS GLESv2 EGL log android OpenSLES)
+    elseif(EMSCRIPTEN)
+        # Emscripten uses built-in ports; options set in use_cocos2dx_libs_depend
     elseif(APPLE)
 
         include_directories(/System/Library/Frameworks)
@@ -82,7 +84,10 @@ macro(use_cocos2dx_libs_depend target)
         target_link_libraries(${target} PUBLIC ${platform_lib})
     endforeach()
 
-    if(LINUX)
+    if(EMSCRIPTEN)
+        target_compile_options(${target} PUBLIC "SHELL:-s USE_SDL=2" "SHELL:-s USE_ZLIB=1" "SHELL:-s USE_LIBPNG=1" "SHELL:-s USE_FREETYPE=1")
+        target_link_options(${target} PUBLIC "SHELL:-s USE_SDL=2" "SHELL:-s USE_ZLIB=1" "SHELL:-s USE_LIBPNG=1" "SHELL:-s USE_FREETYPE=1" "SHELL:-s FULL_ES2=1")
+    elseif(LINUX)
         find_package(Fontconfig REQUIRED) # since CMake 3.14
         target_link_libraries(${target} PUBLIC Fontconfig::Fontconfig)
 

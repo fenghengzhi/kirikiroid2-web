@@ -18,7 +18,9 @@
 #include "GlobalPreferenceForm.h"
 #include "IndividualPreferenceForm.h"
 #include "MessageBox.h"
+#ifndef KRKR2_NO_FFMPEG
 #include "SimpleMediaFilePlayer.h"
+#endif
 #include "tinyxml2/tinyxml2.h"
 #include "StorageImpl.h"
 #include "TipsHelpForm.h"
@@ -195,7 +197,13 @@ void TVPMainFileSelectorForm::onCellClicked(int idx) {
 
     spdlog::debug("Selected file: {}, FullPath: {}", info.NameForDisplay,
                   info.FullPath);
-    runFromPath(info.FullPath);
+    if (info.IsDir) {
+        if (checkStartupTjsScript(info.FullPath)) {
+            doStartup(info.FullPath);
+        }
+    } else {
+        runFromPath(info.FullPath);
+    }
 }
 
 void TVPMainFileSelectorForm::getShortCutDirList(
@@ -329,15 +337,65 @@ void TVPMainFileSelectorForm::showMenu(Ref *) {
             onShowPreferenceConfigAt(CurrentPath);
         });
         reader.findWidget("btnHelp")->addClickEventListener(
-            [this](Ref *) { TVPTipsHelpForm::show(); });
+            [this](Ref *) { 
+                CCLOG("=== Help button clicked ===");
+                TVPTipsHelpForm::show(); 
+            });
 
-        reader.findWidget("btnAbout")->addClickEventListener([](Ref *) {
+        auto btnAbout = reader.findWidget("btnAbout");
+        CCLOG("btnAbout widget found: %p", btnAbout);
+        if (btnAbout) {
+            CCLOG("btnAbout is enabled: %d, visible: %d, touchEnabled: %d", 
+                  btnAbout->isEnabled(), btnAbout->isVisible(), btnAbout->isTouchEnabled());
+            cocos2d::Vec2 pos = btnAbout->getPosition();
+            cocos2d::Size size = btnAbout->getContentSize();
+            cocos2d::Vec2 worldPos = btnAbout->convertToWorldSpace(cocos2d::Vec2::ZERO);
+            CCLOG("btnAbout local pos: (%.1f, %.1f), size: (%.1f x %.1f), world pos: (%.1f, %.1f)", 
+                  pos.x, pos.y, size.width, size.height, worldPos.x, worldPos.y);
+        }
+        btnAbout->addClickEventListener([](Ref *) {
+            CCLOG("=== About button clicked ===");
             std::string versionText = "Version ";
             versionText += TVPGetPackageVersionString();
             versionText += "\n";
             versionText +=
                 LocaleConfigManager::GetInstance()->GetText("about_content");
 
+            std::string strCaption =
+                LocaleConfigManager::GetInstance()->GetText("menu_about");
+            CCLOG("About dialog info - caption: %s, version: %s", strCaption.c_str(), versionText.c_str());
+
+            auto handleAboutResult = [](int n) {
+                switch(n) {
+                    case 1:
+                        TVPOpenPatchLibUrl();
+                        break;
+                    case 2: {
+                        std::string text = TVPGetOpenGLInfo();
+                        std::string okText =
+                            LocaleConfigManager::GetInstance()->GetText("ok");
+                        TVPMessageBoxForm::show(
+                            LocaleConfigManager::GetInstance()->GetText(
+                                "device_info"),
+                            text, 1, &okText, [](int) {});
+                        break;
+                    }
+                }
+            };
+
+#ifdef __EMSCRIPTEN__
+            CCLOG("Showing About dialog for EMSCRIPTEN");
+            const std::string btnTexts[] = {
+                LocaleConfigManager::GetInstance()->GetText("ok"),
+                LocaleConfigManager::GetInstance()->GetText("browse_patch_lib"),
+                LocaleConfigManager::GetInstance()->GetText("device_info"),
+            };
+            CCLOG("About dialog - Button texts: [%s] [%s] [%s]", 
+                  btnTexts[0].c_str(), btnTexts[1].c_str(), btnTexts[2].c_str());
+            TVPMessageBoxForm::show(strCaption, versionText, 3, btnTexts,
+                                    handleAboutResult);
+            CCLOG("TVPMessageBoxForm::show called");
+#else
             const char *pszBtnText[] = {
                 LocaleConfigManager::GetInstance()->GetText("ok").c_str(),
                 LocaleConfigManager::GetInstance()
@@ -347,37 +405,17 @@ void TVPMainFileSelectorForm::showMenu(Ref *) {
                     ->GetText("device_info")
                     .c_str(),
             };
-
-            std::string strCaption =
-                LocaleConfigManager::GetInstance()->GetText("menu_about");
             int n = TVPShowSimpleMessageBox(
                 versionText.c_str(), strCaption.c_str(),
                 sizeof(pszBtnText) / sizeof(pszBtnText[0]), pszBtnText);
-
-            switch(n) {
-                case 1:
-                    TVPOpenPatchLibUrl();
-                    break;
-                case 2:
-                    cocos2d::Director::getInstance()
-                        ->getScheduler()
-                        ->performFunctionInCocosThread([] {
-                            std::string text = TVPGetOpenGLInfo();
-                            const char *pOK = LocaleConfigManager::GetInstance()
-                                                  ->GetText("ok")
-                                                  .c_str();
-                            TVPShowSimpleMessageBox(
-                                text.c_str(),
-                                LocaleConfigManager::GetInstance()
-                                    ->GetText("device_info")
-                                    .c_str(),
-                                1, &pOK);
-                        });
-                    break;
-            }
+            handleAboutResult(n);
+#endif
         });
         reader.findWidget("btnExit")->addClickEventListener(
-            [](Ref *) { _AskExit(); });
+            [](Ref *) { 
+                CCLOG("=== Exit button clicked ===");
+                _AskExit(); 
+            });
         // TODO
         //		reader.findWidget("btnRepack")->addClickEventListener([this](Ref*)
         //{ 			TVPProcessXP3Repack(CurrentPath);

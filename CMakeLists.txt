@@ -19,6 +19,14 @@ if(ANDROID)
     set(ENV{ANDROID_NDK_HOME} "$ENV{ANDROID_NDK}")
     add_compile_options(-Wno-inconsistent-missing-override)
     include(cmake/vcpkg_android.cmake)
+elseif(VCPKG_TARGET_TRIPLET STREQUAL "wasm32-emscripten" OR EMSCRIPTEN)
+    set(WEB ON)
+    set(VCPKG_TARGET_TRIPLET "wasm32-emscripten")
+    set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/triplets")
+    if(CMAKE_TOOLCHAIN_FILE AND NOT CMAKE_TOOLCHAIN_FILE MATCHES "vcpkg")
+        set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "${CMAKE_TOOLCHAIN_FILE}")
+    endif()
+    set(CMAKE_TOOLCHAIN_FILE $ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake)
 else()
     set(CMAKE_TOOLCHAIN_FILE $ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake)
 endif()
@@ -41,12 +49,36 @@ if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/EHsc>" "/MP" "/utf-8")
     add_link_options("/ignore:4099" "/INCREMENTAL" "/DEBUG:FASTLINK")
     # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+elseif(WEB)
+    add_compile_options(-pthread -fexceptions)
 endif()
 
 if(ANDROID)
     add_library(${PROJECT_NAME} SHARED ${CMAKE_CURRENT_SOURCE_DIR}/platforms/android/cpp/krkr2_android.cpp)
     find_package(unofficial-breakpad CONFIG REQUIRED)
     target_link_libraries(${PROJECT_NAME} PUBLIC unofficial::breakpad::libbreakpad_client)
+elseif(WEB)
+    add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/main.cpp)
+    set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".html")
+    target_link_options(${PROJECT_NAME} PRIVATE
+        "SHELL:-s USE_SDL=2"
+        "SHELL:-s USE_SDL_TTF=2"
+        "SHELL:-s MAX_WEBGL_VERSION=2"
+        "SHELL:-s FULL_ES2=1"
+        "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+        "SHELL:-s INITIAL_MEMORY=67108864"
+        "SHELL:-s STACK_SIZE=8388608"
+        "SHELL:-s STACK_OVERFLOW_CHECK=0"
+        "SHELL:-s FORCE_FILESYSTEM=1"
+        "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+        "SHELL:-s PTHREAD_POOL_SIZE=4"
+        "SHELL:-s NO_DISABLE_EXCEPTION_CATCHING"
+        -pthread
+        -lopenal
+        --shell-file ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/shell.html
+        --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio@/
+    )
+    target_compile_options(${PROJECT_NAME} PRIVATE "SHELL:-s USE_SDL=2" "SHELL:-s USE_SDL_TTF=2" -fexceptions)
 elseif(LINUX)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/linux/main.cpp)
 elseif(WINDOWS)
@@ -97,7 +129,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 )
 
 ## resources
-if(NOT ANDROID)
+if(NOT ANDROID AND NOT WEB)
     include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CocosBuildHelpers.cmake")
 
     set(GAME_RES_FOLDER "${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio")
@@ -133,11 +165,11 @@ if(NOT ANDROID)
     endif()
 endif()
 
-if(ENABLE_TESTS AND NOT (IOS OR ANDROID))
+if(ENABLE_TESTS AND NOT (IOS OR ANDROID OR WEB))
     enable_testing()
     add_subdirectory(tests)
 endif()
 
-if(BUILD_TOOLS AND NOT (IOS OR ANDROID))
+if(BUILD_TOOLS AND NOT (IOS OR ANDROID OR WEB))
     add_subdirectory(tools)
 endif()

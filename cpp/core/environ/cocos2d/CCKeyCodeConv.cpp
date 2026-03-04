@@ -1,5 +1,7 @@
 #include "CCKeyCodeConv.h"
+#if !defined(__EMSCRIPTEN__)
 #include "cocos/base/CCController.h"
+#endif
 #include "vkdefine.h"
 
 int TVPConvertMouseBtnToVKCode(tTVPMouseButton _mouseBtn) {
@@ -240,6 +242,7 @@ int TVPConvertKeyCodeToVKCode(cocos2d::EventKeyboard::KeyCode keyCode) {
 }
 
 int TVPConvertPadKeyCodeToVKCode(int keyCode) {
+#if !defined(__EMSCRIPTEN__)
     switch(keyCode) {
         case cocos2d::Controller::BUTTON_A:
             return VK_PAD1;
@@ -283,6 +286,10 @@ int TVPConvertPadKeyCodeToVKCode(int keyCode) {
         default:
             return 0;
     }
+#else
+    (void)keyCode;
+    return 0;
+#endif
 }
 
 const std::unordered_map<std::string, int> &TVPGetVKCodeNameMap() {

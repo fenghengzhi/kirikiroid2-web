@@ -74,36 +74,58 @@ set(VISUAL_HEADERS_DIR
     ${VISUAL_PATH}/impl
 )
 
+if(EMSCRIPTEN)
+    list(REMOVE_ITEM VISUAL_SOURCE_FILES
+        ${VISUAL_PATH}/LoadWEBP.cpp
+        ${VISUAL_PATH}/LoadBPG.cpp
+        ${VISUAL_PATH}/LoadJXR.cpp
+        ${VISUAL_PATH}/LoadJPEG.cpp
+    )
+endif()
+
 add_library(${PROJECT_NAME} STATIC ${VISUAL_SOURCE_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${VISUAL_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_environ_module core_plugin_module core_sound_module core_utils_module)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE libbpg)
-
-find_package(WebP CONFIG REQUIRED)
-target_link_libraries(${PROJECT_NAME} INTERFACE WebP::webp WebP::webpdecoder WebP::webpdemux)
+if(NOT EMSCRIPTEN)
+    target_link_libraries(${PROJECT_NAME} PRIVATE libbpg)
+    find_package(WebP CONFIG REQUIRED)
+    target_link_libraries(${PROJECT_NAME} INTERFACE WebP::webp WebP::webpdecoder WebP::webpdemux)
+else()
+    target_compile_definitions(${PROJECT_NAME} PRIVATE -DKRKR2_NO_BPG -DKRKR2_NO_WEBP -DKRKR2_NO_JPEG -DKRKR2_NO_FFMPEG)
+endif()
 
 find_package(cocos2dx CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE
         cocos2dx::cocos2d
 )
 
-find_package(JXR REQUIRED)
-target_compile_definitions(${PROJECT_NAME} PRIVATE -D__ANSI__)
-target_include_directories(${PROJECT_NAME} PRIVATE ${JXR_INCLUDE_DIRS})
-target_link_libraries(${PROJECT_NAME} PRIVATE ${JXR_LIBRARIES})
+if(NOT EMSCRIPTEN)
+    find_package(JXR REQUIRED)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE -D__ANSI__)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${JXR_INCLUDE_DIRS})
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${JXR_LIBRARIES})
+else()
+    target_compile_definitions(${PROJECT_NAME} PRIVATE -DKRKR2_NO_JXR)
+endif()
 
-find_package(libjpeg-turbo CONFIG REQUIRED)
-target_link_libraries(${PROJECT_NAME} PUBLIC
-    $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
-)
+if(NOT EMSCRIPTEN)
+    find_package(libjpeg-turbo CONFIG REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PUBLIC
+        $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
+    )
+endif()
 
-set(OpenCV_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")
-find_package(OpenCV REQUIRED)
-target_link_libraries(${PROJECT_NAME} PUBLIC
-    opencv_imgproc
-    opencv_core
-)
+if(NOT EMSCRIPTEN)
+    set(OpenCV_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")
+    find_package(OpenCV REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PUBLIC
+        opencv_imgproc
+        opencv_core
+    )
+else()
+    target_compile_definitions(${PROJECT_NAME} PUBLIC -DKRKR2_NO_OPENCV)
+endif()
 
 find_package(lz4 CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PUBLIC

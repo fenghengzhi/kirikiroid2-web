@@ -100,9 +100,7 @@ protected:
                       Node *parent = nullptr);
 
     bool initFromFile(Node *naviBarCall, Node *bodyCall, Node *bottomBarCall,
-                      Node *parent = nullptr) {
-        return true;
-    }
+                      Node *parent = nullptr);
 
     bool initFromFile(Node *body) {
         return initFromFile(nullptr, body, nullptr);

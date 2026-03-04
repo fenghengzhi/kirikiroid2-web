@@ -19,7 +19,9 @@
 #include "WaveLoopManager.h"
 #include "tjsDictionary.h"
 #include "VorbisWaveDecoder.h"
+#ifndef KRKR2_NO_FFMPEG
 #include "FFWaveDecoder.h"
+#endif
 
 //---------------------------------------------------------------------------
 // PCM related constants / definitions
@@ -713,12 +715,16 @@ struct tTVPWaveDecoderManager {
     std::vector<tTVPWaveDecoderCreator *> Creators;
     tTVPWDC_RIFFWave RIFFWaveDecoderCreator;
     VorbisWaveDecoderCreator vorbisWaveDecoderCreator;
+#ifndef KRKR2_NO_FFMPEG
     FFWaveDecoderCreator ffWaveDecoderCreator;
+#endif
     OpusWaveDecoderCreator opusWaveDecoderCreator;
 
     tTVPWaveDecoderManager() {
         TVPWaveDecoderManagerAvail = true;
+#ifndef KRKR2_NO_FFMPEG
         TVPRegisterWaveDecoderCreator(&ffWaveDecoderCreator);
+#endif
         TVPRegisterWaveDecoderCreator(&opusWaveDecoderCreator);
         TVPRegisterWaveDecoderCreator(&RIFFWaveDecoderCreator);
         TVPRegisterWaveDecoderCreator(&vorbisWaveDecoderCreator);

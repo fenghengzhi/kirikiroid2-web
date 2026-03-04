@@ -1,3 +1,5 @@
+#ifndef KRKR2_NO_7ZIP
+
 #include "XP3ArchiveRepack.h"
 #include <map>
 #include <functional>
@@ -813,3 +815,26 @@ void XP3ArchiveRepackAsyncImpl::DoConv() {
     if(OnEnded)
         OnEnded();
 }
+
+#else // KRKR2_NO_7ZIP - stub implementations for platforms without 7zip
+
+#include "XP3ArchiveRepack.h"
+#include "DetectCPU.h"
+
+XP3ArchiveRepackAsync::XP3ArchiveRepackAsync() : _impl(nullptr) {
+    TVPDetectCPU();
+}
+XP3ArchiveRepackAsync::~XP3ArchiveRepackAsync() {}
+uint64_t XP3ArchiveRepackAsync::AddTask(const std::string &) { return 0; }
+void XP3ArchiveRepackAsync::Start() {}
+void XP3ArchiveRepackAsync::Stop() {}
+void XP3ArchiveRepackAsync::SetXP3Filter(const std::string &) {}
+void XP3ArchiveRepackAsync::SetCallback(
+    const std::function<void(int, uint64_t, const std::string &)> &,
+    const std::function<void(int, uint64_t, const std::string &)> &,
+    const std::function<void(uint64_t, uint64_t, uint64_t)> &,
+    const std::function<void(int, const std::string &)> &,
+    const std::function<void()> &) {}
+void XP3ArchiveRepackAsync::SetOption(const std::string &, bool) {}
+
+#endif // KRKR2_NO_7ZIP

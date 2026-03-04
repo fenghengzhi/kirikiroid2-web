@@ -10,6 +10,9 @@ if(WINDOWS)
             windows/main.cpp
             windows/LayerExDraw.cpp
     )
+elseif(EMSCRIPTEN)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/layerex_draw_stub.cpp" "")
+    target_sources(${PROJECT_NAME} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/layerex_draw_stub.cpp")
 else()
     target_sources(${PROJECT_NAME} PUBLIC
             general/main.cpp
@@ -22,8 +25,6 @@ else()
 
     set(VCPKG_INSTALL_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
 
-    # glibconfig
-    # https://invent.kde.org/frameworks/extra-cmake-modules/-/blob/master/find-modules/FindGLIB2.cmake
     target_include_directories(${PROJECT_NAME} PUBLIC "${VCPKG_INSTALL_DIR}/lib/glib-2.0/include")
     target_include_directories(${PROJECT_NAME} PUBLIC "${VCPKG_INSTALL_DIR}/include/glib-2.0")
 

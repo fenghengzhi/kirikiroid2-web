@@ -33,30 +33,47 @@ set(SOUND_HEADERS_DIR
     ${SOUND_PATH}/win32
 )
 
+if(EMSCRIPTEN)
+    list(REMOVE_ITEM SOUND_SOURCE_FILES ${SOUND_PATH}/FFWaveDecoder.cpp)
+endif()
+
 add_library(${PROJECT_NAME} STATIC ${SOUND_SOURCE_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${SOUND_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_movie_module core_utils_module core_environ_module)
 
-find_package(Vorbis CONFIG REQUIRED)
-find_package(Opus CONFIG REQUIRED)
-find_package(OpusFile CONFIG REQUIRED)
-
-if(ANDROID)
-    find_package(oboe CONFIG REQUIRED)
+if(EMSCRIPTEN)
+    find_package(Vorbis CONFIG REQUIRED)
+    find_package(Opus CONFIG REQUIRED)
+    find_package(OpusFile CONFIG REQUIRED)
 
     target_link_libraries(${PROJECT_NAME} PRIVATE
-        oboe::oboe
+        Vorbis::vorbis
+        Vorbis::vorbisfile
+        Vorbis::vorbisenc
+        Opus::opus
+        OpusFile::opusfile
+    )
+    target_link_options(${PROJECT_NAME} PUBLIC -lopenal)
+else()
+    find_package(Vorbis CONFIG REQUIRED)
+    find_package(Opus CONFIG REQUIRED)
+    find_package(OpusFile CONFIG REQUIRED)
+
+    if(ANDROID)
+        find_package(oboe CONFIG REQUIRED)
+        target_link_libraries(${PROJECT_NAME} PRIVATE
+            oboe::oboe
+        )
+    endif()
+
+    find_package(OpenAL CONFIG REQUIRED)
+
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        Vorbis::vorbis
+        Vorbis::vorbisfile
+        Vorbis::vorbisenc
+        Opus::opus
+        OpusFile::opusfile
+        OpenAL::OpenAL
     )
 endif()
-
-find_package(OpenAL CONFIG REQUIRED)
-
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    Vorbis::vorbis
-    Vorbis::vorbisfile
-    Vorbis::vorbisenc
-
-    Opus::opus
-    OpusFile::opusfile
-    OpenAL::OpenAL
-)

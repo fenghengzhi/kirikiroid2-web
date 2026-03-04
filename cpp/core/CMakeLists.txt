@@ -37,8 +37,7 @@ target_compile_definitions(${PROJECT_NAME} INTERFACE
     -DUSE_UNICODE_FSTRING
 )
 
-if(NOT APPLE)
-    # 启用 OpenMP 支持
+if(NOT APPLE AND NOT EMSCRIPTEN)
     find_package(OpenMP REQUIRED)
 
     target_link_libraries(${PROJECT_NAME} INTERFACE OpenMP::OpenMP_CXX)

@@ -37,18 +37,24 @@ set(COCOS_CORE_LIB cocos2d)
 include(2d/CMakeLists.txt)
 include(3d/CMakeLists.txt)
 include(platform/CMakeLists.txt)
-include(physics/CMakeLists.txt)
-include(physics3d/CMakeLists.txt)
+if(NOT EMSCRIPTEN)
+    include(physics/CMakeLists.txt)
+    include(physics3d/CMakeLists.txt)
+    include(navmesh/CMakeLists.txt)
+endif()
 include(math/CMakeLists.txt)
-include(navmesh/CMakeLists.txt)
 include(renderer/CMakeLists.txt)
 include(vr/CMakeLists.txt)
 include(base/CMakeLists.txt)
 include(deprecated/CMakeLists.txt)
 include(ui/CMakeLists.txt)
-include(network/CMakeLists.txt)
+if(NOT EMSCRIPTEN)
+    include(network/CMakeLists.txt)
+endif()
 include(audio/CMakeLists.txt)
-include(storage/CMakeLists.txt)
+if(NOT EMSCRIPTEN)
+    include(storage/CMakeLists.txt)
+endif()
 
 # default value for cocos2dx extensions modules build
 option(BUILD_EDITOR_COCOSBUILDER "Build editor support for cocosbuilder" ON)
@@ -79,41 +85,48 @@ set(COCOS_HEADER cocos2d.h
     ${COCOS_2D_HEADER}
     ${COCOS_3D_HEADER}
     ${COCOS_PLATFORM_HEADER}
-    ${COCOS_PHYSICS_HEADER}
-    ${COCOS_PHYSICS3D_HEADER}
     ${COCOS_MATH_HEADER}
-    ${COCOS_NAVMESH_HEADER}
     ${COCOS_RENDERER_HEADER}
     ${COCOS_VR_HEADER}
     ${COCOS_BASE_HEADER}
     ${COCOS_AUDIO_HEADER}
     ${COCOS_UI_HEADER}
     ${COCOS_DEPRECATED_HEADER}
-    ${COCOS_NETWORK_HEADER}
     ${COCOS_EDITOR_SUPPORT_HEADER}
     ${COCOS_EXTENSIONS_HEADER}
-    ${COCOS_STORAGE_HEADER}
 )
 
 set(COCOS_SRC cocos2d.cpp
     ${COCOS_2D_SRC}
     ${COCOS_3D_SRC}
     ${COCOS_PLATFORM_SRC}
-    ${COCOS_PHYSICS_SRC}
-    ${COCOS_PHYSICS3D_SRC}
     ${COCOS_MATH_SRC}
-    ${COCOS_NAVMESH_SRC}
     ${COCOS_RENDERER_SRC}
     ${COCOS_VR_SRC}
     ${COCOS_BASE_SRC}
     ${COCOS_AUDIO_SRC}
     ${COCOS_UI_SRC}
     ${COCOS_DEPRECATED_SRC}
-    ${COCOS_NETWORK_SRC}
     ${COCOS_EDITOR_SUPPORT_SRC}
     ${COCOS_EXTENSIONS_SRC}
-    ${COCOS_STORAGE_SRC}
 )
+
+if(NOT EMSCRIPTEN)
+    list(APPEND COCOS_HEADER
+        ${COCOS_PHYSICS_HEADER}
+        ${COCOS_PHYSICS3D_HEADER}
+        ${COCOS_NAVMESH_HEADER}
+        ${COCOS_NETWORK_HEADER}
+        ${COCOS_STORAGE_HEADER}
+    )
+    list(APPEND COCOS_SRC
+        ${COCOS_PHYSICS_SRC}
+        ${COCOS_PHYSICS3D_SRC}
+        ${COCOS_NAVMESH_SRC}
+        ${COCOS_NETWORK_SRC}
+        ${COCOS_STORAGE_SRC}
+    )
+endif()
 
 list(APPEND COCOS_SRC ${COCOS_HEADER})
 

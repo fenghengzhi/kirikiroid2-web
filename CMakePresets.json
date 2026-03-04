@@ -125,6 +125,35 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "Web Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "VCPKG_TARGET_TRIPLET": "wasm32-emscripten",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/vcpkg/triplets",
+        "ENABLE_TESTS": false,
+        "BUILD_TOOLS": false
+      },
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
+    },
+    {
+      "name": "Web Debug Config",
+      "inherits": "Web Config",
+      "binaryDir": "${sourceDir}/out/web/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "Web Release Config",
+      "inherits": "Web Config",
+      "binaryDir": "${sourceDir}/out/web/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -151,6 +180,14 @@
     {
       "name": "MacOS Release Build",
       "configurePreset": "MacOS Release Config"
+    },
+    {
+      "name": "Web Debug Build",
+      "configurePreset": "Web Debug Config"
+    },
+    {
+      "name": "Web Release Build",
+      "configurePreset": "Web Release Config"
     }
   ]
 }

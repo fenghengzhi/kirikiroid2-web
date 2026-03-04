@@ -15,8 +15,10 @@
 #include "Random.h"
 #include "UtilStreams.h"
 #include "vkdefine.h"
+#if !defined(__EMSCRIPTEN__)
 #include "base/CCEventListenerController.h"
 #include "base/CCController.h"
+#endif
 #include "ConfigManager/IndividualConfigManager.h"
 #include "Platform.h"
 #include "ui/ConsoleWindow.h"
@@ -1802,6 +1804,7 @@ void TVPMainScene::initialize() {
     _eventDispatcher->addEventListenerWithSceneGraphPriority(_touchListener,
                                                              this);
 
+#if !defined(__EMSCRIPTEN__)
     EventListenerController *ctrllistener = EventListenerController::create();
     ctrllistener->onAxisEvent = CC_CALLBACK_3(TVPMainScene::onAxisEvent, this);
     ctrllistener->onKeyDown = CC_CALLBACK_3(TVPMainScene::onPadKeyDown, this);
@@ -1812,6 +1815,7 @@ void TVPMainScene::initialize() {
                                                              this);
     cocos2d::Controller::startDiscoveryController(); // for win32 &
                                                      // iOS
+#endif
 }
 
 TVPMainScene *TVPMainScene::create() {
@@ -2523,6 +2527,7 @@ void TVPMainScene::onTextInput(const std::string &text) {
 
 void TVPMainScene::onAxisEvent(cocos2d::Controller *ctrl, int keyCode,
                                cocos2d::Event *e) {
+#if !defined(__EMSCRIPTEN__)
     if(!_currentWindowLayer || !_currentWindowLayer->PrimaryLayerArea)
         return;
     if(!_virutalMouseMode || _windowMgrOverlay)
@@ -2568,10 +2573,16 @@ void TVPMainScene::onAxisEvent(cocos2d::Controller *ctrl, int keyCode,
         newpt.y = size.height;
     _mouseCursor->setPosition(newpt);
     _currentWindowLayer->onMouseMove(GameNode->convertToWorldSpace(newpt));
+#else
+    (void)ctrl;
+    (void)keyCode;
+    (void)e;
+#endif
 }
 
 void TVPMainScene::onPadKeyDown(cocos2d::Controller *ctrl, int keyCode,
                                 cocos2d::Event *e) {
+#if !defined(__EMSCRIPTEN__)
     if(!UINode->getChildren().empty())
         return;
     unsigned int code = TVPConvertPadKeyCodeToVKCode(keyCode);
@@ -2583,10 +2594,16 @@ void TVPMainScene::onPadKeyDown(cocos2d::Controller *ctrl, int keyCode,
         _currentWindowLayer->InternalKeyDown(code,
                                              TVPGetCurrentShiftKeyState());
     }
+#else
+    (void)ctrl;
+    (void)keyCode;
+    (void)e;
+#endif
 }
 
 void TVPMainScene::onPadKeyUp(cocos2d::Controller *ctrl, int keyCode,
                               cocos2d::Event *e) {
+#if !defined(__EMSCRIPTEN__)
     unsigned int code = TVPConvertPadKeyCodeToVKCode(keyCode);
     if(!code || code >= 0x200)
         return;
@@ -2596,10 +2613,19 @@ void TVPMainScene::onPadKeyUp(cocos2d::Controller *ctrl, int keyCode,
     if(isPressed && _currentWindowLayer) {
         _currentWindowLayer->OnKeyUp(code, TVPGetCurrentShiftKeyState());
     }
+#else
+    (void)ctrl;
+    (void)keyCode;
+    (void)e;
+#endif
 }
 
 void TVPMainScene::onPadKeyRepeat(cocos2d::Controller *ctrl, int code,
-                                  cocos2d::Event *e) {}
+                                  cocos2d::Event *e) {
+    (void)ctrl;
+    (void)code;
+    (void)e;
+}
 
 float TVPMainScene::convertCursorScale(float val /*0 ~ 1*/) {
     if(val <= 0.5f) {
@@ -2663,6 +2689,7 @@ ttstr TVPGetDataPath() {
 
 #include "StorageImpl.h"
 
+#ifndef __EMSCRIPTEN__
 static std::string _TVPGetInternalPreferencePath() {
     std::string path = cocos2d::FileUtils::getInstance()->getWritablePath();
     path += ".preference";
@@ -2677,6 +2704,7 @@ const std::string &TVPGetInternalPreferencePath() {
     static std::string ret = _TVPGetInternalPreferencePath();
     return ret;
 }
+#endif
 
 tjs_uint32 TVPGetCurrentShiftKeyState() {
     tjs_uint32 f = 0;

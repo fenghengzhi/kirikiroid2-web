@@ -8,13 +8,15 @@
 LocaleConfigManager::LocaleConfigManager() = default;
 
 std::string LocaleConfigManager::GetFilePath() {
-    std::string pathprefix = "locale/"; // constant file in app package
+    std::string pathprefix = "locale/";
     std::string fullpath =
-        pathprefix + currentLangCode + ".xml"; // exp. "local/en_us.xml"
+        pathprefix + currentLangCode + ".xml";
     if(!cocos2d::FileUtils::getInstance()->isFileExist(fullpath)) {
-        currentLangCode =
-            "en_us"; // restore to default language config(must exist)
-        return GetFilePath();
+        if(currentLangCode != "en_us") {
+            currentLangCode = "en_us";
+            return GetFilePath();
+        }
+        return {};
     }
     return cocos2d::FileUtils::getInstance()->fullPathForFilename(fullpath);
 }

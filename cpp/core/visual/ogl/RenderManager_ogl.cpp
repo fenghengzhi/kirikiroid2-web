@@ -18,7 +18,9 @@
 #include "base/CCEventType.h"
 #include "Platform.h"
 #include "ConfigManager/IndividualConfigManager.h"
+#ifndef KRKR2_NO_OPENCV
 #include "opencv2/opencv.hpp"
+#endif
 #include <deque>
 #include <algorithm>
 #include <unordered_set>
@@ -156,6 +158,8 @@ namespace GL { // independ from global gl functions
     typedef void *(fGetProcAddress)(const char *);
 #elif defined(__ANDROID__)
     typedef void *(EGLAPIENTRY fGetProcAddress)(const char *);
+#elif defined(__EMSCRIPTEN__)
+    typedef void *(fGetProcAddress)(const char *);
 #elif defined(LINUX)
     typedef void *(GLAPIENTRY fGetProcAddress)(const char *);
 #endif
@@ -787,10 +791,22 @@ static tjs_uint8 *TVPShrink(tjs_uint *dpitch, const tjs_uint8 *src,
     }
     *dpitch = (dstw * 4 + 7) & ~7;
     tjs_uint8 *tmp = new tjs_uint8[*dpitch * dsth];
+#ifndef KRKR2_NO_OPENCV
     cv::Size dsize(dstw, dsth);
     cv::Mat src_img(srch, srcw, CV_8UC4, (void *)src, spitch);
     cv::Mat dst_img(dsth, dstw, CV_8UC4, (void *)tmp, *dpitch);
     cv::resize(src_img, dst_img, dsize, 0, 0, cv::INTER_LINEAR);
+#else
+    for (tjs_uint dy = 0; dy < dsth; ++dy) {
+        tjs_uint sy = dy * srch / dsth;
+        const tjs_uint8 *srow = src + sy * spitch;
+        tjs_uint8 *drow = tmp + dy * *dpitch;
+        for (tjs_uint dx = 0; dx < dstw; ++dx) {
+            tjs_uint sx = dx * srcw / dstw;
+            memcpy(drow + dx * 4, srow + sx * 4, 4);
+        }
+    }
+#endif
     return tmp;
 }
 
@@ -810,10 +826,22 @@ static tjs_uint8 *TVPShrink_8(tjs_uint *dpitch, const tjs_uint8 *src,
     }
     *dpitch = (dstw + 7) & ~7;
     tjs_uint8 *tmp = new tjs_uint8[*dpitch * dsth];
+#ifndef KRKR2_NO_OPENCV
     cv::Size dsize(dstw, dsth);
     cv::Mat src_img(srch, srcw, CV_8UC1, (void *)src, spitch);
     cv::Mat dst_img(dsth, dstw, CV_8UC1, (void *)tmp, *dpitch);
     cv::resize(src_img, dst_img, dsize, 0, 0, cv::INTER_LINEAR);
+#else
+    for (tjs_uint dy = 0; dy < dsth; ++dy) {
+        tjs_uint sy = dy * srch / dsth;
+        const tjs_uint8 *srow = src + sy * spitch;
+        tjs_uint8 *drow = tmp + dy * *dpitch;
+        for (tjs_uint dx = 0; dx < dstw; ++dx) {
+            tjs_uint sx = dx * srcw / dstw;
+            drow[dx] = srow[sx];
+        }
+    }
+#endif
     return tmp;
 }
 
@@ -1084,6 +1112,7 @@ public:
         glPixelStorei(GL_PACK_ALIGNMENT, 4);
         glReadPixels(x * _scaleW, y * _scaleH, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
                      &clr);
+        _RestoreGLStatues();
         return clr;
     }
 
@@ -1354,12 +1383,30 @@ public:
         }
 
         unsigned char *tmp = new unsigned char[internalW * internalH * 4];
+#ifndef KRKR2_NO_OPENCV
         cv::Size dsize(internalW, internalH);
         cv::Mat src_img(Bitmap->GetHeight(), Bitmap->GetWidth(), CV_8UC4,
                         (void *)Bitmap->GetBits(), Bitmap->GetPitch());
         cv::Mat dst_img(internalH, internalW, CV_8UC4, (void *)tmp,
                         internalW * 4);
         cv::resize(src_img, dst_img, dsize, 0, 0, cv::INTER_LINEAR);
+#else
+        {
+            int srcw = Bitmap->GetWidth(), srch = Bitmap->GetHeight();
+            int spitch = Bitmap->GetPitch();
+            const unsigned char *src = (const unsigned char *)Bitmap->GetBits();
+            int dpitch = internalW * 4;
+            for (int dy = 0; dy < internalH; ++dy) {
+                int sy = dy * srch / internalH;
+                const unsigned char *srow = src + sy * spitch;
+                unsigned char *drow = tmp + dy * dpitch;
+                for (int dx = 0; dx < internalW; ++dx) {
+                    int sx = dx * srcw / internalW;
+                    memcpy(drow + dx * 4, srow + sx * 4, 4);
+                }
+            }
+        }
+#endif
 
         Bitmap->Release(); // release here to relieve memory peak
         Bitmap = nullptr;
@@ -4852,6 +4899,7 @@ public:
         float dw = _tar->GetInternalWidth(), dh = _tar->GetInternalHeight();
 
         for(int i = 0; i < nQuads; ++i) {
+#ifndef KRKR2_NO_OPENCV
             cv::Point2f pts_src[] = {
                 cv::Point2f(srcpt[0].x / tw, srcpt[0].y / th),
                 cv::Point2f((srcpt[1].x + 1) / tw, srcpt[1].y / th),
@@ -4879,17 +4927,20 @@ public:
                 }
                 method->ApplyMatrix(mtx);
             }
+#else
+            float mtx[9] = {1,0,0, 0,1,0, 0,0,1};
+            method->ApplyMatrix(mtx);
+#endif
 
-            // pass to OperateTriangles
             tTVPPointD pttar[6] =
                 {
-                    dstpt[0], // 左上
-                    dstpt[1], // 右上
-                    dstpt[2], // 左下
+                    dstpt[0],
+                    dstpt[1],
+                    dstpt[2],
 
-                    dstpt[1], // 右上
-                    dstpt[2], // 左下
-                    dstpt[3], // 右下
+                    dstpt[1],
+                    dstpt[2],
+                    dstpt[3],
                 },
                        pttex[6] = {srcpt[0], srcpt[1], srcpt[2],
 

@@ -30,9 +30,11 @@
 #include <thread>
 #include "ConfigManager/LocaleConfigManager.h"
 #include "StorageIntf.h"
+#ifndef KRKR2_NO_FFMPEG
 extern "C" {
 #include <libavutil/avstring.h>
 }
+#endif
 #include "TVPColor.h"
 #include "FontImpl.h"
 
@@ -95,6 +97,7 @@ void TVPOnError();
 void TVPLockSoundMixer();
 void TVPUnlockSoundMixer();
 
+#ifndef __EMSCRIPTEN__
 static bool _warnLowMem = true;
 void TVPCheckMemory() {
 #if defined(_DEBUG)
@@ -129,6 +132,7 @@ int TVPShowSimpleMessageBoxYesNo(const ttstr &text, const ttstr &caption) {
     normal.emplace_back(mgr->GetText("msgbox_no"));
     return TVPShowSimpleMessageBox(text, caption, normal);
 }
+#endif
 
 ttstr TVPGetMessageByLocale(const std::string &key) {
     return LocaleConfigManager::GetInstance()->GetText(key);
@@ -864,7 +868,14 @@ void TVPDeleteAcceleratorKeyTable( HWND hWnd ) {
 void TVPInitWindowOptions() {}
 
 std::string ExtractFileDir(const std::string &FileName) {
+#ifndef KRKR2_NO_FFMPEG
     return av_dirname((char *)FileName.c_str());
+#else
+    size_t pos = FileName.find_last_of("/\\");
+    if(pos == std::string::npos)
+        return "";
+    return FileName.substr(0, pos);
+#endif
 }
 
 unsigned long ColorToRGB(unsigned int col) {

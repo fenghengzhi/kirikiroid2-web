@@ -5,7 +5,9 @@
 
 #include "TextStream.h"
 
+#ifndef KRKR2_NO_OPENCV
 #include <opencv2/core/hal/interface.h>
+#endif
 #include <spdlog/spdlog.h>
 
 #include "MsgIntf.h"

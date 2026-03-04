@@ -1,3 +1,5 @@
+#ifndef __EMSCRIPTEN__
+
 #include <ioapi.h>
 #include <minizip/zip.h>
 #include <cocos/base/base64.h>
@@ -257,3 +259,5 @@ void TVPCheckAndSendDumps(const std::string &dumpdir,
         }
     }
 }
+
+#endif // __EMSCRIPTEN__

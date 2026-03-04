@@ -687,7 +687,8 @@ namespace Csd {
 
         // ScrollView text（用于文字显示）
         const auto scrollView = ScrollView::create();
-        scrollView->setDirection(ScrollView::Direction::HORIZONTAL);
+        scrollView->setName("text");
+        scrollView->setDirection(ScrollView::Direction::VERTICAL);
         scrollView->setTouchEnabled(true);
         scrollView->setContentSize(cocos2d::Size(566, 152));
         scrollView->setInnerContainerSize(cocos2d::Size(566, 222)); // 容器大小
@@ -699,6 +700,7 @@ namespace Csd {
         // Text 内容
         const auto label =
             Text::create("Text cocos2d::Label", "NotoSansCJK-Regular.ttc", 56);
+        label->setName("content");
         label->setTextColor(cocos2d::Color4B::WHITE);
         label->enableOutline(cocos2d::Color4B::BLUE, 1);
         label->enableShadow(cocos2d::Color4B(110, 110, 110, 255),
@@ -711,6 +713,7 @@ namespace Csd {
         // 标题 title
         const auto title =
             Text::create("Text cocos2d::Label", "NotoSansCJK-Regular.ttc", 64);
+        title->setName("title");
         title->setTextColor(cocos2d::Color4B::WHITE);
         title->enableOutline(cocos2d::Color4B::BLUE, 1);
         title->enableShadow(cocos2d::Color4B(110, 110, 110, 255),
@@ -721,6 +724,7 @@ namespace Csd {
 
         // btnList Panel
         const auto btnList = Layout::create();
+        btnList->setName("btnList");
         btnList->setTouchEnabled(true);
         btnList->setContentSize(cocos2d::Size(566, 120));
         btnList->setBackGroundColorType(Layout::BackGroundColorType::SOLID);
@@ -730,6 +734,7 @@ namespace Csd {
 
         // btn（按钮容器）
         const auto btnPanel = Layout::create();
+        btnPanel->setName("btn");
         btnPanel->setTouchEnabled(true);
         btnPanel->setContentSize(cocos2d::Size(250, 105));
         btnPanel->setBackGroundColorType(Layout::BackGroundColorType::GRADIENT);
@@ -752,6 +757,7 @@ namespace Csd {
         // Button 实体
         const auto button =
             Button::create("img/empty.png", "img/gray.png", "img/gray.png");
+        button->setName("btnBody");
         button->setTitleText("Button");
         button->setTitleFontName("NotoSansCJK-Regular.ttc");
         button->setTitleFontSize(64);

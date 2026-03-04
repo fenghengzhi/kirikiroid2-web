@@ -1,21 +1,36 @@
 {
   "name": "cocos2dx",
   "version-string": "3.17.2",
-  "port-version": 5,
+  "port-version": 30,
   "description": "Cocos2d-x is a suite of open-source, cross-platform, game-development tools utilized by millions of developers across the globe.",
   "homepage": "http://www.cocos2d-x.org/",
   "license": null,
-  "supports": "android | linux | windows | osx",
+  "supports": "android | linux | windows | osx | emscripten",
   "dependencies": [
     {
       "name": "bzip2",
       "platform": "linux"
     },
-    "box2d",
-    "bullet3",
-    "chipmunk",
-    "libuv",
-    "libwebsockets",
+    {
+      "name": "box2d",
+      "platform": "!emscripten"
+    },
+    {
+      "name": "bullet3",
+      "platform": "!emscripten"
+    },
+    {
+      "name": "chipmunk",
+      "platform": "!emscripten"
+    },
+    {
+      "name": "libuv",
+      "platform": "!emscripten"
+    },
+    {
+      "name": "libwebsockets",
+      "platform": "!emscripten"
+    },
     {
       "name": "mpg123",
       "platform": "windows"
@@ -24,16 +39,18 @@
       "name": "libogg",
       "platform": "windows"
     },
-    "curl",
     {
       "name": "curl",
-      "platform": "linux"
+      "platform": "!emscripten"
     },
     {
       "name": "fontconfig",
       "platform": "linux"
     },
-    "freetype",
+    {
+      "name": "freetype",
+      "platform": "!emscripten"
+    },
     {
       "name": "glfw3",
       "platform": "linux | windows | osx"
@@ -46,10 +63,22 @@
       "name": "gtk3",
       "platform": "linux"
     },
-    "libiconv",
-    "libjpeg-turbo",
-    "libpng",
-    "libwebp",
+    {
+      "name": "libiconv",
+      "platform": "!emscripten"
+    },
+    {
+      "name": "libjpeg-turbo",
+      "platform": "!emscripten"
+    },
+    {
+      "name": "libpng",
+      "platform": "!emscripten"
+    },
+    {
+      "name": "libwebp",
+      "platform": "!emscripten"
+    },
     {
       "name": "libvorbis",
       "platform": "android | windows"
@@ -68,13 +97,17 @@
     },
     {
       "name": "openssl",
-      "default-features": false
+      "default-features": false,
+      "platform": "!emscripten"
     },
     {
       "name": "sqlite3",
       "platform": "linux | windows"
     },
-    "tiff",
+    {
+      "name": "tiff",
+      "platform": "!emscripten"
+    },
     {
       "name": "vcpkg-cmake",
       "host": true

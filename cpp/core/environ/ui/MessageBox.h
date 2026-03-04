@@ -11,6 +11,8 @@ public:
     static void showYesNo(const std::string &caption, const std::string &text,
                           const std::function<void(int)> &callback);
 
+    void rearrangeLayout() override;
+
 private:
     void init(const std::string &caption, const std::string &text, int nBtns,
               const std::string *btnText,

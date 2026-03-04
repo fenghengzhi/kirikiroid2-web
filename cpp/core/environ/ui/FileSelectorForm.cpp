@@ -362,9 +362,13 @@ void TVPBaseFileSelectorForm::onTitleClicked(cocos2d::Ref *owner) {
     };
     for(const std::string &path : paths) {
         CSBReader reader;
-        auto *cell = dynamic_cast<Widget *>(
-            reader.Load("ui/ListItem.csb")->getChildByName("item"));
-        Button *item = dynamic_cast<Button *>(reader.findController("item"));
+        reader.Load("ui/ListItem.csb");
+        auto *cell = dynamic_cast<Widget *>(reader.findController("item"));
+        if (cell) {
+            cell->retain();
+            cell->removeFromParentAndCleanup(false);
+        }
+        Button *item = dynamic_cast<Button *>(cell);
         item->setCallbackName(path);
         item->setTitleText(path);
         item->addClickEventListener(func);
@@ -372,6 +376,9 @@ void TVPBaseFileSelectorForm::onTitleClicked(cocos2d::Ref *owner) {
         buttons.emplace_back(item);
     }
     _listform = TVPListForm::create(cells);
+    for (auto *cell : cells) {
+        cell->release();
+    }
     _listform->show();
     // march all button's text in its width
     for(Button *btn : buttons) {

@@ -4,6 +4,7 @@
 #include "MainScene.h"
 #include "Application.h"
 #include "Platform.h"
+#include "2d/CCCamera.h"
 #include "ui/GlobalPreferenceForm.h"
 #include "ui/MainFileSelectorForm.h"
 #include "ui/extension/UIExtension.h"
@@ -65,6 +66,15 @@ bool TVPAppDelegate::applicationDidFinishLaunching() {
                                     ResolutionPolicy::FIXED_WIDTH);
 #endif
 
+    {
+        auto frameSize = glview->getFrameSize();
+        auto vp = cocos2d::experimental::Viewport(
+            0, 0,
+            static_cast<int>(frameSize.width),
+            static_cast<int>(frameSize.height));
+        cocos2d::Camera::setDefaultViewport(vp);
+    }
+
     std::vector<std::string> searchPath;
 
     // In this demo, we select resource according to the frame's
@@ -79,7 +89,7 @@ bool TVPAppDelegate::applicationDidFinishLaunching() {
     cocos2d::FileUtils::getInstance()->setSearchPaths(searchPath);
 
     // turn on display FPS
-    director->setDisplayStats(false);
+    director->setDisplayStats(true);
 
     // set FPS. the default value is 1.0/60 if you don't call this
     director->setAnimationInterval(1.0f / 60);
