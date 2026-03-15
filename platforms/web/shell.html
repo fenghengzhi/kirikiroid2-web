@@ -506,7 +506,8 @@
 
             try {
                 setPickerProgress(0, 'Scanning directory...');
-                var entries = await enumerateDir(hostDirHandle, '');
+                var dirPrefix = '/' + hostDirHandle.name;
+                var entries = await enumerateDir(hostDirHandle, dirPrefix);
                 var total = entries.length;
                 if (total === 0) {
                     pickerStatus.textContent = 'Directory is empty.';
@@ -520,12 +521,13 @@
                 Module._hostStreams = {};
                 Module._nextStreamId = 1;
                 Module._hostDirHandle = hostDirHandle;
+                Module._hostDirPrefix = dirPrefix;
 
                 for (var i = 0; i < total; i++) {
                     var entry = entries[i];
                     setPickerProgress(
                         Math.round(i / total * 100),
-                        'Registering (' + (i + 1) + '/' + total + ') ' + entry.path.substring(1)
+                        'Registering (' + (i + 1) + '/' + total + ') ' + entry.path.substring(dirPrefix.length + 1)
                     );
                     var isStream = entry.path.toLowerCase().endsWith('.xp3');
                     Module._lazyFiles[entry.path] = {

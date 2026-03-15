@@ -148,7 +148,11 @@ EM_ASYNC_JS(void, fsafs_flush_file, (const char *path_ptr), {
     if (!Module._hostDirHandle) return;
     try {
         var data = FS.readFile(p);
-        var parts = p.split('/').filter(Boolean);
+        var relPath = p;
+        if (Module._hostDirPrefix && relPath.startsWith(Module._hostDirPrefix + '/')) {
+            relPath = relPath.substring(Module._hostDirPrefix.length);
+        }
+        var parts = relPath.split('/').filter(Boolean);
         var fileName = parts.pop();
         var dirHandle = Module._hostDirHandle;
         for (var i = 0; i < parts.length; i++) {
