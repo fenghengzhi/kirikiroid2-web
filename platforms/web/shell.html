@@ -302,18 +302,19 @@
         var pickerProgress = document.getElementById('picker-progress');
         var pickerProgressFill = document.getElementById('picker-progress-fill');
         var gameFileReady = false;
+        var userFileDepAdded = false;
         var hasFileSystemAPI = typeof window.showDirectoryPicker === 'function';
 
         // --- File System Access API state ---
         var hostDirHandle = null;
-        var fileSyncEnabled = false;
-        var fileSnapshot = {};         // path -> mtime at initial load
-        var syncQueue = [];
-        var syncRunning = false;
 
         var Module = {
             preRun: [function() {
                 Module.addRunDependency('user-file');
+                userFileDepAdded = true;
+                if (gameFileReady) {
+                    Module.removeRunDependency('user-file');
+                }
             }],
             postRun: [function() {
                 loadingOverlay.classList.add('hidden');
@@ -331,7 +332,7 @@
             setStatus: function(text) {
                 if (!text) {
                     loadingOverlay.classList.add('hidden');
-                    if (!gameFileReady) {
+                    if (!gameFileReady && !xp3Url) {
                         filePicker.classList.add('visible');
                     }
                     return;
@@ -373,6 +374,8 @@
             canvas.width = container.clientWidth || 1280;
             canvas.height = container.clientHeight || 720;
         })();
+
+        var xp3Url = new URLSearchParams(window.location.search).get('xp3');
 
         // Show File System API button when supported
         if (hasFileSystemAPI) {
@@ -426,7 +429,56 @@
             loadingOverlay.classList.remove('hidden');
             statusElement.textContent = 'Starting game...';
             progressFill.style.width = '100%';
-            Module.removeRunDependency('user-file');
+            if (userFileDepAdded) {
+                Module.removeRunDependency('user-file');
+            }
+        }
+
+        // --- Auto-load from URL parameter: ?xp3=<url> ---
+        async function fetchXp3FromUrl(url) {
+            loadingOverlay.classList.remove('hidden');
+            statusElement.textContent = 'Downloading game data...';
+            progressFill.style.width = '0%';
+            try {
+                var resp = await fetch(url);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+                var total = parseInt(resp.headers.get('Content-Length') || '0', 10);
+                var reader = resp.body.getReader();
+                var chunks = [];
+                var loaded = 0;
+                while (true) {
+                    var r = await reader.read();
+                    if (r.done) break;
+                    chunks.push(r.value);
+                    loaded += r.value.length;
+                    if (total > 0) {
+                        var pct = Math.round(loaded / total * 100);
+                        progressFill.style.width = pct + '%';
+                        statusElement.textContent = 'Downloading... ' + pct + '%';
+                    } else {
+                        statusElement.textContent = 'Downloading... ' + (loaded / 1048576).toFixed(1) + ' MB';
+                    }
+                }
+                var data = new Uint8Array(loaded);
+                var offset = 0;
+                for (var i = 0; i < chunks.length; i++) {
+                    data.set(chunks[i], offset);
+                    offset += chunks[i].length;
+                }
+                statusElement.textContent = 'Writing to filesystem...';
+                writeFileToFS('/data.xp3', data);
+                startGame();
+            } catch (err) {
+                statusElement.textContent = 'Download failed: ' + err.message;
+                progressFill.style.width = '0%';
+                console.error('fetchXp3FromUrl error:', err);
+                filePicker.classList.add('visible');
+                loadingOverlay.classList.add('hidden');
+            }
+        }
+
+        if (xp3Url) {
+            fetchXp3FromUrl(xp3Url);
         }
 
         // --- File System Access API: directory picker + save sync ---
@@ -463,119 +515,35 @@
                     return;
                 }
 
-                var totalBytes = 0;
-                var loadedBytes = 0;
-                for (var e of entries) {
-                    var f = await e.handle.getFile();
-                    e._file = f;
-                    totalBytes += f.size;
-                }
+                Module._lazyFiles = {};
+                Module._loadedFiles = {};
+                Module._hostStreams = {};
+                Module._nextStreamId = 1;
+                Module._hostDirHandle = hostDirHandle;
 
                 for (var i = 0; i < total; i++) {
                     var entry = entries[i];
-                    var file = entry._file;
-                    var sizeMB = totalBytes > 0
-                        ? (loadedBytes / 1048576).toFixed(0) + '/' + (totalBytes / 1048576).toFixed(0) + ' MB'
-                        : '';
                     setPickerProgress(
-                        Math.round(loadedBytes / totalBytes * 100),
-                        'Loading (' + (i + 1) + '/' + total + ') ' + entry.path.substring(1) + '  ' + sizeMB
+                        Math.round(i / total * 100),
+                        'Registering (' + (i + 1) + '/' + total + ') ' + entry.path.substring(1)
                     );
-                    var data = new Uint8Array(await file.arrayBuffer());
-                    writeFileToFS(entry.path, data);
-                    loadedBytes += file.size;
-
-                    fileSnapshot[entry.path] = FS.stat(entry.path).mtime;
+                    var isStream = entry.path.toLowerCase().endsWith('.xp3');
+                    Module._lazyFiles[entry.path] = {
+                        handle: entry.handle,
+                        stream: isStream
+                    };
+                    var dir = entry.path.substring(0, entry.path.lastIndexOf('/'));
+                    if (dir) ensureDir(dir);
+                    FS.writeFile(entry.path, new Uint8Array(0));
                 }
 
                 setPickerProgress(100, 'Starting...');
-                fileSyncEnabled = true;
-                startFileSyncTimer();
                 startGame();
             } catch (err) {
                 pickerStatus.textContent = 'Error: ' + err.message;
                 pickerProgress.classList.remove('visible');
                 hostDirHandle = null;
             }
-        }
-
-        // --- Save sync: detect MEMFS changes and write back to host ---
-        function scanMemfsChanges(fsPath) {
-            var changed = [];
-            var SKIP = { '.': 1, '..': 1, dev: 1, proc: 1, tmp: 1 };
-            try {
-                var entries = FS.readdir(fsPath);
-            } catch(e) { return changed; }
-            for (var name of entries) {
-                if (SKIP[name]) continue;
-                var fullPath = fsPath === '/' ? '/' + name : fsPath + '/' + name;
-                try {
-                    var stat = FS.stat(fullPath);
-                    if (FS.isDir(stat.mode)) {
-                        changed = changed.concat(scanMemfsChanges(fullPath));
-                    } else {
-                        var ext = name.split('.').pop().toLowerCase();
-                        if (ext === 'xp3') continue;
-                        var snapMtime = fileSnapshot[fullPath];
-                        if (snapMtime === undefined || stat.mtime !== snapMtime) {
-                            changed.push(fullPath);
-                            fileSnapshot[fullPath] = stat.mtime;
-                        }
-                    }
-                } catch(e) {}
-            }
-            return changed;
-        }
-
-        async function getSubdirHandle(rootHandle, pathParts) {
-            var cur = rootHandle;
-            for (var part of pathParts) {
-                cur = await cur.getDirectoryHandle(part, { create: true });
-            }
-            return cur;
-        }
-
-        async function syncFileToHost(fsPath) {
-            if (!hostDirHandle) return;
-            try {
-                var data = FS.readFile(fsPath);
-                var parts = fsPath.split('/').filter(Boolean);
-                var fileName = parts.pop();
-                var dirHandle = await getSubdirHandle(hostDirHandle, parts);
-                var fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
-                var writable = await fileHandle.createWritable();
-                await writable.write(data);
-                await writable.close();
-                console.log('[FileSync] Synced: ' + fsPath);
-            } catch (err) {
-                console.warn('[FileSync] Failed: ' + fsPath + ' - ' + err.message);
-            }
-        }
-
-        async function processSyncQueue() {
-            if (syncRunning || syncQueue.length === 0) return;
-            syncRunning = true;
-            while (syncQueue.length > 0) {
-                var path = syncQueue.shift();
-                await syncFileToHost(path);
-            }
-            syncRunning = false;
-        }
-
-        function doSyncScan() {
-            if (!fileSyncEnabled || !hostDirHandle) return;
-            var changed = scanMemfsChanges('/');
-            for (var p of changed) {
-                if (syncQueue.indexOf(p) === -1) syncQueue.push(p);
-            }
-            processSyncQueue();
-        }
-
-        function startFileSyncTimer() {
-            setInterval(doSyncScan, 3000);
-            window.addEventListener('beforeunload', function() {
-                doSyncScan();
-            });
         }
 
         // --- Fallback: .xp3 file picker ---
@@ -595,13 +563,21 @@
         async function handleFolder(files) {
             var total = files.length;
             try {
+                if (!Module._lazyFiles) Module._lazyFiles = {};
+                if (!Module._loadedFiles) Module._loadedFiles = {};
+                if (!Module._hostStreams) Module._hostStreams = {};
+                if (!Module._nextStreamId) Module._nextStreamId = 1;
+
                 for (var i = 0; i < total; i++) {
                     var file = files[i];
                     var relPath = '/' + file.webkitRelativePath;
                     setPickerProgress(Math.round(i / total * 100),
-                        'Loading file ' + (i + 1) + '/' + total + ': ' + file.name);
-                    var data = await readFileWithProgress(file);
-                    writeFileToFS(relPath, data);
+                        'Registering (' + (i + 1) + '/' + total + ') ' + file.name);
+                    var isStream = file.name.toLowerCase().endsWith('.xp3');
+                    Module._lazyFiles[relPath] = { file: file, stream: isStream };
+                    var dir = relPath.substring(0, relPath.lastIndexOf('/'));
+                    if (dir) ensureDir(dir);
+                    FS.writeFile(relPath, new Uint8Array(0));
                 }
                 startGame();
             } catch (err) {

@@ -41,6 +41,18 @@ class tTVPLocalFileStream : public tTJSBinaryStream {
     tTVPMemoryStream *MemBuffer = nullptr;
     ttstr FileName;
 
+#ifdef __EMSCRIPTEN__
+    int HostStreamId = -1;
+    tjs_uint64 HostStreamSize = 0;
+    tjs_uint64 HostStreamPos = 0;
+    std::vector<uint8_t> ReadCache;
+    tjs_uint64 CacheOffset = 0;
+    tjs_uint64 CacheEnd = 0;
+    static constexpr size_t CACHE_BLOCK_SIZE = 1024 * 1024;
+
+    tjs_uint ReadFromHostStream(void *buffer, tjs_uint read_size);
+#endif
+
 public:
     tTVPLocalFileStream(const ttstr &origname, const ttstr &localname,
                         tjs_uint32 flag);

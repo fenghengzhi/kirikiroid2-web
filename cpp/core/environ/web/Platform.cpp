@@ -11,7 +11,9 @@
 #undef st_ctime
 #include <sys/time.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <filesystem>
+#include <algorithm>
 
 #include <spdlog/spdlog.h>
 #include <emscripten.h>
@@ -71,6 +73,97 @@ std::string TVPGetCurrentLanguage() {
     if (locale.empty()) return "en_us";
     return locale;
 }
+
+// ---------------------------------------------------------------------------
+// FSAFS: File System Access API overlay for lazy-load & streaming
+// ---------------------------------------------------------------------------
+
+EM_ASYNC_JS(void, fsafs_ensure_loaded, (const char *path_ptr), {
+    var p = UTF8ToString(path_ptr);
+    if (!Module._lazyFiles) return;
+    var entry = Module._lazyFiles[p];
+    if (!entry || entry.stream) return;
+    if (Module._loadedFiles && Module._loadedFiles[p]) return;
+    var file = entry.file || await entry.handle.getFile();
+    var data = new Uint8Array(await file.arrayBuffer());
+    var dir = p.substring(0, p.lastIndexOf('/'));
+    if (dir) {
+        var parts = dir.split('/').filter(Boolean);
+        var cur = '';
+        for (var i = 0; i < parts.length; i++) {
+            cur += '/' + parts[i];
+            try { FS.mkdir(cur); } catch(e) {}
+        }
+    }
+    FS.writeFile(p, data);
+    if (!Module._loadedFiles) Module._loadedFiles = {};
+    Module._loadedFiles[p] = true;
+});
+
+EM_JS(int, fsafs_is_host_stream, (const char *path_ptr), {
+    var p = UTF8ToString(path_ptr);
+    if (!Module._lazyFiles) return 0;
+    var entry = Module._lazyFiles[p];
+    return (entry && entry.stream) ? 1 : 0;
+});
+
+EM_ASYNC_JS(int, fsafs_open_stream, (const char *path_ptr), {
+    var p = UTF8ToString(path_ptr);
+    if (!Module._lazyFiles) return -1;
+    var entry = Module._lazyFiles[p];
+    if (!entry) return -1;
+    var file = entry.file || await entry.handle.getFile();
+    if (!Module._hostStreams) Module._hostStreams = {};
+    if (!Module._nextStreamId) Module._nextStreamId = 1;
+    var id = Module._nextStreamId++;
+    Module._hostStreams[id] = { file: file, size: file.size };
+    return id;
+});
+
+EM_JS(double, fsafs_get_stream_size, (int stream_id), {
+    if (!Module._hostStreams) return 0;
+    var s = Module._hostStreams[stream_id];
+    return s ? s.size : 0;
+});
+
+EM_ASYNC_JS(int, fsafs_read_stream, (int stream_id, void *buf, double offset, int length), {
+    if (!Module._hostStreams) return -1;
+    var s = Module._hostStreams[stream_id];
+    if (!s) return -1;
+    var end = Math.min(offset + length, s.size);
+    if (end <= offset) return 0;
+    var blob = s.file.slice(offset, end);
+    var ab = await blob.arrayBuffer();
+    var data = new Uint8Array(ab);
+    HEAPU8.set(data, buf);
+    return data.length;
+});
+
+EM_JS(void, fsafs_close_stream, (int stream_id), {
+    if (Module._hostStreams) delete Module._hostStreams[stream_id];
+});
+
+EM_ASYNC_JS(void, fsafs_flush_file, (const char *path_ptr), {
+    var p = UTF8ToString(path_ptr);
+    if (!Module._hostDirHandle) return;
+    try {
+        var data = FS.readFile(p);
+        var parts = p.split('/').filter(Boolean);
+        var fileName = parts.pop();
+        var dirHandle = Module._hostDirHandle;
+        for (var i = 0; i < parts.length; i++) {
+            dirHandle = await dirHandle.getDirectoryHandle(parts[i], { create: true });
+        }
+        var fh = await dirHandle.getFileHandle(fileName, { create: true });
+        var writable = await fh.createWritable();
+        await writable.write(data);
+        await writable.close();
+    } catch (err) {
+        console.warn('[FSAFS] flush failed: ' + p + ' - ' + err.message);
+    }
+});
+
+// ---------------------------------------------------------------------------
 
 EM_JS(int, web_alert, (const char* msg, const char* title), {
     alert(UTF8ToString(title) + '\n' + UTF8ToString(msg));
@@ -199,12 +292,79 @@ void TVPExitApplication(int code) {
     emscripten_force_exit(code);
 }
 
-bool TVPCheckStartupArg() {
+static bool tryStartFromDir(const std::string &dir) {
     struct stat st;
-    if (stat("/data.xp3", &st) == 0 && S_ISREG(st.st_mode)) {
-        spdlog::info("Found /data.xp3, auto-starting game");
-        TVPMainScene::GetInstance()->startupFrom("/data.xp3");
+    std::string xp3File;
+    bool hasStartupTjs = false;
+
+    DIR *dirp = opendir(dir.c_str());
+    if (!dirp) return false;
+
+    dirent *dp;
+    while ((dp = readdir(dirp))) {
+        std::string name = dp->d_name;
+        if (name.empty() || name[0] == '.') continue;
+
+        std::string full = dir;
+        if (full.back() != '/') full += '/';
+        full += name;
+
+        if (stat(full.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
+
+        std::string lower = name;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+        if (lower == "data.xp3") {
+            closedir(dirp);
+            spdlog::info("Found {}, auto-starting game", full);
+            TVPMainScene::GetInstance()->startupFrom(full);
+            return true;
+        }
+        if (lower.size() > 4 &&
+            lower.compare(lower.size() - 4, 4, ".xp3") == 0 &&
+            xp3File.empty()) {
+            xp3File = full;
+        }
+        if (lower == "startup.tjs") {
+            hasStartupTjs = true;
+        }
+    }
+    closedir(dirp);
+
+    if (!xp3File.empty()) {
+        spdlog::info("Found {}, auto-starting game", xp3File);
+        TVPMainScene::GetInstance()->startupFrom(xp3File);
         return true;
+    }
+    if (hasStartupTjs) {
+        spdlog::info("Found startup.tjs in {}, auto-starting game", dir);
+        TVPMainScene::GetInstance()->startupFrom(dir);
+        return true;
+    }
+    return false;
+}
+
+bool TVPCheckStartupArg() {
+    if (tryStartFromDir("/")) return true;
+
+    struct stat st;
+    DIR *rootDir = opendir("/");
+    if (rootDir) {
+        dirent *dp;
+        while ((dp = readdir(rootDir))) {
+            std::string name = dp->d_name;
+            if (name.empty() || name[0] == '.') continue;
+            if (name == "dev" || name == "proc" || name == "tmp" ||
+                name == "home" || name == "save") continue;
+            std::string full = "/" + name;
+            if (stat(full.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+                if (tryStartFromDir(full)) {
+                    closedir(rootDir);
+                    return true;
+                }
+            }
+        }
+        closedir(rootDir);
     }
     return false;
 }
@@ -250,10 +410,12 @@ const std::string &TVPGetInternalPreferencePath() {
 
 bool TVPWriteDataToFile(const ttstr &filepath, const void *data,
                         unsigned int len) {
-    FILE *handle = fopen(filepath.AsStdString().c_str(), "wb");
+    std::string path = filepath.AsStdString();
+    FILE *handle = fopen(path.c_str(), "wb");
     if (handle) {
         bool ret = fwrite(data, 1, len, handle) == len;
         fclose(handle);
+        if (ret) fsafs_flush_file(path.c_str());
         return ret;
     }
     return false;

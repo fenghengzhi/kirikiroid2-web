@@ -14,6 +14,52 @@
 #include "ft2build.h"
 #include FT_FREETYPE_H
 
+EM_JS(int, _cc_canvas_render_text, (const char* textPtr, int fontSize,
+    int fillR, int fillG, int fillB, int fillA,
+    int dimW, int dimH, int alignVal), {
+    var text = UTF8ToString(textPtr);
+    if (!text || text.length === 0) return 0;
+
+    var canvas = document.createElement('canvas');
+    var ctx = canvas.getContext('2d');
+    var fontStr = fontSize + 'px sans-serif';
+    ctx.font = fontStr;
+
+    var lines = text.split('\n');
+    var lineHeight = Math.ceil(fontSize * 1.3);
+    var maxW = 0;
+    for (var i = 0; i < lines.length; i++) {
+        var m = ctx.measureText(lines[i]);
+        if (m.width > maxW) maxW = m.width;
+    }
+    var w = Math.ceil(maxW) || 1;
+    var h = lineHeight * lines.length || 1;
+    if (dimW > 0 && dimW > w) w = dimW;
+    if (dimH > 0 && dimH > h) h = dimH;
+
+    canvas.width = w;
+    canvas.height = h;
+    ctx.font = fontStr;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(' + fillR + ',' + fillG + ',' + fillB + ',' + (fillA / 255.0) + ')';
+    ctx.textBaseline = 'top';
+
+    for (var i = 0; i < lines.length; i++) {
+        var x = 0;
+        if (alignVal === 1) x = (w - ctx.measureText(lines[i]).width) / 2;
+        else if (alignVal === 2) x = w - ctx.measureText(lines[i]).width;
+        ctx.fillText(lines[i], x, i * lineHeight);
+    }
+
+    var imageData = ctx.getImageData(0, 0, w, h);
+    var totalBytes = 8 + w * h * 4;
+    var buf = _malloc(totalBytes);
+    HEAP32[buf >> 2] = w;
+    HEAP32[(buf + 4) >> 2] = h;
+    HEAPU8.set(imageData.data, buf + 8);
+    return buf;
+});
+
 NS_CC_BEGIN
 
 int Device::getDPI()
@@ -227,14 +273,45 @@ public:
         return path;
     }
 
+    bool getBitmapCanvas(const char* text, const FontDefinition& textDef, Device::TextAlign align) {
+        int fontSize = static_cast<int>(textDef._fontSize);
+        if (fontSize <= 0) fontSize = 24;
+
+        int alignVal = 0;
+        if (align == Device::TextAlign::CENTER || align == Device::TextAlign::TOP || align == Device::TextAlign::BOTTOM)
+            alignVal = 1;
+        else if (align == Device::TextAlign::RIGHT || align == Device::TextAlign::TOP_RIGHT || align == Device::TextAlign::BOTTOM_RIGHT)
+            alignVal = 2;
+
+        int resultPtr = _cc_canvas_render_text(text, fontSize,
+            textDef._fontFillColor.r, textDef._fontFillColor.g,
+            textDef._fontFillColor.b, textDef._fontAlpha,
+            (int)textDef._dimensions.width, (int)textDef._dimensions.height,
+            alignVal);
+        if (!resultPtr) return false;
+
+        int* header = reinterpret_cast<int*>(resultPtr);
+        iMaxLineWidth = header[0];
+        iMaxLineHeight = header[1];
+        if (iMaxLineWidth <= 0 || iMaxLineHeight <= 0) {
+            free(header);
+            return false;
+        }
+        int dataSize = iMaxLineWidth * iMaxLineHeight * 4;
+        _data = static_cast<unsigned char*>(malloc(dataSize));
+        memcpy(_data, reinterpret_cast<unsigned char*>(resultPtr) + 8, dataSize);
+        free(header);
+        return true;
+    }
+
     bool getBitmap(const char* text, const FontDefinition& textDef, Device::TextAlign align) {
-        if (libError) return false;
+        if (libError) return getBitmapCanvas(text, textDef, align);
 
         std::string fontFile = getFontFile(textDef._fontName.c_str());
 
         FT_Face face;
         if (FT_New_Face(library, fontFile.c_str(), 0, &face)) {
-            return false;
+            return getBitmapCanvas(text, textDef, align);
         }
 
         if (FT_Select_Charmap(face, FT_ENCODING_UNICODE)) {

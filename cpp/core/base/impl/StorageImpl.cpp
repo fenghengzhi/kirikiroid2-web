@@ -645,6 +645,17 @@ ttstr TVPLocalExtractFilePath(const ttstr &name) {
 //---------------------------------------------------------------------------
 // tTVPLocalFileStream
 //---------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+extern "C" {
+extern void fsafs_ensure_loaded(const char *);
+extern int fsafs_is_host_stream(const char *);
+extern int fsafs_open_stream(const char *);
+extern double fsafs_get_stream_size(int);
+extern int fsafs_read_stream(int, void *, double, int);
+extern void fsafs_close_stream(int);
+}
+#endif
+
 tTVPLocalFileStream::tTVPLocalFileStream(const ttstr &origname,
                                          const ttstr &localname,
                                          tjs_uint32 flag) :
@@ -668,6 +679,20 @@ tTVPLocalFileStream::tTVPLocalFileStream(const ttstr &origname,
         MemBuffer = new tTVPMemoryStream();
         return;
     }
+
+#ifdef __EMSCRIPTEN__
+    {
+        tTJSNarrowStringHolder path(localname.c_str());
+        if(fsafs_is_host_stream(path)) {
+            HostStreamId = fsafs_open_stream(path);
+            if(HostStreamId >= 0) {
+                HostStreamSize = (tjs_uint64)fsafs_get_stream_size(HostStreamId);
+                return;
+            }
+        }
+        fsafs_ensure_loaded(path);
+    }
+#endif
 
     unsigned int rw = 0;
     switch(access) {
@@ -741,6 +766,14 @@ bool TVPWriteDataToFile(const ttstr &filepath, const void *data,
                         unsigned int len);
 
 tTVPLocalFileStream::~tTVPLocalFileStream() {
+#ifdef __EMSCRIPTEN__
+    if(HostStreamId >= 0) {
+        fsafs_close_stream(HostStreamId);
+        uint32_t tick = TVPGetRoughTickCount32();
+        TVPPushEnvironNoise(&tick, sizeof(tick));
+        return;
+    }
+#endif
     if(MemBuffer) {
         if(!TVPWriteDataToFile(FileName, MemBuffer->GetInternalBuffer(),
                                MemBuffer->GetSize())) {
@@ -764,6 +797,16 @@ tTVPLocalFileStream::~tTVPLocalFileStream() {
 
 //---------------------------------------------------------------------------
 tjs_uint64 tTVPLocalFileStream::Seek(tjs_int64 offset, tjs_int whence) {
+#ifdef __EMSCRIPTEN__
+    if(HostStreamId >= 0) {
+        switch(whence) {
+            case SEEK_SET: HostStreamPos = (tjs_uint64)offset; break;
+            case SEEK_CUR: HostStreamPos = (tjs_uint64)((tjs_int64)HostStreamPos + offset); break;
+            case SEEK_END: HostStreamPos = (tjs_uint64)((tjs_int64)HostStreamSize + offset); break;
+        }
+        return HostStreamPos;
+    }
+#endif
     if(MemBuffer) {
         return MemBuffer->Seek(offset, whence);
     }
@@ -772,6 +815,9 @@ tjs_uint64 tTVPLocalFileStream::Seek(tjs_int64 offset, tjs_int whence) {
 
 //---------------------------------------------------------------------------
 tjs_uint tTVPLocalFileStream::Read(void *buffer, tjs_uint read_size) {
+#ifdef __EMSCRIPTEN__
+    if(HostStreamId >= 0) return ReadFromHostStream(buffer, read_size);
+#endif
     if(MemBuffer) {
         return MemBuffer->Read(buffer, read_size);
     }
@@ -796,6 +842,9 @@ void tTVPLocalFileStream::SetEndOfStorage() {
 
 //---------------------------------------------------------------------------
 tjs_uint64 tTVPLocalFileStream::GetSize() {
+#ifdef __EMSCRIPTEN__
+    if(HostStreamId >= 0) return HostStreamSize;
+#endif
     if(MemBuffer) {
         return MemBuffer->GetSize();
     }
@@ -805,6 +854,50 @@ tjs_uint64 tTVPLocalFileStream::GetSize() {
     lseek64(Handle, curpos, SEEK_SET);
     return ret;
 }
+
+#ifdef __EMSCRIPTEN__
+//---------------------------------------------------------------------------
+tjs_uint tTVPLocalFileStream::ReadFromHostStream(void *buffer, tjs_uint read_size) {
+    if(HostStreamPos >= HostStreamSize) return 0;
+    tjs_uint64 remaining = HostStreamSize - HostStreamPos;
+    if(read_size > remaining) read_size = (tjs_uint)remaining;
+
+    tjs_uint total = 0;
+    auto *dst = static_cast<uint8_t *>(buffer);
+
+    while(read_size > 0) {
+        if(HostStreamPos >= CacheOffset && HostStreamPos < CacheEnd) {
+            tjs_uint avail = (tjs_uint)std::min(
+                (tjs_uint64)read_size, CacheEnd - HostStreamPos);
+            memcpy(dst, ReadCache.data() + (HostStreamPos - CacheOffset), avail);
+            dst += avail;
+            HostStreamPos += avail;
+            read_size -= avail;
+            total += avail;
+        } else if(read_size >= CACHE_BLOCK_SIZE) {
+            int loaded = fsafs_read_stream(
+                HostStreamId, dst, (double)HostStreamPos, (int)read_size);
+            if(loaded <= 0) break;
+            dst += loaded;
+            HostStreamPos += loaded;
+            read_size -= loaded;
+            total += loaded;
+        } else {
+            CacheOffset = HostStreamPos;
+            tjs_uint blockSize = (tjs_uint)std::min(
+                (tjs_uint64)CACHE_BLOCK_SIZE, HostStreamSize - CacheOffset);
+            ReadCache.resize(blockSize);
+            int loaded = fsafs_read_stream(
+                HostStreamId, ReadCache.data(), (double)CacheOffset, (int)blockSize);
+            if(loaded <= 0) break;
+            CacheEnd = CacheOffset + loaded;
+        }
+    }
+
+    return total;
+}
+#endif
+
 /*
 this class provides COM's IStream adapter for tTJSBinaryStream
 */
