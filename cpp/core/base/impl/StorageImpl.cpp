@@ -653,14 +653,16 @@ extern int fsafs_open_stream(const char *);
 extern double fsafs_get_stream_size(int);
 extern int fsafs_read_stream(int, void *, double, int);
 extern void fsafs_close_stream(int);
+extern void fsafs_mark_written(const char *);
+extern void fsafs_flush_file(const char *);
 }
 #endif
 
 tTVPLocalFileStream::tTVPLocalFileStream(const ttstr &origname,
                                          const ttstr &localname,
                                          tjs_uint32 flag) :
-    MemBuffer(nullptr), FileName(localname), Handle(-1) {
-    tjs_uint32 access = flag & TJS_BS_ACCESS_MASK;
+    MemBuffer(nullptr), FileName(localname), Handle(-1), AccessFlags(flag & TJS_BS_ACCESS_MASK) {
+    tjs_uint32 access = AccessFlags;
     if(access == TJS_BS_WRITE) {
         if(TVPCheckExistentLocalFile(localname)) {
         } else {
@@ -674,7 +676,6 @@ tTVPLocalFileStream::tTVPLocalFileStream(const ttstr &origname,
                !TVPCreateFolders(dirpath)) {
                 TVPThrowExceptionMessage(TVPCannotOpenStorage, origname);
             }
-            //			_lastFileSystemChanged = true;
         }
         MemBuffer = new tTVPMemoryStream();
         return;
@@ -787,6 +788,13 @@ tTVPLocalFileStream::~tTVPLocalFileStream() {
     }
     if(Handle >= 0) {
         close(Handle);
+#ifdef __EMSCRIPTEN__
+        if(AccessFlags == TJS_BS_UPDATE || AccessFlags == TJS_BS_APPEND) {
+            tTJSNarrowStringHolder path(FileName.c_str());
+            fsafs_mark_written(path);
+            fsafs_flush_file(path);
+        }
+#endif
     }
 
     // push current tick as an environment noise

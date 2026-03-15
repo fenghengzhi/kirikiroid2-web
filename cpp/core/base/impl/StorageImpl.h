@@ -40,6 +40,7 @@ class tTVPLocalFileStream : public tTJSBinaryStream {
     int Handle;
     tTVPMemoryStream *MemBuffer = nullptr;
     ttstr FileName;
+    tjs_uint32 AccessFlags = 0;
 
 #ifdef __EMSCRIPTEN__
     int HostStreamId = -1;

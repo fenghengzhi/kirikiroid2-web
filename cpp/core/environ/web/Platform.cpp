@@ -83,21 +83,27 @@ EM_ASYNC_JS(void, fsafs_ensure_loaded, (const char *path_ptr), {
     if (!Module._lazyFiles) return;
     var entry = Module._lazyFiles[p];
     if (!entry || entry.stream) return;
-    if (Module._loadedFiles && Module._loadedFiles[p]) return;
-    var file = entry.file || await entry.handle.getFile();
-    var data = new Uint8Array(await file.arrayBuffer());
-    var dir = p.substring(0, p.lastIndexOf('/'));
-    if (dir) {
-        var parts = dir.split('/').filter(Boolean);
-        var cur = '';
-        for (var i = 0; i < parts.length; i++) {
-            cur += '/' + parts[i];
-            try { FS.mkdir(cur); } catch(e) {}
-        }
+    if (Module._loadedFiles && Module._loadedFiles[p]) {
+        return;
     }
-    FS.writeFile(p, data);
-    if (!Module._loadedFiles) Module._loadedFiles = {};
-    Module._loadedFiles[p] = true;
+    try {
+        var file = entry.file || await entry.handle.getFile();
+        var data = new Uint8Array(await file.arrayBuffer());
+        var dir = p.substring(0, p.lastIndexOf('/'));
+        if (dir) {
+            var parts = dir.split('/').filter(Boolean);
+            var cur = '';
+            for (var i = 0; i < parts.length; i++) {
+                cur += '/' + parts[i];
+                try { FS.mkdir(cur); } catch(e) {}
+            }
+        }
+        FS.writeFile(p, data);
+        if (!Module._loadedFiles) Module._loadedFiles = {};
+        Module._loadedFiles[p] = true;
+    } catch(err) {
+        console.error('[FSAFS] ensure_loaded FAILED: ' + p + ' - ' + err.message);
+    }
 });
 
 EM_JS(int, fsafs_is_host_stream, (const char *path_ptr), {
@@ -143,28 +149,38 @@ EM_JS(void, fsafs_close_stream, (int stream_id), {
     if (Module._hostStreams) delete Module._hostStreams[stream_id];
 });
 
-EM_ASYNC_JS(void, fsafs_flush_file, (const char *path_ptr), {
+EM_JS(void, fsafs_mark_written, (const char *path_ptr), {
+    var p = UTF8ToString(path_ptr);
+    if (!Module._loadedFiles) Module._loadedFiles = {};
+    Module._loadedFiles[p] = true;
+});
+
+EM_JS(void, fsafs_flush_file, (const char *path_ptr), {
     var p = UTF8ToString(path_ptr);
     if (!Module._hostDirHandle) return;
-    try {
-        var data = FS.readFile(p);
-        var relPath = p;
-        if (Module._hostDirPrefix && relPath.startsWith(Module._hostDirPrefix + '/')) {
-            relPath = relPath.substring(Module._hostDirPrefix.length);
+    var dirHandle = Module._hostDirHandle;
+    var prefix = Module._hostDirPrefix;
+    setTimeout(async function() {
+        try {
+            var data = FS.readFile(p);
+            var relPath = p;
+            if (prefix && relPath.startsWith(prefix + '/')) {
+                relPath = relPath.substring(prefix.length);
+            }
+            var parts = relPath.split('/').filter(Boolean);
+            var fileName = parts.pop();
+            var cur = dirHandle;
+            for (var i = 0; i < parts.length; i++) {
+                cur = await cur.getDirectoryHandle(parts[i], { create: true });
+            }
+            var fh = await cur.getFileHandle(fileName, { create: true });
+            var writable = await fh.createWritable();
+            await writable.write(data);
+            await writable.close();
+        } catch (err) {
+            console.warn('[FSAFS] flush_file FAILED: ' + p + ' - ' + err.message);
         }
-        var parts = relPath.split('/').filter(Boolean);
-        var fileName = parts.pop();
-        var dirHandle = Module._hostDirHandle;
-        for (var i = 0; i < parts.length; i++) {
-            dirHandle = await dirHandle.getDirectoryHandle(parts[i], { create: true });
-        }
-        var fh = await dirHandle.getFileHandle(fileName, { create: true });
-        var writable = await fh.createWritable();
-        await writable.write(data);
-        await writable.close();
-    } catch (err) {
-        console.warn('[FSAFS] flush failed: ' + p + ' - ' + err.message);
-    }
+    }, 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -385,17 +401,28 @@ bool TVPRenameFile(const std::string &from, const std::string &to) {
 
 bool TVPCopyFile(const std::string &from, const std::string &to) {
     FILE *src = fopen(from.c_str(), "rb");
-    if (!src) return false;
+    if (!src) {
+        spdlog::error("[FSAFS] TVPCopyFile fopen src FAILED: {}", from);
+        return false;
+    }
     FILE *dst = fopen(to.c_str(), "wb");
-    if (!dst) { fclose(src); return false; }
+    if (!dst) {
+        spdlog::error("[FSAFS] TVPCopyFile fopen dst FAILED: {}", to);
+        fclose(src);
+        return false;
+    }
 
     char buf[4096];
     size_t n;
+    size_t total = 0;
     while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
         fwrite(buf, 1, n, dst);
+        total += n;
     }
     fclose(src);
     fclose(dst);
+    fsafs_mark_written(to.c_str());
+    fsafs_flush_file(to.c_str());
     return true;
 }
 
@@ -419,9 +446,13 @@ bool TVPWriteDataToFile(const ttstr &filepath, const void *data,
     if (handle) {
         bool ret = fwrite(data, 1, len, handle) == len;
         fclose(handle);
-        if (ret) fsafs_flush_file(path.c_str());
+        if (ret) {
+            fsafs_mark_written(path.c_str());
+            fsafs_flush_file(path.c_str());
+        }
         return ret;
     }
+    spdlog::error("[FSAFS] TVPWriteDataToFile fopen FAILED: {}", path);
     return false;
 }
 

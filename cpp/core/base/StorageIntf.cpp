@@ -1134,10 +1134,11 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
     ttstr name;
 
     tjs_uint32 access = flags & TJS_BS_ACCESS_MASK;
-    if(access == TJS_BS_WRITE)
+    if(access == TJS_BS_WRITE) {
         name = TVPNormalizeStorageName(_name);
-    else
+    } else {
         name = TVPGetPlacedPath(_name); // file must exist
+    }
 
     if(name.IsEmpty()) {
         if(access >= 1)

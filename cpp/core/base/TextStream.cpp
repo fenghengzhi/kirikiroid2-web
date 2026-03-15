@@ -77,7 +77,8 @@ public:
         size_t ofs = parseModeNumber(mode.c_str(), TJS_W('o'), 255, 0).value();
         _stream->SetPosition(ofs);
 
-        auto size = static_cast<size_t>(_stream->GetSize() - ofs);
+        auto totalSize = _stream->GetSize();
+        auto size = static_cast<size_t>(totalSize - ofs);
         std::vector<std::uint8_t> raw(size);
         _stream->ReadBuffer(raw.data(), size);
 
@@ -209,6 +210,14 @@ public:
         std::copy_n(_buffer.data() + _pos, n, buf);
         buf[n] = 0;
         _pos += n;
+
+        for(size_t j = 0; j < n; j++) {
+            if(buf[j] == 0) {
+                buf[j] = 0x0020;
+            }
+        }
+        buf[n] = 0;
+
         targ.FixLen();
         return n;
     }
@@ -354,11 +363,20 @@ public:
 
     void Write(const ttstr &targ) override {
         tjs_int len = targ.GetLen();
-        auto buf = std::make_unique<tjs_uint16[]>(len + 1);
+        if(len <= 0) return;
         const tjs_char *src = targ.c_str();
+
+        if(src[0] == 0) {
+            return;
+        }
+
+        auto buf = std::make_unique<tjs_uint16[]>(len + 1);
         tjs_int i;
         for(i = 0; i < len; i++) {
             buf[i] = src[i];
+            if(buf[i] == 0) {
+                buf[i] = 0x0020;
+            }
         }
         buf[i] = 0;
 

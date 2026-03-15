@@ -18,6 +18,7 @@
 #include "StorageIntf.h"
 #include "DebugIntf.h"
 #include "WindowIntf.h"
+#include <spdlog/spdlog.h>
 #include "LayerIntf.h"
 #include "CDDAIntf.h"
 #include "MIDIIntf.h"
@@ -784,20 +785,6 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
         place, modestr) };
     ttstr buffer;
     stream->Read(buffer, 0);
-
-    // save extract script file for debug!
-    //    auto tmpPlace = place.AsStdString();
-    //    auto i = tmpPlace.find(".xp3>");
-    //    if(i > -1) {
-    //        tmpPlace.replace(i, std::strlen(".xp3>"), "_xp3/");
-    //        std::filesystem::path absoluteScriptPath{ tmpPlace.substr(
-    //            std::strlen("file://.")) };
-    //        std::filesystem::create_directories(absoluteScriptPath.parent_path());
-    //        std::ofstream of{ absoluteScriptPath };
-    //        of << buffer.AsStdString() << std::endl;
-    //        of.close();
-    //    }
-    // end
 
     if(TVPScriptEngine) {
 
