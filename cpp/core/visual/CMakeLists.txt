@@ -76,7 +76,6 @@ set(VISUAL_HEADERS_DIR
 
 if(EMSCRIPTEN)
     list(REMOVE_ITEM VISUAL_SOURCE_FILES
-        ${VISUAL_PATH}/LoadWEBP.cpp
         ${VISUAL_PATH}/LoadBPG.cpp
         ${VISUAL_PATH}/LoadJXR.cpp
     )
@@ -86,12 +85,13 @@ add_library(${PROJECT_NAME} STATIC ${VISUAL_SOURCE_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${VISUAL_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_environ_module core_plugin_module core_sound_module core_utils_module)
 
+find_package(WebP CONFIG REQUIRED)
+target_link_libraries(${PROJECT_NAME} INTERFACE WebP::webp WebP::webpdecoder WebP::webpdemux)
+
 if(NOT EMSCRIPTEN)
     target_link_libraries(${PROJECT_NAME} PRIVATE libbpg)
-    find_package(WebP CONFIG REQUIRED)
-    target_link_libraries(${PROJECT_NAME} INTERFACE WebP::webp WebP::webpdecoder WebP::webpdemux)
 else()
-    target_compile_definitions(${PROJECT_NAME} PRIVATE -DKRKR2_NO_BPG -DKRKR2_NO_WEBP -DKRKR2_NO_FFMPEG)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE -DKRKR2_NO_BPG -DKRKR2_NO_FFMPEG)
 endif()
 
 find_package(cocos2dx CONFIG REQUIRED)

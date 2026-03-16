@@ -59,10 +59,7 @@
       "platform": "!linux & !emscripten"
     },
     "libvorbis",
-    {
-      "name": "libwebp",
-      "platform": "!emscripten"
-    },
+    "libwebp",
     "lz4",
     "oniguruma",
     {

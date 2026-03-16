@@ -21,13 +21,6 @@ void TVPLoadBPG(void *formatdata, void *callbackdata,
                 tTJSBinaryStream *src, tjs_int keyidx,
                 tTVPGraphicLoadMode mode) {}
 
-void TVPLoadWEBP(void *formatdata, void *callbackdata,
-                 tTVPGraphicSizeCallback sizecallback,
-                 tTVPGraphicScanLineCallback scanlinecallback,
-                 tTVPMetaInfoPushCallback metainfopushcallback,
-                 tTJSBinaryStream *src, tjs_int keyidx,
-                 tTVPGraphicLoadMode mode) {}
-
 void TVPLoadJXR(void *formatdata, void *callbackdata,
                 tTVPGraphicSizeCallback sizecallback,
                 tTVPGraphicScanLineCallback scanlinecallback,
@@ -37,9 +30,6 @@ void TVPLoadJXR(void *formatdata, void *callbackdata,
 
 void TVPLoadHeaderBPG(void *formatdata, tTJSBinaryStream *src,
                       iTJSDispatch2 **dic) {}
-
-void TVPLoadHeaderWEBP(void *formatdata, tTJSBinaryStream *src,
-                       iTJSDispatch2 **dic) {}
 
 void TVPLoadHeaderJXR(void *formatdata, tTJSBinaryStream *src,
                       iTJSDispatch2 **dic) {}
