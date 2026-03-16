@@ -591,6 +591,12 @@ public:
         checkerr("alSourceQueueBuffers");
         //_tags[_bufferIdx] = tag;
         _bufferSize[_bufferIdx] = len;
+
+        ALenum state;
+        alGetSourcei(_alSource, AL_SOURCE_STATE, &state);
+        if(state == AL_STOPPED && _playing) {
+            alSourcePlay(_alSource);
+        }
     }
 
     void Reset() override {

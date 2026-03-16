@@ -78,6 +78,9 @@ if [ "@VCPKG_CMAKE_SYSTEM_NAME@" = "Android" ]; then
     OPTIONS_arm64=" --disable-asm"
     OPTIONS_x86=" --disable-asm"
     OPTIONS_x86_64="${OPTIONS_x86}"
+elif [ "@VCPKG_CMAKE_SYSTEM_NAME@" = "Emscripten" ]; then
+    OPTIONS_x86_32=" --disable-asm"
+    OPTIONS_wasm32=" --disable-asm"
 else
     OPTIONS_arm=" --disable-asm"
     OPTIONS_arm64=" --enable-asm"

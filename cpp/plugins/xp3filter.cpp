@@ -9,6 +9,7 @@
 #include "ThreadIntf.h"
 #include <memory>
 #include <thread>
+#include <spdlog/spdlog.h>
 
 #include "TextStream.h"
 
@@ -421,7 +422,25 @@ static XP3FilterDecoder *AddXP3Decoder() {
 }
 
 static std::map<std::thread::id, XP3FilterDecoder *> _thread_decoders;
-#if 1 || (defined(_MSC_VER) /*&& _MSC_VER <= 1800*/) ||                        \
+#ifdef __EMSCRIPTEN__
+static std::mutex _decoders_mtx;
+static XP3FilterDecoder *_shared_decoder = nullptr;
+static std::unique_lock<std::mutex> FetchXP3DecoderLocked(XP3FilterDecoder *&out) {
+    std::unique_lock<std::mutex> lk(_decoders_mtx);
+    if(!_shared_decoder) {
+        _shared_decoder = AddXP3Decoder();
+    }
+    out = _shared_decoder;
+    return lk;
+}
+static XP3FilterDecoder *FetchXP3Decoder() {
+    std::lock_guard<std::mutex> lk(_decoders_mtx);
+    if(!_shared_decoder) {
+        _shared_decoder = AddXP3Decoder();
+    }
+    return _shared_decoder;
+}
+#elif 1 || (defined(_MSC_VER) /*&& _MSC_VER <= 1800*/) ||                      \
     defined(CC_TARGET_OS_IPHONE)
 static std::mutex _decoders_mtx;
 static std::vector<XP3FilterDecoder *> _cached_decoders;
@@ -469,7 +488,12 @@ tjs_int TVPXP3ArchiveContentFilterWrapper(const ttstr &filepath,
     if(!_ManagedFilterInited)
         return 0;
 
-    XP3FilterDecoder *decoder = FetchXP3Decoder();
+    XP3FilterDecoder *decoder;
+#ifdef __EMSCRIPTEN__
+    auto lock = FetchXP3DecoderLocked(decoder);
+#else
+    decoder = FetchXP3Decoder();
+#endif
     if(!decoder->ManagedFilter.Object)
         return 0;
     tTJSVariant FilePath(filepath);
@@ -496,7 +520,12 @@ TVPXP3ArchiveExtractionFilterWrapper(tTVPXP3ExtractionFilterInfo *info,
     if(info->SizeOfSelf != sizeof(tTVPXP3ExtractionFilterInfo))
         TVPThrowExceptionMessage(
             TJS_W("Incompatible tTVPXP3ExtractionFilterInfo size"));
-    XP3FilterDecoder *decoder = FetchXP3Decoder();
+    XP3FilterDecoder *decoder;
+#ifdef __EMSCRIPTEN__
+    auto lock = FetchXP3DecoderLocked(decoder);
+#else
+    decoder = FetchXP3Decoder();
+#endif
     if(decoder->ManagedDecoder.Object) {
         tTJSVariant FileHash = (tjs_int64)info->FileHash;
         tTJSVariant Offset = (tjs_int64)info->Offset;
@@ -508,25 +537,9 @@ TVPXP3ArchiveExtractionFilterWrapper(tTVPXP3ExtractionFilterInfo *info,
         tTJSVariant FileName(info->FileName);
         tTJSVariant *vars[] = { &FileHash,   &Offset,   &Buffer,
                                 &BufferSize, &FileName, ctx };
-#if defined(WIN32) && defined(CHECK_CXDEC)
-        unsigned char *pBackup = new unsigned char[info->BufferSize],
-                      *pBuffer = (unsigned char *)info->Buffer;
-        memcpy(pBackup, info->Buffer, info->BufferSize);
-#endif
         decoder->ManagedDecoder.FuncCall(0, nullptr, nullptr, nullptr,
                                          sizeof(vars) / sizeof(vars[0]), vars,
                                          nullptr);
-#if defined(WIN32) && defined(CHECK_CXDEC)
-        cxdec_decode(&dec_callback, info->FileHash, info->Offset, pBackup,
-                     info->BufferSize);
-        for(int i = 0; i < info->BufferSize; ++i) {
-            if(pBackup[i] != pBuffer[i]) {
-                assert(false);
-                break;
-            }
-        }
-        delete[] pBackup;
-#endif
     }
 }
 
@@ -536,6 +549,10 @@ void TVPSetXP3FilterScript(ttstr content) {
             delete it.second;
         }
         _thread_decoders.clear();
+#ifdef __EMSCRIPTEN__
+        delete _shared_decoder;
+        _shared_decoder = nullptr;
+#endif
     }
     if(content.IsEmpty()) {
         TVPSetXP3ArchiveExtractionFilter(nullptr);
@@ -549,7 +566,10 @@ void TVPSetXP3FilterScript(ttstr content) {
 
 static void PostRegistCallback() {
     ttstr path = TVPGetAppPath() + TJS_W("xp3filter.tjs");
-    if(TVPIsExistentStorageNoSearch(path)) {
+    bool exists = TVPIsExistentStorageNoSearch(path);
+    spdlog::info("xp3filter: PostRegistCallback path='{}', exists={}",
+                 path.AsStdString(), exists);
+    if(exists) {
         iTJSTextReadStream *stream = TVPCreateTextStreamForRead(path, "");
         try {
             stream->Read(sXP3FilterScript, 0);
@@ -558,11 +578,10 @@ static void PostRegistCallback() {
             throw;
         }
         stream->Destruct();
-        //    AddXP3Decoder();
+        spdlog::info("xp3filter: Script loaded, len={}", sXP3FilterScript.GetLen());
         TVPSetXP3ArchiveExtractionFilter(TVPXP3ArchiveExtractionFilterWrapper);
         TVPSetXP3ArchiveContentFilter(TVPXP3ArchiveContentFilterWrapper);
     }
-    // TVPSetXP3ArchiveExtractionFilter(TVPXP3ArchiveExtractionFilter);
 }
 
 NCB_POST_REGIST_CALLBACK(PostRegistCallback);

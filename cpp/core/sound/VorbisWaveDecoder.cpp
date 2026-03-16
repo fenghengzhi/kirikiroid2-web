@@ -9,6 +9,7 @@
 #include "StorageIntf.h"
 #include "DebugIntf.h"
 #include <algorithm>
+#include <spdlog/spdlog.h>
 
 static const bool FloatExtraction =
     false; // true if output format is IEEE 32-bit float
@@ -215,11 +216,11 @@ bool VorbisWaveDecoder::SetStream(const ttstr &url) {
         return false;
 
     ov_callbacks callbacks = { read_func, seek_func, close_func, tell_func };
-    // callback functions
 
-    // open input stream via ov_open_callbacks
-    if(ov_open_callbacks(this, &InputFile, nullptr, 0, callbacks) < 0) {
-        // error!
+    int ov_ret = ov_open_callbacks(this, &InputFile, nullptr, 0, callbacks);
+    if(ov_ret < 0) {
+        spdlog::warn("VorbisWaveDecoder: ov_open_callbacks failed for '{}', ret={}",
+                     url.AsStdString(), ov_ret);
         delete InputStream;
         InputStream = nullptr;
         return false;

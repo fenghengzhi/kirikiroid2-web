@@ -4,7 +4,6 @@
 #include "DebugIntf.h"
 #include "SysInitIntf.h"
 #include "BinaryStream.h"
-#include "krffmpeg.h"
 
 extern "C" {
 #ifndef __STDC_CONSTANT_MACROS
@@ -21,6 +20,19 @@ extern "C" {
 #include "libavcodec/avcodec.h"
 #include "libavformat/avformat.h"
 };
+
+#ifdef __EMSCRIPTEN__
+static bool FFInitilalized = false;
+void TVPInitLibAVCodec() {
+    if(!FFInitilalized) {
+        avcodec_register_all();
+        av_register_all();
+        FFInitilalized = true;
+    }
+}
+#else
+#include "krffmpeg.h"
+#endif
 
 class FFWaveDecoder : public tTVPWaveDecoder // decoder interface
 {

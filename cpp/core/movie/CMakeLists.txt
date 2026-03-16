@@ -13,7 +13,7 @@ if(EMSCRIPTEN)
     add_library(${PROJECT_NAME} STATIC "${CMAKE_CURRENT_BINARY_DIR}/movie_stub.cpp")
     target_include_directories(${PROJECT_NAME} PUBLIC ${MOVIE_HEADERS_DIR})
     target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_utils_module)
-    target_compile_definitions(${PROJECT_NAME} PUBLIC KRKR2_NO_FFMPEG)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE KRKR2_NO_FFMPEG)
 else()
     set(MOVIE_SOURCE_FILES
         ${MOVIE_PATH}/ffmpeg/AEChannelInfo.cpp

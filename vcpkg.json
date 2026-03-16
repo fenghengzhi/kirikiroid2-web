@@ -37,10 +37,7 @@
       "name": "dirent",
       "platform": "windows"
     },
-    {
-      "name": "ffmpeg",
-      "platform": "!emscripten"
-    },
+    "ffmpeg",
     "fmt",
     {
       "name": "glfw3",
