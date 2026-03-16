@@ -1,0 +1,3 @@
+[submodule "cpp/plugins/layerExImage"]
+	path = cpp/plugins/layerExImage
+	url = https://github.com/wamsoft/layerExImage.git

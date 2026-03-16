@@ -22,7 +22,7 @@ android {
             cmake {
                 targets 'krkr2'
                 cppFlags '-fsigned-char'
-                arguments '-DANDROID_STL=c++_shared', '-DANDROID=ON'
+                arguments '-DANDROID_STL=c++_shared', '-DANDROID=ON', "-DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison"
             }
         }
         versionCode Integer.parseInt(new Date().format('yyyyMMddHH'))

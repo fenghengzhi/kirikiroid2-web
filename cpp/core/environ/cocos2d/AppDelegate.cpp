@@ -10,6 +10,10 @@
 #include "ui/extension/UIExtension.h"
 #include "ConfigManager/LocaleConfigManager.h"
 
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
+
 static cocos2d::Size designSize(960, 640);
 extern std::thread::id TVPMainThreadID;
 
@@ -88,8 +92,14 @@ bool TVPAppDelegate::applicationDidFinishLaunching() {
     // set searching path
     cocos2d::FileUtils::getInstance()->setSearchPaths(searchPath);
 
-    // turn on display FPS
+#ifdef EMSCRIPTEN
+    bool showStats = EM_ASM_INT({
+        return new URLSearchParams(window.location.search).has('debug') ? 1 : 0;
+    });
+    director->setDisplayStats(showStats);
+#else
     director->setDisplayStats(true);
+#endif
 
     // set FPS. the default value is 1.0/60 if you don't call this
     director->setAnimationInterval(1.0f / 60);

@@ -18,12 +18,28 @@ set(_PLUGIN_SOURCES
     layerExPerspective.cpp
     fftgraph.cpp
     LayerExBase.cpp
-    xp3filter.cpp
 )
 if(NOT EMSCRIPTEN)
     list(APPEND _PLUGIN_SOURCES layerExMovie.cpp)
 endif()
 target_sources(${PROJECT_NAME} PUBLIC ${_PLUGIN_SOURCES})
+
+add_library(krkr2plugins_ncbind STATIC
+    xp3filter.cpp
+    layerExImage/Main.cpp
+    layerExImage/LayerExImage.cpp
+)
+set_source_files_properties(
+    layerExImage/Main.cpp
+    layerExImage/LayerExImage.cpp
+    PROPERTIES COMPILE_DEFINITIONS "NCB_MODULE_NAME=TJS_W(\"layerExImage.dll\")"
+)
+target_include_directories(krkr2plugins_ncbind PRIVATE
+    ${KRKR2PLUGIN_PATH}
+    ${KRKR2PLUGIN_PATH}/simplebinder}
+    ${KRKR2PLUGIN_PATH}/layerExImage
+)
+target_link_libraries(krkr2plugins_ncbind PRIVATE krkr2core)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
     ${KRKR2CORE_PATH}/
@@ -49,7 +65,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 add_definitions(-D__STDC_CONSTANT_MACROS -DTJS_TEXT_OUT_CRLF)
 
-target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder})
+target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder} ${KRKR2PLUGIN_PATH}/layerExImage)
 target_link_libraries(${PROJECT_NAME} PUBLIC krkr2core)
 
 add_subdirectory(psdfile)

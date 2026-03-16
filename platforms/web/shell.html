@@ -249,6 +249,74 @@
             border-radius: 3px;
             transition: width 0.2s;
         }
+
+        #xp3-selector {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: #1a1a2e;
+            z-index: 160;
+        }
+
+        #xp3-selector.visible { display: flex; }
+
+        #selector-box {
+            text-align: center;
+            max-width: 520px;
+            width: 90%;
+        }
+
+        #selector-box h2 {
+            font-size: 22px;
+            color: #e94560;
+            margin-bottom: 8px;
+        }
+
+        #selector-box .subtitle {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
+        #xp3-list {
+            max-height: 60vh;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .xp3-item {
+            display: block;
+            width: 100%;
+            padding: 12px 16px;
+            background: #16213e;
+            color: #e0e0e0;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 15px;
+            text-align: left;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .xp3-item:hover {
+            background: #0f3460;
+            border-color: #e94560;
+        }
+
+        .xp3-item .xp3-name {
+            font-weight: 600;
+        }
+
+        .xp3-item .xp3-dir {
+            font-size: 12px;
+            color: #666;
+            margin-top: 2px;
+        }
     </style>
 </head>
 <body>
@@ -290,6 +358,14 @@
             <div id="picker-progress"><div id="picker-progress-fill"></div></div>
         </div>
     </div>
+    <div id="xp3-selector">
+        <div id="selector-box">
+            <h2>Select Game Archive</h2>
+            <p class="subtitle">Multiple .xp3 files found. Choose one to start:</p>
+            <div id="xp3-list"></div>
+        </div>
+    </div>
+
     <input type="file" id="file-input" style="display:none;">
     <input type="file" id="dir-input" webkitdirectory style="display:none;">
 
@@ -423,6 +499,49 @@
             });
         }
 
+        function showXp3Selector(xp3Paths, dirPrefix, callback) {
+            var selectorEl = document.getElementById('xp3-selector');
+            var listEl = document.getElementById('xp3-list');
+            listEl.innerHTML = '';
+
+            xp3Paths.sort(function(a, b) {
+                return a.toLowerCase().localeCompare(b.toLowerCase());
+            });
+
+            for (var i = 0; i < xp3Paths.length; i++) {
+                (function(path) {
+                    var name = path.substring(path.lastIndexOf('/') + 1);
+                    var dir = path.substring(0, path.lastIndexOf('/'));
+                    var relDir = dirPrefix ? dir.substring(dirPrefix.length) : dir;
+
+                    var btn = document.createElement('button');
+                    btn.className = 'xp3-item';
+                    btn.innerHTML = '<div class="xp3-name">' + name + '</div>' +
+                        (relDir ? '<div class="xp3-dir">' + relDir + '</div>' : '');
+                    btn.addEventListener('click', function() {
+                        selectorEl.classList.remove('visible');
+                        callback(path);
+                    });
+                    listEl.appendChild(btn);
+                })(xp3Paths[i]);
+            }
+
+            filePicker.classList.remove('visible');
+            pickerProgress.classList.remove('visible');
+            selectorEl.classList.add('visible');
+        }
+
+        function checkAndStartGame(xp3Paths, dirPrefix) {
+            if (xp3Paths.length > 1) {
+                showXp3Selector(xp3Paths, dirPrefix, function(path) {
+                    Module._startupXp3Path = path;
+                    startGame();
+                });
+            } else {
+                startGame();
+            }
+        }
+
         function startGame() {
             gameFileReady = true;
             filePicker.classList.remove('visible');
@@ -516,31 +635,39 @@
                     return;
                 }
 
-                Module._lazyFiles = {};
-                Module._loadedFiles = {};
-                Module._hostStreams = {};
-                Module._nextStreamId = 1;
                 Module._hostDirHandle = hostDirHandle;
                 Module._hostDirPrefix = dirPrefix;
 
+                var xp3Paths = [];
+                var hasRootStartupTjs = false;
+
                 for (var i = 0; i < total; i++) {
                     var entry = entries[i];
+                    var lowerName = entry.path.substring(entry.path.lastIndexOf('/') + 1).toLowerCase();
+                    var isXp3 = lowerName.endsWith('.xp3');
+
                     setPickerProgress(
                         Math.round(i / total * 100),
-                        'Registering (' + (i + 1) + '/' + total + ') ' + entry.path.substring(dirPrefix.length + 1)
+                        'Loading (' + (i + 1) + '/' + total + ') ' + entry.path.substring(dirPrefix.length + 1)
                     );
-                    var isStream = entry.path.toLowerCase().endsWith('.xp3');
-                    Module._lazyFiles[entry.path] = {
-                        handle: entry.handle,
-                        stream: isStream
-                    };
-                    var dir = entry.path.substring(0, entry.path.lastIndexOf('/'));
-                    if (dir) ensureDir(dir);
-                    FS.writeFile(entry.path, new Uint8Array(0));
+
+                    var file = await entry.handle.getFile();
+                    var data = new Uint8Array(await file.arrayBuffer());
+                    writeFileToFS(entry.path, data);
+
+                    if (isXp3) xp3Paths.push(entry.path);
+                    if (lowerName === 'startup.tjs') {
+                        var relPath = entry.path.substring(dirPrefix.length + 1);
+                        if (relPath.indexOf('/') === -1) hasRootStartupTjs = true;
+                    }
                 }
 
                 setPickerProgress(100, 'Starting...');
-                startGame();
+                if (xp3Paths.length > 1 && !hasRootStartupTjs) {
+                    checkAndStartGame(xp3Paths, dirPrefix);
+                } else {
+                    startGame();
+                }
             } catch (err) {
                 pickerStatus.textContent = 'Error: ' + err.message;
                 pickerProgress.classList.remove('visible');
@@ -565,23 +692,34 @@
         async function handleFolder(files) {
             var total = files.length;
             try {
-                if (!Module._lazyFiles) Module._lazyFiles = {};
-                if (!Module._loadedFiles) Module._loadedFiles = {};
-                if (!Module._hostStreams) Module._hostStreams = {};
-                if (!Module._nextStreamId) Module._nextStreamId = 1;
+                var xp3Paths = [];
+                var folderPrefix = '/' + files[0].webkitRelativePath.split('/')[0];
+                var hasRootStartupTjs = false;
 
                 for (var i = 0; i < total; i++) {
                     var file = files[i];
                     var relPath = '/' + file.webkitRelativePath;
+                    var lowerName = file.name.toLowerCase();
+                    var isXp3 = lowerName.endsWith('.xp3');
+
                     setPickerProgress(Math.round(i / total * 100),
-                        'Registering (' + (i + 1) + '/' + total + ') ' + file.name);
-                    var isStream = file.name.toLowerCase().endsWith('.xp3');
-                    Module._lazyFiles[relPath] = { file: file, stream: isStream };
-                    var dir = relPath.substring(0, relPath.lastIndexOf('/'));
-                    if (dir) ensureDir(dir);
-                    FS.writeFile(relPath, new Uint8Array(0));
+                        'Loading (' + (i + 1) + '/' + total + ') ' + file.name);
+
+                    var data = new Uint8Array(await file.arrayBuffer());
+                    writeFileToFS(relPath, data);
+
+                    if (isXp3) xp3Paths.push(relPath);
+                    if (lowerName === 'startup.tjs') {
+                        var pathAfterPrefix = relPath.substring(folderPrefix.length + 1);
+                        if (pathAfterPrefix.indexOf('/') === -1) hasRootStartupTjs = true;
+                    }
                 }
-                startGame();
+
+                if (xp3Paths.length > 1 && !hasRootStartupTjs) {
+                    checkAndStartGame(xp3Paths, folderPrefix);
+                } else {
+                    startGame();
+                }
             } catch (err) {
                 pickerStatus.textContent = 'Error: ' + err.message;
                 pickerProgress.classList.remove('visible');

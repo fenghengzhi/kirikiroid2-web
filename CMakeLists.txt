@@ -16,7 +16,9 @@ add_compile_definitions(
 
 if(ANDROID)
     set(VCPKG_TARGET_ANDROID ON)
-    set(ENV{ANDROID_NDK_HOME} "$ENV{ANDROID_NDK}")
+    if(ANDROID_NDK)
+        set(ENV{ANDROID_NDK_HOME} "${ANDROID_NDK}")
+    endif()
     add_compile_options(-Wno-inconsistent-missing-override)
     include(cmake/vcpkg_android.cmake)
 elseif(VCPKG_TARGET_TRIPLET STREQUAL "wasm32-emscripten" OR EMSCRIPTEN)
@@ -73,8 +75,6 @@ elseif(WEB)
         "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
         "SHELL:-s PTHREAD_POOL_SIZE=16"
         "SHELL:-s NO_DISABLE_EXCEPTION_CATCHING"
-        "SHELL:-s ASYNCIFY"
-        "SHELL:-s ASYNCIFY_STACK_SIZE=65536"
         -pthread
         -lopenal
         --shell-file ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/shell.html
@@ -129,6 +129,16 @@ add_subdirectory(${KRKR2PLUGIN_PATH})
 target_link_libraries(${PROJECT_NAME} PUBLIC
     krkr2plugin krkr2core
 )
+
+if(APPLE AND NOT EMSCRIPTEN)
+    target_link_libraries(${PROJECT_NAME} PUBLIC
+        -Wl,-force_load,$<TARGET_FILE:krkr2plugins_ncbind>
+    )
+else()
+    target_link_libraries(${PROJECT_NAME} PUBLIC
+        -Wl,--whole-archive krkr2plugins_ncbind -Wl,--no-whole-archive
+    )
+endif()
 
 ## resources
 if(NOT ANDROID AND NOT WEB)

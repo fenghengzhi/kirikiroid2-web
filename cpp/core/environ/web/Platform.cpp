@@ -75,79 +75,20 @@ std::string TVPGetCurrentLanguage() {
 }
 
 // ---------------------------------------------------------------------------
-// FSAFS: File System Access API overlay for lazy-load & streaming
+// FSAFS: save-persistence helpers (write-back to host via File System Access API)
 // ---------------------------------------------------------------------------
 
-EM_ASYNC_JS(void, fsafs_ensure_loaded, (const char *path_ptr), {
-    var p = UTF8ToString(path_ptr);
-    if (!Module._lazyFiles) return;
-    var entry = Module._lazyFiles[p];
-    if (!entry || entry.stream) return;
-    if (Module._loadedFiles && Module._loadedFiles[p]) {
-        return;
-    }
-    try {
-        var file = entry.file || await entry.handle.getFile();
-        var data = new Uint8Array(await file.arrayBuffer());
-        var dir = p.substring(0, p.lastIndexOf('/'));
-        if (dir) {
-            var parts = dir.split('/').filter(Boolean);
-            var cur = '';
-            for (var i = 0; i < parts.length; i++) {
-                cur += '/' + parts[i];
-                try { FS.mkdir(cur); } catch(e) {}
-            }
-        }
-        FS.writeFile(p, data);
-        if (!Module._loadedFiles) Module._loadedFiles = {};
-        Module._loadedFiles[p] = true;
-    } catch(err) {
-        console.error('[FSAFS] ensure_loaded FAILED: ' + p + ' - ' + err.message);
-    }
-});
+EM_JS(void, fsafs_ensure_loaded, (const char *path_ptr), {});
 
-EM_JS(int, fsafs_is_host_stream, (const char *path_ptr), {
-    var p = UTF8ToString(path_ptr);
-    if (!Module._lazyFiles) return 0;
-    var entry = Module._lazyFiles[p];
-    return (entry && entry.stream) ? 1 : 0;
-});
+EM_JS(int, fsafs_is_host_stream, (const char *path_ptr), { return 0; });
 
-EM_ASYNC_JS(int, fsafs_open_stream, (const char *path_ptr), {
-    var p = UTF8ToString(path_ptr);
-    if (!Module._lazyFiles) return -1;
-    var entry = Module._lazyFiles[p];
-    if (!entry) return -1;
-    var file = entry.file || await entry.handle.getFile();
-    if (!Module._hostStreams) Module._hostStreams = {};
-    if (!Module._nextStreamId) Module._nextStreamId = 1;
-    var id = Module._nextStreamId++;
-    Module._hostStreams[id] = { file: file, size: file.size };
-    return id;
-});
+EM_JS(int, fsafs_open_stream, (const char *path_ptr), { return -1; });
 
-EM_JS(double, fsafs_get_stream_size, (int stream_id), {
-    if (!Module._hostStreams) return 0;
-    var s = Module._hostStreams[stream_id];
-    return s ? s.size : 0;
-});
+EM_JS(double, fsafs_get_stream_size, (int stream_id), { return 0; });
 
-EM_ASYNC_JS(int, fsafs_read_stream, (int stream_id, void *buf, double offset, int length), {
-    if (!Module._hostStreams) return -1;
-    var s = Module._hostStreams[stream_id];
-    if (!s) return -1;
-    var end = Math.min(offset + length, s.size);
-    if (end <= offset) return 0;
-    var blob = s.file.slice(offset, end);
-    var ab = await blob.arrayBuffer();
-    var data = new Uint8Array(ab);
-    HEAPU8.set(data, buf);
-    return data.length;
-});
+EM_JS(int, fsafs_read_stream, (int stream_id, void *buf, double offset, int length), { return -1; });
 
-EM_JS(void, fsafs_close_stream, (int stream_id), {
-    if (Module._hostStreams) delete Module._hostStreams[stream_id];
-});
+EM_JS(void, fsafs_close_stream, (int stream_id), {});
 
 EM_JS(void, fsafs_mark_written, (const char *path_ptr), {
     var p = UTF8ToString(path_ptr);
@@ -364,7 +305,26 @@ static bool tryStartFromDir(const std::string &dir) {
     return false;
 }
 
+EM_JS(char *, krkr2_get_startup_xp3_path, (), {
+    if (Module._startupXp3Path) {
+        var s = Module._startupXp3Path;
+        var len = lengthBytesUTF8(s) + 1;
+        var buf = _malloc(len);
+        stringToUTF8(s, buf, len);
+        return buf;
+    }
+    return 0;
+});
+
 bool TVPCheckStartupArg() {
+    char *selectedXp3 = krkr2_get_startup_xp3_path();
+    if (selectedXp3) {
+        std::string path(selectedXp3);
+        free(selectedXp3);
+        TVPMainScene::GetInstance()->startupFrom(path);
+        return true;
+    }
+
     if (tryStartFromDir("/")) return true;
 
     struct stat st;
