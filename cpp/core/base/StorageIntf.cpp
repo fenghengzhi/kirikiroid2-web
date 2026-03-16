@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <memory>
+#include <spdlog/spdlog.h>
 #include "StorageIntf.h"
 #include "tjsUtils.h"
 #include "MsgIntf.h"
@@ -198,6 +199,8 @@ tTVPStorageMediaManager::~tTVPStorageMediaManager() {}
 
 //---------------------------------------------------------------------------
 void tTVPStorageMediaManager::ThrowUnsupportedMediaType(const ttstr &name) {
+    spdlog::error("ThrowUnsupportedMediaType: raw name='{}', extracted media='{}'",
+                  name.AsStdString(), ExtractMediaName(name).AsStdString());
     TVPThrowExceptionMessage(TVPUnsupportedMediaName, ExtractMediaName(name));
 }
 
@@ -345,6 +348,9 @@ ttstr tTVPStorageMediaManager::NormalizeStorageName(const ttstr &name,
     // supply omitted and normalize
     if(media.IsEmpty()) {
         media = TVPCurrentMedia;
+        if(media.IsEmpty()) {
+            media = TJS_W("file");
+        }
     } else {
         // normalize media name ( make them all small )
         //        tjs_char *p = media.Independ();

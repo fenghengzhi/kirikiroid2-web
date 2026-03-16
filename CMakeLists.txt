@@ -73,7 +73,7 @@ elseif(WEB)
         "SHELL:-s STACK_OVERFLOW_CHECK=0"
         "SHELL:-s FORCE_FILESYSTEM=1"
         "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
-        "SHELL:-s PTHREAD_POOL_SIZE=16"
+        "SHELL:-s PTHREAD_POOL_SIZE=64"
         "SHELL:-s NO_DISABLE_EXCEPTION_CATCHING"
         -pthread
         -lopenal

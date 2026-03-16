@@ -56,10 +56,7 @@
       "platform": "!windows & !emscripten"
     },
     "libjpeg-turbo",
-    {
-      "name": "libogg",
-      "platform": "android"
-    },
+    "libogg",
     {
       "name": "libpng",
       "platform": "!linux & !emscripten"

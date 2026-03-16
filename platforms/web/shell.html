@@ -369,6 +369,7 @@
     <input type="file" id="file-input" style="display:none;">
     <input type="file" id="dir-input" webkitdirectory style="display:none;">
 
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script>
         var statusElement = document.getElementById('status');
         var progressFill = document.getElementById('progress-fill');
@@ -408,7 +409,7 @@
             setStatus: function(text) {
                 if (!text) {
                     loadingOverlay.classList.add('hidden');
-                    if (!gameFileReady && !xp3Url) {
+                    if (!gameFileReady && !xp3Url && !gameZipUrl) {
                         filePicker.classList.add('visible');
                     }
                     return;
@@ -451,7 +452,10 @@
             canvas.height = container.clientHeight || 720;
         })();
 
-        var xp3Url = new URLSearchParams(window.location.search).get('xp3');
+        var urlParams = new URLSearchParams(window.location.search);
+        var xp3Url = urlParams.get('xp3');
+        var gameZipUrl = urlParams.get('game');
+        var entryXp3 = urlParams.get('entry');
 
         // Show File System API button when supported
         if (hasFileSystemAPI) {
@@ -596,7 +600,110 @@
             }
         }
 
-        if (xp3Url) {
+        async function fetchWithProgress(url, onProgress) {
+            var resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+            var total = parseInt(resp.headers.get('Content-Length') || '0', 10);
+            var reader = resp.body.getReader();
+            var chunks = [];
+            var loaded = 0;
+            while (true) {
+                var r = await reader.read();
+                if (r.done) break;
+                chunks.push(r.value);
+                loaded += r.value.length;
+                if (onProgress) onProgress(loaded, total);
+            }
+            var data = new Uint8Array(loaded);
+            var offset = 0;
+            for (var i = 0; i < chunks.length; i++) {
+                data.set(chunks[i], offset);
+                offset += chunks[i].length;
+            }
+            return data;
+        }
+
+        async function fetchAndExtractZip(url, entryFile) {
+            loadingOverlay.classList.remove('hidden');
+            statusElement.textContent = 'Downloading game archive...';
+            progressFill.style.width = '0%';
+            try {
+                var zipData = await fetchWithProgress(url, function(loaded, total) {
+                    if (total > 0) {
+                        var pct = Math.round(loaded / total * 100);
+                        progressFill.style.width = (pct * 0.5) + '%';
+                        statusElement.textContent = 'Downloading... ' + pct + '% (' + (loaded / 1048576).toFixed(1) + ' MB)';
+                    } else {
+                        statusElement.textContent = 'Downloading... ' + (loaded / 1048576).toFixed(1) + ' MB';
+                    }
+                });
+
+                statusElement.textContent = 'Extracting archive...';
+                progressFill.style.width = '50%';
+                var zip = await JSZip.loadAsync(zipData);
+                zipData = null;
+
+                var entries = [];
+                zip.forEach(function(relativePath, zipEntry) {
+                    if (!zipEntry.dir) entries.push({ path: relativePath, entry: zipEntry });
+                });
+
+                var commonPrefix = '';
+                if (entries.length > 0) {
+                    var firstSlash = entries[0].path.indexOf('/');
+                    if (firstSlash > 0) {
+                        var candidate = entries[0].path.substring(0, firstSlash + 1);
+                        var allMatch = entries.every(function(e) { return e.path.startsWith(candidate); });
+                        if (allMatch) commonPrefix = candidate;
+                    }
+                }
+
+                var xp3Paths = [];
+                var total = entries.length;
+                for (var i = 0; i < total; i++) {
+                    var e = entries[i];
+                    var innerPath = commonPrefix ? e.path.substring(commonPrefix.length) : e.path;
+                    if (!innerPath) continue;
+                    var fsPath = '/' + innerPath;
+                    var lowerName = innerPath.substring(innerPath.lastIndexOf('/') + 1).toLowerCase();
+
+                    var pct = 50 + Math.round(i / total * 50);
+                    progressFill.style.width = pct + '%';
+                    statusElement.textContent = 'Extracting (' + (i + 1) + '/' + total + ') ' + innerPath;
+
+                    var fileData = await e.entry.async('uint8array');
+                    writeFileToFS(fsPath, fileData);
+
+                    if (lowerName.endsWith('.xp3')) xp3Paths.push(fsPath);
+                }
+
+                progressFill.style.width = '100%';
+                statusElement.textContent = 'Starting game...';
+
+                if (entryFile) {
+                    var entryLower = entryFile.toLowerCase();
+                    var matched = xp3Paths.find(function(p) {
+                        return p.substring(p.lastIndexOf('/') + 1).toLowerCase() === entryLower;
+                    });
+                    if (matched) Module._startupXp3Path = matched;
+                    startGame();
+                } else if (xp3Paths.length > 1) {
+                    checkAndStartGame(xp3Paths, '');
+                } else {
+                    startGame();
+                }
+            } catch (err) {
+                statusElement.textContent = 'Failed: ' + err.message;
+                progressFill.style.width = '0%';
+                console.error('fetchAndExtractZip error:', err);
+                filePicker.classList.add('visible');
+                loadingOverlay.classList.add('hidden');
+            }
+        }
+
+        if (gameZipUrl) {
+            fetchAndExtractZip(gameZipUrl, entryXp3);
+        } else if (xp3Url) {
             fetchXp3FromUrl(xp3Url);
         }
 
@@ -639,35 +746,27 @@
                 Module._hostDirPrefix = dirPrefix;
 
                 var xp3Paths = [];
-                var hasRootStartupTjs = false;
 
                 for (var i = 0; i < total; i++) {
                     var entry = entries[i];
-                    var lowerName = entry.path.substring(entry.path.lastIndexOf('/') + 1).toLowerCase();
+                    var innerPath = entry.path.substring(dirPrefix.length);
+                    var lowerName = innerPath.substring(innerPath.lastIndexOf('/') + 1).toLowerCase();
                     var isXp3 = lowerName.endsWith('.xp3');
 
                     setPickerProgress(
                         Math.round(i / total * 100),
-                        'Loading (' + (i + 1) + '/' + total + ') ' + entry.path.substring(dirPrefix.length + 1)
+                        'Loading (' + (i + 1) + '/' + total + ') ' + innerPath.substring(1)
                     );
 
                     var file = await entry.handle.getFile();
                     var data = new Uint8Array(await file.arrayBuffer());
-                    writeFileToFS(entry.path, data);
+                    writeFileToFS(innerPath, data);
 
-                    if (isXp3) xp3Paths.push(entry.path);
-                    if (lowerName === 'startup.tjs') {
-                        var relPath = entry.path.substring(dirPrefix.length + 1);
-                        if (relPath.indexOf('/') === -1) hasRootStartupTjs = true;
-                    }
+                    if (isXp3) xp3Paths.push(innerPath);
                 }
 
                 setPickerProgress(100, 'Starting...');
-                if (xp3Paths.length > 1 && !hasRootStartupTjs) {
-                    checkAndStartGame(xp3Paths, dirPrefix);
-                } else {
-                    startGame();
-                }
+                checkAndStartGame(xp3Paths, '');
             } catch (err) {
                 pickerStatus.textContent = 'Error: ' + err.message;
                 pickerProgress.classList.remove('visible');
@@ -694,11 +793,11 @@
             try {
                 var xp3Paths = [];
                 var folderPrefix = '/' + files[0].webkitRelativePath.split('/')[0];
-                var hasRootStartupTjs = false;
 
                 for (var i = 0; i < total; i++) {
                     var file = files[i];
-                    var relPath = '/' + file.webkitRelativePath;
+                    var fullPath = '/' + file.webkitRelativePath;
+                    var innerPath = fullPath.substring(folderPrefix.length);
                     var lowerName = file.name.toLowerCase();
                     var isXp3 = lowerName.endsWith('.xp3');
 
@@ -706,20 +805,12 @@
                         'Loading (' + (i + 1) + '/' + total + ') ' + file.name);
 
                     var data = new Uint8Array(await file.arrayBuffer());
-                    writeFileToFS(relPath, data);
+                    writeFileToFS(innerPath, data);
 
-                    if (isXp3) xp3Paths.push(relPath);
-                    if (lowerName === 'startup.tjs') {
-                        var pathAfterPrefix = relPath.substring(folderPrefix.length + 1);
-                        if (pathAfterPrefix.indexOf('/') === -1) hasRootStartupTjs = true;
-                    }
+                    if (isXp3) xp3Paths.push(innerPath);
                 }
 
-                if (xp3Paths.length > 1 && !hasRootStartupTjs) {
-                    checkAndStartGame(xp3Paths, folderPrefix);
-                } else {
-                    startGame();
-                }
+                checkAndStartGame(xp3Paths, '');
             } catch (err) {
                 pickerStatus.textContent = 'Error: ' + err.message;
                 pickerProgress.classList.remove('visible');
