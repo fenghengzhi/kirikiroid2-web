@@ -73,12 +73,9 @@ elseif(WEB)
         "SHELL:-s STACK_OVERFLOW_CHECK=0"
         "SHELL:-s FORCE_FILESYSTEM=1"
         "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
-        "SHELL:-s PTHREAD_POOL_SIZE=16"
+        "SHELL:-s PTHREAD_POOL_SIZE=32"
         "SHELL:-s DEFAULT_PTHREAD_STACK_SIZE=2097152"
         "SHELL:-s NO_DISABLE_EXCEPTION_CATCHING"
-        "SHELL:-s ASYNCIFY"
-        "SHELL:-s ASYNCIFY_STACK_SIZE=65536"
-        "SHELL:-s ASYNCIFY_IMPORTS=['fsafs_ensure_loaded','fsafs_open_stream','fsafs_read_stream','emscripten_sleep']"
         -pthread
         -lopenal
         --shell-file ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/shell.html

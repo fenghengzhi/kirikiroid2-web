@@ -766,10 +766,6 @@
                     return;
                 }
 
-                Module._lazyFiles = {};
-                Module._loadedFiles = {};
-                Module._hostStreams = {};
-                Module._nextStreamId = 1;
                 Module._hostDirHandle = hostDirHandle;
                 Module._hostDirPrefix = dirPrefix;
 
@@ -783,17 +779,12 @@
 
                     setPickerProgress(
                         Math.round(i / total * 100),
-                        'Registering (' + (i + 1) + '/' + total + ') ' + innerPath.substring(1)
+                        'Loading (' + (i + 1) + '/' + total + ') ' + innerPath.substring(1)
                     );
 
-                    var isStream = isXp3;
-                    Module._lazyFiles[innerPath] = {
-                        handle: entry.handle,
-                        stream: isStream
-                    };
-                    var dir = innerPath.substring(0, innerPath.lastIndexOf('/'));
-                    if (dir) ensureDir(dir);
-                    FS.writeFile(innerPath, new Uint8Array(0));
+                    var file = await entry.handle.getFile();
+                    var data = new Uint8Array(await file.arrayBuffer());
+                    writeFileToFS(innerPath, data);
 
                     if (isXp3) xp3Paths.push(innerPath);
                 }
@@ -807,19 +798,13 @@
             }
         }
 
-        // --- Fallback: .xp3 file picker (lazy stream) ---
+        // --- Fallback: .xp3 file picker ---
         async function handleXp3File(file) {
             try {
-                if (!Module._lazyFiles) Module._lazyFiles = {};
-                if (!Module._loadedFiles) Module._loadedFiles = {};
-                if (!Module._hostStreams) Module._hostStreams = {};
-                if (!Module._nextStreamId) Module._nextStreamId = 1;
-
-                var fsPath = '/' + file.name;
-                Module._lazyFiles[fsPath] = { file: file, stream: true };
-                ensureDir('/');
-                FS.writeFile(fsPath, new Uint8Array(0));
-
+                setPickerProgress(0, 'Reading ' + file.name + '...');
+                var data = await readFileWithProgress(file);
+                setPickerProgress(100, 'Writing to filesystem...');
+                writeFileToFS('/data.xp3', data);
                 startGame();
             } catch (err) {
                 pickerStatus.textContent = 'Error: ' + err.message;
@@ -830,11 +815,6 @@
         async function handleFolder(files) {
             var total = files.length;
             try {
-                if (!Module._lazyFiles) Module._lazyFiles = {};
-                if (!Module._loadedFiles) Module._loadedFiles = {};
-                if (!Module._hostStreams) Module._hostStreams = {};
-                if (!Module._nextStreamId) Module._nextStreamId = 1;
-
                 var xp3Paths = [];
                 var folderPrefix = '/' + files[0].webkitRelativePath.split('/')[0];
 
@@ -846,13 +826,10 @@
                     var isXp3 = lowerName.endsWith('.xp3');
 
                     setPickerProgress(Math.round(i / total * 100),
-                        'Registering (' + (i + 1) + '/' + total + ') ' + file.name);
+                        'Loading (' + (i + 1) + '/' + total + ') ' + file.name);
 
-                    var isStream = isXp3;
-                    Module._lazyFiles[innerPath] = { file: file, stream: isStream };
-                    var dir = innerPath.substring(0, innerPath.lastIndexOf('/'));
-                    if (dir) ensureDir(dir);
-                    FS.writeFile(innerPath, new Uint8Array(0));
+                    var data = new Uint8Array(await file.arrayBuffer());
+                    writeFileToFS(innerPath, data);
 
                     if (isXp3) xp3Paths.push(innerPath);
                 }
