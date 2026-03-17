@@ -61,7 +61,7 @@ The Web build requires [Cross-Origin Isolation](https://web.dev/cross-origin-iso
 Use the included `coi-server.py`:
 
 ```bash
-python3 coi-server.py out/web/release [http_port] [https_port] [--xp3 game.xp3]
+python3 coi-server.py out/web/release [http_port] [https_port] [options]
 ```
 
 The server starts:
@@ -72,6 +72,8 @@ Then open `http://localhost:8080/index.html` in your browser.
 
 ### Serving a Game File Directly
 
+#### Single .xp3 file
+
 Use `--xp3` to have the server host a local `.xp3` file:
 
 ```bash
@@ -80,11 +82,29 @@ python3 coi-server.py out/web/release --xp3 /path/to/game/data.xp3
 
 The file is served at `/data.xp3`, and the printed URL includes the `?xp3=` query parameter. Opening that URL will automatically download and start the game without manual file selection.
 
-You can also specify any accessible `.xp3` URL manually:
+#### ZIP archive
 
+Use `--zip` to serve a `.zip` archive containing the game files. The web page will extract it in-browser and load the game:
+
+```bash
+python3 coi-server.py out/web/release --zip /path/to/game.zip
 ```
-http://localhost:8080/index.html?xp3=/data.xp3
+
+If the archive contains multiple `.xp3` files, a selection dialog will appear. Use `--entry` to auto-select one:
+
+```bash
+python3 coi-server.py out/web/release --zip /path/to/game.zip --entry data.xp3
 ```
+
+#### URL parameters
+
+You can also pass game sources via URL query parameters directly:
+
+| Parameter | Description |
+|-----------|-------------|
+| `?xp3=<url>` | Load a single `.xp3` file from the given URL |
+| `?game=<url>` | Download and extract a `.zip` archive from the given URL |
+| `?entry=<name>` | Auto-select this `.xp3` when the archive contains multiple (use with `game`) |
 
 ### HTTPS for LAN Access
 

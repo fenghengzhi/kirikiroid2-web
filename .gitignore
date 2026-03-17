@@ -20,3 +20,4 @@ java_pid*.hprof
 .playwright
 .playwright-cli
 build-web
+__pycache__/

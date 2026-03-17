@@ -61,7 +61,7 @@ Web 版本需要[跨域隔离](https://web.dev/cross-origin-isolation-guide/)响
 使用项目自带的 `coi-server.py`：
 
 ```bash
-python3 coi-server.py out/web/release [http端口] [https端口] [--xp3 游戏文件.xp3]
+python3 coi-server.py out/web/release [http端口] [https端口] [选项]
 ```
 
 服务器同时启动：
@@ -72,6 +72,8 @@ python3 coi-server.py out/web/release [http端口] [https端口] [--xp3 游戏�
 
 ### 直接指定游戏文件
 
+#### 单个 .xp3 文件
+
 通过 `--xp3` 参数让服务器托管本地 `.xp3` 文件：
 
 ```bash
@@ -80,11 +82,29 @@ python3 coi-server.py out/web/release --xp3 /path/to/game/data.xp3
 
 服务器会将该文件映射到 `/data.xp3` 路径，并输出包含 `?xp3=` 参数的完整 URL。打开该 URL 后，网页会自动下载并启动游戏，无需手动选择文件。
 
-也可以通过 URL 参数手动指定任意可访问的 `.xp3` 文件地址：
+#### ZIP 压缩包
 
+通过 `--zip` 参数托管包含游戏文件的 `.zip` 压缩包。网页会在浏览器中解压并加载游戏：
+
+```bash
+python3 coi-server.py out/web/release --zip /path/to/game.zip
 ```
-http://localhost:8080/index.html?xp3=/data.xp3
+
+如果压缩包中包含多个 `.xp3` 文件，会弹出选择对话框。使用 `--entry` 自动选择其中一个：
+
+```bash
+python3 coi-server.py out/web/release --zip /path/to/game.zip --entry data.xp3
 ```
+
+#### URL 参数
+
+也可以直接通过 URL 查询参数指定游戏来源：
+
+| 参数 | 说明 |
+|------|------|
+| `?xp3=<url>` | 从指定 URL 加载单个 `.xp3` 文件 |
+| `?game=<url>` | 从指定 URL 下载并解压 `.zip` 压缩包 |
+| `?entry=<name>` | 当压缩包中包含多个 `.xp3` 时，自动选择指定的文件（配合 `game` 使用） |
 
 ### 局域网 HTTPS 访问
 

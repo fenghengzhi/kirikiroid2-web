@@ -558,6 +558,8 @@ void TVPGetLocalName(ttstr &name) {
 
 //---------------------------------------------------------------------------
 ttstr TVPGetLocallyAccessibleName(const ttstr &name) {
+    if(name.IsEmpty())
+        return TJS_W("");
     if(TJS_strchr(name.c_str(), TVPArchiveDelimiter))
         return TJS_W("");
     // in-archive storage is always not accessible from local file
@@ -741,6 +743,8 @@ static tTVPAtExit TVPClearArchiveCacheAtExit(TVP_ATEXIT_PRI_SHUTDOWN,
 // TVPIsExistentStorageNoSearch
 //---------------------------------------------------------------------------
 bool TVPIsExistentStorageNoSearchNoNormalize(const ttstr &name) {
+    if(name.IsEmpty()) return false;
+
     // does name contain > ?
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
 
