@@ -75,6 +75,8 @@ elseif(WEB)
         "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
         "SHELL:-s PTHREAD_POOL_SIZE=64"
         "SHELL:-s NO_DISABLE_EXCEPTION_CATCHING"
+        "SHELL:-s ASYNCIFY"
+        "SHELL:-s ASYNCIFY_STACK_SIZE=65536"
         -pthread
         -lopenal
         --shell-file ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/shell.html

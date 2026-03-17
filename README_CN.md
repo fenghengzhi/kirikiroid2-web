@@ -34,27 +34,22 @@ source /path/to/emsdk/emsdk_env.sh   # 自动设置 EMSDK
 
 ### 编译步骤
 
+> **注意**：仅支持 Release 构建。Debug 构建会因 Asyncify 对 TJS 编译器递归下降解析器的插桩导致栈溢出崩溃。
+
 ```bash
 cmake --preset "Web Release Config"
 cmake --build out/web/release
-```
-
-编译 Debug 版本，将 `Release` 替换为 `Debug`：
-
-```bash
-cmake --preset "Web Debug Config"
-cmake --build out/web/debug
 ```
 
 ### 产物位置
 
 ```
 out/web/release/
-  krkr2.html
-  krkr2.js
-  krkr2.wasm
-  krkr2.data
-  krkr2.worker.js
+  index.html
+  index.js
+  index.wasm
+  index.data
+  index.worker.js
 ```
 
 ---
@@ -73,7 +68,7 @@ python3 coi-server.py out/web/release [http端口] [https端口] [--xp3 游戏�
 - **HTTP** 端口 8080（默认）— 用于 `localhost` 本地调试
 - **HTTPS** 端口 8443（默认）— 用于局域网内其他设备访问
 
-然后在浏览器中打开 `http://localhost:8080/krkr2.html`。
+然后在浏览器中打开 `http://localhost:8080/index.html`。
 
 ### 直接指定游戏文件
 
@@ -88,7 +83,7 @@ python3 coi-server.py out/web/release --xp3 /path/to/game/data.xp3
 也可以通过 URL 参数手动指定任意可访问的 `.xp3` 文件地址：
 
 ```
-http://localhost:8080/krkr2.html?xp3=/data.xp3
+http://localhost:8080/index.html?xp3=/data.xp3
 ```
 
 ### 局域网 HTTPS 访问

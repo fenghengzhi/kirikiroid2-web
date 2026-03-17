@@ -34,27 +34,22 @@ source /path/to/emsdk/emsdk_env.sh   # sets EMSDK automatically
 
 ### Build Steps
 
+> **Note**: Only Release builds are supported. Debug builds will crash with a stack overflow due to Asyncify instrumentation on the TJS compiler's recursive descent parser.
+
 ```bash
 cmake --preset "Web Release Config"
 cmake --build out/web/release
-```
-
-For a debug build, replace `Release` with `Debug`:
-
-```bash
-cmake --preset "Web Debug Config"
-cmake --build out/web/debug
 ```
 
 ### Output Files
 
 ```
 out/web/release/
-  krkr2.html
-  krkr2.js
-  krkr2.wasm
-  krkr2.data
-  krkr2.worker.js
+  index.html
+  index.js
+  index.wasm
+  index.data
+  index.worker.js
 ```
 
 ---
@@ -73,7 +68,7 @@ The server starts:
 - **HTTP** on port 8080 (default) — for `localhost` debugging
 - **HTTPS** on port 8443 (default) — for LAN access from other devices
 
-Then open `http://localhost:8080/krkr2.html` in your browser.
+Then open `http://localhost:8080/index.html` in your browser.
 
 ### Serving a Game File Directly
 
@@ -88,7 +83,7 @@ The file is served at `/data.xp3`, and the printed URL includes the `?xp3=` quer
 You can also specify any accessible `.xp3` URL manually:
 
 ```
-http://localhost:8080/krkr2.html?xp3=/data.xp3
+http://localhost:8080/index.html?xp3=/data.xp3
 ```
 
 ### HTTPS for LAN Access

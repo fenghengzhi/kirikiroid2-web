@@ -65,14 +65,14 @@ keyfile = os.path.join(script_dir, 'server.key')
 xp3_param = '?xp3=/data.xp3' if xp3_real_path else ''
 
 http_server = http.server.HTTPServer(('0.0.0.0', args.http_port), COIHandler)
-print(f"  HTTP  -> http://localhost:{args.http_port}/krkr2.html{xp3_param}  (localhost debug)")
+print(f"  HTTP  -> http://localhost:{args.http_port}/index.html{xp3_param}  (localhost debug)")
 
 if os.path.exists(certfile) and os.path.exists(keyfile):
     https_server = http.server.HTTPServer(('0.0.0.0', args.https_port), COIHandler)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(certfile, keyfile)
     https_server.socket = ctx.wrap_socket(https_server.socket, server_side=True)
-    print(f"  HTTPS -> https://<your-ip>:{args.https_port}/krkr2.html{xp3_param}  (LAN access)")
+    print(f"  HTTPS -> https://<your-ip>:{args.https_port}/index.html{xp3_param}  (LAN access)")
     threading.Thread(target=https_server.serve_forever, daemon=True).start()
 else:
     print(f"  HTTPS not enabled (no server.crt / server.key found)")
