@@ -230,6 +230,21 @@
             min-height: 20px;
         }
 
+        .feedback-link {
+            margin-top: 24px;
+            font-size: 13px;
+        }
+
+        .feedback-link a {
+            color: #888;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .feedback-link a:hover {
+            color: #e94560;
+        }
+
         #picker-progress {
             width: 100%;
             height: 6px;
@@ -356,6 +371,7 @@
             </div>
             <div id="picker-status"></div>
             <div id="picker-progress"><div id="picker-progress-fill"></div></div>
+            <div class="feedback-link"><a href="https://github.com/fenghengzhi/krkr2/issues" target="_blank" rel="noopener">Feedback & Issues</a></div>
         </div>
     </div>
     <div id="xp3-selector">
@@ -448,8 +464,16 @@
         (function() {
             var canvas = document.getElementById('canvas');
             var container = document.getElementById('container');
-            canvas.width = container.clientWidth || 1280;
-            canvas.height = container.clientHeight || 720;
+            function updateCanvasSize() {
+                var w = Math.round(container.clientWidth) || 1280;
+                var h = Math.round(container.clientHeight) || 720;
+                if (canvas.width !== w || canvas.height !== h) {
+                    canvas.width = w;
+                    canvas.height = h;
+                }
+            }
+            updateCanvasSize();
+            new ResizeObserver(updateCanvasSize).observe(container);
         })();
 
         var urlParams = new URLSearchParams(window.location.search);

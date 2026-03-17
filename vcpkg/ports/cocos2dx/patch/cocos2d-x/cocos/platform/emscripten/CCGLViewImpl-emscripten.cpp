@@ -8,6 +8,7 @@
 #include "base/CCEventKeyboard.h"
 #include "base/CCEventMouse.h"
 #include "base/CCIMEDispatcher.h"
+#include "2d/CCCamera.h"
 
 #include <emscripten.h>
 #include <emscripten/html5.h>
@@ -274,6 +275,13 @@ void GLViewImpl::handleSDLEvents()
                 int w = event.window.data1;
                 int h = event.window.data2;
                 GLView::setFrameSize((float)w, (float)h);
+                if (_designResolutionSize.width > 0 && _designResolutionSize.height > 0) {
+                    setDesignResolutionSize(_designResolutionSize.width,
+                                           _designResolutionSize.height,
+                                           _resolutionPolicy);
+                }
+                auto vp = cocos2d::experimental::Viewport(0, 0, w, h);
+                cocos2d::Camera::setDefaultViewport(vp);
                 Director::getInstance()->setViewport();
             }
             break;

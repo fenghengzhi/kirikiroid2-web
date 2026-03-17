@@ -18,7 +18,10 @@
 #if !defined(__EMSCRIPTEN__)
 #include "base/CCEventListenerController.h"
 #include "base/CCController.h"
+#else
+#include <emscripten/html5.h>
 #endif
+#include "2d/CCCamera.h"
 #include "ConfigManager/IndividualConfigManager.h"
 #include "Platform.h"
 #include "ui/ConsoleWindow.h"
@@ -1770,6 +1773,7 @@ TVPMainScene *TVPMainScene::CreateInstance() {
 void TVPMainScene::initialize() {
     auto glview = cocos2d::Director::getInstance()->getOpenGLView();
     cocos2d::Size screenSize = glview->getFrameSize();
+    _lastFrameSize = screenSize;
     cocos2d::Size designSize = glview->getDesignResolutionSize();
     ScreenRatio = screenSize.height / designSize.height;
     designSize.width = designSize.height * screenSize.width / screenSize.height;
@@ -2028,7 +2032,53 @@ void TVPOnError();
 
 tjs_uint TVPGetGraphicCacheTotalBytes();
 
+void TVPMainScene::onFrameSizeChanged() {
+    auto glview = cocos2d::Director::getInstance()->getOpenGLView();
+
+    glview->setFrameSize(_lastFrameSize.width, _lastFrameSize.height);
+    glview->setDesignResolutionSize(
+        glview->getDesignResolutionSize().width,
+        glview->getDesignResolutionSize().height,
+        glview->getResolutionPolicy());
+
+    auto vp = cocos2d::experimental::Viewport(
+        0, 0,
+        static_cast<int>(_lastFrameSize.width),
+        static_cast<int>(_lastFrameSize.height));
+    cocos2d::Camera::setDefaultViewport(vp);
+    cocos2d::Director::getInstance()->setViewport();
+
+    cocos2d::Size designSize = glview->getDesignResolutionSize();
+    ScreenRatio = _lastFrameSize.height / designSize.height;
+
+    setContentSize(designSize);
+    GameNode->setContentSize(designSize);
+    UINode->setContentSize(designSize);
+    UISize = designSize;
+
+    TVPWindowLayer *win = _lastWindowLayer;
+    while(win) {
+        win->setViewSize(designSize);
+        win->RecalcPaintBox();
+        win = win->_prevWindow;
+    }
+
+    for(Node *ui : UINode->getChildren()) {
+        static_cast<iTVPBaseForm *>(ui)->rearrangeLayout();
+    }
+}
+
 void TVPMainScene::update(float delta) {
+#ifdef __EMSCRIPTEN__
+    int canvasW, canvasH;
+    emscripten_get_canvas_element_size("#canvas", &canvasW, &canvasH);
+    if(canvasW != static_cast<int>(_lastFrameSize.width) ||
+       canvasH != static_cast<int>(_lastFrameSize.height)) {
+        _lastFrameSize = cocos2d::Size(canvasW, canvasH);
+        onFrameSizeChanged();
+    }
+#endif
+
     ::Application->Run();
     //	if (_currentWindowLayer) _currentWindowLayer->UpdateOverlay();
     iTVPTexture2D::RecycleProcess();

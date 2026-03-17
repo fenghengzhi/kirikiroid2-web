@@ -61,7 +61,7 @@ if(ANDROID)
     target_link_libraries(${PROJECT_NAME} PUBLIC unofficial::breakpad::libbreakpad_client)
 elseif(WEB)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/main.cpp)
-    set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".html")
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "index" SUFFIX ".html")
     target_link_options(${PROJECT_NAME} PRIVATE
         "SHELL:-s USE_SDL=2"
         "SHELL:-s USE_SDL_TTF=2"

@@ -85,9 +85,11 @@ private:
     void insertText(const char *text, size_t len) override;
 
     void doStartup(float dt, std::string path);
+    void onFrameSizeChanged();
 
     float ScreenRatio;
     cocos2d::Size SceneSize, UISize;
+    cocos2d::Size _lastFrameSize;
     cocos2d::Node *UINode, *GameNode;
     cocos2d::EventListenerTouchOneByOne *_touchListener;
     TVPGameMainMenu *_gameMenu;
