@@ -96,6 +96,12 @@ openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 
 
 ---
 
+## TODO
+
+- [ ] 等 iOS Safari 支持 [JSPI（JavaScript Promise Integration）](https://github.com/aspect-build/aspect-cli/issues/1)后，使用 JSPI + `-fwasm-exceptions` 替代 Asyncify + `NO_DISABLE_EXCEPTION_CATCHING`。这将消除基于 `invoke_*` 的异常处理，显著减小 wasm 体积（~26MB → ~17MB），降低每个 Worker 的内存开销。
+
+---
+
 ## 支持的游戏列表
 
 见 [games list](./doc/support_games.txt)。

@@ -96,6 +96,12 @@ openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 
 
 ---
 
+## TODO
+
+- [ ] Switch from Asyncify + `NO_DISABLE_EXCEPTION_CATCHING` to JSPI + `-fwasm-exceptions` once iOS Safari supports [JSPI (JavaScript Promise Integration)](https://github.com/aspect-build/aspect-cli/issues/1). This will eliminate `invoke_*`-based exception handling, significantly reduce wasm binary size (~26MB → ~17MB), and lower per-Worker memory overhead.
+
+---
+
 ## Supported Games
 
 See [games list](./doc/support_games.txt).
