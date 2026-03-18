@@ -98,7 +98,14 @@ EM_JS(void, fsafs_mark_written, (const char *path_ptr), {
 
 EM_JS(void, fsafs_flush_file, (const char *path_ptr), {
     var p = UTF8ToString(path_ptr);
-    if (!Module._hostDirHandle) return;
+    if (!Module._hostDirHandle) {
+        if (Module._saveSpaceId && (p.startsWith('/savedata/') || p.startsWith('/save/'))) {
+            try { idbSaveFile(p, FS.readFile(p)); } catch (e) {
+                console.warn('[IDB] flush fallback failed:', p, e);
+            }
+        }
+        return;
+    }
     var dirHandle = Module._hostDirHandle;
     var prefix = Module._hostDirPrefix;
     setTimeout(async function() {

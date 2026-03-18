@@ -332,6 +332,157 @@
             color: #666;
             margin-top: 2px;
         }
+
+        #save-space-picker {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: #1a1a2e;
+            z-index: 170;
+        }
+
+        #save-space-picker.visible { display: flex; }
+
+        #space-box {
+            text-align: center;
+            max-width: 520px;
+            width: 90%;
+        }
+
+        #space-box h1 {
+            font-size: 24px;
+            color: #e94560;
+            margin-bottom: 6px;
+        }
+
+        #space-box .subtitle {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
+        #space-list {
+            max-height: 45vh;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .space-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            transition: border-color 0.2s;
+        }
+
+        .space-item:hover { border-color: #e94560; }
+
+        .space-item .space-info {
+            flex: 1;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .space-item .space-name {
+            font-weight: 600;
+            font-size: 15px;
+        }
+
+        .space-item .space-meta {
+            font-size: 12px;
+            color: #666;
+            margin-top: 2px;
+        }
+
+        .space-item button {
+            padding: 5px 10px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: transparent;
+            color: #aaa;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.2s, color 0.2s;
+            white-space: nowrap;
+        }
+
+        .space-item button:hover {
+            background: #0f3460;
+            color: #fff;
+        }
+
+        .space-item button.delete-btn:hover {
+            background: #c73652;
+        }
+
+        #space-create {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        #space-create input {
+            flex: 1;
+            padding: 8px 12px;
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 14px;
+            outline: none;
+        }
+
+        #space-create input:focus { border-color: #e94560; }
+
+        #space-create button {
+            padding: 8px 16px;
+            background: #e94560;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        #space-create button:hover { background: #c73652; }
+
+        #space-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        #space-actions button {
+            padding: 8px 18px;
+            background: #0f3460;
+            color: #e0e0e0;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+
+        #space-actions button:hover { background: #1a4a7a; }
+
+        #space-status {
+            margin-top: 14px;
+            font-size: 13px;
+            color: #888;
+            min-height: 18px;
+        }
     </style>
 </head>
 <body>
@@ -353,6 +504,24 @@
     <div id="container">
         <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
     </div>
+
+    <div id="save-space-picker">
+        <div id="space-box">
+            <h1>Save Spaces</h1>
+            <p class="subtitle">Select or create a save space to persist your game data</p>
+            <div id="space-list"></div>
+            <div id="space-create">
+                <input type="text" id="space-name-input" placeholder="New space name...">
+                <button id="space-create-btn">Create</button>
+            </div>
+            <div id="space-actions">
+                <button id="space-import-btn">Import ZIP</button>
+                <button id="space-skip-btn">Skip (no saving)</button>
+            </div>
+            <div id="space-status"></div>
+        </div>
+    </div>
+    <input type="file" id="space-import-input" accept=".zip" style="display:none;">
 
     <div id="file-picker">
         <div id="picker-box">
@@ -460,7 +629,7 @@
                 if (!text) {
                     loadingOverlay.classList.add('hidden');
                     if (!gameFileReady && !xp3Url && !gameZipUrl) {
-                        filePicker.classList.add('visible');
+                        showFilePicker();
                     }
                     return;
                 }
@@ -520,6 +689,288 @@
             document.getElementById('pick-dir-api-btn').style.display = '';
             document.getElementById('picker-divider').style.display = '';
         }
+
+        // --- IndexedDB save space persistence ---
+        var IDB_PREFIX = 'krkr2-space-';
+        var currentIdb = null;
+
+        function idbOpen(spaceId) {
+            return new Promise(function(resolve, reject) {
+                var req = indexedDB.open(IDB_PREFIX + spaceId, 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('files'); };
+                req.onsuccess = function(e) { currentIdb = e.target.result; resolve(currentIdb); };
+                req.onerror = function() { reject(req.error); };
+            });
+        }
+
+        function idbSaveFile(path, data) {
+            if (!currentIdb) return;
+            try {
+                var tx = currentIdb.transaction('files', 'readwrite');
+                tx.objectStore('files').put(new Uint8Array(data), path);
+            } catch (e) { console.warn('[IDB] save failed:', path, e); }
+        }
+
+        function idbLoadAll() {
+            if (!currentIdb) return Promise.resolve([]);
+            return new Promise(function(resolve) {
+                var tx = currentIdb.transaction('files', 'readonly');
+                var store = tx.objectStore('files');
+                var results = [];
+                var cursorReq = store.openCursor();
+                cursorReq.onsuccess = function(e) {
+                    var cursor = e.target.result;
+                    if (cursor) {
+                        results.push({ path: cursor.key, data: cursor.value });
+                        cursor.continue();
+                    } else { resolve(results); }
+                };
+                cursorReq.onerror = function() { resolve(results); };
+            });
+        }
+
+        function idbListSpaces() {
+            if (indexedDB.databases) {
+                return indexedDB.databases().then(function(dbs) {
+                    return dbs
+                        .filter(function(d) { return d.name && d.name.startsWith(IDB_PREFIX); })
+                        .map(function(d) { return d.name.substring(IDB_PREFIX.length); });
+                });
+            }
+            var saved = localStorage.getItem('krkr2-spaces');
+            return Promise.resolve(saved ? JSON.parse(saved) : []);
+        }
+
+        function idbRegisterSpace(name) {
+            try {
+                var saved = JSON.parse(localStorage.getItem('krkr2-spaces') || '[]');
+                if (saved.indexOf(name) < 0) { saved.push(name); localStorage.setItem('krkr2-spaces', JSON.stringify(saved)); }
+            } catch (e) {}
+        }
+
+        function idbUnregisterSpace(name) {
+            try {
+                var saved = JSON.parse(localStorage.getItem('krkr2-spaces') || '[]');
+                saved = saved.filter(function(s) { return s !== name; });
+                localStorage.setItem('krkr2-spaces', JSON.stringify(saved));
+            } catch (e) {}
+        }
+
+        function idbDeleteSpace(spaceId) {
+            return new Promise(function(resolve) {
+                var req = indexedDB.deleteDatabase(IDB_PREFIX + spaceId);
+                req.onsuccess = function() { idbUnregisterSpace(spaceId); resolve(); };
+                req.onerror = function() { resolve(); };
+            });
+        }
+
+        function idbGetSpaceInfo(spaceId) {
+            return new Promise(function(resolve) {
+                var req = indexedDB.open(IDB_PREFIX + spaceId, 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('files'); };
+                req.onsuccess = function(e) {
+                    var db = e.target.result;
+                    try {
+                        var tx = db.transaction('files', 'readonly');
+                        var store = tx.objectStore('files');
+                        var count = 0, totalSize = 0;
+                        var cur = store.openCursor();
+                        cur.onsuccess = function(ev) {
+                            var c = ev.target.result;
+                            if (c) { count++; totalSize += c.value.byteLength || 0; c.continue(); }
+                            else { db.close(); resolve({ count: count, size: totalSize }); }
+                        };
+                        cur.onerror = function() { db.close(); resolve({ count: 0, size: 0 }); };
+                    } catch (err) { db.close(); resolve({ count: 0, size: 0 }); }
+                };
+                req.onerror = function() { resolve({ count: 0, size: 0 }); };
+            });
+        }
+
+        async function idbRestoreSaves() {
+            var files = await idbLoadAll();
+            if (files.length === 0) return;
+            await waitForFS();
+            for (var i = 0; i < files.length; i++) {
+                writeFileToFS(files[i].path, files[i].data);
+            }
+            console.log('[IDB] Restored ' + files.length + ' save file(s)');
+        }
+
+        async function idbExportZip(spaceId) {
+            var db = await new Promise(function(resolve, reject) {
+                var req = indexedDB.open(IDB_PREFIX + spaceId, 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('files'); };
+                req.onsuccess = function(e) { resolve(e.target.result); };
+                req.onerror = function() { reject(req.error); };
+            });
+            var files = await new Promise(function(resolve) {
+                var tx = db.transaction('files', 'readonly');
+                var results = [];
+                var cur = tx.objectStore('files').openCursor();
+                cur.onsuccess = function(e) {
+                    var c = e.target.result;
+                    if (c) { results.push({ path: c.key, data: c.value }); c.continue(); }
+                    else { resolve(results); }
+                };
+                cur.onerror = function() { resolve(results); };
+            });
+            db.close();
+            var zip = new JSZip();
+            for (var i = 0; i < files.length; i++) {
+                zip.file(files[i].path.replace(/^\//, ''), files[i].data);
+            }
+            var blob = await zip.generateAsync({ type: 'blob' });
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = spaceId + '-saves.zip';
+            a.click();
+            URL.revokeObjectURL(a.href);
+        }
+
+        async function idbImportZip(file) {
+            var zip = await JSZip.loadAsync(file);
+            var spaceName = file.name.replace(/\.zip$/i, '').replace(/-saves$/, '');
+            await idbOpen(spaceName);
+            idbRegisterSpace(spaceName);
+            var entries = [];
+            zip.forEach(function(p, e) { if (!e.dir) entries.push({ path: p, entry: e }); });
+            for (var i = 0; i < entries.length; i++) {
+                var data = await entries[i].entry.async('uint8array');
+                var path = '/' + entries[i].path;
+                idbSaveFile(path, data);
+            }
+            if (currentIdb) { currentIdb.close(); currentIdb = null; }
+            return spaceName;
+        }
+
+        // --- Save space picker UI ---
+        var saveSpacePicker = document.getElementById('save-space-picker');
+        var spaceStatus = document.getElementById('space-status');
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        }
+
+        async function refreshSpaceList() {
+            var listEl = document.getElementById('space-list');
+            listEl.innerHTML = '';
+            spaceStatus.textContent = 'Loading...';
+            var spaces = await idbListSpaces();
+            spaceStatus.textContent = '';
+            if (spaces.length === 0) {
+                listEl.innerHTML = '<div style="color:#666;font-size:13px;padding:12px;">No save spaces yet. Create one below.</div>';
+                return;
+            }
+            for (var i = 0; i < spaces.length; i++) {
+                (function(name) {
+                    var item = document.createElement('div');
+                    item.className = 'space-item';
+                    var info = document.createElement('div');
+                    info.className = 'space-info';
+                    info.innerHTML = '<div class="space-name">' + name + '</div><div class="space-meta">Loading...</div>';
+                    info.addEventListener('click', function() { selectSpace(name); });
+                    var exportBtn = document.createElement('button');
+                    exportBtn.textContent = 'Export';
+                    exportBtn.addEventListener('click', function() {
+                        spaceStatus.textContent = 'Exporting...';
+                        idbExportZip(name).then(function() { spaceStatus.textContent = 'Exported!'; });
+                    });
+                    var deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'delete-btn';
+                    deleteBtn.textContent = 'Delete';
+                    deleteBtn.addEventListener('click', function() {
+                        if (confirm('Delete save space "' + name + '"? This cannot be undone.')) {
+                            idbDeleteSpace(name).then(refreshSpaceList);
+                        }
+                    });
+                    item.appendChild(info);
+                    item.appendChild(exportBtn);
+                    item.appendChild(deleteBtn);
+                    listEl.appendChild(item);
+                    idbGetSpaceInfo(name).then(function(si) {
+                        info.querySelector('.space-meta').textContent = si.count + ' file(s), ' + formatSize(si.size);
+                    });
+                })(spaces[i]);
+            }
+        }
+
+            var spaceChosen = false;
+        var pendingNonFsaAction = null;
+
+        async function selectSpace(name) {
+            Module._saveSpaceId = name;
+            localStorage.setItem('krkr2-last-space', name);
+            await idbOpen(name);
+            idbRegisterSpace(name);
+            spaceChosen = true;
+            saveSpacePicker.classList.remove('visible');
+            filePicker.classList.add('visible');
+            if (pendingNonFsaAction) {
+                var action = pendingNonFsaAction;
+                pendingNonFsaAction = null;
+                action();
+            }
+        }
+
+        function showFilePicker() {
+            filePicker.classList.add('visible');
+        }
+
+        function showSpacePicker() {
+            refreshSpaceList();
+            saveSpacePicker.classList.add('visible');
+        }
+
+        function ensureSpaceThen(action) {
+            if (spaceChosen) { action(); return; }
+            pendingNonFsaAction = action;
+            filePicker.classList.remove('visible');
+            showSpacePicker();
+        }
+
+        document.getElementById('space-create-btn').addEventListener('click', function() {
+            var input = document.getElementById('space-name-input');
+            var name = input.value.trim();
+            if (!name) return;
+            input.value = '';
+            selectSpace(name);
+        });
+
+        document.getElementById('space-name-input').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') document.getElementById('space-create-btn').click();
+        });
+
+        document.getElementById('space-skip-btn').addEventListener('click', function() {
+            Module._saveSpaceId = null;
+            spaceChosen = true;
+            saveSpacePicker.classList.remove('visible');
+            filePicker.classList.add('visible');
+            if (pendingNonFsaAction) {
+                var action = pendingNonFsaAction;
+                pendingNonFsaAction = null;
+                action();
+            }
+        });
+
+        document.getElementById('space-import-btn').addEventListener('click', function() {
+            document.getElementById('space-import-input').click();
+        });
+
+        document.getElementById('space-import-input').addEventListener('change', function(e) {
+            var file = e.target.files[0];
+            if (!file) return;
+            e.target.value = '';
+            spaceStatus.textContent = 'Importing...';
+            idbImportZip(file).then(function(name) {
+                spaceStatus.textContent = 'Imported "' + name + '"';
+                refreshSpaceList();
+            }).catch(function(err) {
+                spaceStatus.textContent = 'Import failed: ' + err.message;
+            });
+        });
 
         // --- Common helpers ---
         function waitForFS() {
@@ -619,8 +1070,19 @@
             loadingOverlay.classList.remove('hidden');
             statusElement.textContent = 'Starting game...';
             progressFill.style.width = '100%';
-            if (userFileDepAdded) {
-                Module.removeRunDependency('user-file');
+
+            function releaseDep() {
+                if (userFileDepAdded) Module.removeRunDependency('user-file');
+            }
+
+            if (Module._saveSpaceId) {
+                statusElement.textContent = 'Restoring saves...';
+                idbRestoreSaves().then(releaseDep).catch(function(e) {
+                    console.warn('[IDB] Failed to restore saves:', e);
+                    releaseDep();
+                });
+            } else {
+                releaseDep();
             }
         }
 
@@ -773,10 +1235,19 @@
             }
         }
 
+        async function autoSelectSpace() {
+            if (hasFileSystemAPI) return;
+            var lastSpace = localStorage.getItem('krkr2-last-space');
+            if (lastSpace) {
+                Module._saveSpaceId = lastSpace;
+                await idbOpen(lastSpace);
+            }
+        }
+
         if (gameZipUrl) {
-            fetchAndExtractZip(gameZipUrl, entryXp3);
+            autoSelectSpace().then(function() { fetchAndExtractZip(gameZipUrl, entryXp3); });
         } else if (xp3Url) {
-            fetchXp3FromUrl(xp3Url);
+            autoSelectSpace().then(function() { fetchXp3FromUrl(xp3Url); });
         }
 
         // --- File System Access API: directory picker + save sync ---
@@ -899,10 +1370,14 @@
         document.getElementById('pick-dir-api-btn').addEventListener('click', handleDirectoryAPI);
 
         document.getElementById('pick-file-btn').addEventListener('click', function() {
-            document.getElementById('file-input').click();
+            ensureSpaceThen(function() {
+                document.getElementById('file-input').click();
+            });
         });
         document.getElementById('pick-dir-btn').addEventListener('click', function() {
-            document.getElementById('dir-input').click();
+            ensureSpaceThen(function() {
+                document.getElementById('dir-input').click();
+            });
         });
 
         document.getElementById('file-input').addEventListener('change', function(e) {
@@ -920,7 +1395,9 @@
         // Drag & drop
         var dropZone = document.getElementById('drop-zone');
         dropZone.addEventListener('click', function() {
-            document.getElementById('file-input').click();
+            ensureSpaceThen(function() {
+                document.getElementById('file-input').click();
+            });
         });
         dropZone.addEventListener('dragover', function(e) {
             e.preventDefault();
@@ -933,7 +1410,9 @@
             e.preventDefault();
             dropZone.classList.remove('dragover');
             var file = e.dataTransfer.files[0];
-            if (file) handleXp3File(file);
+            if (file) {
+                ensureSpaceThen(function() { handleXp3File(file); });
+            }
         });
     </script>
     {{{ SCRIPT }}}
