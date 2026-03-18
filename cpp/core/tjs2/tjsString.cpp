@@ -42,20 +42,20 @@ namespace TJS {
 
     //---------------------------------------------------------------------------
     tjs_char *tTJSString::InternalIndepend() {
-        // severs sharing of the string instance
-        // and returns independent internal buffer
+        if(!Ptr) return nullptr;
 
         tTJSVariantString *newstr =
-            TJSAllocVariantString(Ptr->operator const tjs_char *());
+            TJSAllocVariantString(static_cast<const tjs_char *>(*Ptr));
 
         Ptr->Release();
         Ptr = newstr;
 
-        return const_cast<tjs_char *>(newstr->operator const tjs_char *());
+        if(!newstr) return nullptr;
+        return const_cast<tjs_char *>(static_cast<const tjs_char *>(*newstr));
     }
 
     //---------------------------------------------------------------------------
-    tjs_int64 tTJSString::AsInteger() const { return Ptr->ToInteger(); }
+    tjs_int64 tTJSString::AsInteger() const { return Ptr ? Ptr->ToInteger() : 0; }
 
     //---------------------------------------------------------------------------
     void tTJSString::Replace(const tTJSString &from, const tTJSString &to,
@@ -272,7 +272,7 @@ namespace TJS {
         tjs_char *p1 = (tjs_char *)_str.c_str() + _str.length() - 1;
         while(p0 < p1 && *p1 != '\0' && *p1 < 0x20)
             *p1-- = '\0';
-        _str.Ptr->FixLength();
+        if(_str.Ptr) _str.Ptr = _str.Ptr->FixLength();
         return _str;
     }
 

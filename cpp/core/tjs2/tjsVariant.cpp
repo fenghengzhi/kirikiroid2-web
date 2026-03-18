@@ -866,8 +866,8 @@ namespace TJS {
         tTJSVariantString *s1, *s2;
         s1 = AsString();
         s2 = val2.AsString();
-        const tjs_char *p1 = *s1;
-        const tjs_char *p2 = *s2;
+        const tjs_char *p1 = s1 ? (const tjs_char *)*s1 : nullptr;
+        const tjs_char *p2 = s2 ? (const tjs_char *)*s2 : nullptr;
         if(!p1)
             p1 = TJS_W("");
         if(!p2)
@@ -894,8 +894,8 @@ namespace TJS {
         tTJSVariantString *s1, *s2;
         s1 = AsString();
         s2 = val2.AsString();
-        const tjs_char *p1 = *s1;
-        const tjs_char *p2 = *s2;
+        const tjs_char *p1 = s1 ? (const tjs_char *)*s1 : nullptr;
+        const tjs_char *p2 = s2 ? (const tjs_char *)*s2 : nullptr;
         if(!p1)
             p1 = TJS_W("");
         if(!p2)
@@ -934,8 +934,9 @@ namespace TJS {
 
     //---------------------------------------------------------------------------
     void tTJSVariant::increment() {
-        if(vt == tvtString)
-            String->ToNumber(*this);
+        if(vt == tvtString) {
+            if(String) String->ToNumber(*this); else *this = 0;
+        }
 
         if(vt == tvtReal) {
             TJSSetFPUE();
@@ -950,8 +951,9 @@ namespace TJS {
 
     //---------------------------------------------------------------------------
     void tTJSVariant::decrement() {
-        if(vt == tvtString)
-            String->ToNumber(*this);
+        if(vt == tvtString) {
+            if(String) String->ToNumber(*this); else *this = 0;
+        }
 
         if(vt == tvtReal) {
             TJSSetFPUE();
@@ -1075,7 +1077,7 @@ namespace TJS {
             return; // nothing to do
 
         if(vt == tvtString) {
-            String->ToNumber(*this);
+            if(String) String->ToNumber(*this); else *this = 0;
             return;
         }
 
@@ -1144,7 +1146,9 @@ namespace TJS {
             tTJSVariantString *s1, *s2;
             s1 = AsString();
             s2 = rhs.AsString();
-            val.String = TJSAllocVariantString(*s1, *s2);
+            val.String = TJSAllocVariantString(
+                s1 ? (const tjs_char *)*s1 : nullptr,
+                s2 ? (const tjs_char *)*s2 : nullptr);
             if(s1)
                 s1->Release();
             if(s2)

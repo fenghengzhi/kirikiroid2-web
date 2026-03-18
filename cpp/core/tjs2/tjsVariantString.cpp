@@ -455,9 +455,6 @@ namespace TJS {
 
     //---------------------------------------------------------------------------
     tTVInteger tTJSVariantString::ToInteger() const {
-        if(!this)
-            return 0;
-
         tTJSVariant val;
         const tjs_char *ptr = this->operator const tjs_char *();
         if(TJSParseNumber(val, &ptr))
@@ -467,9 +464,6 @@ namespace TJS {
 
     //---------------------------------------------------------------------------
     tTVReal tTJSVariantString::ToReal() const {
-        if(!this)
-            return 0;
-
         tTJSVariant val;
         const tjs_char *ptr = this->operator const tjs_char *();
         if(TJSParseNumber(val, &ptr))
@@ -479,11 +473,6 @@ namespace TJS {
 
     //---------------------------------------------------------------------------
     void tTJSVariantString::ToNumber(tTJSVariant &dest) const {
-        if(!this) {
-            dest = 0;
-            return;
-        }
-
         const tjs_char *ptr = this->operator const tjs_char *();
         if(TJSParseNumber(dest, &ptr))
             return;
@@ -493,21 +482,16 @@ namespace TJS {
 
     //---------------------------------------------------------------------------
     tTJSVariantString::operator const tjs_char *() const {
-        return (!this) ? (nullptr) : (LongString ? LongString : ShortString);
+        return LongString ? LongString : ShortString;
     }
 
     //---------------------------------------------------------------------------
     tjs_int tTJSVariantString::GetLength() const {
-        if(!this)
-            return 0;
         return Length;
     }
 
     //---------------------------------------------------------------------------
     tTJSVariantString *tTJSVariantString::FixLength() {
-        if(!this)
-            return nullptr;
-
         if(RefCount != 0)
             TJSThrowStringDeallocError();
         Length = (tjs_int)TJS_strlen(this->operator const tjs_char *());

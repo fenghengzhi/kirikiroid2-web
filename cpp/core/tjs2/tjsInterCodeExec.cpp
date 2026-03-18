@@ -55,14 +55,14 @@ namespace TJS {
             if(!TJS_strcmp(name, TJS_W("length"))) {
                 // get string length
                 const tTJSVariantString *s = str->AsStringNoAddRef();
-                *result = tTVInteger(s->GetLength());
+                *result = tTVInteger(s ? s->GetLength() : 0);
                 return;
             }
             if(name[0] >= TJS_W('0') && name[0] <= TJS_W('9')) {
                 const tTJSVariantString *valstr = str->AsStringNoAddRef();
                 const tjs_char *s = str->GetString();
                 tjs_int n = TJS_atoi(name);
-                tjs_int len = valstr->GetLength();
+                tjs_int len = valstr ? valstr->GetLength() : 0;
                 if(n == len) {
                     *result = tTJSVariant(TJS_W(""));
                     return;
@@ -83,7 +83,7 @@ namespace TJS {
             const tTJSVariantString *valstr = str->AsStringNoAddRef();
             const tjs_char *s = str->GetString();
             tjs_int n = (tjs_int)member.AsInteger();
-            tjs_int len = valstr->GetLength();
+            tjs_int len = valstr ? valstr->GetLength() : 0;
             if(n == len) {
                 *result = tTJSVariant(TJS_W(""));
                 return;
