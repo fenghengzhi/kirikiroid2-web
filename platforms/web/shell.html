@@ -659,6 +659,7 @@
                 await waitForFS();
                 statusElement.textContent = 'Writing to filesystem...';
                 writeFileToFS('/data.xp3', data);
+                data = null;
                 startGame();
             } catch (err) {
                 statusElement.textContent = 'Download failed: ' + err.message;
@@ -743,6 +744,7 @@
 
                     var fileData = await e.entry.async('uint8array');
                     writeFileToFS(fsPath, fileData);
+                    fileData = null;
 
                     if (lowerName.endsWith('.xp3')) xp3Paths.push(fsPath);
                 }
@@ -832,6 +834,7 @@
                     var file = await entry.handle.getFile();
                     var data = new Uint8Array(await file.arrayBuffer());
                     writeFileToFS(innerPath, data);
+                    data = null;
 
                     if (isXp3) xp3Paths.push(innerPath);
                 }
@@ -853,6 +856,7 @@
                 await waitForFS();
                 setPickerProgress(100, 'Writing to filesystem...');
                 writeFileToFS('/data.xp3', data);
+                data = null;
                 startGame();
             } catch (err) {
                 pickerStatus.textContent = 'Error: ' + err.message;
@@ -879,6 +883,7 @@
 
                     var data = new Uint8Array(await file.arrayBuffer());
                     writeFileToFS(innerPath, data);
+                    data = null;
 
                     if (isXp3) xp3Paths.push(innerPath);
                 }
