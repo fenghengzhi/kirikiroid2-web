@@ -76,8 +76,9 @@ elseif(WEB)
         "SHELL:-s PTHREAD_POOL_SIZE=32"
         "SHELL:-s DEFAULT_PTHREAD_STACK_SIZE=2097152"
         "SHELL:-s NO_DISABLE_EXCEPTION_CATCHING"
-        #--emit-symbol-map
-        #-g2
+        $<$<CONFIG:Debug>:--emit-symbol-map>
+        $<$<CONFIG:Debug>:-g2>
+        $<$<CONFIG:Debug>:-O1>
         -pthread
         -lopenal
         --shell-file ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/shell.html

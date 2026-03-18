@@ -387,6 +387,25 @@
 
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script>
+        // Fix WebGL shader precision mismatch on mobile:
+        // cocos2d-x injects uniforms (mat4/mat3) without explicit precision into both
+        // vertex (highp default) and fragment (mediump default) shaders, causing link failure.
+        (function() {
+            var typePattern = /uniform\s+(?!highp\s|mediump\s|lowp\s)(mat[234]|vec[234]|float|int)\s/g;
+            function fixPrecision(shader, source) {
+                return source.replace(typePattern, 'uniform highp $1 ');
+            }
+            var proto = WebGLRenderingContext.prototype;
+            var origSS = proto.shaderSource;
+            proto.shaderSource = function(shader, source) { return origSS.call(this, shader, fixPrecision(shader, source)); };
+            if (typeof WebGL2RenderingContext !== 'undefined') {
+                var proto2 = WebGL2RenderingContext.prototype;
+                var origSS2 = proto2.shaderSource;
+                proto2.shaderSource = function(shader, source) { return origSS2.call(this, shader, fixPrecision(shader, source)); };
+            }
+        })();
+    </script>
+    <script>
         var statusElement = document.getElementById('status');
         var progressFill = document.getElementById('progress-fill');
         var loadingOverlay = document.getElementById('loading');
@@ -401,8 +420,23 @@
         // --- File System Access API state ---
         var hostDirHandle = null;
 
+        // Replace blocking alert() with non-blocking toast to prevent
+        // rendering pipeline stalls on mobile browsers
+        (function() {
+            var origAlert = window.alert;
+            window.alert = function(msg) {
+                console.warn('[alert suppressed]', msg);
+                var toast = document.createElement('div');
+                toast.textContent = msg;
+                toast.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.85);color:#fff;padding:12px 24px;border-radius:8px;z-index:999999;font-size:14px;max-width:80%;text-align:center;pointer-events:none;';
+                document.body.appendChild(toast);
+                setTimeout(function() { toast.remove(); }, 4000);
+            };
+        })();
+
         var Module = {
             preRun: [function() {
+                FS.mkdir('/savedata');
                 Module.addRunDependency('user-file');
                 userFileDepAdded = true;
                 if (gameFileReady) {
@@ -488,6 +522,15 @@
         }
 
         // --- Common helpers ---
+        function waitForFS() {
+            return new Promise(function(resolve) {
+                if (typeof FS !== 'undefined') { resolve(); return; }
+                var check = setInterval(function() {
+                    if (typeof FS !== 'undefined') { clearInterval(check); resolve(); }
+                }, 50);
+            });
+        }
+
         function ensureDir(path) {
             var parts = path.split('/').filter(Boolean);
             var cur = '';
@@ -612,6 +655,8 @@
                     data.set(chunks[i], offset);
                     offset += chunks[i].length;
                 }
+                statusElement.textContent = 'Waiting for engine...';
+                await waitForFS();
                 statusElement.textContent = 'Writing to filesystem...';
                 writeFileToFS('/data.xp3', data);
                 startGame();
@@ -684,6 +729,7 @@
 
                 var xp3Paths = [];
                 var total = entries.length;
+                await waitForFS();
                 for (var i = 0; i < total; i++) {
                     var e = entries[i];
                     var innerPath = commonPrefix ? e.path.substring(commonPrefix.length) : e.path;
@@ -769,6 +815,7 @@
                 Module._hostDirHandle = hostDirHandle;
                 Module._hostDirPrefix = dirPrefix;
 
+                await waitForFS();
                 var xp3Paths = [];
 
                 for (var i = 0; i < total; i++) {
@@ -803,6 +850,7 @@
             try {
                 setPickerProgress(0, 'Reading ' + file.name + '...');
                 var data = await readFileWithProgress(file);
+                await waitForFS();
                 setPickerProgress(100, 'Writing to filesystem...');
                 writeFileToFS('/data.xp3', data);
                 startGame();
@@ -815,6 +863,7 @@
         async function handleFolder(files) {
             var total = files.length;
             try {
+                await waitForFS();
                 var xp3Paths = [];
                 var folderPrefix = '/' + files[0].webkitRelativePath.split('/')[0];
 
