@@ -68,6 +68,20 @@ execute_process(
     COMMAND_ECHO STDOUT
 )
 
+# Workaround: these files crash under -O2/-O3 in Emscripten (WASM) due to
+# miscompilation of TJS_strcpy/TJSAllocVariantString and critical sections.
+# Force -O0 for the affected sources only to keep the rest optimized.
+if(WEB)
+    set_source_files_properties(
+        tjsVariantString.cpp
+        tjsVariant.cpp
+        tjsInterCodeExec.cpp
+        tjsArray.cpp
+        tjsUtils.cpp
+        PROPERTIES COMPILE_OPTIONS "-O0"
+    )
+endif()
+
 target_sources(${PROJECT_NAME} PRIVATE
     ${PARSE_TAB_CPP_FILES}
     tjsLex.cpp

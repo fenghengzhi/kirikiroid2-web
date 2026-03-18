@@ -52,7 +52,7 @@ if(MSVC)
     add_link_options("/ignore:4099" "/INCREMENTAL" "/DEBUG:FASTLINK")
     # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 elseif(WEB)
-    add_compile_options(-pthread -fexceptions)
+    add_compile_options(-pthread -fexceptions -g2)
 endif()
 
 if(ANDROID)
@@ -76,6 +76,8 @@ elseif(WEB)
         "SHELL:-s PTHREAD_POOL_SIZE=32"
         "SHELL:-s DEFAULT_PTHREAD_STACK_SIZE=2097152"
         "SHELL:-s NO_DISABLE_EXCEPTION_CATCHING"
+        #--emit-symbol-map
+        #-g2
         -pthread
         -lopenal
         --shell-file ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/shell.html
