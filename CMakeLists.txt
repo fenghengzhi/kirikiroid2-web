@@ -52,7 +52,7 @@ if(MSVC)
     add_link_options("/ignore:4099" "/INCREMENTAL" "/DEBUG:FASTLINK")
     # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 elseif(WEB)
-    add_compile_options(-pthread -fexceptions -g2)
+    add_compile_options(-pthread -fwasm-exceptions)
 endif()
 
 if(ANDROID)
@@ -75,7 +75,7 @@ elseif(WEB)
         "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
         "SHELL:-s PTHREAD_POOL_SIZE=4"
         "SHELL:-s DEFAULT_PTHREAD_STACK_SIZE=1048576"
-        "SHELL:-s NO_DISABLE_EXCEPTION_CATCHING"
+        -fwasm-exceptions
         $<$<CONFIG:Debug>:--emit-symbol-map>
         $<$<CONFIG:Debug>:-g2>
         $<$<CONFIG:Debug>:-O1>
@@ -84,7 +84,7 @@ elseif(WEB)
         --shell-file ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/shell.html
         --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio@/
     )
-    target_compile_options(${PROJECT_NAME} PRIVATE "SHELL:-s USE_SDL=2" "SHELL:-s USE_SDL_TTF=2" -fexceptions)
+    target_compile_options(${PROJECT_NAME} PRIVATE "SHELL:-s USE_SDL=2" "SHELL:-s USE_SDL_TTF=2" -fwasm-exceptions)
 elseif(LINUX)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/linux/main.cpp)
 elseif(WINDOWS)

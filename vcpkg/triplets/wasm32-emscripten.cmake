@@ -4,8 +4,8 @@ set(VCPKG_LIBRARY_LINKAGE static)
 set(VCPKG_CMAKE_SYSTEM_NAME Emscripten)
 
 list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS
-    "-DCMAKE_C_FLAGS=-pthread"
-    "-DCMAKE_CXX_FLAGS=-pthread"
+    "-DCMAKE_C_FLAGS=-pthread -fwasm-exceptions"
+    "-DCMAKE_CXX_FLAGS=-pthread -fwasm-exceptions"
 )
 
 if(DEFINED ENV{EMSDK})
