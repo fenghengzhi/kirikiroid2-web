@@ -69,12 +69,12 @@ elseif(WEB)
         "SHELL:-s FULL_ES2=1"
         "SHELL:-s ALLOW_MEMORY_GROWTH=1"
         "SHELL:-s INITIAL_MEMORY=67108864"
-        "SHELL:-s STACK_SIZE=8388608"
+        "SHELL:-s STACK_SIZE=524288"
         "SHELL:-s STACK_OVERFLOW_CHECK=0"
         "SHELL:-s FORCE_FILESYSTEM=1"
         "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
-        "SHELL:-s PTHREAD_POOL_SIZE=32"
-        "SHELL:-s DEFAULT_PTHREAD_STACK_SIZE=2097152"
+        "SHELL:-s PTHREAD_POOL_SIZE=4"
+        "SHELL:-s DEFAULT_PTHREAD_STACK_SIZE=1048576"
         "SHELL:-s NO_DISABLE_EXCEPTION_CATCHING"
         $<$<CONFIG:Debug>:--emit-symbol-map>
         $<$<CONFIG:Debug>:-g2>
