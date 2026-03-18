@@ -74,10 +74,6 @@ execute_process(
 if(WEB)
     set_source_files_properties(
         tjsVariantString.cpp
-        tjsVariant.cpp
-        tjsInterCodeExec.cpp
-        tjsArray.cpp
-        tjsUtils.cpp
         PROPERTIES COMPILE_OPTIONS "-O0"
     )
 endif()

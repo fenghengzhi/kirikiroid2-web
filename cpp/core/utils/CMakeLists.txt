@@ -33,19 +33,6 @@ set(UTILS_HEADERS_DIR
     ${UTILS_PATH}/win32/
 )
 
-# Workaround: TimerIntf/TickCount/ThreadImpl crash under -O2/-O3 in Emscripten
-# with "operation does not support unaligned accesses" in pthread_mutex_lock.
-if(WEB)
-    set_source_files_properties(
-        ${UTILS_PATH}/TimerIntf.cpp
-        ${UTILS_PATH}/TickCount.cpp
-        ${UTILS_PATH}/ThreadIntf.cpp
-        ${UTILS_PATH}/win32/ThreadImpl.cpp
-        ${UTILS_PATH}/win32/TimerImpl.cpp
-        PROPERTIES COMPILE_OPTIONS "-O0"
-    )
-endif()
-
 add_library(${PROJECT_NAME} STATIC ${UTILS_SOURCE_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${UTILS_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_environ_module)
