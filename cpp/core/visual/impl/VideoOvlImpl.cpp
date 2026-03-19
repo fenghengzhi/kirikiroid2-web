@@ -203,6 +203,9 @@ void tTJSNI_VideoOverlay::Open(const ttstr &_name) {
                                       name.c_str(), ext.c_str(), size,
                                       &VideoOverlay);
         }
+        if(!VideoOverlay)
+            TVPThrowExceptionMessage(
+                TJS_W("Cannot open video: no video decoder available"));
         if((Mode == vomOverlay) || (Mode == vomMixer) || (Mode == vomMFEVR)) {
             ResetOverlayParams();
         } else { // set font and back buffer to layerVideo

@@ -21,18 +21,7 @@ extern "C" {
 #include "libavformat/avformat.h"
 };
 
-#ifdef __EMSCRIPTEN__
-static bool FFInitilalized = false;
-void TVPInitLibAVCodec() {
-    if(!FFInitilalized) {
-        avcodec_register_all();
-        av_register_all();
-        FFInitilalized = true;
-    }
-}
-#else
 #include "krffmpeg.h"
-#endif
 
 class FFWaveDecoder : public tTVPWaveDecoder // decoder interface
 {

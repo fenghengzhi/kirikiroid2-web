@@ -43,39 +43,4 @@ bool TVPAcceptSaveAsJXR(void *formatdata, const ttstr &type,
     return false;
 }
 
-class tTJSNI_VideoOverlay;
-class iTVPVideoOverlay;
-
-void GetVideoLayerObject(tTJSNI_VideoOverlay *callbackwin,
-                         struct IStream *stream,
-                         const tjs_char *streamname,
-                         const tjs_char *type, uint64_t size,
-                         iTVPVideoOverlay **out) {
-    if (out) *out = nullptr;
-}
-
-void GetMixingVideoOverlayObject(tTJSNI_VideoOverlay *callbackwin,
-                                 struct IStream *stream,
-                                 const tjs_char *streamname,
-                                 const tjs_char *type, uint64_t size,
-                                 iTVPVideoOverlay **out) {
-    if (out) *out = nullptr;
-}
-
-void GetMFVideoOverlayObject(tTJSNI_VideoOverlay *callbackwin,
-                             struct IStream *stream,
-                             const tjs_char *streamname,
-                             const tjs_char *type, uint64_t size,
-                             iTVPVideoOverlay **out) {
-    if (out) *out = nullptr;
-}
-
-void GetVideoOverlayObject(tTJSNI_VideoOverlay *callbackwin,
-                           struct IStream *stream,
-                           const tjs_char *streamname,
-                           const tjs_char *type, uint64_t size,
-                           iTVPVideoOverlay **out) {
-    if (out) *out = nullptr;
-}
-
 #endif
