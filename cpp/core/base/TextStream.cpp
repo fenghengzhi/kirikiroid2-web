@@ -78,8 +78,6 @@ std::string checkTextEncoding(const void *buf, size_t size,
         } else if(encoding == "WINDOWS-1252") {
             encoding = "ASCII";
         }
-        spdlog::debug("uchardet detected encoding: '{}' (size={})", encoding,
-                      size);
     }
 
     return encoding;
@@ -165,9 +163,6 @@ public:
 
         if(encoding.empty())
             encoding = G_DefaultReadEncoding;
-
-        spdlog::debug("TextStream '{}': encoding='{}', size={}, bomSize={}",
-                      name.AsStdString(), encoding, size, bomSize);
 
         if(encoding == "ASCII") {
             _buffer.assign(raw.data(), raw.data() + size);

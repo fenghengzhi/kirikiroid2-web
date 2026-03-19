@@ -18,7 +18,6 @@
 #include "tjsCompileControl.h"
 #include "tjsScriptBlock.h"
 #include "tjsObject.h"
-#include <spdlog/spdlog.h>
 
 namespace TJS {
 
@@ -318,6 +317,7 @@ namespace TJS {
                 const tjs_char *p = (*ptr);
                 TJSSkipSpace(&p);
                 if(*p == delim) {
+                    // sequence of 'A' 'B' will be combined as 'AB'
                     (*ptr) = p;
                     TJSNext(ptr);
                 } else {
