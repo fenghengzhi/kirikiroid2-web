@@ -18,10 +18,8 @@ set(_PLUGIN_SOURCES
     layerExPerspective.cpp
     fftgraph.cpp
     LayerExBase.cpp
+    layerExMovie.cpp
 )
-if(NOT EMSCRIPTEN)
-    list(APPEND _PLUGIN_SOURCES layerExMovie.cpp)
-endif()
 target_sources(${PROJECT_NAME} PUBLIC ${_PLUGIN_SOURCES})
 
 add_library(krkr2plugins_ncbind STATIC
