@@ -16,6 +16,27 @@
 #include "CharacterSet.h"
 #include "BinaryStream.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+
+EM_JS(int, js_decode_text, (const char *encoding, const uint8_t *data, int dataLen, uint16_t *out, int outCap), {
+    try {
+        var encStr = UTF8ToString(encoding);
+        var bytes = HEAPU8.slice(data, data + dataLen);
+        var decoder = new TextDecoder(encStr);
+        var str = decoder.decode(bytes);
+        var len = str.length;
+        if (len > outCap) len = outCap;
+        for (var i = 0; i < len; i++) {
+            HEAPU16[(out >> 1) + i] = str.charCodeAt(i);
+        }
+        return len;
+    } catch(e) {
+        return -1;
+    }
+});
+#endif
+
 static std::string G_DefaultReadEncoding = "UTF-8";
 
 std::string checkTextEncoding(const void *buf, size_t size,
@@ -57,6 +78,8 @@ std::string checkTextEncoding(const void *buf, size_t size,
         } else if(encoding == "WINDOWS-1252") {
             encoding = "ASCII";
         }
+        spdlog::debug("uchardet detected encoding: '{}' (size={})", encoding,
+                      size);
     }
 
     return encoding;
@@ -141,7 +164,10 @@ public:
         raw.erase(raw.begin(), raw.begin() + bomSize);
 
         if(encoding.empty())
-            encoding = G_DefaultReadEncoding; // 默认回退
+            encoding = G_DefaultReadEncoding;
+
+        spdlog::debug("TextStream '{}': encoding='{}', size={}, bomSize={}",
+                      name.AsStdString(), encoding, size, bomSize);
 
         if(encoding == "ASCII") {
             _buffer.assign(raw.data(), raw.data() + size);
@@ -182,16 +208,37 @@ public:
             return;
         }
 
-        // 其他文本字符
-        try {
-            std::wstring wide = boost::locale::conv::to_utf<wchar_t>(
-                reinterpret_cast<const char *>(raw.data()),
-                reinterpret_cast<const char *>(raw.data() + raw.size()),
-                encoding);
-            _buffer = boost::locale::conv::utf_to_utf<char16_t>(wide);
-        } catch(const std::exception &e) {
-            spdlog::error(e.what());
-            TVPThrowExceptionMessage(TJSNarrowToWideConversionError);
+        // 其他编码 → UTF-16
+#ifdef __EMSCRIPTEN__
+        {
+            std::string jsEnc = encoding;
+            if(jsEnc == "cp932") jsEnc = "shift_jis";
+
+            size_t maxChars = raw.size();
+            _buffer.resize(maxChars);
+            int result = js_decode_text(
+                jsEnc.c_str(), raw.data(), (int)raw.size(),
+                reinterpret_cast<uint16_t*>(_buffer.data()), (int)maxChars);
+            if(result >= 0) {
+                _buffer.resize(result);
+            } else {
+                spdlog::warn("TextDecoder failed for encoding '{}', falling back to boost::locale", encoding);
+                _buffer.clear();
+            }
+        }
+        if(_buffer.empty())
+#endif
+        {
+            try {
+                std::wstring wide = boost::locale::conv::to_utf<wchar_t>(
+                    reinterpret_cast<const char *>(raw.data()),
+                    reinterpret_cast<const char *>(raw.data() + raw.size()),
+                    encoding);
+                _buffer = boost::locale::conv::utf_to_utf<char16_t>(wide);
+            } catch(const std::exception &e) {
+                spdlog::error(e.what());
+                TVPThrowExceptionMessage(TJSNarrowToWideConversionError);
+            }
         }
     }
 
