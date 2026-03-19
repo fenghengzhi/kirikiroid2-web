@@ -1003,22 +1003,11 @@
             if (text) pickerStatus.textContent = text;
         }
 
-        function readFileWithProgress(file) {
-            return new Promise(function(resolve, reject) {
-                var reader = new FileReader();
-                var sizeMB = (file.size / 1048576).toFixed(1);
-                reader.onprogress = function(e) {
-                    if (e.lengthComputable) {
-                        var pct = Math.round(e.loaded / e.total * 100);
-                        setPickerProgress(pct, 'Reading ' + file.name + ' (' + sizeMB + ' MB)... ' + pct + '%');
-                    }
-                };
-                reader.onload = function(e) {
-                    resolve(new Uint8Array(e.target.result));
-                };
-                reader.onerror = function() { reject(reader.error); };
-                reader.readAsArrayBuffer(file);
-            });
+        async function readFileWithProgress(file) {
+            var sizeMB = (file.size / 1048576).toFixed(1);
+            setPickerProgress(50, 'Reading ' + file.name + ' (' + sizeMB + ' MB)...');
+            var buffer = await file.arrayBuffer();
+            return new Uint8Array(buffer);
         }
 
         function showXp3Selector(xp3Paths, dirPrefix, callback) {
@@ -1092,17 +1081,7 @@
             statusElement.textContent = 'Downloading game data...';
             progressFill.style.width = '0%';
             try {
-                var resp = await fetch(url);
-                if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
-                var total = parseInt(resp.headers.get('Content-Length') || '0', 10);
-                var reader = resp.body.getReader();
-                var chunks = [];
-                var loaded = 0;
-                while (true) {
-                    var r = await reader.read();
-                    if (r.done) break;
-                    chunks.push(r.value);
-                    loaded += r.value.length;
+                var data = await fetchWithProgress(url, function(loaded, total) {
                     if (total > 0) {
                         var pct = Math.round(loaded / total * 100);
                         progressFill.style.width = pct + '%';
@@ -1110,13 +1089,7 @@
                     } else {
                         statusElement.textContent = 'Downloading... ' + (loaded / 1048576).toFixed(1) + ' MB';
                     }
-                }
-                var data = new Uint8Array(loaded);
-                var offset = 0;
-                for (var i = 0; i < chunks.length; i++) {
-                    data.set(chunks[i], offset);
-                    offset += chunks[i].length;
-                }
+                });
                 statusElement.textContent = 'Waiting for engine...';
                 await waitForFS();
                 statusElement.textContent = 'Writing to filesystem...';
@@ -1136,22 +1109,9 @@
             var resp = await fetch(url);
             if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
             var total = parseInt(resp.headers.get('Content-Length') || '0', 10);
-            var reader = resp.body.getReader();
-            var chunks = [];
-            var loaded = 0;
-            while (true) {
-                var r = await reader.read();
-                if (r.done) break;
-                chunks.push(r.value);
-                loaded += r.value.length;
-                if (onProgress) onProgress(loaded, total);
-            }
-            var data = new Uint8Array(loaded);
-            var offset = 0;
-            for (var i = 0; i < chunks.length; i++) {
-                data.set(chunks[i], offset);
-                offset += chunks[i].length;
-            }
+            if (onProgress) onProgress(0, total);
+            var data = new Uint8Array(await resp.arrayBuffer());
+            if (onProgress) onProgress(data.byteLength, total);
             return data;
         }
 
