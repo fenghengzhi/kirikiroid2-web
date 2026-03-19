@@ -19,6 +19,7 @@ set(_PLUGIN_SOURCES
     fftgraph.cpp
     LayerExBase.cpp
     layerExMovie.cpp
+    kirikiroid2.cpp
 )
 target_sources(${PROJECT_NAME} PUBLIC ${_PLUGIN_SOURCES})
 
