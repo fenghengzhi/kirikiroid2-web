@@ -39,6 +39,49 @@ EM_JS(int, js_decode_text, (const char *encoding, const uint8_t *data, int dataL
 
 static std::string G_DefaultReadEncoding = "UTF-8";
 
+static bool looksLikeShiftJIS(const unsigned char *raw, size_t size) {
+    size_t validPairs = 0;
+    size_t invalidBytes = 0;
+    size_t halfWidthKana = 0;
+    size_t highBytes = 0;
+
+    for(size_t i = 0; i < size; i++) {
+        unsigned char ch = raw[i];
+        if(ch < 0x80) {
+            continue;
+        }
+
+        highBytes++;
+        if(ch >= 0xA1 && ch <= 0xDF) {
+            halfWidthKana++;
+            continue;
+        }
+
+        if((ch >= 0x81 && ch <= 0x9F) || (ch >= 0xE0 && ch <= 0xFC)) {
+            if(i + 1 < size) {
+                unsigned char trail = raw[i + 1];
+                if((trail >= 0x40 && trail <= 0x7E) ||
+                   (trail >= 0x80 && trail <= 0xFC)) {
+                    validPairs++;
+                    i++;
+                    continue;
+                }
+            }
+        }
+
+        invalidBytes++;
+    }
+
+    if(highBytes == 0) {
+        return false;
+    }
+    if(validPairs == 0 && halfWidthKana == 0) {
+        return false;
+    }
+
+    return invalidBytes == 0 || (validPairs * 2 + halfWidthKana) > invalidBytes;
+}
+
 std::string checkTextEncoding(const void *buf, size_t size,
                               std::uint8_t &bomSize) {
     auto raw = static_cast<const unsigned char *>(buf);
@@ -74,6 +117,13 @@ std::string checkTextEncoding(const void *buf, size_t size,
         encoding = uchardet_get_charset(ud);
         uchardet_delete(ud);
         if(encoding == "SHIFT_JIS") {
+            encoding = "cp932";
+        } else if((encoding == "ASCII" || encoding == "ISO-8859-1" ||
+                   encoding == "WINDOWS-1252") &&
+                  looksLikeShiftJIS(raw, size)) {
+            spdlog::warn(
+                "uchardet guessed '{}', but bytes look like Shift_JIS; using cp932",
+                encoding);
             encoding = "cp932";
         } else if(encoding == "WINDOWS-1252") {
             encoding = "ASCII";
