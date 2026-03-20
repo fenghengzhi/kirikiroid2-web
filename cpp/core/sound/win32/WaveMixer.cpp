@@ -678,7 +678,15 @@ public:
     tjs_uint GetLatencySamples() override {
         std::lock_guard<std::mutex> lk(_buffer_mtx);
         ALint offset = 0, queued = 0;
+#ifdef __EMSCRIPTEN__
+        // Emscripten may report fractional offsets here; truncate to keep the
+        // debug runtime from aborting on an integer heap write assertion.
+        ALfloat offsetFloat = 0.0f;
+        alGetSourcef(_alSource, AL_BYTE_OFFSET, &offsetFloat);
+        offset = static_cast<ALint>(offsetFloat);
+#else
         alGetSourcei(_alSource, AL_BYTE_OFFSET, &offset);
+#endif
         alGetSourcei(_alSource, AL_BUFFERS_QUEUED, &queued);
         int remainBuffers = queued;
         if(remainBuffers == 0)
@@ -701,7 +709,13 @@ public:
 
     tjs_uint GetCurrentPlaySamples() override {
         ALint offset = 0;
+#ifdef __EMSCRIPTEN__
+        ALfloat offsetFloat = 0.0f;
+        alGetSourcef(_alSource, AL_SAMPLE_OFFSET, &offsetFloat);
+        offset = static_cast<ALint>(offsetFloat);
+#else
         alGetSourcei(_alSource, AL_SAMPLE_OFFSET, &offset);
+#endif
         return _sendedSamples + offset;
     }
 };

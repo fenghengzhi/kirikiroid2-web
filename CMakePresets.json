@@ -196,8 +196,8 @@
       "configurePreset": "Web Debug Config"
     },
     {
-      "name": "Web Debug Safe Heap Build",
-      "configurePreset": "Web Debug Safe Heap Config"
+      "name": "Web Debug No Asan Config",
+      "configurePreset": "Web Debug No Asan Config"
     },
     {
       "name": "Web Release Build",

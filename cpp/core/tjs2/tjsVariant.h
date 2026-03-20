@@ -795,7 +795,7 @@ namespace TJS {
             // returns String
             if(vt != tvtString)
                 TJSThrowVariantConvertError(*this, tvtString);
-            return *String;
+            return String ? String->operator const tjs_char *() : TJS_W("");
         }
 
         TJS_METHOD_DEF(tjs_uint32 *, GetHint, ()) {

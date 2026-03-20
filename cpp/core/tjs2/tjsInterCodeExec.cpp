@@ -44,6 +44,20 @@ namespace TJS {
     static void ThrowInvalidVMCode() { TJS_eTJSError(TJSInvalidOpecode); }
 
     //---------------------------------------------------------------------------
+    static const tjs_char *GetSafeStringValue(const tTJSVariantString *str) {
+        return str ? str->operator const tjs_char *() : TJS_W("");
+    }
+
+    //---------------------------------------------------------------------------
+    static bool ShouldUseStackTracer() {
+#ifdef __EMSCRIPTEN__
+        return false;
+#else
+        return TJSStackTracerEnabled();
+#endif
+    }
+
+    //---------------------------------------------------------------------------
     static void GetStringProperty(tTJSVariant *result, const tTJSVariant *str,
                                   const tTJSVariant &member) {
         // processes properties toward strings.
@@ -683,7 +697,7 @@ namespace TJS {
                                     ra[-2].SetObject(global, global);
                             }
             */
-            if(TJSStackTracerEnabled())
+            if(ShouldUseStackTracer())
                 TJSStackTracerPush(this, false);
 
             // check whether the objthis is deleting
@@ -749,7 +763,7 @@ namespace TJS {
                 ra[-2].Clear(); // at least we must clear the object
                                 // placed at local stack
                 TJSVariantArrayStack->Deallocate(num_alloc, regs);
-                if(TJSStackTracerEnabled())
+                if(ShouldUseStackTracer())
                     TJSStackTracerPop();
                 throw;
             }
@@ -763,7 +777,7 @@ namespace TJS {
 
             TJSVariantArrayStack->Deallocate(num_alloc, regs);
 
-            if(TJSStackTracerEnabled())
+            if(ShouldUseStackTracer())
                 TJSStackTracerPop();
         } catch(...) {
             //		if(objthis) objthis->Release();
@@ -858,7 +872,7 @@ namespace TJS {
         try {
             tjs_int32 *code = codesave = CodeArea + startip;
 
-            if(TJSStackTracerEnabled())
+            if(ShouldUseStackTracer())
                 TJSStackTracerSetCodePointer(CodeArea, &codesave);
 
             tTJSVariant *ra = ra_org;
@@ -1339,17 +1353,17 @@ namespace TJS {
         // execute codes in a try-protected block
 
         try {
-            if(TJSStackTracerEnabled())
+            if(ShouldUseStackTracer())
                 TJSStackTracerPush(this, true);
             tjs_int ret;
             try {
                 ret = ExecuteCode(ra, startip, args, numargs, result, true);
             } catch(...) {
-                if(TJSStackTracerEnabled())
+                if(ShouldUseStackTracer())
                     TJSStackTracerPop();
                 throw;
             }
-            if(TJSStackTracerEnabled())
+            if(ShouldUseStackTracer())
                 TJSStackTracerPop();
             return ret;
         } catch(eTJSSilent &) {
@@ -1510,14 +1524,16 @@ namespace TJS {
         tTJSVariant *ra_code3 = TJS_GET_VM_REG_ADDR(ra, code[3]);
         if(ra_code3->Type() != tvtInteger) {
             tTJSVariantString *str = ra_code3->AsString();
+            const tjs_char *member_name = GetSafeStringValue(str);
 
             try {
                 // TODO: verify here needs hint holding
                 hr = clo.PropGet(
-                    flags, *str, nullptr, TJS_GET_VM_REG_ADDR(ra, code[1]),
+                    flags, member_name, nullptr,
+                    TJS_GET_VM_REG_ADDR(ra, code[1]),
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
                 if(TJS_FAILED(hr))
-                    TJSThrowFrom_tjs_error(hr, *str);
+                    TJSThrowFrom_tjs_error(hr, member_name);
             } catch(...) {
                 if(str)
                     str->Release();
@@ -1560,8 +1576,10 @@ namespace TJS {
         tTJSVariant *ra_code2 = TJS_GET_VM_REG_ADDR(ra, code[2]);
         if(ra_code2->Type() != tvtInteger) {
             tTJSVariantString *str;
+            const tjs_char *member_name = TJS_W("");
             try {
                 str = ra_code2->AsString();
+                member_name = GetSafeStringValue(str);
             } catch(...) {
                 clo.Release();
                 throw;
@@ -1573,10 +1591,11 @@ namespace TJS {
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
                 if(hr == TJS_E_NOTIMPL)
                     hr = clo.PropSet(
-                        flags, *str, nullptr, TJS_GET_VM_REG_ADDR(ra, code[3]),
+                        flags, member_name, nullptr,
+                        TJS_GET_VM_REG_ADDR(ra, code[3]),
                         clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
                 if(TJS_FAILED(hr))
-                    TJSThrowFrom_tjs_error(hr, *str);
+                    TJSThrowFrom_tjs_error(hr, member_name);
             } catch(...) {
                 if(str)
                     str->Release();
@@ -1640,20 +1659,22 @@ namespace TJS {
         tTJSVariant *ra_code3 = TJS_GET_VM_REG_ADDR(ra, code[3]);
         if(ra_code3->Type() != tvtInteger) {
             tTJSVariantString *str;
+            const tjs_char *member_name = TJS_W("");
             try {
                 str = ra_code3->AsString();
+                member_name = GetSafeStringValue(str);
             } catch(...) {
                 clo.Release();
                 throw;
             }
             try {
                 tjs_error hr = clo.Operation(
-                    ope, *str, nullptr,
+                    ope, member_name, nullptr,
                     code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
                     TJS_GET_VM_REG_ADDR(ra, code[4]),
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
                 if(TJS_FAILED(hr))
-                    TJSThrowFrom_tjs_error(hr, *str);
+                    TJSThrowFrom_tjs_error(hr, member_name);
             } catch(...) {
                 if(str)
                     str->Release();
@@ -1738,8 +1759,10 @@ namespace TJS {
         tTJSVariant *ra_code3 = TJS_GET_VM_REG_ADDR(ra, code[3]);
         if(ra_code3->Type() != tvtInteger) {
             tTJSVariantString *str;
+            const tjs_char *member_name = TJS_W("");
             try {
                 str = ra_code3->AsString();
+                member_name = GetSafeStringValue(str);
             } catch(...) {
                 clo.Release();
                 throw;
@@ -1747,12 +1770,12 @@ namespace TJS {
             tjs_error hr;
             try {
                 hr = clo.Operation(
-                    ope, *str, nullptr,
+                    ope, member_name, nullptr,
                     code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
                     nullptr,
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
                 if(TJS_FAILED(hr))
-                    TJSThrowFrom_tjs_error(hr, *str);
+                    TJSThrowFrom_tjs_error(hr, member_name);
             } catch(...) {
                 if(str)
                     str->Release();
@@ -1839,10 +1862,11 @@ namespace TJS {
             clo.Release();
             throw;
         }
+        const tjs_char *member_name = GetSafeStringValue(str);
 
         try {
             tjs_error hr = clo.DeleteMember(
-                0, *str, nullptr,
+                0, member_name, nullptr,
                 clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
             if(code[1]) {
                 if(TJS_FAILED(hr))
@@ -1932,8 +1956,10 @@ namespace TJS {
         tTJSVariantClosure clo = TJS_GET_VM_REG(ra, code[2]).AsObjectClosure();
         if(TJS_GET_VM_REG(ra, code[3]).Type() != tvtInteger) {
             tTJSVariantString *str;
+            const tjs_char *member_name = TJS_W("");
             try {
                 str = TJS_GET_VM_REG(ra, code[3]).AsString();
+                member_name = GetSafeStringValue(str);
             } catch(...) {
                 clo.Release();
                 throw;
@@ -1942,7 +1968,8 @@ namespace TJS {
             try {
                 // TODO: verify here needs hint holding
                 hr = clo.PropGet(
-                    flags, *str, nullptr, TJS_GET_VM_REG_ADDR(ra, code[1]),
+                    flags, member_name, nullptr,
+                    TJS_GET_VM_REG_ADDR(ra, code[1]),
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
                 if(hr == TJS_S_OK) {
                     TypeOf(TJS_GET_VM_REG(ra, code[1]));
@@ -2664,7 +2691,7 @@ namespace TJS {
         // puts val's character code on val
         tTJSVariantString *str = val.AsString();
         if(str) {
-            const tjs_char *ch = (const tjs_char *)*str;
+            const tjs_char *ch = GetSafeStringValue(str);
             val = tTVInteger(ch[0]);
             str->Release();
             return;
@@ -2686,9 +2713,10 @@ namespace TJS {
         // checks instance inheritance.
         tTJSVariantString *str = name.AsString();
         if(str) {
+            const tjs_char *class_name = GetSafeStringValue(str);
             tjs_error hr;
             try {
-                hr = TJSDefaultIsInstanceOf(0, targ, (const tjs_char *)*str,
+                hr = TJSDefaultIsInstanceOf(0, targ, class_name,
                                             nullptr);
             } catch(...) {
                 str->Release();
