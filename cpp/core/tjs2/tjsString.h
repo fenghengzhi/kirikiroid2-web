@@ -447,7 +447,7 @@ namespace TJS {
         }
 
         [[nodiscard]] int IndexOf(tjs_char c, unsigned int pos = 0) const {
-            return IndexOf(tTJSString(&c, 1), pos);
+            return IndexOf(tTJSString(c), pos);
         }
 
         [[nodiscard]] tTJSString SubString(unsigned int pos,
