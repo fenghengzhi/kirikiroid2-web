@@ -1,40 +1,13 @@
 ---
 name: krkr2-debug
-description: Guides building and running the KrKr2 WebAssembly project for local debugging and testing. Use when the user needs to compile the project, start the development server, load game files, or troubleshoot the runtime environment.
+description: Guides running and debugging the KrKr2 WebAssembly project locally. Use when the user needs to start the development server, load game files, or troubleshoot the runtime environment.
 ---
 
 # KrKr2 调试工作流
 
 ## 编译
 
-### 前置条件
-
-确保以下环境变量已设置：
-
-```bash
-export VCPKG_ROOT=/path/to/vcpkg
-source /path/to/emsdk/emsdk_env.sh
-```
-
-依赖工具：Emscripten SDK、vcpkg、ninja、cmake 3.31.1+、bison 3.8.2+、python3。
-
-### 构建命令
-
-调试时使用 Debug 构建：
-
-```bash
-cmake --preset "Web Debug Config"
-cmake --build out/web/debug
-```
-
-产物在 `out/web/debug/` 下：`index.html`、`index.js`、`index.wasm`、`index.data`、`index.worker.js`。
-
-发布时使用 Release 构建：
-
-```bash
-cmake --preset "Web Release Config"
-cmake --build out/web/release
-```
+参见 [krkr2-build skill](../krkr2-build/SKILL.md)。
 
 ## 运行
 
@@ -82,7 +55,7 @@ python3 coi-server.py out/web/debug --zip /path/to/game.zip --entry data.xp3
 
 ## 浏览器自动化调试
 
-服务器启动后，除了让用户手动访问页面外，也可以使用 `playwright-cli` 进行自动化调试。参考 [playwright-cli skill](../../../.claude/skills/playwright-cli/SKILL.md)。
+服务器启动后，除了让用户手动访问页面外，也可以使用 `playwright-cli` 进行自动化调试。参考 [playwright-cli skill](../playwright-cli/SKILL.md)。
 
 典型流程：
 

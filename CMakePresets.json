@@ -140,18 +140,18 @@
       "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
     },
     {
-      "name": "Web Debug Config",
+      "name": "Web Debug Asan Config",
       "inherits": "Web Config",
-      "binaryDir": "${sourceDir}/out/web/debug",
+      "binaryDir": "${sourceDir}/out/web/debug-asan",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "KRKR2_WEB_DEBUG_ENABLE_ASAN": true
       }
     },
     {
-      "name": "Web Debug No Asan Config",
+      "name": "Web Debug Config",
       "inherits": "Web Config",
-      "binaryDir": "${sourceDir}/out/web/debug-no-asan",
+      "binaryDir": "${sourceDir}/out/web/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "KRKR2_WEB_DEBUG_ENABLE_ASAN": false
@@ -192,12 +192,12 @@
       "configurePreset": "MacOS Release Config"
     },
     {
-      "name": "Web Debug Build",
-      "configurePreset": "Web Debug Config"
+      "name": "Web Debug Asan Build",
+      "configurePreset": "Web Debug Asan Config"
     },
     {
-      "name": "Web Debug No Asan Config",
-      "configurePreset": "Web Debug No Asan Config"
+      "name": "Web Debug Build",
+      "configurePreset": "Web Debug Config"
     },
     {
       "name": "Web Release Build",
