@@ -6,7 +6,7 @@ import os
 import sys
 import threading
 
-parser = argparse.ArgumentParser(description='Serve KiriKiroid2 Web build with COOP/COEP headers')
+parser = argparse.ArgumentParser(description='Serve KrKr2 Web build with COOP/COEP headers')
 parser.add_argument('serve_dir', nargs='?', default='.', help='Directory to serve (default: .)')
 parser.add_argument('http_port', nargs='?', type=int, default=8080, help='HTTP port (default: 8080)')
 parser.add_argument('https_port', nargs='?', type=int, default=8443, help='HTTPS port (default: 8443)')
