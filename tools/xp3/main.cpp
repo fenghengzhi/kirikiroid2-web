@@ -1,5 +1,7 @@
 #include <filesystem>
 #include <fstream>
+#include <optional>
+#include <sstream>
 #include <argparse/argparse.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -9,6 +11,8 @@
 namespace fs = std::filesystem;
 
 static constexpr size_t TVP_LOCAL_TEMP_COPY_BLOCK_SIZE = 65536 * 2;
+
+void TVPSetXP3FilterScript(ttstr content);
 
 void extractArchive(const std::string &file, const std::string &destDir) {
     const std::unique_ptr<tTVPArchive> arc{ TVPOpenArchive(ttstr{ file },
@@ -93,6 +97,44 @@ std::string normalizePath(const std::string &path) {
     return expanded;
 }
 
+std::optional<std::string>
+resolveXp3FilterPath(const fs::path &archivePath,
+                     const std::optional<std::string> &explicitPath) {
+    if(explicitPath) {
+        fs::path filterPath(*explicitPath);
+        if(fs::exists(filterPath) && fs::is_regular_file(filterPath)) {
+            return normalizePath(filterPath.string());
+        }
+        throw std::runtime_error("xp3filter script not found: " +
+                                 filterPath.string());
+    }
+
+    fs::path sibling = archivePath.parent_path() / "xp3filter.tjs";
+    if(fs::exists(sibling) && fs::is_regular_file(sibling)) {
+        return normalizePath(sibling.string());
+    }
+
+    return std::nullopt;
+}
+
+void configureXp3Filter(const std::optional<std::string> &filterPath) {
+    if(!filterPath) {
+        TVPSetXP3FilterScript(TJS_W(""));
+        return;
+    }
+
+    std::ifstream ifs(*filterPath, std::ios::binary);
+    if(!ifs) {
+        throw std::runtime_error("failed to open xp3filter script: " +
+                                 *filterPath);
+    }
+
+    std::ostringstream script;
+    script << ifs.rdbuf();
+    TVPSetXP3FilterScript(ttstr(script.str().c_str()));
+    spdlog::info("Loaded xp3filter script: {}", *filterPath);
+}
+
 int main(int argc, char *argv[]) {
     argparse::ArgumentParser program(PROGRAM_NAME, VERSION);
 
@@ -101,6 +143,8 @@ int main(int argc, char *argv[]) {
         .nargs(argparse::nargs_pattern::at_least_one);
 
     program.add_argument("-o", "--output").help("output dir path");
+    program.add_argument("--xp3filter")
+        .help("xp3filter.tjs path; defaults to a sibling xp3filter.tjs");
 
     try {
         program.parse_args(argc, argv);
@@ -121,6 +165,11 @@ int main(int argc, char *argv[]) {
     if(program.is_used("-o")) {
         output_dir = program.get<std::string>("-o");
     }
+    std::optional<std::string> explicit_filter_path;
+    if(program.is_used("--xp3filter")) {
+        explicit_filter_path =
+            normalizePath(program.get<std::string>("--xp3filter"));
+    }
 
     const auto input_files = program.get<std::vector<std::string>>("files");
     for(const auto &input : input_files) {
@@ -131,8 +180,10 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        configureXp3Filter(resolveXp3FilterPath(file, explicit_filter_path));
         extractArchive(file.string(), fs::path(normalizePath(output_dir) / fs::path(file.stem().string()) / "").string());
     }
+    TVPSetXP3FilterScript(TJS_W(""));
 
     return 0;
 }
