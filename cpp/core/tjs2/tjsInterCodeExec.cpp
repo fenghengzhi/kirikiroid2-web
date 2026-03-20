@@ -49,6 +49,20 @@ namespace TJS {
     }
 
     //---------------------------------------------------------------------------
+    static iTJSDispatch2 *GetCurrentContextThisOrNull(const tTJSVariant *ra) {
+        const tTJSVariant &current_this = ra[-1];
+        return current_this.Type() == tvtObject
+                   ? current_this.AsObjectNoAddRef()
+                   : nullptr;
+    }
+
+    //---------------------------------------------------------------------------
+    static iTJSDispatch2 *GetDispatchObjectThis(const tTJSVariantClosure &clo,
+                                                const tTJSVariant *ra) {
+        return clo.ObjThis ? clo.ObjThis : GetCurrentContextThisOrNull(ra);
+    }
+
+    //---------------------------------------------------------------------------
     static bool ShouldUseStackTracer() {
 #ifdef __EMSCRIPTEN__
         return false;
@@ -1082,26 +1096,29 @@ namespace TJS {
                         break;
 
                     case VM_INV:
-                        TJS_GET_VM_REG(ra, code[1]) =
-                            TJS_GET_VM_REG(ra, code[1]).Type() != tvtObject
-                            ? false
-                            : (TJS_GET_VM_REG(ra, code[1])
-                                   .AsObjectClosureNoAddRef()
-                                   .Invalidate(0, nullptr, nullptr,
-                                               ra[-1].AsObjectNoAddRef()) ==
-                               TJS_S_TRUE);
+                        if(TJS_GET_VM_REG(ra, code[1]).Type() != tvtObject) {
+                            TJS_GET_VM_REG(ra, code[1]) = false;
+                        } else {
+                            auto clo =
+                                TJS_GET_VM_REG(ra, code[1]).AsObjectClosureNoAddRef();
+                            TJS_GET_VM_REG(ra, code[1]) =
+                                clo.Invalidate(0, nullptr, nullptr,
+                                               GetDispatchObjectThis(clo, ra)) ==
+                                TJS_S_TRUE;
+                        }
                         code += 2;
                         break;
 
                     case VM_CHKINV:
-                        TJS_GET_VM_REG(ra, code[1]) =
-                            TJS_GET_VM_REG(ra, code[1]).Type() != tvtObject
-                            ? true
-                            : TJSIsObjectValid(
-                                  TJS_GET_VM_REG(ra, code[1])
-                                      .AsObjectClosureNoAddRef()
-                                      .IsValid(0, nullptr, nullptr,
-                                               ra[-1].AsObjectNoAddRef()));
+                        if(TJS_GET_VM_REG(ra, code[1]).Type() != tvtObject) {
+                            TJS_GET_VM_REG(ra, code[1]) = true;
+                        } else {
+                            auto clo =
+                                TJS_GET_VM_REG(ra, code[1]).AsObjectClosureNoAddRef();
+                            TJS_GET_VM_REG(ra, code[1]) = TJSIsObjectValid(
+                                clo.IsValid(0, nullptr, nullptr,
+                                            GetDispatchObjectThis(clo, ra)));
+                        }
                         code += 2;
                         break;
 
@@ -1434,7 +1451,7 @@ namespace TJS {
         tjs_error hr =
             clo.PropGet(flags, name->GetString(), name->GetHint(),
                         TJS_GET_VM_REG_ADDR(ra, code[1]),
-                        clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                        GetDispatchObjectThis(clo, ra));
         if(TJS_FAILED(hr))
             TJSThrowFrom_tjs_error(
                 hr, TJS_GET_VM_REG(DataArea, code[3]).GetString());
@@ -1463,12 +1480,11 @@ namespace TJS {
         tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[2]);
         tjs_error hr = clo.PropSetByVS(
             flags, name->AsStringNoAddRef(), TJS_GET_VM_REG_ADDR(ra, code[3]),
-            clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+            GetDispatchObjectThis(clo, ra));
         if(hr == TJS_E_NOTIMPL)
             hr = clo.PropSet(flags, name->GetString(), name->GetHint(),
                              TJS_GET_VM_REG_ADDR(ra, code[3]),
-                             clo.ObjThis ? clo.ObjThis
-                                         : ra[-1].AsObjectNoAddRef());
+                             GetDispatchObjectThis(clo, ra));
         if(TJS_FAILED(hr))
             TJSThrowFrom_tjs_error(
                 hr, TJS_GET_VM_REG(DataArea, code[2]).GetString());
@@ -1482,7 +1498,7 @@ namespace TJS {
             TJS_GET_VM_REG_ADDR(ra, code[2])->AsObjectClosureNoAddRef();
         tjs_error hr =
             clo.PropGet(0, nullptr, nullptr, TJS_GET_VM_REG_ADDR(ra, code[1]),
-                        clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                        GetDispatchObjectThis(clo, ra));
         if(TJS_FAILED(hr))
             TJSThrowFrom_tjs_error(hr, nullptr);
     }
@@ -1495,7 +1511,7 @@ namespace TJS {
             TJS_GET_VM_REG_ADDR(ra, code[1])->AsObjectClosureNoAddRef();
         tjs_error hr =
             clo.PropSet(0, nullptr, nullptr, TJS_GET_VM_REG_ADDR(ra, code[2]),
-                        clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                        GetDispatchObjectThis(clo, ra));
         if(TJS_FAILED(hr))
             TJSThrowFrom_tjs_error(hr, nullptr);
     }
@@ -1531,7 +1547,7 @@ namespace TJS {
                 hr = clo.PropGet(
                     flags, member_name, nullptr,
                     TJS_GET_VM_REG_ADDR(ra, code[1]),
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    GetDispatchObjectThis(clo, ra));
                 if(TJS_FAILED(hr))
                     TJSThrowFrom_tjs_error(hr, member_name);
             } catch(...) {
@@ -1544,8 +1560,7 @@ namespace TJS {
         } else {
             hr = clo.PropGetByNum(flags, (tjs_int)ra_code3->AsInteger(),
                                   TJS_GET_VM_REG_ADDR(ra, code[1]),
-                                  clo.ObjThis ? clo.ObjThis
-                                              : ra[-1].AsObjectNoAddRef());
+                                  GetDispatchObjectThis(clo, ra));
             if(TJS_FAILED(hr))
                 ThrowFrom_tjs_error_num(hr, (tjs_int)ra_code3->AsInteger());
         }
@@ -1588,12 +1603,12 @@ namespace TJS {
             try {
                 tjs_error hr = clo.PropSetByVS(
                     flags, str, TJS_GET_VM_REG_ADDR(ra, code[3]),
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    GetDispatchObjectThis(clo, ra));
                 if(hr == TJS_E_NOTIMPL)
                     hr = clo.PropSet(
                         flags, member_name, nullptr,
                         TJS_GET_VM_REG_ADDR(ra, code[3]),
-                        clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                        GetDispatchObjectThis(clo, ra));
                 if(TJS_FAILED(hr))
                     TJSThrowFrom_tjs_error(hr, member_name);
             } catch(...) {
@@ -1611,7 +1626,7 @@ namespace TJS {
                 tjs_error hr = clo.PropSetByNum(
                     flags, (tjs_int)ra_code2->AsInteger(),
                     TJS_GET_VM_REG_ADDR(ra, code[3]),
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    GetDispatchObjectThis(clo, ra));
                 if(TJS_FAILED(hr))
                     ThrowFrom_tjs_error_num(hr, (tjs_int)ra_code2->AsInteger());
             } catch(...) {
@@ -1637,7 +1652,7 @@ namespace TJS {
                 ope, name->GetString(), name->GetHint(),
                 code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
                 TJS_GET_VM_REG_ADDR(ra, code[4]),
-                clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                GetDispatchObjectThis(clo, ra));
         } catch(...) {
             clo.Release();
             throw;
@@ -1672,7 +1687,7 @@ namespace TJS {
                     ope, member_name, nullptr,
                     code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
                     TJS_GET_VM_REG_ADDR(ra, code[4]),
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    GetDispatchObjectThis(clo, ra));
                 if(TJS_FAILED(hr))
                     TJSThrowFrom_tjs_error(hr, member_name);
             } catch(...) {
@@ -1691,7 +1706,7 @@ namespace TJS {
                     ope, (tjs_int)ra_code3->AsInteger(),
                     code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
                     TJS_GET_VM_REG_ADDR(ra, code[4]),
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    GetDispatchObjectThis(clo, ra));
                 if(TJS_FAILED(hr))
                     ThrowFrom_tjs_error_num(
                         hr, (tjs_int)TJS_GET_VM_REG(ra, code[3]).AsInteger());
@@ -1715,7 +1730,7 @@ namespace TJS {
                 ope, nullptr, nullptr,
                 code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
                 TJS_GET_VM_REG_ADDR(ra, code[3]),
-                clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                GetDispatchObjectThis(clo, ra));
         } catch(...) {
             clo.Release();
             throw;
@@ -1738,7 +1753,7 @@ namespace TJS {
             hr = clo.Operation(ope, name->GetString(), name->GetHint(),
                                code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1])
                                        : nullptr,
-                               nullptr, ra[-1].AsObjectNoAddRef());
+                               nullptr, GetDispatchObjectThis(clo, ra));
         } catch(...) {
             clo.Release();
             throw;
@@ -1773,7 +1788,7 @@ namespace TJS {
                     ope, member_name, nullptr,
                     code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
                     nullptr,
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    GetDispatchObjectThis(clo, ra));
                 if(TJS_FAILED(hr))
                     TJSThrowFrom_tjs_error(hr, member_name);
             } catch(...) {
@@ -1792,7 +1807,7 @@ namespace TJS {
                     ope, (tjs_int)TJS_GET_VM_REG(ra, code[3]).AsInteger(),
                     code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
                     nullptr,
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    GetDispatchObjectThis(clo, ra));
                 if(TJS_FAILED(hr))
                     ThrowFrom_tjs_error_num(
                         hr, (tjs_int)TJS_GET_VM_REG(ra, code[3]).AsInteger());
@@ -1815,7 +1830,7 @@ namespace TJS {
             hr = clo.Operation(
                 ope, nullptr, nullptr,
                 code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr, nullptr,
-                clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                GetDispatchObjectThis(clo, ra));
         } catch(...) {
             clo.Release();
             throw;
@@ -1835,7 +1850,7 @@ namespace TJS {
         try {
             tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[3]);
             hr = clo.DeleteMember(0, name->GetString(), name->GetHint(),
-                                  ra[-1].AsObjectNoAddRef());
+                                  GetDispatchObjectThis(clo, ra));
         } catch(...) {
             clo.Release();
             throw;
@@ -1866,8 +1881,7 @@ namespace TJS {
 
         try {
             tjs_error hr = clo.DeleteMember(
-                0, member_name, nullptr,
-                clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                0, member_name, nullptr, GetDispatchObjectThis(clo, ra));
             if(code[1]) {
                 if(TJS_FAILED(hr))
                     TJS_GET_VM_REG(ra, code[1]) = false;
@@ -1912,8 +1926,7 @@ namespace TJS {
             tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[3]);
             hr = clo.PropGet(flags, name->GetString(), name->GetHint(),
                              TJS_GET_VM_REG_ADDR(ra, code[1]),
-                             clo.ObjThis ? clo.ObjThis
-                                         : ra[-1].AsObjectNoAddRef());
+                             GetDispatchObjectThis(clo, ra));
         } catch(...) {
             clo.Release();
             throw;
@@ -1970,7 +1983,7 @@ namespace TJS {
                 hr = clo.PropGet(
                     flags, member_name, nullptr,
                     TJS_GET_VM_REG_ADDR(ra, code[1]),
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    GetDispatchObjectThis(clo, ra));
                 if(hr == TJS_S_OK) {
                     TypeOf(TJS_GET_VM_REG(ra, code[1]));
                 } else // if(hr == TJS_E_MEMBERNOTFOUND)
@@ -1993,7 +2006,7 @@ namespace TJS {
                 hr = clo.PropGetByNum(
                     flags, (tjs_int)TJS_GET_VM_REG(ra, code[3]).AsInteger(),
                     TJS_GET_VM_REG_ADDR(ra, code[1]),
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    GetDispatchObjectThis(clo, ra));
                 if(hr == TJS_S_OK) {
                     TypeOf(TJS_GET_VM_REG(ra, code[1]));
                 } else if(hr == TJS_E_MEMBERNOTFOUND) {
@@ -2139,13 +2152,12 @@ namespace TJS {
                 hr = clo.FuncCall(
                     0, nullptr, nullptr,
                     code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
-                    pass_args_count, pass_args,
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    pass_args_count, pass_args, GetDispatchObjectThis(clo, ra));
             } else {
                 iTJSDispatch2 *dsp;
                 hr = clo.CreateNew(
                     0, nullptr, nullptr, &dsp, pass_args_count, pass_args,
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    GetDispatchObjectThis(clo, ra));
                 if(TJS_SUCCEEDED(hr)) {
                     if(dsp) {
                         if(code[1])
@@ -2202,8 +2214,7 @@ namespace TJS {
                 hr = clo.FuncCall(
                     0, name->GetString(), name->GetHint(),
                     code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
-                    pass_args_count, pass_args,
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    pass_args_count, pass_args, GetDispatchObjectThis(clo, ra));
             } catch(...) {
                 clo.Release();
                 throw;
@@ -2251,8 +2262,7 @@ namespace TJS {
                 hr = clo.FuncCall(
                     0, name.c_str(), name.GetHint(),
                     code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
-                    pass_args_count, pass_args,
-                    clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                    pass_args_count, pass_args, GetDispatchObjectThis(clo, ra));
             } catch(...) {
                 clo.Release();
                 throw;
