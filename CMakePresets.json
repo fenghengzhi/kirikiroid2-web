@@ -145,18 +145,16 @@
       "binaryDir": "${sourceDir}/out/web/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "KRKR2_WEB_DEBUG_ENABLE_ASAN": true,
-        "KRKR2_WEB_DEBUG_ENABLE_SAFE_HEAP": false
+        "KRKR2_WEB_DEBUG_ENABLE_ASAN": true
       }
     },
     {
-      "name": "Web Debug Safe Heap Config",
+      "name": "Web Debug No Asan Config",
       "inherits": "Web Config",
-      "binaryDir": "${sourceDir}/out/web/debug-safe-heap",
+      "binaryDir": "${sourceDir}/out/web/debug-no-asan",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "KRKR2_WEB_DEBUG_ENABLE_ASAN": false,
-        "KRKR2_WEB_DEBUG_ENABLE_SAFE_HEAP": true
+        "KRKR2_WEB_DEBUG_ENABLE_ASAN": false
       }
     },
     {
