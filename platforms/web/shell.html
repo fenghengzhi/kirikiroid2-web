@@ -708,8 +708,11 @@
             var canvas = document.getElementById('canvas');
             var container = document.getElementById('container');
             function updateCanvasSize() {
-                var w = Math.round(container.clientWidth) || 1280;
-                var h = Math.round(container.clientHeight) || 720;
+                var dpr = window.devicePixelRatio || 1;
+                var cssW = Math.round(container.clientWidth) || 1280;
+                var cssH = Math.round(container.clientHeight) || 720;
+                var w = Math.round(cssW * dpr);
+                var h = Math.round(cssH * dpr);
                 if (canvas.width !== w || canvas.height !== h) {
                     canvas.width = w;
                     canvas.height = h;
@@ -717,6 +720,13 @@
             }
             updateCanvasSize();
             new ResizeObserver(updateCanvasSize).observe(container);
+            window.addEventListener('resize', updateCanvasSize);
+            if (window.matchMedia) {
+                var mqDpr = window.matchMedia('(resolution: ' + window.devicePixelRatio + 'dppx)');
+                if (mqDpr.addEventListener) {
+                    mqDpr.addEventListener('change', updateCanvasSize);
+                }
+            }
         })();
 
         var urlParams = new URLSearchParams(window.location.search);

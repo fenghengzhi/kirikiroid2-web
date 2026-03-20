@@ -19,6 +19,15 @@
 
 NS_CC_BEGIN
 
+static void getCSSToCanvasScale(float &scaleX, float &scaleY) {
+    int canvasW, canvasH;
+    double cssW, cssH;
+    emscripten_get_canvas_element_size("#canvas", &canvasW, &canvasH);
+    emscripten_get_element_css_size("#canvas", &cssW, &cssH);
+    scaleX = (cssW > 0) ? (float)canvasW / (float)cssW : 1.0f;
+    scaleY = (cssH > 0) ? (float)canvasH / (float)cssH : 1.0f;
+}
+
 GLViewImpl::GLViewImpl()
     : _captured(false)
     , _isInRetinaMonitor(false)
@@ -111,7 +120,14 @@ bool GLViewImpl::initWithRect(const std::string& viewName, Rect rect, float fram
 
     SDL_GL_MakeCurrent(_sdlWindow, _sdlGLContext);
 
-    setFrameSize(rect.size.width, rect.size.height);
+    double cssW, cssH;
+    emscripten_get_element_css_size("#canvas", &cssW, &cssH);
+    double dpr = EM_ASM_DOUBLE({ return window.devicePixelRatio || 1; });
+    int scaledW = static_cast<int>(cssW * dpr);
+    int scaledH = static_cast<int>(cssH * dpr);
+    emscripten_set_canvas_element_size("#canvas", scaledW, scaledH);
+
+    setFrameSize(static_cast<float>(scaledW), static_cast<float>(scaledH));
 
     return true;
 }
@@ -272,8 +288,8 @@ void GLViewImpl::handleSDLEvents()
             break;
         case SDL_WINDOWEVENT:
             if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-                int w = event.window.data1;
-                int h = event.window.data2;
+                int w, h;
+                emscripten_get_canvas_element_size("#canvas", &w, &h);
                 GLView::setFrameSize((float)w, (float)h);
                 if (_designResolutionSize.width > 0 && _designResolutionSize.height > 0) {
                     setDesignResolutionSize(_designResolutionSize.width,
@@ -322,15 +338,15 @@ void GLViewImpl::handleSDLEvents()
 
 void GLViewImpl::onMouseEvent(SDL_Event& event)
 {
-    float cursorX = (float)event.button.x;
-    float cursorY = (float)event.button.y;
+    float dprScaleX, dprScaleY;
+    getCSSToCanvasScale(dprScaleX, dprScaleY);
+
+    float cursorX = (float)event.button.x * dprScaleX;
+    float cursorY = (float)event.button.y * dprScaleY;
 
     _mouseX = cursorX;
     _mouseY = cursorY;
 
-    // Transform screen pixels to GL world coordinates, matching the touch pipeline:
-    //   handleTouchesBegin stores: ((x - vpX) / scaleX, (y - vpY) / scaleY)
-    //   Touch::getLocation() applies: Director::convertToGL → Y = designH - Y
     float glX = (cursorX - _viewPortRect.origin.x) / _scaleX;
     float glY = _designResolutionSize.height - (cursorY - _viewPortRect.origin.y) / _scaleY;
 
