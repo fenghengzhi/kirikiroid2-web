@@ -40,9 +40,10 @@ namespace TJS {
         if(!str)
             return 0;
         const tjs_char *p = str;
-        max++;
-        while(*p && --max)
+        while(max > 0 && *p) {
             p++;
+            max--;
+        }
         return (tjs_int)(p - str);
     }
 //---------------------------------------------------------------------------
