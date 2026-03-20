@@ -39,10 +39,16 @@ project(${APP_NAME})
 
 option(ENABLE_TESTS "enable tests execute build(exclude android)" ON)
 option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
+option(KRKR2_WEB_DEBUG_ENABLE_ASAN "enable AddressSanitizer in Web Debug builds" ON)
+option(KRKR2_WEB_DEBUG_ENABLE_SAFE_HEAP "enable SAFE_HEAP in Web Debug builds" OFF)
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+if(WEB AND KRKR2_WEB_DEBUG_ENABLE_ASAN AND KRKR2_WEB_DEBUG_ENABLE_SAFE_HEAP)
+    message(FATAL_ERROR "Web Debug does not support enabling AddressSanitizer and SAFE_HEAP at the same time.")
+endif()
 
 set(KRKR2CORE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/core)
 set(KRKR2PLUGIN_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cpp/plugins)
@@ -52,7 +58,12 @@ if(MSVC)
     add_link_options("/ignore:4099" "/INCREMENTAL" "/DEBUG:FASTLINK")
     # set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 elseif(WEB)
-    add_compile_options(-pthread -fwasm-exceptions)
+    add_compile_options(
+        -pthread
+        -fwasm-exceptions
+        $<$<AND:$<CONFIG:Debug>,$<BOOL:${KRKR2_WEB_DEBUG_ENABLE_ASAN}>>:-fsanitize=address>
+    )
+    add_link_options($<$<AND:$<CONFIG:Debug>,$<BOOL:${KRKR2_WEB_DEBUG_ENABLE_ASAN}>>:-fsanitize=address>)
 endif()
 
 if(ANDROID)
@@ -70,7 +81,10 @@ elseif(WEB)
         "SHELL:-s ALLOW_MEMORY_GROWTH=1"
         "SHELL:-s INITIAL_MEMORY=67108864"
         "SHELL:-s STACK_SIZE=524288"
-        "SHELL:-s STACK_OVERFLOW_CHECK=0"
+        "$<$<CONFIG:Debug>:SHELL:-s STACK_OVERFLOW_CHECK=2>"
+        "$<$<NOT:$<CONFIG:Debug>>:SHELL:-s STACK_OVERFLOW_CHECK=0>"
+        "$<$<CONFIG:Debug>:SHELL:-s ASSERTIONS=2>"
+        "$<$<AND:$<CONFIG:Debug>,$<BOOL:${KRKR2_WEB_DEBUG_ENABLE_SAFE_HEAP}>>:SHELL:-s SAFE_HEAP=1>"
         "SHELL:-s FORCE_FILESYSTEM=1"
         "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
         "SHELL:-s PTHREAD_POOL_SIZE=4"

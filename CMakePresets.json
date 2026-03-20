@@ -144,7 +144,19 @@
       "inherits": "Web Config",
       "binaryDir": "${sourceDir}/out/web/debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "KRKR2_WEB_DEBUG_ENABLE_ASAN": true,
+        "KRKR2_WEB_DEBUG_ENABLE_SAFE_HEAP": false
+      }
+    },
+    {
+      "name": "Web Debug Safe Heap Config",
+      "inherits": "Web Config",
+      "binaryDir": "${sourceDir}/out/web/debug-safe-heap",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "KRKR2_WEB_DEBUG_ENABLE_ASAN": false,
+        "KRKR2_WEB_DEBUG_ENABLE_SAFE_HEAP": true
       }
     },
     {
@@ -184,6 +196,10 @@
     {
       "name": "Web Debug Build",
       "configurePreset": "Web Debug Config"
+    },
+    {
+      "name": "Web Debug Safe Heap Build",
+      "configurePreset": "Web Debug Safe Heap Config"
     },
     {
       "name": "Web Release Build",
