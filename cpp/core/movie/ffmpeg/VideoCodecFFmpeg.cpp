@@ -336,8 +336,16 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints,
         if(tryhw && m_decoderState == STATE_NONE) {
             m_decoderState = STATE_HW_SINGLE;
         } else {
-            int num_threads = TVPGetProcessorNum() * 3 / 2;
+            int num_threads;
+#ifdef __EMSCRIPTEN__
+            // On Web platform, limit FFmpeg threads to reduce thread pool pressure
+            // 4-6 threads are usually sufficient for video decoding in WASM
+            num_threads = std::min(TVPGetProcessorNum(), 4);
+            num_threads = std::max(1, num_threads);
+#else
+            num_threads = TVPGetProcessorNum() * 3 / 2;
             num_threads = std::max(1, std::min(num_threads, 16));
+#endif
             m_pCodecContext->thread_count = num_threads;
             m_pCodecContext->thread_safe_callbacks = 1;
             m_decoderState = STATE_SW_MULTI;

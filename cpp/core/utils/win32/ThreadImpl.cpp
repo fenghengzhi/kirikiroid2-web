@@ -144,7 +144,13 @@ tjs_int TVPGetProcessorNum() { return GetProcesserNum(); }
 //---------------------------------------------------------------------------
 tjs_int TVPGetThreadNum() {
     tjs_int threadNum = TVPDrawThreadNum ? TVPDrawThreadNum : GetProcesserNum();
+#ifdef __EMSCRIPTEN__
+    // On Web platform, limit thread count to reduce thread pool pressure
+    // OpenMP will use this value, so we cap it at 4 threads
+    threadNum = std::min(threadNum, 4);
+#else
     threadNum = std::min(threadNum, TVPMaxThreadNum);
+#endif
     return threadNum;
 }
 

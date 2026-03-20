@@ -81,9 +81,15 @@ elseif(WEB)
         "$<$<CONFIG:Debug>:SHELL:-s ASSERTIONS=2>"
         "SHELL:-s FORCE_FILESYSTEM=1"
         "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
-        # Debug keeps a larger warm thread pool for diagnostics; other configs use a smaller default.
-        "$<$<CONFIG:Debug>:SHELL:-s PTHREAD_POOL_SIZE=24>"
-        "$<$<NOT:$<CONFIG:Debug>>:SHELL:-s PTHREAD_POOL_SIZE=4>"
+        # Thread pool size calculation for Web platform:
+        # - 3 application threads (main player, video player, audio player)
+        # - 4 FFmpeg video decoder threads (limited on Web)
+        # - 4 OpenMP threads (for image processing, limited to 4 on Web)
+        # - 2 AudioEngine threads (limited on Web)
+        # - Some buffer for other tasks
+        # Total: ~13-15 threads, so 24 provides good margin
+        "$<$<CONFIG:Debug>:SHELL:-s PTHREAD_POOL_SIZE=64>"
+        "$<$<NOT:$<CONFIG:Debug>>:SHELL:-s PTHREAD_POOL_SIZE=24>"
         "SHELL:-s DEFAULT_PTHREAD_STACK_SIZE=1048576"
         -fwasm-exceptions
         $<$<CONFIG:Debug>:--emit-symbol-map>

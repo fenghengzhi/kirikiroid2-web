@@ -92,6 +92,11 @@ public:
     AudioEngineThreadPool(int threads = 4)
         : _stop(false)
     {
+#ifdef __EMSCRIPTEN__
+        // On Web platform, limit AudioEngine thread pool to 2 threads
+        // to reduce thread pool pressure
+        threads = std::min(threads, 2);
+#endif
         for (int index = 0; index < threads; ++index)
         {
             _workers.emplace_back(std::thread(std::bind(&AudioEngineThreadPool::threadFunc, this)));
