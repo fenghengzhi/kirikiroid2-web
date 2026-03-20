@@ -1,0 +1,21 @@
+---
+description: KrKr2 Web 项目概述与关键入口
+alwaysApply: false
+---
+
+# KrKr2 Web 项目概述
+
+- 本仓库是 `KiriKiri2`（`T Visual Presenter`）的 WebAssembly 移植，目标是在现代浏览器直接运行吉里吉里游戏；当前分支重点是 Web 平台。
+- 核心引擎代码在 `cpp/core`，插件在 `cpp/plugins`，平台入口在 `platforms/*`，其中 Web 入口是 `platforms/web/main.cpp`。
+- 构建系统使用 CMake + Ninja；Web 相关 preset 在 `CMakePresets.json`，常用产物目录是 `out/web/release`。
+- Web 运行依赖 `SharedArrayBuffer`，本地调试应优先使用 `coi-server.py` 提供 `COOP/COEP` 响应头，不要假设普通静态 HTTP 服务器可用。
+- 变更构建逻辑时，优先查看 `CMakeLists.txt`、`CMakePresets.json` 与各子目录下的 `CMakeLists.txt`。
+- 变更 Web 启动、资源加载或浏览器行为时，优先查看 `platforms/web`、`coi-server.py`、`ui/cocos-studio`。
+- `tests` 与 `tools` 在非 Web 平台构建中更常见；Web preset 默认关闭它们。
+- Web 构建以 Release 为主；README 明确说明 Debug 可能因 Asyncify 对 TJS 解析器的插桩导致栈溢出。
+
+```bash
+cmake --preset "Web Release Config"
+cmake --build out/web/release
+python3 coi-server.py out/web/release
+```
