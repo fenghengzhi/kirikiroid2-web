@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import http.server
+import mimetypes
 import ssl
 import os
 import sys
 import threading
+
+mimetypes.add_type('application/manifest+json', '.webmanifest')
 
 parser = argparse.ArgumentParser(description='Serve KrKr2 Web build with COOP/COEP headers')
 parser.add_argument('serve_dir', nargs='?', default='.', help='Directory to serve (default: .)')

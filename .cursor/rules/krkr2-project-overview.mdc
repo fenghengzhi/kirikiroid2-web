@@ -11,6 +11,7 @@ alwaysApply: false
 - Web 运行依赖 `SharedArrayBuffer`，本地调试应优先使用 `coi-server.py` 提供 `COOP/COEP` 响应头，不要假设普通静态 HTTP 服务器可用。
 - 变更构建逻辑时，优先查看 `CMakeLists.txt`、`CMakePresets.json` 与各子目录下的 `CMakeLists.txt`。
 - 变更 Web 启动、资源加载或浏览器行为时，优先查看 `platforms/web`、`coi-server.py`、`ui/cocos-studio`。
+- Web 构建会复制 PWA 相关文件（`manifest.webmanifest`、`sw.js`、`platforms/web/pwa/` 图标）到产物目录；`shell.html` 内注册 Service Worker，`coi-server.py` 为 `.webmanifest` 注册了 MIME 类型。
 - `tests` 与 `tools` 在非 Web 平台构建中更常见；Web preset 默认关闭它们。
 - Web 构建以 Release 为主；README 明确说明 Debug 可能因 Asyncify 对 TJS 解析器的插桩导致栈溢出。
 

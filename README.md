@@ -50,7 +50,14 @@ out/web/release/
   index.wasm
   index.data
   index.worker.js
+  manifest.webmanifest
+  sw.js
+  pwa/
+    icon-192.png
+    icon-512.png
 ```
+
+The build also copies **PWA** assets (`manifest.webmanifest`, `sw.js`, `pwa/*.png`) next to `index.html`. After serving over `localhost` or HTTPS with COOP/COEP (e.g. `coi-server.py`), Chromium-based browsers can offer **Install app**; the service worker uses network-only fetch so engine files are not stale-cached.
 
 ---
 

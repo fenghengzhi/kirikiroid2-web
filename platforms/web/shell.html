@@ -12,6 +12,13 @@
     <meta name="twitter:title" content="KrKr2 Web — Browser-based KiriKiri2 Engine">
     <meta name="twitter:description" content="Run KiriKiri2 visual novels directly in your browser. Load .xp3 game files, no installation required.">
     <title>KrKr2 Web — Browser-based KiriKiri2 Visual Novel Engine</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="KrKr2">
+    <link rel="apple-touch-icon" href="pwa/icon-192.png">
     <style>
         * {
             margin: 0;
@@ -1424,6 +1431,15 @@
                 ensureSpaceThen(function() { handleXp3File(file); });
             }
         });
+    </script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(function (err) {
+                    console.warn('[PWA] service worker registration failed:', err);
+                });
+            });
+        }
     </script>
     {{{ SCRIPT }}}
 </body>

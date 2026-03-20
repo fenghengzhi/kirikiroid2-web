@@ -101,6 +101,17 @@ elseif(WEB)
         --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio@/
     )
     target_compile_options(${PROJECT_NAME} PRIVATE "SHELL:-s USE_SDL=2" "SHELL:-s USE_SDL_TTF=2" -fwasm-exceptions)
+    add_custom_command(
+        TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/manifest.webmanifest
+            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sw.js
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>/pwa
+        COMMENT "Copy PWA manifest, service worker, and icons"
+    )
 elseif(LINUX)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/linux/main.cpp)
 elseif(WINDOWS)
