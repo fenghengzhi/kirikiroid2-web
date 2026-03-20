@@ -41,7 +41,7 @@ namespace TJS {
             return 0;
         const tjs_char *p = str;
         max++;
-        while(*p && --max)
+        while(--max && *p)
             p++;
         return (tjs_int)(p - str);
     }
