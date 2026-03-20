@@ -996,9 +996,13 @@ tjs_uint tTVPXP3ArchiveStream::Read(void *buffer, tjs_uint read_size) {
 
         // execute filter (for encryption method)
         if(TVPXP3ArchiveExtractionFilter) {
+            // Use the const overload to keep FileName bound to archive storage
+            // instead of a temporary ttstr returned by value.
+            const ttstr &file_name =
+                static_cast<const tTVPXP3Archive *>(Owner)->GetName(StorageIndex);
             tTVPXP3ExtractionFilterInfo info(
                 CurPos, (tjs_uint8 *)buffer + write_size, one_size,
-                Owner->GetFileHash(StorageIndex), Owner->GetName(StorageIndex));
+                Owner->GetFileHash(StorageIndex), file_name);
             TVPXP3ArchiveExtractionFilter((tTVPXP3ExtractionFilterInfo *)&info,
                                           &FilterContext);
         }
