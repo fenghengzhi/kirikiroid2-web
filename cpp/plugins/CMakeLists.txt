@@ -27,6 +27,10 @@ add_library(krkr2plugins_ncbind STATIC
     xp3filter.cpp
     layerExImage/Main.cpp
     layerExImage/LayerExImage.cpp
+    shrinkCopy.cpp
+    layerExBTOA.cpp
+    layerExRaster.cpp
+    fPackinOne.cpp
 )
 set_source_files_properties(
     layerExImage/Main.cpp
