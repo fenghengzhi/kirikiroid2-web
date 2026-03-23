@@ -27,7 +27,7 @@ NCB_REGISTER_SUBCLASS_DELAY(SourceCache) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_SUBCLASS_DELAY(ObjSource) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) { NCB_CONSTRUCTOR(()); }
 
-NCB_REGISTER_SUBCLASS_DELAY(Player) {
+NCB_REGISTER_SUBCLASS(Player) {
     NCB_CONSTRUCTOR(());
 
     // Properties
@@ -259,6 +259,14 @@ private:
 };
 
 NCB_REGISTER_CLASS(Motion) {
+    // Subclasses MUST be registered first
+    NCB_SUBCLASS(ResourceManager, ResourceManager);
+    NCB_SUBCLASS(Player, Player);
+    NCB_SUBCLASS(EmotePlayer, EmotePlayer);
+    NCB_SUBCLASS(SeparateLayerAdaptor, SeparateLayerAdaptor);
+    NCB_SUBCLASS(SourceCache, SourceCache);
+    NCB_SUBCLASS(ObjSource, ObjSource);
+
     NCB_PROPERTY_RAW_CALLBACK(enableD3D, Motion::getEnableD3D,
                               Motion::setEnableD3D, TJS_STATICMEMBER);
 
@@ -294,14 +302,6 @@ NCB_REGISTER_CLASS(Motion) {
             (tjs_int)CoordinateRecutangularXY);
     Variant(TJS_W("CoordinateRecutangularXZ"),
             (tjs_int)CoordinateRecutangularXZ);
-
-    // Subclasses
-    NCB_SUBCLASS(ResourceManager, ResourceManager);
-    NCB_SUBCLASS(Player, Player);
-    NCB_SUBCLASS(EmotePlayer, EmotePlayer);
-    NCB_SUBCLASS(SeparateLayerAdaptor, SeparateLayerAdaptor);
-    NCB_SUBCLASS(SourceCache, SourceCache);
-    NCB_SUBCLASS(ObjSource, ObjSource);
 }
 
 // ============================================================

@@ -94,6 +94,7 @@ static void TVPSearchPluginsAt(std::vector<tTVPFoundPlugin> &list,
 void TVPLoadInternalPlugins() {
     ncbAutoRegister::AllRegist();
     ncbAutoRegister::LoadModule(TJS_W("xp3filter.dll"));
+    ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
 }
 
 bool TVPLoadInternalPlugin(const ttstr &_name) {

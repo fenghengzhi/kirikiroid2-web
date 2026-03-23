@@ -48,7 +48,9 @@ namespace motion {
 
     class Player {
     public:
-        Player() = default;
+        Player() {
+            spdlog::get("plugin")->info("Motion.Player constructor called");
+        }
 
         // --- Properties (getter/setter) ---
         void setCompletionType(int v) { _completionType = v; }
@@ -164,6 +166,23 @@ namespace motion {
 
         void setUseD3D(bool v) { _useD3D = v; }
         bool getUseD3D() const { return _useD3D; }
+
+        // Static accessors for class-level property access
+        // (patch.tjs uses: with(Motion.Player) { .useD3D = 0; })
+        static tjs_error setUseD3DStatic(tTJSVariant *, tjs_int count,
+                                         tTJSVariant **p, iTJSDispatch2 *) {
+            if (count == 1 && (*p)->Type() == tvtInteger) {
+                _useD3D = static_cast<bool>(**p);
+                return TJS_S_OK;
+            }
+            return TJS_E_INVALIDPARAM;
+        }
+
+        static tjs_error getUseD3DStatic(tTJSVariant *r, tjs_int,
+                                         tTJSVariant **, iTJSDispatch2 *) {
+            *r = tTJSVariant{_useD3D};
+            return TJS_S_OK;
+        }
 
         void setMeshline(bool v) { _meshline = v; }
         bool getMeshline() const { return _meshline; }
@@ -284,7 +303,7 @@ namespace motion {
         ttstr _stealthMotion;
         tTJSVariant _tags;
         tTJSVariant _project;
-        bool _useD3D = false;
+        inline static bool _useD3D;
         bool _meshline = false;
     };
 
