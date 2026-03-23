@@ -50,6 +50,9 @@ void TVPLoadPlugin(const ttstr &name) {
     // motionplayer.dll and emoteplayer.dll may be same?
     if(name == TJS_W("emoteplayer.dll"))
         pluginName = "motionplayer.dll";
+    // PackinOne.dll is internally registered as fPackinOne.dll
+    if(name == TJS_W("PackinOne.dll"))
+        pluginName = "fPackinOne.dll";
 
     if(TVPLoadInternalPlugin(pluginName)) {
         spdlog::debug("Loading Plugin: {} Success", name.AsStdString());
@@ -351,6 +354,30 @@ tTJSNativeClass *TVPCreateNativeClass_Plugins() {
         return TJS_S_OK;
     }
     TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(cls, getList)
+    //----------------------------------------------------------------------
+    TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ CanLoadPlugin) {
+        if(numparams < 1)
+            return TJS_E_BADPARAMCOUNT;
+
+        ttstr name = *param[0];
+        // Check if plugin is available without loading it
+        // Reuse the same name normalization as TVPLoadPlugin
+        auto pluginName = name;
+        if(name == TJS_W("emoteplayer.dll"))
+            pluginName = "motionplayer.dll";
+        if(name == TJS_W("PackinOne.dll"))
+            pluginName = "fPackinOne.dll";
+
+        ttstr lower = TVPExtractStorageName(pluginName).AsLowerCase();
+        bool canLoad = TVPRegisteredPlugins.find(lower) != TVPRegisteredPlugins.end()
+                        || ncbAutoRegister::HasModule(lower);
+
+        if(result)
+            *result = (tjs_int)canLoad;
+
+        return TJS_S_OK;
+    }
+    TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(cls, CanLoadPlugin)
     //---------------------------------------------------------------------------
 
     //---------------------------------------------------------------------------

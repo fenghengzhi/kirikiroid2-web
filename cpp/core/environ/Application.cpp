@@ -19,6 +19,7 @@
 #include "SystemIntf.h"
 
 #include "Exception.h"
+#include <spdlog/spdlog.h>
 // #include "Resource.h"
 #include "SystemControl.h"
 // #include "MouseCursor.h"
@@ -361,31 +362,33 @@ bool tTVPApplication::StartApplication(ttstr path) {
         TVPOnError();
         if(!TVPSystemUninitCalled)
             ShowException(exception.what());
-    } catch(const TJS::eTJSScriptError &e) {
+    } catch(TJS::eTJSScriptError &e) {
         TVPOnError();
         if(!TVPSystemUninitCalled) {
-            ttstr msg;
-            if(!title_.IsEmpty()) {
-                msg += title_;
-                msg += "\n";
+            // Try TJS System.exceptionHandler first
+            if(!TVPProcessUnhandledException(e)) {
+                // Log the error but don't exit — non-critical scripts may fail
+                // during initialization without preventing the game from running
+                ttstr msg = e.GetMessage();
+                const tjs_char *pszBlockName = e.GetBlockName();
+                if(pszBlockName && *pszBlockName) {
+                    msg += TJS_W("\n@line(");
+                    tjs_char tmp[34];
+                    msg += TJS_int_to_str(e.GetSourceLine(), tmp);
+                    msg += TJS_W(") ");
+                    msg += pszBlockName;
+                }
+                msg += TJS_W("\n");
+                msg += e.GetTrace();
+                spdlog::error("Startup script error (non-fatal): {}", msg.AsStdString());
             }
-            msg += e.GetMessage();
-            const tjs_char *pszBlockName = e.GetBlockName();
-            if(pszBlockName && *pszBlockName) {
-                msg += TJS_W("\n@line(");
-                tjs_char tmp[34];
-                msg += TJS_int_to_str(e.GetSourceLine(), tmp);
-                msg += TJS_W(") ");
-                msg += pszBlockName;
-            }
-            msg += TJS_W("\n");
-            msg += e.GetTrace();
-            ShowException(msg);
         }
-    } catch(const TJS::eTJS &e) {
+    } catch(TJS::eTJS &e) {
         TVPOnError();
-        if(!TVPSystemUninitCalled)
-            ShowException(e.GetMessage());
+        if(!TVPSystemUninitCalled) {
+            if(!TVPProcessUnhandledException(e))
+                spdlog::error("Startup script error (non-fatal): {}", e.GetMessage().AsStdString());
+        }
     } catch(const std::exception &e) {
         ShowException(e.what());
     } catch(const char *e) {

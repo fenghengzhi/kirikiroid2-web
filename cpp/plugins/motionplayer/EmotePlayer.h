@@ -11,17 +11,19 @@ namespace motion {
 
     class EmotePlayer {
     public:
-        explicit EmotePlayer(ResourceManager rm) {}
+        explicit EmotePlayer(iTJSDispatch2 *rm) {}
 
         void initPhysics() {}
 
         void setUseD3D(bool useD3D) { this->_useD3D = useD3D; }
-
         [[nodiscard]] bool getUseD3D() const { return this->_useD3D; }
 
+        tTJSVariant getVariable(ttstr name) { return tTJSVariant(); }
+        void setVariable(ttstr name, tTJSVariant value) {}
+
     private:
-        bool _useD3D;
-        MaskMode _maskMode;
+        bool _useD3D = false;
+        MaskMode _maskMode = MaskMode::MaskModeAlpha;
     };
 
 } // namespace motion

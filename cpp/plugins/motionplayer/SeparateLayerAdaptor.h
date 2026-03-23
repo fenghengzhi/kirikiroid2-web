@@ -6,4 +6,5 @@
 namespace motion {
 
     class SeparateLayerAdaptor {};
+    class D3DAdaptor {};
 } // namespace motion

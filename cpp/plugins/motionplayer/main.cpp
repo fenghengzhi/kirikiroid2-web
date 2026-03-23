@@ -17,13 +17,17 @@ using namespace motion;
 #define NCB_MODULE_NAME TJS_W("motionplayer.dll")
 #define LOGGER spdlog::get("plugin")
 
-NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) { NCB_CONSTRUCTOR(()); }
+NCB_REGISTER_SUBCLASS(SeparateLayerAdaptor) { NCB_CONSTRUCTOR(()); }
 
-NCB_REGISTER_SUBCLASS_DELAY(Player) { NCB_CONSTRUCTOR(()); }
+NCB_REGISTER_SUBCLASS(D3DAdaptor) { NCB_CONSTRUCTOR(()); }
 
-NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
-    NCB_CONSTRUCTOR((ResourceManager));
+NCB_REGISTER_SUBCLASS(Player) { NCB_CONSTRUCTOR(()); }
+
+NCB_REGISTER_SUBCLASS(EmotePlayer) {
+    NCB_CONSTRUCTOR((iTJSDispatch2 *));
     NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
+    NCB_METHOD(getVariable);
+    NCB_METHOD(setVariable);
 }
 
 NCB_REGISTER_SUBCLASS(ResourceManager) {
@@ -59,13 +63,16 @@ private:
 };
 
 NCB_REGISTER_CLASS(Motion) {
-    // Variant("MaskModeAlpha", static_cast<int>(MaskMode::MaskModeAlpha));
-    NCB_PROPERTY_RAW_CALLBACK(enableD3D, Motion::getEnableD3D,
-                              Motion::setEnableD3D, TJS_STATICMEMBER);
+    Variant("MaskModeAlpha", static_cast<int>(MaskMode::MaskModeAlpha));
+    Variant("PlayFlagForce", 1);
+    // NOTE: enableD3D is intentionally NOT registered. The APK does not expose it.
+    // Game scripts use `typeof Motion.enableD3D` to detect D3D support;
+    // returning (int)0 instead of void makes them think D3D is available.
     NCB_SUBCLASS(ResourceManager, ResourceManager);
     NCB_SUBCLASS(Player, Player);
     NCB_SUBCLASS(EmotePlayer, EmotePlayer);
     NCB_SUBCLASS(SeparateLayerAdaptor, SeparateLayerAdaptor);
+    NCB_SUBCLASS(D3DAdaptor, D3DAdaptor);
 }
 
 static void PreRegistCallback() {}
