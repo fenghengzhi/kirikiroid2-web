@@ -101,11 +101,18 @@ elseif(WEB)
         --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio@/
     )
     target_compile_options(${PROJECT_NAME} PRIVATE "SHELL:-s USE_SDL=2" "SHELL:-s USE_SDL_TTF=2" -fwasm-exceptions)
+    # Generate build version timestamp for service worker cache busting
+    string(TIMESTAMP KRKR2_BUILD_VERSION "%Y%m%d%H%M%S")
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sw.js
+        ${CMAKE_CURRENT_BINARY_DIR}/sw.js
+        @ONLY
+    )
     add_custom_command(
         TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/manifest.webmanifest
-            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sw.js
+            ${CMAKE_CURRENT_BINARY_DIR}/sw.js
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa

@@ -21,3 +21,5 @@ java_pid*.hprof
 .playwright-cli
 build-web
 __pycache__/
+apk/
+unpack/

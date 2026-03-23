@@ -601,7 +601,7 @@
     <input type="file" id="file-input" style="display:none;">
     <input type="file" id="dir-input" webkitdirectory style="display:none;">
 
-    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin="anonymous"></script>
     <script>
         // Fix WebGL shader precision mismatch on mobile:
         // cocos2d-x injects uniforms (mat4/mat3) without explicit precision into both
@@ -1435,8 +1435,31 @@
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function () {
-                navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(function (err) {
+                navigator.serviceWorker.register('./sw.js', { scope: './' }).then(function (reg) {
+                    /* Check for updates periodically (every 30 min) */
+                    setInterval(function () { reg.update(); }, 30 * 60 * 1000);
+                    /* When a new SW is waiting, prompt user to reload */
+                    function promptUpdate(worker) {
+                        if (confirm('A new version of Kirikiroid2 Web is available. Reload to update?')) {
+                            worker.postMessage('skipWaiting');
+                        }
+                    }
+                    if (reg.waiting) { promptUpdate(reg.waiting); }
+                    reg.addEventListener('updatefound', function () {
+                        var newWorker = reg.installing;
+                        newWorker.addEventListener('statechange', function () {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                promptUpdate(newWorker);
+                            }
+                        });
+                    });
+                }).catch(function (err) {
                     console.warn('[PWA] service worker registration failed:', err);
+                });
+                /* Reload page when new SW takes over */
+                var refreshing = false;
+                navigator.serviceWorker.addEventListener('controllerchange', function () {
+                    if (!refreshing) { refreshing = true; window.location.reload(); }
                 });
             });
         }
