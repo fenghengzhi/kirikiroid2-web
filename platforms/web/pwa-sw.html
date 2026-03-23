@@ -1,0 +1,32 @@
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('./sw.js', { scope: './' }).then(function (reg) {
+                    /* Check for updates periodically (every 30 min) */
+                    setInterval(function () { reg.update(); }, 30 * 60 * 1000);
+                    /* When a new SW is waiting, prompt user to reload */
+                    function promptUpdate(worker) {
+                        if (confirm('A new version of Kirikiroid2 Web is available. Reload to update?')) {
+                            worker.postMessage('skipWaiting');
+                        }
+                    }
+                    if (reg.waiting) { promptUpdate(reg.waiting); }
+                    reg.addEventListener('updatefound', function () {
+                        var newWorker = reg.installing;
+                        newWorker.addEventListener('statechange', function () {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                promptUpdate(newWorker);
+                            }
+                        });
+                    });
+                }).catch(function (err) {
+                    console.warn('[PWA] service worker registration failed:', err);
+                });
+                /* Reload page when new SW takes over */
+                var refreshing = false;
+                navigator.serviceWorker.addEventListener('controllerchange', function () {
+                    if (!refreshing) { refreshing = true; window.location.reload(); }
+                });
+            });
+        }
+    </script>

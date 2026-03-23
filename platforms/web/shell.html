@@ -12,13 +12,8 @@
     <meta name="twitter:title" content="Kirikiroid2 Web — Browser-based KiriKiri2 Engine">
     <meta name="twitter:description" content="Run KiriKiri2 visual novels directly in your browser. Load .xp3 game files, no installation required.">
     <title>Kirikiroid2 Web — Browser-based KiriKiri2 Visual Novel Engine</title>
-    <link rel="manifest" href="manifest.webmanifest">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Kirikiroid2 Web">
-    <link rel="apple-touch-icon" href="pwa/icon-192.png">
+@KRKR2_PWA_HEAD@
     <style>
         * {
             margin: 0;
@@ -1432,38 +1427,7 @@
             }
         });
     </script>
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', function () {
-                navigator.serviceWorker.register('./sw.js', { scope: './' }).then(function (reg) {
-                    /* Check for updates periodically (every 30 min) */
-                    setInterval(function () { reg.update(); }, 30 * 60 * 1000);
-                    /* When a new SW is waiting, prompt user to reload */
-                    function promptUpdate(worker) {
-                        if (confirm('A new version of Kirikiroid2 Web is available. Reload to update?')) {
-                            worker.postMessage('skipWaiting');
-                        }
-                    }
-                    if (reg.waiting) { promptUpdate(reg.waiting); }
-                    reg.addEventListener('updatefound', function () {
-                        var newWorker = reg.installing;
-                        newWorker.addEventListener('statechange', function () {
-                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                                promptUpdate(newWorker);
-                            }
-                        });
-                    });
-                }).catch(function (err) {
-                    console.warn('[PWA] service worker registration failed:', err);
-                });
-                /* Reload page when new SW takes over */
-                var refreshing = false;
-                navigator.serviceWorker.addEventListener('controllerchange', function () {
-                    if (!refreshing) { refreshing = true; window.location.reload(); }
-                });
-            });
-        }
-    </script>
+@KRKR2_PWA_SCRIPT@
     {{{ SCRIPT }}}
 </body>
 </html>

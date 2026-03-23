@@ -97,28 +97,45 @@ elseif(WEB)
         $<$<CONFIG:Debug>:-O1>
         -pthread
         -lopenal
-        --shell-file ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/shell.html
+        --shell-file ${CMAKE_CURRENT_BINARY_DIR}/shell.html
         --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio@/
     )
     target_compile_options(${PROJECT_NAME} PRIVATE "SHELL:-s USE_SDL=2" "SHELL:-s USE_SDL_TTF=2" -fwasm-exceptions)
-    # Generate build version timestamp for service worker cache busting
-    string(TIMESTAMP KRKR2_BUILD_VERSION "%Y%m%d%H%M%S")
+    # PWA: only enabled for non-Debug builds
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+        file(READ ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa-head.html KRKR2_PWA_HEAD)
+        file(READ ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa-sw.html KRKR2_PWA_SCRIPT)
+        # Generate build version timestamp for service worker cache busting
+        string(TIMESTAMP KRKR2_BUILD_VERSION "%Y%m%d%H%M%S")
+        configure_file(
+            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sw.js
+            ${CMAKE_CURRENT_BINARY_DIR}/sw.js
+            @ONLY
+        )
+    else()
+        set(KRKR2_PWA_HEAD "")
+        # Unregister any previously installed service worker and clear caches
+        file(READ ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa-unregister.html KRKR2_PWA_SCRIPT)
+    endif()
+    # Process shell.html template (injects PWA content for Release, empty for Debug)
     configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sw.js
-        ${CMAKE_CURRENT_BINARY_DIR}/sw.js
+        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/shell.html
+        ${CMAKE_CURRENT_BINARY_DIR}/shell.html
         @ONLY
     )
-    add_custom_command(
-        TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/manifest.webmanifest
-            ${CMAKE_CURRENT_BINARY_DIR}/sw.js
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa
-            $<TARGET_FILE_DIR:${PROJECT_NAME}>/pwa
-        COMMENT "Copy PWA manifest, service worker, and icons"
-    )
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+        add_custom_command(
+            TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/manifest.webmanifest
+                ${CMAKE_CURRENT_BINARY_DIR}/sw.js
+                $<TARGET_FILE_DIR:${PROJECT_NAME}>
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa
+                $<TARGET_FILE_DIR:${PROJECT_NAME}>/pwa
+            COMMENT "Copy PWA manifest, service worker, and icons"
+        )
+    endif()
 elseif(LINUX)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/linux/main.cpp)
 elseif(WINDOWS)
