@@ -27,7 +27,7 @@ NCB_REGISTER_SUBCLASS_DELAY(SourceCache) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_SUBCLASS_DELAY(ObjSource) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) { NCB_CONSTRUCTOR(()); }
 
-NCB_REGISTER_SUBCLASS(Player) {
+NCB_REGISTER_CLASS(Player) {
     NCB_CONSTRUCTOR(());
 
     // Properties
@@ -259,9 +259,8 @@ private:
 };
 
 NCB_REGISTER_CLASS(Motion) {
-    // Subclasses MUST be registered first
+    // Subclasses (Player registered as top-level class, aliased in PostRegistCallback)
     NCB_SUBCLASS(ResourceManager, ResourceManager);
-    NCB_SUBCLASS(Player, Player);
     NCB_SUBCLASS(EmotePlayer, EmotePlayer);
     NCB_SUBCLASS(SeparateLayerAdaptor, SeparateLayerAdaptor);
     NCB_SUBCLASS(SourceCache, SourceCache);
@@ -402,8 +401,31 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
 // Callbacks
 // ============================================================
 
+static void PostRegistCallback() {
+    // Manually alias top-level Player class into Motion namespace
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if (!global) return;
+
+    // Get Motion class object
+    tTJSVariant motionVar;
+    if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Motion"), nullptr, &motionVar, global))) {
+        iTJSDispatch2 *motion = motionVar.AsObjectNoAddRef();
+        if (motion) {
+            // Get Player class object
+            tTJSVariant playerVar;
+            if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Player"), nullptr, &playerVar, global))) {
+                // Set Motion.Player = Player
+                motion->PropSet(TJS_MEMBERENSURE | TJS_STATICMEMBER, TJS_W("Player"),
+                                nullptr, &playerVar, motion);
+            }
+        }
+    }
+    global->Release();
+}
+
 static void PreRegistCallback() {}
 static void PostUnregistCallback() {}
 
 NCB_PRE_REGIST_CALLBACK(PreRegistCallback);
+NCB_POST_REGIST_CALLBACK(PostRegistCallback);
 NCB_POST_UNREGIST_CALLBACK(PostUnregistCallback);
