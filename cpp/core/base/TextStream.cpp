@@ -158,9 +158,10 @@ public:
             std::uint8_t m = raw[2];
             if(m == 0 || m == 1) {
                 // 解密 UTF-16 数据
+                // Header: 3 bytes crypt sig [0xFE,0xFE,mode] + 2 bytes BOM [0xFF,0xFE]
                 const auto *src =
-                    reinterpret_cast<const char16_t *>(raw.data() + 4);
-                size_t len = (size - 4) / 2;
+                    reinterpret_cast<const char16_t *>(raw.data() + 5);
+                size_t len = (size - 5) / 2;
                 _buffer.resize(len);
                 for(size_t i = 0; i < len; i++) {
                     char16_t ch = src[i];
