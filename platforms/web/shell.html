@@ -631,17 +631,20 @@
         // --- File System Access API state ---
         var hostDirHandle = null;
 
-        // Replace blocking alert() with non-blocking toast to prevent
-        // rendering pipeline stalls on mobile browsers
+        // Keep native dialog behavior, but mirror alert/confirm content
+        // to the console for easier debugging.
         (function() {
             var origAlert = window.alert;
+            var origConfirm = window.confirm;
             window.alert = function(msg) {
-                console.warn('[alert suppressed]', msg);
-                var toast = document.createElement('div');
-                toast.textContent = msg;
-                toast.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.85);color:#fff;padding:12px 24px;border-radius:8px;z-index:999999;font-size:14px;max-width:80%;text-align:center;pointer-events:none;';
-                document.body.appendChild(toast);
-                setTimeout(function() { toast.remove(); }, 4000);
+                console.warn('[alert]', msg);
+                return origAlert.call(window, msg);
+            };
+            window.confirm = function(msg) {
+                console.warn('[confirm]', msg);
+                var result = origConfirm.call(window, msg);
+                console.warn('[confirm result]', result);
+                return result;
             };
         })();
 

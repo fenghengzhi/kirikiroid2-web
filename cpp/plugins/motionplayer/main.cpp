@@ -14,6 +14,12 @@
 #include "D3DEmoteModule.h"
 #include "SourceCache.h"
 
+namespace motion {
+    // Present in libkrkr2.so as Motion.D3DAdaptor and referenced by game scripts
+    // to detect the kirikiroid2-compatible motion path.
+    class D3DAdaptor {};
+}
+
 using namespace motion;
 
 #define NCB_MODULE_NAME TJS_W("motionplayer.dll")
@@ -26,9 +32,13 @@ using namespace motion;
 NCB_REGISTER_SUBCLASS_DELAY(SourceCache) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_SUBCLASS_DELAY(ObjSource) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) { NCB_CONSTRUCTOR(()); }
+NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) { NCB_CONSTRUCTOR(()); }
 
 NCB_REGISTER_CLASS(Player) {
     NCB_CONSTRUCTOR(());
+
+    NCB_PROPERTY_RAW_CALLBACK(useD3D, Player::getUseD3DStatic,
+                              Player::setUseD3DStatic, TJS_STATICMEMBER);
 
     // Properties
     NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
@@ -238,24 +248,6 @@ NCB_REGISTER_SUBCLASS(ResourceManager) {
 // ============================================================
 
 class Motion {
-public:
-    static tjs_error setEnableD3D(tTJSVariant *, tjs_int count, tTJSVariant **p,
-                                  iTJSDispatch2 *) {
-        if(count == 1 && (*p)->Type() == tvtInteger) {
-            _enableD3D = static_cast<bool>(**p);
-            return TJS_S_OK;
-        }
-        return TJS_E_INVALIDPARAM;
-    }
-
-    static tjs_error getEnableD3D(tTJSVariant *r, tjs_int, tTJSVariant **,
-                                  iTJSDispatch2 *) {
-        *r = tTJSVariant{ _enableD3D };
-        return TJS_S_OK;
-    }
-
-private:
-    inline static bool _enableD3D;
 };
 
 NCB_REGISTER_CLASS(Motion) {
@@ -263,11 +255,9 @@ NCB_REGISTER_CLASS(Motion) {
     NCB_SUBCLASS(ResourceManager, ResourceManager);
     NCB_SUBCLASS(EmotePlayer, EmotePlayer);
     NCB_SUBCLASS(SeparateLayerAdaptor, SeparateLayerAdaptor);
+    NCB_SUBCLASS(D3DAdaptor, D3DAdaptor);
     NCB_SUBCLASS(SourceCache, SourceCache);
     NCB_SUBCLASS(ObjSource, ObjSource);
-
-    NCB_PROPERTY_RAW_CALLBACK(enableD3D, Motion::getEnableD3D,
-                              Motion::setEnableD3D, TJS_STATICMEMBER);
 
     // Layer types
     Variant(TJS_W("LayerTypeObj"), (tjs_int)LayerTypeObj);
@@ -414,15 +404,23 @@ static void PostRegistCallback() {
             // Get Player class dispatch
             tTJSVariant playerVar;
             if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Player"), nullptr, &playerVar, global))) {
-                iTJSDispatch2 *playerDsp = playerVar.AsObjectNoAddRef();
-                if (playerDsp) {
-                    // Create variant with Player as both object and context
-                    // so with(Motion.Player) { .useD3D = 0; } works
-                    tTJSVariant aliasVar(playerDsp, playerDsp);
+                // Preserve the original class-object closure semantics.
+                // Global TJS classes are exposed as (object=class, objthis=null),
+                // and forcing objthis=class breaks "with(Motion.Player) { .useD3D = 0; }"
+                // with an invalid object context.
+                if (playerVar.Type() == tvtObject &&
+                    playerVar.AsObjectNoAddRef() != nullptr) {
                     motion->PropSet(TJS_MEMBERENSURE, TJS_W("Player"),
-                                    nullptr, &aliasVar, motion);
+                                    nullptr, &playerVar, motion);
                 }
             }
+
+            // kirikiroid2 scripts write Motion.enableD3D as a plain script
+            // member; libkrkr2.so does not appear to register it as a native
+            // property. Keep it as a normal static field on the Motion object.
+            tTJSVariant enableD3D{(tjs_int)0};
+            motion->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP | TJS_STATICMEMBER,
+                            TJS_W("enableD3D"), nullptr, &enableD3D, motion);
         }
     }
     global->Release();
