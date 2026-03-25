@@ -8,6 +8,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     EmotePlayer.cpp
     Player.cpp
     ResourceManager.cpp
+    RuntimeSupport.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin)

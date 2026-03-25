@@ -411,12 +411,17 @@ static void PostRegistCallback() {
     if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Motion"), nullptr, &motionVar, global))) {
         iTJSDispatch2 *motion = motionVar.AsObjectNoAddRef();
         if (motion) {
-            // Get Player class object
+            // Get Player class dispatch
             tTJSVariant playerVar;
             if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Player"), nullptr, &playerVar, global))) {
-                // Set Motion.Player = Player
-                motion->PropSet(TJS_MEMBERENSURE | TJS_STATICMEMBER, TJS_W("Player"),
-                                nullptr, &playerVar, motion);
+                iTJSDispatch2 *playerDsp = playerVar.AsObjectNoAddRef();
+                if (playerDsp) {
+                    // Create variant with Player as both object and context
+                    // so with(Motion.Player) { .useD3D = 0; } works
+                    tTJSVariant aliasVar(playerDsp, playerDsp);
+                    motion->PropSet(TJS_MEMBERENSURE, TJS_W("Player"),
+                                    nullptr, &aliasVar, motion);
+                }
             }
         }
     }

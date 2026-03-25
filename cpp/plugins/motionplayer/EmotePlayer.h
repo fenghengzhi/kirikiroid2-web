@@ -5,12 +5,16 @@
 #pragma once
 
 #include <map>
+#include <memory>
 #include <string>
 #include <spdlog/spdlog.h>
 #include "tjs.h"
 #include "ResourceManager.h"
 
 namespace motion {
+    namespace detail {
+        struct EmotePlayerRuntime;
+    }
 
     enum MaskMode { MaskModeStencil = 0, MaskModeAlpha = 1 };
 
@@ -21,7 +25,8 @@ namespace motion {
 
     class EmotePlayer {
     public:
-        explicit EmotePlayer(ResourceManager rm) {}
+        explicit EmotePlayer(ResourceManager rm);
+        ~EmotePlayer();
 
         // --- Properties ---
         void setUseD3D(bool v) { _useD3D = v; }
@@ -45,7 +50,7 @@ namespace motion {
         void setBustScale(double v) { _bustScale = v; }
         [[nodiscard]] double getBustScale() const { return _bustScale; }
 
-        [[nodiscard]] bool getAnimating() const { return false; }
+        [[nodiscard]] bool getAnimating() const;
 
         void setProgress(double v) { _progress = v; }
         [[nodiscard]] double getProgress() const { return _progress; }
@@ -62,8 +67,8 @@ namespace motion {
         void setOpengl(bool v) { _opengl = v; }
         [[nodiscard]] bool getOpengl() const { return _opengl; }
 
-        void setModule(tTJSVariant v) { _module = v; }
-        [[nodiscard]] tTJSVariant getModule() const { return _module; }
+        void setModule(tTJSVariant v);
+        [[nodiscard]] tTJSVariant getModule() const;
 
         // --- Methods ---
         tTJSVariant clone();
@@ -120,6 +125,7 @@ namespace motion {
         bool contains(double x, double y);
 
     private:
+        std::shared_ptr<detail::EmotePlayerRuntime> _runtime;
         bool _useD3D = false;
         bool _smoothing = true;
         double _meshDivisionRatio = 1.0;

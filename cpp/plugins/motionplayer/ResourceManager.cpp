@@ -4,8 +4,9 @@
 
 #include "ResourceManager.h"
 
-#include "tjsObject.h"
-#include "psbfile/PSBFile.h"
+#include <spdlog/spdlog.h>
+
+#include "RuntimeSupport.h"
 
 #define LOGGER spdlog::get("plugin")
 
@@ -14,12 +15,19 @@ motion::ResourceManager::ResourceManager(iTJSDispatch2 *kag,
     LOGGER->info("kag: {}, cacheSize: {}", static_cast<void *>(kag), cacheSize);
 }
 
+tjs_int motion::ResourceManager::getEmotePSBDecryptSeed() {
+    return _decryptSeed;
+}
+
 tjs_error motion::ResourceManager::setEmotePSBDecryptSeed(tTJSVariant *,
                                                           tjs_int count,
                                                           tTJSVariant **p,
                                                           iTJSDispatch2 *) {
-    if(count != 1 && (*p)->Type() == tvtInteger) {
+    if(count != 1) {
         return TJS_E_BADPARAMCOUNT;
+    }
+    if((*p)->Type() != tvtInteger) {
+        return TJS_E_INVALIDPARAM;
     }
     _decryptSeed = static_cast<tjs_int>(*p[0]);
     LOGGER->info("setEmotePSBDecryptSeed: {}", _decryptSeed);
@@ -35,22 +43,5 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *r,
 }
 
 tTJSVariant motion::ResourceManager::load(ttstr path) const {
-    PSB::PSBFile f;
-    f.setSeed(_decryptSeed);
-    if(!f.loadPSBFile(path)) {
-        LOGGER->error("emote load file: {} failed", path.AsStdString());
-    }
-
-    iTJSDispatch2 *dic = TJSCreateCustomObject();
-    auto objs = f.getObjects();
-    if(objs != nullptr) {
-        for(const auto &[k, v] : *objs) {
-            tTJSVariant tmp = v->toTJSVal();
-            dic->PropSet(TJS_MEMBERENSURE, ttstr{ k }.c_str(), nullptr, &tmp,
-                         dic);
-        }
-    }
-    tTJSVariant result{ dic, dic };
-    dic->Release();
-    return result;
+    return detail::loadPSBVariant(path, _decryptSeed);
 }

@@ -4,10 +4,14 @@
 //
 #pragma once
 
+#include <memory>
 #include <spdlog/spdlog.h>
 #include "tjs.h"
 
 namespace motion {
+    namespace detail {
+        struct PlayerRuntime;
+    }
 
     // Motion class enums
     enum LayerType {
@@ -48,9 +52,8 @@ namespace motion {
 
     class Player {
     public:
-        Player() {
-            spdlog::get("plugin")->info("Motion.Player constructor called");
-        }
+        Player();
+        ~Player();
 
         // --- Properties (getter/setter) ---
         void setCompletionType(int v) { _completionType = v; }
@@ -266,6 +269,7 @@ namespace motion {
         void emoteEdit(tTJSVariant args);
 
     private:
+        std::shared_ptr<detail::PlayerRuntime> _runtime;
         int _completionType = 0;
         ttstr _motionKey;
         bool _outline = false;

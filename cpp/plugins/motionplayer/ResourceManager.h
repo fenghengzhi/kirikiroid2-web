@@ -13,6 +13,7 @@ namespace motion {
         explicit ResourceManager(iTJSDispatch2 *kag, tjs_int cacheSize);
 
         tTJSVariant load(ttstr path) const;
+        [[nodiscard]] static tjs_int getEmotePSBDecryptSeed();
 
         static tjs_error setEmotePSBDecryptSeed(tTJSVariant *r, tjs_int count,
                                                 tTJSVariant **p,
