@@ -23,3 +23,4 @@ build-web
 __pycache__/
 apk/
 unpack/
+.debugtmp/

@@ -35,13 +35,16 @@ NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) { NCB_CONSTRUCTOR(()); }
 
 NCB_REGISTER_CLASS(Player) {
-    NCB_CONSTRUCTOR(());
+    NCB_CONSTRUCTOR((ResourceManager));
 
     NCB_PROPERTY_RAW_CALLBACK(useD3D, Player::getUseD3DStatic,
                               Player::setUseD3DStatic, TJS_STATICMEMBER);
 
     // Properties
     NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
+    NCB_PROPERTY(metadata, getMetadata, setMetadata);
+    NCB_PROPERTY(chara, getChara, setChara);
+    NCB_PROPERTY(motion, getMotion, setMotion);
     NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);
     NCB_PROPERTY(outline, getOutline, setOutline);
     NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);
@@ -50,6 +53,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
     NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
                  setProcessedMeshVerticesNum);
+    NCB_PROPERTY(playing, getAllplaying, setAllplaying);
     NCB_PROPERTY(queuing, getQueuing, setQueuing);
     NCB_PROPERTY(directEdit, getDirectEdit, setDirectEdit);
     NCB_PROPERTY(selectorEnabled, getSelectorEnabled, setSelectorEnabled);
@@ -62,6 +66,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(stereovisionActive, getStereovisionActive,
                  setStereovisionActive);
     NCB_PROPERTY(tickCount, getTickCount, setTickCount);
+    NCB_PROPERTY(speed, getSpeed, setSpeed);
     NCB_PROPERTY(frameTickCount, getFrameTickCount, setFrameTickCount);
     NCB_PROPERTY(colorWeight, getColorWeight, setColorWeight);
     NCB_PROPERTY(independentLayerInherit, getIndependentLayerInherit,
@@ -87,6 +92,7 @@ NCB_REGISTER_CLASS(Player) {
 
     // Core methods
     NCB_METHOD(initPhysics);
+    NCB_METHOD(serialize);
     NCB_METHOD(unserialize);
     NCB_METHOD(setRotate);
     NCB_METHOD(setMirror);
@@ -143,12 +149,33 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(setStereovisionCameraPosition);
 
     // Timeline/variable queries
+    NCB_METHOD(setVariable);
+    NCB_METHOD(getVariable);
+    NCB_METHOD(countVariables);
+    NCB_METHOD(getVariableLabelAt);
+    NCB_METHOD(countVariableFrameAt);
+    NCB_METHOD(getVariableFrameLabelAt);
+    NCB_METHOD(getVariableFrameValueAt);
     NCB_METHOD(getTimelinePlaying);
     NCB_METHOD(getVariableRange);
     NCB_METHOD(getVariableFrameList);
+    NCB_METHOD(countMainTimelines);
+    NCB_METHOD(getMainTimelineLabelAt);
     NCB_METHOD(getMainTimelineLabelList);
+    NCB_METHOD(countDiffTimelines);
+    NCB_METHOD(getDiffTimelineLabelAt);
     NCB_METHOD(getDiffTimelineLabelList);
     NCB_METHOD(getLoopTimeline);
+    NCB_METHOD(countPlayingTimelines);
+    NCB_METHOD(getPlayingTimelineLabelAt);
+    NCB_METHOD(getPlayingTimelineFlagsAt);
+    NCB_METHOD(getTimelineTotalFrameCount);
+    NCB_METHOD(playTimeline);
+    NCB_METHOD(stopTimeline);
+    NCB_METHOD(setTimelineBlendRatio);
+    NCB_METHOD(getTimelineBlendRatio);
+    NCB_METHOD(fadeInTimeline);
+    NCB_METHOD(fadeOutTimeline);
     NCB_METHOD(getPlayingTimelineInfoList);
 
     // Selector
@@ -160,6 +187,10 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(getD3DAvailable);
     NCB_METHOD(doAlphaMaskOperation);
     NCB_METHOD(onFindMotion);
+    NCB_METHOD_RAW_CALLBACK(play, &Player::playCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(progress, &Player::progressCompatMethod, 0);
+    NCB_METHOD_RAW_CALLBACK(isPlaying, &Player::isPlayingCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(stop, &Player::stopCompat, 0);
     NCB_METHOD(motionList);
     NCB_METHOD(emoteEdit);
 }
@@ -235,6 +266,8 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
 NCB_REGISTER_SUBCLASS(ResourceManager) {
     NCB_CONSTRUCTOR((iTJSDispatch2 *, tjs_int));
     NCB_METHOD(load);
+    NCB_METHOD(unload);
+    NCB_METHOD(clearCache);
     NCB_METHOD_RAW_CALLBACK(setEmotePSBDecryptSeed,
                             &ResourceManager::setEmotePSBDecryptSeed,
                             TJS_STATICMEMBER);

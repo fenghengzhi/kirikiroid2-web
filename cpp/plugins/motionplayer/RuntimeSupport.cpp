@@ -411,11 +411,16 @@ namespace motion::detail {
             return candidates;
         }
 
-        candidates.push_back(name);
-
         const auto raw = narrow(name);
-        if(raw.find('/') == std::string::npos &&
-           raw.find('\\') == std::string::npos && !hasExtension(raw)) {
+        const bool hasPathSeparator =
+            raw.find('/') != std::string::npos || raw.find('\\') != std::string::npos;
+        const bool hasKnownExtension = hasExtension(raw);
+        if(hasPathSeparator || hasKnownExtension) {
+            candidates.push_back(name);
+        } else {
+            candidates.emplace_back(ttstr{ raw + ".mtn" });
+            candidates.emplace_back(ttstr{ raw + ".psb" });
+            candidates.emplace_back(ttstr{ "motion/" + raw + ".mtn" });
             candidates.emplace_back(ttstr{ "motion/" + raw + ".psb" });
         }
 

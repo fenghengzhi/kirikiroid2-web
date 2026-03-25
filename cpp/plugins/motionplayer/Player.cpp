@@ -11,6 +11,7 @@
 #include "RuntimeSupport.h"
 #include "ResourceManager.h"
 #include "StorageIntf.h"
+#include "ncbind.hpp"
 #include "tjsArray.h"
 
 #define LOGGER spdlog::get("plugin")
@@ -29,6 +30,25 @@ namespace motion {
         }
 
         std::shared_ptr<detail::MotionSnapshot>
+        cacheMotion(detail::PlayerRuntime &runtime, const std::string &requestKey,
+                    const std::string &resolvedKey,
+                    const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
+            if(!snapshot) {
+                return nullptr;
+            }
+            if(!requestKey.empty()) {
+                runtime.motionsByKey.emplace(requestKey, snapshot);
+            }
+            if(!resolvedKey.empty()) {
+                runtime.motionsByKey.emplace(resolvedKey, snapshot);
+            }
+            if(!snapshot->path.empty()) {
+                runtime.motionsByKey.emplace(snapshot->path, snapshot);
+            }
+            return snapshot;
+        }
+
+        std::shared_ptr<detail::MotionSnapshot>
         activateMotion(detail::PlayerRuntime &runtime,
                        const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
             runtime.activeMotion = snapshot;
@@ -40,7 +60,8 @@ namespace motion {
         }
 
         std::shared_ptr<detail::MotionSnapshot>
-        resolveMotion(detail::PlayerRuntime &runtime, const ttstr &name) {
+        resolveMotion(detail::PlayerRuntime &runtime, const ttstr &name,
+                      const ResourceManager *resourceManager) {
             const auto requestKey = detail::narrow(name);
             if(requestKey.empty()) {
                 return nullptr;
@@ -51,28 +72,34 @@ namespace motion {
                 return it->second;
             }
 
+            const auto candidates = detail::buildMotionLookupCandidates(name);
             ttstr resolved;
-            if(!detail::resolveExistingPath(
-                   detail::buildMotionLookupCandidates(name), resolved)) {
-                return nullptr;
+            if(detail::resolveExistingPath(candidates, resolved)) {
+                const auto resolvedKey = detail::narrow(resolved);
+                if(const auto it = runtime.motionsByKey.find(resolvedKey);
+                   it != runtime.motionsByKey.end()) {
+                    runtime.motionsByKey.emplace(requestKey, it->second);
+                    return it->second;
+                }
+
+                const auto snapshot = detail::loadMotionSnapshot(
+                    resolved, ResourceManager::getEmotePSBDecryptSeed());
+                if(snapshot) {
+                    return cacheMotion(runtime, requestKey, resolvedKey, snapshot);
+                }
             }
 
-            const auto resolvedKey = detail::narrow(resolved);
-            if(const auto it = runtime.motionsByKey.find(resolvedKey);
-               it != runtime.motionsByKey.end()) {
-                runtime.motionsByKey.emplace(requestKey, it->second);
-                return it->second;
+            if(resourceManager != nullptr) {
+                for(const auto &candidate : candidates) {
+                    const auto loaded = resourceManager->load(candidate);
+                    if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
+                        return cacheMotion(runtime, requestKey,
+                                           detail::narrow(candidate), snapshot);
+                    }
+                }
             }
 
-            const auto snapshot = detail::loadMotionSnapshot(
-                resolved, ResourceManager::getEmotePSBDecryptSeed());
-            if(!snapshot) {
-                return nullptr;
-            }
-
-            runtime.motionsByKey.emplace(requestKey, snapshot);
-            runtime.motionsByKey.emplace(resolvedKey, snapshot);
-            return snapshot;
+            return nullptr;
         }
 
         std::vector<ttstr> buildSourceCandidates(
@@ -120,22 +147,367 @@ namespace motion {
                     { "playing", state.playing },
                     { "currentTime", state.currentTime },
                     { "totalFrames", state.totalFrames },
+                    { "blendRatio", state.blendRatio },
                 }));
             }
             return items;
         }
 
+        const detail::TimelineState *
+        nthPlayingTimeline(const detail::PlayerRuntime &runtime, tjs_int idx) {
+            if(idx < 0) {
+                return nullptr;
+            }
+
+            tjs_int current = 0;
+            for(const auto &[_, state] : runtime.timelines) {
+                if(!state.playing) {
+                    continue;
+                }
+                if(current == idx) {
+                    return &state;
+                }
+                ++current;
+            }
+            return nullptr;
+        }
+
+        bool getObjectProperty(const tTJSVariant &object, const tjs_char *name,
+                               tTJSVariant &result) {
+            result.Clear();
+            if(object.Type() != tvtObject || object.AsObjectNoAddRef() == nullptr) {
+                return false;
+            }
+            return TJS_SUCCEEDED(object.AsObjectNoAddRef()->PropGet(
+                TJS_IGNOREPROP, name, nullptr, &result,
+                object.AsObjectNoAddRef()));
+        }
+
+        tjs_int getObjectCount(const tTJSVariant &object) {
+            tTJSVariant count;
+            return getObjectProperty(object, TJS_W("count"), count)
+                ? count.AsInteger()
+                : 0;
+        }
+
+        bool getArrayItem(const tTJSVariant &object, tjs_int index,
+                          tTJSVariant &result) {
+            result.Clear();
+            if(object.Type() != tvtObject || object.AsObjectNoAddRef() == nullptr) {
+                return false;
+            }
+            return TJS_SUCCEEDED(object.AsObjectNoAddRef()->PropGetByNum(
+                TJS_IGNOREPROP, index, &result, object.AsObjectNoAddRef()));
+        }
+
+        struct DictionaryEnumerator : public tTJSDispatch {
+            std::vector<std::pair<ttstr, tTJSVariant>> entries;
+
+            tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                               tTJSVariant *result, tjs_int numparams,
+                               tTJSVariant **param,
+                               iTJSDispatch2 *) override {
+                if(numparams < 3) {
+                    return TJS_E_BADPARAMCOUNT;
+                }
+
+                const tjs_uint32 flags = static_cast<tjs_uint32>(
+                    param[1]->AsInteger());
+                if(flags & TJS_HIDDENMEMBER) {
+                    if(result) {
+                        *result = static_cast<tjs_int>(1);
+                    }
+                    return TJS_S_OK;
+                }
+
+                entries.emplace_back(ttstr(*param[0]), *param[2]);
+                if(result) {
+                    *result = static_cast<tjs_int>(1);
+                }
+                return TJS_S_OK;
+            }
+        };
+
     } // namespace
 
-    Player::Player() : _runtime(detail::makePlayerRuntime()) {
+    Player::Player(ResourceManager rm) :
+        _runtime(detail::makePlayerRuntime()),
+        _resourceManagerNative(std::move(rm)) {
         LOGGER->info("Motion.Player constructor called");
     }
 
     Player::~Player() = default;
 
+    void Player::setMotion(ttstr v) {
+        if(_motionKey == v) {
+            return;
+        }
+        _motionKey = v;
+        _runtime->activeMotion.reset();
+        _runtime->timelines.clear();
+        _variableKeys.Clear();
+        _variableValues.clear();
+        ensureMotionLoaded();
+    }
+
+    bool Player::ensureMotionLoaded() {
+        if(_runtime->activeMotion) {
+            return true;
+        }
+
+        const auto motionKey = detail::narrow(_motionKey);
+        const bool motionKeyLooksLikeStorage =
+            motionKey.find('/') != std::string::npos ||
+            motionKey.find('\\') != std::string::npos ||
+            motionKey.find('.') != std::string::npos;
+
+        if(_project.Type() == tvtObject) {
+            if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
+                activateMotion(*_runtime, snapshot);
+                syncVariableKeysFromActiveMotion();
+                return true;
+            }
+        }
+
+        if(motionKeyLooksLikeStorage) {
+            if(const auto snapshot =
+                   resolveMotion(*_runtime, _motionKey, &_resourceManagerNative)) {
+                activateMotion(*_runtime, snapshot);
+                syncVariableKeysFromActiveMotion();
+                return true;
+            }
+        }
+
+        if(const auto loaded = _resourceManagerNative.getLastLoadedModule();
+           loaded.Type() == tvtObject) {
+            if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
+                activateMotion(*_runtime, snapshot);
+                syncVariableKeysFromActiveMotion();
+                return true;
+            }
+        }
+
+        if(_motionKey.IsEmpty()) {
+            return false;
+        }
+
+        if(const auto snapshot =
+               resolveMotion(*_runtime, _motionKey, &_resourceManagerNative)) {
+            activateMotion(*_runtime, snapshot);
+            syncVariableKeysFromActiveMotion();
+            return true;
+        }
+
+        return false;
+    }
+
+    void Player::syncVariableKeysFromActiveMotion() {
+        if(!_runtime->activeMotion) {
+            _variableKeys = detail::makeArray({});
+            return;
+        }
+
+        _variableKeys = detail::makeArray(
+            detail::stringsToVariants(_runtime->activeMotion->variableLabels));
+    }
+
+    tTJSVariant Player::getVariableKeys() {
+        ensureMotionLoaded();
+        if(_variableKeys.Type() == tvtVoid) {
+            return detail::makeArray({});
+        }
+        return _variableKeys;
+    }
+
+    void Player::setProgressCompat(double v) {
+        ensureMotionLoaded();
+        const auto progress = std::clamp(v, 0.0, 1.0);
+        bool anyPlaying = false;
+        for(auto &[_, state] : _runtime->timelines) {
+            if(state.totalFrames > 0.0) {
+                state.currentTime = state.totalFrames * progress;
+            } else {
+                state.currentTime = progress;
+            }
+            if(progress >= 1.0 && !state.loop) {
+                state.playing = false;
+            }
+            anyPlaying = anyPlaying || state.playing;
+        }
+        _allplaying = anyPlaying;
+    }
+
+    double Player::getProgressCompat() const {
+        bool sawTimeline = false;
+        bool anyPlaying = false;
+        double progress = 0.0;
+
+        for(const auto &[_, state] : _runtime->timelines) {
+            sawTimeline = true;
+            anyPlaying = anyPlaying || state.playing;
+            if(state.totalFrames > 0.0) {
+                progress = std::max(
+                    progress,
+                    std::clamp(state.currentTime / state.totalFrames, 0.0, 1.0));
+            } else if(!state.playing) {
+                progress = std::max(progress, 1.0);
+            }
+        }
+
+        if(!sawTimeline) {
+            return _allplaying ? 0.0 : 1.0;
+        }
+        if(!anyPlaying) {
+            return 1.0;
+        }
+        return progress;
+    }
+
     // --- Core methods ---
     void Player::initPhysics() { STUB_WARN(initPhysics); }
-    void Player::unserialize(tTJSVariant) { STUB_WARN(unserialize); }
+    tTJSVariant Player::serialize() {
+        ensureMotionLoaded();
+
+        std::vector<std::pair<std::string, tTJSVariant>> variables;
+        std::unordered_set<std::string> seenVariables;
+        if(_runtime->activeMotion) {
+            for(const auto &label : _runtime->activeMotion->variableLabels) {
+                seenVariables.insert(label);
+                variables.emplace_back(label, getVariable(detail::widen(label)));
+            }
+        }
+        for(const auto &[label, value] : _variableValues) {
+            if(seenVariables.insert(label).second) {
+                variables.emplace_back(label, value);
+            }
+        }
+
+        return detail::makeDictionary({
+            { "chara", _chara },
+            { "motion", _motionKey },
+            { "tickcount", _tickCount },
+            { "speed", _speed },
+            { "outline", static_cast<tjs_int>(_outline ? 1 : 0) },
+            { "variables", detail::makeDictionary(variables) },
+            { "timelines", getPlayingTimelineInfoList() },
+        });
+    }
+
+    void Player::unserialize(tTJSVariant data) {
+        if(data.Type() != tvtObject || data.AsObjectNoAddRef() == nullptr) {
+            return;
+        }
+
+        tTJSVariant value;
+        if(getObjectProperty(data, TJS_W("chara"), value) &&
+           value.Type() != tvtVoid) {
+            _chara = value;
+        }
+
+        if(getObjectProperty(data, TJS_W("motion"), value) &&
+           value.Type() != tvtVoid) {
+            _motionKey = value;
+            ensureMotionLoaded();
+        }
+
+        if(getObjectProperty(data, TJS_W("tickcount"), value) &&
+           value.Type() != tvtVoid) {
+            _tickCount = value.AsReal();
+        }
+
+        if(getObjectProperty(data, TJS_W("speed"), value) &&
+           value.Type() != tvtVoid) {
+            _speed = value.AsReal();
+        }
+
+        if(getObjectProperty(data, TJS_W("outline"), value) &&
+           value.Type() != tvtVoid) {
+            _outline = value.AsInteger() != 0;
+        }
+
+        if(getObjectProperty(data, TJS_W("variables"), value) &&
+           value.Type() == tvtObject && value.AsObjectNoAddRef() != nullptr) {
+            DictionaryEnumerator callback;
+            tTJSVariantClosure closure(&callback, nullptr);
+            value.AsObjectNoAddRef()->EnumMembers(TJS_IGNOREPROP, &closure,
+                                                  value.AsObjectNoAddRef());
+            for(const auto &[label, stored] : callback.entries) {
+                if(stored.Type() != tvtVoid) {
+                    setVariable(label, stored.AsReal());
+                }
+            }
+        }
+
+        bool restoredTimelines = false;
+        if(getObjectProperty(data, TJS_W("timelines"), value) &&
+           value.Type() == tvtObject && value.AsObjectNoAddRef() != nullptr) {
+            ensureMotionLoaded();
+            if(_runtime->activeMotion && _runtime->timelines.empty()) {
+                detail::primeTimelineStates(_runtime->timelines,
+                                            *_runtime->activeMotion);
+            }
+
+            const auto count = getObjectCount(value);
+            for(tjs_int index = 0; index < count; ++index) {
+                tTJSVariant item;
+                if(!getArrayItem(value, index, item) || item.Type() != tvtObject ||
+                   item.AsObjectNoAddRef() == nullptr) {
+                    continue;
+                }
+
+                tTJSVariant labelValue;
+                if(!getObjectProperty(item, TJS_W("label"), labelValue) ||
+                   labelValue.Type() == tvtVoid) {
+                    continue;
+                }
+
+                const auto key = detail::narrow(labelValue);
+                auto it = _runtime->timelines.find(key);
+                if(it == _runtime->timelines.end()) {
+                    continue;
+                }
+
+                restoredTimelines = true;
+                it->second.playing = true;
+
+                tTJSVariant flagsValue;
+                if(getObjectProperty(item, TJS_W("flags"), flagsValue) &&
+                   flagsValue.Type() != tvtVoid) {
+                    it->second.flags = flagsValue.AsInteger();
+                }
+
+                tTJSVariant currentTimeValue;
+                if(getObjectProperty(item, TJS_W("currentTime"), currentTimeValue) &&
+                   currentTimeValue.Type() != tvtVoid) {
+                    it->second.currentTime = currentTimeValue.AsReal();
+                }
+
+                tTJSVariant blendRatioValue;
+                if(getObjectProperty(item, TJS_W("blendRatio"), blendRatioValue) &&
+                   blendRatioValue.Type() != tvtVoid) {
+                    it->second.blendRatio = blendRatioValue.AsReal();
+                }
+            }
+        }
+
+        if(!restoredTimelines && ensureMotionLoaded()) {
+            if(_runtime->timelines.empty()) {
+                detail::primeTimelineStates(_runtime->timelines,
+                                            *_runtime->activeMotion);
+            }
+            const auto &primary = !_runtime->activeMotion->mainTimelineLabels.empty()
+                ? _runtime->activeMotion->mainTimelineLabels
+                : _runtime->activeMotion->diffTimelineLabels;
+            for(const auto &label : primary) {
+                playTimeline(detail::widen(label), PlayFlagForce);
+            }
+        }
+
+        _allplaying = std::any_of(
+            _runtime->timelines.begin(), _runtime->timelines.end(),
+            [](const auto &entry) { return entry.second.playing; });
+    }
+
     void Player::setRotate(double rot) { STUB_WARN(setRotate); }
     void Player::setMirror(bool mirror) { setFlip(mirror); }
     void Player::setHairScale(double) { STUB_WARN(setHairScale); }
@@ -198,23 +570,25 @@ namespace motion {
         _runtime->lastCanvas.Clear();
         _runtime->lastViewParam.Clear();
         _variableKeys.Clear();
+        _variableValues.clear();
         _motionKey.Clear();
     }
 
     bool Player::isExistMotion(ttstr name) {
-        return static_cast<bool>(resolveMotion(*_runtime, name));
+        return static_cast<bool>(
+            resolveMotion(*_runtime, name, &_resourceManagerNative));
     }
 
     tTJSVariant Player::findMotion(ttstr name) {
-        const auto snapshot = resolveMotion(*_runtime, name);
+        const auto snapshot =
+            resolveMotion(*_runtime, name, &_resourceManagerNative);
         if(!snapshot) {
             return {};
         }
 
         activateMotion(*_runtime, snapshot);
         _motionKey = name;
-        _variableKeys =
-            detail::makeArray(detail::stringsToVariants(snapshot->variableLabels));
+        syncVariableKeysFromActiveMotion();
         return snapshot->moduleValue;
     }
 
@@ -298,7 +672,7 @@ namespace motion {
             return;
         }
 
-        const auto source = ResourceManager{}.load(resolved);
+        const auto source = _resourceManagerNative.load(resolved);
         if(source.Type() == tvtVoid) {
             return;
         }
@@ -330,9 +704,7 @@ namespace motion {
             return;
         }
 
-        if(!_motionKey.IsEmpty() && !_runtime->activeMotion) {
-            findMotion(_motionKey);
-        }
+        ensureMotionLoaded();
 
         if(_runtime->width == 0 && _runtime->activeMotion) {
             _runtime->width = static_cast<tjs_int>(_runtime->activeMotion->width);
@@ -501,7 +873,106 @@ namespace motion {
     }
 
     // --- Timeline/variable queries ---
+    void Player::setVariable(ttstr label, double value) {
+        const auto key = detail::narrow(label);
+        if(key.empty()) {
+            return;
+        }
+        _variableValues[key] = value;
+    }
+
+    double Player::getVariable(ttstr label) {
+        ensureMotionLoaded();
+        const auto key = detail::narrow(label);
+        if(key.empty()) {
+            return 0.0;
+        }
+
+        if(const auto it = _variableValues.find(key); it != _variableValues.end()) {
+            return it->second;
+        }
+
+        if(!_runtime->activeMotion) {
+            return 0.0;
+        }
+
+        if(const auto it = _runtime->activeMotion->variableFrames.find(key);
+           it != _runtime->activeMotion->variableFrames.end() &&
+           !it->second.empty()) {
+            return it->second.front().value;
+        }
+
+        if(const auto it = _runtime->activeMotion->variableRanges.find(key);
+           it != _runtime->activeMotion->variableRanges.end()) {
+            return it->second.first;
+        }
+
+        return 0.0;
+    }
+
+    tjs_int Player::countVariables() {
+        ensureMotionLoaded();
+        return _runtime->activeMotion
+            ? static_cast<tjs_int>(_runtime->activeMotion->variableLabels.size())
+            : 0;
+    }
+
+    ttstr Player::getVariableLabelAt(tjs_int idx) {
+        ensureMotionLoaded();
+        if(!_runtime->activeMotion || idx < 0 ||
+           static_cast<size_t>(idx) >= _runtime->activeMotion->variableLabels.size()) {
+            return {};
+        }
+        return detail::widen(_runtime->activeMotion->variableLabels[idx]);
+    }
+
+    tjs_int Player::countVariableFrameAt(tjs_int idx) {
+        const auto label = getVariableLabelAt(idx);
+        if(label.IsEmpty()) {
+            return 0;
+        }
+        const auto frames = getVariableFrameList(label);
+        return getObjectCount(frames);
+    }
+
+    ttstr Player::getVariableFrameLabelAt(tjs_int idx, tjs_int frameIdx) {
+        const auto label = getVariableLabelAt(idx);
+        if(label.IsEmpty()) {
+            return {};
+        }
+
+        const auto key = detail::narrow(label);
+        if(!_runtime->activeMotion) {
+            return {};
+        }
+        const auto it = _runtime->activeMotion->variableFrames.find(key);
+        if(it == _runtime->activeMotion->variableFrames.end() || frameIdx < 0 ||
+           static_cast<size_t>(frameIdx) >= it->second.size()) {
+            return {};
+        }
+        return detail::widen(it->second[frameIdx].label);
+    }
+
+    double Player::getVariableFrameValueAt(tjs_int idx, tjs_int frameIdx) {
+        const auto label = getVariableLabelAt(idx);
+        if(label.IsEmpty()) {
+            return 0.0;
+        }
+
+        const auto key = detail::narrow(label);
+        if(!_runtime->activeMotion) {
+            return 0.0;
+        }
+        const auto it = _runtime->activeMotion->variableFrames.find(key);
+        if(it == _runtime->activeMotion->variableFrames.end() || frameIdx < 0 ||
+           static_cast<size_t>(frameIdx) >= it->second.size()) {
+            return 0.0;
+        }
+        return it->second[frameIdx].value;
+    }
+
     bool Player::getTimelinePlaying(ttstr label) {
+        ensureMotionLoaded();
         const auto key = detail::narrow(label);
         if(const auto it = _runtime->timelines.find(key);
            it != _runtime->timelines.end()) {
@@ -511,6 +982,7 @@ namespace motion {
     }
 
     tTJSVariant Player::getVariableRange(ttstr label) {
+        ensureMotionLoaded();
         if(!_runtime->activeMotion) {
             return {};
         }
@@ -525,6 +997,7 @@ namespace motion {
     }
 
     tTJSVariant Player::getVariableFrameList(ttstr label) {
+        ensureMotionLoaded();
         if(!_runtime->activeMotion) {
             return detail::makeArray({});
         }
@@ -538,6 +1011,7 @@ namespace motion {
             for(const auto &frame : it->second) {
                 frames.push_back(detail::makeDictionary({
                     { "label", detail::widen(frame.label) },
+                    { "frame", frame.value },
                     { "value", frame.value },
                 }));
             }
@@ -545,7 +1019,25 @@ namespace motion {
         }
     }
 
+    tjs_int Player::countMainTimelines() {
+        ensureMotionLoaded();
+        return _runtime->activeMotion
+            ? static_cast<tjs_int>(_runtime->activeMotion->mainTimelineLabels.size())
+            : 0;
+    }
+
+    ttstr Player::getMainTimelineLabelAt(tjs_int idx) {
+        ensureMotionLoaded();
+        if(!_runtime->activeMotion || idx < 0 ||
+           static_cast<size_t>(idx) >=
+               _runtime->activeMotion->mainTimelineLabels.size()) {
+            return {};
+        }
+        return detail::widen(_runtime->activeMotion->mainTimelineLabels[idx]);
+    }
+
     tTJSVariant Player::getMainTimelineLabelList() {
+        ensureMotionLoaded();
         if(!_runtime->activeMotion) {
             return detail::makeArray({});
         }
@@ -553,7 +1045,25 @@ namespace motion {
             _runtime->activeMotion->mainTimelineLabels));
     }
 
+    tjs_int Player::countDiffTimelines() {
+        ensureMotionLoaded();
+        return _runtime->activeMotion
+            ? static_cast<tjs_int>(_runtime->activeMotion->diffTimelineLabels.size())
+            : 0;
+    }
+
+    ttstr Player::getDiffTimelineLabelAt(tjs_int idx) {
+        ensureMotionLoaded();
+        if(!_runtime->activeMotion || idx < 0 ||
+           static_cast<size_t>(idx) >=
+               _runtime->activeMotion->diffTimelineLabels.size()) {
+            return {};
+        }
+        return detail::widen(_runtime->activeMotion->diffTimelineLabels[idx]);
+    }
+
     tTJSVariant Player::getDiffTimelineLabelList() {
+        ensureMotionLoaded();
         if(!_runtime->activeMotion) {
             return detail::makeArray({});
         }
@@ -562,6 +1072,7 @@ namespace motion {
     }
 
     bool Player::getLoopTimeline(ttstr label) {
+        ensureMotionLoaded();
         if(!_runtime->activeMotion) {
             return false;
         }
@@ -573,7 +1084,109 @@ namespace motion {
         return false;
     }
 
+    tjs_int Player::countPlayingTimelines() {
+        ensureMotionLoaded();
+        return static_cast<tjs_int>(timelineInfoVariants(*_runtime).size());
+    }
+
+    ttstr Player::getPlayingTimelineLabelAt(tjs_int idx) {
+        ensureMotionLoaded();
+        if(const auto *state = nthPlayingTimeline(*_runtime, idx)) {
+            return detail::widen(state->label);
+        }
+        return {};
+    }
+
+    tjs_int Player::getPlayingTimelineFlagsAt(tjs_int idx) {
+        ensureMotionLoaded();
+        if(const auto *state = nthPlayingTimeline(*_runtime, idx)) {
+            return state->flags;
+        }
+        return 0;
+    }
+
+    tjs_int Player::getTimelineTotalFrameCount(ttstr label) {
+        ensureMotionLoaded();
+        const auto key = detail::narrow(label);
+        if(const auto it = _runtime->timelines.find(key);
+           it != _runtime->timelines.end()) {
+            return static_cast<tjs_int>(it->second.totalFrames);
+        }
+        if(_runtime->activeMotion) {
+            if(const auto it = _runtime->activeMotion->timelineTotalFrames.find(key);
+               it != _runtime->activeMotion->timelineTotalFrames.end()) {
+                return static_cast<tjs_int>(it->second);
+            }
+        }
+        return 0;
+    }
+
+    void Player::playTimeline(ttstr label, tjs_int flags) {
+        ensureMotionLoaded();
+        if(!_runtime->activeMotion) {
+            return;
+        }
+        if(_runtime->timelines.empty()) {
+            detail::primeTimelineStates(_runtime->timelines, *_runtime->activeMotion);
+        }
+
+        const auto key = detail::narrow(label);
+        auto it = _runtime->timelines.find(key);
+        if(it == _runtime->timelines.end()) {
+            return;
+        }
+
+        it->second.flags = flags;
+        it->second.playing = true;
+        it->second.currentTime = 0.0;
+        _allplaying = true;
+    }
+
+    void Player::stopTimeline(ttstr label) {
+        const auto key = detail::narrow(label);
+        if(const auto it = _runtime->timelines.find(key);
+           it != _runtime->timelines.end()) {
+            it->second.playing = false;
+        }
+
+        _allplaying = std::any_of(
+            _runtime->timelines.begin(), _runtime->timelines.end(),
+            [](const auto &entry) { return entry.second.playing; });
+    }
+
+    void Player::setTimelineBlendRatio(ttstr label, double ratio) {
+        ensureMotionLoaded();
+        if(_runtime->timelines.empty() && _runtime->activeMotion) {
+            detail::primeTimelineStates(_runtime->timelines, *_runtime->activeMotion);
+        }
+
+        const auto key = detail::narrow(label);
+        auto &state = _runtime->timelines[key];
+        state.label = key;
+        state.blendRatio = ratio;
+    }
+
+    double Player::getTimelineBlendRatio(ttstr label) {
+        const auto key = detail::narrow(label);
+        if(const auto it = _runtime->timelines.find(key);
+           it != _runtime->timelines.end()) {
+            return it->second.blendRatio;
+        }
+        return 1.0;
+    }
+
+    void Player::fadeInTimeline(ttstr label, double, tjs_int flags) {
+        playTimeline(label, flags);
+        setTimelineBlendRatio(label, 1.0);
+    }
+
+    void Player::fadeOutTimeline(ttstr label, double, tjs_int) {
+        setTimelineBlendRatio(label, 0.0);
+        stopTimeline(label);
+    }
+
     tTJSVariant Player::getPlayingTimelineInfoList() {
+        ensureMotionLoaded();
         return detail::makeArray(timelineInfoVariants(*_runtime));
     }
 
@@ -607,6 +1220,171 @@ namespace motion {
     void Player::doAlphaMaskOperation() {}
 
     void Player::onFindMotion(ttstr name) { (void)findMotion(name); }
+
+    tjs_error Player::playCompat(tTJSVariant *result, tjs_int numparams,
+                                 tTJSVariant **param, iTJSDispatch2 *objthis) {
+        if(result) {
+            result->Clear();
+        }
+
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+
+        ttstr label;
+        tjs_int flags = 0;
+        if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid) {
+            if(param[0]->Type() == tvtInteger || param[0]->Type() == tvtReal) {
+                flags = param[0]->AsInteger();
+            } else {
+                label = *param[0];
+            }
+        }
+        if(numparams > 1 && param[1] && param[1]->Type() != tvtVoid) {
+            flags = param[1]->AsInteger();
+        }
+
+        if(!self->_runtime->activeMotion && self->_project.Type() == tvtObject) {
+            if(const auto snapshot = detail::lookupModuleSnapshot(self->_project)) {
+                activateMotion(*self->_runtime, snapshot);
+                self->syncVariableKeysFromActiveMotion();
+            }
+        }
+
+        self->ensureMotionLoaded();
+        if(self->_runtime->activeMotion && self->_runtime->timelines.empty()) {
+            detail::primeTimelineStates(self->_runtime->timelines,
+                                        *self->_runtime->activeMotion);
+        }
+
+        if(!label.IsEmpty() && !self->_runtime->activeMotion) {
+            self->setMotion(label);
+            self->ensureMotionLoaded();
+            if(self->_runtime->activeMotion && self->_runtime->timelines.empty()) {
+                detail::primeTimelineStates(self->_runtime->timelines,
+                                            *self->_runtime->activeMotion);
+            }
+        }
+
+        if(!self->_runtime->activeMotion) {
+            if(result) {
+                *result = tTJSVariant(false);
+            }
+            return TJS_S_OK;
+        }
+
+        const auto playOne = [&](const std::string &timelineLabel) {
+            auto &state = self->_runtime->timelines[timelineLabel];
+            state.label = timelineLabel;
+            state.flags = flags;
+            state.blendRatio = 1.0;
+            state.playing = true;
+            state.currentTime = 0.0;
+        };
+
+        bool started = false;
+        if(!label.IsEmpty()) {
+            const auto key = detail::narrow(label);
+            if(self->_runtime->timelines.find(key) != self->_runtime->timelines.end()) {
+                self->_motionKey = label;
+                playOne(key);
+                started = true;
+            } else if(self->_runtime->activeMotion) {
+                self->_motionKey = label;
+            }
+        }
+
+        if(!started) {
+            const auto &primary = !self->_runtime->activeMotion->mainTimelineLabels.empty()
+                ? self->_runtime->activeMotion->mainTimelineLabels
+                : self->_runtime->activeMotion->diffTimelineLabels;
+            for(const auto &timelineLabel : primary) {
+                playOne(timelineLabel);
+                started = true;
+            }
+        }
+
+        self->_allplaying = std::any_of(
+            self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
+            [](const auto &entry) { return entry.second.playing; });
+        if(result) {
+            *result = tTJSVariant(started);
+        }
+        return TJS_S_OK;
+    }
+
+    tjs_error Player::progressCompatMethod(tTJSVariant *result, tjs_int numparams,
+                                           tTJSVariant **param,
+                                           iTJSDispatch2 *objthis) {
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+
+        self->ensureMotionLoaded();
+
+        double delta = 0.0;
+        if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid) {
+            delta = param[0]->AsReal();
+        }
+
+        self->frameProgress(delta * self->_speed);
+        if(result) {
+            *result = tTJSVariant(self->getProgressCompat());
+        }
+        return TJS_S_OK;
+    }
+
+    tjs_error Player::isPlayingCompat(tTJSVariant *result, tjs_int,
+                                      tTJSVariant **, iTJSDispatch2 *objthis) {
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+
+        const bool playing = std::any_of(
+            self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
+            [](const auto &entry) { return entry.second.playing; });
+        self->_allplaying = playing;
+        if(result) {
+            *result = tTJSVariant(playing);
+        }
+        return TJS_S_OK;
+    }
+
+    tjs_error Player::stopCompat(tTJSVariant *result, tjs_int numparams,
+                                 tTJSVariant **param, iTJSDispatch2 *objthis) {
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+
+        ttstr label;
+        if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid &&
+           param[0]->Type() != tvtInteger && param[0]->Type() != tvtReal) {
+            label = *param[0];
+        }
+
+        if(label.IsEmpty()) {
+            for(auto &[_, state] : self->_runtime->timelines) {
+                state.playing = false;
+            }
+        } else {
+            if(const auto it = self->_runtime->timelines.find(detail::narrow(label));
+               it != self->_runtime->timelines.end()) {
+                it->second.playing = false;
+            }
+        }
+
+        self->_allplaying = false;
+        self->_syncWaiting = false;
+        self->_syncActive = false;
+        if(result) {
+            *result = tTJSVariant(true);
+        }
+        return TJS_S_OK;
+    }
 
     tTJSVariant Player::motionList() {
         std::vector<std::string> paths;

@@ -4,12 +4,15 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+#include <array>
 #include "WaveIntf.h"
 #include "SysInitIntf.h"
 #include "StorageIntf.h"
 #include "DebugIntf.h"
 #include <algorithm>
+#include <memory>
 #include <spdlog/spdlog.h>
+#include <vector>
 
 static const bool FloatExtraction =
     false; // true if output format is IEEE 32-bit float
@@ -22,6 +25,58 @@ static const bool FloatExtraction =
 static bool OldEncoderWarned = false;
 // static LONG AllocCount = 0; // memory block allocation count for
 // decoder
+
+namespace {
+    enum class OggCodecHint { NotOgg, UnknownOgg, Vorbis, Opus };
+
+    constexpr size_t kOggSniffBytes = 4096;
+    constexpr std::array<unsigned char, 4> kOggSignature{ 'O', 'g', 'g',
+                                                          'S' };
+    constexpr std::array<unsigned char, 7> kVorbisMarker{ 0x01, 'v', 'o', 'r',
+                                                          'b', 'i', 's' };
+    constexpr std::array<unsigned char, 8> kOpusMarker{ 'O', 'p', 'u', 's',
+                                                        'H', 'e', 'a', 'd' };
+
+    template <size_t N>
+    bool containsMarker(const std::vector<unsigned char> &buffer,
+                        const std::array<unsigned char, N> &marker) {
+        return std::search(buffer.begin(), buffer.end(), marker.begin(),
+                           marker.end()) != buffer.end();
+    }
+
+    OggCodecHint sniffOggCodec(const ttstr &storagename) {
+        std::unique_ptr<tTJSBinaryStream> stream{
+            TVPCreateStream(storagename, TJS_BS_READ)
+        };
+        if(!stream) {
+            return OggCodecHint::NotOgg;
+        }
+
+        const auto bytesToRead = static_cast<size_t>(
+            std::min<tjs_uint64>(stream->GetSize(), kOggSniffBytes));
+        if(bytesToRead < kOggSignature.size()) {
+            return OggCodecHint::NotOgg;
+        }
+
+        std::vector<unsigned char> buffer(bytesToRead);
+        const auto bytesRead = static_cast<size_t>(
+            stream->Read(buffer.data(), static_cast<tjs_uint>(bytesToRead)));
+        buffer.resize(bytesRead);
+        if(bytesRead < kOggSignature.size() ||
+           !std::equal(kOggSignature.begin(), kOggSignature.end(),
+                       buffer.begin())) {
+            return OggCodecHint::NotOgg;
+        }
+
+        if(containsMarker(buffer, kOpusMarker)) {
+            return OggCodecHint::Opus;
+        }
+        if(containsMarker(buffer, kVorbisMarker)) {
+            return OggCodecHint::Vorbis;
+        }
+        return OggCodecHint::UnknownOgg;
+    }
+} // namespace
 
 // static bool Look_Replay_Gain = false; // whether to look replay
 // gain information static bool Use_Album_Gain = false; // whether to
@@ -133,13 +188,18 @@ private:
 tTVPWaveDecoder *VorbisWaveDecoderCreator::Create(const ttstr &storagename,
                                                   const ttstr &extension) {
     static ttstr strext = TJS_W(".ogg");
+    if(extension != strext) {
+        return nullptr;
+    }
+    const auto codecHint = sniffOggCodec(storagename);
+    if(codecHint == OggCodecHint::NotOgg || codecHint == OggCodecHint::Opus) {
+        return nullptr;
+    }
     VorbisWaveDecoder *decoder = nullptr;
-    if(extension == strext) {
-        decoder = new VorbisWaveDecoder();
-        if(!decoder->SetStream(storagename)) {
-            delete decoder;
-            decoder = nullptr;
-        }
+    decoder = new VorbisWaveDecoder();
+    if(!decoder->SetStream(storagename)) {
+        delete decoder;
+        decoder = nullptr;
     }
     return decoder;
 }
@@ -504,6 +564,16 @@ public:
 
 tTVPWaveDecoder *OpusWaveDecoderCreator::Create(const ttstr &storagename,
                                                 const ttstr &extension) {
+    static ttstr oggExt = TJS_W(".ogg");
+    static ttstr opusExt = TJS_W(".opus");
+    if(extension != oggExt && extension != opusExt) {
+        return nullptr;
+    }
+    const auto codecHint = sniffOggCodec(storagename);
+    if(codecHint == OggCodecHint::NotOgg ||
+       codecHint == OggCodecHint::Vorbis) {
+        return nullptr;
+    }
     OpusWaveDecoder *decoder = nullptr;
     decoder = new OpusWaveDecoder();
     if(!decoder->SetStream(storagename)) {

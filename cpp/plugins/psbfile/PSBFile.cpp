@@ -1,7 +1,11 @@
 #include "PSBFile.h"
 
+#include <array>
+#include <cstring>
 #include <iostream>
 #include <memory>
+#include <vector>
+#include <zlib.h>
 #include <json/memorystream.h>
 
 #include "EMoteCTX.h"
@@ -10,6 +14,27 @@
 #define LOGGER spdlog::get("plugin")
 
 namespace PSB {
+
+    namespace {
+        constexpr std::array<char, 4> kMdfSignature{ 'M', 'D', 'F', '\0' };
+        constexpr std::array<char, 4> kMdfLowerSignature{ 'm', 'd', 'f',
+                                                          '\0' };
+        constexpr std::array<char, 4> kMflSignature{ 'M', 'F', 'L', '\0' };
+        constexpr std::array<char, 4> kMflLowerSignature{ 'm', 'f', 'l',
+                                                          '\0' };
+
+        bool hasSignature(const std::array<char, 4> &actual,
+                          const std::array<char, 4> &expected) {
+            return actual == expected;
+        }
+
+        bool isCompressedPsbSignature(const std::array<char, 4> &signature) {
+            return hasSignature(signature, kMdfSignature) ||
+                hasSignature(signature, kMdfLowerSignature) ||
+                hasSignature(signature, kMflSignature) ||
+                hasSignature(signature, kMflLowerSignature);
+        }
+    } // namespace
 
     void PSBFile::loadKeys(TJS::tTJSBinaryStream *stream) {
         const size_t len = nameIndexes.value.size();
@@ -326,31 +351,41 @@ namespace PSB {
             return false;
 
         const size_t readSize = s->GetSize();
-        if(readSize < 9)
+        if(readSize < 9) {
+            delete s;
             return false;
-
-        tTVPMemoryStream stream{ nullptr, static_cast<tjs_uint>(readSize) };
-        s->Read(stream.GetInternalBuffer(), readSize);
-        delete s;
-
-        constexpr int signSize = 4;
-        char sign[signSize];
-        stream.Read(sign, signSize);
-
-        if(10 < readSize && std::strcmp(sign, "MDF") == 0) {
-            // auto originalLen = readSize - 8;
-            // uLong compressedLen = compressBound(originalLen);
-            // auto *compressed = new Bytef[compressedLen];
-            // stream = uncompress(compressed, &compressedLen,
-            //                       reinterpret_cast<const Bytef *>(buffer[2]),
-            //                       originalLen);
-            // if(code == 0) {
-            //     delete[] buffer;
-            //     return false;
-            // }
-            LOGGER->info("PSBFile::load MDF not implement!");
         }
 
+        std::vector<std::uint8_t> raw(readSize);
+        s->ReadBuffer(raw.data(), readSize);
+        delete s;
+
+        std::array<char, 4> sign{};
+        std::memcpy(sign.data(), raw.data(), sign.size());
+
+        if(readSize > 8 && isCompressedPsbSignature(sign)) {
+            std::uint32_t uncompressedSize = 0;
+            std::memcpy(&uncompressedSize, raw.data() + 4,
+                        sizeof(uncompressedSize));
+            std::vector<std::uint8_t> uncompressed(uncompressedSize);
+            auto destLen = static_cast<unsigned long>(uncompressedSize);
+            const auto ret =
+                uncompress(uncompressed.data(), &destLen, raw.data() + 8,
+                           static_cast<unsigned long>(readSize - 8));
+            if(ret != Z_OK || destLen != uncompressedSize) {
+                LOGGER->error("failed to uncompress {} as MDF/MFL wrapper: "
+                              "zlib ret={}, expected={}, actual={}",
+                              filePath.AsStdString(), ret, uncompressedSize,
+                              destLen);
+                return false;
+            }
+            LOGGER->debug("unwrapped MDF/MFL psb: {} -> {} bytes",
+                          filePath.AsStdString(), destLen);
+            raw = std::move(uncompressed);
+        }
+
+        tTVPMemoryStream stream{ nullptr, static_cast<tjs_uint>(raw.size()) };
+        std::memcpy(stream.GetInternalBuffer(), raw.data(), raw.size());
         stream.SetPosition(0);
         _header = PSB::parsePSBHeader(&stream);
 

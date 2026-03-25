@@ -26,6 +26,7 @@ namespace motion::detail {
         bool loop = false;
         double totalFrames = 0.0;
         double currentTime = 0.0;
+        double blendRatio = 1.0;
     };
 
     struct MotionSnapshot {

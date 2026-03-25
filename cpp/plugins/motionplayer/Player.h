@@ -5,8 +5,10 @@
 #pragma once
 
 #include <memory>
+#include <unordered_map>
 #include <spdlog/spdlog.h>
 #include "tjs.h"
+#include "ResourceManager.h"
 
 namespace motion {
     namespace detail {
@@ -52,14 +54,23 @@ namespace motion {
 
     class Player {
     public:
-        Player();
+        explicit Player(ResourceManager rm = ResourceManager{});
         ~Player();
 
         // --- Properties (getter/setter) ---
         void setCompletionType(int v) { _completionType = v; }
         int getCompletionType() const { return _completionType; }
 
-        void setMotionKey(ttstr v) { _motionKey = v; }
+        void setMetadata(tTJSVariant v) { _metadata = v; }
+        tTJSVariant getMetadata() const { return _metadata; }
+
+        void setChara(ttstr v) { _chara = v; }
+        ttstr getChara() const { return _chara; }
+
+        void setMotion(ttstr v);
+        ttstr getMotion() const { return _motionKey; }
+
+        void setMotionKey(ttstr v) { setMotion(v); }
         ttstr getMotionKey() const { return _motionKey; }
 
         void setOutline(bool v) { _outline = v; }
@@ -70,6 +81,9 @@ namespace motion {
 
         void setFrameLastTime(double v) { _frameLastTime = v; }
         double getFrameLastTime() const { return _frameLastTime; }
+
+        void setProgressCompat(double v);
+        double getProgressCompat() const;
 
         void setFrameLoopTime(double v) { _frameLoopTime = v; }
         double getFrameLoopTime() const { return _frameLoopTime; }
@@ -90,7 +104,7 @@ namespace motion {
         bool getSelectorEnabled() const { return _selectorEnabled; }
 
         void setVariableKeys(tTJSVariant v) { _variableKeys = v; }
-        tTJSVariant getVariableKeys() const { return _variableKeys; }
+        tTJSVariant getVariableKeys();
 
         void setAllplaying(bool v) { _allplaying = v; }
         bool getAllplaying() const { return _allplaying; }
@@ -112,6 +126,9 @@ namespace motion {
 
         void setTickCount(double v) { _tickCount = v; }
         double getTickCount() const { return _tickCount; }
+
+        void setSpeed(double v) { _speed = v; }
+        double getSpeed() const { return _speed; }
 
         void setFrameTickCount(double v) { _frameTickCount = v; }
         double getFrameTickCount() const { return _frameTickCount; }
@@ -192,6 +209,7 @@ namespace motion {
 
         // --- Methods ---
         void initPhysics();
+        tTJSVariant serialize();
         void unserialize(tTJSVariant data);
         void setRotate(double rot);
         void setMirror(bool mirror);
@@ -248,12 +266,33 @@ namespace motion {
         void setStereovisionCameraPosition(double x, double y, double z);
 
         // Timeline/variable queries
+        void setVariable(ttstr label, double value);
+        double getVariable(ttstr label);
+        tjs_int countVariables();
+        ttstr getVariableLabelAt(tjs_int idx);
+        tjs_int countVariableFrameAt(tjs_int idx);
+        ttstr getVariableFrameLabelAt(tjs_int idx, tjs_int frameIdx);
+        double getVariableFrameValueAt(tjs_int idx, tjs_int frameIdx);
         bool getTimelinePlaying(ttstr label);
         tTJSVariant getVariableRange(ttstr label);
         tTJSVariant getVariableFrameList(ttstr label);
+        tjs_int countMainTimelines();
+        ttstr getMainTimelineLabelAt(tjs_int idx);
         tTJSVariant getMainTimelineLabelList();
+        tjs_int countDiffTimelines();
+        ttstr getDiffTimelineLabelAt(tjs_int idx);
         tTJSVariant getDiffTimelineLabelList();
         bool getLoopTimeline(ttstr label);
+        tjs_int countPlayingTimelines();
+        ttstr getPlayingTimelineLabelAt(tjs_int idx);
+        tjs_int getPlayingTimelineFlagsAt(tjs_int idx);
+        tjs_int getTimelineTotalFrameCount(ttstr label);
+        void playTimeline(ttstr label, tjs_int flags);
+        void stopTimeline(ttstr label);
+        void setTimelineBlendRatio(ttstr label, double ratio);
+        double getTimelineBlendRatio(ttstr label);
+        void fadeInTimeline(ttstr label, double duration, tjs_int flags);
+        void fadeOutTimeline(ttstr label, double duration, tjs_int flags);
         tTJSVariant getPlayingTimelineInfoList();
 
         // Selector
@@ -265,12 +304,29 @@ namespace motion {
         bool getD3DAvailable();
         void doAlphaMaskOperation();
         void onFindMotion(ttstr name);
+        static tjs_error playCompat(tTJSVariant *result, tjs_int numparams,
+                                    tTJSVariant **param, iTJSDispatch2 *objthis);
+        static tjs_error progressCompatMethod(tTJSVariant *result,
+                                              tjs_int numparams,
+                                              tTJSVariant **param,
+                                              iTJSDispatch2 *objthis);
+        static tjs_error isPlayingCompat(tTJSVariant *result, tjs_int numparams,
+                                         tTJSVariant **param,
+                                         iTJSDispatch2 *objthis);
+        static tjs_error stopCompat(tTJSVariant *result, tjs_int numparams,
+                                    tTJSVariant **param, iTJSDispatch2 *objthis);
         tTJSVariant motionList();
         void emoteEdit(tTJSVariant args);
 
     private:
+        bool ensureMotionLoaded();
+        void syncVariableKeysFromActiveMotion();
+
         std::shared_ptr<detail::PlayerRuntime> _runtime;
+        ResourceManager _resourceManagerNative;
         int _completionType = 0;
+        tTJSVariant _metadata;
+        ttstr _chara;
         ttstr _motionKey;
         bool _outline = false;
         bool _priorDraw = false;
@@ -289,6 +345,7 @@ namespace motion {
         bool _cameraActive = false;
         bool _stereovisionActive = false;
         double _tickCount = 0.0;
+        double _speed = 1.0;
         double _frameTickCount = 0.0;
         double _colorWeight = 1.0;
         bool _independentLayerInherit = false;
@@ -309,6 +366,7 @@ namespace motion {
         tTJSVariant _project;
         inline static bool _useD3D;
         bool _meshline = false;
+        std::unordered_map<std::string, double> _variableValues;
     };
 
 } // namespace motion
