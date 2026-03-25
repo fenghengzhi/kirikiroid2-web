@@ -3,6 +3,7 @@
 //
 #pragma once
 
+#include <array>
 #include <map>
 #include <memory>
 #include <string>
@@ -60,6 +61,8 @@ namespace motion::detail {
         std::unordered_map<std::string, bool> disabledSelectorTargets;
         tTJSVariant lastCanvas;
         tTJSVariant lastViewParam;
+        std::array<double, 6> drawAffineMatrix{ 1.0, 0.0, 0.0,
+                                                1.0, 0.0, 0.0 };
         tjs_int nextLayerId = 1;
         tjs_int clearColor = 0;
         tjs_int width = 0;

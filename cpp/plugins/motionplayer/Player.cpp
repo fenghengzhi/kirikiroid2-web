@@ -6,13 +6,22 @@
 #include "Player.h"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <unordered_set>
+#include <vector>
 
+#include "LayerIntf.h"
 #include "RuntimeSupport.h"
 #include "ResourceManager.h"
+#include "SeparateLayerAdaptor.h"
 #include "StorageIntf.h"
 #include "ncbind.hpp"
 #include "tjsArray.h"
+
+#ifndef KRKR2_NO_OPENCV
+#include "opencv2/opencv.hpp"
+#endif
 
 #define LOGGER spdlog::get("plugin")
 #define STUB_WARN(name) LOGGER->warn("Player::" #name "() stub called")
@@ -190,6 +199,67 @@ namespace motion {
                 : 0;
         }
 
+        bool tryGetLayerObject(const tTJSVariant &value,
+                               tTJSNI_BaseLayer *&layer) {
+            layer = nullptr;
+            if(value.Type() != tvtObject || value.AsObjectNoAddRef() == nullptr) {
+                return false;
+            }
+
+            const auto closure = value.AsObjectClosureNoAddRef();
+            if(!closure.Object) {
+                return false;
+            }
+
+            return TJS_SUCCEEDED(closure.Object->NativeInstanceSupport(
+                       TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                       reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
+                layer != nullptr;
+        }
+
+        iTJSDispatch2 *tryResolveSeparateAdaptorOwner(const tTJSVariant &value) {
+            if(value.Type() != tvtObject || value.AsObjectNoAddRef() == nullptr) {
+                return nullptr;
+            }
+
+            if(auto *adaptor =
+                   ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+                       value.AsObjectNoAddRef(), false)) {
+                return adaptor->getOwner();
+            }
+
+            tTJSVariant owner;
+            if(getObjectProperty(value, TJS_W("owner"), owner) &&
+               owner.Type() == tvtObject && owner.AsObjectNoAddRef() != nullptr) {
+                return owner.AsObjectNoAddRef();
+            }
+            if(getObjectProperty(value, TJS_W("_owner"), owner) &&
+               owner.Type() == tvtObject && owner.AsObjectNoAddRef() != nullptr) {
+                return owner.AsObjectNoAddRef();
+            }
+
+            return nullptr;
+        }
+
+        void pushGraphicCandidates(std::vector<ttstr> &candidates,
+                                   const ttstr &base) {
+            if(base.IsEmpty()) {
+                return;
+            }
+
+            candidates.push_back(base);
+            const auto raw = detail::narrow(base);
+            if(raw.find('.') != std::string::npos) {
+                return;
+            }
+
+            static const char *exts[] = { ".png",  ".webp", ".jpg", ".jpeg",
+                                          ".bmp",  ".tlg",  ".pimg", ".psb" };
+            for(const auto *ext : exts) {
+                candidates.emplace_back(base + ttstr{ ext });
+            }
+        }
+
         bool getArrayItem(const tTJSVariant &object, tjs_int index,
                           tTJSVariant &result) {
             result.Clear();
@@ -245,6 +315,7 @@ namespace motion {
         _motionKey = v;
         _runtime->activeMotion.reset();
         _runtime->timelines.clear();
+        _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         _variableValues.clear();
         ensureMotionLoaded();
@@ -569,6 +640,7 @@ namespace motion {
         _runtime->layerNamesById.clear();
         _runtime->lastCanvas.Clear();
         _runtime->lastViewParam.Clear();
+        _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         _variableValues.clear();
         _motionKey.Clear();
@@ -639,6 +711,109 @@ namespace motion {
             draw();
         }
         return _runtime->lastCanvas;
+    }
+
+    ttstr Player::resolveCaptureSourcePath() const {
+        if(!_runtime->activeMotion) {
+            return {};
+        }
+
+        std::vector<ttstr> candidates;
+        const auto motionPath = detail::widen(_runtime->activeMotion->path);
+        const auto baseDir = TVPExtractStoragePath(motionPath);
+        for(const auto &candidate : _runtime->activeMotion->sourceCandidates) {
+            pushGraphicCandidates(candidates, detail::widen(candidate));
+            if(!baseDir.IsEmpty()) {
+                pushGraphicCandidates(candidates,
+                                      baseDir + detail::widen(candidate));
+            }
+        }
+
+        const auto stem =
+            detail::widen(basenameWithoutExtension(_runtime->activeMotion->path));
+        pushGraphicCandidates(candidates, stem);
+        if(!baseDir.IsEmpty()) {
+            pushGraphicCandidates(candidates, baseDir + stem);
+        }
+
+        ttstr resolved;
+        detail::resolveExistingPath(candidates, resolved);
+        return resolved;
+    }
+
+    bool Player::renderToLayer(iTJSDispatch2 *layerObject) {
+        if(!layerObject) {
+            return false;
+        }
+
+        ensureMotionLoaded();
+        if(!_runtime->activeMotion) {
+            return false;
+        }
+
+        tTJSNI_BaseLayer *layer = nullptr;
+        if(TJS_FAILED(layerObject->NativeInstanceSupport(
+               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+               reinterpret_cast<iTJSNativeInstance **>(&layer))) ||
+           !layer) {
+            return false;
+        }
+
+        const auto sourcePath = resolveCaptureSourcePath();
+        if(sourcePath.IsEmpty()) {
+            LOGGER->warn("Motion.Player draw fallback could not resolve source "
+                         "for {}",
+                         _runtime->activeMotion->path);
+            return false;
+        }
+
+        try {
+            if(!layer->GetHasImage()) {
+                layer->SetHasImage(true);
+            }
+
+            if(auto *meta = layer->LoadImages(sourcePath, TVP_clNone)) {
+                meta->Release();
+            }
+
+#ifndef KRKR2_NO_OPENCV
+            auto *mainImage = layer->GetMainImage();
+            const auto *srcPixels = reinterpret_cast<const std::uint8_t *>(
+                layer->GetMainImagePixelBuffer());
+            auto *dstPixels = reinterpret_cast<std::uint8_t *>(
+                layer->GetMainImagePixelBufferForWrite());
+            const auto pitch = layer->GetMainImagePixelBufferPitch();
+            if(mainImage && srcPixels && dstPixels && pitch > 0) {
+                const auto width = static_cast<int>(mainImage->GetWidth());
+                const auto height = static_cast<int>(mainImage->GetHeight());
+                if(width > 0 && height > 0) {
+                    std::vector<std::uint8_t> srcCopy(
+                        static_cast<size_t>(pitch) * static_cast<size_t>(height));
+                    std::memcpy(srcCopy.data(), srcPixels, srcCopy.size());
+
+                    cv::Mat srcMat(height, width, CV_8UC4, srcCopy.data(), pitch);
+                    cv::Mat dstMat(height, width, CV_8UC4, dstPixels, pitch);
+                    dstMat.setTo(cv::Scalar(0, 0, 0, 0));
+
+                    const auto &m = _runtime->drawAffineMatrix;
+                    const cv::Mat affine =
+                        (cv::Mat_<double>(2, 3) << m[0], m[1], m[4], m[2], m[3],
+                         m[5]);
+                    cv::warpAffine(srcMat, dstMat, affine, dstMat.size(),
+                                   cv::INTER_LINEAR, cv::BORDER_CONSTANT,
+                                   cv::Scalar(0, 0, 0, 0));
+                }
+            }
+#endif
+
+            layer->Update(false);
+            _runtime->lastCanvas = tTJSVariant(layerObject, layerObject);
+            return true;
+        } catch(...) {
+            LOGGER->warn("Motion.Player draw fallback failed for {}",
+                         sourcePath.AsStdString());
+            return false;
+        }
     }
 
     tTJSVariant Player::findSource(ttstr name) {
@@ -1220,6 +1395,121 @@ namespace motion {
     void Player::doAlphaMaskOperation() {}
 
     void Player::onFindMotion(ttstr name) { (void)findMotion(name); }
+
+    tjs_error Player::setDrawAffineTranslateMatrixCompat(
+        tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+        Player *nativeInstance) {
+        if(result) {
+            result->Clear();
+        }
+        if(!nativeInstance) {
+            return TJS_E_INVALIDOBJECT;
+        }
+
+        std::array<double, 6> matrix{ 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        if(numparams >= 6) {
+            for(size_t index = 0; index < matrix.size(); ++index) {
+                if(!param[index] || param[index]->Type() == tvtVoid) {
+                    return TJS_E_INVALIDPARAM;
+                }
+                matrix[index] = param[index]->AsReal();
+            }
+        } else if(numparams == 1 && param[0] && param[0]->Type() == tvtObject &&
+                  param[0]->AsObjectNoAddRef() != nullptr) {
+            const auto object = *param[0];
+            tTJSVariant value;
+            if(getObjectProperty(object, TJS_W("m11"), value) &&
+               value.Type() != tvtVoid) {
+                matrix[0] = value.AsReal();
+            }
+            if(getObjectProperty(object, TJS_W("m21"), value) &&
+               value.Type() != tvtVoid) {
+                matrix[1] = value.AsReal();
+            }
+            if(getObjectProperty(object, TJS_W("m12"), value) &&
+               value.Type() != tvtVoid) {
+                matrix[2] = value.AsReal();
+            }
+            if(getObjectProperty(object, TJS_W("m22"), value) &&
+               value.Type() != tvtVoid) {
+                matrix[3] = value.AsReal();
+            }
+            if(getObjectProperty(object, TJS_W("m14"), value) &&
+               value.Type() != tvtVoid) {
+                matrix[4] = value.AsReal();
+            }
+            if(getObjectProperty(object, TJS_W("m24"), value) &&
+               value.Type() != tvtVoid) {
+                matrix[5] = value.AsReal();
+            }
+        } else {
+            return TJS_E_BADPARAMCOUNT;
+        }
+
+        nativeInstance->_runtime->drawAffineMatrix = matrix;
+        return TJS_S_OK;
+    }
+
+    tjs_error Player::captureCanvasCompat(tTJSVariant *result, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          Player *nativeInstance) {
+        if(result) {
+            result->Clear();
+        }
+        if(!nativeInstance) {
+            return TJS_E_INVALIDOBJECT;
+        }
+
+        if(numparams > 0 && param[0] && param[0]->Type() == tvtObject &&
+           param[0]->AsObjectNoAddRef() != nullptr &&
+           nativeInstance->renderToLayer(param[0]->AsObjectNoAddRef())) {
+            if(result) {
+                *result = *param[0];
+            }
+            return TJS_S_OK;
+        }
+
+        if(result) {
+            *result = nativeInstance->captureCanvas();
+        }
+        return TJS_S_OK;
+    }
+
+    tjs_error Player::drawCompat(tTJSVariant *result, tjs_int numparams,
+                                 tTJSVariant **param, Player *nativeInstance) {
+        if(result) {
+            result->Clear();
+        }
+        if(!nativeInstance) {
+            return TJS_E_INVALIDOBJECT;
+        }
+
+        tTJSNI_BaseLayer *layer = nullptr;
+        if(numparams > 0 && param[0] && tryGetLayerObject(*param[0], layer) &&
+           nativeInstance->renderToLayer(param[0]->AsObjectNoAddRef())) {
+            if(result) {
+                *result = *param[0];
+            }
+            return TJS_S_OK;
+        }
+
+        if(numparams > 0 && param[0] && param[0]->Type() == tvtObject &&
+           param[0]->AsObjectNoAddRef() != nullptr) {
+            if(auto *owner = tryResolveSeparateAdaptorOwner(*param[0]);
+               owner && nativeInstance->renderToLayer(owner)) {
+                if(result) {
+                    *result = tTJSVariant(owner, owner);
+                }
+                return TJS_S_OK;
+            }
+        }
+
+        nativeInstance->draw();
+        if(result) {
+            *result = nativeInstance->_runtime->lastCanvas;
+        }
+        return TJS_S_OK;
+    }
 
     tjs_error Player::playCompat(tTJSVariant *result, tjs_int numparams,
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {

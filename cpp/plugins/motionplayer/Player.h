@@ -304,6 +304,16 @@ namespace motion {
         bool getD3DAvailable();
         void doAlphaMaskOperation();
         void onFindMotion(ttstr name);
+        static tjs_error setDrawAffineTranslateMatrixCompat(
+            tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+            Player *nativeInstance);
+        static tjs_error captureCanvasCompat(tTJSVariant *result,
+                                             tjs_int numparams,
+                                             tTJSVariant **param,
+                                             Player *nativeInstance);
+        static tjs_error drawCompat(tTJSVariant *result, tjs_int numparams,
+                                    tTJSVariant **param,
+                                    Player *nativeInstance);
         static tjs_error playCompat(tTJSVariant *result, tjs_int numparams,
                                     tTJSVariant **param, iTJSDispatch2 *objthis);
         static tjs_error progressCompatMethod(tTJSVariant *result,
@@ -321,6 +331,8 @@ namespace motion {
     private:
         bool ensureMotionLoaded();
         void syncVariableKeysFromActiveMotion();
+        bool renderToLayer(iTJSDispatch2 *layerObject);
+        ttstr resolveCaptureSourcePath() const;
 
         std::shared_ptr<detail::PlayerRuntime> _runtime;
         ResourceManager _resourceManagerNative;

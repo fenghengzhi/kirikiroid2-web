@@ -430,8 +430,9 @@ namespace motion::detail {
     bool resolveExistingPath(const std::vector<ttstr> &candidates,
                              ttstr &resolved) {
         for(const auto &candidate : candidates) {
-            if(TVPIsExistentStorageNoSearch(candidate)) {
-                resolved = candidate;
+            if(const auto placed = TVPGetPlacedPath(candidate);
+               !placed.IsEmpty()) {
+                resolved = placed;
                 return true;
             }
         }

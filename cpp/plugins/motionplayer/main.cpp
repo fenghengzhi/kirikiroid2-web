@@ -31,7 +31,9 @@ using namespace motion;
 
 NCB_REGISTER_SUBCLASS_DELAY(SourceCache) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_SUBCLASS_DELAY(ObjSource) { NCB_CONSTRUCTOR(()); }
-NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) { NCB_CONSTRUCTOR(()); }
+NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {
+    Factory(&SeparateLayerAdaptor::factory);
+}
 NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) { NCB_CONSTRUCTOR(()); }
 
 NCB_REGISTER_CLASS(Player) {
@@ -99,7 +101,8 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(setHairScale);
     NCB_METHOD(setPartsScale);
     NCB_METHOD(setBustScale);
-    NCB_METHOD(setDrawAffineTranslateMatrix);
+    NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
+                            &Player::setDrawAffineTranslateMatrixCompat, 0);
     NCB_METHOD(getCameraOffset);
     NCB_METHOD(setCameraOffset);
     NCB_METHOD(modifyRoot);
@@ -123,14 +126,14 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(registerCaption);
     NCB_METHOD(unloadUnusedTextures);
     NCB_METHOD(alphaOpAdd);
-    NCB_METHOD(captureCanvas);
+    NCB_METHOD_RAW_CALLBACK(captureCanvas, &Player::captureCanvasCompat, 0);
     NCB_METHOD(findSource);
     NCB_METHOD(loadSource);
     NCB_METHOD(clearCache);
     NCB_METHOD(setSize);
     NCB_METHOD(copyRect);
     NCB_METHOD(adjustGamma);
-    NCB_METHOD(draw);
+    NCB_METHOD_RAW_CALLBACK(draw, &Player::drawCompat, 0);
     NCB_METHOD(frameProgress);
 
     // Viewport/display
