@@ -2289,6 +2289,7 @@ namespace motion {
     struct SelfDriveContinuousHandler : public tTJSDispatch {
         Player *player = nullptr;
         iTJSDispatch2 *ownerObjThis = nullptr;
+        tjs_int64 lastTick = 0;
 
         tjs_error FuncCall(tjs_uint32 flag,
             const tjs_char *membername, tjs_uint32 *hint,
@@ -2299,9 +2300,21 @@ namespace motion {
             if(!player || !player->_runtime || !player->_allplaying) {
                 return TJS_S_OK;
             }
-            // Advance animation by one frame (~16ms at 60fps)
-            constexpr double kFrameDelta = 1.0;
-            player->frameProgress(kFrameDelta * player->_speed);
+            // Compute real time delta from tick parameter (ms)
+            tjs_int64 tick = (numparams > 0 && param[0])
+                ? param[0]->AsInteger() : 0;
+            double deltaMs = 0.0;
+            if(lastTick > 0 && tick > lastTick) {
+                deltaMs = static_cast<double>(tick - lastTick);
+            }
+            lastTick = tick;
+            if(deltaMs <= 0.0 || deltaMs > 200.0) {
+                deltaMs = 16.0; // cap at ~60fps
+            }
+            // Convert ms to frames: 60fps = 1 frame per 16.67ms
+            constexpr double kFramesPerMs = 60.0 / 1000.0;
+            const double deltaFrames = deltaMs * kFramesPerMs;
+            player->frameProgress(deltaFrames * player->_speed);
             // Notify AffineSourceMotion via onAction callback that
             // animation state changed, triggering redrawFlag → onPaint.
             if(ownerObjThis) {
@@ -3086,6 +3099,13 @@ namespace motion {
             state.blendRatio = 1.0;
             state.playing = true;
             state.currentTime = 0.0;
+            // Ensure totalFrames is set (may be 0 if timeline wasn't primed)
+            if(state.totalFrames <= 0.0 && self->_runtime->activeMotion) {
+                auto it = self->_runtime->activeMotion->timelineTotalFrames.find(timelineLabel);
+                if(it != self->_runtime->activeMotion->timelineTotalFrames.end()) {
+                    state.totalFrames = it->second;
+                }
+            }
         };
 
         bool started = false;
