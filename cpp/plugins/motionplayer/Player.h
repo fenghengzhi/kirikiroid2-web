@@ -10,8 +10,13 @@
 #include "tjs.h"
 #include "ResourceManager.h"
 
+namespace PSB {
+    class PSBDictionary;
+}
+
 namespace motion {
     namespace detail {
+        struct MotionClip;
         struct PlayerRuntime;
     }
 
@@ -333,6 +338,12 @@ namespace motion {
         void syncVariableKeysFromActiveMotion();
         bool renderToLayer(iTJSDispatch2 *layerObject);
         ttstr resolveCaptureSourcePath() const;
+        const detail::MotionClip *selectActiveClip() const;
+        const std::vector<std::string> &activeLayerNames() const;
+        const std::unordered_map<
+            std::string, std::shared_ptr<const PSB::PSBDictionary>> *
+        activeLayersByName() const;
+        const std::vector<std::string> &activeSourceCandidates() const;
 
         std::shared_ptr<detail::PlayerRuntime> _runtime;
         ResourceManager _resourceManagerNative;

@@ -3,11 +3,18 @@
 //
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
+
+#include <filesystem>
+#include <iostream>
 
 #include "motionplayer/EmotePlayer.h"
 #include "motionplayer/Player.h"
 #include "motionplayer/ResourceManager.h"
+#include "motionplayer/RuntimeSupport.h"
+#include "psbfile/PSBValue.h"
 #include "test_config.h"
+#include "tjsObject.h"
 
 namespace {
 
@@ -52,6 +59,145 @@ namespace {
 
     tjs_int variantCount(const tTJSVariant &object) {
         return static_cast<tjs_int>(getProp(object, TJS_W("count")).AsInteger());
+    }
+
+    std::vector<std::pair<ttstr, tTJSVariant>>
+    dictionaryEntries(const tTJSVariant &object) {
+        struct Enumerator : tTJSDispatch {
+            std::vector<std::pair<ttstr, tTJSVariant>> entries;
+
+            tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                               tTJSVariant *result, tjs_int numparams,
+                               tTJSVariant **param, iTJSDispatch2 *) override {
+                if(numparams >= 3) {
+                    entries.emplace_back(ttstr(*param[0]), *param[2]);
+                }
+                if(result) {
+                    *result = static_cast<tjs_int>(1);
+                }
+                return TJS_S_OK;
+            }
+        } enumerator;
+
+        REQUIRE(object.Type() == tvtObject);
+        auto *dispatch = object.AsObjectNoAddRef();
+        REQUIRE(dispatch != nullptr);
+        tTJSVariantClosure closure(&enumerator, nullptr);
+        if(TJS_FAILED(
+               dispatch->EnumMembers(TJS_IGNOREPROP, &closure, dispatch))) {
+            return {};
+        }
+        return enumerator.entries;
+    }
+
+    void dumpDictionary(const tTJSVariant &object, const std::string &prefix,
+                        int depth = 0) {
+        if(depth > 2 || object.Type() != tvtObject) {
+            return;
+        }
+
+        for(const auto &[key, value] : dictionaryEntries(object)) {
+            std::cerr << prefix << key.AsStdString()
+                      << " type=" << static_cast<int>(value.Type());
+            if(value.Type() == tvtString) {
+                std::cerr << " value=" << ttstr(value).AsStdString();
+            } else if(value.Type() == tvtInteger) {
+                std::cerr << " value=" << value.AsInteger();
+            } else if(value.Type() == tvtReal) {
+                std::cerr << " value=" << value.AsReal();
+            }
+            std::cerr << "\n";
+
+            if(value.Type() != tvtObject) {
+                continue;
+            }
+
+            if(const auto count = variantCount(value); count > 0) {
+                const auto limit = std::min<tjs_int>(count, 3);
+                std::cerr << prefix << "  [count]=" << count << "\n";
+                for(tjs_int index = 0; index < limit; ++index) {
+                    const auto item = getIndex(value, index);
+                    std::cerr << prefix << "  [" << index
+                              << "] type=" << static_cast<int>(item.Type());
+                    if(item.Type() == tvtString) {
+                        std::cerr << " value=" << ttstr(item).AsStdString();
+                    } else if(item.Type() == tvtInteger) {
+                        std::cerr << " value=" << item.AsInteger();
+                    } else if(item.Type() == tvtReal) {
+                        std::cerr << " value=" << item.AsReal();
+                    }
+                    std::cerr << "\n";
+                    if(item.Type() == tvtObject) {
+                        dumpDictionary(item, prefix + "    ", depth + 1);
+                    }
+                }
+            } else {
+                dumpDictionary(value, prefix + "  ", depth + 1);
+            }
+        }
+    }
+
+    void dumpPsbValue(const std::shared_ptr<PSB::IPSBValue> &value,
+                      const std::string &prefix, int depth = 0) {
+        if(!value || depth > 3) {
+            return;
+        }
+
+        if(auto text = std::dynamic_pointer_cast<PSB::PSBString>(value)) {
+            std::cerr << prefix << "string=" << text->value << "\n";
+            return;
+        }
+        if(auto number = std::dynamic_pointer_cast<PSB::PSBNumber>(value)) {
+            std::cerr << prefix << "number=" << number->toString() << "\n";
+            return;
+        }
+        if(auto boolean = std::dynamic_pointer_cast<PSB::PSBBool>(value)) {
+            std::cerr << prefix << "bool=" << (boolean->value ? "true" : "false")
+                      << "\n";
+            return;
+        }
+        if(auto resource = std::dynamic_pointer_cast<PSB::PSBResource>(value)) {
+            std::cerr << prefix << "resource index="
+                      << resource->index.value_or(UINT32_MAX)
+                      << " size=" << resource->data.size() << "\n";
+            return;
+        }
+        if(auto list = std::dynamic_pointer_cast<PSB::PSBList>(value)) {
+            std::cerr << prefix << "list size=" << list->size() << "\n";
+            const auto limit = std::min<size_t>(list->size(), 3);
+            for(size_t index = 0; index < limit; ++index) {
+                std::cerr << prefix << "  [" << index << "]\n";
+                dumpPsbValue((*list)[static_cast<int>(index)], prefix + "    ",
+                             depth + 1);
+            }
+            return;
+        }
+        if(auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(value)) {
+            std::cerr << prefix << "dict size="
+                      << std::distance(dic->begin(), dic->end()) << "\n";
+            int count = 0;
+            for(const auto &[key, child] : *dic) {
+                std::cerr << prefix << "  " << key << "\n";
+                dumpPsbValue(child, prefix + "    ", depth + 1);
+                if(++count >= 12) {
+                    break;
+                }
+            }
+            return;
+        }
+
+        std::cerr << prefix << "type=" << static_cast<int>(value->getType())
+                  << " text=" << value->toString() << "\n";
+    }
+
+    bool containsString(const tTJSVariant &object, const ttstr &expected) {
+        const auto count = variantCount(object);
+        for(tjs_int index = 0; index < count; ++index) {
+            if(ttstr(getIndex(object, index)) == expected) {
+                return true;
+            }
+        }
+        return false;
     }
 
 } // namespace
@@ -227,4 +373,95 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
 
     player.assignState();
     player.setOuterForce(1.0, 2.0);
+}
+
+TEST_CASE("motionplayer can play internal logo motion clips") {
+    setEmoteSeed();
+
+    const auto baseDir = std::filesystem::path(".debugtmp") / "titleprobe_hd" /
+        "data1080";
+    if(!std::filesystem::exists(baseDir / "yuzulogo.mtn") ||
+       !std::filesystem::exists(baseDir / "m2logo.mtn")) {
+        return;
+    }
+
+    motion::Player player;
+    const auto yuzuPath =
+        ttstr(std::filesystem::absolute(baseDir / "yuzulogo.mtn").string());
+    const auto m2Path =
+        ttstr(std::filesystem::absolute(baseDir / "m2logo.mtn").string());
+
+    const auto verifyOne = [&](const ttstr &path, const ttstr &label,
+                               const tjs_int expectedLayers,
+                               const tjs_int expectedFrames) {
+        INFO("path=" << path.AsStdString() << " label=" << label.AsStdString());
+        REQUIRE(player.findMotion(path).Type() == tvtObject);
+        const auto snapshot = motion::detail::lookupModuleSnapshot(
+            player.findMotion(path));
+        REQUIRE(snapshot != nullptr);
+
+        const auto mainLabels = player.getMainTimelineLabelList();
+        const auto diffLabels = player.getDiffTimelineLabelList();
+        REQUIRE(containsString(mainLabels, label));
+        REQUIRE(variantCount(diffLabels) == 0);
+        REQUIRE(player.getTimelineTotalFrameCount(label) == expectedFrames);
+
+        player.playTimeline(label, motion::PlayFlagForce);
+        REQUIRE(player.getTimelinePlaying(label));
+        const auto layerNames = player.getLayerNames();
+        const auto getterList = player.getLayerGetterList();
+        const auto commands = player.getCommandList();
+        std::cerr << "logo test path=" << path.AsStdString()
+                  << " label=" << label.AsStdString()
+                  << " layers=" << variantCount(layerNames)
+                  << " commands=" << variantCount(commands) << "\n";
+        for(tjs_int index = 0; index < variantCount(commands); ++index) {
+            const auto command = ttstr(getIndex(commands, index));
+            int sourceType = -1;
+            try {
+                sourceType = static_cast<int>(player.findSource(command).Type());
+            } catch(...) {
+                std::cerr << "  command[" << index << "]=" << command.AsStdString()
+                          << " sourceError=<non-std-exception>\n";
+                continue;
+            }
+            std::cerr << "  command[" << index << "]=" << command.AsStdString()
+                      << " sourceType=" << sourceType << "\n";
+        }
+        for(tjs_int index = 0; index < variantCount(layerNames) && index < 2; ++index) {
+            const auto layerName = ttstr(getIndex(layerNames, index));
+            std::cerr << "  layer[" << index << "]=" << layerName.AsStdString()
+                      << "\n";
+            const auto clip =
+                snapshot->clipsByLabel.find(label.AsStdString());
+            REQUIRE(clip != snapshot->clipsByLabel.end());
+            const auto layer =
+                clip->second.layersByName.find(layerName.AsStdString());
+            REQUIRE(layer != clip->second.layersByName.end());
+            if(const auto frameList = (*layer->second)["frameList"]) {
+                std::cerr << "    native frameList\n";
+                dumpPsbValue(frameList, "      ");
+            }
+            if(const auto children = (*layer->second)["children"]) {
+                std::cerr << "    native children\n";
+                dumpPsbValue(children, "      ");
+            }
+        }
+        REQUIRE(variantCount(layerNames) == expectedLayers);
+        REQUIRE(variantCount(getterList) == expectedLayers);
+        REQUIRE(player.getLayerMotion(ttstr(getIndex(player.getLayerNames(), 0)))
+                    .Type() == tvtObject);
+        REQUIRE(player.getProgressCompat() == Catch::Approx(0.0));
+
+        player.frameProgress(static_cast<double>(expectedFrames - 1));
+        REQUIRE(player.getTimelinePlaying(label));
+        REQUIRE(player.getProgressCompat() < 1.0);
+
+        player.frameProgress(1.0);
+        REQUIRE_FALSE(player.getTimelinePlaying(label));
+        REQUIRE(player.getProgressCompat() == Catch::Approx(1.0));
+    };
+
+    verifyOne(yuzuPath, TJS_W("yuzulogo"), 4, 241);
+    verifyOne(m2Path, TJS_W("back_white"), 2, 91);
 }

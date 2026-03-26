@@ -20,6 +20,17 @@ namespace motion::detail {
         double value = 0.0;
     };
 
+    struct MotionClip {
+        std::string label;
+        std::string owner;
+        bool loop = false;
+        double totalFrames = 0.0;
+        std::vector<std::string> layerNames;
+        std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>>
+            layersByName;
+        std::vector<std::string> sourceCandidates;
+    };
+
     struct TimelineState {
         std::string label;
         int flags = 0;
@@ -34,6 +45,8 @@ namespace motion::detail {
         std::string path;
         std::shared_ptr<PSB::PSBFile> file;
         std::shared_ptr<const PSB::PSBDictionary> root;
+        std::unordered_map<std::string, std::shared_ptr<const PSB::PSBResource>>
+            resourcesByPath;
         tTJSVariant moduleValue;
         std::vector<std::string> mainTimelineLabels;
         std::vector<std::string> diffTimelineLabels;
@@ -45,6 +58,8 @@ namespace motion::detail {
         std::vector<std::string> layerNames;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>> layersByName;
         std::vector<std::string> sourceCandidates;
+        std::unordered_map<std::string, MotionClip> clipsByLabel;
+        std::vector<std::string> resourceAliases;
         double width = 0.0;
         double height = 0.0;
     };
@@ -89,6 +104,9 @@ namespace motion::detail {
 
     std::vector<ttstr> buildMotionLookupCandidates(const ttstr &name);
     bool resolveExistingPath(const std::vector<ttstr> &candidates, ttstr &resolved);
+    void appendEmbeddedSourceCandidates(const MotionSnapshot &snapshot,
+                                        const std::string &source,
+                                        std::vector<ttstr> &candidates);
 
     std::shared_ptr<MotionSnapshot> loadMotionSnapshot(const ttstr &path,
                                                        tjs_int decryptSeed);

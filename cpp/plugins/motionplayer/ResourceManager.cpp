@@ -4,11 +4,24 @@
 
 #include "ResourceManager.h"
 
+#include <algorithm>
+#include <cctype>
+
 #include <spdlog/spdlog.h>
 
 #include "RuntimeSupport.h"
 
 #define LOGGER spdlog::get("plugin")
+
+namespace {
+    std::string lowercase(std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        return value;
+    }
+}
 
 motion::ResourceManager::ResourceManager() : _state(std::make_shared<State>()) {}
 
@@ -46,9 +59,14 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *r,
 }
 
 tTJSVariant motion::ResourceManager::load(ttstr path) const {
+    const auto rawPath = path.AsStdString();
+    const auto loweredPath = lowercase(rawPath);
+    if(loweredPath.find(".mtn") != std::string::npos) {
+        LOGGER->warn("Motion resource manager load: {}", rawPath);
+    }
     const auto loaded = detail::loadPSBVariant(path, _decryptSeed);
     if(loaded.Type() != tvtVoid && _state) {
-        const auto key = path.AsStdString();
+        const auto key = rawPath;
         _state->loadedModules[key] = loaded;
         _state->lastLoadedPath = key;
         _state->lastLoadedModule = loaded;

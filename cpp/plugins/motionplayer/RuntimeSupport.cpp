@@ -15,6 +15,7 @@
 #include <spdlog/spdlog.h>
 
 #include "StorageIntf.h"
+#include "psbfile/PSBMediaRegistry.h"
 #include "tjsArray.h"
 #include "tjsDictionary.h"
 
@@ -320,6 +321,104 @@ namespace motion::detail {
                     .value_or(0.0);
         }
 
+        void collectValueSources(const std::shared_ptr<PSB::IPSBValue> &value,
+                                 std::vector<std::string> &sources);
+
+        void collectDictionarySources(
+            const std::shared_ptr<PSB::PSBDictionary> &dic,
+            std::vector<std::string> &sources) {
+            for(const auto &[key, child] : *dic) {
+                const auto loweredKey = lowercase(key);
+                if(const auto text = psbString(child)) {
+                    if(looksLikeStoragePath(*text) ||
+                       loweredKey.find("source") != std::string::npos ||
+                       loweredKey == "path" || loweredKey == "file" ||
+                       loweredKey == "src") {
+                        appendUnique(sources, *text);
+                    }
+                }
+                collectValueSources(child, sources);
+            }
+        }
+
+        void collectListSources(const std::shared_ptr<PSB::PSBList> &list,
+                                std::vector<std::string> &sources) {
+            for(const auto &item : *list) {
+                collectValueSources(item, sources);
+            }
+        }
+
+        void collectValueSources(const std::shared_ptr<PSB::IPSBValue> &value,
+                                 std::vector<std::string> &sources) {
+            if(auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(value)) {
+                collectDictionarySources(dic, sources);
+            } else if(auto list = std::dynamic_pointer_cast<PSB::PSBList>(value)) {
+                collectListSources(list, sources);
+            } else if(const auto text = psbString(value)) {
+                if(looksLikeStoragePath(*text)) {
+                    appendUnique(sources, *text);
+                }
+            }
+        }
+
+        void maybeRecordMotionClip(const std::vector<std::string> &path,
+                                   const std::shared_ptr<PSB::PSBDictionary> &dic,
+                                   MotionSnapshot &snapshot) {
+            if(path.size() < 4 ||
+               lowercase(path[path.size() - 2]) != "motion" ||
+               lowercase(path[path.size() - 4]) != "object") {
+                return;
+            }
+
+            const auto label = path.back();
+            if(label.empty()) {
+                return;
+            }
+
+            auto &clip = snapshot.clipsByLabel[label];
+            clip.label = label;
+            clip.owner = path[path.size() - 3];
+            clip.totalFrames =
+                dictionaryNumber(dic, { "lastTime", "frameCount", "frame_count",
+                                        "totalFrameCount", "total_frame_count",
+                                        "frames", "length", "end" })
+                    .value_or(0.0);
+            if(const auto loop = dictionaryBool(dic, { "loop", "repeat", "is_loop" })) {
+                clip.loop = *loop;
+            } else if(const auto loopTime = dictionaryNumber(dic, { "loopTime" })) {
+                clip.loop = *loopTime >= 0.0;
+            }
+
+            if(const auto layers = dictionaryList(dic, { "layer" })) {
+                for(const auto &item : *layers) {
+                    const auto layer =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
+                    if(!layer) {
+                        continue;
+                    }
+
+                    const auto layerLabel =
+                        dictionaryString(layer, { "label", "name", "id" });
+                    if(!layerLabel || layerLabel->empty()) {
+                        continue;
+                    }
+
+                    if(clip.layersByName.find(*layerLabel) ==
+                       clip.layersByName.end()) {
+                        clip.layersByName[*layerLabel] = layer;
+                        clip.layerNames.push_back(*layerLabel);
+                    }
+                    collectValueSources(layer, clip.sourceCandidates);
+                }
+            }
+
+            collectValueSources(dic, clip.sourceCandidates);
+
+            appendUnique(snapshot.mainTimelineLabels, clip.label);
+            snapshot.loopTimelines[clip.label] = clip.loop;
+            snapshot.timelineTotalFrames[clip.label] = clip.totalFrames;
+        }
+
         void scanValue(const std::shared_ptr<PSB::IPSBValue> &value,
                        std::vector<std::string> &path,
                        MotionSnapshot &snapshot);
@@ -327,6 +426,7 @@ namespace motion::detail {
         void scanDictionary(const std::shared_ptr<PSB::PSBDictionary> &dic,
                             std::vector<std::string> &path,
                             MotionSnapshot &snapshot) {
+            maybeRecordMotionClip(path, dic, snapshot);
             maybeRecordLayer(path, dic, snapshot);
             maybeRecordTimeline(path, dic, snapshot);
             maybeRecordVariable(path, dic, snapshot);
@@ -378,6 +478,94 @@ namespace motion::detail {
                     appendUnique(snapshot.sourceCandidates, *text);
                 }
             }
+        }
+
+        bool looksLikeEmbeddedSourceKey(const std::string &value) {
+            return looksLikeStoragePath(value) ||
+                value.find('/') != std::string::npos ||
+                value.find('\\') != std::string::npos;
+        }
+
+        void collectResourceMap(const std::shared_ptr<PSB::IPSBValue> &value,
+                                std::vector<std::string> &path,
+                                MotionSnapshot &snapshot);
+
+        void collectDictionaryResourceMap(
+            const std::shared_ptr<PSB::PSBDictionary> &dic,
+            std::vector<std::string> &path, MotionSnapshot &snapshot) {
+            for(const auto &[key, child] : *dic) {
+                path.push_back(key);
+                collectResourceMap(child, path, snapshot);
+                path.pop_back();
+            }
+        }
+
+        void collectListResourceMap(const std::shared_ptr<PSB::PSBList> &list,
+                                    std::vector<std::string> &path,
+                                    MotionSnapshot &snapshot) {
+            for(size_t index = 0; index < list->size(); ++index) {
+                path.push_back(std::to_string(index));
+                collectResourceMap((*list)[static_cast<int>(index)], path,
+                                   snapshot);
+                path.pop_back();
+            }
+        }
+
+        void collectResourceMap(const std::shared_ptr<PSB::IPSBValue> &value,
+                                std::vector<std::string> &path,
+                                MotionSnapshot &snapshot) {
+            if(auto resource = std::dynamic_pointer_cast<PSB::PSBResource>(value)) {
+                std::string joined;
+                for(size_t index = 0; index < path.size(); ++index) {
+                    if(index != 0) {
+                        joined += '/';
+                    }
+                    joined += path[index];
+                }
+                if(!joined.empty()) {
+                    snapshot.resourcesByPath.emplace(joined, resource);
+                    if(looksLikeEmbeddedSourceKey(joined)) {
+                        appendUnique(snapshot.sourceCandidates, joined);
+                    }
+                }
+                return;
+            }
+
+            if(auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(value)) {
+                collectDictionaryResourceMap(dic, path, snapshot);
+            } else if(auto list = std::dynamic_pointer_cast<PSB::PSBList>(value)) {
+                collectListResourceMap(list, path, snapshot);
+            }
+        }
+
+        void collectRootResources(const std::shared_ptr<const PSB::PSBDictionary> &root,
+                                  MotionSnapshot &snapshot) {
+            if(!root) {
+                return;
+            }
+
+            std::vector<std::string> path;
+            collectResourceMap(
+                std::const_pointer_cast<PSB::PSBDictionary>(root), path, snapshot);
+
+            for(const auto &[key, value] : *root) {
+                const auto resource =
+                    std::dynamic_pointer_cast<PSB::PSBResource>(value);
+                if(!resource) {
+                    continue;
+                }
+                if(looksLikeEmbeddedSourceKey(key)) {
+                    appendUnique(snapshot.sourceCandidates, key);
+                }
+            }
+        }
+
+        void appendResourceAlias(MotionSnapshot &snapshot, const ttstr &alias) {
+            const auto raw = narrow(alias);
+            if(raw.empty()) {
+                return;
+            }
+            appendUnique(snapshot.resourceAliases, raw);
         }
 
         std::shared_ptr<PSB::PSBFile> loadPSBFile(const ttstr &path,
@@ -439,6 +627,19 @@ namespace motion::detail {
         return false;
     }
 
+    void appendEmbeddedSourceCandidates(const MotionSnapshot &snapshot,
+                                        const std::string &source,
+                                        std::vector<ttstr> &candidates) {
+        if(source.empty()) {
+            return;
+        }
+
+        for(const auto &alias : snapshot.resourceAliases) {
+            candidates.emplace_back(ttstr{ TJS_W("psb://") } + widen(alias) +
+                                    TJS_W("/") + widen(source));
+        }
+    }
+
     std::shared_ptr<MotionSnapshot> loadMotionSnapshot(const ttstr &path,
                                                        const tjs_int decryptSeed) {
         const auto file = loadPSBFile(path, decryptSeed);
@@ -461,10 +662,28 @@ namespace motion::detail {
         snapshot->file = file;
         snapshot->root = root;
         snapshot->moduleValue = root->toTJSVal();
+        const auto loweredPath = lowercase(snapshot->path);
+        if(loweredPath.find("yuzulogo.mtn") != std::string::npos ||
+           loweredPath.find("m2logo.mtn") != std::string::npos) {
+            LOGGER->warn("Motion logo snapshot loaded: path={} clips={} mainLabels={}",
+                         snapshot->path, snapshot->clipsByLabel.size(),
+                         snapshot->mainTimelineLabels.size());
+        }
+        appendResourceAlias(*snapshot, path);
+        appendResourceAlias(*snapshot, TVPExtractStorageName(path));
+        PSB::registerRootResources({ path, TVPExtractStorageName(path) }, *file);
 
         std::vector<std::string> pathParts;
         scanValue(std::const_pointer_cast<PSB::PSBDictionary>(root), pathParts,
                   *snapshot);
+        collectRootResources(root, *snapshot);
+        if(loweredPath.find("yuzulogo.mtn") != std::string::npos ||
+           loweredPath.find("m2logo.mtn") != std::string::npos) {
+            LOGGER->warn("Motion logo snapshot parsed: path={} clips={} mainLabels={} sources={}",
+                         snapshot->path, snapshot->clipsByLabel.size(),
+                         snapshot->mainTimelineLabels.size(),
+                         snapshot->sourceCandidates.size());
+        }
         registerModuleSnapshot(snapshot->moduleValue, snapshot);
         return snapshot;
     }

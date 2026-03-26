@@ -11,7 +11,7 @@
 #include "ncbind.hpp"
 #include "PSBFile.h"
 #include "PSBHeader.h"
-#include "PSBMedia.h"
+#include "PSBMediaRegistry.h"
 #include "PSBValue.h"
 
 #define NCB_MODULE_NAME TJS_W("psbfile.dll")
@@ -19,21 +19,10 @@
 #define LOGGER spdlog::get("plugin")
 
 using namespace PSB;
-static PSBMedia *psbMedia = nullptr;
 
-void initPsbFile() {
-    psbMedia = new PSBMedia();
-    TVPRegisterStorageMedia(psbMedia);
-    psbMedia->Release();
-    LOGGER->info("initPsbFile");
-}
+void initPsbFile() { initPSBMedia(); }
 
-void deInitPsbFile() {
-    if(psbMedia != nullptr) {
-        TVPUnregisterStorageMedia(psbMedia);
-    }
-    LOGGER->info("deInitPsbFile");
-}
+void deInitPsbFile() { deInitPSBMedia(); }
 
 static tjs_error getRoot(tTJSVariant *r, tjs_int n, tTJSVariant **p,
                          iTJSDispatch2 *obj) {
@@ -66,16 +55,7 @@ static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
             LOGGER->info("cannot load psb file : {}", path.AsStdString());
             loadSuccess = false;
         }
-        auto objs = self->getObjects();
-        for(const auto &[k, v] : *objs) {
-            const auto &res = std::dynamic_pointer_cast<PSBResource>(v);
-            if(res == nullptr)
-                continue;
-            ttstr pathN{ k };
-            psbMedia->NormalizeDomainName(path);
-            psbMedia->NormalizePathName(pathN);
-            psbMedia->add((path + TJS_W("/") + pathN).AsStdString(), res);
-        }
+        registerRootResources(path, *self);
     } else if((*p)->Type() == tvtOctet) {
         LOGGER->critical("PSBFile::load stream no implement!");
         loadSuccess = false;
