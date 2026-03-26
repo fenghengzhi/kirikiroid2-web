@@ -33,6 +33,10 @@ namespace motion {
             return _owner.Type() == tvtObject ? _owner.AsObjectNoAddRef() : nullptr;
         }
 
+        const tTJSVariant &getOwnerVariant() const {
+            return _owner;
+        }
+
     private:
         tTJSVariant _owner;
     };

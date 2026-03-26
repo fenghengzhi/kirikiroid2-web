@@ -10,10 +10,12 @@
 #include <cctype>
 #include <cstring>
 #include <optional>
+#include <sstream>
 #include <unordered_set>
 #include <vector>
 
 #include "LayerIntf.h"
+#include "LayerBitmapIntf.h"
 #include "RuntimeSupport.h"
 #include "ResourceManager.h"
 #include "SeparateLayerAdaptor.h"
@@ -362,7 +364,6 @@ namespace motion {
             }
         };
 
-#ifndef KRKR2_NO_OPENCV
         struct FrameContentState {
             bool visible = false;
             std::string src;
@@ -373,11 +374,6 @@ namespace motion {
             double width = 0.0;
             double height = 0.0;
             double opacity = 1.0;
-        };
-
-        struct LoadedSourceImage {
-            bool attempted = false;
-            cv::Mat image;
         };
 
         std::optional<double>
@@ -439,14 +435,6 @@ namespace motion {
                 return nullptr;
             }
             return std::dynamic_pointer_cast<PSB::PSBDictionary>((*dic)[key]);
-        }
-
-        cv::Matx33d translateMatrix(double x, double y) {
-            return cv::Matx33d(1.0, 0.0, x, 0.0, 1.0, y, 0.0, 0.0, 1.0);
-        }
-
-        cv::Matx33d scaleMatrix(double x, double y) {
-            return cv::Matx33d(x, 0.0, 0.0, 0.0, y, 0.0, 0.0, 0.0, 1.0);
         }
 
         double activeClipTime(const detail::PlayerRuntime &runtime,
@@ -548,6 +536,20 @@ namespace motion {
             }
 
             return state;
+        }
+
+#ifndef KRKR2_NO_OPENCV
+        struct LoadedSourceImage {
+            bool attempted = false;
+            cv::Mat image;
+        };
+
+        cv::Matx33d translateMatrix(double x, double y) {
+            return cv::Matx33d(1.0, 0.0, x, 0.0, 1.0, y, 0.0, 0.0, 1.0);
+        }
+
+        cv::Matx33d scaleMatrix(double x, double y) {
+            return cv::Matx33d(x, 0.0, 0.0, 0.0, y, 0.0, 0.0, 0.0, 1.0);
         }
 
         bool copyLayerMainImage(tTJSNI_BaseLayer *layer, cv::Mat &image) {
@@ -697,6 +699,10 @@ namespace motion {
                                  const FrameContentState &state,
                                  const cv::Matx33d &transform) {
             if(!state.visible || state.src.empty() || state.src == "layout") {
+                if(isLogoMotionLike(snapshot.path) && !state.src.empty() && state.src != "layout") {
+                    LOGGER->warn("drawEvaluatedSource skip: visible={} src='{}' opacity={}",
+                                 state.visible, state.src, state.opacity);
+                }
                 return false;
             }
 
@@ -766,6 +772,504 @@ namespace motion {
             return drewAny;
         }
 #endif
+
+        // -----------------------------------------------------------------
+        // Layer-API based rendering (no OpenCV dependency, used in web build)
+        // -----------------------------------------------------------------
+
+        // Find a PSB resource node by source name. The motion layer `src`
+        // field uses paths like "src/yuzu/white_box" but the PSB tree stores
+        // resources under "source/yuzu/icon/white_box/pixel".
+        // We search resourcesByPath for a match on the basename.
+        const PSB::PSBResource *findPSBResourceBySourceName(
+            const detail::MotionSnapshot &snapshot,
+            const std::string &source,
+            int &outWidth, int &outHeight) {
+            outWidth = 0;
+            outHeight = 0;
+            if(source.empty()) {
+                return nullptr;
+            }
+
+            const auto lastSlash = source.rfind('/');
+            const auto baseName = (lastSlash != std::string::npos)
+                ? source.substr(lastSlash + 1) : source;
+
+            // Search resourcesByPath for a key ending with /<baseName>/pixel
+            for(const auto &[resPath, resource] : snapshot.resourcesByPath) {
+                const auto targetSuffix = "/" + baseName + "/pixel";
+                if(resPath.size() >= targetSuffix.size() &&
+                   resPath.compare(resPath.size() - targetSuffix.size(),
+                                   targetSuffix.size(), targetSuffix) == 0) {
+                    // Found the pixel resource. Now find width/height siblings.
+                    // The parent path is resPath minus "/pixel"
+                    const auto parentPath = resPath.substr(0, resPath.size() - 6); // strip "/pixel"
+
+                    // Look for width/height in the PSB tree
+                    if(snapshot.root) {
+                        // Navigate the PSB tree to find the parent node
+                        auto node = snapshot.root;
+
+                        // Parse the parent path and navigate
+                        std::string segment;
+                        std::istringstream pathStream(parentPath);
+                        while(std::getline(pathStream, segment, '/')) {
+                            if(segment.empty() || !node) continue;
+                            auto child = std::dynamic_pointer_cast<const PSB::PSBDictionary>(
+                                (*node)[segment]);
+                            if(!child) {
+                                node = nullptr;
+                                break;
+                            }
+                            node = child;
+                        }
+
+                        if(node) {
+                            if(auto w = psbDictionaryNumber(node, "width")) {
+                                outWidth = static_cast<int>(*w);
+                            }
+                            if(auto h = psbDictionaryNumber(node, "height")) {
+                                outHeight = static_cast<int>(*h);
+                            }
+                            // Also check truncated dimensions
+                            if(outWidth <= 0) {
+                                if(auto tw = psbDictionaryNumber(node, "truncated_width")) {
+                                    outWidth = static_cast<int>(*tw);
+                                }
+                            }
+                            if(outHeight <= 0) {
+                                if(auto th = psbDictionaryNumber(node, "truncated_height")) {
+                                    outHeight = static_cast<int>(*th);
+                                }
+                            }
+                            // Log compress type and truncated dims
+                            if(isLogoMotionLike(snapshot.path)) {
+                                auto compressStr = psbDictionaryString(node, "compress");
+                                auto tw = psbDictionaryNumber(node, "truncated_width");
+                                auto th = psbDictionaryNumber(node, "truncated_height");
+                                LOGGER->warn("PSB source: {}x{} compress='{}' trunc={}x{}",
+                                             outWidth, outHeight, compressStr,
+                                             tw.value_or(-1), th.value_or(-1));
+                            }
+                        }
+                    }
+
+                    if(outWidth > 0 && outHeight > 0 && !resource->data.empty()) {
+                        return resource.get();
+                    }
+                }
+            }
+            return nullptr;
+        }
+
+        // Write raw BGRA pixel data from a PSB resource to a Layer
+        bool loadPSBResourceToLayer(
+            tTJSNI_BaseLayer *layer,
+            const PSB::PSBResource &resource,
+            int width, int height) {
+            if(!layer || width <= 0 || height <= 0 || resource.data.empty()) {
+                return false;
+            }
+
+            if(!layer->GetHasImage()) {
+                layer->SetHasImage(true);
+            }
+            layer->SetImageSize(static_cast<tjs_uint>(width),
+                                static_cast<tjs_uint>(height));
+
+            auto *dstPixels = reinterpret_cast<std::uint8_t *>(
+                layer->GetMainImagePixelBufferForWrite());
+            const auto pitch = layer->GetMainImagePixelBufferPitch();
+            if(!dstPixels || pitch <= 0) {
+                return false;
+            }
+
+            const auto srcPitch = static_cast<size_t>(width) * 4u;
+            const auto expectedSize = srcPitch * static_cast<size_t>(height);
+
+            if(resource.data.size() >= expectedSize) {
+                // Raw BGRA32 pixel data
+                for(int row = 0; row < height; ++row) {
+                    std::memcpy(
+                        dstPixels + static_cast<size_t>(pitch) * row,
+                        resource.data.data() + srcPitch * row,
+                        srcPitch);
+                }
+                return true;
+            }
+
+            // Debug: hex dump first 32 bytes
+            {
+                std::string hex;
+                for(size_t i = 0; i < std::min<size_t>(32, resource.data.size()); ++i) {
+                    char buf[4];
+                    snprintf(buf, sizeof(buf), "%02x ", resource.data[i]);
+                    hex += buf;
+                }
+                LOGGER->warn("PSB resource hex[0..31] for {}x{}: {}", width, height, hex);
+            }
+
+            // Data is compressed. Try M2-style RL decompression.
+            // Each pixel channel (B,G,R,A) is encoded separately with:
+            //   byte 0x00-0x7F: copy (byte+1) literal values
+            //   byte 0x80-0xFF: repeat next value (256-byte+1) times
+            // Channels are concatenated in B,G,R,A order but the actual
+            // pixel data may be stored as separate channel planes.
+            {
+                auto rlDecode = [](const std::uint8_t *src, size_t srcLen,
+                                   std::uint8_t *dst, size_t dstLen) -> bool {
+                    size_t si = 0, di = 0;
+                    while(si < srcLen && di < dstLen) {
+                        std::uint8_t cmd = src[si++];
+                        if(cmd <= 0x7F) {
+                            size_t count = static_cast<size_t>(cmd) + 1u;
+                            for(size_t i = 0; i < count && si < srcLen && di < dstLen; ++i) {
+                                dst[di++] = src[si++];
+                            }
+                        } else {
+                            size_t count = 256u - static_cast<size_t>(cmd) + 1u;
+                            if(si >= srcLen) break;
+                            std::uint8_t value = src[si++];
+                            for(size_t i = 0; i < count && di < dstLen; ++i) {
+                                dst[di++] = value;
+                            }
+                        }
+                    }
+                    return di == dstLen;
+                };
+
+                const size_t pixelCount = static_cast<size_t>(width) *
+                    static_cast<size_t>(height);
+
+                // Try decoding as 4 separate channel planes (BGRA)
+                std::vector<std::uint8_t> decoded(expectedSize);
+
+                // FreeMote RL: marker <= 0x7F → literal (marker+1 bytes)
+                //              marker >  0x7F → repeat next byte (0x101 - marker) times
+                const std::uint8_t *src = resource.data.data();
+                size_t srcOff = 0;
+                bool success = true;
+                for(int ch = 0; ch < 4; ++ch) {
+                    std::vector<std::uint8_t> channelData(pixelCount, 0);
+                    size_t si = srcOff, di = 0;
+                    while(si < resource.data.size() && di < pixelCount) {
+                        std::uint8_t marker = src[si++];
+                        if(marker <= 0x7F) {
+                            size_t count = static_cast<size_t>(marker) + 1u;
+                            for(size_t i = 0; i < count && si < resource.data.size() && di < pixelCount; ++i) {
+                                channelData[di++] = src[si++];
+                            }
+                        } else {
+                            size_t count = 0x101u - static_cast<size_t>(marker);
+                            if(si >= resource.data.size()) break;
+                            std::uint8_t value = src[si++];
+                            for(size_t i = 0; i < count && di < pixelCount; ++i) {
+                                channelData[di++] = value;
+                            }
+                        }
+                    }
+                    if(di == 0) {
+                        success = false;
+                        break;
+                    }
+                    // Channel order in M2 PSB: R, G, B, A → store as BGRA
+                    // (TJS Layer pixel format is BGRA)
+                    // Map: ch0→R(offset 2), ch1→G(offset 1), ch2→B(offset 0), ch3→A(offset 3)
+                    static const int channelOffset[] = { 2, 1, 0, 3 };
+                    const int offset = channelOffset[ch];
+                    for(size_t p = 0; p < pixelCount; ++p) {
+                        decoded[p * 4 + offset] = channelData[p];
+                    }
+                    srcOff = si;
+                }
+
+                if(success) {
+                    // Copy decoded BGRA data to the layer buffer
+                    for(int row = 0; row < height; ++row) {
+                        std::memcpy(
+                            dstPixels + static_cast<size_t>(pitch) * row,
+                            decoded.data() + srcPitch * row,
+                            srcPitch);
+                    }
+                    return true;
+                }
+            }
+
+            LOGGER->warn("PSB resource decompression failed: have={} expected={} ({}x{})",
+                         resource.data.size(), expectedSize, width, height);
+            return false;
+        }
+
+        // Try to resolve a source image path for the given source name in the
+        // motion snapshot. Uses the same candidate generation logic as
+        // loadMotionSourceImage but without OpenCV.
+        ttstr resolveMotionSourcePath(
+            const detail::MotionSnapshot &snapshot,
+            const std::string &source) {
+            if(source.empty()) {
+                return {};
+            }
+
+            std::vector<ttstr> candidates;
+            const auto sourcePath = detail::widen(source);
+            candidates.push_back(sourcePath);
+            pushGraphicCandidates(candidates, sourcePath);
+            detail::appendEmbeddedSourceCandidates(snapshot, source, candidates);
+            for(const auto &alias : snapshot.resourceAliases) {
+                const auto embeddedBase = ttstr{ TJS_W("psb://") } +
+                    detail::widen(alias) + TJS_W("/") + sourcePath;
+                pushGraphicCandidates(candidates, embeddedBase);
+            }
+
+            // PSB motion resources are stored in a tree like:
+            //   source/<group>/<subgroup>/<name>/pixel
+            // but motion layers reference them as:
+            //   src/<group>/<name>
+            // Scan resourcesByPath for matching resource paths.
+            {
+                const auto lastSlash = source.rfind('/');
+                const auto baseName = (lastSlash != std::string::npos)
+                    ? source.substr(lastSlash + 1) : source;
+
+                for(const auto &[resPath, _] : snapshot.resourcesByPath) {
+                    const auto targetSuffix = "/" + baseName + "/pixel";
+                    if(resPath.size() >= targetSuffix.size() &&
+                       resPath.compare(resPath.size() - targetSuffix.size(),
+                                       targetSuffix.size(), targetSuffix) == 0) {
+                        for(const auto &alias : snapshot.resourceAliases) {
+                            const auto psbPath = ttstr{ TJS_W("psb://") } +
+                                detail::widen(alias) + TJS_W("/") +
+                                detail::widen(resPath);
+                            pushGraphicCandidates(candidates, psbPath);
+                        }
+                    }
+                }
+            }
+
+            std::unordered_set<std::string> seen;
+            for(const auto &candidate : candidates) {
+                const auto candidateKey = detail::narrow(candidate);
+                if(!seen.insert(candidateKey).second || candidate.IsEmpty()) {
+                    continue;
+                }
+                if(candidateKey.rfind("psb://", 0) == 0) {
+                    // For psb:// paths, check if the resource exists via the
+                    // storage system (PSBMedia::CheckExistentStorage)
+                    if(TVPIsExistentStorage(candidate)) {
+                        return candidate;
+                    }
+                    continue;
+                }
+                if(const auto placed = TVPGetPlacedPath(candidate);
+                   !placed.IsEmpty()) {
+                    return placed;
+                }
+            }
+            return {};
+        }
+
+        // Render a single motion layer node to the target using Layer API.
+        // scratchLayer is used temporarily to load source images.
+        bool renderMotionLayerViaLayerAPI(
+            tTJSNI_BaseLayer *target,
+            tTJSNI_BaseLayer *scratchLayer,
+            const detail::MotionSnapshot &snapshot,
+            std::unordered_set<std::string> &loadedSources,
+            const std::shared_ptr<const PSB::PSBDictionary> &layerNode,
+            double time,
+            double parentX, double parentY,
+            double parentScaleX, double parentScaleY) {
+            if(!layerNode) {
+                return false;
+            }
+
+            const auto state = evaluateLayerContent(layerNode, time);
+            const double curX = parentX + (state.x + state.ox) * parentScaleX;
+            const double curY = parentY + (state.y + state.oy) * parentScaleY;
+            double curScaleX = parentScaleX;
+            double curScaleY = parentScaleY;
+            const bool logoLike = isLogoMotionLike(snapshot.path);
+
+            bool drewAny = false;
+
+            if(logoLike && (!state.src.empty() || state.visible)) {
+                const auto children = psbDictionaryList(layerNode, "children");
+                LOGGER->warn("LayerAPI node: src='{}' visible={} opacity={:.2f} "
+                             "pos=({:.0f},{:.0f}) scale=({:.2f},{:.2f}) children={}",
+                             state.src, state.visible, state.opacity,
+                             curX, curY, curScaleX, curScaleY,
+                             children ? children->size() : 0u);
+            }
+            // Draw this node's source image if visible
+            if(state.visible && !state.src.empty() && state.src != "layout") {
+                bool sourceLoaded = false;
+                double srcW = 0.0, srcH = 0.0;
+
+                // Try 1: resolve via storage system (for external image files)
+                {
+                    const auto resolvedPath = resolveMotionSourcePath(snapshot, state.src);
+                    if(!resolvedPath.IsEmpty()) {
+                        if(logoLike) {
+                            LOGGER->warn("LayerAPI: loading src='{}' path='{}'",
+                                         state.src, resolvedPath.AsStdString());
+                        }
+                        // If the path has no extension, try with .png
+                        ttstr loadPath = resolvedPath;
+                        const auto pathStr = detail::narrow(resolvedPath);
+                        if(pathStr.rfind('.') == std::string::npos ||
+                           pathStr.rfind('.') < pathStr.rfind('/')) {
+                            loadPath = resolvedPath + TJS_W(".png");
+                        }
+                        try {
+                            if(!scratchLayer->GetHasImage()) {
+                                scratchLayer->SetHasImage(true);
+                            }
+                            if(logoLike) {
+                                LOGGER->warn("LayerAPI: calling LoadImages path='{}'",
+                                             loadPath.AsStdString());
+                            }
+                            if(auto *meta = scratchLayer->LoadImages(loadPath, TVP_clNone)) {
+                                meta->Release();
+                            }
+                            auto *srcImage = scratchLayer->GetMainImage();
+                            if(srcImage && srcImage->GetWidth() > 0 && srcImage->GetHeight() > 0) {
+                                srcW = static_cast<double>(srcImage->GetWidth());
+                                srcH = static_cast<double>(srcImage->GetHeight());
+                                sourceLoaded = true;
+                                if(logoLike) {
+                                    LOGGER->warn("LayerAPI: loaded via LoadImages {}x{}",
+                                                 srcImage->GetWidth(), srcImage->GetHeight());
+                                }
+                            }
+                        } catch(const eTJS &e) {
+                            if(logoLike) {
+                                LOGGER->warn("LayerAPI: LoadImages failed TJS: {}",
+                                             ttstr(e.GetMessage()).AsStdString());
+                            }
+                        } catch(const std::exception &e) {
+                            if(logoLike) {
+                                LOGGER->warn("LayerAPI: LoadImages failed: {}", e.what());
+                            }
+                        } catch(...) {
+                            if(logoLike) {
+                                LOGGER->warn("LayerAPI: LoadImages failed unknown");
+                            }
+                        }
+                    }
+                }
+
+                // Try 2: load directly from PSB resource data
+                if(!sourceLoaded) {
+                    int resW = 0, resH = 0;
+                    const auto *resource = findPSBResourceBySourceName(
+                        snapshot, state.src, resW, resH);
+                    if(resource && resW > 0 && resH > 0) {
+                        if(loadPSBResourceToLayer(scratchLayer, *resource, resW, resH)) {
+                            srcW = static_cast<double>(resW);
+                            srcH = static_cast<double>(resH);
+                            sourceLoaded = true;
+                            if(logoLike) {
+                                LOGGER->warn("LayerAPI: loaded PSB resource src='{}' {}x{} data={}",
+                                             state.src, resW, resH, resource->data.size());
+                            }
+                        } else if(logoLike) {
+                            LOGGER->warn("LayerAPI: PSB resource load failed src='{}' {}x{} data={}",
+                                         state.src, resW, resH, resource->data.size());
+                        }
+                    } else if(logoLike) {
+                        LOGGER->warn("LayerAPI: no PSB resource for src='{}'", state.src);
+                    }
+                }
+
+                if(sourceLoaded && srcW > 0.0 && srcH > 0.0) {
+                    // Direct pixel compositing onto target layer
+                    const double drawW = state.width > 0.0 ? state.width : srcW;
+                    const double drawH = state.height > 0.0 ? state.height : srcH;
+                    const double scaleX = (drawW / srcW) * curScaleX;
+                    const double scaleY = (drawH / srcH) * curScaleY;
+                    const double opacity = state.opacity;
+
+                    // Get the source pixels from scratch layer
+                    auto *srcBuf = reinterpret_cast<const std::uint8_t *>(
+                        scratchLayer->GetMainImagePixelBuffer());
+                    auto srcPitchVal = scratchLayer->GetMainImagePixelBufferPitch();
+                    int srcIW = static_cast<int>(srcW);
+                    int srcIH = static_cast<int>(srcH);
+
+                    // Get the target pixels
+                    auto *dstBuf = reinterpret_cast<std::uint8_t *>(
+                        target->GetMainImagePixelBufferForWrite());
+                    auto dstPitchVal = target->GetMainImagePixelBufferPitch();
+                    int dstW = static_cast<int>(target->GetImageWidth());
+                    int dstH = static_cast<int>(target->GetImageHeight());
+
+                    if(srcBuf && dstBuf && dstPitchVal > 0 && srcPitchVal > 0 &&
+                       dstW > 0 && dstH > 0) {
+                        // Simple blit with scaling and alpha blending
+                        const int dstStartX = static_cast<int>(curX);
+                        const int dstStartY = static_cast<int>(curY);
+                        const int drawIW = static_cast<int>(srcW * scaleX);
+                        const int drawIH = static_cast<int>(srcH * scaleY);
+
+                        for(int dy = 0; dy < drawIH; ++dy) {
+                            int dstY = dstStartY + dy;
+                            if(dstY < 0 || dstY >= dstH) continue;
+                            int srcY = static_cast<int>(dy / scaleY);
+                            if(srcY < 0 || srcY >= srcIH) continue;
+
+                            const auto *srcRow = srcBuf + srcPitchVal * srcY;
+                            auto *dstRow = dstBuf + dstPitchVal * dstY;
+
+                            for(int dx = 0; dx < drawIW; ++dx) {
+                                int dstX = dstStartX + dx;
+                                if(dstX < 0 || dstX >= dstW) continue;
+                                int srcX = static_cast<int>(dx / scaleX);
+                                if(srcX < 0 || srcX >= srcIW) continue;
+
+                                const auto *sp = srcRow + srcX * 4;
+                                auto *dp = dstRow + dstX * 4;
+
+                                // Alpha blend: src BGRA over dst BGRA
+                                int sa = static_cast<int>(sp[3] * opacity);
+                                if(sa <= 0) continue;
+                                if(sa >= 255) {
+                                    dp[0] = sp[0]; dp[1] = sp[1];
+                                    dp[2] = sp[2]; dp[3] = 255;
+                                } else {
+                                    int ia = 255 - sa;
+                                    dp[0] = static_cast<std::uint8_t>((sp[0] * sa + dp[0] * ia) / 255);
+                                    dp[1] = static_cast<std::uint8_t>((sp[1] * sa + dp[1] * ia) / 255);
+                                    dp[2] = static_cast<std::uint8_t>((sp[2] * sa + dp[2] * ia) / 255);
+                                    dp[3] = static_cast<std::uint8_t>(std::min(255, sa + dp[3] * ia / 255));
+                                }
+                            }
+                        }
+                        drewAny = true;
+                        loadedSources.insert(state.src);
+                    }
+                }
+            }
+
+            // Process children
+            if(const auto children = psbDictionaryList(layerNode, "children")) {
+                double childScaleX = curScaleX;
+                double childScaleY = curScaleY;
+                if(state.src == "layout" && state.width > 0.0 && state.height > 0.0) {
+                    childScaleX = curScaleX * state.width;
+                    childScaleY = curScaleY * state.height;
+                }
+
+                for(size_t index = 0; index < children->size(); ++index) {
+                    const auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                        (*children)[static_cast<int>(index)]);
+                    drewAny = renderMotionLayerViaLayerAPI(
+                        target, scratchLayer, snapshot, loadedSources,
+                        child, time, curX, curY, childScaleX, childScaleY) || drewAny;
+                }
+            }
+
+            return drewAny;
+        }
 
     } // namespace
 
@@ -1331,19 +1835,49 @@ namespace motion {
             return false;
         }
 
+        const bool logoLike = isLogoMotionLike(_runtime->activeMotion->path);
+
         tTJSNI_BaseLayer *layer = nullptr;
-        if(TJS_FAILED(layerObject->NativeInstanceSupport(
-               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-               reinterpret_cast<iTJSNativeInstance **>(&layer))) ||
-           !layer) {
-            // layerObject isn't a native Layer—try to find one through
-            // TJS property chain (owner/_owner/targetLayer/layer)
-            tTJSVariant wrapper(layerObject, layerObject);
-            auto *resolved = tryResolveLayerDispatch(wrapper);
-            if(resolved && resolved != layerObject) {
-                return renderToLayer(resolved);
+        {
+            tjs_error nisResult = layerObject->NativeInstanceSupport(
+                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                   reinterpret_cast<iTJSNativeInstance **>(&layer));
+            if(TJS_FAILED(nisResult) || !layer) {
+                // layerObject isn't a native Layer—try to find one through
+                // TJS property chain (owner/_owner/targetLayer/layer)
+                tTJSVariant wrapper(layerObject, layerObject);
+                auto *resolved = tryResolveLayerDispatch(wrapper);
+                if(logoLike) {
+                    LOGGER->warn("renderToLayer: NIS failed hr={} ptr={} obj={} tryResolve={} same={}",
+                                 nisResult, (void*)layer, (void*)layerObject,
+                                 resolved != nullptr,
+                                 resolved == layerObject);
+                }
+                if(resolved && resolved != layerObject) {
+                    return renderToLayer(resolved);
+                }
+
+                // Last resort: try NativeInstanceSupport on layerObject directly
+                // again (sometimes the first call can fail transiently)
+                layer = nullptr;
+                if(TJS_SUCCEEDED(layerObject->NativeInstanceSupport(
+                       TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                       reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
+                   layer) {
+                    if(logoLike) {
+                        LOGGER->warn("renderToLayer: NIS retry SUCCEEDED ptr={}",
+                                     (void*)layer);
+                    }
+                    // Fall through to rendering
+                } else {
+                    return false;
+                }
             }
-            return false;
+        }
+        if(logoLike) {
+            LOGGER->warn("renderToLayer: got native Layer ptr={} w={} h={} resources={}",
+                         (void*)layer, layer->GetWidth(), layer->GetHeight(),
+                         _runtime->activeMotion->resourcesByPath.size());
         }
 
 #ifndef KRKR2_NO_OPENCV
@@ -1376,20 +1910,39 @@ namespace motion {
                         m[0], m[1], m[4], m[2], m[3], m[5], 0.0, 0.0, 1.0);
 
                     bool drewAny = false;
-                    for(const auto &layerName : activeLayerNames()) {
+                    const auto &layerNamesList = activeLayerNames();
+                    if(logoLike) {
+                        LOGGER->warn("renderToLayer OpenCV: canvasSize={}x{} "
+                                     "layerNames={} renderTime={} motionKey={}",
+                                     canvasWidth, canvasHeight,
+                                     layerNamesList.size(), renderTime,
+                                     _motionKey.AsStdString());
+                    }
+                    for(const auto &layerName : layerNamesList) {
                         const auto *layers = activeLayersByName();
                         if(!layers) {
+                            if(logoLike) {
+                                LOGGER->warn("renderToLayer: activeLayersByName returned null");
+                            }
                             break;
                         }
                         const auto it = layers->find(layerName);
                         if(it == layers->end()) {
+                            if(logoLike) {
+                                LOGGER->warn("renderToLayer: layer '{}' not found in map (map size={})",
+                                             layerName, layers->size());
+                            }
                             continue;
                         }
-                        drewAny = renderMotionLayer(
+                        bool result = renderMotionLayer(
                                       canvas, layer, *_runtime->activeMotion,
                                       sourceCache, it->second, renderTime,
-                                      globalTransform) ||
-                            drewAny;
+                                      globalTransform);
+                        if(logoLike) {
+                            LOGGER->warn("renderToLayer: renderMotionLayer '{}' returned {}",
+                                         layerName, result);
+                        }
+                        drewAny = result || drewAny;
                     }
 
                     if(drewAny) {
@@ -1420,6 +1973,94 @@ namespace motion {
                     }
                 } catch(...) {
                     LOGGER->warn("Motion.Player tree render failed for {}",
+                                 _runtime->activeMotion->path);
+                }
+            }
+        }
+#else
+        // Layer-API based rendering (no OpenCV)
+        if(_runtime->activeMotion && !_runtime->activeMotion->resourcesByPath.empty()) {
+            const auto *clip = selectActiveClip();
+            const auto renderTime = activeClipTime(*_runtime, clip);
+
+            int canvasWidth = static_cast<int>(layer->GetWidth());
+            int canvasHeight = static_cast<int>(layer->GetHeight());
+            if(canvasWidth <= 0 || canvasHeight <= 0) {
+                canvasWidth = static_cast<int>(layer->GetImageWidth());
+                canvasHeight = static_cast<int>(layer->GetImageHeight());
+            }
+            if(canvasWidth <= 0 || canvasHeight <= 0) {
+                canvasWidth = static_cast<int>(_runtime->activeMotion->width);
+                canvasHeight = static_cast<int>(_runtime->activeMotion->height);
+            }
+
+            if(canvasWidth > 0 && canvasHeight > 0) {
+                try {
+                    // Ensure target layer has image buffer
+                    if(!layer->GetHasImage()) {
+                        layer->SetHasImage(true);
+                    }
+                    layer->SetImageSize(static_cast<tjs_uint>(canvasWidth),
+                                        static_cast<tjs_uint>(canvasHeight));
+
+                    // Set clip rect to full canvas
+                    layer->SetClip(0, 0, canvasWidth, canvasHeight);
+
+                    // Clear with transparent black
+                    tTVPRect clearRect;
+                    clearRect.left = 0;
+                    clearRect.top = 0;
+                    clearRect.right = canvasWidth;
+                    clearRect.bottom = canvasHeight;
+                    layer->FillRect(clearRect, 0x00000000);
+
+                    const auto &layerNamesList = activeLayerNames();
+                    if(logoLike) {
+                        LOGGER->warn("renderToLayer LayerAPI: canvasSize={}x{} "
+                                     "layerNames={} renderTime={} motionKey={}",
+                                     canvasWidth, canvasHeight,
+                                     layerNamesList.size(), renderTime,
+                                     _motionKey.AsStdString());
+                    }
+
+                    // Apply global affine transform
+                    const auto &m = _runtime->drawAffineMatrix;
+                    const double globalTx = m[4];
+                    const double globalTy = m[5];
+                    const double globalSx = m[0]; // scale X (m11)
+                    const double globalSy = m[3]; // scale Y (m22)
+
+                    bool drewAny = false;
+                    std::unordered_set<std::string> loadedSources;
+
+                    for(const auto &layerName : layerNamesList) {
+                        const auto *layers = activeLayersByName();
+                        if(!layers) break;
+                        const auto it = layers->find(layerName);
+                        if(it == layers->end()) continue;
+
+                        bool result = renderMotionLayerViaLayerAPI(
+                            layer, layer, *_runtime->activeMotion,
+                            loadedSources, it->second, renderTime,
+                            globalTx, globalTy, globalSx, globalSy);
+                        if(logoLike) {
+                            LOGGER->warn("renderToLayer LayerAPI: layer '{}' rendered={}",
+                                         layerName, result);
+                        }
+                        drewAny = result || drewAny;
+                    }
+
+                    if(drewAny) {
+                        layer->Update(false);
+                        _runtime->lastCanvas =
+                            tTJSVariant(layerObject, layerObject);
+                        return true;
+                    }
+                } catch(const std::exception &e) {
+                    LOGGER->warn("Motion.Player LayerAPI render failed for {}: {}",
+                                 _runtime->activeMotion->path, e.what());
+                } catch(...) {
+                    LOGGER->warn("Motion.Player LayerAPI render failed for {}",
                                  _runtime->activeMotion->path);
                 }
             }
@@ -2271,19 +2912,8 @@ namespace motion {
         tTJSNI_BaseLayer *layer = nullptr;
         const bool logoLike = nativeInstance->_runtime->activeMotion &&
             isLogoMotionLike(nativeInstance->_runtime->activeMotion->path);
-        iTJSDispatch2 *owner = nullptr;
-        if(numparams > 0 && param[0] && param[0]->Type() == tvtObject &&
-           param[0]->AsObjectNoAddRef() != nullptr) {
-            owner = tryResolveSeparateAdaptorOwner(*param[0]);
-        }
-        if(logoLike) {
-            LOGGER->warn(
-                "Motion logo drawCompat: path={} hasParam={} hasLayer={} hasOwner={}",
-                nativeInstance->_runtime->activeMotion->path, numparams > 0 && param[0],
-                numparams > 0 && param[0] && tryGetLayerObject(*param[0], layer),
-                owner != nullptr);
-            layer = nullptr;
-        }
+
+        // Fast path: param[0] is directly a native Layer
         if(numparams > 0 && param[0] && tryGetLayerObject(*param[0], layer) &&
            nativeInstance->renderToLayer(param[0]->AsObjectNoAddRef())) {
             if(result) {
@@ -2292,13 +2922,90 @@ namespace motion {
             return TJS_S_OK;
         }
 
+        // SeparateLayerAdaptor path: try to find the real target Layer
         if(numparams > 0 && param[0] && param[0]->Type() == tvtObject &&
            param[0]->AsObjectNoAddRef() != nullptr) {
-            if(owner && nativeInstance->renderToLayer(owner)) {
+            iTJSDispatch2 *paramObj = param[0]->AsObjectNoAddRef();
+
+            // Try 1: resolve via tryResolveLayerDispatch (walks owner/property chain)
+            iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*param[0]);
+            if(resolved && nativeInstance->renderToLayer(resolved)) {
+                if(logoLike) {
+                    LOGGER->warn("drawCompat: SLA rendered via tryResolve");
+                }
                 if(result) {
-                    *result = tTJSVariant(owner, owner);
+                    *result = tTJSVariant(resolved, resolved);
                 }
                 return TJS_S_OK;
+            }
+
+            // Try 2: get native SLA instance and use owner variant directly
+            if(auto *adaptor =
+                   ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+                       paramObj, false)) {
+                const auto &ownerVar = adaptor->getOwnerVariant();
+                if(ownerVar.Type() == tvtObject) {
+                    // Try the variant's Object member
+                    iTJSDispatch2 *ownerObj = ownerVar.AsObjectNoAddRef();
+                    if(ownerObj && nativeInstance->renderToLayer(ownerObj)) {
+                        if(logoLike) {
+                            LOGGER->warn("drawCompat: SLA rendered via owner Object");
+                        }
+                        if(result) {
+                            *result = tTJSVariant(ownerObj, ownerObj);
+                        }
+                        return TJS_S_OK;
+                    }
+
+                    // Try the variant's closure Object (might differ from AsObjectNoAddRef
+                    // if chgthis was used)
+                    auto closure = ownerVar.AsObjectClosureNoAddRef();
+                    if(closure.Object && closure.Object != ownerObj &&
+                       nativeInstance->renderToLayer(closure.Object)) {
+                        if(logoLike) {
+                            LOGGER->warn("drawCompat: SLA rendered via owner closure.Object");
+                        }
+                        if(result) {
+                            *result = tTJSVariant(closure.Object, closure.Object);
+                        }
+                        return TJS_S_OK;
+                    }
+                    if(closure.ObjThis && closure.ObjThis != ownerObj &&
+                       closure.ObjThis != closure.Object &&
+                       nativeInstance->renderToLayer(closure.ObjThis)) {
+                        if(logoLike) {
+                            LOGGER->warn("drawCompat: SLA rendered via owner closure.ObjThis");
+                        }
+                        if(result) {
+                            *result = tTJSVariant(closure.ObjThis, closure.ObjThis);
+                        }
+                        return TJS_S_OK;
+                    }
+
+                    if(logoLike) {
+                        tTJSNI_BaseLayer *testLayer = nullptr;
+                        bool ownerIsLayer = ownerObj && TJS_SUCCEEDED(
+                            ownerObj->NativeInstanceSupport(
+                                TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                                reinterpret_cast<iTJSNativeInstance **>(&testLayer))) &&
+                            testLayer;
+                        LOGGER->warn("drawCompat: SLA all attempts failed. "
+                                     "ownerObj={} ownerIsLayer={} closureObj={} closureObjThis={} "
+                                     "resources={} layerNames={}",
+                                     (void*)ownerObj, ownerIsLayer,
+                                     (void*)closure.Object, (void*)closure.ObjThis,
+                                     nativeInstance->_runtime->activeMotion
+                                         ? nativeInstance->_runtime->activeMotion->resourcesByPath.size() : 0u,
+                                     nativeInstance->activeLayerNames().size());
+                    }
+                }
+            } else if(logoLike) {
+                LOGGER->warn("drawCompat: param[0] is not an SLA native instance");
+                // Try the resolved dispatch directly even without SLA native
+                if(resolved) {
+                    LOGGER->warn("drawCompat: resolved={} but renderToLayer failed",
+                                 (void*)resolved);
+                }
             }
         }
 
