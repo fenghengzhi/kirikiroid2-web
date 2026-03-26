@@ -438,13 +438,23 @@ tjs_error tTJSNI_BaseLayer::Construct(tjs_int numparams, tTJSVariant **param,
         (tjs_intptr_t)(tjs_int64)iface_v);
 
     // get the layer native instance
-    clo = param[1]->AsObjectClosureNoAddRef();
     tTJSNI_Layer *lay = nullptr;
-    if(clo.Object) {
-        if(TJS_FAILED(clo.Object->NativeInstanceSupport(
+    if(param[1]->Type() == tvtObject && param[1]->AsObjectNoAddRef()) {
+        iTJSDispatch2 *parentObj = param[1]->AsObjectNoAddRef();
+        if(TJS_FAILED(parentObj->NativeInstanceSupport(
                TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-               (iTJSNativeInstance **)&lay)))
-            TVPThrowExceptionMessage(TVPSpecifyLayer);
+               (iTJSNativeInstance **)&lay))) {
+            // Fallback: try via closure's Object member
+            clo = param[1]->AsObjectClosureNoAddRef();
+            if(clo.Object && clo.Object != parentObj) {
+                if(TJS_FAILED(clo.Object->NativeInstanceSupport(
+                       TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                       (iTJSNativeInstance **)&lay)))
+                    TVPThrowExceptionMessage(TVPSpecifyLayer);
+            } else {
+                TVPThrowExceptionMessage(TVPSpecifyLayer);
+            }
+        }
     }
 
     // retrieve manager

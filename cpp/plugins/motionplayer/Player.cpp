@@ -245,28 +245,58 @@ namespace motion {
             return false;
         }
 
-        iTJSDispatch2 *tryResolveSeparateAdaptorOwner(const tTJSVariant &value) {
+        // Resolve a real Layer dispatch from a TJS value that might be
+        // a SeparateLayerAdaptor, an AffineLayer wrapper, or a raw Layer.
+        iTJSDispatch2 *tryResolveLayerDispatch(const tTJSVariant &value) {
             if(value.Type() != tvtObject || value.AsObjectNoAddRef() == nullptr) {
                 return nullptr;
             }
 
-            if(auto *adaptor =
-                   ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
-                       value.AsObjectNoAddRef(), false)) {
-                return adaptor->getOwner();
+            iTJSDispatch2 *obj = value.AsObjectNoAddRef();
+
+            // Direct Layer check
+            {
+                tTJSNI_BaseLayer *layer = nullptr;
+                if(TJS_SUCCEEDED(obj->NativeInstanceSupport(
+                       TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                       reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
+                   layer) {
+                    return obj;
+                }
             }
 
-            tTJSVariant owner;
-            if(getObjectProperty(value, TJS_W("owner"), owner) &&
-               owner.Type() == tvtObject && owner.AsObjectNoAddRef() != nullptr) {
-                return owner.AsObjectNoAddRef();
+            // ncb SeparateLayerAdaptor → owner
+            if(auto *adaptor =
+                   ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+                       obj, false)) {
+                auto *ownerObj = adaptor->getOwner();
+                if(ownerObj) {
+                    auto ownerResolved = tryResolveLayerDispatch(
+                        tTJSVariant(ownerObj, ownerObj));
+                    if(ownerResolved) return ownerResolved;
+                }
             }
-            if(getObjectProperty(value, TJS_W("_owner"), owner) &&
-               owner.Type() == tvtObject && owner.AsObjectNoAddRef() != nullptr) {
-                return owner.AsObjectNoAddRef();
+
+            // TJS property chain: owner, _owner, targetLayer
+            static const tjs_char *propNames[] = {
+                TJS_W("owner"), TJS_W("_owner"), TJS_W("targetLayer"),
+                TJS_W("layer"), nullptr };
+            for(int i = 0; propNames[i]; ++i) {
+                tTJSVariant propVal;
+                if(getObjectProperty(value, propNames[i], propVal) &&
+                   propVal.Type() == tvtObject &&
+                   propVal.AsObjectNoAddRef() != nullptr &&
+                   propVal.AsObjectNoAddRef() != obj) {
+                    auto *resolved = tryResolveLayerDispatch(propVal);
+                    if(resolved) return resolved;
+                }
             }
 
             return nullptr;
+        }
+
+        iTJSDispatch2 *tryResolveSeparateAdaptorOwner(const tTJSVariant &value) {
+            return tryResolveLayerDispatch(value);
         }
 
         void pushGraphicCandidates(std::vector<ttstr> &candidates,
@@ -1298,6 +1328,13 @@ namespace motion {
                TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
                reinterpret_cast<iTJSNativeInstance **>(&layer))) ||
            !layer) {
+            // layerObject isn't a native Layer—try to find one through
+            // TJS property chain (owner/_owner/targetLayer/layer)
+            tTJSVariant wrapper(layerObject, layerObject);
+            auto *resolved = tryResolveLayerDispatch(wrapper);
+            if(resolved && resolved != layerObject) {
+                return renderToLayer(resolved);
+            }
             return false;
         }
 
