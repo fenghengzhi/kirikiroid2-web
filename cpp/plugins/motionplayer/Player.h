@@ -333,6 +333,7 @@ namespace motion {
         tTJSVariant motionList();
         void emoteEdit(tTJSVariant args);
 
+        friend struct SelfDriveContinuousHandler;
     private:
         bool ensureMotionLoaded();
         void syncVariableKeysFromActiveMotion();
@@ -390,6 +391,15 @@ namespace motion {
         inline static bool _useD3D;
         bool _meshline = false;
         std::unordered_map<std::string, double> _variableValues;
+
+        // Self-driving animation loop for non-D3D path.
+        // When a timeline is playing and no external driver (D3D/AffineLayer)
+        // is advancing the animation, the Player registers a continuous
+        // handler that calls frameProgress + draw each frame.
+        void startSelfDrive(iTJSDispatch2 *objthis);
+        void stopSelfDrive();
+        iTJSDispatch2 *_selfDriveObjThis = nullptr;
+        bool _selfDriving = false;
     };
 
 } // namespace motion

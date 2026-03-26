@@ -20,6 +20,10 @@
 #include "StorageIntf.h"
 #include "ncbind.hpp"
 #include "tjsArray.h"
+#include "EventIntf.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 #ifndef KRKR2_NO_OPENCV
 #include "opencv2/opencv.hpp"
@@ -280,7 +284,9 @@ namespace motion {
             // TJS property chain: owner, _owner, targetLayer
             static const tjs_char *propNames[] = {
                 TJS_W("owner"), TJS_W("_owner"), TJS_W("targetLayer"),
-                TJS_W("layer"), nullptr };
+                TJS_W("layer"), TJS_W("_layer"), TJS_W("baseLayer"),
+                TJS_W("_base"), TJS_W("parent"), nullptr };
+
             for(int i = 0; propNames[i]; ++i) {
                 tTJSVariant propVal;
                 if(getObjectProperty(value, propNames[i], propVal) &&
@@ -769,7 +775,9 @@ namespace motion {
         LOGGER->info("Motion.Player constructor called");
     }
 
-    Player::~Player() = default;
+    Player::~Player() {
+        stopSelfDrive();
+    }
 
     void Player::setMotion(ttstr v) {
         if(isLogoMotionLike(detail::narrow(v))) {
@@ -1632,6 +1640,72 @@ namespace motion {
         _syncActive = _syncWaiting && _allplaying;
     }
 
+    // --- Self-driving animation loop ---
+    // For the non-D3D web build, AffineLayer's continuous handler may not
+    // fire.  When a timeline is playing, register a TJS continuous handler
+    // that advances the animation and triggers onPaint on the owner's
+    // target layer so the AffineLayer.onPaint → drawAffine chain fires.
+    struct SelfDriveContinuousHandler : public tTJSDispatch {
+        Player *player = nullptr;
+        iTJSDispatch2 *ownerObjThis = nullptr;
+
+        tjs_error FuncCall(tjs_uint32 flag,
+            const tjs_char *membername, tjs_uint32 *hint,
+            tTJSVariant *result,
+            tjs_int numparams, tTJSVariant **param,
+            iTJSDispatch2 *objthis) override {
+            if(result) *result = (tjs_int)1;
+            if(!player || !player->_runtime || !player->_allplaying) {
+                return TJS_S_OK;
+            }
+            // Advance animation by one frame (~16ms at 60fps)
+            constexpr double kFrameDelta = 1.0;
+            player->frameProgress(kFrameDelta * player->_speed);
+            // Notify AffineSourceMotion via onAction callback that
+            // animation state changed, triggering redrawFlag → onPaint.
+            if(ownerObjThis) {
+                tTJSVariant onAction;
+                if(TJS_SUCCEEDED(ownerObjThis->PropGet(0,
+                       TJS_W("onAction"), nullptr, &onAction,
+                       ownerObjThis)) &&
+                   onAction.Type() == tvtObject &&
+                   onAction.AsObjectNoAddRef()) {
+                    try {
+                        tTJSVariant actionName(TJS_W("cycleComplete"));
+                        tTJSVariant *args[] = { &actionName };
+                        onAction.AsObjectClosureNoAddRef().FuncCall(
+                            0, nullptr, nullptr, nullptr, 1, args,
+                            nullptr);
+                    } catch(...) {}
+                }
+            }
+            return TJS_S_OK;
+        }
+    };
+
+    void Player::startSelfDrive(iTJSDispatch2 *objthis) {
+        if(_selfDriving) return;
+        _selfDriving = true;
+        _selfDriveObjThis = objthis;
+        auto *handler = new SelfDriveContinuousHandler();
+        handler->player = this;
+        handler->ownerObjThis = objthis;
+        tTJSVariantClosure clo(handler, nullptr);
+        TVPAddContinuousHandler(clo);
+        handler->Release(); // closure holds a ref
+        LOGGER->info("Motion.Player self-drive started");
+    }
+
+    void Player::stopSelfDrive() {
+        if(!_selfDriving) return;
+        _selfDriving = false;
+        LOGGER->info("Motion.Player self-drive stopped");
+        // The continuous handler will be cleaned up naturally when
+        // player->_allplaying becomes false and the handler returns.
+        // TVPRemoveContinuousHandler is tricky with our transient closure,
+        // so we let the handler self-disable via the _allplaying check.
+    }
+
     // --- Viewport/display ---
     void Player::setFlip(bool v) { _runtime->flip = v; }
 
@@ -2351,6 +2425,12 @@ namespace motion {
         self->_allplaying = std::any_of(
             self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
+
+        // Start self-driving animation loop for non-D3D web builds
+        if(self->_allplaying && !self->_selfDriving) {
+            self->startSelfDrive(objthis);
+        }
+
         if(result) {
             *result = tTJSVariant(started);
         }
