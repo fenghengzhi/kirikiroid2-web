@@ -23,6 +23,7 @@
 #include "SysInitIntf.h"
 #include "XP3Archive.h"
 #include "TickCount.h"
+#include "ncbind.hpp"
 
 #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 64
 #define TVP_DEFAULT_AUTOPATH_CACHE_NUM 256
@@ -1129,8 +1130,62 @@ ttstr TVPSearchPlacedPath(const ttstr &name) {
 //---------------------------------------------------------------------------
 // TVPIsExistentStorage
 //---------------------------------------------------------------------------
+static bool TVPIsInternalPlugin(const ttstr &name) {
+    ttstr storage = TVPExtractStorageName(name).AsLowerCase();
+    if(storage.IsEmpty()) return false;
+    if(TVPRegisteredPlugins.find(storage) != TVPRegisteredPlugins.end())
+        return true;
+    if(ncbAutoRegister::HasModule(storage))
+        return true;
+    return false;
+}
+
+// Check if name matches a "motion_XXX.mtn.tjs" pattern and the actual
+// motion file (XXX.mtn) exists.  This bridges the gap between the game's
+// isExistParameter() TJS function (which checks for "motion_<name>.tjs")
+// and motion files that only exist as raw .mtn/.psb storage entries.
+static bool TVPIsMotionParameterFallback(const ttstr &name) {
+    const auto s = name.AsStdString();
+    // Pattern: ...motion_<basename>.tjs
+    const auto prefix = std::string("motion_");
+    const auto suffix = std::string(".tjs");
+    // Extract storage name only (drop path)
+    auto storageName = TVPExtractStorageName(name).AsStdString();
+    if(storageName.size() <= prefix.size() + suffix.size()) return false;
+    // Check prefix
+    std::string lower = storageName;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if(lower.substr(0, prefix.size()) != prefix) return false;
+    if(lower.substr(lower.size() - suffix.size()) != suffix) return false;
+    // Extract the inner name: motion_yuzulogo.mtn.tjs → yuzulogo.mtn
+    auto inner = storageName.substr(prefix.size(),
+                                    storageName.size() - prefix.size() - suffix.size());
+    // Check if the inner name has a motion-like extension
+    auto dot = inner.rfind('.');
+    if(dot == std::string::npos) return false;
+    auto ext = inner.substr(dot);
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if(ext != ".mtn" && ext != ".psb") return false;
+    // Check if the actual motion file exists in storage
+    ttstr motionPath = ttstr(inner.c_str());
+    bool exists = !TVPGetPlacedPath(motionPath).IsEmpty();
+    if(exists) {
+        spdlog::warn("[MOTION-FALLBACK] '{}' → motion file '{}' found",
+                     storageName, inner);
+    }
+    return exists;
+}
+
 bool TVPIsExistentStorage(const ttstr &name) {
-    return !TVPGetPlacedPath(name).IsEmpty();
+    if(TVPIsInternalPlugin(name))
+        return true;
+    if(!TVPGetPlacedPath(name).IsEmpty())
+        return true;
+    if(TVPIsMotionParameterFallback(name))
+        return true;
+    return false;
 }
 //---------------------------------------------------------------------------
 

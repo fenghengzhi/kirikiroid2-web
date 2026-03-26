@@ -54,7 +54,7 @@ void TVPLoadPlugin(const ttstr &name) {
     if(TVPLoadInternalPlugin(pluginName)) {
         spdlog::debug("Loading Plugin: {} Success", name.AsStdString());
     } else {
-        spdlog::error("Loading Plugin: {} Failed", name.AsStdString());
+        spdlog::debug("Loading Plugin: {} Failed", name.AsStdString());
     }
 }
 
