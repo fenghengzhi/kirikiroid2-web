@@ -23,9 +23,6 @@
 #include "ncbind.hpp"
 #include "tjsArray.h"
 #include "EventIntf.h"
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#endif
 
 #ifndef KRKR2_NO_OPENCV
 #include "opencv2/opencv.hpp"
@@ -2290,6 +2287,7 @@ namespace motion {
         Player *player = nullptr;
         iTJSDispatch2 *ownerObjThis = nullptr;
         tjs_int64 lastTick = 0;
+        bool notifiedStop = false;
 
         tjs_error FuncCall(tjs_uint32 flag,
             const tjs_char *membername, tjs_uint32 *hint,
@@ -2297,7 +2295,38 @@ namespace motion {
             tjs_int numparams, tTJSVariant **param,
             iTJSDispatch2 *objthis) override {
             if(result) *result = (tjs_int)1;
-            if(!player || !player->_runtime || !player->_allplaying) {
+            if(!player || !player->_runtime) {
+                return TJS_S_OK;
+            }
+            if(!player->_allplaying) {
+                // Animation finished — set _playing=0 directly on
+                // AffineSourceMotion so canWaitMovie() returns 0.
+                if(ownerObjThis && !notifiedStop) {
+                    notifiedStop = true;
+                    // Call onMovieStop on AffineSourceMotion to trigger
+                    // the conductor's wait resolution via the event chain.
+                    tTJSVariant onAction;
+                    if(TJS_SUCCEEDED(ownerObjThis->PropGet(0,
+                           TJS_W("onAction"), nullptr, &onAction,
+                           ownerObjThis)) &&
+                       onAction.Type() == tvtObject) {
+                        auto clo = onAction.AsObjectClosureNoAddRef();
+                        iTJSDispatch2 *affineSource =
+                            clo.ObjThis ? clo.ObjThis : clo.Object;
+                        if(affineSource) {
+                            try {
+                                // Set _playing=0 first
+                                tTJSVariant zero((tjs_int)0);
+                                affineSource->PropSet(0, TJS_W("_playing"),
+                                    nullptr, &zero, affineSource);
+                                // Call onMovieStop to notify conductor
+                                affineSource->FuncCall(0,
+                                    TJS_W("onMovieStop"), nullptr,
+                                    nullptr, 0, nullptr, affineSource);
+                            } catch(...) {}
+                        }
+                    }
+                }
                 return TJS_S_OK;
             }
             // Compute real time delta from tick parameter (ms)
@@ -2347,6 +2376,39 @@ namespace motion {
         tTJSVariantClosure clo(handler, nullptr);
         TVPAddContinuousHandler(clo);
         handler->Release(); // closure holds a ref
+        // Set _playing=1 on AffineSourceMotion and override
+        // canWaitMovie to return _playing for motion type too.
+        {
+            tTJSVariant onAction;
+            if(TJS_SUCCEEDED(objthis->PropGet(0, TJS_W("onAction"),
+                   nullptr, &onAction, objthis)) &&
+               onAction.Type() == tvtObject) {
+                auto clo = onAction.AsObjectClosureNoAddRef();
+                iTJSDispatch2 *affineSource =
+                    clo.ObjThis ? clo.ObjThis : clo.Object;
+                if(affineSource) {
+                    tTJSVariant val((tjs_int)1);
+                    affineSource->PropSet(0, TJS_W("_playing"),
+                                          nullptr, &val, affineSource);
+                    // Override canWaitMovie to return _playing
+                    // (the default returns 0 for motion type)
+                    try {
+                        TVPExecuteExpression(
+                            TJS_W("(function(obj){"
+                                  "obj.canWaitMovie = function(){"
+                                  "return this._playing;};})")
+                            , &val);
+                        if(val.Type() == tvtObject) {
+                            tTJSVariant asVar(affineSource, affineSource);
+                            tTJSVariant *args[] = { &asVar };
+                            val.AsObjectClosureNoAddRef().FuncCall(
+                                0, nullptr, nullptr, nullptr, 1, args,
+                                nullptr);
+                        }
+                    } catch(...) {}
+                }
+            }
+        }
         LOGGER->info("Motion.Player self-drive started");
     }
 
@@ -3153,8 +3215,11 @@ namespace motion {
             self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
 
-        // Start self-driving animation loop for non-D3D web builds
-        if(self->_allplaying && !self->_selfDriving) {
+        // Start self-driving animation loop for non-D3D web builds.
+        // Reset _selfDriving so a new play() on the same Player (e.g.,
+        // switching from yuzulogo to m2logo) creates a fresh handler.
+        if(self->_allplaying) {
+            self->_selfDriving = false;
             self->startSelfDrive(objthis);
         }
 
