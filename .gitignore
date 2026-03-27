@@ -19,6 +19,7 @@ java_pid*.hprof
 *.pdb
 .playwright
 .playwright-cli
+.playwright-mcp
 build-web
 __pycache__/
 apk/
