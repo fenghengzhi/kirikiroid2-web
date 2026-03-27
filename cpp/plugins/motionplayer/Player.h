@@ -337,7 +337,8 @@ namespace motion {
     private:
         bool ensureMotionLoaded();
         void syncVariableKeysFromActiveMotion();
-        bool renderToLayer(iTJSDispatch2 *layerObject);
+        bool renderToLayer(iTJSDispatch2 *layerObject,
+                           bool skipUpdate = false);
         ttstr resolveCaptureSourcePath() const;
         const detail::MotionClip *selectActiveClip() const;
         const std::vector<std::string> &activeLayerNames() const;

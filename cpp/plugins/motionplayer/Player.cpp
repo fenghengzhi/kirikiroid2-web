@@ -1822,7 +1822,8 @@ namespace motion {
         return resolved;
     }
 
-    bool Player::renderToLayer(iTJSDispatch2 *layerObject) {
+    bool Player::renderToLayer(iTJSDispatch2 *layerObject,
+                               bool skipUpdate) {
         if(!layerObject) {
             return false;
         }
@@ -1962,7 +1963,7 @@ namespace motion {
                                     srcPixels + srcPitch * row, srcPitch);
                             }
 
-                            layer->Update(false);
+                            if(!skipUpdate) layer->Update(false);
                             _runtime->lastCanvas =
                                 tTJSVariant(layerObject, layerObject);
                             return true;
@@ -2048,7 +2049,7 @@ namespace motion {
                     }
 
                     if(drewAny) {
-                        layer->Update(false);
+                        if(!skipUpdate) layer->Update(false);
                         _runtime->lastCanvas =
                             tTJSVariant(layerObject, layerObject);
                         return true;
@@ -2146,7 +2147,7 @@ namespace motion {
             }
 #endif
 
-            layer->Update(false);
+            if(!skipUpdate) layer->Update(false);
             _runtime->lastCanvas = tTJSVariant(layerObject, layerObject);
             return true;
         } catch(...) {
@@ -2345,6 +2346,12 @@ namespace motion {
             constexpr double kFramesPerMs = 60.0 / 1000.0;
             const double deltaFrames = deltaMs * kFramesPerMs;
             player->frameProgress(deltaFrames * player->_speed);
+            // Direct rendering disabled: renderToLayer to owner
+            // AffineLayer causes hangs even with skipUpdate=true,
+            // because the Layer pixel buffer operations (SetImageSize,
+            // GetMainImagePixelBufferForWrite) may trigger internal
+            // KAG state changes that conflict with the continuous
+            // handler context.
             // Notify AffineSourceMotion via onAction callback that
             // animation state changed, triggering redrawFlag → onPaint.
             if(ownerObjThis) {
