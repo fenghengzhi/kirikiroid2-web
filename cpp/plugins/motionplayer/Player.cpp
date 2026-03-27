@@ -2286,6 +2286,7 @@ namespace motion {
     struct SelfDriveContinuousHandler : public tTJSDispatch {
         Player *player = nullptr;
         iTJSDispatch2 *ownerObjThis = nullptr;
+        iTJSDispatch2 *affineSource = nullptr;
         tjs_int64 lastTick = 0;
         bool notifiedStop = false;
 
@@ -2373,6 +2374,17 @@ namespace motion {
         auto *handler = new SelfDriveContinuousHandler();
         handler->player = this;
         handler->ownerObjThis = objthis;
+        // Resolve AffineSourceMotion from Player's onAction closure
+        {
+            tTJSVariant onAction;
+            if(TJS_SUCCEEDED(objthis->PropGet(0, TJS_W("onAction"),
+                   nullptr, &onAction, objthis)) &&
+               onAction.Type() == tvtObject) {
+                auto clo = onAction.AsObjectClosureNoAddRef();
+                handler->affineSource =
+                    clo.ObjThis ? clo.ObjThis : clo.Object;
+            }
+        }
         tTJSVariantClosure clo(handler, nullptr);
         TVPAddContinuousHandler(clo);
         handler->Release(); // closure holds a ref
