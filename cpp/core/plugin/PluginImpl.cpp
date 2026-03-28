@@ -127,10 +127,10 @@ void TVPLoadInternalPlugins() {
     ncbAutoRegister::AllRegist();
     ncbAutoRegister::LoadModule(TJS_W("xp3filter.dll"));
     ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
-    // DrawDeviceD3D.dll is available for games that enable D3D mode.
-    // Not pre-loaded because some games (e.g. 千恋万花) crash in
-    // keybinder.tjs when DrawDeviceD3D class exists but d3dMotion is false.
-    // Games should load it via Plugins.link("DrawDeviceD3D.dll").
+    // DrawDeviceD3D.dll is available for games that explicitly enable
+    // D3D mode via Plugins.link("DrawDeviceD3D.dll"). Not pre-loaded
+    // because it triggers D3D-specific script paths that require full
+    // gamepad/keyboard binding initialization.
 
     // Verify command line args
     {

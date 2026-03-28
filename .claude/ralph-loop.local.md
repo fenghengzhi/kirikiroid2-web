@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 8
+iteration: 12
 max_iterations: 20
 completion_promise: "已完全解决"
 started_at: "2026-03-28T12:28:56Z"

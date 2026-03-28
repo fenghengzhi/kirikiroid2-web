@@ -18,6 +18,7 @@
 #include "tjs.h"
 #include "tjsUtils.h"
 #include "tjsNative.h"
+#include "tjsDictionary.h"
 #include "tjsArray.h"
 #include "tjsDebug.h"
 #include "tjsOctPack.h"
