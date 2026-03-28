@@ -340,8 +340,56 @@ NCB_REGISTER_CLASS(Motion) {
 }
 
 // ============================================================
-// Top-level emoteplayer.dll classes (D3DEmoteModule, D3DEmotePlayer)
+// Callbacks (must be under motionplayer.dll module)
 // ============================================================
+
+static void PostRegistCallback() {
+    // Manually alias top-level Player class into Motion namespace
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if (!global) return;
+
+    tTJSVariant motionVar;
+    if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Motion"), nullptr, &motionVar, global))) {
+        iTJSDispatch2 *motion = motionVar.AsObjectNoAddRef();
+        if (motion) {
+            tTJSVariant playerVar;
+            if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Player"), nullptr, &playerVar, global))) {
+                if (playerVar.Type() == tvtObject &&
+                    playerVar.AsObjectNoAddRef() != nullptr) {
+                    motion->PropSet(TJS_MEMBERENSURE, TJS_W("Player"),
+                                    nullptr, &playerVar, motion);
+                }
+            }
+
+            tTJSVariant enableD3D{(tjs_int)1};
+            motion->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP | TJS_STATICMEMBER,
+                            TJS_W("enableD3D"), nullptr, &enableD3D, motion);
+        }
+    }
+    global->Release();
+}
+
+static void PreRegistCallback() {}
+static void PostUnregistCallback() {}
+
+NCB_PRE_REGIST_CALLBACK(PreRegistCallback);
+NCB_POST_REGIST_CALLBACK(PostRegistCallback);
+NCB_POST_UNREGIST_CALLBACK(PostUnregistCallback);
+
+// ============================================================
+// emoteplayer.dll module — separate from motionplayer.dll
+// In libkrkr2.so, emoteplayer.dll is an independent module whose
+// entry callback (sub_682528) loads motionplayer.dll as a dependency,
+// then registers EmotePlayer into the Motion namespace.
+// ============================================================
+#undef NCB_MODULE_NAME
+#define NCB_MODULE_NAME TJS_W("emoteplayer.dll")
+
+static void EmotePlayerPreRegist() {
+    // Load motionplayer.dll as dependency (matches libkrkr2.so sub_682528)
+    ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
+}
+NCB_PRE_REGIST_CALLBACK(EmotePlayerPreRegist);
 
 NCB_REGISTER_CLASS(D3DEmoteModule) {
     NCB_CONSTRUCTOR(());
@@ -441,47 +489,3 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(contains);
 }
 
-// ============================================================
-// Callbacks
-// ============================================================
-
-static void PostRegistCallback() {
-    // Manually alias top-level Player class into Motion namespace
-    iTJSDispatch2 *global = TVPGetScriptDispatch();
-    if (!global) return;
-
-    // Get Motion class object
-    tTJSVariant motionVar;
-    if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Motion"), nullptr, &motionVar, global))) {
-        iTJSDispatch2 *motion = motionVar.AsObjectNoAddRef();
-        if (motion) {
-            // Get Player class dispatch
-            tTJSVariant playerVar;
-            if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Player"), nullptr, &playerVar, global))) {
-                // Preserve the original class-object closure semantics.
-                // Global TJS classes are exposed as (object=class, objthis=null),
-                // and forcing objthis=class breaks "with(Motion.Player) { .useD3D = 0; }"
-                // with an invalid object context.
-                if (playerVar.Type() == tvtObject &&
-                    playerVar.AsObjectNoAddRef() != nullptr) {
-                    motion->PropSet(TJS_MEMBERENSURE, TJS_W("Player"),
-                                    nullptr, &playerVar, motion);
-                }
-            }
-
-            // libkrkr2.so enables D3D motion rendering.
-            tTJSVariant enableD3D{(tjs_int)1};
-            motion->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP | TJS_STATICMEMBER,
-                            TJS_W("enableD3D"), nullptr, &enableD3D, motion);
-        }
-    }
-
-    global->Release();
-}
-
-static void PreRegistCallback() {}
-static void PostUnregistCallback() {}
-
-NCB_PRE_REGIST_CALLBACK(PreRegistCallback);
-NCB_POST_REGIST_CALLBACK(PostRegistCallback);
-NCB_POST_UNREGIST_CALLBACK(PostUnregistCallback);

@@ -45,4 +45,7 @@
 
 ## Debugging
 - XP3 extraction: `tools/bin/mac/rel/xp3 -o /tmp/out file.xp3`
+- TJS2 bytecode disassembly: `tools/bin/mac/rel/tjsdump file.tjs` (use `/tjs2-disasm` skill)
+- Build native tools: `cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON -DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison && cmake --build out/macos/release --target tjsdump`
 - Game's D3D mode controlled by `-d3dmotion` / `-d3dmode` command line args (set via `TVPProgramArguments` in SysInitImpl.cpp)
+- Game's D3D rendering initialized by `D3D.tjs` (in `data/system/`), which calls `Plugins.link("drawdeviceD3D.dll")` — in Android kirikiroid2 this is loaded by platform-specific code
