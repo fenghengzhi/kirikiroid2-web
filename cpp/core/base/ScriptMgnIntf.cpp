@@ -717,8 +717,6 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
     if(!TVPScriptEngine)
         TVPThrowInternalError;
 
-    // ShortCutInitialPadKeyMap is now defined in DrawDeviceD3D constructor
-    // (DrawDeviceD3D.cpp) which runs before keybinder.tjs.
 
     { // for bytecode
         ttstr place(TVPSearchPlacedPath(name));

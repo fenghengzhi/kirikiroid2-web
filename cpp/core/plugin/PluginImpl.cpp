@@ -127,18 +127,11 @@ void TVPLoadInternalPlugins() {
     ncbAutoRegister::AllRegist();
     ncbAutoRegister::LoadModule(TJS_W("xp3filter.dll"));
     ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
-    // DrawDeviceD3D.dll is available for games that explicitly enable
-    // D3D mode via Plugins.link("DrawDeviceD3D.dll"). Not pre-loaded
-    // because it triggers D3D-specific script paths that require full
-    // gamepad/keyboard binding initialization.
-
-    // Verify command line args
-    {
-        tTJSVariant val;
-        bool has_d3dmode = TVPGetCommandLine(TJS_W("-d3dmode"), &val);
-        bool has_d3dmotion = TVPGetCommandLine(TJS_W("-d3dmotion"), &val);
-        spdlog::warn("D3D args check: d3dmode={} d3dmotion={}", has_d3dmode, has_d3dmotion);
-    }
+    // DrawDeviceD3D.dll: not pre-loaded. Pre-loading causes keybinder.tjs
+    // crash because the game detects DrawDeviceD3D class and enters the
+    // D3D script path, but initD3D doesn't create the instance (d3dMotion
+    // is false from Config.tjs, and -d3dmotion arg doesn't override it).
+    // The game loads D3D scripts but ShortCutInitialPadKeyMap is undefined.
 }
 
 bool TVPLoadInternalPlugin(const ttstr &_name) {
