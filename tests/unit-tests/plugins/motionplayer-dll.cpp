@@ -358,7 +358,7 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
     REQUIRE_FALSE(player.isTimelinePlaying(label));
     REQUIRE(player.getTimelineBlendRatio(label) == 0.0);
 
-    player.fadeInTimeline(label, 1.0, motion::TimelinePlayFlagDifference);
+    player.fadeInTimeline(label, 1.0, motion::TimelinePlayFlagSequential);
     REQUIRE(player.isTimelinePlaying(label));
     REQUIRE(player.getTimelineBlendRatio(label) == 1.0);
 

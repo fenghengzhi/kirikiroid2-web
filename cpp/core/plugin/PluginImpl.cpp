@@ -13,6 +13,9 @@
 #include <functional>
 
 #include <spdlog/spdlog.h>
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 
 #include "tjsCommHead.h"
 
@@ -45,6 +48,29 @@
 //---------------------------------------------------------------------------
 bool TVPLoadInternalPlugin(const ttstr &_name);
 
+// Force isD3D=true on the KAG window so the game's D3D motion path
+// (used for logo animations) is enabled. Called after plugins are loaded
+// and the KAG window is initialized.
+static bool s_d3dForced = false;
+static void forceD3DOnKAGWindow() {
+    if(s_d3dForced) return;
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if(!global) return;
+
+    tTJSVariant kagVar;
+    if(TJS_SUCCEEDED(global->PropGet(0, TJS_W("kag"), nullptr, &kagVar, global)) &&
+       kagVar.Type() == tvtObject && kagVar.AsObjectNoAddRef()) {
+        // Set isD3D = true on the kag window
+        tTJSVariant trueVal((tjs_int)1);
+        kagVar.AsObjectNoAddRef()->PropSet(
+            TJS_MEMBERENSURE, TJS_W("isD3D"), nullptr, &trueVal,
+            kagVar.AsObjectNoAddRef());
+        s_d3dForced = true;
+        TVPAddLog(TJS_W("(info) Forced kag.isD3D = true for web build"));
+    }
+    global->Release();
+}
+
 void TVPLoadPlugin(const ttstr &name) {
     auto pluginName = name;
     // motionplayer.dll and emoteplayer.dll may be same?
@@ -52,9 +78,36 @@ void TVPLoadPlugin(const ttstr &name) {
         pluginName = "motionplayer.dll";
 
     if(TVPLoadInternalPlugin(pluginName)) {
-        spdlog::debug("Loading Plugin: {} Success", name.AsStdString());
+        TVPAddLog(ttstr(TJS_W("(info) Loading Plugin: ")) + name + TJS_W(" Success"));
     } else {
-        spdlog::debug("Loading Plugin: {} Failed", name.AsStdString());
+        TVPAddLog(ttstr(TJS_W("(info) Loading Plugin: ")) + name + TJS_W(" Failed"));
+    }
+
+    // When motionplayer.dll is loaded (called from Initialize.tjs AFTER
+    // Config.tjs has set d3dMotion/d3dMode), force these to true so
+    // initD3D will try to create a DrawDeviceD3D and set isD3D=true.
+    auto nameStr = name.AsStdString();
+    std::transform(nameStr.begin(), nameStr.end(), nameStr.begin(), ::tolower);
+    // When any motion-related plugin loads (after Config.tjs has run),
+    // force d3dMotion=true so initD3D will create DrawDeviceD3D.
+    if(!s_d3dForced) {
+#ifdef EMSCRIPTEN
+        EM_ASM({ console.warn('[D3D-HOOK] TVPLoadPlugin: ' + UTF8ToString($0)); },
+               nameStr.c_str());
+#endif
+        if(nameStr.find("motion") != std::string::npos ||
+           nameStr.find("emote") != std::string::npos) {
+            s_d3dForced = true;
+#ifdef EMSCRIPTEN
+            EM_ASM({ console.warn('[D3D-HOOK] Forcing d3dMotion=true'); });
+#endif
+            try {
+                tTJSVariant r;
+                TVPExecuteExpression(
+                    TJS_W("global.d3dMotion = true, global.d3dMode = 1"),
+                    &r);
+            } catch(...) {}
+        }
     }
 }
 
@@ -95,6 +148,9 @@ void TVPLoadInternalPlugins() {
     ncbAutoRegister::AllRegist();
     ncbAutoRegister::LoadModule(TJS_W("xp3filter.dll"));
     ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
+    // Pre-load DrawDeviceD3D stub so game scripts can instantiate DrawDeviceD3D
+    ncbAutoRegister::LoadModule(TJS_W("DrawDeviceD3D.dll"));
+    ncbAutoRegister::LoadModule(TJS_W("DrawDeviceD3DZ.dll"));
 }
 
 bool TVPLoadInternalPlugin(const ttstr &_name) {

@@ -91,8 +91,10 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(project, getProject, setProject);
     NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
     NCB_PROPERTY(meshline, getMeshline, setMeshline);
+    NCB_PROPERTY_RO(busy, getBusy);
 
     // Core methods
+    NCB_METHOD(random);
     NCB_METHOD(initPhysics);
     NCB_METHOD(serialize);
     NCB_METHOD(unserialize);
@@ -202,22 +204,27 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_CONSTRUCTOR((ResourceManager));
 
     // Properties
-    NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
+    NCB_PROPERTY_RO(module, getModule);
+    NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
-    NCB_PROPERTY(queing, getQueuing, setQueuing); // original typo
+    NCB_PROPERTY(queing, getQueuing, setQueuing); // original typo preserved
     NCB_PROPERTY(hairScale, getHairScale, setHairScale);
     NCB_PROPERTY(partsScale, getPartsScale, setPartsScale);
     NCB_PROPERTY(bustScale, getBustScale, setBustScale);
-    NCB_PROPERTY_RO(animating, getAnimating);
+    NCB_PROPERTY(bodyScale, getBodyScale, setBodyScale);
+    NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
     NCB_PROPERTY(progress, getProgress, setProgress);
     NCB_PROPERTY(modified, getModified, setModified);
     NCB_PROPERTY(drawvisible, getDrawVisible, setDrawVisible);
     NCB_PROPERTY(drawOpacity, getDrawOpacity, setDrawOpacity);
     NCB_PROPERTY(opengl, getOpengl, setOpengl);
-    NCB_PROPERTY(module, getModule, setModule);
+    NCB_PROPERTY_RO(animating, getAnimating);
+    NCB_PROPERTY_RO(playCallback, getPlayCallback);
 
     // Methods
+    NCB_METHOD(create);
+    NCB_METHOD(load);
     NCB_METHOD(clone);
     NCB_METHOD(show);
     NCB_METHOD(hide);
@@ -251,12 +258,15 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_METHOD(playTimeline);
     NCB_METHOD(isTimelinePlaying);
     NCB_METHOD(stopTimeline);
+    NCB_METHOD(setTimeline);
     NCB_METHOD(setTimelineBlendRatio);
     NCB_METHOD(getTimelineBlendRatio);
     NCB_METHOD(fadeInTimeline);
     NCB_METHOD(fadeOutTimeline);
     NCB_METHOD(skip);
+    NCB_METHOD(addPlayCallback);
     NCB_METHOD(pass);
+    NCB_METHOD(progress);
     NCB_METHOD(setOuterForce);
     NCB_METHOD(getOuterForce);
     NCB_METHOD(contains);
@@ -341,8 +351,8 @@ NCB_REGISTER_CLASS(D3DEmoteModule) {
     Variant(TJS_W("MaskModeAlpha"), (tjs_int)MaskModeAlpha);
     Variant(TJS_W("TimelinePlayFlagParallel"),
             (tjs_int)TimelinePlayFlagParallel);
-    Variant(TJS_W("TimelinePlayFlagDifference"),
-            (tjs_int)TimelinePlayFlagDifference);
+    Variant(TJS_W("TimelinePlayFlagSequential"),
+            (tjs_int)TimelinePlayFlagSequential);
 
     // Properties
     NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
@@ -362,23 +372,28 @@ NCB_REGISTER_CLASS(D3DEmoteModule) {
 NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_CONSTRUCTOR((ResourceManager));
 
-    // Properties (same as EmotePlayer subclass)
-    NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
+    // Properties (same as EmotePlayer subclass, matching IDA registration order)
+    NCB_PROPERTY_RO(module, getModule);
+    NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
     NCB_PROPERTY(queing, getQueuing, setQueuing);
     NCB_PROPERTY(hairScale, getHairScale, setHairScale);
     NCB_PROPERTY(partsScale, getPartsScale, setPartsScale);
     NCB_PROPERTY(bustScale, getBustScale, setBustScale);
-    NCB_PROPERTY_RO(animating, getAnimating);
+    NCB_PROPERTY(bodyScale, getBodyScale, setBodyScale);
+    NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
     NCB_PROPERTY(progress, getProgress, setProgress);
     NCB_PROPERTY(modified, getModified, setModified);
     NCB_PROPERTY(drawvisible, getDrawVisible, setDrawVisible);
     NCB_PROPERTY(drawOpacity, getDrawOpacity, setDrawOpacity);
     NCB_PROPERTY(opengl, getOpengl, setOpengl);
-    NCB_PROPERTY(module, getModule, setModule);
+    NCB_PROPERTY_RO(animating, getAnimating);
+    NCB_PROPERTY_RO(playCallback, getPlayCallback);
 
     // Methods
+    NCB_METHOD(create);
+    NCB_METHOD(load);
     NCB_METHOD(clone);
     NCB_METHOD(show);
     NCB_METHOD(hide);
@@ -412,12 +427,15 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(playTimeline);
     NCB_METHOD(isTimelinePlaying);
     NCB_METHOD(stopTimeline);
+    NCB_METHOD(setTimeline);
     NCB_METHOD(setTimelineBlendRatio);
     NCB_METHOD(getTimelineBlendRatio);
     NCB_METHOD(fadeInTimeline);
     NCB_METHOD(fadeOutTimeline);
     NCB_METHOD(skip);
+    NCB_METHOD(addPlayCallback);
     NCB_METHOD(pass);
+    NCB_METHOD(progress);
     NCB_METHOD(setOuterForce);
     NCB_METHOD(getOuterForce);
     NCB_METHOD(contains);
@@ -451,13 +469,31 @@ static void PostRegistCallback() {
                 }
             }
 
-            // kirikiroid2 scripts write Motion.enableD3D as a plain script
-            // member; libkrkr2.so does not appear to register it as a native
-            // property. Keep it as a normal static field on the Motion object.
-            tTJSVariant enableD3D{(tjs_int)0};
+            // libkrkr2.so enables D3D motion rendering.
+            tTJSVariant enableD3D{(tjs_int)1};
             motion->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP | TJS_STATICMEMBER,
                             TJS_W("enableD3D"), nullptr, &enableD3D, motion);
         }
+    }
+
+    // Force d3dMotion=true and d3dMode=true in global scope.
+    // The game's Config.tjs may set these to false, but our hook in
+    // the Window class will override initD3D to force isD3D=true.
+    // Also override KAGWindow.initD3D to always set isD3D=true.
+    {
+        tTJSVariant result;
+        try {
+            // Override initD3D on the Window prototype to force isD3D=true.
+            // This runs before the game creates the KAG window.
+            TVPExecuteExpression(
+                TJS_W("(function() {"
+                      "  var origCreateWnd = global.Window;"
+                      "  global.d3dMotion = true;"
+                      "  global.d3dMode = true;"
+                      "  global.motionEnabled = true;"
+                      "})()"),
+                &result);
+        } catch(...) {}
     }
     global->Release();
 }

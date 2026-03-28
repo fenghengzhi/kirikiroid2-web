@@ -74,6 +74,23 @@ namespace motion {
 
     tTJSVariant EmotePlayer::getModule() const { return _module; }
 
+    void EmotePlayer::create() {
+        _runtime->snapshot.reset();
+        _runtime->timelines.clear();
+        _module.Clear();
+        _modified = true;
+    }
+
+    void EmotePlayer::load(tTJSVariant data) {
+        _runtime->snapshot = detail::lookupModuleSnapshot(data);
+        _runtime->timelines.clear();
+        if(_runtime->snapshot) {
+            detail::primeTimelineStates(_runtime->timelines, *_runtime->snapshot);
+        }
+        _module = data;
+        _modified = true;
+    }
+
     tTJSVariant EmotePlayer::clone() {
         typedef ncbInstanceAdaptor<EmotePlayer> AdaptorT;
 
@@ -316,6 +333,23 @@ namespace motion {
         stopTimeline(label);
     }
 
+    void EmotePlayer::setTimeline(ttstr label, bool loop) {
+        const auto key = detail::narrow(label);
+        if(key.empty()) {
+            return;
+        }
+
+        auto &state = _runtime->timelines[key];
+        state.label = key;
+        state.loop = loop;
+        state.totalFrames = getTimelineTotalFrameCount(label);
+        _modified = true;
+    }
+
+    void EmotePlayer::addPlayCallback() {
+        _playCallback = true;
+    }
+
     void EmotePlayer::skip() {
         for(auto &[_, state] : _runtime->timelines) {
             if(state.totalFrames > 0.0) {
@@ -331,6 +365,10 @@ namespace motion {
         _progress += dt;
         detail::stepTimelines(_runtime->timelines, dt);
         _modified = true;
+    }
+
+    void EmotePlayer::progress(double dt) {
+        pass(dt);
     }
 
     void EmotePlayer::setOuterForce(double x, double y) {

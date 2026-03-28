@@ -939,6 +939,8 @@ void TVPAddAutoPath(const ttstr &name) {
 
     ttstr normalized = TVPNormalizeStorageName(name);
 
+    TVPAddLog(ttstr(TJS_W("(info) TVPAddAutoPath: ")) + normalized);
+
     auto i =
         std::find(TVPAutoPathList.begin(), TVPAutoPathList.end(), normalized);
     if(i == TVPAutoPathList.end())
@@ -1062,6 +1064,14 @@ static tjs_uint TVPRebuildAutoPathTable() {
 
     AutoPathTableInit = true;
 
+    // Dump first 10 auto paths to understand format
+    TVPAddLog(ttstr(TJS_W("(info) AUTOPATH-COUNT: ")) +
+        ttstr((tjs_int)TVPAutoPathList.size()));
+    for(size_t idx = 0; idx < TVPAutoPathList.size() && idx < 10; ++idx) {
+        TVPAddLog(ttstr(TJS_W("(info) AUTOPATH[")) +
+            ttstr((tjs_int)idx) + TJS_W("]: ") + TVPAutoPathList[idx]);
+    }
+
     return totalcount;
 }
 //---------------------------------------------------------------------------
@@ -1073,6 +1083,21 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
     // search path and return the path which the "name" is placed.
     // returned name is normalized. returns empty string if the
     // storage is not found.
+    {
+        // One-time dump of auto paths after game has initialized
+        static bool dumped = false;
+        if(!dumped && TVPAutoPathList.size() > 30) {
+            dumped = true;
+            for(size_t idx = 0; idx < TVPAutoPathList.size(); ++idx) {
+                auto &p = TVPAutoPathList[idx];
+                auto ps = p.AsStdString();
+                if(ps.find("1080") != std::string::npos ||
+                   ps.find("xp3") != std::string::npos) {
+                    TVPAddLog(ttstr(TJS_W("(info) AUTOPATH: ")) + p);
+                }
+            }
+        }
+    }
 #if 0 // needn't
     if(!TVPClearAutoPathCacheCallbackInit)
     {
@@ -1111,6 +1136,19 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
     }
 
     // not found
+    {
+        auto nameStr = name.AsStdString();
+        if(nameStr.find("logo") != std::string::npos ||
+           nameStr.find("Logo") != std::string::npos ||
+           nameStr.find("bland") != std::string::npos ||
+           nameStr.find(".mtn") != std::string::npos) {
+            ttstr msg = TJS_W("(info) STORAGE-DIAG: TVPGetPlacedPath FAILED for '");
+            msg += name;
+            msg += TJS_W("' autoPathCount=");
+            msg += ttstr((tjs_int)TVPAutoPathList.size());
+            TVPAddLog(msg);
+        }
+    }
     // TVPAutoPathCache.Add(name, ttstr()); // do not cache now
     return {};
 }
@@ -1181,10 +1219,24 @@ static bool TVPIsMotionParameterFallback(const ttstr &name) {
 bool TVPIsExistentStorage(const ttstr &name) {
     if(TVPIsInternalPlugin(name))
         return true;
-    if(!TVPGetPlacedPath(name).IsEmpty())
+    ttstr placed = TVPGetPlacedPath(name);
+    if(!placed.IsEmpty()) {
+        auto s = name.AsStdString();
+        if(s.find(".mtn") != std::string::npos || s.find("logo") != std::string::npos) {
+            TVPAddLog(ttstr(TJS_W("(info) isExistentStorage FOUND: '")) +
+                name + TJS_W("' -> '") + placed + TJS_W("'"));
+        }
         return true;
+    }
     if(TVPIsMotionParameterFallback(name))
         return true;
+    {
+        auto s = name.AsStdString();
+        if(s.find(".mtn") != std::string::npos || s.find("logo") != std::string::npos) {
+            TVPAddLog(ttstr(TJS_W("(info) isExistentStorage NOT FOUND: '")) +
+                name + TJS_W("'"));
+        }
+    }
     return false;
 }
 //---------------------------------------------------------------------------

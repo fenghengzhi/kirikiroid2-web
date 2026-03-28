@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstring>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <unordered_set>
 #include <vector>
@@ -1514,6 +1515,14 @@ namespace motion {
     }
 
     // --- Core methods ---
+    double Player::random() {
+        // In libkrkr2.so, this delegates to a TJS callback "random" method.
+        // Use standard random as a fallback.
+        static std::mt19937 rng{std::random_device{}()};
+        static std::uniform_real_distribution<double> dist(0.0, 1.0);
+        return dist(rng);
+    }
+
     void Player::initPhysics() { STUB_WARN(initPhysics); }
     tTJSVariant Player::serialize() {
         ensureMotionLoaded();
@@ -2064,7 +2073,6 @@ namespace motion {
             }
         }
 #endif
-
         const auto sourcePath = resolveCaptureSourcePath();
         if(sourcePath.IsEmpty()) {
             const auto loweredPath = _runtime->activeMotion
@@ -2286,10 +2294,21 @@ namespace motion {
     // target layer so the AffineLayer.onPaint → drawAffine chain fires.
     struct SelfDriveContinuousHandler : public tTJSDispatch {
         Player *player = nullptr;
-        iTJSDispatch2 *ownerObjThis = nullptr;
-        iTJSDispatch2 *affineSource = nullptr;
+        tTJSVariant ownerObj;       // prevents GC (AddRef'd)
+        tTJSVariant affineSourceObj; // prevents GC (AddRef'd)
         tjs_int64 lastTick = 0;
         bool notifiedStop = false;
+        bool disabled = false;
+
+        iTJSDispatch2 *owner() const {
+            return ownerObj.Type() == tvtObject
+                ? ownerObj.AsObjectNoAddRef() : nullptr;
+        }
+
+        iTJSDispatch2 *affine() const {
+            return affineSourceObj.Type() == tvtObject
+                ? affineSourceObj.AsObjectNoAddRef() : nullptr;
+        }
 
         tjs_error FuncCall(tjs_uint32 flag,
             const tjs_char *membername, tjs_uint32 *hint,
@@ -2297,36 +2316,23 @@ namespace motion {
             tjs_int numparams, tTJSVariant **param,
             iTJSDispatch2 *objthis) override {
             if(result) *result = (tjs_int)1;
-            if(!player || !player->_runtime) {
+            if(disabled || !player || !player->_runtime) {
                 return TJS_S_OK;
             }
             if(!player->_allplaying) {
                 // Animation finished — set _playing=0 directly on
                 // AffineSourceMotion so canWaitMovie() returns 0.
-                if(ownerObjThis && !notifiedStop) {
+                if(!notifiedStop) {
                     notifiedStop = true;
-                    // Call onMovieStop on AffineSourceMotion to trigger
-                    // the conductor's wait resolution via the event chain.
-                    tTJSVariant onAction;
-                    if(TJS_SUCCEEDED(ownerObjThis->PropGet(0,
-                           TJS_W("onAction"), nullptr, &onAction,
-                           ownerObjThis)) &&
-                       onAction.Type() == tvtObject) {
-                        auto clo = onAction.AsObjectClosureNoAddRef();
-                        iTJSDispatch2 *affineSource =
-                            clo.ObjThis ? clo.ObjThis : clo.Object;
-                        if(affineSource) {
-                            try {
-                                // Set _playing=0 first
-                                tTJSVariant zero((tjs_int)0);
-                                affineSource->PropSet(0, TJS_W("_playing"),
-                                    nullptr, &zero, affineSource);
-                                // Call onMovieStop to notify conductor
-                                affineSource->FuncCall(0,
-                                    TJS_W("onMovieStop"), nullptr,
-                                    nullptr, 0, nullptr, affineSource);
-                            } catch(...) {}
-                        }
+                    auto *as = affine();
+                    if(as) {
+                        try {
+                            tTJSVariant zero((tjs_int)0);
+                            as->PropSet(0, TJS_W("_playing"),
+                                nullptr, &zero, as);
+                            as->FuncCall(0, TJS_W("onMovieStop"),
+                                nullptr, nullptr, 0, nullptr, as);
+                        } catch(...) {}
                     }
                 }
                 return TJS_S_OK;
@@ -2342,33 +2348,20 @@ namespace motion {
             if(deltaMs <= 0.0 || deltaMs > 200.0) {
                 deltaMs = 16.0; // cap at ~60fps
             }
-            // Convert ms to frames: 60fps = 1 frame per 16.67ms
             constexpr double kFramesPerMs = 60.0 / 1000.0;
             const double deltaFrames = deltaMs * kFramesPerMs;
             player->frameProgress(deltaFrames * player->_speed);
-            // Direct rendering disabled: renderToLayer to owner
-            // AffineLayer causes hangs even with skipUpdate=true,
-            // because the Layer pixel buffer operations (SetImageSize,
-            // GetMainImagePixelBufferForWrite) may trigger internal
-            // KAG state changes that conflict with the continuous
-            // handler context.
-            // Notify AffineSourceMotion via onAction callback that
-            // animation state changed, triggering redrawFlag → onPaint.
-            if(ownerObjThis) {
-                tTJSVariant onAction;
-                if(TJS_SUCCEEDED(ownerObjThis->PropGet(0,
-                       TJS_W("onAction"), nullptr, &onAction,
-                       ownerObjThis)) &&
-                   onAction.Type() == tvtObject &&
-                   onAction.AsObjectNoAddRef()) {
-                    try {
-                        tTJSVariant actionName(TJS_W("cycleComplete"));
-                        tTJSVariant *args[] = { &actionName };
-                        onAction.AsObjectClosureNoAddRef().FuncCall(
-                            0, nullptr, nullptr, nullptr, 1, args,
-                            nullptr);
-                    } catch(...) {}
-                }
+            // Trigger repaint by setting redrawFlag on AffineSourceMotion.
+            // Do NOT call onAction — that's dispatched by libkrkr2.so's
+            // internal animation system with specific parameters we can't
+            // replicate here.
+            auto *as = affine();
+            if(as) {
+                try {
+                    tTJSVariant flagVal((tjs_int)1);
+                    as->PropSet(0, TJS_W("redrawFlag"),
+                        nullptr, &flagVal, as);
+                } catch(...) {}
             }
             return TJS_S_OK;
         }
@@ -2380,7 +2373,7 @@ namespace motion {
         _selfDriveObjThis = objthis;
         auto *handler = new SelfDriveContinuousHandler();
         handler->player = this;
-        handler->ownerObjThis = objthis;
+        handler->ownerObj = tTJSVariant(objthis, objthis); // AddRef
         // Resolve AffineSourceMotion from Player's onAction closure
         {
             tTJSVariant onAction;
@@ -2388,45 +2381,39 @@ namespace motion {
                    nullptr, &onAction, objthis)) &&
                onAction.Type() == tvtObject) {
                 auto clo = onAction.AsObjectClosureNoAddRef();
-                handler->affineSource =
+                iTJSDispatch2 *as =
                     clo.ObjThis ? clo.ObjThis : clo.Object;
+                if(as) {
+                    handler->affineSourceObj = tTJSVariant(as, as); // AddRef
+                }
             }
         }
+        // Store handler ref so we can remove it in stopSelfDrive
+        _selfDriveHandler = tTJSVariant(handler, nullptr);
         tTJSVariantClosure clo(handler, nullptr);
         TVPAddContinuousHandler(clo);
         handler->Release(); // closure holds a ref
         // Set _playing=1 on AffineSourceMotion and override
         // canWaitMovie to return _playing for motion type too.
-        {
-            tTJSVariant onAction;
-            if(TJS_SUCCEEDED(objthis->PropGet(0, TJS_W("onAction"),
-                   nullptr, &onAction, objthis)) &&
-               onAction.Type() == tvtObject) {
-                auto clo = onAction.AsObjectClosureNoAddRef();
-                iTJSDispatch2 *affineSource =
-                    clo.ObjThis ? clo.ObjThis : clo.Object;
-                if(affineSource) {
-                    tTJSVariant val((tjs_int)1);
-                    affineSource->PropSet(0, TJS_W("_playing"),
-                                          nullptr, &val, affineSource);
-                    // Override canWaitMovie to return _playing
-                    // (the default returns 0 for motion type)
-                    try {
-                        TVPExecuteExpression(
-                            TJS_W("(function(obj){"
-                                  "obj.canWaitMovie = function(){"
-                                  "return this._playing;};})")
-                            , &val);
-                        if(val.Type() == tvtObject) {
-                            tTJSVariant asVar(affineSource, affineSource);
-                            tTJSVariant *args[] = { &asVar };
-                            val.AsObjectClosureNoAddRef().FuncCall(
-                                0, nullptr, nullptr, nullptr, 1, args,
-                                nullptr);
-                        }
-                    } catch(...) {}
+        auto *affineSource = handler->affine();
+        if(affineSource) {
+            tTJSVariant val((tjs_int)1);
+            affineSource->PropSet(0, TJS_W("_playing"),
+                                  nullptr, &val, affineSource);
+            try {
+                TVPExecuteExpression(
+                    TJS_W("(function(obj){"
+                          "obj.canWaitMovie = function(){"
+                          "return this._playing;};})")
+                    , &val);
+                if(val.Type() == tvtObject) {
+                    tTJSVariant asVar(affineSource, affineSource);
+                    tTJSVariant *args[] = { &asVar };
+                    val.AsObjectClosureNoAddRef().FuncCall(
+                        0, nullptr, nullptr, nullptr, 1, args,
+                        nullptr);
                 }
-            }
+            } catch(...) {}
         }
         LOGGER->info("Motion.Player self-drive started");
     }
@@ -2434,11 +2421,19 @@ namespace motion {
     void Player::stopSelfDrive() {
         if(!_selfDriving) return;
         _selfDriving = false;
+        // Remove the continuous handler and disable it
+        if(_selfDriveHandler.Type() == tvtObject &&
+           _selfDriveHandler.AsObjectNoAddRef()) {
+            auto *handler = static_cast<SelfDriveContinuousHandler *>(
+                static_cast<tTJSDispatch *>(
+                    _selfDriveHandler.AsObjectNoAddRef()));
+            handler->disabled = true;
+            handler->player = nullptr;
+            tTJSVariantClosure clo(handler, nullptr);
+            TVPRemoveContinuousHandler(clo);
+        }
+        _selfDriveHandler.Clear();
         LOGGER->info("Motion.Player self-drive stopped");
-        // The continuous handler will be cleaned up naturally when
-        // player->_allplaying becomes false and the handler returns.
-        // TVPRemoveContinuousHandler is tricky with our transient closure,
-        // so we let the handler self-disable via the _allplaying check.
     }
 
     // --- Viewport/display ---
@@ -2894,7 +2889,7 @@ namespace motion {
             detail::stringsToVariants(activeSourceCandidates()));
     }
 
-    bool Player::getD3DAvailable() { return _useD3D; }
+    bool Player::getD3DAvailable() { return true; }
 
     void Player::doAlphaMaskOperation() {}
 

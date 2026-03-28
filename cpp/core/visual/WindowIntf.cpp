@@ -12,6 +12,7 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include "ScriptMgnIntf.h"
 #include "MsgIntf.h"
 #include "WindowIntf.h"
 #include "LayerIntf.h"

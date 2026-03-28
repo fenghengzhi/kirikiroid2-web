@@ -30,7 +30,8 @@ add_library(krkr2plugins_ncbind STATIC
     shrinkCopy.cpp
     layerExBTOA.cpp
     layerExRaster.cpp
-    fPackinOne.cpp
+    PackinOne.cpp
+    DrawDeviceD3D.cpp
 )
 set_source_files_properties(
     layerExImage/Main.cpp

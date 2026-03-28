@@ -20,6 +20,7 @@
 #include <emscripten/html5.h>
 
 #include "EventIntf.h"
+#include "StorageIntf.h"
 #include "StorageImpl.h"
 #include "Defer.h"
 #include "ui/MessageBox.h"
@@ -323,11 +324,62 @@ EM_JS(char *, krkr2_get_startup_xp3_path, (), {
     return 0;
 });
 
+// Auto-mount all sibling .xp3 files in the same directory as the startup xp3.
+// This ensures resolution-specific archives (data1080.xp3, bgimage1080.xp3, etc.)
+// are available even if the game's resolution detection doesn't add them.
+static void autoMountSiblingXp3(const std::string &startupPath) {
+    // Extract directory from startup path
+    auto lastSlash = startupPath.rfind('/');
+    std::string dir = (lastSlash != std::string::npos)
+        ? startupPath.substr(0, lastSlash + 1) : "./";
+    std::string startupName = (lastSlash != std::string::npos)
+        ? startupPath.substr(lastSlash + 1) : startupPath;
+
+    // Lowercase the startup name for comparison
+    std::string startupLower = startupName;
+    std::transform(startupLower.begin(), startupLower.end(),
+                   startupLower.begin(), ::tolower);
+
+    DIR *dirp = opendir(dir.c_str());
+    if (!dirp) return;
+
+    dirent *dp;
+    while ((dp = readdir(dirp))) {
+        std::string name = dp->d_name;
+        if (name.empty() || name[0] == '.') continue;
+
+        std::string lower = name;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+        // Skip non-xp3 files and the startup xp3 itself
+        if (lower.size() <= 4 ||
+            lower.compare(lower.size() - 4, 4, ".xp3") != 0) continue;
+        if (lower == startupLower) continue;
+
+        std::string full = dir + name;
+        struct stat st;
+        if (stat(full.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
+
+        // Add as auto path: "file://./name.xp3>"
+        ttstr autoPath = TJS_W("file://.");
+        autoPath += ttstr(full.c_str());
+        autoPath += TJS_W(">");
+        try {
+            TVPAddAutoPath(autoPath);
+            spdlog::info("Auto-mounted sibling xp3: {}", full);
+        } catch (...) {
+            spdlog::warn("Failed to auto-mount: {}", full);
+        }
+    }
+    closedir(dirp);
+}
+
 bool TVPCheckStartupArg() {
     char *selectedXp3 = krkr2_get_startup_xp3_path();
     if (selectedXp3) {
         std::string path(selectedXp3);
         free(selectedXp3);
+        autoMountSiblingXp3(path);
         TVPMainScene::GetInstance()->startupFrom(path);
         return true;
     }

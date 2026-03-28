@@ -19,8 +19,8 @@ namespace motion {
     enum MaskMode { MaskModeStencil = 0, MaskModeAlpha = 1 };
 
     enum TimelinePlayFlag {
-        TimelinePlayFlagParallel = 0,
-        TimelinePlayFlagDifference = 1
+        TimelinePlayFlagParallel = 1,
+        TimelinePlayFlagSequential = 2
     };
 
     class EmotePlayer {
@@ -50,6 +50,12 @@ namespace motion {
         void setBustScale(double v) { _bustScale = v; }
         [[nodiscard]] double getBustScale() const { return _bustScale; }
 
+        void setBodyScale(double v) { _bodyScale = v; }
+        [[nodiscard]] double getBodyScale() const { return _bodyScale; }
+
+        void setVisible(bool v) { _visible = v; }
+        [[nodiscard]] bool getVisible() const { return _visible; }
+
         [[nodiscard]] bool getAnimating() const;
 
         void setProgress(double v) { _progress = v; }
@@ -70,7 +76,11 @@ namespace motion {
         void setModule(tTJSVariant v);
         [[nodiscard]] tTJSVariant getModule() const;
 
+        [[nodiscard]] bool getPlayCallback() const { return _playCallback; }
+
         // --- Methods ---
+        void create();
+        void load(tTJSVariant data);
         tTJSVariant clone();
         void show();
         void hide();
@@ -117,8 +127,12 @@ namespace motion {
         void fadeInTimeline(ttstr label, double duration, tjs_int flags);
         void fadeOutTimeline(ttstr label, double duration, tjs_int flags);
 
+        void setTimeline(ttstr label, bool loop);
+
         void skip();
+        void addPlayCallback();
         void pass(double dt);
+        void progress(double dt);
 
         void setOuterForce(double x, double y);
         tTJSVariant getOuterForce();
@@ -133,6 +147,7 @@ namespace motion {
         double _hairScale = 1.0;
         double _partsScale = 1.0;
         double _bustScale = 1.0;
+        double _bodyScale = 1.0;
         double _progress = 0.0;
         bool _modified = false;
         bool _drawVisible = true;
@@ -148,6 +163,7 @@ namespace motion {
         double _outerForceX = 0.0;
         double _outerForceY = 0.0;
         bool _visible = true;
+        bool _playCallback = false;
 
         std::map<std::string, double> _variables;
         std::map<std::string, double> _timelineBlendRatios;

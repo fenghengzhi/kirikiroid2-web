@@ -212,6 +212,8 @@ namespace motion {
         void setMeshline(bool v) { _meshline = v; }
         bool getMeshline() const { return _meshline; }
 
+        bool getBusy() const { return _busy; }
+
         // --- Methods ---
         void initPhysics();
         tTJSVariant serialize();
@@ -226,6 +228,8 @@ namespace motion {
         void setCameraOffset(tTJSVariant offset);
         void modifyRoot(tTJSVariant data);
         void debugPrint();
+
+        double random();
 
         // Resource management
         void unload(ttstr name);
@@ -391,6 +395,7 @@ namespace motion {
         tTJSVariant _project;
         inline static bool _useD3D;
         bool _meshline = false;
+        bool _busy = false;
         std::unordered_map<std::string, double> _variableValues;
 
         // Self-driving animation loop for non-D3D path.
@@ -400,6 +405,7 @@ namespace motion {
         void startSelfDrive(iTJSDispatch2 *objthis);
         void stopSelfDrive();
         iTJSDispatch2 *_selfDriveObjThis = nullptr;
+        tTJSVariant _selfDriveHandler;
         bool _selfDriving = false;
     };
 
