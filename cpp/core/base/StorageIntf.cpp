@@ -1175,6 +1175,12 @@ static bool TVPIsInternalPlugin(const ttstr &name) {
         return true;
     if(ncbAutoRegister::HasModule(storage))
         return true;
+    // Log failed internal plugin checks for .dll files
+    auto s = storage.AsStdString();
+    if(s.find(".dll") != std::string::npos) {
+        TVPAddLog(ttstr(TJS_W("(info) TVPIsInternalPlugin: NOT found '")) +
+            storage + TJS_W("'"));
+    }
     return false;
 }
 
@@ -1217,8 +1223,14 @@ static bool TVPIsMotionParameterFallback(const ttstr &name) {
 }
 
 bool TVPIsExistentStorage(const ttstr &name) {
-    if(TVPIsInternalPlugin(name))
+    if(TVPIsInternalPlugin(name)) {
+        auto s = name.AsStdString();
+        if(s.find(".dll") != std::string::npos) {
+            TVPAddLog(ttstr(TJS_W("(info) isExistentStorage: internal plugin '")) +
+                name + TJS_W("' → true"));
+        }
         return true;
+    }
     ttstr placed = TVPGetPlacedPath(name);
     if(!placed.IsEmpty()) {
         auto s = name.AsStdString();

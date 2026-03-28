@@ -257,8 +257,12 @@ tjs_uint32 TVPGetRoughTickCount32() {
 }
 
 void TVPExitApplication(int code) {
+    // On web, don't actually exit — emscripten_force_exit breaks the runtime
+    // without EXIT_RUNTIME set. Game scripts (e.g. keybinder.tjs exception
+    // handlers) may call System.exit() for non-fatal errors that the game
+    // can survive. Log the exit request and continue.
+    spdlog::warn("TVPExitApplication({}) called — ignored on web build", code);
     TVPDeliverCompactEvent(TVP_COMPACT_LEVEL_MAX);
-    emscripten_force_exit(code);
 }
 
 static bool tryStartFromDir(const std::string &dir) {

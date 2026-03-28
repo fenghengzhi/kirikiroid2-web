@@ -1284,12 +1284,15 @@ namespace TJS {
                         code += 2; // actually here not proceed...
                         break;
 
-                    case VM_CHGTHIS:
-                        TJS_GET_VM_REG(ra, code[1])
-                            .ChangeClosureObjThis(
-                                TJS_GET_VM_REG(ra, code[2]).AsObjectNoAddRef());
+                    case VM_CHGTHIS: {
+                        auto &src = TJS_GET_VM_REG(ra, code[2]);
+                        if(src.Type() != tvtVoid) {
+                            TJS_GET_VM_REG(ra, code[1])
+                                .ChangeClosureObjThis(src.AsObjectNoAddRef());
+                        }
                         code += 3;
                         break;
+                    }
 
                     case VM_GLOBAL:
                         TJS_GET_VM_REG(ra, code[1]) =

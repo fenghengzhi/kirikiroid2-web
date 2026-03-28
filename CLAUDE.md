@@ -28,6 +28,7 @@
 - `tests/unit-tests/plugins/motionplayer-dll.cpp` — MotionPlayer/EmotePlayer unit tests
 
 ## Reverse Engineering with IDA MCP
+- No Android kirikiroid2 source code is available — only libkrkr2.so binary. Use IDA MCP for all reverse engineering.
 - `analysis_MotionPlayer_EmotePlayer.md` at project root has prior RE analysis of libkrkr2.so
 - Use `mcp__ida-pro-mcp__decompile` with function addresses to get pseudocode
 - Use `mcp__ida-pro-mcp__find` with type "string" to locate string references
@@ -47,5 +48,3 @@
 - XP3 extraction: `tools/bin/mac/rel/xp3 -o /tmp/out file.xp3`
 - TJS2 bytecode disassembly: `tools/bin/mac/rel/tjsdump file.tjs` (use `/tjs2-disasm` skill)
 - Build native tools: `cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON -DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison && cmake --build out/macos/release --target tjsdump`
-- Game's D3D mode controlled by `-d3dmotion` / `-d3dmode` command line args (set via `TVPProgramArguments` in SysInitImpl.cpp)
-- Game's D3D rendering initialized by `D3D.tjs` (in `data/system/`), which calls `Plugins.link("drawdeviceD3D.dll")` — in Android kirikiroid2 this is loaded by platform-specific code

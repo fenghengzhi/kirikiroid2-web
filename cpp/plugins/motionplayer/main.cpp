@@ -344,10 +344,10 @@ NCB_REGISTER_CLASS(Motion) {
 // ============================================================
 
 static void PostRegistCallback() {
-    // Manually alias top-level Player class into Motion namespace
     iTJSDispatch2 *global = TVPGetScriptDispatch();
     if (!global) return;
 
+    // Alias Player class into Motion namespace
     tTJSVariant motionVar;
     if (TJS_SUCCEEDED(global->PropGet(0, TJS_W("Motion"), nullptr, &motionVar, global))) {
         iTJSDispatch2 *motion = motionVar.AsObjectNoAddRef();
@@ -366,6 +366,24 @@ static void PostRegistCallback() {
                             TJS_W("enableD3D"), nullptr, &enableD3D, motion);
         }
     }
+
+    // Define ShortCutInitialPadKeyMap and related members as empty dictionaries.
+    // These are referenced by encrypted keybinder.tjs but may not be defined
+    // if the gamepad initialization script hasn't run yet.
+    {
+        tTJSVariant r;
+        try {
+            TVPExecuteExpression(
+                TJS_W("global.ShortCutInitialPadKeyMap === void "
+                      "? (global.ShortCutInitialPadKeyMap = %[]) : void"),
+                &r);
+            TVPExecuteExpression(
+                TJS_W("global.ShortCutInitialGamePadKeyMap === void "
+                      "? (global.ShortCutInitialGamePadKeyMap = %[]) : void"),
+                &r);
+        } catch(...) {}
+    }
+
     global->Release();
 }
 

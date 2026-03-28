@@ -3,6 +3,7 @@
 //
 
 #include "ResourceManager.h"
+#include "tjsDictionary.h"
 
 #include <algorithm>
 #include <cctype>
@@ -30,6 +31,30 @@ motion::ResourceManager::ResourceManager(iTJSDispatch2 *kag,
     _state(std::make_shared<State>()) {
     LOGGER->info("kag: {}, cacheSize: {}", static_cast<void *>(kag), cacheSize);
 
+    // Pre-define ShortCutInitialPadKeyMap on the KAG window if not already set.
+    // The encrypted keybinder.tjs accesses .ShortCutInitialPadKeyMap on the
+    // window object. If undefined, it crashes with "Invalid object context".
+    if(kag) {
+        const tjs_char *padKeys[] = {
+            TJS_W("ShortCutInitialPadKeyMap"),
+            TJS_W("ShortCutInitialGamePadKeyMap"),
+            TJS_W("_proceedingKeyList"),
+            nullptr
+        };
+        for(int i = 0; padKeys[i]; ++i) {
+            tTJSVariant existing;
+            if(TJS_FAILED(kag->PropGet(0, padKeys[i], nullptr, &existing, kag)) ||
+               existing.Type() == tvtVoid) {
+                iTJSDispatch2 *dict = TJSCreateDictionaryObject();
+                if(dict) {
+                    tTJSVariant v(dict, dict);
+                    kag->PropSet(TJS_MEMBERENSURE, padKeys[i], nullptr,
+                                 &v, kag);
+                    dict->Release();
+                }
+            }
+        }
+    }
 }
 
 tjs_int motion::ResourceManager::getEmotePSBDecryptSeed() {
