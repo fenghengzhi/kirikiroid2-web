@@ -1,6 +1,5 @@
 {
   "enabledPlugins": {
-    "playwright@claude-plugins-official": true,
     "ralph-wiggum@claude-code-plugins": true,
     "claude-md-management@claude-plugins-official": true
   }
