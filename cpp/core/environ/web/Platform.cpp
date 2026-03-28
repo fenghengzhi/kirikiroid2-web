@@ -135,7 +135,7 @@ EM_JS(void, fsafs_flush_file, (const char *path_ptr), {
 // ---------------------------------------------------------------------------
 
 EM_JS(int, web_alert, (const char* msg, const char* title), {
-    alert(UTF8ToString(title) + '\n' + UTF8ToString(msg));
+    console.warn('[alert] ' + UTF8ToString(title) + '\n' + UTF8ToString(msg));
     return 0;
 });
 

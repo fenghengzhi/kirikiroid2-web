@@ -30,16 +30,6 @@ motion::ResourceManager::ResourceManager(iTJSDispatch2 *kag,
     _state(std::make_shared<State>()) {
     LOGGER->info("kag: {}, cacheSize: {}", static_cast<void *>(kag), cacheSize);
 
-    // Force isD3D=true on the KAG window so the game enables the D3D
-    // motion rendering path (needed for logo animations).
-    // In libkrkr2.so this happens via initD3D + DrawDeviceD3D;
-    // in the web build we bypass the D3D device requirement.
-    if(kag) {
-        tTJSVariant trueVal((tjs_int)1);
-        kag->PropSet(TJS_MEMBERENSURE, TJS_W("isD3D"), nullptr,
-                     &trueVal, kag);
-        LOGGER->warn("Forced kag.isD3D = true for web build");
-    }
 }
 
 tjs_int motion::ResourceManager::getEmotePSBDecryptSeed() {

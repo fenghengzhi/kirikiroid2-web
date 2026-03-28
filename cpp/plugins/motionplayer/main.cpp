@@ -476,25 +476,6 @@ static void PostRegistCallback() {
         }
     }
 
-    // Force d3dMotion=true and d3dMode=true in global scope.
-    // The game's Config.tjs may set these to false, but our hook in
-    // the Window class will override initD3D to force isD3D=true.
-    // Also override KAGWindow.initD3D to always set isD3D=true.
-    {
-        tTJSVariant result;
-        try {
-            // Override initD3D on the Window prototype to force isD3D=true.
-            // This runs before the game creates the KAG window.
-            TVPExecuteExpression(
-                TJS_W("(function() {"
-                      "  var origCreateWnd = global.Window;"
-                      "  global.d3dMotion = true;"
-                      "  global.d3dMode = true;"
-                      "  global.motionEnabled = true;"
-                      "})()"),
-                &result);
-        } catch(...) {}
-    }
     global->Release();
 }
 

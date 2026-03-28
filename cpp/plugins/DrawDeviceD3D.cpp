@@ -17,6 +17,7 @@
 #include "ncbind.hpp"
 #include "tjs.h"
 #include "tjsArray.h"
+#include "tjsDictionary.h"
 #include "DrawDevice.h"
 #include "visual/WindowIntf.h"
 #include "StorageIntf.h"
@@ -26,12 +27,34 @@
 // ---------------------------------------------------------------------------
 class DrawDeviceD3D : public iTVPDrawDevice {
     iTVPDrawDevice *Real = nullptr;
+    iTVPWindow *Window = nullptr;
 
 public:
     DrawDeviceD3D() {
         if (TVPMainWindow)
             Real = TVPMainWindow->GetDrawDevice();
         TVPAddLog(TJS_W("(info) DrawDeviceD3D created (wrapper around PassThroughDrawDevice)"));
+
+        // Define ShortCutInitialPadKeyMap on global scope.
+        // In D3D mode, keybinder.tjs accesses this before it's defined
+        // by default.tjs. We pre-define it as an empty dictionary.
+        iTJSDispatch2 *global = TVPGetScriptDispatch();
+        if(global) {
+            tTJSVariant existing;
+            if(TJS_FAILED(global->PropGet(0, TJS_W("ShortCutInitialPadKeyMap"),
+                   nullptr, &existing, global)) ||
+               existing.Type() == tvtVoid) {
+                iTJSDispatch2 *dict = TJSCreateDictionaryObject();
+                if(dict) {
+                    tTJSVariant v(dict, dict);
+                    global->PropSet(TJS_MEMBERENSURE,
+                        TJS_W("ShortCutInitialPadKeyMap"),
+                        nullptr, &v, global);
+                    dict->Release();
+                }
+            }
+            global->Release();
+        }
     }
 
     ~DrawDeviceD3D() = default;
@@ -80,10 +103,18 @@ public:
 
     void setSize(int w, int h) {}
 
-    // Screen rect methods (called by mainwindow.tjs changeMenuBarState)
+    // Methods called by MainWindow.tjs during D3D initialization and usage
+    bool checkEnable() { return true; }
+    void recreate() {}
+    void setPrimarySize(int w, int h) {}
     void setScreenRect(tTJSVariant) {}
     tTJSVariant getScreenRect() { return tTJSVariant(); }
     void fillRect(tTJSVariant) {}
+    void copyRect(tTJSVariant) {}
+    void setClearColor(int c) {}
+    int getClearColor() { return 0; }
+    void setForceRenderTexture(bool v) {}
+    bool getForceRenderTexture() { return false; }
 
 private:
     bool _defaultVisible = true;
@@ -94,7 +125,14 @@ private:
     void Destruct() override { /* don't destroy Real; it's shared */ }
 
     void SetWindowInterface(iTVPWindow *window) override {
-        if (Real) Real->SetWindowInterface(window);
+        Window = window;
+        // Real may have been invalidated during drawDevice swap.
+        // Re-acquire the current draw device from the window.
+        if (window && TVPMainWindow) {
+            Real = TVPMainWindow->GetDrawDevice();
+            if (Real == static_cast<iTVPDrawDevice*>(this))
+                Real = nullptr; // don't delegate to ourselves
+        }
     }
 
     void AddLayerManager(iTVPLayerManager *m) override {
@@ -317,6 +355,15 @@ NCB_REGISTER_CLASS(DrawDeviceD3D) {
     NCB_METHOD(setVisible);
     NCB_METHOD(getVisible);
     NCB_METHOD(setSize);
+    NCB_METHOD(checkEnable);
+    NCB_METHOD(recreate);
+    NCB_METHOD(setPrimarySize);
+    NCB_METHOD(setScreenRect);
+    NCB_METHOD(getScreenRect);
+    NCB_METHOD(fillRect);
+    NCB_METHOD(copyRect);
+    NCB_PROPERTY(clearColor, getClearColor, setClearColor);
+    NCB_PROPERTY(forceRenderTexture, getForceRenderTexture, setForceRenderTexture);
 }
 
 // Register as top-level classes (game scripts access them globally)

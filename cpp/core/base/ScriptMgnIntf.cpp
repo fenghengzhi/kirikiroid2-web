@@ -10,6 +10,7 @@
 //---------------------------------------------------------------------------
 
 #include "tjsCommHead.h"
+#include "tjsDictionary.h"
 
 #include "tjs.h"
 #include "tjsDebug.h"
@@ -716,41 +717,8 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
     if(!TVPScriptEngine)
         TVPThrowInternalError;
 
-    // After MainWindow.tjs loads, override KAGWindow's initD3D to force
-    // isD3D=true using our DrawDeviceD3D stub. This happens before the
-    // KAGWindow instance is created.
-    {
-        static int d3dState = 0; // 0=waiting, 1=saw MainWindow, 2=patched
-        if(d3dState < 2) {
-            auto ns = name.AsStdString();
-            if(d3dState == 0 && ns.find("MainWindow") != std::string::npos) {
-                d3dState = 1; // Mark: patch after this script finishes
-            } else if(d3dState == 1) {
-                // This is the FIRST script loaded AFTER MainWindow.tjs
-                // KAGWindow class now exists, patch its initD3D
-                d3dState = 2;
-                try {
-                    tTJSVariant r;
-                    TVPScriptEngine->EvalExpression(
-                        TJS_W("(function() {"
-                              "  if (typeof global.KAGWindow !== 'undefined') {"
-                              "    var orig = global.KAGWindow.prototype.initD3D;"
-                              "    global.KAGWindow.prototype.initD3D = function() {"
-                              "      try {"
-                              "        this.drawDevice = new global.DrawDeviceD3D();"
-                              "        this.isD3D = true;"
-                              "        System.inform('initD3D patched: isD3D=true');"
-                              "      } catch(e) {"
-                              "        if (orig) orig.apply(this, arguments);"
-                              "      }"
-                              "    };"
-                              "  }"
-                              "})()"),
-                        &r, nullptr, nullptr);
-                } catch(...) {}
-            }
-        }
-    }
+    // ShortCutInitialPadKeyMap is now defined in DrawDeviceD3D constructor
+    // (DrawDeviceD3D.cpp) which runs before keybinder.tjs.
 
     { // for bytecode
         ttstr place(TVPSearchPlacedPath(name));

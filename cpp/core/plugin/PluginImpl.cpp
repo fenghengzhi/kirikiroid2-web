@@ -88,27 +88,6 @@ void TVPLoadPlugin(const ttstr &name) {
     // initD3D will try to create a DrawDeviceD3D and set isD3D=true.
     auto nameStr = name.AsStdString();
     std::transform(nameStr.begin(), nameStr.end(), nameStr.begin(), ::tolower);
-    // When any motion-related plugin loads (after Config.tjs has run),
-    // force d3dMotion=true so initD3D will create DrawDeviceD3D.
-    if(!s_d3dForced) {
-#ifdef EMSCRIPTEN
-        EM_ASM({ console.warn('[D3D-HOOK] TVPLoadPlugin: ' + UTF8ToString($0)); },
-               nameStr.c_str());
-#endif
-        if(nameStr.find("motion") != std::string::npos ||
-           nameStr.find("emote") != std::string::npos) {
-            s_d3dForced = true;
-#ifdef EMSCRIPTEN
-            EM_ASM({ console.warn('[D3D-HOOK] Forcing d3dMotion=true'); });
-#endif
-            try {
-                tTJSVariant r;
-                TVPExecuteExpression(
-                    TJS_W("global.d3dMotion = true, global.d3dMode = 1"),
-                    &r);
-            } catch(...) {}
-        }
-    }
 }
 
 //---------------------------------------------------------------------------
@@ -148,9 +127,7 @@ void TVPLoadInternalPlugins() {
     ncbAutoRegister::AllRegist();
     ncbAutoRegister::LoadModule(TJS_W("xp3filter.dll"));
     ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
-    // Pre-load DrawDeviceD3D stub so game scripts can instantiate DrawDeviceD3D
-    ncbAutoRegister::LoadModule(TJS_W("DrawDeviceD3D.dll"));
-    ncbAutoRegister::LoadModule(TJS_W("DrawDeviceD3DZ.dll"));
+    // DrawDeviceD3D.dll is loaded on demand when game calls Plugins.link
 }
 
 bool TVPLoadInternalPlugin(const ttstr &_name) {

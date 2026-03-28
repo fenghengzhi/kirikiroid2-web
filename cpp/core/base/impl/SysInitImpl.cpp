@@ -542,6 +542,16 @@ static void TVPInitProgramArgumentsAndDataPath(bool stop_after_datapath_got) {
             PushConfigFileOptions(options[2]); // has more priority
             PushConfigFileOptions(options[1]); // has more priority
             PushConfigFileOptions(options[0]); // has lesser priority
+
+#ifdef EMSCRIPTEN
+            // Web build: enable D3D motion rendering.
+            // In kirikiroid2 (Android), the launcher passes -d3dmotion
+            // to enable the D3D motion path. The web build's DrawDeviceD3D
+            // wrapper provides a compatible iTVPDrawDevice, so games can
+            // use the D3D rendering path for logo animations etc.
+            TVPProgramArguments.emplace_back(TJS_W("-d3dmode"));
+            TVPProgramArguments.emplace_back(TJS_W("-d3dmotion"));
+#endif
         } catch(...) {
             for(auto &option : options)
                 if(option)

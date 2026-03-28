@@ -8,16 +8,23 @@
 - Full env one-liner: `export EMSDK=/Users/bytedance/emsdk && export VCPKG_ROOT=/Users/bytedance/vcpkg && export PATH="/opt/homebrew/opt/bison/bin:$EMSDK:$EMSDK/upstream/emscripten:$EMSDK/node/20.18.0_64bit/bin:/opt/homebrew/bin:$PATH"`
 - After CMakeLists.txt changes (file add/remove/rename), must re-run `cmake --preset` before build
 - If bison errors with "require 3.8.2 but have 2.3", add `-DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison`
+- IMPORTANT: Kill coi-server BEFORE building — it serves stale wasm if build runs while server is up
+- Asan build (`Web Debug Asan Config`) produces ~126MB wasm; coi-server may fail to serve it
 
 ## Project Structure
 - `cpp/plugins/` — NCB plugin DLLs (each file = one virtual .dll module)
   - `PackinOne.cpp` — Batch loader that loads 8 sub-plugins when `Plugins.link("PackinOne.dll")` is called
+  - `DrawDeviceD3D.cpp` — iTVPDrawDevice wrapper (D3D stub for web build)
 - `cpp/plugins/motionplayer/` — EmotePlayer + Player (MotionPlayer) classes with NCB TJS2 bindings
   - `main.cpp` — NCB_REGISTER_CLASS/SUBCLASS macros for TJS2 registration
   - `EmotePlayer.{h,cpp}` — E-mote SDK wrapper (D3DEmotePlayer derives from it)
   - `Player.{h,cpp}` — Motion animation player (registered as Motion.Player in TJS2)
   - `ResourceManager.{h,cpp}` — PSB resource loading + decrypt seed management
 - `cpp/core/tjs2/` — TJS2 scripting engine core
+- `cpp/core/visual/WindowIntf.cpp` — Window class: drawDevice setter requires `interface` property returning iTVPDrawDevice*
+- `cpp/core/plugin/PluginImpl.cpp` — TVPLoadPlugin (called by Plugins.link), TVPLoadInternalPlugins (startup)
+- `cpp/core/base/StorageIntf.cpp` — Auto path table, TVPAddAutoPath, TVPGetPlacedPath
+- `cpp/core/environ/web/Platform.cpp` — Web-specific startup, auto-mounts sibling xp3 files from ZIP
 - `tests/unit-tests/plugins/motionplayer-dll.cpp` — MotionPlayer/EmotePlayer unit tests
 
 ## Reverse Engineering with IDA MCP
@@ -35,3 +42,7 @@
 - TJS2 method binding: `NCB_METHOD(name)`, `NCB_METHOD_RAW_CALLBACK(name, &Class::func, flags)`
 - Stub pattern: `#define STUB_WARN(name) LOGGER->warn("ClassName::" #name "() stub called")`
 - String conversion: `detail::narrow(ttstr)` → std::string, `detail::widen(std::string)` → ttstr
+
+## Debugging
+- XP3 extraction: `tools/bin/mac/rel/xp3 -o /tmp/out file.xp3`
+- Game's D3D mode controlled by `-d3dmotion` / `-d3dmode` command line args (set via `TVPProgramArguments` in SysInitImpl.cpp)
