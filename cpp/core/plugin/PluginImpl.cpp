@@ -124,8 +124,11 @@ void TVPLoadInternalPlugins() {
     ncbAutoRegister::AllRegist();
     ncbAutoRegister::LoadModule(TJS_W("xp3filter.dll"));
     ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
-    // DrawDeviceD3D.dll is loaded by D3D.tjs (which is auto-loaded
-    // after motion.tjs via ScriptMgnIntf.cpp hook).
+    // emoteplayer.dll must be pre-loaded so CanLoadPlugin("emoteplayer.dll")
+    // returns true. In libkrkr2.so, emoteplayer.dll is registered via static
+    // init (sub_42EB00) and its entry (sub_682528) loads motionplayer.dll.
+    // CanLoadPlugin checks TVPIsExistentStorage which checks HasModule.
+    ncbAutoRegister::LoadModule(TJS_W("emoteplayer.dll"));
 }
 
 bool TVPLoadInternalPlugin(const ttstr &_name) {

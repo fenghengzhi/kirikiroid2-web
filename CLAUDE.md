@@ -48,3 +48,6 @@
 - XP3 extraction: `tools/bin/mac/rel/xp3 -o /tmp/out file.xp3`
 - TJS2 bytecode disassembly: `tools/bin/mac/rel/tjsdump file.tjs` (use `/tjs2-disasm` skill)
 - Build native tools: `cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON -DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison && cmake --build out/macos/release --target tjsdump`
+
+## Workflow
+- IMPORTANT: When fixing a bug, do NOT directly apply a guessed fix. First add logging/debug output to confirm the root cause, verify the hypothesis, then apply the actual fix.

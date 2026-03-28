@@ -1106,6 +1106,17 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
     }
 #endif
 
+    // Check for internal plugins (registered via NCB but no actual file on disk).
+    // CanLoadPlugin() uses getPlacedPath() which previously didn't check internal
+    // plugins, causing motion.tjs to fail loading AffineSourceMotion.tjs.
+    {
+        ttstr storage = TVPExtractStorageName(name).AsLowerCase();
+        if(!storage.IsEmpty() &&
+           (TVPRegisteredPlugins.find(storage) != TVPRegisteredPlugins.end() ||
+            ncbAutoRegister::HasModule(storage)))
+            return TVPNormalizeStorageName(name);
+    }
+
     ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
     if(incache)
         return *incache; // found in cache
