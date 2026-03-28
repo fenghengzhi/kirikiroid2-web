@@ -1,0 +1,199 @@
+Total messages: 197 (Errors: 0, Warnings: 0)
+
+[LOG] [2026-03-28 07:10:29.302] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.302] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.302] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.302] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.302] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.302] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.303] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.303] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.303] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.303] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.303] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.303] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.303] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.303] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.327] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.327] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.327] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.327] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.327] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.327] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.328] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.328] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.328] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.328] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.328] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.328] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.328] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.328] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.351] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.352] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.376] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.377] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.377] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.377] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.400] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.401] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.425] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.425] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.425] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.425] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.425] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.425] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.427] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.427] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.427] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.427] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.427] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.427] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.427] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.427] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.451] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.451] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.451] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.452] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.478] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.478] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.478] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.478] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.478] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.478] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.479] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.479] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.479] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.479] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.479] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.479] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.479] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.479] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.503] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.504] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.528] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.528] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.528] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.528] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.528] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.529] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.529] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.529] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.529] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.529] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.529] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.529] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.529] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.531] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.556] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.582] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.582] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.582] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.582] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.582] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.583] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.583] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.583] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.583] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.583] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.583] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.583] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.583] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.584] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.608] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.609] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.609] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.609] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.633] [tjs2] [info]  ==== An exception occurred at world.tjs(1)[(function) onMotionAction], VM ip = 6 ====  @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.633] [tjs2] [info]  -- Disassembled VM code -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.633] [tjs2] [info]  #(1) Bytecode. @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.633] [tjs2] [info]  *0 = (int)0 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.633] [tjs2] [info]  *1 = (int)2 @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.633] [tjs2] [info]  *2 = (string)"substr" @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.635] [tjs2] [info]  -- Register dump -- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.635] [tjs2] [info]  %-8=()  %-7=(int)0  %-6=(object)(object 0x19864c8[unknown type]:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.635] [tjs2] [info]  %-5=(object)(object 0xf3cfa20[instance of class EnvGraphicLayer]:0xf3cfa20[instance of class EnvGraphicLayer]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.635] [tjs2] [info]  %-4=()  %-3=(string)"cycleComplete"  %-2=(object)(object 0xe57d80:0x0) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.635] [tjs2] [info]  %-1=(object)(object 0x3cbb7a0[instance of class KAGWorldPlugin]:0x3cbb7a0[instance of class KAGWorldPlugin]) @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.635] [tjs2] [info]  %0=()  %1=(int)0  %2=(int)2  %3=()  %4=(int)0  %5=() @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.635] [tjs2] [info]  -------------------------------------------------------------------------------------- @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.635] [tjs2] [info]  Cannot convert the variable type (() to Object) at world.tjs(1)[(function) onMotionAction] @ http://localhost:8090/index.html?game=/game.zip:662
+[LOG] [2026-03-28 07:10:29.687] [plugin] [debug] load psb file: title.PIMG @ http://localhost:8090/index.html?game=/game.zip:662

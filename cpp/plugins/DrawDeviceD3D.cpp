@@ -35,25 +35,31 @@ public:
             Real = TVPMainWindow->GetDrawDevice();
         TVPAddLog(TJS_W("(info) DrawDeviceD3D created (wrapper around PassThroughDrawDevice)"));
 
-        // Define ShortCutInitialPadKeyMap on global scope.
-        // In D3D mode, keybinder.tjs accesses this before it's defined
-        // by default.tjs. We pre-define it as an empty dictionary.
-        iTJSDispatch2 *global = TVPGetScriptDispatch();
-        if(global) {
-            tTJSVariant existing;
-            if(TJS_FAILED(global->PropGet(0, TJS_W("ShortCutInitialPadKeyMap"),
-                   nullptr, &existing, global)) ||
-               existing.Type() == tvtVoid) {
-                iTJSDispatch2 *dict = TJSCreateDictionaryObject();
-                if(dict) {
-                    tTJSVariant v(dict, dict);
-                    global->PropSet(TJS_MEMBERENSURE,
-                        TJS_W("ShortCutInitialPadKeyMap"),
-                        nullptr, &v, global);
-                    dict->Release();
+        // Define ShortCutInitialPadKeyMap and ShortCutInitialGamePadKeyMap
+        // on the global scope. In D3D mode, keybinder.tjs's callAfterInit
+        // hook accesses these via `.` prefix (= this member on global).
+        // Pre-define as empty dictionaries to prevent crash.
+        {
+            iTJSDispatch2 *global = TVPGetScriptDispatch();
+            if(global) {
+                const tjs_char *names[] = {
+                    TJS_W("ShortCutInitialPadKeyMap"),
+                    TJS_W("ShortCutInitialGamePadKeyMap"),
+                    nullptr
+                };
+                for(int i = 0; names[i]; ++i) {
+                    iTJSDispatch2 *dict = TJSCreateDictionaryObject();
+                    if(dict) {
+                        tTJSVariant v(dict, dict);
+                        global->PropSet(
+                            TJS_MEMBERENSURE | TJS_IGNOREPROP,
+                            names[i], nullptr, &v, global);
+                        dict->Release();
+                        TVPAddLog(ttstr(TJS_W("(info) Pre-defined ")) + names[i]);
+                    }
                 }
+                global->Release();
             }
-            global->Release();
         }
     }
 
@@ -385,6 +391,25 @@ NCB_REGISTER_CLASS(D3DLayer) {
 }
 NCB_REGISTER_CLASS(D3DImage) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_CLASS(D3DPicture) { NCB_CONSTRUCTOR(()); }
+
+// Post-registration: define ShortCutInitialPadKeyMap on global scope.
+// In D3D mode, keybinder.tjs accesses .ShortCutInitialPadKeyMap (= global member)
+// before it's defined by default.tjs. Pre-define as empty dictionaries.
+static void DrawDeviceD3D_PostRegist() {
+    // Define ShortCutInitialPadKeyMap via TJS eval so it's visible
+    // in the TJS2 scope chain (PropSet on global dispatch doesn't work
+    // for `.member` resolution in compiled bytecodes).
+    try {
+        tTJSVariant r;
+        TVPExecuteExpression(
+            TJS_W("global.ShortCutInitialPadKeyMap === void "
+                  "? (global.ShortCutInitialPadKeyMap = %[]) : void, "
+                  "global.ShortCutInitialGamePadKeyMap === void "
+                  "? (global.ShortCutInitialGamePadKeyMap = %[]) : void"),
+            &r);
+    } catch(...) {}
+}
+NCB_POST_REGIST_CALLBACK(DrawDeviceD3D_PostRegist);
 
 // Also register as DrawDeviceD3DZ.dll (libkrkr2.so registers both)
 #undef NCB_MODULE_NAME

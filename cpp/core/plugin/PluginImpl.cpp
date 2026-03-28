@@ -127,7 +127,18 @@ void TVPLoadInternalPlugins() {
     ncbAutoRegister::AllRegist();
     ncbAutoRegister::LoadModule(TJS_W("xp3filter.dll"));
     ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
-    // DrawDeviceD3D.dll is loaded on demand when game calls Plugins.link
+    // DrawDeviceD3D.dll is available for games that enable D3D mode.
+    // Not pre-loaded because some games (e.g. 千恋万花) crash in
+    // keybinder.tjs when DrawDeviceD3D class exists but d3dMotion is false.
+    // Games should load it via Plugins.link("DrawDeviceD3D.dll").
+
+    // Verify command line args
+    {
+        tTJSVariant val;
+        bool has_d3dmode = TVPGetCommandLine(TJS_W("-d3dmode"), &val);
+        bool has_d3dmotion = TVPGetCommandLine(TJS_W("-d3dmotion"), &val);
+        spdlog::warn("D3D args check: d3dmode={} d3dmotion={}", has_d3dmode, has_d3dmotion);
+    }
 }
 
 bool TVPLoadInternalPlugin(const ttstr &_name) {
