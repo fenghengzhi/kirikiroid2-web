@@ -127,11 +127,12 @@ void TVPLoadInternalPlugins() {
     ncbAutoRegister::AllRegist();
     ncbAutoRegister::LoadModule(TJS_W("xp3filter.dll"));
     ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
-    // DrawDeviceD3D.dll: not pre-loaded. Pre-loading causes keybinder.tjs
-    // crash because the game detects DrawDeviceD3D class and enters the
-    // D3D script path, but initD3D doesn't create the instance (d3dMotion
-    // is false from Config.tjs, and -d3dmotion arg doesn't override it).
-    // The game loads D3D scripts but ShortCutInitialPadKeyMap is undefined.
+    // Pre-load DrawDeviceD3D so initD3D can create the D3D draw device.
+    // Combined with -d3dmode arg (SysInitImpl.cpp), the game's KAGWindow
+    // constructor will: check d3dMode → true, check typeof DrawDeviceD3D
+    // → "Object", create new DrawDeviceD3D() → set isD3D=true.
+    ncbAutoRegister::LoadModule(TJS_W("DrawDeviceD3D.dll"));
+    ncbAutoRegister::LoadModule(TJS_W("DrawDeviceD3DZ.dll"));
 }
 
 bool TVPLoadInternalPlugin(const ttstr &_name) {

@@ -39,9 +39,11 @@ public:
 
     ~DrawDeviceD3D() = default;
 
-    static tjs_error factory(DrawDeviceD3D **result, tjs_int,
-                             tTJSVariant **, iTJSDispatch2 *) {
+    static tjs_error factory(DrawDeviceD3D **result, tjs_int numparams,
+                             tTJSVariant **params, iTJSDispatch2 *) {
         *result = new DrawDeviceD3D();
+        TVPAddLog(ttstr(TJS_W("(info) DrawDeviceD3D factory called, numparams=")) +
+            ttstr((tjs_int)numparams));
         return TJS_S_OK;
     }
 
