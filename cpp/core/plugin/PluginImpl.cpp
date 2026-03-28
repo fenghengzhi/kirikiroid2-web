@@ -127,12 +127,8 @@ void TVPLoadInternalPlugins() {
     ncbAutoRegister::AllRegist();
     ncbAutoRegister::LoadModule(TJS_W("xp3filter.dll"));
     ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll"));
-    // Pre-load DrawDeviceD3D so initD3D can create the D3D draw device.
-    // Combined with -d3dmode arg (SysInitImpl.cpp), the game's KAGWindow
-    // constructor will: check d3dMode → true, check typeof DrawDeviceD3D
-    // → "Object", create new DrawDeviceD3D() → set isD3D=true.
-    ncbAutoRegister::LoadModule(TJS_W("DrawDeviceD3D.dll"));
-    ncbAutoRegister::LoadModule(TJS_W("DrawDeviceD3DZ.dll"));
+    // DrawDeviceD3D.dll is loaded by D3D.tjs (which is auto-loaded
+    // after motion.tjs via ScriptMgnIntf.cpp hook).
 }
 
 bool TVPLoadInternalPlugin(const ttstr &_name) {

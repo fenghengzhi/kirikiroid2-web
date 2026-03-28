@@ -717,6 +717,24 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
     if(!TVPScriptEngine)
         TVPThrowInternalError;
 
+    // Web build: load D3D.tjs after motion.tjs to initialize D3D rendering.
+    // In kirikiroid2 Android, D3D.tjs is loaded by platform-specific code.
+    // D3D.tjs calls Plugins.link("drawdeviceD3D.dll") which registers the
+    // DrawDeviceD3D class, enabling the D3D motion rendering path.
+    {
+        static int d3dLoadState = 0;
+        if(d3dLoadState == 0) {
+            auto sn = name.AsStdString();
+            if(sn.find("motion.tjs") != std::string::npos) {
+                d3dLoadState = 1; // load D3D.tjs on next call
+            }
+        } else if(d3dLoadState == 1) {
+            d3dLoadState = 2;
+            try {
+                TVPExecuteStorage(TJS_W("D3D.tjs"), nullptr, false, nullptr);
+            } catch(...) {} // D3D.tjs might not exist in all games
+        }
+    }
 
     { // for bytecode
         ttstr place(TVPSearchPlacedPath(name));
