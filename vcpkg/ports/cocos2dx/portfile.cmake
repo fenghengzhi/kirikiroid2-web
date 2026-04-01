@@ -64,6 +64,7 @@ file(COPY "${CMAKE_CURRENT_LIST_DIR}/patch/cocos2d-x/cocos/platform/emscripten/"
 include("${CMAKE_CURRENT_LIST_DIR}/DownloadDeps.cmake")
 
 file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/patch/cocos2d-x/external/CMakeLists.txt" "${SOURCE_PATH}/external/CMakeLists.txt" ONLY_IF_DIFFERENT)
+file(COPY_FILE "${CMAKE_CURRENT_LIST_DIR}/patch/cocos2d-x/external/unzip/CMakeLists.txt" "${SOURCE_PATH}/external/unzip/CMakeLists.txt" ONLY_IF_DIFFERENT)
 
 set(_COCOS_OPTIONS
     -DBUILD_TESTS=OFF
