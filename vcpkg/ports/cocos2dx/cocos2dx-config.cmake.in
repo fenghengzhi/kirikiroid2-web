@@ -59,8 +59,8 @@ if(NOT EMSCRIPTEN)
     find_dependency(PNG)
 endif()
 
+find_dependency(ZLIB)
 if(@BUILD_EXT_ZLIB@)
-    find_dependency(ZLIB)
     add_library(ext_zlib ALIAS ZLIB::ZLIB)
 endif()
 
