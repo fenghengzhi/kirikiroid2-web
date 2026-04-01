@@ -97,11 +97,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
+          if-no-files-found: warn
           path: |
             out/web/release/vcpkg-manifest-install.log
             out/web/release/CMakeFiles/CMakeError.log
-            out/web/release/CMakeFiles/CMakeOutput.log
-            ${{ env.VCPKG_ROOT }}/buildtrees/*/*.log
+            out/web/release/CMakeFiles/CMakeConfigureLog.yaml
+            ${{ env.VCPKG_ROOT }}/buildtrees/**/*.log
 
       - name: Build
         run: |
