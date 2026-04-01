@@ -61,6 +61,7 @@ endif()
 
 if(@BUILD_EXT_ZLIB@)
     find_dependency(ZLIB)
+    add_library(ext_zlib ALIAS ZLIB::ZLIB)
 endif()
 
 if(@BUILD_EXT_UV@)
