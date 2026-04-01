@@ -90,7 +90,11 @@ jobs:
 
       - name: Configure CMake
         run: |
-          cmake --preset "Web Release Config"
+          cmake --preset "Web Release Config" 2>&1 | tee /tmp/cmake-configure.log
+
+      - name: Build
+        run: |
+          cmake --build out/web/release 2>&1 | tee /tmp/cmake-build.log
 
       - name: Upload logs on failure
         if: failure()
@@ -99,14 +103,10 @@ jobs:
           name: build-logs
           if-no-files-found: warn
           path: |
+            /tmp/cmake-configure.log
+            /tmp/cmake-build.log
             out/web/release/vcpkg-manifest-install.log
-            out/web/release/CMakeFiles/CMakeError.log
-            out/web/release/CMakeFiles/CMakeConfigureLog.yaml
             ${{ env.VCPKG_ROOT }}/buildtrees/**/*.log
-
-      - name: Build
-        run: |
-          cmake --build out/web/release
 
       - name: Upload artifacts
         if: success()
