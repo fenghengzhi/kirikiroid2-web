@@ -91,6 +91,15 @@ jobs:
         run: |
           cmake --preset "Web Release Config"
 
+      - name: Upload vcpkg logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-logs
+          path: |
+            out/web/release/vcpkg-manifest-install.log
+            ${{ env.VCPKG_ROOT }}/buildtrees/*/*.log
+
       - name: Build
         run: |
           cmake --build out/web/release
