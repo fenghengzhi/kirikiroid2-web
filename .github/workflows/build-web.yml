@@ -9,7 +9,6 @@ on:
 
 env:
   EMSDK_VERSION: "3.1.64"
-  VCPKG_BINARY_SOURCES: "clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,readwrite"
 
 jobs:
   build-web:
@@ -56,10 +55,12 @@ jobs:
           ${{ env.VCPKG_ROOT }}/bootstrap-vcpkg.sh
 
       - name: Install Mono (for NuGet)
+        if: ${{ secrets.NUGET_API_KEY != '' }}
         run: |
           sudo apt-get install -y mono-complete
 
       - name: Add NuGet sources
+        if: ${{ secrets.NUGET_API_KEY != '' }}
         run: |
           mono `${{ env.VCPKG_ROOT }}/vcpkg fetch nuget | tail -n 1` \
             sources add \
@@ -71,6 +72,7 @@ jobs:
           mono `${{ env.VCPKG_ROOT }}/vcpkg fetch nuget | tail -n 1` \
             setapikey "${{ secrets.NUGET_API_KEY }}" \
             -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          echo "VCPKG_BINARY_SOURCES=clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,readwrite" >> $GITHUB_ENV
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.18
