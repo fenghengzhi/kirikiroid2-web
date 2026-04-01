@@ -115,6 +115,3 @@ jobs:
             out/web/release/index.wasm
             out/web/release/index.data
             out/web/release/index.worker.js
-            out/web/release/manifest.webmanifest
-            out/web/release/sw.js
-            out/web/release/pwa/
