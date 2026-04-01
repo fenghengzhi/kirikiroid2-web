@@ -54,13 +54,19 @@ jobs:
           git clone https://github.com/microsoft/vcpkg.git ${{ env.VCPKG_ROOT }}
           ${{ env.VCPKG_ROOT }}/bootstrap-vcpkg.sh
 
+      - name: Check NuGet API key
+        run: |
+          if [ -n "${{ secrets.NUGET_API_KEY }}" ]; then
+            echo "HAS_NUGET_KEY=true" >> $GITHUB_ENV
+          fi
+
       - name: Install Mono (for NuGet)
-        if: ${{ secrets.NUGET_API_KEY != '' }}
+        if: ${{ env.HAS_NUGET_KEY == 'true' }}
         run: |
           sudo apt-get install -y mono-complete
 
       - name: Add NuGet sources
-        if: ${{ secrets.NUGET_API_KEY != '' }}
+        if: ${{ env.HAS_NUGET_KEY == 'true' }}
         run: |
           mono `${{ env.VCPKG_ROOT }}/vcpkg fetch nuget | tail -n 1` \
             sources add \
