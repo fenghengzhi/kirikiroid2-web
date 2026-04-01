@@ -26,10 +26,8 @@ target_include_directories(${target_name}
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/..>
 )
 
-get_target_property(zlib_header ext_zlib INTERFACE_INCLUDE_DIRECTORIES)
-if(zlib_header)
-  target_include_directories(${target_name} PRIVATE ${zlib_header})
-endif()
+find_package(ZLIB REQUIRED)
+target_link_libraries(${target_name} PRIVATE ZLIB::ZLIB)
 
 set_target_properties(${target_name}
     PROPERTIES
