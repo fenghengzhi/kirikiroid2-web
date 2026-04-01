@@ -55,11 +55,12 @@ if(@BUILD_EXT_WEBP@)
     find_dependency(WebP CONFIG)
 endif()
 
-find_dependency(PNG)
+if(NOT EMSCRIPTEN)
+    find_dependency(PNG)
+endif()
 
 if(@BUILD_EXT_ZLIB@)
     find_dependency(ZLIB)
-    add_library(ext_zlib ALIAS ZLIB::ZLIB)
 endif()
 
 if(@BUILD_EXT_UV@)
