@@ -813,6 +813,13 @@ static void _TVPDeliverContinuousEvent() // internal
     }
 
     if(!TVPEventDisabled && TVPContinuousHandlerVector.size()) {
+        static int chCnt = 0;
+        if(chCnt < 5) {
+            printf("_TVPDeliverContinuousEvent: handlers=%zu tick=%llu\n",
+                        TVPContinuousHandlerVector.size(), (unsigned long long)tick);
+                fflush(stdout);
+            chCnt++;
+        }
         bool emptyflag = false;
         tTJSVariant vtick((tjs_int64)tick);
         tTJSVariant *pvtick = &vtick;

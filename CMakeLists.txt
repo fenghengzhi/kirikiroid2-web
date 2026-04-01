@@ -75,7 +75,7 @@ elseif(WEB)
         "SHELL:-s FULL_ES2=1"
         "SHELL:-s ALLOW_MEMORY_GROWTH=1"
         "SHELL:-s INITIAL_MEMORY=67108864"
-        "SHELL:-s STACK_SIZE=524288"
+        "SHELL:-s STACK_SIZE=2097152"
         "$<$<CONFIG:Debug>:SHELL:-s STACK_OVERFLOW_CHECK=2>"
         "$<$<NOT:$<CONFIG:Debug>>:SHELL:-s STACK_OVERFLOW_CHECK=0>"
         "$<$<CONFIG:Debug>:SHELL:-s ASSERTIONS=2>"

@@ -1,5 +1,6 @@
 
 #define NOMINMAX
+#include <spdlog/spdlog.h>
 #include "tjsCommHead.h"
 #include "DrawDevice.h"
 #include "BasicDrawDevice.h"
@@ -540,6 +541,13 @@ void tTVPBasicDrawDevice::Show() {
         iWindowLayer *form = Window->GetForm();
         if(form && !Managers.empty()) {
             iTVPBaseBitmap *buf = Managers.back()->GetDrawBuffer();
+            static int showCnt = 0;
+            if(showCnt < 5 && buf) {
+                spdlog::get("core")->warn("BasicDrawDevice::Show buf={}x{} tex={} form={}",
+                                          buf->GetWidth(), buf->GetHeight(),
+                                          (void*)buf->GetTexture(), (void*)form);
+                showCnt++;
+            }
             if(buf)
                 form->UpdateDrawBuffer(buf->GetTexture());
         }

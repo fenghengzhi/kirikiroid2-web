@@ -10,6 +10,7 @@
 //---------------------------------------------------------------------------
 
 #include "tjsCommHead.h"
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include "DrawDevice.h"
@@ -579,7 +580,8 @@ void tTVPDrawDevice::RequestInvalidation(const tTVPRect &rect) {
 
 //---------------------------------------------------------------------------
 void tTVPDrawDevice::Update() {
-    // すべての layer manager の UpdateToDrawDevice を呼ぶ
+    static int duCnt = 0;
+    if(duCnt < 5) { spdlog::get("core")->warn("DrawDevice::Update managers={}", Managers.size()); duCnt++; }
     for(auto &Manager : Managers) {
         Manager->UpdateToDrawDevice();
     }

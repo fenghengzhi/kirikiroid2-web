@@ -2,6 +2,22 @@
   "enabledPlugins": {
     "ralph-wiggum@claude-code-plugins": true,
     "claude-md-management@claude-plugins-official": true,
-    "skill-creator@claude-plugins-official": true
+    "skill-creator@claude-plugins-official": true,
+    "pua@pua-skills": true,
+    "superpowers@claude-plugins-official": true
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "ida-pro-mcp"
+  ],
+  "permissions": {
+    "allow": [
+      "Read",
+      "Bash",
+      "WebFetch",
+      "mcp__ida-pro-mcp__*",
+      "Skill",
+      "Edit"
+    ]
   }
 }

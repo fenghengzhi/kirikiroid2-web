@@ -15,6 +15,10 @@ namespace PSB {
 }
 
 namespace motion {
+    class D3DAdaptor;
+}
+
+namespace motion {
     namespace detail {
         struct MotionClip;
         struct PlayerRuntime;
@@ -197,7 +201,13 @@ namespace motion {
         static tjs_error setUseD3DStatic(tTJSVariant *, tjs_int count,
                                          tTJSVariant **p, iTJSDispatch2 *) {
             if (count == 1 && (*p)->Type() == tvtInteger) {
+                bool old = _useD3D;
                 _useD3D = static_cast<bool>(**p);
+                auto logger = spdlog::get("plugin");
+                if(logger) {
+                    logger->warn("Motion.Player.useD3D: {} -> {}",
+                                 old, _useD3D);
+                }
                 return TJS_S_OK;
             }
             return TJS_E_INVALIDPARAM;
@@ -343,6 +353,7 @@ namespace motion {
         void syncVariableKeysFromActiveMotion();
         bool renderToLayer(iTJSDispatch2 *layerObject,
                            bool skipUpdate = false);
+        bool renderToD3DAdaptor(D3DAdaptor *adaptor);
         ttstr resolveCaptureSourcePath() const;
         const detail::MotionClip *selectActiveClip() const;
         const std::vector<std::string> &activeLayerNames() const;
@@ -385,6 +396,7 @@ namespace motion {
         bool _cameraAlive = false;
         bool _canvasCaptureEnabled = false;
         bool _clearEnabled = false;
+        bool _d3dDrawMode = false; // libkrkr2.so byte_909: set when draw(D3DAdaptor) called
         double _hitThreshold = 0.0;
         bool _preview = false;
         double _outsideFactor = 0.0;

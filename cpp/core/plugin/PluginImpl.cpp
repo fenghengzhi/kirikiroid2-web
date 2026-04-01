@@ -74,6 +74,15 @@ static void forceD3DOnKAGWindow() {
 void TVPLoadPlugin(const ttstr &name) {
     auto pluginName = name;
 
+#ifdef EMSCRIPTEN
+    {
+        auto s = name.AsStdString();
+        if(s.find("emote") != std::string::npos || s.find("motion") != std::string::npos) {
+            EM_ASM({ console.warn('[PLUGIN-LINK] ' + UTF8ToString($0)); }, s.c_str());
+        }
+    }
+#endif
+
     if(TVPLoadInternalPlugin(pluginName)) {
         TVPAddLog(ttstr(TJS_W("(info) Loading Plugin: ")) + name + TJS_W(" Success"));
     } else {

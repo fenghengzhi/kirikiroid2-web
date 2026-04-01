@@ -508,6 +508,10 @@ public:
     void onMouseDownEvent(Event *_e) {
         EventMouse *e = static_cast<EventMouse *>(_e);
         switch(e->getMouseButton()) {
+            case EventMouse::MouseButton::BUTTON_LEFT:
+                _mouseBtn = mbLeft;
+                onMouseDown(e->getLocation());
+                break;
             case EventMouse::MouseButton::BUTTON_RIGHT:
                 _mouseBtn = mbRight;
                 onMouseDown(e->getLocation());
@@ -524,6 +528,10 @@ public:
     void onMouseUpEvent(Event *_e) {
         EventMouse *e = static_cast<EventMouse *>(_e);
         switch(e->getMouseButton()) {
+            case EventMouse::MouseButton::BUTTON_LEFT:
+                _mouseBtn = mbLeft;
+                onMouseUp(e->getLocation());
+                break;
             case EventMouse::MouseButton::BUTTON_RIGHT:
                 _mouseBtn = mbRight;
                 onMouseUp(e->getLocation());

@@ -1,3 +1,4 @@
+#include <spdlog/spdlog.h>
 //---------------------------------------------------------------------------
 /*
         TVP2 ( T Visual Presenter 2 )  A script authoring tool
@@ -185,8 +186,23 @@ public:
         //        SDL_FreeSurface(surface);
     }
     void Show() override {
-        /* Update the screen! */
-        // TVPGetRenderManager()->PresentScreen();
+        // Upload the composited layer bitmap to the Cocos2D sprite texture.
+        static int showCnt = 0;
+        if(showCnt < 3) {
+            spdlog::get("core")->warn("Drawer::Show Device={} Window={} Managers={}",
+                                      (void*)Device,
+                                      Device ? (void*)Device->GetWindow() : nullptr,
+                                      Device ? Device->GetManagers().size() : 0);
+            showCnt++;
+        }
+        if(Device && Device->GetWindow()) {
+            iWindowLayer *form = Device->GetWindow()->GetForm();
+            if(form && !Device->GetManagers().empty()) {
+                iTVPBaseBitmap *buf = Device->GetManagers().back()->GetDrawBuffer();
+                if(buf)
+                    form->UpdateDrawBuffer(buf->GetTexture());
+            }
+        }
     }
     void Clear() override {
         // TVPGetRenderManager()->ClearScreen();
@@ -398,8 +414,22 @@ void tTVPPassThroughDrawDevice::NotifyLayerResize(iTVPLayerManager *manager) {
 //---------------------------------------------------------------------------
 void tTVPPassThroughDrawDevice::Show() {
     if(Drawer) {
-        // TVPDrawCursor();
         Drawer->Show();
+    }
+    // Upload composited layer bitmap to Cocos2D sprite texture.
+    static int ptddShowCnt = 0;
+    if(ptddShowCnt < 3) {
+        spdlog::get("core")->warn("PTDD::Show Window={} Drawer={} Managers={}",
+                                  (void*)Window, (void*)Drawer, Managers.size());
+        ptddShowCnt++;
+    }
+    if(Window) {
+        iWindowLayer *form = Window->GetForm();
+        if(form && !Managers.empty()) {
+            iTVPBaseBitmap *buf = Managers.back()->GetDrawBuffer();
+            if(buf)
+                form->UpdateDrawBuffer(buf->GetTexture());
+        }
     }
 }
 //---------------------------------------------------------------------------

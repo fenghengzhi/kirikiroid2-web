@@ -25,3 +25,5 @@ __pycache__/
 apk/
 unpack/
 .debugtmp/
+.claude.local.md
+.claude/settings.local.json

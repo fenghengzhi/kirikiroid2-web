@@ -13,12 +13,7 @@
 #include "SeparateLayerAdaptor.h"
 #include "D3DEmoteModule.h"
 #include "SourceCache.h"
-
-namespace motion {
-    // Present in libkrkr2.so as Motion.D3DAdaptor and referenced by game scripts
-    // to detect the kirikiroid2-compatible motion path.
-    class D3DAdaptor {};
-}
+#include "D3DAdaptor.h"
 
 using namespace motion;
 
@@ -34,7 +29,24 @@ NCB_REGISTER_SUBCLASS_DELAY(ObjSource) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {
     Factory(&SeparateLayerAdaptor::factory);
 }
-NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) { NCB_CONSTRUCTOR(()); }
+NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
+    Factory(&D3DAdaptor::factory);
+    NCB_METHOD(setPos);
+    NCB_METHOD(setSize);
+    NCB_METHOD(setClearColor);
+    NCB_METHOD(setResizable);
+    NCB_METHOD(removeAllTextures);
+    NCB_METHOD(removeAllBg);
+    NCB_METHOD(removeAllCaption);
+    NCB_METHOD(registerBg);
+    NCB_METHOD(registerCaption);
+    NCB_METHOD(unloadUnusedTextures);
+    RawCallback(TJS_W("captureCanvas"), &D3DAdaptor::captureCanvasStatic, 0);
+    NCB_PROPERTY(visible, getVisible, setVisible);
+    NCB_PROPERTY(alphaOpAdd, getAlphaOpAdd, setAlphaOpAdd);
+    NCB_PROPERTY(canvasCaptureEnabled, getCanvasCaptureEnabled, setCanvasCaptureEnabled);
+    NCB_PROPERTY(clearEnabled, getClearEnabled, setClearEnabled);
+}
 
 NCB_REGISTER_CLASS(Player) {
     NCB_CONSTRUCTOR((ResourceManager));

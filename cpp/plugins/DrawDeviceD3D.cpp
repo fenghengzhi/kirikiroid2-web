@@ -14,6 +14,9 @@
  */
 #define NCB_MODULE_NAME TJS_W("DrawDeviceD3D.dll")
 
+#include <algorithm>
+#include <vector>
+#include <spdlog/spdlog.h>
 #include "ncbind.hpp"
 #include "tjs.h"
 #include "tjsArray.h"
@@ -28,13 +31,15 @@
 class DrawDeviceD3D : public iTVPDrawDevice {
     iTVPDrawDevice *Real = nullptr;
     iTVPWindow *Window = nullptr;
+    std::vector<iTVPLayerManager*> myManagers;
 
 public:
     DrawDeviceD3D() {
         if (TVPMainWindow)
             Real = TVPMainWindow->GetDrawDevice();
+        spdlog::get("core")->warn("DrawDeviceD3D created: this={} Real={}",
+                                  (void*)static_cast<iTVPDrawDevice*>(this), (void*)Real);
         TVPAddLog(TJS_W("(info) DrawDeviceD3D created (wrapper around PassThroughDrawDevice)"));
-
     }
 
     ~DrawDeviceD3D() = default;
@@ -118,9 +123,11 @@ private:
     }
 
     void AddLayerManager(iTVPLayerManager *m) override {
+        myManagers.push_back(m);
         if (Real) Real->AddLayerManager(m);
     }
     void RemoveLayerManager(iTVPLayerManager *m) override {
+        myManagers.erase(std::remove(myManagers.begin(), myManagers.end(), m), myManagers.end());
         if (Real) Real->RemoveLayerManager(m);
     }
 
@@ -247,7 +254,20 @@ private:
         if (Real) Real->Update();
     }
     void Show() override {
+        static int showCnt = 0;
+        if(showCnt < 5) {
+            spdlog::get("core")->warn("DrawDeviceD3D::Show Real={} Window={} myManagers={}",
+                                      (void*)Real, (void*)Window, myManagers.size());
+            showCnt++;
+        }
         if (Real) Real->Show();
+        if(Window) {
+            iWindowLayer *form = Window->GetForm();
+            if(form && !myManagers.empty()) {
+                iTVPBaseBitmap *buf = myManagers.back()->GetDrawBuffer();
+                if(buf) form->UpdateDrawBuffer(buf->GetTexture());
+            }
+        }
     }
     void StartBitmapCompletion(iTVPLayerManager *m) override {
         if (Real) Real->StartBitmapCompletion(m);

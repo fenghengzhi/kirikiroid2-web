@@ -10,6 +10,7 @@
 //---------------------------------------------------------------------------
 
 #include "tjsCommHead.h"
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include "ScriptMgnIntf.h"
@@ -625,6 +626,12 @@ void tTJSNI_BaseWindow::NotifyUpdateRegionFixed(
 }
 //---------------------------------------------------------------------------
 void tTJSNI_BaseWindow::UpdateContent() {
+    static int ucCnt = 0;
+    if(ucCnt < 3) {
+        spdlog::get("core")->warn("UpdateContent: DrawDevice={} WaitVSync={}",
+                                  (void*)DrawDevice, WaitVSync);
+        ucCnt++;
+    }
     if(DrawDevice) {
         DrawDevice->Update();
 

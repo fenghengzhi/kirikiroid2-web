@@ -8,6 +8,9 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 #include <mutex>
 #include <optional>
 #include <unordered_set>
@@ -788,12 +791,21 @@ namespace motion::detail {
             return;
         }
 
-        for(auto &[_, state] : states) {
+        for(auto &[name, state] : states) {
             if(!state.playing) {
                 continue;
             }
 
             state.currentTime += dt;
+#ifdef __EMSCRIPTEN__
+            if(state.totalFrames > 100) {
+                static int stepLogCount = 0;
+                if(stepLogCount++ < 10) {
+                    EM_ASM({ console.warn('[stepTL] ' + UTF8ToString($0) + ' dt=' + $1 + ' t=' + $2 + '/' + $3); },
+                           name.c_str(), dt, state.currentTime, state.totalFrames);
+                }
+            }
+#endif
             if(state.totalFrames <= 0.0) {
                 continue;
             }
@@ -805,6 +817,13 @@ namespace motion::detail {
             if(state.loop) {
                 state.currentTime = std::fmod(state.currentTime, state.totalFrames);
             } else {
+#ifdef __EMSCRIPTEN__
+                static int stepEndCount = 0;
+                if(stepEndCount++ < 20) {
+                    EM_ASM({ console.warn('[stepTimelines-END] label=' + UTF8ToString($0) + ' dt=' + $1 + ' currentTime=' + $2 + ' totalFrames=' + $3); },
+                           name.c_str(), dt, state.currentTime, state.totalFrames);
+                }
+#endif
                 state.currentTime = state.totalFrames;
                 state.playing = false;
             }

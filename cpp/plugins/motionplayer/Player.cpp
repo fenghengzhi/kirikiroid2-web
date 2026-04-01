@@ -8,6 +8,10 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include "WindowIntf.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 #include <cstring>
 #include <optional>
 #include <random>
@@ -17,9 +21,11 @@
 
 #include "LayerIntf.h"
 #include "LayerBitmapIntf.h"
+#include "GraphicsLoaderIntf.h"
 #include "RuntimeSupport.h"
 #include "ResourceManager.h"
 #include "SeparateLayerAdaptor.h"
+#include "D3DAdaptor.h"
 #include "StorageIntf.h"
 #include "ncbind.hpp"
 #include "tjsArray.h"
@@ -46,6 +52,71 @@ namespace motion {
             }(value);
             return lowered.find("yuzulogo") != std::string::npos ||
                 lowered.find("m2logo") != std::string::npos;
+        }
+
+        // Return true if a source path is a motion cross-reference
+        // (e.g. "motion/title_bg/char_move"), not an image source.
+        bool isMotionCrossReference(const std::string &src) {
+            return src.rfind("motion/", 0) == 0;
+        }
+
+        // PSB RL decompression: each RGBA channel is separately RL-compressed.
+        // Format per channel: stream of [marker] entries where
+        //   marker & 0x80 → repeat (marker & 0x7F + 1) copies of next byte
+        //   otherwise      → (marker + 1) literal bytes follow
+        // Aligned to libkrkr2.so via FreeMote PSB RL spec.
+        std::vector<std::uint8_t> decompressPsbRL(
+            const std::vector<std::uint8_t> &compressed,
+            int width, int height) {
+            const size_t totalPixels = static_cast<size_t>(width) * height;
+            const size_t expectedBytes = totalPixels * 4u;
+            std::vector<std::uint8_t> output(expectedBytes, 0);
+
+            auto decompressChannel =
+                [&](size_t srcStart, std::vector<std::uint8_t> &channelBuf)
+                -> size_t {
+                channelBuf.resize(totalPixels, 0);
+                size_t src = srcStart;
+                size_t dst = 0;
+                while(src < compressed.size() && dst < totalPixels) {
+                    const auto marker = compressed[src++];
+                    if(marker & 0x80) {
+                        const size_t count =
+                            static_cast<size_t>(marker & 0x7F) + 1;
+                        if(src >= compressed.size()) break;
+                        const auto val = compressed[src++];
+                        const size_t end = std::min(dst + count, totalPixels);
+                        std::memset(channelBuf.data() + dst, val, end - dst);
+                        dst = end;
+                    } else {
+                        const size_t count =
+                            static_cast<size_t>(marker) + 1;
+                        const size_t end = std::min(dst + count, totalPixels);
+                        const size_t actual = end - dst;
+                        if(src + actual > compressed.size()) break;
+                        std::memcpy(channelBuf.data() + dst,
+                                    compressed.data() + src, actual);
+                        src += actual;
+                        dst = end;
+                    }
+                }
+                return src;
+            };
+
+            std::vector<std::uint8_t> channels[4];
+            size_t pos = 0;
+            for(int ch = 0; ch < 4; ++ch) {
+                pos = decompressChannel(pos, channels[ch]);
+            }
+
+            // Interleave channels into RGBA pixel output
+            for(size_t i = 0; i < totalPixels; ++i) {
+                output[i * 4 + 0] = channels[0][i]; // R
+                output[i * 4 + 1] = channels[1][i]; // G
+                output[i * 4 + 2] = channels[2][i]; // B
+                output[i * 4 + 3] = channels[3][i]; // A
+            }
+            return output;
         }
 
         constexpr double kMotionFramesPerMillisecond = 60.0 / 1000.0;
@@ -80,6 +151,17 @@ namespace motion {
         std::shared_ptr<detail::MotionSnapshot>
         activateMotion(detail::PlayerRuntime &runtime,
                        const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
+#ifdef __EMSCRIPTEN__
+            {
+                bool hadPlaying = std::any_of(
+                    runtime.timelines.begin(), runtime.timelines.end(),
+                    [](const auto &e) { return e.second.playing; });
+                if(hadPlaying && snapshot) {
+                    EM_ASM({ console.warn('[activateMotion-CLEAR] path=' + UTF8ToString($0) + ' HAD PLAYING'); },
+                           snapshot->path.c_str());
+                }
+            }
+#endif
             runtime.activeMotion = snapshot;
             runtime.timelines.clear();
             if(snapshot) {
@@ -696,8 +778,10 @@ namespace motion {
                                  std::unordered_map<std::string, LoadedSourceImage> &cache,
                                  const FrameContentState &state,
                                  const cv::Matx33d &transform) {
-            if(!state.visible || state.src.empty() || state.src == "layout") {
-                if(isLogoMotionLike(snapshot.path) && !state.src.empty() && state.src != "layout") {
+            if(!state.visible || state.src.empty() || state.src == "layout"
+               || isMotionCrossReference(state.src)) {
+                if(isLogoMotionLike(snapshot.path) && !state.src.empty()
+                   && state.src != "layout" && !isMotionCrossReference(state.src)) {
                     LOGGER->warn("drawEvaluatedSource skip: visible={} src='{}' opacity={}",
                                  state.visible, state.src, state.opacity);
                 }
@@ -775,84 +859,134 @@ namespace motion {
         // Layer-API based rendering (no OpenCV dependency, used in web build)
         // -----------------------------------------------------------------
 
+        // Navigate a PSB dictionary tree by a slash-separated path.
+        std::shared_ptr<const PSB::PSBDictionary> navigatePSBPath(
+            const std::shared_ptr<const PSB::PSBDictionary> &root,
+            const std::string &path) {
+            if(!root || path.empty()) return nullptr;
+            auto node = root;
+            std::istringstream pathStream(path);
+            std::string segment;
+            while(std::getline(pathStream, segment, '/')) {
+                if(segment.empty() || !node) continue;
+                auto child = std::dynamic_pointer_cast<const PSB::PSBDictionary>(
+                    (*node)[segment]);
+                if(!child) return nullptr;
+                node = child;
+            }
+            return node;
+        }
+
         // Find a PSB resource node by source name. The motion layer `src`
-        // field uses paths like "src/yuzu/white_box" but the PSB tree stores
-        // resources under "source/yuzu/icon/white_box/pixel".
-        // We search resourcesByPath for a match on the basename.
+        // field uses paths like "src/title/bg" and the PSB tree stores
+        // resources under "source/title/icon/bg/pixel".
+        // Aligned to libkrkr2.so sub_6948E8: navigates source/<group>/icon/<name>.
+        // If the resource is RL-compressed, decompresses into decompressedOut.
         const PSB::PSBResource *findPSBResourceBySourceName(
             const detail::MotionSnapshot &snapshot,
             const std::string &source,
-            int &outWidth, int &outHeight) {
+            int &outWidth, int &outHeight,
+            std::vector<std::uint8_t> &decompressedOut) {
             outWidth = 0;
             outHeight = 0;
-            if(source.empty()) {
+            decompressedOut.clear();
+            if(source.empty() || isMotionCrossReference(source)) {
                 return nullptr;
             }
 
+            // Strategy 1: Parse src/<group>/<name> and navigate directly
+            // to source/<group>/icon/<name> in the PSB tree.
+            // This is the primary path aligned to libkrkr2.so sub_6948E8.
+            if(source.rfind("src/", 0) == 0 && snapshot.root) {
+                // Parse "src/<group>/<name>" → group, name
+                const auto afterSrc = source.substr(4); // skip "src/"
+                const auto slash = afterSrc.find('/');
+                if(slash != std::string::npos) {
+                    const auto group = afterSrc.substr(0, slash);
+                    const auto name = afterSrc.substr(slash + 1);
+                    // Navigate: source/<group>/icon/<name>
+                    const auto iconPath =
+                        "source/" + group + "/icon/" + name;
+                    auto iconNode = navigatePSBPath(snapshot.root, iconPath);
+                    if(iconNode) {
+                        // Read width/height from the icon node
+                        if(auto w = psbDictionaryNumber(iconNode, "width"))
+                            outWidth = static_cast<int>(*w);
+                        if(auto h = psbDictionaryNumber(iconNode, "height"))
+                            outHeight = static_cast<int>(*h);
+                        if(outWidth <= 0) {
+                            if(auto tw = psbDictionaryNumber(iconNode,
+                                             "truncated_width"))
+                                outWidth = static_cast<int>(*tw);
+                        }
+                        if(outHeight <= 0) {
+                            if(auto th = psbDictionaryNumber(iconNode,
+                                             "truncated_height"))
+                                outHeight = static_cast<int>(*th);
+                        }
+                        // Get the pixel resource
+                        const auto pixelPath = iconPath + "/pixel";
+                        auto resIt = snapshot.resourcesByPath.find(pixelPath);
+                        if(resIt != snapshot.resourcesByPath.end() &&
+                           !resIt->second->data.empty() &&
+                           outWidth > 0 && outHeight > 0) {
+                            // Check for RL compression
+                            auto compressStr =
+                                psbDictionaryString(iconNode, "compress");
+                            if(compressStr == "RL") {
+                                decompressedOut = decompressPsbRL(
+                                    resIt->second->data,
+                                    outWidth, outHeight);
+                            }
+                            return resIt->second.get();
+                        }
+                    }
+                }
+            }
+
+            // Strategy 2 (fallback): Search resourcesByPath for a key
+            // ending with /<baseName>/pixel.
             const auto lastSlash = source.rfind('/');
             const auto baseName = (lastSlash != std::string::npos)
                 ? source.substr(lastSlash + 1) : source;
 
-            // Search resourcesByPath for a key ending with /<baseName>/pixel
             for(const auto &[resPath, resource] : snapshot.resourcesByPath) {
                 const auto targetSuffix = "/" + baseName + "/pixel";
                 if(resPath.size() >= targetSuffix.size() &&
                    resPath.compare(resPath.size() - targetSuffix.size(),
                                    targetSuffix.size(), targetSuffix) == 0) {
-                    // Found the pixel resource. Now find width/height siblings.
-                    // The parent path is resPath minus "/pixel"
-                    const auto parentPath = resPath.substr(0, resPath.size() - 6); // strip "/pixel"
-
-                    // Look for width/height in the PSB tree
+                    // Found the pixel resource — read dims from parent node
+                    const auto parentPath =
+                        resPath.substr(0, resPath.size() - 6); // strip "/pixel"
                     if(snapshot.root) {
-                        // Navigate the PSB tree to find the parent node
-                        auto node = snapshot.root;
-
-                        // Parse the parent path and navigate
-                        std::string segment;
-                        std::istringstream pathStream(parentPath);
-                        while(std::getline(pathStream, segment, '/')) {
-                            if(segment.empty() || !node) continue;
-                            auto child = std::dynamic_pointer_cast<const PSB::PSBDictionary>(
-                                (*node)[segment]);
-                            if(!child) {
-                                node = nullptr;
-                                break;
-                            }
-                            node = child;
-                        }
-
+                        auto node = navigatePSBPath(snapshot.root, parentPath);
                         if(node) {
-                            if(auto w = psbDictionaryNumber(node, "width")) {
+                            if(auto w = psbDictionaryNumber(node, "width"))
                                 outWidth = static_cast<int>(*w);
-                            }
-                            if(auto h = psbDictionaryNumber(node, "height")) {
+                            if(auto h = psbDictionaryNumber(node, "height"))
                                 outHeight = static_cast<int>(*h);
-                            }
-                            // Also check truncated dimensions
                             if(outWidth <= 0) {
-                                if(auto tw = psbDictionaryNumber(node, "truncated_width")) {
+                                if(auto tw = psbDictionaryNumber(node,
+                                                 "truncated_width"))
                                     outWidth = static_cast<int>(*tw);
-                                }
                             }
                             if(outHeight <= 0) {
-                                if(auto th = psbDictionaryNumber(node, "truncated_height")) {
+                                if(auto th = psbDictionaryNumber(node,
+                                                 "truncated_height"))
                                     outHeight = static_cast<int>(*th);
-                                }
                             }
-                            // Log compress type and truncated dims
-                            if(isLogoMotionLike(snapshot.path)) {
-                                auto compressStr = psbDictionaryString(node, "compress");
-                                auto tw = psbDictionaryNumber(node, "truncated_width");
-                                auto th = psbDictionaryNumber(node, "truncated_height");
-                                LOGGER->warn("PSB source: {}x{} compress='{}' trunc={}x{}",
-                                             outWidth, outHeight, compressStr,
-                                             tw.value_or(-1), th.value_or(-1));
+                            // Check for RL compression
+                            auto compressStr =
+                                psbDictionaryString(node, "compress");
+                            if(compressStr == "RL" &&
+                               outWidth > 0 && outHeight > 0) {
+                                decompressedOut = decompressPsbRL(
+                                    resource->data, outWidth, outHeight);
                             }
                         }
                     }
-
-                    if(outWidth > 0 && outHeight > 0 && !resource->data.empty()) {
+                    if(outWidth > 0 && outHeight > 0 &&
+                       !resource->data.empty()) {
                         return resource.get();
                     }
                 }
@@ -861,6 +995,12 @@ namespace motion {
         }
 
         // Write raw BGRA pixel data from a PSB resource to a Layer
+        // Load PSB resource pixel data into a layer.
+        // Based on libkrkr2.so sub_6948E8: PSB texture data is raw RGBA8
+        // pixels (not RL-compressed). The data size may be smaller than
+        // width*height*4 — only data.size()/4 pixels are valid, the rest
+        // should be zero (transparent). RGB order is swapped to BGRA for
+        // TJS layers (TVPReverseRGB in libkrkr2.so).
         bool loadPSBResourceToLayer(
             tTJSNI_BaseLayer *layer,
             const PSB::PSBResource &resource,
@@ -882,120 +1022,27 @@ namespace motion {
                 return false;
             }
 
-            const auto srcPitch = static_cast<size_t>(width) * 4u;
-            const auto expectedSize = srcPitch * static_cast<size_t>(height);
-
-            if(resource.data.size() >= expectedSize) {
-                // Raw BGRA32 pixel data
-                for(int row = 0; row < height; ++row) {
-                    std::memcpy(
-                        dstPixels + static_cast<size_t>(pitch) * row,
-                        resource.data.data() + srcPitch * row,
-                        srcPitch);
-                }
-                return true;
+            // Zero-fill the entire layer buffer first
+            const auto totalRows = static_cast<size_t>(height);
+            for(size_t row = 0; row < totalRows; ++row) {
+                std::memset(dstPixels + pitch * row, 0,
+                            static_cast<size_t>(width) * 4u);
             }
 
-            // Debug: hex dump first 32 bytes
-            {
-                std::string hex;
-                for(size_t i = 0; i < std::min<size_t>(32, resource.data.size()); ++i) {
-                    char buf[4];
-                    snprintf(buf, sizeof(buf), "%02x ", resource.data[i]);
-                    hex += buf;
-                }
-                LOGGER->warn("PSB resource hex[0..31] for {}x{}: {}", width, height, hex);
+            // Copy raw RGBA8 data, swapping R↔B → BGRA (TJS format)
+            const size_t pixelCount = resource.data.size() / 4u;
+            const auto *src = resource.data.data();
+            for(size_t i = 0; i < pixelCount; ++i) {
+                const size_t px = i % static_cast<size_t>(width);
+                const size_t py = i / static_cast<size_t>(width);
+                if(py >= totalRows) break;
+                auto *dst = dstPixels + pitch * py + px * 4;
+                dst[0] = src[i * 4 + 2]; // B ← src R
+                dst[1] = src[i * 4 + 1]; // G ← src G
+                dst[2] = src[i * 4 + 0]; // R ← src B
+                dst[3] = src[i * 4 + 3]; // A ← src A
             }
-
-            // Data is compressed. Try M2-style RL decompression.
-            // Each pixel channel (B,G,R,A) is encoded separately with:
-            //   byte 0x00-0x7F: copy (byte+1) literal values
-            //   byte 0x80-0xFF: repeat next value (256-byte+1) times
-            // Channels are concatenated in B,G,R,A order but the actual
-            // pixel data may be stored as separate channel planes.
-            {
-                auto rlDecode = [](const std::uint8_t *src, size_t srcLen,
-                                   std::uint8_t *dst, size_t dstLen) -> bool {
-                    size_t si = 0, di = 0;
-                    while(si < srcLen && di < dstLen) {
-                        std::uint8_t cmd = src[si++];
-                        if(cmd <= 0x7F) {
-                            size_t count = static_cast<size_t>(cmd) + 1u;
-                            for(size_t i = 0; i < count && si < srcLen && di < dstLen; ++i) {
-                                dst[di++] = src[si++];
-                            }
-                        } else {
-                            size_t count = 256u - static_cast<size_t>(cmd) + 1u;
-                            if(si >= srcLen) break;
-                            std::uint8_t value = src[si++];
-                            for(size_t i = 0; i < count && di < dstLen; ++i) {
-                                dst[di++] = value;
-                            }
-                        }
-                    }
-                    return di == dstLen;
-                };
-
-                const size_t pixelCount = static_cast<size_t>(width) *
-                    static_cast<size_t>(height);
-
-                // Try decoding as 4 separate channel planes (BGRA)
-                std::vector<std::uint8_t> decoded(expectedSize);
-
-                // FreeMote RL: marker <= 0x7F → literal (marker+1 bytes)
-                //              marker >  0x7F → repeat next byte (0x101 - marker) times
-                const std::uint8_t *src = resource.data.data();
-                size_t srcOff = 0;
-                bool success = true;
-                for(int ch = 0; ch < 4; ++ch) {
-                    std::vector<std::uint8_t> channelData(pixelCount, 0);
-                    size_t si = srcOff, di = 0;
-                    while(si < resource.data.size() && di < pixelCount) {
-                        std::uint8_t marker = src[si++];
-                        if(marker <= 0x7F) {
-                            size_t count = static_cast<size_t>(marker) + 1u;
-                            for(size_t i = 0; i < count && si < resource.data.size() && di < pixelCount; ++i) {
-                                channelData[di++] = src[si++];
-                            }
-                        } else {
-                            size_t count = 0x101u - static_cast<size_t>(marker);
-                            if(si >= resource.data.size()) break;
-                            std::uint8_t value = src[si++];
-                            for(size_t i = 0; i < count && di < pixelCount; ++i) {
-                                channelData[di++] = value;
-                            }
-                        }
-                    }
-                    if(di == 0) {
-                        success = false;
-                        break;
-                    }
-                    // Channel order in M2 PSB: R, G, B, A → store as BGRA
-                    // (TJS Layer pixel format is BGRA)
-                    // Map: ch0→R(offset 2), ch1→G(offset 1), ch2→B(offset 0), ch3→A(offset 3)
-                    static const int channelOffset[] = { 2, 1, 0, 3 };
-                    const int offset = channelOffset[ch];
-                    for(size_t p = 0; p < pixelCount; ++p) {
-                        decoded[p * 4 + offset] = channelData[p];
-                    }
-                    srcOff = si;
-                }
-
-                if(success) {
-                    // Copy decoded BGRA data to the layer buffer
-                    for(int row = 0; row < height; ++row) {
-                        std::memcpy(
-                            dstPixels + static_cast<size_t>(pitch) * row,
-                            decoded.data() + srcPitch * row,
-                            srcPitch);
-                    }
-                    return true;
-                }
-            }
-
-            LOGGER->warn("PSB resource decompression failed: have={} expected={} ({}x{})",
-                         resource.data.size(), expectedSize, width, height);
-            return false;
+            return true;
         }
 
         // Try to resolve a source image path for the given source name in the
@@ -1004,7 +1051,7 @@ namespace motion {
         ttstr resolveMotionSourcePath(
             const detail::MotionSnapshot &snapshot,
             const std::string &source) {
-            if(source.empty()) {
+            if(source.empty() || isMotionCrossReference(source)) {
                 return {};
             }
 
@@ -1066,207 +1113,47 @@ namespace motion {
             return {};
         }
 
-        // Render a single motion layer node to the target using Layer API.
-        // scratchLayer is used temporarily to load source images.
-        bool renderMotionLayerViaLayerAPI(
-            tTJSNI_BaseLayer *target,
-            tTJSNI_BaseLayer *scratchLayer,
-            const detail::MotionSnapshot &snapshot,
-            std::unordered_set<std::string> &loadedSources,
-            const std::shared_ptr<const PSB::PSBDictionary> &layerNode,
+        // Flatten a PSB layer node tree into a list of render nodes.
+        // Aligned to libkrkr2.so sub_6C4E28: converts tree into flat list
+        // with pre-computed positions for the sub_6C7440 render loop.
+        struct FlatRenderNode {
+            FrameContentState state;
+            double x = 0.0, y = 0.0;     // computed position
+            double scaleX = 1.0, scaleY = 1.0; // accumulated scale
+        };
+
+        void flattenLayerNodes(
+            const std::shared_ptr<const PSB::PSBDictionary> &node,
             double time,
             double parentX, double parentY,
-            double parentScaleX, double parentScaleY) {
-            if(!layerNode) {
-                return false;
-            }
-
-            const auto state = evaluateLayerContent(layerNode, time);
+            double parentScaleX, double parentScaleY,
+            std::vector<FlatRenderNode> &out) {
+            if(!node) return;
+            const auto state = evaluateLayerContent(node, time);
             const double curX = parentX + (state.x + state.ox) * parentScaleX;
             const double curY = parentY + (state.y + state.oy) * parentScaleY;
             double curScaleX = parentScaleX;
             double curScaleY = parentScaleY;
-            const bool logoLike = isLogoMotionLike(snapshot.path);
 
-            bool drewAny = false;
-
-            if(logoLike && (!state.src.empty() || state.visible)) {
-                const auto children = psbDictionaryList(layerNode, "children");
-                LOGGER->warn("LayerAPI node: src='{}' visible={} opacity={:.2f} "
-                             "pos=({:.0f},{:.0f}) scale=({:.2f},{:.2f}) children={}",
-                             state.src, state.visible, state.opacity,
-                             curX, curY, curScaleX, curScaleY,
-                             children ? children->size() : 0u);
-            }
-            // Draw this node's source image if visible
-            if(state.visible && !state.src.empty() && state.src != "layout") {
-                bool sourceLoaded = false;
-                double srcW = 0.0, srcH = 0.0;
-
-                // Try 1: resolve via storage system (for external image files)
-                {
-                    const auto resolvedPath = resolveMotionSourcePath(snapshot, state.src);
-                    if(!resolvedPath.IsEmpty()) {
-                        if(logoLike) {
-                            LOGGER->warn("LayerAPI: loading src='{}' path='{}'",
-                                         state.src, resolvedPath.AsStdString());
-                        }
-                        // If the path has no extension, try with .png
-                        ttstr loadPath = resolvedPath;
-                        const auto pathStr = detail::narrow(resolvedPath);
-                        if(pathStr.rfind('.') == std::string::npos ||
-                           pathStr.rfind('.') < pathStr.rfind('/')) {
-                            loadPath = resolvedPath + TJS_W(".png");
-                        }
-                        try {
-                            if(!scratchLayer->GetHasImage()) {
-                                scratchLayer->SetHasImage(true);
-                            }
-                            if(logoLike) {
-                                LOGGER->warn("LayerAPI: calling LoadImages path='{}'",
-                                             loadPath.AsStdString());
-                            }
-                            if(auto *meta = scratchLayer->LoadImages(loadPath, TVP_clNone)) {
-                                meta->Release();
-                            }
-                            auto *srcImage = scratchLayer->GetMainImage();
-                            if(srcImage && srcImage->GetWidth() > 0 && srcImage->GetHeight() > 0) {
-                                srcW = static_cast<double>(srcImage->GetWidth());
-                                srcH = static_cast<double>(srcImage->GetHeight());
-                                sourceLoaded = true;
-                                if(logoLike) {
-                                    LOGGER->warn("LayerAPI: loaded via LoadImages {}x{}",
-                                                 srcImage->GetWidth(), srcImage->GetHeight());
-                                }
-                            }
-                        } catch(const eTJS &e) {
-                            if(logoLike) {
-                                LOGGER->warn("LayerAPI: LoadImages failed TJS: {}",
-                                             ttstr(e.GetMessage()).AsStdString());
-                            }
-                        } catch(const std::exception &e) {
-                            if(logoLike) {
-                                LOGGER->warn("LayerAPI: LoadImages failed: {}", e.what());
-                            }
-                        } catch(...) {
-                            if(logoLike) {
-                                LOGGER->warn("LayerAPI: LoadImages failed unknown");
-                            }
-                        }
-                    }
-                }
-
-                // Try 2: load directly from PSB resource data
-                if(!sourceLoaded) {
-                    int resW = 0, resH = 0;
-                    const auto *resource = findPSBResourceBySourceName(
-                        snapshot, state.src, resW, resH);
-                    if(resource && resW > 0 && resH > 0) {
-                        if(loadPSBResourceToLayer(scratchLayer, *resource, resW, resH)) {
-                            srcW = static_cast<double>(resW);
-                            srcH = static_cast<double>(resH);
-                            sourceLoaded = true;
-                            if(logoLike) {
-                                LOGGER->warn("LayerAPI: loaded PSB resource src='{}' {}x{} data={}",
-                                             state.src, resW, resH, resource->data.size());
-                            }
-                        } else if(logoLike) {
-                            LOGGER->warn("LayerAPI: PSB resource load failed src='{}' {}x{} data={}",
-                                         state.src, resW, resH, resource->data.size());
-                        }
-                    } else if(logoLike) {
-                        LOGGER->warn("LayerAPI: no PSB resource for src='{}'", state.src);
-                    }
-                }
-
-                if(sourceLoaded && srcW > 0.0 && srcH > 0.0) {
-                    // Direct pixel compositing onto target layer
-                    const double drawW = state.width > 0.0 ? state.width : srcW;
-                    const double drawH = state.height > 0.0 ? state.height : srcH;
-                    const double scaleX = (drawW / srcW) * curScaleX;
-                    const double scaleY = (drawH / srcH) * curScaleY;
-                    const double opacity = state.opacity;
-
-                    // Get the source pixels from scratch layer
-                    auto *srcBuf = reinterpret_cast<const std::uint8_t *>(
-                        scratchLayer->GetMainImagePixelBuffer());
-                    auto srcPitchVal = scratchLayer->GetMainImagePixelBufferPitch();
-                    int srcIW = static_cast<int>(srcW);
-                    int srcIH = static_cast<int>(srcH);
-
-                    // Get the target pixels
-                    auto *dstBuf = reinterpret_cast<std::uint8_t *>(
-                        target->GetMainImagePixelBufferForWrite());
-                    auto dstPitchVal = target->GetMainImagePixelBufferPitch();
-                    int dstW = static_cast<int>(target->GetImageWidth());
-                    int dstH = static_cast<int>(target->GetImageHeight());
-
-                    if(srcBuf && dstBuf && dstPitchVal > 0 && srcPitchVal > 0 &&
-                       dstW > 0 && dstH > 0) {
-                        // Simple blit with scaling and alpha blending
-                        const int dstStartX = static_cast<int>(curX);
-                        const int dstStartY = static_cast<int>(curY);
-                        const int drawIW = static_cast<int>(srcW * scaleX);
-                        const int drawIH = static_cast<int>(srcH * scaleY);
-
-                        for(int dy = 0; dy < drawIH; ++dy) {
-                            int dstY = dstStartY + dy;
-                            if(dstY < 0 || dstY >= dstH) continue;
-                            int srcY = static_cast<int>(dy / scaleY);
-                            if(srcY < 0 || srcY >= srcIH) continue;
-
-                            const auto *srcRow = srcBuf + srcPitchVal * srcY;
-                            auto *dstRow = dstBuf + dstPitchVal * dstY;
-
-                            for(int dx = 0; dx < drawIW; ++dx) {
-                                int dstX = dstStartX + dx;
-                                if(dstX < 0 || dstX >= dstW) continue;
-                                int srcX = static_cast<int>(dx / scaleX);
-                                if(srcX < 0 || srcX >= srcIW) continue;
-
-                                const auto *sp = srcRow + srcX * 4;
-                                auto *dp = dstRow + dstX * 4;
-
-                                // Alpha blend: src BGRA over dst BGRA
-                                int sa = static_cast<int>(sp[3] * opacity);
-                                if(sa <= 0) continue;
-                                if(sa >= 255) {
-                                    dp[0] = sp[0]; dp[1] = sp[1];
-                                    dp[2] = sp[2]; dp[3] = 255;
-                                } else {
-                                    int ia = 255 - sa;
-                                    dp[0] = static_cast<std::uint8_t>((sp[0] * sa + dp[0] * ia) / 255);
-                                    dp[1] = static_cast<std::uint8_t>((sp[1] * sa + dp[1] * ia) / 255);
-                                    dp[2] = static_cast<std::uint8_t>((sp[2] * sa + dp[2] * ia) / 255);
-                                    dp[3] = static_cast<std::uint8_t>(std::min(255, sa + dp[3] * ia / 255));
-                                }
-                            }
-                        }
-                        drewAny = true;
-                        loadedSources.insert(state.src);
-                    }
-                }
+            if(state.visible && !state.src.empty() && state.src != "layout"
+               && !isMotionCrossReference(state.src)) {
+                out.push_back({state, curX, curY, curScaleX, curScaleY});
             }
 
-            // Process children
-            if(const auto children = psbDictionaryList(layerNode, "children")) {
+            if(const auto children = psbDictionaryList(node, "children")) {
                 double childScaleX = curScaleX;
                 double childScaleY = curScaleY;
                 if(state.src == "layout" && state.width > 0.0 && state.height > 0.0) {
                     childScaleX = curScaleX * state.width;
                     childScaleY = curScaleY * state.height;
                 }
-
-                for(size_t index = 0; index < children->size(); ++index) {
-                    const auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                        (*children)[static_cast<int>(index)]);
-                    drewAny = renderMotionLayerViaLayerAPI(
-                        target, scratchLayer, snapshot, loadedSources,
-                        child, time, curX, curY, childScaleX, childScaleY) || drewAny;
+                for(size_t i = 0; i < children->size(); ++i) {
+                    auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                        (*children)[static_cast<int>(i)]);
+                    flattenLayerNodes(child, time, curX, curY,
+                                     childScaleX, childScaleY, out);
                 }
             }
-
-            return drewAny;
         }
 
     } // namespace
@@ -1282,6 +1169,17 @@ namespace motion {
     }
 
     void Player::setMotion(ttstr v) {
+#ifdef __EMSCRIPTEN__
+        {
+            bool hadPlaying = std::any_of(
+                _runtime->timelines.begin(), _runtime->timelines.end(),
+                [](const auto &e) { return e.second.playing; });
+            if(hadPlaying) {
+                EM_ASM({ console.warn('[setMotion-CLEAR] new=' + UTF8ToString($0) + ' old=' + UTF8ToString($1) + ' HAD PLAYING TIMELINES'); },
+                       v.c_str(), _motionKey.c_str());
+            }
+        }
+#endif
         if(isLogoMotionLike(detail::narrow(v))) {
             LOGGER->warn("Motion logo setMotion: request={} previous={}",
                          v.AsStdString(), _motionKey.AsStdString());
@@ -1471,6 +1369,12 @@ namespace motion {
     }
 
     void Player::setProgressCompat(double v) {
+#ifdef __EMSCRIPTEN__
+        if(_runtime->activeMotion) {
+            EM_ASM({ console.warn('[setProgressCompat] v=' + $0 + ' path=' + UTF8ToString($1)); },
+                   v, _runtime->activeMotion->path.c_str());
+        }
+#endif
         ensureMotionLoaded();
         const auto progress = std::clamp(v, 0.0, 1.0);
         bool anyPlaying = false;
@@ -1486,6 +1390,8 @@ namespace motion {
             anyPlaying = anyPlaying || state.playing;
         }
         _allplaying = anyPlaying;
+        EM_ASM({ console.warn('[_allplaying] setProgressCompat=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
+               (int)_allplaying, (int)(uintptr_t)this);
     }
 
     double Player::getProgressCompat() const {
@@ -1665,6 +1571,8 @@ namespace motion {
         _allplaying = std::any_of(
             _runtime->timelines.begin(), _runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
+        EM_ASM({ console.warn('[_allplaying] stopTimeline=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
+               (int)_allplaying, (int)(uintptr_t)this);
     }
 
     void Player::setRotate(double rot) { STUB_WARN(setRotate); }
@@ -1831,6 +1739,109 @@ namespace motion {
         return resolved;
     }
 
+    bool Player::renderToD3DAdaptor(D3DAdaptor *adaptor) {
+        if(!adaptor || adaptor->getWidth() <= 0 || adaptor->getHeight() <= 0) {
+            return false;
+        }
+        // Guard against recursion: renderToLayer may trigger TJS callbacks
+        // that call drawCompat again.
+        static bool s_inRenderToD3D = false;
+        if(s_inRenderToD3D) return false;
+        s_inRenderToD3D = true;
+        struct Guard { ~Guard() { s_inRenderToD3D = false; } } guard;
+
+        ensureMotionLoaded();
+        if(!_runtime->activeMotion) return false;
+
+        // We need a scratch Layer for the rendering pipeline (LoadImages etc.).
+        // Reuse _runtime->lastCanvas if available, otherwise create one via TJS.
+        iTJSDispatch2 *scratchLayerObj = nullptr;
+        if(_runtime->lastCanvas.Type() == tvtObject &&
+           _runtime->lastCanvas.AsObjectNoAddRef()) {
+            scratchLayerObj = _runtime->lastCanvas.AsObjectNoAddRef();
+        }
+
+        // Create a temporary Layer if we don't have one cached
+        bool ownedLayer = false;
+        if(!scratchLayerObj) {
+            // Get the global Window object to use as parent
+            iTJSDispatch2 *global = TVPGetScriptDispatch();
+            if(!global) return false;
+            tTJSVariant kagVar;
+            if(TJS_SUCCEEDED(global->PropGet(0, TJS_W("kag"), nullptr, &kagVar, global)) &&
+               kagVar.Type() == tvtObject && kagVar.AsObjectNoAddRef()) {
+                // Create: new Layer(kag, kag.primaryLayer)
+                tTJSVariant primaryVar;
+                kagVar.AsObjectNoAddRef()->PropGet(0, TJS_W("primaryLayer"),
+                                                   nullptr, &primaryVar,
+                                                   kagVar.AsObjectNoAddRef());
+                if(primaryVar.Type() == tvtObject && primaryVar.AsObjectNoAddRef()) {
+                    iTJSDispatch2 *layerClass = nullptr;
+                    tTJSVariant lcVar;
+                    if(TJS_SUCCEEDED(global->PropGet(0, TJS_W("Layer"), nullptr, &lcVar, global)) &&
+                       lcVar.Type() == tvtObject) {
+                        layerClass = lcVar.AsObjectNoAddRef();
+                        tTJSVariant *args[] = { &kagVar, &primaryVar };
+                        iTJSDispatch2 *newLayerDisp = nullptr;
+                        if(TJS_SUCCEEDED(layerClass->CreateNew(0, nullptr, nullptr,
+                                                                &newLayerDisp, 2, args, layerClass)) &&
+                           newLayerDisp) {
+                            tTJSVariant newLayer(newLayerDisp, newLayerDisp);
+                            newLayerDisp->Release();
+                            scratchLayerObj = newLayer.AsObjectNoAddRef();
+                            _runtime->lastCanvas = newLayer;  // cache it
+                            ownedLayer = true;
+                        }
+                    }
+                }
+            }
+            global->Release();
+        }
+
+        if(!scratchLayerObj) return false;
+
+        // Render to the scratch Layer
+        if(!renderToLayer(scratchLayerObj, true)) return false;
+
+        // Copy pixels from scratch Layer to D3DAdaptor buffer
+        tTJSNI_BaseLayer *layer = nullptr;
+        if(TJS_FAILED(scratchLayerObj->NativeInstanceSupport(
+               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+               reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
+            return false;
+        }
+
+        const int w = adaptor->getWidth();
+        const int h = adaptor->getHeight();
+        const int layerW = static_cast<int>(layer->GetImageWidth());
+        const int layerH = static_cast<int>(layer->GetImageHeight());
+        const auto *srcBuf = reinterpret_cast<const std::uint8_t *>(
+            layer->GetMainImagePixelBuffer());
+        auto srcPitch = layer->GetMainImagePixelBufferPitch();
+
+        if(!srcBuf || srcPitch <= 0 || layerW <= 0 || layerH <= 0) return false;
+
+        // Resize adaptor buffer if needed
+        if(w != layerW || h != layerH) {
+            adaptor->setSize(layerW, layerH);
+        }
+        adaptor->clearBuffer();
+
+        auto *dstBuf = adaptor->getBuffer();
+        const auto dstPitch = adaptor->getBufferPitch();
+        const int copyH = std::min(layerH, adaptor->getHeight());
+        const int copyRowBytes = std::min(
+            static_cast<int>(layerW * 4), dstPitch);
+
+        for(int y = 0; y < copyH; ++y) {
+            std::memcpy(dstBuf + dstPitch * y,
+                        srcBuf + srcPitch * y,
+                        static_cast<size_t>(copyRowBytes));
+        }
+
+        return true;
+    }
+
     bool Player::renderToLayer(iTJSDispatch2 *layerObject,
                                bool skipUpdate) {
         if(!layerObject) {
@@ -1841,6 +1852,13 @@ namespace motion {
         if(!_runtime->activeMotion) {
             return false;
         }
+
+#ifdef __EMSCRIPTEN__
+        EM_ASM({ console.warn('[renderToLayer] obj=' + $0 + ' activeMotion=' + $1 + ' path=' + UTF8ToString($2)); },
+               (int)(layerObject != nullptr),
+               (int)(_runtime->activeMotion != nullptr),
+               _runtime->activeMotion ? _runtime->activeMotion->path.c_str() : "null");
+#endif
 
         const bool logoLike = isLogoMotionLike(_runtime->activeMotion->path);
 
@@ -1972,6 +1990,15 @@ namespace motion {
                                     srcPixels + srcPitch * row, srcPitch);
                             }
 
+                            {
+                                // Quick pixel check
+                                int nz = 0;
+                                for(int r = 0; r < canvasHeight; r += canvasHeight/3+1)
+                                    for(int c = 0; c < canvasWidth; c += canvasWidth/5+1)
+                                        if(dstPixels[pitch*r + c*4 + 3]) nz++;
+                                EM_ASM({ console.warn('[render] ' + $0 + 'x' + $1 + ' nz=' + $2 + ' skip=' + $3); },
+                                       canvasWidth, canvasHeight, nz, (int)skipUpdate);
+                            }
                             if(!skipUpdate) layer->Update(false);
                             _runtime->lastCanvas =
                                 tTJSVariant(layerObject, layerObject);
@@ -1986,19 +2013,32 @@ namespace motion {
         }
 #else
         // Layer-API based rendering (no OpenCV)
-        if(_runtime->activeMotion && !_runtime->activeMotion->resourcesByPath.empty()) {
+        // libkrkr2.so sub_6C7440 does not gate on resourcesByPath —
+        // motions can reference external image files without embedding
+        // PSB resources (e.g. logo .mtn files).
+        if(_runtime->activeMotion) {
             const auto *clip = selectActiveClip();
             const auto renderTime = activeClipTime(*_runtime, clip);
 
+            // Use the target layer's own size if it's large enough (e.g.
+            // motionWorkLayer at full screen resolution). Only fall back to
+            // motion's native size if the layer is too small (e.g. SLA owner
+            // at 64x64). libkrkr2.so renders at the target's size, not the
+            // motion's intrinsic size.
             int canvasWidth = static_cast<int>(layer->GetWidth());
             int canvasHeight = static_cast<int>(layer->GetHeight());
             if(canvasWidth <= 0 || canvasHeight <= 0) {
                 canvasWidth = static_cast<int>(layer->GetImageWidth());
                 canvasHeight = static_cast<int>(layer->GetImageHeight());
             }
-            if(canvasWidth <= 0 || canvasHeight <= 0) {
-                canvasWidth = static_cast<int>(_runtime->activeMotion->width);
-                canvasHeight = static_cast<int>(_runtime->activeMotion->height);
+            // Fall back to motion size only if layer is very small
+            if(canvasWidth < 128 || canvasHeight < 128) {
+                int motionW = static_cast<int>(_runtime->activeMotion->width);
+                int motionH = static_cast<int>(_runtime->activeMotion->height);
+                if(motionW > canvasWidth || motionH > canvasHeight) {
+                    canvasWidth = motionW;
+                    canvasHeight = motionH;
+                }
             }
 
             if(canvasWidth > 0 && canvasHeight > 0) {
@@ -2009,6 +2049,13 @@ namespace motion {
                     }
                     layer->SetImageSize(static_cast<tjs_uint>(canvasWidth),
                                         static_cast<tjs_uint>(canvasHeight));
+                    // Always set display size to match canvas
+                    layer->SetSize(canvasWidth, canvasHeight);
+                    // libkrkr2.so Player_DrawSLA_guess sets visible=true
+                    // on the resolved layer before rendering
+                    if(!layer->GetVisible()) {
+                        layer->SetVisible(true);
+                    }
 
                     // Set clip rect to full canvas
                     layer->SetClip(0, 0, canvasWidth, canvasHeight);
@@ -2037,25 +2084,190 @@ namespace motion {
                     const double globalSx = m[0]; // scale X (m11)
                     const double globalSy = m[3]; // scale Y (m22)
 
-                    bool drewAny = false;
-                    std::unordered_set<std::string> loadedSources;
-
+                    // Step 1 (sub_6C4E28): Flatten PSB layer tree into
+                    // a flat list with pre-computed positions.
+                    std::vector<FlatRenderNode> renderNodes;
                     for(const auto &layerName : layerNamesList) {
                         const auto *layers = activeLayersByName();
                         if(!layers) break;
                         const auto it = layers->find(layerName);
                         if(it == layers->end()) continue;
-
-                        bool result = renderMotionLayerViaLayerAPI(
-                            layer, layer, *_runtime->activeMotion,
-                            loadedSources, it->second, renderTime,
-                            globalTx, globalTy, globalSx, globalSy);
-                        if(logoLike) {
-                            LOGGER->warn("renderToLayer LayerAPI: layer '{}' rendered={}",
-                                         layerName, result);
-                        }
-                        drewAny = result || drewAny;
+                        flattenLayerNodes(it->second, renderTime,
+                                          globalTx, globalTy,
+                                          globalSx, globalSy,
+                                          renderNodes);
                     }
+
+                    // If we got 0 render nodes, check for motion cross-
+                    // references in the active clip's layers and resolve
+                    // them. A motion cross-reference has src like
+                    // "motion/<owner>/<clipLabel>". We look up the
+                    // referenced clip and flatten its layers instead.
+                    if(renderNodes.empty()) {
+                        const auto *layers = activeLayersByName();
+                        if(layers) {
+                            for(const auto &layerName : layerNamesList) {
+                                const auto it = layers->find(layerName);
+                                if(it == layers->end()) continue;
+                                const auto st = evaluateLayerContent(
+                                    it->second, renderTime);
+                                if(!isMotionCrossReference(st.src)) continue;
+                                // Parse "motion/<owner>/<clipLabel>"
+                                const auto parts = st.src.substr(7); // skip "motion/"
+                                const auto slash = parts.rfind('/');
+                                if(slash == std::string::npos) continue;
+                                const auto refLabel = parts.substr(slash + 1);
+                                // Look up the referenced clip
+                                const auto clipIt =
+                                    _runtime->activeMotion->clipsByLabel
+                                        .find(refLabel);
+                                if(clipIt ==
+                                   _runtime->activeMotion->clipsByLabel.end())
+                                    continue;
+                                // Flatten the referenced clip's layers
+                                for(const auto &refLayerName :
+                                    clipIt->second.layerNames) {
+                                    const auto refIt =
+                                        clipIt->second.layersByName
+                                            .find(refLayerName);
+                                    if(refIt ==
+                                       clipIt->second.layersByName.end())
+                                        continue;
+                                    flattenLayerNodes(
+                                        refIt->second, renderTime,
+                                        globalTx + (st.x + st.ox),
+                                        globalTy + (st.y + st.oy),
+                                        globalSx, globalSy, renderNodes);
+                                }
+                            }
+                        }
+                    }
+
+                    EM_ASM({ console.warn('[motion] nodes=' + $0 + ' layers=' + $1 + ' path=' + UTF8ToString($2)); },
+                           (int)renderNodes.size(), (int)layerNamesList.size(),
+                           _runtime->activeMotion->path.c_str());
+
+                    // Step 2 (sub_6C7440): Flat loop — for each node,
+                    // load source bitmap and call OperateAffine on target.
+                    bool drewAny = false;
+                    std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>> srcCache;
+
+                    for(const auto &node : renderNodes) {
+                        // Resolve source bitmap (with cache)
+                        std::shared_ptr<tTVPBaseBitmap> srcBmp;
+                        if(auto cit = srcCache.find(node.state.src);
+                           cit != srcCache.end()) {
+                            srcBmp = cit->second;
+                        } else {
+                            // Try file source via storage system
+                            const auto resolvedPath = resolveMotionSourcePath(
+                                *_runtime->activeMotion, node.state.src);
+                            if(!resolvedPath.IsEmpty()) {
+                                ttstr loadPath = resolvedPath;
+                                const auto ps = detail::narrow(resolvedPath);
+                                if(ps.rfind('.') == std::string::npos ||
+                                   ps.rfind('.') < ps.rfind('/')) {
+                                    loadPath = resolvedPath + TJS_W(".png");
+                                }
+                                try {
+                                    auto bmp = std::make_shared<tTVPBaseBitmap>(1, 1, 32);
+                                    TVPLoadGraphic(bmp.get(), loadPath,
+                                                   TVP_clNone, 0, 0,
+                                                   glmNormal, nullptr, nullptr);
+                                    if(bmp->GetWidth() > 0 && bmp->GetHeight() > 0)
+                                        srcBmp = bmp;
+                                } catch(...) {}
+                                EM_ASM({ console.warn('[src-file] src=' + UTF8ToString($0) + ' path=' + UTF8ToString($1) + ' ok=' + $2); },
+                                       node.state.src.c_str(), resolvedPath.c_str(), srcBmp ? 1 : 0);
+                            }
+                            // Try PSB embedded resource
+                            if(!srcBmp) {
+                                int rw = 0, rh = 0;
+                                std::vector<std::uint8_t> decompressed;
+                                const auto *res = findPSBResourceBySourceName(
+                                    *_runtime->activeMotion, node.state.src,
+                                    rw, rh, decompressed);
+                                if(res && rw > 0 && rh > 0 && !res->data.empty()) {
+                                    // Use decompressed data if RL was applied,
+                                    // otherwise use raw resource data
+                                    const auto &pixelData = decompressed.empty()
+                                        ? res->data : decompressed;
+                                    auto bmp = std::make_shared<tTVPBaseBitmap>(
+                                        static_cast<tjs_uint>(rw),
+                                        static_cast<tjs_uint>(rh), 32);
+                                    tTVPRect fr(0, 0, rw, rh);
+                                    bmp->Fill(fr, 0x00000000);
+                                    const auto *sd = pixelData.data();
+                                    for(int y = 0; y < rh; ++y) {
+                                        auto *row = static_cast<std::uint8_t *>(
+                                            bmp->GetScanLineForWrite(
+                                                static_cast<tjs_uint>(y)));
+                                        for(int x = 0; x < rw; ++x) {
+                                            const size_t si =
+                                                (static_cast<size_t>(y) * rw + x) * 4;
+                                            if(si + 3 >= pixelData.size()) break;
+                                            auto *dp = row + x * 4;
+                                            dp[0] = sd[si + 2]; // B <- R
+                                            dp[1] = sd[si + 1]; // G
+                                            dp[2] = sd[si + 0]; // R <- B
+                                            dp[3] = sd[si + 3]; // A
+                                        }
+                                    }
+                                    srcBmp = bmp;
+                                }
+                                EM_ASM({ console.warn('[src-psb] src=' + UTF8ToString($0) + ' found=' + $1 + ' w=' + $2 + ' h=' + $3 + ' rl=' + $4); },
+                                       node.state.src.c_str(), res ? 1 : 0, rw, rh,
+                                       decompressed.empty() ? 0 : 1);
+                            }
+                            srcCache.emplace(node.state.src, srcBmp);
+                        }
+
+                        if(!srcBmp || srcBmp->GetWidth() == 0) {
+                            EM_ASM({ console.warn('[src-fail] src=' + UTF8ToString($0)); },
+                                   node.state.src.c_str());
+                            continue;
+                        }
+
+                        // Compute affine destination points
+                        // Aligned to sub_6C7440 operateAffine call
+                        const double srcW = static_cast<double>(srcBmp->GetWidth());
+                        const double srcH = static_cast<double>(srcBmp->GetHeight());
+                        const double drawW = node.state.width > 0.0
+                            ? node.state.width : srcW;
+                        const double drawH = node.state.height > 0.0
+                            ? node.state.height : srcH;
+                        const double sx = (drawW / srcW) * node.scaleX;
+                        const double sy = (drawH / srcH) * node.scaleY;
+
+                        // libkrkr2.so applies -0.5 texel offset
+                        tTVPPointD pts[3];
+                        pts[0] = {node.x - 0.5,              node.y - 0.5};
+                        pts[1] = {node.x - 0.5 + srcW * sx,  node.y - 0.5};
+                        pts[2] = {node.x - 0.5,              node.y - 0.5 + srcH * sy};
+
+                        tTVPRect sr(0, 0, static_cast<tjs_int>(srcW),
+                                    static_cast<tjs_int>(srcH));
+                        const tjs_int opa = static_cast<tjs_int>(
+                            std::clamp(node.state.opacity * 255.0, 0.0, 255.0));
+
+                        try {
+                            layer->OperateAffine(pts, srcBmp.get(), sr,
+                                                 omAlpha, opa, stNearest);
+                            drewAny = true;
+                            EM_ASM({ console.warn('[affine-ok] src=' + UTF8ToString($0) + ' ' + $1 + 'x' + $2 + ' at(' + $3 + ',' + $4 + ') opa=' + $5); },
+                                   node.state.src.c_str(), (int)srcW, (int)srcH,
+                                   (int)node.x, (int)node.y, opa);
+                        } catch(const eTJS &e) {
+                            EM_ASM({ console.warn('[affine-err] src=' + UTF8ToString($0) + ' err=' + UTF8ToString($1)); },
+                                   node.state.src.c_str(), ttstr(e.GetMessage()).c_str());
+                        } catch(...) {
+                            EM_ASM({ console.warn('[affine-err] src=' + UTF8ToString($0) + ' unknown'); },
+                                   node.state.src.c_str());
+                        }
+                    }
+
+                    EM_ASM({ console.warn('[render-done] drewAny=' + $0 + ' nodes=' + $1 + ' canvas=' + $2 + 'x' + $3); },
+                           (int)drewAny, (int)renderNodes.size(), canvasWidth, canvasHeight);
 
                     if(drewAny) {
                         if(!skipUpdate) layer->Update(false);
@@ -2274,6 +2486,15 @@ namespace motion {
     }
 
     void Player::frameProgress(double dt) {
+#ifdef __EMSCRIPTEN__
+        if(_runtime->activeMotion && isLogoMotionLike(_runtime->activeMotion->path)) {
+            static int fpLogCount = 0;
+            if(fpLogCount++ < 30) {
+                EM_ASM({ console.warn('[frameProgress] dt=' + $0 + ' tickCount=' + $1 + ' path=' + UTF8ToString($2)); },
+                       dt, _tickCount, _runtime->activeMotion->path.c_str());
+            }
+        }
+#endif
         _frameLastTime = dt;
         _frameLoopTime += dt;
         _loopTime += dt;
@@ -2284,6 +2505,18 @@ namespace motion {
         _allplaying = std::any_of(
             _runtime->timelines.begin(), _runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
+        if(_runtime->activeMotion && isLogoMotionLike(_runtime->activeMotion->path)) {
+            static int fpLogoCount = 0;
+            if(fpLogoCount++ < 10) {
+                std::string tlDetail;
+                for(const auto &[k, v] : _runtime->timelines) {
+                    tlDetail += k + "(p=" + std::to_string(v.playing) + ",t=" +
+                        std::to_string(v.currentTime) + "/" + std::to_string(v.totalFrames) + ") ";
+                }
+                EM_ASM({ console.warn('[fp-logo] allplaying=' + $0 + ' dt=' + $1 + ' tl=' + UTF8ToString($2)); },
+                       (int)_allplaying, dt, tlDetail.c_str());
+            }
+        }
         _syncActive = _syncWaiting && _allplaying;
     }
 
@@ -2319,6 +2552,24 @@ namespace motion {
             if(disabled || !player || !player->_runtime) {
                 return TJS_S_OK;
             }
+#ifdef __EMSCRIPTEN__
+            {
+                static int selfDriveCallCount = 0;
+                if(selfDriveCallCount++ < 40) {
+                    std::string tlInfo;
+                    for(const auto &[k, v] : player->_runtime->timelines) {
+                        tlInfo += k + "(p=" + std::to_string(v.playing)
+                               + ",t=" + std::to_string(v.currentTime)
+                               + "/" + std::to_string(v.totalFrames)
+                               + ",loop=" + std::to_string(v.loop) + ") ";
+                    }
+                    std::string motPath = player->_runtime->activeMotion
+                        ? player->_runtime->activeMotion->path : "null";
+                    EM_ASM({ console.warn('[SelfDrive] player=0x' + ($0 >>> 0).toString(16) + ' allplaying=' + $1 + ' path=' + UTF8ToString($2) + ' tl=' + UTF8ToString($3)); },
+                           (int)(uintptr_t)player, (int)player->_allplaying, motPath.c_str(), tlInfo.c_str());
+                }
+            }
+#endif
             if(!player->_allplaying) {
                 // Animation finished — set _playing=0 directly on
                 // AffineSourceMotion so canWaitMovie() returns 0.
@@ -2369,6 +2620,10 @@ namespace motion {
 
     void Player::startSelfDrive(iTJSDispatch2 *objthis) {
         if(_selfDriving) return;
+#ifdef __EMSCRIPTEN__
+        EM_ASM({ console.warn('[startSelfDrive] player=0x' + ($0 >>> 0).toString(16) + ' objthis=' + $1); },
+               (int)(uintptr_t)this, (int)(objthis != nullptr));
+#endif
         _selfDriving = true;
         _selfDriveObjThis = objthis;
         auto *handler = new SelfDriveContinuousHandler();
@@ -2396,6 +2651,25 @@ namespace motion {
         // Set _playing=1 on AffineSourceMotion and override
         // canWaitMovie to return _playing for motion type too.
         auto *affineSource = handler->affine();
+#ifdef __EMSCRIPTEN__
+        if(affineSource) {
+            tTJSVariant stVal;
+            affineSource->PropGet(0, TJS_W("_storageType"), nullptr, &stVal, affineSource);
+            auto stStr = ttstr(stVal).AsStdString();
+            tTJSVariant cwmVal2;
+            affineSource->PropGet(0, TJS_W("canWaitMovie"), nullptr, &cwmVal2, affineSource);
+            int cwmType = cwmVal2.Type();
+            // Call original canWaitMovie before override
+            tTJSVariant cwmResult2;
+            if(cwmVal2.Type() == tvtObject) {
+                try { cwmVal2.AsObjectClosureNoAddRef().FuncCall(0, nullptr, nullptr, &cwmResult2, 0, nullptr, affineSource); } catch(...) {}
+            }
+            EM_ASM({ console.warn('[startSelfDrive] affineSource=1 _storageType=' + UTF8ToString($0) + ' canWaitMovie(before)=' + $1); },
+                   stStr.c_str(), (int)cwmResult2.AsInteger());
+        } else {
+            EM_ASM({ console.warn('[startSelfDrive] affineSource=0'); });
+        }
+#endif
         if(affineSource) {
             tTJSVariant val((tjs_int)1);
             affineSource->PropSet(0, TJS_W("_playing"),
@@ -2414,6 +2688,27 @@ namespace motion {
                         nullptr);
                 }
             } catch(...) {}
+#ifdef __EMSCRIPTEN__
+            // Verify canWaitMovie override worked
+            tTJSVariant cwmVal;
+            if(TJS_SUCCEEDED(affineSource->PropGet(0, TJS_W("canWaitMovie"),
+                             nullptr, &cwmVal, affineSource))) {
+                // Call canWaitMovie() to get its return value
+                tTJSVariant cwmResult;
+                if(cwmVal.Type() == tvtObject) {
+                    try {
+                        cwmVal.AsObjectClosureNoAddRef().FuncCall(
+                            0, nullptr, nullptr, &cwmResult, 0, nullptr,
+                            affineSource);
+                    } catch(...) {}
+                }
+                EM_ASM({ console.warn('[canWaitMovie-check] type=' + $0 + ' result=' + $1 + ' _playing=' + $2); },
+                       (int)cwmVal.Type(), (int)cwmResult.AsInteger(),
+                       0);
+            } else {
+                EM_ASM({ console.warn('[canWaitMovie-check] PropGet FAILED'); });
+            }
+#endif
         }
         LOGGER->info("Motion.Player self-drive started");
     }
@@ -2814,6 +3109,8 @@ namespace motion {
             _motionKey = label;
         }
         _allplaying = true;
+        EM_ASM({ console.warn('[_allplaying] playTimeline=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
+               (int)_allplaying, (int)(uintptr_t)this);
     }
 
     void Player::stopTimeline(ttstr label) {
@@ -2826,6 +3123,8 @@ namespace motion {
         _allplaying = std::any_of(
             _runtime->timelines.begin(), _runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
+        EM_ASM({ console.warn('[_allplaying] playTimeline2=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
+               (int)_allplaying, (int)(uintptr_t)this);
     }
 
     void Player::setTimelineBlendRatio(ttstr label, double ratio) {
@@ -2975,12 +3274,27 @@ namespace motion {
         }
 
         if(numparams > 0 && param[0] && param[0]->Type() == tvtObject &&
-           param[0]->AsObjectNoAddRef() != nullptr &&
-           nativeInstance->renderToLayer(param[0]->AsObjectNoAddRef())) {
-            if(result) {
-                *result = *param[0];
+           param[0]->AsObjectNoAddRef() != nullptr) {
+            tTJSNI_BaseLayer *targetLayer = nullptr;
+            bool isLayer = tryGetLayerObject(*param[0], targetLayer);
+            if(logoLike) {
+                LOGGER->warn("captureCanvasCompat: param isLayer={} w={} h={}",
+                             isLayer,
+                             targetLayer ? static_cast<int>(targetLayer->GetWidth()) : -1,
+                             targetLayer ? static_cast<int>(targetLayer->GetHeight()) : -1);
             }
-            return TJS_S_OK;
+            if(nativeInstance->renderToLayer(param[0]->AsObjectNoAddRef())) {
+                if(logoLike) {
+                    LOGGER->warn("captureCanvasCompat: renderToLayer OK");
+                }
+                if(result) {
+                    *result = *param[0];
+                }
+                return TJS_S_OK;
+            }
+            if(logoLike) {
+                LOGGER->warn("captureCanvasCompat: renderToLayer FAILED");
+            }
         }
 
         if(result) {
@@ -2989,6 +3303,12 @@ namespace motion {
         return TJS_S_OK;
     }
 
+    // drawCompat — aligned to libkrkr2.so sub_6D5FB8.
+    // Logic:
+    //   1. param is D3DAdaptor → set _d3dDrawMode flag, return (no render)
+    //   2. param is SLA → mark for SLA processing, return
+    //   3. param is Layer → if _d3dDrawMode, render via D3DAdaptor path;
+    //      else render directly to Layer
     tjs_error Player::drawCompat(tTJSVariant *result, tjs_int numparams,
                                  tTJSVariant **param, Player *nativeInstance) {
         if(result) {
@@ -2998,106 +3318,125 @@ namespace motion {
             return TJS_E_INVALIDOBJECT;
         }
 
-        tTJSNI_BaseLayer *layer = nullptr;
-        const bool logoLike = nativeInstance->_runtime->activeMotion &&
-            isLogoMotionLike(nativeInstance->_runtime->activeMotion->path);
-
-        // Fast path: param[0] is directly a native Layer
-        if(numparams > 0 && param[0] && tryGetLayerObject(*param[0], layer) &&
-           nativeInstance->renderToLayer(param[0]->AsObjectNoAddRef())) {
-            if(result) {
-                *result = *param[0];
+#ifdef __EMSCRIPTEN__
+        {
+            static int drawCount = 0;
+            if(drawCount++ < 30) {
+                EM_ASM({ console.warn('[drawCompat] d3d=' + $0 + ' activeMotion=' + $1 + ' allplaying=' + $2 + ' numparams=' + $3); },
+                       (int)nativeInstance->_d3dDrawMode,
+                       nativeInstance->_runtime->activeMotion ? 1 : 0,
+                       (int)nativeInstance->_allplaying,
+                       (int)numparams);
             }
+        }
+#endif
+
+        if(numparams < 1 || !param[0] || param[0]->Type() != tvtObject ||
+           !param[0]->AsObjectNoAddRef()) {
             return TJS_S_OK;
         }
 
-        // SeparateLayerAdaptor path: try to find the real target Layer
-        if(numparams > 0 && param[0] && param[0]->Type() == tvtObject &&
-           param[0]->AsObjectNoAddRef() != nullptr) {
-            iTJSDispatch2 *paramObj = param[0]->AsObjectNoAddRef();
+        iTJSDispatch2 *paramObj = param[0]->AsObjectNoAddRef();
+        const bool logoLike = nativeInstance->_runtime->activeMotion &&
+            isLogoMotionLike(nativeInstance->_runtime->activeMotion->path);
 
-            // Try 1: resolve via tryResolveLayerDispatch (walks owner/property chain)
-            iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*param[0]);
-            if(resolved && nativeInstance->renderToLayer(resolved)) {
-                if(logoLike) {
-                    LOGGER->warn("drawCompat: SLA rendered via tryResolve");
-                }
-                if(result) {
-                    *result = tTJSVariant(resolved, resolved);
-                }
+        // Step 1: Check if param is D3DAdaptor (libkrkr2.so checks NIS with
+        // D3DAdaptor classID). If so, set _d3dDrawMode and return immediately.
+        {
+            tTJSVariant testVar;
+            bool isD3DAdaptor =
+                ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(paramObj, false) != nullptr;
+            if(!isD3DAdaptor) {
+                // Fallback: check for canvasCaptureEnabled property
+                isD3DAdaptor = TJS_SUCCEEDED(paramObj->PropGet(
+                    TJS_MEMBERMUSTEXIST, TJS_W("canvasCaptureEnabled"),
+                    nullptr, &testVar, paramObj));
+            }
+            if(isD3DAdaptor) {
+                nativeInstance->_d3dDrawMode = true;
+                if(result) *result = *param[0];
                 return TJS_S_OK;
             }
+        }
 
-            // Try 2: get native SLA instance and use owner variant directly
-            if(auto *adaptor =
-                   ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
-                       paramObj, false)) {
-                const auto &ownerVar = adaptor->getOwnerVariant();
-                if(ownerVar.Type() == tvtObject) {
-                    // Try the variant's Object member
-                    iTJSDispatch2 *ownerObj = ownerVar.AsObjectNoAddRef();
-                    if(ownerObj && nativeInstance->renderToLayer(ownerObj)) {
-                        if(logoLike) {
-                            LOGGER->warn("drawCompat: SLA rendered via owner Object");
+        // Step 2: Check if param is SLA.
+        // When TJS calls _player.draw(sla), the SLA path must render to a
+        // visible Layer and trigger display update. In libkrkr2.so, this is
+        // handled by Player_DrawSLA_guess which resolves internal targets.
+        // We render to the motionWorkLayer (full-screen, in display tree).
+        {
+            auto *sla = ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+                paramObj, false);
+            if(!sla) {
+                iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*param[0]);
+                if(resolved && resolved != paramObj) {
+                    sla = reinterpret_cast<SeparateLayerAdaptor*>(1);
+                }
+            }
+            if(sla) {
+                // libkrkr2.so CPU path (sub_6C9CA8): renders motion directly
+                // onto the SLA's owner Layer by calling TJS methods on it
+                // (affineCopy, setSize, setPos, visible=1, assignImages).
+                // Get the motionWorkLayer from the window — a full-screen
+                // Layer in the display tree.
+                // TJS path: kag.motionWorkLayer (or _window.motionWorkLayer)
+                iTJSDispatch2 *targetLayer = nullptr;
+                {
+                    // Get the window object from the first KAG window
+                    tjs_int winCount = TVPGetWindowCount();
+                    for(tjs_int wi = 0; wi < winCount && !targetLayer; wi++) {
+                        auto *win = TVPGetWindowListAt(wi);
+                        if(!win) continue;
+                        iTJSDispatch2 *winObj = win->GetOwnerNoAddRef();
+                        if(!winObj) continue;
+                        // Try to get motionWorkLayer from window
+                        tTJSVariant mwlVar;
+                        if(TJS_SUCCEEDED(winObj->PropGet(0, TJS_W("motionWorkLayer"),
+                                         nullptr, &mwlVar, winObj)) &&
+                           mwlVar.Type() == tvtObject) {
+                            targetLayer = mwlVar.AsObjectNoAddRef();
                         }
-                        if(result) {
-                            *result = tTJSVariant(ownerObj, ownerObj);
-                        }
-                        return TJS_S_OK;
-                    }
-
-                    // Try the variant's closure Object (might differ from AsObjectNoAddRef
-                    // if chgthis was used)
-                    auto closure = ownerVar.AsObjectClosureNoAddRef();
-                    if(closure.Object && closure.Object != ownerObj &&
-                       nativeInstance->renderToLayer(closure.Object)) {
-                        if(logoLike) {
-                            LOGGER->warn("drawCompat: SLA rendered via owner closure.Object");
-                        }
-                        if(result) {
-                            *result = tTJSVariant(closure.Object, closure.Object);
-                        }
-                        return TJS_S_OK;
-                    }
-                    if(closure.ObjThis && closure.ObjThis != ownerObj &&
-                       closure.ObjThis != closure.Object &&
-                       nativeInstance->renderToLayer(closure.ObjThis)) {
-                        if(logoLike) {
-                            LOGGER->warn("drawCompat: SLA rendered via owner closure.ObjThis");
-                        }
-                        if(result) {
-                            *result = tTJSVariant(closure.ObjThis, closure.ObjThis);
-                        }
-                        return TJS_S_OK;
-                    }
-
-                    if(logoLike) {
-                        tTJSNI_BaseLayer *testLayer = nullptr;
-                        bool ownerIsLayer = ownerObj && TJS_SUCCEEDED(
-                            ownerObj->NativeInstanceSupport(
-                                TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                                reinterpret_cast<iTJSNativeInstance **>(&testLayer))) &&
-                            testLayer;
-                        LOGGER->warn("drawCompat: SLA all attempts failed. "
-                                     "ownerObj={} ownerIsLayer={} closureObj={} closureObjThis={} "
-                                     "resources={} layerNames={}",
-                                     (void*)ownerObj, ownerIsLayer,
-                                     (void*)closure.Object, (void*)closure.ObjThis,
-                                     nativeInstance->_runtime->activeMotion
-                                         ? nativeInstance->_runtime->activeMotion->resourcesByPath.size() : 0u,
-                                     nativeInstance->activeLayerNames().size());
                     }
                 }
-            } else if(logoLike) {
-                LOGGER->warn("drawCompat: param[0] is not an SLA native instance");
-                // Try the resolved dispatch directly even without SLA native
-                if(resolved) {
-                    LOGGER->warn("drawCompat: resolved={} but renderToLayer failed",
-                                 (void*)resolved);
+                if(targetLayer) {
+                    nativeInstance->renderToLayer(targetLayer);
+                    if(result) *result = tTJSVariant(targetLayer, targetLayer);
+                    return TJS_S_OK;
                 }
             }
         }
 
+        // Step 3: param is a Layer (or resolves to one)
+        tTJSNI_BaseLayer *layer = nullptr;
+        if(tryGetLayerObject(*param[0], layer)) {
+            if(nativeInstance->_d3dDrawMode) {
+                // D3D mode: render via renderToLayer (which does motion
+                // rendering via LayerAPI), same as libkrkr2.so's D3D path
+                // that calls sub_6ADE24 + sub_6AD92C.
+                if(logoLike) {
+                    LOGGER->warn("drawCompat: Layer + _d3dDrawMode → renderToLayer");
+                }
+                nativeInstance->renderToLayer(paramObj);
+            } else {
+                nativeInstance->renderToLayer(paramObj);
+            }
+            if(result) *result = *param[0];
+            return TJS_S_OK;
+        }
+
+        // Step 4: param resolves to a Layer via property chain
+        {
+            iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*param[0]);
+            if(resolved) {
+                static int s4cnt = 0;
+                if(s4cnt < 3) { LOGGER->warn("drawCompat Step4: resolved via property chain"); s4cnt++; }
+                nativeInstance->renderToLayer(resolved);
+                if(result) *result = tTJSVariant(resolved, resolved);
+                return TJS_S_OK;
+            }
+        }
+
+        // Fallback
         nativeInstance->draw();
         if(result) {
             *result = nativeInstance->_runtime->lastCanvas;
@@ -3128,6 +3467,16 @@ namespace motion {
         if(numparams > 1 && param[1] && param[1]->Type() != tvtVoid) {
             flags = param[1]->AsInteger();
         }
+
+#ifdef __EMSCRIPTEN__
+        EM_ASM({ console.warn('[playCompat] player=0x' + ($0 >>> 0).toString(16) + ' motionKey=' + UTF8ToString($1) + ' label=' + UTF8ToString($2) + ' allplaying=' + $3 + ' activeMotion=' + $4 + ' timelinesCount=' + $5); },
+               (int)(uintptr_t)self,
+               self->_motionKey.AsStdString().c_str(),
+               detail::narrow(label).c_str(),
+               (int)self->_allplaying,
+               self->_runtime->activeMotion ? 1 : 0,
+               (int)self->_runtime->timelines.size());
+#endif
 
         const bool logoLike =
             isLogoMotionLike(detail::narrow(label)) || isLogoMotionLike(detail::narrow(self->_motionKey));
@@ -3170,6 +3519,12 @@ namespace motion {
 
         const auto playOne = [&](const std::string &timelineLabel) {
             auto &state = self->_runtime->timelines[timelineLabel];
+#ifdef __EMSCRIPTEN__
+            if(isLogoMotionLike(timelineLabel) || (self->_runtime->activeMotion && isLogoMotionLike(self->_runtime->activeMotion->path))) {
+                EM_ASM({ console.warn('[playOne] label=' + UTF8ToString($0) + ' BEFORE: playing=' + $1 + ' currentTime=' + $2 + ' totalFrames=' + $3); },
+                       timelineLabel.c_str(), (int)state.playing, state.currentTime, state.totalFrames);
+            }
+#endif
             state.label = timelineLabel;
             state.flags = flags;
             state.blendRatio = 1.0;
@@ -3228,14 +3583,31 @@ namespace motion {
         self->_allplaying = std::any_of(
             self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
+        EM_ASM({ console.warn('[_allplaying] progressCompat=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
+               (int)self->_allplaying, (int)(uintptr_t)self);
 
         // Start self-driving animation loop for non-D3D web builds.
-        // Reset _selfDriving so a new play() on the same Player (e.g.,
-        // switching from yuzulogo to m2logo) creates a fresh handler.
+        // Stop any existing handler first to avoid having two handlers
+        // for the same Player (the old one would see stale timeline
+        // states and report allplaying=0, triggering premature onMovieStop).
         if(self->_allplaying) {
-            self->_selfDriving = false;
+            self->stopSelfDrive();
             self->startSelfDrive(objthis);
         }
+
+#ifdef __EMSCRIPTEN__
+        {
+            // Log final state after play
+            std::string tlInfo;
+            for(const auto &[k, v] : self->_runtime->timelines) {
+                tlInfo += k + "(playing=" + std::to_string(v.playing)
+                       + ",totalFrames=" + std::to_string(v.totalFrames)
+                       + ",loop=" + std::to_string(v.loop) + ") ";
+            }
+            EM_ASM({ console.warn('[playCompat] EXIT: started=' + $0 + ' allplaying=' + $1 + ' selfDriving=' + $2 + ' timelines=' + UTF8ToString($3)); },
+                   (int)started, (int)self->_allplaying, (int)self->_selfDriving, tlInfo.c_str());
+        }
+#endif
 
         if(result) {
             *result = tTJSVariant(started);
@@ -3251,11 +3623,27 @@ namespace motion {
             return TJS_E_INVALIDOBJECT;
         }
 
+#ifdef __EMSCRIPTEN__
+        {
+            static int progressCount = 0;
+            if(progressCount++ < 20) {
+                double rawDelta = (numparams > 0 && param[0] && param[0]->Type() != tvtVoid) ? param[0]->AsReal() : -1;
+                EM_ASM({ console.warn('[progressCompat] rawDelta=' + $0 + ' allplaying=' + $1 + ' activeMotion=' + $2); },
+                       rawDelta, (int)self->_allplaying, self->_runtime->activeMotion ? 1 : 0);
+            }
+        }
+#endif
+
         self->ensureMotionLoaded();
 
         double delta = 0.0;
         if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid) {
             delta = param[0]->AsReal();
+        }
+        // Clamp delta to sane range: TJS tick differences can overflow
+        // when uint32 wraps (e.g. 4294967381 = 2^32 + 85)
+        if(delta < 0 || delta > 60000) {
+            delta = 0;
         }
 
         self->frameProgress(delta * kMotionFramesPerMillisecond * self->_speed);
@@ -3276,6 +3664,17 @@ namespace motion {
             self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
         self->_allplaying = playing;
+        EM_ASM({ console.warn('[_allplaying] isPlayingCompat=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
+               (int)self->_allplaying, (int)(uintptr_t)self);
+#ifdef __EMSCRIPTEN__
+        {
+            static int isPlayingCount = 0;
+            if(isPlayingCount++ < 20) {
+                EM_ASM({ console.warn('[isPlayingCompat] result=' + $0 + ' timelinesCount=' + $1); },
+                       (int)playing, (int)self->_runtime->timelines.size());
+            }
+        }
+#endif
         if(result) {
             *result = tTJSVariant(playing);
         }
@@ -3288,6 +3687,12 @@ namespace motion {
         if(!self) {
             return TJS_E_INVALIDOBJECT;
         }
+#ifdef __EMSCRIPTEN__
+        if(self->_runtime->activeMotion && isLogoMotionLike(self->_runtime->activeMotion->path)) {
+            EM_ASM({ console.warn('[stopCompat] path=' + UTF8ToString($0)); },
+                   self->_runtime->activeMotion->path.c_str());
+        }
+#endif
 
         ttstr label;
         if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid &&
@@ -3307,6 +3712,8 @@ namespace motion {
         }
 
         self->_allplaying = false;
+        EM_ASM({ console.warn('[_allplaying] stopCompat=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
+               (int)self->_allplaying, (int)(uintptr_t)self);
         self->_syncWaiting = false;
         self->_syncActive = false;
         if(result) {

@@ -5968,8 +5968,15 @@ void tTJSNI_BaseLayer::InternalUpdate(const tTVPRect &rect, bool tempupdate) {
     if(Parent) {
         tTVPComplexRect c;
         c.Or(cr);
-        Parent->UpdateChildRegion(this, c, tempupdate, GetVisible(),
-                                  GetNodeVisible());
+        bool vis = GetVisible();
+        bool nodeVis = GetNodeVisible();
+        if(!vis || !nodeVis) {
+            spdlog::get("core")->warn("InternalUpdate: layer {} SKIPPED "
+                                      "visible={} nodeVisible={} rect=({},{},{},{})",
+                                      (void*)this, vis, nodeVis,
+                                      cr.left, cr.top, cr.right, cr.bottom);
+        }
+        Parent->UpdateChildRegion(this, c, tempupdate, vis, nodeVis);
     } else {
         if(Manager)
             Manager->AddUpdateRegion(cr);
@@ -7178,6 +7185,21 @@ void tTJSNI_BaseLayer::DrawCompleted(const tTVPRect &destrect,
 void tTJSNI_BaseLayer::InternalComplete2(tTVPComplexRect &updateregion,
                                          tTVPDrawable *drawable) {
     //--- querying phase
+    {
+        int regionCount = updateregion.GetCount();
+        if(regionCount > 0) {
+            static int ic2Count = 0;
+            if(ic2Count < 20) {
+                auto bound = updateregion.GetBound();
+                spdlog::get("core")->warn("InternalComplete2: regions={} bound=({},{},{},{}) "
+                                          "children={} visible={}",
+                                          regionCount, bound.left, bound.top,
+                                          bound.right, bound.bottom,
+                                          GetVisibleChildrenCount(), GetVisible());
+                ic2Count++;
+            }
+        }
+    }
 
     // search ltOpaque, not to draw region behind them.
     if(Manager)

@@ -538,6 +538,10 @@ protected:
     tjs_int LockedWidth = 0, LockedHeight = 0;
     tTVPRect ClipRect; //!< クリッピング矩形
 
+public:
+    iTVPWindow *GetWindow() const { return Window; }
+    const std::vector<iTVPLayerManager *> &GetManagers() const { return Managers; }
+
 protected:
     tTVPDrawDevice(); //!< コンストラクタ
 protected:
