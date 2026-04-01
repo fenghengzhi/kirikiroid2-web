@@ -168,10 +168,12 @@ if (BUILD_EXT_ZLIB)
     add_library(ext_zlib ALIAS ZLIB::ZLIB)
 endif (BUILD_EXT_ZLIB)
 
-# For Emscripten, zlib is provided via port flags (-s USE_ZLIB=1);
-# create ext_zlib so the unzip subdirectory can link against it.
+# For Emscripten, zlib is installed via vcpkg as a separate port.
+# Link against it so the unzip subdirectory can find zlib.h.
 if (EMSCRIPTEN AND NOT TARGET ext_zlib)
-    add_library(ext_zlib INTERFACE)
+    find_package(ZLIB REQUIRED)
+    add_library(ext_zlib ALIAS ZLIB::ZLIB)
+    target_link_libraries(external INTERFACE ZLIB::ZLIB)
 endif()
 
 # unzip depend on zlib
