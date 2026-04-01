@@ -13,9 +13,6 @@
 #include "EventIntf.h"
 #include "ScriptMgnIntf.h"
 #include "tjsDictionary.h"
-#ifdef __EMSCRIPTEN__
-#include <emscripten/emscripten.h>
-#endif
 #include "DebugIntf.h"
 #include "TextStream.h"
 
@@ -1681,23 +1678,6 @@ parse_start:
                     TVP_KAG_STEP_NEXT;
 
                     if(condition && ExcludeLevel == -1) {
-#ifdef __EMSCRIPTEN__
-                        {
-                            auto tn = tagname.AsStdString();
-                            if(tn == "ev" || tn == "wait" || tn == "waitmovie" ||
-                               tn == "allimage" || tn == "clickskip" ||
-                               tn == "syscover" || tn == "clearlayers" ||
-                               tn == "syshook" || tn == "sysjump" ||
-                               tn == "stage" || tn == "endskip" ||
-                               tn == "sysvoice" || tn == "delaystart" ||
-                               tn == "delaycancel" || tn == "sysupdate" ||
-                               tn == "begintrans" || tn == "endtrans" ||
-                               tn == "all" || tn == "msgoff") {
-                                EM_ASM({ console.warn('[KAG-TAG] ' + UTF8ToString($0)); },
-                                       tn.c_str());
-                            }
-                        }
-#endif
                         DicObj->AddRef();
                         return DicObj;
                     }

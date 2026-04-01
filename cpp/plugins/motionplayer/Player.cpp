@@ -9,9 +9,6 @@
 #include <array>
 #include <cctype>
 #include "WindowIntf.h"
-#ifdef __EMSCRIPTEN__
-#include <emscripten/emscripten.h>
-#endif
 #include <cstring>
 #include <optional>
 #include <random>
@@ -41,18 +38,6 @@
 namespace motion {
 
     namespace {
-
-        bool isLogoMotionLike(const std::string &value) {
-            const auto lowered = [] (std::string text) {
-                std::transform(text.begin(), text.end(), text.begin(),
-                               [](unsigned char ch) {
-                                   return static_cast<char>(std::tolower(ch));
-                               });
-                return text;
-            }(value);
-            return lowered.find("yuzulogo") != std::string::npos ||
-                lowered.find("m2logo") != std::string::npos;
-        }
 
         // Return true if a source path is a motion cross-reference
         // (e.g. "motion/title_bg/char_move"), not an image source.
@@ -151,17 +136,6 @@ namespace motion {
         std::shared_ptr<detail::MotionSnapshot>
         activateMotion(detail::PlayerRuntime &runtime,
                        const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
-#ifdef __EMSCRIPTEN__
-            {
-                bool hadPlaying = std::any_of(
-                    runtime.timelines.begin(), runtime.timelines.end(),
-                    [](const auto &e) { return e.second.playing; });
-                if(hadPlaying && snapshot) {
-                    EM_ASM({ console.warn('[activateMotion-CLEAR] path=' + UTF8ToString($0) + ' HAD PLAYING'); },
-                           snapshot->path.c_str());
-                }
-            }
-#endif
             runtime.activeMotion = snapshot;
             runtime.timelines.clear();
             if(snapshot) {
@@ -678,7 +652,6 @@ namespace motion {
 
             auto &entry = cache[source];
             entry.attempted = true;
-            const bool logoLike = isLogoMotionLike(snapshot.path);
 
             std::vector<ttstr> candidates;
             const auto sourcePath = detail::widen(source);
@@ -711,21 +684,11 @@ namespace motion {
                         meta->Release();
                     }
                     if(copyLayerMainImage(scratchLayer, entry.image)) {
-                        if(logoLike) {
-                            LOGGER->warn(
-                                "Motion logo source resolved: motion={} source={} candidate={}",
-                                snapshot.path, source, candidateKey);
-                        }
                         image = entry.image.clone();
                         return true;
                     }
                 } catch(...) {
                 }
-            }
-
-            if(logoLike) {
-                LOGGER->warn("Motion logo source unresolved: motion={} source={}",
-                             snapshot.path, source);
             }
 
             return false;
@@ -780,11 +743,6 @@ namespace motion {
                                  const cv::Matx33d &transform) {
             if(!state.visible || state.src.empty() || state.src == "layout"
                || isMotionCrossReference(state.src)) {
-                if(isLogoMotionLike(snapshot.path) && !state.src.empty()
-                   && state.src != "layout" && !isMotionCrossReference(state.src)) {
-                    LOGGER->warn("drawEvaluatedSource skip: visible={} src='{}' opacity={}",
-                                 state.visible, state.src, state.opacity);
-                }
                 return false;
             }
 
@@ -1169,21 +1127,6 @@ namespace motion {
     }
 
     void Player::setMotion(ttstr v) {
-#ifdef __EMSCRIPTEN__
-        {
-            bool hadPlaying = std::any_of(
-                _runtime->timelines.begin(), _runtime->timelines.end(),
-                [](const auto &e) { return e.second.playing; });
-            if(hadPlaying) {
-                EM_ASM({ console.warn('[setMotion-CLEAR] new=' + UTF8ToString($0) + ' old=' + UTF8ToString($1) + ' HAD PLAYING TIMELINES'); },
-                       v.c_str(), _motionKey.c_str());
-            }
-        }
-#endif
-        if(isLogoMotionLike(detail::narrow(v))) {
-            LOGGER->warn("Motion logo setMotion: request={} previous={}",
-                         v.AsStdString(), _motionKey.AsStdString());
-        }
         if(_motionKey == v) {
             return;
         }
@@ -1202,7 +1145,6 @@ namespace motion {
         }
 
         const auto motionKey = detail::narrow(_motionKey);
-        const bool logoLike = isLogoMotionLike(motionKey);
         const bool motionKeyLooksLikeStorage =
             motionKey.find('/') != std::string::npos ||
             motionKey.find('\\') != std::string::npos ||
@@ -1210,10 +1152,6 @@ namespace motion {
 
         if(_project.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
-                if(logoLike) {
-                    LOGGER->warn("Motion logo ensureMotionLoaded: using project snapshot path={}",
-                                 snapshot->path);
-                }
                 activateMotion(*_runtime, snapshot);
                 syncVariableKeysFromActiveMotion();
                 return true;
@@ -1223,10 +1161,6 @@ namespace motion {
         if(motionKeyLooksLikeStorage) {
             if(const auto snapshot =
                    resolveMotion(*_runtime, _motionKey, &_resourceManagerNative)) {
-                if(logoLike) {
-                    LOGGER->warn("Motion logo ensureMotionLoaded: resolved from storage key={} path={}",
-                                 motionKey, snapshot->path);
-                }
                 activateMotion(*_runtime, snapshot);
                 syncVariableKeysFromActiveMotion();
                 return true;
@@ -1236,10 +1170,6 @@ namespace motion {
         if(const auto loaded = _resourceManagerNative.getLastLoadedModule();
            loaded.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
-                if(logoLike) {
-                    LOGGER->warn("Motion logo ensureMotionLoaded: using lastLoadedModule key={} path={}",
-                                 motionKey, snapshot->path);
-                }
                 activateMotion(*_runtime, snapshot);
                 syncVariableKeysFromActiveMotion();
                 return true;
@@ -1252,22 +1182,11 @@ namespace motion {
 
         if(const auto snapshot =
                resolveMotion(*_runtime, _motionKey, &_resourceManagerNative)) {
-            if(logoLike) {
-                LOGGER->warn("Motion logo ensureMotionLoaded: resolved fallback key={} path={}",
-                             motionKey, snapshot->path);
-            }
             activateMotion(*_runtime, snapshot);
             syncVariableKeysFromActiveMotion();
             return true;
         }
 
-        if(logoLike) {
-            LOGGER->warn(
-                "Motion logo ensureMotionLoaded: failed key={} lastLoadedType={} motionKeyLooksLikeStorage={}",
-                motionKey,
-                static_cast<int>(_resourceManagerNative.getLastLoadedModule().Type()),
-                motionKeyLooksLikeStorage);
-        }
         return false;
     }
 
@@ -1369,12 +1288,6 @@ namespace motion {
     }
 
     void Player::setProgressCompat(double v) {
-#ifdef __EMSCRIPTEN__
-        if(_runtime->activeMotion) {
-            EM_ASM({ console.warn('[setProgressCompat] v=' + $0 + ' path=' + UTF8ToString($1)); },
-                   v, _runtime->activeMotion->path.c_str());
-        }
-#endif
         ensureMotionLoaded();
         const auto progress = std::clamp(v, 0.0, 1.0);
         bool anyPlaying = false;
@@ -1390,8 +1303,6 @@ namespace motion {
             anyPlaying = anyPlaying || state.playing;
         }
         _allplaying = anyPlaying;
-        EM_ASM({ console.warn('[_allplaying] setProgressCompat=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
-               (int)_allplaying, (int)(uintptr_t)this);
     }
 
     double Player::getProgressCompat() const {
@@ -1571,8 +1482,6 @@ namespace motion {
         _allplaying = std::any_of(
             _runtime->timelines.begin(), _runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
-        EM_ASM({ console.warn('[_allplaying] stopTimeline=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
-               (int)_allplaying, (int)(uintptr_t)this);
     }
 
     void Player::setRotate(double rot) { STUB_WARN(setRotate); }
@@ -1853,14 +1762,6 @@ namespace motion {
             return false;
         }
 
-#ifdef __EMSCRIPTEN__
-        EM_ASM({ console.warn('[renderToLayer] obj=' + $0 + ' activeMotion=' + $1 + ' path=' + UTF8ToString($2)); },
-               (int)(layerObject != nullptr),
-               (int)(_runtime->activeMotion != nullptr),
-               _runtime->activeMotion ? _runtime->activeMotion->path.c_str() : "null");
-#endif
-
-        const bool logoLike = isLogoMotionLike(_runtime->activeMotion->path);
 
         tTJSNI_BaseLayer *layer = nullptr;
         {
@@ -1872,12 +1773,6 @@ namespace motion {
                 // TJS property chain (owner/_owner/targetLayer/layer)
                 tTJSVariant wrapper(layerObject, layerObject);
                 auto *resolved = tryResolveLayerDispatch(wrapper);
-                if(logoLike) {
-                    LOGGER->warn("renderToLayer: NIS failed hr={} ptr={} obj={} tryResolve={} same={}",
-                                 nisResult, (void*)layer, (void*)layerObject,
-                                 resolved != nullptr,
-                                 resolved == layerObject);
-                }
                 if(resolved && resolved != layerObject) {
                     return renderToLayer(resolved);
                 }
@@ -1889,22 +1784,12 @@ namespace motion {
                        TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
                        reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
                    layer) {
-                    if(logoLike) {
-                        LOGGER->warn("renderToLayer: NIS retry SUCCEEDED ptr={}",
-                                     (void*)layer);
-                    }
                     // Fall through to rendering
                 } else {
                     return false;
                 }
             }
         }
-        if(logoLike) {
-            LOGGER->warn("renderToLayer: got native Layer ptr={} w={} h={} resources={}",
-                         (void*)layer, layer->GetWidth(), layer->GetHeight(),
-                         _runtime->activeMotion->resourcesByPath.size());
-        }
-
 #ifndef KRKR2_NO_OPENCV
         if(_runtime->activeMotion && !_runtime->activeMotion->resourcesByPath.empty()) {
             const auto *clip = selectActiveClip();
@@ -1936,37 +1821,19 @@ namespace motion {
 
                     bool drewAny = false;
                     const auto &layerNamesList = activeLayerNames();
-                    if(logoLike) {
-                        LOGGER->warn("renderToLayer OpenCV: canvasSize={}x{} "
-                                     "layerNames={} renderTime={} motionKey={}",
-                                     canvasWidth, canvasHeight,
-                                     layerNamesList.size(), renderTime,
-                                     _motionKey.AsStdString());
-                    }
                     for(const auto &layerName : layerNamesList) {
                         const auto *layers = activeLayersByName();
                         if(!layers) {
-                            if(logoLike) {
-                                LOGGER->warn("renderToLayer: activeLayersByName returned null");
-                            }
                             break;
                         }
                         const auto it = layers->find(layerName);
                         if(it == layers->end()) {
-                            if(logoLike) {
-                                LOGGER->warn("renderToLayer: layer '{}' not found in map (map size={})",
-                                             layerName, layers->size());
-                            }
                             continue;
                         }
                         bool result = renderMotionLayer(
                                       canvas, layer, *_runtime->activeMotion,
                                       sourceCache, it->second, renderTime,
                                       globalTransform);
-                        if(logoLike) {
-                            LOGGER->warn("renderToLayer: renderMotionLayer '{}' returned {}",
-                                         layerName, result);
-                        }
                         drewAny = result || drewAny;
                     }
 
@@ -1990,15 +1857,6 @@ namespace motion {
                                     srcPixels + srcPitch * row, srcPitch);
                             }
 
-                            {
-                                // Quick pixel check
-                                int nz = 0;
-                                for(int r = 0; r < canvasHeight; r += canvasHeight/3+1)
-                                    for(int c = 0; c < canvasWidth; c += canvasWidth/5+1)
-                                        if(dstPixels[pitch*r + c*4 + 3]) nz++;
-                                EM_ASM({ console.warn('[render] ' + $0 + 'x' + $1 + ' nz=' + $2 + ' skip=' + $3); },
-                                       canvasWidth, canvasHeight, nz, (int)skipUpdate);
-                            }
                             if(!skipUpdate) layer->Update(false);
                             _runtime->lastCanvas =
                                 tTJSVariant(layerObject, layerObject);
@@ -2069,13 +1927,6 @@ namespace motion {
                     layer->FillRect(clearRect, 0x00000000);
 
                     const auto &layerNamesList = activeLayerNames();
-                    if(logoLike) {
-                        LOGGER->warn("renderToLayer LayerAPI: canvasSize={}x{} "
-                                     "layerNames={} renderTime={} motionKey={}",
-                                     canvasWidth, canvasHeight,
-                                     layerNamesList.size(), renderTime,
-                                     _motionKey.AsStdString());
-                    }
 
                     // Apply global affine transform
                     const auto &m = _runtime->drawAffineMatrix;
@@ -2143,10 +1994,6 @@ namespace motion {
                         }
                     }
 
-                    EM_ASM({ console.warn('[motion] nodes=' + $0 + ' layers=' + $1 + ' path=' + UTF8ToString($2)); },
-                           (int)renderNodes.size(), (int)layerNamesList.size(),
-                           _runtime->activeMotion->path.c_str());
-
                     // Step 2 (sub_6C7440): Flat loop — for each node,
                     // load source bitmap and call OperateAffine on target.
                     bool drewAny = false;
@@ -2177,8 +2024,6 @@ namespace motion {
                                     if(bmp->GetWidth() > 0 && bmp->GetHeight() > 0)
                                         srcBmp = bmp;
                                 } catch(...) {}
-                                EM_ASM({ console.warn('[src-file] src=' + UTF8ToString($0) + ' path=' + UTF8ToString($1) + ' ok=' + $2); },
-                                       node.state.src.c_str(), resolvedPath.c_str(), srcBmp ? 1 : 0);
                             }
                             // Try PSB embedded resource
                             if(!srcBmp) {
@@ -2215,16 +2060,11 @@ namespace motion {
                                     }
                                     srcBmp = bmp;
                                 }
-                                EM_ASM({ console.warn('[src-psb] src=' + UTF8ToString($0) + ' found=' + $1 + ' w=' + $2 + ' h=' + $3 + ' rl=' + $4); },
-                                       node.state.src.c_str(), res ? 1 : 0, rw, rh,
-                                       decompressed.empty() ? 0 : 1);
                             }
                             srcCache.emplace(node.state.src, srcBmp);
                         }
 
                         if(!srcBmp || srcBmp->GetWidth() == 0) {
-                            EM_ASM({ console.warn('[src-fail] src=' + UTF8ToString($0)); },
-                                   node.state.src.c_str());
                             continue;
                         }
 
@@ -2254,20 +2094,10 @@ namespace motion {
                             layer->OperateAffine(pts, srcBmp.get(), sr,
                                                  omAlpha, opa, stNearest);
                             drewAny = true;
-                            EM_ASM({ console.warn('[affine-ok] src=' + UTF8ToString($0) + ' ' + $1 + 'x' + $2 + ' at(' + $3 + ',' + $4 + ') opa=' + $5); },
-                                   node.state.src.c_str(), (int)srcW, (int)srcH,
-                                   (int)node.x, (int)node.y, opa);
-                        } catch(const eTJS &e) {
-                            EM_ASM({ console.warn('[affine-err] src=' + UTF8ToString($0) + ' err=' + UTF8ToString($1)); },
-                                   node.state.src.c_str(), ttstr(e.GetMessage()).c_str());
+                        } catch(const eTJS &) {
                         } catch(...) {
-                            EM_ASM({ console.warn('[affine-err] src=' + UTF8ToString($0) + ' unknown'); },
-                                   node.state.src.c_str());
                         }
                     }
-
-                    EM_ASM({ console.warn('[render-done] drewAny=' + $0 + ' nodes=' + $1 + ' canvas=' + $2 + 'x' + $3); },
-                           (int)drewAny, (int)renderNodes.size(), canvasWidth, canvasHeight);
 
                     if(drewAny) {
                         if(!skipUpdate) layer->Update(false);
@@ -2287,45 +2117,10 @@ namespace motion {
 #endif
         const auto sourcePath = resolveCaptureSourcePath();
         if(sourcePath.IsEmpty()) {
-            const auto loweredPath = _runtime->activeMotion
-                ? detail::narrow(detail::widen(_runtime->activeMotion->path))
-                : std::string{};
-            const auto loweredMotionPath =
-                loweredPath.empty() ? std::string{} : [] (std::string value) {
-                    std::transform(value.begin(), value.end(), value.begin(),
-                                   [](unsigned char ch) {
-                                       return static_cast<char>(std::tolower(ch));
-                                   });
-                    return value;
-                }(loweredPath);
-            if(_runtime->activeMotion &&
-               (loweredMotionPath.find("yuzulogo.mtn") != std::string::npos ||
-                loweredMotionPath.find("m2logo.mtn") != std::string::npos)) {
-                LOGGER->warn("Motion logo draw unresolved: path={} motionKey={} clipSources={} allSources={}",
-                             _runtime->activeMotion->path, _motionKey.AsStdString(),
-                             activeSourceCandidates().size(),
-                             _runtime->activeMotion->sourceCandidates.size());
-            }
             LOGGER->warn("Motion.Player draw fallback could not resolve source "
                          "for {}",
                          _runtime->activeMotion->path);
             return false;
-        }
-        const auto loweredMotionPath = _runtime->activeMotion
-            ? [] (std::string value) {
-                  std::transform(value.begin(), value.end(), value.begin(),
-                                 [](unsigned char ch) {
-                                     return static_cast<char>(std::tolower(ch));
-                                 });
-                  return value;
-              }(_runtime->activeMotion->path)
-            : std::string{};
-        if(_runtime->activeMotion &&
-           (loweredMotionPath.find("yuzulogo.mtn") != std::string::npos ||
-            loweredMotionPath.find("m2logo.mtn") != std::string::npos)) {
-            LOGGER->warn("Motion logo draw resolved: path={} motionKey={} source={}",
-                         _runtime->activeMotion->path, _motionKey.AsStdString(),
-                         sourcePath.AsStdString());
         }
 
         try {
@@ -2486,15 +2281,6 @@ namespace motion {
     }
 
     void Player::frameProgress(double dt) {
-#ifdef __EMSCRIPTEN__
-        if(_runtime->activeMotion && isLogoMotionLike(_runtime->activeMotion->path)) {
-            static int fpLogCount = 0;
-            if(fpLogCount++ < 30) {
-                EM_ASM({ console.warn('[frameProgress] dt=' + $0 + ' tickCount=' + $1 + ' path=' + UTF8ToString($2)); },
-                       dt, _tickCount, _runtime->activeMotion->path.c_str());
-            }
-        }
-#endif
         _frameLastTime = dt;
         _frameLoopTime += dt;
         _loopTime += dt;
@@ -2505,18 +2291,6 @@ namespace motion {
         _allplaying = std::any_of(
             _runtime->timelines.begin(), _runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
-        if(_runtime->activeMotion && isLogoMotionLike(_runtime->activeMotion->path)) {
-            static int fpLogoCount = 0;
-            if(fpLogoCount++ < 10) {
-                std::string tlDetail;
-                for(const auto &[k, v] : _runtime->timelines) {
-                    tlDetail += k + "(p=" + std::to_string(v.playing) + ",t=" +
-                        std::to_string(v.currentTime) + "/" + std::to_string(v.totalFrames) + ") ";
-                }
-                EM_ASM({ console.warn('[fp-logo] allplaying=' + $0 + ' dt=' + $1 + ' tl=' + UTF8ToString($2)); },
-                       (int)_allplaying, dt, tlDetail.c_str());
-            }
-        }
         _syncActive = _syncWaiting && _allplaying;
     }
 
@@ -2552,24 +2326,6 @@ namespace motion {
             if(disabled || !player || !player->_runtime) {
                 return TJS_S_OK;
             }
-#ifdef __EMSCRIPTEN__
-            {
-                static int selfDriveCallCount = 0;
-                if(selfDriveCallCount++ < 40) {
-                    std::string tlInfo;
-                    for(const auto &[k, v] : player->_runtime->timelines) {
-                        tlInfo += k + "(p=" + std::to_string(v.playing)
-                               + ",t=" + std::to_string(v.currentTime)
-                               + "/" + std::to_string(v.totalFrames)
-                               + ",loop=" + std::to_string(v.loop) + ") ";
-                    }
-                    std::string motPath = player->_runtime->activeMotion
-                        ? player->_runtime->activeMotion->path : "null";
-                    EM_ASM({ console.warn('[SelfDrive] player=0x' + ($0 >>> 0).toString(16) + ' allplaying=' + $1 + ' path=' + UTF8ToString($2) + ' tl=' + UTF8ToString($3)); },
-                           (int)(uintptr_t)player, (int)player->_allplaying, motPath.c_str(), tlInfo.c_str());
-                }
-            }
-#endif
             if(!player->_allplaying) {
                 // Animation finished — set _playing=0 directly on
                 // AffineSourceMotion so canWaitMovie() returns 0.
@@ -2620,10 +2376,6 @@ namespace motion {
 
     void Player::startSelfDrive(iTJSDispatch2 *objthis) {
         if(_selfDriving) return;
-#ifdef __EMSCRIPTEN__
-        EM_ASM({ console.warn('[startSelfDrive] player=0x' + ($0 >>> 0).toString(16) + ' objthis=' + $1); },
-               (int)(uintptr_t)this, (int)(objthis != nullptr));
-#endif
         _selfDriving = true;
         _selfDriveObjThis = objthis;
         auto *handler = new SelfDriveContinuousHandler();
@@ -2651,25 +2403,6 @@ namespace motion {
         // Set _playing=1 on AffineSourceMotion and override
         // canWaitMovie to return _playing for motion type too.
         auto *affineSource = handler->affine();
-#ifdef __EMSCRIPTEN__
-        if(affineSource) {
-            tTJSVariant stVal;
-            affineSource->PropGet(0, TJS_W("_storageType"), nullptr, &stVal, affineSource);
-            auto stStr = ttstr(stVal).AsStdString();
-            tTJSVariant cwmVal2;
-            affineSource->PropGet(0, TJS_W("canWaitMovie"), nullptr, &cwmVal2, affineSource);
-            int cwmType = cwmVal2.Type();
-            // Call original canWaitMovie before override
-            tTJSVariant cwmResult2;
-            if(cwmVal2.Type() == tvtObject) {
-                try { cwmVal2.AsObjectClosureNoAddRef().FuncCall(0, nullptr, nullptr, &cwmResult2, 0, nullptr, affineSource); } catch(...) {}
-            }
-            EM_ASM({ console.warn('[startSelfDrive] affineSource=1 _storageType=' + UTF8ToString($0) + ' canWaitMovie(before)=' + $1); },
-                   stStr.c_str(), (int)cwmResult2.AsInteger());
-        } else {
-            EM_ASM({ console.warn('[startSelfDrive] affineSource=0'); });
-        }
-#endif
         if(affineSource) {
             tTJSVariant val((tjs_int)1);
             affineSource->PropSet(0, TJS_W("_playing"),
@@ -2688,27 +2421,6 @@ namespace motion {
                         nullptr);
                 }
             } catch(...) {}
-#ifdef __EMSCRIPTEN__
-            // Verify canWaitMovie override worked
-            tTJSVariant cwmVal;
-            if(TJS_SUCCEEDED(affineSource->PropGet(0, TJS_W("canWaitMovie"),
-                             nullptr, &cwmVal, affineSource))) {
-                // Call canWaitMovie() to get its return value
-                tTJSVariant cwmResult;
-                if(cwmVal.Type() == tvtObject) {
-                    try {
-                        cwmVal.AsObjectClosureNoAddRef().FuncCall(
-                            0, nullptr, nullptr, &cwmResult, 0, nullptr,
-                            affineSource);
-                    } catch(...) {}
-                }
-                EM_ASM({ console.warn('[canWaitMovie-check] type=' + $0 + ' result=' + $1 + ' _playing=' + $2); },
-                       (int)cwmVal.Type(), (int)cwmResult.AsInteger(),
-                       0);
-            } else {
-                EM_ASM({ console.warn('[canWaitMovie-check] PropGet FAILED'); });
-            }
-#endif
         }
         LOGGER->info("Motion.Player self-drive started");
     }
@@ -3109,8 +2821,6 @@ namespace motion {
             _motionKey = label;
         }
         _allplaying = true;
-        EM_ASM({ console.warn('[_allplaying] playTimeline=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
-               (int)_allplaying, (int)(uintptr_t)this);
     }
 
     void Player::stopTimeline(ttstr label) {
@@ -3123,8 +2833,6 @@ namespace motion {
         _allplaying = std::any_of(
             _runtime->timelines.begin(), _runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
-        EM_ASM({ console.warn('[_allplaying] playTimeline2=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
-               (int)_allplaying, (int)(uintptr_t)this);
     }
 
     void Player::setTimelineBlendRatio(ttstr label, double ratio) {
@@ -3258,42 +2966,13 @@ namespace motion {
             return TJS_E_INVALIDOBJECT;
         }
 
-        const bool logoLike = nativeInstance->_runtime->activeMotion &&
-            isLogoMotionLike(nativeInstance->_runtime->activeMotion->path);
-        if(logoLike) {
-            tTJSNI_BaseLayer *layer = nullptr;
-            const bool hasLayer = numparams > 0 && param[0] &&
-                tryGetLayerObject(*param[0], layer);
-            const bool hasOwner = numparams > 0 && param[0] &&
-                param[0]->Type() == tvtObject && param[0]->AsObjectNoAddRef() != nullptr &&
-                tryResolveSeparateAdaptorOwner(*param[0]) != nullptr;
-            LOGGER->warn(
-                "Motion logo captureCanvasCompat: path={} hasParam={} hasLayer={} hasOwner={}",
-                nativeInstance->_runtime->activeMotion->path, numparams > 0 && param[0],
-                hasLayer, hasOwner);
-        }
-
         if(numparams > 0 && param[0] && param[0]->Type() == tvtObject &&
            param[0]->AsObjectNoAddRef() != nullptr) {
-            tTJSNI_BaseLayer *targetLayer = nullptr;
-            bool isLayer = tryGetLayerObject(*param[0], targetLayer);
-            if(logoLike) {
-                LOGGER->warn("captureCanvasCompat: param isLayer={} w={} h={}",
-                             isLayer,
-                             targetLayer ? static_cast<int>(targetLayer->GetWidth()) : -1,
-                             targetLayer ? static_cast<int>(targetLayer->GetHeight()) : -1);
-            }
             if(nativeInstance->renderToLayer(param[0]->AsObjectNoAddRef())) {
-                if(logoLike) {
-                    LOGGER->warn("captureCanvasCompat: renderToLayer OK");
-                }
                 if(result) {
                     *result = *param[0];
                 }
                 return TJS_S_OK;
-            }
-            if(logoLike) {
-                LOGGER->warn("captureCanvasCompat: renderToLayer FAILED");
             }
         }
 
@@ -3318,27 +2997,12 @@ namespace motion {
             return TJS_E_INVALIDOBJECT;
         }
 
-#ifdef __EMSCRIPTEN__
-        {
-            static int drawCount = 0;
-            if(drawCount++ < 30) {
-                EM_ASM({ console.warn('[drawCompat] d3d=' + $0 + ' activeMotion=' + $1 + ' allplaying=' + $2 + ' numparams=' + $3); },
-                       (int)nativeInstance->_d3dDrawMode,
-                       nativeInstance->_runtime->activeMotion ? 1 : 0,
-                       (int)nativeInstance->_allplaying,
-                       (int)numparams);
-            }
-        }
-#endif
-
         if(numparams < 1 || !param[0] || param[0]->Type() != tvtObject ||
            !param[0]->AsObjectNoAddRef()) {
             return TJS_S_OK;
         }
 
         iTJSDispatch2 *paramObj = param[0]->AsObjectNoAddRef();
-        const bool logoLike = nativeInstance->_runtime->activeMotion &&
-            isLogoMotionLike(nativeInstance->_runtime->activeMotion->path);
 
         // Step 1: Check if param is D3DAdaptor (libkrkr2.so checks NIS with
         // D3DAdaptor classID). If so, set _d3dDrawMode and return immediately.
@@ -3409,17 +3073,7 @@ namespace motion {
         // Step 3: param is a Layer (or resolves to one)
         tTJSNI_BaseLayer *layer = nullptr;
         if(tryGetLayerObject(*param[0], layer)) {
-            if(nativeInstance->_d3dDrawMode) {
-                // D3D mode: render via renderToLayer (which does motion
-                // rendering via LayerAPI), same as libkrkr2.so's D3D path
-                // that calls sub_6ADE24 + sub_6AD92C.
-                if(logoLike) {
-                    LOGGER->warn("drawCompat: Layer + _d3dDrawMode → renderToLayer");
-                }
-                nativeInstance->renderToLayer(paramObj);
-            } else {
-                nativeInstance->renderToLayer(paramObj);
-            }
+            nativeInstance->renderToLayer(paramObj);
             if(result) *result = *param[0];
             return TJS_S_OK;
         }
@@ -3428,8 +3082,6 @@ namespace motion {
         {
             iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*param[0]);
             if(resolved) {
-                static int s4cnt = 0;
-                if(s4cnt < 3) { LOGGER->warn("drawCompat Step4: resolved via property chain"); s4cnt++; }
                 nativeInstance->renderToLayer(resolved);
                 if(result) *result = tTJSVariant(resolved, resolved);
                 return TJS_S_OK;
@@ -3468,26 +3120,6 @@ namespace motion {
             flags = param[1]->AsInteger();
         }
 
-#ifdef __EMSCRIPTEN__
-        EM_ASM({ console.warn('[playCompat] player=0x' + ($0 >>> 0).toString(16) + ' motionKey=' + UTF8ToString($1) + ' label=' + UTF8ToString($2) + ' allplaying=' + $3 + ' activeMotion=' + $4 + ' timelinesCount=' + $5); },
-               (int)(uintptr_t)self,
-               self->_motionKey.AsStdString().c_str(),
-               detail::narrow(label).c_str(),
-               (int)self->_allplaying,
-               self->_runtime->activeMotion ? 1 : 0,
-               (int)self->_runtime->timelines.size());
-#endif
-
-        const bool logoLike =
-            isLogoMotionLike(detail::narrow(label)) || isLogoMotionLike(detail::narrow(self->_motionKey));
-        if(logoLike) {
-            LOGGER->warn(
-                "Motion logo playCompat entry: label={} motionKey={} activeMotion={} lastLoadedType={}",
-                label.AsStdString(), self->_motionKey.AsStdString(),
-                self->_runtime->activeMotion ? self->_runtime->activeMotion->path : std::string{},
-                static_cast<int>(self->_resourceManagerNative.getLastLoadedModule().Type()));
-        }
-
         if(!self->_runtime->activeMotion && self->_project.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(self->_project)) {
                 activateMotion(*self->_runtime, snapshot);
@@ -3519,12 +3151,6 @@ namespace motion {
 
         const auto playOne = [&](const std::string &timelineLabel) {
             auto &state = self->_runtime->timelines[timelineLabel];
-#ifdef __EMSCRIPTEN__
-            if(isLogoMotionLike(timelineLabel) || (self->_runtime->activeMotion && isLogoMotionLike(self->_runtime->activeMotion->path))) {
-                EM_ASM({ console.warn('[playOne] label=' + UTF8ToString($0) + ' BEFORE: playing=' + $1 + ' currentTime=' + $2 + ' totalFrames=' + $3); },
-                       timelineLabel.c_str(), (int)state.playing, state.currentTime, state.totalFrames);
-            }
-#endif
             state.label = timelineLabel;
             state.flags = flags;
             state.blendRatio = 1.0;
@@ -3561,30 +3187,9 @@ namespace motion {
             }
         }
 
-        const auto loweredMotionPath = self->_runtime->activeMotion
-            ? [] (std::string value) {
-                  std::transform(value.begin(), value.end(), value.begin(),
-                                 [](unsigned char ch) {
-                                     return static_cast<char>(std::tolower(ch));
-                                 });
-                  return value;
-              }(self->_runtime->activeMotion->path)
-            : std::string{};
-        if(self->_runtime->activeMotion &&
-           (loweredMotionPath.find("yuzulogo.mtn") != std::string::npos ||
-            loweredMotionPath.find("m2logo.mtn") != std::string::npos)) {
-            LOGGER->warn(
-                "Motion logo play: path={} label={} started={} mainLabels={} selectedClipLayers={}",
-                self->_runtime->activeMotion->path, label.AsStdString(), started,
-                self->_runtime->activeMotion->mainTimelineLabels.size(),
-                self->activeLayerNames().size());
-        }
-
         self->_allplaying = std::any_of(
             self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
-        EM_ASM({ console.warn('[_allplaying] progressCompat=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
-               (int)self->_allplaying, (int)(uintptr_t)self);
 
         // Start self-driving animation loop for non-D3D web builds.
         // Stop any existing handler first to avoid having two handlers
@@ -3594,20 +3199,6 @@ namespace motion {
             self->stopSelfDrive();
             self->startSelfDrive(objthis);
         }
-
-#ifdef __EMSCRIPTEN__
-        {
-            // Log final state after play
-            std::string tlInfo;
-            for(const auto &[k, v] : self->_runtime->timelines) {
-                tlInfo += k + "(playing=" + std::to_string(v.playing)
-                       + ",totalFrames=" + std::to_string(v.totalFrames)
-                       + ",loop=" + std::to_string(v.loop) + ") ";
-            }
-            EM_ASM({ console.warn('[playCompat] EXIT: started=' + $0 + ' allplaying=' + $1 + ' selfDriving=' + $2 + ' timelines=' + UTF8ToString($3)); },
-                   (int)started, (int)self->_allplaying, (int)self->_selfDriving, tlInfo.c_str());
-        }
-#endif
 
         if(result) {
             *result = tTJSVariant(started);
@@ -3622,17 +3213,6 @@ namespace motion {
         if(!self) {
             return TJS_E_INVALIDOBJECT;
         }
-
-#ifdef __EMSCRIPTEN__
-        {
-            static int progressCount = 0;
-            if(progressCount++ < 20) {
-                double rawDelta = (numparams > 0 && param[0] && param[0]->Type() != tvtVoid) ? param[0]->AsReal() : -1;
-                EM_ASM({ console.warn('[progressCompat] rawDelta=' + $0 + ' allplaying=' + $1 + ' activeMotion=' + $2); },
-                       rawDelta, (int)self->_allplaying, self->_runtime->activeMotion ? 1 : 0);
-            }
-        }
-#endif
 
         self->ensureMotionLoaded();
 
@@ -3664,17 +3244,6 @@ namespace motion {
             self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
         self->_allplaying = playing;
-        EM_ASM({ console.warn('[_allplaying] isPlayingCompat=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
-               (int)self->_allplaying, (int)(uintptr_t)self);
-#ifdef __EMSCRIPTEN__
-        {
-            static int isPlayingCount = 0;
-            if(isPlayingCount++ < 20) {
-                EM_ASM({ console.warn('[isPlayingCompat] result=' + $0 + ' timelinesCount=' + $1); },
-                       (int)playing, (int)self->_runtime->timelines.size());
-            }
-        }
-#endif
         if(result) {
             *result = tTJSVariant(playing);
         }
@@ -3687,13 +3256,6 @@ namespace motion {
         if(!self) {
             return TJS_E_INVALIDOBJECT;
         }
-#ifdef __EMSCRIPTEN__
-        if(self->_runtime->activeMotion && isLogoMotionLike(self->_runtime->activeMotion->path)) {
-            EM_ASM({ console.warn('[stopCompat] path=' + UTF8ToString($0)); },
-                   self->_runtime->activeMotion->path.c_str());
-        }
-#endif
-
         ttstr label;
         if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid &&
            param[0]->Type() != tvtInteger && param[0]->Type() != tvtReal) {
@@ -3712,8 +3274,6 @@ namespace motion {
         }
 
         self->_allplaying = false;
-        EM_ASM({ console.warn('[_allplaying] stopCompat=' + $0 + ' ptr=0x' + ($1 >>> 0).toString(16)); },
-               (int)self->_allplaying, (int)(uintptr_t)self);
         self->_syncWaiting = false;
         self->_syncActive = false;
         if(result) {

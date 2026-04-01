@@ -43,10 +43,6 @@
 #include "BinaryStream.h"
 #include "SysInitImpl.h"
 #include "Application.h"
-#ifdef EMSCRIPTEN
-#include <emscripten.h>
-#endif
-
 #include "RectItf.h"
 #include "ImageFunction.h"
 #include "BitmapIntf.h"
@@ -734,10 +730,6 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
            sn.find("first") != std::string::npos ||
            sn.find("Override") != std::string::npos ||
            sn.find("AfterInit") != std::string::npos) {
-#ifdef EMSCRIPTEN
-            EM_ASM({ console.warn('[SCRIPT-LOAD] ' + UTF8ToString($0)); },
-                   sn.c_str());
-#endif
         }
     }
 
@@ -753,9 +745,6 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
             if(sn.find("AffineSourceMotion") != std::string::npos &&
                sn.find("D3D") == std::string::npos) {
                 patchedCanWaitMovie = true;
-#ifdef EMSCRIPTEN
-                EM_ASM({ console.warn('[PATCH] Overriding AffineSourceMotion canWaitMovie+stopMovie'); });
-#endif
                 try {
                     tTJSVariant dummy;
                     TVPExecuteExpression(
@@ -785,9 +774,6 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
             auto sn = name.AsStdString();
             if(sn.find("AffineSourceFlip") != std::string::npos) {
                 patchedFlipCanWait = true;
-#ifdef EMSCRIPTEN
-                EM_ASM({ console.warn('[PATCH] Overriding AffineSourceFlip.canWaitMovie'); });
-#endif
                 try {
                     tTJSVariant dummy;
                     TVPExecuteExpression(
