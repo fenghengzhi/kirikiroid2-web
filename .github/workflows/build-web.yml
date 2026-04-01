@@ -45,9 +45,11 @@ jobs:
         run: |
           source ${{ env.EMSDK }}/emsdk_env.sh
           echo "EMSDK=${{ env.EMSDK }}" >> $GITHUB_ENV
+          echo "EM_CONFIG=${{ env.EMSDK }}/.emscripten" >> $GITHUB_ENV
+          echo "EMSDK_NODE=$(find ${{ env.EMSDK }}/node -name node -type f | head -1)" >> $GITHUB_ENV
           echo "${{ env.EMSDK }}" >> $GITHUB_PATH
           echo "${{ env.EMSDK }}/upstream/emscripten" >> $GITHUB_PATH
-          echo "${{ env.EMSDK }}/node/$(ls ${{ env.EMSDK }}/node/ | head -1)/bin" >> $GITHUB_PATH
+          echo "$(dirname $(find ${{ env.EMSDK }}/node -name node -type f | head -1))" >> $GITHUB_PATH
 
       - name: Setup vcpkg
         run: |
@@ -87,16 +89,14 @@ jobs:
 
       - name: Configure CMake
         run: |
-          source ${{ env.EMSDK }}/emsdk_env.sh
           cmake --preset "Web Release Config"
 
       - name: Build
         run: |
-          source ${{ env.EMSDK }}/emsdk_env.sh
           cmake --build out/web/release
 
       - name: Upload artifacts
-        if: ${{ !env.ACT && success() }}
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: web-build
