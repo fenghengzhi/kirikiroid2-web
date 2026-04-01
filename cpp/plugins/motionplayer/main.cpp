@@ -58,7 +58,10 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
     NCB_PROPERTY(metadata, getMetadata, setMetadata);
     NCB_PROPERTY(chara, getChara, setChara);
-    NCB_PROPERTY(motion, getMotion, setMotion);
+    // Aligned to libkrkr2.so 0x681CAC: raw callback to access objthis
+    // for onFindMotion TJS callback during motion loading
+    NCB_PROPERTY_RAW_CALLBACK(motion, Player::getMotionCompat,
+                              Player::setMotionCompat, 0);
     NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);
     NCB_PROPERTY(outline, getOutline, setOutline);
     NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);

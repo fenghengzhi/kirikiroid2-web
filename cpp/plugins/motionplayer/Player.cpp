@@ -8,7 +8,11 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include "WindowIntf.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 #include <cstring>
 #include <optional>
 #include <random>
@@ -428,6 +432,9 @@ namespace motion {
             double width = 0.0;
             double height = 0.0;
             double opacity = 1.0;
+            double angle = 0.0;     // rotation angle in degrees
+            std::string action;     // "content.action" from PSB frameList
+            bool hasSync = false;   // "content.sync" from PSB frameList
         };
 
         std::optional<double>
@@ -539,6 +546,15 @@ namespace motion {
                 state.y = *y;
             }
 
+            if(const auto angle = psbDictionaryNumber(content, "angle")) {
+                state.angle = *angle;
+            }
+            if(const auto act = psbDictionaryString(content, "action"); !act.empty()) {
+                state.action = act;
+            }
+            if(const auto sync = psbDictionaryNumber(content, "sync")) {
+                state.hasSync = *sync != 0.0;
+            }
             if(const auto coord = psbDictionaryList(content, "coord")) {
                 if(coord->size() > 0) {
                     if(const auto value = psbNumberValue((*coord)[0])) {
@@ -1074,42 +1090,89 @@ namespace motion {
         // Flatten a PSB layer node tree into a list of render nodes.
         // Aligned to libkrkr2.so sub_6C4E28: converts tree into flat list
         // with pre-computed positions for the sub_6C7440 render loop.
+        // Aligned to libkrkr2.so: full 2x3 affine [m11,m21,m12,m22,tx,ty]
+        using Affine2x3 = std::array<double, 6>;
+
         struct FlatRenderNode {
             FrameContentState state;
-            double x = 0.0, y = 0.0;     // computed position
-            double scaleX = 1.0, scaleY = 1.0; // accumulated scale
+            Affine2x3 affine{1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+            double accumulatedOpacity = 1.0;  // parent.opacity * child.opacity
+            bool flipX = false;               // XOR-inherited from parent
+            bool flipY = false;               // XOR-inherited from parent
         };
+
+        // Compose: result = parent * Translate(lx, ly)
+        Affine2x3 affineTranslate(const Affine2x3 &p, double lx, double ly) {
+            return {p[0], p[1], p[2], p[3],
+                    p[0]*lx + p[2]*ly + p[4],
+                    p[1]*lx + p[3]*ly + p[5]};
+        }
+
+        // Compose: result = a * Scale(sx, sy)
+        Affine2x3 affineScale(const Affine2x3 &a, double sx, double sy) {
+            return {a[0]*sx, a[1]*sx, a[2]*sy, a[3]*sy, a[4], a[5]};
+        }
+
+        // Compose: result = a * Rotate(angleDeg)
+        // Aligned to libkrkr2.so Player_updateLayers 2x2 matrix multiply
+        Affine2x3 affineRotate(const Affine2x3 &a, double angleDeg) {
+            if(angleDeg == 0.0) return a;
+            const double rad = angleDeg * 3.14159265358979323846 / 180.0;
+            const double c = std::cos(rad);
+            const double s = std::sin(rad);
+            // Rotation matrix R = [c -s; s c]
+            // A * R: new_m11 = a.m11*c + a.m12*s, new_m12 = -a.m11*s + a.m12*c
+            return {a[0]*c + a[2]*s, a[1]*c + a[3]*s,
+                    -a[0]*s + a[2]*c, -a[1]*s + a[3]*c,
+                    a[4], a[5]};
+        }
 
         void flattenLayerNodes(
             const std::shared_ptr<const PSB::PSBDictionary> &node,
             double time,
-            double parentX, double parentY,
-            double parentScaleX, double parentScaleY,
+            const Affine2x3 &parentAffine,
+            double parentOpacity,
+            bool parentFlipX, bool parentFlipY,
             std::vector<FlatRenderNode> &out) {
             if(!node) return;
             const auto state = evaluateLayerContent(node, time);
-            const double curX = parentX + (state.x + state.ox) * parentScaleX;
-            const double curY = parentY + (state.y + state.oy) * parentScaleY;
-            double curScaleX = parentScaleX;
-            double curScaleY = parentScaleY;
+            const double lx = state.x + state.ox;
+            const double ly = state.y + state.oy;
+            // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
+            // Compose: curAffine = parent * Translate(lx,ly) * Rotate(angle)
+            // The 2x2 matrix at layer+120~144 includes rotation, inherited via
+            // matrix multiply: Result = Parent * Child
+            auto curAffine = affineTranslate(parentAffine, lx, ly);
+            if(state.angle != 0.0) {
+                curAffine = affineRotate(curAffine, state.angle);
+            }
+
+            // Opacity cascades as multiplication, flip flags XOR with parent
+            const double curOpacity = parentOpacity * state.opacity;
+            const bool curFlipX = parentFlipX;
+            const bool curFlipY = parentFlipY;
 
             if(state.visible && !state.src.empty() && state.src != "layout"
                && !isMotionCrossReference(state.src)) {
-                out.push_back({state, curX, curY, curScaleX, curScaleY});
+                FlatRenderNode rn;
+                rn.state = state;
+                rn.affine = curAffine;
+                rn.accumulatedOpacity = curOpacity;
+                rn.flipX = curFlipX;
+                rn.flipY = curFlipY;
+                out.push_back(std::move(rn));
             }
 
             if(const auto children = psbDictionaryList(node, "children")) {
-                double childScaleX = curScaleX;
-                double childScaleY = curScaleY;
+                auto childAffine = curAffine;
                 if(state.src == "layout" && state.width > 0.0 && state.height > 0.0) {
-                    childScaleX = curScaleX * state.width;
-                    childScaleY = curScaleY * state.height;
+                    childAffine = affineScale(curAffine, state.width, state.height);
                 }
                 for(size_t i = 0; i < children->size(); ++i) {
                     auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                         (*children)[static_cast<int>(i)]);
-                    flattenLayerNodes(child, time, curX, curY,
-                                     childScaleX, childScaleY, out);
+                    flattenLayerNodes(child, time, childAffine,
+                                     curOpacity, curFlipX, curFlipY, out);
                 }
             }
         }
@@ -1122,9 +1185,7 @@ namespace motion {
         LOGGER->info("Motion.Player constructor called");
     }
 
-    Player::~Player() {
-        stopSelfDrive();
-    }
+    Player::~Player() = default;
 
     void Player::setMotion(ttstr v) {
         if(_motionKey == v) {
@@ -1137,6 +1198,73 @@ namespace motion {
         _variableKeys.Clear();
         _variableValues.clear();
         ensureMotionLoaded();
+    }
+
+    // Aligned to libkrkr2.so 0x681CAC → 0x6B0F10:
+    // motion setter calls objthis.onFindMotion({chara, motion}) to let
+    // TJS participate in path resolution before loading the PSB.
+    tjs_error Player::setMotionCompat(tTJSVariant *result, tjs_int numparams,
+                                      tTJSVariant **param,
+                                      iTJSDispatch2 *objthis) {
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) return TJS_E_INVALIDOBJECT;
+
+        ttstr motionValue;
+        if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid) {
+            motionValue = *param[0];
+        }
+
+        if(self->_motionKey == motionValue) {
+            return TJS_S_OK;
+        }
+
+        // Build dict {chara, motion} and call objthis.onFindMotion(dict)
+        // Aligned to libkrkr2.so Player_loadMotion_guess (0x6B0F10)
+        tTJSVariant dictVar = detail::makeDictionary({
+            {"chara", tTJSVariant(self->_chara)},
+            {"motion", tTJSVariant(motionValue)}
+        });
+        tTJSVariant onFindResult;
+        tTJSVariant *args[] = { &dictVar };
+        tjs_error hr = objthis->FuncCall(0, TJS_W("onFindMotion"),
+                                          nullptr, &onFindResult, 1, args, objthis);
+
+        // Read back (possibly modified) chara and motion from result
+        if(TJS_SUCCEEDED(hr) && onFindResult.Type() == tvtObject) {
+            iTJSDispatch2 *resObj = onFindResult.AsObjectNoAddRef();
+            if(resObj) {
+                tTJSVariant charaVal, motionVal;
+                if(TJS_SUCCEEDED(resObj->PropGet(TJS_MEMBERMUSTEXIST,
+                    TJS_W("chara"), nullptr, &charaVal, resObj))
+                    && charaVal.Type() != tvtVoid) {
+                    self->_chara = ttstr(charaVal);
+                }
+                if(TJS_SUCCEEDED(resObj->PropGet(TJS_MEMBERMUSTEXIST,
+                    TJS_W("motion"), nullptr, &motionVal, resObj))
+                    && motionVal.Type() != tvtVoid) {
+                    motionValue = ttstr(motionVal);
+                }
+            }
+        }
+
+        // Reset state and load
+        self->_motionKey = motionValue;
+        self->_runtime->activeMotion.reset();
+        self->_runtime->timelines.clear();
+        self->_runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        self->_variableKeys.Clear();
+        self->_variableValues.clear();
+        self->ensureMotionLoaded();
+
+        return TJS_S_OK;
+    }
+
+    tjs_error Player::getMotionCompat(tTJSVariant *result, tjs_int,
+                                      tTJSVariant **, iTJSDispatch2 *objthis) {
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) return TJS_E_INVALIDOBJECT;
+        if(result) *result = tTJSVariant(self->_motionKey);
+        return TJS_S_OK;
     }
 
     bool Player::ensureMotionLoaded() {
@@ -1928,12 +2056,13 @@ namespace motion {
 
                     const auto &layerNamesList = activeLayerNames();
 
-                    // Apply global affine transform
-                    const auto &m = _runtime->drawAffineMatrix;
-                    const double globalTx = m[4];
-                    const double globalTy = m[5];
-                    const double globalSx = m[0]; // scale X (m11)
-                    const double globalSy = m[3]; // scale Y (m22)
+                    // Full 2x3 affine from setDrawAffineTranslateMatrix,
+                    // with camera root offset applied (player+784/792/800 velocity)
+                    auto globalAffine = _runtime->drawAffineMatrix;
+                    if(_rootOffsetX != 0.0 || _rootOffsetY != 0.0) {
+                        globalAffine[4] += _rootOffsetX;
+                        globalAffine[5] += _rootOffsetY;
+                    }
 
                     // Step 1 (sub_6C4E28): Flatten PSB layer tree into
                     // a flat list with pre-computed positions.
@@ -1944,9 +2073,8 @@ namespace motion {
                         const auto it = layers->find(layerName);
                         if(it == layers->end()) continue;
                         flattenLayerNodes(it->second, renderTime,
-                                          globalTx, globalTy,
-                                          globalSx, globalSy,
-                                          renderNodes);
+                                          globalAffine, 1.0,
+                                          false, false, renderNodes);
                     }
 
                     // If we got 0 render nodes, check for motion cross-
@@ -1984,13 +2112,37 @@ namespace motion {
                                     if(refIt ==
                                        clipIt->second.layersByName.end())
                                         continue;
+                                    const auto refAffine = affineTranslate(
+                                        globalAffine, st.x + st.ox, st.y + st.oy);
                                     flattenLayerNodes(
                                         refIt->second, renderTime,
-                                        globalTx + (st.x + st.ox),
-                                        globalTy + (st.y + st.oy),
-                                        globalSx, globalSy, renderNodes);
+                                        refAffine, 1.0,
+                                        false, false, renderNodes);
                                 }
                             }
+                        }
+                    }
+
+                    // Aligned to libkrkr2.so Player_calcBounds (0x6C3D04):
+                    // Compute AABB from all render node affine corners.
+                    _boundsMinX = 1e308;
+                    _boundsMinY = 1e308;
+                    _boundsMaxX = -1e308;
+                    _boundsMaxY = -1e308;
+                    for(const auto &node : renderNodes) {
+                        // Estimate node bounds: use state.width/height or
+                        // a default size. Exact source size isn't known yet.
+                        const double nw = node.state.width > 0 ? node.state.width : 128.0;
+                        const double nh = node.state.height > 0 ? node.state.height : 128.0;
+                        const auto &a = node.affine;
+                        // 4 corners: (0,0), (nw,0), (0,nh), (nw,nh)
+                        double cx[4] = {a[4], a[0]*nw+a[4], a[2]*nh+a[4], a[0]*nw+a[2]*nh+a[4]};
+                        double cy[4] = {a[5], a[1]*nw+a[5], a[3]*nh+a[5], a[1]*nw+a[3]*nh+a[5]};
+                        for(int c = 0; c < 4; c++) {
+                            if(cx[c] < _boundsMinX) _boundsMinX = cx[c];
+                            if(cy[c] < _boundsMinY) _boundsMinY = cy[c];
+                            if(cx[c] > _boundsMaxX) _boundsMaxX = cx[c];
+                            if(cy[c] > _boundsMaxY) _boundsMaxY = cy[c];
                         }
                     }
 
@@ -2068,27 +2220,48 @@ namespace motion {
                             continue;
                         }
 
-                        // Compute affine destination points
-                        // Aligned to sub_6C7440 operateAffine call
+                        // Compute affine destination points using full 2x3 matrix
+                        // Aligned to libkrkr2.so sub_6C7440 operateAffine call
                         const double srcW = static_cast<double>(srcBmp->GetWidth());
                         const double srcH = static_cast<double>(srcBmp->GetHeight());
                         const double drawW = node.state.width > 0.0
                             ? node.state.width : srcW;
                         const double drawH = node.state.height > 0.0
                             ? node.state.height : srcH;
-                        const double sx = (drawW / srcW) * node.scaleX;
-                        const double sy = (drawH / srcH) * node.scaleY;
+                        const double localSx = drawW / srcW;
+                        const double localSy = drawH / srcH;
 
-                        // libkrkr2.so applies -0.5 texel offset
+                        // Compose node affine with local source scale:
+                        // A = node.affine * Scale(localSx, localSy)
+                        const auto &a = node.affine;
+                        const double am11 = a[0] * localSx;
+                        const double am21 = a[1] * localSx;
+                        const double am12 = a[2] * localSy;
+                        const double am22 = a[3] * localSy;
+                        const double atx  = a[4];
+                        const double aty  = a[5];
+
+                        // OperateAffine takes 3 corner points:
+                        // (0,0), (srcW,0), (0,srcH) mapped through the affine.
+                        // libkrkr2.so applies -0.5 texel offset.
+                        // Aligned to libkrkr2.so: flipX/flipY inherited from parent
+                        double fam11 = am11, fam21 = am21, fam12 = am12, fam22 = am22;
+                        if(node.flipX) { fam11 = -fam11; fam21 = -fam21; }
+                        if(node.flipY) { fam12 = -fam12; fam22 = -fam22; }
                         tTVPPointD pts[3];
-                        pts[0] = {node.x - 0.5,              node.y - 0.5};
-                        pts[1] = {node.x - 0.5 + srcW * sx,  node.y - 0.5};
-                        pts[2] = {node.x - 0.5,              node.y - 0.5 + srcH * sy};
+                        pts[0] = {atx - 0.5,
+                                  aty - 0.5};
+                        pts[1] = {fam11 * srcW + atx - 0.5,
+                                  fam21 * srcW + aty - 0.5};
+                        pts[2] = {fam12 * srcH + atx - 0.5,
+                                  fam22 * srcH + aty - 0.5};
 
                         tTVPRect sr(0, 0, static_cast<tjs_int>(srcW),
                                     static_cast<tjs_int>(srcH));
+                        // Use accumulated opacity (parent * child cascade)
+                        // aligned to libkrkr2.so Player_updateLayers opacity multiplication
                         const tjs_int opa = static_cast<tjs_int>(
-                            std::clamp(node.state.opacity * 255.0, 0.0, 255.0));
+                            std::clamp(node.accumulatedOpacity * 255.0, 0.0, 255.0));
 
                         try {
                             layer->OperateAffine(pts, srcBmp.get(), sr,
@@ -2281,166 +2454,62 @@ namespace motion {
     }
 
     void Player::frameProgress(double dt) {
-        _frameLastTime = dt;
-        _frameLoopTime += dt;
-        _loopTime += dt;
-        _tickCount += dt;
+        // Aligned to libkrkr2.so Player_progress_inner (0x6C106C):
+        // speed is applied internally, not by the caller.
+        const double actualDelta = _speed * dt;
+        _frameLastTime = actualDelta;
+        _frameLoopTime += actualDelta;
+        _loopTime += actualDelta;
+        _tickCount += actualDelta;
         _frameTickCount += 1.0;
-        detail::stepTimelines(_runtime->timelines, dt);
+
+        // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C) camera section:
+        // Apply camera velocity to root offset, then apply exponential damping.
+        // player+784/792/800 = velocityX/Y/Z, player+600 = damping
+        if(_cameraVelocityX != 0.0) {
+            _rootOffsetX += actualDelta * _cameraVelocityX;
+        }
+        if(_cameraVelocityY != 0.0) {
+            _rootOffsetY += actualDelta * _cameraVelocityY;
+        }
+        if(_cameraVelocityZ != 0.0) {
+            _rootOffsetZ += actualDelta * _cameraVelocityZ;
+        }
+        if(_cameraDamping != 1.0 && actualDelta > 0.0) {
+            const double dampFactor = std::pow(_cameraDamping, actualDelta / 60.0);
+            _cameraVelocityX *= dampFactor;
+            _cameraVelocityY *= dampFactor;
+            _cameraVelocityZ *= dampFactor;
+        }
+
+        // Save prevTime per timeline for action scanning
+        std::unordered_map<std::string, double> prevTimes;
+        for(const auto &[name, state] : _runtime->timelines) {
+            prevTimes[name] = state.currentTime;
+        }
+
+        detail::stepTimelines(_runtime->timelines, actualDelta,
+                              &_runtime->pendingEvents);
+
+        // Scan PSB layers for action/sync events crossed this frame
+        // Aligned to libkrkr2.so: updateLayers queues events during evaluation
+        if(_runtime->activeMotion && actualDelta > 0) {
+            for(const auto &[name, state] : _runtime->timelines) {
+                double prev = 0.0;
+                if(auto it = prevTimes.find(name); it != prevTimes.end())
+                    prev = it->second;
+                if(state.currentTime > prev) {
+                    detail::scanLayerActions(*_runtime->activeMotion,
+                                            prev, state.currentTime,
+                                            _runtime->pendingEvents);
+                }
+            }
+        }
 
         _allplaying = std::any_of(
             _runtime->timelines.begin(), _runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
         _syncActive = _syncWaiting && _allplaying;
-    }
-
-    // --- Self-driving animation loop ---
-    // For the non-D3D web build, AffineLayer's continuous handler may not
-    // fire.  When a timeline is playing, register a TJS continuous handler
-    // that advances the animation and triggers onPaint on the owner's
-    // target layer so the AffineLayer.onPaint → drawAffine chain fires.
-    struct SelfDriveContinuousHandler : public tTJSDispatch {
-        Player *player = nullptr;
-        tTJSVariant ownerObj;       // prevents GC (AddRef'd)
-        tTJSVariant affineSourceObj; // prevents GC (AddRef'd)
-        tjs_int64 lastTick = 0;
-        bool notifiedStop = false;
-        bool disabled = false;
-
-        iTJSDispatch2 *owner() const {
-            return ownerObj.Type() == tvtObject
-                ? ownerObj.AsObjectNoAddRef() : nullptr;
-        }
-
-        iTJSDispatch2 *affine() const {
-            return affineSourceObj.Type() == tvtObject
-                ? affineSourceObj.AsObjectNoAddRef() : nullptr;
-        }
-
-        tjs_error FuncCall(tjs_uint32 flag,
-            const tjs_char *membername, tjs_uint32 *hint,
-            tTJSVariant *result,
-            tjs_int numparams, tTJSVariant **param,
-            iTJSDispatch2 *objthis) override {
-            if(result) *result = (tjs_int)1;
-            if(disabled || !player || !player->_runtime) {
-                return TJS_S_OK;
-            }
-            if(!player->_allplaying) {
-                // Animation finished — set _playing=0 directly on
-                // AffineSourceMotion so canWaitMovie() returns 0.
-                if(!notifiedStop) {
-                    notifiedStop = true;
-                    auto *as = affine();
-                    if(as) {
-                        try {
-                            tTJSVariant zero((tjs_int)0);
-                            as->PropSet(0, TJS_W("_playing"),
-                                nullptr, &zero, as);
-                            as->FuncCall(0, TJS_W("onMovieStop"),
-                                nullptr, nullptr, 0, nullptr, as);
-                        } catch(...) {}
-                    }
-                }
-                return TJS_S_OK;
-            }
-            // Compute real time delta from tick parameter (ms)
-            tjs_int64 tick = (numparams > 0 && param[0])
-                ? param[0]->AsInteger() : 0;
-            double deltaMs = 0.0;
-            if(lastTick > 0 && tick > lastTick) {
-                deltaMs = static_cast<double>(tick - lastTick);
-            }
-            lastTick = tick;
-            if(deltaMs <= 0.0 || deltaMs > 200.0) {
-                deltaMs = 16.0; // cap at ~60fps
-            }
-            constexpr double kFramesPerMs = 60.0 / 1000.0;
-            const double deltaFrames = deltaMs * kFramesPerMs;
-            player->frameProgress(deltaFrames * player->_speed);
-            // Trigger repaint by setting redrawFlag on AffineSourceMotion.
-            // Do NOT call onAction — that's dispatched by libkrkr2.so's
-            // internal animation system with specific parameters we can't
-            // replicate here.
-            auto *as = affine();
-            if(as) {
-                try {
-                    tTJSVariant flagVal((tjs_int)1);
-                    as->PropSet(0, TJS_W("redrawFlag"),
-                        nullptr, &flagVal, as);
-                } catch(...) {}
-            }
-            return TJS_S_OK;
-        }
-    };
-
-    void Player::startSelfDrive(iTJSDispatch2 *objthis) {
-        if(_selfDriving) return;
-        _selfDriving = true;
-        _selfDriveObjThis = objthis;
-        auto *handler = new SelfDriveContinuousHandler();
-        handler->player = this;
-        handler->ownerObj = tTJSVariant(objthis, objthis); // AddRef
-        // Resolve AffineSourceMotion from Player's onAction closure
-        {
-            tTJSVariant onAction;
-            if(TJS_SUCCEEDED(objthis->PropGet(0, TJS_W("onAction"),
-                   nullptr, &onAction, objthis)) &&
-               onAction.Type() == tvtObject) {
-                auto clo = onAction.AsObjectClosureNoAddRef();
-                iTJSDispatch2 *as =
-                    clo.ObjThis ? clo.ObjThis : clo.Object;
-                if(as) {
-                    handler->affineSourceObj = tTJSVariant(as, as); // AddRef
-                }
-            }
-        }
-        // Store handler ref so we can remove it in stopSelfDrive
-        _selfDriveHandler = tTJSVariant(handler, nullptr);
-        tTJSVariantClosure clo(handler, nullptr);
-        TVPAddContinuousHandler(clo);
-        handler->Release(); // closure holds a ref
-        // Set _playing=1 on AffineSourceMotion and override
-        // canWaitMovie to return _playing for motion type too.
-        auto *affineSource = handler->affine();
-        if(affineSource) {
-            tTJSVariant val((tjs_int)1);
-            affineSource->PropSet(0, TJS_W("_playing"),
-                                  nullptr, &val, affineSource);
-            try {
-                TVPExecuteExpression(
-                    TJS_W("(function(obj){"
-                          "obj.canWaitMovie = function(){"
-                          "return this._playing;};})")
-                    , &val);
-                if(val.Type() == tvtObject) {
-                    tTJSVariant asVar(affineSource, affineSource);
-                    tTJSVariant *args[] = { &asVar };
-                    val.AsObjectClosureNoAddRef().FuncCall(
-                        0, nullptr, nullptr, nullptr, 1, args,
-                        nullptr);
-                }
-            } catch(...) {}
-        }
-        LOGGER->info("Motion.Player self-drive started");
-    }
-
-    void Player::stopSelfDrive() {
-        if(!_selfDriving) return;
-        _selfDriving = false;
-        // Remove the continuous handler and disable it
-        if(_selfDriveHandler.Type() == tvtObject &&
-           _selfDriveHandler.AsObjectNoAddRef()) {
-            auto *handler = static_cast<SelfDriveContinuousHandler *>(
-                static_cast<tTJSDispatch *>(
-                    _selfDriveHandler.AsObjectNoAddRef()));
-            handler->disabled = true;
-            handler->player = nullptr;
-            tTJSVariantClosure clo(handler, nullptr);
-            TVPRemoveContinuousHandler(clo);
-        }
-        _selfDriveHandler.Clear();
-        LOGGER->info("Motion.Player self-drive stopped");
     }
 
     // --- Viewport/display ---
@@ -3038,33 +3107,19 @@ namespace motion {
                 }
             }
             if(sla) {
-                // libkrkr2.so CPU path (sub_6C9CA8): renders motion directly
-                // onto the SLA's owner Layer by calling TJS methods on it
-                // (affineCopy, setSize, setPos, visible=1, assignImages).
-                // Get the motionWorkLayer from the window — a full-screen
-                // Layer in the display tree.
-                // TJS path: kag.motionWorkLayer (or _window.motionWorkLayer)
-                iTJSDispatch2 *targetLayer = nullptr;
-                {
-                    // Get the window object from the first KAG window
-                    tjs_int winCount = TVPGetWindowCount();
-                    for(tjs_int wi = 0; wi < winCount && !targetLayer; wi++) {
-                        auto *win = TVPGetWindowListAt(wi);
-                        if(!win) continue;
-                        iTJSDispatch2 *winObj = win->GetOwnerNoAddRef();
-                        if(!winObj) continue;
-                        // Try to get motionWorkLayer from window
-                        tTJSVariant mwlVar;
-                        if(TJS_SUCCEEDED(winObj->PropGet(0, TJS_W("motionWorkLayer"),
-                                         nullptr, &mwlVar, winObj)) &&
-                           mwlVar.Type() == tvtObject) {
-                            targetLayer = mwlVar.AsObjectNoAddRef();
-                        }
-                    }
+                // SLA detected. In non-D3D mode, the SLA's owner is the
+                // AffineLayer (in display tree). Render directly to it.
+                // Also try the owner's parent or the motionWorkLayer
+                // if the owner is not suitable.
+                auto *realSla = ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+                    paramObj, false);
+                iTJSDispatch2 *ownerLayer = realSla ? realSla->getOwner() : nullptr;
+                if(!ownerLayer) {
+                    ownerLayer = tryResolveSeparateAdaptorOwner(*param[0]);
                 }
-                if(targetLayer) {
-                    nativeInstance->renderToLayer(targetLayer);
-                    if(result) *result = tTJSVariant(targetLayer, targetLayer);
+                if(ownerLayer) {
+                    nativeInstance->renderToLayer(ownerLayer);
+                    if(result) *result = tTJSVariant(ownerLayer, ownerLayer);
                     return TJS_S_OK;
                 }
             }
@@ -3074,6 +3129,19 @@ namespace motion {
         tTJSNI_BaseLayer *layer = nullptr;
         if(tryGetLayerObject(*param[0], layer)) {
             nativeInstance->renderToLayer(paramObj);
+            // Aligned to libkrkr2.so Player_updateLayerAfterDraw_guess (0x6CE7D8):
+            // If flag+613 is set, call assignImages on internal render layer.
+            // In our implementation, renderToLayer renders directly to target,
+            // so the flag check is for future internal-buffer rendering modes.
+            if(nativeInstance->_needsInternalAssignImages) {
+                nativeInstance->_needsInternalAssignImages = false;
+                try {
+                    tTJSVariant targetVar(paramObj, paramObj);
+                    tTJSVariant *args[] = { &targetVar };
+                    paramObj->FuncCall(0, TJS_W("assignImages"),
+                        nullptr, nullptr, 1, args, paramObj);
+                } catch(...) {}
+            }
             if(result) *result = *param[0];
             return TJS_S_OK;
         }
@@ -3083,12 +3151,21 @@ namespace motion {
             iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*param[0]);
             if(resolved) {
                 nativeInstance->renderToLayer(resolved);
+                if(nativeInstance->_needsInternalAssignImages) {
+                    nativeInstance->_needsInternalAssignImages = false;
+                    try {
+                        tTJSVariant targetVar(resolved, resolved);
+                        tTJSVariant *args[] = { &targetVar };
+                        resolved->FuncCall(0, TJS_W("assignImages"),
+                            nullptr, nullptr, 1, args, resolved);
+                    } catch(...) {}
+                }
                 if(result) *result = tTJSVariant(resolved, resolved);
                 return TJS_S_OK;
             }
         }
 
-        // Fallback
+        // Fallback: no SLA/Layer match
         nativeInstance->draw();
         if(result) {
             *result = nativeInstance->_runtime->lastCanvas;
@@ -3191,15 +3268,6 @@ namespace motion {
             self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
 
-        // Start self-driving animation loop for non-D3D web builds.
-        // Stop any existing handler first to avoid having two handlers
-        // for the same Player (the old one would see stale timeline
-        // states and report allplaying=0, triggering premature onMovieStop).
-        if(self->_allplaying) {
-            self->stopSelfDrive();
-            self->startSelfDrive(objthis);
-        }
-
         if(result) {
             *result = tTJSVariant(started);
         }
@@ -3226,7 +3294,31 @@ namespace motion {
             delta = 0;
         }
 
-        self->frameProgress(delta * kMotionFramesPerMillisecond * self->_speed);
+        self->_runtime->pendingEvents.clear();
+        self->frameProgress(delta * kMotionFramesPerMillisecond);
+
+        // Aligned to libkrkr2.so Player_dispatchEvents (0x6C4490):
+        // After stepping timelines, dispatch queued onAction/onSync events.
+        if(!self->_runtime->pendingEvents.empty()) {
+            for(const auto &ev : self->_runtime->pendingEvents) {
+                try {
+                    if(ev.type == 0) {
+                        // onAction(param1, param2)
+                        tTJSVariant p1(detail::widen(ev.param1));
+                        tTJSVariant p2(detail::widen(ev.param2));
+                        tTJSVariant *args[] = { &p1, &p2 };
+                        objthis->FuncCall(0, TJS_W("onAction"),
+                            nullptr, nullptr, 2, args, objthis);
+                    } else if(ev.type == 1) {
+                        // onSync()
+                        objthis->FuncCall(0, TJS_W("onSync"),
+                            nullptr, nullptr, 0, nullptr, objthis);
+                    }
+                } catch(...) {}
+            }
+            self->_runtime->pendingEvents.clear();
+        }
+
         if(result) {
             *result = tTJSVariant(self->getProgressCompat());
         }
@@ -3256,26 +3348,14 @@ namespace motion {
         if(!self) {
             return TJS_E_INVALIDOBJECT;
         }
-        ttstr label;
-        if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid &&
-           param[0]->Type() != tvtInteger && param[0]->Type() != tvtReal) {
-            label = *param[0];
-        }
 
-        if(label.IsEmpty()) {
-            for(auto &[_, state] : self->_runtime->timelines) {
-                state.playing = false;
-            }
-        } else {
-            if(const auto it = self->_runtime->timelines.find(detail::narrow(label));
-               it != self->_runtime->timelines.end()) {
-                it->second.playing = false;
-            }
+        // Aligned to libkrkr2.so Player_stop (0x6D9A30):
+        // Binary simply sets playing=false (offset 1099), nothing else.
+        for(auto &[_, state] : self->_runtime->timelines) {
+            state.playing = false;
         }
-
         self->_allplaying = false;
-        self->_syncWaiting = false;
-        self->_syncActive = false;
+
         if(result) {
             *result = tTJSVariant(true);
         }

@@ -24,6 +24,7 @@ namespace motion::detail {
         std::string label;
         std::string owner;
         bool loop = false;
+        double loopTime = -1.0;   // from PSB; >=0 means loop restart point
         double totalFrames = 0.0;
         std::vector<std::string> layerNames;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>>
@@ -36,9 +37,19 @@ namespace motion::detail {
         int flags = 0;
         bool playing = false;
         bool loop = false;
+        double loopTime = -1.0;   // from PSB; >=0 means loop, <0 means stop at end
         double totalFrames = 0.0;
         double currentTime = 0.0;
         double blendRatio = 1.0;
+        bool wasPlaying = false;  // for edge detection in dispatchEvents
+    };
+
+    // Aligned to libkrkr2.so Player_dispatchEvents (0x6C4490):
+    // type=0: onAction(param1, param2), type=1: onSync()
+    struct MotionEvent {
+        int type = 0;
+        std::string param1;
+        std::string param2;
     };
 
     struct MotionSnapshot {
@@ -52,6 +63,7 @@ namespace motion::detail {
         std::vector<std::string> diffTimelineLabels;
         std::vector<std::string> variableLabels;
         std::unordered_map<std::string, bool> loopTimelines;
+        std::unordered_map<std::string, double> timelineLoopTimes;
         std::unordered_map<std::string, double> timelineTotalFrames;
         std::unordered_map<std::string, std::pair<double, double>> variableRanges;
         std::unordered_map<std::string, std::vector<VariableFrameInfo>> variableFrames;
@@ -89,6 +101,7 @@ namespace motion::detail {
         double opacity = 1.0;
         double slant = 0.0;
         double zoom = 1.0;
+        std::vector<MotionEvent> pendingEvents;
     };
 
     struct EmotePlayerRuntime {
@@ -125,6 +138,13 @@ namespace motion::detail {
     void primeTimelineStates(std::unordered_map<std::string, TimelineState> &states,
                              const MotionSnapshot &snapshot);
     void stepTimelines(std::unordered_map<std::string, TimelineState> &states,
-                       double dt);
+                       double dt,
+                       std::vector<MotionEvent> *events = nullptr);
+
+    // Scan PSB layer tree for action/sync events between prevTime and newTime.
+    // Aligned to libkrkr2.so: updateLayers queues events during tree evaluation.
+    void scanLayerActions(const MotionSnapshot &snapshot,
+                          double prevTime, double newTime,
+                          std::vector<MotionEvent> &events);
 
 } // namespace motion::detail

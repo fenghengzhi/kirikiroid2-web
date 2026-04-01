@@ -27,3 +27,4 @@ unpack/
 .debugtmp/
 .claude.local.md
 .claude/settings.local.json
+.ida-mcp/

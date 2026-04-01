@@ -383,10 +383,12 @@ namespace motion::detail {
                                         "totalFrameCount", "total_frame_count",
                                         "frames", "length", "end" })
                     .value_or(0.0);
-            if(const auto loop = dictionaryBool(dic, { "loop", "repeat", "is_loop" })) {
-                clip.loop = *loop;
-            } else if(const auto loopTime = dictionaryNumber(dic, { "loopTime" })) {
+            if(const auto loopTime = dictionaryNumber(dic, { "loopTime" })) {
+                clip.loopTime = *loopTime;
                 clip.loop = *loopTime >= 0.0;
+            } else if(const auto loop = dictionaryBool(dic, { "loop", "repeat", "is_loop" })) {
+                clip.loop = *loop;
+                clip.loopTime = *loop ? 0.0 : -1.0;
             }
 
             if(const auto layers = dictionaryList(dic, { "layer" })) {
@@ -416,6 +418,7 @@ namespace motion::detail {
 
             appendUnique(snapshot.mainTimelineLabels, clip.label);
             snapshot.loopTimelines[clip.label] = clip.loop;
+            snapshot.timelineLoopTimes[clip.label] = clip.loopTime;
             snapshot.timelineTotalFrames[clip.label] = clip.totalFrames;
         }
 
@@ -767,6 +770,10 @@ namespace motion::detail {
                 snapshot.loopTimelines.find(label) != snapshot.loopTimelines.end()
                 ? snapshot.loopTimelines.at(label)
                 : false;
+            state.loopTime =
+                snapshot.timelineLoopTimes.find(label) != snapshot.timelineLoopTimes.end()
+                ? snapshot.timelineLoopTimes.at(label)
+                : -1.0;
             state.totalFrames =
                 snapshot.timelineTotalFrames.find(label) !=
                     snapshot.timelineTotalFrames.end()
@@ -783,16 +790,19 @@ namespace motion::detail {
     }
 
     void stepTimelines(std::unordered_map<std::string, TimelineState> &states,
-                       const double dt) {
+                       const double dt,
+                       std::vector<MotionEvent> *events) {
         if(dt <= 0.0) {
             return;
         }
 
         for(auto &[name, state] : states) {
             if(!state.playing) {
+                state.wasPlaying = false;
                 continue;
             }
 
+            state.wasPlaying = true;
             state.currentTime += dt;
             if(state.totalFrames <= 0.0) {
                 continue;
@@ -802,11 +812,128 @@ namespace motion::detail {
                 continue;
             }
 
-            if(state.loop) {
-                state.currentTime = std::fmod(state.currentTime, state.totalFrames);
+            // Aligned to libkrkr2.so Player_progress_inner (0x6C106C):
+            // loopTime >= 0: wrap using currentTime = currentTime + loopTime - lastTime
+            // loopTime < 0: stop at end
+            if(state.loopTime >= 0.0) {
+                while(state.currentTime >= state.totalFrames) {
+                    state.currentTime = state.currentTime + state.loopTime - state.totalFrames;
+                }
             } else {
                 state.currentTime = state.totalFrames;
                 state.playing = false;
+                // Aligned to libkrkr2.so Player_dispatchEvents (0x6C4490):
+                // Queue onSync event when timeline stops (playing→false)
+                if(events && state.wasPlaying) {
+                    events->push_back({1, name, {}});
+                    state.wasPlaying = false;
+                }
+            }
+        }
+    }
+
+    // Scan PSB layer tree for action/sync events between prevTime and newTime.
+    // Aligned to libkrkr2.so: updateLayers queues events when frame evaluation
+    // crosses a frame boundary that has content.action or content.sync.
+    void scanLayerActions(const MotionSnapshot &snapshot,
+                          double prevTime, double newTime,
+                          std::vector<MotionEvent> &events) {
+        // Walk all layers in the snapshot
+        for(const auto &[name, layerDict] : snapshot.layersByName) {
+            if(!layerDict) continue;
+            auto frameList = std::dynamic_pointer_cast<PSB::PSBList>(
+                (*layerDict)["frameList"]);
+            if(!frameList) continue;
+
+            for(size_t i = 0; i < frameList->size(); ++i) {
+                auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*frameList)[static_cast<int>(i)]);
+                if(!frame) continue;
+
+                auto timeVal = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                    (*frame)["time"]);
+                if(!timeVal) continue;
+                double frameTime = 0.0;
+                switch(timeVal->numberType) {
+                    case PSB::PSBNumberType::Float:
+                        frameTime = timeVal->getValue<float>(); break;
+                    case PSB::PSBNumberType::Double:
+                        frameTime = timeVal->getValue<double>(); break;
+                    case PSB::PSBNumberType::Int:
+                        frameTime = static_cast<double>(timeVal->getValue<int>()); break;
+                    default:
+                        frameTime = static_cast<double>(timeVal->getValue<tjs_int64>()); break;
+                }
+
+                // Only fire for frames crossed: prevTime < frameTime <= newTime
+                if(frameTime <= prevTime || frameTime > newTime) continue;
+
+                auto content = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*frame)["content"]);
+                if(!content) continue;
+
+                // Check for action
+                if(auto actionStr = std::dynamic_pointer_cast<PSB::PSBString>(
+                    (*content)["action"])) {
+                    if(!actionStr->value.empty()) {
+                        events.push_back({0, actionStr->value, name});
+                    }
+                }
+
+                // Check for sync
+                if(auto syncVal = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                    (*content)["sync"])) {
+                    double sv = 0.0;
+                    switch(syncVal->numberType) {
+                        case PSB::PSBNumberType::Float:
+                            sv = syncVal->getValue<float>(); break;
+                        case PSB::PSBNumberType::Int:
+                            sv = static_cast<double>(syncVal->getValue<int>()); break;
+                        default: break;
+                    }
+                    if(sv != 0.0) {
+                        events.push_back({1, name, {}});
+                    }
+                }
+            }
+        }
+
+        // Also scan clips' layers
+        for(const auto &[clipLabel, clip] : snapshot.clipsByLabel) {
+            for(const auto &[layerName, layerDict] : clip.layersByName) {
+                if(!layerDict) continue;
+                auto frameList = std::dynamic_pointer_cast<PSB::PSBList>(
+                    (*layerDict)["frameList"]);
+                if(!frameList) continue;
+
+                for(size_t i = 0; i < frameList->size(); ++i) {
+                    auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                        (*frameList)[static_cast<int>(i)]);
+                    if(!frame) continue;
+
+                    auto timeVal = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                        (*frame)["time"]);
+                    if(!timeVal) continue;
+                    double frameTime = static_cast<double>(
+                        timeVal->numberType == PSB::PSBNumberType::Float
+                            ? timeVal->getValue<float>()
+                            : timeVal->numberType == PSB::PSBNumberType::Double
+                                ? timeVal->getValue<double>()
+                                : static_cast<double>(timeVal->getValue<int>()));
+
+                    if(frameTime <= prevTime || frameTime > newTime) continue;
+
+                    auto content = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                        (*frame)["content"]);
+                    if(!content) continue;
+
+                    if(auto actionStr = std::dynamic_pointer_cast<PSB::PSBString>(
+                        (*content)["action"])) {
+                        if(!actionStr->value.empty()) {
+                            events.push_back({0, actionStr->value, layerName});
+                        }
+                    }
+                }
             }
         }
     }

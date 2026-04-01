@@ -323,6 +323,12 @@ namespace motion {
         bool getD3DAvailable();
         void doAlphaMaskOperation();
         void onFindMotion(ttstr name);
+        // Aligned to libkrkr2.so 0x681CAC: motion property as raw callback
+        // so we have objthis to call onFindMotion TJS callback.
+        static tjs_error setMotionCompat(tTJSVariant *result, tjs_int numparams,
+                                         tTJSVariant **param, iTJSDispatch2 *objthis);
+        static tjs_error getMotionCompat(tTJSVariant *result, tjs_int numparams,
+                                         tTJSVariant **param, iTJSDispatch2 *objthis);
         static tjs_error setDrawAffineTranslateMatrixCompat(
             tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
             Player *nativeInstance);
@@ -347,7 +353,6 @@ namespace motion {
         tTJSVariant motionList();
         void emoteEdit(tTJSVariant args);
 
-        friend struct SelfDriveContinuousHandler;
     private:
         bool ensureMotionLoaded();
         void syncVariableKeysFromActiveMotion();
@@ -408,17 +413,26 @@ namespace motion {
         inline static bool _useD3D;
         bool _meshline = false;
         bool _busy = false;
+
+        // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
+        // Camera velocity at player+784/792/800, damping at player+600
+        double _cameraVelocityX = 0.0;   // player+784
+        double _cameraVelocityY = 0.0;   // player+792
+        double _cameraVelocityZ = 0.0;   // player+800
+        double _cameraDamping = 1.0;     // player+600 (1.0 = no damping)
+        double _rootOffsetX = 0.0;       // root layer position offset
+        double _rootOffsetY = 0.0;
+        double _rootOffsetZ = 0.0;
+
+        // Aligned to libkrkr2.so Player_calcBounds (0x6C3D04):
+        // AABB stored at player+152~176
+        double _boundsMinX = 1e308;
+        double _boundsMinY = 1e308;
+        double _boundsMaxX = -1e308;
+        double _boundsMaxY = -1e308;
+        bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
         std::unordered_map<std::string, double> _variableValues;
 
-        // Self-driving animation loop for non-D3D path.
-        // When a timeline is playing and no external driver (D3D/AffineLayer)
-        // is advancing the animation, the Player registers a continuous
-        // handler that calls frameProgress + draw each frame.
-        void startSelfDrive(iTJSDispatch2 *objthis);
-        void stopSelfDrive();
-        iTJSDispatch2 *_selfDriveObjThis = nullptr;
-        tTJSVariant _selfDriveHandler;
-        bool _selfDriving = false;
     };
 
 } // namespace motion

@@ -20,7 +20,7 @@ description: Guides the full KrKr2 WebAssembly debug workflow from build to brow
 典型流程：
 
 ```bash
-playwright-cli open http://localhost:8080/index.html
+playwright-cli open http://localhost:8080/index.html?game=game.zip&entry=data.xp3
 playwright-cli snapshot
 playwright-cli console
 playwright-cli screenshot --filename=debug.png

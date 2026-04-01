@@ -13,12 +13,16 @@ namespace motion {
 
         static tjs_error factory(SeparateLayerAdaptor **result, tjs_int numparams,
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
-            // Return failure so TJS _motionSeparateAdaptor stays undefined.
-            // This forces TJS drawAffine to use motionWorkLayer path instead
-            // of SLA path. The motionWorkLayer path does proper assignImages
-            // post-processing which is needed for the web port's rendering.
-            if(result) *result = nullptr;
-            return TJS_E_INVALIDPARAM;
+            // Let the SLA object be created (so entryOwner doesn't throw),
+            // but return it normally. In drawAffine, if _motionSeparateAdaptor
+            // is defined, TJS passes it to _player.draw(). The drawCompat SLA
+            // path then renders to the owner (AffineLayer) via renderToLayer.
+            tTJSVariant owner;
+            if(numparams > 0 && param[0]) {
+                owner = *param[0];
+            }
+            if(result) *result = new SeparateLayerAdaptor(owner);
+            return TJS_S_OK;
         }
 
         iTJSDispatch2 *getOwner() const {
