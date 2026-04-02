@@ -1765,13 +1765,21 @@ namespace motion {
 
                     const auto &layerNamesList = activeLayerNames();
 
-                    // Full 2x3 affine from setDrawAffineTranslateMatrix,
-                    // with camera root offset applied (player+784/792/800 velocity)
-                    auto globalAffine = _runtime->drawAffineMatrix;
-                    if(_rootOffsetX != 0.0 || _rootOffsetY != 0.0) {
-                        globalAffine[4] += _rootOffsetX;
-                        globalAffine[5] += _rootOffsetY;
-                    }
+                    // Aligned to libkrkr2.so Player_renderToCanvas_guess (0x6C7440):
+                    // drawAffineMatrix translation (m14,m24) is the AffineLayer's
+                    // screen position, applied by applyTranslateOffset (0x6D5264)
+                    // to internal node structs at player+144/148 — NOT as the root
+                    // of PSB tree evaluation. PSB coordinates start at (0,0).
+                    // Only rotation/scale (m11,m21,m12,m22) affects rendering.
+                    // Camera offset is additive.
+                    Affine2x3 globalAffine = {
+                        _runtime->drawAffineMatrix[0],  // m11 (rotation/scale)
+                        _runtime->drawAffineMatrix[1],  // m21
+                        _runtime->drawAffineMatrix[2],  // m12
+                        _runtime->drawAffineMatrix[3],  // m22
+                        _rootOffsetX,                    // tx = camera only
+                        _rootOffsetY                     // ty = camera only
+                    };
 
                     // Step 1 (sub_6C4E28): Flatten PSB layer tree into
                     // a flat list with pre-computed positions.
@@ -2820,10 +2828,14 @@ namespace motion {
         }
 
         // Step 2: Check if param is SLA.
-        // When TJS calls _player.draw(sla), the SLA path must render to a
-        // visible Layer and trigger display update. In libkrkr2.so, this is
-        // handled by Player_DrawSLA_guess which resolves internal targets.
-        // We render to the motionWorkLayer (full-screen, in display tree).
+        // Aligned to libkrkr2.so Player_DrawSLA (0x6D5658):
+        // SLA owner is the AffineLayer in the display tree.
+        // Render directly to it — TJS drawAffine does NOT call assignImages
+        // for SLA path (SLA is not Layer/D3DAdaptor), so the owner IS the
+        // final display target. renderToLayer now uses identity translation
+        // (drawAffineMatrix tx/ty stripped in renderToLayer) because the
+        // AffineLayer's position in the display tree already handles screen
+        // placement.
         {
             auto *sla = ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
                 paramObj, false);
@@ -2834,10 +2846,6 @@ namespace motion {
                 }
             }
             if(sla) {
-                // SLA detected. In non-D3D mode, the SLA's owner is the
-                // AffineLayer (in display tree). Render directly to it.
-                // Also try the owner's parent or the motionWorkLayer
-                // if the owner is not suitable.
                 auto *realSla = ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
                     paramObj, false);
                 iTJSDispatch2 *ownerLayer = realSla ? realSla->getOwner() : nullptr;
