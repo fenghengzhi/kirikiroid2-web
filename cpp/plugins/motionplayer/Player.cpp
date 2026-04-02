@@ -901,8 +901,12 @@ namespace motion {
             std::vector<FlatRenderNode> &out) {
             if(!node) return;
             const auto state = evaluateLayerContent(node, time);
-            const double lx = state.x + state.ox;
-            const double ly = state.y + state.oy;
+            // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
+            // Position uses x,y only. ox/oy are origin offsets applied
+            // separately during vertex computation (sub_6BC4F0), NOT added
+            // to the translation here.
+            const double lx = state.x;
+            const double ly = state.y;
             // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
             // Compose: curAffine = parent * Translate(lx,ly) * Rotate(angle)
             // The 2x2 matrix at layer+120~144 includes rotation, inherited via
@@ -1768,7 +1772,6 @@ namespace motion {
                         _runtime->drawAffineMatrix[4] + _rootOffsetX + _cameraOffsetX,
                         _runtime->drawAffineMatrix[5] + _rootOffsetY + _cameraOffsetY
                     };
-
                     // Step 1 (sub_6C4E28): Flatten PSB layer tree into
                     // a flat list with pre-computed positions.
                     std::vector<FlatRenderNode> renderNodes;
@@ -1926,7 +1929,6 @@ namespace motion {
                         if(!srcBmp || srcBmp->GetWidth() == 0) {
                             continue;
                         }
-
                         // Compute affine destination points using full 2x3 matrix
                         // Aligned to libkrkr2.so sub_6C7440 operateAffine call
                         const double srcW = static_cast<double>(srcBmp->GetWidth());
@@ -1945,13 +1947,18 @@ namespace motion {
                         const double am21 = a[1] * localSx;
                         const double am12 = a[2] * localSy;
                         const double am22 = a[3] * localSy;
-                        const double atx  = a[4];
-                        const double aty  = a[5];
+
+                        // Aligned to libkrkr2.so sub_6BC4F0 (0x6BCB20):
+                        // origin = pos - matrix × originOffset
+                        // ox/oy from PSB content are the origin (anchor) offsets.
+                        const double ox = node.state.ox;
+                        const double oy = node.state.oy;
+                        const double atx = a[4] - (a[0] * ox + a[2] * oy);
+                        const double aty = a[5] - (a[1] * ox + a[3] * oy);
 
                         // OperateAffine takes 3 corner points:
                         // (0,0), (srcW,0), (0,srcH) mapped through the affine.
                         // libkrkr2.so applies -0.5 texel offset.
-                        // Aligned to libkrkr2.so: flipX/flipY inherited from parent
                         double fam11 = am11, fam21 = am21, fam12 = am12, fam22 = am22;
                         if(node.flipX) { fam11 = -fam11; fam21 = -fam21; }
                         if(node.flipY) { fam12 = -fam12; fam22 = -fam22; }

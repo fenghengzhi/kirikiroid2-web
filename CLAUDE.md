@@ -33,6 +33,10 @@
 ## Reverse Engineering with IDA MCP
 - No Android kirikiroid2 source code is available — only libkrkr2.so binary. Use IDA MCP for all reverse engineering.
 - CRITICAL: libkrkr2.so and the current project code do NOT correspond 1:1. When analyzing libkrkr2.so, do NOT reference local project code as ground truth — the local code may be wrong or incomplete. Always treat libkrkr2.so decompilation as the authoritative source.
+- `analysis/` directory contains detailed RE analysis docs — check before re-analyzing the same functions
+- Key analysis docs: `PSB_RL_Decompression_libkrkr2so.md`, `SLA_Rendering_Chain_libkrkr2so.md`, `Window_DrawDevice_Scaling_libkrkr2so.md`
+- SLA rendering chain (6 steps): PSB tree eval (0x6BB33C) → vertex computation (0x6BC4F0) → drawAffineMatrix transform (0x6C2334) → cameraOffset+rootOffset (0x6D5264) → PrivateMotionGLL child layer (0x6D5948) → direct vertex render (0x6DE738)
+- Window scaling: TVPWindowLayer::RecalcPaintBox (0xaa7c58), ResetDrawSprite (0xaa7d70), SetPaintBoxSize (0xaa5a24). drawSprite.textureRect clips to paintBox (scWidth×scHeight), not full primaryLayer size
 - `analysis_MotionPlayer_EmotePlayer.md` at project root has prior RE analysis of libkrkr2.so
 - Use `mcp__ida-pro-mcp__decompile` with function addresses to get pseudocode
 - Use `mcp__ida-pro-mcp__find` with type "string" to locate string references
@@ -55,11 +59,15 @@
 - Build native tools: `cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON -DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison && cmake --build out/macos/release --target tjsdump`
 - Do NOT test with individual XP3 files — incomplete XP3 sets cause init failures that mask real bugs
 - Browser automation: Use `playwright-cli` skill. Game uses touch events for left-click; use CDP `Input.dispatchTouchEvent` or ensure BUTTON_LEFT in onMouseDownEvent
-- C++ logging in Emscripten: `spdlog`/`printf`/`fprintf(stderr)` NOT captured by playwright. Use `EM_ASM({ console.warn(...) })` for browser-visible logs
+- C++ logging in Emscripten: `spdlog`/`printf`/`fprintf(stderr)` all output to browser console, but playwright-cli console only shows a limited number of recent entries. When logs are voluminous, earlier C++ output gets pushed out. Use debug-capture.sh's addInitScript approach to capture specific keywords
 - ZIP game loading via playwright takes ~10 min; plan test cycles accordingly
+- RecalcPaintBox in `cpp/core/environ/cocos2d/MainScene.cpp` controls game→screen coordinate mapping. Key runtime values: viewSize, contentSize, paintBox, scale, offset
+- Game uses exHeight (1440) > scHeight (1080) for extended layer area. primaryLayer contentSize = scWidth×scHeight, but some layers (AffineLayer) use exWidth×exHeight
 
 ## Workflow
 - CRITICAL: All fixes MUST be aligned to libkrkr2.so. Do NOT guess or patch — decompile the corresponding function in libkrkr2.so first, understand how the original does it, then replicate that logic. Use `/ida-decompile` skill and `mcp__ida-pro-mcp__decompile` for every non-trivial fix.
+- CRITICAL: When fixing rendering/positioning issues, trace the COMPLETE coordinate chain (PSB → ownerLayer → primaryLayer → paintBox → screen) BEFORE making any code changes. Each layer has its own transform.
+- When a fix doesn't work, do NOT try another speculative fix. Instead: add a diagnostic (fprintf stderr), verify actual runtime values, then fix based on evidence.
 - IMPORTANT: When fixing a bug, do NOT directly apply a guessed fix. First add logging/debug output to confirm the root cause, verify the hypothesis, then apply the actual fix.
 - When a C++ function needs implementation (draw, captureCanvas, etc.), find and decompile the exact function in libkrkr2.so before writing any code. Do not invent behavior.
 - ANTI-PATTERN: Do NOT try multiple "maybe this will work" patches in sequence. Each failed attempt wastes time and muddies the code. Instead: decompile libkrkr2.so → understand the real data flow → implement once correctly.
