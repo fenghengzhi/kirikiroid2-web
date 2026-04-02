@@ -1072,6 +1072,8 @@ namespace motion {
                     continue;
                 }
                 if(candidateKey.rfind("psb://", 0) == 0) {
+                    // For psb:// paths, check if the resource exists via the
+                    // storage system (PSBMedia::CheckExistentStorage)
                     if(TVPIsExistentStorage(candidate)) {
                         return candidate;
                     }
@@ -2003,20 +2005,6 @@ namespace motion {
         if(_runtime->activeMotion) {
             const auto *clip = selectActiveClip();
             const auto renderTime = activeClipTime(*_runtime, clip);
-            {
-                static int rtlDiag = 0;
-                if(rtlDiag++ < 30) {
-                    EM_ASM({ console.log('[RTL] renderToLayer: motion=' + UTF8ToString($0)
-                        + ' clip=' + UTF8ToString($1)
-                        + ' time=' + $2
-                        + ' allplaying=' + $3
-                        + ' timelines=' + $4); },
-                        _runtime->activeMotion->path.c_str(),
-                        clip ? clip->label.c_str() : "null",
-                        renderTime, (int)_allplaying,
-                        (int)_runtime->timelines.size());
-                }
-            }
 
             // Use the target layer's own size if it's large enough (e.g.
             // motionWorkLayer at full screen resolution). Only fall back to
@@ -2087,32 +2075,6 @@ namespace motion {
                         flattenLayerNodes(it->second, renderTime,
                                           globalAffine, 1.0,
                                           false, false, renderNodes);
-                    }
-
-                    {
-                        static int flatDiag = 0;
-                        if(flatDiag++ < 30) {
-                            EM_ASM({ console.log('[RTL] flatten: nodes=' + $0
-                                + ' layers=' + $1
-                                + ' canvas=' + $2 + 'x' + $3
-                                + ' affine=[' + $4 + ',' + $5 + ',' + $6 + ',' + $7 + ',' + $8 + ',' + $9 + ']'); },
-                                (int)renderNodes.size(),
-                                (int)layerNamesList.size(),
-                                canvasWidth, canvasHeight,
-                                globalAffine[0], globalAffine[1],
-                                globalAffine[2], globalAffine[3],
-                                globalAffine[4], globalAffine[5]);
-                            for(size_t ni = 0; ni < renderNodes.size() && ni < 5; ++ni) {
-                                EM_ASM({ console.log('[RTL]   node[' + $0 + '] src=' + UTF8ToString($1)
-                                    + ' opa=' + $2 + ' vis=' + $3
-                                    + ' w=' + $4 + ' h=' + $5); },
-                                    (int)ni, renderNodes[ni].state.src.c_str(),
-                                    renderNodes[ni].state.opacity,
-                                    (int)renderNodes[ni].state.visible,
-                                    renderNodes[ni].state.width,
-                                    renderNodes[ni].state.height);
-                            }
-                        }
                     }
 
                     // If we got 0 render nodes, check for motion cross-
@@ -2254,18 +2216,6 @@ namespace motion {
                             srcCache.emplace(node.state.src, srcBmp);
                         }
 
-                        {
-                            static int srcDiag = 0;
-                            if(srcDiag++ < 30) {
-                                EM_ASM({ console.log('[RTL] src=' + UTF8ToString($0)
-                                    + ' bmp=' + ($1 ? ($2 + 'x' + $3) : 'null')); },
-                                    node.state.src.c_str(),
-                                    srcBmp ? 1 : 0,
-                                    srcBmp ? (int)srcBmp->GetWidth() : 0,
-                                    srcBmp ? (int)srcBmp->GetHeight() : 0);
-                            }
-                        }
-
                         if(!srcBmp || srcBmp->GetWidth() == 0) {
                             continue;
                         }
@@ -2319,16 +2269,6 @@ namespace motion {
                             drewAny = true;
                         } catch(const eTJS &) {
                         } catch(...) {
-                        }
-                    }
-
-                    {
-                        static int drawDiag = 0;
-                        if(drawDiag++ < 15) {
-                            EM_ASM({ console.log('[RTL] drewAny=' + $0
-                                + ' nodes=' + $1 + ' canvas=' + $2 + 'x' + $3); },
-                                (int)drewAny, (int)renderNodes.size(),
-                                canvasWidth, canvasHeight);
                         }
                     }
 

@@ -43,7 +43,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${BASE_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_visual_module core_plugin_module core_environ_module core_extension_module core_sound_module core_utils_module)
 
 if(EMSCRIPTEN)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE KRKR2_NO_7ZIP)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE KRKR2_NO_7ZIP KRKR2_NO_OPENCV)
 endif()
 
 find_package(uchardet CONFIG REQUIRED)

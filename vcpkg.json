@@ -75,11 +75,6 @@
       "platform": "!emscripten"
     },
     {
-      "name": "opencv4",
-      "default-features": false,
-      "platform": "emscripten"
-    },
-    {
       "name": "opus",
       "platform": "android"
     },
@@ -101,5 +96,10 @@
     },
     "zstd"
   ],
-  "overrides": []
+  "overrides": [
+    {
+      "name": "opencv4",
+      "version": "4.7.0#6"
+    }
+  ]
 }

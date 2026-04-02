@@ -113,12 +113,16 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
 )
 
-set(OpenCV_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")
-find_package(OpenCV REQUIRED)
-target_link_libraries(${PROJECT_NAME} PUBLIC
-    opencv_imgproc
-    opencv_core
-)
+if(NOT EMSCRIPTEN)
+    set(OpenCV_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")
+    find_package(OpenCV REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PUBLIC
+        opencv_imgproc
+        opencv_core
+    )
+else()
+    target_compile_definitions(${PROJECT_NAME} PUBLIC -DKRKR2_NO_OPENCV)
+endif()
 
 find_package(lz4 CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PUBLIC
