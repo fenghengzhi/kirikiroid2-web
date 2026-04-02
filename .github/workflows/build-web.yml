@@ -6,6 +6,9 @@ on:
   workflow_run:
     workflows: ["Code Format Check"]
     types: ["completed"]
+  push:
+    branches:
+      - web
 
 env:
   EMSDK_VERSION: "3.1.64"

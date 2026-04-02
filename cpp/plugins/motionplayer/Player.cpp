@@ -10,9 +10,6 @@
 #include <cctype>
 #include <cmath>
 #include "WindowIntf.h"
-#ifdef __EMSCRIPTEN__
-#include <emscripten/emscripten.h>
-#endif
 #include <cstring>
 #include <optional>
 #include <random>
@@ -51,56 +48,49 @@ namespace motion {
         //   marker & 0x80 → repeat (marker & 0x7F + 1) copies of next byte
         //   otherwise      → (marker + 1) literal bytes follow
         // Aligned to libkrkr2.so via FreeMote PSB RL spec.
+        // PSB RL decompression — two variants based on libkrkr2.so sub_695DE8:
+        //
+        // align=1 (with palette): single-byte RLE, used with 8-bit indexed data
+        //   RLE run:  count = (marker & 0x7F) + 3, repeat 1 byte
+        //   Literal:  count = marker + 1, copy count bytes
+        //
+        // align=4 (no palette, RGBA8): 4-byte RLE, used with 32-bit pixel data
+        //   RLE run:  count = (marker & 0x7F) + 3, repeat 4 bytes
+        //   Literal:  count = marker + 1, copy count*4 bytes
+        //   (0x696D00-0x696D98 in libkrkr2.so)
         std::vector<std::uint8_t> decompressPsbRL(
             const std::vector<std::uint8_t> &compressed,
-            int width, int height) {
-            const size_t totalPixels = static_cast<size_t>(width) * height;
-            const size_t expectedBytes = totalPixels * 4u;
-            std::vector<std::uint8_t> output(expectedBytes, 0);
+            int width, int height, int align = 4) {
+            const size_t outputSize =
+                static_cast<size_t>(width) * height * 4u;
+            std::vector<std::uint8_t> output(outputSize, 0);
 
-            auto decompressChannel =
-                [&](size_t srcStart, std::vector<std::uint8_t> &channelBuf)
-                -> size_t {
-                channelBuf.resize(totalPixels, 0);
-                size_t src = srcStart;
-                size_t dst = 0;
-                while(src < compressed.size() && dst < totalPixels) {
-                    const auto marker = compressed[src++];
-                    if(marker & 0x80) {
-                        const size_t count =
-                            static_cast<size_t>(marker & 0x7F) + 1;
-                        if(src >= compressed.size()) break;
-                        const auto val = compressed[src++];
-                        const size_t end = std::min(dst + count, totalPixels);
-                        std::memset(channelBuf.data() + dst, val, end - dst);
-                        dst = end;
-                    } else {
-                        const size_t count =
-                            static_cast<size_t>(marker) + 1;
-                        const size_t end = std::min(dst + count, totalPixels);
-                        const size_t actual = end - dst;
-                        if(src + actual > compressed.size()) break;
-                        std::memcpy(channelBuf.data() + dst,
-                                    compressed.data() + src, actual);
-                        src += actual;
-                        dst = end;
+            const auto *src = compressed.data();
+            const auto *srcEnd = src + compressed.size();
+            auto *dst = output.data();
+            const auto *dstEnd = dst + outputSize;
+
+            while(src < srcEnd && dst < dstEnd) {
+                const auto marker = *src++;
+                if(marker & 0x80) {
+                    // RLE run: repeat `align` bytes (count) times
+                    const size_t count = (marker & 0x7F) + 3;
+                    if(src + align > srcEnd) break;
+                    for(size_t i = 0; i < count && dst + align <= dstEnd; i++) {
+                        std::memcpy(dst, src, align);
+                        dst += align;
                     }
+                    src += align;
+                } else {
+                    // Literal: copy (marker+1)*align bytes verbatim
+                    const size_t count = (marker + 1) * static_cast<size_t>(align);
+                    if(src + count > srcEnd) break;
+                    const size_t n = std::min(count,
+                        static_cast<size_t>(dstEnd - dst));
+                    std::memcpy(dst, src, n);
+                    src += count;
+                    dst += n;
                 }
-                return src;
-            };
-
-            std::vector<std::uint8_t> channels[4];
-            size_t pos = 0;
-            for(int ch = 0; ch < 4; ++ch) {
-                pos = decompressChannel(pos, channels[ch]);
-            }
-
-            // Interleave channels into RGBA pixel output
-            for(size_t i = 0; i < totalPixels; ++i) {
-                output[i * 4 + 0] = channels[0][i]; // R
-                output[i * 4 + 1] = channels[1][i]; // G
-                output[i * 4 + 2] = channels[2][i]; // B
-                output[i * 4 + 3] = channels[3][i]; // A
             }
             return output;
         }
@@ -1700,21 +1690,6 @@ namespace motion {
         if(_runtime->activeMotion) {
             const auto *clip = selectActiveClip();
             const auto renderTime = activeClipTime(*_runtime, clip);
-            {
-                static int rtlDiag = 0;
-                if(rtlDiag++ < 30) {
-                    EM_ASM({ console.log('[RTL] renderToLayer: motion=' + UTF8ToString($0)
-                        + ' clip=' + UTF8ToString($1)
-                        + ' time=' + $2
-                        + ' allplaying=' + $3
-                        + ' timelines=' + $4); },
-                        _runtime->activeMotion->path.c_str(),
-                        clip ? clip->label.c_str() : "null",
-                        renderTime, (int)_allplaying,
-                        (int)_runtime->timelines.size());
-                }
-            }
-
             // Use the target layer's own size if it's large enough (e.g.
             // motionWorkLayer at full screen resolution). Only fall back to
             // motion's native size if the layer is too small (e.g. SLA owner
@@ -1792,32 +1767,6 @@ namespace motion {
                         flattenLayerNodes(it->second, renderTime,
                                           globalAffine, 1.0,
                                           false, false, renderNodes);
-                    }
-
-                    {
-                        static int flatDiag = 0;
-                        if(flatDiag++ < 30) {
-                            EM_ASM({ console.log('[RTL] flatten: nodes=' + $0
-                                + ' layers=' + $1
-                                + ' canvas=' + $2 + 'x' + $3
-                                + ' affine=[' + $4 + ',' + $5 + ',' + $6 + ',' + $7 + ',' + $8 + ',' + $9 + ']'); },
-                                (int)renderNodes.size(),
-                                (int)layerNamesList.size(),
-                                canvasWidth, canvasHeight,
-                                globalAffine[0], globalAffine[1],
-                                globalAffine[2], globalAffine[3],
-                                globalAffine[4], globalAffine[5]);
-                            for(size_t ni = 0; ni < renderNodes.size() && ni < 5; ++ni) {
-                                EM_ASM({ console.log('[RTL]   node[' + $0 + '] src=' + UTF8ToString($1)
-                                    + ' opa=' + $2 + ' vis=' + $3
-                                    + ' w=' + $4 + ' h=' + $5); },
-                                    (int)ni, renderNodes[ni].state.src.c_str(),
-                                    renderNodes[ni].state.opacity,
-                                    (int)renderNodes[ni].state.visible,
-                                    renderNodes[ni].state.width,
-                                    renderNodes[ni].state.height);
-                            }
-                        }
                     }
 
                     // If we got 0 render nodes, check for motion cross-
@@ -1937,6 +1886,8 @@ namespace motion {
                                         static_cast<tjs_uint>(rh), 32);
                                     tTVPRect fr(0, 0, rw, rh);
                                     bmp->Fill(fr, 0x00000000);
+                                    // RL-decompressed data is RGBA interleaved.
+                                    // KiKiRi2 internal format is BGRA. Swap R and B.
                                     const auto *sd = pixelData.data();
                                     for(int y = 0; y < rh; ++y) {
                                         auto *row = static_cast<std::uint8_t *>(
@@ -1957,18 +1908,6 @@ namespace motion {
                                 }
                             }
                             srcCache.emplace(node.state.src, srcBmp);
-                        }
-
-                        {
-                            static int srcDiag = 0;
-                            if(srcDiag++ < 30) {
-                                EM_ASM({ console.log('[RTL] src=' + UTF8ToString($0)
-                                    + ' bmp=' + ($1 ? ($2 + 'x' + $3) : 'null')); },
-                                    node.state.src.c_str(),
-                                    srcBmp ? 1 : 0,
-                                    srcBmp ? (int)srcBmp->GetWidth() : 0,
-                                    srcBmp ? (int)srcBmp->GetHeight() : 0);
-                            }
                         }
 
                         if(!srcBmp || srcBmp->GetWidth() == 0) {
@@ -2024,16 +1963,6 @@ namespace motion {
                             drewAny = true;
                         } catch(const eTJS &) {
                         } catch(...) {
-                        }
-                    }
-
-                    {
-                        static int drawDiag = 0;
-                        if(drawDiag++ < 15) {
-                            EM_ASM({ console.log('[RTL] drewAny=' + $0
-                                + ' nodes=' + $1 + ' canvas=' + $2 + 'x' + $3); },
-                                (int)drewAny, (int)renderNodes.size(),
-                                canvasWidth, canvasHeight);
                         }
                     }
 
@@ -2853,7 +2782,50 @@ namespace motion {
                     ownerLayer = tryResolveSeparateAdaptorOwner(*param[0]);
                 }
                 if(ownerLayer) {
-                    nativeInstance->renderToLayer(ownerLayer);
+                    // AffineLayer is ltBinder — compositor skips its own image.
+                    // Create child layer under primaryLayer as render target.
+                    static tTJSVariant slaChild;
+                    iTJSDispatch2 *renderTarget = nullptr;
+                    if(slaChild.Type() == tvtObject && slaChild.AsObjectNoAddRef())
+                        renderTarget = slaChild.AsObjectNoAddRef();
+                    if(!renderTarget) {
+                        iTJSDispatch2 *global = TVPGetScriptDispatch();
+                        if(global) {
+                            tTJSVariant lcVar, kagVar, primaryVar;
+                            global->PropGet(0, TJS_W("Layer"), nullptr, &lcVar, global);
+                            global->PropGet(0, TJS_W("kag"), nullptr, &kagVar, global);
+                            if(kagVar.Type() == tvtObject)
+                                kagVar.AsObjectNoAddRef()->PropGet(0, TJS_W("primaryLayer"),
+                                    nullptr, &primaryVar, kagVar.AsObjectNoAddRef());
+                            if(lcVar.Type() == tvtObject && primaryVar.Type() == tvtObject) {
+                                tTJSVariant *args[] = { &kagVar, &primaryVar };
+                                iTJSDispatch2 *newL = nullptr;
+                                lcVar.AsObjectNoAddRef()->CreateNew(0, nullptr, nullptr,
+                                    &newL, 2, args, lcVar.AsObjectNoAddRef());
+                                if(newL) {
+                                    slaChild = tTJSVariant(newL, newL);
+                                    newL->Release();
+                                    renderTarget = slaChild.AsObjectNoAddRef();
+                                    tTJSNI_BaseLayer *cn = nullptr;
+                                    renderTarget->NativeInstanceSupport(TJS_NIS_GETINSTANCE,
+                                        tTJSNC_Layer::ClassID,
+                                        reinterpret_cast<iTJSNativeInstance **>(&cn));
+                                    if(cn) {
+                                        cn->SetVisible(true);
+                                        tTJSNI_BaseLayer *ownerN = nullptr;
+                                        ownerLayer->NativeInstanceSupport(TJS_NIS_GETINSTANCE,
+                                            tTJSNC_Layer::ClassID,
+                                            reinterpret_cast<iTJSNativeInstance **>(&ownerN));
+                                        if(ownerN) cn->SetSize(ownerN->GetWidth(), ownerN->GetHeight());
+                                        cn->SetType(static_cast<tTVPLayerType>(2));
+                                    }
+                                }
+                            }
+                            global->Release();
+                        }
+                    }
+                    if(renderTarget)
+                        nativeInstance->renderToLayer(renderTarget);
                     if(result) *result = tTJSVariant(ownerLayer, ownerLayer);
                     return TJS_S_OK;
                 }
