@@ -1147,20 +1147,6 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
     }
 
     // not found
-    {
-        auto nameStr = name.AsStdString();
-        if(nameStr.find("logo") != std::string::npos ||
-           nameStr.find("Logo") != std::string::npos ||
-           nameStr.find("bland") != std::string::npos ||
-           nameStr.find(".mtn") != std::string::npos) {
-            ttstr msg = TJS_W("(info) STORAGE-DIAG: TVPGetPlacedPath FAILED for '");
-            msg += name;
-            msg += TJS_W("' autoPathCount=");
-            msg += ttstr((tjs_int)TVPAutoPathList.size());
-            TVPAddLog(msg);
-        }
-    }
-    // TVPAutoPathCache.Add(name, ttstr()); // do not cache now
     return {};
 }
 //---------------------------------------------------------------------------
@@ -1253,13 +1239,6 @@ bool TVPIsExistentStorage(const ttstr &name) {
     }
     if(TVPIsMotionParameterFallback(name))
         return true;
-    {
-        auto s = name.AsStdString();
-        if(s.find(".mtn") != std::string::npos || s.find("logo") != std::string::npos) {
-            TVPAddLog(ttstr(TJS_W("(info) isExistentStorage NOT FOUND: '")) +
-                name + TJS_W("'"));
-        }
-    }
     return false;
 }
 //---------------------------------------------------------------------------
