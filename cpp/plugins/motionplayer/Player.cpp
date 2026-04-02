@@ -622,14 +622,19 @@ namespace motion {
         // field uses paths like "src/title/bg" and the PSB tree stores
         // resources under "source/title/icon/bg/pixel".
         // Aligned to libkrkr2.so sub_6948E8: navigates source/<group>/icon/<name>.
+        // Also reads originX/originY from the icon node (image anchor point,
+        // used in sub_6BC4F0: origin = pos - matrix × (originX, originY)).
         // If the resource is RL-compressed, decompresses into decompressedOut.
         const PSB::PSBResource *findPSBResourceBySourceName(
             const detail::MotionSnapshot &snapshot,
             const std::string &source,
             int &outWidth, int &outHeight,
-            std::vector<std::uint8_t> &decompressedOut) {
+            std::vector<std::uint8_t> &decompressedOut,
+            double &outOriginX, double &outOriginY) {
             outWidth = 0;
             outHeight = 0;
+            outOriginX = 0.0;
+            outOriginY = 0.0;
             decompressedOut.clear();
             if(source.empty() || isMotionCrossReference(source)) {
                 return nullptr;
@@ -665,6 +670,13 @@ namespace motion {
                                              "truncated_height"))
                                 outHeight = static_cast<int>(*th);
                         }
+                        // Read origin (anchor point) from icon node
+                        // Aligned to libkrkr2.so sub_6BC4F0: used as
+                        // origin = pos - matrix × (originX, originY)
+                        if(auto ox = psbDictionaryNumber(iconNode, "originX"))
+                            outOriginX = *ox;
+                        if(auto oy = psbDictionaryNumber(iconNode, "originY"))
+                            outOriginY = *oy;
                         // Get the pixel resource
                         const auto pixelPath = iconPath + "/pixel";
                         auto resIt = snapshot.resourcesByPath.find(pixelPath);
@@ -902,11 +914,11 @@ namespace motion {
             if(!node) return;
             const auto state = evaluateLayerContent(node, time);
             // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
-            // Position uses x,y only. ox/oy are origin offsets applied
-            // separately during vertex computation (sub_6BC4F0), NOT added
-            // to the translation here.
-            const double lx = state.x;
-            const double ly = state.y;
+            // ox/oy from PSB frameList content are position offsets.
+            // Source-level originX/originY (from PSB icon node) are
+            // separate anchor offsets applied in vertex computation.
+            const double lx = state.x + state.ox;
+            const double ly = state.y + state.oy;
             // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
             // Compose: curAffine = parent * Translate(lx,ly) * Rotate(angle)
             // The 2x2 matrix at layer+120~144 includes rotation, inherited via
@@ -1858,6 +1870,10 @@ namespace motion {
                     // load source bitmap and call OperateAffine on target.
                     bool drewAny = false;
                     std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>> srcCache;
+                    // Cache PSB source origin (anchor) offsets per source name.
+                    // Aligned to libkrkr2.so sub_6BC4F0: originX/originY from
+                    // PSB icon node define the image pivot point.
+                    std::unordered_map<std::string, std::pair<double,double>> originCache;
 
                     for(const auto &node : renderNodes) {
                         // Resolve source bitmap (with cache)
@@ -1888,10 +1904,13 @@ namespace motion {
                             // Try PSB embedded resource
                             if(!srcBmp) {
                                 int rw = 0, rh = 0;
+                                double srcOriginX = 0, srcOriginY = 0;
                                 std::vector<std::uint8_t> decompressed;
                                 const auto *res = findPSBResourceBySourceName(
                                     *_runtime->activeMotion, node.state.src,
-                                    rw, rh, decompressed);
+                                    rw, rh, decompressed,
+                                    srcOriginX, srcOriginY);
+                                originCache[node.state.src] = {srcOriginX, srcOriginY};
                                 if(res && rw > 0 && rh > 0 && !res->data.empty()) {
                                     // Use decompressed data if RL was applied,
                                     // otherwise use raw resource data
@@ -1948,13 +1967,19 @@ namespace motion {
                         const double am12 = a[2] * localSy;
                         const double am22 = a[3] * localSy;
 
-                        // Aligned to libkrkr2.so sub_6BC4F0 (0x6BCB20):
-                        // origin = pos - matrix × originOffset
-                        // ox/oy from PSB content are the origin (anchor) offsets.
-                        const double ox = node.state.ox;
-                        const double oy = node.state.oy;
-                        const double atx = a[4] - (a[0] * ox + a[2] * oy);
-                        const double aty = a[5] - (a[1] * ox + a[3] * oy);
+                        // Aligned to libkrkr2.so sub_6BC4F0 (0x6BCB3C):
+                        // origin = pos - matrix × (node[248] + clip[376], node[256] + clip[384])
+                        // Confirmed via IDA: node[248]/[256] = PSB source icon "originX"/"originY"
+                        //   (read in Motion_Player_findSource at 0x69505C/0x6950A8)
+                        // clip[376]/[384] = clip-level offset (from "timeOffset", usually 0)
+                        // PSB frameList ox/oy are position offsets (already in lx/ly).
+                        double srcOX = 0, srcOY = 0;
+                        if(auto oit = originCache.find(node.state.src); oit != originCache.end()) {
+                            srcOX = oit->second.first;
+                            srcOY = oit->second.second;
+                        }
+                        const double atx = a[4] - (a[0] * srcOX + a[2] * srcOY);
+                        const double aty = a[5] - (a[1] * srcOX + a[3] * srcOY);
 
                         // OperateAffine takes 3 corner points:
                         // (0,0), (srcW,0), (0,srcH) mapped through the affine.
