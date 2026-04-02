@@ -1389,7 +1389,21 @@ namespace motion {
 
     tTJSVariant Player::getCameraOffset() { return _cameraPosition; }
 
-    void Player::setCameraOffset(tTJSVariant offset) { _cameraPosition = offset; }
+    void Player::setCameraOffset(tTJSVariant offset) {
+        _cameraPosition = offset;
+        // Aligned to libkrkr2.so sub_6D9A38: setCameraOffset(x, y)
+        // Stores as float at Player+144/148. NCB passes a Point with x,y.
+        if(offset.Type() == tvtObject) {
+            auto *obj = offset.AsObjectNoAddRef();
+            if(obj) {
+                tTJSVariant xv, yv;
+                if(obj->PropGet(0, TJS_W("x"), nullptr, &xv, obj) == TJS_S_OK)
+                    _cameraOffsetX = static_cast<float>(xv.AsReal());
+                if(obj->PropGet(0, TJS_W("y"), nullptr, &yv, obj) == TJS_S_OK)
+                    _cameraOffsetY = static_cast<float>(yv.AsReal());
+            }
+        }
+    }
 
     void Player::modifyRoot(tTJSVariant data) { _project = data; }
 
@@ -1740,20 +1754,19 @@ namespace motion {
 
                     const auto &layerNamesList = activeLayerNames();
 
-                    // Aligned to libkrkr2.so Player_renderToCanvas_guess (0x6C7440):
-                    // drawAffineMatrix translation (m14,m24) is the AffineLayer's
-                    // screen position, applied by applyTranslateOffset (0x6D5264)
-                    // to internal node structs at player+144/148 — NOT as the root
-                    // of PSB tree evaluation. PSB coordinates start at (0,0).
-                    // Only rotation/scale (m11,m21,m12,m22) affects rendering.
-                    // Camera offset is additive.
+                    // Aligned to libkrkr2.so sub_6C2334 + Player_applyTranslateOffset_guess:
+                    // 1. drawAffineMatrix (internal+808..844) transforms PSB native
+                    //    coords to ownerLayer coords during render tree building
+                    // 2. cameraOffset (Player+144/148) + rootOffset (Player+120/128)
+                    //    are added to all vertices by applyTranslateOffset
+                    // Our globalAffine combines both steps.
                     Affine2x3 globalAffine = {
-                        _runtime->drawAffineMatrix[0],  // m11 (rotation/scale)
+                        _runtime->drawAffineMatrix[0],  // m11
                         _runtime->drawAffineMatrix[1],  // m21
                         _runtime->drawAffineMatrix[2],  // m12
                         _runtime->drawAffineMatrix[3],  // m22
-                        _rootOffsetX,                    // tx = camera only
-                        _rootOffsetY                     // ty = camera only
+                        _runtime->drawAffineMatrix[4] + _rootOffsetX + _cameraOffsetX,
+                        _runtime->drawAffineMatrix[5] + _rootOffsetY + _cameraOffsetY
                     };
 
                     // Step 1 (sub_6C4E28): Flatten PSB layer tree into
@@ -2782,8 +2795,12 @@ namespace motion {
                     ownerLayer = tryResolveSeparateAdaptorOwner(*param[0]);
                 }
                 if(ownerLayer) {
-                    // AffineLayer is ltBinder — compositor skips its own image.
-                    // Create child layer under primaryLayer as render target.
+                    // Aligned to libkrkr2.so Player_ResolveSLATarget_guess
+                    // (0x6D5948): create PrivateMotionGLL (Layer subclass,
+                    // type=ltAlpha) as child of ownerLayer (AffineLayer).
+                    // The ownerLayer may be larger than the visible window
+                    // (e.g. 1920×1440 vs 1920×1080 for exHeight support).
+                    // The compositor + DrawDevice handle clipping/scaling.
                     static tTJSVariant slaChild;
                     iTJSDispatch2 *renderTarget = nullptr;
                     if(slaChild.Type() == tvtObject && slaChild.AsObjectNoAddRef())
@@ -2791,14 +2808,12 @@ namespace motion {
                     if(!renderTarget) {
                         iTJSDispatch2 *global = TVPGetScriptDispatch();
                         if(global) {
-                            tTJSVariant lcVar, kagVar, primaryVar;
+                            tTJSVariant lcVar, kagVar;
+                            tTJSVariant ownerVar(ownerLayer, ownerLayer);
                             global->PropGet(0, TJS_W("Layer"), nullptr, &lcVar, global);
                             global->PropGet(0, TJS_W("kag"), nullptr, &kagVar, global);
-                            if(kagVar.Type() == tvtObject)
-                                kagVar.AsObjectNoAddRef()->PropGet(0, TJS_W("primaryLayer"),
-                                    nullptr, &primaryVar, kagVar.AsObjectNoAddRef());
-                            if(lcVar.Type() == tvtObject && primaryVar.Type() == tvtObject) {
-                                tTJSVariant *args[] = { &kagVar, &primaryVar };
+                            if(lcVar.Type() == tvtObject) {
+                                tTJSVariant *args[] = { &kagVar, &ownerVar };
                                 iTJSDispatch2 *newL = nullptr;
                                 lcVar.AsObjectNoAddRef()->CreateNew(0, nullptr, nullptr,
                                     &newL, 2, args, lcVar.AsObjectNoAddRef());
@@ -2816,8 +2831,9 @@ namespace motion {
                                         ownerLayer->NativeInstanceSupport(TJS_NIS_GETINSTANCE,
                                             tTJSNC_Layer::ClassID,
                                             reinterpret_cast<iTJSNativeInstance **>(&ownerN));
-                                        if(ownerN) cn->SetSize(ownerN->GetWidth(), ownerN->GetHeight());
-                                        cn->SetType(static_cast<tTVPLayerType>(2));
+                                        if(ownerN)
+                                            cn->SetSize(ownerN->GetWidth(), ownerN->GetHeight());
+                                        cn->SetType(static_cast<tTVPLayerType>(2)); // ltAlpha
                                     }
                                 }
                             }

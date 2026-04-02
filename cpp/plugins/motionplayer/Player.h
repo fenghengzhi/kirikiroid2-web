@@ -420,9 +420,11 @@ namespace motion {
         double _cameraVelocityY = 0.0;   // player+792
         double _cameraVelocityZ = 0.0;   // player+800
         double _cameraDamping = 1.0;     // player+600 (1.0 = no damping)
-        double _rootOffsetX = 0.0;       // root layer position offset
-        double _rootOffsetY = 0.0;
+        double _rootOffsetX = 0.0;       // player+120, root layer position offset
+        double _rootOffsetY = 0.0;       // player+128
         double _rootOffsetZ = 0.0;
+        float _cameraOffsetX = 0.0f;    // player+144, set by setCameraOffset (0x6D9A38)
+        float _cameraOffsetY = 0.0f;    // player+148
 
         // Aligned to libkrkr2.so Player_calcBounds (0x6C3D04):
         // AABB stored at player+152~176
