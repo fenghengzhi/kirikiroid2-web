@@ -416,12 +416,14 @@ namespace motion {
             double y = 0.0;
             double ox = 0.0;
             double oy = 0.0;
-            double width = 0.0;
-            double height = 0.0;
-            double opacity = 1.0;
-            double angle = 0.0;     // rotation angle in degrees
-            std::string action;     // "content.action" from PSB frameList
-            bool hasSync = false;   // "content.sync" from PSB frameList
+            double width = 0.0;    // "zx" from PSB (source display width)
+            double height = 0.0;   // "zy" from PSB (source display height)
+            double opacity = 1.0;  // 0.0-1.0 (from PSB "opa" uint8 0-255)
+            double angle = 0.0;    // rotation angle in degrees
+            bool flipX = false;    // "fx" from PSB content
+            bool flipY = false;    // "fy" from PSB content
+            std::string action;    // "content.action" from PSB frameList
+            bool hasSync = false;  // "content.sync" from PSB frameList
         };
 
         std::optional<double>
@@ -523,8 +525,11 @@ namespace motion {
             if(const auto zy = psbDictionaryNumber(content, "zy")) {
                 state.height = *zy;
             }
-            if(const auto opacity = psbDictionaryNumber(content, "opacity")) {
-                state.opacity = std::clamp(*opacity / 255.0, 0.0, 1.0);
+            // BUG FIX: PSB uses "opa" (uint8 0-255), not "opacity".
+            // Confirmed: yuzulogo.mtn key table has "opa", no "opacity" key.
+            // Aligned to libkrkr2.so sub_692AB0 flag 0x400: reads "opa" as uint8.
+            if(const auto opa = psbDictionaryNumber(content, "opa")) {
+                state.opacity = std::clamp(*opa / 255.0, 0.0, 1.0);
             }
             if(const auto x = psbDictionaryNumber(content, "x")) {
                 state.x = *x;
@@ -535,6 +540,14 @@ namespace motion {
 
             if(const auto angle = psbDictionaryNumber(content, "angle")) {
                 state.angle = *angle;
+            }
+            // Flip flags: "fx"/"fy" in PSB content.
+            // Aligned to libkrkr2.so sub_692AB0 flag 0x4/0x8.
+            if(const auto fx = psbDictionaryNumber(content, "fx")) {
+                state.flipX = *fx != 0.0;
+            }
+            if(const auto fy = psbDictionaryNumber(content, "fy")) {
+                state.flipY = *fy != 0.0;
             }
             if(const auto act = psbDictionaryString(content, "action"); !act.empty()) {
                 state.action = act;
@@ -565,19 +578,25 @@ namespace motion {
                 return state;
             }
 
+            // Find the active keyframe index (last frame with time <= time).
+            int activeIndex = -1;
             for(size_t index = 0; index < frames->size(); ++index) {
-                const auto frame =
-                    std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[static_cast<int>(index)]);
-                if(!frame) {
-                    continue;
-                }
-
+                const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*frames)[static_cast<int>(index)]);
+                if(!frame) continue;
                 const auto frameTime =
                     psbDictionaryNumber(frame, "time").value_or(0.0);
-                if(frameTime > time) {
-                    break;
-                }
+                if(frameTime > time) break;
+                activeIndex = static_cast<int>(index);
+            }
 
+            if(activeIndex < 0) return state;
+
+            // Evaluate all frames up to activeIndex (PSB frames are cumulative).
+            for(int i = 0; i <= activeIndex; ++i) {
+                const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*frames)[i]);
+                if(!frame) continue;
                 const auto type =
                     static_cast<int>(psbDictionaryNumber(frame, "type").value_or(0.0));
                 if(type == 0) {
@@ -585,11 +604,73 @@ namespace motion {
                     state.src.clear();
                     continue;
                 }
-
                 if(const auto content = psbDictionaryValue(frame, "content")) {
                     mergeFrameContent(content, state);
                 }
                 state.visible = true;
+            }
+
+            // Interpolate with next keyframe if available.
+            // Aligned to libkrkr2.so sub_699AE4 (0x699AE4):
+            // Linear interpolation between two clip states with ratio t.
+            const int nextIndex = activeIndex + 1;
+            if(nextIndex < static_cast<int>(frames->size()) && state.visible) {
+                const auto curFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*frames)[activeIndex]);
+                const auto nextFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*frames)[nextIndex]);
+                if(curFrame && nextFrame) {
+                    const double curTime =
+                        psbDictionaryNumber(curFrame, "time").value_or(0.0);
+                    const double nextTime =
+                        psbDictionaryNumber(nextFrame, "time").value_or(0.0);
+                    const double duration = nextTime - curTime;
+                    if(duration > 0.0) {
+                        const double t = std::clamp(
+                            (time - curTime) / duration, 0.0, 1.0);
+                        if(t > 0.0) {
+                            // Build next frame state by merging onto current
+                            FrameContentState nextState = state;
+                            const auto nextType = static_cast<int>(
+                                psbDictionaryNumber(nextFrame, "type").value_or(0.0));
+                            if(nextType != 0) {
+                                if(const auto nc = psbDictionaryValue(nextFrame, "content")) {
+                                    mergeFrameContent(nc, nextState);
+                                }
+                                auto lerp = [](double a, double b, double r) {
+                                    return a * (1.0 - r) + b * r;
+                                };
+                                state.x = lerp(state.x, nextState.x, t);
+                                state.y = lerp(state.y, nextState.y, t);
+                                state.ox = lerp(state.ox, nextState.ox, t);
+                                state.oy = lerp(state.oy, nextState.oy, t);
+                                state.opacity = lerp(state.opacity, nextState.opacity, t);
+                                // Angle interpolation with 360° wrap-around.
+                                // Aligned to sub_699AE4 at 0x699D94:
+                                //   if curAngle >= nextAngle && diff > 180: nextAngle += 360
+                                //   if curAngle <  nextAngle && diff > 180: nextAngle -= 360
+                                //   result: if < 0 add 360, if >= 360 subtract 360
+                                double curAngle = state.angle;
+                                double nxtAngle = nextState.angle;
+                                if(curAngle != nxtAngle) {
+                                    if(curAngle >= nxtAngle) {
+                                        if(curAngle - nxtAngle > 180.0) nxtAngle += 360.0;
+                                    } else {
+                                        if(nxtAngle - curAngle > 180.0) nxtAngle -= 360.0;
+                                    }
+                                    double interpAngle = lerp(curAngle, nxtAngle, t);
+                                    if(interpAngle < 0.0) interpAngle += 360.0;
+                                    else if(interpAngle >= 360.0) interpAngle -= 360.0;
+                                    state.angle = interpAngle;
+                                }
+                                if(nextState.width > 0.0 && state.width > 0.0)
+                                    state.width = lerp(state.width, nextState.width, t);
+                                if(nextState.height > 0.0 && state.height > 0.0)
+                                    state.height = lerp(state.height, nextState.height, t);
+                            }
+                        }
+                    }
+                }
             }
 
             return state;
@@ -904,6 +985,54 @@ namespace motion {
                     a[4], a[5]};
         }
 
+        // Build local 2x2 matrix and right-multiply into affine.
+        // Exactly replicates libkrkr2.so sub_699940 (0x699940):
+        //   Starts from identity, LEFT-multiplies transforms in order
+        //   [0=Flip, 1=Angle, 2=Zoom, 3=Slant] (default transformOrder).
+        //   Then composes: affine = affine × local_2x2
+        //
+        // sub_699940 variable mapping (verified from decompilation):
+        //   v5→m11(+120), v6→m12(+128), v4→m21(+136), v7→m22(+144)
+        //   case 0 flipX: negate v5,v6 (row1) = left-multiply [-1,0;0,1]
+        //   case 0 flipY: negate v4,v7 (row2) = left-multiply [1,0;0,-1]
+        //   case 1 angle: left-multiply [cos,-sin;sin,cos]
+        //   case 2 zoom:  left-multiply [zoomX,0;0,zoomY]
+        //   case 3 slant: left-multiply [1,slantX;slantY,1]
+        void applyLocalTransform(Affine2x3 &a,
+                                 bool flipX, bool flipY,
+                                 double angle) {
+            // Build local 2x2 from identity via left-multiplication
+            double l11 = 1.0, l12 = 0.0, l21 = 0.0, l22 = 1.0;
+
+            // Case 0: Flip (left-multiply flip matrix)
+            if(flipX) { l11 = -l11; l12 = -l12; }
+            if(flipY) { l21 = -l21; l22 = -l22; }
+
+            // Case 1: Angle (left-multiply rotation)
+            if(angle != 0.0) {
+                const double rad = angle * 2.0 * 3.14159265358979323846 / 360.0;
+                const double c = std::cos(rad);
+                const double s = std::sin(rad);
+                // R × L where R = [c,-s; s,c]
+                const double t11 = c*l11 - s*l21;
+                const double t12 = c*l12 - s*l22;
+                const double t21 = s*l11 + c*l21;
+                const double t22 = s*l12 + c*l22;
+                l11 = t11; l12 = t12; l21 = t21; l22 = t22;
+            }
+
+            // Case 2: Zoom — requires clip-level scaleX/scaleY (not yet parsed)
+            // Case 3: Slant — requires clip-level slantX/slantY (not yet parsed)
+
+            // Right-multiply local 2x2 into affine: A_new = A × L
+            // (tx,ty unchanged; only 2x2 part is affected)
+            const double m11 = a[0]*l11 + a[2]*l21;
+            const double m21 = a[1]*l11 + a[3]*l21;
+            const double m12 = a[0]*l12 + a[2]*l22;
+            const double m22 = a[1]*l12 + a[3]*l22;
+            a[0] = m11; a[1] = m21; a[2] = m12; a[3] = m22;
+        }
+
         void flattenLayerNodes(
             const std::shared_ptr<const PSB::PSBDictionary> &node,
             double time,
@@ -915,23 +1044,32 @@ namespace motion {
             const auto state = evaluateLayerContent(node, time);
             // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
             // ox/oy from PSB frameList content are position offsets.
-            // Source-level originX/originY (from PSB icon node) are
-            // separate anchor offsets applied in vertex computation.
             const double lx = state.x + state.ox;
             const double ly = state.y + state.oy;
-            // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
-            // Compose: curAffine = parent * Translate(lx,ly) * Rotate(angle)
-            // The 2x2 matrix at layer+120~144 includes rotation, inherited via
-            // matrix multiply: Result = Parent * Child
-            auto curAffine = affineTranslate(parentAffine, lx, ly);
-            if(state.angle != 0.0) {
-                curAffine = affineRotate(curAffine, state.angle);
-            }
 
-            // Opacity cascades as multiplication, flip flags XOR with parent
-            const double curOpacity = parentOpacity * state.opacity;
-            const bool curFlipX = parentFlipX;
-            const bool curFlipY = parentFlipY;
+            // Step 1: Translation — parent * Translate(lx, ly)
+            auto curAffine = affineTranslate(parentAffine, lx, ly);
+
+            // Step 2: Build local 2x2 matrix matching sub_699940.
+            // Uses the node's OWN flip (state.flipX/Y from sub_699AE4),
+            // NOT the XOR'd inherited flip. The XOR is only for children.
+            applyLocalTransform(curAffine, state.flipX, state.flipY,
+                                state.angle);
+
+            // Flip XOR for inheritance to children.
+            // Aligned to Player_updateLayers (0x6BB8A8):
+            //   child.flipX ^= parent.flipX
+            const bool curFlipX = parentFlipX ^ state.flipX;
+            const bool curFlipY = parentFlipY ^ state.flipY;
+
+            // Opacity: integer multiplication matching libkrkr2.so (0x6BB6D4):
+            //   result = parent_opa * child_opa / 255  (int math)
+            const int parentOpaInt = static_cast<int>(
+                std::clamp(parentOpacity * 255.0, 0.0, 255.0));
+            const int childOpaInt = static_cast<int>(
+                std::clamp(state.opacity * 255.0, 0.0, 255.0));
+            const double curOpacity = static_cast<double>(
+                parentOpaInt * childOpaInt / 255) / 255.0;
 
             if(state.visible && !state.src.empty() && state.src != "layout"
                && !isMotionCrossReference(state.src)) {
@@ -939,8 +1077,10 @@ namespace motion {
                 rn.state = state;
                 rn.affine = curAffine;
                 rn.accumulatedOpacity = curOpacity;
-                rn.flipX = curFlipX;
-                rn.flipY = curFlipY;
+                // Flip is already in the matrix via applyLocalTransform.
+                // These flags are not used at render time anymore.
+                rn.flipX = false;
+                rn.flipY = false;
                 out.push_back(std::move(rn));
             }
 
@@ -1984,16 +2124,15 @@ namespace motion {
                         // OperateAffine takes 3 corner points:
                         // (0,0), (srcW,0), (0,srcH) mapped through the affine.
                         // libkrkr2.so applies -0.5 texel offset.
-                        double fam11 = am11, fam21 = am21, fam12 = am12, fam22 = am22;
-                        if(node.flipX) { fam11 = -fam11; fam21 = -fam21; }
-                        if(node.flipY) { fam12 = -fam12; fam22 = -fam22; }
+                        // Flip is now integrated into the affine matrix via
+                        // applyLocalTransform (matching sub_699940 case 0).
                         tTVPPointD pts[3];
                         pts[0] = {atx - 0.5,
                                   aty - 0.5};
-                        pts[1] = {fam11 * srcW + atx - 0.5,
-                                  fam21 * srcW + aty - 0.5};
-                        pts[2] = {fam12 * srcH + atx - 0.5,
-                                  fam22 * srcH + aty - 0.5};
+                        pts[1] = {am11 * srcW + atx - 0.5,
+                                  am21 * srcW + aty - 0.5};
+                        pts[2] = {am12 * srcH + atx - 0.5,
+                                  am22 * srcH + aty - 0.5};
 
                         tTVPRect sr(0, 0, static_cast<tjs_int>(srcW),
                                     static_cast<tjs_int>(srcH));
