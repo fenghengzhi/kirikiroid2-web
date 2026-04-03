@@ -436,11 +436,22 @@ namespace motion {
             bool flipX = false;       // mask 0x4: "fx"
             bool flipY = false;       // mask 0x8: "fy"
             int blendMode = 16;       // mask 0x20000: "bm"/"b" (default 16)
+            int colorR = 0x80;        // mask 0x200: color RGBA (sub_692AB0 default 0xFF808080)
+            int colorG = 0x80;
+            int colorB = 0x80;
+            int colorA = 0xFF;
             BezierCurve ccc;          // mask 0x800: color curve control
             BezierCurve acc;          // mask 0x1000: angle curve control
             BezierCurve zcc;          // mask 0x2000: zoom curve control
             BezierCurve scc;          // mask 0x4000: slant curve control
             BezierCurve occ;          // mask 0x8000: opacity curve control
+            // Subsystem data (mask 0x80000+)
+            double motionTimeOffset = 0.0;  // mask 0x80000: motion.timeOffset
+            double cameraFactor = 0.0;      // mask 0x200000: camera.f
+            double feedbackTimespan = 0.0;  // mask 0x8000000: feedback.timespan
+            // Transform order (default [0,1,2,3] = Flip,Angle,Zoom,Slant)
+            int transformOrder[4] = {0, 1, 2, 3};
+            bool hasTransformOrder = false;
             std::string action;       // "content.action" from PSB frameList
             bool hasSync = false;     // "content.sync" from PSB frameList
         };
@@ -705,6 +716,53 @@ namespace motion {
                     state.occ = parseBezierCurve(occDict);
             }
 
+            // mask & 0x200: color RGBA (sub_692AB0 at 0x692F4C → 0x693330)
+            // Color is stored as 4 ints at clip+72..84, default 0xFF808080
+            if(mask & 0x200) {
+                if(auto colorDict = psbDictionaryValue(content, "color")) {
+                    // Color can be a dict with indexed values (sub_6637BC)
+                    // or a single int broadcast to all channels
+                    if(auto r = psbDictionaryNumber(colorDict, "0"))
+                        state.colorR = static_cast<int>(*r);
+                    if(auto g = psbDictionaryNumber(colorDict, "1"))
+                        state.colorG = static_cast<int>(*g);
+                    if(auto b = psbDictionaryNumber(colorDict, "2"))
+                        state.colorB = static_cast<int>(*b);
+                    if(auto a = psbDictionaryNumber(colorDict, "3"))
+                        state.colorA = static_cast<int>(*a);
+                } else if(auto colorVal = psbDictionaryNumber(content, "color")) {
+                    // Single value broadcast (sub_692AB0 case 2/4/5)
+                    int cv = static_cast<int>(*colorVal);
+                    state.colorR = cv; state.colorG = cv;
+                    state.colorB = cv; state.colorA = cv;
+                }
+            }
+
+            // mask & 0x80000: motion sub-object (sub_692AB0 at 0x6938CC)
+            // Reads motion.timeOffset, motion.mask, motion.dt, etc.
+            if(mask & 0x80000) {
+                if(auto motionDict = psbDictionaryValue(content, "motion")) {
+                    if(auto to = psbDictionaryNumber(motionDict, "timeOffset"))
+                        state.motionTimeOffset = *to;
+                }
+            }
+
+            // mask & 0x200000: camera (sub_692AB0 at 0x693EF0)
+            if(mask & 0x200000) {
+                if(auto camDict = psbDictionaryValue(content, "camera")) {
+                    if(auto f = psbDictionaryNumber(camDict, "f"))
+                        state.cameraFactor = *f;
+                }
+            }
+
+            // mask & 0x8000000: feedback (sub_692AB0 at 0x694130)
+            if(mask & 0x8000000) {
+                if(auto fbDict = psbDictionaryValue(content, "feedback")) {
+                    if(auto ts = psbDictionaryNumber(fbDict, "timespan"))
+                        state.feedbackTimespan = *ts;
+                }
+            }
+
             // action/sync: not mask-gated (separate mechanism via mask & 0x40000
             // in sub_6926B4 at 0x6928EC)
             if(const auto act = psbDictionaryString(content, "action"); !act.empty()) {
@@ -751,6 +809,18 @@ namespace motion {
                 return state;
             }
 
+            // Read transformOrder from layer dict (stored at node+84..96 in libkrkr2.so).
+            // sub_699940 uses this to determine the order of Flip/Angle/Zoom/Slant.
+            if(auto toList = psbDictionaryList(
+                   std::const_pointer_cast<PSB::PSBDictionary>(layer),
+                   "transformOrder")) {
+                for(int i = 0; i < 4 && i < static_cast<int>(toList->size()); i++) {
+                    if(auto v = psbNumberValue((*toList)[i]))
+                        state.transformOrder[i] = static_cast<int>(*v);
+                }
+                state.hasTransformOrder = true;
+            }
+
             // Aligned to libkrkr2.so dual-slot model (sub_699AE4 at 0x699AE4):
             // 1. Find the active frame (last frame with time <= time)
             // 2. If type=0: invisible
@@ -786,8 +856,16 @@ namespace motion {
             }
 
             // Initialize slot A from the active frame (fresh defaults + mask)
+            // Preserve transformOrder from layer dict (read above)
+            int savedTO[4]; bool savedHasTO = state.hasTransformOrder;
+            std::copy(std::begin(state.transformOrder),
+                      std::end(state.transformOrder), savedTO);
             state = initSlotFromFrame(activeFrame);
             state.visible = true;
+            if(savedHasTO) {
+                std::copy(savedTO, savedTO + 4, state.transformOrder);
+                state.hasTransformOrder = true;
+            }
 
             // type=2: static display, no interpolation
             if(activeType == 2) {
@@ -1242,44 +1320,48 @@ namespace motion {
         //   case 2 zoom:  left-multiply [zoomX,0;0,zoomY]
         //   case 3 slant: left-multiply [1,slantX;slantY,1]
         void applyLocalTransform(Affine2x3 &a,
-                                 bool flipX, bool flipY,
-                                 double angle,
-                                 double scaleX, double scaleY,
-                                 double slantX, double slantY) {
-            // Build local 2x2 from identity via left-multiplication
-            // Exactly replicates sub_699940 default order [0,1,2,3]:
-            //   case 0: Flip, case 1: Angle, case 2: Zoom, case 3: Slant
+                                 const FrameContentState &state) {
+            // Build local 2x2 from identity via left-multiplication.
+            // Exactly replicates sub_699940 (0x699940): iterates
+            // transformOrder[0..3] and applies each transform case.
+            // Default order [0,1,2,3] = [Flip, Angle, Zoom, Slant].
             double l11 = 1.0, l12 = 0.0, l21 = 0.0, l22 = 1.0;
 
-            // Case 0: Flip (left-multiply [-1,0;0,1] / [1,0;0,-1])
-            if(flipX) { l11 = -l11; l12 = -l12; }
-            if(flipY) { l21 = -l21; l22 = -l22; }
-
-            // Case 1: Angle (left-multiply [c,-s;s,c])
-            if(angle != 0.0) {
-                const double rad = angle * 2.0 * 3.14159265358979323846 / 360.0;
-                const double c = std::cos(rad);
-                const double s = std::sin(rad);
-                const double t11 = c*l11 - s*l21;
-                const double t12 = c*l12 - s*l22;
-                const double t21 = s*l11 + c*l21;
-                const double t22 = s*l12 + c*l22;
-                l11 = t11; l12 = t12; l21 = t21; l22 = t22;
-            }
-
-            // Case 2: Zoom (left-multiply [zx,0;0,zy]) — sub_699940 at 0x699A50
-            if(scaleX != 1.0 || scaleY != 1.0) {
-                l11 *= scaleX; l12 *= scaleX;
-                l21 *= scaleY; l22 *= scaleY;
-            }
-
-            // Case 3: Slant (left-multiply [1,sx;sy,1]) — sub_699940 at 0x699A7C
-            if(slantX != 0.0 || slantY != 0.0) {
-                const double t12 = l22 * slantX + l12;
-                const double t21 = l11 * slantY + l21;
-                const double t22 = l22 + l12 * slantY;
-                const double t11 = l11 + slantX * l21;
-                l11 = t11; l12 = t12; l21 = t21; l22 = t22;
+            for(int step = 0; step < 4; step++) {
+                const int op = state.transformOrder[step];
+                switch(op) {
+                    case 0: // Flip (left-multiply [-1,0;0,1] / [1,0;0,-1])
+                        if(state.flipX) { l11 = -l11; l12 = -l12; }
+                        if(state.flipY) { l21 = -l21; l22 = -l22; }
+                        break;
+                    case 1: // Angle (left-multiply [c,-s;s,c])
+                        if(state.angle != 0.0) {
+                            const double rad = state.angle * 2.0 * 3.14159265358979323846 / 360.0;
+                            const double c = std::cos(rad);
+                            const double s = std::sin(rad);
+                            const double t11 = c*l11 - s*l21;
+                            const double t12 = c*l12 - s*l22;
+                            const double t21 = s*l11 + c*l21;
+                            const double t22 = s*l12 + c*l22;
+                            l11 = t11; l12 = t12; l21 = t21; l22 = t22;
+                        }
+                        break;
+                    case 2: // Zoom (left-multiply [zx,0;0,zy]) — 0x699A50
+                        if(state.scaleX != 1.0 || state.scaleY != 1.0) {
+                            l11 *= state.scaleX; l12 *= state.scaleX;
+                            l21 *= state.scaleY; l22 *= state.scaleY;
+                        }
+                        break;
+                    case 3: // Slant (left-multiply [1,sx;sy,1]) — 0x699A7C
+                        if(state.slantX != 0.0 || state.slantY != 0.0) {
+                            const double t12 = l22*state.slantX + l12;
+                            const double t21 = l11*state.slantY + l21;
+                            const double t22 = l22 + l12*state.slantY;
+                            const double t11 = l11 + state.slantX*l21;
+                            l11 = t11; l12 = t12; l21 = t21; l22 = t22;
+                        }
+                        break;
+                }
             }
 
             // Right-multiply local 2x2 into affine: A_new = A × L
@@ -1311,9 +1393,7 @@ namespace motion {
             // Step 2: Build local 2x2 matrix matching sub_699940.
             // Uses the node's OWN flip (state.flipX/Y from sub_699AE4),
             // NOT the XOR'd inherited flip. The XOR is only for children.
-            applyLocalTransform(curAffine, state.flipX, state.flipY,
-                                state.angle, state.scaleX, state.scaleY,
-                                state.slantX, state.slantY);
+            applyLocalTransform(curAffine, state);
 
             // Flip XOR for inheritance to children.
             // Aligned to Player_updateLayers (0x6BB8A8):
