@@ -409,6 +409,15 @@ namespace motion {
             }
         };
 
+        // Bezier curve control points for easing.
+        // Aligned to libkrkr2.so sub_69A754: PSB stores "x" and "y" arrays
+        // in the curve data dict. Each array has 3*N+1 entries (N cubic segments).
+        struct BezierCurve {
+            std::vector<double> x;  // time control points
+            std::vector<double> y;  // value control points
+            bool empty() const { return x.empty(); }
+        };
+
         struct FrameContentState {
             bool visible = false;
             std::string src;
@@ -422,6 +431,9 @@ namespace motion {
             double angle = 0.0;    // rotation angle in degrees
             bool flipX = false;    // "fx" from PSB content
             bool flipY = false;    // "fy" from PSB content
+            int blendMode = 16;    // "bm"/"b" from PSB content (default 16)
+            BezierCurve ccc;       // color curve control (mask 0x800)
+            BezierCurve acc;       // angle curve control (mask 0x1000)
             std::string action;    // "content.action" from PSB frameList
             bool hasSync = false;  // "content.sync" from PSB frameList
         };
@@ -476,6 +488,52 @@ namespace motion {
                 return nullptr;
             }
             return std::dynamic_pointer_cast<PSB::PSBList>((*dic)[key]);
+        }
+
+        // Parse a BezierCurve from a PSB dict that has "x" and "y" list children.
+        // Aligned to libkrkr2.so sub_69A754 (0x69A754): reads curve_data["x"]
+        // and curve_data["y"] as arrays of doubles.
+        BezierCurve parseBezierCurve(
+            const std::shared_ptr<const PSB::PSBDictionary> &dic) {
+            BezierCurve curve;
+            if(!dic) return curve;
+            auto xList = std::dynamic_pointer_cast<PSB::PSBList>((*dic)["x"]);
+            auto yList = std::dynamic_pointer_cast<PSB::PSBList>((*dic)["y"]);
+            if(!xList || !yList) return curve;
+            for(int i = 0; i < static_cast<int>(xList->size()); i++) {
+                if(auto v = psbNumberValue((*xList)[i])) curve.x.push_back(*v);
+            }
+            for(int i = 0; i < static_cast<int>(yList->size()); i++) {
+                if(auto v = psbNumberValue((*yList)[i])) curve.y.push_back(*v);
+            }
+            return curve;
+        }
+
+        // Evaluate cubic bezier curve at parameter t.
+        // Aligned to libkrkr2.so sub_69A754 (0x69A754):
+        //   - x[] = time control points, y[] = value control points
+        //   - Segments of 4 control points each (step 3, shared endpoints)
+        //   - If t <= x[0]: return y[0]
+        //   - If t >= x[last]: return y[last]
+        //   - Find segment where x[i] >= t (step 3)
+        //   - B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
+        double evaluateBezierCurve(const BezierCurve &curve, double t) {
+            if(curve.x.size() < 2 || curve.y.size() < 2) return t;
+            if(curve.x.size() != curve.y.size()) return t;
+            const size_t n = curve.x.size();
+            if(curve.x[0] >= t) return curve.y[0];
+            if(curve.x[n-1] <= t) return curve.y[n-1];
+            // Find segment (step 3, aligned to sub_69A754 at 0x69A960)
+            size_t i = 0;
+            while(i < n && curve.x[i] < t) i += 3;
+            if(i < 3 || i >= n) return t;
+            // Cubic bezier: P0=y[i-3], P1=y[i-2], P2=y[i-1], P3=y[i]
+            const double p0 = curve.y[i-3];
+            const double p1 = curve.y[i-2];
+            const double p2 = curve.y[i-1];
+            const double p3 = curve.y[i];
+            const double u = 1.0 - t;
+            return u*u*u*p0 + 3.0*u*u*t*p1 + 3.0*u*t*t*p2 + t*t*t*p3;
         }
 
         std::shared_ptr<PSB::PSBDictionary>
@@ -577,6 +635,25 @@ namespace motion {
                     if(const auto fy = psbDictionaryNumber(content, "fy"))
                         state.flipY = *fy != 0.0;
                 }
+            }
+
+            // mask & 0x20000: bm/blend mode (sub_692AB0 at 0x692F20)
+            if(mask & 0x20000) {
+                if(const auto bm = psbDictionaryNumber(content, "bm"))
+                    state.blendMode = static_cast<int>(*bm);
+            }
+
+            // mask & 0x800: ccc/color curve control (sub_692AB0 at 0x6930DC)
+            // Stored as PSB dict with "x"/"y" arrays for bezier evaluation
+            if(mask & 0x800) {
+                if(auto cccDict = psbDictionaryValue(content, "ccc"))
+                    state.ccc = parseBezierCurve(cccDict);
+            }
+
+            // mask & 0x1000: acc/angle curve control (sub_692AB0 at 0x69319C)
+            if(mask & 0x1000) {
+                if(auto accDict = psbDictionaryValue(content, "acc"))
+                    state.acc = parseBezierCurve(accDict);
             }
 
             // action/sync: not mask-gated (separate mechanism via mask & 0x40000
@@ -702,11 +779,23 @@ namespace motion {
                 return state;  // at exact start or next is invisible
             }
 
-            // Interpolate between slot A and slot B
+            // Interpolate between slot A (state) and slot B (slotB)
             // Aligned to sub_699AE4 (0x699AE4)
             auto lerp = [](double a, double b, double r) {
                 return a * (1.0 - r) + b * r;
             };
+
+            // Compute eased t for properties with curve control.
+            // Aligned to sub_699AE4: if curve data exists, t is transformed
+            // through sub_69A754 bezier evaluation before interpolation.
+
+            // ccc: eases opacity and color (sub_69A4D4 at 0x69A55C)
+            const double t_ccc = !state.ccc.empty()
+                ? evaluateBezierCurve(state.ccc, t) : t;
+
+            // acc: eases angle (sub_699AE4 at 0x699DE8)
+            const double t_acc = !state.acc.empty()
+                ? evaluateBezierCurve(state.acc, t) : t;
 
             // Position (linear, sub_699AE4 at 0x699BB0~BC0)
             state.x = lerp(state.x, slotB.x, t);
@@ -714,14 +803,12 @@ namespace motion {
             state.ox = lerp(state.ox, slotB.ox, t);
             state.oy = lerp(state.oy, slotB.oy, t);
 
-            // Opacity (linear, sub_699AE4 at 0x69A004~024)
-            // sub_699AE4: v50 = (double)slot_A.opa, v51 = (double)slot_B.opa
-            // if (v50 != v51) v50 = lerp(v50, v51, t)
+            // Opacity — uses ccc-eased t (sub_69A4D4 at 0x69A624)
             if(state.opacity != slotB.opacity) {
-                state.opacity = lerp(state.opacity, slotB.opacity, t);
+                state.opacity = lerp(state.opacity, slotB.opacity, t_ccc);
             }
 
-            // Angle with 360° wrap-around (sub_699AE4 at 0x699D84~E38)
+            // Angle with 360° wrap — uses acc-eased t (sub_699AE4 at 0x699DEC)
             double curAngle = state.angle;
             double nxtAngle = slotB.angle;
             if(curAngle != nxtAngle) {
@@ -730,13 +817,13 @@ namespace motion {
                 } else {
                     if(nxtAngle - curAngle > 180.0) nxtAngle -= 360.0;
                 }
-                double interpAngle = lerp(curAngle, nxtAngle, t);
+                double interpAngle = lerp(curAngle, nxtAngle, t_acc);
                 if(interpAngle < 0.0) interpAngle += 360.0;
                 else if(interpAngle >= 360.0) interpAngle -= 360.0;
                 state.angle = interpAngle;
             }
 
-            // Width/height
+            // Width/height (linear)
             if(state.width != slotB.width)
                 state.width = lerp(state.width, slotB.width, t);
             if(state.height != slotB.height)
