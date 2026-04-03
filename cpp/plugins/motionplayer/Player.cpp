@@ -436,6 +436,9 @@ namespace motion {
             bool flipX = false;       // mask 0x4: "fx"
             bool flipY = false;       // mask 0x8: "fy"
             int blendMode = 16;       // mask 0x20000: "bm"/"b" (default 16)
+            double c0 = 0.0;          // mask 0x2: color curve control points (sub_692AB0 at 0x692E14)
+            double c1 = 0.0;          //   3 doubles via sub_6695BC indices 0,1,2
+            double c2 = 0.0;
             int colorR = 0x80;        // mask 0x200: color RGBA (sub_692AB0 default 0xFF808080)
             int colorG = 0x80;
             int colorB = 0x80;
@@ -445,10 +448,35 @@ namespace motion {
             BezierCurve zcc;          // mask 0x2000: zoom curve control
             BezierCurve scc;          // mask 0x4000: slant curve control
             BezierCurve occ;          // mask 0x8000: opacity curve control
-            // Subsystem data (mask 0x80000+)
-            double motionTimeOffset = 0.0;  // mask 0x80000: motion.timeOffset
-            double cameraFactor = 0.0;      // mask 0x200000: camera.f
-            double feedbackTimespan = 0.0;  // mask 0x8000000: feedback.timespan
+            // === Subsystem data (mask 0x80000+) ===
+            // mask 0x80000: motion sub-object (sub_692AB0 at 0x6938CC)
+            int motionMask = 0;
+            int motionFlags = 0;
+            int motionDt = 0;
+            bool motionDocmpl = false;
+            double motionDofst = 0.0;
+            double motionTimeOffset = 0.0;
+            // mask 0x100000: particle sub-object (sub_692AB0 at 0x693C64)
+            int prtTrigger = 0;
+            double prtFmin = 10.0;
+            double prtF = 10.0;
+            double prtVmin = 0.0;
+            double prtV = 0.0;
+            double prtAmin = 0.0;
+            double prtA = 0.0;
+            double prtZmin = 1.0;
+            double prtZ = 1.0;
+            double prtRange = 0.0;
+            // mask 0x200000: camera sub-object (sub_692AB0 at 0x693EF0)
+            double cameraFactor = 0.0;
+            // mask 0x800000: anchor sub-object (sub_692AB0 at 0x694020)
+            // target is a string ref to another node
+            // mask 0x1000000: model sub-object (sub_692AB0 at 0x693AE8)
+            double modelTimeOffset = 0.0;
+            bool modelLoop = false;
+            int modelDt = 0;
+            // mask 0x8000000: feedback sub-object (sub_692AB0 at 0x694130)
+            double feedbackTimespan = 0.0;
             // Transform order (default [0,1,2,3] = Flip,Angle,Zoom,Slant)
             int transformOrder[4] = {0, 1, 2, 3};
             bool hasTransformOrder = false;
@@ -643,6 +671,24 @@ namespace motion {
                     state.angle = *angle;
             }
 
+            // mask & 0x2: "c" color curve control points (sub_692AB0 at 0x692E14)
+            // 3 doubles read via sub_6695BC(content["c"], index, ...)
+            if(mask & 0x2) {
+                if(auto cList = psbDictionaryList(content, "c")) {
+                    if(cList->size() > 0)
+                        if(auto v = psbNumberValue((*cList)[0])) state.c0 = *v;
+                    if(cList->size() > 1)
+                        if(auto v = psbNumberValue((*cList)[1])) state.c1 = *v;
+                    if(cList->size() > 2)
+                        if(auto v = psbNumberValue((*cList)[2])) state.c2 = *v;
+                } else if(auto cDict = psbDictionaryValue(content, "c")) {
+                    // May also be stored as dict with "0","1","2" keys
+                    if(auto v = psbDictionaryNumber(cDict, "0")) state.c0 = *v;
+                    if(auto v = psbDictionaryNumber(cDict, "1")) state.c1 = *v;
+                    if(auto v = psbDictionaryNumber(cDict, "2")) state.c2 = *v;
+                }
+            }
+
             // mask & 0x4: fx, mask & 0x8: fy (sub_692AB0 at 0x692F6C)
             if(mask & 0xC) {
                 if(mask & 0x4) {
@@ -739,27 +785,109 @@ namespace motion {
             }
 
             // mask & 0x80000: motion sub-object (sub_692AB0 at 0x6938CC)
-            // Reads motion.timeOffset, motion.mask, motion.dt, etc.
+            // Full read: mask → flags/dt/docmpl/dofst/dtgt + timeOffset
             if(mask & 0x80000) {
-                if(auto motionDict = psbDictionaryValue(content, "motion")) {
-                    if(auto to = psbDictionaryNumber(motionDict, "timeOffset"))
-                        state.motionTimeOffset = *to;
+                if(auto md = psbDictionaryValue(content, "motion")) {
+                    int mm = static_cast<int>(
+                        psbDictionaryNumber(md, "mask").value_or(0));
+                    state.motionMask = mm;
+                    if(mm & 0x1) {
+                        if(auto v = psbDictionaryNumber(md, "flags"))
+                            state.motionFlags = static_cast<int>(*v);
+                    }
+                    if(mm & 0x2) {
+                        if(auto v = psbDictionaryNumber(md, "dt"))
+                            state.motionDt = static_cast<int>(*v);
+                    }
+                    if(mm & 0x4) {
+                        if(auto v = psbDictionaryNumber(md, "docmpl"))
+                            state.motionDocmpl = *v != 0.0;
+                    }
+                    if(mm & 0x8) {
+                        if(auto v = psbDictionaryNumber(md, "dofst"))
+                            state.motionDofst = *v;
+                    }
+                    // dtgt (mm & 0x10) is a string ref — read but not stored
+                    // (would need variant storage)
+                    if(auto v = psbDictionaryNumber(md, "timeOffset"))
+                        state.motionTimeOffset = *v;
+                }
+            }
+
+            // mask & 0x100000: particle sub-object (sub_692AB0 at 0x693C64)
+            if(mask & 0x100000) {
+                if(auto pd = psbDictionaryValue(content, "prt")) {
+                    int pm = static_cast<int>(
+                        psbDictionaryNumber(pd, "mask").value_or(0));
+                    if(pm & 0x1) {
+                        if(auto v = psbDictionaryNumber(pd, "trigger"))
+                            state.prtTrigger = static_cast<int>(*v);
+                    }
+                    if(pm & 0x2) {
+                        if(auto v = psbDictionaryNumber(pd, "fmin"))
+                            state.prtFmin = *v;
+                        if(auto v = psbDictionaryNumber(pd, "f"))
+                            state.prtF = *v;
+                    }
+                    if(pm & 0x4) {
+                        if(auto v = psbDictionaryNumber(pd, "vmin"))
+                            state.prtVmin = *v;
+                        if(auto v = psbDictionaryNumber(pd, "v"))
+                            state.prtV = *v;
+                    }
+                    if(pm & 0x8) {
+                        if(auto v = psbDictionaryNumber(pd, "amin"))
+                            state.prtAmin = *v;
+                        if(auto v = psbDictionaryNumber(pd, "a"))
+                            state.prtA = *v;
+                    }
+                    if(pm & 0x10) {
+                        if(auto v = psbDictionaryNumber(pd, "zmin"))
+                            state.prtZmin = *v;
+                        if(auto v = psbDictionaryNumber(pd, "z"))
+                            state.prtZ = *v;
+                    }
+                    if(pm & 0x20) {
+                        if(auto v = psbDictionaryNumber(pd, "range"))
+                            state.prtRange = *v;
+                    }
                 }
             }
 
             // mask & 0x200000: camera (sub_692AB0 at 0x693EF0)
             if(mask & 0x200000) {
-                if(auto camDict = psbDictionaryValue(content, "camera")) {
-                    if(auto f = psbDictionaryNumber(camDict, "f"))
-                        state.cameraFactor = *f;
+                if(auto cd = psbDictionaryValue(content, "camera")) {
+                    if(auto v = psbDictionaryNumber(cd, "f"))
+                        state.cameraFactor = *v;
+                    // camera.target is a string ref (sub_529524)
+                }
+            }
+
+            // mask & 0x800000: anchor (sub_692AB0 at 0x694020)
+            if(mask & 0x800000) {
+                // anchor.target is a string ref — read via sub_529524
+                // No numeric properties to store; the target ref links
+                // to another node for position constraint.
+            }
+
+            // mask & 0x1000000: model (sub_692AB0 at 0x693AE8)
+            if(mask & 0x1000000) {
+                if(auto md = psbDictionaryValue(content, "model")) {
+                    if(auto v = psbDictionaryNumber(md, "timeOffset"))
+                        state.modelTimeOffset = *v;
+                    if(auto v = psbDictionaryNumber(md, "loop"))
+                        state.modelLoop = *v != 0.0;
+                    if(auto v = psbDictionaryNumber(md, "dt"))
+                        state.modelDt = static_cast<int>(*v);
+                    // model.dtgt is a string ref
                 }
             }
 
             // mask & 0x8000000: feedback (sub_692AB0 at 0x694130)
             if(mask & 0x8000000) {
-                if(auto fbDict = psbDictionaryValue(content, "feedback")) {
-                    if(auto ts = psbDictionaryNumber(fbDict, "timespan"))
-                        state.feedbackTimespan = *ts;
+                if(auto fd = psbDictionaryValue(content, "feedback")) {
+                    if(auto v = psbDictionaryNumber(fd, "timespan"))
+                        state.feedbackTimespan = *v;
                 }
             }
 
