@@ -601,22 +601,44 @@ namespace motion {
             }
         }
 
+        // Initialize a FrameContentState from a single PSB frame's content.
+        // Aligned to libkrkr2.so sub_692AB0 (0x692AB0): each clip slot is
+        // independently initialized with DEFAULTS, then mask-gated properties
+        // are applied from the frame's content dict. No accumulation from
+        // prior frames.
+        FrameContentState
+        initSlotFromFrame(const std::shared_ptr<PSB::PSBDictionary> &frame) {
+            FrameContentState slot;  // defaults: opacity=1.0, angle=0, etc.
+            if(!frame) return slot;
+            if(const auto content = psbDictionaryValue(frame, "content")) {
+                mergeFrameContent(content, slot);
+            }
+            return slot;
+        }
+
         FrameContentState
         evaluateLayerContent(const std::shared_ptr<const PSB::PSBDictionary> &layer,
                              double time) {
             FrameContentState state;
             const auto frames = psbDictionaryList(layer, "frameList");
-            if(!frames) {
+            if(!frames || frames->size() == 0) {
                 return state;
             }
 
-            // Find the active keyframe index (last frame with time <= time).
+            // Aligned to libkrkr2.so dual-slot model (sub_699AE4 at 0x699AE4):
+            // 1. Find the active frame (last frame with time <= time)
+            // 2. If type=0: invisible
+            // 3. If type=2: use this frame's slot directly (no interpolation)
+            // 4. If type=3: interpolate between this frame's slot and
+            //    the next frame's slot. Each slot is INDEPENDENTLY initialized
+            //    with defaults + mask-gated overrides (sub_692AB0).
+
             int activeIndex = -1;
             for(size_t index = 0; index < frames->size(); ++index) {
                 const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                     (*frames)[static_cast<int>(index)]);
                 if(!frame) continue;
-                const auto frameTime =
+                const double frameTime =
                     psbDictionaryNumber(frame, "time").value_or(0.0);
                 if(frameTime > time) break;
                 activeIndex = static_cast<int>(index);
@@ -624,93 +646,108 @@ namespace motion {
 
             if(activeIndex < 0) return state;
 
-            // Evaluate all frames up to activeIndex (PSB frames are cumulative).
-            for(int i = 0; i <= activeIndex; ++i) {
-                const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                    (*frames)[i]);
-                if(!frame) continue;
-                const auto type =
-                    static_cast<int>(psbDictionaryNumber(frame, "type").value_or(0.0));
-                if(type == 0) {
-                    state.visible = false;
-                    state.src.clear();
-                    continue;
-                }
-                if(const auto content = psbDictionaryValue(frame, "content")) {
-                    mergeFrameContent(content, state);
-                }
-                state.visible = true;
+            const auto activeFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*frames)[activeIndex]);
+            if(!activeFrame) return state;
+
+            const int activeType = static_cast<int>(
+                psbDictionaryNumber(activeFrame, "type").value_or(0.0));
+
+            // type=0: node is invisible at this time
+            if(activeType == 0) {
+                state.visible = false;
+                return state;
             }
 
-            // Interpolate with next keyframe if available.
-            // Aligned to libkrkr2.so sub_699AE4 (0x699AE4):
-            // Linear interpolation between two clip states with ratio t.
+            // Initialize slot A from the active frame (fresh defaults + mask)
+            state = initSlotFromFrame(activeFrame);
+            state.visible = true;
+
+            // type=2: static display, no interpolation
+            if(activeType == 2) {
+                return state;
+            }
+
+            // type=3: interpolate with next frame's slot
             const int nextIndex = activeIndex + 1;
-            if(nextIndex < static_cast<int>(frames->size()) && state.visible) {
-                const auto curFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                    (*frames)[activeIndex]);
-                const auto nextFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                    (*frames)[nextIndex]);
-                if(curFrame && nextFrame) {
-                    const double curTime =
-                        psbDictionaryNumber(curFrame, "time").value_or(0.0);
-                    const double nextTime =
-                        psbDictionaryNumber(nextFrame, "time").value_or(0.0);
-                    const double duration = nextTime - curTime;
-                    if(duration > 0.0) {
-                        const double t = std::clamp(
-                            (time - curTime) / duration, 0.0, 1.0);
-                        if(t > 0.0) {
-                            // Aligned to libkrkr2.so sub_692AB0 (0x692AB0):
-                            // Each clip slot is initialized with DEFAULTS
-                            // before mask-gated properties are applied:
-                            //   opacity = 255, color = 0xFF808080, blendMode = 16
-                            // NOT copied from the current slot's values.
-                            // This means: if the next keyframe's mask doesn't
-                            // include 0x400 (opa), its opacity is 255 (default),
-                            // NOT the current frame's opa value.
-                            FrameContentState nextState;  // fresh defaults
-                            nextState.src = state.src;    // inherit src
-                            const auto nextType = static_cast<int>(
-                                psbDictionaryNumber(nextFrame, "type").value_or(0.0));
-                            if(nextType != 0) {
-                                if(const auto nc = psbDictionaryValue(nextFrame, "content")) {
-                                    mergeFrameContent(nc, nextState);
-                                }
-                                auto lerp = [](double a, double b, double r) {
-                                    return a * (1.0 - r) + b * r;
-                                };
-                                state.x = lerp(state.x, nextState.x, t);
-                                state.y = lerp(state.y, nextState.y, t);
-                                state.ox = lerp(state.ox, nextState.ox, t);
-                                state.oy = lerp(state.oy, nextState.oy, t);
-                                state.opacity = lerp(state.opacity, nextState.opacity, t);
-                                // Angle interpolation with 360° wrap-around.
-                                // Aligned to sub_699AE4 at 0x699D94:
-                                //   if curAngle >= nextAngle && diff > 180: nextAngle += 360
-                                //   if curAngle <  nextAngle && diff > 180: nextAngle -= 360
-                                //   result: if < 0 add 360, if >= 360 subtract 360
-                                double curAngle = state.angle;
-                                double nxtAngle = nextState.angle;
-                                if(curAngle != nxtAngle) {
-                                    if(curAngle >= nxtAngle) {
-                                        if(curAngle - nxtAngle > 180.0) nxtAngle += 360.0;
-                                    } else {
-                                        if(nxtAngle - curAngle > 180.0) nxtAngle -= 360.0;
-                                    }
-                                    double interpAngle = lerp(curAngle, nxtAngle, t);
-                                    if(interpAngle < 0.0) interpAngle += 360.0;
-                                    else if(interpAngle >= 360.0) interpAngle -= 360.0;
-                                    state.angle = interpAngle;
-                                }
-                                if(nextState.width > 0.0 && state.width > 0.0)
-                                    state.width = lerp(state.width, nextState.width, t);
-                                if(nextState.height > 0.0 && state.height > 0.0)
-                                    state.height = lerp(state.height, nextState.height, t);
-                            }
-                        }
-                    }
+            if(nextIndex >= static_cast<int>(frames->size())) {
+                return state;  // no next frame, just use slot A
+            }
+
+            const auto nextFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*frames)[nextIndex]);
+            if(!nextFrame) return state;
+
+            const int nextType = static_cast<int>(
+                psbDictionaryNumber(nextFrame, "type").value_or(0.0));
+
+            // Initialize slot B from the next frame (fresh defaults + mask)
+            // Aligned to sub_692AB0: independent init, NOT copied from slot A
+            FrameContentState slotB = initSlotFromFrame(nextFrame);
+            // Inherit src from slot A if slot B doesn't set one
+            if(slotB.src.empty()) slotB.src = state.src;
+
+            // Compute interpolation ratio
+            const double curTime =
+                psbDictionaryNumber(activeFrame, "time").value_or(0.0);
+            const double nextTime =
+                psbDictionaryNumber(nextFrame, "time").value_or(0.0);
+            const double duration = nextTime - curTime;
+            if(duration <= 0.0) return state;
+
+            const double t = std::clamp(
+                (time - curTime) / duration, 0.0, 1.0);
+
+            if(t <= 0.0 || nextType == 0) {
+                return state;  // at exact start or next is invisible
+            }
+
+            // Interpolate between slot A and slot B
+            // Aligned to sub_699AE4 (0x699AE4)
+            auto lerp = [](double a, double b, double r) {
+                return a * (1.0 - r) + b * r;
+            };
+
+            // Position (linear, sub_699AE4 at 0x699BB0~BC0)
+            state.x = lerp(state.x, slotB.x, t);
+            state.y = lerp(state.y, slotB.y, t);
+            state.ox = lerp(state.ox, slotB.ox, t);
+            state.oy = lerp(state.oy, slotB.oy, t);
+
+            // Opacity (linear, sub_699AE4 at 0x69A004~024)
+            // sub_699AE4: v50 = (double)slot_A.opa, v51 = (double)slot_B.opa
+            // if (v50 != v51) v50 = lerp(v50, v51, t)
+            if(state.opacity != slotB.opacity) {
+                state.opacity = lerp(state.opacity, slotB.opacity, t);
+            }
+
+            // Angle with 360° wrap-around (sub_699AE4 at 0x699D84~E38)
+            double curAngle = state.angle;
+            double nxtAngle = slotB.angle;
+            if(curAngle != nxtAngle) {
+                if(curAngle >= nxtAngle) {
+                    if(curAngle - nxtAngle > 180.0) nxtAngle += 360.0;
+                } else {
+                    if(nxtAngle - curAngle > 180.0) nxtAngle -= 360.0;
                 }
+                double interpAngle = lerp(curAngle, nxtAngle, t);
+                if(interpAngle < 0.0) interpAngle += 360.0;
+                else if(interpAngle >= 360.0) interpAngle -= 360.0;
+                state.angle = interpAngle;
+            }
+
+            // Width/height
+            if(state.width != slotB.width)
+                state.width = lerp(state.width, slotB.width, t);
+            if(state.height != slotB.height)
+                state.height = lerp(state.height, slotB.height, t);
+
+            // FlipX/FlipY: not interpolated, use slot A value
+            // (sub_699AE4 copies directly from clip slot, no lerp)
+
+            // Use src from slot A (or B if A is empty)
+            if(state.src.empty() && !slotB.src.empty()) {
+                state.src = slotB.src;
             }
 
             return state;
