@@ -423,19 +423,26 @@ namespace motion {
             std::string src;
             double x = 0.0;
             double y = 0.0;
-            double ox = 0.0;
-            double oy = 0.0;
-            double width = 0.0;    // "zx" from PSB (source display width)
-            double height = 0.0;   // "zy" from PSB (source display height)
-            double opacity = 1.0;  // 0.0-1.0 (from PSB "opa" uint8 0-255)
-            double angle = 0.0;    // rotation angle in degrees
-            bool flipX = false;    // "fx" from PSB content
-            bool flipY = false;    // "fy" from PSB content
-            int blendMode = 16;    // "bm"/"b" from PSB content (default 16)
-            BezierCurve ccc;       // color curve control (mask 0x800)
-            BezierCurve acc;       // angle curve control (mask 0x1000)
-            std::string action;    // "content.action" from PSB frameList
-            bool hasSync = false;  // "content.sync" from PSB frameList
+            double ox = 0.0;          // mask 0x1: position offset X
+            double oy = 0.0;          // mask 0x1: position offset Y
+            double width = 0.0;       // "zx" from PSB (source display width)
+            double height = 0.0;      // "zy" from PSB (source display height)
+            double opacity = 1.0;     // mask 0x400: 0.0-1.0 (from "opa" uint8 0-255)
+            double angle = 0.0;       // mask 0x10: rotation degrees
+            double scaleX = 1.0;      // mask 0x20: zoom X ("z")
+            double scaleY = 1.0;      // mask 0x40: zoom Y ("zy" in clip context)
+            double slantX = 0.0;      // mask 0x80: slant X ("s")
+            double slantY = 0.0;      // mask 0x100: slant Y ("sy")
+            bool flipX = false;       // mask 0x4: "fx"
+            bool flipY = false;       // mask 0x8: "fy"
+            int blendMode = 16;       // mask 0x20000: "bm"/"b" (default 16)
+            BezierCurve ccc;          // mask 0x800: color curve control
+            BezierCurve acc;          // mask 0x1000: angle curve control
+            BezierCurve zcc;          // mask 0x2000: zoom curve control
+            BezierCurve scc;          // mask 0x4000: slant curve control
+            BezierCurve occ;          // mask 0x8000: opacity curve control
+            std::string action;       // "content.action" from PSB frameList
+            bool hasSync = false;     // "content.sync" from PSB frameList
         };
 
         std::optional<double>
@@ -637,6 +644,31 @@ namespace motion {
                 }
             }
 
+            // mask & 0x20: z/scaleX, mask & 0x40: zy/scaleY (sub_692AB0 at 0x692FF4)
+            if(mask & 0x60) {
+                if(mask & 0x20) {
+                    if(const auto z = psbDictionaryNumber(content, "z"))
+                        state.scaleX = *z;
+                }
+                if(mask & 0x40) {
+                    // In clip context, "zy" is scaleY (not display height)
+                    if(const auto zy = psbDictionaryNumber(content, "zy"))
+                        state.scaleY = *zy;
+                }
+            }
+
+            // mask & 0x80: s/slantX, mask & 0x100: sy/slantY (sub_692AB0 at 0x693048)
+            if(mask & 0x180) {
+                if(mask & 0x80) {
+                    if(const auto s = psbDictionaryNumber(content, "s"))
+                        state.slantX = *s;
+                }
+                if(mask & 0x100) {
+                    if(const auto sy = psbDictionaryNumber(content, "sy"))
+                        state.slantY = *sy;
+                }
+            }
+
             // mask & 0x20000: bm/blend mode (sub_692AB0 at 0x692F20)
             if(mask & 0x20000) {
                 if(const auto bm = psbDictionaryNumber(content, "bm"))
@@ -644,7 +676,6 @@ namespace motion {
             }
 
             // mask & 0x800: ccc/color curve control (sub_692AB0 at 0x6930DC)
-            // Stored as PSB dict with "x"/"y" arrays for bezier evaluation
             if(mask & 0x800) {
                 if(auto cccDict = psbDictionaryValue(content, "ccc"))
                     state.ccc = parseBezierCurve(cccDict);
@@ -654,6 +685,24 @@ namespace motion {
             if(mask & 0x1000) {
                 if(auto accDict = psbDictionaryValue(content, "acc"))
                     state.acc = parseBezierCurve(accDict);
+            }
+
+            // mask & 0x2000: zcc/zoom curve control (sub_692AB0 at 0x6931FC)
+            if(mask & 0x2000) {
+                if(auto zccDict = psbDictionaryValue(content, "zcc"))
+                    state.zcc = parseBezierCurve(zccDict);
+            }
+
+            // mask & 0x4000: scc/slant curve control (sub_692AB0 at 0x69325C)
+            if(mask & 0x4000) {
+                if(auto sccDict = psbDictionaryValue(content, "scc"))
+                    state.scc = parseBezierCurve(sccDict);
+            }
+
+            // mask & 0x8000: occ/opacity curve control (sub_692AB0 at 0x69313C)
+            if(mask & 0x8000) {
+                if(auto occDict = psbDictionaryValue(content, "occ"))
+                    state.occ = parseBezierCurve(occDict);
             }
 
             // action/sync: not mask-gated (separate mechanism via mask & 0x40000
@@ -804,8 +853,22 @@ namespace motion {
             state.oy = lerp(state.oy, slotB.oy, t);
 
             // Opacity — uses ccc-eased t (sub_69A4D4 at 0x69A624)
+            // Also supports occ (opacity-specific curve, mask 0x8000)
+            // sub_699AE4 at 0x69A004: lerp as int, then round via
+            // floor(v+0.5) or ceil(v-0.5)
             if(state.opacity != slotB.opacity) {
-                state.opacity = lerp(state.opacity, slotB.opacity, t_ccc);
+                const double t_opa = !state.occ.empty()
+                    ? evaluateBezierCurve(state.occ, t)
+                    : t_ccc;  // fall back to ccc if no occ
+                const double opaA = state.opacity * 255.0;
+                const double opaB = slotB.opacity * 255.0;
+                double opaInterp = lerp(opaA, opaB, t_opa);
+                // Integer rounding aligned to sub_699AE4 at 0x69A040:
+                // if (v < 0) ceil(v - 0.5) else floor(v + 0.5)
+                int opaInt = opaInterp < 0.0
+                    ? static_cast<int>(std::ceil(opaInterp - 0.5))
+                    : static_cast<int>(std::floor(opaInterp + 0.5));
+                state.opacity = std::clamp(opaInt / 255.0, 0.0, 1.0);
             }
 
             // Angle with 360° wrap — uses acc-eased t (sub_699AE4 at 0x699DEC)
@@ -822,6 +885,22 @@ namespace motion {
                 else if(interpAngle >= 360.0) interpAngle -= 360.0;
                 state.angle = interpAngle;
             }
+
+            // ScaleX/scaleY — uses zcc-eased t (sub_699AE4 at 0x699E4C)
+            const double t_zcc = !state.zcc.empty()
+                ? evaluateBezierCurve(state.zcc, t) : t;
+            if(state.scaleX != slotB.scaleX)
+                state.scaleX = lerp(state.scaleX, slotB.scaleX, t_zcc);
+            if(state.scaleY != slotB.scaleY)
+                state.scaleY = lerp(state.scaleY, slotB.scaleY, t_zcc);
+
+            // SlantX/slantY — uses scc-eased t (sub_699AE4 at 0x699EFC)
+            const double t_scc = !state.scc.empty()
+                ? evaluateBezierCurve(state.scc, t) : t;
+            if(state.slantX != slotB.slantX)
+                state.slantX = lerp(state.slantX, slotB.slantX, t_scc);
+            if(state.slantY != slotB.slantY)
+                state.slantY = lerp(state.slantY, slotB.slantY, t_scc);
 
             // Width/height (linear)
             if(state.width != slotB.width)
@@ -1164,20 +1243,23 @@ namespace motion {
         //   case 3 slant: left-multiply [1,slantX;slantY,1]
         void applyLocalTransform(Affine2x3 &a,
                                  bool flipX, bool flipY,
-                                 double angle) {
+                                 double angle,
+                                 double scaleX, double scaleY,
+                                 double slantX, double slantY) {
             // Build local 2x2 from identity via left-multiplication
+            // Exactly replicates sub_699940 default order [0,1,2,3]:
+            //   case 0: Flip, case 1: Angle, case 2: Zoom, case 3: Slant
             double l11 = 1.0, l12 = 0.0, l21 = 0.0, l22 = 1.0;
 
-            // Case 0: Flip (left-multiply flip matrix)
+            // Case 0: Flip (left-multiply [-1,0;0,1] / [1,0;0,-1])
             if(flipX) { l11 = -l11; l12 = -l12; }
             if(flipY) { l21 = -l21; l22 = -l22; }
 
-            // Case 1: Angle (left-multiply rotation)
+            // Case 1: Angle (left-multiply [c,-s;s,c])
             if(angle != 0.0) {
                 const double rad = angle * 2.0 * 3.14159265358979323846 / 360.0;
                 const double c = std::cos(rad);
                 const double s = std::sin(rad);
-                // R × L where R = [c,-s; s,c]
                 const double t11 = c*l11 - s*l21;
                 const double t12 = c*l12 - s*l22;
                 const double t21 = s*l11 + c*l21;
@@ -1185,8 +1267,20 @@ namespace motion {
                 l11 = t11; l12 = t12; l21 = t21; l22 = t22;
             }
 
-            // Case 2: Zoom — requires clip-level scaleX/scaleY (not yet parsed)
-            // Case 3: Slant — requires clip-level slantX/slantY (not yet parsed)
+            // Case 2: Zoom (left-multiply [zx,0;0,zy]) — sub_699940 at 0x699A50
+            if(scaleX != 1.0 || scaleY != 1.0) {
+                l11 *= scaleX; l12 *= scaleX;
+                l21 *= scaleY; l22 *= scaleY;
+            }
+
+            // Case 3: Slant (left-multiply [1,sx;sy,1]) — sub_699940 at 0x699A7C
+            if(slantX != 0.0 || slantY != 0.0) {
+                const double t12 = l22 * slantX + l12;
+                const double t21 = l11 * slantY + l21;
+                const double t22 = l22 + l12 * slantY;
+                const double t11 = l11 + slantX * l21;
+                l11 = t11; l12 = t12; l21 = t21; l22 = t22;
+            }
 
             // Right-multiply local 2x2 into affine: A_new = A × L
             // (tx,ty unchanged; only 2x2 part is affected)
@@ -1218,7 +1312,8 @@ namespace motion {
             // Uses the node's OWN flip (state.flipX/Y from sub_699AE4),
             // NOT the XOR'd inherited flip. The XOR is only for children.
             applyLocalTransform(curAffine, state.flipX, state.flipY,
-                                state.angle);
+                                state.angle, state.scaleX, state.scaleY,
+                                state.slantX, state.slantY);
 
             // Flip XOR for inheritance to children.
             // Aligned to Player_updateLayers (0x6BB8A8):
