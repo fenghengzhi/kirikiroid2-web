@@ -64,14 +64,34 @@
 - RecalcPaintBox in `cpp/core/environ/cocos2d/MainScene.cpp` controls game→screen coordinate mapping. Key runtime values: viewSize, contentSize, paintBox, scale, offset
 - Game uses exHeight (1440) > scHeight (1080) for extended layer area. primaryLayer contentSize = scWidth×scHeight, but some layers (AffineLayer) use exWidth×exHeight
 
-## Workflow
-- CRITICAL: All fixes MUST be aligned to libkrkr2.so. Do NOT guess or patch — decompile the corresponding function in libkrkr2.so first, understand how the original does it, then replicate that logic. Use `/ida-decompile` skill and `mcp__ida-pro-mcp__decompile` for every non-trivial fix.
-- CRITICAL: When fixing rendering/positioning issues, trace the COMPLETE coordinate chain (PSB → ownerLayer → primaryLayer → paintBox → screen) BEFORE making any code changes. Each layer has its own transform.
-- When a fix doesn't work, do NOT try another speculative fix. Instead: add a diagnostic (fprintf stderr), verify actual runtime values, then fix based on evidence.
-- IMPORTANT: When fixing a bug, do NOT directly apply a guessed fix. First add logging/debug output to confirm the root cause, verify the hypothesis, then apply the actual fix.
-- When a C++ function needs implementation (draw, captureCanvas, etc.), find and decompile the exact function in libkrkr2.so before writing any code. Do not invent behavior.
-- ANTI-PATTERN: Do NOT try multiple "maybe this will work" patches in sequence. Each failed attempt wastes time and muddies the code. Instead: decompile libkrkr2.so → understand the real data flow → implement once correctly.
-- ANTI-PATTERN: Do NOT guess the reason for a failure. Every conclusion must be backed by evidence — either from decompiling libkrkr2.so, disassembling game scripts (tjsdump), or runtime logs. Phrases like "maybe", "probably", "might be" indicate guessing. Stop and gather evidence first.
-- ANTI-PATTERN: Do NOT use an uncertain "possible" answer as the basis for a fix. If you are not sure whether X is the cause, do NOT write code to fix X. Instead, decompile libkrkr2.so or add runtime logging to confirm X first, THEN fix.
-- When something doesn't display/render, decompile the full rendering chain in libkrkr2.so (Layer→DrawDevice→Texture→Cocos2D) before touching local code. The local rendering pipeline may differ from libkrkr2.so.
-- When IDA decompilation 100% confirms an identifier's real name, rename it immediately via `mcp__ida-pro-mcp__rename`. This applies to functions (`func`), global variables/data (`data`), local variables (`local`), and stack variables (`stack`) — not just functions. When the name is a best guess but not 100% confirmed, still rename it but append `_guess` suffix (e.g. `Layer_Update_guess`). Building a readable symbol table makes all future decompilation output more useful.
+## Workflow — 代码修改前置条件（BLOCKING）
+
+任何对 cpp/ 目录的代码修改（Edit/Write），**必须**满足以下全部条件，缺一不可。不满足条件的修改视为无效，必须回退。
+
+### 前置检查清单
+1. **libkrkr2.so 函数地址** — 本次修改对齐的是哪个函数（例：sub_692AB0 at 0x692AB0）
+2. **反编译证据** — 本次对话中必须有对该函数的 `mcp__ida-pro-mcp__decompile` 调用记录
+3. **关键逻辑摘要** — 用伪代码写出 libkrkr2.so 的实际行为（不超过10行），包括所有条件分支和默认值
+4. **本地实现对照** — 逐行说明本地代码如何复刻上述伪代码
+
+### 硬性禁止（违反任何一条 = 立即停止并反编译）
+- **禁止从 PSB 键名推导行为** — "PSB有opa键"不等于"应该读opa"。必须反编译确认读取条件（如 mask 位掩码门控）、默认值、数据类型
+- **禁止从变量名推导语义** — "opacity"不等于"opa"。必须反编译确认 libkrkr2.so 实际使用的字符串常量
+- **禁止"先改代码再验证"** — 必须"先反编译 → 写出 libkrkr2.so 伪代码 → 再改本地代码"
+- **禁止把多个推测链接成结论** — 每一步都必须有独立的反编译/运行时日志证据
+- **禁止从本地代码推断 libkrkr2.so 行为** — 本地代码可能是错的，libkrkr2.so 是唯一权威来源
+
+### 标准工作流程
+1. 发现问题 → 加诊断日志确认现象
+2. 反编译 libkrkr2.so 对应函数 → 写出伪代码
+3. 对比本地代码与伪代码 → 找到精确差异
+4. 修改本地代码精确复刻伪代码 → 在注释中引用函数地址
+5. 构建验证 → 运行时诊断确认修复
+
+### 渲染/定位问题专项
+- 修复前必须 trace 完整坐标链（PSB → ownerLayer → primaryLayer → paintBox → screen），每层有独立 transform
+- 反编译完整渲染链（Layer→DrawDevice→Texture→Cocos2D），不要只看局部
+
+### IDA 符号管理
+- 当反编译 100% 确认标识符真名时，立即通过 `mcp__ida-pro-mcp__rename` 重命名（func/data/local/stack）
+- 非 100% 确认的加 `_guess` 后缀（如 `Layer_Update_guess`）

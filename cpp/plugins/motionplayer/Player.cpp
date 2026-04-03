@@ -510,27 +510,50 @@ namespace motion {
                 return;
             }
 
+            // Aligned to libkrkr2.so sub_6926B4 (0x6926B4) + sub_692AB0 (0x692AB0):
+            // Each PSB frameList frame's "content" dict has a "mask" integer.
+            // "mask" is a bitmask that controls WHICH properties this keyframe
+            // modifies. Properties without their mask bit set keep their
+            // previous/default value. This is critical — e.g. yuzulogo.mtn's
+            // logo nodes have opa=0 in content but mask does NOT have bit 0x400,
+            // so libkrkr2.so ignores the opa value and uses default 255.
+            const int mask = static_cast<int>(
+                psbDictionaryNumber(content, "mask").value_or(0));
+
+            // "src" is NOT gated by mask — it's gated by node type in sub_692AB0
+            // (((1 << a2) & 0x1849) != 0). We don't have node type here, so
+            // read unconditionally (safe: src is always a string or absent).
             if(const auto src = psbDictionaryString(content, "src"); !src.empty()) {
                 state.src = src;
             }
-            if(const auto ox = psbDictionaryNumber(content, "ox")) {
-                state.ox = *ox;
+
+            // mask & 0x1: ox/oy (sub_692AB0 at 0x692DC4)
+            if(mask & 0x1) {
+                if(const auto ox = psbDictionaryNumber(content, "ox"))
+                    state.ox = *ox;
+                if(const auto oy = psbDictionaryNumber(content, "oy"))
+                    state.oy = *oy;
             }
-            if(const auto oy = psbDictionaryNumber(content, "oy")) {
-                state.oy = *oy;
-            }
+
+            // "zx"/"zy" (source display dimensions) — not clearly mask-gated
+            // in sub_692AB0. Read unconditionally for safety.
             if(const auto zx = psbDictionaryNumber(content, "zx")) {
                 state.width = *zx;
             }
             if(const auto zy = psbDictionaryNumber(content, "zy")) {
                 state.height = *zy;
             }
-            // BUG FIX: PSB uses "opa" (uint8 0-255), not "opacity".
-            // Confirmed: yuzulogo.mtn key table has "opa", no "opacity" key.
-            // Aligned to libkrkr2.so sub_692AB0 flag 0x400: reads "opa" as uint8.
-            if(const auto opa = psbDictionaryNumber(content, "opa")) {
-                state.opacity = std::clamp(*opa / 255.0, 0.0, 1.0);
+
+            // mask & 0x400: opa (sub_692AB0 at 0x693440)
+            // CRITICAL: only read "opa" when mask bit 0x400 is set.
+            // Default opacity is 255 (1.0) — set in FrameContentState init.
+            if(mask & 0x400) {
+                if(const auto opa = psbDictionaryNumber(content, "opa"))
+                    state.opacity = std::clamp(*opa / 255.0, 0.0, 1.0);
             }
+
+            // "x"/"y" position — read unconditionally (these may be layer-level,
+            // not clip-level properties; not clearly mask-gated in sub_692AB0)
             if(const auto x = psbDictionaryNumber(content, "x")) {
                 state.x = *x;
             }
@@ -538,33 +561,42 @@ namespace motion {
                 state.y = *y;
             }
 
-            if(const auto angle = psbDictionaryNumber(content, "angle")) {
-                state.angle = *angle;
+            // mask & 0x10: angle (sub_692AB0 at 0x692FC4)
+            if(mask & 0x10) {
+                if(const auto angle = psbDictionaryNumber(content, "angle"))
+                    state.angle = *angle;
             }
-            // Flip flags: "fx"/"fy" in PSB content.
-            // Aligned to libkrkr2.so sub_692AB0 flag 0x4/0x8.
-            if(const auto fx = psbDictionaryNumber(content, "fx")) {
-                state.flipX = *fx != 0.0;
+
+            // mask & 0x4: fx, mask & 0x8: fy (sub_692AB0 at 0x692F6C)
+            if(mask & 0xC) {
+                if(mask & 0x4) {
+                    if(const auto fx = psbDictionaryNumber(content, "fx"))
+                        state.flipX = *fx != 0.0;
+                }
+                if(mask & 0x8) {
+                    if(const auto fy = psbDictionaryNumber(content, "fy"))
+                        state.flipY = *fy != 0.0;
+                }
             }
-            if(const auto fy = psbDictionaryNumber(content, "fy")) {
-                state.flipY = *fy != 0.0;
-            }
+
+            // action/sync: not mask-gated (separate mechanism via mask & 0x40000
+            // in sub_6926B4 at 0x6928EC)
             if(const auto act = psbDictionaryString(content, "action"); !act.empty()) {
                 state.action = act;
             }
             if(const auto sync = psbDictionaryNumber(content, "sync")) {
                 state.hasSync = *sync != 0.0;
             }
+
+            // coord: alternative position format, read unconditionally
             if(const auto coord = psbDictionaryList(content, "coord")) {
                 if(coord->size() > 0) {
-                    if(const auto value = psbNumberValue((*coord)[0])) {
+                    if(const auto value = psbNumberValue((*coord)[0]))
                         state.x = *value;
-                    }
                 }
                 if(coord->size() > 1) {
-                    if(const auto value = psbNumberValue((*coord)[1])) {
+                    if(const auto value = psbNumberValue((*coord)[1]))
                         state.y = *value;
-                    }
                 }
             }
         }
@@ -629,8 +661,16 @@ namespace motion {
                         const double t = std::clamp(
                             (time - curTime) / duration, 0.0, 1.0);
                         if(t > 0.0) {
-                            // Build next frame state by merging onto current
-                            FrameContentState nextState = state;
+                            // Aligned to libkrkr2.so sub_692AB0 (0x692AB0):
+                            // Each clip slot is initialized with DEFAULTS
+                            // before mask-gated properties are applied:
+                            //   opacity = 255, color = 0xFF808080, blendMode = 16
+                            // NOT copied from the current slot's values.
+                            // This means: if the next keyframe's mask doesn't
+                            // include 0x400 (opa), its opacity is 255 (default),
+                            // NOT the current frame's opa value.
+                            FrameContentState nextState;  // fresh defaults
+                            nextState.src = state.src;    // inherit src
                             const auto nextType = static_cast<int>(
                                 psbDictionaryNumber(nextFrame, "type").value_or(0.0));
                             if(nextType != 0) {
