@@ -499,6 +499,8 @@ namespace internal {
             bool hasTransformOrder = false;
             std::string action;       // "content.action" from PSB frameList
             bool hasSync = false;     // "content.sync" from PSB frameList
+            // Clip slot timing — slot+328 in libkrkr2.so (frame start time)
+            double clipStartTime = 0.0;
         };
 
         inline std::optional<double>
@@ -1151,6 +1153,7 @@ namespace internal {
                       std::end(state.transformOrder), savedTO);
             state = frameA.slot;
             state.visible = true;
+            state.clipStartTime = frameA.time;  // slot+328: frame start time
             if(savedHasTO) {
                 std::copy(savedTO, savedTO + 4, state.transformOrder);
                 state.hasTransformOrder = true;

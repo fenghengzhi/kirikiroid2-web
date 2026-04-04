@@ -214,6 +214,7 @@ namespace motion {
             node.interpolatedCache.motionDofst = state.motionDofst;
             node.interpolatedCache.motionDocmpl = state.motionDocmpl;
             node.interpolatedCache.motionTimeOffset = state.motionTimeOffset;
+            node.interpolatedCache.clipStartTime = state.clipStartTime;
             node.interpolatedCache.motionDtgt = state.motionDtgt;
             // Particle data from FrameContentState (mask 0x100000)
             node.interpolatedCache.prtTrigger = state.prtTrigger;
@@ -1567,61 +1568,122 @@ namespace motion {
         auto &nodes = _runtime->nodes;
         // --- sub_6BEDD0: Particle emitter state (nodeType=6) ---
         // Aligned to 0x6BEDD0. Only when !isEmoteMode.
-        // Manages emitter timer and trigger state for particle emitter nodes.
-        if (!_runtime->isEmoteMode) {
-            for (size_t ei = 1; ei < nodes.size(); ++ei) {
-                auto &en = nodes[ei];
-                if (en.nodeType != 6) continue;
-                if (!en.accumulated.active || en.slotDone) {
-                    // Clear emitter state (0x6BEEB0..0x6BEEC4)
-                    en.emitterActive = false;
-                    en.emitterDtgt.clear();
-                    en.emitterTimer = 0.0;
-                    continue;
-                }
-                // dtgt from interpolated cache (clip slot+356)
-                const std::string &dtgt = en.interpolatedCache.src;
-                if (dtgt.empty()) {
-                    en.emitterActive = false;
-                    en.emitterDtgt.clear();
-                    en.emitterTimer = 0.0;
-                    continue;
-                }
-                // Check if dtgt changed → reinit (0x6BEEF0..0x6BEF48)
-                if (en.emitterActive && en.emitterDtgt != dtgt) {
-                    en.emitterDtgt = dtgt;
-                    en.emitterTimer = 0.0;
-                } else if (!en.emitterActive) {
-                    en.emitterActive = true;
-                    en.emitterDtgt = dtgt;
-                    en.emitterTimer = 0.0;
-                }
-                // Accumulate timer (0x6BEFAC..0x6BEFC0)
-                en.emitterOffsetActive = false;
+        if (_runtime->isEmoteMode) return;
+
+        for (size_t ei = 1; ei < nodes.size(); ++ei) {
+            auto &en = nodes[ei];
+            if (en.nodeType != 6) continue;
+
+            // Active/slotDone guard (0x6BEE90..0x6BEEC4)
+            if (!en.accumulated.active || en.slotDone) {
+                en.emitterActive = false;
+                en.emitterDtgt.clear();
+                en.emitterTimer = 0.0;
+                continue;
+            }
+
+            // dtgt from clip slot (node+536*slot+356, our interpolatedCache.src)
+            const std::string &dtgt = en.interpolatedCache.src;
+            if (dtgt.empty()) {
+                en.emitterActive = false;
+                en.emitterDtgt.clear();
+                en.emitterTimer = 0.0;
+                continue;
+            }
+
+            // Flags gate + re-resolve logic (0x6BEED8..0x6BEF9C)
+            // Key insight: node+44 (flags) gates whether we re-check dtgt.
+            // If flags==0: always LABEL_27 (continue, just accumulate timer).
+            // If flags!=0: check emitterActive + dtgt comparison.
+            bool doAccumulate; // true=LABEL_27 (timer += dt), false=LABEL_21 (re-resolve)
+
+            if (!(en.flags & 0x01)) {
+                // node+44 flags == 0: skip re-resolve → LABEL_27 (0x6BEEE0)
+                doAccumulate = true;
+            } else if (!en.emitterActive) {
+                // First init → LABEL_21 (0x6BEEFC)
+                doAccumulate = false;
+            } else if (en.emitterDtgt == dtgt) {
+                // Same dtgt (pointer or string compare) → LABEL_27 (0x6BEEF8)
+                doAccumulate = true;
+            } else {
+                // dtgt changed → LABEL_21
+                doAccumulate = false;
+            }
+
+            en.emitterOffsetActive = false; // 0x6BEFB0
+
+            if (doAccumulate) {
+                // LABEL_27 (0x6BEF88): emitterTimer = _frameLastTime + emitterTimer
                 en.emitterTimer += _frameLastTime;
-                // Trigger type handling (0x6BEFC4..0x6BF0B8)
-                const int triggerType = en.prtTrigger;
-                if (triggerType == 4) {
-                    // Target position mode: compute offset from target node
-                    // Emission handled by sub_6BF0DC (particle system node)
-                    en.emitterOffsetActive = false;
-                } else if (triggerType == 3) {
-                    // Interpolated emit: use delta position as offset
-                    if (_frameLastTime != 0.0) {
-                        en.emitterOffsetActive = true;
-                        en.emitterOffsetX = en.deltaPosX;
-                        en.emitterOffsetY = en.deltaPosY;
-                        en.emitterOffsetZ = en.deltaPosZ;
-                    }
-                } else if (triggerType == 2) {
-                    // Timer-based emission
-                    // Emission handled by sub_6BF0DC (particle system node)
+            } else {
+                // LABEL_21 (0x6BEF48): re-resolve dtgt, compute time offset
+                en.emitterActive = true;
+                en.emitterDtgt = dtgt;
+                // Timer = (parentTime - clipSlot.startTime) + clipSlot.timeOffset
+                // Aligned to 0x6BEF74..0x6BEFA8:
+                //   parentTime = node+8 ? *(node+8+40) : player._currentTime
+                //   v21 = parentTime - slot+328
+                //   v22 = &(slot+728)
+                //   timer = v21 + *v22
+                double parentTime = _loopTime;  // player._currentTime equivalent
+                double startTime = en.interpolatedCache.clipStartTime;
+                double timeOffset = en.interpolatedCache.motionTimeOffset;
+                en.emitterTimer = (parentTime - startTime) + timeOffset;
+            }
+
+            // Trigger type handling (0x6BEFC4..0x6BF0B8)
+            // triggerType from clipSlot (node+536*slot+708)
+            const int triggerType = en.interpolatedCache.prtTrigger;
+
+            switch (triggerType) {
+            case 4: {
+                // Target position offset (0x6BF048..0x6BF0B8)
+                // sub_6F2228 resolves target node by name from slot+712 (motionDtgt).
+                // Compute position difference: target.pos - emitter.pos
+                int targetIdx = findNodeByLabel(nodes, en.interpolatedCache.motionDtgt);
+                if (targetIdx >= 0 && targetIdx < static_cast<int>(nodes.size())) {
+                    auto &target = nodes[targetIdx];
+                    en.emitterOffsetActive = true;
+                    en.emitterOffsetX = target.accumulated.posX - en.accumulated.posX;
+                    en.emitterOffsetY = target.accumulated.posY - en.accumulated.posY;
+                    en.emitterOffsetZ = target.accumulated.posZ - en.accumulated.posZ;
                 }
-                // Particle creation is handled by sub_6BF0DC (nodeType=4).
-                // implemented. Emitter state is maintained for future use.
+                break;
+            }
+            case 3: {
+                // Interpolated emit via sub_6C1540 (0x6BF028)
+                // sub_6C1540 interpolates between two clip slot positions at
+                // current time and computes position derivative as emit offset.
+                // In our single-slot architecture, approximate with delta position.
+                en.emitterOffsetActive = true;
+                en.emitterOffsetX = en.deltaPosX;
+                en.emitterOffsetY = en.deltaPosY;
+                en.emitterOffsetZ = en.deltaPosZ;
+                break;
+            }
+            case 2: {
+                // Timer/queuing mode (0x6BEFF0..0x6BF020)
+                if (_queuing || en.emitterTimer == 0.0) {
+                    // Same as case 3: call sub_6C1540
+                    en.emitterOffsetActive = true;
+                    en.emitterOffsetX = en.deltaPosX;
+                    en.emitterOffsetY = en.deltaPosY;
+                    en.emitterOffsetZ = en.deltaPosZ;
+                } else {
+                    // Non-queuing, timer running: use node delta position
+                    // (0x6BF004..0x6BF020)
+                    en.emitterOffsetActive = true;
+                    en.emitterOffsetX = en.deltaPosX;
+                    en.emitterOffsetY = en.deltaPosY;
+                    en.emitterOffsetZ = en.deltaPosZ;
+                }
+                break;
+            }
+            default:
+                break;
             }
         }
-
     }
 
     void Player::updateLayersPhase3_ParticleSystem(double currentTime) {

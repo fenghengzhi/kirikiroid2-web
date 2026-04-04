@@ -246,6 +246,7 @@ namespace motion::detail {
             double motionDofst = 0.0;  // angle value for case 1
             bool motionDocmpl = false;
             double motionTimeOffset = 0.0;
+            double clipStartTime = 0.0;  // slot+328: frame start time in clip
             std::string motionDtgt;    // target node name for angleMode=4
             // Particle data from FrameContentState (mask 0x100000)
             int prtTrigger = 0;
