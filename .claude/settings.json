@@ -10,7 +10,8 @@
     ],
     "additionalDirectories": [
       "/tmp",
-      "/private/tmp"
+      "/private/tmp",
+      "/Users/bytedance/.claude/plans"
     ]
   },
   "enableAllProjectMcpServers": true,
@@ -22,6 +23,6 @@
     "claude-md-management@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": true,
     "pua@pua-skills": true,
-    "superpowers@claude-plugins-official": true
+    "superpowers@claude-plugins-official": false
   }
 }

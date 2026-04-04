@@ -6,7 +6,11 @@ add_library(${PROJECT_NAME} STATIC)
 target_sources(${PROJECT_NAME} PUBLIC
     main.cpp
     EmotePlayer.cpp
-    Player.cpp
+    PlayerCore.cpp
+    PlayerResource.cpp
+    PlayerRender.cpp
+    PlayerUpdateLayers.cpp
+    PlayerQuery.cpp
     ResourceManager.cpp
     RuntimeSupport.cpp
     NodeTree.cpp

@@ -367,6 +367,19 @@ namespace motion {
         activeLayersByName() const;
         const std::vector<std::string> &activeSourceCandidates() const;
         void updateLayers(double currentTime);
+        // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
+        void updateLayersPhase1_PreLoop(double currentTime);
+        void updateLayersPhase2_MainLoop(double currentTime);
+        void updateLayersPhase3_CameraConstraint();          // sub_6BC000
+        void updateLayersPhase3_VertexComputation();          // sub_6BC4F0
+        void updateLayersPhase3_Visibility();                 // sub_6BD8DC
+        void updateLayersPhase3_CameraNode();                 // sub_6BDA28
+        void updateLayersPhase3_ShapeAABB();                  // sub_6BDCC0
+        void updateLayersPhase3_ShapeGeometry();              // sub_6BDE94
+        void updateLayersPhase3_MotionSubNode(double currentTime);  // sub_6BE0C0
+        void updateLayersPhase3_ParticleEmitter();            // sub_6BEDD0
+        void updateLayersPhase3_ParticleSystem(double currentTime); // sub_6BF0DC
+        void updateLayersPhase3_AnchorNode();                 // sub_6C0528
 
         std::shared_ptr<detail::PlayerRuntime> _runtime;
         ResourceManager _resourceManagerNative;
@@ -390,6 +403,10 @@ namespace motion {
         bool _hasCamera = false;
         bool _cameraActive = false;
         bool _stereovisionActive = false;
+        // Camera angle for stereovision (a1+472, sub_6BDA28 at 0x6BDC50)
+        double _cameraAngle = 0.0;
+        double _cameraPosX = 0, _cameraPosY = 0, _cameraPosZ = 0;
+        double _cameraTargetX = 0, _cameraTargetY = 0, _cameraTargetZ = 0;
         double _tickCount = 0.0;
         double _speed = 1.0;
         double _frameTickCount = 0.0;
@@ -436,6 +453,17 @@ namespace motion {
         bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
         std::unordered_map<std::string, double> _variableValues;
 
+        // Aligned to libkrkr2.so emote scale/rotate fields:
+        // sub_681F20: player+1184, sub_681F28: player+1192, sub_681F30: player+1200
+        double _hairScale = 1.0;    // player+1184
+        double _partsScale = 1.0;   // player+1192
+        double _bustScale = 1.0;    // player+1200
+        double _rotateAngle = 0.0;  // sub_672568 rotation parameter
+
+        // Aligned to libkrkr2.so player+992: TJS Math.RandomGenerator object.
+        // sub_6BA7B8 calls its "random" method to get [0.0, 1.0) doubles.
+        // Created via TJS eval "new Math.RandomGenerator()" during init.
+        tTJSVariant _tjsRandomGenerator;  // player+992
     };
 
 } // namespace motion
