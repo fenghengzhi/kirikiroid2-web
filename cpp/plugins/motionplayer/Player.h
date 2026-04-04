@@ -85,8 +85,8 @@ namespace motion {
         void setOutline(bool v) { _outline = v; }
         bool getOutline() const { return _outline; }
 
-        void setPriorDraw(bool v) { _priorDraw = v; }
-        bool getPriorDraw() const { return _priorDraw; }
+        void setPriorDraw(int v) { _priorDraw = v; }
+        int getPriorDraw() const { return _priorDraw; }
 
         void setFrameLastTime(double v) { _frameLastTime = v; }
         double getFrameLastTime() const { return _frameLastTime; }
@@ -388,7 +388,7 @@ namespace motion {
         ttstr _chara;
         ttstr _motionKey;
         bool _outline = false;
-        bool _priorDraw = false;
+        int _priorDraw = 0;  // raw int, not bool — sub_6BE0C0 checks (v12 & 5)
         double _frameLastTime = 0.0;
         double _frameLoopTime = 0.0;
         double _loopTime = 0.0;

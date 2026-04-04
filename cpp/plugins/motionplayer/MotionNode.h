@@ -74,7 +74,8 @@ namespace motion::detail {
         std::shared_ptr<const PSB::PSBDictionary> emoteEditDict;
 
         // Prior draw flag (node+48, from PSB emoteEdit "priorDraw")
-        bool priorDraw = false;
+        // Raw int, not bool — binary checks bit flags (v12 & 5) in sub_6BE0C0.
+        int priorDraw = 0;
 
         // Clip slot state — aligned to sub_6B4A6C: both slots start done=true.
         // Set to false when evaluateLayerContent finds an active frame (type!=0).
@@ -88,6 +89,7 @@ namespace motion::detail {
         struct AccumulatedState {
             bool visible = false;
             bool active = false;
+            bool dirty = false;     // node+1584: set when state changes, cleared by consumer
             bool flipX = false;
             bool flipY = false;
             double posX = 0.0;
@@ -160,7 +162,10 @@ namespace motion::detail {
         std::vector<std::shared_ptr<Player>> particleChildren;
         int particleType = 0;          // node+2164: particle subtype
         int particleMaxNum = 0;        // node+2168: max particle count
-        double particleAccelRatio = 0; // node+2192
+        // Binary: node+2192 is a SINGLE field used as both "accel ratio" (decay
+        // factor in exponential velocity mode) and "camera damping" (copied to
+        // child player). PSB key: "particleAccelRatio". See sub_6BF0DC.
+        double particleAccelRatio = 0; // node+2192 — also used as cameraDamping
         bool particleInheritAngle = false; // node+2172
         int particleInheritVelocity = 0;   // node+2176
         int particleFlyDirection = 0;      // node+2180
@@ -173,7 +178,6 @@ namespace motion::detail {
         double prevParticleAngle = 0.0;        // node+2352
         double emitterTimerAccum = 0.0;        // node+2360: frequency timer
         bool particleEmitterFlagActive = false; // v8[135].u8[0]
-        double particleCameraDamping = 1.0;    // v8[137].u64[0]
 
         // Particle emitter state for nodeType=6 (sub_6BEDD0 at 0x6BEDD0)
         bool emitterActive = false;    // node+2380

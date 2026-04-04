@@ -163,8 +163,11 @@ namespace motion::detail {
                 node.particleDeleteOutside = (*v != 0.0);
             if (auto v = nodeTreePsbNumber(psbNode, "particleTriVolume"))
                 node.particleTriVolume = (*v != 0.0);
+            // Binary: node+2192 is ONE field, used as both accel decay ratio
+            // and camera damping. "particleCameraDamping" PSB key overwrites
+            // "particleAccelRatio" if both present (same binary offset).
             if (auto v = nodeTreePsbNumber(psbNode, "particleCameraDamping"))
-                node.particleCameraDamping = *v;
+                node.particleAccelRatio = *v;
 
             // Check if any frame has a source image
             node.hasSource = checkHasSource(psbNode);
