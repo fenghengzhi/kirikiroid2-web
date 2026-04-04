@@ -128,6 +128,9 @@ namespace motion::detail {
             // "meshSyncChildMask" → meshFlags (node+2004, sub_6B3C78 at 0x6B41B8)
             if (auto v = nodeTreePsbNumber(psbNode, "meshSyncChildMask"))
                 node.meshFlags = static_cast<int>(*v);
+            // "meshDivision" → meshDivision (node+2008, sub_6B3C78 at 0x6B41D8)
+            if (auto v = nodeTreePsbNumber(psbNode, "meshDivision"))
+                node.meshDivision = static_cast<int>(*v);
 
             // "stencilType" → stencilType (node+52)
             if (auto v = nodeTreePsbNumber(psbNode, "stencilType"))

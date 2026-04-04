@@ -56,6 +56,7 @@ elseif(WEB)
     add_compile_options(
         -pthread
         -fwasm-exceptions
+        -msimd128
         $<$<AND:$<CONFIG:Debug>,$<BOOL:${KRKR2_WEB_DEBUG_ENABLE_ASAN}>>:-fsanitize=address>
     )
     add_link_options($<$<AND:$<CONFIG:Debug>,$<BOOL:${KRKR2_WEB_DEBUG_ENABLE_ASAN}>>:-fsanitize=address>)

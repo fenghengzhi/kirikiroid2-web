@@ -20,6 +20,10 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
+
+// iTJSDispatch2 is declared in tjs.h — no forward declaration needed here.
+// Files that include MotionNode.h must also include tjs.h for the type.
 
 namespace PSB {
     class PSBDictionary;
@@ -40,12 +44,34 @@ namespace motion::detail {
         int inheritFlags = 0x1FC;      // node+40 (bits 2-8, default all-set)
         uint8_t flags = 0;             // node+42 (bit 0x40 = skip in parent walk)
         bool groundCorrection = false; // node+47
+        // TJS layer dispatch object for callbacks (sub_6BAA10 onGroundCorrection).
+        // In libkrkr2.so this is at *(node+0)+16 (the layer's iTJSDispatch2*).
+        // Stored as void* to avoid iTJSDispatch2 header dependency here;
+        // cast to iTJSDispatch2* in Player.cpp where tjs.h is included.
+        void *tjsLayerObject = nullptr;  // non-owning reference
         int transformOrder[4] = {0, 1, 2, 3}; // node+84..96
         bool hasSource = false;        // has any frame with non-empty src
         std::string layerName;         // "label" from PSB
         int meshType = 0;             // "meshTransform" from PSB (node+2000)
         int meshFlags = 0;            // "meshSyncChildMask" from PSB (node+2004)
+        int meshDivision = 0;         // "meshDivision" from PSB (node+2008)
+        int meshDivX = 0;             // node+2012: computed grid width
+        int meshDivY = 0;             // node+2016: computed grid height
+        // Mesh inverse matrix for sub_69AE74 child deformation (node+2096..2132)
+        double meshInvM11 = 0, meshInvM12 = 0;  // node+2096, node+2104
+        double meshInvM21 = 0, meshInvM22 = 0;  // node+2112, node+2120
+        float meshInvOffX = 0, meshInvOffY = 0;  // node+2128, node+2132
         int stencilType = 0;          // "stencilType" from PSB
+
+        // Mesh control points (node+2024..2032 in libkrkr2.so).
+        // For meshType=1: 16 × 2 floats (Bezier patch 4×4 control grid) = 32 floats.
+        // For meshType=2: (divX+1)*(divY+1)*2 floats (grid mesh).
+        // Built by sub_6BC4F0 vertex computation.
+        std::vector<float> meshControlPoints;      // node+2024
+        std::vector<float> meshControlPointsPrev;  // node+2048 (previous frame)
+
+        // Prior draw flag (node+48, from PSB emoteEdit "priorDraw")
+        bool priorDraw = false;
 
         // Clip slot state — aligned to sub_6B4A6C: both slots start done=true.
         // Set to false when evaluateLayerContent finds an active frame (type!=0).
