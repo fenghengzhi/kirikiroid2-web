@@ -80,20 +80,86 @@ namespace motion::detail {
         // Raw int, not bool — binary checks bit flags (v12 & 5) in sub_6BE0C0.
         int priorDraw = 0;
 
-        // Clip slot state — aligned to sub_6B4A6C: both slots start done=true.
-        // Set to false when evaluateLayerContent finds an active frame (type!=0).
-        bool slotDone = true;          // node+344 / node+880 (current slot)
-
-        // Dual clip slot crossfade state (sub_6BE0C0 at 0x6BE85C)
-        // When a new motion is played, the current slot becomes "other slot" for blending.
-        bool currentSlotCrossfading = false;  // *(v10 + 536*v13 + 345)
-        bool currentSlotHasEasing = false;    // *(v10 + 536*v13 + 544)
-        // Crossfade easing curve data (slot+208 in binary, sub_69A754).
-        // Populated during slot flip; used by sub_6BE0C0 at 0x6BEC8C.
-        struct CrossfadeEasing {
+        // ========== Dual Clip Slot Architecture ==========
+        // Aligned to libkrkr2.so's two 536-byte clip slots per node:
+        //   slot0 @ node+320, slot1 @ node+856, activeSlotIndex @ node+1392.
+        // When a new motion is played, data is written to the inactive slot,
+        // then activeSlotIndex ^= 1 flips. The old slot is preserved for
+        // crossfade blending.
+        //
+        // CurveData is a lightweight bezier curve container compatible with
+        // the evaluateBezierCurve() template (requires .x, .y, .empty()).
+        // BezierCurve/ControlPointCurve types are defined in PlayerInternal.h
+        // which MotionNode.h cannot include, so we use this standalone type.
+        struct CurveData {
             std::vector<double> x, y;
             bool empty() const { return x.empty(); }
-        } crossfadeEasingCurve;
+        };
+        struct ControlPointData {
+            std::vector<double> x, y, t;
+            bool empty() const { return t.empty(); }
+        };
+
+        struct ClipSlot {
+            // Visibility (slot+24, slot+25)
+            bool done = true;
+            bool crossfading = false;      // slot+25: currently blending with other slot
+            bool hasEasing = false;         // slot+544: has easing curve for crossfade
+
+            // Source (slot+36)
+            std::string src;
+            std::vector<std::string> srcList;
+
+            // Position (slot+96..112)
+            double x = 0, y = 0, z = 0;
+            double ox = 0, oy = 0;
+
+            // Transform
+            double width = 0, height = 0;
+            double opacity = 1.0;
+            double angle = 0.0;
+            double scaleX = 1.0, scaleY = 1.0;
+            double slantX = 0.0, slantY = 0.0;
+            bool flipX = false, flipY = false;
+            int blendMode = 16;
+            int colorR = 0x80, colorG = 0x80, colorB = 0x80, colorA = 0xFF;
+
+            // Easing curves (slot+168, +208, +228, +248, +268, +296)
+            CurveData ccc, acc, zcc, scc, occ, cc;
+            ControlPointData cp;
+            bool hasCpRotation = false;
+
+            // Time (slot+328)
+            double clipStartTime = 0.0;
+
+            // Motion sub-object (mask 0x80000)
+            int motionDt = 0, motionFlags = 0;
+            double motionDofst = 0.0;
+            bool motionDocmpl = false;
+            double motionTimeOffset = 0.0;
+            std::string motionDtgt;
+
+            // Particle sub-object (mask 0x100000)
+            int prtTrigger = 0;
+            double prtFmin = 10.0, prtF = 10.0;
+            double prtVmin = 0.0, prtV = 0.0;
+            double prtAmin = 0.0, prtA = 0.0;
+            double prtZmin = 1.0, prtZ = 1.0;
+            double prtRange = 0.0;
+
+            // TransformOrder
+            bool hasTransformOrder = false;
+            int transformOrder[4] = {0,1,2,3};
+            std::string action;
+            bool hasSync = false;
+        };
+
+        ClipSlot slots[2];
+        int activeSlotIndex = 0;       // node+1392
+        ClipSlot& activeSlot() { return slots[activeSlotIndex]; }
+        const ClipSlot& activeSlot() const { return slots[activeSlotIndex]; }
+        ClipSlot& otherSlot() { return slots[activeSlotIndex ^ 1]; }
+        const ClipSlot& otherSlot() const { return slots[activeSlotIndex ^ 1]; }
 
         // PSB reference (for evaluateLayerContent calls)
         std::shared_ptr<const PSB::PSBDictionary> psbNode;
@@ -115,6 +181,7 @@ namespace motion::detail {
             double slantX = 0.0;
             double slantY = 0.0;
             int opacity = 255;         // 0-255 integer, matching libkrkr2.so int math
+            int blendMode = 16;        // node+1656: accumulated blend mode (default 0x10)
             // 2x2 matrix (local × parent accumulated)
             double m11 = 1.0;
             double m12 = 0.0;
@@ -266,11 +333,6 @@ namespace motion::detail {
             double motionTimeOffset = 0.0;
             double clipStartTime = 0.0;  // slot+328: frame start time in clip
             std::string motionDtgt;    // target node name for angleMode=4
-            // --- Other clip slot state for crossfade (sub_6BE0C0 at 0x6BE85C) ---
-            bool otherSlotDone = true;              // *(v10 + 536*v38 + 344)
-            int otherSlotMotionDt = 0;              // *(v10 + 536*v38 + 668) angleMode
-            double otherSlotMotionDofst = 0.0;      // *(v10 + 536*v38 + 672) dofst
-            double otherSlotStartTime = 0.0;        // *(v10 + 536*v38 + 328)
             // Particle data from FrameContentState (mask 0x100000)
             int prtTrigger = 0;
             double prtFmin = 10.0;
@@ -289,18 +351,6 @@ namespace motion::detail {
             std::vector<double> cp_x, cp_y;    // cp main bezier points
             std::vector<double> cp_t;           // cp time knots
             bool hasCpRotation = false;         // slot+284 type != 0
-            // --- Dual-slot raw data for sub_6C1540 equivalent ---
-            // Stored during Phase 2 evaluateLayerContent when type==3 (interpolate).
-            // Phase 3 particle emitter uses these to compute position derivative.
-            bool hasDualSlot = false;      // true when both slots are valid
-            double dualSlotRatio = 0.0;    // t ∈ [0,1] interpolation ratio
-            // Raw position from slotA (current keyframe, pre-interpolation)
-            double slotA_x = 0.0, slotA_y = 0.0;
-            // Raw position from slotB (next keyframe)
-            double slotB_x = 0.0, slotB_y = 0.0;
-            // Clip start times for both slots
-            double slotA_startTime = 0.0;
-            double slotB_startTime = 0.0;
         } interpolatedCache;
     };
 

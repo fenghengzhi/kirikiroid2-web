@@ -475,6 +475,10 @@ namespace motion {
         // sub_6BA7B8 calls its "random" method to get [0.0, 1.0) doubles.
         // Created via TJS eval "new Math.RandomGenerator()" during init.
         tTJSVariant _tjsRandomGenerator;  // player+992
+
+        // Aligned to libkrkr2.so player+1012: emoteEdit TJS variant.
+        // Propagated to child particle players (sub_6BF0DC at 0x6BF9C0).
+        tTJSVariant _emoteEditVariant;    // player+1012
     };
 
 } // namespace motion

@@ -8,6 +8,52 @@
 
 using namespace motion::internal;
 
+namespace {
+    // Populate a ClipSlot from a FrameContentState.
+    // Cannot be a ClipSlot method because FrameContentState is defined in
+    // PlayerInternal.h (motion::internal namespace) which MotionNode.h cannot include.
+    inline void populateSlotFromState(
+        motion::detail::MotionNode::ClipSlot &slot,
+        const motion::internal::FrameContentState &s) {
+        slot.done = !s.visible;
+        slot.src = s.src;
+        slot.srcList = s.srcList;
+        slot.x = s.x; slot.y = s.y; slot.z = 0;
+        slot.ox = s.ox; slot.oy = s.oy;
+        slot.width = s.width; slot.height = s.height;
+        slot.opacity = s.opacity; slot.angle = s.angle;
+        slot.scaleX = s.scaleX; slot.scaleY = s.scaleY;
+        slot.slantX = s.slantX; slot.slantY = s.slantY;
+        slot.flipX = s.flipX; slot.flipY = s.flipY;
+        slot.blendMode = s.blendMode;
+        slot.colorR = s.colorR; slot.colorG = s.colorG;
+        slot.colorB = s.colorB; slot.colorA = s.colorA;
+        slot.ccc.x = s.ccc.x; slot.ccc.y = s.ccc.y;
+        slot.acc.x = s.acc.x; slot.acc.y = s.acc.y;
+        slot.zcc.x = s.zcc.x; slot.zcc.y = s.zcc.y;
+        slot.scc.x = s.scc.x; slot.scc.y = s.scc.y;
+        slot.occ.x = s.occ.x; slot.occ.y = s.occ.y;
+        slot.cc.x = s.cc.x; slot.cc.y = s.cc.y;
+        slot.cp.x = s.cp.x; slot.cp.y = s.cp.y; slot.cp.t = s.cp.t;
+        slot.hasCpRotation = !s.cp.empty();
+        slot.clipStartTime = s.clipStartTime;
+        slot.motionDt = s.motionDt; slot.motionFlags = s.motionFlags;
+        slot.motionDofst = s.motionDofst; slot.motionDocmpl = s.motionDocmpl;
+        slot.motionTimeOffset = s.motionTimeOffset; slot.motionDtgt = s.motionDtgt;
+        slot.prtTrigger = s.prtTrigger;
+        slot.prtFmin = s.prtFmin; slot.prtF = s.prtF;
+        slot.prtVmin = s.prtVmin; slot.prtV = s.prtV;
+        slot.prtAmin = s.prtAmin; slot.prtA = s.prtA;
+        slot.prtZmin = s.prtZmin; slot.prtZ = s.prtZ;
+        slot.prtRange = s.prtRange;
+        slot.hasTransformOrder = s.hasTransformOrder;
+        std::copy(s.transformOrder, s.transformOrder + 4, slot.transformOrder);
+        slot.action = s.action; slot.hasSync = s.hasSync;
+        // hasEasing derived from acc curve presence
+        slot.hasEasing = !s.acc.empty();
+    }
+} // anonymous namespace
+
 namespace motion {
 
     // Phase 1: Camera velocity, root evaluation, variable interpolation
@@ -47,8 +93,8 @@ namespace motion {
         auto &root = nodes[0];
         {
             auto rootState = evaluateLayerContent(root.psbNode, currentTime);
-            // slotDone: type=0 in evaluateLayerContent → visible=false → done
-            root.slotDone = !rootState.visible;
+            // Populate root active clip slot
+            populateSlotFromState(root.activeSlot(), rootState);
             // Map to accumulated state
             root.accumulated.visible = rootState.visible;
             root.accumulated.flipX = rootState.flipX;
@@ -225,19 +271,7 @@ namespace motion {
             node.interpolatedCache.prtZ = state.prtZ;
             node.interpolatedCache.prtRange = state.prtRange;
             node.prtTrigger = state.prtTrigger;
-            // Crossfade easing: binary slot+208 stores the acc (angle curve control).
-            // sub_6BE0C0 at 0x6BEC74 checks slot+224 (= acc type != 0) and applies
-            // sub_69A754 on the acc curve to ease the crossfade ratio.
-            // Propagate acc curve to node for Phase 3 crossfade use.
-            if (!state.acc.empty()) {
-                node.currentSlotHasEasing = true;
-                node.crossfadeEasingCurve.x = state.acc.x;
-                node.crossfadeEasingCurve.y = state.acc.y;
-            } else {
-                node.currentSlotHasEasing = false;
-                node.crossfadeEasingCurve.x.clear();
-                node.crossfadeEasingCurve.y.clear();
-            }
+            // Crossfade easing now stored in ClipSlot via populateSlotFromState.
             // Position easing (ccc) and rotation (cp) for sub_69A4D4 context
             node.interpolatedCache.ccc_x = state.ccc.x;
             node.interpolatedCache.ccc_y = state.ccc.y;
@@ -245,15 +279,7 @@ namespace motion {
             node.interpolatedCache.cp_y = state.cp.y;
             node.interpolatedCache.cp_t = state.cp.t;
             node.interpolatedCache.hasCpRotation = !state.cp.empty();
-            // Dual-slot raw data for sub_6C1540 equivalent (Phase 3 particle emitter)
-            node.interpolatedCache.hasDualSlot = state.hasDualSlot;
-            node.interpolatedCache.dualSlotRatio = state.dualSlotRatio;
-            node.interpolatedCache.slotA_x = state.rawSlotA_x;
-            node.interpolatedCache.slotA_y = state.rawSlotA_y;
-            node.interpolatedCache.slotB_x = state.rawSlotB_x;
-            node.interpolatedCache.slotB_y = state.rawSlotB_y;
-            node.interpolatedCache.slotA_startTime = state.rawSlotA_startTime;
-            node.interpolatedCache.slotB_startTime = state.rawSlotB_startTime;
+
 
             // Populate clipW/clipH from interpolated state (sub_6BC4F0 at 0x6BCB14)
             node.clipW = state.width;
@@ -273,8 +299,8 @@ namespace motion {
                 if (node.clipH <= 0 && srcH > 0) node.clipH = srcH;
             }
 
-            // slotDone: type=0 in evaluateLayerContent → visible=false → done
-            node.slotDone = !state.visible;
+            // Populate active clip slot from evaluated state
+            populateSlotFromState(node.activeSlot(), state);
 
             if (!state.visible) {
                 node.accumulated.visible = false;
@@ -622,7 +648,7 @@ namespace motion {
 
             for (size_t ci = 1; ci < nodes.size(); ++ci) {
                 auto &cn = nodes[ci];
-                if (cn.nodeType != 9 || cn.slotDone || !cn.accumulated.active) continue;
+                if (cn.nodeType != 9 || cn.activeSlot().done || !cn.accumulated.active) continue;
 
                 // Target node: root (node 0). Full impl would look up dtgt.
                 const auto &target = nodes[0];
@@ -795,7 +821,7 @@ namespace motion {
             }
 
             // Non slot-done path: vertex computation (0x6BC8DC..0x6BD730)
-            if (!vn.slotDone) {
+            if (!vn.activeSlot().done) {
                 // Second visibility bitmask check (0x6BCE2C..0x6BCE40)
                 // Non-emote: 7233 = 0x1C41, Emote: 7241 = 0x1C49
                 const int vbm = _runtime->isEmoteMode ? 7241 : 7233;
@@ -1156,7 +1182,7 @@ namespace motion {
             //   else { v9 = stencilType; if (v9) { v9 = active; if (v9) {
             //     if (forceVisible || (bitmask & (1<<nodeType))) v9 = hasSource; } } }
             //   drawFlag = v9;
-            if (node.slotDone) {
+            if (node.activeSlot().done) {
                 node.drawFlag = false;
             } else if (node.stencilType == 0) {
                 // node+52 == 0 → invisible (0x6BD958)
@@ -1279,7 +1305,7 @@ namespace motion {
         // compute shape vertices based on shapeType (0=point,1=circle,2=rect,3=quad).
         for (size_t si = 1; si < nodes.size(); ++si) {
             auto &sn = nodes[si];
-            if (sn.nodeType != 1 || sn.slotDone) continue;
+            if (sn.nodeType != 1 || sn.activeSlot().done) continue;
             sn.shapeGeomType = sn.shapeType;
             switch (sn.shapeType) {
                 case 0: // point (0x6BDF40)
@@ -1372,20 +1398,25 @@ namespace motion {
             // Check slotDone → clear child (0x6BE31C..0x6BE354)
             // Binary: calls cleanup (sub_6C0DE8, sub_6B56F8), releases TJS variants,
             // then goes to LABEL_3 (next loop iteration), SKIPPING frameProgress/updateLayers.
-            if (mn.slotDone) {
+            if (mn.activeSlot().done) {
                 // Binary cleanup at 0x6BE328..0x6BE354:
                 // 1. child._allplaying = false (player+1099)
-                // 2. sub_6C0DE8(child+1296) — timeline cleanup
-                // 3. sub_6B56F8(child) — player cleanup
+                // 2. sub_6C0DE8(child+1296) — resets timeline keyframe data
+                // 3. sub_6B56F8(child) — clears nodes (except root), releases layer IDs,
+                //    resets node tree, clears std::set at player+3..8
                 // 4. Release TJS variants at child+984 and child+976
                 child._allplaying = false;
                 child._queuing = false;
                 mn.childNeedsInit = true;
-                // Reset child runtime state to approximate cleanup functions
+                // Reset child runtime: clear nodes and timelines so next play()
+                // rebuilds from scratch, matching sub_6B56F8 behavior.
                 if (child._runtime) {
-                    for (auto &[name, tl] : child._runtime->timelines) {
-                        tl.currentTime = 0.0;
+                    child._runtime->timelines.clear();
+                    // Keep root node but clear the rest (sub_6B56F8 at 0x6B59E0)
+                    if (child._runtime->nodes.size() > 1) {
+                        child._runtime->nodes.resize(1);
                     }
+                    child._runtime->nodesBuilt = false;
                 }
                 continue;  // skip to next iteration — binary goes to LABEL_3, not LABEL_18
             }
@@ -1398,20 +1429,38 @@ namespace motion {
                     if ((v12 & 5) != 0 || (mn.flags & 0x01)) {
                         mn.flags |= 0x01; // mark as initialized (0x6BE388)
 
-                        // --- Slot flip: save current slot to other slot for crossfade ---
-                        // Before loading new motion, preserve current slot state so the
-                        // crossfade blend (0x6BE85C) can interpolate between old and new.
-                        mn.interpolatedCache.otherSlotDone = mn.slotDone;
-                        mn.interpolatedCache.otherSlotMotionDt = mn.interpolatedCache.motionDt;
-                        mn.interpolatedCache.otherSlotMotionDofst = mn.interpolatedCache.motionDofst;
-                        mn.interpolatedCache.otherSlotStartTime = mn.interpolatedCache.clipStartTime;
-                        mn.currentSlotCrossfading = true;
+                        // --- Slot flip: flip activeSlotIndex so old data is preserved ---
+                        // The current active slot (with old data) becomes the other slot.
+                        // New data will be written to the new active slot.
+                        mn.activeSlotIndex ^= 1;
+                        mn.activeSlot().crossfading = true;
 
                         // Resolve motion and play (0x6BE3B4..0x6BE46C)
-                        // Binary: prepends "/" to src, then calls Player_play(child, motionFlags | v12, "/" + src)
-                        child.setChara(_chara);
-                        child.onFindMotion(detail::widen("/" + src),
-                                           mn.interpolatedCache.motionFlags | v12);
+                        // Binary: splits src by "/" via sub_697D34.
+                        // 1-element (no "/"): sub_6B29C0(child, 0, src) + Player_play(child, flags, src)
+                        //   → setChara(src), play the motion named src
+                        // 2-element ("chara/motion"): sub_6B29C0(child, 0, split[1]) + Player_play(child, flags, split[2])
+                        //   → setChara(split[0]=chara part), play motion split[1]
+                        {
+                            auto slashPos = src.find('/');
+                            if (slashPos == std::string::npos) {
+                                // Single segment: binary sets chara to src itself
+                                child.setChara(detail::widen(src));
+                                child.onFindMotion(detail::widen("/" + src),
+                                                   mn.interpolatedCache.motionFlags | v12);
+                            } else {
+                                // Multi-segment: "chara/motion" format
+                                std::string charaPart = src.substr(0, slashPos);
+                                std::string motionPart = src.substr(slashPos + 1);
+                                child.setChara(detail::widen(charaPart));
+                                child.onFindMotion(detail::widen("/" + motionPart),
+                                                   mn.interpolatedCache.motionFlags | v12);
+                            }
+                        }
+                        // Stealth motion (0x6BE41C..0x6BE44C): binary plays stealth if set
+                        if (!_stealthMotion.IsEmpty()) {
+                            child.onFindMotion(_stealthMotion, PlayFlagStealth);
+                        }
                         mn.childNeedsInit = false;
 
                         // Time sync from parent loop time (0x6BE478..0x6BE4E8)
@@ -1445,7 +1494,8 @@ namespace motion {
                                 child._allplaying = true;
                                 child._queuing = true;
                             }
-                            if (!_allplaying) {
+                            // Binary: if (!*(byte*)(v4 + 480)) — checks _queuing (0x6BE4EC)
+                            if (!_queuing) {
                                 child._needsInternalAssignImages = true;
                             }
                         }
@@ -1465,21 +1515,21 @@ namespace motion {
                 // old and new slot values using time-based ratio.
                 double v37 = dofst;
                 if (mn.interpolatedCache.motionDocmpl
-                    && mn.currentSlotCrossfading
-                    && !mn.interpolatedCache.otherSlotDone
-                    && mn.interpolatedCache.otherSlotMotionDt != 0) {
+                    && mn.activeSlot().crossfading
+                    && !mn.otherSlot().done
+                    && mn.otherSlot().motionDt != 0) {
                     double parentTime = _frameLoopTime;
                     double currentStart = mn.interpolatedCache.clipStartTime;
-                    double otherStart = mn.interpolatedCache.otherSlotStartTime;
+                    double otherStart = mn.otherSlot().clipStartTime;
                     double denom = otherStart - currentStart;
                     if (denom != 0.0) {
                         double ratio = (parentTime - currentStart) / denom;
                         // Binary at 0x6BEC74: apply bezier easing if slot has it
-                        if (mn.currentSlotHasEasing && !mn.crossfadeEasingCurve.empty()) {
-                            ratio = evaluateBezierCurve(mn.crossfadeEasingCurve, ratio);
+                        if (mn.activeSlot().hasEasing && !mn.activeSlot().acc.empty()) {
+                            ratio = evaluateBezierCurve(mn.activeSlot().acc, ratio);
                         }
                         // Binary does NOT clamp ratio to [0,1] (0x6BEC9C).
-                        double otherDofst = mn.interpolatedCache.otherSlotMotionDofst;
+                        double otherDofst = mn.otherSlot().motionDofst;
                         // Wrap angle difference > 180 degrees for shortest-path interpolation
                         if (dofst >= otherDofst) {
                             if (dofst - otherDofst > 180.0) otherDofst += 360.0;
@@ -1504,6 +1554,7 @@ namespace motion {
 
                     switch (effectiveMode) {
                     case 1: // Direct angle (0x6BE5BC)
+                        // Binary does NOT normalize case 1 to [0,360).
                         computedAngle = dofst + mn.accumulated.angle;
                         hasAngle = true;
                         break;
@@ -1527,55 +1578,50 @@ namespace motion {
                         // Otherwise: compute ratio from parent time, call sub_69A4D4
                         // twice (at t and t+0.0001) for finite-difference derivative,
                         // then atan2 on delta based on coordinateMode.
-                        if (!mn.currentSlotCrossfading
-                            || mn.interpolatedCache.otherSlotDone) {
+                        if (!mn.activeSlot().crossfading
+                            || mn.otherSlot().done) {
                             // Guard fails → LABEL_119: hasAngle=false
                             break;
                         }
                         // Parent time (0x6BE688..0x6BE6B0): node+8 ? *(node+8)+40 : player+57*8
                         double parentTime = _frameLoopTime;
                         double currentStart = mn.interpolatedCache.clipStartTime;
-                        double otherStart = mn.interpolatedCache.otherSlotStartTime;
+                        double otherStart = mn.otherSlot().clipStartTime;
                         double denom = otherStart - currentStart;
                         if (denom == 0.0) break;
                         double ratio = (parentTime - currentStart) / denom;
                         double t2 = ratio + 0.0001;
                         if (t2 >= 1.0) ratio = 0.9999;
                         t2 = std::min(t2, 1.0);
-                        // sub_69A4D4 equivalent: position interpolation with ccc easing + cp rotation.
-                        // Binary: calls sub_69A4D4(slot+168, otherSlot+96, slot+96, &out, coordMode, slot+268, t)
+                        // sub_69A4D4: interpolate between slot positions.
+                        // src = currentSlot+96 = current evaluated position
+                        // dst = otherSlot+96 = position from before crossfade
                         const auto &cache = mn.interpolatedCache;
-                        if (cache.hasDualSlot) {
-                            // Build ccc curve for easing (slot+168)
-                            BezierCurve cccCurve;
-                            cccCurve.x = cache.ccc_x; cccCurve.y = cache.ccc_y;
-                            // Build cp curve for rotation (slot+268)
-                            ControlPointCurve cpCurve;
-                            if (cache.hasCpRotation) {
-                                cpCurve.x = cache.cp_x; cpCurve.y = cache.cp_y;
-                                cpCurve.t = cache.cp_t;
-                                // Note: cp.s segments not cached — rotation falls to linear
-                                // for the cubic spline sub-evaluation. Main bezier still works.
-                            }
-                            double src[3] = {cache.slotA_x, cache.slotA_y, 0.0};
-                            double dst[3] = {cache.slotB_x, cache.slotB_y, 0.0};
-                            double out1[3] = {}, out2[3] = {};
-                            interpolatePosition69A4D4(cccCurve, dst, src, out1, mn.coordinateMode, cpCurve, ratio);
-                            interpolatePosition69A4D4(cccCurve, dst, src, out2, mn.coordinateMode, cpCurve, t2);
-                            // Pick dx/dy based on coordinateMode (0x6BE72C..0x6BE740)
-                            double dx_comp, dy_comp;
-                            if (mn.coordinateMode == 1) {
-                                dx_comp = out2[0] - out1[0]; dy_comp = out2[2] - out1[2];
-                            } else if (mn.coordinateMode == 0) {
-                                dx_comp = out2[0] - out1[0]; dy_comp = out2[1] - out1[1];
-                            } else {
-                                hasAngle = true;
-                                break; // LABEL_129
-                            }
-                            computedAngle = v37 + std::atan2(dy_comp, dx_comp) * 360.0 / 6.28318531;
-                            hasAngle = true;
+                        BezierCurve cccCurve;
+                        cccCurve.x = cache.ccc_x; cccCurve.y = cache.ccc_y;
+                        ControlPointCurve cpCurve;
+                        if (cache.hasCpRotation) {
+                            cpCurve.x = cache.cp_x; cpCurve.y = cache.cp_y;
+                            cpCurve.t = cache.cp_t;
                         }
-                        // If no dual slot data, hasAngle stays false
+                        // Use crossfade slot positions: src=current, dst=other (saved at flip)
+                        double src[3] = {cache.x, cache.y, 0.0};
+                        double dst[3] = {mn.otherSlot().x, mn.otherSlot().y, mn.otherSlot().z};
+                        double out1[3] = {}, out2[3] = {};
+                        interpolatePosition69A4D4(cccCurve, dst, src, out1, mn.coordinateMode, cpCurve, ratio);
+                        interpolatePosition69A4D4(cccCurve, dst, src, out2, mn.coordinateMode, cpCurve, t2);
+                        // Pick dx/dy based on coordinateMode (0x6BE72C..0x6BE740)
+                        double dx_comp, dy_comp;
+                        if (mn.coordinateMode == 1) {
+                            dx_comp = out2[0] - out1[0]; dy_comp = out2[2] - out1[2];
+                        } else if (mn.coordinateMode == 0) {
+                            dx_comp = out2[0] - out1[0]; dy_comp = out2[1] - out1[1];
+                        } else {
+                            hasAngle = true;
+                            break; // LABEL_129
+                        }
+                        computedAngle = v37 + std::atan2(dy_comp, dx_comp) * 360.0 / 6.28318531;
+                        hasAngle = true;
                         break;
                     }
                     case 4: { // Target node lookup (0x6BE7B4)
@@ -1603,9 +1649,12 @@ namespace motion {
                     }
                     default: break; // LABEL_119: hasAngle=false
                     }
-                    // Normalize to [0, 360) (0x6BECA4..0x6BECB8)
-                    while (computedAngle < 0.0) computedAngle += 360.0;
-                    while (computedAngle >= 360.0) computedAngle -= 360.0;
+                    // Binary normalizes per-case (cases 2,3,4 each have inline loops).
+                    // Case 1 does NOT normalize. Skip normalization for case 1.
+                    if (effectiveMode != 1) {
+                        while (computedAngle < 0.0) computedAngle += 360.0;
+                        while (computedAngle >= 360.0) computedAngle -= 360.0;
+                    }
                 }
 
                 // === Origin offset (0x6BE994..0x6BE9F4) ===
@@ -1752,7 +1801,7 @@ namespace motion {
                     }
                 }
                 // Step child: frameProgress + updateLayers (0x6BE2A4..0x6BE2AC)
-                child._independentLayerInherit = _independentLayerInherit;
+                // Binary does NOT propagate _independentLayerInherit to child.
                 child.frameProgress(_frameLastTime);
                 if (child._runtime && !child._runtime->nodes.empty()) {
                     child.updateLayers(currentTime);
@@ -1773,7 +1822,7 @@ namespace motion {
             if (en.nodeType != 6) continue;
 
             // Active/slotDone guard (0x6BEE90..0x6BEEC4)
-            if (!en.accumulated.active || en.slotDone) {
+            if (!en.accumulated.active || en.activeSlot().done) {
                 en.emitterActive = false;
                 en.emitterDtgt.clear();
                 en.emitterTimer = 0.0;
@@ -1815,7 +1864,11 @@ namespace motion {
                 // LABEL_27 (0x6BEF88): emitterTimer = _frameLastTime + emitterTimer
                 en.emitterTimer += _frameLastTime;
             } else {
-                // LABEL_21 (0x6BEF48): re-resolve dtgt, compute time offset
+                // LABEL_21 (0x6BEF48): re-resolve dtgt, compute time offset.
+                // This is equivalent to a clip slot flip for the emitter.
+                // Slot flip: preserve current data as other slot for crossfade.
+                en.activeSlotIndex ^= 1;
+                en.activeSlot().crossfading = true;
                 en.emitterActive = true;
                 en.emitterDtgt = dtgt;
                 // Timer = (parentTime - clipSlot.startTime) + clipSlot.timeOffset
@@ -1855,50 +1908,20 @@ namespace motion {
             }
             case 3: {
                 // LABEL_36 (0x6BF028): sub_6C1540 equivalent.
-                // Compute position derivative via dual-slot finite difference.
-                // sub_6C1540 guard: crossfading && !otherSlotDone (0x6C1574).
-                const auto &cache = en.interpolatedCache;
-                if (cache.hasDualSlot) {
-                    constexpr double epsilon = 0.0001;
-                    double t1 = std::min(cache.dualSlotRatio, 0.9999);
-                    double t2 = std::min(t1 + epsilon, 1.0);
-                    // sub_69A4D4 with ccc easing + cp rotation (0x6C15EC..0x6C160C)
-                    BezierCurve cccCurve;
-                    cccCurve.x = cache.ccc_x; cccCurve.y = cache.ccc_y;
-                    ControlPointCurve cpCurve;
-                    if (cache.hasCpRotation) {
-                        cpCurve.x = cache.cp_x; cpCurve.y = cache.cp_y;
-                        cpCurve.t = cache.cp_t;
-                    }
-                    double src[3] = {cache.slotA_x, cache.slotA_y, 0.0};
-                    double dst[3] = {cache.slotB_x, cache.slotB_y, 0.0};
-                    double out1[3] = {}, out2[3] = {};
-                    interpolatePosition69A4D4(cccCurve, dst, src, out1,
-                        en.coordinateMode, cpCurve, t1);
-                    interpolatePosition69A4D4(cccCurve, dst, src, out2,
-                        en.coordinateMode, cpCurve, t2);
-                    en.emitterOffsetActive = true;
-                    en.emitterOffsetX = out2[0] - out1[0];
-                    en.emitterOffsetY = out2[1] - out1[1];
-                    en.emitterOffsetZ = out2[2] - out1[2];
-                }
-                // When hasDualSlot is false, sub_6C1540's guard fails →
-                // offset stays inactive (0x6C1574).
-                break;
-            }
-            case 2: {
-                // (0x6BEFF0..0x6BF020)
-                // Binary checks player+608 (_noUpdateYet) OR emitterTimer==0 (0x6BEFF4)
-                if (_noUpdateYet || en.emitterTimer == 0.0) {
-                    // Queuing or zero timer → same as case 3: sub_6C1540
-                    // sub_6C1540 guard: hasDualSlot && !otherSlotDone. If guard
-                    // fails, returns without writing → offset stays inactive.
-                    // Same as case 3: sub_6C1540 with sub_69A4D4
+                // sub_6C1540 guard at 0x6C1574: *(a3+25) [crossfading] && !*(a4+24) [otherSlotDone].
+                // ratio at 0x6C15A8: (player+456 - currentSlot.startTime) / (otherSlot.startTime - currentSlot.startTime)
+                // src = currentSlot+96 (current evaluated position), dst = otherSlot+96 (saved at crossfade start).
+                if (en.activeSlot().crossfading && !en.otherSlot().done) {
                     const auto &cache = en.interpolatedCache;
-                    if (cache.hasDualSlot) {
+                    double currentStart = cache.clipStartTime;
+                    double otherStart = en.otherSlot().clipStartTime;
+                    double denom = otherStart - currentStart;
+                    if (denom != 0.0) {
                         constexpr double epsilon = 0.0001;
-                        double t1 = std::min(cache.dualSlotRatio, 0.9999);
-                        double t2 = std::min(t1 + epsilon, 1.0);
+                        double ratio = (_frameLoopTime - currentStart) / denom;
+                        double t2 = ratio + epsilon;
+                        if (t2 >= 1.0) ratio = 0.9999;
+                        t2 = std::min(t2, 1.0);
                         BezierCurve cccCurve;
                         cccCurve.x = cache.ccc_x; cccCurve.y = cache.ccc_y;
                         ControlPointCurve cpCurve;
@@ -1906,17 +1929,58 @@ namespace motion {
                             cpCurve.x = cache.cp_x; cpCurve.y = cache.cp_y;
                             cpCurve.t = cache.cp_t;
                         }
-                        double src[3] = {cache.slotA_x, cache.slotA_y, 0.0};
-                        double dst[3] = {cache.slotB_x, cache.slotB_y, 0.0};
+                        // src = current slot position, dst = other slot position (saved at flip)
+                        double src[3] = {cache.x, cache.y, 0.0};
+                        double dst[3] = {en.otherSlot().x, en.otherSlot().y, en.otherSlot().z};
                         double out1[3] = {}, out2[3] = {};
                         interpolatePosition69A4D4(cccCurve, dst, src, out1,
-                            en.coordinateMode, cpCurve, t1);
+                            en.coordinateMode, cpCurve, ratio);
                         interpolatePosition69A4D4(cccCurve, dst, src, out2,
                             en.coordinateMode, cpCurve, t2);
                         en.emitterOffsetActive = true;
                         en.emitterOffsetX = out2[0] - out1[0];
                         en.emitterOffsetY = out2[1] - out1[1];
                         en.emitterOffsetZ = out2[2] - out1[2];
+                    }
+                }
+                break;
+            }
+            case 2: {
+                // (0x6BEFF0..0x6BF020)
+                // Binary checks player+608 (_noUpdateYet) OR emitterTimer==0 (0x6BEFF4)
+                if (_noUpdateYet || en.emitterTimer == 0.0) {
+                    // Queuing or zero timer → same as case 3: sub_6C1540
+                    // sub_6C1540 guard: crossfading && !otherSlotDone (0x6C1574)
+                    if (en.activeSlot().crossfading && !en.otherSlot().done) {
+                        const auto &cache = en.interpolatedCache;
+                        double currentStart = cache.clipStartTime;
+                        double otherStart = en.otherSlot().clipStartTime;
+                        double denom = otherStart - currentStart;
+                        if (denom != 0.0) {
+                            constexpr double epsilon = 0.0001;
+                            double ratio = (_frameLoopTime - currentStart) / denom;
+                            double t2 = ratio + epsilon;
+                            if (t2 >= 1.0) ratio = 0.9999;
+                            t2 = std::min(t2, 1.0);
+                            BezierCurve cccCurve;
+                            cccCurve.x = cache.ccc_x; cccCurve.y = cache.ccc_y;
+                            ControlPointCurve cpCurve;
+                            if (cache.hasCpRotation) {
+                                cpCurve.x = cache.cp_x; cpCurve.y = cache.cp_y;
+                                cpCurve.t = cache.cp_t;
+                            }
+                            double src[3] = {cache.x, cache.y, 0.0};
+                            double dst[3] = {en.otherSlot().x, en.otherSlot().y, en.otherSlot().z};
+                            double out1[3] = {}, out2[3] = {};
+                            interpolatePosition69A4D4(cccCurve, dst, src, out1,
+                                en.coordinateMode, cpCurve, ratio);
+                            interpolatePosition69A4D4(cccCurve, dst, src, out2,
+                                en.coordinateMode, cpCurve, t2);
+                            en.emitterOffsetActive = true;
+                            en.emitterOffsetX = out2[0] - out1[0];
+                            en.emitterOffsetY = out2[1] - out1[1];
+                            en.emitterOffsetZ = out2[2] - out1[2];
+                        }
                     }
                 } else {
                     // Non-queuing, timer running: binary reads node+176/184/192
@@ -1948,10 +2012,50 @@ namespace motion {
             auto &pn = nodes[pi];
             if (pn.nodeType != 4) continue;
 
-            // Guard: inactive or slotDone => clear (0x6BF298)
-            if (!pn.accumulated.active || pn.slotDone) {
-                pn.particleChildren.clear();
+            // Guard: inactive or slotDone (0x6BF298)
+            // Binary does NOT clear particleChildren here — it jumps to LABEL_64
+            // which checks activity, then falls through to physics step (sub_6C17A4).
+            // Existing particles keep running and are removed naturally when they stop playing.
+            if (!pn.accumulated.active || pn.activeSlot().done) {
                 pn.particleEmitterFlagActive = false;
+                // Skip emission control, go straight to physics step.
+                // Using a block with duplicate physics_step code to avoid goto across declarations.
+                {
+                    for (auto it = pn.particleChildren.begin(); it != pn.particleChildren.end(); ) {
+                        auto &child = *it;
+                        if (!child || !child->_runtime || child->_runtime->nodes.empty()) {
+                            it = pn.particleChildren.erase(it); continue;
+                        }
+                        if (child->_allplaying) {
+                            if (pn.particleDeleteOutside) {
+                                const double bMinX = child->_boundsMinX, bMinY = child->_boundsMinY;
+                                const double bMaxX = child->_boundsMaxX, bMaxY = child->_boundsMaxY;
+                                if (bMaxX >= bMinX && bMaxY >= bMinY) {
+                                    const double sw = _runtime->width > 0 ? _runtime->width : 1024.0;
+                                    const double sh = _runtime->height > 0 ? _runtime->height : 768.0;
+                                    if (!(bMaxY > 0.0 && bMinX < sw && bMaxX > 0.0 && bMinY < sh)) {
+                                        it = pn.particleChildren.erase(it); continue;
+                                    }
+                                }
+                            }
+                            ++it;
+                        } else {
+                            it = pn.particleChildren.erase(it);
+                        }
+                    }
+                    for (auto &child : pn.particleChildren) {
+                        if (!child || !child->_runtime) continue;
+                        child->_zFactor = _zFactor;
+                        if (!child->_runtime->nodes.empty()) {
+                            auto &cr = child->_runtime->nodes[0];
+                            cr.parentClipIndex = pn.parentClipIndex;
+                            cr.visibleAncestorIndex = pn.visibleAncestorIndex;
+                        }
+                        child->frameProgress(_frameLastTime);
+                        if (!child->_runtime->nodes.empty())
+                            child->updateLayers(currentTime);
+                    }
+                }
                 continue;
             }
 
@@ -1962,7 +2066,7 @@ namespace motion {
             // If != 2: goto LABEL_64 (skip ALL child position updates).
             // If == 2: check !slotDone && particleInheritAngle for full matrix update;
             // otherwise just add deltaPos to existing children (0x6BF32C..0x6BF384).
-            if (pn.particleInheritVelocity == 2 && childCount >= 1 && !pn.slotDone && pn.particleInheritAngle) {
+            if (pn.particleInheritVelocity == 2 && childCount >= 1 && !pn.activeSlot().done && pn.particleInheritAngle) {
                 const double curM11 = pn.accumulated.m11, curM21 = pn.accumulated.m21;
                 const double curM12 = pn.accumulated.m12, curM22 = pn.accumulated.m22;
 
@@ -2131,23 +2235,29 @@ namespace motion {
             }
 
             // ====== BLOCK 3: Particle creation (0x6BF810..0x6C02DC) ======
-            // Binary creates exactly 1 particle per emission per frame (0x6C026C).
-            // emitCount > 1 means "more to emit next frame"; physics is skipped.
+            // Binary creates exactly 1 particle per frame per node.
+            // When srcList is empty (v85==0), skip creation and run ONE physics step (0x6C02D0).
+            // When emitCount > 1, physics is skipped; next frame creates another particle.
             if (emitCount > 0) {
-                // 3a. Resolve motion path from interpolatedCache
-                // Binary (0x6BF810..0x6BF8FC): treats src as a TJS Array at node+2200.
-                // If array count > 0, randomly selects one entry, then splits by "/".
-                // If array count == 0, goes to physics step (LABEL_178).
+                // 3a. Resolve srcList count (0x6BF810..0x6BF87C)
                 const auto &srcList = pn.interpolatedCache.srcList;
-                std::string selectedSrc;
-                if (!srcList.empty()) {
-                    // Random selection from array (0x6BF87C: v86 = random() * v85)
-                    int idx = static_cast<int>(random() * srcList.size());
-                    if (idx >= static_cast<int>(srcList.size())) idx = static_cast<int>(srcList.size()) - 1;
-                    selectedSrc = srcList[idx];
-                } else {
-                    selectedSrc = pn.interpolatedCache.src;
+                const int srcListCount = static_cast<int>(srcList.size());
+
+                // Binary: if srcList count==0, skip creation entirely (0x6C02D0).
+                // The binary decrements emitCount to 0 (a no-op loop), then runs
+                // ONE physics step. No particles are created.
+                if (srcListCount == 0) {
+                    goto physics_step;
                 }
+
+                // Binary creates exactly 1 particle per frame per node (0x6BF810..0x6C02DC).
+                // emitCount > 1 just means "skip physics this frame" (0x6C0270).
+                {
+
+                // Random selection from srcList (0x6BF87C: v86 = random() * v85)
+                int idx = static_cast<int>(random() * srcListCount);
+                if (idx >= srcListCount) idx = srcListCount - 1;
+                const std::string &selectedSrc = srcList[idx];
                 if (selectedSrc.empty()) goto physics_step;
 
                 // Handle "chara/motion" format (binary: sub_697D34 splits by "/")
@@ -2167,14 +2277,41 @@ namespace motion {
                 // Binary: chara comes from the split path, not parent chara
                 child->setChara(particleChara.empty() ? _chara : detail::widen(particleChara));
                 child->onFindMotion(detail::widen("/" + motionPath));
+                // Stealth motion (0x6BFA08..0x6BFA40): binary checks child+776
+                // (stealth motion path) and plays it with flag 0x10. In our arch,
+                // propagate parent stealth fields so child resolves stealth if set.
+                child->_stealthChara = _stealthChara;
+                child->_stealthMotion = _stealthMotion;
+                if (!_stealthMotion.IsEmpty()) {
+                    child->onFindMotion(_stealthMotion, PlayFlagStealth);
+                }
+                // _parentColorPacked propagation (0x6BF9B4)
+                {
+                    uint32_t packed;
+                    std::memcpy(&packed, &pn.colorBytes[0], sizeof(uint32_t));
+                    child->_parentColorPacked = packed;
+                }
+                // emoteEdit propagation (0x6BF9C0..0x6BF9D4)
+                child->_emoteEditVariant = _emoteEditVariant;
                 child->_zFactor = _zFactor;
                 child->_independentLayerInherit = _independentLayerInherit;
 
-                // Set blendMode (0x6BFAA8..0x6BFAC4)
+                // Set blendMode on child root node accumulated state (0x6BFAA8..0x6BFAC4)
+                // Binary writes to *(v99+1656) = root node accumulated blendMode, not interpolatedCache.
                 if (child->_runtime && !child->_runtime->nodes.empty()) {
                     auto &cr = child->_runtime->nodes[0];
-                    cr.interpolatedCache.blendMode = pn.interpolatedCache.blendMode;
+                    auto blendVal = pn.interpolatedCache.blendMode;
+                    if (cr.accumulated.blendMode != blendVal) {
+                        cr.accumulated.dirty = true;
+                        cr.accumulated.blendMode = blendVal;
+                    }
                 }
+
+                // Stealth motion play (0x6BFA08..0x6BFA40)
+                // Binary: if child+776 (stealth path) exists, play it with flags=16
+                // In our architecture, stealth is stored at player level.
+                // The binary copies the stealth path from the resource manager state.
+                // For web port, stealth motion is rarely used; skip for now.
 
                 // 3c. Position based on flyDirection (0x6BFAC8..0x6BFC88)
                 double offX = 0, offY = 0, offZ = 0;
@@ -2186,9 +2323,10 @@ namespace motion {
 
                 if (flyDir == 2) {
                     // Uniform box (0x6BFB88..0x6BFBCC)
-                    // Binary RNG order: r1→offY, r2→offX, r3→offZ (0x6BFB88)
-                    offY = random() * 32.0 - 16.0;
-                    offX = random() * 32.0 - 16.0;
+                    // Binary RNG order: r1→offX (v110→v168), r2→offY (v167) (0x6BFB88)
+                    double r1 = random();
+                    offY = random() * 32.0 - 16.0;  // r2→offY (v167)
+                    offX = r1 * 32.0 - 16.0;         // r1→offX (v168)
                     if (has3D) offZ = random() * 32.0 - 16.0;
                 } else if (flyDir == 1) {
                     // 3D sphere (0x6BFAE4..0x6BFB78)
@@ -2338,16 +2476,33 @@ namespace motion {
                     }
                     while (childAngle < 0.0) childAngle += 360.0;
                     while (childAngle >= 360.0) childAngle -= 360.0;
-                    cr.accumulated.angle = childAngle;
+
+                    // _directEdit check (0x6C0058): binary writes to player+464 and
+                    // calls Player_initEmoteMotion if child._directEdit is true
+                    if (child->_directEdit) {
+                        // Emote mode angle path (0x6C0088..0x6C00AC)
+                        double k = childAngle;
+                        while (k < 0.0) k += 360.0;
+                        while (k >= 360.0) k -= 360.0;
+                        // player+464 = emote angle — not mapped in web port
+                        // Player_initEmoteMotion(child, 2) — N/A for web
+                    } else {
+                        // Normal angle path (0x6C0060..0x6C0078)
+                        if (cr.accumulated.angle != childAngle) {
+                            cr.accumulated.dirty = true;
+                            cr.accumulated.angle = childAngle;
+                        }
+                    }
 
                     // 3j. Zoom lerp — AFTER angle (0x6C00B0..0x6C00D8)
                     double zoom = pn.interpolatedCache.prtZmin;
                     if (zoom != pn.interpolatedCache.prtZ)
                         zoom = zoom + (pn.interpolatedCache.prtZ - zoom) * random();
-                    cr.accumulated.scaleX = zoom;
-                    cr.accumulated.scaleY = zoom;
-                    // Note: binary does NOT set opacity/active/visible here.
-                    // Child player's own init pipeline handles these.
+                    if (cr.accumulated.scaleX != zoom || cr.accumulated.scaleY != zoom) {
+                        cr.accumulated.dirty = true;
+                        cr.accumulated.scaleX = zoom;
+                        cr.accumulated.scaleY = zoom;
+                    }
 
                     // 3j. particleApplyZoomToVelocity on child velocity (0x6C0110..0x6C0168)
                     // Binary gate: particleFlyDirection != 2 (0x6C0110)
@@ -2388,8 +2543,10 @@ namespace motion {
 
                 // Physics only when emitCount <= 1 (0x6C026C: CMP W20, #1; B.GT)
                 if (emitCount <= 1) goto physics_step;
-                // emitCount > 1: skip physics this frame, advance to next node
+                // emitCount > 1: skip physics this frame, advance to next node.
+                // Next frame will create another particle.
                 continue;
+                } // end creation block
             }
 
         physics_step:
