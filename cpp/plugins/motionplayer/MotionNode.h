@@ -166,6 +166,7 @@ namespace motion::detail {
         int particleFlyDirection = 0;      // node+2180
         int particleApplyZoomToVelocity = 0; // node+2184
         bool particleDeleteOutside = false;  // node+2188
+        bool particleTriVolume = false;    // node+2189: PSB "particleTriVolume", 3D particle flag
         // Previous frame matrix for change detection (node+2320..2336)
         double prevM11 = 1.0, prevM21 = 0.0;
         double prevM12 = 0.0, prevM22 = 1.0;
@@ -257,6 +258,18 @@ namespace motion::detail {
             double prtZmin = 1.0;
             double prtZ = 1.0;
             double prtRange = 0.0;
+            // --- Dual-slot raw data for sub_6C1540 equivalent ---
+            // Stored during Phase 2 evaluateLayerContent when type==3 (interpolate).
+            // Phase 3 particle emitter uses these to compute position derivative.
+            bool hasDualSlot = false;      // true when both slots are valid
+            double dualSlotRatio = 0.0;    // t ∈ [0,1] interpolation ratio
+            // Raw position from slotA (current keyframe, pre-interpolation)
+            double slotA_x = 0.0, slotA_y = 0.0;
+            // Raw position from slotB (next keyframe)
+            double slotB_x = 0.0, slotB_y = 0.0;
+            // Clip start times for both slots
+            double slotA_startTime = 0.0;
+            double slotB_startTime = 0.0;
         } interpolatedCache;
     };
 

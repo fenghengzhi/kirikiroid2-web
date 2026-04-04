@@ -224,6 +224,15 @@ namespace motion {
             node.interpolatedCache.prtZ = state.prtZ;
             node.interpolatedCache.prtRange = state.prtRange;
             node.prtTrigger = state.prtTrigger;
+            // Dual-slot raw data for sub_6C1540 equivalent (Phase 3 particle emitter)
+            node.interpolatedCache.hasDualSlot = state.hasDualSlot;
+            node.interpolatedCache.dualSlotRatio = state.dualSlotRatio;
+            node.interpolatedCache.slotA_x = state.rawSlotA_x;
+            node.interpolatedCache.slotA_y = state.rawSlotA_y;
+            node.interpolatedCache.slotB_x = state.rawSlotB_x;
+            node.interpolatedCache.slotB_y = state.rawSlotB_y;
+            node.interpolatedCache.slotA_startTime = state.rawSlotA_startTime;
+            node.interpolatedCache.slotB_startTime = state.rawSlotB_startTime;
 
             // Populate clipW/clipH from interpolated state (sub_6BC4F0 at 0x6BCB14)
             node.clipW = state.width;
@@ -1543,22 +1552,27 @@ namespace motion {
                     cr.visibleAncestorIndex = mn.visibleAncestorIndex;
                 }
 
-                // === Step child (0x6BE2A4..0x6BE2AC) ===
+            }
+            // Fall through to label_18 (matches binary: active path → LABEL_18)
+
+        label_18:
+            // LABEL_18: shared exit for ALL paths (0x6BE278..0x6BE2F8).
+            // Binary always calls frameProgress + updateLayers on child,
+            // even for inactive/non-visible nodes.
+            if (mn.childPlayer) {
+                auto &child = *mn.childPlayer;
+                if (child._runtime && !child._runtime->nodes.empty()) {
+                    auto &cr = child._runtime->nodes[0];
+                    // Clip chain propagation (0x6BE278..0x6BE29C)
+                    cr.parentClipIndex = mn.parentClipIndex;
+                    cr.visibleAncestorIndex = mn.visibleAncestorIndex;
+                }
+                // Step child: frameProgress + updateLayers (0x6BE2A4..0x6BE2AC)
                 child._independentLayerInherit = _independentLayerInherit;
-                child.frameProgress(_frameLastTime);  // NOT 0.0!
+                child.frameProgress(_frameLastTime);
                 if (child._runtime && !child._runtime->nodes.empty()) {
                     child.updateLayers(currentTime);
                 }
-            }
-            continue;
-
-        label_18:
-            // Minimal propagation for inactive nodes (0x6BE278)
-            if (mn.childPlayer && mn.childPlayer->_runtime &&
-                !mn.childPlayer->_runtime->nodes.empty()) {
-                auto &cr = mn.childPlayer->_runtime->nodes[0];
-                cr.parentClipIndex = mn.parentClipIndex;
-                cr.visibleAncestorIndex = mn.visibleAncestorIndex;
             }
         }
 
@@ -1592,12 +1606,12 @@ namespace motion {
             }
 
             // Flags gate + re-resolve logic (0x6BEED8..0x6BEF9C)
-            // Key insight: node+44 (flags) gates whether we re-check dtgt.
+            // Binary checks whole byte at node+44: LDRB W9,[X21,#0x2C]; CBZ W9
             // If flags==0: always LABEL_27 (continue, just accumulate timer).
             // If flags!=0: check emitterActive + dtgt comparison.
             bool doAccumulate; // true=LABEL_27 (timer += dt), false=LABEL_21 (re-resolve)
 
-            if (!(en.flags & 0x01)) {
+            if (!en.flags) {
                 // node+44 flags == 0: skip re-resolve → LABEL_27 (0x6BEEE0)
                 doAccumulate = true;
             } else if (!en.emitterActive) {
@@ -1626,7 +1640,10 @@ namespace motion {
                 //   v21 = parentTime - slot+328
                 //   v22 = &(slot+728)
                 //   timer = v21 + *v22
-                double parentTime = _loopTime;  // player._currentTime equivalent
+                // Binary: parentTime = node+8 ? *(node+8+40) : player+1120
+                // node+8 is parent pointer (deque parent node or NULL).
+                // Our arch has no parent pointer per node; _loopTime = player+1120 fallback.
+                double parentTime = _loopTime;
                 double startTime = en.interpolatedCache.clipStartTime;
                 double timeOffset = en.interpolatedCache.motionTimeOffset;
                 en.emitterTimer = (parentTime - startTime) + timeOffset;
@@ -1652,27 +1669,59 @@ namespace motion {
                 break;
             }
             case 3: {
-                // Interpolated emit via sub_6C1540 (0x6BF028)
-                // sub_6C1540 interpolates between two clip slot positions at
-                // current time and computes position derivative as emit offset.
-                // In our single-slot architecture, approximate with delta position.
-                en.emitterOffsetActive = true;
-                en.emitterOffsetX = en.deltaPosX;
-                en.emitterOffsetY = en.deltaPosY;
-                en.emitterOffsetZ = en.deltaPosZ;
-                break;
-            }
-            case 2: {
-                // Timer/queuing mode (0x6BEFF0..0x6BF020)
-                if (_queuing || en.emitterTimer == 0.0) {
-                    // Same as case 3: call sub_6C1540
+                // LABEL_36 (0x6BF028): sub_6C1540 equivalent.
+                // Compute position derivative via dual-slot finite difference.
+                // sub_6C1540: pos(t+ε)-pos(t) using linear position interpolation
+                // between slotA and slotB positions.
+                const auto &cache = en.interpolatedCache;
+                if (cache.hasDualSlot) {
+                    constexpr double epsilon = 0.0001;
+                    double t1 = std::min(cache.dualSlotRatio, 0.9999);
+                    double t2 = std::min(t1 + epsilon, 1.0);
+                    // Linear position interpolation at t1 and t2
+                    double x1 = cache.slotA_x + (cache.slotB_x - cache.slotA_x) * t1;
+                    double y1 = cache.slotA_y + (cache.slotB_y - cache.slotA_y) * t1;
+                    double x2 = cache.slotA_x + (cache.slotB_x - cache.slotA_x) * t2;
+                    double y2 = cache.slotA_y + (cache.slotB_y - cache.slotA_y) * t2;
+                    en.emitterOffsetActive = true;
+                    en.emitterOffsetX = x2 - x1;
+                    en.emitterOffsetY = y2 - y1;
+                    en.emitterOffsetZ = 0.0;
+                } else {
+                    // No dual-slot data: fallback to delta position
                     en.emitterOffsetActive = true;
                     en.emitterOffsetX = en.deltaPosX;
                     en.emitterOffsetY = en.deltaPosY;
                     en.emitterOffsetZ = en.deltaPosZ;
+                }
+                break;
+            }
+            case 2: {
+                // (0x6BEFF0..0x6BF020)
+                if (_queuing || en.emitterTimer == 0.0) {
+                    // Queuing or zero timer → same as case 3: sub_6C1540
+                    const auto &cache = en.interpolatedCache;
+                    if (cache.hasDualSlot) {
+                        constexpr double epsilon = 0.0001;
+                        double t1 = std::min(cache.dualSlotRatio, 0.9999);
+                        double t2 = std::min(t1 + epsilon, 1.0);
+                        double x1 = cache.slotA_x + (cache.slotB_x - cache.slotA_x) * t1;
+                        double y1 = cache.slotA_y + (cache.slotB_y - cache.slotA_y) * t1;
+                        double x2 = cache.slotA_x + (cache.slotB_x - cache.slotA_x) * t2;
+                        double y2 = cache.slotA_y + (cache.slotB_y - cache.slotA_y) * t2;
+                        en.emitterOffsetActive = true;
+                        en.emitterOffsetX = x2 - x1;
+                        en.emitterOffsetY = y2 - y1;
+                        en.emitterOffsetZ = 0.0;
+                    } else {
+                        en.emitterOffsetActive = true;
+                        en.emitterOffsetX = en.deltaPosX;
+                        en.emitterOffsetY = en.deltaPosY;
+                        en.emitterOffsetZ = en.deltaPosZ;
+                    }
                 } else {
-                    // Non-queuing, timer running: use node delta position
-                    // (0x6BF004..0x6BF020)
+                    // Non-queuing, timer running: binary reads node+176/184/192
+                    // directly (0x6BF004..0x6BF020), which ARE deltaPosX/Y/Z.
                     en.emitterOffsetActive = true;
                     en.emitterOffsetX = en.deltaPosX;
                     en.emitterOffsetY = en.deltaPosY;
@@ -1708,10 +1757,11 @@ namespace motion {
             }
 
             const int childCount = static_cast<int>(pn.particleChildren.size());
-            const int slotIdx = pn.interpolatedCache.prtTrigger; // current slot trigger
 
             // ====== BLOCK 1: Existing particle update (0x6BF310..0x6BF668) ======
-            if (slotIdx != 2 && childCount >= 1 && !pn.slotDone && pn.particleInheritAngle) {
+            // Binary guard: particleInheritVelocity==2 gates matrix tracking (0x6BF304).
+            // Within: !slotDone && particleInheritAngle for full matrix update.
+            if (pn.particleInheritVelocity == 2 && childCount >= 1 && !pn.slotDone && pn.particleInheritAngle) {
                 const double curM11 = pn.accumulated.m11, curM21 = pn.accumulated.m21;
                 const double curM12 = pn.accumulated.m12, curM22 = pn.accumulated.m22;
 
@@ -1837,23 +1887,27 @@ namespace motion {
                     // Frequency mode (0x6BF690..0x6BF7F4)
                     if (!wasActive) {
                         // First frame: initialize timer (0x6BF7BC..0x6BF7EC)
-                        double r = random();
-                        double fLerp = prtFmin + (prtF - prtFmin) * r;
-                        double freq = (fLerp != 0.0) ? 60.0 / fLerp : 60.0;
-                        pn.emitterTimerAccum = freq;
+                        // Binary interpolates in frequency domain: lerp(60/prtFmin, 60/prtF, r)
+                        double freq0 = 60.0 / prtFmin;
+                        double freq1 = 60.0 / prtF;
+                        if (freq0 != freq1)
+                            freq0 = freq0 + (freq1 - freq0) * random();
+                        pn.emitterTimerAccum = freq0;
                     }
                     // Timer loop (0x6BF698..0x6BF6F8)
                     pn.emitterTimerAccum -= dt;
                     while (pn.emitterTimerAccum <= 0.0) {
-                        double r = random();
-                        double fLerp = prtFmin + (prtF - prtFmin) * r;
-                        double freq = (fLerp != 0.0) ? 60.0 / fLerp : 60.0;
-                        pn.emitterTimerAccum += freq;
+                        double freq0 = 60.0 / prtFmin;
+                        double freq1 = 60.0 / prtF;
+                        if (freq0 != freq1)
+                            freq0 = freq0 + (freq1 - freq0) * random();
+                        pn.emitterTimerAccum += freq0;
                         ++emitCount;
                     }
                 } else if (triggerType == 1) {
                     // Count mode (0x6BF734..0x6BF804)
-                    if (pn.particleInheritAngle) {
+                    // Binary checks node+44 (flags byte, v173) not particleInheritAngle.
+                    if (pn.flags) {
                         double r = random();
                         emitCount = static_cast<int>(prtFmin + (prtF - prtFmin) * r);
                     }
@@ -1867,10 +1921,12 @@ namespace motion {
             }
 
             // ====== BLOCK 3: Particle creation (0x6BF810..0x6C02DC) ======
-            for (int ei = 0; ei < emitCount; ++ei) {
+            // Binary creates exactly 1 particle per emission per frame (0x6C026C).
+            // emitCount > 1 means "more to emit next frame"; physics is skipped.
+            if (emitCount > 0) {
                 // 3a. Resolve motion path from interpolatedCache.src
                 const std::string &motionPath = pn.interpolatedCache.src;
-                if (motionPath.empty()) continue;
+                if (motionPath.empty()) goto physics_step;
 
                 // 3b. Create child Player (0x6BF93C..0x6BFA00)
                 auto child = std::make_shared<Player>(_resourceManagerNative);
@@ -1888,8 +1944,11 @@ namespace motion {
 
                 // 3c. Position based on flyDirection (0x6BFAC8..0x6BFC88)
                 double offX = 0, offY = 0, offZ = 0;
-                const int flyDir = pn.particleFlyDirection;
-                const bool has3D = (pn.coordinateMode != 0);
+                // Binary uses "particle" field (node+2164, PSB key "particle") for fly
+                // direction, NOT particleFlyDirection (node+2180). 0x6BFAC8.
+                const int flyDir = pn.particleType;
+                // Binary uses node+2189 (particleTriVolume, PSB key), not coordinateMode.
+                const bool has3D = pn.particleTriVolume;
 
                 if (flyDir == 2) {
                     // Uniform box (0x6BFBD8..0x6BFBE0)
@@ -1915,17 +1974,17 @@ namespace motion {
                         offY = radius * std::sin(angle2d);
                     }
                 } else {
-                    // flyDir == 0: same as flyDir 1 (default) (0x6BFBD8)
-                    offX = random() * 32.0 - 16.0;
-                    offY = random() * 32.0 - 16.0;
-                    if (has3D) offZ = random() * 32.0 - 16.0;
+                    // flyDir == 0 or other: offX=offY=0 (0x6BFBD8)
+                    offX = 0.0;
+                    offY = 0.0;
                 }
 
                 // Z component scale by sqrt(det(matrix)) (0x6BFC64..0x6BFC88)
+                // Binary does sqrt(det) without abs — NaN for negative det.
                 if (offZ != 0.0) {
                     const double det = pn.accumulated.m11 * pn.accumulated.m22
                                      - pn.accumulated.m12 * pn.accumulated.m21;
-                    offZ *= std::sqrt(std::abs(det));
+                    offZ *= std::sqrt(det);
                 }
 
                 // Transform offset through parent matrix (0x6BFCE0..0x6BFCE8)
@@ -1936,12 +1995,16 @@ namespace motion {
                 const double tyOff = m21 * (offX - clipOX) + m22 * (offY - clipOY);
 
                 // 3d. Speed = lerp(prtVmin, prtV, random()) (0x6BFC94..0x6BFCBC)
-                double speed = pn.interpolatedCache.prtVmin
-                    + (pn.interpolatedCache.prtV - pn.interpolatedCache.prtVmin) * random();
+                // Binary only calls random() when min != max to preserve RNG sequence.
+                double speed = pn.interpolatedCache.prtVmin;
+                if (speed != pn.interpolatedCache.prtV)
+                    speed = speed + (pn.interpolatedCache.prtV - speed) * random();
 
-                // 3e. Direction based on inheritVelocity (0x6BFCEC..0x6BFDE8)
+                // 3e. Direction based on particleFlyDirection (0x6BFCEC..0x6BFDE8)
+                // Binary uses node+2180 (particleFlyDirection) for direction mode,
+                // NOT node+2176 (particleInheritVelocity). 0x6BFCC4.
                 double direction = 0.0;
-                const int inhVel = pn.particleInheritVelocity;
+                const int inhVel = pn.particleFlyDirection;
 
                 if (inhVel == 2) {
                     // Exponential decay (0x6BFD58..0x6BFDE8)
@@ -1959,15 +2022,16 @@ namespace motion {
                     } else if (decay > 0.0 && dtNorm > 0.0) {
                         speed = dist * std::log(decay) / (std::pow(decay, dtNorm) - 1.0);
                     }
-                    direction = dirAngle / (2.0 * PI) + PI;
+                    direction = dirAngle / (2.0 * PI) + 180.0;
+                    direction = direction * PI / 180.0; // convert to radians
                     speed /= 60.0;
                 } else if (inhVel == 1) {
                     // Offset direction (0x6BFCF4..0x6BFD18)
                     direction = std::atan2(tyOff, txOff) * 360.0 / (2.0 * PI) + 180.0;
                     direction = direction * PI / 180.0;
                 } else {
-                    // Matrix angle (0x6BFDAC)
-                    direction = std::atan2(m12, m11) * 360.0 / (2.0 * PI);
+                    // Matrix angle (0x6BFDAC): atan2(m21, m11), not m12.
+                    direction = std::atan2(pn.accumulated.m21, pn.accumulated.m11) * 360.0 / (2.0 * PI);
                     direction = direction * PI / 180.0;
                 }
 
@@ -1989,69 +2053,74 @@ namespace motion {
                     }
                 }
 
-                // Compute velocity (0x6BFEC0..0x6BFF70)
-                double velX = zoomScale * speed * std::cos(dirRad);
-                double velY = zoomScale * speed * std::sin(dirRad);
-                double velZ = speed * 0.0; // default Z=0
+                // Compute velocity + set position (0x6BFEC0..0x6BFF70)
+                // Binary branches on coordinateMode (node+24), not inhVel.
+                double velX = 0.0, velY = 0.0, velZ = 0.0;
 
-                if (inhVel == 0) {
-                    // coordinateMode==0: velZ=0, velY=speed*sin
-                    velY = speed * 0.0; // binary: v174 * 0.0 for velY
-                    velZ = zoomScale * speed * std::sin(dirRad);
-                }
-
-                // 3g. Set child position (0x6BFEC0..0x6BFEDC / 0x6BFF20..0x6BFF3C)
                 if (child->_runtime && !child->_runtime->nodes.empty()) {
                     auto &cr = child->_runtime->nodes[0];
-                    if (inhVel != 0) {
+                    if (pn.coordinateMode == 1) {
+                        // 3D mode (0x6BFEB4..0x6BFEDC)
                         cr.accumulated.posX = txOff + pn.accumulated.posX;
                         cr.accumulated.posY = offZ + pn.accumulated.posY;
                         cr.accumulated.posZ = tyOff + pn.accumulated.posZ;
-                    } else {
+                        velX = zoomScale * speed * std::cos(dirRad);
+                        velY = speed * 0.0;
+                        velZ = zoomScale * speed * std::sin(dirRad);
+                    } else if (pn.coordinateMode == 0) {
+                        // 2D mode (0x6BFF14..0x6BFF3C)
                         cr.accumulated.posX = txOff + pn.accumulated.posX;
                         cr.accumulated.posY = tyOff + pn.accumulated.posY;
                         cr.accumulated.posZ = offZ + pn.accumulated.posZ;
+                        velX = zoomScale * speed * std::cos(dirRad);
+                        velY = zoomScale * speed * std::sin(dirRad);
+                        velZ = speed * 0.0;
                     }
 
-                    // 3h. Set flipX/Y, zoom/scale (0x6BFF74..0x6BFFA4)
+                    // 3h. Set flipX/Y (0x6BFF74..0x6BFFA4)
                     cr.accumulated.flipX = pn.accumulated.flipX;
                     cr.accumulated.flipY = pn.accumulated.flipY;
 
-                    // Zoom lerp (0x6BFFA8..0x6BFFD0)
-                    double zoom = pn.interpolatedCache.prtZmin
-                        + (pn.interpolatedCache.prtZ - pn.interpolatedCache.prtZmin) * random();
+                    // 3i. Angle from prtA lerp — BEFORE zoom (0x6BFFA8..0x6C00AC)
+                    // Binary order: angle lerp → angle computation → zoom lerp.
+                    // Both call random(), so order matters for RNG sequence.
+                    double aMin = pn.interpolatedCache.prtAmin;
+                    double aMax = pn.interpolatedCache.prtA;
+                    double prtAngle = aMin;
+                    if (aMin != aMax) prtAngle = aMin + (aMax - aMin) * random();
+                    // Binary uses PARENT flipX/Y for sign (0x6BFFD8..0x6BFFE0)
+                    double childAngle = -prtAngle;
+                    if (pn.accumulated.flipX == pn.accumulated.flipY) childAngle = prtAngle;
+
+                    if (pn.particleInheritAngle) {
+                        // Binary: v154 = dirRad + PI; if(!flipX) v154 = dirRad;
+                        // then childAngle += v154 * 360 / (2*PI) (0x6BFFEC..0x6C0008)
+                        double v154 = dirRad + PI;
+                        if (!pn.accumulated.flipX) v154 = dirRad;
+                        childAngle += v154 * 360.0 / (2.0 * PI);
+                    }
+                    while (childAngle < 0.0) childAngle += 360.0;
+                    while (childAngle >= 360.0) childAngle -= 360.0;
+                    cr.accumulated.angle = childAngle;
+
+                    // 3j. Zoom lerp — AFTER angle (0x6C00B0..0x6C00D8)
+                    double zoom = pn.interpolatedCache.prtZmin;
+                    if (zoom != pn.interpolatedCache.prtZ)
+                        zoom = zoom + (pn.interpolatedCache.prtZ - zoom) * random();
                     cr.accumulated.scaleX = zoom;
                     cr.accumulated.scaleY = zoom;
                     cr.accumulated.opacity = pn.accumulated.opacity;
                     cr.accumulated.active = true;
                     cr.accumulated.visible = true;
 
-                    // 3i. particleInheritAngle (0x6BFFD4..0x6C00AC)
-                    double childAngle = -zoom; // base from zoom sign
-                    if (pn.accumulated.flipX == pn.accumulated.flipY) childAngle = zoom;
-                    // Actually: use prtA lerp for angle
-                    double aMin = pn.interpolatedCache.prtAmin;
-                    double aMax = pn.interpolatedCache.prtA;
-                    double prtAngle = aMin;
-                    if (aMin != aMax) prtAngle = aMin + (aMax - aMin) * random();
-                    childAngle = -prtAngle;
-                    if (cr.accumulated.flipX == cr.accumulated.flipY) childAngle = prtAngle;
-
-                    if (pn.particleInheritAngle) {
-                        double velDirDeg = dirRad * 180.0 / PI;
-                        if (!cr.accumulated.flipX) velDirDeg = dirRad * 180.0 / PI;
-                        else velDirDeg = dirRad * 180.0 / PI + 180.0;
-                        childAngle += velDirDeg * 360.0 / (2.0 * PI);
-                    }
-                    while (childAngle < 0.0) childAngle += 360.0;
-                    while (childAngle >= 360.0) childAngle -= 360.0;
-                    cr.accumulated.angle = childAngle;
-
                     // 3j. particleApplyZoomToVelocity on child velocity (0x6C0110..0x6C0168)
-                    if (pn.particleApplyZoomToVelocity == 1) {
-                        velX *= zoom; velY *= zoom; velZ *= zoom;
-                    } else if (pn.particleApplyZoomToVelocity == 2 && zoom != 0.0) {
-                        velX /= zoom; velY /= zoom; velZ /= zoom;
+                    // Binary gate: particleFlyDirection != 2 (0x6C0110)
+                    if (pn.particleFlyDirection != 2) {
+                        if (pn.particleApplyZoomToVelocity == 1) {
+                            velX *= zoom; velY *= zoom; velZ *= zoom;
+                        } else if (pn.particleApplyZoomToVelocity == 2 && zoom != 0.0) {
+                            velX /= zoom; velY /= zoom; velZ /= zoom;
+                        }
                     }
                 }
 
@@ -2060,8 +2129,9 @@ namespace motion {
                 child->_cameraVelocityY = velY;
                 child->_cameraVelocityZ = velZ;
 
-                // 3l. inheritVelocity==1: add parent delta/dt (0x6C0174..0x6C01AC)
-                if (inhVel == 1 && dt > 0.0) {
+                // 3l. particleInheritVelocity==1: add parent delta/dt (0x6C0174..0x6C01AC)
+                // Binary checks node+2176 (particleInheritVelocity), not particleFlyDirection.
+                if (pn.particleInheritVelocity == 1 && dt > 0.0) {
                     child->_cameraVelocityX += pn.deltaPosX / dt;
                     child->_cameraVelocityY += pn.deltaPosY / dt;
                     child->_cameraVelocityZ += pn.deltaPosZ / dt;
@@ -2071,13 +2141,18 @@ namespace motion {
                 child->_cameraDamping = pn.particleCameraDamping;
 
                 pn.particleChildren.push_back(std::move(child));
-            }
 
-            // Enforce maxNum (0x6C0218..0x6C0268)
-            if (pn.particleMaxNum > 0) {
-                while (static_cast<int>(pn.particleChildren.size()) > pn.particleMaxNum) {
-                    pn.particleChildren.erase(pn.particleChildren.begin());
+                // Enforce maxNum per-particle (0x6C0218..0x6C0268)
+                if (pn.particleMaxNum > 0) {
+                    while (static_cast<int>(pn.particleChildren.size()) > pn.particleMaxNum) {
+                        pn.particleChildren.erase(pn.particleChildren.begin());
+                    }
                 }
+
+                // Physics only when emitCount <= 1 (0x6C026C: CMP W20, #1; B.GT)
+                if (emitCount <= 1) goto physics_step;
+                // emitCount > 1: skip physics this frame, advance to next node
+                continue;
             }
 
         physics_step:

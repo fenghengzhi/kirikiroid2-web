@@ -501,6 +501,12 @@ namespace internal {
             bool hasSync = false;     // "content.sync" from PSB frameList
             // Clip slot timing — slot+328 in libkrkr2.so (frame start time)
             double clipStartTime = 0.0;
+            // Dual-slot raw data (populated when type==3 interpolation occurs)
+            bool hasDualSlot = false;
+            double dualSlotRatio = 0.0;
+            double rawSlotA_x = 0.0, rawSlotA_y = 0.0;
+            double rawSlotB_x = 0.0, rawSlotB_y = 0.0;
+            double rawSlotA_startTime = 0.0, rawSlotB_startTime = 0.0;
         };
 
         inline std::optional<double>
@@ -1190,9 +1196,22 @@ namespace internal {
                 return state;  // at exact start or next is invisible
             }
 
+            // Store raw dual-slot data for Phase 3 sub_6C1540 equivalent
+            const double rawA_x = state.x, rawA_y = state.y;
+            const double rawB_x = frameB.slot.x, rawB_y = frameB.slot.y;
+            const double rawA_startTime = frameA.time;
+            const double rawB_startTime = frameB.time;
+
             // Step 4: Interpolate via sub_699AE4
             state = interpolateSlots(state, frameB.slot, t);
             state.visible = true;
+            // Attach raw slot data to interpolated result
+            state.hasDualSlot = true;
+            state.dualSlotRatio = t;
+            state.rawSlotA_x = rawA_x; state.rawSlotA_y = rawA_y;
+            state.rawSlotB_x = rawB_x; state.rawSlotB_y = rawB_y;
+            state.rawSlotA_startTime = rawA_startTime;
+            state.rawSlotB_startTime = rawB_startTime;
             if(savedHasTO) {
                 std::copy(savedTO, savedTO + 4, state.transformOrder);
                 state.hasTransformOrder = true;

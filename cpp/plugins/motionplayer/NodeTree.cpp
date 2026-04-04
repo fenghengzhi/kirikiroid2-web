@@ -161,6 +161,8 @@ namespace motion::detail {
                 node.particleApplyZoomToVelocity = static_cast<int>(*v);
             if (auto v = nodeTreePsbNumber(psbNode, "particleDeleteOutsideScreen"))
                 node.particleDeleteOutside = (*v != 0.0);
+            if (auto v = nodeTreePsbNumber(psbNode, "particleTriVolume"))
+                node.particleTriVolume = (*v != 0.0);
             if (auto v = nodeTreePsbNumber(psbNode, "particleCameraDamping"))
                 node.particleCameraDamping = *v;
 
