@@ -161,6 +161,8 @@ namespace motion::detail {
                 node.particleApplyZoomToVelocity = static_cast<int>(*v);
             if (auto v = nodeTreePsbNumber(psbNode, "particleDeleteOutsideScreen"))
                 node.particleDeleteOutside = (*v != 0.0);
+            if (auto v = nodeTreePsbNumber(psbNode, "particleCameraDamping"))
+                node.particleCameraDamping = *v;
 
             // Check if any frame has a source image
             node.hasSource = checkHasSource(psbNode);

@@ -1687,122 +1687,438 @@ namespace motion {
     }
 
     void Player::updateLayersPhase3_ParticleSystem(double currentTime) {
-        auto &nodes = _runtime->nodes;
         // --- sub_6BF0DC: Particle system (nodeType=4) ---
-        // Aligned to 0x6BF0DC. Only when !isEmoteMode.
-        // Manages child Player instances per particle with physics stepping.
-        if (!_runtime->isEmoteMode) {
-            for (size_t pi = 1; pi < nodes.size(); ++pi) {
-                auto &pn = nodes[pi];
-                if (pn.nodeType != 4) continue;
-                if (!pn.accumulated.active || pn.slotDone) {
-                    // Inactive: clear all particles
-                    pn.particleChildren.clear();
-                    pn.particleStates.clear();
-                    continue;
-                }
+        // Fully aligned to libkrkr2.so 0x6BF0DC (~800 lines decompiled).
+        // Velocity stored on child Player _cameraVelocityX/Y/Z (player+784/792/800).
+        // frameProgress + updateLayersPhase1_PreLoop auto-applies velocity+damping.
+        if (_runtime->isEmoteMode) return;
+        auto &nodes = _runtime->nodes;
+        const double dt = _frameLastTime;
+        constexpr double PI = 3.14159265358979323846;
 
-                const double dt = _frameLastTime;
+        for (size_t pi = 1; pi < nodes.size(); ++pi) {
+            auto &pn = nodes[pi];
+            if (pn.nodeType != 4) continue;
 
-                // Find the emitter node (nodeType=6) that feeds this particle node.
-                // In libkrkr2.so, the emitter's trigger drives particle creation.
-                // Look for a nodeType=6 child of the same parent with matching dtgt.
-                detail::MotionNode *emitter = nullptr;
-                for (size_t ei = 1; ei < nodes.size(); ++ei) {
-                    if (nodes[ei].nodeType == 6
-                        && nodes[ei].parentIndex == pn.parentIndex
-                        && nodes[ei].emitterActive) {
-                        emitter = &nodes[ei];
-                        break;
-                    }
-                }
+            // Guard: inactive or slotDone => clear (0x6BF298)
+            if (!pn.accumulated.active || pn.slotDone) {
+                pn.particleChildren.clear();
+                pn.particleEmitterFlagActive = false;
+                continue;
+            }
 
-                // Emit new particles when emitter triggers (0x6BF1F0..0x6BF3D0)
-                if (emitter && emitter->emitterTimer > 0.0 && dt > 0.0) {
-                    // Check if we should emit (frequency-based)
-                    // prtF = emission frequency from interpolatedCache
-                    const double freq = pn.interpolatedCache.prtF;
-                    if (freq > 0.0 && pn.particleChildren.size()
-                        < static_cast<size_t>(pn.particleMaxNum > 0 ? pn.particleMaxNum : 100)) {
-                        // Create new particle child Player (0x6BF240..0x6BF390)
-                        auto child = std::make_shared<Player>(_resourceManagerNative);
-                        // Aligned to sub_6CED30: inherit parent's RandomGenerator
-                        child->_tjsRandomGenerator = _tjsRandomGenerator;
-                        child->setChara(_chara);
-                        if (!emitter->emitterDtgt.empty()) {
-                            child->onFindMotion(detail::widen(emitter->emitterDtgt));
+            const int childCount = static_cast<int>(pn.particleChildren.size());
+            const int slotIdx = pn.interpolatedCache.prtTrigger; // current slot trigger
+
+            // ====== BLOCK 1: Existing particle update (0x6BF310..0x6BF668) ======
+            if (slotIdx != 2 && childCount >= 1 && !pn.slotDone && pn.particleInheritAngle) {
+                const double curM11 = pn.accumulated.m11, curM21 = pn.accumulated.m21;
+                const double curM12 = pn.accumulated.m12, curM22 = pn.accumulated.m22;
+
+                const bool matrixChanged =
+                    (curM11 != pn.prevM11 || curM21 != pn.prevM21 ||
+                     curM12 != pn.prevM12 || curM22 != pn.prevM22);
+
+                if (matrixChanged) {
+                    // Compute inverse of previous matrix (0x6BF458..0x6BF468)
+                    const double det = pn.prevM11 * pn.prevM22 - pn.prevM12 * pn.prevM21;
+                    if (std::abs(det) > 1e-30) {
+                        const double id = 1.0 / det;
+                        const double im11 =  pn.prevM22 * id, im12 = -pn.prevM12 * id;
+                        const double im21 = -pn.prevM21 * id, im22 =  pn.prevM11 * id;
+                        // new-in-old-frame coefficients (0x6BF490..0x6BF4A0)
+                        const double t11 = curM11 * im11 + curM21 * im21;
+                        const double t12 = curM11 * im12 + curM21 * im22;
+                        const double t21 = curM12 * im11 + curM22 * im21;
+                        const double t22 = curM12 * im12 + curM22 * im22;
+
+                        // Angle delta (0x6BF404..0x6BF43C)
+                        const double curAngle = pn.interpolatedCache.angle;
+                        double angleDelta = curAngle - pn.prevParticleAngle;
+                        if (pn.accumulated.flipX == pn.accumulated.flipY)
+                            angleDelta = curAngle - pn.prevParticleAngle;
+                        else
+                            angleDelta = -(curAngle - pn.prevParticleAngle);
+                        pn.prevParticleAngle = curAngle;
+
+                        const double posXref = pn.accumulated.posX;
+                        const double posYref = pn.accumulated.posY;
+                        const double posZref = pn.accumulated.posZ;
+                        const double dPosX = pn.deltaPosX, dPosY = pn.deltaPosY;
+                        const double dPosZ = pn.deltaPosZ;
+
+                        for (auto &child : pn.particleChildren) {
+                            if (!child || !child->_runtime || child->_runtime->nodes.empty()) continue;
+                            auto &cr = child->_runtime->nodes[0];
+
+                            // Rotate child angle (0x6BF4E8..0x6BF528)
+                            if (*reinterpret_cast<const uint8_t*>(&pn.particleInheritAngle)) {
+                                // Set angle via child's runtime
+                                double cAngle = cr.accumulated.angle + angleDelta;
+                                while (cAngle < 0.0) cAngle += 360.0;
+                                while (cAngle >= 360.0) cAngle -= 360.0;
+                                cr.accumulated.angle = cAngle;
+                            }
+
+                            // Transform position (0x6BF54C..0x6BF620)
+                            const int coordMode = pn.coordinateMode;
+                            if (coordMode == 1) {
+                                // 3D: X/Z through matrix, Y pass-through
+                                double px = cr.accumulated.posX - posXref + dPosX;
+                                double pz = cr.accumulated.posZ - posZref + dPosZ;
+                                cr.accumulated.posX = posXref + t11 * px + t12 * pz;
+                                cr.accumulated.posZ = posZref + t21 * px + t22 * pz;
+                                cr.accumulated.posY += dPosY;
+                            } else {
+                                // 2D: X/Y through matrix
+                                double px = cr.accumulated.posX - posXref + dPosX;
+                                double py = cr.accumulated.posY - posYref + dPosY;
+                                cr.accumulated.posX = posXref + t11 * px + t12 * py;
+                                cr.accumulated.posY = posYref + t21 * px + t22 * py;
+                            }
+
+                            // Transform velocity (0x6BF628..0x6BF64C)
+                            double vx = child->_cameraVelocityX;
+                            double vy = (coordMode == 1) ? child->_cameraVelocityZ
+                                                         : child->_cameraVelocityY;
+                            double nvx = t11 * vx + t12 * vy;
+                            double nvy = t21 * vx + t22 * vy;
+                            child->_cameraVelocityX = nvx;
+                            if (coordMode == 1) child->_cameraVelocityZ = nvy;
+                            else child->_cameraVelocityY = nvy;
                         }
-                        child->_zFactor = _zFactor;
-                        child->_independentLayerInherit = _independentLayerInherit;
-                        child->_runtime->drawAffineMatrix = _runtime->drawAffineMatrix;
-
-                        // Initialize particle state with random emission (0x6BF390..0x6BF5D0)
-                        detail::MotionNode::ParticleState ps;
-                        ps.posX = pn.accumulated.posX;
-                        ps.posY = pn.accumulated.posY;
-                        ps.posZ = pn.accumulated.posZ;
-                        // Random velocity from prtV/prtVmin range
-                        const double vel = pn.interpolatedCache.prtV;
-                        // Random angle from prtRange
-                        const double range = pn.interpolatedCache.prtRange;
-                        const double emitAngle = pn.accumulated.angle
-                            + (range > 0.0 ? (random() * 2.0 - 1.0) * range : 0.0);
-                        const double rad = emitAngle * 3.14159265358979323846 / 180.0;
-                        ps.velX = vel * std::cos(rad);
-                        ps.velY = vel * std::sin(rad);
-                        ps.angle = emitAngle;
-                        ps.zoom = pn.interpolatedCache.prtZ;
-                        ps.alive = true;
-
-                        pn.particleChildren.push_back(std::move(child));
-                        pn.particleStates.push_back(ps);
                     }
-                }
-
-                // Step all existing particles (0x6BF5D0..0x6BF9E0)
-                for (size_t ci = 0; ci < pn.particleChildren.size(); ++ci) {
-                    auto &child = pn.particleChildren[ci];
-                    auto &ps = pn.particleStates[ci];
-                    if (!ps.alive || !child) continue;
-
-                    // Physics step: velocity + acceleration (0x6BF660..0x6BF750)
-                    const double accel = pn.interpolatedCache.prtA;
-                    ps.velX += accel * std::cos(ps.angle * 3.14159265358979323846 / 180.0) * dt;
-                    ps.velY += accel * std::sin(ps.angle * 3.14159265358979323846 / 180.0) * dt;
-
-                    // Position update
-                    ps.posX += ps.velX * dt;
-                    ps.posY += ps.velY * dt;
-
-                    // Propagate to child Player root node (0x6BF750..0x6BF850)
-                    if (child->_runtime && !child->_runtime->nodes.empty()) {
+                    pn.prevM11 = curM11; pn.prevM21 = curM21;
+                    pn.prevM12 = curM12; pn.prevM22 = curM22;
+                } else {
+                    // Matrix unchanged: just add delta position (0x6BF348..0x6BF384)
+                    for (auto &child : pn.particleChildren) {
+                        if (!child || !child->_runtime || child->_runtime->nodes.empty()) continue;
                         auto &cr = child->_runtime->nodes[0];
-                        cr.accumulated.posX = ps.posX;
-                        cr.accumulated.posY = ps.posY;
-                        cr.accumulated.posZ = ps.posZ;
-                        cr.accumulated.scaleX = pn.accumulated.scaleX * ps.zoom;
-                        cr.accumulated.scaleY = pn.accumulated.scaleY * ps.zoom;
-                        cr.accumulated.opacity = pn.accumulated.opacity;
-                        cr.accumulated.visible = true;
-                        cr.accumulated.active = true;
-                    }
-
-                    // Step child Player (0x6BF850..0x6BF8E0)
-                    child->frameProgress(dt);
-                    if (child->_runtime && !child->_runtime->nodes.empty()) {
-                        child->updateLayers(currentTime);
+                        cr.accumulated.posX += pn.deltaPosX;
+                        cr.accumulated.posY += pn.deltaPosY;
+                        cr.accumulated.posZ += pn.deltaPosZ;
                     }
                 }
-
-                // Enforce max particle count (0x6BF9E0..0x6BFA20)
-                const int maxNum = pn.particleMaxNum > 0 ? pn.particleMaxNum : 100;
-                while (static_cast<int>(pn.particleChildren.size()) > maxNum) {
-                    pn.particleChildren.erase(pn.particleChildren.begin());
-                    pn.particleStates.erase(pn.particleStates.begin());
+            } else if (childCount >= 1) {
+                // No matrix tracking: add delta position (0x6BF32C..0x6BF384)
+                for (auto &child : pn.particleChildren) {
+                    if (!child || !child->_runtime || child->_runtime->nodes.empty()) continue;
+                    auto &cr = child->_runtime->nodes[0];
+                    cr.accumulated.posX += pn.deltaPosX;
+                    cr.accumulated.posY += pn.deltaPosY;
+                    cr.accumulated.posZ += pn.deltaPosZ;
                 }
             }
-        }
 
+            // ====== BLOCK 2: Emission control (0x6BF668..0x6BF810) ======
+            int emitCount = 0;
+            bool doPhysicsStep = true;
+
+            if (!pn.accumulated.active) {
+                pn.particleEmitterFlagActive = false;
+                goto physics_step;
+            }
+
+            {
+                const double prtFmin = pn.interpolatedCache.prtFmin;
+                const double prtF = pn.interpolatedCache.prtF;
+                const int prtTrigger = pn.interpolatedCache.prtTrigger;
+
+                if (prtTrigger == 0 && prtFmin == 0.0) goto physics_step;
+
+                const bool wasActive = pn.particleEmitterFlagActive;
+                pn.particleEmitterFlagActive = true;
+
+                // Read trigger type from slot (0x6BF680..0x6BF690)
+                const int triggerType = pn.prtTrigger;
+
+                if (triggerType == 0) {
+                    // Frequency mode (0x6BF690..0x6BF7F4)
+                    if (!wasActive) {
+                        // First frame: initialize timer (0x6BF7BC..0x6BF7EC)
+                        double r = random();
+                        double fLerp = prtFmin + (prtF - prtFmin) * r;
+                        double freq = (fLerp != 0.0) ? 60.0 / fLerp : 60.0;
+                        pn.emitterTimerAccum = freq;
+                    }
+                    // Timer loop (0x6BF698..0x6BF6F8)
+                    pn.emitterTimerAccum -= dt;
+                    while (pn.emitterTimerAccum <= 0.0) {
+                        double r = random();
+                        double fLerp = prtFmin + (prtF - prtFmin) * r;
+                        double freq = (fLerp != 0.0) ? 60.0 / fLerp : 60.0;
+                        pn.emitterTimerAccum += freq;
+                        ++emitCount;
+                    }
+                } else if (triggerType == 1) {
+                    // Count mode (0x6BF734..0x6BF804)
+                    if (pn.particleInheritAngle) {
+                        double r = random();
+                        emitCount = static_cast<int>(prtFmin + (prtF - prtFmin) * r);
+                    }
+                    // Clamp timer (0x6BF780..0x6BF7A0)
+                    if (prtFmin > 0.0) {
+                        double maxT = 60.0 / prtFmin;
+                        if (pn.emitterTimerAccum > maxT) pn.emitterTimerAccum = maxT;
+                    }
+                    if (emitCount <= 0) goto physics_step;
+                }
+            }
+
+            // ====== BLOCK 3: Particle creation (0x6BF810..0x6C02DC) ======
+            for (int ei = 0; ei < emitCount; ++ei) {
+                // 3a. Resolve motion path from interpolatedCache.src
+                const std::string &motionPath = pn.interpolatedCache.src;
+                if (motionPath.empty()) continue;
+
+                // 3b. Create child Player (0x6BF93C..0x6BFA00)
+                auto child = std::make_shared<Player>(_resourceManagerNative);
+                child->_tjsRandomGenerator = _tjsRandomGenerator;
+                child->setChara(_chara);
+                child->onFindMotion(detail::widen(motionPath));
+                child->_zFactor = _zFactor;
+                child->_independentLayerInherit = _independentLayerInherit;
+
+                // Set blendMode (0x6BFAA8..0x6BFAC4)
+                if (child->_runtime && !child->_runtime->nodes.empty()) {
+                    auto &cr = child->_runtime->nodes[0];
+                    cr.interpolatedCache.blendMode = pn.interpolatedCache.blendMode;
+                }
+
+                // 3c. Position based on flyDirection (0x6BFAC8..0x6BFC88)
+                double offX = 0, offY = 0, offZ = 0;
+                const int flyDir = pn.particleFlyDirection;
+                const bool has3D = (pn.coordinateMode != 0);
+
+                if (flyDir == 2) {
+                    // Uniform box (0x6BFBD8..0x6BFBE0)
+                    offX = random() * 32.0 - 16.0;
+                    offY = random() * 32.0 - 16.0;
+                    if (has3D) offZ = random() * 32.0 - 16.0;
+                } else if (flyDir == 1) {
+                    // 3D sphere (0x6BFAE4..0x6BFB78)
+                    if (has3D) {
+                        double r1 = random(), r2 = random(), r3 = random();
+                        double phi = r2 * 2.0 * PI;
+                        double theta = r1 * 2.0 * PI;
+                        double radius = std::cbrt(r3) * 16.0;
+                        double cosPhi = std::cos(phi);
+                        offX = cosPhi * (radius * std::cos(theta));
+                        offY = radius * (cosPhi * std::sin(theta));
+                        offZ = radius * std::sin(phi);
+                    } else {
+                        // 2D disk (0x6BFC14..0x6BFC48)
+                        double angle2d = random() * 2.0 * PI;
+                        double radius = std::sqrt(random()) * 16.0;
+                        offX = std::cos(angle2d) * radius;
+                        offY = radius * std::sin(angle2d);
+                    }
+                } else {
+                    // flyDir == 0: same as flyDir 1 (default) (0x6BFBD8)
+                    offX = random() * 32.0 - 16.0;
+                    offY = random() * 32.0 - 16.0;
+                    if (has3D) offZ = random() * 32.0 - 16.0;
+                }
+
+                // Z component scale by sqrt(det(matrix)) (0x6BFC64..0x6BFC88)
+                if (offZ != 0.0) {
+                    const double det = pn.accumulated.m11 * pn.accumulated.m22
+                                     - pn.accumulated.m12 * pn.accumulated.m21;
+                    offZ *= std::sqrt(std::abs(det));
+                }
+
+                // Transform offset through parent matrix (0x6BFCE0..0x6BFCE8)
+                const double m11 = pn.accumulated.m11, m21 = pn.accumulated.m21;
+                const double m12 = pn.accumulated.m12, m22 = pn.accumulated.m22;
+                const double clipOX = pn.clipOriginX, clipOY = pn.clipOriginY;
+                const double txOff = m11 * (offX - clipOX) + m12 * (offY - clipOY);
+                const double tyOff = m21 * (offX - clipOX) + m22 * (offY - clipOY);
+
+                // 3d. Speed = lerp(prtVmin, prtV, random()) (0x6BFC94..0x6BFCBC)
+                double speed = pn.interpolatedCache.prtVmin
+                    + (pn.interpolatedCache.prtV - pn.interpolatedCache.prtVmin) * random();
+
+                // 3e. Direction based on inheritVelocity (0x6BFCEC..0x6BFDE8)
+                double direction = 0.0;
+                const int inhVel = pn.particleInheritVelocity;
+
+                if (inhVel == 2) {
+                    // Exponential decay (0x6BFD58..0x6BFDE8)
+                    double dist = std::sqrt(txOff * txOff + tyOff * tyOff + offZ * offZ);
+                    double dirAngle = std::atan2(tyOff, txOff) * 360.0;
+                    double decay = pn.particleAccelRatio;
+                    double childTotalTime = 0.0;
+                    if (child->_runtime) {
+                        for (auto &[n, tl] : child->_runtime->timelines)
+                            if (tl.totalFrames > childTotalTime) childTotalTime = tl.totalFrames;
+                    }
+                    double dtNorm = childTotalTime / 60.0;
+                    if (decay == 1.0) {
+                        speed = (dtNorm > 0) ? dist / dtNorm : 0.0;
+                    } else if (decay > 0.0 && dtNorm > 0.0) {
+                        speed = dist * std::log(decay) / (std::pow(decay, dtNorm) - 1.0);
+                    }
+                    direction = dirAngle / (2.0 * PI) + PI;
+                    speed /= 60.0;
+                } else if (inhVel == 1) {
+                    // Offset direction (0x6BFCF4..0x6BFD18)
+                    direction = std::atan2(tyOff, txOff) * 360.0 / (2.0 * PI) + 180.0;
+                    direction = direction * PI / 180.0;
+                } else {
+                    // Matrix angle (0x6BFDAC)
+                    direction = std::atan2(m12, m11) * 360.0 / (2.0 * PI);
+                    direction = direction * PI / 180.0;
+                }
+
+                // Angle spread (0x6BFDEC..0x6BFE34)
+                double range = pn.interpolatedCache.prtRange;
+                double spreadRandom = -range;
+                if (range != -range) spreadRandom = (range + range) * random() - range;
+                double totalAngle = direction + spreadRandom * PI / 180.0;
+                double dirRad = totalAngle;
+
+                // 3f. particleApplyZoomToVelocity (0x6BFE38..0x6BFEA0)
+                double zoomScale = 1.0;
+                if (inhVel >= 1 && inhVel <= 2) {
+                    if (txOff != 0.0 || tyOff != 0.0) {
+                        if (offZ != 0.0) {
+                            double xyLen = std::sqrt(txOff * txOff + tyOff * tyOff);
+                            zoomScale = xyLen / std::sqrt(offZ * offZ + xyLen * xyLen);
+                        }
+                    }
+                }
+
+                // Compute velocity (0x6BFEC0..0x6BFF70)
+                double velX = zoomScale * speed * std::cos(dirRad);
+                double velY = zoomScale * speed * std::sin(dirRad);
+                double velZ = speed * 0.0; // default Z=0
+
+                if (inhVel == 0) {
+                    // coordinateMode==0: velZ=0, velY=speed*sin
+                    velY = speed * 0.0; // binary: v174 * 0.0 for velY
+                    velZ = zoomScale * speed * std::sin(dirRad);
+                }
+
+                // 3g. Set child position (0x6BFEC0..0x6BFEDC / 0x6BFF20..0x6BFF3C)
+                if (child->_runtime && !child->_runtime->nodes.empty()) {
+                    auto &cr = child->_runtime->nodes[0];
+                    if (inhVel != 0) {
+                        cr.accumulated.posX = txOff + pn.accumulated.posX;
+                        cr.accumulated.posY = offZ + pn.accumulated.posY;
+                        cr.accumulated.posZ = tyOff + pn.accumulated.posZ;
+                    } else {
+                        cr.accumulated.posX = txOff + pn.accumulated.posX;
+                        cr.accumulated.posY = tyOff + pn.accumulated.posY;
+                        cr.accumulated.posZ = offZ + pn.accumulated.posZ;
+                    }
+
+                    // 3h. Set flipX/Y, zoom/scale (0x6BFF74..0x6BFFA4)
+                    cr.accumulated.flipX = pn.accumulated.flipX;
+                    cr.accumulated.flipY = pn.accumulated.flipY;
+
+                    // Zoom lerp (0x6BFFA8..0x6BFFD0)
+                    double zoom = pn.interpolatedCache.prtZmin
+                        + (pn.interpolatedCache.prtZ - pn.interpolatedCache.prtZmin) * random();
+                    cr.accumulated.scaleX = zoom;
+                    cr.accumulated.scaleY = zoom;
+                    cr.accumulated.opacity = pn.accumulated.opacity;
+                    cr.accumulated.active = true;
+                    cr.accumulated.visible = true;
+
+                    // 3i. particleInheritAngle (0x6BFFD4..0x6C00AC)
+                    double childAngle = -zoom; // base from zoom sign
+                    if (pn.accumulated.flipX == pn.accumulated.flipY) childAngle = zoom;
+                    // Actually: use prtA lerp for angle
+                    double aMin = pn.interpolatedCache.prtAmin;
+                    double aMax = pn.interpolatedCache.prtA;
+                    double prtAngle = aMin;
+                    if (aMin != aMax) prtAngle = aMin + (aMax - aMin) * random();
+                    childAngle = -prtAngle;
+                    if (cr.accumulated.flipX == cr.accumulated.flipY) childAngle = prtAngle;
+
+                    if (pn.particleInheritAngle) {
+                        double velDirDeg = dirRad * 180.0 / PI;
+                        if (!cr.accumulated.flipX) velDirDeg = dirRad * 180.0 / PI;
+                        else velDirDeg = dirRad * 180.0 / PI + 180.0;
+                        childAngle += velDirDeg * 360.0 / (2.0 * PI);
+                    }
+                    while (childAngle < 0.0) childAngle += 360.0;
+                    while (childAngle >= 360.0) childAngle -= 360.0;
+                    cr.accumulated.angle = childAngle;
+
+                    // 3j. particleApplyZoomToVelocity on child velocity (0x6C0110..0x6C0168)
+                    if (pn.particleApplyZoomToVelocity == 1) {
+                        velX *= zoom; velY *= zoom; velZ *= zoom;
+                    } else if (pn.particleApplyZoomToVelocity == 2 && zoom != 0.0) {
+                        velX /= zoom; velY /= zoom; velZ /= zoom;
+                    }
+                }
+
+                // 3k. Store velocity on child (0x6BFEF8..0x6BFF70)
+                child->_cameraVelocityX = velX;
+                child->_cameraVelocityY = velY;
+                child->_cameraVelocityZ = velZ;
+
+                // 3l. inheritVelocity==1: add parent delta/dt (0x6C0174..0x6C01AC)
+                if (inhVel == 1 && dt > 0.0) {
+                    child->_cameraVelocityX += pn.deltaPosX / dt;
+                    child->_cameraVelocityY += pn.deltaPosY / dt;
+                    child->_cameraVelocityZ += pn.deltaPosZ / dt;
+                }
+
+                // 3m. Set cameraDamping (0x6C01B4)
+                child->_cameraDamping = pn.particleCameraDamping;
+
+                pn.particleChildren.push_back(std::move(child));
+            }
+
+            // Enforce maxNum (0x6C0218..0x6C0268)
+            if (pn.particleMaxNum > 0) {
+                while (static_cast<int>(pn.particleChildren.size()) > pn.particleMaxNum) {
+                    pn.particleChildren.erase(pn.particleChildren.begin());
+                }
+            }
+
+        physics_step:
+            // ====== sub_6C17A4: Physics stepping ======
+            // Pass 1: Delete outside-screen particles (0x6C1858..0x6C1950)
+            if (pn.particleDeleteOutside) {
+                for (auto it = pn.particleChildren.begin(); it != pn.particleChildren.end(); ) {
+                    auto &child = *it;
+                    if (!child || !child->_runtime || child->_runtime->nodes.empty()) {
+                        it = pn.particleChildren.erase(it);
+                        continue;
+                    }
+                    if (child->_allplaying && pn.particleDeleteOutside) {
+                        const auto &cr = child->_runtime->nodes[0];
+                        const double px = cr.accumulated.posX, py = cr.accumulated.posY;
+                        const double w = _runtime->width > 0 ? _runtime->width : 1024.0;
+                        const double h = _runtime->height > 0 ? _runtime->height : 768.0;
+                        if (px < -w || px > 2*w || py < -h || py > 2*h) {
+                            it = pn.particleChildren.erase(it);
+                            continue;
+                        }
+                    }
+                    ++it;
+                }
+            }
+
+            // Pass 2: Step each remaining child (0x6C1984..0x6C1A3C)
+            for (auto &child : pn.particleChildren) {
+                if (!child || !child->_runtime) continue;
+                child->_zFactor = _zFactor;
+                if (!child->_runtime->nodes.empty()) {
+                    auto &cr = child->_runtime->nodes[0];
+                    cr.parentClipIndex = pn.parentClipIndex;
+                    cr.visibleAncestorIndex = pn.visibleAncestorIndex;
+                }
+                child->frameProgress(_frameLastTime);
+                if (!child->_runtime->nodes.empty()) {
+                    child->updateLayers(currentTime);
+                }
+            }
+        } // for each nodeType==4
     }
 
     void Player::updateLayersPhase3_AnchorNode() {

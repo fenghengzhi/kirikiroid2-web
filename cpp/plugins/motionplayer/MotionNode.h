@@ -166,15 +166,13 @@ namespace motion::detail {
         int particleFlyDirection = 0;      // node+2180
         int particleApplyZoomToVelocity = 0; // node+2184
         bool particleDeleteOutside = false;  // node+2188
-        // Per-particle state (position, velocity, angle, lifetime)
-        struct ParticleState {
-            double posX = 0, posY = 0, posZ = 0;
-            double velX = 0, velY = 0;
-            double angle = 0;
-            double zoom = 1.0;
-            bool alive = false;
-        };
-        std::vector<ParticleState> particleStates;
+        // Previous frame matrix for change detection (node+2320..2336)
+        double prevM11 = 1.0, prevM21 = 0.0;
+        double prevM12 = 0.0, prevM22 = 1.0;
+        double prevParticleAngle = 0.0;        // node+2352
+        double emitterTimerAccum = 0.0;        // node+2360: frequency timer
+        bool particleEmitterFlagActive = false; // v8[135].u8[0]
+        double particleCameraDamping = 1.0;    // v8[137].u64[0]
 
         // Particle emitter state for nodeType=6 (sub_6BEDD0 at 0x6BEDD0)
         bool emitterActive = false;    // node+2380
