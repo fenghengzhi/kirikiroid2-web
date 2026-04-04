@@ -322,7 +322,7 @@ namespace motion {
         tTJSVariant getCommandList();
         bool getD3DAvailable();
         void doAlphaMaskOperation();
-        void onFindMotion(ttstr name);
+        void onFindMotion(ttstr name, int flags = 0);
         // Aligned to libkrkr2.so 0x681CAC: motion property as raw callback
         // so we have objthis to call onFindMotion TJS callback.
         static tjs_error setMotionCompat(tTJSVariant *result, tjs_int numparams,
@@ -452,6 +452,11 @@ namespace motion {
         double _boundsMaxY = -1e308;
         bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
         std::unordered_map<std::string, double> _variableValues;
+
+        // Parent color propagated from parent motion node (sub_6BE0C0 at 0x6BEB7C).
+        // Binary: *(_DWORD *)(childPlayer + 1156) = *(_DWORD *)(node + 100)
+        // Stores colorBytes[0..3] packed as RGBA uint32 (default 0xFF808080).
+        uint32_t _parentColorPacked = 0xFF808080u;  // player+1156
 
         // Aligned to libkrkr2.so emote scale/rotate fields:
         // sub_681F20: player+1184, sub_681F28: player+1192, sub_681F30: player+1200

@@ -61,6 +61,9 @@ namespace motion::detail {
         double meshInvM11 = 0, meshInvM12 = 0;  // node+2096, node+2104
         double meshInvM21 = 0, meshInvM22 = 0;  // node+2112, node+2120
         float meshInvOffX = 0, meshInvOffY = 0;  // node+2128, node+2132
+        // Computed mesh flags (sub_6BC4F0 at 0x6BC6E4..0x6BC818)
+        bool hasMeshData = false;        // node+1962: has active mesh data
+        bool meshCombineEnabled = false; // node+1963: mesh combines with children
         int stencilType = 0;          // "stencilType" from PSB
 
         // Mesh control points (node+2024..2032 in libkrkr2.so).
@@ -80,6 +83,11 @@ namespace motion::detail {
         // Clip slot state — aligned to sub_6B4A6C: both slots start done=true.
         // Set to false when evaluateLayerContent finds an active frame (type!=0).
         bool slotDone = true;          // node+344 / node+880 (current slot)
+
+        // Dual clip slot crossfade state (sub_6BE0C0 at 0x6BE85C)
+        // When a new motion is played, the current slot becomes "other slot" for blending.
+        bool currentSlotCrossfading = false;  // *(v10 + 536*v13 + 345)
+        bool currentSlotHasEasing = false;    // *(v10 + 536*v13 + 544)
 
         // PSB reference (for evaluateLayerContent calls)
         std::shared_ptr<const PSB::PSBDictionary> psbNode;
@@ -251,6 +259,11 @@ namespace motion::detail {
             double motionTimeOffset = 0.0;
             double clipStartTime = 0.0;  // slot+328: frame start time in clip
             std::string motionDtgt;    // target node name for angleMode=4
+            // --- Other clip slot state for crossfade (sub_6BE0C0 at 0x6BE85C) ---
+            bool otherSlotDone = true;              // *(v10 + 536*v38 + 344)
+            int otherSlotMotionDt = 0;              // *(v10 + 536*v38 + 668) angleMode
+            double otherSlotMotionDofst = 0.0;      // *(v10 + 536*v38 + 672) dofst
+            double otherSlotStartTime = 0.0;        // *(v10 + 536*v38 + 328)
             // Particle data from FrameContentState (mask 0x100000)
             int prtTrigger = 0;
             double prtFmin = 10.0;

@@ -719,6 +719,11 @@ namespace motion {
             // Parent clip chain: node+1962/1963 flags (0x6BC6E4..0x6BC818)
             // node+1962 = has mesh data, node+1963 = mesh combine enabled
             // parentClipIndex propagated by sub_6BDCC0 carries the ancestor chain
+            // Set mesh flags: hasMeshData when meshType!=0 and control points exist;
+            // meshCombineEnabled when mesh is active for child deformation.
+            // These flags gate the visibleAncestor conditional in sub_6BE0C0 (label_18).
+            vn.hasMeshData = (vn.meshType != 0 && !vn.meshControlPoints.empty());
+            vn.meshCombineEnabled = (vn.hasMeshData && vn.meshType == 1 && (vn.meshFlags & 1) != 0);
 
             // Check visible (0x6BC700..0x6BC74C)
             if (!vn.accumulated.visible) {
@@ -1360,12 +1365,20 @@ namespace motion {
                     if ((v12 & 5) != 0 || (mn.flags & 0x01)) {
                         mn.flags |= 0x01; // mark as initialized (0x6BE388)
 
+                        // --- Slot flip: save current slot to other slot for crossfade ---
+                        // Before loading new motion, preserve current slot state so the
+                        // crossfade blend (0x6BE85C) can interpolate between old and new.
+                        mn.interpolatedCache.otherSlotDone = mn.slotDone;
+                        mn.interpolatedCache.otherSlotMotionDt = mn.interpolatedCache.motionDt;
+                        mn.interpolatedCache.otherSlotMotionDofst = mn.interpolatedCache.motionDofst;
+                        mn.interpolatedCache.otherSlotStartTime = mn.interpolatedCache.clipStartTime;
+                        mn.currentSlotCrossfading = true;
+
                         // Resolve motion and play (0x6BE3B4..0x6BE46C)
                         // Binary: prepends "/" to src, then calls Player_play(child, motionFlags | v12, "/" + src)
-                        // TODO: Pass play flags (mn.interpolatedCache.motionFlags | v12) to child.
-                        // We don't have a Player_play equivalent yet, so only onFindMotion is called.
                         child.setChara(_chara);
-                        child.onFindMotion(detail::widen("/" + src));
+                        child.onFindMotion(detail::widen("/" + src),
+                                           mn.interpolatedCache.motionFlags | v12);
                         mn.childNeedsInit = false;
 
                         // Time sync from parent loop time (0x6BE478..0x6BE4E8)
@@ -1414,13 +1427,37 @@ namespace motion {
                 double computedAngle = 0.0;
                 const double dofst = mn.interpolatedCache.motionDofst;
 
-                // TODO [CRITICAL 5/6/7]: Pre-switch dual-slot angle interpolation (0x6BE85C..0x6BEC9C).
-                // Binary: when docmpl is set, other slot is not done, and other slot has angleMode,
-                // it blends dofst (v37) between two clip slots during crossfade using sub_69A754
-                // curve-aware interpolation. This affects the base v37 value used by cases 2, 3, 4.
-                // Current: dofst is used raw without dual-slot blending.
-                // All three cases (2, 4, and the pre-switch block) share this missing infrastructure.
-                double v37 = dofst;  // should be dual-slot interpolated when crossfading
+                // Dual-slot crossfade angle interpolation (0x6BE85C..0x6BEC9C)
+                // When crossfading between two clip slots, blend dofst (v37) between
+                // old and new slot values using time-based ratio.
+                double v37 = dofst;
+                if (mn.interpolatedCache.motionDocmpl
+                    && mn.currentSlotCrossfading
+                    && !mn.interpolatedCache.otherSlotDone
+                    && mn.interpolatedCache.otherSlotMotionDt != 0) {
+                    double parentTime = _frameLoopTime;
+                    double currentStart = mn.interpolatedCache.clipStartTime;
+                    double otherStart = mn.interpolatedCache.otherSlotStartTime;
+                    double denom = otherStart - currentStart;
+                    if (denom != 0.0) {
+                        double ratio = (parentTime - currentStart) / denom;
+                        if (mn.currentSlotHasEasing) {
+                            // TODO: apply evaluateBezierCurve for easing
+                        }
+                        ratio = std::clamp(ratio, 0.0, 1.0);
+                        double otherDofst = mn.interpolatedCache.otherSlotMotionDofst;
+                        // Wrap angle difference > 180 degrees for shortest-path interpolation
+                        if (dofst >= otherDofst) {
+                            if (dofst - otherDofst > 180.0) otherDofst += 360.0;
+                        } else {
+                            if (otherDofst - dofst > 180.0) otherDofst -= 360.0;
+                        }
+                        v37 = otherDofst * ratio + dofst * (1.0 - ratio);
+                        // Normalize to [0, 360)
+                        if (v37 < 0.0) v37 += 360.0;
+                        if (v37 >= 360.0) v37 -= 360.0;
+                    }
+                }
 
                 if (angleMode != 0) {
                     switch (angleMode) {
@@ -1539,13 +1576,15 @@ namespace motion {
                         cr.accumulated.active = mn.accumulated.active;
                         cr.accumulated.dirty = true;
                     }
-                    // Blend mode (0x6BEB7C)
+                    // Parent color propagation (0x6BEB7C)
                     // Binary: *(_DWORD *)(v16 + 1156) = *(_DWORD *)(v10 + 100)
-                    // Reads node+100 (colorBytes[0..3] packed as int32), writes to
-                    // child player+1156 (NOT runtime node). Our architecture stores
-                    // blendMode on the runtime node's interpolatedCache instead.
-                    // TODO: verify node+100 maps to blendMode — may be colorBytes pack.
-                    cr.interpolatedCache.blendMode = mn.interpolatedCache.blendMode;
+                    // Reads node+100 (colorBytes[0..3] packed as uint32 RGBA), writes to
+                    // child player+1156 (_parentColorPacked). NOT a blend mode field.
+                    {
+                        uint32_t packed;
+                        std::memcpy(&packed, &mn.colorBytes[0], sizeof(uint32_t));
+                        child._parentColorPacked = packed;
+                    }
 
                     // zFactor propagation (0x6BEA94)
                     child._zFactor = _zFactor;
@@ -1589,7 +1628,13 @@ namespace motion {
 
                     // Clip chain propagation (0x6BE278..0x6BE29C)
                     cr.parentClipIndex = mn.parentClipIndex;
-                    cr.visibleAncestorIndex = mn.visibleAncestorIndex;
+                    // Binary 0x6BE280: if meshCombineEnabled, current node is ancestor;
+                    // otherwise, propagate stored ancestor.
+                    if (mn.meshCombineEnabled) {
+                        cr.visibleAncestorIndex = static_cast<int>(i);
+                    } else {
+                        cr.visibleAncestorIndex = mn.visibleAncestorIndex;
+                    }
                 }
 
             }
@@ -1608,10 +1653,14 @@ namespace motion {
                     //         v18 = v10; if (!node+1963) v18 = *(v10+1968)
                     //         v17+1968 = v18 (visibleAncestor with conditional)
                     //         v17+1952 = v10+1952 (third field — not mapped in our arch)
-                    // TODO: Binary has conditional logic for visibleAncestor based on
-                    // node+1963 (mesh combine flag). Our architecture uses a flat index.
                     cr.parentClipIndex = mn.parentClipIndex;
-                    cr.visibleAncestorIndex = mn.visibleAncestorIndex;
+                    // Binary 0x6BE280: if meshCombineEnabled, current node is ancestor;
+                    // otherwise, propagate stored ancestor.
+                    if (mn.meshCombineEnabled) {
+                        cr.visibleAncestorIndex = static_cast<int>(i);
+                    } else {
+                        cr.visibleAncestorIndex = mn.visibleAncestorIndex;
+                    }
                 }
                 // Step child: frameProgress + updateLayers (0x6BE2A4..0x6BE2AC)
                 child._independentLayerInherit = _independentLayerInherit;

@@ -464,7 +464,50 @@ namespace motion {
 
     void Player::doAlphaMaskOperation() {}
 
-    void Player::onFindMotion(ttstr name) { (void)findMotion(name); }
+    // Aligned to libkrkr2.so Player_playImpl (0x6B21E8):
+    // Called from sub_6BE0C0 at 0x6BE46C with flags = motionFlags | v12.
+    // flags: PlayFlagForce(1)=force reload, PlayFlagStealth(16)=set stealth fields only.
+    void Player::onFindMotion(ttstr name, int flags) {
+        // PlayFlagStealth (0x10): store as stealth motion, don't load
+        // Binary: if ((flags & 0x10) && !player->project) { player->motionKey = name; return; }
+        if ((flags & PlayFlagStealth) && _project.Type() == tvtVoid) {
+            _stealthMotion = name;
+            return;
+        }
+
+        // PlayFlagForce (0x01): force reload even if same motion is loaded
+        // Binary: Player_setMotionImpl skips reload guard when force flag set
+        if ((flags & PlayFlagForce) && _motionKey == name) {
+            _motionKey = ttstr();  // clear to bypass same-motion guard in findMotion
+        }
+
+        // Load the motion (equivalent to Player_setMotionImpl → loadMotion)
+        (void)findMotion(name);
+
+        // After loading, prime timelines and start playback
+        // (aligned to Player_setMotionImpl post-load behavior)
+        if (_runtime->activeMotion && _runtime->timelines.empty()) {
+            detail::primeTimelineStates(_runtime->timelines,
+                                        *_runtime->activeMotion);
+        }
+
+        // Start all timelines playing (equivalent to playCompat's playOne loop)
+        if (_runtime->activeMotion && !_runtime->timelines.empty()) {
+            for (auto &[tlName, state] : _runtime->timelines) {
+                state.flags = flags & ~PlayFlagStealth;  // pass flags minus stealth
+                state.playing = true;
+                state.blendRatio = 1.0;
+            }
+            _allplaying = true;
+        }
+
+        // Handle pending stealth motion (0x6B226C..0x6B2280)
+        if (!_stealthMotion.IsEmpty()) {
+            _stealthChara = _chara;
+            // stealthMotion is consumed — binary nulls it after use
+            _stealthMotion = ttstr();
+        }
+    }
 
     tjs_error Player::setDrawAffineTranslateMatrixCompat(
         tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
