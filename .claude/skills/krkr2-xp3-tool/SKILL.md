@@ -1,6 +1,6 @@
 ---
 name: krkr2-xp3-tool
-description: Extract files from XP3 archives with the repository's native `tools/xp3` utility, including native build steps, output layout, and `xp3filter.tjs` handling. Use when the user asks to unpack XP3 files, run the `xp3` CLI, inspect `tools/xp3`, or work with `xp3filter.tjs` in this repository.
+description: 使用仓库内置的 `tools/xp3` 工具解包 XP3 归档，包括原生构建步骤、输出目录结构和 `xp3filter.tjs` 处理。当用户需要解包 XP3 文件、运行 `xp3` 命令行工具、查看 `tools/xp3` 或处理 `xp3filter.tjs` 时使用。
 ---
 
 # KrKr2 XP3 工具

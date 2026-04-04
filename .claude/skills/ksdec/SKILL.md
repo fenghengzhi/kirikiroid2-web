@@ -1,70 +1,70 @@
 ---
 name: ksdec
-description: Decrypt KiriKiri2 encrypted scenario files (.ks/.tjs) using the ksdec tool. Use this skill whenever you need to read, inspect, or analyze the contents of .ks or .tjs files that are FEFE-encrypted (mode 0/1/2), or when working with KAG scenario scripts from KiriKiri2/kirikiroid2 games. Also use when the user asks to decode, decrypt, or dump scenario files, or when you encounter binary .ks files that aren't plain text.
+description: 使用 ksdec 工具解密 KiriKiri2 加密的剧情脚本文件（.ks/.tjs）。当需要读取、检查或分析 FEFE 加密（模式 0/1/2）的 .ks 或 .tjs 文件，或处理 KiriKiri2/kirikiroid2 游戏的 KAG 剧情脚本时使用。也在用户要求解码、解密或转储剧情文件，或遇到非纯文本的二进制 .ks 文件时使用。
 ---
 
-# KiriKiri2 Scenario Decryptor (ksdec)
+# KiriKiri2 剧情脚本解密器（ksdec）
 
-## Tool Location
+## 工具位置
 
 ```
 tools/bin/mac/rel/ksdec
 ```
 
-## What It Does
+## 功能说明
 
-Decrypts KiriKiri2 FEFE-encrypted scenario files and outputs UTF-8 text. Handles all encryption modes used by KiriKiri2's TextStream:
+解密 KiriKiri2 FEFE 加密的剧情脚本文件并输出 UTF-8 文本。处理 KiriKiri2 TextStream 使用的所有加密模式：
 
-| Format | Header | Description |
-|--------|--------|-------------|
-| FEFE mode 0 | `FE FE 00` | XOR cipher on UTF-16LE |
-| FEFE mode 1 | `FE FE 01` | Adjacent bit swap on UTF-16LE |
-| FEFE mode 2 | `FE FE 02` | zlib-compressed UTF-16LE |
-| Plain UTF-16LE | `FF FE` | BOM-marked, no encryption |
-| Plain UTF-16BE | `FE FF` | BOM-marked, byte-swapped |
-| Plain UTF-8 | any | Passed through as-is |
+| 格式 | 文件头 | 说明 |
+|------|--------|------|
+| FEFE 模式 0 | `FE FE 00` | 对 UTF-16LE 进行 XOR 加密 |
+| FEFE 模式 1 | `FE FE 01` | 对 UTF-16LE 进行相邻位交换 |
+| FEFE 模式 2 | `FE FE 02` | zlib 压缩的 UTF-16LE |
+| 纯 UTF-16LE | `FF FE` | 带 BOM 标记，无加密 |
+| 纯 UTF-16BE | `FE FF` | 带 BOM 标记，字节序翻转 |
+| 纯 UTF-8 | 任意 | 直接透传 |
 
-## Usage
+## 用法
 
 ```bash
-# Decrypt to stdout
+# 解密输出到标准输出
 tools/bin/mac/rel/ksdec input.ks
 
-# Decrypt to file
+# 解密输出到文件
 tools/bin/mac/rel/ksdec -o output.txt input.ks
 
-# Batch decrypt multiple files
+# 批量解密多个文件
 tools/bin/mac/rel/ksdec file1.ks file2.ks file3.tjs
 
-# Decrypt all .ks in a directory
+# 解密目录下所有 .ks 文件
 find /tmp/gamedata -name "*.ks" -exec tools/bin/mac/rel/ksdec {} \;
 ```
 
-Diagnostic info (format detected, char count) goes to stderr. Decrypted text goes to stdout.
+诊断信息（检测到的格式、字符数）输出到 stderr。解密后的文本输出到 stdout。
 
-## Typical Workflow
+## 典型工作流
 
-1. Extract game archives with xp3 tool
-2. Decrypt scenario files with ksdec
-3. Analyze KAG script logic (tags, labels, macros)
+1. 使用 xp3 工具解包游戏归档
+2. 使用 ksdec 解密剧情脚本文件
+3. 分析 KAG 脚本逻辑（标签、标记、宏）
 
 ```bash
-# Full pipeline example
+# 完整流程示例
 tools/bin/mac/rel/xp3 -o /tmp/gamedata game.xp3
 tools/bin/mac/rel/ksdec /tmp/gamedata/data/sysscn/first.ks
 ```
 
-## Building From Source
+## 从源码构建
 
 ```bash
-# Standalone (no cmake needed)
+# 独立编译（无需 cmake）
 c++ -std=c++17 -O2 -lz -o tools/bin/mac/rel/ksdec tools/ksdec/main.cpp
 
-# Via cmake (builds alongside other tools)
+# 通过 cmake（与其他工具一起构建）
 cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON
 cmake --build out/macos/release --target ksdec
 ```
 
-## Technical Details
+## 技术细节
 
-The encryption/decryption logic mirrors `cpp/core/base/TextStream.cpp` (tTVPTextReadStream constructor, line 157-210). The tool is a standalone C++ binary with only zlib as a dependency — no TJS2 engine required.
+加密/解密逻辑与 `cpp/core/base/TextStream.cpp`（tTVPTextReadStream 构造函数，第 157-210 行）一致。该工具是一个独立的 C++ 二进制文件，仅依赖 zlib——不需要 TJS2 引擎。

@@ -1,6 +1,6 @@
 ---
 name: krkr2-server
-description: Start the KrKr2 development server with cross-origin isolation headers for WebAssembly debugging. Use when the user needs to launch coi-server, serve build output, load XP3 or ZIP game files, or access the app from LAN devices.
+description: 启动带跨域隔离响应头的 KrKr2 开发服务器，用于 WebAssembly 调试。当用户需要启动 coi-server、提供构建输出服务、加载 XP3 或 ZIP 游戏文件、或从局域网设备访问时使用。
 ---
 
 # KrKr2 开发服务器

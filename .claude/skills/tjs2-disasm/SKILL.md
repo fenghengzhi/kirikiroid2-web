@@ -1,23 +1,23 @@
 ---
 name: tjs2-disasm
-description: Disassemble compiled TJS2 bytecode files (.tjs) from KiriKiri2 game archives into human-readable VM instructions. Use when you need to understand game script logic, reverse-engineer compiled TJS2 bytecodes, analyze Config.tjs/MainWindow.tjs/Initialize.tjs behavior, find string references in compiled scripts, or trace function call flows in KiriKiri2 games. Also trigger when the user asks to "decompile TJS", "disassemble .tjs", "read compiled script", "dump bytecodes", or wants to understand what a compiled game script does.
+description: 将 KiriKiri2 游戏归档中的已编译 TJS2 字节码文件（.tjs）反汇编为人类可读的 VM 指令。当需要理解游戏脚本逻辑、逆向工程已编译 TJS2 字节码、分析 Config.tjs/MainWindow.tjs/Initialize.tjs 行为、在编译脚本中查找字符串引用，或追踪 KiriKiri2 游戏中的函数调用流程时使用。也在用户要求"反编译 TJS"、"反汇编 .tjs"、"读取编译脚本"、"转储字节码"或想了解编译后游戏脚本的功能时触发。
 ---
 
-# TJS2 Bytecode Disassembler
+# TJS2 字节码反汇编器
 
-## What this does
+## 功能说明
 
-Disassembles compiled TJS2 bytecode files (the `.tjs` files inside KiriKiri2 `.xp3` archives) into readable VM instruction listings. These files are NOT plain text — they're compiled bytecodes with the `TJS2100` header.
+将已编译的 TJS2 字节码文件（KiriKiri2 `.xp3` 归档中的 `.tjs` 文件）反汇编为可读的 VM 指令列表。这些文件不是纯文本——它们是带有 `TJS2100` 文件头的编译字节码。
 
-The output shows:
-- All function/class/property contexts in the script
-- VM instructions (cp, call, jf, jnf, tt, ceq, etc.)
-- String constants, integer constants, object references
-- Control flow (jumps, branches, try/catch blocks)
+输出内容包括：
+- 脚本中所有的函数/类/属性上下文
+- VM 指令（cp、call、jf、jnf、tt、ceq 等）
+- 字符串常量、整数常量、对象引用
+- 控制流（跳转、分支、try/catch 块）
 
-## Prerequisites
+## 前置条件
 
-The `tjsdump` tool must be built first (native macOS/Linux binary, NOT Emscripten):
+需要先构建 `tjsdump` 工具（原生 macOS/Linux 二进制文件，不是 Emscripten 版本）：
 
 ```bash
 export VCPKG_ROOT=/Users/bytedance/vcpkg
@@ -25,99 +25,99 @@ cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON -DBISON_EXECUTABLE=/opt/h
 cmake --build out/macos/release --target tjsdump
 ```
 
-Binary location: `tools/bin/mac/rel/tjsdump`
+二进制文件位置：`tools/bin/mac/rel/tjsdump`
 
-## Usage
+## 用法
 
-### Basic disassembly
+### 基本反汇编
 
 ```bash
 tools/bin/mac/rel/tjsdump /path/to/script.tjs
 ```
 
-### Extract from XP3 first, then disassemble
+### 先从 XP3 解包，再反汇编
 
 ```bash
-# Extract all files from an xp3 archive
+# 从 xp3 归档中解包所有文件
 tools/bin/mac/rel/xp3 -o /tmp/extracted game.xp3
 
-# Disassemble a specific script
+# 反汇编特定脚本
 tools/bin/mac/rel/tjsdump /tmp/extracted/game/system/MainWindow.tjs
 ```
 
-### Search for specific strings in disassembly
+### 在反汇编输出中搜索特定字符串
 
 ```bash
-# Find all references to "d3dMode" in MainWindow.tjs
+# 在 MainWindow.tjs 中查找所有 "d3dMode" 的引用
 tools/bin/mac/rel/tjsdump /path/to/MainWindow.tjs | grep "d3dMode"
 
-# Dump to file for detailed analysis
+# 转储到文件以便详细分析
 tools/bin/mac/rel/tjsdump /path/to/MainWindow.tjs > /tmp/mainwindow_disasm.txt
 ```
 
-### Find a specific function
+### 查找特定函数
 
 ```bash
-# Find the initD3D function definition and its body
+# 查找 initD3D 函数定义及其函数体
 tools/bin/mac/rel/tjsdump /path/to/MainWindow.tjs | sed -n '/^(function) initD3D/,/^([a-z]/p'
 ```
 
-## Reading the output
+## 读取输出
 
-### Context headers
+### 上下文头
 ```
-(top level script) global 0x...     ← top-level code
-(function) initD3D 0x...            ← function definition
-(class) KAGWindow 0x...             ← class definition
-(property) isD3D 0x...              ← property getter/setter
-```
-
-### VM instructions
-```
-*N = (type)"value"    ← constant definition (string, int, object)
-NN instruction args   ← VM opcode at address NN
+(top level script) global 0x...     ← 顶层代码
+(function) initD3D 0x...            ← 函数定义
+(class) KAGWindow 0x...             ← 类定义
+(property) isD3D 0x...              ← 属性 getter/setter
 ```
 
-Key opcodes:
-- `cp %dst, %src` — copy register
-- `call %result, %func(args)` — function call
-- `tt %reg` / `tf %reg` — test true / test false
-- `jf addr` / `jnf addr` — jump if false / jump if not false
-- `jmp addr` — unconditional jump
-- `ceq %a, %b` — compare equal
-- `cgt %a, %b` — compare greater than
-- `entry addr, %reg` — try block entry (catch at addr)
-- `extry` — exit try block
-- `new %result, %class(args)` — create new object
-- `chgthis %func, %obj` — bind function to object
-- `gpi %result, %obj.%prop` — get property indirect
-- `spi %obj.%prop, %value` — set property indirect
-- `cl %reg` — clear register (set to void)
-- `srv %reg` — set return value
-- `ret` — return
+### VM 指令
+```
+*N = (type)"value"    ← 常量定义（字符串、整数、对象）
+NN instruction args   ← 地址 NN 处的 VM 操作码
+```
 
-### Register conventions
-- `%-N` — local variables / function parameters (negative = locals)
-- `%N` — temporary registers (positive = temps)
-- `%-1` is typically `this`
+关键操作码：
+- `cp %dst, %src` — 复制寄存器
+- `call %result, %func(args)` — 函数调用
+- `tt %reg` / `tf %reg` — 测试真 / 测试假
+- `jf addr` / `jnf addr` — 假则跳转 / 非假则跳转
+- `jmp addr` — 无条件跳转
+- `ceq %a, %b` — 比较相等
+- `cgt %a, %b` — 比较大于
+- `entry addr, %reg` — try 块入口（catch 在 addr 处）
+- `extry` — 退出 try 块
+- `new %result, %class(args)` — 创建新对象
+- `chgthis %func, %obj` — 将函数绑定到对象
+- `gpi %result, %obj.%prop` — 间接获取属性
+- `spi %obj.%prop, %value` — 间接设置属性
+- `cl %reg` — 清空寄存器（设为 void）
+- `srv %reg` — 设置返回值
+- `ret` — 返回
 
-## Common analysis patterns
+### 寄存器约定
+- `%-N` — 局部变量 / 函数参数（负数 = 局部变量）
+- `%N` — 临时寄存器（正数 = 临时变量）
+- `%-1` 通常是 `this`
 
-### Find what conditions gate a code path
+## 常见分析模式
+
+### 查找什么条件门控某个代码路径
 ```bash
-# Example: what controls D3D initialization?
+# 示例：什么控制 D3D 初始化？
 tjsdump MainWindow.tjs | grep -B5 -A10 "DrawDeviceD3D"
 ```
 
-### Trace function call chain
+### 追踪函数调用链
 ```bash
-# Find all functions that reference "isD3D"
+# 查找所有引用 "isD3D" 的函数
 tjsdump MainWindow.tjs | grep -n "isD3D" | head -20
 ```
 
-### Find where a script is loaded
+### 查找脚本在哪里被加载
 ```bash
-# Search all scripts for references to "D3D.tjs"
+# 在所有脚本中搜索 "D3D.tjs" 的引用
 for f in /tmp/extracted/**/*.tjs; do
   result=$(tjsdump "$f" 2>&1 | grep "D3D.tjs" | head -1)
   [ -n "$result" ] && echo "=== $(basename $f) ===" && echo "$result"

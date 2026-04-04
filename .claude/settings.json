@@ -6,7 +6,8 @@
       "WebFetch",
       "mcp__ida-pro-mcp__*",
       "Skill",
-      "Edit"
+      "Edit",
+      "Edit(/.claude/**)"
     ],
     "additionalDirectories": [
       "/tmp",

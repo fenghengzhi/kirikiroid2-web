@@ -1,6 +1,6 @@
 ---
 name: krkr2-build
-description: Compile and build the KrKr2 WebAssembly project using CMake and Emscripten. Use when the user needs to compile, build, or rebuild the project, configure build presets, or troubleshoot build errors.
+description: 使用 CMake 和 Emscripten 编译构建 KrKr2 WebAssembly 项目。当用户需要编译、构建或重新构建项目、配置构建预设或排查构建错误时使用。
 ---
 
 # KrKr2 编译构建

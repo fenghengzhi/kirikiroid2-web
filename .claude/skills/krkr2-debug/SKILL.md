@@ -1,6 +1,6 @@
 ---
 name: krkr2-debug
-description: Guides the full KrKr2 WebAssembly debug workflow from build to browser. Use when the user needs to debug, test, or troubleshoot the runtime environment end-to-end.
+description: 指导 KrKr2 WebAssembly 完整调试工作流，从构建到浏览器。当用户需要调试、测试或排查运行时环境的端到端问题时使用。
 ---
 
 # KrKr2 调试工作流

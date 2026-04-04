@@ -1,28 +1,28 @@
 ---
 name: ida-search-string
-description: Search for strings in IDA Pro across ALL encodings (UTF-8, UTF-16LE, UTF-32) using IDAPython. The IDA MCP `find` tool only matches ASCII/UTF-8 strings and misses UTF-16 encoded strings — this skill fixes that gap. Use this skill whenever the user wants to search or find strings in IDA Pro, especially when they say "搜索字符串", "search string", "find string in IDA", or when a previous `find` string search returned no results unexpectedly.
+description: 在 IDA Pro 中跨所有编码（UTF-8、UTF-16LE、UTF-32）搜索字符串，使用 IDAPython。IDA MCP 的 `find` 工具仅匹配 ASCII/UTF-8 字符串，会遗漏 UTF-16 编码的字符串——此 skill 修补了这个缺口。当用户要搜索或查找 IDA Pro 中的字符串时使用，尤其是当用户说"搜索字符串"、"search string"、"find string in IDA"，或之前的 `find` 字符串搜索意外返回空结果时。
 ---
 
-# IDA String Search (All Encodings)
+# IDA 字符串搜索（全编码）
 
-## Why this skill exists
+## 为什么需要这个 skill
 
-The `mcp__ida-pro-mcp__find` tool with `type: "string"` only searches ASCII/UTF-8 strings in IDA's string list. It silently skips UTF-16LE strings, which are extremely common in binaries that use wide characters (e.g., Kirikiri/吉里吉里 engine, Windows-origin code, Java/JNI unicode strings).
+`mcp__ida-pro-mcp__find` 工具配合 `type: "string"` 仅搜索 IDA 字符串列表中的 ASCII/UTF-8 字符串。它会静默跳过 UTF-16LE 字符串，而这类字符串在使用宽字符的二进制中极其常见（如 Kirikiri/吉里吉里引擎、Windows 来源的代码、Java/JNI unicode 字符串）。
 
-Additionally, IDA's string list can misdetect the start address of tightly packed UTF-16 strings (off by 2 bytes), causing the first character to be truncated. For example, `"PackinOne.dll"` may appear as `"ackinOne.dll"` in the string list, making keyword searches miss it.
+此外，IDA 的字符串列表可能错误检测紧密排列的 UTF-16 字符串的起始地址（偏移 2 字节），导致第一个字符被截断。例如，`"PackinOne.dll"` 在字符串列表中可能显示为 `"ackinOne.dll"`，使得关键词搜索无法匹配。
 
-This skill uses `mcp__ida-pro-mcp__py_eval` to search both IDA's string list AND raw memory, matching against all encodings.
+此 skill 使用 `mcp__ida-pro-mcp__py_eval` 同时搜索 IDA 的字符串列表和原始内存，匹配所有编码。
 
-## How to use
+## 使用方法
 
-The user provides a search keyword as the argument. For example:
+用户提供搜索关键词作为参数。例如：
 - `/ida-search-string emoteplayer.dll`
 - `/ida-search-string JNI_OnLoad`
 
-## Steps
+## 步骤
 
-1. Extract the search keyword from the user's argument.
-2. Call `mcp__ida-pro-mcp__py_eval` with the following IDAPython code, replacing `KEYWORD` with the user's search term:
+1. 从用户参数中提取搜索关键词。
+2. 调用 `mcp__ida-pro-mcp__py_eval`，使用以下 IDAPython 代码，将 `KEYWORD` 替换为用户的搜索词：
 
 ```python
 import ida_strlist, ida_bytes, ida_segment
@@ -30,7 +30,7 @@ import ida_strlist, ida_bytes, ida_segment
 keyword = b"KEYWORD"
 kw_lower = keyword.lower()
 
-# ── Phase 1: Search IDA string list (fast) ──
+# ── 阶段 1：搜索 IDA 字符串列表（快速）──
 sl = ida_strlist.string_info_t()
 count = ida_strlist.get_strlist_qty()
 found_addrs = set()
@@ -46,7 +46,7 @@ for i in range(count):
             found_addrs.add(sl.ea)
             found += 1
 
-# ── Phase 2: Raw memory scan for UTF-16LE (catches misdetected strings) ──
+# ── 阶段 2：原始内存扫描 UTF-16LE（捕获未正确检测的字符串）──
 kw_utf16 = keyword.lower().decode('ascii', errors='ignore').encode('utf-16-le')
 
 raw_found = 0
@@ -100,17 +100,17 @@ while seg:
         ea += chunk_size
     seg = ida_segment.get_next_seg(seg.start_ea)
 
-print(f"\nPhase 1 (string list): {found} matches")
-print(f"Phase 2 (raw memory):  {raw_found} additional matches")
-print(f"Total: {found + raw_found} matches")
+print(f"\n阶段 1（字符串列表）：{found} 个匹配")
+print(f"阶段 2（原始内存）：  {raw_found} 个额外匹配")
+print(f"总计：{found + raw_found} 个匹配")
 ```
 
-3. Present the results to the user. If matches are found, show each address, encoding type, and string content. Phase 1 results come from IDA's string list; Phase 2 (marked `[UTF-16/raw]`) are from raw memory scanning, which catches strings that IDA misdetected or missed entirely. Note that Phase 2 results may include 1-2 extra characters at boundaries due to adjacent data resembling valid UTF-16. If no matches are found, suggest the user try a partial keyword or check if the string might be dynamically constructed at runtime.
+3. 向用户展示结果。如果找到匹配，显示每个地址、编码类型和字符串内容。阶段 1 的结果来自 IDA 的字符串列表；阶段 2（标记为 `[UTF-16/raw]`）来自原始内存扫描，可以捕获 IDA 未正确检测或完全遗漏的字符串。注意阶段 2 的结果在边界处可能包含 1-2 个额外字符，因为相邻数据恰好看起来像有效的 UTF-16。如果没有找到匹配，建议用户尝试部分关键词或检查该字符串是否可能在运行时动态构造。
 
-## Important notes
+## 重要说明
 
-- Always escape any quotes or backslashes in the user's keyword before inserting into the Python code.
-- The keyword is matched case-insensitively against the raw bytes decoded as UTF-8, which works for ASCII substrings in both UTF-8 and UTF-16 content (since `get_strlit_contents` normalizes UTF-16 to bytes).
-- Phase 2 raw memory scan handles cases where IDA's string list has wrong start addresses for tightly-packed UTF-16 strings (e.g., `"PackinOne.dll"` detected as `"ackinOne.dll"`).
-- Phase 2 uses `is_printable_utf16le()` to determine string boundaries, which may include 1-2 stray chars from adjacent ASCII data that happens to look like valid UTF-16LE.
-- If the user previously tried `find` with `type: "string"` and got 0 results, proactively mention that the string was likely UTF-16 encoded, which is why `find` missed it.
+- 插入 Python 代码之前，始终转义用户关键词中的引号和反斜杠。
+- 关键词以不区分大小写的方式与解码为 UTF-8 的原始字节进行匹配，这对 UTF-8 和 UTF-16 内容中的 ASCII 子字符串都有效（因为 `get_strlit_contents` 会将 UTF-16 标准化为字节）。
+- 阶段 2 原始内存扫描处理 IDA 字符串列表中紧密排列的 UTF-16 字符串起始地址错误的情况（如 `"PackinOne.dll"` 被检测为 `"ackinOne.dll"`）。
+- 阶段 2 使用 `is_printable_utf16le()` 来确定字符串边界，可能包含来自相邻 ASCII 数据的 1-2 个杂散字符，因为它们恰好看起来像有效的 UTF-16LE。
+- 如果用户之前尝试过 `find` 配合 `type: "string"` 且得到 0 个结果，主动说明该字符串可能是 UTF-16 编码的，这就是 `find` 遗漏它的原因。

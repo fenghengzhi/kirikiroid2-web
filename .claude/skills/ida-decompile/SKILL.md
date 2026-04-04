@@ -1,93 +1,91 @@
 ---
 name: ida-decompile
 description: >
-  Reverse-engineer libkrkr2.so (Android kirikiroid2) using IDA Pro MCP tools.
-  Use this skill whenever the user asks to check how libkrkr2.so implements
-  something, compare our web port's C++ code against the original binary,
-  find function addresses, trace call chains, or understand NCB class
-  registrations. Also use it proactively when fixing bugs that require
-  understanding the original Android implementation. Triggers on mentions
-  of: libkrkr2.so, IDA, decompile, reverse engineer, original implementation,
-  Android kirikiroid2 binary, "how does the original do X", NCB registration
-  in binary, finding functions in the .so file.
+  使用 IDA Pro MCP 工具逆向工程 libkrkr2.so（Android kirikiroid2）。
+  当用户要求检查 libkrkr2.so 如何实现某功能、将 Web 移植版的 C++ 代码与原始二进制对比、
+  查找函数地址、追踪调用链，或理解 NCB 类注册时使用此 skill。
+  在修复需要理解原始 Android 实现的 bug 时也应主动使用。
+  触发关键词：libkrkr2.so、IDA、反编译、逆向工程、原始实现、
+  Android kirikiroid2 二进制、"原版是怎么做的"、二进制中的 NCB 注册、
+  在 .so 文件中查找函数。
 ---
 
-# IDA Pro MCP — libkrkr2.so Reverse Engineering
+# IDA Pro MCP — libkrkr2.so 逆向工程
 
-This skill provides patterns for reverse-engineering the Android kirikiroid2
-binary (`libkrkr2.so`) using IDA Pro MCP tools.
+此 skill 提供使用 IDA Pro MCP 工具逆向工程 Android kirikiroid2
+二进制文件（`libkrkr2.so`）的模式。
 
-## Available Tools
+## 可用工具
 
-| Tool | Purpose |
-|------|---------|
-| `mcp__ida-pro-mcp__decompile` | Decompile function at address → pseudocode |
-| `mcp__ida-pro-mcp__find` | Search strings/immediates (ASCII/UTF-8 only) |
-| `mcp__ida-pro-mcp__xrefs_to` | Find cross-references to an address |
-| `mcp__ida-pro-mcp__py_eval` | Run IDAPython code (for complex queries) |
-| `mcp__ida-pro-mcp__disasm` | Get disassembly at address |
-| `mcp__ida-pro-mcp__list_funcs` | List functions matching a pattern |
-| `mcp__ida-pro-mcp__get_bytes` | Read raw bytes at address |
+| 工具 | 用途 |
+|------|------|
+| `mcp__ida-pro-mcp__decompile` | 反编译指定地址的函数 → 伪代码 |
+| `mcp__ida-pro-mcp__find` | 搜索字符串/立即数（仅 ASCII/UTF-8） |
+| `mcp__ida-pro-mcp__xrefs_to` | 查找某地址的交叉引用 |
+| `mcp__ida-pro-mcp__py_eval` | 运行 IDAPython 代码（用于复杂查询） |
+| `mcp__ida-pro-mcp__disasm` | 获取指定地址的反汇编代码 |
+| `mcp__ida-pro-mcp__list_funcs` | 列出匹配模式的函数 |
+| `mcp__ida-pro-mcp__get_bytes` | 读取指定地址的原始字节 |
 
-All tools require fetching via `ToolSearch` first (they are deferred tools).
+所有工具需要先通过 `ToolSearch` 获取（它们是延迟加载的工具）。
 
-## Common Workflows
+## 常见工作流
 
-### 1. Find a function by string reference
+### 1. 通过字符串引用查找函数
 
 ```
-Step 1: Search for a known string the function uses
+步骤 1：搜索函数使用的已知字符串
   mcp__ida-pro-mcp__find  type="string"  targets=["the string"]
 
-Step 2: Find what code references that string
+步骤 2：查找引用该字符串的代码
   mcp__ida-pro-mcp__xrefs_to  addrs="0xADDRESS"
 
-Step 3: Decompile the referencing function
+步骤 3：反编译引用函数
   mcp__ida-pro-mcp__decompile  addr="0xFUNC_ADDR"
 ```
 
-### 2. Search for UTF-16 strings
+### 2. 搜索 UTF-16 字符串
 
-`mcp__ida-pro-mcp__find` with `type: "string"` only finds ASCII/UTF-8.
-For UTF-16 strings (very common in KiriKiri — all `TJS_W(...)` literals),
-use the `/ida-search-string` skill instead, which runs an IDAPython script
-that scans both the string list and raw memory.
+`mcp__ida-pro-mcp__find` 配合 `type: "string"` 仅能找到 ASCII/UTF-8。
+对于 UTF-16 字符串（在 KiriKiri 中非常常见——所有 `TJS_W(...)` 字面量），
+改用 `/ida-search-string` skill，它会运行 IDAPython 脚本
+同时扫描字符串列表和原始内存。
 
-### 3. Trace NCB class registration
+### 3. 追踪 NCB 类注册
 
-NCB classes in libkrkr2.so are registered via a chain of functions:
+libkrkr2.so 中的 NCB 类通过一系列函数链注册：
 
 ```
-Module registration function (e.g., sub_6D9B08 for motionplayer.dll)
+模块注册函数（如 sub_6D9B08 用于 motionplayer.dll）
   ├── sub_6DA28C(cls, L"ConstantName", value, flags)  → addConstant
   ├── sub_6FC6E8(L"SubClassName", flag)                → NCB_REGISTER_SUBCLASS
-  │     └── sub_6FC84C → registers members (methods, properties)
+  │     └── sub_6FC84C → 注册成员（方法、属性）
   └── sub_6FEEE4(L"ClassName", flag)                   → NCB_REGISTER_CLASS
-        └── sub_6FF048 → registers members
+        └── sub_6FF048 → 注册成员
               └── sub_9F5AF4(cls, L"methodName", funcPtr, ...) → addMember
 ```
 
-To find a class's registration:
-1. Search for the class name string (e.g., "Player", "SeparateLayerAdaptor")
-2. Find xrefs to that string
-3. The referencing function is usually the NCB registration function
-4. Decompile it to see all registered members
+要查找某个类的注册：
+1. 搜索类名字符串（如 "Player"、"SeparateLayerAdaptor"）
+2. 查找该字符串的交叉引用
+3. 引用函数通常就是 NCB 注册函数
+4. 反编译它以查看所有注册的成员
 
-### 4. Understand function signatures
+### 4. 理解函数签名
 
-IDA decompilation of ARM64 code uses these conventions:
-- `a1` = first argument (usually `this` or class pointer)
-- Return values in `x0` (integer) or `v0`/`d0` (float/double)
-- `__ldaxr`/`__stlxr` = atomic operations (refcount, thread safety)
-- `sub_A13274` = likely `Release()` (reference count decrement)
-- `sub_A136C0` = likely string creation from wide string literal
-- `sub_A13390` = likely `c_str()` or string data access
-- `sub_9F538C` = likely function wrapper creation
-- `sub_9F5AF4` = NCB `addMember` (registers method/property on class)
+IDA 反编译 ARM64 代码使用以下约定：
+- `a1` = 第一个参数（通常是 `this` 或类指针）
+- 返回值在 `x0`（整数）或 `v0`/`d0`（浮点/双精度）
+- `__ldaxr`/`__stlxr` = 原子操作（引用计数、线程安全）
+- `sub_A13274` = 可能是 `Release()`（引用计数递减）
+- `sub_A136C0` = 可能是从宽字符串字面量创建字符串
+- `sub_A13390` = 可能是 `c_str()` 或字符串数据访问
+- `sub_9F538C` = 可能是函数包装器创建
+- `sub_9F5AF4` = NCB `addMember`（在类上注册方法/属性）
 
-### 5. Identify TJS property/method access
+### 5. 识别 TJS 属性/方法访问
 
-TJS object member access in decompiled code looks like:
+反编译代码中的 TJS 对象成员访问看起来像：
 ```c
 // PropGet: obj->PropGet(flags, L"propertyName", hint, &result, obj)
 (**(func_ptr**)(vtable + 200))(obj, flags, wide_string, hint, &result, obj);
@@ -99,39 +97,39 @@ TJS object member access in decompiled code looks like:
 (**(func_ptr**)(vtable + 16))(obj, flags, wide_string, hint, &result, argc, argv, obj);
 ```
 
-### 6. Identify image/resource handling
+### 6. 识别图像/资源处理
 
-For PSB/MTN resource handling:
-- `sub_5996E4` = get PSB resource data (returns pointer + sets size)
-- `TVPReverseRGB` = swap R↔B in RGBA pixel data (for BGRA layer format)
-- Resource pixel format is identified by string: "RGBA8", "A8L8"
-- Resources are raw pixel data (not RL-compressed) after PSB chunk loading
+对于 PSB/MTN 资源处理：
+- `sub_5996E4` = 获取 PSB 资源数据（返回指针 + 设置大小）
+- `TVPReverseRGB` = 在 RGBA 像素数据中交换 R↔B（用于 BGRA 图层格式）
+- 资源像素格式通过字符串识别："RGBA8"、"A8L8"
+- PSB 块加载后，资源是原始像素数据（非 RL 压缩）
 
-### 7. Rename confirmed functions
+### 7. 重命名已确认的函数
 
-When you can **100% confirm** that a `sub_XXXXXX` corresponds to a known
-function in the project, rename it immediately using `mcp__ida-pro-mcp__rename`.
-This makes all future decompilation output readable.
+当你能**100% 确认**某个 `sub_XXXXXX` 对应项目中的已知函数时，
+立即使用 `mcp__ida-pro-mcp__rename` 重命名。
+这会使所有后续反编译输出更加可读。
 
-**When to rename:**
-- The function's string references, call pattern, and behavior exactly match
-  a known function in our C++ codebase or a well-known library function
-- You have cross-referenced from multiple directions (string refs, callers,
-  callees, parameter count) and there is no ambiguity
+**何时重命名：**
+- 函数的字符串引用、调用模式和行为与我们 C++ 代码库中的
+  已知函数或知名库函数完全匹配
+- 你从多个方向交叉验证过（字符串引用、调用者、
+  被调用者、参数数量）且没有歧义
 
-**When NOT to rename:**
-- You're only guessing based on a single clue (e.g., one string reference)
-- The function might be an inlined/merged variant
-- You're unsure whether it's the exact function or a wrapper around it
+**何时不要重命名：**
+- 你仅基于单一线索推测（如一个字符串引用）
+- 该函数可能是内联/合并的变体
+- 你不确定它是精确的函数还是它的包装器
 
-**Naming conventions:**
-- NCB registration: `ClassName_ncb_register`, `ClassName_ncb_members`
-- NCB infrastructure: `ncb_addMember`, `ncb_addConstant`, `ncb_classInit`
-- TJS runtime: `tTJSVariant_Release`, `ttstr_createFromWide`, `ttstr_c_str`
-- Module-level: `modulename_entry`, `modulename_static_init`
-- Class methods: `ClassName_methodName`
+**命名约定：**
+- NCB 注册：`ClassName_ncb_register`、`ClassName_ncb_members`
+- NCB 基础设施：`ncb_addMember`、`ncb_addConstant`、`ncb_classInit`
+- TJS 运行时：`tTJSVariant_Release`、`ttstr_createFromWide`、`ttstr_c_str`
+- 模块级别：`modulename_entry`、`modulename_static_init`
+- 类方法：`ClassName_methodName`
 
-**Example:**
+**示例：**
 ```
 mcp__ida-pro-mcp__rename  batch={
   "func": [
@@ -141,46 +139,42 @@ mcp__ida-pro-mcp__rename  batch={
 }
 ```
 
-Use `"dry_run": true` first if you want to verify before committing.
+提交前如果想先验证，使用 `"dry_run": true`。
 
-## Named Functions (already renamed in IDA)
+## 已命名函数（已在 IDA 中重命名）
 
-| Address | Name | Description |
-|---------|------|-------------|
-| `0x6D9B08` | `motionplayer_ncb_register` | motionplayer.dll NCB module registration |
-| `0x6948E8` | `Motion_Player_findSource` | Motion findSource (texture/resource loading) |
-| `0x42EB00` | `emoteplayer_static_init` | emoteplayer.dll static init registration |
-| `0x682528` | `emoteplayer_entry` | emoteplayer.dll entry (loads motionplayer.dll) |
+| 地址 | 名称 | 说明 |
+|------|------|------|
+| `0x6D9B08` | `motionplayer_ncb_register` | motionplayer.dll NCB 模块注册 |
+| `0x6948E8` | `Motion_Player_findSource` | Motion findSource（纹理/资源加载） |
+| `0x42EB00` | `emoteplayer_static_init` | emoteplayer.dll 静态初始化注册 |
+| `0x682528` | `emoteplayer_entry` | emoteplayer.dll 入口（加载 motionplayer.dll） |
 | `0x54242C` | `ncb_addMember` | NCB addMember |
 | `0x52FA58` | `ncb_addConstant` | NCB addConstant |
-| `0x6DA28C` | `ncb_addConstant_wrapper` | NCB addConstant wrapper (module-level) |
-| `0x9F5AF4` | `ncb_registerMember` | NCB registerMember (method/property on class) |
-| `0x9F538C` | `ncb_createFuncWrapper` | NCB function wrapper creation |
-| `0x9F5858` | `ncb_classInit` | NCB class init (tTJSNativeClass setup) |
-| `0xA13274` | `tTJSVariant_Release` | Reference count decrement / Release |
-| `0xA136C0` | `ttstr_createFromWide` | Create ttstr from wide string literal |
-| `0xA13390` | `ttstr_c_str` | Get C string pointer from ttstr |
-| `0x5996E4` | `PSB_getResourceData` | Get PSB resource data pointer + size |
-| `0x695D04` | `Motion_createTextureFromPixels` | Create texture object from raw pixels |
-| `0x6FEEE4` | `SeparateLayerAdaptor_ncb_register` | SLA NCB class registration |
-| `0x6FF048` | `SeparateLayerAdaptor_ncb_members` | SLA NCB member registration |
-| `0x6ABF98` | `SeparateLayerAdaptor_registerProps` | SLA property registration |
-| `0x6FC6E8` | `Motion_Point_ncb_register` | Motion.Point NCB registration |
-| `0x6FDD04` | `Motion_Player_ncb_register` | Motion.Player NCB registration |
-| `0x6FE124` | `Motion_SourceCache_ncb_register` | Motion.SourceCache NCB registration |
-| `0x6FE610` | `Motion_ObjSource_ncb_register` | Motion.ObjSource NCB registration |
-| `0x6FEAC4` | `Motion_ResourceManager_ncb_register` | Motion.ResourceManager NCB registration |
-| `0x6FF2F8` | `Motion_D3DAdaptor_ncb_register` | Motion.D3DAdaptor NCB registration |
+| `0x6DA28C` | `ncb_addConstant_wrapper` | NCB addConstant 包装器（模块级别） |
+| `0x9F5AF4` | `ncb_registerMember` | NCB registerMember（类上的方法/属性） |
+| `0x9F538C` | `ncb_createFuncWrapper` | NCB 函数包装器创建 |
+| `0x9F5858` | `ncb_classInit` | NCB 类初始化（tTJSNativeClass 设置） |
+| `0xA13274` | `tTJSVariant_Release` | 引用计数递减 / Release |
+| `0xA136C0` | `ttstr_createFromWide` | 从宽字符串字面量创建 ttstr |
+| `0xA13390` | `ttstr_c_str` | 从 ttstr 获取 C 字符串指针 |
+| `0x5996E4` | `PSB_getResourceData` | 获取 PSB 资源数据指针 + 大小 |
+| `0x695D04` | `Motion_createTextureFromPixels` | 从原始像素创建纹理对象 |
+| `0x6FEEE4` | `SeparateLayerAdaptor_ncb_register` | SLA NCB 类注册 |
+| `0x6FF048` | `SeparateLayerAdaptor_ncb_members` | SLA NCB 成员注册 |
+| `0x6ABF98` | `SeparateLayerAdaptor_registerProps` | SLA 属性注册 |
+| `0x6FC6E8` | `Motion_Point_ncb_register` | Motion.Point NCB 注册 |
+| `0x6FDD04` | `Motion_Player_ncb_register` | Motion.Player NCB 注册 |
+| `0x6FE124` | `Motion_SourceCache_ncb_register` | Motion.SourceCache NCB 注册 |
+| `0x6FE610` | `Motion_ObjSource_ncb_register` | Motion.ObjSource NCB 注册 |
+| `0x6FEAC4` | `Motion_ResourceManager_ncb_register` | Motion.ResourceManager NCB 注册 |
+| `0x6FF2F8` | `Motion_D3DAdaptor_ncb_register` | Motion.D3DAdaptor NCB 注册 |
 
-## Tips
+## 技巧
 
-- If `decompile` fails at an address, try nearby addresses (IDA may have
-  merged functions). Look for `SUB SP` prologues at `loc_` labels.
-- NCB module loading (`LoadModule`) is case-insensitive (lowercases before lookup).
-- String comparisons like `strcmp(v57, "RGBA8")` indicate format-dependent
-  code paths — decompile the full function to understand all branches.
-- When tracing a call chain, decompile each function in the chain and
-  annotate what it does before moving to the next. This avoids losing context.
-- Use `xrefs_to` on function addresses to find callers (trace upward).
-- Use `py_eval` for batch operations like scanning all strings or dumping
-  struct layouts.
+- 如果 `decompile` 在某地址失败，尝试相邻地址（IDA 可能合并了函数）。在 `loc_` 标签处查找 `SUB SP` 序言。
+- NCB 模块加载（`LoadModule`）不区分大小写（查找前转为小写）。
+- 类似 `strcmp(v57, "RGBA8")` 的字符串比较表示格式相关的代码路径——反编译完整函数以理解所有分支。
+- 追踪调用链时，逐个反编译链中的每个函数并标注其功能，然后再处理下一个。这可以避免丢失上下文。
+- 对函数地址使用 `xrefs_to` 查找调用者（向上追踪）。
+- 使用 `py_eval` 进行批量操作，如扫描所有字符串或转储结构体布局。
