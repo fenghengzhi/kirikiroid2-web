@@ -106,6 +106,32 @@ namespace motion::detail {
         // Persistent node tree for updateLayers pipeline
         std::vector<MotionNode> nodes;
         bool nodesBuilt = false;
+
+        // Render entry list for cross-Player merge during updateLayers.
+        // Aligned to libkrkr2.so player+936/944: vector of 44-byte entries.
+        // Each entry: int nodeIndex + tTJSVariant srcRef + tTJSVariant renderData.
+        // Populated by sub_6C2334 (draw phase), merged from child→parent by
+        // sub_6F363C during sub_6BE0C0/sub_6C17A4 (updateLayers phase3).
+        // Render entry list for cross-Player merge during updateLayers.
+        // Aligned to libkrkr2.so player+936/944: vector of 44-byte entries.
+        struct RenderEntry {
+            int nodeIndex = 0;        // offset 0: node reference
+            tTJSVariant srcRef;       // offset 4: source image variant
+            tTJSVariant renderData;   // offset 24: render parameters variant
+        };
+        std::vector<RenderEntry> renderEntries;  // player+936/944
+
+        // Per-node evaluation time array.
+        // Aligned to libkrkr2.so player+384: 56-byte-per-node entries.
+        // Each node's node+8 pointer points into this array.
+        // Offset 40 within each entry stores the per-node eval time.
+        // Offset 48 stores the per-node dirty flag (cleared in post-loop).
+        struct PerNodeEvalData {
+            double padding[5] = {};   // offsets 0-39 (unused in our current scope)
+            double evalTime = 0.0;    // offset 40: per-node evaluation time
+            int dirtyFlag = 0;        // offset 48: cleared in post-loop
+        };
+        std::vector<PerNodeEvalData> perNodeEvalData;  // player+384/392
         // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
         // PSB root "type" field: 0=non-emote (motion), 1=emote
         bool isEmoteMode = false;

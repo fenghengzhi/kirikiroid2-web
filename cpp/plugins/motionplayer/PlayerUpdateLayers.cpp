@@ -1535,7 +1535,10 @@ namespace motion {
                     && mn.otherSlot().motionDt != 0) {
                     // Binary at 0x6BE864: uses node+8+40 (per-node eval time) if
                     // available, else player+456 (_clampedEvalTime). NOT _frameLoopTime.
-                    double parentTime = _clampedEvalTime;
+                    // Binary: *(node+8+40) — per-node eval time from player+384 array.
+                    // Falls back to player+456 (_clampedEvalTime) if node+8 is null.
+                    double parentTime = (i < _runtime->perNodeEvalData.size())
+                        ? _runtime->perNodeEvalData[i].evalTime : _clampedEvalTime;
                     double currentStart = mn.interpolatedCache.clipStartTime;
                     double otherStart = mn.otherSlot().clipStartTime;
                     double denom = otherStart - currentStart;
@@ -1601,7 +1604,10 @@ namespace motion {
                             break;
                         }
                         // Parent time (0x6BE688..0x6BE6B0): node+8 ? *(node+8)+40 : player+456
-                        double parentTime = _clampedEvalTime;
+                        // Binary: *(node+8+40) — per-node eval time from player+384 array.
+                    // Falls back to player+456 (_clampedEvalTime) if node+8 is null.
+                    double parentTime = (i < _runtime->perNodeEvalData.size())
+                        ? _runtime->perNodeEvalData[i].evalTime : _clampedEvalTime;
                         double currentStart = mn.interpolatedCache.clipStartTime;
                         double otherStart = mn.otherSlot().clipStartTime;
                         double denom = otherStart - currentStart;
@@ -1828,6 +1834,19 @@ namespace motion {
                 child.frameProgress(_frameLastTime);
                 if (child._runtime && !child._runtime->nodes.empty()) {
                     child.updateLayers(currentTime);
+                }
+                // Render list merge (0x6BE2C0..0x6BE2F8):
+                // sub_6F363C: insert child render entries into parent's list.
+                // Then release child's entries and reset child's list.
+                if (child._runtime) {
+                    auto &parentEntries = _runtime->renderEntries;
+                    auto &childEntries = child._runtime->renderEntries;
+                    if (!childEntries.empty()) {
+                        parentEntries.insert(parentEntries.end(),
+                            std::make_move_iterator(childEntries.begin()),
+                            std::make_move_iterator(childEntries.end()));
+                        childEntries.clear();
+                    }
                 }
             }
         }
@@ -2614,6 +2633,18 @@ namespace motion {
                     if (!child->_runtime->nodes.empty()) {
                         child->updateLayers(currentTime);
                     }
+                    // Render list merge (0x6C1A00..0x6C1A3C):
+                    // sub_6F363C: merge child render entries into parent.
+                    {
+                        auto &parentEntries = _runtime->renderEntries;
+                        auto &childEntries = child->_runtime->renderEntries;
+                        if (!childEntries.empty()) {
+                            parentEntries.insert(parentEntries.end(),
+                                std::make_move_iterator(childEntries.begin()),
+                                std::make_move_iterator(childEntries.end()));
+                            childEntries.clear();
+                        }
+                    }
                 }
             }
         } // for each nodeType==4
@@ -2777,6 +2808,18 @@ namespace motion {
         auto &nodes = _runtime->nodes;
         if (nodes.empty()) return;
 
+        // Ensure per-node eval data array matches node count (player+384).
+        // Binary allocates this as a fixed-size array during Player construction;
+        // we resize dynamically to match node count.
+        if (_runtime->perNodeEvalData.size() != nodes.size()) {
+            _runtime->perNodeEvalData.resize(nodes.size());
+        }
+        // Set eval time for all nodes to _clampedEvalTime (player+456).
+        // Binary writes per-node eval time during the main loop (0x6BB4E0 area).
+        for (size_t ni = 0; ni < nodes.size(); ++ni) {
+            _runtime->perNodeEvalData[ni].evalTime = _clampedEvalTime;
+        }
+
         updateLayersPhase1_PreLoop(currentTime);
         updateLayersPhase2_MainLoop(currentTime);
 
@@ -2810,6 +2853,12 @@ namespace motion {
         for (size_t ci = 1; ci < nodes.size(); ++ci) {
             nodes[ci].flags &= ~0x01;           // node+44
             nodes[ci].accumulated.visible = false; // node+1504
+        }
+
+        // Clear per-node eval data dirty flags (0x6BBD44..0x6BBDF4).
+        // Binary: *(v98+48) = 0 for each entry in player+384 array.
+        for (auto &evalData : _runtime->perNodeEvalData) {
+            evalData.dirtyFlag = 0;
         }
     }
 
