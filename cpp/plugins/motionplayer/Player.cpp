@@ -28,6 +28,8 @@
 #include "ncbind.hpp"
 #include "tjsArray.h"
 #include "EventIntf.h"
+#include "NodeTree.h"
+#include "MotionNode.h"
 
 
 #define LOGGER spdlog::get("plugin")
@@ -129,6 +131,19 @@ namespace motion {
                        const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
             runtime.activeMotion = snapshot;
             runtime.timelines.clear();
+            // Reset persistent node tree so it gets rebuilt for new motion
+            runtime.nodes.clear();
+            runtime.nodesBuilt = false;
+            // Detect emote mode from PSB root "type" field.
+            // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
+            //   type=0 → non-emote (motion), type=1 → emote
+            runtime.isEmoteMode = false;
+            if(snapshot && snapshot->root) {
+                auto typeVal = (*snapshot->root)["type"];
+                if(auto num = std::dynamic_pointer_cast<PSB::PSBNumber>(typeVal)) {
+                    runtime.isEmoteMode = (num->getValue<int>() == 1);
+                }
+            }
             if(snapshot) {
                 detail::primeTimelineStates(runtime.timelines, *snapshot);
             }
@@ -1565,6 +1580,89 @@ namespace motion {
             }
         }
 
+
+        // Build flat render list from persistent node tree.
+        // Replaces flattenLayerNodes() output — produces FlatRenderNodes
+        // from accumulated MotionNode state.
+        // Aligned to libkrkr2.so sub_6C2334: converts accumulated node
+        // state into renderable entries with globalAffine applied.
+        void buildRenderListFromNodes(
+            const std::vector<detail::MotionNode> &nodes,
+            const Affine2x3 &globalAffine,
+            std::vector<FlatRenderNode> &out) {
+            for (const auto &node : nodes) {
+                if (!node.drawFlag) continue;
+                if (node.nodeType != 0) continue;  // only obj nodes render
+                if (!node.hasSource) continue;
+                if (node.interpolatedCache.src.empty()) continue;
+                if (node.interpolatedCache.src == "layout") continue;
+                if (isMotionCrossReference(node.interpolatedCache.src)) continue;
+
+                // Compose globalAffine with node's accumulated transform:
+                // result = globalAffine × [node.m11, node.m12; node.m21, node.m22]
+                // with translation from node accumulated position.
+                const auto &acc = node.accumulated;
+                Affine2x3 nodeAffine;
+                // First translate by accumulated position
+                nodeAffine[0] = globalAffine[0];
+                nodeAffine[1] = globalAffine[1];
+                nodeAffine[2] = globalAffine[2];
+                nodeAffine[3] = globalAffine[3];
+                nodeAffine[4] = globalAffine[0] * acc.posX + globalAffine[2] * acc.posY + globalAffine[4];
+                nodeAffine[5] = globalAffine[1] * acc.posX + globalAffine[3] * acc.posY + globalAffine[5];
+                // Then multiply by accumulated 2x2 matrix
+                const double m11 = nodeAffine[0] * acc.m11 + nodeAffine[2] * acc.m21;
+                const double m21 = nodeAffine[1] * acc.m11 + nodeAffine[3] * acc.m21;
+                const double m12 = nodeAffine[0] * acc.m12 + nodeAffine[2] * acc.m22;
+                const double m22 = nodeAffine[1] * acc.m12 + nodeAffine[3] * acc.m22;
+                nodeAffine[0] = m11;
+                nodeAffine[1] = m21;
+                nodeAffine[2] = m12;
+                nodeAffine[3] = m22;
+
+                FlatRenderNode rn;
+                // Copy interpolated cache back into FrameContentState for rendering
+                rn.state.visible = acc.visible;
+                rn.state.src = node.interpolatedCache.src;
+                rn.state.width = node.interpolatedCache.width;
+                rn.state.height = node.interpolatedCache.height;
+                rn.state.x = node.interpolatedCache.x;
+                rn.state.y = node.interpolatedCache.y;
+                rn.state.ox = node.interpolatedCache.ox;
+                rn.state.oy = node.interpolatedCache.oy;
+                rn.state.opacity = node.interpolatedCache.opacity;
+                rn.state.angle = node.interpolatedCache.angle;
+                rn.state.scaleX = node.interpolatedCache.scaleX;
+                rn.state.scaleY = node.interpolatedCache.scaleY;
+                rn.state.slantX = node.interpolatedCache.slantX;
+                rn.state.slantY = node.interpolatedCache.slantY;
+                rn.state.flipX = node.interpolatedCache.flipX;
+                rn.state.flipY = node.interpolatedCache.flipY;
+                rn.state.blendMode = node.interpolatedCache.blendMode;
+                rn.state.colorR = node.interpolatedCache.colorR;
+                rn.state.colorG = node.interpolatedCache.colorG;
+                rn.state.colorB = node.interpolatedCache.colorB;
+                rn.state.colorA = node.interpolatedCache.colorA;
+                if (node.interpolatedCache.hasTransformOrder) {
+                    std::copy(std::begin(node.interpolatedCache.transformOrder),
+                              std::end(node.interpolatedCache.transformOrder),
+                              rn.state.transformOrder);
+                    rn.state.hasTransformOrder = true;
+                }
+                rn.state.action = node.interpolatedCache.action;
+                rn.state.hasSync = node.interpolatedCache.hasSync;
+
+                rn.affine = nodeAffine;
+                rn.accumulatedOpacity = acc.opacity / 255.0;
+                rn.flipX = false;
+                rn.flipY = false;
+                out.push_back(std::move(rn));
+            }
+
+            // Child Player render collection is done separately in
+            // collectChildRenderNodes() called from renderToLayer().
+        }
+
     } // namespace
 
     Player::Player(ResourceManager rm) :
@@ -2391,62 +2489,73 @@ namespace motion {
                         _runtime->drawAffineMatrix[4] + _rootOffsetX + _cameraOffsetX,
                         _runtime->drawAffineMatrix[5] + _rootOffsetY + _cameraOffsetY
                     };
-                    // Step 1 (sub_6C4E28): Flatten PSB layer tree into
-                    // a flat list with pre-computed positions.
-                    std::vector<FlatRenderNode> renderNodes;
-                    for(const auto &layerName : layerNamesList) {
-                        const auto *layers = activeLayersByName();
-                        if(!layers) break;
-                        const auto it = layers->find(layerName);
-                        if(it == layers->end()) continue;
-                        flattenLayerNodes(it->second, renderTime,
-                                          globalAffine, 1.0,
-                                          false, false, renderNodes);
+                    // Build persistent node tree if not yet built.
+                    // Aligned to libkrkr2.so sub_6B51F0 → sub_6B4A6C.
+                    if (!_runtime->nodesBuilt) {
+                        std::string clipLabel;
+                        if (clip) clipLabel = clip->label;
+                        _runtime->nodes = detail::buildNodeTree(
+                            *_runtime->activeMotion, clipLabel);
+                        _runtime->nodesBuilt = true;
                     }
 
-                    // If we got 0 render nodes, check for motion cross-
-                    // references in the active clip's layers and resolve
-                    // them. A motion cross-reference has src like
-                    // "motion/<owner>/<clipLabel>". We look up the
-                    // referenced clip and flatten its layers instead.
-                    if(renderNodes.empty()) {
-                        const auto *layers = activeLayersByName();
-                        if(layers) {
-                            for(const auto &layerName : layerNamesList) {
-                                const auto it = layers->find(layerName);
-                                if(it == layers->end()) continue;
-                                const auto st = evaluateLayerContent(
-                                    it->second, renderTime);
-                                if(!isMotionCrossReference(st.src)) continue;
-                                // Parse "motion/<owner>/<clipLabel>"
-                                const auto parts = st.src.substr(7); // skip "motion/"
-                                const auto slash = parts.rfind('/');
-                                if(slash == std::string::npos) continue;
-                                const auto refLabel = parts.substr(slash + 1);
-                                // Look up the referenced clip
-                                const auto clipIt =
-                                    _runtime->activeMotion->clipsByLabel
-                                        .find(refLabel);
-                                if(clipIt ==
-                                   _runtime->activeMotion->clipsByLabel.end())
-                                    continue;
-                                // Flatten the referenced clip's layers
-                                for(const auto &refLayerName :
-                                    clipIt->second.layerNames) {
-                                    const auto refIt =
-                                        clipIt->second.layersByName
-                                            .find(refLayerName);
-                                    if(refIt ==
-                                       clipIt->second.layersByName.end())
-                                        continue;
-                                    const auto refAffine = affineTranslate(
-                                        globalAffine, st.x + st.ox, st.y + st.oy);
-                                    flattenLayerNodes(
-                                        refIt->second, renderTime,
-                                        refAffine, 1.0,
-                                        false, false, renderNodes);
-                                }
-                            }
+                    // Run 3-phase updateLayers pipeline on persistent nodes.
+                    // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C).
+                    updateLayers(renderTime);
+
+                    // Collect visible nodes into render list.
+                    // Aligned to libkrkr2.so sub_6C2334 render tree building.
+                    std::vector<FlatRenderNode> renderNodes;
+                    buildRenderListFromNodes(_runtime->nodes, globalAffine,
+                                            renderNodes);
+
+                    // Collect child Player render output for nodeType=3 (Motion).
+                    // Aligned to sub_6BE0C0: child render merges into parent tree.
+                    for (const auto &motionNode : _runtime->nodes) {
+                        if (motionNode.nodeType != 3 || !motionNode.childPlayer) continue;
+                        auto &childRuntime = motionNode.childPlayer->_runtime;
+                        if (!childRuntime || childRuntime->nodes.empty()) continue;
+                        const auto &acc = motionNode.accumulated;
+                        Affine2x3 childGlobal = {
+                            globalAffine[0], globalAffine[1],
+                            globalAffine[2], globalAffine[3],
+                            globalAffine[0]*acc.posX + globalAffine[2]*acc.posY + globalAffine[4],
+                            globalAffine[1]*acc.posX + globalAffine[3]*acc.posY + globalAffine[5]
+                        };
+                        buildRenderListFromNodes(childRuntime->nodes,
+                                                childGlobal, renderNodes);
+                    }
+
+                    // Collect particle child Player render output (nodeType=4).
+                    // Aligned to sub_6BF0DC: particle children render into parent tree.
+                    for (const auto &particleNode : _runtime->nodes) {
+                        if (particleNode.nodeType != 4) continue;
+                        for (const auto &pChild : particleNode.particleChildren) {
+                            if (!pChild || !pChild->_runtime) continue;
+                            auto &pNodes = pChild->_runtime->nodes;
+                            if (pNodes.empty()) continue;
+                            const auto &pacc = particleNode.accumulated;
+                            Affine2x3 pGlobal = {
+                                globalAffine[0], globalAffine[1],
+                                globalAffine[2], globalAffine[3],
+                                globalAffine[0]*pacc.posX + globalAffine[2]*pacc.posY + globalAffine[4],
+                                globalAffine[1]*pacc.posX + globalAffine[3]*pacc.posY + globalAffine[5]
+                            };
+                            buildRenderListFromNodes(pNodes, pGlobal, renderNodes);
+                        }
+                    }
+
+                    // If node pipeline produced nothing, fall back to
+                    // flattenLayerNodes for motion cross-references.
+                    if (renderNodes.empty()) {
+                        for (const auto &layerName : layerNamesList) {
+                            const auto *layers = activeLayersByName();
+                            if (!layers) break;
+                            const auto it = layers->find(layerName);
+                            if (it == layers->end()) continue;
+                            flattenLayerNodes(it->second, renderTime,
+                                              globalAffine, 1.0,
+                                              false, false, renderNodes);
                         }
                     }
 
@@ -2825,6 +2934,1046 @@ namespace motion {
             _runtime->timelines.begin(), _runtime->timelines.end(),
             [](const auto &entry) { return entry.second.playing; });
         _syncActive = _syncWaiting && _allplaying;
+    }
+
+    // --- updateLayers: 3-phase pipeline ---
+    // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C).
+    // Operates on persistent MotionNode vector instead of re-walking PSB tree.
+    void Player::updateLayers(double currentTime) {
+        auto &nodes = _runtime->nodes;
+        if (nodes.empty()) return;
+
+        // === PHASE 1: Pre-loop setup ===
+
+        // Step 1: Save previous positions for delta calculation
+        for (auto &n : nodes) {
+            n.prevPosX = n.accumulated.posX;
+            n.prevPosY = n.accumulated.posY;
+            n.prevPosZ = n.accumulated.posZ;
+        }
+
+        // Step 2: Evaluate root node (index 0)
+        auto &root = nodes[0];
+        {
+            auto rootState = evaluateLayerContent(root.psbNode, currentTime);
+            // slotDone: type=0 in evaluateLayerContent → visible=false → done
+            root.slotDone = !rootState.visible;
+            // Map to accumulated state
+            root.accumulated.visible = rootState.visible;
+            root.accumulated.flipX = rootState.flipX;
+            root.accumulated.flipY = rootState.flipY;
+            root.accumulated.posX = rootState.x + rootState.ox;
+            root.accumulated.posY = rootState.y + rootState.oy;
+            root.accumulated.posZ = 0.0;
+            root.accumulated.angle = rootState.angle;
+            root.accumulated.scaleX = rootState.scaleX;
+            root.accumulated.scaleY = rootState.scaleY;
+            root.accumulated.slantX = rootState.slantX;
+            root.accumulated.slantY = rootState.slantY;
+            root.accumulated.opacity = static_cast<int>(
+                std::clamp(rootState.opacity * 255.0, 0.0, 255.0));
+            root.accumulated.active = true;
+            // Cache interpolated data for rendering
+            root.interpolatedCache.src = rootState.src;
+            root.interpolatedCache.width = rootState.width;
+            root.interpolatedCache.height = rootState.height;
+            root.interpolatedCache.opacity = rootState.opacity;
+            root.interpolatedCache.x = rootState.x;
+            root.interpolatedCache.y = rootState.y;
+            root.interpolatedCache.ox = rootState.ox;
+            root.interpolatedCache.oy = rootState.oy;
+            root.interpolatedCache.angle = rootState.angle;
+            root.interpolatedCache.scaleX = rootState.scaleX;
+            root.interpolatedCache.scaleY = rootState.scaleY;
+            root.interpolatedCache.slantX = rootState.slantX;
+            root.interpolatedCache.slantY = rootState.slantY;
+            root.interpolatedCache.flipX = rootState.flipX;
+            root.interpolatedCache.flipY = rootState.flipY;
+            root.interpolatedCache.blendMode = rootState.blendMode;
+            root.interpolatedCache.colorR = rootState.colorR;
+            root.interpolatedCache.colorG = rootState.colorG;
+            root.interpolatedCache.colorB = rootState.colorB;
+            root.interpolatedCache.colorA = rootState.colorA;
+            root.interpolatedCache.hasTransformOrder = rootState.hasTransformOrder;
+            if (rootState.hasTransformOrder) {
+                std::copy(std::begin(rootState.transformOrder),
+                          std::end(rootState.transformOrder),
+                          root.interpolatedCache.transformOrder);
+            }
+            root.interpolatedCache.action = rootState.action;
+            root.interpolatedCache.hasSync = rootState.hasSync;
+            root.interpolatedCache.prtTrigger = rootState.prtTrigger;
+            root.interpolatedCache.prtF = rootState.prtF;
+            root.interpolatedCache.prtV = rootState.prtV;
+            root.interpolatedCache.prtA = rootState.prtA;
+            root.interpolatedCache.prtZ = rootState.prtZ;
+            root.interpolatedCache.prtRange = rootState.prtRange;
+
+            // Step 3: Build root local 2x2 matrix via sub_699940
+            // Reuse applyLocalTransform logic but on raw 2x2
+            Affine2x3 rootAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+            applyLocalTransform(rootAffine, rootState);
+            root.accumulated.m11 = rootAffine[0];
+            root.accumulated.m21 = rootAffine[1];
+            root.accumulated.m12 = rootAffine[2];
+            root.accumulated.m22 = rootAffine[3];
+        }
+
+        // --- sub_6BBE20: Variable interpolation (pre-loop) ---
+        // Aligned to 0x6BBE20. Interpolates variable values and binds to nodes.
+        // In libkrkr2.so this operates on a 160-byte item deque (player+1312).
+        // Each variable is interpolated then bound to nodes via sub_6C4668.
+        //
+        // sub_6C4668 binding: resolves variable name to a source entry in
+        // player+264 map, then updates child Player timeline parameters for
+        // nodeType=3 and nodeType=4 nodes. In our architecture, variable values
+        // are stored in _variableValues and exposed via getVariable()/setVariable()
+        // TJS API. The binding to child Players happens implicitly when child
+        // Players re-evaluate their timelines.
+        if (_runtime->activeMotion) {
+            const auto &varFrames = _runtime->activeMotion->variableFrames;
+            for (const auto &[label, frames] : varFrames) {
+                if (frames.empty()) continue;
+                // User-set value takes precedence
+                if (_variableValues.find(label) != _variableValues.end()) continue;
+                // Default: use first frame value
+                _variableValues[label] = frames.front().value;
+            }
+            // Bind variable values to child Players (sub_6C4668 equivalent)
+            // For nodeType=3/4 nodes with child Players, propagate variable values
+            for (auto &vn : nodes) {
+                if ((vn.nodeType == 3 || vn.nodeType == 4) && vn.childPlayer) {
+                    for (const auto &[label, value] : _variableValues) {
+                        vn.childPlayer->setVariable(detail::widen(label), value);
+                    }
+                }
+            }
+        }
+
+        // === PHASE 2: Main loop — evaluate non-root nodes ===
+        for (size_t i = 1; i < nodes.size(); ++i) {
+            auto &node = nodes[i];
+
+            // Find parent node — walk parentIndex chain, skip flag 0x40 nodes
+            // Aligned to 0x6BB598..0x6BB5BC
+            int parentIdx = node.parentIndex;
+            while (parentIdx > 0 && parentIdx < static_cast<int>(nodes.size())) {
+                if ((nodes[parentIdx].flags & 0x40) == 0) break;
+                parentIdx = nodes[parentIdx].parentIndex;
+            }
+            if (parentIdx < 0 || parentIdx >= static_cast<int>(nodes.size()))
+                parentIdx = 0;
+            const auto &parent = nodes[parentIdx];
+
+            // Evaluate this node's interpolated state
+            auto state = evaluateLayerContent(node.psbNode, currentTime);
+
+            // Cache interpolated data for rendering
+            node.interpolatedCache.src = state.src;
+            node.interpolatedCache.width = state.width;
+            node.interpolatedCache.height = state.height;
+            node.interpolatedCache.opacity = state.opacity;
+            node.interpolatedCache.x = state.x;
+            node.interpolatedCache.y = state.y;
+            node.interpolatedCache.ox = state.ox;
+            node.interpolatedCache.oy = state.oy;
+            node.interpolatedCache.angle = state.angle;
+            node.interpolatedCache.scaleX = state.scaleX;
+            node.interpolatedCache.scaleY = state.scaleY;
+            node.interpolatedCache.slantX = state.slantX;
+            node.interpolatedCache.slantY = state.slantY;
+            node.interpolatedCache.flipX = state.flipX;
+            node.interpolatedCache.flipY = state.flipY;
+            node.interpolatedCache.blendMode = state.blendMode;
+            node.interpolatedCache.colorR = state.colorR;
+            node.interpolatedCache.colorG = state.colorG;
+            node.interpolatedCache.colorB = state.colorB;
+            node.interpolatedCache.colorA = state.colorA;
+            node.interpolatedCache.hasTransformOrder = state.hasTransformOrder;
+            if (state.hasTransformOrder) {
+                std::copy(std::begin(state.transformOrder),
+                          std::end(state.transformOrder),
+                          node.interpolatedCache.transformOrder);
+            }
+            node.interpolatedCache.action = state.action;
+            node.interpolatedCache.hasSync = state.hasSync;
+            // Particle data from FrameContentState (mask 0x100000)
+            node.interpolatedCache.prtTrigger = state.prtTrigger;
+            node.interpolatedCache.prtF = state.prtF;
+            node.interpolatedCache.prtV = state.prtV;
+            node.interpolatedCache.prtA = state.prtA;
+            node.interpolatedCache.prtZ = state.prtZ;
+            node.interpolatedCache.prtRange = state.prtRange;
+            node.prtTrigger = state.prtTrigger;
+
+            // slotDone: type=0 in evaluateLayerContent → visible=false → done
+            node.slotDone = !state.visible;
+
+            if (!state.visible) {
+                node.accumulated.visible = false;
+                node.accumulated.active = false;
+                node.accumulated.opacity = 0;
+                node.drawFlag = false;
+                continue;
+            }
+
+            // === Inheritance from parent ===
+            // Aligned to libkrkr2.so 0x6BB630..0x6BBB6C (Player_updateLayers main loop)
+            // Full inheritFlags system with 3-phase independentLayerInherit support.
+            node.accumulated.visible = true;
+            node.accumulated.active = true;
+
+            // Flip XOR from interpolated → accumulated (0x6BB668)
+            node.accumulated.flipX = state.flipX ^ parent.accumulated.flipX;
+            node.accumulated.flipY = state.flipY ^ parent.accumulated.flipY;
+
+            // Scale: multiply from parent interpolated (0x6BB6A4)
+            node.accumulated.scaleX = state.scaleX * parent.accumulated.scaleX;
+            node.accumulated.scaleY = state.scaleY * parent.accumulated.scaleY;
+
+            // Slant: add from parent interpolated (0x6BB6B8)
+            node.accumulated.slantX = state.slantX + parent.accumulated.slantX;
+            node.accumulated.slantY = state.slantY + parent.accumulated.slantY;
+
+            // Opacity: int multiplication (0x6BB6D4)
+            // First multiply: parent.interpolated.opacity * child.interpolated.opacity / 255
+            const int childOpa = static_cast<int>(
+                std::clamp(state.opacity * 255.0, 0.0, 255.0));
+            node.accumulated.opacity = parent.accumulated.opacity * childOpa / 255;
+
+            // Position: add from interpolated offsets (0x6BB6EC)
+            const double lx = state.x + state.ox;
+            const double ly = state.y + state.oy;
+
+            // Position transform: parent.matrix × child.pos + parent.pos
+            // 3D/2D coordinate mode branching (0x6BB718..0x6BB7C4)
+            if (node.coordinateMode != 0) {
+                // 3D mode: X and Z through matrix, Y pass-through (0x6BB720)
+                node.accumulated.posX = parent.accumulated.m11 * lx
+                    + parent.accumulated.m12 * ly + parent.accumulated.posX;
+                node.accumulated.posY = parent.accumulated.m21 * lx
+                    + parent.accumulated.m22 * ly + parent.accumulated.posY;
+                // posZ: pass-through from interpolated + parent
+                node.accumulated.posZ = state.y + state.oy + parent.accumulated.posZ;
+            } else {
+                // 2D mode (default, 0x6BB794): X and Y through matrix, Z pass-through
+                node.accumulated.posX = parent.accumulated.m11 * lx
+                    + parent.accumulated.m12 * ly + parent.accumulated.posX;
+                node.accumulated.posY = parent.accumulated.m21 * lx
+                    + parent.accumulated.m22 * ly + parent.accumulated.posY;
+                // posZ: add from interpolated + parent (0x6BB7E4)
+                node.accumulated.posZ += parent.accumulated.posZ;
+            }
+
+            // sub_69AE74: Mesh position deformation (0x6BB714)
+            // Aligned to 0x69AE74. Called when parent.meshType != 0.
+            // Deforms child position based on parent mesh surface.
+            // Condition: parent.meshType==1 && (parent.meshFlags & 1) &&
+            //            child.active && child.hasSource && parent has mesh vertices.
+            if (parent.meshType == 1 && (parent.meshFlags & 1) != 0
+                && node.accumulated.active && node.hasSource) {
+                // Normalize child position by parent clip dimensions (0x69AF24..0x69AF50)
+                const double pw = parent.clipW > 0.0 ? parent.clipW : 1.0;
+                const double ph = parent.clipH > 0.0 ? parent.clipH : 1.0;
+                const double normX = (node.accumulated.posX + parent.originX) / pw;
+                const double normY = (node.accumulated.posY + parent.originY) / ph;
+                // sub_69B1E8: mesh evaluation at normalized coordinates.
+                // Evaluates bezier patch at (normX, normY) using mesh vertices
+                // built by sub_6BC4F0. The mesh vertex array is at node+2024.
+                // Passthrough when mesh vertices are empty (no deformation).
+                double deformedX = normX;
+                double deformedY = normY;
+                // Mesh vertex evaluation would go here:
+                // deformedX, deformedY = evaluateMesh(parent.meshVertices, normX, normY);
+                node.accumulated.posX = deformedX * pw - parent.originX;
+                node.accumulated.posY = deformedY * ph - parent.originY;
+
+                // Optional angle deformation (0x69AFB4..0x69B0EC)
+                // if (parent.meshFlags & 2) && (node.inheritFlags & 0x10):
+                //   Sample mesh at 4 nearby points, compute atan2 gradient angle
+                if ((parent.meshFlags & 2) != 0
+                    && (node.inheritFlags & 0x10) != 0) {
+                    // Angle deformation from mesh gradient (0x69B098..0x69B0EC)
+                    // Samples mesh at 4 nearby points (±0.0001 offset),
+                    // computes gradient via atan2, adds to child angle.
+                }
+
+                // Optional scale deformation (0x69B11C..0x69B1A8)
+                // if (parent.meshFlags & 4) && (node.inheritFlags & 0x60):
+                //   Compute area ratio from mesh jacobian → scaleFactor
+                if ((parent.meshFlags & 4) != 0
+                    && (node.inheritFlags & 0x60) != 0) {
+                    // Scale deformation from mesh jacobian (0x69B11C..0x69B1A8)
+                    // Computes area ratio from 4-point mesh sample,
+                    // scaleFactor = sqrt(area) / 0.0002, applies to scaleX/Y.
+                }
+            }
+
+            // sub_6BAA10: Ground correction TJS callback (0x6BB7F8)
+            // Aligned to 0x6BAA10. Called when node+47 (groundCorrection) set.
+            // Invokes TJS onGroundCorrection(parentPos, childPos) callback on
+            // the node's TJS object. The callback can modify child position.
+            // In libkrkr2.so, the TJS object is at *(node+0)+16 (the layer's
+            // iTJSDispatch2 reference). In our architecture, MotionNode doesn't
+            // hold a TJS dispatch pointer. This callback is used for specialized
+            // ground-plane correction in E-mote animations.
+            if (node.groundCorrection) {
+                // Would call: node.tjsObject.onGroundCorrection(parentPos, childPos)
+                // Reading back corrected position from the callback result.
+                // Requires wiring MotionNode to its TJS layer dispatch object.
+            }
+
+            // Opacity conditional second multiply (0x6BB808..0x6BB830):
+            // Decompilation: if ((v46 & 0x400) != 0 || (v47 = v3, !*(a1+1097)))
+            //   node.opacity = v47.opacity * node.opacity / 255
+            // v47 = parent when 0x400 set; v47 = root (v3) when !independentLayerInherit
+            {
+                const auto *opaNode = &parent;
+                if ((node.inheritFlags & 0x400) == 0 && _independentLayerInherit) {
+                    // Neither 0x400 set nor independentLayerInherit=false: skip
+                    // (no second multiply in this case)
+                } else {
+                    if ((node.inheritFlags & 0x400) != 0)
+                        opaNode = &parent;
+                    else
+                        opaNode = &nodes[0];  // root
+                    node.accumulated.opacity = opaNode->accumulated.opacity
+                        * node.accumulated.opacity / 255;
+                }
+            }
+
+            // Angle: add (0x6BB8C8)
+            node.accumulated.angle = state.angle + parent.accumulated.angle;
+
+            // === inheritFlags per-property control (0x6BB83C) ===
+            // Decompilation evidence: Player_updateLayers 0x6BB83C..0x6BBB6C
+            //   if ((~v46 & 0x1FC) == 0) → all bits set, simple path
+            //   else:
+            //     per-property inherit from parent for SET bits
+            //     if (player+1097) → LABEL_68: sub_699940 only, NO matrix multiply
+            //     else → LABEL_76: root undo → sub_699940 → root re-apply → matrix multiply
+            const int flags = node.inheritFlags;
+            const bool allInheritBitsSet = (~flags & 0x1FC) == 0;
+
+            if (allInheritBitsSet) {
+                // All bits set → simple path (0x6BB848): inherit from parent,
+                // sub_699940, matrix multiply. Already inherited above.
+                Affine2x3 localAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+                applyLocalTransform(localAffine, state);
+                const double lm11 = localAffine[0], lm21 = localAffine[1];
+                const double lm12 = localAffine[2], lm22 = localAffine[3];
+                node.accumulated.m11 = parent.accumulated.m11 * lm11 + parent.accumulated.m12 * lm21;
+                node.accumulated.m21 = parent.accumulated.m21 * lm11 + parent.accumulated.m22 * lm21;
+                node.accumulated.m12 = parent.accumulated.m11 * lm12 + parent.accumulated.m12 * lm22;
+                node.accumulated.m22 = parent.accumulated.m21 * lm12 + parent.accumulated.m22 * lm22;
+            } else {
+                // Some bits NOT set: per-property inherit from parent for SET bits only
+                // (0x6BB8F4..0x6BB918)
+                if (flags & 0x004) node.accumulated.flipX = state.flipX ^ parent.accumulated.flipX;
+                else               node.accumulated.flipX = state.flipX;
+                if (flags & 0x008) node.accumulated.flipY = state.flipY ^ parent.accumulated.flipY;
+                else               node.accumulated.flipY = state.flipY;
+                if (flags & 0x010) node.accumulated.angle = state.angle + parent.accumulated.angle;
+                else               node.accumulated.angle = state.angle;
+                if (flags & 0x020) node.accumulated.scaleX = state.scaleX * parent.accumulated.scaleX;
+                else               node.accumulated.scaleX = state.scaleX;
+                if (flags & 0x040) node.accumulated.scaleY = state.scaleY * parent.accumulated.scaleY;
+                else               node.accumulated.scaleY = state.scaleY;
+                if (flags & 0x080) node.accumulated.slantX = state.slantX + parent.accumulated.slantX;
+                else               node.accumulated.slantX = state.slantX;
+                if (flags & 0x100) node.accumulated.slantY = state.slantY + parent.accumulated.slantY;
+                else               node.accumulated.slantY = state.slantY;
+
+                if (_independentLayerInherit) {
+                    // LABEL_68 (0x6BB918): independentLayerInherit=TRUE
+                    // Only sub_699940, NO matrix multiply with parent.
+                    // Node's matrix stays as its own local matrix (independent of parent).
+                    Affine2x3 localAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+                    applyLocalTransform(localAffine, state);
+                    node.accumulated.m11 = localAffine[0];
+                    node.accumulated.m21 = localAffine[1];
+                    node.accumulated.m12 = localAffine[2];
+                    node.accumulated.m22 = localAffine[3];
+                } else {
+                    // LABEL_76 (0x6BB9BC..0x6BBB6C): independentLayerInherit=FALSE
+                    // 4-phase: undo root → sub_699940 → re-apply root → matrix multiply
+                    const auto &rootNode = nodes[0];
+
+                    // Phase A: For SET bits, UNDO root contribution (0x6BB9BC)
+                    if (flags & 0x004) node.accumulated.flipX ^= rootNode.accumulated.flipX;
+                    if (flags & 0x008) node.accumulated.flipY ^= rootNode.accumulated.flipY;
+                    if (flags & 0x010) node.accumulated.angle -= rootNode.accumulated.angle;
+                    if (flags & 0x020 && rootNode.accumulated.scaleX != 0.0)
+                        node.accumulated.scaleX /= rootNode.accumulated.scaleX;
+                    if (flags & 0x040 && rootNode.accumulated.scaleY != 0.0)
+                        node.accumulated.scaleY /= rootNode.accumulated.scaleY;
+                    if (flags & 0x080) node.accumulated.slantX -= rootNode.accumulated.slantX;
+                    if (flags & 0x100) node.accumulated.slantY -= rootNode.accumulated.slantY;
+
+                    // Phase B: sub_699940 (0x6BB9E8)
+                    Affine2x3 localAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+                    applyLocalTransform(localAffine, state);
+
+                    // Phase C: For SET bits, RE-APPLY root contribution (0x6BBA04)
+                    if (flags & 0x004) node.accumulated.flipX ^= rootNode.accumulated.flipX;
+                    if (flags & 0x008) node.accumulated.flipY ^= rootNode.accumulated.flipY;
+                    if (flags & 0x010) node.accumulated.angle += rootNode.accumulated.angle;
+                    if (flags & 0x020) node.accumulated.scaleX *= rootNode.accumulated.scaleX;
+                    if (flags & 0x040) node.accumulated.scaleY *= rootNode.accumulated.scaleY;
+                    if (flags & 0x080) node.accumulated.slantX += rootNode.accumulated.slantX;
+                    if (flags & 0x100) node.accumulated.slantY += rootNode.accumulated.slantY;
+
+                    // Phase D: Matrix multiply parent × local (0x6BBA24)
+                    const double lm11 = localAffine[0], lm21 = localAffine[1];
+                    const double lm12 = localAffine[2], lm22 = localAffine[3];
+                    node.accumulated.m11 = parent.accumulated.m11 * lm11 + parent.accumulated.m12 * lm21;
+                    node.accumulated.m21 = parent.accumulated.m21 * lm11 + parent.accumulated.m22 * lm21;
+                    node.accumulated.m12 = parent.accumulated.m11 * lm12 + parent.accumulated.m12 * lm22;
+                    node.accumulated.m22 = parent.accumulated.m21 * lm12 + parent.accumulated.m22 * lm22;
+                }
+            }
+        }
+
+        // === PHASE 3: Post-loop processing ===
+        // Call order matches libkrkr2.so Player_updateLayers (0x6BBC60..0x6BBCA8):
+        // sub_6BC000 → sub_6BC4F0 → sub_6BD8DC → sub_6BDA28 →
+        // sub_6BDCC0 → sub_6BDE94 → sub_6BE0C0 → sub_6BEDD0 →
+        // sub_6BF0DC → sub_6C0528
+
+        // --- sub_6BC000: Camera constraint (nodeType=9) ---
+        // Aligned to 0x6BC000. Only when !isEmoteMode.
+        // Computes position constraints from nodeType=9 nodes and adjusts
+        // all node positions by the constraint offset.
+        if (!_runtime->isEmoteMode && nodes.size() >= 2) {
+            double offsetX = 0, offsetY = 0, offsetZ = 0;
+            bool hasConstraint = false;
+            // Iterate nodes looking for nodeType=9
+            for (size_t ci = 1; ci < nodes.size(); ++ci) {
+                auto &cn = nodes[ci];
+                if (cn.nodeType != 9 || cn.slotDone) continue;
+                if (!cn.accumulated.active) continue;
+                // Position delta between target and constraint node
+                // (0x6BC224..0x6BC358: 9 cases based on flip+constraintType)
+                // Full logic computes per-axis min/max clamping based on
+                // flip bits and constraintType (0-8). The target node is
+                // looked up via clip slot dtgt. Without clip slot dtgt
+                // tracking, we use root as the implicit target.
+                const double dx = nodes[0].accumulated.posX - cn.accumulated.posX;
+                const double dy = nodes[0].accumulated.posY - cn.accumulated.posY;
+                const double dz = nodes[0].accumulated.posZ - cn.accumulated.posZ;
+                if (dx != 0 || dy != 0 || dz != 0) {
+                    offsetX = dx; offsetY = dy; offsetZ = dz;
+                    hasConstraint = true;
+                }
+            }
+            if (hasConstraint && (offsetX != 0 || offsetY != 0 || offsetZ != 0)) {
+                // Apply offset to all nodes (0x6BC450..0x6BC4BC)
+                for (size_t ci = 1; ci < nodes.size(); ++ci) {
+                    nodes[ci].accumulated.posX += offsetX;
+                    nodes[ci].accumulated.posY += offsetY;
+                    nodes[ci].accumulated.posZ += offsetZ;
+                }
+            }
+        }
+
+        // --- sub_6BC4F0: Vertex computation ---
+        // Aligned to 0x6BC4F0. Computes vertex positions from accumulated state.
+        // For each visible node with source: origin = pos - matrix × originOffset
+        // Computes 4 corner vertices for rendering.
+        for (size_t vi = 1; vi < nodes.size(); ++vi) {
+            auto &vn = nodes[vi];
+            if (!vn.accumulated.visible || !vn.accumulated.active) continue;
+            if (!vn.hasSource) continue;
+            // Store vertex-computed position (node+152..168)
+            // Full sub_6BC4F0 computes: origin = pos - matrix × (originX + clipOriginX,
+            // originY + clipOriginY), then 4 corner vertices. The full vertex
+            // computation also handles mesh deformation (bezierPatch/meshCopy).
+            // Using accumulated position as vertex position (correct for
+            // non-mesh nodes when origin offset is applied at render time).
+            vn.vertexPosX = vn.accumulated.posX;
+            vn.vertexPosY = vn.accumulated.posY;
+            vn.vertexPosZ = vn.accumulated.posZ;
+            // Propagate clip origin from interpolated cache
+            vn.clipOriginX = vn.interpolatedCache.ox;
+            vn.clipOriginY = vn.interpolatedCache.oy;
+        }
+
+        // Delta position computation (0x6BBB74..0x6BBC54)
+        // if playing (player+480): delta = 0; else: delta = currentPos - prevPos
+        {
+            bool anyPlaying = std::any_of(
+                _runtime->timelines.begin(), _runtime->timelines.end(),
+                [](const auto &e) { return e.second.playing; });
+            for (size_t di = 1; di < nodes.size(); ++di) {
+                auto &dn = nodes[di];
+                if (anyPlaying) {
+                    dn.deltaPosX = 0; dn.deltaPosY = 0; dn.deltaPosZ = 0;
+                } else {
+                    dn.deltaPosX = dn.accumulated.posX - dn.prevPosX;
+                    dn.deltaPosY = dn.accumulated.posY - dn.prevPosY;
+                    dn.deltaPosZ = dn.accumulated.posZ - dn.prevPosZ;
+                }
+            }
+        }
+
+        // Visibility flags — aligned to sub_6BD8DC at 0x6BD8DC.
+        // Root node (index 0) is always visible.
+        if (!nodes.empty()) {
+            nodes[0].drawFlag = nodes[0].accumulated.visible && nodes[0].hasSource;
+        }
+        // Visibility bitmask: which nodeTypes can render
+        // Non-emote: 6145 = 0x1801 → nodeTypes 0, 11, 12
+        // Emote:     6153 = 0x1809 → nodeTypes 0, 3, 11, 12
+        // Aligned to sub_6BD8DC (0x6BD8DC): visibility bitmask depends on emote mode.
+        const int visBitmask = _runtime->isEmoteMode ? 6153 : 6145;
+        for (size_t i = 1; i < nodes.size(); ++i) {
+            auto &node = nodes[i];
+
+            // Find visible ancestor (walk parent chain, 0x6BD9D8)
+            int pIdx = node.parentIndex;
+            if (pIdx >= 0 && pIdx < static_cast<int>(nodes.size())) {
+                if (!nodes[pIdx].drawFlag) {
+                    node.visibleAncestorIndex = nodes[pIdx].visibleAncestorIndex;
+                } else {
+                    node.visibleAncestorIndex = pIdx;
+                }
+            }
+
+            // Visibility logic — exact replica of sub_6BD8DC (0x6BD958..0x6BDA00):
+            //   if (slotDone) { v9 = 0; }
+            //   else { v9 = stencilType; if (v9) { v9 = active; if (v9) {
+            //     if (forceVisible || (bitmask & (1<<nodeType))) v9 = hasSource; } } }
+            //   drawFlag = v9;
+            if (node.slotDone) {
+                node.drawFlag = false;
+            } else if (node.stencilType == 0) {
+                // node+52 == 0 → invisible (0x6BD958)
+                node.drawFlag = false;
+            } else if (!node.accumulated.active) {
+                node.drawFlag = false;
+            } else if (node.forceVisible
+                       || (visBitmask & (1 << node.nodeType)) != 0) {
+                node.drawFlag = node.hasSource;
+            } else {
+                // Active node, not in renderable bitmask, not forceVisible:
+                // v9 stays as active (non-zero) → drawFlag = true
+                node.drawFlag = true;
+            }
+        }
+
+        // Camera node processing — aligned to sub_6BDA28 (0x6BDA28).
+        // Find first nodeType=5 (camera) that is active, compute cameraOffset.
+        _hasCamera = false;
+        for (size_t i = 1; i < nodes.size(); ++i) {
+            const auto &camNode = nodes[i];
+            if (camNode.nodeType != 5 || !camNode.accumulated.active) continue;
+            _hasCamera = true;
+
+            // Compute delta from root node position
+            const auto &rootAcc = nodes[0].accumulated;
+            const double dx = -(camNode.accumulated.posX - rootAcc.posX);
+            const double dy = -(camNode.accumulated.posY * _zFactor
+                + camNode.accumulated.posZ
+                - (rootAcc.posY * _zFactor + rootAcc.posZ));
+
+            // Transform by drawAffineMatrix (player+808..832)
+            const auto &dam = _runtime->drawAffineMatrix;
+            _cameraOffsetX = static_cast<float>(
+                static_cast<int>(dam[0] * dx + dam[2] * dy + 0.5));
+            _cameraOffsetY = static_cast<float>(
+                static_cast<int>(dam[1] * dx + dam[3] * dy + 0.5));
+            break;  // only first camera node
+        }
+
+        // --- sub_6BDCC0: Shape AABB computation (nodeType=7) ---
+        // Aligned to 0x6BDCC0. For nodeType=7 active nodes, compute AABB
+        // from 2x2 matrix × 16-unit extent, origin offset, parent clip clamping.
+        for (size_t si = 1; si < nodes.size(); ++si) {
+            auto &sn = nodes[si];
+            // Propagate parent clip region (node+1936)
+            if (sn.parentIndex >= 0 && sn.parentIndex < static_cast<int>(nodes.size())) {
+                sn.parentClipIndex = nodes[sn.parentIndex].parentClipIndex;
+            }
+            if (sn.nodeType != 7 || !sn.accumulated.active) continue;
+
+            const double m11 = sn.accumulated.m11, m12 = sn.accumulated.m12;
+            const double m21 = sn.accumulated.m21, m22 = sn.accumulated.m22;
+            const double px = sn.accumulated.posX, py = sn.accumulated.posY;
+            const double pzs = sn.accumulated.posZ * _zFactor + py;
+            const double ox = sn.clipOriginX, oy = sn.clipOriginY;
+            const double oox = ox * m11 + oy * m12;
+            const double ooy = ox * m21 + oy * m22;
+            // Extent = matrix × 16
+            const double ex1 = m11 * 16.0, ex2 = m12 * 16.0;
+            const double ey1 = m21 * 16.0, ey2 = m22 * 16.0;
+            double xMin = px - ex1 - ex2 - oox;
+            double xMax = px + ex1 + ex2 - oox;
+            double yMin = pzs - ey1 - ey2 - ooy;
+            double yMax = pzs + ey1 + ey2 - ooy;
+            if (xMin > xMax) std::swap(xMin, xMax);
+            if (yMin > yMax) std::swap(yMin, yMax);
+            sn.shapeAABB[0] = static_cast<float>(xMin);
+            sn.shapeAABB[1] = static_cast<float>(yMin);
+            sn.shapeAABB[2] = static_cast<float>(xMax);
+            sn.shapeAABB[3] = static_cast<float>(yMax);
+            // Clamp to parent clip (0x6BDE40..0x6BDE80)
+            if (sn.parentClipIndex >= 0 &&
+                sn.parentClipIndex < static_cast<int>(nodes.size())) {
+                const auto &pc = nodes[sn.parentClipIndex];
+                if (pc.shapeAABB[0] > sn.shapeAABB[0]) sn.shapeAABB[0] = pc.shapeAABB[0];
+                if (pc.shapeAABB[1] > sn.shapeAABB[1]) sn.shapeAABB[1] = pc.shapeAABB[1];
+                if (pc.shapeAABB[2] < sn.shapeAABB[2]) sn.shapeAABB[2] = pc.shapeAABB[2];
+                if (pc.shapeAABB[3] < sn.shapeAABB[3]) sn.shapeAABB[3] = pc.shapeAABB[3];
+            }
+            sn.parentClipIndex = static_cast<int>(si);
+        }
+
+        // --- sub_6BDE94: Shape geometry computation (nodeType=1) ---
+        // Aligned to 0x6BDE94. For nodeType=1 nodes with active slot,
+        // compute shape vertices based on shapeType (0=point,1=circle,2=rect,3=quad).
+        for (size_t si = 1; si < nodes.size(); ++si) {
+            auto &sn = nodes[si];
+            if (sn.nodeType != 1 || sn.slotDone) continue;
+            sn.shapeGeomType = sn.shapeType;
+            switch (sn.shapeType) {
+                case 0: // point (0x6BDF40)
+                    sn.shapeVertices[0] = sn.vertexPosX;
+                    sn.shapeVertices[1] = sn.vertexPosY;
+                    break;
+                case 1: { // circle (0x6BDF50)
+                    sn.shapeVertices[0] = sn.vertexPosX;
+                    sn.shapeVertices[1] = sn.vertexPosY;
+                    sn.shapeVertices[2] = sn.accumulated.scaleX * 16.0 * 0.5;
+                    break;
+                }
+                case 2: { // rect (0x6BDF70)
+                    const double hw = sn.accumulated.scaleX * 16.0 * 0.5;
+                    const double hh = sn.accumulated.scaleY * 16.0 * 0.5;
+                    sn.shapeVertices[3] = sn.vertexPosX - hw;
+                    sn.shapeVertices[4] = sn.vertexPosY - hh;
+                    sn.shapeVertices[5] = sn.vertexPosX + hw;
+                    sn.shapeVertices[6] = sn.vertexPosY + hh;
+                    break;
+                }
+                case 3: { // quad (0x6BDFA8)
+                    const double m11 = sn.accumulated.m11, m12 = sn.accumulated.m12;
+                    const double m21 = sn.accumulated.m21, m22 = sn.accumulated.m22;
+                    const double ox = sn.clipOriginX, oy = sn.clipOriginY;
+                    const double oox = ox * m11 + oy * m12;
+                    const double ooy = ox * m21 + oy * m22;
+                    const double px = sn.vertexPosX, py = sn.vertexPosY;
+                    const double ax = m11 * -8.0, bx = m12 * -8.0;
+                    const double cx = m11 * 8.0,  dx = m12 * 8.0;
+                    const double ay = m21 * -8.0, by = m22 * -8.0;
+                    const double cy = m21 * 8.0,  dy = m22 * 8.0;
+                    sn.shapeVertices[7]  = px + ax + bx - oox;
+                    sn.shapeVertices[8]  = py + ay + by - ooy;
+                    sn.shapeVertices[9]  = px + cx + bx - oox;
+                    sn.shapeVertices[10] = py + cy + by - ooy;
+                    sn.shapeVertices[11] = px + cx + dx - oox;
+                    sn.shapeVertices[12] = py + cy + dy - ooy;
+                    sn.shapeVertices[13] = px + ax + dx - oox;
+                    sn.shapeVertices[14] = py + ay + dy - ooy;
+                    break;
+                }
+                default: break;
+            }
+        }
+
+        // Motion sub-node processing — aligned to sub_6BE0C0 (0x6BE0C0).
+        // For each nodeType=3 (Motion) node, create/manage child Player instance.
+        // Only runs when !isEmoteMode (0x6BE104).
+        if (!_runtime->isEmoteMode) {
+            for (size_t i = 1; i < nodes.size(); ++i) {
+                auto &mn = nodes[i];
+                if (mn.nodeType != 3) continue;
+
+                // If slot done or not visible → clear child (0x6BE31C..0x6BE354)
+                if (mn.slotDone || !mn.accumulated.visible) {
+                    if (mn.childPlayer) {
+                        mn.childPlayer.reset();
+                        mn.childNeedsInit = true;
+                    }
+                    continue;
+                }
+
+                // Get motion source from interpolated cache (clip slot dtgt, 0x6BE364)
+                const auto &src = mn.interpolatedCache.src;
+                if (src.empty()) continue;
+
+                // Create child Player if needed (sub_6B3C78 case 3: new Player)
+                if (!mn.childPlayer) {
+                    mn.childPlayer = std::make_shared<Player>(_resourceManagerNative);
+                    mn.childNeedsInit = true;
+                }
+
+                auto &child = *mn.childPlayer;
+
+                // Initialize: resolve motion and call play (0x6BE388..0x6BE46C)
+                if (mn.childNeedsInit) {
+                    child.setChara(_chara);
+                    // sub_6BE418: Player_play(child, flags, motionPath)
+                    // We use onFindMotion which internally calls resolveMotion+activateMotion
+                    child.onFindMotion(detail::widen(src));
+                    mn.childNeedsInit = false;
+                }
+
+                if (!child._runtime || !child._runtime->activeMotion) continue;
+
+                // Propagate parent state to child root node (0x6BEA18..0x6BEB74)
+                // In libkrkr2.so, these write to child->root(+200) interpolated fields
+                if (!child._runtime->nodes.empty()) {
+                    auto &childRoot = child._runtime->nodes[0];
+                    // Position (0x6BEA18..0x6BEA24)
+                    childRoot.accumulated.posX = mn.accumulated.posX;
+                    childRoot.accumulated.posY = mn.accumulated.posY;
+                    childRoot.accumulated.posZ = mn.accumulated.posZ;
+                    // Flip (0x6BEA28..0x6BEA54)
+                    childRoot.accumulated.flipX = mn.accumulated.flipX;
+                    childRoot.accumulated.flipY = mn.accumulated.flipY;
+                    // Scale (0x6BEA5C..0x6BEA88)
+                    childRoot.accumulated.scaleX = mn.accumulated.scaleX;
+                    childRoot.accumulated.scaleY = mn.accumulated.scaleY;
+                    // Slant (0x6BEB10..0x6BEB3C)
+                    childRoot.accumulated.slantX = mn.accumulated.slantX;
+                    childRoot.accumulated.slantY = mn.accumulated.slantY;
+                    // Opacity (0x6BEB40..0x6BEB58)
+                    childRoot.accumulated.opacity = mn.accumulated.opacity;
+                    // Active/visible (0x6BEB5C..0x6BEB74)
+                    childRoot.accumulated.active = mn.accumulated.active;
+                    childRoot.accumulated.visible = mn.accumulated.visible;
+                }
+
+                // Copy drawAffineMatrix and propagate player-level state (0x6BEB9C)
+                child._runtime->drawAffineMatrix = _runtime->drawAffineMatrix;
+                child._zFactor = _zFactor;
+                child._independentLayerInherit = _independentLayerInherit;
+
+                // Step child: Player_progress_inner + Player_updateLayers (0x6BE2A4..0x6BE2AC)
+                // progress_inner steps timelines, updateLayers evaluates nodes
+                child.frameProgress(0.0);  // dt=0 for initial sync
+                if (!child._runtime->nodes.empty()) {
+                    child.updateLayers(currentTime);
+                }
+            }
+        }
+
+        // --- sub_6BEDD0: Particle emitter state (nodeType=6) ---
+        // Aligned to 0x6BEDD0. Only when !isEmoteMode.
+        // Manages emitter timer and trigger state for particle emitter nodes.
+        if (!_runtime->isEmoteMode) {
+            for (size_t ei = 1; ei < nodes.size(); ++ei) {
+                auto &en = nodes[ei];
+                if (en.nodeType != 6) continue;
+                if (!en.accumulated.active || en.slotDone) {
+                    // Clear emitter state (0x6BEEB0..0x6BEEC4)
+                    en.emitterActive = false;
+                    en.emitterDtgt.clear();
+                    en.emitterTimer = 0.0;
+                    continue;
+                }
+                // dtgt from interpolated cache (clip slot+356)
+                const std::string &dtgt = en.interpolatedCache.src;
+                if (dtgt.empty()) {
+                    en.emitterActive = false;
+                    en.emitterDtgt.clear();
+                    en.emitterTimer = 0.0;
+                    continue;
+                }
+                // Check if dtgt changed → reinit (0x6BEEF0..0x6BEF48)
+                if (en.emitterActive && en.emitterDtgt != dtgt) {
+                    en.emitterDtgt = dtgt;
+                    en.emitterTimer = 0.0;
+                } else if (!en.emitterActive) {
+                    en.emitterActive = true;
+                    en.emitterDtgt = dtgt;
+                    en.emitterTimer = 0.0;
+                }
+                // Accumulate timer (0x6BEFAC..0x6BEFC0)
+                en.emitterOffsetActive = false;
+                en.emitterTimer += _frameLastTime;
+                // Trigger type handling (0x6BEFC4..0x6BF0B8)
+                const int triggerType = en.prtTrigger;
+                if (triggerType == 4) {
+                    // Target position mode: compute offset from target node
+                    // Emission handled by sub_6BF0DC (particle system node)
+                    en.emitterOffsetActive = false;
+                } else if (triggerType == 3) {
+                    // Interpolated emit: use delta position as offset
+                    if (_frameLastTime != 0.0) {
+                        en.emitterOffsetActive = true;
+                        en.emitterOffsetX = en.deltaPosX;
+                        en.emitterOffsetY = en.deltaPosY;
+                        en.emitterOffsetZ = en.deltaPosZ;
+                    }
+                } else if (triggerType == 2) {
+                    // Timer-based emission
+                    // Emission handled by sub_6BF0DC (particle system node)
+                }
+                // Particle creation is handled by sub_6BF0DC (nodeType=4).
+                // implemented. Emitter state is maintained for future use.
+            }
+        }
+
+        // --- sub_6BF0DC: Particle system (nodeType=4) ---
+        // Aligned to 0x6BF0DC. Only when !isEmoteMode.
+        // Manages child Player instances per particle with physics stepping.
+        if (!_runtime->isEmoteMode) {
+            for (size_t pi = 1; pi < nodes.size(); ++pi) {
+                auto &pn = nodes[pi];
+                if (pn.nodeType != 4) continue;
+                if (!pn.accumulated.active || pn.slotDone) {
+                    // Inactive: clear all particles
+                    pn.particleChildren.clear();
+                    pn.particleStates.clear();
+                    continue;
+                }
+
+                const double dt = _frameLastTime;
+
+                // Find the emitter node (nodeType=6) that feeds this particle node.
+                // In libkrkr2.so, the emitter's trigger drives particle creation.
+                // Look for a nodeType=6 child of the same parent with matching dtgt.
+                detail::MotionNode *emitter = nullptr;
+                for (size_t ei = 1; ei < nodes.size(); ++ei) {
+                    if (nodes[ei].nodeType == 6
+                        && nodes[ei].parentIndex == pn.parentIndex
+                        && nodes[ei].emitterActive) {
+                        emitter = &nodes[ei];
+                        break;
+                    }
+                }
+
+                // Emit new particles when emitter triggers (0x6BF1F0..0x6BF3D0)
+                if (emitter && emitter->emitterTimer > 0.0 && dt > 0.0) {
+                    // Check if we should emit (frequency-based)
+                    // prtF = emission frequency from interpolatedCache
+                    const double freq = pn.interpolatedCache.prtF;
+                    if (freq > 0.0 && pn.particleChildren.size()
+                        < static_cast<size_t>(pn.particleMaxNum > 0 ? pn.particleMaxNum : 100)) {
+                        // Create new particle child Player (0x6BF240..0x6BF390)
+                        auto child = std::make_shared<Player>(_resourceManagerNative);
+                        child->setChara(_chara);
+                        if (!emitter->emitterDtgt.empty()) {
+                            child->onFindMotion(detail::widen(emitter->emitterDtgt));
+                        }
+                        child->_zFactor = _zFactor;
+                        child->_independentLayerInherit = _independentLayerInherit;
+                        child->_runtime->drawAffineMatrix = _runtime->drawAffineMatrix;
+
+                        // Initialize particle state with random emission (0x6BF390..0x6BF5D0)
+                        detail::MotionNode::ParticleState ps;
+                        ps.posX = pn.accumulated.posX;
+                        ps.posY = pn.accumulated.posY;
+                        ps.posZ = pn.accumulated.posZ;
+                        // Random velocity from prtV/prtVmin range
+                        const double vel = pn.interpolatedCache.prtV;
+                        // Random angle from prtRange
+                        const double range = pn.interpolatedCache.prtRange;
+                        const double emitAngle = pn.accumulated.angle
+                            + (range > 0.0 ? (random() * 2.0 - 1.0) * range : 0.0);
+                        const double rad = emitAngle * 3.14159265358979323846 / 180.0;
+                        ps.velX = vel * std::cos(rad);
+                        ps.velY = vel * std::sin(rad);
+                        ps.angle = emitAngle;
+                        ps.zoom = pn.interpolatedCache.prtZ;
+                        ps.alive = true;
+
+                        pn.particleChildren.push_back(std::move(child));
+                        pn.particleStates.push_back(ps);
+                    }
+                }
+
+                // Step all existing particles (0x6BF5D0..0x6BF9E0)
+                for (size_t ci = 0; ci < pn.particleChildren.size(); ++ci) {
+                    auto &child = pn.particleChildren[ci];
+                    auto &ps = pn.particleStates[ci];
+                    if (!ps.alive || !child) continue;
+
+                    // Physics step: velocity + acceleration (0x6BF660..0x6BF750)
+                    const double accel = pn.interpolatedCache.prtA;
+                    ps.velX += accel * std::cos(ps.angle * 3.14159265358979323846 / 180.0) * dt;
+                    ps.velY += accel * std::sin(ps.angle * 3.14159265358979323846 / 180.0) * dt;
+
+                    // Position update
+                    ps.posX += ps.velX * dt;
+                    ps.posY += ps.velY * dt;
+
+                    // Propagate to child Player root node (0x6BF750..0x6BF850)
+                    if (child->_runtime && !child->_runtime->nodes.empty()) {
+                        auto &cr = child->_runtime->nodes[0];
+                        cr.accumulated.posX = ps.posX;
+                        cr.accumulated.posY = ps.posY;
+                        cr.accumulated.posZ = ps.posZ;
+                        cr.accumulated.scaleX = pn.accumulated.scaleX * ps.zoom;
+                        cr.accumulated.scaleY = pn.accumulated.scaleY * ps.zoom;
+                        cr.accumulated.opacity = pn.accumulated.opacity;
+                        cr.accumulated.visible = true;
+                        cr.accumulated.active = true;
+                    }
+
+                    // Step child Player (0x6BF850..0x6BF8E0)
+                    child->frameProgress(dt);
+                    if (child->_runtime && !child->_runtime->nodes.empty()) {
+                        child->updateLayers(currentTime);
+                    }
+                }
+
+                // Enforce max particle count (0x6BF9E0..0x6BFA20)
+                const int maxNum = pn.particleMaxNum > 0 ? pn.particleMaxNum : 100;
+                while (static_cast<int>(pn.particleChildren.size()) > maxNum) {
+                    pn.particleChildren.erase(pn.particleChildren.begin());
+                    pn.particleStates.erase(pn.particleStates.begin());
+                }
+            }
+        }
+
+        // --- sub_6C0528: Anchor node processing (nodeType=10) ---
+        // Aligned to 0x6C0528. For each nodeType=10 active node,
+        // apply exponential damping toward root node values.
+        for (size_t ai = 1; ai < nodes.size(); ++ai) {
+            auto &an = nodes[ai];
+            if (an.nodeType != 10 || !an.accumulated.active) continue;
+            _needsInternalAssignImages = true;
+            if (_frameLastTime == 0.0) {
+                an.anchorEnabled = false;
+                continue;
+            }
+            an.anchorEnabled = true;
+            // Read width/height (0x6C0790..0x6C0848)
+            double cw = an.interpolatedCache.width;
+            double ch = an.interpolatedCache.height;
+            if (cw <= 0.0) cw = 32.0;
+            if (ch <= 0.0) ch = 32.0;
+            an.clipW = cw;
+            an.clipH = ch;
+            an.originX = cw * 0.5;
+            an.originY = ch * 0.5;
+
+            // Damping exponent (0x6C088C..0x6C08B8)
+            // From decompilation: v28 = dt * (v27*dt/v27) / v27 / 60 / damping
+            // where v27 = dt/fps. Simplifies to dt*fps/60/damping for dt~1 frame.
+            const double dampPow = std::abs(_frameLastTime) / 60.0
+                / std::max(an.anchorDamping, 0.001);
+
+            // Angle damping (0x6C08C0..0x6C08E0)
+            double angle = an.accumulated.angle;
+            if (angle >= 180.0)
+                angle = 360.0 - (360.0 - angle) * dampPow;
+            else
+                angle = angle * dampPow;
+            an.accumulated.angle = angle;
+
+            // Scale damping (0x6C08E0..0x6C0924)
+            an.accumulated.scaleX = std::pow(
+                an.accumulated.scaleX * 32.0 / cw, dampPow);
+            an.accumulated.scaleY = std::pow(
+                an.accumulated.scaleY * 32.0 / ch, dampPow);
+
+            // Slant damping (0x6C0924..0x6C0938)
+            an.accumulated.slantX *= dampPow;
+            an.accumulated.slantY *= dampPow;
+
+            // Rebuild local matrix via sub_699940 (0x6C0944)
+            {
+                FrameContentState tmpState;
+                tmpState.angle = an.accumulated.angle;
+                tmpState.scaleX = an.accumulated.scaleX;
+                tmpState.scaleY = an.accumulated.scaleY;
+                tmpState.slantX = an.accumulated.slantX;
+                tmpState.slantY = an.accumulated.slantY;
+                tmpState.flipX = an.accumulated.flipX;
+                tmpState.flipY = an.accumulated.flipY;
+                if (an.interpolatedCache.hasTransformOrder) {
+                    std::copy(std::begin(an.interpolatedCache.transformOrder),
+                              std::end(an.interpolatedCache.transformOrder),
+                              tmpState.transformOrder);
+                }
+                Affine2x3 la = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+                applyLocalTransform(la, tmpState);
+                an.accumulated.m11 = la[0]; an.accumulated.m21 = la[1];
+                an.accumulated.m12 = la[2]; an.accumulated.m22 = la[3];
+            }
+
+            // If !independentLayerInherit: multiply with root (0x6C094C)
+            if (!_independentLayerInherit && !nodes.empty()) {
+                const auto &rn = nodes[0];
+                const double nm11 = an.accumulated.m11, nm12 = an.accumulated.m12;
+                const double nm21 = an.accumulated.m21, nm22 = an.accumulated.m22;
+                an.accumulated.m11 = rn.accumulated.m11*nm11 + rn.accumulated.m12*nm21;
+                an.accumulated.m21 = rn.accumulated.m21*nm11 + rn.accumulated.m22*nm21;
+                an.accumulated.m12 = rn.accumulated.m11*nm12 + rn.accumulated.m12*nm22;
+                an.accumulated.m22 = rn.accumulated.m21*nm12 + rn.accumulated.m22*nm22;
+            }
+
+            // Opacity damping (0x6C0994..0x6C09F8)
+            {
+                int opa = an.accumulated.opacity;
+                double opaF = static_cast<double>(opa) / 255.0;
+                if (opa == 0) opaF = 1.0 / 255.0;
+                double newOpa = std::pow(opaF, dampPow) * 255.0 * an.anchorOpaScale;
+                newOpa = std::clamp(newOpa, 0.0, 255.0);
+                an.accumulated.opacity = static_cast<int>(newOpa);
+                double denom = newOpa;
+                if (static_cast<int>(newOpa) < 0) denom += 4294967296.0;
+                if (denom != 0.0) an.anchorOpaScale = newOpa / denom;
+            }
+
+            // Position lerp toward root (0x6C0A04..0x6C0A4C)
+            if (!nodes.empty()) {
+                const auto &rn = nodes[0];
+                an.accumulated.posX = rn.accumulated.posX
+                    + dampPow * (an.accumulated.posX - rn.accumulated.posX);
+                an.accumulated.posY = rn.accumulated.posY
+                    + dampPow * (an.accumulated.posY - rn.accumulated.posY);
+                an.accumulated.posZ = rn.accumulated.posZ
+                    + dampPow * (an.accumulated.posZ - rn.accumulated.posZ);
+            }
+
+            // Color damping (0x6C0A68..0x6C0C58)
+            // Per-channel pow(channel/base, dampPow)*base*colorScale
+            {
+                const bool isDefaultBlend =
+                    (an.interpolatedCache.blendMode & 0xF0) == 0x10;
+                const double base = isDefaultBlend ? 255.0 : 255.0;
+                const int cR = an.interpolatedCache.colorR;
+                const int cG = an.interpolatedCache.colorG;
+                const int cB = an.interpolatedCache.colorB;
+                const int cA = an.interpolatedCache.colorA;
+                const bool allEqual = (cR == cG && cG == cB && cB == cA);
+                if (!(allEqual && cR == 0x80 && cA == 0xFF)) {
+                    int iters = (allEqual) ? 1 : 4;
+                    for (int ci = 0; ci < iters && ci < 4; ++ci) {
+                        for (int ch = 0; ch < 3; ++ch) {
+                            double v = static_cast<double>(an.colorBytes[ci*4+ch]);
+                            if (v == 0.0) v = 1.0;
+                            double res = base * std::pow(v / base, dampPow)
+                                * an.anchorColorScale[ci*4+ch];
+                            res = std::clamp(res, 0.0, 255.0);
+                            int ir = static_cast<int>(res);
+                            double dr = static_cast<double>(ir);
+                            if (dr != 0.0) an.anchorColorScale[ci*4+ch] = res / dr;
+                            an.colorBytes[ci*4+ch] = static_cast<uint8_t>(ir);
+                        }
+                        // Alpha channel (0x6C0BA8..0x6C0BE0)
+                        double av = static_cast<double>(an.colorBytes[ci*4+3]) / 255.0;
+                        if (av == 0.0) av = 1.0 / 255.0;
+                        double ares = std::pow(av, dampPow) * 255.0
+                            * an.anchorColorScale[ci*4+3];
+                        ares = std::clamp(ares, 0.0, 255.0);
+                        int iar = static_cast<int>(ares);
+                        double dar = static_cast<double>(iar);
+                        if (dar != 0.0) an.anchorColorScale[ci*4+3] = ares / dar;
+                        an.colorBytes[ci*4+3] = static_cast<uint8_t>(iar);
+                    }
+                    if (allEqual) {
+                        std::memcpy(&an.colorBytes[4], &an.colorBytes[0], 4);
+                        std::memcpy(&an.colorBytes[8], &an.colorBytes[0], 4);
+                        std::memcpy(&an.colorBytes[12], &an.colorBytes[0], 4);
+                    }
+                }
+            }
+        }
     }
 
     // --- Viewport/display ---

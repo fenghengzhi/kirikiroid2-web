@@ -1,70 +1,65 @@
-# KrKr2 WebAssembly Port
+# KrKr2 WebAssembly 移植
 
-## Build
-- `cmake --preset "Web Debug Config"` then `cmake --build out/web/debug`
-- Release: `cmake --preset "Web Release Config"` then `cmake --build out/web/release`
-- Requires: emsdk sourced, VCPKG_ROOT set, ninja, cmake 3.31.1+, bison 3.8.2+
-- Output: `out/web/{debug,release}/` → index.html, index.js, index.wasm, index.data, index.worker.js
-- Full env one-liner: `export EMSDK=/Users/bytedance/emsdk && export EMSDK_PYTHON=$EMSDK/python/3.13.3_64bit/bin/python3 && export VCPKG_ROOT=/Users/bytedance/vcpkg && export PATH="/opt/homebrew/opt/bison/bin:$EMSDK:$EMSDK/upstream/emscripten:$EMSDK/node/20.18.0_64bit/bin:/opt/homebrew/bin:$PATH"`
-- EMSDK_PYTHON must be exported — vcpkg ffmpeg build fails without it (system Python lacks `match` syntax)
-- After CMakeLists.txt changes (file add/remove/rename), must re-run `cmake --preset` before build
-- If bison errors with "require 3.8.2 but have 2.3", add `-DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison`
-- IMPORTANT: Kill coi-server BEFORE building — it serves stale wasm if build runs while server is up
-- Asan build (`Web Debug Asan Config`) produces ~126MB wasm; coi-server may fail to serve it
+## 构建
+- 调试版：`cmake --preset "Web Debug Config"` → `cmake --build out/web/debug`
+- 发布版：`cmake --preset "Web Release Config"` → `cmake --build out/web/release`
+- 依赖：emsdk 已 source、VCPKG_ROOT 已设置、ninja、cmake 3.31.1+、bison 3.8.2+
+- 输出：`out/web/{debug,release}/` → index.html, index.js, index.wasm, index.data, index.worker.js
+- 环境变量：见 `.claude.local.md`（机器特定的 EMSDK/VCPKG_ROOT 路径）
 
-## Project Structure
-- `cpp/plugins/` — NCB plugin DLLs (each file = one virtual .dll module)
-  - `PackinOne.cpp` — Batch loader that loads 8 sub-plugins when `Plugins.link("PackinOne.dll")` is called
-  - `DrawDeviceD3D.cpp` — iTVPDrawDevice wrapper (D3D stub for web build)
-- `cpp/plugins/motionplayer/` — EmotePlayer + Player (MotionPlayer) classes with NCB TJS2 bindings
-  - `main.cpp` — NCB_REGISTER_CLASS/SUBCLASS macros for TJS2 registration
-  - `EmotePlayer.{h,cpp}` — E-mote SDK wrapper (D3DEmotePlayer derives from it)
-  - `Player.{h,cpp}` — Motion animation player (registered as Motion.Player in TJS2)
-  - `ResourceManager.{h,cpp}` — PSB resource loading + decrypt seed management
-  - `D3DAdaptor.h` — Motion.D3DAdaptor pixel buffer (RE'd from libkrkr2.so sub_6ADB10)
-  - `SeparateLayerAdaptor.h` — Motion.SeparateLayerAdaptor thin wrapper
-- `cpp/core/tjs2/` — TJS2 scripting engine core
-- `cpp/core/visual/WindowIntf.cpp` — Window class: drawDevice setter requires `interface` property returning iTVPDrawDevice*
-- `cpp/core/plugin/PluginImpl.cpp` — TVPLoadPlugin (called by Plugins.link), TVPLoadInternalPlugins (startup)
-- `cpp/core/base/StorageIntf.cpp` — Auto path table, TVPAddAutoPath, TVPGetPlacedPath
-- `cpp/core/environ/web/Platform.cpp` — Web-specific startup, auto-mounts sibling xp3 files from ZIP
-- `tests/unit-tests/plugins/motionplayer-dll.cpp` — MotionPlayer/EmotePlayer unit tests
+### 构建陷阱
+- 必须导出 EMSDK_PYTHON — vcpkg ffmpeg 构建需要（系统 Python 缺少 `match` 语法）
+- 改 CMakeLists.txt（增删改文件）后必须重跑 `cmake --preset` 再构建
+- bison 报错"require 3.8.2 but have 2.3"时加 `-DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison`
+- 构建前必须关闭 coi-server — 否则提供旧 wasm
 
-## Reverse Engineering with IDA MCP
-- No Android kirikiroid2 source code is available — only libkrkr2.so binary. Use IDA MCP for all reverse engineering.
-- CRITICAL: libkrkr2.so and the current project code do NOT correspond 1:1. When analyzing libkrkr2.so, do NOT reference local project code as ground truth — the local code may be wrong or incomplete. Always treat libkrkr2.so decompilation as the authoritative source.
-- `analysis/` directory contains detailed RE analysis docs — check before re-analyzing the same functions
-- Key analysis docs: `PSB_RL_Decompression_libkrkr2so.md`, `SLA_Rendering_Chain_libkrkr2so.md`, `Window_DrawDevice_Scaling_libkrkr2so.md`
-- SLA rendering chain (6 steps): PSB tree eval (0x6BB33C) → vertex computation (0x6BC4F0) → drawAffineMatrix transform (0x6C2334) → cameraOffset+rootOffset (0x6D5264) → PrivateMotionGLL child layer (0x6D5948) → direct vertex render (0x6DE738)
-- Window scaling: TVPWindowLayer::RecalcPaintBox (0xaa7c58), ResetDrawSprite (0xaa7d70), SetPaintBoxSize (0xaa5a24). drawSprite.textureRect clips to paintBox (scWidth×scHeight), not full primaryLayer size
-- `analysis_MotionPlayer_EmotePlayer.md` at project root has prior RE analysis of libkrkr2.so
-- Use `mcp__ida-pro-mcp__decompile` with function addresses to get pseudocode
-- Use `mcp__ida-pro-mcp__find` with type "string" to locate string references
-- `mcp__ida-pro-mcp__find` ONLY matches ASCII/UTF-8 strings — use `/ida-search-string` skill for UTF-16
-- IDA may show only first char of UTF-16 strings (e.g. "f" for "fstat.dll") — use hex dump or `get_operand_value` to resolve
-- IDA sometimes merges separate functions — check for `SUB SP` prologues at `loc_` addresses
-- NCB class registration functions in IDA: look for `ncb_addMember` (0x54242C) and `ncb_addConstant` (0x52FA58) calls
-- Many functions have been renamed in IDA — see `.claude/skills/ida-decompile/SKILL.md` "Named Functions" table for the full list
-- NCB module loading (`LoadModule`) is case-insensitive (lowercases before lookup)
+## 项目结构
+- `cpp/plugins/` — NCB 插件 DLL（每个文件 = 一个虚拟 .dll 模块）
+  - `PackinOne.cpp` — 批量加载器，`Plugins.link("PackinOne.dll")` 时加载 8 个子插件
+  - `DrawDeviceD3D.cpp` — iTVPDrawDevice 封装（Web 构建的 D3D 桩实现）
+- `cpp/plugins/motionplayer/` — EmotePlayer + Player (MotionPlayer)，带 NCB TJS2 绑定，详见各文件头注释
+- `cpp/core/tjs2/` — TJS2 脚本引擎核心
+- `cpp/core/visual/WindowIntf.cpp` — Window 类：drawDevice setter 要求 `interface` 属性返回 iTVPDrawDevice*
+- `cpp/core/plugin/PluginImpl.cpp` — TVPLoadPlugin（由 Plugins.link 调用）、TVPLoadInternalPlugins（启动时）
+- `cpp/core/base/StorageIntf.cpp` — 自动路径表、TVPAddAutoPath、TVPGetPlacedPath
+- `cpp/core/environ/web/Platform.cpp` — Web 平台启动逻辑，自动挂载 ZIP 中的同级 xp3 文件
+- `tests/unit-tests/plugins/motionplayer-dll.cpp` — MotionPlayer/EmotePlayer 单元测试
 
-## Code Patterns
-- TJS2 property binding: `NCB_PROPERTY(name, getter, setter)`, `NCB_PROPERTY_RO(name, getter)`
-- TJS2 method binding: `NCB_METHOD(name)`, `NCB_METHOD_RAW_CALLBACK(name, &Class::func, flags)`
-- Stub pattern: `#define STUB_WARN(name) LOGGER->warn("ClassName::" #name "() stub called")`
-- String conversion: `detail::narrow(ttstr)` → std::string, `detail::widen(std::string)` → ttstr
+## 代码模式
+- TJS2 属性绑定：`NCB_PROPERTY(name, getter, setter)`、`NCB_PROPERTY_RO(name, getter)`
+- TJS2 方法绑定：`NCB_METHOD(name)`、`NCB_METHOD_RAW_CALLBACK(name, &Class::func, flags)`
+- 桩模式：`#define STUB_WARN(name) LOGGER->warn("ClassName::" #name "() stub called")`
+- 字符串转换：`detail::narrow(ttstr)` → std::string、`detail::widen(std::string)` → ttstr
 
-## Debugging
-- XP3 extraction: `tools/bin/mac/rel/xp3 -o /tmp/out file.xp3`
-- TJS2 bytecode disassembly: `tools/bin/mac/rel/tjsdump file.tjs` (use `/tjs2-disasm` skill)
-- Build native tools: `cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON -DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison && cmake --build out/macos/release --target tjsdump`
-- Do NOT test with individual XP3 files — incomplete XP3 sets cause init failures that mask real bugs
-- Browser automation: Use `playwright-cli` skill. Game uses touch events for left-click; use CDP `Input.dispatchTouchEvent` or ensure BUTTON_LEFT in onMouseDownEvent
-- C++ logging in Emscripten: `spdlog`/`printf`/`fprintf(stderr)` all output to browser console, but playwright-cli console only shows a limited number of recent entries. When logs are voluminous, earlier C++ output gets pushed out. Use debug-capture.sh's addInitScript approach to capture specific keywords
-- ZIP game loading via playwright takes ~10 min; plan test cycles accordingly
-- RecalcPaintBox in `cpp/core/environ/cocos2d/MainScene.cpp` controls game→screen coordinate mapping. Key runtime values: viewSize, contentSize, paintBox, scale, offset
-- Game uses exHeight (1440) > scHeight (1080) for extended layer area. primaryLayer contentSize = scWidth×scHeight, but some layers (AffineLayer) use exWidth×exHeight
+## 调试工具
+- XP3 解包：`tools/bin/mac/rel/xp3 -o /tmp/out file.xp3`
+- TJS2 字节码反汇编：`tools/bin/mac/rel/tjsdump file.tjs`（使用 `/tjs2-disasm` 技能）
+- 构建原生工具：`cmake --preset "MacOS Release Config" -DBUILD_TOOLS=ON -DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison && cmake --build out/macos/release --target tjsdump`
 
-## Workflow — 代码修改前置条件（BLOCKING）
+## 调试注意事项
+- 不要用单独的 XP3 文件测试 — 不完整的 XP3 集合会导致初始化失败，掩盖真正的 bug
+- 浏览器自动化：使用 `playwright-cli` 技能。游戏用触摸事件处理左键点击；用 CDP `Input.dispatchTouchEvent` 或确保 onMouseDownEvent 中使用 BUTTON_LEFT
+- C++ 日志（`spdlog`/`printf`/`fprintf(stderr)`）均输出到浏览器控制台，但 playwright-cli 只保留最近条目。日志量大时早期输出被挤出，用 debug-capture.sh 的 addInitScript 捕获特定关键词
+
+## IDA MCP 逆向工程
+
+### 核心原则
+- 无 Android kirikiroid2 源代码，仅有 libkrkr2.so 二进制。所有逆向使用 IDA MCP
+- libkrkr2.so 与本地代码并非一一对应。始终以反编译结果为权威来源，本地代码可能有误或不完整
+
+### 已有分析成果
+- `analysis/` 目录包含详细逆向文档 — 分析新函数前先检查是否已有记录
+
+### IDA 工具注意事项
+- `mcp__ida-pro-mcp__decompile` 配合函数地址获取伪代码
+- `mcp__ida-pro-mcp__find` 配合 type "string" 定位字符串引用，但仅匹配 ASCII/UTF-8 — UTF-16 用 `/ida-search-string` 技能
+- IDA 可能只显示 UTF-16 字符串首字符（如 "f" 代表 "fstat.dll"）— 用十六进制转储或 `get_operand_value` 解析
+- IDA 有时合并独立函数 — 检查 `loc_` 地址处是否有 `SUB SP` 函数序言
+- NCB 类注册函数：查找 `ncb_addMember` (0x54242C) 和 `ncb_addConstant` (0x52FA58) 调用
+- 已重命名函数完整列表见 `.claude/skills/ida-decompile/SKILL.md` "Named Functions" 表
+- NCB 模块加载（`LoadModule`）不区分大小写（加载前转小写）
+
+## 工作流 — 代码修改前置条件（BLOCKING）
 
 任何对 cpp/ 目录的代码修改（Edit/Write），**必须**满足以下全部条件，缺一不可。不满足条件的修改视为无效，必须回退。
 
@@ -75,11 +70,11 @@
 4. **本地实现对照** — 逐行说明本地代码如何复刻上述伪代码
 
 ### 硬性禁止（违反任何一条 = 立即停止并反编译）
-- **禁止从 PSB 键名推导行为** — "PSB有opa键"不等于"应该读opa"。必须反编译确认读取条件（如 mask 位掩码门控）、默认值、数据类型
-- **禁止从变量名推导语义** — "opacity"不等于"opa"。必须反编译确认 libkrkr2.so 实际使用的字符串常量
-- **禁止"先改代码再验证"** — 必须"先反编译 → 写出 libkrkr2.so 伪代码 → 再改本地代码"
+- **禁止从 PSB 键名推导行为** — 必须反编译确认读取条件（如 mask 位掩码门控）、默认值、数据类型
+- **禁止从变量名推导语义** — 必须反编译确认 libkrkr2.so 实际使用的字符串常量
+- **禁止"先改代码再验证"** — 必须"先反编译 → 写伪代码 → 再改本地代码"
 - **禁止把多个推测链接成结论** — 每一步都必须有独立的反编译/运行时日志证据
-- **禁止从本地代码推断 libkrkr2.so 行为** — 本地代码可能是错的，libkrkr2.so 是唯一权威来源
+- **禁止从本地代码推断 libkrkr2.so 行为** — 本地代码可能是错的
 
 ### 标准工作流程
 1. 发现问题 → 加诊断日志确认现象
@@ -93,5 +88,5 @@
 - 反编译完整渲染链（Layer→DrawDevice→Texture→Cocos2D），不要只看局部
 
 ### IDA 符号管理
-- 当反编译 100% 确认标识符真名时，立即通过 `mcp__ida-pro-mcp__rename` 重命名（func/data/local/stack）
+- 反编译 100% 确认标识符真名时，立即通过 `mcp__ida-pro-mcp__rename` 重命名
 - 非 100% 确认的加 `_guess` 后缀（如 `Layer_Update_guess`）

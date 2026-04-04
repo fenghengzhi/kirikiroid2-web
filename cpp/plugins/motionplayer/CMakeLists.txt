@@ -9,6 +9,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     Player.cpp
     ResourceManager.cpp
     RuntimeSupport.cpp
+    NodeTree.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin)

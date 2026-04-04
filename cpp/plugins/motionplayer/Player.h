@@ -366,6 +366,7 @@ namespace motion {
             std::string, std::shared_ptr<const PSB::PSBDictionary>> *
         activeLayersByName() const;
         const std::vector<std::string> &activeSourceCandidates() const;
+        void updateLayers(double currentTime);
 
         std::shared_ptr<detail::PlayerRuntime> _runtime;
         ResourceManager _resourceManagerNative;

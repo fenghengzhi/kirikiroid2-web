@@ -12,6 +12,7 @@
 
 #include "tjs.h"
 #include "psbfile/PSBFile.h"
+#include "MotionNode.h"
 
 namespace motion::detail {
 
@@ -102,6 +103,12 @@ namespace motion::detail {
         double slant = 0.0;
         double zoom = 1.0;
         std::vector<MotionEvent> pendingEvents;
+        // Persistent node tree for updateLayers pipeline
+        std::vector<MotionNode> nodes;
+        bool nodesBuilt = false;
+        // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
+        // PSB root "type" field: 0=non-emote (motion), 1=emote
+        bool isEmoteMode = false;
     };
 
     struct EmotePlayerRuntime {
