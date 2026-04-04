@@ -458,6 +458,12 @@ namespace motion {
         // Stores colorBytes[0..3] packed as RGBA uint32 (default 0xFF808080).
         uint32_t _parentColorPacked = 0xFF808080u;  // player+1156
 
+        // Per-frame flag cleared at end of updateLayers (player+608, 0x6BBDF8).
+        // Set to true in constructor; checked by sub_6BE0C0 case 2 (0x6BE664)
+        // and sub_6BEDD0 case 2 (0x6BEFF4). When true, case 2 falls through
+        // to interpolated derivative path instead of using deltaPos.
+        bool _noUpdateYet = true;  // player+608
+
         // Aligned to libkrkr2.so emote scale/rotate fields:
         // sub_681F20: player+1184, sub_681F28: player+1192, sub_681F30: player+1200
         double _hairScale = 1.0;    // player+1184

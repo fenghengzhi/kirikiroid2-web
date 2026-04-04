@@ -88,6 +88,12 @@ namespace motion::detail {
         // When a new motion is played, the current slot becomes "other slot" for blending.
         bool currentSlotCrossfading = false;  // *(v10 + 536*v13 + 345)
         bool currentSlotHasEasing = false;    // *(v10 + 536*v13 + 544)
+        // Crossfade easing curve data (slot+208 in binary, sub_69A754).
+        // Populated during slot flip; used by sub_6BE0C0 at 0x6BEC8C.
+        struct CrossfadeEasing {
+            std::vector<double> x, y;
+            bool empty() const { return x.empty(); }
+        } crossfadeEasingCurve;
 
         // PSB reference (for evaluateLayerContent calls)
         std::shared_ptr<const PSB::PSBDictionary> psbNode;
@@ -228,6 +234,7 @@ namespace motion::detail {
         // anonymous namespace and can't be referenced here).
         struct InterpolatedCache {
             std::string src;
+            std::vector<std::string> srcList;  // node+2200: particle motion path array
             double width = 0.0;
             double height = 0.0;
             double opacity = 1.0;  // 0.0-1.0 as from PSB
@@ -275,6 +282,13 @@ namespace motion::detail {
             double prtZmin = 1.0;
             double prtZ = 1.0;
             double prtRange = 0.0;
+            // Position easing curve (slot+168=ccc in sub_69A4D4 context)
+            // and rotation control points (slot+268="cp").
+            // Used by sub_6C1540 / sub_6BE0C0 case 3 for position derivative.
+            std::vector<double> ccc_x, ccc_y;  // ccc curve for t easing in sub_69A4D4
+            std::vector<double> cp_x, cp_y;    // cp main bezier points
+            std::vector<double> cp_t;           // cp time knots
+            bool hasCpRotation = false;         // slot+284 type != 0
             // --- Dual-slot raw data for sub_6C1540 equivalent ---
             // Stored during Phase 2 evaluateLayerContent when type==3 (interpolate).
             // Phase 3 particle emitter uses these to compute position derivative.

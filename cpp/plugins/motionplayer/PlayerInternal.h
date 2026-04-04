@@ -434,9 +434,26 @@ namespace internal {
             bool empty() const { return x.empty(); }
         };
 
+        // Control point curve for spline rotation (sub_698454).
+        // PSB "cp" key stores nested structure: x, y, t arrays + s[] segments.
+        // Each segment has x, y, p sub-arrays for cubic spline interpolation.
+        struct SplineSegment {
+            std::vector<double> x;  // breakpoints
+            std::vector<double> y;  // values
+            std::vector<double> p;  // spline parameters
+        };
+        struct ControlPointCurve {
+            std::vector<double> x;  // main bezier X control points (3N+1)
+            std::vector<double> y;  // main bezier Y control points (3N+1)
+            std::vector<double> t;  // time knot points
+            std::vector<SplineSegment> s;  // per-segment spline data
+            bool empty() const { return t.empty(); }
+        };
+
         struct FrameContentState {
             bool visible = false;
             std::string src;
+            std::vector<std::string> srcList;  // For particle nodes: array of "chara/motion" paths
             double x = 0.0;
             double y = 0.0;
             double ox = 0.0;          // mask 0x1: position offset X
@@ -464,6 +481,8 @@ namespace internal {
             BezierCurve zcc;          // mask 0x2000: zoom curve control
             BezierCurve scc;          // mask 0x4000: slant curve control
             BezierCurve occ;          // mask 0x8000: opacity curve control
+            BezierCurve cc;           // position curve (slot+296, "cc" PSB key)
+            ControlPointCurve cp;     // rotation spline (slot+268, "cp" PSB key)
             // === Subsystem data (mask 0x80000+) ===
             // mask 0x80000: motion sub-object (sub_692AB0 at 0x6938CC)
             int motionMask = 0;
@@ -588,7 +607,8 @@ namespace internal {
         //   - If t >= x[last]: return y[last]
         //   - Find segment where x[i] >= t (step 3)
         //   - B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
-        inline double evaluateBezierCurve(const BezierCurve &curve, double t) {
+        template<typename CurveT>
+        inline double evaluateBezierCurve(const CurveT &curve, double t) {
             if(curve.x.size() < 2 || curve.y.size() < 2) return t;
             if(curve.x.size() != curve.y.size()) return t;
             const size_t n = curve.x.size();
@@ -605,6 +625,111 @@ namespace internal {
             const double p3 = curve.y[i];
             const double u = 1.0 - t;
             return u*u*u*p0 + 3.0*u*u*t*p1 + 3.0*u*t*t*p2 + t*t*t*p3;
+        }
+
+        // sub_698454 equivalent: evaluate control point curve for rotation.
+        // Returns 2D point (cos/sin pair) for rotation interpolation.
+        inline void evaluateControlPointCurve(
+            double outXY[2], const ControlPointCurve &cp, double inputT) {
+            if (cp.t.size() < 2 || cp.x.size() < 4 || cp.y.size() < 4) return;
+            // Step 1: find segment in t[] where t[i+1] >= inputT (0x698720..0x698744)
+            int segIdx = 0;
+            int mainIdx = 0;
+            for (size_t i = 1; i < cp.t.size(); ++i) {
+                mainIdx += 3;
+                if (cp.t[i] >= inputT) { segIdx = static_cast<int>(i) - 1; break; }
+                segIdx = static_cast<int>(i) - 1;
+            }
+            if (segIdx < 0 || segIdx >= static_cast<int>(cp.s.size())) return;
+            // Knot values (0x69875C..0x69878C)
+            double tStart = cp.t[segIdx];
+            double tEnd = (segIdx + 1 < static_cast<int>(cp.t.size())) ? cp.t[segIdx + 1] : tStart;
+            double localT = (tEnd != tStart) ? (inputT - tStart) / (tEnd - tStart) : 0.0;
+            // Step 2: evaluate segment spline to get bezier parameter (0x6989D8..0x698B38)
+            double param = localT;
+            const auto &seg = cp.s[segIdx];
+            if (!seg.x.empty() && seg.x.size() == seg.y.size()) {
+                double sx0 = seg.x[0];
+                if (sx0 >= localT) {
+                    param = seg.y[0];
+                } else if (seg.x.back() <= localT) {
+                    param = seg.y.back();
+                } else {
+                    // Find sub-segment (step 1, 0x698A18..0x698A38)
+                    int subIdx = 0;
+                    for (size_t i = 1; i < seg.x.size(); ++i) {
+                        if (seg.x[i] >= localT) { subIdx = static_cast<int>(i) - 1; break; }
+                        subIdx = static_cast<int>(i) - 1;
+                    }
+                    if (subIdx >= 0 && subIdx + 1 < static_cast<int>(seg.x.size()) &&
+                        subIdx + 1 < static_cast<int>(seg.y.size())) {
+                        double x0 = seg.x[subIdx], x1 = seg.x[subIdx + 1];
+                        double y0 = seg.y[subIdx], y1 = seg.y[subIdx + 1];
+                        double dx = x1 - x0;
+                        if (dx != 0.0) {
+                            double u = (localT - x0) / dx;
+                            double p0 = (subIdx < static_cast<int>(seg.p.size())) ? seg.p[subIdx] : 0.0;
+                            double p1 = (subIdx + 1 < static_cast<int>(seg.p.size())) ? seg.p[subIdx + 1] : 0.0;
+                            // Cubic spline formula (0x698AF0..0x698B38)
+                            param = dx * dx * ((u*u*u - u) * p1 + ((1-u)*(1-u)*(1-u) - (1-u)) * p0) / 6.0
+                                  + u * y1 + (1 - u) * y0;
+                        }
+                    }
+                }
+            }
+            // Step 3: evaluate main cubic bezier with 'param' (0x698BF0..0x698D0C)
+            if (mainIdx >= 3 && mainIdx < static_cast<int>(cp.x.size()) &&
+                mainIdx < static_cast<int>(cp.y.size())) {
+                double px0 = cp.x[mainIdx-3], py0 = cp.y[mainIdx-3];
+                double px1 = cp.x[mainIdx-2], py1 = cp.y[mainIdx-2];
+                double px2 = cp.x[mainIdx-1], py2 = cp.y[mainIdx-1];
+                double px3 = cp.x[mainIdx],   py3 = cp.y[mainIdx];
+                double u = 1.0 - param;
+                outXY[0] = u*u*u*px0 + 3*u*u*param*px1 + 3*u*param*param*px2 + param*param*param*px3;
+                outXY[1] = u*u*u*py0 + 3*u*u*param*py1 + 3*u*param*param*py2 + param*param*param*py3;
+            }
+        }
+
+        // sub_69A4D4 equivalent: position interpolation with optional easing + rotation.
+        // Uses ccc for easing (slot+168) and cp for rotation (slot+268).
+        inline void interpolatePosition69A4D4(
+            const BezierCurve &easingCurve,         // ccc (slot+168)
+            const double dstPos[3],                 // other slot [x,y,z]
+            const double srcPos[3],                 // current slot [x,y,z]
+            double outPos[3],                       // output
+            int coordinateMode,
+            const ControlPointCurve &rotationCurve, // cp (slot+268)
+            double t) {
+            // Skip if positions identical (0x69A52C..0x69A558)
+            if (srcPos[0]==dstPos[0] && srcPos[1]==dstPos[1] && srcPos[2]==dstPos[2]) {
+                outPos[0]=srcPos[0]; outPos[1]=srcPos[1]; outPos[2]=srcPos[2];
+                return;
+            }
+            // Apply easing (0x69A55C..0x69A56C)
+            double et = !easingCurve.empty() ? evaluateBezierCurve(easingCurve, t) : t;
+            if (rotationCurve.empty()) {
+                // Linear path (0x69A600..0x69A6F8)
+                for (int i = 0; i < 3; ++i)
+                    outPos[i] = (srcPos[i]!=dstPos[i]) ? srcPos[i]*(1-et)+dstPos[i]*et : srcPos[i];
+                return;
+            }
+            // Rotation path via sub_698454 (0x69A588..0x69A5CC / 0x69A680..0x69A6F0)
+            double rot[2] = {1.0, 0.0};
+            evaluateControlPointCurve(rot, rotationCurve, et);
+            double cosA = rot[0], sinA = rot[1];
+            if (coordinateMode == 0) {
+                double dx = dstPos[0]-srcPos[0], dy = dstPos[1]-srcPos[1];
+                outPos[0] = srcPos[0] + dx*cosA - dy*sinA;
+                outPos[1] = srcPos[1] + dx*sinA + dy*cosA;
+                outPos[2] = (srcPos[2]!=dstPos[2]) ? srcPos[2]*(1-et)+dstPos[2]*et : srcPos[2];
+            } else if (coordinateMode == 1) {
+                double dx = dstPos[0]-srcPos[0], dz = dstPos[2]-srcPos[2];
+                outPos[0] = srcPos[0] + dx*cosA - dz*sinA;
+                outPos[1] = (srcPos[1]!=dstPos[1]) ? srcPos[1]*(1-et)+dstPos[1]*et : srcPos[1];
+                outPos[2] = srcPos[2] + dz*cosA + dx*sinA;
+            } else {
+                outPos[0]=srcPos[0]; outPos[1]=srcPos[1]; outPos[2]=srcPos[2];
+            }
         }
 
         inline std::shared_ptr<PSB::PSBDictionary>
@@ -651,9 +776,18 @@ namespace internal {
 
             // "src" is NOT gated by mask — it's gated by node type in sub_692AB0
             // (((1 << a2) & 0x1849) != 0). We don't have node type here, so
-            // read unconditionally (safe: src is always a string or absent).
+            // read unconditionally. "src" can be a string or a PSBList of strings
+            // (binary stores as TJS Array at node+2200 for particle random selection).
             if(const auto src = psbDictionaryString(content, "src"); !src.empty()) {
                 state.src = src;
+            } else if(auto srcList = psbDictionaryList(content, "src")) {
+                // PSBList of strings — store all entries in srcList
+                for(size_t si = 0; si < srcList->size(); ++si) {
+                    if(auto s = std::dynamic_pointer_cast<PSB::PSBString>((*srcList)[si])) {
+                        state.srcList.push_back(s->value);
+                    }
+                }
+                if(!state.srcList.empty()) state.src = state.srcList[0];
             }
 
             // mask & 0x1: ox/oy (sub_692AB0 at 0x692DC4)
@@ -785,6 +919,47 @@ namespace internal {
             if(mask & 0x8000) {
                 if(auto occDict = psbDictionaryValue(content, "occ"))
                     state.occ = parseBezierCurve(occDict);
+            }
+
+            // "cc" position curve (sub_692AB0 at 0x693580, slot+296)
+            // Used by sub_69A4D4 to ease position interpolation t value.
+            // Check done AFTER per-property curves, gated by slot+25 (crossfading)
+            // and slot+22 (flipX) at 0x6932B8..0x6932C4.
+            if(auto ccDict = psbDictionaryValue(content, "cc"))
+                state.cc = parseBezierCurve(ccDict);
+
+            // "cp" rotation control points (sub_692AB0 at 0x6932D8, slot+268)
+            // Used by sub_698454 for spline rotation interpolation in sub_69A4D4.
+            if(auto cpDict = psbDictionaryValue(content, "cp")) {
+                auto cpxList = psbDictionaryList(cpDict, "x");
+                auto cpyList = psbDictionaryList(cpDict, "y");
+                auto cptList = psbDictionaryList(cpDict, "t");
+                auto cpsList = psbDictionaryList(cpDict, "s");
+                if (cpxList && cpyList && cptList) {
+                    for (size_t ci = 0; ci < cpxList->size(); ++ci)
+                        if (auto v = psbNumberValue((*cpxList)[ci])) state.cp.x.push_back(*v);
+                    for (size_t ci = 0; ci < cpyList->size(); ++ci)
+                        if (auto v = psbNumberValue((*cpyList)[ci])) state.cp.y.push_back(*v);
+                    for (size_t ci = 0; ci < cptList->size(); ++ci)
+                        if (auto v = psbNumberValue((*cptList)[ci])) state.cp.t.push_back(*v);
+                    if (cpsList) {
+                        for (size_t ci = 0; ci < cpsList->size(); ++ci) {
+                            SplineSegment seg;
+                            if (auto segDict = std::dynamic_pointer_cast<PSB::PSBDictionary>((*cpsList)[ci])) {
+                                if (auto sx = psbDictionaryList(segDict, "x"))
+                                    for (size_t si = 0; si < sx->size(); ++si)
+                                        if (auto v = psbNumberValue((*sx)[si])) seg.x.push_back(*v);
+                                if (auto sy = psbDictionaryList(segDict, "y"))
+                                    for (size_t si = 0; si < sy->size(); ++si)
+                                        if (auto v = psbNumberValue((*sy)[si])) seg.y.push_back(*v);
+                                if (auto sp = psbDictionaryList(segDict, "p"))
+                                    for (size_t si = 0; si < sp->size(); ++si)
+                                        if (auto v = psbNumberValue((*sp)[si])) seg.p.push_back(*v);
+                            }
+                            state.cp.s.push_back(std::move(seg));
+                        }
+                    }
+                }
             }
 
             // mask & 0x200: color RGBA (sub_692AB0 at 0x692F4C → 0x693330)
@@ -1008,7 +1183,10 @@ namespace internal {
             const double t_acc = !state.acc.empty()
                 ? evaluateBezierCurve(state.acc, t) : t;
 
-            // Position (linear, sub_699AE4 at 0x699BB0~BC0)
+            // Position uses PLAIN t (sub_699AE4 at 0x699BB0~BC0).
+            // Note: "cc" position curve is NOT applied in interpolateSlots.
+            // It's only used by sub_69A4D4 (called from sub_6C1540/case 3 for
+            // position derivative computation), separate from normal frame interpolation.
             state.x = lerp(state.x, slotB.x, t);
             state.y = lerp(state.y, slotB.y, t);
             state.ox = lerp(state.ox, slotB.ox, t);
