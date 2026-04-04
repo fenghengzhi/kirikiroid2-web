@@ -165,6 +165,10 @@ namespace motion::detail {
             // Check if any frame has a source image
             node.hasSource = checkHasSource(psbNode);
 
+            // "emoteEdit" → emoteEditDict (node+1980, sub_6B3C78 at 0x6B3D48)
+            if (auto ee = std::dynamic_pointer_cast<PSB::PSBDictionary>((*psbNode)["emoteEdit"]))
+                node.emoteEditDict = ee;
+
             // Add this node to the flat vector
             const int thisIdx = node.index;
             nodes.push_back(std::move(node));

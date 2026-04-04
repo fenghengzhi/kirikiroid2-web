@@ -3590,12 +3590,18 @@ namespace motion {
             const int slotIdx = 0;  // current slot index
 
             // priorDraw flag from emoteEdit (0x6BC648..0x6BC6C4)
-            if (vn.forceVisible) {
-                // Read priorDraw from PSB emoteEdit dict
-                // In binary: node+1980 → emoteEdit variant → PropGet("priorDraw")
-                vn.priorDraw = false;  // default; populated from PSB if emoteEdit exists
+            // priorDraw from emoteEdit (0x6BC648..0x6BC6C4)
+            if (vn.forceVisible && vn.emoteEditDict) {
+                // sub_6636D4: read bool "priorDraw" from emoteEdit dict
+                auto pdVal = (*vn.emoteEditDict)["priorDraw"];
+                if (auto num = std::dynamic_pointer_cast<PSB::PSBNumber>(pdVal))
+                    vn.priorDraw = (num->getValue<int>() != 0);
+                else if (auto bl = std::dynamic_pointer_cast<PSB::PSBBool>(pdVal))
+                    vn.priorDraw = bl->value;
+                else
+                    vn.priorDraw = false;
             } else {
-                vn.priorDraw = false;
+                vn.priorDraw = false;  // 0x6BC67C
             }
 
             // Parent clip chain: node+1962/1963 flags (0x6BC6E4..0x6BC818)
@@ -3641,8 +3647,8 @@ namespace motion {
             // Non slot-done path: vertex computation (0x6BC8DC..0x6BD730)
             if (!vn.slotDone) {
                 // Second visibility bitmask check (0x6BCE2C..0x6BCE40)
-                // bitmask 5185/5193 for vertex output eligibility
-                const int vbm = _runtime->isEmoteMode ? 5193 : 5185;
+                // Non-emote: 7233 = 0x1C41, Emote: 7241 = 0x1C49
+                const int vbm = _runtime->isEmoteMode ? 7241 : 7233;
                 const bool vertexEligible = vn.forceVisible
                     || ((vbm & (1 << vn.nodeType)) != 0);
 
@@ -3874,8 +3880,6 @@ namespace motion {
                             }
 #endif
                         }
-                    } else {
-                        // No mesh: just store origin (already done above)
                     }
 
                     // 4-corner vertex output (0x6BCE44..0x6BCEC0)

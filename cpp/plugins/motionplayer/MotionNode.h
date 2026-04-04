@@ -70,6 +70,9 @@ namespace motion::detail {
         std::vector<float> meshControlPoints;      // node+2024
         std::vector<float> meshControlPointsPrev;  // node+2048 (previous frame)
 
+        // emoteEdit PSB dict reference (node+1980, sub_6B3C78 at 0x6B3D48)
+        std::shared_ptr<const PSB::PSBDictionary> emoteEditDict;
+
         // Prior draw flag (node+48, from PSB emoteEdit "priorDraw")
         bool priorDraw = false;
 
