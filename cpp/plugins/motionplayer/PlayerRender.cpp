@@ -286,6 +286,13 @@ namespace motion {
                         _runtime->nodes = detail::buildNodeTree(
                             *_runtime->activeMotion, clipLabel);
                         _runtime->nodesBuilt = true;
+                        // Populate label→index map (aligned to binary's std::map at player+24)
+                        _runtime->nodeLabelMap.clear();
+                        for (size_t ni = 0; ni < _runtime->nodes.size(); ++ni) {
+                            const auto &lbl = _runtime->nodes[ni].layerName;
+                            if (!lbl.empty())
+                                _runtime->nodeLabelMap.emplace(lbl, static_cast<int>(ni));
+                        }
                     }
 
                     // Run 3-phase updateLayers pipeline on persistent nodes.

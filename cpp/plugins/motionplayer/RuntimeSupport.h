@@ -106,6 +106,9 @@ namespace motion::detail {
         // Persistent node tree for updateLayers pipeline
         std::vector<MotionNode> nodes;
         bool nodesBuilt = false;
+        // Node label → index map. Aligned to binary's std::map<ttstr,int> at player+24.
+        // Populated after buildNodeTree, queried by sub_6F2228 equivalent.
+        std::map<std::string, int> nodeLabelMap;
 
         // Render entry list for cross-Player merge during updateLayers.
         // Aligned to libkrkr2.so player+936/944: vector of 44-byte entries.

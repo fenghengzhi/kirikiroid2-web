@@ -493,11 +493,14 @@ namespace motion {
 
         // Start all timelines playing (equivalent to playCompat's playOne loop)
         if (_runtime->activeMotion && !_runtime->timelines.empty()) {
+            double maxTF = 0.0;
             for (auto &[tlName, state] : _runtime->timelines) {
                 state.flags = flags & ~PlayFlagStealth;  // pass flags minus stealth
                 state.playing = true;
                 state.blendRatio = 1.0;
+                if (state.totalFrames > maxTF) maxTF = state.totalFrames;
             }
+            _cachedTotalFrames = maxTF;  // player+1128 cached value
             _allplaying = true;
         }
 

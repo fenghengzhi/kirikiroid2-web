@@ -392,7 +392,8 @@ namespace motion {
         double _frameLastTime = 0.0;
         double _frameLoopTime = 0.0;
         double _clampedEvalTime = 0.0; // player+456: min(_frameLoopTime, totalFrames)
-        double _loopTime = 0.0;
+        double _loopTime = 0.0;    // player+1136
+        double _cachedTotalFrames = 0.0; // player+1128: cached max totalFrames across timelines
         int _processedMeshVerticesNum = 0;
         bool _queuing = false;
         bool _directEdit = false;
