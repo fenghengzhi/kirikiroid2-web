@@ -240,6 +240,13 @@ namespace motion::detail {
             int transformOrder[4] = {0, 1, 2, 3};
             std::string action;
             bool hasSync = false;
+            // Motion sub-object data from FrameContentState (mask 0x80000)
+            int motionDt = 0;          // angleMode: 0=none,1=direct,2=atan2-delta,3=interpolated,4=target
+            int motionFlags = 0;       // play flags from PSB "flags"
+            double motionDofst = 0.0;  // angle value for case 1
+            bool motionDocmpl = false;
+            double motionTimeOffset = 0.0;
+            std::string motionDtgt;    // target node name for angleMode=4
             // Particle data from FrameContentState (mask 0x100000)
             int prtTrigger = 0;
             double prtFmin = 10.0;

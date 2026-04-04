@@ -471,6 +471,7 @@ namespace internal {
             int motionDt = 0;
             bool motionDocmpl = false;
             double motionDofst = 0.0;
+            std::string motionDtgt;    // mask 0x80000, sub-mask 0x10: target node name
             double motionTimeOffset = 0.0;
             // mask 0x100000: particle sub-object (sub_692AB0 at 0x693C64)
             int prtTrigger = 0;
@@ -823,8 +824,11 @@ namespace internal {
                         if(auto v = psbDictionaryNumber(md, "dofst"))
                             state.motionDofst = *v;
                     }
-                    // dtgt (mm & 0x10) is a string ref — read but not stored
-                    // (would need variant storage)
+                    // dtgt (mm & 0x10): target node name string (sub_692AB0 at 0x693A48)
+                    if(mm & 0x10) {
+                        auto v = psbDictionaryString(md, "dtgt");
+                        if(!v.empty()) state.motionDtgt = v;
+                    }
                     if(auto v = psbDictionaryNumber(md, "timeOffset"))
                         state.motionTimeOffset = *v;
                 }

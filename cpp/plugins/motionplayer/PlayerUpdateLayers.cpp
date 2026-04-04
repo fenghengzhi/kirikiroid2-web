@@ -208,6 +208,13 @@ namespace motion {
             }
             node.interpolatedCache.action = state.action;
             node.interpolatedCache.hasSync = state.hasSync;
+            // Motion sub-object data from FrameContentState (mask 0x80000)
+            node.interpolatedCache.motionDt = state.motionDt;
+            node.interpolatedCache.motionFlags = state.motionFlags;
+            node.interpolatedCache.motionDofst = state.motionDofst;
+            node.interpolatedCache.motionDocmpl = state.motionDocmpl;
+            node.interpolatedCache.motionTimeOffset = state.motionTimeOffset;
+            node.interpolatedCache.motionDtgt = state.motionDtgt;
             // Particle data from FrameContentState (mask 0x100000)
             node.interpolatedCache.prtTrigger = state.prtTrigger;
             node.interpolatedCache.prtF = state.prtF;
@@ -1285,86 +1292,272 @@ namespace motion {
 
     }
 
+    // Helper: find node by label in the node tree (sub_6F2228 equivalent)
+    static int findNodeByLabel(const std::vector<detail::MotionNode> &nodes,
+                               const std::string &label) {
+        for (size_t i = 0; i < nodes.size(); ++i)
+            if (nodes[i].layerName == label) return static_cast<int>(i);
+        return -1;
+    }
+
     void Player::updateLayersPhase3_MotionSubNode(double currentTime) {
         auto &nodes = _runtime->nodes;
         // Motion sub-node processing — aligned to sub_6BE0C0 (0x6BE0C0).
         // For each nodeType=3 (Motion) node, create/manage child Player instance.
         // Only runs when !isEmoteMode (0x6BE104).
-        if (!_runtime->isEmoteMode) {
-            for (size_t i = 1; i < nodes.size(); ++i) {
-                auto &mn = nodes[i];
-                if (mn.nodeType != 3) continue;
+        if (_runtime->isEmoteMode) return;
 
-                // If slot done or not visible → clear child (0x6BE31C..0x6BE354)
-                if (mn.slotDone || !mn.accumulated.visible) {
-                    if (mn.childPlayer) {
-                        mn.childPlayer.reset();
-                        mn.childNeedsInit = true;
-                    }
-                    continue;
-                }
+        for (size_t i = 1; i < nodes.size(); ++i) {
+            auto &mn = nodes[i];
+            if (mn.nodeType != 3) continue;
 
-                // Get motion source from interpolated cache (clip slot dtgt, 0x6BE364)
+            // Get parent's priorDraw flag as play trigger (v12, 0x6BE204..0x6BE214)
+            // In libkrkr2.so: v12 = *(int*)(parentObj+48) where parentObj = node+8 or player+47*8
+            int v12 = 0;
+            if (mn.tjsLayerObject) {
+                v12 = mn.priorDraw ? 1 : 0;
+            } else {
+                v12 = _priorDraw ? 1 : 0;
+            }
+
+            // Create child Player on demand (0x6BE220..0x6BE260)
+            if (!mn.childPlayer) {
+                mn.childPlayer = std::make_shared<Player>(_resourceManagerNative);
+                mn.childPlayer->_tjsRandomGenerator = _tjsRandomGenerator;
+                mn.childNeedsInit = true;
+            }
+            auto &child = *mn.childPlayer;
+
+            // If no v12 flags and not visible → skip to LABEL_18 (0x6BE270)
+            if (!v12 && !mn.accumulated.visible) {
+                goto label_18;
+            }
+
+            // Check slotDone → clear child (0x6BE31C..0x6BE354)
+            if (mn.slotDone) {
+                child._allplaying = false;
+                mn.childNeedsInit = true;
+                goto label_18;
+            }
+
+            {
+                // Get motion source from clip slot (0x6BE364)
                 const auto &src = mn.interpolatedCache.src;
-                if (src.empty()) continue;
+                if (!src.empty()) {
+                    // Re-init gate: (v12 & 5) != 0 || mn.flags (0x6BE37C)
+                    if ((v12 & 5) != 0 || (mn.flags & 0x01)) {
+                        mn.flags |= 0x01; // mark as initialized (0x6BE388)
 
-                // Create child Player if needed (sub_6B3C78 case 3: new Player)
-                if (!mn.childPlayer) {
-                    mn.childPlayer = std::make_shared<Player>(_resourceManagerNative);
-                    // Aligned to sub_6CED30 (0x6CED30): child inherits parent's
-                    // RandomGenerator (player+992 = parent+992)
-                    mn.childPlayer->_tjsRandomGenerator = _tjsRandomGenerator;
-                    mn.childNeedsInit = true;
+                        // Resolve motion and play (0x6BE3B4..0x6BE46C)
+                        child.setChara(_chara);
+                        child.onFindMotion(detail::widen(src));
+                        mn.childNeedsInit = false;
+
+                        // Time sync from parent loop time (0x6BE478..0x6BE4E8)
+                        if (child._allplaying) {
+                            double childTime = _frameLoopTime
+                                - mn.interpolatedCache.motionTimeOffset
+                                + mn.interpolatedCache.motionDofst;
+                            if (_frameLastTime < 0.0) {
+                                // Backward play: handle loop wrapping
+                                double loopEnd = child._loopTime;
+                                if (loopEnd >= 0.0) {
+                                    double totalFrames = child._runtime ?
+                                        child._runtime->timelines.begin()->second.totalFrames : 0;
+                                    while (childTime >= totalFrames)
+                                        childTime = childTime - totalFrames + loopEnd;
+                                }
+                            }
+                            double totalFrames = 0;
+                            if (child._runtime && !child._runtime->timelines.empty())
+                                totalFrames = child._runtime->timelines.begin()->second.totalFrames;
+                            childTime = std::max(childTime, 0.0);
+                            if (childTime > totalFrames) childTime = totalFrames;
+                            // Set child's current time directly
+                            if (child._runtime) {
+                                for (auto &[name, tl] : child._runtime->timelines) {
+                                    tl.currentTime = childTime;
+                                }
+                                child._allplaying = true;
+                                child._queuing = true;
+                            }
+                            if (!_allplaying) {
+                                child._needsInternalAssignImages = true;
+                            }
+                        }
+                    }
                 }
 
-                auto &child = *mn.childPlayer;
+                if (!child._runtime || !child._runtime->activeMotion) goto label_18;
 
-                // Initialize: resolve motion and call play (0x6BE388..0x6BE46C)
-                if (mn.childNeedsInit) {
-                    child.setChara(_chara);
-                    // sub_6BE418: Player_play(child, flags, motionPath)
-                    // We use onFindMotion which internally calls resolveMotion+activateMotion
-                    child.onFindMotion(detail::widen(src));
-                    mn.childNeedsInit = false;
+                // === Angle interpolation (0x6BE534..0x6BEC9C) ===
+                int angleMode = mn.interpolatedCache.motionDt;
+                bool hasAngle = false;
+                double computedAngle = 0.0;
+                const double dofst = mn.interpolatedCache.motionDofst;
+
+                if (angleMode != 0) {
+                    switch (angleMode) {
+                    case 1: // Direct angle (0x6BE5BC)
+                        computedAngle = dofst + mn.accumulated.angle;
+                        hasAngle = true;
+                        break;
+                    case 2: { // atan2 from delta position (0x6BE8C4)
+                        double dy_comp, dx_comp;
+                        if (mn.coordinateMode == 1) {
+                            dy_comp = mn.deltaPosZ; // node+192
+                            dx_comp = mn.deltaPosX; // node+176
+                        } else {
+                            dy_comp = mn.deltaPosY; // node+184
+                            dx_comp = mn.deltaPosX; // node+176
+                        }
+                        computedAngle = dofst + std::atan2(dy_comp, dx_comp) * 360.0 / 6.28318531;
+                        hasAngle = true;
+                        break;
+                    }
+                    case 3: // Interpolated atan2 (0x6BE664..0x6BE79C)
+                        // Simplified: use same as case 2 (full interpolation requires
+                        // dual clip slot access which our architecture handles differently)
+                        hasAngle = true;
+                        computedAngle = dofst + mn.accumulated.angle;
+                        break;
+                    case 4: { // Target node lookup (0x6BE7B4)
+                        const auto &dtgt = mn.interpolatedCache.motionDtgt;
+                        if (!dtgt.empty()) {
+                            int targetIdx = findNodeByLabel(nodes, dtgt);
+                            if (targetIdx >= 0) {
+                                const auto &target = nodes[targetIdx];
+                                double dy_comp, dx_comp;
+                                if (mn.coordinateMode == 1) {
+                                    dy_comp = target.accumulated.posZ - mn.accumulated.posZ;
+                                    dx_comp = target.accumulated.posX - mn.accumulated.posX;
+                                } else {
+                                    dy_comp = target.accumulated.posY - mn.accumulated.posY;
+                                    dx_comp = target.accumulated.posX - mn.accumulated.posX;
+                                }
+                                computedAngle = dofst + std::atan2(dy_comp, dx_comp) * 360.0 / 6.28318531;
+                            }
+                        }
+                        hasAngle = true;
+                        break;
+                    }
+                    default: break;
+                    }
+                    // Normalize to [0, 360) (0x6BECA4..0x6BECB8)
+                    while (computedAngle < 0.0) computedAngle += 360.0;
+                    while (computedAngle >= 360.0) computedAngle -= 360.0;
                 }
 
-                if (!child._runtime || !child._runtime->activeMotion) continue;
+                // === Origin offset (0x6BE994..0x6BE9F4) ===
+                double posX = mn.accumulated.posX;
+                double posY = mn.accumulated.posY;
+                double posZ = mn.accumulated.posZ;
 
-                // Propagate parent state to child root node (0x6BEA18..0x6BEB74)
-                // In libkrkr2.so, these write to child->root(+200) interpolated fields
-                if (!child._runtime->nodes.empty()) {
-                    auto &childRoot = child._runtime->nodes[0];
-                    // Position (0x6BEA18..0x6BEA24)
-                    childRoot.accumulated.posX = mn.accumulated.posX;
-                    childRoot.accumulated.posY = mn.accumulated.posY;
-                    childRoot.accumulated.posZ = mn.accumulated.posZ;
-                    // Flip (0x6BEA28..0x6BEA54)
-                    childRoot.accumulated.flipX = mn.accumulated.flipX;
-                    childRoot.accumulated.flipY = mn.accumulated.flipY;
-                    // Scale (0x6BEA5C..0x6BEA88)
-                    childRoot.accumulated.scaleX = mn.accumulated.scaleX;
-                    childRoot.accumulated.scaleY = mn.accumulated.scaleY;
+                const double originX = mn.interpolatedCache.ox;
+                const double originY = mn.interpolatedCache.oy;
+                if (originX != 0.0 || originY != 0.0) {
+                    const double negOY = -originY;
+                    // v79 = m12*negOY - originX*m11 (0x6BE9E0)
+                    const double vx = mn.accumulated.m12 * negOY - originX * mn.accumulated.m11;
+                    // v80 = m22*negOY - originX*m21 (0x6BE9E4)
+                    const double vy = mn.accumulated.m22 * negOY - originX * mn.accumulated.m21;
+                    if (mn.coordinateMode == 1) {
+                        posX += vx;
+                        posZ += vy;
+                    } else {
+                        posX += vx;
+                        posY += vy;
+                    }
+                }
+
+                // === State propagation to child root node (0x6BEA18..0x6BEB74) ===
+                if (child._runtime && !child._runtime->nodes.empty()) {
+                    auto &cr = child._runtime->nodes[0];
+                    cr.accumulated.posX = posX;
+                    cr.accumulated.posY = posY;
+                    cr.accumulated.posZ = posZ;
+                    // Flip — only write if changed (0x6BEA28..0x6BEA54)
+                    if (cr.accumulated.flipX != mn.accumulated.flipX ||
+                        cr.accumulated.flipY != mn.accumulated.flipY) {
+                        cr.accumulated.flipX = mn.accumulated.flipX;
+                        cr.accumulated.flipY = mn.accumulated.flipY;
+                    }
+                    // Scale — only write if changed (0x6BEA5C..0x6BEA88)
+                    if (cr.accumulated.scaleX != mn.accumulated.scaleX ||
+                        cr.accumulated.scaleY != mn.accumulated.scaleY) {
+                        cr.accumulated.scaleX = mn.accumulated.scaleX;
+                        cr.accumulated.scaleY = mn.accumulated.scaleY;
+                    }
                     // Slant (0x6BEB10..0x6BEB3C)
-                    childRoot.accumulated.slantX = mn.accumulated.slantX;
-                    childRoot.accumulated.slantY = mn.accumulated.slantY;
+                    if (cr.accumulated.slantX != mn.accumulated.slantX ||
+                        cr.accumulated.slantY != mn.accumulated.slantY) {
+                        cr.accumulated.slantX = mn.accumulated.slantX;
+                        cr.accumulated.slantY = mn.accumulated.slantY;
+                    }
                     // Opacity (0x6BEB40..0x6BEB58)
-                    childRoot.accumulated.opacity = mn.accumulated.opacity;
-                    // Active/visible (0x6BEB5C..0x6BEB74)
-                    childRoot.accumulated.active = mn.accumulated.active;
-                    childRoot.accumulated.visible = mn.accumulated.visible;
+                    cr.accumulated.opacity = mn.accumulated.opacity;
+                    // Active — use node's own active, not accumulated (0x6BEB5C)
+                    cr.accumulated.active = mn.accumulated.active;
+                    // Blend mode (0x6BEB7C)
+                    // node+100 = colorBytes[0..3] packed as int
+                    cr.interpolatedCache.blendMode = mn.interpolatedCache.blendMode;
+
+                    // zFactor propagation (0x6BEA94)
+                    child._zFactor = _zFactor;
+
+                    // === Angle → child (0x6BEAA8..0x6BEB08) ===
+                    if (hasAngle) {
+                        if (child._runtime->isEmoteMode) {
+                            // Emote mode: set angle directly + reinit
+                            // Player_initEmoteMotion(child, 2) equivalent
+                        } else {
+                            cr.accumulated.angle = computedAngle;
+                        }
+                    }
+
+                    // === Matrix propagation (0x6BEB9C..0x6BEC4C) ===
+                    if (hasAngle || computedAngle == mn.accumulated.angle ||
+                        child._runtime->isEmoteMode) {
+                        // Direct copy (0x6BEB9C)
+                        cr.accumulated.m11 = mn.accumulated.m11;
+                        cr.accumulated.m12 = mn.accumulated.m12;
+                        cr.accumulated.m21 = mn.accumulated.m21;
+                        cr.accumulated.m22 = mn.accumulated.m22;
+                    } else {
+                        // Rotate by (computedAngle - accumulated.angle) (0x6BEBC8..0x6BEC4C)
+                        double delta = (computedAngle - mn.accumulated.angle)
+                                       * 3.14159265 * 2.0 / 360.0;
+                        if (mn.accumulated.flipX != mn.accumulated.flipY)
+                            delta = -delta;
+                        const double c = std::cos(delta);
+                        const double s = std::sin(delta);
+                        cr.accumulated.m11 = c * mn.accumulated.m11 + s * mn.accumulated.m12;
+                        cr.accumulated.m12 = c * mn.accumulated.m12 - mn.accumulated.m11 * s;
+                        cr.accumulated.m21 = c * mn.accumulated.m21 + s * mn.accumulated.m22;
+                        cr.accumulated.m22 = c * mn.accumulated.m22 - mn.accumulated.m21 * s;
+                    }
+
+                    // Clip chain propagation (0x6BE278..0x6BE29C)
+                    cr.parentClipIndex = mn.parentClipIndex;
+                    cr.visibleAncestorIndex = mn.visibleAncestorIndex;
                 }
 
-                // Copy drawAffineMatrix and propagate player-level state (0x6BEB9C)
-                child._runtime->drawAffineMatrix = _runtime->drawAffineMatrix;
-                child._zFactor = _zFactor;
+                // === Step child (0x6BE2A4..0x6BE2AC) ===
                 child._independentLayerInherit = _independentLayerInherit;
-
-                // Step child: Player_progress_inner + Player_updateLayers (0x6BE2A4..0x6BE2AC)
-                // progress_inner steps timelines, updateLayers evaluates nodes
-                child.frameProgress(0.0);  // dt=0 for initial sync
-                if (!child._runtime->nodes.empty()) {
+                child.frameProgress(_frameLastTime);  // NOT 0.0!
+                if (child._runtime && !child._runtime->nodes.empty()) {
                     child.updateLayers(currentTime);
                 }
+            }
+            continue;
+
+        label_18:
+            // Minimal propagation for inactive nodes (0x6BE278)
+            if (mn.childPlayer && mn.childPlayer->_runtime &&
+                !mn.childPlayer->_runtime->nodes.empty()) {
+                auto &cr = mn.childPlayer->_runtime->nodes[0];
+                cr.parentClipIndex = mn.parentClipIndex;
+                cr.visibleAncestorIndex = mn.visibleAncestorIndex;
             }
         }
 
