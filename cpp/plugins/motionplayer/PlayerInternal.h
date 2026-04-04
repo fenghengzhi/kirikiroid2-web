@@ -929,129 +929,57 @@ namespace internal {
             }
         }
 
-        // Initialize a FrameContentState from a single PSB frame's content.
-        // Aligned to libkrkr2.so sub_692AB0 (0x692AB0): each clip slot is
-        // independently initialized with DEFAULTS, then mask-gated properties
-        // are applied from the frame's content dict. No accumulation from
-        // prior frames.
-        inline FrameContentState
-        initSlotFromFrame(const std::shared_ptr<PSB::PSBDictionary> &frame) {
-            FrameContentState slot;  // defaults: opacity=1.0, angle=0, etc.
-            if(!frame) return slot;
-            if(const auto content = psbDictionaryValue(frame, "content")) {
-                mergeFrameContent(content, slot);
+        // Parse a single PSB frame entry: read time, type, content.
+        // Aligned to libkrkr2.so sub_6926B4 (0x6926B4):
+        //   - Reads frame["time"] (double), frame["type"] (int: 0=invisible, 2=static, 3=interpolate)
+        //   - Reads frame["content"]["mask"] and calls sub_692AB0 to populate slot properties
+        //   - Reads frame["content"]["act"] (action string, mask & 0x40000)
+        struct ParsedFrame {
+            double time = 0.0;
+            int type = 0;        // 0=invisible, 2=static, 3=interpolate
+            bool invisible = true;  // type==0
+            bool interpolate = false; // type==3
+            FrameContentState slot;  // populated by sub_692AB0 (mergeFrameContent)
+        };
+
+        inline ParsedFrame
+        parseFrame(const std::shared_ptr<PSB::PSBDictionary> &frame) {
+            ParsedFrame result;
+            if(!frame) return result;
+            result.time = psbDictionaryNumber(frame, "time").value_or(0.0);
+            result.type = static_cast<int>(
+                psbDictionaryNumber(frame, "type").value_or(0.0));
+            result.invisible = (result.type == 0);
+            result.interpolate = (result.type == 3);
+            if(!result.invisible) {
+                // sub_6926B4 at 0x692838: read content dict, then call sub_692AB0
+                if(const auto content = psbDictionaryValue(frame, "content")) {
+                    mergeFrameContent(content, result.slot);
+                }
             }
-            return slot;
+            return result;
         }
 
+        // Initialize a FrameContentState from a single PSB frame's content.
+        // Convenience wrapper: calls parseFrame (sub_6926B4) and returns
+        // the populated slot. Used by flattenLayerNodes (PSB-tree path).
         inline FrameContentState
-        evaluateLayerContent(const std::shared_ptr<const PSB::PSBDictionary> &layer,
-                             double time) {
-            FrameContentState state;
-            const auto frames = psbDictionaryList(layer, "frameList");
-            if(!frames || frames->size() == 0) {
-                return state;
-            }
+        initSlotFromFrame(const std::shared_ptr<PSB::PSBDictionary> &frame) {
+            return parseFrame(frame).slot;
+        }
 
-            // Read transformOrder from layer dict (stored at node+84..96 in libkrkr2.so).
-            // sub_699940 uses this to determine the order of Flip/Angle/Zoom/Slant.
-            if(auto toList = psbDictionaryList(
-                   std::const_pointer_cast<PSB::PSBDictionary>(layer),
-                   "transformOrder")) {
-                for(int i = 0; i < 4 && i < static_cast<int>(toList->size()); i++) {
-                    if(auto v = psbNumberValue((*toList)[i]))
-                        state.transformOrder[i] = static_cast<int>(*v);
-                }
-                state.hasTransformOrder = true;
-            }
+        // Dual-slot interpolation between two FrameContentStates.
+        // Aligned to libkrkr2.so sub_699AE4 (0x699AE4):
+        //   - Takes slotA (active frame) and slotB (next frame)
+        //   - Interpolation ratio t ∈ [0,1]
+        //   - Applies bezier curve easing per property (ccc, acc, zcc, scc, occ)
+        //   - Returns interpolated result
+        inline FrameContentState
+        interpolateSlots(const FrameContentState &slotA,
+                         const FrameContentState &slotB,
+                         double t) {
+            FrameContentState state = slotA;
 
-            // Aligned to libkrkr2.so dual-slot model (sub_699AE4 at 0x699AE4):
-            // 1. Find the active frame (last frame with time <= time)
-            // 2. If type=0: invisible
-            // 3. If type=2: use this frame's slot directly (no interpolation)
-            // 4. If type=3: interpolate between this frame's slot and
-            //    the next frame's slot. Each slot is INDEPENDENTLY initialized
-            //    with defaults + mask-gated overrides (sub_692AB0).
-
-            int activeIndex = -1;
-            for(size_t index = 0; index < frames->size(); ++index) {
-                const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                    (*frames)[static_cast<int>(index)]);
-                if(!frame) continue;
-                const double frameTime =
-                    psbDictionaryNumber(frame, "time").value_or(0.0);
-                if(frameTime > time) break;
-                activeIndex = static_cast<int>(index);
-            }
-
-            if(activeIndex < 0) return state;
-
-            const auto activeFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*frames)[activeIndex]);
-            if(!activeFrame) return state;
-
-            const int activeType = static_cast<int>(
-                psbDictionaryNumber(activeFrame, "type").value_or(0.0));
-
-            // type=0: node is invisible at this time
-            if(activeType == 0) {
-                state.visible = false;
-                return state;
-            }
-
-            // Initialize slot A from the active frame (fresh defaults + mask)
-            // Preserve transformOrder from layer dict (read above)
-            int savedTO[4]; bool savedHasTO = state.hasTransformOrder;
-            std::copy(std::begin(state.transformOrder),
-                      std::end(state.transformOrder), savedTO);
-            state = initSlotFromFrame(activeFrame);
-            state.visible = true;
-            if(savedHasTO) {
-                std::copy(savedTO, savedTO + 4, state.transformOrder);
-                state.hasTransformOrder = true;
-            }
-
-            // type=2: static display, no interpolation
-            if(activeType == 2) {
-                return state;
-            }
-
-            // type=3: interpolate with next frame's slot
-            const int nextIndex = activeIndex + 1;
-            if(nextIndex >= static_cast<int>(frames->size())) {
-                return state;  // no next frame, just use slot A
-            }
-
-            const auto nextFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*frames)[nextIndex]);
-            if(!nextFrame) return state;
-
-            const int nextType = static_cast<int>(
-                psbDictionaryNumber(nextFrame, "type").value_or(0.0));
-
-            // Initialize slot B from the next frame (fresh defaults + mask)
-            // Aligned to sub_692AB0: independent init, NOT copied from slot A
-            FrameContentState slotB = initSlotFromFrame(nextFrame);
-            // Inherit src from slot A if slot B doesn't set one
-            if(slotB.src.empty()) slotB.src = state.src;
-
-            // Compute interpolation ratio
-            const double curTime =
-                psbDictionaryNumber(activeFrame, "time").value_or(0.0);
-            const double nextTime =
-                psbDictionaryNumber(nextFrame, "time").value_or(0.0);
-            const double duration = nextTime - curTime;
-            if(duration <= 0.0) return state;
-
-            const double t = std::clamp(
-                (time - curTime) / duration, 0.0, 1.0);
-
-            if(t <= 0.0 || nextType == 0) {
-                return state;  // at exact start or next is invisible
-            }
-
-            // Interpolate between slot A (state) and slot B (slotB)
-            // Aligned to sub_699AE4 (0x699AE4)
             auto lerp = [](double a, double b, double r) {
                 return a * (1.0 - r) + b * r;
             };
@@ -1155,6 +1083,112 @@ namespace internal {
             // Use src from slot A (or B if A is empty)
             if(state.src.empty() && !slotB.src.empty()) {
                 state.src = slotB.src;
+            }
+
+            return state;
+        }
+
+        // Evaluate layer content at a given time.
+        // Orchestrator that calls:
+        //   1. parseFrame (sub_6926B4) — parse each frame in frameList
+        //   2. mergeFrameContent (sub_692AB0) — read mask-gated properties (called by parseFrame)
+        //   3. interpolateSlots (sub_699AE4) — dual-slot interpolation
+        inline FrameContentState
+        evaluateLayerContent(const std::shared_ptr<const PSB::PSBDictionary> &layer,
+                             double time) {
+            FrameContentState state;
+            const auto frames = psbDictionaryList(layer, "frameList");
+            if(!frames || frames->size() == 0) {
+                return state;
+            }
+
+            // Read transformOrder from layer dict (stored at node+84..96 in libkrkr2.so).
+            // sub_699940 uses this to determine the order of Flip/Angle/Zoom/Slant.
+            if(auto toList = psbDictionaryList(
+                   std::const_pointer_cast<PSB::PSBDictionary>(layer),
+                   "transformOrder")) {
+                for(int i = 0; i < 4 && i < static_cast<int>(toList->size()); i++) {
+                    if(auto v = psbNumberValue((*toList)[i]))
+                        state.transformOrder[i] = static_cast<int>(*v);
+                }
+                state.hasTransformOrder = true;
+            }
+
+            // Step 1: Find active frame (last frame with time <= time)
+            int activeIndex = -1;
+            for(size_t index = 0; index < frames->size(); ++index) {
+                const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*frames)[static_cast<int>(index)]);
+                if(!frame) continue;
+                const double frameTime =
+                    psbDictionaryNumber(frame, "time").value_or(0.0);
+                if(frameTime > time) break;
+                activeIndex = static_cast<int>(index);
+            }
+
+            if(activeIndex < 0) return state;
+
+            const auto activeFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*frames)[activeIndex]);
+            if(!activeFrame) return state;
+
+            // Step 2: Parse active frame via sub_6926B4
+            ParsedFrame frameA = parseFrame(activeFrame);
+
+            // type=0: node is invisible at this time
+            if(frameA.invisible) {
+                state.visible = false;
+                return state;
+            }
+
+            // Preserve transformOrder from layer dict
+            int savedTO[4]; bool savedHasTO = state.hasTransformOrder;
+            std::copy(std::begin(state.transformOrder),
+                      std::end(state.transformOrder), savedTO);
+            state = frameA.slot;
+            state.visible = true;
+            if(savedHasTO) {
+                std::copy(savedTO, savedTO + 4, state.transformOrder);
+                state.hasTransformOrder = true;
+            }
+
+            // type=2: static display, no interpolation
+            if(!frameA.interpolate) {
+                return state;
+            }
+
+            // type=3: interpolate with next frame's slot
+            const int nextIndex = activeIndex + 1;
+            if(nextIndex >= static_cast<int>(frames->size())) {
+                return state;  // no next frame, just use slot A
+            }
+
+            const auto nextFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*frames)[nextIndex]);
+            if(!nextFrame) return state;
+
+            // Step 3: Parse next frame via sub_6926B4
+            ParsedFrame frameB = parseFrame(nextFrame);
+            // Inherit src from slot A if slot B doesn't set one
+            if(frameB.slot.src.empty()) frameB.slot.src = state.src;
+
+            // Compute interpolation ratio
+            const double duration = frameB.time - frameA.time;
+            if(duration <= 0.0) return state;
+
+            const double t = std::clamp(
+                (time - frameA.time) / duration, 0.0, 1.0);
+
+            if(t <= 0.0 || frameB.invisible) {
+                return state;  // at exact start or next is invisible
+            }
+
+            // Step 4: Interpolate via sub_699AE4
+            state = interpolateSlots(state, frameB.slot, t);
+            state.visible = true;
+            if(savedHasTO) {
+                std::copy(savedTO, savedTO + 4, state.transformOrder);
+                state.hasTransformOrder = true;
             }
 
             return state;
