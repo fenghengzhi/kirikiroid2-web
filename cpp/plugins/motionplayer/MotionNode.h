@@ -42,7 +42,7 @@ namespace motion::detail {
         int nodeType = 0;              // node+28
         int coordinateMode = 0;        // node+24
         int inheritFlags = 0x1FC;      // node+40 (bits 2-8, default all-set)
-        uint8_t flags = 0;             // node+42 (bit 0x40 = skip in parent walk)
+        uint8_t flags = 0;             // node+44 (sub_6BE0C0 at 0x6BE37C, sub_6BF0DC at 0x6BF310)
         bool groundCorrection = false; // node+47
         // TJS layer dispatch object for callbacks (sub_6BAA10 onGroundCorrection).
         // In libkrkr2.so this is at *(node+0)+16 (the layer's iTJSDispatch2*).

@@ -687,6 +687,12 @@ namespace motion {
         detail::stepTimelines(_runtime->timelines, actualDelta,
                               &_runtime->pendingEvents);
 
+        // Set clamped eval time (player+456) from main timeline's currentTime.
+        // Binary writes this during timeline evaluation; sub_6C1540 reads it for ratio.
+        if (!_runtime->timelines.empty()) {
+            _clampedEvalTime = _runtime->timelines.begin()->second.currentTime;
+        }
+
         // Scan PSB layers for action/sync events crossed this frame
         // Aligned to libkrkr2.so: updateLayers queues events during evaluation
         if(_runtime->activeMotion && actualDelta > 0) {

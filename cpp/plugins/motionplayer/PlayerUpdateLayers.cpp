@@ -1429,11 +1429,9 @@ namespace motion {
                     if ((v12 & 5) != 0 || (mn.flags & 0x01)) {
                         mn.flags |= 0x01; // mark as initialized (0x6BE388)
 
-                        // --- Slot flip: flip activeSlotIndex so old data is preserved ---
-                        // The current active slot (with old data) becomes the other slot.
-                        // New data will be written to the new active slot.
-                        mn.activeSlotIndex ^= 1;
-                        mn.activeSlot().crossfading = true;
+                        // Binary does NOT flip activeSlotIndex here (0x6BE21C reads it
+                        // once and uses it unchanged throughout). Slot flip is managed
+                        // elsewhere in the clip evaluation pipeline.
 
                         // Resolve motion and play (0x6BE3B4..0x6BE46C)
                         // Binary: splits src by "/" via sub_697D34.
@@ -1457,18 +1455,22 @@ namespace motion {
                                                    mn.interpolatedCache.motionFlags | v12);
                             }
                         }
-                        // Stealth motion (0x6BE41C..0x6BE44C): binary plays stealth if set
-                        if (!_stealthMotion.IsEmpty()) {
-                            child.onFindMotion(_stealthMotion, PlayFlagStealth);
+                        // Stealth motion (0x6BE41C..0x6BE44C): binary reads from
+                        // CHILD player+776, plays with flag 16, then clears child+776.
+                        if (!child._stealthMotion.IsEmpty()) {
+                            child.onFindMotion(child._stealthMotion, PlayFlagStealth);
+                            child._stealthMotion.Clear();
                         }
                         mn.childNeedsInit = false;
 
                         // Time sync from parent loop time (0x6BE478..0x6BE4E8)
                         // Binary checks both _allplaying && _queuing (0x6BE478)
                         if (child._allplaying && child._queuing) {
+                            // Binary at 0x6BE49C: childTime = player+1120 - slot+8 + slot+376
+                            // = _frameLoopTime - clipStartTime + motionTimeOffset
                             double childTime = _frameLoopTime
-                                - mn.interpolatedCache.motionTimeOffset
-                                + mn.interpolatedCache.motionDofst;
+                                - mn.interpolatedCache.clipStartTime
+                                + mn.interpolatedCache.motionTimeOffset;
                             if (_frameLastTime < 0.0) {
                                 // Backward play: handle loop wrapping
                                 double loopEnd = child._loopTime;
@@ -1486,6 +1488,8 @@ namespace motion {
                             // Binary: writes unclamped time to player+1120 (0x6BE4D4)
                             child._frameLoopTime = childTime;
                             if (childTime > totalFrames) childTime = totalFrames;
+                            // Binary: writes clamped time to player+456 (0x6BE4E4)
+                            child._clampedEvalTime = childTime;
                             // Set child's current time directly
                             if (child._runtime) {
                                 for (auto &[name, tl] : child._runtime->timelines) {
@@ -1502,7 +1506,9 @@ namespace motion {
                     }
                 }
 
-                if (!child._runtime || !child._runtime->activeMotion) goto label_18;
+                // Binary at 0x6BE534 unconditionally proceeds to angle/state
+                // propagation (no activeMotion guard). Only guard for null runtime.
+                if (!child._runtime) goto label_18;
 
                 // === Angle interpolation (0x6BE534..0x6BEC9C) ===
                 int angleMode = mn.interpolatedCache.motionDt;
@@ -1865,10 +1871,8 @@ namespace motion {
                 en.emitterTimer += _frameLastTime;
             } else {
                 // LABEL_21 (0x6BEF48): re-resolve dtgt, compute time offset.
-                // This is equivalent to a clip slot flip for the emitter.
-                // Slot flip: preserve current data as other slot for crossfade.
-                en.activeSlotIndex ^= 1;
-                en.activeSlot().crossfading = true;
+                // Binary does NOT flip activeSlotIndex here (v10 is read once at
+                // 0x6BEE9C and never modified). No crossfading flag is set either.
                 en.emitterActive = true;
                 en.emitterDtgt = dtgt;
                 // Timer = (parentTime - clipSlot.startTime) + clipSlot.timeOffset
@@ -1918,7 +1922,7 @@ namespace motion {
                     double denom = otherStart - currentStart;
                     if (denom != 0.0) {
                         constexpr double epsilon = 0.0001;
-                        double ratio = (_frameLoopTime - currentStart) / denom;
+                        double ratio = (_clampedEvalTime - currentStart) / denom;
                         double t2 = ratio + epsilon;
                         if (t2 >= 1.0) ratio = 0.9999;
                         t2 = std::min(t2, 1.0);
@@ -1958,7 +1962,7 @@ namespace motion {
                         double denom = otherStart - currentStart;
                         if (denom != 0.0) {
                             constexpr double epsilon = 0.0001;
-                            double ratio = (_frameLoopTime - currentStart) / denom;
+                            double ratio = (_clampedEvalTime - currentStart) / denom;
                             double t2 = ratio + epsilon;
                             if (t2 >= 1.0) ratio = 0.9999;
                             t2 = std::min(t2, 1.0);
@@ -2225,11 +2229,8 @@ namespace motion {
                         double r = random();
                         emitCount = static_cast<int>(prtFmin + (prtF - prtFmin) * r);
                     }
-                    // Clamp timer (0x6BF780..0x6BF7A0)
-                    if (prtFmin > 0.0) {
-                        double maxT = 60.0 / prtFmin;
-                        if (pn.emitterTimerAccum > maxT) pn.emitterTimerAccum = maxT;
-                    }
+                    // Timer clamp is NOT applied for triggerType==1 in binary.
+                    // LABEL_85 (0x6BF780) is only reachable from the frequency mode path.
                     if (emitCount <= 0) goto physics_step;
                 }
             }
@@ -2453,8 +2454,13 @@ namespace motion {
                     }
 
                     // 3h. Set flipX/Y (0x6BFF74..0x6BFFA4)
-                    cr.accumulated.flipX = pn.accumulated.flipX;
-                    cr.accumulated.flipY = pn.accumulated.flipY;
+                    // Binary only writes + sets dirty when values differ.
+                    if (cr.accumulated.flipX != pn.accumulated.flipX ||
+                        cr.accumulated.flipY != pn.accumulated.flipY) {
+                        cr.accumulated.flipX = pn.accumulated.flipX;
+                        cr.accumulated.flipY = pn.accumulated.flipY;
+                        cr.accumulated.dirty = true;
+                    }
 
                     // 3i. Angle from prtA lerp — BEFORE zoom (0x6BFFA8..0x6C00AC)
                     // Binary order: angle lerp → angle computation → zoom lerp.
@@ -2522,7 +2528,8 @@ namespace motion {
 
                 // 3l. particleInheritVelocity==1: add parent delta/dt (0x6C0174..0x6C01AC)
                 // Binary checks node+2176 (particleInheritVelocity), not particleFlyDirection.
-                if (pn.particleInheritVelocity == 1 && dt > 0.0) {
+                // Binary at 0x6C0178: checks dt != 0.0 (not dt > 0.0)
+                if (pn.particleInheritVelocity == 1 && dt != 0.0) {
                     child->_cameraVelocityX += pn.deltaPosX / dt;
                     child->_cameraVelocityY += pn.deltaPosY / dt;
                     child->_cameraVelocityZ += pn.deltaPosZ / dt;

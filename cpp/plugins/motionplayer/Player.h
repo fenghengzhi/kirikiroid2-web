@@ -391,6 +391,7 @@ namespace motion {
         int _priorDraw = 0;  // raw int, not bool — sub_6BE0C0 checks (v12 & 5)
         double _frameLastTime = 0.0;
         double _frameLoopTime = 0.0;
+        double _clampedEvalTime = 0.0; // player+456: min(_frameLoopTime, totalFrames)
         double _loopTime = 0.0;
         int _processedMeshVerticesNum = 0;
         bool _queuing = false;
