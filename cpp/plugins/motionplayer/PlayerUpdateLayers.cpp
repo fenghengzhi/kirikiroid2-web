@@ -2,6 +2,8 @@
 // Split from Player.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "ncbind.hpp"    // ncbInstanceAdaptor<Player>::CreateAdaptor for TJS bridge
+#include "tjsArray.h"    // TJSCreateArrayObject, TJSGetArrayElementCount
 #ifdef __EMSCRIPTEN__
 #include <wasm_simd128.h>
 #endif
@@ -194,9 +196,17 @@ namespace motion {
             // Bind variable values to child Players (sub_6C4668 equivalent)
             // For nodeType=3/4 nodes with child Players, propagate variable values
             for (auto &vn : nodes) {
-                if ((vn.nodeType == 3 || vn.nodeType == 4) && vn.childPlayer) {
-                    for (const auto &[label, value] : _variableValues) {
-                        vn.childPlayer->setVariable(detail::widen(label), value);
+                if (vn.nodeType == 3) {
+                    if (auto *cp = vn.getChildPlayer()) {
+                        for (const auto &[label, value] : _variableValues)
+                            cp->setVariable(detail::widen(label), value);
+                    }
+                } else if (vn.nodeType == 4) {
+                    for (int pi2 = 0; pi2 < vn.getParticleCount(); ++pi2) {
+                        if (auto *cp = vn.getParticleChild(pi2)) {
+                            for (const auto &[label, value] : _variableValues)
+                                cp->setVariable(detail::widen(label), value);
+                        }
                     }
                 }
             }
@@ -1382,13 +1392,15 @@ namespace motion {
                 v12 = _priorDraw;    // keep raw int value
             }
 
-            // Create child Player on demand (0x6BE220..0x6BE260)
-            if (!mn.childPlayer) {
-                mn.childPlayer = std::make_shared<Player>(_resourceManagerNative);
-                mn.childPlayer->_tjsRandomGenerator = _tjsRandomGenerator;
-                mn.childNeedsInit = true;
+            // Get child Player via TJS dispatch (0x6BE220..0x6BE260)
+            // Aligned to binary: node+1912 → NativeInstanceSupport → native Player*
+            // Child Player is pre-created in buildNodeTree (sub_6B3C78 case 3).
+            {
+            Player *childPtr = mn.getChildPlayer();
+            if (!childPtr) {
+                goto label_18;
             }
-            auto &child = *mn.childPlayer;
+            Player &child = *childPtr;
 
             // If no v12 flags and not visible → skip to LABEL_18 (0x6BE270)
             if (!v12 && !mn.accumulated.visible) {
@@ -1405,9 +1417,9 @@ namespace motion {
                 // 3. sub_6B56F8(child) — clears nodes (except root), releases layer IDs,
                 //    resets node tree, clears std::set at player+3..8
                 // 4. Release TJS variants at child+984 and child+976
+                // Binary at 0x6BE328: only sets _allplaying=false (child+1099).
+                // Does NOT touch _queuing. _queuing is cleared in post-loop cleanup.
                 child._allplaying = false;
-                child._queuing = false;
-                mn.childNeedsInit = true;
                 // Reset child runtime: clear nodes and timelines so next play()
                 // rebuilds from scratch, matching sub_6B56F8 behavior.
                 if (child._runtime) {
@@ -1461,7 +1473,7 @@ namespace motion {
                             child.onFindMotion(child._stealthMotion, PlayFlagStealth);
                             child._stealthMotion.Clear();
                         }
-                        mn.childNeedsInit = false;
+
 
                         // Time sync from parent loop time (0x6BE478..0x6BE4E8)
                         // Binary checks both _allplaying && _queuing (0x6BE478)
@@ -1490,14 +1502,11 @@ namespace motion {
                             if (childTime > totalFrames) childTime = totalFrames;
                             // Binary: writes clamped time to player+456 (0x6BE4E4)
                             child._clampedEvalTime = childTime;
-                            // Set child's current time directly
-                            if (child._runtime) {
-                                for (auto &[name, tl] : child._runtime->timelines) {
-                                    tl.currentTime = childTime;
-                                }
-                                child._allplaying = true;
-                                child._queuing = true;
-                            }
+                            // Binary at 0x6BE4E8: writes word 0x0101 to child+480,
+                            // setting both _queuing (byte+480) and _allplaying (byte+481)
+                            // simultaneously. Does NOT iterate timelines.
+                            child._allplaying = true;
+                            child._queuing = true;
                             // Binary: if (!*(byte*)(v4 + 480)) — checks _queuing (0x6BE4EC)
                             if (!_queuing) {
                                 child._needsInternalAssignImages = true;
@@ -1524,14 +1533,16 @@ namespace motion {
                     && mn.activeSlot().crossfading
                     && !mn.otherSlot().done
                     && mn.otherSlot().motionDt != 0) {
-                    double parentTime = _frameLoopTime;
+                    // Binary at 0x6BE864: uses node+8+40 (per-node eval time) if
+                    // available, else player+456 (_clampedEvalTime). NOT _frameLoopTime.
+                    double parentTime = _clampedEvalTime;
                     double currentStart = mn.interpolatedCache.clipStartTime;
                     double otherStart = mn.otherSlot().clipStartTime;
                     double denom = otherStart - currentStart;
                     if (denom != 0.0) {
                         double ratio = (parentTime - currentStart) / denom;
-                        // Binary at 0x6BEC74: apply bezier easing if slot has it
-                        if (mn.activeSlot().hasEasing && !mn.activeSlot().acc.empty()) {
+                        // Binary at 0x6BEC74: only checks hasEasing (slot+544).
+                        if (mn.activeSlot().hasEasing) {
                             ratio = evaluateBezierCurve(mn.activeSlot().acc, ratio);
                         }
                         // Binary does NOT clamp ratio to [0,1] (0x6BEC9C).
@@ -1589,8 +1600,8 @@ namespace motion {
                             // Guard fails → LABEL_119: hasAngle=false
                             break;
                         }
-                        // Parent time (0x6BE688..0x6BE6B0): node+8 ? *(node+8)+40 : player+57*8
-                        double parentTime = _frameLoopTime;
+                        // Parent time (0x6BE688..0x6BE6B0): node+8 ? *(node+8)+40 : player+456
+                        double parentTime = _clampedEvalTime;
                         double currentStart = mn.interpolatedCache.clipStartTime;
                         double otherStart = mn.otherSlot().clipStartTime;
                         double denom = otherStart - currentStart;
@@ -1611,7 +1622,8 @@ namespace motion {
                             cpCurve.t = cache.cp_t;
                         }
                         // Use crossfade slot positions: src=current, dst=other (saved at flip)
-                        double src[3] = {cache.x, cache.y, 0.0};
+                        // Binary reads full {x,y,z} from active slot (a3+96..112).
+                        double src[3] = {cache.x, cache.y, mn.activeSlot().z};
                         double dst[3] = {mn.otherSlot().x, mn.otherSlot().y, mn.otherSlot().z};
                         double out1[3] = {}, out2[3] = {};
                         interpolatePosition69A4D4(cccCurve, dst, src, out1, mn.coordinateMode, cpCurve, ratio);
@@ -1755,8 +1767,10 @@ namespace motion {
                     }
 
                     // === Matrix propagation (0x6BEB9C..0x6BEC4C) ===
+                    // Binary at 0x6BEB90: condition is hasAngle || angle==accAngle || child._queuing
+                    // (player+482). When _queuing is true, direct-copy path is taken.
                     if (hasAngle || computedAngle == mn.accumulated.angle ||
-                        child._runtime->isEmoteMode) {
+                        child._queuing) {
                         // Direct copy (0x6BEB9C)
                         cr.accumulated.m11 = mn.accumulated.m11;
                         cr.accumulated.m12 = mn.accumulated.m12;
@@ -1782,14 +1796,15 @@ namespace motion {
                 }
 
             }
+            } // end childPtr scope — goto label_18 can jump here
             // Fall through to label_18 (matches binary: active path → LABEL_18)
 
         label_18:
             // LABEL_18: shared exit for ALL paths (0x6BE278..0x6BE2F8).
             // Binary always calls frameProgress + updateLayers on child,
             // even for inactive/non-visible nodes.
-            if (mn.childPlayer) {
-                auto &child = *mn.childPlayer;
+            if (auto *childP = mn.getChildPlayer()) {
+                auto &child = *childP;
                 if (child._runtime && !child._runtime->nodes.empty()) {
                     auto &cr = child._runtime->nodes[0];
                     // Clip chain propagation (0x6BE278..0x6BE29C)
@@ -1805,6 +1820,8 @@ namespace motion {
                     } else {
                         cr.visibleAncestorIndex = mn.visibleAncestorIndex;
                     }
+                    // Binary 0x6BE29C: propagates node+1952 (forceVisible) to child root
+                    cr.forceVisible = mn.forceVisible;
                 }
                 // Step child: frameProgress + updateLayers (0x6BE2A4..0x6BE2AC)
                 // Binary does NOT propagate _independentLayerInherit to child.
@@ -1934,7 +1951,8 @@ namespace motion {
                             cpCurve.t = cache.cp_t;
                         }
                         // src = current slot position, dst = other slot position (saved at flip)
-                        double src[3] = {cache.x, cache.y, 0.0};
+                        // Binary reads full {x,y,z} from active slot (a3+96..112).
+                        double src[3] = {cache.x, cache.y, en.activeSlot().z};
                         double dst[3] = {en.otherSlot().x, en.otherSlot().y, en.otherSlot().z};
                         double out1[3] = {}, out2[3] = {};
                         interpolatePosition69A4D4(cccCurve, dst, src, out1,
@@ -1973,7 +1991,7 @@ namespace motion {
                                 cpCurve.x = cache.cp_x; cpCurve.y = cache.cp_y;
                                 cpCurve.t = cache.cp_t;
                             }
-                            double src[3] = {cache.x, cache.y, 0.0};
+                            double src[3] = {cache.x, cache.y, en.activeSlot().z};
                             double dst[3] = {en.otherSlot().x, en.otherSlot().y, en.otherSlot().z};
                             double out1[3] = {}, out2[3] = {};
                             interpolatePosition69A4D4(cccCurve, dst, src, out1,
@@ -2016,54 +2034,11 @@ namespace motion {
             auto &pn = nodes[pi];
             if (pn.nodeType != 4) continue;
 
-            // Guard: inactive or slotDone (0x6BF298)
-            // Binary does NOT clear particleChildren here — it jumps to LABEL_64
-            // which checks activity, then falls through to physics step (sub_6C17A4).
-            // Existing particles keep running and are removed naturally when they stop playing.
-            if (!pn.accumulated.active || pn.activeSlot().done) {
-                pn.particleEmitterFlagActive = false;
-                // Skip emission control, go straight to physics step.
-                // Using a block with duplicate physics_step code to avoid goto across declarations.
-                {
-                    for (auto it = pn.particleChildren.begin(); it != pn.particleChildren.end(); ) {
-                        auto &child = *it;
-                        if (!child || !child->_runtime || child->_runtime->nodes.empty()) {
-                            it = pn.particleChildren.erase(it); continue;
-                        }
-                        if (child->_allplaying) {
-                            if (pn.particleDeleteOutside) {
-                                const double bMinX = child->_boundsMinX, bMinY = child->_boundsMinY;
-                                const double bMaxX = child->_boundsMaxX, bMaxY = child->_boundsMaxY;
-                                if (bMaxX >= bMinX && bMaxY >= bMinY) {
-                                    const double sw = _runtime->width > 0 ? _runtime->width : 1024.0;
-                                    const double sh = _runtime->height > 0 ? _runtime->height : 768.0;
-                                    if (!(bMaxY > 0.0 && bMinX < sw && bMaxX > 0.0 && bMinY < sh)) {
-                                        it = pn.particleChildren.erase(it); continue;
-                                    }
-                                }
-                            }
-                            ++it;
-                        } else {
-                            it = pn.particleChildren.erase(it);
-                        }
-                    }
-                    for (auto &child : pn.particleChildren) {
-                        if (!child || !child->_runtime) continue;
-                        child->_zFactor = _zFactor;
-                        if (!child->_runtime->nodes.empty()) {
-                            auto &cr = child->_runtime->nodes[0];
-                            cr.parentClipIndex = pn.parentClipIndex;
-                            cr.visibleAncestorIndex = pn.visibleAncestorIndex;
-                        }
-                        child->frameProgress(_frameLastTime);
-                        if (!child->_runtime->nodes.empty())
-                            child->updateLayers(currentTime);
-                    }
-                }
-                continue;
-            }
+            // Binary flow: BLOCK 1 (child position update) runs BEFORE the LABEL_64
+            // activity check. The activity check only gates BLOCK 2 (emission control).
+            // Existing particles ALWAYS get position updates even when inactive/done.
 
-            const int childCount = static_cast<int>(pn.particleChildren.size());
+            const int childCount = pn.getParticleCount();
 
             // ====== BLOCK 1: Existing particle update (0x6BF310..0x6BF668) ======
             // Binary guard: particleInheritVelocity==2 gates ALL child position updates (0x6BF304).
@@ -2080,8 +2055,10 @@ namespace motion {
 
                 if (matrixChanged) {
                     // Compute inverse of previous matrix (0x6BF458..0x6BF468)
+                    // Binary divides directly without abs() guard. Division by zero
+                    // yields infinity, which is used as-is.
                     const double det = pn.prevM11 * pn.prevM22 - pn.prevM12 * pn.prevM21;
-                    if (std::abs(det) > 1e-30) {
+                    {
                         const double id = 1.0 / det;
                         const double im11 =  pn.prevM22 * id, im12 = -pn.prevM12 * id;
                         const double im21 = -pn.prevM21 * id, im22 =  pn.prevM11 * id;
@@ -2107,13 +2084,19 @@ namespace motion {
                         const double dPosX = pn.deltaPosX, dPosY = pn.deltaPosY;
                         const double dPosZ = pn.deltaPosZ;
 
-                        for (auto &child : pn.particleChildren) {
+                        for (int ci = 0; ci < childCount; ++ci) {
+                            auto *child = pn.getParticleChild(ci);
                             if (!child || !child->_runtime || child->_runtime->nodes.empty()) continue;
                             auto &cr = child->_runtime->nodes[0];
 
-                            // Rotate child angle (0x6BF4E8..0x6BF528)
-                            if (*reinterpret_cast<const uint8_t*>(&pn.particleInheritAngle)) {
-                                // Set angle via child's runtime
+                            // Rotate child angle (0x6BF4C4..0x6BF528)
+                            // Binary checks child._directEdit (player+482) for emote path.
+                            // If _directEdit: writes to player+464 and calls initEmoteMotion.
+                            // If not: writes to root node accumulated.angle.
+                            if (child->_directEdit) {
+                                // Emote angle path — not applicable in web port
+                                // player+464 = emote angle, Player_initEmoteMotion(child, 2)
+                            } else {
                                 double cAngle = cr.accumulated.angle + angleDelta;
                                 while (cAngle < 0.0) cAngle += 360.0;
                                 while (cAngle >= 360.0) cAngle -= 360.0;
@@ -2156,7 +2139,8 @@ namespace motion {
                     pn.prevM12 = curM12; pn.prevM22 = curM22;
                 } else {
                     // Matrix unchanged: just add delta position (0x6BF348..0x6BF384)
-                    for (auto &child : pn.particleChildren) {
+                    for (int ci = 0; ci < childCount; ++ci) {
+                        auto *child = pn.getParticleChild(ci);
                         if (!child || !child->_runtime || child->_runtime->nodes.empty()) continue;
                         auto &cr = child->_runtime->nodes[0];
                         cr.accumulated.posX += pn.deltaPosX;
@@ -2168,7 +2152,8 @@ namespace motion {
                 // Missing path from binary (0x6BF32C..0x6BF384):
                 // When particleInheritVelocity==2 but (slotDone || !particleInheritAngle),
                 // still add deltaPos to existing children's positions.
-                for (auto &child : pn.particleChildren) {
+                for (int ci = 0; ci < childCount; ++ci) {
+                    auto *child = pn.getParticleChild(ci);
                     if (!child || !child->_runtime || child->_runtime->nodes.empty()) continue;
                     auto &cr = child->_runtime->nodes[0];
                     cr.accumulated.posX += pn.deltaPosX;
@@ -2179,15 +2164,20 @@ namespace motion {
             // Binary: when particleInheritVelocity != 2, goto LABEL_64 (0x6BF314)
             // skips ALL child position updates — no deltaPos addition.
 
-            // ====== BLOCK 2: Emission control (0x6BF668..0x6BF810) ======
+            // ====== LABEL_64: Activity check (0x6BF668..0x6BF710) ======
+            // Binary: only !accumulated.active sets particleEmitterFlagActive=false.
+            // slotDone alone does NOT reset the flag — it just skips emission.
+            // emitCount declared here so goto doesn't cross initialization.
+            {
             int emitCount = 0;
-            bool doPhysicsStep = true;
-
             if (!pn.accumulated.active) {
                 pn.particleEmitterFlagActive = false;
                 goto physics_step;
             }
 
+            // ====== BLOCK 2: Emission control (0x6BF668..0x6BF810) ======
+            // Binary: slotDone skips emission but does NOT reset particleEmitterFlagActive.
+            if (pn.activeSlot().done) goto physics_step;
             {
                 const double prtFmin = pn.interpolatedCache.prtFmin;
                 const double prtF = pn.interpolatedCache.prtF;
@@ -2272,9 +2262,16 @@ namespace motion {
                     motionPath = selectedSrc;
                 }
 
-                // 3b. Create child Player (0x6BF93C..0x6BFA00)
-                auto child = std::make_shared<Player>(_resourceManagerNative);
-                child->_tjsRandomGenerator = _tjsRandomGenerator;
+                // 3b. Create child Player via TJS dispatch (0x6BF93C..0x6BFA00)
+                // Aligned to binary: new Player → CreateAdaptor → Array.add
+                using PlayerAdaptor = ncbInstanceAdaptor<Player>;
+                auto *childRaw = new Player(_resourceManagerNative);
+                childRaw->_tjsRandomGenerator = _tjsRandomGenerator;
+                iTJSDispatch2 *childDisp = PlayerAdaptor::CreateAdaptor(childRaw);
+                if (!childDisp) { delete childRaw; goto physics_step; }
+                tTJSVariant childVar(childDisp, childDisp);
+                childDisp->Release();
+                auto *child = childRaw;  // native pointer for subsequent use
                 // Binary: chara comes from the split path, not parent chara
                 child->setChara(particleChara.empty() ? _chara : detail::widen(particleChara));
                 child->onFindMotion(detail::widen("/" + motionPath));
@@ -2539,13 +2536,13 @@ namespace motion {
                 // Binary: node+2192 is one field for both decay and damping
                 child->_cameraDamping = pn.particleAccelRatio;
 
-                pn.particleChildren.push_back(std::move(child));
+                pn.addParticleChild(childVar);
 
                 // Enforce maxNum per-particle (0x6C0218..0x6C0268)
                 // Binary: signed comparison count > maxNum. When maxNum==0, ALL particles
                 // are removed (size > 0 is always true). Only removes ONE per emission.
-                if (static_cast<int>(pn.particleChildren.size()) > pn.particleMaxNum) {
-                    pn.particleChildren.erase(pn.particleChildren.begin());
+                if (pn.getParticleCount() > pn.particleMaxNum) {
+                    pn.eraseParticleChild(0);
                 }
 
                 // Physics only when emitCount <= 1 (0x6C026C: CMP W20, #1; B.GT)
@@ -2555,60 +2552,68 @@ namespace motion {
                 continue;
                 } // end creation block
             }
+            } // end outer emitCount scope
 
         physics_step:
             // ====== sub_6C17A4: Physics stepping ======
             // Pass 1: Delete particles (0x6C1858..0x6C1950)
-            // Binary ALWAYS runs this loop. Non-playing children are always deleted.
-            // Bounds check only runs when particleDeleteOutside is true AND child is playing.
-            for (auto it = pn.particleChildren.begin(); it != pn.particleChildren.end(); ) {
-                auto &child = *it;
-                if (!child || !child->_runtime || child->_runtime->nodes.empty()) {
-                    it = pn.particleChildren.erase(it);
-                    continue;
-                }
-                if (child->_allplaying) {
-                    // Playing: only check bounds if particleDeleteOutside (0x6C1888)
-                    if (pn.particleDeleteOutside) {
-                        // AABB overlap check (sub_6C17A4 at 0x6C1890..0x6C18F0):
-                        // Binary checks child player's bounding rect against screen rect.
-                        const double bMinX = child->_boundsMinX;
-                        const double bMinY = child->_boundsMinY;
-                        const double bMaxX = child->_boundsMaxX;
-                        const double bMaxY = child->_boundsMaxY;
-                        // Skip degenerate bounds (0x6C189C..0x6C18AC)
-                        if (bMaxX >= bMinX && bMaxY >= bMinY) {
-                            const double sw = _runtime->width > 0 ? _runtime->width : 1024.0;
-                            const double sh = _runtime->height > 0 ? _runtime->height : 768.0;
-                            // Standard AABB overlap: if all 4 conditions met → overlaps → keep
-                            bool overlaps = (bMaxY > 0.0 && bMinX < sw
-                                          && bMaxX > 0.0 && bMinY < sh);
-                            if (!overlaps) {
-                                it = pn.particleChildren.erase(it);
-                                continue;
+            // Binary uses TJS Array.erase with index-based iteration.
+            // When erasing, count decreases and index stays (--i after erase).
+            {
+                int pCount = pn.getParticleCount();
+                for (int ci = 0; ci < pCount; ++ci) {
+                    auto *child = pn.getParticleChild(ci);
+                    bool shouldErase = false;
+                    if (!child || !child->_runtime || child->_runtime->nodes.empty()) {
+                        shouldErase = true;
+                    } else if (child->_allplaying) {
+                        // Playing: only check bounds if particleDeleteOutside (0x6C1888)
+                        if (pn.particleDeleteOutside) {
+                            const double bMinX = child->_boundsMinX;
+                            const double bMinY = child->_boundsMinY;
+                            const double bMaxX = child->_boundsMaxX;
+                            const double bMaxY = child->_boundsMaxY;
+                            if (bMaxX >= bMinX && bMaxY >= bMinY) {
+                                const double sw = static_cast<double>(_runtime->width);
+                                const double sh = static_cast<double>(_runtime->height);
+                                if (!(bMaxY > 0.0 && bMinX < sw && bMaxX > 0.0 && bMinY < sh)) {
+                                    shouldErase = true;
+                                }
                             }
                         }
-                        // else: degenerate bounds → skip deletion (binary continues)
+                    } else {
+                        // Not playing: always delete (0x6C1880)
+                        shouldErase = true;
                     }
-                    ++it;
-                } else {
-                    // Not playing: always delete (0x6C1880 falls through to erase)
-                    it = pn.particleChildren.erase(it);
+                    if (shouldErase) {
+                        // Aligned to sub_6C17A4 (0x6C1930): TJS Array.erase(index)
+                        pn.eraseParticleChild(ci);
+                        --ci;
+                        pCount = pn.getParticleCount();
+                    }
                 }
             }
 
             // Pass 2: Step each remaining child (0x6C1984..0x6C1A3C)
-            for (auto &child : pn.particleChildren) {
-                if (!child || !child->_runtime) continue;
-                child->_zFactor = _zFactor;
-                if (!child->_runtime->nodes.empty()) {
-                    auto &cr = child->_runtime->nodes[0];
-                    cr.parentClipIndex = pn.parentClipIndex;
-                    cr.visibleAncestorIndex = pn.visibleAncestorIndex;
-                }
-                child->frameProgress(_frameLastTime);
-                if (!child->_runtime->nodes.empty()) {
-                    child->updateLayers(currentTime);
+            // Binary at 0x6C1960: mesh combine parent propagation.
+            {
+                const int meshParentIdx = pn.meshCombineEnabled
+                    ? static_cast<int>(pi) : pn.visibleAncestorIndex;
+                const int pCount2 = pn.getParticleCount();
+                for (int ci = 0; ci < pCount2; ++ci) {
+                    auto *child = pn.getParticleChild(ci);
+                    if (!child || !child->_runtime) continue;
+                    child->_zFactor = _zFactor;
+                    if (!child->_runtime->nodes.empty()) {
+                        auto &cr = child->_runtime->nodes[0];
+                        cr.parentClipIndex = pn.parentClipIndex;
+                        cr.visibleAncestorIndex = meshParentIdx;
+                        cr.forceVisible = pn.forceVisible;
+                    }
+                    child->frameProgress(_frameLastTime);
+                    if (!child->_runtime->nodes.empty()) {
+                        child->updateLayers(currentTime);
+                    }
                 }
             }
         } // for each nodeType==4

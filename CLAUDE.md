@@ -46,6 +46,7 @@
 ### 核心原则
 - 无 Android kirikiroid2 源代码，仅有 libkrkr2.so 二进制。所有逆向使用 IDA MCP
 - libkrkr2.so 与本地代码并非一一对应。始终以反编译结果为权威来源，本地代码可能有误或不完整
+- **完全对齐架构，不接受功能等价** — 必须复刻 libkrkr2.so 的代码架构和内部实现（如 TJS dispatch 包装、TJS Array 管理），不能用 C++ 简化替代（如 shared_ptr、std::vector）即使行为结果相同
 
 ### 已有分析成果
 - `analysis/` 目录包含详细逆向文档 — 分析新函数前先检查是否已有记录

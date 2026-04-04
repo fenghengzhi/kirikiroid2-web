@@ -6,6 +6,9 @@
 #include "NodeTree.h"
 #include "MotionNode.h"
 #include "RuntimeSupport.h"
+#include "Player.h"
+#include "ncbind.hpp"
+#include "tjsArray.h"
 #include "psbfile/PSBFile.h"
 
 #include <spdlog/spdlog.h>
@@ -175,6 +178,28 @@ namespace motion::detail {
             // "emoteEdit" → emoteEditDict (node+1980, sub_6B3C78 at 0x6B3D48)
             if (auto ee = std::dynamic_pointer_cast<PSB::PSBDictionary>((*psbNode)["emoteEdit"]))
                 node.emoteEditDict = ee;
+
+            // === TJS↔Native bridge: create child objects (sub_6B3C78 case 3/4) ===
+            if (node.nodeType == 3) {
+                // Aligned to sub_6B3C78 case 3 (0x6B43C0..0x6B46E0):
+                // operator new(0x568) → Player constructor → sub_6F1794 (NCB CreateAdaptor)
+                // → store as tTJSVariant at node+1912.
+                using PlayerAdaptor = ncbInstanceAdaptor<Player>;
+                auto *childNative = new Player(ResourceManager{});
+                if (auto *dispatch = PlayerAdaptor::CreateAdaptor(childNative)) {
+                    node.childPlayerVar = tTJSVariant(dispatch, dispatch);
+                    dispatch->Release();
+                } else {
+                    delete childNative;
+                }
+            } else if (node.nodeType == 4) {
+                // Aligned to sub_6B3C78 case 4 (0x6B45D8..0x6B45E4):
+                // sub_704CB8 (TJSCreateArrayObject) → store at node+2296.
+                if (auto *array = TJSCreateArrayObject()) {
+                    node.particleArrayVar = tTJSVariant(array, array);
+                    array->Release();
+                }
+            }
 
             // Add this node to the flat vector
             const int thisIdx = node.index;

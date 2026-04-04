@@ -22,8 +22,7 @@
 #include <string>
 #include <vector>
 
-// iTJSDispatch2 is declared in tjs.h — no forward declaration needed here.
-// Files that include MotionNode.h must also include tjs.h for the type.
+#include "tjs.h"  // tTJSVariant, iTJSDispatch2 for TJS↔Native bridge (node+1912, node+2296)
 
 namespace PSB {
     class PSBDictionary;
@@ -199,10 +198,19 @@ namespace motion::detail {
         int forceVisible = 0;              // node+1996
         int visibleAncestorIndex = -1;     // replaces pointer at node+1952
 
-        // Child Player for nodeType=3 (Motion) and nodeType=4 (Particle).
-        // Aligned to sub_6BE0C0 (0x6BE0C0): creates child Player instances.
-        std::shared_ptr<Player> childPlayer;
-        bool childNeedsInit = true;  // true until first play() call
+        // Child Player for nodeType=3 (Motion).
+        // Aligned to libkrkr2.so node+1912: tTJSVariant holding iTJSDispatch2-wrapped
+        // Player object, created by sub_6B3C78 case 3 via sub_6F1794 (NCB CreateAdaptor).
+        // Use getChildPlayer() helper to extract native Player*.
+        tTJSVariant childPlayerVar;
+
+        // Particle children for nodeType=4 (Particle).
+        // Aligned to libkrkr2.so node+2296: tTJSVariant holding TJS Array of
+        // iTJSDispatch2-wrapped Player objects, created by sub_6B3C78 case 4 via
+        // sub_704CB8 (TJSCreateArrayObject).
+        // Use getParticleCount()/getParticleChild(i)/addParticleChild()/eraseParticleChild()
+        // helpers for Array operations matching sub_56C694/sub_6C1678.
+        tTJSVariant particleArrayVar;
 
         // Shape type for nodeType=1 (from PSB "shape" key, sub_6B3C78 case 1)
         int shapeType = 0;             // node+32: 0=point, 1=circle, 2=rect, 3=quad
@@ -238,9 +246,7 @@ namespace motion::detail {
         // Camera constraint for nodeType=9 (sub_6BC000 at 0x6BC000)
         int cameraConstraintType = 0;  // node+2376: "anchor" type
 
-        // Particle child Players for nodeType=4 (sub_6BF0DC at 0x6BF0DC)
-        // Each particle is a child Player instance with its own PSB/timelines.
-        std::vector<std::shared_ptr<Player>> particleChildren;
+        // (particleChildren replaced by particleArrayVar above — TJS Array)
         int particleType = 0;          // node+2164: particle subtype
         int particleMaxNum = 0;        // node+2168: max particle count
         // Binary: node+2192 is a SINGLE field used as both "accel ratio" (decay
@@ -352,6 +358,35 @@ namespace motion::detail {
             std::vector<double> cp_t;           // cp time knots
             bool hasCpRotation = false;         // slot+284 type != 0
         } interpolatedCache;
+
+        // === TJS↔Native bridge helpers ===
+        // These are implemented in MotionNodeBridge.cpp to avoid circular
+        // dependency (MotionNode.h cannot include Player.h or ncbind.hpp).
+
+        // nodeType=3: Get native Player* from childPlayerVar (node+1912).
+        // Aligned to sub_6BE0C0 NativeInstanceSupport pattern.
+        // Returns nullptr if childPlayerVar is void/invalid.
+        Player* getChildPlayer() const;
+
+        // nodeType=4: Get particle count from TJS Array (node+2296).
+        // Aligned to sub_56C694: Array.count.
+        int getParticleCount() const;
+
+        // nodeType=4: Get native Player* for particle child at index.
+        // Aligned to sub_6C1678: Array[i] + NativeInstanceSupport.
+        Player* getParticleChild(int index) const;
+
+        // nodeType=4: Get iTJSDispatch2* for particle child at index.
+        // Returns the TJS dispatch object (for passing to sub_6B29C0 etc).
+        iTJSDispatch2* getParticleChildDispatch(int index) const;
+
+        // nodeType=4: Add a TJS-wrapped Player to the particle Array.
+        // Aligned to TJS Array.add.
+        void addParticleChild(const tTJSVariant &playerVar);
+
+        // nodeType=4: Erase particle child at index from TJS Array.
+        // Aligned to TJS Array.erase(index).
+        void eraseParticleChild(int index);
     };
 
 } // namespace motion::detail

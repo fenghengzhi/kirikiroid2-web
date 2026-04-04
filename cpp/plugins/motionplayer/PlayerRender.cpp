@@ -301,8 +301,10 @@ namespace motion {
                     // Collect child Player render output for nodeType=3 (Motion).
                     // Aligned to sub_6BE0C0: child render merges into parent tree.
                     for (const auto &motionNode : _runtime->nodes) {
-                        if (motionNode.nodeType != 3 || !motionNode.childPlayer) continue;
-                        auto &childRuntime = motionNode.childPlayer->_runtime;
+                        if (motionNode.nodeType != 3) continue;
+                        auto *childP = motionNode.getChildPlayer();
+                        if (!childP) continue;
+                        auto &childRuntime = childP->_runtime;
                         if (!childRuntime || childRuntime->nodes.empty()) continue;
                         const auto &acc = motionNode.accumulated;
                         Affine2x3 childGlobal = {
@@ -319,7 +321,8 @@ namespace motion {
                     // Aligned to sub_6BF0DC: particle children render into parent tree.
                     for (const auto &particleNode : _runtime->nodes) {
                         if (particleNode.nodeType != 4) continue;
-                        for (const auto &pChild : particleNode.particleChildren) {
+                        for (int pci = 0; pci < particleNode.getParticleCount(); ++pci) {
+                            auto *pChild = particleNode.getParticleChild(pci);
                             if (!pChild || !pChild->_runtime) continue;
                             auto &pNodes = pChild->_runtime->nodes;
                             if (pNodes.empty()) continue;

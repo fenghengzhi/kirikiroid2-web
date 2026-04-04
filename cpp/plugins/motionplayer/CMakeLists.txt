@@ -14,6 +14,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     ResourceManager.cpp
     RuntimeSupport.cpp
     NodeTree.cpp
+    MotionNodeBridge.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin)
