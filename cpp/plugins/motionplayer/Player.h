@@ -373,6 +373,19 @@ namespace motion {
         double getActiveMotionWidth() const;
         double getActiveMotionHeight() const;
 
+        // Root node position (x/y/left/top)
+        // Aligned to libkrkr2.so:
+        //   getter: Player_getRootX (0x6D98A8) reads root_node+1592
+        //   setter: Player_setRootX (0x6CD028) writes root_node+1592, sets dirty
+        double getX() const;
+        double getY() const;
+        void setX(double v);
+        void setY(double v);
+        double getLeft() const { return getX(); }
+        double getTop() const { return getY(); }
+        void setLeft(double v) { setX(v); }
+        void setTop(double v) { setY(v); }
+
     private:
         bool ensureMotionLoaded();
         void syncVariableKeysFromActiveMotion();
@@ -461,6 +474,12 @@ namespace motion {
         double _cameraDamping = 1.0;     // player+600 (1.0 = no damping)
         double _rootOffsetX = 0.0;       // player+120, root layer position offset
         double _rootOffsetY = 0.0;       // player+128
+        // Pending root position from TJS setter (player.x/y).
+        // Applied to root node when nodes are built (deferred because
+        // setter may be called before node tree exists).
+        double _pendingRootX = 0.0;
+        double _pendingRootY = 0.0;
+        bool _hasPendingRootPos = false;
         double _rootOffsetZ = 0.0;
         float _cameraOffsetX = 0.0f;    // player+144, set by setCameraOffset (0x6D9A38)
         float _cameraOffsetY = 0.0f;    // player+148

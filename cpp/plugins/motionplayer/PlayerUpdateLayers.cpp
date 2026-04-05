@@ -98,11 +98,15 @@ namespace motion {
             // Populate root active clip slot
             populateSlotFromState(root.activeSlot(), rootState);
             // Map to accumulated state
+            // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
+            // Binary does memcpy(root+1504, root+1584, 0x50) copying dirty→accumulated.
+            // Root posX/posY are set by TJS setter (player.x/y) and preserved across
+            // frames — not overwritten by PSB frame x/ox. Frame interpolation only
+            // affects child nodes via accumulated.posX += interpolated.posX (0x6BB6EC).
             root.accumulated.visible = rootState.visible;
             root.accumulated.flipX = rootState.flipX;
             root.accumulated.flipY = rootState.flipY;
-            root.accumulated.posX = rootState.x + rootState.ox;
-            root.accumulated.posY = rootState.y + rootState.oy;
+            // Do NOT overwrite posX/posY — they are set by TJS player.x/y setter
             root.accumulated.posZ = 0.0;
             root.accumulated.angle = rootState.angle;
             root.accumulated.scaleX = rootState.scaleX;

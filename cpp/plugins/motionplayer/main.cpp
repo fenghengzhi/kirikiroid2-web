@@ -122,6 +122,12 @@ NCB_REGISTER_CLASS(Player) {
                               Player::setUseD3DStatic, TJS_STATICMEMBER);
 
     // Properties
+    // Root node position — aligned to libkrkr2.so NCB registration (0x6D69C8)
+    NCB_PROPERTY(x, getX, setX);
+    NCB_PROPERTY(y, getY, setY);
+    NCB_PROPERTY(left, getLeft, setLeft);
+    NCB_PROPERTY(top, getTop, setTop);
+
     NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
     NCB_PROPERTY(metadata, getMetadata, setMetadata);
     NCB_PROPERTY(chara, getChara, setChara);

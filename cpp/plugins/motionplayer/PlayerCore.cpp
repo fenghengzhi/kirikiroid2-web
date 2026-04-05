@@ -24,6 +24,41 @@ namespace motion {
 
     Player::~Player() = default;
 
+    // Aligned to libkrkr2.so Player_getRootX (0x6D98A8) / Player_setRootX (0x6CD028)
+    double Player::getX() const {
+        if (_runtime && !_runtime->nodes.empty())
+            return _runtime->nodes[0].accumulated.posX;
+        return _hasPendingRootPos ? _pendingRootX : 0.0;
+    }
+    void Player::setX(double v) {
+        _pendingRootX = v;
+        _hasPendingRootPos = true;
+        if (_runtime && !_runtime->nodes.empty()) {
+            auto &root = _runtime->nodes[0];
+            if (root.accumulated.posX != v) {
+                root.accumulated.posX = v;
+                root.accumulated.dirty = true;
+            }
+        }
+    }
+    // Aligned to libkrkr2.so Player_getRootY (0x6D98B4) / Player_setRootY (0x6CD048)
+    double Player::getY() const {
+        if (_runtime && !_runtime->nodes.empty())
+            return _runtime->nodes[0].accumulated.posY;
+        return _hasPendingRootPos ? _pendingRootY : 0.0;
+    }
+    void Player::setY(double v) {
+        _pendingRootY = v;
+        _hasPendingRootPos = true;
+        if (_runtime && !_runtime->nodes.empty()) {
+            auto &root = _runtime->nodes[0];
+            if (root.accumulated.posY != v) {
+                root.accumulated.posY = v;
+                root.accumulated.dirty = true;
+            }
+        }
+    }
+
     // Aligned to libkrkr2.so EmoteObject_init (sub_67DBAC):
     // Sets activeMotion directly from a pre-loaded snapshot, bypassing file I/O.
     // Used by EmotePlayer.setModule() to bridge loaded PSB data into the Player pipeline.

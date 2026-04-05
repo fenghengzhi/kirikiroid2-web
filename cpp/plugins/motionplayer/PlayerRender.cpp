@@ -286,6 +286,12 @@ namespace motion {
                         _runtime->nodes = detail::buildNodeTree(
                             *_runtime->activeMotion, clipLabel);
                         _runtime->nodesBuilt = true;
+                        // Apply pending root position from TJS setter
+                        // (player.x/y may be set before node tree exists)
+                        if (_hasPendingRootPos && !_runtime->nodes.empty()) {
+                            _runtime->nodes[0].accumulated.posX = _pendingRootX;
+                            _runtime->nodes[0].accumulated.posY = _pendingRootY;
+                        }
                         // Populate label→index map (aligned to binary's std::map at player+24)
                         _runtime->nodeLabelMap.clear();
                         for (size_t ni = 0; ni < _runtime->nodes.size(); ++ni) {
