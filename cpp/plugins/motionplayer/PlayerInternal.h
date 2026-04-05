@@ -459,8 +459,8 @@ namespace internal {
             double y = 0.0;
             double ox = 0.0;          // mask 0x1: position offset X
             double oy = 0.0;          // mask 0x1: position offset Y
-            double width = 0.0;       // source display width (from PSB icon node, not "zx")
-            double height = 0.0;      // source display height (from PSB icon node, not "zy")
+            double width = 0.0;       // "zx" from PSB: display width in pixels
+            double height = 0.0;      // "zy" from PSB: display height in pixels
             double opacity = 1.0;     // mask 0x400: 0.0-1.0 (from "opa" uint8 0-255)
             double angle = 0.0;       // mask 0x10: rotation degrees
             double scaleX = 1.0;      // mask 0x20: zoom X ("z")
@@ -793,9 +793,14 @@ namespace internal {
                     state.oy = *oy;
             }
 
-            // NOTE: "zx"/"zy" are NOT display width/height — they are scaleX/scaleY,
-            // read below under mask & 0x60. Confirmed via IDA: sub_692AB0 has no
-            // unconditional zx/zy read for display dimensions.
+            // "zx"/"zy" as display dimensions (width/height).
+            // Aligned to sub_692AB0: PSB stores display size in "zx"/"zy" keys.
+            // Binary reads scaleX via "z" (not "zx") under mask & 0x60, so when
+            // PSB has "zx" key (not "z"), scaleX stays at default 1.0.
+            if(const auto zx = psbDictionaryNumber(content, "zx"))
+                state.width = *zx;
+            if(const auto zy = psbDictionaryNumber(content, "zy"))
+                state.height = *zy;
 
             // mask & 0x400: opa (sub_692AB0 at 0x693440)
             // CRITICAL: only read "opa" when mask bit 0x400 is set.
@@ -850,13 +855,15 @@ namespace internal {
                 }
             }
 
-            // mask & 0x20: "zx"/scaleX, mask & 0x40: "zy"/scaleY
-            // Aligned to sub_692AB0 at 0x692FF4: field names are UTF-16 "zx"/"zy"
-            // (IDA truncates UTF-16 to first char, showing "z" for "zx")
+            // mask & 0x60: scaleX ("z") / scaleY ("zy")
+            // Aligned to sub_692AB0 at 0x693018: reads "z" for scaleX, "zy" for scaleY.
+            // Note: PSB stores display width/height in "zx"/"zy" keys (read above),
+            // but binary uses "z" (not "zx") for scaleX. Since PSB typically has "zx"
+            // but not "z", scaleX stays at default 1.0 in practice.
             if(mask & 0x60) {
                 if(mask & 0x20) {
-                    if(const auto zx = psbDictionaryNumber(content, "zx"))
-                        state.scaleX = *zx;
+                    if(const auto z = psbDictionaryNumber(content, "z"))
+                        state.scaleX = *z;
                 }
                 if(mask & 0x40) {
                     if(const auto zy = psbDictionaryNumber(content, "zy"))
@@ -864,12 +871,11 @@ namespace internal {
                 }
             }
 
-            // mask & 0x80: "sx"/slantX, mask & 0x100: "sy"/slantY
-            // Aligned to sub_692AB0 at 0x693048: field names are UTF-16 "sx"/"sy"
-            // (IDA truncates UTF-16 to first char, showing "s" for "sx")
+            // mask & 0x80: slantX ("s") / mask & 0x100: slantY ("sy")
+            // Aligned to sub_692AB0 at 0x69306C: reads "s" for slantX, "sy" for slantY.
             if(mask & 0x180) {
                 if(mask & 0x80) {
-                    if(const auto s = psbDictionaryNumber(content, "sx"))
+                    if(const auto s = psbDictionaryNumber(content, "s"))
                         state.slantX = *s;
                 }
                 if(mask & 0x100) {
