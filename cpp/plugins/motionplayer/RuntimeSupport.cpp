@@ -682,6 +682,9 @@ namespace motion::detail {
                          snapshot->path, snapshot->clipsByLabel.size(),
                          snapshot->mainTimelineLabels.size(),
                          snapshot->sourceCandidates.size());
+            for(const auto &[rp, res] : snapshot->resourcesByPath) {
+                LOGGER->warn("  resource: {} ({}bytes)", rp, res->data.size());
+            }
         }
         registerModuleSnapshot(snapshot->moduleValue, snapshot);
         return snapshot;

@@ -152,19 +152,18 @@ namespace motion {
             root.interpolatedCache.prtZ = rootState.prtZ;
             root.interpolatedCache.prtRange = rootState.prtRange;
 
-            // Populate root clipW/clipH/originX/originY (sub_6BC4F0)
-            root.clipW = rootState.width;
-            root.clipH = rootState.height;
+            // Populate root clipW/clipH/originX/originY from PSB icon.
+            // Aligned to sub_6BC4F0: node+232/240 = PSB icon pixel dimensions.
             if (!rootState.src.empty() && _runtime->activeMotion) {
                 int srcW = 0, srcH = 0;
                 double srcOX = 0, srcOY = 0;
                 std::vector<std::uint8_t> decomp;
                 findPSBResourceBySourceName(*_runtime->activeMotion, rootState.src,
                     srcW, srcH, decomp, srcOX, srcOY);
+                root.clipW = srcW;
+                root.clipH = srcH;
                 root.originX = srcOX;
                 root.originY = srcOY;
-                if (root.clipW <= 0 && srcW > 0) root.clipW = srcW;
-                if (root.clipH <= 0 && srcH > 0) root.clipH = srcH;
             }
 
             // Step 3: Build root local 2x2 matrix via sub_699940
@@ -295,22 +294,21 @@ namespace motion {
             node.interpolatedCache.hasCpRotation = !state.cp.empty();
 
 
-            // Populate clipW/clipH from interpolated state (sub_6BC4F0 at 0x6BCB14)
-            node.clipW = state.width;
-            node.clipH = state.height;
-
-            // Populate originX/originY from PSB source icon (sub_6948E8).
-            // findPSBResourceBySourceName reads originX/originY from PSB icon nodes.
+            // Populate clipW/clipH and originX/originY from PSB source icon.
+            // Aligned to sub_6BC4F0 at 0x6BCB14: node+232/240 = PSB icon
+            // pixel dimensions (not state.width/height which are unused).
+            // findPSBResourceBySourceName navigates source/<group>/icon/<name>
+            // and reads width, height, originX, originY from the icon node.
             if (!state.src.empty() && _runtime->activeMotion) {
                 int srcW = 0, srcH = 0;
                 double srcOX = 0, srcOY = 0;
                 std::vector<std::uint8_t> decomp;
                 findPSBResourceBySourceName(*_runtime->activeMotion, state.src,
                     srcW, srcH, decomp, srcOX, srcOY);
+                node.clipW = srcW;
+                node.clipH = srcH;
                 node.originX = srcOX;
                 node.originY = srcOY;
-                if (node.clipW <= 0 && srcW > 0) node.clipW = srcW;
-                if (node.clipH <= 0 && srcH > 0) node.clipH = srcH;
             }
 
             // Populate active clip slot from evaluated state

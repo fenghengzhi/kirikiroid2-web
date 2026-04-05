@@ -470,58 +470,39 @@ namespace motion {
                         if(!srcBmp || srcBmp->GetWidth() == 0) {
                             continue;
                         }
-                        // Compute affine destination points using full 2x3 matrix
-                        // Aligned to libkrkr2.so sub_6C7440 operateAffine call
-                        const double srcW = static_cast<double>(srcBmp->GetWidth());
-                        const double srcH = static_cast<double>(srcBmp->GetHeight());
-                        const double drawW = node.state.width > 0.0
-                            ? node.state.width : srcW;
-                        const double drawH = node.state.height > 0.0
-                            ? node.state.height : srcH;
-                        const double localSx = drawW / srcW;
-                        const double localSy = drawH / srcH;
 
-                        // Compose node affine with local source scale:
-                        // A = node.affine * Scale(localSx, localSy)
-                        const auto &a = node.affine;
-                        const double am11 = a[0] * localSx;
-                        const double am21 = a[1] * localSx;
-                        const double am12 = a[2] * localSy;
-                        const double am22 = a[3] * localSy;
+                        // Aligned to sub_6C7440 at 0x6C7F54:
+                        // src rect = (0, 0, bitmapWidth, bitmapHeight)
+                        // dst points = pre-computed corners[0,1,3] - 0.5
+                        const tjs_int srcW = static_cast<tjs_int>(srcBmp->GetWidth());
+                        const tjs_int srcH = static_cast<tjs_int>(srcBmp->GetHeight());
+                        tTVPRect sr(0, 0, srcW, srcH);
 
-                        // Aligned to libkrkr2.so sub_6BC4F0 (0x6BCB3C):
-                        // origin = pos - matrix × (node[248] + clip[376], node[256] + clip[384])
-                        // Confirmed via IDA: node[248]/[256] = PSB source icon "originX"/"originY"
-                        //   (read in Motion_Player_findSource at 0x69505C/0x6950A8)
-                        // clip[376]/[384] = clip-level offset (from "timeOffset", usually 0)
-                        // PSB frameList ox/oy are position offsets (already in lx/ly).
-                        double srcOX = 0, srcOY = 0;
-                        if(auto oit = originCache.find(node.state.src); oit != originCache.end()) {
-                            srcOX = oit->second.first;
-                            srcOY = oit->second.second;
-                        }
-                        const double atx = a[4] - (a[0] * srcOX + a[2] * srcOY);
-                        const double aty = a[5] - (a[1] * srcOX + a[3] * srcOY);
-
-                        // OperateAffine takes 3 corner points:
-                        // (0,0), (srcW,0), (0,srcH) mapped through the affine.
-                        // libkrkr2.so applies -0.5 texel offset.
-                        // Flip is now integrated into the affine matrix via
-                        // applyLocalTransform (matching sub_699940 case 0).
-                        tTVPPointD pts[3];
-                        pts[0] = {atx - 0.5,
-                                  aty - 0.5};
-                        pts[1] = {am11 * srcW + atx - 0.5,
-                                  am21 * srcW + aty - 0.5};
-                        pts[2] = {am12 * srcH + atx - 0.5,
-                                  am22 * srcH + aty - 0.5};
-
-                        tTVPRect sr(0, 0, static_cast<tjs_int>(srcW),
-                                    static_cast<tjs_int>(srcH));
-                        // Use accumulated opacity (parent * child cascade)
-                        // aligned to libkrkr2.so Player_updateLayers opacity multiplication
                         const tjs_int opa = static_cast<tjs_int>(
                             std::clamp(node.accumulatedOpacity * 255.0, 0.0, 255.0));
+
+                        tTVPPointD pts[3];
+                        if (node.hasCorners) {
+                            // Use pre-computed corner vertices (aligned to binary).
+                            // Binary passes corners 0, 1, 3 (not 2) to affineCopy.
+                            pts[0] = {node.corners[0] - 0.5, node.corners[1] - 0.5};
+                            pts[1] = {node.corners[2] - 0.5, node.corners[3] - 0.5};
+                            pts[2] = {node.corners[6] - 0.5, node.corners[7] - 0.5};
+                        } else {
+                            // Fallback for nodes without pre-computed vertices
+                            const auto &a = node.affine;
+                            double srcOX = 0, srcOY = 0;
+                            if(auto oit = originCache.find(node.state.src);
+                               oit != originCache.end()) {
+                                srcOX = oit->second.first;
+                                srcOY = oit->second.second;
+                            }
+                            const double atx = a[4] - (a[0]*srcOX + a[2]*srcOY);
+                            const double aty = a[5] - (a[1]*srcOX + a[3]*srcOY);
+                            pts[0] = {atx - 0.5, aty - 0.5};
+                            pts[1] = {a[0]*srcW + atx - 0.5, a[1]*srcW + aty - 0.5};
+                            pts[2] = {a[2]*srcH + atx - 0.5, a[3]*srcH + aty - 0.5};
+                        }
 
                         try {
                             layer->OperateAffine(pts, srcBmp.get(), sr,

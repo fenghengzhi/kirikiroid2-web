@@ -793,14 +793,10 @@ namespace internal {
                     state.oy = *oy;
             }
 
-            // "zx"/"zy" as display dimensions (width/height).
-            // Aligned to sub_692AB0: PSB stores display size in "zx"/"zy" keys.
-            // Binary reads scaleX via "z" (not "zx") under mask & 0x60, so when
-            // PSB has "zx" key (not "z"), scaleX stays at default 1.0.
-            if(const auto zx = psbDictionaryNumber(content, "zx"))
-                state.width = *zx;
-            if(const auto zy = psbDictionaryNumber(content, "zy"))
-                state.height = *zy;
+            // sub_692AB0 has NO unconditional "zx"/"zy" read for width/height.
+            // "z" and "zy" are only read under mask & 0x60 as zoomX/zoomY (below).
+            // Source display size (node+232/240) comes from PSB icon node,
+            // populated in buildNodeTree via findPSBResourceBySourceName.
 
             // mask & 0x400: opa (sub_692AB0 at 0x693440)
             // CRITICAL: only read "opa" when mask bit 0x400 is set.
@@ -1666,6 +1662,12 @@ namespace internal {
             double accumulatedOpacity = 1.0;  // parent.opacity * child.opacity
             bool flipX = false;               // XOR-inherited from parent
             bool flipY = false;               // XOR-inherited from parent
+            // Pre-computed corner vertices (aligned to binary renderNode+136~164).
+            // Set by buildRenderListFromNodes from node.vertices[],
+            // optionally transformed by drawAffineMatrix.
+            // Layout: [c0x,c0y, c1x,c1y, c2x,c2y, c3x,c3y]
+            float corners[8] = {};
+            bool hasCorners = false;
         };
 
         // Compose: result = parent * Translate(lx, ly)
@@ -1909,6 +1911,24 @@ namespace internal {
                 rn.accumulatedOpacity = acc.opacity / 255.0;
                 rn.flipX = false;
                 rn.flipY = false;
+
+                // Copy pre-computed corner vertices from node.vertices[]
+                // and transform by globalAffine (drawAffineMatrix + offsets).
+                // Aligned to sub_6C2334 at 0x6C35AC (copy) + 0x6C2B90 (transform).
+                // Binary copies node+1856~1884 → renderNode+136~164, then
+                // applies drawAffineMatrix to each corner.
+                if (node.clipW > 0 && node.clipH > 0) {
+                    for (int ci = 0; ci < 4; ++ci) {
+                        const float ox = node.vertices[ci * 2];
+                        const float oy = node.vertices[ci * 2 + 1];
+                        rn.corners[ci * 2]     = static_cast<float>(
+                            globalAffine[0] * ox + globalAffine[2] * oy + globalAffine[4]);
+                        rn.corners[ci * 2 + 1] = static_cast<float>(
+                            globalAffine[1] * ox + globalAffine[3] * oy + globalAffine[5]);
+                    }
+                    rn.hasCorners = true;
+                }
+
                 out.push_back(std::move(rn));
             }
 
