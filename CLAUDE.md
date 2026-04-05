@@ -39,7 +39,9 @@
 ## 调试注意事项
 - 不要用单独的 XP3 文件测试 — 不完整的 XP3 集合会导致初始化失败，掩盖真正的 bug
 - 浏览器自动化：使用 `playwright-cli` 技能。游戏用触摸事件处理左键点击；用 CDP `Input.dispatchTouchEvent` 或确保 onMouseDownEvent 中使用 BUTTON_LEFT
-- C++ 日志（`spdlog`/`printf`/`fprintf(stderr)`）均输出到浏览器控制台，但 playwright-cli 只保留最近条目。日志量大时早期输出被挤出，用 debug-capture.sh 的 addInitScript 捕获特定关键词
+- C++ 日志（`spdlog`/`printf`/`fprintf(stderr)`）均输出到浏览器控制台
+- **playwright-cli `console` 命令只保留最近约 200 条日志，WASM 引擎每秒产生数百条，绝大部分会丢失**。必须用 `addInitScript` 注入捕获脚本：先 `open` 空白页 → `run-code` 注入 `addInitScript` 过滤+收集日志 → 再 `goto` 目标页面 → 用 `eval` 取回 `window._filteredLogs`。详见 krkr2-debug skill
+- URL 参数：`?xp3=file.xp3` 加载单个 XP3，`?game=file.zip` 加载 ZIP 包。注意不要混用
 
 ## IDA MCP 逆向工程
 

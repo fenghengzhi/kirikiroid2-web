@@ -1230,11 +1230,6 @@ bool TVPIsExistentStorage(const ttstr &name) {
     }
     ttstr placed = TVPGetPlacedPath(name);
     if(!placed.IsEmpty()) {
-        auto s = name.AsStdString();
-        if(s.find(".mtn") != std::string::npos || s.find("logo") != std::string::npos) {
-            TVPAddLog(ttstr(TJS_W("(info) isExistentStorage FOUND: '")) +
-                name + TJS_W("' -> '") + placed + TJS_W("'"));
-        }
         return true;
     }
     if(TVPIsMotionParameterFallback(name))

@@ -141,15 +141,6 @@ void tTVPLayerManager::DrawCompleted(const tTVPRect &destrect,
         }
     }
 
-    static int dcCnt = 0;
-    if(dcCnt < 10) {
-        spdlog::get("core")->warn("DrawCompleted: dest=({},{},{},{}) clip=({},{},{},{}) "
-                                  "type={} opacity={} bmp={}",
-                                  destrect.left, destrect.top, destrect.right, destrect.bottom,
-                                  cliprect.left, cliprect.top, cliprect.right, cliprect.bottom,
-                                  static_cast<int>(type), opacity, (void*)bmp);
-        dcCnt++;
-    }
     DrawBuffer->Blt(destrect.left, destrect.top, bmp, cliprect, type, opacity,
                     HoldAlpha);
 #endif
@@ -1058,8 +1049,6 @@ void tTVPLayerManager::AddUpdateRegion(const tTVPRect &rect) {
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::UpdateToDrawDevice() {
-    spdlog::get("core")->debug("UpdateToDrawDevice: Primary={} updateRegion={}",
-                               (void*)Primary, UpdateRegion.GetCount());
     if(!Primary) return;
     Primary->CompleteForWindow(this);
 }

@@ -23,7 +23,7 @@
     "ralph-wiggum@claude-code-plugins": true,
     "claude-md-management@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": true,
-    "pua@pua-skills": true,
+    "pua@pua-skills": false,
     "superpowers@claude-plugins-official": false
   }
 }

@@ -580,8 +580,6 @@ void tTVPDrawDevice::RequestInvalidation(const tTVPRect &rect) {
 
 //---------------------------------------------------------------------------
 void tTVPDrawDevice::Update() {
-    static int duCnt = 0;
-    if(duCnt < 5) { spdlog::get("core")->warn("DrawDevice::Update managers={}", Managers.size()); duCnt++; }
     for(auto &Manager : Managers) {
         Manager->UpdateToDrawDevice();
     }

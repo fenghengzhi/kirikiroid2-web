@@ -7186,19 +7186,6 @@ void tTJSNI_BaseLayer::InternalComplete2(tTVPComplexRect &updateregion,
                                          tTVPDrawable *drawable) {
     //--- querying phase
     {
-        int regionCount = updateregion.GetCount();
-        if(regionCount > 0) {
-            static int ic2Count = 0;
-            if(ic2Count < 20) {
-                auto bound = updateregion.GetBound();
-                spdlog::get("core")->warn("InternalComplete2: regions={} bound=({},{},{},{}) "
-                                          "children={} visible={}",
-                                          regionCount, bound.left, bound.top,
-                                          bound.right, bound.bottom,
-                                          GetVisibleChildrenCount(), GetVisible());
-                ic2Count++;
-            }
-        }
     }
 
     // search ltOpaque, not to draw region behind them.
