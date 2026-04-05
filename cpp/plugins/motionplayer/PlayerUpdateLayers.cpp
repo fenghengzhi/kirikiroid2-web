@@ -1082,6 +1082,23 @@ namespace motion {
                         vn.vertices[5] = static_cast<float>(fy + m21*cw + m22*ch);
                         vn.vertices[6] = static_cast<float>(fx + m12*ch);
                         vn.vertices[7] = static_cast<float>(fy + m22*ch);
+                        // TRACE: vertex computation output
+                        {
+                            static int vtxLog = 0;
+                            if (vtxLog < 5) {
+                                LOGGER->warn("  VERTEX src='{}' cw={:.0f} ch={:.0f} "
+                                    "ox={:.1f} oy={:.1f} m=[{:.3f},{:.3f},{:.3f},{:.3f}] "
+                                    "v=[{:.0f},{:.0f},{:.0f},{:.0f},{:.0f},{:.0f},{:.0f},{:.0f}]",
+                                    vn.interpolatedCache.src, cw, ch,
+                                    vn.originX, vn.originY,
+                                    m11, m21, m12, m22,
+                                    vn.vertices[0], vn.vertices[1],
+                                    vn.vertices[2], vn.vertices[3],
+                                    vn.vertices[4], vn.vertices[5],
+                                    vn.vertices[6], vn.vertices[7]);
+                                vtxLog++;
+                            }
+                        }
                     }
 
                     // forceVisible TJS property writing (0x6BD38C..0x6BD72C)
@@ -2832,6 +2849,37 @@ namespace motion {
 
         updateLayersPhase1_PreLoop(currentTime);
         updateLayersPhase2_MainLoop(currentTime);
+
+        // ===== PIPELINE TRACE (first frame only) =====
+        {
+            static bool traced = false;
+            if (!traced && _runtime->activeMotion &&
+                _runtime->activeMotion->path.find("logo") != std::string::npos) {
+                traced = true;
+                LOGGER->warn("===== PIPELINE TRACE t={:.3f} path={} nodes={} =====",
+                             currentTime, _runtime->activeMotion->path, nodes.size());
+                for (size_t ni = 0; ni < nodes.size() && ni < 10; ++ni) {
+                    const auto &n = nodes[ni];
+                    const auto &a = n.accumulated;
+                    const auto &ic = n.interpolatedCache;
+                    LOGGER->warn("  N[{}] type={} label='{}' hasSource={} active={} "
+                        "src='{}' clipW={:.0f} clipH={:.0f}",
+                        ni, n.nodeType, n.layerName, n.hasSource,
+                        a.active, ic.src, n.clipW, n.clipH);
+                    if (n.hasSource || ni == 0) {
+                        LOGGER->warn("    interp: x={:.1f} y={:.1f} ox={:.1f} oy={:.1f} "
+                            "scaleX={:.3f} scaleY={:.3f} opa={:.3f} angle={:.1f}",
+                            ic.x, ic.y, ic.ox, ic.oy,
+                            ic.scaleX, ic.scaleY, ic.opacity, ic.angle);
+                        LOGGER->warn("    accum: posX={:.1f} posY={:.1f} "
+                            "scX={:.3f} scY={:.3f} opa={} "
+                            "m=[{:.3f},{:.3f},{:.3f},{:.3f}]",
+                            a.posX, a.posY, a.scaleX, a.scaleY, a.opacity,
+                            a.m11, a.m21, a.m12, a.m22);
+                    }
+                }
+            }
+        }
 
         // === PHASE 3: Post-loop processing ===
         // Call order matches libkrkr2.so Player_updateLayers (0x6BBC60..0x6BBCA8):

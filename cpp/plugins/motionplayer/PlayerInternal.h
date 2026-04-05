@@ -851,15 +851,16 @@ namespace internal {
                 }
             }
 
-            // mask & 0x60: scaleX ("z") / scaleY ("zy")
-            // Aligned to sub_692AB0 at 0x693018: reads "z" for scaleX, "zy" for scaleY.
-            // Note: PSB stores display width/height in "zx"/"zy" keys (read above),
-            // but binary uses "z" (not "zx") for scaleX. Since PSB typically has "zx"
-            // but not "z", scaleX stays at default 1.0 in practice.
+            // mask & 0x60: scaleX ("zx") / scaleY ("zy")
+            // Aligned to sub_692AB0 at 0x693018.
+            // IDA mistakenly displayed UTF-16LE strings as ASCII single chars:
+            //   0x14D868E: bytes 7a 00 78 00 00 00 = UTF-16LE "zx" (shown as "z")
+            //   0x14D8694: "zy" (shown correctly as L"zy")
+            // Confirmed via hex dump at string addresses in IDB.
             if(mask & 0x60) {
                 if(mask & 0x20) {
-                    if(const auto z = psbDictionaryNumber(content, "z"))
-                        state.scaleX = *z;
+                    if(const auto zx = psbDictionaryNumber(content, "zx"))
+                        state.scaleX = *zx;
                 }
                 if(mask & 0x40) {
                     if(const auto zy = psbDictionaryNumber(content, "zy"))
@@ -867,11 +868,12 @@ namespace internal {
                 }
             }
 
-            // mask & 0x80: slantX ("s") / mask & 0x100: slantY ("sy")
-            // Aligned to sub_692AB0 at 0x69306C: reads "s" for slantX, "sy" for slantY.
+            // mask & 0x80: slantX ("sx") / mask & 0x100: slantY ("sy")
+            // Aligned to sub_692AB0 at 0x69306C.
+            // 0x14D869A: bytes 73 00 78 00 00 00 = UTF-16LE "sx" (IDA showed "s")
             if(mask & 0x180) {
                 if(mask & 0x80) {
-                    if(const auto s = psbDictionaryNumber(content, "s"))
+                    if(const auto s = psbDictionaryNumber(content, "sx"))
                         state.slantX = *s;
                 }
                 if(mask & 0x100) {

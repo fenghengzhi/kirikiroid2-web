@@ -505,6 +505,18 @@ namespace motion {
                         }
 
                         try {
+                            {
+                                static int oaLog = 0;
+                                if (oaLog < 5) {
+                                    LOGGER->warn("  OA[{}] src='{}' bmp={}x{} opa={} corners={} "
+                                        "pts=[({:.0f},{:.0f}),({:.0f},{:.0f}),({:.0f},{:.0f})]",
+                                        oaLog, node.state.src, srcW, srcH, opa,
+                                        node.hasCorners ? "YES" : "NO",
+                                        pts[0].x, pts[0].y, pts[1].x, pts[1].y,
+                                        pts[2].x, pts[2].y);
+                                    oaLog++;
+                                }
+                            }
                             layer->OperateAffine(pts, srcBmp.get(), sr,
                                                  omAlpha, opa, stNearest);
                             drewAny = true;
