@@ -459,8 +459,8 @@ namespace internal {
             double y = 0.0;
             double ox = 0.0;          // mask 0x1: position offset X
             double oy = 0.0;          // mask 0x1: position offset Y
-            double width = 0.0;       // "zx" from PSB (source display width)
-            double height = 0.0;      // "zy" from PSB (source display height)
+            double width = 0.0;       // source display width (from PSB icon node, not "zx")
+            double height = 0.0;      // source display height (from PSB icon node, not "zy")
             double opacity = 1.0;     // mask 0x400: 0.0-1.0 (from "opa" uint8 0-255)
             double angle = 0.0;       // mask 0x10: rotation degrees
             double scaleX = 1.0;      // mask 0x20: zoom X ("z")
@@ -793,14 +793,9 @@ namespace internal {
                     state.oy = *oy;
             }
 
-            // "zx"/"zy" (source display dimensions) — not clearly mask-gated
-            // in sub_692AB0. Read unconditionally for safety.
-            if(const auto zx = psbDictionaryNumber(content, "zx")) {
-                state.width = *zx;
-            }
-            if(const auto zy = psbDictionaryNumber(content, "zy")) {
-                state.height = *zy;
-            }
+            // NOTE: "zx"/"zy" are NOT display width/height — they are scaleX/scaleY,
+            // read below under mask & 0x60. Confirmed via IDA: sub_692AB0 has no
+            // unconditional zx/zy read for display dimensions.
 
             // mask & 0x400: opa (sub_692AB0 at 0x693440)
             // CRITICAL: only read "opa" when mask bit 0x400 is set.
@@ -855,23 +850,26 @@ namespace internal {
                 }
             }
 
-            // mask & 0x20: z/scaleX, mask & 0x40: zy/scaleY (sub_692AB0 at 0x692FF4)
+            // mask & 0x20: "zx"/scaleX, mask & 0x40: "zy"/scaleY
+            // Aligned to sub_692AB0 at 0x692FF4: field names are UTF-16 "zx"/"zy"
+            // (IDA truncates UTF-16 to first char, showing "z" for "zx")
             if(mask & 0x60) {
                 if(mask & 0x20) {
-                    if(const auto z = psbDictionaryNumber(content, "z"))
-                        state.scaleX = *z;
+                    if(const auto zx = psbDictionaryNumber(content, "zx"))
+                        state.scaleX = *zx;
                 }
                 if(mask & 0x40) {
-                    // In clip context, "zy" is scaleY (not display height)
                     if(const auto zy = psbDictionaryNumber(content, "zy"))
                         state.scaleY = *zy;
                 }
             }
 
-            // mask & 0x80: s/slantX, mask & 0x100: sy/slantY (sub_692AB0 at 0x693048)
+            // mask & 0x80: "sx"/slantX, mask & 0x100: "sy"/slantY
+            // Aligned to sub_692AB0 at 0x693048: field names are UTF-16 "sx"/"sy"
+            // (IDA truncates UTF-16 to first char, showing "s" for "sx")
             if(mask & 0x180) {
                 if(mask & 0x80) {
-                    if(const auto s = psbDictionaryNumber(content, "s"))
+                    if(const auto s = psbDictionaryNumber(content, "sx"))
                         state.slantX = *s;
                 }
                 if(mask & 0x100) {
