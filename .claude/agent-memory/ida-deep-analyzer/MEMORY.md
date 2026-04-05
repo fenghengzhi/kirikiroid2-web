@@ -1,0 +1,2 @@
+- [EmotePlayer architecture](project_emoteplayer_architecture.md) — 3-layer object hierarchy, Player struct layout (1496b), 9-case setVariable dispatch, physics engine in progress()
+- [Player class layout](project_player_class_layout.md) — Complete Player object layout (0x568=1384 bytes), NCB registration at 0x6D69C8, 90 functions renamed, root node field map
