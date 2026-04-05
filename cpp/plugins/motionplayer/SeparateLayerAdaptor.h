@@ -33,7 +33,17 @@ namespace motion {
             return _owner;
         }
 
+        // Aligned to libkrkr2.so SeparateLayerAdaptor_ncb_registerMembers (0x6ABFAC)
+        bool getAbsolute() const { return _absolute; }
+        void setAbsolute(bool v) { _absolute = v; }
+        tTJSVariant getTargetLayer() const { return _targetLayer; }
+        void setTargetLayer(tTJSVariant v) { _targetLayer = v; }
+        void assign() {} // stub
+        void c() {} // "c" method = resetRenderState (stub)
+
     private:
         tTJSVariant _owner;
+        bool _absolute = false;
+        tTJSVariant _targetLayer;
     };
 } // namespace motion

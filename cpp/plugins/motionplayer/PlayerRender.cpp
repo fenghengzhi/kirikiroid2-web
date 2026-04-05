@@ -626,7 +626,7 @@ namespace motion {
         if(!_runtime->visible) {
             _runtime->lastCanvas = detail::makeDictionary({
                 { "visible", false },
-                { "tickCount", _tickCount },
+                { "tickCount", getTickCount() },
             });
             return;
         }
@@ -657,7 +657,7 @@ namespace motion {
             { "slant", _runtime->slant },
             { "zoom", _runtime->zoom },
             { "clearColor", _runtime->clearColor },
-            { "tickCount", _tickCount },
+            { "tickCount", getTickCount() },
             { "frameTickCount", _frameTickCount },
             { "backgroundCount",
               static_cast<tjs_int>(_runtime->backgrounds.size()) },
@@ -678,13 +678,15 @@ namespace motion {
 
     void Player::frameProgress(double dt) {
         // Aligned to libkrkr2.so Player_progress_inner (0x6C106C):
-        // speed is applied internally, not by the caller.
-        const double actualDelta = _speed * dt;
+        // _speed is a bool flag (play/pause). When false, skip progress entirely.
+        if(!_speed) {
+            return;
+        }
+        const double actualDelta = dt;
         _frameLastTime = actualDelta;
         _frameLoopTime += actualDelta;
         _loopTime += actualDelta;
-        _tickCount += actualDelta;
-        _frameTickCount += 1.0;
+        _frameTickCount += actualDelta;
 
         // Camera velocity/friction moved to updateLayers pre-loop (0x6BB360..0x6BB42C)
 

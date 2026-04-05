@@ -140,13 +140,7 @@ namespace motion::detail {
         bool isEmoteMode = false;
     };
 
-    struct EmotePlayerRuntime {
-        std::shared_ptr<MotionSnapshot> snapshot;
-        std::unordered_map<std::string, TimelineState> timelines;
-    };
-
     std::shared_ptr<PlayerRuntime> makePlayerRuntime();
-    std::shared_ptr<EmotePlayerRuntime> makeEmotePlayerRuntime();
 
     std::string narrow(const ttstr &value);
     ttstr widen(const std::string &value);

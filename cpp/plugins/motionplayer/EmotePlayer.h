@@ -1,20 +1,18 @@
 //
 // Created by LiDon on 2025/9/15.
-// Reverse-engineered from libkrkr2.so D3DEmotePlayer API surface
+// Aligned to libkrkr2.so D3DEmotePlayer architecture:
+// D3DEmotePlayerNativeInstance(24b) → EmoteObject(40b) → Player(1496b)
+// EmotePlayer is a thin shell that delegates all animation logic to an owned Player.
 //
 #pragma once
 
-#include <map>
 #include <memory>
 #include <string>
 #include <spdlog/spdlog.h>
 #include "tjs.h"
-#include "ResourceManager.h"
+#include "Player.h"
 
 namespace motion {
-    namespace detail {
-        struct EmotePlayerRuntime;
-    }
 
     enum MaskMode { MaskModeStencil = 0, MaskModeAlpha = 1 };
 
@@ -53,7 +51,7 @@ namespace motion {
         void setBodyScale(double v) { _bodyScale = v; }
         [[nodiscard]] double getBodyScale() const { return _bodyScale; }
 
-        void setVisible(bool v) { _visible = v; }
+        void setVisible(bool v);
         [[nodiscard]] bool getVisible() const { return _visible; }
 
         [[nodiscard]] bool getAnimating() const;
@@ -138,8 +136,17 @@ namespace motion {
         tTJSVariant getOuterForce();
         bool contains(double x, double y);
 
+        // Access to internal Player for delegation from NCB methods
+        Player &getPlayer() { return _player; }
+        const Player &getPlayer() const { return _player; }
+
     private:
-        std::shared_ptr<detail::EmotePlayerRuntime> _runtime;
+        // Aligned to libkrkr2.so: EmoteObject(40b) owns ResourceManager + Player(1496b).
+        // All animation logic delegates to this Player instance.
+        Player _player;
+
+        // EmotePlayer-specific state (not on Player)
+        tTJSVariant _module;
         bool _useD3D = false;
         bool _smoothing = true;
         double _meshDivisionRatio = 1.0;
@@ -153,20 +160,19 @@ namespace motion {
         bool _drawVisible = true;
         double _drawOpacity = 1.0;
         bool _opengl = false;
-        tTJSVariant _module;
-
-        double _rot = 0.0;
-        double _coordX = 0.0;
-        double _coordY = 0.0;
-        double _scale = 1.0;
-        tjs_int _color = 0xFFFFFF;
-        double _outerForceX = 0.0;
-        double _outerForceY = 0.0;
         bool _visible = true;
         bool _playCallback = false;
 
-        std::map<std::string, double> _variables;
-        std::map<std::string, double> _timelineBlendRatios;
+        // Aligned to libkrkr2.so sub_530260: finalScale = baseScale * userScale
+        float _baseScale = 1.0f;   // +40 in binary D3DEmotePlayer wrapper
+        float _userScale = 1.0f;   // +44 in binary
+
+        // Cached values for getScale/getRot/getColor
+        // Binary getters return hardcoded 1.0/0.0/0 but we track for local use
+        double _rot = 0.0;
+        double _coordX = 0.0;
+        double _coordY = 0.0;
+        tjs_int _color = 0xFFFFFF;
     };
 
     // Thin wrapper for top-level NCB registration (avoids ncbind conflict)

@@ -26,8 +26,75 @@ using namespace motion;
 
 NCB_REGISTER_SUBCLASS_DELAY(SourceCache) { NCB_CONSTRUCTOR(()); }
 NCB_REGISTER_SUBCLASS_DELAY(ObjSource) { NCB_CONSTRUCTOR(()); }
+
+// Aligned to libkrkr2.so Motion.Point/Circle/Rect/Quad/LayerGetter (0x690FBC~0x69B350)
+NCB_REGISTER_SUBCLASS_DELAY(Point) {
+    NCB_CONSTRUCTOR(());
+    NCB_PROPERTY_RO(type, getType);
+    NCB_METHOD(contains);
+    NCB_PROPERTY_RO(x, getX);
+    NCB_PROPERTY_RO(y, getY);
+}
+NCB_REGISTER_SUBCLASS_DELAY(Circle) {
+    NCB_CONSTRUCTOR(());
+    NCB_PROPERTY_RO(type, getType);
+    NCB_METHOD(contains);
+    NCB_PROPERTY_RO(x, getX);
+    NCB_PROPERTY_RO(y, getY);
+    NCB_PROPERTY_RO(r, getR);
+}
+NCB_REGISTER_SUBCLASS_DELAY(Rect) {
+    NCB_CONSTRUCTOR(());
+    NCB_PROPERTY_RO(type, getType);
+    NCB_METHOD(contains);
+    NCB_PROPERTY_RO(l, getL);
+    NCB_PROPERTY_RO(t, getT);
+    NCB_PROPERTY_RO(w, getW);
+    NCB_PROPERTY_RO(h, getH);
+}
+NCB_REGISTER_SUBCLASS_DELAY(Quad) {
+    NCB_CONSTRUCTOR(());
+    NCB_PROPERTY_RO(type, getType);
+    NCB_METHOD(contains);
+    NCB_PROPERTY_RO(p, getP);
+}
+NCB_REGISTER_SUBCLASS_DELAY(LayerGetter) {
+    NCB_CONSTRUCTOR(());
+    NCB_PROPERTY_RO(type, getType);
+    NCB_PROPERTY_RO(label, getLabel);
+    NCB_PROPERTY_RO(visible, getVisible);
+    NCB_PROPERTY_RO(branchVisible, getBranchVisible);
+    NCB_PROPERTY_RO(layerVisible, getLayerVisible);
+    NCB_PROPERTY_RO(x, getX);
+    NCB_PROPERTY_RO(y, getY);
+    NCB_PROPERTY_RO(left, getLeft);
+    NCB_PROPERTY_RO(top, getTop);
+    NCB_PROPERTY_RO(flipX, getFlipX);
+    NCB_PROPERTY_RO(flipY, getFlipY);
+    NCB_PROPERTY_RO(zoomX, getZoomX);
+    NCB_PROPERTY_RO(zoomY, getZoomY);
+    NCB_PROPERTY_RO(angleDeg, getAngleDeg);
+    NCB_PROPERTY_RO(angleRad, getAngleRad);
+    NCB_PROPERTY_RO(slantX, getSlantX);
+    NCB_PROPERTY_RO(slantY, getSlantY);
+    NCB_PROPERTY_RO(originX, getOriginX);
+    NCB_PROPERTY_RO(originY, getOriginY);
+    NCB_PROPERTY_RO(opacity, getOpacity);
+    NCB_PROPERTY_RO(mtx, getMtx);
+    NCB_PROPERTY_RO(vtx, getVtx);
+    NCB_PROPERTY_RO(color, getColor);
+    NCB_PROPERTY_RO(bezierPatch, getBezierPatch);
+    NCB_PROPERTY_RO(shape, getShape);
+    NCB_PROPERTY_RO(motion, getMotion);
+    NCB_PROPERTY_RO(particle, getParticle);
+}
+// Aligned to libkrkr2.so SeparateLayerAdaptor_ncb_registerMembers (0x6ABFAC)
 NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {
     Factory(&SeparateLayerAdaptor::factory);
+    NCB_PROPERTY(absolute, getAbsolute, setAbsolute);
+    NCB_PROPERTY(targetLayer, getTargetLayer, setTargetLayer);
+    NCB_METHOD(c);
+    NCB_METHOD(assign);
 }
 NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
     Factory(&D3DAdaptor::factory);
@@ -319,6 +386,12 @@ NCB_REGISTER_CLASS(Motion) {
     NCB_SUBCLASS(D3DAdaptor, D3DAdaptor);
     NCB_SUBCLASS(SourceCache, SourceCache);
     NCB_SUBCLASS(ObjSource, ObjSource);
+    // Aligned to libkrkr2.so Motion_namespace_ncb_register (0x6D9B08)
+    NCB_SUBCLASS(Point, Point);
+    NCB_SUBCLASS(Circle, Circle);
+    NCB_SUBCLASS(Rect, Rect);
+    NCB_SUBCLASS(Quad, Quad);
+    NCB_SUBCLASS(LayerGetter, LayerGetter);
 
     // Layer types
     Variant(TJS_W("LayerTypeObj"), (tjs_int)LayerTypeObj);

@@ -588,10 +588,6 @@ namespace motion::detail {
         return std::make_shared<PlayerRuntime>();
     }
 
-    std::shared_ptr<EmotePlayerRuntime> makeEmotePlayerRuntime() {
-        return std::make_shared<EmotePlayerRuntime>();
-    }
-
     std::string narrow(const ttstr &value) { return value.AsStdString(); }
 
     ttstr widen(const std::string &value) { return ttstr{ value }; }

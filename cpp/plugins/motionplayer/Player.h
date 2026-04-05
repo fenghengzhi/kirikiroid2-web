@@ -21,6 +21,7 @@ namespace motion {
 namespace motion {
     namespace detail {
         struct MotionClip;
+        struct MotionSnapshot;
         struct PlayerRuntime;
     }
 
@@ -49,11 +50,12 @@ namespace motion {
         PlayFlagStealth = 16
     };
 
+    // Aligned to libkrkr2.so Motion_namespace_ncb_register (0x6D9B08)
     enum TransformOrder {
         TransformOrderFlip = 0,
-        TransformOrderSlant = 1,
+        TransformOrderAngle = 1,
         TransformOrderZoom = 2,
-        TransformOrderAngle = 3
+        TransformOrderSlant = 3
     };
 
     enum CoordinateType {
@@ -82,11 +84,13 @@ namespace motion {
         void setMotionKey(ttstr v) { setMotion(v); }
         ttstr getMotionKey() const { return _motionKey; }
 
-        void setOutline(bool v) { _outline = v; }
-        bool getOutline() const { return _outline; }
+        // Aligned to libkrkr2.so +1032: ttstr, not bool
+        void setOutline(ttstr v) { _outline = v; }
+        ttstr getOutline() const { return _outline; }
 
-        void setPriorDraw(int v) { _priorDraw = v; }
-        int getPriorDraw() const { return _priorDraw; }
+        // Aligned to libkrkr2.so +1160: double, not int
+        void setPriorDraw(double v) { _priorDraw = v; }
+        double getPriorDraw() const { return _priorDraw; }
 
         void setFrameLastTime(double v) { _frameLastTime = v; }
         double getFrameLastTime() const { return _frameLastTime; }
@@ -133,17 +137,23 @@ namespace motion {
         void setStereovisionActive(bool v) { _stereovisionActive = v; }
         bool getStereovisionActive() const { return _stereovisionActive; }
 
-        void setTickCount(double v) { _tickCount = v; }
-        double getTickCount() const { return _tickCount; }
+        // Aligned to libkrkr2.so: tickCount uses ms↔frame conversion (60fps internal)
+        // Getter: frameTickCount * 1000/60; Setter: value * 60/1000
+        void setTickCount(double v) { _frameTickCount = v * 60.0 / 1000.0; }
+        double getTickCount() const {
+            return _frameTickCount > 0 ? _frameTickCount * 1000.0 / 60.0 : 0.0;
+        }
 
-        void setSpeed(double v) { _speed = v; }
-        double getSpeed() const { return _speed; }
+        // Aligned to libkrkr2.so +1093: bool flag (defaultSyncActive), not double
+        void setSpeed(bool v) { _speed = v; }
+        bool getSpeed() const { return _speed; }
 
         void setFrameTickCount(double v) { _frameTickCount = v; }
         double getFrameTickCount() const { return _frameTickCount; }
 
-        void setColorWeight(double v) { _colorWeight = v; }
-        double getColorWeight() const { return _colorWeight; }
+        // Aligned to libkrkr2.so +1097: bool flag, not double
+        void setColorWeight(bool v) { _colorWeight = v; }
+        bool getColorWeight() const { return _colorWeight; }
 
         void setIndependentLayerInherit(bool v) { _independentLayerInherit = v; }
         bool getIndependentLayerInherit() const { return _independentLayerInherit; }
@@ -219,8 +229,9 @@ namespace motion {
             return TJS_S_OK;
         }
 
-        void setMeshline(bool v) { _meshline = v; }
-        bool getMeshline() const { return _meshline; }
+        // Aligned to libkrkr2.so +1052: ttstr, not bool
+        void setMeshline(ttstr v) { _meshline = v; }
+        ttstr getMeshline() const { return _meshline; }
 
         bool getBusy() const { return _busy; }
 
@@ -240,6 +251,11 @@ namespace motion {
         void debugPrint();
 
         double random();
+
+        // Load from a pre-loaded snapshot (used by EmotePlayer.setModule)
+        // Aligned to libkrkr2.so: EmoteObject_init (sub_67DBAC) sets Player's
+        // activeMotion directly from loaded PSB data without file I/O.
+        void loadFromSnapshot(std::shared_ptr<detail::MotionSnapshot> snapshot);
 
         // Resource management
         void unload(ttstr name);
@@ -353,6 +369,10 @@ namespace motion {
         tTJSVariant motionList();
         void emoteEdit(tTJSVariant args);
 
+        // Public accessor for EmotePlayer delegation
+        double getActiveMotionWidth() const;
+        double getActiveMotionHeight() const;
+
     private:
         bool ensureMotionLoaded();
         void syncVariableKeysFromActiveMotion();
@@ -387,8 +407,8 @@ namespace motion {
         tTJSVariant _metadata;
         ttstr _chara;
         ttstr _motionKey;
-        bool _outline = false;
-        int _priorDraw = 0;  // raw int, not bool — sub_6BE0C0 checks (v12 & 5)
+        ttstr _outline;  // Aligned to libkrkr2.so +1032: ttstr
+        double _priorDraw = 0.0;  // Aligned to libkrkr2.so +1160: double
         double _frameLastTime = 0.0;
         double _frameLoopTime = 0.0;
         double _clampedEvalTime = 0.0; // player+456: min(_frameLoopTime, totalFrames)
@@ -409,10 +429,9 @@ namespace motion {
         double _cameraAngle = 0.0;
         double _cameraPosX = 0, _cameraPosY = 0, _cameraPosZ = 0;
         double _cameraTargetX = 0, _cameraTargetY = 0, _cameraTargetZ = 0;
-        double _tickCount = 0.0;
-        double _speed = 1.0;
+        bool _speed = true;           // Aligned to libkrkr2.so +1093: bool flag
         double _frameTickCount = 0.0;
-        double _colorWeight = 1.0;
+        bool _colorWeight = true;     // Aligned to libkrkr2.so +1097: bool flag
         bool _independentLayerInherit = false;
         double _zFactor = 1.0;
         tTJSVariant _cameraTarget;
@@ -431,7 +450,7 @@ namespace motion {
         tTJSVariant _tags;
         tTJSVariant _project;
         inline static bool _useD3D;
-        bool _meshline = false;
+        ttstr _meshline;  // Aligned to libkrkr2.so +1052: ttstr
         bool _busy = false;
 
         // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):

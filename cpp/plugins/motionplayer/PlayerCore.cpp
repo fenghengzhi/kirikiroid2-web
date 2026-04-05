@@ -24,6 +24,31 @@ namespace motion {
 
     Player::~Player() = default;
 
+    // Aligned to libkrkr2.so EmoteObject_init (sub_67DBAC):
+    // Sets activeMotion directly from a pre-loaded snapshot, bypassing file I/O.
+    // Used by EmotePlayer.setModule() to bridge loaded PSB data into the Player pipeline.
+    void Player::loadFromSnapshot(
+        std::shared_ptr<detail::MotionSnapshot> snapshot) {
+        _runtime->activeMotion.reset();
+        _runtime->timelines.clear();
+        _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        _variableKeys.Clear();
+        _variableValues.clear();
+
+        if(snapshot) {
+            activateMotion(*_runtime, snapshot);
+            syncVariableKeysFromActiveMotion();
+        }
+    }
+
+    double Player::getActiveMotionWidth() const {
+        return _runtime->activeMotion ? _runtime->activeMotion->width : 0.0;
+    }
+
+    double Player::getActiveMotionHeight() const {
+        return _runtime->activeMotion ? _runtime->activeMotion->height : 0.0;
+    }
+
     void Player::setMotion(ttstr v) {
         if(_motionKey == v) {
             return;
@@ -353,9 +378,9 @@ namespace motion {
         return detail::makeDictionary({
             { "chara", _chara },
             { "motion", _motionKey },
-            { "tickcount", _tickCount },
+            { "tickcount", getTickCount() },
             { "speed", _speed },
-            { "outline", static_cast<tjs_int>(_outline ? 1 : 0) },
+            { "outline", tTJSVariant(_outline) },
             { "variables", detail::makeDictionary(variables) },
             { "timelines", getPlayingTimelineInfoList() },
         });
@@ -380,7 +405,7 @@ namespace motion {
 
         if(getObjectProperty(data, TJS_W("tickcount"), value) &&
            value.Type() != tvtVoid) {
-            _tickCount = value.AsReal();
+            setTickCount(value.AsReal());
         }
 
         if(getObjectProperty(data, TJS_W("speed"), value) &&
@@ -390,7 +415,7 @@ namespace motion {
 
         if(getObjectProperty(data, TJS_W("outline"), value) &&
            value.Type() != tvtVoid) {
-            _outline = value.AsInteger() != 0;
+            _outline = ttstr(value);
         }
 
         if(getObjectProperty(data, TJS_W("variables"), value) &&
