@@ -14,7 +14,7 @@ namespace motion {
         // Aligned to sub_6A88CC (0x6A8988): create TJS Math.RandomGenerator
         // and store at player+992. Child Players inherit via sub_6CED30.
         try {
-            TVPExecuteScript(
+            TVPExecuteExpression(
                 TJS_W("new Math.RandomGenerator()"),
                 &_tjsRandomGenerator);
         } catch (...) {

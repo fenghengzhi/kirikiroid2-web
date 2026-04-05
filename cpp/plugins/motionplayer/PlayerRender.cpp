@@ -302,8 +302,9 @@ namespace motion {
                     // Collect visible nodes into render list.
                     // Aligned to libkrkr2.so sub_6C2334 render tree building.
                     std::vector<FlatRenderNode> renderNodes;
+                    const bool emo = _runtime->isEmoteMode;
                     buildRenderListFromNodes(_runtime->nodes, globalAffine,
-                                            renderNodes);
+                                            renderNodes, emo);
 
                     // Collect child Player render output for nodeType=3 (Motion).
                     // Aligned to sub_6BE0C0: child render merges into parent tree.
@@ -321,7 +322,7 @@ namespace motion {
                             globalAffine[1]*acc.posX + globalAffine[3]*acc.posY + globalAffine[5]
                         };
                         buildRenderListFromNodes(childRuntime->nodes,
-                                                childGlobal, renderNodes);
+                                                childGlobal, renderNodes, emo);
                     }
 
                     // Collect particle child Player render output (nodeType=4).
@@ -340,7 +341,7 @@ namespace motion {
                                 globalAffine[0]*pacc.posX + globalAffine[2]*pacc.posY + globalAffine[4],
                                 globalAffine[1]*pacc.posX + globalAffine[3]*pacc.posY + globalAffine[5]
                             };
-                            buildRenderListFromNodes(pNodes, pGlobal, renderNodes);
+                            buildRenderListFromNodes(pNodes, pGlobal, renderNodes, emo);
                         }
                     }
 

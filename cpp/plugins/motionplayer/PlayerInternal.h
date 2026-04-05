@@ -1830,14 +1830,22 @@ namespace internal {
         inline void buildRenderListFromNodes(
             const std::vector<detail::MotionNode> &nodes,
             const Affine2x3 &globalAffine,
-            std::vector<FlatRenderNode> &out) {
+            std::vector<FlatRenderNode> &out,
+            bool isEmoteMode = false) {
+            // Aligned to libkrkr2.so sub_6C2334 (0x6C2334):
+            // Filter conditions in order:
+            //   1. !accumulated.active → skip (node+1505)
+            //   2. nodeType 3/4 handled separately (not here)
+            //   3. bitmask check: (1 << nodeType) & 5185 for !isEmoteMode
+            //      5185 = 0x1441 → nodeType 0, 6, 10, 12
+            //   4. hasSource (node+200) → must be true
+            const int bitmask = isEmoteMode ? 5193 : 5185;
             for (const auto &node : nodes) {
-                if (!node.drawFlag) continue;
-                if (node.nodeType != 0) continue;  // only obj nodes render
+                if (!node.accumulated.active) continue;
+                if (!node.forceVisible) {
+                    if (((1 << node.nodeType) & bitmask) == 0) continue;
+                }
                 if (!node.hasSource) continue;
-                if (node.interpolatedCache.src.empty()) continue;
-                if (node.interpolatedCache.src == "layout") continue;
-                if (isMotionCrossReference(node.interpolatedCache.src)) continue;
 
                 // Compose globalAffine with node's accumulated transform:
                 // result = globalAffine × [node.m11, node.m12; node.m21, node.m22]
