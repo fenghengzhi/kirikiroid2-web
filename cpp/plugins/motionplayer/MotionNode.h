@@ -17,6 +17,7 @@
 //
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -62,8 +63,15 @@ namespace motion::detail {
         float meshInvOffX = 0, meshInvOffY = 0;  // node+2128, node+2132
         // Computed mesh flags (sub_6BC4F0 at 0x6BC6E4..0x6BC818)
         bool hasMeshData = false;        // node+1962: has active mesh data
+        bool stencilCompositeMaskReferenced = false; // node+1961: post-build mask-layer reference
         bool meshCombineEnabled = false; // node+1963: mesh combines with children
-        int stencilType = 0;          // "stencilType" from PSB
+        // libkrkr2.so seeds node+52 from PSB "stencilType" in Player_initNodeFields
+        // (0x6B3C78), but later visibility/render-tree stages consume the same slot as
+        // a per-frame non-zero update mask while still preserving deflector bit 4.
+        // Keep both the raw PSB seed and the runtime-composed value explicitly.
+        int stencilTypeBase = 0;      // raw PSB "stencilType"
+        int stencilType = 0;          // runtime node+52-compatible mask
+        int currentFrameType = 0;     // current frameList type (0/2/3), for trace
 
         // Mesh control points (node+2024..2032 in libkrkr2.so).
         // For meshType=1: 16 × 2 floats (Bezier patch 4×4 control grid) = 32 floats.
@@ -121,7 +129,9 @@ namespace motion::detail {
             double slantX = 0.0, slantY = 0.0;
             bool flipX = false, flipY = false;
             int blendMode = 16;
-            int colorR = 0x80, colorG = 0x80, colorB = 0x80, colorA = 0xFF;
+            std::array<std::uint32_t, 4> packedColors{
+                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
+            };
 
             // Easing curves (slot+168, +208, +228, +248, +268, +296)
             CurveData ccc, acc, zcc, scc, occ, cc;
@@ -230,6 +240,9 @@ namespace motion::detail {
         // Vertex output (sub_6BC4F0)
         float vertices[8] = {};        // node+1856..1884: 4 corners x 2 floats
 
+        // Bounding box output (Player_calcBounds, 0x6C3D04)
+        float bounds[4] = { 1.0f, 1.0f, -1.0f, -1.0f }; // node+1888..1900
+
         // Origin offsets (from PSB source icon, sub_6BC4F0)
         double originX = 0.0;          // node+248
         double originY = 0.0;          // node+256
@@ -323,10 +336,9 @@ namespace motion::detail {
             double ox = 0.0;
             double oy = 0.0;
             int blendMode = 16;
-            int colorR = 0x80;
-            int colorG = 0x80;
-            int colorB = 0x80;
-            int colorA = 0xFF;
+            std::array<std::uint32_t, 4> packedColors{
+                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
+            };
             bool hasTransformOrder = false;
             int transformOrder[4] = {0, 1, 2, 3};
             std::string action;

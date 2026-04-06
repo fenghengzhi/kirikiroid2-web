@@ -1,41 +1,42 @@
 ---
 name: playwright-cli
-description: 自动化浏览器交互，用于 Web 测试、表单填写、截图和数据提取。当用户需要浏览网页、与页面交互、填写表单、截图、测试 Web 应用或从网页提取信息时使用。
-allowed-tools: Bash(playwright-cli:*)
+description: Automate browser interactions, test web pages and work with Playwright tests.
+allowed-tools: Bash(playwright-cli:*) Bash(npx:*) Bash(npm:*)
 ---
 
-# 使用 playwright-cli 进行浏览器自动化
+# Browser Automation with playwright-cli
 
-## 快速入门
+## Quick start
 
 ```bash
-# 打开新浏览器
+# open new browser
 playwright-cli open
-# 导航到页面
+# navigate to a page
 playwright-cli goto https://playwright.dev
-# 使用快照中的 ref 与页面交互
+# interact with the page using refs from the snapshot
 playwright-cli click e15
 playwright-cli type "page.click"
 playwright-cli press Enter
-# 截图（较少使用，快照更常用）
+# take a screenshot (rarely used, as snapshot is more common)
 playwright-cli screenshot
-# 关闭浏览器
+# close the browser
 playwright-cli close
 ```
 
-## 命令
+## Commands
 
-### 核心
+### Core
 
 ```bash
 playwright-cli open
-# 打开并直接导航
+# open and navigate right away
 playwright-cli open https://example.com/
 playwright-cli goto https://playwright.dev
 playwright-cli type "search query"
 playwright-cli click e3
 playwright-cli dblclick e7
-playwright-cli fill e5 "user@example.com"
+# --submit presses Enter after filling the element
+playwright-cli fill e5 "user@example.com"  --submit
 playwright-cli drag e2 e8
 playwright-cli hover e4
 playwright-cli select e9 "option-value"
@@ -43,9 +44,11 @@ playwright-cli upload ./document.pdf
 playwright-cli check e12
 playwright-cli uncheck e12
 playwright-cli snapshot
-playwright-cli snapshot --filename=after-click.yaml
 playwright-cli eval "document.title"
 playwright-cli eval "el => el.textContent" e5
+# get element id, class, or any attribute not visible in the snapshot
+playwright-cli eval "el => el.id" e5
+playwright-cli eval "el => el.getAttribute('data-testid')" e5
 playwright-cli dialog-accept
 playwright-cli dialog-accept "confirmation text"
 playwright-cli dialog-dismiss
@@ -53,7 +56,7 @@ playwright-cli resize 1920 1080
 playwright-cli close
 ```
 
-### 导航
+### Navigation
 
 ```bash
 playwright-cli go-back
@@ -61,7 +64,7 @@ playwright-cli go-forward
 playwright-cli reload
 ```
 
-### 键盘
+### Keyboard
 
 ```bash
 playwright-cli press Enter
@@ -70,7 +73,7 @@ playwright-cli keydown Shift
 playwright-cli keyup Shift
 ```
 
-### 鼠标
+### Mouse
 
 ```bash
 playwright-cli mousemove 150 300
@@ -81,7 +84,7 @@ playwright-cli mouseup right
 playwright-cli mousewheel 0 100
 ```
 
-### 保存为
+### Save as
 
 ```bash
 playwright-cli screenshot
@@ -90,7 +93,7 @@ playwright-cli screenshot --filename=page.png
 playwright-cli pdf --filename=page.pdf
 ```
 
-### 标签页
+### Tabs
 
 ```bash
 playwright-cli tab-list
@@ -101,7 +104,7 @@ playwright-cli tab-close 2
 playwright-cli tab-select 0
 ```
 
-### 存储
+### Storage
 
 ```bash
 playwright-cli state-save
@@ -132,7 +135,7 @@ playwright-cli sessionstorage-delete step
 playwright-cli sessionstorage-clear
 ```
 
-### 网络
+### Network
 
 ```bash
 playwright-cli route "**/*.jpg" --status=404
@@ -142,88 +145,149 @@ playwright-cli unroute "**/*.jpg"
 playwright-cli unroute
 ```
 
-### 开发者工具
+### DevTools
 
 ```bash
 playwright-cli console
 playwright-cli console warning
 playwright-cli network
 playwright-cli run-code "async page => await page.context().grantPermissions(['geolocation'])"
+playwright-cli run-code --filename=script.js
 playwright-cli tracing-start
 playwright-cli tracing-stop
-playwright-cli video-start
-playwright-cli video-stop video.webm
+playwright-cli video-start video.webm
+playwright-cli video-chapter "Chapter Title" --description="Details" --duration=2000
+playwright-cli video-stop
 ```
 
-## 打开参数
+## Raw output
+
+The global `--raw` option strips page status, generated code, and snapshot sections from the output, returning only the result value. Use it to pipe command output into other tools. Commands that don't produce output return nothing.
+
 ```bash
-# 创建会话时使用指定浏览器
+playwright-cli --raw eval "JSON.stringify(performance.timing)" | jq '.loadEventEnd - .navigationStart'
+playwright-cli --raw eval "JSON.stringify([...document.querySelectorAll('a')].map(a => a.href))" > links.json
+playwright-cli --raw snapshot > before.yml
+playwright-cli click e5
+playwright-cli --raw snapshot > after.yml
+diff before.yml after.yml
+TOKEN=$(playwright-cli --raw cookie-get session_id)
+playwright-cli --raw localstorage-get theme
+```
+
+## Open parameters
+```bash
+# Use specific browser when creating session
 playwright-cli open --browser=chrome
 playwright-cli open --browser=firefox
 playwright-cli open --browser=webkit
 playwright-cli open --browser=msedge
-# 通过扩展连接浏览器
-playwright-cli open --extension
 
-# 使用持久化配置文件（默认配置文件在内存中）
+# Use persistent profile (by default profile is in-memory)
 playwright-cli open --persistent
-# 使用自定义目录的持久化配置文件
+# Use persistent profile with custom directory
 playwright-cli open --profile=/path/to/profile
 
-# 使用配置文件启动
+# Connect to browser via extension
+playwright-cli attach --extension
+
+# Start with config file
 playwright-cli open --config=my-config.json
 
-# 关闭浏览器
+# Close the browser
 playwright-cli close
-# 删除默认会话的用户数据
+# Delete user data for the default session
 playwright-cli delete-data
 ```
 
-## 快照
+## Snapshots
 
-每条命令执行后，playwright-cli 会提供当前浏览器状态的快照。
+After each command, playwright-cli provides a snapshot of the current browser state.
 
 ```bash
 > playwright-cli goto https://example.com
-### 页面
-- 页面 URL: https://example.com/
-- 页面标题: Example Domain
-### 快照
+### Page
+- Page URL: https://example.com/
+- Page Title: Example Domain
+### Snapshot
 [Snapshot](.playwright-cli/page-2026-02-14T19-22-42-679Z.yml)
 ```
 
-也可以使用 `playwright-cli snapshot` 命令按需获取快照。
-
-如果未提供 `--filename`，会使用时间戳创建新快照文件。默认使用自动命名，当快照是工作流结果的一部分时使用 `--filename=`。
-
-## 浏览器会话
+You can also take a snapshot on demand using `playwright-cli snapshot` command. All the options below can be combined as needed.
 
 ```bash
-# 创建名为 "mysession" 的新浏览器会话，使用持久化配置
+# default - save to a file with timestamp-based name
+playwright-cli snapshot
+
+# save to file, use when snapshot is a part of the workflow result
+playwright-cli snapshot --filename=after-click.yaml
+
+# snapshot an element instead of the whole page
+playwright-cli snapshot "#main"
+
+# limit snapshot depth for efficiency, take a partial snapshot afterwards
+playwright-cli snapshot --depth=4
+playwright-cli snapshot e34
+```
+
+## Targeting elements
+
+By default, use refs from the snapshot to interact with page elements.
+
+```bash
+# get snapshot with refs
+playwright-cli snapshot
+
+# interact using a ref
+playwright-cli click e15
+```
+
+You can also use css selectors or Playwright locators.
+
+```bash
+# css selector
+playwright-cli click "#main > button.submit"
+
+# role locator
+playwright-cli click "getByRole('button', { name: 'Submit' })"
+
+# test id
+playwright-cli click "getByTestId('submit-button')"
+```
+
+## Browser Sessions
+
+```bash
+# create new browser session named "mysession" with persistent profile
 playwright-cli -s=mysession open example.com --persistent
-# 手动指定配置文件目录（仅在明确要求时使用）
+# same with manually specified profile directory (use when requested explicitly)
 playwright-cli -s=mysession open example.com --profile=/path/to/profile
 playwright-cli -s=mysession click e6
-playwright-cli -s=mysession close  # 停止命名浏览器
-playwright-cli -s=mysession delete-data  # 删除持久化会话的用户数据
+playwright-cli -s=mysession close  # stop a named browser
+playwright-cli -s=mysession delete-data  # delete user data for persistent session
 
 playwright-cli list
-# 关闭所有浏览器
+# Close all browsers
 playwright-cli close-all
-# 强制终止所有浏览器进程
+# Forcefully kill all browser processes
 playwright-cli kill-all
 ```
 
-## 本地安装
+## Installation
 
-某些情况下用户可能需要在本地安装 playwright-cli。如果运行全局 `playwright-cli` 二进制文件失败，使用 `npx playwright-cli` 运行命令。例如：
+If global `playwright-cli` command is not available, try a local version via `npx playwright-cli`:
 
 ```bash
-npx playwright-cli open https://example.com
-npx playwright-cli click e1
+npx --no-install playwright-cli --version
 ```
 
-## 示例：表单提交
+When local version is available, use `npx playwright-cli` in all commands. Otherwise, install `playwright-cli` as a global command:
+
+```bash
+npm install -g @playwright/cli@latest
+```
+
+## Example: Form submission
 
 ```bash
 playwright-cli open https://example.com/form
@@ -236,7 +300,7 @@ playwright-cli snapshot
 playwright-cli close
 ```
 
-## 示例：多标签页工作流
+## Example: Multi-tab workflow
 
 ```bash
 playwright-cli open https://example.com
@@ -247,7 +311,7 @@ playwright-cli snapshot
 playwright-cli close
 ```
 
-## 示例：使用开发者工具调试
+## Example: Debugging with DevTools
 
 ```bash
 playwright-cli open https://example.com
@@ -267,12 +331,14 @@ playwright-cli tracing-stop
 playwright-cli close
 ```
 
-## 特定任务
+## Specific tasks
 
-* **请求模拟** [references/request-mocking.md](references/request-mocking.md)
-* **运行 Playwright 代码** [references/running-code.md](references/running-code.md)
-* **浏览器会话管理** [references/session-management.md](references/session-management.md)
-* **存储状态（cookies、localStorage）** [references/storage-state.md](references/storage-state.md)
-* **测试生成** [references/test-generation.md](references/test-generation.md)
-* **追踪** [references/tracing.md](references/tracing.md)
-* **视频录制** [references/video-recording.md](references/video-recording.md)
+* **Running and Debugging Playwright tests** [references/playwright-tests.md](references/playwright-tests.md)
+* **Request mocking** [references/request-mocking.md](references/request-mocking.md)
+* **Running Playwright code** [references/running-code.md](references/running-code.md)
+* **Browser session management** [references/session-management.md](references/session-management.md)
+* **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)
+* **Test generation** [references/test-generation.md](references/test-generation.md)
+* **Tracing** [references/tracing.md](references/tracing.md)
+* **Video recording** [references/video-recording.md](references/video-recording.md)
+* **Inspecting element attributes** [references/element-attributes.md](references/element-attributes.md)

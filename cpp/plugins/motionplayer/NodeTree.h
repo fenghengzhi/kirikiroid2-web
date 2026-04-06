@@ -15,7 +15,8 @@ namespace motion::detail {
 
     // Walk the PSB layer tree for the given clip (or root layers if clipLabel
     // is empty/not found) and produce a flat vector of MotionNodes.
-    // Root node is at index 0. Each node's parentIndex points to its parent.
+    // Index 0 is a synthetic root node; each real PSB layer points to its
+    // parent node index, with top-level layers using parentIndex=0.
     std::vector<MotionNode> buildNodeTree(
         const MotionSnapshot &snapshot,
         const std::string &clipLabel);

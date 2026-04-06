@@ -4,11 +4,15 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+#include <spdlog/fmt/fmt.h>
 
 #include "tjs.h"
 #include "psbfile/PSBFile.h"
@@ -89,6 +93,11 @@ namespace motion::detail {
         std::unordered_map<std::string, bool> disabledSelectorTargets;
         tTJSVariant lastCanvas;
         tTJSVariant lastViewParam;
+        // Aligned to libkrkr2.so player+696: internal render layer consumed by
+        // sub_6CE7D8 / sub_6CE938 style post-draw update.
+        tTJSVariant internalRenderLayer;
+        // Reusable work layer for sub_6C4E28-style per-item local clipping.
+        tTJSVariant scratchWorkLayer;
         std::array<double, 6> drawAffineMatrix{ 1.0, 0.0, 0.0,
                                                 1.0, 0.0, 0.0 };
         tjs_int nextLayerId = 1;
@@ -110,19 +119,56 @@ namespace motion::detail {
         // Populated after buildNodeTree, queried by sub_6F2228 equivalent.
         std::map<std::string, int> nodeLabelMap;
 
-        // Render entry list for cross-Player merge during updateLayers.
-        // Aligned to libkrkr2.so player+936/944: vector of 44-byte entries.
-        // Each entry: int nodeIndex + tTJSVariant srcRef + tTJSVariant renderData.
-        // Populated by sub_6C2334 (draw phase), merged from child→parent by
-        // sub_6F363C during sub_6BE0C0/sub_6C17A4 (updateLayers phase3).
-        // Render entry list for cross-Player merge during updateLayers.
-        // Aligned to libkrkr2.so player+936/944: vector of 44-byte entries.
-        struct RenderEntry {
-            int nodeIndex = 0;        // offset 0: node reference
-            tTJSVariant srcRef;       // offset 4: source image variant
-            tTJSVariant renderData;   // offset 24: render parameters variant
+        struct PreparedRenderItem {
+            int nodeIndex = 0;
+            tTJSVariant srcRef;
+            std::string sourceKey;
+            bool skipFlag0 = false;
+            bool skipFlag1 = false;
+            bool clipFlag = false;
+            bool drawFlag = false;
+            double sortKey = 0.0;
+            int blendMode = 16;
+            std::array<float, 8> corners{};
+            std::array<std::uint32_t, 4> packedColors{
+                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
+            };
+            std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f};
+            std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f};
+            bool hasViewport = false;
+            int opacity = 255;
+            int updateCount = 0;
+            int visibleAncestorIndex = -1;
+            int meshDivX = 0;
+            int meshDivY = 0;
+            int meshType = 0;
+            std::vector<float> meshPoints;
+            int layerId = 0;
         };
-        std::vector<RenderEntry> renderEntries;  // player+936/944
+        struct RenderCommand {
+            int nodeIndex = 0;
+            tTJSVariant srcRef;
+            std::string sourceKey;
+            int blendMode = 16;
+            int opacity = 255;
+            std::array<std::uint32_t, 4> packedColors{
+                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
+            };
+            int visibleAncestorIndex = -1;
+            bool clearEnabled = false;
+            std::array<int, 4> clipRect{0, 0, 0, 0};
+            std::array<int, 4> dirtyRect{0, 0, 0, 0};
+            std::array<float, 8> worldCorners{};
+            std::array<float, 8> localCorners{};
+            std::vector<float> worldMeshPoints;
+            std::vector<float> localMeshPoints;
+            int meshDivX = 0;
+            int meshDivY = 0;
+            int meshType = 0;
+            int layerId = 0;
+        };
+        std::vector<PreparedRenderItem> preparedRenderItems;  // player+936/944
+        std::vector<RenderCommand> renderCommands;
 
         // Per-node evaluation time array.
         // Aligned to libkrkr2.so player+384: 56-byte-per-node entries.
@@ -170,6 +216,42 @@ namespace motion::detail {
     void stepTimelines(std::unordered_map<std::string, TimelineState> &states,
                        double dt,
                        std::vector<MotionEvent> *events = nullptr);
+
+    bool logoChainTraceEnabled();
+    bool logoChainTraceEnabledForPath(const std::string &motionPath);
+    bool logoChainTraceEnabled(const std::shared_ptr<MotionSnapshot> &snapshot);
+    void resetLogoChainTraceSession(const std::string &motionPath);
+    void logoChainTraceLog(const std::string &motionPath,
+                           const char *stage,
+                           const char *func,
+                           double frameTime,
+                           const std::string &message);
+    void logoChainTraceCheck(const std::string &motionPath,
+                             const char *stage,
+                             const char *func,
+                             double frameTime,
+                             const std::string &expected,
+                             const std::string &actual,
+                             bool ok,
+                             const std::string &likelyRootCause = {});
+    void logoChainTraceSummary(const std::string &motionPath,
+                               const char *func,
+                               double frameTime,
+                               const std::string &note = {});
+
+    template <typename... Args>
+    inline void logoChainTraceLogf(const std::string &motionPath,
+                                   const char *stage,
+                                   const char *func,
+                                   double frameTime,
+                                   fmt::format_string<Args...> format,
+                                   Args &&...args) {
+        if(!logoChainTraceEnabledForPath(motionPath)) {
+            return;
+        }
+        logoChainTraceLog(motionPath, stage, func, frameTime,
+                          fmt::format(format, std::forward<Args>(args)...));
+    }
 
     // Scan PSB layer tree for action/sync events between prevTime and newTime.
     // Aligned to libkrkr2.so: updateLayers queues events during tree evaluation.

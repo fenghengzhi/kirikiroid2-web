@@ -1,0 +1,6 @@
+[mcp_servers.ida-mcp-pro]
+url = "http://127.0.0.1:13337/mcp"
+startup_timeout_sec = 20
+tool_timeout_sec = 45
+enabled = true
+required = true

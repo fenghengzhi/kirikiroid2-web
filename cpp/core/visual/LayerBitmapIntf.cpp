@@ -23,8 +23,37 @@
 #include "gl/ResampleImage.h"
 #include "RenderManager.h"
 #include <assert.h>
+#include <spdlog/spdlog.h>
+
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 
 // #define TVP_FORCE_BILINEAR
+
+namespace {
+bool lowLevelLogoTraceEnabled() {
+#ifdef EMSCRIPTEN
+    return EM_ASM_INT({
+               try {
+                   if(typeof window !== 'undefined' &&
+                      window.__KRKR_TRACE_LOGO_CHAIN__) {
+                       return 1;
+                   }
+                   const params = new URLSearchParams(window.location.search);
+                   const traceParam = params.get('trace') || "";
+                   return params.has('traceLogoChain') ||
+                       traceParam === 'logo' || traceParam === 'logo-chain' ||
+                       traceParam === '1';
+               } catch (e) {
+                   return 0;
+               }
+           }) != 0;
+#else
+    return false;
+#endif
+}
+} // namespace
 
 iTVPRenderManager *TVPGetSoftwareRenderManager();
 
@@ -4011,6 +4040,29 @@ bool iTVPBaseBitmap::AffineBlt(tTVPRect destrect, const iTVPBaseBitmap *ref,
         { (double)refrect.left, (double)refrect.bottom },
         { (double)refrect.right, (double)refrect.bottom },
     };
+    if(lowLevelLogoTraceEnabled()) {
+        if(auto logger = spdlog::get("core")) {
+            logger->warn(
+                "WCHAIN stage=visual.affineBlt.submit func=0x6C7440/0x6DE738 "
+                "destRect=[{},{},{},{}] refRect=[{},{},{},{}] dstSize={}x{} srcSize={}x{} "
+                "points=[({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f})] "
+                "triDst=[({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f})] "
+                "triSrc=[({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f})] "
+                "method={} opacity={} hda={} stretchType={} clear={} clearColor=0x{:08x}",
+                destrect.left, destrect.top, destrect.right, destrect.bottom,
+                refrect.left, refrect.top, refrect.right, refrect.bottom,
+                GetWidth(), GetHeight(), ref->GetWidth(), ref->GetHeight(),
+                points_in[0].x, points_in[0].y, points_in[1].x, points_in[1].y,
+                points_in[2].x, points_in[2].y, dstpt[0].x, dstpt[0].y,
+                dstpt[1].x, dstpt[1].y, dstpt[2].x, dstpt[2].y, dstpt[3].x,
+                dstpt[3].y, dstpt[4].x, dstpt[4].y, dstpt[5].x, dstpt[5].y,
+                refpt[0].x, refpt[0].y, refpt[1].x, refpt[1].y, refpt[2].x,
+                refpt[2].y, refpt[3].x, refpt[3].y, refpt[4].x, refpt[4].y,
+                refpt[5].x, refpt[5].y, static_cast<int>(method), opa,
+                hda ? 1 : 0, static_cast<int>(mode & stTypeMask),
+                clear ? 1 : 0, clearcolor);
+        }
+    }
 
     auto type = (tTVPBBStretchType)(mode & stTypeMask);
     static int StretchTypeId =
@@ -4028,6 +4080,15 @@ bool iTVPBaseBitmap::AffineBlt(tTVPRect destrect, const iTVPBaseBitmap *ref,
         reftex, destrect, dstpt, tRenderTexQuadArray(src_tex));
     if(updaterect)
         *updaterect = destrect;
+    if(lowLevelLogoTraceEnabled() && updaterect) {
+        if(auto logger = spdlog::get("core")) {
+            logger->warn(
+                "WCHAIN stage=visual.affineBlt.done func=0x6C7440/0x6DE738 "
+                "updateRect=[{},{},{},{}]",
+                updaterect->left, updaterect->top, updaterect->right,
+                updaterect->bottom);
+        }
+    }
     return true;
 #if 0
 	if (0 == InternalAffineBlt(destrect, ref, refrect, points_in, method, opa, updaterect, hda,

@@ -15,6 +15,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     RuntimeSupport.cpp
     NodeTree.cpp
     MotionNodeBridge.cpp
+    SeparateLayerAdaptor.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin)

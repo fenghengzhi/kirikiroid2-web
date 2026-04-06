@@ -116,6 +116,10 @@ namespace motion {
         // Buffer access (for Player to render into)
         int getWidth() const { return _width; }
         int getHeight() const { return _height; }
+        iTJSDispatch2 *getWindowObject() const {
+            return _window.Type() == tvtObject ? _window.AsObjectNoAddRef()
+                                               : nullptr;
+        }
         std::uint8_t *getBuffer() { return _buffer.data(); }
         const std::uint8_t *getBuffer() const { return _buffer.data(); }
         tjs_int getBufferPitch() const { return _width * 4; }

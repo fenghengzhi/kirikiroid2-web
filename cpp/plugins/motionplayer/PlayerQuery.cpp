@@ -563,6 +563,21 @@ namespace motion {
         }
 
         nativeInstance->_runtime->drawAffineMatrix = matrix;
+        const auto motionPath =
+            nativeInstance->_runtime && nativeInstance->_runtime->activeMotion
+                ? nativeInstance->_runtime->activeMotion->path
+                : std::string{};
+        const bool isIdentity =
+            matrix[0] == 1.0 && matrix[1] == 0.0 && matrix[2] == 0.0 &&
+            matrix[3] == 1.0 && matrix[4] == 0.0 && matrix[5] == 0.0;
+        detail::logoChainTraceLogf(
+            motionPath, "setDrawAffine", "0x6D4F14",
+            nativeInstance->_clampedEvalTime,
+            "numparams={} matrix=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] nonIdentityFlag={} routeSource={}",
+            numparams, matrix[0], matrix[1], matrix[2], matrix[3], matrix[4],
+            matrix[5], isIdentity ? 0 : 1,
+            (numparams >= 6) ? "six-params"
+                             : ((numparams == 1) ? "matrix-object" : "invalid"));
         return TJS_S_OK;
     }
 
@@ -592,160 +607,161 @@ namespace motion {
         return TJS_S_OK;
     }
 
-    // drawCompat — aligned to libkrkr2.so sub_6D5FB8.
+    // drawCompat — aligned to libkrkr2.so sub_6D5FB8 / Player_drawD3D (0x6D5B90).
     // Logic:
-    //   1. param is D3DAdaptor → set _d3dDrawMode flag, return (no render)
-    //   2. param is SLA → mark for SLA processing, return
-    //   3. param is Layer → if _d3dDrawMode, render via D3DAdaptor path;
+    //   1. param is D3DAdaptor → set _d3dDrawMode and render via D3D path immediately
+    //   2. param is SLA → route to SLA target
+    //   3. param is Layer → if _d3dDrawMode, render via shared D3DAdaptor+captureCanvas;
     //      else render directly to Layer
     tjs_error Player::drawCompat(tTJSVariant *result, tjs_int numparams,
-                                 tTJSVariant **param, Player *nativeInstance) {
+                                 tTJSVariant **param, iTJSDispatch2 *objthis) {
         if(result) {
             result->Clear();
         }
+        auto *nativeInstance = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
         if(!nativeInstance) {
             return TJS_E_INVALIDOBJECT;
         }
 
-        if(numparams < 1 || !param[0] || param[0]->Type() != tvtObject ||
-           !param[0]->AsObjectNoAddRef()) {
+        const auto motionPath =
+            nativeInstance->_runtime && nativeInstance->_runtime->activeMotion
+                ? nativeInstance->_runtime->activeMotion->path
+                : std::string{};
+        tTJSVariant *arg = (numparams > 0 && param) ? param[0] : nullptr;
+        iTJSDispatch2 *paramObj =
+            (arg && arg->Type() == tvtObject) ? arg->AsObjectNoAddRef() : nullptr;
+
+        if(!paramObj) {
+            detail::logoChainTraceLogf(
+                motionPath, "drawCompat.dispatch", "0x6D5FB8",
+                nativeInstance->_clampedEvalTime,
+                "route=no-param drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f})",
+                nativeInstance->_runtime->drawAffineMatrix[0],
+                nativeInstance->_runtime->drawAffineMatrix[1],
+                nativeInstance->_runtime->drawAffineMatrix[2],
+                nativeInstance->_runtime->drawAffineMatrix[3],
+                nativeInstance->_runtime->drawAffineMatrix[4],
+                nativeInstance->_runtime->drawAffineMatrix[5],
+                nativeInstance->_cameraOffsetX, nativeInstance->_cameraOffsetY);
+            if(result) {
+                *result = nativeInstance->_runtime->lastCanvas;
+            }
             return TJS_S_OK;
         }
 
-        iTJSDispatch2 *paramObj = param[0]->AsObjectNoAddRef();
-
         // Step 1: Check if param is D3DAdaptor (libkrkr2.so checks NIS with
-        // D3DAdaptor classID). If so, set _d3dDrawMode and return immediately.
+        // D3DAdaptor classID). If so, set _d3dDrawMode and render immediately.
         {
-            tTJSVariant testVar;
-            bool isD3DAdaptor =
-                ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(paramObj, false) != nullptr;
-            if(!isD3DAdaptor) {
-                // Fallback: check for canvasCaptureEnabled property
-                isD3DAdaptor = TJS_SUCCEEDED(paramObj->PropGet(
-                    TJS_MEMBERMUSTEXIST, TJS_W("canvasCaptureEnabled"),
-                    nullptr, &testVar, paramObj));
-            }
-            if(isD3DAdaptor) {
+            auto *d3dAdaptor =
+                ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(paramObj, false);
+            if(d3dAdaptor) {
+                detail::logoChainTraceCheck(
+                    motionPath, "drawCompat.dispatch", "0x6D5FB8",
+                    nativeInstance->_clampedEvalTime,
+                    "D3DAdaptor -> Player_drawD3D",
+                    "D3DAdaptor -> Player_drawD3D", true,
+                    "drawCompat D3D routing mismatch");
+                detail::logoChainTraceLogf(
+                    motionPath, "drawCompat.matrix", "0x6D5FB8",
+                    nativeInstance->_clampedEvalTime,
+                    "route=d3d drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
+                    nativeInstance->_runtime->drawAffineMatrix[0],
+                    nativeInstance->_runtime->drawAffineMatrix[1],
+                    nativeInstance->_runtime->drawAffineMatrix[2],
+                    nativeInstance->_runtime->drawAffineMatrix[3],
+                    nativeInstance->_runtime->drawAffineMatrix[4],
+                    nativeInstance->_runtime->drawAffineMatrix[5],
+                    nativeInstance->_cameraOffsetX, nativeInstance->_cameraOffsetY);
                 nativeInstance->_d3dDrawMode = true;
-                if(result) *result = *param[0];
+                nativeInstance->renderToD3DAdaptor(d3dAdaptor);
+                if(result && arg) *result = *arg;
                 return TJS_S_OK;
             }
         }
 
         // Step 2: Check if param is SLA.
-        // Aligned to libkrkr2.so Player_DrawSLA (0x6D5658):
-        // SLA owner is the AffineLayer in the display tree.
-        // Render directly to it — TJS drawAffine does NOT call assignImages
-        // for SLA path (SLA is not Layer/D3DAdaptor), so the owner IS the
-        // final display target. renderToLayer now uses identity translation
-        // (drawAffineMatrix tx/ty stripped in renderToLayer) because the
-        // AffineLayer's position in the display tree already handles screen
-        // placement.
+        // Aligned to libkrkr2.so Player_drawCompat (0x6D5FB8):
+        // the native code only checks the SeparateLayerAdaptor class ID here.
+        // It does not route plain Layer objects through the SLA backend just
+        // because they resolve to an owner/target layer.
         {
-            auto *sla = ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
-                paramObj, false);
-            if(!sla) {
-                iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*param[0]);
-                if(resolved && resolved != paramObj) {
-                    sla = reinterpret_cast<SeparateLayerAdaptor*>(1);
-                }
-            }
-            if(sla) {
-                auto *realSla = ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
+            auto *sla =
+                ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
                     paramObj, false);
-                iTJSDispatch2 *ownerLayer = realSla ? realSla->getOwner() : nullptr;
-                if(!ownerLayer) {
-                    ownerLayer = tryResolveSeparateAdaptorOwner(*param[0]);
+            if(sla) {
+                detail::logoChainTraceCheck(
+                    motionPath, "drawCompat.dispatch", "0x6D5FB8",
+                    nativeInstance->_clampedEvalTime,
+                    "SeparateLayerAdaptor -> Player_DrawSLA",
+                    "SeparateLayerAdaptor -> Player_DrawSLA", true,
+                    "drawCompat SLA routing mismatch");
+                detail::logoChainTraceLogf(
+                    motionPath, "drawCompat.matrix", "0x6D5FB8",
+                    nativeInstance->_clampedEvalTime,
+                    "route=sla drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
+                    nativeInstance->_runtime->drawAffineMatrix[0],
+                    nativeInstance->_runtime->drawAffineMatrix[1],
+                    nativeInstance->_runtime->drawAffineMatrix[2],
+                    nativeInstance->_runtime->drawAffineMatrix[3],
+                    nativeInstance->_runtime->drawAffineMatrix[4],
+                    nativeInstance->_runtime->drawAffineMatrix[5],
+                    nativeInstance->_cameraOffsetX, nativeInstance->_cameraOffsetY);
+                nativeInstance->renderToSeparateLayerAdaptor(paramObj);
+                if(result && arg) {
+                    *result = *arg;
                 }
-                if(ownerLayer) {
-                    // Aligned to libkrkr2.so Player_ResolveSLATarget_guess
-                    // (0x6D5948): create PrivateMotionGLL (Layer subclass,
-                    // type=ltAlpha) as child of ownerLayer (AffineLayer).
-                    // The ownerLayer may be larger than the visible window
-                    // (e.g. 1920×1440 vs 1920×1080 for exHeight support).
-                    // The compositor + DrawDevice handle clipping/scaling.
-                    static tTJSVariant slaChild;
-                    iTJSDispatch2 *renderTarget = nullptr;
-                    if(slaChild.Type() == tvtObject && slaChild.AsObjectNoAddRef())
-                        renderTarget = slaChild.AsObjectNoAddRef();
-                    if(!renderTarget) {
-                        iTJSDispatch2 *global = TVPGetScriptDispatch();
-                        if(global) {
-                            tTJSVariant lcVar, kagVar;
-                            tTJSVariant ownerVar(ownerLayer, ownerLayer);
-                            global->PropGet(0, TJS_W("Layer"), nullptr, &lcVar, global);
-                            global->PropGet(0, TJS_W("kag"), nullptr, &kagVar, global);
-                            if(lcVar.Type() == tvtObject) {
-                                tTJSVariant *args[] = { &kagVar, &ownerVar };
-                                iTJSDispatch2 *newL = nullptr;
-                                lcVar.AsObjectNoAddRef()->CreateNew(0, nullptr, nullptr,
-                                    &newL, 2, args, lcVar.AsObjectNoAddRef());
-                                if(newL) {
-                                    slaChild = tTJSVariant(newL, newL);
-                                    newL->Release();
-                                    renderTarget = slaChild.AsObjectNoAddRef();
-                                    tTJSNI_BaseLayer *cn = nullptr;
-                                    renderTarget->NativeInstanceSupport(TJS_NIS_GETINSTANCE,
-                                        tTJSNC_Layer::ClassID,
-                                        reinterpret_cast<iTJSNativeInstance **>(&cn));
-                                    if(cn) {
-                                        cn->SetVisible(true);
-                                        tTJSNI_BaseLayer *ownerN = nullptr;
-                                        ownerLayer->NativeInstanceSupport(TJS_NIS_GETINSTANCE,
-                                            tTJSNC_Layer::ClassID,
-                                            reinterpret_cast<iTJSNativeInstance **>(&ownerN));
-                                        if(ownerN)
-                                            cn->SetSize(ownerN->GetWidth(), ownerN->GetHeight());
-                                        cn->SetType(static_cast<tTVPLayerType>(2)); // ltAlpha
-                                    }
-                                }
-                            }
-                            global->Release();
-                        }
-                    }
-                    if(renderTarget)
-                        nativeInstance->renderToLayer(renderTarget);
-                    if(result) *result = tTJSVariant(ownerLayer, ownerLayer);
-                    return TJS_S_OK;
-                }
+                return TJS_S_OK;
             }
         }
 
         // Step 3: param is a Layer (or resolves to one)
         tTJSNI_BaseLayer *layer = nullptr;
-        if(tryGetLayerObject(*param[0], layer)) {
-            nativeInstance->renderToLayer(paramObj);
-            // Aligned to libkrkr2.so Player_updateLayerAfterDraw_guess (0x6CE7D8):
-            // If flag+613 is set, call assignImages on internal render layer.
-            // In our implementation, renderToLayer renders directly to target,
-            // so the flag check is for future internal-buffer rendering modes.
-            if(nativeInstance->_needsInternalAssignImages) {
-                nativeInstance->_needsInternalAssignImages = false;
-                try {
-                    tTJSVariant targetVar(paramObj, paramObj);
-                    tTJSVariant *args[] = { &targetVar };
-                    paramObj->FuncCall(0, TJS_W("assignImages"),
-                        nullptr, nullptr, 1, args, paramObj);
-                } catch(...) {}
+        if(tryGetLayerObject(*arg, layer)) {
+            detail::logoChainTraceCheck(
+                motionPath, "drawCompat.dispatch", "0x6D5FB8",
+                nativeInstance->_clampedEvalTime,
+                "Layer -> renderToLayer/renderViaSharedD3DAdaptor",
+                nativeInstance->_d3dDrawMode
+                    ? "Layer -> renderViaSharedD3DAdaptor"
+                    : "Layer -> renderToLayer",
+                true, "drawCompat Layer routing mismatch");
+            detail::logoChainTraceLogf(
+                motionPath, "drawCompat.matrix", "0x6D5FB8",
+                nativeInstance->_clampedEvalTime,
+                "route={} drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
+                nativeInstance->_d3dDrawMode ? "layer-via-d3d" : "layer",
+                nativeInstance->_runtime->drawAffineMatrix[0],
+                nativeInstance->_runtime->drawAffineMatrix[1],
+                nativeInstance->_runtime->drawAffineMatrix[2],
+                nativeInstance->_runtime->drawAffineMatrix[3],
+                nativeInstance->_runtime->drawAffineMatrix[4],
+                nativeInstance->_runtime->drawAffineMatrix[5],
+                nativeInstance->_cameraOffsetX, nativeInstance->_cameraOffsetY);
+            if(nativeInstance->_d3dDrawMode) {
+                nativeInstance->renderViaSharedD3DAdaptor(paramObj);
+            } else {
+                nativeInstance->renderToLayer(paramObj);
             }
-            if(result) *result = *param[0];
+            if(result) *result = *arg;
             return TJS_S_OK;
         }
 
         // Step 4: param resolves to a Layer via property chain
         {
-            iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*param[0]);
+            iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*arg);
             if(resolved) {
-                nativeInstance->renderToLayer(resolved);
-                if(nativeInstance->_needsInternalAssignImages) {
-                    nativeInstance->_needsInternalAssignImages = false;
-                    try {
-                        tTJSVariant targetVar(resolved, resolved);
-                        tTJSVariant *args[] = { &targetVar };
-                        resolved->FuncCall(0, TJS_W("assignImages"),
-                            nullptr, nullptr, 1, args, resolved);
-                    } catch(...) {}
+                detail::logoChainTraceCheck(
+                    motionPath, "drawCompat.dispatch", "0x6D5FB8",
+                    nativeInstance->_clampedEvalTime,
+                    "Resolved owner Layer -> renderToLayer/renderViaSharedD3DAdaptor",
+                    nativeInstance->_d3dDrawMode
+                        ? "Resolved owner Layer -> renderViaSharedD3DAdaptor"
+                        : "Resolved owner Layer -> renderToLayer",
+                    true, "drawCompat owner-layer routing mismatch");
+                if(nativeInstance->_d3dDrawMode) {
+                    nativeInstance->renderViaSharedD3DAdaptor(resolved);
+                } else {
+                    nativeInstance->renderToLayer(resolved);
                 }
                 if(result) *result = tTJSVariant(resolved, resolved);
                 return TJS_S_OK;
@@ -753,7 +769,12 @@ namespace motion {
         }
 
         // Fallback: no SLA/Layer match
-        nativeInstance->draw();
+        detail::logoChainTraceCheck(
+            motionPath, "drawCompat.dispatch", "0x6D5FB8",
+            nativeInstance->_clampedEvalTime,
+            "D3DAdaptor | SeparateLayerAdaptor | Layer",
+            "unresolved target", false,
+            "drawCompat could not classify the target object");
         if(result) {
             *result = nativeInstance->_runtime->lastCanvas;
         }
@@ -883,6 +904,33 @@ namespace motion {
 
         self->_runtime->pendingEvents.clear();
         self->frameProgress(delta * kMotionFramesPerMillisecond);
+        const auto motionPath =
+            self->_runtime && self->_runtime->activeMotion
+                ? self->_runtime->activeMotion->path
+                : std::string{};
+        detail::logoChainTraceCheck(
+            motionPath, "progressCompat.dt", "0x6D2A98",
+            self->_clampedEvalTime,
+            fmt::format("dt_ms*60/1000={:.6f}", delta * kMotionFramesPerMillisecond),
+            fmt::format("dt_frames={:.6f}", self->_frameLastTime),
+            std::fabs(self->_frameLastTime - delta * kMotionFramesPerMillisecond) <
+                0.000001,
+            "progressCompat dt(ms)->frame conversion diverged from 0x6D2A98");
+
+        // Aligned to libkrkr2.so Player_progressCompat (0x6D2A98):
+        // progress_inner -> updateLayers -> calcBounds -> dispatchEvents.
+        self->ensureNodeTreeBuilt();
+        if(!self->_runtime->nodes.empty()) {
+            const auto *clip = self->selectActiveClip();
+            const auto currentTime = activeClipTime(*self->_runtime, clip);
+            detail::logoChainTraceLogf(
+                motionPath, "progressCompat.update", "0x6D2A98", currentTime,
+                "timelineCurrentTime={:.3f} pendingEvents={} nodes={}",
+                currentTime, self->_runtime->pendingEvents.size(),
+                self->_runtime->nodes.size());
+            self->updateLayers(currentTime);
+        }
+        self->calcBounds();
 
         // Aligned to libkrkr2.so Player_dispatchEvents (0x6C4490):
         // After stepping timelines, dispatch queued onAction/onSync events.
@@ -937,10 +985,9 @@ namespace motion {
         }
 
         // Aligned to libkrkr2.so Player_stop (0x6D9A30):
-        // Binary simply sets playing=false (offset 1099), nothing else.
-        for(auto &[_, state] : self->_runtime->timelines) {
-            state.playing = false;
-        }
+        // Binary simply clears the Player-level playing flag (player+1099).
+        // Timeline state is left intact; TJS polls `playing` for edge-triggered
+        // stop detection and may still inspect the final motion pose afterward.
         self->_allplaying = false;
 
         if(result) {

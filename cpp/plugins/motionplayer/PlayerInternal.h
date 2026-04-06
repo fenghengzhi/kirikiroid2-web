@@ -21,6 +21,7 @@
 #include "LayerIntf.h"
 #include "LayerBitmapIntf.h"
 #include "GraphicsLoaderIntf.h"
+#include "tvpgl.h"
 #include "RuntimeSupport.h"
 #include "ResourceManager.h"
 #include "SeparateLayerAdaptor.h"
@@ -63,9 +64,8 @@ namespace internal {
         //   (0x696D00-0x696D98 in libkrkr2.so)
         inline std::vector<std::uint8_t> decompressPsbRL(
             const std::vector<std::uint8_t> &compressed,
-            int width, int height, int align = 4) {
-            const size_t outputSize =
-                static_cast<size_t>(width) * height * 4u;
+            size_t elementCount, int align = 4) {
+            const size_t outputSize = elementCount * static_cast<size_t>(align);
             std::vector<std::uint8_t> output(outputSize, 0);
 
             const auto *src = compressed.data();
@@ -96,6 +96,79 @@ namespace internal {
                 }
             }
             return output;
+        }
+
+        inline bool decodePsbPixelResource(
+            const detail::MotionSnapshot &snapshot,
+            const std::string &iconPath,
+            const PSB::PSBResource &pixelResource,
+            int width,
+            int height,
+            bool isRLCompressed,
+            std::vector<std::uint8_t> &decodedOut,
+            bool *outDecodedIsBgra = nullptr) {
+            decodedOut.clear();
+            if(outDecodedIsBgra) {
+                *outDecodedIsBgra = false;
+            }
+
+            if(width <= 0 || height <= 0 || pixelResource.data.empty()) {
+                return false;
+            }
+
+            const size_t pixelCount =
+                static_cast<size_t>(width) * static_cast<size_t>(height);
+            const auto palPath = iconPath + "/pal";
+            const auto palIt = snapshot.resourcesByPath.find(palPath);
+            const bool hasPalette = palIt != snapshot.resourcesByPath.end() &&
+                palIt->second && !palIt->second->data.empty();
+
+            if(hasPalette) {
+                std::vector<std::uint8_t> indexBuffer;
+                if(isRLCompressed) {
+                    indexBuffer = decompressPsbRL(pixelResource.data,
+                                                  pixelCount, 1);
+                } else {
+                    indexBuffer.resize(pixelCount, 0);
+                    const size_t copyCount = std::min(pixelCount,
+                                                      pixelResource.data.size());
+                    std::memcpy(indexBuffer.data(), pixelResource.data.data(),
+                                copyCount);
+                }
+
+                const size_t paletteEntryCount =
+                    palIt->second->data.size() / sizeof(tjs_uint32);
+                if(paletteEntryCount == 0) {
+                    return false;
+                }
+
+                std::vector<tjs_uint32> rawPalette(paletteEntryCount, 0);
+                std::memcpy(rawPalette.data(), palIt->second->data.data(),
+                            paletteEntryCount * sizeof(tjs_uint32));
+                std::vector<tjs_uint32> bgraPalette(paletteEntryCount, 0);
+                TVPReverseRGB(bgraPalette.data(), rawPalette.data(),
+                              static_cast<tjs_int>(paletteEntryCount));
+
+                std::vector<tjs_uint32> expandedPixels(pixelCount, 0);
+                TVPBLExpand8BitTo32BitPal(
+                    expandedPixels.data(), indexBuffer.data(),
+                    static_cast<tjs_int>(pixelCount), bgraPalette.data());
+
+                decodedOut.resize(pixelCount * sizeof(tjs_uint32));
+                std::memcpy(decodedOut.data(), expandedPixels.data(),
+                            decodedOut.size());
+                if(outDecodedIsBgra) {
+                    *outDecodedIsBgra = true;
+                }
+                return true;
+            }
+
+            if(isRLCompressed) {
+                decodedOut = decompressPsbRL(pixelResource.data, pixelCount, 4);
+                return !decodedOut.empty();
+            }
+
+            return false;
         }
 
         constexpr double kMotionFramesPerMillisecond = 60.0 / 1000.0;
@@ -453,6 +526,7 @@ namespace internal {
 
         struct FrameContentState {
             bool visible = false;
+            int frameType = 0;        // frame["type"] from sub_6926B4: 0/2/3
             std::string src;
             std::vector<std::string> srcList;  // For particle nodes: array of "chara/motion" paths
             double x = 0.0;
@@ -473,10 +547,12 @@ namespace internal {
             double c0 = 0.0;          // mask 0x2: color curve control points (sub_692AB0 at 0x692E14)
             double c1 = 0.0;          //   3 doubles via sub_6695BC indices 0,1,2
             double c2 = 0.0;
-            int colorR = 0x80;        // mask 0x200: color RGBA (sub_692AB0 default 0xFF808080)
-            int colorG = 0x80;
-            int colorB = 0x80;
-            int colorA = 0xFF;
+            // Aligned to sub_692AB0 (0x692F4C..0x693428):
+            // clip+72..84 stores four packed RGBA DWORDs. Default is
+            // vdupq_n_s32(0xFF808080), not four scalar channels.
+            std::array<std::uint32_t, 4> packedColors{
+                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
+            };
             BezierCurve ccc;          // mask 0x800: color curve control
             BezierCurve acc;          // mask 0x1000: angle curve control
             BezierCurve zcc;          // mask 0x2000: zoom curve control
@@ -852,24 +928,15 @@ namespace internal {
             }
 
             // mask & 0x60: scaleX ("zx") / scaleY ("zy")
-            // Aligned to sub_692AB0 at 0x693018.
-            // IDA mistakenly displayed UTF-16LE strings as ASCII single chars:
-            //   0x14D868E: bytes 7a 00 78 00 00 00 = UTF-16LE "zx" (shown as "z")
-            //   0x14D8694: "zy" (shown correctly as L"zy")
-            // Confirmed via hex dump at string addresses in IDB.
-            // mask & 0x60: PSB "zx"/"zy" fields.
-            // sub_692AB0 at 0x693018 reads these under mask & 0x60. IDA shows the
-            // key at 0x14D868E is UTF-16LE "zx" (confirmed via get_bytes).
-            // However, testing confirms that applying these values as scaleX/scaleY
-            // produces 40x/20x magnification — completely wrong. Disabling them
-            // gives correct logo size matching libkrkr2.so output.
-            // Root cause TBD: binary's PSB dispatch PropGet may not match UTF-16
-            // key L"zx" against trie-encoded PSB key "zx", so scaleX stays 1.0.
-            // For now, "zx"/"zy" are read as display dimensions (width/height)
-            // above, not as scale factors.
+            // Aligned to libkrkr2.so sub_692AB0 at 0x693018:
+            // both keys are read directly from the PSB content dict and stored
+            // in the current clip slot. This is required by logo motions whose
+            // opening backdrop uses zx/zy magnification on a tiny source image.
             if(mask & 0x60) {
-                // scaleX/scaleY intentionally NOT read from "zx"/"zy".
-                // See analysis/Player_Draw_Full_RenderPath.md for details.
+                if(const auto zx = psbDictionaryNumber(content, "zx"))
+                    state.scaleX = *zx;
+                if(const auto zy = psbDictionaryNumber(content, "zy"))
+                    state.scaleY = *zy;
             }
 
             // mask & 0x80: slantX ("sx") / mask & 0x100: slantY ("sy")
@@ -963,25 +1030,22 @@ namespace internal {
                 }
             }
 
-            // mask & 0x200: color RGBA (sub_692AB0 at 0x692F4C → 0x693330)
-            // Color is stored as 4 ints at clip+72..84, default 0xFF808080
+            // mask & 0x200: packed color payload (sub_692AB0 at
+            // 0x692F4C..0x693428). Binary stores four packed RGBA DWORDs.
             if(mask & 0x200) {
                 if(auto colorDict = psbDictionaryValue(content, "color")) {
-                    // Color can be a dict with indexed values (sub_6637BC)
-                    // or a single int broadcast to all channels
-                    if(auto r = psbDictionaryNumber(colorDict, "0"))
-                        state.colorR = static_cast<int>(*r);
-                    if(auto g = psbDictionaryNumber(colorDict, "1"))
-                        state.colorG = static_cast<int>(*g);
-                    if(auto b = psbDictionaryNumber(colorDict, "2"))
-                        state.colorB = static_cast<int>(*b);
-                    if(auto a = psbDictionaryNumber(colorDict, "3"))
-                        state.colorA = static_cast<int>(*a);
+                    for(int ci = 0; ci < 4; ++ci) {
+                        const auto key = std::to_string(ci);
+                        if(auto value = psbDictionaryNumber(colorDict, key.c_str())) {
+                            state.packedColors[ci] =
+                                static_cast<std::uint32_t>(static_cast<std::int64_t>(*value));
+                        }
+                    }
                 } else if(auto colorVal = psbDictionaryNumber(content, "color")) {
-                    // Single value broadcast (sub_692AB0 case 2/4/5)
-                    int cv = static_cast<int>(*colorVal);
-                    state.colorR = cv; state.colorG = cv;
-                    state.colorB = cv; state.colorA = cv;
+                    // Scalar color is broadcast to all four packed slots.
+                    const auto packed = static_cast<std::uint32_t>(
+                        static_cast<std::int64_t>(*colorVal));
+                    state.packedColors = { packed, packed, packed, packed };
                 }
             }
 
@@ -1139,6 +1203,7 @@ namespace internal {
                 psbDictionaryNumber(frame, "type").value_or(0.0));
             result.invisible = (result.type == 0);
             result.interpolate = (result.type == 3);
+            result.slot.frameType = result.type;
             if(!result.invisible) {
                 // sub_6926B4 at 0x692838: read content dict, then call sub_692AB0
                 if(const auto content = psbDictionaryValue(frame, "content")) {
@@ -1212,24 +1277,11 @@ namespace internal {
                 state.opacity = std::clamp(opaInt / 255.0, 0.0, 1.0);
             }
 
-            // Color RGBA — uses ccc-eased t (sub_69A4D4 at 0x699FD4)
-            // Aligned to sub_699AE4: color channels interpolated same as opacity
-            if (state.colorR != slotB.colorR)
-                state.colorR = static_cast<int>(lerp(
-                    static_cast<double>(state.colorR),
-                    static_cast<double>(slotB.colorR), t_ccc));
-            if (state.colorG != slotB.colorG)
-                state.colorG = static_cast<int>(lerp(
-                    static_cast<double>(state.colorG),
-                    static_cast<double>(slotB.colorG), t_ccc));
-            if (state.colorB != slotB.colorB)
-                state.colorB = static_cast<int>(lerp(
-                    static_cast<double>(state.colorB),
-                    static_cast<double>(slotB.colorB), t_ccc));
-            if (state.colorA != slotB.colorA)
-                state.colorA = static_cast<int>(lerp(
-                    static_cast<double>(state.colorA),
-                    static_cast<double>(slotB.colorA), t_ccc));
+            // Aligned to sub_699AE4 (0x699FD4..0x699FF8):
+            // the node state consumes four packed color DWORDs from the
+            // current slot representation rather than expanding them to
+            // independent RGBA channel scalars here.
+            state.packedColors = slotA.packedColors;
 
             // Angle with 360° wrap — uses acc-eased t (sub_699AE4 at 0x699DEC)
             double curAngle = state.angle;
@@ -1416,18 +1468,23 @@ namespace internal {
         // Aligned to libkrkr2.so sub_6948E8: navigates source/<group>/icon/<name>.
         // Also reads originX/originY from the icon node (image anchor point,
         // used in sub_6BC4F0: origin = pos - matrix × (originX, originY)).
-        // If the resource is RL-compressed, decompresses into decompressedOut.
+        // If the resource is RL-compressed or palettized, decodes into
+        // decompressedOut. Palettized output matches libkrkr2.so's BGRA path.
         inline const PSB::PSBResource *findPSBResourceBySourceName(
             const detail::MotionSnapshot &snapshot,
             const std::string &source,
             int &outWidth, int &outHeight,
             std::vector<std::uint8_t> &decompressedOut,
-            double &outOriginX, double &outOriginY) {
+            double &outOriginX, double &outOriginY,
+            bool *outDecodedIsBgra = nullptr) {
             outWidth = 0;
             outHeight = 0;
             outOriginX = 0.0;
             outOriginY = 0.0;
             decompressedOut.clear();
+            if(outDecodedIsBgra) {
+                *outDecodedIsBgra = false;
+            }
             if(source.empty() || isMotionCrossReference(source)) {
                 return nullptr;
             }
@@ -1475,14 +1532,12 @@ namespace internal {
                         if(resIt != snapshot.resourcesByPath.end() &&
                            !resIt->second->data.empty() &&
                            outWidth > 0 && outHeight > 0) {
-                            // Check for RL compression
                             auto compressStr =
                                 psbDictionaryString(iconNode, "compress");
-                            if(compressStr == "RL") {
-                                decompressedOut = decompressPsbRL(
-                                    resIt->second->data,
-                                    outWidth, outHeight);
-                            }
+                            decodePsbPixelResource(
+                                snapshot, iconPath, *resIt->second,
+                                outWidth, outHeight, compressStr == "RL",
+                                decompressedOut, outDecodedIsBgra);
                             return resIt->second.get();
                         }
                     }
@@ -1520,13 +1575,13 @@ namespace internal {
                                                  "truncated_height"))
                                     outHeight = static_cast<int>(*th);
                             }
-                            // Check for RL compression
                             auto compressStr =
                                 psbDictionaryString(node, "compress");
-                            if(compressStr == "RL" &&
-                               outWidth > 0 && outHeight > 0) {
-                                decompressedOut = decompressPsbRL(
-                                    resource->data, outWidth, outHeight);
+                            if(outWidth > 0 && outHeight > 0) {
+                                decodePsbPixelResource(
+                                    snapshot, parentPath, *resource,
+                                    outWidth, outHeight, compressStr == "RL",
+                                    decompressedOut, outDecodedIsBgra);
                             }
                         }
                     }
@@ -1662,20 +1717,6 @@ namespace internal {
         // Aligned to libkrkr2.so: full 2x3 affine [m11,m21,m12,m22,tx,ty]
         using Affine2x3 = std::array<double, 6>;
 
-        struct FlatRenderNode {
-            FrameContentState state;
-            Affine2x3 affine{1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
-            double accumulatedOpacity = 1.0;  // parent.opacity * child.opacity
-            bool flipX = false;               // XOR-inherited from parent
-            bool flipY = false;               // XOR-inherited from parent
-            // Pre-computed corner vertices (aligned to binary renderNode+136~164).
-            // Set by buildRenderListFromNodes from node.vertices[],
-            // optionally transformed by drawAffineMatrix.
-            // Layout: [c0x,c0y, c1x,c1y, c2x,c2y, c3x,c3y]
-            float corners[8] = {};
-            bool hasCorners = false;
-        };
-
         // Compose: result = parent * Translate(lx, ly)
         inline Affine2x3 affineTranslate(const Affine2x3 &p, double lx, double ly) {
             return {p[0], p[1], p[2], p[3],
@@ -1768,180 +1809,6 @@ namespace internal {
             const double m22 = a[1]*l12 + a[3]*l22;
             a[0] = m11; a[1] = m21; a[2] = m12; a[3] = m22;
         }
-
-        inline void flattenLayerNodes(
-            const std::shared_ptr<const PSB::PSBDictionary> &node,
-            double time,
-            const Affine2x3 &parentAffine,
-            double parentOpacity,
-            bool parentFlipX, bool parentFlipY,
-            std::vector<FlatRenderNode> &out) {
-            if(!node) return;
-            const auto state = evaluateLayerContent(node, time);
-            // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
-            // ox/oy from PSB frameList content are position offsets.
-            const double lx = state.x + state.ox;
-            const double ly = state.y + state.oy;
-
-            // Step 1: Translation — parent * Translate(lx, ly)
-            auto curAffine = affineTranslate(parentAffine, lx, ly);
-
-            // Step 2: Build local 2x2 matrix matching sub_699940.
-            // Uses the node's OWN flip (state.flipX/Y from sub_699AE4),
-            // NOT the XOR'd inherited flip. The XOR is only for children.
-            applyLocalTransform(curAffine, state);
-
-            // Flip XOR for inheritance to children.
-            // Aligned to Player_updateLayers (0x6BB8A8):
-            //   child.flipX ^= parent.flipX
-            const bool curFlipX = parentFlipX ^ state.flipX;
-            const bool curFlipY = parentFlipY ^ state.flipY;
-
-            // Opacity: integer multiplication matching libkrkr2.so (0x6BB6D4):
-            //   result = parent_opa * child_opa / 255  (int math)
-            const int parentOpaInt = static_cast<int>(
-                std::clamp(parentOpacity * 255.0, 0.0, 255.0));
-            const int childOpaInt = static_cast<int>(
-                std::clamp(state.opacity * 255.0, 0.0, 255.0));
-            const double curOpacity = static_cast<double>(
-                parentOpaInt * childOpaInt / 255) / 255.0;
-
-            if(state.visible && !state.src.empty() && state.src != "layout"
-               && !isMotionCrossReference(state.src)) {
-                FlatRenderNode rn;
-                rn.state = state;
-                rn.affine = curAffine;
-                rn.accumulatedOpacity = curOpacity;
-                // Flip is already in the matrix via applyLocalTransform.
-                // These flags are not used at render time anymore.
-                rn.flipX = false;
-                rn.flipY = false;
-                out.push_back(std::move(rn));
-            }
-
-            if(const auto children = psbDictionaryList(node, "children")) {
-                auto childAffine = curAffine;
-                if(state.src == "layout" && state.width > 0.0 && state.height > 0.0) {
-                    childAffine = affineScale(curAffine, state.width, state.height);
-                }
-                for(size_t i = 0; i < children->size(); ++i) {
-                    auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                        (*children)[static_cast<int>(i)]);
-                    flattenLayerNodes(child, time, childAffine,
-                                     curOpacity, curFlipX, curFlipY, out);
-                }
-            }
-        }
-
-
-        // Build flat render list from persistent node tree.
-        // Replaces flattenLayerNodes() output — produces FlatRenderNodes
-        // from accumulated MotionNode state.
-        // Aligned to libkrkr2.so sub_6C2334: converts accumulated node
-        // state into renderable entries with globalAffine applied.
-        inline void buildRenderListFromNodes(
-            const std::vector<detail::MotionNode> &nodes,
-            const Affine2x3 &globalAffine,
-            std::vector<FlatRenderNode> &out,
-            bool isEmoteMode = false) {
-            // Aligned to libkrkr2.so sub_6C2334 (0x6C2334):
-            // Filter conditions in order:
-            //   1. !accumulated.active → skip (node+1505)
-            //   2. nodeType 3/4 handled separately (not here)
-            //   3. bitmask check: (1 << nodeType) & 5185 for !isEmoteMode
-            //      5185 = 0x1441 → nodeType 0, 6, 10, 12
-            //   4. hasSource (node+200) → must be true
-            const int bitmask = isEmoteMode ? 5193 : 5185;
-            for (const auto &node : nodes) {
-                if (!node.accumulated.active) continue;
-                if (!node.forceVisible) {
-                    if (((1 << node.nodeType) & bitmask) == 0) continue;
-                }
-                if (!node.hasSource) continue;
-
-                // Compose globalAffine with node's accumulated transform:
-                // result = globalAffine × [node.m11, node.m12; node.m21, node.m22]
-                // with translation from node accumulated position.
-                const auto &acc = node.accumulated;
-                Affine2x3 nodeAffine;
-                // First translate by accumulated position
-                nodeAffine[0] = globalAffine[0];
-                nodeAffine[1] = globalAffine[1];
-                nodeAffine[2] = globalAffine[2];
-                nodeAffine[3] = globalAffine[3];
-                nodeAffine[4] = globalAffine[0] * acc.posX + globalAffine[2] * acc.posY + globalAffine[4];
-                nodeAffine[5] = globalAffine[1] * acc.posX + globalAffine[3] * acc.posY + globalAffine[5];
-                // Then multiply by accumulated 2x2 matrix
-                const double m11 = nodeAffine[0] * acc.m11 + nodeAffine[2] * acc.m21;
-                const double m21 = nodeAffine[1] * acc.m11 + nodeAffine[3] * acc.m21;
-                const double m12 = nodeAffine[0] * acc.m12 + nodeAffine[2] * acc.m22;
-                const double m22 = nodeAffine[1] * acc.m12 + nodeAffine[3] * acc.m22;
-                nodeAffine[0] = m11;
-                nodeAffine[1] = m21;
-                nodeAffine[2] = m12;
-                nodeAffine[3] = m22;
-
-                FlatRenderNode rn;
-                // Copy interpolated cache back into FrameContentState for rendering
-                rn.state.visible = acc.visible;
-                rn.state.src = node.interpolatedCache.src;
-                rn.state.width = node.interpolatedCache.width;
-                rn.state.height = node.interpolatedCache.height;
-                rn.state.x = node.interpolatedCache.x;
-                rn.state.y = node.interpolatedCache.y;
-                rn.state.ox = node.interpolatedCache.ox;
-                rn.state.oy = node.interpolatedCache.oy;
-                rn.state.opacity = node.interpolatedCache.opacity;
-                rn.state.angle = node.interpolatedCache.angle;
-                rn.state.scaleX = node.interpolatedCache.scaleX;
-                rn.state.scaleY = node.interpolatedCache.scaleY;
-                rn.state.slantX = node.interpolatedCache.slantX;
-                rn.state.slantY = node.interpolatedCache.slantY;
-                rn.state.flipX = node.interpolatedCache.flipX;
-                rn.state.flipY = node.interpolatedCache.flipY;
-                rn.state.blendMode = node.interpolatedCache.blendMode;
-                rn.state.colorR = node.interpolatedCache.colorR;
-                rn.state.colorG = node.interpolatedCache.colorG;
-                rn.state.colorB = node.interpolatedCache.colorB;
-                rn.state.colorA = node.interpolatedCache.colorA;
-                if (node.interpolatedCache.hasTransformOrder) {
-                    std::copy(std::begin(node.interpolatedCache.transformOrder),
-                              std::end(node.interpolatedCache.transformOrder),
-                              rn.state.transformOrder);
-                    rn.state.hasTransformOrder = true;
-                }
-                rn.state.action = node.interpolatedCache.action;
-                rn.state.hasSync = node.interpolatedCache.hasSync;
-
-                rn.affine = nodeAffine;
-                rn.accumulatedOpacity = acc.opacity / 255.0;
-                rn.flipX = false;
-                rn.flipY = false;
-
-                // Copy pre-computed corner vertices from node.vertices[]
-                // and transform by globalAffine (drawAffineMatrix + offsets).
-                // Aligned to sub_6C2334 at 0x6C35AC (copy) + 0x6C2B90 (transform).
-                // Binary copies node+1856~1884 → renderNode+136~164, then
-                // applies drawAffineMatrix to each corner.
-                if (node.clipW > 0 && node.clipH > 0) {
-                    for (int ci = 0; ci < 4; ++ci) {
-                        const float ox = node.vertices[ci * 2];
-                        const float oy = node.vertices[ci * 2 + 1];
-                        rn.corners[ci * 2]     = static_cast<float>(
-                            globalAffine[0] * ox + globalAffine[2] * oy + globalAffine[4]);
-                        rn.corners[ci * 2 + 1] = static_cast<float>(
-                            globalAffine[1] * ox + globalAffine[3] * oy + globalAffine[5]);
-                    }
-                    rn.hasCorners = true;
-                }
-
-                out.push_back(std::move(rn));
-            }
-
-            // Child Player render collection is done separately in
-            // collectChildRenderNodes() called from renderToLayer().
-        }
-
 
 } // namespace internal
 } // namespace motion

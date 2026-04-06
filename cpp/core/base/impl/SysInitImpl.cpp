@@ -543,16 +543,6 @@ static void TVPInitProgramArgumentsAndDataPath(bool stop_after_datapath_got) {
             PushConfigFileOptions(options[1]); // has more priority
             PushConfigFileOptions(options[0]); // has lesser priority
 
-#ifdef EMSCRIPTEN
-            // Web build: enable D3D mode but NOT d3dmotion.
-            // In AffineSourceMotion.tjs, _useD3D=false causes drawAffine
-            // to use the D3DAdaptor path (motionD3DAdaptor → captureCanvas
-            // → _redrawImage), which correctly transfers rendered pixels
-            // to the display layer. _useD3D=true would use the SLA path
-            // which skips _redrawImage (because SLA instanceof Layer is
-            // false). This was confirmed by disassembling drawAffine.
-            TVPProgramArguments.emplace_back(TJS_W("-d3dmode"));
-#endif
         } catch(...) {
             for(auto &option : options)
                 if(option)

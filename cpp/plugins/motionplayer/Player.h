@@ -16,6 +16,7 @@ namespace PSB {
 
 namespace motion {
     class D3DAdaptor;
+    class SeparateLayerAdaptor;
 }
 
 namespace motion {
@@ -354,7 +355,7 @@ namespace motion {
                                              Player *nativeInstance);
         static tjs_error drawCompat(tTJSVariant *result, tjs_int numparams,
                                     tTJSVariant **param,
-                                    Player *nativeInstance);
+                                    iTJSDispatch2 *objthis);
         static tjs_error playCompat(tTJSVariant *result, tjs_int numparams,
                                     tTJSVariant **param, iTJSDispatch2 *objthis);
         static tjs_error progressCompatMethod(tTJSVariant *result,
@@ -388,18 +389,37 @@ namespace motion {
 
     private:
         bool ensureMotionLoaded();
+        void ensureNodeTreeBuilt();
         void syncVariableKeysFromActiveMotion();
         bool renderToLayer(iTJSDispatch2 *layerObject,
                            bool skipUpdate = false);
+        bool renderToSeparateLayerAdaptor(iTJSDispatch2 *slaObject);
         bool renderToD3DAdaptor(D3DAdaptor *adaptor);
-        ttstr resolveCaptureSourcePath() const;
+        bool renderViaSharedD3DAdaptor(iTJSDispatch2 *targetLayerObject);
+        iTJSDispatch2 *resolveSeparateLayerRenderTarget(SeparateLayerAdaptor *sla,
+                                                        iTJSDispatch2 *fallbackOwner,
+                                                        int &canvasWidth,
+                                                        int &canvasHeight);
+        bool renderMotionFrameToTarget(iTJSDispatch2 *renderTargetObject,
+                                       tjs_int canvasWidth,
+                                       tjs_int canvasHeight,
+                                       const char *traceFunc);
         const detail::MotionClip *selectActiveClip() const;
         const std::vector<std::string> &activeLayerNames() const;
         const std::unordered_map<
             std::string, std::shared_ptr<const PSB::PSBDictionary>> *
         activeLayersByName() const;
         const std::vector<std::string> &activeSourceCandidates() const;
+        void calcBounds();
         void updateLayers(double currentTime);
+        bool prepareRenderItems();
+        void appendPreparedRenderItems();
+        void applyPreparedRenderItemTranslateOffsets();
+        bool buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight);
+        bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
+                                        bool skipUpdate);
+        bool updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject);
+        bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);

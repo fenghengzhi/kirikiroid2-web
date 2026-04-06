@@ -3,20 +3,19 @@
 //
 #pragma once
 
+#include <vector>
+
 #include "tjs.h"
 
 namespace motion {
 
     class SeparateLayerAdaptor {
     public:
-        explicit SeparateLayerAdaptor(tTJSVariant owner = {}) : _owner(owner) {}
+        explicit SeparateLayerAdaptor(tTJSVariant owner = {})
+            : _owner(owner), _targetLayer(owner) {}
 
         static tjs_error factory(SeparateLayerAdaptor **result, tjs_int numparams,
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
-            // Let the SLA object be created (so entryOwner doesn't throw),
-            // but return it normally. In drawAffine, if _motionSeparateAdaptor
-            // is defined, TJS passes it to _player.draw(). The drawCompat SLA
-            // path then renders to the owner (AffineLayer) via renderToLayer.
             tTJSVariant owner;
             if(numparams > 0 && param[0]) {
                 owner = *param[0];
@@ -38,12 +37,28 @@ namespace motion {
         void setAbsolute(bool v) { _absolute = v; }
         tTJSVariant getTargetLayer() const { return _targetLayer; }
         void setTargetLayer(tTJSVariant v) { _targetLayer = v; }
-        void assign() {} // stub
-        void c() {} // "c" method = resetRenderState (stub)
+
+        tTJSVariant getPrivateRenderTarget() const { return _privateRenderTarget; }
+        tTJSVariant &privateRenderTargetSlot() { return _privateRenderTarget; }
+        iTJSDispatch2 *getPrivateRenderTargetObject() const {
+            return _privateRenderTarget.Type() == tvtObject
+                       ? _privateRenderTarget.AsObjectNoAddRef()
+                       : nullptr;
+        }
+        void setPrivateRenderTarget(tTJSVariant v);
+        void c();
+        static tjs_error assignCompat(tTJSVariant *result, tjs_int numparams,
+                                      tTJSVariant **param,
+                                      iTJSDispatch2 *objthis);
 
     private:
+        void trackManagedTarget(const tTJSVariant &target);
+        void clearPrivateRenderState();
+
         tTJSVariant _owner;
         bool _absolute = false;
         tTJSVariant _targetLayer;
+        tTJSVariant _privateRenderTarget;
+        std::vector<tTJSVariant> _managedTargets;
     };
 } // namespace motion

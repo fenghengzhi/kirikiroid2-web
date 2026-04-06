@@ -12,6 +12,7 @@
 #include "psbfile/PSBFile.h"
 
 #include <spdlog/spdlog.h>
+#include <unordered_map>
 
 namespace motion::detail {
 
@@ -136,8 +137,10 @@ namespace motion::detail {
                 node.meshDivision = static_cast<int>(*v);
 
             // "stencilType" → stencilType (node+52)
-            if (auto v = nodeTreePsbNumber(psbNode, "stencilType"))
-                node.stencilType = static_cast<int>(*v);
+            if (auto v = nodeTreePsbNumber(psbNode, "stencilType")) {
+                node.stencilTypeBase = static_cast<int>(*v);
+                node.stencilType = node.stencilTypeBase;
+            }
 
             // "shape" → shapeType (node+32, sub_6B3C78 case 1)
             if (auto v = nodeTreePsbNumber(psbNode, "shape"))
@@ -223,8 +226,17 @@ namespace motion::detail {
         const std::string &clipLabel) {
 
         std::vector<MotionNode> nodes;
+        // Aligned to Player_buildNodeTree (0x6B51F0): root index 0 is a
+        // synthetic container node, and all PSB layers are attached under it.
+        MotionNode root;
+        root.index = 0;
+        root.parentIndex = -1;
+        nodes.push_back(std::move(root));
 
-        // Determine which layer set to use: clip-specific or root
+        // Determine which layer set to use: current clip content first, then
+        // fall back to snapshot root-level layers. This matches libkrkr2.so
+        // using player+528 as the active motion/clip content object before
+        // reading its "layer" property in Player_buildNodeTree (0x6B51F0).
         const std::unordered_map<std::string,
             std::shared_ptr<const PSB::PSBDictionary>> *layersByName = nullptr;
         const std::vector<std::string> *layerNames = nullptr;
@@ -237,7 +249,6 @@ namespace motion::detail {
             }
         }
 
-        // Fall back to snapshot root layers
         if (!layersByName) {
             layersByName = &snapshot.layersByName;
             layerNames = &snapshot.layerNames;
@@ -247,17 +258,54 @@ namespace motion::detail {
             return nodes;
         }
 
-        // Walk each root layer. For single-root motions, index 0 is the root.
-        // For multi-root, we create a synthetic approach: each root has parentIndex=-1.
+        // Aligned to Player_buildNodeTree_recursive(player, 0, layerArray):
+        // every top-level PSB layer uses the synthetic root (index 0) as parent.
         for (const auto &name : *layerNames) {
             auto it = layersByName->find(name);
             if (it == layersByName->end()) continue;
-            walkTree(it->second, -1, nodes);
+            walkTree(it->second, 0, nodes);
+        }
+
+        std::unordered_map<std::string, int> nodeIndexByLabel;
+        nodeIndexByLabel.reserve(nodes.size());
+        for(const auto &node : nodes) {
+            if(!node.layerName.empty()) {
+                nodeIndexByLabel.emplace(node.layerName, node.index);
+            }
+        }
+
+        // Aligned to Player_buildNodeTree post-pass (0x6B51F0..0x6B55AC):
+        // type==12 nodes with stencilType bit 2 set walk
+        // "stencilCompositeMaskLayerList", resolve label→node, and set node+1961
+        // on the referenced mask layers.
+        for(auto &node : nodes) {
+            if(node.nodeType != 12 || (node.stencilType & 4) == 0 || !node.psbNode) {
+                continue;
+            }
+            auto maskLayers = nodeTreePsbList(
+                node.psbNode, "stencilCompositeMaskLayerList");
+            if(!maskLayers) {
+                continue;
+            }
+            for(int i = 0; i < static_cast<int>(maskLayers->size()); ++i) {
+                auto label = std::dynamic_pointer_cast<PSB::PSBString>((*maskLayers)[i]);
+                if(!label || label->value.empty()) {
+                    continue;
+                }
+                auto it = nodeIndexByLabel.find(label->value);
+                if(it == nodeIndexByLabel.end()) {
+                    continue;
+                }
+                auto &target = nodes[it->second];
+                if(target.nodeType == 0 || target.nodeType == 3) {
+                    target.stencilCompositeMaskReferenced = true;
+                }
+            }
         }
 
         if (auto logger = spdlog::get("plugin")) {
-            logger->debug("buildNodeTree: clipLabel='{}', {} nodes built",
-                          clipLabel, nodes.size());
+            logger->debug("buildNodeTree: clipLabel='{}', rootLayers={}, {} nodes built",
+                          clipLabel, layerNames->size(), nodes.size());
         }
 
         return nodes;

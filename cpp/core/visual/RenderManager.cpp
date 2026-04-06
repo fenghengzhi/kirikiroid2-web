@@ -31,9 +31,38 @@ extern "C" {
 #include "tjsHashSearch.h"
 #include "EventIntf.h"
 #include "lz4.h"
+#include <spdlog/spdlog.h>
+
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 
 // #define USE_SWSCALE
 #define USE_CV_AFFINE
+
+namespace {
+bool lowLevelLogoTraceEnabled() {
+#ifdef EMSCRIPTEN
+    return EM_ASM_INT({
+               try {
+                   if(typeof window !== 'undefined' &&
+                      window.__KRKR_TRACE_LOGO_CHAIN__) {
+                       return 1;
+                   }
+                   const params = new URLSearchParams(window.location.search);
+                   const traceParam = params.get('trace') || "";
+                   return params.has('traceLogoChain') ||
+                       traceParam === 'logo' || traceParam === 'logo-chain' ||
+                       traceParam === '1';
+               } catch (e) {
+                   return 0;
+               }
+           }) != 0;
+#else
+    return false;
+#endif
+}
+} // namespace
 
 //---------------------------------------------------------------------------
 // heap allocation functions for bitmap bits
@@ -3045,6 +3074,20 @@ public:
             dw = rctar.get_width(), dh = rctar.get_height();
         if(dw == 0 || dh == 0 || sw == 0 || sh == 0)
             return;
+        if(lowLevelLogoTraceEnabled()) {
+            if(auto logger = spdlog::get("core")) {
+                logger->warn(
+                    "WCHAIN stage=visual.operateRect.in func=0x6C7440/0x6DE738 "
+                    "target={}x{} src={}x{} rctar=[{},{},{},{}] rcsrc=[{},{},{},{}] "
+                    "stretchType={} scaled={}",
+                    tar ? tar->GetWidth() : 0, tar ? tar->GetHeight() : 0,
+                    src ? src->GetWidth() : 0, src ? src->GetHeight() : 0,
+                    rctar.left, rctar.top, rctar.right, rctar.bottom,
+                    rcsrc.left, rcsrc.top, rcsrc.right, rcsrc.bottom,
+                    static_cast<int>(StretchType),
+                    (sw != dw || sh != dh) ? 1 : 0);
+            }
+        }
         if(sw > 0 && sh > 0 && (sw != dw || sh != dh)) {
             tTVPRect cr(0, 0, tar->GetWidth(), tar->GetHeight());
             if(cr.left > rctar.left) {
@@ -3117,9 +3160,28 @@ public:
             }
 #endif
             tTVPRect rc(0, 0, dw, dh);
+            if(lowLevelLogoTraceEnabled()) {
+                if(auto logger = spdlog::get("core")) {
+                    logger->warn(
+                        "WCHAIN stage=visual.operateRect.render func=0x6C7440/0x6DE738 "
+                        "scaled=1 rctar=[{},{},{},{}] rcsrc=[{},{},{},{}] tempRect=[{},{},{},{}]",
+                        rctar.left, rctar.top, rctar.right, rctar.bottom,
+                        rcsrc.left, rcsrc.top, rcsrc.right, rcsrc.bottom,
+                        rc.left, rc.top, rc.right, rc.bottom);
+                }
+            }
             ((tTVPRenderMethod_Software *)method)
                 ->DoRender(tar, rctar, tar, rctar, tmp, rc, nullptr, rc);
         } else {
+            if(lowLevelLogoTraceEnabled()) {
+                if(auto logger = spdlog::get("core")) {
+                    logger->warn(
+                        "WCHAIN stage=visual.operateRect.render func=0x6C7440/0x6DE738 "
+                        "scaled=0 rctar=[{},{},{},{}] rcsrc=[{},{},{},{}]",
+                        rctar.left, rctar.top, rctar.right, rctar.bottom,
+                        rcsrc.left, rcsrc.top, rcsrc.right, rcsrc.bottom);
+                }
+            }
             ((tTVPRenderMethod_Software *)method)
                 ->DoRender(tar, rctar, tar, rctar, src, rcsrc, nullptr, rcsrc);
         }
@@ -3545,7 +3607,31 @@ public:
         const tTVPPointD *dstpt = pttar;
         iTVPTexture2D *src = textures[0].first;
         const tTVPPointD *srcpt = textures[0].second;
-        if(nTriangles == 2 && CheckQuad(pttar) && CheckTextureQuad(textures)) {
+        const bool checkQuad = nTriangles == 2 && CheckQuad(pttar);
+        const bool checkTextureQuad =
+            nTriangles == 2 && CheckTextureQuad(textures);
+        if(lowLevelLogoTraceEnabled() && nTriangles == 2) {
+            if(auto logger = spdlog::get("core")) {
+                logger->warn(
+                    "WCHAIN stage=visual.operateTriangles.in func=0x6C7440/0x6DE738 "
+                    "rcclip=[{},{},{},{}] target={}x{} refTarget={}x{} src={}x{} "
+                    "checkQuad={} checkTextureQuad={} "
+                    "dst=[({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f})] "
+                    "src=[({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f})]",
+                    rcclip.left, rcclip.top, rcclip.right, rcclip.bottom,
+                    dst ? dst->GetWidth() : 0, dst ? dst->GetHeight() : 0,
+                    reftar ? reftar->GetWidth() : 0,
+                    reftar ? reftar->GetHeight() : 0,
+                    src ? src->GetWidth() : 0, src ? src->GetHeight() : 0,
+                    checkQuad ? 1 : 0, checkTextureQuad ? 1 : 0, dstpt[0].x,
+                    dstpt[0].y, dstpt[1].x, dstpt[1].y, dstpt[2].x, dstpt[2].y,
+                    dstpt[3].x, dstpt[3].y, dstpt[4].x, dstpt[4].y, dstpt[5].x,
+                    dstpt[5].y, srcpt[0].x, srcpt[0].y, srcpt[1].x, srcpt[1].y,
+                    srcpt[2].x, srcpt[2].y, srcpt[3].x, srcpt[3].y, srcpt[4].x,
+                    srcpt[4].y, srcpt[5].x, srcpt[5].y);
+            }
+        }
+        if(nTriangles == 2 && checkQuad && checkTextureQuad) {
             bool isSrcRect = isDoubleEqual(srcpt[0].y, srcpt[1].y) &&
                 isDoubleEqual(srcpt[1].x, srcpt[5].x) &&
                 isDoubleEqual(srcpt[0].x, srcpt[2].x) &&
@@ -3577,8 +3663,20 @@ public:
                     std::swap(dstrect.bottom, dstrect.top);
                 }
                 tTVPRect rcdest;
-                if(!TVPIntersectRect(&rcdest, cr, dstrect))
+                if(!TVPIntersectRect(&rcdest, cr, dstrect)) {
+                    if(lowLevelLogoTraceEnabled()) {
+                        if(auto logger = spdlog::get("core")) {
+                            logger->warn(
+                                "WCHAIN stage=visual.operateTriangles.fastRect.skip func=0x6C7440/0x6DE738 "
+                                "dstRect=[{},{},{},{}] refRect=[{},{},{},{}] rcclip=[{},{},{},{}]",
+                                dstrect.left, dstrect.top, dstrect.right,
+                                dstrect.bottom, refrect.left, refrect.top,
+                                refrect.right, refrect.bottom, cr.left, cr.top,
+                                cr.right, cr.bottom);
+                        }
+                    }
                     return;
+                }
 
                 tjs_int dw = dstrect.get_width(), dh = dstrect.get_height();
                 tjs_int rw = refrect.get_width(), rh = refrect.get_height();
@@ -3597,6 +3695,20 @@ public:
                 if(rcdest.bottom < dstrect.bottom) {
                     refrect.bottom -=
                         (float)rh / dh * (dstrect.bottom - rcdest.bottom);
+                }
+                if(lowLevelLogoTraceEnabled()) {
+                    if(auto logger = spdlog::get("core")) {
+                        logger->warn(
+                            "WCHAIN stage=visual.operateTriangles.fastRect func=0x6C7440/0x6DE738 "
+                            "isSrcRect={} isDstRect={} dstRect=[{},{},{},{}] "
+                            "rcdest=[{},{},{},{}] refRect=[{},{},{},{}] rcclip=[{},{},{},{}]",
+                            isSrcRect ? 1 : 0, isDstRect ? 1 : 0,
+                            dstrect.left, dstrect.top, dstrect.right,
+                            dstrect.bottom, rcdest.left, rcdest.top,
+                            rcdest.right, rcdest.bottom, refrect.left,
+                            refrect.top, refrect.right, refrect.bottom,
+                            cr.left, cr.top, cr.right, cr.bottom);
+                    }
                 }
 
                 // 				tjs_int clipW = cr.get_width(),

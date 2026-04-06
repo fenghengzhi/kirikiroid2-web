@@ -94,7 +94,7 @@ NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {
     NCB_PROPERTY(absolute, getAbsolute, setAbsolute);
     NCB_PROPERTY(targetLayer, getTargetLayer, setTargetLayer);
     NCB_METHOD(c);
-    NCB_METHOD(assign);
+    RawCallback(TJS_W("assign"), &SeparateLayerAdaptor::assignCompat, 0);
 }
 NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
     Factory(&D3DAdaptor::factory);
@@ -600,4 +600,3 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(getOuterForce);
     NCB_METHOD(contains);
 }
-

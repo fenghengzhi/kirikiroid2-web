@@ -18,6 +18,9 @@
 #include <cstdlib>
 #include <cmath>
 #include <spdlog/spdlog.h>
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 
 #include "tjsArray.h"
 #include "LayerIntf.h"
@@ -72,6 +75,28 @@ static bool IsGPU() {
         !IndividualConfigManager::GetInstance()->GetValue<bool>(
             "ogl_accurate_render", false);
     return isGPU;
+}
+
+static bool lowLevelLogoTraceEnabled() {
+#ifdef EMSCRIPTEN
+    return EM_ASM_INT({
+               try {
+                   if(typeof window !== 'undefined' &&
+                      window.__KRKR_TRACE_LOGO_CHAIN__) {
+                       return 1;
+                   }
+                   const params = new URLSearchParams(window.location.search);
+                   const traceParam = params.get('trace') || "";
+                   return params.has('traceLogoChain') ||
+                       traceParam === 'logo' || traceParam === 'logo-chain' ||
+                       traceParam === '1';
+               } catch (e) {
+                   return 0;
+               }
+           }) != 0;
+#else
+    return false;
+#endif
 }
 
 //---------------------------------------------------------------------------
@@ -4786,6 +4811,304 @@ void tTJSNI_BaseLayer::AffineCopy(const tTVPPointD *points, iTVPBaseBitmap *src,
 }
 
 //---------------------------------------------------------------------------
+void tTJSNI_BaseLayer::BezierPatchCopy(const tTVPPointD *points, tjs_int divx,
+                                       tjs_int divy, iTVPBaseBitmap *src,
+                                       const tTVPRect &srcrect,
+                                       tTVPBBStretchType type, bool clear) {
+    if(!points || !src || divx < 2 || divy < 2) {
+        return;
+    }
+
+    const auto cubicBlend = [](double p0, double p1, double p2, double p3,
+                               double t) {
+        const double mt = 1.0 - t;
+        return mt * mt * mt * p0 + 3.0 * mt * mt * t * p1 +
+            3.0 * mt * t * t * p2 + t * t * t * p3;
+    };
+    const auto samplePatch = [&](double u, double v) -> tTVPPointD {
+        tTVPPointD curve[4];
+        for(int row = 0; row < 4; ++row) {
+            const auto *cp = &points[row * 4];
+            curve[row].x = cubicBlend(cp[0].x, cp[1].x, cp[2].x, cp[3].x, u);
+            curve[row].y = cubicBlend(cp[0].y, cp[1].y, cp[2].y, cp[3].y, u);
+        }
+        return {
+            cubicBlend(curve[0].x, curve[1].x, curve[2].x, curve[3].x, v),
+            cubicBlend(curve[0].y, curve[1].y, curve[2].y, curve[3].y, v),
+        };
+    };
+
+    std::vector<tTVPPointD> tessellated;
+    tessellated.reserve(static_cast<size_t>(divx) * static_cast<size_t>(divy));
+    for(tjs_int y = 0; y < divy; ++y) {
+        const double v = divy > 1
+            ? static_cast<double>(y) / static_cast<double>(divy - 1)
+            : 0.0;
+        for(tjs_int x = 0; x < divx; ++x) {
+            const double u = divx > 1
+                ? static_cast<double>(x) / static_cast<double>(divx - 1)
+                : 0.0;
+            tessellated.push_back(samplePatch(u, v));
+        }
+    }
+
+    MeshCopy(tessellated.data(), divx, divy, src, srcrect, type, clear);
+}
+
+//---------------------------------------------------------------------------
+void tTJSNI_BaseLayer::MeshCopy(const tTVPPointD *points, tjs_int divx,
+                                tjs_int divy, iTVPBaseBitmap *src,
+                                const tTVPRect &srcrect,
+                                tTVPBBStretchType type, bool clear) {
+    if(!points || !src || divx < 2 || divy < 2) {
+        return;
+    }
+
+    if(DrawFace != dfAlpha && DrawFace != dfAddAlpha && DrawFace != dfOpaque) {
+        TVPThrowExceptionMessage(TVPNotDrawableFaceType, TJS_W("meshCopy"));
+    }
+    if(!MainImage) {
+        TVPThrowExceptionMessage(TVPNotDrawableLayerType);
+    }
+
+    if(clear) {
+        FillRect(ClipRect, NeutralColor);
+    }
+
+    const double srcLeft = static_cast<double>(srcrect.left);
+    const double srcTop = static_cast<double>(srcrect.top);
+    const double srcWidth = static_cast<double>(srcrect.right - srcrect.left);
+    const double srcHeight = static_cast<double>(srcrect.bottom - srcrect.top);
+
+    bool anyUpdated = false;
+    tTVPRect totalUpdateRect;
+
+    auto appendUpdateRect = [&](const tTVPRect &rect) {
+        if(!anyUpdated) {
+            totalUpdateRect = rect;
+            anyUpdated = true;
+        } else {
+            totalUpdateRect.do_union(rect);
+        }
+    };
+
+    auto blitCell = [&](const tTVPPointD *cellPoints, const tTVPRect &cellRect) {
+        tTVPRect updateRect;
+        bool updated = false;
+        switch(DrawFace) {
+            case dfAlpha:
+            case dfAddAlpha:
+                updated = MainImage->AffineBlt(ClipRect, src, cellRect, cellPoints,
+                                               bmCopy, 255, &updateRect, false,
+                                               type, false, NeutralColor);
+                break;
+            case dfOpaque:
+                updated = MainImage->AffineBlt(ClipRect, src, cellRect, cellPoints,
+                                               bmCopy, 255, &updateRect, HoldAlpha,
+                                               type, false, NeutralColor);
+                break;
+            default:
+                break;
+        }
+        if(updated) {
+            ImageModified = true;
+            appendUpdateRect(updateRect);
+        }
+    };
+
+    for(tjs_int y = 0; y < divy - 1; ++y) {
+        const double v0 = static_cast<double>(y) / static_cast<double>(divy - 1);
+        const double v1 = static_cast<double>(y + 1) / static_cast<double>(divy - 1);
+        for(tjs_int x = 0; x < divx - 1; ++x) {
+            const double u0 = static_cast<double>(x) / static_cast<double>(divx - 1);
+            const double u1 = static_cast<double>(x + 1) / static_cast<double>(divx - 1);
+
+            tTVPRect cellRect(
+                static_cast<tjs_int>(std::floor(srcLeft + srcWidth * u0)),
+                static_cast<tjs_int>(std::floor(srcTop + srcHeight * v0)),
+                static_cast<tjs_int>(std::ceil(srcLeft + srcWidth * u1)),
+                static_cast<tjs_int>(std::ceil(srcTop + srcHeight * v1)));
+            if(cellRect.right <= cellRect.left || cellRect.bottom <= cellRect.top) {
+                continue;
+            }
+
+            const auto &p0 = points[y * divx + x];
+            const auto &p1 = points[y * divx + x + 1];
+            const auto &p2 = points[(y + 1) * divx + x];
+            const auto &p3 = points[(y + 1) * divx + x + 1];
+            tTVPPointD upperTriangle[3] = { p0, p1, p2 };
+            tTVPPointD lowerTriangle[3] = { p3, p2, p1 };
+            blitCell(upperTriangle, cellRect);
+            blitCell(lowerTriangle, cellRect);
+        }
+    }
+
+    if(anyUpdated) {
+        totalUpdateRect.add_offsets(ImageLeft, ImageTop);
+        Update(totalUpdateRect);
+    }
+}
+
+//---------------------------------------------------------------------------
+void tTJSNI_BaseLayer::OperateBezierPatch(const tTVPPointD *points,
+                                          tjs_int divx, tjs_int divy,
+                                          iTVPBaseBitmap *src,
+                                          const tTVPRect &srcrect,
+                                          tTVPBlendOperationMode mode,
+                                          tjs_int opacity,
+                                          tTVPBBStretchType type, bool clear) {
+    if(!points || !src || divx < 2 || divy < 2) {
+        return;
+    }
+
+    const auto cubicBlend = [](double p0, double p1, double p2, double p3,
+                               double t) {
+        const double mt = 1.0 - t;
+        return mt * mt * mt * p0 + 3.0 * mt * mt * t * p1 +
+            3.0 * mt * t * t * p2 + t * t * t * p3;
+    };
+    const auto samplePatch = [&](double u, double v) -> tTVPPointD {
+        tTVPPointD curve[4];
+        for(int row = 0; row < 4; ++row) {
+            const auto *cp = &points[row * 4];
+            curve[row].x = cubicBlend(cp[0].x, cp[1].x, cp[2].x, cp[3].x, u);
+            curve[row].y = cubicBlend(cp[0].y, cp[1].y, cp[2].y, cp[3].y, u);
+        }
+        return {
+            cubicBlend(curve[0].x, curve[1].x, curve[2].x, curve[3].x, v),
+            cubicBlend(curve[0].y, curve[1].y, curve[2].y, curve[3].y, v),
+        };
+    };
+
+    std::vector<tTVPPointD> tessellated;
+    tessellated.reserve(static_cast<size_t>(divx) * static_cast<size_t>(divy));
+    for(tjs_int y = 0; y < divy; ++y) {
+        const double v = divy > 1
+            ? static_cast<double>(y) / static_cast<double>(divy - 1)
+            : 0.0;
+        for(tjs_int x = 0; x < divx; ++x) {
+            const double u = divx > 1
+                ? static_cast<double>(x) / static_cast<double>(divx - 1)
+                : 0.0;
+            tessellated.push_back(samplePatch(u, v));
+        }
+    }
+
+    OperateMesh(tessellated.data(), divx, divy, src, srcrect, mode, opacity,
+                type, clear);
+}
+
+//---------------------------------------------------------------------------
+void tTJSNI_BaseLayer::OperateMesh(const tTVPPointD *points, tjs_int divx,
+                                   tjs_int divy, iTVPBaseBitmap *src,
+                                   const tTVPRect &srcrect,
+                                   tTVPBlendOperationMode mode,
+                                   tjs_int opacity,
+                                   tTVPBBStretchType type, bool clear) {
+    if(!points || !src || divx < 2 || divy < 2) {
+        return;
+    }
+
+    if(mode == omAuto)
+        TVPThrowExceptionMessage(TVPCannotAcceptModeAuto);
+
+    tTVPBBBltMethod met;
+    if(!GetBltMethodFromOperationModeAndDrawFace(met, mode)) {
+        TVPThrowExceptionMessage(TVPNotDrawableFaceType,
+                                 TJS_W("operateMesh"));
+    }
+
+    if(DrawFace != dfAlpha && DrawFace != dfAddAlpha && DrawFace != dfOpaque) {
+        TVPThrowExceptionMessage(TVPNotDrawableFaceType,
+                                 TJS_W("operateMesh"));
+    }
+    if(!MainImage) {
+        TVPThrowExceptionMessage(TVPNotDrawableLayerType);
+    }
+
+    if(clear) {
+        FillRect(ClipRect, NeutralColor);
+    }
+
+    const double srcLeft = static_cast<double>(srcrect.left);
+    const double srcTop = static_cast<double>(srcrect.top);
+    const double srcWidth = static_cast<double>(srcrect.right - srcrect.left);
+    const double srcHeight = static_cast<double>(srcrect.bottom - srcrect.top);
+
+    bool anyUpdated = false;
+    tTVPRect totalUpdateRect;
+
+    auto appendUpdateRect = [&](const tTVPRect &rect) {
+        if(!anyUpdated) {
+            totalUpdateRect = rect;
+            anyUpdated = true;
+        } else {
+            totalUpdateRect.do_union(rect);
+        }
+    };
+
+    auto blitCell = [&](const tTVPPointD *cellPoints, const tTVPRect &cellRect) {
+        tTVPRect updateRect;
+        bool updated = false;
+        switch(DrawFace) {
+            case dfAlpha:
+            case dfAddAlpha:
+                updated = MainImage->AffineBlt(ClipRect, src, cellRect, cellPoints,
+                                               met, opacity, &updateRect, false,
+                                               type, false, NeutralColor);
+                break;
+            case dfOpaque:
+                updated = MainImage->AffineBlt(ClipRect, src, cellRect, cellPoints,
+                                               met, opacity, &updateRect,
+                                               HoldAlpha, type, false,
+                                               NeutralColor);
+                break;
+            default:
+                break;
+        }
+        if(updated) {
+            ImageModified = true;
+            appendUpdateRect(updateRect);
+        }
+    };
+
+    for(tjs_int y = 0; y < divy - 1; ++y) {
+        const double v0 = static_cast<double>(y) / static_cast<double>(divy - 1);
+        const double v1 = static_cast<double>(y + 1) /
+            static_cast<double>(divy - 1);
+        for(tjs_int x = 0; x < divx - 1; ++x) {
+            const double u0 = static_cast<double>(x) /
+                static_cast<double>(divx - 1);
+            const double u1 = static_cast<double>(x + 1) /
+                static_cast<double>(divx - 1);
+
+            tTVPRect cellRect(
+                static_cast<tjs_int>(std::floor(srcLeft + srcWidth * u0)),
+                static_cast<tjs_int>(std::floor(srcTop + srcHeight * v0)),
+                static_cast<tjs_int>(std::ceil(srcLeft + srcWidth * u1)),
+                static_cast<tjs_int>(std::ceil(srcTop + srcHeight * v1)));
+            if(cellRect.right <= cellRect.left || cellRect.bottom <= cellRect.top) {
+                continue;
+            }
+
+            const auto &p0 = points[y * divx + x];
+            const auto &p1 = points[y * divx + x + 1];
+            const auto &p2 = points[(y + 1) * divx + x];
+            const auto &p3 = points[(y + 1) * divx + x + 1];
+            tTVPPointD upperTriangle[3] = { p0, p1, p2 };
+            tTVPPointD lowerTriangle[3] = { p3, p2, p1 };
+            blitCell(upperTriangle, cellRect);
+            blitCell(lowerTriangle, cellRect);
+        }
+    }
+
+    if(anyUpdated) {
+        totalUpdateRect.add_offsets(ImageLeft, ImageTop);
+        Update(totalUpdateRect);
+    }
+}
+
+//---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::PileRect(tjs_int dx, tjs_int dy, tTJSNI_BaseLayer *src,
                                 const tTVPRect &srcrect, tjs_int opacity) {
     // obsoleted (use OperateRect)
@@ -5353,12 +5676,42 @@ void tTJSNI_BaseLayer::OperateAffine(const tTVPPointD *points,
         TVPThrowExceptionMessage(TVPNotDrawableLayerType);
     if(!src)
         TVPThrowExceptionMessage(TVPSourceLayerHasNoImage);
+    if(lowLevelLogoTraceEnabled()) {
+        const double quadX = points[1].x - points[0].x + points[2].x;
+        const double quadY = points[1].y - points[0].y + points[2].y;
+        if(auto logger = spdlog::get("core")) {
+            logger->warn(
+                "WCHAIN stage=visual.operateAffine.in func=0x6C7440/0x6DE738 "
+                "layer={}x{} clipRect=[{},{},{},{}] srcRect=[{},{},{},{}] "
+                "points=[({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f}),({:.3f},{:.3f})] "
+                "imageOffset=({}, {}) srcSize={}x{} mode={} opacity={} holdAlpha={} type={}",
+                MainImage->GetWidth(), MainImage->GetHeight(), ClipRect.left,
+                ClipRect.top, ClipRect.right, ClipRect.bottom, srcrect.left,
+                srcrect.top, srcrect.right, srcrect.bottom, points[0].x,
+                points[0].y, points[1].x, points[1].y, points[2].x,
+                points[2].y, quadX, quadY, ImageLeft, ImageTop,
+                src->GetWidth(), src->GetHeight(), static_cast<int>(mode),
+                opacity, HoldAlpha ? 1 : 0, static_cast<int>(type));
+        }
+    }
     updated = MainImage->AffineBlt(ClipRect, src, srcrect, points, met, opacity,
                                    &updaterect, HoldAlpha, type);
 
     ImageModified = updated || ImageModified;
 
     if(updated) {
+        if(lowLevelLogoTraceEnabled()) {
+            if(auto logger = spdlog::get("core")) {
+                logger->warn(
+                    "WCHAIN stage=visual.operateAffine.out func=0x6C7440/0x6DE738 "
+                    "updated={} updateRect=[{},{},{},{}] finalUpdate=[{},{},{},{}]",
+                    updated ? 1 : 0, updaterect.left, updaterect.top,
+                    updaterect.right, updaterect.bottom,
+                    updaterect.left + ImageLeft, updaterect.top + ImageTop,
+                    updaterect.right + ImageLeft,
+                    updaterect.bottom + ImageTop);
+            }
+        }
         updaterect.add_offsets(ImageLeft, ImageTop);
         Update(updaterect);
     }

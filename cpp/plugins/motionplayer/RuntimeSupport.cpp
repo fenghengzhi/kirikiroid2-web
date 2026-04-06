@@ -10,9 +10,14 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <unordered_set>
 
 #include <spdlog/spdlog.h>
+
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 
 #include "StorageIntf.h"
 #include "psbfile/PSBMediaRegistry.h"
@@ -36,6 +41,29 @@ namespace motion::detail {
                                       std::shared_ptr<MotionSnapshot>>
                 registry;
             return registry;
+        }
+
+        struct LogoChainTraceSession {
+            std::uint64_t sequence = 0;
+            std::string motionPath;
+            std::string motionName;
+            std::string firstBadStage;
+            std::string firstBadExpected;
+            std::string firstBadActual;
+            std::string upstreamLastGoodStage;
+            std::string likelyRootCause;
+            bool summaryEmitted = false;
+        };
+
+        std::mutex &logoTraceMutex() {
+            static std::mutex mutex;
+            return mutex;
+        }
+
+        std::unordered_map<std::string, LogoChainTraceSession>
+        &logoTraceSessions() {
+            static std::unordered_map<std::string, LogoChainTraceSession> sessions;
+            return sessions;
         }
 
         std::string lowercase(std::string value) {
@@ -66,10 +94,69 @@ namespace motion::detail {
                 value.compare(value.size() - suffixLen, suffixLen, suffix) == 0;
         }
 
+        std::string basename(const std::string &value) {
+            const auto slash = value.find_last_of("/\\");
+            return slash == std::string::npos ? value : value.substr(slash + 1);
+        }
+
+        bool isTargetLogoMotionPath(const std::string &motionPath) {
+            const auto lowered = lowercase(motionPath);
+            return lowered.find("yuzulogo.mtn") != std::string::npos ||
+                lowered.find("m2logo.mtn") != std::string::npos;
+        }
+
+        bool logoTraceQueryEnabled() {
+#ifdef EMSCRIPTEN
+            return EM_ASM_INT({
+                try {
+                    if(typeof window !== 'undefined' &&
+                       window.__KRKR_TRACE_LOGO_CHAIN__) {
+                        return 1;
+                    }
+                    const params = new URLSearchParams(window.location.search);
+                    const traceParam = params.get('trace') || "";
+                    if(params.has('traceLogoChain')) {
+                        return 1;
+                    }
+                    return traceParam === 'logo' ||
+                        traceParam === 'logo-chain' ||
+                        traceParam === '1';
+                } catch (e) {
+                    return 0;
+                }
+            }) != 0;
+#else
+            const auto commandLine = TVPGetCommandLine().AsStdString();
+            const auto lowered = lowercase(commandLine);
+            return lowered.find("-tracelogochain") != std::string::npos ||
+                lowered.find("--tracelogochain") != std::string::npos;
+#endif
+        }
+
+        LogoChainTraceSession &ensureLogoTraceSessionLocked(
+            const std::string &motionPath) {
+            auto &session = logoTraceSessions()[lowercase(motionPath)];
+            if(session.motionPath != motionPath) {
+                session = {};
+                session.motionPath = motionPath;
+                session.motionName = basename(motionPath);
+            }
+            if(session.motionName.empty()) {
+                session.motionName = basename(motionPath);
+            }
+            return session;
+        }
+
+        std::string frameLabel(double frameTime) {
+            return std::isfinite(frameTime)
+                ? fmt::format("{:.3f}", frameTime)
+                : "n/a";
+        }
+
         bool looksLikeStoragePath(const std::string &value) {
             const auto lowered = lowercase(value);
             static const char *exts[] = { ".psb", ".pimg", ".png", ".jpg",
-                                          ".jpeg", ".bmp", ".tlg", ".webp" };
+                                         ".jpeg", ".bmp", ".tlg", ".webp" };
             return std::any_of(std::begin(exts), std::end(exts),
                                [&lowered](const char *ext) {
                                    return hasSuffix(lowered, ext);
@@ -181,6 +268,41 @@ namespace motion::detail {
                                               .find(loweredToken) !=
                                        std::string::npos;
                                });
+        }
+
+        std::shared_ptr<const PSB::PSBDictionary> navigateDictionaryPath(
+            const std::shared_ptr<const PSB::PSBDictionary> &root,
+            const std::string &path) {
+            if(!root || path.empty()) {
+                return nullptr;
+            }
+
+            auto node = root;
+            std::istringstream stream(path);
+            std::string segment;
+            while(std::getline(stream, segment, '/')) {
+                if(segment.empty() || !node) {
+                    continue;
+                }
+                node = std::dynamic_pointer_cast<const PSB::PSBDictionary>(
+                    (*node)[segment]);
+                if(!node) {
+                    return nullptr;
+                }
+            }
+            return node;
+        }
+
+        std::string joinStrings(const std::vector<std::string> &values,
+                                const char *separator = ",") {
+            std::ostringstream buffer;
+            for(size_t i = 0; i < values.size(); ++i) {
+                if(i > 0) {
+                    buffer << separator;
+                }
+                buffer << values[i];
+            }
+            return buffer.str();
         }
 
         void appendUnique(std::vector<std::string> &values,
@@ -661,12 +783,10 @@ namespace motion::detail {
         snapshot->file = file;
         snapshot->root = root;
         snapshot->moduleValue = root->toTJSVal();
-        const auto loweredPath = lowercase(snapshot->path);
-        if(loweredPath.find("yuzulogo.mtn") != std::string::npos ||
-           loweredPath.find("m2logo.mtn") != std::string::npos) {
-            LOGGER->warn("Motion logo snapshot loaded: path={} clips={} mainLabels={}",
-                         snapshot->path, snapshot->clipsByLabel.size(),
-                         snapshot->mainTimelineLabels.size());
+        if(logoChainTraceEnabled(snapshot)) {
+            resetLogoChainTraceSession(snapshot->path);
+            logoChainTraceLogf(snapshot->path, "snapshot.load", "PSB parse",
+                               -1.0, "path={} phase=begin", snapshot->path);
         }
         appendResourceAlias(*snapshot, path);
         appendResourceAlias(*snapshot, TVPExtractStorageName(path));
@@ -676,14 +796,51 @@ namespace motion::detail {
         scanValue(std::const_pointer_cast<PSB::PSBDictionary>(root), pathParts,
                   *snapshot);
         collectRootResources(root, *snapshot);
-        if(loweredPath.find("yuzulogo.mtn") != std::string::npos ||
-           loweredPath.find("m2logo.mtn") != std::string::npos) {
-            LOGGER->warn("Motion logo snapshot parsed: path={} clips={} mainLabels={} sources={}",
-                         snapshot->path, snapshot->clipsByLabel.size(),
-                         snapshot->mainTimelineLabels.size(),
-                         snapshot->sourceCandidates.size());
-            for(const auto &[rp, res] : snapshot->resourcesByPath) {
-                LOGGER->warn("  resource: {} ({}bytes)", rp, res->data.size());
+        if(logoChainTraceEnabled(snapshot)) {
+            logoChainTraceLogf(
+                snapshot->path, "snapshot.parsed", "PSB parse", -1.0,
+                "path={} clipCount={} mainLabels={} sourceCount={} resourceAliases={}",
+                snapshot->path, snapshot->clipsByLabel.size(),
+                joinStrings(snapshot->mainTimelineLabels),
+                snapshot->sourceCandidates.size(),
+                joinStrings(snapshot->resourceAliases));
+            for(const auto &[resourcePath, resource] : snapshot->resourcesByPath) {
+                if(!hasSuffix(resourcePath, "/pixel") &&
+                   !hasSuffix(resourcePath, "/pal")) {
+                    continue;
+                }
+                const auto iconPath = hasSuffix(resourcePath, "/pixel")
+                    ? resourcePath.substr(0, resourcePath.size() - 6)
+                    : resourcePath.substr(0, resourcePath.size() - 4);
+                const auto iconNode =
+                    navigateDictionaryPath(snapshot->root, iconPath);
+                const auto width = iconNode
+                    ? dictionaryNumber(iconNode, {"width", "truncated_width"})
+                          .value_or(0.0)
+                    : 0.0;
+                const auto height = iconNode
+                    ? dictionaryNumber(iconNode, {"height", "truncated_height"})
+                          .value_or(0.0)
+                    : 0.0;
+                const auto originX = iconNode
+                    ? dictionaryNumber(iconNode, {"originX"}).value_or(0.0)
+                    : 0.0;
+                const auto originY = iconNode
+                    ? dictionaryNumber(iconNode, {"originY"}).value_or(0.0)
+                    : 0.0;
+                const auto compress = iconNode
+                    ? dictionaryString(iconNode, {"compress"}).value_or("raw")
+                    : std::string("raw");
+                const bool hasPal =
+                    snapshot->resourcesByPath.find(iconPath + "/pal") !=
+                    snapshot->resourcesByPath.end();
+                logoChainTraceLogf(
+                    snapshot->path, "snapshot.resource", "PSB parse", -1.0,
+                    "resource={} width={:.0f} height={:.0f} origin=({:.3f},{:.3f}) hasPal={} isRL={} bytes={}",
+                    resourcePath, width, height, originX, originY,
+                    hasPal ? 1 : 0,
+                    lowercase(compress) == "rl" ? 1 : 0,
+                    resource ? resource->data.size() : 0);
             }
         }
         registerModuleSnapshot(snapshot->moduleValue, snapshot);
@@ -829,6 +986,120 @@ namespace motion::detail {
                 }
             }
         }
+    }
+
+    bool logoChainTraceEnabled() {
+        static const bool enabled = logoTraceQueryEnabled();
+        return enabled;
+    }
+
+    bool logoChainTraceEnabledForPath(const std::string &motionPath) {
+        return logoChainTraceEnabled() && isTargetLogoMotionPath(motionPath);
+    }
+
+    bool logoChainTraceEnabled(const std::shared_ptr<MotionSnapshot> &snapshot) {
+        return snapshot && logoChainTraceEnabledForPath(snapshot->path);
+    }
+
+    void resetLogoChainTraceSession(const std::string &motionPath) {
+        if(!logoChainTraceEnabledForPath(motionPath)) {
+            return;
+        }
+        std::lock_guard lock(logoTraceMutex());
+        auto &session = ensureLogoTraceSessionLocked(motionPath);
+        session = {};
+        session.motionPath = motionPath;
+        session.motionName = basename(motionPath);
+    }
+
+    void logoChainTraceLog(const std::string &motionPath,
+                           const char *stage,
+                           const char *func,
+                           const double frameTime,
+                           const std::string &message) {
+        if(!logoChainTraceEnabledForPath(motionPath) || !LOGGER) {
+            return;
+        }
+        std::lock_guard lock(logoTraceMutex());
+        auto &session = ensureLogoTraceSessionLocked(motionPath);
+        ++session.sequence;
+        LOGGER->warn(
+            "CHAIN SEQ={} stage={} func={} motion={} frame={} {}",
+            session.sequence, stage, func, session.motionName,
+            frameLabel(frameTime), message);
+    }
+
+    void logoChainTraceCheck(const std::string &motionPath,
+                             const char *stage,
+                             const char *func,
+                             const double frameTime,
+                             const std::string &expected,
+                             const std::string &actual,
+                             const bool ok,
+                             const std::string &likelyRootCause) {
+        if(!logoChainTraceEnabledForPath(motionPath) || !LOGGER) {
+            return;
+        }
+
+        std::lock_guard lock(logoTraceMutex());
+        auto &session = ensureLogoTraceSessionLocked(motionPath);
+        ++session.sequence;
+        LOGGER->warn(
+            "CHAIN SEQ={} stage={} func={} motion={} frame={} exp={} act={} ok={}",
+            session.sequence, stage, func, session.motionName,
+            frameLabel(frameTime), expected, actual, ok ? 1 : 0);
+
+        if(ok) {
+            if(session.firstBadStage.empty()) {
+                session.upstreamLastGoodStage = stage;
+            }
+            return;
+        }
+
+        if(session.firstBadStage.empty()) {
+            session.firstBadStage = stage;
+            session.firstBadExpected = expected;
+            session.firstBadActual = actual;
+            session.likelyRootCause = likelyRootCause;
+        }
+    }
+
+    void logoChainTraceSummary(const std::string &motionPath,
+                               const char *func,
+                               const double frameTime,
+                               const std::string &note) {
+        if(!logoChainTraceEnabledForPath(motionPath) || !LOGGER) {
+            return;
+        }
+
+        std::lock_guard lock(logoTraceMutex());
+        auto &session = ensureLogoTraceSessionLocked(motionPath);
+        if(session.summaryEmitted) {
+            return;
+        }
+        session.summaryEmitted = true;
+
+        const auto firstBadStage = session.firstBadStage.empty()
+            ? std::string("none")
+            : session.firstBadStage;
+        const auto expected = session.firstBadExpected.empty()
+            ? std::string("all_logged_stages_ok")
+            : session.firstBadExpected;
+        const auto actual = session.firstBadActual.empty()
+            ? std::string("all_logged_stages_ok")
+            : session.firstBadActual;
+        const auto upstream = session.upstreamLastGoodStage.empty()
+            ? std::string("none")
+            : session.upstreamLastGoodStage;
+        const auto rootCause = session.likelyRootCause.empty()
+            ? std::string("not_detected_in_logged_fields")
+            : session.likelyRootCause;
+
+        LOGGER->warn(
+            "CHAIN SUMMARY func={} motion={} frame={} first_bad_stage={} expected={} actual={} upstream_last_good_stage={} likely_root_cause={}{}{}",
+            func, session.motionName, frameLabel(frameTime), firstBadStage,
+            expected, actual, upstream, rootCause,
+            note.empty() ? "" : " note=", note);
     }
 
     // Scan PSB layer tree for action/sync events between prevTime and newTime.

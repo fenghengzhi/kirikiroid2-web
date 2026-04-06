@@ -926,6 +926,23 @@ public:
             DrawSprite->setPosition(Vec2(0, size.height));
             PrimaryLayerArea->setContentSize(size);
             PrimaryLayerArea->setScale(scale);
+            if(auto logger = spdlog::get("core")) {
+                const auto spriteRect = DrawSprite->getTextureRect();
+                const auto primarySize = PrimaryLayerArea->getContentSize();
+                logger->warn(
+                    "WCHAIN stage=window.resetDrawSprite func=0xAA7D70 "
+                    "contentSize={}x{} logicalSize={}x{} zoom={}/{} scale={} "
+                    "paintBox={}x{} drawTextureScale={}x{} spriteRect=({}, {}, {}, {}) "
+                    "spritePos=({}, {}) primarySize={}x{} primaryScale={}",
+                    getContentSize().width, getContentSize().height,
+                    size.width, size.height, ActualZoomNumer,
+                    ActualZoomDenom, scale, LayerWidth, LayerHeight,
+                    _drawTextureScaleX, _drawTextureScaleY, spriteRect.origin.x,
+                    spriteRect.origin.y, spriteRect.size.width,
+                    spriteRect.size.height, DrawSprite->getPositionX(),
+                    DrawSprite->getPositionY(), primarySize.width,
+                    primarySize.height, PrimaryLayerArea->getScale());
+            }
         }
     }
 
@@ -953,6 +970,21 @@ public:
         setZoomScale(scale);
         setContentOffset(offset);
         updateInset();
+        if(auto logger = spdlog::get("core")) {
+            const auto viewSize = getViewSize();
+            const auto contentSize = getContentSize();
+            const auto appliedOffset = getContentOffset();
+            logger->warn(
+                "WCHAIN stage=window.recalcPaintBox func=0xAA7C58 "
+                "paintBox={}x{} viewSize={}x{} contentSize={}x{} "
+                "branch={} scale={} offset=({}, {}) appliedZoom={} "
+                "appliedOffset=({}, {}) drawTextureScale={}x{}",
+                LayerWidth, LayerHeight, viewSize.width, viewSize.height,
+                contentSize.width, contentSize.height, R > r ? "width" : "height",
+                scale, offset.x, offset.y, getZoomScale(),
+                appliedOffset.x, appliedOffset.y, _drawTextureScaleX,
+                _drawTextureScaleY);
+        }
     }
 
     void SetWidth(tjs_int w) override {
@@ -1024,6 +1056,23 @@ public:
         // 		}
         Texture2D *tex2d = DrawSprite->getTexture();
         Texture2D *newtex = tex->GetAdapterTexture(tex2d);
+        float loggedScaleX = 1.f, loggedScaleY = 1.f;
+        tex->GetScale(loggedScaleX, loggedScaleY);
+        if(auto logger = spdlog::get("core")) {
+            const auto viewSize = getViewSize();
+            const auto contentSize = getContentSize();
+            logger->warn(
+                "WCHAIN stage=window.updateDrawBuffer.pre func=0xAA6268 "
+                "tex={} currentTex={} newTex={} paintBox={}x{} tex={}x{} "
+                "internal={}x{} texScale={}x{} viewSize={}x{} contentSize={}x{} "
+                "zoom={} offset=({}, {})",
+                (void *)tex, (void *)tex2d, (void *)newtex, LayerWidth,
+                LayerHeight, tex->GetWidth(), tex->GetHeight(),
+                tex->GetInternalWidth(), tex->GetInternalHeight(), loggedScaleX,
+                loggedScaleY, viewSize.width, viewSize.height,
+                contentSize.width, contentSize.height, getZoomScale(),
+                getContentOffset().x, getContentOffset().y);
+        }
         if(tex2d != newtex) {
             DrawSprite->setTexture(newtex);
             float sw, sh;
@@ -1044,6 +1093,17 @@ public:
             }
             DrawSprite->setTextureRect(cocos2d::Rect(0, 0, sw, sh));
             DrawSprite->setBlendFunc(BlendFunc::DISABLE);
+            if(auto logger = spdlog::get("core")) {
+                const auto spriteRect = DrawSprite->getTextureRect();
+                logger->warn(
+                    "WCHAIN stage=window.updateDrawBuffer.apply func=0xAA6268 "
+                    "sw={} sh={} paintBox={}x{} drawTextureScale={}x{} "
+                    "spriteRect=({}, {}, {}, {})",
+                    sw, sh, LayerWidth, LayerHeight, _drawTextureScaleX,
+                    _drawTextureScaleY, spriteRect.origin.x,
+                    spriteRect.origin.y, spriteRect.size.width,
+                    spriteRect.size.height);
+            }
             ResetDrawSprite();
         }
     }

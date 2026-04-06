@@ -92,17 +92,35 @@ playwright-cli run-code "async page => {
 # 复制游戏文件到构建输出目录
 cp /path/to/game.xp3 out/web/debug/
 
-# 打开浏览器 + 注入日志捕获 + 导航
-playwright-cli open
-playwright-cli run-code "async page => { ... addInitScript ... }"
+# 用 headed 模式打开（WebGL 截图需要）
+playwright-cli open --browser=chrome --headed
+
+# 注入日志捕获
+playwright-cli run-code "async page => {
+  await page.context().addInitScript(() => {
+    window._logs=[];
+    const o=console.log, w=console.warn, e=console.error;
+    const c=(l,a)=>{const m=a.map(x=>typeof x==='string'?x:String(x)).join(' ');window._logs.push('['+l+'] '+m);};
+    console.log=function(){c('L',[...arguments]);o.apply(console,arguments);};
+    console.warn=function(){c('W',[...arguments]);w.apply(console,arguments);};
+    console.error=function(){c('E',[...arguments]);e.apply(console,arguments);};
+  });
+}"
+
+# 导航到目标页面
 playwright-cli goto "http://localhost:8080/index.html?xp3=game.xp3"
 
 # 等待加载后截图
-playwright-cli screenshot --filename=debug.png
+sleep 3
+playwright-cli screenshot --filename=/tmp/debug.png
 
-# 取回完整日志进行分析
-playwright-cli eval "JSON.stringify({total: window._allLogCount, filtered: window._filteredLogs.length})"
-playwright-cli eval "JSON.stringify(window._filteredLogs.slice(0, 80))"
+# 取回日志（用 run-code 避免 eval 的 TypeError）
+playwright-cli run-code "async page => {
+  return JSON.stringify(await page.evaluate(() => ({
+    total: window._logs.length,
+    logs: window._logs.slice(0, 80)
+  })));
+}"
 
 # 关闭
 playwright-cli close
