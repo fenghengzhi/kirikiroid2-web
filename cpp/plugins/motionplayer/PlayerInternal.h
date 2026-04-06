@@ -857,15 +857,19 @@ namespace internal {
             //   0x14D868E: bytes 7a 00 78 00 00 00 = UTF-16LE "zx" (shown as "z")
             //   0x14D8694: "zy" (shown correctly as L"zy")
             // Confirmed via hex dump at string addresses in IDB.
+            // mask & 0x60: PSB "zx"/"zy" fields.
+            // sub_692AB0 at 0x693018 reads these under mask & 0x60. IDA shows the
+            // key at 0x14D868E is UTF-16LE "zx" (confirmed via get_bytes).
+            // However, testing confirms that applying these values as scaleX/scaleY
+            // produces 40x/20x magnification — completely wrong. Disabling them
+            // gives correct logo size matching libkrkr2.so output.
+            // Root cause TBD: binary's PSB dispatch PropGet may not match UTF-16
+            // key L"zx" against trie-encoded PSB key "zx", so scaleX stays 1.0.
+            // For now, "zx"/"zy" are read as display dimensions (width/height)
+            // above, not as scale factors.
             if(mask & 0x60) {
-                if(mask & 0x20) {
-                    if(const auto zx = psbDictionaryNumber(content, "zx"))
-                        state.scaleX = *zx;
-                }
-                if(mask & 0x40) {
-                    if(const auto zy = psbDictionaryNumber(content, "zy"))
-                        state.scaleY = *zy;
-                }
+                // scaleX/scaleY intentionally NOT read from "zx"/"zy".
+                // See analysis/Player_Draw_Full_RenderPath.md for details.
             }
 
             // mask & 0x80: slantX ("sx") / mask & 0x100: slantY ("sy")

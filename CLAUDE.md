@@ -57,6 +57,7 @@
 - `mcp__ida-pro-mcp__decompile` 配合函数地址获取伪代码
 - `mcp__ida-pro-mcp__find` 配合 type "string" 定位字符串引用，但仅匹配 ASCII/UTF-8 — UTF-16 用 `/ida-search-string` 技能
 - IDA 可能只显示 UTF-16 字符串首字符（如 "f" 代表 "fstat.dll"）— 用十六进制转储或 `get_operand_value` 解析
+- IDA 经常将 UTF-16LE 字符串误标为 ASCII（如 `"z"` 实际是 `"zx"`）。原因：UTF-16LE 的 `7A 00 78 00` 被 IDA 在 `7A 00` 处截断为 ASCII `"z"`。libkrkr2.so 中所有传给 `iTJSDispatch2::PropGet` 的 key 都是 `tjs_char*`=UTF-16LE，因此**反编译中出现的单字符字符串常量都应怀疑是截断的 UTF-16LE**。遇到时用 `get_bytes(addr, 16)` 确认真实内容，然后通过 `set_type` 逐个修复 IDA 标注
 - IDA 有时合并独立函数 — 检查 `loc_` 地址处是否有 `SUB SP` 函数序言
 - NCB 类注册函数：查找 `ncb_addMember` (0x54242C) 和 `ncb_addConstant` (0x52FA58) 调用
 - 已重命名函数完整列表见 `.claude/skills/ida-decompile/SKILL.md` "Named Functions" 表
@@ -78,6 +79,7 @@
 - **禁止"先改代码再验证"** — 必须"先反编译 → 写伪代码 → 再改本地代码"
 - **禁止把多个推测链接成结论** — 每一步都必须有独立的反编译/运行时日志证据
 - **禁止从本地代码推断 libkrkr2.so 行为** — 本地代码可能是错的
+- **禁止在架构不一致的基础上打补丁** — 当修复需要 workaround 架构差异时（如本地代码缺少 libkrkr2.so 中存在的计算步骤、或存在 libkrkr2.so 中不存在的计算），必须先重构代码使数据流和计算步骤与 libkrkr2.so 反编译伪代码一一对应（同样的输入→同样的中间变量→同样的计算顺序→同样的输出），再进行修复。打补丁只会引入新 bug
 
 ### 标准工作流程
 1. 发现问题 → 加诊断日志确认现象

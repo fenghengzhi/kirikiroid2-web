@@ -1,2 +1,7 @@
 - [EmotePlayer architecture](project_emoteplayer_architecture.md) — 3-layer object hierarchy, Player struct layout (1496b), 9-case setVariable dispatch, physics engine in progress()
 - [Player class layout](project_player_class_layout.md) — Complete Player object layout (0x568=1384 bytes), NCB registration at 0x6D69C8, 90 functions renamed, root node field map
+- [drawAffineMatrix transform](project_drawAffineMatrix.md) — tx/ty are float (not double), only set by TJS script, ox/oy from calcMatrix provides centering offset
+- [IDA UTF-16 string trap](feedback_ida_utf16_strings.md) — IDA mislabels UTF-16LE as ASCII, showing only first char; MUST verify raw bytes for all string operands
+- [sub_692AB0 PSB key mapping](project_sub692AB0_key_mapping.md) — Byte-verified: "z"→"zx", "s"→"sx", "b"→"bm", "t"→"ti", "i"→"icon", "c"→"coord", "f"→"fov"/"fmax"
+- [Node tree construction](project_node_tree_construction.md) — Full build chain (0x6B51F0→0x6B4A6C→0x6B3C78), sourceWidth/Height NOT set at build time, only for camera(type==10) at render time
+- [Render pipeline timing](project_render_pipeline_timing.md) — Player_calcBounds runs AFTER updateLayers in progress(). sourceWidth/Height=0 for type=0 nodes. 3 coordinate systems. RenderNode struct layout.

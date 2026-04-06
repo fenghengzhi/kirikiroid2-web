@@ -2863,9 +2863,10 @@ namespace motion {
                     const auto &a = n.accumulated;
                     const auto &ic = n.interpolatedCache;
                     LOGGER->warn("  N[{}] type={} label='{}' hasSource={} active={} "
-                        "src='{}' clipW={:.0f} clipH={:.0f}",
+                        "src='{}' clipW={:.0f} clipH={:.0f} inherit=0x{:x} parent={}",
                         ni, n.nodeType, n.layerName, n.hasSource,
-                        a.active, ic.src, n.clipW, n.clipH);
+                        a.active, ic.src, n.clipW, n.clipH,
+                        n.inheritFlags, n.parentIndex);
                     if (n.hasSource || ni == 0) {
                         LOGGER->warn("    interp: x={:.1f} y={:.1f} ox={:.1f} oy={:.1f} "
                             "scaleX={:.3f} scaleY={:.3f} opa={:.3f} angle={:.1f}",
