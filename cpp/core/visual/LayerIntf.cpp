@@ -6276,6 +6276,26 @@ void tTJSNI_BaseLayer::UpdateChildRegion(tTJSNI_BaseLayer *child,
 
     tTVPComplexRect converted;
     converted.CopyWithOffsets(region, cr, child->Rect.left, child->Rect.top);
+    if(lowLevelLogoTraceEnabled()) {
+        const tjs_int regionCount = region.GetCount();
+        const tjs_int convertedCount = converted.GetCount();
+        if(regionCount && convertedCount) {
+            const auto &regionBound = region.GetBound();
+            const auto &convertedBound = converted.GetBound();
+            spdlog::get("core")->info(
+                "WCHAIN stage=layer.updateChildRegion parent={} child={} "
+                "childRect=[{},{},{},{}] regionCount={} regionBound=[{},{},{},{}] "
+                "convertedCount={} convertedBound=[{},{},{},{}] temp={} "
+                "targVisible={} addToPrimary={}",
+                (void *)this, (void *)child, child->Rect.left, child->Rect.top,
+                child->Rect.right, child->Rect.bottom, regionCount,
+                regionBound.left, regionBound.top, regionBound.right,
+                regionBound.bottom, convertedCount, convertedBound.left,
+                convertedBound.top, convertedBound.right, convertedBound.bottom,
+                tempupdate ? 1 : 0, targvisible ? 1 : 0,
+                addtoprimary ? 1 : 0);
+        }
+    }
 
     if(!tempupdate) {
         if(GetCacheEnabled()) {
@@ -6308,6 +6328,17 @@ void tTJSNI_BaseLayer::InternalUpdate(const tTVPRect &rect, bool tempupdate) {
     cr.bottom = Rect.get_height();
     if(!TVPIntersectRect(&cr, cr, rect))
         return;
+    if(lowLevelLogoTraceEnabled()) {
+        spdlog::get("core")->info(
+            "WCHAIN stage=layer.internalUpdate layer={} parent={} "
+            "inputRect=[{},{},{},{}] clipped=[{},{},{},{}] temp={} "
+            "visible={} nodeVisible={} layerRect=[{},{},{},{}]",
+            (void *)this, (void *)Parent, rect.left, rect.top, rect.right,
+            rect.bottom, cr.left, cr.top, cr.right, cr.bottom,
+            tempupdate ? 1 : 0, GetVisible() ? 1 : 0,
+            GetNodeVisible() ? 1 : 0, Rect.left, Rect.top, Rect.right,
+            Rect.bottom);
+    }
 
     if(!tempupdate) {
         if(GetCacheEnabled()) {
@@ -6839,6 +6870,15 @@ void tTJSNI_BaseLayer::CopySelfForRect(iTVPBaseBitmap *dest, tjs_int destx,
 void tTJSNI_BaseLayer::CopySelf(iTVPBaseBitmap *dest, tjs_int destx,
                                 tjs_int desty, const tTVPRect &r) {
     const tTVPRect &uer = UpdateExcludeRect;
+    if(lowLevelLogoTraceEnabled() && !uer.is_empty()) {
+        spdlog::get("core")->info(
+            "WCHAIN stage=layer.copySelf layer={} dest={} destx={} desty={} "
+            "rect=[{},{},{},{}] updateExclude=[{},{},{},{}] imageLeft={} "
+            "imageTop={} layerRect=[{},{},{},{}]",
+            (void *)this, (void *)dest, destx, desty, r.left, r.top, r.right,
+            r.bottom, uer.left, uer.top, uer.right, uer.bottom, ImageLeft,
+            ImageTop, Rect.left, Rect.top, Rect.right, Rect.bottom);
+    }
     if(uer.is_empty()) {
         CopySelfForRect(dest, destx, desty, r);
     } else {
@@ -7460,12 +7500,37 @@ void tTJSNI_BaseLayer::DrawCompleted(const tTVPRect &destrect,
     // as UpdateBitmapForChild.
     if(DisplayType == ltBinder ||
        (MainImage == nullptr && DirectTransferToParent)) {
+        if(lowLevelLogoTraceEnabled()) {
+            spdlog::get("core")->info(
+                "WCHAIN stage=layer.drawCompleted.forward layer={} target={} "
+                "destRect=[{},{},{},{}] clipRect=[{},{},{},{}] type={} "
+                "opacity={} rect=[{},{},{},{}]",
+                (void *)this, (void *)CurrentDrawTarget, destrect.left,
+                destrect.top, destrect.right, destrect.bottom, cliprect.left,
+                cliprect.top, cliprect.right, cliprect.bottom, (int)type,
+                opacity, Rect.left, Rect.top, Rect.right, Rect.bottom);
+        }
         tTVPRect _destrect(destrect);
         tTVPRect _cliprect(cliprect);
         _destrect.add_offsets(Rect.left, Rect.top);
         CurrentDrawTarget->DrawCompleted(_destrect, bmp, _cliprect, type,
                                          opacity);
         return;
+    }
+
+    if(lowLevelLogoTraceEnabled()) {
+        spdlog::get("core")->info(
+            "WCHAIN stage=layer.drawCompleted.local layer={} bmp={} "
+            "bmpIsChildBuffer={} destRect=[{},{},{},{}] clipRect=[{},{},{},{}] "
+            "displayType={} srcType={} opacity={} updateOfs=({}, {}) "
+            "updateRectForChild=[{},{},{},{}] layerRect=[{},{},{},{}]",
+            (void *)this, (void *)bmp, bmp == UpdateBitmapForChild ? 1 : 0,
+            destrect.left, destrect.top, destrect.right, destrect.bottom,
+            cliprect.left, cliprect.top, cliprect.right, cliprect.bottom,
+            (int)DisplayType, (int)type, opacity, UpdateOfsX, UpdateOfsY,
+            UpdateRectForChild.left, UpdateRectForChild.top,
+            UpdateRectForChild.right, UpdateRectForChild.bottom, Rect.left,
+            Rect.top, Rect.right, Rect.bottom);
     }
 
     if(bmp != UpdateBitmapForChild) {
@@ -7690,6 +7755,28 @@ void tTJSNI_BaseLayer::CompleteForWindow(tTVPDrawable *drawable) {
     if(Manager)
         Manager->GetLayerTreeOwner()->StartBitmapCompletion(Manager);
     try {
+        if(lowLevelLogoTraceEnabled() && Manager) {
+            const auto &updateRegion = Manager->GetUpdateRegionForCompletion();
+            const tjs_int count = updateRegion.GetCount();
+            if(count) {
+                const auto &bound = updateRegion.GetBound();
+                spdlog::get("core")->info(
+                    "WCHAIN stage=layer.completeForWindow.begin layer={} "
+                    "manager={} drawable={} isGPU={} updateCount={} "
+                    "updateBound=[{},{},{},{}] rect=[{},{},{},{}]",
+                    (void *)this, (void *)Manager, (void *)drawable,
+                    IsGPU() ? 1 : 0, count, bound.left, bound.top, bound.right,
+                    bound.bottom, Rect.left, Rect.top, Rect.right,
+                    Rect.bottom);
+            } else {
+                spdlog::get("core")->info(
+                    "WCHAIN stage=layer.completeForWindow.begin layer={} "
+                    "manager={} drawable={} isGPU={} updateCount=0 rect=[{},{},{},{}]",
+                    (void *)this, (void *)Manager, (void *)drawable,
+                    IsGPU() ? 1 : 0, Rect.left, Rect.top, Rect.right,
+                    Rect.bottom);
+            }
+        }
         if(IsGPU()) {
             InternalComplete2_GPU(Rect, drawable);
         } else {

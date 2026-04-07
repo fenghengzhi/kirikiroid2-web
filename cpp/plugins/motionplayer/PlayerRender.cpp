@@ -332,7 +332,6 @@ namespace {
         layer->SetImageSize(static_cast<tjs_uint>(width),
                             static_cast<tjs_uint>(height));
         layer->SetSize(width, height);
-        layer->SetVisible(true);
         layer->SetClip(0, 0, width, height);
         tTVPRect rect(0, 0, width, height);
         layer->FillRect(rect, clearColor);

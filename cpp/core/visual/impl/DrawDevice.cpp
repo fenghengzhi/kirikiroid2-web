@@ -11,6 +11,9 @@
 
 #include "tjsCommHead.h"
 #include <spdlog/spdlog.h>
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 
 #include <algorithm>
 #include "DrawDevice.h"
@@ -19,6 +22,30 @@
 #include "LayerManager.h"
 #include "WindowIntf.h"
 #include "DebugIntf.h"
+
+static bool lowLevelLogoTraceEnabled() {
+#ifdef EMSCRIPTEN
+    return EM_ASM_INT({
+               try {
+                   if(typeof window !== 'undefined' &&
+                      window.__KRKR_TRACE_LOGO_CHAIN__) {
+                       return 1;
+                   }
+                   const params = new URLSearchParams(window.location.search);
+                   const traceParam = params.get('trace') || "";
+                   return params.has('traceLogoChain') ||
+                          traceParam === 'logo' ||
+                          traceParam.split(',').includes('logo')
+                              ? 1
+                              : 0;
+               } catch(e) {
+                   return 0;
+               }
+           }) != 0;
+#else
+    return false;
+#endif
+}
 
 //---------------------------------------------------------------------------
 tTVPDrawDevice::tTVPDrawDevice() {
@@ -184,6 +211,13 @@ void tTVPDrawDevice::NotifyLayerResize(iTVPLayerManager *manager) {
 void tTVPDrawDevice::NotifyLayerImageChange(iTVPLayerManager *manager) {
     iTVPLayerManager *primary_manager =
         GetLayerManagerAt(PrimaryLayerManagerIndex);
+    if(lowLevelLogoTraceEnabled()) {
+        spdlog::get("core")->info(
+            "WCHAIN stage=drawDevice.notifyLayerImageChange drawDevice={} "
+            "manager={} primaryManager={} primaryMatch={} window={}",
+            (void *)this, (void *)manager, (void *)primary_manager,
+            primary_manager == manager ? 1 : 0, (void *)Window);
+    }
     if(primary_manager == manager)
         Window->RequestUpdate();
 }
@@ -580,6 +614,12 @@ void tTVPDrawDevice::RequestInvalidation(const tTVPRect &rect) {
 
 //---------------------------------------------------------------------------
 void tTVPDrawDevice::Update() {
+    if(lowLevelLogoTraceEnabled()) {
+        spdlog::get("core")->info(
+            "WCHAIN stage=drawDevice.update drawDevice={} managerCount={} "
+            "primaryIndex={}",
+            (void *)this, Managers.size(), PrimaryLayerManagerIndex);
+    }
     for(auto &Manager : Managers) {
         Manager->UpdateToDrawDevice();
     }

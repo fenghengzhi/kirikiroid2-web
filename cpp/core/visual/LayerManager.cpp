@@ -11,6 +11,9 @@
 
 #include "tjsCommHead.h"
 #include <spdlog/spdlog.h>
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 
 #include "tjsArray.h"
 #include "LayerManager.h"
@@ -22,6 +25,30 @@
 #include "TickCount.h"
 #include "DebugIntf.h"
 #include "LayerTreeOwner.h"
+
+static bool lowLevelLogoTraceEnabled() {
+#ifdef EMSCRIPTEN
+    return EM_ASM_INT({
+               try {
+                   if(typeof window !== 'undefined' &&
+                      window.__KRKR_TRACE_LOGO_CHAIN__) {
+                       return 1;
+                   }
+                   const params = new URLSearchParams(window.location.search);
+                   const traceParam = params.get('trace') || "";
+                   return params.has('traceLogoChain') ||
+                          traceParam === 'logo' ||
+                          traceParam.split(',').includes('logo')
+                              ? 1
+                              : 0;
+               } catch(e) {
+                   return 0;
+               }
+           }) != 0;
+#else
+    return false;
+#endif
+}
 
 //---------------------------------------------------------------------------
 // tTVPLayerManager
@@ -123,6 +150,16 @@ void tTVPLayerManager::DrawCompleted(const tTVPRect &destrect,
     tjs_int w, h;
     if(!/*LayerTreeOwner->*/ GetPrimaryLayerSize(w, h))
         return;
+    if(lowLevelLogoTraceEnabled()) {
+        spdlog::get("core")->info(
+            "WCHAIN stage=manager.drawCompleted manager={} primary={} "
+            "destRect=[{},{},{},{}] clipRect=[{},{},{},{}] type={} opacity={} "
+            "bmp={} bmpSize={}x{}",
+            (void *)this, (void *)Primary, destrect.left, destrect.top,
+            destrect.right, destrect.bottom, cliprect.left, cliprect.top,
+            cliprect.right, cliprect.bottom, (int)type, opacity, (void *)bmp,
+            bmp ? bmp->GetWidth() : 0, bmp ? bmp->GetHeight() : 0);
+    }
     // Window->GetDrawDevice()->GetSrcSize(w, h);
     if(!DrawBuffer) {
         // create draw buffer
@@ -322,6 +359,22 @@ void tTVPLayerManager::NotifyWindowInvalidation() {
     // to LayerTreeOwner.
     if(!LayerTreeOwner)
         return;
+    if(lowLevelLogoTraceEnabled()) {
+        const tjs_int count = UpdateRegion.GetCount();
+        if(count) {
+            const auto &bound = UpdateRegion.GetBound();
+            spdlog::get("core")->info(
+                "WCHAIN stage=manager.notifyWindowInvalidation manager={} "
+                "primary={} updateCount={} updateBound=[{},{},{},{}]",
+                (void *)this, (void *)Primary, count, bound.left, bound.top,
+                bound.right, bound.bottom);
+        } else {
+            spdlog::get("core")->info(
+                "WCHAIN stage=manager.notifyWindowInvalidation manager={} "
+                "primary={} updateCount=0",
+                (void *)this, (void *)Primary);
+        }
+    }
 
     LayerTreeOwner->NotifyLayerImageChange(this);
     // TODO atlernative of LayerTreeOwner->RequestUpdate();
@@ -1039,17 +1092,68 @@ void tTVPLayerManager::AddUpdateRegion(const tTVPComplexRect &rects) {
     UpdateRegion.Or(rects);
     if(UpdateRegion.GetCount() > TVP_UPDATE_UNITE_LIMIT)
         UpdateRegion.Unite();
+    if(lowLevelLogoTraceEnabled()) {
+        const tjs_int addedCount = rects.GetCount();
+        const tjs_int mergedCount = UpdateRegion.GetCount();
+        if(mergedCount) {
+            const auto &merged = UpdateRegion.GetBound();
+            if(addedCount) {
+                const auto &added = rects.GetBound();
+                spdlog::get("core")->info(
+                    "WCHAIN stage=manager.addUpdateRegion.rects manager={} "
+                    "addedCount={} addedBound=[{},{},{},{}] mergedCount={} "
+                    "mergedBound=[{},{},{},{}]",
+                    (void *)this, addedCount, added.left, added.top,
+                    added.right, added.bottom, mergedCount, merged.left,
+                    merged.top, merged.right, merged.bottom);
+            } else {
+                spdlog::get("core")->info(
+                    "WCHAIN stage=manager.addUpdateRegion.rects manager={} "
+                    "addedCount=0 mergedCount={} mergedBound=[{},{},{},{}]",
+                    (void *)this, mergedCount, merged.left, merged.top,
+                    merged.right, merged.bottom);
+            }
+        }
+    }
     NotifyWindowInvalidation();
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::AddUpdateRegion(const tTVPRect &rect) {
     // the window is invalidated;
     UpdateRegion.Or(rect);
+    if(lowLevelLogoTraceEnabled()) {
+        const tjs_int mergedCount = UpdateRegion.GetCount();
+        if(mergedCount) {
+            const auto &merged = UpdateRegion.GetBound();
+            spdlog::get("core")->info(
+                "WCHAIN stage=manager.addUpdateRegion.rect manager={} "
+                "added=[{},{},{},{}] mergedCount={} mergedBound=[{},{},{},{}]",
+                (void *)this, rect.left, rect.top, rect.right, rect.bottom,
+                mergedCount, merged.left, merged.top, merged.right,
+                merged.bottom);
+        }
+    }
     NotifyWindowInvalidation();
 }
 //---------------------------------------------------------------------------
 void tTVPLayerManager::UpdateToDrawDevice() {
     if(!Primary) return;
+    if(lowLevelLogoTraceEnabled()) {
+        const tjs_int count = UpdateRegion.GetCount();
+        if(count) {
+            const auto &bound = UpdateRegion.GetBound();
+            spdlog::get("core")->info(
+                "WCHAIN stage=manager.updateToDrawDevice manager={} primary={} "
+                "updateCount={} updateBound=[{},{},{},{}]",
+                (void *)this, (void *)Primary, count, bound.left, bound.top,
+                bound.right, bound.bottom);
+        } else {
+            spdlog::get("core")->info(
+                "WCHAIN stage=manager.updateToDrawDevice manager={} primary={} "
+                "updateCount=0",
+                (void *)this, (void *)Primary);
+        }
+    }
     Primary->CompleteForWindow(this);
 }
 //---------------------------------------------------------------------------
