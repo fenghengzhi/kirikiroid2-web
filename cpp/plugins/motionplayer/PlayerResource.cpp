@@ -49,6 +49,10 @@ namespace motion {
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         _variableValues.clear();
+        _variableAnimators.clear();
+        _controllerAnimators.clear();
+        _evalResultValues.clear();
+        _evalResultOrder.clear();
         _motionKey.Clear();
     }
 

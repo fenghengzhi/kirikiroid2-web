@@ -5,6 +5,8 @@
 // Binary: D3DEmotePlayerNativeInstance(24b) → EmoteObject(40b) → Player(1496b)
 //
 
+#include <algorithm>
+
 #include "EmotePlayer.h"
 #include "RuntimeSupport.h"
 #include "ncbind.hpp"
@@ -24,6 +26,11 @@ namespace motion {
     void EmotePlayer::setVisible(bool v) {
         _visible = v;
         _player.setVisible(v);
+    }
+
+    void EmotePlayer::setMeshDivisionRatio(double v) {
+        _meshDivisionRatio = v;
+        _player.setEmoteMeshDivisionRatio(v);
     }
 
     bool EmotePlayer::getAnimating() const {
@@ -120,43 +127,153 @@ namespace motion {
     void EmotePlayer::initPhysics() { STUB_WARN(initPhysics); }
 
     // Aligned to libkrkr2.so sub_5302E4: delegates to Player's rotAnimator
-    void EmotePlayer::setRot(double rot) {
+    void EmotePlayer::setRot(double rot, double transition, double ease) {
         _rot = rot;
-        _player.setRotate(rot);
+        _player.setRotate(rot, transition, ease);
+        _modified = true;
     }
 
-    // Aligned to libkrkr2.so sub_5302DC: binary returns hardcoded 0.0
-    double EmotePlayer::getRot() { return _rot; }
+    tjs_error EmotePlayer::setRotCompat(tTJSVariant *, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 1 || !param[0]) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        const double transition =
+            (numparams >= 2 && param[1]) ? param[1]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        self->setRot(param[0]->AsReal(), transition, ease);
+        return TJS_S_OK;
+    }
+
+    // Aligned to libkrkr2.so sub_53030C: binary returns hardcoded 0.0
+    double EmotePlayer::getRot() { return 0.0; }
 
     // Aligned to libkrkr2.so sub_5301EC: delegates to Player's coordAnimator
-    void EmotePlayer::setCoord(double x, double y) {
+    void EmotePlayer::setCoord(double x, double y, double transition,
+                               double ease) {
         _coordX = x;
         _coordY = y;
-        // Coordinates stored locally for contains() AABB test.
-        // In the binary, setCoord delegates to Player's coordAnimator.
+        _player.setEmoteCoord(x, y, transition, ease);
+        _modified = true;
+    }
+
+    tjs_error EmotePlayer::setCoordCompat(tTJSVariant *, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 2 || !param[0] || !param[1]) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        const double transition =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
+        self->setCoord(param[0]->AsReal(), param[1]->AsReal(),
+                       transition, ease);
+        return TJS_S_OK;
     }
 
     // Aligned to libkrkr2.so sub_530260: finalScale = baseScale * userScale
-    void EmotePlayer::setScale(double s) {
+    void EmotePlayer::setScale(double s, double transition, double ease) {
         _userScale = static_cast<float>(s);
-        // Binary: *(float*)(this+44) = s; then pass baseScale * s to animator
-        // We don't have the full animator pipeline, but store for contains()
+        const double finalScale =
+            static_cast<double>(_baseScale) * static_cast<double>(_userScale);
+        _player.setEmoteScale(finalScale, transition, ease);
+        _modified = true;
+    }
+
+    tjs_error EmotePlayer::setScaleCompat(tTJSVariant *, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 1 || !param[0]) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        const double transition =
+            (numparams >= 2 && param[1]) ? param[1]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        self->setScale(param[0]->AsReal(), transition, ease);
+        return TJS_S_OK;
     }
 
     // Aligned to libkrkr2.so sub_5302DC: binary returns hardcoded 1.0
-    double EmotePlayer::getScale() { return static_cast<double>(_userScale); }
+    double EmotePlayer::getScale() { return 1.0; }
 
-    void EmotePlayer::setColor(tjs_int color) { _color = color; }
+    void EmotePlayer::setColor(tjs_int color, double transition, double ease) {
+        _color = color;
+        _player.setEmoteColor(static_cast<tjs_uint32>(color), transition, ease);
+        _modified = true;
+    }
+
+    tjs_error EmotePlayer::setColorCompat(tTJSVariant *, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 1 || !param[0]) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        const double transition =
+            (numparams >= 2 && param[1]) ? param[1]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        self->setColor(param[0]->AsInteger(), transition, ease);
+        return TJS_S_OK;
+    }
     // Aligned to libkrkr2.so sub_530320: binary returns hardcoded 0
-    tjs_int EmotePlayer::getColor() { return _color; }
+    tjs_int EmotePlayer::getColor() { return 0; }
 
     // --- Variable system: delegates to Player ---
     // Aligned to libkrkr2.so sub_5305C8 → sub_671228:
-    // In binary, setVariable routes through a 9-case type dispatch.
-    // Our Player::setVariable stores into _variableValues which feeds updateLayers.
-    void EmotePlayer::setVariable(ttstr label, double value) {
-        _player.setVariable(label, value);
+    // wrapper forwards label/value/transition/ease into Player_setVariable.
+    void EmotePlayer::setVariable(ttstr label, double value, double transition,
+                                  double ease) {
+        _player.setVariable(label, value, transition, ease);
         _modified = true;
+    }
+
+    tjs_error EmotePlayer::setVariableCompat(tTJSVariant *, tjs_int numparams,
+                                             tTJSVariant **param,
+                                             iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 2 || !param[0] || !param[1]) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        const double transition =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
+        self->setVariable(ttstr(*param[0]), param[1]->AsReal(), transition,
+                          ease);
+        return TJS_S_OK;
     }
 
     double EmotePlayer::getVariable(ttstr label) {
@@ -184,16 +301,47 @@ namespace motion {
     }
 
     // --- Wind/Force ---
-    void EmotePlayer::startWind(double a, double b, double c) {
-        // Aligned to libkrkr2.so sub_6709AC: creates 0x61C-byte wind simulator.
-        // We don't have the full simulator; store parameters for future use.
-        _player.setHairScale(a);
-        _player.setPartsScale(b);
-        _player.setBustScale(c);
+    void EmotePlayer::startWind(double minAngle, double maxAngle,
+                                double amplitude, double freqX,
+                                double freqY) {
+        _player.startWind(minAngle, maxAngle, amplitude, freqX, freqY);
+        _modified = true;
+    }
+
+    tjs_error EmotePlayer::startWindCompat(tTJSVariant *, tjs_int numparams,
+                                           tTJSVariant **param,
+                                           iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 5 || !param[0] || !param[1] || !param[2] ||
+           !param[3] || !param[4]) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        self->startWind(param[0]->AsReal(), param[1]->AsReal(),
+                        param[2]->AsReal(), param[3]->AsReal(),
+                        param[4]->AsReal());
+        return TJS_S_OK;
     }
 
     void EmotePlayer::stopWind() {
-        // Aligned to libkrkr2.so: destroys wind simulator at Player+1128
+        _player.stopWind();
+        _modified = true;
+    }
+
+    tjs_error EmotePlayer::stopWindCompat(tTJSVariant *, tjs_int,
+                                          tTJSVariant **,
+                                          iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        self->stopWind();
+        return TJS_S_OK;
     }
 
     // --- Timeline methods: delegate to Player ---
@@ -284,7 +432,12 @@ namespace motion {
     // Binary progress() delegates to Player's full physics/animation engine.
     void EmotePlayer::pass(double dt) {
         _progress += dt;
-        _player.frameProgress(dt);
+        double remaining = dt;
+        while(remaining > 0.0) {
+            const double step = std::min(remaining, 1.1);
+            _player.frameProgress(step);
+            remaining -= step;
+        }
         _modified = true;
     }
 
@@ -294,9 +447,35 @@ namespace motion {
 
     // Aligned to libkrkr2.so sub_672D58: routes by label to bust/h/parts
     void EmotePlayer::setOuterForce(double x, double y) {
-        // Binary EmotePlayer API doesn't have label parameter;
-        // the label routing happens in Player-level setVariable dispatch.
-        // Store for potential future use.
+        setOuterForce(TJS_W("bust"), x, y, 0.0, 0.0);
+    }
+
+    void EmotePlayer::setOuterForce(ttstr label, double x, double y,
+                                    double transition, double ease) {
+        _player.setOuterForce(label, x, y, transition, ease);
+        _modified = true;
+    }
+
+    tjs_error EmotePlayer::setOuterForceCompat(tTJSVariant *, tjs_int numparams,
+                                               tTJSVariant **param,
+                                               iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 3 || !param[0] || !param[1] || !param[2]) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        const ttstr label(*param[0]);
+        const double transition =
+            (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 5 && param[4]) ? param[4]->AsReal() : 0.0;
+        self->setOuterForce(label, param[1]->AsReal(), param[2]->AsReal(),
+                            transition, ease);
+        return TJS_S_OK;
     }
 
     tTJSVariant EmotePlayer::getOuterForce() {
@@ -323,6 +502,40 @@ namespace motion {
         const auto scaledHeight = height * scale;
         return x >= _coordX && x <= (_coordX + scaledWidth) &&
                y >= _coordY && y <= (_coordY + scaledHeight);
+    }
+
+    bool EmotePlayer::contains(ttstr label, double x, double y) {
+        if(!_visible || label.IsEmpty()) {
+            return false;
+        }
+        return _player.hitTestLayer(label, x, y);
+    }
+
+    tjs_error EmotePlayer::containsCompat(tTJSVariant *result, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(!result) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        if(numparams >= 3 && param[0] && param[1] && param[2]) {
+            *result = tTJSVariant(
+                self->contains(ttstr(*param[0]),
+                               param[1]->AsReal(),
+                               param[2]->AsReal()));
+            return TJS_S_OK;
+        }
+        if(numparams >= 2 && param[0] && param[1]) {
+            *result = tTJSVariant(
+                self->contains(param[0]->AsReal(), param[1]->AsReal()));
+            return TJS_S_OK;
+        }
+        return TJS_E_INVALIDPARAM;
     }
 
 } // namespace motion

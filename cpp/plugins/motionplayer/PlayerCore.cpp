@@ -1,9 +1,22 @@
 // PlayerCore.cpp — Constructor, setMotion, serialize, core properties
 // Split from Player.cpp for maintainability.
 //
+#include <cctype>
+#include <cmath>
+
 #include "PlayerInternal.h"
 
 using namespace motion::internal;
+
+namespace {
+    std::string lowerAscii(std::string value) {
+        for(char &ch : value) {
+            ch = static_cast<char>(
+                std::tolower(static_cast<unsigned char>(ch)));
+        }
+        return value;
+    }
+}
 
 namespace motion {
 
@@ -69,6 +82,10 @@ namespace motion {
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         _variableValues.clear();
+        _variableAnimators.clear();
+        _controllerAnimators.clear();
+        _evalResultValues.clear();
+        _evalResultOrder.clear();
 
         if(snapshot) {
             activateMotion(*_runtime, snapshot);
@@ -94,6 +111,10 @@ namespace motion {
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         _variableValues.clear();
+        _variableAnimators.clear();
+        _controllerAnimators.clear();
+        _evalResultValues.clear();
+        _evalResultOrder.clear();
         ensureMotionLoaded();
     }
 
@@ -536,17 +557,65 @@ namespace motion {
             [](const auto &entry) { return entry.second.playing; });
     }
 
-    // Aligned to libkrkr2.so sub_672568 at 0x672568:
-    // setRotate is a raw callback that parses TJS params (angle, accel, weight)
-    // and calls sub_666490 on the inner emote renderer. Since our web port does
-    // not have the emote physics renderer (player+1096), we store the value for
-    // potential future use. The full implementation requires the physics subsystem.
-    void Player::setRotate(double rot) {
-        // sub_672568: stores rotation params to emote renderer (player+1096+1161)
-        // We don't have that subsystem, but store the angle.
-        _rotateAngle = rot;
+    // Aligned to libkrkr2.so D3DEmotePlayer_setCoord (0x5301EC):
+    // store the coord animator payload on Player and keep root x/y in sync.
+    void Player::setEmoteCoord(double x, double y, double transition,
+                               double ease) {
+        _emoteCoordState.x = x;
+        _emoteCoordState.y = y;
+        _emoteCoordState.transition = transition;
+        _emoteCoordState.ease = ease;
+        setX(x);
+        setY(y);
+        _emoteDirty = true;
     }
+
+    // Aligned to libkrkr2.so D3DEmotePlayer_setScale (0x530260):
+    // the wrapper multiplies baseScale * userScale, then forwards the final
+    // scalar plus transition/ease to the inner Player scale animator.
+    void Player::setEmoteScale(double scale, double transition, double ease) {
+        _emoteScaleState.value = scale;
+        _emoteScaleState.transition = transition;
+        _emoteScaleState.ease = ease;
+        _emoteDirty = true;
+    }
+
+    // Aligned to libkrkr2.so D3DEmotePlayer_setRot (0x5302E4):
+    // read player+1161, set player+1162=1, then forward rot/transition/ease
+    // to the Player rot animator sink.
+    void Player::setRotate(double rot, double transition, double ease) {
+        _rotateAngle = rot;
+        _emoteRotState.value = rot;
+        _emoteRotState.transition = transition;
+        _emoteRotState.ease = ease;
+        _emoteDirty = true;
+    }
+
+    // Aligned to libkrkr2.so D3DEmotePlayer_setColor (0x530314):
+    // unpack AARRGGBB into four float byte values and forward them to the
+    // Player color animator sink together with transition/ease.
+    void Player::setEmoteColor(tjs_uint32 color, double transition,
+                               double ease) {
+        _emoteColorState.packed = color;
+        _emoteColorState.rgbaBytes[0] =
+            static_cast<float>(static_cast<std::uint8_t>(color));
+        _emoteColorState.rgbaBytes[1] =
+            static_cast<float>(static_cast<std::uint8_t>(color >> 8));
+        _emoteColorState.rgbaBytes[2] =
+            static_cast<float>(static_cast<std::uint8_t>(color >> 16));
+        _emoteColorState.rgbaBytes[3] =
+            static_cast<float>(static_cast<std::uint8_t>(color >> 24));
+        _emoteColorState.transition = transition;
+        _emoteColorState.ease = ease;
+        _emoteDirty = true;
+    }
+
     void Player::setMirror(bool mirror) { setFlip(mirror); }
+
+    void Player::setEmoteMeshDivisionRatio(double v) {
+        _emoteMeshDivisionRatio = v;
+        _emoteMeshDivisionRatioDup = v;
+    }
 
     // Aligned to libkrkr2.so:
     // sub_681F20: player+1184 = a2
@@ -555,6 +624,77 @@ namespace motion {
     void Player::setPartsScale(double s) { _partsScale = s; }
     // sub_681F30: player+1200 = a2
     void Player::setBustScale(double s) { _bustScale = s; }
+
+    // Aligned to D3DEmotePlayer_startWind (0x530680) -> Player_startWind (0x6709AC):
+    // normalize amplitude, optionally destroy/rebuild wind simulator state, then
+    // store min/max/amplitude/freq and reset the active counter.
+    void Player::startWind(double minAngle, double maxAngle, double amplitude,
+                           double freqX, double freqY) {
+        const double absAmplitude = std::abs(amplitude);
+        const double normalizedMin = amplitude >= 0.0 ? minAngle : maxAngle;
+        const double normalizedMax = amplitude >= 0.0 ? maxAngle : minAngle;
+
+        if(absAmplitude == 0.0 || normalizedMin == normalizedMax ||
+           (freqX == 0.0 && freqY == 0.0)) {
+            stopWind();
+            return;
+        }
+
+        const bool rebuild = !_windState.active ||
+            _windState.minAngle != normalizedMin ||
+            _windState.maxAngle != normalizedMax;
+        if(rebuild) {
+            _windState = {};
+            _windState.active = true;
+        }
+
+        _windState.active = true;
+        _windState.minAngle = normalizedMin;
+        _windState.maxAngle = normalizedMax;
+        _windState.amplitude = absAmplitude;
+        _windState.freqX = freqX;
+        _windState.freqY = freqY;
+        const double direction = _windState.prevPhase > _windState.phase
+            ? -1.0
+            : 1.0;
+        const double ratio = _emoteMeshDivisionRatio != 0.0
+            ? _emoteMeshDivisionRatio
+            : 1.0;
+        _windState.scaledAmplitude = direction * (absAmplitude / ratio);
+        _windState.counter = 0;
+        _emoteDirty = true;
+    }
+
+    // Aligned to sub_681A38: delete wind simulator and clear player+1128.
+    void Player::stopWind() {
+        _windState = {};
+        _emoteDirty = true;
+    }
+
+    // Aligned to D3DEmotePlayer_setOuterForce (0x530A8C) ->
+    // Player_setOuterForce (0x672D58): case-insensitive label dispatch for
+    // "bust", "h", and "parts", carrying transition/ease through the sink.
+    void Player::setOuterForce(ttstr label, double x, double y,
+                               double transition, double ease) {
+        const auto key = lowerAscii(detail::narrow(label));
+        OuterForceState *target = nullptr;
+        if(key == "bust") {
+            target = &_bustOuterForce;
+        } else if(key == "h") {
+            target = &_hairOuterForce;
+        } else if(key == "parts") {
+            target = &_partsOuterForce;
+        } else {
+            return;
+        }
+
+        target->active = true;
+        target->x = x;
+        target->y = y;
+        target->transition = transition;
+        target->ease = ease;
+        _emoteDirty = true;
+    }
 
     // Aligned to libkrkr2.so sub_681EF8 at 0x681EF8:
     // Stores translate (x,y) to runtime+144/148 (cameraOffsetX/Y).

@@ -33,7 +33,7 @@ namespace motion {
         void setSmoothing(bool v) { _smoothing = v; }
         [[nodiscard]] bool getSmoothing() const { return _smoothing; }
 
-        void setMeshDivisionRatio(double v) { _meshDivisionRatio = v; }
+        void setMeshDivisionRatio(double v);
         [[nodiscard]] double getMeshDivisionRatio() const { return _meshDivisionRatio; }
 
         void setQueuing(bool v) { _queuing = v; }
@@ -85,13 +85,29 @@ namespace motion {
         void assignState();
         void initPhysics();
 
-        void setRot(double rot);
+        void setRot(double rot, double transition = 0.0,
+                    double ease = 0.0);
+        static tjs_error setRotCompat(tTJSVariant *result, tjs_int numparams,
+                                      tTJSVariant **param,
+                                      iTJSDispatch2 *objthis);
         double getRot();
 
-        void setCoord(double x, double y);
-        void setScale(double s);
+        void setCoord(double x, double y, double transition = 0.0,
+                      double ease = 0.0);
+        static tjs_error setCoordCompat(tTJSVariant *result, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        iTJSDispatch2 *objthis);
+        void setScale(double s, double transition = 0.0,
+                      double ease = 0.0);
+        static tjs_error setScaleCompat(tTJSVariant *result, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        iTJSDispatch2 *objthis);
         double getScale();
-        void setColor(tjs_int color);
+        void setColor(tjs_int color, double transition = 0.0,
+                      double ease = 0.0);
+        static tjs_error setColorCompat(tTJSVariant *result, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        iTJSDispatch2 *objthis);
         tjs_int getColor();
 
         tjs_int countVariables();
@@ -100,11 +116,23 @@ namespace motion {
         ttstr getVariableFrameLabelAt(tjs_int idx, tjs_int frameIdx);
         double getVariableFrameValueAt(tjs_int idx, tjs_int frameIdx);
 
-        void setVariable(ttstr label, double value);
+        void setVariable(ttstr label, double value, double transition = 0.0,
+                         double ease = 0.0);
+        static tjs_error setVariableCompat(tTJSVariant *result,
+                                           tjs_int numparams,
+                                           tTJSVariant **param,
+                                           iTJSDispatch2 *objthis);
         double getVariable(ttstr label);
 
-        void startWind(double a, double b, double c);
+        void startWind(double minAngle, double maxAngle, double amplitude,
+                       double freqX = 0.0, double freqY = 0.0);
+        static tjs_error startWindCompat(tTJSVariant *result, tjs_int numparams,
+                                         tTJSVariant **param,
+                                         iTJSDispatch2 *objthis);
         void stopWind();
+        static tjs_error stopWindCompat(tTJSVariant *result, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        iTJSDispatch2 *objthis);
 
         tjs_int countMainTimelines();
         ttstr getMainTimelineLabelAt(tjs_int idx);
@@ -133,8 +161,18 @@ namespace motion {
         void progress(double dt);
 
         void setOuterForce(double x, double y);
+        void setOuterForce(ttstr label, double x, double y,
+                           double transition = 0.0, double ease = 0.0);
+        static tjs_error setOuterForceCompat(tTJSVariant *result,
+                                             tjs_int numparams,
+                                             tTJSVariant **param,
+                                             iTJSDispatch2 *objthis);
         tTJSVariant getOuterForce();
         bool contains(double x, double y);
+        bool contains(ttstr label, double x, double y);
+        static tjs_error containsCompat(tTJSVariant *result, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        iTJSDispatch2 *objthis);
 
         // Access to internal Player for delegation from NCB methods
         Player &getPlayer() { return _player; }

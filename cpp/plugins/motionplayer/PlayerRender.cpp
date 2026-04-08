@@ -116,8 +116,9 @@ namespace {
                     255, tintB * static_cast<int>(dst[0]) / colorDivisor));
                 dst[3] = static_cast<std::uint8_t>(std::min(
                     255, tintA * static_cast<int>(dst[3]) / 255));
-            }
-        }
+    }
+
+}
     }
 
     iTJSDispatch2 *resolveLayerTreeOwnerObject(iTJSDispatch2 *object) {
@@ -1628,6 +1629,88 @@ namespace motion {
         _frameLoopTime += actualDelta;
         _loopTime += actualDelta;
         _frameTickCount += actualDelta;
+
+        _evalResultValues.clear();
+        const auto stepVariableAnimatorLike_0x67D01C =
+            [](auto &state, double dt, double &outValue) {
+                double remaining = std::max(dt, 0.0);
+
+                while(remaining > 0.0) {
+                    if(!state.active) {
+                        if(state.queue.empty()) {
+                            outValue = state.currentValue;
+                            return false;
+                        }
+                        const auto frame = state.queue.front();
+                        state.queue.pop_front();
+                        state.startValue = state.currentValue;
+                        state.targetValue = frame.value;
+                        state.duration = std::max(frame.duration, 0.000001f);
+                        state.weight = frame.weight;
+                        state.progress = 0.0f;
+                        state.active = true;
+                    }
+
+                    const double remainingDuration =
+                        static_cast<double>(state.duration) *
+                        std::max(0.0f, 1.0f - state.progress);
+                    const double consume = std::min(remaining, remainingDuration);
+                    if(state.duration > 0.0f) {
+                        state.progress = static_cast<float>(std::min(
+                            1.0, static_cast<double>(state.progress) +
+                                     consume / static_cast<double>(state.duration)));
+                    } else {
+                        state.progress = 1.0f;
+                    }
+
+                    const double ratio = std::pow(
+                        std::clamp(static_cast<double>(state.progress), 0.0, 1.0),
+                        static_cast<double>(state.weight));
+                    state.currentValue = static_cast<float>(
+                        state.startValue +
+                        (state.targetValue - state.startValue) * ratio);
+                    remaining -= consume;
+
+                    if(state.progress >= 1.0f) {
+                        state.currentValue = state.targetValue;
+                        state.active = false;
+                    }
+
+                    if(consume <= 0.0) {
+                        break;
+                    }
+                }
+
+                outValue = state.currentValue;
+                return state.active || !state.queue.empty();
+            };
+        double remainingControllerStep = actualDelta;
+        while(remainingControllerStep > 0.0) {
+            const double controllerDt = std::min(remainingControllerStep, 1.1);
+            for(auto &[label, state] : _controllerAnimators) {
+                double steppedValue = state.currentValue;
+                const bool stillAnimating =
+                    stepVariableAnimatorLike_0x67D01C(state, controllerDt,
+                                                     steppedValue);
+                _variableValues[label] = steppedValue;
+                _evalResultValues[label] = steppedValue;
+                if(stillAnimating) {
+                    _emoteDirty = true;
+                }
+            }
+            for(auto &[label, state] : _variableAnimators) {
+                double steppedValue = state.currentValue;
+                const bool stillAnimating =
+                    stepVariableAnimatorLike_0x67D01C(state, controllerDt,
+                                                     steppedValue);
+                _variableValues[label] = steppedValue;
+                _evalResultValues[label] = steppedValue;
+                if(stillAnimating) {
+                    _emoteDirty = true;
+                }
+            }
+            remainingControllerStep -= controllerDt;
+        }
 
         // Camera velocity/friction moved to updateLayers pre-loop (0x6BB360..0x6BB42C)
 

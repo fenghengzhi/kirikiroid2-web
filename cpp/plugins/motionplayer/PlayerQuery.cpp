@@ -5,6 +5,58 @@
 
 using namespace motion::internal;
 
+namespace {
+    float variableEaseWeightLike_0x671228(double ease) {
+        if(ease > 0.0) {
+            return static_cast<float>(ease + 1.0);
+        }
+        if(ease < 0.0) {
+            return static_cast<float>(1.0 / (1.0 - ease));
+        }
+        return 1.0f;
+    }
+
+    bool hitTestMotionNodeShape(const motion::detail::MotionNode &node,
+                                double x, double y) {
+        switch(node.shapeGeomType) {
+            case 1: {
+                const double cx = node.shapeVertices[0];
+                const double cy = node.shapeVertices[1];
+                const double r = node.shapeVertices[2];
+                const double dx = x - cx;
+                const double dy = y - cy;
+                return dx * dx + dy * dy <= r * r;
+            }
+            case 2:
+                return node.shapeVertices[3] <= x && x < node.shapeVertices[5] &&
+                    node.shapeVertices[4] <= y && y < node.shapeVertices[6];
+            case 3: {
+                const double x0 = node.shapeVertices[7];
+                const double y0 = node.shapeVertices[8];
+                const double x1 = node.shapeVertices[9];
+                const double y1 = node.shapeVertices[10];
+                const double x2 = node.shapeVertices[11];
+                const double y2 = node.shapeVertices[12];
+                const double x3 = node.shapeVertices[13];
+                const double y3 = node.shapeVertices[14];
+                const auto cross = [](double ax, double ay, double bx, double by,
+                                      double px, double py) {
+                    return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+                };
+                const double winding = cross(x0, y0, x1, y1, x2, y2) >= 0.0
+                    ? 1.0
+                    : -1.0;
+                return winding * cross(x0, y0, x1, y1, x, y) <= 0.0 &&
+                    winding * cross(x1, y1, x2, y2, x, y) <= 0.0 &&
+                    winding * cross(x2, y2, x3, y3, x, y) <= 0.0 &&
+                    winding * cross(x3, y3, x0, y0, x, y) <= 0.0;
+            }
+            default:
+                return false;
+        }
+    }
+}
+
 namespace motion {
 
     // --- Viewport/display ---
@@ -115,12 +167,262 @@ namespace motion {
     }
 
     // --- Timeline/variable queries ---
-    void Player::setVariable(ttstr label, double value) {
+    void Player::setVariable(ttstr label, double value, double transition,
+                             double ease) {
         const auto key = detail::narrow(label);
         if(key.empty()) {
             return;
         }
-        _variableValues[key] = value;
+
+        const auto *activeMotion = _runtime->activeMotion.get();
+        const auto bindingIt = activeMotion
+            ? activeMotion->controllerBindings.find(key)
+            : decltype(activeMotion->controllerBindings.find(key)){};
+        const bool hasBinding =
+            activeMotion && bindingIt != activeMotion->controllerBindings.end();
+        const bool isInstantVariable =
+            activeMotion &&
+            activeMotion->instantVariableLabels.find(key) !=
+                activeMotion->instantVariableLabels.end();
+
+        // Aligned to 0x66F64C + 0x671228:
+        // instantVariableList labels bypass controller animation and go straight
+        // into evalResult storage.
+        if(isInstantVariable) {
+            _variableAnimators.erase(key);
+            _controllerAnimators.erase(key);
+            if(std::find(_evalResultOrder.begin(), _evalResultOrder.end(), key) ==
+               _evalResultOrder.end()) {
+                _evalResultOrder.push_back(key);
+            }
+            _variableValues[key] = value;
+            _evalResultValues[key] = value;
+            _emoteDirty = true;
+            return;
+        }
+
+        if(hasBinding) {
+            const auto queueControllerStateLikeBinary =
+                [&](const std::string &targetKey,
+                    VariableAnimatorState &state,
+                    double currentValueInput,
+                    double requestedValue,
+                    double requestedTransition,
+                    double requestedEaseWeight) {
+                    const auto currentValue =
+                        static_cast<float>(currentValueInput);
+                    const auto targetValue =
+                        static_cast<float>(requestedValue);
+                    if(requestedTransition <= 0.0) {
+                        state.queue.clear();
+                        state.active = false;
+                        state.currentValue = targetValue;
+                        state.startValue = targetValue;
+                        state.targetValue = targetValue;
+                        state.progress = 1.0f;
+                        state.duration = 0.0f;
+                        state.weight =
+                            static_cast<float>(requestedEaseWeight);
+                        _variableValues[targetKey] = requestedValue;
+                        _evalResultValues[targetKey] = requestedValue;
+                        return;
+                    }
+
+                    if(!_emoteAnimatorFlag) {
+                        state.queue.clear();
+                        state.active = false;
+                        state.currentValue = currentValue;
+                        state.startValue = currentValue;
+                        state.targetValue = currentValue;
+                        state.progress = 1.0f;
+                        state.duration = 0.0f;
+                    }
+
+                    state.queue.push_back(VariableKeyframe{
+                        targetValue,
+                        static_cast<float>(requestedTransition),
+                        static_cast<float>(requestedEaseWeight),
+                    });
+                    _variableValues[targetKey] = state.currentValue;
+                    _evalResultValues[targetKey] = state.currentValue;
+                };
+
+            const auto queueControllerLikeBinary =
+                [&](VariableAnimatorState &state,
+                    double requestedValue,
+                    double requestedTransition,
+                    double requestedEaseWeight) {
+                    queueControllerStateLikeBinary(
+                        key, state,
+                        _variableValues.count(key) ? _variableValues[key]
+                                                   : getVariable(label),
+                        requestedValue, requestedTransition,
+                        requestedEaseWeight);
+                };
+
+            switch(bindingIt->second.type) {
+                case 0:
+                case 1:
+                case 2:
+                    // Aligned to 0x671228 cases 0/1/2:
+                    // these labels are routed to physics control groups, not to
+                    // the generic eval-result map / animator sink.
+                    _emoteDirty = true;
+                    return;
+                case 3:
+                    // Aligned to 0x671228 default route for loopControl-built
+                    // entries: no generic eval-result write happens here.
+                    _emoteDirty = true;
+                    return;
+                case 4:
+                case 5:
+                case 7:
+                case 8: {
+                    if(bindingIt->second.type == 8 && activeMotion) {
+                        const auto selectorIt =
+                            activeMotion->selectorControls.find(key);
+                        if(selectorIt != activeMotion->selectorControls.end()) {
+                            const int selectedIndex =
+                                static_cast<int>(value);
+                            _controllerAnimators.erase(key);
+                            if(std::find(_evalResultOrder.begin(),
+                                         _evalResultOrder.end(),
+                                         key) == _evalResultOrder.end()) {
+                                _evalResultOrder.push_back(key);
+                            }
+                            _variableValues[key] =
+                                static_cast<double>(selectedIndex);
+                            _evalResultValues[key] =
+                                static_cast<double>(selectedIndex);
+
+                            const double easeWeight =
+                                variableEaseWeightLike_0x671228(ease);
+                            int optionIndex = 0;
+                            for(const auto &option : selectorIt->second.options) {
+                                if(option.label.empty()) {
+                                    ++optionIndex;
+                                    continue;
+                                }
+                                const double targetValue =
+                                    optionIndex == selectedIndex
+                                        ? option.onValue
+                                        : option.offValue;
+                                const auto currentIt =
+                                    _evalResultValues.find(option.label);
+                                const double currentValue =
+                                    currentIt != _evalResultValues.end()
+                                        ? currentIt->second
+                                        : (_variableValues.count(option.label)
+                                               ? _variableValues[option.label]
+                                               : getVariable(
+                                                     detail::widen(option.label)));
+                                const double range =
+                                    std::abs(option.onValue - option.offValue);
+                                const double scaledTransition =
+                                    transition > 0.0 && range > 0.0000001
+                                        ? std::abs(targetValue - currentValue) /
+                                              range * transition
+                                        : 0.0;
+                                if(std::find(_evalResultOrder.begin(),
+                                             _evalResultOrder.end(),
+                                             option.label) ==
+                                   _evalResultOrder.end()) {
+                                    _evalResultOrder.push_back(option.label);
+                                }
+                                auto &optionState =
+                                    _controllerAnimators[option.label];
+                                queueControllerStateLikeBinary(
+                                    option.label, optionState, currentValue,
+                                    targetValue, scaledTransition, easeWeight);
+                                ++optionIndex;
+                            }
+                            _emoteDirty = true;
+                            return;
+                        }
+                    }
+                    auto &state = _controllerAnimators[key];
+                    if(std::find(_evalResultOrder.begin(), _evalResultOrder.end(),
+                                 key) == _evalResultOrder.end()) {
+                        _evalResultOrder.push_back(key);
+                    }
+                    queueControllerLikeBinary(
+                        state, value, transition,
+                        variableEaseWeightLike_0x671228(ease));
+                    _emoteDirty = true;
+                    return;
+                }
+                case 6: {
+                    if(bindingIt->second.role == "label") {
+                        _controllerAnimators.erase(key);
+                        const double directValue =
+                            static_cast<double>(static_cast<int>(value));
+                        if(std::find(_evalResultOrder.begin(),
+                                     _evalResultOrder.end(),
+                                     key) == _evalResultOrder.end()) {
+                            _evalResultOrder.push_back(key);
+                        }
+                        _variableValues[key] = directValue;
+                        _evalResultValues[key] = directValue;
+                        _emoteDirty = true;
+                        return;
+                    }
+                    auto &state = _controllerAnimators[key];
+                    if(std::find(_evalResultOrder.begin(), _evalResultOrder.end(),
+                                 key) == _evalResultOrder.end()) {
+                        _evalResultOrder.push_back(key);
+                    }
+                    queueControllerLikeBinary(
+                        state, value, transition,
+                        variableEaseWeightLike_0x671228(ease));
+                    _emoteDirty = true;
+                    return;
+                }
+                default:
+                    break;
+            }
+        }
+
+        auto &state = _variableAnimators[key];
+        if(std::find(_evalResultOrder.begin(), _evalResultOrder.end(), key) ==
+           _evalResultOrder.end()) {
+            _evalResultOrder.push_back(key);
+        }
+
+        const auto currentValue = static_cast<float>(getVariable(label));
+        const auto targetValue = static_cast<float>(value);
+        if(transition <= 0.0) {
+            state.queue.clear();
+            state.active = false;
+            state.currentValue = targetValue;
+            state.startValue = targetValue;
+            state.targetValue = targetValue;
+            state.progress = 1.0f;
+            state.duration = 0.0f;
+            state.weight = 1.0f;
+            _variableValues[key] = value;
+            _evalResultValues[key] = value;
+            _emoteDirty = true;
+            return;
+        }
+
+        if(!_emoteAnimatorFlag) {
+            state.queue.clear();
+            state.active = false;
+            state.currentValue = currentValue;
+            state.startValue = currentValue;
+            state.targetValue = currentValue;
+            state.progress = 1.0f;
+            state.duration = 0.0f;
+        }
+
+        state.queue.push_back(VariableKeyframe{
+            targetValue,
+            static_cast<float>(transition),
+            variableEaseWeightLike_0x671228(ease),
+        });
+        _variableValues[key] = state.currentValue;
+        _evalResultValues[key] = state.currentValue;
+        _emoteDirty = true;
     }
 
     double Player::getVariable(ttstr label) {
@@ -259,6 +561,67 @@ namespace motion {
             }
             return detail::makeArray(frames);
         }
+    }
+
+    bool Player::hitTestLayer(ttstr name, double x, double y) {
+        ensureMotionLoaded();
+        ensureNodeTreeBuilt();
+        if(!_runtime || !_runtime->activeMotion) {
+            return false;
+        }
+
+        if(!_runtime->nodes.empty()) {
+            const auto *clip = selectActiveClip();
+            updateLayers(activeClipTime(*_runtime, clip));
+            calcBounds();
+        }
+
+        const auto key = detail::narrow(name);
+        if(key.empty()) {
+            return false;
+        }
+
+        auto findNodeRecursive =
+            [&](auto &&self, Player *player) -> const detail::MotionNode * {
+            if(!player || !player->_runtime) {
+                return nullptr;
+            }
+
+            if(const auto it = player->_runtime->nodeLabelMap.find(key);
+               it != player->_runtime->nodeLabelMap.end()) {
+                const auto index = it->second;
+                if(index >= 0 &&
+                   index < static_cast<int>(player->_runtime->nodes.size())) {
+                    return &player->_runtime->nodes[static_cast<size_t>(index)];
+                }
+            }
+
+            for(auto &node : player->_runtime->nodes) {
+                if(node.nodeType == 3) {
+                    if(auto *child = node.getChildPlayer()) {
+                        if(const auto *found = self(self, child)) {
+                            return found;
+                        }
+                    }
+                } else if(node.nodeType == 4) {
+                    const int particleCount = node.getParticleCount();
+                    for(int i = 0; i < particleCount; ++i) {
+                        if(auto *child = node.getParticleChild(i)) {
+                            if(const auto *found = self(self, child)) {
+                                return found;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return nullptr;
+        };
+
+        if(const auto *node = findNodeRecursive(findNodeRecursive, this)) {
+            return hitTestMotionNodeShape(*node, x, y);
+        }
+        return false;
     }
 
     tjs_int Player::countMainTimelines() {
@@ -957,6 +1320,26 @@ namespace motion {
         if(result) {
             *result = tTJSVariant(self->getProgressCompat());
         }
+        return TJS_S_OK;
+    }
+
+    tjs_error Player::setVariableCompatMethod(tTJSVariant *, tjs_int numparams,
+                                              tTJSVariant **param,
+                                              iTJSDispatch2 *objthis) {
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 2 || !param[0] || !param[1]) {
+            return TJS_E_INVALIDPARAM;
+        }
+
+        const double transition =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
+        self->setVariable(ttstr(*param[0]), param[1]->AsReal(), transition,
+                          ease);
         return TJS_S_OK;
     }
 

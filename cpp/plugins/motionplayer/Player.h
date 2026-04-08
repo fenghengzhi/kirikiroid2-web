@@ -4,8 +4,11 @@
 //
 #pragma once
 
+#include <array>
+#include <deque>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 #include <spdlog/spdlog.h>
 #include "tjs.h"
 #include "ResourceManager.h"
@@ -240,11 +243,24 @@ namespace motion {
         void initPhysics();
         tTJSVariant serialize();
         void unserialize(tTJSVariant data);
-        void setRotate(double rot);
+        void setEmoteCoord(double x, double y, double transition = 0.0,
+                           double ease = 0.0);
+        void setEmoteScale(double scale, double transition = 0.0,
+                           double ease = 0.0);
+        void setRotate(double rot, double transition = 0.0,
+                       double ease = 0.0);
+        void setEmoteColor(tjs_uint32 color, double transition = 0.0,
+                           double ease = 0.0);
         void setMirror(bool mirror);
+        void setEmoteMeshDivisionRatio(double v);
         void setHairScale(double s);
         void setPartsScale(double s);
         void setBustScale(double s);
+        void startWind(double minAngle, double maxAngle, double amplitude,
+                       double freqX, double freqY);
+        void stopWind();
+        void setOuterForce(ttstr label, double x, double y,
+                           double transition = 0.0, double ease = 0.0);
         void setDrawAffineTranslateMatrix(tTJSVariant m);
         tTJSVariant getCameraOffset();
         void setCameraOffset(tTJSVariant offset);
@@ -302,7 +318,8 @@ namespace motion {
         void setStereovisionCameraPosition(double x, double y, double z);
 
         // Timeline/variable queries
-        void setVariable(ttstr label, double value);
+        void setVariable(ttstr label, double value, double transition = 0.0,
+                         double ease = 0.0);
         double getVariable(ttstr label);
         tjs_int countVariables();
         ttstr getVariableLabelAt(tjs_int idx);
@@ -362,6 +379,10 @@ namespace motion {
                                               tjs_int numparams,
                                               tTJSVariant **param,
                                               iTJSDispatch2 *objthis);
+        static tjs_error setVariableCompatMethod(tTJSVariant *result,
+                                                 tjs_int numparams,
+                                                 tTJSVariant **param,
+                                                 iTJSDispatch2 *objthis);
         static tjs_error isPlayingCompat(tTJSVariant *result, tjs_int numparams,
                                          tTJSVariant **param,
                                          iTJSDispatch2 *objthis);
@@ -373,6 +394,7 @@ namespace motion {
         // Public accessor for EmotePlayer delegation
         double getActiveMotionWidth() const;
         double getActiveMotionHeight() const;
+        bool hitTestLayer(ttstr name, double x, double y);
 
         // Root node position (x/y/left/top)
         // Aligned to libkrkr2.so:
@@ -512,6 +534,25 @@ namespace motion {
         double _boundsMaxY = -1e308;
         bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
         std::unordered_map<std::string, double> _variableValues;
+        struct VariableKeyframe {
+            float value = 0.0f;
+            float duration = 0.0f;
+            float weight = 1.0f;
+        };
+        struct VariableAnimatorState {
+            std::deque<VariableKeyframe> queue;
+            bool active = false;
+            float currentValue = 0.0f;
+            float startValue = 0.0f;
+            float targetValue = 0.0f;
+            float progress = 1.0f;
+            float duration = 0.0f;
+            float weight = 1.0f;
+        };
+        std::unordered_map<std::string, VariableAnimatorState> _variableAnimators;
+        std::unordered_map<std::string, VariableAnimatorState> _controllerAnimators;
+        std::unordered_map<std::string, double> _evalResultValues;
+        std::vector<std::string> _evalResultOrder;
 
         // Parent color propagated from parent motion node (sub_6BE0C0 at 0x6BEB7C).
         // Binary: *(_DWORD *)(childPlayer + 1156) = *(_DWORD *)(node + 100)
@@ -526,10 +567,59 @@ namespace motion {
 
         // Aligned to libkrkr2.so emote scale/rotate fields:
         // sub_681F20: player+1184, sub_681F28: player+1192, sub_681F30: player+1200
+        // player+1168/+1176 are the duplicated meshDivisionRatio doubles read by
+        // Player_startWind (0x6709AC).
+        double _emoteMeshDivisionRatio = 1.0;
+        double _emoteMeshDivisionRatioDup = 1.0;
         double _hairScale = 1.0;    // player+1184
         double _partsScale = 1.0;   // player+1192
         double _bustScale = 1.0;    // player+1200
         double _rotateAngle = 0.0;  // sub_672568 rotation parameter
+        bool _physicsDisabled = false;   // player+1159
+        bool _emoteAnimatorFlag = false; // player+1161
+        bool _emoteDirty = false;        // player+1162
+        struct EmoteCoordState {
+            double x = 0.0;
+            double y = 0.0;
+            double transition = 0.0;
+            double ease = 0.0;
+        } _emoteCoordState;
+        struct EmoteScalarAnimatorState {
+            double value = 0.0;
+            double transition = 0.0;
+            double ease = 0.0;
+        } _emoteScaleState, _emoteRotState;
+        struct EmoteColorState {
+            tjs_uint32 packed = 0;
+            std::array<float, 4> rgbaBytes{0.f, 0.f, 0.f, 0.f};
+            double transition = 0.0;
+            double ease = 0.0;
+        } _emoteColorState;
+
+        struct WindState {
+            bool active = false;
+            double minAngle = 0.0;
+            double maxAngle = 0.0;
+            double amplitude = 0.0;
+            double freqX = 0.0;
+            double freqY = 0.0;
+            double phase = 0.0;
+            double prevPhase = 0.0;
+            double scaledAmplitude = 0.0;
+            int counter = 0;
+        } _windState;
+
+        struct OuterForceState {
+            bool active = false;
+            double x = 0.0;
+            double y = 0.0;
+            double transition = 0.0;
+            double ease = 0.0;
+        };
+
+        OuterForceState _bustOuterForce;
+        OuterForceState _hairOuterForce;
+        OuterForceState _partsOuterForce;
 
         // Aligned to libkrkr2.so player+992: TJS Math.RandomGenerator object.
         // sub_6BA7B8 calls its "random" method to get [0.0, 1.0) doubles.

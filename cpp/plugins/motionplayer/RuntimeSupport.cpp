@@ -352,6 +352,219 @@ namespace motion::detail {
             }
         }
 
+        void recordControllerBinding(MotionSnapshot &snapshot,
+                                     const std::string &label,
+                                     int type,
+                                     int index,
+                                     const char *source,
+                                     const char *role) {
+            if(label.empty()) {
+                return;
+            }
+            appendUnique(snapshot.variableLabels, label);
+            snapshot.controllerBindings[label] = VariableControllerBinding{
+                type,
+                index,
+                source ? source : "",
+                role ? role : "",
+            };
+        }
+
+        void collectInstantVariableList(
+            const std::shared_ptr<const PSB::PSBDictionary> &base,
+            MotionSnapshot &snapshot) {
+            const auto list = dictionaryList(base, {"instantVariableList"});
+            if(!list) {
+                return;
+            }
+
+            for(const auto &item : *list) {
+                std::optional<std::string> label;
+                if(const auto text = psbString(item)) {
+                    label = *text;
+                } else if(const auto dic =
+                              std::dynamic_pointer_cast<PSB::PSBDictionary>(item)) {
+                    label = dictionaryString(dic, {"label", "name", "id"});
+                }
+
+                if(!label || label->empty()) {
+                    continue;
+                }
+
+                appendUnique(snapshot.variableLabels, *label);
+                snapshot.instantVariableLabels.insert(*label);
+            }
+        }
+
+        void collectControlBindings(
+            const std::shared_ptr<const PSB::PSBDictionary> &base,
+            const char *listKey,
+            int type,
+            const std::vector<std::pair<std::string, std::string>> &labelKeys,
+            MotionSnapshot &snapshot) {
+            const auto list = dictionaryList(base, {listKey});
+            if(!list) {
+                return;
+            }
+
+            int index = 0;
+            for(const auto &item : *list) {
+                const auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
+                if(!dic) {
+                    ++index;
+                    continue;
+                }
+
+                // Aligned to sub_6636D4: missing "enabled" returns false.
+                if(!dictionaryBool(dic, {"enabled"}).value_or(false)) {
+                    ++index;
+                    continue;
+                }
+
+                for(const auto &[labelKey, role] : labelKeys) {
+                    if(const auto label = dictionaryString(dic, {labelKey});
+                       label && !label->empty()) {
+                        recordControllerBinding(snapshot, *label, type, index,
+                                                listKey, role.c_str());
+                    }
+                }
+                ++index;
+            }
+        }
+
+        void collectTimelineControlMetadata(
+            const std::shared_ptr<const PSB::PSBDictionary> &base,
+            MotionSnapshot &snapshot) {
+            const auto list = dictionaryList(base, {"timelineControl"});
+            if(!list) {
+                return;
+            }
+
+            snapshot.mainTimelineLabels.clear();
+            snapshot.diffTimelineLabels.clear();
+            snapshot.timelineControlByLabel.clear();
+
+            for(const auto &item : *list) {
+                const auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
+                if(!dic) {
+                    continue;
+                }
+
+                const auto label = dictionaryString(dic, {"label", "name", "id"});
+                if(!label || label->empty()) {
+                    continue;
+                }
+
+                const bool isDiff =
+                    dictionaryBool(dic, {"diff"}).value_or(false);
+                appendUnique(isDiff ? snapshot.diffTimelineLabels
+                                    : snapshot.mainTimelineLabels,
+                             *label);
+                snapshot.timelineControlByLabel[*label] = dic;
+            }
+        }
+
+        void collectSelectorControlMetadata(
+            const std::shared_ptr<const PSB::PSBDictionary> &base,
+            MotionSnapshot &snapshot) {
+            const auto list = dictionaryList(base, {"selectorControl"});
+            if(!list) {
+                return;
+            }
+
+            snapshot.selectorControls.clear();
+            int index = 0;
+            for(const auto &item : *list) {
+                const auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
+                if(!dic) {
+                    ++index;
+                    continue;
+                }
+
+                const auto label = dictionaryString(dic, {"label", "name", "id"});
+                if(!label || label->empty()) {
+                    ++index;
+                    continue;
+                }
+
+                // Aligned to sub_66D8FC + sub_66E248:
+                // disabled selector entries are removed from the selector label
+                // container instead of participating in controller binding.
+                if(!dictionaryBool(dic, {"enabled"}).value_or(false)) {
+                    snapshot.controllerBindings.erase(*label);
+                    ++index;
+                    continue;
+                }
+
+                SelectorControlBinding binding;
+                binding.label = *label;
+                if(const auto optionList = dictionaryList(dic, {"optionList"})) {
+                    for(const auto &optionItem : *optionList) {
+                        const auto optionDic = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                            optionItem);
+                        if(!optionDic) {
+                            continue;
+                        }
+                        const auto optionLabel = dictionaryString(
+                            optionDic, {"label", "name", "id"});
+                        if(!optionLabel || optionLabel->empty()) {
+                            continue;
+                        }
+                        binding.options.push_back(SelectorControlOption{
+                            *optionLabel,
+                            dictionaryNumber(optionDic, {"offValue"})
+                                .value_or(0.0),
+                            dictionaryNumber(optionDic, {"onValue"})
+                                .value_or(0.0),
+                        });
+                    }
+                }
+
+                snapshot.selectorControls[*label] = binding;
+                recordControllerBinding(snapshot, *label, 8, index,
+                                        "selectorControl", "label");
+                ++index;
+            }
+        }
+
+        void collectControlMetadata(MotionSnapshot &snapshot) {
+            const auto base =
+                navigateDictionaryPath(snapshot.root, "metadata/base");
+            if(!base) {
+                return;
+            }
+
+            collectTimelineControlMetadata(base, snapshot);
+            collectInstantVariableList(base, snapshot);
+            collectControlBindings(base, "bustControl", 0,
+                                   {{"var_lr", "var_lr"},
+                                    {"var_ud", "var_ud"}},
+                                   snapshot);
+            collectControlBindings(base, "hairControl", 1,
+                                   {{"var_lr", "var_lr"},
+                                    {"var_lrm", "var_lrm"},
+                                    {"var_ud", "var_ud"}},
+                                   snapshot);
+            collectControlBindings(base, "partsControl", 2,
+                                   {{"var_lr", "var_lr"},
+                                    {"var_lrm", "var_lrm"},
+                                    {"var_ud", "var_ud"}},
+                                   snapshot);
+            collectControlBindings(base, "loopControl", 3,
+                                   {{"var_loop", "var_loop"}}, snapshot);
+            collectControlBindings(base, "eyeControl", 4,
+                                   {{"label", "label"}}, snapshot);
+            collectControlBindings(base, "eyebrowControl", 5,
+                                   {{"label", "label"}}, snapshot);
+            collectControlBindings(base, "mouthControl", 6,
+                                   {{"label", "label"},
+                                    {"talkLabel", "talkLabel"}},
+                                   snapshot);
+            collectControlBindings(base, "transitionControl", 7,
+                                   {{"label", "label"}}, snapshot);
+            collectSelectorControlMetadata(base, snapshot);
+        }
+
         void maybeRecordVariable(
             const std::vector<std::string> &path,
             const std::shared_ptr<PSB::PSBDictionary> &dic,
@@ -795,6 +1008,7 @@ namespace motion::detail {
         std::vector<std::string> pathParts;
         scanValue(std::const_pointer_cast<PSB::PSBDictionary>(root), pathParts,
                   *snapshot);
+        collectControlMetadata(*snapshot);
         collectRootResources(root, *snapshot);
         if(logoChainTraceEnabled(snapshot)) {
             logoChainTraceLogf(

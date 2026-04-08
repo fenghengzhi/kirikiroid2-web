@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -23,6 +24,24 @@ namespace motion::detail {
     struct VariableFrameInfo {
         std::string label;
         double value = 0.0;
+    };
+
+    struct VariableControllerBinding {
+        int type = -1;
+        int index = -1;
+        std::string source;
+        std::string role;
+    };
+
+    struct SelectorControlOption {
+        std::string label;
+        double offValue = 0.0;
+        double onValue = 0.0;
+    };
+
+    struct SelectorControlBinding {
+        std::string label;
+        std::vector<SelectorControlOption> options;
     };
 
     struct MotionClip {
@@ -72,10 +91,15 @@ namespace motion::detail {
         std::unordered_map<std::string, double> timelineTotalFrames;
         std::unordered_map<std::string, std::pair<double, double>> variableRanges;
         std::unordered_map<std::string, std::vector<VariableFrameInfo>> variableFrames;
+        std::unordered_map<std::string, VariableControllerBinding> controllerBindings;
+        std::unordered_set<std::string> instantVariableLabels;
+        std::unordered_map<std::string, SelectorControlBinding> selectorControls;
         std::vector<std::string> layerNames;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>> layersByName;
         std::vector<std::string> sourceCandidates;
         std::unordered_map<std::string, MotionClip> clipsByLabel;
+        std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>>
+            timelineControlByLabel;
         std::vector<std::string> resourceAliases;
         double width = 0.0;
         double height = 0.0;
