@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
       "Read",
@@ -7,7 +8,8 @@
       "mcp__ida-pro-mcp__*",
       "Skill",
       "Edit",
-      "Edit(/.claude/**)"
+      "Edit(/.claude/**)",
+      "Edit(/.claude/skills/ida-decompile/**)"
     ],
     "additionalDirectories": [
       "/tmp",
@@ -25,5 +27,10 @@
     "skill-creator@claude-plugins-official": true,
     "pua@pua-skills": false,
     "superpowers@claude-plugins-official": false
+  },
+  "effortLevel": "max",
+  "env": {
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+    "CLAUDE_CODE_EFFORT_LEVEL": "max"
   }
 }

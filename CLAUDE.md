@@ -93,5 +93,5 @@
 - 反编译完整渲染链（Layer→DrawDevice→Texture→Cocos2D），不要只看局部
 
 ### IDA 符号管理
-- 反编译 100% 确认标识符真名时，立即通过 `mcp__ida-pro-mcp__rename` 重命名
-- 非 100% 确认的加 `_guess` 后缀（如 `Layer_Update_guess`）
+- **重命名必须以本地代码为依据** — 必须先 grep 本地项目找到对应的类名::方法名，用 `ClassName_MethodName` 格式重命名。禁止从二进制行为推断命名（如把 `StartProcess` 猜成 `Process`）
+- 无法在本地代码中找到对应标识符时，加 `_guess` 后缀（如 `Layer_Update_guess`）

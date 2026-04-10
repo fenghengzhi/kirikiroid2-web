@@ -107,18 +107,17 @@ IDA 反编译 ARM64 代码使用以下约定：
 
 ### 7. 重命名已确认的函数
 
-当你能**100% 确认**某个 `sub_XXXXXX` 对应项目中的已知函数时，
-立即使用 `mcp__ida-pro-mcp__rename` 重命名。
-这会使所有后续反编译输出更加可读。
+**核心原则：重命名必须以本地代码为依据。** 禁止从二进制行为推断命名。
+必须先 grep 本地项目找到对应的类名::方法名，再用 `ClassName_MethodName` 格式重命名。
+无法在本地代码中找到对应标识符时，必须加 `_guess` 后缀。
 
 **何时重命名：**
-- 函数的字符串引用、调用模式和行为与我们 C++ 代码库中的
-  已知函数或知名库函数完全匹配
-- 你从多个方向交叉验证过（字符串引用、调用者、
-  被调用者、参数数量）且没有歧义
+- 已在本地 C++ 代码中通过 grep 找到精确匹配的类名和方法名
+- 从多个方向交叉验证过（字符串引用、调用者、被调用者、参数数量）且没有歧义
 
-**何时不要重命名：**
-- 你仅基于单一线索推测（如一个字符串引用）
+**何时不要重命名（或加 `_guess` 后缀）：**
+- 仅从反编译行为推断名称，未在本地代码中验证（如把 `StartProcess` 猜成 `Process`）
+- 仅基于单一线索推测（如一个字符串引用）
 - 该函数可能是内联/合并的变体
 - 你不确定它是精确的函数还是它的包装器
 
@@ -127,7 +126,7 @@ IDA 反编译 ARM64 代码使用以下约定：
 - NCB 基础设施：`ncb_addMember`、`ncb_addConstant`、`ncb_classInit`
 - TJS 运行时：`tTJSVariant_Release`、`ttstr_createFromWide`、`ttstr_c_str`
 - 模块级别：`modulename_entry`、`modulename_static_init`
-- 类方法：`ClassName_methodName`
+- 类方法：`ClassName_MethodName`（必须与本地代码中 `Class::Method` 一致）
 
 **示例：**
 ```
@@ -141,17 +140,14 @@ mcp__ida-pro-mcp__rename  batch={
 
 提交前如果想先验证，使用 `"dry_run": true`。
 
-## 已命名函数（已在 IDA 中重命名）
+## 基础设施锚点函数（反编译中高频出现）
+
+业务函数已在 IDA 数据库中命名，用 `lookup_funcs` / `list_funcs` 查询。以下仅列出反编译时识别模式用的基础设施函数：
 
 | 地址 | 名称 | 说明 |
 |------|------|------|
-| `0x6D9B08` | `motionplayer_ncb_register` | motionplayer.dll NCB 模块注册 |
-| `0x6948E8` | `Motion_Player_findSource` | Motion findSource（纹理/资源加载） |
-| `0x42EB00` | `emoteplayer_static_init` | emoteplayer.dll 静态初始化注册 |
-| `0x682528` | `emoteplayer_entry` | emoteplayer.dll 入口（加载 motionplayer.dll） |
 | `0x54242C` | `ncb_addMember` | NCB addMember |
 | `0x52FA58` | `ncb_addConstant` | NCB addConstant |
-| `0x6DA28C` | `ncb_addConstant_wrapper` | NCB addConstant 包装器（模块级别） |
 | `0x9F5AF4` | `ncb_registerMember` | NCB registerMember（类上的方法/属性） |
 | `0x9F538C` | `ncb_createFuncWrapper` | NCB 函数包装器创建 |
 | `0x9F5858` | `ncb_classInit` | NCB 类初始化（tTJSNativeClass 设置） |
@@ -159,16 +155,6 @@ mcp__ida-pro-mcp__rename  batch={
 | `0xA136C0` | `ttstr_createFromWide` | 从宽字符串字面量创建 ttstr |
 | `0xA13390` | `ttstr_c_str` | 从 ttstr 获取 C 字符串指针 |
 | `0x5996E4` | `PSB_getResourceData` | 获取 PSB 资源数据指针 + 大小 |
-| `0x695D04` | `Motion_createTextureFromPixels` | 从原始像素创建纹理对象 |
-| `0x6FEEE4` | `SeparateLayerAdaptor_ncb_register` | SLA NCB 类注册 |
-| `0x6FF048` | `SeparateLayerAdaptor_ncb_members` | SLA NCB 成员注册 |
-| `0x6ABF98` | `SeparateLayerAdaptor_registerProps` | SLA 属性注册 |
-| `0x6FC6E8` | `Motion_Point_ncb_register` | Motion.Point NCB 注册 |
-| `0x6FDD04` | `Motion_Player_ncb_register` | Motion.Player NCB 注册 |
-| `0x6FE124` | `Motion_SourceCache_ncb_register` | Motion.SourceCache NCB 注册 |
-| `0x6FE610` | `Motion_ObjSource_ncb_register` | Motion.ObjSource NCB 注册 |
-| `0x6FEAC4` | `Motion_ResourceManager_ncb_register` | Motion.ResourceManager NCB 注册 |
-| `0x6FF2F8` | `Motion_D3DAdaptor_ncb_register` | Motion.D3DAdaptor NCB 注册 |
 
 ## 技巧
 

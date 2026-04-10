@@ -5,3 +5,4 @@
 - [sub_692AB0 PSB key mapping](project_sub692AB0_key_mapping.md) — Byte-verified: "z"→"zx", "s"→"sx", "b"→"bm", "t"→"ti", "i"→"icon", "c"→"coord", "f"→"fov"/"fmax"
 - [Node tree construction](project_node_tree_construction.md) — Full build chain (0x6B51F0→0x6B4A6C→0x6B3C78), sourceWidth/Height NOT set at build time, only for camera(type==10) at render time
 - [Render pipeline timing](project_render_pipeline_timing.md) — Player_calcBounds runs AFTER updateLayers in progress(). sourceWidth/Height=0 for type=0 nodes. 3 coordinate systems. RenderNode struct layout.
+- [Transition crossfade architecture](project_transition_crossfade.md) — Full @trans crossfade chain: Layer offsets 616-808, handler vtable 0x1A297C8, alpha=elapsed*255/time, ConstAlphaBlend_SD pixel blend
