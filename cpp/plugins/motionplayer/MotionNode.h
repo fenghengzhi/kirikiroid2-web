@@ -41,7 +41,9 @@ namespace motion::detail {
         int parentIndex = -1;          // node+36
         int nodeType = 0;              // node+28
         int coordinateMode = 0;        // node+24
-        int inheritFlags = 0x1FC;      // node+40 (bits 2-8, default all-set)
+        int inheritFlags = 0x1FC;      // node+40. Player_updateLayers (0x6BB33C)
+                                        // also tests byte(node+42)&0x40, i.e.
+                                        // inheritMask bit 0x00400000.
         uint8_t flags = 0;             // node+44 (sub_6BE0C0 at 0x6BE37C, sub_6BF0DC at 0x6BF310)
         bool groundCorrection = false; // node+47
         // TJS layer dispatch object for callbacks (sub_6BAA10 onGroundCorrection).
@@ -173,8 +175,33 @@ namespace motion::detail {
         // PSB reference (for evaluateLayerContent calls)
         std::shared_ptr<const PSB::PSBDictionary> psbNode;
 
-        // Accumulated state (built during updateLayers inheritance loop)
-        // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C) main loop
+        // Per-node source/override state.
+        // Aligned to libkrkr2.so node+0x630..0x678 block consumed by
+        // Player_updateLayers (0x6BB630..0x6BB700). Root setters write here
+        // (e.g. Player_setRootX 0x6CD028, Player_setRootFlipX 0x6CD068), and
+        // the main loop folds it into the working block after timeline eval.
+        struct LocalState {
+            bool visible = false;
+            bool active = false;
+            bool dirty = false;
+            bool flipX = false;
+            bool flipY = false;
+            double posX = 0.0;
+            double posY = 0.0;
+            double posZ = 0.0;
+            double angle = 0.0;
+            double scaleX = 1.0;
+            double scaleY = 1.0;
+            double slantX = 0.0;
+            double slantY = 0.0;
+            int opacity = 255;
+            int blendMode = 16;
+        } localState;
+
+        // Working/evaluated state (built during updateLayers inheritance loop)
+        // Aligned to libkrkr2.so node+0x5E0..0x628 block written by
+        // Player_evaluateTimeline (0x699AE4) and further composed by
+        // Player_updateLayers (0x6BB33C).
         struct AccumulatedState {
             bool visible = false;
             bool active = false;
@@ -333,6 +360,7 @@ namespace motion::detail {
             bool flipY = false;
             double x = 0.0;
             double y = 0.0;
+            double z = 0.0;
             double ox = 0.0;
             double oy = 0.0;
             int blendMode = 16;

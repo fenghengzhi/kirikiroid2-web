@@ -390,6 +390,25 @@ public:
 
     cocos2d::Texture2D *
     GetAdapterTexture(cocos2d::Texture2D *origTex) override {
+        const auto origTexId = origTex ? origTex->getName() : 0u;
+        bool updated = false;
+        bool recreated = false;
+        if(auto logger = spdlog::get("core")) {
+            const auto samplePixelTL =
+                (BmpData && Pitch >= 4) ? *((const uint32_t *)BmpData) : 0u;
+            uint32_t samplePixelCenter = 0u;
+            if(BmpData && Pitch >= 4 && Width > 0 && Height > 0) {
+                const auto *center =
+                    reinterpret_cast<const uint32_t *>(BmpData + Pitch * (Height / 2));
+                samplePixelCenter = center[Width / 2];
+            }
+            logger->warn(
+                "WCHAIN stage=texture.getAdapterTexture func=0xAA6268 "
+                "kind=static ptr={} origTex={} size={}x{} pitch={} "
+                "sampleTL=0x{:08x} sampleCenter=0x{:08x}",
+                (void *)this, (void *)origTex, Width, Height, Pitch,
+                samplePixelTL, samplePixelCenter);
+        }
         if(!origTex || origTex->getPixelsWide() != Width ||
            origTex->getPixelsHigh() != Height) {
             origTex = new cocos2d::Texture2D;
@@ -397,8 +416,17 @@ public:
             origTex->initWithData(BmpData, Pitch * Height,
                                   CCPixelFormat::RGBA8888, Pitch / 4, Height,
                                   cocos2d::Size::ZERO);
+            recreated = true;
+            updated = true;
         } else {
-            origTex->updateWithData(BmpData, 0, 0, Pitch / 4, Height);
+            updated = origTex->updateWithData(BmpData, 0, 0, Pitch / 4, Height);
+        }
+        if(auto logger = spdlog::get("core")) {
+            logger->warn(
+                "WCHAIN stage=texture.getAdapterTexture.result func=0xAA6268 "
+                "kind=static ptr={} recreated={} updated={} origTexId={} newTexId={}",
+                (void *)this, recreated ? 1 : 0, updated ? 1 : 0, origTexId,
+                origTex ? origTex->getName() : 0u);
         }
         return origTex;
     }
@@ -501,6 +529,25 @@ public:
     cocos2d::Texture2D *
     GetAdapterTexture(cocos2d::Texture2D *origTex) override {
         GetPixelData();
+        const auto origTexId = origTex ? origTex->getName() : 0u;
+        bool updated = false;
+        bool recreated = false;
+        if(auto logger = spdlog::get("core")) {
+            const auto samplePixelTL =
+                (BmpData && Pitch >= 4) ? *((const uint32_t *)BmpData) : 0u;
+            uint32_t samplePixelCenter = 0u;
+            if(BmpData && Pitch >= 4 && Width > 0 && Height > 0) {
+                const auto *center =
+                    reinterpret_cast<const uint32_t *>(BmpData + Pitch * (Height / 2));
+                samplePixelCenter = center[Width / 2];
+            }
+            logger->warn(
+                "WCHAIN stage=texture.getAdapterTexture func=0xAA6268 "
+                "kind=compress ptr={} origTex={} size={}x{} pitch={} "
+                "sampleTL=0x{:08x} sampleCenter=0x{:08x}",
+                (void *)this, (void *)origTex, Width, Height, Pitch,
+                samplePixelTL, samplePixelCenter);
+        }
         if(!origTex || origTex->getPixelsWide() != Width ||
            origTex->getPixelsHigh() != Height) {
             origTex = new cocos2d::Texture2D;
@@ -508,8 +555,17 @@ public:
             origTex->initWithData(BmpData, Pitch * Height,
                                   CCPixelFormat::RGBA8888, Width, Height,
                                   cocos2d::Size::ZERO);
+            recreated = true;
+            updated = true;
         } else {
-            origTex->updateWithData(BmpData, 0, 0, Width, Height);
+            updated = origTex->updateWithData(BmpData, 0, 0, Width, Height);
+        }
+        if(auto logger = spdlog::get("core")) {
+            logger->warn(
+                "WCHAIN stage=texture.getAdapterTexture.result func=0xAA6268 "
+                "kind=compress ptr={} recreated={} updated={} origTexId={} newTexId={}",
+                (void *)this, recreated ? 1 : 0, updated ? 1 : 0, origTexId,
+                origTex ? origTex->getName() : 0u);
         }
         return origTex;
     }
@@ -591,6 +647,26 @@ public:
 
     cocos2d::Texture2D *
     GetAdapterTexture(cocos2d::Texture2D *origTex) override {
+        const auto origTexId = origTex ? origTex->getName() : 0u;
+        bool recreated = false;
+        if(auto logger = spdlog::get("core")) {
+            const auto samplePixelTL =
+                (_scanline.empty() || !_scanline.front()) ? 0u
+                                                          : *((const uint32_t *)_scanline.front());
+            uint32_t samplePixelCenter = 0u;
+            if(!_scanline.empty() && Width > 0) {
+                const size_t cy = std::min<size_t>(_scanline.size() - 1, Height / 2);
+                const auto *center =
+                    reinterpret_cast<const uint32_t *>(_scanline[cy]);
+                samplePixelCenter = center[Width / 2];
+            }
+            logger->warn(
+                "WCHAIN stage=texture.getAdapterTexture func=0xAA6268 "
+                "kind=half ptr={} origTex={} size={}x{} internalH={} "
+                "sampleTL=0x{:08x} sampleCenter=0x{:08x}",
+                (void *)this, (void *)origTex, Width, Height,
+                (unsigned)_scanline.size(), samplePixelTL, samplePixelCenter);
+        }
         if(!origTex || origTex->getPixelsWide() != Width ||
            origTex->getPixelsHigh() != _scanline.size()) {
             origTex = new cocos2d::Texture2D;
@@ -598,11 +674,22 @@ public:
             origTex->initWithData(nullptr, Pitch * _scanline.size(),
                                   CCPixelFormat::RGBA8888, Width,
                                   _scanline.size(), cocos2d::Size::ZERO);
+            recreated = true;
         }
+        int updatedLines = 0;
         int y = 0;
         for(const tjs_uint8 *line : _scanline) {
-            origTex->updateWithData(line, 0, y, Width, 1);
+            if(origTex->updateWithData(line, 0, y, Width, 1))
+                ++updatedLines;
             ++y;
+        }
+        if(auto logger = spdlog::get("core")) {
+            logger->warn(
+                "WCHAIN stage=texture.getAdapterTexture.result func=0xAA6268 "
+                "kind=half ptr={} recreated={} updatedLines={} totalLines={} "
+                "origTexId={} newTexId={}",
+                (void *)this, recreated ? 1 : 0, updatedLines, y, origTexId,
+                origTex ? origTex->getName() : 0u);
         }
         return origTex;
     }

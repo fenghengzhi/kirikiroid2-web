@@ -62,6 +62,61 @@ namespace motion {
     // --- Viewport/display ---
     void Player::setFlip(bool v) { _runtime->flip = v; }
 
+    bool Player::shouldMirrorEvalLabelLike_0x67C6B0(const std::string &label) {
+        if(!_mirrorEvalEnabled || label.empty() || !_runtime->activeMotion) {
+            return false;
+        }
+
+        if(_mirrorPositiveCache.find(label) != _mirrorPositiveCache.end()) {
+            return true;
+        }
+        if(_mirrorNegativeCache.find(label) != _mirrorNegativeCache.end()) {
+            return false;
+        }
+
+        const auto &matchList = _runtime->activeMotion->mirrorVariableMatchList;
+        const bool matched =
+            std::find(matchList.begin(), matchList.end(), label) !=
+            matchList.end();
+        if(matched) {
+            _mirrorPositiveCache.insert(label);
+        } else {
+            _mirrorNegativeCache.insert(label);
+        }
+        return matched;
+    }
+
+    double &Player::ensureEvalResultSlotLike_0x686944(const std::string &label) {
+        if(const auto it = _evalResultListIndex.find(label);
+           it != _evalResultListIndex.end()) {
+            return it->second->value;
+        }
+
+        _evalResultList.push_back(EvalResultEntry{label, 0.0});
+        auto it = _evalResultList.end();
+        --it;
+        _evalResultListIndex[label] = it;
+        return it->value;
+    }
+
+    void Player::removeEvalResultSlotLike_Reset(const std::string &label) {
+        if(const auto it = _evalResultListIndex.find(label);
+           it != _evalResultListIndex.end()) {
+            _evalResultList.erase(it->second);
+            _evalResultListIndex.erase(it);
+        }
+    }
+
+    void Player::writeEvalResultValueLike_0x6C4668(const std::string &label,
+                                                   double value) {
+        if(label.empty()) {
+            return;
+        }
+        ensureEvalResultSlotLike_0x686944(label) = value;
+        _variableValues[label] = value;
+        _evalResultValues[label] = value;
+    }
+
     void Player::setOpacity(double v) { _runtime->opacity = v; }
 
     void Player::setVisible(bool v) { _runtime->visible = v; }
@@ -90,7 +145,7 @@ namespace motion {
             { "slant", _runtime->slant },
             { "zoom", _runtime->zoom },
             { "zFactor", _zFactor },
-            { "colorWeight", _colorWeight },
+            { "colorWeight", getColorWeight() },
         });
     }
 
@@ -146,8 +201,22 @@ namespace motion {
                 state.playing = false;
             }
         }
+        if(const auto it = std::remove_if(_runtime->playingTimelineLabels.begin(),
+                                          _runtime->playingTimelineLabels.end(),
+                                          [this](const std::string &label) {
+                                              const auto found =
+                                                  _runtime->timelines.find(label);
+                                              return found ==
+                                                      _runtime->timelines.end() ||
+                                                  !found->second.playing;
+                                          });
+           it != _runtime->playingTimelineLabels.end()) {
+            _runtime->playingTimelineLabels.erase(
+                it, _runtime->playingTimelineLabels.end());
+        }
         _syncWaiting = false;
         _syncActive = false;
+        _allplaying = !_runtime->playingTimelineLabels.empty();
     }
 
     void Player::setStereovisionCameraPosition(double x, double y, double z) {
@@ -167,39 +236,15 @@ namespace motion {
     }
 
     // --- Timeline/variable queries ---
-    void Player::setVariable(ttstr label, double value, double transition,
-                             double ease) {
-        const auto key = detail::narrow(label);
-        if(key.empty()) {
-            return;
-        }
-
+    void Player::setVariableResolvedWeightLike_0x671228(
+        const std::string &key, double value, double transition,
+        double easeWeight) {
         const auto *activeMotion = _runtime->activeMotion.get();
         const auto bindingIt = activeMotion
             ? activeMotion->controllerBindings.find(key)
             : decltype(activeMotion->controllerBindings.find(key)){};
         const bool hasBinding =
             activeMotion && bindingIt != activeMotion->controllerBindings.end();
-        const bool isInstantVariable =
-            activeMotion &&
-            activeMotion->instantVariableLabels.find(key) !=
-                activeMotion->instantVariableLabels.end();
-
-        // Aligned to 0x66F64C + 0x671228:
-        // instantVariableList labels bypass controller animation and go straight
-        // into evalResult storage.
-        if(isInstantVariable) {
-            _variableAnimators.erase(key);
-            _controllerAnimators.erase(key);
-            if(std::find(_evalResultOrder.begin(), _evalResultOrder.end(), key) ==
-               _evalResultOrder.end()) {
-                _evalResultOrder.push_back(key);
-            }
-            _variableValues[key] = value;
-            _evalResultValues[key] = value;
-            _emoteDirty = true;
-            return;
-        }
 
         if(hasBinding) {
             const auto queueControllerStateLikeBinary =
@@ -224,6 +269,8 @@ namespace motion {
                         state.weight =
                             static_cast<float>(requestedEaseWeight);
                         _variableValues[targetKey] = requestedValue;
+                        ensureEvalResultSlotLike_0x686944(targetKey) =
+                            requestedValue;
                         _evalResultValues[targetKey] = requestedValue;
                         return;
                     }
@@ -244,6 +291,8 @@ namespace motion {
                         static_cast<float>(requestedEaseWeight),
                     });
                     _variableValues[targetKey] = state.currentValue;
+                    ensureEvalResultSlotLike_0x686944(targetKey) =
+                        state.currentValue;
                     _evalResultValues[targetKey] = state.currentValue;
                 };
 
@@ -255,7 +304,7 @@ namespace motion {
                     queueControllerStateLikeBinary(
                         key, state,
                         _variableValues.count(key) ? _variableValues[key]
-                                                   : getVariable(label),
+                                                   : getVariable(detail::widen(key)),
                         requestedValue, requestedTransition,
                         requestedEaseWeight);
                 };
@@ -284,19 +333,15 @@ namespace motion {
                         if(selectorIt != activeMotion->selectorControls.end()) {
                             const int selectedIndex =
                                 static_cast<int>(value);
-                            _controllerAnimators.erase(key);
-                            if(std::find(_evalResultOrder.begin(),
-                                         _evalResultOrder.end(),
-                                         key) == _evalResultOrder.end()) {
-                                _evalResultOrder.push_back(key);
-                            }
+                            eraseControllerAnimatorStateLike_0x671228(key);
                             _variableValues[key] =
+                                static_cast<double>(selectedIndex);
+                            ensureEvalResultSlotLike_0x686944(key) =
                                 static_cast<double>(selectedIndex);
                             _evalResultValues[key] =
                                 static_cast<double>(selectedIndex);
 
-                            const double easeWeight =
-                                variableEaseWeightLike_0x671228(ease);
+                            const double resolvedEaseWeight = easeWeight;
                             int optionIndex = 0;
                             for(const auto &option : selectorIt->second.options) {
                                 if(option.label.empty()) {
@@ -323,106 +368,74 @@ namespace motion {
                                         ? std::abs(targetValue - currentValue) /
                                               range * transition
                                         : 0.0;
-                                if(std::find(_evalResultOrder.begin(),
-                                             _evalResultOrder.end(),
-                                             option.label) ==
-                                   _evalResultOrder.end()) {
-                                    _evalResultOrder.push_back(option.label);
-                                }
                                 auto &optionState =
-                                    _controllerAnimators[option.label];
+                                    _type8ControllerAnimators[option.label];
                                 queueControllerStateLikeBinary(
                                     option.label, optionState, currentValue,
-                                    targetValue, scaledTransition, easeWeight);
+                                    targetValue, scaledTransition,
+                                    resolvedEaseWeight);
                                 ++optionIndex;
                             }
                             _emoteDirty = true;
                             return;
                         }
                     }
-                    auto &state = _controllerAnimators[key];
-                    if(std::find(_evalResultOrder.begin(), _evalResultOrder.end(),
-                                 key) == _evalResultOrder.end()) {
-                        _evalResultOrder.push_back(key);
+                    auto *bucket =
+                        controllerAnimatorBucketLike_0x671228(
+                            bindingIt->second.type);
+                    if(!bucket) {
+                        _emoteDirty = true;
+                        return;
                     }
-                    queueControllerLikeBinary(
-                        state, value, transition,
-                        variableEaseWeightLike_0x671228(ease));
+                    auto &state = (*bucket)[key];
+                    ensureEvalResultSlotLike_0x686944(key);
+                    queueControllerLikeBinary(state, value, transition,
+                                              easeWeight);
                     _emoteDirty = true;
                     return;
                 }
                 case 6: {
                     if(bindingIt->second.role == "label") {
-                        _controllerAnimators.erase(key);
+                        eraseControllerAnimatorStateLike_0x671228(key);
                         const double directValue =
                             static_cast<double>(static_cast<int>(value));
-                        if(std::find(_evalResultOrder.begin(),
-                                     _evalResultOrder.end(),
-                                     key) == _evalResultOrder.end()) {
-                            _evalResultOrder.push_back(key);
-                        }
                         _variableValues[key] = directValue;
+                        ensureEvalResultSlotLike_0x686944(key) = directValue;
                         _evalResultValues[key] = directValue;
                         _emoteDirty = true;
                         return;
                     }
-                    auto &state = _controllerAnimators[key];
-                    if(std::find(_evalResultOrder.begin(), _evalResultOrder.end(),
-                                 key) == _evalResultOrder.end()) {
-                        _evalResultOrder.push_back(key);
-                    }
-                    queueControllerLikeBinary(
-                        state, value, transition,
-                        variableEaseWeightLike_0x671228(ease));
+                    auto &state = _type6ControllerAnimators[key];
+                    ensureEvalResultSlotLike_0x686944(key);
+                    queueControllerLikeBinary(state, value, transition,
+                                              easeWeight);
                     _emoteDirty = true;
                     return;
                 }
                 default:
-                    break;
+                    _emoteDirty = true;
+                    return;
             }
         }
 
-        auto &state = _variableAnimators[key];
-        if(std::find(_evalResultOrder.begin(), _evalResultOrder.end(), key) ==
-           _evalResultOrder.end()) {
-            _evalResultOrder.push_back(key);
-        }
+        // Aligned to Player_setVariable (0x671228): labels without a controller
+        // binding bypass animator queues and write the eval map immediately.
+        _variableAnimators.erase(key);
+        _variableValues[key] = value;
+        ensureEvalResultSlotLike_0x686944(key) = value;
+        _evalResultValues[key] = value;
+        _emoteDirty = true;
+    }
 
-        const auto currentValue = static_cast<float>(getVariable(label));
-        const auto targetValue = static_cast<float>(value);
-        if(transition <= 0.0) {
-            state.queue.clear();
-            state.active = false;
-            state.currentValue = targetValue;
-            state.startValue = targetValue;
-            state.targetValue = targetValue;
-            state.progress = 1.0f;
-            state.duration = 0.0f;
-            state.weight = 1.0f;
-            _variableValues[key] = value;
-            _evalResultValues[key] = value;
-            _emoteDirty = true;
+    void Player::setVariable(ttstr label, double value, double transition,
+                             double ease) {
+        const auto key = detail::narrow(label);
+        if(key.empty()) {
             return;
         }
 
-        if(!_emoteAnimatorFlag) {
-            state.queue.clear();
-            state.active = false;
-            state.currentValue = currentValue;
-            state.startValue = currentValue;
-            state.targetValue = currentValue;
-            state.progress = 1.0f;
-            state.duration = 0.0f;
-        }
-
-        state.queue.push_back(VariableKeyframe{
-            targetValue,
-            static_cast<float>(transition),
-            variableEaseWeightLike_0x671228(ease),
-        });
-        _variableValues[key] = state.currentValue;
-        _evalResultValues[key] = state.currentValue;
-        _emoteDirty = true;
+        setVariableResolvedWeightLike_0x671228(
+            key, value, transition, variableEaseWeightLike_0x671228(ease));
     }
 
     double Player::getVariable(ttstr label) {
@@ -571,8 +584,7 @@ namespace motion {
         }
 
         if(!_runtime->nodes.empty()) {
-            const auto *clip = selectActiveClip();
-            updateLayers(activeClipTime(*_runtime, clip));
+            updateLayers();
             calcBounds();
         }
 
@@ -691,21 +703,27 @@ namespace motion {
 
     tjs_int Player::countPlayingTimelines() {
         ensureMotionLoaded();
-        return static_cast<tjs_int>(timelineInfoVariants(*_runtime).size());
+        return static_cast<tjs_int>(_runtime->playingTimelineLabels.size());
     }
 
     ttstr Player::getPlayingTimelineLabelAt(tjs_int idx) {
         ensureMotionLoaded();
-        if(const auto *state = nthPlayingTimeline(*_runtime, idx)) {
-            return detail::widen(state->label);
+        if(idx >= 0 &&
+           static_cast<size_t>(idx) < _runtime->playingTimelineLabels.size()) {
+            return detail::widen(_runtime->playingTimelineLabels[idx]);
         }
         return {};
     }
 
     tjs_int Player::getPlayingTimelineFlagsAt(tjs_int idx) {
         ensureMotionLoaded();
-        if(const auto *state = nthPlayingTimeline(*_runtime, idx)) {
-            return state->flags;
+        if(idx >= 0 &&
+           static_cast<size_t>(idx) < _runtime->playingTimelineLabels.size()) {
+            const auto &label = _runtime->playingTimelineLabels[idx];
+            if(const auto it = _runtime->timelines.find(label);
+               it != _runtime->timelines.end()) {
+                return it->second.flags;
+            }
         }
         return 0;
     }
@@ -741,25 +759,76 @@ namespace motion {
             return;
         }
 
+        // Aligned to libkrkr2.so Player_playTimeline (0x672F70):
+        // parallel flag first clears the playing-timeline list.
+        if((flags & 1) != 0) {
+            stopTimeline(TJS_W(""));
+        }
+
+        if(!label.IsEmpty()) {
+            if(std::find(_runtime->playingTimelineLabels.begin(),
+                         _runtime->playingTimelineLabels.end(),
+                         key) == _runtime->playingTimelineLabels.end()) {
+                _runtime->playingTimelineLabels.push_back(key);
+            }
+        }
+
         it->second.flags = flags;
         it->second.playing = true;
         it->second.currentTime = 0.0;
-        if(!label.IsEmpty()) {
-            _motionKey = label;
+        it->second.blendRatio = 1.0;
+        it->second.blendAnimator = {};
+        it->second.blendAutoStop = false;
+        it->second.controlInitialized = false;
+        it->second.controlLastAppliedTime = 0.0;
+        it->second.controlFrameCursor.clear();
+        it->second.controlTrackValues.clear();
+        it->second.controlTrackAnimators.clear();
+        if(const auto controlIt =
+               _runtime->activeMotion->timelineControlByLabel.find(key);
+           controlIt != _runtime->activeMotion->timelineControlByLabel.end()) {
+            resetTimelineControlStateLike_0x671A50(
+                it->second, controlIt->second, 0.0);
         }
-        _allplaying = true;
+        _allplaying = !_runtime->playingTimelineLabels.empty();
     }
 
     void Player::stopTimeline(ttstr label) {
         const auto key = detail::narrow(label);
-        if(const auto it = _runtime->timelines.find(key);
-           it != _runtime->timelines.end()) {
-            it->second.playing = false;
+        if(label.IsEmpty()) {
+            for(auto &[_, state] : _runtime->timelines) {
+                state.playing = false;
+                state.blendRatio = 1.0;
+                state.blendAnimator = {};
+                state.blendAutoStop = false;
+                state.controlInitialized = false;
+                state.controlFrameCursor.clear();
+                state.controlTrackValues.clear();
+                state.controlTrackAnimators.clear();
+            }
+            _runtime->playingTimelineLabels.clear();
+        } else {
+            if(const auto it = _runtime->timelines.find(key);
+               it != _runtime->timelines.end()) {
+                it->second.playing = false;
+                it->second.blendRatio = 1.0;
+                it->second.blendAnimator = {};
+                it->second.blendAutoStop = false;
+                it->second.controlInitialized = false;
+                it->second.controlFrameCursor.clear();
+                it->second.controlTrackValues.clear();
+                it->second.controlTrackAnimators.clear();
+            }
+            if(const auto it = std::remove(_runtime->playingTimelineLabels.begin(),
+                                           _runtime->playingTimelineLabels.end(),
+                                           key);
+               it != _runtime->playingTimelineLabels.end()) {
+                _runtime->playingTimelineLabels.erase(
+                    it, _runtime->playingTimelineLabels.end());
+            }
         }
 
-        _allplaying = std::any_of(
-            _runtime->timelines.begin(), _runtime->timelines.end(),
-            [](const auto &entry) { return entry.second.playing; });
+        _allplaying = !_runtime->playingTimelineLabels.empty();
     }
 
     void Player::setTimelineBlendRatio(ttstr label, double ratio) {
@@ -772,6 +841,8 @@ namespace motion {
         auto &state = _runtime->timelines[key];
         state.label = key;
         state.blendRatio = ratio;
+        state.blendAnimator = {};
+        state.blendAutoStop = false;
     }
 
     double Player::getTimelineBlendRatio(ttstr label) {
@@ -783,14 +854,22 @@ namespace motion {
         return 1.0;
     }
 
-    void Player::fadeInTimeline(ttstr label, double, tjs_int flags) {
-        playTimeline(label, flags);
-        setTimelineBlendRatio(label, 1.0);
+    void Player::fadeInTimeline(ttstr label, double duration, tjs_int flags) {
+        const auto key = detail::narrow(label);
+        const bool alreadyPlaying =
+            std::find(_runtime->playingTimelineLabels.begin(),
+                      _runtime->playingTimelineLabels.end(),
+                      key) != _runtime->playingTimelineLabels.end();
+        if(!alreadyPlaying) {
+            playTimeline(label, 3);
+            setTimelineBlendLike_0x6735AC(key, false, 0.0, 0.0, 0.0);
+        }
+        setTimelineBlendLike_0x6735AC(key, false, 1.0, duration, 0.0);
     }
 
-    void Player::fadeOutTimeline(ttstr label, double, tjs_int) {
-        setTimelineBlendRatio(label, 0.0);
-        stopTimeline(label);
+    void Player::fadeOutTimeline(ttstr label, double duration, tjs_int) {
+        setTimelineBlendLike_0x6735AC(detail::narrow(label), true, 0.0,
+                                      duration, 0.0);
     }
 
     tTJSVariant Player::getPlayingTimelineInfoList() {
@@ -857,14 +936,26 @@ namespace motion {
         // Start all timelines playing (equivalent to playCompat's playOne loop)
         if (_runtime->activeMotion && !_runtime->timelines.empty()) {
             double maxTF = 0.0;
-            for (auto &[tlName, state] : _runtime->timelines) {
+            _runtime->playingTimelineLabels.clear();
+            const auto &primary =
+                !_runtime->activeMotion->mainTimelineLabels.empty()
+                    ? _runtime->activeMotion->mainTimelineLabels
+                    : _runtime->activeMotion->diffTimelineLabels;
+            for (const auto &timelineLabel : primary) {
+                auto &state = _runtime->timelines[timelineLabel];
                 state.flags = flags & ~PlayFlagStealth;  // pass flags minus stealth
                 state.playing = true;
                 state.blendRatio = 1.0;
+                state.controlInitialized = false;
+                state.controlLastAppliedTime = state.currentTime;
+                state.controlFrameCursor.clear();
+                state.controlTrackValues.clear();
+                state.controlTrackAnimators.clear();
+                _runtime->playingTimelineLabels.push_back(timelineLabel);
                 if (state.totalFrames > maxTF) maxTF = state.totalFrames;
             }
             _cachedTotalFrames = maxTF;  // player+1128 cached value
-            _allplaying = true;
+            _allplaying = !_runtime->playingTimelineLabels.empty();
         }
 
         // Handle pending stealth motion (0x6B226C..0x6B2280)
@@ -1197,6 +1288,10 @@ namespace motion {
             return TJS_S_OK;
         }
 
+        if((flags & PlayFlagForce) != 0) {
+            self->stopTimeline(TJS_W(""));
+        }
+
         const auto playOne = [&](const std::string &timelineLabel) {
             auto &state = self->_runtime->timelines[timelineLabel];
             state.label = timelineLabel;
@@ -1204,6 +1299,17 @@ namespace motion {
             state.blendRatio = 1.0;
             state.playing = true;
             state.currentTime = 0.0;
+            state.controlInitialized = false;
+            state.controlLastAppliedTime = 0.0;
+            state.controlFrameCursor.clear();
+            state.controlTrackValues.clear();
+            state.controlTrackAnimators.clear();
+            if(std::find(self->_runtime->playingTimelineLabels.begin(),
+                         self->_runtime->playingTimelineLabels.end(),
+                         timelineLabel) ==
+               self->_runtime->playingTimelineLabels.end()) {
+                self->_runtime->playingTimelineLabels.push_back(timelineLabel);
+            }
             // Ensure totalFrames is set (may be 0 if timeline wasn't primed)
             if(state.totalFrames <= 0.0 && self->_runtime->activeMotion) {
                 auto it = self->_runtime->activeMotion->timelineTotalFrames.find(timelineLabel);
@@ -1217,11 +1323,8 @@ namespace motion {
         if(!label.IsEmpty()) {
             const auto key = detail::narrow(label);
             if(self->_runtime->timelines.find(key) != self->_runtime->timelines.end()) {
-                self->_motionKey = label;
                 playOne(key);
                 started = true;
-            } else if(self->_runtime->activeMotion) {
-                self->_motionKey = label;
             }
         }
 
@@ -1235,9 +1338,7 @@ namespace motion {
             }
         }
 
-        self->_allplaying = std::any_of(
-            self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
-            [](const auto &entry) { return entry.second.playing; });
+        self->_allplaying = !self->_runtime->playingTimelineLabels.empty();
 
         if(result) {
             *result = tTJSVariant(started);
@@ -1284,14 +1385,13 @@ namespace motion {
         // progress_inner -> updateLayers -> calcBounds -> dispatchEvents.
         self->ensureNodeTreeBuilt();
         if(!self->_runtime->nodes.empty()) {
-            const auto *clip = self->selectActiveClip();
-            const auto currentTime = activeClipTime(*self->_runtime, clip);
             detail::logoChainTraceLogf(
-                motionPath, "progressCompat.update", "0x6D2A98", currentTime,
+                motionPath, "progressCompat.update", "0x6D2A98",
+                self->_clampedEvalTime,
                 "timelineCurrentTime={:.3f} pendingEvents={} nodes={}",
-                currentTime, self->_runtime->pendingEvents.size(),
+                self->_clampedEvalTime, self->_runtime->pendingEvents.size(),
                 self->_runtime->nodes.size());
-            self->updateLayers(currentTime);
+            self->updateLayers();
         }
         self->calcBounds();
 
@@ -1350,9 +1450,7 @@ namespace motion {
             return TJS_E_INVALIDOBJECT;
         }
 
-        const bool playing = std::any_of(
-            self->_runtime->timelines.begin(), self->_runtime->timelines.end(),
-            [](const auto &entry) { return entry.second.playing; });
+        const bool playing = !self->_runtime->playingTimelineLabels.empty();
         self->_allplaying = playing;
         if(result) {
             *result = tTJSVariant(playing);

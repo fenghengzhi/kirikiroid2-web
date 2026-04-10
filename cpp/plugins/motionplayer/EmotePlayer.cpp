@@ -95,6 +95,9 @@ namespace motion {
         copy->_rot = _rot;
         copy->_coordX = _coordX;
         copy->_coordY = _coordY;
+        copy->_mirrorBase = _mirrorBase;
+        copy->_mirrorRequested = _mirrorRequested;
+        copy->_mirrorChanged = _mirrorChanged;
         copy->_color = _color;
 
         // Load the same snapshot into the cloned Player
@@ -217,6 +220,17 @@ namespace motion {
 
     // Aligned to libkrkr2.so sub_5302DC: binary returns hardcoded 1.0
     double EmotePlayer::getScale() { return 1.0; }
+
+    void EmotePlayer::setMirror(bool mirror) {
+        // Aligned to libkrkr2.so sub_671DB0:
+        // wrapper stores requested mirror, derives a root-flip delta against a
+        // baseline bit, forwards that effective flip to Player_setRootFlipX,
+        // then triggers the large controller reset path.
+        _mirrorRequested = mirror;
+        _mirrorChanged = (_mirrorRequested != _mirrorBase);
+        _player.setMirror(_mirrorChanged);
+        _modified = true;
+    }
 
     void EmotePlayer::setColor(tjs_int color, double transition, double ease) {
         _color = color;

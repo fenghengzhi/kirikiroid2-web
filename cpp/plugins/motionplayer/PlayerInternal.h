@@ -303,10 +303,12 @@ namespace internal {
         inline std::vector<tTJSVariant>
         timelineInfoVariants(const detail::PlayerRuntime &runtime) {
             std::vector<tTJSVariant> items;
-            for(const auto &[label, state] : runtime.timelines) {
-                if(!state.playing) {
+            for(const auto &label : runtime.playingTimelineLabels) {
+                const auto it = runtime.timelines.find(label);
+                if(it == runtime.timelines.end() || !it->second.playing) {
                     continue;
                 }
+                const auto &state = it->second;
 
                 items.push_back(detail::makeDictionary({
                     { "label", detail::widen(label) },
@@ -326,18 +328,12 @@ namespace internal {
             if(idx < 0) {
                 return nullptr;
             }
-
-            tjs_int current = 0;
-            for(const auto &[_, state] : runtime.timelines) {
-                if(!state.playing) {
-                    continue;
-                }
-                if(current == idx) {
-                    return &state;
-                }
-                ++current;
+            if(static_cast<size_t>(idx) >= runtime.playingTimelineLabels.size()) {
+                return nullptr;
             }
-            return nullptr;
+            const auto it =
+                runtime.timelines.find(runtime.playingTimelineLabels[idx]);
+            return it != runtime.timelines.end() ? &it->second : nullptr;
         }
 
         inline bool getObjectProperty(const tTJSVariant &object, const tjs_char *name,
@@ -531,6 +527,7 @@ namespace internal {
             std::vector<std::string> srcList;  // For particle nodes: array of "chara/motion" paths
             double x = 0.0;
             double y = 0.0;
+            double z = 0.0;
             double ox = 0.0;          // mask 0x1: position offset X
             double oy = 0.0;          // mask 0x1: position offset Y
             double width = 0.0;       // "zx" from PSB: display width in pixels
@@ -544,9 +541,6 @@ namespace internal {
             bool flipX = false;       // mask 0x4: "fx"
             bool flipY = false;       // mask 0x8: "fy"
             int blendMode = 16;       // mask 0x20000: "bm"/"b" (default 16)
-            double c0 = 0.0;          // mask 0x2: color curve control points (sub_692AB0 at 0x692E14)
-            double c1 = 0.0;          //   3 doubles via sub_6695BC indices 0,1,2
-            double c2 = 0.0;
             // Aligned to sub_692AB0 (0x692F4C..0x693428):
             // clip+72..84 stores four packed RGBA DWORDs. Default is
             // vdupq_n_s32(0xFF808080), not four scalar channels.
@@ -597,6 +591,26 @@ namespace internal {
             bool hasSync = false;     // "content.sync" from PSB frameList
             // Clip slot timing — slot+328 in libkrkr2.so (frame start time)
             double clipStartTime = 0.0;
+            // Gated diagnostics for frame selection vs dual-slot interpolation.
+            bool debugEvaluated = false;
+            int debugActiveIndex = -1;
+            int debugNextIndex = -1;
+            int debugFrameAType = 0;
+            int debugFrameBType = 0;
+            bool debugFrameAInvisible = false;
+            bool debugFrameBInvisible = false;
+            bool debugInterpolated = false;
+            double debugFrameATime = 0.0;
+            double debugFrameBTime = 0.0;
+            double debugInterpT = 0.0;
+            double debugFrameAOpacity = 1.0;
+            double debugFrameBOpacity = 1.0;
+            double debugFrameAScaleX = 1.0;
+            double debugFrameAScaleY = 1.0;
+            double debugFrameBScaleX = 1.0;
+            double debugFrameBScaleY = 1.0;
+            std::string debugFrameASrc;
+            std::string debugFrameBSrc;
         };
 
         inline std::optional<double>
@@ -821,44 +835,46 @@ namespace internal {
                 }
             }
 
-            for(const auto &[_, state] : runtime.timelines) {
-                if(state.playing || state.currentTime > 0.0) {
-                    return state.currentTime;
+            for(const auto &label : runtime.playingTimelineLabels) {
+                if(const auto it = runtime.timelines.find(label);
+                   it != runtime.timelines.end()) {
+                    return it->second.currentTime;
                 }
             }
             return 0.0;
         }
 
         inline void mergeFrameContent(const std::shared_ptr<PSB::PSBDictionary> &content,
-                               FrameContentState &state) {
+                               FrameContentState &state,
+                               int nodeType) {
             if(!content) {
                 return;
             }
 
-            // Aligned to libkrkr2.so sub_6926B4 (0x6926B4) + sub_692AB0 (0x692AB0):
-            // Each PSB frameList frame's "content" dict has a "mask" integer.
-            // "mask" is a bitmask that controls WHICH properties this keyframe
-            // modifies. Properties without their mask bit set keep their
-            // previous/default value. This is critical — e.g. yuzulogo.mtn's
-            // logo nodes have opa=0 in content but mask does NOT have bit 0x400,
-            // so libkrkr2.so ignores the opa value and uses default 255.
+            // Aligned to libkrkr2.so sub_692AB0 (0x692AB0):
+            // the clip slot is already reset to defaults by sub_69260C/ParsedFrame,
+            // then this routine applies only the fields selected by mask bits.
             const int mask = static_cast<int>(
                 psbDictionaryNumber(content, "mask").value_or(0));
 
-            // "src" is NOT gated by mask — it's gated by node type in sub_692AB0
-            // (((1 << a2) & 0x1849) != 0). We don't have node type here, so
-            // read unconditionally. "src" can be a string or a PSBList of strings
-            // (binary stores as TJS Array at node+2200 for particle random selection).
-            if(const auto src = psbDictionaryString(content, "src"); !src.empty()) {
-                state.src = src;
-            } else if(auto srcList = psbDictionaryList(content, "src")) {
-                // PSBList of strings — store all entries in srcList
-                for(size_t si = 0; si < srcList->size(); ++si) {
-                    if(auto s = std::dynamic_pointer_cast<PSB::PSBString>((*srcList)[si])) {
-                        state.srcList.push_back(s->value);
+            // sub_692AB0 gates the "src"/"icon" lookup on ((1 << nodeType) & 0x1849).
+            // This covers the initial source-handle block only; ox/oy/coord are handled
+            // below by their own mask bits.
+            const bool sourceGateEnabled =
+                nodeType >= 0 && nodeType < 63 &&
+                ((((std::uint64_t)1) << static_cast<unsigned>(nodeType)) &
+                 0x1849u) != 0;
+            if(sourceGateEnabled) {
+                if(const auto src = psbDictionaryString(content, "src"); !src.empty()) {
+                    state.src = src;
+                } else if(auto srcList = psbDictionaryList(content, "src")) {
+                    for(size_t si = 0; si < srcList->size(); ++si) {
+                        if(auto s = std::dynamic_pointer_cast<PSB::PSBString>((*srcList)[si])) {
+                            state.srcList.push_back(s->value);
+                        }
                     }
+                    if(!state.srcList.empty()) state.src = state.srcList[0];
                 }
-                if(!state.srcList.empty()) state.src = state.srcList[0];
             }
 
             // mask & 0x1: ox/oy (sub_692AB0 at 0x692DC4)
@@ -869,10 +885,28 @@ namespace internal {
                     state.oy = *oy;
             }
 
-            // sub_692AB0 has NO unconditional "zx"/"zy" read for width/height.
-            // "z" and "zy" are only read under mask & 0x60 as zoomX/zoomY (below).
-            // Source display size (node+232/240) comes from PSB icon node,
-            // populated in buildNodeTree via findPSBResourceBySourceName.
+            // mask & 0x2: coord[x,y,z] (sub_692AB0 at 0x692E14).
+            // Binary fetches content["coord"] then reads indices 0/1/2 via sub_6695BC.
+            if(mask & 0x2) {
+                if(const auto coord = psbDictionaryList(content, "coord")) {
+                    if(coord->size() > 0) {
+                        if(const auto value = psbNumberValue((*coord)[0]))
+                            state.x = *value;
+                    }
+                    if(coord->size() > 1) {
+                        if(const auto value = psbNumberValue((*coord)[1]))
+                            state.y = *value;
+                    }
+                    if(coord->size() > 2) {
+                        if(const auto value = psbNumberValue((*coord)[2]))
+                            state.z = *value;
+                    }
+                } else if(auto coordDict = psbDictionaryValue(content, "coord")) {
+                    if(auto value = psbDictionaryNumber(coordDict, "0")) state.x = *value;
+                    if(auto value = psbDictionaryNumber(coordDict, "1")) state.y = *value;
+                    if(auto value = psbDictionaryNumber(coordDict, "2")) state.z = *value;
+                }
+            }
 
             // mask & 0x400: opa (sub_692AB0 at 0x693440)
             // CRITICAL: only read "opa" when mask bit 0x400 is set.
@@ -882,37 +916,10 @@ namespace internal {
                     state.opacity = std::clamp(*opa / 255.0, 0.0, 1.0);
             }
 
-            // "x"/"y" position — read unconditionally (these may be layer-level,
-            // not clip-level properties; not clearly mask-gated in sub_692AB0)
-            if(const auto x = psbDictionaryNumber(content, "x")) {
-                state.x = *x;
-            }
-            if(const auto y = psbDictionaryNumber(content, "y")) {
-                state.y = *y;
-            }
-
             // mask & 0x10: angle (sub_692AB0 at 0x692FC4)
             if(mask & 0x10) {
                 if(const auto angle = psbDictionaryNumber(content, "angle"))
                     state.angle = *angle;
-            }
-
-            // mask & 0x2: "c" color curve control points (sub_692AB0 at 0x692E14)
-            // 3 doubles read via sub_6695BC(content["c"], index, ...)
-            if(mask & 0x2) {
-                if(auto cList = psbDictionaryList(content, "c")) {
-                    if(cList->size() > 0)
-                        if(auto v = psbNumberValue((*cList)[0])) state.c0 = *v;
-                    if(cList->size() > 1)
-                        if(auto v = psbNumberValue((*cList)[1])) state.c1 = *v;
-                    if(cList->size() > 2)
-                        if(auto v = psbNumberValue((*cList)[2])) state.c2 = *v;
-                } else if(auto cDict = psbDictionaryValue(content, "c")) {
-                    // May also be stored as dict with "0","1","2" keys
-                    if(auto v = psbDictionaryNumber(cDict, "0")) state.c0 = *v;
-                    if(auto v = psbDictionaryNumber(cDict, "1")) state.c1 = *v;
-                    if(auto v = psbDictionaryNumber(cDict, "2")) state.c2 = *v;
-                }
             }
 
             // mask & 0x4: fx, mask & 0x8: fy (sub_692AB0 at 0x692F6C)
@@ -1167,18 +1174,6 @@ namespace internal {
             if(const auto sync = psbDictionaryNumber(content, "sync")) {
                 state.hasSync = *sync != 0.0;
             }
-
-            // coord: alternative position format, read unconditionally
-            if(const auto coord = psbDictionaryList(content, "coord")) {
-                if(coord->size() > 0) {
-                    if(const auto value = psbNumberValue((*coord)[0]))
-                        state.x = *value;
-                }
-                if(coord->size() > 1) {
-                    if(const auto value = psbNumberValue((*coord)[1]))
-                        state.y = *value;
-                }
-            }
         }
 
         // Parse a single PSB frame entry: read time, type, content.
@@ -1195,7 +1190,8 @@ namespace internal {
         };
 
         inline ParsedFrame
-        parseFrame(const std::shared_ptr<PSB::PSBDictionary> &frame) {
+        parseFrame(const std::shared_ptr<PSB::PSBDictionary> &frame,
+                   int nodeType) {
             ParsedFrame result;
             if(!frame) return result;
             result.time = psbDictionaryNumber(frame, "time").value_or(0.0);
@@ -1207,7 +1203,7 @@ namespace internal {
             if(!result.invisible) {
                 // sub_6926B4 at 0x692838: read content dict, then call sub_692AB0
                 if(const auto content = psbDictionaryValue(frame, "content")) {
-                    mergeFrameContent(content, result.slot);
+                    mergeFrameContent(content, result.slot, nodeType);
                 }
             }
             return result;
@@ -1217,8 +1213,9 @@ namespace internal {
         // Convenience wrapper: calls parseFrame (sub_6926B4) and returns
         // the populated slot. Used by flattenLayerNodes (PSB-tree path).
         inline FrameContentState
-        initSlotFromFrame(const std::shared_ptr<PSB::PSBDictionary> &frame) {
-            return parseFrame(frame).slot;
+        initSlotFromFrame(const std::shared_ptr<PSB::PSBDictionary> &frame,
+                          int nodeType) {
+            return parseFrame(frame, nodeType).slot;
         }
 
         // Dual-slot interpolation between two FrameContentStates.
@@ -1255,6 +1252,7 @@ namespace internal {
             // position derivative computation), separate from normal frame interpolation.
             state.x = lerp(state.x, slotB.x, t);
             state.y = lerp(state.y, slotB.y, t);
+            state.z = lerp(state.z, slotB.z, t);
             state.ox = lerp(state.ox, slotB.ox, t);
             state.oy = lerp(state.oy, slotB.oy, t);
 
@@ -1338,7 +1336,8 @@ namespace internal {
         //   3. interpolateSlots (sub_699AE4) — dual-slot interpolation
         inline FrameContentState
         evaluateLayerContent(const std::shared_ptr<const PSB::PSBDictionary> &layer,
-                             double time) {
+                             double time,
+                             int nodeType) {
             FrameContentState state;
             const auto frames = psbDictionaryList(layer, "frameList");
             if(!frames || frames->size() == 0) {
@@ -1370,13 +1369,22 @@ namespace internal {
             }
 
             if(activeIndex < 0) return state;
+            state.debugEvaluated = true;
+            state.debugActiveIndex = activeIndex;
 
             const auto activeFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                 (*frames)[activeIndex]);
             if(!activeFrame) return state;
 
             // Step 2: Parse active frame via sub_6926B4
-            ParsedFrame frameA = parseFrame(activeFrame);
+            ParsedFrame frameA = parseFrame(activeFrame, nodeType);
+            state.debugFrameATime = frameA.time;
+            state.debugFrameAType = frameA.type;
+            state.debugFrameAInvisible = frameA.invisible;
+            state.debugFrameAOpacity = frameA.slot.opacity;
+            state.debugFrameAScaleX = frameA.slot.scaleX;
+            state.debugFrameAScaleY = frameA.slot.scaleY;
+            state.debugFrameASrc = frameA.slot.src;
 
             // type=0: node is invisible at this time
             if(frameA.invisible) {
@@ -1391,6 +1399,15 @@ namespace internal {
             state = frameA.slot;
             state.visible = true;
             state.clipStartTime = frameA.time;  // slot+328: frame start time
+            state.debugEvaluated = true;
+            state.debugActiveIndex = activeIndex;
+            state.debugFrameATime = frameA.time;
+            state.debugFrameAType = frameA.type;
+            state.debugFrameAInvisible = frameA.invisible;
+            state.debugFrameAOpacity = frameA.slot.opacity;
+            state.debugFrameAScaleX = frameA.slot.scaleX;
+            state.debugFrameAScaleY = frameA.slot.scaleY;
+            state.debugFrameASrc = frameA.slot.src;
             if(savedHasTO) {
                 std::copy(savedTO, savedTO + 4, state.transformOrder);
                 state.hasTransformOrder = true;
@@ -1406,13 +1423,21 @@ namespace internal {
             if(nextIndex >= static_cast<int>(frames->size())) {
                 return state;  // no next frame, just use slot A
             }
+            state.debugNextIndex = nextIndex;
 
             const auto nextFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                 (*frames)[nextIndex]);
             if(!nextFrame) return state;
 
             // Step 3: Parse next frame via sub_6926B4
-            ParsedFrame frameB = parseFrame(nextFrame);
+            ParsedFrame frameB = parseFrame(nextFrame, nodeType);
+            state.debugFrameBTime = frameB.time;
+            state.debugFrameBType = frameB.type;
+            state.debugFrameBInvisible = frameB.invisible;
+            state.debugFrameBOpacity = frameB.slot.opacity;
+            state.debugFrameBScaleX = frameB.slot.scaleX;
+            state.debugFrameBScaleY = frameB.slot.scaleY;
+            state.debugFrameBSrc = frameB.slot.src;
             // Inherit src from slot A if slot B doesn't set one
             if(frameB.slot.src.empty()) frameB.slot.src = state.src;
 
@@ -1422,6 +1447,7 @@ namespace internal {
 
             const double t = std::clamp(
                 (time - frameA.time) / duration, 0.0, 1.0);
+            state.debugInterpT = t;
 
             if(t <= 0.0 || frameB.invisible) {
                 return state;  // at exact start or next is invisible
@@ -1430,6 +1456,25 @@ namespace internal {
             // Step 4: Interpolate via sub_699AE4
             state = interpolateSlots(state, frameB.slot, t);
             state.visible = true;
+            state.debugEvaluated = true;
+            state.debugActiveIndex = activeIndex;
+            state.debugNextIndex = nextIndex;
+            state.debugFrameATime = frameA.time;
+            state.debugFrameAType = frameA.type;
+            state.debugFrameAInvisible = frameA.invisible;
+            state.debugFrameAOpacity = frameA.slot.opacity;
+            state.debugFrameAScaleX = frameA.slot.scaleX;
+            state.debugFrameAScaleY = frameA.slot.scaleY;
+            state.debugFrameASrc = frameA.slot.src;
+            state.debugFrameBTime = frameB.time;
+            state.debugFrameBType = frameB.type;
+            state.debugFrameBInvisible = frameB.invisible;
+            state.debugFrameBOpacity = frameB.slot.opacity;
+            state.debugFrameBScaleX = frameB.slot.scaleX;
+            state.debugFrameBScaleY = frameB.slot.scaleY;
+            state.debugFrameBSrc = frameB.slot.src;
+            state.debugInterpT = t;
+            state.debugInterpolated = true;
 
             if(savedHasTO) {
                 std::copy(savedTO, savedTO + 4, state.transformOrder);
@@ -1756,8 +1801,16 @@ namespace internal {
         //   case 1 angle: left-multiply [cos,-sin;sin,cos]
         //   case 2 zoom:  left-multiply [zoomX,0;0,zoomY]
         //   case 3 slant: left-multiply [1,slantX;slantY,1]
-        inline void applyLocalTransform(Affine2x3 &a,
-                                 const FrameContentState &state) {
+        inline void applyLocalTransform(
+            Affine2x3 &a,
+            bool flipX,
+            bool flipY,
+            double angle,
+            double scaleX,
+            double scaleY,
+            double slantX,
+            double slantY,
+            const int (&transformOrder)[4]) {
             // Build local 2x2 from identity via left-multiplication.
             // Exactly replicates sub_699940 (0x699940): iterates
             // transformOrder[0..3] and applies each transform case.
@@ -1765,15 +1818,15 @@ namespace internal {
             double l11 = 1.0, l12 = 0.0, l21 = 0.0, l22 = 1.0;
 
             for(int step = 0; step < 4; step++) {
-                const int op = state.transformOrder[step];
+                const int op = transformOrder[step];
                 switch(op) {
                     case 0: // Flip (left-multiply [-1,0;0,1] / [1,0;0,-1])
-                        if(state.flipX) { l11 = -l11; l12 = -l12; }
-                        if(state.flipY) { l21 = -l21; l22 = -l22; }
+                        if(flipX) { l11 = -l11; l12 = -l12; }
+                        if(flipY) { l21 = -l21; l22 = -l22; }
                         break;
                     case 1: // Angle (left-multiply [c,-s;s,c])
-                        if(state.angle != 0.0) {
-                            const double rad = state.angle * 2.0 * 3.14159265358979323846 / 360.0;
+                        if(angle != 0.0) {
+                            const double rad = angle * 2.0 * 3.14159265358979323846 / 360.0;
                             const double c = std::cos(rad);
                             const double s = std::sin(rad);
                             const double t11 = c*l11 - s*l21;
@@ -1784,17 +1837,17 @@ namespace internal {
                         }
                         break;
                     case 2: // Zoom (left-multiply [zx,0;0,zy]) — 0x699A50
-                        if(state.scaleX != 1.0 || state.scaleY != 1.0) {
-                            l11 *= state.scaleX; l12 *= state.scaleX;
-                            l21 *= state.scaleY; l22 *= state.scaleY;
+                        if(scaleX != 1.0 || scaleY != 1.0) {
+                            l11 *= scaleX; l12 *= scaleX;
+                            l21 *= scaleY; l22 *= scaleY;
                         }
                         break;
                     case 3: // Slant (left-multiply [1,sx;sy,1]) — 0x699A7C
-                        if(state.slantX != 0.0 || state.slantY != 0.0) {
-                            const double t12 = l22*state.slantX + l12;
-                            const double t21 = l11*state.slantY + l21;
-                            const double t22 = l22 + l12*state.slantY;
-                            const double t11 = l11 + state.slantX*l21;
+                        if(slantX != 0.0 || slantY != 0.0) {
+                            const double t12 = l22*slantX + l12;
+                            const double t21 = l11*slantY + l21;
+                            const double t22 = l22 + l12*slantY;
+                            const double t11 = l11 + slantX*l21;
                             l11 = t11; l12 = t12; l21 = t21; l22 = t22;
                         }
                         break;
@@ -1808,6 +1861,31 @@ namespace internal {
             const double m12 = a[0]*l12 + a[2]*l22;
             const double m22 = a[1]*l12 + a[3]*l22;
             a[0] = m11; a[1] = m21; a[2] = m12; a[3] = m22;
+        }
+
+        inline void applyLocalTransform(Affine2x3 &a,
+                                 const FrameContentState &state) {
+            applyLocalTransform(a,
+                                state.flipX, state.flipY,
+                                state.angle,
+                                state.scaleX, state.scaleY,
+                                state.slantX, state.slantY,
+                                state.transformOrder);
+        }
+
+        // sub_699940 (0x699940) rebuilds the local 2x2 from node fields
+        // after Player_updateLayers has already applied inheritFlags.
+        inline void applyLocalTransform(Affine2x3 &a,
+                                 const detail::MotionNode &node) {
+            applyLocalTransform(a,
+                                node.accumulated.flipX,
+                                node.accumulated.flipY,
+                                node.accumulated.angle,
+                                node.accumulated.scaleX,
+                                node.accumulated.scaleY,
+                                node.accumulated.slantX,
+                                node.accumulated.slantY,
+                                node.transformOrder);
         }
 
 } // namespace internal

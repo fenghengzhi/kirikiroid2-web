@@ -103,6 +103,7 @@ namespace motion {
                                         tTJSVariant **param,
                                         iTJSDispatch2 *objthis);
         double getScale();
+        void setMirror(bool mirror);
         void setColor(tjs_int color, double transition = 0.0,
                       double ease = 0.0);
         static tjs_error setColorCompat(tTJSVariant *result, tjs_int numparams,
@@ -210,6 +211,9 @@ namespace motion {
         double _rot = 0.0;
         double _coordX = 0.0;
         double _coordY = 0.0;
+        bool _mirrorBase = false;
+        bool _mirrorRequested = false;
+        bool _mirrorChanged = false;
         tjs_int _color = 0xFFFFFF;
     };
 

@@ -20,6 +20,7 @@ namespace motion {
                 if(_runtime->activeMotion == it->second) {
                     _runtime->activeMotion.reset();
                     _runtime->timelines.clear();
+                    _runtime->playingTimelineLabels.clear();
                 }
                 it = _runtime->motionsByKey.erase(it);
             } else {
@@ -42,6 +43,7 @@ namespace motion {
         _runtime->sourcesByKey.clear();
         _runtime->activeMotion.reset();
         _runtime->timelines.clear();
+        _runtime->playingTimelineLabels.clear();
         _runtime->layerIdsByName.clear();
         _runtime->layerNamesById.clear();
         _runtime->lastCanvas.Clear();
@@ -50,9 +52,12 @@ namespace motion {
         _variableKeys.Clear();
         _variableValues.clear();
         _variableAnimators.clear();
-        _controllerAnimators.clear();
+        clearControllerAnimatorStateLike_0x671228();
         _evalResultValues.clear();
-        _evalResultOrder.clear();
+        _evalResultList.clear();
+        _evalResultListIndex.clear();
+        _mirrorPositiveCache.clear();
+        _mirrorNegativeCache.clear();
         _motionKey.Clear();
     }
 

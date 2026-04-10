@@ -315,6 +315,16 @@ namespace motion::detail {
             }
         }
 
+        double timelineControlEaseWeightLike_0x66FC5C(double easing) {
+            if(easing > 0.0) {
+                return easing + 1.0;
+            }
+            if(easing < 0.0) {
+                return 1.0 / (1.0 - easing);
+            }
+            return 1.0;
+        }
+
         std::string basenameWithoutExtension(const std::string &value) {
             const auto slash = value.find_last_of("/\\");
             const auto fileName =
@@ -323,32 +333,63 @@ namespace motion::detail {
             return dot == std::string::npos ? fileName : fileName.substr(0, dot);
         }
 
-        void collectFrameList(const std::string &label,
-                              const std::shared_ptr<PSB::PSBList> &list,
-                              MotionSnapshot &snapshot) {
+        void collectVariableListMetadata(
+            const std::shared_ptr<const PSB::PSBDictionary> &base,
+            MotionSnapshot &snapshot) {
+            const auto list = dictionaryList(base, {"variableList"});
             if(!list) {
                 return;
             }
 
-            std::vector<VariableFrameInfo> frames;
-            int index = 0;
-            for(const auto &item : *list) {
-                if(auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(item)) {
-                    const auto frameLabel = dictionaryString(
-                        dic, { "label", "name", "id" })
-                                                .value_or(std::to_string(index));
-                    const auto value = dictionaryNumber(
-                        dic, { "value", "val", "frame", "position", "time" })
-                                           .value_or(static_cast<double>(index));
-                    frames.push_back({ frameLabel, value });
-                } else if(const auto value = psbNumber(item)) {
-                    frames.push_back({ std::to_string(index), *value });
-                }
-                ++index;
-            }
+            snapshot.variableLabels.clear();
+            snapshot.variableRanges.clear();
+            snapshot.variableFrames.clear();
 
-            if(!frames.empty()) {
-                snapshot.variableFrames[label] = std::move(frames);
+            for(const auto &item : *list) {
+                const auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
+                if(!dic) {
+                    continue;
+                }
+
+                const auto label = dictionaryString(dic, {"label", "name", "id"});
+                if(!label || label->empty()) {
+                    continue;
+                }
+
+                appendUnique(snapshot.variableLabels, *label);
+
+                std::vector<VariableFrameInfo> frames;
+                double minValue = std::numeric_limits<double>::infinity();
+                double maxValue = -std::numeric_limits<double>::infinity();
+                if(const auto frameList = dictionaryList(dic, {"frameList"})) {
+                    int frameIndex = 0;
+                    for(const auto &frameItem : *frameList) {
+                        if(const auto frameDic =
+                               std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                                   frameItem)) {
+                            const auto frameLabel = dictionaryString(
+                                frameDic, {"label", "name", "id"})
+                                                        .value_or(
+                                                            std::to_string(
+                                                                frameIndex));
+                            const double frameValue = dictionaryNumber(
+                                frameDic, {"f"}).value_or(0.0);
+                            frames.push_back({frameLabel, frameValue});
+                            minValue = std::min(minValue, frameValue);
+                            maxValue = std::max(maxValue, frameValue);
+                        } else if(const auto value = psbNumber(frameItem)) {
+                            frames.push_back({std::to_string(frameIndex), *value});
+                            minValue = std::min(minValue, *value);
+                            maxValue = std::max(maxValue, *value);
+                        }
+                        ++frameIndex;
+                    }
+                }
+
+                if(!frames.empty()) {
+                    snapshot.variableFrames[*label] = std::move(frames);
+                    snapshot.variableRanges[*label] = {minValue, maxValue};
+                }
             }
         }
 
@@ -378,6 +419,7 @@ namespace motion::detail {
                 return;
             }
 
+            snapshot.instantVariableLabels.clear();
             for(const auto &item : *list) {
                 std::optional<std::string> label;
                 if(const auto text = psbString(item)) {
@@ -460,7 +502,83 @@ namespace motion::detail {
                 appendUnique(isDiff ? snapshot.diffTimelineLabels
                                     : snapshot.mainTimelineLabels,
                              *label);
-                snapshot.timelineControlByLabel[*label] = dic;
+                TimelineControlBinding binding;
+                binding.label = *label;
+                binding.loopBegin =
+                    dictionaryNumber(dic, {"loopBegin"}).value_or(-1.0);
+                binding.loopEnd =
+                    dictionaryNumber(dic, {"loopEnd"}).value_or(-1.0);
+                binding.lastTime =
+                    dictionaryNumber(dic, {"lastTime"}).value_or(-1.0);
+
+                if(const auto variableList = dictionaryList(dic, {"variableList"})) {
+                    for(const auto &variableItem : *variableList) {
+                        const auto variableDic =
+                            std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                                variableItem);
+                        if(!variableDic) {
+                            continue;
+                        }
+
+                        TimelineControlTrack track;
+                        track.label = dictionaryString(
+                                          variableDic, {"label", "name", "id"})
+                                          .value_or(std::string{});
+                        if(track.label.empty()) {
+                            continue;
+                        }
+                        track.instantVariable =
+                            snapshot.instantVariableLabels.find(track.label) !=
+                            snapshot.instantVariableLabels.end();
+
+                        if(const auto frameList =
+                               dictionaryList(variableDic, {"frameList"})) {
+                            for(const auto &frameItem : *frameList) {
+                                const auto frameDic =
+                                    std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                                        frameItem);
+                                if(!frameDic) {
+                                    continue;
+                                }
+
+                                TimelineControlFrame frame;
+                                frame.time = dictionaryNumber(frameDic, {"time"})
+                                                 .value_or(0.0);
+                                const int type = static_cast<int>(
+                                    dictionaryNumber(frameDic, {"type"})
+                                        .value_or(0.0));
+                                frame.isTypeZero = type == 0;
+                                if(!frame.isTypeZero) {
+                                    const auto contentDic =
+                                        std::dynamic_pointer_cast<
+                                            const PSB::PSBDictionary>(
+                                            (*frameDic)["content"]);
+                                    if(contentDic) {
+                                        frame.value = static_cast<float>(
+                                            dictionaryNumber(contentDic,
+                                                             {"value"})
+                                                .value_or(0.0));
+                                        frame.easingWeight =
+                                            timelineControlEaseWeightLike_0x66FC5C(
+                                                dictionaryNumber(contentDic,
+                                                                 {"easing"})
+                                                    .value_or(0.0));
+                                    }
+                                }
+                                track.frames.push_back(std::move(frame));
+                            }
+                        }
+
+                        if(!track.frames.empty()) {
+                            binding.lastTime =
+                                std::max(binding.lastTime,
+                                         track.frames.back().time);
+                            binding.tracks.push_back(std::move(track));
+                        }
+                    }
+                }
+
+                snapshot.timelineControlByLabel[*label] = std::move(binding);
             }
         }
 
@@ -527,6 +645,128 @@ namespace motion::detail {
             }
         }
 
+        void collectClampControlMetadata(
+            const std::shared_ptr<const PSB::PSBDictionary> &base,
+            MotionSnapshot &snapshot) {
+            const auto list = dictionaryList(base, {"clampControl"});
+            if(!list) {
+                return;
+            }
+
+            snapshot.clampControls.clear();
+            for(const auto &item : *list) {
+                const auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
+                if(!dic ||
+                   !dictionaryBool(dic, {"enabled"}).value_or(false)) {
+                    continue;
+                }
+
+                ClampControlBinding binding;
+                binding.type = static_cast<int>(
+                    dictionaryNumber(dic, {"type"}).value_or(0.0));
+                binding.varLr =
+                    dictionaryString(dic, {"var_lr"}).value_or(std::string{});
+                binding.varUd =
+                    dictionaryString(dic, {"var_ud"}).value_or(std::string{});
+                binding.minValue =
+                    dictionaryNumber(dic, {"min"}).value_or(0.0);
+                binding.maxValue =
+                    dictionaryNumber(dic, {"max"}).value_or(0.0);
+                snapshot.clampControls.push_back(std::move(binding));
+            }
+        }
+
+        void collectMirrorControlMetadata(
+            const std::shared_ptr<const PSB::PSBDictionary> &base,
+            MotionSnapshot &snapshot) {
+            snapshot.mirrorVariableMatchList.clear();
+
+            const auto mirrorDic =
+                std::dynamic_pointer_cast<const PSB::PSBDictionary>(
+                    (*base)["mirrorControl"]);
+            if(!mirrorDic) {
+                return;
+            }
+
+            if(const auto list = dictionaryList(mirrorDic, {"variableMatchList"})) {
+                for(const auto &item : *list) {
+                    if(const auto label = psbString(item); label && !label->empty()) {
+                        appendUnique(snapshot.mirrorVariableMatchList, *label);
+                    }
+                }
+            }
+        }
+
+        void buildFixedControllerOutputOrder(MotionSnapshot &snapshot) {
+            snapshot.fixedControllerOutputs.clear();
+
+            for(const auto &[label, binding] : snapshot.controllerBindings) {
+                switch(binding.type) {
+                    case 4:
+                    case 5:
+                    case 6:
+                    case 7:
+                    case 8:
+                        snapshot.fixedControllerOutputs.push_back(
+                            FixedControllerOutputBinding{
+                                label,
+                                binding.type,
+                                binding.index,
+                                binding.role,
+                            });
+                        break;
+                    default:
+                        break;
+                }
+            }
+
+            const auto typeOrder = [](int type) {
+                switch(type) {
+                    case 4:
+                        return 0; // player+256 / sub_676478
+                    case 5:
+                        return 1; // player+336 / sub_67653C
+                    case 6:
+                        return 2; // player+416 / sub_676600
+                    case 8:
+                        return 3; // player+656 / sub_668470
+                    case 7:
+                        return 4; // player+576 / sub_666BF8
+                    default:
+                        return 99;
+                }
+            };
+            const auto roleOrder = [](const std::string &role) {
+                if(role == "label") {
+                    return 0;
+                }
+                if(role == "talkLabel") {
+                    return 1;
+                }
+                return 2;
+            };
+
+            std::sort(snapshot.fixedControllerOutputs.begin(),
+                      snapshot.fixedControllerOutputs.end(),
+                      [&](const FixedControllerOutputBinding &lhs,
+                          const FixedControllerOutputBinding &rhs) {
+                          const int lhsType = typeOrder(lhs.type);
+                          const int rhsType = typeOrder(rhs.type);
+                          if(lhsType != rhsType) {
+                              return lhsType < rhsType;
+                          }
+                          if(lhs.index != rhs.index) {
+                              return lhs.index < rhs.index;
+                          }
+                          const int lhsRole = roleOrder(lhs.role);
+                          const int rhsRole = roleOrder(rhs.role);
+                          if(lhsRole != rhsRole) {
+                              return lhsRole < rhsRole;
+                          }
+                          return lhs.label < rhs.label;
+                      });
+        }
+
         void collectControlMetadata(MotionSnapshot &snapshot) {
             const auto base =
                 navigateDictionaryPath(snapshot.root, "metadata/base");
@@ -534,8 +774,7 @@ namespace motion::detail {
                 return;
             }
 
-            collectTimelineControlMetadata(base, snapshot);
-            collectInstantVariableList(base, snapshot);
+            collectVariableListMetadata(base, snapshot);
             collectControlBindings(base, "bustControl", 0,
                                    {{"var_lr", "var_lr"},
                                     {"var_ud", "var_ud"}},
@@ -563,38 +802,11 @@ namespace motion::detail {
             collectControlBindings(base, "transitionControl", 7,
                                    {{"label", "label"}}, snapshot);
             collectSelectorControlMetadata(base, snapshot);
-        }
-
-        void maybeRecordVariable(
-            const std::vector<std::string> &path,
-            const std::shared_ptr<PSB::PSBDictionary> &dic,
-            MotionSnapshot &snapshot) {
-            if(!pathContainsToken(path, "variable") &&
-               !pathContainsToken(path, "vars")) {
-                return;
-            }
-
-            const auto label =
-                dictionaryString(dic, { "label", "name", "id" });
-            if(!label || label->empty()) {
-                return;
-            }
-
-            appendUnique(snapshot.variableLabels, *label);
-
-            const auto minValue =
-                dictionaryNumber(dic, { "min", "minimum", "from" });
-            const auto maxValue =
-                dictionaryNumber(dic, { "max", "maximum", "to" });
-            if(minValue && maxValue) {
-                snapshot.variableRanges[*label] = { *minValue, *maxValue };
-            }
-
-            collectFrameList(*label,
-                             dictionaryList(dic, { "frames", "frameList",
-                                                   "frame_list", "values",
-                                                   "valueList" }),
-                             snapshot);
+            collectClampControlMetadata(base, snapshot);
+            collectMirrorControlMetadata(base, snapshot);
+            collectInstantVariableList(base, snapshot);
+            collectTimelineControlMetadata(base, snapshot);
+            buildFixedControllerOutputOrder(snapshot);
         }
 
         void maybeRecordLayer(const std::vector<std::string> &path,
@@ -767,7 +979,6 @@ namespace motion::detail {
             maybeRecordMotionClip(path, dic, snapshot);
             maybeRecordLayer(path, dic, snapshot);
             maybeRecordTimeline(path, dic, snapshot);
-            maybeRecordVariable(path, dic, snapshot);
 
             if(const auto width = dictionaryNumber(dic, { "width" });
                width && snapshot.width == 0.0) {
@@ -1013,11 +1224,19 @@ namespace motion::detail {
         if(logoChainTraceEnabled(snapshot)) {
             logoChainTraceLogf(
                 snapshot->path, "snapshot.parsed", "PSB parse", -1.0,
-                "path={} clipCount={} mainLabels={} sourceCount={} resourceAliases={}",
+                "path={} clipCount={} mainLabels={} sourceCount={} resourceAliases={} variableCount={} controllerBindings={} fixedControllerOutputs={} selectorControls={} timelineControls={} instantVariables={} clampControls={} mirrorMatches={}",
                 snapshot->path, snapshot->clipsByLabel.size(),
                 joinStrings(snapshot->mainTimelineLabels),
                 snapshot->sourceCandidates.size(),
-                joinStrings(snapshot->resourceAliases));
+                joinStrings(snapshot->resourceAliases),
+                snapshot->variableLabels.size(),
+                snapshot->controllerBindings.size(),
+                snapshot->fixedControllerOutputs.size(),
+                snapshot->selectorControls.size(),
+                snapshot->timelineControlByLabel.size(),
+                snapshot->instantVariableLabels.size(),
+                snapshot->clampControls.size(),
+                snapshot->mirrorVariableMatchList.size());
             for(const auto &[resourcePath, resource] : snapshot->resourcesByPath) {
                 if(!hasSuffix(resourcePath, "/pixel") &&
                    !hasSuffix(resourcePath, "/pal")) {
@@ -1136,6 +1355,11 @@ namespace motion::detail {
         const auto primeOne = [&](const std::string &label) {
             auto &state = states[label];
             state.label = label;
+            state.controlInitialized = false;
+            state.controlLastAppliedTime = 0.0;
+            state.controlFrameCursor.clear();
+            state.controlTrackValues.clear();
+            state.controlTrackAnimators.clear();
             state.loop =
                 snapshot.loopTimelines.find(label) != snapshot.loopTimelines.end()
                 ? snapshot.loopTimelines.at(label)

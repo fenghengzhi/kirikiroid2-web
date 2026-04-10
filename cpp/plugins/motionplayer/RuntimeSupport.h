@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <string>
@@ -44,6 +45,61 @@ namespace motion::detail {
         std::vector<SelectorControlOption> options;
     };
 
+    struct FixedControllerOutputBinding {
+        std::string label;
+        int type = -1;
+        int index = -1;
+        std::string role;
+    };
+
+    struct ClampControlBinding {
+        int type = 0;
+        std::string varLr;
+        std::string varUd;
+        double minValue = 0.0;
+        double maxValue = 0.0;
+    };
+
+    struct TimelineControlFrame {
+        double time = 0.0;
+        bool isTypeZero = true;
+        float value = 0.0f;
+        double easingWeight = 1.0;
+    };
+
+    struct TimelineControlTrack {
+        std::string label;
+        // Aligned to libkrkr2.so sub_66FC5C byte at track+8:
+        // set when label is present in instantVariableList (player+0x4F8).
+        bool instantVariable = false;
+        std::vector<TimelineControlFrame> frames;
+    };
+
+    struct TimelineControlBinding {
+        std::string label;
+        double loopBegin = -1.0;
+        double loopEnd = -1.0;
+        double lastTime = -1.0;
+        std::vector<TimelineControlTrack> tracks;
+    };
+
+    struct TimelineControlKeyframe {
+        float value = 0.0f;
+        float duration = 0.0f;
+        float weight = 1.0f;
+    };
+
+    struct TimelineControlAnimatorState {
+        std::deque<TimelineControlKeyframe> queue;
+        bool active = false;
+        float currentValue = 0.0f;
+        float startValue = 0.0f;
+        float targetValue = 0.0f;
+        float progress = 1.0f;
+        float duration = 0.0f;
+        float weight = 1.0f;
+    };
+
     struct MotionClip {
         std::string label;
         std::string owner;
@@ -66,6 +122,13 @@ namespace motion::detail {
         double currentTime = 0.0;
         double blendRatio = 1.0;
         bool wasPlaying = false;  // for edge detection in dispatchEvents
+        bool controlInitialized = false;
+        double controlLastAppliedTime = 0.0;
+        std::vector<int> controlFrameCursor;
+        std::vector<float> controlTrackValues;
+        std::vector<TimelineControlAnimatorState> controlTrackAnimators;
+        TimelineControlAnimatorState blendAnimator;
+        bool blendAutoStop = false;
     };
 
     // Aligned to libkrkr2.so Player_dispatchEvents (0x6C4490):
@@ -94,11 +157,14 @@ namespace motion::detail {
         std::unordered_map<std::string, VariableControllerBinding> controllerBindings;
         std::unordered_set<std::string> instantVariableLabels;
         std::unordered_map<std::string, SelectorControlBinding> selectorControls;
+        std::vector<FixedControllerOutputBinding> fixedControllerOutputs;
+        std::vector<ClampControlBinding> clampControls;
+        std::vector<std::string> mirrorVariableMatchList;
         std::vector<std::string> layerNames;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>> layersByName;
         std::vector<std::string> sourceCandidates;
         std::unordered_map<std::string, MotionClip> clipsByLabel;
-        std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>>
+        std::unordered_map<std::string, TimelineControlBinding>
             timelineControlByLabel;
         std::vector<std::string> resourceAliases;
         double width = 0.0;
@@ -110,6 +176,7 @@ namespace motion::detail {
         std::unordered_map<std::string, tTJSVariant> sourcesByKey;
         std::shared_ptr<MotionSnapshot> activeMotion;
         std::unordered_map<std::string, TimelineState> timelines;
+        std::vector<std::string> playingTimelineLabels;
         std::unordered_map<std::string, tjs_int> layerIdsByName;
         std::unordered_map<tjs_int, std::string> layerNamesById;
         std::vector<tTJSVariant> backgrounds;
@@ -147,6 +214,8 @@ namespace motion::detail {
             int nodeIndex = 0;
             tTJSVariant srcRef;
             std::string sourceKey;
+            bool hasOwnSource = false;
+            bool groupOnly = false;
             bool skipFlag0 = false;
             bool skipFlag1 = false;
             bool clipFlag = false;
@@ -173,8 +242,13 @@ namespace motion::detail {
             int nodeIndex = 0;
             tTJSVariant srcRef;
             std::string sourceKey;
+            bool hasOwnSource = false;
+            bool groupOnly = false;
             int blendMode = 16;
             int opacity = 255;
+            int itemFlags = 0;
+            int parentNodeIndex = -1;
+            bool hasRenderParent = false;
             std::array<std::uint32_t, 4> packedColors{
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
             };
@@ -190,6 +264,13 @@ namespace motion::detail {
             int meshDivY = 0;
             int meshType = 0;
             int layerId = 0;
+            std::vector<int> childCommandIndices;
+            tTJSVariant leafLayer;
+            tTJSVariant composedLayer;
+            std::array<int, 4> builtRect{0, 0, 0, 0};
+            bool leafBuilt = false;
+            bool composedBuilt = false;
+            bool executedDirect = false;
         };
         std::vector<PreparedRenderItem> preparedRenderItems;  // player+936/944
         std::vector<RenderCommand> renderCommands;

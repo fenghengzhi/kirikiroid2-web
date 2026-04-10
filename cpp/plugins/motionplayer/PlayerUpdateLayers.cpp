@@ -34,6 +34,27 @@ namespace {
         };
     }
 
+    template <typename StateT>
+    inline void populateTransformStateFromFrameState(
+        StateT &localState,
+        const motion::internal::FrameContentState &state) {
+        localState.visible = state.visible;
+        localState.active = state.visible;
+        localState.flipX = state.flipX;
+        localState.flipY = state.flipY;
+        localState.posX = state.x;
+        localState.posY = state.y;
+        localState.posZ = state.z;
+        localState.angle = state.angle;
+        localState.scaleX = state.scaleX;
+        localState.scaleY = state.scaleY;
+        localState.slantX = state.slantX;
+        localState.slantY = state.slantY;
+        localState.opacity = static_cast<int>(
+            std::clamp(state.opacity * 255.0, 0.0, 255.0));
+        localState.blendMode = state.blendMode;
+    }
+
     // Populate a ClipSlot from a FrameContentState.
     // Cannot be a ClipSlot method because FrameContentState is defined in
     // PlayerInternal.h (motion::internal namespace) which MotionNode.h cannot include.
@@ -43,7 +64,7 @@ namespace {
         slot.done = !s.visible;
         slot.src = s.src;
         slot.srcList = s.srcList;
-        slot.x = s.x; slot.y = s.y; slot.z = 0;
+        slot.x = s.x; slot.y = s.y; slot.z = s.z;
         slot.ox = s.ox; slot.oy = s.oy;
         slot.width = s.width; slot.height = s.height;
         slot.opacity = s.opacity; slot.angle = s.angle;
@@ -91,11 +112,11 @@ namespace motion {
         {
             auto &rootNode = nodes[0];
             if (_cameraVelocityX != 0.0)
-                rootNode.accumulated.posX += _frameLastTime * _cameraVelocityX;
+                rootNode.localState.posX += _frameLastTime * _cameraVelocityX;
             if (_cameraVelocityY != 0.0)
-                rootNode.accumulated.posY += _frameLastTime * _cameraVelocityY;
+                rootNode.localState.posY += _frameLastTime * _cameraVelocityY;
             if (_cameraVelocityZ != 0.0)
-                rootNode.accumulated.posZ += _frameLastTime * _cameraVelocityZ;
+                rootNode.localState.posZ += _frameLastTime * _cameraVelocityZ;
             // Camera friction (0x6BB3E0..0x6BB428)
             if (_cameraDamping != 1.0 && _frameLastTime > 0.0) {
                 const double dampFactor = std::pow(_cameraDamping,
@@ -118,7 +139,8 @@ namespace motion {
         {
             FrameContentState rootState;
             if (root.psbNode) {
-                rootState = evaluateLayerContent(root.psbNode, currentTime);
+                rootState = evaluateLayerContent(root.psbNode, currentTime,
+                                                 root.nodeType);
             } else {
                 // Aligned to Player_buildNodeTree (0x6B51F0): node 0 is a
                 // synthetic root, so it keeps the Player-set transform and a
@@ -133,25 +155,33 @@ namespace motion {
             populateSlotFromState(root.activeSlot(), rootState);
             root.currentFrameType = rootState.frameType;
             root.stencilType = root.stencilTypeBase | rootState.frameType;
-            // Map to accumulated state
-            // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
-            // Binary does memcpy(root+1504, root+1584, 0x50) copying dirty→accumulated.
-            // Root posX/posY are set by TJS setter (player.x/y) and preserved across
-            // frames — not overwritten by PSB frame x/ox. Frame interpolation only
-            // affects child nodes via accumulated.posX += interpolated.posX (0x6BB6EC).
-            root.accumulated.visible = rootState.visible;
-            root.accumulated.flipX = rootState.flipX;
-            root.accumulated.flipY = rootState.flipY;
-            // Do NOT overwrite posX/posY — they are set by TJS player.x/y setter
-            root.accumulated.posZ = 0.0;
-            root.accumulated.angle = rootState.angle;
-            root.accumulated.scaleX = rootState.scaleX;
-            root.accumulated.scaleY = rootState.scaleY;
-            root.accumulated.slantX = rootState.slantX;
-            root.accumulated.slantY = rootState.slantY;
-            root.accumulated.opacity = static_cast<int>(
-                std::clamp(rootState.opacity * 255.0, 0.0, 255.0));
-            root.accumulated.active = true;
+            const double sourcePosX = root.localState.posX;
+            const double sourcePosY = root.localState.posY;
+            const double sourcePosZ = root.localState.posZ;
+            const bool sourceFlipX = root.localState.flipX;
+            populateTransformStateFromFrameState(root.localState, rootState);
+            // Aligned to Player_updateLayers (0x6BB33C): root working state is
+            // rebuilt by memcpy(root+0x5E0, root+0x630, 0x50), so preserve the
+            // setter/camera-authored source block before refreshing defaults.
+            root.localState.posX = sourcePosX;
+            root.localState.posY = sourcePosY;
+            root.localState.posZ = sourcePosZ;
+            root.localState.flipX = sourceFlipX;
+            root.localState.dirty = true;
+            root.accumulated.visible = root.localState.visible;
+            root.accumulated.flipX = root.localState.flipX;
+            root.accumulated.flipY = root.localState.flipY;
+            root.accumulated.posX = root.localState.posX;
+            root.accumulated.posY = root.localState.posY;
+            root.accumulated.posZ = root.localState.posZ;
+            root.accumulated.angle = root.localState.angle;
+            root.accumulated.scaleX = root.localState.scaleX;
+            root.accumulated.scaleY = root.localState.scaleY;
+            root.accumulated.slantX = root.localState.slantX;
+            root.accumulated.slantY = root.localState.slantY;
+            root.accumulated.opacity = root.localState.opacity;
+            root.accumulated.blendMode = root.localState.blendMode;
+            root.accumulated.active = root.localState.active;
             // Cache interpolated data for rendering
             root.interpolatedCache.src = rootState.src;
             root.interpolatedCache.width = rootState.width;
@@ -159,6 +189,7 @@ namespace motion {
             root.interpolatedCache.opacity = rootState.opacity;
             root.interpolatedCache.x = rootState.x;
             root.interpolatedCache.y = rootState.y;
+            root.interpolatedCache.z = rootState.z;
             root.interpolatedCache.ox = rootState.ox;
             root.interpolatedCache.oy = rootState.oy;
             root.interpolatedCache.angle = rootState.angle;
@@ -166,7 +197,7 @@ namespace motion {
             root.interpolatedCache.scaleY = rootState.scaleY;
             root.interpolatedCache.slantX = rootState.slantX;
             root.interpolatedCache.slantY = rootState.slantY;
-            root.interpolatedCache.flipX = rootState.flipX;
+            root.interpolatedCache.flipX = rootState.flipX ^ _rootFlipX;
             root.interpolatedCache.flipY = rootState.flipY;
             root.interpolatedCache.blendMode = rootState.blendMode;
             root.interpolatedCache.packedColors = rootState.packedColors;
@@ -203,7 +234,7 @@ namespace motion {
             // Step 3: Build root local 2x2 matrix via sub_699940
             // Reuse applyLocalTransform logic but on raw 2x2
             Affine2x3 rootAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
-            applyLocalTransform(rootAffine, rootState);
+            applyLocalTransform(rootAffine, root);
             root.accumulated.m11 = rootAffine[0];
             root.accumulated.m21 = rootAffine[1];
             root.accumulated.m12 = rootAffine[2];
@@ -254,15 +285,19 @@ namespace motion {
     // Phase 2: Main node evaluation loop (non-root nodes)
     void Player::updateLayersPhase2_MainLoop(double currentTime) {
         auto &nodes = _runtime->nodes;
+        const std::string motionPath = _runtime->activeMotion
+            ? _runtime->activeMotion->path
+            : std::string();
         // === PHASE 2: Main loop — evaluate non-root nodes ===
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
 
-            // Find parent node — walk parentIndex chain, skip flag 0x40 nodes
-            // Aligned to 0x6BB598..0x6BB5BC
+            // Find parent node — walk parentIndex chain while the parent's
+            // inheritMask carries the byte(node+42)&0x40 gate used by
+            // Player_updateLayers at 0x6BB598..0x6BB5BC.
             int parentIdx = node.parentIndex;
             while (parentIdx > 0 && parentIdx < static_cast<int>(nodes.size())) {
-                if ((nodes[parentIdx].flags & 0x40) == 0) break;
+                if ((nodes[parentIdx].inheritFlags & 0x00400000) == 0) break;
                 parentIdx = nodes[parentIdx].parentIndex;
             }
             if (parentIdx < 0 || parentIdx >= static_cast<int>(nodes.size()))
@@ -270,7 +305,43 @@ namespace motion {
             const auto &parent = nodes[parentIdx];
 
             // Evaluate this node's interpolated state
-            auto state = evaluateLayerContent(node.psbNode, currentTime);
+            auto state = evaluateLayerContent(node.psbNode, currentTime,
+                                              node.nodeType);
+            if(detail::logoChainTraceEnabled(_runtime->activeMotion)
+               && state.debugEvaluated) {
+                detail::logoChainTraceLogf(
+                    motionPath, "updateLayers.phase2.framesel", "0x6926B4/0x699AE4",
+                    currentTime,
+                    "nodeIndex={} label={} type={} activeIndex={} nextIndex={} frameA[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] frameB[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] t={:.6f} interpolated={} final[src={},opacity={:.6f},scale=({:.6f},{:.6f})]",
+                    node.index,
+                    node.layerName.empty() ? std::string("<root>")
+                                           : node.layerName,
+                    node.nodeType,
+                    state.debugActiveIndex,
+                    state.debugNextIndex,
+                    state.debugFrameATime,
+                    state.debugFrameAType,
+                    state.debugFrameAInvisible ? 1 : 0,
+                    state.debugFrameASrc.empty() ? std::string("<none>")
+                                                : state.debugFrameASrc,
+                    state.debugFrameAOpacity,
+                    state.debugFrameAScaleX,
+                    state.debugFrameAScaleY,
+                    state.debugFrameBTime,
+                    state.debugFrameBType,
+                    state.debugFrameBInvisible ? 1 : 0,
+                    state.debugFrameBSrc.empty() ? std::string("<none>")
+                                                : state.debugFrameBSrc,
+                    state.debugFrameBOpacity,
+                    state.debugFrameBScaleX,
+                    state.debugFrameBScaleY,
+                    state.debugInterpT,
+                    state.debugInterpolated ? 1 : 0,
+                    state.src.empty() ? std::string("<none>") : state.src,
+                    state.opacity,
+                    state.scaleX,
+                    state.scaleY);
+            }
             node.currentFrameType = state.frameType;
             // libkrkr2.so uses node+52 both as the PSB-seeded stencil bits
             // (0x6B3C78) and as the non-zero runtime gate consumed by
@@ -286,6 +357,7 @@ namespace motion {
             node.interpolatedCache.opacity = state.opacity;
             node.interpolatedCache.x = state.x;
             node.interpolatedCache.y = state.y;
+            node.interpolatedCache.z = state.z;
             node.interpolatedCache.ox = state.ox;
             node.interpolatedCache.oy = state.oy;
             node.interpolatedCache.angle = state.angle;
@@ -351,6 +423,8 @@ namespace motion {
 
             // Populate active clip slot from evaluated state
             populateSlotFromState(node.activeSlot(), state);
+            populateTransformStateFromFrameState(node.accumulated, state);
+            node.accumulated.dirty = true;
 
             if (!state.visible) {
                 node.accumulated.visible = false;
@@ -365,48 +439,21 @@ namespace motion {
             // Full inheritFlags system with 3-phase independentLayerInherit support.
             node.accumulated.visible = true;
             node.accumulated.active = true;
-
-            // Flip XOR from interpolated → accumulated (0x6BB668)
-            node.accumulated.flipX = state.flipX ^ parent.accumulated.flipX;
-            node.accumulated.flipY = state.flipY ^ parent.accumulated.flipY;
-
-            // Scale: multiply from parent interpolated (0x6BB6A4)
-            node.accumulated.scaleX = state.scaleX * parent.accumulated.scaleX;
-            node.accumulated.scaleY = state.scaleY * parent.accumulated.scaleY;
-
-            // Slant: add from parent interpolated (0x6BB6B8)
-            node.accumulated.slantX = state.slantX + parent.accumulated.slantX;
-            node.accumulated.slantY = state.slantY + parent.accumulated.slantY;
-
-            // Opacity: int multiplication (0x6BB6D4)
-            // First multiply: parent.interpolated.opacity * child.interpolated.opacity / 255
-            const int childOpa = static_cast<int>(
-                std::clamp(state.opacity * 255.0, 0.0, 255.0));
-            node.accumulated.opacity = parent.accumulated.opacity * childOpa / 255;
-
-            // Position: add from interpolated offsets (0x6BB6EC)
-            const double lx = state.x + state.ox;
-            const double ly = state.y + state.oy;
-
-            // Position transform: parent.matrix × child.pos + parent.pos
-            // 3D/2D coordinate mode branching (0x6BB718..0x6BB7C4)
-            if (node.coordinateMode != 0) {
-                // 3D mode: X and Z through matrix, Y pass-through (0x6BB720)
-                node.accumulated.posX = parent.accumulated.m11 * lx
-                    + parent.accumulated.m12 * ly + parent.accumulated.posX;
-                node.accumulated.posY = parent.accumulated.m21 * lx
-                    + parent.accumulated.m22 * ly + parent.accumulated.posY;
-                // posZ: pass-through from interpolated + parent
-                node.accumulated.posZ = state.y + state.oy + parent.accumulated.posZ;
-            } else {
-                // 2D mode (default, 0x6BB794): X and Y through matrix, Z pass-through
-                node.accumulated.posX = parent.accumulated.m11 * lx
-                    + parent.accumulated.m12 * ly + parent.accumulated.posX;
-                node.accumulated.posY = parent.accumulated.m21 * lx
-                    + parent.accumulated.m22 * ly + parent.accumulated.posY;
-                // posZ: add from interpolated + parent (0x6BB7E4)
-                node.accumulated.posZ += parent.accumulated.posZ;
-            }
+            // First-stage composition uses the node's own override/source block
+            // (+0x630..+0x678) to modify the evaluated working block
+            // (+0x5E0..+0x628), matching 0x6BB630..0x6BB700.
+            node.accumulated.flipX ^= node.localState.flipX;
+            node.accumulated.flipY ^= node.localState.flipY;
+            node.accumulated.angle += node.localState.angle;
+            node.accumulated.scaleX *= node.localState.scaleX;
+            node.accumulated.scaleY *= node.localState.scaleY;
+            node.accumulated.slantX += node.localState.slantX;
+            node.accumulated.slantY += node.localState.slantY;
+            node.accumulated.opacity =
+                node.accumulated.opacity * node.localState.opacity / 255;
+            node.accumulated.posX += node.localState.posX;
+            node.accumulated.posY += node.localState.posY;
+            node.accumulated.posZ += node.localState.posZ;
 
             // sub_69AE74: Mesh position deformation (0x6BB714)
             // Aligned to 0x69AE74. Called when parent.meshType != 0.
@@ -501,6 +548,31 @@ namespace motion {
                 }
             }
 
+            // Position transform happens after the parent-local pre-add and mesh
+            // deformation. The branch key is parent.coordinateMode (0x6BB718).
+            {
+                const double localX = node.accumulated.posX;
+                const double localY = node.accumulated.posY;
+                const double localZ = node.accumulated.posZ;
+                if (parent.coordinateMode != 0) {
+                    const double worldX = parent.accumulated.m11 * localX
+                        + parent.accumulated.m12 * localZ;
+                    const double worldZ = parent.accumulated.m21 * localX
+                        + parent.accumulated.m22 * localZ;
+                    node.accumulated.posX = worldX + parent.accumulated.posX;
+                    node.accumulated.posY = localY + parent.accumulated.posY;
+                    node.accumulated.posZ = worldZ + parent.accumulated.posZ;
+                } else {
+                    const double worldX = parent.accumulated.m11 * localX
+                        + parent.accumulated.m12 * localY;
+                    const double worldY = parent.accumulated.m21 * localX
+                        + parent.accumulated.m22 * localY;
+                    node.accumulated.posX = worldX + parent.accumulated.posX;
+                    node.accumulated.posY = worldY + parent.accumulated.posY;
+                    node.accumulated.posZ = localZ + parent.accumulated.posZ;
+                }
+            }
+
             // sub_6BAA10: Ground correction TJS callback (0x6BB7F8)
             // Aligned to 0x6BAA10. Called when node+47 (groundCorrection) set.
             // Invokes TJS onGroundCorrection(parentPos, childPos) callback on
@@ -587,9 +659,6 @@ namespace motion {
                 }
             }
 
-            // Angle: add (0x6BB8C8)
-            node.accumulated.angle = state.angle + parent.accumulated.angle;
-
             // === inheritFlags per-property control (0x6BB83C) ===
             // Decompilation evidence: Player_updateLayers 0x6BB83C..0x6BBB6C
             //   if ((~v46 & 0x1FC) == 0) → all bits set, simple path
@@ -604,7 +673,7 @@ namespace motion {
                 // All bits set → simple path (0x6BB848): inherit from parent,
                 // sub_699940, matrix multiply. Already inherited above.
                 Affine2x3 localAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
-                applyLocalTransform(localAffine, state);
+                applyLocalTransform(localAffine, node);
                 const double lm11 = localAffine[0], lm21 = localAffine[1];
                 const double lm12 = localAffine[2], lm22 = localAffine[3];
                 node.accumulated.m11 = parent.accumulated.m11 * lm11 + parent.accumulated.m12 * lm21;
@@ -634,7 +703,7 @@ namespace motion {
                     // Only sub_699940, NO matrix multiply with parent.
                     // Node's matrix stays as its own local matrix (independent of parent).
                     Affine2x3 localAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
-                    applyLocalTransform(localAffine, state);
+                    applyLocalTransform(localAffine, node);
                     node.accumulated.m11 = localAffine[0];
                     node.accumulated.m21 = localAffine[1];
                     node.accumulated.m12 = localAffine[2];
@@ -657,7 +726,7 @@ namespace motion {
 
                     // Phase B: sub_699940 (0x6BB9E8)
                     Affine2x3 localAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
-                    applyLocalTransform(localAffine, state);
+                    applyLocalTransform(localAffine, node);
 
                     // Phase C: For SET bits, RE-APPLY root contribution (0x6BBA04)
                     if (flags & 0x004) node.accumulated.flipX ^= rootNode.accumulated.flipX;
@@ -1921,7 +1990,7 @@ namespace motion {
                 // Binary calls both unconditionally (no guard).
                 child.frameProgress(_frameLastTime);
                 child.ensureNodeTreeBuilt();
-                child.updateLayers(currentTime);
+                child.updateLayers();
             }
         }
 
@@ -2709,7 +2778,7 @@ namespace motion {
                     child->frameProgress(_frameLastTime);
                     child->ensureNodeTreeBuilt();
                     if (!child->_runtime->nodes.empty()) {
-                        child->updateLayers(currentTime);
+                        child->updateLayers();
                     }
                 }
             }
@@ -2766,21 +2835,8 @@ namespace motion {
 
             // Rebuild local matrix via sub_699940 (0x6C0944)
             {
-                FrameContentState tmpState;
-                tmpState.angle = an.accumulated.angle;
-                tmpState.scaleX = an.accumulated.scaleX;
-                tmpState.scaleY = an.accumulated.scaleY;
-                tmpState.slantX = an.accumulated.slantX;
-                tmpState.slantY = an.accumulated.slantY;
-                tmpState.flipX = an.accumulated.flipX;
-                tmpState.flipY = an.accumulated.flipY;
-                if (an.interpolatedCache.hasTransformOrder) {
-                    std::copy(std::begin(an.interpolatedCache.transformOrder),
-                              std::end(an.interpolatedCache.transformOrder),
-                              tmpState.transformOrder);
-                }
                 Affine2x3 la = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
-                applyLocalTransform(la, tmpState);
+                applyLocalTransform(la, an);
                 an.accumulated.m11 = la[0]; an.accumulated.m21 = la[1];
                 an.accumulated.m12 = la[2]; an.accumulated.m22 = la[3];
             }
@@ -2870,12 +2926,13 @@ namespace motion {
     // --- updateLayers: 3-phase pipeline ---
     // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C).
     // Operates on persistent MotionNode vector instead of re-walking PSB tree.
-    void Player::updateLayers(double currentTime) {
+    void Player::updateLayers() {
         auto &nodes = _runtime->nodes;
         if (nodes.empty()) return;
         const auto motionPath =
             _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
                                                : std::string{};
+        const double currentTime = _clampedEvalTime;
 
         // Ensure per-node eval data array matches node count (player+384).
         // Binary allocates this as a fixed-size array during Player construction;
@@ -2907,17 +2964,33 @@ namespace motion {
             for(const auto &node : nodes) {
                 const auto &ic = node.interpolatedCache;
                 const auto &ac = node.accumulated;
+                const auto &ls = node.localState;
+                const bool hasParent = node.parentIndex >= 0
+                    && node.parentIndex < static_cast<int>(nodes.size());
+                const auto &pc = hasParent ? nodes[node.parentIndex].accumulated
+                                           : nodes[0].accumulated;
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase2.node", "0x6BB33C",
                     currentTime,
-                    "nodeIndex={} label={} type={} parent={} src={} interp[x={:.3f},y={:.3f},ox={:.3f},oy={:.3f},w={:.3f},h={:.3f},opacity={:.6f},angle={:.3f}] accum[pos=({:.3f},{:.3f},{:.3f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={},blend={},active={},visible={}]",
+                    "nodeIndex={} label={} type={} parent={} src={} inherit=0x{:x} indep={} interp[x={:.3f},y={:.3f},ox={:.3f},oy={:.3f},w={:.3f},h={:.3f},opacity={:.6f},angle={:.3f},scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),flip=({},{}) blend={}] local[pos=({:.3f},{:.3f},{:.3f}),angle={:.3f},scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),flip=({},{}) opacity={},blend={}] parentAccum[pos=({:.3f},{:.3f},{:.3f}),scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={},blend={}] accum[pos=({:.3f},{:.3f},{:.3f}),scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={},blend={},active={},visible={}]",
                     node.index,
                     node.layerName.empty() ? std::string("<root>")
                                            : node.layerName,
                     node.nodeType, node.parentIndex,
                     ic.src.empty() ? std::string("<none>") : ic.src,
+                    node.inheritFlags,
+                    _independentLayerInherit ? 1 : 0,
                     ic.x, ic.y, ic.ox, ic.oy, ic.width, ic.height, ic.opacity,
-                    ic.angle, ac.posX, ac.posY, ac.posZ, ac.m11, ac.m12,
+                    ic.angle, ic.scaleX, ic.scaleY, ic.slantX, ic.slantY,
+                    ic.flipX ? 1 : 0, ic.flipY ? 1 : 0, ic.blendMode,
+                    ls.posX, ls.posY, ls.posZ, ls.angle, ls.scaleX, ls.scaleY,
+                    ls.slantX, ls.slantY, ls.flipX ? 1 : 0, ls.flipY ? 1 : 0,
+                    ls.opacity, ls.blendMode,
+                    pc.posX, pc.posY, pc.posZ, pc.scaleX, pc.scaleY,
+                    pc.slantX, pc.slantY, pc.m11, pc.m12, pc.m21, pc.m22,
+                    pc.opacity, pc.blendMode,
+                    ac.posX, ac.posY, ac.posZ, ac.scaleX, ac.scaleY,
+                    ac.slantX, ac.slantY, ac.m11, ac.m12,
                     ac.m21, ac.m22, ac.opacity, ac.blendMode,
                     ac.active ? 1 : 0, ac.visible ? 1 : 0);
             }
@@ -3124,12 +3197,17 @@ namespace motion {
         const auto &nodes = _runtime->nodes;
         const int bitmask = _runtime->isEmoteMode ? 5193 : 5185;
         const auto &dam = _runtime->drawAffineMatrix;
+        std::unordered_set<int> requiredGroupNodeIndices;
 
         auto transformPoint = [&](float x, float y) -> tTVPPointD {
             return {
                 dam[0] * static_cast<double>(x) + dam[2] * static_cast<double>(y) + dam[4],
                 dam[1] * static_cast<double>(x) + dam[3] * static_cast<double>(y) + dam[5]
             };
+        };
+
+        constexpr std::array<float, 4> kInvalidPreparedPaintBox = {
+            1.0f, 1.0f, -1.0f, -1.0f
         };
 
         auto updatePaintBox = [](detail::PlayerRuntime::PreparedRenderItem &entry,
@@ -3154,16 +3232,49 @@ namespace motion {
             }
             if(!node.hasSource || node.interpolatedCache.src.empty()) continue;
 
+            for(int ancestorIndex = node.visibleAncestorIndex;
+                ancestorIndex >= 0 &&
+                ancestorIndex < static_cast<int>(nodes.size()); ) {
+                const auto inserted = requiredGroupNodeIndices.insert(ancestorIndex);
+                const auto &ancestor = nodes[ancestorIndex];
+                const int nextAncestorIndex = ancestor.visibleAncestorIndex;
+                if(!inserted.second || nextAncestorIndex == ancestorIndex) {
+                    break;
+                }
+                ancestorIndex = nextAncestorIndex;
+            }
+        }
+
+        for(size_t i = 0; i < nodes.size(); ++i) {
+            const auto &node = nodes[i];
+            if(!node.accumulated.active) continue;
+            const bool hasOwnSource =
+                node.hasSource && !node.interpolatedCache.src.empty();
+            const bool needsGroupEntry =
+                requiredGroupNodeIndices.find(static_cast<int>(i)) !=
+                requiredGroupNodeIndices.end();
+            if(!needsGroupEntry &&
+               !node.forceVisible &&
+               (((1 << node.nodeType) & bitmask) == 0)) {
+                continue;
+            }
+            if(!hasOwnSource && !needsGroupEntry) continue;
+
             detail::PlayerRuntime::PreparedRenderItem entry;
             entry.nodeIndex = static_cast<int>(i);
-            entry.sourceKey = node.interpolatedCache.src;
-            entry.srcRef = findSource(detail::widen(entry.sourceKey));
+            entry.hasOwnSource = hasOwnSource;
+            entry.groupOnly = !hasOwnSource && needsGroupEntry;
+            if(hasOwnSource) {
+                entry.sourceKey = node.interpolatedCache.src;
+                entry.srcRef = findSource(detail::widen(entry.sourceKey));
+            }
             // Aligned to sub_6D5164 -> sub_6C2334:
             // top-level build uses arg4=0, so render-item draw flag becomes
             // node+1960 ? 1 : node+1961. node+1961 is the post-build
             // stencilComposite mask-layer reference flag.
             entry.drawFlag =
-                node.drawFlag || node.stencilCompositeMaskReferenced;
+                node.drawFlag || node.stencilCompositeMaskReferenced ||
+                needsGroupEntry;
             entry.sortKey = node.priorDraw != 0
                 ? static_cast<double>(node.priorDraw)
                 : _priorDraw;
@@ -3177,7 +3288,7 @@ namespace motion {
             entry.meshDivY = node.meshDivY;
 
             bool havePaintBox = false;
-            if(node.clipW > 0.0 && node.clipH > 0.0) {
+            if(hasOwnSource && node.clipW > 0.0 && node.clipH > 0.0) {
                 for(int ci = 0; ci < 4; ++ci) {
                     const auto pt = transformPoint(node.vertices[ci * 2],
                                                    node.vertices[ci * 2 + 1]);
@@ -3188,7 +3299,7 @@ namespace motion {
                 }
             }
 
-            if(!node.meshControlPoints.empty()) {
+            if(hasOwnSource && !node.meshControlPoints.empty()) {
                 entry.meshPoints.resize(node.meshControlPoints.size());
                 for(size_t pi = 0; pi + 1 < node.meshControlPoints.size(); pi += 2) {
                     const auto pt = transformPoint(node.meshControlPoints[pi],
@@ -3201,6 +3312,7 @@ namespace motion {
             }
 
             if(!havePaintBox
+               && hasOwnSource
                && node.bounds[2] >= node.bounds[0]
                && node.bounds[3] >= node.bounds[1]) {
                 const auto p0 = transformPoint(node.bounds[0], node.bounds[1]);
@@ -3221,13 +3333,14 @@ namespace motion {
             }
 
             if(!havePaintBox) {
-                const auto pt = transformPoint(node.vertexPosX, node.vertexPosY);
-                entry.paintBox = {
-                    static_cast<float>(std::floor(pt.x)),
-                    static_cast<float>(std::floor(pt.y)),
-                    static_cast<float>(std::ceil(pt.x)),
-                    static_cast<float>(std::ceil(pt.y))
-                };
+                // libkrkr2.so sub_6C2334 initializes item+200..212 from
+                // node+1936 when present, otherwise from xmmword_14D7C60.
+                // That default is {1,1,-1,-1}, i.e. an invalid rect sentinel,
+                // not a point box at vertexPos. Group-only items rely on this
+                // invalid sentinel so the later child-union pass can replace
+                // the parent paintBox with the first real child bounds instead
+                // of being permanently anchored at (0,0).
+                entry.paintBox = kInvalidPreparedPaintBox;
             } else {
                 entry.paintBox = {
                     static_cast<float>(std::floor(entry.paintBox[0])),
@@ -3367,6 +3480,52 @@ namespace motion {
             }
 
             entries.push_back(std::move(entry));
+        }
+
+        if(entries.empty()) {
+            return;
+        }
+
+        std::unordered_map<int, size_t> entryIndexByNode;
+        entryIndexByNode.reserve(entries.size());
+        for(size_t i = 0; i < entries.size(); ++i) {
+            entryIndexByNode.emplace(entries[i].nodeIndex, i);
+        }
+
+        auto unionPaintBox =
+            [](detail::PlayerRuntime::PreparedRenderItem &parent,
+               const detail::PlayerRuntime::PreparedRenderItem &child) {
+                if(child.paintBox[2] < child.paintBox[0] ||
+                   child.paintBox[3] < child.paintBox[1]) {
+                    return;
+                }
+                if(parent.paintBox[2] < parent.paintBox[0] ||
+                   parent.paintBox[3] < parent.paintBox[1]) {
+                    parent.paintBox = child.paintBox;
+                    return;
+                }
+                parent.paintBox[0] = std::min(parent.paintBox[0], child.paintBox[0]);
+                parent.paintBox[1] = std::min(parent.paintBox[1], child.paintBox[1]);
+                parent.paintBox[2] = std::max(parent.paintBox[2], child.paintBox[2]);
+                parent.paintBox[3] = std::max(parent.paintBox[3], child.paintBox[3]);
+            };
+
+        for(const auto &childEntry : entries) {
+            for(int ancestorIndex = childEntry.visibleAncestorIndex;
+                ancestorIndex >= 0; ) {
+                const auto parentIt = entryIndexByNode.find(ancestorIndex);
+                if(parentIt == entryIndexByNode.end()) {
+                    break;
+                }
+                auto &parentEntry = entries[parentIt->second];
+                const auto &ancestorNode = nodes[parentEntry.nodeIndex];
+                unionPaintBox(parentEntry, childEntry);
+                const int nextAncestorIndex = ancestorNode.visibleAncestorIndex;
+                if(nextAncestorIndex == ancestorIndex) {
+                    break;
+                }
+                ancestorIndex = nextAncestorIndex;
+            }
         }
     }
 

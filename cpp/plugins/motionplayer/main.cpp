@@ -158,6 +158,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(tickCount, getTickCount, setTickCount);
     NCB_PROPERTY(speed, getSpeed, setSpeed);
     NCB_PROPERTY(frameTickCount, getFrameTickCount, setFrameTickCount);
+    NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
     NCB_PROPERTY(colorWeight, getColorWeight, setColorWeight);
     NCB_PROPERTY(independentLayerInherit, getIndependentLayerInherit,
                  setIndependentLayerInherit);
@@ -323,6 +324,7 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_METHOD_RAW_CALLBACK(setCoord, &EmotePlayer::setCoordCompat, 0);
     NCB_METHOD_RAW_CALLBACK(setScale, &EmotePlayer::setScaleCompat, 0);
     NCB_METHOD(getScale);
+    NCB_METHOD(setMirror);
     NCB_METHOD_RAW_CALLBACK(setColor, &EmotePlayer::setColorCompat, 0);
     NCB_METHOD(getColor);
     NCB_METHOD(countVariables);
@@ -564,6 +566,7 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD_RAW_CALLBACK(setCoord, &EmotePlayer::setCoordCompat, 0);
     NCB_METHOD_RAW_CALLBACK(setScale, &EmotePlayer::setScaleCompat, 0);
     NCB_METHOD(getScale);
+    NCB_METHOD(setMirror);
     NCB_METHOD_RAW_CALLBACK(setColor, &EmotePlayer::setColorCompat, 0);
     NCB_METHOD(getColor);
     NCB_METHOD(countVariables);

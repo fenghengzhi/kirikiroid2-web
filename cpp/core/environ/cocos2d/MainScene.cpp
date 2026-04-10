@@ -1061,17 +1061,52 @@ public:
         if(auto logger = spdlog::get("core")) {
             const auto viewSize = getViewSize();
             const auto contentSize = getContentSize();
+            const auto spriteRect =
+                DrawSprite ? DrawSprite->getTextureRect() : cocos2d::Rect::ZERO;
+            const auto spritePos =
+                DrawSprite ? DrawSprite->getPosition() : cocos2d::Vec2::ZERO;
+            const auto primarySize = PrimaryLayerArea
+                ? PrimaryLayerArea->getContentSize()
+                : cocos2d::Size::ZERO;
+            const auto windowPos = getPosition();
+            const auto currentTexId = tex2d ? tex2d->getName() : 0u;
+            const auto newTexId = newtex ? newtex->getName() : 0u;
+            const auto *spriteParent = DrawSprite ? DrawSprite->getParent() : nullptr;
+            const auto *primaryParent =
+                PrimaryLayerArea ? PrimaryLayerArea->getParent() : nullptr;
+            const auto *windowParent = getParent();
             logger->warn(
                 "WCHAIN stage=window.updateDrawBuffer.pre func=0xAA6268 "
                 "tex={} currentTex={} newTex={} paintBox={}x{} tex={}x{} "
                 "internal={}x{} texScale={}x{} viewSize={}x{} contentSize={}x{} "
-                "zoom={} offset=({}, {})",
+                "zoom={} offset=({}, {}) spriteVisible={} spritePos=({}, {}) "
+                "spriteScale={}x{} spriteRect=({}, {}, {}, {}) "
+                "primaryVisible={} primarySize={}x{} primaryScale={}x{} "
+                "windowVisible={} windowPos=({}, {}) isCurrentWindow={} "
+                "currentTexId={} newTexId={} spriteRunning={} primaryRunning={} "
+                "windowRunning={} spriteParent={} primaryParent={} windowParent={}",
                 (void *)tex, (void *)tex2d, (void *)newtex, LayerWidth,
                 LayerHeight, tex->GetWidth(), tex->GetHeight(),
                 tex->GetInternalWidth(), tex->GetInternalHeight(), loggedScaleX,
                 loggedScaleY, viewSize.width, viewSize.height,
                 contentSize.width, contentSize.height, getZoomScale(),
-                getContentOffset().x, getContentOffset().y);
+                getContentOffset().x, getContentOffset().y,
+                DrawSprite ? (DrawSprite->isVisible() ? 1 : 0) : 0,
+                spritePos.x, spritePos.y,
+                DrawSprite ? DrawSprite->getScaleX() : 0.f,
+                DrawSprite ? DrawSprite->getScaleY() : 0.f,
+                spriteRect.origin.x, spriteRect.origin.y,
+                spriteRect.size.width, spriteRect.size.height,
+                PrimaryLayerArea ? (PrimaryLayerArea->isVisible() ? 1 : 0) : 0,
+                primarySize.width, primarySize.height,
+                PrimaryLayerArea ? PrimaryLayerArea->getScaleX() : 0.f,
+                PrimaryLayerArea ? PrimaryLayerArea->getScaleY() : 0.f,
+                isVisible() ? 1 : 0, windowPos.x, windowPos.y,
+                _currentWindowLayer == this ? 1 : 0, currentTexId, newTexId,
+                DrawSprite ? (DrawSprite->isRunning() ? 1 : 0) : 0,
+                PrimaryLayerArea ? (PrimaryLayerArea->isRunning() ? 1 : 0) : 0,
+                isRunning() ? 1 : 0, (const void *)spriteParent,
+                (const void *)primaryParent, (const void *)windowParent);
         }
         if(tex2d != newtex) {
             DrawSprite->setTexture(newtex);

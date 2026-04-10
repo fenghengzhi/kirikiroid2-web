@@ -1,6 +1,7 @@
 // PlayerCore.cpp — Constructor, setMotion, serialize, core properties
 // Split from Player.cpp for maintainability.
 //
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 
@@ -16,9 +17,161 @@ namespace {
         }
         return value;
     }
+
+    std::uint32_t swapPackedRbLike_0x6CD710(std::uint32_t packedColor) {
+        return (packedColor & 0xFF00FF00u) |
+            ((packedColor >> 16) & 0xFFu) |
+            ((packedColor & 0xFFu) << 16);
+    }
 }
 
 namespace motion {
+
+    std::unordered_map<std::string, Player::VariableAnimatorState> *
+    Player::controllerAnimatorBucketLike_0x671228(int type) {
+        switch(type) {
+            case 4:
+                return &_type4ControllerAnimators;
+            case 5:
+                return &_type5ControllerAnimators;
+            case 6:
+                return &_type6ControllerAnimators;
+            case 7:
+                return &_type7ControllerAnimators;
+            case 8:
+                return &_type8ControllerAnimators;
+            default:
+                return nullptr;
+        }
+    }
+
+    const std::unordered_map<std::string, Player::VariableAnimatorState> *
+    Player::controllerAnimatorBucketLike_0x671228(int type) const {
+        switch(type) {
+            case 4:
+                return &_type4ControllerAnimators;
+            case 5:
+                return &_type5ControllerAnimators;
+            case 6:
+                return &_type6ControllerAnimators;
+            case 7:
+                return &_type7ControllerAnimators;
+            case 8:
+                return &_type8ControllerAnimators;
+            default:
+                return nullptr;
+        }
+    }
+
+    Player::VariableAnimatorState *
+    Player::findControllerAnimatorStateLike_0x671228(const std::string &label) {
+        const auto findInBucket =
+            [&label](auto &bucket) -> VariableAnimatorState * {
+            if(const auto it = bucket.find(label); it != bucket.end()) {
+                return &it->second;
+            }
+            return nullptr;
+        };
+
+        if(auto *state = findInBucket(_type4ControllerAnimators)) {
+            return state;
+        }
+        if(auto *state = findInBucket(_type5ControllerAnimators)) {
+            return state;
+        }
+        if(auto *state = findInBucket(_type6ControllerAnimators)) {
+            return state;
+        }
+        if(auto *state = findInBucket(_type8ControllerAnimators)) {
+            return state;
+        }
+        return findInBucket(_type7ControllerAnimators);
+    }
+
+    const Player::VariableAnimatorState *
+    Player::findControllerAnimatorStateLike_0x671228(
+        const std::string &label) const {
+        const auto findInBucket =
+            [&label](const auto &bucket) -> const VariableAnimatorState * {
+            if(const auto it = bucket.find(label); it != bucket.end()) {
+                return &it->second;
+            }
+            return nullptr;
+        };
+
+        if(const auto *state = findInBucket(_type4ControllerAnimators)) {
+            return state;
+        }
+        if(const auto *state = findInBucket(_type5ControllerAnimators)) {
+            return state;
+        }
+        if(const auto *state = findInBucket(_type6ControllerAnimators)) {
+            return state;
+        }
+        if(const auto *state = findInBucket(_type8ControllerAnimators)) {
+            return state;
+        }
+        return findInBucket(_type7ControllerAnimators);
+    }
+
+    void Player::eraseControllerAnimatorStateLike_0x671228(
+        const std::string &label) {
+        _type4ControllerAnimators.erase(label);
+        _type5ControllerAnimators.erase(label);
+        _type6ControllerAnimators.erase(label);
+        _type7ControllerAnimators.erase(label);
+        _type8ControllerAnimators.erase(label);
+    }
+
+    void Player::clearControllerAnimatorStateLike_0x671228() {
+        _type4ControllerAnimators.clear();
+        _type5ControllerAnimators.clear();
+        _type6ControllerAnimators.clear();
+        _type7ControllerAnimators.clear();
+        _type8ControllerAnimators.clear();
+    }
+
+    void Player::setSelectorEnabled(bool v) {
+        if(_selectorEnabled == v) {
+            return;
+        }
+        _selectorEnabled = v;
+        syncSelectorControlsLike_0x670D1C();
+    }
+
+    tjs_int Player::getColorWeight() const {
+        return static_cast<tjs_int>(
+            swapPackedRbLike_0x6CD710(_colorWeightPacked));
+    }
+
+    void Player::setColorWeight(tjs_int v) {
+        _colorWeightPacked = swapPackedRbLike_0x6CD710(
+            static_cast<std::uint32_t>(v));
+    }
+
+    tjs_int Player::getMaskMode() const {
+        return _maskMode;
+    }
+
+    void Player::setMaskMode(tjs_int v) {
+        _maskMode = v;
+    }
+
+    void Player::setIndependentLayerInherit(bool v) {
+        if(_independentLayerInherit == v) {
+            return;
+        }
+
+        _independentLayerInherit = v;
+        if(!_runtime) {
+            return;
+        }
+
+        // libkrkr2.so 0x6CC9D4 compares player+1097 and marks node+1584 dirty.
+        for(auto &node : _runtime->nodes) {
+            node.accumulated.dirty = true;
+        }
+    }
 
     Player::Player(ResourceManager rm) :
         _runtime(detail::makePlayerRuntime()),
@@ -40,7 +193,7 @@ namespace motion {
     // Aligned to libkrkr2.so Player_getRootX (0x6D98A8) / Player_setRootX (0x6CD028)
     double Player::getX() const {
         if (_runtime && !_runtime->nodes.empty())
-            return _runtime->nodes[0].accumulated.posX;
+            return _runtime->nodes[0].localState.posX;
         return _hasPendingRootPos ? _pendingRootX : 0.0;
     }
     void Player::setX(double v) {
@@ -48,8 +201,9 @@ namespace motion {
         _hasPendingRootPos = true;
         if (_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
-            if (root.accumulated.posX != v) {
-                root.accumulated.posX = v;
+            if (root.localState.posX != v) {
+                root.localState.posX = v;
+                root.localState.dirty = true;
                 root.accumulated.dirty = true;
             }
         }
@@ -57,7 +211,7 @@ namespace motion {
     // Aligned to libkrkr2.so Player_getRootY (0x6D98B4) / Player_setRootY (0x6CD048)
     double Player::getY() const {
         if (_runtime && !_runtime->nodes.empty())
-            return _runtime->nodes[0].accumulated.posY;
+            return _runtime->nodes[0].localState.posY;
         return _hasPendingRootPos ? _pendingRootY : 0.0;
     }
     void Player::setY(double v) {
@@ -65,8 +219,9 @@ namespace motion {
         _hasPendingRootPos = true;
         if (_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
-            if (root.accumulated.posY != v) {
-                root.accumulated.posY = v;
+            if (root.localState.posY != v) {
+                root.localState.posY = v;
+                root.localState.dirty = true;
                 root.accumulated.dirty = true;
             }
         }
@@ -79,13 +234,17 @@ namespace motion {
         std::shared_ptr<detail::MotionSnapshot> snapshot) {
         _runtime->activeMotion.reset();
         _runtime->timelines.clear();
+        _runtime->playingTimelineLabels.clear();
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         _variableValues.clear();
         _variableAnimators.clear();
-        _controllerAnimators.clear();
+        clearControllerAnimatorStateLike_0x671228();
         _evalResultValues.clear();
-        _evalResultOrder.clear();
+        _evalResultList.clear();
+        _evalResultListIndex.clear();
+        _mirrorPositiveCache.clear();
+        _mirrorNegativeCache.clear();
 
         if(snapshot) {
             activateMotion(*_runtime, snapshot);
@@ -108,13 +267,17 @@ namespace motion {
         _motionKey = v;
         _runtime->activeMotion.reset();
         _runtime->timelines.clear();
+        _runtime->playingTimelineLabels.clear();
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         _variableValues.clear();
         _variableAnimators.clear();
-        _controllerAnimators.clear();
+        clearControllerAnimatorStateLike_0x671228();
         _evalResultValues.clear();
-        _evalResultOrder.clear();
+        _evalResultList.clear();
+        _evalResultListIndex.clear();
+        _mirrorPositiveCache.clear();
+        _mirrorNegativeCache.clear();
         ensureMotionLoaded();
     }
 
@@ -169,6 +332,7 @@ namespace motion {
         self->_motionKey = motionValue;
         self->_runtime->activeMotion.reset();
         self->_runtime->timelines.clear();
+        self->_runtime->playingTimelineLabels.clear();
         self->_runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         self->_variableKeys.Clear();
         self->_variableValues.clear();
@@ -244,6 +408,99 @@ namespace motion {
 
         _variableKeys = detail::makeArray(
             detail::stringsToVariants(_runtime->activeMotion->variableLabels));
+        syncSelectorControlsLike_0x670D1C();
+    }
+
+    void Player::syncSelectorControlsLike_0x670D1C() {
+        const auto *activeMotion = _runtime->activeMotion.get();
+        if(!activeMotion) {
+            return;
+        }
+
+        const auto removeRuntimeState =
+            [this](const std::string &label) {
+                if(label.empty()) {
+                    return;
+                }
+                _variableAnimators.erase(label);
+                eraseControllerAnimatorStateLike_0x671228(label);
+                _variableValues.erase(label);
+                _evalResultValues.erase(label);
+                removeEvalResultSlotLike_Reset(label);
+            };
+
+        for(const auto &[selectorLabel, binding] : activeMotion->selectorControls) {
+            removeRuntimeState(selectorLabel);
+            for(const auto &option : binding.options) {
+                removeRuntimeState(option.label);
+            }
+
+            if(!_selectorEnabled) {
+                continue;
+            }
+
+            // Aligned to libkrkr2.so sub_670D1C:
+            // selector-enabled path resets each selector controller and
+            // immediately applies sub_6680B0(..., index=0, transition=0, ease=0).
+            setVariable(detail::widen(selectorLabel), 0.0, 0.0, 0.0);
+        }
+
+        _emoteDirty = true;
+    }
+
+    const detail::TimelineState *Player::primaryTimelineStateLike_0x66F80C() const {
+        if(!_runtime->activeMotion) {
+            return nullptr;
+        }
+
+        const auto &primaryLabels =
+            !_runtime->activeMotion->mainTimelineLabels.empty()
+                ? _runtime->activeMotion->mainTimelineLabels
+                : _runtime->activeMotion->diffTimelineLabels;
+        for(const auto &label : primaryLabels) {
+            if(const auto it = _runtime->timelines.find(label);
+               it != _runtime->timelines.end()) {
+                return &it->second;
+            }
+        }
+
+        if(!_motionKey.IsEmpty()) {
+            if(const auto it = _runtime->timelines.find(detail::narrow(_motionKey));
+               it != _runtime->timelines.end()) {
+                return &it->second;
+            }
+        }
+
+        return !_runtime->timelines.empty()
+            ? &(_runtime->timelines.begin()->second)
+            : nullptr;
+    }
+
+    void Player::resetControllerStateLike_0x66EB8C() {
+        // Aligned to libkrkr2.so sub_66EB8C:
+        // the binary performs a broad controller/reset sweep after wrapper-side
+        // setMirror(). Keep the local reset focused on runtime controller state,
+        // eval sinks, and root-node dirty propagation.
+        _variableAnimators.clear();
+        clearControllerAnimatorStateLike_0x671228();
+        _evalResultValues.clear();
+        _evalResultList.clear();
+        _evalResultListIndex.clear();
+        _mirrorPositiveCache.clear();
+        _mirrorNegativeCache.clear();
+
+        if(_runtime && !_runtime->nodes.empty()) {
+            auto &root = _runtime->nodes.front();
+            root.localState.flipX = _rootFlipX;
+            root.localState.dirty = true;
+            root.accumulated.dirty = true;
+            root.interpolatedCache.flipX = _rootFlipX;
+        }
+
+        if(_selectorEnabled) {
+            syncSelectorControlsLike_0x670D1C();
+        }
+        _emoteDirty = true;
     }
 
     const detail::MotionClip *Player::selectActiveClip() const {
@@ -262,14 +519,17 @@ namespace motion {
                     : nullptr;
             };
 
-        if(const auto *clip = selectByLabel(detail::narrow(_motionKey))) {
-            return clip;
+        for(const auto &label : _runtime->playingTimelineLabels) {
+            if(const auto *clip = selectByLabel(label)) {
+                return clip;
+            }
         }
 
-        for(const auto &[label, state] : _runtime->timelines) {
-            if(!state.playing) {
-                continue;
-            }
+        const auto &primaryLabels =
+            !_runtime->activeMotion->mainTimelineLabels.empty()
+                ? _runtime->activeMotion->mainTimelineLabels
+                : _runtime->activeMotion->diffTimelineLabels;
+        for(const auto &label : primaryLabels) {
             if(const auto *clip = selectByLabel(label)) {
                 return clip;
             }
@@ -336,7 +596,7 @@ namespace motion {
     void Player::setProgressCompat(double v) {
         ensureMotionLoaded();
         const auto progress = std::clamp(v, 0.0, 1.0);
-        bool anyPlaying = false;
+        _runtime->playingTimelineLabels.clear();
         for(auto &[_, state] : _runtime->timelines) {
             if(state.totalFrames > 0.0) {
                 state.currentTime = state.totalFrames * progress;
@@ -346,9 +606,16 @@ namespace motion {
             if(progress >= 1.0 && !state.loop) {
                 state.playing = false;
             }
-            anyPlaying = anyPlaying || state.playing;
+            state.controlInitialized = false;
+            state.controlLastAppliedTime = state.currentTime;
+            state.controlFrameCursor.clear();
+            state.controlTrackValues.clear();
+            state.controlTrackAnimators.clear();
+            if(state.playing) {
+                _runtime->playingTimelineLabels.push_back(state.label);
+            }
         }
-        _allplaying = anyPlaying;
+        _allplaying = !_runtime->playingTimelineLabels.empty();
     }
 
     double Player::getProgressCompat() const {
@@ -495,6 +762,7 @@ namespace motion {
                 detail::primeTimelineStates(_runtime->timelines,
                                             *_runtime->activeMotion);
             }
+            _runtime->playingTimelineLabels.clear();
 
             const auto count = getObjectCount(value);
             for(tjs_int index = 0; index < count; ++index) {
@@ -518,6 +786,12 @@ namespace motion {
 
                 restoredTimelines = true;
                 it->second.playing = true;
+                _runtime->playingTimelineLabels.push_back(key);
+                it->second.controlInitialized = false;
+                it->second.controlLastAppliedTime = it->second.currentTime;
+                it->second.controlFrameCursor.clear();
+                it->second.controlTrackValues.clear();
+                it->second.controlTrackAnimators.clear();
 
                 tTJSVariant flagsValue;
                 if(getObjectProperty(item, TJS_W("flags"), flagsValue) &&
@@ -552,9 +826,7 @@ namespace motion {
             }
         }
 
-        _allplaying = std::any_of(
-            _runtime->timelines.begin(), _runtime->timelines.end(),
-            [](const auto &entry) { return entry.second.playing; });
+        _allplaying = !_runtime->playingTimelineLabels.empty();
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setCoord (0x5301EC):
@@ -610,7 +882,17 @@ namespace motion {
         _emoteDirty = true;
     }
 
-    void Player::setMirror(bool mirror) { setFlip(mirror); }
+    void Player::setMirror(bool mirror) {
+        // Aligned to libkrkr2.so Player_setRootFlipX (0x6CD068):
+        // update the synthetic root node's flipX flag and mark it dirty.
+        if(_rootFlipX == mirror && _mirrorEvalEnabled == mirror) {
+            return;
+        }
+
+        _rootFlipX = mirror;
+        _mirrorEvalEnabled = mirror;
+        resetControllerStateLike_0x66EB8C();
+    }
 
     void Player::setEmoteMeshDivisionRatio(double v) {
         _emoteMeshDivisionRatio = v;

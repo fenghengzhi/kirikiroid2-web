@@ -6,8 +6,10 @@
 
 #include <array>
 #include <deque>
+#include <list>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <spdlog/spdlog.h>
 #include "tjs.h"
@@ -27,6 +29,8 @@ namespace motion {
         struct MotionClip;
         struct MotionSnapshot;
         struct PlayerRuntime;
+        struct TimelineControlBinding;
+        struct TimelineState;
     }
 
     // Motion class enums
@@ -117,7 +121,7 @@ namespace motion {
         void setDirectEdit(bool v) { _directEdit = v; }
         bool getDirectEdit() const { return _directEdit; }
 
-        void setSelectorEnabled(bool v) { _selectorEnabled = v; }
+        void setSelectorEnabled(bool v);
         bool getSelectorEnabled() const { return _selectorEnabled; }
 
         void setVariableKeys(tTJSVariant v) { _variableKeys = v; }
@@ -155,11 +159,16 @@ namespace motion {
         void setFrameTickCount(double v) { _frameTickCount = v; }
         double getFrameTickCount() const { return _frameTickCount; }
 
-        // Aligned to libkrkr2.so +1097: bool flag, not double
-        void setColorWeight(bool v) { _colorWeight = v; }
-        bool getColorWeight() const { return _colorWeight; }
+        // Aligned to libkrkr2.so 0x6CD724 / 0x6CD710: packed color int at +1156
+        void setColorWeight(tjs_int v);
+        tjs_int getColorWeight() const;
 
-        void setIndependentLayerInherit(bool v) { _independentLayerInherit = v; }
+        // Aligned to libkrkr2.so 0x6D9760 / 0x6D9758: raw int at +1148
+        void setMaskMode(tjs_int v);
+        tjs_int getMaskMode() const;
+
+        // Aligned to libkrkr2.so 0x6CC9D4 / 0x6D9768: bool flag at +1097
+        void setIndependentLayerInherit(bool v);
         bool getIndependentLayerInherit() const { return _independentLayerInherit; }
 
         void setZFactor(double v) { _zFactor = v; }
@@ -413,6 +422,52 @@ namespace motion {
         bool ensureMotionLoaded();
         void ensureNodeTreeBuilt();
         void syncVariableKeysFromActiveMotion();
+        void syncSelectorControlsLike_0x670D1C();
+        const detail::TimelineState *primaryTimelineStateLike_0x66F80C() const;
+        void preProgressPlayingTimelinesLike_0x671764(
+            double dt, std::unordered_map<std::string, double> *prevTimes);
+        void resetTimelineControlStateLike_0x671A50(
+            detail::TimelineState &state,
+            const detail::TimelineControlBinding &binding,
+            double time);
+        void scheduleTimelineControlAnimatorLike_0x671A50(
+            detail::TimelineState &state,
+            size_t trackIndex,
+            float value,
+            double transition,
+            double easeWeight);
+        void applyTimelineControlWindowLike_0x669E1C(
+            detail::TimelineState &state,
+            const detail::TimelineControlBinding &binding,
+            double targetTime,
+            bool inclusiveEnd);
+        void applyTimelineControlFrameCrossingLike_0x67CD20(
+            const std::unordered_map<std::string, double> &prevTimes);
+        void stepTimelineControlAnimatorsLike_0x67D01C(double dt);
+        void stepTimelineBlendAnimatorsLike_0x67D01C(double dt);
+        void setTimelineBlendLike_0x6735AC(
+            const std::string &label,
+            bool autoStop,
+            double value,
+            double transition,
+            double ease);
+        void refreshFixedControllerEvalOutputsLike_0x67D01C();
+        void accumulateTimelineContributionLike_0x67C560(
+            const std::string &label,
+            double &value);
+        void setVariableResolvedWeightLike_0x671228(
+            const std::string &key,
+            double value,
+            double transition,
+            double easeWeight);
+        void resetControllerStateLike_0x66EB8C();
+        void applyEvalResultPostProcessLike_0x67CC9C();
+        void applyClampControlsLike_0x67C8A8();
+        bool shouldMirrorEvalLabelLike_0x67C6B0(const std::string &label);
+        double &ensureEvalResultSlotLike_0x686944(const std::string &label);
+        void removeEvalResultSlotLike_Reset(const std::string &label);
+        void writeEvalResultValueLike_0x6C4668(const std::string &label,
+                                              double value);
         bool renderToLayer(iTJSDispatch2 *layerObject,
                            bool skipUpdate = false);
         bool renderToSeparateLayerAdaptor(iTJSDispatch2 *slaObject);
@@ -433,7 +488,7 @@ namespace motion {
         activeLayersByName() const;
         const std::vector<std::string> &activeSourceCandidates() const;
         void calcBounds();
-        void updateLayers(double currentTime);
+        void updateLayers();
         bool prepareRenderItems();
         void appendPreparedRenderItems();
         void applyPreparedRenderItemTranslateOffsets();
@@ -486,8 +541,9 @@ namespace motion {
         double _cameraTargetX = 0, _cameraTargetY = 0, _cameraTargetZ = 0;
         bool _speed = true;           // Aligned to libkrkr2.so +1093: bool flag
         double _frameTickCount = 0.0;
-        bool _colorWeight = true;     // Aligned to libkrkr2.so +1097: bool flag
-        bool _independentLayerInherit = false;
+        tjs_int _maskMode = 0;                         // libkrkr2.so +1148
+        std::uint32_t _colorWeightPacked = 0xFF808080u; // libkrkr2.so +1156
+        bool _independentLayerInherit = false;          // libkrkr2.so +1097
         double _zFactor = 1.0;
         tTJSVariant _cameraTarget;
         tTJSVariant _cameraPosition;
@@ -550,9 +606,38 @@ namespace motion {
             float weight = 1.0f;
         };
         std::unordered_map<std::string, VariableAnimatorState> _variableAnimators;
-        std::unordered_map<std::string, VariableAnimatorState> _controllerAnimators;
+        std::unordered_map<std::string, VariableAnimatorState>
+            _type4ControllerAnimators;
+        std::unordered_map<std::string, VariableAnimatorState>
+            _type5ControllerAnimators;
+        std::unordered_map<std::string, VariableAnimatorState>
+            _type6ControllerAnimators;
+        std::unordered_map<std::string, VariableAnimatorState>
+            _type7ControllerAnimators;
+        std::unordered_map<std::string, VariableAnimatorState>
+            _type8ControllerAnimators;
+        std::unordered_map<std::string, VariableAnimatorState> *
+        controllerAnimatorBucketLike_0x671228(int type);
+        const std::unordered_map<std::string, VariableAnimatorState> *
+        controllerAnimatorBucketLike_0x671228(int type) const;
+        VariableAnimatorState *
+        findControllerAnimatorStateLike_0x671228(const std::string &label);
+        const VariableAnimatorState *
+        findControllerAnimatorStateLike_0x671228(const std::string &label) const;
+        void eraseControllerAnimatorStateLike_0x671228(const std::string &label);
+        void clearControllerAnimatorStateLike_0x671228();
         std::unordered_map<std::string, double> _evalResultValues;
-        std::vector<std::string> _evalResultOrder;
+        struct EvalResultEntry {
+            std::string label;
+            double value = 0.0;
+        };
+        std::list<EvalResultEntry> _evalResultList;
+        std::unordered_map<std::string, std::list<EvalResultEntry>::iterator>
+            _evalResultListIndex;
+        bool _rootFlipX = false;
+        bool _mirrorEvalEnabled = false;
+        std::unordered_set<std::string> _mirrorPositiveCache;
+        std::unordered_set<std::string> _mirrorNegativeCache;
 
         // Parent color propagated from parent motion node (sub_6BE0C0 at 0x6BEB7C).
         // Binary: *(_DWORD *)(childPlayer + 1156) = *(_DWORD *)(node + 100)
