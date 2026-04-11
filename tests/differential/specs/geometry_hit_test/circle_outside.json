@@ -1,0 +1,14 @@
+{
+  "id": "circle_outside",
+  "family": "hit_test",
+  "shape": {
+    "kind": "circle",
+    "cx": 0.0,
+    "cy": 0.0,
+    "r": 5.0
+  },
+  "point": {
+    "x": 5.1,
+    "y": 0.0
+  }
+}

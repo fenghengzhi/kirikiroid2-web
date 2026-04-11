@@ -181,6 +181,9 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/external)
 # build library
 add_subdirectory(${KRKR2CORE_PATH})
 add_subdirectory(${KRKR2PLUGIN_PATH})
+if(WEB)
+    add_subdirectory(tests/differential/wasm)
+endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC
     krkr2plugin krkr2core

@@ -2,6 +2,7 @@
 // Split from Player.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "HitTestInternal.h"
 
 using namespace motion::internal;
 
@@ -18,42 +19,13 @@ namespace {
 
     bool hitTestMotionNodeShape(const motion::detail::MotionNode &node,
                                 double x, double y) {
-        switch(node.shapeGeomType) {
-            case 1: {
-                const double cx = node.shapeVertices[0];
-                const double cy = node.shapeVertices[1];
-                const double r = node.shapeVertices[2];
-                const double dx = x - cx;
-                const double dy = y - cy;
-                return dx * dx + dy * dy <= r * r;
-            }
-            case 2:
-                return node.shapeVertices[3] <= x && x < node.shapeVertices[5] &&
-                    node.shapeVertices[4] <= y && y < node.shapeVertices[6];
-            case 3: {
-                const double x0 = node.shapeVertices[7];
-                const double y0 = node.shapeVertices[8];
-                const double x1 = node.shapeVertices[9];
-                const double y1 = node.shapeVertices[10];
-                const double x2 = node.shapeVertices[11];
-                const double y2 = node.shapeVertices[12];
-                const double x3 = node.shapeVertices[13];
-                const double y3 = node.shapeVertices[14];
-                const auto cross = [](double ax, double ay, double bx, double by,
-                                      double px, double py) {
-                    return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-                };
-                const double winding = cross(x0, y0, x1, y1, x2, y2) >= 0.0
-                    ? 1.0
-                    : -1.0;
-                return winding * cross(x0, y0, x1, y1, x, y) <= 0.0 &&
-                    winding * cross(x1, y1, x2, y2, x, y) <= 0.0 &&
-                    winding * cross(x2, y2, x3, y3, x, y) <= 0.0 &&
-                    winding * cross(x3, y3, x0, y0, x, y) <= 0.0;
-            }
-            default:
-                return false;
+        motion::detail::HitData hit{};
+        hit.type = node.shapeGeomType;
+        for(size_t i = 0; i < node.shapeVertices.size() && i < hit.values.size();
+            ++i) {
+            hit.values[i] = node.shapeVertices[i];
         }
+        return motion::detail::hitTestHitData(hit, x, y);
     }
 }
 

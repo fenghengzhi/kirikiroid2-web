@@ -1,0 +1,15 @@
+{
+  "id": "rect_left_top_inclusive",
+  "family": "hit_test",
+  "shape": {
+    "kind": "rect",
+    "left": 1.0,
+    "top": 2.0,
+    "right": 6.0,
+    "bottom": 8.0
+  },
+  "point": {
+    "x": 1.0,
+    "y": 2.0
+  }
+}

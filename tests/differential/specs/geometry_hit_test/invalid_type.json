@@ -1,0 +1,15 @@
+{
+  "id": "invalid_type",
+  "family": "hit_test",
+  "shape": {
+    "kind": "circle",
+    "type_override": 99,
+    "cx": 0.0,
+    "cy": 0.0,
+    "r": 5.0
+  },
+  "point": {
+    "x": 0.0,
+    "y": 0.0
+  }
+}
