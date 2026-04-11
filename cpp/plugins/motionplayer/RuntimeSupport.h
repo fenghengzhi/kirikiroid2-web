@@ -325,6 +325,8 @@ namespace motion::detail {
     bool logoChainTraceEnabled();
     bool logoChainTraceEnabledForPath(const std::string &motionPath);
     bool logoChainTraceEnabled(const std::shared_ptr<MotionSnapshot> &snapshot);
+    bool logoSnapshotMarkEnabled();
+    bool logoSnapshotMarkEnabledForPath(const std::string &motionPath);
     void resetLogoChainTraceSession(const std::string &motionPath);
     void logoChainTraceLog(const std::string &motionPath,
                            const char *stage,

@@ -21,7 +21,8 @@ namespace {
                                 double x, double y) {
         motion::detail::HitData hit{};
         hit.type = node.shapeGeomType;
-        for(size_t i = 0; i < node.shapeVertices.size() && i < hit.values.size();
+        for(size_t i = 0; i < std::size(node.shapeVertices) &&
+                          i < hit.values.size();
             ++i) {
             hit.values[i] = node.shapeVertices[i];
         }
@@ -1366,6 +1367,13 @@ namespace motion {
             self->updateLayers();
         }
         self->calcBounds();
+
+        if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+           motionPath.find("m2logo.mtn") != std::string::npos &&
+           self->_clampedEvalTime >= 30.0 && self->_clampedEvalTime <= 40.0) {
+            std::fprintf(stderr, "SHOTMARK motion=%s frame=%.3f\n",
+                         motionPath.c_str(), self->_clampedEvalTime);
+        }
 
         // Aligned to libkrkr2.so Player_dispatchEvents (0x6C4490):
         // After stepping timelines, dispatch queued onAction/onSync events.

@@ -133,6 +133,29 @@ namespace motion::detail {
 #endif
         }
 
+        bool logoSnapshotQueryEnabled() {
+#ifdef EMSCRIPTEN
+            return EM_ASM_INT({
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    const snapParam = params.get('snap') || "";
+                    const traceParam = params.get('trace') || "";
+                    return snapParam === '1' ||
+                        snapParam === 'logo' ||
+                        traceParam === 'snap' ||
+                        traceParam === 'logo-snap';
+                } catch (e) {
+                    return 0;
+                }
+            }) != 0;
+#else
+            const auto commandLine = TVPGetCommandLine().AsStdString();
+            const auto lowered = lowercase(commandLine);
+            return lowered.find("-snaplogo") != std::string::npos ||
+                lowered.find("--snaplogo") != std::string::npos;
+#endif
+        }
+
         LogoChainTraceSession &ensureLogoTraceSessionLocked(
             const std::string &motionPath) {
             auto &session = logoTraceSessions()[lowercase(motionPath)];
@@ -1431,8 +1454,17 @@ namespace motion::detail {
         return enabled;
     }
 
+    bool logoSnapshotMarkEnabled() {
+        static const bool enabled = logoSnapshotQueryEnabled();
+        return enabled;
+    }
+
     bool logoChainTraceEnabledForPath(const std::string &motionPath) {
         return logoChainTraceEnabled() && isTargetLogoMotionPath(motionPath);
+    }
+
+    bool logoSnapshotMarkEnabledForPath(const std::string &motionPath) {
+        return logoSnapshotMarkEnabled() && isTargetLogoMotionPath(motionPath);
     }
 
     bool logoChainTraceEnabled(const std::shared_ptr<MotionSnapshot> &snapshot) {

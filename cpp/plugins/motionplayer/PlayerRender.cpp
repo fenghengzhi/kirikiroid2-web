@@ -1080,6 +1080,7 @@ namespace motion {
             static_cast<const void *>(renderLayer),
             static_cast<const void *>(scratchOwner),
             static_cast<const void *>(scratchParent), skipUpdate ? 1 : 0);
+        int snapshotCopyOrder = 0;
         if(!renderLayer) {
             detail::logoChainTraceCheck(
                 motionPath, "execute.setup", "0x6C7440", _clampedEvalTime,
@@ -1588,6 +1589,17 @@ namespace motion {
                         command.visibleAncestorIndex,
                         command.clearEnabled ? 1 : 0,
                         renderLayer->GetWidth(), renderLayer->GetHeight());
+                    if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+                       motionPath.find("m2logo.mtn") != std::string::npos &&
+                       _clampedEvalTime >= 30.0 && _clampedEvalTime <= 40.0) {
+                        std::fprintf(stderr,
+                                     "SNAPCOPY order=%d frame=%.3f nodeIndex=%d branch=%s clipRect=[%d,%d,%d,%d] opacity=%d blend=%d\n",
+                                     snapshotCopyOrder++, _clampedEvalTime,
+                                     command.nodeIndex, branch.c_str(),
+                                     command.clipRect[0], command.clipRect[1],
+                                     command.clipRect[2], command.clipRect[3],
+                                     opa, command.blendMode);
+                    }
                     continue;
                 }
 
@@ -1621,6 +1633,21 @@ namespace motion {
                     localRect.get_width(), localRect.get_height(),
                     renderLayer->GetWidth(), renderLayer->GetHeight(),
                     command.childCommandIndices.size());
+                if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+                   motionPath.find("m2logo.mtn") != std::string::npos &&
+                   _clampedEvalTime >= 30.0 && _clampedEvalTime <= 40.0) {
+                    const char *snapBranch = command.composedBuilt
+                        ? "buffered.operateRect.composed"
+                        : "buffered.operateRect.leaf";
+                    std::fprintf(stderr,
+                                 "SNAPCOPY order=%d frame=%.3f nodeIndex=%d branch=%s clipRect=[%d,%d,%d,%d] opacity=%d blend=%d childCount=%zu\n",
+                                 snapshotCopyOrder++, _clampedEvalTime,
+                                 command.nodeIndex, snapBranch,
+                                 command.clipRect[0], command.clipRect[1],
+                                 command.clipRect[2], command.clipRect[3],
+                                 opa, command.blendMode,
+                                 command.childCommandIndices.size());
+                }
             } catch(const eTJS &) {
             } catch(...) {
             }
@@ -1835,8 +1862,17 @@ namespace motion {
                 static_cast<tTVPLayerType>(ltAlpha),
                 false);
         }
-        if(!prepareLayerForRender(renderLayerObject, canvasWidth, canvasHeight,
-                                  0x00000000)) {
+        if(renderLayerObject != resolvedLayerObject) {
+            if(!prepareLayerForRender(renderLayerObject, canvasWidth, canvasHeight,
+                                      0x00000000)) {
+                return false;
+            }
+        } else if(auto *targetLayer = resolveNativeLayer(resolvedLayerObject)) {
+            if(targetLayer->GetWidth() != canvasWidth ||
+               targetLayer->GetHeight() != canvasHeight) {
+                targetLayer->SetSize(canvasWidth, canvasHeight);
+            }
+        } else {
             return false;
         }
 

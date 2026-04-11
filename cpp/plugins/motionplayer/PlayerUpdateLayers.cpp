@@ -3235,10 +3235,20 @@ namespace motion {
             for(int ancestorIndex = node.visibleAncestorIndex;
                 ancestorIndex >= 0 &&
                 ancestorIndex < static_cast<int>(nodes.size()); ) {
-                const auto inserted = requiredGroupNodeIndices.insert(ancestorIndex);
                 const auto &ancestor = nodes[ancestorIndex];
+                const bool isSpecialCompositeParent =
+                    ancestor.nodeType == 12 && (ancestor.stencilType & 4) != 0;
+                const auto inserted = isSpecialCompositeParent
+                    ? requiredGroupNodeIndices.insert(ancestorIndex)
+                    : std::pair<std::unordered_set<int>::iterator, bool>{
+                          requiredGroupNodeIndices.end(), false
+                      };
                 const int nextAncestorIndex = ancestor.visibleAncestorIndex;
                 if(!inserted.second || nextAncestorIndex == ancestorIndex) {
+                    if(!isSpecialCompositeParent && nextAncestorIndex != ancestorIndex) {
+                        ancestorIndex = nextAncestorIndex;
+                        continue;
+                    }
                     break;
                 }
                 ancestorIndex = nextAncestorIndex;
@@ -3564,14 +3574,19 @@ namespace motion {
             childEntries.clear();
         };
 
-        for(size_t ni = 1; ni < _runtime->nodes.size(); ++ni) {
-            auto &node = _runtime->nodes[ni];
-            if(node.nodeType == 3) {
-                prependChildEntries(node.getChildPlayer());
-            } else if(node.nodeType == 4) {
-                const int particleCount = node.getParticleCount();
-                for(int pi = 0; pi < particleCount; ++pi) {
-                    prependChildEntries(node.getParticleChild(pi));
+        // Aligned to sub_6C2334: nodeType 3/4 child-player recursion is gated
+        // by player+1092 (preview). The native code only expands these child
+        // render lists when preview == 0.
+        if(!_preview) {
+            for(size_t ni = 1; ni < _runtime->nodes.size(); ++ni) {
+                auto &node = _runtime->nodes[ni];
+                if(node.nodeType == 3) {
+                    prependChildEntries(node.getChildPlayer());
+                } else if(node.nodeType == 4) {
+                    const int particleCount = node.getParticleCount();
+                    for(int pi = 0; pi < particleCount; ++pi) {
+                        prependChildEntries(node.getParticleChild(pi));
+                    }
                 }
             }
         }
