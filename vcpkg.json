@@ -72,12 +72,12 @@
       "features": [
         "openmp"
       ],
-      "platform": "!emscripten"
+      "platform": "!emscripten & !osx"
     },
     {
       "name": "opencv4",
       "default-features": false,
-      "platform": "emscripten"
+      "platform": "emscripten | osx"
     },
     {
       "name": "opus",

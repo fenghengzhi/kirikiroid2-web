@@ -126,10 +126,27 @@ namespace motion::detail {
                 }
             }) != 0;
 #else
-            const auto commandLine = TVPGetCommandLine().AsStdString();
-            const auto lowered = lowercase(commandLine);
-            return lowered.find("-tracelogochain") != std::string::npos ||
-                lowered.find("--tracelogochain") != std::string::npos;
+            // libkrkr2.so (Android original) has no logo chain trace feature.
+            // Verified via IDA Pro MCP:
+            //   - No "tracelogochain" / "snaplogo" / "logoChain*" strings in
+            //     either UTF-8 or UTF-16LE encoding (ida-search-string skill
+            //     scan across all segments).
+            //   - EmoteObject_init at 0x67DBAC (the PSB load entry) contains
+            //     zero spdlog/LOGGER calls and zero conditional-trace branches
+            //     in its full 1632-byte body.
+            //   - libkrkr2.so's only command-line query helper is sub_90DA50
+            //     (the equivalent of the named-arg TVPGetCommandLine). The
+            //     string pool contains -forcelog / -lowpri / -laxtimer as
+            //     query targets, but not -tracelogochain, so no function in
+            //     libkrkr2.so ever issues a sub_90DA50(L"-tracelogochain", _)
+            //     call. Introducing one here would add a call-site that does
+            //     not exist in the original binary.
+            //
+            // The whole logoChainTrace* subsystem (added in commit 0830b84)
+            // is a pure-logging local debug path, preserved on the EMSCRIPTEN
+            // side only. For non-EMSCRIPTEN builds the aligned behavior is to
+            // never enable it.
+            return false;
 #endif
         }
 
@@ -149,10 +166,10 @@ namespace motion::detail {
                 }
             }) != 0;
 #else
-            const auto commandLine = TVPGetCommandLine().AsStdString();
-            const auto lowered = lowercase(commandLine);
-            return lowered.find("-snaplogo") != std::string::npos ||
-                lowered.find("--snaplogo") != std::string::npos;
+            // Same rationale as logoTraceQueryEnabled above: verified absent
+            // from libkrkr2.so, non-EMSCRIPTEN builds stay aligned by never
+            // enabling the snapshot feature.
+            return false;
 #endif
         }
 
