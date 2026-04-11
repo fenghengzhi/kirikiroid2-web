@@ -1,0 +1,82 @@
+[
+  {
+    "query": "我现在在调 e-mote3.0バニラパジャマa 这个 fixture 的渲染 bug，face_eye_hitomi_l 在 Web 构建里看着不太对。能不能先把这个 psb 里的所有原始贴图 dump 出来，我想对比一下源图本身有没有问题，seed 应该是 742877301。文件在 tests/test_files/emote/",
+    "should_trigger": true
+  },
+  {
+    "query": "dump 一下 /tmp/xp3_out/motion/opening_logo.mtn 里的所有 src 贴图到 /tmp/logo_imgs/ 看看",
+    "should_trigger": true
+  },
+  {
+    "query": "我想做一个 differential test，把 libkrkr2.so 那边和 Web port 的 motion psb 解码输出对比一下 pixel-perfect，用同一个 .psb 两边分别跑看能不能 diff 出来。有没有离线工具能导出这些贴图",
+    "should_trigger": true
+  },
+  {
+    "query": "帮我从这个 motion 文件里把所有 icon 的 origin 和尺寸读出来，我只要一份列表就行不需要实际的图片，文件是 body_base.psb 在 /Users/me/Desktop/",
+    "should_trigger": true
+  },
+  {
+    "query": "mtndump 的 -s 参数是什么意思？我对加密 psb 给 0 结果一直报 PSBArray bad length type size",
+    "should_trigger": true
+  },
+  {
+    "query": "想批量校验一下这个 emote 资产包里所有 psb 的 seed 对不对，大概 200 个文件，都在 assets/motions/ 下，失败的我想让它列出来但不要中断",
+    "should_trigger": true
+  },
+  {
+    "query": "现在要做一个 EmotePlayer 的 regression，打算把 ref 分支和 HEAD 分支各自跑一遍 e-mote3.0バニラパジャマa.psb 的贴图导出然后 diff 目录",
+    "should_trigger": true
+  },
+  {
+    "query": "有没有办法把 .psb motion 文件里 src/face_nose/icon1 这个具体条目的贴图和它的锚点坐标查出来",
+    "should_trigger": true
+  },
+  {
+    "query": "我能不能用 mtndump 处理 ezsave.pimg 这种 emote save state 文件？还是只能处理 motion？",
+    "should_trigger": true
+  },
+  {
+    "query": "把 game.xp3 里所有的 .mtn 解开然后每个都 dump 一份贴图出来，seed 从 Config.tjs 里查到是 1234567",
+    "should_trigger": true
+  },
+  {
+    "query": "我想把 game.xp3 这个归档里面的所有文件解出来看看有啥，里面有 tjs 和 ks 脚本还有一些 psb 贴图",
+    "should_trigger": false
+  },
+  {
+    "query": "Config.tjs 里 setEmotePSBDecryptSeed 这一行被调用时传的是什么数字？我需要反编译一下这个编译后的 tjs 看看",
+    "should_trigger": false
+  },
+  {
+    "query": "这个 first.ks 剧情脚本文件打开全是乱码，应该是被 FEFE 加密过了，帮我解一下",
+    "should_trigger": false
+  },
+  {
+    "query": "libkrkr2.so 里 sub_6948E8 这个函数是干嘛的？能反编译看看它怎么在 PSB 树里找 source 条目的吗",
+    "should_trigger": false
+  },
+  {
+    "query": "EmotePlayer::setScale 这个方法我们本地的实现跟 libkrkr2.so 对不上，需要按原版重新实现一下",
+    "should_trigger": false
+  },
+  {
+    "query": "Web 构建的 e-mote 角色在浏览器里眼睛部分渲染出来变成白块了，我已经看过源贴图是对的，问题应该在 Layer 渲染路径里的 blend mode",
+    "should_trigger": false
+  },
+  {
+    "query": "把 e-mote3.0 这个 motion 跑起来看看在 Web 里能不能正确播放 wait 动作，我要一个能在浏览器里调试的环境",
+    "should_trigger": false
+  },
+  {
+    "query": "在游戏脚本里我想根据当前变量切换到 happy.mtn 这个 motion，对应的 TJS 代码应该怎么写调用 MotionPlayer.load",
+    "should_trigger": false
+  },
+  {
+    "query": "mac 上 cmake 配置 krkr2 项目的时候 opencv4 build 一直失败，报 WITH_OPENMP 没找到，怎么办",
+    "should_trigger": false
+  },
+  {
+    "query": "我们 psbfile 插件的 PSBFile::loadPSBFile 里 RL 解压部分好像和 Android 原版有偏差，能不能帮我对比一下看差异在哪",
+    "should_trigger": false
+  }
+]
