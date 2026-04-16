@@ -6,7 +6,7 @@ on:
     branches: [web]
 
 env:
-  EMSDK_VERSION: "3.1.64"
+  EMSDK_VERSION: "4.0.23"
 
 jobs:
   differential:
