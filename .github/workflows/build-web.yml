@@ -98,7 +98,8 @@ jobs:
 
       - name: Pre-build Emscripten ports
         run: |
-          embuilder build sdl2 sdl2_ttf sdl2-mt sdl2_ttf-mt
+          embuilder build sdl2 sdl2_ttf sdl2-mt
+          echo "int main(){}" | em++ -x c++ - -o /dev/null -pthread -sUSE_SDL=2 -sUSE_SDL_TTF=2
 
       - name: Build
         run: |
