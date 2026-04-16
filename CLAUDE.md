@@ -92,6 +92,28 @@
 - 修复前必须 trace 完整坐标链（PSB → ownerLayer → primaryLayer → paintBox → screen），每层有独立 transform
 - 反编译完整渲染链（Layer→DrawDevice→Texture→Cocos2D），不要只看局部
 
+### IDA 反编译质量改善（手动逐个修正）
+反编译后如果发现以下问题，**当场修正**，不要留到以后。每次分析函数顺手修几个，IDB 质量持续提升。
+
+#### UTF-16LE 字符串修正
+发现截断的单字符字符串时：
+1. `get_bytes(addr, 32)` 确认真实 UTF-16LE 内容
+2. `set_type(addr, "tjs_char")` 或 `set_type(addr, "wchar16")` 修正类型标注
+3. 重新 `decompile` 确认反编译输出已更新
+
+#### 类型信息丰富
+- `declare_type` — 把本地代码中的 C++ struct/class 定义导入 IDA（如 EmotePlayer、tTVPRect、iTJSDispatch2）
+- `set_type` — 给函数签名设正确的参数和返回类型（如 `void __fastcall fn(EmotePlayer *this, int index)`）
+- `infer_types` — 修正关键函数类型后调用，让 IDA 沿调用链自动传播类型
+- 导入类型的优先级：高频基础类（iTJSDispatch2、tTJSVariant）> 当前分析的目标类 > 其余
+
+#### 函数/变量重命名
+- `rename` — 给 `sub_XXXX` 重命名为 `ClassName_MethodName`（命名规范见下方"IDA 符号管理"）
+- 局部变量无法持久重命名时，用 `set_comments` 在函数头部标注关键变量含义
+
+#### 修正后保存
+- 一轮分析结束后调用 `idb_save` 持久化所有修正
+
 ### IDA 符号管理
 - **重命名必须以本地代码为依据** — 必须先 grep 本地项目找到对应的类名::方法名，用 `ClassName_MethodName` 格式重命名。禁止从二进制行为推断命名（如把 `StartProcess` 猜成 `Process`）
 - 无法在本地代码中找到对应标识符时，加 `_guess` 后缀（如 `Layer_Update_guess`）
