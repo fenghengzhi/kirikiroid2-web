@@ -817,24 +817,21 @@ namespace motion {
                 item.childItems.push_back(&item);
             }
         }
-        for(auto &item : _runtime->preparedRenderItems) {
-            const int parentNodeIndex = item.visibleAncestorIndex;
-            if(parentNodeIndex < 0 || parentNodeIndex == item.nodeIndex) {
-                continue;
-            }
-            const auto it = entryPtrByNode.find(parentNodeIndex);
-            if(it == entryPtrByNode.end()) {
-                continue;
-            }
-            const auto &candidateNode =
-                _runtime->nodes[static_cast<size_t>(item.nodeIndex)];
-            if(it->second->selfSeedChildList &&
-               (candidateNode.nodeType == 0 || candidateNode.nodeType == 3)) {
-                continue;
-            }
-            item.parentItem = it->second;
-            it->second->childItems.push_back(&item);
-        }
+        // Aligned to libkrkr2.so sub_6C2334: item+264 (parentItem) is written
+        // in exactly two places — Branch A for nodeType=3 sub-player wrappers
+        // (0x6c2b28) and the type12 composite aggregation branch (0x6c2654).
+        // Normal type0 / type1 / type2 layers — including transform-only
+        // parents like yuzulogo's `slide` nodes — **never** see their item+264
+        // populated by the binary, so their visibleAncestor chain stays at the
+        // render command level only (item+24 children vector is untouched).
+        //
+        // The previous generic "assign parentItem for any visibleAncestor" loop
+        // caused moji_y/u/z/... to inherit `hasRenderParent=true` from their
+        // slide parents, which the top-level execute filter at
+        // PlayerRender.cpp:1851 then skipped — leaving the letters unrendered
+        // despite correct updateLayers data. The type12 composite case is
+        // handled further below at the selfSeedChildList loop, which matches
+        // Branch 0x6C3740..0x6C3924 / sub_6F3424.
 
         // Align to 0x6C3800..0x6C3924 and sub_6F3424:
         // under a special type12 composite parent, nodeType 0 children are
