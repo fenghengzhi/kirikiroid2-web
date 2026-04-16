@@ -98,8 +98,7 @@ jobs:
 
       - name: Pre-build Emscripten ports
         run: |
-          embuilder build sdl2 sdl2_ttf zlib libpng freetype harfbuzz
-          embuilder build sdl2 sdl2_ttf zlib libpng freetype harfbuzz --pthreads
+          embuilder build sdl2 sdl2_ttf zlib libpng freetype harfbuzz sdl2-mt sdl2_ttf-mt zlib-mt libpng-mt freetype-mt harfbuzz-mt
 
       - name: Build
         run: |
