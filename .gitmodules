@@ -1,6 +1,6 @@
 [submodule "cpp/plugins/layerExImage"]
 	path = cpp/plugins/layerExImage
-	url = https://github.com/wamsoft/layerExImage.git
+	url = https://github.com/fenghengzhi/layerExImage.git
 
 [submodule "reference"]
 	path = reference
