@@ -73,6 +73,24 @@ namespace {
         return 1.0 / (1.0 - ease);
     }
 
+    double activeClipTime(const motion::detail::PlayerRuntime &runtime,
+                          const motion::detail::MotionClip *clip) {
+        if(clip) {
+            if(const auto it = runtime.timelines.find(clip->label);
+               it != runtime.timelines.end()) {
+                return it->second.currentTime;
+            }
+        }
+
+        for(const auto &label : runtime.playingTimelineLabels) {
+            if(const auto it = runtime.timelines.find(label);
+               it != runtime.timelines.end()) {
+                return it->second.currentTime;
+            }
+        }
+        return 0.0;
+    }
+
 } // anonymous namespace
 
 namespace motion {

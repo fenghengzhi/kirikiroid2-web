@@ -201,6 +201,91 @@ namespace {
         return resolvePrimaryLayerObject(resolveMainWindowOwnerObject());
     }
 
+    void pushGraphicCandidates(std::vector<ttstr> &candidates,
+                               const ttstr &base) {
+        if(base.IsEmpty()) {
+            return;
+        }
+
+        candidates.push_back(base);
+        const auto raw = motion::detail::narrow(base);
+        if(raw.find('.') != std::string::npos) {
+            return;
+        }
+
+        static const char *exts[] = { ".png",  ".webp", ".jpg", ".jpeg",
+                                      ".bmp",  ".tlg",  ".pimg", ".psb" };
+        for(const auto *ext : exts) {
+            candidates.emplace_back(base + ttstr{ ext });
+        }
+    }
+
+    // Try to resolve a source image path for the given source name in the
+    // motion snapshot. Uses the same candidate generation logic as
+    // loadMotionSourceImage but without OpenCV.
+    ttstr resolveMotionSourcePath(
+        const motion::detail::MotionSnapshot &snapshot,
+        const std::string &source) {
+        if(source.empty() || isMotionCrossReference(source)) {
+            return {};
+        }
+
+        std::vector<ttstr> candidates;
+        const auto sourcePath = motion::detail::widen(source);
+        candidates.push_back(sourcePath);
+        pushGraphicCandidates(candidates, sourcePath);
+        motion::detail::appendEmbeddedSourceCandidates(snapshot, source, candidates);
+        for(const auto &alias : snapshot.resourceAliases) {
+            const auto embeddedBase = ttstr{ TJS_W("psb://") } +
+                motion::detail::widen(alias) + TJS_W("/") + sourcePath;
+            pushGraphicCandidates(candidates, embeddedBase);
+        }
+
+        // PSB motion resources are stored in a tree like:
+        //   source/<group>/<subgroup>/<name>/pixel
+        // but motion layers reference them as:
+        //   src/<group>/<name>
+        // Scan resourcesByPath for matching resource paths.
+        {
+            const auto lastSlash = source.rfind('/');
+            const auto baseName = (lastSlash != std::string::npos)
+                ? source.substr(lastSlash + 1) : source;
+
+            for(const auto &[resPath, _] : snapshot.resourcesByPath) {
+                const auto targetSuffix = "/" + baseName + "/pixel";
+                if(resPath.size() >= targetSuffix.size() &&
+                   resPath.compare(resPath.size() - targetSuffix.size(),
+                                   targetSuffix.size(), targetSuffix) == 0) {
+                        for(const auto &alias : snapshot.resourceAliases) {
+                            const auto psbPath = ttstr{ TJS_W("psb://") } +
+                            motion::detail::widen(alias) + TJS_W("/") +
+                            motion::detail::widen(resPath);
+                        pushGraphicCandidates(candidates, psbPath);
+                    }
+                }
+            }
+        }
+
+        std::unordered_set<std::string> seen;
+        for(const auto &candidate : candidates) {
+            const auto candidateKey = motion::detail::narrow(candidate);
+            if(!seen.insert(candidateKey).second || candidate.IsEmpty()) {
+                continue;
+            }
+            if(candidateKey.rfind("psb://", 0) == 0) {
+                if(TVPIsExistentStorage(candidate)) {
+                    return candidate;
+                }
+                continue;
+            }
+            if(const auto placed = TVPGetPlacedPath(candidate);
+               !placed.IsEmpty()) {
+                return placed;
+            }
+        }
+        return {};
+    }
+
     iTJSDispatch2 *createLayerObject(iTJSDispatch2 *layerTreeOwnerObject,
                                      iTJSDispatch2 *parentLayerObject) {
         if(!layerTreeOwnerObject) {
