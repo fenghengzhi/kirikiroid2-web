@@ -23,11 +23,10 @@ Emscripten 的端口库（SDL2、SDL2_ttf 等）在首次使用时按需编译�
 **首次构建前**（或清空 emsdk 缓存后），必须先单线程预编译端口：
 
 ```bash
-embuilder build sdl2 sdl2_ttf sdl2-mt
-echo "int main(){}" | em++ -x c++ - -o /dev/null -pthread -sUSE_SDL=2 -sUSE_SDL_TTF=2
+embuilder build sdl2 sdl2_ttf sdl2-mt sdl2_ttf-mt
 ```
 
-第一行预编译非 pthreads 变体（sdl2_ttf 会自动拉 freetype、harfbuzz）。第二行通过编译空文件触发 pthreads 变体的缓存构建（`sdl2_ttf-mt` 在部分 emsdk 版本中不是合法的 embuilder 目标）。缓存建立后后续构建无需重复执行。
+此命令会自动编译 freetype、harfbuzz 等依赖。`-mt` 后缀为 pthreads 变体。缓存建立后后续构建无需重复执行。
 
 ## 构建命令
 

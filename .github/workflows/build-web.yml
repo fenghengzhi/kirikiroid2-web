@@ -11,7 +11,7 @@ on:
       - web
 
 env:
-  EMSDK_VERSION: "3.1.64"
+  EMSDK_VERSION: "4.0.23"
 
 jobs:
   build-web:
@@ -98,8 +98,7 @@ jobs:
 
       - name: Pre-build Emscripten ports
         run: |
-          embuilder build sdl2 sdl2_ttf sdl2-mt
-          echo "int main(){}" | em++ -x c++ - -o /dev/null -pthread -sUSE_SDL=2 -sUSE_SDL_TTF=2
+          embuilder build sdl2 sdl2_ttf sdl2-mt sdl2_ttf-mt
 
       - name: Build
         run: |
