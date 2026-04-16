@@ -1,26 +1,28 @@
 name: Tests
 
 on:
+  workflow_dispatch:
   push:
     branches: [web]
   pull_request:
     branches: [web]
-  workflow_dispatch:
 
 env:
   EMSDK_VERSION: "3.1.64"
 
 jobs:
-  unit-tests:
+  tests:
     runs-on: ubuntu-latest
     env:
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
+      EMSDK: ${{ github.workspace }}/.emsdk
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: true
           submodules: recursive
 
+      # ── System deps ──
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -30,6 +32,7 @@ jobs:
             libcurl4-gnutls-dev libfontconfig1-dev libsqlite3-dev libglew-dev \
             libssl-dev libgtk-3-dev autoconf automake libtool pkg-config libltdl-dev
 
+      # ── vcpkg ──
       - name: Setup vcpkg
         run: |
           git clone https://github.com/microsoft/vcpkg.git ${{ env.VCPKG_ROOT }}
@@ -41,27 +44,7 @@ jobs:
           path: ${{ env.VCPKG_ROOT }}/installed
           key: vcpkg-linux-${{ hashFiles('vcpkg.json') }}
 
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.18
-        with:
-          key: unit-tests
-
-      - name: Configure
-        run: cmake --preset "Linux Debug Config" -DENABLE_TESTS=ON -DBUILD_TOOLS=OFF
-
-      - name: Build
-        run: cmake --build out/linux/debug
-
-      - name: Run tests
-        run: ctest --test-dir out/linux/debug --output-on-failure
-
-  differential-tests:
-    runs-on: ubuntu-latest
-    env:
-      EMSDK: ${{ github.workspace }}/.emsdk
-    steps:
-      - uses: actions/checkout@v4
-
+      # ── Emscripten ──
       - name: Cache Emscripten SDK
         uses: actions/cache@v4
         id: emsdk-cache
@@ -84,6 +67,7 @@ jobs:
           echo "${{ env.EMSDK }}" >> $GITHUB_PATH
           echo "${{ env.EMSDK }}/upstream/emscripten" >> $GITHUB_PATH
 
+      # ── Python + wasmtime ──
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -92,6 +76,23 @@ jobs:
       - name: Install wasmtime
         run: pip install wasmtime
 
+      # ── ccache ──
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.18
+        with:
+          key: tests
+
+      # ── Unit tests (native Linux build) ──
+      - name: Configure native build
+        run: cmake --preset "Linux Debug Config" -DENABLE_TESTS=ON -DBUILD_TOOLS=OFF
+
+      - name: Build native
+        run: cmake --build out/linux/debug
+
+      - name: Run unit tests
+        run: ctest --test-dir out/linux/debug --output-on-failure
+
+      # ── Differential tests (standalone WASM + wasmtime) ──
       - name: Build WASM test targets
         run: |
           cd tests/differential/wasm
@@ -117,32 +118,24 @@ jobs:
             -sSTANDALONE_WASM=1 -sEXPORTED_FUNCTIONS="['_run_position_interp','_get_easing_x_ptr','_get_easing_y_ptr','_get_cp_x_ptr','_get_cp_y_ptr','_get_cp_t_ptr','_get_cp_seg_data_ptr','_get_cp_seg_sizes_ptr','_get_src_pos_ptr','_get_dst_pos_ptr','_get_out_pos_ptr']" \
             --no-entry -o position_interp.wasm
 
-      - name: Run geometry_hit_test
+      - name: Run differential tests
         run: |
           python tests/differential/python/run_geometry_hit_test_wasmtime.py \
             --spec-dir tests/differential/specs/geometry_hit_test \
             --wasm tests/differential/wasm/geometry_hit_test.wasm
 
-      - name: Run psb_rl_decompress
-        run: |
           python tests/differential/python/run_psb_rl_decompress_wasmtime.py \
             --spec-dir tests/differential/specs/psb_rl_decompress \
             --wasm tests/differential/wasm/psb_rl_decompress.wasm
 
-      - name: Run bezier_curve
-        run: |
           python tests/differential/python/run_bezier_curve_wasmtime.py \
             --spec-dir tests/differential/specs/bezier_curve \
             --wasm tests/differential/wasm/bezier_curve.wasm
 
-      - name: Run local_transform
-        run: |
           python tests/differential/python/run_local_transform_wasmtime.py \
             --spec-dir tests/differential/specs/local_transform \
             --wasm tests/differential/wasm/local_transform.wasm
 
-      - name: Run position_interp
-        run: |
           python tests/differential/python/run_position_interp_wasmtime.py \
             --spec-dir tests/differential/specs/position_interp \
             --wasm tests/differential/wasm/position_interp.wasm
