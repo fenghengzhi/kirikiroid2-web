@@ -1,46 +1,23 @@
-name: Tests
+name: Differential Tests
 
 on:
   workflow_dispatch:
-  pull_request:
+  push:
     branches: [web]
 
 env:
   EMSDK_VERSION: "3.1.64"
 
 jobs:
-  tests:
+  differential:
     runs-on: ubuntu-latest
     env:
-      VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       EMSDK: ${{ github.workspace }}/.emsdk
+      QILING_ROOTFS: ${{ github.workspace }}/.qiling-rootfs
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: true
           submodules: recursive
-
-      # ── System deps ──
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bison ninja-build python3 nasm \
-            libxft-dev libxext-dev libxxf86vm-dev libx11-dev libxmu-dev \
-            libglu1-mesa-dev libgl2ps-dev libxi-dev libzip-dev libpng-dev \
-            libcurl4-gnutls-dev libfontconfig1-dev libsqlite3-dev libglew-dev \
-            libssl-dev libgtk-3-dev autoconf automake libtool pkg-config libltdl-dev
-
-      # ── vcpkg ──
-      - name: Setup vcpkg
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git ${{ env.VCPKG_ROOT }}
-          ${{ env.VCPKG_ROOT }}/bootstrap-vcpkg.sh
-
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.VCPKG_ROOT }}/installed
-          key: vcpkg-linux-${{ hashFiles('vcpkg.json') }}
 
       # ── Emscripten ──
       - name: Cache Emscripten SDK
@@ -71,26 +48,26 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install wasmtime
-        run: pip install wasmtime
+      - name: Install wasmtime + Qiling oracle deps
+        run: |
+          pip install wasmtime
+          pip install -r tests/differential/oracle_runner/requirements-oracle.txt
 
-      # ── ccache ──
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.18
+      # ── Qiling Android ARM64 rootfs ──
+      - name: Cache Qiling rootfs
+        uses: actions/cache@v4
+        id: qiling-rootfs-cache
         with:
-          key: tests
+          path: ${{ env.QILING_ROOTFS }}
+          key: qiling-rootfs-arm64-android6-v1
 
-      # ── Unit tests (native Linux build) ──
-      - name: Configure native build
-        run: cmake --preset "Linux Debug Config" -DENABLE_TESTS=ON -DBUILD_TOOLS=OFF
+      - name: Clone Qiling rootfs
+        if: steps.qiling-rootfs-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/qilingframework/rootfs.git \
+            ${{ env.QILING_ROOTFS }}
 
-      - name: Build native
-        run: cmake --build out/linux/debug
-
-      - name: Run unit tests
-        run: ctest --test-dir out/linux/debug --output-on-failure
-
-      # ── Differential tests (standalone WASM + wasmtime) ──
+      # ── Build standalone WASM test modules ──
       - name: Build WASM test targets
         run: |
           cd tests/differential/wasm
@@ -137,3 +114,14 @@ jobs:
           python tests/differential/python/run_position_interp_wasmtime.py \
             --spec-dir tests/differential/specs/position_interp \
             --wasm tests/differential/wasm/position_interp.wasm
+
+      # ── Qiling oracle validation (runs libkrkr2.so under emulation) ──
+      - name: Run Qiling oracle tests
+        env:
+          KRKR2_ROOTFS: ${{ env.QILING_ROOTFS }}/arm64_android6.0
+        run: |
+          python tests/differential/python/run_geometry_hit_test_qiling.py \
+            --spec-dir tests/differential/specs/geometry_hit_test
+
+          python tests/differential/python/run_local_transform_qiling.py \
+            --spec-dir tests/differential/specs/local_transform
