@@ -1,0 +1,14 @@
+{
+  "id": "linear_with_easing",
+  "family": "position_interp",
+  "easing_curve": {
+    "x": [0.0, 0.33, 0.66, 1.0],
+    "y": [0.0, 0.1, 0.9, 1.0]
+  },
+  "src_pos": [0.0, 0.0, 0.0],
+  "dst_pos": [100.0, 200.0, 50.0],
+  "coord_mode": 0,
+  "rotation_curve": { "x": [], "y": [], "t": [], "segments": [] },
+  "t": 0.5,
+  "expected": [50.0, 100.0, 25.0]
+}

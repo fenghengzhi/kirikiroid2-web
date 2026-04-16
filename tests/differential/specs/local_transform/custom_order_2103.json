@@ -1,0 +1,14 @@
+{
+  "id": "custom_order_2103",
+  "family": "local_transform",
+  "affine_in": [2.0, 0.0, 0.0, 3.0, 10.0, 20.0],
+  "flipX": true,
+  "flipY": false,
+  "angle": 45.0,
+  "scaleX": 2.0,
+  "scaleY": 2.0,
+  "slantX": 0.1,
+  "slantY": 0.0,
+  "transformOrder": [2, 1, 0, 3],
+  "expected": [-2.5455844122715714, 4.242640687119285, 3.1112698372208087, 4.242640687119286, 10.0, 20.0]
+}

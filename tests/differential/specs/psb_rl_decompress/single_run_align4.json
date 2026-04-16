@@ -1,0 +1,8 @@
+{
+  "id": "single_run_align4",
+  "family": "psb_rl_decompress",
+  "compressed": [128, 170, 187, 204, 221],
+  "element_count": 3,
+  "align": 4,
+  "expected": [170, 187, 204, 221, 170, 187, 204, 221, 170, 187, 204, 221]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "flip_x_only",
+  "family": "local_transform",
+  "affine_in": [2.0, 0.0, 0.0, 3.0, 10.0, 20.0],
+  "flipX": true,
+  "flipY": false,
+  "angle": 0.0,
+  "scaleX": 1.0,
+  "scaleY": 1.0,
+  "slantX": 0.0,
+  "slantY": 0.0,
+  "transformOrder": [0, 1, 2, 3],
+  "expected": [-2.0, 0.0, 0.0, 3.0, 10.0, 20.0]
+}

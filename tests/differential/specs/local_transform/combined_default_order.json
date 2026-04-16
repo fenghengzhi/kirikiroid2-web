@@ -1,0 +1,14 @@
+{
+  "id": "combined_default_order",
+  "family": "local_transform",
+  "affine_in": [2.0, 0.0, 0.0, 3.0, 10.0, 20.0],
+  "flipX": true,
+  "flipY": false,
+  "angle": 45.0,
+  "scaleX": 2.0,
+  "scaleY": 2.0,
+  "slantX": 0.1,
+  "slantY": 0.0,
+  "transformOrder": [0, 1, 2, 3],
+  "expected": [-3.111269837220809, -4.242640687119285, -2.545584412271571, 4.242640687119286, 10.0, 20.0]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "pure_rle_align4",
+  "family": "psb_rl_decompress",
+  "compressed": [128, 255, 0, 128, 64],
+  "element_count": 3,
+  "align": 4,
+  "expected": [255, 0, 128, 64, 255, 0, 128, 64, 255, 0, 128, 64]
+}

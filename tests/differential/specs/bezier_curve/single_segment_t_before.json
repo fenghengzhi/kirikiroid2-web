@@ -1,0 +1,7 @@
+{
+  "id": "single_segment_t_before",
+  "family": "bezier_curve",
+  "curve": { "x": [0.0, 0.33, 0.66, 1.0], "y": [0.0, 0.1, 0.9, 1.0] },
+  "t": -0.1,
+  "expected": 0.0
+}

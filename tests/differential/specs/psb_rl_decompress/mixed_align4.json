@@ -1,0 +1,8 @@
+{
+  "id": "mixed_align4",
+  "family": "psb_rl_decompress",
+  "compressed": [128, 1, 2, 3, 4, 0, 5, 6, 7, 8],
+  "element_count": 4,
+  "align": 4,
+  "expected": [1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 5, 6, 7, 8]
+}

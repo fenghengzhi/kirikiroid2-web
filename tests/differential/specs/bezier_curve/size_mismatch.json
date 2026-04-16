@@ -1,0 +1,7 @@
+{
+  "id": "size_mismatch",
+  "family": "bezier_curve",
+  "curve": { "x": [0.0, 1.0], "y": [0.0] },
+  "t": 0.5,
+  "expected": 0.5
+}

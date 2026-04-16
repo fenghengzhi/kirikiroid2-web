@@ -1,0 +1,14 @@
+{
+  "id": "scale_non_uniform",
+  "family": "local_transform",
+  "affine_in": [2.0, 0.0, 0.0, 3.0, 10.0, 20.0],
+  "flipX": false,
+  "flipY": false,
+  "angle": 0.0,
+  "scaleX": 2.0,
+  "scaleY": 3.0,
+  "slantX": 0.0,
+  "slantY": 0.0,
+  "transformOrder": [0, 1, 2, 3],
+  "expected": [4.0, 0.0, 0.0, 9.0, 10.0, 20.0]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "empty_input",
+  "family": "psb_rl_decompress",
+  "compressed": [],
+  "element_count": 0,
+  "align": 4,
+  "expected": []
+}

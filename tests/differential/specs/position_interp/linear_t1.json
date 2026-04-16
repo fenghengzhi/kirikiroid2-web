@@ -1,0 +1,11 @@
+{
+  "id": "linear_t1",
+  "family": "position_interp",
+  "easing_curve": { "x": [], "y": [] },
+  "src_pos": [0.0, 0.0, 0.0],
+  "dst_pos": [100.0, 200.0, 0.0],
+  "coord_mode": 0,
+  "rotation_curve": { "x": [], "y": [], "t": [], "segments": [] },
+  "t": 1.0,
+  "expected": [100.0, 200.0, 0.0]
+}

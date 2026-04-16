@@ -1,0 +1,8 @@
+{
+  "id": "pure_rle_align1",
+  "family": "psb_rl_decompress",
+  "compressed": [130, 171],
+  "element_count": 5,
+  "align": 1,
+  "expected": [171, 171, 171, 171, 171]
+}

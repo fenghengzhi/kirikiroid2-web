@@ -1,0 +1,8 @@
+{
+  "id": "pure_literal_align4",
+  "family": "psb_rl_decompress",
+  "compressed": [1, 10, 20, 30, 40, 50, 60, 70, 80],
+  "element_count": 2,
+  "align": 4,
+  "expected": [10, 20, 30, 40, 50, 60, 70, 80]
+}
