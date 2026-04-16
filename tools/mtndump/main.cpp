@@ -8,6 +8,9 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include "BinaryStream.h"
+#include "StorageIntf.h"
+#include "SysInitImpl.h"
+#include "SysInitIntf.h"
 #include "GraphicsLoaderIntf.h"
 #include "motionplayer/PlayerInternal.h"
 #include "motionplayer/RuntimeSupport.h"
@@ -94,6 +97,20 @@ namespace {
         TVPSaveAsPNG(nullptr, stream.get(), &bitmap, TJS_W("png"), nullptr);
     }
 
+    class ToolRuntimeScope {
+    public:
+        ToolRuntimeScope() {
+            const auto cwd = fs::current_path().string();
+            TVPNativeProjectDir = ttstr(cwd);
+            TVPProjectDir = TVPNormalizeStorageName(TVPNativeProjectDir);
+            TVPInitScriptEngine();
+            TVPInitializeBaseSystems();
+            TVPSystemInit();
+        }
+
+        ~ToolRuntimeScope() = default;
+    };
+
 } // namespace
 
 int main(int argc, char *argv[]) {
@@ -123,6 +140,8 @@ int main(int argc, char *argv[]) {
     spdlog::stdout_color_mt("tjs2");
     spdlog::stdout_color_mt("plugin");
     spdlog::set_pattern("%^%v%$");
+
+    ToolRuntimeScope runtimeScope;
 
     const fs::path outputRoot =
         fs::path(normalizePath(program.get<std::string>("--output")));

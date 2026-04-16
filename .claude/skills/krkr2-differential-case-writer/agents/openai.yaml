@@ -1,0 +1,4 @@
+interface:
+  display_name: "KrKr2 Diff Cases"
+  short_description: "Write KrKr2 differential test cases"
+  default_prompt: "Use $krkr2-differential-case-writer to add or update a KrKr2 geometry_hit_test differential case."

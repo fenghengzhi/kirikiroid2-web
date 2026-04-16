@@ -28,3 +28,4 @@ unpack/
 .claude.local.md
 .claude/settings.local.json
 .ida-mcp/
+.xp3tmp/
