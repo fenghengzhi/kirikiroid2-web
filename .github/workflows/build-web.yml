@@ -96,6 +96,11 @@ jobs:
           set -o pipefail
           cmake --preset "Web Release Config" 2>&1 | tee /tmp/cmake-configure.log
 
+      - name: Pre-build Emscripten ports
+        run: |
+          embuilder build sdl2 sdl2_ttf zlib libpng freetype harfbuzz
+          embuilder build sdl2 sdl2_ttf zlib libpng freetype harfbuzz --pthreads
+
       - name: Build
         run: |
           set -o pipefail
