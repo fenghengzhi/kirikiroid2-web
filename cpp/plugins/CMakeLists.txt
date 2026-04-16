@@ -23,6 +23,19 @@ set(_PLUGIN_SOURCES
 )
 target_sources(${PROJECT_NAME} PUBLIC ${_PLUGIN_SOURCES})
 
+execute_process(
+    COMMAND git apply --check ${CMAKE_CURRENT_SOURCE_DIR}/layerExImage.patch
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/layerExImage
+    RESULT_VARIABLE _patch_check_result
+    ERROR_QUIET
+)
+if(_patch_check_result EQUAL 0)
+    execute_process(
+        COMMAND git apply ${CMAKE_CURRENT_SOURCE_DIR}/layerExImage.patch
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/layerExImage
+    )
+endif()
+
 add_library(krkr2plugins_ncbind STATIC
     xp3filter.cpp
     layerExImage/Main.cpp

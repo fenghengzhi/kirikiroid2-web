@@ -26,10 +26,6 @@ jobs:
           lfs: true
           submodules: recursive
 
-      - name: Patch submodules
-        run: |
-          git -C cpp/plugins/layerExImage apply ../layerExImage.patch
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
