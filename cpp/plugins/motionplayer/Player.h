@@ -482,10 +482,6 @@ namespace motion {
                                        tjs_int canvasHeight,
                                        const char *traceFunc);
         const detail::MotionClip *selectActiveClip() const;
-        const std::vector<std::string> &activeLayerNames() const;
-        const std::unordered_map<
-            std::string, std::shared_ptr<const PSB::PSBDictionary>> *
-        activeLayersByName() const;
         const std::vector<std::string> &activeSourceCandidates() const;
         void calcBounds();
         void updateLayers();

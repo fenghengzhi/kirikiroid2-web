@@ -161,10 +161,21 @@ namespace motion {
     void Player::setZoom(double v) { _runtime->zoom = v; }
 
     tTJSVariant Player::getLayerNames() {
-        if(!_runtime->activeMotion) {
+        // Aligned to libkrkr2.so sub_6D1018 (getLayerNames NCB callback):
+        // iterates Player+24 labelMap (std::map<ttstr,int>) and emits its keys.
+        // That map is populated at 0x6B4CE4 during buildNodeTree_recursive with
+        // operator[] — duplicates naturally collapse to one key per label.
+        ensureMotionLoaded();
+        ensureNodeTreeBuilt();
+        if(!_runtime || !_runtime->activeMotion) {
             return detail::makeArray({});
         }
-        return detail::makeArray(detail::stringsToVariants(activeLayerNames()));
+        std::vector<std::string> labels;
+        labels.reserve(_runtime->nodeLabelMap.size());
+        for(const auto &[label, _] : _runtime->nodeLabelMap) {
+            labels.push_back(label);
+        }
+        return detail::makeArray(detail::stringsToVariants(labels));
     }
 
     void Player::releaseSyncWait() {
@@ -185,17 +196,27 @@ namespace motion {
     }
 
     tTJSVariant Player::getLayerMotion(ttstr name) {
-        const auto *layers = activeLayersByName();
-        if(!layers) {
+        // Aligned to libkrkr2.so sub_6D38F4 → sub_6B5AD8 (getLayerMotion):
+        // queries Player+24 labelMap (last-wins) and returns the PSB dict of
+        // the resolved node. For duplicate labels this yields the last layer
+        // that wrote the key during buildNodeTree_recursive.
+        ensureMotionLoaded();
+        ensureNodeTreeBuilt();
+        if(!_runtime) {
             return {};
         }
 
         const auto key = detail::narrow(name);
-        if(const auto it = layers->find(key); it != layers->end()) {
-            return it->second->toTJSVal();
+        const auto it = _runtime->nodeLabelMap.find(key);
+        if(it == _runtime->nodeLabelMap.end()) {
+            return {};
         }
-
-        return {};
+        const auto nodeIndex = it->second;
+        if(nodeIndex < 0 || nodeIndex >= static_cast<int>(_runtime->nodes.size())) {
+            return {};
+        }
+        const auto &psb = _runtime->nodes[nodeIndex].psbNode;
+        return psb ? psb->toTJSVal() : tTJSVariant{};
     }
 
     tTJSVariant Player::getLayerGetter(ttstr name) {
@@ -217,6 +238,10 @@ namespace motion {
     }
 
     tTJSVariant Player::getLayerGetterList() {
+        // Aligned to libkrkr2.so sub_6D4F88 (getLayerGetterList): walks the
+        // flat node container (Player+200 deque) in nodeIndex order and emits
+        // a getter per non-root node. Duplicates are NOT collapsed — every
+        // node maps to its own getter, unlike getLayerNames.
         ensureMotionLoaded();
         ensureNodeTreeBuilt();
         if(!_runtime || !_runtime->activeMotion) {
@@ -224,10 +249,12 @@ namespace motion {
         }
 
         std::vector<tTJSVariant> items;
-        for(const auto &layerName : activeLayerNames()) {
-            const auto getter = getLayerGetter(detail::widen(layerName));
+        items.reserve(_runtime->nodes.size());
+        for(size_t i = 1; i < _runtime->nodes.size(); ++i) {
+            const auto &node = _runtime->nodes[i];
+            auto getter = buildLayerGetterVariant(*this, node);
             if(getter.Type() != tvtVoid) {
-                items.push_back(getter);
+                items.push_back(std::move(getter));
             }
         }
         return detail::makeArray(items);
@@ -920,12 +947,19 @@ namespace motion {
 
     // --- Selector ---
     bool Player::isSelectorTarget(ttstr name) {
-        const auto *layers = activeLayersByName();
-        if(!layers) {
+        // Aligned to libkrkr2.so sub_6823FC (EmotePlayer-level selector
+        // target): checks membership in the "selectorControl" registry
+        // parsed at PSB load time, NOT the layer list. Our snapshot already
+        // populates selectorControls (RuntimeSupport.cpp:681) from the same
+        // PSB "selectorControl" array. The previous implementation incorrectly
+        // checked layer existence via layersByName, which conflated layer
+        // tree membership with selector-target registration.
+        if(!_runtime->activeMotion) {
             return false;
         }
         const auto key = detail::narrow(name);
-        return layers->find(key) != layers->end() &&
+        const auto &selectors = _runtime->activeMotion->selectorControls;
+        return selectors.find(key) != selectors.end() &&
             _runtime->disabledSelectorTargets.find(key) ==
                 _runtime->disabledSelectorTargets.end();
     }
@@ -982,8 +1016,8 @@ namespace motion {
         } else {
             if(_project.Type() == tvtObject) {
                 if(const auto projectSnapshot = detail::lookupModuleSnapshot(_project)) {
-                    if(projectSnapshot->clipsByLabel.find(motionRaw) !=
-                       projectSnapshot->clipsByLabel.end()) {
+                    if(projectSnapshot->clipIndexByLabel.find(motionRaw) !=
+                       projectSnapshot->clipIndexByLabel.end()) {
                         snapshot = projectSnapshot;
                     }
                 }

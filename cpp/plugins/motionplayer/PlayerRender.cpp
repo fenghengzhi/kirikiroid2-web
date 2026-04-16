@@ -867,7 +867,7 @@ namespace motion {
                 _runtime->playingTimelineLabels.empty()
                     ? "<none>"
                     : _runtime->playingTimelineLabels.front().c_str(),
-                _runtime->activeMotion->clipsByLabel.size());
+                _runtime->activeMotion->clipList.size());
         }
 
         _runtime->nodes = detail::buildNodeTree(*_runtime->activeMotion, clipLabel,
@@ -916,7 +916,7 @@ namespace motion {
                 motionPath, "buildNodeTree", "0x6B51F0", _clampedEvalTime,
                 "clipLabel={} rootLayers={} nodeCount={}",
                 clipLabel.empty() ? std::string("<root>") : clipLabel,
-                activeLayerNames().size(), _runtime->nodes.size());
+                _runtime->activeMotion->layerList.size(), _runtime->nodes.size());
             for(const auto &node : _runtime->nodes) {
                 const bool hasStencilTypeKey =
                     node.psbNode && static_cast<bool>((*node.psbNode)["stencilType"]);

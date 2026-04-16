@@ -251,40 +251,45 @@ namespace motion::detail {
         // fall back to snapshot root-level layers. This matches libkrkr2.so
         // using player+528 as the active motion/clip content object before
         // reading its "layer" property in Player_buildNodeTree (0x6B51F0).
-        const std::unordered_map<std::string,
-            std::shared_ptr<const PSB::PSBDictionary>> *layersByName = nullptr;
-        const std::vector<std::string> *layerNames = nullptr;
+        const std::vector<std::shared_ptr<const PSB::PSBDictionary>> *layerList
+            = nullptr;
 
         if (!clipLabel.empty()) {
-            auto clipIt = snapshot.clipsByLabel.find(clipLabel);
-            if (clipIt != snapshot.clipsByLabel.end()) {
-                layersByName = &clipIt->second.layersByName;
-                layerNames = &clipIt->second.layerNames;
+            auto it = snapshot.clipIndexByLabel.find(clipLabel);
+            if (it != snapshot.clipIndexByLabel.end()) {
+                const int idx = it->second;
+                if (idx >= 0 && idx < static_cast<int>(snapshot.clipList.size())) {
+                    layerList = &snapshot.clipList[idx].layerList;
+                }
             }
         }
 
-        if (!layersByName) {
-            layersByName = &snapshot.layersByName;
-            layerNames = &snapshot.layerNames;
+        if (!layerList) {
+            layerList = &snapshot.layerList;
         }
 
-        if (!layerNames || layerNames->empty()) {
+        if (!layerList || layerList->empty()) {
             return nodes;
         }
 
-        // Aligned to Player_buildNodeTree_recursive(player, 0, layerArray):
-        // every top-level PSB layer uses the synthetic root (index 0) as parent.
-        for (const auto &name : *layerNames) {
-            auto it = layersByName->find(name);
-            if (it == layersByName->end()) continue;
-            walkTree(it->second, 0, nodes, resourceManager);
+        // Aligned to Player_buildNodeTree_recursive(player, 0, layerArray) at
+        // 0x6B4A6C: iterate the PSB "layer" array by index; every element
+        // becomes an independent node (no name-based dedup). Parent for all
+        // top-level layers is the synthetic root at index 0.
+        for (const auto &layerDict : *layerList) {
+            if (!layerDict) continue;
+            walkTree(layerDict, 0, nodes, resourceManager);
         }
 
+        // Aligned to libkrkr2.so Player+24 label map (populated at 0x6B4CE4
+        // with std::map::operator[] — last-write-wins semantics). Later
+        // duplicate labels overwrite earlier ones so stencil composite mask
+        // resolution and TJS layer-by-name lookups converge on the same node.
         std::unordered_map<std::string, int> nodeIndexByLabel;
         nodeIndexByLabel.reserve(nodes.size());
         for(const auto &node : nodes) {
             if(!node.layerName.empty()) {
-                nodeIndexByLabel.emplace(node.layerName, node.index);
+                nodeIndexByLabel[node.layerName] = node.index;
             }
         }
 
@@ -319,7 +324,7 @@ namespace motion::detail {
 
         if (auto logger = spdlog::get("plugin")) {
             logger->debug("buildNodeTree: clipLabel='{}', rootLayers={}, {} nodes built",
-                          clipLabel, layerNames->size(), nodes.size());
+                          clipLabel, layerList->size(), nodes.size());
         }
 
         return nodes;

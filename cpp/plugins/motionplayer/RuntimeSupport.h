@@ -106,9 +106,10 @@ namespace motion::detail {
         bool loop = false;
         double loopTime = -1.0;   // from PSB; >=0 means loop restart point
         double totalFrames = 0.0;
-        std::vector<std::string> layerNames;
-        std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>>
-            layersByName;
+        // Primary layer storage — PSB array order, duplicates preserved.
+        // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0) reading
+        // "layer" from Player+528 as a TJS Array iterated by index.
+        std::vector<std::shared_ptr<const PSB::PSBDictionary>> layerList;
         std::vector<std::string> sourceCandidates;
     };
 
@@ -160,10 +161,19 @@ namespace motion::detail {
         std::vector<FixedControllerOutputBinding> fixedControllerOutputs;
         std::vector<ClampControlBinding> clampControls;
         std::vector<std::string> mirrorVariableMatchList;
-        std::vector<std::string> layerNames;
-        std::unordered_map<std::string, std::shared_ptr<const PSB::PSBDictionary>> layersByName;
+        // Primary layer storage — PSB array order, duplicates preserved.
+        // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0) which reads
+        // the "layer" TJS Array from Player+528 and iterates by index.
+        std::vector<std::shared_ptr<const PSB::PSBDictionary>> layerList;
         std::vector<std::string> sourceCandidates;
-        std::unordered_map<std::string, MotionClip> clipsByLabel;
+        // Primary clip storage — PSB priority[] order preserved.
+        // Aligned to libkrkr2.so Player+548 (motion.priority TJSArray stored at
+        // 0x6B37D0) + Player+616 (priority[currentIndex].content at 0x6B38FC).
+        // Duplicate clip labels are allowed (index-addressable) but the
+        // auxiliary label→index map below resolves name-based lookups using
+        // last-wins semantics to mirror Player+24 labelMap behaviour.
+        std::vector<MotionClip> clipList;
+        std::unordered_map<std::string, int> clipIndexByLabel;
         std::unordered_map<std::string, TimelineControlBinding>
             timelineControlByLabel;
         std::vector<std::string> resourceAliases;

@@ -516,15 +516,18 @@ namespace motion {
             return nullptr;
         }
 
+        const auto &motion = *_runtime->activeMotion;
         const auto selectByLabel =
-            [this](const std::string &label) -> const detail::MotionClip * {
+            [&motion](const std::string &label) -> const detail::MotionClip * {
                 if(label.empty()) {
                     return nullptr;
                 }
-                const auto it = _runtime->activeMotion->clipsByLabel.find(label);
-                return it != _runtime->activeMotion->clipsByLabel.end()
-                    ? &it->second
-                    : nullptr;
+                const auto it = motion.clipIndexByLabel.find(label);
+                if(it == motion.clipIndexByLabel.end()) return nullptr;
+                const int idx = it->second;
+                if(idx < 0 || idx >= static_cast<int>(motion.clipList.size()))
+                    return nullptr;
+                return &motion.clipList[idx];
             };
 
         // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
@@ -546,49 +549,25 @@ namespace motion {
         }
 
         const auto &primaryLabels =
-            !_runtime->activeMotion->mainTimelineLabels.empty()
-                ? _runtime->activeMotion->mainTimelineLabels
-                : _runtime->activeMotion->diffTimelineLabels;
+            !motion.mainTimelineLabels.empty()
+                ? motion.mainTimelineLabels
+                : motion.diffTimelineLabels;
         for(const auto &label : primaryLabels) {
             if(const auto *clip = selectByLabel(label)) {
                 return clip;
             }
         }
 
-        if(_runtime->activeMotion->clipsByLabel.size() == 1) {
-            return &_runtime->activeMotion->clipsByLabel.begin()->second;
+        // Fallback — aligned to libkrkr2.so Player_initNonEmoteMotion reading
+        // priority[0].content at 0x6B38FC when no explicit selection exists.
+        if(motion.clipList.size() == 1) {
+            return &motion.clipList.front();
+        }
+        if(!motion.clipList.empty()) {
+            return &motion.clipList.front();
         }
 
         return nullptr;
-    }
-
-    const std::vector<std::string> &Player::activeLayerNames() const {
-        static const std::vector<std::string> empty;
-        if(!_runtime->activeMotion) {
-            return empty;
-        }
-
-        if(const auto *clip = selectActiveClip();
-           clip && !clip->layerNames.empty()) {
-            return clip->layerNames;
-        }
-
-        return _runtime->activeMotion->layerNames;
-    }
-
-    const std::unordered_map<
-        std::string, std::shared_ptr<const PSB::PSBDictionary>> *
-    Player::activeLayersByName() const {
-        if(!_runtime->activeMotion) {
-            return nullptr;
-        }
-
-        if(const auto *clip = selectActiveClip();
-           clip && !clip->layersByName.empty()) {
-            return &clip->layersByName;
-        }
-
-        return &_runtime->activeMotion->layersByName;
     }
 
     const std::vector<std::string> &Player::activeSourceCandidates() const {
