@@ -6,3 +6,5 @@
 - [Node tree construction](project_node_tree_construction.md) — Full build chain (0x6B51F0→0x6B4A6C→0x6B3C78), sourceWidth/Height NOT set at build time, only for camera(type==10) at render time
 - [Render pipeline timing](project_render_pipeline_timing.md) — Player_calcBounds runs AFTER updateLayers in progress(). sourceWidth/Height=0 for type=0 nodes. 3 coordinate systems. RenderNode struct layout.
 - [Transition crossfade architecture](project_transition_crossfade.md) — Full @trans crossfade chain: Layer offsets 616-808, handler vtable 0x1A297C8, alpha=elapsed*255/time, ConstAlphaBlend_SD pixel blend
+- [framesel / evaluateTimeline chain](project_framesel_analysis.md) — sub_6926B4 parses ONE frame, sub_692AB0 merges mask-gated content, sub_699AE4 lerps two slots. frameList NOT filtered/split. type semantics confirmed.
+- [Layer labelMap no dedup](project_label_map_no_dedup.md) — Player+24 std::map<ttstr,int32_t> built at tree-build not PSB-load; N dup labels → N nodes, last wins labelMap. Web port dedup in RuntimeSupport.cpp:869-874 is misalignment.
