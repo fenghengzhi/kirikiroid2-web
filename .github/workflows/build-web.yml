@@ -93,10 +93,12 @@ jobs:
 
       - name: Configure CMake
         run: |
+          set -o pipefail
           cmake --preset "Web Release Config" 2>&1 | tee /tmp/cmake-configure.log
 
       - name: Build
         run: |
+          set -o pipefail
           cmake --build out/web/release 2>&1 | tee /tmp/cmake-build.log
 
       - name: Upload logs on failure
