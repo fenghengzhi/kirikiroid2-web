@@ -1,0 +1,4 @@
+qiling>=1.4.6
+unicorn>=2.0.1
+capstone>=5.0
+pyelftools>=0.29
