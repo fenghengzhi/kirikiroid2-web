@@ -25,6 +25,7 @@
 #include "Defer.h"
 #include "ui/MessageBox.h"
 #include "cocos2d/MainScene.h"
+#include "LayerFrameDumper.h"
 
 void TVPGetMemoryInfo(TVPMemoryInfo &m) {
     size_t heapSize = (size_t)sbrk(0);
@@ -379,6 +380,8 @@ static void autoMountSiblingXp3(const std::string &startupPath) {
 }
 
 bool TVPCheckStartupArg() {
+    TVPInstallLayerFrameDumperIfRequested();
+
     char *selectedXp3 = krkr2_get_startup_xp3_path();
     if (selectedXp3) {
         std::string path(selectedXp3);
