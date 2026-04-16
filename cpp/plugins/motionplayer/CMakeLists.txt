@@ -7,8 +7,10 @@ target_sources(${PROJECT_NAME} PUBLIC
     main.cpp
     EmotePlayer.cpp
     PlayerCore.cpp
+    PlayerFrameProgress.cpp
     PlayerResource.cpp
     PlayerRender.cpp
+    PlayerRenderPrepare.cpp
     PlayerUpdateLayers.cpp
     PlayerQuery.cpp
     ResourceManager.cpp

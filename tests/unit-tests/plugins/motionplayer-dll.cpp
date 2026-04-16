@@ -288,6 +288,9 @@ TEST_CASE("motionplayer draw cache and playback state") {
     REQUIRE(player.getFrameLastTime() == 16.0);
     REQUIRE(player.getTickCount() == 16.0);
     REQUIRE(player.getFrameTickCount() == 1.0);
+    player.draw();
+    REQUIRE(getProp(player.captureCanvas(), TJS_W("sourceCount")).AsInteger() ==
+            1);
 
     player.clearCache();
     player.draw();
