@@ -1,0 +1,54 @@
+{
+  "env": {
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Skill(playwright-cli)",
+      "Skill(playwright-cli:*)",
+      "WebSearch",
+      "Read(//tmp/packinone_analysis/**)",
+      "Read(//private/tmp/packinone_analysis/**)",
+      "Skill(ralph-wiggum:cancel-ralph)",
+      "Skill(ralph-wiggum:cancel-ralph:*)",
+      "Read(//Users/bytedance/WebstormProjects/XposedTargetApp/app/src/main/**)",
+      "Read(//Users/bytedance/WebstormProjects/XposedTargetApp/app/**)",
+      "Read(//Users/bytedance/WebstormProjects/XposedTargetApp/**)",
+      "Read(//tmp/**)",
+      "Read(//private/tmp/**)",
+      "Read(//Users/bytedance/WebstormProjects/krkr2/krkr2/**)"
+    ],
+    "additionalDirectories": [
+      "/Users/bytedance/MyXposedModuleApp/app/src/main/java/com/example/myxposedmodule",
+      "/Users/bytedance/WebstormProjects/VirtualXposed/.claude",
+      "/Users/bytedance/WebstormProjects/XposedTargetApp"
+    ]
+  },
+  "enabledPlugins": {
+    "ralph-wiggum@claude-code-plugins": false,
+    "pua@pua-skills": false,
+    "playwright@claude-plugins-official": false
+  },
+  "extraKnownMarketplaces": {
+    "claude-code-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-code"
+      }
+    },
+    "claude-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-official"
+      }
+    },
+    "pua-skills": {
+      "source": {
+        "source": "github",
+        "repo": "tanweai/pua"
+      }
+    }
+  },
+  "effortLevel": "max"
+}
