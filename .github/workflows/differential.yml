@@ -17,7 +17,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Init submodules (public + private reference)
+        env:
+          PRIVATE_SUBMODULE_PAT: ${{ secrets.PRIVATE_SUBMODULE_PAT }}
+        run: |
+          git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
+          git -c submodule.reference.update=checkout submodule update --init --recursive
 
       # ── Emscripten ──
       - name: Cache Emscripten SDK
