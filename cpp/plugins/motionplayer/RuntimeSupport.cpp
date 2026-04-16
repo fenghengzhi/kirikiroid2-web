@@ -1171,7 +1171,10 @@ namespace motion::detail {
     } // namespace
 
     std::shared_ptr<PlayerRuntime> makePlayerRuntime() {
-        return std::make_shared<PlayerRuntime>();
+        auto runtime = std::make_shared<PlayerRuntime>();
+        runtime->defaultParameterEntry.rangeScale = 1.0;
+        runtime->defaultParameterEntry.mode = 0;
+        return runtime;
     }
 
     std::string narrow(const ttstr &value) { return value.AsStdString(); }
@@ -1262,9 +1265,31 @@ namespace motion::detail {
         collectControlMetadata(*snapshot);
         collectRootResources(root, *snapshot);
         if(logoChainTraceEnabled(snapshot)) {
+            const auto rootParameterList =
+                dictionaryList(snapshot->root, {"parameter"});
+            const auto rootParameterizeValue =
+                (*snapshot->root)["parameterize"];
+            const auto contentNode =
+                navigateDictionaryPath(snapshot->root, "content");
+            const auto contentParameterList = contentNode
+                ? dictionaryList(contentNode, {"parameter"})
+                : nullptr;
+            const auto contentParameterizeValue = contentNode
+                ? (*contentNode)["parameterize"]
+                : std::shared_ptr<PSB::IPSBValue>{};
+            const auto describeValue =
+                [](const std::shared_ptr<PSB::IPSBValue> &value) -> std::string {
+                    if(!value) return "<none>";
+                    if(std::dynamic_pointer_cast<PSB::PSBList>(value)) return "list";
+                    if(std::dynamic_pointer_cast<PSB::PSBDictionary>(value)) return "dict";
+                    if(std::dynamic_pointer_cast<PSB::PSBString>(value)) return "string";
+                    if(std::dynamic_pointer_cast<PSB::PSBNumber>(value)) return "number";
+                    if(std::dynamic_pointer_cast<PSB::PSBBool>(value)) return "bool";
+                    return "other";
+                };
             logoChainTraceLogf(
                 snapshot->path, "snapshot.parsed", "PSB parse", -1.0,
-                "path={} clipCount={} mainLabels={} sourceCount={} resourceAliases={} variableCount={} controllerBindings={} fixedControllerOutputs={} selectorControls={} timelineControls={} instantVariables={} clampControls={} mirrorMatches={}",
+                "path={} clipCount={} mainLabels={} sourceCount={} resourceAliases={} variableCount={} controllerBindings={} fixedControllerOutputs={} selectorControls={} timelineControls={} instantVariables={} clampControls={} mirrorMatches={} rootParameterCount={} rootParameterize={} contentParameterCount={} contentParameterize={}",
                 snapshot->path, snapshot->clipsByLabel.size(),
                 joinStrings(snapshot->mainTimelineLabels),
                 snapshot->sourceCandidates.size(),
@@ -1276,7 +1301,11 @@ namespace motion::detail {
                 snapshot->timelineControlByLabel.size(),
                 snapshot->instantVariableLabels.size(),
                 snapshot->clampControls.size(),
-                snapshot->mirrorVariableMatchList.size());
+                snapshot->mirrorVariableMatchList.size(),
+                rootParameterList ? rootParameterList->size() : 0,
+                describeValue(rootParameterizeValue),
+                contentParameterList ? contentParameterList->size() : 0,
+                describeValue(contentParameterizeValue));
             for(const auto &[resourcePath, resource] : snapshot->resourcesByPath) {
                 if(!hasSuffix(resourcePath, "/pixel") &&
                    !hasSuffix(resourcePath, "/pal")) {

@@ -83,13 +83,18 @@ namespace motion::detail {
         // Recursively walk PSB layer tree, appending nodes to the flat vector.
         void walkTree(const std::shared_ptr<const PSB::PSBDictionary> &psbNode,
                       int parentIdx,
-                      std::vector<MotionNode> &nodes) {
+                      std::vector<MotionNode> &nodes,
+                      motion::ResourceManager *resourceManager) {
             if (!psbNode) return;
 
             MotionNode node;
             node.index = static_cast<int>(nodes.size());
             node.parentIndex = parentIdx;
             node.psbNode = psbNode;
+            if(resourceManager) {
+                node.layerId1 = resourceManager->requireLayerId();
+                node.layerId2 = resourceManager->requireLayerId();
+            }
 
             // "label" → layerName (node+0)
             node.layerName = nodeTreePsbString(psbNode, "label");
@@ -103,6 +108,14 @@ namespace motion::detail {
             // "coordinate" → coordinateMode (node+24)
             if (auto v = nodeTreePsbNumber(psbNode, "coordinate"))
                 node.coordinateMode = static_cast<int>(*v);
+
+            // "parameterize" → parameter table index (node+8 in libkrkr2.so)
+            if (auto v = nodeTreePsbNumber(psbNode, "parameterize"))
+                node.parameterizeIndex = static_cast<int>(*v);
+            if (node.nodeType == 0) {
+                if (auto v = nodeTreePsbNumber(psbNode, "objTriPriority"))
+                    node.objTriPriority = static_cast<int>(*v);
+            }
 
             // "inheritMask" → inheritFlags (node+40, default 0x1FC)
             if (auto v = nodeTreePsbNumber(psbNode, "inheritMask"))
@@ -214,7 +227,7 @@ namespace motion::detail {
                 for (int i = 0; i < static_cast<int>(children->size()); ++i) {
                     auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                         (*children)[i]);
-                    walkTree(child, thisIdx, nodes);
+                    walkTree(child, thisIdx, nodes, resourceManager);
                 }
             }
         }
@@ -223,7 +236,8 @@ namespace motion::detail {
 
     std::vector<MotionNode> buildNodeTree(
         const MotionSnapshot &snapshot,
-        const std::string &clipLabel) {
+        const std::string &clipLabel,
+        motion::ResourceManager *resourceManager) {
 
         std::vector<MotionNode> nodes;
         // Aligned to Player_buildNodeTree (0x6B51F0): root index 0 is a
@@ -263,7 +277,7 @@ namespace motion::detail {
         for (const auto &name : *layerNames) {
             auto it = layersByName->find(name);
             if (it == layersByName->end()) continue;
-            walkTree(it->second, 0, nodes);
+            walkTree(it->second, 0, nodes, resourceManager);
         }
 
         std::unordered_map<std::string, int> nodeIndexByLabel;

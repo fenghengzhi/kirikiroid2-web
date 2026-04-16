@@ -342,6 +342,10 @@ namespace motion {
                     state.scaleX,
                     state.scaleY);
             }
+            const auto previousSrc = node.interpolatedCache.src;
+            const auto previousFrameType = node.currentFrameType;
+            const auto previousClipStartTime = node.interpolatedCache.clipStartTime;
+            const auto previousMotionDtgt = node.interpolatedCache.motionDtgt;
             node.currentFrameType = state.frameType;
             // libkrkr2.so uses node+52 both as the PSB-seeded stencil bits
             // (0x6B3C78) and as the non-zero runtime gate consumed by
@@ -386,6 +390,18 @@ namespace motion {
             node.interpolatedCache.motionTimeOffset = state.motionTimeOffset;
             node.interpolatedCache.clipStartTime = state.clipStartTime;
             node.interpolatedCache.motionDtgt = state.motionDtgt;
+
+            // Aligned to libkrkr2.so Player_evaluateTimeline (0x699AE4):
+            // node+44 participates in the "need update" gate. The local port
+            // previously only set this byte from sub_6BE0C0 itself, which left
+            // motion sub-nodes unable to trigger on the first frame where the
+            // resolved source/clip actually changed.
+            if (previousFrameType != state.frameType ||
+                previousSrc != state.src ||
+                previousClipStartTime != state.clipStartTime ||
+                previousMotionDtgt != state.motionDtgt) {
+                node.flags |= 0x01;
+            }
             // Particle data from FrameContentState (mask 0x100000)
             node.interpolatedCache.prtTrigger = state.prtTrigger;
             node.interpolatedCache.prtF = state.prtF;
@@ -1455,6 +1471,27 @@ namespace motion {
                 if (pc.shapeAABB[3] < sn.shapeAABB[3]) sn.shapeAABB[3] = pc.shapeAABB[3];
             }
             sn.parentClipIndex = static_cast<int>(si);
+
+            if(detail::logoSnapshotMarkEnabledForPath(_runtime->activeMotion->path) &&
+               _runtime->activeMotion->path.find("m2logo.mtn") != std::string::npos &&
+               _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0 &&
+               sn.index == 18) {
+                std::fprintf(
+                    stderr,
+                    "SNAPSHAPE frame=%.3f nodeIndex=%d label=%s slotOxOy=(%.3f,%.3f) interpOxOy=(%.3f,%.3f) clipOrigin=(%.3f,%.3f) accumPos=(%.3f,%.3f,%.3f) m=(%.6f,%.6f,%.6f,%.6f) shapeAABB=[%.3f,%.3f,%.3f,%.3f] parentClipIndex=%d\n",
+                    _clampedEvalTime,
+                    sn.index,
+                    sn.layerName.empty() ? "<none>" : sn.layerName.c_str(),
+                    sn.activeSlot().ox, sn.activeSlot().oy,
+                    sn.interpolatedCache.ox, sn.interpolatedCache.oy,
+                    sn.clipOriginX, sn.clipOriginY,
+                    sn.accumulated.posX, sn.accumulated.posY, sn.accumulated.posZ,
+                    sn.accumulated.m11, sn.accumulated.m12,
+                    sn.accumulated.m21, sn.accumulated.m22,
+                    sn.shapeAABB[0], sn.shapeAABB[1],
+                    sn.shapeAABB[2], sn.shapeAABB[3],
+                    sn.parentClipIndex);
+            }
         }
 
     }
@@ -1526,6 +1563,8 @@ namespace motion {
 
     void Player::updateLayersPhase3_MotionSubNode(double currentTime) {
         auto &nodes = _runtime->nodes;
+        const auto motionPath =
+            _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
         // Motion sub-node processing — aligned to sub_6BE0C0 (0x6BE0C0).
         // For each nodeType=3 (Motion) node, create/manage child Player instance.
         // Only runs when !isEmoteMode (0x6BE104).
@@ -1599,26 +1638,42 @@ namespace motion {
                         // elsewhere in the clip evaluation pipeline.
 
                         // Resolve motion and play (0x6BE3B4..0x6BE46C)
-                        // Binary: splits src by "/" via sub_697D34.
-                        // 1-element (no "/"): sub_6B29C0(child, 0, src) + Player_play(child, flags, src)
-                        //   → setChara(src), play the motion named src
-                        // 2-element ("chara/motion"): sub_6B29C0(child, 0, split[1]) + Player_play(child, flags, split[2])
-                        //   → setChara(split[0]=chara part), play motion split[1]
+                        // Aligned to libkrkr2.so sub_6BE0C0 + sub_697D34:
+                        // split src by "/" into segments.
+                        // - 1 segment: setChara(segment[0]), then Player_play(raw src)
+                        // - otherwise: setChara(segment[1]), then Player_play(segment[2])
+                        //
+                        // This is important for paths like
+                        // "motion/m2cheeseware_logo/icon25": the native code
+                        // ignores the first "motion" prefix and uses
+                        // chara="m2cheeseware_logo", motion="icon25".
                         {
-                            auto slashPos = src.find('/');
-                            if (slashPos == std::string::npos) {
+                            std::vector<std::string> segments;
+                            size_t start = 0;
+                            while (start <= src.size()) {
+                                const size_t slashPos = src.find('/', start);
+                                if (slashPos == std::string::npos) {
+                                    segments.push_back(src.substr(start));
+                                    break;
+                                }
+                                segments.push_back(src.substr(start, slashPos - start));
+                                start = slashPos + 1;
+                            }
+
+                            if (segments.size() <= 1) {
                                 // Single segment: binary sets chara to src itself
                                 // then Player_play with raw src (no "/" prefix)
                                 child.setChara(detail::widen(src));
                                 child.onFindMotion(detail::widen(src),
                                                    mn.activeSlot().motionFlags | v12);
+                            } else if (segments.size() >= 3) {
+                                child.setChara(detail::widen(segments[1]));
+                                child.onFindMotion(detail::widen(segments[2]),
+                                                   mn.activeSlot().motionFlags | v12);
                             } else {
-                                // Multi-segment: "chara/motion" format
-                                // Binary: setChara(chara), Player_play(motion)
-                                std::string charaPart = src.substr(0, slashPos);
-                                std::string motionPart = src.substr(slashPos + 1);
-                                child.setChara(detail::widen(charaPart));
-                                child.onFindMotion(detail::widen(motionPart),
+                                // Defensive fallback for unexpected 2-segment paths.
+                                child.setChara(detail::widen(segments[0]));
+                                child.onFindMotion(detail::widen(segments[1]),
                                                    mn.activeSlot().motionFlags | v12);
                             }
                         }
@@ -1627,6 +1682,23 @@ namespace motion {
                         if (!child._stealthMotion.IsEmpty()) {
                             child.onFindMotion(child._stealthMotion, PlayFlagStealth);
                             child._stealthMotion.Clear();
+                        }
+
+                        if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+                           motionPath.find("m2logo.mtn") != std::string::npos &&
+                           currentTime >= 0.0 && currentTime <= 50.0) {
+                            std::fprintf(
+                                stderr,
+                                "SNAPPLAY frame=%.3f nodeIndex=%d src=%s childMotionKey=%s childActiveMotion=%s childNodesBuilt=%d childPlaying=%d\n",
+                                currentTime,
+                                mn.index,
+                                src.c_str(),
+                                detail::narrow(child.getMotion()).c_str(),
+                                child._runtime && child._runtime->activeMotion
+                                    ? child._runtime->activeMotion->path.c_str()
+                                    : "<none>",
+                                child._runtime && child._runtime->nodesBuilt ? 1 : 0,
+                                child._allplaying ? 1 : 0);
                         }
 
 
@@ -1968,6 +2040,29 @@ namespace motion {
             // even for inactive/non-visible nodes.
             if (auto *childP = mn.getChildPlayer()) {
                 auto &child = *childP;
+                if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+                   motionPath.find("m2logo.mtn") != std::string::npos &&
+                   currentTime >= 30.0 && currentTime <= 50.0) {
+                    const auto *activeClip = child.selectActiveClip();
+                    std::fprintf(
+                        stderr,
+                        "SNAPCHILD phase=runtime frame=%.3f nodeIndex=%d src=%s parameterizeIndex=%d childActiveMotion=%s childMotionKey=%s childClip=%s childAllPlaying=%d childQueuing=%d childNodesBuilt=%d childNodeCount=%zu childNeedsAssignImages=%d\n",
+                        currentTime,
+                        mn.index,
+                        mn.activeSlot().src.empty() ? "<none>"
+                                                    : mn.activeSlot().src.c_str(),
+                        mn.parameterizeIndex,
+                        child._runtime && child._runtime->activeMotion
+                            ? child._runtime->activeMotion->path.c_str()
+                            : "<none>",
+                        detail::narrow(child.getMotion()).c_str(),
+                        activeClip ? activeClip->label.c_str() : "<none>",
+                        child._allplaying ? 1 : 0,
+                        child._queuing ? 1 : 0,
+                        child._runtime && child._runtime->nodesBuilt ? 1 : 0,
+                        child._runtime ? child._runtime->nodes.size() : 0,
+                        child._needsInternalAssignImages ? 1 : 0);
+                }
                 if (child._runtime && !child._runtime->nodes.empty()) {
                     auto &cr = child._runtime->nodes[0];
                     // Clip chain propagation (0x6BE278..0x6BE29C)
@@ -2460,7 +2555,7 @@ namespace motion {
                     child->_parentColorPacked = packed;
                 }
                 // emoteEdit propagation (0x6BF9C0..0x6BF9D4)
-                child->_emoteEditVariant = _emoteEditVariant;
+                child->_findMotionContextVariant = _findMotionContextVariant;
                 child->_zFactor = _zFactor;
                 child->_independentLayerInherit = _independentLayerInherit;
 
@@ -2796,9 +2891,11 @@ namespace motion {
             _needsInternalAssignImages = true;
             if (_frameLastTime == 0.0) {
                 an.anchorEnabled = false;
+                an.renderTreeFlag200 = false;
                 continue;
             }
             an.anchorEnabled = true;
+            an.renderTreeFlag200 = true;
             // Read width/height (0x6C0790..0x6C0848)
             double cw = an.interpolatedCache.width;
             double ch = an.interpolatedCache.height;
@@ -3037,7 +3134,13 @@ namespace motion {
     }
 
     void Player::calcBounds() {
-        ensureMotionLoaded();
+        if(!_runtime || !_runtime->activeMotion) {
+            _boundsMinX = 0.0;
+            _boundsMinY = 0.0;
+            _boundsMaxX = 0.0;
+            _boundsMaxY = 0.0;
+            return;
+        }
         ensureNodeTreeBuilt();
         const auto motionPath =
             _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
@@ -3193,8 +3296,10 @@ namespace motion {
             return;
         }
 
+        const bool inheritedFlag18 = _renderItemInheritedFlag18;
         auto &entries = _runtime->preparedRenderItems;
         const auto &nodes = _runtime->nodes;
+        const auto motionPath = _runtime->activeMotion->path;
         const int bitmask = _runtime->isEmoteMode ? 5193 : 5185;
         const auto &dam = _runtime->drawAffineMatrix;
         std::unordered_set<int> requiredGroupNodeIndices;
@@ -3228,27 +3333,76 @@ namespace motion {
             const auto &node = nodes[i];
             if(!node.accumulated.active) continue;
             if(!node.forceVisible && (((1 << node.nodeType) & bitmask) == 0)) {
+                if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+                   motionPath.find("m2logo.mtn") != std::string::npos &&
+                   _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0 &&
+                   (node.index == 18 || node.index == 19)) {
+                    std::fprintf(
+                        stderr,
+                        "SNAPPREPCAND frame=%.3f nodeIndex=%d label=%s phase=maskReject forceVisible=%d nodeType=%d bitmask=0x%x hasSource=%d currentSrc=%s drawFlag=%d visibleAncestorIndex=%d\n",
+                        _clampedEvalTime,
+                        node.index,
+                        node.layerName.empty() ? "<none>" : node.layerName.c_str(),
+                        node.forceVisible,
+                        node.nodeType,
+                        bitmask,
+                        node.hasSource ? 1 : 0,
+                        node.interpolatedCache.src.empty()
+                            ? "<none>"
+                            : node.interpolatedCache.src.c_str(),
+                        node.drawFlag ? 1 : 0,
+                        node.visibleAncestorIndex);
+                }
                 continue;
             }
             if(!node.hasSource || node.interpolatedCache.src.empty()) continue;
 
-            for(int ancestorIndex = node.visibleAncestorIndex;
+            if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+               motionPath.find("m2logo.mtn") != std::string::npos &&
+               _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0 &&
+               (node.index == 18 || node.index == 19)) {
+                std::fprintf(
+                    stderr,
+                    "SNAPPREPCAND frame=%.3f nodeIndex=%d label=%s phase=accept forceVisible=%d nodeType=%d bitmask=0x%x hasSource=%d currentSrc=%s drawFlag=%d visibleAncestorIndex=%d\n",
+                    _clampedEvalTime,
+                    node.index,
+                    node.layerName.empty() ? "<none>" : node.layerName.c_str(),
+                    node.forceVisible,
+                    node.nodeType,
+                    bitmask,
+                    node.hasSource ? 1 : 0,
+                    node.interpolatedCache.src.empty()
+                        ? "<none>"
+                        : node.interpolatedCache.src.c_str(),
+                    node.drawFlag ? 1 : 0,
+                    node.visibleAncestorIndex);
+            }
+
+            // libkrkr2.so sub_6C2334 (0x6C2334):
+            // leaf items always take node+1952->1904 as their parent item
+            // pointer, allocating that synthetic ancestor item on demand even
+            // when the ancestor itself has no source-backed render item.
+            if(node.visibleAncestorIndex >= 0 &&
+               node.visibleAncestorIndex < static_cast<int>(nodes.size()) &&
+               node.visibleAncestorIndex != node.index) {
+                requiredGroupNodeIndices.insert(node.visibleAncestorIndex);
+            }
+
+            for(int ancestorIndex =
+                    (node.visibleAncestorIndex >= 0 &&
+                     node.visibleAncestorIndex < static_cast<int>(nodes.size()))
+                        ? nodes[node.visibleAncestorIndex].visibleAncestorIndex
+                        : -1;
                 ancestorIndex >= 0 &&
                 ancestorIndex < static_cast<int>(nodes.size()); ) {
                 const auto &ancestor = nodes[ancestorIndex];
                 const bool isSpecialCompositeParent =
                     ancestor.nodeType == 12 && (ancestor.stencilType & 4) != 0;
-                const auto inserted = isSpecialCompositeParent
-                    ? requiredGroupNodeIndices.insert(ancestorIndex)
-                    : std::pair<std::unordered_set<int>::iterator, bool>{
-                          requiredGroupNodeIndices.end(), false
-                      };
+                if(isSpecialCompositeParent) {
+                    requiredGroupNodeIndices.insert(ancestorIndex);
+                }
                 const int nextAncestorIndex = ancestor.visibleAncestorIndex;
-                if(!inserted.second || nextAncestorIndex == ancestorIndex) {
-                    if(!isSpecialCompositeParent && nextAncestorIndex != ancestorIndex) {
-                        ancestorIndex = nextAncestorIndex;
-                        continue;
-                    }
+                if(nextAncestorIndex == ancestorIndex) {
                     break;
                 }
                 ancestorIndex = nextAncestorIndex;
@@ -3263,6 +3417,9 @@ namespace motion {
             const bool needsGroupEntry =
                 requiredGroupNodeIndices.find(static_cast<int>(i)) !=
                 requiredGroupNodeIndices.end();
+            const bool syntheticParentOnly =
+                needsGroupEntry && !hasOwnSource && !node.forceVisible &&
+                (((1 << node.nodeType) & bitmask) == 0);
             if(!needsGroupEntry &&
                !node.forceVisible &&
                (((1 << node.nodeType) & bitmask) == 0)) {
@@ -3274,6 +3431,9 @@ namespace motion {
             entry.nodeIndex = static_cast<int>(i);
             entry.hasOwnSource = hasOwnSource;
             entry.groupOnly = !hasOwnSource && needsGroupEntry;
+            entry.topLevelList = true;
+            entry.groupList = false;
+            entry.selfSeedChildList = false;
             if(hasOwnSource) {
                 entry.sourceKey = node.interpolatedCache.src;
                 entry.srcRef = findSource(detail::widen(entry.sourceKey));
@@ -3285,17 +3445,59 @@ namespace motion {
             entry.drawFlag =
                 node.drawFlag || node.stencilCompositeMaskReferenced ||
                 needsGroupEntry;
-            entry.sortKey = node.priorDraw != 0
-                ? static_cast<double>(node.priorDraw)
-                : _priorDraw;
-            entry.blendMode = node.accumulated.blendMode;
-            entry.packedColors = copyPackedColorsFromBytes(node.colorBytes);
-            entry.opacity = node.accumulated.opacity;
-            entry.updateCount = node.stencilType;
-            entry.visibleAncestorIndex = node.visibleAncestorIndex;
-            entry.meshType = node.meshType;
-            entry.meshDivX = node.meshDivX;
-            entry.meshDivY = node.meshDivY;
+            entry.rawFlag16 = node.renderTreeFlag201;
+            entry.skipFlag0 =
+                (((_preview ? 1097 : 1089) & (1 << node.nodeType)) == 0);
+            entry.skipFlag1 =
+                !(inheritedFlag18 || (node.priorDraw != 0));
+            // libkrkr2.so sub_6C2334 copies player+1012 straight into item+248.
+            // Keep that variant explicit in the local render item instead of
+            // folding it away completely.
+            entry.contextVariant = _findMotionContextVariant;
+            entry.layerId = node.layerId1;
+            entry.layerId2 = node.layerId2;
+
+            if(syntheticParentOnly) {
+                // libkrkr2.so sub_6C2334 (0x6C2334):
+                // when a leaf item references node+1952->1904, the ancestor
+                // item is allocated as a zero-initialized 0x1B0 container.
+                // It is not populated from the ancestor node's viewport/parent
+                // chain at allocation time. Keep the local synthetic parent as
+                // a neutral container and let child union/build steps fill it.
+                entry.blendMode = 0;
+                entry.paintBox = {1.0f, 1.0f, -1.0f, -1.0f};
+                entry.viewport = {1.0f, 1.0f, -1.0f, -1.0f};
+                entry.hasViewport = false;
+                entry.visibleAncestorIndex = -1;
+                const bool specialCompositeParent =
+                    node.nodeType == 12 && (node.stencilType & 4) != 0;
+                if(specialCompositeParent) {
+                    // libkrkr2.so 0x6C3740..0x6C37E4:
+                    // special type12 parents are inserted into the auxiliary
+                    // render list (a3) and seeded into their own item+24 child
+                    // vector. They are not inserted into the main top-level
+                    // list at this point.
+                    entry.topLevelList = false;
+                    entry.groupList = true;
+                    entry.selfSeedChildList = true;
+                }
+            } else {
+                // Aligned to libkrkr2.so sub_6C2334 (0x6C2334):
+                // render item +0x40 stores node accumulated posZ (node+0x5F8),
+                // while coordinateMode and objTriPriority are copied into
+                // separate integer fields (+0xEC/+0xF0).
+                entry.sortKey = node.accumulated.posZ;
+                entry.blendMode = node.accumulated.blendMode;
+                entry.packedColors = copyPackedColorsFromBytes(node.colorBytes);
+                entry.opacity = node.accumulated.opacity;
+                entry.updateCount = node.stencilType;
+                entry.coordinateMode = node.coordinateMode;
+                entry.objTriPriority = node.objTriPriority;
+                entry.visibleAncestorIndex = node.visibleAncestorIndex;
+                entry.meshType = node.meshType;
+                entry.meshDivX = node.meshDivX;
+                entry.meshDivY = node.meshDivY;
+            }
 
             bool havePaintBox = false;
             if(hasOwnSource && node.clipW > 0.0 && node.clipH > 0.0) {
@@ -3360,7 +3562,8 @@ namespace motion {
                 };
             }
 
-            if(node.parentClipIndex >= 0
+            if(!syntheticParentOnly &&
+               node.parentClipIndex >= 0
                && node.parentClipIndex < static_cast<int>(nodes.size())) {
                 const auto &clipNode = nodes[node.parentClipIndex];
                 if(clipNode.shapeAABB[2] >= clipNode.shapeAABB[0]
@@ -3411,7 +3614,7 @@ namespace motion {
                 detail::logoChainTraceLogf(
                     motionPath, "prepare.item", "0x6C2334",
                     _clampedEvalTime,
-                    "nodeIndex={} src={} blend={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] meshType={} meshDiv=({},{}) sortKey={:.3f} nodeDrawFlag={} maskRef={} itemDrawFlag={} visibleAncestorIndex={} slotDone={} frameType={} stencilBase={} stencilType={}",
+                    "nodeIndex={} src={} blend={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] meshType={} meshDiv=({},{}) sortKey={:.3f} coordinateMode={} objTriPriority={} layerId=({}, {}) nodeDrawFlag={} maskRef={} itemDrawFlag={} visibleAncestorIndex={} slotDone={} frameType={} stencilBase={} stencilType={}",
                     entry.nodeIndex,
                     entry.sourceKey.empty() ? std::string("<none>")
                                             : entry.sourceKey,
@@ -3422,6 +3625,8 @@ namespace motion {
                     effectiveColor[2], effectiveColor[3],
                     entry.meshType, entry.meshDivX,
                     entry.meshDivY, entry.sortKey,
+                    entry.coordinateMode, entry.objTriPriority,
+                    entry.layerId, entry.layerId2,
                     node.drawFlag ? 1 : 0,
                     node.stencilCompositeMaskReferenced ? 1 : 0,
                     entry.drawFlag ? 1 : 0,
@@ -3489,6 +3694,41 @@ namespace motion {
                     "PreparedRenderItem viewport propagation diverged from parent clip chain");
             }
 
+            if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+               motionPath.find("m2logo.mtn") != std::string::npos &&
+               _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0 &&
+               (entry.nodeIndex == 14 || entry.nodeIndex == 15 ||
+                entry.nodeIndex == 19 ||
+                (entry.nodeIndex >= 20 && entry.nodeIndex <= 29))) {
+                std::fprintf(
+                    stderr,
+                    "SNAPPREP frame=%.3f nodeIndex=%d source=%s hasOwnSource=%d groupOnly=%d rawFlags=[%d,%d,%d,%d] priorDraw=%d inherited18=%d sortKey=%.3f coordinateMode=%d objTriPriority=%d visibleAncestorIndex=%d drawFlag=%d opacity=%d paintBox=[%.1f,%.1f,%.1f,%.1f] viewport=%s\n",
+                    _clampedEvalTime,
+                    entry.nodeIndex,
+                    entry.sourceKey.empty() ? "<none>" : entry.sourceKey.c_str(),
+                    entry.hasOwnSource ? 1 : 0,
+                    entry.groupOnly ? 1 : 0,
+                    entry.rawFlag16 ? 1 : 0,
+                    entry.skipFlag0 ? 1 : 0,
+                    entry.skipFlag1 ? 0 : 1,
+                    entry.drawFlag ? 1 : 0,
+                    node.priorDraw,
+                    inheritedFlag18 ? 1 : 0,
+                    entry.sortKey,
+                    entry.coordinateMode,
+                    entry.objTriPriority,
+                    entry.visibleAncestorIndex,
+                    entry.drawFlag ? 1 : 0,
+                    entry.opacity,
+                    entry.paintBox[0], entry.paintBox[1],
+                    entry.paintBox[2], entry.paintBox[3],
+                    entry.hasViewport
+                        ? fmt::format("[{:.1f},{:.1f},{:.1f},{:.1f}]",
+                                      entry.viewport[0], entry.viewport[1],
+                                      entry.viewport[2], entry.viewport[3]).c_str()
+                        : "<invalid>");
+            }
+
             entries.push_back(std::move(entry));
         }
 
@@ -3539,11 +3779,13 @@ namespace motion {
         }
     }
 
-    bool Player::prepareRenderItems() {
+    bool Player::prepareRenderItems(bool inheritedFlag18) {
         if(!_runtime) {
             return false;
         }
 
+        const bool savedInheritedFlag18 = _renderItemInheritedFlag18;
+        _renderItemInheritedFlag18 = inheritedFlag18;
         _runtime->preparedRenderItems.clear();
         const auto motionPath =
             _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
@@ -3552,8 +3794,29 @@ namespace motion {
             if(!child || !child->_runtime) {
                 return;
             }
-            child->prepareRenderItems();
+            child->prepareRenderItems(
+                inheritedFlag18 || (_priorDraw != 0.0));
             auto &childEntries = child->_runtime->preparedRenderItems;
+            if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+               motionPath.find("m2logo.mtn") != std::string::npos &&
+               _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0) {
+                const auto *activeClip = child->selectActiveClip();
+                std::fprintf(
+                    stderr,
+                    "SNAPCHILD phase=prepare frame=%.3f childActiveMotion=%s childMotionKey=%s childClip=%s childNodesBuilt=%d childNodeCount=%zu childPreparedItemCount=%zu firstSource=%s\n",
+                    _clampedEvalTime,
+                    child->_runtime->activeMotion
+                        ? child->_runtime->activeMotion->path.c_str()
+                        : "<none>",
+                    detail::narrow(child->getMotion()).c_str(),
+                    activeClip ? activeClip->label.c_str() : "<none>",
+                    child->_runtime->nodesBuilt ? 1 : 0,
+                    child->_runtime->nodes.size(),
+                    childEntries.size(),
+                    childEntries.empty() || childEntries.front().sourceKey.empty()
+                        ? "<none>"
+                        : childEntries.front().sourceKey.c_str());
+            }
             if(childEntries.empty()) {
                 return;
             }
@@ -3581,13 +3844,22 @@ namespace motion {
             for(size_t ni = 1; ni < _runtime->nodes.size(); ++ni) {
                 auto &node = _runtime->nodes[ni];
                 if(node.nodeType == 3) {
+                    if(auto *child = node.getChildPlayer()) {
+                        child->_renderItemInheritedFlag18 =
+                            _renderItemInheritedFlag18 || (node.priorDraw != 0);
+                    }
                     prependChildEntries(node.getChildPlayer());
                 } else if(node.nodeType == 4) {
                     const int particleCount = node.getParticleCount();
                     for(int pi = 0; pi < particleCount; ++pi) {
-                        prependChildEntries(node.getParticleChild(pi));
-                    }
-                }
+                        if(auto *child = node.getParticleChild(pi)) {
+                            child->_renderItemInheritedFlag18 =
+                                _renderItemInheritedFlag18 ||
+                                (node.priorDraw != 0);
+                        }
+	                        prependChildEntries(node.getParticleChild(pi));
+	                    }
+	                }
             }
         }
 
@@ -3622,6 +3894,111 @@ namespace motion {
                 _runtime->preparedRenderItems.size(), beforeSort.str(),
                 afterSort.str());
         }
+
+        std::unordered_map<int, detail::PlayerRuntime::PreparedRenderItem *>
+            entryPtrByNode;
+        entryPtrByNode.reserve(_runtime->preparedRenderItems.size());
+        for(auto &item : _runtime->preparedRenderItems) {
+            item.parentItem = nullptr;
+            item.childItems.clear();
+            entryPtrByNode.emplace(item.nodeIndex, &item);
+        }
+        for(auto &item : _runtime->preparedRenderItems) {
+            if(item.selfSeedChildList) {
+                item.childItems.push_back(&item);
+            }
+        }
+        for(auto &item : _runtime->preparedRenderItems) {
+            const int parentNodeIndex = item.visibleAncestorIndex;
+            if(parentNodeIndex < 0 || parentNodeIndex == item.nodeIndex) {
+                continue;
+            }
+            const auto it = entryPtrByNode.find(parentNodeIndex);
+            if(it == entryPtrByNode.end()) {
+                continue;
+            }
+            const auto &candidateNode =
+                _runtime->nodes[static_cast<size_t>(item.nodeIndex)];
+            if(it->second->selfSeedChildList &&
+               (candidateNode.nodeType == 0 || candidateNode.nodeType == 3)) {
+                continue;
+            }
+            item.parentItem = it->second;
+            it->second->childItems.push_back(&item);
+        }
+
+        // Align to 0x6C3800..0x6C3924 and sub_6F3424:
+        // under a special type12 composite parent, nodeType 0 children are
+        // appended directly; nodeType 3 children append directly only in
+        // preview mode, otherwise their child vector is spliced into the
+        // parent's child vector.
+        for(auto &parentItem : _runtime->preparedRenderItems) {
+            if(!parentItem.selfSeedChildList) {
+                continue;
+            }
+            const auto parentNodeIndex = parentItem.nodeIndex;
+            for(auto &candidate : _runtime->preparedRenderItems) {
+                if(candidate.nodeIndex == parentNodeIndex) {
+                    continue;
+                }
+                if(candidate.visibleAncestorIndex != parentNodeIndex) {
+                    continue;
+                }
+                const auto &candidateNode =
+                    _runtime->nodes[static_cast<size_t>(candidate.nodeIndex)];
+                if(candidateNode.nodeType == 0) {
+                    candidate.parentItem = &parentItem;
+                    parentItem.childItems.push_back(&candidate);
+                    continue;
+                }
+                if(candidateNode.nodeType != 3) {
+                    continue;
+                }
+                if(_preview) {
+                    candidate.parentItem = &parentItem;
+                    parentItem.childItems.push_back(&candidate);
+                } else {
+                    for(auto *grandChild : candidate.childItems) {
+                        if(!grandChild) {
+                            continue;
+                        }
+                        grandChild->parentItem = &parentItem;
+                        parentItem.childItems.push_back(grandChild);
+                    }
+                }
+            }
+        }
+
+        if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+           motionPath.find("m2logo.mtn") != std::string::npos &&
+           _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
+            for(size_t i = 0; i < _runtime->preparedRenderItems.size(); ++i) {
+                const auto &item = _runtime->preparedRenderItems[i];
+                if(!(item.nodeIndex == 14 || item.nodeIndex == 15 ||
+                     item.nodeIndex == 19 ||
+                     (item.nodeIndex >= 20 && item.nodeIndex <= 29))) {
+                    continue;
+                }
+                std::fprintf(
+                    stderr,
+                    "SNAPPREPORDER frame=%.3f order=%zu nodeIndex=%d source=%s groupOnly=%d topLevel=%d groupList=%d selfSeed=%d sortKey=%.3f visibleAncestorIndex=%d parentNodeIndex=%d childCount=%zu coordinateMode=%d objTriPriority=%d\n",
+                    _clampedEvalTime,
+                    i,
+                    item.nodeIndex,
+                    item.sourceKey.empty() ? "<none>" : item.sourceKey.c_str(),
+                    item.groupOnly ? 1 : 0,
+                    item.topLevelList ? 1 : 0,
+                    item.groupList ? 1 : 0,
+                    item.selfSeedChildList ? 1 : 0,
+                    item.sortKey,
+                    item.visibleAncestorIndex,
+                    item.parentItem ? item.parentItem->nodeIndex : -1,
+                    item.childItems.size(),
+                    item.coordinateMode,
+                    item.objTriPriority);
+            }
+        }
+        _renderItemInheritedFlag18 = savedInheritedFlag18;
         return !_runtime->preparedRenderItems.empty();
     }
 

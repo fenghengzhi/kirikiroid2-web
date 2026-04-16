@@ -39,6 +39,8 @@ namespace motion::detail {
         // Identity (from PSB, set once during tree build)
         int index = 0;
         int parentIndex = -1;          // node+36
+        int layerId1 = 0;              // node+16: first requireLayerId result
+        int layerId2 = 0;              // node+20: second requireLayerId result
         int nodeType = 0;              // node+28
         int coordinateMode = 0;        // node+24
         int inheritFlags = 0x1FC;      // node+40. Player_updateLayers (0x6BB33C)
@@ -59,6 +61,11 @@ namespace motion::detail {
         int meshDivision = 0;         // "meshDivision" from PSB (node+2008)
         int meshDivX = 0;             // node+2012: computed grid width
         int meshDivY = 0;             // node+2016: computed grid height
+        int objTriPriority = 0;       // node+2136: "objTriPriority" for type==0
+        // Aligned to libkrkr2.so Player_initNodeFields (0x6B3C78):
+        // node+8 points to an entry selected from the player's 56-byte
+        // parameter table using the PSB "parameterize" index.
+        int parameterizeIndex = -1;
         // Mesh inverse matrix for sub_69AE74 child deformation (node+2096..2132)
         double meshInvM11 = 0, meshInvM12 = 0;  // node+2096, node+2104
         double meshInvM21 = 0, meshInvM22 = 0;  // node+2112, node+2120
@@ -327,7 +334,20 @@ namespace motion::detail {
         // Parent clip region index (replaces node+1936 pointer)
         int parentClipIndex = -1;
 
-        // Anchor enabled flag (node+200 in sub_6C0528 context)
+        // node+200 / node+201 are consumed by sub_6BC4F0 and sub_6C2334.
+        // Current-turn evidence:
+        // - node+200 is zero-initialized by sub_699390 via STRB [node,#0xC8]
+        // - node+200 is later written by sub_6C0528 (anchor path) via STRB [node,#0xC8]
+        // - node+201 is read by sub_6C2334 via LDRB [node,#0xC9]
+        // - current ctor/deque/build-node review found no standalone init writer
+        //   for node+201 inside the motionplayer node lifecycle
+        bool renderTreeFlag200 = false; // node+200 / 0xC8
+        // node+201 / 0xC9. Read by 0x6BC4F0 and copied into item+16 by
+        // 0x6C2334. There is no standalone init writer on the current reachable
+        // motionplayer node ctor/build paths; the byte behaves as a default-zero
+        // state that propagates through the native copy chain via 0x6F468C
+        // (`*(_WORD *)(dst + 200) = *(_WORD *)(src + 200)`).
+        bool renderTreeFlag201 = false;
         bool anchorEnabled = false;
 
         // Color bytes for anchor damping (node+100..115: 4 sets of RGBA)

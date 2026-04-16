@@ -8,6 +8,10 @@
 #include <string>
 #include <vector>
 
+namespace motion {
+    class ResourceManager;
+}
+
 namespace motion::detail {
 
     struct MotionSnapshot;
@@ -19,6 +23,7 @@ namespace motion::detail {
     // parent node index, with top-level layers using parentIndex=0.
     std::vector<MotionNode> buildNodeTree(
         const MotionSnapshot &snapshot,
-        const std::string &clipLabel);
+        const std::string &clipLabel,
+        motion::ResourceManager *resourceManager = nullptr);
 
 } // namespace motion::detail

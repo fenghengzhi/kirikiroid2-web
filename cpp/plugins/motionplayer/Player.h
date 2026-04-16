@@ -489,7 +489,7 @@ namespace motion {
         const std::vector<std::string> &activeSourceCandidates() const;
         void calcBounds();
         void updateLayers();
-        bool prepareRenderItems();
+        bool prepareRenderItems(bool inheritedFlag18 = false);
         void appendPreparedRenderItems();
         void applyPreparedRenderItemTranslateOffsets();
         bool buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight);
@@ -553,7 +553,8 @@ namespace motion {
         bool _clearEnabled = false;
         bool _d3dDrawMode = false; // libkrkr2.so byte_909: set when draw(D3DAdaptor) called
         double _hitThreshold = 0.0;
-        bool _preview = false;
+        bool _preview = false; // libkrkr2.so +1096
+        bool _renderItemInheritedFlag18 = false; // sub_6C2334 arg6 low-bit lineage
         double _outsideFactor = 0.0;
         tTJSVariant _resourceManager;
         ttstr _stealthChara;
@@ -711,9 +712,17 @@ namespace motion {
         // Created via TJS eval "new Math.RandomGenerator()" during init.
         tTJSVariant _tjsRandomGenerator;  // player+992
 
-        // Aligned to libkrkr2.so player+1012: emoteEdit TJS variant.
-        // Propagated to child particle players (sub_6BF0DC at 0x6BF9C0).
-        tTJSVariant _emoteEditVariant;    // player+1012
+        // Aligned to libkrkr2.so player+1012:
+        // - written from Player_playImpl / load-motion result path
+        // - propagated to child particle players (sub_6BF0DC at 0x6BF9C0)
+        // - copied into render item +248 by sub_6C2334
+        // Its exact semantic name is still under investigation, so keep the
+        // local field neutral instead of claiming it is emoteEdit-specific.
+        // libkrkr2.so player+1012:
+        // second result returned by Player_loadMotion / Player_playImpl and
+        // then fed back into Player_loadMotion as the first argument to
+        // "findMotion" (0x6B0F10 / 0x6B2284), including child-player copies.
+        tTJSVariant _findMotionContextVariant;    // player+1012
     };
 
 } // namespace motion

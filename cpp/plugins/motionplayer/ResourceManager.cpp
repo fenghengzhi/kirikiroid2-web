@@ -100,6 +100,10 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
     return loaded;
 }
 
+tTJSVariant motion::ResourceManager::loadSource(ttstr path) const {
+    return load(path);
+}
+
 void motion::ResourceManager::unload(ttstr path) const {
     LOGGER->debug("ResourceManager::unload({})", path.AsStdString());
     if(!_state) {
@@ -123,6 +127,10 @@ void motion::ResourceManager::clearCache() const {
     _state->loadedModules.clear();
     _state->lastLoadedPath.clear();
     _state->lastLoadedModule.Clear();
+    _state->layerIdsByName.clear();
+    _state->layerNamesById.clear();
+    _state->usedLayerIds.clear();
+    _state->nextLayerId = 1;
 }
 
 tTJSVariant motion::ResourceManager::getLastLoadedModule() const {
@@ -136,4 +144,51 @@ tTJSVariant motion::ResourceManager::findLoaded(ttstr path) const {
 
     const auto it = _state->loadedModules.find(path.AsStdString());
     return it != _state->loadedModules.end() ? it->second : tTJSVariant{};
+}
+
+tTJSVariant motion::ResourceManager::findSource(ttstr path) const {
+    return findLoaded(path);
+}
+
+tjs_int motion::ResourceManager::requireLayerId() {
+    if(!_state) {
+        return 0;
+    }
+
+    while(_state->usedLayerIds.find(_state->nextLayerId) !=
+          _state->usedLayerIds.end()) {
+        ++_state->nextLayerId;
+    }
+    const auto id = _state->nextLayerId;
+    _state->usedLayerIds.insert(id);
+    ++_state->nextLayerId;
+    return id;
+}
+
+tjs_int motion::ResourceManager::requireLayerIdForName(ttstr name) {
+    if(!_state) {
+        return 0;
+    }
+    const auto key = name.AsStdString();
+    if(const auto it = _state->layerIdsByName.find(key);
+       it != _state->layerIdsByName.end()) {
+        return it->second;
+    }
+
+    const auto id = requireLayerId();
+    _state->layerIdsByName[key] = id;
+    _state->layerNamesById[id] = key;
+    return id;
+}
+
+void motion::ResourceManager::releaseLayerId(tjs_int id) {
+    if(!_state || id == 0) {
+        return;
+    }
+    _state->usedLayerIds.erase(id);
+    if(const auto it = _state->layerNamesById.find(id);
+       it != _state->layerNamesById.end()) {
+        _state->layerIdsByName.erase(it->second);
+        _state->layerNamesById.erase(it);
+    }
 }

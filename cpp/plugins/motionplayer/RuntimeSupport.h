@@ -172,6 +172,15 @@ namespace motion::detail {
     };
 
     struct PlayerRuntime {
+        struct ParameterEntry {
+            std::string id;
+            bool discretization = false;
+            double rangeBegin = 0.0;
+            double rangeEnd = 0.0;
+            double rangeScale = 1.0;
+            double value = 0.0;
+            int mode = 0; // aligns to entry+48 reads in 0x6BE0C0
+        };
         std::unordered_map<std::string, std::shared_ptr<MotionSnapshot>> motionsByKey;
         std::unordered_map<std::string, tTJSVariant> sourcesByKey;
         std::shared_ptr<MotionSnapshot> activeMotion;
@@ -179,6 +188,24 @@ namespace motion::detail {
         std::vector<std::string> playingTimelineLabels;
         std::unordered_map<std::string, tjs_int> layerIdsByName;
         std::unordered_map<tjs_int, std::string> layerNamesById;
+        tjs_int nextLayerAbsolute = 1;
+        struct LayerRenderState {
+            tjs_int layerId = 0;
+            bool clipEnabled = true;
+            bool initialized = false;
+            bool isDirty = false;
+            tjs_int absolute = 0;
+            tjs_int hitThreshold = 256;
+            tTJSVariant layerObject;
+            tTJSVariant layerGetter;
+            std::array<float, 4> clipRect{0.f, 0.f, 0.f, 0.f};
+            std::array<float, 4> worldRect{0.f, 0.f, 0.f, 0.f};
+            std::array<float, 4> localRect{0.f, 0.f, 0.f, 0.f};
+            std::array<std::uint32_t, 4> packedColors{
+                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
+            };
+        };
+        std::unordered_map<tjs_int, LayerRenderState> renderLayerStates;
         std::vector<tTJSVariant> backgrounds;
         std::vector<tTJSVariant> captions;
         std::unordered_map<std::string, bool> disabledSelectorTargets;
@@ -203,6 +230,8 @@ namespace motion::detail {
         double slant = 0.0;
         double zoom = 1.0;
         std::vector<MotionEvent> pendingEvents;
+        std::vector<ParameterEntry> parameterEntries;
+        ParameterEntry defaultParameterEntry;
         // Persistent node tree for updateLayers pipeline
         std::vector<MotionNode> nodes;
         bool nodesBuilt = false;
@@ -216,12 +245,17 @@ namespace motion::detail {
             std::string sourceKey;
             bool hasOwnSource = false;
             bool groupOnly = false;
-            bool skipFlag0 = false;
-            bool skipFlag1 = false;
-            bool clipFlag = false;
-            bool drawFlag = false;
+            bool topLevelList = true;
+            bool groupList = false;
+            bool selfSeedChildList = false;
+            bool rawFlag16 = false; // original item +16 = node+201
+            bool skipFlag0 = false; // original render item +17 (0x6C2334 / 0x6C7440)
+            bool skipFlag1 = false; // original render item +18 (0x6C2334 / 0x6C7440)
+            bool clipFlag = false;  // reserved for explicit +20/+21 alignment
+            bool drawFlag = false;  // original render item +19
             double sortKey = 0.0;
             int blendMode = 16;
+            tTJSVariant contextVariant; // original item +248 (player+1012 copy)
             std::array<float, 8> corners{};
             std::array<std::uint32_t, 4> packedColors{
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
@@ -231,12 +265,17 @@ namespace motion::detail {
             bool hasViewport = false;
             int opacity = 255;
             int updateCount = 0;
+            int coordinateMode = 0;
+            int objTriPriority = 0;
             int visibleAncestorIndex = -1;
             int meshDivX = 0;
             int meshDivY = 0;
             int meshType = 0;
             std::vector<float> meshPoints;
             int layerId = 0;
+            int layerId2 = 0;
+            PreparedRenderItem *parentItem = nullptr; // semantic mapping of item +264
+            std::vector<PreparedRenderItem *> childItems; // semantic mapping of item +24
         };
         struct RenderCommand {
             int nodeIndex = 0;
@@ -244,10 +283,20 @@ namespace motion::detail {
             std::string sourceKey;
             bool hasOwnSource = false;
             bool groupOnly = false;
+            bool topLevelList = true;
+            bool groupList = false;
+            bool rawFlag16 = false;
+            bool rawFlag17 = false;
+            bool rawFlag18 = false;
+            bool rawFlag19 = false;
+            bool rawFlag20 = false;
+            bool rawFlag21 = false;
             int blendMode = 16;
+            tTJSVariant contextVariant; // maps original item +248 variant
             int opacity = 255;
             int itemFlags = 0;
-            int parentNodeIndex = -1;
+            int parentNodeIndex = -1; // semantic mapping of original item +264 parent pointer
+            const PreparedRenderItem *preparedItem = nullptr;
             bool hasRenderParent = false;
             std::array<std::uint32_t, 4> packedColors{
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
@@ -264,7 +313,10 @@ namespace motion::detail {
             int meshDivY = 0;
             int meshType = 0;
             int layerId = 0;
-            std::vector<int> childCommandIndices;
+            int layerId2 = 0;
+            // semantic mapping of the original std::vector<item*> at item +24
+            RenderCommand *parentCommand = nullptr; // semantic mapping of item +264
+            std::vector<RenderCommand *> childCommandPtrs; // semantic mapping of item +24
             tTJSVariant leafLayer;
             tTJSVariant composedLayer;
             std::array<int, 4> builtRect{0, 0, 0, 0};
@@ -274,6 +326,13 @@ namespace motion::detail {
         };
         std::vector<PreparedRenderItem> preparedRenderItems;  // player+936/944
         std::vector<RenderCommand> renderCommands;
+        // Local approximation of the native a2/a3 split passed through
+        // sub_6C2334 -> sub_6C4E28 -> sub_6C7440.
+        // renderCommandsTopLevel mirrors the single list walked by 0x6C7440
+        // after it calls 0x6C4E28; renderCommandsGroup mirrors the auxiliary
+        // list consumed inside 0x6C4E28.
+        std::vector<RenderCommand *> renderCommandsTopLevel;
+        std::vector<RenderCommand *> renderCommandsGroup;
 
         // Per-node evaluation time array.
         // Aligned to libkrkr2.so player+384: 56-byte-per-node entries.

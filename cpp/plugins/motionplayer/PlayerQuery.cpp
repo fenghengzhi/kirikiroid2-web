@@ -3,6 +3,8 @@
 //
 #include "PlayerInternal.h"
 #include "HitTestInternal.h"
+#include "SourceCache.h"
+#include "ncbind.hpp"
 
 using namespace motion::internal;
 
@@ -28,6 +30,66 @@ namespace {
         }
         return motion::detail::hitTestHitData(hit, x, y);
     }
+
+    tTJSVariant buildLayerGetterVariant(motion::Player &player,
+                                        const motion::detail::MotionNode &node) {
+        using LayerGetterAdaptor = ncbInstanceAdaptor<motion::LayerGetter>;
+
+        auto *getter = new motion::LayerGetter();
+        getter->setType(node.nodeType);
+        getter->setLabel(motion::detail::widen(node.layerName));
+        getter->setVisible(node.accumulated.visible);
+        getter->setBranchVisible(node.accumulated.active);
+        getter->setLayerVisible(node.drawFlag);
+        getter->setX(node.accumulated.posX);
+        getter->setY(node.accumulated.posY);
+        getter->setFlipX(node.accumulated.flipX);
+        getter->setFlipY(node.accumulated.flipY);
+        getter->setZoomX(node.accumulated.scaleX);
+        getter->setZoomY(node.accumulated.scaleY);
+        getter->setAngleRad(node.accumulated.angle);
+        getter->setAngleDeg(
+            node.accumulated.angle * 180.0 / 3.14159265358979323846);
+        getter->setSlantX(node.accumulated.slantX);
+        getter->setSlantY(node.accumulated.slantY);
+        getter->setOriginX(node.originX);
+        getter->setOriginY(node.originY);
+        getter->setOpacity(node.accumulated.opacity);
+        getter->setMtx(motion::detail::makeArray({
+            tTJSVariant(node.accumulated.m11),
+            tTJSVariant(node.accumulated.m12),
+            tTJSVariant(node.accumulated.m21),
+            tTJSVariant(node.accumulated.m22),
+            tTJSVariant(node.accumulated.posX),
+            tTJSVariant(node.accumulated.posY),
+        }));
+        getter->setVtx(motion::detail::makeArray({
+            tTJSVariant(node.vertices[0]), tTJSVariant(node.vertices[1]),
+            tTJSVariant(node.vertices[2]), tTJSVariant(node.vertices[3]),
+            tTJSVariant(node.vertices[4]), tTJSVariant(node.vertices[5]),
+            tTJSVariant(node.vertices[6]), tTJSVariant(node.vertices[7]),
+        }));
+        getter->setColor(motion::detail::makeArray({
+            tTJSVariant(static_cast<tjs_int>(node.colorBytes[0])),
+            tTJSVariant(static_cast<tjs_int>(node.colorBytes[1])),
+            tTJSVariant(static_cast<tjs_int>(node.colorBytes[2])),
+            tTJSVariant(static_cast<tjs_int>(node.colorBytes[3])),
+        }));
+        if(node.nodeType == 3) {
+            getter->setMotion(node.childPlayerVar);
+        } else if(node.nodeType == 4) {
+            getter->setParticle(node.particleArrayVar);
+        }
+
+        if(auto *dispatch = LayerGetterAdaptor::CreateAdaptor(getter)) {
+            tTJSVariant result(dispatch, dispatch);
+            dispatch->Release();
+            return result;
+        }
+        delete getter;
+        return {};
+    }
+
 }
 
 namespace motion {
@@ -137,21 +199,27 @@ namespace motion {
     }
 
     tTJSVariant Player::getLayerGetter(ttstr name) {
-        const auto layer = getLayerMotion(name);
-        if(layer.Type() == tvtVoid) {
+        ensureMotionLoaded();
+        ensureNodeTreeBuilt();
+        if(!_runtime) {
             return {};
         }
-
-        const auto layerId = requireLayerId(name);
-        return detail::makeDictionary({
-            { "name", name },
-            { "id", layerId },
-            { "motion", layer },
-        });
+        const auto key = detail::narrow(name);
+        const auto it = _runtime->nodeLabelMap.find(key);
+        if(it == _runtime->nodeLabelMap.end()) {
+            return {};
+        }
+        const auto nodeIndex = it->second;
+        if(nodeIndex < 0 || nodeIndex >= static_cast<int>(_runtime->nodes.size())) {
+            return {};
+        }
+        return buildLayerGetterVariant(*this, _runtime->nodes[nodeIndex]);
     }
 
     tTJSVariant Player::getLayerGetterList() {
-        if(!_runtime->activeMotion) {
+        ensureMotionLoaded();
+        ensureNodeTreeBuilt();
+        if(!_runtime || !_runtime->activeMotion) {
             return detail::makeArray({});
         }
 
@@ -896,39 +964,104 @@ namespace motion {
             _motionKey = ttstr();  // clear to bypass same-motion guard in findMotion
         }
 
-        // Load the motion (equivalent to Player_setMotionImpl → loadMotion)
-        (void)findMotion(name);
+        // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
+        // the requested motion/timeline label is part of the player state
+        // throughout the load/init path (+976/+984 in the binary). Keep the
+        // local request key after the force-guard so nested motion players do
+        // not collapse back to the module's primary clip ordering.
+        _motionKey = name;
 
-        // After loading, prime timelines and start playback
-        // (aligned to Player_setMotionImpl post-load behavior)
+        // Aligned to Player_loadMotion (0x6B0F10): the native path resolves
+        // motion using the current chara first ("motion/<chara>/<motion>"),
+        // then falls back to the raw motion string when needed.
+        std::shared_ptr<detail::MotionSnapshot> snapshot;
+        const auto motionRaw = detail::narrow(name);
+        const auto charaRaw = detail::narrow(_chara);
+        if(!_runtime || name.IsEmpty()) {
+            snapshot.reset();
+        } else {
+            if(_project.Type() == tvtObject) {
+                if(const auto projectSnapshot = detail::lookupModuleSnapshot(_project)) {
+                    if(projectSnapshot->clipsByLabel.find(motionRaw) !=
+                       projectSnapshot->clipsByLabel.end()) {
+                        snapshot = projectSnapshot;
+                    }
+                }
+            }
+            if(!charaRaw.empty() &&
+               !snapshot &&
+               motionRaw.find('/') == std::string::npos &&
+               motionRaw.find('\\') == std::string::npos) {
+                const auto fullPath =
+                    ttstr{ "motion/" + charaRaw + "/" + motionRaw };
+                snapshot =
+                    resolveMotion(*_runtime, fullPath, &_resourceManagerNative);
+                if(snapshot) {
+                    cacheMotion(*_runtime, motionRaw,
+                                detail::narrow(fullPath), snapshot);
+                }
+            }
+            if(!snapshot) {
+                snapshot = resolveMotion(*_runtime, name, &_resourceManagerNative);
+            }
+        }
+        if(snapshot) {
+            activateMotion(*_runtime, snapshot);
+            _motionKey = name;
+            _project = snapshot->moduleValue;
+            syncVariableKeysFromActiveMotion();
+            // Aligned to libkrkr2.so Player_playImpl (0x6B2284) ->
+            // Player_initNonEmoteMotion (0x6B365C):
+            // once motion loading succeeds, the binary immediately rebuilds the
+            // node tree for the selected clip before later progress/render
+            // stages consume it.
+            ensureNodeTreeBuilt();
+        }
+
+        // After loading, prime timelines and start playback.
+        // Binary alignment:
+        // - Player_playImpl (0x6B2284) stores the requested motion label
+        // - Player_initNonEmoteMotion (0x6B365C) rebuilds state but does not
+        //   auto-start every primary clip
+        // - Player_playTimeline (0x672F70) starts the requested label only
+        //   when it exists
         if (_runtime->activeMotion && _runtime->timelines.empty()) {
             detail::primeTimelineStates(_runtime->timelines,
                                         *_runtime->activeMotion);
         }
 
-        // Start all timelines playing (equivalent to playCompat's playOne loop)
         if (_runtime->activeMotion && !_runtime->timelines.empty()) {
-            double maxTF = 0.0;
-            _runtime->playingTimelineLabels.clear();
-            const auto &primary =
-                !_runtime->activeMotion->mainTimelineLabels.empty()
-                    ? _runtime->activeMotion->mainTimelineLabels
-                    : _runtime->activeMotion->diffTimelineLabels;
-            for (const auto &timelineLabel : primary) {
-                auto &state = _runtime->timelines[timelineLabel];
-                state.flags = flags & ~PlayFlagStealth;  // pass flags minus stealth
-                state.playing = true;
-                state.blendRatio = 1.0;
-                state.controlInitialized = false;
-                state.controlLastAppliedTime = state.currentTime;
-                state.controlFrameCursor.clear();
-                state.controlTrackValues.clear();
-                state.controlTrackAnimators.clear();
-                _runtime->playingTimelineLabels.push_back(timelineLabel);
-                if (state.totalFrames > maxTF) maxTF = state.totalFrames;
+            const auto requestedKey = detail::narrow(name);
+            bool startedRequested = false;
+            if(!requestedKey.empty() &&
+               _runtime->timelines.find(requestedKey) != _runtime->timelines.end()) {
+                playTimeline(name, flags & ~PlayFlagStealth);
+                startedRequested = true;
             }
-            _cachedTotalFrames = maxTF;  // player+1128 cached value
-            _allplaying = !_runtime->playingTimelineLabels.empty();
+
+            if(!startedRequested) {
+                double maxTF = 0.0;
+                _runtime->playingTimelineLabels.clear();
+                const auto &primary =
+                    !_runtime->activeMotion->mainTimelineLabels.empty()
+                        ? _runtime->activeMotion->mainTimelineLabels
+                        : _runtime->activeMotion->diffTimelineLabels;
+                for (const auto &timelineLabel : primary) {
+                    auto &state = _runtime->timelines[timelineLabel];
+                    state.flags = flags & ~PlayFlagStealth;
+                    state.playing = true;
+                    state.blendRatio = 1.0;
+                    state.controlInitialized = false;
+                    state.controlLastAppliedTime = state.currentTime;
+                    state.controlFrameCursor.clear();
+                    state.controlTrackValues.clear();
+                    state.controlTrackAnimators.clear();
+                    _runtime->playingTimelineLabels.push_back(timelineLabel);
+                    if (state.totalFrames > maxTF) maxTF = state.totalFrames;
+                }
+                _cachedTotalFrames = maxTF;
+                _allplaying = !_runtime->playingTimelineLabels.empty();
+            }
         }
 
         // Handle pending stealth motion (0x6B226C..0x6B2280)
@@ -1370,7 +1503,17 @@ namespace motion {
 
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&
-           self->_clampedEvalTime >= 30.0 && self->_clampedEvalTime <= 40.0) {
+           self->_clampedEvalTime >= 0.0 && self->_clampedEvalTime <= 60.0) {
+            std::fprintf(stderr,
+                         "SNAPTIME motion=%s frame=%.3f playing=%d nodes=%zu\n",
+                         motionPath.c_str(), self->_clampedEvalTime,
+                         self->_allplaying ? 1 : 0,
+                         self->_runtime ? self->_runtime->nodes.size() : 0);
+        }
+
+        if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+           motionPath.find("m2logo.mtn") != std::string::npos &&
+           self->_clampedEvalTime >= 30.0 && self->_clampedEvalTime <= 50.0) {
             std::fprintf(stderr, "SHOTMARK motion=%s frame=%.3f\n",
                          motionPath.c_str(), self->_clampedEvalTime);
         }

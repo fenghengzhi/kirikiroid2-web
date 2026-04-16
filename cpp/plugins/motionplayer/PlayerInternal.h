@@ -268,6 +268,18 @@ namespace internal {
             return nullptr;
         }
 
+        inline detail::PlayerRuntime::ParameterEntry *
+        resolveNodeParameterEntry(detail::PlayerRuntime &runtime,
+                                  const detail::MotionNode &node) {
+            if(node.parameterizeIndex >= 0 &&
+               static_cast<size_t>(node.parameterizeIndex) <
+                   runtime.parameterEntries.size()) {
+                return &runtime.parameterEntries[static_cast<size_t>(
+                    node.parameterizeIndex)];
+            }
+            return &runtime.defaultParameterEntry;
+        }
+
         inline std::vector<ttstr> buildSourceCandidates(
             const detail::PlayerRuntime &runtime, const ttstr &name) {
             std::vector<ttstr> candidates;

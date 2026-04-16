@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "PlayerInternal.h"
+#include "ncbind.hpp"
 
 using namespace motion::internal;
 
@@ -177,6 +178,13 @@ namespace motion {
         _runtime(detail::makePlayerRuntime()),
         _resourceManagerNative(std::move(rm)) {
         LOGGER->info("Motion.Player constructor called");
+        using ResourceManagerAdaptor = ncbInstanceAdaptor<ResourceManager>;
+        if(auto *dispatch =
+               ResourceManagerAdaptor::CreateAdaptor(
+                   new ResourceManager(_resourceManagerNative))) {
+            _resourceManager = tTJSVariant(dispatch, dispatch);
+            dispatch->Release();
+        }
         // Aligned to sub_6A88CC (0x6A8988): create TJS Math.RandomGenerator
         // and store at player+992. Child Players inherit via sub_6CED30.
         try {
@@ -518,6 +526,18 @@ namespace motion {
                     ? &it->second
                     : nullptr;
             };
+
+        // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
+        // the requested motion/timeline label is stored on the player before
+        // the non-emote init path rebuilds content/node state. In the local
+        // architecture, this is the closest equivalent to the binary's
+        // selected content object, so prefer _motionKey before falling back to
+        // the playing-timeline list or primary label ordering.
+        if(!_motionKey.IsEmpty()) {
+            if(const auto *clip = selectByLabel(detail::narrow(_motionKey))) {
+                return clip;
+            }
+        }
 
         for(const auto &label : _runtime->playingTimelineLabels) {
             if(const auto *clip = selectByLabel(label)) {

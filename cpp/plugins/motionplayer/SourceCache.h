@@ -79,6 +79,32 @@ namespace motion {
     public:
         LayerGetter() = default;
 
+        void setType(int v) { _type = v; }
+        void setLabel(ttstr v) { _label = v; }
+        void setVisible(bool v) { _visible = v; }
+        void setBranchVisible(bool v) { _branchVisible = v; }
+        void setLayerVisible(bool v) { _layerVisible = v; }
+        void setX(double v) { _x = v; }
+        void setY(double v) { _y = v; }
+        void setFlipX(bool v) { _flipX = v; }
+        void setFlipY(bool v) { _flipY = v; }
+        void setZoomX(double v) { _zoomX = v; }
+        void setZoomY(double v) { _zoomY = v; }
+        void setAngleDeg(double v) { _angleDeg = v; }
+        void setAngleRad(double v) { _angleRad = v; }
+        void setSlantX(double v) { _slantX = v; }
+        void setSlantY(double v) { _slantY = v; }
+        void setOriginX(double v) { _originX = v; }
+        void setOriginY(double v) { _originY = v; }
+        void setOpacity(int v) { _opacity = v; }
+        void setMtx(tTJSVariant v) { _mtx = v; }
+        void setVtx(tTJSVariant v) { _vtx = v; }
+        void setColor(tTJSVariant v) { _color = v; }
+        void setBezierPatch(tTJSVariant v) { _bezierPatch = v; }
+        void setShape(tTJSVariant v) { _shape = v; }
+        void setMotion(tTJSVariant v) { _motion = v; }
+        void setParticle(tTJSVariant v) { _particle = v; }
+
         int getType() const { return _type; }
         ttstr getLabel() const { return _label; }
         bool getVisible() const { return _visible; }
@@ -99,13 +125,13 @@ namespace motion {
         double getOriginX() const { return _originX; }
         double getOriginY() const { return _originY; }
         int getOpacity() const { return _opacity; }
-        tTJSVariant getMtx() const { return {}; }
-        tTJSVariant getVtx() const { return {}; }
-        tTJSVariant getColor() const { return {}; }
-        tTJSVariant getBezierPatch() const { return {}; }
-        tTJSVariant getShape() const { return {}; }
-        tTJSVariant getMotion() const { return {}; }
-        tTJSVariant getParticle() const { return {}; }
+        tTJSVariant getMtx() const { return _mtx; }
+        tTJSVariant getVtx() const { return _vtx; }
+        tTJSVariant getColor() const { return _color; }
+        tTJSVariant getBezierPatch() const { return _bezierPatch; }
+        tTJSVariant getShape() const { return _shape; }
+        tTJSVariant getMotion() const { return _motion; }
+        tTJSVariant getParticle() const { return _particle; }
 
     private:
         int _type = 0;
@@ -118,6 +144,13 @@ namespace motion {
         double _slantX = 0, _slantY = 0;
         double _originX = 0, _originY = 0;
         int _opacity = 255;
+        tTJSVariant _mtx;
+        tTJSVariant _vtx;
+        tTJSVariant _color;
+        tTJSVariant _bezierPatch;
+        tTJSVariant _shape;
+        tTJSVariant _motion;
+        tTJSVariant _particle;
     };
 
 } // namespace motion
