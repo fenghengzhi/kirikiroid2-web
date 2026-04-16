@@ -1,6 +1,9 @@
 // Standalone WASM harness for local transform matrix computation.
 // Function copied from motionplayer/PlayerInternal.h (lines 1816-1876).
 // Aligned to libkrkr2.so sub_699940 (0x699940).
+//
+// @exports: _run_local_transform,_get_affine_in_ptr,_get_affine_out_ptr
+// @qiling
 
 #include <array>
 #include <cmath>

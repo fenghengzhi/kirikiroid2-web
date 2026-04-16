@@ -1,6 +1,8 @@
 // Standalone WASM harness for Bezier curve evaluation.
 // Function copied from motionplayer/PlayerInternal.h (lines 708-725).
 // Aligned to libkrkr2.so sub_69A754 (0x69A754).
+//
+// @exports: _run_bezier_curve,_get_curve_x_ptr,_get_curve_y_ptr,_get_result_ptr
 
 #include <cstddef>
 #include <cstdint>

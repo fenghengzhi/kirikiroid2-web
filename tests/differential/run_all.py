@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Build and run every differential WASM test family.
+
+Discovers families from `tests/differential/wasm/<family>_wasm.cpp` and
+reads build/run directives from the top comment block of each source:
+
+    // @exports: _foo,_bar       required; em++ EXPORTED_FUNCTIONS list
+    // @plugin-include           optional flag; adds -I<repo>/cpp/plugins
+    // @qiling                   optional flag; also run run_<family>_qiling.py
+
+Usage:
+    run_all.py --backend wasmtime           # build + run port-wasm harness
+    run_all.py --backend qiling             # run Qiling oracle only
+    run_all.py --backend all                # both
+    run_all.py --backend wasmtime --no-build
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+WASM_DIR = REPO_ROOT / "tests/differential/wasm"
+PYTHON_DIR = REPO_ROOT / "tests/differential/python"
+SPEC_ROOT = REPO_ROOT / "tests/differential/specs"
+PLUGIN_DIR = REPO_ROOT / "cpp/plugins"
+
+DIRECTIVE_RE = re.compile(r"//\s*@([a-zA-Z0-9_-]+)(?::\s*(.+))?\s*$")
+
+
+class Family:
+    def __init__(self, name: str, src: Path, exports: list[str],
+                 plugin_include: bool, qiling: bool) -> None:
+        self.name = name
+        self.src = src
+        self.exports = exports
+        self.plugin_include = plugin_include
+        self.qiling = qiling
+
+    @property
+    def wasm(self) -> Path:
+        return WASM_DIR / f"{self.name}.wasm"
+
+    @property
+    def wasmtime_runner(self) -> Path:
+        return PYTHON_DIR / f"run_{self.name}_wasmtime.py"
+
+    @property
+    def qiling_runner(self) -> Path:
+        return PYTHON_DIR / f"run_{self.name}_qiling.py"
+
+    @property
+    def spec_dir(self) -> Path:
+        return SPEC_ROOT / self.name
+
+
+def parse_directives(src: Path) -> tuple[list[str], bool, bool]:
+    exports: list[str] = []
+    plugin_include = False
+    qiling = False
+    for line in src.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("//"):
+            if line.strip() and not line.strip().startswith("/*"):
+                break  # directives only valid in leading comment block
+        m = DIRECTIVE_RE.match(line)
+        if not m:
+            continue
+        key, value = m.group(1), (m.group(2) or "").strip()
+        if key == "exports":
+            exports = [e.strip() for e in value.split(",") if e.strip()]
+        elif key == "plugin-include":
+            plugin_include = True
+        elif key == "qiling":
+            qiling = True
+    if not exports:
+        raise RuntimeError(f"{src}: missing `// @exports:` directive")
+    return exports, plugin_include, qiling
+
+
+def discover_families() -> list[Family]:
+    families: list[Family] = []
+    for src in sorted(WASM_DIR.glob("*_wasm.cpp")):
+        name = src.stem[:-len("_wasm")]
+        exports, plugin_include, qiling = parse_directives(src)
+        families.append(Family(name, src, exports, plugin_include, qiling))
+    if not families:
+        raise RuntimeError(f"no *_wasm.cpp files under {WASM_DIR}")
+    return families
+
+
+def build(family: Family) -> None:
+    exports_arg = "[" + ",".join(f"'{e}'" for e in family.exports) + "]"
+    cmd = [
+        "em++", str(family.src),
+        "-std=c++17", "-O1",
+        "-sSTANDALONE_WASM=1",
+        f"-sEXPORTED_FUNCTIONS={exports_arg}",
+        "--no-entry",
+        "-o", str(family.wasm),
+    ]
+    if family.plugin_include:
+        cmd.insert(3, f"-I{PLUGIN_DIR}")
+    print(f"[build] {family.name}: {' '.join(cmd)}", flush=True)
+    subprocess.run(cmd, check=True)
+
+
+def run_wasmtime(family: Family) -> int:
+    if not family.wasmtime_runner.exists():
+        raise RuntimeError(f"missing runner: {family.wasmtime_runner}")
+    cmd = [
+        sys.executable, str(family.wasmtime_runner),
+        "--spec-dir", str(family.spec_dir),
+        "--wasm", str(family.wasm),
+    ]
+    print(f"[wasmtime] {family.name}", flush=True)
+    return subprocess.run(cmd).returncode
+
+
+def run_qiling(family: Family) -> int:
+    if not family.qiling_runner.exists():
+        raise RuntimeError(f"missing qiling runner: {family.qiling_runner}")
+    cmd = [
+        sys.executable, str(family.qiling_runner),
+        "--spec-dir", str(family.spec_dir),
+    ]
+    print(f"[qiling] {family.name}", flush=True)
+    return subprocess.run(cmd).returncode
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=["wasmtime", "qiling", "all"],
+                        default="wasmtime")
+    parser.add_argument("--no-build", action="store_true",
+                        help="skip em++ compilation")
+    parser.add_argument("--family", action="append",
+                        help="restrict to specific family (repeatable)")
+    args = parser.parse_args()
+
+    families = discover_families()
+    if args.family:
+        wanted = set(args.family)
+        families = [f for f in families if f.name in wanted]
+        missing = wanted - {f.name for f in families}
+        if missing:
+            raise RuntimeError(f"unknown families: {sorted(missing)}")
+
+    if args.backend in ("wasmtime", "all") and not args.no_build:
+        for f in families:
+            build(f)
+
+    failed = 0
+    if args.backend in ("wasmtime", "all"):
+        for f in families:
+            if run_wasmtime(f) != 0:
+                failed += 1
+    if args.backend in ("qiling", "all"):
+        for f in families:
+            if not f.qiling:
+                continue
+            if run_qiling(f) != 0:
+                failed += 1
+
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

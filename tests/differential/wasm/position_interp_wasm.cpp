@@ -3,6 +3,8 @@
 //   - evaluateBezierCurve (lines 708-725), aligned to sub_69A754
 //   - evaluateControlPointCurve (lines 729-788), aligned to sub_698454
 //   - interpolatePosition69A4D4 (lines 792-830), aligned to sub_69A4D4
+//
+// @exports: _run_position_interp,_get_easing_x_ptr,_get_easing_y_ptr,_get_cp_x_ptr,_get_cp_y_ptr,_get_cp_t_ptr,_get_cp_seg_data_ptr,_get_cp_seg_sizes_ptr,_get_src_pos_ptr,_get_dst_pos_ptr,_get_out_pos_ptr
 
 #include <cstddef>
 #include <cstdint>

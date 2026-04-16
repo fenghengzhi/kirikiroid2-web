@@ -1,6 +1,8 @@
 // Standalone WASM harness for PSB RL decompression.
 // Function copied from motionplayer/PlayerInternal.h (lines 65-98).
 // Aligned to libkrkr2.so sub_695DE8 (0x695DE8).
+//
+// @exports: _run_psb_rl_decompress,_get_compressed_ptr,_get_decompressed_ptr,_get_decompressed_size_ptr
 
 #include <algorithm>
 #include <cstddef>
