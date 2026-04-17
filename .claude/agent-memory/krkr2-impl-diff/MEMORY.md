@@ -1,0 +1,1 @@
+- [Phase2 MainLoop mapping](project_phase2_mainloop_mapping.md) — 本地 updateLayersPhase2_MainLoop 与 libkrkr2.so sub_6BB33C phase2 段的对应与已知偏离

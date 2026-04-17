@@ -1,0 +1,2 @@
+- [Player phase2 偏差清单](project_player_updateLayers_phase2_deviations.md) — 2026-04-17 updateLayersPhase2_MainLoop vs sub_6BB33C 架构级/越权/结构级偏差汇总
+- [delta/override 块是架构关键](feedback_motionplayer_delta_override_block.md) — libkrkr2.so node +1584..+1660 delta 块无法用单一 state + 双层合并等价替代
