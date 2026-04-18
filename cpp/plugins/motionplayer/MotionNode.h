@@ -182,11 +182,10 @@ namespace motion::detail {
         // PSB reference (for evaluateLayerContent calls)
         std::shared_ptr<const PSB::PSBDictionary> psbNode;
 
-        // Per-node source/override state.
-        // Aligned to libkrkr2.so node+0x630..0x678 block consumed by
-        // Player_updateLayers (0x6BB630..0x6BB700). Root setters write here
-        // (e.g. Player_setRootX 0x6CD028, Player_setRootFlipX 0x6CD068), and
-        // the main loop folds it into the working block after timeline eval.
+        // Per-node post-interpolation mirror for render/debug consumers.
+        // The binary phase2 logic consumes node+1584..+1660 instead; this
+        // local copy mirrors the current evaluated frame state without owning
+        // the persistent setter/camera override semantics.
         struct LocalState {
             bool visible = false;
             bool active = false;
@@ -205,6 +204,28 @@ namespace motion::detail {
             int blendMode = 16;
         } localState;
 
+        // TJS setter / camera velocity override block.
+        // Aligned to libkrkr2.so node+1584..+1660: delta block consumed by
+        // Player_updateLayers phase2 (0x6BB630..0x6BB700). Written by root
+        // TJS setters (setX/setY/setFlipX @ 0x6CD028/0x6CD048/0x6CD068) and
+        // camera velocity @ 0x6BB378..0x6BB3DC.
+        struct DeltaState {
+            bool dirty = false;              // node+1584
+            bool activeOverride = false;     // node+1585
+            bool visibleOverride = false;    // node+1586
+            bool flipX = false;              // node+1587
+            bool flipY = false;              // node+1588
+            double posX = 0.0;               // node+1592
+            double posY = 0.0;               // node+1600
+            double posZ = 0.0;               // node+1608
+            double angle = 0.0;              // node+1616
+            double scaleX = 1.0;             // node+1624
+            double scaleY = 1.0;             // node+1632
+            double slantX = 0.0;             // node+1640
+            double slantY = 0.0;             // node+1648
+            int opacity = 255;               // node+1656
+        } delta;
+
         // Working/evaluated state (built during updateLayers inheritance loop)
         // Aligned to libkrkr2.so node+0x5E0..0x628 block written by
         // Player_evaluateTimeline (0x699AE4) and further composed by
@@ -212,7 +233,7 @@ namespace motion::detail {
         struct AccumulatedState {
             bool visible = false;
             bool active = false;
-            bool dirty = false;     // node+1584: set when state changes, cleared by consumer
+            bool dirty = false;     // node+1504
             bool flipX = false;
             bool flipY = false;
             double posX = 0.0;

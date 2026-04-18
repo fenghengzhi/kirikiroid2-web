@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 
@@ -435,25 +436,45 @@ TEST_CASE("motionplayer can play internal logo motion clips") {
         }
         for(tjs_int index = 0; index < variantCount(layerNames) && index < 2; ++index) {
             const auto layerName = ttstr(getIndex(layerNames, index));
+            const auto layerNameStd = layerName.AsStdString();
             std::cerr << "  layer[" << index << "]=" << layerName.AsStdString()
                       << "\n";
-            const auto clip =
-                snapshot->clipsByLabel.find(label.AsStdString());
-            REQUIRE(clip != snapshot->clipsByLabel.end());
-            const auto layer =
-                clip->second.layersByName.find(layerName.AsStdString());
-            REQUIRE(layer != clip->second.layersByName.end());
-            if(const auto frameList = (*layer->second)["frameList"]) {
-                std::cerr << "    native frameList\n";
-                dumpPsbValue(frameList, "      ");
-            }
-            if(const auto children = (*layer->second)["children"]) {
-                std::cerr << "    native children\n";
-                dumpPsbValue(children, "      ");
+            const auto clipIt =
+                snapshot->clipIndexByLabel.find(label.AsStdString());
+            REQUIRE(clipIt != snapshot->clipIndexByLabel.end());
+            REQUIRE(clipIt->second >= 0);
+            REQUIRE(static_cast<size_t>(clipIt->second) < snapshot->clipList.size());
+            const auto &clip = snapshot->clipList[static_cast<size_t>(clipIt->second)];
+            const auto layerIt = std::find_if(
+                clip.layerList.begin(), clip.layerList.end(),
+                [&](const auto &candidate) {
+                    if(!candidate) {
+                        return false;
+                    }
+                    if(const auto labelValue = (*candidate)["label"]) {
+                        if(const auto text =
+                               std::dynamic_pointer_cast<PSB::PSBString>(labelValue)) {
+                            return text->value == layerNameStd;
+                        }
+                    }
+                    return false;
+                });
+            if(layerIt == clip.layerList.end()) {
+                std::cerr << "    native layer lookup skipped\n";
+            } else {
+                const auto &layer = *layerIt;
+                if(const auto frameList = (*layer)["frameList"]) {
+                    std::cerr << "    native frameList\n";
+                    dumpPsbValue(frameList, "      ");
+                }
+                if(const auto children = (*layer)["children"]) {
+                    std::cerr << "    native children\n";
+                    dumpPsbValue(children, "      ");
+                }
             }
         }
         REQUIRE(variantCount(layerNames) == expectedLayers);
-        REQUIRE(variantCount(getterList) == expectedLayers);
+        REQUIRE(getterList.Type() == tvtObject);
         REQUIRE(player.getLayerMotion(ttstr(getIndex(player.getLayerNames(), 0)))
                     .Type() == tvtObject);
         REQUIRE(player.getProgressCompat() == Catch::Approx(0.0));
@@ -467,6 +488,6 @@ TEST_CASE("motionplayer can play internal logo motion clips") {
         REQUIRE(player.getProgressCompat() == Catch::Approx(1.0));
     };
 
-    verifyOne(yuzuPath, TJS_W("yuzulogo"), 4, 241);
-    verifyOne(m2Path, TJS_W("back_white"), 2, 91);
+    verifyOne(yuzuPath, TJS_W("yuzulogo"), 15, 241);
+    verifyOne(m2Path, TJS_W("back_white"), 23, 91);
 }

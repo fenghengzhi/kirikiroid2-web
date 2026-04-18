@@ -894,12 +894,15 @@ namespace motion {
 
         if(!_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
-            root.localState.flipX = _rootFlipX;
+            // Aligned to libkrkr2.so Player_setRootFlipX/X/Y
+            // (0x6CD028/0x6CD048/0x6CD068): these setters write the delta block
+            // at node+1584..+1660, not the local post-interpolation mirror.
+            root.delta.flipX = _rootFlipX;
             if(_hasPendingRootPos) {
-                root.localState.posX = _pendingRootX;
-                root.localState.posY = _pendingRootY;
+                root.delta.posX = _pendingRootX;
+                root.delta.posY = _pendingRootY;
             }
-            root.localState.dirty = true;
+            root.delta.dirty = true;
         }
 
         _runtime->nodeLabelMap.clear();
