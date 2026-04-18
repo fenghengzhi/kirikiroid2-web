@@ -182,11 +182,11 @@ namespace motion::detail {
         // PSB reference (for evaluateLayerContent calls)
         std::shared_ptr<const PSB::PSBDictionary> psbNode;
 
-        // Per-node post-interpolation working state.
-        // Aligned to libkrkr2.so accum input block at node+1504..+1580 (the
-        // block that Player_evaluateTimeline writes and the phase2 delta
-        // merge/matrix composition reads from). In libkrkr2.so this and the
-        // delta block share the same struct layout shifted by +80 bytes.
+        // Per-node source/override state.
+        // Aligned to libkrkr2.so node+0x630..0x678 block consumed by
+        // Player_updateLayers (0x6BB630..0x6BB700). Root setters write here
+        // (e.g. Player_setRootX 0x6CD028, Player_setRootFlipX 0x6CD068), and
+        // the main loop folds it into the working block after timeline eval.
         struct LocalState {
             bool visible = false;
             bool active = false;
@@ -204,47 +204,6 @@ namespace motion::detail {
             int opacity = 255;
             int blendMode = 16;
         } localState;
-
-        // TJS setter / camera velocity override block.
-        // Aligned to libkrkr2.so node+1584..+1660: delta block consumed by
-        // Player_updateLayers phase2 (0x6BB630..0x6BB700). Written by root
-        // TJS setters (setX/setY/setFlipX @ 0x6CD028/0x6CD048/0x6CD068) and
-        // camera velocity @ 0x6BB378..0x6BB3DC. At phase1 root init the
-        // block is memcpy'd onto accum and the dirty byte is cleared
-        // (0x6BB4E0..0x6BB4E8). At phase2 entry per node the same dirty
-        // byte (+1584) is cleared after its contents are merged.
-        //
-        // Layout (byte offset relative to delta block base = node+1584):
-        //   +0  dirty               — node+1584 (also = "delta-dirty" gate)
-        //   +1  activeOverride      — node+1585
-        //   +2  visibleOverride     — node+1586
-        //   +3  flipX               — node+1587
-        //   +4  flipY               — node+1588
-        //   +8  posX                — node+1592 (vaddq with accum.posX/posY)
-        //   +16 posY                — node+1600
-        //   +24 posZ                — node+1608 (vaddq with accum.posZ/angle)
-        //   +32 angle               — node+1616
-        //   +40 scaleX              — node+1624 (vmulq with accum.scaleX/scaleY)
-        //   +48 scaleY              — node+1632
-        //   +56 slantX              — node+1640 (vaddq with accum.slantX/slantY)
-        //   +64 slantY              — node+1648
-        //   +72 opacity             — node+1656 (accum.opacity * delta.opacity / 255)
-        struct DeltaState {
-            bool dirty = false;              // node+1584
-            bool activeOverride = false;     // node+1585
-            bool visibleOverride = false;    // node+1586
-            bool flipX = false;              // node+1587
-            bool flipY = false;              // node+1588
-            double posX = 0.0;               // node+1592
-            double posY = 0.0;               // node+1600
-            double posZ = 0.0;               // node+1608
-            double angle = 0.0;              // node+1616
-            double scaleX = 1.0;             // node+1624
-            double scaleY = 1.0;             // node+1632
-            double slantX = 0.0;             // node+1640
-            double slantY = 0.0;             // node+1648
-            int opacity = 255;               // node+1656
-        } delta;
 
         // Working/evaluated state (built during updateLayers inheritance loop)
         // Aligned to libkrkr2.so node+0x5E0..0x628 block written by

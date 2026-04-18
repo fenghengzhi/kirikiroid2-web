@@ -198,12 +198,10 @@ namespace motion {
 
     Player::~Player() = default;
 
-    // Aligned to libkrkr2.so Player_getRootX (0x6D98A8) / Player_setRootX (0x6CD028):
-    //   sub_6CD028: if (root.delta.posX != v) { root.delta.posX = v; root.delta.dirty = 1; }
-    //   — writes node+1592 (delta.posX) and sets node+1584 (delta.dirty).
+    // Aligned to libkrkr2.so Player_getRootX (0x6D98A8) / Player_setRootX (0x6CD028)
     double Player::getX() const {
         if (_runtime && !_runtime->nodes.empty())
-            return _runtime->nodes[0].delta.posX;
+            return _runtime->nodes[0].localState.posX;
         return _hasPendingRootPos ? _pendingRootX : 0.0;
     }
     void Player::setX(double v) {
@@ -211,17 +209,17 @@ namespace motion {
         _hasPendingRootPos = true;
         if (_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
-            if (root.delta.posX != v) {
-                root.delta.posX = v;
-                root.delta.dirty = true;
+            if (root.localState.posX != v) {
+                root.localState.posX = v;
+                root.localState.dirty = true;
+                root.accumulated.dirty = true;
             }
         }
     }
-    // Aligned to libkrkr2.so Player_getRootY (0x6D98B4) / Player_setRootY (0x6CD048):
-    // same shape as setRootX but at node+1600 (delta.posY).
+    // Aligned to libkrkr2.so Player_getRootY (0x6D98B4) / Player_setRootY (0x6CD048)
     double Player::getY() const {
         if (_runtime && !_runtime->nodes.empty())
-            return _runtime->nodes[0].delta.posY;
+            return _runtime->nodes[0].localState.posY;
         return _hasPendingRootPos ? _pendingRootY : 0.0;
     }
     void Player::setY(double v) {
@@ -229,9 +227,10 @@ namespace motion {
         _hasPendingRootPos = true;
         if (_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
-            if (root.delta.posY != v) {
-                root.delta.posY = v;
-                root.delta.dirty = true;
+            if (root.localState.posY != v) {
+                root.localState.posY = v;
+                root.localState.dirty = true;
+                root.accumulated.dirty = true;
             }
         }
     }
@@ -500,10 +499,9 @@ namespace motion {
 
         if(_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes.front();
-            // Aligned to libkrkr2.so Player_setRootFlipX (0x6CD068):
-            // writes node+1587 (delta.flipX), sets node+1584 (delta.dirty).
-            root.delta.flipX = _rootFlipX;
-            root.delta.dirty = true;
+            root.localState.flipX = _rootFlipX;
+            root.localState.dirty = true;
+            root.accumulated.dirty = true;
             root.interpolatedCache.flipX = _rootFlipX;
         }
 

@@ -894,16 +894,12 @@ namespace motion {
 
         if(!_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
-            // Aligned to libkrkr2.so Player_setRootFlipX/X/Y (0x6CD028/0x6CD048/0x6CD068):
-            // these setters write the delta/override block at node+1584..+1660,
-            // not the local (post-interpolation) block. Replay any pending root
-            // position/flip that was authored before the node tree existed.
-            root.delta.flipX = _rootFlipX;
+            root.localState.flipX = _rootFlipX;
             if(_hasPendingRootPos) {
-                root.delta.posX = _pendingRootX;
-                root.delta.posY = _pendingRootY;
+                root.localState.posX = _pendingRootX;
+                root.localState.posY = _pendingRootY;
             }
-            root.delta.dirty = true;
+            root.localState.dirty = true;
         }
 
         _runtime->nodeLabelMap.clear();
