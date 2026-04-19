@@ -1,4 +1,4 @@
-"""AAPCS64 calling convention helpers for Qiling AArch64.
+"""AAPCS64 calling convention helpers for AArch64.
 
 Rules implemented:
   - integer/pointer args -> x0..x7 in order, overflow spilled 8B-aligned on stack
@@ -8,13 +8,19 @@ Rules implemented:
   - SP must be 16B-aligned at call boundary
   - HFA/HVA composite rules ignored (none of our targets use them)
   - No red zone on AArch64 Linux
+
+This module is engine-agnostic: callers inject a `reg_writer(name, value)`
+and `mem_writer(addr, data)`, plus a `sp_getter() -> int` / `sp_setter(int)`
+pair for stack-spilled overflow. Qiling callers supply Qiling-flavoured
+lambdas; PANDA callers supply pypanda-flavoured lambdas. Same logic either
+way.
 """
 
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal
+from dataclasses import dataclass
+from typing import Any, Callable, Iterable, Literal
 
 ReturnKind = Literal["int", "uint", "bool", "ptr", "double", "void"]
 
@@ -26,17 +32,24 @@ class CallSpec:
     ret: ReturnKind = "int"
 
 
-# AArch64 Qiling exposes registers as lowercase names.
+# AArch64 register names exposed lowercase by both Qiling and pypanda.
 _X_REGS = [f"x{i}" for i in range(8)]
 _D_REGS = [f"d{i}" for i in range(8)]
 
 
-def pack_args(ql, ints: Iterable[int], doubles: Iterable[float]) -> None:
+def pack_args(
+    reg_writer: Callable[[str, int], None],
+    mem_writer: Callable[[int, bytes], None],
+    sp_getter: Callable[[], int],
+    sp_setter: Callable[[int], None],
+    ints: Iterable[int],
+    doubles: Iterable[float],
+) -> None:
     """Load ints into x0..x7 and doubles into d0..d7; spill overflow on stack.
 
     Stack layout for overflow (AAPCS64): args pushed in reverse order so the
     first stack arg is at [sp], next at [sp+8], etc. Integer overflow spilled
-    first, then double overflow, each 8-byte slot.
+    first, then double overflow, each 8-byte slot. Final SP is 16B-aligned.
     """
     int_list = list(ints)
     dbl_list = list(doubles)
@@ -47,13 +60,12 @@ def pack_args(ql, ints: Iterable[int], doubles: Iterable[float]) -> None:
     dbl_on_stack = dbl_list[8:]
 
     for reg, val in zip(_X_REGS, int_in_regs):
-        ql.arch.regs.write(reg, val & 0xFFFFFFFFFFFFFFFF)
+        reg_writer(reg, val & 0xFFFFFFFFFFFFFFFF)
     for reg, val in zip(_D_REGS, dbl_in_regs):
-        _write_double(ql, reg, float(val))
+        bits = struct.unpack("<Q", struct.pack("<d", float(val)))[0]
+        reg_writer(reg, bits)
 
     if int_on_stack or dbl_on_stack:
-        # Build stack buffer: ints first, then doubles (our convention; target
-        # funcs don't mix overflow of both). Keep 16B alignment by padding.
         parts: list[bytes] = []
         for v in int_on_stack:
             parts.append(struct.pack("<q", v & 0xFFFFFFFFFFFFFFFF))
@@ -62,17 +74,18 @@ def pack_args(ql, ints: Iterable[int], doubles: Iterable[float]) -> None:
         payload = b"".join(parts)
         if len(payload) % 16:
             payload += b"\x00" * (16 - (len(payload) % 16))
-        sp = ql.arch.regs.read("sp") - len(payload)
-        ql.mem.write(sp, payload)
-        ql.arch.regs.write("sp", sp)
+        new_sp = sp_getter() - len(payload)
+        mem_writer(new_sp, payload)
+        sp_setter(new_sp)
 
 
-def read_return(ql, kind: ReturnKind) -> Any:
+def read_return(reg_reader: Callable[[str], int], kind: ReturnKind) -> Any:
     if kind == "void":
         return None
     if kind == "double":
-        return _read_double(ql, "d0")
-    x0 = ql.arch.regs.read("x0") & 0xFFFFFFFFFFFFFFFF
+        bits = reg_reader("d0") & 0xFFFFFFFFFFFFFFFF
+        return struct.unpack("<d", struct.pack("<Q", bits))[0]
+    x0 = reg_reader("x0") & 0xFFFFFFFFFFFFFFFF
     if kind == "bool":
         return bool(x0 & 1)
     if kind == "int":
@@ -80,14 +93,3 @@ def read_return(ql, kind: ReturnKind) -> Any:
             return x0 - (1 << 64)
         return x0
     return x0  # uint, ptr
-
-
-def _write_double(ql, reg: str, value: float) -> None:
-    # Qiling's unicorn-backed register writer accepts int bit-pattern for d*
-    bits = struct.unpack("<Q", struct.pack("<d", value))[0]
-    ql.arch.regs.write(reg, bits)
-
-
-def _read_double(ql, reg: str) -> float:
-    bits = ql.arch.regs.read(reg) & 0xFFFFFFFFFFFFFFFF
-    return struct.unpack("<d", struct.pack("<Q", bits))[0]

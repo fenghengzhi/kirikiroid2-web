@@ -1,4 +1,5 @@
-qiling>=1.4.6
-unicorn>=2.0.1
-capstone>=5.0
-pyelftools>=0.29
+# Frida version must match the frida-server binary pushed to the
+# device (see README "One-time setup"). Bumping here is a two-sided
+# change: update the CI download URL + checked-in goldens at the same
+# time, because the tracer output shape evolves between frida releases.
+frida==16.4.10

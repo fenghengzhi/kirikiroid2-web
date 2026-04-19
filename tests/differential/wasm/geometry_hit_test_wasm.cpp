@@ -1,6 +1,5 @@
 // @exports: _krkr2_hit_test_run
 // @plugin-include
-// @qiling
 
 #include <cstdint>
 

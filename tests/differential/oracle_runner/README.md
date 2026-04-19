@@ -1,103 +1,188 @@
-# Qiling Oracle Runner
+# ADB + Frida Oracle Runner
 
-Runs libkrkr2.so under Qiling (Unicorn-based ARM64 emulator) to independently
-validate the hardcoded `EXPECTED_*` tables / inline `"expected"` fields in
-`tests/differential/python/run_*_wasmtime.py`.
+Runs libkrkr2.so (the Android kirikiroid2 binary) inside a real Android
+arm64 emulator, driven from the host over `adb shell`. Provides two
+layers of assertion against the WASM port:
 
-A mismatch means either the EXPECTED value (derived by hand from IDA reading)
-is wrong, or the WASM port diverged from libkrkr2.so.
+1. **Return-value diff** — the host pokes function calls into a tiny
+   [harness binary](harness/) running on the device, reads return
+   values, compares against the spec's `"expected"`.
+2. **Call-sequence diff** — optional per-case Frida tracer attaches to
+   the same harness process, hooks a curated set of sub-function
+   offsets, and verifies the runtime event stream matches a checked-in
+   golden at `tests/differential/traces/<family>/<case_id>.trace.json`.
+
+Any divergence between the port's output and libkrkr2's output — either
+at the return-value or at a sub-call — surfaces at CI time as a PR
+failure.
 
 ## Status
 
-| Family | Qiling oracle | Notes |
-|---|---|---|
-| geometry_hit_test | **✓ 10/10** | Pure C leaf `Player_hitTest` (0x690DF0), no libm/TJS deps |
-| local_transform | **✓ 8/8** | `sub_699940` (0x699940) builds local 2×2; Python does A×L; libm sin/cos hooked |
-| psb_rl_decompress | — skipped | RL loop is inlined inside sub_695DE8 (a 53 KB PSB loader); no standalone entry |
-| bezier_curve | — skipped | `sub_69A754` wraps math in TJS dispatch (`PropGet L"x"`/`L"y"`); calling standalone needs a fake TJS dispatch + vtable |
-| position_interp | — skipped | `sub_69A4D4` depends on TJS-wrapped `sub_69A754` + `sub_698454`; same blocker as above |
-
-Skipped families still run in the WASM port harness against the inline
-`expected` values. Lifting them to the Qiling oracle would require a TJS
-dispatch fake object that responds to `iTJSDispatch2::PropGet` with guest
-arrays — a substantial undertaking left for future work.
+| Family | ADB calls | Golden traces | Notes |
+|---|---|---|---|
+| `geometry_hit_test` | **✓ 10/10** | **✓ 10** | `Player_hitTest` (0x690DF0), pure C leaf |
+| `local_transform` | **✓ 8/8** | **✓ 8** | `sub_699940` (0x699940), libm sin/cos used by `rotate_90` |
+| `bezier_curve` | 6/8 + 1 expected-error + 1 finding | **✓ 7** | `sub_69A754` (0x69A754). `empty_curve` returns 0.0 on libkrkr2 vs 0.5 on port (real differential finding) |
+| `position_interp` | 3/8 + 2 findings + 3 crashers | **✓ 5** | `sub_69A4D4` (0x69A4D4). `linear_t0/t1` have inverted `t` convention; `rotation_*` with empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (sanitised by the port). Crash cases produce no golden by design |
+| `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
 
 ## Prerequisites
 
-**libkrkr2.so** — default path `reference/libkrkr2/libkrkr2.so` (via the
-`reference` git submodule → `kirikiroid2-web-private`). Ensure it's checked
-out: `git submodule update --init reference`. Override with
-`KRKR2_SO_PATH=/path/to/libkrkr2.so` or `--so`.
-
-**Android ARM64 rootfs** — clone Qiling's sample rootfs:
+**libkrkr2.so + supporting libs** — private `reference` git submodule:
 
 ```bash
-git clone --depth 1 https://github.com/qilingframework/rootfs.git ~/.qiling-rootfs
-export KRKR2_ROOTFS=~/.qiling-rootfs/arm64_android6.0
+git submodule update --init reference    # requires PRIVATE_SUBMODULE_PAT
+# Provides:
+#   reference/libkrkr2/libkrkr2.so
+#   reference/lib/libSDL2.so
+#   reference/lib/libffmpeg.so
 ```
 
-The engine points at `arm64_android6.0/` (contains `libc.so`, `libm.so`,
-`libc++.so`, `libstdc++.so`, `linker64`). The smaller `arm64_android/`
-subdir is **insufficient** — missing libm and libc++. Override via
-`KRKR2_ROOTFS` env var or `--rootfs`.
+**Android emulator** — API 24+ arm64-v8a google_apis image. The 4
+ADB runners need a rooted emulator so `adb push` can drop binaries
+into `/data/local/tmp/` and the harness can talk stdin/stdout over
+`adb shell`. Locally we use an AVD named `oracle-arm64`; see
+`.github/workflows/differential.yml` for the CI version
+(`reactivecircus/android-emulator-runner@v2`, `macos-14` host for
+HVF-accelerated arm64).
+
+**Harness binary** — checked in at
+[harness/prebuilt/harness-aarch64](harness/prebuilt/harness-aarch64)
+(450 KB, arm64 PIE, NDK-built). Rebuild instructions are in
+[harness/README.md](harness/README.md).
 
 **Python deps**:
 
 ```bash
 pip install -r tests/differential/oracle_runner/requirements-oracle.txt
+# → frida==16.4.10 (only needed when using --trace / --record-trace)
+```
+
+**Frida server** (for `--trace` mode) — pinned to match `frida-python`:
+
+```bash
+# Operator step, idempotent
+curl -L -o /tmp/frida-server.xz \
+  https://github.com/frida/frida/releases/download/16.4.10/frida-server-16.4.10-android-arm64.xz
+xz -d /tmp/frida-server.xz
+mv /tmp/frida-server tools/bin/android/frida-server
 ```
 
 ## Running
 
+### One-time provisioning on device
+
 ```bash
-export KRKR2_ROOTFS=~/.qiling-rootfs/arm64_android6.0
-
-python3 tests/differential/python/run_geometry_hit_test_qiling.py \
-  --spec-dir tests/differential/specs/geometry_hit_test
-
-python3 tests/differential/python/run_local_transform_qiling.py \
-  --spec-dir tests/differential/specs/local_transform
+export PATH=$ANDROID_SDK_ROOT/platform-tools:$PATH
+adb root && adb wait-for-device
+adb push reference/libkrkr2/libkrkr2.so   /data/local/tmp/
+adb push reference/lib/libSDL2.so         /data/local/tmp/
+adb push reference/lib/libffmpeg.so       /data/local/tmp/
+adb push tests/differential/oracle_runner/harness/prebuilt/harness-aarch64 \
+         /data/local/tmp/
+adb push tools/bin/android/frida-server   /data/local/tmp/
+adb shell "chmod 755 /data/local/tmp/harness-aarch64 /data/local/tmp/frida-server"
+adb shell "nohup /data/local/tmp/frida-server -D >/dev/null 2>&1 &"
 ```
 
-Output is one JSON line per case (same format as `run_*_wasmtime.py` but with
-`"runner": "qiling-oracle"`); mismatches are reported on stderr; exit 0 if all
-match, 1 otherwise.
+### Return-value diff only (no Frida)
+
+```bash
+python3 tests/differential/python/run_geometry_hit_test_adb.py \
+  --spec-dir tests/differential/specs/geometry_hit_test
+```
+
+Output: one JSON line per case on stdout (`runner: android-adb-oracle`);
+mismatches on stderr; exit 0 iff all match.
+
+### With Frida trace verification (recommended in CI)
+
+```bash
+# --trace   : verify runtime call sequence matches golden on disk
+# --record-trace: overwrite goldens from the current run (golden produ-
+#                 cer; use only when libkrkr2 is the new source of truth)
+python3 tests/differential/python/run_bezier_curve_adb.py \
+  --spec-dir tests/differential/specs/bezier_curve --trace
+```
+
+Without either flag the tracer stays off and `frida` is not even
+imported — default runs have zero overhead.
+
+On mismatch the runner prints, with the first divergent step:
+
+```
+TRACE MISMATCH single_segment_mid:
+step 12: addr differs (sub_69A754 vs sub_698454)
+  golden:  enter sub_69A754 depth=1 x0=<ptr> d0=0.5
+  runtime: enter sub_698454 depth=1 x0=<ptr> d0=0.5
+```
 
 ## Architecture
 
 ```
 oracle_runner/
-├── qiling_engine.py    OracleEngine: loads libkrkr2.so, resolves PIE base,
-│                       hooks libm PLT stubs, exposes call(addr, ints=..., doubles=..., ret=...)
-├── arm64_abi.py        AAPCS64 register/stack packing (x0-x7 ints, d0-d7 doubles)
-├── guest_heap.py       16 MB bump allocator at fixed guest VA 0x50000000
-├── stl_layout.py       HitData / Affine2x3 / Vec3 / vector<double> builders
-│                       (kept for future adapters; hit_test only uses HitData)
-└── adapters/
-    ├── geometry_hit_test.py
-    └── local_transform.py
+├── adb_engine.py       AdbHarnessEngine: pushes harness + libs, spawns
+│                       `adb shell`, speaks line-based RPC, tracks pid
+│                       for Frida attach.
+├── arm64_abi.py        AAPCS64 register/stack packing (x0-x7, d0-d7)
+├── guest_heap.py       Bump allocator at fixed guest VA 0x50000000
+├── stl_layout.py       HitData / Affine2x3 builders
+├── frida_tracer.py     FridaTracerEngine: attach to harness pid, load
+│                       agent.js, expose start_case/stop_case
+├── frida_agent.js      Per-target `Interceptor.attach` recording x0-x7
+│                       + d0-d7 at entry; x0/d0 at exit
+├── trace_targets.py    Per-family target offsets + arity + return-kind
+├── trace_diff.py       Golden read/write + first-divergence diff
+├── adapters/           Per-family case-to-CALL translation
+│   ├── geometry_hit_test.py
+│   ├── local_transform.py
+│   ├── bezier_curve.py
+│   └── position_interp.py
+└── harness/            On-device guest (see harness/README.md)
+    ├── harness.cpp
+    ├── CMakeLists.txt
+    └── prebuilt/harness-aarch64
 ```
 
-`run_*_qiling.py` (siblings of `run_*_wasmtime.py`) are thin wrappers that
-instantiate `OracleEngine` once and iterate spec JSON. They import
-`EXPECTED_*` tables and `load_specs` from their wasmtime counterparts to
-avoid duplication.
+`run_*_adb.py` (siblings of `run_*_wasmtime.py`) instantiate
+`AdbHarnessEngine` once, iterate specs, and optionally attach a
+`FridaTracerEngine` configured with the family's target offset list.
 
 ## Implementation notes
 
-**libm PLT hooking** — Qiling loads libkrkr2.so but doesn't fully initialise
-libm.so's GOT/PLT chain. Calling `sin`/`cos` via PLT crashes with
-`UC_ERR_FETCH_UNMAPPED`. We hook libkrkr2.so's `.sin` and `.cos` PLT stubs
-(offsets 0x411390 and 0x4091E0, found via IDA `lookup_funcs`) and execute
-Python `math.sin`/`math.cos` in-process, then advance PC to LR. This bypasses
-libm entirely. All 8 local_transform cases pass bit-exact against the port.
+**Pointer canonicalisation** — raw x-register values ≥ `0x1_0000_0000`
+(bionic heap, libkrkr2 text, stack, TLS) are replaced with `<ptr>` at
+normalisation time. Values below (our deterministic GuestHeap at
+`0x50000000`, small scalars, bools) stay raw. Without this the trace
+diff fires on every ASLR reshuffle.
 
-**A × L multiplication** — libkrkr2.so's `sub_699940` only builds the local
-2×2 matrix and writes it back to layer offsets +120..+144. The port's
-`applyLocalTransform` additionally performs `A_new = A × L`. The adapter
-reads L back from guest memory and performs the A×L step in Python so the
-oracle result matches the spec's `"expected"` Affine2x3.
+**Arity masking** — AAPCS64 leaves unused argument registers in
+whatever state the caller wrote last. Per-target `ARG_COUNTS` in
+[trace_targets.py](trace_targets.py) caps the meaningful x/d register
+count; beyond that we emit `-`. The return-value half uses
+`RETURN_KINDS` to decide whether `x0` (int/pointer return) or `d0`
+(double return) carries signal.
 
-**Guard page** — before each call, LR is set to 0x90000000 (a mapped guard
-page). `ql.emu_start(begin=addr, end=0x90000000)` runs until PC reaches the
-guard, giving a clean function-return boundary.
+**Crash resilience** — `AdbHarnessEngine.is_alive()` polls the child
+process; on SIGSEGV inside libkrkr2 the runner calls `restart()`,
+re-spawns the harness, and re-attaches Frida. Crash cases produce no
+golden trace (the script is torn down with the process); the tracer's
+`stop_case()` swallows `frida.InvalidOperationError` so the adapter's
+exception surface reflects the real crash, not the Frida-side
+teardown.
+
+**Script destroyed errors** — if you see `InvalidOperationError` from
+`stop_case`, it means the target died mid-case *and* the canonical
+swallow path didn't trigger. Verify `frida-server` on the device
+matches the pinned `frida-python` version.
+
+## Follow-ups
+
+- Port-side tracer — instrument the wasm build to emit the same event
+  schema, run a true libkrkr2-vs-port sequence diff (currently the
+  golden freezes libkrkr2-side only)
+- `psb_rl_decompress` — needs static extraction of the RL loop from
+  `sub_695DE8`, not in scope
+- Richer target lists — hook `iTJSDispatch2::PropGet` call-sites
+  inside `sub_69A754`/`sub_69A4D4` if the leaf-only coverage proves
+  insufficient

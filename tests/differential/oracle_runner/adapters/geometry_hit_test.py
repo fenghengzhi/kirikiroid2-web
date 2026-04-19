@@ -46,12 +46,22 @@ def _flatten_shape(shape: dict) -> tuple[int, list[float]]:
     return type_id, values
 
 
-def run_case(engine, spec: dict) -> dict:
+def run_case(engine, spec: dict, tracer=None) -> dict:
     engine.reset_heap()
     type_id, values = _flatten_shape(spec["shape"])
     hd_ptr = build_hit_data(engine.heap, type_id, values)
     px = float(spec["point"]["x"])
     py = float(spec["point"]["y"])
     addr = engine.offset(PLAYER_HIT_TEST_OFFSET)
-    result = engine.call(addr, ints=(hd_ptr,), doubles=(px, py), ret="int")
-    return {"case_id": spec["id"], "hit": bool(result), "status": "ok"}
+    trace = None
+    if tracer is not None:
+        tracer.start_case()
+    try:
+        result = engine.call(addr, ints=(hd_ptr,), doubles=(px, py), ret="int")
+    finally:
+        if tracer is not None:
+            trace = tracer.stop_case()
+    out = {"case_id": spec["id"], "hit": bool(result), "status": "ok"}
+    if trace is not None:
+        out["trace"] = trace
+    return out

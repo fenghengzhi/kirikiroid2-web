@@ -80,12 +80,19 @@ def _apply_ax_l(affine_in, l) -> list[float]:
     return [m11, m21, m12, m22, a4, a5]
 
 
-def run_case(engine, spec: dict) -> dict:
+def run_case(engine, spec: dict, tracer=None) -> dict:
     engine.reset_heap()
     node_addr = _build_node(engine.heap, spec)
     ctx_addr = _build_ctx(engine.heap)
     addr = engine.offset(SUB_699940_OFFSET)
-    engine.call(addr, ints=(node_addr, ctx_addr), ret="void")
+    trace = None
+    if tracer is not None:
+        tracer.start_case()
+    try:
+        engine.call(addr, ints=(node_addr, ctx_addr), ret="void")
+    finally:
+        if tracer is not None:
+            trace = tracer.stop_case()
 
     # Read back L from layer offsets 120, 128, 136, 144.
     raw = engine.ql.mem.read(node_addr + _OFF_L11, 32)
@@ -100,7 +107,7 @@ def run_case(engine, spec: dict) -> dict:
         if not math.isclose(a, b, rel_tol=tol, abs_tol=tol)
     ]
     status = "mismatch" if mismatches else "ok"
-    return {
+    out = {
         "case_id": spec["id"],
         "status": status,
         "result": affine_out,
@@ -108,3 +115,6 @@ def run_case(engine, spec: dict) -> dict:
         "mismatches": mismatches,
         "local_l": [l11, l12, l21, l22],
     }
+    if trace is not None:
+        out["trace"] = trace
+    return out
