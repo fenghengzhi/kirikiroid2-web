@@ -83,21 +83,26 @@ jobs:
           git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
           git -c submodule.reference.update=checkout submodule update --init --recursive
 
-      # Redroid requires the Android `binder` kernel module + binderfs.
-      # The stock Ubuntu Azure kernel ships it as a loadable module.
-      # Fail loud if it's missing (prefer a clear error to a silent hang
-      # later when adb can't connect).
+      # Redroid needs the Android binder driver. Azure kernels don't
+      # ship binder in the default module set — try linux-modules-extra
+      # first (which on Canonical Ubuntu images carries binder). If
+      # still missing, fail loud with diagnostics so the rest of the
+      # job doesn't waste time.
       - name: Set up Android binder
         run: |
           set -x
           uname -a
-          # On 6.x kernels the driver name is `binder_linux`; on older
-          # it was `binder`. Try both.
+          cat /boot/config-$(uname -r) 2>/dev/null | grep -iE 'CONFIG_ANDROID|BINDER' || true
+          # linux-modules-extra-<ver> on Azure kernels sometimes ships
+          # binder + binderfs; cost is ~30s download, worth trying.
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            "linux-modules-extra-$(uname -r)" || true
+          ls -la /lib/modules/$(uname -r)/kernel/drivers/android/ 2>/dev/null || true
           sudo modprobe binder_linux num_binders=3 || \
             sudo modprobe binder num_binders=3 || true
           lsmod | grep -E '^binder' || \
-            { echo "::error::binder kernel module unavailable — Redroid will not work on this runner" >&2; exit 1; }
-          # Mount binderfs so redroid can allocate its own binder domain.
+            { echo "::error::binder kernel module unavailable on $(uname -r) — Redroid cannot run on this GitHub-hosted runner" >&2; exit 1; }
           sudo mkdir -p /dev/binderfs
           mountpoint -q /dev/binderfs || \
             sudo mount -t binder binder /dev/binderfs
