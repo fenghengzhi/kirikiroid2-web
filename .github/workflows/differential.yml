@@ -61,10 +61,12 @@ jobs:
         run: python tests/differential/run_all.py
 
   # ── libkrkr2 oracle via ADB harness + Frida call-sequence diff
-  #    (rooted Android 7 arm64 emulator on Apple Silicon macOS for HVF).
+  #    (rooted Android 7 arm64 emulator on KVM-accelerated Graviton-class
+  #    ARM64 Linux; HVF is blocked by nested virt on GitHub-hosted
+  #    macos-14, so we use native ARM Linux hosts instead).
   adb-frida:
     needs: wasmtime
-    runs-on: macos-14
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,6 +78,15 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
           git -c submodule.reference.update=checkout submodule update --init --recursive
+
+      # /dev/kvm exists on ubuntu-24.04-arm but isn't world-accessible by
+      # default; reactivecircus docs recommend the udev-rule workaround.
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -110,7 +121,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-api24-arm64-${{ runner.os }}
+          key: avd-api24-arm64-${{ runner.os }}-${{ runner.arch }}
 
       - name: Generate AVD snapshot
         if: steps.avd-cache.outputs.cache-hit != 'true'
