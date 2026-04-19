@@ -71,7 +71,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       # Multi-arch manifest; Docker picks arm64 variant on ubuntu-24.04-arm.
-      REDROID_IMAGE: redroid/redroid:11.0.0_64only
+      # Using Android 14 (the Redroid repo's currently-maintained default);
+      # older Android tags have been dropped from the arm64 manifest list.
+      REDROID_IMAGE: redroid/redroid:14.0.0_64only
     steps:
       - uses: actions/checkout@v4
         with:
