@@ -60,13 +60,17 @@ jobs:
       - name: Build WASM + run port-wasm differential tests
         run: python tests/differential/run_all.py
 
-  # ── libkrkr2 oracle via ADB harness + Frida call-sequence diff
-  #    (rooted Android 7 arm64 emulator on KVM-accelerated Graviton-class
-  #    ARM64 Linux; HVF is blocked by nested virt on GitHub-hosted
-  #    macos-14, so we use native ARM Linux hosts instead).
+  # ── libkrkr2 oracle via ADB harness + Frida call-sequence diff.
+  #    Runs against a Redroid (Android-in-Docker) arm64 container on a
+  #    native arm64 Linux host, which sidesteps the nested-virt limits
+  #    of GitHub's macos-14 (HVF blocked) and KVM-less ubuntu-24.04-arm.
+  #    Same kernel means no hardware virtualisation required; Android
+  #    runs as a privileged container sharing the host kernel's binder.
   adb-frida:
     needs: wasmtime
     runs-on: ubuntu-24.04-arm
+    env:
+      REDROID_IMAGE: redroid/redroid:11.0.0_64only-arm64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,20 +83,31 @@ jobs:
           git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
           git -c submodule.reference.update=checkout submodule update --init --recursive
 
-      # Give the runner user RW access to /dev/kvm so QEMU can open it.
-      # The reactivecircus-recommended `udevadm trigger --name-match=kvm`
-      # dance doesn't work on ubuntu-24.04-arm (KVM isn't a hot-pluggable
-      # udev device on Graviton hosts); chmod it directly instead. The
-      # diagnostic block first so we fail loud if /dev/kvm is missing
-      # rather than silently falling back to TCG.
-      - name: Enable KVM
+      # Redroid requires the Android `binder` kernel module + binderfs.
+      # The stock Ubuntu Azure kernel ships it as a loadable module.
+      # Fail loud if it's missing (prefer a clear error to a silent hang
+      # later when adb can't connect).
+      - name: Set up Android binder
         run: |
           set -x
           uname -a
-          ls -la /dev/kvm || { echo "::error::/dev/kvm missing — no KVM on this runner" >&2; exit 1; }
-          lsmod | grep -E '^kvm' || true
-          sudo chmod 0666 /dev/kvm
-          ls -la /dev/kvm
+          # On 6.x kernels the driver name is `binder_linux`; on older
+          # it was `binder`. Try both.
+          sudo modprobe binder_linux num_binders=3 || \
+            sudo modprobe binder num_binders=3 || true
+          lsmod | grep -E '^binder' || \
+            { echo "::error::binder kernel module unavailable — Redroid will not work on this runner" >&2; exit 1; }
+          # Mount binderfs so redroid can allocate its own binder domain.
+          sudo mkdir -p /dev/binderfs
+          mountpoint -q /dev/binderfs || \
+            sudo mount -t binder binder /dev/binderfs
+          ls /dev/binderfs
+
+      - name: Install adb + tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends adb xz-utils
+          adb version
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -119,79 +134,79 @@ jobs:
           mv /tmp/frida-server tools/bin/android/frida-server
           chmod 755 tools/bin/android/frida-server
 
-      # AVD cache to skip cold-boot / image download on subsequent runs.
-      - name: Cache AVD
-        uses: actions/cache@v4
-        id: avd-cache
-        with:
-          path: |
-            ~/.android/avd/*
-            ~/.android/adb*
-          key: avd-api24-arm64-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Generate AVD snapshot
-        if: steps.avd-cache.outputs.cache-hit != 'true'
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 24
-          target: google_apis
-          arch: arm64-v8a
-          force-avd-creation: false
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save
-          disable-animations: true
-          disable-spellchecker: true
-          script: echo "AVD booted; saving snapshot"
+      - name: Start Redroid container
+        run: |
+          set -x
+          docker pull "${REDROID_IMAGE}"
+          # --network=host so `adb connect localhost:5555` from runner
+          # talks to redroid's adbd on the same IP namespace.
+          docker run -d --rm --name redroid \
+            --privileged \
+            --network=host \
+            "${REDROID_IMAGE}"
+          # Wait for boot: adb connect + sys.boot_completed=1.
+          for i in $(seq 1 60); do
+            sleep 5
+            adb connect localhost:5555 2>&1 | grep -qE 'connected|already' || continue
+            bc=$(adb -s localhost:5555 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')
+            echo "boot_completed=${bc} (attempt ${i}/60)"
+            if [ "${bc}" = "1" ]; then
+              echo "Redroid ready"
+              break
+            fi
+            if [ "${i}" = "60" ]; then
+              echo "::error::Redroid didn't boot within 5 minutes" >&2
+              docker logs redroid >&2 || true
+              exit 1
+            fi
+          done
+          adb devices -l
 
       - name: Run ADB+Frida differential oracle
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 24
-          target: google_apis
-          arch: arm64-v8a
-          force-avd-creation: false
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save
-          disable-animations: true
-          disable-spellchecker: true
-          script: |
-            set -euo pipefail
-            adb root
-            adb wait-for-device
-            adb shell "mkdir -p /data/local/tmp"
-            adb push reference/libkrkr2/libkrkr2.so   /data/local/tmp/
-            adb push reference/lib/libSDL2.so         /data/local/tmp/
-            adb push reference/lib/libffmpeg.so       /data/local/tmp/
-            adb push tests/differential/oracle_runner/harness/prebuilt/harness-aarch64 \
-                     /data/local/tmp/
-            adb push tools/bin/android/frida-server   /data/local/tmp/
-            adb shell "chmod 755 /data/local/tmp/harness-aarch64 /data/local/tmp/frida-server"
-            adb shell "nohup /data/local/tmp/frida-server -D >/dev/null 2>&1 &"
-            sleep 3
-            test -n "$(adb shell pidof frida-server | tr -d '[:space:]')" \
-              || { echo 'frida-server did not start' >&2; exit 1; }
+        run: |
+          set -euo pipefail
+          export ANDROID_SERIAL=localhost:5555
+          adb -s "${ANDROID_SERIAL}" shell "mkdir -p /data/local/tmp"
+          adb -s "${ANDROID_SERIAL}" push reference/libkrkr2/libkrkr2.so   /data/local/tmp/
+          adb -s "${ANDROID_SERIAL}" push reference/lib/libSDL2.so         /data/local/tmp/
+          adb -s "${ANDROID_SERIAL}" push reference/lib/libffmpeg.so       /data/local/tmp/
+          adb -s "${ANDROID_SERIAL}" push tests/differential/oracle_runner/harness/prebuilt/harness-aarch64 \
+                   /data/local/tmp/
+          adb -s "${ANDROID_SERIAL}" push tools/bin/android/frida-server   /data/local/tmp/
+          adb -s "${ANDROID_SERIAL}" shell "chmod 755 /data/local/tmp/harness-aarch64 /data/local/tmp/frida-server"
+          adb -s "${ANDROID_SERIAL}" shell "nohup /data/local/tmp/frida-server -D >/dev/null 2>&1 &"
+          sleep 3
+          test -n "$(adb -s "${ANDROID_SERIAL}" shell pidof frida-server | tr -d '[:space:]')" \
+            || { echo 'frida-server did not start' >&2; exit 1; }
 
-            # Runners exit non-zero on BOTH trace-vs-golden divergences
-            # AND port-vs-libkrkr2 value divergences. The Frida job's
-            # purpose is only the former — port-value divergences are
-            # documented findings (see oracle_runner/README.md "Status")
-            # and get addressed in the port, not here. Fail only if a
-            # trace diff or missing-golden error fires.
-            trace_failed=0
-            for f in geometry_hit_test local_transform bezier_curve position_interp; do
-              echo "::group::run_${f}_adb --trace"
-              set +e
-              python3 tests/differential/python/run_${f}_adb.py \
-                      --spec-dir tests/differential/specs/${f} \
-                      --trace \
-                      > /tmp/run.${f}.stdout 2> /tmp/run.${f}.stderr
-              runner_rc=$?
-              set -e
-              cat /tmp/run.${f}.stdout
-              cat /tmp/run.${f}.stderr >&2
-              if grep -qE '^TRACE (MISMATCH|MISSING)' /tmp/run.${f}.stderr; then
-                echo "::error family=${f}::Frida trace regression" >&2
-                trace_failed=1
-              fi
-              echo "::endgroup::"
-              echo "${f}: runner_rc=${runner_rc}"
-            done
-            exit $trace_failed
+          # Runners exit non-zero on BOTH trace-vs-golden divergences
+          # AND port-vs-libkrkr2 value divergences. The Frida job's
+          # purpose is only the former — port-value divergences are
+          # documented findings (see oracle_runner/README.md "Status")
+          # and get addressed in the port, not here. Fail only if a
+          # trace diff or missing-golden error fires.
+          trace_failed=0
+          for f in geometry_hit_test local_transform bezier_curve position_interp; do
+            echo "::group::run_${f}_adb --trace"
+            set +e
+            python3 tests/differential/python/run_${f}_adb.py \
+                    --spec-dir tests/differential/specs/${f} \
+                    --serial "${ANDROID_SERIAL}" \
+                    --trace \
+                    > /tmp/run.${f}.stdout 2> /tmp/run.${f}.stderr
+            runner_rc=$?
+            set -e
+            cat /tmp/run.${f}.stdout
+            cat /tmp/run.${f}.stderr >&2
+            if grep -qE '^TRACE (MISMATCH|MISSING)' /tmp/run.${f}.stderr; then
+              echo "::error family=${f}::Frida trace regression" >&2
+              trace_failed=1
+            fi
+            echo "::endgroup::"
+            echo "${f}: runner_rc=${runner_rc}"
+          done
+          exit $trace_failed
+
+      - name: Stop Redroid
+        if: always()
+        run: docker stop redroid || true
