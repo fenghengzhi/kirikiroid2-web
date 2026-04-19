@@ -79,14 +79,20 @@ jobs:
           git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
           git -c submodule.reference.update=checkout submodule update --init --recursive
 
-      # /dev/kvm exists on ubuntu-24.04-arm but isn't world-accessible by
-      # default; reactivecircus docs recommend the udev-rule workaround.
-      - name: Enable KVM group perms
+      # Give the runner user RW access to /dev/kvm so QEMU can open it.
+      # The reactivecircus-recommended `udevadm trigger --name-match=kvm`
+      # dance doesn't work on ubuntu-24.04-arm (KVM isn't a hot-pluggable
+      # udev device on Graviton hosts); chmod it directly instead. The
+      # diagnostic block first so we fail loud if /dev/kvm is missing
+      # rather than silently falling back to TCG.
+      - name: Enable KVM
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+          set -x
+          uname -a
+          ls -la /dev/kvm || { echo "::error::/dev/kvm missing — no KVM on this runner" >&2; exit 1; }
+          lsmod | grep -E '^kvm' || true
+          sudo chmod 0666 /dev/kvm
+          ls -la /dev/kvm
 
       - name: Setup Python
         uses: actions/setup-python@v5
