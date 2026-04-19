@@ -70,10 +70,11 @@ jobs:
     needs: wasmtime
     runs-on: ubuntu-24.04-arm
     env:
-      # Multi-arch manifest; Docker picks arm64 variant on ubuntu-24.04-arm.
-      # Using Android 14 (the Redroid repo's currently-maintained default);
-      # older Android tags have been dropped from the arm64 manifest list.
-      REDROID_IMAGE: redroid/redroid:14.0.0_64only
+      # Multi-arch manifest (amd64 + arm64). Tag schema is
+      # `<version>_64only-<date>`; pin a date for reproducibility rather
+      # than floating `-latest`. Android 14 = API 34, libkrkr2 targets
+      # API 21+ so the API level is non-load-bearing.
+      REDROID_IMAGE: redroid/redroid:14.0.0_64only-240527
     steps:
       - uses: actions/checkout@v4
         with:
