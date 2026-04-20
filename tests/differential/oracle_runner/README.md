@@ -22,7 +22,7 @@ failure.
 |---|---|---|---|
 | `geometry_hit_test` | **✓ 10/10** | **✓ 10** | `Player_hitTest` (0x690DF0), pure C leaf |
 | `local_transform` | **✓ 8/8** | **✓ 8** | `sub_699940` (0x699940), libm sin/cos used by `rotate_90` |
-| `bezier_curve` | 6/8 + 1 expected-error + 1 finding | **✓ 7** | `sub_69A754` (0x69A754). `empty_curve` returns 0.0 on libkrkr2 vs 0.5 on port (real differential finding) |
+| `bezier_curve` | 6/7 + 1 finding | **✓ 7** | `sub_69A754` (0x69A754). `empty_curve` returns 0.0 on libkrkr2 vs 0.5 on port (real differential finding). `size_mismatch` spec removed: libkrkr2 infinite-loops on mismatched `x.count`/`y.count` because the segment-step loop (`v8 += 3`) has no `x.count` bound — UB input, no meaningful oracle |
 | `position_interp` | 3/8 + 2 findings + 3 crashers | **✓ 5** | `sub_69A4D4` (0x69A4D4). `linear_t0/t1` have inverted `t` convention; `rotation_*` with empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (sanitised by the port). Crash cases produce no golden by design |
 | `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
 
