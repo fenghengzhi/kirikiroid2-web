@@ -1,7 +1,7 @@
 sandbox_mode = "danger-full-access"
 approval_policy = "never"
 model_context_window = 1000000
-model_auto_compact_token_limit = 900000
+model_auto_compact_token_limit = 400000
 [mcp_servers.ida-mcp-pro]
 url = "http://127.0.0.1:13337/mcp"
 startup_timeout_sec = 20

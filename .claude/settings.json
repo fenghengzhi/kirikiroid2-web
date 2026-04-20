@@ -19,9 +19,7 @@
     ]
   },
   "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "ida-pro-mcp"
-  ],
+  "enabledMcpjsonServers": ["ida-pro-mcp"],
   "enabledPlugins": {
     "ralph-wiggum@claude-code-plugins": true,
     "claude-md-management@claude-plugins-official": true,
@@ -35,6 +33,8 @@
     "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
     "DISABLE_AUTOUPDATER": "1",
     "CLAUDE_CODE_EFFORT_LEVEL": "high",
-    "MCP_TIMEOUT": "600000"
+    "MCP_TIMEOUT": "600000",
+    "MCP_TOOL_TIMEOUT": "600000",
+    "MAX_MCP_OUTPUT_TOKENS": "500000"
   }
 }
