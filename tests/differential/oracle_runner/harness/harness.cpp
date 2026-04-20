@@ -38,6 +38,8 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <exception>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +62,18 @@
 #define OFF_TTSTR_FROM_ASCII   0xA13878
 #define OFF_TTJSVARIANT_CLEAR  0xA0F778
 
+/* TVPScriptEngine global slot (0x1AE2FD0 relative to libkrkr2 base).
+ * cocos2d's applicationDidFinishLaunching path (TVPMainScene::doStartup
+ * → TVPInitScriptEngine) parks a live tTJS* here. When the harness runs
+ * inside the repacked krkr2-harness.apk (HarnessActivity extends
+ * Cocos2dxActivity) this slot is already populated by the time we serve
+ * the first RPC, so we just read it — no manual ttstr globals or call
+ * into TVPInitScriptEngine required.
+ *
+ * In standalone / app_process modes the slot is NULL and we fall back
+ * to a minimal tTJS ctor (sub_97EA40) on a static buffer. */
+#define OFF_TVP_SCRIPT_ENGINE_GLOBAL 0x1AE2FD0
+
 /* iTJSDispatch2 vtable slot for PropGet — standard Kirikiri interface
  * layout: slot 0=Release, slot 1=AddRef, slot 2=QueryInterface, ..., slot 4 (0x20 offset) = PropGet.
  * Verified against sub_69A754 decompile: `(*(vtable+32))(this, flags, key, hint, &result, objthis)`. */
@@ -81,24 +95,51 @@ typedef void     void_fn(uint64_t, uint64_t, uint64_t, uint64_t,
                          double, double, double, double,
                          double, double, double, double);
 
-/* ---------- stdio helpers ---------- */
+/* ---------- RPC I/O (fd-based; stdio just passes 0/1) ---------- */
+
+/* Global I/O fd context. `harness_rpc_main()` sets them to 0/1 (stdin/stdout);
+ * `harness_rpc_main_fd()` sets them to the same socket fd for both (TCP
+ * sockets are bidirectional). Every command handler uses only read_line/
+ * println/write_all, never stdio directly. */
+static int g_in_fd  = 0;
+static int g_out_fd = 1;
+
+static ssize_t write_all(int fd, const void *buf, size_t n) {
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t done = 0;
+    while (done < n) {
+        ssize_t w = write(fd, p + done, n - done);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        done += (size_t)w;
+    }
+    return (ssize_t)done;
+}
 
 static int read_line(char *buf, size_t cap) {
     size_t n = 0;
     while (n + 1 < cap) {
-        int c = getchar();
-        if (c == EOF) return n == 0 ? -1 : (int)n;
+        char c;
+        ssize_t r;
+        do { r = read(g_in_fd, &c, 1); } while (r < 0 && errno == EINTR);
+        if (r <= 0) return n == 0 ? -1 : (int)n;
         if (c == '\n') break;
-        buf[n++] = (char)c;
+        buf[n++] = c;
     }
     buf[n] = '\0';
     return (int)n;
 }
 
+static void write_bytes(const void *buf, size_t n) {
+    (void)write_all(g_out_fd, buf, n);
+}
+
 static void println(const char *s) {
-    fputs(s, stdout);
-    fputc('\n', stdout);
-    fflush(stdout);
+    size_t len = strlen(s);
+    write_bytes(s, len);
+    write_bytes("\n", 1);
 }
 
 /* parse hex u64; returns 0 on ok, -1 on error. Stops at whitespace/end. */
@@ -230,9 +271,9 @@ static void handle_read(const char *args) {
     static char out[4 + 2 * 65536 + 1];
     memcpy(out, "OK_DATA ", 8);
     hex_encode((const uint8_t *)(uintptr_t)addr, (size_t)n, out + 8);
-    fputs(out, stdout);
-    fputc('\n', stdout);
-    fflush(stdout);
+    size_t total = 8 + 2 * (size_t)n;
+    write_bytes(out, total);
+    write_bytes("\n", 1);
 }
 
 static void handle_write(const char *args) {
@@ -252,27 +293,101 @@ static void handle_write(const char *args) {
 
 /* ---------- TJS helpers ---------- */
 
+/* handle_tjs_init picks a strategy at runtime:
+ *
+ *   1. If the TVPScriptEngine global at libkrkr2+0x1AE2FD0 is already
+ *      populated (i.e. cocos2d's applicationDidFinishLaunching already
+ *      ran — only happens when the harness is loaded inside a real
+ *      Activity like HarnessActivity in the repacked APK), read it.
+ *      This is "Full TJS" — every NCB class registered, Motion.* etc.
+ *   2. Otherwise call the tTJS C++ ctor (sub_97EA40) on a static 0x68-byte
+ *      buffer. Registers Array/Dict/Math only. Minimal but good enough
+ *      for bezier_curve / position_interp and the two non-TJS families.
+ *
+ * Mode 1 is used by the APK-backed path (HarnessActivity); modes 2 is
+ * used by the standalone bionic ELF and the app_process launcher. */
 static uint64_t g_so_base = 0;
-static uint8_t  g_tjs_buf[0x68];   /* tTJS instance storage (ctor-filled) */
+static uint8_t  g_tjs_buf[0x68];    /* fallback static tTJS storage */
+static void    *g_tjs_ptr = NULL;   /* filled by handle_tjs_init */
 static int      g_tjs_inited = 0;
 
 static inline void *libkrkr2_fn(uint64_t off) {
     return (void *)(uintptr_t)(g_so_base + off);
 }
 
+/* Crash diagnostics for the Full-TJS init path — `TVPInitScriptEngine`
+ * recurses through a config/argv init chain that expects globals to
+ * already be populated by normal Android app launch. If any of those
+ * reads fall over, emit something useful on stderr before the process
+ * dies so we can differentiate "SIGBUS at wild PC" (uninit'd fn ptr)
+ * from "SIGSEGV deref NULL" (missing Application context).
+ *
+ * Raw sigcontext offsets on bionic arm64 (see bionic/libc/kernel/uapi/
+ * asm-arm64/asm/sigcontext.h): fault_address @ +0x00, regs[31] @ +0x08,
+ * sp @ +0x100, pc @ +0x108. ucontext_t.uc_mcontext starts at +0xB0
+ * inside ucontext_t on bionic arm64 LP64. */
+#define MCTX_OFF_IN_UCTX    0xB0
+#define MCTX_FAULT_ADDR     0x00
+#define MCTX_SP_OFF         0x100
+#define MCTX_PC_OFF         0x108
+#define MCTX_LR_OFF         0xF8   /* regs[30] */
+
+/* Custom std::terminate handler.
+ *
+ * libkrkr2.so is linked against Android's legacy `libstdc++.so` (gnustl);
+ * our harness uses NDK r27's libc++ via `-static-libstdc++`. When
+ * libkrkr2 throws a C++ exception that escapes our frames (or even just
+ * propagates past a catch that can't match the other-runtime type_info),
+ * libc++abi's default terminate handler (`demangling_terminate_handler`)
+ * invokes the Itanium name demangler on the exception's `type_info.name()`.
+ * The name comes from libkrkr2's gnustl, which the libc++ demangler
+ * doesn't understand; it walks into garbage and SIGBUS's with an unaligned
+ * PC inside the demangler's .text.
+ *
+ * Install a demangle-free handler that just reports and exits. */
+static void harness_terminate_handler() {
+    (void)write(2, "ERR std::terminate called (cross-runtime exception?)\n", 53);
+    (void)write(1, "ERR terminate\n", 14);
+    _exit(3);
+}
+
+static void install_crash_handlers(void) {
+    std::set_terminate(harness_terminate_handler);
+}
+
 static void handle_tjs_init(void) {
     if (g_tjs_inited) {
         char buf[48];
-        snprintf(buf, sizeof(buf), "OK %llx", (unsigned long long)(uintptr_t)g_tjs_buf);
+        snprintf(buf, sizeof(buf), "OK %llx", (unsigned long long)(uintptr_t)g_tjs_ptr);
         println(buf);
         return;
     }
-    /* tTJS::tTJS(this) — x0 = this */
+
+    /* Step 1: if cocos2d already initialized the engine (APK mode), the
+     * TVPScriptEngine global at libkrkr2+0x1AE2FD0 holds a live tTJS*.
+     * This is the preferred path because every NCB class (Motion.*,
+     * Window, Layer, Plugins, ...) is registered. */
+    void **slot = (void **)libkrkr2_fn(OFF_TVP_SCRIPT_ENGINE_GLOBAL);
+    if (*slot != NULL) {
+        g_tjs_ptr = *slot;
+        g_tjs_inited = 1;
+        char buf[64];
+        snprintf(buf, sizeof(buf), "OK %llx",
+                 (unsigned long long)(uintptr_t)g_tjs_ptr);
+        println(buf);
+        return;
+    }
+
+    /* Step 2: standalone path — no cocos2d, no JVM. Just construct a
+     * bare tTJS into our static buffer. Registers Array/Dict/Math — good
+     * enough for bezier_curve / position_interp. */
     typedef void (*ctor_fn)(void *this_ptr);
     ((ctor_fn)libkrkr2_fn(OFF_TTJS_CTOR))(g_tjs_buf);
+    g_tjs_ptr = g_tjs_buf;
     g_tjs_inited = 1;
-    char buf[48];
-    snprintf(buf, sizeof(buf), "OK %llx", (unsigned long long)(uintptr_t)g_tjs_buf);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "OK %llx",
+             (unsigned long long)(uintptr_t)g_tjs_ptr);
     println(buf);
 }
 
@@ -323,7 +438,7 @@ static void handle_tjs_exec(const char *args) {
                                void *result, void *context,
                                void *name, int lineofs);
         (void)((exec_fn)libkrkr2_fn(OFF_TTJS_EXECSCRIPT))(
-            g_tjs_buf, &slot, NULL, NULL, NULL, 0);
+            g_tjs_ptr, &slot, NULL, NULL, NULL, 0);
     } catch (std::exception &e) {
         char err[256];
         snprintf(err, sizeof(err),
@@ -388,7 +503,7 @@ static void handle_tjs_global(const char *args) {
 
     /* GlobalContext = tTJS::GetGlobalNoAddRef(tTJS*). Returns iTJSDispatch2*. */
     typedef void *(*getg_fn)(void *this_ptr);
-    void *ctx = ((getg_fn)libkrkr2_fn(OFF_TTJS_GETGLOBAL))(g_tjs_buf);
+    void *ctx = ((getg_fn)libkrkr2_fn(OFF_TTJS_GETGLOBAL))(g_tjs_ptr);
     if (!ctx) {
         println("ERR null global context");
         return;
@@ -417,17 +532,26 @@ static void handle_tjs_global(const char *args) {
     println(buf);
 }
 
-/* ---------- main ---------- */
+/* ---------- RPC main (shared between standalone ELF and JNI entry) ---------- */
 
-int main(int argc, char **argv) {
-    const char *so_path = (argc > 1) ? argv[1] : "libkrkr2.so";
+static int harness_bootstrap(const char *so_path) {
+    /* Install before dlopen so faults in libkrkr2 loader code get reported. */
+    install_crash_handlers();
 
-    void *heap = mmap((void *)HEAP_VA, HEAP_SIZE, PROT_READ | PROT_WRITE,
-                      MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (heap == MAP_FAILED || heap != (void *)HEAP_VA) {
-        fprintf(stderr, "harness: mmap heap at 0x%lx failed\n",
-                (unsigned long)HEAP_VA);
-        return 1;
+    /* Reserve the oracle heap region if not already mapped by a previous
+     * call (idempotent: MAP_FIXED would silently overwrite, so check
+     * first). When running inside an APK, libkrkr2 is already loaded
+     * by cocos2d, so dlopen below just bumps refcount. */
+    static int heap_mapped = 0;
+    if (!heap_mapped) {
+        void *heap = mmap((void *)HEAP_VA, HEAP_SIZE, PROT_READ | PROT_WRITE,
+                          MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (heap == MAP_FAILED || heap != (void *)HEAP_VA) {
+            fprintf(stderr, "harness: mmap heap at 0x%lx failed\n",
+                    (unsigned long)HEAP_VA);
+            return 1;
+        }
+        heap_mapped = 1;
     }
 
     void *h = dlopen(so_path, RTLD_NOW | RTLD_GLOBAL);
@@ -454,11 +578,20 @@ int main(int argc, char **argv) {
 
     g_so_base = so_base;   /* cached for TJS helpers */
 
-    /* Announce readiness. */
+    /* Announce readiness on the caller-selected output fd. */
     char ready[64];
     snprintf(ready, sizeof(ready), "READY %llx %lx",
              (unsigned long long)so_base, (unsigned long)HEAP_VA);
     println(ready);
+    return 0;
+}
+
+/* Returns 0 on clean exit (host sent QUIT), 1 on bootstrap failure. */
+extern "C" int harness_rpc_main(const char *so_path) {
+    g_in_fd = 0;
+    g_out_fd = 1;
+    int rc = harness_bootstrap(so_path);
+    if (rc != 0) return rc;
 
     /* Command loop. */
     static char line[131072];  /* accommodates WRITE hex payload */
@@ -490,6 +623,55 @@ int main(int argc, char **argv) {
         }
     }
 
-    dlclose(h);
+    /* Deliberately not dlclose'ing — libkrkr2 is kept loaded because
+     * subsequent sessions (in APK mode) reuse the same global TJS. */
     return 0;
+}
+
+/* Serve a single RPC session on the given fd (TCP socket, both directions).
+ * HarnessActivity inside the repacked APK invokes this through JNI when a
+ * client connects. Shares all handlers with `harness_rpc_main`. */
+extern "C" int harness_rpc_main_fd(const char *so_path, int fd) {
+    g_in_fd = fd;
+    g_out_fd = fd;
+    int rc = harness_bootstrap(so_path);
+    if (rc != 0) return rc;
+
+    static char line[131072];
+    for (;;) {
+        int n = read_line(line, sizeof(line));
+        if (n < 0) break;
+        if (n == 0) continue;
+
+        if (strncmp(line, "CALL ", 5) == 0) {
+            handle_call(line + 5);
+        } else if (strncmp(line, "READ ", 5) == 0) {
+            handle_read(line + 5);
+        } else if (strncmp(line, "WRITE ", 6) == 0) {
+            handle_write(line + 6);
+        } else if (strncmp(line, "TJS_INIT", 8) == 0) {
+            handle_tjs_init();
+        } else if (strncmp(line, "TJS_EXEC ", 9) == 0) {
+            handle_tjs_exec(line + 9);
+        } else if (strncmp(line, "TJS_GLOBAL ", 11) == 0) {
+            handle_tjs_global(line + 11);
+        } else if (strncmp(line, "TJS_RESET", 9) == 0) {
+            tjs_reset_variant_heap();
+            println("OK_VOID");
+        } else if (strncmp(line, "QUIT", 4) == 0) {
+            println("OK_VOID");
+            break;
+        } else {
+            println("ERR unknown command");
+        }
+    }
+    return 0;
+}
+
+/* Thin wrapper for the standalone ELF build. When linked as a shared
+ * library (libharness.so) and launched via `app_process` + the Java
+ * bootstrap, the JNI bridge calls `harness_rpc_main` directly. */
+int main(int argc, char **argv) {
+    const char *so_path = (argc > 1) ? argv[1] : "libkrkr2.so";
+    return harness_rpc_main(so_path);
 }

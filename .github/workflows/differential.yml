@@ -70,11 +70,13 @@ jobs:
     needs: wasmtime
     runs-on: ubuntu-24.04-arm
     env:
-      # Multi-arch manifest (amd64 + arm64). Tag schema is
-      # `<version>_64only-<date>`; pin a date for reproducibility rather
-      # than floating `-latest`. Android 14 = API 34, libkrkr2 targets
-      # API 21+ so the API level is non-load-bearing.
-      REDROID_IMAGE: redroid/redroid:14.0.0_64only-240527
+      # Multi-arch Redroid image. Tag schema for Android 11+ images is
+      # `<version>_64only-<date>`; Android 10 images predate the 64only
+      # split (dual-ABI), tag schema is `<version>-<date>`. We pin to
+      # Android 10 = API 29, which matches the harness APK's
+      # `minSdkVersion=29` and keeps the local emulator (oracle-arm64-29)
+      # and CI at the same API level.
+      REDROID_IMAGE: redroid/redroid:10.0.0-240527
     steps:
       - uses: actions/checkout@v4
         with:
@@ -175,14 +177,23 @@ jobs:
         run: |
           set -euo pipefail
           export ANDROID_SERIAL=localhost:5555
-          adb -s "${ANDROID_SERIAL}" shell "mkdir -p /data/local/tmp"
-          adb -s "${ANDROID_SERIAL}" push reference/libkrkr2/libkrkr2.so   /data/local/tmp/
-          adb -s "${ANDROID_SERIAL}" push reference/lib/libSDL2.so         /data/local/tmp/
-          adb -s "${ANDROID_SERIAL}" push reference/lib/libffmpeg.so       /data/local/tmp/
-          adb -s "${ANDROID_SERIAL}" push tests/differential/oracle_runner/harness/prebuilt/harness-aarch64 \
-                   /data/local/tmp/
+          # Frida needs ptrace privileges; our Activity isn't debuggable so
+          # without root the attach fails with PermissionDeniedError. Redroid
+          # images are userdebug so `adb root` flips adbd into the root shell.
+          adb -s "${ANDROID_SERIAL}" root || true
+          adb -s "${ANDROID_SERIAL}" wait-for-device
+
+          # Default driver path: install the repacked krkr2-harness.apk
+          # and let adb_engine.py's launcher_mode=apk drive HarnessActivity
+          # over a TCP socket (adb forward). This is the mode that gives
+          # us cocos2d's full init (TVPInitScriptEngine has run) so
+          # TJS_INIT returns the real TVPScriptEngine tTJS*.
+          adb -s "${ANDROID_SERIAL}" install -r -t \
+                   tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk
+
+          # Push frida-server separately (not inside APK).
           adb -s "${ANDROID_SERIAL}" push tools/bin/android/frida-server   /data/local/tmp/
-          adb -s "${ANDROID_SERIAL}" shell "chmod 755 /data/local/tmp/harness-aarch64 /data/local/tmp/frida-server"
+          adb -s "${ANDROID_SERIAL}" shell "chmod 755 /data/local/tmp/frida-server"
           adb -s "${ANDROID_SERIAL}" shell "nohup /data/local/tmp/frida-server -D >/dev/null 2>&1 &"
           sleep 3
           test -n "$(adb -s "${ANDROID_SERIAL}" shell pidof frida-server | tr -d '[:space:]')" \

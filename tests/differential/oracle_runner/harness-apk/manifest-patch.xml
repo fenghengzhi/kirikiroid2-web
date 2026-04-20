@@ -1,0 +1,15 @@
+<!--
+  Injected as a sibling of existing <activity> entries inside <application>.
+  patch_manifest.py inserts this verbatim after the last existing <activity>.
+-->
+<activity
+    android:name="org.github.krkr2.HarnessActivity"
+    android:exported="true"
+    android:theme="@style/Theme.KR2"
+    android:screenOrientation="landscape"
+    android:configChanges="orientation|screenSize|keyboardHidden|keyboard">
+    <intent-filter>
+        <action android:name="org.github.krkr2.HARNESS_RPC" />
+        <category android:name="android.intent.category.DEFAULT" />
+    </intent-filter>
+</activity>
