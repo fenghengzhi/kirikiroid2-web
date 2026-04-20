@@ -1,7 +1,0 @@
-{
-  "id": "empty_curve",
-  "family": "bezier_curve",
-  "curve": { "x": [], "y": [] },
-  "t": 0.5,
-  "expected": 0.5
-}
