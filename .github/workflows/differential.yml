@@ -277,29 +277,10 @@ jobs:
         run: |
           set -euo pipefail
           export ANDROID_SERIAL=localhost:5555
-          # The adb connect from "Start Redroid container" doesn't
-          # persist — each step spins up a fresh shell and the TCP
-          # adb connection to Redroid drops once the starter step
-          # ends. Without reconnecting, `adb -s localhost:5555 ...`
-          # would report "device ... not found" and wait-for-device
-          # would hang forever. Re-establish the link here before
-          # any device-targeted command.
-          for i in $(seq 1 30); do
-            if adb connect localhost:5555 2>&1 | grep -qE 'connected|already'; then
-              break
-            fi
-            sleep 2
-          done
-          adb devices -l
           # Frida needs ptrace privileges; our Activity isn't debuggable so
           # without root the attach fails with PermissionDeniedError. Redroid
           # images are userdebug so `adb root` flips adbd into the root shell.
           adb -s "${ANDROID_SERIAL}" root || true
-          # `adb root` restarts adbd, which drops the TCP connection —
-          # reconnect after a short sleep so the next command sees the
-          # new root adbd.
-          sleep 2
-          adb connect localhost:5555 >/dev/null 2>&1 || true
           adb -s "${ANDROID_SERIAL}" wait-for-device
 
           # Default driver path: install the repacked krkr2-harness.apk
