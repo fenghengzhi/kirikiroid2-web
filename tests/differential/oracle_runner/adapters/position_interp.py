@@ -3,14 +3,19 @@
 Decompiled prototype (see docs/ida analysis):
     void sub_69A4D4(
         tTJSVariant *easing_curve,   // a1 (x0) — TJS object or empty variant
-        double     *src_pos,         // a2 (x1) — &double[3]
-        double     *dst_pos,         // a3 (x2) — &double[3]
+        double     *dst_pos,         // a2 (x1) — &double[3], returned at t=1
+        double     *src_pos,         // a3 (x2) — &double[3], returned at t=0
         double     *out_pos,         // a4 (x3) — &double[3] (output)
         int         coord_mode,      // a5 (w4)
         tTJSVariant *rotation_curve, // a6 (x5) — TJS object or empty variant
         double      t,               // d0
         double      _unused          // d1
     );
+
+Parameter order matches the port's interpolatePosition69A4D4
+(PlayerInternal.h) and its call sites in PlayerUpdateLayers.cpp —
+dst first, src second. Linear formula: srcPos*(1-et) + dstPos*et,
+so t=0 → srcPos (= arg3), t=1 → dstPos (= arg2).
 
 Important short-circuits:
   - if easing_curve's variant type (offset +16 in the variant) is 0,
@@ -131,7 +136,8 @@ def run_case(engine, spec: dict, tracer=None) -> dict:
         try:
             engine.call(
                 engine.offset(SUB_69A4D4_OFFSET),
-                ints=(easing_ptr, src_addr, dst_addr, out_addr, coord_mode, rotation_ptr),
+                # a2=dst, a3=src — libkrkr2 returns a3 at t=0 and a2 at t=1.
+                ints=(easing_ptr, dst_addr, src_addr, out_addr, coord_mode, rotation_ptr),
                 doubles=(t,),
                 ret="void",
             )
