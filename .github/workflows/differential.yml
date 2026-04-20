@@ -78,9 +78,9 @@ jobs:
       # A10 images predate the _64only split (dual-ABI); tag schema
       # is `<version>-<date>`. Earlier 240527 image was flaky in CI
       # (boot_completed=1 but adbd unusable from the next step);
-      # 250907 rebuild is stable. Pinned by digest so Docker Hub
-      # re-tags can't drift us silently.
-      REDROID_IMAGE: redroid/redroid:10.0.0-250907@sha256:e03a15291e765f8381c05438001297a1f673024d87bff210245501afd65e4776
+      # 250907 rebuild is stable. Tag alone — Docker Hub's multi-arch
+      # manifest list picks the arm64 layer for ubuntu-24.04-arm.
+      REDROID_IMAGE: redroid/redroid:10.0.0-250907
     steps:
       - uses: actions/checkout@v4
         with:
