@@ -871,7 +871,8 @@ namespace motion {
         }
 
         _runtime->nodes = detail::buildNodeTree(*_runtime->activeMotion, clipLabel,
-                                                &_resourceManagerNative);
+                                                &_resourceManagerNative,
+                                                _completionType);
         _runtime->nodesBuilt = true;
 
         // Aligned to Player_initNodeFields case 3 (0x6B43C0..0x6B4688):
@@ -992,11 +993,13 @@ namespace motion {
         const auto motionPath =
             _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
         for(const auto &entry : _runtime->preparedRenderItems) {
-            // rawFlag17/rawFlag18 are now captured into the local data flow, but
-            // the native split-pass execute architecture is not yet fully
-            // mirrored here. Keep the old execute gate stable until those bits
-            // are wired through a byte-accurate two-pass renderer.
-            if(!entry.drawFlag || entry.opacity <= 0) {
+            // Render gate — aligned to sub_6C7440 @ 0x6C7440 (libkrkr2.so).
+            // Path A main iteration does NOT read drawFlag (node+1960 /
+            // item+19); that field is a Path B product (sub_6BD8DC) used by
+            // Player_calcBounds and type3 propagate. Membership in mainList
+            // (i.e. being present in preparedRenderItems, gated by nodeType
+            // mask 0x1441/0x1449 upstream) is the render decision.
+            if(entry.opacity <= 0) {
                 continue;
             }
 
@@ -1017,7 +1020,7 @@ namespace motion {
             command.blendMode = entry.blendMode;
             command.contextVariant = entry.contextVariant;
             command.opacity = entry.opacity;
-            command.itemFlags = entry.updateCount;
+            command.itemFlags = entry.stencilComposite;
             command.parentNodeIndex = entry.visibleAncestorIndex;
             command.preparedItem = &entry;
             command.packedColors = entry.packedColors;

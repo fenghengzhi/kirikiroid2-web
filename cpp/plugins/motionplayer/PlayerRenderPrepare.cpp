@@ -384,7 +384,7 @@ namespace motion {
                 entry.blendMode = node.accumulated.blendMode;
                 entry.packedColors = copyPackedColorsFromBytes(node.colorBytes);
                 entry.opacity = node.accumulated.opacity;
-                entry.updateCount = node.stencilType;
+                entry.stencilComposite = node.stencilType;
                 entry.coordinateMode = node.coordinateMode;
                 entry.objTriPriority = node.objTriPriority;
                 entry.visibleAncestorIndex = node.visibleAncestorIndex;

@@ -531,7 +531,6 @@ namespace motion {
             // Populate root active clip slot
             populateSlotFromState(root.activeSlot(), rootState);
             root.currentFrameType = rootState.frameType;
-            root.stencilType = root.stencilTypeBase | rootState.frameType;
             populateTransformStateFromFrameState(root.localState, rootState);
             root.localState.dirty = root.delta.dirty;
 
@@ -1598,8 +1597,6 @@ namespace motion {
         // Visibility flags — aligned to sub_6BD8DC at 0x6BD8DC.
         // Root node (index 0) is always visible.
         if (!nodes.empty()) {
-            nodes[0].stencilType =
-                nodes[0].stencilTypeBase | nodes[0].currentFrameType;
             nodes[0].drawFlag = nodes[0].accumulated.visible && nodes[0].hasSource;
         }
         // Visibility bitmask: which nodeTypes can render
@@ -1609,7 +1606,6 @@ namespace motion {
         const int visBitmask = _runtime->isEmoteMode ? 6153 : 6145;
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
-            node.stencilType = node.stencilTypeBase | node.currentFrameType;
 
             // Find visible ancestor (walk parent chain, 0x6BD9D8)
             int pIdx = node.parentIndex;

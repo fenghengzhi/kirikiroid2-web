@@ -84,7 +84,8 @@ namespace motion::detail {
         void walkTree(const std::shared_ptr<const PSB::PSBDictionary> &psbNode,
                       int parentIdx,
                       std::vector<MotionNode> &nodes,
-                      motion::ResourceManager *resourceManager) {
+                      motion::ResourceManager *resourceManager,
+                      int parentCompletionType) {
             if (!psbNode) return;
 
             MotionNode node;
@@ -197,6 +198,19 @@ namespace motion::detail {
 
             // === TJS↔Native bridge: create child objects (sub_6B3C78 case 3/4) ===
             if (node.nodeType == 3) {
+                // Aligned to sub_6B3C78 case 3 (0x6B43A4..0x6B43B0):
+                // when the owning Player has completionType != 0, bit-2 of the
+                // node's stencilType is cleared so the nested MotionPlayer
+                // sub-node renders as an independent item rather than being
+                // composited through the parent alpha-mask.
+                //   6B43A4 LDRB W8, [X20,#0x444]   ; player.completionType
+                //   6B43A8 CBZ  W8, 6B43B4         ; skip when zero
+                //   6B43AC AND  W8, W0, #~4        ; stencilType & ~4
+                //   6B43B0 STR  W8, [X19,#0x34]    ; write back
+                if (parentCompletionType != 0) {
+                    node.stencilType &= ~4;
+                }
+
                 // Aligned to sub_6B3C78 case 3 (0x6B43C0..0x6B46E0):
                 // operator new(0x568) → Player constructor → sub_6F1794 (NCB CreateAdaptor)
                 // → store as tTJSVariant at node+1912.
@@ -227,7 +241,8 @@ namespace motion::detail {
                 for (int i = 0; i < static_cast<int>(children->size()); ++i) {
                     auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                         (*children)[i]);
-                    walkTree(child, thisIdx, nodes, resourceManager);
+                    walkTree(child, thisIdx, nodes, resourceManager,
+                             parentCompletionType);
                 }
             }
         }
@@ -237,7 +252,8 @@ namespace motion::detail {
     std::vector<MotionNode> buildNodeTree(
         const MotionSnapshot &snapshot,
         const std::string &clipLabel,
-        motion::ResourceManager *resourceManager) {
+        motion::ResourceManager *resourceManager,
+        int parentCompletionType) {
 
         std::vector<MotionNode> nodes;
         // Aligned to Player_buildNodeTree (0x6B51F0): root index 0 is a
@@ -278,7 +294,7 @@ namespace motion::detail {
         // top-level layers is the synthetic root at index 0.
         for (const auto &layerDict : *layerList) {
             if (!layerDict) continue;
-            walkTree(layerDict, 0, nodes, resourceManager);
+            walkTree(layerDict, 0, nodes, resourceManager, parentCompletionType);
         }
 
         // Aligned to libkrkr2.so Player+24 label map (populated at 0x6B4CE4

@@ -50,7 +50,8 @@ Signature: `(resultObj, a2=&mainList, a3=&auxList, color, preview_flag, a6)`.
 **Main per-node loop** (line 408 `for i = 1; i < node_count; i++`):
 For each non-root node in the deque:
 
-### Branch A: nodeType==3 Motion sub-node (`!player+1092 && node+28==3`)
+### Branch A: nodeType==3 Motion sub-node
+Entry condition at sub_6C2334: `node.type == 3` (node+28 == 3) AND `node.drawFlag` (node+1960) is set. The branch then splits at 0x6C38A0 via `CBZ player.completionType` (player+1092, byte): `completionType != 0` → alloc/push independent item (node+1904 auxList path); `completionType == 0` → normal nested-render path. Player+1092 is `completionType` (1-byte bool, TJS-settable) — NOT `isEmoteMode` or `indepLayerInherit`. See project_player_completionType.md for byte-verified semantics.
 - Fetch child Player TJS obj from `node+1912`
 - Get child's renderList pointer via PropGet
 - If drawFlag (node+1960) set:

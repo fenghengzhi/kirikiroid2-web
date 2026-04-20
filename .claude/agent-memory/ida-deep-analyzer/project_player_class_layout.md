@@ -23,7 +23,7 @@ Key offset groups:
 - +908..912: flags (skipRootMatrix, useD3D, pixelateDivision)
 - +960..984: variableKeys/chara/motion/stealthMotion TJS variant ptrs
 - +992..1072: ttstr fields (transformOrder, emoteEdit, outline, meshline, stealthMotion)
-- +1092..1100: packed bool flags (completionType, speed, cameraActive, stereo, preview, colorWeight, syncWait, playing, cameraAlive)
+- +1092..1100: 9 independent 1-byte bool fields, NOT a C bitfield. Each has its own TJS getter/setter. Order: completionType(+1092), speed(+1093), cameraActive(+1094), stereovisionActive(+1095), preview(+1096), colorWeight(+1097), syncWaiting(+1098), playing(+1099), cameraAlive(+1100). See project_player_completionType.md for full byte-verified layout.
 - +1120: frameTickCount, +1128: frameLastTime, +1136: frameLoopTime
 - +1144: project(int), +1148: maskMode(int), +1156: parentColorPacked(0xFF808080)
 - +1160: priorDraw, +1168: meshDivisionRatio(1.0), +1176: outsideFactor

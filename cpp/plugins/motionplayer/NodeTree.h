@@ -24,6 +24,7 @@ namespace motion::detail {
     std::vector<MotionNode> buildNodeTree(
         const MotionSnapshot &snapshot,
         const std::string &clipLabel,
-        motion::ResourceManager *resourceManager = nullptr);
+        motion::ResourceManager *resourceManager = nullptr,
+        int parentCompletionType = 0);
 
 } // namespace motion::detail

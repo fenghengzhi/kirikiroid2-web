@@ -74,12 +74,11 @@ namespace motion::detail {
         bool hasMeshData = false;        // node+1962: has active mesh data
         bool stencilCompositeMaskReferenced = false; // node+1961: post-build mask-layer reference
         bool meshCombineEnabled = false; // node+1963: mesh combines with children
-        // libkrkr2.so seeds node+52 from PSB "stencilType" in Player_initNodeFields
-        // (0x6B3C78), but later visibility/render-tree stages consume the same slot as
-        // a per-frame non-zero update mask while still preserving deflector bit 4.
-        // Keep both the raw PSB seed and the runtime-composed value explicitly.
+        // libkrkr2.so seeds node+52 from PSB "stencilType" in
+        // Player_initNodeFields (0x6B3C78) and later runtime stages only read
+        // the field; they do not rebuild it from frame state.
         int stencilTypeBase = 0;      // raw PSB "stencilType"
-        int stencilType = 0;          // runtime node+52-compatible mask
+        int stencilType = 0;          // runtime node+52, init-time owned
         int currentFrameType = 0;     // current frameList type (0/2/3), for trace
 
         // Mesh control points (node+2024..2032 in libkrkr2.so).

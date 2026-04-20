@@ -274,7 +274,10 @@ namespace motion::detail {
             std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f};
             bool hasViewport = false;
             int opacity = 255;
-            int updateCount = 0;
+            // item+244 in libkrkr2.so sub_6C2334 @ 0x6C2A90 — stencil/composite
+            // flags copied from node.stencilType; consumed by sub_6C7440 alpha
+            // mask path `(item+244 & 4)` / `(item+244 & 3)==1`.
+            int stencilComposite = 0;
             int coordinateMode = 0;
             int objTriPriority = 0;
             int visibleAncestorIndex = -1;

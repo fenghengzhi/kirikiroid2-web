@@ -550,11 +550,11 @@ Key offsets:
 - +808..844: drawAffineMatrix (6 doubles: m11, m21, m12, m22, tx, ty)
 - +908: skip root matrix flag (byte)
 - +936/944: event queue begin/end
-- +1092: isEmoteMode flag (byte)
-- +1097: independentLayerInherit flag (byte)
+- +1092: completionType (byte, 1-byte bool, TJS "completionType"). Byte-verified via Player_getCompletionType@0x6D9634 / Player_setCompletionType@0x6D9640 / Player_ctor@0x6CF0A4. Used at sub_6B3C78@0x6B43A8 (CBZ → `stencilType &= ~4` when `completionType != 0`) and sub_6C2334@0x6C38A0. See analysis/Player_Class_Layout_libkrkr2so.md:214 authoritative table for +1092..+1100 full layout (completionType, speed, cameraActive, stereovisionActive, preview, colorWeight, syncWaiting, playing, cameraAlive — all independent 1-byte bools).
+- +1096: preview flag (byte) — was previously mislabeled here as "+1097: independentLayerInherit"; +1097 is actually `colorWeight` per the authoritative layout table.
 - +1112: zFactor
-- +1144: blendMode
-- +1148: stencilType
+- +1144: blendMode (CROSS-REFERENCE: Player_Class_Layout_libkrkr2so.md lists +1144 as `project(int)` — needs re-verification, do not rely on this line)
+- +1148: (WRONG label "stencilType" — stencilType is on Node+52, NOT Player. Per Player_Class_Layout_libkrkr2so.md this offset is `maskMode(int)`. Kept here only for diff visibility; use the layout table as authoritative.)
 - +1152: processedMeshVerticesNum
 - +1312..1368: variable deque internal pointers (160-byte items, for sub_6BBE20)
 
