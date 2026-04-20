@@ -138,8 +138,18 @@ jobs:
           # disk. ubuntu-24.04-arm's default sources are ports.ubuntu.com
           # (arm64 only); archive.ubuntu.com carries amd64. Add amd64 as
           # a foreign arch and point a dedicated source at archive.
-          sudo sed -i '0,/^Signed-By:/s/^Signed-By:/Architectures: arm64\nSigned-By:/' \
+          #
+          # ubuntu.sources on noble-arm64 has multiple deb822 records
+          # (noble + noble-security), so pin ALL of them to
+          # Architectures: arm64 — a single-record sed would leave
+          # noble-security unconstrained and apt would try to fetch
+          # amd64 Packages from ports.ubuntu.com → 404.
+          echo "--- before ---"
+          cat /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i 's/^Signed-By:/Architectures: arm64\nSigned-By:/g' \
             /etc/apt/sources.list.d/ubuntu.sources
+          echo "--- after ---"
+          cat /etc/apt/sources.list.d/ubuntu.sources
           sudo tee /etc/apt/sources.list.d/amd64.sources >/dev/null <<'EOF'
           Types: deb
           URIs: http://archive.ubuntu.com/ubuntu
