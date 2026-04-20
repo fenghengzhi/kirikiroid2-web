@@ -129,6 +129,32 @@ jobs:
             adb xz-utils unzip qemu-user-static binfmt-support
           adb version
 
+      - name: Enable amd64 multiarch for x86_64 build-tools runtime
+        run: |
+          set -eux
+          # qemu-user-static emulates x86_64 syscalls, but the target
+          # binaries (aapt2, zipalign) are dynamically linked against
+          # glibc+libstdc++ and need an x86_64 ld.so + runtime libs on
+          # disk. ubuntu-24.04-arm's default sources are ports.ubuntu.com
+          # (arm64 only); archive.ubuntu.com carries amd64. Add amd64 as
+          # a foreign arch and point a dedicated source at archive.
+          sudo sed -i '0,/^Signed-By:/s/^Signed-By:/Architectures: arm64\nSigned-By:/' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          sudo tee /etc/apt/sources.list.d/amd64.sources >/dev/null <<'EOF'
+          Types: deb
+          URIs: http://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates noble-security
+          Components: main universe
+          Architectures: amd64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo dpkg --add-architecture amd64
+          sudo apt-get update -qq
+          # libc6:amd64 ships /lib64/ld-linux-x86-64.so.2 + libm/libdl/
+          # libpthread; libstdc++6 + zlib1g cover aapt2's C++ deps.
+          sudo apt-get install -y --no-install-recommends \
+            libc6:amd64 libstdc++6:amd64 zlib1g:amd64
+
       - name: Setup JDK for APK repack
         uses: actions/setup-java@v4
         with:
