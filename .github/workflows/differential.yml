@@ -75,12 +75,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       # Multi-arch Redroid image. Tag schema for Android 11+ images is
-      # `<version>_64only-<date>`; Android 10 images predate the 64only
-      # split (dual-ABI), tag schema is `<version>-<date>`. We pin to
-      # Android 10 = API 29, which matches the harness APK's
-      # `minSdkVersion=29` and keeps the local emulator (oracle-arm64-29)
-      # and CI at the same API level.
-      REDROID_IMAGE: redroid/redroid:10.0.0-240527
+      # `<version>_64only-<date>`. APK's minSdkVersion=29 so any image
+      # API 30+ installs it forward-compatibly.
+      REDROID_IMAGE: redroid/redroid:11.0.0_64only-240527
     steps:
       - uses: actions/checkout@v4
         with:
