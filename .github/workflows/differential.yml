@@ -74,13 +74,12 @@ jobs:
     needs: wasmtime
     runs-on: ubuntu-24.04-arm
     env:
-      # Android 10 = API 29, matches the harness APK's minSdkVersion.
-      # A10 images predate the _64only split (dual-ABI); tag schema
-      # is `<version>-<date>`. Earlier 240527 image was flaky in CI
-      # (boot_completed=1 but adbd unusable from the next step);
-      # 250907 rebuild is stable. Tag alone — Docker Hub's multi-arch
-      # manifest list picks the arm64 layer for ubuntu-24.04-arm.
-      REDROID_IMAGE: redroid/redroid:10.0.0-250907
+      # Android 12 = API 31. _64only variant drops the 32-bit system
+      # libraries; our harness APK + libkrkr2.so are arm64-v8a only,
+      # so 32-bit would just be dead weight. APK minSdkVersion=29 so
+      # API 31 installs it forward-compatibly. A12 image observed
+      # stable in CI when A10 240527 was flaky.
+      REDROID_IMAGE: redroid/redroid:12.0.0_64only-240527
     steps:
       - uses: actions/checkout@v4
         with:
