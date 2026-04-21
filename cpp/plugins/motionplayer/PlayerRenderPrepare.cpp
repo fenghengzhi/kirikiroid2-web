@@ -74,14 +74,29 @@ namespace motion {
             node.bounds[2] = -1.0f;
             node.bounds[3] = -1.0f;
 
-            // Aligned to Player_calcBounds @ 0x6C3D04: bbox iteration skips
-            // nodes not in the Path A render list (node+1944 drawnThisFrame),
-            // not nodes lacking the Path B drawFlag. Previously this read
-            // drawFlag, which for stencilType=0 nodes was always 0 and
-            // incorrectly excluded them from bounds even though sub_6C2334
-            // still enqueued them via its nodeType mask.
-            if(!node.accumulated.active || !node.hasSource ||
-               !node.drawnThisFrame) {
+            // Aligned to Player_calcBounds @ 0x6C40B0 (libkrkr2.so):
+            //   v30 = 1 << nodeType
+            //   v31 = completionType ? 0x1449 : 0x1441
+            //   if ((v31 & v30) == 0 || !*(BYTE*)(node+200)) skip
+            // The actual native gate is the Path A nodeType mask PLUS
+            // renderTreeFlag200 (node+0xC8) — NOT drawFlag (Path B) and
+            // NOT drawnThisFrame (node+1944, set by sub_6C2334 but not
+            // read here). Port's previous drawFlag/drawnThisFrame reads
+            // were both proxies; this is the authoritative gate.
+            //
+            // NOTE: libkrkr2's calcBounds also has (a) a slot-done byte
+            // gate at node+536*slot+344 and (b) recursive handling for
+            // nodeType=3 sub-players (0x6C4048) and nodeType=4 particles
+            // (0x6C3F08). Port's simplified structure doesn't model those
+            // yet; hasSource is the current placeholder for "this node
+            // has its own geometry to contribute to the bbox".
+            const int visBitmaskCalc =
+                _completionType ? 0x1449 : 0x1441;
+            if(((1 << node.nodeType) & visBitmaskCalc) == 0 ||
+               !node.renderTreeFlag200) {
+                continue;
+            }
+            if(!node.hasSource) {
                 continue;
             }
 
