@@ -1,7 +1,7 @@
 """Frida-based call tracer for the ADB oracle harness.
 
-Attaches to the live `harness-aarch64` process spawned by
-`AdbHarnessEngine.start()` and installs `Interceptor.attach` hooks on a
+Attaches to the live `HarnessActivity` process (`org.github.krkr2`)
+spawned by `AdbHarnessEngine.start()` and installs `Interceptor.attach` hooks on a
 curated list of libkrkr2.so offsets (see `trace_targets.py`). Per-case
 event capture is gated by `start_case()`/`stop_case()`, so hooks stay
 resident across the whole session but only record inside the interesting

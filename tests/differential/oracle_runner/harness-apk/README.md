@@ -56,8 +56,8 @@ printf 'TJS_INIT\nQUIT\n' | nc 127.0.0.1 5039
 # Expect: READY <so_base> 50000000 ; OK <ttjs_ptr> ; OK_VOID
 ```
 
-The Python driver does all of this automatically via
-`AdbHarnessEngine(launcher_mode="apk")` (the default). See
+The Python driver does all of this automatically via `AdbHarnessEngine`
+(the APK path is the only supported launch mode). See
 `../adb_engine.py`.
 
 ## Frida attach

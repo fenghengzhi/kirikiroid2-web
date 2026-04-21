@@ -285,11 +285,10 @@ jobs:
           adb -s "${ANDROID_SERIAL}" root || true
           adb -s "${ANDROID_SERIAL}" wait-for-device
 
-          # Default driver path: install the repacked krkr2-harness.apk
-          # and let adb_engine.py's launcher_mode=apk drive HarnessActivity
-          # over a TCP socket (adb forward). This is the mode that gives
-          # us cocos2d's full init (TVPInitScriptEngine has run) so
-          # TJS_INIT returns the real TVPScriptEngine tTJS*.
+          # Install the repacked krkr2-harness.apk; adb_engine.py drives
+          # HarnessActivity over a TCP socket (adb forward). This path
+          # runs cocos2d's full init (TVPInitScriptEngine) so TJS_INIT
+          # returns the real TVPScriptEngine tTJS*.
           adb -s "${ANDROID_SERIAL}" install -r -t \
                    tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk
 

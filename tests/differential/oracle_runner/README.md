@@ -1,14 +1,15 @@
 # ADB + Frida Oracle Runner
 
-Runs libkrkr2.so (the Android kirikiroid2 binary) inside a real Android
-arm64 emulator, driven from the host over `adb shell`. Provides two
-layers of assertion against the WASM port:
+Runs libkrkr2.so (the Android kirikiroid2 binary) inside the repacked
+`krkr2-harness.apk` on a real Android arm64 emulator, driven from the
+host over `adb forward tcp:5039` + `am start HarnessActivity`. Provides
+two layers of assertion against the WASM port:
 
-1. **Return-value diff** — the host pokes function calls into a tiny
-   [harness binary](harness/) running on the device, reads return
-   values, compares against the spec's `"expected"`.
+1. **Return-value diff** — the host pokes function calls into
+   [libharness.so](harness/) loaded by the APK, reads return values,
+   compares against the spec's `"expected"`.
 2. **Call-sequence diff** — optional per-case Frida tracer attaches to
-   the same harness process, hooks a curated set of sub-function
+   the `HarnessActivity` process, hooks a curated set of sub-function
    offsets, and verifies the runtime event stream matches a checked-in
    golden at `tests/differential/traces/<family>/<case_id>.trace.json`.
 
@@ -39,18 +40,19 @@ git submodule update --init reference    # requires PRIVATE_SUBMODULE_PAT
 #   reference/lib/libffmpeg.so
 ```
 
-**Android emulator** — API 24+ arm64-v8a google_apis image. The 4
-ADB runners need a rooted emulator so `adb push` can drop binaries
-into `/data/local/tmp/` and the harness can talk stdin/stdout over
-`adb shell`. Locally we use an AVD named `oracle-arm64`; see
+**Android emulator** — API 24+ arm64-v8a google_apis image. The ADB
+runners need a rooted emulator so `adb push` can drop libkrkr2/SDL2/
+ffmpeg into `/data/local/tmp/` and `adb install` can drop the harness
+APK. Locally we use an AVD named `oracle-arm64`; see
 `.github/workflows/differential.yml` for the CI version
 (`reactivecircus/android-emulator-runner@v2`, `macos-14` host for
 HVF-accelerated arm64).
 
-**Harness binary** — checked in at
-[harness/prebuilt/harness-aarch64](harness/prebuilt/harness-aarch64)
-(450 KB, arm64 PIE, NDK-built). Rebuild instructions are in
-[harness/README.md](harness/README.md).
+**Harness APK** — the repacked `krkr2-harness.apk` contains
+`libharness.so` (arm64 NDK-built) and a minimal `HarnessActivity`
+that extends `Cocos2dxActivity`. Build with
+[harness-apk/build.sh](harness-apk/build.sh); rebuild instructions for
+the native .so live in [harness/README.md](harness/README.md).
 
 **Python deps**:
 
@@ -79,11 +81,13 @@ adb root && adb wait-for-device
 adb push reference/libkrkr2/libkrkr2.so   /data/local/tmp/
 adb push reference/lib/libSDL2.so         /data/local/tmp/
 adb push reference/lib/libffmpeg.so       /data/local/tmp/
-adb push tests/differential/oracle_runner/harness/prebuilt/harness-aarch64 \
-         /data/local/tmp/
 adb push tools/bin/android/frida-server   /data/local/tmp/
-adb shell "chmod 755 /data/local/tmp/harness-aarch64 /data/local/tmp/frida-server"
+adb shell "chmod 755 /data/local/tmp/frida-server"
 adb shell "nohup /data/local/tmp/frida-server -D >/dev/null 2>&1 &"
+
+# Build + install the harness APK (packages libharness.so inside).
+./tests/differential/oracle_runner/harness-apk/build.sh
+adb install -r tests/differential/oracle_runner/harness-apk/out/krkr2-harness.apk
 ```
 
 ### Return-value diff only (no Frida)
@@ -122,14 +126,14 @@ step 12: addr differs (sub_69A754 vs sub_698454)
 
 ```
 oracle_runner/
-├── adb_engine.py       AdbHarnessEngine: pushes harness + libs, spawns
-│                       `adb shell`, speaks line-based RPC, tracks pid
-│                       for Frida attach.
+├── adb_engine.py       AdbHarnessEngine: pushes libs, launches
+│                       HarnessActivity, speaks line-based RPC over a
+│                       forwarded TCP socket, tracks pid for Frida attach.
 ├── arm64_abi.py        AAPCS64 register/stack packing (x0-x7, d0-d7)
 ├── guest_heap.py       Bump allocator at fixed guest VA 0x50000000
 ├── stl_layout.py       HitData / Affine2x3 builders
-├── frida_tracer.py     FridaTracerEngine: attach to harness pid, load
-│                       agent.js, expose start_case/stop_case
+├── frida_tracer.py     FridaTracerEngine: attach to HarnessActivity pid,
+│                       load agent.js, expose start_case/stop_case
 ├── frida_agent.js      Per-target `Interceptor.attach` recording x0-x7
 │                       + d0-d7 at entry; x0/d0 at exit
 ├── trace_targets.py    Per-family target offsets + arity + return-kind
@@ -138,11 +142,16 @@ oracle_runner/
 │   ├── geometry_hit_test.py
 │   ├── local_transform.py
 │   ├── bezier_curve.py
-│   └── position_interp.py
-└── harness/            On-device guest (see harness/README.md)
-    ├── harness.cpp
-    ├── CMakeLists.txt
-    └── prebuilt/harness-aarch64
+│   ├── position_interp.py
+│   └── motion_playback.py
+├── harness/            Native side of the harness (see harness/README.md)
+│   ├── harness.cpp
+│   ├── jni_bridge.cpp
+│   ├── CMakeLists.txt
+│   └── prebuilt/libharness.so
+└── harness-apk/        APK wrapper around libharness.so (see harness-apk/README.md)
+    ├── build.sh
+    └── HarnessActivity.java
 ```
 
 `run_*_adb.py` (siblings of `run_*_wasmtime.py`) instantiate

@@ -1,10 +1,16 @@
-/* harness.c — minimal aarch64 bionic guest for differential oracles.
+/* harness.cpp — aarch64 guest for differential oracles.
  *
- * Runs on a real Android emulator/device (API 21+) driven via adb. The
- * real linker64 handles relocations, TLS, libc/libm resolution — so
- * the host Python side (adb_engine.py) doesn't have to fake any of it.
+ * Loaded as `libharness.so` inside the repacked `krkr2-harness.apk`
+ * (HarnessActivity extends Cocos2dxActivity). Cocos2dx runs its normal
+ * init chain so by the time we serve RPC the global TVPScriptEngine
+ * slot is populated and every NCB class is registered with TJS.
  *
- * Protocol with the host (line-oriented ASCII over stdin/stdout):
+ * The host (adb_engine.py) speaks line-oriented ASCII over a TCP
+ * socket forwarded by `adb forward tcp:5039 tcp:5039`. The single
+ * entry point is `harness_rpc_main_fd(so_path, fd)`, invoked from
+ * Java_org_github_krkr2_HarnessActivity_runRpcServeFd via JNI.
+ *
+ * Protocol with the host:
  *
  *   Startup:
  *     harness -> READY <libkrkr2_base_hex> <heap_base_hex>\n
@@ -72,8 +78,9 @@
  * the first RPC, so we just read it — no manual ttstr globals or call
  * into TVPInitScriptEngine required.
  *
- * In standalone / app_process modes the slot is NULL and we fall back
- * to a minimal tTJS ctor (sub_97EA40) on a static buffer. */
+ * (Historical note: the ELF / app_process launch paths used to fall back
+ * to a minimal tTJS ctor on a static buffer when the slot was NULL; those
+ * modes have been removed and the APK path is the only supported one.) */
 #define OFF_TVP_SCRIPT_ENGINE_GLOBAL 0x1AE2FD0
 
 /* iTJSDispatch2 vtable slot for PropGet — standard Kirikiri interface
@@ -99,12 +106,11 @@ typedef void     void_fn(uint64_t, uint64_t, uint64_t, uint64_t,
 
 /* ---------- RPC I/O (fd-based; stdio just passes 0/1) ---------- */
 
-/* Global I/O fd context. `harness_rpc_main()` sets them to 0/1 (stdin/stdout);
- * `harness_rpc_main_fd()` sets them to the same socket fd for both (TCP
- * sockets are bidirectional). Every command handler uses only read_line/
- * println/write_all, never stdio directly. */
-static int g_in_fd  = 0;
-static int g_out_fd = 1;
+/* Global I/O fd context. `harness_rpc_main_fd()` sets them to the same
+ * socket fd for both (TCP sockets are bidirectional). Every command
+ * handler uses only read_line/println/write_all, never stdio directly. */
+static int g_in_fd  = -1;
+static int g_out_fd = -1;
 
 static ssize_t write_all(int fd, const void *buf, size_t n) {
     const uint8_t *p = (const uint8_t *)buf;
@@ -299,15 +305,12 @@ static void handle_write(const char *args) {
  *
  *   1. If the TVPScriptEngine global at libkrkr2+0x1AE2FD0 is already
  *      populated (i.e. cocos2d's applicationDidFinishLaunching already
- *      ran — only happens when the harness is loaded inside a real
- *      Activity like HarnessActivity in the repacked APK), read it.
+ *      ran — HarnessActivity extends Cocos2dxActivity so this is always
+ *      true under the APK launch path), read it.
  *      This is "Full TJS" — every NCB class registered, Motion.* etc.
- *   2. Otherwise call the tTJS C++ ctor (sub_97EA40) on a static 0x68-byte
- *      buffer. Registers Array/Dict/Math only. Minimal but good enough
- *      for bezier_curve / position_interp and the two non-TJS families.
- *
- * Mode 1 is used by the APK-backed path (HarnessActivity); modes 2 is
- * used by the standalone bionic ELF and the app_process launcher. */
+ *   2. Fallback: call the tTJS C++ ctor (sub_97EA40) on a static 0x68-byte
+ *      buffer. Registers Array/Dict/Math only. Kept for defensiveness —
+ *      the supported launch path (APK) always hits mode 1. */
 static uint64_t g_so_base = 0;
 static uint8_t  g_tjs_buf[0x68];    /* fallback static tTJS storage */
 static void    *g_tjs_ptr = NULL;   /* filled by handle_tjs_init */
@@ -738,53 +741,9 @@ static int harness_bootstrap(const char *so_path) {
     return 0;
 }
 
-/* Returns 0 on clean exit (host sent QUIT), 1 on bootstrap failure. */
-extern "C" int harness_rpc_main(const char *so_path) {
-    g_in_fd = 0;
-    g_out_fd = 1;
-    int rc = harness_bootstrap(so_path);
-    if (rc != 0) return rc;
-
-    /* Command loop. */
-    static char line[131072];  /* accommodates WRITE hex payload */
-    for (;;) {
-        int n = read_line(line, sizeof(line));
-        if (n < 0) break;
-        if (n == 0) continue;
-
-        if (strncmp(line, "CALL ", 5) == 0) {
-            handle_call(line + 5);
-        } else if (strncmp(line, "READ ", 5) == 0) {
-            handle_read(line + 5);
-        } else if (strncmp(line, "WRITE ", 6) == 0) {
-            handle_write(line + 6);
-        } else if (strncmp(line, "TJS_INIT", 8) == 0) {
-            handle_tjs_init();
-        } else if (strncmp(line, "TJS_EXEC_STR ", 13) == 0) {
-            handle_tjs_exec_str(line + 13);
-        } else if (strncmp(line, "TJS_EXEC ", 9) == 0) {
-            handle_tjs_exec(line + 9);
-        } else if (strncmp(line, "TJS_GLOBAL ", 11) == 0) {
-            handle_tjs_global(line + 11);
-        } else if (strncmp(line, "TJS_RESET", 9) == 0) {
-            tjs_reset_variant_heap();
-            println("OK_VOID");
-        } else if (strncmp(line, "QUIT", 4) == 0) {
-            println("OK_VOID");
-            break;
-        } else {
-            println("ERR unknown command");
-        }
-    }
-
-    /* Deliberately not dlclose'ing — libkrkr2 is kept loaded because
-     * subsequent sessions (in APK mode) reuse the same global TJS. */
-    return 0;
-}
-
 /* Serve a single RPC session on the given fd (TCP socket, both directions).
  * HarnessActivity inside the repacked APK invokes this through JNI when a
- * client connects. Shares all handlers with `harness_rpc_main`. */
+ * client connects. */
 extern "C" int harness_rpc_main_fd(const char *so_path, int fd) {
     g_in_fd = fd;
     g_out_fd = fd;
@@ -822,12 +781,4 @@ extern "C" int harness_rpc_main_fd(const char *so_path, int fd) {
         }
     }
     return 0;
-}
-
-/* Thin wrapper for the standalone ELF build. When linked as a shared
- * library (libharness.so) and launched via `app_process` + the Java
- * bootstrap, the JNI bridge calls `harness_rpc_main` directly. */
-int main(int argc, char **argv) {
-    const char *so_path = (argc > 1) ? argv[1] : "libkrkr2.so";
-    return harness_rpc_main(so_path);
 }
