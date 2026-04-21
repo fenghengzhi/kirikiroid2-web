@@ -56,9 +56,10 @@ jobs:
           echo "$(dirname $(find ${{ env.EMSDK }}/node -name node -type f | head -1))" >> $GITHUB_PATH
 
       - name: Setup vcpkg
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git ${{ env.VCPKG_ROOT }}
-          ${{ env.VCPKG_ROOT }}/bootstrap-vcpkg.sh
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ env.VCPKG_ROOT }}
+          vcpkgGitCommitId: b1e15efef6758eaa0beb0a8732cfa66f6a68a81d
 
       - name: Check NuGet API key
         run: |
