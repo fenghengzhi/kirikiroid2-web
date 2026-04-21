@@ -167,8 +167,29 @@ def _floats_close(a: float, b: float, *, rel: float, abs_: float) -> bool:
     return diff <= max(abs_, rel * max(abs(a), abs(b)))
 
 
+# Structural subset that the port CLI fills in accurately without
+# needing runUpdatePassForOracle() (which currently segfaults headless).
+# These come from node identity / tree shape / clip flags set by
+# buildNodeTree / playTimeline, not from per-frame updateLayers.
+STRUCTURAL_FIELDS_INT = ("index", "nodeType", "opacity", "blendMode")
+STRUCTURAL_FIELDS_BOOL = ("visible", "active", "flipX", "flipY")
+STRUCTURAL_FIELDS_STR = ("label",)
+
+
 def diff_frames(port_frames: list, oracle_frames: list, *,
-                rel: float = 1e-6, abs_: float = 1e-6) -> list:
+                rel: float = 1e-6, abs_: float = 1e-6,
+                structural_only: bool = False) -> list:
+    if structural_only:
+        int_fields = STRUCTURAL_FIELDS_INT
+        bool_fields = STRUCTURAL_FIELDS_BOOL
+        str_fields = STRUCTURAL_FIELDS_STR
+        num_fields: tuple[str, ...] = ()
+    else:
+        int_fields = LAYER_FIELDS_INT
+        bool_fields = LAYER_FIELDS_BOOL
+        str_fields = LAYER_FIELDS_STR
+        num_fields = LAYER_FIELDS_NUM
+
     mismatches: list[dict[str, Any]] = []
     n = min(len(port_frames), len(oracle_frames))
     if len(port_frames) != len(oracle_frames):
@@ -192,7 +213,7 @@ def diff_frames(port_frames: list, oracle_frames: list, *,
         for i in range(min(len(pl), len(ol))):
             pli = pl[i]
             oli = ol[i]
-            for k in LAYER_FIELDS_INT + LAYER_FIELDS_BOOL + LAYER_FIELDS_STR:
+            for k in int_fields + bool_fields + str_fields:
                 if pli.get(k) != oli.get(k):
                     mismatches.append({
                         "kind": "field",
@@ -202,7 +223,7 @@ def diff_frames(port_frames: list, oracle_frames: list, *,
                         "port": pli.get(k),
                         "oracle": oli.get(k),
                     })
-            for k in LAYER_FIELDS_NUM:
+            for k in num_fields:
                 pv = pli.get(k)
                 ov = oli.get(k)
                 if pv is None or ov is None:
@@ -231,7 +252,8 @@ def diff_frames(port_frames: list, oracle_frames: list, *,
 
 def run_case(engine, spec: dict, *, port_frames: list,
              oracle_frames: list | None = None,
-             tracer=None) -> dict:
+             tracer=None,
+             structural_only: bool = False) -> dict:
     """Compare port_frames against oracle_frames (live or cached)."""
     out: dict[str, Any] = {
         "case_id": spec["id"],
@@ -242,7 +264,8 @@ def run_case(engine, spec: dict, *, port_frames: list,
         out["status"] = "error"
         out["error"] = "no oracle frames provided"
         return out
-    mismatches = diff_frames(port_frames, oracle_frames)
+    mismatches = diff_frames(port_frames, oracle_frames,
+                             structural_only=structural_only)
     out["mismatches"] = mismatches
     if mismatches:
         out["status"] = "mismatch"

@@ -1,7 +1,7 @@
 {
   "id": "yuzulogo",
   "family": "motion_playback",
-  "mtn_path": ".debugtmp/titleprobe_hd/data1080/yuzulogo.mtn",
+  "mtn_path": "reference/xp3/logo_test/yuzulogo.mtn",
   "label": "yuzulogo",
   "frames": 241,
   "expected_trace": "traces/motion_playback/yuzulogo.oracle.json",

@@ -1,7 +1,7 @@
 {
   "id": "m2logo",
   "family": "motion_playback",
-  "mtn_path": ".debugtmp/titleprobe_hd/data1080/m2logo.mtn",
+  "mtn_path": "reference/xp3/logo_test/m2logo.mtn",
   "label": "back_white",
   "frames": 91,
   "expected_trace": "traces/motion_playback/m2logo.oracle.json",

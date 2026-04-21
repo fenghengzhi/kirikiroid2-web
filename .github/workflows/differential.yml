@@ -2,6 +2,11 @@ name: Differential Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      record_motion_playback_oracle:
+        description: "Re-record motion_playback goldens from Redroid (uploads them as an artifact)"
+        type: boolean
+        default: false
   push:
     branches: [web]
 
@@ -327,6 +332,35 @@ jobs:
             echo "${f}: runner_rc=${runner_rc}"
           done
           exit $trace_failed
+
+      # ── motion_playback oracle recorder. Opt-in via workflow_dispatch
+      #    input `record_motion_playback_oracle=true`. Produces
+      #    tests/differential/traces/motion_playback/*.oracle.json, uploaded
+      #    as an artifact. Operator downloads, commits to the repo, pushes;
+      #    subsequent runs of run_motion_playback.py --only-structural on
+      #    the host then diff the port CLI against the recorded goldens.
+      - name: Record motion_playback goldens
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.record_motion_playback_oracle == 'true'
+        env:
+          ANDROID_SERIAL: localhost:5555
+        run: |
+          set -euo pipefail
+          python3 tests/differential/python/run_motion_playback.py \
+            --record-oracle --serial "${ANDROID_SERIAL}" 2>&1 | tee /tmp/record.log
+          echo "--- recorded goldens ---"
+          ls -la tests/differential/traces/motion_playback/ || true
+          # Basic sanity: non-empty array, non-empty layers on frame 0.
+          for f in tests/differential/traces/motion_playback/*.oracle.json; do
+            python3 -c "import json,sys; d=json.load(open('$f')); assert len(d)>0 and len(d[0].get('layers',[]))>0, '$f empty'; print('$f: frames=', len(d), ', layer_count=', len(d[0]['layers']))"
+          done
+
+      - name: Upload motion_playback goldens artifact
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.record_motion_playback_oracle == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-goldens
+          path: tests/differential/traces/motion_playback/*.oracle.json
+          if-no-files-found: error
 
       - name: Stop Redroid
         if: always()

@@ -59,6 +59,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--strict-missing-trace", action="store_true",
                    help="Fail when a disk golden is missing instead of "
                         "auto-skipping the case")
+    p.add_argument("--only-structural", action="store_true",
+                   help="Diff only structural fields (index/label/nodeType/"
+                        "visible/active/flipX/flipY/opacity/blendMode); skip "
+                        "the accumulated transform fields that rely on "
+                        "Player::runUpdatePassForOracle, which currently "
+                        "segfaults in the headless port CLI")
     return p.parse_args(argv)
 
 
@@ -114,14 +120,12 @@ def main(argv: list[str]) -> int:
     from adapters import motion_playback as mpb
 
     if args.record_oracle:
-        from adb_engine import AdbEngine
+        from adb_engine import AdbHarnessEngine
         if not args.serial:
             print("--record-oracle requires --serial", file=sys.stderr)
             return 2
         trace_dir.mkdir(parents=True, exist_ok=True)
-        engine = AdbEngine(serial=args.serial)
-        engine.connect()
-        try:
+        with AdbHarnessEngine(serial=args.serial) as engine:
             for spec in specs:
                 print(f"[record] {spec['id']}: launching APK snapshot")
                 frames = mpb.record_oracle(engine, spec, serial=args.serial)
@@ -130,8 +134,12 @@ def main(argv: list[str]) -> int:
                     json.dump(frames, f, indent=2, sort_keys=True)
                 print(f"[record] {spec['id']}: wrote {len(frames)} frames "
                       f"to {target}")
-        finally:
-            engine.close()
+        # Record-only: port CLI isn't required on the recording host
+        # (CI's Redroid runner only has libkrkr2 + harness APK, not a
+        # host-native motion::Player build). The host-side fast-path
+        # verification is a separate invocation after the operator
+        # commits the goldens.
+        return 0
 
     failures = 0
     for spec in specs:
@@ -155,7 +163,8 @@ def main(argv: list[str]) -> int:
             continue
         result = mpb.run_case(None, spec,
                               port_frames=port_frames,
-                              oracle_frames=oracle_frames)
+                              oracle_frames=oracle_frames,
+                              structural_only=args.only_structural)
         if result["status"] == "ok":
             print(f"PASS: {spec['id']} ({len(port_frames)} frames)")
         else:
