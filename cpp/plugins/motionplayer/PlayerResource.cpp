@@ -82,7 +82,10 @@ namespace motion {
 
     tjs_int Player::requireLayerId(ttstr name) {
         const auto key = detail::narrow(name);
-        if(_runtime && _runtime->nodesBuilt) {
+        // Aligned to libkrkr2.so: after eager Player_buildNodeTree, the
+        // label map is authoritative for any loaded motion; an empty
+        // nodeLabelMap simply means no motion is loaded yet.
+        if(_runtime) {
             if(const auto it = _runtime->nodeLabelMap.find(key);
                it != _runtime->nodeLabelMap.end()) {
                 const auto nodeIndex = it->second;

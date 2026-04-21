@@ -38,7 +38,6 @@ namespace motion {
             _boundsMaxY = 0.0;
             return;
         }
-        ensureNodeTreeBuilt();
         const auto motionPath =
             _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
                                                : std::string{};
@@ -760,7 +759,7 @@ namespace motion {
                         : "<none>",
                     detail::narrow(child->getMotion()).c_str(),
                     activeClip ? activeClip->label.c_str() : "<none>",
-                    child->_runtime->nodesBuilt ? 1 : 0,
+                    child->_runtime->nodes.empty() ? 0 : 1,
                     child->_runtime->nodes.size(), childEntries.size(),
                     childEntries.empty() || childEntries.front().sourceKey.empty()
                         ? "<none>"

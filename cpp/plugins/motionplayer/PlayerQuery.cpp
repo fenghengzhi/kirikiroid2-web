@@ -166,7 +166,6 @@ namespace motion {
         // That map is populated at 0x6B4CE4 during buildNodeTree_recursive with
         // operator[] — duplicates naturally collapse to one key per label.
         ensureMotionLoaded();
-        ensureNodeTreeBuilt();
         if(!_runtime || !_runtime->activeMotion) {
             return detail::makeArray({});
         }
@@ -201,7 +200,6 @@ namespace motion {
         // the resolved node. For duplicate labels this yields the last layer
         // that wrote the key during buildNodeTree_recursive.
         ensureMotionLoaded();
-        ensureNodeTreeBuilt();
         if(!_runtime) {
             return {};
         }
@@ -221,7 +219,6 @@ namespace motion {
 
     tTJSVariant Player::getLayerGetter(ttstr name) {
         ensureMotionLoaded();
-        ensureNodeTreeBuilt();
         if(!_runtime) {
             return {};
         }
@@ -243,7 +240,6 @@ namespace motion {
         // a getter per non-root node. Duplicates are NOT collapsed — every
         // node maps to its own getter, unlike getLayerNames.
         ensureMotionLoaded();
-        ensureNodeTreeBuilt();
         if(!_runtime || !_runtime->activeMotion) {
             return detail::makeArray({});
         }
@@ -646,7 +642,6 @@ namespace motion {
 
     void Player::runUpdatePassForOracle() {
         ensureMotionLoaded();
-        ensureNodeTreeBuilt();
         if(!_runtime || !_runtime->activeMotion ||
            _runtime->nodes.empty()) {
             return;
@@ -659,7 +654,6 @@ namespace motion {
 
     bool Player::hitTestLayer(ttstr name, double x, double y) {
         ensureMotionLoaded();
-        ensureNodeTreeBuilt();
         if(!_runtime || !_runtime->activeMotion) {
             return false;
         }
@@ -1062,7 +1056,7 @@ namespace motion {
             // once motion loading succeeds, the binary immediately rebuilds the
             // node tree for the selected clip before later progress/render
             // stages consume it.
-            ensureNodeTreeBuilt();
+            buildNodeTree();
         }
 
         // After loading, prime timelines and start playback.
@@ -1419,7 +1413,14 @@ namespace motion {
             }
         }
 
+        // Aligned to libkrkr2.so Player_playImpl (0x6B2284) ->
+        // Player_initNonEmoteMotion (0x6B365C): after loadMotion, the binary
+        // synchronously calls Player_buildNodeTree (0x6B51F0) and
+        // Player_initVariables (0x6CD750) before setting any playing state.
+        // No lazy gate exists in the binary.
         self->ensureMotionLoaded();
+        self->buildNodeTree();
+        self->initVariables();
         if(self->_runtime->activeMotion && self->_runtime->timelines.empty()) {
             detail::primeTimelineStates(self->_runtime->timelines,
                                         *self->_runtime->activeMotion);
@@ -1428,6 +1429,8 @@ namespace motion {
         if(!label.IsEmpty() && !self->_runtime->activeMotion) {
             self->setMotion(label);
             self->ensureMotionLoaded();
+            self->buildNodeTree();
+            self->initVariables();
             if(self->_runtime->activeMotion && self->_runtime->timelines.empty()) {
                 detail::primeTimelineStates(self->_runtime->timelines,
                                             *self->_runtime->activeMotion);
@@ -1445,18 +1448,32 @@ namespace motion {
             self->stopTimeline(TJS_W(""));
         }
 
+        // Aligned to libkrkr2.so Player_initNonEmoteMotion (0x6B3A8C):
+        //   if ((flags & 2) == 0) {                // non-Chain
+        //       Player+456 = fmin(Player+1128, 0); // reset lastTime
+        //       Player+1120 = 0;                   // reset time counter
+        //       Player+480  = 257;                 // playing state
+        //   }
+        // Chain mode (bit 1) preserves the prior play position; non-Chain
+        // resets time to the motion's origin. At the per-timeline level we
+        // mirror this by gating currentTime / control cursor reset on
+        // non-Chain. Label/flags/blendRatio/playing stay unconditional
+        // because the binary always stores the new motion state.
+        const bool chainMode = (flags & PlayFlagChain) != 0;
         const auto playOne = [&](const std::string &timelineLabel) {
             auto &state = self->_runtime->timelines[timelineLabel];
             state.label = timelineLabel;
             state.flags = flags;
             state.blendRatio = 1.0;
             state.playing = true;
-            state.currentTime = 0.0;
-            state.controlInitialized = false;
-            state.controlLastAppliedTime = 0.0;
-            state.controlFrameCursor.clear();
-            state.controlTrackValues.clear();
-            state.controlTrackAnimators.clear();
+            if(!chainMode) {
+                state.currentTime = 0.0;
+                state.controlInitialized = false;
+                state.controlLastAppliedTime = 0.0;
+                state.controlFrameCursor.clear();
+                state.controlTrackValues.clear();
+                state.controlTrackAnimators.clear();
+            }
             if(std::find(self->_runtime->playingTimelineLabels.begin(),
                          self->_runtime->playingTimelineLabels.end(),
                          timelineLabel) ==
@@ -1536,7 +1553,8 @@ namespace motion {
 
         // Aligned to libkrkr2.so Player_progressCompat (0x6D2A98):
         // progress_inner -> updateLayers -> calcBounds -> dispatchEvents.
-        self->ensureNodeTreeBuilt();
+        // The binary assumes the node tree is already built (it was built
+        // eagerly inside play()/setMotion()), so there is no lazy build here.
         if(!self->_runtime->nodes.empty()) {
             detail::logoChainTraceLogf(
                 motionPath, "progressCompat.update", "0x6D2A98",

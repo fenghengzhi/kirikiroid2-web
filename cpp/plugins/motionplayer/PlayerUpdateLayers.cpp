@@ -1879,11 +1879,12 @@ namespace motion {
                     child._runtime->layerIdsByName.clear();
                     child._runtime->layerNamesById.clear();
                     child._runtime->nodeLabelMap.clear();
-                    // Keep root node but clear the rest (sub_6B56F8 at 0x6B59E0)
+                    // Keep root node but clear the rest (sub_6B56F8 at 0x6B59E0).
+                    // Next time the child plays, Player_buildNodeTree will
+                    // rebuild eagerly via the onFindMotion path above.
                     if (child._runtime->nodes.size() > 1) {
                         child._runtime->nodes.resize(1);
                     }
-                    child._runtime->nodesBuilt = false;
                 }
                 continue;  // skip to next iteration — binary goes to LABEL_3, not LABEL_18
             }
@@ -1960,7 +1961,7 @@ namespace motion {
                                 child._runtime && child._runtime->activeMotion
                                     ? child._runtime->activeMotion->path.c_str()
                                     : "<none>",
-                                child._runtime && child._runtime->nodesBuilt ? 1 : 0,
+                                child._runtime && !child._runtime->nodes.empty() ? 1 : 0,
                                 child._allplaying ? 1 : 0);
                         }
 
@@ -2322,7 +2323,7 @@ namespace motion {
                         activeClip ? activeClip->label.c_str() : "<none>",
                         child._allplaying ? 1 : 0,
                         child._queuing ? 1 : 0,
-                        child._runtime && child._runtime->nodesBuilt ? 1 : 0,
+                        child._runtime && !child._runtime->nodes.empty() ? 1 : 0,
                         child._runtime ? child._runtime->nodes.size() : 0,
                         child._needsInternalAssignImages ? 1 : 0);
                 }
@@ -2345,9 +2346,11 @@ namespace motion {
                     cr.forceVisible = mn.forceVisible;
                 }
                 // Step child: frameProgress + updateLayers (0x6BE2A4..0x6BE2AC)
-                // Binary calls both unconditionally (no guard).
+                // Binary calls both unconditionally (no guard). Child's node
+                // tree was eagerly built when its play/onFindMotion fired
+                // earlier in this loop (see 0x6BE41C eager chain) — the
+                // binary assumes nodes are already ready here.
                 child.frameProgress(_frameLastTime);
-                child.ensureNodeTreeBuilt();
                 child.updateLayers();
             }
         }
@@ -3133,8 +3136,10 @@ namespace motion {
                         cr.visibleAncestorIndex = meshParentIdx;
                         cr.forceVisible = pn.forceVisible;
                     }
+                    // Aligned to libkrkr2.so particle-child step at 0x6BEF58+:
+                    // binary does not lazy-build the child tree here; the tree
+                    // was already built when the child's play/onFindMotion ran.
                     child->frameProgress(_frameLastTime);
-                    child->ensureNodeTreeBuilt();
                     if (!child->_runtime->nodes.empty()) {
                         child->updateLayers();
                     }

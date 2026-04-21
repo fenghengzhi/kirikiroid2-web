@@ -206,8 +206,8 @@ namespace internal {
             runtime.activeMotion = snapshot;
             runtime.timelines.clear();
             // Reset persistent node tree so it gets rebuilt for new motion
+            // by the subsequent eager Player_buildNodeTree call (no gate).
             runtime.nodes.clear();
-            runtime.nodesBuilt = false;
             runtime.nodeLabelMap.clear();
             // Detect emote mode from PSB root "type" field.
             // Aligned to libkrkr2.so Player_playImpl (0x6B2284):

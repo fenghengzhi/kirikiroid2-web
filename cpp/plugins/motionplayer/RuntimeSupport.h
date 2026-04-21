@@ -181,6 +181,23 @@ namespace motion::detail {
         double height = 0.0;
     };
 
+    // Aligned to libkrkr2.so Player+1296 std::vector<LabelEntry> written by
+    // Player_initVariables (0x6CD750). Each entry is 160 bytes in the binary
+    // with these observed writes (offsets relative to entry base):
+    //   +0   ttstr name   — from entry["scope"], split by ':' and take the
+    //                       right half; empty when no scope / no colon.
+    //   +24  ttstr label  — from entry["label"].
+    //   +68  u8  flag68=1 — observed default (semantics not yet reversed).
+    //   +124 u8  flag124=1 — observed default (semantics not yet reversed).
+    // Read paths in the binary have not been fully traced; the struct exists
+    // so the eager initialisation sequence can land without drifting further.
+    struct VariableLabelEntry {
+        ttstr name;
+        ttstr label;
+        bool flag68 = true;
+        bool flag124 = true;
+    };
+
     struct PlayerRuntime {
         struct ParameterEntry {
             std::string id;
@@ -242,9 +259,15 @@ namespace motion::detail {
         std::vector<MotionEvent> pendingEvents;
         std::vector<ParameterEntry> parameterEntries;
         ParameterEntry defaultParameterEntry;
-        // Persistent node tree for updateLayers pipeline
+        // Persistent node tree for updateLayers pipeline. Aligned to
+        // libkrkr2.so Player+200 (std::deque of MotionNode). The binary has
+        // no "nodesBuilt" gate; nodes are either empty (motion not yet
+        // loaded) or built eagerly by Player_buildNodeTree (0x6B51F0).
         std::vector<MotionNode> nodes;
-        bool nodesBuilt = false;
+        // Aligned to libkrkr2.so Player+1296 std::vector<LabelEntry>.
+        // Populated eagerly by Player_initVariables (0x6CD750) right after
+        // buildNodeTree on the play / setMotion path.
+        std::vector<VariableLabelEntry> variableLabelEntries;
         // Node label → index map. Aligned to binary's std::map<ttstr,int> at player+24.
         // Populated after buildNodeTree, queried by sub_6F2228 equivalent.
         std::map<std::string, int> nodeLabelMap;

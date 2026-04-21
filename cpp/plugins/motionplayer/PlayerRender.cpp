@@ -838,15 +838,68 @@ namespace motion {
         return _runtime->lastCanvas;
     }
 
-    void Player::ensureNodeTreeBuilt() {
-        if(!_runtime->activeMotion &&
-           _motionKey.IsEmpty() &&
-           _project.Type() != tvtObject) {
+    // Aligned to libkrkr2.so Player_initVariables (0x6CD750). Called
+    // synchronously from the play path after Player_buildNodeTree (0x6B51F0)
+    // and before the (flags & Chain) playback-state gate. Reads the PSB
+    // "variable" array (from Player+528 == activeMotion->root) and appends
+    // one VariableLabelEntry per dict entry:
+    //   name  <- entry["scope"] split by ':' (right half), or empty
+    //   label <- entry["label"]
+    //   flag68/flag124 <- 1 (binary default; semantics not yet reversed)
+    void Player::initVariables() {
+        if(!_runtime) {
+            return;
+        }
+        _runtime->variableLabelEntries.clear();
+        if(!_runtime->activeMotion || !_runtime->activeMotion->root) {
             return;
         }
 
-        ensureMotionLoaded();
-        if(!_runtime->activeMotion || _runtime->nodesBuilt) {
+        const auto &root = _runtime->activeMotion->root;
+        const auto variableList = std::dynamic_pointer_cast<PSB::PSBList>(
+            (*root)["variable"]);
+        if(!variableList) {
+            return;
+        }
+
+        for(const auto &item : *variableList) {
+            const auto entryDic =
+                std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
+            if(!entryDic) {
+                continue;
+            }
+
+            detail::VariableLabelEntry entry;
+
+            if(const auto scopeVal = (*entryDic)["scope"]) {
+                if(const auto scopeStr = std::dynamic_pointer_cast<
+                       PSB::PSBString>(scopeVal)) {
+                    const auto &scope = scopeStr->value;
+                    const auto colon = scope.find(':');
+                    if(colon != std::string::npos) {
+                        entry.name = detail::widen(scope.substr(colon + 1));
+                    }
+                }
+            }
+            if(const auto labelVal = (*entryDic)["label"]) {
+                if(const auto labelStr = std::dynamic_pointer_cast<
+                       PSB::PSBString>(labelVal)) {
+                    entry.label = detail::widen(labelStr->value);
+                }
+            }
+
+            _runtime->variableLabelEntries.push_back(std::move(entry));
+        }
+    }
+
+    // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0). The binary calls
+    // this unconditionally from Player_initNonEmoteMotion (0x6B365C) after
+    // Player_loadMotion succeeds — there is no lazy gate. The caller is
+    // responsible for having loaded the motion first; we keep a minimal null
+    // check so calls on a Player without a loaded motion become a no-op
+    // instead of crashing, but we do NOT call ensureMotionLoaded here.
+    void Player::buildNodeTree() {
+        if(!_runtime || !_runtime->activeMotion) {
             return;
         }
 
@@ -873,7 +926,6 @@ namespace motion {
         _runtime->nodes = detail::buildNodeTree(*_runtime->activeMotion, clipLabel,
                                                 &_resourceManagerNative,
                                                 _completionType);
-        _runtime->nodesBuilt = true;
 
         // Aligned to Player_initNodeFields case 3 (0x6B43C0..0x6B4688):
         // child motion players inherit the parent's resource manager context
@@ -2100,7 +2152,6 @@ namespace motion {
             "adaptorSize={}x{} route=D3DAdaptor_renderFromPlayer",
             adaptor->getWidth(), adaptor->getHeight());
 
-        ensureNodeTreeBuilt();
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
 
@@ -2195,7 +2246,6 @@ namespace motion {
             canvasWidth, canvasHeight, skipUpdate ? 1 : 0,
             _needsInternalAssignImages ? 1 : 0);
 
-        ensureNodeTreeBuilt();
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
 
@@ -2314,7 +2364,6 @@ namespace motion {
             sla->getAbsolute() ? 1 : 0,
             canvasWidth, canvasHeight);
 
-        ensureNodeTreeBuilt();
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
 
@@ -2497,7 +2546,6 @@ namespace motion {
         }
 
         ensureMotionLoaded();
-        ensureNodeTreeBuilt();
         calcViewParam();
         prepareRenderItems();
     }

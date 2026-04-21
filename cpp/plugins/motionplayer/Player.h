@@ -420,7 +420,14 @@ namespace motion {
 
     private:
         bool ensureMotionLoaded();
-        void ensureNodeTreeBuilt();
+        // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0). Called
+        // eagerly from play/onFindMotion paths; the binary has no lazy gate.
+        void buildNodeTree();
+        // Aligned to libkrkr2.so Player_initVariables (0x6CD750). Writes the
+        // Player+1296 std::vector<LabelEntry> from PSB content["variable"].
+        // Currently a placeholder; real implementation lands with the
+        // std::vector<VariableLabelEntry> field (see RuntimeSupport.h).
+        void initVariables();
         void syncVariableKeysFromActiveMotion();
         void syncSelectorControlsLike_0x670D1C();
         const detail::TimelineState *primaryTimelineStateLike_0x66F80C() const;
