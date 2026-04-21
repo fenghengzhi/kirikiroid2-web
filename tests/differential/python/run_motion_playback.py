@@ -8,11 +8,13 @@ Default fast path:
     or Redroid required — pure CI lane.
 
 Re-record path (`--record-oracle`):
-    Spawns the APK harness on a Redroid device, drives Motion.Player
-    via the harness's TJS_EXEC_STR command, and writes the resulting
-    JSON to disk so subsequent fast-path runs have an updated oracle.
-    The port snapshot is also produced and compared so the user gets
-    immediate feedback on whether port and libkrkr2 agree.
+    Spawns the APK harness on a Redroid / AVD device, triggers
+    `TVPMainScene::startupFrom(logo_test.xp3)` via harness-RPC (which
+    only schedules — actual playback runs on the cocos2d GL thread),
+    and attaches Frida to hook `Player_updateLayers` for per-frame
+    per-layer state. Both motion fixtures (yuzulogo, m2logo) are
+    recorded in a single playback since startup.tjs plays them
+    sequentially. Requires a running `frida-server` on the device.
 
 Usage:
     run_motion_playback.py [--spec-dir DIR] [--port-runner PATH]
@@ -30,8 +32,11 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(
-    0, str(REPO_ROOT / "tests" / "differential" / "oracle_runner"))
+# Match the import pattern used by the other run_*_adb.py runners:
+# oracle_runner.adb_engine / oracle_runner.adapters.* rely on the
+# `oracle_runner` directory being a package, so tests/differential (the
+# package parent) goes on sys.path rather than oracle_runner itself.
+sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
 
 # Imported lazily so the disk-only fast path doesn't need adb_engine deps.
 
@@ -117,23 +122,36 @@ def main(argv: list[str]) -> int:
         print(f"no specs in {spec_dir}", file=sys.stderr)
         return 0
 
-    from adapters import motion_playback as mpb
+    from oracle_runner.adapters import motion_playback as mpb
 
     if args.record_oracle:
-        from adb_engine import AdbHarnessEngine
+        from oracle_runner.adb_engine import AdbHarnessEngine
         if not args.serial:
             print("--record-oracle requires --serial", file=sys.stderr)
             return 2
         trace_dir.mkdir(parents=True, exist_ok=True)
+        # Single playback covers every spec: startup.tjs inside
+        # logo_test.xp3 plays all SEGMENT_ORDER motions sequentially, and
+        # cocos2d only accepts one scheduleOnce("startup", ...) per
+        # Activity lifetime. mpb.record_all_oracles returns
+        # {spec_id: frames} in one shot.
         with AdbHarnessEngine(serial=args.serial) as engine:
-            for spec in specs:
-                print(f"[record] {spec['id']}: launching APK snapshot")
-                frames = mpb.record_oracle(engine, spec, serial=args.serial)
-                target = trace_dir / f"{spec['id']}.oracle.json"
-                with target.open("w") as f:
-                    json.dump(frames, f, indent=2, sort_keys=True)
-                print(f"[record] {spec['id']}: wrote {len(frames)} frames "
-                      f"to {target}")
+            print(f"[record] capturing all {len(specs)} specs in one "
+                  f"playback (Frida-hooked Player_updateLayers)")
+            all_frames = mpb.record_all_oracles(
+                engine, specs, serial=args.serial)
+        for spec in specs:
+            frames = all_frames.get(spec["id"])
+            if frames is None:
+                print(f"[record] {spec['id']}: no frames captured — "
+                      f"spec id not in SEGMENT_ORDER or playback ended "
+                      f"early", file=sys.stderr)
+                continue
+            target = trace_dir / f"{spec['id']}.oracle.json"
+            with target.open("w") as f:
+                json.dump(frames, f, indent=2, sort_keys=True)
+            print(f"[record] {spec['id']}: wrote {len(frames)} frames "
+                  f"to {target}")
         # Record-only: port CLI isn't required on the recording host
         # (CI's Redroid runner only has libkrkr2 + harness APK, not a
         # host-native motion::Player build). The host-side fast-path

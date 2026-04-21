@@ -2,6 +2,7 @@
   "id": "m2logo",
   "family": "motion_playback",
   "mtn_path": "reference/xp3/logo_test/m2logo.mtn",
+  "chara": "m2cheeseware_logo",
   "label": "back_white",
   "frames": 91,
   "expected_trace": "traces/motion_playback/m2logo.oracle.json",

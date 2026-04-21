@@ -175,6 +175,54 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Cache Android NDK
+        uses: actions/cache@v4
+        id: ndk-cache
+        with:
+          path: ${{ runner.temp }}/android-ndk
+          # Pinned NDK version: match the toolchain libkrkr2.so was
+          # built against (aarch64 clang, API 24 ABI baseline) so our
+          # JNI library uses the same libstdc++ ABI shape.
+          key: android-ndk-r27-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Android NDK (build libharness only)
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -eux
+          NDK_VERSION=r27c
+          NDK_HOST=linux  # works for both x86_64 and aarch64 runner hosts
+          curl -fsSL -o /tmp/ndk.zip \
+            "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-${NDK_HOST}.zip"
+          unzip -q /tmp/ndk.zip -d "${{ runner.temp }}"
+          mv "${{ runner.temp }}/android-ndk-${NDK_VERSION}" "${{ runner.temp }}/android-ndk"
+
+      - name: Cache libharness.so build
+        uses: actions/cache@v4
+        id: libharness-cache
+        with:
+          path: tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          # Invalidate whenever the sources or build invocation change.
+          key: libharness-v1-${{ hashFiles('tests/differential/oracle_runner/harness/harness.cpp', 'tests/differential/oracle_runner/harness/jni_bridge.cpp', 'tests/differential/oracle_runner/harness/CMakeLists.txt') }}
+
+      - name: Build libharness.so (NDK cross-compile)
+        if: steps.libharness-cache.outputs.cache-hit != 'true'
+        env:
+          ANDROID_NDK: ${{ runner.temp }}/android-ndk
+        run: |
+          set -eux
+          # Mirror the one-liner documented in harness/CMakeLists.txt:
+          # direct clang invocation is faster than a full CMake cycle
+          # and we only emit one .so with no generated code.
+          HOST_TAG=$(ls "$ANDROID_NDK/toolchains/llvm/prebuilt" | head -1)
+          CLANG="$ANDROID_NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/aarch64-linux-android24-clang++"
+          mkdir -p tests/differential/oracle_runner/harness/prebuilt
+          "$CLANG" -O2 -fPIC -shared -static-libstdc++ \
+            tests/differential/oracle_runner/harness/harness.cpp \
+            tests/differential/oracle_runner/harness/jni_bridge.cpp \
+            -ldl -llog \
+            -o tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          file tests/differential/oracle_runner/harness/prebuilt/libharness.so
+
       - name: Cache Android SDK build-tools
         uses: actions/cache@v4
         id: android-sdk-cache
@@ -219,7 +267,12 @@ jobs:
           # lives in the private submodule — its submodule SHA is already
           # part of the main repo tree hash (via the gitlink), so hashing
           # the parent .gitmodules + the pointer is enough.
-          key: harness-apk-v1-${{ hashFiles('tests/differential/oracle_runner/harness-apk/HarnessActivity.java', 'tests/differential/oracle_runner/harness-apk/manifest-patch.xml', 'tests/differential/oracle_runner/harness-apk/patch_manifest.py', 'tests/differential/oracle_runner/harness-apk/build.sh', 'tests/differential/oracle_runner/harness-apk/keystore/harness-test.jks', 'tests/differential/oracle_runner/harness-apk/keystore/harness-test.password', 'tests/differential/oracle_runner/harness/prebuilt/libharness.so', 'reference/apk/krkr2 1.4.4.apk') }}
+          # Hash libharness.so SOURCES (not the binary) since the binary
+          # is produced by the "Build libharness.so" step earlier in this
+          # job — not a repo asset. Cross-compiler output isn't guaranteed
+          # bit-for-bit reproducible across NDK patch versions, so hashing
+          # the sources + CMakeLists is the stable signal.
+          key: harness-apk-v2-${{ hashFiles('tests/differential/oracle_runner/harness-apk/HarnessActivity.java', 'tests/differential/oracle_runner/harness-apk/manifest-patch.xml', 'tests/differential/oracle_runner/harness-apk/patch_manifest.py', 'tests/differential/oracle_runner/harness-apk/build.sh', 'tests/differential/oracle_runner/harness-apk/keystore/harness-test.jks', 'tests/differential/oracle_runner/harness-apk/keystore/harness-test.password', 'tests/differential/oracle_runner/harness/harness.cpp', 'tests/differential/oracle_runner/harness/jni_bridge.cpp', 'tests/differential/oracle_runner/harness/CMakeLists.txt', 'reference/apk/krkr2 1.4.4.apk') }}
 
       - name: Build harness APK
         if: steps.harness-apk-cache.outputs.cache-hit != 'true'

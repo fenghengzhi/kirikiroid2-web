@@ -1,29 +1,52 @@
 """Adapter for the `motion_playback` differential family.
 
-Drives libkrkr2's TJS-side Motion.Player from inside the APK harness and
-captures a per-frame snapshot of every layer's accumulated state. The
-snapshot is the oracle that the port-side `motion_playback_port` CLI
-diff'd against.
-
 Two modes:
-  * Live oracle: feed `engine` (an `AdbEngine`); we exec a TJS script that
-    plays the motion and returns a JSON string via the harness's
-    TJS_EXEC_STR command. Use `--record-oracle` in the runner for this.
-  * Disk oracle: pass `engine=None` and provide `spec["expected_trace"]`;
-    the adapter just loads the cached golden JSON.
+  * Live oracle (`record_all_oracles`): attach Frida to the APK harness,
+    drop `logo_test.xp3` on the device, trigger
+    `TVPMainScene::startupFrom` via the harness-RPC engine (pure
+    scheduler call; doesn't touch GL thread state), and let the embedded
+    `startup.tjs` play yuzulogo then m2logo on the cocos2d GL thread.
+    Frida's `Interceptor.attach` on `Player_updateLayers @ +0x6BB33C`
+    captures per-frame per-layer accum state at the exact point where
+    it's coherent — no cross-thread RPC into Motion.Player methods, so
+    no GL-thread-affinity SIGSEGV.
 
-The TJS script body is built inline because TJS standard library coverage
-varies between APK builds; we cannot rely on a built-in JSON encoder, so
-we ship a tiny one (~30 lines of TJS) tuned for the snapshot schema.
+    Rationale for the architecture split (harness-RPC for the boot
+    call; Frida for the runtime observation): see the "分工原则"
+    section in /Users/bytedance/.claude/plans/
+    oracle-runner-panda-floofy-garden.md.
+
+  * Disk oracle (`run_case`): compare port CLI output against a
+    checked-in golden JSON. No engine required.
+
+Previous revisions of this file shipped a TJS snapshot script executed
+via `engine.tjs_exec_str` from the harness-rpc pthread. That approach
+crashed consistently: Motion.Player's `getLayerNames`/`draw` methods
+iterate the node tree with GL-thread assumptions, and calling them
+from our RPC worker SIGSEGV'd in `emutls_key_destructor`. Hooking
+`Player_updateLayers` from its *natural* GL-thread caller side-steps
+the whole problem.
 """
 
 from __future__ import annotations
 
 import json
-import shlex
+import struct
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
+
+
+# libkrkr2 offsets (relative to load base) resolved from IDA by
+# mangled-name strings present in the dynamic string table:
+#   _ZN12TVPMainScene11GetInstanceEv            → 0xA9D4D4
+#   _ZN12TVPMainScene11startupFromERKSs         → 0xA9F954
+# The second arg's 'Ss' abbreviation confirms libkrkr2 was built with
+# gnustl (libstdc++ old ABI), not libc++. That dictates the std::string
+# layout used by _construct_gnustl_string below.
+OFFSET_TVPMAINSCENE_GETINSTANCE = 0xA9D4D4
+OFFSET_TVPMAINSCENE_STARTUPFROM = 0xA9F954
 
 
 # Schema fields, kept in sync with tests/differential/port_runners/motion_playback_port.cpp.
@@ -36,101 +59,24 @@ LAYER_FIELDS_BOOL = ("visible", "active", "flipX", "flipY")
 LAYER_FIELDS_STR = ("label", "currentImage")
 
 
-def _build_snapshot_script(mtn_path: str, label: str, frames: int) -> str:
-    """TJS source. The function returns a JSON string; ExecScript writes
-    that string into the result variant which TJS_EXEC_STR ferries back."""
-    # JSON encoder kept TJS-1.x compatible (no try/catch around toString).
-    return f"""
-(function() {{
-  var enc = function(v) {{
-    if (v === void) return "null";
-    var t = typeof v;
-    if (t == "Object") {{
-      if (v == null) return "null";
-      // Treat any Array-like as array if it has .count and integer keys.
-      if (v instanceof "Array") {{
-        var s = "[";
-        for (var i = 0; i < v.count; i++) {{
-          if (i > 0) s += ",";
-          s += enc(v[i]);
-        }}
-        return s + "]";
-      }}
-      var keys = v.getKeys();  // Dictionary
-      var s2 = "{{";
-      var first = true;
-      for (var i = 0; i < keys.count; i++) {{
-        var k = keys[i];
-        if (!first) s2 += ",";
-        first = false;
-        s2 += "\\"" + k + "\\":" + enc(v[k]);
-      }}
-      return s2 + "}}";
-    }}
-    if (t == "Integer") return "" + v;
-    if (t == "Real") {{
-      var s = "" + v;
-      // TJS floats can stringify as "1" — make them JSON-safe doubles.
-      if (s.indexOf(".") < 0 && s.indexOf("e") < 0 && s.indexOf("E") < 0)
-        s += ".0";
-      return s;
-    }}
-    if (t == "String") {{
-      var s = "\\"";
-      for (var i = 0; i < v.length; i++) {{
-        var ch = v[i];
-        if (ch == "\\\\") s += "\\\\\\\\";
-        else if (ch == "\\"") s += "\\\\\\"";
-        else if (ch == "\\n") s += "\\\\n";
-        else if (ch == "\\r") s += "\\\\r";
-        else if (ch == "\\t") s += "\\\\t";
-        else s += ch;
-      }}
-      return s + "\\"";
-    }}
-    if (v === true) return "true";
-    if (v === false) return "false";
-    return "null";
-  }};
+# Order that logo_test.xp3's startup.tjs plays motions. We partition the
+# Frida trace by player pointer; the first segment is yuzulogo, second
+# is m2logo. Adapter-level contract: spec ids must be one of these.
+SEGMENT_ORDER: tuple[str, ...] = ("yuzulogo", "m2logo")
 
-  var rm = new Motion.ResourceManager(null, 0);
-  var p = new Motion.Player(rm);
-  p.motion = "{mtn_path}";
-  p.play("{label}", 0);
-  var frames = [];
-  for (var f = 0; f < {frames}; f++) {{
-    p.progress(1000.0 / 60.0);
-    var names = p.getLayerNames();
-    var layers = [];
-    for (var i = 0; i < names.count; i++) {{
-      var g = p.getLayerGetter(names[i]);
-      layers.add(%[
-        "index": i,
-        "label": names[i],
-        "nodeType": g.type,
-        "visible": g.visible,
-        "active": g.branchVisible,
-        "flipX": g.flipX,
-        "flipY": g.flipY,
-        "posX": g.x,
-        "posY": g.y,
-        "posZ": 0.0,
-        "angleDeg": g.angleDeg,
-        "scaleX": g.zoomX,
-        "scaleY": g.zoomY,
-        "slantX": g.slantX,
-        "slantY": g.slantY,
-        "opacity": g.opacity,
-        "blendMode": 16,
-        "currentImage": ""
-      ]);
-    }}
-    frames.add(%[ "frame": f, "layers": layers ]);
-  }}
-  return enc(frames);
-}})()
-"""
 
+# Deterministic oracle-recording xp3. Its startup.tjs runs fixed-step
+# `player.progress(1000/60)` loops (241 frames for yuzulogo, 91 for
+# m2logo) matching the host port CLI, instead of logo_test.xp3's real-
+# time variable-step doFrame. Sources live in the reference submodule
+# (reference/xp3/logo_test_oracle/startup.tjs + the shared mtn files in
+# reference/xp3/logo_test/). Regenerate via
+# `tests/differential/oracle_runner/fixtures/build_logo_test_oracle.sh`
+# whenever the spec frame counts change.
+_LOGO_TEST_XP3_REL = "reference/xp3/logo_test_oracle.xp3"
+
+
+# ---------------------------------------------------------------- device ops
 
 def push_fixture(serial: str | None, local: Path, remote: str) -> None:
     cmd = ["adb"]
@@ -140,25 +86,221 @@ def push_fixture(serial: str | None, local: Path, remote: str) -> None:
     subprocess.run(cmd, check=True, capture_output=True)
 
 
-def record_oracle(engine, spec: dict, *, serial: str | None = None) -> list:
-    """Run the TJS snapshot inside the APK and return a Python list-of-dicts
-    matching the schema written by motion_playback_port.cpp."""
-    mtn_local = Path(spec["mtn_path"])
-    if not mtn_local.is_absolute():
-        mtn_local = Path(__file__).resolve().parents[3] / spec["mtn_path"]
-    if not mtn_local.exists():
-        raise FileNotFoundError(f"motion fixture missing: {mtn_local}")
+def _adb_shell(serial: str | None, cmdline: str) -> str:
+    cmd = ["adb"]
+    if serial:
+        cmd += ["-s", serial]
+    cmd += ["shell", cmdline]
+    out = subprocess.run(cmd, check=True, capture_output=True)
+    return out.stdout.decode(errors="replace")
 
-    remote = f"/data/local/tmp/{mtn_local.name}"
-    push_fixture(serial, mtn_local, remote)
 
-    engine.tjs_init()
-    engine.tjs_reset()
+def _ensure_logo_test_xp3_pushed(serial: str | None) -> str:
+    """Push the oracle bootstrap xp3 (fixed-step startup.tjs wrapper
+    around logo_test's yuzulogo + m2logo motions) to a path that
+    TVPCheckStartupPath accepts. Returns the device-side absolute path."""
+    repo_root = Path(__file__).resolve().parents[4]
+    local = repo_root / _LOGO_TEST_XP3_REL
+    if not local.exists():
+        raise FileNotFoundError(
+            f"oracle bootstrap xp3 missing: {local}. "
+            f"Build it via tests/differential/oracle_runner/fixtures/"
+            f"build_logo_test_oracle.sh (requires the xp3pack tool).")
+    # app's scoped-storage dir: write access guaranteed on API 29+.
+    remote_dir = "/sdcard/Android/data/org.github.krkr2/files"
+    _adb_shell(serial, f"mkdir -p {remote_dir}")
+    remote_path = f"{remote_dir}/logo_test_oracle.xp3"
+    push_fixture(serial, local, remote_path)
+    return remote_path
 
-    script = _build_snapshot_script(remote, spec["label"], int(spec["frames"]))
-    payload = engine.tjs_exec_str(script)
-    return json.loads(payload)
 
+# ------------------------------------------------------------ startup boot
+
+_startup_triggered = False
+
+
+def trigger_startup(engine, game_path_on_device: str) -> None:
+    """Kick libkrkr2's deferred startup chain for `game_path_on_device`.
+
+    Idempotent per AdbHarnessEngine session: cocos2d only accepts one
+    `scheduleOnce` per "startup" key; a second invocation is a no-op on
+    our side but would raise from startupFrom. We guard with
+    `_startup_triggered`.
+
+    After this returns, the cocos2d GL thread will (asynchronously)
+    pick up the scheduled `doStartup`, run StartApplication →
+    TVPInitScriptEngine → plugin loader → startup.tjs. Playback begins
+    at some point 1–3s later. This function *returns immediately* once
+    the scheduler accepts the path; use the Frida tracer's event count
+    to determine when actual Motion.Player frames start arriving.
+    """
+    global _startup_triggered
+    if _startup_triggered:
+        return
+    scene = engine.call(
+        engine.offset(OFFSET_TVPMAINSCENE_GETINSTANCE), ret="ptr")
+    if not scene:
+        raise RuntimeError(
+            "TVPMainScene::GetInstance returned null — cocos2d hasn't "
+            "finished applicationDidFinishLaunching yet?")
+
+    # gnustl std::string layout. Data block:
+    #   [cap u64][len u64][refcnt i32][pad i32][chars...]['\0']
+    # The std::string object itself is an 8-byte pointer to &chars[0].
+    path_bytes = game_path_on_device.encode("utf-8")
+    header = struct.pack("<qqii", len(path_bytes), len(path_bytes), 0, 0)
+    data_blk = engine.heap.write(header + path_bytes + b"\x00")
+    string_obj = engine.heap.write(struct.pack("<Q", data_blk + 24))
+
+    ok = engine.call(
+        engine.offset(OFFSET_TVPMAINSCENE_STARTUPFROM),
+        ints=(scene, string_obj), ret="bool")
+    if not ok:
+        raise RuntimeError(
+            f"TVPMainScene::startupFrom({game_path_on_device!r}) returned "
+            f"false — TVPCheckStartupPath rejected the path. Check the "
+            f"path is under the app's scoped-storage dir and exists.")
+    _startup_triggered = True
+
+
+# ------------------------------------------------------------ oracle recording
+
+def _normalize_frame(frame: dict, index: int) -> dict:
+    """Drop Frida-internal fields (player, frameId, layout), canonicalise
+    to the oracle schema consumed by motion_playback_port.cpp."""
+    layers = []
+    for layer in frame.get("layers", []):
+        layers.append({k: layer.get(k) for k in (
+            LAYER_FIELDS_NUM + LAYER_FIELDS_INT
+            + LAYER_FIELDS_BOOL + LAYER_FIELDS_STR
+        )})
+    return {"frame": index, "layers": layers}
+
+
+def record_all_oracles(
+    engine,
+    specs: list[dict],
+    *,
+    serial: str | None = None,
+    playback_timeout: float = 60.0,
+) -> dict[str, list[dict]]:
+    """Capture per-frame layer state for all specs in a single playback.
+
+    `logo_test.xp3`'s startup.tjs plays yuzulogo then m2logo back-to-
+    back; we can only trigger startupFrom once per session, so this
+    adapter deliberately records every spec in one go rather than per-
+    spec. Returns `{spec_id: frames_list}`.
+    """
+    from oracle_runner.frida_motion_tracer import (  # local import to
+        FridaMotionTracer,                           # keep disk-only
+        segment_by_player,                           # fast path free of
+    )                                                # frida dep.
+
+    specs_by_id = {s["id"]: s for s in specs}
+    unknown = [sid for sid in specs_by_id if sid not in SEGMENT_ORDER]
+    if unknown:
+        raise ValueError(
+            f"unknown motion_playback spec id(s): {unknown}. "
+            f"Expected ids are fixed by logo_test.xp3's startup.tjs: "
+            f"{SEGMENT_ORDER}.")
+
+    remote_game = _ensure_logo_test_xp3_pushed(serial)
+
+    with FridaMotionTracer(engine, device_id=serial) as tracer:
+        tracer.start_record()
+
+        # tjs_init only to make sure the harness has a usable engine
+        # pointer for subsequent calls; it does not touch cocos2d state.
+        engine.tjs_init()
+        trigger_startup(engine, remote_game)
+
+        events = _wait_for_two_segments(
+            tracer, specs_by_id, timeout=playback_timeout)
+
+        # Safety: ensure we actually stop before detaching.
+        tracer.stop_record()
+
+    segments = segment_by_player(events)
+    # Filter out any "warmup" segments that fire before startup.tjs's
+    # own Motion.Player instances exist (e.g. if libkrkr2 runs an
+    # internal Motion.Player for an intro clip). The startup.tjs
+    # playback guarantees two Motion.Player instances with ≥ 60 frames
+    # each; anything shorter is noise.
+    substantive = [s for s in segments if len(s["frames"]) >= 30]
+    if len(substantive) < 2:
+        raise RuntimeError(
+            f"only {len(substantive)} substantive player segment(s) "
+            f"captured (raw segments: {[len(s['frames']) for s in segments]}). "
+            f"startup.tjs should produce two (yuzulogo + m2logo); check "
+            f"logcat for Motion.Player creation or GL-surface failures.")
+
+    results: dict[str, list[dict]] = {}
+    for i, spec_id in enumerate(SEGMENT_ORDER):
+        if spec_id not in specs_by_id:
+            continue
+        spec = specs_by_id[spec_id]
+        wanted = int(spec["frames"])
+        frames = substantive[i]["frames"]
+        if len(frames) < wanted:
+            raise RuntimeError(
+                f"segment {i} ({spec_id}) only has {len(frames)} frames; "
+                f"spec requires {wanted}. Increase playback_timeout or "
+                f"check Motion.Player's per-motion frame count.")
+        results[spec_id] = [
+            _normalize_frame(fr, fi) for fi, fr in enumerate(frames[:wanted])
+        ]
+    return results
+
+
+def _wait_for_two_segments(
+    tracer,
+    specs_by_id: dict[str, dict],
+    *,
+    timeout: float,
+    poll_interval: float = 0.4,
+    stabilise_seconds: float = 2.0,
+) -> list[dict]:
+    """Poll until we have ≥ len(specs) substantive player segments AND
+    the event count has been stable for `stabilise_seconds`. Returns the
+    full event list.
+
+    We can't peek at the buffer incrementally (rpc.exports round-trips
+    freeze the whole array), so we only call stop_record() on the final
+    return. Intermediate polls use `event_count` which is cheap (one
+    integer over RPC).
+    """
+    from oracle_runner.frida_motion_tracer import segment_by_player
+
+    needed_substantive = len(specs_by_id)
+    needed_frames = sum(int(s["frames"]) for s in specs_by_id.values())
+
+    deadline = time.time() + timeout
+    stable_since: float | None = None
+    last_count = -1
+    while time.time() < deadline:
+        count = tracer.event_count()
+        if count != last_count:
+            stable_since = None
+            last_count = count
+        elif count >= needed_frames and stable_since is None:
+            stable_since = time.time()
+        if stable_since is not None and \
+                time.time() - stable_since >= stabilise_seconds:
+            events = tracer.stop_record()
+            segments = segment_by_player(events)
+            substantive = [s for s in segments if len(s["frames"]) >= 30]
+            if len(substantive) >= needed_substantive:
+                return events
+            # Not enough yet; resume recording and keep waiting.
+            tracer.start_record()
+            stable_since = None
+        time.sleep(poll_interval)
+    raise RuntimeError(
+        f"motion playback did not stabilise within {timeout}s "
+        f"(last event count: {last_count}, needed ≥ {needed_frames})")
+
+
+# ------------------------------------------------------------ diff helpers
 
 def _floats_close(a: float, b: float, *, rel: float, abs_: float) -> bool:
     if a == b:

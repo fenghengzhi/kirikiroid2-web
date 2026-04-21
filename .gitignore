@@ -29,3 +29,10 @@ unpack/
 .claude/settings.local.json
 .ida-mcp/
 .xp3tmp/
+
+# oracle harness: libharness.so is cross-compiled per-build (CI builds
+# it in .github/workflows/differential.yml; local devs rebuild via the
+# one-liner at tests/differential/oracle_runner/harness/CMakeLists.txt).
+# Do not commit .so binaries — they bloat the repo history and rebuilds
+# are fast (~10s with NDK clang).
+tests/differential/oracle_runner/harness/prebuilt/libharness.so

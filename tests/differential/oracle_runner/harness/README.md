@@ -46,9 +46,10 @@ pointer: up to 8 ints and 8 doubles, matching `arm64_abi.pack_args`.
 
 ## Building
 
-Cross-compile via the NDK (r25+). Use clang++ — `harness.cpp` uses
-`<exception>`. Link `-static-libstdc++` so the .so doesn't depend on
-`libc++_shared.so` at runtime.
+`prebuilt/libharness.so` is **not checked in** — it's cross-compiled on
+demand. CI builds it in the `adb-frida` job of
+[`.github/workflows/differential.yml`](../../../../.github/workflows/differential.yml)
+(see the "Build libharness.so" step). Locally:
 
 ```bash
 export ANDROID_NDK=~/Library/Android/sdk/ndk/27.0.12077973
@@ -59,9 +60,11 @@ CLANG="$ANDROID_NDK/toolchains/llvm/prebuilt/$(ls $ANDROID_NDK/toolchains/llvm/p
          -o prebuilt/libharness.so
 ```
 
-The CMakeLists.txt here wires the same build in CMake form. Either way
-the resulting `libharness.so` is consumed by `harness-apk/build.sh`,
-which repacks it into `krkr2-harness.apk`.
+Use clang++ — `harness.cpp` uses `<exception>`. Link `-static-libstdc++`
+so the .so doesn't depend on `libc++_shared.so` at runtime. The
+CMakeLists.txt here wires the same build in CMake form. Either way the
+resulting `libharness.so` is consumed by `harness-apk/build.sh`, which
+repacks it into `krkr2-harness.apk`.
 
 ## Running
 
