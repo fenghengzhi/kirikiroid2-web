@@ -29,6 +29,8 @@ namespace {
 namespace motion {
 
     void Player::calcBounds() {
+        // Equivalent to sub_6D5164 @ 0x6D5178's `player+544` null gate —
+        // without a loaded motion there is no render list to measure.
         if(!_runtime || !_runtime->activeMotion) {
             _boundsMinX = 0.0;
             _boundsMinY = 0.0;
@@ -72,7 +74,14 @@ namespace motion {
             node.bounds[2] = -1.0f;
             node.bounds[3] = -1.0f;
 
-            if(!node.accumulated.active || !node.hasSource || !node.drawFlag) {
+            // Aligned to Player_calcBounds @ 0x6C3D04: bbox iteration skips
+            // nodes not in the Path A render list (node+1944 drawnThisFrame),
+            // not nodes lacking the Path B drawFlag. Previously this read
+            // drawFlag, which for stencilType=0 nodes was always 0 and
+            // incorrectly excluded them from bounds even though sub_6C2334
+            // still enqueued them via its nodeType mask.
+            if(!node.accumulated.active || !node.hasSource ||
+               !node.drawnThisFrame) {
                 continue;
             }
 
@@ -192,8 +201,20 @@ namespace motion {
     }
 
     void Player::appendPreparedRenderItems() {
+        // sub_6D5164 @ 0x6D5178: the first instruction of the libkrkr2.so
+        // build+sort wrapper is `if (!*(DWORD*)(player+544)) return 0;`.
+        // Port has no explicit `player+544` mirror; the equivalent gate
+        // is a null activeMotion, since without a loaded motion there is
+        // no render list to build.
         if(!_runtime || !_runtime->activeMotion) {
             return;
+        }
+
+        // Aligned to sub_6C2334 top: clear every node's drawnThisFrame
+        // (node+1944) before rebuilding mainList, so downstream consumers
+        // like calcBounds see only nodes that entered this frame's list.
+        for(auto &node : _runtime->nodes) {
+            node.drawnThisFrame = false;
         }
 
         const bool inheritedFlag18 = _renderItemInheritedFlag18;
@@ -633,6 +654,12 @@ namespace motion {
                         : "<invalid>");
             }
 
+            // Aligned to sub_6C2334 mainList enqueue: this node is now in
+            // the Path A render list; mark it so downstream consumers
+            // (e.g. calcBounds) can distinguish Path A presence from the
+            // Path B drawFlag.
+            _runtime->nodes[i].drawnThisFrame = true;
+
             entries.push_back(std::move(entry));
         }
 
@@ -873,6 +900,35 @@ namespace motion {
                     }
                 }
             }
+        }
+
+        // Branch A — aligned to sub_6C2334 @ 0x6C2B28 (libkrkr2.so).
+        // nodeType=3 sub-player wrappers get their item+264 (parentItem)
+        // populated with the visibleAncestor's PreparedRenderItem pointer,
+        // forming the sub-player ancestor chain that sub_6C7440 reads to
+        // decide direct vs composed render path. This is distinct from the
+        // type12 composite aggregation above (item+24 children collection).
+        // Only fill when parentItem is still nullptr so the type12 composite
+        // writes above remain authoritative for their covered cases. See
+        // analysis/RenderPipeline_Path_A_ImplRef.md §7.3.
+        for(auto &entry : _runtime->preparedRenderItems) {
+            if(entry.parentItem != nullptr) {
+                continue;
+            }
+            const auto &entryNode =
+                _runtime->nodes[static_cast<size_t>(entry.nodeIndex)];
+            if(entryNode.nodeType != 3) {
+                continue;
+            }
+            const int va = entry.visibleAncestorIndex;
+            if(va < 0) {
+                continue;
+            }
+            auto it = entryPtrByNode.find(va);
+            if(it == entryPtrByNode.end()) {
+                continue;
+            }
+            entry.parentItem = it->second;
         }
 
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&

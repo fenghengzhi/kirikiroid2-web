@@ -983,6 +983,9 @@ namespace motion {
     }
 
     bool Player::buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight) {
+        // Equivalent to sub_6D5164 @ 0x6D5178's `player+544` null gate —
+        // the port has no explicit +544 mirror, so an absent runtime is
+        // the canonical "no render list yet" signal.
         if(!_runtime) {
             return false;
         }

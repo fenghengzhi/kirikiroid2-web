@@ -257,8 +257,17 @@ namespace motion::detail {
         double prevPosY = 0.0;
         double prevPosZ = 0.0;
 
-        // Draw flag (computed in post-loop visibility pass, sub_6BD8DC)
+        // Draw flag (computed in post-loop visibility pass, sub_6BD8DC).
+        // Path B product — consumed by Player_calcBounds @ 0x6C3D04 and
+        // type3 propagate only; NOT the Path A main render gate.
         bool drawFlag = false;
+
+        // node+1944 in libkrkr2.so sub_6C2334 — set to 1 when a node enters
+        // the Path A render list (mainList), cleared at the top of the
+        // outer loop. Distinct from drawFlag (Path B). Makes Path A
+        // enqueue state explicit for downstream consumers like calcBounds.
+        bool drawnThisFrame = false;
+
         int forceVisible = 0;              // node+1996
         int visibleAncestorIndex = -1;     // replaces pointer at node+1952
 
