@@ -17,6 +17,8 @@
  *     WRITE <addr_hex> <n_dec> <hex_bytes>
  *     TJS_INIT                                -- build a private tTJS instance
  *     TJS_EXEC <ascii_hex>                    -- tTJS::ExecScript on the private tTJS
+ *     TJS_EXEC_STR <ascii_hex>                -- ExecScript that yields a String;
+ *                                                returns OK_STR <utf8_hex>
  *     TJS_GLOBAL <utf16le_key_hex>            -- fetch global as heap-resident tTJSVariant,
  *                                                returns its guest-VA hex
  *     QUIT
@@ -453,6 +455,156 @@ static void handle_tjs_exec(const char *args) {
     println("OK_VOID");
 }
 
+/* Forward decl — definition lives below the TJS_GLOBAL section. */
+static void *tjs_alloc_variant(void);
+
+/* TJS_EXEC_STR runs a script and reads back the last-expression result as
+ * a UTF-8 string. Used by the motion_playback oracle adapter to ferry a
+ * JSON snapshot from inside libkrkr2 to the host without adding any new
+ * libkrkr2 dependencies — the script is expected to evaluate to a String.
+ *
+ * Layout assumptions (verified against libkrkr2 sub_A12E4C / sub_A138BC /
+ * sub_A0F790 decompiles):
+ *   tTJSVariant (24B):
+ *     +0   payload (8B): tTJSVariantString * for tvtString
+ *     +16  type tag (4B): 2 = tvtString
+ *   tTJSVariantString:
+ *     +60  Length (uint32, in tjs_char chars)
+ *     +16  inline UTF-16LE chars when Length < 22
+ *     +8   pointer to UTF-16LE chars when Length >= 22 (already past the
+ *          8-byte capacity header set by sub_A138BC).
+ */
+static void handle_tjs_exec_str(const char *args) {
+    if (!g_tjs_inited) {
+        println("ERR tjs not init");
+        return;
+    }
+    while (*args == ' ') args++;
+    size_t hex_len = strlen(args);
+    if (hex_len % 2 != 0) {
+        println("ERR bad hex");
+        return;
+    }
+    size_t src_len = hex_len / 2;
+    static uint8_t src_buf[262144];
+    if (src_len + 1 > sizeof(src_buf)) {
+        println("ERR source too large");
+        return;
+    }
+    if (decode_hex(args, hex_len, src_buf, src_len) < 0) {
+        println("ERR hex decode");
+        return;
+    }
+    src_buf[src_len] = 0;
+
+    /* Allocate a fresh result variant on the per-session variant heap so
+     * its lifetime is bounded by tjs_reset_variant_heap(). */
+    void *result_var = tjs_alloc_variant();
+    if (!result_var) { println("ERR variant heap full"); return; }
+
+    try {
+        typedef void *(*mkstr_fn)(const char *ascii);
+        void *ttstr_payload = ((mkstr_fn)libkrkr2_fn(OFF_TTSTR_FROM_ASCII))(
+            (const char *)src_buf);
+        if (!ttstr_payload) {
+            println("ERR ttstr alloc failed");
+            return;
+        }
+        void *slot = ttstr_payload;
+        typedef int (*exec_fn)(void *this_ptr, void **script_ref,
+                               void *result, void *context,
+                               void *name, int lineofs);
+        (void)((exec_fn)libkrkr2_fn(OFF_TTJS_EXECSCRIPT))(
+            g_tjs_ptr, &slot, result_var, NULL, NULL, 0);
+    } catch (std::exception &e) {
+        char err[256];
+        snprintf(err, sizeof(err),
+                 "ERR exec threw std::exception: %.200s", e.what());
+        println(err);
+        return;
+    } catch (...) {
+        println("ERR exec threw unknown exception");
+        return;
+    }
+
+    /* Inspect the variant: type tag at +16, payload at +0. */
+    uint32_t tag = *(const uint32_t *)((const uint8_t *)result_var + 16);
+    if (tag != 2 /* tvtString */) {
+        char err[64];
+        snprintf(err, sizeof(err), "ERR result not string (type=%u)", tag);
+        println(err);
+        return;
+    }
+    void *str_ptr = *(void **)result_var;
+    if (!str_ptr) {
+        println("ERR null string payload");
+        return;
+    }
+    uint32_t length = *(const uint32_t *)((const uint8_t *)str_ptr + 60);
+    const uint16_t *u16;
+    if (length < 22) {
+        u16 = (const uint16_t *)((const uint8_t *)str_ptr + 16);
+    } else {
+        u16 = *(const uint16_t **)((const uint8_t *)str_ptr + 8);
+        if (!u16) {
+            println("ERR null long-string ptr");
+            return;
+        }
+    }
+
+    /* UTF-16LE → UTF-8, then hex-encode. Worst case bytes-per-char = 4
+     * (BMP outside ASCII can take 3, surrogate pairs handled below). Hex
+     * doubles that. Cap at 1 MiB to mirror the harness line buffer. */
+    static uint8_t utf8_buf[1u << 20];
+    size_t utf8_len = 0;
+    for (uint32_t i = 0; i < length;) {
+        if (utf8_len + 4 > sizeof(utf8_buf)) {
+            println("ERR string too large");
+            return;
+        }
+        uint32_t cp = u16[i++];
+        if (cp >= 0xD800 && cp <= 0xDBFF && i < length) {
+            uint32_t low = u16[i];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                ++i;
+            }
+        }
+        if (cp < 0x80) {
+            utf8_buf[utf8_len++] = (uint8_t)cp;
+        } else if (cp < 0x800) {
+            utf8_buf[utf8_len++] = (uint8_t)(0xC0 | (cp >> 6));
+            utf8_buf[utf8_len++] = (uint8_t)(0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            utf8_buf[utf8_len++] = (uint8_t)(0xE0 | (cp >> 12));
+            utf8_buf[utf8_len++] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F));
+            utf8_buf[utf8_len++] = (uint8_t)(0x80 | (cp & 0x3F));
+        } else {
+            utf8_buf[utf8_len++] = (uint8_t)(0xF0 | (cp >> 18));
+            utf8_buf[utf8_len++] = (uint8_t)(0x80 | ((cp >> 12) & 0x3F));
+            utf8_buf[utf8_len++] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F));
+            utf8_buf[utf8_len++] = (uint8_t)(0x80 | (cp & 0x3F));
+        }
+    }
+
+    static char hex_buf[2 * sizeof(utf8_buf) + 16];
+    static const char hex_digits[] = "0123456789abcdef";
+    size_t hex_pos = 0;
+    static const char prefix[] = "OK_STR ";
+    memcpy(hex_buf + hex_pos, prefix, sizeof(prefix) - 1);
+    hex_pos += sizeof(prefix) - 1;
+    for (size_t i = 0; i < utf8_len; ++i) {
+        if (hex_pos + 2 >= sizeof(hex_buf)) {
+            println("ERR hex buffer overflow");
+            return;
+        }
+        hex_buf[hex_pos++] = hex_digits[(utf8_buf[i] >> 4) & 0xF];
+        hex_buf[hex_pos++] = hex_digits[utf8_buf[i] & 0xF];
+    }
+    hex_buf[hex_pos] = 0;
+    println(hex_buf);
+}
+
 /* TJS_GLOBAL looks up a global variable on the tTJS's GlobalContext by
  * UTF-16LE name (hex-encoded, null-terminated in the wire format). It
  * allocates a fresh 24-byte tTJSVariant from the guest heap, writes the
@@ -608,6 +760,8 @@ extern "C" int harness_rpc_main(const char *so_path) {
             handle_write(line + 6);
         } else if (strncmp(line, "TJS_INIT", 8) == 0) {
             handle_tjs_init();
+        } else if (strncmp(line, "TJS_EXEC_STR ", 13) == 0) {
+            handle_tjs_exec_str(line + 13);
         } else if (strncmp(line, "TJS_EXEC ", 9) == 0) {
             handle_tjs_exec(line + 9);
         } else if (strncmp(line, "TJS_GLOBAL ", 11) == 0) {
@@ -651,6 +805,8 @@ extern "C" int harness_rpc_main_fd(const char *so_path, int fd) {
             handle_write(line + 6);
         } else if (strncmp(line, "TJS_INIT", 8) == 0) {
             handle_tjs_init();
+        } else if (strncmp(line, "TJS_EXEC_STR ", 13) == 0) {
+            handle_tjs_exec_str(line + 13);
         } else if (strncmp(line, "TJS_EXEC ", 9) == 0) {
             handle_tjs_exec(line + 9);
         } else if (strncmp(line, "TJS_GLOBAL ", 11) == 0) {

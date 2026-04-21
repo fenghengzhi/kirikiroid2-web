@@ -644,6 +644,19 @@ namespace motion {
         }
     }
 
+    void Player::runUpdatePassForOracle() {
+        ensureMotionLoaded();
+        ensureNodeTreeBuilt();
+        if(!_runtime || !_runtime->activeMotion ||
+           _runtime->nodes.empty()) {
+            return;
+        }
+        // Mirrors progressCompatMethod's pre-update wipe (PlayerQuery.cpp:1520).
+        _runtime->pendingEvents.clear();
+        updateLayers();
+        calcBounds();
+    }
+
     bool Player::hitTestLayer(ttstr name, double x, double y) {
         ensureMotionLoaded();
         ensureNodeTreeBuilt();

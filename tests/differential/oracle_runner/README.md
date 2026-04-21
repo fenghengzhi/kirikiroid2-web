@@ -25,6 +25,7 @@ failure.
 | `bezier_curve` | **✓ 6/6** | **✓ 6** | `sub_69A754` (0x69A754). `empty_curve` + `size_mismatch` specs dropped — UB inputs (empty or mismatched arrays) where libkrkr2's behaviour is an OOB-read side effect / infinite loop rather than a designed contract; oracle doesn't apply |
 | `position_interp` | **✓ 5/5** | **✓ 5** | `sub_69A4D4` (0x69A4D4). Adapter had `src_addr`/`dst_addr` wired into a2/a3 — libkrkr2's convention (matching port's `interpolatePosition69A4D4` signature) is a2=dst (returned at t=1), a3=src (returned at t=0). `rotation_coord*` specs dropped — empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (latent libkrkr2 bug, never hit by real assets); port's defensive sanitisation is intentionally non-matching |
 | `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
+| `motion_playback` | scaffold | pending | Drives `Motion.Player` end-to-end via the new `TJS_EXEC_STR` harness command, snapshots per-frame layer state, diffs against a host-native `motion_playback_port` CLI. Specs land for `m2logo` / `yuzulogo` to guard the Phase 2 `PlayerRender.cpp:1000` drawFlag-gate fix. Oracle JSONs need to be recorded once in a Redroid env (see [run_motion_playback.py](../python/run_motion_playback.py) `--record-oracle`); port CLI emits structurally valid frames but only fills accumulated state once the headless `updateLayers()` crash is debugged (the public `Player::runUpdatePassForOracle()` hook is in place for that follow-up) |
 
 ## Prerequisites
 

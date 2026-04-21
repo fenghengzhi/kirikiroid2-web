@@ -496,6 +496,23 @@ class AdbHarnessEngine:
         if reply != "OK_VOID":
             raise RuntimeError(f"unexpected TJS_EXEC reply: {reply!r}")
 
+    def tjs_exec_str(self, ascii_source: str) -> str:
+        """Run a TJS script whose final expression yields a String, and
+        return the UTF-8 decoded result. Used by the motion_playback oracle
+        adapter to ferry a JSON payload back from libkrkr2 in one round-trip
+        instead of chunking via repeated TJS_GLOBAL calls."""
+        if not getattr(self, "_tjs_ptr", 0):
+            raise RuntimeError("call tjs_init() first")
+        self._writeline(
+            f"TJS_EXEC_STR {ascii_source.encode('utf-8').hex()}")
+        reply = self._readline(timeout=60.0)
+        if reply.startswith("ERR "):
+            raise RuntimeError(f"TJS_EXEC_STR error: {reply[4:]}")
+        if not reply.startswith("OK_STR "):
+            raise RuntimeError(
+                f"unexpected TJS_EXEC_STR reply: {reply[:120]!r}")
+        return bytes.fromhex(reply[7:]).decode("utf-8")
+
     def tjs_global(self, name: str) -> int:
         """Look up a global variable on the tTJS GlobalContext and return
         a guest VA of a freshly-allocated 24-byte tTJSVariant holding the

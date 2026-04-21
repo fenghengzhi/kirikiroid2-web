@@ -1,0 +1,9 @@
+{
+  "id": "m2logo",
+  "family": "motion_playback",
+  "mtn_path": ".debugtmp/titleprobe_hd/data1080/m2logo.mtn",
+  "label": "back_white",
+  "frames": 91,
+  "expected_trace": "traces/motion_playback/m2logo.oracle.json",
+  "notes": "type0-only fixture covering the Phase 2 PlayerRender drawFlag-gate fix."
+}
