@@ -257,15 +257,22 @@ namespace motion::detail {
         double prevPosY = 0.0;
         double prevPosZ = 0.0;
 
-        // Draw flag (computed in post-loop visibility pass, sub_6BD8DC).
-        // Path B product — consumed by Player_calcBounds @ 0x6C3D04 and
-        // type3 propagate only; NOT the Path A main render gate.
+        // Path B visibility flag (node+1960), written by sub_6BD8DC @
+        // 0x6BD958. Consumed by: the visibleAncestor chain walk in the
+        // same sub_6BD8DC pass (PlayerUpdateLayers.cpp:1613), copied to
+        // PreparedRenderItem::drawFlag (item+19) in sub_6C2334's item
+        // build, and exposed to TJS via the layerVisible getter
+        // (PlayerQuery.cpp:43). NOT read by Player_calcBounds — that
+        // function gates on nodeType mask + renderTreeFlag200 instead
+        // (see PlayerRenderPrepare.cpp:75 comment). NOT the Path A main
+        // render gate either.
         bool drawFlag = false;
 
-        // node+1944 in libkrkr2.so sub_6C2334 — set to 1 when a node enters
-        // the Path A render list (mainList), cleared at the top of the
-        // outer loop. Distinct from drawFlag (Path B). Makes Path A
-        // enqueue state explicit for downstream consumers like calcBounds.
+        // node+1944 in libkrkr2.so sub_6C2334 — set to 1 when a node
+        // enters the Path A render list (mainList), cleared at the top
+        // of the outer loop. Mirrors a real native field for parity but
+        // currently has no port consumer; kept for the Phase 4
+        // motion_playback differential oracle.
         bool drawnThisFrame = false;
 
         int forceVisible = 0;              // node+1996
