@@ -7,8 +7,8 @@ the APK, `HarnessActivity` extends `Cocos2dxActivity` so cocos2d's init
 chain runs; by the time it invokes
 `Java_org_github_krkr2_HarnessActivity_runRpcServeFd` via JNI the
 global `TVPScriptEngine` slot is populated and every NCB class is
-registered with TJS. The Activity opens a `ServerSocket` on port 5039;
-the host connects via `adb forward tcp:5039 tcp:5039`.
+registered with TJS. The Activity opens a `ServerSocket` on port 5039
+from `onResume`; the host connects via `adb forward tcp:5039 tcp:5039`.
 
 ## Protocol
 
@@ -48,9 +48,10 @@ pointer: up to 8 ints and 8 doubles, matching `arm64_abi.pack_args`.
 ## Building
 
 `prebuilt/libharness.so` is **not checked in** — it's cross-compiled on
-demand. CI builds it in the `adb-frida` job of
-[`.github/workflows/differential.yml`](../../../../.github/workflows/differential.yml)
-(see the "Build libharness.so" step). Locally:
+demand. CI builds it in the native x86_64 `build-legacy-harness` job of
+[`.github/workflows/differential.yml`](../../../../.github/workflows/differential.yml),
+uploads it as an artifact, and the arm64 `adb-frida` Redroid job
+downloads that artifact before repacking the APK. Locally:
 
 ```bash
 export KRKR2_LEGACY_NDK=/path/to/android-ndk-r17c
@@ -80,12 +81,13 @@ Everything goes through `AdbHarnessEngine` in
 1. `adb forward tcp:5039 tcp:5039`
 2. `am start -W -n org.github.krkr2/.HarnessActivity`
 3. Retries TCP connect until `HarnessActivity`'s `ServerSocket` binds
-   (after `onWindowFocusChanged(true)`).
+   (started from `onResume`).
 4. Reads the `READY` line and starts issuing RPC commands.
 
 See [../README.md](../README.md) for end-to-end provisioning
 (`adb install krkr2-harness.apk`, pushing libkrkr2/libSDL2/libffmpeg)
-and how the four `run_*_adb.py` drivers sit on top.
+and how the scalar `run_*_adb.py` drivers plus the `motion_playback`
+recorder sit on top.
 
 ## Relationship with the Frida tracer
 
@@ -107,4 +109,5 @@ Division of labour:
 | Layer | Asserts on | Runs when |
 |---|---|---|
 | ADB harness | return value + output buffer contents | every ADB test |
-| Frida tracer | sub-call sequence, addresses, register snapshots at entry | `--trace` / `--record-trace` (CI uses `--trace` on all 4 families) |
+| Frida tracer | sub-call sequence, addresses, register snapshots at entry | `--trace` / `--record-trace` for the scalar families |
+| Frida motion tracer | Motion.Player per-frame state during natural GL-thread playback | `run_motion_playback.py --record-oracle` |

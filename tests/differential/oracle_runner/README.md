@@ -1,9 +1,10 @@
 # ADB + Frida Oracle Runner
 
 Runs libkrkr2.so (the Android kirikiroid2 binary) inside the repacked
-`krkr2-harness.apk` on a real Android arm64 emulator, driven from the
-host over `adb forward tcp:5039` + `am start HarnessActivity`. Provides
-two layers of assertion against the WASM port:
+`krkr2-harness.apk` on a real Android arm64 device or Redroid
+container, driven from the host over `adb forward tcp:5039` +
+`am start HarnessActivity`. Provides two established assertion layers
+against the port:
 
 1. **Return-value diff** — the host pokes function calls into
    [libharness.so](harness/) loaded by the APK, reads return values,
@@ -17,16 +18,85 @@ Any divergence between the port's output and libkrkr2's output — either
 at the return-value or at a sub-call — surfaces at CI time as a PR
 failure.
 
+For `motion_playback`, this directory also contains a libkrkr2-side
+recording path that captures Motion.Player per-frame state from natural
+playback on the cocos2d GL thread. That path is useful as a state oracle,
+but it is not yet a final visual oracle: it does not capture the
+framebuffer, draw commands, texture identity, shader/blend state, or
+pixel output.
+
 ## Status
 
-| Family | ADB calls | Golden traces | Notes |
+| Family | Oracle path | Goldens | Notes |
 |---|---|---|---|
 | `geometry_hit_test` | **✓ 10/10** | **✓ 10** | `Player_hitTest` (0x690DF0), pure C leaf |
 | `local_transform` | **✓ 8/8** | **✓ 8** | `sub_699940` (0x699940), libm sin/cos used by `rotate_90` |
 | `bezier_curve` | **✓ 6/6** | **✓ 6** | `sub_69A754` (0x69A754). `empty_curve` + `size_mismatch` specs dropped — UB inputs (empty or mismatched arrays) where libkrkr2's behaviour is an OOB-read side effect / infinite loop rather than a designed contract; oracle doesn't apply |
 | `position_interp` | **✓ 5/5** | **✓ 5** | `sub_69A4D4` (0x69A4D4). Adapter had `src_addr`/`dst_addr` wired into a2/a3 — libkrkr2's convention (matching port's `interpolatePosition69A4D4` signature) is a2=dst (returned at t=1), a3=src (returned at t=0). `rotation_coord*` specs dropped — empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (latent libkrkr2 bug, never hit by real assets); port's defensive sanitisation is intentionally non-matching |
 | `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
-| `motion_playback` | scaffold | pending | Drives `Motion.Player` end-to-end via the new `TJS_EXEC_STR` harness command, snapshots per-frame layer state, diffs against a host-native `motion_playback_port` CLI. Specs land for `m2logo` / `yuzulogo` to guard the Phase 2 `PlayerRender.cpp:1000` drawFlag-gate fix. Oracle JSONs need to be recorded once in a Redroid env (see [run_motion_playback.py](../python/run_motion_playback.py) `--record-oracle`); port CLI emits structurally valid frames but only fills accumulated state once the headless `updateLayers()` crash is debugged (the public `Player::runUpdatePassForOracle()` hook is in place for that follow-up) |
+| `motion_playback` | record-only state oracle | **✓ 2** | Uses `STARTUP_FROM` to schedule `reference/xp3/logo_test_oracle.xp3` inside libkrkr2, then Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record per-frame Motion node state for `yuzulogo.mtn` and `m2logo.mtn`. Checked-in goldens exist under `tests/differential/traces/motion_playback/*.oracle.json`. This is not yet a full visual oracle and is not part of the normal push CI pass/fail path; see "Motion playback visual oracle status" below. |
+
+## Motion playback visual oracle status
+
+Target goal: use `tests/differential` to prove that the current port's
+final visual output while playing `reference/xp3/logo_test/yuzulogo.mtn`
+and `reference/xp3/logo_test/m2logo.mtn` matches libkrkr2.so.
+
+Current oracle-runner side status:
+
+- The runner can launch the real repacked Android APK and execute
+  libkrkr2 on the same cocos2d/Java activity path used by the original
+  app.
+- `libharness.so` exposes `STARTUP_FROM <utf8_hex_path>`, constructs a
+  real gnustl `std::string`, and calls
+  `TVPMainScene::startupFrom(const std::string&)`. This avoids the old
+  Python-side fake `std::string` ABI risk.
+- The recording fixture is `reference/xp3/logo_test_oracle.xp3`, a
+  deterministic wrapper around the two shared `.mtn` files. It plays
+  `yuzulogo.mtn` first, then `m2logo.mtn`, using fixed
+  `player.progress(1000/60)` steps so the recorded frame counts match
+  the specs.
+- `FridaMotionTracer` attaches to the harness process and the in-process
+  JS agent hooks `Motion.Player.progress` and `Player_updateLayers`.
+  Recording happens from natural playback on the GL thread; the host
+  does not call Motion.Player methods from the RPC worker thread.
+- The checked-in oracle files currently contain non-empty per-frame
+  node state for both fixtures:
+  `tests/differential/traces/motion_playback/yuzulogo.oracle.json` and
+  `tests/differential/traces/motion_playback/m2logo.oracle.json`.
+
+What this proves today:
+
+- It can produce a libkrkr2 baseline for Motion node evaluation:
+  per-frame node count, node type, visibility/active flags, flip flags,
+  accumulated position, scale, angle, opacity, and a limited blend-mode
+  proxy.
+- It is suitable as a state oracle for debugging the port's
+  `Motion.Player` timeline and `Player_updateLayers` behaviour.
+
+What it does not prove yet:
+
+- It does not capture final framebuffer pixels or screenshots.
+- It does not capture a complete draw-command stream, draw order
+  contract, GL state, shader inputs, texture upload/sampling, clipping,
+  mask/stencil behaviour, or blend results.
+- `label` and `currentImage` in the current motion oracle schema are not
+  populated with authoritative runtime names/textures, so texture
+  identity and source image selection are not covered.
+- The deterministic wrapper uses fixed-step `progress()` calls; it does
+  not prove the original `logo_test.xp3` real-time scheduling path or
+  wall-clock timing behaviour.
+- Normal push CI records/validates the ADB+Frida scalar families. The
+  `motion_playback` recorder is opt-in via
+  `workflow_dispatch record_motion_playback_oracle=true`; normal CI does
+  not yet fail PRs on port-vs-motion-oracle mismatches.
+
+Therefore, as of now, the oracle runner side is good enough to be a
+libkrkr2 Motion state oracle for these two fixtures, but not enough to
+claim final visual output equivalence. Reaching that goal requires
+adding either framebuffer/pixel capture or a
+render-command oracle that covers texture identity, draw order, clipping,
+blend/stencil state, and final compositing.
 
 ## Prerequisites
 
@@ -40,13 +110,11 @@ git submodule update --init reference    # requires PRIVATE_SUBMODULE_PAT
 #   reference/lib/libffmpeg.so
 ```
 
-**Android emulator** — API 24+ arm64-v8a google_apis image. The ADB
-runners need a rooted emulator so `adb push` can drop libkrkr2/SDL2/
-ffmpeg into `/data/local/tmp/` and `adb install` can drop the harness
-APK. Locally we use an AVD named `oracle-arm64`; see
-`.github/workflows/differential.yml` for the CI version
-(`reactivecircus/android-emulator-runner@v2`, `macos-14` host for
-HVF-accelerated arm64).
+**Android device / Redroid** — API 24+ arm64-v8a. The ADB runners need
+root so `frida-server` can attach to the non-debuggable APK. Current CI
+uses `ubuntu-24.04-arm` with Redroid (`redroid/redroid:12.0.0_64only`)
+so Android runs as an arm64 container sharing the host kernel. Local
+development can use either Redroid or a rooted arm64 emulator.
 
 **Harness APK** — the repacked `krkr2-harness.apk` contains
 `libharness.so` (arm64, NDK r17c + `gnustl_static`) and a minimal `HarnessActivity`
@@ -61,7 +129,8 @@ pip install -r tests/differential/oracle_runner/requirements-oracle.txt
 # → frida==16.4.10 (only needed when using --trace / --record-trace)
 ```
 
-**Frida server** (for `--trace` mode) — pinned to match `frida-python`:
+**Frida server** (for `--trace` and `motion_playback --record-oracle`
+mode) — pinned to match `frida-python`:
 
 ```bash
 # Operator step, idempotent
@@ -124,6 +193,28 @@ step 12: addr differs (sub_69A754 vs sub_698454)
   runtime: enter sub_698454 depth=1 x0=<ptr> d0=0.5
 ```
 
+### Motion playback oracle recording
+
+`motion_playback` is recorded from live libkrkr2 rather than by a scalar
+`CALL`. It starts the APK harness, pushes
+`reference/xp3/logo_test_oracle.xp3`, calls `STARTUP_FROM`, and records
+the natural GL-thread playback with the specialised Frida motion tracer.
+
+```bash
+python3 tests/differential/python/run_motion_playback.py \
+  --record-oracle --serial "$ANDROID_SERIAL"
+```
+
+The command writes:
+
+```text
+tests/differential/traces/motion_playback/yuzulogo.oracle.json
+tests/differential/traces/motion_playback/m2logo.oracle.json
+```
+
+Treat those files as libkrkr2 Motion state goldens, not as final visual
+goldens.
+
 ## Architecture
 
 ```
@@ -138,6 +229,11 @@ oracle_runner/
 │                       load agent.js, expose start_case/stop_case
 ├── frida_agent.js      Per-target `Interceptor.attach` recording x0-x7
 │                       + d0-d7 at entry; x0/d0 at exit
+├── frida_motion_agent.js
+│                       Motion.Player progress/updateLayers recorder used
+│                       only by motion_playback oracle recording.
+├── frida_motion_tracer.py
+│                       Host-side wrapper for frida_motion_agent.js.
 ├── trace_targets.py    Per-family target offsets + arity + return-kind
 ├── trace_diff.py       Golden read/write + first-divergence diff
 ├── adapters/           Per-family case-to-CALL translation
@@ -160,6 +256,9 @@ oracle_runner/
 `run_*_adb.py` (siblings of `run_*_wasmtime.py`) instantiate
 `AdbHarnessEngine` once, iterate specs, and optionally attach a
 `FridaTracerEngine` configured with the family's target offset list.
+`run_motion_playback.py --record-oracle` uses `FridaMotionTracer`
+instead because it records a continuous playback rather than a single
+leaf-function call.
 
 ## Implementation notes
 
@@ -194,6 +293,11 @@ matches the pinned `frida-python` version.
 - Port-side tracer — instrument the wasm build to emit the same event
   schema, run a true libkrkr2-vs-port sequence diff (currently the
   golden freezes libkrkr2-side only)
+- Visual motion oracle — capture either final framebuffer pixels or a
+  complete draw-command stream for `yuzulogo.mtn` / `m2logo.mtn`,
+  including texture identity, draw order, clipping, blend/stencil state,
+  and compositing. This is required before claiming complete visual
+  equivalence.
 - `psb_rl_decompress` — needs static extraction of the RL loop from
   `sub_695DE8`, not in scope
 - Richer target lists — hook `iTJSDispatch2::PropGet` call-sites
