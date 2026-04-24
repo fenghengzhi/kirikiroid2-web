@@ -1,8 +1,9 @@
-"""Android ARM64 libc++ container layouts + project-specific structs.
+"""Android ARM64 STL container layouts + project-specific structs.
 
-libc++ (LLVM) `std::vector<T>` = `{T* begin; T* end; T* end_cap;}` = 24 bytes,
-three 8-byte pointers. This matches Android NDK r19+. If bezier_curve / other
-smoke tests fail, cross-check against sub_69A754 prologue's offset accesses
+GNU libstdc++/gnustl and libc++ both use a 24-byte `std::vector<T>` header
+on Android ARM64 for the layouts this file models:
+`{T* begin; T* end; T* end_cap;}`. If bezier_curve / other smoke tests fail,
+cross-check against sub_69A754 prologue's offset accesses
 ([x0], [x0+8], [x0+16]).
 """
 
@@ -11,7 +12,7 @@ from __future__ import annotations
 import struct
 from typing import Sequence
 
-VECTOR_SIZE = 24  # sizeof(std::vector<T>) on Android ARM64 libc++
+VECTOR_SIZE = 24  # sizeof(std::vector<T>) on Android ARM64
 
 
 def build_vector(heap, payload: bytes, element_size: int) -> int:

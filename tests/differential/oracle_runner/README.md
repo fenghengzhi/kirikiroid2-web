@@ -49,7 +49,7 @@ APK. Locally we use an AVD named `oracle-arm64`; see
 HVF-accelerated arm64).
 
 **Harness APK** — the repacked `krkr2-harness.apk` contains
-`libharness.so` (arm64 NDK-built) and a minimal `HarnessActivity`
+`libharness.so` (arm64, NDK r17c + `gnustl_static`) and a minimal `HarnessActivity`
 that extends `Cocos2dxActivity`. Build with
 [harness-apk/build.sh](harness-apk/build.sh); rebuild instructions for
 the native .so live in [harness/README.md](harness/README.md).
@@ -86,8 +86,10 @@ adb shell "chmod 755 /data/local/tmp/frida-server"
 adb shell "nohup /data/local/tmp/frida-server -D >/dev/null 2>&1 &"
 
 # Build + install the harness APK (packages libharness.so inside).
+export KRKR2_LEGACY_NDK=/path/to/android-ndk-r17c
+./tests/differential/oracle_runner/harness/build_legacy.sh
 ./tests/differential/oracle_runner/harness-apk/build.sh
-adb install -r tests/differential/oracle_runner/harness-apk/out/krkr2-harness.apk
+adb install -r tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk
 ```
 
 ### Return-value diff only (no Frida)
@@ -147,7 +149,8 @@ oracle_runner/
 ├── harness/            Native side of the harness (see harness/README.md)
 │   ├── harness.cpp
 │   ├── jni_bridge.cpp
-│   ├── CMakeLists.txt
+│   ├── Android.mk / Application.mk
+│   ├── build_legacy.sh
 │   └── prebuilt/libharness.so
 └── harness-apk/        APK wrapper around libharness.so (see harness-apk/README.md)
     ├── build.sh

@@ -31,8 +31,9 @@ on top.
 
 ```bash
 # Prerequisites: JDK 11+ (openjdk@21), apktool 3.x, Android SDK
-# build-tools 34.0.0 at $ANDROID_HOME, NDK r27+ (for libharness.so).
-tests/differential/oracle_runner/harness/CMakeLists.txt        # builds libharness.so
+# build-tools 34.0.0 at $ANDROID_HOME, and android-ndk-r17c for libharness.so.
+export KRKR2_LEGACY_NDK=/path/to/android-ndk-r17c
+tests/differential/oracle_runner/harness/build_legacy.sh       # builds libharness.so
 tests/differential/oracle_runner/harness-apk/build.sh          # produces prebuilt/krkr2-harness.apk
 ```
 

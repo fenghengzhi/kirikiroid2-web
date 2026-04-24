@@ -27,6 +27,7 @@ TJS_EXEC     <ascii_hex>
 TJS_EXEC_STR <ascii_hex>
 TJS_GLOBAL   <utf16le_key_hex>
 TJS_RESET
+STARTUP_FROM <utf8_hex_path>
 QUIT
 ```
 
@@ -52,19 +53,24 @@ demand. CI builds it in the `adb-frida` job of
 (see the "Build libharness.so" step). Locally:
 
 ```bash
-export ANDROID_NDK=~/Library/Android/sdk/ndk/27.0.12077973
-CLANG="$ANDROID_NDK/toolchains/llvm/prebuilt/$(ls $ANDROID_NDK/toolchains/llvm/prebuilt)/bin/aarch64-linux-android24-clang++"
-
-"$CLANG" -O2 -Wall -fPIC -shared -static-libstdc++ \
-         harness.cpp jni_bridge.cpp -ldl -llog \
-         -o prebuilt/libharness.so
+export KRKR2_LEGACY_NDK=/path/to/android-ndk-r17c
+./build_legacy.sh
 ```
 
-Use clang++ — `harness.cpp` uses `<exception>`. Link `-static-libstdc++`
-so the .so doesn't depend on `libc++_shared.so` at runtime. The
-CMakeLists.txt here wires the same build in CMake form. Either way the
-resulting `libharness.so` is consumed by `harness-apk/build.sh`, which
-repacks it into `krkr2-harness.apk`.
+This must use Android NDK r17c with `APP_STL := gnustl_static`; modern
+NDK r27/libc++ builds create a second C++ runtime with incompatible
+`std::string`, RTTI, exception, and allocator ABI. `build_legacy.sh`
+runs `check_harness_abi.py` after linking and rejects libc++ markers
+such as `std::__ndk1` / `libc++abi`. The CMakeLists.txt here is only a
+thin wrapper around the same script. The resulting `libharness.so` is
+consumed by `harness-apk/build.sh`, which repacks it into
+`krkr2-harness.apk`.
+
+Boundary rule: STL object ownership never crosses the `.so` boundary.
+`STARTUP_FROM` constructs a temporary gnustl `std::string` inside
+`libharness.so` and passes it by `const&` to
+`TVPMainScene::startupFrom`; `libkrkr2.so` must only read it during the
+call.
 
 ## Running
 

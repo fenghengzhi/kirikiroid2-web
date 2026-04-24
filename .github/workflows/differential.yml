@@ -17,6 +17,8 @@ env:
   ANDROID_BUILD_TOOLS_VERSION: "34.0.0"
   ANDROID_PLATFORM_VERSION: "34"
   ANDROID_CMDLINE_TOOLS_VERSION: "11076708"
+  LEGACY_NDK_BASENAME: "android-ndk-r17c"
+  LEGACY_NDK_SHA1: "12cacc70c3fd2f40574015631c00f41fb8a39048"
 
 jobs:
   # ── Port vs libkrkr2 value diff under wasmtime (fast, parallel-friendly).
@@ -130,7 +132,7 @@ jobs:
           # the arm64 runner — Google doesn't ship aarch64 Linux builds
           # for build-tools yet.
           sudo apt-get install -y --no-install-recommends \
-            adb xz-utils unzip qemu-user-static binfmt-support
+            adb make xz-utils unzip qemu-user-static binfmt-support
           adb version
 
       - name: Enable amd64 multiarch for x86_64 build-tools runtime
@@ -175,26 +177,23 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Cache Android NDK
+      - name: Cache legacy Android NDK
         uses: actions/cache@v4
-        id: ndk-cache
+        id: legacy-ndk-cache
         with:
-          path: ${{ runner.temp }}/android-ndk
-          # Pinned NDK version: match the toolchain libkrkr2.so was
-          # built against (aarch64 clang, API 24 ABI baseline) so our
-          # JNI library uses the same libstdc++ ABI shape.
-          key: android-ndk-r27-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/${{ env.LEGACY_NDK_BASENAME }}
+          # r17c is the last practical NDK line with GNU libstdc++/gnustl.
+          # libharness.so must use this ABI family to match libkrkr2.so.
+          key: ${{ env.LEGACY_NDK_BASENAME }}-${{ runner.os }}-${{ runner.arch }}
 
-      - name: Install Android NDK (build libharness only)
-        if: steps.ndk-cache.outputs.cache-hit != 'true'
+      - name: Install legacy Android NDK (build libharness only)
+        if: steps.legacy-ndk-cache.outputs.cache-hit != 'true'
         run: |
           set -eux
-          NDK_VERSION=r27c
-          NDK_HOST=linux  # works for both x86_64 and aarch64 runner hosts
           curl -fsSL -o /tmp/ndk.zip \
-            "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-${NDK_HOST}.zip"
+            "https://dl.google.com/android/repository/${LEGACY_NDK_BASENAME}-linux-x86_64.zip"
+          echo "${LEGACY_NDK_SHA1}  /tmp/ndk.zip" | sha1sum -c -
           unzip -q /tmp/ndk.zip -d "${{ runner.temp }}"
-          mv "${{ runner.temp }}/android-ndk-${NDK_VERSION}" "${{ runner.temp }}/android-ndk"
 
       - name: Cache libharness.so build
         uses: actions/cache@v4
@@ -202,26 +201,39 @@ jobs:
         with:
           path: tests/differential/oracle_runner/harness/prebuilt/libharness.so
           # Invalidate whenever the sources or build invocation change.
-          key: libharness-v1-${{ hashFiles('tests/differential/oracle_runner/harness/harness.cpp', 'tests/differential/oracle_runner/harness/jni_bridge.cpp', 'tests/differential/oracle_runner/harness/CMakeLists.txt') }}
+          key: libharness-gnustl-v1-${{ hashFiles('tests/differential/oracle_runner/harness/harness.cpp', 'tests/differential/oracle_runner/harness/jni_bridge.cpp', 'tests/differential/oracle_runner/harness/Android.mk', 'tests/differential/oracle_runner/harness/Application.mk', 'tests/differential/oracle_runner/harness/CMakeLists.txt', 'tests/differential/oracle_runner/harness/build_legacy.sh', 'tests/differential/oracle_runner/check_harness_abi.py') }}
 
-      - name: Build libharness.so (NDK cross-compile)
+      - name: Build libharness.so (legacy GNU C++ ABI)
         if: steps.libharness-cache.outputs.cache-hit != 'true'
         env:
-          ANDROID_NDK: ${{ runner.temp }}/android-ndk
+          KRKR2_LEGACY_NDK: ${{ runner.temp }}/${{ env.LEGACY_NDK_BASENAME }}
         run: |
           set -eux
-          # Mirror the one-liner documented in harness/CMakeLists.txt:
-          # direct clang invocation is faster than a full CMake cycle
-          # and we only emit one .so with no generated code.
-          HOST_TAG=$(ls "$ANDROID_NDK/toolchains/llvm/prebuilt" | head -1)
-          CLANG="$ANDROID_NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/aarch64-linux-android24-clang++"
-          mkdir -p tests/differential/oracle_runner/harness/prebuilt
-          "$CLANG" -O2 -fPIC -shared -static-libstdc++ \
-            tests/differential/oracle_runner/harness/harness.cpp \
-            tests/differential/oracle_runner/harness/jni_bridge.cpp \
-            -ldl -llog \
-            -o tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          # r17c ships linux-x86_64 host tools only. The Redroid job runs
+          # on an arm64 host, so build the harness in an amd64 container
+          # through qemu-user-static/binfmt and leave the produced arm64
+          # libharness.so in the workspace for the following APK repack.
+          docker run --rm --platform linux/amd64 \
+            -e HOST_UID="$(id -u)" \
+            -e HOST_GID="$(id -g)" \
+            -v "${PWD}:/work" \
+            -v "${KRKR2_LEGACY_NDK}:/ndk:ro" \
+            -w /work \
+            ubuntu:22.04 \
+            bash -lc 'set -eux
+              apt-get update -qq
+              apt-get install -y --no-install-recommends make python3 file ca-certificates
+              KRKR2_LEGACY_NDK=/ndk tests/differential/oracle_runner/harness/build_legacy.sh
+              chown -R "$HOST_UID:$HOST_GID" \
+                tests/differential/oracle_runner/harness/prebuilt \
+                tests/differential/oracle_runner/harness/build'
           file tests/differential/oracle_runner/harness/prebuilt/libharness.so
+
+      - name: Check libharness.so C++ ABI
+        run: |
+          python3 tests/differential/oracle_runner/check_harness_abi.py \
+            --harness tests/differential/oracle_runner/harness/prebuilt/libharness.so \
+            --libkrkr2 reference/libkrkr2/libkrkr2.so
 
       - name: Cache Android SDK build-tools
         uses: actions/cache@v4
@@ -271,8 +283,8 @@ jobs:
           # is produced by the "Build libharness.so" step earlier in this
           # job — not a repo asset. Cross-compiler output isn't guaranteed
           # bit-for-bit reproducible across NDK patch versions, so hashing
-          # the sources + CMakeLists is the stable signal.
-          key: harness-apk-v2-${{ hashFiles('tests/differential/oracle_runner/harness-apk/HarnessActivity.java', 'tests/differential/oracle_runner/harness-apk/manifest-patch.xml', 'tests/differential/oracle_runner/harness-apk/patch_manifest.py', 'tests/differential/oracle_runner/harness-apk/build.sh', 'tests/differential/oracle_runner/harness-apk/keystore/harness-test.jks', 'tests/differential/oracle_runner/harness-apk/keystore/harness-test.password', 'tests/differential/oracle_runner/harness/harness.cpp', 'tests/differential/oracle_runner/harness/jni_bridge.cpp', 'tests/differential/oracle_runner/harness/CMakeLists.txt', 'reference/apk/krkr2 1.4.4.apk') }}
+          # the sources + legacy build files is the stable signal.
+          key: harness-apk-v3-${{ hashFiles('tests/differential/oracle_runner/harness-apk/HarnessActivity.java', 'tests/differential/oracle_runner/harness-apk/manifest-patch.xml', 'tests/differential/oracle_runner/harness-apk/patch_manifest.py', 'tests/differential/oracle_runner/harness-apk/build.sh', 'tests/differential/oracle_runner/harness-apk/keystore/harness-test.jks', 'tests/differential/oracle_runner/harness-apk/keystore/harness-test.password', 'tests/differential/oracle_runner/harness/harness.cpp', 'tests/differential/oracle_runner/harness/jni_bridge.cpp', 'tests/differential/oracle_runner/harness/Android.mk', 'tests/differential/oracle_runner/harness/Application.mk', 'tests/differential/oracle_runner/harness/CMakeLists.txt', 'tests/differential/oracle_runner/harness/build_legacy.sh', 'tests/differential/oracle_runner/check_harness_abi.py', 'reference/apk/krkr2 1.4.4.apk') }}
 
       - name: Build harness APK
         if: steps.harness-apk-cache.outputs.cache-hit != 'true'

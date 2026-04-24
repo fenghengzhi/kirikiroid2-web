@@ -31,22 +31,10 @@ the whole problem.
 from __future__ import annotations
 
 import json
-import struct
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
-
-
-# libkrkr2 offsets (relative to load base) resolved from IDA by
-# mangled-name strings present in the dynamic string table:
-#   _ZN12TVPMainScene11GetInstanceEv            → 0xA9D4D4
-#   _ZN12TVPMainScene11startupFromERKSs         → 0xA9F954
-# The second arg's 'Ss' abbreviation confirms libkrkr2 was built with
-# gnustl (libstdc++ old ABI), not libc++. That dictates the std::string
-# layout used by _construct_gnustl_string below.
-OFFSET_TVPMAINSCENE_GETINSTANCE = 0xA9D4D4
-OFFSET_TVPMAINSCENE_STARTUPFROM = 0xA9F954
 
 
 # Schema fields, kept in sync with tests/differential/port_runners/motion_playback_port.cpp.
@@ -137,24 +125,7 @@ def trigger_startup(engine, game_path_on_device: str) -> None:
     global _startup_triggered
     if _startup_triggered:
         return
-    scene = engine.call(
-        engine.offset(OFFSET_TVPMAINSCENE_GETINSTANCE), ret="ptr")
-    if not scene:
-        raise RuntimeError(
-            "TVPMainScene::GetInstance returned null — cocos2d hasn't "
-            "finished applicationDidFinishLaunching yet?")
-
-    # gnustl std::string layout. Data block:
-    #   [cap u64][len u64][refcnt i32][pad i32][chars...]['\0']
-    # The std::string object itself is an 8-byte pointer to &chars[0].
-    path_bytes = game_path_on_device.encode("utf-8")
-    header = struct.pack("<qqii", len(path_bytes), len(path_bytes), 0, 0)
-    data_blk = engine.heap.write(header + path_bytes + b"\x00")
-    string_obj = engine.heap.write(struct.pack("<Q", data_blk + 24))
-
-    ok = engine.call(
-        engine.offset(OFFSET_TVPMAINSCENE_STARTUPFROM),
-        ints=(scene, string_obj), ret="bool")
+    ok = engine.startup_from(game_path_on_device)
     if not ok:
         raise RuntimeError(
             f"TVPMainScene::startupFrom({game_path_on_device!r}) returned "

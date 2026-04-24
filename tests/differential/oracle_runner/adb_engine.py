@@ -20,6 +20,7 @@ Public surface used by adapters:
     engine.ql.mem.read / mem.write  (ql.* is a facade; the backing is
                                      a device RPC, not a guest emulator)
     engine.tjs_init() / tjs_exec() / tjs_exec_str() / tjs_global() / tjs_reset()
+    engine.startup_from(path)  # TVPMainScene::startupFrom via native std::string
 """
 
 from __future__ import annotations
@@ -446,6 +447,21 @@ class AdbHarnessEngine:
         reply = self._readline()
         if reply != "OK_VOID":
             raise RuntimeError(f"unexpected TJS_RESET reply: {reply!r}")
+
+    def startup_from(self, game_path_on_device: str) -> bool:
+        """Call TVPMainScene::startupFrom(path) inside the native harness.
+
+        The harness constructs the GNU-libstdc++ std::string itself so
+        Python never has to forge a libkrkr2 C++ object layout.
+        """
+        self._writeline(
+            f"STARTUP_FROM {game_path_on_device.encode('utf-8').hex()}")
+        reply = self._readline(timeout=60.0)
+        if reply.startswith("ERR "):
+            raise RuntimeError(f"STARTUP_FROM error: {reply[4:]}")
+        if not reply.startswith("OK "):
+            raise RuntimeError(f"unexpected STARTUP_FROM reply: {reply!r}")
+        return bool(int(reply[3:], 16) & 1)
 
     # -------------------------------------------------------------- RPC plumbing
     def _writeline(self, s: str) -> None:

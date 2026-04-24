@@ -27,6 +27,8 @@
  *                                                returns OK_STR <utf8_hex>
  *     TJS_GLOBAL <utf16le_key_hex>            -- fetch global as heap-resident tTJSVariant,
  *                                                returns its guest-VA hex
+ *     STARTUP_FROM <utf8_hex_path>            -- call TVPMainScene::startupFrom
+ *                                                with a real gnustl std::string
  *     QUIT
  *
  *   Responses (harness -> host):
@@ -34,6 +36,7 @@
  *     OK_DOUBLE <bits_hex>     // CALL with double return
  *     OK_VOID                  // CALL with void return, or QUIT, WRITE, TJS_EXEC
  *     OK_DATA <hex_bytes>      // READ
+ *     OK_STR  <utf8_hex>       // TJS_EXEC_STR
  *     ERR <message>            // any failure
  *
  * AAPCS64 dispatch: we use a "universal signature" trick — declare a function
@@ -51,6 +54,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -69,6 +73,15 @@
 #define OFF_TTJS_GETGLOBAL     0x97F310
 #define OFF_TTSTR_FROM_ASCII   0xA13878
 #define OFF_TTJSVARIANT_CLEAR  0xA0F778
+
+/* TVPMainScene bootstrap helpers. Symbol names observed in libkrkr2.so:
+ *   _ZN12TVPMainScene11GetInstanceEv    -> 0xA9D4D4
+ *   _ZN12TVPMainScene11startupFromERKSs -> 0xA9F954
+ * The `Ss` parameter is GNU libstdc++/gnustl std::string, so this harness
+ * must be built with the matching legacy ABI. The string is a temporary
+ * const& consumed by startupFrom; ownership never crosses the .so boundary. */
+#define OFF_TVPMAINSCENE_GETINSTANCE 0xA9D4D4
+#define OFF_TVPMAINSCENE_STARTUPFROM 0xA9F954
 
 /* TVPScriptEngine global slot (0x1AE2FD0 relative to libkrkr2 base).
  * cocos2d's applicationDidFinishLaunching path (TVPMainScene::doStartup
@@ -339,17 +352,11 @@ static inline void *libkrkr2_fn(uint64_t off) {
 
 /* Custom std::terminate handler.
  *
- * libkrkr2.so is linked against Android's legacy `libstdc++.so` (gnustl);
- * our harness uses NDK r27's libc++ via `-static-libstdc++`. When
- * libkrkr2 throws a C++ exception that escapes our frames (or even just
- * propagates past a catch that can't match the other-runtime type_info),
- * libc++abi's default terminate handler (`demangling_terminate_handler`)
- * invokes the Itanium name demangler on the exception's `type_info.name()`.
- * The name comes from libkrkr2's gnustl, which the libc++ demangler
- * doesn't understand; it walks into garbage and SIGBUS's with an unaligned
- * PC inside the demangler's .text.
- *
- * Install a demangle-free handler that just reports and exits. */
+ * The harness must be built with NDK r17c + gnustl_static to match
+ * libkrkr2.so's old GNU C++ ABI. Keep a demangle-free terminate handler
+ * anyway: if a future build accidentally reintroduces libc++abi, or a
+ * foreign exception escapes past our catches, we want a clear process
+ * death instead of a crash inside a mismatched demangler. */
 static void harness_terminate_handler() {
     (void)write(2, "ERR std::terminate called (cross-runtime exception?)\n", 53);
     (void)write(1, "ERR terminate\n", 14);
@@ -687,6 +694,56 @@ static void handle_tjs_global(const char *args) {
     println(buf);
 }
 
+/* STARTUP_FROM constructs a real GNU-libstdc++ std::string inside the
+ * ABI-matched harness and passes it by const& to TVPMainScene::startupFrom.
+ * This replaces the old host-side hand-built gnustl string layout. */
+static void handle_startup_from(const char *args) {
+    while (*args == ' ') args++;
+    size_t hex_len = strlen(args);
+    if (hex_len == 0 || hex_len % 2 != 0) {
+        println("ERR bad path hex");
+        return;
+    }
+    size_t path_len = hex_len / 2;
+    static uint8_t path_buf[8192];
+    if (path_len + 1 > sizeof(path_buf)) {
+        println("ERR path too long");
+        return;
+    }
+    if (decode_hex(args, hex_len, path_buf, path_len) < 0) {
+        println("ERR hex decode");
+        return;
+    }
+    path_buf[path_len] = 0;
+
+    try {
+        typedef void *(*get_instance_fn)(void);
+        void *scene = ((get_instance_fn)libkrkr2_fn(
+            OFF_TVPMAINSCENE_GETINSTANCE))();
+        if (!scene) {
+            println("ERR TVPMainScene::GetInstance returned null");
+            return;
+        }
+
+        std::string path((const char *)path_buf, path_len);
+        typedef bool (*startup_from_fn)(void *this_ptr,
+                                        const std::string &path);
+        bool ok = ((startup_from_fn)libkrkr2_fn(
+            OFF_TVPMAINSCENE_STARTUPFROM))(scene, path);
+
+        char buf[16];
+        snprintf(buf, sizeof(buf), "OK %x", ok ? 1 : 0);
+        println(buf);
+    } catch (std::exception &e) {
+        char err[256];
+        snprintf(err, sizeof(err),
+                 "ERR startupFrom threw std::exception: %.200s", e.what());
+        println(err);
+    } catch (...) {
+        println("ERR startupFrom threw unknown exception");
+    }
+}
+
 /* ---------- RPC main (shared between standalone ELF and JNI entry) ---------- */
 
 static int harness_bootstrap(const char *so_path) {
@@ -770,6 +827,8 @@ extern "C" int harness_rpc_main_fd(const char *so_path, int fd) {
             handle_tjs_exec(line + 9);
         } else if (strncmp(line, "TJS_GLOBAL ", 11) == 0) {
             handle_tjs_global(line + 11);
+        } else if (strncmp(line, "STARTUP_FROM ", 13) == 0) {
+            handle_startup_from(line + 13);
         } else if (strncmp(line, "TJS_RESET", 9) == 0) {
             tjs_reset_variant_heap();
             println("OK_VOID");
