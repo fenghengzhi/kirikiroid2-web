@@ -71,6 +71,80 @@ jobs:
       - name: Build WASM + run port-wasm differential tests
         run: python tests/differential/run_all.py
 
+  # ── Build the legacy gnustl harness on a native x86_64 Linux host.
+  #    Android NDK r17c only ships linux-x86_64 host tools, while the
+  #    Redroid oracle job needs an arm64 runner. Keep those concerns split:
+  #    produce arm64-v8a/libharness.so here, then pass it to adb-frida as
+  #    an artifact.
+  build-legacy-harness:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init submodules (public + private reference)
+        env:
+          PRIVATE_SUBMODULE_PAT: ${{ secrets.PRIVATE_SUBMODULE_PAT }}
+        run: |
+          git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
+          git -c submodule.reference.update=checkout submodule update --init --recursive
+
+      - name: Install harness build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates curl make python3 unzip file
+
+      - name: Cache libharness.so build
+        uses: actions/cache@v4
+        id: libharness-cache
+        with:
+          path: tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          # Invalidate whenever the sources or build invocation change.
+          key: libharness-gnustl-v2-${{ hashFiles('tests/differential/oracle_runner/harness/harness.cpp', 'tests/differential/oracle_runner/harness/jni_bridge.cpp', 'tests/differential/oracle_runner/harness/Android.mk', 'tests/differential/oracle_runner/harness/Application.mk', 'tests/differential/oracle_runner/harness/CMakeLists.txt', 'tests/differential/oracle_runner/harness/build_legacy.sh', 'tests/differential/oracle_runner/check_harness_abi.py') }}
+
+      - name: Cache legacy Android NDK
+        if: steps.libharness-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        id: legacy-ndk-cache
+        with:
+          path: ${{ runner.temp }}/${{ env.LEGACY_NDK_BASENAME }}
+          # r17c is the last practical NDK line with GNU libstdc++/gnustl.
+          # libharness.so must use this ABI family to match libkrkr2.so.
+          key: ${{ env.LEGACY_NDK_BASENAME }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install legacy Android NDK (build libharness only)
+        if: steps.libharness-cache.outputs.cache-hit != 'true' && steps.legacy-ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/ndk.zip \
+            "https://dl.google.com/android/repository/${LEGACY_NDK_BASENAME}-linux-x86_64.zip"
+          echo "${LEGACY_NDK_SHA1}  /tmp/ndk.zip" | sha1sum -c -
+          unzip -q /tmp/ndk.zip -d "${{ runner.temp }}"
+
+      - name: Build libharness.so (legacy GNU C++ ABI)
+        if: steps.libharness-cache.outputs.cache-hit != 'true'
+        env:
+          KRKR2_LEGACY_NDK: ${{ runner.temp }}/${{ env.LEGACY_NDK_BASENAME }}
+        run: |
+          set -eux
+          tests/differential/oracle_runner/harness/build_legacy.sh
+
+      - name: Check libharness.so C++ ABI
+        run: |
+          file tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          python3 tests/differential/oracle_runner/check_harness_abi.py \
+            --harness tests/differential/oracle_runner/harness/prebuilt/libharness.so \
+            --libkrkr2 reference/libkrkr2/libkrkr2.so
+
+      - name: Upload libharness.so artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libharness-gnustl-arm64
+          path: tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          if-no-files-found: error
+
   # ── libkrkr2 oracle via ADB harness + Frida call-sequence diff.
   #    Runs against a Redroid (Android-in-Docker) arm64 container on a
   #    native arm64 Linux host, which sidesteps the nested-virt limits
@@ -78,7 +152,7 @@ jobs:
   #    Same kernel means no hardware virtualisation required; Android
   #    runs as a privileged container sharing the host kernel's binder.
   adb-frida:
-    needs: wasmtime
+    needs: [wasmtime, build-legacy-harness]
     runs-on: ubuntu-24.04-arm
     env:
       # Android 12 = API 31. _64only variant drops the 32-bit system
@@ -177,60 +251,15 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Cache legacy Android NDK
-        uses: actions/cache@v4
-        id: legacy-ndk-cache
+      - name: Download libharness.so artifact
+        uses: actions/download-artifact@v4
         with:
-          path: ${{ runner.temp }}/${{ env.LEGACY_NDK_BASENAME }}
-          # r17c is the last practical NDK line with GNU libstdc++/gnustl.
-          # libharness.so must use this ABI family to match libkrkr2.so.
-          key: ${{ env.LEGACY_NDK_BASENAME }}-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install legacy Android NDK (build libharness only)
-        if: steps.legacy-ndk-cache.outputs.cache-hit != 'true'
-        run: |
-          set -eux
-          curl -fsSL -o /tmp/ndk.zip \
-            "https://dl.google.com/android/repository/${LEGACY_NDK_BASENAME}-linux-x86_64.zip"
-          echo "${LEGACY_NDK_SHA1}  /tmp/ndk.zip" | sha1sum -c -
-          unzip -q /tmp/ndk.zip -d "${{ runner.temp }}"
-
-      - name: Cache libharness.so build
-        uses: actions/cache@v4
-        id: libharness-cache
-        with:
-          path: tests/differential/oracle_runner/harness/prebuilt/libharness.so
-          # Invalidate whenever the sources or build invocation change.
-          key: libharness-gnustl-v1-${{ hashFiles('tests/differential/oracle_runner/harness/harness.cpp', 'tests/differential/oracle_runner/harness/jni_bridge.cpp', 'tests/differential/oracle_runner/harness/Android.mk', 'tests/differential/oracle_runner/harness/Application.mk', 'tests/differential/oracle_runner/harness/CMakeLists.txt', 'tests/differential/oracle_runner/harness/build_legacy.sh', 'tests/differential/oracle_runner/check_harness_abi.py') }}
-
-      - name: Build libharness.so (legacy GNU C++ ABI)
-        if: steps.libharness-cache.outputs.cache-hit != 'true'
-        env:
-          KRKR2_LEGACY_NDK: ${{ runner.temp }}/${{ env.LEGACY_NDK_BASENAME }}
-        run: |
-          set -eux
-          # r17c ships linux-x86_64 host tools only. The Redroid job runs
-          # on an arm64 host, so build the harness in an amd64 container
-          # through qemu-user-static/binfmt and leave the produced arm64
-          # libharness.so in the workspace for the following APK repack.
-          docker run --rm --platform linux/amd64 \
-            -e HOST_UID="$(id -u)" \
-            -e HOST_GID="$(id -g)" \
-            -v "${PWD}:/work" \
-            -v "${KRKR2_LEGACY_NDK}:/ndk:ro" \
-            -w /work \
-            ubuntu:22.04 \
-            bash -lc 'set -eux
-              apt-get update -qq
-              apt-get install -y --no-install-recommends make python3 file ca-certificates
-              KRKR2_LEGACY_NDK=/ndk tests/differential/oracle_runner/harness/build_legacy.sh
-              chown -R "$HOST_UID:$HOST_GID" \
-                tests/differential/oracle_runner/harness/prebuilt \
-                tests/differential/oracle_runner/harness/build'
-          file tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          name: libharness-gnustl-arm64
+          path: tests/differential/oracle_runner/harness/prebuilt
 
       - name: Check libharness.so C++ ABI
         run: |
+          file tests/differential/oracle_runner/harness/prebuilt/libharness.so
           python3 tests/differential/oracle_runner/check_harness_abi.py \
             --harness tests/differential/oracle_runner/harness/prebuilt/libharness.so \
             --libkrkr2 reference/libkrkr2/libkrkr2.so
