@@ -44,6 +44,16 @@ BIND_PARAMETER_SYMBOL = "motion::Player::bindParameterValueLike_0x6C4668"
 EVALUATE_TIMELINE_SYMBOL = "evaluateTimelineLike_0x699AE4"
 SUB_MOTION_SYMBOL = "motion::Player::updateLayersPhase3_MotionSubNode"
 
+STATIC_PARSE_PROJECTION = "static_parse-semantic-v1"
+STATIC_PARSE_SAMPLE_POINTS = {
+    "init_non_emote_enter": "initNonEmoteMotionLike_0x6B365C.enter",
+    "init_non_emote_leave": "initNonEmoteMotionLike_0x6B365C.leave",
+    "parse_parameter_enter": "appendParameterEntryLike_0x6B1718.enter",
+    "parse_parameter_leave": "appendParameterEntryLike_0x6B1718.leave",
+    "parse_parameter_list_enter": "parseParameterListLike_0x6B202C.enter",
+    "parse_parameter_list_leave": "parseParameterListLike_0x6B202C.leave",
+}
+
 TRACE_FLATTEN_PROJECTION = "trace_flatten-semantic-v1"
 TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
 
@@ -460,6 +470,30 @@ class NativeMotionStageTracer:
         self.seq_counter += 1
         self.events.append(ev)
 
+    def _emit_static_parse(
+        self,
+        kind: str,
+        payload: dict[str, Any] | None = None,
+        diagnostics: dict[str, Any] | None = None,
+    ) -> None:
+        if "static_parse" not in self.enabled_stages:
+            return
+        diag = dict(diagnostics or {})
+        if self.current_record is not None:
+            diag.setdefault("frameId", self.current_record.get("frameId"))
+            diag.setdefault("objthis", self.current_record.get("objthis"))
+        ev = dict(payload or {})
+        ev["schema"] = EVENT_SCHEMA
+        ev["stage"] = "static_parse"
+        ev["kind"] = kind
+        ev["projection"] = STATIC_PARSE_PROJECTION
+        ev["samplePoint"] = STATIC_PARSE_SAMPLE_POINTS.get(kind, kind)
+        ev["diagnostics"] = diag
+        ev["seq"] = self.seq_counter
+        ev["timeMs"] = int((time.monotonic() - self.start_monotonic) * 1000)
+        self.seq_counter += 1
+        self.events.append(ev)
+
     # ----------------------------------------------------------- progress/flat
 
     def _on_progress_enter(self, frame) -> None:
@@ -536,7 +570,7 @@ class NativeMotionStageTracer:
 
     def _on_init_motion_enter(self, frame) -> None:
         player = self._player_ptr_from_frame(frame)
-        self._emit("static_parse", "init_non_emote_enter", {
+        self._emit_static_parse("init_non_emote_enter", {}, {
             "addr": CANONICAL_ADDR["init_motion"],
             "player": player,
         })
@@ -552,7 +586,7 @@ class NativeMotionStageTracer:
     def _on_parse_parameter_enter(self, frame) -> None:
         x0 = ptr_to_hex(sb_unsigned(frame.FindRegister("x0")))
         x1 = ptr_to_hex(sb_unsigned(frame.FindRegister("x1")))
-        self._emit("static_parse", "parse_parameter_enter", {
+        self._emit_static_parse("parse_parameter_enter", {}, {
             "addr": CANONICAL_ADDR["parse_parameter"],
             "x0": x0,
             "x1": x1,
@@ -566,7 +600,7 @@ class NativeMotionStageTracer:
     def _on_parse_parameter_list_enter(self, frame) -> None:
         x0 = ptr_to_hex(sb_unsigned(frame.FindRegister("x0")))
         x1 = ptr_to_hex(sb_unsigned(frame.FindRegister("x1")))
-        self._emit("static_parse", "parse_parameter_list_enter", {
+        self._emit_static_parse("parse_parameter_list_enter", {}, {
             "addr": CANONICAL_ADDR["parse_parameter_list"],
             "x0": x0,
             "x1": x1,
@@ -641,14 +675,14 @@ class NativeMotionStageTracer:
         elif kind == "init_motion_return":
             self._on_init_motion_return(frame, info)
         elif kind == "parse_parameter_return":
-            self._emit("static_parse", "parse_parameter_leave", {
+            self._emit_static_parse("parse_parameter_leave", {}, {
                 "addr": CANONICAL_ADDR["parse_parameter"],
                 "x0": info.get("x0"),
                 "x1": info.get("x1"),
                 "retval": ptr_to_hex(sb_unsigned(frame.FindRegister("x0"))),
             })
         elif kind == "parse_parameter_list_return":
-            self._emit("static_parse", "parse_parameter_list_leave", {
+            self._emit_static_parse("parse_parameter_list_leave", {}, {
                 "addr": CANONICAL_ADDR["parse_parameter_list"],
                 "x0": info.get("x0"),
                 "x1": info.get("x1"),
@@ -679,11 +713,14 @@ class NativeMotionStageTracer:
         player = info["player"]
         overview = self._player_overview(frame, player)
         retval = ptr_to_hex(sb_unsigned(frame.FindRegister("x0")))
-        self._emit("static_parse", "init_non_emote_leave", {
+        raw_parameter_table = overview.get("parameterTable")
+        self._emit_static_parse("init_non_emote_leave", {
+            "parameterTable": self._semantic_parameter_table(raw_parameter_table),
+        }, {
             "addr": CANONICAL_ADDR["init_motion"],
             "retval": retval,
             "player": player,
-            "parameterTable": overview.get("parameterTable"),
+            "parameterTable": self._parameter_table_diagnostics(raw_parameter_table),
         })
         self._emit("init_motion", "init_non_emote_leave", {
             "addr": CANONICAL_ADDR["init_motion"],
@@ -809,6 +846,49 @@ class NativeMotionStageTracer:
                 target, "parameterEntry", data_ptr + i * stride, elem_type)
             out["entries"].append(self._read_parameter_entry(entry, i))
         return out
+
+    @staticmethod
+    def _semantic_parameter_table(raw: dict[str, Any] | None) -> dict[str, Any]:
+        entries = (raw or {}).get("entries") or []
+        return {
+            "count": (raw or {}).get("count", len(entries)),
+            "entries": [
+                {
+                    "index": entry.get("index"),
+                    "id": entry.get("id"),
+                    "discretization": bool(entry.get("discretization")),
+                    "rangeBegin": entry.get("rangeBegin"),
+                    "rangeEnd": entry.get("rangeEnd"),
+                    "value": entry.get("value"),
+                    "mode": entry.get("mode"),
+                }
+                for entry in entries
+            ],
+        }
+
+    @staticmethod
+    def _parameter_table_diagnostics(raw: dict[str, Any] | None) -> dict[str, Any]:
+        raw = raw or {}
+        diag = {
+            "begin": raw.get("begin"),
+            "end": raw.get("end"),
+            "stride": raw.get("stride"),
+            "defaultParameterEntryIndex": raw.get("defaultParameterEntryIndex"),
+            "defaultParameterEntry": raw.get("defaultParameterEntry"),
+        }
+        if raw.get("error"):
+            diag["error"] = raw.get("error")
+        entries = raw.get("entries") or []
+        if entries:
+            diag["entries"] = [
+                {
+                    "index": entry.get("index"),
+                    "ptr": entry.get("ptr"),
+                    "idPtr": entry.get("idPtr"),
+                }
+                for entry in entries
+            ]
+        return diag
 
     def _read_parameter_entry(self, entry, index: int) -> dict[str, Any]:
         id_value = sb_child_optional(entry, "id")

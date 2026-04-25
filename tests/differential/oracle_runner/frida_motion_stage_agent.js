@@ -16,6 +16,16 @@ const PLAYER_EVALUATE_TIMELINE_OFF = 0x699AE4;
 const PLAYER_SUB_MOTION_OFF      = 0x6BE0C0;
 const PLAYER_PHASE3_LAST_OFF     = 0x6C0528;
 
+const STATIC_PARSE_PROJECTION = 'static_parse-semantic-v1';
+const STATIC_PARSE_SAMPLE_POINTS = {
+    init_non_emote_enter: 'initNonEmoteMotionLike_0x6B365C.enter',
+    init_non_emote_leave: 'initNonEmoteMotionLike_0x6B365C.leave',
+    parse_parameter_enter: 'appendParameterEntryLike_0x6B1718.enter',
+    parse_parameter_leave: 'appendParameterEntryLike_0x6B1718.leave',
+    parse_parameter_list_enter: 'parseParameterListLike_0x6B202C.enter',
+    parse_parameter_list_leave: 'parseParameterListLike_0x6B202C.leave',
+};
+
 const TRACE_FLATTEN_PROJECTION = 'trace_flatten-semantic-v1';
 const TRACE_FLATTEN_SAMPLE_POINT = 'progressCompat.phase3-end.pre-cleanup';
 
@@ -200,6 +210,25 @@ function emit(stage, kind, payload) {
     events.push(ev);
 }
 
+function emitStaticParse(kind, semanticPayload, diagnostics) {
+    if (!recording || !stageEnabled(STAGE_STATIC_PARSE)) return;
+    const diag = diagnostics || {};
+    if (inCompat) {
+        diag.frameId = currentFrameId;
+        diag.objthis = ptrHex(capturedObjthis);
+    }
+    const ev = semanticPayload || {};
+    ev.schema = 'motion-stage-oracle-v1-event';
+    ev.stage = STAGE_STATIC_PARSE;
+    ev.kind = kind;
+    ev.projection = STATIC_PARSE_PROJECTION;
+    ev.samplePoint = STATIC_PARSE_SAMPLE_POINTS[kind] || kind;
+    ev.diagnostics = diag;
+    ev.seq = seqCounter++;
+    ev.timeMs = Date.now() - startTimeMs;
+    events.push(ev);
+}
+
 function safeUtf16(ptrValue, length) {
     try {
         if (!ptrValue || ptrValue.isNull()) return null;
@@ -299,6 +328,40 @@ function readParameterTable(playerPtr) {
         out.entries.push(readParameterEntry(begin.add(i * PARAM_ENTRY_STRIDE), i));
     }
     return out;
+}
+
+function semanticParameterTable(raw) {
+    const entries = raw && raw.entries ? raw.entries : [];
+    return {
+        count: raw && typeof raw.count === 'number' ? raw.count : entries.length,
+        entries: entries.map((entry) => ({
+            index: entry.index,
+            id: entry.id,
+            discretization: entry.discretization !== 0,
+            rangeBegin: entry.rangeBegin,
+            rangeEnd: entry.rangeEnd,
+            value: entry.value,
+            mode: entry.mode,
+        })),
+    };
+}
+
+function parameterTableDiagnostics(raw) {
+    const diag = {
+        begin: raw ? raw.begin : null,
+        end: raw ? raw.end : null,
+        stride: raw ? raw.stride : null,
+    };
+    if (raw && raw.error) diag.error = raw.error;
+    if (raw && raw.span !== undefined) diag.span = raw.span;
+    if (raw && raw.entries && raw.entries.length > 0) {
+        diag.entries = raw.entries.map((entry) => ({
+            index: entry.index,
+            ptr: entry.ptr,
+            idPtr: entry.idPtr,
+        }));
+    }
+    return diag;
 }
 
 function parameterTableChanges(before, after) {
@@ -611,7 +674,7 @@ function installHook() {
     attachAt(PLAYER_INIT_NON_EMOTE_OFF, 'Player_initNonEmoteMotion', {
         onEnter(args) {
             this.player = args[0];
-            emit(STAGE_STATIC_PARSE, 'init_non_emote_enter', {
+            emitStaticParse('init_non_emote_enter', {}, {
                 addr: PLAYER_INIT_NON_EMOTE_OFF,
                 player: ptrHex(args[0]),
             });
@@ -622,11 +685,14 @@ function installHook() {
         },
         onLeave(retval) {
             const overview = playerOverview(this.player);
-            emit(STAGE_STATIC_PARSE, 'init_non_emote_leave', {
+            const rawParameterTable = overview.parameterTable;
+            emitStaticParse('init_non_emote_leave', {
+                parameterTable: semanticParameterTable(rawParameterTable),
+            }, {
                 addr: PLAYER_INIT_NON_EMOTE_OFF,
                 retval: ptrHex(retval),
                 player: ptrHex(this.player),
-                parameterTable: overview.parameterTable,
+                parameterTable: parameterTableDiagnostics(rawParameterTable),
             });
             emit(STAGE_INIT_MOTION, 'init_non_emote_leave', {
                 addr: PLAYER_INIT_NON_EMOTE_OFF,
@@ -640,14 +706,14 @@ function installHook() {
         onEnter(args) {
             this.arg0 = args[0];
             this.arg1 = args[1];
-            emit(STAGE_STATIC_PARSE, 'parse_parameter_enter', {
+            emitStaticParse('parse_parameter_enter', {}, {
                 addr: PLAYER_PARSE_PARAM_OFF,
                 x0: ptrHex(args[0]),
                 x1: ptrHex(args[1]),
             });
         },
         onLeave(retval) {
-            emit(STAGE_STATIC_PARSE, 'parse_parameter_leave', {
+            emitStaticParse('parse_parameter_leave', {}, {
                 addr: PLAYER_PARSE_PARAM_OFF,
                 x0: ptrHex(this.arg0),
                 x1: ptrHex(this.arg1),
@@ -660,14 +726,14 @@ function installHook() {
         onEnter(args) {
             this.arg0 = args[0];
             this.arg1 = args[1];
-            emit(STAGE_STATIC_PARSE, 'parse_parameter_list_enter', {
+            emitStaticParse('parse_parameter_list_enter', {}, {
                 addr: PLAYER_PARSE_PARAM_LIST_OFF,
                 x0: ptrHex(args[0]),
                 x1: ptrHex(args[1]),
             });
         },
         onLeave(retval) {
-            emit(STAGE_STATIC_PARSE, 'parse_parameter_list_leave', {
+            emitStaticParse('parse_parameter_list_leave', {}, {
                 addr: PLAYER_PARSE_PARAM_LIST_OFF,
                 x0: ptrHex(this.arg0),
                 x1: ptrHex(this.arg1),

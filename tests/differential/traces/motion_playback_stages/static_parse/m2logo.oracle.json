@@ -5,318 +5,426 @@
   "source": "android-frida-libkrkr2",
   "events": [
     {
-      "addr": 7026268,
-      "player": "0x798fcc1400",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_enter",
-      "seq": 6278,
-      "timeMs": 1206
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x79dfb02400"
+      },
+      "seq": 249,
+      "timeMs": 1333
     },
     {
-      "addr": 7020588,
-      "x0": "0x798fcc1400",
-      "x1": "0x798f707ea8",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_enter",
-      "seq": 6280,
-      "timeMs": 1206
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.enter",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfb02400",
+        "x1": "0x7987757ea8"
+      },
+      "seq": 250,
+      "timeMs": 1333
     },
     {
-      "addr": 7020588,
-      "x0": "0x798fcc1400",
-      "x1": "0x798f707ea8",
-      "retval": "0x1",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_leave",
-      "seq": 6281,
-      "timeMs": 1206
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.leave",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfb02400",
+        "x1": "0x7987757ea8",
+        "retval": "0x1"
+      },
+      "seq": 251,
+      "timeMs": 1333
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
-      "player": "0x798fcc1400",
       "parameterTable": {
-        "begin": null,
-        "end": null,
-        "stride": 56,
         "count": 0,
         "entries": []
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_leave",
-      "seq": 6282,
-      "timeMs": 1207
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x79dfb02400",
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56
+        }
+      },
+      "seq": 252,
+      "timeMs": 1334
     },
     {
-      "addr": 7026268,
-      "player": "0x798fcc1400",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_enter",
-      "seq": 6284,
-      "timeMs": 1207
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x79dfb02400"
+      },
+      "seq": 253,
+      "timeMs": 1334
     },
     {
-      "addr": 7020588,
-      "x0": "0x798fcc1400",
-      "x1": "0x798f707d18",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_enter",
-      "seq": 6286,
-      "timeMs": 1207
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.enter",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfb02400",
+        "x1": "0x7987757d18"
+      },
+      "seq": 254,
+      "timeMs": 1334
     },
     {
-      "addr": 7020588,
-      "x0": "0x798fcc1400",
-      "x1": "0x798f707d18",
-      "retval": "0x1",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_leave",
-      "seq": 6287,
-      "timeMs": 1207
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.leave",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfb02400",
+        "x1": "0x7987757d18",
+        "retval": "0x1"
+      },
+      "seq": 255,
+      "timeMs": 1334
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
-      "player": "0x798fcc1400",
       "parameterTable": {
-        "begin": null,
-        "end": null,
-        "stride": 56,
         "count": 0,
         "entries": []
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_leave",
-      "seq": 6288,
-      "timeMs": 1208
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x79dfb02400",
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56
+        }
+      },
+      "seq": 256,
+      "timeMs": 1335
     },
     {
-      "addr": 7026268,
-      "player": "0x7988957c00",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_enter",
-      "seq": 6704,
-      "timeMs": 1243,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x79dfa72e00",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 269,
+      "timeMs": 1376
     },
     {
-      "addr": 7020588,
-      "x0": "0x7988957c00",
-      "x1": "0x798f707b58",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_enter",
-      "seq": 6706,
-      "timeMs": 1243,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.enter",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfa72e00",
+        "x1": "0x7987757b58",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 270,
+      "timeMs": 1376
     },
     {
-      "addr": 7020588,
-      "x0": "0x7988957c00",
-      "x1": "0x798f707b58",
-      "retval": "0x1",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_leave",
-      "seq": 6707,
-      "timeMs": 1243,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.leave",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfa72e00",
+        "x1": "0x7987757b58",
+        "retval": "0x1",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 271,
+      "timeMs": 1376
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
-      "player": "0x7988957c00",
       "parameterTable": {
-        "begin": null,
-        "end": null,
-        "stride": 56,
         "count": 0,
         "entries": []
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_leave",
-      "seq": 6708,
-      "timeMs": 1243,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x79dfa72e00",
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56
+        },
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 272,
+      "timeMs": 1376
     },
     {
-      "addr": 7026268,
-      "player": "0x7988957600",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_enter",
-      "seq": 6712,
-      "timeMs": 1243,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x79dfa72800",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 273,
+      "timeMs": 1376
     },
     {
-      "addr": 7020588,
-      "x0": "0x7988957600",
-      "x1": "0x798f707b58",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_enter",
-      "seq": 6714,
-      "timeMs": 1243,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.enter",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfa72800",
+        "x1": "0x7987757b58",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 274,
+      "timeMs": 1376
     },
     {
-      "addr": 7020588,
-      "x0": "0x7988957600",
-      "x1": "0x798f707b58",
-      "retval": "0x1",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_leave",
-      "seq": 6715,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.leave",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfa72800",
+        "x1": "0x7987757b58",
+        "retval": "0x1",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 275,
+      "timeMs": 1376
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
-      "player": "0x7988957600",
       "parameterTable": {
-        "begin": null,
-        "end": null,
-        "stride": 56,
         "count": 0,
         "entries": []
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_leave",
-      "seq": 6716,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x79dfa72800",
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56
+        },
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 276,
+      "timeMs": 1377
     },
     {
-      "addr": 7026268,
-      "player": "0x7988957000",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_enter",
-      "seq": 6720,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x79dfa72200",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 277,
+      "timeMs": 1377
     },
     {
-      "addr": 7020588,
-      "x0": "0x7988957000",
-      "x1": "0x798f707b58",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_enter",
-      "seq": 6722,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.enter",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfa72200",
+        "x1": "0x7987757b58",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 278,
+      "timeMs": 1377
     },
     {
-      "addr": 7020588,
-      "x0": "0x7988957000",
-      "x1": "0x798f707b58",
-      "retval": "0x1",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_leave",
-      "seq": 6723,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.leave",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfa72200",
+        "x1": "0x7987757b58",
+        "retval": "0x1",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 279,
+      "timeMs": 1377
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
-      "player": "0x7988957000",
       "parameterTable": {
-        "begin": null,
-        "end": null,
-        "stride": 56,
         "count": 0,
         "entries": []
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_leave",
-      "seq": 6724,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x79dfa72200",
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56
+        },
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 280,
+      "timeMs": 1377
     },
     {
-      "addr": 7026268,
-      "player": "0x798fcc1a00",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_enter",
-      "seq": 6728,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x79dfa71c00",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 281,
+      "timeMs": 1377
     },
     {
-      "addr": 7020588,
-      "x0": "0x798fcc1a00",
-      "x1": "0x798f707b58",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_enter",
-      "seq": 6730,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.enter",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfa71c00",
+        "x1": "0x7987757b58",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 282,
+      "timeMs": 1377
     },
     {
-      "addr": 7020588,
-      "x0": "0x798fcc1a00",
-      "x1": "0x798f707b58",
-      "retval": "0x1",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_leave",
-      "seq": 6731,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.leave",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfa71c00",
+        "x1": "0x7987757b58",
+        "retval": "0x1",
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 283,
+      "timeMs": 1377
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
-      "player": "0x798fcc1a00",
       "parameterTable": {
-        "begin": null,
-        "end": null,
-        "stride": 56,
         "count": 0,
         "entries": []
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_leave",
-      "seq": 6732,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x79dfa71c00",
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56
+        },
+        "frameId": 253,
+        "objthis": "0x797e26ada0"
+      },
+      "seq": 284,
+      "timeMs": 1377
     }
   ],
   "summary": {
@@ -329,16 +437,12 @@
     },
     "traceFrameCount": 91,
     "traceSeqRange": [
-      6321,
-      9473
+      257,
+      363
     ],
     "eventSeqRange": [
-      6278,
-      6732
-    ],
-    "eventFrameIdRange": [
-      253,
-      253
+      249,
+      284
     ]
   }
 }

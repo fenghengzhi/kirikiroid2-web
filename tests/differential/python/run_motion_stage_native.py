@@ -18,6 +18,18 @@ sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
 
 SCHEMA = "motion-stage-oracle-v1"
 SOURCE = "native-lldb-macos"
+STATIC_PARSE_PROJECTION = "static_parse-semantic-v1"
+STATIC_PARSE_SAMPLE_POINTS = {
+    "init_non_emote_enter": "initNonEmoteMotionLike_0x6B365C.enter",
+    "init_non_emote_leave": "initNonEmoteMotionLike_0x6B365C.leave",
+    "parse_parameter_enter": "appendParameterEntryLike_0x6B1718.enter",
+    "parse_parameter_leave": "appendParameterEntryLike_0x6B1718.leave",
+    "parse_parameter_list_enter": "parseParameterListLike_0x6B202C.enter",
+    "parse_parameter_list_leave": "parseParameterListLike_0x6B202C.leave",
+}
+STATIC_PARSE_PARAMETER_FIELDS = (
+    "index", "id", "discretization", "rangeBegin", "rangeEnd", "value", "mode",
+)
 TRACE_FLATTEN_PROJECTION = "trace_flatten-semantic-v1"
 TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
 TRACE_FLATTEN_NUM_FIELDS: tuple[str, ...] = (
@@ -434,6 +446,225 @@ def trace_flatten_schema_mismatches(
     return mismatches
 
 
+def static_parse_schema_mismatches(
+    events: list[dict[str, Any]],
+    *,
+    side: str,
+) -> list[dict[str, Any]]:
+    mismatches: list[dict[str, Any]] = []
+    forbidden_top_level = (
+        "addr", "player", "x0", "x1", "retval", "frameId", "objthis",
+    )
+    forbidden_table_fields = (
+        "begin", "end", "stride", "defaultParameterEntry",
+        "defaultParameterEntryIndex",
+    )
+    forbidden_entry_fields = ("ptr", "idPtr")
+    for event_index, ev in enumerate(events):
+        kind = str(ev.get("kind"))
+        if ev.get("projection") != STATIC_PARSE_PROJECTION:
+            mismatches.append({
+                "kind": "static_parse_schema",
+                "side": side,
+                "event": event_index,
+                "field": "projection",
+                "value": ev.get("projection"),
+                "expected": STATIC_PARSE_PROJECTION,
+            })
+        expected_sample = STATIC_PARSE_SAMPLE_POINTS.get(kind)
+        if ev.get("samplePoint") != expected_sample:
+            mismatches.append({
+                "kind": "static_parse_schema",
+                "side": side,
+                "event": event_index,
+                "field": "samplePoint",
+                "value": ev.get("samplePoint"),
+                "expected": expected_sample,
+            })
+        if not isinstance(ev.get("diagnostics"), dict):
+            mismatches.append({
+                "kind": "static_parse_schema",
+                "side": side,
+                "event": event_index,
+                "field": "diagnostics",
+                "value": type(ev.get("diagnostics")).__name__,
+                "expected": "dict",
+            })
+        for field in forbidden_top_level:
+            if field in ev:
+                mismatches.append({
+                    "kind": "static_parse_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": field,
+                    "reason": "diagnostic_field_must_not_be_top_level",
+                })
+
+        table = ev.get("parameterTable")
+        if kind == "init_non_emote_leave":
+            if not isinstance(table, dict):
+                mismatches.append({
+                    "kind": "static_parse_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": "parameterTable",
+                    "value": type(table).__name__,
+                    "expected": "dict",
+                })
+                continue
+            for field in forbidden_table_fields:
+                if field in table:
+                    mismatches.append({
+                        "kind": "static_parse_schema",
+                        "side": side,
+                        "event": event_index,
+                        "field": f"parameterTable.{field}",
+                        "reason": "layout_field_must_be_diagnostic",
+                    })
+            entries = table.get("entries")
+            if not isinstance(table.get("count"), int):
+                mismatches.append({
+                    "kind": "static_parse_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": "parameterTable.count",
+                    "value": type(table.get("count")).__name__,
+                    "expected": "int",
+                })
+            if not isinstance(entries, list):
+                mismatches.append({
+                    "kind": "static_parse_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": "parameterTable.entries",
+                    "value": type(entries).__name__,
+                    "expected": "list",
+                })
+                continue
+            if isinstance(table.get("count"), int) and table["count"] != len(entries):
+                mismatches.append({
+                    "kind": "static_parse_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": "parameterTable.count",
+                    "value": table["count"],
+                    "expected": len(entries),
+                })
+            for entry_index, entry in enumerate(entries):
+                if not isinstance(entry, dict):
+                    mismatches.append({
+                        "kind": "static_parse_schema",
+                        "side": side,
+                        "event": event_index,
+                        "entry": entry_index,
+                        "field": "parameterTable.entries[]",
+                        "value": type(entry).__name__,
+                        "expected": "dict",
+                    })
+                    continue
+                for field in STATIC_PARSE_PARAMETER_FIELDS:
+                    if field not in entry:
+                        mismatches.append({
+                            "kind": "static_parse_schema",
+                            "side": side,
+                            "event": event_index,
+                            "entry": entry_index,
+                            "field": field,
+                            "reason": "missing_semantic_parameter_field",
+                        })
+                for field in forbidden_entry_fields:
+                    if field in entry:
+                        mismatches.append({
+                            "kind": "static_parse_schema",
+                            "side": side,
+                            "event": event_index,
+                            "entry": entry_index,
+                            "field": field,
+                            "reason": "layout_field_must_be_diagnostic",
+                        })
+                if "discretization" in entry and \
+                        not isinstance(entry["discretization"], bool):
+                    mismatches.append({
+                        "kind": "static_parse_schema",
+                        "side": side,
+                        "event": event_index,
+                        "entry": entry_index,
+                        "field": "discretization",
+                        "value": type(entry["discretization"]).__name__,
+                        "expected": "bool",
+                    })
+        elif table is not None:
+            mismatches.append({
+                "kind": "static_parse_schema",
+                "side": side,
+                "event": event_index,
+                "field": "parameterTable",
+                "reason": "only_init_non_emote_leave_has_parameter_table",
+            })
+    return mismatches
+
+
+def normalize_static_parse_events(
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for ev in events:
+        item = {
+            "kind": ev.get("kind"),
+            "samplePoint": ev.get("samplePoint"),
+        }
+        if ev.get("kind") == "init_non_emote_leave":
+            item["parameterTable"] = ev.get("parameterTable")
+        out.append(item)
+    return out
+
+
+def diff_static_parse_events(
+    native_payload: dict[str, Any],
+    oracle_payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    n_events = native_payload.get("events") or []
+    o_events = oracle_payload.get("events") or []
+    n_summary = native_payload.get("summary") or {}
+    o_summary = oracle_payload.get("summary") or {}
+    mismatches = (
+        static_parse_schema_mismatches(n_events, side="native")
+        + static_parse_schema_mismatches(o_events, side="oracle")
+    )
+    if len(n_events) != len(o_events):
+        mismatches.append({
+            "kind": "event_count",
+            "native": len(n_events),
+            "oracle": len(o_events),
+        })
+    if n_summary.get("kindCounts") != o_summary.get("kindCounts"):
+        mismatches.append({
+            "kind": "kind_counts",
+            "native": n_summary.get("kindCounts"),
+            "oracle": o_summary.get("kindCounts"),
+        })
+    n_kinds = [ev.get("kind") for ev in n_events]
+    o_kinds = [ev.get("kind") for ev in o_events]
+    if n_kinds != o_kinds:
+        mismatches.append({
+            "kind": "event_order",
+            "native": n_kinds,
+            "oracle": o_kinds,
+        })
+
+    n_semantic = normalize_static_parse_events(n_events)
+    o_semantic = normalize_static_parse_events(o_events)
+    for i, (native_ev, oracle_ev) in enumerate(zip(n_semantic, o_semantic)):
+        if native_ev != oracle_ev:
+            mismatches.append({
+                "kind": "semantic_event",
+                "event": i,
+                "native": native_ev,
+                "oracle": oracle_ev,
+            })
+    return mismatches
+
+
 def normalize_trace_flatten_events(
     events: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -744,10 +975,11 @@ def main(argv: list[str]) -> int:
         print(f"[native-stage] wrote raw stream to {raw_path}")
 
     failures = 0
-    for mismatch in trace_flatten_acceptance(payloads):
-        print(f"FAIL: native trace_flatten acceptance: {mismatch}",
-              file=sys.stderr)
-        failures += 1
+    if "trace_flatten" in stages:
+        for mismatch in trace_flatten_acceptance(payloads):
+            print(f"FAIL: native trace_flatten acceptance: {mismatch}",
+                  file=sys.stderr)
+            failures += 1
 
     spec_by_id = {spec["id"]: spec for spec in specs}
     for stage in stages:
@@ -790,6 +1022,30 @@ def main(argv: list[str]) -> int:
                     print(
                         f"PASS: {stage}/{case_id} "
                         f"({len(native_frames)} frames)"
+                    )
+                else:
+                    print(
+                        f"FAIL: {stage}/{case_id}: mismatch "
+                        f"({len(mismatches)} mismatches)"
+                    )
+                    for mismatch in mismatches[:10]:
+                        print(f"  {mismatch}")
+                    if len(mismatches) > 10:
+                        print(
+                            f"  ... +{len(mismatches) - 10} more")
+                    failures += 1
+                continue
+
+            if stage == "static_parse":
+                mismatches = diff_static_parse_events(
+                    native_payload=native_payload,
+                    oracle_payload=oracle_payload,
+                )
+                summary = native_payload.get("summary") or {}
+                if not mismatches:
+                    print(
+                        f"PASS: {stage}/{case_id} "
+                        f"({summary.get('eventCount', 0)} events)"
                     )
                 else:
                     print(

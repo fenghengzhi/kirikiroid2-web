@@ -5,98 +5,134 @@
   "source": "android-frida-libkrkr2",
   "events": [
     {
-      "addr": 7026268,
-      "player": "0x798fcc1400",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_enter",
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x79dfb02400"
+      },
       "seq": 0,
-      "timeMs": 98
+      "timeMs": 122
     },
     {
-      "addr": 7020588,
-      "x0": "0x798fcc1400",
-      "x1": "0x798f707ea8",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_enter",
-      "seq": 2,
-      "timeMs": 98
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.enter",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfb02400",
+        "x1": "0x7987757ea8"
+      },
+      "seq": 1,
+      "timeMs": 122
     },
     {
-      "addr": 7020588,
-      "x0": "0x798fcc1400",
-      "x1": "0x798f707ea8",
-      "retval": "0x1",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_leave",
-      "seq": 3,
-      "timeMs": 99
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.leave",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfb02400",
+        "x1": "0x7987757ea8",
+        "retval": "0x1"
+      },
+      "seq": 2,
+      "timeMs": 122
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
-      "player": "0x798fcc1400",
       "parameterTable": {
-        "begin": null,
-        "end": null,
-        "stride": 56,
         "count": 0,
         "entries": []
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_leave",
-      "seq": 4,
-      "timeMs": 99
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x79dfb02400",
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56
+        }
+      },
+      "seq": 3,
+      "timeMs": 123
     },
     {
-      "addr": 7026268,
-      "player": "0x798fcc1400",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_enter",
-      "seq": 6,
-      "timeMs": 100
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x79dfb02400"
+      },
+      "seq": 4,
+      "timeMs": 123
     },
     {
-      "addr": 7020588,
-      "x0": "0x798fcc1400",
-      "x1": "0x798f707d18",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_enter",
-      "seq": 8,
-      "timeMs": 100
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.enter",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfb02400",
+        "x1": "0x7987757d18"
+      },
+      "seq": 5,
+      "timeMs": 123
     },
     {
-      "addr": 7020588,
-      "x0": "0x798fcc1400",
-      "x1": "0x798f707d18",
-      "retval": "0x1",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "parse_parameter_list_leave",
-      "seq": 9,
-      "timeMs": 100
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "parseParameterListLike_0x6B202C.leave",
+      "diagnostics": {
+        "addr": 7020588,
+        "x0": "0x79dfb02400",
+        "x1": "0x7987757d18",
+        "retval": "0x1"
+      },
+      "seq": 6,
+      "timeMs": 123
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
-      "player": "0x798fcc1400",
       "parameterTable": {
-        "begin": null,
-        "end": null,
-        "stride": 56,
         "count": 0,
         "entries": []
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "static_parse",
       "kind": "init_non_emote_leave",
-      "seq": 10,
-      "timeMs": 100
+      "projection": "static_parse-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x79dfb02400",
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56
+        }
+      },
+      "seq": 7,
+      "timeMs": 124
     }
   ],
   "summary": {
@@ -109,12 +145,12 @@
     },
     "traceFrameCount": 241,
     "traceSeqRange": [
-      37,
-      6277
+      8,
+      248
     ],
     "eventSeqRange": [
       0,
-      10
+      7
     ]
   }
 }
