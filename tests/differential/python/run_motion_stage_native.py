@@ -538,7 +538,7 @@ def main(argv: list[str]) -> int:
                 "not match expected [241, 91]"
             )
         payloads = build_native_payloads(
-            stages=stages,
+            stages=sorted(set(stages) | {"trace_flatten"}),
             specs=specs,
             events=events,
             case_segments=case_segments,

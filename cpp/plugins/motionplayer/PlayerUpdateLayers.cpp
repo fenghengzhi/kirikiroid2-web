@@ -9,6 +9,12 @@
 #include <wasm_simd128.h>
 #endif
 
+#if defined(__clang__) || defined(__GNUC__)
+#define MOTIONPLAYER_NOINLINE __attribute__((noinline))
+#else
+#define MOTIONPLAYER_NOINLINE
+#endif
+
 using namespace motion::internal;
 
 namespace {
@@ -472,6 +478,370 @@ namespace {
     }
 } // anonymous namespace
 
+namespace motion::internal {
+
+    namespace {
+        FrameContentState frameStateFromClipSlot(
+            const detail::MotionNode::ClipSlot &slot,
+            bool visible,
+            int frameType = 0) {
+            FrameContentState state;
+            state.visible = visible && !slot.done;
+            state.frameType = frameType;
+            state.src = slot.src;
+            state.srcList = slot.srcList;
+            state.x = slot.x; state.y = slot.y; state.z = slot.z;
+            state.ox = slot.ox; state.oy = slot.oy;
+            state.width = slot.width; state.height = slot.height;
+            state.opacity = slot.opacity; state.angle = slot.angle;
+            state.scaleX = slot.scaleX; state.scaleY = slot.scaleY;
+            state.slantX = slot.slantX; state.slantY = slot.slantY;
+            state.flipX = slot.flipX; state.flipY = slot.flipY;
+            state.blendMode = slot.blendMode;
+            state.packedColors = slot.packedColors;
+            state.ccc.x = slot.ccc.x; state.ccc.y = slot.ccc.y;
+            state.acc.x = slot.acc.x; state.acc.y = slot.acc.y;
+            state.zcc.x = slot.zcc.x; state.zcc.y = slot.zcc.y;
+            state.scc.x = slot.scc.x; state.scc.y = slot.scc.y;
+            state.occ.x = slot.occ.x; state.occ.y = slot.occ.y;
+            state.cc.x = slot.cc.x; state.cc.y = slot.cc.y;
+            state.cp.x = slot.cp.x; state.cp.y = slot.cp.y;
+            state.cp.t = slot.cp.t;
+            state.clipStartTime = slot.clipStartTime;
+            state.motionDt = slot.motionDt;
+            state.motionFlags = slot.motionFlags;
+            state.motionDofst = slot.motionDofst;
+            state.motionDocmpl = slot.motionDocmpl;
+            state.motionTimeOffset = slot.motionTimeOffset;
+            state.motionDtgt = slot.motionDtgt;
+            state.prtTrigger = slot.prtTrigger;
+            state.prtFmin = slot.prtFmin; state.prtF = slot.prtF;
+            state.prtVmin = slot.prtVmin; state.prtV = slot.prtV;
+            state.prtAmin = slot.prtAmin; state.prtA = slot.prtA;
+            state.prtZmin = slot.prtZmin; state.prtZ = slot.prtZ;
+            state.prtRange = slot.prtRange;
+            state.hasTransformOrder = slot.hasTransformOrder;
+            std::copy(slot.transformOrder, slot.transformOrder + 4,
+                      state.transformOrder);
+            state.action = slot.action;
+            state.hasSync = slot.hasSync;
+            return state;
+        }
+
+        void populateInterpolatedCacheFromState(
+            detail::MotionNode &node,
+            const FrameContentState &state) {
+            node.interpolatedCache.src = state.src;
+            node.interpolatedCache.srcList = state.srcList;
+            node.interpolatedCache.width = state.width;
+            node.interpolatedCache.height = state.height;
+            node.interpolatedCache.opacity = state.opacity;
+            node.interpolatedCache.x = state.x;
+            node.interpolatedCache.y = state.y;
+            node.interpolatedCache.z = state.z;
+            node.interpolatedCache.ox = state.ox;
+            node.interpolatedCache.oy = state.oy;
+            node.interpolatedCache.angle = state.angle;
+            node.interpolatedCache.scaleX = state.scaleX;
+            node.interpolatedCache.scaleY = state.scaleY;
+            node.interpolatedCache.slantX = state.slantX;
+            node.interpolatedCache.slantY = state.slantY;
+            node.interpolatedCache.flipX = state.flipX;
+            node.interpolatedCache.flipY = state.flipY;
+            node.interpolatedCache.blendMode = state.blendMode;
+            node.interpolatedCache.packedColors = state.packedColors;
+            node.interpolatedCache.hasTransformOrder = state.hasTransformOrder;
+            if (state.hasTransformOrder) {
+                std::copy(std::begin(state.transformOrder),
+                          std::end(state.transformOrder),
+                          node.interpolatedCache.transformOrder);
+            }
+            node.interpolatedCache.action = state.action;
+            node.interpolatedCache.hasSync = state.hasSync;
+            node.interpolatedCache.motionDt = state.motionDt;
+            node.interpolatedCache.motionFlags = state.motionFlags;
+            node.interpolatedCache.motionDofst = state.motionDofst;
+            node.interpolatedCache.motionDocmpl = state.motionDocmpl;
+            node.interpolatedCache.motionTimeOffset = state.motionTimeOffset;
+            node.interpolatedCache.clipStartTime = state.clipStartTime;
+            node.interpolatedCache.motionDtgt = state.motionDtgt;
+            node.interpolatedCache.prtTrigger = state.prtTrigger;
+            node.interpolatedCache.prtF = state.prtF;
+            node.interpolatedCache.prtV = state.prtV;
+            node.interpolatedCache.prtA = state.prtA;
+            node.interpolatedCache.prtZ = state.prtZ;
+            node.interpolatedCache.prtRange = state.prtRange;
+            node.prtTrigger = state.prtTrigger;
+            node.interpolatedCache.ccc_x = state.ccc.x;
+            node.interpolatedCache.ccc_y = state.ccc.y;
+            node.interpolatedCache.cp_x = state.cp.x;
+            node.interpolatedCache.cp_y = state.cp.y;
+            node.interpolatedCache.cp_t = state.cp.t;
+            node.interpolatedCache.hasCpRotation = !state.cp.empty();
+            copyPackedColorsToBytes(node.colorBytes, state.packedColors);
+        }
+
+        void writeTimelineStateLike_0x699AE4(
+            detail::MotionNode &node,
+            const FrameContentState &state,
+            bool dirtyArg) {
+            populateTransformStateFromFrameState(node.accumulated, state);
+            populateTransformStateFromFrameState(node.localState, state);
+            node.accumulated.dirty = dirtyArg || node.flags != 0;
+            node.localState.dirty = node.accumulated.dirty;
+            populateInterpolatedCacheFromState(node, state);
+        }
+
+        void markNodePayloadDirtyFromState(
+            detail::MotionNode &node,
+            const FrameContentState &state) {
+            if (!state.debugEvaluated) {
+                return;
+            }
+            const bool payloadChanged =
+                !node.hasLastActivePayload ||
+                node.lastActiveFrameIndex != state.debugActiveIndex ||
+                node.lastActiveSrc != state.src ||
+                node.lastActiveMotionFlags != state.motionFlags ||
+                node.lastActiveMotionDtgt != state.motionDtgt;
+            if (payloadChanged) {
+                node.flags |= 0x01;
+            }
+            node.hasLastActivePayload = true;
+            node.lastActiveFrameIndex = state.debugActiveIndex;
+            node.lastActiveSrc = state.src;
+            node.lastActiveMotionFlags = state.motionFlags;
+            node.lastActiveMotionDtgt = state.motionDtgt;
+        }
+
+        void markNodeNoActiveFrame(detail::MotionNode &node) {
+            node.hasLastActivePayload = true;
+            node.lastActiveFrameIndex = -1;
+            node.lastActiveSrc.clear();
+            node.lastActiveMotionFlags = 0;
+            node.lastActiveMotionDtgt.clear();
+        }
+    }
+
+    MOTIONPLAYER_NOINLINE FrameContentState
+    advanceNodeFrameSelectionLike_0x6926B4(detail::MotionNode &node,
+                                           double currentTime) {
+        FrameContentState state;
+        const auto frames = psbDictionaryList(node.psbNode, "frameList");
+        if(!frames || frames->size() == 0) {
+            node.activeSlot().done = true;
+            node.activeSlot().crossfading = false;
+            node.otherSlot().done = true;
+            markNodeNoActiveFrame(node);
+            return state;
+        }
+
+        int savedTransformOrder[4] = {0, 1, 2, 3};
+        bool savedHasTransformOrder = false;
+        if(auto toList = psbDictionaryList(
+               std::const_pointer_cast<PSB::PSBDictionary>(node.psbNode),
+               "transformOrder")) {
+            for(int i = 0; i < 4 && i < static_cast<int>(toList->size()); i++) {
+                if(auto v = psbNumberValue((*toList)[i])) {
+                    savedTransformOrder[i] = static_cast<int>(*v);
+                }
+            }
+            savedHasTransformOrder = true;
+        }
+
+        int activeIndex = -1;
+        for(size_t index = 0; index < frames->size(); ++index) {
+            const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*frames)[static_cast<int>(index)]);
+            if(!frame) {
+                continue;
+            }
+            const double frameTime =
+                psbDictionaryNumber(frame, "time").value_or(0.0);
+            if(frameTime > currentTime) {
+                break;
+            }
+            activeIndex = static_cast<int>(index);
+        }
+        if(activeIndex < 0) {
+            node.activeSlot().done = true;
+            node.activeSlot().crossfading = false;
+            node.otherSlot().done = true;
+            markNodeNoActiveFrame(node);
+            return state;
+        }
+
+        const auto activeFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+            (*frames)[activeIndex]);
+        if(!activeFrame) {
+            node.activeSlot().done = true;
+            node.activeSlot().crossfading = false;
+            node.otherSlot().done = true;
+            markNodeNoActiveFrame(node);
+            return state;
+        }
+
+        ParsedFrame frameA = parseFrame(activeFrame, node.nodeType);
+        state.debugEvaluated = true;
+        state.debugActiveIndex = activeIndex;
+        state.debugFrameATime = frameA.time;
+        state.debugFrameAType = frameA.type;
+        state.debugFrameAInvisible = frameA.invisible;
+        state.debugFrameAOpacity = frameA.slot.opacity;
+        state.debugFrameAScaleX = frameA.slot.scaleX;
+        state.debugFrameAScaleY = frameA.slot.scaleY;
+        state.debugFrameASrc = frameA.slot.src;
+        state.frameType = frameA.type;
+        state.clipStartTime = frameA.time;
+
+        if(frameA.invisible) {
+            state.visible = false;
+            populateSlotFromState(node.activeSlot(), state);
+            node.activeSlot().done = true;
+            node.activeSlot().crossfading = false;
+            node.otherSlot().done = true;
+            node.currentFrameType = state.frameType;
+            markNodePayloadDirtyFromState(node, state);
+            return state;
+        }
+
+        state = frameA.slot;
+        state.visible = true;
+        state.frameType = frameA.type;
+        state.clipStartTime = frameA.time;
+        state.debugEvaluated = true;
+        state.debugActiveIndex = activeIndex;
+        state.debugFrameATime = frameA.time;
+        state.debugFrameAType = frameA.type;
+        state.debugFrameAInvisible = frameA.invisible;
+        state.debugFrameAOpacity = frameA.slot.opacity;
+        state.debugFrameAScaleX = frameA.slot.scaleX;
+        state.debugFrameAScaleY = frameA.slot.scaleY;
+        state.debugFrameASrc = frameA.slot.src;
+        if(savedHasTransformOrder) {
+            std::copy(savedTransformOrder, savedTransformOrder + 4,
+                      state.transformOrder);
+            state.hasTransformOrder = true;
+        }
+
+        populateSlotFromState(node.activeSlot(), state);
+        node.activeSlot().crossfading = false;
+        node.otherSlot().done = true;
+
+        if(frameA.interpolate) {
+            const int nextIndex = activeIndex + 1;
+            if(nextIndex < static_cast<int>(frames->size())) {
+                state.debugNextIndex = nextIndex;
+                const auto nextFrame =
+                    std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                        (*frames)[nextIndex]);
+                if(nextFrame) {
+                    ParsedFrame frameB = parseFrame(nextFrame, node.nodeType);
+                    state.debugFrameBTime = frameB.time;
+                    state.debugFrameBType = frameB.type;
+                    state.debugFrameBInvisible = frameB.invisible;
+                    state.debugFrameBOpacity = frameB.slot.opacity;
+                    state.debugFrameBScaleX = frameB.slot.scaleX;
+                    state.debugFrameBScaleY = frameB.slot.scaleY;
+                    state.debugFrameBSrc = frameB.slot.src;
+
+                    const double duration = frameB.time - frameA.time;
+                    if(duration > 0.0 && !frameB.invisible) {
+                        FrameContentState nextState = frameB.slot;
+                        nextState.visible = true;
+                        nextState.frameType = frameB.type;
+                        nextState.clipStartTime = frameB.time;
+                        if(nextState.src.empty()) {
+                            nextState.src = state.src;
+                        }
+                        if(savedHasTransformOrder) {
+                            std::copy(savedTransformOrder,
+                                      savedTransformOrder + 4,
+                                      nextState.transformOrder);
+                            nextState.hasTransformOrder = true;
+                        }
+                        populateSlotFromState(node.otherSlot(), nextState);
+                        node.activeSlot().crossfading = true;
+                        state.debugInterpT = std::clamp(
+                            (currentTime - frameA.time) / duration, 0.0, 1.0);
+                        state.debugInterpolated = state.debugInterpT > 0.0;
+                    }
+                }
+            }
+        }
+
+        node.currentFrameType = state.frameType;
+        markNodePayloadDirtyFromState(node, state);
+        return state;
+    }
+
+    MOTIONPLAYER_NOINLINE bool
+    evaluateTimelineLike_0x699AE4(detail::MotionNode &node,
+                                  bool dirtyArg,
+                                  double currentTime) {
+        const bool dirty = dirtyArg || node.flags != 0;
+        auto &active = node.activeSlot();
+        auto &other = node.otherSlot();
+
+        if(active.done) {
+            if(dirty) {
+                FrameContentState invisible =
+                    frameStateFromClipSlot(active, false, node.currentFrameType);
+                invisible.visible = false;
+                writeTimelineStateLike_0x699AE4(node, invisible, true);
+            }
+            return dirty;
+        }
+
+        if(!active.crossfading || other.done) {
+            if(!dirty) {
+                return false;
+            }
+            FrameContentState state =
+                frameStateFromClipSlot(active, true, node.currentFrameType);
+            writeTimelineStateLike_0x699AE4(node, state, true);
+            node.timelineEvalRatio = 0.0;
+            node.hasTimelineEvalRatio = true;
+            return true;
+        }
+
+        if(node.timelineParameterOverride) {
+            currentTime = node.timelineParameterValue;
+        }
+
+        const double duration = other.clipStartTime - active.clipStartTime;
+        double ratio = duration != 0.0
+            ? (currentTime - active.clipStartTime) / duration
+            : 0.0;
+        ratio = std::clamp(ratio, 0.0, 1.0);
+
+        const bool ratioChanged =
+            !node.hasTimelineEvalRatio ||
+            std::fabs(node.timelineEvalRatio - ratio) > 1.0e-12;
+        if(!dirty && !ratioChanged) {
+            return false;
+        }
+        node.timelineEvalRatio = ratio;
+        node.hasTimelineEvalRatio = true;
+
+        FrameContentState state =
+            frameStateFromClipSlot(active, true, node.currentFrameType);
+        if(ratio > 0.0) {
+            FrameContentState next =
+                frameStateFromClipSlot(other, !other.done, node.currentFrameType);
+            if(next.src.empty()) {
+                next.src = state.src;
+            }
+            state = interpolateSlots(state, next, ratio);
+            state.visible = true;
+            state.frameType = node.currentFrameType;
+        }
+
+        writeTimelineStateLike_0x699AE4(node, state, true);
+        return true;
+    }
+}
+
 namespace motion {
 
     // Phase 1: Camera velocity, root evaluation, variable interpolation
@@ -674,13 +1044,14 @@ namespace motion {
                     _independentLayerInherit ? 1 : 0);
             }
 
-            auto state = evaluateLayerContent(node.psbNode, currentTime,
-                                              node.nodeType);
+            const bool initialNodeUpdate = !node.hasLastActivePayload;
+            auto state = advanceNodeFrameSelectionLike_0x6926B4(node,
+                                                                 currentTime);
             if (detail::logoChainTraceEnabled(_runtime->activeMotion)
                 && state.debugEvaluated) {
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase2.framesel",
-                    "0x6926B4/0x699AE4", currentTime,
+                    "0x6926B4", currentTime,
                     "nodeIndex={} label={} type={} activeIndex={} nextIndex={} frameA[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] frameB[time={:.3f},type={},invisible={},src={},opacity={:.6f},scale=({:.6f},{:.6f})] t={:.6f} interpolated={} final[src={},opacity={:.6f},scale=({:.6f},{:.6f})]",
                     node.index,
                     node.layerName.empty() ? std::string("<root>")
@@ -713,90 +1084,41 @@ namespace motion {
             }
 
             const bool forceDirty = false;
+            const bool firstUpdate = _noUpdateYet;
             const bool needGround = node.groundCorrection;
             const bool parentDirty = parent.accumulated.dirty;
             const bool deltaDirty = node.delta.dirty;
-            const bool shouldUpdate =
-                forceDirty | needGround | parentDirty | deltaDirty;
-            if (!state.debugEvaluated && !shouldUpdate) {
+            const bool shouldEnterEvaluate =
+                state.debugEvaluated || initialNodeUpdate || firstUpdate ||
+                forceDirty || needGround || parentDirty || deltaDirty ||
+                node.flags != 0;
+            if (!shouldEnterEvaluate) {
                 continue;
             }
 
-            node.currentFrameType = state.frameType;
-            if (state.debugEvaluated) {
-                const bool payloadChanged =
-                    !node.hasLastActivePayload ||
-                    node.lastActiveFrameIndex != state.debugActiveIndex ||
-                    node.lastActiveSrc != state.src ||
-                    node.lastActiveMotionFlags != state.motionFlags ||
-                    node.lastActiveMotionDtgt != state.motionDtgt;
-                if (payloadChanged) {
-                    node.flags |= 0x01;
+            node.timelineParameterOverride = false;
+            node.timelineParameterValue = 0.0;
+            if (node.parameterizeIndex >= 0) {
+                auto *parameterEntry = resolveNodeParameterEntry(*_runtime, node);
+                if (parameterEntry != nullptr && parameterEntry->mode != 0) {
+                    node.timelineParameterOverride = true;
+                    node.timelineParameterValue = parameterEntry->value;
                 }
-                node.hasLastActivePayload = true;
-                node.lastActiveFrameIndex = state.debugActiveIndex;
-                node.lastActiveSrc = state.src;
-                node.lastActiveMotionFlags = state.motionFlags;
-                node.lastActiveMotionDtgt = state.motionDtgt;
             }
-            node.interpolatedCache.src = state.src;
-            node.interpolatedCache.srcList = state.srcList;
-            node.interpolatedCache.width = state.width;
-            node.interpolatedCache.height = state.height;
-            node.interpolatedCache.opacity = state.opacity;
-            node.interpolatedCache.x = state.x;
-            node.interpolatedCache.y = state.y;
-            node.interpolatedCache.z = state.z;
-            node.interpolatedCache.ox = state.ox;
-            node.interpolatedCache.oy = state.oy;
-            node.interpolatedCache.angle = state.angle;
-            node.interpolatedCache.scaleX = state.scaleX;
-            node.interpolatedCache.scaleY = state.scaleY;
-            node.interpolatedCache.slantX = state.slantX;
-            node.interpolatedCache.slantY = state.slantY;
-            node.interpolatedCache.flipX = state.flipX;
-            node.interpolatedCache.flipY = state.flipY;
-            node.interpolatedCache.blendMode = state.blendMode;
-            node.interpolatedCache.packedColors = state.packedColors;
-            copyPackedColorsToBytes(node.colorBytes, state.packedColors);
-            node.interpolatedCache.hasTransformOrder = state.hasTransformOrder;
-            if (state.hasTransformOrder) {
-                std::copy(std::begin(state.transformOrder),
-                          std::end(state.transformOrder),
-                          node.interpolatedCache.transformOrder);
-            }
-            node.interpolatedCache.action = state.action;
-            node.interpolatedCache.hasSync = state.hasSync;
-            node.interpolatedCache.motionDt = state.motionDt;
-            node.interpolatedCache.motionFlags = state.motionFlags;
-            node.interpolatedCache.motionDofst = state.motionDofst;
-            node.interpolatedCache.motionDocmpl = state.motionDocmpl;
-            node.interpolatedCache.motionTimeOffset = state.motionTimeOffset;
-            node.interpolatedCache.clipStartTime = state.clipStartTime;
-            node.interpolatedCache.motionDtgt = state.motionDtgt;
-            node.interpolatedCache.prtTrigger = state.prtTrigger;
-            node.interpolatedCache.prtF = state.prtF;
-            node.interpolatedCache.prtV = state.prtV;
-            node.interpolatedCache.prtA = state.prtA;
-            node.interpolatedCache.prtZ = state.prtZ;
-            node.interpolatedCache.prtRange = state.prtRange;
-            node.prtTrigger = state.prtTrigger;
-            node.interpolatedCache.ccc_x = state.ccc.x;
-            node.interpolatedCache.ccc_y = state.ccc.y;
-            node.interpolatedCache.cp_x = state.cp.x;
-            node.interpolatedCache.cp_y = state.cp.y;
-            node.interpolatedCache.cp_t = state.cp.t;
-            node.interpolatedCache.hasCpRotation = !state.cp.empty();
 
-            populateSlotFromState(node.activeSlot(), state);
-            populateTransformStateFromFrameState(node.accumulated, state);
-            populateTransformStateFromFrameState(node.localState, state);
-            node.localState.dirty = deltaDirty;
+            // Player_updateLayers @ 0x6BB5EC calls Player_evaluateTimeline
+            // with dirtyArg=1 after the binary dirty/no-update gate passes.
+            if (!evaluateTimelineLike_0x699AE4(node, true, currentTime)) {
+                continue;
+            }
+
+            refreshSourceGeometryFromSourceName(
+                node, _runtime->activeMotion, node.interpolatedCache.src);
 
             // The port keeps non-root delta transforms as persistent overrides;
             // timeline evaluation only re-arms the visible/active gate while the
             // scalar/vector members reset to their neutral identity values.
-            neutralizeDeltaTransformOverrides(node.delta, state.visible);
+            neutralizeDeltaTransformOverrides(node.delta, node.accumulated.visible);
             node.delta.dirty = false;
 
             if (node.activeSlot().hasSync) {

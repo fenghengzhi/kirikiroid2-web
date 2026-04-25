@@ -182,6 +182,12 @@ namespace motion::detail {
         const ClipSlot& activeSlot() const { return slots[activeSlotIndex]; }
         ClipSlot& otherSlot() { return slots[activeSlotIndex ^ 1]; }
         const ClipSlot& otherSlot() const { return slots[activeSlotIndex ^ 1]; }
+        // Player_evaluateTimeline (0x699AE4) caches the last slot blend ratio
+        // and can replace currentTime with a node parameter entry value.
+        double timelineEvalRatio = 0.0;
+        bool hasTimelineEvalRatio = false;
+        bool timelineParameterOverride = false;
+        double timelineParameterValue = 0.0;
 
         // PSB reference (for evaluateLayerContent calls)
         std::shared_ptr<const PSB::PSBDictionary> psbNode;

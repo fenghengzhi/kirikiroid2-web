@@ -1472,6 +1472,19 @@ namespace internal {
             return state;
         }
 
+        // Phase-2 frame selection is split to match libkrkr2.so:
+        // sub_6926B4/sub_692AB0 advance PSB frameList data into node clip slots,
+        // then Player_evaluateTimeline (0x699AE4) consumes those slots and writes
+        // node runtime state. These are intentionally non-inline in
+        // PlayerUpdateLayers.cpp so native LLDB can hook the 0x699AE4 boundary.
+        FrameContentState
+        advanceNodeFrameSelectionLike_0x6926B4(detail::MotionNode &node,
+                                               double currentTime);
+
+        bool evaluateTimelineLike_0x699AE4(detail::MotionNode &node,
+                                           bool dirtyArg,
+                                           double currentTime);
+
 
         // -----------------------------------------------------------------
         // Layer-API based rendering (no OpenCV dependency, used in web build)

@@ -37,13 +37,22 @@ STAGES: tuple[str, ...] = (
 
 PROGRESS_COMPAT_SYMBOL = "motion::Player::progressCompatMethod"
 PHASE3_LAST_SYMBOL = "motion::Player::updateLayersPhase3_AnchorNode"
-INIT_MOTION_SYMBOL = "motion::Player::loadParameterEntriesForClipLike_0x6B365C"
+INIT_NON_EMOTE_SYMBOL = "motion::Player::buildNodeTree"
 PARSE_PARAMETER_SYMBOL = "parseMotionParameterSpecLike_0x6B1718"
 PARSE_PARAMETER_LIST_SYMBOL = "collectMotionParametersLike_0x6B365C"
 BIND_PARAMETER_SYMBOL = "motion::Player::bindParameterValueLike_0x6C4668"
 EVALUATE_TIMELINE_SYMBOL = "evaluateTimelineLike_0x699AE4"
-PHASE2_FALLBACK_SYMBOL = "motion::Player::updateLayersPhase2_MainLoop"
 SUB_MOTION_SYMBOL = "motion::Player::updateLayersPhase3_MotionSubNode"
+
+CANONICAL_ADDR = {
+    "init_motion": 0x6B365C,
+    "parse_parameter": 0x6B1718,
+    "parse_parameter_list": 0x6B202C,
+    "bind_parameter": 0x6C4668,
+    "evaluate_timeline": 0x699AE4,
+    "sub_motion": 0x6BE0C0,
+    "phase3_last": 0x6C0528,
+}
 
 ACTIVE_TRACER: "NativeMotionStageTracer | None" = None
 
@@ -271,7 +280,6 @@ class NativeMotionStageTracer:
         self.parse_list_bp_id: int | None = None
         self.bind_bp_id: int | None = None
         self.eval_timeline_bp_id: int | None = None
-        self.phase2_bp_id: int | None = None
         self.sub_motion_bp_id: int | None = None
 
     def run(self) -> list[dict[str, Any]]:
@@ -291,7 +299,7 @@ class NativeMotionStageTracer:
             self.phase3_bp_id = self._required_bp(
                 target, PHASE3_LAST_SYMBOL).GetID()
             self.init_bp_id = self._required_bp(
-                target, INIT_MOTION_SYMBOL).GetID()
+                target, INIT_NON_EMOTE_SYMBOL).GetID()
             bind_bp = self._optional_bp(target, BIND_PARAMETER_SYMBOL)
             self.bind_bp_id = bind_bp.GetID() if bind_bp else None
 
@@ -301,18 +309,15 @@ class NativeMotionStageTracer:
             self.parse_list_bp_id = parse_list_bp.GetID() if parse_list_bp else None
 
             eval_timeline_bp = self._optional_bp(target, EVALUATE_TIMELINE_SYMBOL)
-            if eval_timeline_bp is not None:
-                self.eval_timeline_bp_id = eval_timeline_bp.GetID()
-            else:
-                phase2_bp = self._optional_bp(target, PHASE2_FALLBACK_SYMBOL)
-                if phase2_bp is None:
-                    raise RuntimeError(
-                        "failed to set frame_selection breakpoint on "
-                        f"{EVALUATE_TIMELINE_SYMBOL} or fallback "
-                        f"{PHASE2_FALLBACK_SYMBOL}; this native stage tracer "
-                        "requires a macOS Debug runner with motionplayer symbols"
-                    )
-                self.phase2_bp_id = phase2_bp.GetID()
+            if eval_timeline_bp is None:
+                raise RuntimeError(
+                    "failed to set frame_selection breakpoint on "
+                    f"{EVALUATE_TIMELINE_SYMBOL}; rebuild the macOS Debug "
+                    "native runner after the frame_selection refactor and "
+                    "verify it with:\n"
+                    "  nm -C <runner> | rg evaluateTimelineLike_0x699AE4"
+                )
+            self.eval_timeline_bp_id = eval_timeline_bp.GetID()
 
             self.sub_motion_bp_id = self._required_bp(
                 target, SUB_MOTION_SYMBOL).GetID()
@@ -427,8 +432,6 @@ class NativeMotionStageTracer:
                 self._on_bind_parameter_enter(frame)
             elif breakpoint_id == self.eval_timeline_bp_id:
                 self._on_evaluate_timeline_enter(frame)
-            elif breakpoint_id == self.phase2_bp_id:
-                self._on_phase2_enter(frame)
             elif breakpoint_id == self.sub_motion_bp_id:
                 self._on_sub_motion_enter(frame)
             elif breakpoint_id in self.progress_return_records:
@@ -502,7 +505,7 @@ class NativeMotionStageTracer:
             "objthis": record.get("objthis"),
             "topPlayer": players[0]["ptr"] if players else None,
             "playerCount": len(players),
-            "layout": "native-lldb",
+            "layout": "pre-cleanup",
             "layers": flat_layers,
             "error": "; ".join(errors) if errors else None,
         })
@@ -518,11 +521,11 @@ class NativeMotionStageTracer:
     def _on_init_motion_enter(self, frame) -> None:
         player = self._player_ptr_from_frame(frame)
         self._emit("static_parse", "init_non_emote_enter", {
-            "symbol": INIT_MOTION_SYMBOL,
+            "addr": CANONICAL_ADDR["init_motion"],
             "player": player,
         })
         self._emit("init_motion", "init_non_emote_enter", {
-            "symbol": INIT_MOTION_SYMBOL,
+            "addr": CANONICAL_ADDR["init_motion"],
             "player": player,
         })
         self._set_return_breakpoint(frame, {
@@ -534,7 +537,7 @@ class NativeMotionStageTracer:
         x0 = ptr_to_hex(sb_unsigned(frame.FindRegister("x0")))
         x1 = ptr_to_hex(sb_unsigned(frame.FindRegister("x1")))
         self._emit("static_parse", "parse_parameter_enter", {
-            "symbol": PARSE_PARAMETER_SYMBOL,
+            "addr": CANONICAL_ADDR["parse_parameter"],
             "x0": x0,
             "x1": x1,
         })
@@ -548,7 +551,7 @@ class NativeMotionStageTracer:
         x0 = ptr_to_hex(sb_unsigned(frame.FindRegister("x0")))
         x1 = ptr_to_hex(sb_unsigned(frame.FindRegister("x1")))
         self._emit("static_parse", "parse_parameter_list_enter", {
-            "symbol": PARSE_PARAMETER_LIST_SYMBOL,
+            "addr": CANONICAL_ADDR["parse_parameter_list"],
             "x0": x0,
             "x1": x1,
         })
@@ -562,11 +565,13 @@ class NativeMotionStageTracer:
         player = self._player_ptr_from_frame(frame)
         mode = sb_signed(frame.FindRegister("x2"), 0)
         value = register_double(frame, "d0")
+        label_ptr = ptr_to_hex(sb_unsigned(frame.FindRegister("x1")))
         label = sb_string(frame.FindVariable("label"))
         before = self._parameter_table_for_player_ptr(frame, player)
         self._emit("variable_binding", "bind_parameter_enter", {
-            "symbol": BIND_PARAMETER_SYMBOL,
+            "addr": CANONICAL_ADDR["bind_parameter"],
             "player": player,
+            "labelPtr": label_ptr,
             "label": label,
             "mode": mode,
             "value": value,
@@ -576,21 +581,11 @@ class NativeMotionStageTracer:
         self._set_return_breakpoint(frame, {
             "kind": "bind_parameter_return",
             "player": player,
+            "labelPtr": label_ptr,
             "label": label,
             "mode": mode,
             "value": value,
             "valueRaw": register_raw(frame, "d0"),
-            "before": before,
-        })
-
-    def _on_phase2_enter(self, frame) -> None:
-        player = self._player_ptr_from_frame(frame)
-        before = self._snapshot_eval_nodes(frame, player)
-        self._set_return_breakpoint(frame, {
-            "kind": "phase2_return",
-            "player": player,
-            "time": register_double(frame, "d0"),
-            "timeRaw": register_raw(frame, "d0"),
             "before": before,
         })
 
@@ -631,22 +626,20 @@ class NativeMotionStageTracer:
             self._on_init_motion_return(frame, info)
         elif kind == "parse_parameter_return":
             self._emit("static_parse", "parse_parameter_leave", {
-                "symbol": PARSE_PARAMETER_SYMBOL,
+                "addr": CANONICAL_ADDR["parse_parameter"],
                 "x0": info.get("x0"),
                 "x1": info.get("x1"),
                 "retval": ptr_to_hex(sb_unsigned(frame.FindRegister("x0"))),
             })
         elif kind == "parse_parameter_list_return":
             self._emit("static_parse", "parse_parameter_list_leave", {
-                "symbol": PARSE_PARAMETER_LIST_SYMBOL,
+                "addr": CANONICAL_ADDR["parse_parameter_list"],
                 "x0": info.get("x0"),
                 "x1": info.get("x1"),
                 "retval": ptr_to_hex(sb_unsigned(frame.FindRegister("x0"))),
             })
         elif kind == "bind_parameter_return":
             self._on_bind_parameter_return(frame, info)
-        elif kind == "phase2_return":
-            self._on_phase2_return(frame, info)
         elif kind == "evaluate_timeline_return":
             self._on_evaluate_timeline_return(frame, info)
         elif kind == "sub_motion_return":
@@ -669,13 +662,13 @@ class NativeMotionStageTracer:
         overview = self._player_overview(frame, player)
         retval = ptr_to_hex(sb_unsigned(frame.FindRegister("x0")))
         self._emit("static_parse", "init_non_emote_leave", {
-            "symbol": INIT_MOTION_SYMBOL,
+            "addr": CANONICAL_ADDR["init_motion"],
             "retval": retval,
             "player": player,
             "parameterTable": overview.get("parameterTable"),
         })
         self._emit("init_motion", "init_non_emote_leave", {
-            "symbol": INIT_MOTION_SYMBOL,
+            "addr": CANONICAL_ADDR["init_motion"],
             "retval": retval,
             "overview": overview,
         })
@@ -683,8 +676,9 @@ class NativeMotionStageTracer:
     def _on_bind_parameter_return(self, frame, info: dict[str, Any]) -> None:
         after = self._parameter_table_for_player_ptr(frame, info["player"])
         self._emit("variable_binding", "bind_parameter_leave", {
-            "symbol": BIND_PARAMETER_SYMBOL,
+            "addr": CANONICAL_ADDR["bind_parameter"],
             "player": info["player"],
+            "labelPtr": info.get("labelPtr"),
             "label": info.get("label"),
             "mode": info.get("mode"),
             "value": info.get("value"),
@@ -695,32 +689,9 @@ class NativeMotionStageTracer:
             "parameterTableAfter": after,
         })
 
-    def _on_phase2_return(self, frame, info: dict[str, Any]) -> None:
-        player = info["player"]
-        after = self._snapshot_eval_nodes(frame, player)
-        before_by_index = {
-            item.get("index"): item for item in info.get("before", [])
-        }
-        for item in after:
-            index = item.get("index")
-            if index == 0:
-                continue
-            self._emit("frame_selection", "evaluate_timeline", {
-                "symbol": PHASE2_FALLBACK_SYMBOL,
-                "fallback": "phase2_main_loop",
-                "player": player,
-                "node": item.get("ptr"),
-                "dirtyArg": None,
-                "time": info.get("time"),
-                "timeRaw": info.get("timeRaw"),
-                "retval": None,
-                "before": before_by_index.get(index),
-                "after": item,
-            })
-
     def _on_evaluate_timeline_return(self, frame, info: dict[str, Any]) -> None:
         self._emit("frame_selection", "evaluate_timeline", {
-            "symbol": EVALUATE_TIMELINE_SYMBOL,
+            "addr": CANONICAL_ADDR["evaluate_timeline"],
             "node": info.get("node"),
             "dirtyArg": info.get("dirtyArg"),
             "time": info.get("time"),
@@ -736,7 +707,7 @@ class NativeMotionStageTracer:
         child_delta = max(0, len(samples_after) - len(info.get("samplesBefore", [])))
         after = self._snapshot_motion_sub_nodes(frame, player)
         self._emit("sub_motion_decision", "sub_motion_decision", {
-            "symbol": SUB_MOTION_SYMBOL,
+            "addr": CANONICAL_ADDR["sub_motion"],
             "player": player,
             "retval": ptr_to_hex(sb_unsigned(frame.FindRegister("x0"))),
             "childSamplesBefore": info.get("samplesBefore", []),
@@ -815,20 +786,19 @@ class NativeMotionStageTracer:
             entry = create_value_from_load_address(
                 target, "parameterEntry", data_ptr + i * stride, elem_type)
             out["entries"].append(self._read_parameter_entry(entry, i))
-        default_index = sb_child_optional(runtime, "defaultParameterEntryIndex")
-        if default_index is not None:
-            out["defaultParameterEntryIndex"] = sb_signed(default_index, -1)
         return out
 
     def _read_parameter_entry(self, entry, index: int) -> dict[str, Any]:
+        id_value = sb_child_optional(entry, "id")
         return {
             "index": index,
             "ptr": ptr_to_hex(sb_unsigned(entry.AddressOf())),
-            "id": sb_string(sb_child_optional(entry, "id")),
+            "idPtr": ptr_to_hex(sb_unsigned(id_value.AddressOf()))
+                     if id_value is not None else None,
+            "id": sb_string(id_value),
             "discretization": sb_bool(sb_child_optional(entry, "discretization")),
             "rangeBegin": sb_float(sb_child_optional(entry, "rangeBegin")),
             "rangeEnd": sb_float(sb_child_optional(entry, "rangeEnd")),
-            "rangeScale": sb_float(sb_child_optional(entry, "rangeScale")),
             "value": sb_float(sb_child_optional(entry, "value")),
             "mode": sb_signed(sb_child_optional(entry, "mode"), 0),
         }
@@ -870,26 +840,26 @@ class NativeMotionStageTracer:
             "index": index,
             "ptr": ptr_to_hex(sb_unsigned(node.AddressOf())),
             "parameterEntry": param.get("ptr") if param else None,
-            "parameter": param,
-            "parameterizeIndex": param_index,
+            "parameter": self._node_parameter_payload(param),
             "coordinateMode": sb_signed(sb_child_optional(node, "coordinateMode"), 0),
             "nodeType": sb_signed(sb_child_optional(node, "nodeType"), 0),
             "parentIndex": sb_signed(sb_child_optional(node, "parentIndex"), -1),
             "flags": sb_unsigned(sb_child_optional(node, "flags"), 0),
-            "currentFrameType": sb_signed(sb_child_optional(node, "currentFrameType"), 0),
-            "hasLastActivePayload": sb_bool(
-                sb_child_optional(node, "hasLastActivePayload"), None),
-            "lastActiveFrameIndex": sb_signed(
-                sb_child_optional(node, "lastActiveFrameIndex"), -1),
-            "lastActiveSrc": sb_string(sb_child_optional(node, "lastActiveSrc")),
-            "lastActiveMotionFlags": sb_signed(
-                sb_child_optional(node, "lastActiveMotionFlags"), 0),
-            "lastActiveMotionDtgt": sb_string(
-                sb_child_optional(node, "lastActiveMotionDtgt")),
             "activeSlot": sb_signed(sb_child_optional(node, "activeSlotIndex"), 0),
             "active": sb_bool(sb_child_optional(accumulated, "active"), None),
             "visible": sb_bool(sb_child_optional(accumulated, "visible"), None),
             "opacity": sb_signed(sb_child_optional(accumulated, "opacity"), 0),
+        }
+
+    @staticmethod
+    def _node_parameter_payload(param: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not param:
+            return None
+        return {
+            "ptr": param.get("ptr"),
+            "mode": param.get("mode"),
+            "value": param.get("value"),
+            "id": param.get("id"),
         }
 
     def _node_brief_from_ptr(
@@ -900,13 +870,15 @@ class NativeMotionStageTracer:
         if not node_ptr_hex:
             return None
         target = frame.GetThread().GetProcess().GetTarget()
-        node_type = target.FindFirstType("motion::MotionNode")
+        node_type = target.FindFirstType("motion::detail::MotionNode")
+        if not node_type.IsValid():
+            node_type = target.FindFirstType("motion::MotionNode")
         if not node_type.IsValid():
             node_type = target.FindFirstType("MotionNode")
         if not node_type.IsValid():
             return {
                 "ptr": node_ptr_hex,
-                "error": "motion::MotionNode debug type not found",
+                "error": "motion::detail::MotionNode debug type not found",
             }
         node = create_value_from_load_address(
             target, "node", int(node_ptr_hex, 16), node_type)
