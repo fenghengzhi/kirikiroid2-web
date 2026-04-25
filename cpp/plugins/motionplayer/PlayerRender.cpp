@@ -904,7 +904,9 @@ namespace motion {
         }
 
         std::string clipLabel;
-        if(const auto *clip = selectActiveClip()) {
+        const auto *clip = selectActiveClip();
+        loadParameterEntriesForClipLike_0x6B365C(clip);
+        if(clip != nullptr) {
             clipLabel = clip->label;
         }
 
@@ -926,6 +928,11 @@ namespace motion {
         _runtime->nodes = detail::buildNodeTree(*_runtime->activeMotion, clipLabel,
                                                 &_resourceManagerNative,
                                                 _completionType);
+        for(const auto &node : _runtime->nodes) {
+            if(node.parameterizeIndex >= 0) {
+                (void)resolveNodeParameterEntry(*_runtime, node);
+            }
+        }
 
         // Aligned to Player_initNodeFields case 3 (0x6B43C0..0x6B4688):
         // child motion players inherit the parent's resource manager context

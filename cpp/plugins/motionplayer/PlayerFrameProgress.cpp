@@ -260,9 +260,7 @@ namespace motion {
                 value = getVariable(detail::widen(binding.label));
             }
 
-            ensureEvalResultSlotLike_0x686944(binding.label) = value;
-            _evalResultValues[binding.label] = value;
-            _variableValues[binding.label] = value;
+            writeEvalResultValueLike_0x6C4668(binding.label, value);
         }
     }
 
@@ -395,8 +393,7 @@ namespace motion {
             if(shouldMirrorEvalLabelLike_0x67C6B0(entry.label)) {
                 outputValue = -outputValue;
             }
-            _evalResultValues[entry.label] = outputValue;
-            _variableValues[entry.label] = outputValue;
+            writeEvalResultValueLike_0x6C4668(entry.label, outputValue);
         }
 
         applyClampControlsLike_0x67C8A8();
@@ -806,9 +803,7 @@ namespace motion {
                     double steppedValue = state.currentValue;
                     const bool stillAnimating = stepQueuedAnimatorLike_0x67D01C(
                         state, controllerDt, steppedValue);
-                    _variableValues[label] = steppedValue;
-                    ensureEvalResultSlotLike_0x686944(label) = steppedValue;
-                    _evalResultValues[label] = steppedValue;
+                    writeEvalResultValueLike_0x6C4668(label, steppedValue);
                     if(stillAnimating) {
                         _emoteDirty = true;
                     }

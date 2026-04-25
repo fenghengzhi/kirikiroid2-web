@@ -1,0 +1,120 @@
+{
+  "schema": "motion-stage-oracle-v1",
+  "stage": "static_parse",
+  "caseId": "yuzulogo",
+  "source": "android-frida-libkrkr2",
+  "events": [
+    {
+      "addr": 7026268,
+      "player": "0x798fcc1400",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "static_parse",
+      "kind": "init_non_emote_enter",
+      "seq": 0,
+      "timeMs": 98
+    },
+    {
+      "addr": 7020588,
+      "x0": "0x798fcc1400",
+      "x1": "0x798f707ea8",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "static_parse",
+      "kind": "parse_parameter_list_enter",
+      "seq": 2,
+      "timeMs": 98
+    },
+    {
+      "addr": 7020588,
+      "x0": "0x798fcc1400",
+      "x1": "0x798f707ea8",
+      "retval": "0x1",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "static_parse",
+      "kind": "parse_parameter_list_leave",
+      "seq": 3,
+      "timeMs": 99
+    },
+    {
+      "addr": 7026268,
+      "retval": "0x5",
+      "player": "0x798fcc1400",
+      "parameterTable": {
+        "begin": null,
+        "end": null,
+        "stride": 56,
+        "count": 0,
+        "entries": []
+      },
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "static_parse",
+      "kind": "init_non_emote_leave",
+      "seq": 4,
+      "timeMs": 99
+    },
+    {
+      "addr": 7026268,
+      "player": "0x798fcc1400",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "static_parse",
+      "kind": "init_non_emote_enter",
+      "seq": 6,
+      "timeMs": 100
+    },
+    {
+      "addr": 7020588,
+      "x0": "0x798fcc1400",
+      "x1": "0x798f707d18",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "static_parse",
+      "kind": "parse_parameter_list_enter",
+      "seq": 8,
+      "timeMs": 100
+    },
+    {
+      "addr": 7020588,
+      "x0": "0x798fcc1400",
+      "x1": "0x798f707d18",
+      "retval": "0x1",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "static_parse",
+      "kind": "parse_parameter_list_leave",
+      "seq": 9,
+      "timeMs": 100
+    },
+    {
+      "addr": 7026268,
+      "retval": "0x5",
+      "player": "0x798fcc1400",
+      "parameterTable": {
+        "begin": null,
+        "end": null,
+        "stride": 56,
+        "count": 0,
+        "entries": []
+      },
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "static_parse",
+      "kind": "init_non_emote_leave",
+      "seq": 10,
+      "timeMs": 100
+    }
+  ],
+  "summary": {
+    "eventCount": 8,
+    "kindCounts": {
+      "init_non_emote_enter": 2,
+      "init_non_emote_leave": 2,
+      "parse_parameter_list_enter": 2,
+      "parse_parameter_list_leave": 2
+    },
+    "traceFrameCount": 241,
+    "traceSeqRange": [
+      37,
+      6277
+    ],
+    "eventSeqRange": [
+      0,
+      10
+    ]
+  }
+}

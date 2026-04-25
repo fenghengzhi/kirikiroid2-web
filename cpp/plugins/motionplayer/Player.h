@@ -473,7 +473,15 @@ namespace motion {
         bool shouldMirrorEvalLabelLike_0x67C6B0(const std::string &label);
         double &ensureEvalResultSlotLike_0x686944(const std::string &label);
         void removeEvalResultSlotLike_Reset(const std::string &label);
+        void loadParameterEntriesForClipLike_0x6B365C(
+            const detail::MotionClip *clip);
+        void bindParameterValueLike_0x6C4668(const std::string &label,
+                                             int mode,
+                                             double value);
         void writeEvalResultValueLike_0x6C4668(const std::string &label,
+                                              double value);
+        void writeEvalResultValueLike_0x6C4668(const std::string &label,
+                                              int mode,
                                               double value);
         bool renderToLayer(iTJSDispatch2 *layerObject,
                            bool skipUpdate = false);

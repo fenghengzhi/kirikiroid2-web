@@ -80,6 +80,11 @@ namespace motion::detail {
         int stencilTypeBase = 0;      // raw PSB "stencilType"
         int stencilType = 0;          // runtime node+52, init-time owned
         int currentFrameType = 0;     // current frameList type (0/2/3), for trace
+        bool hasLastActivePayload = false;
+        int lastActiveFrameIndex = -1;
+        std::string lastActiveSrc;
+        int lastActiveMotionFlags = 0;
+        std::string lastActiveMotionDtgt;
 
         // Mesh control points (node+2024..2032 in libkrkr2.so).
         // For meshType=1: 16 × 2 floats (Bezier patch 4×4 control grid) = 32 floats.

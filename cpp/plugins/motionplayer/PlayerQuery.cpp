@@ -91,6 +91,61 @@ namespace {
         return {};
     }
 
+    struct ParameterLabelParts {
+        std::string full;
+        std::string suffix;
+    };
+
+    ParameterLabelParts splitParameterLabelLike_0x6D0BF4(
+        const std::string &label) {
+        ParameterLabelParts parts;
+        parts.full = label;
+        const auto scopePos = label.rfind("::");
+        if(scopePos != std::string::npos) {
+            parts.suffix = label.substr(scopePos + 2);
+            return parts;
+        }
+        const auto slashPos = label.rfind('/');
+        if(slashPos != std::string::npos) {
+            parts.suffix = label.substr(slashPos + 1);
+        }
+        return parts;
+    }
+
+    bool parameterIdMatchesLabelLike_0x6D0BF4(
+        const motion::detail::PlayerRuntime::ParameterEntry &entry,
+        const ParameterLabelParts &parts) {
+        return !entry.id.empty() &&
+            (entry.id == parts.full ||
+             (!parts.suffix.empty() && entry.id == parts.suffix));
+    }
+
+    double normalizeParameterValueLike_0x6B1718(
+        const motion::detail::PlayerRuntime::ParameterEntry &entry,
+        double rawValue) {
+        double value = entry.discretization
+            ? static_cast<double>(static_cast<int>(rawValue))
+            : rawValue;
+        const double lo = std::min(entry.rangeBegin, entry.rangeEnd);
+        const double hi = std::max(entry.rangeBegin, entry.rangeEnd);
+        value = std::clamp(value, lo, hi);
+        return (value - entry.rangeBegin) * entry.rangeScale;
+    }
+
+    void bindParameterEntriesLike_0x6C4668(
+        std::vector<motion::detail::PlayerRuntime::ParameterEntry> &entries,
+        const ParameterLabelParts &parts,
+        int mode,
+        double rawValue) {
+        for(auto &entry : entries) {
+            if(!parameterIdMatchesLabelLike_0x6D0BF4(entry, parts)) {
+                continue;
+            }
+            entry.value = normalizeParameterValueLike_0x6B1718(entry, rawValue);
+            entry.mode = mode;
+        }
+    }
+
 }
 
 namespace motion {
@@ -143,7 +198,84 @@ namespace motion {
         }
     }
 
+    void Player::loadParameterEntriesForClipLike_0x6B365C(
+        const detail::MotionClip *clip) {
+        if(!_runtime) {
+            return;
+        }
+
+        _runtime->parameterEntries.clear();
+        _runtime->defaultParameterEntry = {};
+        _runtime->defaultParameterEntryIndex = -1;
+        if(clip == nullptr) {
+            return;
+        }
+
+        _runtime->parameterEntries.reserve(clip->parameterSpecs.size());
+        for(const auto &spec : clip->parameterSpecs) {
+            detail::PlayerRuntime::ParameterEntry entry;
+            entry.id = spec.id;
+            entry.discretization = spec.discretization;
+            entry.rangeBegin = spec.rangeBegin;
+            entry.rangeEnd = spec.rangeEnd;
+            entry.rangeScale = spec.rangeScale;
+            entry.mode = 0;
+
+            double rawValue = spec.value;
+            if(!entry.id.empty()) {
+                if(const auto it = _variableValues.find(entry.id);
+                   it != _variableValues.end()) {
+                    rawValue = it->second;
+                } else if(const auto evalIt = _evalResultValues.find(entry.id);
+                          evalIt != _evalResultValues.end()) {
+                    rawValue = evalIt->second;
+                }
+            }
+            entry.value = normalizeParameterValueLike_0x6B1718(entry, rawValue);
+            _runtime->parameterEntries.push_back(std::move(entry));
+        }
+
+        if(clip->defaultParameterIndex >= 0 &&
+           static_cast<size_t>(clip->defaultParameterIndex) <
+               _runtime->parameterEntries.size()) {
+            _runtime->defaultParameterEntryIndex = clip->defaultParameterIndex;
+        }
+    }
+
+    void Player::bindParameterValueLike_0x6C4668(const std::string &label,
+                                                 int mode,
+                                                 double value) {
+        if(!_runtime || label.empty()) {
+            return;
+        }
+
+        const auto parts = splitParameterLabelLike_0x6D0BF4(label);
+        bindParameterEntriesLike_0x6C4668(_runtime->parameterEntries, parts,
+                                          mode, value);
+
+        for(auto &node : _runtime->nodes) {
+            if(node.nodeType == 3) {
+                if(auto *child = node.getChildPlayer()) {
+                    child->bindParameterValueLike_0x6C4668(label, mode, value);
+                }
+            } else if(node.nodeType == 4) {
+                for(int i = 0; i < node.getParticleCount(); ++i) {
+                    if(auto *child = node.getParticleChild(i)) {
+                        child->bindParameterValueLike_0x6C4668(label, mode,
+                                                               value);
+                    }
+                }
+            }
+        }
+    }
+
     void Player::writeEvalResultValueLike_0x6C4668(const std::string &label,
+                                                   double value) {
+        writeEvalResultValueLike_0x6C4668(label, 0, value);
+    }
+
+    void Player::writeEvalResultValueLike_0x6C4668(const std::string &label,
+                                                   int mode,
                                                    double value) {
         if(label.empty()) {
             return;
@@ -151,6 +283,7 @@ namespace motion {
         ensureEvalResultSlotLike_0x686944(label) = value;
         _variableValues[label] = value;
         _evalResultValues[label] = value;
+        bindParameterValueLike_0x6C4668(label, mode, value);
     }
 
     void Player::setOpacity(double v) { _runtime->opacity = v; }
@@ -333,10 +466,8 @@ namespace motion {
                         state.duration = 0.0f;
                         state.weight =
                             static_cast<float>(requestedEaseWeight);
-                        _variableValues[targetKey] = requestedValue;
-                        ensureEvalResultSlotLike_0x686944(targetKey) =
-                            requestedValue;
-                        _evalResultValues[targetKey] = requestedValue;
+                        writeEvalResultValueLike_0x6C4668(targetKey,
+                                                          requestedValue);
                         return;
                     }
 
@@ -355,10 +486,8 @@ namespace motion {
                         static_cast<float>(requestedTransition),
                         static_cast<float>(requestedEaseWeight),
                     });
-                    _variableValues[targetKey] = state.currentValue;
-                    ensureEvalResultSlotLike_0x686944(targetKey) =
-                        state.currentValue;
-                    _evalResultValues[targetKey] = state.currentValue;
+                    writeEvalResultValueLike_0x6C4668(targetKey,
+                                                      state.currentValue);
                 };
 
             const auto queueControllerLikeBinary =
@@ -399,12 +528,8 @@ namespace motion {
                             const int selectedIndex =
                                 static_cast<int>(value);
                             eraseControllerAnimatorStateLike_0x671228(key);
-                            _variableValues[key] =
-                                static_cast<double>(selectedIndex);
-                            ensureEvalResultSlotLike_0x686944(key) =
-                                static_cast<double>(selectedIndex);
-                            _evalResultValues[key] =
-                                static_cast<double>(selectedIndex);
+                            writeEvalResultValueLike_0x6C4668(
+                                key, static_cast<double>(selectedIndex));
 
                             const double resolvedEaseWeight = easeWeight;
                             int optionIndex = 0;
@@ -464,9 +589,7 @@ namespace motion {
                         eraseControllerAnimatorStateLike_0x671228(key);
                         const double directValue =
                             static_cast<double>(static_cast<int>(value));
-                        _variableValues[key] = directValue;
-                        ensureEvalResultSlotLike_0x686944(key) = directValue;
-                        _evalResultValues[key] = directValue;
+                        writeEvalResultValueLike_0x6C4668(key, directValue);
                         _emoteDirty = true;
                         return;
                     }
@@ -486,9 +609,7 @@ namespace motion {
         // Aligned to Player_setVariable (0x671228): labels without a controller
         // binding bypass animator queues and write the eval map immediately.
         _variableAnimators.erase(key);
-        _variableValues[key] = value;
-        ensureEvalResultSlotLike_0x686944(key) = value;
-        _evalResultValues[key] = value;
+        writeEvalResultValueLike_0x6C4668(key, value);
         _emoteDirty = true;
     }
 
@@ -1612,12 +1733,19 @@ namespace motion {
             return TJS_E_INVALIDPARAM;
         }
 
-        const double transition =
-            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
-        const double ease =
-            (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
-        self->setVariable(ttstr(*param[0]), param[1]->AsReal(), transition,
-                          ease);
+        // Aligned to the raw callback tail merged into libkrkr2.so
+        // sub_6D0BF4 (0x6D0E70..0x6D0FB4): args are
+        // setVariable(label, value, mode=0), and mode is forwarded as a3 to
+        // sub_6C4668. It is not the transition/ease route used by the C++
+        // convenience method.
+        const auto key = detail::narrow(ttstr(*param[0]));
+        const int mode =
+            (numparams >= 3 && param[2])
+                ? static_cast<int>(param[2]->AsInteger())
+                : 0;
+        self->writeEvalResultValueLike_0x6C4668(key, mode,
+                                                param[1]->AsReal());
+        self->_emoteDirty = true;
         return TJS_S_OK;
     }
 

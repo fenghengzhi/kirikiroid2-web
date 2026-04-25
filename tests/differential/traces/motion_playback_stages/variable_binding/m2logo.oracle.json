@@ -1,0 +1,16 @@
+{
+  "schema": "motion-stage-oracle-v1",
+  "stage": "variable_binding",
+  "caseId": "m2logo",
+  "source": "android-frida-libkrkr2",
+  "events": [],
+  "summary": {
+    "eventCount": 0,
+    "kindCounts": {},
+    "traceFrameCount": 91,
+    "traceSeqRange": [
+      6321,
+      9473
+    ]
+  }
+}

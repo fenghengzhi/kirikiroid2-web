@@ -293,6 +293,74 @@ namespace motion::detail {
             return nullptr;
         }
 
+        std::optional<MotionParameterSpec> parseMotionParameterSpecLike_0x6B1718(
+            const std::shared_ptr<const PSB::PSBDictionary> &dic) {
+            if(!dic) {
+                return std::nullopt;
+            }
+
+            MotionParameterSpec spec;
+            spec.id = dictionaryString(dic, {"id"}).value_or(std::string{});
+            spec.discretization =
+                dictionaryBool(dic, {"discretization"}).value_or(false);
+            spec.rangeBegin =
+                dictionaryNumber(dic, {"rangeBegin"}).value_or(0.0);
+            spec.rangeEnd = dictionaryNumber(dic, {"rangeEnd"}).value_or(0.0);
+
+            double division = dictionaryNumber(dic, {"division"})
+                                  .value_or(spec.rangeEnd - spec.rangeBegin);
+            if(division <= 0.0) {
+                division = 1.0;
+            }
+            const double range = spec.rangeEnd - spec.rangeBegin;
+            spec.rangeScale = std::abs(range) > 0.000000000001
+                ? division / range
+                : 1.0;
+            spec.value = 0.0;
+            spec.mode = 0;
+            return spec;
+        }
+
+        void collectMotionParametersLike_0x6B365C(
+            const std::shared_ptr<PSB::PSBDictionary> &dic,
+            MotionClip &clip) {
+            clip.parameterSpecs.clear();
+            clip.defaultParameterIndex = -1;
+            if(!dic) {
+                return;
+            }
+
+            const auto parameterizeValue = (*dic)["parameterize"];
+            if(auto parameterizeDic =
+                   std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                       parameterizeValue)) {
+                if(auto spec =
+                       parseMotionParameterSpecLike_0x6B1718(parameterizeDic)) {
+                    clip.parameterSpecs.push_back(std::move(*spec));
+                    clip.defaultParameterIndex = 0;
+                }
+                return;
+            }
+
+            if(const auto parameterList = dictionaryList(dic, {"parameter"})) {
+                for(const auto &item : *parameterList) {
+                    auto itemDic =
+                        std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
+                    if(!itemDic) {
+                        continue;
+                    }
+                    if(auto spec =
+                           parseMotionParameterSpecLike_0x6B1718(itemDic)) {
+                        clip.parameterSpecs.push_back(std::move(*spec));
+                    }
+                }
+            }
+
+            if(const auto index = psbNumber(parameterizeValue)) {
+                clip.defaultParameterIndex = static_cast<int>(*index);
+            }
+        }
+
         bool dictionaryHasKey(const std::shared_ptr<const PSB::PSBDictionary> &dic,
                               const std::string &key) {
             return (*dic)[key] != nullptr;
@@ -1012,6 +1080,7 @@ namespace motion::detail {
                 }
             }
 
+            collectMotionParametersLike_0x6B365C(dic, clip);
             collectValueSources(dic, clip.sourceCandidates);
 
             appendUnique(snapshot.mainTimelineLabels, clip.label);

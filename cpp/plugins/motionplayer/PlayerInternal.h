@@ -14,6 +14,7 @@
 #include <cstring>
 #include <optional>
 #include <random>
+#include <stdexcept>
 #include <sstream>
 #include <unordered_set>
 #include <vector>
@@ -209,6 +210,9 @@ namespace internal {
             // by the subsequent eager Player_buildNodeTree call (no gate).
             runtime.nodes.clear();
             runtime.nodeLabelMap.clear();
+            runtime.parameterEntries.clear();
+            runtime.defaultParameterEntry = {};
+            runtime.defaultParameterEntryIndex = -1;
             // Detect emote mode from PSB root "type" field.
             // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
             //   type=0 → non-emote (motion), type=1 → emote
@@ -276,6 +280,15 @@ namespace internal {
                    runtime.parameterEntries.size()) {
                 return &runtime.parameterEntries[static_cast<size_t>(
                     node.parameterizeIndex)];
+            }
+            if(node.parameterizeIndex >= 0) {
+                throw std::out_of_range("parameter id out of range.");
+            }
+            if(runtime.defaultParameterEntryIndex >= 0 &&
+               static_cast<size_t>(runtime.defaultParameterEntryIndex) <
+                   runtime.parameterEntries.size()) {
+                return &runtime.parameterEntries[static_cast<size_t>(
+                    runtime.defaultParameterEntryIndex)];
             }
             return &runtime.defaultParameterEntry;
         }

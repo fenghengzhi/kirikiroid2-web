@@ -1,0 +1,248 @@
+{
+  "schema": "motion-stage-oracle-v1",
+  "stage": "init_motion",
+  "caseId": "m2logo",
+  "source": "android-frida-libkrkr2",
+  "events": [
+    {
+      "addr": 7026268,
+      "player": "0x798fcc1400",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_enter",
+      "seq": 6279,
+      "timeMs": 1206
+    },
+    {
+      "addr": 7026268,
+      "retval": "0x5",
+      "overview": {
+        "player": "0x798fcc1400",
+        "nodeLayout": "deque",
+        "nodeCount": 31,
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56,
+          "count": 0,
+          "entries": []
+        },
+        "playing": true,
+        "currentTime": 0,
+        "frameTickCount": 0,
+        "frameLastTime": 91
+      },
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_leave",
+      "seq": 6283,
+      "timeMs": 1207
+    },
+    {
+      "addr": 7026268,
+      "player": "0x798fcc1400",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_enter",
+      "seq": 6285,
+      "timeMs": 1207
+    },
+    {
+      "addr": 7026268,
+      "retval": "0x5",
+      "overview": {
+        "player": "0x798fcc1400",
+        "nodeLayout": "deque",
+        "nodeCount": 31,
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56,
+          "count": 0,
+          "entries": []
+        },
+        "playing": true,
+        "currentTime": 0,
+        "frameTickCount": 0,
+        "frameLastTime": 91
+      },
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_leave",
+      "seq": 6289,
+      "timeMs": 1208
+    },
+    {
+      "addr": 7026268,
+      "player": "0x7988957c00",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_enter",
+      "seq": 6705,
+      "timeMs": 1243,
+      "frameId": 253,
+      "objthis": "0x797ce0cda0"
+    },
+    {
+      "addr": 7026268,
+      "retval": "0x5",
+      "overview": {
+        "player": "0x7988957c00",
+        "nodeLayout": "deque",
+        "nodeCount": 2,
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56,
+          "count": 0,
+          "entries": []
+        },
+        "playing": true,
+        "currentTime": 0,
+        "frameTickCount": 0,
+        "frameLastTime": 1
+      },
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_leave",
+      "seq": 6709,
+      "timeMs": 1243,
+      "frameId": 253,
+      "objthis": "0x797ce0cda0"
+    },
+    {
+      "addr": 7026268,
+      "player": "0x7988957600",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_enter",
+      "seq": 6713,
+      "timeMs": 1243,
+      "frameId": 253,
+      "objthis": "0x797ce0cda0"
+    },
+    {
+      "addr": 7026268,
+      "retval": "0x5",
+      "overview": {
+        "player": "0x7988957600",
+        "nodeLayout": "deque",
+        "nodeCount": 2,
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56,
+          "count": 0,
+          "entries": []
+        },
+        "playing": true,
+        "currentTime": 0,
+        "frameTickCount": 0,
+        "frameLastTime": 1
+      },
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_leave",
+      "seq": 6717,
+      "timeMs": 1244,
+      "frameId": 253,
+      "objthis": "0x797ce0cda0"
+    },
+    {
+      "addr": 7026268,
+      "player": "0x7988957000",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_enter",
+      "seq": 6721,
+      "timeMs": 1244,
+      "frameId": 253,
+      "objthis": "0x797ce0cda0"
+    },
+    {
+      "addr": 7026268,
+      "retval": "0x5",
+      "overview": {
+        "player": "0x7988957000",
+        "nodeLayout": "deque",
+        "nodeCount": 2,
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56,
+          "count": 0,
+          "entries": []
+        },
+        "playing": true,
+        "currentTime": 0,
+        "frameTickCount": 0,
+        "frameLastTime": 1
+      },
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_leave",
+      "seq": 6725,
+      "timeMs": 1244,
+      "frameId": 253,
+      "objthis": "0x797ce0cda0"
+    },
+    {
+      "addr": 7026268,
+      "player": "0x798fcc1a00",
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_enter",
+      "seq": 6729,
+      "timeMs": 1244,
+      "frameId": 253,
+      "objthis": "0x797ce0cda0"
+    },
+    {
+      "addr": 7026268,
+      "retval": "0x5",
+      "overview": {
+        "player": "0x798fcc1a00",
+        "nodeLayout": "deque",
+        "nodeCount": 2,
+        "parameterTable": {
+          "begin": null,
+          "end": null,
+          "stride": 56,
+          "count": 0,
+          "entries": []
+        },
+        "playing": true,
+        "currentTime": 0,
+        "frameTickCount": 0,
+        "frameLastTime": 1
+      },
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_leave",
+      "seq": 6733,
+      "timeMs": 1244,
+      "frameId": 253,
+      "objthis": "0x797ce0cda0"
+    }
+  ],
+  "summary": {
+    "eventCount": 12,
+    "kindCounts": {
+      "init_non_emote_enter": 6,
+      "init_non_emote_leave": 6
+    },
+    "traceFrameCount": 91,
+    "traceSeqRange": [
+      6321,
+      9473
+    ],
+    "eventSeqRange": [
+      6279,
+      6733
+    ],
+    "eventFrameIdRange": [
+      253,
+      253
+    ]
+  }
+}

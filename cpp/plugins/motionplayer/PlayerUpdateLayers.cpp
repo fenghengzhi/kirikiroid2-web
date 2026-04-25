@@ -617,24 +617,13 @@ namespace motion {
                 // User-set value takes precedence
                 if (_variableValues.find(label) != _variableValues.end()) continue;
                 // Default: use first frame value
-                _variableValues[label] = frames.front().value;
+                writeEvalResultValueLike_0x6C4668(label, 0,
+                                                  frames.front().value);
             }
-            // Bind variable values to child Players (sub_6C4668 equivalent)
-            // For nodeType=3/4 nodes with child Players, propagate variable values
-            for (auto &vn : nodes) {
-                if (vn.nodeType == 3) {
-                    if (auto *cp = vn.getChildPlayer()) {
-                        for (const auto &[label, value] : _variableValues)
-                            cp->setVariable(detail::widen(label), value);
-                    }
-                } else if (vn.nodeType == 4) {
-                    for (int pi2 = 0; pi2 < vn.getParticleCount(); ++pi2) {
-                        if (auto *cp = vn.getParticleChild(pi2)) {
-                            for (const auto &[label, value] : _variableValues)
-                                cp->setVariable(detail::widen(label), value);
-                        }
-                    }
-                }
+            // Aligned to sub_6C4668: refresh parameter entries directly. This
+            // intentionally does not call public setVariable() on child players.
+            for (const auto &[label, value] : _variableValues) {
+                bindParameterValueLike_0x6C4668(label, 0, value);
             }
         }
 
@@ -734,6 +723,22 @@ namespace motion {
             }
 
             node.currentFrameType = state.frameType;
+            if (state.debugEvaluated) {
+                const bool payloadChanged =
+                    !node.hasLastActivePayload ||
+                    node.lastActiveFrameIndex != state.debugActiveIndex ||
+                    node.lastActiveSrc != state.src ||
+                    node.lastActiveMotionFlags != state.motionFlags ||
+                    node.lastActiveMotionDtgt != state.motionDtgt;
+                if (payloadChanged) {
+                    node.flags |= 0x01;
+                }
+                node.hasLastActivePayload = true;
+                node.lastActiveFrameIndex = state.debugActiveIndex;
+                node.lastActiveSrc = state.src;
+                node.lastActiveMotionFlags = state.motionFlags;
+                node.lastActiveMotionDtgt = state.motionDtgt;
+            }
             node.interpolatedCache.src = state.src;
             node.interpolatedCache.srcList = state.srcList;
             node.interpolatedCache.width = state.width;
@@ -1838,14 +1843,11 @@ namespace motion {
             auto &mn = nodes[i];
             if (mn.nodeType != 3) continue;
 
-            // Get parent's priorDraw flag as play trigger (v12, 0x6BE204..0x6BE214)
-            // In libkrkr2.so: v12 = *(int*)(parentObj+48) where parentObj = node+8 or player+47*8
-            int v12 = 0;
-            if (mn.tjsLayerObject) {
-                v12 = mn.priorDraw;  // keep raw int value, don't truncate to 0/1
-            } else {
-                v12 = _priorDraw;    // keep raw int value
-            }
+            // Aligned to libkrkr2.so sub_6BE0C0 (0x6BE204..0x6BE214):
+            // v12 is parameterEntry->mode (entry+48), using the node entry
+            // or the Player_initNonEmoteMotion default entry as fallback.
+            auto *parameterEntry = resolveNodeParameterEntry(*_runtime, mn);
+            int v12 = parameterEntry ? parameterEntry->mode : 0;
 
             // Get child Player via TJS dispatch (0x6BE220..0x6BE260)
             // Aligned to binary: node+1912 → NativeInstanceSupport → native Player*
@@ -2024,12 +2026,10 @@ namespace motion {
                     && mn.activeSlot().crossfading
                     && !mn.otherSlot().done
                     && mn.otherSlot().motionDt != 0) {
-                    // Binary at 0x6BE864: uses node+8+40 (per-node eval time) if
-                    // available, else player+456 (_clampedEvalTime). NOT _frameLoopTime.
-                    // Binary: *(node+8+40) — per-node eval time from player+384 array.
+                    // Binary at 0x6BE864 reads node+8+40: parameterEntry->value.
                     // Falls back to player+456 (_clampedEvalTime) if node+8 is null.
-                    double parentTime = (i < _runtime->perNodeEvalData.size())
-                        ? _runtime->perNodeEvalData[i].evalTime : _clampedEvalTime;
+                    double parentTime =
+                        parameterEntry ? parameterEntry->value : _clampedEvalTime;
                     double currentStart = mn.activeSlot().clipStartTime;
                     double otherStart = mn.otherSlot().clipStartTime;
                     double denom = otherStart - currentStart;
@@ -2097,11 +2097,10 @@ namespace motion {
                             // Guard fails → LABEL_119: hasAngle=false
                             break;
                         }
-                        // Parent time (0x6BE688..0x6BE6B0): node+8 ? *(node+8)+40 : player+456
-                        // Binary: *(node+8+40) — per-node eval time from player+384 array.
-                    // Falls back to player+456 (_clampedEvalTime) if node+8 is null.
-                    double parentTime = (i < _runtime->perNodeEvalData.size())
-                        ? _runtime->perNodeEvalData[i].evalTime : _clampedEvalTime;
+                        // Parent time (0x6BE688..0x6BE6B0): node+8+40 is
+                        // parameterEntry->value; fallback is player+456.
+                    double parentTime =
+                        parameterEntry ? parameterEntry->value : _clampedEvalTime;
                         double currentStart = mn.activeSlot().clipStartTime;
                         double otherStart = mn.otherSlot().clipStartTime;
                         double denom = otherStart - currentStart;
@@ -2416,11 +2415,11 @@ namespace motion {
                 en.emitterDtgt = dtgt;
                 // Timer = (parentTime - clipSlot.startTime) + clipSlot.timeOffset
                 // Aligned to 0x6BEF74..0x6BEFA8:
-                //   parentTime = node+8 ? *(node+8+40) : player+1120 (_frameLoopTime)
-                // Binary: node+8 is per-node eval data pointer. Offset 40 = evalTime.
-                // Falls back to player+1120 (_frameLoopTime) if null.
-                double parentTime = (ei < _runtime->perNodeEvalData.size())
-                    ? _runtime->perNodeEvalData[ei].evalTime : _frameLoopTime;
+                //   parentTime = node+8 ? parameterEntry->value : player+1120
+                // Falls back to _frameLoopTime if node+8 is null.
+                auto *parameterEntry = resolveNodeParameterEntry(*_runtime, en);
+                double parentTime =
+                    parameterEntry ? parameterEntry->value : _frameLoopTime;
                 double startTime = en.activeSlot().clipStartTime;
                 double timeOffset = en.activeSlot().motionTimeOffset;
                 en.emitterTimer = (parentTime - startTime) + timeOffset;
@@ -3301,14 +3300,11 @@ namespace motion {
                                                : std::string{};
         const double currentTime = _clampedEvalTime;
 
-        // Ensure per-node eval data array matches node count (player+384).
-        // Binary allocates this as a fixed-size array during Player construction;
-        // we resize dynamically to match node count.
+        // Keep legacy diagnostic scratch in sync with node count. The native
+        // node+8 path is parameterEntries; do not use this as player+384.
         if (_runtime->perNodeEvalData.size() != nodes.size()) {
             _runtime->perNodeEvalData.resize(nodes.size());
         }
-        // Set eval time for all nodes to _clampedEvalTime (player+456).
-        // Binary writes per-node eval time during the main loop (0x6BB4E0 area).
         for (size_t ni = 0; ni < nodes.size(); ++ni) {
             _runtime->perNodeEvalData[ni].evalTime = _clampedEvalTime;
         }
@@ -3395,8 +3391,7 @@ namespace motion {
             nodes[ci].accumulated.visible = false; // node+1504
         }
 
-        // Clear per-node eval data dirty flags (0x6BBD44..0x6BBDF4).
-        // Binary: *(v98+48) = 0 for each entry in player+384 array.
+        // Clear legacy local scratch flags.
         for (auto &evalData : _runtime->perNodeEvalData) {
             evalData.dirtyFlag = 0;
         }

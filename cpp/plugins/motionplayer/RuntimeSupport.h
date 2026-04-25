@@ -100,6 +100,18 @@ namespace motion::detail {
         float weight = 1.0f;
     };
 
+    // Aligned to libkrkr2.so sub_6B1718: parsed from motion
+    // "parameterize" / "parameter" entries before Player_buildNodeTree.
+    struct MotionParameterSpec {
+        std::string id;
+        bool discretization = false;
+        double rangeBegin = 0.0;
+        double rangeEnd = 0.0;
+        double rangeScale = 1.0;
+        double value = 0.0;
+        int mode = 0;
+    };
+
     struct MotionClip {
         std::string label;
         std::string owner;
@@ -111,6 +123,8 @@ namespace motion::detail {
         // "layer" from Player+528 as a TJS Array iterated by index.
         std::vector<std::shared_ptr<const PSB::PSBDictionary>> layerList;
         std::vector<std::string> sourceCandidates;
+        std::vector<MotionParameterSpec> parameterSpecs;
+        int defaultParameterIndex = -1;
     };
 
     struct TimelineState {
@@ -259,6 +273,7 @@ namespace motion::detail {
         std::vector<MotionEvent> pendingEvents;
         std::vector<ParameterEntry> parameterEntries;
         ParameterEntry defaultParameterEntry;
+        int defaultParameterEntryIndex = -1;
         // Persistent node tree for updateLayers pipeline. Aligned to
         // libkrkr2.so Player+200 (std::deque of MotionNode). The binary has
         // no "nodesBuilt" gate; nodes are either empty (motion not yet
@@ -370,17 +385,16 @@ namespace motion::detail {
         std::vector<RenderCommand *> renderCommandsTopLevel;
         std::vector<RenderCommand *> renderCommandsGroup;
 
-        // Per-node evaluation time array.
-        // Aligned to libkrkr2.so player+384: 56-byte-per-node entries.
-        // Each node's node+8 pointer points into this array.
-        // Offset 40 within each entry stores the per-node eval time.
-        // Offset 48 stores the per-node dirty flag (cleared in post-loop).
+        // Legacy local scratch for old diagnostics. libkrkr2.so player+384 is
+        // the parameter table initialized by Player_initNonEmoteMotion
+        // (0x6B365C), not per-node storage; node+8 resolves into
+        // parameterEntries via MotionNode::parameterizeIndex.
         struct PerNodeEvalData {
             double padding[5] = {};   // offsets 0-39 (unused in our current scope)
-            double evalTime = 0.0;    // offset 40: per-node evaluation time
-            int dirtyFlag = 0;        // offset 48: cleared in post-loop
+            double evalTime = 0.0;
+            int dirtyFlag = 0;
         };
-        std::vector<PerNodeEvalData> perNodeEvalData;  // player+384/392
+        std::vector<PerNodeEvalData> perNodeEvalData;
         // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
         // PSB root "type" field: 0=non-emote (motion), 1=emote
         bool isEmoteMode = false;
