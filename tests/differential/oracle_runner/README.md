@@ -99,6 +99,35 @@ adding either framebuffer/pixel capture or a
 render-command oracle that covers texture identity, draw order, clipping,
 blend/stencil state, and final compositing.
 
+## Motion tracer equivalence model
+
+The Android Frida tracers and the macOS LLDB tracers are comparable only
+as stage-specific semantic projections, not as proof that the two
+runtimes share the same physical object layout.
+
+- Android/Frida is the oracle side. It attaches to `libkrkr2.so`, sets
+  breakpoints or interceptors by binary address/offset, and reads fields
+  from raw process memory using the libkrkr2 layout recovered from IDA.
+- macOS/LLDB is the port side. It launches the full native engine,
+  breaks on local C++ functions or source lines, and reads fields through
+  debug symbols, typed expressions, or local helper projections.
+- A field is considered comparable only when both tracers sample at the
+  same logical stage boundary and project the same runtime meaning into
+  the same JSON schema field. The comparison does not require identical
+  pointer values, absolute sequence numbers, addresses, padding, STL
+  layout, or private native-only bookkeeping.
+- When adding or changing a motion stage tracer, document the hook point,
+  the sampled object, and the field projection for both sides. If either
+  side uses a fallback hook or a derived field, the stage is diagnostic
+  only until the timing and projection are made explicit.
+
+For the 6-stage motion playback diagnostics, this means `static_parse`,
+`init_motion`, `variable_binding`, `frame_selection`,
+`sub_motion_decision`, and `trace_flatten` must each define their own
+sampling boundary. A passing diff means the two tracers observed
+equivalent stage outputs for the fixture; it must not be read as evidence
+that the port has reproduced libkrkr2's in-memory layout byte-for-byte.
+
 ## Prerequisites
 
 **libkrkr2.so + supporting libs** — private `reference` git submodule:
