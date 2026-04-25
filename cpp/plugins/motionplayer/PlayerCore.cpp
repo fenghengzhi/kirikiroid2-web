@@ -174,9 +174,10 @@ namespace motion {
         }
     }
 
-    Player::Player(ResourceManager rm) :
+    Player::Player(ResourceManager rm, Player *parentPlayer) :
         _runtime(detail::makePlayerRuntime()),
-        _resourceManagerNative(std::move(rm)) {
+        _resourceManagerNative(std::move(rm)),
+        _parentPlayer(parentPlayer) {
         LOGGER->info("Motion.Player constructor called");
         using ResourceManagerAdaptor = ncbInstanceAdaptor<ResourceManager>;
         if(auto *dispatch =
@@ -287,7 +288,9 @@ namespace motion {
         _evalResultListIndex.clear();
         _mirrorPositiveCache.clear();
         _mirrorNegativeCache.clear();
-        ensureMotionLoaded();
+        if(ensureMotionLoaded()) {
+            initNonEmoteMotionLike_0x6B365C(0);
+        }
     }
 
     // Aligned to libkrkr2.so 0x681CAC → 0x6B0F10:
@@ -345,7 +348,9 @@ namespace motion {
         self->_runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         self->_variableKeys.Clear();
         self->_variableValues.clear();
-        self->ensureMotionLoaded();
+        if(self->ensureMotionLoaded()) {
+            self->initNonEmoteMotionLike_0x6B365C(0);
+        }
 
         return TJS_S_OK;
     }
@@ -407,6 +412,90 @@ namespace motion {
         }
 
         return false;
+    }
+
+    void Player::initNonEmoteMotionLike_0x6B365C(std::uint32_t playFlags) {
+        if(!_runtime || !_runtime->activeMotion || _runtime->isEmoteMode) {
+            return;
+        }
+
+        const auto *clip = selectActiveClip();
+        _runtime->activeClip = clip;
+
+        _runtime->nodes.clear();
+        _runtime->nodeLabelMap.clear();
+        _runtime->parameterEntries.clear();
+        _runtime->parameterEntryById.clear();
+        _runtime->defaultParameterEntry = {};
+        _runtime->defaultParameterEntry.rangeScale = 1.0;
+        _runtime->defaultParameterEntry.mode = 0;
+        _runtime->defaultParameterEntryPtr = nullptr;
+        _runtime->defaultParameterEntryIndex = -1;
+
+        if(clip != nullptr) {
+            _loopTime = clip->loopTime;
+            _cachedTotalFrames = clip->totalFrames;
+        }
+
+        const auto motionObject = clip ? clip->motionObject : nullptr;
+        if(motionObject) {
+            const auto parameterizeValue = (*motionObject)["parameterize"];
+            if(auto parameterizeObject =
+                   std::dynamic_pointer_cast<const PSB::PSBDictionary>(
+                       parameterizeValue)) {
+                appendParameterEntryLike_0x6B1718(parameterizeObject);
+                finalizeParameterTableLike_0x6B1ECC();
+                if(!_runtime->parameterEntries.empty()) {
+                    _runtime->defaultParameterEntryIndex = 0;
+                    _runtime->defaultParameterEntryPtr =
+                        &_runtime->parameterEntries.front();
+                }
+            } else {
+                parseParameterListLike_0x6B202C((*motionObject)["parameter"]);
+                if(auto numeric =
+                       std::dynamic_pointer_cast<PSB::PSBNumber>(
+                           parameterizeValue)) {
+                    int index = 0;
+                    switch(numeric->numberType) {
+                        case PSB::PSBNumberType::Float:
+                            index = static_cast<int>(
+                                numeric->getValue<float>());
+                            break;
+                        case PSB::PSBNumberType::Double:
+                            index = static_cast<int>(
+                                numeric->getValue<double>());
+                            break;
+                        case PSB::PSBNumberType::Int:
+                            index = numeric->getValue<int>();
+                            break;
+                        case PSB::PSBNumberType::Long:
+                        default:
+                            index = static_cast<int>(
+                                numeric->getValue<tjs_int64>());
+                            break;
+                    }
+                    if(index < 0 ||
+                       static_cast<size_t>(index) >=
+                           _runtime->parameterEntries.size()) {
+                        throw std::out_of_range("parameter id out of range.");
+                    }
+                    _runtime->defaultParameterEntryIndex = index;
+                    _runtime->defaultParameterEntryPtr =
+                        &_runtime->parameterEntries[static_cast<size_t>(index)];
+                }
+            }
+        }
+
+        buildNodeTree();
+        initVariables();
+
+        if((playFlags & PlayFlagChain) == 0) {
+            _frameLoopTime = 0.0;
+            _clampedEvalTime = std::min(_cachedTotalFrames, 0.0);
+            _queuing = true;
+            _allplaying = true;
+        }
+        _allplaying = true;
     }
 
     void Player::syncVariableKeysFromActiveMotion() {

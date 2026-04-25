@@ -46,8 +46,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                                "traces" / "motion_playback_stages"),
                    help="Directory of staged Android oracle JSONs")
     p.add_argument("--stage", default="all",
-                   choices=("all",) + STAGES,
-                   help="Stage to compare, or all stages")
+                   help="Stage to compare, comma-separated stages, or all")
     p.add_argument("--lldb-timeout", type=float, default=90.0,
                    help="Timeout for the macOS LLDB native tracer")
     p.add_argument("--raw-out", default=None,
@@ -69,7 +68,11 @@ def load_specs(spec_dir: Path) -> list[dict[str, Any]]:
 def selected_stages(stage: str) -> list[str]:
     if stage == "all":
         return list(STAGES)
-    return [stage]
+    stages = [item.strip() for item in stage.split(",") if item.strip()]
+    unknown = sorted(set(stages) - set(STAGES))
+    if unknown:
+        raise ValueError(f"unknown stage(s): {unknown}; expected {STAGES}")
+    return stages
 
 
 def default_runner_candidates() -> list[Path]:

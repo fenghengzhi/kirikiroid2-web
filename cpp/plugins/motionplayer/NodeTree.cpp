@@ -85,6 +85,7 @@ namespace motion::detail {
                       int parentIdx,
                       std::vector<MotionNode> &nodes,
                       motion::ResourceManager *resourceManager,
+                      motion::Player *ownerPlayer,
                       int parentCompletionType) {
             if (!psbNode) return;
 
@@ -215,7 +216,7 @@ namespace motion::detail {
                 // operator new(0x568) → Player constructor → sub_6F1794 (NCB CreateAdaptor)
                 // → store as tTJSVariant at node+1912.
                 using PlayerAdaptor = ncbInstanceAdaptor<Player>;
-                auto *childNative = new Player(ResourceManager{});
+                auto *childNative = new Player(ResourceManager{}, ownerPlayer);
                 if (auto *dispatch = PlayerAdaptor::CreateAdaptor(childNative)) {
                     node.childPlayerVar = tTJSVariant(dispatch, dispatch);
                     dispatch->Release();
@@ -242,7 +243,7 @@ namespace motion::detail {
                     auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                         (*children)[i]);
                     walkTree(child, thisIdx, nodes, resourceManager,
-                             parentCompletionType);
+                             ownerPlayer, parentCompletionType);
                 }
             }
         }
@@ -253,6 +254,7 @@ namespace motion::detail {
         const MotionSnapshot &snapshot,
         const std::string &clipLabel,
         motion::ResourceManager *resourceManager,
+        motion::Player *ownerPlayer,
         int parentCompletionType) {
 
         std::vector<MotionNode> nodes;
@@ -294,7 +296,8 @@ namespace motion::detail {
         // top-level layers is the synthetic root at index 0.
         for (const auto &layerDict : *layerList) {
             if (!layerDict) continue;
-            walkTree(layerDict, 0, nodes, resourceManager, parentCompletionType);
+            walkTree(layerDict, 0, nodes, resourceManager, ownerPlayer,
+                     parentCompletionType);
         }
 
         // Aligned to libkrkr2.so Player+24 label map (populated at 0x6B4CE4

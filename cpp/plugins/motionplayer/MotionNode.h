@@ -35,6 +35,8 @@ namespace motion {
 
 namespace motion::detail {
 
+    struct MotionParameterEntry;
+
     struct MotionNode {
         // Identity (from PSB, set once during tree build)
         int index = 0;
@@ -66,6 +68,7 @@ namespace motion::detail {
         // node+8 points to an entry selected from the player's 56-byte
         // parameter table using the PSB "parameterize" index.
         int parameterizeIndex = -1;
+        MotionParameterEntry *parameterEntry = nullptr;
         // Mesh inverse matrix for sub_69AE74 child deformation (node+2096..2132)
         double meshInvM11 = 0, meshInvM12 = 0;  // node+2096, node+2104
         double meshInvM21 = 0, meshInvM22 = 0;  // node+2112, node+2120

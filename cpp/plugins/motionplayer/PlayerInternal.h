@@ -211,8 +211,11 @@ namespace internal {
             runtime.nodes.clear();
             runtime.nodeLabelMap.clear();
             runtime.parameterEntries.clear();
+            runtime.parameterEntryById.clear();
             runtime.defaultParameterEntry = {};
+            runtime.defaultParameterEntryPtr = nullptr;
             runtime.defaultParameterEntryIndex = -1;
+            runtime.activeClip = nullptr;
             // Detect emote mode from PSB root "type" field.
             // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
             //   type=0 → non-emote (motion), type=1 → emote
@@ -272,9 +275,12 @@ namespace internal {
             return nullptr;
         }
 
-        inline detail::PlayerRuntime::ParameterEntry *
+        inline detail::MotionParameterEntry *
         resolveNodeParameterEntry(detail::PlayerRuntime &runtime,
                                   const detail::MotionNode &node) {
+            if(node.parameterEntry != nullptr) {
+                return node.parameterEntry;
+            }
             if(node.parameterizeIndex >= 0 &&
                static_cast<size_t>(node.parameterizeIndex) <
                    runtime.parameterEntries.size()) {
@@ -284,11 +290,8 @@ namespace internal {
             if(node.parameterizeIndex >= 0) {
                 throw std::out_of_range("parameter id out of range.");
             }
-            if(runtime.defaultParameterEntryIndex >= 0 &&
-               static_cast<size_t>(runtime.defaultParameterEntryIndex) <
-                   runtime.parameterEntries.size()) {
-                return &runtime.parameterEntries[static_cast<size_t>(
-                    runtime.defaultParameterEntryIndex)];
+            if(runtime.defaultParameterEntryPtr != nullptr) {
+                return runtime.defaultParameterEntryPtr;
             }
             return &runtime.defaultParameterEntry;
         }

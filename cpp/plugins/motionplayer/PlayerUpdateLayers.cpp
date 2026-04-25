@@ -3118,7 +3118,7 @@ namespace motion {
                 // 3b. Create child Player via TJS dispatch (0x6BF93C..0x6BFA00)
                 // Aligned to binary: new Player → CreateAdaptor → Array.add
                 using PlayerAdaptor = ncbInstanceAdaptor<Player>;
-                auto *childRaw = new Player(_resourceManagerNative);
+                auto *childRaw = new Player(_resourceManagerNative, this);
                 childRaw->_tjsRandomGenerator = _tjsRandomGenerator;
                 iTJSDispatch2 *childDisp = PlayerAdaptor::CreateAdaptor(childRaw);
                 if (!childDisp) { delete childRaw; goto physics_step; }

@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace motion {
+    class Player;
     class ResourceManager;
 }
 
@@ -25,6 +26,7 @@ namespace motion::detail {
         const MotionSnapshot &snapshot,
         const std::string &clipLabel,
         motion::ResourceManager *resourceManager = nullptr,
+        motion::Player *ownerPlayer = nullptr,
         int parentCompletionType = 0);
 
 } // namespace motion::detail

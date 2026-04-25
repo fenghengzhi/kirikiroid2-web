@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <deque>
 #include <list>
 #include <memory>
@@ -17,6 +18,8 @@
 
 namespace PSB {
     class PSBDictionary;
+    class PSBList;
+    class IPSBValue;
 }
 
 namespace motion {
@@ -27,6 +30,7 @@ namespace motion {
 namespace motion {
     namespace detail {
         struct MotionClip;
+        struct MotionParameterEntry;
         struct MotionSnapshot;
         struct PlayerRuntime;
         struct TimelineControlBinding;
@@ -73,7 +77,8 @@ namespace motion {
 
     class Player {
     public:
-        explicit Player(ResourceManager rm = ResourceManager{});
+        explicit Player(ResourceManager rm = ResourceManager{},
+                        Player *parentPlayer = nullptr);
         ~Player();
 
         // --- Properties (getter/setter) ---
@@ -366,6 +371,9 @@ namespace motion {
         bool getD3DAvailable();
         void doAlphaMaskOperation();
         void onFindMotion(ttstr name, int flags = 0);
+        void setParentPlayerLike_0x6B1ABC(Player *parentPlayer) {
+            _parentPlayer = parentPlayer;
+        }
         // Aligned to libkrkr2.so 0x681CAC: motion property as raw callback
         // so we have objthis to call onFindMotion TJS callback.
         static tjs_error setMotionCompat(tTJSVariant *result, tjs_int numparams,
@@ -420,6 +428,9 @@ namespace motion {
 
     private:
         bool ensureMotionLoaded();
+        // Aligned to libkrkr2.so Player_initNonEmoteMotion (0x6B365C).
+        // This is the native/LLDB init_motion stage boundary.
+        void initNonEmoteMotionLike_0x6B365C(std::uint32_t playFlags);
         // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0). Called
         // eagerly from play/onFindMotion paths; the binary has no lazy gate.
         void buildNodeTree();
@@ -473,8 +484,13 @@ namespace motion {
         bool shouldMirrorEvalLabelLike_0x67C6B0(const std::string &label);
         double &ensureEvalResultSlotLike_0x686944(const std::string &label);
         void removeEvalResultSlotLike_Reset(const std::string &label);
-        void loadParameterEntriesForClipLike_0x6B365C(
-            const detail::MotionClip *clip);
+        detail::MotionParameterEntry *appendParameterEntryLike_0x6B1718(
+            const std::shared_ptr<const PSB::PSBDictionary> &dic);
+        bool parseParameterListLike_0x6B202C(
+            const std::shared_ptr<PSB::IPSBValue> &value);
+        void finalizeParameterTableLike_0x6B1ECC();
+        double initialParameterRawValueLike_0x6B1ABC(
+            const std::string &id) const;
         void bindParameterValueLike_0x6C4668(const std::string &label,
                                              int mode,
                                              double value);
@@ -531,6 +547,7 @@ namespace motion {
     private:
         std::shared_ptr<detail::PlayerRuntime> _runtime;
         ResourceManager _resourceManagerNative;
+        Player *_parentPlayer = nullptr; // non-owning, for 0x6B1ABC lookup
         int _completionType = 0;
         tTJSVariant _metadata;
         ttstr _chara;

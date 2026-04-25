@@ -113,7 +113,7 @@ namespace {
     }
 
     bool parameterIdMatchesLabelLike_0x6D0BF4(
-        const motion::detail::PlayerRuntime::ParameterEntry &entry,
+        const motion::detail::MotionParameterEntry &entry,
         const ParameterLabelParts &parts) {
         return !entry.id.empty() &&
             (entry.id == parts.full ||
@@ -121,8 +121,12 @@ namespace {
     }
 
     double normalizeParameterValueLike_0x6B1718(
-        const motion::detail::PlayerRuntime::ParameterEntry &entry,
+        const motion::detail::MotionParameterEntry &entry,
         double rawValue) {
+        const double range = entry.rangeEnd - entry.rangeBegin;
+        if(range == 0.0 || entry.rangeScale == 0.0) {
+            return 0.0;
+        }
         double value = entry.discretization
             ? static_cast<double>(static_cast<int>(rawValue))
             : rawValue;
@@ -133,7 +137,7 @@ namespace {
     }
 
     void bindParameterEntriesLike_0x6C4668(
-        std::vector<motion::detail::PlayerRuntime::ParameterEntry> &entries,
+        std::vector<motion::detail::MotionParameterEntry> &entries,
         const ParameterLabelParts &parts,
         int mode,
         double rawValue) {
@@ -144,6 +148,63 @@ namespace {
             entry.value = normalizeParameterValueLike_0x6B1718(entry, rawValue);
             entry.mode = mode;
         }
+    }
+
+    std::optional<double> parameterPsbNumberLike_0x6B1718(
+        const std::shared_ptr<PSB::IPSBValue> &value) {
+        if(auto number = std::dynamic_pointer_cast<PSB::PSBNumber>(value)) {
+            switch(number->numberType) {
+                case PSB::PSBNumberType::Float:
+                    return number->getValue<float>();
+                case PSB::PSBNumberType::Double:
+                    return number->getValue<double>();
+                case PSB::PSBNumberType::Int:
+                    return static_cast<double>(number->getValue<int>());
+                case PSB::PSBNumberType::Long:
+                default:
+                    return static_cast<double>(number->getValue<tjs_int64>());
+            }
+        }
+        if(auto boolean = std::dynamic_pointer_cast<PSB::PSBBool>(value)) {
+            return boolean->value ? 1.0 : 0.0;
+        }
+        return std::nullopt;
+    }
+
+    std::optional<double> parameterDictionaryNumberLike_0x6B1718(
+        const std::shared_ptr<const PSB::PSBDictionary> &dic,
+        const char *key) {
+        if(!dic) {
+            return std::nullopt;
+        }
+        return parameterPsbNumberLike_0x6B1718((*dic)[key]);
+    }
+
+    std::string parameterDictionaryStringLike_0x6B1718(
+        const std::shared_ptr<const PSB::PSBDictionary> &dic,
+        const char *key) {
+        if(!dic) {
+            return {};
+        }
+        if(auto str = std::dynamic_pointer_cast<PSB::PSBString>((*dic)[key])) {
+            return str->value;
+        }
+        return {};
+    }
+
+    bool parameterDictionaryBoolLike_0x6B1718(
+        const std::shared_ptr<const PSB::PSBDictionary> &dic,
+        const char *key) {
+        if(!dic) {
+            return false;
+        }
+        if(auto boolean = std::dynamic_pointer_cast<PSB::PSBBool>((*dic)[key])) {
+            return boolean->value;
+        }
+        if(auto number = parameterPsbNumberLike_0x6B1718((*dic)[key])) {
+            return *number != 0.0;
+        }
+        return false;
     }
 
 }
@@ -198,48 +259,114 @@ namespace motion {
         }
     }
 
-    void Player::loadParameterEntriesForClipLike_0x6B365C(
-        const detail::MotionClip *clip) {
+    detail::MotionParameterEntry *Player::appendParameterEntryLike_0x6B1718(
+        const std::shared_ptr<const PSB::PSBDictionary> &dic) {
+        if(!_runtime || !dic) {
+            return nullptr;
+        }
+
+        detail::MotionParameterEntry entry;
+        entry.id = parameterDictionaryStringLike_0x6B1718(dic, "id");
+        entry.discretization =
+            parameterDictionaryBoolLike_0x6B1718(dic, "discretization");
+        entry.rangeBegin =
+            parameterDictionaryNumberLike_0x6B1718(dic, "rangeBegin")
+                .value_or(0.0);
+        entry.rangeEnd =
+            parameterDictionaryNumberLike_0x6B1718(dic, "rangeEnd")
+                .value_or(0.0);
+
+        const double range = entry.rangeEnd - entry.rangeBegin;
+        double division = 0.0;
+        if(const auto explicitDivision =
+               parameterDictionaryNumberLike_0x6B1718(dic, "division")) {
+            division = *explicitDivision;
+        } else {
+            division = range;
+            if(division <= 0.0) {
+                division = 1.0;
+            }
+        }
+        entry.rangeScale = (range != 0.0 && division > 0.0)
+            ? division / range
+            : 0.0;
+        entry.mode = 0;
+        entry.value = normalizeParameterValueLike_0x6B1718(
+            entry, initialParameterRawValueLike_0x6B1ABC(entry.id));
+
+        _runtime->parameterEntries.push_back(std::move(entry));
+        return &_runtime->parameterEntries.back();
+    }
+
+    bool Player::parseParameterListLike_0x6B202C(
+        const std::shared_ptr<PSB::IPSBValue> &value) {
+        if(!_runtime || !value) {
+            return false;
+        }
+
+        const auto list = std::dynamic_pointer_cast<PSB::PSBList>(value);
+        if(!list) {
+            return false;
+        }
+
+        _runtime->parameterEntries.reserve(
+            _runtime->parameterEntries.size() + list->size());
+        for(const auto &item : *list) {
+            auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
+            appendParameterEntryLike_0x6B1718(dic);
+        }
+        finalizeParameterTableLike_0x6B1ECC();
+        return true;
+    }
+
+    void Player::finalizeParameterTableLike_0x6B1ECC() {
         if(!_runtime) {
             return;
         }
 
-        _runtime->parameterEntries.clear();
-        _runtime->defaultParameterEntry = {};
-        _runtime->defaultParameterEntryIndex = -1;
-        if(clip == nullptr) {
-            return;
+        _runtime->parameterEntryById.clear();
+        for(size_t i = 0; i < _runtime->parameterEntries.size(); ++i) {
+            const auto &entry = _runtime->parameterEntries[i];
+            if(!entry.id.empty()) {
+                _runtime->parameterEntryById[entry.id] = i;
+            }
+        }
+    }
+
+    double Player::initialParameterRawValueLike_0x6B1ABC(
+        const std::string &id) const {
+        if(id.empty()) {
+            return 0.0;
         }
 
-        _runtime->parameterEntries.reserve(clip->parameterSpecs.size());
-        for(const auto &spec : clip->parameterSpecs) {
-            detail::PlayerRuntime::ParameterEntry entry;
-            entry.id = spec.id;
-            entry.discretization = spec.discretization;
-            entry.rangeBegin = spec.rangeBegin;
-            entry.rangeEnd = spec.rangeEnd;
-            entry.rangeScale = spec.rangeScale;
-            entry.mode = 0;
-
-            double rawValue = spec.value;
-            if(!entry.id.empty()) {
-                if(const auto it = _variableValues.find(entry.id);
-                   it != _variableValues.end()) {
-                    rawValue = it->second;
-                } else if(const auto evalIt = _evalResultValues.find(entry.id);
-                          evalIt != _evalResultValues.end()) {
-                    rawValue = evalIt->second;
+        const auto parts = splitParameterLabelLike_0x6D0BF4(id);
+        const auto findValue =
+            [&parts](const std::unordered_map<std::string, double> &values,
+                     double &out) -> bool {
+            if(const auto it = values.find(parts.full); it != values.end()) {
+                out = it->second;
+                return true;
+            }
+            if(!parts.suffix.empty()) {
+                if(const auto it = values.find(parts.suffix);
+                   it != values.end()) {
+                    out = it->second;
+                    return true;
                 }
             }
-            entry.value = normalizeParameterValueLike_0x6B1718(entry, rawValue);
-            _runtime->parameterEntries.push_back(std::move(entry));
+            return false;
+        };
+
+        for(const Player *player = this; player != nullptr;
+            player = player->_parentPlayer) {
+            double value = 0.0;
+            if(findValue(player->_variableValues, value) ||
+               findValue(player->_evalResultValues, value)) {
+                return value;
+            }
         }
 
-        if(clip->defaultParameterIndex >= 0 &&
-           static_cast<size_t>(clip->defaultParameterIndex) <
-               _runtime->parameterEntries.size()) {
-            _runtime->defaultParameterEntryIndex = clip->defaultParameterIndex;
-        }
+        return 0.0;
     }
 
     void Player::bindParameterValueLike_0x6C4668(const std::string &label,
@@ -1109,8 +1236,15 @@ namespace motion {
             return;
         }
 
-        // PlayFlagForce (0x01): force reload even if same motion is loaded
-        // Binary: Player_setMotionImpl skips reload guard when force flag set
+        // Player_playImpl (0x6B2284) only enters Player_loadMotion /
+        // Player_initNonEmoteMotion when force/as-can is set or the requested
+        // motion key differs from the stored key.
+        if(_runtime && _runtime->activeMotion && _motionKey == name &&
+           (flags & (PlayFlagForce | PlayFlagAsCan)) == 0) {
+            return;
+        }
+
+        // PlayFlagForce (0x01): force reload even if same motion is loaded.
         if ((flags & PlayFlagForce) && _motionKey == name) {
             _motionKey = ttstr();  // clear to bypass same-motion guard in findMotion
         }
@@ -1161,12 +1295,8 @@ namespace motion {
             _motionKey = name;
             _project = snapshot->moduleValue;
             syncVariableKeysFromActiveMotion();
-            // Aligned to libkrkr2.so Player_playImpl (0x6B2284) ->
-            // Player_initNonEmoteMotion (0x6B365C):
-            // once motion loading succeeds, the binary immediately rebuilds the
-            // node tree for the selected clip before later progress/render
-            // stages consume it.
-            buildNodeTree();
+            initNonEmoteMotionLike_0x6B365C(
+                static_cast<std::uint32_t>(flags));
         }
 
         // After loading, prime timelines and start playback.
@@ -1529,8 +1659,8 @@ namespace motion {
         // Player_initVariables (0x6CD750) before setting any playing state.
         // No lazy gate exists in the binary.
         self->ensureMotionLoaded();
-        self->buildNodeTree();
-        self->initVariables();
+        self->initNonEmoteMotionLike_0x6B365C(
+            static_cast<std::uint32_t>(flags));
         if(self->_runtime->activeMotion && self->_runtime->timelines.empty()) {
             detail::primeTimelineStates(self->_runtime->timelines,
                                         *self->_runtime->activeMotion);
@@ -1539,8 +1669,8 @@ namespace motion {
         if(!label.IsEmpty() && !self->_runtime->activeMotion) {
             self->setMotion(label);
             self->ensureMotionLoaded();
-            self->buildNodeTree();
-            self->initVariables();
+            self->initNonEmoteMotionLike_0x6B365C(
+                static_cast<std::uint32_t>(flags));
             if(self->_runtime->activeMotion && self->_runtime->timelines.empty()) {
                 detail::primeTimelineStates(self->_runtime->timelines,
                                             *self->_runtime->activeMotion);

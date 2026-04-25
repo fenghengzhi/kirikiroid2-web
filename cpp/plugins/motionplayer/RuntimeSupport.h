@@ -100,9 +100,10 @@ namespace motion::detail {
         float weight = 1.0f;
     };
 
-    // Aligned to libkrkr2.so sub_6B1718: parsed from motion
-    // "parameterize" / "parameter" entries before Player_buildNodeTree.
-    struct MotionParameterSpec {
+    // Runtime-owned parameter entry. Aligned to libkrkr2.so's 56-byte
+    // Player+384 parameter table populated inside Player_initNonEmoteMotion
+    // (0x6B365C) via sub_6B1718 / sub_6B202C.
+    struct MotionParameterEntry {
         std::string id;
         bool discretization = false;
         double rangeBegin = 0.0;
@@ -123,8 +124,11 @@ namespace motion::detail {
         // "layer" from Player+528 as a TJS Array iterated by index.
         std::vector<std::shared_ptr<const PSB::PSBDictionary>> layerList;
         std::vector<std::string> sourceCandidates;
-        std::vector<MotionParameterSpec> parameterSpecs;
-        int defaultParameterIndex = -1;
+        // Raw PSB objects retained for Player_initNonEmoteMotion (0x6B365C).
+        // The parameter table is intentionally not cached here; it is rebuilt
+        // on each player init to mirror libkrkr2.so ownership/lifetime.
+        std::shared_ptr<const PSB::PSBDictionary> motionObject;
+        std::shared_ptr<const PSB::PSBDictionary> contentObject;
     };
 
     struct TimelineState {
@@ -213,15 +217,6 @@ namespace motion::detail {
     };
 
     struct PlayerRuntime {
-        struct ParameterEntry {
-            std::string id;
-            bool discretization = false;
-            double rangeBegin = 0.0;
-            double rangeEnd = 0.0;
-            double rangeScale = 1.0;
-            double value = 0.0;
-            int mode = 0; // aligns to entry+48 reads in 0x6BE0C0
-        };
         std::unordered_map<std::string, std::shared_ptr<MotionSnapshot>> motionsByKey;
         std::unordered_map<std::string, tTJSVariant> sourcesByKey;
         std::shared_ptr<MotionSnapshot> activeMotion;
@@ -271,9 +266,12 @@ namespace motion::detail {
         double slant = 0.0;
         double zoom = 1.0;
         std::vector<MotionEvent> pendingEvents;
-        std::vector<ParameterEntry> parameterEntries;
-        ParameterEntry defaultParameterEntry;
+        std::vector<MotionParameterEntry> parameterEntries;
+        std::unordered_map<std::string, size_t> parameterEntryById;
+        MotionParameterEntry defaultParameterEntry;
+        MotionParameterEntry *defaultParameterEntryPtr = nullptr;
         int defaultParameterEntryIndex = -1;
+        const MotionClip *activeClip = nullptr;
         // Persistent node tree for updateLayers pipeline. Aligned to
         // libkrkr2.so Player+200 (std::deque of MotionNode). The binary has
         // no "nodesBuilt" gate; nodes are either empty (motion not yet

@@ -904,8 +904,9 @@ namespace motion {
         }
 
         std::string clipLabel;
-        const auto *clip = selectActiveClip();
-        loadParameterEntriesForClipLike_0x6B365C(clip);
+        const auto *clip =
+            _runtime->activeClip != nullptr ? _runtime->activeClip
+                                            : selectActiveClip();
         if(clip != nullptr) {
             clipLabel = clip->label;
         }
@@ -925,13 +926,11 @@ namespace motion {
                 _runtime->activeMotion->clipList.size());
         }
 
-        _runtime->nodes = detail::buildNodeTree(*_runtime->activeMotion, clipLabel,
-                                                &_resourceManagerNative,
-                                                _completionType);
-        for(const auto &node : _runtime->nodes) {
-            if(node.parameterizeIndex >= 0) {
-                (void)resolveNodeParameterEntry(*_runtime, node);
-            }
+        _runtime->nodes = detail::buildNodeTree(
+            *_runtime->activeMotion, clipLabel, &_resourceManagerNative, this,
+            _completionType);
+        for(auto &node : _runtime->nodes) {
+            node.parameterEntry = resolveNodeParameterEntry(*_runtime, node);
         }
 
         // Aligned to Player_initNodeFields case 3 (0x6B43C0..0x6B4688):

@@ -37,9 +37,9 @@ STAGES: tuple[str, ...] = (
 
 PROGRESS_COMPAT_SYMBOL = "motion::Player::progressCompatMethod"
 PHASE3_LAST_SYMBOL = "motion::Player::updateLayersPhase3_AnchorNode"
-INIT_NON_EMOTE_SYMBOL = "motion::Player::buildNodeTree"
-PARSE_PARAMETER_SYMBOL = "parseMotionParameterSpecLike_0x6B1718"
-PARSE_PARAMETER_LIST_SYMBOL = "collectMotionParametersLike_0x6B365C"
+INIT_NON_EMOTE_SYMBOL = "motion::Player::initNonEmoteMotionLike_0x6B365C"
+PARSE_PARAMETER_SYMBOL = "motion::Player::appendParameterEntryLike_0x6B1718"
+PARSE_PARAMETER_LIST_SYMBOL = "motion::Player::parseParameterListLike_0x6B202C"
 BIND_PARAMETER_SYMBOL = "motion::Player::bindParameterValueLike_0x6C4668"
 EVALUATE_TIMELINE_SYMBOL = "evaluateTimelineLike_0x699AE4"
 SUB_MOTION_SYMBOL = "motion::Player::updateLayersPhase3_MotionSubNode"
@@ -303,10 +303,10 @@ class NativeMotionStageTracer:
             bind_bp = self._optional_bp(target, BIND_PARAMETER_SYMBOL)
             self.bind_bp_id = bind_bp.GetID() if bind_bp else None
 
-            parse_bp = self._optional_bp(target, PARSE_PARAMETER_SYMBOL)
-            self.parse_bp_id = parse_bp.GetID() if parse_bp else None
-            parse_list_bp = self._optional_bp(target, PARSE_PARAMETER_LIST_SYMBOL)
-            self.parse_list_bp_id = parse_list_bp.GetID() if parse_list_bp else None
+            self.parse_bp_id = self._required_bp(
+                target, PARSE_PARAMETER_SYMBOL).GetID()
+            self.parse_list_bp_id = self._required_bp(
+                target, PARSE_PARAMETER_LIST_SYMBOL).GetID()
 
             eval_timeline_bp = self._optional_bp(target, EVALUATE_TIMELINE_SYMBOL)
             if eval_timeline_bp is None:
@@ -776,6 +776,10 @@ class NativeMotionStageTracer:
             "end": ptr_to_hex(end_ptr),
             "stride": stride,
             "count": count,
+            "defaultParameterEntryIndex":
+                sb_signed(sb_child_optional(runtime, "defaultParameterEntryIndex"), -1),
+            "defaultParameterEntry":
+                ptr_to_hex(sb_unsigned(sb_child_optional(runtime, "defaultParameterEntryPtr"))),
             "entries": [],
         }
         if count > 256:
