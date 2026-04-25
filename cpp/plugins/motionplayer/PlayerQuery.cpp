@@ -3,6 +3,7 @@
 //
 #include "PlayerInternal.h"
 #include "HitTestInternal.h"
+#include "MotionTraceWeb.h"
 #include "SourceCache.h"
 #include "ncbind.hpp"
 
@@ -638,18 +639,6 @@ namespace motion {
             }
             return detail::makeArray(frames);
         }
-    }
-
-    void Player::runUpdatePassForOracle() {
-        ensureMotionLoaded();
-        if(!_runtime || !_runtime->activeMotion ||
-           _runtime->nodes.empty()) {
-            return;
-        }
-        // Mirrors progressCompatMethod's pre-update wipe (PlayerQuery.cpp:1520).
-        _runtime->pendingEvents.clear();
-        updateLayers();
-        calcBounds();
     }
 
     bool Player::hitTestLayer(ttstr name, double x, double y) {
@@ -1525,6 +1514,7 @@ namespace motion {
         }
 
         self->ensureMotionLoaded();
+        detail::MotionTraceProgressScope motionTraceScope(self, objthis);
 
         double delta = 0.0;
         if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid) {

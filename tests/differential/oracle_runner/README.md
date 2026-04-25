@@ -34,7 +34,7 @@ pixel output.
 | `bezier_curve` | **✓ 6/6** | **✓ 6** | `sub_69A754` (0x69A754). `empty_curve` + `size_mismatch` specs dropped — UB inputs (empty or mismatched arrays) where libkrkr2's behaviour is an OOB-read side effect / infinite loop rather than a designed contract; oracle doesn't apply |
 | `position_interp` | **✓ 5/5** | **✓ 5** | `sub_69A4D4` (0x69A4D4). Adapter had `src_addr`/`dst_addr` wired into a2/a3 — libkrkr2's convention (matching port's `interpolatePosition69A4D4` signature) is a2=dst (returned at t=1), a3=src (returned at t=0). `rotation_coord*` specs dropped — empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (latent libkrkr2 bug, never hit by real assets); port's defensive sanitisation is intentionally non-matching |
 | `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
-| `motion_playback` | record-only state oracle | **✓ 2** | Uses `STARTUP_FROM` to schedule `reference/xp3/logo_test_oracle.xp3` inside libkrkr2, then Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record per-frame Motion node state for `yuzulogo.mtn` and `m2logo.mtn`. Checked-in goldens exist under `tests/differential/traces/motion_playback/*.oracle.json`. This is not yet a full visual oracle and is not part of the normal push CI pass/fail path; see "Motion playback visual oracle status" below. |
+| `motion_playback` | libkrkr2 record + Wasmtime verify | **✓ 2** | Uses `STARTUP_FROM` to schedule `reference/xp3/logo_test_oracle.xp3` inside libkrkr2, then Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record per-frame Motion node state for `yuzulogo.mtn` and `m2logo.mtn`. Checked-in goldens exist under `tests/differential/traces/motion_playback/*.oracle.json`; the default port-side verifier runs the dedicated `motion_playback_wasmtime` test wasm under Wasmtime, executing the same `startup.tjs` path with a headless Window stub. The Browser-WASM trace hook remains available for manual debugging. This is not yet a full visual oracle; see "Motion playback visual oracle status" below. |
 
 ## Motion playback visual oracle status
 
@@ -86,10 +86,11 @@ What it does not prove yet:
 - The deterministic wrapper uses fixed-step `progress()` calls; it does
   not prove the original `logo_test.xp3` real-time scheduling path or
   wall-clock timing behaviour.
-- Normal push CI records/validates the ADB+Frida scalar families. The
-  `motion_playback` recorder is opt-in via
-  `workflow_dispatch record_motion_playback_oracle=true`; normal CI does
-  not yet fail PRs on port-vs-motion-oracle mismatches.
+- Normal push CI validates the Wasmtime port trace against the checked-in
+  `motion_playback` goldens. Re-recording those goldens from libkrkr2
+  remains opt-in via `run_motion_playback.py --record-oracle`; the
+  Browser-WASM trace hook is a manual diagnostic path, not the default
+  port-side runner.
 
 Therefore, as of now, the oracle runner side is good enough to be a
 libkrkr2 Motion state oracle for these two fixtures, but not enough to
@@ -127,6 +128,9 @@ the native .so live in [harness/README.md](harness/README.md).
 ```bash
 pip install -r tests/differential/oracle_runner/requirements-oracle.txt
 # → frida==16.4.10 (only needed when using --trace / --record-trace)
+pip install -r tests/differential/python/requirements-wasm.txt
+# Playwright/Chromium is only needed for the optional Browser-WASM motion
+# trace path; the default port-side verifier uses Wasmtime.
 ```
 
 **Frida server** (for `--trace` and `motion_playback --record-oracle`

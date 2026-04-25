@@ -2,6 +2,7 @@
 // Split from Player.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "MotionTraceWeb.h"
 #include "ncbind.hpp"    // ncbInstanceAdaptor<Player>::CreateAdaptor for TJS bridge
 #include "tjsArray.h"    // TJSCreateArrayObject, TJSGetArrayElementCount
 #ifdef __EMSCRIPTEN__
@@ -3292,6 +3293,7 @@ namespace motion {
     // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C).
     // Operates on persistent MotionNode vector instead of re-walking PSB tree.
     void Player::updateLayers() {
+        detail::motionTraceRecordUpdatePlayer(this);
         auto &nodes = _runtime->nodes;
         if (nodes.empty()) return;
         const auto motionPath =

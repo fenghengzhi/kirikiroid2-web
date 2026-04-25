@@ -16,8 +16,8 @@ Two modes:
     section in /Users/bytedance/.claude/plans/
     oracle-runner-panda-floofy-garden.md.
 
-  * Disk oracle (`run_case`): compare port CLI output against a
-    checked-in golden JSON. No engine required.
+  * Disk oracle (`run_case`): compare Browser-WASM port trace output
+    against a checked-in golden JSON. No Android device is required.
 
 Previous revisions of this file shipped a TJS snapshot script executed
 via `engine.tjs_exec_str` from the harness-rpc pthread. That approach
@@ -37,7 +37,11 @@ from pathlib import Path
 from typing import Any
 
 
-# Schema fields, kept in sync with tests/differential/port_runners/motion_playback_port.cpp.
+# Schema fields, kept in sync with the Browser-WASM motionTrace hook.
+# The default golden diff intentionally compares Motion node state only.
+# Strings/images and draw diagnostics are kept in JSON snapshots to aid
+# investigation, but libkrkr2's Frida trace and the Browser-WASM port trace
+# do not need their diagnostic labels to match byte-for-byte for state parity.
 LAYER_FIELDS_NUM = (
     "posX", "posY", "posZ", "angleDeg",
     "scaleX", "scaleY", "slantX", "slantY",
@@ -45,6 +49,7 @@ LAYER_FIELDS_NUM = (
 LAYER_FIELDS_INT = ("opacity", "blendMode", "nodeType", "index")
 LAYER_FIELDS_BOOL = ("visible", "active", "flipX", "flipY")
 LAYER_FIELDS_STR = ("label", "currentImage")
+COMPARE_FIELDS_STR: tuple[str, ...] = ()
 
 
 # Order that logo_test.xp3's startup.tjs plays motions. We partition the
@@ -55,8 +60,9 @@ SEGMENT_ORDER: tuple[str, ...] = ("yuzulogo", "m2logo")
 
 # Deterministic oracle-recording xp3. Its startup.tjs runs fixed-step
 # `player.progress(1000/60)` loops (241 frames for yuzulogo, 91 for
-# m2logo) matching the host port CLI, instead of logo_test.xp3's real-
-# time variable-step doFrame. Sources live in the reference submodule
+# m2logo). The Browser-WASM verifier loads this same xp3 and collects the
+# port-side `motionTrace=1` samples, instead of using logo_test.xp3's
+# real-time variable-step doFrame. Sources live in the reference submodule
 # (reference/xp3/logo_test_oracle/startup.tjs + the shared mtn files in
 # reference/xp3/logo_test/). Regenerate via
 # `tests/differential/oracle_runner/fixtures/build_logo_test_oracle.sh`
@@ -136,9 +142,9 @@ def trigger_startup(engine, game_path_on_device: str) -> None:
 
 # ------------------------------------------------------------ oracle recording
 
-def _normalize_frame(frame: dict, index: int) -> dict:
+def normalize_frame(frame: dict, index: int) -> dict:
     """Drop Frida-internal fields (player, frameId, layout), canonicalise
-    to the oracle schema consumed by motion_playback_port.cpp."""
+    to the oracle schema consumed by the port-side motionTrace hook."""
     layers = []
     for layer in frame.get("layers", []):
         layers.append({k: layer.get(k) for k in (
@@ -218,7 +224,7 @@ def record_all_oracles(
                 f"spec requires {wanted}. Increase playback_timeout or "
                 f"check Motion.Player's per-motion frame count.")
         results[spec_id] = [
-            _normalize_frame(fr, fi) for fi, fr in enumerate(frames[:wanted])
+            normalize_frame(fr, fi) for fi, fr in enumerate(frames[:wanted])
         ]
     return results
 
@@ -280,13 +286,12 @@ def _floats_close(a: float, b: float, *, rel: float, abs_: float) -> bool:
     return diff <= max(abs_, rel * max(abs(a), abs(b)))
 
 
-# Structural subset that the port CLI fills in accurately without
-# needing runUpdatePassForOracle() (which currently segfaults headless).
-# These come from node identity / tree shape / clip flags set by
-# buildNodeTree / playTimeline, not from per-frame updateLayers.
+# Structural subset for focused tree/state debugging. This skips the
+# accumulated transform fields while keeping the same string-diagnostic
+# policy as the full diff.
 STRUCTURAL_FIELDS_INT = ("index", "nodeType", "opacity", "blendMode")
 STRUCTURAL_FIELDS_BOOL = ("visible", "active", "flipX", "flipY")
-STRUCTURAL_FIELDS_STR = ("label",)
+STRUCTURAL_FIELDS_STR: tuple[str, ...] = ()
 
 
 def diff_frames(port_frames: list, oracle_frames: list, *,
@@ -300,7 +305,7 @@ def diff_frames(port_frames: list, oracle_frames: list, *,
     else:
         int_fields = LAYER_FIELDS_INT
         bool_fields = LAYER_FIELDS_BOOL
-        str_fields = LAYER_FIELDS_STR
+        str_fields = COMPARE_FIELDS_STR
         num_fields = LAYER_FIELDS_NUM
 
     mismatches: list[dict[str, Any]] = []

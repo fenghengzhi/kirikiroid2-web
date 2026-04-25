@@ -431,8 +431,8 @@ jobs:
       #    input `record_motion_playback_oracle=true`. Produces
       #    tests/differential/traces/motion_playback/*.oracle.json, uploaded
       #    as an artifact. Operator downloads, commits to the repo, pushes;
-      #    subsequent runs of run_motion_playback.py --only-structural on
-      #    the host then diff the port CLI against the recorded goldens.
+      #    normal Tests workflow runs then diff the Browser-WASM motionTrace
+      #    output against the recorded goldens.
       - name: Record motion_playback goldens
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.record_motion_playback_oracle == 'true'
         env:

@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 """motion_playback differential runner.
 
-Default fast path:
-    Runs the host-native `motion_playback_port` CLI for each spec and
-    diffs its frame snapshot against a checked-in disk golden under
-    `tests/differential/traces/motion_playback/<id>.oracle.json`. No ADB
-    or Redroid required — pure CI lane.
+Default path:
+    Starts the Browser-WASM build, loads `logo_test_oracle.xp3`, collects
+    the port-side `motionTrace=1` Motion.Player state trace, and diffs it
+    against checked-in libkrkr2 goldens under
+    `tests/differential/traces/motion_playback/<id>.oracle.json`.
 
 Re-record path (`--record-oracle`):
     Spawns the APK harness on a Redroid / AVD device, triggers
-    `TVPMainScene::startupFrom(logo_test.xp3)` via harness-RPC (which
-    only schedules — actual playback runs on the cocos2d GL thread),
-    and attaches Frida to hook `Player_updateLayers` for per-frame
-    per-layer state. Both motion fixtures (yuzulogo, m2logo) are
-    recorded in a single playback since startup.tjs plays them
-    sequentially. Requires a running `frida-server` on the device.
+    `TVPMainScene::startupFrom(logo_test_oracle.xp3)` via harness-RPC,
+    and attaches Frida to hook Motion.Player progress/updateLayers.
 
 Usage:
-    run_motion_playback.py [--spec-dir DIR] [--port-runner PATH]
+    run_motion_playback.py [--spec-dir DIR] [--web-build-dir DIR]
                            [--trace-dir DIR] [--record-oracle]
                            [--serial ADB_SERIAL]
 """
@@ -25,11 +21,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import functools
+import http.server
 import json
-import os
-import subprocess
+import mimetypes
 import sys
+import threading
+import time
+import urllib.parse
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 # Match the import pattern used by the other run_*_adb.py runners:
@@ -38,7 +39,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # package parent) goes on sys.path rather than oracle_runner itself.
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
 
-# Imported lazily so the disk-only fast path doesn't need adb_engine deps.
+mimetypes.add_type("application/wasm", ".wasm")
+mimetypes.add_type("application/octet-stream", ".data")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -51,11 +53,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    default=str(REPO_ROOT / "tests" / "differential" /
                                "traces" / "motion_playback"),
                    help="Directory of cached oracle JSONs")
-    p.add_argument("--port-runner",
-                   default=str(REPO_ROOT / "out" / "macos" / "debug" /
-                               "tests" / "differential" /
-                               "port_runners" / "motion_playback_port"),
-                   help="Path to the motion_playback_port executable")
+    p.add_argument("--web-build-dir",
+                   default=str(REPO_ROOT / "out" / "web" / "debug"),
+                   help="Directory containing index.html/index.wasm")
     p.add_argument("--record-oracle", action="store_true",
                    help="Re-record disk goldens from a live APK harness "
                         "(requires --serial and a deployed harness)")
@@ -65,11 +65,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Fail when a disk golden is missing instead of "
                         "auto-skipping the case")
     p.add_argument("--only-structural", action="store_true",
-                   help="Diff only structural fields (index/label/nodeType/"
-                        "visible/active/flipX/flipY/opacity/blendMode); skip "
-                        "the accumulated transform fields that rely on "
-                        "Player::runUpdatePassForOracle, which currently "
-                        "segfaults in the headless port CLI")
+                   help="Diff only structural Motion state fields "
+                        "(index/nodeType/visible/active/flipX/flipY/"
+                        "opacity/blendMode); skip accumulated transform "
+                        "fields. Diagnostic strings/images are not compared "
+                        "by default.")
+    p.add_argument("--playback-timeout", type=float, default=90.0,
+                   help="Seconds to wait for Browser-WASM playback trace")
     return p.parse_args(argv)
 
 
@@ -81,40 +83,226 @@ def load_specs(spec_dir: Path) -> list[dict]:
     return specs
 
 
-def run_port_snapshot(runner: Path, spec: dict) -> list:
-    """Invoke motion_playback_port and parse its stdout JSON."""
-    mtn = spec["mtn_path"]
-    if not Path(mtn).is_absolute():
-        mtn = str(REPO_ROOT / mtn)
-    cmd = [
-        str(runner),
-        "--mtn", mtn,
-        "--label", spec["label"],
-        "--frames", str(int(spec["frames"])),
-    ]
-    if "seed" in spec and spec["seed"] is not None:
-        cmd += ["--seed", str(int(spec["seed"]))]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"port runner exit {proc.returncode}\n"
-            f"stderr (last 1KB):\n{proc.stderr[-1024:]}"
+class _MotionTraceHandler(http.server.SimpleHTTPRequestHandler):
+    xp3_path: Path
+
+    def end_headers(self) -> None:
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        super().end_headers()
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server API
+        if self._is_data_xp3():
+            self._serve_xp3(head_only=False)
+        else:
+            super().do_GET()
+
+    def do_HEAD(self) -> None:  # noqa: N802 - http.server API
+        if self._is_data_xp3():
+            self._serve_xp3(head_only=True)
+        else:
+            super().do_HEAD()
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        return
+
+    def _is_data_xp3(self) -> bool:
+        path = urllib.parse.urlparse(self.path).path
+        return path == "/data.xp3"
+
+    def _serve_xp3(self, *, head_only: bool) -> None:
+        try:
+            size = self.xp3_path.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            if head_only:
+                return
+            with self.xp3_path.open("rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except Exception as exc:
+            self.send_error(500, str(exc))
+
+
+class _TraceServer:
+    def __init__(self, web_build_dir: Path, xp3_path: Path) -> None:
+        self.web_build_dir = web_build_dir
+        self.xp3_path = xp3_path
+        self.httpd: http.server.ThreadingHTTPServer | None = None
+        self.thread: threading.Thread | None = None
+        self.url: str | None = None
+
+    def __enter__(self) -> "_TraceServer":
+        handler_cls = type(
+            "MotionPlaybackTraceHandler",
+            (_MotionTraceHandler,),
+            {"xp3_path": self.xp3_path},
         )
-    return json.loads(proc.stdout)
+        handler = functools.partial(handler_cls,
+                                    directory=str(self.web_build_dir))
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
+                                                     handler)
+        host, port = self.httpd.server_address
+        self.url = (
+            f"http://{host}:{port}/index.html"
+            "?xp3=/data.xp3&motionTrace=1"
+        )
+        self.thread = threading.Thread(target=self.httpd.serve_forever,
+                                       name="motion-trace-http",
+                                       daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.httpd is not None:
+            self.httpd.shutdown()
+            self.httpd.server_close()
+        if self.thread is not None:
+            self.thread.join(timeout=5.0)
+
+
+def _load_playwright():
+    try:
+        from playwright.sync_api import sync_playwright  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "playwright is not installed; run "
+            "`python3 -m pip install -r "
+            "tests/differential/python/requirements-wasm.txt` and "
+            "`python3 -m playwright install chromium`"
+        ) from exc
+    return sync_playwright
+
+
+def _segment_events(events: list[dict]) -> list[dict]:
+    segments: list[dict] = []
+    for ev in events:
+        key = ev.get("objthis") or ev.get("topPlayer")
+        if not segments or segments[-1]["player"] != key:
+            segments.append({"player": key, "frames": []})
+        segments[-1]["frames"].append(ev)
+    return segments
+
+
+def _wait_for_motion_trace(page, *, wanted_frames: int,
+                           timeout: float) -> list[dict]:
+    deadline = time.time() + timeout
+    last_count = -1
+    stable_since: float | None = None
+    while time.time() < deadline:
+        count = int(page.evaluate(
+            "() => (window.__krkr2MotionTrace || []).length"
+        ))
+        if count != last_count:
+            stable_since = None
+            last_count = count
+        elif count >= wanted_frames and stable_since is None:
+            stable_since = time.time()
+        if stable_since is not None and time.time() - stable_since >= 1.5:
+            events = page.evaluate(
+                "() => (window.__krkr2MotionTrace || []).slice()"
+            )
+            return list(events or [])
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"Browser-WASM motionTrace timed out after {timeout:.1f}s "
+        f"(last frame count: {last_count}, expected at least {wanted_frames})"
+    )
+
+
+def run_web_port_trace(web_build_dir: Path, specs: list[dict],
+                       *, timeout: float) -> list[dict]:
+    index_html = web_build_dir / "index.html"
+    if not index_html.exists():
+        raise FileNotFoundError(
+            f"Web build missing index.html: {index_html}. "
+            "Build with `cmake --preset \"Web Debug Config\"` and "
+            "`cmake --build out/web/debug`."
+        )
+    xp3_path = REPO_ROOT / "reference" / "xp3" / "logo_test_oracle.xp3"
+    if not xp3_path.exists():
+        raise FileNotFoundError(f"oracle bootstrap xp3 missing: {xp3_path}")
+
+    sync_playwright = _load_playwright()
+    wanted_frames = sum(int(s["frames"]) for s in specs)
+    console_lines: list[str] = []
+    with _TraceServer(web_build_dir, xp3_path) as server:
+        assert server.url is not None
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            page = browser.new_page(viewport={"width": 1920, "height": 1080})
+            page.on("console", lambda msg:
+                    console_lines.append(f"[{msg.type}] {msg.text}"))
+            try:
+                page.goto(server.url, wait_until="domcontentloaded",
+                          timeout=int(timeout * 1000))
+                return _wait_for_motion_trace(page,
+                                              wanted_frames=wanted_frames,
+                                              timeout=timeout)
+            except Exception as exc:
+                tail = "\n".join(console_lines[-40:])
+                raise RuntimeError(
+                    f"Browser-WASM motion trace failed: {exc}\n"
+                    f"console tail:\n{tail}"
+                ) from exc
+            finally:
+                browser.close()
+
+
+def partition_port_frames(events: list[dict], specs: list[dict], mpb) -> dict:
+    specs_by_id = {s["id"]: s for s in specs}
+    unknown = [sid for sid in specs_by_id if sid not in mpb.SEGMENT_ORDER]
+    if unknown:
+        raise ValueError(
+            f"unknown motion_playback spec id(s): {unknown}. "
+            f"Expected ids are fixed by logo_test_oracle.xp3: "
+            f"{mpb.SEGMENT_ORDER}."
+        )
+
+    segments = _segment_events(events)
+    substantive = [s for s in segments if len(s["frames"]) >= 30]
+    if len(substantive) < len(specs_by_id):
+        raise RuntimeError(
+            f"only {len(substantive)} substantive Browser-WASM segment(s) "
+            f"captured (raw segments: {[len(s['frames']) for s in segments]})."
+        )
+
+    results: dict[str, list[dict]] = {}
+    for i, spec_id in enumerate(mpb.SEGMENT_ORDER):
+        if spec_id not in specs_by_id:
+            continue
+        spec = specs_by_id[spec_id]
+        wanted = int(spec["frames"])
+        frames = substantive[i]["frames"]
+        if len(frames) < wanted:
+            raise RuntimeError(
+                f"Browser-WASM segment {i} ({spec_id}) has "
+                f"{len(frames)} frames; spec requires {wanted}."
+            )
+        results[spec_id] = [
+            mpb.normalize_frame(fr, fi)
+            for fi, fr in enumerate(frames[:wanted])
+        ]
+    return results
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     spec_dir = Path(args.spec_dir)
     trace_dir = Path(args.trace_dir)
-    runner = Path(args.port_runner)
+    web_build_dir = Path(args.web_build_dir)
 
     if not spec_dir.exists():
         print(f"spec dir not found: {spec_dir}", file=sys.stderr)
-        return 2
-    if not runner.exists() and not args.record_oracle:
-        print(f"port runner missing (build the motion_playback_port target): "
-              f"{runner}", file=sys.stderr)
         return 2
 
     specs = load_specs(spec_dir)
@@ -131,13 +319,13 @@ def main(argv: list[str]) -> int:
             return 2
         trace_dir.mkdir(parents=True, exist_ok=True)
         # Single playback covers every spec: startup.tjs inside
-        # logo_test.xp3 plays all SEGMENT_ORDER motions sequentially, and
-        # cocos2d only accepts one scheduleOnce("startup", ...) per
+        # logo_test_oracle.xp3 plays all SEGMENT_ORDER motions sequentially,
+        # and cocos2d only accepts one scheduleOnce("startup", ...) per
         # Activity lifetime. mpb.record_all_oracles returns
         # {spec_id: frames} in one shot.
         with AdbHarnessEngine(serial=args.serial) as engine:
             print(f"[record] capturing all {len(specs)} specs in one "
-                  f"playback (Frida-hooked Player_updateLayers)")
+                  f"playback (Frida-hooked Motion.Player progress)")
             all_frames = mpb.record_all_oracles(
                 engine, specs, serial=args.serial)
         for spec in specs:
@@ -152,12 +340,15 @@ def main(argv: list[str]) -> int:
                 json.dump(frames, f, indent=2, sort_keys=True)
             print(f"[record] {spec['id']}: wrote {len(frames)} frames "
                   f"to {target}")
-        # Record-only: port CLI isn't required on the recording host
-        # (CI's Redroid runner only has libkrkr2 + harness APK, not a
-        # host-native motion::Player build). The host-side fast-path
-        # verification is a separate invocation after the operator
-        # commits the goldens.
         return 0
+
+    try:
+        port_events = run_web_port_trace(web_build_dir, specs,
+                                         timeout=args.playback_timeout)
+        port_frames_by_id = partition_port_frames(port_events, specs, mpb)
+    except Exception as exc:
+        print(f"FAIL: Browser-WASM port trace error: {exc}", file=sys.stderr)
+        return 1
 
     failures = 0
     for spec in specs:
@@ -172,13 +363,14 @@ def main(argv: list[str]) -> int:
             continue
         with oracle_path.open() as f:
             oracle_frames = json.load(f)
-        try:
-            port_frames = run_port_snapshot(runner, spec)
-        except Exception as exc:
-            print(f"FAIL: {spec['id']}: port snapshot error: {exc}",
+
+        port_frames = port_frames_by_id.get(spec["id"])
+        if port_frames is None:
+            print(f"FAIL: {spec['id']}: no Browser-WASM frames captured",
                   file=sys.stderr)
             failures += 1
             continue
+
         result = mpb.run_case(None, spec,
                               port_frames=port_frames,
                               oracle_frames=oracle_frames,

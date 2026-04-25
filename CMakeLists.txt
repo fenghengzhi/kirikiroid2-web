@@ -40,6 +40,23 @@ project(${APP_NAME})
 option(ENABLE_TESTS "enable tests execute build(exclude android)" ON)
 option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
 option(KRKR2_WEB_DEBUG_ENABLE_ASAN "enable AddressSanitizer in Web Debug builds" ON)
+option(KRKR2_ENABLE_WASMTIME_HEADLESS "build the generic Wasmtime headless debug runner" OFF)
+if(NOT DEFINED KRKR2_USE_STUB_SPDLOG)
+    set(_KRKR2_USE_STUB_SPDLOG_DEFAULT OFF)
+    if(WEB AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(_KRKR2_USE_STUB_SPDLOG_DEFAULT ON)
+    endif()
+    set(KRKR2_USE_STUB_SPDLOG ${_KRKR2_USE_STUB_SPDLOG_DEFAULT} CACHE BOOL
+        "use the no-op spdlog stub package")
+endif()
+
+if(KRKR2_USE_STUB_SPDLOG)
+    set(spdlog_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/spdlog_stub" CACHE PATH
+        "stub spdlog package path" FORCE)
+    message(STATUS "Using no-op spdlog stub")
+elseif(DEFINED spdlog_DIR AND spdlog_DIR MATCHES "/cmake/spdlog_stub$")
+    unset(spdlog_DIR CACHE)
+endif()
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
@@ -183,6 +200,9 @@ add_subdirectory(${KRKR2CORE_PATH})
 add_subdirectory(${KRKR2PLUGIN_PATH})
 if(WEB)
     add_subdirectory(tests/differential/wasm)
+    if(KRKR2_ENABLE_WASMTIME_HEADLESS)
+        add_subdirectory(platforms/wasmtime)
+    endif()
 endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC

@@ -7,6 +7,38 @@
   },
   "configurePresets": [
     {
+      "name": "MacOS Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "cacheVariables": {
+        "MACOS": true,
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "MacOS Debug Config",
+      "inherits": "MacOS Config",
+      "binaryDir": "${sourceDir}/out/macos/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "MacOS Release Config",
+      "inherits": "MacOS Config",
+      "binaryDir": "${sourceDir}/out/macos/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
       "name": "Web Config",
       "generator": "Ninja",
       "hidden": true,
@@ -38,6 +70,27 @@
       }
     },
     {
+      "name": "Web Wasmtime Debug Config",
+      "inherits": "Web Config",
+      "binaryDir": "${sourceDir}/out/web/wasmtime-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "KRKR2_WEB_DEBUG_ENABLE_ASAN": false,
+        "KRKR2_USE_STUB_SPDLOG": true
+      }
+    },
+    {
+      "name": "Wasmtime Headless Debug Config",
+      "inherits": "Web Config",
+      "binaryDir": "${sourceDir}/out/wasmtime/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "KRKR2_WEB_DEBUG_ENABLE_ASAN": false,
+        "KRKR2_USE_STUB_SPDLOG": true,
+        "KRKR2_ENABLE_WASMTIME_HEADLESS": true
+      }
+    },
+    {
       "name": "Web Release Config",
       "inherits": "Web Config",
       "binaryDir": "${sourceDir}/out/web/release",
@@ -48,12 +101,28 @@
   ],
   "buildPresets": [
     {
+      "name": "MacOS Debug Build",
+      "configurePreset": "MacOS Debug Config"
+    },
+    {
+      "name": "MacOS Release Build",
+      "configurePreset": "MacOS Release Config"
+    },
+    {
       "name": "Web Debug Asan Build",
       "configurePreset": "Web Debug Asan Config"
     },
     {
       "name": "Web Debug Build",
       "configurePreset": "Web Debug Config"
+    },
+    {
+      "name": "Web Wasmtime Debug Build",
+      "configurePreset": "Web Wasmtime Debug Config"
+    },
+    {
+      "name": "Wasmtime Headless Debug Build",
+      "configurePreset": "Wasmtime Headless Debug Config"
     },
     {
       "name": "Web Release Build",

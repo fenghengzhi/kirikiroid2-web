@@ -13,9 +13,7 @@ add_subdirectory(unit-tests/core/visual)
 add_subdirectory(unit-tests/core/tjs2)
 
 add_subdirectory(unit-tests/plugins)
-
-# Host-native CLI runners for differential oracles (no-op under emscripten).
-add_subdirectory(differential/port_runners)
+add_subdirectory(differential/native)
 
 set(TEST_FILES_PATH ${CMAKE_CURRENT_SOURCE_DIR}/test_files)
 configure_file(test_config.h.in test_config.h)

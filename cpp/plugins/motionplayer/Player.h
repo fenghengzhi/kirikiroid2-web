@@ -515,17 +515,10 @@ namespace motion {
         void updateLayersPhase3_AnchorNode();                 // sub_6C0528
 
     public:
-        // Non-owning read access to the internal runtime for offline tooling
-        // (tests/differential/port_runners/motion_playback_port.cpp). Not part
-        // of the engine's public contract — do not call from production code.
+        // Non-owning read access to the internal runtime for offline tooling.
+        // Not part of the engine's public contract — do not call from
+        // production code.
         const detail::PlayerRuntime *runtime() const { return _runtime.get(); }
-
-        // Trigger a single update pass on the internal pipeline (node-tree
-        // build + updateLayers + calcBounds). Mirrors the prefix of
-        // progressCompatMethod() at PlayerQuery.cpp:1526..1536 without the
-        // TJS-event marshalling. Public solely for the offline oracle
-        // snapshotter so it can capture per-frame `accumulated` state.
-        void runUpdatePassForOracle();
 
     private:
         std::shared_ptr<detail::PlayerRuntime> _runtime;

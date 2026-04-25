@@ -7,19 +7,20 @@
 // never calls Motion.Player methods directly, so there's no thread-
 // affinity SIGSEGV risk.
 //
-// Hook: `Player_progressCompat` @ libkrkr2.so+0x6D2A98 (TJS wrapper
-// for `Motion.Player::progress(delta)`). The reason we use this and
-// not `Player_updateLayers` (+0x6BB33C): progressCompat is called
-// exactly ONCE per TJS-driven frame, from the top-level Player only;
-// each Player has a deque of sub-Motion.Player instances whose
-// updateLayers ALSO fire per frame, and updateLayers doesn't
-// distinguish top-level vs. sub. Hooking progressCompat side-steps
-// that — the top-level is whoever TJS's startup.tjs holds the
-// reference to, which is also the only Player whose progress()
-// bubbles through the TJS call chain. onLeave is safe: progressCompat
-// internally runs `progress_inner → updateLayers → calcBounds →
-// dispatchEvents`, so by onLeave every Node's accum block
-// (node+1505..1576) is coherent.
+// Frame window: `Player_progressCompat` @ libkrkr2.so+0x6D2A98 (TJS
+// wrapper for `Motion.Player::progress(delta)`). It is called exactly
+// once per TJS-driven frame, from the top-level Player only; each Player
+// has sub-Motion.Player instances whose updateLayers ALSO fire per
+// frame, and updateLayers alone doesn't distinguish top-level vs. sub.
+//
+// Sampling point: `Player_updateLayers` phase3 end, immediately before
+// the cleanup block starts. We hook the last phase3 helper
+// `Player_evaluateCameraNodes` at its function boundary and sample in
+// `onLeave`; this observes the parent `updateLayers` state after phase3
+// and before cleanup without instrumenting the middle of updateLayers.
+// This is the render-relevant accumulated state, before updateLayers
+// clears scratch per-node flags. The macOS LLDB native tracer samples
+// the same phase3 helper return boundary for parity.
 //
 // Host-side (frida_motion_tracer.py) calls over RPC:
 //   setup()           -> { base: "0x...", nodeStride: 2632 }
@@ -35,6 +36,7 @@
 
 const PLAYER_PROGRESS_COMPAT_OFF = 0x6D2A98;  // TJS Motion.Player.progress wrapper
 const PLAYER_UPDATE_LAYERS_OFF   = 0x6BB33C;  // void Player_updateLayers(Player*)
+const PLAYER_PHASE3_LAST_OFF     = 0x6C0528;  // Player_evaluateCameraNodes(Player*)
 const NODE_STRIDE = 2632;
 
 // Node accum-block offsets (confirmed by ida-deep-analyzer; see
@@ -72,10 +74,10 @@ function ensureBase() {
     return base;
 }
 
-// Read a Node's accum fields. Returns plain object matching the oracle
-// schema expected by motion_playback_port.cpp (LAYER_FIELDS_*). Fields
-// with special encoding (label, currentImage) are filled by the walker
-// that owns the labelMap context.
+// Read a Node's accum fields. Returns a plain object matching the oracle
+// schema consumed by the Browser-WASM motionTrace hook. Fields with
+// special encoding (label, currentImage) are filled by the walker that
+// owns the labelMap context.
 function readNodeAccum(nodePtr) {
     return {
         nodeType: nodePtr.add(NODE_OFF.nodeType).readS32(),
@@ -209,21 +211,18 @@ function walkNodes(playerPtr) {
 // Coordination between the two hooks. `inCompat` is true while we're
 // inside a progressCompat invocation (i.e. TJS just called
 // Motion.Player.progress on a top-level Player). During that window,
-// Player_updateLayers fires once for the top-level Player (which only
-// owns the "player position" root node) and once for each sub-
-// Motion.Player child (which owns the actual animated body-part layers
-// from the .mtn timeline). We record EVERY player seen inside the
-// window — at progressCompat onLeave we walk all of them and flatten
-// their nodes into a single per-frame layer list, matching the schema
-// motion_playback_port.cpp produces.
+// the phase3-end updateLayers sample point fires once for the top-level
+// Player and once for each sub-Motion.Player child. We walk EVERY player
+// at that exact pre-cleanup point, then flatten the sampled layers at
+// progressCompat onLeave into the schema consumed by the verifier.
 let inCompat = false;
-let playersInFrame = [];
+let samplesInFrame = [];
 let capturedObjthis = null;
 
 function installHook() {
     if (hooked) return;
     const compatAddr = ensureBase().add(PLAYER_PROGRESS_COMPAT_OFF);
-    const updateAddr = ensureBase().add(PLAYER_UPDATE_LAYERS_OFF);
+    const phase3LastAddr = ensureBase().add(PLAYER_PHASE3_LAST_OFF);
 
     // progressCompat is NCB's TJS methodCompat thunk; signature is
     //   methodCompat(tTJSVariant *result,
@@ -236,46 +235,40 @@ function installHook() {
     Interceptor.attach(compatAddr, {
         onEnter(args) {
             inCompat = true;
-            playersInFrame = [];
+            samplesInFrame = [];
             capturedObjthis = args[3];
         },
         onLeave(retval) {
             inCompat = false;
             if (!recording) {
-                playersInFrame = [];
+                samplesInFrame = [];
                 capturedObjthis = null;
                 return;
             }
             const objthis = capturedObjthis;
-            const players = playersInFrame;
-            playersInFrame = [];
+            const samples = samplesInFrame;
+            samplesInFrame = [];
             capturedObjthis = null;
 
-            // Walk each observed Player's node deque and concatenate
-            // into a flat layer list. Each layer keeps its source
-            // player pointer in case the host adapter wants to cross-
-            // check, but the primary index is global (order of update).
             const flatLayers = [];
-            let layoutTag = 'ok';
+            let layoutTag = 'pre-cleanup';
             let walkError = null;
-            for (const p of players) {
-                try {
-                    const w = walkNodes(p);
-                    for (const l of w.layers) {
-                        l.sourcePlayer = p.toString();
-                        l.index = flatLayers.length;
-                        flatLayers.push(l);
-                    }
-                    if (w.layout !== 'vec@208') layoutTag = w.layout;
-                } catch (e) {
-                    walkError = walkError || String(e);
+            for (const sample of samples) {
+                for (const l of sample.layers) {
+                    l.sourcePlayer = sample.player.toString();
+                    l.index = flatLayers.length;
+                    flatLayers.push(l);
                 }
+                if (sample.layout && sample.layout !== 'deque') {
+                    layoutTag = sample.layout;
+                }
+                walkError = walkError || sample.error;
             }
             events.push({
                 frameId: frameCounter++,
                 objthis: objthis ? objthis.toString() : null,
-                topPlayer: players.length > 0 ? players[0].toString() : null,
-                playerCount: players.length,
+                topPlayer: samples.length > 0 ? samples[0].player.toString() : null,
+                playerCount: samples.length,
                 layout: layoutTag,
                 layers: flatLayers,
                 error: walkError,
@@ -283,15 +276,32 @@ function installHook() {
         },
     });
 
-    // Player_updateLayers(Player *this_) — the accum-state producer.
-    // Fires once per Player per frame. Within a progressCompat window
-    // we expect 1 + N hits: one for the top-level Player and one for
-    // each sub-Motion.Player child owned by it. We record each hit's
-    // Player* — the onLeave of progressCompat then walks all of them.
-    Interceptor.attach(updateAddr, {
+    // Player_updateLayers phase3-end sample point. This helper is called
+    // last in phase3 with Player* in x0; onLeave runs after phase3 and
+    // before the caller's cleanup loop.
+    Interceptor.attach(phase3LastAddr, {
         onEnter(args) {
-            if (!inCompat) return;
-            playersInFrame.push(args[0]);
+            this.player = args[0];
+        },
+        onLeave() {
+            if (!inCompat || !recording) return;
+            const player = this.player;
+            try {
+                const w = walkNodes(player);
+                samplesInFrame.push({
+                    player: player,
+                    layout: w.layout,
+                    layers: w.layers,
+                    error: w.error || null,
+                });
+            } catch (e) {
+                samplesInFrame.push({
+                    player: player,
+                    layout: 'sample-error',
+                    layers: [],
+                    error: String(e),
+                });
+            }
         },
     });
     hooked = true;
@@ -304,6 +314,7 @@ rpc.exports = {
             base: ensureBase().toString(),
             nodeStride: NODE_STRIDE,
             hookOffset: PLAYER_PROGRESS_COMPAT_OFF,
+            sampleOffset: PLAYER_PHASE3_LAST_OFF,
         };
     },
     startRecord() {
