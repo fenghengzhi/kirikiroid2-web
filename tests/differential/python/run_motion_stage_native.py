@@ -18,6 +18,18 @@ sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
 
 SCHEMA = "motion-stage-oracle-v1"
 SOURCE = "native-lldb-macos"
+TRACE_FLATTEN_PROJECTION = "trace_flatten-semantic-v1"
+TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
+TRACE_FLATTEN_NUM_FIELDS: tuple[str, ...] = (
+    "posX", "posY", "posZ", "angleDeg",
+    "scaleX", "scaleY", "slantX", "slantY",
+)
+TRACE_FLATTEN_INT_FIELDS: tuple[str, ...] = (
+    "index", "nodeType", "opacity", "stencilType",
+)
+TRACE_FLATTEN_BOOL_FIELDS: tuple[str, ...] = (
+    "visible", "active", "flipX", "flipY",
+)
 STAGES: tuple[str, ...] = (
     "static_parse",
     "init_motion",
@@ -191,7 +203,13 @@ def trace_flatten_frames(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def segment_trace_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     segments: list[dict[str, Any]] = []
     for frame in frames:
-        key = frame.get("objthis") or frame.get("topPlayer")
+        diagnostics = frame.get("diagnostics") or {}
+        key = (
+            diagnostics.get("objthis")
+            or diagnostics.get("topPlayer")
+            or frame.get("objthis")
+            or frame.get("topPlayer")
+        )
         if not segments or segments[-1]["player"] != key:
             segments.append({"player": key, "frames": []})
         segments[-1]["frames"].append(frame)
@@ -345,11 +363,166 @@ def load_oracle_payload(trace_dir: Path, stage: str, case_id: str) -> dict[str, 
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def trace_flatten_schema_mismatches(
+    events: list[dict[str, Any]],
+    *,
+    side: str,
+) -> list[dict[str, Any]]:
+    mismatches: list[dict[str, Any]] = []
+    forbidden_event_fields = ("objthis", "topPlayer", "layout", "error")
+    forbidden_layer_fields = (
+        "blendMode", "sourcePlayer", "label", "currentImage",
+    )
+    for frame_index, ev in enumerate(events):
+        if ev.get("projection") != TRACE_FLATTEN_PROJECTION:
+            mismatches.append({
+                "kind": "trace_flatten_schema",
+                "side": side,
+                "frame": frame_index,
+                "field": "projection",
+                "value": ev.get("projection"),
+                "expected": TRACE_FLATTEN_PROJECTION,
+            })
+        if ev.get("samplePoint") != TRACE_FLATTEN_SAMPLE_POINT:
+            mismatches.append({
+                "kind": "trace_flatten_schema",
+                "side": side,
+                "frame": frame_index,
+                "field": "samplePoint",
+                "value": ev.get("samplePoint"),
+                "expected": TRACE_FLATTEN_SAMPLE_POINT,
+            })
+        diagnostics = ev.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            mismatches.append({
+                "kind": "trace_flatten_schema",
+                "side": side,
+                "frame": frame_index,
+                "field": "diagnostics",
+                "value": type(diagnostics).__name__,
+                "expected": "dict",
+            })
+        for field in forbidden_event_fields:
+            if field in ev:
+                mismatches.append({
+                    "kind": "trace_flatten_schema",
+                    "side": side,
+                    "frame": frame_index,
+                    "field": field,
+                    "reason": "diagnostic_field_must_not_be_top_level",
+                })
+        for layer_index, layer in enumerate(ev.get("layers") or []):
+            for field in forbidden_layer_fields:
+                if field in layer:
+                    mismatches.append({
+                        "kind": "trace_flatten_schema",
+                        "side": side,
+                        "frame": frame_index,
+                        "layer_index": layer_index,
+                        "field": field,
+                        "reason": "non_semantic_layer_field",
+                    })
+            if "stencilType" not in layer:
+                mismatches.append({
+                    "kind": "trace_flatten_schema",
+                    "side": side,
+                    "frame": frame_index,
+                    "layer_index": layer_index,
+                    "field": "stencilType",
+                    "reason": "missing_semantic_layer_field",
+                })
+    return mismatches
+
+
 def normalize_trace_flatten_events(
     events: list[dict[str, Any]],
-    mpb,
 ) -> list[dict[str, Any]]:
-    return [mpb.normalize_frame(ev, i) for i, ev in enumerate(events)]
+    fields = (
+        TRACE_FLATTEN_NUM_FIELDS
+        + TRACE_FLATTEN_INT_FIELDS
+        + TRACE_FLATTEN_BOOL_FIELDS
+    )
+    out = []
+    for frame_index, ev in enumerate(events):
+        layers = [
+            {field: layer.get(field) for field in fields}
+            for layer in ev.get("layers", [])
+        ]
+        out.append({"frame": frame_index, "layers": layers})
+    return out
+
+
+def _floats_close(a: float, b: float, *, rel: float, abs_: float) -> bool:
+    return abs(a - b) <= max(abs_, rel * max(abs(a), abs(b)))
+
+
+def diff_trace_flatten_frames(
+    native_frames: list[dict[str, Any]],
+    oracle_frames: list[dict[str, Any]],
+    *,
+    structural_only: bool,
+    rel: float = 1e-6,
+    abs_: float = 1e-6,
+) -> list[dict[str, Any]]:
+    int_fields = TRACE_FLATTEN_INT_FIELDS
+    bool_fields = TRACE_FLATTEN_BOOL_FIELDS
+    num_fields = () if structural_only else TRACE_FLATTEN_NUM_FIELDS
+    mismatches: list[dict[str, Any]] = []
+    frame_count = min(len(native_frames), len(oracle_frames))
+    if len(native_frames) != len(oracle_frames):
+        mismatches.append({
+            "kind": "frame_count",
+            "native": len(native_frames),
+            "oracle": len(oracle_frames),
+        })
+    for frame_index in range(frame_count):
+        native_layers = native_frames[frame_index].get("layers", [])
+        oracle_layers = oracle_frames[frame_index].get("layers", [])
+        if len(native_layers) != len(oracle_layers):
+            mismatches.append({
+                "kind": "layer_count",
+                "frame": frame_index,
+                "native": len(native_layers),
+                "oracle": len(oracle_layers),
+            })
+        for layer_index in range(min(len(native_layers), len(oracle_layers))):
+            native_layer = native_layers[layer_index]
+            oracle_layer = oracle_layers[layer_index]
+            for field in int_fields + bool_fields:
+                if native_layer.get(field) != oracle_layer.get(field):
+                    mismatches.append({
+                        "kind": "field",
+                        "frame": frame_index,
+                        "layer_index": layer_index,
+                        "field": field,
+                        "native": native_layer.get(field),
+                        "oracle": oracle_layer.get(field),
+                    })
+            for field in num_fields:
+                native_value = native_layer.get(field)
+                oracle_value = oracle_layer.get(field)
+                if native_value is None or oracle_value is None:
+                    if native_value != oracle_value:
+                        mismatches.append({
+                            "kind": "field",
+                            "frame": frame_index,
+                            "layer_index": layer_index,
+                            "field": field,
+                            "native": native_value,
+                            "oracle": oracle_value,
+                        })
+                    continue
+                if not _floats_close(float(native_value), float(oracle_value),
+                                     rel=rel, abs_=abs_):
+                    mismatches.append({
+                        "kind": "float",
+                        "frame": frame_index,
+                        "layer_index": layer_index,
+                        "field": field,
+                        "native": native_value,
+                        "oracle": oracle_value,
+                    })
+    return mismatches
 
 
 def frame_ids(events: list[dict[str, Any]]) -> set[int]:
@@ -598,32 +771,36 @@ def main(argv: list[str]) -> int:
                 continue
 
             if stage == "trace_flatten":
-                native_frames = normalize_trace_flatten_events(
-                    native_payload.get("events") or [], mpb)
-                oracle_frames = normalize_trace_flatten_events(
-                    oracle_payload.get("events") or [], mpb)
-                result = mpb.run_case(
-                    None,
-                    spec_by_id[case_id],
-                    port_frames=native_frames,
-                    oracle_frames=oracle_frames,
+                native_events = native_payload.get("events") or []
+                oracle_events = oracle_payload.get("events") or []
+                schema_mismatches = (
+                    trace_flatten_schema_mismatches(
+                        native_events, side="native")
+                    + trace_flatten_schema_mismatches(
+                        oracle_events, side="oracle")
+                )
+                native_frames = normalize_trace_flatten_events(native_events)
+                oracle_frames = normalize_trace_flatten_events(oracle_events)
+                mismatches = schema_mismatches + diff_trace_flatten_frames(
+                    native_frames,
+                    oracle_frames,
                     structural_only=args.only_structural,
                 )
-                if result["status"] == "ok":
+                if not mismatches:
                     print(
                         f"PASS: {stage}/{case_id} "
                         f"({len(native_frames)} frames)"
                     )
                 else:
                     print(
-                        f"FAIL: {stage}/{case_id}: {result['status']} "
-                        f"({len(result['mismatches'])} mismatches)"
+                        f"FAIL: {stage}/{case_id}: mismatch "
+                        f"({len(mismatches)} mismatches)"
                     )
-                    for mismatch in result["mismatches"][:10]:
+                    for mismatch in mismatches[:10]:
                         print(f"  {mismatch}")
-                    if len(result["mismatches"]) > 10:
+                    if len(mismatches) > 10:
                         print(
-                            f"  ... +{len(result['mismatches']) - 10} more")
+                            f"  ... +{len(mismatches) - 10} more")
                     failures += 1
                 continue
 

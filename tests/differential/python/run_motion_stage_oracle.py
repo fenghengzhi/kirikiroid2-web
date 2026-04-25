@@ -113,7 +113,13 @@ def trace_flatten_frames(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def segment_trace_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     segments: list[dict[str, Any]] = []
     for frame in frames:
-        key = frame.get("objthis") or frame.get("topPlayer")
+        diagnostics = frame.get("diagnostics") or {}
+        key = (
+            diagnostics.get("objthis")
+            or diagnostics.get("topPlayer")
+            or frame.get("objthis")
+            or frame.get("topPlayer")
+        )
         if not segments or segments[-1]["player"] != key:
             segments.append({"player": key, "frames": []})
         segments[-1]["frames"].append(frame)

@@ -44,6 +44,9 @@ BIND_PARAMETER_SYMBOL = "motion::Player::bindParameterValueLike_0x6C4668"
 EVALUATE_TIMELINE_SYMBOL = "evaluateTimelineLike_0x699AE4"
 SUB_MOTION_SYMBOL = "motion::Player::updateLayersPhase3_MotionSubNode"
 
+TRACE_FLATTEN_PROJECTION = "trace_flatten-semantic-v1"
+TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
+
 CANONICAL_ADDR = {
     "init_motion": 0x6B365C,
     "parse_parameter": 0x6B1718,
@@ -452,7 +455,8 @@ class NativeMotionStageTracer:
         ev["timeMs"] = int((time.monotonic() - self.start_monotonic) * 1000)
         if self.current_record is not None:
             ev.setdefault("frameId", self.current_record.get("frameId"))
-            ev.setdefault("objthis", self.current_record.get("objthis"))
+            if stage != "trace_flatten":
+                ev.setdefault("objthis", self.current_record.get("objthis"))
         self.seq_counter += 1
         self.events.append(ev)
 
@@ -491,23 +495,35 @@ class NativeMotionStageTracer:
             return
         record = info["record"]
         flat_layers: list[dict[str, Any]] = []
+        diagnostic_players: list[dict[str, Any]] = []
         players = record.get("players") or []
         for player in players:
+            layer_start = len(flat_layers)
             for layer in player["layers"]:
                 out = dict(layer)
                 out["index"] = len(flat_layers)
-                if player.get("ptr"):
-                    out["sourcePlayer"] = player["ptr"]
                 flat_layers.append(out)
+            diagnostic_players.append({
+                "ptr": player.get("ptr"),
+                "layout": player.get("layout"),
+                "layerStart": layer_start,
+                "layerCount": len(player.get("layers") or []),
+                "error": player.get("error"),
+            })
         errors = record.get("errors") or []
         self._emit("trace_flatten", "frame", {
+            "projection": TRACE_FLATTEN_PROJECTION,
+            "samplePoint": TRACE_FLATTEN_SAMPLE_POINT,
             "frameId": record.get("frameId"),
-            "objthis": record.get("objthis"),
-            "topPlayer": players[0]["ptr"] if players else None,
             "playerCount": len(players),
-            "layout": "pre-cleanup",
             "layers": flat_layers,
-            "error": "; ".join(errors) if errors else None,
+            "diagnostics": {
+                "objthis": record.get("objthis"),
+                "topPlayer": players[0]["ptr"] if players else None,
+                "layout": "pre-cleanup",
+                "players": diagnostic_players,
+                "error": "; ".join(errors) if errors else None,
+            },
         })
         self.frame_counter += 1
         if self.record_stack and self.record_stack[-1] is record:
@@ -652,7 +668,9 @@ class NativeMotionStageTracer:
             layers = self._dump_layers(frame, player)
             record["players"].append({
                 "ptr": player,
+                "layout": "vector",
                 "layers": layers,
+                "error": None,
             })
         except Exception as exc:
             record["errors"].append(str(exc))
@@ -1027,7 +1045,6 @@ class NativeMotionStageTracer:
             base = i * stride
             layers.append({
                 "index": i,
-                "label": "",
                 "nodeType": self._read_i32(blob, base + layout["nodeType"]),
                 "visible": self._read_bool(blob, base + layout["visible"]),
                 "active": self._read_bool(blob, base + layout["active"]),
@@ -1042,8 +1059,7 @@ class NativeMotionStageTracer:
                 "slantX": self._read_f64(blob, base + layout["slantX"]),
                 "slantY": self._read_f64(blob, base + layout["slantY"]),
                 "opacity": self._read_i32(blob, base + layout["opacity"]),
-                "blendMode": self._read_i32(blob, base + layout["stencilType"]),
-                "currentImage": "",
+                "stencilType": self._read_i32(blob, base + layout["stencilType"]),
             })
         return layers
 

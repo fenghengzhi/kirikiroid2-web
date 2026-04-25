@@ -16,6 +16,9 @@ const PLAYER_EVALUATE_TIMELINE_OFF = 0x699AE4;
 const PLAYER_SUB_MOTION_OFF      = 0x6BE0C0;
 const PLAYER_PHASE3_LAST_OFF     = 0x6C0528;
 
+const TRACE_FLATTEN_PROJECTION = 'trace_flatten-semantic-v1';
+const TRACE_FLATTEN_SAMPLE_POINT = 'progressCompat.phase3-end.pre-cleanup';
+
 const NODE_STRIDE = 2632;
 const PARAM_ENTRY_STRIDE = 56;
 
@@ -55,7 +58,7 @@ const NODE_OFF = {
     slantX: 1560,
     slantY: 1568,
     opacity: 1576,
-    blendMode: 52,
+    stencilType: 52,
 };
 
 const PARAM_OFF = {
@@ -190,7 +193,9 @@ function emit(stage, kind, payload) {
     ev.timeMs = Date.now() - startTimeMs;
     if (inCompat) {
         ev.frameId = currentFrameId;
-        ev.objthis = ptrHex(capturedObjthis);
+        if (stage !== STAGE_TRACE_FLATTEN) {
+            ev.objthis = ptrHex(capturedObjthis);
+        }
     }
     events.push(ev);
 }
@@ -392,7 +397,7 @@ function readNodeAccum(nodePtr) {
         slantX: readDouble(node, NODE_OFF.slantX),
         slantY: readDouble(node, NODE_OFF.slantY),
         opacity: readS32(node, NODE_OFF.opacity),
-        blendMode: readS32(node, NODE_OFF.blendMode),
+        stencilType: readS32(node, NODE_OFF.stencilType),
     };
 }
 
@@ -432,8 +437,6 @@ function walkNodes(playerPtr) {
             for (let i = 0; i < nodes.length; i++) {
                 const accum = readNodeAccum(nodes[i]);
                 accum.index = i;
-                accum.label = '';
-                accum.currentImage = '';
                 layers.push(accum);
             }
             return { layout: 'deque', layers: layers, nodeCount: nodes.length };
@@ -445,8 +448,6 @@ function walkNodes(playerPtr) {
     if (rootPtr === null) return { layout: 'empty', layers: [], nodeCount: 0 };
     const accum = readNodeAccum(rootPtr);
     accum.index = 0;
-    accum.label = '';
-    accum.currentImage = '';
     return { layout: 'root-only', layers: [accum], nodeCount: 1 };
 }
 
@@ -541,27 +542,41 @@ function installHook() {
             }
 
             const flatLayers = [];
+            const diagnosticPlayers = [];
             let layoutTag = 'pre-cleanup';
             let walkError = null;
             for (const sample of samples) {
+                const layerStart = flatLayers.length;
                 for (const l of sample.layers) {
-                    l.sourcePlayer = sample.player.toString();
-                    l.index = flatLayers.length;
-                    flatLayers.push(l);
+                    const out = Object.assign({}, l);
+                    out.index = flatLayers.length;
+                    flatLayers.push(out);
                 }
+                diagnosticPlayers.push({
+                    ptr: sample.player.toString(),
+                    layout: sample.layout || null,
+                    layerStart: layerStart,
+                    layerCount: sample.layers.length,
+                    error: sample.error || null,
+                });
                 if (sample.layout && sample.layout !== 'deque') {
                     layoutTag = sample.layout;
                 }
                 walkError = walkError || sample.error;
             }
             emit(STAGE_TRACE_FLATTEN, 'frame', {
+                projection: TRACE_FLATTEN_PROJECTION,
+                samplePoint: TRACE_FLATTEN_SAMPLE_POINT,
                 frameId: frameCounter++,
-                objthis: objthis ? objthis.toString() : null,
-                topPlayer: samples.length > 0 ? samples[0].player.toString() : null,
                 playerCount: samples.length,
-                layout: layoutTag,
                 layers: flatLayers,
-                error: walkError,
+                diagnostics: {
+                    objthis: objthis ? objthis.toString() : null,
+                    topPlayer: samples.length > 0 ? samples[0].player.toString() : null,
+                    layout: layoutTag,
+                    players: diagnosticPlayers,
+                    error: walkError,
+                },
             });
             samplesInFrame = [];
         },

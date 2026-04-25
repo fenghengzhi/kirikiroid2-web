@@ -128,6 +128,19 @@ sampling boundary. A passing diff means the two tracers observed
 equivalent stage outputs for the fixture; it must not be read as evidence
 that the port has reproduced libkrkr2's in-memory layout byte-for-byte.
 
+`trace_flatten` uses the `trace_flatten-semantic-v1` projection sampled at
+`progressCompat.phase3-end.pre-cleanup`. Its comparable layer fields are:
+`index`, `nodeType`, `visible`, `active`, `flipX`, `flipY`, `posX`,
+`posY`, `posZ`, `angleDeg`, `scaleX`, `scaleY`, `slantX`, `slantY`,
+`opacity`, and `stencilType`. The `stencilType` field is Android
+`node+52` and native `MotionNode::stencilType`; it is intentionally not
+named `blendMode` in the staged oracle schema.
+
+Pointer values, `objthis`, `topPlayer`, player source ranges, traversal
+layout, trace errors, and unsupported names/images are diagnostics only.
+They may be stored under `diagnostics` for segmentation and debugging,
+but they are not semantic `trace_flatten` diff fields.
+
 ## Prerequisites
 
 **libkrkr2.so + supporting libs** — private `reference` git submodule:
