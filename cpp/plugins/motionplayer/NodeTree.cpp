@@ -12,7 +12,7 @@
 #include "psbfile/PSBFile.h"
 
 #include <spdlog/spdlog.h>
-#include <unordered_map>
+#include <stdexcept>
 
 namespace motion::detail {
 
@@ -80,17 +80,37 @@ namespace motion::detail {
             return false;
         }
 
-        // Recursively walk PSB layer tree, appending nodes to the flat vector.
+        MotionParameterEntry *
+        resolveParameterEntryForNodeInit(PlayerRuntime &runtime,
+                                         const MotionNode &node) {
+            if(node.parameterizeIndex >= 0 &&
+               static_cast<size_t>(node.parameterizeIndex) <
+                   runtime.parameterEntries.size()) {
+                return &runtime.parameterEntries[static_cast<size_t>(
+                    node.parameterizeIndex)];
+            }
+            if(node.parameterizeIndex >= 0) {
+                throw std::out_of_range("parameter id out of range.");
+            }
+            if(runtime.defaultParameterEntryPtr != nullptr) {
+                return runtime.defaultParameterEntryPtr;
+            }
+            return &runtime.defaultParameterEntry;
+        }
+
+        // Recursively walk PSB layer tree, appending nodes to the Player deque.
         void walkTree(const std::shared_ptr<const PSB::PSBDictionary> &psbNode,
                       int parentIdx,
-                      std::vector<MotionNode> &nodes,
+                      PlayerRuntime &runtime,
                       motion::ResourceManager *resourceManager,
                       motion::Player *ownerPlayer,
                       int parentCompletionType) {
             if (!psbNode) return;
 
-            MotionNode node;
-            node.index = static_cast<int>(nodes.size());
+            auto &nodes = runtime.nodes;
+            nodes.emplace_back();
+            MotionNode &node = nodes.back();
+            node.index = static_cast<int>(nodes.size() - 1);
             node.parentIndex = parentIdx;
             node.psbNode = psbNode;
             if(resourceManager) {
@@ -100,6 +120,9 @@ namespace motion::detail {
 
             // "label" → layerName (node+0)
             node.layerName = nodeTreePsbString(psbNode, "label");
+            if(!node.layerName.empty()) {
+                runtime.nodeLabelMap[node.layerName] = node.index;
+            }
 
             // "type" → nodeType (node+28)
             // 0=obj, 1=shape, 3=motion, 4=particle, 5=camera, 6=emitter,
@@ -114,6 +137,7 @@ namespace motion::detail {
             // "parameterize" → parameter table index (node+8 in libkrkr2.so)
             if (auto v = nodeTreePsbNumber(psbNode, "parameterize"))
                 node.parameterizeIndex = static_cast<int>(*v);
+            node.parameterEntry = resolveParameterEntryForNodeInit(runtime, node);
             if (node.nodeType == 0) {
                 if (auto v = nodeTreePsbNumber(psbNode, "objTriPriority"))
                     node.objTriPriority = static_cast<int>(*v);
@@ -216,12 +240,17 @@ namespace motion::detail {
                 // operator new(0x568) → Player constructor → sub_6F1794 (NCB CreateAdaptor)
                 // → store as tTJSVariant at node+1912.
                 using PlayerAdaptor = ncbInstanceAdaptor<Player>;
-                auto *childNative = new Player(ResourceManager{}, ownerPlayer);
+                auto *childNative = new Player(
+                    resourceManager ? *resourceManager : ResourceManager{},
+                    ownerPlayer);
                 if (auto *dispatch = PlayerAdaptor::CreateAdaptor(childNative)) {
                     node.childPlayerVar = tTJSVariant(dispatch, dispatch);
                     dispatch->Release();
                 } else {
                     delete childNative;
+                }
+                if(ownerPlayer) {
+                    ownerPlayer->inheritChildPlayerStateLike_0x6B3C78(node);
                 }
             } else if (node.nodeType == 4) {
                 // Aligned to sub_6B3C78 case 4 (0x6B45D8..0x6B45E4):
@@ -232,9 +261,7 @@ namespace motion::detail {
                 }
             }
 
-            // Add this node to the flat vector
             const int thisIdx = node.index;
-            nodes.push_back(std::move(node));
 
             // Recurse into "children"
             auto children = nodeTreePsbList(psbNode, "children");
@@ -242,7 +269,7 @@ namespace motion::detail {
                 for (int i = 0; i < static_cast<int>(children->size()); ++i) {
                     auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                         (*children)[i]);
-                    walkTree(child, thisIdx, nodes, resourceManager,
+                    walkTree(child, thisIdx, runtime, resourceManager,
                              ownerPlayer, parentCompletionType);
                 }
             }
@@ -250,20 +277,17 @@ namespace motion::detail {
 
     } // anonymous namespace
 
-    std::vector<MotionNode> buildNodeTree(
+    void buildNodeTree(
+        PlayerRuntime &runtime,
         const MotionSnapshot &snapshot,
         const std::string &clipLabel,
         motion::ResourceManager *resourceManager,
         motion::Player *ownerPlayer,
         int parentCompletionType) {
 
-        std::vector<MotionNode> nodes;
-        // Aligned to Player_buildNodeTree (0x6B51F0): root index 0 is a
-        // synthetic container node, and all PSB layers are attached under it.
-        MotionNode root;
-        root.index = 0;
-        root.parentIndex = -1;
-        nodes.push_back(std::move(root));
+        ensureRootNodeLike_0x6CED30(runtime);
+        runtime.nodes.front().index = 0;
+        runtime.nodes.front().parentIndex = -1;
 
         // Determine which layer set to use: current clip content first, then
         // fall back to snapshot root-level layers. This matches libkrkr2.so
@@ -287,7 +311,7 @@ namespace motion::detail {
         }
 
         if (!layerList || layerList->empty()) {
-            return nodes;
+            return;
         }
 
         // Aligned to Player_buildNodeTree_recursive(player, 0, layerArray) at
@@ -296,27 +320,15 @@ namespace motion::detail {
         // top-level layers is the synthetic root at index 0.
         for (const auto &layerDict : *layerList) {
             if (!layerDict) continue;
-            walkTree(layerDict, 0, nodes, resourceManager, ownerPlayer,
+            walkTree(layerDict, 0, runtime, resourceManager, ownerPlayer,
                      parentCompletionType);
-        }
-
-        // Aligned to libkrkr2.so Player+24 label map (populated at 0x6B4CE4
-        // with std::map::operator[] — last-write-wins semantics). Later
-        // duplicate labels overwrite earlier ones so stencil composite mask
-        // resolution and TJS layer-by-name lookups converge on the same node.
-        std::unordered_map<std::string, int> nodeIndexByLabel;
-        nodeIndexByLabel.reserve(nodes.size());
-        for(const auto &node : nodes) {
-            if(!node.layerName.empty()) {
-                nodeIndexByLabel[node.layerName] = node.index;
-            }
         }
 
         // Aligned to Player_buildNodeTree post-pass (0x6B51F0..0x6B55AC):
         // type==12 nodes with stencilType bit 2 set walk
         // "stencilCompositeMaskLayerList", resolve label→node, and set node+1961
         // on the referenced mask layers.
-        for(auto &node : nodes) {
+        for(auto &node : runtime.nodes) {
             if(node.nodeType != 12 || (node.stencilType & 4) == 0 || !node.psbNode) {
                 continue;
             }
@@ -330,11 +342,11 @@ namespace motion::detail {
                 if(!label || label->value.empty()) {
                     continue;
                 }
-                auto it = nodeIndexByLabel.find(label->value);
-                if(it == nodeIndexByLabel.end()) {
+                auto it = runtime.nodeLabelMap.find(label->value);
+                if(it == runtime.nodeLabelMap.end()) {
                     continue;
                 }
-                auto &target = nodes[it->second];
+                auto &target = runtime.nodes[static_cast<size_t>(it->second)];
                 if(target.nodeType == 0 || target.nodeType == 3) {
                     target.stencilCompositeMaskReferenced = true;
                 }
@@ -343,10 +355,8 @@ namespace motion::detail {
 
         if (auto logger = spdlog::get("plugin")) {
             logger->debug("buildNodeTree: clipLabel='{}', rootLayers={}, {} nodes built",
-                          clipLabel, layerList->size(), nodes.size());
+                          clipLabel, layerList->size(), runtime.nodes.size());
         }
-
-        return nodes;
     }
 
 } // namespace motion::detail

@@ -30,6 +30,15 @@ STATIC_PARSE_SAMPLE_POINTS = {
 STATIC_PARSE_PARAMETER_FIELDS = (
     "index", "id", "discretization", "rangeBegin", "rangeEnd", "value", "mode",
 )
+INIT_MOTION_PROJECTION = "init-motion-semantic-v1"
+INIT_MOTION_SAMPLE_POINTS = {
+    "init_non_emote_enter": "initNonEmoteMotionLike_0x6B365C.enter",
+    "init_non_emote_leave": "initNonEmoteMotionLike_0x6B365C.leave",
+}
+INIT_MOTION_OVERVIEW_FIELDS = (
+    "nodeCount", "parameterTable", "playing",
+    "currentTime",
+)
 TRACE_FLATTEN_PROJECTION = "trace_flatten-semantic-v1"
 TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
 TRACE_FLATTEN_NUM_FIELDS: tuple[str, ...] = (
@@ -665,6 +674,160 @@ def diff_static_parse_events(
     return mismatches
 
 
+def init_motion_schema_mismatches(
+    events: list[dict[str, Any]],
+    *,
+    side: str,
+) -> list[dict[str, Any]]:
+    mismatches: list[dict[str, Any]] = []
+    forbidden_top_level = (
+        "addr", "player", "retval", "frameId", "objthis", "nodeLayout",
+    )
+    for event_index, ev in enumerate(events):
+        kind = str(ev.get("kind"))
+        if ev.get("projection") != INIT_MOTION_PROJECTION:
+            mismatches.append({
+                "kind": "init_motion_schema",
+                "side": side,
+                "event": event_index,
+                "field": "projection",
+                "value": ev.get("projection"),
+                "expected": INIT_MOTION_PROJECTION,
+            })
+        expected_sample = INIT_MOTION_SAMPLE_POINTS.get(kind)
+        if ev.get("samplePoint") != expected_sample:
+            mismatches.append({
+                "kind": "init_motion_schema",
+                "side": side,
+                "event": event_index,
+                "field": "samplePoint",
+                "value": ev.get("samplePoint"),
+                "expected": expected_sample,
+            })
+        diagnostics = ev.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            mismatches.append({
+                "kind": "init_motion_schema",
+                "side": side,
+                "event": event_index,
+                "field": "diagnostics",
+                "value": type(diagnostics).__name__,
+                "expected": "dict",
+            })
+        for field in forbidden_top_level:
+            if field in ev:
+                mismatches.append({
+                    "kind": "init_motion_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": field,
+                    "reason": "diagnostic_field_must_not_be_top_level",
+                })
+        overview = ev.get("overview")
+        if kind == "init_non_emote_leave":
+            if not isinstance(overview, dict):
+                mismatches.append({
+                    "kind": "init_motion_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": "overview",
+                    "value": type(overview).__name__,
+                    "expected": "dict",
+                })
+                continue
+            for field in INIT_MOTION_OVERVIEW_FIELDS:
+                if field not in overview:
+                    mismatches.append({
+                        "kind": "init_motion_schema",
+                        "side": side,
+                        "event": event_index,
+                        "field": f"overview.{field}",
+                        "reason": "missing_semantic_overview_field",
+                    })
+            if "nodeLayout" in overview:
+                mismatches.append({
+                    "kind": "init_motion_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": "overview.nodeLayout",
+                    "reason": "layout_field_must_be_diagnostic",
+                })
+        elif overview is not None:
+            mismatches.append({
+                "kind": "init_motion_schema",
+                "side": side,
+                "event": event_index,
+                "field": "overview",
+                "reason": "only_init_non_emote_leave_has_overview",
+            })
+    return mismatches
+
+
+def _overview_field_equal(a: Any, b: Any) -> bool:
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return _floats_close(float(a), float(b), rel=1e-6, abs_=1e-6)
+    return a == b
+
+
+def diff_init_motion_events(
+    native_payload: dict[str, Any],
+    oracle_payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    n_events = native_payload.get("events") or []
+    o_events = oracle_payload.get("events") or []
+    n_summary = native_payload.get("summary") or {}
+    o_summary = oracle_payload.get("summary") or {}
+    mismatches = (
+        init_motion_schema_mismatches(n_events, side="native")
+        + init_motion_schema_mismatches(o_events, side="oracle")
+    )
+    if len(n_events) != len(o_events):
+        mismatches.append({
+            "kind": "event_count",
+            "native": len(n_events),
+            "oracle": len(o_events),
+        })
+    if n_summary.get("kindCounts") != o_summary.get("kindCounts"):
+        mismatches.append({
+            "kind": "kind_counts",
+            "native": n_summary.get("kindCounts"),
+            "oracle": o_summary.get("kindCounts"),
+        })
+    n_kinds = [ev.get("kind") for ev in n_events]
+    o_kinds = [ev.get("kind") for ev in o_events]
+    if n_kinds != o_kinds:
+        mismatches.append({
+            "kind": "event_order",
+            "native": n_kinds,
+            "oracle": o_kinds,
+        })
+
+    for i, (native_ev, oracle_ev) in enumerate(zip(n_events, o_events)):
+        if native_ev.get("samplePoint") != oracle_ev.get("samplePoint"):
+            mismatches.append({
+                "kind": "sample_point",
+                "event": i,
+                "native": native_ev.get("samplePoint"),
+                "oracle": oracle_ev.get("samplePoint"),
+            })
+        if native_ev.get("kind") != "init_non_emote_leave":
+            continue
+        n_overview = native_ev.get("overview") or {}
+        o_overview = oracle_ev.get("overview") or {}
+        for field in INIT_MOTION_OVERVIEW_FIELDS:
+            n_value = n_overview.get(field)
+            o_value = o_overview.get(field)
+            if not _overview_field_equal(n_value, o_value):
+                mismatches.append({
+                    "kind": "semantic_overview",
+                    "event": i,
+                    "field": field,
+                    "native": n_value,
+                    "oracle": o_value,
+                })
+    return mismatches
+
+
 def normalize_trace_flatten_events(
     events: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1038,6 +1201,30 @@ def main(argv: list[str]) -> int:
 
             if stage == "static_parse":
                 mismatches = diff_static_parse_events(
+                    native_payload=native_payload,
+                    oracle_payload=oracle_payload,
+                )
+                summary = native_payload.get("summary") or {}
+                if not mismatches:
+                    print(
+                        f"PASS: {stage}/{case_id} "
+                        f"({summary.get('eventCount', 0)} events)"
+                    )
+                else:
+                    print(
+                        f"FAIL: {stage}/{case_id}: mismatch "
+                        f"({len(mismatches)} mismatches)"
+                    )
+                    for mismatch in mismatches[:10]:
+                        print(f"  {mismatch}")
+                    if len(mismatches) > 10:
+                        print(
+                            f"  ... +{len(mismatches) - 10} more")
+                    failures += 1
+                continue
+
+            if stage == "init_motion":
+                mismatches = diff_init_motion_events(
                     native_payload=native_payload,
                     oracle_payload=oracle_payload,
                 )

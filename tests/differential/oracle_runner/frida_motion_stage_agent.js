@@ -26,6 +26,12 @@ const STATIC_PARSE_SAMPLE_POINTS = {
     parse_parameter_list_leave: 'parseParameterListLike_0x6B202C.leave',
 };
 
+const INIT_MOTION_PROJECTION = 'init-motion-semantic-v1';
+const INIT_MOTION_SAMPLE_POINTS = {
+    init_non_emote_enter: 'initNonEmoteMotionLike_0x6B365C.enter',
+    init_non_emote_leave: 'initNonEmoteMotionLike_0x6B365C.leave',
+};
+
 const TRACE_FLATTEN_PROJECTION = 'trace_flatten-semantic-v1';
 const TRACE_FLATTEN_SAMPLE_POINT = 'progressCompat.phase3-end.pre-cleanup';
 
@@ -229,6 +235,25 @@ function emitStaticParse(kind, semanticPayload, diagnostics) {
     events.push(ev);
 }
 
+function emitInitMotion(kind, semanticPayload, diagnostics) {
+    if (!recording || !stageEnabled(STAGE_INIT_MOTION)) return;
+    const diag = diagnostics || {};
+    if (inCompat) {
+        diag.frameId = currentFrameId;
+        diag.objthis = ptrHex(capturedObjthis);
+    }
+    const ev = semanticPayload || {};
+    ev.schema = 'motion-stage-oracle-v1-event';
+    ev.stage = STAGE_INIT_MOTION;
+    ev.kind = kind;
+    ev.projection = INIT_MOTION_PROJECTION;
+    ev.samplePoint = INIT_MOTION_SAMPLE_POINTS[kind] || kind;
+    ev.diagnostics = diag;
+    ev.seq = seqCounter++;
+    ev.timeMs = Date.now() - startTimeMs;
+    events.push(ev);
+}
+
 function safeUtf16(ptrValue, length) {
     try {
         if (!ptrValue || ptrValue.isNull()) return null;
@@ -362,6 +387,27 @@ function parameterTableDiagnostics(raw) {
         }));
     }
     return diag;
+}
+
+function semanticPlayerOverview(raw) {
+    raw = raw || {};
+    return {
+        nodeCount: raw.nodeCount || 0,
+        parameterTable: semanticParameterTable(raw.parameterTable),
+        playing: raw.playing,
+        currentTime: raw.currentTime,
+    };
+}
+
+function playerOverviewDiagnostics(raw) {
+    raw = raw || {};
+    return {
+        player: raw.player,
+        nodeLayout: raw.nodeLayout,
+        frameTickCount: raw.frameTickCount,
+        frameLastTime: raw.frameLastTime,
+        parameterTable: parameterTableDiagnostics(raw.parameterTable),
+    };
 }
 
 function parameterTableChanges(before, after) {
@@ -678,7 +724,7 @@ function installHook() {
                 addr: PLAYER_INIT_NON_EMOTE_OFF,
                 player: ptrHex(args[0]),
             });
-            emit(STAGE_INIT_MOTION, 'init_non_emote_enter', {
+            emitInitMotion('init_non_emote_enter', {}, {
                 addr: PLAYER_INIT_NON_EMOTE_OFF,
                 player: ptrHex(args[0]),
             });
@@ -694,10 +740,13 @@ function installHook() {
                 player: ptrHex(this.player),
                 parameterTable: parameterTableDiagnostics(rawParameterTable),
             });
-            emit(STAGE_INIT_MOTION, 'init_non_emote_leave', {
+            emitInitMotion('init_non_emote_leave', {
+                overview: semanticPlayerOverview(overview),
+            }, {
                 addr: PLAYER_INIT_NON_EMOTE_OFF,
                 retval: ptrHex(retval),
-                overview: overview,
+                player: ptrHex(this.player),
+                overview: playerOverviewDiagnostics(overview),
             });
         },
     });

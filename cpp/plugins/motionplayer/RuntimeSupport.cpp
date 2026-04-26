@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -1183,10 +1184,34 @@ namespace motion::detail {
 
     } // namespace
 
+    void ensureRootNodeLike_0x6CED30(PlayerRuntime &runtime) {
+        if(!runtime.nodes.empty()) {
+            runtime.nodes.front().index = 0;
+            runtime.nodes.front().parentIndex = -1;
+            return;
+        }
+        MotionNode root;
+        root.index = 0;
+        root.parentIndex = -1;
+        runtime.nodes.emplace_back(std::move(root));
+    }
+
+    void resetNodeTreeKeepRootLike_0x6B56F8(PlayerRuntime &runtime) {
+        ensureRootNodeLike_0x6CED30(runtime);
+        auto &root = runtime.nodes.front();
+        root.index = 0;
+        root.parentIndex = -1;
+        if(runtime.nodes.size() > 1) {
+            runtime.nodes.erase(std::next(runtime.nodes.begin()), runtime.nodes.end());
+        }
+        runtime.nodeLabelMap.clear();
+    }
+
     std::shared_ptr<PlayerRuntime> makePlayerRuntime() {
         auto runtime = std::make_shared<PlayerRuntime>();
         runtime->defaultParameterEntry.rangeScale = 1.0;
         runtime->defaultParameterEntry.mode = 0;
+        ensureRootNodeLike_0x6CED30(*runtime);
         return runtime;
     }
 

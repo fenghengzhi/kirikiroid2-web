@@ -257,7 +257,7 @@ namespace motion {
         _mirrorNegativeCache.clear();
 
         if(snapshot) {
-            activateMotion(*_runtime, snapshot);
+            activateMotion(*_runtime, snapshot, &_resourceManagerNative);
             syncVariableKeysFromActiveMotion();
         }
     }
@@ -376,7 +376,7 @@ namespace motion {
 
         if(_project.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
-                activateMotion(*_runtime, snapshot);
+                activateMotion(*_runtime, snapshot, &_resourceManagerNative);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -385,7 +385,7 @@ namespace motion {
         if(motionKeyLooksLikeStorage) {
             if(const auto snapshot =
                    resolveMotion(*_runtime, _motionKey, &_resourceManagerNative)) {
-                activateMotion(*_runtime, snapshot);
+                activateMotion(*_runtime, snapshot, &_resourceManagerNative);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -394,7 +394,7 @@ namespace motion {
         if(const auto loaded = _resourceManagerNative.getLastLoadedModule();
            loaded.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
-                activateMotion(*_runtime, snapshot);
+                activateMotion(*_runtime, snapshot, &_resourceManagerNative);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -406,7 +406,7 @@ namespace motion {
 
         if(const auto snapshot =
                resolveMotion(*_runtime, _motionKey, &_resourceManagerNative)) {
-            activateMotion(*_runtime, snapshot);
+            activateMotion(*_runtime, snapshot, &_resourceManagerNative);
             syncVariableKeysFromActiveMotion();
             return true;
         }
@@ -422,8 +422,7 @@ namespace motion {
         const auto *clip = selectActiveClip();
         _runtime->activeClip = clip;
 
-        _runtime->nodes.clear();
-        _runtime->nodeLabelMap.clear();
+        resetNodeTreeForBuildLike_0x6B56F8();
         _runtime->parameterEntries.clear();
         _runtime->parameterEntryById.clear();
         _runtime->defaultParameterEntry = {};

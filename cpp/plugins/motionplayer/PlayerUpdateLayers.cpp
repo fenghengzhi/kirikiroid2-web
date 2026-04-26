@@ -2200,16 +2200,9 @@ namespace motion {
                 if (child._runtime) {
                     // sub_6C0DE8: reset timeline keyframe cache
                     child._runtime->timelines.clear();
-                    // sub_6B56F8: release layer IDs for non-root nodes, then clear
-                    child._runtime->layerIdsByName.clear();
-                    child._runtime->layerNamesById.clear();
-                    child._runtime->nodeLabelMap.clear();
-                    // Keep root node but clear the rest (sub_6B56F8 at 0x6B59E0).
-                    // Next time the child plays, Player_buildNodeTree will
-                    // rebuild eagerly via the onFindMotion path above.
-                    if (child._runtime->nodes.size() > 1) {
-                        child._runtime->nodes.resize(1);
-                    }
+                    // sub_6B56F8: release layer IDs for non-root nodes, keep
+                    // the constructor-created root, and clear the label map.
+                    child.resetNodeTreeForBuildLike_0x6B56F8();
                 }
                 continue;  // skip to next iteration — binary goes to LABEL_3, not LABEL_18
             }
@@ -2286,7 +2279,7 @@ namespace motion {
                                 child._runtime && child._runtime->activeMotion
                                     ? child._runtime->activeMotion->path.c_str()
                                     : "<none>",
-                                child._runtime && !child._runtime->nodes.empty() ? 1 : 0,
+                                child._runtime && child._runtime->nodes.size() > 1 ? 1 : 0,
                                 child._allplaying ? 1 : 0);
                         }
 
@@ -2645,7 +2638,7 @@ namespace motion {
                         activeClip ? activeClip->label.c_str() : "<none>",
                         child._allplaying ? 1 : 0,
                         child._queuing ? 1 : 0,
-                        child._runtime && !child._runtime->nodes.empty() ? 1 : 0,
+                        child._runtime && child._runtime->nodes.size() > 1 ? 1 : 0,
                         child._runtime ? child._runtime->nodes.size() : 0,
                         child._needsInternalAssignImages ? 1 : 0);
                 }
@@ -3612,7 +3605,7 @@ namespace motion {
 
     // --- updateLayers: 3-phase pipeline ---
     // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C).
-    // Operates on persistent MotionNode vector instead of re-walking PSB tree.
+    // Operates on persistent MotionNode deque instead of re-walking PSB tree.
     void Player::updateLayers() {
         detail::motionTraceRecordUpdatePlayer(this);
         auto &nodes = _runtime->nodes;

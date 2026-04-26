@@ -273,16 +273,17 @@ namespace motion::detail {
         int defaultParameterEntryIndex = -1;
         const MotionClip *activeClip = nullptr;
         // Persistent node tree for updateLayers pipeline. Aligned to
-        // libkrkr2.so Player+200 (std::deque of MotionNode). The binary has
-        // no "nodesBuilt" gate; nodes are either empty (motion not yet
-        // loaded) or built eagerly by Player_buildNodeTree (0x6B51F0).
-        std::vector<MotionNode> nodes;
+        // libkrkr2.so Player+200 (std::deque of MotionNode). The constructor
+        // creates index 0 as the root node; loaded layer trees append real
+        // nodes at indices [1,end) during Player_buildNodeTree (0x6B51F0).
+        std::deque<MotionNode> nodes;
         // Aligned to libkrkr2.so Player+1296 std::vector<LabelEntry>.
         // Populated eagerly by Player_initVariables (0x6CD750) right after
         // buildNodeTree on the play / setMotion path.
         std::vector<VariableLabelEntry> variableLabelEntries;
-        // Node label → index map. Aligned to binary's std::map<ttstr,int> at player+24.
-        // Populated after buildNodeTree, queried by sub_6F2228 equivalent.
+        // Node label → index map. Aligned to binary's std::map<ttstr,int> at
+        // player+24. Populated during recursive build with last-write-wins
+        // assignment, queried by sub_6F2228 equivalent.
         std::map<std::string, int> nodeLabelMap;
 
         struct PreparedRenderItem {
@@ -398,6 +399,8 @@ namespace motion::detail {
         bool isEmoteMode = false;
     };
 
+    void ensureRootNodeLike_0x6CED30(PlayerRuntime &runtime);
+    void resetNodeTreeKeepRootLike_0x6B56F8(PlayerRuntime &runtime);
     std::shared_ptr<PlayerRuntime> makePlayerRuntime();
 
     std::string narrow(const ttstr &value);

@@ -5,224 +5,302 @@
   "source": "android-frida-libkrkr2",
   "events": [
     {
-      "addr": 7026268,
-      "player": "0x798fcc1400",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_enter",
-      "seq": 6279,
-      "timeMs": 1206
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x798552b400"
+      },
+      "seq": 245,
+      "timeMs": 1304
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
       "overview": {
-        "player": "0x798fcc1400",
-        "nodeLayout": "deque",
         "nodeCount": 31,
         "parameterTable": {
-          "begin": null,
-          "end": null,
-          "stride": 56,
           "count": 0,
           "entries": []
         },
         "playing": true,
-        "currentTime": 0,
-        "frameTickCount": 0,
-        "frameLastTime": 91
+        "currentTime": 0
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_leave",
-      "seq": 6283,
-      "timeMs": 1207
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x798552b400",
+        "overview": {
+          "player": "0x798552b400",
+          "nodeLayout": "deque",
+          "frameTickCount": 0,
+          "frameLastTime": 91,
+          "parameterTable": {
+            "begin": null,
+            "end": null,
+            "stride": 56
+          }
+        }
+      },
+      "seq": 246,
+      "timeMs": 1305
     },
     {
-      "addr": 7026268,
-      "player": "0x798fcc1400",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_enter",
-      "seq": 6285,
-      "timeMs": 1207
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x798552b400"
+      },
+      "seq": 247,
+      "timeMs": 1305
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
       "overview": {
-        "player": "0x798fcc1400",
-        "nodeLayout": "deque",
         "nodeCount": 31,
         "parameterTable": {
-          "begin": null,
-          "end": null,
-          "stride": 56,
           "count": 0,
           "entries": []
         },
         "playing": true,
-        "currentTime": 0,
-        "frameTickCount": 0,
-        "frameLastTime": 91
+        "currentTime": 0
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_leave",
-      "seq": 6289,
-      "timeMs": 1208
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x798552b400",
+        "overview": {
+          "player": "0x798552b400",
+          "nodeLayout": "deque",
+          "frameTickCount": 0,
+          "frameLastTime": 91,
+          "parameterTable": {
+            "begin": null,
+            "end": null,
+            "stride": 56
+          }
+        }
+      },
+      "seq": 248,
+      "timeMs": 1306
     },
     {
-      "addr": 7026268,
-      "player": "0x7988957c00",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_enter",
-      "seq": 6705,
-      "timeMs": 1243,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x7966a16800",
+        "frameId": 253,
+        "objthis": "0x797e035da0"
+      },
+      "seq": 261,
+      "timeMs": 1343
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
       "overview": {
-        "player": "0x7988957c00",
-        "nodeLayout": "deque",
         "nodeCount": 2,
         "parameterTable": {
-          "begin": null,
-          "end": null,
-          "stride": 56,
           "count": 0,
           "entries": []
         },
         "playing": true,
-        "currentTime": 0,
-        "frameTickCount": 0,
-        "frameLastTime": 1
+        "currentTime": 0
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_leave",
-      "seq": 6709,
-      "timeMs": 1243,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x7966a16800",
+        "overview": {
+          "player": "0x7966a16800",
+          "nodeLayout": "deque",
+          "frameTickCount": 0,
+          "frameLastTime": 1,
+          "parameterTable": {
+            "begin": null,
+            "end": null,
+            "stride": 56
+          }
+        },
+        "frameId": 253,
+        "objthis": "0x797e035da0"
+      },
+      "seq": 262,
+      "timeMs": 1343
     },
     {
-      "addr": 7026268,
-      "player": "0x7988957600",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_enter",
-      "seq": 6713,
-      "timeMs": 1243,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x7966a16200",
+        "frameId": 253,
+        "objthis": "0x797e035da0"
+      },
+      "seq": 263,
+      "timeMs": 1343
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
       "overview": {
-        "player": "0x7988957600",
-        "nodeLayout": "deque",
         "nodeCount": 2,
         "parameterTable": {
-          "begin": null,
-          "end": null,
-          "stride": 56,
           "count": 0,
           "entries": []
         },
         "playing": true,
-        "currentTime": 0,
-        "frameTickCount": 0,
-        "frameLastTime": 1
+        "currentTime": 0
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_leave",
-      "seq": 6717,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x7966a16200",
+        "overview": {
+          "player": "0x7966a16200",
+          "nodeLayout": "deque",
+          "frameTickCount": 0,
+          "frameLastTime": 1,
+          "parameterTable": {
+            "begin": null,
+            "end": null,
+            "stride": 56
+          }
+        },
+        "frameId": 253,
+        "objthis": "0x797e035da0"
+      },
+      "seq": 264,
+      "timeMs": 1343
     },
     {
-      "addr": 7026268,
-      "player": "0x7988957000",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_enter",
-      "seq": 6721,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x7966a15c00",
+        "frameId": 253,
+        "objthis": "0x797e035da0"
+      },
+      "seq": 265,
+      "timeMs": 1344
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
       "overview": {
-        "player": "0x7988957000",
-        "nodeLayout": "deque",
         "nodeCount": 2,
         "parameterTable": {
-          "begin": null,
-          "end": null,
-          "stride": 56,
           "count": 0,
           "entries": []
         },
         "playing": true,
-        "currentTime": 0,
-        "frameTickCount": 0,
-        "frameLastTime": 1
+        "currentTime": 0
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_leave",
-      "seq": 6725,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x7966a15c00",
+        "overview": {
+          "player": "0x7966a15c00",
+          "nodeLayout": "deque",
+          "frameTickCount": 0,
+          "frameLastTime": 1,
+          "parameterTable": {
+            "begin": null,
+            "end": null,
+            "stride": 56
+          }
+        },
+        "frameId": 253,
+        "objthis": "0x797e035da0"
+      },
+      "seq": 266,
+      "timeMs": 1344
     },
     {
-      "addr": 7026268,
-      "player": "0x798fcc1a00",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_enter",
-      "seq": 6729,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x798552ba00",
+        "frameId": 253,
+        "objthis": "0x797e035da0"
+      },
+      "seq": 267,
+      "timeMs": 1344
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
       "overview": {
-        "player": "0x798fcc1a00",
-        "nodeLayout": "deque",
         "nodeCount": 2,
         "parameterTable": {
-          "begin": null,
-          "end": null,
-          "stride": 56,
           "count": 0,
           "entries": []
         },
         "playing": true,
-        "currentTime": 0,
-        "frameTickCount": 0,
-        "frameLastTime": 1
+        "currentTime": 0
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_leave",
-      "seq": 6733,
-      "timeMs": 1244,
-      "frameId": 253,
-      "objthis": "0x797ce0cda0"
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x798552ba00",
+        "overview": {
+          "player": "0x798552ba00",
+          "nodeLayout": "deque",
+          "frameTickCount": 0,
+          "frameLastTime": 1,
+          "parameterTable": {
+            "begin": null,
+            "end": null,
+            "stride": 56
+          }
+        },
+        "frameId": 253,
+        "objthis": "0x797e035da0"
+      },
+      "seq": 268,
+      "timeMs": 1344
     }
   ],
   "summary": {
@@ -233,16 +311,12 @@
     },
     "traceFrameCount": 91,
     "traceSeqRange": [
-      6321,
-      9473
+      249,
+      347
     ],
     "eventSeqRange": [
-      6279,
-      6733
-    ],
-    "eventFrameIdRange": [
-      253,
-      253
+      245,
+      268
     ]
   }
 }

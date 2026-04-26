@@ -843,7 +843,8 @@ namespace motion {
     // and before the (flags & Chain) playback-state gate. Reads the PSB
     // "variable" array (from Player+528 == activeMotion->root) and appends
     // one VariableLabelEntry per dict entry:
-    //   name  <- entry["scope"] split by ':' (right half), or empty
+    //   name  <- entry["scope"] split by "::" first, then ":" (right half),
+    //            or empty
     //   label <- entry["label"]
     //   flag68/flag124 <- 1 (binary default; semantics not yet reversed)
     void Player::initVariables() {
@@ -875,9 +876,14 @@ namespace motion {
                 if(const auto scopeStr = std::dynamic_pointer_cast<
                        PSB::PSBString>(scopeVal)) {
                     const auto &scope = scopeStr->value;
-                    const auto colon = scope.find(':');
-                    if(colon != std::string::npos) {
-                        entry.name = detail::widen(scope.substr(colon + 1));
+                    auto sep = scope.find("::");
+                    size_t sepLen = 2;
+                    if(sep == std::string::npos) {
+                        sep = scope.find(':');
+                        sepLen = 1;
+                    }
+                    if(sep != std::string::npos) {
+                        entry.name = detail::widen(scope.substr(sep + sepLen));
                     }
                 }
             }
@@ -892,6 +898,40 @@ namespace motion {
         }
     }
 
+    void Player::resetNodeTreeForBuildLike_0x6B56F8() {
+        if(!_runtime) {
+            return;
+        }
+        detail::ensureRootNodeLike_0x6CED30(*_runtime);
+        for(size_t i = 1; i < _runtime->nodes.size(); ++i) {
+            auto &node = _runtime->nodes[i];
+            _resourceManagerNative.releaseLayerId(node.layerId1);
+            _resourceManagerNative.releaseLayerId(node.layerId2);
+        }
+        detail::resetNodeTreeKeepRootLike_0x6B56F8(*_runtime);
+    }
+
+    void Player::inheritChildPlayerStateLike_0x6B3C78(detail::MotionNode &node) {
+        if(auto *child = node.getChildPlayer()) {
+            child->_resourceManagerNative = _resourceManagerNative;
+            child->_tjsRandomGenerator = _tjsRandomGenerator;
+            child->_project = _project.Type() == tvtObject
+                ? _project
+                : (_runtime && _runtime->activeMotion
+                       ? _runtime->activeMotion->moduleValue
+                       : tTJSVariant{});
+            if(child->_runtime) {
+                detail::ensureRootNodeLike_0x6CED30(*child->_runtime);
+                auto &root = child->_runtime->nodes.front();
+                root.coordinateMode = node.coordinateMode;
+                for(int i = 0; i < 4; ++i) {
+                    root.transformOrder[i] = node.transformOrder[i];
+                }
+                root.delta.dirty = true;
+            }
+        }
+    }
+
     // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0). The binary calls
     // this unconditionally from Player_initNonEmoteMotion (0x6B365C) after
     // Player_loadMotion succeeds — there is no lazy gate. The caller is
@@ -902,6 +942,8 @@ namespace motion {
         if(!_runtime || !_runtime->activeMotion) {
             return;
         }
+
+        resetNodeTreeForBuildLike_0x6B56F8();
 
         std::string clipLabel;
         const auto *clip =
@@ -926,30 +968,9 @@ namespace motion {
                 _runtime->activeMotion->clipList.size());
         }
 
-        _runtime->nodes = detail::buildNodeTree(
-            *_runtime->activeMotion, clipLabel, &_resourceManagerNative, this,
+        detail::buildNodeTree(
+            *_runtime, *_runtime->activeMotion, clipLabel, &_resourceManagerNative, this,
             _completionType);
-        for(auto &node : _runtime->nodes) {
-            node.parameterEntry = resolveNodeParameterEntry(*_runtime, node);
-        }
-
-        // Aligned to Player_initNodeFields case 3 (0x6B43C0..0x6B4688):
-        // child motion players inherit the parent's resource manager context
-        // (ctor arg a1+124) and random generator state (copy from a1+1012).
-        for(auto &node : _runtime->nodes) {
-            if(node.nodeType != 3) {
-                continue;
-            }
-            if(auto *child = node.getChildPlayer()) {
-                child->_resourceManagerNative = _resourceManagerNative;
-                child->_tjsRandomGenerator = _tjsRandomGenerator;
-                child->_project = _project.Type() == tvtObject
-                    ? _project
-                    : (_runtime->activeMotion
-                           ? _runtime->activeMotion->moduleValue
-                           : tTJSVariant{});
-            }
-        }
 
         if(!_runtime->nodes.empty()) {
             auto &root = _runtime->nodes[0];
@@ -962,14 +983,6 @@ namespace motion {
                 root.delta.posY = _pendingRootY;
             }
             root.delta.dirty = true;
-        }
-
-        _runtime->nodeLabelMap.clear();
-        for(size_t ni = 0; ni < _runtime->nodes.size(); ++ni) {
-            const auto &label = _runtime->nodes[ni].layerName;
-            if(!label.empty()) {
-                _runtime->nodeLabelMap.emplace(label, static_cast<int>(ni));
-            }
         }
 
         if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {

@@ -9,6 +9,7 @@
 #include <deque>
 #include <list>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -24,17 +25,26 @@ namespace PSB {
 
 namespace motion {
     class D3DAdaptor;
+    class Player;
     class SeparateLayerAdaptor;
 }
 
 namespace motion {
     namespace detail {
         struct MotionClip;
+        struct MotionNode;
         struct MotionParameterEntry;
         struct MotionSnapshot;
         struct PlayerRuntime;
         struct TimelineControlBinding;
         struct TimelineState;
+
+        void buildNodeTree(PlayerRuntime &runtime,
+                           const MotionSnapshot &snapshot,
+                           const std::string &clipLabel,
+                           motion::ResourceManager *resourceManager,
+                           motion::Player *ownerPlayer,
+                           int parentCompletionType);
     }
 
     // Motion class enums
@@ -426,6 +436,11 @@ namespace motion {
         void setLeft(double v) { setX(v); }
         void setTop(double v) { setY(v); }
 
+        // Internal node-construction hook used by detail::buildNodeTree().
+        // Not registered to TJS; keeps child Player init ordering aligned with
+        // Player_initNodeFields case 3 (0x6B3C78).
+        void inheritChildPlayerStateLike_0x6B3C78(detail::MotionNode &node);
+
     private:
         bool ensureMotionLoaded();
         // Aligned to libkrkr2.so Player_initNonEmoteMotion (0x6B365C).
@@ -434,11 +449,18 @@ namespace motion {
         // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0). Called
         // eagerly from play/onFindMotion paths; the binary has no lazy gate.
         void buildNodeTree();
+        void resetNodeTreeForBuildLike_0x6B56F8();
         // Aligned to libkrkr2.so Player_initVariables (0x6CD750). Writes the
         // Player+1296 std::vector<LabelEntry> from PSB content["variable"].
         // Currently a placeholder; real implementation lands with the
         // std::vector<VariableLabelEntry> field (see RuntimeSupport.h).
         void initVariables();
+        friend void detail::buildNodeTree(detail::PlayerRuntime &runtime,
+                                          const detail::MotionSnapshot &snapshot,
+                                          const std::string &clipLabel,
+                                          motion::ResourceManager *resourceManager,
+                                          motion::Player *ownerPlayer,
+                                          int parentCompletionType);
         void syncVariableKeysFromActiveMotion();
         void syncSelectorControlsLike_0x670D1C();
         const detail::TimelineState *primaryTimelineStateLike_0x66F80C() const;

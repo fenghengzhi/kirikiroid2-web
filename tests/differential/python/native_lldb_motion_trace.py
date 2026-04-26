@@ -101,6 +101,16 @@ def sb_unsigned(value, default: int = 0) -> int:
         return int(raw, 0) if raw else default
 
 
+def sb_signed(value, default: int = 0) -> int:
+    if not value or not value.IsValid():
+        return default
+    try:
+        return int(value.GetValueAsSigned(default))
+    except Exception:
+        raw = value.GetValue()
+        return int(raw, 0) if raw else default
+
+
 def sb_child(value, name: str, fallback_index: int | None = None):
     child = value.GetChildMemberWithName(name)
     if child.IsValid():
@@ -111,6 +121,43 @@ def sb_child(value, name: str, fallback_index: int | None = None):
             return child
     raise RuntimeError(
         f"LLDB value `{value.GetName()}` has no child `{name}`")
+
+
+def sb_child_optional(value, *names: str):
+    if not value or not value.IsValid():
+        return None
+    for name in names:
+        child = value.GetChildMemberWithName(name)
+        if child.IsValid():
+            return child
+    return None
+
+
+def sb_bool(value, default: bool | None = None) -> bool | None:
+    if not value or not value.IsValid():
+        return default
+    raw = value.GetValue()
+    if raw is None:
+        return default
+    if raw in ("true", "false"):
+        return raw == "true"
+    try:
+        return int(raw, 0) != 0
+    except Exception:
+        return default
+
+
+def sb_float(value, default: float | None = None) -> float | None:
+    if not value or not value.IsValid():
+        return default
+    raw = value.GetValue()
+    if raw is None:
+        return default
+    try:
+        f = float(raw)
+        return f if math.isfinite(f) else default
+    except Exception:
+        return default
 
 
 class NativeMotionTracer:
@@ -356,67 +403,125 @@ class NativeMotionTracer:
             player = self._player_value_from_ptr(frame, player_ptr_hex)
         else:
             raise RuntimeError("phase3 return frame has no `this` variable")
-        runtime_shared = sb_child(player, "_runtime", 0)
-        runtime_ptr = sb_child(runtime_shared, "pointer", 0)
-        if not sb_unsigned(runtime_ptr):
-            raise RuntimeError("Player::_runtime pointer is null")
-        runtime = runtime_ptr.Dereference()
-        nodes = sb_child(runtime, "nodes", 31).GetNonSyntheticValue()
-        begin = sb_child(nodes, "__begin_", 0)
-        end = sb_child(nodes, "__end_", 1)
-        data_ptr = sb_unsigned(begin)
-        end_ptr = sb_unsigned(end)
-        node_type = begin.GetType().GetPointeeType()
-        layout = self._ensure_node_layout(node_type)
-        stride = layout["sizeof"]
-        if end_ptr < data_ptr:
-            raise RuntimeError("runtime nodes vector has invalid begin/end")
-        span = end_ptr - data_ptr
-        if span % stride != 0:
-            raise RuntimeError(
-                f"runtime nodes vector span {span} is not aligned to {stride}")
-        count = span // stride
+        if not player_ptr_hex:
+            player_ptr_hex = ptr_to_hex(sb_unsigned(player.AddressOf()))
+        if not player_ptr_hex:
+            raise RuntimeError("could not resolve motion::Player pointer")
+        count = self._node_count_for_player_ptr(frame, player_ptr_hex)
         if count == 0:
             return []
-        if not data_ptr:
-            raise RuntimeError("runtime nodes data pointer is null")
         if count > 10000:
-            raise RuntimeError(f"runtime nodes vector is unexpectedly large: {count}")
-        byte_count = stride * count
-        process = frame.GetThread().GetProcess()
-        error = self.lldb.SBError()
-        blob = process.ReadMemory(data_ptr, byte_count, error)
-        if not error.Success():
-            raise RuntimeError(
-                f"failed to read runtime nodes memory: {error.GetCString()}")
-        if len(blob) < byte_count:
-            raise RuntimeError(
-                f"short runtime nodes read: got {len(blob)}, wanted {byte_count}")
+            raise RuntimeError(f"runtime nodes deque is unexpectedly large: {count}")
 
         layers: list[dict[str, Any]] = []
+        sequence, synthetic_count = self._node_sequence_for_player_ptr(
+            frame, player_ptr_hex)
+        if sequence is not None:
+            count = synthetic_count
         for i in range(count):
-            base = i * stride
-            layers.append({
-                "index": i,
-                "label": "",
-                "nodeType": self._read_i32(blob, base + layout["nodeType"]),
-                "visible": self._read_bool(blob, base + layout["visible"]),
-                "active": self._read_bool(blob, base + layout["active"]),
-                "flipX": self._read_bool(blob, base + layout["flipX"]),
-                "flipY": self._read_bool(blob, base + layout["flipY"]),
-                "posX": self._read_f64(blob, base + layout["posX"]),
-                "posY": self._read_f64(blob, base + layout["posY"]),
-                "posZ": self._read_f64(blob, base + layout["posZ"]),
-                "angleDeg": self._read_f64(blob, base + layout["angle"]),
-                "scaleX": self._read_f64(blob, base + layout["scaleX"]),
-                "scaleY": self._read_f64(blob, base + layout["scaleY"]),
-                "slantX": self._read_f64(blob, base + layout["slantX"]),
-                "slantY": self._read_f64(blob, base + layout["slantY"]),
-                "opacity": self._read_i32(blob, base + layout["opacity"]),
-                "blendMode": self._read_i32(blob, base + layout["stencilType"]),
-                "currentImage": "",
-            })
+            if sequence is not None:
+                node = sequence.GetChildAtIndex(i)
+            else:
+                node = self._node_value_for_player_index(
+                    frame, player_ptr_hex, i)
+            layers.append(self._read_layer_from_node(node, i))
         return layers
+
+    def _node_count_for_player_ptr(self, frame, player_ptr_hex: str) -> int:
+        _sequence, count = self._node_sequence_for_player_ptr(
+            frame, player_ptr_hex)
+        if count is not None:
+            return count
+        expr = (
+            f"reinterpret_cast<motion::Player *>({player_ptr_hex})"
+            "->runtime()->nodes.size()"
+        )
+        value = frame.EvaluateExpression(expr)
+        if not value.IsValid() or not value.GetError().Success():
+            err = value.GetError().GetCString() if value.IsValid() else "invalid value"
+            raise RuntimeError(f"failed to evaluate node deque size: {err}")
+        return sb_unsigned(value)
+
+    def _node_value_for_player_index(self, frame, player_ptr_hex: str, index: int):
+        sequence, count = self._node_sequence_for_player_ptr(frame, player_ptr_hex)
+        if sequence is not None and count is not None and index < count:
+            node = sequence.GetChildAtIndex(index)
+            if node.IsValid():
+                return node
+        expr = (
+            "(unsigned long long)(&("
+            f"reinterpret_cast<motion::Player *>({player_ptr_hex})"
+            f"->runtime()->nodes[{index}]))"
+        )
+        value = frame.EvaluateExpression(expr)
+        if not value.IsValid() or not value.GetError().Success():
+            err = value.GetError().GetCString() if value.IsValid() else "invalid value"
+            raise RuntimeError(f"failed to evaluate node deque element {index}: {err}")
+        addr = sb_unsigned(value)
+        if not addr:
+            raise RuntimeError(f"node deque element {index} has null address")
+        target = frame.GetThread().GetProcess().GetTarget()
+        node_type = self._node_type(target)
+        return target.CreateValueFromAddress(
+            "node", target.ResolveLoadAddress(addr), node_type)
+
+    def _node_sequence_for_player_ptr(self, frame, player_ptr_hex: str):
+        try:
+            runtime = self._runtime_value_for_player_ptr(frame, player_ptr_hex)
+            nodes = sb_child_optional(runtime, "nodes")
+            if not nodes or not nodes.IsValid():
+                return None, None
+            synthetic = nodes.GetSyntheticValue()
+            if not synthetic.IsValid():
+                return None, None
+            count = synthetic.GetNumChildren()
+            if count < 0:
+                return None, None
+            if count == 0:
+                return synthetic, 0
+            first = synthetic.GetChildAtIndex(0)
+            type_name = first.GetTypeName() if first.IsValid() else ""
+            if first.IsValid() and "MotionNode" in type_name:
+                return synthetic, count
+        except Exception:
+            return None, None
+        return None, None
+
+    @staticmethod
+    def _node_type(target):
+        for name in (
+            "motion::detail::MotionNode",
+            "motion::MotionNode",
+            "MotionNode",
+        ):
+            node_type = target.FindFirstType(name)
+            if node_type.IsValid():
+                return node_type
+        raise RuntimeError("motion::detail::MotionNode debug type not found")
+
+    @staticmethod
+    def _read_layer_from_node(node, index: int) -> dict[str, Any]:
+        accumulated = sb_child_optional(node, "accumulated")
+        return {
+            "index": index,
+            "label": "",
+            "nodeType": sb_signed(sb_child_optional(node, "nodeType"), 0),
+            "visible": sb_bool(sb_child_optional(accumulated, "visible"), None),
+            "active": sb_bool(sb_child_optional(accumulated, "active"), None),
+            "flipX": sb_bool(sb_child_optional(accumulated, "flipX"), None),
+            "flipY": sb_bool(sb_child_optional(accumulated, "flipY"), None),
+            "posX": sb_float(sb_child_optional(accumulated, "posX")),
+            "posY": sb_float(sb_child_optional(accumulated, "posY")),
+            "posZ": sb_float(sb_child_optional(accumulated, "posZ")),
+            "angleDeg": sb_float(sb_child_optional(accumulated, "angle")),
+            "scaleX": sb_float(sb_child_optional(accumulated, "scaleX")),
+            "scaleY": sb_float(sb_child_optional(accumulated, "scaleY")),
+            "slantX": sb_float(sb_child_optional(accumulated, "slantX")),
+            "slantY": sb_float(sb_child_optional(accumulated, "slantY")),
+            "opacity": sb_signed(sb_child_optional(accumulated, "opacity"), 0),
+            "blendMode": sb_signed(sb_child_optional(node, "stencilType"), 0),
+            "currentImage": "",
+        }
 
     def _player_value_from_ptr(self, frame, player_ptr_hex: str):
         target = frame.GetThread().GetProcess().GetTarget()
@@ -437,6 +542,14 @@ class NativeMotionTracer:
         err = value.GetError().GetCString() if value.IsValid() else "invalid value"
         raise RuntimeError(
             f"could not materialize motion::Player at {player_ptr_hex}: {err}")
+
+    def _runtime_value_for_player_ptr(self, frame, player_ptr_hex: str):
+        player = self._player_value_from_ptr(frame, player_ptr_hex)
+        runtime_shared = sb_child(player, "_runtime", 0)
+        runtime_ptr = sb_child(runtime_shared, "pointer", 0)
+        if not sb_unsigned(runtime_ptr):
+            raise RuntimeError("Player::_runtime pointer is null")
+        return runtime_ptr.Dereference()
 
     def _ensure_node_layout(self, node_type) -> dict[str, int]:
         if self.node_layout is not None:

@@ -5,72 +5,98 @@
   "source": "android-frida-libkrkr2",
   "events": [
     {
-      "addr": 7026268,
-      "player": "0x798fcc1400",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_enter",
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x798552b400"
+      },
+      "seq": 0,
+      "timeMs": 108
+    },
+    {
+      "overview": {
+        "nodeCount": 25,
+        "parameterTable": {
+          "count": 0,
+          "entries": []
+        },
+        "playing": true,
+        "currentTime": 0
+      },
+      "schema": "motion-stage-oracle-v1-event",
+      "stage": "init_motion",
+      "kind": "init_non_emote_leave",
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x798552b400",
+        "overview": {
+          "player": "0x798552b400",
+          "nodeLayout": "deque",
+          "frameTickCount": 0,
+          "frameLastTime": 241,
+          "parameterTable": {
+            "begin": null,
+            "end": null,
+            "stride": 56
+          }
+        }
+      },
       "seq": 1,
-      "timeMs": 98
+      "timeMs": 109
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
-      "overview": {
-        "player": "0x798fcc1400",
-        "nodeLayout": "deque",
-        "nodeCount": 25,
-        "parameterTable": {
-          "begin": null,
-          "end": null,
-          "stride": 56,
-          "count": 0,
-          "entries": []
-        },
-        "playing": true,
-        "currentTime": 0,
-        "frameTickCount": 0,
-        "frameLastTime": 241
-      },
-      "schema": "motion-stage-oracle-v1-event",
-      "stage": "init_motion",
-      "kind": "init_non_emote_leave",
-      "seq": 5,
-      "timeMs": 99
-    },
-    {
-      "addr": 7026268,
-      "player": "0x798fcc1400",
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_enter",
-      "seq": 7,
-      "timeMs": 100
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.enter",
+      "diagnostics": {
+        "addr": 7026268,
+        "player": "0x798552b400"
+      },
+      "seq": 2,
+      "timeMs": 109
     },
     {
-      "addr": 7026268,
-      "retval": "0x5",
       "overview": {
-        "player": "0x798fcc1400",
-        "nodeLayout": "deque",
         "nodeCount": 25,
         "parameterTable": {
-          "begin": null,
-          "end": null,
-          "stride": 56,
           "count": 0,
           "entries": []
         },
         "playing": true,
-        "currentTime": 0,
-        "frameTickCount": 0,
-        "frameLastTime": 241
+        "currentTime": 0
       },
       "schema": "motion-stage-oracle-v1-event",
       "stage": "init_motion",
       "kind": "init_non_emote_leave",
-      "seq": 11,
-      "timeMs": 100
+      "projection": "init-motion-semantic-v1",
+      "samplePoint": "initNonEmoteMotionLike_0x6B365C.leave",
+      "diagnostics": {
+        "addr": 7026268,
+        "retval": "0x5",
+        "player": "0x798552b400",
+        "overview": {
+          "player": "0x798552b400",
+          "nodeLayout": "deque",
+          "frameTickCount": 0,
+          "frameLastTime": 241,
+          "parameterTable": {
+            "begin": null,
+            "end": null,
+            "stride": 56
+          }
+        }
+      },
+      "seq": 3,
+      "timeMs": 110
     }
   ],
   "summary": {
@@ -81,12 +107,12 @@
     },
     "traceFrameCount": 241,
     "traceSeqRange": [
-      37,
-      6277
+      4,
+      244
     ],
     "eventSeqRange": [
-      1,
-      11
+      0,
+      3
     ]
   }
 }

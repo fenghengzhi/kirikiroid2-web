@@ -759,7 +759,7 @@ namespace motion {
                         : "<none>",
                     detail::narrow(child->getMotion()).c_str(),
                     activeClip ? activeClip->label.c_str() : "<none>",
-                    child->_runtime->nodes.empty() ? 0 : 1,
+                    child->_runtime->nodes.size() > 1 ? 1 : 0,
                     child->_runtime->nodes.size(), childEntries.size(),
                     childEntries.empty() || childEntries.front().sourceKey.empty()
                         ? "<none>"

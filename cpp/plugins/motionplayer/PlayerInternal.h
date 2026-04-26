@@ -203,13 +203,21 @@ namespace internal {
 
         inline std::shared_ptr<detail::MotionSnapshot>
         activateMotion(detail::PlayerRuntime &runtime,
-                       const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
+                       const std::shared_ptr<detail::MotionSnapshot> &snapshot,
+                       ResourceManager *resourceManager = nullptr) {
             runtime.activeMotion = snapshot;
             runtime.timelines.clear();
             // Reset persistent node tree so it gets rebuilt for new motion
             // by the subsequent eager Player_buildNodeTree call (no gate).
-            runtime.nodes.clear();
-            runtime.nodeLabelMap.clear();
+            // Mirrors Player_resetAndReleaseNodes (0x6B56F8) shape: keep the
+            // constructor-created root node and drop runtime children.
+            if(resourceManager) {
+                for(size_t i = 1; i < runtime.nodes.size(); ++i) {
+                    resourceManager->releaseLayerId(runtime.nodes[i].layerId1);
+                    resourceManager->releaseLayerId(runtime.nodes[i].layerId2);
+                }
+            }
+            detail::resetNodeTreeKeepRootLike_0x6B56F8(runtime);
             runtime.parameterEntries.clear();
             runtime.parameterEntryById.clear();
             runtime.defaultParameterEntry = {};

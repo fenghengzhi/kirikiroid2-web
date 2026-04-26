@@ -54,6 +54,12 @@ STATIC_PARSE_SAMPLE_POINTS = {
     "parse_parameter_list_leave": "parseParameterListLike_0x6B202C.leave",
 }
 
+INIT_MOTION_PROJECTION = "init-motion-semantic-v1"
+INIT_MOTION_SAMPLE_POINTS = {
+    "init_non_emote_enter": "initNonEmoteMotionLike_0x6B365C.enter",
+    "init_non_emote_leave": "initNonEmoteMotionLike_0x6B365C.leave",
+}
+
 TRACE_FLATTEN_PROJECTION = "trace_flatten-semantic-v1"
 TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
 
@@ -275,6 +281,10 @@ class NativeMotionStageTracer:
         self.timeout = timeout
         self.enabled_stages = set(stages)
         self.enabled_stages.add("trace_flatten")
+        self.full_trace_flatten = (
+            self.enabled_stages == {"trace_flatten"} or
+            self.enabled_stages == set(STAGES)
+        )
         self.events: list[dict[str, Any]] = []
         self.seq_counter = 0
         self.frame_counter = 0
@@ -313,27 +323,32 @@ class NativeMotionStageTracer:
                 target, PHASE3_LAST_SYMBOL).GetID()
             self.init_bp_id = self._required_bp(
                 target, INIT_NON_EMOTE_SYMBOL).GetID()
-            bind_bp = self._optional_bp(target, BIND_PARAMETER_SYMBOL)
-            self.bind_bp_id = bind_bp.GetID() if bind_bp else None
 
-            self.parse_bp_id = self._required_bp(
-                target, PARSE_PARAMETER_SYMBOL).GetID()
-            self.parse_list_bp_id = self._required_bp(
-                target, PARSE_PARAMETER_LIST_SYMBOL).GetID()
+            if "variable_binding" in self.enabled_stages:
+                bind_bp = self._optional_bp(target, BIND_PARAMETER_SYMBOL)
+                self.bind_bp_id = bind_bp.GetID() if bind_bp else None
 
-            eval_timeline_bp = self._optional_bp(target, EVALUATE_TIMELINE_SYMBOL)
-            if eval_timeline_bp is None:
-                raise RuntimeError(
-                    "failed to set frame_selection breakpoint on "
-                    f"{EVALUATE_TIMELINE_SYMBOL}; rebuild the macOS Debug "
-                    "native runner after the frame_selection refactor and "
-                    "verify it with:\n"
-                    "  nm -C <runner> | rg evaluateTimelineLike_0x699AE4"
-                )
-            self.eval_timeline_bp_id = eval_timeline_bp.GetID()
+            if "static_parse" in self.enabled_stages:
+                self.parse_bp_id = self._required_bp(
+                    target, PARSE_PARAMETER_SYMBOL).GetID()
+                self.parse_list_bp_id = self._required_bp(
+                    target, PARSE_PARAMETER_LIST_SYMBOL).GetID()
 
-            self.sub_motion_bp_id = self._required_bp(
-                target, SUB_MOTION_SYMBOL).GetID()
+            if "frame_selection" in self.enabled_stages:
+                eval_timeline_bp = self._optional_bp(target, EVALUATE_TIMELINE_SYMBOL)
+                if eval_timeline_bp is None:
+                    raise RuntimeError(
+                        "failed to set frame_selection breakpoint on "
+                        f"{EVALUATE_TIMELINE_SYMBOL}; rebuild the macOS Debug "
+                        "native runner after the frame_selection refactor and "
+                        "verify it with:\n"
+                        "  nm -C <runner> | rg evaluateTimelineLike_0x699AE4"
+                    )
+                self.eval_timeline_bp_id = eval_timeline_bp.GetID()
+
+            if "sub_motion_decision" in self.enabled_stages:
+                self.sub_motion_bp_id = self._required_bp(
+                    target, SUB_MOTION_SYMBOL).GetID()
 
             launch = lldb.SBLaunchInfo([
                 "--startup-xp3",
@@ -494,6 +509,30 @@ class NativeMotionStageTracer:
         self.seq_counter += 1
         self.events.append(ev)
 
+    def _emit_init_motion(
+        self,
+        kind: str,
+        payload: dict[str, Any] | None = None,
+        diagnostics: dict[str, Any] | None = None,
+    ) -> None:
+        if "init_motion" not in self.enabled_stages:
+            return
+        diag = dict(diagnostics or {})
+        if self.current_record is not None:
+            diag.setdefault("frameId", self.current_record.get("frameId"))
+            diag.setdefault("objthis", self.current_record.get("objthis"))
+        ev = dict(payload or {})
+        ev["schema"] = EVENT_SCHEMA
+        ev["stage"] = "init_motion"
+        ev["kind"] = kind
+        ev["projection"] = INIT_MOTION_PROJECTION
+        ev["samplePoint"] = INIT_MOTION_SAMPLE_POINTS.get(kind, kind)
+        ev["diagnostics"] = diag
+        ev["seq"] = self.seq_counter
+        ev["timeMs"] = int((time.monotonic() - self.start_monotonic) * 1000)
+        self.seq_counter += 1
+        self.events.append(ev)
+
     # ----------------------------------------------------------- progress/flat
 
     def _on_progress_enter(self, frame) -> None:
@@ -574,7 +613,7 @@ class NativeMotionStageTracer:
             "addr": CANONICAL_ADDR["init_motion"],
             "player": player,
         })
-        self._emit("init_motion", "init_non_emote_enter", {
+        self._emit_init_motion("init_non_emote_enter", {}, {
             "addr": CANONICAL_ADDR["init_motion"],
             "player": player,
         })
@@ -699,10 +738,11 @@ class NativeMotionStageTracer:
         record = info["record"]
         player = info["player"]
         try:
-            layers = self._dump_layers(frame, player)
+            layers = self._dump_layers(frame, player) \
+                if self.full_trace_flatten else []
             record["players"].append({
                 "ptr": player,
-                "layout": "vector",
+                "layout": "deque" if self.full_trace_flatten else "deque-segment",
                 "layers": layers,
                 "error": None,
             })
@@ -722,10 +762,13 @@ class NativeMotionStageTracer:
             "player": player,
             "parameterTable": self._parameter_table_diagnostics(raw_parameter_table),
         })
-        self._emit("init_motion", "init_non_emote_leave", {
+        self._emit_init_motion("init_non_emote_leave", {
+            "overview": self._semantic_player_overview(overview),
+        }, {
             "addr": CANONICAL_ADDR["init_motion"],
             "retval": retval,
-            "overview": overview,
+            "player": player,
+            "overview": self._player_overview_diagnostics(overview),
         })
 
     def _on_bind_parameter_return(self, frame, info: dict[str, Any]) -> None:
@@ -795,11 +838,10 @@ class NativeMotionStageTracer:
     def _player_overview(self, frame, player_ptr_hex: str) -> dict[str, Any]:
         player = self._player_value_from_ptr(frame, player_ptr_hex)
         runtime = self._runtime_value_for_player_ptr(frame, player_ptr_hex)
-        nodes = self._nodes_vector(runtime)
-        count = self._vector_count(nodes)
+        count = self._node_count_for_player_ptr(frame, player_ptr_hex)
         overview = {
             "player": player_ptr_hex,
-            "nodeLayout": "vector",
+            "nodeLayout": "deque",
             "nodeCount": count,
             "parameterTable": self._parameter_table_from_runtime(runtime),
             "playing": sb_bool(sb_child_optional(player, "_allplaying"), None),
@@ -808,6 +850,29 @@ class NativeMotionStageTracer:
             "frameLastTime": sb_float(sb_child_optional(player, "_frameLastTime")),
         }
         return overview
+
+    @staticmethod
+    def _semantic_player_overview(raw: dict[str, Any] | None) -> dict[str, Any]:
+        raw = raw or {}
+        return {
+            "nodeCount": raw.get("nodeCount", 0),
+            "parameterTable": NativeMotionStageTracer._semantic_parameter_table(
+                raw.get("parameterTable")),
+            "playing": raw.get("playing"),
+            "currentTime": raw.get("currentTime"),
+        }
+
+    @staticmethod
+    def _player_overview_diagnostics(raw: dict[str, Any] | None) -> dict[str, Any]:
+        raw = raw or {}
+        return {
+            "player": raw.get("player"),
+            "nodeLayout": raw.get("nodeLayout"),
+            "frameTickCount": raw.get("frameTickCount"),
+            "frameLastTime": raw.get("frameLastTime"),
+            "parameterTable": NativeMotionStageTracer._parameter_table_diagnostics(
+                raw.get("parameterTable")),
+        }
 
     def _parameter_table_for_player_ptr(self, frame, player_ptr_hex: str) -> dict[str, Any]:
         runtime = self._runtime_value_for_player_ptr(frame, player_ptr_hex)
@@ -919,15 +984,12 @@ class NativeMotionStageTracer:
         motion_only: bool,
     ) -> list[dict[str, Any]]:
         runtime = self._runtime_value_for_player_ptr(frame, player_ptr_hex)
-        nodes = self._nodes_vector(runtime)
-        data_ptr, _end_ptr, elem_type, stride, count = self._vector_span(nodes)
+        count = self._node_count_for_player_ptr(frame, player_ptr_hex)
         if count > 10000:
-            raise RuntimeError(f"runtime nodes vector unexpectedly large: {count}")
-        target = frame.GetThread().GetProcess().GetTarget()
+            raise RuntimeError(f"runtime nodes deque unexpectedly large: {count}")
         out: list[dict[str, Any]] = []
         for i in range(count):
-            node = create_value_from_load_address(
-                target, "node", data_ptr + i * stride, elem_type)
+            node = self._node_value_for_player_index(frame, player_ptr_hex, i)
             brief = self._read_node_brief(node, i, runtime)
             if motion_only and brief.get("nodeType") != 3:
                 continue
@@ -1081,67 +1143,123 @@ class NativeMotionStageTracer:
             this_value = frame.FindVariable("this")
             if this_value.IsValid() and sb_unsigned(this_value):
                 player = this_value.Dereference()
+                player_ptr_hex = ptr_to_hex(sb_unsigned(player.AddressOf()))
             else:
                 raise RuntimeError("phase3 return frame has no `this` variable")
-        runtime_shared = sb_child(player, "_runtime", 0)
-        runtime_ptr = sb_child(runtime_shared, "pointer", 0)
-        if not sb_unsigned(runtime_ptr):
-            raise RuntimeError("Player::_runtime pointer is null")
-        runtime = runtime_ptr.Dereference()
-        nodes = self._nodes_vector(runtime)
-        begin = sb_child(nodes, "__begin_", 0)
-        end = sb_child(nodes, "__end_", 1)
-        data_ptr = sb_unsigned(begin)
-        end_ptr = sb_unsigned(end)
-        node_type = begin.GetType().GetPointeeType()
-        layout = self._ensure_node_layout(node_type)
-        stride = layout["sizeof"]
-        if end_ptr < data_ptr:
-            raise RuntimeError("runtime nodes vector has invalid begin/end")
-        span = end_ptr - data_ptr
-        if span % stride != 0:
-            raise RuntimeError(
-                f"runtime nodes vector span {span} is not aligned to {stride}")
-        count = span // stride
+        if not player_ptr_hex:
+            raise RuntimeError("could not resolve motion::Player pointer")
+        count = self._node_count_for_player_ptr(frame, player_ptr_hex)
         if count == 0:
             return []
-        if not data_ptr:
-            raise RuntimeError("runtime nodes data pointer is null")
         if count > 10000:
-            raise RuntimeError(f"runtime nodes vector is unexpectedly large: {count}")
-        byte_count = stride * count
-        process = frame.GetThread().GetProcess()
-        error = self.lldb.SBError()
-        blob = process.ReadMemory(data_ptr, byte_count, error)
-        if not error.Success():
-            raise RuntimeError(
-                f"failed to read runtime nodes memory: {error.GetCString()}")
-        if len(blob) < byte_count:
-            raise RuntimeError(
-                f"short runtime nodes read: got {len(blob)}, wanted {byte_count}")
+            raise RuntimeError(f"runtime nodes deque is unexpectedly large: {count}")
 
         layers: list[dict[str, Any]] = []
+        sequence, synthetic_count = self._node_sequence_for_player_ptr(
+            frame, player_ptr_hex)
+        if sequence is not None:
+            count = synthetic_count
         for i in range(count):
-            base = i * stride
-            layers.append({
-                "index": i,
-                "nodeType": self._read_i32(blob, base + layout["nodeType"]),
-                "visible": self._read_bool(blob, base + layout["visible"]),
-                "active": self._read_bool(blob, base + layout["active"]),
-                "flipX": self._read_bool(blob, base + layout["flipX"]),
-                "flipY": self._read_bool(blob, base + layout["flipY"]),
-                "posX": self._read_f64(blob, base + layout["posX"]),
-                "posY": self._read_f64(blob, base + layout["posY"]),
-                "posZ": self._read_f64(blob, base + layout["posZ"]),
-                "angleDeg": self._read_f64(blob, base + layout["angle"]),
-                "scaleX": self._read_f64(blob, base + layout["scaleX"]),
-                "scaleY": self._read_f64(blob, base + layout["scaleY"]),
-                "slantX": self._read_f64(blob, base + layout["slantX"]),
-                "slantY": self._read_f64(blob, base + layout["slantY"]),
-                "opacity": self._read_i32(blob, base + layout["opacity"]),
-                "stencilType": self._read_i32(blob, base + layout["stencilType"]),
-            })
+            if sequence is not None:
+                node = sequence.GetChildAtIndex(i)
+            else:
+                node = self._node_value_for_player_index(
+                    frame, player_ptr_hex, i)
+            layers.append(self._read_layer_from_node(node, i))
         return layers
+
+    def _node_count_for_player_ptr(self, frame, player_ptr_hex: str) -> int:
+        _sequence, count = self._node_sequence_for_player_ptr(
+            frame, player_ptr_hex)
+        if count is not None:
+            return count
+        expr = (
+            f"reinterpret_cast<motion::Player *>({player_ptr_hex})"
+            "->runtime()->nodes.size()"
+        )
+        value = frame.EvaluateExpression(expr)
+        if not value.IsValid() or not value.GetError().Success():
+            err = value.GetError().GetCString() if value.IsValid() else "invalid value"
+            raise RuntimeError(f"failed to evaluate node deque size: {err}")
+        return sb_unsigned(value)
+
+    def _node_value_for_player_index(self, frame, player_ptr_hex: str, index: int):
+        sequence, count = self._node_sequence_for_player_ptr(frame, player_ptr_hex)
+        if sequence is not None and count is not None and index < count:
+            node = sequence.GetChildAtIndex(index)
+            if node.IsValid():
+                return node
+        expr = (
+            "(unsigned long long)(&("
+            f"reinterpret_cast<motion::Player *>({player_ptr_hex})"
+            f"->runtime()->nodes[{index}]))"
+        )
+        value = frame.EvaluateExpression(expr)
+        if not value.IsValid() or not value.GetError().Success():
+            err = value.GetError().GetCString() if value.IsValid() else "invalid value"
+            raise RuntimeError(f"failed to evaluate node deque element {index}: {err}")
+        addr = sb_unsigned(value)
+        if not addr:
+            raise RuntimeError(f"node deque element {index} has null address")
+        target = frame.GetThread().GetProcess().GetTarget()
+        node_type = self._node_type(target)
+        return create_value_from_load_address(target, "node", addr, node_type)
+
+    def _node_sequence_for_player_ptr(self, frame, player_ptr_hex: str):
+        try:
+            runtime = self._runtime_value_for_player_ptr(frame, player_ptr_hex)
+            nodes = sb_child_optional(runtime, "nodes")
+            if not nodes or not nodes.IsValid():
+                return None, None
+            synthetic = nodes.GetSyntheticValue()
+            if not synthetic.IsValid():
+                return None, None
+            count = synthetic.GetNumChildren()
+            if count < 0:
+                return None, None
+            if count == 0:
+                return synthetic, 0
+            first = synthetic.GetChildAtIndex(0)
+            type_name = first.GetTypeName() if first.IsValid() else ""
+            if first.IsValid() and "MotionNode" in type_name:
+                return synthetic, count
+        except Exception:
+            return None, None
+        return None, None
+
+    @staticmethod
+    def _node_type(target):
+        for name in (
+            "motion::detail::MotionNode",
+            "motion::MotionNode",
+            "MotionNode",
+        ):
+            node_type = target.FindFirstType(name)
+            if node_type.IsValid():
+                return node_type
+        raise RuntimeError("motion::detail::MotionNode debug type not found")
+
+    @staticmethod
+    def _read_layer_from_node(node, index: int) -> dict[str, Any]:
+        accumulated = sb_child_optional(node, "accumulated")
+        return {
+            "index": index,
+            "nodeType": sb_signed(sb_child_optional(node, "nodeType"), 0),
+            "visible": sb_bool(sb_child_optional(accumulated, "visible"), None),
+            "active": sb_bool(sb_child_optional(accumulated, "active"), None),
+            "flipX": sb_bool(sb_child_optional(accumulated, "flipX"), None),
+            "flipY": sb_bool(sb_child_optional(accumulated, "flipY"), None),
+            "posX": sb_float(sb_child_optional(accumulated, "posX")),
+            "posY": sb_float(sb_child_optional(accumulated, "posY")),
+            "posZ": sb_float(sb_child_optional(accumulated, "posZ")),
+            "angleDeg": sb_float(sb_child_optional(accumulated, "angle")),
+            "scaleX": sb_float(sb_child_optional(accumulated, "scaleX")),
+            "scaleY": sb_float(sb_child_optional(accumulated, "scaleY")),
+            "slantX": sb_float(sb_child_optional(accumulated, "slantX")),
+            "slantY": sb_float(sb_child_optional(accumulated, "slantY")),
+            "opacity": sb_signed(sb_child_optional(accumulated, "opacity"), 0),
+            "stencilType": sb_signed(sb_child_optional(node, "stencilType"), 0),
+        }
 
     def _player_value_from_ptr(self, frame, player_ptr_hex: str):
         target = frame.GetThread().GetProcess().GetTarget()
