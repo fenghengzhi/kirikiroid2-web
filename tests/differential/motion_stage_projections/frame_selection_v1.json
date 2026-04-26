@@ -1,0 +1,27 @@
+{
+  "projection": "frame_selection-semantic-v1",
+  "samplePoint": "evaluateTimelineLike_0x699AE4.leave",
+  "eventFields": [
+    "dirtyArg",
+    "time",
+    "retval",
+    "before",
+    "after"
+  ],
+  "nodeFields": [
+    "coordinateMode",
+    "nodeType",
+    "parentIndex",
+    "flags",
+    "activeSlot",
+    "active",
+    "visible",
+    "opacity"
+  ],
+  "diagnosticFields": [
+    "addr",
+    "node",
+    "timeRaw",
+    "objthis"
+  ]
+}

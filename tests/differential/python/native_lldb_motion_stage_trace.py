@@ -62,6 +62,17 @@ INIT_MOTION_SAMPLE_POINTS = {
 
 TRACE_FLATTEN_PROJECTION = "trace_flatten-semantic-v1"
 TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
+FRAME_SELECTION_PROJECTION_SPEC = json.loads(
+    (
+        REPO_ROOT / "tests" / "differential" /
+        "motion_stage_projections" / "frame_selection_v1.json"
+    ).read_text(encoding="utf-8")
+)
+FRAME_SELECTION_PROJECTION = str(FRAME_SELECTION_PROJECTION_SPEC["projection"])
+FRAME_SELECTION_SAMPLE_POINT = str(FRAME_SELECTION_PROJECTION_SPEC["samplePoint"])
+FRAME_SELECTION_NODE_FIELDS: tuple[str, ...] = tuple(
+    str(field) for field in FRAME_SELECTION_PROJECTION_SPEC["nodeFields"]
+)
 
 CANONICAL_ADDR = {
     "init_motion": 0x6B365C,
@@ -74,6 +85,7 @@ CANONICAL_ADDR = {
 }
 
 ACTIVE_TRACER: "NativeMotionStageTracer | None" = None
+LLDB_INVALID_ADDRESS = (1 << 64) - 1
 
 
 def _native_lldb_motion_stage_callback(frame, bp_loc, _internal_dict):
@@ -166,6 +178,16 @@ def sb_unsigned(value, default: int = 0) -> int:
         return int(raw, 0) if raw else default
 
 
+def sb_unsigned_optional(value) -> int | None:
+    if not value or not value.IsValid():
+        return None
+    try:
+        return int(value.GetValueAsUnsigned(0))
+    except Exception:
+        raw = value.GetValue()
+        return int(raw, 0) if raw else None
+
+
 def sb_signed(value, default: int = 0) -> int:
     if not value or not value.IsValid():
         return default
@@ -256,6 +278,16 @@ def register_raw(frame, name: str) -> str | None:
     return reg.GetValue() if reg.IsValid() else None
 
 
+def bool_return_register(frame) -> int | None:
+    w0 = sb_unsigned_optional(frame.FindRegister("w0"))
+    if w0 in (0, 1):
+        return w0
+    x0 = sb_unsigned_optional(frame.FindRegister("x0"))
+    if x0 in (0, 1):
+        return x0
+    return x0 if x0 is not None else w0
+
+
 def create_value_from_load_address(target, name: str, addr: int, value_type):
     return target.CreateValueFromAddress(
         name, target.ResolveLoadAddress(addr), value_type)
@@ -335,7 +367,8 @@ class NativeMotionStageTracer:
                     target, PARSE_PARAMETER_LIST_SYMBOL).GetID()
 
             if "frame_selection" in self.enabled_stages:
-                eval_timeline_bp = self._optional_bp(target, EVALUATE_TIMELINE_SYMBOL)
+                eval_timeline_bp = self._optional_symbol_start_bp(
+                    target, EVALUATE_TIMELINE_SYMBOL)
                 if eval_timeline_bp is None:
                     raise RuntimeError(
                         "failed to set frame_selection breakpoint on "
@@ -417,6 +450,39 @@ class NativeMotionStageTracer:
         self._install_auto_callback(bp)
         return bp
 
+    def _optional_symbol_start_bp(self, target, name: str):
+        try:
+            addr = self._symbol_start_address(target, name)
+        except RuntimeError:
+            return None
+        bp = target.BreakpointCreateBySBAddress(addr)
+        if bp.GetNumLocations() < 1:
+            try:
+                target.BreakpointDelete(bp.GetID())
+            except Exception:
+                pass
+            return None
+        self._install_auto_callback(bp)
+        return bp
+
+    def _symbol_start_address(self, target, name: str):
+        contexts = target.FindFunctions(name, self.lldb.eFunctionNameTypeAuto)
+        for index in range(contexts.GetSize()):
+            context = contexts.GetContextAtIndex(index)
+            for item in (context.GetFunction(), context.GetSymbol()):
+                if not item or not item.IsValid():
+                    continue
+                start = item.GetStartAddress()
+                if not start or not start.IsValid():
+                    continue
+                file_addr = start.GetFileAddress()
+                if file_addr == LLDB_INVALID_ADDRESS:
+                    continue
+                addr = target.ResolveFileAddress(file_addr)
+                if addr and addr.IsValid():
+                    return addr
+        raise RuntimeError(f"failed to resolve symbol start address: {name}")
+
     def _install_auto_callback(self, breakpoint) -> None:
         error = breakpoint.SetScriptCallbackBody(
             "import __main__\n"
@@ -430,11 +496,11 @@ class NativeMotionStageTracer:
         breakpoint.SetAutoContinue(True)
 
     def _set_return_breakpoint(self, frame, payload: dict[str, Any]) -> int:
-        lr = sb_unsigned(frame.FindRegister("lr"))
-        if not lr:
-            raise RuntimeError("breakpoint had no LR register")
+        ret_addr = self._callee_return_address(frame)
+        if not ret_addr:
+            raise RuntimeError("breakpoint had no callee return address")
         target = frame.GetThread().GetProcess().GetTarget()
-        ret_bp = target.BreakpointCreateByAddress(lr)
+        ret_bp = target.BreakpointCreateByAddress(ret_addr)
         ret_bp.SetOneShot(True)
         try:
             ret_bp.SetThreadID(frame.GetThread().GetThreadID())
@@ -443,6 +509,24 @@ class NativeMotionStageTracer:
         self._install_auto_callback(ret_bp)
         self.return_records[ret_bp.GetID()] = payload
         return ret_bp.GetID()
+
+    @staticmethod
+    def _callee_return_address(frame) -> int | None:
+        try:
+            thread = frame.GetThread()
+            if thread and thread.IsValid() and thread.GetNumFrames() > 1:
+                caller = thread.GetFrameAtIndex(1)
+                if caller and caller.IsValid():
+                    pc = int(caller.GetPC())
+                    if pc and pc != LLDB_INVALID_ADDRESS:
+                        return pc
+        except Exception:
+            pass
+        for reg_name in ("x30", "lr"):
+            value = sb_unsigned_optional(frame.FindRegister(reg_name))
+            if value:
+                return value
+        return None
 
     def handle_breakpoint_callback(self, breakpoint_id: int, frame) -> None:
         try:
@@ -481,7 +565,13 @@ class NativeMotionStageTracer:
         if self.current_record is not None:
             ev.setdefault("frameId", self.current_record.get("frameId"))
             if stage != "trace_flatten":
-                ev.setdefault("objthis", self.current_record.get("objthis"))
+                if stage == "frame_selection":
+                    diagnostics = dict(ev.get("diagnostics") or {})
+                    diagnostics.setdefault(
+                        "objthis", self.current_record.get("objthis"))
+                    ev["diagnostics"] = diagnostics
+                else:
+                    ev.setdefault("objthis", self.current_record.get("objthis"))
         self.seq_counter += 1
         self.events.append(ev)
 
@@ -680,7 +770,8 @@ class NativeMotionStageTracer:
 
     def _on_evaluate_timeline_enter(self, frame) -> None:
         node_ptr = ptr_to_hex(sb_unsigned(frame.FindRegister("x0")))
-        before = self._node_brief_from_ptr(frame, node_ptr)
+        before = self._semantic_frame_selection_node(
+            self._node_brief_from_ptr(frame, node_ptr))
         self._set_return_breakpoint(frame, {
             "kind": "evaluate_timeline_return",
             "node": node_ptr,
@@ -789,14 +880,19 @@ class NativeMotionStageTracer:
 
     def _on_evaluate_timeline_return(self, frame, info: dict[str, Any]) -> None:
         self._emit("frame_selection", "evaluate_timeline", {
-            "addr": CANONICAL_ADDR["evaluate_timeline"],
-            "node": info.get("node"),
+            "projection": FRAME_SELECTION_PROJECTION,
+            "samplePoint": FRAME_SELECTION_SAMPLE_POINT,
             "dirtyArg": info.get("dirtyArg"),
             "time": info.get("time"),
-            "timeRaw": info.get("timeRaw"),
-            "retval": sb_signed(frame.FindRegister("x0"), 0),
+            "retval": bool_return_register(frame),
             "before": info.get("before"),
-            "after": self._node_brief_from_ptr(frame, info.get("node")),
+            "after": self._semantic_frame_selection_node(
+                self._node_brief_from_ptr(frame, info.get("node"))),
+            "diagnostics": {
+                "addr": CANONICAL_ADDR["evaluate_timeline"],
+                "node": info.get("node"),
+                "timeRaw": info.get("timeRaw"),
+            },
         })
 
     def _on_sub_motion_return(self, frame, info: dict[str, Any]) -> None:
@@ -1013,6 +1109,17 @@ class NativeMotionStageTracer:
             "active": sb_bool(sb_child_optional(accumulated, "active"), None),
             "visible": sb_bool(sb_child_optional(accumulated, "visible"), None),
             "opacity": sb_signed(sb_child_optional(accumulated, "opacity"), 0),
+        }
+
+    @staticmethod
+    def _semantic_frame_selection_node(
+        raw: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if raw is None:
+            return None
+        return {
+            field: raw.get(field)
+            for field in FRAME_SELECTION_NODE_FIELDS
         }
 
     @staticmethod

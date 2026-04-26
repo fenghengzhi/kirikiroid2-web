@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -13,6 +14,10 @@ except ModuleNotFoundError:  # pragma: no cover - raised at attach time
 
 
 _AGENT_PATH = Path(__file__).with_name("frida_motion_stage_agent.js")
+_FRAME_SELECTION_PROJECTION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "motion_stage_projections" / "frame_selection_v1.json"
+)
 
 STAGES: tuple[str, ...] = (
     "static_parse",
@@ -22,6 +27,17 @@ STAGES: tuple[str, ...] = (
     "sub_motion_decision",
     "trace_flatten",
 )
+
+
+def _load_agent_source() -> str:
+    source = _AGENT_PATH.read_text(encoding="utf-8")
+    projection = json.loads(
+        _FRAME_SELECTION_PROJECTION_PATH.read_text(encoding="utf-8")
+    )
+    return source.replace(
+        "__FRAME_SELECTION_PROJECTION_JSON__",
+        json.dumps(projection, separators=(",", ":")),
+    )
 
 
 class FridaMotionStageTracer:
@@ -73,7 +89,7 @@ class FridaMotionStageTracer:
                 f"frida attach(pid={pid}) timed out: {last_err!r}"
             )
 
-        source = _AGENT_PATH.read_text(encoding="utf-8")
+        source = _load_agent_source()
         self._script = self._session.create_script(source)
         self._script.on("message", self._on_message)
         self._script.load()

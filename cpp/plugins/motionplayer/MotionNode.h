@@ -128,6 +128,8 @@ namespace motion::detail {
             bool done = true;
             bool crossfading = false;      // slot+25: currently blending with other slot
             bool hasEasing = false;         // slot+544: has easing curve for crossfade
+            int frameIndex = -1;            // cached frameList index for this slot
+            int frameType = 0;              // frame["type"]: 0 invisible, 2 static, 3 interpolate
 
             // Source (slot+36)
             std::string src;
@@ -200,8 +202,8 @@ namespace motion::detail {
         // local copy mirrors the current evaluated frame state without owning
         // the persistent setter/camera override semantics.
         struct LocalState {
-            bool visible = false;
-            bool active = false;
+            bool visible = true;
+            bool active = true;
             bool dirty = false;
             bool flipX = false;
             bool flipY = false;
@@ -223,9 +225,9 @@ namespace motion::detail {
         // TJS setters (setX/setY/setFlipX @ 0x6CD028/0x6CD048/0x6CD068) and
         // camera velocity @ 0x6BB378..0x6BB3DC.
         struct DeltaState {
-            bool dirty = false;              // node+1584
-            bool activeOverride = false;     // node+1585
-            bool visibleOverride = false;    // node+1586
+            bool dirty = true;               // node+1584
+            bool activeOverride = true;      // node+1585
+            bool visibleOverride = true;     // node+1586
             bool flipX = false;              // node+1587
             bool flipY = false;              // node+1588
             double posX = 0.0;               // node+1592
@@ -244,9 +246,9 @@ namespace motion::detail {
         // Player_evaluateTimeline (0x699AE4) and further composed by
         // Player_updateLayers (0x6BB33C).
         struct AccumulatedState {
-            bool visible = false;
-            bool active = false;
-            bool dirty = false;     // node+1504
+            bool visible = true;
+            bool active = true;
+            bool dirty = true;      // node+1504
             bool flipX = false;
             bool flipY = false;
             double posX = 0.0;

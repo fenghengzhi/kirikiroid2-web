@@ -51,6 +51,20 @@ TRACE_FLATTEN_INT_FIELDS: tuple[str, ...] = (
 TRACE_FLATTEN_BOOL_FIELDS: tuple[str, ...] = (
     "visible", "active", "flipX", "flipY",
 )
+FRAME_SELECTION_PROJECTION_SPEC = json.loads(
+    (
+        REPO_ROOT / "tests" / "differential" /
+        "motion_stage_projections" / "frame_selection_v1.json"
+    ).read_text(encoding="utf-8")
+)
+FRAME_SELECTION_PROJECTION = str(FRAME_SELECTION_PROJECTION_SPEC["projection"])
+FRAME_SELECTION_SAMPLE_POINT = str(FRAME_SELECTION_PROJECTION_SPEC["samplePoint"])
+FRAME_SELECTION_EVENT_FIELDS: tuple[str, ...] = tuple(
+    str(field) for field in FRAME_SELECTION_PROJECTION_SPEC["eventFields"]
+)
+FRAME_SELECTION_NODE_FIELDS: tuple[str, ...] = tuple(
+    str(field) for field in FRAME_SELECTION_PROJECTION_SPEC["nodeFields"]
+)
 STAGES: tuple[str, ...] = (
     "static_parse",
     "init_motion",
@@ -80,7 +94,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Directory of staged Android oracle JSONs")
     p.add_argument("--stage", default="all",
                    help="Stage to compare, comma-separated stages, or all")
-    p.add_argument("--lldb-timeout", type=float, default=90.0,
+    p.add_argument("--lldb-timeout", type=float, default=240.0,
                    help="Timeout for the macOS LLDB native tracer")
     p.add_argument("--raw-out", default=None,
                    help="Optional path for the unsplit raw native event stream")
@@ -828,6 +842,266 @@ def diff_init_motion_events(
     return mismatches
 
 
+def frame_selection_schema_mismatches(
+    events: list[dict[str, Any]],
+    *,
+    side: str,
+) -> list[dict[str, Any]]:
+    mismatches: list[dict[str, Any]] = []
+    forbidden_top_level = (
+        "addr", "node", "timeRaw", "objthis", "parameter",
+        "parameterEntry",
+    )
+    forbidden_node_fields = (
+        "ptr", "parameterEntry", "parameter", "idPtr",
+    )
+    for event_index, ev in enumerate(events):
+        kind = str(ev.get("kind"))
+        if ev.get("projection") != FRAME_SELECTION_PROJECTION:
+            mismatches.append({
+                "kind": "frame_selection_schema",
+                "side": side,
+                "event": event_index,
+                "field": "projection",
+                "value": ev.get("projection"),
+                "expected": FRAME_SELECTION_PROJECTION,
+            })
+        if ev.get("samplePoint") != FRAME_SELECTION_SAMPLE_POINT:
+            mismatches.append({
+                "kind": "frame_selection_schema",
+                "side": side,
+                "event": event_index,
+                "field": "samplePoint",
+                "value": ev.get("samplePoint"),
+                "expected": FRAME_SELECTION_SAMPLE_POINT,
+            })
+        if kind != "evaluate_timeline":
+            mismatches.append({
+                "kind": "frame_selection_schema",
+                "side": side,
+                "event": event_index,
+                "field": "kind",
+                "value": kind,
+                "expected": "evaluate_timeline",
+            })
+        diagnostics = ev.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            mismatches.append({
+                "kind": "frame_selection_schema",
+                "side": side,
+                "event": event_index,
+                "field": "diagnostics",
+                "value": type(diagnostics).__name__,
+                "expected": "dict",
+            })
+        for field in forbidden_top_level:
+            if field in ev:
+                mismatches.append({
+                    "kind": "frame_selection_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": field,
+                    "reason": "diagnostic_field_must_not_be_top_level",
+                })
+        for field in FRAME_SELECTION_EVENT_FIELDS:
+            if field not in ev:
+                mismatches.append({
+                    "kind": "frame_selection_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": field,
+                    "reason": "missing_semantic_event_field",
+                })
+        for node_field_name in ("before", "after"):
+            node = ev.get(node_field_name)
+            if not isinstance(node, dict):
+                mismatches.append({
+                    "kind": "frame_selection_schema",
+                    "side": side,
+                    "event": event_index,
+                    "field": node_field_name,
+                    "value": type(node).__name__,
+                    "expected": "dict",
+                })
+                continue
+            for field in FRAME_SELECTION_NODE_FIELDS:
+                if field not in node:
+                    mismatches.append({
+                        "kind": "frame_selection_schema",
+                        "side": side,
+                        "event": event_index,
+                        "field": f"{node_field_name}.{field}",
+                        "reason": "missing_semantic_node_field",
+                    })
+            for field in forbidden_node_fields:
+                if field in node:
+                    mismatches.append({
+                        "kind": "frame_selection_schema",
+                        "side": side,
+                        "event": event_index,
+                        "field": f"{node_field_name}.{field}",
+                        "reason": "diagnostic_field_must_not_be_semantic",
+                    })
+    return mismatches
+
+
+def normalize_frame_selection_node(node: Any) -> dict[str, Any] | None:
+    if not isinstance(node, dict):
+        return None
+    return {
+        field: node.get(field)
+        for field in FRAME_SELECTION_NODE_FIELDS
+    }
+
+
+def normalize_frame_selection_events(
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for ev in events:
+        out.append({
+            "kind": ev.get("kind"),
+            "samplePoint": ev.get("samplePoint"),
+            "frameId": ev.get("frameId"),
+            "dirtyArg": ev.get("dirtyArg"),
+            "time": ev.get("time"),
+            "retval": ev.get("retval"),
+            "before": normalize_frame_selection_node(ev.get("before")),
+            "after": normalize_frame_selection_node(ev.get("after")),
+        })
+    return out
+
+
+def _semantic_value_equal(a: Any, b: Any) -> bool:
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return _floats_close(float(a), float(b), rel=1e-6, abs_=1e-6)
+    return a == b
+
+
+def _diff_frame_selection_node(
+    *,
+    side_path: str,
+    event_index: int,
+    native_node: dict[str, Any] | None,
+    oracle_node: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if native_node is None or oracle_node is None:
+        if native_node == oracle_node:
+            return []
+        return [{
+            "kind": "semantic_node",
+            "event": event_index,
+            "field": side_path,
+            "native": native_node,
+            "oracle": oracle_node,
+        }]
+    out: list[dict[str, Any]] = []
+    for field in FRAME_SELECTION_NODE_FIELDS:
+        native_value = native_node.get(field)
+        oracle_value = oracle_node.get(field)
+        if not _semantic_value_equal(native_value, oracle_value):
+            out.append({
+                "kind": "semantic_node",
+                "event": event_index,
+                "field": f"{side_path}.{field}",
+                "native": native_value,
+                "oracle": oracle_value,
+            })
+    return out
+
+
+def diff_frame_selection_events(
+    native_payload: dict[str, Any],
+    oracle_payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    n_events = native_payload.get("events") or []
+    o_events = oracle_payload.get("events") or []
+    n_summary = native_payload.get("summary") or {}
+    o_summary = oracle_payload.get("summary") or {}
+    mismatches = (
+        frame_selection_schema_mismatches(n_events, side="native")
+        + frame_selection_schema_mismatches(o_events, side="oracle")
+    )
+    if len(n_events) != len(o_events):
+        mismatches.append({
+            "kind": "event_count",
+            "native": len(n_events),
+            "oracle": len(o_events),
+        })
+    if n_summary.get("kindCounts") != o_summary.get("kindCounts"):
+        mismatches.append({
+            "kind": "kind_counts",
+            "native": n_summary.get("kindCounts"),
+            "oracle": o_summary.get("kindCounts"),
+        })
+    n_kinds = [ev.get("kind") for ev in n_events]
+    o_kinds = [ev.get("kind") for ev in o_events]
+    if n_kinds != o_kinds:
+        first_mismatch = None
+        for i, (native_kind, oracle_kind) in enumerate(zip(n_kinds, o_kinds)):
+            if native_kind != oracle_kind:
+                first_mismatch = i
+                break
+        mismatches.append({
+            "kind": "event_order",
+            "nativeCount": len(n_kinds),
+            "oracleCount": len(o_kinds),
+            "firstMismatch": first_mismatch,
+            "nativeSample": n_kinds[:10],
+            "oracleSample": o_kinds[:10],
+        })
+    n_frames = frame_ids(n_events)
+    o_frames = frame_ids(o_events)
+    if n_frames != o_frames:
+        mismatches.append({
+            "kind": "frame_coverage",
+            "nativeRange": [
+                min(n_frames) if n_frames else None,
+                max(n_frames) if n_frames else None,
+            ],
+            "oracleRange": [
+                min(o_frames) if o_frames else None,
+                max(o_frames) if o_frames else None,
+            ],
+            "nativeOnlySample": sorted(n_frames - o_frames)[:10],
+            "oracleOnlySample": sorted(o_frames - n_frames)[:10],
+        })
+
+    n_semantic = normalize_frame_selection_events(n_events)
+    o_semantic = normalize_frame_selection_events(o_events)
+    for i, (native_ev, oracle_ev) in enumerate(zip(n_semantic, o_semantic)):
+        for field in ("kind", "samplePoint", "frameId", "dirtyArg", "retval"):
+            if native_ev.get(field) != oracle_ev.get(field):
+                mismatches.append({
+                    "kind": "semantic_event",
+                    "event": i,
+                    "field": field,
+                    "native": native_ev.get(field),
+                    "oracle": oracle_ev.get(field),
+                })
+        if not _semantic_value_equal(native_ev.get("time"), oracle_ev.get("time")):
+            mismatches.append({
+                "kind": "semantic_event",
+                "event": i,
+                "field": "time",
+                "native": native_ev.get("time"),
+                "oracle": oracle_ev.get("time"),
+            })
+        mismatches.extend(_diff_frame_selection_node(
+            side_path="before",
+            event_index=i,
+            native_node=native_ev.get("before"),
+            oracle_node=oracle_ev.get("before"),
+        ))
+        mismatches.extend(_diff_frame_selection_node(
+            side_path="after",
+            event_index=i,
+            native_node=native_ev.get("after"),
+            oracle_node=oracle_ev.get("after"),
+        ))
+    return mismatches
+
+
 def normalize_trace_flatten_events(
     events: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1244,6 +1518,29 @@ def main(argv: list[str]) -> int:
                     if len(mismatches) > 10:
                         print(
                             f"  ... +{len(mismatches) - 10} more")
+                    failures += 1
+                continue
+
+            if stage == "frame_selection":
+                mismatches = diff_frame_selection_events(
+                    native_payload=native_payload,
+                    oracle_payload=oracle_payload,
+                )
+                summary = native_payload.get("summary") or {}
+                if not mismatches:
+                    print(
+                        f"PASS: {stage}/{case_id} "
+                        f"({summary.get('eventCount', 0)} events)"
+                    )
+                else:
+                    print(
+                        f"FAIL: {stage}/{case_id}: semantic mismatch "
+                        f"({len(mismatches)} mismatches)"
+                    )
+                    for mismatch in mismatches[:10]:
+                        print(f"  {mismatch}")
+                    if len(mismatches) > 10:
+                        print(f"  ... +{len(mismatches) - 10} more")
                     failures += 1
                 continue
 

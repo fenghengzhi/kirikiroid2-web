@@ -42,11 +42,9 @@ namespace {
     }
 
     template <typename StateT>
-    inline void populateTransformStateFromFrameState(
+    inline void populateTimelinePayloadFromFrameState(
         StateT &localState,
         const motion::internal::FrameContentState &state) {
-        localState.visible = state.visible;
-        localState.active = state.visible;
         localState.flipX = state.flipX;
         localState.flipY = state.flipY;
         localState.posX = state.x;
@@ -60,6 +58,15 @@ namespace {
         localState.opacity = static_cast<int>(
             std::clamp(state.opacity * 255.0, 0.0, 255.0));
         localState.blendMode = state.blendMode;
+    }
+
+    template <typename StateT>
+    inline void populateTransformStateFromFrameState(
+        StateT &localState,
+        const motion::internal::FrameContentState &state) {
+        localState.visible = state.visible;
+        localState.active = state.visible;
+        populateTimelinePayloadFromFrameState(localState, state);
     }
 
     inline void populateDeltaStateFromFrameState(
@@ -82,10 +89,7 @@ namespace {
     }
 
     inline void neutralizeDeltaTransformOverrides(
-        motion::detail::MotionNode::DeltaState &delta,
-        bool visible) {
-        delta.activeOverride = visible;
-        delta.visibleOverride = visible;
+        motion::detail::MotionNode::DeltaState &delta) {
         delta.flipX = false;
         delta.flipY = false;
         delta.posX = 0.0;
@@ -145,6 +149,8 @@ namespace {
         motion::detail::MotionNode::ClipSlot &slot,
         const motion::internal::FrameContentState &s) {
         slot.done = !s.visible;
+        slot.frameIndex = s.debugActiveIndex;
+        slot.frameType = s.frameType;
         slot.src = s.src;
         slot.srcList = s.srcList;
         slot.x = s.x; slot.y = s.y; slot.z = s.z;
@@ -487,7 +493,7 @@ namespace motion::internal {
             int frameType = 0) {
             FrameContentState state;
             state.visible = visible && !slot.done;
-            state.frameType = frameType;
+            state.frameType = slot.frameIndex >= 0 ? slot.frameType : frameType;
             state.src = slot.src;
             state.srcList = slot.srcList;
             state.x = slot.x; state.y = slot.y; state.z = slot.z;
@@ -585,10 +591,12 @@ namespace motion::internal {
             detail::MotionNode &node,
             const FrameContentState &state,
             bool dirtyArg) {
-            populateTransformStateFromFrameState(node.accumulated, state);
+            // Player_evaluateTimeline (0x699AE4) updates the node+1507+
+            // payload, but leaves node+1504/+1505/+1506
+            // (dirty/active/visible) to Player_updateLayers.
+            populateTimelinePayloadFromFrameState(node.accumulated, state);
             populateTransformStateFromFrameState(node.localState, state);
-            node.accumulated.dirty = dirtyArg || node.flags != 0;
-            node.localState.dirty = node.accumulated.dirty;
+            node.localState.dirty = dirtyArg || node.flags != 0;
             populateInterpolatedCacheFromState(node, state);
         }
 
@@ -621,155 +629,260 @@ namespace motion::internal {
             node.lastActiveMotionFlags = 0;
             node.lastActiveMotionDtgt.clear();
         }
+
+        struct NodeTransformOrder {
+            int order[4] = {0, 1, 2, 3};
+            bool has = false;
+        };
+
+        NodeTransformOrder readNodeTransformOrder(
+            const std::shared_ptr<const PSB::PSBDictionary> &nodeDict) {
+            NodeTransformOrder out;
+            if(auto toList = psbDictionaryList(nodeDict, "transformOrder")) {
+                for(int i = 0; i < 4 && i < static_cast<int>(toList->size()); ++i) {
+                    if(auto v = psbNumberValue((*toList)[i])) {
+                        out.order[i] = static_cast<int>(*v);
+                    }
+                }
+                out.has = true;
+            }
+            return out;
+        }
+
+        void applyNodeTransformOrder(FrameContentState &state,
+                                     const NodeTransformOrder &order) {
+            if(!order.has) {
+                return;
+            }
+            std::copy(order.order, order.order + 4, state.transformOrder);
+            state.hasTransformOrder = true;
+        }
+
+        void resetClipSlot(detail::MotionNode::ClipSlot &slot) {
+            slot = detail::MotionNode::ClipSlot{};
+        }
+
+        bool populateClipSlotFromFrameLike_0x6926B4(
+            detail::MotionNode &node,
+            const std::shared_ptr<PSB::PSBList> &frames,
+            int frameIndex,
+            const NodeTransformOrder &transformOrder,
+            detail::MotionNode::ClipSlot &slot,
+            FrameContentState *outState = nullptr) {
+            if(!frames || frameIndex < 0 ||
+               frameIndex >= static_cast<int>(frames->size())) {
+                resetClipSlot(slot);
+                return false;
+            }
+
+            const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*frames)[frameIndex]);
+            if(!frame) {
+                resetClipSlot(slot);
+                slot.frameIndex = frameIndex;
+                return false;
+            }
+
+            ParsedFrame parsed = parseFrame(frame, node.nodeType);
+            FrameContentState state;
+            state.debugEvaluated = true;
+            state.debugActiveIndex = frameIndex;
+            state.debugFrameATime = parsed.time;
+            state.debugFrameAType = parsed.type;
+            state.debugFrameAInvisible = parsed.invisible;
+            state.debugFrameAOpacity = parsed.slot.opacity;
+            state.debugFrameAScaleX = parsed.slot.scaleX;
+            state.debugFrameAScaleY = parsed.slot.scaleY;
+            state.debugFrameASrc = parsed.slot.src;
+            state.frameType = parsed.type;
+            state.clipStartTime = parsed.time;
+
+            if(!parsed.invisible) {
+                state = parsed.slot;
+                state.visible = true;
+                state.frameType = parsed.type;
+                state.clipStartTime = parsed.time;
+                state.debugEvaluated = true;
+                state.debugActiveIndex = frameIndex;
+                state.debugFrameATime = parsed.time;
+                state.debugFrameAType = parsed.type;
+                state.debugFrameAInvisible = false;
+                state.debugFrameAOpacity = parsed.slot.opacity;
+                state.debugFrameAScaleX = parsed.slot.scaleX;
+                state.debugFrameAScaleY = parsed.slot.scaleY;
+                state.debugFrameASrc = parsed.slot.src;
+                applyNodeTransformOrder(state, transformOrder);
+            }
+
+            populateSlotFromState(slot, state);
+            slot.frameIndex = frameIndex;
+            slot.frameType = parsed.type;
+            slot.crossfading = !parsed.invisible && parsed.interpolate;
+            if(outState) {
+                *outState = state;
+            }
+            return true;
+        }
+
+        int initialFrameIndexForTime(
+            const std::shared_ptr<PSB::PSBList> &frames,
+            double currentTime) {
+            if(!frames || frames->size() == 0) {
+                return -1;
+            }
+
+            int selected = 0;
+            for(size_t index = 0; index < frames->size(); ++index) {
+                const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*frames)[static_cast<int>(index)]);
+                if(!frame) {
+                    continue;
+                }
+                const double frameTime =
+                    psbDictionaryNumber(frame, "time").value_or(0.0);
+                if(currentTime < frameTime) {
+                    selected = static_cast<int>(index == 0 ? 0 : index - 1);
+                    break;
+                }
+                selected = static_cast<int>(index);
+            }
+
+            if(frames->size() > 1) {
+                selected = std::min(
+                    selected, static_cast<int>(frames->size()) - 2);
+            }
+            return std::max(selected, 0);
+        }
+
+        double frameSelectionTimeLike_0x6B7E44(
+            const detail::MotionNode &node,
+            double currentTime) {
+            // sub_6B64AC/sub_6B7E44 read node+8->value when the node is
+            // parameterized; otherwise they use the Player timeline time.
+            if(node.parameterizeIndex >= 0 && node.parameterEntry != nullptr) {
+                return node.parameterEntry->value;
+            }
+            return currentTime;
+        }
+
+        bool initializeNodeTimelineSlotsLike_0x6B64AC(
+            detail::MotionNode &node,
+            const std::shared_ptr<PSB::PSBList> &frames,
+            double currentTime,
+            const NodeTransformOrder &transformOrder) {
+            if(!frames || frames->size() == 0) {
+                resetClipSlot(node.slots[0]);
+                resetClipSlot(node.slots[1]);
+                node.activeSlotIndex = 0;
+                markNodeNoActiveFrame(node);
+                return false;
+            }
+
+            const double selectionTime =
+                frameSelectionTimeLike_0x6B7E44(node, currentTime);
+            const int activeIndex = initialFrameIndexForTime(frames, selectionTime);
+            node.activeSlotIndex = 0;
+            populateClipSlotFromFrameLike_0x6926B4(
+                node, frames, activeIndex, transformOrder, node.slots[0]);
+            populateClipSlotFromFrameLike_0x6926B4(
+                node, frames, activeIndex + 1, transformOrder, node.slots[1]);
+            node.flags |= 0x01;
+            node.hasTimelineEvalRatio = false;
+            return true;
+        }
+
+        FrameContentState frameStateFromNodeSlots(
+            const detail::MotionNode &node,
+            double currentTime) {
+            const auto &active = node.activeSlot();
+            const auto &other = node.otherSlot();
+            FrameContentState state =
+                frameStateFromClipSlot(active, !active.done, active.frameType);
+            state.debugEvaluated = active.frameIndex >= 0;
+            state.debugActiveIndex = active.frameIndex;
+            state.debugFrameATime = active.clipStartTime;
+            state.debugFrameAType = active.frameType;
+            state.debugFrameAInvisible = active.done;
+            state.debugFrameAOpacity = active.opacity;
+            state.debugFrameAScaleX = active.scaleX;
+            state.debugFrameAScaleY = active.scaleY;
+            state.debugFrameASrc = active.src;
+            state.clipStartTime = active.clipStartTime;
+
+            if(other.frameIndex >= 0) {
+                state.debugNextIndex = other.frameIndex;
+                state.debugFrameBTime = other.clipStartTime;
+                state.debugFrameBType = other.frameType;
+                state.debugFrameBInvisible = other.done;
+                state.debugFrameBOpacity = other.opacity;
+                state.debugFrameBScaleX = other.scaleX;
+                state.debugFrameBScaleY = other.scaleY;
+                state.debugFrameBSrc = other.src;
+            }
+
+            if(active.crossfading && other.frameIndex >= 0) {
+                const double duration = other.clipStartTime - active.clipStartTime;
+                if(duration > 0.0) {
+                    state.debugInterpT = std::clamp(
+                        (currentTime - active.clipStartTime) / duration,
+                        0.0, 1.0);
+                    state.debugInterpolated =
+                        state.debugInterpT > 0.0 && !other.done;
+                }
+            }
+            return state;
+        }
     }
 
     MOTIONPLAYER_NOINLINE FrameContentState
     advanceNodeFrameSelectionLike_0x6926B4(detail::MotionNode &node,
                                            double currentTime) {
-        FrameContentState state;
         const auto frames = psbDictionaryList(node.psbNode, "frameList");
         if(!frames || frames->size() == 0) {
             node.activeSlot().done = true;
             node.activeSlot().crossfading = false;
             node.otherSlot().done = true;
             markNodeNoActiveFrame(node);
-            return state;
+            return {};
         }
 
-        int savedTransformOrder[4] = {0, 1, 2, 3};
-        bool savedHasTransformOrder = false;
-        if(auto toList = psbDictionaryList(
-               std::const_pointer_cast<PSB::PSBDictionary>(node.psbNode),
-               "transformOrder")) {
-            for(int i = 0; i < 4 && i < static_cast<int>(toList->size()); i++) {
-                if(auto v = psbNumberValue((*toList)[i])) {
-                    savedTransformOrder[i] = static_cast<int>(*v);
-                }
-            }
-            savedHasTransformOrder = true;
+        const NodeTransformOrder transformOrder =
+            readNodeTransformOrder(node.psbNode);
+        const double selectionTime =
+            frameSelectionTimeLike_0x6B7E44(node, currentTime);
+        if(node.activeSlot().frameIndex < 0 && node.otherSlot().frameIndex < 0) {
+            initializeNodeTimelineSlotsLike_0x6B64AC(
+                node, frames, currentTime, transformOrder);
         }
 
-        int activeIndex = -1;
-        for(size_t index = 0; index < frames->size(); ++index) {
-            const auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*frames)[static_cast<int>(index)]);
-            if(!frame) {
-                continue;
-            }
-            const double frameTime =
-                psbDictionaryNumber(frame, "time").value_or(0.0);
-            if(frameTime > currentTime) {
-                break;
-            }
-            activeIndex = static_cast<int>(index);
+        const int lastForwardFrameIndex =
+            static_cast<int>(frames->size()) - 2;
+        while(node.otherSlot().frameIndex >= 0 &&
+              node.activeSlot().frameIndex < lastForwardFrameIndex &&
+              selectionTime >= node.otherSlot().clipStartTime) {
+            node.activeSlotIndex ^= 1;
+            const int nextIndex = node.activeSlot().frameIndex + 1;
+            populateClipSlotFromFrameLike_0x6926B4(
+                node, frames, nextIndex, transformOrder, node.otherSlot());
+            node.flags |= 0x01;
+            node.hasTimelineEvalRatio = false;
         }
-        if(activeIndex < 0) {
-            node.activeSlot().done = true;
-            node.activeSlot().crossfading = false;
-            node.otherSlot().done = true;
+
+        while(node.activeSlot().frameIndex > 0 &&
+              selectionTime < node.activeSlot().clipStartTime) {
+            const int previousIndex = node.activeSlot().frameIndex - 1;
+            node.activeSlotIndex ^= 1;
+            populateClipSlotFromFrameLike_0x6926B4(
+                node, frames, previousIndex, transformOrder, node.activeSlot());
+            node.flags |= 0x01;
+            node.hasTimelineEvalRatio = false;
+        }
+
+        FrameContentState state = frameStateFromNodeSlots(node, selectionTime);
+        if(!state.debugEvaluated) {
             markNodeNoActiveFrame(node);
             return state;
         }
-
-        const auto activeFrame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-            (*frames)[activeIndex]);
-        if(!activeFrame) {
-            node.activeSlot().done = true;
-            node.activeSlot().crossfading = false;
-            node.otherSlot().done = true;
-            markNodeNoActiveFrame(node);
-            return state;
-        }
-
-        ParsedFrame frameA = parseFrame(activeFrame, node.nodeType);
-        state.debugEvaluated = true;
-        state.debugActiveIndex = activeIndex;
-        state.debugFrameATime = frameA.time;
-        state.debugFrameAType = frameA.type;
-        state.debugFrameAInvisible = frameA.invisible;
-        state.debugFrameAOpacity = frameA.slot.opacity;
-        state.debugFrameAScaleX = frameA.slot.scaleX;
-        state.debugFrameAScaleY = frameA.slot.scaleY;
-        state.debugFrameASrc = frameA.slot.src;
-        state.frameType = frameA.type;
-        state.clipStartTime = frameA.time;
-
-        if(frameA.invisible) {
-            state.visible = false;
-            populateSlotFromState(node.activeSlot(), state);
-            node.activeSlot().done = true;
-            node.activeSlot().crossfading = false;
-            node.otherSlot().done = true;
-            node.currentFrameType = state.frameType;
-            markNodePayloadDirtyFromState(node, state);
-            return state;
-        }
-
-        state = frameA.slot;
-        state.visible = true;
-        state.frameType = frameA.type;
-        state.clipStartTime = frameA.time;
-        state.debugEvaluated = true;
-        state.debugActiveIndex = activeIndex;
-        state.debugFrameATime = frameA.time;
-        state.debugFrameAType = frameA.type;
-        state.debugFrameAInvisible = frameA.invisible;
-        state.debugFrameAOpacity = frameA.slot.opacity;
-        state.debugFrameAScaleX = frameA.slot.scaleX;
-        state.debugFrameAScaleY = frameA.slot.scaleY;
-        state.debugFrameASrc = frameA.slot.src;
-        if(savedHasTransformOrder) {
-            std::copy(savedTransformOrder, savedTransformOrder + 4,
-                      state.transformOrder);
-            state.hasTransformOrder = true;
-        }
-
-        populateSlotFromState(node.activeSlot(), state);
-        node.activeSlot().crossfading = false;
-        node.otherSlot().done = true;
-
-        if(frameA.interpolate) {
-            const int nextIndex = activeIndex + 1;
-            if(nextIndex < static_cast<int>(frames->size())) {
-                state.debugNextIndex = nextIndex;
-                const auto nextFrame =
-                    std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                        (*frames)[nextIndex]);
-                if(nextFrame) {
-                    ParsedFrame frameB = parseFrame(nextFrame, node.nodeType);
-                    state.debugFrameBTime = frameB.time;
-                    state.debugFrameBType = frameB.type;
-                    state.debugFrameBInvisible = frameB.invisible;
-                    state.debugFrameBOpacity = frameB.slot.opacity;
-                    state.debugFrameBScaleX = frameB.slot.scaleX;
-                    state.debugFrameBScaleY = frameB.slot.scaleY;
-                    state.debugFrameBSrc = frameB.slot.src;
-
-                    const double duration = frameB.time - frameA.time;
-                    if(duration > 0.0 && !frameB.invisible) {
-                        FrameContentState nextState = frameB.slot;
-                        nextState.visible = true;
-                        nextState.frameType = frameB.type;
-                        nextState.clipStartTime = frameB.time;
-                        if(nextState.src.empty()) {
-                            nextState.src = state.src;
-                        }
-                        if(savedHasTransformOrder) {
-                            std::copy(savedTransformOrder,
-                                      savedTransformOrder + 4,
-                                      nextState.transformOrder);
-                            nextState.hasTransformOrder = true;
-                        }
-                        populateSlotFromState(node.otherSlot(), nextState);
-                        node.activeSlot().crossfading = true;
-                        state.debugInterpT = std::clamp(
-                            (currentTime - frameA.time) / duration, 0.0, 1.0);
-                        state.debugInterpolated = state.debugInterpT > 0.0;
-                    }
-                }
-            }
-        }
-
         node.currentFrameType = state.frameType;
         markNodePayloadDirtyFromState(node, state);
         return state;
@@ -784,12 +897,6 @@ namespace motion::internal {
         auto &other = node.otherSlot();
 
         if(active.done) {
-            if(dirty) {
-                FrameContentState invisible =
-                    frameStateFromClipSlot(active, false, node.currentFrameType);
-                invisible.visible = false;
-                writeTimelineStateLike_0x699AE4(node, invisible, true);
-            }
             return dirty;
         }
 
@@ -1044,7 +1151,6 @@ namespace motion {
                     _independentLayerInherit ? 1 : 0);
             }
 
-            const bool initialNodeUpdate = !node.hasLastActivePayload;
             auto state = advanceNodeFrameSelectionLike_0x6926B4(node,
                                                                  currentTime);
             if (detail::logoChainTraceEnabled(_runtime->activeMotion)
@@ -1084,17 +1190,14 @@ namespace motion {
             }
 
             const bool forceDirty = false;
-            const bool firstUpdate = _noUpdateYet;
             const bool needGround = node.groundCorrection;
             const bool parentDirty = parent.accumulated.dirty;
             const bool deltaDirty = node.delta.dirty;
-            const bool shouldEnterEvaluate =
-                state.debugEvaluated || initialNodeUpdate || firstUpdate ||
-                forceDirty || needGround || parentDirty || deltaDirty ||
-                node.flags != 0;
-            if (!shouldEnterEvaluate) {
-                continue;
-            }
+            // Player_updateLayers @ 0x6BB5E0 passes only the explicit
+            // dirty sources as a2; node+44 is folded in inside
+            // Player_evaluateTimeline itself.
+            const bool timelineDirtyArg =
+                forceDirty || needGround || parentDirty || deltaDirty;
 
             node.timelineParameterOverride = false;
             node.timelineParameterValue = 0.0;
@@ -1106,20 +1209,32 @@ namespace motion {
                 }
             }
 
-            // Player_updateLayers @ 0x6BB5EC calls Player_evaluateTimeline
-            // with dirtyArg=1 after the binary dirty/no-update gate passes.
-            if (!evaluateTimelineLike_0x699AE4(node, true, currentTime)) {
+            if (!evaluateTimelineLike_0x699AE4(
+                    node, timelineDirtyArg, currentTime)) {
                 continue;
             }
 
             refreshSourceGeometryFromSourceName(
                 node, _runtime->activeMotion, node.interpolatedCache.src);
 
-            // The port keeps non-root delta transforms as persistent overrides;
-            // timeline evaluation only re-arms the visible/active gate while the
-            // scalar/vector members reset to their neutral identity values.
-            neutralizeDeltaTransformOverrides(node.delta, node.accumulated.visible);
+            // Player_updateLayers clears node+1584 after evaluateTimeline but
+            // keeps the active/visible override bytes intact.
+            neutralizeDeltaTransformOverrides(node.delta);
             node.delta.dirty = false;
+
+            if (node.activeSlot().done) {
+                node.accumulated = parent.accumulated;
+                const bool copiedDirty = node.accumulated.dirty;
+                node.accumulated.active = false;
+                node.accumulated.dirty = copiedDirty ? true : (node.flags != 0);
+                node.accumulated.visible =
+                    node.accumulated.visible && node.delta.visibleOverride;
+                node.accumulated.m11 = parent.accumulated.m11;
+                node.accumulated.m21 = parent.accumulated.m21;
+                node.accumulated.m12 = parent.accumulated.m12;
+                node.accumulated.m22 = parent.accumulated.m22;
+                continue;
+            }
 
             if (node.activeSlot().hasSync) {
                 node.accumulated.dirty = parent.accumulated.dirty;
@@ -2181,8 +2296,9 @@ namespace motion {
             }
             Player &child = *childPtr;
 
-            // If no v12 flags and not visible → skip to LABEL_18 (0x6BE270)
-            if (!v12 && !mn.accumulated.visible) {
+            // If no v12 flags and not dirty -> skip to LABEL_18 (0x6BE270).
+            // sub_6BE0C0 tests node+1504 here; visible is node+1506.
+            if (!v12 && !mn.accumulated.dirty) {
                 goto label_18;
             }
 
@@ -2603,8 +2719,9 @@ namespace motion {
                         cr.accumulated.m21 = c * mn.accumulated.m21 + s * mn.accumulated.m22;
                         cr.accumulated.m22 = c * mn.accumulated.m22 - mn.accumulated.m21 * s;
                     }
-                    // Unconditional dirty after matrix propagation (0x6BEBAC)
-                    cr.accumulated.dirty = true;
+                    // Unconditional child-root delta dirty after matrix
+                    // propagation (0x6BEBAC writes childRoot+1584).
+                    cr.delta.dirty = true;
                     // Note: clip chain propagation is done in label_18 below,
                     // which ALL paths (active + inactive) fall through to.
                 }
@@ -3699,11 +3816,11 @@ namespace motion {
         // Clear player+480 queuing flag (0x6BBDFC: STRB WZR, [X19,#0x1E0]).
         _queuing = false;
 
-        // Clear node+44 (flags byte) and node+1504 (accumulated visible)
-        // for all non-root nodes (0x6BBCFC..0x6BBD40).
+        // Clear node+44 (flags byte) and node+1504 (accumulated dirty) for
+        // all non-root nodes (0x6BBCFC..0x6BBD40).
         for (size_t ci = 1; ci < nodes.size(); ++ci) {
             nodes[ci].flags &= ~0x01;           // node+44
-            nodes[ci].accumulated.visible = false; // node+1504
+            nodes[ci].accumulated.dirty = false; // node+1504
         }
 
         // Clear legacy local scratch flags.

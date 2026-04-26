@@ -1255,17 +1255,13 @@ namespace internal {
             state.ox = lerp(state.ox, slotB.ox, t);
             state.oy = lerp(state.oy, slotB.oy, t);
 
-            // Opacity — uses ccc-eased t (sub_69A4D4 at 0x69A624)
-            // Also supports occ (opacity-specific curve, mask 0x8000)
-            // sub_699AE4 at 0x69A004: lerp as int, then round via
-            // floor(v+0.5) or ceil(v-0.5)
+            // Opacity: sub_699AE4 (0x69A004..0x69A054) uses the raw slot
+            // ratio, then rounds via floor(v+0.5) / ceil(v-0.5). The earlier
+            // sub_69A4D4 call feeds color data, not opacity easing.
             if(state.opacity != slotB.opacity) {
-                const double t_opa = !state.occ.empty()
-                    ? evaluateBezierCurve(state.occ, t)
-                    : t_ccc;  // fall back to ccc if no occ
                 const double opaA = state.opacity * 255.0;
                 const double opaB = slotB.opacity * 255.0;
-                double opaInterp = lerp(opaA, opaB, t_opa);
+                double opaInterp = lerp(opaA, opaB, t);
                 // Integer rounding aligned to sub_699AE4 at 0x69A040:
                 // if (v < 0) ceil(v - 0.5) else floor(v + 0.5)
                 int opaInt = opaInterp < 0.0

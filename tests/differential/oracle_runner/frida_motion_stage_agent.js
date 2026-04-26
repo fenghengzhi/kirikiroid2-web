@@ -34,6 +34,10 @@ const INIT_MOTION_SAMPLE_POINTS = {
 
 const TRACE_FLATTEN_PROJECTION = 'trace_flatten-semantic-v1';
 const TRACE_FLATTEN_SAMPLE_POINT = 'progressCompat.phase3-end.pre-cleanup';
+const FRAME_SELECTION_SPEC = __FRAME_SELECTION_PROJECTION_JSON__;
+const FRAME_SELECTION_PROJECTION = FRAME_SELECTION_SPEC.projection;
+const FRAME_SELECTION_SAMPLE_POINT = FRAME_SELECTION_SPEC.samplePoint;
+const FRAME_SELECTION_NODE_FIELDS = FRAME_SELECTION_SPEC.nodeFields || [];
 
 const NODE_STRIDE = 2632;
 const PARAM_ENTRY_STRIDE = 56;
@@ -251,6 +255,38 @@ function emitInitMotion(kind, semanticPayload, diagnostics) {
     ev.diagnostics = diag;
     ev.seq = seqCounter++;
     ev.timeMs = Date.now() - startTimeMs;
+    events.push(ev);
+}
+
+function semanticFrameSelectionNode(raw) {
+    if (raw === null || raw === undefined) return null;
+    const out = {};
+    for (const field of FRAME_SELECTION_NODE_FIELDS) {
+        out[field] = Object.prototype.hasOwnProperty.call(raw, field)
+            ? raw[field]
+            : null;
+    }
+    return out;
+}
+
+function emitFrameSelection(kind, semanticPayload, diagnostics) {
+    if (!recording || !stageEnabled(STAGE_FRAME_SELECTION)) return;
+    const diag = diagnostics || {};
+    if (inCompat) {
+        diag.objthis = ptrHex(capturedObjthis);
+    }
+    const ev = semanticPayload || {};
+    ev.schema = 'motion-stage-oracle-v1-event';
+    ev.stage = STAGE_FRAME_SELECTION;
+    ev.kind = kind;
+    ev.projection = FRAME_SELECTION_PROJECTION;
+    ev.samplePoint = FRAME_SELECTION_SAMPLE_POINT;
+    ev.diagnostics = diag;
+    ev.seq = seqCounter++;
+    ev.timeMs = Date.now() - startTimeMs;
+    if (inCompat) {
+        ev.frameId = currentFrameId;
+    }
     events.push(ev);
 }
 
@@ -592,6 +628,10 @@ function snapshotEvalNode(nodePtr) {
     return readNodeBrief(ptr(nodePtr), -1);
 }
 
+function semanticEvalNode(nodePtr) {
+    return semanticFrameSelectionNode(snapshotEvalNode(nodePtr));
+}
+
 function classifySubMotion(beforeNode, afterNode, childSampleDelta) {
     const node = afterNode || beforeNode || {};
     const param = node.parameter || {};
@@ -833,18 +873,19 @@ function installHook() {
             this.dirtyArg = readArgInt(args[1]);
             this.time = readD0(this.context);
             this.timeRaw = readD0Raw(this.context);
-            this.before = snapshotEvalNode(args[0]);
+            this.before = semanticEvalNode(args[0]);
         },
         onLeave(retval) {
-            emit(STAGE_FRAME_SELECTION, 'evaluate_timeline', {
-                addr: PLAYER_EVALUATE_TIMELINE_OFF,
-                node: ptrHex(this.node),
+            emitFrameSelection('evaluate_timeline', {
                 dirtyArg: this.dirtyArg,
                 time: this.time,
-                timeRaw: this.timeRaw,
                 retval: readArgInt(retval),
                 before: this.before,
-                after: snapshotEvalNode(this.node),
+                after: semanticEvalNode(this.node),
+            }, {
+                addr: PLAYER_EVALUATE_TIMELINE_OFF,
+                node: ptrHex(this.node),
+                timeRaw: this.timeRaw,
             });
         },
     });

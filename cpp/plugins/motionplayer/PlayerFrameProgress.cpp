@@ -785,11 +785,21 @@ namespace motion {
         }
         const double actualDelta = dt;
         _frameLastTime = actualDelta;
+
+        _evalResultValues.clear();
+
+        // Aligned to Player_progress_inner (0x6C106C): player+480 is a
+        // one-shot first-frame gate. While it is set, progress records the
+        // incoming delta but does not advance player+1120/player+456.
+        if(_queuing) {
+            _allplaying = !_runtime->playingTimelineLabels.empty();
+            _syncActive = _syncWaiting && _allplaying;
+            return;
+        }
+
         _frameLoopTime += actualDelta;
         _loopTime += actualDelta;
         _frameTickCount += actualDelta;
-
-        _evalResultValues.clear();
 
         // Aligned to Player_preProgress (0x671764): timeline advancement
         // happens before controller stepping inside Player_progress.
