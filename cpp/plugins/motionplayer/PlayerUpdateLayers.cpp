@@ -939,7 +939,7 @@ namespace motion::internal {
             if(next.src.empty()) {
                 next.src = state.src;
             }
-            state = interpolateSlots(state, next, ratio);
+            state = interpolateSlots(state, next, node.coordinateMode, ratio);
             state.visible = true;
             state.frameType = node.currentFrameType;
         }
@@ -993,17 +993,29 @@ namespace motion {
         auto &root = nodes[0];
         {
             FrameContentState rootState;
+            const bool syntheticRoot = !root.psbNode;
             if (root.psbNode) {
                 rootState = evaluateLayerContent(root.psbNode, currentTime,
                                                  root.nodeType);
             } else {
                 // Aligned to Player_buildNodeTree (0x6B51F0): node 0 is a
-                // synthetic root, so it keeps the Player-set transform and a
-                // neutral visible state instead of evaluating a PSB frameList.
-                rootState.visible = true;
-                rootState.opacity = 1.0;
-                rootState.scaleX = 1.0;
-                rootState.scaleY = 1.0;
+                // synthetic root. Player_updateLayers @ 0x6BB4D4 copies its
+                // existing delta block directly to accumulated state.
+                root.delta.flipX = _rootFlipX;
+                rootState.visible = root.delta.visibleOverride;
+                rootState.opacity = std::clamp(
+                    static_cast<double>(root.delta.opacity) / 255.0,
+                    0.0, 1.0);
+                rootState.x = root.delta.posX;
+                rootState.y = root.delta.posY;
+                rootState.z = root.delta.posZ;
+                rootState.angle = root.delta.angle;
+                rootState.scaleX = root.delta.scaleX;
+                rootState.scaleY = root.delta.scaleY;
+                rootState.slantX = root.delta.slantX;
+                rootState.slantY = root.delta.slantY;
+                rootState.flipX = root.delta.flipX;
+                rootState.flipY = root.delta.flipY;
                 rootState.blendMode = 16;
             }
             // Populate root active clip slot
@@ -1012,16 +1024,18 @@ namespace motion {
             populateTransformStateFromFrameState(root.localState, rootState);
             root.localState.dirty = root.delta.dirty;
 
-            const bool deltaDirty = root.delta.dirty;
-            const double deltaPosX = root.delta.posX;
-            const double deltaPosY = root.delta.posY;
-            const double deltaPosZ = root.delta.posZ;
-            populateDeltaStateFromFrameState(root.delta, rootState);
-            root.delta.posX = deltaPosX;
-            root.delta.posY = deltaPosY;
-            root.delta.posZ = deltaPosZ;
-            root.delta.flipX = rootState.flipX ^ _rootFlipX;
-            root.delta.dirty = deltaDirty;
+            if (!syntheticRoot) {
+                const bool deltaDirty = root.delta.dirty;
+                const double deltaPosX = root.delta.posX;
+                const double deltaPosY = root.delta.posY;
+                const double deltaPosZ = root.delta.posZ;
+                populateDeltaStateFromFrameState(root.delta, rootState);
+                root.delta.posX = deltaPosX;
+                root.delta.posY = deltaPosY;
+                root.delta.posZ = deltaPosZ;
+                root.delta.flipX = rootState.flipX ^ _rootFlipX;
+                root.delta.dirty = deltaDirty;
+            }
 
             // Aligned to libkrkr2.so 0x6BB4E0..0x6BB4E8:
             //   memcpy(root+1504, root+1584, 0x50); *(root+1584) = 0;
@@ -2630,39 +2644,44 @@ namespace motion {
                 // === State propagation to child root node (0x6BEA18..0x6BEB74) ===
                 if (child._runtime && !child._runtime->nodes.empty()) {
                     auto &cr = child._runtime->nodes[0];
-                    cr.accumulated.posX = posX;
-                    cr.accumulated.posY = posY;
-                    cr.accumulated.posZ = posZ;
-                    // Flip — only write if changed, set dirty (0x6BEA28..0x6BEA54)
-                    if (cr.accumulated.flipX != mn.accumulated.flipX ||
-                        cr.accumulated.flipY != mn.accumulated.flipY) {
-                        cr.accumulated.flipX = mn.accumulated.flipX;
-                        cr.accumulated.flipY = mn.accumulated.flipY;
-                        cr.accumulated.dirty = true;
+                    cr.delta.posX = posX;
+                    cr.delta.posY = posY;
+                    cr.delta.posZ = posZ;
+                    // Flip — child root delta block node+1587/+1588.
+                    if (cr.delta.flipX != mn.accumulated.flipX ||
+                        cr.delta.flipY != mn.accumulated.flipY) {
+                        cr.delta.flipX = mn.accumulated.flipX;
+                        cr.delta.flipY = mn.accumulated.flipY;
+                        cr.delta.dirty = true;
                     }
-                    // Scale — only write if changed, set dirty (0x6BEA5C..0x6BEA88)
-                    if (cr.accumulated.scaleX != mn.accumulated.scaleX ||
-                        cr.accumulated.scaleY != mn.accumulated.scaleY) {
-                        cr.accumulated.scaleX = mn.accumulated.scaleX;
-                        cr.accumulated.scaleY = mn.accumulated.scaleY;
-                        cr.accumulated.dirty = true;
+                    // Scale — child root delta block node+1624/+1632.
+                    if (cr.delta.scaleX != mn.accumulated.scaleX ||
+                        cr.delta.scaleY != mn.accumulated.scaleY) {
+                        cr.delta.scaleX = mn.accumulated.scaleX;
+                        cr.delta.scaleY = mn.accumulated.scaleY;
+                        cr.delta.dirty = true;
                     }
-                    // Slant — set dirty if changed (0x6BEB10..0x6BEB3C)
-                    if (cr.accumulated.slantX != mn.accumulated.slantX ||
-                        cr.accumulated.slantY != mn.accumulated.slantY) {
-                        cr.accumulated.slantX = mn.accumulated.slantX;
-                        cr.accumulated.slantY = mn.accumulated.slantY;
-                        cr.accumulated.dirty = true;
+                    // Slant — child root delta block node+1640/+1648.
+                    if (cr.delta.slantX != mn.accumulated.slantX ||
+                        cr.delta.slantY != mn.accumulated.slantY) {
+                        cr.delta.slantX = mn.accumulated.slantX;
+                        cr.delta.slantY = mn.accumulated.slantY;
+                        cr.delta.dirty = true;
                     }
-                    // Opacity — set dirty if changed (0x6BEB40..0x6BEB58)
-                    if (cr.accumulated.opacity != mn.accumulated.opacity) {
-                        cr.accumulated.opacity = mn.accumulated.opacity;
-                        cr.accumulated.dirty = true;
+                    // Opacity — child root delta block node+1656.
+                    if (cr.delta.opacity != mn.accumulated.opacity) {
+                        cr.delta.opacity = mn.accumulated.opacity;
+                        cr.delta.dirty = true;
                     }
-                    // Active — set dirty if changed (0x6BEB5C..0x6BEB74)
-                    if (cr.accumulated.active != mn.accumulated.active) {
-                        cr.accumulated.active = mn.accumulated.active;
-                        cr.accumulated.dirty = true;
+                    // Active/visible overrides are consumed by the next child
+                    // Player_updateLayers root memcpy at 0x6BB4D4.
+                    if (cr.delta.activeOverride != mn.accumulated.active) {
+                        cr.delta.activeOverride = mn.accumulated.active;
+                        cr.delta.dirty = true;
+                    }
+                    if (cr.delta.visibleOverride != mn.accumulated.visible) {
+                        cr.delta.visibleOverride = mn.accumulated.visible;
+                        cr.delta.dirty = true;
                     }
                     // Parent color propagation (0x6BEB7C)
                     // Binary: *(_DWORD *)(v16 + 1156) = *(_DWORD *)(v10 + 100)
@@ -2689,9 +2708,9 @@ namespace motion {
                             // player+464 = emote angle (not mapped in web port)
                             // Player_initEmoteMotion(child, 2) — N/A for web
                         } else {
-                            if (cr.accumulated.angle != computedAngle) {
-                                cr.accumulated.angle = computedAngle;
-                                cr.accumulated.dirty = true;
+                            if (cr.delta.angle != computedAngle) {
+                                cr.delta.angle = computedAngle;
+                                cr.delta.dirty = true;
                             }
                         }
                     }

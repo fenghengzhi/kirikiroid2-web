@@ -1059,6 +1059,10 @@ namespace internal {
             // Full read: mask → flags/dt/docmpl/dofst/dtgt + timeOffset
             if(mask & 0x80000) {
                 if(auto md = psbDictionaryValue(content, "motion")) {
+                    // sub_692AB0 @ 0x693988 initializes the motion block with
+                    // flags=0, dt=1, docmpl=false, dofst=0 before applying the
+                    // motion sub-mask overrides.
+                    state.motionDt = 1;
                     int mm = static_cast<int>(
                         psbDictionaryNumber(md, "mask").value_or(0));
                     state.motionMask = mm;
@@ -1226,6 +1230,7 @@ namespace internal {
         inline FrameContentState
         interpolateSlots(const FrameContentState &slotA,
                          const FrameContentState &slotB,
+                         int coordinateMode,
                          double t) {
             FrameContentState state = slotA;
 
@@ -1237,21 +1242,21 @@ namespace internal {
             // Aligned to sub_699AE4: if curve data exists, t is transformed
             // through sub_69A754 bezier evaluation before interpolation.
 
-            // ccc: eases opacity and color (sub_69A4D4 at 0x69A55C)
-            const double t_ccc = !state.ccc.empty()
-                ? evaluateBezierCurve(state.ccc, t) : t;
-
             // acc: eases angle (sub_699AE4 at 0x699DE8)
             const double t_acc = !state.acc.empty()
                 ? evaluateBezierCurve(state.acc, t) : t;
 
-            // Position uses PLAIN t (sub_699AE4 at 0x699BB0~BC0).
-            // Note: "cc" position curve is NOT applied in interpolateSlots.
-            // It's only used by sub_69A4D4 (called from sub_6C1540/case 3 for
-            // position derivative computation), separate from normal frame interpolation.
-            state.x = lerp(state.x, slotB.x, t);
-            state.y = lerp(state.y, slotB.y, t);
-            state.z = lerp(state.z, slotB.z, t);
+            // Player_evaluateTimeline @ 0x699AE4 calls sub_69A4D4 for
+            // position, using the active slot ccc/cp blocks.
+            const double srcPos[3] = { state.x, state.y, state.z };
+            const double dstPos[3] = { slotB.x, slotB.y, slotB.z };
+            double outPos[3] = {};
+            interpolatePosition69A4D4(
+                state.ccc, dstPos, srcPos, outPos,
+                coordinateMode, state.cp, t);
+            state.x = outPos[0];
+            state.y = outPos[1];
+            state.z = outPos[2];
             state.ox = lerp(state.ox, slotB.ox, t);
             state.oy = lerp(state.oy, slotB.oy, t);
 
@@ -1449,7 +1454,7 @@ namespace internal {
             }
 
             // Step 4: Interpolate via sub_699AE4
-            state = interpolateSlots(state, frameB.slot, t);
+            state = interpolateSlots(state, frameB.slot, 0, t);
             state.visible = true;
             state.debugEvaluated = true;
             state.debugActiveIndex = activeIndex;
