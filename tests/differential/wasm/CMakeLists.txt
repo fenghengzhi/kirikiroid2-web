@@ -10,10 +10,12 @@ add_custom_command(
     COMMAND ${CMAKE_CXX_COMPILER}
         ${CMAKE_CURRENT_SOURCE_DIR}/geometry_hit_test_wasm.cpp
         -std=c++17
-        -O1
+        -g3
+        -O0
         -I${KRKR2PLUGIN_PATH}
         -sSTANDALONE_WASM=1
         -sEXPORTED_FUNCTIONS=['_krkr2_hit_test_run']
+        --profiling-funcs
         --no-entry
         -o ${GEOMETRY_HIT_TEST_WASM}
     DEPENDS
