@@ -94,7 +94,7 @@ jobs:
       # ── Differential tests (standalone WASM + wasmtime) ──
       - name: Build WASM test targets
         run: |
-          cd tests/differential/wasm
+          cd tests/differential/wasmtime
           PLUGIN_PATH=${{ github.workspace }}/cpp/plugins
 
           em++ geometry_hit_test_wasm.cpp -std=c++17 -O1 -I${PLUGIN_PATH} \
@@ -121,30 +121,30 @@ jobs:
         run: |
           python tests/differential/python/run_geometry_hit_test_wasmtime.py \
             --spec-dir tests/differential/specs/geometry_hit_test \
-            --wasm tests/differential/wasm/geometry_hit_test.wasm
+            --wasm tests/differential/wasmtime/geometry_hit_test.wasm
 
           python tests/differential/python/run_psb_rl_decompress_wasmtime.py \
             --spec-dir tests/differential/specs/psb_rl_decompress \
-            --wasm tests/differential/wasm/psb_rl_decompress.wasm
+            --wasm tests/differential/wasmtime/psb_rl_decompress.wasm
 
           python tests/differential/python/run_bezier_curve_wasmtime.py \
             --spec-dir tests/differential/specs/bezier_curve \
-            --wasm tests/differential/wasm/bezier_curve.wasm
+            --wasm tests/differential/wasmtime/bezier_curve.wasm
 
           python tests/differential/python/run_local_transform_wasmtime.py \
             --spec-dir tests/differential/specs/local_transform \
-            --wasm tests/differential/wasm/local_transform.wasm
+            --wasm tests/differential/wasmtime/local_transform.wasm
 
           python tests/differential/python/run_position_interp_wasmtime.py \
             --spec-dir tests/differential/specs/position_interp \
-            --wasm tests/differential/wasm/position_interp.wasm
+            --wasm tests/differential/wasmtime/position_interp.wasm
 
       # ── Motion playback (TJS startup chain + Wasmtime) ──
-      - name: Configure Web Wasmtime Debug build
-        run: cmake --preset "Web Wasmtime Debug Config" -DENABLE_TESTS=ON -DBUILD_TOOLS=OFF -DKRKR2_WEB_DEBUG_ENABLE_ASAN=OFF
+      - name: Configure Wasmtime Headless Debug build
+        run: cmake --preset "Wasmtime Headless Debug Config" -DENABLE_TESTS=ON -DBUILD_TOOLS=OFF -DKRKR2_WEB_DEBUG_ENABLE_ASAN=OFF
 
       - name: Build motion playback Wasmtime target
-        run: cmake --build out/web/wasmtime-debug --target motion_playback_wasmtime
+        run: cmake --build out/wasmtime/debug --target motion_playback_wasmtime
 
       - name: Run motion playback state diff
-        run: python3 tests/differential/python/run_motion_playback_wasmtime.py --strict-missing-trace --wasm out/web/wasmtime-debug/tests/differential/wasm/motion_playback_wasmtime.wasm
+        run: python3 tests/differential/python/run_motion_playback_wasmtime.py --strict-missing-trace --wasm out/wasmtime/debug/tests/differential/wasmtime/motion_playback_wasmtime.wasm

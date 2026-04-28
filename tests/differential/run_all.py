@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build and run every differential WASM test family.
 
-Discovers families from `tests/differential/wasm/<family>_wasm.cpp` and
+Discovers families from `tests/differential/wasmtime/<family>_wasm.cpp` and
 reads build directives from the top comment block of each source:
 
     // @exports: _foo,_bar       required; em++ EXPORTED_FUNCTIONS list
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WASM_DIR = REPO_ROOT / "tests/differential/wasm"
+WASM_DIR = REPO_ROOT / "tests/differential/wasmtime"
 PYTHON_DIR = REPO_ROOT / "tests/differential/python"
 SPEC_ROOT = REPO_ROOT / "tests/differential/specs"
 PLUGIN_DIR = REPO_ROOT / "cpp/plugins"

@@ -1,0 +1,1510 @@
+"""PyOpenGL-backed env.gl* provider for Wasmtime differential runners."""
+
+from __future__ import annotations
+
+import re
+import sys
+import logging
+import os
+import ctypes
+import struct
+from collections import deque
+from typing import Any
+
+
+class WasmtimeGLProvider:
+    """Bridge Emscripten-style env.gl* imports to a real OpenGL context."""
+
+    SUPPORTED_IMPORTS = {
+        "glPixelStorei",
+        "glGenTextures",
+        "glTexParameteri",
+        "glGetError",
+        "glTexImage2D",
+        "glCompressedTexImage2D",
+        "glCreateProgram",
+        "glAttachShader",
+        "glLinkProgram",
+        "glGetProgramiv",
+        "glDeleteShader",
+        "glGetUniformLocation",
+        "glUniform1i",
+        "glCreateShader",
+        "glShaderSource",
+        "glCompileShader",
+        "glGetShaderiv",
+        "glGetShaderSource",
+        "glBindAttribLocation",
+        "glGetActiveAttrib",
+        "glGetAttribLocation",
+        "glGetProgramInfoLog",
+        "glGetActiveUniform",
+        "glTexSubImage2D",
+        "glDeleteProgram",
+        "glUseProgram",
+        "glActiveTexture",
+        "glBindTexture",
+        "glDeleteTextures",
+        "glBindVertexArray",
+        "glDeleteBuffers",
+        "glDeleteVertexArrays",
+        "glGetIntegerv",
+        "glViewport",
+        "glUniform1f",
+        "glUniform2f",
+        "glUniform3f",
+        "glUniform4f",
+        "glUniform1fv",
+        "glUniform2fv",
+        "glUniform3fv",
+        "glUniform4fv",
+        "glUniformMatrix3fv",
+        "glUniformMatrix4fv",
+        "glVertexAttribPointer",
+        "glIsEnabled",
+        "glGetBooleanv",
+        "glEnable",
+        "glDisable",
+        "glCullFace",
+        "glFrontFace",
+        "glDepthMask",
+        "glDepthFunc",
+        "glGenVertexArrays",
+        "glBindBuffer",
+        "glEnableVertexAttribArray",
+        "glDisableVertexAttribArray",
+        "glBufferData",
+        "glBufferSubData",
+        "glDrawElements",
+        "glDrawArrays",
+        "glBlendFunc",
+        "glBindFramebuffer",
+        "glFramebufferTexture2D",
+        "glFramebufferRenderbuffer",
+        "glCheckFramebufferStatus",
+    }
+
+    def __init__(self) -> None:
+        self._glfw = None
+        self._gl = None
+        self._window = None
+        self._profile = ""
+        self._is_gles = False
+        self._shader_types: dict[int, int] = {}
+        self._shader_sources: dict[int, str] = {}
+        self._shader_compile_logs: dict[int, str] = {}
+        self._program_shaders: dict[int, set[int]] = {}
+        self._program_active_attribs: dict[int, set[int]] = {}
+        self._bound_buffers: dict[int, int] = {}
+        self._default_vao = 0
+        self._array_attribs: set[int] = set()
+        self._client_attribs: dict[int, tuple[int, int, int, int, int]] = {}
+        self._client_attrib_buffers: dict[int, int] = {}
+        self._client_element_buffer = 0
+        self._guest_strings: dict[bytes, int] = {}
+        self._recent_calls: deque[str] = deque(maxlen=80)
+        self._trace_calls = os.environ.get("KRKR2_WASMTIME_GL_TRACE") == "1"
+
+    def define_imports(self, linker: Any, module: Any) -> None:
+        gl_imports = [
+            imp for imp in module.imports
+            if imp.module == "env"
+            and (imp.name.startswith("gl")
+                 or imp.name.startswith("emscripten_gl"))
+        ]
+        if not gl_imports:
+            return
+
+        self._ensure_context()
+        for imp in gl_imports:
+            linker.define_func(
+                "env",
+                imp.name,
+                imp.type,
+                self._make_import_callback(imp.name),
+                access_caller=True,
+            )
+
+    def _ensure_context(self) -> None:
+        if self._window is not None:
+            self._glfw.make_context_current(self._window)
+            return
+
+        try:
+            import glfw  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "glfw is required for env.gl* imports; run "
+                "`python3 -m pip install -r "
+                "tests/differential/python/requirements-wasm.txt`"
+            ) from exc
+        try:
+            logging.getLogger("OpenGL.plugins").setLevel(logging.ERROR)
+            from OpenGL import GL  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "PyOpenGL is required for env.gl* imports; run "
+                "`python3 -m pip install -r "
+                "tests/differential/python/requirements-wasm.txt`"
+            ) from exc
+
+        errors: list[str] = []
+
+        def error_callback(code: int, desc: bytes) -> None:
+            text = desc.decode("utf-8", errors="replace")
+            errors.append(f"GLFW {code}: {text}")
+
+        glfw.set_error_callback(error_callback)
+        if not glfw.init():
+            raise RuntimeError(
+                "glfw.init() failed: " + ("; ".join(errors) or "no detail")
+            )
+
+        attempts = [
+            ("gles", self._hint_gles),
+            ("desktop_compat", self._hint_desktop_compat),
+            ("desktop_core", self._hint_desktop_core),
+        ]
+        last_error = ""
+        for profile, apply_hints in attempts:
+            glfw.default_window_hints()
+            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
+            apply_hints(glfw)
+            window = glfw.create_window(64, 64, "krkr2-wasmtime-gl", None,
+                                        None)
+            if not window:
+                last_error = "; ".join(errors) or f"{profile} create failed"
+                continue
+
+            glfw.make_context_current(window)
+            self._glfw = glfw
+            self._gl = GL
+            self._window = window
+            self._profile = profile
+            self._is_gles = profile == "gles"
+            try:
+                self._probe_context()
+                self._ensure_default_vertex_array()
+                self._log_context()
+                return
+            except Exception as exc:
+                last_error = f"{profile}: {exc}"
+                glfw.destroy_window(window)
+                self._window = None
+                self._gl = None
+
+        glfw.terminate()
+        raise RuntimeError(
+            "failed to create a usable hidden OpenGL context: " + last_error
+        )
+
+    @staticmethod
+    def _hint_gles(glfw: Any) -> None:
+        glfw.window_hint(glfw.CLIENT_API, glfw.OPENGL_ES_API)
+        glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 2)
+        glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 0)
+
+    @staticmethod
+    def _hint_desktop_core(glfw: Any) -> None:
+        glfw.window_hint(glfw.CLIENT_API, glfw.OPENGL_API)
+        glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
+        glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 2)
+        glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+        if sys.platform == "darwin":
+            glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE)
+
+    @staticmethod
+    def _hint_desktop_compat(glfw: Any) -> None:
+        glfw.window_hint(glfw.CLIENT_API, glfw.OPENGL_API)
+
+    def _probe_context(self) -> None:
+        GL = self._gl
+        tex = GL.glGenTextures(1)
+        GL.glBindTexture(GL.GL_TEXTURE_2D, tex)
+        GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
+        pixel = bytes([255, 255, 255, 255])
+        GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, 1, 1, 0,
+                        GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, pixel)
+        GL.glDeleteTextures([tex])
+
+        vs = GL.glCreateShader(GL.GL_VERTEX_SHADER)
+        fs = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
+        program = GL.glCreateProgram()
+        try:
+            vs_src = (
+                "attribute vec2 a_position;\n"
+                "varying vec2 v_uv;\n"
+                "void main(){ v_uv = a_position; "
+                "gl_Position = vec4(a_position, 0.0, 1.0); }\n"
+            )
+            fs_src = (
+                "precision mediump float;\n"
+                "varying vec2 v_uv;\n"
+                "void main(){ gl_FragColor = vec4(v_uv, 0.0, 1.0); }\n"
+            )
+            self._compile_probe_shader(vs, GL.GL_VERTEX_SHADER, vs_src)
+            self._compile_probe_shader(fs, GL.GL_FRAGMENT_SHADER, fs_src)
+            GL.glAttachShader(program, vs)
+            GL.glAttachShader(program, fs)
+            GL.glLinkProgram(program)
+            if not GL.glGetProgramiv(program, GL.GL_LINK_STATUS):
+                raise RuntimeError(
+                    self._bytes_to_text(GL.glGetProgramInfoLog(program))
+                )
+        finally:
+            GL.glDeleteShader(vs)
+            GL.glDeleteShader(fs)
+            GL.glDeleteProgram(program)
+
+    def _ensure_default_vertex_array(self) -> None:
+        GL = self._gl
+        if self._is_gles:
+            return
+        gen_vertex_arrays = getattr(GL, "glGenVertexArrays", None)
+        bind_vertex_array = getattr(GL, "glBindVertexArray", None)
+        if gen_vertex_arrays is None or bind_vertex_array is None:
+            return
+        vao = gen_vertex_arrays(1)
+        if isinstance(vao, (list, tuple)):
+            vao = vao[0]
+        self._default_vao = int(vao)
+        bind_vertex_array(self._default_vao)
+
+    def _compile_probe_shader(self, shader: int, shader_type: int,
+                              source: str) -> None:
+        GL = self._gl
+        translated = self._translate_shader_source(source, shader_type)
+        GL.glShaderSource(shader, [translated])
+        GL.glCompileShader(shader)
+        if not GL.glGetShaderiv(shader, GL.GL_COMPILE_STATUS):
+            raise RuntimeError(self._bytes_to_text(GL.glGetShaderInfoLog(shader)))
+
+    def _log_context(self) -> None:
+        GL = self._gl
+        vendor = self._gl_string(GL.GL_VENDOR)
+        renderer = self._gl_string(GL.GL_RENDERER)
+        version = self._gl_string(GL.GL_VERSION)
+        shading = self._gl_string(GL.GL_SHADING_LANGUAGE_VERSION)
+        print(
+            "Wasmtime GL provider: "
+            f"profile={self._profile}, vendor={vendor}, "
+            f"renderer={renderer}, version={version}, glsl={shading}",
+            file=sys.stderr,
+        )
+
+    def _gl_string(self, name: int) -> str:
+        value = self._gl.glGetString(name)
+        return self._bytes_to_text(value) if value else "<none>"
+
+    @staticmethod
+    def _bytes_to_text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
+
+    def _call(self, name: str, args: tuple[Any, ...], fn: Any) -> Any:
+        self._ensure_context()
+        self._recent_calls.append(f"{name}{args}")
+        if self._trace_calls:
+            print(f"[wasmtime-gl] {name}{args}", file=sys.stderr)
+        try:
+            return fn()
+        except Exception as exc:
+            recent = "\n".join(f"  {call}" for call in self._recent_calls)
+            raise RuntimeError(f"{name}{args} failed: {exc}\n{recent}") from exc
+
+    def _make_import_callback(self, import_name: str) -> Any:
+        local_name = self._local_gl_name(import_name)
+        method = getattr(self, local_name, None)
+        if method is not None:
+            return method
+
+        gl_fn = getattr(self._gl, local_name, None)
+        if gl_fn is not None:
+            def generic(caller: Any, *args: Any) -> Any:
+                return self._call(import_name, tuple(args),
+                                  lambda: gl_fn(*args))
+            return generic
+
+        def unsupported(_caller: Any, *args: Any) -> Any:
+            recent = "\n".join(f"  {call}" for call in self._recent_calls)
+            raise RuntimeError(
+                f"{import_name}{tuple(args)} is not supported by the "
+                f"PyOpenGL provider\n{recent}"
+            )
+        return unsupported
+
+    @staticmethod
+    def _local_gl_name(import_name: str) -> str:
+        if not import_name.startswith("emscripten_gl"):
+            return import_name
+        suffix = import_name[len("emscripten_gl"):]
+        aliases = {
+            "BindVertexArrayOES": "BindVertexArray",
+            "DeleteVertexArraysOES": "DeleteVertexArrays",
+            "GenVertexArraysOES": "GenVertexArrays",
+            "IsVertexArrayOES": "IsVertexArray",
+            "DrawArraysInstancedANGLE": "DrawArraysInstanced",
+            "DrawElementsInstancedANGLE": "DrawElementsInstanced",
+            "VertexAttribDivisorANGLE": "VertexAttribDivisor",
+            "DrawBuffersWEBGL": "DrawBuffers",
+        }
+        return "gl" + aliases.get(suffix, suffix)
+
+    @staticmethod
+    def _memory(caller: Any) -> Any:
+        memory = caller.get("memory")
+        if memory is None:
+            raise RuntimeError("guest memory export is unavailable")
+        return memory
+
+    @staticmethod
+    def _memory_base(caller: Any, memory: Any) -> int:
+        try:
+            ptr = memory.data_ptr(caller)
+        except TypeError:
+            ptr = memory.data_ptr()
+        return ctypes.addressof(ptr.contents)
+
+    @staticmethod
+    def _memory_len(caller: Any, memory: Any) -> int:
+        try:
+            return int(memory.data_len(caller))
+        except TypeError:
+            return int(memory.data_len())
+
+    def _read(self, caller: Any, ptr: int, size: int) -> bytes:
+        if ptr == 0 or size <= 0:
+            return b""
+        memory = self._memory(caller)
+        data_len = self._memory_len(caller, memory)
+        if ptr < 0 or ptr + size > data_len:
+            raise RuntimeError(
+                f"guest memory read out of bounds: ptr={ptr} size={size}"
+            )
+        return ctypes.string_at(self._memory_base(caller, memory) + ptr, size)
+
+    def _write(self, caller: Any, ptr: int, data: bytes) -> None:
+        if ptr == 0:
+            if data:
+                raise RuntimeError("attempted to write through a null pointer")
+            return
+        memory = self._memory(caller)
+        data_len = self._memory_len(caller, memory)
+        if ptr < 0 or ptr + len(data) > data_len:
+            raise RuntimeError(
+                f"guest memory write out of bounds: ptr={ptr} size={len(data)}"
+            )
+        ctypes.memmove(self._memory_base(caller, memory) + ptr, data,
+                       len(data))
+
+    def _read_i32(self, caller: Any, ptr: int) -> int:
+        return int.from_bytes(self._read(caller, ptr, 4), "little",
+                              signed=True)
+
+    def _read_i32_array(self, caller: Any, ptr: int, count: int) -> list[int]:
+        return [self._read_i32(caller, ptr + i * 4) for i in range(count)]
+
+    def _write_i32(self, caller: Any, ptr: int, value: int) -> None:
+        if ptr:
+            self._write(caller, ptr,
+                        int(value).to_bytes(4, "little", signed=True))
+
+    def _write_u32_array(self, caller: Any, ptr: int,
+                         values: list[int]) -> None:
+        for i, value in enumerate(values):
+            self._write(caller, ptr + i * 4,
+                        int(value & 0xffffffff).to_bytes(
+                            4, "little", signed=False))
+
+    def _write_i32_array(self, caller: Any, ptr: int,
+                         values: list[int]) -> None:
+        for i, value in enumerate(values):
+            self._write_i32(caller, ptr + i * 4, int(value))
+
+    def _write_f32_array(self, caller: Any, ptr: int,
+                         values: list[float]) -> None:
+        if not ptr or not values:
+            return
+        self._write(caller, ptr,
+                    struct.pack("<" + "f" * len(values), *values))
+
+    def _read_f32_array(self, caller: Any, ptr: int, count: int) -> list[float]:
+        if ptr == 0 or count <= 0:
+            return []
+        raw = self._read(caller, ptr, count * 4)
+        return list(struct.unpack("<" + "f" * count, raw))
+
+    def _read_c_string(self, caller: Any, ptr: int) -> bytes:
+        if ptr == 0:
+            return b""
+        memory = self._memory(caller)
+        data_len = self._memory_len(caller, memory)
+        if ptr < 0 or ptr >= data_len:
+            raise RuntimeError(f"guest string pointer out of bounds: {ptr}")
+        data = ctypes.string_at(self._memory_base(caller, memory) + ptr,
+                                data_len - ptr)
+        end = data.find(0)
+        if end < 0:
+            raise RuntimeError(f"unterminated string at guest pointer {ptr}")
+        return bytes(data[:end])
+
+    def _guest_c_string(self, caller: Any, value: bytes | str | None) -> int:
+        if value is None:
+            return 0
+        raw = value.encode("utf-8") if isinstance(value, str) else bytes(value)
+        raw = raw.rstrip(b"\0") + b"\0"
+        cached = self._guest_strings.get(raw)
+        if cached:
+            return cached
+        malloc = caller.get("malloc")
+        if malloc is None:
+            malloc = caller.get("_malloc")
+        if malloc is None:
+            return 0
+        ptr = int(malloc(caller, len(raw)))
+        if ptr == 0:
+            return 0
+        self._write(caller, ptr, raw)
+        self._guest_strings[raw] = ptr
+        return ptr
+
+    def _read_shader_sources(self, caller: Any, count: int, strings_ptr: int,
+                             lengths_ptr: int) -> list[str]:
+        ptrs = self._read_i32_array(caller, strings_ptr, count)
+        lengths = (
+            self._read_i32_array(caller, lengths_ptr, count)
+            if lengths_ptr else [-1] * count
+        )
+        sources: list[str] = []
+        for ptr, length in zip(ptrs, lengths):
+            if length is None or length < 0:
+                raw = self._read_c_string(caller, ptr)
+            else:
+                raw = self._read(caller, ptr, length)
+            sources.append(raw.decode("utf-8", errors="replace"))
+        return sources
+
+    def _write_gl_string(self, caller: Any, buf_size: int, length_ptr: int,
+                         buf_ptr: int, text: str) -> None:
+        raw = text.encode("utf-8")
+        if length_ptr:
+            self._write_i32(caller, length_ptr, min(len(raw), max(buf_size - 1, 0)))
+        if buf_ptr and buf_size > 0:
+            clipped = raw[:max(buf_size - 1, 0)]
+            self._write(caller, buf_ptr, clipped + b"\0")
+
+    def _translate_shader_source(self, source: str, shader_type: int) -> str:
+        if self._is_gles:
+            return source
+
+        text = re.sub(r"^\s*precision\s+\w+\s+\w+\s*;\s*$", "",
+                      source, flags=re.MULTILINE)
+        text = re.sub(r"\b(?:lowp|mediump|highp)\s+", "", text)
+
+        if self._profile == "desktop_core":
+            text, had_version = re.subn(r"^\s*#version\s+\d+\s*$",
+                                        "#version 150",
+                                        text,
+                                        count=1,
+                                        flags=re.MULTILINE)
+            if had_version == 0:
+                text = "#version 150\n" + text
+            if shader_type == self._gl.GL_VERTEX_SHADER:
+                text = re.sub(r"\battribute\b", "in", text)
+                text = re.sub(r"\bvarying\b", "out", text)
+            elif shader_type == self._gl.GL_FRAGMENT_SHADER:
+                text = re.sub(r"\bvarying\b", "in", text)
+                text = re.sub(r"\btexture2D\b", "texture", text)
+                text = re.sub(r"\btextureCube\b", "texture", text)
+                if "gl_FragColor" in text:
+                    lines = text.splitlines()
+                    insert_at = 1 if lines and lines[0].startswith("#version") else 0
+                    lines.insert(insert_at, "out vec4 fragColor;")
+                    text = "\n".join(lines).replace("gl_FragColor",
+                                                    "fragColor")
+        else:
+            text, had_version = re.subn(r"^\s*#version\s+\d+\s*$",
+                                        "#version 120",
+                                        text,
+                                        count=1,
+                                        flags=re.MULTILINE)
+        return text
+
+    def _texture_byte_size(self, width: int, height: int, fmt: int,
+                           typ: int) -> int:
+        GL = self._gl
+        if width <= 0 or height <= 0:
+            return 0
+        if typ == GL.GL_UNSIGNED_BYTE:
+            channels = {
+                GL.GL_RGBA: 4,
+                getattr(GL, "GL_BGRA", 0x80E1): 4,
+                GL.GL_RGB: 3,
+                getattr(GL, "GL_BGR", 0x80E0): 3,
+                GL.GL_ALPHA: 1,
+                GL.GL_LUMINANCE: 1,
+                GL.GL_LUMINANCE_ALPHA: 2,
+            }.get(fmt)
+            if channels is None:
+                raise RuntimeError(
+                    f"unsupported unsigned-byte texture format 0x{fmt:x}"
+                )
+            return width * height * channels
+        if typ in {
+            GL.GL_UNSIGNED_SHORT_4_4_4_4,
+            GL.GL_UNSIGNED_SHORT_5_5_5_1,
+            GL.GL_UNSIGNED_SHORT_5_6_5,
+        }:
+            return width * height * 2
+        if typ in {
+            getattr(GL, "GL_UNSIGNED_INT_8_8_8_8", 0x8035),
+            getattr(GL, "GL_UNSIGNED_INT_8_8_8_8_REV", 0x8367),
+        }:
+            return width * height * 4
+        raise RuntimeError(f"unsupported texture type 0x{typ:x}")
+
+    def _normalize_texture_formats(self, internalformat: int,
+                                   fmt: int) -> tuple[int, int]:
+        if self._is_gles:
+            return internalformat, fmt
+        GL = self._gl
+        alpha = getattr(GL, "GL_ALPHA", 0x1906)
+        luminance = getattr(GL, "GL_LUMINANCE", 0x1909)
+        luminance_alpha = getattr(GL, "GL_LUMINANCE_ALPHA", 0x190A)
+        red = getattr(GL, "GL_RED", 0x1903)
+        rg = getattr(GL, "GL_RG", 0x8227)
+        r8 = getattr(GL, "GL_R8", red)
+        rg8 = getattr(GL, "GL_RG8", rg)
+        if fmt == alpha:
+            return r8, red
+        if fmt == luminance:
+            return r8, red
+        if fmt == luminance_alpha:
+            return rg8, rg
+        return internalformat, fmt
+
+    def _pixel_buffer(self, caller: Any, ptr: int, width: int, height: int,
+                      fmt: int, typ: int) -> Any:
+        if ptr == 0:
+            return None
+        size = self._texture_byte_size(width, height, fmt, typ)
+        return self._buffer_ptr(caller, size, ptr)
+
+    @staticmethod
+    def _values_as_list(value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, (bytes, bytearray)):
+            return list(value)
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        if hasattr(value, "tolist"):
+            listed = value.tolist()
+            return listed if isinstance(listed, list) else [listed]
+        try:
+            return list(value)
+        except TypeError:
+            return [value]
+
+    def _active_info_name(self, result: Any) -> bytes:
+        if result is None:
+            return b""
+        for item in result:
+            if isinstance(item, bytes):
+                return item
+            if isinstance(item, str):
+                return item.encode("utf-8")
+        return b""
+
+    def _active_attrib_locations(self, program: int) -> set[int]:
+        cached = self._program_active_attribs.get(program)
+        if cached is not None:
+            return cached
+        GL = self._gl
+        active: set[int] = set()
+        if program:
+            count = int(GL.glGetProgramiv(program, GL.GL_ACTIVE_ATTRIBUTES))
+            for index in range(count):
+                name = self._active_info_name(
+                    GL.glGetActiveAttrib(program, index))
+                if not name:
+                    continue
+                base_name = name.split(b"[", 1)[0]
+                loc = int(GL.glGetAttribLocation(program, base_name))
+                if loc >= 0:
+                    active.add(loc)
+        self._program_active_attribs[program] = active
+        return active
+
+    def _enabled_attribs(self) -> list[int]:
+        GL = self._gl
+        max_attribs = max(16, int(GL.glGetIntegerv(
+            GL.GL_MAX_VERTEX_ATTRIBS)))
+        return [
+            index for index in range(max_attribs)
+            if self._attrib_enabled(index)
+        ]
+
+    def _attrib_enabled(self, index: int) -> bool:
+        value = self._gl.glGetVertexAttribiv(
+            index, self._gl.GL_VERTEX_ATTRIB_ARRAY_ENABLED)
+        values = self._values_as_list(value)
+        return bool(values and int(values[0]))
+
+    def _suspend_inactive_attribs(self) -> list[int]:
+        GL = self._gl
+        program = int(GL.glGetIntegerv(GL.GL_CURRENT_PROGRAM))
+        active = self._active_attrib_locations(program)
+        if not active:
+            active = set(self._array_attribs) | set(self._client_attribs)
+        disabled: list[int] = []
+        for index in self._enabled_attribs():
+            if index not in active:
+                GL.glDisableVertexAttribArray(index)
+                disabled.append(index)
+        return disabled
+
+    def _restore_attribs(self, indices: list[int]) -> None:
+        for index in indices:
+            self._gl.glEnableVertexAttribArray(index)
+
+    def _pointer_or_offset(self, caller: Any, target: int, ptr: int,
+                           byte_size: int) -> Any:
+        if ptr == 0:
+            return None
+        if self._bound_buffers.get(target, 0) != 0:
+            return ctypes.c_void_p(ptr)
+        return self._buffer_ptr(caller, byte_size, ptr)
+
+    def _gl_type_size(self, typ: int) -> int:
+        GL = self._gl
+        sizes = {
+            GL.GL_BYTE: 1,
+            GL.GL_UNSIGNED_BYTE: 1,
+            GL.GL_SHORT: 2,
+            GL.GL_UNSIGNED_SHORT: 2,
+            GL.GL_INT: 4,
+            GL.GL_UNSIGNED_INT: 4,
+            GL.GL_FLOAT: 4,
+        }
+        if typ not in sizes:
+            raise RuntimeError(f"unsupported GL scalar type 0x{typ:x}")
+        return sizes[typ]
+
+    def _client_buffer_id(self, index: int) -> int:
+        buffer = self._client_attrib_buffers.get(index)
+        if buffer:
+            return buffer
+        generated = self._gl.glGenBuffers(1)
+        if isinstance(generated, (list, tuple)):
+            generated = generated[0]
+        buffer = int(generated)
+        self._client_attrib_buffers[index] = buffer
+        return buffer
+
+    def _ensure_client_element_buffer(self) -> int:
+        if self._client_element_buffer:
+            return self._client_element_buffer
+        generated = self._gl.glGenBuffers(1)
+        if isinstance(generated, (list, tuple)):
+            generated = generated[0]
+        self._client_element_buffer = int(generated)
+        return self._client_element_buffer
+
+    def _upload_client_attribs(self, caller: Any, first: int,
+                               vertex_count: int) -> None:
+        if vertex_count <= 0:
+            return
+        GL = self._gl
+        previous_array_buffer = self._bound_buffers.get(GL.GL_ARRAY_BUFFER, 0)
+        try:
+            for index, (size, typ, normalized, stride, pointer) in (
+                    self._client_attribs.items()):
+                scalar_size = self._gl_type_size(typ)
+                element_size = size * scalar_size
+                effective_stride = stride or element_size
+                start = pointer + first * effective_stride
+                byte_size = ((vertex_count - 1) * effective_stride +
+                             element_size)
+                data = self._read(caller, start, byte_size)
+                buffer = self._client_buffer_id(index)
+                GL.glBindBuffer(GL.GL_ARRAY_BUFFER, buffer)
+                GL.glBufferData(GL.GL_ARRAY_BUFFER, len(data), data,
+                                GL.GL_STREAM_DRAW)
+                GL.glVertexAttribPointer(index, size, typ, bool(normalized),
+                                         effective_stride, ctypes.c_void_p(0))
+        finally:
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, previous_array_buffer)
+
+    def _read_indices(self, caller: Any, ptr: int, count: int,
+                      typ: int) -> tuple[bytes, int]:
+        bytes_per_index = {
+            self._gl.GL_UNSIGNED_BYTE: 1,
+            self._gl.GL_UNSIGNED_SHORT: 2,
+            self._gl.GL_UNSIGNED_INT: 4,
+        }.get(typ)
+        if bytes_per_index is None:
+            raise RuntimeError(f"unsupported draw index type 0x{typ:x}")
+        raw = self._read(caller, ptr, count * bytes_per_index)
+        if not raw:
+            return raw, 0
+        if typ == self._gl.GL_UNSIGNED_BYTE:
+            max_index = max(raw)
+        elif typ == self._gl.GL_UNSIGNED_SHORT:
+            values = struct.unpack("<" + "H" * count, raw)
+            max_index = max(values) if values else 0
+        else:
+            values = struct.unpack("<" + "I" * count, raw)
+            max_index = max(values) if values else 0
+        return raw, int(max_index)
+
+    def _buffer_ptr(self, caller: Any, size: int, ptr: int) -> Any:
+        if ptr == 0:
+            return None
+        memory = self._memory(caller)
+        get_buffer_ptr = getattr(memory, "get_buffer_ptr", None)
+        if get_buffer_ptr is not None:
+            try:
+                return get_buffer_ptr(caller, size, ptr)
+            except TypeError:
+                return get_buffer_ptr(size, ptr)
+        data_len = self._memory_len(caller, memory)
+        if ptr < 0 or ptr + size > data_len:
+            raise RuntimeError(
+                f"guest buffer out of bounds: ptr={ptr} size={size}"
+            )
+        return (ctypes.c_ubyte * size).from_address(
+            self._memory_base(caller, memory) + ptr)
+
+    def glPixelStorei(self, caller: Any, pname: int, param: int) -> None:
+        return self._call("glPixelStorei", (pname, param),
+                          lambda: self._gl.glPixelStorei(pname, param))
+
+    def glGenTextures(self, caller: Any, n: int, textures: int) -> None:
+        def run() -> None:
+            ids = self._gl.glGenTextures(n)
+            if n == 1 and isinstance(ids, int):
+                values = [ids]
+            else:
+                values = [int(v) for v in ids]
+            self._write_u32_array(caller, textures, values)
+        return self._call("glGenTextures", (n, textures), run)
+
+    def glTexParameteri(self, caller: Any, target: int, pname: int,
+                        param: int) -> None:
+        return self._call("glTexParameteri", (target, pname, param),
+                          lambda: self._gl.glTexParameteri(target, pname,
+                                                           param))
+
+    def glGetError(self, caller: Any) -> int:
+        return int(self._call("glGetError", (), self._gl.glGetError))
+
+    def glGetIntegerv(self, caller: Any, pname: int, params: int) -> None:
+        def run() -> None:
+            values = [int(v) for v in self._values_as_list(
+                self._gl.glGetIntegerv(pname)
+            )]
+            self._write_i32_array(caller, params, values)
+        return self._call("glGetIntegerv", (pname, params), run)
+
+    def glGetFloatv(self, caller: Any, pname: int, params: int) -> None:
+        def run() -> None:
+            values = [float(v) for v in self._values_as_list(
+                self._gl.glGetFloatv(pname)
+            )]
+            self._write_f32_array(caller, params, values)
+        return self._call("glGetFloatv", (pname, params), run)
+
+    def glGetString(self, caller: Any, name: int) -> int:
+        def run() -> int:
+            try:
+                value = self._gl.glGetString(name)
+            except Exception:
+                if name == self._gl.GL_EXTENSIONS:
+                    value = b""
+                else:
+                    raise
+            if self._trace_calls:
+                text = self._bytes_to_text(value) if value else "<none>"
+                print(f"[wasmtime-gl] glGetString({name}) -> {text}",
+                      file=sys.stderr)
+            return self._guest_c_string(caller, value)
+        return int(self._call("glGetString", (name,), run))
+
+    def glViewport(self, caller: Any, x: int, y: int, width: int,
+                   height: int) -> None:
+        return self._call("glViewport", (x, y, width, height),
+                          lambda: self._gl.glViewport(x, y, width, height))
+
+    def glTexImage2D(self, caller: Any, target: int, level: int,
+                     internalformat: int, width: int, height: int,
+                     border: int, fmt: int, typ: int, pixels: int) -> None:
+        def run() -> None:
+            data = self._pixel_buffer(caller, pixels, width, height, fmt, typ)
+            upload_internal, upload_format = self._normalize_texture_formats(
+                internalformat, fmt)
+            self._gl.glTexImage2D(target, level, upload_internal, width,
+                                  height, border, upload_format, typ, data)
+        return self._call("glTexImage2D",
+                          (target, level, internalformat, width, height,
+                           border, fmt, typ, pixels), run)
+
+    def glCompressedTexImage2D(self, caller: Any, target: int, level: int,
+                               internalformat: int, width: int, height: int,
+                               border: int, image_size: int,
+                               data_ptr: int) -> None:
+        def run() -> None:
+            data = (
+                None if data_ptr == 0 else
+                self._buffer_ptr(caller, image_size, data_ptr)
+            )
+            self._gl.glCompressedTexImage2D(target, level, internalformat,
+                                            width, height, border,
+                                            image_size, data)
+        return self._call("glCompressedTexImage2D",
+                          (target, level, internalformat, width, height,
+                           border, image_size, data_ptr), run)
+
+    def glReadPixels(self, caller: Any, x: int, y: int, width: int,
+                     height: int, fmt: int, typ: int, pixels: int) -> None:
+        def run() -> None:
+            size = self._texture_byte_size(width, height, fmt, typ)
+            data = self._buffer_ptr(caller, size, pixels)
+            self._gl.glReadPixels(x, y, width, height, fmt, typ, data)
+        return self._call("glReadPixels",
+                          (x, y, width, height, fmt, typ, pixels), run)
+
+    def glCreateProgram(self, caller: Any) -> int:
+        return int(self._call("glCreateProgram", (),
+                              self._gl.glCreateProgram))
+
+    def glAttachShader(self, caller: Any, program: int, shader: int) -> None:
+        def run() -> None:
+            self._program_shaders.setdefault(program, set()).add(shader)
+            self._gl.glAttachShader(program, shader)
+        return self._call("glAttachShader", (program, shader), run)
+
+    def glLinkProgram(self, caller: Any, program: int) -> None:
+        def run() -> None:
+            self._gl.glLinkProgram(program)
+            self._program_active_attribs.pop(program, None)
+        return self._call("glLinkProgram", (program,), run)
+
+    def glGetProgramiv(self, caller: Any, program: int, pname: int,
+                       params: int) -> None:
+        def run() -> None:
+            value = self._gl.glGetProgramiv(program, pname)
+            self._write_i32(caller, params, int(value))
+        return self._call("glGetProgramiv", (program, pname, params), run)
+
+    def glDeleteShader(self, caller: Any, shader: int) -> None:
+        def run() -> None:
+            self._gl.glDeleteShader(shader)
+            self._shader_types.pop(shader, None)
+            self._shader_sources.pop(shader, None)
+        return self._call("glDeleteShader", (shader,), run)
+
+    def glGetUniformLocation(self, caller: Any, program: int,
+                             name_ptr: int) -> int:
+        def run() -> int:
+            name = self._read_c_string(caller, name_ptr)
+            return int(self._gl.glGetUniformLocation(program, name))
+        return int(self._call("glGetUniformLocation", (program, name_ptr),
+                              run))
+
+    def glUniform1i(self, caller: Any, location: int, v0: int) -> None:
+        return self._call("glUniform1i", (location, v0),
+                          lambda: self._gl.glUniform1i(location, v0))
+
+    def glUniform1f(self, caller: Any, location: int, v0: float) -> None:
+        return self._call("glUniform1f", (location, v0),
+                          lambda: self._gl.glUniform1f(location, v0))
+
+    def glUniform2f(self, caller: Any, location: int, v0: float,
+                    v1: float) -> None:
+        return self._call("glUniform2f", (location, v0, v1),
+                          lambda: self._gl.glUniform2f(location, v0, v1))
+
+    def glUniform3f(self, caller: Any, location: int, v0: float,
+                    v1: float, v2: float) -> None:
+        return self._call("glUniform3f", (location, v0, v1, v2),
+                          lambda: self._gl.glUniform3f(location, v0, v1, v2))
+
+    def glUniform4f(self, caller: Any, location: int, v0: float,
+                    v1: float, v2: float, v3: float) -> None:
+        return self._call("glUniform4f", (location, v0, v1, v2, v3),
+                          lambda: self._gl.glUniform4f(location, v0, v1, v2,
+                                                       v3))
+
+    def _uniform_fv(self, caller: Any, name: str, location: int, count: int,
+                    values_ptr: int, width: int, fn: Any) -> None:
+        def run() -> None:
+            values = self._read_f32_array(caller, values_ptr, count * width)
+            fn(location, count, values)
+        return self._call(name, (location, count, values_ptr), run)
+
+    def glUniform1fv(self, caller: Any, location: int, count: int,
+                     values: int) -> None:
+        return self._uniform_fv(caller, "glUniform1fv", location, count,
+                                values, 1, self._gl.glUniform1fv)
+
+    def glUniform2fv(self, caller: Any, location: int, count: int,
+                     values: int) -> None:
+        return self._uniform_fv(caller, "glUniform2fv", location, count,
+                                values, 2, self._gl.glUniform2fv)
+
+    def glUniform3fv(self, caller: Any, location: int, count: int,
+                     values: int) -> None:
+        return self._uniform_fv(caller, "glUniform3fv", location, count,
+                                values, 3, self._gl.glUniform3fv)
+
+    def glUniform4fv(self, caller: Any, location: int, count: int,
+                     values: int) -> None:
+        return self._uniform_fv(caller, "glUniform4fv", location, count,
+                                values, 4, self._gl.glUniform4fv)
+
+    def glUniformMatrix3fv(self, caller: Any, location: int, count: int,
+                           transpose: int, values: int) -> None:
+        def run() -> None:
+            data = self._read_f32_array(caller, values, count * 9)
+            self._gl.glUniformMatrix3fv(location, count, bool(transpose), data)
+        return self._call("glUniformMatrix3fv",
+                          (location, count, transpose, values), run)
+
+    def glUniformMatrix4fv(self, caller: Any, location: int, count: int,
+                           transpose: int, values: int) -> None:
+        def run() -> None:
+            data = self._read_f32_array(caller, values, count * 16)
+            self._gl.glUniformMatrix4fv(location, count, bool(transpose), data)
+        return self._call("glUniformMatrix4fv",
+                          (location, count, transpose, values), run)
+
+    def glCreateShader(self, caller: Any, shader_type: int) -> int:
+        def run() -> int:
+            shader = int(self._gl.glCreateShader(shader_type))
+            self._shader_types[shader] = shader_type
+            return shader
+        return int(self._call("glCreateShader", (shader_type,), run))
+
+    def glShaderSource(self, caller: Any, shader: int, count: int,
+                       strings: int, lengths: int) -> None:
+        def run() -> None:
+            sources = self._read_shader_sources(caller, count, strings,
+                                                lengths)
+            source = "".join(sources)
+            shader_type = self._shader_types.get(shader, 0)
+            translated = self._translate_shader_source(source, shader_type)
+            self._shader_sources[shader] = translated
+            self._gl.glShaderSource(shader, [translated])
+        return self._call("glShaderSource",
+                          (shader, count, strings, lengths), run)
+
+    def glCompileShader(self, caller: Any, shader: int) -> None:
+        def run() -> None:
+            self._gl.glCompileShader(shader)
+            status = int(self._gl.glGetShaderiv(
+                shader, self._gl.GL_COMPILE_STATUS))
+            if status:
+                self._shader_compile_logs.pop(shader, None)
+                return
+            log = self._bytes_to_text(self._gl.glGetShaderInfoLog(shader))
+            self._shader_compile_logs[shader] = log
+            if self._trace_calls:
+                source = self._shader_sources.get(shader, "")
+                print(
+                    f"[wasmtime-gl] shader {shader} compile failed: "
+                    f"{log}\n{source}",
+                    file=sys.stderr,
+                )
+        return self._call("glCompileShader", (shader,), run)
+
+    def glGetShaderiv(self, caller: Any, shader: int, pname: int,
+                      params: int) -> None:
+        def run() -> None:
+            value = self._gl.glGetShaderiv(shader, pname)
+            self._write_i32(caller, params, int(value))
+        return self._call("glGetShaderiv", (shader, pname, params), run)
+
+    def glGetShaderSource(self, caller: Any, shader: int, buf_size: int,
+                          length: int, source_ptr: int) -> None:
+        def run() -> None:
+            source = self._bytes_to_text(self._gl.glGetShaderSource(shader))
+            if not source:
+                source = self._shader_sources.get(shader, "")
+            self._write_gl_string(caller, buf_size, length, source_ptr,
+                                  source)
+        return self._call("glGetShaderSource",
+                          (shader, buf_size, length, source_ptr), run)
+
+    def glGetShaderInfoLog(self, caller: Any, shader: int, buf_size: int,
+                           length: int, info_log: int) -> None:
+        def run() -> None:
+            log = self._bytes_to_text(self._gl.glGetShaderInfoLog(shader))
+            self._write_gl_string(caller, buf_size, length, info_log, log)
+        return self._call("glGetShaderInfoLog",
+                          (shader, buf_size, length, info_log), run)
+
+    def glBindAttribLocation(self, caller: Any, program: int, index: int,
+                             name_ptr: int) -> None:
+        def run() -> None:
+            name = self._read_c_string(caller, name_ptr)
+            self._gl.glBindAttribLocation(program, index, name)
+        return self._call("glBindAttribLocation",
+                          (program, index, name_ptr), run)
+
+    def _write_active_info(self, caller: Any, result: Any, buf_size: int,
+                           length: int, size_ptr: int, type_ptr: int,
+                           name_ptr: int) -> None:
+        if result is None:
+            name, size, typ = b"", 0, 0
+        else:
+            name = b""
+            numeric: list[int] = []
+            for item in result:
+                try:
+                    numeric.append(int(item))
+                except (TypeError, ValueError):
+                    name = item
+            if len(numeric) >= 2:
+                size, typ = numeric[0], numeric[1]
+            else:
+                size, typ = 0, 0
+        text = self._bytes_to_text(name)
+        self._write_i32(caller, size_ptr, int(size))
+        self._write_i32(caller, type_ptr, int(typ))
+        self._write_gl_string(caller, buf_size, length, name_ptr, text)
+
+    def glGetActiveAttrib(self, caller: Any, program: int, index: int,
+                          buf_size: int, length: int, size_ptr: int,
+                          type_ptr: int, name_ptr: int) -> None:
+        def run() -> None:
+            result = self._gl.glGetActiveAttrib(program, index)
+            self._write_active_info(caller, result, buf_size, length,
+                                    size_ptr, type_ptr, name_ptr)
+        return self._call("glGetActiveAttrib",
+                          (program, index, buf_size, length, size_ptr,
+                           type_ptr, name_ptr), run)
+
+    def glGetAttribLocation(self, caller: Any, program: int,
+                            name_ptr: int) -> int:
+        def run() -> int:
+            name = self._read_c_string(caller, name_ptr)
+            return int(self._gl.glGetAttribLocation(program, name))
+        return int(self._call("glGetAttribLocation", (program, name_ptr),
+                              run))
+
+    def glGetProgramInfoLog(self, caller: Any, program: int, buf_size: int,
+                            length: int, info_log: int) -> None:
+        def run() -> None:
+            log = self._bytes_to_text(self._gl.glGetProgramInfoLog(program))
+            self._write_gl_string(caller, buf_size, length, info_log, log)
+        return self._call("glGetProgramInfoLog",
+                          (program, buf_size, length, info_log), run)
+
+    def glGetActiveUniform(self, caller: Any, program: int, index: int,
+                           buf_size: int, length: int, size_ptr: int,
+                           type_ptr: int, name_ptr: int) -> None:
+        def run() -> None:
+            result = self._gl.glGetActiveUniform(program, index)
+            self._write_active_info(caller, result, buf_size, length,
+                                    size_ptr, type_ptr, name_ptr)
+        return self._call("glGetActiveUniform",
+                          (program, index, buf_size, length, size_ptr,
+                           type_ptr, name_ptr), run)
+
+    def glTexSubImage2D(self, caller: Any, target: int, level: int,
+                        xoffset: int, yoffset: int, width: int, height: int,
+                        fmt: int, typ: int, pixels: int) -> None:
+        def run() -> None:
+            data = self._pixel_buffer(caller, pixels, width, height, fmt, typ)
+            _, upload_format = self._normalize_texture_formats(fmt, fmt)
+            self._gl.glTexSubImage2D(target, level, xoffset, yoffset, width,
+                                     height, upload_format, typ, data)
+        return self._call("glTexSubImage2D",
+                          (target, level, xoffset, yoffset, width, height,
+                           fmt, typ, pixels), run)
+
+    def glDeleteProgram(self, caller: Any, program: int) -> None:
+        def run() -> None:
+            self._program_active_attribs.pop(program, None)
+            self._program_shaders.pop(program, None)
+            self._gl.glDeleteProgram(program)
+        return self._call("glDeleteProgram", (program,), run)
+
+    def glUseProgram(self, caller: Any, program: int) -> None:
+        return self._call("glUseProgram", (program,),
+                          lambda: self._gl.glUseProgram(program))
+
+    def glActiveTexture(self, caller: Any, texture: int) -> None:
+        return self._call("glActiveTexture", (texture,),
+                          lambda: self._gl.glActiveTexture(texture))
+
+    def glBindTexture(self, caller: Any, target: int, texture: int) -> None:
+        return self._call("glBindTexture", (target, texture),
+                          lambda: self._gl.glBindTexture(target, texture))
+
+    def glDeleteTextures(self, caller: Any, n: int, textures: int) -> None:
+        def run() -> None:
+            ids = self._read_i32_array(caller, textures, n)
+            self._gl.glDeleteTextures(ids)
+        return self._call("glDeleteTextures", (n, textures), run)
+
+    def glBindVertexArray(self, caller: Any, array: int) -> None:
+        if array == 0 and self._default_vao:
+            array = self._default_vao
+        return self._call("glBindVertexArray", (array,),
+                          lambda: self._gl.glBindVertexArray(array))
+
+    def glIsVertexArray(self, caller: Any, array: int) -> int:
+        return int(self._call("glIsVertexArray", (array,),
+                              lambda: self._gl.glIsVertexArray(array)))
+
+    def glGenVertexArrays(self, caller: Any, n: int, arrays: int) -> None:
+        def run() -> None:
+            ids = self._gl.glGenVertexArrays(n)
+            if n == 1 and isinstance(ids, int):
+                values = [ids]
+            else:
+                values = [int(v) for v in ids]
+            self._write_u32_array(caller, arrays, values)
+        return self._call("glGenVertexArrays", (n, arrays), run)
+
+    def glGenBuffers(self, caller: Any, n: int, buffers: int) -> None:
+        def run() -> None:
+            ids = self._gl.glGenBuffers(n)
+            values = [ids] if n == 1 and isinstance(ids, int) else [
+                int(v) for v in ids
+            ]
+            self._write_u32_array(caller, buffers, values)
+        return self._call("glGenBuffers", (n, buffers), run)
+
+    def glGenFramebuffers(self, caller: Any, n: int, buffers: int) -> None:
+        def run() -> None:
+            ids = self._gl.glGenFramebuffers(n)
+            values = [ids] if n == 1 and isinstance(ids, int) else [
+                int(v) for v in ids
+            ]
+            self._write_u32_array(caller, buffers, values)
+        return self._call("glGenFramebuffers", (n, buffers), run)
+
+    def glGenRenderbuffers(self, caller: Any, n: int, buffers: int) -> None:
+        def run() -> None:
+            ids = self._gl.glGenRenderbuffers(n)
+            values = [ids] if n == 1 and isinstance(ids, int) else [
+                int(v) for v in ids
+            ]
+            self._write_u32_array(caller, buffers, values)
+        return self._call("glGenRenderbuffers", (n, buffers), run)
+
+    def glDeleteBuffers(self, caller: Any, n: int, buffers: int) -> None:
+        def run() -> None:
+            ids = self._read_i32_array(caller, buffers, n)
+            self._gl.glDeleteBuffers(n, ids)
+        return self._call("glDeleteBuffers", (n, buffers), run)
+
+    def glDeleteVertexArrays(self, caller: Any, n: int, arrays: int) -> None:
+        def run() -> None:
+            ids = self._read_i32_array(caller, arrays, n)
+            self._gl.glDeleteVertexArrays(n, ids)
+        return self._call("glDeleteVertexArrays", (n, arrays), run)
+
+    def glDeleteFramebuffers(self, caller: Any, n: int, buffers: int) -> None:
+        def run() -> None:
+            ids = self._read_i32_array(caller, buffers, n)
+            self._gl.glDeleteFramebuffers(n, ids)
+        return self._call("glDeleteFramebuffers", (n, buffers), run)
+
+    def glDeleteRenderbuffers(self, caller: Any, n: int, buffers: int) -> None:
+        def run() -> None:
+            ids = self._read_i32_array(caller, buffers, n)
+            self._gl.glDeleteRenderbuffers(n, ids)
+        return self._call("glDeleteRenderbuffers", (n, buffers), run)
+
+    def glBindBuffer(self, caller: Any, target: int, buffer: int) -> None:
+        def run() -> None:
+            self._bound_buffers[target] = buffer
+            self._gl.glBindBuffer(target, buffer)
+        return self._call("glBindBuffer", (target, buffer), run)
+
+    def glBufferData(self, caller: Any, target: int, size: int,
+                     data_ptr: int, usage: int) -> None:
+        def run() -> None:
+            data = (
+                None if data_ptr == 0 else
+                self._buffer_ptr(caller, size, data_ptr)
+            )
+            self._gl.glBufferData(target, size, data, usage)
+        return self._call("glBufferData", (target, size, data_ptr, usage),
+                          run)
+
+    def glBufferSubData(self, caller: Any, target: int, offset: int, size: int,
+                        data_ptr: int) -> None:
+        def run() -> None:
+            data = (
+                None if data_ptr == 0 else
+                self._buffer_ptr(caller, size, data_ptr)
+            )
+            self._gl.glBufferSubData(target, offset, size, data)
+        return self._call("glBufferSubData",
+                          (target, offset, size, data_ptr), run)
+
+    def glEnableVertexAttribArray(self, caller: Any, index: int) -> None:
+        return self._call("glEnableVertexAttribArray", (index,),
+                          lambda: self._gl.glEnableVertexAttribArray(index))
+
+    def glDisableVertexAttribArray(self, caller: Any, index: int) -> None:
+        return self._call("glDisableVertexAttribArray", (index,),
+                          lambda: self._gl.glDisableVertexAttribArray(index))
+
+    def glVertexAttribPointer(self, caller: Any, index: int, size: int,
+                              typ: int, normalized: int, stride: int,
+                              pointer: int) -> None:
+        def run() -> None:
+            if self._bound_buffers.get(self._gl.GL_ARRAY_BUFFER, 0) != 0:
+                self._client_attribs.pop(index, None)
+                self._array_attribs.add(index)
+                data = ctypes.c_void_p(pointer)
+            else:
+                self._array_attribs.discard(index)
+                self._client_attribs[index] = (
+                    size, typ, normalized, stride, pointer)
+                return
+            self._gl.glVertexAttribPointer(index, size, typ, bool(normalized),
+                                           stride, data)
+        return self._call("glVertexAttribPointer",
+                          (index, size, typ, normalized, stride, pointer), run)
+
+    def glDrawElements(self, caller: Any, mode: int, count: int, typ: int,
+                       indices: int) -> None:
+        def run() -> None:
+            GL = self._gl
+            if self._bound_buffers.get(GL.GL_ELEMENT_ARRAY_BUFFER, 0) == 0:
+                raw_indices, max_index = self._read_indices(
+                    caller, indices, count, typ)
+                self._upload_client_attribs(caller, 0, max_index + 1)
+                previous_element_buffer = self._bound_buffers.get(
+                    GL.GL_ELEMENT_ARRAY_BUFFER, 0)
+                try:
+                    buffer = self._ensure_client_element_buffer()
+                    GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, buffer)
+                    GL.glBufferData(GL.GL_ELEMENT_ARRAY_BUFFER,
+                                    len(raw_indices), raw_indices,
+                                    GL.GL_STREAM_DRAW)
+                    GL.glDrawElements(mode, count, typ, ctypes.c_void_p(0))
+                finally:
+                    GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER,
+                                    previous_element_buffer)
+            else:
+                self._upload_client_attribs(caller, 0, count)
+                offset = None if indices == 0 else ctypes.c_void_p(indices)
+                pre_error = GL.glGetError()
+                if pre_error:
+                    raise RuntimeError(
+                        f"pre-existing GL error 0x{pre_error:x} before "
+                        "glDrawElements")
+                suspended = self._suspend_inactive_attribs()
+                try:
+                    self._gl.glDrawElements(mode, count, typ, offset)
+                except Exception as exc:
+                    program = int(GL.glGetIntegerv(GL.GL_CURRENT_PROGRAM))
+                    try:
+                        GL.glValidateProgram(program)
+                        validate_status = int(GL.glGetProgramiv(
+                            program, GL.GL_VALIDATE_STATUS))
+                    except Exception:
+                        validate_status = -1
+                    attached = [
+                        {
+                            "shader": shader,
+                            "type": self._shader_types.get(shader, 0),
+                            "sourcePrefix": self._shader_sources.get(
+                                shader, "")[:120],
+                        }
+                        for shader in sorted(
+                            self._program_shaders.get(program, set()))
+                    ]
+                    state = {
+                        "program": program,
+                        "linkStatus": int(GL.glGetProgramiv(
+                            program, GL.GL_LINK_STATUS)),
+                        "validateStatus": validate_status,
+                        "programLog": self._bytes_to_text(
+                            GL.glGetProgramInfoLog(program))[:240],
+                        "attachedShaders": attached,
+                        "activeAttribs": sorted(
+                            self._active_attrib_locations(program)),
+                        "configuredAttribs": sorted(
+                            set(self._array_attribs) |
+                            set(self._client_attribs)),
+                        "arrayBuffer": int(GL.glGetIntegerv(
+                            GL.GL_ARRAY_BUFFER_BINDING)),
+                        "elementArrayBuffer": int(GL.glGetIntegerv(
+                            GL.GL_ELEMENT_ARRAY_BUFFER_BINDING)),
+                        "vertexArray": int(GL.glGetIntegerv(
+                            getattr(GL, "GL_VERTEX_ARRAY_BINDING", 0x85B5))),
+                        "enabledAttribs": [
+                            i for i in range(8) if self._attrib_enabled(i)
+                        ],
+                    }
+                    raise RuntimeError(
+                        f"{exc}; draw state={state}") from exc
+                finally:
+                    self._restore_attribs(suspended)
+        return self._call("glDrawElements", (mode, count, typ, indices), run)
+
+    def glDrawArrays(self, caller: Any, mode: int, first: int,
+                     count: int) -> None:
+        def run() -> None:
+            self._upload_client_attribs(caller, first, count)
+            suspended = self._suspend_inactive_attribs()
+            try:
+                self._gl.glDrawArrays(mode, first, count)
+            finally:
+                self._restore_attribs(suspended)
+        return self._call("glDrawArrays", (mode, first, count), run)
+
+    def glIsEnabled(self, caller: Any, cap: int) -> int:
+        return int(bool(self._call("glIsEnabled", (cap,),
+                                   lambda: self._gl.glIsEnabled(cap))))
+
+    def glGetBooleanv(self, caller: Any, pname: int, params: int) -> None:
+        def run() -> None:
+            values = [1 if bool(v) else 0 for v in self._values_as_list(
+                self._gl.glGetBooleanv(pname)
+            )]
+            self._write(caller, params, bytes(values))
+        return self._call("glGetBooleanv", (pname, params), run)
+
+    def glEnable(self, caller: Any, cap: int) -> None:
+        return self._call("glEnable", (cap,), lambda: self._gl.glEnable(cap))
+
+    def glDisable(self, caller: Any, cap: int) -> None:
+        return self._call("glDisable", (cap,), lambda: self._gl.glDisable(cap))
+
+    def glCullFace(self, caller: Any, mode: int) -> None:
+        return self._call("glCullFace", (mode,),
+                          lambda: self._gl.glCullFace(mode))
+
+    def glFrontFace(self, caller: Any, mode: int) -> None:
+        return self._call("glFrontFace", (mode,),
+                          lambda: self._gl.glFrontFace(mode))
+
+    def glDepthMask(self, caller: Any, flag: int) -> None:
+        return self._call("glDepthMask", (flag,),
+                          lambda: self._gl.glDepthMask(bool(flag)))
+
+    def glDepthFunc(self, caller: Any, func: int) -> None:
+        return self._call("glDepthFunc", (func,),
+                          lambda: self._gl.glDepthFunc(func))
+
+    def glBlendFunc(self, caller: Any, sfactor: int, dfactor: int) -> None:
+        return self._call("glBlendFunc", (sfactor, dfactor),
+                          lambda: self._gl.glBlendFunc(sfactor, dfactor))
+
+    def glBindFramebuffer(self, caller: Any, target: int,
+                          framebuffer: int) -> None:
+        return self._call("glBindFramebuffer", (target, framebuffer),
+                          lambda: self._gl.glBindFramebuffer(target,
+                                                             framebuffer))
+
+    def glBindRenderbuffer(self, caller: Any, target: int,
+                           renderbuffer: int) -> None:
+        return self._call("glBindRenderbuffer", (target, renderbuffer),
+                          lambda: self._gl.glBindRenderbuffer(target,
+                                                               renderbuffer))
+
+    def glFramebufferTexture2D(self, caller: Any, target: int,
+                               attachment: int, textarget: int, texture: int,
+                               level: int) -> None:
+        return self._call("glFramebufferTexture2D",
+                          (target, attachment, textarget, texture, level),
+                          lambda: self._gl.glFramebufferTexture2D(
+                              target, attachment, textarget, texture, level))
+
+    def glFramebufferRenderbuffer(self, caller: Any, target: int,
+                                  attachment: int, renderbuffertarget: int,
+                                  renderbuffer: int) -> None:
+        return self._call("glFramebufferRenderbuffer",
+                          (target, attachment, renderbuffertarget,
+                           renderbuffer),
+                          lambda: self._gl.glFramebufferRenderbuffer(
+                              target, attachment, renderbuffertarget,
+                              renderbuffer))
+
+    def glCheckFramebufferStatus(self, caller: Any, target: int) -> int:
+        return int(self._call("glCheckFramebufferStatus", (target,),
+                              lambda: self._gl.glCheckFramebufferStatus(
+                                  target)))
+
+    def glRenderbufferStorage(self, caller: Any, target: int,
+                              internalformat: int, width: int,
+                              height: int) -> None:
+        return self._call(
+            "glRenderbufferStorage", (target, internalformat, width, height),
+            lambda: self._gl.glRenderbufferStorage(target, internalformat,
+                                                   width, height))
+
+    def glBlendEquation(self, caller: Any, mode: int) -> None:
+        return self._call("glBlendEquation", (mode,),
+                          lambda: self._gl.glBlendEquation(mode))
+
+    def glBlendFuncSeparate(self, caller: Any, src_rgb: int, dst_rgb: int,
+                            src_alpha: int, dst_alpha: int) -> None:
+        return self._call(
+            "glBlendFuncSeparate",
+            (src_rgb, dst_rgb, src_alpha, dst_alpha),
+            lambda: self._gl.glBlendFuncSeparate(src_rgb, dst_rgb, src_alpha,
+                                                 dst_alpha))
+
+    def glBlendColor(self, caller: Any, red: float, green: float, blue: float,
+                     alpha: float) -> None:
+        return self._call("glBlendColor", (red, green, blue, alpha),
+                          lambda: self._gl.glBlendColor(red, green, blue,
+                                                        alpha))
+
+    def glLineWidth(self, caller: Any, width: float) -> None:
+        return self._call("glLineWidth", (width,),
+                          lambda: self._gl.glLineWidth(width))
+
+    def glScissor(self, caller: Any, x: int, y: int, width: int,
+                  height: int) -> None:
+        return self._call("glScissor", (x, y, width, height),
+                          lambda: self._gl.glScissor(x, y, width, height))
+
+    def glClearColor(self, caller: Any, red: float, green: float, blue: float,
+                     alpha: float) -> None:
+        return self._call("glClearColor", (red, green, blue, alpha),
+                          lambda: self._gl.glClearColor(red, green, blue,
+                                                        alpha))
+
+    def glClear(self, caller: Any, mask: int) -> None:
+        return self._call("glClear", (mask,), lambda: self._gl.glClear(mask))
+
+    def glClearDepthf(self, caller: Any, depth: float) -> None:
+        return self._call("glClearDepthf", (depth,),
+                          lambda: self._gl.glClearDepth(depth))
+
+    def glIsBuffer(self, caller: Any, buffer: int) -> int:
+        return int(self._call("glIsBuffer", (buffer,),
+                              lambda: self._gl.glIsBuffer(buffer)))
+
+    def glClearStencil(self, caller: Any, stencil: int) -> None:
+        return self._call("glClearStencil", (stencil,),
+                          lambda: self._gl.glClearStencil(stencil))
+
+    def glStencilMask(self, caller: Any, mask: int) -> None:
+        return self._call("glStencilMask", (mask,),
+                          lambda: self._gl.glStencilMask(mask))
+
+    def glStencilFunc(self, caller: Any, func: int, ref: int,
+                      mask: int) -> None:
+        return self._call("glStencilFunc", (func, ref, mask),
+                          lambda: self._gl.glStencilFunc(func, ref, mask))
+
+    def glStencilOp(self, caller: Any, fail: int, zfail: int,
+                    zpass: int) -> None:
+        return self._call("glStencilOp", (fail, zfail, zpass),
+                          lambda: self._gl.glStencilOp(fail, zfail, zpass))

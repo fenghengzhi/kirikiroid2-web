@@ -1,20 +1,60 @@
 // Generic Wasmtime headless guest ABI.
 //
-// The current implementation reuses the existing full-engine motion playback
-// Wasmtime substrate for startup/TJS/platform stubs, but this target opts into
-// the real software RenderManager instead of the motion-only no-op renderer.
+// This target keeps the guest-side ABI to startup/tick/trace glue. Browser and
+// Emscripten host services are provided by the Python Wasmtime runner.
 
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <stdexcept>
 
 #include <emscripten/emscripten.h>
 
+#include "AppDelegate.h"
+
 #define KRKR2_WASMTIME_USE_REAL_RENDER_MANAGER 1
-#include "../../../tests/differential/wasm/motion_playback_wasmtime.cpp"
+#include "../../../tests/differential/wasmtime/motion_playback_wasmtime.cpp"
+
+extern "C" {
+
+int krkr2_env_syscall_openat(int dirfd, int path, int flags, int varargs)
+    __attribute__((import_module("env"), import_name("__syscall_openat")));
+int krkr2_env_syscall_fstat64(int fd, int buf)
+    __attribute__((import_module("env"), import_name("__syscall_fstat64")));
+int krkr2_env_syscall_stat64(int path, int buf)
+    __attribute__((import_module("env"), import_name("__syscall_stat64")));
+int krkr2_env_syscall_newfstatat(int dirfd, int path, int buf, int flags)
+    __attribute__((import_module("env"), import_name("__syscall_newfstatat")));
+int krkr2_env_syscall_lstat64(int path, int buf)
+    __attribute__((import_module("env"), import_name("__syscall_lstat64")));
+
+int __syscall_openat(int dirfd, int path, int flags, int varargs) {
+    return krkr2_env_syscall_openat(dirfd, path, flags, varargs);
+}
+
+int __syscall_fstat64(int fd, int buf) {
+    return krkr2_env_syscall_fstat64(fd, buf);
+}
+
+int __syscall_stat64(int path, int buf) {
+    return krkr2_env_syscall_stat64(path, buf);
+}
+
+int __syscall_newfstatat(int dirfd, int path, int buf, int flags) {
+    return krkr2_env_syscall_newfstatat(dirfd, path, buf, flags);
+}
+
+int __syscall_lstat64(int path, int buf) {
+    return krkr2_env_syscall_lstat64(path, buf);
+}
+
+} // extern "C"
 
 namespace {
 
 int g_trace_mask = 0;
+std::unique_ptr<TVPAppDelegate> g_app_delegate;
+bool g_app_started = false;
 
 int traceMaskFromConfig(const char *config, int len) {
     if(!config || len <= 0)
@@ -38,8 +78,17 @@ EMSCRIPTEN_KEEPALIVE
 int krkr2_wasm_init(const char *configJson, int len) {
     resetState();
     g_trace_mask = traceMaskFromConfig(configJson, len);
-    (void)g_trace_mask;
-    return 1;
+    return runWithErrors([&]() {
+        (void)g_trace_mask;
+        if(!g_app_delegate)
+            g_app_delegate = std::make_unique<TVPAppDelegate>();
+        if(!g_app_started) {
+            const int rc = g_app_delegate->run();
+            if(rc != 0)
+                throw std::runtime_error("TVPAppDelegate::run failed");
+            g_app_started = true;
+        }
+    });
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -48,9 +97,10 @@ int krkr2_wasm_startup_from(const char *path, int len) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int krkr2_wasm_tick(double) {
-    rebuildTraceJson();
-    return 1;
+int krkr2_wasm_tick(double dtMs) {
+    return runWithErrors([&]() {
+        TVPWasmtimeTickMainScene(static_cast<float>(dtMs / 1000.0));
+    });
 }
 
 EMSCRIPTEN_KEEPALIVE

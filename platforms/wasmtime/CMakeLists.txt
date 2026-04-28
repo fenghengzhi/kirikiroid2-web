@@ -48,6 +48,7 @@ set(KRKR2_WASMTIME_INCLUDE_DIRS
     ${KRKR2CORE_PATH}/visual
     ${KRKR2CORE_PATH}/visual/impl
     ${KRKR2CORE_PATH}/sound
+    ${KRKR2CORE_PATH}/sound/win32
     ${KRKR2CORE_PATH}/utils
     ${KRKR2CORE_PATH}/utils/win32
     ${KRKR2CORE_PATH}/environ
@@ -67,8 +68,14 @@ target_compile_definitions(krkr2_wasmtime_guest_objects PRIVATE
     __STDC_CONSTANT_MACROS
     USE_UNICODE_FSTRING
     KRKR2_WASMTIME_HEADLESS=1
+    KRKR2_NO_7ZIP
+    KRKR2_NO_FFMPEG
 )
-target_compile_options(krkr2_wasmtime_guest_objects PRIVATE -g3 -O0)
+target_compile_options(krkr2_wasmtime_guest_objects PRIVATE
+    -g3
+    -O0
+    "SHELL:-sUSE_FREETYPE=1"
+)
 
 find_package(Boost COMPONENTS locale REQUIRED NO_MODULE)
 find_package(fmt CONFIG REQUIRED)
@@ -84,6 +91,18 @@ set(OpenCV_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")
 find_package(OpenCV REQUIRED)
 find_package(lz4 CONFIG REQUIRED)
 find_package(cocos2dx CONFIG REQUIRED)
+find_package(Vorbis CONFIG REQUIRED)
+find_package(Opus CONFIG REQUIRED)
+find_package(OpusFile CONFIG REQUIRED)
+find_package(FFMPEG COMPONENTS
+    avutil
+    avfilter
+    avcodec
+    avformat
+    swscale
+    swresample
+    REQUIRED
+)
 
 target_link_libraries(krkr2_wasmtime_guest_objects PRIVATE
     tjs2
@@ -104,6 +123,8 @@ target_compile_definitions(krkr2_wasmtime_guest PRIVATE
     USE_UNICODE_FSTRING
     KRKR2_WASMTIME_HEADLESS=1
     KRKR2_WASMTIME_USE_REAL_RENDER_MANAGER=1
+    KRKR2_NO_7ZIP
+    KRKR2_NO_FFMPEG
 )
 target_compile_options(krkr2_wasmtime_guest PRIVATE -g3 -O0)
 set_target_properties(krkr2_wasmtime_guest PROPERTIES
@@ -114,17 +135,23 @@ set_target_properties(krkr2_wasmtime_guest PROPERTIES
 add_dependencies(krkr2_wasmtime_guest
     tjs2
     core_base_module
+    core_environ_module
     core_plugin_module
     core_visual_module
     core_utils_module
+    core_sound_module
+    core_movie_module
     core_extension_module
     minizip
 )
 target_link_libraries(krkr2_wasmtime_guest PRIVATE
     $<TARGET_FILE:core_base_module>
+    $<TARGET_FILE:core_environ_module>
     $<TARGET_FILE:core_plugin_module>
     $<TARGET_FILE:core_visual_module>
     $<TARGET_FILE:core_utils_module>
+    $<TARGET_FILE:core_sound_module>
+    $<TARGET_FILE:core_movie_module>
     $<TARGET_FILE:core_extension_module>
     $<TARGET_FILE:tjs2>
     minizip
@@ -139,6 +166,12 @@ target_link_libraries(krkr2_wasmtime_guest PRIVATE
     opencv_imgproc
     opencv_core
     lz4::lz4
+    Vorbis::vorbis
+    Vorbis::vorbisfile
+    Vorbis::vorbisenc
+    Opus::opus
+    OpusFile::opusfile
+    ${FFMPEG_LIBRARIES}
     Boost::locale
     fmt::fmt
     spdlog::spdlog
@@ -148,16 +181,22 @@ target_link_libraries(krkr2_wasmtime_guest PRIVATE
     cocos2dx::ext_xxhash
 )
 target_link_options(krkr2_wasmtime_guest PRIVATE
-    "SHELL:-sSTANDALONE_WASM=1"
+    "SHELL:-sUSE_SDL=2"
+    "SHELL:-sUSE_SDL_TTF=2"
     "SHELL:-sFORCE_FILESYSTEM=1"
+    "SHELL:-sALLOW_UNIMPLEMENTED_SYSCALLS=0"
+    "SHELL:-sERROR_ON_UNDEFINED_SYMBOLS=0"
     "SHELL:-sALLOW_MEMORY_GROWTH=1"
-    "SHELL:-sINITIAL_MEMORY=134217728"
+    "SHELL:-sINITIAL_MEMORY=268435456"
     "SHELL:-sSTACK_SIZE=8388608"
     "SHELL:-sWASM_BIGINT=1"
     "SHELL:-sUSE_LIBPNG=1"
     "SHELL:-sUSE_FREETYPE=1"
     "SHELL:-sEXPORTED_FUNCTIONS=['_krkr2_wasm_init','_krkr2_wasm_startup_from','_krkr2_wasm_tick','_krkr2_wasm_send_input','_krkr2_wasm_set_trace','_krkr2_wasm_get_trace_ptr','_krkr2_wasm_get_trace_len','_krkr2_wasm_clear_trace','_krkr2_wasm_get_error_ptr','_krkr2_wasm_get_error_len','_krkr2_wasm_get_framebuffer_ptr','_krkr2_wasm_get_framebuffer_width','_krkr2_wasm_get_framebuffer_height','_krkr2_wasm_get_framebuffer_pitch','_krkr2_wasm_get_framebuffer_format','_krkr2_wasm_get_framebuffer_frame_no','_malloc','_free']"
     "-fwasm-exceptions"
+    "-lopenal"
+    "SHELL:-Wl,--allow-multiple-definition"
+    "SHELL:-Wl,--export-memory"
     "SHELL:--profiling-funcs"
     "SHELL:--no-entry"
     "-g3"
@@ -179,7 +218,7 @@ add_custom_command(TARGET krkr2_wasmtime_guest POST_BUILD
         $<TARGET_FILE:krkr2_wasmtime_guest>.exnref
         $<TARGET_FILE:krkr2_wasmtime_guest>
     COMMAND ${Python3_EXECUTABLE}
-        ${CMAKE_SOURCE_DIR}/tests/differential/wasm/strip_wasm_export.py
+        ${CMAKE_SOURCE_DIR}/tests/differential/wasmtime/strip_wasm_export.py
         $<TARGET_FILE:krkr2_wasmtime_guest>
         __cpp_exception
     VERBATIM

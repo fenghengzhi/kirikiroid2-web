@@ -70,16 +70,6 @@
       }
     },
     {
-      "name": "Web Wasmtime Debug Config",
-      "inherits": "Web Config",
-      "binaryDir": "${sourceDir}/out/web/wasmtime-debug",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "KRKR2_WEB_DEBUG_ENABLE_ASAN": false,
-        "KRKR2_USE_STUB_SPDLOG": true
-      }
-    },
-    {
       "name": "Wasmtime Headless Debug Config",
       "inherits": "Web Config",
       "binaryDir": "${sourceDir}/out/wasmtime/debug",
@@ -115,10 +105,6 @@
     {
       "name": "Web Debug Build",
       "configurePreset": "Web Debug Config"
-    },
-    {
-      "name": "Web Wasmtime Debug Build",
-      "configurePreset": "Web Wasmtime Debug Config"
     },
     {
       "name": "Wasmtime Headless Debug Build",
