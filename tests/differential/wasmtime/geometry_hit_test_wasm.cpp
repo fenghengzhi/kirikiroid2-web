@@ -5,6 +5,24 @@
 
 #include "motionplayer/HitTestInternal.h"
 
+namespace {
+
+int g_call_index = 0;
+
+} // namespace
+
+extern "C" __attribute__((used))
+volatile std::int32_t krkr2_lldb_hit_test_last_call_index = -1;
+
+extern "C" __attribute__((used))
+volatile std::int32_t krkr2_lldb_hit_test_last_hit = 0;
+
+extern "C" __attribute__((noinline, used))
+void krkr2_lldb_hit_test_sample(std::int32_t call_index,
+                                std::int32_t hit) {
+    asm volatile("" : : "r"(call_index), "r"(hit) : "memory");
+}
+
 extern "C" int krkr2_hit_test_run(std::int32_t type,
                                    double point_x,
                                    double point_y,
@@ -40,5 +58,11 @@ extern "C" int krkr2_hit_test_run(std::int32_t type,
     hit.values[12] = v12;
     hit.values[13] = v13;
     hit.values[14] = v14;
-    return motion::detail::hitTestHitData(hit, point_x, point_y) ? 1 : 0;
+    const int result =
+        motion::detail::hitTestHitData(hit, point_x, point_y) ? 1 : 0;
+    const int call_index = g_call_index++;
+    krkr2_lldb_hit_test_last_call_index = call_index;
+    krkr2_lldb_hit_test_last_hit = result;
+    krkr2_lldb_hit_test_sample(call_index, result);
+    return result;
 }

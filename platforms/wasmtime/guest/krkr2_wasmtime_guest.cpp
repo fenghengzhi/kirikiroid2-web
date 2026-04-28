@@ -1,7 +1,8 @@
 // Generic Wasmtime headless guest ABI.
 //
-// This target keeps the guest-side ABI to startup/tick/trace glue. Browser and
-// Emscripten host services are provided by the Python Wasmtime runner.
+// This target keeps the guest-side ABI to startup/tick/error/framebuffer glue.
+// Browser and Emscripten host services are provided by the Python Wasmtime
+// runner; differential data is read by LLDB from guest frames.
 
 #include <cstdlib>
 #include <cstring>
@@ -52,23 +53,8 @@ int __syscall_lstat64(int path, int buf) {
 
 namespace {
 
-int g_trace_mask = 0;
 std::unique_ptr<TVPAppDelegate> g_app_delegate;
 bool g_app_started = false;
-
-int traceMaskFromConfig(const char *config, int len) {
-    if(!config || len <= 0)
-        return 0;
-    const std::string text(config, static_cast<size_t>(len));
-    int mask = 0;
-    if(text.find("motion") != std::string::npos)
-        mask |= 1;
-    if(text.find("log") != std::string::npos)
-        mask |= 2;
-    if(text.find("framebuffer") != std::string::npos)
-        mask |= 4;
-    return mask;
-}
 
 } // namespace
 
@@ -76,10 +62,10 @@ extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
 int krkr2_wasm_init(const char *configJson, int len) {
+    (void)configJson;
+    (void)len;
     resetState();
-    g_trace_mask = traceMaskFromConfig(configJson, len);
     return runWithErrors([&]() {
-        (void)g_trace_mask;
         if(!g_app_delegate)
             g_app_delegate = std::make_unique<TVPAppDelegate>();
         if(!g_app_started) {
@@ -93,7 +79,7 @@ int krkr2_wasm_init(const char *configJson, int len) {
 
 EMSCRIPTEN_KEEPALIVE
 int krkr2_wasm_startup_from(const char *path, int len) {
-    return mp_startup_from(path, len);
+    return wasmtimeStartupFrom(path, len);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -110,35 +96,13 @@ int krkr2_wasm_send_input(const char *, int) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-void krkr2_wasm_set_trace(int mask) {
-    g_trace_mask = mask;
-    (void)g_trace_mask;
-}
-
-EMSCRIPTEN_KEEPALIVE
-int krkr2_wasm_get_trace_ptr() {
-    return mp_get_trace_ptr();
-}
-
-EMSCRIPTEN_KEEPALIVE
-int krkr2_wasm_get_trace_len() {
-    return mp_get_trace_len();
-}
-
-EMSCRIPTEN_KEEPALIVE
-void krkr2_wasm_clear_trace() {
-    g_frame_json.clear();
-    rebuildTraceJson();
-}
-
-EMSCRIPTEN_KEEPALIVE
 int krkr2_wasm_get_error_ptr() {
-    return mp_get_error_ptr();
+    return wasmtimeGetErrorPtr();
 }
 
 EMSCRIPTEN_KEEPALIVE
 int krkr2_wasm_get_error_len() {
-    return mp_get_error_len();
+    return wasmtimeGetErrorLen();
 }
 
 EMSCRIPTEN_KEEPALIVE

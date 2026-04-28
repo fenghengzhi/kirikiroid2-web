@@ -9,6 +9,7 @@ import json
 import os
 import posixpath
 import shutil
+import subprocess
 import sys
 import struct
 import tempfile
@@ -18,6 +19,10 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
+DEFAULT_HOST_PYTHON_RAW = os.environ.get("KRKR2_HOST_PYTHON") or shutil.which("python3")
+DEFAULT_HOST_PYTHON = (
+    Path(DEFAULT_HOST_PYTHON_RAW) if DEFAULT_HOST_PYTHON_RAW else None
+)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -44,9 +49,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         "auto-skipping the case")
     p.add_argument("--only-structural", action="store_true",
                    help="Diff only structural Motion state fields")
-    p.add_argument("--use-mp-abi", action="store_true",
-                   help="Use the legacy narrow mp_* ABI instead of the "
-                        "default full krkr2_wasm_* guest ABI")
+    p.add_argument("--lldb-timeout", type=float, default=600.0,
+                   help="Timeout for the LLDB Wasm guest tracer")
+    p.add_argument("--host-python", default=DEFAULT_HOST_PYTHON, type=Path,
+                   help="Python interpreter LLDB should launch as host")
+    p.add_argument("--host-mode", action="store_true",
+                   help=argparse.SUPPRESS)
+    p.add_argument("--host-output", type=Path, help=argparse.SUPPRESS)
+    p.add_argument("--host-frames", type=int, default=0,
+                   help=argparse.SUPPRESS)
     return p.parse_args(argv)
 
 
@@ -756,7 +767,7 @@ def instantiate_module(wasmtime, wasm_path: Path, enable_gl: bool,
         ]
         if gl_imports:
             raise RuntimeError(
-                "legacy mp_* ABI path cannot instantiate wasm with GL "
+                "wasm module has GL imports but GL provider is disabled: "
                 f"imports: {', '.join(gl_imports)}"
             )
     instance = linker.instantiate(store, module)
@@ -805,49 +816,8 @@ def call_with_guest_bytes(store, memory, malloc, free, data: bytes, callback):
         free(store, ptr)
 
 
-def stage_guest_file(store, exports, guest_path: str, data: bytes) -> None:
-    memory = exports["memory"]
-    malloc = exports["malloc"]
-    free = exports["free"]
-    write_file = exports["mp_write_file"]
-
-    path_bytes = guest_path.encode("utf-8")
-    path_ptr = malloc(store, len(path_bytes))
-    data_ptr = malloc(store, len(data))
-    if path_ptr == 0 and path_bytes:
-        raise RuntimeError(f"guest malloc failed for path {guest_path}")
-    if data_ptr == 0 and data:
-        free(store, path_ptr)
-        raise RuntimeError(
-            f"guest malloc failed for {guest_path} ({len(data)} bytes)"
-        )
-    try:
-        write_bytes(store, memory, path_ptr, path_bytes)
-        if data:
-            write_bytes(store, memory, data_ptr, data)
-        staged = write_file(store, path_ptr, len(path_bytes),
-                            data_ptr, len(data))
-        if not staged:
-            err = read_string(store, memory,
-                              exports["mp_get_error_ptr"](store),
-                              exports["mp_get_error_len"](store))
-            raise RuntimeError(err or f"mp_write_file failed for {guest_path}")
-    finally:
-        free(store, data_ptr)
-        free(store, path_ptr)
-
-
-def stage_browser_preload(store, exports,
-                          bootstrap: BrowserBootstrapInfo) -> None:
-    for path in sorted(bootstrap.root.rglob("*")):
-        if not path.is_file():
-            continue
-        guest_path = "/" + path.relative_to(bootstrap.root).as_posix()
-        stage_guest_file(store, exports, guest_path, path.read_bytes())
-
-
-def run_full_guest_trace(wasm_path: Path, startup_xp3: Path,
-                         frames: int) -> list[dict]:
+def drive_full_guest(wasm_path: Path, startup_xp3: Path,
+                     frames: int) -> dict[str, Any]:
     if not wasm_path.exists():
         raise FileNotFoundError(
             f"wasm module not found: {wasm_path}. Build with "
@@ -860,15 +830,15 @@ def run_full_guest_trace(wasm_path: Path, startup_xp3: Path,
     with tempfile.TemporaryDirectory(prefix="krkr2-wasmtime-browserfs-") as tmp:
         bootstrap = prepare_browser_bootstrap(Path(tmp), startup_xp3)
         try:
-            return _run_full_guest_trace_with_bootstrap(
+            return _drive_full_guest_with_bootstrap(
                 wasmtime, wasm_path, bootstrap, frames)
         except Exception as exc:
             raise RuntimeError(f"{exc}\n{bootstrap.summary()}") from exc
 
 
-def _run_full_guest_trace_with_bootstrap(wasmtime, wasm_path: Path,
-                                         bootstrap: BrowserBootstrapInfo,
-                                         frames: int) -> list[dict]:
+def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
+                                     bootstrap: BrowserBootstrapInfo,
+                                     frames: int) -> dict[str, Any]:
     store, exports = instantiate_module(
         wasmtime, wasm_path, enable_gl=True, wasi_root=bootstrap.root)
     memory = exports["memory"]
@@ -877,13 +847,11 @@ def _run_full_guest_trace_with_bootstrap(wasmtime, wasm_path: Path,
     init = exports["krkr2_wasm_init"]
     startup = exports["krkr2_wasm_startup_from"]
     tick = exports["krkr2_wasm_tick"]
-    set_trace = exports["krkr2_wasm_set_trace"]
 
     guest_path = bootstrap.xp3_guest_path.encode("utf-8")
     config = json.dumps({
         "guestRoot": "/",
         "xp3": guest_path.decode("utf-8"),
-        "trace": "motion,log,framebuffer",
         "headless": True,
         "bootstrap": {
             "preloadFiles": bootstrap.preload_files,
@@ -891,7 +859,6 @@ def _run_full_guest_trace_with_bootstrap(wasmtime, wasm_path: Path,
         },
     }).encode("utf-8")
 
-    set_trace(store, 1 | 2 | 4)
     init_ok = call_with_guest_bytes(
         store, memory, malloc, free, config,
         lambda ptr, length: init(store, ptr, length))
@@ -919,73 +886,95 @@ def _run_full_guest_trace_with_bootstrap(wasmtime, wasm_path: Path,
                               exports["krkr2_wasm_get_error_len"](store))
             raise RuntimeError(err or "krkr2_wasm_tick returned false")
 
-    raw = read_string(store, memory,
-                      exports["krkr2_wasm_get_trace_ptr"](store),
-                      exports["krkr2_wasm_get_trace_len"](store))
-    try:
-        events = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"Wasmtime trace JSON decode failed: {exc}: {raw[:400]!r}"
-        ) from exc
-    if not isinstance(events, list):
-        raise RuntimeError(f"Wasmtime trace root is not a list: {type(events)}")
-    return events
+    return {
+        "ok": True,
+        "runner": "motion-playback-wasmtime-python-host",
+        "framesDriven": frames,
+        "bootstrap": {
+            "guestRoot": str(bootstrap.root),
+            "preloadFiles": bootstrap.preload_files,
+            "font": bootstrap.font_guest_path,
+            "xp3": bootstrap.xp3_guest_path,
+        },
+    }
 
 
-def run_wasmtime_trace(wasm_path: Path, startup_xp3: Path) -> list[dict]:
+def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
+                           frames: int, output: Path) -> int:
+    summary = drive_full_guest(wasm_path, startup_xp3, frames)
+    output.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return 0
+
+
+def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
+                         expected_frames: int,
+                         timeout: float,
+                         host_python: Path) -> list[dict]:
+    if host_python is None or not host_python.exists():
+        raise FileNotFoundError(f"host Python not found: {host_python}")
     if not wasm_path.exists():
         raise FileNotFoundError(
             f"wasm module not found: {wasm_path}. Build with "
-            "`cmake --build out/wasmtime/debug --target motion_playback_wasmtime`."
+            "`cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest`."
         )
     if not startup_xp3.exists():
         raise FileNotFoundError(f"oracle bootstrap xp3 missing: {startup_xp3}")
+    if sys.platform != "darwin":
+        raise RuntimeError("Wasmtime LLDB guest trace is only supported on macOS")
 
-    wasmtime = load_wasmtime()
-    store, exports = instantiate_module(wasmtime, wasm_path, enable_gl=False)
-    memory = exports["memory"]
-    malloc = exports["malloc"]
-    free = exports["free"]
-    write_file = exports["mp_write_file"]
-    startup = exports["mp_startup_from"]
-
-    guest_path = b"reference/xp3/logo_test_oracle.xp3"
-    xp3_bytes = startup_xp3.read_bytes()
-    path_ptr = malloc(store, len(guest_path))
-    data_ptr = malloc(store, len(xp3_bytes))
-    try:
-        write_bytes(store, memory, path_ptr, guest_path)
-        write_bytes(store, memory, data_ptr, xp3_bytes)
-        staged = write_file(store, path_ptr, len(guest_path),
-                            data_ptr, len(xp3_bytes))
-        if not staged:
-            err = read_string(store, memory,
-                              exports["mp_get_error_ptr"](store),
-                              exports["mp_get_error_len"](store))
-            raise RuntimeError(err or "mp_write_file returned false")
-        ok = startup(store, path_ptr, len(guest_path))
-    finally:
-        free(store, data_ptr)
-        free(store, path_ptr)
-
-    err = read_string(store, memory,
-                      exports["mp_get_error_ptr"](store),
-                      exports["mp_get_error_len"](store))
-    if not ok:
-        raise RuntimeError(err or "mp_startup_from returned false")
-
-    raw = read_string(store, memory,
-                      exports["mp_get_trace_ptr"](store),
-                      exports["mp_get_trace_len"](store))
-    try:
-        events = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"Wasmtime trace JSON decode failed: {exc}: {raw[:400]!r}"
-        ) from exc
+    with tempfile.TemporaryDirectory(prefix="krkr2-motion-wasmtime-lldb-") as td:
+        temp = Path(td)
+        trace_path = temp / "trace.json"
+        host_report = temp / "host.json"
+        tracer = REPO_ROOT / "tests" / "differential" / "python" / \
+            "wasm_lldb_motion_trace.py"
+        cmd = [
+            "xcrun", "python3", str(tracer),
+            "--driver", str(Path(__file__).resolve()),
+            "--host-python", str(host_python),
+            "--wasm", str(wasm_path),
+            "--startup-xp3", str(startup_xp3),
+            "--trace-out", str(trace_path),
+            "--host-output", str(host_report),
+            "--expected-frames", str(expected_frames),
+            "--timeout", str(timeout),
+            "--repo-root", str(REPO_ROOT),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(REPO_ROOT),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout + 30.0,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Wasmtime LLDB trace timed out after {timeout + 30.0:.1f}s\n"
+                f"stdout:\n{exc.stdout or ''}\nstderr:\n{exc.stderr or ''}"
+            ) from exc
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Wasmtime LLDB tracer failed with exit code "
+                f"{proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n"
+                f"{proc.stderr}"
+            )
+        if not trace_path.exists():
+            raise RuntimeError(
+                "Wasmtime LLDB tracer did not write trace output\n"
+                f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+            )
+        try:
+            events = json.loads(trace_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Wasmtime LLDB trace JSON decode failed: {exc}\n"
+                f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+            ) from exc
     if not isinstance(events, list):
-        raise RuntimeError(f"Wasmtime trace root is not a list: {type(events)}")
+        raise RuntimeError(f"Wasmtime LLDB trace root is not a list: {type(events)}")
     return events
 
 
@@ -1043,6 +1032,22 @@ def main(argv: list[str]) -> int:
     wasm_path = Path(args.wasm)
     startup_xp3 = Path(args.startup_xp3)
 
+    if args.host_mode:
+        if args.host_output is None:
+            print("--host-output is required in --host-mode", file=sys.stderr)
+            return 2
+        frames = int(args.host_frames or 0)
+        if frames <= 0:
+            print("--host-frames must be positive in --host-mode",
+                  file=sys.stderr)
+            return 2
+        try:
+            return run_python_host_driver(
+                wasm_path, startup_xp3, frames, args.host_output)
+        except Exception as exc:
+            print(f"FAIL: Wasmtime host driver error: {exc}", file=sys.stderr)
+            return 1
+
     if not spec_dir.exists():
         print(f"spec dir not found: {spec_dir}", file=sys.stderr)
         return 2
@@ -1055,15 +1060,17 @@ def main(argv: list[str]) -> int:
     from oracle_runner.adapters import motion_playback as mpb
 
     try:
-        max_frames = max(int(spec["frames"]) for spec in specs)
-        if args.use_mp_abi:
-            port_events = run_wasmtime_trace(wasm_path, startup_xp3)
-        else:
-            port_events = run_full_guest_trace(wasm_path, startup_xp3,
-                                               max_frames)
+        expected_frames = sum(int(spec["frames"]) for spec in specs)
+        port_events = run_lldb_guest_trace(
+            wasm_path,
+            startup_xp3,
+            expected_frames=expected_frames,
+            timeout=args.lldb_timeout,
+            host_python=args.host_python,
+        )
         port_frames_by_id = partition_port_frames(port_events, specs, mpb)
     except Exception as exc:
-        print(f"FAIL: Wasmtime port trace error: {exc}", file=sys.stderr)
+        print(f"FAIL: Wasmtime LLDB trace error: {exc}", file=sys.stderr)
         return 1
 
     failures = 0

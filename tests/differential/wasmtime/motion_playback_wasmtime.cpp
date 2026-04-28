@@ -1,15 +1,12 @@
 // Wasmtime-only Motion playback differential glue.
 //
 // This file deliberately stays below the engine/platform boundary: it owns the
-// exported test ABI, error/trace buffers, and MotionTraceWeb symbols. Browser,
-// Cocos, Window, FS, thread, and event behavior must come from the normal
-// engine sources plus host-provided env/WASI imports.
+// exported test ABI, error buffer, framebuffer buffer, and MotionTraceWeb
+// linkage symbols. Browser, Cocos, Window, FS, thread, event behavior, and
+// differential trace collection must come from the normal engine sources plus
+// host-provided env/WASI imports and LLDB guest inspection.
 
-#include <cmath>
 #include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -19,8 +16,8 @@
 #include "Application.h"
 #include "MainScene.h"
 #include "tjsError.h"
-#include "motionplayer/MotionTraceWeb.h"
 #include "motionplayer/MotionNode.h"
+#include "motionplayer/MotionTraceWeb.h"
 #include "motionplayer/Player.h"
 #include "motionplayer/RuntimeSupport.h"
 
@@ -28,111 +25,14 @@ void setError(const std::string &message);
 
 namespace {
 
-std::string g_trace_json = "[]";
 std::string g_error;
 std::string g_stage;
-std::vector<std::string> g_frame_json;
 std::vector<unsigned char> g_framebuffer;
 int g_framebuffer_width = 0;
 int g_framebuffer_height = 0;
 int g_framebuffer_pitch = 0;
 int g_framebuffer_format = 0;
 int g_framebuffer_frame_no = 0;
-
-std::string jsonEscape(const std::string &in) {
-    std::string out;
-    out.reserve(in.size() + 2);
-    for(char c : in) {
-        switch(c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if(static_cast<unsigned char>(c) < 0x20) {
-                    char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x",
-                                  static_cast<unsigned char>(c));
-                    out += buf;
-                } else {
-                    out += c;
-                }
-        }
-    }
-    return out;
-}
-
-void writeJsonString(std::ostringstream &out, const std::string &value) {
-    out << '"' << jsonEscape(value) << '"';
-}
-
-void writeJsonDouble(std::ostringstream &out, double value) {
-    if(std::isnan(value) || std::isinf(value)) {
-        out << "null";
-        return;
-    }
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.12g", value);
-    out << buf;
-}
-
-std::string ptrString(const void *ptr) {
-    if(!ptr) return {};
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%p", ptr);
-    return buf;
-}
-
-void appendNodeJson(std::ostringstream &out,
-                    const motion::detail::MotionNode &node,
-                    int flatIndex) {
-    const auto &accum = node.accumulated;
-    out << "{";
-    out << "\"index\":" << flatIndex;
-    out << ",\"label\":";
-    writeJsonString(out, node.layerName);
-    out << ",\"nodeType\":" << node.nodeType;
-    out << ",\"visible\":" << (accum.visible ? "true" : "false");
-    out << ",\"active\":" << (accum.active ? "true" : "false");
-    out << ",\"flipX\":" << (accum.flipX ? "true" : "false");
-    out << ",\"flipY\":" << (accum.flipY ? "true" : "false");
-    out << ",\"posX\":";
-    writeJsonDouble(out, accum.posX);
-    out << ",\"posY\":";
-    writeJsonDouble(out, accum.posY);
-    out << ",\"posZ\":";
-    writeJsonDouble(out, accum.posZ);
-    out << ",\"angleDeg\":";
-    writeJsonDouble(out, accum.angle);
-    out << ",\"scaleX\":";
-    writeJsonDouble(out, accum.scaleX);
-    out << ",\"scaleY\":";
-    writeJsonDouble(out, accum.scaleY);
-    out << ",\"slantX\":";
-    writeJsonDouble(out, accum.slantX);
-    out << ",\"slantY\":";
-    writeJsonDouble(out, accum.slantY);
-    out << ",\"opacity\":" << accum.opacity;
-    out << ",\"blendMode\":" << node.stencilType;
-    out << ",\"drawFlag\":" << (node.drawFlag ? "true" : "false");
-    out << ",\"drawnThisFrame\":"
-        << (node.drawnThisFrame ? "true" : "false");
-    out << ",\"currentImage\":";
-    writeJsonString(out, node.interpolatedCache.src);
-    out << "}";
-}
-
-void rebuildTraceJson() {
-    std::ostringstream out;
-    out << "[";
-    for(size_t i = 0; i < g_frame_json.size(); ++i) {
-        if(i) out << ",";
-        out << g_frame_json[i];
-    }
-    out << "]";
-    g_trace_json = out.str();
-}
 
 struct TraceState {
     bool inProgress = false;
@@ -146,72 +46,123 @@ TraceState &traceState() {
     return state;
 }
 
-void emitProgressFrame(motion::Player *fallbackPlayer) {
-    auto &state = traceState();
-    std::ostringstream out;
-    out << "{";
-    out << "\"frameId\":" << state.frameCounter++;
-    out << ",\"objthis\":";
-    if(state.objthis) {
-        writeJsonString(out, ptrString(state.objthis));
-    } else {
-        out << "null";
+extern "C" __attribute__((noinline, used))
+void krkr2_lldb_motion_frame_begin(std::int32_t frameId,
+                                   const void *objthis,
+                                   const motion::Player *topPlayer,
+                                   std::int32_t playerCount) {
+    (void)frameId;
+    (void)objthis;
+    (void)topPlayer;
+    (void)playerCount;
+}
+
+extern "C" __attribute__((noinline, used))
+void krkr2_lldb_motion_layer_sample(std::int32_t frameId,
+                                    std::int32_t index,
+                                    std::uint64_t nodeFlags,
+                                    std::uint64_t opacityBlend,
+                                    double posX,
+                                    double posY,
+                                    double posZ,
+                                    double angleDeg,
+                                    double scaleX,
+                                    double scaleY,
+                                    double slantX,
+                                    double slantY) {
+    (void)frameId;
+    (void)index;
+    (void)nodeFlags;
+    (void)opacityBlend;
+    (void)posX;
+    (void)posY;
+    (void)posZ;
+    (void)angleDeg;
+    (void)scaleX;
+    (void)scaleY;
+    (void)slantX;
+    (void)slantY;
+}
+
+extern "C" __attribute__((noinline, used))
+void krkr2_lldb_motion_frame_end(std::int32_t frameId) {
+    (void)frameId;
+}
+
+void emitLayerSample(int frameId,
+                     int flatIndex,
+                     const motion::detail::MotionNode &node) {
+    const auto &accum = node.accumulated;
+    const std::uint64_t opacityBlend =
+        (static_cast<std::uint64_t>(
+             static_cast<std::uint32_t>(accum.opacity)) << 32) |
+        static_cast<std::uint32_t>(node.stencilType);
+    int flags = 0;
+    if(accum.visible) flags |= 1 << 0;
+    if(accum.active) flags |= 1 << 1;
+    if(accum.flipX) flags |= 1 << 2;
+    if(accum.flipY) flags |= 1 << 3;
+    const std::uint64_t nodeFlags =
+        (static_cast<std::uint64_t>(
+             static_cast<std::uint32_t>(node.nodeType)) << 32) |
+        static_cast<std::uint32_t>(flags);
+    krkr2_lldb_motion_layer_sample(
+        frameId, flatIndex, nodeFlags, opacityBlend, accum.posX, accum.posY,
+        accum.posZ, accum.angle, accum.scaleX, accum.scaleY, accum.slantX,
+        accum.slantY);
+}
+
+void emitPlayerLayers(int frameId, int &flatIndex, motion::Player *player) {
+    if(!player) return;
+    const auto *runtime = player->runtime();
+    if(!runtime) return;
+    for(const auto &node : runtime->nodes) {
+        emitLayerSample(frameId, flatIndex++, node);
     }
-    out << ",\"topPlayer\":";
+}
+
+void emitProgressSample(motion::Player *fallbackPlayer) {
+    auto &state = traceState();
+    const int frameId = state.frameCounter++;
     motion::Player *topPlayer =
         !state.players.empty() ? state.players.front() : fallbackPlayer;
-    if(topPlayer) {
-        writeJsonString(out, ptrString(topPlayer));
-    } else {
-        out << "null";
-    }
-    out << ",\"playerCount\":" << state.players.size();
-    out << ",\"layout\":\"wasmtime-runtime\"";
-    out << ",\"layers\":[";
+    krkr2_lldb_motion_frame_begin(
+        frameId, state.objthis, topPlayer,
+        static_cast<std::int32_t>(state.players.size()));
 
     int flatIndex = 0;
-    bool first = true;
-    auto appendPlayer = [&](motion::Player *player) {
-        if(!player) return;
-        const auto *runtime = player->runtime();
-        if(!runtime) return;
-        for(const auto &node : runtime->nodes) {
-            if(!first) out << ",";
-            first = false;
-            appendNodeJson(out, node, flatIndex++);
-        }
-    };
-
     for(size_t i = 1; i < state.players.size(); ++i) {
-        appendPlayer(state.players[i]);
+        emitPlayerLayers(frameId, flatIndex, state.players[i]);
     }
     if(!state.players.empty()) {
-        appendPlayer(state.players.front());
+        emitPlayerLayers(frameId, flatIndex, state.players.front());
     } else {
-        appendPlayer(fallbackPlayer);
+        emitPlayerLayers(frameId, flatIndex, fallbackPlayer);
     }
-
-    out << "]}";
-    g_frame_json.push_back(out.str());
+    krkr2_lldb_motion_frame_end(frameId);
 }
 
 template <typename Fn>
 int runWithErrors(Fn &&fn) {
     try {
         fn();
-        rebuildTraceJson();
         return 1;
     } catch(const TJS::eTJSScriptError &e) {
-        std::ostringstream msg;
-        msg << ttstr(e.GetMessage()).AsStdString();
+        std::string msg = ttstr(e.GetMessage()).AsStdString();
         if(e.GetBlockName()) {
-            msg << " at " << ttstr(e.GetBlockName()).AsStdString()
-                << ":" << e.GetSourceLine();
+            msg += " at ";
+            msg += ttstr(e.GetBlockName()).AsStdString();
+            msg += ":";
+            msg += std::to_string(e.GetSourceLine());
         }
-        msg << " pos " << e.GetPosition();
+        msg += " pos ";
+        msg += std::to_string(e.GetPosition());
         const auto trace = ttstr(e.GetTrace()).AsStdString();
-        if(!trace.empty()) msg << "\n" << trace;
-        setError(msg.str());
+        if(!trace.empty()) {
+            msg += "\n";
+            msg += trace;
+        }
+        setError(msg);
     } catch(const TJS::eTJS &e) {
         setError(ttstr(e.GetMessage()).AsStdString());
     } catch(const std::exception &e) {
@@ -223,7 +174,6 @@ int runWithErrors(Fn &&fn) {
     } catch(...) {
         setError("unknown C++ exception");
     }
-    rebuildTraceJson();
     return 0;
 }
 
@@ -232,8 +182,6 @@ int runWithErrors(Fn &&fn) {
 void resetState() {
     g_error.clear();
     g_stage.clear();
-    g_trace_json = "[]";
-    g_frame_json.clear();
     g_framebuffer.clear();
     g_framebuffer_width = 0;
     g_framebuffer_height = 0;
@@ -284,7 +232,7 @@ MotionTraceProgressScope::MotionTraceProgressScope(Player *player,
 MotionTraceProgressScope::~MotionTraceProgressScope() {
     auto &state = traceState();
     if(!state.inProgress) return;
-    emitProgressFrame(_player);
+    emitProgressSample(_player);
     state.inProgress = false;
     state.objthis = nullptr;
     state.players.clear();
@@ -298,35 +246,7 @@ void motionTraceRecordUpdatePlayer(Player *player) {
 
 } // namespace motion::detail
 
-extern "C" {
-
-EMSCRIPTEN_KEEPALIVE
-int mp_write_file(const char *path, int pathLen, const void *data, int dataLen) {
-    if(!path || pathLen <= 0 || dataLen < 0 || (!data && dataLen > 0)) {
-        setError("mp_write_file: invalid argument");
-        return 0;
-    }
-
-    const std::string filePath(path, static_cast<size_t>(pathLen));
-    FILE *f = std::fopen(filePath.c_str(), "wb");
-    if(!f) {
-        setError("mp_write_file: fopen failed for " + filePath);
-        return 0;
-    }
-    const bool ok =
-        dataLen == 0 ||
-        std::fwrite(data, 1, static_cast<size_t>(dataLen), f) ==
-            static_cast<size_t>(dataLen);
-    std::fclose(f);
-    if(!ok) {
-        setError("mp_write_file: fwrite failed for " + filePath);
-        return 0;
-    }
-    return 1;
-}
-
-EMSCRIPTEN_KEEPALIVE
-int mp_startup_from(const char *path, int len) {
+int wasmtimeStartupFrom(const char *path, int len) {
     if(!path || len <= 0) {
         setError("empty xp3 path");
         return 0;
@@ -347,24 +267,10 @@ int mp_startup_from(const char *path, int len) {
     });
 }
 
-EMSCRIPTEN_KEEPALIVE
-int mp_get_trace_ptr() {
-    return static_cast<int>(reinterpret_cast<uintptr_t>(g_trace_json.c_str()));
-}
-
-EMSCRIPTEN_KEEPALIVE
-int mp_get_trace_len() {
-    return static_cast<int>(g_trace_json.size());
-}
-
-EMSCRIPTEN_KEEPALIVE
-int mp_get_error_ptr() {
+int wasmtimeGetErrorPtr() {
     return static_cast<int>(reinterpret_cast<uintptr_t>(g_error.c_str()));
 }
 
-EMSCRIPTEN_KEEPALIVE
-int mp_get_error_len() {
+int wasmtimeGetErrorLen() {
     return static_cast<int>(g_error.size());
 }
-
-} // extern "C"

@@ -188,7 +188,7 @@ target_link_options(krkr2_wasmtime_guest PRIVATE
     "SHELL:-sWASM_BIGINT=1"
     "SHELL:-sUSE_LIBPNG=1"
     "SHELL:-sUSE_FREETYPE=1"
-    "SHELL:-sEXPORTED_FUNCTIONS=['_krkr2_wasm_init','_krkr2_wasm_startup_from','_krkr2_wasm_tick','_krkr2_wasm_send_input','_krkr2_wasm_set_trace','_krkr2_wasm_get_trace_ptr','_krkr2_wasm_get_trace_len','_krkr2_wasm_clear_trace','_krkr2_wasm_get_error_ptr','_krkr2_wasm_get_error_len','_krkr2_wasm_get_framebuffer_ptr','_krkr2_wasm_get_framebuffer_width','_krkr2_wasm_get_framebuffer_height','_krkr2_wasm_get_framebuffer_pitch','_krkr2_wasm_get_framebuffer_format','_krkr2_wasm_get_framebuffer_frame_no','_malloc','_free']"
+    "SHELL:-sEXPORTED_FUNCTIONS=['_krkr2_wasm_init','_krkr2_wasm_startup_from','_krkr2_wasm_tick','_krkr2_wasm_send_input','_krkr2_wasm_get_error_ptr','_krkr2_wasm_get_error_len','_krkr2_wasm_get_framebuffer_ptr','_krkr2_wasm_get_framebuffer_width','_krkr2_wasm_get_framebuffer_height','_krkr2_wasm_get_framebuffer_pitch','_krkr2_wasm_get_framebuffer_format','_krkr2_wasm_get_framebuffer_frame_no','_malloc','_free']"
     "-fwasm-exceptions"
     "-lopenal"
     "SHELL:-Wl,--allow-multiple-definition"

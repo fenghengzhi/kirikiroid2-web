@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -15,7 +17,7 @@ DEFAULT_HOST_PYTHON_RAW = os.environ.get("KRKR2_HOST_PYTHON") or shutil.which("p
 DEFAULT_HOST_PYTHON = (
     Path(DEFAULT_HOST_PYTHON_RAW) if DEFAULT_HOST_PYTHON_RAW else None
 )
-BREAKPOINT_NAME = "krkr2_hit_test_run"
+BREAKPOINT_NAME = "krkr2_lldb_hit_test_sample"
 ACTIVE_TRACER = None
 
 EXPECTED_HITS = {
@@ -91,6 +93,64 @@ def _run_lldb_command(lldb, debugger, command: str) -> None:
         )
 
 
+def _sb_int(value, default: int | None = None) -> int | None:
+    if not value or not value.IsValid():
+        return default
+    raw = value.GetValue()
+    if raw is not None:
+        try:
+            return int(raw, 0)
+        except Exception:
+            pass
+    try:
+        error = value.GetError()
+        if error and not error.Success():
+            return default
+    except Exception:
+        pass
+    try:
+        return int(value.GetValueAsSigned(default if default is not None else 0))
+    except Exception:
+        return default
+
+
+def _read_register_int(frame, *names: str) -> int | None:
+    for name in names:
+        value = frame.FindRegister(name)
+        reg_value = _sb_int(value)
+        if reg_value is not None:
+            return reg_value
+    return None
+
+
+def _read_lldb_int(frame, local_name: str, global_name: str,
+                   *registers: str) -> int | None:
+    register_value = _read_register_int(frame, *registers)
+    if register_value is not None:
+        return register_value
+    try:
+        target = frame.GetThread().GetProcess().GetTarget()
+        value = target.FindFirstGlobalVariable(global_name)
+        global_value = _sb_int(value)
+        if global_value is not None:
+            return global_value
+    except Exception:
+        pass
+    value = frame.EvaluateExpression(global_name)
+    global_value = _sb_int(value)
+    if global_value is not None:
+        return global_value
+    local = frame.FindVariable(local_name)
+    if local and local.IsValid():
+        raw = local.GetValue()
+        if raw is not None:
+            try:
+                return int(raw, 0)
+            except Exception:
+                pass
+    return _read_register_int(frame, *registers)
+
+
 def verify_wasm_debug_info(wasm_path: Path) -> None:
     objdump = shutil.which("wasm-objdump")
     if objdump is None:
@@ -138,6 +198,7 @@ class LldbGuestRun:
         self.timeout = timeout
         self.hit_count = 0
         self.first_frame: dict | None = None
+        self.samples: list[dict] = []
         self.callback_errors: list[str] = []
 
     def run(self) -> dict:
@@ -211,6 +272,7 @@ class LldbGuestRun:
             "report": report,
             "breakpoint_hits": self.hit_count,
             "first_frame": self.first_frame,
+            "samples": self.samples,
         }
 
     def _install_callback(self, breakpoint) -> None:
@@ -281,6 +343,21 @@ class LldbGuestRun:
         location = f" at {file_name}:{line_no}" if file_name and line_no else ""
         return f"{frame.GetFrameID()}: {function}{location}"
 
+    @staticmethod
+    def _dump_frame_variables(frame) -> str:
+        out = []
+        try:
+            variables = frame.GetVariables(True, True, True, True)
+            for i in range(variables.GetSize()):
+                value = variables.GetValueAtIndex(i)
+                out.append(
+                    f"{value.GetName()}={value.GetValue()} "
+                    f"type={value.GetTypeName()} valid={value.IsValid()}"
+                )
+        except Exception as exc:
+            out.append(f"<variable dump failed: {exc}>")
+        return "; ".join(out)
+
     def handle_breakpoint(self, frame, _bp_loc) -> None:
         try:
             self.hit_count += 1
@@ -301,6 +378,31 @@ class LldbGuestRun:
                     "file": file_name,
                     "line": line_no,
                 }
+            call_index = _read_lldb_int(
+                frame,
+                "call_index",
+                "krkr2_lldb_hit_test_last_call_index",
+                "x4",
+                "w4",
+            )
+            hit = _read_lldb_int(
+                frame,
+                "hit",
+                "krkr2_lldb_hit_test_last_hit",
+                "x5",
+                "w5",
+            )
+            if call_index is None or hit is None:
+                self.callback_errors.append(
+                    "LLDB could not read krkr2_lldb_hit_test_sample "
+                    f"arguments in {self._describe_frame(frame)}; "
+                    f"vars: {self._dump_frame_variables(frame)}"
+                )
+                return
+            self.samples.append({
+                "call_index": call_index,
+                "hit": bool(hit),
+            })
         except Exception as exc:
             self.callback_errors.append(str(exc))
 
@@ -429,20 +531,16 @@ def flatten_case(spec: dict) -> list[float]:
 def run_python_host(wasm_path: Path, spec_dir: Path, output: Path) -> int:
     wasmtime = load_wasmtime()
     store, run_fn = instantiate_module(wasmtime, wasm_path)
-    results = []
+    cases = []
     for spec in load_specs(spec_dir):
-        raw_result = run_fn(store, *flatten_case(spec))
-        results.append({
-            "case_id": spec["id"],
-            "status": "ok",
-            "hit": bool(raw_result),
-            "runner": "port-wasm-lldb",
-        })
+        run_fn(store, *flatten_case(spec))
+        cases.append(spec["id"])
 
     report = {
         "ok": True,
         "runner": "geometry-hit-test-wasmtime-python-host",
-        "results": results,
+        "cases": cases,
+        "host_calls": len(cases),
     }
     output.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return 0
@@ -485,18 +583,46 @@ def main() -> int:
     report = debug_result["report"]
     if not isinstance(report, dict) or report.get("ok") is not True:
         raise RuntimeError(f"invalid host report: {report}")
-    results = report.get("results")
-    if not isinstance(results, list):
-        raise RuntimeError(f"host report results is not a list: {type(results)}")
+    cases = report.get("cases")
+    if not isinstance(cases, list):
+        raise RuntimeError(f"host report cases is not a list: {type(cases)}")
+    samples = debug_result.get("samples")
+    if not isinstance(samples, list):
+        raise RuntimeError(f"LLDB samples is not a list: {type(samples)}")
+    if len(samples) != len(cases):
+        raise RuntimeError(
+            f"LLDB sampled {len(samples)} result(s), but host drove "
+            f"{len(cases)} case(s)"
+        )
+    samples_by_index = {}
+    for sample in samples:
+        if not isinstance(sample, dict):
+            raise RuntimeError(f"LLDB sample is not an object: {sample}")
+        call_index = int(sample.get("call_index", -1))
+        if call_index in samples_by_index:
+            raise RuntimeError(f"duplicate LLDB call_index sample: {call_index}")
+        samples_by_index[call_index] = sample
+    expected_indexes = set(range(len(cases)))
+    if set(samples_by_index) != expected_indexes:
+        raise RuntimeError(
+            f"LLDB call indexes {sorted(samples_by_index)} do not match "
+            f"host case indexes {sorted(expected_indexes)}"
+        )
 
     failed = False
     spec_by_id = {spec["id"]: spec for spec in specs}
     seen_cases = set()
-    for result in results:
-        if not isinstance(result, dict):
-            raise RuntimeError(f"host result is not an object: {result}")
-        case_id = str(result.get("case_id", ""))
+    for call_index, case_id_raw in enumerate(cases):
+        case_id = str(case_id_raw)
         seen_cases.add(case_id)
+        sample = samples_by_index[call_index]
+        result = {
+            "case_id": case_id,
+            "status": "ok",
+            "hit": bool(sample["hit"]),
+            "call_index": call_index,
+            "runner": "port-wasm-lldb",
+        }
         print(json.dumps(result, ensure_ascii=True))
 
         expected = EXPECTED_HITS.get(case_id)
