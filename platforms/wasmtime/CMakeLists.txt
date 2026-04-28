@@ -1,11 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
-project(krkr2_wasmtime_headless LANGUAGES CXX)
+project(krkr2_wasmtime LANGUAGES CXX)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
-find_program(CARGO_EXECUTABLE cargo)
-if(NOT CARGO_EXECUTABLE)
-    message(FATAL_ERROR "cargo is required to build krkr2_wasmtime_host")
-endif()
 
 add_library(krkr2_wasmtime_guest_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/main.cpp
@@ -224,36 +220,3 @@ add_custom_command(TARGET krkr2_wasmtime_guest POST_BUILD
     VERBATIM
     COMMENT "Converting krkr2_wasmtime_guest.wasm to exnref exceptions"
 )
-
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(KRKR2_WASMTIME_CARGO_ARGS --release)
-    set(KRKR2_WASMTIME_CARGO_PROFILE release)
-else()
-    set(KRKR2_WASMTIME_CARGO_ARGS)
-    set(KRKR2_WASMTIME_CARGO_PROFILE debug)
-endif()
-
-set(KRKR2_WASMTIME_HOST_OUTPUT
-    ${CMAKE_BINARY_DIR}/host/krkr2_wasmtime_host
-)
-add_custom_command(
-    OUTPUT ${KRKR2_WASMTIME_HOST_OUTPUT}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/host
-    COMMAND ${CMAKE_COMMAND} -E env
-        CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/cargo
-        ${CARGO_EXECUTABLE} build
-        --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/host/Cargo.toml
-        ${KRKR2_WASMTIME_CARGO_ARGS}
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_BINARY_DIR}/cargo/${KRKR2_WASMTIME_CARGO_PROFILE}/krkr2_wasmtime_host
-        ${KRKR2_WASMTIME_HOST_OUTPUT}
-    DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/host/Cargo.toml
-        ${CMAKE_CURRENT_SOURCE_DIR}/host/src/main.rs
-    VERBATIM
-    COMMENT "Building krkr2_wasmtime_host"
-)
-add_custom_target(krkr2_wasmtime_host
-    DEPENDS ${KRKR2_WASMTIME_HOST_OUTPUT}
-)
-set_target_properties(krkr2_wasmtime_host PROPERTIES EXCLUDE_FROM_ALL TRUE)

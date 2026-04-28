@@ -35,10 +35,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    default=str(REPO_ROOT / "out" / "wasmtime" / "debug" /
                                "krkr2_wasmtime_guest.wasm"),
                    help="Path to the Wasmtime guest wasm")
-    p.add_argument("--host",
-                   default=None,
-                   help="Path to krkr2_wasmtime_host. When present, run the "
-                        "generic headless host instead of Python wasmtime-py.")
     p.add_argument("--startup-xp3",
                    default=str(REPO_ROOT / "reference" / "xp3" /
                                "logo_test_oracle.xp3"),
@@ -993,41 +989,6 @@ def run_wasmtime_trace(wasm_path: Path, startup_xp3: Path) -> list[dict]:
     return events
 
 
-def run_headless_host_trace(host_path: Path, wasm_path: Path,
-                            startup_xp3: Path, frames: int) -> list[dict]:
-    from wasmtime_headless import run_headless_host
-
-    if not host_path.exists():
-        raise FileNotFoundError(
-            f"host not found: {host_path}. Build with "
-            "`cmake --build out/wasmtime/debug --target krkr2_wasmtime_host`."
-        )
-    if not wasm_path.exists():
-        raise FileNotFoundError(
-            f"wasm module not found: {wasm_path}. Build with "
-            "`cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest`."
-        )
-    report = run_headless_host(
-        host=host_path,
-        wasm=wasm_path,
-        repo_root=REPO_ROOT,
-        xp3=startup_xp3,
-        frames=frames,
-        trace="motion,log,framebuffer",
-    )
-    if not report.get("ok", False):
-        raise RuntimeError(
-            "krkr2_wasmtime_host guest failed: "
-            f"{report.get('error') or report}"
-        )
-    events = report.get("trace")
-    if not isinstance(events, list):
-        raise RuntimeError(
-            f"krkr2_wasmtime_host trace is not a list: {type(events)}"
-        )
-    return events
-
-
 def _segment_events(events: list[dict]) -> list[dict]:
     segments: list[dict] = []
     for ev in events:
@@ -1095,10 +1056,7 @@ def main(argv: list[str]) -> int:
 
     try:
         max_frames = max(int(spec["frames"]) for spec in specs)
-        if args.host:
-            port_events = run_headless_host_trace(Path(args.host), wasm_path,
-                                                  startup_xp3, max_frames)
-        elif args.use_mp_abi:
+        if args.use_mp_abi:
             port_events = run_wasmtime_trace(wasm_path, startup_xp3)
         else:
             port_events = run_full_guest_trace(wasm_path, startup_xp3,
