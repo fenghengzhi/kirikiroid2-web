@@ -96,6 +96,17 @@ jobs:
           source "${EMSDK}/emsdk_env.sh"
           python3 tests/differential/run_all.py
 
+      - name: Prewarm Emscripten ports for Wasmtime full guest
+        run: |
+          source "${EMSDK}/emsdk_env.sh"
+          # SDL2_ttf's port build invokes emcc with USE_FREETYPE/USE_HARFBUZZ.
+          # Build those dependencies first so the nested port build does not
+          # try to reacquire Emscripten's cache lock in CI.
+          embuilder.py build freetype
+          embuilder.py build harfbuzz harfbuzz-mt
+          embuilder.py build sdl2 sdl2-mt
+          embuilder.py build sdl2_ttf sdl2_ttf-mt
+
       - name: Build Wasmtime full guest for motion_playback
         run: |
           source "${EMSDK}/emsdk_env.sh"
