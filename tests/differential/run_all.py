@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Build and run every differential WASM test family.
+"""Build and run every differential Wasmtime LLDB guest-debug family.
 
 Discovers families from `tests/differential/wasmtime/<family>_wasm.cpp` and
 reads build directives from the top comment block of each source:
 
     // @exports: _foo,_bar       required; em++ EXPORTED_FUNCTIONS list
     // @plugin-include           optional flag; adds -I<repo>/cpp/plugins
+    // @requires-lldb            optional documentation flag
 
 The ADB+Frida oracle is a separate lane — invoke the per-family
 ``run_<family>_adb.py`` scripts directly (see
 ``tests/differential/oracle_runner/README.md``).
 
 Usage:
-    run_all.py                              # build + run port-wasm harness
+    run_all.py                              # build + run LLDB guest-debug harness
     run_all.py --no-build                   # run without rebuilding .wasm
     run_all.py --family bezier_curve        # restrict to one family
 """
@@ -36,11 +37,12 @@ DIRECTIVE_RE = re.compile(r"//\s*@([a-zA-Z0-9_-]+)(?::\s*(.+))?\s*$")
 
 class Family:
     def __init__(self, name: str, src: Path, exports: list[str],
-                 plugin_include: bool) -> None:
+                 plugin_include: bool, requires_lldb: bool) -> None:
         self.name = name
         self.src = src
         self.exports = exports
         self.plugin_include = plugin_include
+        self.requires_lldb = requires_lldb
 
     @property
     def wasm(self) -> Path:
@@ -55,9 +57,10 @@ class Family:
         return SPEC_ROOT / self.name
 
 
-def parse_directives(src: Path) -> tuple[list[str], bool]:
+def parse_directives(src: Path) -> tuple[list[str], bool, bool]:
     exports: list[str] = []
     plugin_include = False
+    requires_lldb = False
     for line in src.read_text(encoding="utf-8").splitlines():
         if not line.startswith("//"):
             if line.strip() and not line.strip().startswith("/*"):
@@ -70,17 +73,20 @@ def parse_directives(src: Path) -> tuple[list[str], bool]:
             exports = [e.strip() for e in value.split(",") if e.strip()]
         elif key == "plugin-include":
             plugin_include = True
+        elif key == "requires-lldb":
+            requires_lldb = True
     if not exports:
         raise RuntimeError(f"{src}: missing `// @exports:` directive")
-    return exports, plugin_include
+    return exports, plugin_include, requires_lldb
 
 
 def discover_families() -> list[Family]:
     families: list[Family] = []
     for src in sorted(WASM_DIR.glob("*_wasm.cpp")):
         name = src.stem[:-len("_wasm")]
-        exports, plugin_include = parse_directives(src)
-        families.append(Family(name, src, exports, plugin_include))
+        exports, plugin_include, requires_lldb = parse_directives(src)
+        families.append(Family(name, src, exports, plugin_include,
+                               requires_lldb))
     if not families:
         raise RuntimeError(f"no *_wasm.cpp files under {WASM_DIR}")
     return families
@@ -90,7 +96,7 @@ def build(family: Family) -> None:
     exports_arg = "[" + ",".join(f"'{e}'" for e in family.exports) + "]"
     cmd = [
         "em++", str(family.src),
-        "-std=c++17", "-O1",
+        "-std=c++17", "-g3", "-O0", "--profiling-funcs",
         "-sSTANDALONE_WASM=1",
         f"-sEXPORTED_FUNCTIONS={exports_arg}",
         "--no-entry",

@@ -21,11 +21,12 @@ env:
   LEGACY_NDK_SHA1: "12cacc70c3fd2f40574015631c00f41fb8a39048"
 
 jobs:
-  # ── Port vs libkrkr2 value diff under wasmtime (fast, parallel-friendly).
+  # ── Port vs libkrkr2 value diff under Wasmtime LLDB guest-debug.
   wasmtime:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     env:
       EMSDK: ${{ github.workspace }}/.emsdk
+      VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,17 +60,58 @@ jobs:
           echo "EM_CONFIG=${{ env.EMSDK }}/.emscripten" >> $GITHUB_ENV
           echo "${{ env.EMSDK }}" >> $GITHUB_PATH
           echo "${{ env.EMSDK }}/upstream/emscripten" >> $GITHUB_PATH
+          echo "${{ env.EMSDK }}/upstream/bin" >> $GITHUB_PATH
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install wasmtime
-        run: pip install wasmtime
+      - name: Install Wasmtime LLDB test dependencies
+        run: |
+          brew update
+          brew install bison cmake glfw ninja pkg-config wabt
+          python3 -m pip install -r tests/differential/python/requirements-wasm.txt
 
-      - name: Build WASM + run port-wasm differential tests
-        run: python tests/differential/run_all.py
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        id: vcpkg-cache
+        with:
+          path: ${{ env.VCPKG_ROOT }}
+          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/**') }}
+
+      - name: Setup vcpkg
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "${VCPKG_ROOT}"
+          "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Ensure vcpkg is bootstrapped
+        run: |
+          test -x "${VCPKG_ROOT}/vcpkg" || "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
+          echo "${VCPKG_ROOT}" >> $GITHUB_PATH
+
+      - name: Build WASM + run LLDB guest-debug differential tests
+        run: |
+          source "${EMSDK}/emsdk_env.sh"
+          python3 tests/differential/run_all.py
+
+      - name: Build Wasmtime full guest for motion_playback
+        run: |
+          source "${EMSDK}/emsdk_env.sh"
+          export BISON_EXECUTABLE="$(brew --prefix bison)/bin/bison"
+          cmake --preset "Wasmtime Headless Debug Config" \
+            -DBISON_EXECUTABLE="${BISON_EXECUTABLE}"
+          cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest
+
+      - name: Run motion_playback Wasmtime LLDB guest-debug
+        run: |
+          source "${EMSDK}/emsdk_env.sh"
+          python3 tests/differential/python/run_motion_playback_wasmtime.py \
+            --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm \
+            --startup-xp3 reference/xp3/logo_test_oracle.xp3 \
+            --strict-missing-trace \
+            --lldb-timeout 600
 
   # ── Build the legacy gnustl harness on a native x86_64 Linux host.
   #    Android NDK r17c only ships linux-x86_64 host tools, while the

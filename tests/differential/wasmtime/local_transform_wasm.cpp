@@ -2,7 +2,8 @@
 // Function copied from motionplayer/PlayerInternal.h (lines 1816-1876).
 // Aligned to libkrkr2.so sub_699940 (0x699940).
 //
-// @exports: _run_local_transform,_get_affine_in_ptr,_get_affine_out_ptr
+// @exports: _run_local_transform,_get_affine_in_ptr
+// @requires-lldb
 
 #include <array>
 #include <cmath>
@@ -80,11 +81,28 @@ void applyLocalTransform(
 
 static double g_affine_in[6];
 static double g_affine_out[6];
+static std::int32_t g_call_index;
+
+extern "C" __attribute__((noinline, used))
+void krkr2_lldb_local_transform_sample(std::int32_t call_index,
+                                       double v0,
+                                       double v1,
+                                       double v2,
+                                       double v3,
+                                       double v4,
+                                       double v5) {
+    (void)call_index;
+    (void)v0;
+    (void)v1;
+    (void)v2;
+    (void)v3;
+    (void)v4;
+    (void)v5;
+}
 
 extern "C" {
 
 double *get_affine_in_ptr() { return g_affine_in; }
-double *get_affine_out_ptr() { return g_affine_out; }
 
 void run_local_transform(
     std::int32_t flipX, std::int32_t flipY,
@@ -98,6 +116,9 @@ void run_local_transform(
     applyLocalTransform(a, flipX != 0, flipY != 0, angle, scaleX, scaleY,
                         slantX, slantY, transformOrder);
     std::memcpy(g_affine_out, a.data(), sizeof(double) * 6);
+    krkr2_lldb_local_transform_sample(
+        g_call_index++, g_affine_out[0], g_affine_out[1], g_affine_out[2],
+        g_affine_out[3], g_affine_out[4], g_affine_out[5]);
 }
 
 } // extern "C"

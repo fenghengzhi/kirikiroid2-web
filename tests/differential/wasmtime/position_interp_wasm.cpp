@@ -4,7 +4,8 @@
 //   - evaluateControlPointCurve (lines 729-788), aligned to sub_698454
 //   - interpolatePosition69A4D4 (lines 792-830), aligned to sub_69A4D4
 //
-// @exports: _run_position_interp,_get_easing_x_ptr,_get_easing_y_ptr,_get_cp_x_ptr,_get_cp_y_ptr,_get_cp_t_ptr,_get_cp_seg_data_ptr,_get_cp_seg_sizes_ptr,_get_src_pos_ptr,_get_dst_pos_ptr,_get_out_pos_ptr
+// @exports: _run_position_interp,_get_easing_x_ptr,_get_easing_y_ptr,_get_cp_x_ptr,_get_cp_y_ptr,_get_cp_t_ptr,_get_cp_seg_data_ptr,_get_cp_seg_sizes_ptr,_get_src_pos_ptr,_get_dst_pos_ptr
+// @requires-lldb
 
 #include <cstddef>
 #include <cstdint>
@@ -166,6 +167,18 @@ static std::int32_t g_cp_seg_sizes[12];
 static double g_src_pos[3];
 static double g_dst_pos[3];
 static double g_out_pos[3];
+static std::int32_t g_call_index;
+
+extern "C" __attribute__((noinline, used))
+void krkr2_lldb_position_interp_sample(std::int32_t call_index,
+                                       double x,
+                                       double y,
+                                       double z) {
+    (void)call_index;
+    (void)x;
+    (void)y;
+    (void)z;
+}
 
 extern "C" {
 
@@ -178,7 +191,6 @@ double *get_cp_seg_data_ptr() { return g_cp_seg_data; }
 std::int32_t *get_cp_seg_sizes_ptr() { return g_cp_seg_sizes; }
 double *get_src_pos_ptr() { return g_src_pos; }
 double *get_dst_pos_ptr() { return g_dst_pos; }
-double *get_out_pos_ptr() { return g_out_pos; }
 
 void run_position_interp(
     std::int32_t easing_n,
@@ -221,6 +233,8 @@ void run_position_interp(
     g_out_pos[2] = 0.0;
     interpolatePosition69A4D4(easing, g_dst_pos, g_src_pos, g_out_pos,
                               coord_mode, cp, t);
+    krkr2_lldb_position_interp_sample(
+        g_call_index++, g_out_pos[0], g_out_pos[1], g_out_pos[2]);
 }
 
 } // extern "C"

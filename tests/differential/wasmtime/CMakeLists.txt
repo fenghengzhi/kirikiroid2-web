@@ -33,9 +33,9 @@ add_custom_command(
     OUTPUT ${PSB_RL_DECOMPRESS_WASM}
     COMMAND ${CMAKE_CXX_COMPILER}
         ${CMAKE_CURRENT_SOURCE_DIR}/psb_rl_decompress_wasm.cpp
-        -std=c++17 -O1
+        -std=c++17 -g3 -O0 --profiling-funcs
         -sSTANDALONE_WASM=1
-        -sEXPORTED_FUNCTIONS=['_run_psb_rl_decompress','_get_compressed_ptr','_get_decompressed_ptr','_get_decompressed_size_ptr']
+        -sEXPORTED_FUNCTIONS=['_run_psb_rl_decompress','_get_compressed_ptr']
         --no-entry
         -o ${PSB_RL_DECOMPRESS_WASM}
     DEPENDS
@@ -51,9 +51,9 @@ add_custom_command(
     OUTPUT ${BEZIER_CURVE_WASM}
     COMMAND ${CMAKE_CXX_COMPILER}
         ${CMAKE_CURRENT_SOURCE_DIR}/bezier_curve_wasm.cpp
-        -std=c++17 -O1
+        -std=c++17 -g3 -O0 --profiling-funcs
         -sSTANDALONE_WASM=1
-        -sEXPORTED_FUNCTIONS=['_run_bezier_curve','_get_curve_x_ptr','_get_curve_y_ptr','_get_result_ptr']
+        -sEXPORTED_FUNCTIONS=['_run_bezier_curve','_get_curve_x_ptr','_get_curve_y_ptr']
         --no-entry
         -o ${BEZIER_CURVE_WASM}
     DEPENDS
@@ -69,9 +69,9 @@ add_custom_command(
     OUTPUT ${LOCAL_TRANSFORM_WASM}
     COMMAND ${CMAKE_CXX_COMPILER}
         ${CMAKE_CURRENT_SOURCE_DIR}/local_transform_wasm.cpp
-        -std=c++17 -O1
+        -std=c++17 -g3 -O0 --profiling-funcs
         -sSTANDALONE_WASM=1
-        -sEXPORTED_FUNCTIONS=['_run_local_transform','_get_affine_in_ptr','_get_affine_out_ptr']
+        -sEXPORTED_FUNCTIONS=['_run_local_transform','_get_affine_in_ptr']
         --no-entry
         -o ${LOCAL_TRANSFORM_WASM}
     DEPENDS
@@ -87,9 +87,9 @@ add_custom_command(
     OUTPUT ${POSITION_INTERP_WASM}
     COMMAND ${CMAKE_CXX_COMPILER}
         ${CMAKE_CURRENT_SOURCE_DIR}/position_interp_wasm.cpp
-        -std=c++17 -O1
+        -std=c++17 -g3 -O0 --profiling-funcs
         -sSTANDALONE_WASM=1
-        -sEXPORTED_FUNCTIONS=['_run_position_interp','_get_easing_x_ptr','_get_easing_y_ptr','_get_cp_x_ptr','_get_cp_y_ptr','_get_cp_t_ptr','_get_cp_seg_data_ptr','_get_cp_seg_sizes_ptr','_get_src_pos_ptr','_get_dst_pos_ptr','_get_out_pos_ptr']
+        -sEXPORTED_FUNCTIONS=['_run_position_interp','_get_easing_x_ptr','_get_easing_y_ptr','_get_cp_x_ptr','_get_cp_y_ptr','_get_cp_t_ptr','_get_cp_seg_data_ptr','_get_cp_seg_sizes_ptr','_get_src_pos_ptr','_get_dst_pos_ptr']
         --no-entry
         -o ${POSITION_INTERP_WASM}
     DEPENDS

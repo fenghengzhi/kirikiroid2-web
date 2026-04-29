@@ -2,7 +2,8 @@
 // Function copied from motionplayer/PlayerInternal.h (lines 65-98).
 // Aligned to libkrkr2.so sub_695DE8 (0x695DE8).
 //
-// @exports: _run_psb_rl_decompress,_get_compressed_ptr,_get_decompressed_ptr,_get_decompressed_size_ptr
+// @exports: _run_psb_rl_decompress,_get_compressed_ptr
+// @requires-lldb
 
 #include <algorithm>
 #include <cstddef>
@@ -64,12 +65,33 @@ std::vector<std::uint8_t> decompressPsbRL(
 static std::uint8_t g_compressed[4096];
 static std::uint8_t g_decompressed[16384];
 static std::int32_t g_decompressed_size;
+static std::int32_t g_call_index;
+
+std::uint64_t packBytes64(const std::uint8_t *data,
+                          size_t offset,
+                          size_t size) {
+    std::uint64_t out = 0;
+    for(size_t i = 0; i < 8 && offset + i < size; ++i) {
+        out |= static_cast<std::uint64_t>(data[offset + i]) << (i * 8);
+    }
+    return out;
+}
+
+extern "C" __attribute__((noinline, used))
+void krkr2_lldb_psb_rl_decompress_sample(std::int32_t call_index,
+                                         std::int32_t output_size,
+                                         std::uint64_t bytes0,
+                                         std::uint64_t bytes1) {
+    asm volatile(
+        ""
+        :
+        : "r"(call_index), "r"(output_size), "r"(bytes0), "r"(bytes1)
+        : "memory");
+}
 
 extern "C" {
 
 std::uint8_t *get_compressed_ptr() { return g_compressed; }
-std::uint8_t *get_decompressed_ptr() { return g_decompressed; }
-std::int32_t *get_decompressed_size_ptr() { return &g_decompressed_size; }
 
 void run_psb_rl_decompress(std::int32_t compressed_len,
                            std::int32_t element_count,
@@ -81,6 +103,10 @@ void run_psb_rl_decompress(std::int32_t compressed_len,
     g_decompressed_size = static_cast<std::int32_t>(output.size());
     const size_t copy_n = std::min(output.size(), sizeof(g_decompressed));
     std::memcpy(g_decompressed, output.data(), copy_n);
+    krkr2_lldb_psb_rl_decompress_sample(
+        g_call_index++, g_decompressed_size,
+        packBytes64(g_decompressed, 0, copy_n),
+        packBytes64(g_decompressed, 8, copy_n));
 }
 
 } // extern "C"

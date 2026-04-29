@@ -1,11 +1,26 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import argparse
 import ctypes
 import json
 import struct
 import sys
 from pathlib import Path
+
+from wasm_lldb_runner import (
+    DEFAULT_HOST_PYTHON,
+    instantiate_standalone_module,
+    load_wasmtime,
+    register_double_arg,
+    register_int_arg,
+    run_lldb_probe,
+    verify_wasm_debug_info,
+)
+
+
+BREAKPOINT_NAME = "krkr2_lldb_position_interp_sample"
 
 
 def load_specs(spec_dir: Path) -> list[dict]:
@@ -15,78 +30,27 @@ def load_specs(spec_dir: Path) -> list[dict]:
     ]
 
 
-def load_wasmtime():
-    try:
-        import wasmtime  # type: ignore
-    except ImportError as exc:
-        raise RuntimeError(
-            "wasmtime is not installed; run "
-            "'python3 -m pip install -r "
-            "tests/differential/python/requirements-wasm.txt'"
-        ) from exc
-    return wasmtime
-
-
-def instantiate_module(wasmtime, wasm_path: Path):
-    engine = wasmtime.Engine()
-    module = wasmtime.Module.from_file(engine, str(wasm_path))
-    store = wasmtime.Store(engine)
-    linker = wasmtime.Linker(engine)
-    instance = linker.instantiate(store, module)
-    exports = instance.exports(store)
-
-    initialize = None
-    for init_name in ("__initialize", "_initialize"):
-        try:
-            initialize = exports[init_name]
-            break
-        except Exception:
-            continue
-    if initialize is not None:
-        initialize(store)
-
-    return store, exports
-
-
 def mem_base(store, memory) -> int:
     return ctypes.addressof(memory.data_ptr(store).contents)
 
 
-def write_doubles_at(base: int, ptr: int, values: list[float]):
+def write_doubles_at(base: int, ptr: int, values: list[float]) -> None:
     if not values:
         return
     data = struct.pack(f"<{len(values)}d", *values)
     ctypes.memmove(base + ptr, data, len(data))
 
 
-def write_int32s_at(base: int, ptr: int, values: list[int]):
+def write_int32s_at(base: int, ptr: int, values: list[int]) -> None:
     if not values:
         return
     data = struct.pack(f"<{len(values)}i", *values)
     ctypes.memmove(base + ptr, data, len(data))
 
 
-def read_doubles_at(base: int, ptr: int, count: int) -> list[float]:
-    arr = (ctypes.c_double * count).from_address(base + ptr)
-    return list(arr)
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--spec-dir", required=True, type=Path)
-    parser.add_argument("--wasm", required=True, type=Path)
-    args = parser.parse_args()
-
-    if not args.wasm.exists():
-        raise RuntimeError(f"wasm module not found: {args.wasm}")
-
-    specs = load_specs(args.spec_dir)
-    if not specs:
-        raise RuntimeError(f"no specs found in {args.spec_dir}")
-
+def run_python_host(wasm_path: Path, spec_dir: Path, output: Path) -> int:
     wasmtime = load_wasmtime()
-    store, exports = instantiate_module(wasmtime, args.wasm)
-
+    store, exports = instantiate_standalone_module(wasmtime, wasm_path)
     memory = exports["memory"]
     ptrs = {
         "easing_x": exports["get_easing_x_ptr"](store),
@@ -98,79 +62,133 @@ def main() -> int:
         "cp_seg_sizes": exports["get_cp_seg_sizes_ptr"](store),
         "src_pos": exports["get_src_pos_ptr"](store),
         "dst_pos": exports["get_dst_pos_ptr"](store),
-        "out_pos": exports["get_out_pos_ptr"](store),
     }
     run_fn = exports["run_position_interp"]
 
-    failed = False
-    for spec in specs:
-        case_id = spec["id"]
-        easing = spec["easing_curve"]
-        rc = spec["rotation_curve"]
-        expected = spec["expected"]
-
+    cases = []
+    for spec in load_specs(spec_dir):
         base = mem_base(store, memory)
+        easing = spec["easing_curve"]
+        rotation = spec["rotation_curve"]
+        write_doubles_at(base, ptrs["easing_x"], easing["x"])
+        write_doubles_at(base, ptrs["easing_y"], easing["y"])
+        write_doubles_at(base, ptrs["cp_x"], rotation["x"])
+        write_doubles_at(base, ptrs["cp_y"], rotation["y"])
+        write_doubles_at(base, ptrs["cp_t"], rotation["t"])
 
-        # Write easing curve
-        easing_x = easing["x"]
-        easing_y = easing["y"]
-        easing_n = len(easing_x)
-        write_doubles_at(base, ptrs["easing_x"], easing_x)
-        write_doubles_at(base, ptrs["easing_y"], easing_y)
-
-        # Write control point curve
-        cp_x = rc["x"]
-        cp_y = rc["y"]
-        cp_t = rc["t"]
-        cp_n = len(cp_x)
-        cp_t_n = len(cp_t)
-        write_doubles_at(base, ptrs["cp_x"], cp_x)
-        write_doubles_at(base, ptrs["cp_y"], cp_y)
-        write_doubles_at(base, ptrs["cp_t"], cp_t)
-
-        # Pack segment data
-        segments = rc["segments"]
         seg_data: list[float] = []
         seg_sizes: list[int] = []
-        for seg in segments:
-            sx = seg["x"]
-            sy = seg["y"]
-            sp = seg["p"]
-            seg_sizes.extend([len(sx), len(sy), len(sp)])
-            seg_data.extend(sx)
-            seg_data.extend(sy)
-            seg_data.extend(sp)
+        for seg in rotation["segments"]:
+            seg_sizes.extend([len(seg["x"]), len(seg["y"]), len(seg["p"])])
+            seg_data.extend(seg["x"])
+            seg_data.extend(seg["y"])
+            seg_data.extend(seg["p"])
         write_doubles_at(base, ptrs["cp_seg_data"], seg_data)
         write_int32s_at(base, ptrs["cp_seg_sizes"], seg_sizes)
-
-        # Write positions
         write_doubles_at(base, ptrs["src_pos"], spec["src_pos"])
         write_doubles_at(base, ptrs["dst_pos"], spec["dst_pos"])
 
-        # Run
-        run_fn(store, easing_n, cp_n, cp_t_n, len(segments),
-               spec["coord_mode"], spec["t"])
+        run_fn(
+            store,
+            len(easing["x"]),
+            len(rotation["x"]),
+            len(rotation["t"]),
+            len(rotation["segments"]),
+            spec["coord_mode"],
+            spec["t"],
+        )
+        cases.append(spec["id"])
 
-        # Read output
-        base = mem_base(store, memory)
-        actual = read_doubles_at(base, ptrs["out_pos"], 3)
+    output.write_text(json.dumps({
+        "ok": True,
+        "runner": "position-interp-wasmtime-python-host",
+        "cases": cases,
+        "host_calls": len(cases),
+    }, indent=2), encoding="utf-8")
+    return 0
 
-        result = {
+
+def read_sample(frame) -> dict:
+    return {
+        "call_index": register_int_arg(frame, 0),
+        "result": [register_double_arg(frame, i) for i in range(3)],
+    }
+
+
+def samples_by_index(samples: list[dict], cases: list[str]) -> dict[int, dict]:
+    if len(samples) != len(cases):
+        raise RuntimeError(
+            f"LLDB sampled {len(samples)} result(s), host drove {len(cases)} case(s)"
+        )
+    out: dict[int, dict] = {}
+    for sample in samples:
+        call_index = int(sample.get("call_index", -1))
+        if call_index in out:
+            raise RuntimeError(f"duplicate LLDB call_index sample: {call_index}")
+        out[call_index] = sample
+    expected = set(range(len(cases)))
+    if set(out) != expected:
+        raise RuntimeError(
+            f"LLDB call indexes {sorted(out)} do not match {sorted(expected)}"
+        )
+    return out
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--spec-dir", required=True, type=Path)
+    parser.add_argument("--wasm", required=True, type=Path)
+    parser.add_argument("--host-python", default=DEFAULT_HOST_PYTHON, type=Path)
+    parser.add_argument("--lldb-timeout", default=120.0, type=float)
+    parser.add_argument("--host-mode", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--output", type=Path, help=argparse.SUPPRESS)
+    args = parser.parse_args()
+
+    if not args.wasm.exists():
+        raise RuntimeError(f"wasm module not found: {args.wasm}")
+    if args.host_mode:
+        if args.output is None:
+            raise RuntimeError("--output is required in --host-mode")
+        return run_python_host(args.wasm, args.spec_dir, args.output)
+    if args.host_python is None or not args.host_python.exists():
+        raise RuntimeError(f"host Python not found: {args.host_python}")
+
+    verify_wasm_debug_info(args.wasm)
+    specs = load_specs(args.spec_dir)
+    if not specs:
+        raise RuntimeError(f"no specs found in {args.spec_dir}")
+
+    debug_result = run_lldb_probe(
+        breakpoint_name=BREAKPOINT_NAME,
+        sample_reader=read_sample,
+        driver=Path(__file__).resolve(),
+        host_python=args.host_python,
+        wasm=args.wasm,
+        spec_dir=args.spec_dir,
+        timeout=args.lldb_timeout,
+    )
+    if debug_result["hit_count"] == 0:
+        raise RuntimeError(f"LLDB breakpoint {BREAKPOINT_NAME} was not hit")
+    cases = debug_result["report"].get("cases", [])
+    by_index = samples_by_index(debug_result["samples"], cases)
+    specs_by_id = {spec["id"]: spec for spec in specs}
+
+    failed = False
+    for call_index, case_id in enumerate(cases):
+        actual = by_index[call_index]["result"]
+        expected = specs_by_id[case_id]["expected"]
+        print(json.dumps({
             "case_id": case_id,
             "status": "ok",
             "result": actual,
-            "runner": "port-wasm",
-        }
-        print(json.dumps(result, ensure_ascii=True))
-
+            "runner": "port-wasm-lldb",
+        }, ensure_ascii=True))
         if actual != expected:
             failed = True
             print(
-                f"mismatch case_id={case_id} "
-                f"wasm={actual} expected={expected}",
+                f"mismatch case_id={case_id} wasm={actual} expected={expected}",
                 file=sys.stderr,
             )
-
     return 1 if failed else 0
 
 
