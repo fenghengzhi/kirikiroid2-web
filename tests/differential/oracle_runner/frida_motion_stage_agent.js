@@ -15,6 +15,12 @@ const PLAYER_BIND_PARAM_OFF      = 0x6C4668;
 const PLAYER_EVALUATE_TIMELINE_OFF = 0x699AE4;
 const PLAYER_SUB_MOTION_OFF      = 0x6BE0C0;
 const PLAYER_PHASE3_LAST_OFF     = 0x6C0528;
+const PLAYER_DRAW_COMPAT_OFF     = 0x6D5FB8;
+const PLAYER_RENDER_PREPARE_OFF  = 0x6D5164;
+const PLAYER_APPLY_TRANSLATE_OFF = 0x6D5264;
+const PLAYER_BUILD_ITEMS_OFF     = 0x6C2334;
+const PLAYER_BUILD_COMMANDS_OFF  = 0x6C4E28;
+const PLAYER_RENDER_EXECUTE_OFF  = 0x6C7440;
 
 const STATIC_PARSE_PROJECTION = 'static_parse-semantic-v1';
 const STATIC_PARSE_SAMPLE_POINTS = {
@@ -48,6 +54,11 @@ const STAGE_VARIABLE_BINDING = 'variable_binding';
 const STAGE_FRAME_SELECTION = 'frame_selection';
 const STAGE_SUB_MOTION_DECISION = 'sub_motion_decision';
 const STAGE_TRACE_FLATTEN = 'trace_flatten';
+const STAGE_DRAW_DISPATCH = 'draw_dispatch';
+const STAGE_RENDER_PREPARE = 'render_prepare';
+const STAGE_RENDER_COMMANDS = 'render_commands';
+const STAGE_RENDER_EXECUTE = 'render_execute';
+const STAGE_LAYER_SAVE = 'layer_save';
 
 const ALL_STAGES = [
     STAGE_STATIC_PARSE,
@@ -56,6 +67,14 @@ const ALL_STAGES = [
     STAGE_FRAME_SELECTION,
     STAGE_SUB_MOTION_DECISION,
     STAGE_TRACE_FLATTEN,
+];
+
+const RENDER_STAGES = [
+    STAGE_DRAW_DISPATCH,
+    STAGE_RENDER_PREPARE,
+    STAGE_RENDER_COMMANDS,
+    STAGE_RENDER_EXECUTE,
+    STAGE_LAYER_SAVE,
 ];
 
 const NODE_OFF = {
@@ -103,6 +122,10 @@ let inCompat = false;
 let samplesInFrame = [];
 let capturedObjthis = null;
 let currentFrameId = null;
+let lastCompletedFrameId = null;
+let lastCompletedTopPlayer = null;
+let currentRenderFrameId = null;
+let currentRenderPlayer = null;
 
 function ensureBase() {
     if (base !== null) return base;
@@ -155,6 +178,10 @@ function readS32(p, off) {
     try { return p.add(off).readS32(); } catch (e) { return null; }
 }
 
+function readU32(p, off) {
+    try { return p.add(off).readU32(); } catch (e) { return null; }
+}
+
 function readU8(p, off) {
     try { return p.add(off).readU8(); } catch (e) { return null; }
 }
@@ -167,6 +194,15 @@ function readBool(p, off) {
 function readDouble(p, off) {
     try {
         const v = p.add(off).readDouble();
+        return Number.isFinite(v) ? v : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function readFloat(p, off) {
+    try {
+        const v = p.add(off).readFloat();
         return Number.isFinite(v) ? v : null;
     } catch (e) {
         return null;
@@ -287,6 +323,46 @@ function emitFrameSelection(kind, semanticPayload, diagnostics) {
     if (inCompat) {
         ev.frameId = currentFrameId;
     }
+    events.push(ev);
+}
+
+function renderFrameIdFor(player) {
+    if (currentRenderFrameId !== null && currentRenderFrameId !== undefined) {
+        return currentRenderFrameId;
+    }
+    if (lastCompletedFrameId === null || lastCompletedFrameId === undefined) {
+        return null;
+    }
+    if (lastCompletedTopPlayer === null || lastCompletedTopPlayer === undefined) {
+        return lastCompletedFrameId;
+    }
+    if (player === null || player === undefined) {
+        return lastCompletedFrameId;
+    }
+    return ptrHex(player) === ptrHex(lastCompletedTopPlayer)
+        ? lastCompletedFrameId
+        : null;
+}
+
+function emitRender(stage, kind, semanticPayload, diagnostics, samplePoint) {
+    if (!recording || !stageEnabled(stage)) return;
+    let player = currentRenderPlayer;
+    if (!player && diagnostics && diagnostics.player) {
+        try { player = ptr(diagnostics.player); } catch (e) { player = null; }
+    }
+    const frameId = renderFrameIdFor(player);
+    if (frameId === null || frameId === undefined) return;
+    const diag = diagnostics || {};
+    const ev = semanticPayload || {};
+    ev.schema = 'motion-render-stage-oracle-v1-event';
+    ev.stage = stage;
+    ev.kind = kind;
+    ev.samplePoint = samplePoint || kind;
+    ev.frameId = frameId;
+    ev.player = ptrHex(player);
+    ev.diagnostics = diag;
+    ev.seq = seqCounter++;
+    ev.timeMs = Date.now() - startTimeMs;
     events.push(ev);
 }
 
@@ -667,6 +743,112 @@ function currentSamplePlayers() {
     return samplesInFrame.map((s) => s.player.toString());
 }
 
+function readRectF(p, off) {
+    return [
+        readFloat(p, off),
+        readFloat(p, off + 4),
+        readFloat(p, off + 8),
+        readFloat(p, off + 12),
+    ];
+}
+
+function readRenderItem(itemPtr, index) {
+    const item = ptr(itemPtr);
+    return {
+        index: index,
+        item: ptrHex(item),
+        flags: {
+            flag16: readU8(item, 16),
+            flag17: readU8(item, 17),
+            flag18: readU8(item, 18),
+            drawFlag19: readU8(item, 19),
+            layerResolved20: readU8(item, 20),
+            clipValid21: readU8(item, 21),
+        },
+        layerIds: {
+            primary: readS32(item, 52),
+            secondary: readS32(item, 56),
+        },
+        clipRect: readRectF(item, 184),
+        viewportRect: readRectF(item, 200),
+        sourceGate232: readU32(item, 232),
+        stencilType244: readU32(item, 244),
+        parentItem264: ptrHex(readPointer(item, 264)),
+        meshType280: readS32(item, 280),
+        leafLayerVariantTag320: readU32(item, 320),
+        composedLayerVariantTag340: readU32(item, 340),
+    };
+}
+
+function readRenderItemVector(vectorPtr, limit) {
+    const vec = ptr(vectorPtr);
+    const out = {
+        vector: ptrHex(vec),
+        begin: null,
+        end: null,
+        count: 0,
+        items: [],
+    };
+    try {
+        const begin = vec.readPointer();
+        const end = vec.add(8).readPointer();
+        out.begin = ptrHex(begin);
+        out.end = ptrHex(end);
+        const beginN = ptrToNumber(begin);
+        const endN = ptrToNumber(end);
+        if (beginN === 0 || endN === 0 || endN < beginN) {
+            out.error = 'invalid render item vector begin/end';
+            return out;
+        }
+        const span = endN - beginN;
+        if (span % 8 !== 0) {
+            out.error = 'render item vector span is not pointer aligned';
+            out.span = span;
+            return out;
+        }
+        const count = span / 8;
+        out.count = count;
+        const n = Math.min(count, limit || 256);
+        for (let i = 0; i < n; i++) {
+            const itemPtr = begin.add(i * 8).readPointer();
+            if (!itemPtr.isNull()) {
+                out.items.push(readRenderItem(itemPtr, i));
+            } else {
+                out.items.push({ index: i, item: null });
+            }
+        }
+        if (count > n) out.truncated = count - n;
+    } catch (e) {
+        out.error = String(e);
+    }
+    return out;
+}
+
+function readRenderLists(mainListPtr, auxListPtr) {
+    return {
+        mainList: mainListPtr ? readRenderItemVector(mainListPtr, 256) : null,
+        auxList: auxListPtr ? readRenderItemVector(auxListPtr, 256) : null,
+    };
+}
+
+function enterRenderContext(player) {
+    return {
+        frameId: currentRenderFrameId,
+        player: currentRenderPlayer,
+        nextFrameId: lastCompletedFrameId,
+    };
+}
+
+function applyRenderContext(ctx, player) {
+    currentRenderFrameId = ctx.nextFrameId;
+    currentRenderPlayer = player;
+}
+
+function leaveRenderContext(ctx) {
+    currentRenderFrameId = ctx.frameId;
+    currentRenderPlayer = ctx.player;
+}
+
 function installHook() {
     if (hooked) return;
     ensureBase();
@@ -681,9 +863,14 @@ function installHook() {
         onLeave(retval) {
             const objthis = capturedObjthis;
             const samples = samplesInFrame;
+            const completedFrameId = currentFrameId;
+            const completedTopPlayer =
+                samples.length > 0 ? samples[0].player : capturedObjthis;
             inCompat = false;
             capturedObjthis = null;
             currentFrameId = null;
+            lastCompletedFrameId = completedFrameId;
+            lastCompletedTopPlayer = completedTopPlayer;
 
             if (!recording || !stageEnabled(STAGE_TRACE_FLATTEN)) {
                 samplesInFrame = [];
@@ -716,7 +903,7 @@ function installHook() {
             emit(STAGE_TRACE_FLATTEN, 'frame', {
                 projection: TRACE_FLATTEN_PROJECTION,
                 samplePoint: TRACE_FLATTEN_SAMPLE_POINT,
-                frameId: frameCounter++,
+                frameId: completedFrameId,
                 playerCount: samples.length,
                 layers: flatLayers,
                 diagnostics: {
@@ -727,6 +914,7 @@ function installHook() {
                     error: walkError,
                 },
             });
+            frameCounter++;
             samplesInFrame = [];
         },
     });
@@ -754,6 +942,162 @@ function installHook() {
                     error: String(e),
                 });
             }
+        },
+    });
+
+    attachAt(PLAYER_DRAW_COMPAT_OFF, 'Player_drawCompat', {
+        onEnter(args) {
+            this.player = args[0];
+            this.ctx = enterRenderContext(this.player);
+            applyRenderContext(this.ctx, this.player);
+            emitRender(STAGE_DRAW_DISPATCH, 'draw_enter', {
+                numparamsOrArg: readArgInt(args[1]),
+            }, {
+                addr: PLAYER_DRAW_COMPAT_OFF,
+                player: ptrHex(this.player),
+                arg0: ptrHex(args[0]),
+                arg1: ptrHex(args[1]),
+                arg2: ptrHex(args[2]),
+                arg3: ptrHex(args[3]),
+            }, 'Player_drawCompat.enter');
+        },
+        onLeave(retval) {
+            emitRender(STAGE_DRAW_DISPATCH, 'draw_leave', {
+                retval: ptrHex(retval),
+            }, {
+                addr: PLAYER_DRAW_COMPAT_OFF,
+                player: ptrHex(this.player),
+            }, 'Player_drawCompat.leave');
+            leaveRenderContext(this.ctx);
+        },
+    });
+
+    attachAt(PLAYER_RENDER_PREPARE_OFF, 'Player_renderPrepare', {
+        onEnter(args) {
+            this.player = args[0];
+            this.mainList = args[1];
+            this.auxList = args[2];
+            emitRender(STAGE_RENDER_PREPARE, 'prepare_enter', {}, {
+                addr: PLAYER_RENDER_PREPARE_OFF,
+                player: ptrHex(this.player),
+                mainListPtr: ptrHex(this.mainList),
+                auxListPtr: ptrHex(this.auxList),
+                arg3: ptrHex(args[3]),
+                arg4: readArgInt(args[4]),
+                arg5: readArgInt(args[5]),
+            }, 'sub_6D5164.enter');
+        },
+        onLeave(retval) {
+            emitRender(STAGE_RENDER_PREPARE, 'prepare_leave', {
+                ok: readArgInt(retval),
+                renderLists: readRenderLists(this.mainList, this.auxList),
+            }, {
+                addr: PLAYER_RENDER_PREPARE_OFF,
+                player: ptrHex(this.player),
+                retval: ptrHex(retval),
+            }, 'sub_6D5164.leave');
+        },
+    });
+
+    attachAt(PLAYER_APPLY_TRANSLATE_OFF, 'Player_applyTranslateOffset', {
+        onEnter(args) {
+            this.player = args[0];
+            this.mainList = args[1];
+            emitRender(STAGE_RENDER_PREPARE, 'apply_translate_enter', {}, {
+                addr: PLAYER_APPLY_TRANSLATE_OFF,
+                player: ptrHex(this.player),
+                mainListPtr: ptrHex(this.mainList),
+                arg2: ptrHex(args[2]),
+            }, 'sub_6D5264.enter');
+        },
+        onLeave(retval) {
+            emitRender(STAGE_RENDER_PREPARE, 'apply_translate_leave', {
+                renderLists: readRenderLists(this.mainList, null),
+            }, {
+                addr: PLAYER_APPLY_TRANSLATE_OFF,
+                player: ptrHex(this.player),
+                retval: ptrHex(retval),
+            }, 'sub_6D5264.leave');
+        },
+    });
+
+    attachAt(PLAYER_BUILD_ITEMS_OFF, 'Player_buildRenderItems', {
+        onEnter(args) {
+            this.player = args[0];
+            this.mainList = args[1];
+            this.auxList = args[2];
+            emitRender(STAGE_RENDER_COMMANDS, 'build_items_enter', {}, {
+                addr: PLAYER_BUILD_ITEMS_OFF,
+                player: ptrHex(this.player),
+                mainListPtr: ptrHex(this.mainList),
+                auxListPtr: ptrHex(this.auxList),
+                defaultColor: readArgInt(args[3]),
+                arg4: readArgInt(args[4]),
+                arg5: readArgInt(args[5]),
+            }, 'sub_6C2334.enter');
+        },
+        onLeave(retval) {
+            emitRender(STAGE_RENDER_COMMANDS, 'build_items_leave', {
+                renderLists: readRenderLists(this.mainList, this.auxList),
+            }, {
+                addr: PLAYER_BUILD_ITEMS_OFF,
+                player: ptrHex(this.player),
+                retval: ptrHex(retval),
+            }, 'sub_6C2334.leave');
+        },
+    });
+
+    attachAt(PLAYER_BUILD_COMMANDS_OFF, 'Player_buildRenderCommands', {
+        onEnter(args) {
+            this.player = args[0];
+            this.mainList = args[1];
+            this.auxList = args[2];
+            emitRender(STAGE_RENDER_COMMANDS, 'build_commands_enter', {
+                renderLists: readRenderLists(this.mainList, this.auxList),
+            }, {
+                addr: PLAYER_BUILD_COMMANDS_OFF,
+                player: ptrHex(this.player),
+                mainListPtr: ptrHex(this.mainList),
+                auxListPtr: ptrHex(this.auxList),
+                arg3: ptrHex(args[3]),
+            }, 'sub_6C4E28.enter');
+        },
+        onLeave(retval) {
+            emitRender(STAGE_RENDER_COMMANDS, 'build_commands_leave', {
+                renderLists: readRenderLists(this.mainList, this.auxList),
+            }, {
+                addr: PLAYER_BUILD_COMMANDS_OFF,
+                player: ptrHex(this.player),
+                retval: ptrHex(retval),
+            }, 'sub_6C4E28.leave');
+        },
+    });
+
+    attachAt(PLAYER_RENDER_EXECUTE_OFF, 'Player_renderExecute', {
+        onEnter(args) {
+            this.player = args[0];
+            this.target = args[1];
+            this.mainList = args[2];
+            this.auxList = args[3];
+            emitRender(STAGE_RENDER_EXECUTE, 'execute_enter', {
+                renderLists: readRenderLists(this.mainList, this.auxList),
+            }, {
+                addr: PLAYER_RENDER_EXECUTE_OFF,
+                player: ptrHex(this.player),
+                target: ptrHex(this.target),
+                mainListPtr: ptrHex(this.mainList),
+                auxListPtr: ptrHex(this.auxList),
+            }, 'sub_6C7440.enter');
+        },
+        onLeave(retval) {
+            emitRender(STAGE_RENDER_EXECUTE, 'execute_leave', {
+                renderLists: readRenderLists(this.mainList, this.auxList),
+                retval: ptrHex(retval),
+            }, {
+                addr: PLAYER_RENDER_EXECUTE_OFF,
+                player: ptrHex(this.player),
+                target: ptrHex(this.target),
+            }, 'sub_6C7440.leave');
         },
     });
 
@@ -921,6 +1265,7 @@ rpc.exports = {
         return {
             base: ensureBase().toString(),
             stages: ALL_STAGES,
+            renderStages: RENDER_STAGES,
             nodeStride: NODE_STRIDE,
             parameterEntryStride: PARAM_ENTRY_STRIDE,
             offsets: {
@@ -932,6 +1277,12 @@ rpc.exports = {
                 evaluateTimeline: PLAYER_EVALUATE_TIMELINE_OFF,
                 subMotionDecision: PLAYER_SUB_MOTION_OFF,
                 phase3Last: PLAYER_PHASE3_LAST_OFF,
+                drawCompat: PLAYER_DRAW_COMPAT_OFF,
+                renderPrepare: PLAYER_RENDER_PREPARE_OFF,
+                applyTranslate: PLAYER_APPLY_TRANSLATE_OFF,
+                buildRenderItems: PLAYER_BUILD_ITEMS_OFF,
+                buildRenderCommands: PLAYER_BUILD_COMMANDS_OFF,
+                renderExecute: PLAYER_RENDER_EXECUTE_OFF,
             },
         };
     },
@@ -943,6 +1294,10 @@ rpc.exports = {
         frameCounter = 0;
         seqCounter = 0;
         startTimeMs = Date.now();
+        lastCompletedFrameId = null;
+        lastCompletedTopPlayer = null;
+        currentRenderFrameId = null;
+        currentRenderPlayer = null;
         recording = true;
         return true;
     },

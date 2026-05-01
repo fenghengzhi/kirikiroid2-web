@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 import time
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,16 @@ sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
 
 SCHEMA = "motion-stage-oracle-v1"
 SOURCE = "android-frida-libkrkr2"
+RENDER_SCHEMA = "motion-render-stage-oracle-v1"
+RENDER_SOURCE = "android-frida-libkrkr2-render"
+RENDER_PATH_STAGE = "render_path"
+RENDER_STAGES: tuple[str, ...] = (
+    "draw_dispatch",
+    "render_prepare",
+    "render_commands",
+    "render_execute",
+    "layer_save",
+)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -36,8 +48,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--serial", required=True,
                    help="ADB serial for the Android oracle harness")
     p.add_argument("--stage", default="all",
-                   choices=("all",) + STAGES,
+                   choices=("all", RENDER_PATH_STAGE) + STAGES,
                    help="Stage to write, or all stages")
+    p.add_argument("--render-artifact-dir", type=Path, default=None,
+                   help="Output directory for --stage render_path artifacts "
+                        "(default: tests/differential/artifacts/"
+                        "motion_playback_render_stages/<run-id>)")
     p.add_argument("--playback-timeout", type=float, default=90.0,
                    help="Seconds to wait for deterministic playback")
     p.add_argument("--raw-out", default=None,
@@ -57,7 +73,17 @@ def selected_stages(stage: str) -> list[str]:
 
     if stage == "all":
         return list(STAGES)
+    if stage == RENDER_PATH_STAGE:
+        return list(RENDER_STAGES)
     return [stage]
+
+
+def default_render_artifact_dir() -> Path:
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return (
+        REPO_ROOT / "tests" / "differential" / "artifacts"
+        / "motion_playback_render_stages" / run_id
+    )
 
 
 def wait_for_stage_trace(
@@ -167,6 +193,8 @@ def build_case_segments(
             "frames": clipped,
             "firstSeq": int(clipped[0]["seq"]),
             "lastSeq": int(clipped[-1]["seq"]),
+            "firstFrameId": int(clipped[0].get("frameId", 0)),
+            "lastFrameId": int(clipped[-1].get("frameId", wanted - 1)),
         })
     return out
 
@@ -276,11 +304,216 @@ def write_stage_oracles(
     return written
 
 
+def assign_render_case_index(
+    ev: dict[str, Any],
+    case_segments: list[dict[str, Any]],
+) -> int:
+    frame_id = ev.get("frameId")
+    if isinstance(frame_id, int):
+        for i, seg in enumerate(case_segments):
+            if int(seg["firstFrameId"]) <= frame_id <= int(seg["lastFrameId"]):
+                return i
+    return assign_case_index(int(ev.get("seq", -1)), case_segments)
+
+
+def split_render_events_by_stage_and_case(
+    events: list[dict[str, Any]],
+    case_segments: list[dict[str, Any]],
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    out: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    render_stage_set = set(RENDER_STAGES)
+    for ev in events:
+        stage = str(ev.get("stage") or "")
+        if stage not in render_stage_set or stage == "layer_save":
+            continue
+        case_index = assign_render_case_index(ev, case_segments)
+        case_id = str(case_segments[case_index]["caseId"])
+        cloned = dict(ev)
+        cloned["caseId"] = case_id
+        out.setdefault(stage, {}).setdefault(case_id, []).append(cloned)
+    return out
+
+
+def render_stage_summary(
+    events: list[dict[str, Any]],
+    trace_frame_count: int,
+) -> dict[str, Any]:
+    kinds = Counter(str(ev.get("kind")) for ev in events)
+    frame_ids = [
+        int(ev["frameId"]) for ev in events
+        if isinstance(ev.get("frameId"), int)
+    ]
+    seqs = [int(ev["seq"]) for ev in events if "seq" in ev]
+    summary: dict[str, Any] = {
+        "eventCount": len(events),
+        "kindCounts": dict(sorted(kinds.items())),
+        "traceFrameCount": trace_frame_count,
+        "framesWithEvents": len(set(frame_ids)),
+    }
+    if frame_ids:
+        summary["eventFrameIdRange"] = [min(frame_ids), max(frame_ids)]
+    if seqs:
+        summary["eventSeqRange"] = [min(seqs), max(seqs)]
+    return summary
+
+
+def layer_save_events_for_case(
+    case_images: dict[str, Any],
+    case_segment: dict[str, Any],
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    case_id = str(case_images["caseId"])
+    first_frame_id = int(case_segment["firstFrameId"])
+    seq = 0
+    for phase in ("pre_draw", "post_draw"):
+        for image in case_images.get("phases", {}).get(phase, []):
+            local_frame = int(image["frame"])
+            events.append({
+                "schema": "motion-render-stage-oracle-v1-event",
+                "source": RENDER_SOURCE,
+                "stage": "layer_save",
+                "kind": "save_layer_image",
+                "samplePoint": f"startup.tjs.{phase}",
+                "caseId": case_id,
+                "frameId": first_frame_id + local_frame,
+                "frame": local_frame,
+                "seq": seq,
+                "phase": phase,
+                "path": image["path"],
+                "width": image["width"],
+                "height": image["height"],
+                "bytes": image["bytes"],
+                "sha256": image["sha256"],
+                "diagnostics": {
+                    "synthetic": True,
+                    "source": "pulled-png-manifest",
+                },
+            })
+            seq += 1
+    return events
+
+
+def write_render_stage_artifacts(
+    *,
+    artifact_dir: Path,
+    stages: list[str],
+    specs: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    case_segments: list[dict[str, Any]],
+    image_manifest: dict[str, Any],
+) -> list[Path]:
+    events_by_stage_case = split_render_events_by_stage_and_case(
+        events, case_segments)
+    case_by_id = {seg["caseId"]: seg for seg in case_segments}
+    image_case_by_id = {
+        case["caseId"]: case for case in image_manifest.get("cases", [])
+    }
+    written: list[Path] = []
+    events_root = artifact_dir / "events"
+    stage_set = set(stages)
+    total_event_count = 0
+
+    for stage in RENDER_STAGES:
+        if stage not in stage_set:
+            continue
+        for spec in specs:
+            case_id = str(spec["id"])
+            case_segment = case_by_id.get(case_id)
+            if case_segment is None:
+                continue
+            if stage == "layer_save":
+                stage_events = layer_save_events_for_case(
+                    image_case_by_id.get(case_id, {
+                        "caseId": case_id,
+                        "phases": {},
+                    }),
+                    case_segment,
+                )
+            else:
+                stage_events = (
+                    events_by_stage_case.get(stage, {}).get(case_id, [])
+                )
+            total_event_count += len(stage_events)
+            payload = {
+                "schema": RENDER_SCHEMA,
+                "source": RENDER_SOURCE,
+                "stage": stage,
+                "caseId": case_id,
+                "events": stage_events,
+                "summary": render_stage_summary(
+                    stage_events, len(case_segment["frames"])),
+            }
+            target = events_root / stage / f"{case_id}.oracle.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=True,
+                           allow_nan=False) + "\n",
+                encoding="utf-8",
+            )
+            written.append(target)
+
+    manifest = {
+        "schema": RENDER_SCHEMA,
+        "source": RENDER_SOURCE,
+        "generatedAt": datetime.now(timezone.utc)
+        .replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "localRoot": str(artifact_dir),
+        "remoteCaptureRoot": image_manifest.get("remoteCaptureRoot"),
+        "fixture": {
+            "xp3": "logo_test_render_stage_oracle.xp3",
+            "window": {"width": 1920, "height": 1080},
+            "deltaMs": 1000.0 / 60.0,
+            "segmentOrder": [s["caseId"] for s in case_segments],
+        },
+        "stages": list(stages),
+        "eventsRoot": "events",
+        "imagesRoot": "images",
+        "images": image_manifest,
+        "summary": {
+            "caseCount": len(case_segments),
+            "traceFlattenFrameCount": len(trace_flatten_frames(events)),
+            "eventCount": total_event_count,
+            "imageCount": image_manifest.get("summary", {}).get(
+                "imageCount", 0),
+        },
+        "cases": [
+            {
+                "caseId": seg["caseId"],
+                "frames": len(seg["frames"]),
+                "frameIdRange": [seg["firstFrameId"], seg["lastFrameId"]],
+                "traceSeqRange": [seg["firstSeq"], seg["lastSeq"]],
+                "eventFiles": {
+                    stage: str(
+                        (Path("events") / stage /
+                         f"{seg['caseId']}.oracle.json").as_posix()
+                    )
+                    for stage in stages
+                },
+            }
+            for seg in case_segments
+        ],
+    }
+    manifest_path = artifact_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=True,
+                   allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    written.append(manifest_path)
+    return written
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     spec_dir = Path(args.spec_dir)
     trace_dir = Path(args.trace_dir)
     stages = selected_stages(args.stage)
+    render_path = args.stage == RENDER_PATH_STAGE
+    render_artifact_dir = (
+        Path(args.render_artifact_dir)
+        if args.render_artifact_dir is not None
+        else default_render_artifact_dir()
+    ) if render_path else None
 
     if not spec_dir.exists():
         print(f"spec dir not found: {spec_dir}", file=sys.stderr)
@@ -296,23 +529,43 @@ def main(argv: list[str]) -> int:
     from oracle_runner.frida_motion_stage_tracer import FridaMotionStageTracer
 
     expected_frames = sum(int(spec["frames"]) for spec in specs)
+    specs_by_id = {spec["id"]: spec for spec in specs}
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
 
     try:
-        with AdbHarnessEngine(serial=args.serial) as engine:
-            print(
-                f"[record-stage] capturing stages={stages} "
-                f"expected_trace_flatten_frames={expected_frames}"
-            )
-            remote_game = mpb._ensure_logo_test_xp3_pushed(args.serial)
-            with FridaMotionStageTracer(engine, device_id=args.serial) as tracer:
-                tracer.start_record(stages)
-                engine.tjs_init()
-                mpb.trigger_startup(engine, remote_game)
-                events = wait_for_stage_trace(
-                    tracer,
-                    expected_frames=expected_frames,
-                    timeout=args.playback_timeout,
+        try:
+            with AdbHarnessEngine(serial=args.serial) as engine:
+                print(
+                    f"[record-stage] capturing stages={stages} "
+                    f"expected_trace_flatten_frames={expected_frames}"
                 )
+                if render_path:
+                    assert render_artifact_dir is not None
+                    temp_dir = tempfile.TemporaryDirectory(
+                        prefix="krkr2-motion-render-stage-xp3-")
+                    remote_game, remote_render_root = \
+                        mpb._prepare_render_stage_capture(
+                            args.serial, specs_by_id,
+                            render_artifact_dir, Path(temp_dir.name))
+                else:
+                    remote_game = mpb._ensure_logo_test_xp3_pushed(
+                        args.serial)
+                    remote_render_root = None
+
+                with FridaMotionStageTracer(
+                    engine, device_id=args.serial) as tracer:
+                    tracer.start_record(stages)
+                    engine.tjs_init()
+                    mpb.trigger_startup(engine, remote_game)
+                    events = wait_for_stage_trace(
+                        tracer,
+                        expected_frames=expected_frames,
+                        timeout=args.playback_timeout,
+                        stabilise_seconds=5.0 if render_path else 2.0,
+                    )
+        finally:
+            if temp_dir is not None:
+                temp_dir.cleanup()
 
         case_segments = build_case_segments(events, specs, mpb)
         segment_lengths = [len(seg["frames"]) for seg in case_segments]
@@ -323,8 +576,8 @@ def main(argv: list[str]) -> int:
             raw_path.parent.mkdir(parents=True, exist_ok=True)
             raw_path.write_text(
                 json.dumps({
-                    "schema": SCHEMA,
-                    "source": SOURCE,
+                    "schema": RENDER_SCHEMA if render_path else SCHEMA,
+                    "source": RENDER_SOURCE if render_path else SOURCE,
                     "events": events,
                     "summary": {
                         "eventCount": len(events),
@@ -337,19 +590,39 @@ def main(argv: list[str]) -> int:
             )
             print(f"[record-stage] wrote raw stream to {raw_path}")
 
-        written = write_stage_oracles(
-            trace_dir=trace_dir,
-            stages=stages,
-            specs=specs,
-            events=events,
-            case_segments=case_segments,
-        )
+        if render_path:
+            assert render_artifact_dir is not None
+            assert remote_render_root is not None
+            image_manifest = mpb._collect_render_stage_capture(
+                args.serial, specs_by_id, render_artifact_dir,
+                remote_render_root, timeout=args.playback_timeout)
+            written = write_render_stage_artifacts(
+                artifact_dir=render_artifact_dir,
+                stages=stages,
+                specs=specs,
+                events=events,
+                case_segments=case_segments,
+                image_manifest=image_manifest,
+            )
+            print(
+                f"[record-stage] render artifact manifest: "
+                f"{render_artifact_dir / 'manifest.json'}"
+            )
+        else:
+            written = write_stage_oracles(
+                trace_dir=trace_dir,
+                stages=stages,
+                specs=specs,
+                events=events,
+                case_segments=case_segments,
+            )
         for path in written:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            print(
-                f"[record-stage] {payload['stage']}/{payload['caseId']}: "
-                f"{payload['summary']['eventCount']} events -> {path}"
-            )
+            if payload.get("stage") and payload.get("caseId"):
+                print(
+                    f"[record-stage] {payload['stage']}/{payload['caseId']}: "
+                    f"{payload['summary']['eventCount']} events -> {path}"
+                )
     except Exception as exc:
         print(f"FAIL: motion stage oracle recording error: {exc}",
               file=sys.stderr)

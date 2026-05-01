@@ -28,6 +28,14 @@ STAGES: tuple[str, ...] = (
     "trace_flatten",
 )
 
+RENDER_STAGES: tuple[str, ...] = (
+    "draw_dispatch",
+    "render_prepare",
+    "render_commands",
+    "render_execute",
+    "layer_save",
+)
+
 
 def _load_agent_source() -> str:
     source = _AGENT_PATH.read_text(encoding="utf-8")
