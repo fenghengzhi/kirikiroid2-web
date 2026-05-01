@@ -29,6 +29,7 @@ unpack/
 .claude/settings.local.json
 .ida-mcp/
 .xp3tmp/
+tests/differential/artifacts/
 
 # oracle harness: libharness.so is cross-compiled per-build (CI builds
 # it in .github/workflows/differential.yml; local devs rebuild via the

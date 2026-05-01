@@ -15,6 +15,8 @@ Re-record path (`--record-oracle`):
 Usage:
     run_motion_playback.py [--spec-dir DIR] [--web-build-dir DIR]
                            [--trace-dir DIR] [--record-oracle]
+                           [--record-framebuffer]
+                           [--framebuffer-dir DIR]
                            [--serial ADB_SERIAL]
 """
 
@@ -59,6 +61,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--record-oracle", action="store_true",
                    help="Re-record disk goldens from a live APK harness "
                         "(requires --serial and a deployed harness)")
+    p.add_argument("--record-framebuffer", action="store_true",
+                   help="With --record-oracle, save every libkrkr2 "
+                        "motion_playback frame as PNG artifacts and write "
+                        "a manifest.json")
+    p.add_argument("--framebuffer-dir", type=Path, default=None,
+                   help="Framebuffer artifact output directory. Default: "
+                        "tests/differential/artifacts/"
+                        "motion_playback_framebuffer/<run-id>")
     p.add_argument("--serial", default=None,
                    help="ADB serial, only with --record-oracle")
     p.add_argument("--strict-missing-trace", action="store_true",
@@ -71,8 +81,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         "fields. Diagnostic strings/images are not compared "
                         "by default.")
     p.add_argument("--playback-timeout", type=float, default=90.0,
-                   help="Seconds to wait for Browser-WASM playback trace")
+                   help="Seconds to wait for Browser-WASM playback trace or "
+                        "Android oracle recording")
     return p.parse_args(argv)
+
+
+def default_framebuffer_dir() -> Path:
+    run_id = time.strftime("%Y%m%d-%H%M%S")
+    return (
+        REPO_ROOT / "tests" / "differential" / "artifacts"
+        / "motion_playback_framebuffer" / run_id
+    )
 
 
 def load_specs(spec_dir: Path) -> list[dict]:
@@ -312,12 +331,20 @@ def main(argv: list[str]) -> int:
 
     from oracle_runner.adapters import motion_playback as mpb
 
+    if args.record_framebuffer and not args.record_oracle:
+        print("--record-framebuffer requires --record-oracle", file=sys.stderr)
+        return 2
+
     if args.record_oracle:
         from oracle_runner.adb_engine import AdbHarnessEngine
         if not args.serial:
             print("--record-oracle requires --serial", file=sys.stderr)
             return 2
         trace_dir.mkdir(parents=True, exist_ok=True)
+        framebuffer_dir = (
+            Path(args.framebuffer_dir) if args.framebuffer_dir is not None
+            else default_framebuffer_dir()
+        ) if args.record_framebuffer else None
         # Single playback covers every spec: startup.tjs inside
         # logo_test_oracle.xp3 plays all SEGMENT_ORDER motions sequentially,
         # and cocos2d only accepts one scheduleOnce("startup", ...) per
@@ -327,7 +354,9 @@ def main(argv: list[str]) -> int:
             print(f"[record] capturing all {len(specs)} specs in one "
                   f"playback (Frida-hooked Motion.Player progress)")
             all_frames = mpb.record_all_oracles(
-                engine, specs, serial=args.serial)
+                engine, specs, serial=args.serial,
+                playback_timeout=args.playback_timeout,
+                framebuffer_dir=framebuffer_dir)
         for spec in specs:
             frames = all_frames.get(spec["id"])
             if frames is None:
@@ -340,6 +369,10 @@ def main(argv: list[str]) -> int:
                 json.dump(frames, f, indent=2, sort_keys=True)
             print(f"[record] {spec['id']}: wrote {len(frames)} frames "
                   f"to {target}")
+        if framebuffer_dir is not None:
+            manifest = framebuffer_dir / "manifest.json"
+            if manifest.exists():
+                print(f"[record] framebuffer manifest: {manifest}")
         return 0
 
     try:
