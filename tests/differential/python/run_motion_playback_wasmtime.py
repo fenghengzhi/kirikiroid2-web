@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import json
 import os
 import posixpath
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import struct
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,12 @@ DEFAULT_HOST_PYTHON_RAW = os.environ.get("KRKR2_HOST_PYTHON") or shutil.which("p
 DEFAULT_HOST_PYTHON = (
     Path(DEFAULT_HOST_PYTHON_RAW) if DEFAULT_HOST_PYTHON_RAW else None
 )
+FRAMEBUFFER_SCHEMA = "motion-framebuffer-wasmtime-v1"
+FRAMEBUFFER_SOURCE = "wasmtime-port-saveLayerImage"
+FRAMEBUFFER_CAPTURE_SURFACE = (
+    "Layer main image immediately after Motion.Player.draw(base)"
+)
+FRAMEBUFFER_CAPTURE_GUEST_ROOT = "/framebuffer_capture"
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -53,12 +61,29 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Timeout for the LLDB Wasm guest tracer")
     p.add_argument("--host-python", default=DEFAULT_HOST_PYTHON, type=Path,
                    help="Python interpreter LLDB should launch as host")
+    p.add_argument("--record-framebuffer", action="store_true",
+                   help="Save every Wasmtime motion_playback frame as PNG "
+                        "artifacts and write a manifest.json")
+    p.add_argument("--framebuffer-dir", type=Path, default=None,
+                   help="Framebuffer artifact output directory. Default: "
+                        "tests/differential/artifacts/"
+                        "motion_playback_framebuffer_wasmtime/<run-id>")
     p.add_argument("--host-mode", action="store_true",
                    help=argparse.SUPPRESS)
     p.add_argument("--host-output", type=Path, help=argparse.SUPPRESS)
     p.add_argument("--host-frames", type=int, default=0,
                    help=argparse.SUPPRESS)
+    p.add_argument("--manifest-startup-xp3", type=Path, default=None,
+                   help=argparse.SUPPRESS)
     return p.parse_args(argv)
+
+
+def default_framebuffer_dir() -> Path:
+    run_id = time.strftime("%Y%m%d-%H%M%S")
+    return (
+        REPO_ROOT / "tests" / "differential" / "artifacts"
+        / "motion_playback_framebuffer_wasmtime" / run_id
+    )
 
 
 def load_specs(spec_dir: Path) -> list[dict]:
@@ -244,7 +269,7 @@ class WasmtimeEnvProvider:
             "getpwnam_r": self._return_minus_one,
             "getpwuid_r": self._return_minus_one,
             "vfork": self._return_minus_one,
-            "web_alert": self._return_none,
+            "web_alert": self._return_zero,
             "web_confirm": self._return_zero,
             "_cc_canvas_render_text": self._return_zero,
             "emscripten_exit_fullscreen": self._return_zero,
@@ -816,8 +841,170 @@ def call_with_guest_bytes(store, memory, malloc, free, data: bytes, callback):
         free(store, ptr)
 
 
+def _png_dimensions(path: Path) -> tuple[int, int]:
+    with path.open("rb") as f:
+        header = f.read(24)
+    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        raise RuntimeError(f"not a PNG file: {path}")
+    if header[12:16] != b"IHDR":
+        raise RuntimeError(f"PNG missing IHDR at expected offset: {path}")
+    width = int.from_bytes(header[16:20], "big")
+    height = int.from_bytes(header[20:24], "big")
+    return width, height
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _build_framebuffer_capture_xp3(specs: list[dict], work_dir: Path) -> Path:
+    from oracle_runner.adapters import motion_playback as mpb
+
+    specs_by_id = {s["id"]: s for s in specs}
+    builder = getattr(mpb, "_build_framebuffer_capture_xp3", None)
+    if builder is None:
+        raise RuntimeError(
+            "motion_playback adapter does not expose framebuffer XP3 builder")
+    return builder(specs_by_id, FRAMEBUFFER_CAPTURE_GUEST_ROOT, work_dir)
+
+
+def _write_wasmtime_framebuffer_manifest(
+    framebuffer_dir: Path,
+    specs: list[dict],
+    *,
+    wasm_path: Path,
+    startup_xp3: Path,
+    manifest_startup_xp3: Path,
+    bootstrap: BrowserBootstrapInfo,
+) -> Path:
+    from oracle_runner.adapters import motion_playback as mpb
+
+    specs_by_id = {s["id"]: s for s in specs}
+    cases: list[dict[str, Any]] = []
+    total_frames = 0
+    for spec_id in mpb.SEGMENT_ORDER:
+        spec = specs_by_id.get(spec_id)
+        if spec is None:
+            continue
+        expected = int(spec["frames"])
+        case_dir = framebuffer_dir / spec_id
+        images: list[dict[str, Any]] = []
+        for frame in range(expected):
+            rel = Path(spec_id) / f"frame_{frame:04d}.png"
+            path = framebuffer_dir / rel
+            if not path.exists():
+                raise RuntimeError(f"missing Wasmtime framebuffer PNG: {path}")
+            width, height = _png_dimensions(path)
+            images.append({
+                "frame": frame,
+                "path": rel.as_posix(),
+                "width": width,
+                "height": height,
+                "bytes": path.stat().st_size,
+                "sha256": _sha256_file(path),
+            })
+        extras = sorted(case_dir.glob("frame_*.png"))[expected:]
+        if extras:
+            raise RuntimeError(
+                f"unexpected extra Wasmtime framebuffer PNG(s) for {spec_id}: "
+                f"{[p.name for p in extras[:5]]}"
+            )
+        total_frames += len(images)
+        cases.append({
+            "caseId": spec_id,
+            "mtnPath": spec.get("mtn_path"),
+            "chara": spec.get("chara"),
+            "label": spec.get("label"),
+            "frames": expected,
+            "images": images,
+        })
+
+    manifest = {
+        "schema": FRAMEBUFFER_SCHEMA,
+        "source": FRAMEBUFFER_SOURCE,
+        "captureSurface": FRAMEBUFFER_CAPTURE_SURFACE,
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "localRoot": str(framebuffer_dir),
+        "wasm": str(wasm_path),
+        "startupXp3": str(manifest_startup_xp3),
+        "captureXp3": str(startup_xp3),
+        "fixture": {
+            "guestRoot": str(bootstrap.root),
+            "guestCaptureRoot": FRAMEBUFFER_CAPTURE_GUEST_ROOT,
+            "xp3": bootstrap.xp3_guest_path,
+            "window": {"width": 1920, "height": 1080},
+            "deltaMs": 1000.0 / 60.0,
+            "segmentOrder": list(mpb.SEGMENT_ORDER),
+        },
+        "summary": {
+            "caseCount": len(cases),
+            "frameCount": total_frames,
+        },
+        "cases": cases,
+    }
+    target = framebuffer_dir / "manifest.json"
+    target.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=True,
+                   allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+def _collect_wasmtime_framebuffer_capture(
+    bootstrap: BrowserBootstrapInfo,
+    framebuffer_dir: Path,
+    specs: list[dict],
+    *,
+    wasm_path: Path,
+    startup_xp3: Path,
+    manifest_startup_xp3: Path,
+) -> Path:
+    from oracle_runner.adapters import motion_playback as mpb
+
+    capture_root = bootstrap.root / FRAMEBUFFER_CAPTURE_GUEST_ROOT.lstrip("/")
+    if not capture_root.is_dir():
+        raise RuntimeError(
+            f"Wasmtime framebuffer capture directory missing: {capture_root}")
+
+    framebuffer_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = framebuffer_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest_path.unlink()
+
+    specs_by_id = {s["id"]: s for s in specs}
+    for spec_id in mpb.SEGMENT_ORDER:
+        if spec_id not in specs_by_id:
+            continue
+        src_case = capture_root / spec_id
+        if not src_case.is_dir():
+            raise RuntimeError(
+                f"Wasmtime framebuffer case directory missing: {src_case}")
+        dst_case = framebuffer_dir / spec_id
+        if dst_case.exists():
+            shutil.rmtree(dst_case)
+        shutil.copytree(src_case, dst_case)
+
+    return _write_wasmtime_framebuffer_manifest(
+        framebuffer_dir, specs,
+        wasm_path=wasm_path,
+        startup_xp3=startup_xp3,
+        manifest_startup_xp3=manifest_startup_xp3,
+        bootstrap=bootstrap)
+
+
 def drive_full_guest(wasm_path: Path, startup_xp3: Path,
-                     frames: int) -> dict[str, Any]:
+                     frames: int, *,
+                     framebuffer_dir: Path | None = None,
+                     specs: list[dict] | None = None,
+                     manifest_startup_xp3: Path | None = None) -> dict[str, Any]:
     if not wasm_path.exists():
         raise FileNotFoundError(
             f"wasm module not found: {wasm_path}. Build with "
@@ -830,8 +1017,27 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
     with tempfile.TemporaryDirectory(prefix="krkr2-wasmtime-browserfs-") as tmp:
         bootstrap = prepare_browser_bootstrap(Path(tmp), startup_xp3)
         try:
-            return _drive_full_guest_with_bootstrap(
+            if framebuffer_dir is not None:
+                if specs is None:
+                    raise RuntimeError(
+                        "framebuffer capture requires motion_playback specs")
+                capture_root = (
+                    bootstrap.root / FRAMEBUFFER_CAPTURE_GUEST_ROOT.lstrip("/")
+                )
+                for spec in specs:
+                    (capture_root / str(spec["id"])).mkdir(
+                        parents=True, exist_ok=True)
+            summary = _drive_full_guest_with_bootstrap(
                 wasmtime, wasm_path, bootstrap, frames)
+            if framebuffer_dir is not None:
+                manifest = _collect_wasmtime_framebuffer_capture(
+                    bootstrap, framebuffer_dir, specs,
+                    wasm_path=wasm_path,
+                    startup_xp3=startup_xp3,
+                    manifest_startup_xp3=(
+                        manifest_startup_xp3 or startup_xp3))
+                summary["framebufferManifest"] = str(manifest)
+            return summary
         except Exception as exc:
             raise RuntimeError(f"{exc}\n{bootstrap.summary()}") from exc
 
@@ -900,16 +1106,26 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
 
 
 def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
-                           frames: int, output: Path) -> int:
-    summary = drive_full_guest(wasm_path, startup_xp3, frames)
+                           frames: int, output: Path, *,
+                           framebuffer_dir: Path | None = None,
+                           specs: list[dict] | None = None,
+                           manifest_startup_xp3: Path | None = None) -> int:
+    summary = drive_full_guest(
+        wasm_path, startup_xp3, frames,
+        framebuffer_dir=framebuffer_dir,
+        specs=specs,
+        manifest_startup_xp3=manifest_startup_xp3)
     output.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return 0
 
 
 def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
+                         spec_dir: Path,
                          expected_frames: int,
                          timeout: float,
-                         host_python: Path) -> list[dict]:
+                         host_python: Path,
+                         framebuffer_dir: Path | None = None,
+                         manifest_startup_xp3: Path | None = None) -> list[dict]:
     if host_python is None or not host_python.exists():
         raise FileNotFoundError(f"host Python not found: {host_python}")
     if not wasm_path.exists():
@@ -934,12 +1150,22 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
             "--host-python", str(host_python),
             "--wasm", str(wasm_path),
             "--startup-xp3", str(startup_xp3),
+            "--spec-dir", str(spec_dir),
             "--trace-out", str(trace_path),
             "--host-output", str(host_report),
             "--expected-frames", str(expected_frames),
             "--timeout", str(timeout),
             "--repo-root", str(REPO_ROOT),
         ]
+        if framebuffer_dir is not None:
+            cmd += [
+                "--record-framebuffer",
+                "--framebuffer-dir", str(framebuffer_dir),
+            ]
+            if manifest_startup_xp3 is not None:
+                cmd += [
+                    "--manifest-startup-xp3", str(manifest_startup_xp3),
+                ]
         try:
             proc = subprocess.run(
                 cmd,
@@ -1031,6 +1257,10 @@ def main(argv: list[str]) -> int:
     trace_dir = Path(args.trace_dir)
     wasm_path = Path(args.wasm)
     startup_xp3 = Path(args.startup_xp3)
+    framebuffer_dir = (
+        Path(args.framebuffer_dir) if args.framebuffer_dir is not None
+        else default_framebuffer_dir()
+    ) if args.record_framebuffer else None
 
     if args.host_mode:
         if args.host_output is None:
@@ -1042,8 +1272,15 @@ def main(argv: list[str]) -> int:
                   file=sys.stderr)
             return 2
         try:
+            specs = load_specs(spec_dir)
             return run_python_host_driver(
-                wasm_path, startup_xp3, frames, args.host_output)
+                wasm_path, startup_xp3, frames, args.host_output,
+                framebuffer_dir=framebuffer_dir,
+                specs=specs,
+                manifest_startup_xp3=(
+                    Path(args.manifest_startup_xp3)
+                    if args.manifest_startup_xp3 is not None
+                    else None))
         except Exception as exc:
             print(f"FAIL: Wasmtime host driver error: {exc}", file=sys.stderr)
             return 1
@@ -1061,13 +1298,28 @@ def main(argv: list[str]) -> int:
 
     try:
         expected_frames = sum(int(spec["frames"]) for spec in specs)
-        port_events = run_lldb_guest_trace(
-            wasm_path,
-            startup_xp3,
-            expected_frames=expected_frames,
-            timeout=args.lldb_timeout,
-            host_python=args.host_python,
-        )
+        trace_startup_xp3 = startup_xp3
+        temp_capture: tempfile.TemporaryDirectory[str] | None = None
+        if framebuffer_dir is not None:
+            temp_capture = tempfile.TemporaryDirectory(
+                prefix="krkr2-motion-wasmtime-framebuffer-xp3-")
+            trace_startup_xp3 = _build_framebuffer_capture_xp3(
+                specs, Path(temp_capture.name))
+        try:
+            port_events = run_lldb_guest_trace(
+                wasm_path,
+                trace_startup_xp3,
+                spec_dir=spec_dir,
+                expected_frames=expected_frames,
+                timeout=args.lldb_timeout,
+                host_python=args.host_python,
+                framebuffer_dir=framebuffer_dir,
+                manifest_startup_xp3=startup_xp3
+                if framebuffer_dir is not None else None,
+            )
+        finally:
+            if temp_capture is not None:
+                temp_capture.cleanup()
         port_frames_by_id = partition_port_frames(port_events, specs, mpb)
     except Exception as exc:
         print(f"FAIL: Wasmtime LLDB trace error: {exc}", file=sys.stderr)
@@ -1107,6 +1359,10 @@ def main(argv: list[str]) -> int:
             if len(result["mismatches"]) > 10:
                 print(f"  ... +{len(result['mismatches']) - 10} more")
             failures += 1
+    if framebuffer_dir is not None:
+        manifest = framebuffer_dir / "manifest.json"
+        if manifest.exists():
+            print(f"[record] framebuffer manifest: {manifest}")
     return 1 if failures else 0
 
 

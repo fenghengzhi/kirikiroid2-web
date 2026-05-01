@@ -106,10 +106,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Path to krkr2_wasmtime_guest.wasm")
     p.add_argument("--startup-xp3", required=True,
                    help="Path to logo_test_oracle.xp3")
+    p.add_argument("--spec-dir", required=True,
+                   help="Directory of motion_playback spec JSON files")
     p.add_argument("--trace-out", required=True,
                    help="Path to write LLDB-collected JSON trace events")
     p.add_argument("--host-output", required=True,
                    help="Path for host-mode bootstrap summary JSON")
+    p.add_argument("--record-framebuffer", action="store_true",
+                   help="Ask the host-mode driver to write framebuffer PNGs")
+    p.add_argument("--framebuffer-dir", default=None,
+                   help="Host path where framebuffer PNGs should be copied")
+    p.add_argument("--manifest-startup-xp3", default=None,
+                   help="Original startup XP3 path to record in manifest")
     p.add_argument("--expected-frames", type=int, default=332,
                    help="Minimum expected event count")
     p.add_argument("--timeout", type=float, default=600.0,
@@ -128,20 +136,28 @@ class WasmMotionTracer:
         host_python: Path,
         wasm: Path,
         startup_xp3: Path,
+        spec_dir: Path,
         host_output: Path,
         repo_root: Path,
         expected_frames: int,
         timeout: float,
+        record_framebuffer: bool = False,
+        framebuffer_dir: Path | None = None,
+        manifest_startup_xp3: Path | None = None,
     ) -> None:
         self.lldb = lldb
         self.driver = driver
         self.host_python = host_python
         self.wasm = wasm
         self.startup_xp3 = startup_xp3
+        self.spec_dir = spec_dir
         self.host_output = host_output
         self.repo_root = repo_root
         self.expected_frames = expected_frames
         self.timeout = timeout
+        self.record_framebuffer = record_framebuffer
+        self.framebuffer_dir = framebuffer_dir
+        self.manifest_startup_xp3 = manifest_startup_xp3
         self.events: list[dict[str, Any]] = []
         self.frame_records: dict[int, dict[str, Any]] = {}
         self.callback_errors: list[str] = []
@@ -179,18 +195,35 @@ class WasmMotionTracer:
                 temp = Path(temp_dir)
                 stdout_path = temp / "host.stdout"
                 stderr_path = temp / "host.stderr"
-                launch = lldb.SBLaunchInfo([
+                launch_args = [
                     str(self.driver),
                     "--host-mode",
                     "--wasm",
                     str(self.wasm),
                     "--startup-xp3",
                     str(self.startup_xp3),
+                    "--spec-dir",
+                    str(self.spec_dir),
                     "--host-frames",
                     str(max(self.expected_frames, 1)),
                     "--host-output",
                     str(self.host_output),
-                ])
+                ]
+                if self.record_framebuffer:
+                    if self.framebuffer_dir is None:
+                        raise RuntimeError(
+                            "record_framebuffer requires framebuffer_dir")
+                    launch_args += [
+                        "--record-framebuffer",
+                        "--framebuffer-dir",
+                        str(self.framebuffer_dir),
+                    ]
+                    if self.manifest_startup_xp3 is not None:
+                        launch_args += [
+                            "--manifest-startup-xp3",
+                            str(self.manifest_startup_xp3),
+                        ]
+                launch = lldb.SBLaunchInfo(launch_args)
                 launch.SetWorkingDirectory(str(self.repo_root))
                 launch.AddOpenFileAction(1, str(stdout_path), False, True)
                 launch.AddOpenFileAction(2, str(stderr_path), False, True)
@@ -420,9 +453,18 @@ def main(argv: list[str]) -> int:
     host_python = Path(args.host_python)
     wasm = Path(args.wasm)
     startup_xp3 = Path(args.startup_xp3)
+    spec_dir = Path(args.spec_dir)
     trace_out = Path(args.trace_out)
     host_output = Path(args.host_output)
     repo_root = Path(args.repo_root)
+    framebuffer_dir = (
+        Path(args.framebuffer_dir) if args.framebuffer_dir is not None
+        else None
+    )
+    manifest_startup_xp3 = (
+        Path(args.manifest_startup_xp3)
+        if args.manifest_startup_xp3 is not None else None
+    )
 
     if sys.platform != "darwin":
         print("Wasmtime LLDB motion trace is only supported on macOS",
@@ -433,10 +475,15 @@ def main(argv: list[str]) -> int:
         ("host Python", host_python),
         ("wasm", wasm),
         ("startup xp3", startup_xp3),
+        ("spec dir", spec_dir),
     ):
         if not path.exists():
             print(f"{label} not found: {path}", file=sys.stderr)
             return 2
+    if args.record_framebuffer and framebuffer_dir is None:
+        print("--framebuffer-dir is required with --record-framebuffer",
+              file=sys.stderr)
+        return 2
 
     try:
         lldb = _load_lldb()
@@ -446,10 +493,14 @@ def main(argv: list[str]) -> int:
             host_python=host_python,
             wasm=wasm,
             startup_xp3=startup_xp3,
+            spec_dir=spec_dir,
             host_output=host_output,
             repo_root=repo_root,
             expected_frames=args.expected_frames,
             timeout=args.timeout,
+            record_framebuffer=args.record_framebuffer,
+            framebuffer_dir=framebuffer_dir,
+            manifest_startup_xp3=manifest_startup_xp3,
         )
         events = tracer.run()
         trace_out.parent.mkdir(parents=True, exist_ok=True)
