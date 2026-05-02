@@ -82,7 +82,7 @@ _FRAMEBUFFER_CAPTURE_SURFACE = (
 )
 _FRAMEBUFFER_XP3_NAME = "logo_test_framebuffer_oracle.xp3"
 _RENDER_STAGE_XP3_NAME = "logo_test_render_stage_oracle.xp3"
-_RENDER_STAGE_CAPTURE_SURFACES = ("pre_draw", "post_draw")
+_RENDER_STAGE_CAPTURE_SURFACES = ("initial", "post_draw")
 
 
 # ---------------------------------------------------------------- device ops
@@ -319,9 +319,9 @@ def _build_render_stage_startup_tjs(
         "    player.chara = chara;",
         "    player.motion = motion;",
         "    player.play(motion, Motion.PlayFlagForce);",
+        "    savePhase(caseId, \"initial\", 0);",
         "    for (var i = 0; i < frameCount; i++) {",
         "        player.progress(FIXED_DELTA_MS);",
-        "        savePhase(caseId, \"pre_draw\", i);",
         "        player.draw(base);",
         "        savePhase(caseId, \"post_draw\", i);",
         "    }",
@@ -593,10 +593,7 @@ def _collect_render_stage_capture(
     *,
     timeout: float,
 ) -> dict[str, Any]:
-    expected_files = (
-        sum(int(s["frames"]) for s in specs_by_id.values())
-        * len(_RENDER_STAGE_CAPTURE_SURFACES)
-    )
+    expected_files = sum(int(s["frames"]) + 1 for s in specs_by_id.values())
     _wait_for_remote_framebuffer_files(
         serial, remote_capture_root, expected_files,
         timeout=max(30.0, timeout))
@@ -631,8 +628,9 @@ def _collect_render_stage_capture(
             if not phase_dir.is_dir():
                 raise RuntimeError(
                     f"missing render stage image directory: {phase_dir}")
+            expected_phase_frames = 1 if phase == "initial" else expected
             images: list[dict[str, Any]] = []
-            for frame in range(expected):
+            for frame in range(expected_phase_frames):
                 rel = Path("images") / spec_id / phase / \
                     f"frame_{frame:04d}.png"
                 path = artifact_dir / rel
@@ -645,7 +643,7 @@ def _collect_render_stage_capture(
                     path=path,
                     rel=rel,
                 ))
-            extras = sorted(phase_dir.glob("frame_*.png"))[expected:]
+            extras = sorted(phase_dir.glob("frame_*.png"))[expected_phase_frames:]
             if extras:
                 raise RuntimeError(
                     f"unexpected extra render stage PNG(s) for "

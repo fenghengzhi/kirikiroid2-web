@@ -592,7 +592,6 @@ function drawPathSummary(ctx) {
         renderToCanvasCalled: ctx.renderToCanvasCalled,
         updateLayerAfterDrawCalled: ctx.updateLayerAfterDrawCalled,
         internalAssignRequested: ctx.internalAssignRequested,
-        imageChanged: null,
     };
 }
 

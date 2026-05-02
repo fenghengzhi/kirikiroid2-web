@@ -38,7 +38,7 @@ RENDER_SCHEMA = "motion-render-stage-wasmtime-v1"
 RENDER_EVENT_SCHEMA = "motion-render-stage-wasmtime-v1-event"
 RENDER_SOURCE = "wasmtime-port-render-stage"
 RENDER_CAPTURE_GUEST_ROOT = "/render_stage_capture"
-RENDER_CAPTURE_SURFACES: tuple[str, ...] = ("pre_draw", "post_draw")
+RENDER_CAPTURE_SURFACES: tuple[str, ...] = ("initial", "post_draw")
 RENDER_STEP_CHECKPOINT_SURFACES: tuple[str, ...] = (
     "execute_pre",
     "execute_post",
@@ -1082,8 +1082,11 @@ def _collect_wasmtime_render_stage_capture(
             if not phase_dir.is_dir():
                 raise RuntimeError(
                     f"missing Wasmtime render stage image directory: {phase_dir}")
+            expected_phase_frames = (
+                1 if phase == "initial" else expected
+            )
             images: list[dict[str, Any]] = []
-            for frame in range(expected):
+            for frame in range(expected_phase_frames):
                 rel = Path("images") / spec_id / phase / f"frame_{frame:04d}.png"
                 path = render_artifact_dir / rel
                 if not path.exists():
@@ -1095,7 +1098,7 @@ def _collect_wasmtime_render_stage_capture(
                     path=path,
                     rel=rel,
                 ))
-            extras = sorted(phase_dir.glob("frame_*.png"))[expected:]
+            extras = sorted(phase_dir.glob("frame_*.png"))[expected_phase_frames:]
             if extras:
                 raise RuntimeError(
                     f"unexpected extra Wasmtime render stage PNG(s) for "
@@ -1641,17 +1644,6 @@ def _add_image_manifest_error(
     event["diagnostics"] = diagnostics
 
 
-def _set_draw_path_image_changed(
-    event: dict[str, Any],
-    image_changed: bool | None,
-) -> None:
-    draw_path = event.get("drawPath")
-    if isinstance(draw_path, dict):
-        updated = dict(draw_path)
-        updated["imageChanged"] = image_changed
-        event["drawPath"] = updated
-
-
 def _enrich_draw_dispatch_events_for_case(
     events: list[dict[str, Any]],
     case_segment: dict[str, Any],
@@ -1659,7 +1651,7 @@ def _enrich_draw_dispatch_events_for_case(
 ) -> list[dict[str, Any]]:
     first_frame_id = int(case_segment["firstFrameId"])
     last_frame_id = int(case_segment["lastFrameId"])
-    pre_by_frame = _phase_images_by_frame(case_images, "pre_draw")
+    initial_image = _phase_images_by_frame(case_images, "initial").get(0)
     post_by_frame = _phase_images_by_frame(case_images, "post_draw")
     enriched: list[dict[str, Any]] = []
 
@@ -1680,24 +1672,15 @@ def _enrich_draw_dispatch_events_for_case(
             continue
 
         local_frame = frame_id - first_frame_id
-        pre_draw = pre_by_frame.get(local_frame)
         post_draw = post_by_frame.get(local_frame)
 
         kind = str(event.get("kind") or "")
-        if kind == "draw_enter":
-            event["preDrawImage"] = pre_draw
-            if pre_draw is None:
-                _add_image_manifest_error(
-                    event, f"missing pre_draw image for frame {local_frame}")
-        elif kind == "draw_leave":
-            event["preDrawImage"] = pre_draw
+        if kind == "draw_leave":
+            event["initialImage"] = initial_image
             event["postDrawImage"] = post_draw
-            image_changed = images_changed(pre_draw, post_draw)
-            event["imageChanged"] = image_changed
-            _set_draw_path_image_changed(event, image_changed)
-            if pre_draw is None:
+            if initial_image is None:
                 _add_image_manifest_error(
-                    event, f"missing pre_draw image for frame {local_frame}")
+                    event, "missing initial image")
             if post_draw is None:
                 _add_image_manifest_error(
                     event, f"missing post_draw image for frame {local_frame}")

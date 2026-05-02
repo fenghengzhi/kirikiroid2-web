@@ -159,6 +159,19 @@ def execute_leaves(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [event for event in events if event.get("kind") == "execute_leave"]
 
 
+def layer_save_images(events: list[dict[str, Any]]) -> dict[tuple[str, int], dict[str, Any]]:
+    out: dict[tuple[str, int], dict[str, Any]] = {}
+    for event in events:
+        if event.get("kind") != "save_layer_image":
+            continue
+        phase = event.get("phase")
+        frame = event.get("frame")
+        if not isinstance(phase, str) or not isinstance(frame, int):
+            continue
+        out[(phase, frame)] = event
+    return out
+
+
 def decoded_image_hash(
     artifact_root: Path,
     image: dict[str, Any] | None,
@@ -250,6 +263,56 @@ def _compare_build_flow(
     return None
 
 
+def _compare_layer_save_images(
+    oracle_root: Path,
+    wasmtime_root: Path,
+    oracle_images: dict[tuple[str, int], dict[str, Any]],
+    wasmtime_images: dict[tuple[str, int], dict[str, Any]],
+    oracle_cache: dict[Path, str],
+    wasmtime_cache: dict[Path, str],
+) -> tuple[int, tuple[str, Any, Any] | None]:
+    mismatches = 0
+    first_mismatch: tuple[str, Any, Any] | None = None
+    phase_order = {"initial": 0, "post_draw": 1}
+    keys = sorted(
+        set(oracle_images) | set(wasmtime_images) | {("initial", 0)},
+        key=lambda key: (phase_order.get(key[0], 99), key[1], key[0]),
+    )
+    for phase, frame in keys:
+        if phase not in phase_order or (phase == "initial" and frame != 0):
+            mismatches += 1
+            if first_mismatch is None:
+                first_mismatch = (
+                    f"{phase}[{frame}].phase",
+                    phase if (phase, frame) in oracle_images else None,
+                    phase if (phase, frame) in wasmtime_images else None,
+                )
+            continue
+        oracle_image = oracle_images.get((phase, frame))
+        wasmtime_image = wasmtime_images.get((phase, frame))
+        if oracle_image is None or wasmtime_image is None:
+            mismatches += 1
+            if first_mismatch is None:
+                first_mismatch = (
+                    f"{phase}[{frame}].present",
+                    oracle_image is not None,
+                    wasmtime_image is not None,
+                )
+            continue
+        oracle_hash = decoded_image_hash(oracle_root, oracle_image, oracle_cache)
+        wasmtime_hash = decoded_image_hash(
+            wasmtime_root, wasmtime_image, wasmtime_cache)
+        if oracle_hash != wasmtime_hash:
+            mismatches += 1
+            if first_mismatch is None:
+                first_mismatch = (
+                    f"{phase}[{frame}].rgbaSha256",
+                    oracle_hash,
+                    wasmtime_hash,
+                )
+    return mismatches, first_mismatch
+
+
 def _event_frame_label(event: dict[str, Any], fallback: int) -> str:
     frame = event.get("frame")
     if isinstance(frame, int):
@@ -277,12 +340,19 @@ def compare_case(
     wasmtime_execute = execute_leaves(load_events(
         wasmtime_root / "events" / "render_execute" /
         f"{case_id}.wasmtime.json"))
+    oracle_layer_save = layer_save_images(load_events(
+        oracle_root / "events" / "layer_save" /
+        f"{case_id}.oracle.json"))
+    wasmtime_layer_save = layer_save_images(load_events(
+        wasmtime_root / "events" / "layer_save" /
+        f"{case_id}.wasmtime.json"))
 
     first_mismatch: tuple[int, str, str, Any, Any] | None = None
     build_flow_mismatches = 0
     execute_pre_mismatches = 0
     execute_post_mismatches = 0
     execute_changed_mismatches = 0
+    layer_save_mismatches = 0
     oracle_cache: dict[Path, str] = {}
     wasmtime_cache: dict[Path, str] = {}
 
@@ -388,6 +458,24 @@ def compare_case(
                     wasmtime_changed,
                 )
 
+    layer_save_mismatches, layer_save_first = _compare_layer_save_images(
+        oracle_root,
+        wasmtime_root,
+        oracle_layer_save,
+        wasmtime_layer_save,
+        oracle_cache,
+        wasmtime_cache,
+    )
+    if layer_save_first is not None and first_mismatch is None:
+        field, oracle_value, wasmtime_value = layer_save_first
+        first_mismatch = (
+            0,
+            "layer_save",
+            field,
+            oracle_value,
+            wasmtime_value,
+        )
+
     ok = first_mismatch is None
     if ok:
         print(f"{case_id}: PASS frames={frame_count}")
@@ -408,7 +496,8 @@ def compare_case(
         f"{case_id}: summary build_flow_mismatch={build_flow_mismatches} "
         f"execute_pre_mismatch={execute_pre_mismatches} "
         f"execute_post_mismatch={execute_post_mismatches} "
-        f"executeImageChanged_mismatch={execute_changed_mismatches}")
+        f"executeImageChanged_mismatch={execute_changed_mismatches} "
+        f"layer_save_mismatch={layer_save_mismatches}")
     return ok
 
 

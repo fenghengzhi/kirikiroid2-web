@@ -40,6 +40,7 @@ RENDER_STEP_CHECKPOINT_PHASES: tuple[str, ...] = (
     "execute_pre",
     "execute_post",
 )
+RENDER_CAPTURE_SURFACES: tuple[str, ...] = ("initial", "post_draw")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -378,7 +379,7 @@ def layer_save_events_for_case(
     case_id = str(case_images["caseId"])
     first_frame_id = int(case_segment["firstFrameId"])
     seq = 0
-    for phase in ("pre_draw", "post_draw"):
+    for phase in RENDER_CAPTURE_SURFACES:
         for image in case_images.get("phases", {}).get(phase, []):
             local_frame = int(image["frame"])
             events.append({
@@ -432,17 +433,6 @@ def _add_image_manifest_error(
     event["diagnostics"] = diagnostics
 
 
-def _set_draw_path_image_changed(
-    event: dict[str, Any],
-    image_changed: bool | None,
-) -> None:
-    draw_path = event.get("drawPath")
-    if isinstance(draw_path, dict):
-        updated = dict(draw_path)
-        updated["imageChanged"] = image_changed
-        event["drawPath"] = updated
-
-
 def enrich_draw_dispatch_events_for_case(
     events: list[dict[str, Any]],
     case_segment: dict[str, Any],
@@ -450,7 +440,7 @@ def enrich_draw_dispatch_events_for_case(
 ) -> list[dict[str, Any]]:
     first_frame_id = int(case_segment["firstFrameId"])
     last_frame_id = int(case_segment["lastFrameId"])
-    pre_by_frame = _phase_images_by_frame(case_images, "pre_draw")
+    initial_image = _phase_images_by_frame(case_images, "initial").get(0)
     post_by_frame = _phase_images_by_frame(case_images, "post_draw")
     enriched: list[dict[str, Any]] = []
 
@@ -471,24 +461,15 @@ def enrich_draw_dispatch_events_for_case(
             continue
 
         local_frame = frame_id - first_frame_id
-        pre_draw = pre_by_frame.get(local_frame)
         post_draw = post_by_frame.get(local_frame)
 
         kind = str(event.get("kind") or "")
-        if kind == "draw_enter":
-            event["preDrawImage"] = pre_draw
-            if pre_draw is None:
-                _add_image_manifest_error(
-                    event, f"missing pre_draw image for frame {local_frame}")
-        elif kind == "draw_leave":
-            event["preDrawImage"] = pre_draw
+        if kind == "draw_leave":
+            event["initialImage"] = initial_image
             event["postDrawImage"] = post_draw
-            image_changed = images_changed(pre_draw, post_draw)
-            event["imageChanged"] = image_changed
-            _set_draw_path_image_changed(event, image_changed)
-            if pre_draw is None:
+            if initial_image is None:
                 _add_image_manifest_error(
-                    event, f"missing pre_draw image for frame {local_frame}")
+                    event, "missing initial image")
             if post_draw is None:
                 _add_image_manifest_error(
                     event, f"missing post_draw image for frame {local_frame}")

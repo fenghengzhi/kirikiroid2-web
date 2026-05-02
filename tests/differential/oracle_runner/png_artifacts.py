@@ -90,13 +90,13 @@ def image_pixel_hash(image: dict[str, Any]) -> str | None:
 
 
 def images_changed(
-    pre_draw: dict[str, Any] | None,
-    post_draw: dict[str, Any] | None,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
 ) -> bool | None:
-    if pre_draw is None or post_draw is None:
+    if before is None or after is None:
         return None
-    pre_hash = image_pixel_hash(pre_draw)
-    post_hash = image_pixel_hash(post_draw)
-    if pre_hash is None or post_hash is None:
+    before_hash = image_pixel_hash(before)
+    after_hash = image_pixel_hash(after)
+    if before_hash is None or after_hash is None:
         return None
-    return pre_hash != post_hash
+    return before_hash != after_hash

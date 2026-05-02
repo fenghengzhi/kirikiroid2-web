@@ -10,10 +10,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
-from oracle_runner.png_artifacts import image_pixel_hash, rgba_sha256_file
-
 
 SEMANTIC_FIELDS = (
     "drawPath.route",
@@ -23,7 +19,6 @@ SEMANTIC_FIELDS = (
     "drawPath.renderToCanvasCalled",
     "drawPath.updateLayerAfterDrawCalled",
     "drawPath.internalAssignRequested",
-    "imageChanged",
 )
 
 
@@ -51,52 +46,7 @@ def draw_leaves(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [e for e in events if e.get("kind") == "draw_leave"]
 
 
-def decoded_image_hash(
-    artifact_root: Path,
-    image: dict[str, Any] | None,
-    cache: dict[Path, str],
-) -> str | None:
-    if image is None:
-        return None
-    value = image_pixel_hash(image)
-    if value is not None:
-        return value
-    rel = image.get("path")
-    if not isinstance(rel, str) or not rel:
-        return value
-    path = artifact_root / rel
-    cached = cache.get(path)
-    if cached is not None:
-        return cached
-    cached = rgba_sha256_file(path)
-    cache[path] = cached
-    return cached
-
-
-def event_image_changed(
-    event: dict[str, Any],
-    artifact_root: Path,
-    cache: dict[Path, str],
-) -> Any:
-    pre_hash = decoded_image_hash(
-        artifact_root, event.get("preDrawImage"), cache)
-    post_hash = decoded_image_hash(
-        artifact_root, event.get("postDrawImage"), cache)
-    if pre_hash is not None and post_hash is not None:
-        return pre_hash != post_hash
-    return None
-
-
-def event_value(
-    event: dict[str, Any],
-    field: str,
-    *,
-    artifact_root: Path,
-    image_hash_cache: dict[Path, str],
-) -> Any:
-    if field == "imageChanged":
-        return event_image_changed(
-            event, artifact_root, image_hash_cache)
+def event_value(event: dict[str, Any], field: str) -> Any:
     value: Any = event
     for part in field.split("."):
         if not isinstance(value, dict):
@@ -122,16 +72,6 @@ def route_counts(leaves: list[dict[str, Any]]) -> Counter[str]:
     return out
 
 
-def image_changed_count(
-    leaves: list[dict[str, Any]],
-    artifact_root: Path,
-    image_hash_cache: dict[Path, str],
-) -> int:
-    return sum(
-        1 for event in leaves
-        if event_image_changed(event, artifact_root, image_hash_cache) is True)
-
-
 def compare_case(
     oracle_root: Path,
     wasmtime_root: Path,
@@ -153,21 +93,11 @@ def compare_case(
             f"wasmtime={len(wasmtime_leaves)}")
 
     first_mismatch: tuple[int, str, Any, Any] | None = None
-    oracle_image_cache: dict[Path, str] = {}
-    wasmtime_image_cache: dict[Path, str] = {}
     for index, (oracle_event, wasmtime_event) in enumerate(
         zip(oracle_leaves, wasmtime_leaves)):
         for field in SEMANTIC_FIELDS:
-            oracle_value = event_value(
-                oracle_event, field,
-                artifact_root=oracle_root,
-                image_hash_cache=oracle_image_cache,
-            )
-            wasmtime_value = event_value(
-                wasmtime_event, field,
-                artifact_root=wasmtime_root,
-                image_hash_cache=wasmtime_image_cache,
-            )
+            oracle_value = event_value(oracle_event, field)
+            wasmtime_value = event_value(wasmtime_event, field)
             if oracle_value != wasmtime_value:
                 first_mismatch = (index, field, oracle_value, wasmtime_value)
                 ok = False
@@ -184,15 +114,9 @@ def compare_case(
     elif ok:
         print(f"{case_id}: PASS frames={len(oracle_leaves)}")
 
-    oracle_changed = image_changed_count(
-        oracle_leaves, oracle_root, oracle_image_cache)
-    wasmtime_changed = image_changed_count(
-        wasmtime_leaves, wasmtime_root, wasmtime_image_cache)
     print(
         f"{case_id}: routes oracle={dict(route_counts(oracle_leaves))} "
-        f"wasmtime={dict(route_counts(wasmtime_leaves))} "
-        f"imageChanged oracle={oracle_changed} "
-        f"wasmtime={wasmtime_changed}")
+        f"wasmtime={dict(route_counts(wasmtime_leaves))}")
     return ok
 
 
