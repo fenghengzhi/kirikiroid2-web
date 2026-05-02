@@ -1619,6 +1619,17 @@ def _add_image_manifest_error(
     event["diagnostics"] = diagnostics
 
 
+def _set_draw_path_image_changed(
+    event: dict[str, Any],
+    image_changed: bool | None,
+) -> None:
+    draw_path = event.get("drawPath")
+    if isinstance(draw_path, dict):
+        updated = dict(draw_path)
+        updated["imageChanged"] = image_changed
+        event["drawPath"] = updated
+
+
 def _enrich_draw_dispatch_events_for_case(
     events: list[dict[str, Any]],
     case_segment: dict[str, Any],
@@ -1659,10 +1670,12 @@ def _enrich_draw_dispatch_events_for_case(
         elif kind == "draw_leave":
             event["preDrawImage"] = pre_draw
             event["postDrawImage"] = post_draw
-            event["imageChanged"] = (
+            image_changed = (
                 None if pre_draw is None or post_draw is None
                 else pre_draw.get("sha256") != post_draw.get("sha256")
             )
+            event["imageChanged"] = image_changed
+            _set_draw_path_image_changed(event, image_changed)
             if pre_draw is None:
                 _add_image_manifest_error(
                     event, f"missing pre_draw image for frame {local_frame}")

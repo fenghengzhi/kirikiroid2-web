@@ -1,5 +1,10 @@
 #pragma once
 
+#if defined(KRKR2_WASMTIME_HEADLESS)
+#include <string>
+#include <vector>
+#endif
+
 namespace motion {
     class Player;
 }
@@ -31,12 +36,35 @@ namespace motion::detail {
         MotionTraceRenderDrawScope &operator=(const MotionTraceRenderDrawScope &) = delete;
 
         void setRoute(const char *route);
+        void recordTargetCheckD3D(bool hit);
+        void recordTargetCheckSLA(bool hit);
+        void recordPrepareResult(bool ok);
+        void recordBranchAfterPrepare(bool d3dDrawMode);
+        void recordApplyTranslateOffset();
+        void recordRenderToCanvas(bool ok);
+        void recordUpdateLayerAfterDraw(bool internalAssignRequested, bool ok);
 
     private:
+        void emitStep(const char *drawStep, const char *outcome,
+                      const char *route = nullptr,
+                      const char *extraPayload = nullptr);
+
         Player *_player = nullptr;
         void *_argVariant = nullptr;
         void *_targetObject = nullptr;
         const char *_route = nullptr;
+        int _drawId = -1;
+        int _stepIndex = 0;
+        std::vector<std::string> _steps;
+        bool _prepareCalled = false;
+        bool _prepareOk = false;
+        bool _prepareOkKnown = false;
+        bool _d3dDrawModeAfterPrepare = false;
+        bool _d3dDrawModeAfterPrepareKnown = false;
+        bool _renderToCanvasCalled = false;
+        bool _updateLayerAfterDrawCalled = false;
+        bool _internalAssignRequested = false;
+        bool _internalAssignRequestedKnown = false;
     };
 
     class MotionTraceRenderExecuteScope {

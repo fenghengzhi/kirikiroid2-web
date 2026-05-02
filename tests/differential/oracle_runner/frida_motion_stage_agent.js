@@ -16,11 +16,14 @@ const PLAYER_EVALUATE_TIMELINE_OFF = 0x699AE4;
 const PLAYER_SUB_MOTION_OFF      = 0x6BE0C0;
 const PLAYER_PHASE3_LAST_OFF     = 0x6C0528;
 const PLAYER_DRAW_COMPAT_OFF     = 0x6D5FB8;
+const PLAYER_DRAW_D3D_OFF        = 0x6D5B90;
+const PLAYER_DRAW_SLA_OFF        = 0x6D5658;
 const PLAYER_RENDER_PREPARE_OFF  = 0x6D5164;
 const PLAYER_APPLY_TRANSLATE_OFF = 0x6D5264;
 const PLAYER_BUILD_ITEMS_OFF     = 0x6C2334;
 const PLAYER_BUILD_COMMANDS_OFF  = 0x6C4E28;
 const PLAYER_RENDER_EXECUTE_OFF  = 0x6C7440;
+const PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF = 0x6CE7D8;
 
 const STATIC_PARSE_PROJECTION = 'static_parse-semantic-v1';
 const STATIC_PARSE_SAMPLE_POINTS = {
@@ -109,6 +112,11 @@ const PARAM_OFF = {
     mode: 48,
 };
 
+const PLAYER_OFF = {
+    internalAssignRequested: 613,
+    d3dDrawMode: 909,
+};
+
 let base = null;
 let hooked = false;
 let recording = false;
@@ -126,6 +134,8 @@ let lastCompletedFrameId = null;
 let lastCompletedTopPlayer = null;
 let currentRenderFrameId = null;
 let currentRenderPlayer = null;
+let drawIdCounter = 0;
+let activeDrawContexts = [];
 
 function ensureBase() {
     if (base !== null) return base;
@@ -364,6 +374,99 @@ function emitRender(stage, kind, semanticPayload, diagnostics, samplePoint) {
     ev.seq = seqCounter++;
     ev.timeMs = Date.now() - startTimeMs;
     events.push(ev);
+}
+
+function currentDrawContextFor(player) {
+    if (activeDrawContexts.length === 0) return null;
+    const playerHex = ptrHex(player);
+    for (let i = activeDrawContexts.length - 1; i >= 0; --i) {
+        const ctx = activeDrawContexts[i];
+        if (!ctx) continue;
+        if (!playerHex || ctx.playerHex === playerHex) return ctx;
+    }
+    return null;
+}
+
+function drawPathSummary(ctx) {
+    const route = ctx.route || (ctx.steps.length === 0 ? 'no_target' : 'failed');
+    return {
+        route: route,
+        steps: ctx.steps.slice(),
+        prepareCalled: ctx.prepareCalled,
+        prepareOk: ctx.prepareOk,
+        d3dDrawModeAfterPrepare: ctx.d3dDrawModeAfterPrepare,
+        renderToCanvasCalled: ctx.renderToCanvasCalled,
+        updateLayerAfterDrawCalled: ctx.updateLayerAfterDrawCalled,
+        internalAssignRequested: ctx.internalAssignRequested,
+        imageChanged: null,
+    };
+}
+
+function beginDrawContext(player, argVariant) {
+    const ctx = {
+        drawId: drawIdCounter++,
+        player: player,
+        playerHex: ptrHex(player),
+        argVariant: argVariant,
+        steps: [],
+        emittedSteps: {},
+        route: null,
+        prepareCalled: false,
+        prepareOk: null,
+        d3dDrawModeAfterPrepare: null,
+        renderToCanvasCalled: false,
+        updateLayerAfterDrawCalled: false,
+        internalAssignRequested: null,
+    };
+    activeDrawContexts.push(ctx);
+    return ctx;
+}
+
+function finishDrawContext(ctx) {
+    if (!ctx) return;
+    for (let i = activeDrawContexts.length - 1; i >= 0; --i) {
+        if (activeDrawContexts[i] === ctx) {
+            activeDrawContexts.splice(i, 1);
+            break;
+        }
+    }
+}
+
+function setDrawRoute(ctx, route) {
+    if (ctx && route) ctx.route = route;
+}
+
+function emitDrawStep(ctx, drawStep, outcome, route, extra) {
+    if (!ctx) return;
+    const stepIndex = ctx.steps.length;
+    ctx.steps.push(drawStep);
+    ctx.emittedSteps[drawStep] = true;
+    if (route) ctx.route = route;
+    const payload = {
+        drawId: ctx.drawId,
+        stepIndex: stepIndex,
+        drawStep: drawStep,
+        outcome: outcome,
+    };
+    if (route) payload.route = route;
+    if (extra) {
+        for (const k of Object.keys(extra)) payload[k] = extra[k];
+    }
+    emitRender(STAGE_DRAW_DISPATCH, 'draw_step', payload, {
+        addr: PLAYER_DRAW_COMPAT_OFF,
+        player: ctx.playerHex,
+        argVariant: ptrHex(ctx.argVariant),
+    }, 'Player_drawCompat_0x6D5FB8.' + drawStep);
+}
+
+function ensureDrawTargetCheckMisses(ctx) {
+    if (!ctx) return;
+    if (!ctx.emittedSteps.target_check_d3d) {
+        emitDrawStep(ctx, 'target_check_d3d', 'miss');
+    }
+    if (!ctx.emittedSteps.target_check_sla) {
+        emitDrawStep(ctx, 'target_check_sla', 'miss');
+    }
 }
 
 function safeUtf16(ptrValue, length) {
@@ -951,11 +1054,13 @@ function installHook() {
             this.argVariant = args[1];
             this.ctx = enterRenderContext(this.player);
             applyRenderContext(this.ctx, this.player);
+            this.drawCtx = beginDrawContext(this.player, this.argVariant);
             emitRender(STAGE_DRAW_DISPATCH, 'draw_enter', {
-                argVariant: ptrHex(this.argVariant),
+                drawId: this.drawCtx.drawId,
             }, {
                 addr: PLAYER_DRAW_COMPAT_OFF,
                 player: ptrHex(this.player),
+                argVariant: ptrHex(this.argVariant),
                 rawArgs: {
                     arg0: ptrHex(args[0]),
                     arg1: ptrHex(args[1]),
@@ -965,12 +1070,41 @@ function installHook() {
             }, 'Player_drawCompat_0x6D5FB8.enter');
         },
         onLeave() {
-            emitRender(STAGE_DRAW_DISPATCH, 'draw_leave', {}, {
+            emitRender(STAGE_DRAW_DISPATCH, 'draw_leave', {
+                drawId: this.drawCtx ? this.drawCtx.drawId : null,
+                route: this.drawCtx
+                    ? drawPathSummary(this.drawCtx).route
+                    : 'failed',
+                drawPath: this.drawCtx ? drawPathSummary(this.drawCtx) : null,
+            }, {
                 addr: PLAYER_DRAW_COMPAT_OFF,
                 player: ptrHex(this.player),
                 argVariant: ptrHex(this.argVariant),
             }, 'Player_drawCompat_0x6D5FB8.leave');
+            finishDrawContext(this.drawCtx);
             leaveRenderContext(this.ctx);
+        },
+    });
+
+    attachAt(PLAYER_DRAW_D3D_OFF, 'Player_drawD3D', {
+        onEnter(args) {
+            this.player = args[0];
+            const ctx = currentDrawContextFor(this.player);
+            if (!ctx) return;
+            emitDrawStep(ctx, 'target_check_d3d', 'hit', 'd3d_adaptor');
+        },
+    });
+
+    attachAt(PLAYER_DRAW_SLA_OFF, 'Player_DrawSLA', {
+        onEnter(args) {
+            this.player = args[0];
+            const ctx = currentDrawContextFor(this.player);
+            if (!ctx) return;
+            if (!ctx.emittedSteps.target_check_d3d) {
+                emitDrawStep(ctx, 'target_check_d3d', 'miss');
+            }
+            emitDrawStep(
+                ctx, 'target_check_sla', 'hit', 'separate_layer_adaptor');
         },
     });
 
@@ -990,8 +1124,34 @@ function installHook() {
             }, 'sub_6D5164.enter');
         },
         onLeave(retval) {
+            const ctx = currentDrawContextFor(this.player);
+            const ok = readArgInt(retval) !== 0;
+            if (ctx) {
+                ensureDrawTargetCheckMisses(ctx);
+                ctx.prepareCalled = true;
+                ctx.prepareOk = ok;
+                emitDrawStep(
+                    ctx,
+                    'prepare_render_items',
+                    ok ? 'ok' : 'empty',
+                    ok ? null : 'prepare_empty',
+                    { prepareOk: ok });
+                if (ok) {
+                    const d3dDrawMode = readBool(
+                        this.player, PLAYER_OFF.d3dDrawMode);
+                    ctx.d3dDrawModeAfterPrepare = d3dDrawMode;
+                    emitDrawStep(
+                        ctx,
+                        'branch_after_prepare',
+                        d3dDrawMode ? 'shared_d3d' : 'ordinary',
+                        d3dDrawMode
+                            ? 'shared_d3d_after_prepare'
+                            : 'ordinary_layer',
+                        { d3dDrawModeAfterPrepare: d3dDrawMode });
+                }
+            }
             emitRender(STAGE_RENDER_PREPARE, 'prepare_leave', {
-                ok: readArgInt(retval),
+                ok: ok ? 1 : 0,
                 renderLists: readRenderLists(this.mainList, this.auxList),
             }, {
                 addr: PLAYER_RENDER_PREPARE_OFF,
@@ -1013,6 +1173,10 @@ function installHook() {
             }, 'sub_6D5264.enter');
         },
         onLeave(retval) {
+            const ctx = currentDrawContextFor(this.player);
+            if (ctx) {
+                emitDrawStep(ctx, 'apply_translate_offset', 'done');
+            }
             emitRender(STAGE_RENDER_PREPARE, 'apply_translate_leave', {
                 renderLists: readRenderLists(this.mainList, null),
             }, {
@@ -1092,6 +1256,11 @@ function installHook() {
             }, 'sub_6C7440.enter');
         },
         onLeave(retval) {
+            const ctx = currentDrawContextFor(this.player);
+            if (ctx) {
+                ctx.renderToCanvasCalled = true;
+                emitDrawStep(ctx, 'render_to_canvas', 'done', 'ordinary_layer');
+            }
             emitRender(STAGE_RENDER_EXECUTE, 'execute_leave', {
                 renderLists: readRenderLists(this.mainList, this.auxList),
                 retval: ptrHex(retval),
@@ -1100,6 +1269,26 @@ function installHook() {
                 player: ptrHex(this.player),
                 target: ptrHex(this.target),
             }, 'sub_6C7440.leave');
+        },
+    });
+
+    attachAt(PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF, 'Player_updateLayerAfterDraw', {
+        onEnter(args) {
+            this.player = args[0];
+            this.internalAssignRequested = readBool(
+                this.player, PLAYER_OFF.internalAssignRequested);
+        },
+        onLeave() {
+            const ctx = currentDrawContextFor(this.player);
+            if (!ctx) return;
+            ctx.updateLayerAfterDrawCalled = true;
+            ctx.internalAssignRequested = this.internalAssignRequested;
+            emitDrawStep(
+                ctx,
+                'update_layer_after_draw',
+                'done',
+                'ordinary_layer',
+                { internalAssignRequested: this.internalAssignRequested });
         },
     });
 
@@ -1280,11 +1469,14 @@ rpc.exports = {
                 subMotionDecision: PLAYER_SUB_MOTION_OFF,
                 phase3Last: PLAYER_PHASE3_LAST_OFF,
                 drawCompat: PLAYER_DRAW_COMPAT_OFF,
+                drawD3D: PLAYER_DRAW_D3D_OFF,
+                drawSLA: PLAYER_DRAW_SLA_OFF,
                 renderPrepare: PLAYER_RENDER_PREPARE_OFF,
                 applyTranslate: PLAYER_APPLY_TRANSLATE_OFF,
                 buildRenderItems: PLAYER_BUILD_ITEMS_OFF,
                 buildRenderCommands: PLAYER_BUILD_COMMANDS_OFF,
                 renderExecute: PLAYER_RENDER_EXECUTE_OFF,
+                updateLayerAfterDraw: PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF,
             },
         };
     },
@@ -1300,6 +1492,8 @@ rpc.exports = {
         lastCompletedTopPlayer = null;
         currentRenderFrameId = null;
         currentRenderPlayer = null;
+        drawIdCounter = 0;
+        activeDrawContexts = [];
         recording = true;
         return true;
     },

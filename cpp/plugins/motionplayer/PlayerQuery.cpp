@@ -1489,7 +1489,7 @@ namespace motion {
 
         if(!paramObj) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
-            renderTrace.setRoute("no-param");
+            renderTrace.setRoute("no_target");
 #endif
             detail::logoChainTraceLogf(
                 motionPath, "drawCompat.dispatch", "0x6D5FB8",
@@ -1505,7 +1505,8 @@ namespace motion {
                 ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(paramObj, false);
             if(d3dAdaptor) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
-                renderTrace.setRoute("d3d");
+                renderTrace.recordTargetCheckD3D(true);
+                renderTrace.setRoute("d3d_adaptor");
 #endif
                 detail::logoChainTraceCheck(
                     motionPath, "drawCompat.dispatch", "0x6D5FB8",
@@ -1518,6 +1519,9 @@ namespace motion {
                 renderToD3DAdaptor(d3dAdaptor);
                 return;
             }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            renderTrace.recordTargetCheckD3D(false);
+#endif
         }
 
         // Step 2: Check if param is SLA.
@@ -1531,7 +1535,8 @@ namespace motion {
                     paramObj, false);
             if(sla) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
-                renderTrace.setRoute("sla");
+                renderTrace.recordTargetCheckSLA(true);
+                renderTrace.setRoute("separate_layer_adaptor");
 #endif
                 detail::logoChainTraceCheck(
                     motionPath, "drawCompat.dispatch", "0x6D5FB8",
@@ -1543,6 +1548,9 @@ namespace motion {
                 renderToSeparateLayerAdaptor(paramObj);
                 return;
             }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            renderTrace.recordTargetCheckSLA(false);
+#endif
         }
 
         // Step 3: ordinary render-list path. Android does not dispatch plain
@@ -1552,7 +1560,7 @@ namespace motion {
         ensureMotionLoaded();
         if(!_runtime || !_runtime->activeMotion) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
-            renderTrace.setRoute("no-motion");
+            renderTrace.setRoute("no_motion");
 #endif
             detail::logoChainTraceLogf(
                 motionPath, "drawCompat.dispatch", "0x6D5FB8",
@@ -1561,7 +1569,11 @@ namespace motion {
             return;
         }
 
-        if(!prepareRenderItems()) {
+        const bool prepareOk = prepareRenderItems();
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        renderTrace.recordPrepareResult(prepareOk);
+#endif
+        if(!prepareOk) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
             renderTrace.setRoute("prepare_empty");
 #endif
@@ -1574,10 +1586,13 @@ namespace motion {
             return;
         }
 
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        renderTrace.recordBranchAfterPrepare(_d3dDrawMode);
+#endif
         if(_d3dDrawMode) {
             const bool ok = renderViaSharedD3DAdaptor(paramObj);
 #if defined(KRKR2_WASMTIME_HEADLESS)
-            renderTrace.setRoute(ok ? "shared_d3d" : "shared_d3d_failed");
+            renderTrace.setRoute(ok ? "shared_d3d_after_prepare" : "failed");
 #endif
             detail::logoChainTraceCheck(
                 motionPath, "drawCompat.dispatch", "0x6D5FB8",
@@ -1590,17 +1605,31 @@ namespace motion {
         }
 
         applyPreparedRenderItemTranslateOffsets();
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        renderTrace.recordApplyTranslateOffset();
+#endif
         tTJSVariant targetCopy;
         targetCopy = *arg;
         const bool rendered =
             renderToCanvasLike_0x6C7440(&targetCopy, true);
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        renderTrace.recordRenderToCanvas(rendered);
+#endif
+        const bool internalAssignRequested =
+            rendered && _needsInternalAssignImages;
         const bool updated =
             rendered && updateLayerAfterDrawLike_0x6CE7D8(arg);
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        if(rendered) {
+            renderTrace.recordUpdateLayerAfterDraw(
+                internalAssignRequested, updated);
+        }
+#endif
         const bool ok = rendered && updated;
 #if defined(KRKR2_WASMTIME_HEADLESS)
         renderTrace.setRoute(ok
-            ? "render_to_canvas"
-            : "render_to_canvas_failed");
+            ? "ordinary_layer"
+            : "failed");
 #endif
         detail::logoChainTraceCheck(
             motionPath, "drawCompat.dispatch", "0x6D5FB8",

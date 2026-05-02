@@ -40,6 +40,7 @@ int g_framebuffer_format = 0;
 int g_framebuffer_frame_no = 0;
 std::string g_render_probe_jsonl;
 int g_render_probe_seq = 0;
+int g_render_draw_id = 0;
 
 struct TraceState {
     bool inProgress = false;
@@ -91,6 +92,14 @@ void appendJsonString(std::string &out, const std::string &value) {
         }
     }
     out.push_back('"');
+}
+
+void appendJsonBoolOrNull(std::string &out, bool known, bool value) {
+    if(!known) {
+        out += "null";
+        return;
+    }
+    out += value ? "true" : "false";
 }
 
 template <typename T, size_t N>
@@ -484,6 +493,7 @@ void resetState() {
     g_framebuffer_frame_no = 0;
     g_render_probe_jsonl.clear();
     g_render_probe_seq = 0;
+    g_render_draw_id = 0;
     auto &state = traceState();
     state.inProgress = false;
     state.inRender = false;
@@ -550,12 +560,13 @@ MotionTraceRenderDrawScope::MotionTraceRenderDrawScope(
     _player(player),
     _argVariant(argVariant),
     _targetObject(targetObject) {
+    _drawId = g_render_draw_id++;
     auto &state = traceState();
     state.inRender = true;
     state.currentRenderFrameId = state.lastCompletedFrameId;
     state.currentRenderPlayer = player;
-    std::string payload = "\"targetObject\":";
-    payload += ptrHex(targetObject);
+    std::string payload = "\"drawId\":";
+    payload += std::to_string(_drawId);
     std::string diagnostics = "{\"argVariant\":";
     diagnostics += ptrHex(argVariant);
     diagnostics += ",\"targetObject\":";
@@ -567,10 +578,35 @@ MotionTraceRenderDrawScope::MotionTraceRenderDrawScope(
 }
 
 MotionTraceRenderDrawScope::~MotionTraceRenderDrawScope() {
+    const char *route = _route ? _route : (_steps.empty() ? "no_target" : "failed");
     std::string payload = "\"route\":";
-    appendJsonString(payload, _route ? _route : "unknown");
-    payload += ",\"targetObject\":";
-    payload += ptrHex(_targetObject);
+    appendJsonString(payload, route);
+    payload += ",\"drawId\":";
+    payload += std::to_string(_drawId);
+    payload += ",\"drawPath\":{\"route\":";
+    appendJsonString(payload, route);
+    payload += ",\"steps\":[";
+    for(size_t i = 0; i < _steps.size(); ++i) {
+        if(i) payload.push_back(',');
+        appendJsonString(payload, _steps[i]);
+    }
+    payload += "],\"prepareCalled\":";
+    payload += _prepareCalled ? "true" : "false";
+    payload += ",\"prepareOk\":";
+    appendJsonBoolOrNull(payload, _prepareOkKnown, _prepareOk);
+    payload += ",\"d3dDrawModeAfterPrepare\":";
+    appendJsonBoolOrNull(
+        payload, _d3dDrawModeAfterPrepareKnown,
+        _d3dDrawModeAfterPrepare);
+    payload += ",\"renderToCanvasCalled\":";
+    payload += _renderToCanvasCalled ? "true" : "false";
+    payload += ",\"updateLayerAfterDrawCalled\":";
+    payload += _updateLayerAfterDrawCalled ? "true" : "false";
+    payload += ",\"internalAssignRequested\":";
+    appendJsonBoolOrNull(
+        payload, _internalAssignRequestedKnown,
+        _internalAssignRequested);
+    payload += ",\"imageChanged\":null}";
     std::string diagnostics = "{\"argVariant\":";
     diagnostics += ptrHex(_argVariant);
     diagnostics += ",\"targetObject\":";
@@ -587,6 +623,95 @@ MotionTraceRenderDrawScope::~MotionTraceRenderDrawScope() {
 
 void MotionTraceRenderDrawScope::setRoute(const char *route) {
     _route = route;
+}
+
+void MotionTraceRenderDrawScope::emitStep(
+    const char *drawStep,
+    const char *outcome,
+    const char *route,
+    const char *extraPayload) {
+    if(!drawStep) return;
+    if(route) _route = route;
+    _steps.emplace_back(drawStep);
+    std::string payload = "\"drawId\":";
+    payload += std::to_string(_drawId);
+    payload += ",\"stepIndex\":";
+    payload += std::to_string(_stepIndex++);
+    payload += ",\"drawStep\":";
+    appendJsonString(payload, drawStep);
+    payload += ",\"outcome\":";
+    appendJsonString(payload, outcome ? outcome : "");
+    if(route) {
+        payload += ",\"route\":";
+        appendJsonString(payload, route);
+    }
+    if(extraPayload && extraPayload[0] != '\0') {
+        payload.push_back(',');
+        payload += extraPayload;
+    }
+    std::string diagnostics = "{\"argVariant\":";
+    diagnostics += ptrHex(_argVariant);
+    diagnostics += ",\"targetObject\":";
+    diagnostics += ptrHex(_targetObject);
+    diagnostics += ",\"sampling\":\"guest-cpp-drawCompat-0x6D5FB8\"}";
+    std::string samplePoint = "Player::drawCompat_0x6D5FB8.";
+    samplePoint += drawStep;
+    appendRenderEvent(_player, "draw_dispatch", "draw_step",
+                      samplePoint.c_str(), payload, diagnostics);
+}
+
+void MotionTraceRenderDrawScope::recordTargetCheckD3D(bool hit) {
+    emitStep("target_check_d3d", hit ? "hit" : "miss",
+             hit ? "d3d_adaptor" : nullptr);
+}
+
+void MotionTraceRenderDrawScope::recordTargetCheckSLA(bool hit) {
+    emitStep("target_check_sla", hit ? "hit" : "miss",
+             hit ? "separate_layer_adaptor" : nullptr);
+}
+
+void MotionTraceRenderDrawScope::recordPrepareResult(bool ok) {
+    _prepareCalled = true;
+    _prepareOk = ok;
+    _prepareOkKnown = true;
+    emitStep("prepare_render_items", ok ? "ok" : "empty",
+             ok ? nullptr : "prepare_empty",
+             ok ? "\"prepareOk\":true" : "\"prepareOk\":false");
+}
+
+void MotionTraceRenderDrawScope::recordBranchAfterPrepare(bool d3dDrawMode) {
+    _d3dDrawModeAfterPrepare = d3dDrawMode;
+    _d3dDrawModeAfterPrepareKnown = true;
+    emitStep(
+        "branch_after_prepare",
+        d3dDrawMode ? "shared_d3d" : "ordinary",
+        d3dDrawMode ? "shared_d3d_after_prepare" : "ordinary_layer",
+        d3dDrawMode
+            ? "\"d3dDrawModeAfterPrepare\":true"
+            : "\"d3dDrawModeAfterPrepare\":false");
+}
+
+void MotionTraceRenderDrawScope::recordApplyTranslateOffset() {
+    emitStep("apply_translate_offset", "done");
+}
+
+void MotionTraceRenderDrawScope::recordRenderToCanvas(bool ok) {
+    _renderToCanvasCalled = true;
+    emitStep("render_to_canvas", ok ? "done" : "failed", "ordinary_layer");
+}
+
+void MotionTraceRenderDrawScope::recordUpdateLayerAfterDraw(
+    bool internalAssignRequested, bool ok) {
+    _updateLayerAfterDrawCalled = true;
+    _internalAssignRequested = internalAssignRequested;
+    _internalAssignRequestedKnown = true;
+    emitStep(
+        "update_layer_after_draw",
+        ok ? "done" : "failed",
+        "ordinary_layer",
+        internalAssignRequested
+            ? "\"internalAssignRequested\":true"
+            : "\"internalAssignRequested\":false");
 }
 
 MotionTraceRenderExecuteScope::MotionTraceRenderExecuteScope(
