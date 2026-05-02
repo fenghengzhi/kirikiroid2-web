@@ -194,18 +194,6 @@ def decoded_image_hash(
     return cached
 
 
-def _execute_image_changed(
-    event: dict[str, Any],
-    root: Path,
-    cache: dict[Path, str],
-) -> bool | None:
-    pre_hash = decoded_image_hash(root, event.get("executePreImage"), cache)
-    post_hash = decoded_image_hash(root, event.get("executePostImage"), cache)
-    if pre_hash is None or post_hash is None:
-        return None
-    return pre_hash != post_hash
-
-
 def _value_summary(value: Any) -> str:
     text = repr(value)
     if len(text) <= 220:
@@ -351,10 +339,28 @@ def compare_case(
     build_flow_mismatches = 0
     execute_pre_mismatches = 0
     execute_post_mismatches = 0
-    execute_changed_mismatches = 0
     layer_save_mismatches = 0
     oracle_cache: dict[Path, str] = {}
     wasmtime_cache: dict[Path, str] = {}
+    execute_checkpoint_enabled = any(
+        decoded_image_hash(oracle_root, event.get("executePreImage"), oracle_cache)
+        is not None
+        for event in oracle_execute
+    ) or any(
+        decoded_image_hash(
+            wasmtime_root, event.get("executePreImage"), wasmtime_cache)
+        is not None
+        for event in wasmtime_execute
+    ) or any(
+        decoded_image_hash(oracle_root, event.get("executePostImage"), oracle_cache)
+        is not None
+        for event in oracle_execute
+    ) or any(
+        decoded_image_hash(
+            wasmtime_root, event.get("executePostImage"), wasmtime_cache)
+        is not None
+        for event in wasmtime_execute
+    )
 
     frame_count = max(
         len(oracle_build_events),
@@ -396,9 +402,9 @@ def compare_case(
                     )
 
         if index >= len(oracle_execute) or index >= len(wasmtime_execute):
-            execute_pre_mismatches += 1
-            execute_post_mismatches += 1
-            execute_changed_mismatches += 1
+            if execute_checkpoint_enabled:
+                execute_pre_mismatches += 1
+                execute_post_mismatches += 1
             if first_mismatch is None:
                 first_mismatch = (
                     index,
@@ -411,52 +417,38 @@ def compare_case(
 
         oracle_event = oracle_execute[index]
         wasmtime_event = wasmtime_execute[index]
-        oracle_pre = decoded_image_hash(
-            oracle_root, oracle_event.get("executePreImage"), oracle_cache)
-        wasmtime_pre = decoded_image_hash(
-            wasmtime_root, wasmtime_event.get("executePreImage"),
-            wasmtime_cache)
-        if oracle_pre != wasmtime_pre:
-            execute_pre_mismatches += 1
-            if first_mismatch is None:
-                first_mismatch = (
-                    index,
-                    "render_execute",
-                    "execute_pre.rgbaSha256",
-                    oracle_pre,
-                    wasmtime_pre,
-                )
+        if execute_checkpoint_enabled:
+            oracle_pre = decoded_image_hash(
+                oracle_root, oracle_event.get("executePreImage"), oracle_cache)
+            wasmtime_pre = decoded_image_hash(
+                wasmtime_root, wasmtime_event.get("executePreImage"),
+                wasmtime_cache)
+            if oracle_pre != wasmtime_pre:
+                execute_pre_mismatches += 1
+                if first_mismatch is None:
+                    first_mismatch = (
+                        index,
+                        "render_execute",
+                        "execute_pre.rgbaSha256",
+                        oracle_pre,
+                        wasmtime_pre,
+                    )
 
-        oracle_post = decoded_image_hash(
-            oracle_root, oracle_event.get("executePostImage"), oracle_cache)
-        wasmtime_post = decoded_image_hash(
-            wasmtime_root, wasmtime_event.get("executePostImage"),
-            wasmtime_cache)
-        if oracle_post != wasmtime_post:
-            execute_post_mismatches += 1
-            if first_mismatch is None:
-                first_mismatch = (
-                    index,
-                    "render_execute",
-                    "execute_post.rgbaSha256",
-                    oracle_post,
-                    wasmtime_post,
-                )
-
-        oracle_changed = _execute_image_changed(
-            oracle_event, oracle_root, oracle_cache)
-        wasmtime_changed = _execute_image_changed(
-            wasmtime_event, wasmtime_root, wasmtime_cache)
-        if oracle_changed != wasmtime_changed:
-            execute_changed_mismatches += 1
-            if first_mismatch is None:
-                first_mismatch = (
-                    index,
-                    "render_execute",
-                    "executeImageChanged",
-                    oracle_changed,
-                    wasmtime_changed,
-                )
+            oracle_post = decoded_image_hash(
+                oracle_root, oracle_event.get("executePostImage"), oracle_cache)
+            wasmtime_post = decoded_image_hash(
+                wasmtime_root, wasmtime_event.get("executePostImage"),
+                wasmtime_cache)
+            if oracle_post != wasmtime_post:
+                execute_post_mismatches += 1
+                if first_mismatch is None:
+                    first_mismatch = (
+                        index,
+                        "render_execute",
+                        "execute_post.rgbaSha256",
+                        oracle_post,
+                        wasmtime_post,
+                    )
 
     layer_save_mismatches, layer_save_first = _compare_layer_save_images(
         oracle_root,
@@ -496,7 +488,6 @@ def compare_case(
         f"{case_id}: summary build_flow_mismatch={build_flow_mismatches} "
         f"execute_pre_mismatch={execute_pre_mismatches} "
         f"execute_post_mismatch={execute_post_mismatches} "
-        f"executeImageChanged_mismatch={execute_changed_mismatches} "
         f"layer_save_mismatch={layer_save_mismatches}")
     return ok
 

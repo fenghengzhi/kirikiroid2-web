@@ -22,7 +22,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
-from oracle_runner.png_artifacts import images_changed, png_manifest_entry
+from oracle_runner.png_artifacts import png_manifest_entry
 
 DEFAULT_HOST_PYTHON_RAW = os.environ.get("KRKR2_HOST_PYTHON") or shutil.which("python3")
 DEFAULT_HOST_PYTHON = (
@@ -89,7 +89,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         "motion_playback_framebuffer_wasmtime/<run-id>")
     p.add_argument("--record-render-stages", action="store_true",
                    help="Save Wasmtime render_path stage artifacts: "
-                        "pre/post draw PNGs plus render stage JSON")
+                        "initial/post draw PNGs plus render stage JSON")
     p.add_argument("--record-render-step-checkpoints", action="store_true",
                    help="With --record-render-stages, save execute_pre/"
                         "execute_post images around executeLayerRenderCommands")
@@ -1878,8 +1878,6 @@ def _enrich_render_execute_events_for_case(
         elif kind == "execute_leave":
             event["executePreImage"] = execute_pre
             event["executePostImage"] = execute_post
-            image_changed = images_changed(execute_pre, execute_post)
-            event["executeImageChanged"] = image_changed
             if execute_pre is None:
                 _add_image_manifest_error(
                     event,

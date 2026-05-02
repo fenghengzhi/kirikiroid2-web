@@ -119,8 +119,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--record-render-stages", action="store_true",
                    help="Collect Wasmtime render stage diagnostics and images")
     p.add_argument("--record-render-step-checkpoints", action="store_true",
-                   help="Ask host-mode driver to save execute_pre/execute_post "
-                        "render checkpoints")
+                   help="Ask host-mode driver to save execute_pre/"
+                        "execute_post render checkpoints")
     p.add_argument("--render-artifact-dir", default=None,
                    help="Host path where render stage artifacts should be copied")
     p.add_argument("--render-stage-out", default=None,

@@ -734,7 +734,16 @@ def trigger_startup(engine, game_path_on_device: str) -> None:
     global _startup_triggered
     if _startup_triggered:
         return
-    ok = engine.startup_from(game_path_on_device)
+    deadline = time.time() + 10.0
+    while True:
+        try:
+            ok = engine.startup_from(game_path_on_device)
+            break
+        except RuntimeError as exc:
+            if ("TVPMainScene::GetInstance returned null" not in str(exc)
+                    or time.time() >= deadline):
+                raise
+            time.sleep(0.2)
     if not ok:
         raise RuntimeError(
             f"TVPMainScene::startupFrom({game_path_on_device!r}) returned "

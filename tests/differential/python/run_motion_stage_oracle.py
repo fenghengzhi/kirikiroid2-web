@@ -18,7 +18,6 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
 from oracle_runner.png_artifacts import (
-    images_changed,
     png_manifest_entry,
     write_bgra_png,
 )
@@ -664,8 +663,6 @@ def enrich_render_execute_events_for_case(
         elif kind == "execute_leave":
             event["executePreImage"] = execute_pre
             event["executePostImage"] = execute_post
-            image_changed = images_changed(execute_pre, execute_post)
-            event["executeImageChanged"] = image_changed
             if execute_pre is None:
                 _add_image_manifest_error(
                     event, f"missing execute_pre image for frame {local_frame}")

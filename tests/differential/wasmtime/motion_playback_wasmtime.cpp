@@ -660,7 +660,7 @@ MotionTraceRenderDrawScope::~MotionTraceRenderDrawScope() {
     appendJsonBoolOrNull(
         payload, _internalAssignRequestedKnown,
         _internalAssignRequested);
-    payload += ",\"imageChanged\":null}";
+    payload += "}";
     std::string diagnostics = "{\"argVariant\":";
     diagnostics += ptrHex(_argVariant);
     diagnostics += ",\"targetObject\":";

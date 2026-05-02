@@ -87,16 +87,3 @@ def image_pixel_hash(image: dict[str, Any]) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
-
-
-def images_changed(
-    before: dict[str, Any] | None,
-    after: dict[str, Any] | None,
-) -> bool | None:
-    if before is None or after is None:
-        return None
-    before_hash = image_pixel_hash(before)
-    after_hash = image_pixel_hash(after)
-    if before_hash is None or after_hash is None:
-        return None
-    return before_hash != after_hash
