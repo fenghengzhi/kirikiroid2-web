@@ -10,6 +10,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
+from oracle_runner.png_artifacts import image_pixel_hash, rgba_sha256_file
+
 
 SEMANTIC_FIELDS = (
     "drawPath.route",
@@ -47,12 +51,52 @@ def draw_leaves(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [e for e in events if e.get("kind") == "draw_leave"]
 
 
-def event_value(event: dict[str, Any], field: str) -> Any:
+def decoded_image_hash(
+    artifact_root: Path,
+    image: dict[str, Any] | None,
+    cache: dict[Path, str],
+) -> str | None:
+    if image is None:
+        return None
+    value = image_pixel_hash(image)
+    if value is not None:
+        return value
+    rel = image.get("path")
+    if not isinstance(rel, str) or not rel:
+        return value
+    path = artifact_root / rel
+    cached = cache.get(path)
+    if cached is not None:
+        return cached
+    cached = rgba_sha256_file(path)
+    cache[path] = cached
+    return cached
+
+
+def event_image_changed(
+    event: dict[str, Any],
+    artifact_root: Path,
+    cache: dict[Path, str],
+) -> Any:
+    pre_hash = decoded_image_hash(
+        artifact_root, event.get("preDrawImage"), cache)
+    post_hash = decoded_image_hash(
+        artifact_root, event.get("postDrawImage"), cache)
+    if pre_hash is not None and post_hash is not None:
+        return pre_hash != post_hash
+    return None
+
+
+def event_value(
+    event: dict[str, Any],
+    field: str,
+    *,
+    artifact_root: Path,
+    image_hash_cache: dict[Path, str],
+) -> Any:
     if field == "imageChanged":
-        draw_path = event.get("drawPath")
-        if isinstance(draw_path, dict) and "imageChanged" in draw_path:
-            return draw_path.get("imageChanged")
-        return event.get("imageChanged")
+        return event_image_changed(
+            event, artifact_root, image_hash_cache)
     value: Any = event
     for part in field.split("."):
         if not isinstance(value, dict):
@@ -71,16 +115,28 @@ def case_ids(oracle_root: Path) -> list[str]:
 def route_counts(leaves: list[dict[str, Any]]) -> Counter[str]:
     out: Counter[str] = Counter()
     for event in leaves:
-        route = event_value(event, "drawPath.route")
+        route: Any = event
+        for part in "drawPath.route".split("."):
+            route = route.get(part) if isinstance(route, dict) else None
         out[str(route)] += 1
     return out
 
 
-def image_changed_count(leaves: list[dict[str, Any]]) -> int:
-    return sum(1 for event in leaves if event_value(event, "imageChanged") is True)
+def image_changed_count(
+    leaves: list[dict[str, Any]],
+    artifact_root: Path,
+    image_hash_cache: dict[Path, str],
+) -> int:
+    return sum(
+        1 for event in leaves
+        if event_image_changed(event, artifact_root, image_hash_cache) is True)
 
 
-def compare_case(oracle_root: Path, wasmtime_root: Path, case_id: str) -> bool:
+def compare_case(
+    oracle_root: Path,
+    wasmtime_root: Path,
+    case_id: str,
+) -> bool:
     oracle_path = (
         oracle_root / "events" / "draw_dispatch" / f"{case_id}.oracle.json")
     wasmtime_path = (
@@ -97,11 +153,21 @@ def compare_case(oracle_root: Path, wasmtime_root: Path, case_id: str) -> bool:
             f"wasmtime={len(wasmtime_leaves)}")
 
     first_mismatch: tuple[int, str, Any, Any] | None = None
+    oracle_image_cache: dict[Path, str] = {}
+    wasmtime_image_cache: dict[Path, str] = {}
     for index, (oracle_event, wasmtime_event) in enumerate(
         zip(oracle_leaves, wasmtime_leaves)):
         for field in SEMANTIC_FIELDS:
-            oracle_value = event_value(oracle_event, field)
-            wasmtime_value = event_value(wasmtime_event, field)
+            oracle_value = event_value(
+                oracle_event, field,
+                artifact_root=oracle_root,
+                image_hash_cache=oracle_image_cache,
+            )
+            wasmtime_value = event_value(
+                wasmtime_event, field,
+                artifact_root=wasmtime_root,
+                image_hash_cache=wasmtime_image_cache,
+            )
             if oracle_value != wasmtime_value:
                 first_mismatch = (index, field, oracle_value, wasmtime_value)
                 ok = False
@@ -118,11 +184,15 @@ def compare_case(oracle_root: Path, wasmtime_root: Path, case_id: str) -> bool:
     elif ok:
         print(f"{case_id}: PASS frames={len(oracle_leaves)}")
 
+    oracle_changed = image_changed_count(
+        oracle_leaves, oracle_root, oracle_image_cache)
+    wasmtime_changed = image_changed_count(
+        wasmtime_leaves, wasmtime_root, wasmtime_image_cache)
     print(
         f"{case_id}: routes oracle={dict(route_counts(oracle_leaves))} "
         f"wasmtime={dict(route_counts(wasmtime_leaves))} "
-        f"imageChanged oracle={image_changed_count(oracle_leaves)} "
-        f"wasmtime={image_changed_count(wasmtime_leaves)}")
+        f"imageChanged oracle={oracle_changed} "
+        f"wasmtime={wasmtime_changed}")
     return ok
 
 

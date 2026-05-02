@@ -15,10 +15,12 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <sys/stat.h>
 
 #include <emscripten/emscripten.h>
 
 #include "Application.h"
+#include "LayerIntf.h"
 #include "MainScene.h"
 #include "tjsError.h"
 #include "motionplayer/MotionNode.h"
@@ -41,6 +43,7 @@ int g_framebuffer_frame_no = 0;
 std::string g_render_probe_jsonl;
 int g_render_probe_seq = 0;
 int g_render_draw_id = 0;
+constexpr const char *kRenderStageCaptureRoot = "/render_stage_capture";
 
 struct TraceState {
     bool inProgress = false;
@@ -319,8 +322,10 @@ void appendRenderCommandJson(
 void appendRenderCommandsPayload(std::string &out,
                                  const motion::detail::PlayerRuntime *runtime) {
     constexpr size_t kLimit = 256;
+    out += "\"preparedItemCount\":";
+    out += std::to_string(runtime ? runtime->preparedRenderItems.size() : 0);
     const size_t count = runtime ? runtime->renderCommands.size() : 0;
-    out += "\"renderCommandCount\":";
+    out += ",\"renderCommandCount\":";
     out += std::to_string(count);
     out += ",\"topLevelCommandCount\":";
     out += std::to_string(runtime ? runtime->renderCommandsTopLevel.size() : 0);
@@ -345,6 +350,40 @@ std::string playerDiagnostics(motion::Player *player) {
     appendJsonString(diag, activeMotionPath(player));
     diag += ",\"samplingMode\":\"guest-cpp-probe\"}";
     return diag;
+}
+
+bool directoryExists(const std::string &path) {
+    struct stat st {};
+    return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+std::string framePath(const char *phase, int frameId) {
+    char name[128];
+    std::snprintf(name, sizeof(name), "%s/_execute/%s/frame_%04d.png",
+                  kRenderStageCaptureRoot, phase ? phase : "unknown",
+                  frameId);
+    return std::string(name);
+}
+
+void appendImageCheckpointEvent(motion::Player *player, const char *phase,
+                                const char *samplePoint, bool ok,
+                                const std::string &path,
+                                const std::string &error) {
+    std::string payload = "\"phase\":";
+    appendJsonString(payload, phase ? phase : "");
+    payload += ",\"ok\":";
+    payload += ok ? "true" : "false";
+    if(!path.empty()) {
+        payload += ",\"guestPath\":";
+        appendJsonString(payload, path);
+    }
+    if(!error.empty()) {
+        payload += ",\"error\":";
+        appendJsonString(payload, error);
+    }
+    appendRenderEvent(player, "render_execute", "execute_image_checkpoint",
+                      samplePoint ? samplePoint : "execute_image_checkpoint",
+                      payload, playerDiagnostics(player));
 }
 
 extern "C" __attribute__((noinline, used))
@@ -780,6 +819,48 @@ void motionTraceRenderCommands(Player *player, const char *kind,
                       kind ? kind : "render_commands_ready",
                       samplePoint ? samplePoint : "Player::buildRenderCommands.leave",
                       payload, diagnostics);
+}
+
+void motionTraceRenderImageCheckpoint(Player *player,
+                                      void *renderLayerObject,
+                                      const char *phase,
+                                      const char *samplePoint) {
+    const int frameId = renderFrameIdFor(player);
+    if(frameId < 0 || !phase || !renderLayerObject) {
+        return;
+    }
+    const std::string phaseDir =
+        std::string(kRenderStageCaptureRoot) + "/_execute/" + phase;
+    if(!directoryExists(phaseDir)) {
+        return;
+    }
+    auto *layerObject = static_cast<iTJSDispatch2 *>(renderLayerObject);
+    tTJSNI_BaseLayer *layer = nullptr;
+    if(TJS_FAILED(layerObject->NativeInstanceSupport(
+           TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+           reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
+        appendImageCheckpointEvent(
+            player, phase, samplePoint, false, {},
+            "renderLayerObject did not resolve to Layer native instance");
+        return;
+    }
+
+    const auto path = framePath(phase, frameId);
+    try {
+        layer->SaveLayerImage(motion::detail::widen(path), TJS_W("png"));
+        appendImageCheckpointEvent(player, phase, samplePoint, true, path, {});
+    } catch(const eTJS &e) {
+        appendImageCheckpointEvent(
+            player, phase, samplePoint, false, path,
+            motion::detail::narrow(e.GetMessage()));
+    } catch(const std::exception &e) {
+        appendImageCheckpointEvent(
+            player, phase, samplePoint, false, path, e.what());
+    } catch(...) {
+        appendImageCheckpointEvent(
+            player, phase, samplePoint, false, path,
+            "unknown exception while saving Layer image checkpoint");
+    }
 }
 
 } // namespace motion::detail

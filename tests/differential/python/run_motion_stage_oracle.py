@@ -16,6 +16,11 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
+from oracle_runner.png_artifacts import (
+    images_changed,
+    png_manifest_entry,
+    write_bgra_png,
+)
 
 
 SCHEMA = "motion-stage-oracle-v1"
@@ -29,6 +34,10 @@ RENDER_STAGES: tuple[str, ...] = (
     "render_commands",
     "render_execute",
     "layer_save",
+)
+RENDER_STEP_CHECKPOINT_PHASES: tuple[str, ...] = (
+    "execute_pre",
+    "execute_post",
 )
 
 
@@ -54,6 +63,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Output directory for --stage render_path artifacts "
                         "(default: tests/differential/artifacts/"
                         "motion_playback_render_stages/<run-id>)")
+    p.add_argument("--record-render-step-checkpoints", action="store_true",
+                   help="With --stage render_path, capture execute_pre/"
+                        "execute_post Layer images around sub_6C7440")
     p.add_argument("--playback-timeout", type=float, default=90.0,
                    help="Seconds to wait for deterministic playback")
     p.add_argument("--raw-out", default=None,
@@ -383,7 +395,8 @@ def layer_save_events_for_case(
                 "width": image["width"],
                 "height": image["height"],
                 "bytes": image["bytes"],
-                "sha256": image["sha256"],
+                **({"rgbaSha256": image["rgbaSha256"]}
+                   if "rgbaSha256" in image else {}),
                 "diagnostics": {
                     "synthetic": True,
                     "source": "pulled-png-manifest",
@@ -469,10 +482,7 @@ def enrich_draw_dispatch_events_for_case(
         elif kind == "draw_leave":
             event["preDrawImage"] = pre_draw
             event["postDrawImage"] = post_draw
-            image_changed = (
-                None if pre_draw is None or post_draw is None
-                else pre_draw.get("sha256") != post_draw.get("sha256")
-            )
+            image_changed = images_changed(pre_draw, post_draw)
             event["imageChanged"] = image_changed
             _set_draw_path_image_changed(event, image_changed)
             if pre_draw is None:
@@ -485,6 +495,204 @@ def enrich_draw_dispatch_events_for_case(
         enriched.append(event)
 
     return enriched
+
+
+def _semantic_render_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "index": item.get("index"),
+        "nodeIndex": item.get("nodeIndex"),
+        "sourceKey": item.get("sourceKey"),
+        "flags": item.get("flags"),
+        "layerIds": item.get("layerIds"),
+        "clipRect": item.get("clipRect"),
+        "dirtyRect": item.get("dirtyRect"),
+        "viewportRect": item.get("viewportRect"),
+        "sourceGate232": item.get("sourceGate232"),
+        "stencilType244": item.get("stencilType244"),
+        "parentItemIndex": item.get("parentItemIndex"),
+        "parentCommandIndex": item.get("parentCommandIndex"),
+        "parentItem264": item.get("parentItem264"),
+        "childItemCount": item.get("childItemCount"),
+        "childCommandCount": item.get("childCommandCount"),
+        "meshType280": item.get("meshType280"),
+        "leafLayerVariantTag": item.get("leafLayerVariantTag"),
+        "composedLayerVariantTag": item.get("composedLayerVariantTag"),
+        "leafLayerVariantTag320": item.get("leafLayerVariantTag320"),
+        "composedLayerVariantTag340": item.get("composedLayerVariantTag340"),
+        "leafBuilt": item.get("leafBuilt"),
+        "composedBuilt": item.get("composedBuilt"),
+        "executedDirect": item.get("executedDirect"),
+    }
+
+
+def _build_flow_summary(event: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(event.get("buildFlow"), dict):
+        return dict(event["buildFlow"])
+    render_commands = event.get("renderCommands")
+    if isinstance(render_commands, list):
+        commands = [_semantic_render_item(item)
+                    for item in render_commands if isinstance(item, dict)]
+        return {
+            "inputItemCount": event.get("preparedItemCount"),
+            "renderCommandCount": event.get("renderCommandCount", len(commands)),
+            "topLevelCommandCount": event.get("topLevelCommandCount"),
+            "groupCommandCount": event.get("groupCommandCount"),
+            "commands": commands,
+        }
+    render_lists = event.get("renderLists")
+    main_list = (
+        render_lists.get("mainList")
+        if isinstance(render_lists, dict) else None
+    )
+    items = main_list.get("items") if isinstance(main_list, dict) else []
+    commands = [
+        _semantic_render_item(item)
+        for item in items if isinstance(item, dict)
+    ]
+    return {
+        "inputItemCount": main_list.get("count")
+        if isinstance(main_list, dict) else None,
+        "renderCommandCount": len(commands),
+        "topLevelCommandCount": None,
+        "groupCommandCount": None,
+        "commands": commands,
+    }
+
+
+def enrich_render_commands_events_for_case(
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for source_event in events:
+        event = dict(source_event)
+        if str(event.get("kind") or "").startswith("build_commands"):
+            event["buildFlow"] = _build_flow_summary(event)
+        enriched.append(event)
+    return enriched
+
+
+def enrich_render_execute_events_for_case(
+    events: list[dict[str, Any]],
+    case_segment: dict[str, Any],
+    case_images: dict[str, Any],
+) -> list[dict[str, Any]]:
+    first_frame_id = int(case_segment["firstFrameId"])
+    last_frame_id = int(case_segment["lastFrameId"])
+    pre_by_frame = _phase_images_by_frame(case_images, "execute_pre")
+    post_by_frame = _phase_images_by_frame(case_images, "execute_post")
+    enriched: list[dict[str, Any]] = []
+
+    for source_event in events:
+        event = dict(source_event)
+        frame_id = event.get("frameId")
+        if not isinstance(frame_id, int):
+            _add_image_manifest_error(event, "event has no integer frameId")
+            enriched.append(event)
+            continue
+        if frame_id < first_frame_id or frame_id > last_frame_id:
+            _add_image_manifest_error(
+                event,
+                f"frameId {frame_id} outside case segment "
+                f"{first_frame_id}..{last_frame_id}",
+            )
+            enriched.append(event)
+            continue
+        local_frame = frame_id - first_frame_id
+        execute_pre = pre_by_frame.get(local_frame)
+        execute_post = post_by_frame.get(local_frame)
+        kind = str(event.get("kind") or "")
+        if kind == "execute_enter":
+            event["executePreImage"] = execute_pre
+            if execute_pre is None:
+                _add_image_manifest_error(
+                    event, f"missing execute_pre image for frame {local_frame}")
+        elif kind == "execute_leave":
+            event["executePreImage"] = execute_pre
+            event["executePostImage"] = execute_post
+            image_changed = images_changed(execute_pre, execute_post)
+            event["executeImageChanged"] = image_changed
+            if execute_pre is None:
+                _add_image_manifest_error(
+                    event, f"missing execute_pre image for frame {local_frame}")
+            if execute_post is None:
+                _add_image_manifest_error(
+                    event, f"missing execute_post image for frame {local_frame}")
+        enriched.append(event)
+    return enriched
+
+
+def add_oracle_execute_checkpoint_images(
+    *,
+    artifact_dir: Path,
+    image_manifest: dict[str, Any],
+    checkpoints: list[dict[str, Any]],
+    case_segments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    by_frame_phase: dict[tuple[int, str], dict[str, Any]] = {}
+    for checkpoint in checkpoints:
+        frame_id = checkpoint.get("frameId")
+        phase = checkpoint.get("phase")
+        if isinstance(frame_id, int) and isinstance(phase, str):
+            by_frame_phase[(frame_id, phase)] = checkpoint
+
+    case_by_id = {
+        str(case["caseId"]): case for case in image_manifest.get("cases", [])
+    }
+    total_added = 0
+    for segment in case_segments:
+        case_id = str(segment["caseId"])
+        case = case_by_id.get(case_id)
+        if case is None:
+            continue
+        phases = case.setdefault("phases", {})
+        first_frame_id = int(segment["firstFrameId"])
+        frame_count = len(segment["frames"])
+        for phase in RENDER_STEP_CHECKPOINT_PHASES:
+            images: list[dict[str, Any]] = []
+            for local_frame in range(frame_count):
+                frame_id = first_frame_id + local_frame
+                checkpoint = by_frame_phase.get((frame_id, phase))
+                if checkpoint is None:
+                    raise RuntimeError(
+                        f"missing oracle {phase} checkpoint for "
+                        f"{case_id} frame {local_frame} (frameId {frame_id})")
+                if not checkpoint.get("ok"):
+                    raise RuntimeError(
+                        f"oracle {phase} checkpoint failed for "
+                        f"{case_id} frame {local_frame}: "
+                        f"{checkpoint.get('error')}")
+                raw_path_value = checkpoint.get("rawPath")
+                if not isinstance(raw_path_value, str):
+                    raise RuntimeError(
+                        f"oracle {phase} checkpoint has no rawPath for "
+                        f"{case_id} frame {local_frame}")
+                rel = Path("images") / case_id / phase / \
+                    f"frame_{local_frame:04d}.png"
+                path = artifact_dir / rel
+                write_bgra_png(
+                    raw_path=Path(raw_path_value),
+                    path=path,
+                    width=int(checkpoint["width"]),
+                    height=int(checkpoint["height"]),
+                )
+                images.append(png_manifest_entry(
+                    frame=local_frame,
+                    phase=phase,
+                    path=path,
+                    rel=rel,
+                ))
+            phases[phase] = images
+            total_added += len(images)
+
+    surfaces = list(image_manifest.get("captureSurfaces", []))
+    for phase in RENDER_STEP_CHECKPOINT_PHASES:
+        if phase not in surfaces:
+            surfaces.append(phase)
+    image_manifest["captureSurfaces"] = surfaces
+    summary = dict(image_manifest.get("summary") or {})
+    summary["imageCount"] = int(summary.get("imageCount", 0)) + total_added
+    image_manifest["summary"] = summary
+    return image_manifest
 
 
 def write_render_stage_artifacts(
@@ -529,6 +737,18 @@ def write_render_stage_artifacts(
                 )
                 if stage == "draw_dispatch":
                     stage_events = enrich_draw_dispatch_events_for_case(
+                        stage_events,
+                        case_segment,
+                        image_case_by_id.get(case_id, {
+                            "caseId": case_id,
+                            "phases": {},
+                        }),
+                    )
+                elif stage == "render_commands":
+                    stage_events = enrich_render_commands_events_for_case(
+                        stage_events)
+                elif stage == "render_execute":
+                    stage_events = enrich_render_execute_events_for_case(
                         stage_events,
                         case_segment,
                         image_case_by_id.get(case_id, {
@@ -612,6 +832,10 @@ def main(argv: list[str]) -> int:
     trace_dir = Path(args.trace_dir)
     stages = selected_stages(args.stage)
     render_path = args.stage == RENDER_PATH_STAGE
+    if args.record_render_step_checkpoints and not render_path:
+        print("--record-render-step-checkpoints requires --stage render_path",
+              file=sys.stderr)
+        return 2
     render_artifact_dir = (
         Path(args.render_artifact_dir)
         if args.render_artifact_dir is not None
@@ -634,6 +858,7 @@ def main(argv: list[str]) -> int:
     expected_frames = sum(int(spec["frames"]) for spec in specs)
     specs_by_id = {spec["id"]: spec for spec in specs}
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    render_step_checkpoints: list[dict[str, Any]] = []
 
     try:
         try:
@@ -657,7 +882,17 @@ def main(argv: list[str]) -> int:
 
                 with FridaMotionStageTracer(
                     engine, device_id=args.serial) as tracer:
-                    tracer.start_record(stages)
+                    checkpoint_raw_dir = (
+                        render_artifact_dir / ".oracle_execute_raw"
+                        if args.record_render_step_checkpoints and
+                        render_artifact_dir is not None else None
+                    )
+                    tracer.configure_image_checkpoints(checkpoint_raw_dir)
+                    tracer.start_record(
+                        stages,
+                        record_render_step_checkpoints=(
+                            args.record_render_step_checkpoints),
+                    )
                     engine.tjs_init()
                     mpb.trigger_startup(engine, remote_game)
                     events = wait_for_stage_trace(
@@ -666,6 +901,7 @@ def main(argv: list[str]) -> int:
                         timeout=args.playback_timeout,
                         stabilise_seconds=5.0 if render_path else 2.0,
                     )
+                    render_step_checkpoints = tracer.image_checkpoints()
         finally:
             if temp_dir is not None:
                 temp_dir.cleanup()
@@ -699,6 +935,13 @@ def main(argv: list[str]) -> int:
             image_manifest = mpb._collect_render_stage_capture(
                 args.serial, specs_by_id, render_artifact_dir,
                 remote_render_root, timeout=args.playback_timeout)
+            if args.record_render_step_checkpoints:
+                image_manifest = add_oracle_execute_checkpoint_images(
+                    artifact_dir=render_artifact_dir,
+                    image_manifest=image_manifest,
+                    checkpoints=render_step_checkpoints,
+                    case_segments=case_segments,
+                )
             written = write_render_stage_artifacts(
                 artifact_dir=render_artifact_dir,
                 stages=stages,

@@ -71,6 +71,8 @@ class FridaMotionStageTracer:
         self._script: Any = None
         self._api: Any = None
         self._info: dict[str, Any] | None = None
+        self._image_checkpoint_dir: Path | None = None
+        self._image_checkpoints: list[dict[str, Any]] = []
 
     def attach(self) -> None:
         if self._session is not None:
@@ -130,10 +132,27 @@ class FridaMotionStageTracer:
     def info(self) -> dict[str, Any] | None:
         return self._info
 
-    def start_record(self, stages: Sequence[str]) -> None:
+    def configure_image_checkpoints(self, raw_dir: Path | None) -> None:
+        self._image_checkpoint_dir = raw_dir
+        self._image_checkpoints = []
+        if raw_dir is not None:
+            raw_dir.mkdir(parents=True, exist_ok=True)
+
+    def image_checkpoints(self) -> list[dict[str, Any]]:
+        return [dict(item) for item in self._image_checkpoints]
+
+    def start_record(
+        self,
+        stages: Sequence[str],
+        *,
+        record_render_step_checkpoints: bool = False,
+    ) -> None:
         if self._api is None:
             raise RuntimeError("tracer not attached; call attach() first")
-        self._api.start_record(list(stages))
+        self._api.start_record(list(stages), {
+            "recordRenderStepCheckpoints": bool(
+                record_render_step_checkpoints),
+        })
 
     def stop_record(self) -> list[dict[str, Any]]:
         if self._api is None:
@@ -173,3 +192,31 @@ class FridaMotionStageTracer:
                 f"{message.get('stack') or message}",
                 file=sys.stderr,
             )
+            return
+        if message.get("type") != "send":
+            return
+        payload = message.get("payload")
+        if not isinstance(payload, dict):
+            return
+        if payload.get("type") != "render_image_checkpoint":
+            return
+        record = dict(payload)
+        record.pop("type", None)
+        if record.get("ok") and data is not None:
+            raw_dir = self._image_checkpoint_dir
+            if raw_dir is None:
+                record["ok"] = False
+                record["error"] = "host raw checkpoint directory is not configured"
+            else:
+                frame_value = record.get("frameId")
+                if not isinstance(frame_value, int):
+                    record["ok"] = False
+                    record["error"] = "checkpoint has no integer frameId"
+                    self._image_checkpoints.append(record)
+                    return
+                frame_id = int(frame_value)
+                phase = str(record.get("phase") or "unknown")
+                raw_path = raw_dir / f"frame_{frame_id:04d}_{phase}.bgra"
+                raw_path.write_bytes(bytes(data))
+                record["rawPath"] = str(raw_path)
+        self._image_checkpoints.append(record)

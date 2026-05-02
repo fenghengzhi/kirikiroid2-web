@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-import hashlib
 import json
 import os
 import posixpath
@@ -22,6 +21,8 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
+from oracle_runner.png_artifacts import images_changed, png_manifest_entry
+
 DEFAULT_HOST_PYTHON_RAW = os.environ.get("KRKR2_HOST_PYTHON") or shutil.which("python3")
 DEFAULT_HOST_PYTHON = (
     Path(DEFAULT_HOST_PYTHON_RAW) if DEFAULT_HOST_PYTHON_RAW else None
@@ -37,6 +38,10 @@ RENDER_EVENT_SCHEMA = "motion-render-stage-wasmtime-v1-event"
 RENDER_SOURCE = "wasmtime-port-render-stage"
 RENDER_CAPTURE_GUEST_ROOT = "/render_stage_capture"
 RENDER_CAPTURE_SURFACES: tuple[str, ...] = ("pre_draw", "post_draw")
+RENDER_STEP_CHECKPOINT_SURFACES: tuple[str, ...] = (
+    "execute_pre",
+    "execute_post",
+)
 RENDER_STAGES: tuple[str, ...] = (
     "draw_dispatch",
     "render_prepare",
@@ -84,6 +89,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--record-render-stages", action="store_true",
                    help="Save Wasmtime render_path stage artifacts: "
                         "pre/post draw PNGs plus render stage JSON")
+    p.add_argument("--record-render-step-checkpoints", action="store_true",
+                   help="With --record-render-stages, save execute_pre/"
+                        "execute_post images around executeLayerRenderCommands")
     p.add_argument("--render-artifact-dir", type=Path, default=None,
                    help="Render stage artifact output directory. Default: "
                         "tests/differential/artifacts/"
@@ -906,29 +914,6 @@ def call_with_guest_bytes(store, memory, malloc, free, data: bytes, callback):
         free(store, ptr)
 
 
-def _png_dimensions(path: Path) -> tuple[int, int]:
-    with path.open("rb") as f:
-        header = f.read(24)
-    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
-        raise RuntimeError(f"not a PNG file: {path}")
-    if header[12:16] != b"IHDR":
-        raise RuntimeError(f"PNG missing IHDR at expected offset: {path}")
-    width = int.from_bytes(header[16:20], "big")
-    height = int.from_bytes(header[20:24], "big")
-    return width, height
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _build_framebuffer_capture_xp3(specs: list[dict], work_dir: Path) -> Path:
     from oracle_runner.adapters import motion_playback as mpb
 
@@ -977,15 +962,11 @@ def _write_wasmtime_framebuffer_manifest(
             path = framebuffer_dir / rel
             if not path.exists():
                 raise RuntimeError(f"missing Wasmtime framebuffer PNG: {path}")
-            width, height = _png_dimensions(path)
-            images.append({
-                "frame": frame,
-                "path": rel.as_posix(),
-                "width": width,
-                "height": height,
-                "bytes": path.stat().st_size,
-                "sha256": _sha256_file(path),
-            })
+            images.append(png_manifest_entry(
+                frame=frame,
+                path=path,
+                rel=rel,
+            ))
         extras = sorted(case_dir.glob("frame_*.png"))[expected:]
         if extras:
             raise RuntimeError(
@@ -1038,6 +1019,8 @@ def _collect_wasmtime_render_stage_capture(
     bootstrap: BrowserBootstrapInfo,
     render_artifact_dir: Path,
     specs: list[dict],
+    *,
+    record_render_step_checkpoints: bool = False,
 ) -> dict[str, Any]:
     from oracle_runner.adapters import motion_playback as mpb
 
@@ -1055,10 +1038,12 @@ def _collect_wasmtime_render_stage_capture(
     specs_by_id = {s["id"]: s for s in specs}
     cases: list[dict[str, Any]] = []
     total_images = 0
+    global_frame_offset = 0
     for spec_id in mpb.SEGMENT_ORDER:
         spec = specs_by_id.get(spec_id)
         if spec is None:
             continue
+        expected = int(spec["frames"])
         src_case = capture_root / spec_id
         if not src_case.is_dir():
             raise RuntimeError(
@@ -1066,9 +1051,32 @@ def _collect_wasmtime_render_stage_capture(
         dst_case = images_root / spec_id
         shutil.copytree(src_case, dst_case)
 
-        expected = int(spec["frames"])
+        if record_render_step_checkpoints:
+            for phase in RENDER_STEP_CHECKPOINT_SURFACES:
+                src_phase = capture_root / "_execute" / phase
+                if not src_phase.is_dir():
+                    raise RuntimeError(
+                        "missing Wasmtime execute checkpoint directory: "
+                        f"{src_phase}")
+                dst_phase = dst_case / phase
+                if dst_phase.exists():
+                    shutil.rmtree(dst_phase)
+                dst_phase.mkdir(parents=True, exist_ok=True)
+                for local_frame in range(expected):
+                    global_frame = global_frame_offset + local_frame
+                    src_png = src_phase / f"frame_{global_frame:04d}.png"
+                    if not src_png.exists():
+                        raise RuntimeError(
+                            "missing Wasmtime execute checkpoint PNG: "
+                            f"{src_png}")
+                    shutil.copy2(
+                        src_png, dst_phase / f"frame_{local_frame:04d}.png")
+
         phases: dict[str, list[dict[str, Any]]] = {}
-        for phase in RENDER_CAPTURE_SURFACES:
+        phases_to_collect = list(RENDER_CAPTURE_SURFACES)
+        if record_render_step_checkpoints:
+            phases_to_collect.extend(RENDER_STEP_CHECKPOINT_SURFACES)
+        for phase in phases_to_collect:
             phase_dir = dst_case / phase
             if not phase_dir.is_dir():
                 raise RuntimeError(
@@ -1080,16 +1088,12 @@ def _collect_wasmtime_render_stage_capture(
                 if not path.exists():
                     raise RuntimeError(
                         f"missing Wasmtime render stage PNG: {path}")
-                width, height = _png_dimensions(path)
-                images.append({
-                    "frame": frame,
-                    "phase": phase,
-                    "path": rel.as_posix(),
-                    "width": width,
-                    "height": height,
-                    "bytes": path.stat().st_size,
-                    "sha256": _sha256_file(path),
-                })
+                images.append(png_manifest_entry(
+                    frame=frame,
+                    phase=phase,
+                    path=path,
+                    rel=rel,
+                ))
             extras = sorted(phase_dir.glob("frame_*.png"))[expected:]
             if extras:
                 raise RuntimeError(
@@ -1107,10 +1111,14 @@ def _collect_wasmtime_render_stage_capture(
             "frames": expected,
             "phases": phases,
         })
+        global_frame_offset += expected
 
+    capture_surfaces = list(RENDER_CAPTURE_SURFACES)
+    if record_render_step_checkpoints:
+        capture_surfaces.extend(RENDER_STEP_CHECKPOINT_SURFACES)
     image_manifest = {
         "guestCaptureRoot": RENDER_CAPTURE_GUEST_ROOT,
-        "captureSurfaces": list(RENDER_CAPTURE_SURFACES),
+        "captureSurfaces": capture_surfaces,
         "cases": cases,
         "summary": {
             "caseCount": len(cases),
@@ -1172,6 +1180,7 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                      frames: int, *,
                      framebuffer_dir: Path | None = None,
                      render_artifact_dir: Path | None = None,
+                     record_render_step_checkpoints: bool = False,
                      render_stage_out: Path | None = None,
                      specs: list[dict] | None = None,
                      manifest_startup_xp3: Path | None = None) -> dict[str, Any]:
@@ -1208,6 +1217,10 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                     for phase in RENDER_CAPTURE_SURFACES:
                         (capture_root / str(spec["id"]) / phase).mkdir(
                             parents=True, exist_ok=True)
+                if record_render_step_checkpoints:
+                    for phase in RENDER_STEP_CHECKPOINT_SURFACES:
+                        (capture_root / "_execute" / phase).mkdir(
+                            parents=True, exist_ok=True)
             summary = _drive_full_guest_with_bootstrap(
                 wasmtime, wasm_path, bootstrap, frames,
                 render_stage_out=render_stage_out)
@@ -1221,7 +1234,9 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                 summary["framebufferManifest"] = str(manifest)
             if render_artifact_dir is not None:
                 image_manifest = _collect_wasmtime_render_stage_capture(
-                    bootstrap, render_artifact_dir, specs)
+                    bootstrap, render_artifact_dir, specs,
+                    record_render_step_checkpoints=(
+                        record_render_step_checkpoints))
                 summary["renderStageImageManifest"] = image_manifest["summary"]
             return summary
         except Exception as exc:
@@ -1308,6 +1323,7 @@ def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
                            frames: int, output: Path, *,
                            framebuffer_dir: Path | None = None,
                            render_artifact_dir: Path | None = None,
+                           record_render_step_checkpoints: bool = False,
                            render_stage_out: Path | None = None,
                            specs: list[dict] | None = None,
                            manifest_startup_xp3: Path | None = None) -> int:
@@ -1315,6 +1331,7 @@ def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
         wasm_path, startup_xp3, frames,
         framebuffer_dir=framebuffer_dir,
         render_artifact_dir=render_artifact_dir,
+        record_render_step_checkpoints=record_render_step_checkpoints,
         render_stage_out=render_stage_out,
         specs=specs,
         manifest_startup_xp3=manifest_startup_xp3)
@@ -1329,6 +1346,7 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                          host_python: Path,
                          framebuffer_dir: Path | None = None,
                          render_artifact_dir: Path | None = None,
+                         record_render_step_checkpoints: bool = False,
                          manifest_startup_xp3: Path | None = None
                          ) -> tuple[list[dict], list[dict]]:
     if host_python is None or not host_python.exists():
@@ -1378,6 +1396,8 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                 "--render-artifact-dir", str(render_artifact_dir),
                 "--render-stage-out", str(render_stage_path),
             ]
+            if record_render_step_checkpoints:
+                cmd.append("--record-render-step-checkpoints")
         try:
             proc = subprocess.run(
                 cmd,
@@ -1580,11 +1600,12 @@ def _layer_save_events_for_case(case_images: dict[str, Any],
                 "frame": local_frame,
                 "seq": seq,
                 "phase": phase,
-                "path": image["path"],
-                "width": image["width"],
-                "height": image["height"],
-                "bytes": image["bytes"],
-                "sha256": image["sha256"],
+            "path": image["path"],
+            "width": image["width"],
+            "height": image["height"],
+            "bytes": image["bytes"],
+            **({"rgbaSha256": image["rgbaSha256"]}
+               if "rgbaSha256" in image else {}),
                 "diagnostics": {
                     "synthetic": True,
                     "source": "wasmtime-render-png-manifest",
@@ -1670,10 +1691,7 @@ def _enrich_draw_dispatch_events_for_case(
         elif kind == "draw_leave":
             event["preDrawImage"] = pre_draw
             event["postDrawImage"] = post_draw
-            image_changed = (
-                None if pre_draw is None or post_draw is None
-                else pre_draw.get("sha256") != post_draw.get("sha256")
-            )
+            image_changed = images_changed(pre_draw, post_draw)
             event["imageChanged"] = image_changed
             _set_draw_path_image_changed(event, image_changed)
             if pre_draw is None:
@@ -1683,6 +1701,140 @@ def _enrich_draw_dispatch_events_for_case(
                 _add_image_manifest_error(
                     event, f"missing post_draw image for frame {local_frame}")
 
+        enriched.append(event)
+
+    return enriched
+
+
+def _semantic_render_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "index": item.get("index"),
+        "nodeIndex": item.get("nodeIndex"),
+        "sourceKey": item.get("sourceKey"),
+        "flags": item.get("flags"),
+        "layerIds": item.get("layerIds"),
+        "clipRect": item.get("clipRect"),
+        "dirtyRect": item.get("dirtyRect"),
+        "viewportRect": item.get("viewportRect"),
+        "sourceGate232": item.get("sourceGate232"),
+        "stencilType244": item.get("stencilType244"),
+        "parentItemIndex": item.get("parentItemIndex"),
+        "parentCommandIndex": item.get("parentCommandIndex"),
+        "parentItem264": item.get("parentItem264"),
+        "childItemCount": item.get("childItemCount"),
+        "childCommandCount": item.get("childCommandCount"),
+        "meshType280": item.get("meshType280"),
+        "leafLayerVariantTag": item.get("leafLayerVariantTag"),
+        "composedLayerVariantTag": item.get("composedLayerVariantTag"),
+        "leafLayerVariantTag320": item.get("leafLayerVariantTag320"),
+        "composedLayerVariantTag340": item.get("composedLayerVariantTag340"),
+        "leafBuilt": item.get("leafBuilt"),
+        "composedBuilt": item.get("composedBuilt"),
+        "executedDirect": item.get("executedDirect"),
+    }
+
+
+def _build_flow_summary(event: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(event.get("buildFlow"), dict):
+        return dict(event["buildFlow"])
+    render_commands = event.get("renderCommands")
+    if isinstance(render_commands, list):
+        commands = [
+            _semantic_render_item(item)
+            for item in render_commands if isinstance(item, dict)
+        ]
+        return {
+            "inputItemCount": event.get("preparedItemCount"),
+            "renderCommandCount": event.get("renderCommandCount", len(commands)),
+            "topLevelCommandCount": event.get("topLevelCommandCount"),
+            "groupCommandCount": event.get("groupCommandCount"),
+            "commands": commands,
+        }
+    render_lists = event.get("renderLists")
+    main_list = (
+        render_lists.get("mainList")
+        if isinstance(render_lists, dict) else None
+    )
+    items = main_list.get("items") if isinstance(main_list, dict) else []
+    commands = [
+        _semantic_render_item(item)
+        for item in items if isinstance(item, dict)
+    ]
+    return {
+        "inputItemCount": main_list.get("count")
+        if isinstance(main_list, dict) else None,
+        "renderCommandCount": len(commands),
+        "topLevelCommandCount": None,
+        "groupCommandCount": None,
+        "commands": commands,
+    }
+
+
+def _enrich_render_commands_events_for_case(
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for source_event in events:
+        event = dict(source_event)
+        if str(event.get("kind") or "").startswith("build_commands"):
+            event["buildFlow"] = _build_flow_summary(event)
+        enriched.append(event)
+    return enriched
+
+
+def _enrich_render_execute_events_for_case(
+    events: list[dict[str, Any]],
+    case_segment: dict[str, Any],
+    case_images: dict[str, Any],
+) -> list[dict[str, Any]]:
+    first_frame_id = int(case_segment["firstFrameId"])
+    last_frame_id = int(case_segment["lastFrameId"])
+    pre_by_frame = _phase_images_by_frame(case_images, "execute_pre")
+    post_by_frame = _phase_images_by_frame(case_images, "execute_post")
+    enriched: list[dict[str, Any]] = []
+
+    for source_event in events:
+        event = dict(source_event)
+        frame_id = event.get("frameId")
+        if not isinstance(frame_id, int):
+            _add_image_manifest_error(event, "event has no integer frameId")
+            enriched.append(event)
+            continue
+        if frame_id < first_frame_id or frame_id > last_frame_id:
+            _add_image_manifest_error(
+                event,
+                f"frameId {frame_id} outside case segment "
+                f"{first_frame_id}..{last_frame_id}",
+            )
+            enriched.append(event)
+            continue
+
+        local_frame = frame_id - first_frame_id
+        execute_pre = pre_by_frame.get(local_frame)
+        execute_post = post_by_frame.get(local_frame)
+        kind = str(event.get("kind") or "")
+        if kind == "execute_enter":
+            event["executePreImage"] = execute_pre
+            if execute_pre is None:
+                _add_image_manifest_error(
+                    event,
+                    f"missing execute_pre image for frame {local_frame}",
+                )
+        elif kind == "execute_leave":
+            event["executePreImage"] = execute_pre
+            event["executePostImage"] = execute_post
+            image_changed = images_changed(execute_pre, execute_post)
+            event["executeImageChanged"] = image_changed
+            if execute_pre is None:
+                _add_image_manifest_error(
+                    event,
+                    f"missing execute_pre image for frame {local_frame}",
+                )
+            if execute_post is None:
+                _add_image_manifest_error(
+                    event,
+                    f"missing execute_post image for frame {local_frame}",
+                )
         enriched.append(event)
 
     return enriched
@@ -1728,6 +1880,18 @@ def write_render_stage_artifacts(
                 )
                 if stage == "draw_dispatch":
                     stage_events = _enrich_draw_dispatch_events_for_case(
+                        stage_events,
+                        case_segment,
+                        image_case_by_id.get(spec_id, {
+                            "caseId": spec_id,
+                            "phases": {},
+                        }),
+                    )
+                elif stage == "render_commands":
+                    stage_events = _enrich_render_commands_events_for_case(
+                        stage_events)
+                elif stage == "render_execute":
+                    stage_events = _enrich_render_execute_events_for_case(
                         stage_events,
                         case_segment,
                         image_case_by_id.get(spec_id, {
@@ -1808,6 +1972,10 @@ def main(argv: list[str]) -> int:
               "different capture XP3 fixtures; run them separately",
               file=sys.stderr)
         return 2
+    if args.record_render_step_checkpoints and render_artifact_dir is None:
+        print("--record-render-step-checkpoints requires "
+              "--record-render-stages", file=sys.stderr)
+        return 2
 
     if args.host_mode:
         if args.host_output is None:
@@ -1828,6 +1996,8 @@ def main(argv: list[str]) -> int:
                 wasm_path, startup_xp3, frames, args.host_output,
                 framebuffer_dir=framebuffer_dir,
                 render_artifact_dir=render_artifact_dir,
+                record_render_step_checkpoints=(
+                    args.record_render_step_checkpoints),
                 render_stage_out=args.render_stage_out,
                 specs=specs,
                 manifest_startup_xp3=(
@@ -1873,6 +2043,8 @@ def main(argv: list[str]) -> int:
                 host_python=args.host_python,
                 framebuffer_dir=framebuffer_dir,
                 render_artifact_dir=render_artifact_dir,
+                record_render_step_checkpoints=(
+                    args.record_render_step_checkpoints),
                 manifest_startup_xp3=startup_xp3
                 if (framebuffer_dir is not None or render_artifact_dir is not None)
                 else None,

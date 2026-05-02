@@ -118,6 +118,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Host path where framebuffer PNGs should be copied")
     p.add_argument("--record-render-stages", action="store_true",
                    help="Collect Wasmtime render stage diagnostics and images")
+    p.add_argument("--record-render-step-checkpoints", action="store_true",
+                   help="Ask host-mode driver to save execute_pre/execute_post "
+                        "render checkpoints")
     p.add_argument("--render-artifact-dir", default=None,
                    help="Host path where render stage artifacts should be copied")
     p.add_argument("--render-stage-out", default=None,
@@ -150,6 +153,7 @@ class WasmMotionTracer:
         record_framebuffer: bool = False,
         framebuffer_dir: Path | None = None,
         record_render_stages: bool = False,
+        record_render_step_checkpoints: bool = False,
         render_artifact_dir: Path | None = None,
         render_stage_out: Path | None = None,
         manifest_startup_xp3: Path | None = None,
@@ -167,6 +171,7 @@ class WasmMotionTracer:
         self.record_framebuffer = record_framebuffer
         self.framebuffer_dir = framebuffer_dir
         self.record_render_stages = record_render_stages
+        self.record_render_step_checkpoints = record_render_step_checkpoints
         self.render_artifact_dir = render_artifact_dir
         self.render_stage_out = render_stage_out
         self.manifest_startup_xp3 = manifest_startup_xp3
@@ -251,6 +256,9 @@ class WasmMotionTracer:
                         "--render-stage-out",
                         str(self.render_stage_out),
                     ]
+                    if self.record_render_step_checkpoints:
+                        launch_args.append(
+                            "--record-render-step-checkpoints")
                 launch = lldb.SBLaunchInfo(launch_args)
                 launch.SetWorkingDirectory(str(self.repo_root))
                 launch.AddOpenFileAction(1, str(stdout_path), False, True)
@@ -530,6 +538,10 @@ def main(argv: list[str]) -> int:
         print("--render-stage-out is required with --record-render-stages",
               file=sys.stderr)
         return 2
+    if args.record_render_step_checkpoints and not args.record_render_stages:
+        print("--record-render-step-checkpoints requires "
+              "--record-render-stages", file=sys.stderr)
+        return 2
 
     try:
         lldb = _load_lldb()
@@ -547,6 +559,8 @@ def main(argv: list[str]) -> int:
             record_framebuffer=args.record_framebuffer,
             framebuffer_dir=framebuffer_dir,
             record_render_stages=args.record_render_stages,
+            record_render_step_checkpoints=(
+                args.record_render_step_checkpoints),
             render_artifact_dir=render_artifact_dir,
             render_stage_out=render_stage_out,
             manifest_startup_xp3=manifest_startup_xp3,

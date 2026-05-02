@@ -1374,6 +1374,11 @@ namespace motion {
                 "SLA/Layer backend could not resolve native layers before copy");
             return false;
         }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderImageCheckpoint(
+            this, renderLayerObject, "execute_pre",
+            "Player::executeLayerRenderCommands.execute_pre");
+#endif
 
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             baseSourceCache;
@@ -2089,6 +2094,9 @@ namespace motion {
                 renderLayer->GetWidth(), renderLayer->GetHeight());
         }
 #if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderImageCheckpoint(
+            this, renderLayerObject, "execute_post",
+            "Player::executeLayerRenderCommands.execute_post");
         renderTrace.setResult(true);
 #endif
         return true;

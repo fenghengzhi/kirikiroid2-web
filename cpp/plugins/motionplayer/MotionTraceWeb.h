@@ -90,6 +90,10 @@ namespace motion::detail {
     void motionTraceRenderCommands(Player *player, const char *kind,
                                    const char *samplePoint,
                                    int canvasWidth, int canvasHeight);
+    void motionTraceRenderImageCheckpoint(Player *player,
+                                          void *renderLayerObject,
+                                          const char *phase,
+                                          const char *samplePoint);
 #endif
 
 } // namespace motion::detail

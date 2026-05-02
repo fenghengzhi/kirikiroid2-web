@@ -24,6 +24,9 @@ const PLAYER_BUILD_ITEMS_OFF     = 0x6C2334;
 const PLAYER_BUILD_COMMANDS_OFF  = 0x6C4E28;
 const PLAYER_RENDER_EXECUTE_OFF  = 0x6C7440;
 const PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF = 0x6CE7D8;
+const LAYER_CLASS_ID_OFF = 0x1ADE668;
+const LAYER_NATIVE_MAIN_IMAGE_OFF = 280;
+const BITMAP_NATIVE_IMPL_OFF = 88;
 
 const STATIC_PARSE_PROJECTION = 'static_parse-semantic-v1';
 const STATIC_PARSE_SAMPLE_POINTS = {
@@ -136,6 +139,10 @@ let currentRenderFrameId = null;
 let currentRenderPlayer = null;
 let drawIdCounter = 0;
 let activeDrawContexts = [];
+let recordRenderStepCheckpoints = false;
+let nativeInstanceSupportCache = {};
+let bitmapBufferFunctionCache = {};
+let bitmapPitchFunctionCache = {};
 
 function ensureBase() {
     if (base !== null) return base;
@@ -232,6 +239,164 @@ function readArgInt(arg) {
     try { return arg.toInt32(); } catch (e) {}
     try { return parseInt(arg.toString(), 16) | 0; } catch (e) {}
     return null;
+}
+
+function getCachedNativeFunction(cache, fnPtr, retType, argTypes) {
+    const key = ptrHex(fnPtr);
+    if (!key) return null;
+    if (!cache[key]) {
+        cache[key] = new NativeFunction(fnPtr, retType, argTypes);
+    }
+    return cache[key];
+}
+
+function readVariantObject(variantPtr) {
+    try {
+        const variant = ptr(variantPtr);
+        if (variant.isNull()) {
+            return { object: null, type: null, error: 'null variant' };
+        }
+        const type = readS32(variant, 16);
+        const object = readPointer(variant, 0);
+        if (object === null) {
+            return { object: null, type: type, error: 'variant object is null' };
+        }
+        return { object: object, type: type, error: null };
+    } catch (e) {
+        return { object: null, type: null, error: String(e) };
+    }
+}
+
+function resolveLayerNativeInstance(layerObject) {
+    const obj = ptr(layerObject);
+    if (obj.isNull()) return { layer: null, error: 'null layer object' };
+    try {
+        const vtable = obj.readPointer();
+        const fnPtr = vtable.add(200).readPointer();
+        const fn = getCachedNativeFunction(
+            nativeInstanceSupportCache, fnPtr,
+            'int64', ['pointer', 'int64', 'uint32', 'pointer']);
+        if (!fn) return { layer: null, error: 'NativeInstanceSupport missing' };
+        const out = Memory.alloc(Process.pointerSize);
+        out.writePointer(NULL);
+        const classId = ensureBase().add(LAYER_CLASS_ID_OFF).readU32();
+        const hr = fn(obj, 2, classId, out);
+        const layer = out.readPointer();
+        if ((Number(hr) & 0x80000000) !== 0 || layer.isNull()) {
+            return {
+                layer: null,
+                error: 'NativeInstanceSupport failed',
+                hresult: String(hr),
+                classId: classId,
+            };
+        }
+        return { layer: layer, error: null, classId: classId };
+    } catch (e) {
+        return { layer: null, error: String(e) };
+    }
+}
+
+function readLayerImageSnapshot(layerObject) {
+    const resolved = resolveLayerNativeInstance(layerObject);
+    if (!resolved.layer) return { ok: false, error: resolved.error || 'no layer' };
+    try {
+        const mainImage = readPointer(resolved.layer, LAYER_NATIVE_MAIN_IMAGE_OFF);
+        if (mainImage === null) return { ok: false, error: 'layer has no main image' };
+        const bitmapImpl = readPointer(mainImage, BITMAP_NATIVE_IMPL_OFF);
+        if (bitmapImpl === null) {
+            return { ok: false, error: 'main image has no bitmap impl' };
+        }
+        const width = readU32(bitmapImpl, 12);
+        const height = readU32(bitmapImpl, 16);
+        if (!width || !height || width <= 0 || height <= 0 ||
+            width > 8192 || height > 8192) {
+            return {
+                ok: false,
+                error: 'invalid bitmap dimensions',
+                width: width,
+                height: height,
+            };
+        }
+        const vtable = bitmapImpl.readPointer();
+        const bufferFn = getCachedNativeFunction(
+            bitmapBufferFunctionCache,
+            vtable.add(56).readPointer(),
+            'pointer', ['pointer']);
+        const pitchFn = getCachedNativeFunction(
+            bitmapPitchFunctionCache,
+            vtable.add(80).readPointer(),
+            'int', ['pointer']);
+        const buffer = bufferFn(bitmapImpl);
+        const pitch = pitchFn(bitmapImpl);
+        if (!buffer || buffer.isNull()) {
+            return { ok: false, error: 'bitmap buffer is null' };
+        }
+        if (!pitch || pitch < width * 4 || pitch > width * 16) {
+            return {
+                ok: false,
+                error: 'invalid bitmap pitch',
+                width: width,
+                height: height,
+                pitch: pitch,
+            };
+        }
+        const packedSize = width * height * 4;
+        const packed = Memory.alloc(packedSize);
+        for (let y = 0; y < height; y++) {
+            Memory.copy(
+                packed.add(y * width * 4),
+                buffer.add(y * pitch),
+                width * 4);
+        }
+        return {
+            ok: true,
+            width: width,
+            height: height,
+            pitch: pitch,
+            pixelFormat: 'bgra32',
+            data: packed.readByteArray(packedSize),
+            diagnostics: {
+                layerObject: ptrHex(layerObject),
+                nativeLayer: ptrHex(resolved.layer),
+                mainImage: ptrHex(mainImage),
+                bitmapImpl: ptrHex(bitmapImpl),
+                buffer: ptrHex(buffer),
+            },
+        };
+    } catch (e) {
+        return { ok: false, error: String(e), layerObject: ptrHex(layerObject) };
+    }
+}
+
+function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint) {
+    if (!recordRenderStepCheckpoints || !recording ||
+        !stageEnabled(STAGE_RENDER_EXECUTE)) {
+        return;
+    }
+    const frameId = renderFrameIdFor(player);
+    if (frameId === null || frameId === undefined) return;
+    const snapshot = readLayerImageSnapshot(layerObject);
+    const payload = {
+        type: 'render_image_checkpoint',
+        source: 'android-frida-layer-main-image',
+        phase: phase,
+        samplePoint: samplePoint,
+        frameId: frameId,
+        player: ptrHex(player),
+        layerObject: ptrHex(layerObject),
+        ok: snapshot.ok === true,
+        width: snapshot.width || null,
+        height: snapshot.height || null,
+        pitch: snapshot.pitch || null,
+        pixelFormat: snapshot.pixelFormat || 'bgra32',
+        diagnostics: snapshot.diagnostics || {},
+    };
+    if (!snapshot.ok) {
+        payload.error = snapshot.error || 'snapshot failed';
+        send(payload);
+        return;
+    }
+    send(payload, snapshot.data);
 }
 
 function readD0(ctx) {
@@ -1242,15 +1407,23 @@ function installHook() {
     attachAt(PLAYER_RENDER_EXECUTE_OFF, 'Player_renderExecute', {
         onEnter(args) {
             this.player = args[0];
-            this.target = args[1];
+            this.targetVariant = args[1];
+            this.targetVariantObject = readVariantObject(this.targetVariant);
+            this.target = this.targetVariantObject.object;
             this.mainList = args[2];
             this.auxList = args[3];
+            sendRenderImageCheckpoint(
+                this.player, this.target, 'execute_pre',
+                'sub_6C7440.enter.after-target-resolve');
             emitRender(STAGE_RENDER_EXECUTE, 'execute_enter', {
                 renderLists: readRenderLists(this.mainList, this.auxList),
             }, {
                 addr: PLAYER_RENDER_EXECUTE_OFF,
                 player: ptrHex(this.player),
+                targetVariant: ptrHex(this.targetVariant),
+                targetVariantType: this.targetVariantObject.type,
                 target: ptrHex(this.target),
+                targetError: this.targetVariantObject.error,
                 mainListPtr: ptrHex(this.mainList),
                 auxListPtr: ptrHex(this.auxList),
             }, 'sub_6C7440.enter');
@@ -1267,8 +1440,14 @@ function installHook() {
             }, {
                 addr: PLAYER_RENDER_EXECUTE_OFF,
                 player: ptrHex(this.player),
+                targetVariant: ptrHex(this.targetVariant),
+                targetVariantType: this.targetVariantObject.type,
                 target: ptrHex(this.target),
+                targetError: this.targetVariantObject.error,
             }, 'sub_6C7440.leave');
+            sendRenderImageCheckpoint(
+                this.player, this.target, 'execute_post',
+                'sub_6C7440.leave.before-return');
         },
     });
 
@@ -1477,13 +1656,16 @@ rpc.exports = {
                 buildRenderCommands: PLAYER_BUILD_COMMANDS_OFF,
                 renderExecute: PLAYER_RENDER_EXECUTE_OFF,
                 updateLayerAfterDraw: PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF,
+                layerClassId: LAYER_CLASS_ID_OFF,
             },
         };
     },
-    startRecord(stageNames) {
+    startRecord(stageNames, options) {
         const requested = Array.isArray(stageNames) ? stageNames : ALL_STAGES;
         enabledStages = new Set(requested);
         enabledStages.add(STAGE_TRACE_FLATTEN);
+        recordRenderStepCheckpoints =
+            !!(options && options.recordRenderStepCheckpoints);
         events = [];
         frameCounter = 0;
         seqCounter = 0;

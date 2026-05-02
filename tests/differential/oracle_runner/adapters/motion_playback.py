@@ -30,7 +30,6 @@ the whole problem.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shlex
@@ -40,6 +39,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from oracle_runner.png_artifacts import png_manifest_entry
 
 
 # Schema fields, kept in sync with the Browser-WASM motionTrace hook.
@@ -479,29 +480,6 @@ def _wait_for_remote_framebuffer_files(
     )
 
 
-def _png_dimensions(path: Path) -> tuple[int, int]:
-    with path.open("rb") as f:
-        header = f.read(24)
-    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
-        raise RuntimeError(f"not a PNG file: {path}")
-    if header[12:16] != b"IHDR":
-        raise RuntimeError(f"PNG missing IHDR at expected offset: {path}")
-    width = int.from_bytes(header[16:20], "big")
-    height = int.from_bytes(header[20:24], "big")
-    return width, height
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _write_framebuffer_manifest(
     framebuffer_dir: Path,
     specs_by_id: dict[str, dict],
@@ -521,15 +499,11 @@ def _write_framebuffer_manifest(
             path = framebuffer_dir / rel
             if not path.exists():
                 raise RuntimeError(f"missing framebuffer PNG: {path}")
-            width, height = _png_dimensions(path)
-            images.append({
-                "frame": frame,
-                "path": rel.as_posix(),
-                "width": width,
-                "height": height,
-                "bytes": path.stat().st_size,
-                "sha256": _sha256_file(path),
-            })
+            images.append(png_manifest_entry(
+                frame=frame,
+                path=path,
+                rel=rel,
+            ))
         extras = sorted(case_dir.glob("frame_*.png"))[expected:]
         if extras:
             raise RuntimeError(
@@ -665,16 +639,12 @@ def _collect_render_stage_capture(
                 if not path.exists():
                     raise RuntimeError(
                         f"missing render stage PNG: {path}")
-                width, height = _png_dimensions(path)
-                images.append({
-                    "frame": frame,
-                    "phase": phase,
-                    "path": rel.as_posix(),
-                    "width": width,
-                    "height": height,
-                    "bytes": path.stat().st_size,
-                    "sha256": _sha256_file(path),
-                })
+                images.append(png_manifest_entry(
+                    frame=frame,
+                    phase=phase,
+                    path=path,
+                    rel=rel,
+                ))
             extras = sorted(phase_dir.glob("frame_*.png"))[expected:]
             if extras:
                 raise RuntimeError(

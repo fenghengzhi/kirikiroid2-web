@@ -3,3 +3,4 @@
 # change: update the CI download URL + checked-in goldens at the same
 # time, because the tracer output shape evolves between frida releases.
 frida==16.4.10
+Pillow
