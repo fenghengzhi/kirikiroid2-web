@@ -21,7 +21,10 @@ ITEM_FIELDS = (
     "sourceKey",
     "flags",
     "layerIds",
+    "sortKey64",
+    "paintBox",
     "clipRect",
+    "buildClipRect",
     "dirtyRect",
     "viewportRect",
     "sourceGate232",
@@ -72,21 +75,14 @@ def case_ids(oracle_root: Path) -> list[str]:
 
 
 def _normalized_item_value(item: dict[str, Any], field: str) -> Any:
+    flags = item.get("flags")
+    clip_valid = (
+        bool(flags.get("clipValid21"))
+        if isinstance(flags, dict) else False
+    )
     if field == "flags":
-        value = item.get("flags")
-        if not isinstance(value, dict):
-            return value
-        flags = dict(value)
-        rect = item.get("clipRect")
-        if isinstance(rect, list) and len(rect) == 4:
-            try:
-                left, top, right, bottom = (float(part) for part in rect)
-            except (TypeError, ValueError):
-                pass
-            else:
-                if left < right and top < bottom:
-                    flags["clipValid21"] = 1
-        return flags
+        value = flags
+        return dict(value) if isinstance(value, dict) else value
     if field == "leafLayerVariantTag":
         value = item.get("leafLayerVariantTag")
         return item.get("leafLayerVariantTag320") if value is None else value
@@ -94,8 +90,21 @@ def _normalized_item_value(item: dict[str, Any], field: str) -> Any:
         value = item.get("composedLayerVariantTag")
         return item.get("composedLayerVariantTag340") if value is None else value
     value = item.get(field)
+    if field == "buildClipRect" and value is None:
+        value = item.get("clipRect")
+    if field in {"clipRect", "buildClipRect"} and not clip_valid:
+        return [0, 0, 0, 0]
     if field == "viewportRect" and value == [1, 1, -1, -1]:
         return None
+    if field in {"paintBox", "clipRect", "buildClipRect", "dirtyRect",
+                 "viewportRect"} and isinstance(value, list):
+        normalized = []
+        for part in value:
+            if isinstance(part, (int, float)):
+                normalized.append(round(float(part), 3))
+            else:
+                normalized.append(part)
+        return normalized
     return value
 
 

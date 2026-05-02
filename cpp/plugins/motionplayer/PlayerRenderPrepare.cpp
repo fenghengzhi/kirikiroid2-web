@@ -240,6 +240,55 @@ namespace motion {
         const auto &dam = _runtime->drawAffineMatrix;
         std::unordered_set<int> requiredGroupNodeIndices;
 
+        auto appendChildEntriesAtCurrentNode = [&](Player *child,
+                                                   bool nodePriorDraw) {
+            if(!child || !child->_runtime) {
+                return;
+            }
+            child->_renderItemInheritedFlag18 =
+                _renderItemInheritedFlag18 || nodePriorDraw;
+            child->prepareRenderItems(inheritedFlag18 || (_priorDraw != 0.0));
+            auto &childEntries = child->_runtime->preparedRenderItems;
+            if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+               motionPath.find("m2logo.mtn") != std::string::npos &&
+               _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0) {
+                const auto *activeClip = child->selectActiveClip();
+                std::fprintf(
+                    stderr,
+                    "SNAPCHILD phase=prepare frame=%.3f childActiveMotion=%s childMotionKey=%s childClip=%s childNodesBuilt=%d childNodeCount=%zu childPreparedItemCount=%zu firstSource=%s\n",
+                    _clampedEvalTime,
+                    child->_runtime->activeMotion
+                        ? child->_runtime->activeMotion->path.c_str()
+                        : "<none>",
+                    detail::narrow(child->getMotion()).c_str(),
+                    activeClip ? activeClip->label.c_str() : "<none>",
+                    child->_runtime->nodes.size() > 1 ? 1 : 0,
+                    child->_runtime->nodes.size(), childEntries.size(),
+                    childEntries.empty() || childEntries.front().sourceKey.empty()
+                        ? "<none>"
+                        : childEntries.front().sourceKey.c_str());
+            }
+            if(childEntries.empty()) {
+                return;
+            }
+            // Android sub_6D4F00 only stable-sorts by item+64. For equal
+            // sort keys, the pre-sort generation order is observable. Keep
+            // child-player output at the current node position instead of
+            // batching every child list at the front of the parent list.
+            entries.insert(entries.end(),
+                           std::make_move_iterator(childEntries.begin()),
+                           std::make_move_iterator(childEntries.end()));
+            detail::logoChainTraceLogf(
+                motionPath, "prepare.childMerge", "0x6C2334/0x6D4F00",
+                _clampedEvalTime,
+                "childMotionPath={} appendedAtNode={} parentTotalAfterInsert={}",
+                child->_runtime->activeMotion
+                    ? child->_runtime->activeMotion->path
+                    : std::string("<none>"),
+                childEntries.size(), entries.size());
+            childEntries.clear();
+        };
+
         auto transformPoint = [&](float x, float y) -> tTVPPointD {
             return { dam[0] * static_cast<double>(x) +
                          dam[2] * static_cast<double>(y) + dam[4],
@@ -267,7 +316,7 @@ namespace motion {
             };
 
         for(size_t i = 0; i < nodes.size(); ++i) {
-            const auto &node = nodes[i];
+            auto &node = _runtime->nodes[i];
             if(!node.accumulated.active) continue;
             if(!node.forceVisible && (((1 << node.nodeType) & bitmask) == 0)) {
                 if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
@@ -343,6 +392,18 @@ namespace motion {
         for(size_t i = 0; i < nodes.size(); ++i) {
             const auto &node = nodes[i];
             if(!node.accumulated.active) continue;
+            if(!_preview) {
+                if(node.nodeType == 3) {
+                    appendChildEntriesAtCurrentNode(
+                        node.getChildPlayer(), node.priorDraw != 0);
+                } else if(node.nodeType == 4) {
+                    const int particleCount = node.getParticleCount();
+                    for(int pi = 0; pi < particleCount; ++pi) {
+                        appendChildEntriesAtCurrentNode(
+                            node.getParticleChild(pi), node.priorDraw != 0);
+                    }
+                }
+            }
             const bool hasOwnSource =
                 node.hasSource && !node.interpolatedCache.src.empty();
             const bool needsGroupEntry =
@@ -740,78 +801,6 @@ namespace motion {
         const auto motionPath =
             _runtime->activeMotion ? _runtime->activeMotion->path
                                    : std::string{};
-
-        auto prependChildEntries = [&](Player *child) {
-            if(!child || !child->_runtime) {
-                return;
-            }
-            child->prepareRenderItems(inheritedFlag18 || (_priorDraw != 0.0));
-            auto &childEntries = child->_runtime->preparedRenderItems;
-            if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
-               motionPath.find("m2logo.mtn") != std::string::npos &&
-               _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0) {
-                const auto *activeClip = child->selectActiveClip();
-                std::fprintf(
-                    stderr,
-                    "SNAPCHILD phase=prepare frame=%.3f childActiveMotion=%s childMotionKey=%s childClip=%s childNodesBuilt=%d childNodeCount=%zu childPreparedItemCount=%zu firstSource=%s\n",
-                    _clampedEvalTime,
-                    child->_runtime->activeMotion
-                        ? child->_runtime->activeMotion->path.c_str()
-                        : "<none>",
-                    detail::narrow(child->getMotion()).c_str(),
-                    activeClip ? activeClip->label.c_str() : "<none>",
-                    child->_runtime->nodes.size() > 1 ? 1 : 0,
-                    child->_runtime->nodes.size(), childEntries.size(),
-                    childEntries.empty() || childEntries.front().sourceKey.empty()
-                        ? "<none>"
-                        : childEntries.front().sourceKey.c_str());
-            }
-            if(childEntries.empty()) {
-                return;
-            }
-            // Aligned to sub_6F363C call sites (0x6BE2C0 / 0x6C1A00):
-            // child render items are inserted at BEGIN before the parent items.
-            _runtime->preparedRenderItems.insert(
-                _runtime->preparedRenderItems.begin(),
-                std::make_move_iterator(childEntries.begin()),
-                std::make_move_iterator(childEntries.end()));
-            detail::logoChainTraceLogf(
-                motionPath, "prepare.childMerge", "0x6F363C",
-                _clampedEvalTime,
-                "childMotionPath={} insertedAtBegin={} parentTotalAfterInsert={}",
-                child->_runtime->activeMotion
-                    ? child->_runtime->activeMotion->path
-                    : std::string("<none>"),
-                childEntries.size(), _runtime->preparedRenderItems.size());
-            childEntries.clear();
-        };
-
-        // Aligned to sub_6C2334: nodeType 3/4 child-player recursion is gated
-        // by player+1092 (preview). The native code only expands these child
-        // render lists when preview == 0.
-        if(!_preview) {
-            for(size_t ni = 1; ni < _runtime->nodes.size(); ++ni) {
-                auto &node = _runtime->nodes[ni];
-                if(node.nodeType == 3) {
-                    if(auto *child = node.getChildPlayer()) {
-                        child->_renderItemInheritedFlag18 =
-                            _renderItemInheritedFlag18 ||
-                            (node.priorDraw != 0);
-                    }
-                    prependChildEntries(node.getChildPlayer());
-                } else if(node.nodeType == 4) {
-                    const int particleCount = node.getParticleCount();
-                    for(int pi = 0; pi < particleCount; ++pi) {
-                        if(auto *child = node.getParticleChild(pi)) {
-                            child->_renderItemInheritedFlag18 =
-                                _renderItemInheritedFlag18 ||
-                                (node.priorDraw != 0);
-                        }
-                        prependChildEntries(node.getParticleChild(pi));
-                    }
-                }
-            }
-        }
 
         appendPreparedRenderItems();
         std::vector<double> beforeSortKeys;

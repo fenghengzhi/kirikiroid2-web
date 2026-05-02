@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import tempfile
 import time
@@ -498,13 +499,26 @@ def enrich_draw_dispatch_events_for_case(
 
 
 def _semantic_render_item(item: dict[str, Any]) -> dict[str, Any]:
+    flags = item.get("flags")
+    clip_valid = (
+        bool(flags.get("clipValid21"))
+        if isinstance(flags, dict) else False
+    )
+    clip_rect = item.get("clipRect") if clip_valid else [0, 0, 0, 0]
+    build_clip_rect = (
+        item.get("buildClipRect", item.get("clipRect"))
+        if clip_valid else [0, 0, 0, 0]
+    )
     return {
         "index": item.get("index"),
         "nodeIndex": item.get("nodeIndex"),
         "sourceKey": item.get("sourceKey"),
-        "flags": item.get("flags"),
+        "flags": flags,
         "layerIds": item.get("layerIds"),
-        "clipRect": item.get("clipRect"),
+        "sortKey64": item.get("sortKey64"),
+        "paintBox": item.get("paintBox"),
+        "clipRect": clip_rect,
+        "buildClipRect": build_clip_rect,
         "dirtyRect": item.get("dirtyRect"),
         "viewportRect": item.get("viewportRect"),
         "sourceGate232": item.get("sourceGate232"),
@@ -524,7 +538,43 @@ def _semantic_render_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _has_valid_clip_rect(item: dict[str, Any]) -> bool:
-    rect = item.get("clipRect")
+    flags = item.get("flags")
+    flag16 = bool(flags.get("flag16")) if isinstance(flags, dict) else False
+    flag17 = bool(flags.get("flag17")) if isinstance(flags, dict) else False
+    if flag16 or flag17:
+        return False
+    source_gate = item.get("sourceGate232")
+    try:
+        if int(source_gate) == 0:
+            return False
+    except (TypeError, ValueError):
+        pass
+    clip_valid = (
+        bool(flags.get("clipValid21"))
+        if isinstance(flags, dict) else False
+    )
+    rect = (
+        item.get("buildClipRect", item.get("clipRect"))
+        if clip_valid else item.get("paintBox")
+    )
+    if not clip_valid:
+        viewport = item.get("viewportRect")
+        if isinstance(rect, list) and len(rect) == 4 and \
+                isinstance(viewport, list) and len(viewport) == 4:
+            try:
+                v_left, v_top, v_right, v_bottom = (
+                    float(value) for value in viewport)
+                left, top, right, bottom = (float(value) for value in rect)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if v_right >= v_left and v_bottom >= v_top:
+                    rect = [
+                        max(left, math.floor(v_left)),
+                        max(top, math.floor(v_top)),
+                        min(right, math.ceil(v_right)),
+                        min(bottom, math.ceil(v_bottom)),
+                    ]
     if not isinstance(rect, list) or len(rect) != 4:
         return False
     try:
@@ -699,12 +749,22 @@ def add_oracle_execute_checkpoint_images(
                     width=int(checkpoint["width"]),
                     height=int(checkpoint["height"]),
                 )
-                images.append(png_manifest_entry(
+                entry = png_manifest_entry(
                     frame=local_frame,
                     phase=phase,
                     path=path,
                     rel=rel,
-                ))
+                )
+                diagnostics = checkpoint.get("diagnostics")
+                if isinstance(diagnostics, dict) and diagnostics:
+                    entry["diagnostics"] = {
+                        "rawCheckpoint": diagnostics,
+                    }
+                images.append(entry)
+                try:
+                    Path(raw_path_value).unlink()
+                except FileNotFoundError:
+                    pass
             phases[phase] = images
             total_added += len(images)
 

@@ -254,16 +254,45 @@ function readVariantObject(variantPtr) {
     try {
         const variant = ptr(variantPtr);
         if (variant.isNull()) {
-            return { object: null, type: null, error: 'null variant' };
+            return {
+                object: null,
+                objThis: null,
+                type: null,
+                error: 'null variant',
+            };
         }
         const type = readS32(variant, 16);
         const object = readPointer(variant, 0);
         if (object === null) {
-            return { object: null, type: type, error: 'variant object is null' };
+            return {
+                object: null,
+                objThis: null,
+                type: type,
+                error: 'variant object is null',
+            };
         }
-        return { object: object, type: type, error: null };
+        return {
+            object: object,
+            objThis: readPointer(variant, 8),
+            type: type,
+            error: null,
+        };
     } catch (e) {
-        return { object: null, type: null, error: String(e) };
+        return {
+            object: null,
+            objThis: null,
+            type: null,
+            error: String(e),
+        };
+    }
+}
+
+function ptrEqual(a, b) {
+    if (!a || !b) return false;
+    try {
+        return ptr(a).equals(ptr(b));
+    } catch (e) {
+        return false;
     }
 }
 
@@ -568,11 +597,16 @@ function drawPathSummary(ctx) {
 }
 
 function beginDrawContext(player, argVariant) {
+    const targetVariant = readVariantObject(argVariant);
     const ctx = {
         drawId: drawIdCounter++,
         player: player,
         playerHex: ptrHex(player),
         argVariant: argVariant,
+        targetObject: targetVariant.object,
+        targetObjThis: targetVariant.objThis,
+        targetVariantType: targetVariant.type,
+        targetVariantError: targetVariant.error,
         steps: [],
         emittedSteps: {},
         route: null,
@@ -621,6 +655,10 @@ function emitDrawStep(ctx, drawStep, outcome, route, extra) {
         addr: PLAYER_DRAW_COMPAT_OFF,
         player: ctx.playerHex,
         argVariant: ptrHex(ctx.argVariant),
+        targetVariantType: ctx.targetVariantType,
+        targetObject: ptrHex(ctx.targetObject),
+        targetObjThis: ptrHex(ctx.targetObjThis),
+        targetError: ctx.targetVariantError,
     }, 'Player_drawCompat_0x6D5FB8.' + drawStep);
 }
 
@@ -1031,6 +1069,8 @@ function readRectS32(p, off) {
 
 function readRenderItem(itemPtr, index) {
     const item = ptr(itemPtr);
+    const paintBox = readRectF(item, 184);
+    const buildClipRect = readRectF(item, 216);
     return {
         index: index,
         item: ptrHex(item),
@@ -1046,10 +1086,14 @@ function readRenderItem(itemPtr, index) {
             primary: readS32(item, 52),
             secondary: readS32(item, 56),
         },
-        clipRect: readRectF(item, 184),
+        sortKey64: readDouble(item, 64),
+        paintBox: paintBox,
+        clipRect: buildClipRect,
+        buildClipRect: buildClipRect,
         viewportRect: readRectF(item, 200),
         diagnostics: {
-            itemPlus216Rect: readRectS32(item, 216),
+            itemPlus184PaintBox: paintBox,
+            itemPlus216BuildClipRect: buildClipRect,
         },
         sourceGate232: readU32(item, 232),
         stencilType244: readU32(item, 244),
@@ -1238,6 +1282,10 @@ function installHook() {
                 addr: PLAYER_DRAW_COMPAT_OFF,
                 player: ptrHex(this.player),
                 argVariant: ptrHex(this.argVariant),
+                targetVariantType: this.drawCtx.targetVariantType,
+                targetObject: ptrHex(this.drawCtx.targetObject),
+                targetObjThis: ptrHex(this.drawCtx.targetObjThis),
+                targetError: this.drawCtx.targetVariantError,
                 rawArgs: {
                     arg0: ptrHex(args[0]),
                     arg1: ptrHex(args[1]),
@@ -1257,6 +1305,14 @@ function installHook() {
                 addr: PLAYER_DRAW_COMPAT_OFF,
                 player: ptrHex(this.player),
                 argVariant: ptrHex(this.argVariant),
+                targetVariantType: this.drawCtx
+                    ? this.drawCtx.targetVariantType : null,
+                targetObject: this.drawCtx
+                    ? ptrHex(this.drawCtx.targetObject) : null,
+                targetObjThis: this.drawCtx
+                    ? ptrHex(this.drawCtx.targetObjThis) : null,
+                targetError: this.drawCtx
+                    ? this.drawCtx.targetVariantError : null,
             }, 'Player_drawCompat_0x6D5FB8.leave');
             finishDrawContext(this.drawCtx);
             leaveRenderContext(this.ctx);
@@ -1422,6 +1478,10 @@ function installHook() {
             this.targetVariant = args[1];
             this.targetVariantObject = readVariantObject(this.targetVariant);
             this.target = this.targetVariantObject.object;
+            this.drawCtx = currentDrawContextFor(this.player);
+            this.targetMatchesDrawArg = this.drawCtx
+                ? ptrEqual(this.target, this.drawCtx.targetObject)
+                : null;
             this.mainList = args[2];
             this.auxList = args[3];
             sendRenderImageCheckpoint(
@@ -1435,7 +1495,11 @@ function installHook() {
                 targetVariant: ptrHex(this.targetVariant),
                 targetVariantType: this.targetVariantObject.type,
                 target: ptrHex(this.target),
+                targetObjThis: ptrHex(this.targetVariantObject.objThis),
                 targetError: this.targetVariantObject.error,
+                drawTarget: this.drawCtx
+                    ? ptrHex(this.drawCtx.targetObject) : null,
+                targetMatchesDrawArg: this.targetMatchesDrawArg,
                 mainListPtr: ptrHex(this.mainList),
                 auxListPtr: ptrHex(this.auxList),
             }, 'sub_6C7440.enter');
@@ -1455,7 +1519,11 @@ function installHook() {
                 targetVariant: ptrHex(this.targetVariant),
                 targetVariantType: this.targetVariantObject.type,
                 target: ptrHex(this.target),
+                targetObjThis: ptrHex(this.targetVariantObject.objThis),
                 targetError: this.targetVariantObject.error,
+                drawTarget: this.drawCtx
+                    ? ptrHex(this.drawCtx.targetObject) : null,
+                targetMatchesDrawArg: this.targetMatchesDrawArg,
             }, 'sub_6C7440.leave');
             sendRenderImageCheckpoint(
                 this.player, this.target, 'execute_post',

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <iomanip>
@@ -218,9 +219,13 @@ void appendPreparedItemJson(
     out += std::to_string(item.layerId);
     out += ",\"secondary\":";
     out += std::to_string(item.layerId2);
-    out += "},\"paintBox\":";
+    out += "},\"sortKey64\":";
+    out += std::to_string(item.sortKey);
+    out += ",\"paintBox\":";
     appendNumberArray(out, item.paintBox);
     out += ",\"clipRect\":";
+    appendNumberArray(out, item.clipRect);
+    out += ",\"buildClipRect\":";
     appendNumberArray(out, item.clipRect);
     out += ",\"dirtyRect\":";
     appendNumberArray(out, item.dirtyRect);
@@ -303,9 +308,28 @@ void appendRenderItemsPayload(std::string &out,
     auto hasValidClipRect = [](const std::array<int, 4> &rect) {
         return rect[0] < rect[2] && rect[1] < rect[3];
     };
+    auto hasValidPaintOrViewportRect =
+        [](const motion::detail::PlayerRuntime::PreparedRenderItem &item) {
+        if(item.rawFlag16 || item.skipFlag0 || item.opacity <= 0) return false;
+        float left = item.paintBox[0];
+        float top = item.paintBox[1];
+        float right = item.paintBox[2];
+        float bottom = item.paintBox[3];
+        if(item.hasViewport && item.viewport[2] >= item.viewport[0] &&
+           item.viewport[3] >= item.viewport[1]) {
+            left = std::max(left, std::floor(item.viewport[0]));
+            top = std::max(top, std::floor(item.viewport[1]));
+            right = std::min(right, std::ceil(item.viewport[2]));
+            bottom = std::min(bottom, std::ceil(item.viewport[3]));
+        }
+        return left < right && top < bottom;
+    };
     if(runtime) {
         for(const auto &item : runtime->preparedRenderItems) {
-            if(hasValidClipRect(item.clipRect)) ++validDrawableCount;
+            if((item.rawFlag21 && hasValidClipRect(item.clipRect)) ||
+               (!item.rawFlag21 && hasValidPaintOrViewportRect(item))) {
+                ++validDrawableCount;
+            }
             if(item.leafBuilt) ++leafBuiltCount;
             if(item.composedBuilt) ++composedBuiltCount;
         }

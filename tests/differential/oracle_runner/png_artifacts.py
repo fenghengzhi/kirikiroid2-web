@@ -56,14 +56,8 @@ def write_bgra_png(
             f"raw BGRA size mismatch for {raw_path}: "
             f"got {len(data)}, expected {expected}"
         )
-    rgba = bytearray(expected)
-    for i in range(0, expected, 4):
-        rgba[i + 0] = data[i + 2]
-        rgba[i + 1] = data[i + 1]
-        rgba[i + 2] = data[i + 0]
-        rgba[i + 3] = data[i + 3]
     path.parent.mkdir(parents=True, exist_ok=True)
-    image = Image.frombytes("RGBA", (width, height), bytes(rgba))
+    image = Image.frombytes("RGBA", (width, height), data, "raw", "BGRA")
     image.save(path, "PNG")
 
 

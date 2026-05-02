@@ -1089,10 +1089,14 @@ namespace motion {
 
             RenderClipRect clipRect;
             std::string clipFailureReason;
-            const bool drawableGate = !entry.rawFlag16;
-            if(!drawableGate ||
-               !computeRenderClipRect(entry, canvasWidth, canvasHeight, clipRect,
-                                      &clipFailureReason)) {
+            const bool drawableGate = entry.drawFlag && !entry.rawFlag16;
+            if(!entry.drawFlag) {
+                // libkrkr2.so sub_6C4E28 only materializes item+21 and
+                // item+216..228 for item+19 entries. Ordinary direct items are
+                // clipped and submitted later by sub_6C7440 from item+184..212.
+            } else if(!drawableGate ||
+                      !computeRenderClipRect(entry, canvasWidth, canvasHeight,
+                                             clipRect, &clipFailureReason)) {
                 detail::logoChainTraceCheck(
                     motionPath, "renderItem.clip", "0x6C4E28",
                     _clampedEvalTime,
@@ -1628,6 +1632,25 @@ namespace motion {
             }
             return nullptr;
         };
+        auto targetDrawableRect =
+            [&](const PreparedRenderItem &item,
+                RenderClipRect *outRect = nullptr) -> bool {
+            if(item.rawFlag16 || item.skipFlag0 || item.opacity <= 0) {
+                return false;
+            }
+            RenderClipRect rect;
+            if(!computeRenderClipRect(
+                   item,
+                   renderLayer ? static_cast<int>(renderLayer->GetWidth()) : 0,
+                   renderLayer ? static_cast<int>(renderLayer->GetHeight()) : 0,
+                   rect)) {
+                return false;
+            }
+            if(outRect) {
+                *outRect = rect;
+            }
+            return true;
+        };
 
         auto buildItemOutput = [&](auto &&self, PreparedRenderItem *itemPtr) -> bool {
             if(!itemPtr) {
@@ -1637,13 +1660,16 @@ namespace motion {
             if(item.executedDirect || item.leafBuilt || item.composedBuilt) {
                 return true;
             }
-            if(!item.rawFlag21) {
+            RenderClipRect directTargetRect;
+            const bool hasDirectTargetRect =
+                targetDrawableRect(item, &directTargetRect);
+            if(!item.rawFlag21 && !hasDirectTargetRect) {
                 return false;
             }
 
             const int clipWidth = item.clipRect[2] - item.clipRect[0];
             const int clipHeight = item.clipRect[3] - item.clipRect[1];
-            if(clipWidth <= 0 || clipHeight <= 0) {
+            if(item.rawFlag21 && (clipWidth <= 0 || clipHeight <= 0)) {
                 return false;
             }
 
@@ -1688,8 +1714,16 @@ namespace motion {
                 !hasChildren && item.parentItem == nullptr;
             if(useDirectRenderPath) {
                 item.executedDirect = true;
-                item.builtRect = item.clipRect;
+                item.builtRect = {
+                    directTargetRect.left,
+                    directTargetRect.top,
+                    directTargetRect.right,
+                    directTargetRect.bottom,
+                };
                 return true;
+            }
+            if(!item.rawFlag21) {
+                return false;
             }
 
             iTJSDispatch2 *leafLayerObject = ensureLeafItemLayer(item);
@@ -1817,7 +1851,10 @@ namespace motion {
         };
 
         for(auto &item : _runtime->preparedRenderItems) {
-            if(!item.topLevelList || !item.rawFlag21 || item.rawFlag16) {
+            if(!item.topLevelList || item.rawFlag16) {
+                continue;
+            }
+            if(!item.rawFlag21 && !targetDrawableRect(item)) {
                 continue;
             }
             buildItemOutput(buildItemOutput, &item);
@@ -1849,7 +1886,7 @@ namespace motion {
                 continue;
             }
 
-            if(!item.rawFlag21) {
+            if(!item.rawFlag21 && !targetDrawableRect(item)) {
                 continue;
             }
             // libkrkr2.so 0x6C7440 reads item+17/item+16/item+18 in the
