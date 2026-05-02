@@ -579,7 +579,7 @@
                 <div id="picker-divider" class="picker-divider" style="display:none">or load a copy into memory</div>
                 <button id="pick-file-btn">Select .xp3 File</button>
                 <button id="pick-dir-btn">Upload Folder</button>
-@KRKR2_DEBUG_OPEN_ZIP_BUTTON@
+                <button id="pick-zip-btn" style="display:none">Select .zip File</button>
             </div>
             <div id="picker-status"></div>
             <div id="picker-progress"><div id="picker-progress-fill"></div></div>
@@ -596,7 +596,7 @@
 
     <input type="file" id="file-input" style="display:none;">
     <input type="file" id="dir-input" webkitdirectory style="display:none;">
-@KRKR2_DEBUG_OPEN_ZIP_INPUT@
+    <input type="file" id="zip-input" accept=".zip,application/zip,application/x-zip-compressed" style="display:none;">
 
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin="anonymous"></script>
     <script>
@@ -740,6 +740,11 @@
         var xp3Url = urlParams.get('xp3');
         var gameZipUrl = urlParams.get('game');
         var entryXp3 = urlParams.get('entry');
+        var localZipPickerEnabled = @KRKR2_LOCAL_ZIP_PICKER_DEFAULT_VISIBLE@ || urlParams.has('pickZip');
+
+        if (localZipPickerEnabled) {
+            document.getElementById('pick-zip-btn').style.display = '';
+        }
 
         // Show File System API button when supported
         if (hasFileSystemAPI) {
@@ -1367,6 +1372,27 @@
             }
         }
 
+        async function handleZipFile(file) {
+            try {
+                setPickerProgress(0, 'Reading ' + file.name + '...');
+                var zipData = await readFileWithProgress(file);
+                setPickerProgress(50, 'Extracting archive...');
+                var zip = await JSZip.loadAsync(zipData);
+                zipData = null;
+
+                var xp3Paths = await extractZipEntriesToFS(collectZipEntries(zip), function(pct, text) {
+                    setPickerProgress(50 + Math.round(pct * 0.5), text);
+                });
+
+                setPickerProgress(100, 'Starting...');
+                checkAndStartGame(xp3Paths, '');
+            } catch (err) {
+                pickerStatus.textContent = 'Error: ' + err.message;
+                pickerProgress.classList.remove('visible');
+                console.error('handleZipFile error:', err);
+            }
+        }
+
         async function handleFolder(files) {
             var total = files.length;
             try {
@@ -1411,6 +1437,11 @@
                 document.getElementById('dir-input').click();
             });
         });
+        document.getElementById('pick-zip-btn').addEventListener('click', function() {
+            ensureSpaceThen(function() {
+                document.getElementById('zip-input').click();
+            });
+        });
 
         document.getElementById('file-input').addEventListener('change', function(e) {
             var file = e.target.files[0];
@@ -1424,7 +1455,11 @@
             e.target.value = '';
         });
 
-@KRKR2_DEBUG_OPEN_ZIP_SCRIPT@
+        document.getElementById('zip-input').addEventListener('change', function(e) {
+            var file = e.target.files[0];
+            if (file) handleZipFile(file);
+            e.target.value = '';
+        });
 
         // Drag & drop
         var dropZone = document.getElementById('drop-zone');
