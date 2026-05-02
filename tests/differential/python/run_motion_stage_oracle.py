@@ -510,10 +510,8 @@ def _semantic_render_item(item: dict[str, Any]) -> dict[str, Any]:
         "sourceGate232": item.get("sourceGate232"),
         "stencilType244": item.get("stencilType244"),
         "parentItemIndex": item.get("parentItemIndex"),
-        "parentCommandIndex": item.get("parentCommandIndex"),
         "parentItem264": item.get("parentItem264"),
         "childItemCount": item.get("childItemCount"),
-        "childCommandCount": item.get("childCommandCount"),
         "meshType280": item.get("meshType280"),
         "leafLayerVariantTag": item.get("leafLayerVariantTag"),
         "composedLayerVariantTag": item.get("composedLayerVariantTag"),
@@ -525,19 +523,41 @@ def _semantic_render_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _has_valid_clip_rect(item: dict[str, Any]) -> bool:
+    rect = item.get("clipRect")
+    if not isinstance(rect, list) or len(rect) != 4:
+        return False
+    try:
+        left, top, right, bottom = (float(value) for value in rect)
+    except (TypeError, ValueError):
+        return False
+    return left < right and top < bottom
+
+
 def _build_flow_summary(event: dict[str, Any]) -> dict[str, Any]:
     if isinstance(event.get("buildFlow"), dict):
         return dict(event["buildFlow"])
-    render_commands = event.get("renderCommands")
-    if isinstance(render_commands, list):
-        commands = [_semantic_render_item(item)
-                    for item in render_commands if isinstance(item, dict)]
+    main_items = event.get("mainListSemanticItems")
+    if isinstance(main_items, list):
+        main_semantic_items = [
+            _semantic_render_item(item)
+            for item in main_items if isinstance(item, dict)
+        ]
+        aux_items = event.get("auxListSemanticItems")
+        aux_semantic_items = [
+            _semantic_render_item(item)
+            for item in aux_items if isinstance(item, dict)
+        ] if isinstance(aux_items, list) else []
         return {
-            "inputItemCount": event.get("preparedItemCount"),
-            "renderCommandCount": event.get("renderCommandCount", len(commands)),
-            "topLevelCommandCount": event.get("topLevelCommandCount"),
-            "groupCommandCount": event.get("groupCommandCount"),
-            "commands": commands,
+            "inputItemCount": event.get("inputItemCount"),
+            "builtItemCount": event.get("builtItemCount",
+                                        len(main_semantic_items)),
+            "validDrawableItemCount": event.get("validDrawableItemCount"),
+            "leafBuiltCount": event.get("leafBuiltCount"),
+            "composedBuiltCount": event.get("composedBuiltCount"),
+            "mainListSemanticItems": main_semantic_items,
+            "auxListSemanticItems": aux_semantic_items,
+            "items": main_semantic_items,
         }
     render_lists = event.get("renderLists")
     main_list = (
@@ -545,17 +565,21 @@ def _build_flow_summary(event: dict[str, Any]) -> dict[str, Any]:
         if isinstance(render_lists, dict) else None
     )
     items = main_list.get("items") if isinstance(main_list, dict) else []
-    commands = [
+    semantic_items = [
         _semantic_render_item(item)
         for item in items if isinstance(item, dict)
     ]
     return {
         "inputItemCount": main_list.get("count")
         if isinstance(main_list, dict) else None,
-        "renderCommandCount": len(commands),
-        "topLevelCommandCount": None,
-        "groupCommandCount": None,
-        "commands": commands,
+        "builtItemCount": len(semantic_items),
+        "validDrawableItemCount": sum(
+            1 for item in semantic_items if _has_valid_clip_rect(item)),
+        "leafBuiltCount": None,
+        "composedBuiltCount": None,
+        "mainListSemanticItems": semantic_items,
+        "auxListSemanticItems": [],
+        "items": semantic_items,
     }
 
 

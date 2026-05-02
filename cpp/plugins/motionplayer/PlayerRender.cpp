@@ -494,11 +494,12 @@ namespace {
     }
 
     bool shouldUseDirectRenderPathLike_0x6C7440(
-        const motion::detail::PlayerRuntime::RenderCommand &command) {
+        const motion::detail::PlayerRuntime::PreparedRenderItem &item,
+        bool clearEnabled) {
         const unsigned lowNibble =
-            static_cast<unsigned>(command.blendMode) & 0x0Fu;
-        return !command.clearEnabled &&
-            command.visibleAncestorIndex < 0 &&
+            static_cast<unsigned>(item.blendMode) & 0x0Fu;
+        return !clearEnabled &&
+            item.visibleAncestorIndex < 0 &&
             (lowNibble == 0u || lowNibble > 5u);
     }
 
@@ -570,10 +571,16 @@ namespace {
                                int canvasWidth, int canvasHeight,
                                RenderClipRect &out,
                                std::string *failureReason = nullptr) {
-        float clipLeft = std::max(0.0f, entry.paintBox[0]);
-        float clipTop = std::max(0.0f, entry.paintBox[1]);
-        float clipRight = std::min(static_cast<float>(canvasWidth), entry.paintBox[2]);
-        float clipBottom = std::min(static_cast<float>(canvasHeight), entry.paintBox[3]);
+        (void)canvasWidth;
+        (void)canvasHeight;
+        // sub_6C4E28 writes the render item's own paint/viewport bounds to
+        // the build-stage clip rect. It does not clamp this intermediate
+        // Layer rect to the final target canvas; final target clipping
+        // happens when the prepared Layer is submitted by sub_6C7440.
+        float clipLeft = entry.paintBox[0];
+        float clipTop = entry.paintBox[1];
+        float clipRight = entry.paintBox[2];
+        float clipBottom = entry.paintBox[3];
 
         if(entry.hasViewport && entry.viewport[2] >= entry.viewport[0]
            && entry.viewport[3] >= entry.viewport[1]) {
@@ -586,23 +593,22 @@ namespace {
         if(!(clipLeft < clipRight && clipTop < clipBottom)) {
             if(failureReason) {
                 *failureReason = fmt::format(
-                    "invalid_intersection paintBox=[{:.3f},{:.3f},{:.3f},{:.3f}] viewport={} canvas=[0,0,{},{}]",
+                    "invalid_intersection paintBox=[{:.3f},{:.3f},{:.3f},{:.3f}] viewport={}",
                     entry.paintBox[0], entry.paintBox[1], entry.paintBox[2],
                     entry.paintBox[3],
                     entry.hasViewport
                         ? fmt::format("[{:.3f},{:.3f},{:.3f},{:.3f}]",
                                       entry.viewport[0], entry.viewport[1],
                                       entry.viewport[2], entry.viewport[3])
-                        : std::string("<invalid default>"),
-                    canvasWidth, canvasHeight);
+                        : std::string("<invalid default>"));
             }
             return false;
         }
 
-        out.left = static_cast<int>(clipLeft);
-        out.top = static_cast<int>(clipTop);
-        out.right = static_cast<int>(clipRight);
-        out.bottom = static_cast<int>(clipBottom);
+        out.left = static_cast<int>(floorf(clipLeft));
+        out.top = static_cast<int>(floorf(clipTop));
+        out.right = static_cast<int>(ceilf(clipRight));
+        out.bottom = static_cast<int>(ceilf(clipBottom));
         if(failureReason) {
             failureReason->clear();
         }
@@ -617,11 +623,11 @@ namespace {
         return config->GetValue<bool>("ogl_accurate_render", false);
     }
 
-    tTVPRect localRectFromCommand(
-        const motion::detail::PlayerRuntime::RenderCommand &command) {
+    tTVPRect localRectFromItem(
+        const motion::detail::PlayerRuntime::PreparedRenderItem &item) {
         return tTVPRect(0, 0,
-                        command.clipRect[2] - command.clipRect[0],
-                        command.clipRect[3] - command.clipRect[1]);
+                        item.clipRect[2] - item.clipRect[0],
+                        item.clipRect[3] - item.clipRect[1]);
     }
 
     bool clearLayerAlphaOutsideRect(tTJSNI_BaseLayer *layer,
@@ -1062,93 +1068,67 @@ namespace motion {
             return false;
         }
 
-        _runtime->renderCommands.clear();
-        _runtime->renderCommandsTopLevel.clear();
-        _runtime->renderCommandsGroup.clear();
+        _runtime->preparedRenderItemsTopLevel.clear();
+        _runtime->preparedRenderItemsGroup.clear();
         const auto motionPath =
             _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
-        for(const auto &entry : _runtime->preparedRenderItems) {
-            // Render gate — aligned to sub_6C7440 @ 0x6C7440 (libkrkr2.so).
-            // Path A main iteration does NOT read drawFlag (node+1960 /
-            // item+19); that field is a Path B product (sub_6BD8DC) used by
-            // Player_calcBounds and type3 propagate. Membership in mainList
-            // (i.e. being present in preparedRenderItems, gated by nodeType
-            // mask 0x1441/0x1449 upstream) is the render decision.
-            if(entry.opacity <= 0) {
-                continue;
-            }
+        for(auto &entry : _runtime->preparedRenderItems) {
+            // libkrkr2.so sub_6C4E28 works in-place on the render item list
+            // built by sub_6C2334. Keep every item in the list and write
+            // +20/+21/clip/local geometry products onto PreparedRenderItem.
+            entry.rawFlag20 = false;
+            entry.rawFlag21 = false;
+            entry.clipRect = {0, 0, 0, 0};
+            entry.dirtyRect = {0, 0, 0, 0};
+            entry.localCorners = {};
+            entry.localMeshPoints.clear();
+            entry.builtRect = {0, 0, 0, 0};
+            entry.leafBuilt = false;
+            entry.composedBuilt = false;
+            entry.executedDirect = false;
 
-            detail::PlayerRuntime::RenderCommand command;
-            command.nodeIndex = entry.nodeIndex;
-            command.srcRef = entry.srcRef;
-            command.sourceKey = entry.sourceKey;
-            command.hasOwnSource = entry.hasOwnSource;
-            command.groupOnly = entry.groupOnly;
-            command.topLevelList = entry.topLevelList;
-            command.groupList = entry.groupList;
-            command.rawFlag16 = entry.rawFlag16;
-            command.rawFlag17 = entry.skipFlag0;
-            command.rawFlag18 = !entry.skipFlag1;
-            command.rawFlag19 = entry.drawFlag;
-            command.rawFlag20 = false;
-            command.rawFlag21 = false;
-            command.blendMode = entry.blendMode;
-            command.contextVariant = entry.contextVariant;
-            command.opacity = entry.opacity;
-            command.itemFlags = entry.stencilComposite;
-            command.parentNodeIndex = entry.visibleAncestorIndex;
-            command.preparedItem = &entry;
-            command.packedColors = entry.packedColors;
-            command.visibleAncestorIndex = entry.visibleAncestorIndex;
-            command.clearEnabled = _clearEnabled;
-            command.meshType = entry.meshType;
-            command.meshDivX = entry.meshDivX;
-            command.meshDivY = entry.meshDivY;
-            command.layerId = entry.layerId;
-            command.layerId2 = entry.layerId2;
-            command.worldCorners = entry.corners;
-            command.worldMeshPoints = entry.meshPoints;
             RenderClipRect clipRect;
             std::string clipFailureReason;
-            if(!computeRenderClipRect(entry, canvasWidth, canvasHeight, clipRect,
+            const bool drawableGate = !entry.rawFlag16;
+            if(!drawableGate ||
+               !computeRenderClipRect(entry, canvasWidth, canvasHeight, clipRect,
                                       &clipFailureReason)) {
                 detail::logoChainTraceCheck(
-                    motionPath, "renderCommand.clip", "0x6C4E28",
+                    motionPath, "renderItem.clip", "0x6C4E28",
                     _clampedEvalTime,
                     fmt::format(
-                        "paintBox∩viewport∩canvas exp paintBox=[{:.3f},{:.3f},{:.3f},{:.3f}] viewport={} canvas=[0,0,{},{}]",
+                        "paintBox∩viewport exp paintBox=[{:.3f},{:.3f},{:.3f},{:.3f}] viewport={}",
                         entry.paintBox[0], entry.paintBox[1], entry.paintBox[2],
                         entry.paintBox[3],
                         entry.hasViewport
                             ? fmt::format("[{:.3f},{:.3f},{:.3f},{:.3f}]",
                                           entry.viewport[0], entry.viewport[1],
                                           entry.viewport[2], entry.viewport[3])
-                            : std::string("<invalid default>"),
-                        canvasWidth, canvasHeight),
+                            : std::string("<invalid default>")),
                     fmt::format("nodeIndex={} act=<invalid:{}>",
                                 entry.nodeIndex, clipFailureReason),
                     false,
                     "sub_6C4E28 produced an invalid local clip rect");
             } else {
-                command.rawFlag21 = true;
-                command.clipRect = {
+                entry.rawFlag21 = true;
+                entry.clipRect = {
                     clipRect.left, clipRect.top, clipRect.right, clipRect.bottom
                 };
-                command.dirtyRect = command.clipRect;
+                entry.dirtyRect = entry.clipRect;
 
                 for(size_t ci = 0; ci < entry.corners.size(); ci += 2) {
-                    command.localCorners[ci] =
+                    entry.localCorners[ci] =
                         entry.corners[ci] - 0.5f - static_cast<float>(clipRect.left);
-                    command.localCorners[ci + 1] =
+                    entry.localCorners[ci + 1] =
                         entry.corners[ci + 1] - 0.5f - static_cast<float>(clipRect.top);
                 }
 
-                command.localMeshPoints.reserve(entry.meshPoints.size());
+                entry.localMeshPoints.reserve(entry.meshPoints.size());
                 for(size_t pi = 0; pi + 1 < entry.meshPoints.size(); pi += 2) {
-                    command.localMeshPoints.push_back(
+                    entry.localMeshPoints.push_back(
                         entry.meshPoints[pi] - 0.5f -
                         static_cast<float>(clipRect.left));
-                    command.localMeshPoints.push_back(
+                    entry.localMeshPoints.push_back(
                         entry.meshPoints[pi + 1] - 0.5f -
                         static_cast<float>(clipRect.top));
                 }
@@ -1161,28 +1141,28 @@ namespace motion {
                     expectedLocalCorners[ci + 1] =
                         entry.corners[ci + 1] - 0.5f - static_cast<float>(clipRect.top);
                     if(std::fabs(expectedLocalCorners[ci] -
-                                 command.localCorners[ci]) > 0.01f ||
+                                 entry.localCorners[ci]) > 0.01f ||
                        std::fabs(expectedLocalCorners[ci + 1] -
-                                 command.localCorners[ci + 1]) > 0.01f) {
+                                 entry.localCorners[ci + 1]) > 0.01f) {
                         cornersOk = false;
                     }
                 }
                 detail::logoChainTraceCheck(
-                    motionPath, "renderCommand.clip", "0x6C4E28",
+                    motionPath, "renderItem.clip", "0x6C4E28",
                     _clampedEvalTime,
                     fmt::format(
-                        "paintBox∩viewport∩canvas exp=[{},{},{},{}]",
+                        "paintBox∩viewport exp=[{},{},{},{}]",
                         clipRect.left, clipRect.top, clipRect.right,
                         clipRect.bottom),
                     fmt::format(
                         "nodeIndex={} act=[{},{},{},{}]",
-                        entry.nodeIndex, command.clipRect[0],
-                        command.clipRect[1], command.clipRect[2],
-                        command.clipRect[3]),
+                        entry.nodeIndex, entry.clipRect[0],
+                        entry.clipRect[1], entry.clipRect[2],
+                        entry.clipRect[3]),
                     true,
                     "sub_6C4E28 clip rect diverged from expected intersection");
                 detail::logoChainTraceCheck(
-                    motionPath, "renderCommand.localCorners", "0x6C4E28",
+                    motionPath, "renderItem.localCorners", "0x6C4E28",
                     _clampedEvalTime,
                     fmt::format(
                         "corners-0.5-clipOrigin exp=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
@@ -1193,85 +1173,29 @@ namespace motion {
                     fmt::format(
                         "nodeIndex={} act=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
                         entry.nodeIndex,
-                        command.localCorners[0], command.localCorners[1],
-                        command.localCorners[2], command.localCorners[3],
-                        command.localCorners[4], command.localCorners[5],
-                        command.localCorners[6], command.localCorners[7]),
+                        entry.localCorners[0], entry.localCorners[1],
+                        entry.localCorners[2], entry.localCorners[3],
+                        entry.localCorners[4], entry.localCorners[5],
+                        entry.localCorners[6], entry.localCorners[7]),
                     cornersOk,
                     "sub_6C4E28 local corner translation diverged from clip-local expectation");
             }
 
-            _runtime->renderCommands.push_back(std::move(command));
-        }
-
-        std::unordered_map<const detail::PlayerRuntime::PreparedRenderItem *,
-                           detail::PlayerRuntime::RenderCommand *>
-            commandByPreparedItem;
-        commandByPreparedItem.reserve(_runtime->renderCommands.size());
-        for(size_t i = 0; i < _runtime->renderCommands.size(); ++i) {
-            _runtime->renderCommands[i].childCommandPtrs.clear();
-            _runtime->renderCommands[i].parentCommand = nullptr;
-            _runtime->renderCommands[i].leafBuilt = false;
-            _runtime->renderCommands[i].composedBuilt = false;
-            _runtime->renderCommands[i].executedDirect = false;
-            _runtime->renderCommands[i].builtRect = {0, 0, 0, 0};
-            commandByPreparedItem.emplace(_runtime->renderCommands[i].preparedItem,
-                                          &_runtime->renderCommands[i]);
-        }
-        _runtime->renderCommandsTopLevel.reserve(_runtime->renderCommands.size());
-        _runtime->renderCommandsGroup.reserve(_runtime->renderCommands.size());
-        for(auto &command : _runtime->renderCommands) {
-            if(command.groupList) {
-                _runtime->renderCommandsGroup.push_back(&command);
+            if(entry.groupList) {
+                _runtime->preparedRenderItemsGroup.push_back(&entry);
             }
-            if(command.topLevelList) {
-                _runtime->renderCommandsTopLevel.push_back(&command);
-            }
-        }
-        for(size_t i = 0; i < _runtime->renderCommands.size(); ++i) {
-            const auto *preparedItem = _runtime->renderCommands[i].preparedItem;
-            if(!preparedItem || !preparedItem->parentItem) {
-                continue;
-            }
-            if(const auto it =
-                   commandByPreparedItem.find(preparedItem->parentItem);
-               it != commandByPreparedItem.end()) {
-                auto &parentCommand = *it->second;
-                auto &childCommand = _runtime->renderCommands[i];
-                parentCommand.childCommandPtrs.push_back(&childCommand);
-                childCommand.parentCommand = &parentCommand;
-                childCommand.hasRenderParent = true;
-                childCommand.parentNodeIndex = parentCommand.nodeIndex;
-            }
-        }
-        for(auto &command : _runtime->renderCommands) {
-            const auto *preparedItem = command.preparedItem;
-            if(!preparedItem) {
-                continue;
-            }
-            command.childCommandPtrs.clear();
-            for(auto *preparedChild : preparedItem->childItems) {
-                if(!preparedChild) {
-                    continue;
-                }
-                const auto it = commandByPreparedItem.find(preparedChild);
-                if(it == commandByPreparedItem.end() || !it->second) {
-                    continue;
-                }
-                if(it->second == &command) {
-                    continue;
-                }
-                command.childCommandPtrs.push_back(it->second);
+            if(entry.topLevelList) {
+                _runtime->preparedRenderItemsTopLevel.push_back(&entry);
             }
         }
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&
            _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
-            for(size_t i = 0; i < _runtime->renderCommands.size(); ++i) {
-                const auto &command = _runtime->renderCommands[i];
-                if(!(command.nodeIndex == 14 || command.nodeIndex == 15 ||
-                     command.nodeIndex == 19 ||
-                     (command.nodeIndex >= 20 && command.nodeIndex <= 29))) {
+            for(size_t i = 0; i < _runtime->preparedRenderItems.size(); ++i) {
+                const auto &item = _runtime->preparedRenderItems[i];
+                if(!(item.nodeIndex == 14 || item.nodeIndex == 15 ||
+                     item.nodeIndex == 19 ||
+                     (item.nodeIndex >= 20 && item.nodeIndex <= 29))) {
                     continue;
                 }
                 std::fprintf(
@@ -1279,44 +1203,38 @@ namespace motion {
                     "SNAPCMD frame=%.3f order=%zu nodeIndex=%d source=%s groupOnly=%d topLevel=%d groupList=%d rawFlags=[%d,%d,%d,%d,%d,%d] parentNodeIndex=%d hasRenderParent=%d childCount=%zu layerId=(%d,%d) clipRect=[%d,%d,%d,%d] opacity=%d blend=%d\n",
                     _clampedEvalTime,
                     i,
-                    command.nodeIndex,
-                    command.sourceKey.empty() ? "<none>" : command.sourceKey.c_str(),
-                    command.groupOnly ? 1 : 0,
-                    command.topLevelList ? 1 : 0,
-                    command.groupList ? 1 : 0,
-                    command.rawFlag16 ? 1 : 0,
-                    command.rawFlag17 ? 1 : 0,
-                    command.rawFlag18 ? 1 : 0,
-                    command.rawFlag19 ? 1 : 0,
-                    command.rawFlag20 ? 1 : 0,
-                    command.rawFlag21 ? 1 : 0,
-                    command.parentNodeIndex,
-                    command.hasRenderParent ? 1 : 0,
-                    command.childCommandPtrs.size(),
-                    command.layerId,
-                    command.layerId2,
-                    command.clipRect[0], command.clipRect[1],
-                    command.clipRect[2], command.clipRect[3],
-                    command.opacity,
-                    command.blendMode);
+                    item.nodeIndex,
+                    item.sourceKey.empty() ? "<none>" : item.sourceKey.c_str(),
+                    item.groupOnly ? 1 : 0,
+                    item.topLevelList ? 1 : 0,
+                    item.groupList ? 1 : 0,
+                    item.rawFlag16 ? 1 : 0,
+                    item.skipFlag0 ? 1 : 0,
+                    item.skipFlag1 ? 0 : 1,
+                    item.drawFlag ? 1 : 0,
+                    item.rawFlag20 ? 1 : 0,
+                    item.rawFlag21 ? 1 : 0,
+                    item.parentItem ? item.parentItem->nodeIndex
+                                    : item.visibleAncestorIndex,
+                    item.parentItem ? 1 : 0,
+                    item.childItems.size(),
+                    item.layerId,
+                    item.layerId2,
+                    item.clipRect[0], item.clipRect[1],
+                    item.clipRect[2], item.clipRect[3],
+                    item.opacity,
+                    item.blendMode);
             }
         }
 
         detail::logoChainTraceLogf(
-            motionPath, "renderCommand.count", "0x6C4E28",
+            motionPath, "renderItem.count", "0x6C4E28",
             _clampedEvalTime,
-            "canvas={}x{} preparedItems={} renderCommands={} topLevelList={} groupList={}",
+            "canvas={}x{} preparedItems={} topLevelList={} groupList={}",
             canvasWidth, canvasHeight, _runtime->preparedRenderItems.size(),
-            _runtime->renderCommands.size(),
-            _runtime->renderCommandsTopLevel.size(),
-            _runtime->renderCommandsGroup.size());
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderCommands(
-            this, "build_commands_leave",
-            "Player::buildRenderCommands.leave",
-            static_cast<int>(canvasWidth), static_cast<int>(canvasHeight));
-#endif
-        return !_runtime->renderCommands.empty();
+            _runtime->preparedRenderItemsTopLevel.size(),
+            _runtime->preparedRenderItemsGroup.size());
+        return !_runtime->preparedRenderItems.empty();
     }
 
     bool Player::executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
@@ -1358,8 +1276,10 @@ namespace motion {
             static_cast<const void *>(resolveNativeLayer(scratchParent)));
         detail::logoChainTraceLogf(
             motionPath, "execute.begin", "0x6C7440", _clampedEvalTime,
-            "renderCommands={} renderLayer={} scratchOwner={} scratchParent={} skipUpdate={}",
-            _runtime->renderCommands.size(),
+            "renderItems={} topLevelItems={} groupItems={} renderLayer={} scratchOwner={} scratchParent={} skipUpdate={}",
+            _runtime->preparedRenderItems.size(),
+            _runtime->preparedRenderItemsTopLevel.size(),
+            _runtime->preparedRenderItemsGroup.size(),
             static_cast<const void *>(renderLayer),
             static_cast<const void *>(scratchOwner),
             static_cast<const void *>(scratchParent), skipUpdate ? 1 : 0);
@@ -1374,23 +1294,19 @@ namespace motion {
                 "SLA/Layer backend could not resolve native layers before copy");
             return false;
         }
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderImageCheckpoint(
-            this, renderLayerObject, "execute_pre",
-            "Player::executeLayerRenderCommands.execute_pre");
-#endif
 
+        using PreparedRenderItem = detail::PlayerRuntime::PreparedRenderItem;
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             baseSourceCache;
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             preparedSourceCache;
         auto resolveBaseSourceBitmap =
-            [&](const detail::PlayerRuntime::RenderCommand &command)
+            [&](const PreparedRenderItem &item)
                 -> std::shared_ptr<tTVPBaseBitmap> {
-            if(command.sourceKey.empty()) {
+            if(item.sourceKey.empty()) {
                 return nullptr;
             }
-            if(auto it = baseSourceCache.find(command.sourceKey);
+            if(auto it = baseSourceCache.find(item.sourceKey);
                it != baseSourceCache.end()) {
                 return it->second;
             }
@@ -1398,7 +1314,7 @@ namespace motion {
             std::shared_ptr<tTVPBaseBitmap> srcBmp;
             std::string sourceOrigin("unresolved");
             const auto resolvedPath =
-                resolveMotionSourcePath(*_runtime->activeMotion, command.sourceKey);
+                resolveMotionSourcePath(*_runtime->activeMotion, item.sourceKey);
             if(!resolvedPath.IsEmpty()) {
                 ttstr loadPath = resolvedPath;
                 const auto pathString = detail::narrow(resolvedPath);
@@ -1426,7 +1342,7 @@ namespace motion {
                 std::vector<std::uint8_t> decodedPixels;
                 bool decodedPixelsAreBgra = false;
                 const auto *resource = findPSBResourceBySourceName(
-                    *_runtime->activeMotion, command.sourceKey, width, height,
+                    *_runtime->activeMotion, item.sourceKey, width, height,
                     decodedPixels, originX, originY, &decodedPixelsAreBgra);
                 if(resource && width > 0 && height > 0 && !resource->data.empty()) {
                     const auto &pixelData =
@@ -1462,7 +1378,7 @@ namespace motion {
                     srcBmp = bmp;
                     sourceOrigin = fmt::format(
                         "psb:{}:{}x{}:origin=({:.3f},{:.3f}):bgra={}",
-                        command.sourceKey, width, height, originX, originY,
+                        item.sourceKey, width, height, originX, originY,
                         decodedPixelsAreBgra ? 1 : 0);
                 }
             }
@@ -1470,76 +1386,76 @@ namespace motion {
             detail::logoChainTraceLogf(
                 motionPath, "execute.source", "0x6C7440", _clampedEvalTime,
                 "source={} resolve={} bitmap={}x{}",
-                command.sourceKey.empty() ? std::string("<none>")
-                                          : command.sourceKey,
+                item.sourceKey.empty() ? std::string("<none>")
+                                       : item.sourceKey,
                 sourceOrigin,
                 srcBmp ? srcBmp->GetWidth() : 0,
                 srcBmp ? srcBmp->GetHeight() : 0);
 
-            baseSourceCache.emplace(command.sourceKey, srcBmp);
+            baseSourceCache.emplace(item.sourceKey, srcBmp);
             return srcBmp;
         };
         auto resolveSourceBitmap =
-            [&](const detail::PlayerRuntime::RenderCommand &command)
+            [&](const PreparedRenderItem &item)
                 -> std::shared_ptr<tTVPBaseBitmap> {
-            if(command.sourceKey.empty()) {
+            if(item.sourceKey.empty()) {
                 return nullptr;
             }
 
             const bool useHalfAlphaTint =
-                (command.blendMode & 0xF0) == 0x10;
+                (item.blendMode & 0xF0) == 0x10;
             const auto tintKey = fmt::format(
                 "{}|{:08x}|{:08x}|{:08x}|{:08x}|{}",
-                command.sourceKey, command.packedColors[0],
-                command.packedColors[1], command.packedColors[2],
-                command.packedColors[3], useHalfAlphaTint ? 1 : 0);
+                item.sourceKey, item.packedColors[0],
+                item.packedColors[1], item.packedColors[2],
+                item.packedColors[3], useHalfAlphaTint ? 1 : 0);
             if(auto it = preparedSourceCache.find(tintKey);
                it != preparedSourceCache.end()) {
                 return it->second;
             }
 
-            auto srcBmp = resolveBaseSourceBitmap(command);
+            auto srcBmp = resolveBaseSourceBitmap(item);
             if(!srcBmp) {
                 preparedSourceCache.emplace(tintKey, nullptr);
                 return nullptr;
             }
 
             const bool needsTint =
-                !packedColorsAreDefault(command.packedColors[0],
-                                        command.packedColors[1],
-                                        command.packedColors[2],
-                                        command.packedColors[3]) &&
-                !packedColorsAreOpaqueWhite(command.packedColors[0],
-                                            command.packedColors[1],
-                                            command.packedColors[2],
-                                            command.packedColors[3]);
+                !packedColorsAreDefault(item.packedColors[0],
+                                        item.packedColors[1],
+                                        item.packedColors[2],
+                                        item.packedColors[3]) &&
+                !packedColorsAreOpaqueWhite(item.packedColors[0],
+                                            item.packedColors[1],
+                                            item.packedColors[2],
+                                            item.packedColors[3]);
             if(!needsTint) {
                 preparedSourceCache.emplace(tintKey, srcBmp);
                 return srcBmp;
             }
 
             auto tinted = cloneBitmap32(*srcBmp);
-            applyPackedCornerTintLike_0x6A7518(*tinted, command.packedColors,
+            applyPackedCornerTintLike_0x6A7518(*tinted, item.packedColors,
                                               useHalfAlphaTint);
             detail::logoChainTraceLogf(
                 motionPath, "execute.sourceTint", "0x6C1B70/0x6A7518",
                 _clampedEvalTime,
                 "source={} halfAlphaTint={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] bitmap={}x{}",
-                command.sourceKey, useHalfAlphaTint ? 1 : 0,
-                command.packedColors[0], command.packedColors[1],
-                command.packedColors[2], command.packedColors[3],
+                item.sourceKey, useHalfAlphaTint ? 1 : 0,
+                item.packedColors[0], item.packedColors[1],
+                item.packedColors[2], item.packedColors[3],
                 tinted->GetWidth(), tinted->GetHeight());
             preparedSourceCache.emplace(tintKey, tinted);
             return tinted;
         };
 
         const int playerStencilType = _maskMode;
-        auto ensureLeafCommandLayer =
-            [&](detail::PlayerRuntime::RenderCommand &command) -> iTJSDispatch2 * {
-            const tjs_int stateLayerId = command.layerId;
+        auto ensureLeafItemLayer =
+            [&](PreparedRenderItem &item) -> iTJSDispatch2 * {
+            const tjs_int stateLayerId = item.layerId;
             if(stateLayerId == 0) {
                 return ensureReusableLayerObject(
-                    command.leafLayer,
+                    item.leafLayer,
                     scratchOwner,
                     scratchParent,
                     static_cast<tTVPLayerType>(ltAlpha),
@@ -1552,9 +1468,9 @@ namespace motion {
                 state.absolute = _runtime->nextLayerAbsolute++;
                 state.hitThreshold = 256;
                 state.initialized = true;
-                if(command.nodeIndex >= 0 &&
-                   command.nodeIndex < static_cast<int>(_runtime->nodes.size())) {
-                    const auto &node = _runtime->nodes[command.nodeIndex];
+                if(item.nodeIndex >= 0 &&
+                   item.nodeIndex < static_cast<int>(_runtime->nodes.size())) {
+                    const auto &node = _runtime->nodes[item.nodeIndex];
                     state.layerGetter = getLayerGetter(detail::widen(node.layerName));
                 }
             }
@@ -1568,43 +1484,43 @@ namespace motion {
             if(!layerObject) {
                 return nullptr;
             }
-            command.rawFlag20 = true;
+            item.rawFlag20 = true;
 
             setObjectIntProperty(layerObject, TJS_W("absolute"), state.absolute);
             setObjectIntProperty(layerObject, TJS_W("hitThreshold"),
                                  state.hitThreshold);
 
             state.clipRect = {
-                static_cast<float>(command.clipRect[0]),
-                static_cast<float>(command.clipRect[1]),
-                static_cast<float>(command.clipRect[2]),
-                static_cast<float>(command.clipRect[3])
+                static_cast<float>(item.clipRect[0]),
+                static_cast<float>(item.clipRect[1]),
+                static_cast<float>(item.clipRect[2]),
+                static_cast<float>(item.clipRect[3])
             };
             state.worldRect = {
-                command.worldCorners[0], command.worldCorners[1],
-                command.worldCorners[4], command.worldCorners[5]
+                item.corners[0], item.corners[1],
+                item.corners[4], item.corners[5]
             };
             state.localRect = {
-                command.localCorners[0], command.localCorners[1],
-                command.localCorners[4], command.localCorners[5]
+                item.localCorners[0], item.localCorners[1],
+                item.localCorners[4], item.localCorners[5]
             };
-            state.packedColors = command.packedColors;
+            state.packedColors = item.packedColors;
             state.isDirty = true;
 
-            command.leafLayer = state.layerObject;
+            item.leafLayer = state.layerObject;
             return layerObject;
         };
-        auto ensureComposedCommandLayer =
-            [&](detail::PlayerRuntime::RenderCommand &command) -> iTJSDispatch2 * {
+        auto ensureComposedItemLayer =
+            [&](PreparedRenderItem &item) -> iTJSDispatch2 * {
             return ensureReusableLayerObject(
-                command.composedLayer,
+                item.composedLayer,
                 scratchOwner,
                 scratchParent,
                 static_cast<tTVPLayerType>(ltAlpha),
                 false);
         };
-        auto renderCommandSourceToLayer =
-            [&](detail::PlayerRuntime::RenderCommand &command,
+        auto renderItemSourceToLayer =
+            [&](PreparedRenderItem &item,
                 iTJSDispatch2 *targetLayerObject,
                 tTJSNI_BaseLayer *targetLayer,
                 const std::shared_ptr<tTVPBaseBitmap> &srcBmp,
@@ -1613,8 +1529,8 @@ namespace motion {
             if(!targetLayerObject || !targetLayer) {
                 return false;
             }
-            const int clipWidth = command.clipRect[2] - command.clipRect[0];
-            const int clipHeight = command.clipRect[3] - command.clipRect[1];
+            const int clipWidth = item.clipRect[2] - item.clipRect[0];
+            const int clipHeight = item.clipRect[3] - item.clipRect[1];
             if(clipWidth <= 0 || clipHeight <= 0) {
                 return false;
             }
@@ -1632,59 +1548,58 @@ namespace motion {
                     stderr,
                     "SNAPGEOM phase=leafSource frame=%.3f nodeIndex=%d source=%s meshType=%d layerSize=%dx%d sourceRect=[%d,%d,%d,%d] clipRect=[%d,%d,%d,%d] worldCorners=[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f] localCorners=[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f]\n",
                     _clampedEvalTime,
-                    command.nodeIndex,
-                    command.sourceKey.empty() ? "<none>" : command.sourceKey.c_str(),
-                    command.meshType,
+                    item.nodeIndex,
+                    item.sourceKey.empty() ? "<none>" : item.sourceKey.c_str(),
+                    item.meshType,
                     clipWidth,
                     clipHeight,
                     sourceRect.left,
                     sourceRect.top,
                     sourceRect.right,
                     sourceRect.bottom,
-                    command.clipRect[0],
-                    command.clipRect[1],
-                    command.clipRect[2],
-                    command.clipRect[3],
-                    command.worldCorners[0],
-                    command.worldCorners[1],
-                    command.worldCorners[2],
-                    command.worldCorners[3],
-                    command.worldCorners[4],
-                    command.worldCorners[5],
-                    command.worldCorners[6],
-                    command.worldCorners[7],
-                    command.localCorners[0],
-                    command.localCorners[1],
-                    command.localCorners[2],
-                    command.localCorners[3],
-                    command.localCorners[4],
-                    command.localCorners[5],
-                    command.localCorners[6],
-                    command.localCorners[7]);
+                    item.clipRect[0],
+                    item.clipRect[1],
+                    item.clipRect[2],
+                    item.clipRect[3],
+                    item.corners[0],
+                    item.corners[1],
+                    item.corners[2],
+                    item.corners[3],
+                    item.corners[4],
+                    item.corners[5],
+                    item.corners[6],
+                    item.corners[7],
+                    item.localCorners[0],
+                    item.localCorners[1],
+                    item.localCorners[2],
+                    item.localCorners[3],
+                    item.localCorners[4],
+                    item.localCorners[5],
+                    item.localCorners[6],
+                    item.localCorners[7]);
             }
-            if(command.meshType == 0) {
+            if(item.meshType == 0) {
                 const auto localPts =
-                    buildAffineTrianglePoints(command.localCorners, 0.0f, 0.0f);
+                    buildAffineTrianglePoints(item.localCorners, 0.0f, 0.0f);
                 targetLayer->AffineCopy(localPts.data(), srcBmp.get(),
-                                        sourceRect, stNearest,
-                                        command.clearEnabled);
+                                        sourceRect, stNearest, _clearEnabled);
             } else {
-                if(command.localMeshPoints.empty() || command.meshDivX < 2 ||
-                   command.meshDivY < 2) {
+                if(item.localMeshPoints.empty() || item.meshDivX < 2 ||
+                   item.meshDivY < 2) {
                     return false;
                 }
                 auto localMeshPoints =
-                    buildMeshPoints(command.localMeshPoints, 0.0f, 0.0f);
-                if(command.meshType == 1) {
+                    buildMeshPoints(item.localMeshPoints, 0.0f, 0.0f);
+                if(item.meshType == 1) {
                     targetLayer->BezierPatchCopy(
-                        localMeshPoints.data(), command.meshDivX,
-                        command.meshDivY, srcBmp.get(), sourceRect, stNearest,
-                        command.clearEnabled);
-                } else if(command.meshType == 2) {
+                        localMeshPoints.data(), item.meshDivX,
+                        item.meshDivY, srcBmp.get(), sourceRect, stNearest,
+                        _clearEnabled);
+                } else if(item.meshType == 2) {
                     targetLayer->MeshCopy(localMeshPoints.data(),
-                                          command.meshDivX, command.meshDivY,
+                                          item.meshDivX, item.meshDivY,
                                           srcBmp.get(), sourceRect, stNearest,
-                                          command.clearEnabled);
+                                          _clearEnabled);
                 } else {
                     return false;
                 }
@@ -1692,53 +1607,56 @@ namespace motion {
             detail::logoChainTraceLogf(
                 motionPath, "execute.layerSource", "0x6C7440", _clampedEvalTime,
                 "branch={} nodeIndex={} clipRect=[{},{},{},{}] layer={}x{} clearEnabled={}",
-                branch, command.nodeIndex,
-                command.clipRect[0], command.clipRect[1],
-                command.clipRect[2], command.clipRect[3],
-                clipWidth, clipHeight, command.clearEnabled ? 1 : 0);
+                branch, item.nodeIndex,
+                item.clipRect[0], item.clipRect[1],
+                item.clipRect[2], item.clipRect[3],
+                clipWidth, clipHeight, _clearEnabled ? 1 : 0);
             return true;
         };
-        auto chooseCommandOutputLayerObject =
-            [&](detail::PlayerRuntime::RenderCommand &command) -> iTJSDispatch2 * {
-            const bool preferLeafLayer = (command.itemFlags & 4) == 0;
+        auto chooseItemOutputLayerObject =
+            [&](PreparedRenderItem &item) -> iTJSDispatch2 * {
+            const bool preferLeafLayer = (item.stencilComposite & 4) == 0;
             if(!preferLeafLayer &&
-               command.composedLayer.Type() == tvtObject) {
-                return command.composedLayer.AsObjectNoAddRef();
+               item.composedLayer.Type() == tvtObject) {
+                return item.composedLayer.AsObjectNoAddRef();
             }
-            if(command.leafLayer.Type() == tvtObject) {
-                return command.leafLayer.AsObjectNoAddRef();
+            if(item.leafLayer.Type() == tvtObject) {
+                return item.leafLayer.AsObjectNoAddRef();
             }
-            if(command.composedLayer.Type() == tvtObject) {
-                return command.composedLayer.AsObjectNoAddRef();
+            if(item.composedLayer.Type() == tvtObject) {
+                return item.composedLayer.AsObjectNoAddRef();
             }
             return nullptr;
         };
 
-        auto buildCommandOutput = [&](auto &&self, size_t commandIndex) -> bool {
-            auto &command = _runtime->renderCommands[commandIndex];
-            if(command.executedDirect || command.leafBuilt || command.composedBuilt) {
+        auto buildItemOutput = [&](auto &&self, PreparedRenderItem *itemPtr) -> bool {
+            if(!itemPtr) {
+                return false;
+            }
+            auto &item = *itemPtr;
+            if(item.executedDirect || item.leafBuilt || item.composedBuilt) {
                 return true;
             }
-            if(!command.rawFlag21) {
+            if(!item.rawFlag21) {
                 return false;
             }
 
-            const int clipWidth = command.clipRect[2] - command.clipRect[0];
-            const int clipHeight = command.clipRect[3] - command.clipRect[1];
+            const int clipWidth = item.clipRect[2] - item.clipRect[0];
+            const int clipHeight = item.clipRect[3] - item.clipRect[1];
             if(clipWidth <= 0 || clipHeight <= 0) {
                 return false;
             }
 
-            auto srcBmp = resolveSourceBitmap(command);
+            auto srcBmp = resolveSourceBitmap(item);
             const bool hasSourceBitmap =
                 srcBmp && srcBmp->GetWidth() > 0 && srcBmp->GetHeight() > 0;
-            if(!hasSourceBitmap && command.childCommandPtrs.empty()) {
+            if(!hasSourceBitmap && item.childItems.empty()) {
                 detail::logoChainTraceCheck(
                     motionPath, "execute.source", "0x6C7440",
                     _clampedEvalTime,
                     "resolved bitmap should exist with positive size",
                     fmt::format("nodeIndex={} source={} bitmap={}x{}",
-                                command.nodeIndex, command.sourceKey,
+                                item.nodeIndex, item.sourceKey,
                                 srcBmp ? srcBmp->GetWidth() : 0,
                                 srcBmp ? srcBmp->GetHeight() : 0),
                     false,
@@ -1757,24 +1675,24 @@ namespace motion {
                     fmt::format("full texture rect exp=[0,0,{},{}]",
                                 srcBmp->GetWidth(), srcBmp->GetHeight()),
                     fmt::format("nodeIndex={} act=[{},{},{},{}]",
-                                command.nodeIndex, sourceRect.left,
+                                item.nodeIndex, sourceRect.left,
                                 sourceRect.top, sourceRect.right,
                                 sourceRect.bottom),
                     true,
                     "sub_6C7440 source rect was not the full texture bounds");
             }
 
-            const bool hasChildren = !command.childCommandPtrs.empty();
+            const bool hasChildren = !item.childItems.empty();
             const bool useDirectRenderPath =
-                shouldUseDirectRenderPathLike_0x6C7440(command) &&
-                !hasChildren && command.parentCommand == nullptr;
+                shouldUseDirectRenderPathLike_0x6C7440(item, _clearEnabled) &&
+                !hasChildren && item.parentItem == nullptr;
             if(useDirectRenderPath) {
-                command.executedDirect = true;
-                command.builtRect = command.clipRect;
+                item.executedDirect = true;
+                item.builtRect = item.clipRect;
                 return true;
             }
 
-            iTJSDispatch2 *leafLayerObject = ensureLeafCommandLayer(command);
+            iTJSDispatch2 *leafLayerObject = ensureLeafItemLayer(item);
             auto *leafLayer = resolveNativeLayer(leafLayerObject);
             if(!leafLayerObject || !leafLayer) {
                 detail::logoChainTraceCheck(
@@ -1782,41 +1700,32 @@ namespace motion {
                     _clampedEvalTime,
                     "leaf layer should resolve for buffered item path",
                     fmt::format("nodeIndex={} leafLayer={}",
-                                command.nodeIndex,
+                                item.nodeIndex,
                                 static_cast<const void *>(leafLayer)),
                     false,
                     "sub_6C7440 could not allocate the per-item leaf layer");
                 return false;
             }
 
-            if(!renderCommandSourceToLayer(command, leafLayerObject, leafLayer,
-                                           srcBmp, sourceRect,
-                                           "item.leaf.affineCopy")) {
+            if(!renderItemSourceToLayer(item, leafLayerObject, leafLayer,
+                                        srcBmp, sourceRect,
+                                        "item.leaf.affineCopy")) {
                 return false;
             }
-            command.leafBuilt = true;
-            command.builtRect = command.clipRect;
+            item.leafBuilt = true;
+            item.builtRect = item.clipRect;
 
             bool hasBuiltChildren = false;
-            for(auto *childCommand : command.childCommandPtrs) {
-                if(!childCommand) {
-                    continue;
-                }
-                const auto childCommandIndex = static_cast<size_t>(
-                    childCommand - _runtime->renderCommands.data());
-                if(childCommandIndex >= _runtime->renderCommands.size()) {
-                    continue;
-                }
+            for(auto *childItem : item.childItems) {
                 hasBuiltChildren =
-                    self(self, childCommandIndex) || hasBuiltChildren;
+                    self(self, childItem) || hasBuiltChildren;
             }
 
             if(!hasBuiltChildren) {
                 return true;
             }
 
-            iTJSDispatch2 *composedLayerObject =
-                ensureComposedCommandLayer(command);
+            iTJSDispatch2 *composedLayerObject = ensureComposedItemLayer(item);
             auto *composedLayer = resolveNativeLayer(composedLayerObject);
             if(!composedLayerObject || !composedLayer) {
                 detail::logoChainTraceCheck(
@@ -1824,7 +1733,7 @@ namespace motion {
                     _clampedEvalTime,
                     "composed layer should resolve for parent item path",
                     fmt::format("nodeIndex={} composedLayer={}",
-                                command.nodeIndex,
+                                item.nodeIndex,
                                 static_cast<const void *>(composedLayer)),
                     false,
                     "sub_6C7440 could not allocate the composed output layer");
@@ -1835,13 +1744,13 @@ namespace motion {
                                       0x00000000)) {
                 return false;
             }
-            if(command.leafBuilt) {
-                const auto localRect = localRectFromCommand(command);
+            if(item.leafBuilt) {
+                const auto localRect = localRectFromItem(item);
                 composedLayer->CopyRect(0, 0, leafLayer->GetMainImage(),
                                         nullptr, localRect);
             }
 
-            for(auto *childPtr : command.childCommandPtrs) {
+            for(auto *childPtr : item.childItems) {
                 if(!childPtr) {
                     continue;
                 }
@@ -1849,7 +1758,7 @@ namespace motion {
                 if(!child.rawFlag21 || child.rawFlag16) {
                     continue;
                 }
-                if((command.itemFlags & 4) != 0) {
+                if((item.stencilComposite & 4) != 0) {
                     auto *childMaskLayerObject =
                         child.leafLayer.Type() == tvtObject
                             ? child.leafLayer.AsObjectNoAddRef()
@@ -1864,8 +1773,8 @@ namespace motion {
                     }
                     applyMotionAlphaMaskLike_0x6AF104(
                         composedLayerObject,
-                        child.builtRect[0] - command.clipRect[0],
-                        child.builtRect[1] - command.clipRect[1],
+                        child.builtRect[0] - item.clipRect[0],
+                        child.builtRect[1] - item.clipRect[1],
                         childMaskLayerObject,
                         0,
                         0,
@@ -1873,20 +1782,20 @@ namespace motion {
                         childHeight,
                         64,
                         playerStencilType,
-                        command.itemFlags,
+                        item.stencilComposite,
                         motionPath,
                         _clampedEvalTime,
-                        command.nodeIndex,
+                        item.nodeIndex,
                         child.nodeIndex);
                     continue;
                 }
 
-                auto *childOutputLayerObject = chooseCommandOutputLayerObject(child);
+                auto *childOutputLayerObject = chooseItemOutputLayerObject(child);
                 auto *childOutputLayer = resolveNativeLayer(childOutputLayerObject);
                 if(!childOutputLayerObject || !childOutputLayer) {
                     continue;
                 }
-                const auto childLocalRect = localRectFromCommand(child);
+                const auto childLocalRect = localRectFromItem(child);
                 const auto childBlendMode =
                     resolveBlendOperationModeLike_0x6C7440(child.blendMode);
                 const auto childOpacity = static_cast<tjs_int>(
@@ -1895,102 +1804,109 @@ namespace motion {
                     continue;
                 }
                 composedLayer->OperateRect(
-                    child.builtRect[0] - command.clipRect[0],
-                    child.builtRect[1] - command.clipRect[1],
+                    child.builtRect[0] - item.clipRect[0],
+                    child.builtRect[1] - item.clipRect[1],
                     childOutputLayer->GetMainImage(),
                     childLocalRect,
                     childBlendMode,
                     childOpacity);
             }
 
-            command.composedBuilt = true;
+            item.composedBuilt = true;
             return true;
         };
 
-        for(auto *commandPtr : _runtime->renderCommandsTopLevel) {
-            if(!commandPtr) {
+        for(auto &item : _runtime->preparedRenderItems) {
+            if(!item.topLevelList || !item.rawFlag21 || item.rawFlag16) {
                 continue;
             }
-            auto &command = *commandPtr;
+            buildItemOutput(buildItemOutput, &item);
+        }
 
-                const auto blendMode =
-                    resolveBlendOperationModeLike_0x6C7440(command.blendMode);
-                const auto effectiveColor =
-                    unpackPackedRgba(command.packedColors[0]);
-                const auto opa = static_cast<tjs_int>(
-                    std::clamp(command.opacity, 0, 255));
-                if(opa <= 0) {
-                    continue;
-                }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderCommands(
+            this, "build_commands_leave",
+            "Player::buildRenderCommands.leave",
+            renderLayer ? static_cast<int>(renderLayer->GetWidth()) : 0,
+            renderLayer ? static_cast<int>(renderLayer->GetHeight()) : 0);
+        detail::motionTraceRenderImageCheckpoint(
+            this, renderLayerObject, "execute_pre",
+            "Player::executeLayerRenderCommands.execute_pre");
+#endif
 
-                const auto commandIndex = static_cast<size_t>(
-                    &command - _runtime->renderCommands.data());
-                if(commandIndex >= _runtime->renderCommands.size()) {
-                    continue;
-                }
-                if(!command.rawFlag21) {
-                    continue;
-                }
-                // libkrkr2.so 0x6C7440 reads item+17/item+16/item+18 in the
-                // top-level walk before it enters the per-item output path.
-                // Keep the local order the same instead of eagerly building a
-                // command that the native loop would have skipped.
-                if(command.rawFlag17) {
-                    continue;
-                }
-                if(command.rawFlag16) {
-                    continue;
-                }
-                if(_preview && !command.rawFlag18) {
-                    continue;
-                }
-                if(command.hasRenderParent) {
-                    continue;
-                }
-                if(!buildCommandOutput(buildCommandOutput, commandIndex)) {
-                    continue;
-                }
+        for(auto *itemPtr : _runtime->preparedRenderItemsTopLevel) {
+            if(!itemPtr) {
+                continue;
+            }
+            auto &item = *itemPtr;
 
-                try {
-                    if(command.executedDirect) {
-                        auto srcBmp = resolveSourceBitmap(command);
-                        if(!srcBmp || srcBmp->GetWidth() <= 0 ||
-                           srcBmp->GetHeight() <= 0) {
-                            continue;
-                        }
+            const auto blendMode =
+                resolveBlendOperationModeLike_0x6C7440(item.blendMode);
+            const auto effectiveColor = unpackPackedRgba(item.packedColors[0]);
+            const auto opa = static_cast<tjs_int>(
+                std::clamp(item.opacity, 0, 255));
+            if(opa <= 0) {
+                continue;
+            }
+
+            if(!item.rawFlag21) {
+                continue;
+            }
+            // libkrkr2.so 0x6C7440 reads item+17/item+16/item+18 in the
+            // top-level walk before it enters the per-item output path.
+            if(item.skipFlag0) {
+                continue;
+            }
+            if(item.rawFlag16) {
+                continue;
+            }
+            if(_preview && item.skipFlag1) {
+                continue;
+            }
+            if(item.parentItem) {
+                continue;
+            }
+            if(!buildItemOutput(buildItemOutput, &item)) {
+                continue;
+            }
+
+            try {
+                if(item.executedDirect) {
+                    auto srcBmp = resolveSourceBitmap(item);
+                    if(!srcBmp || srcBmp->GetWidth() <= 0 ||
+                       srcBmp->GetHeight() <= 0) {
+                        continue;
+                    }
                     const tTVPRect sourceRect(
                         0, 0, static_cast<tjs_int>(srcBmp->GetWidth()),
                         static_cast<tjs_int>(srcBmp->GetHeight()));
                     std::string branch("direct.operateAffine");
-                    if(command.meshType == 0) {
+                    if(item.meshType == 0) {
                         const auto worldPts =
-                            buildAffineTrianglePoints(command.worldCorners,
+                            buildAffineTrianglePoints(item.corners,
                                                      -0.5f, -0.5f);
                         renderLayer->OperateAffine(worldPts.data(), srcBmp.get(),
                                                    sourceRect, blendMode, opa,
                                                    stNearest);
                     } else {
-                        if(command.worldMeshPoints.empty() ||
-                           command.meshDivX < 2 || command.meshDivY < 2) {
+                        if(item.meshPoints.empty() ||
+                           item.meshDivX < 2 || item.meshDivY < 2) {
                             continue;
                         }
                         auto worldMeshPoints =
-                            buildMeshPoints(command.worldMeshPoints,
-                                            -0.5f, -0.5f);
-                        if(command.meshType == 1) {
+                            buildMeshPoints(item.meshPoints, -0.5f, -0.5f);
+                        if(item.meshType == 1) {
                             branch = "direct.operateBezierPatch";
                             renderLayer->OperateBezierPatch(
-                                worldMeshPoints.data(), command.meshDivX,
-                                command.meshDivY, srcBmp.get(), sourceRect,
-                                blendMode, opa, stNearest,
-                                command.clearEnabled);
-                        } else if(command.meshType == 2) {
+                                worldMeshPoints.data(), item.meshDivX,
+                                item.meshDivY, srcBmp.get(), sourceRect,
+                                blendMode, opa, stNearest, _clearEnabled);
+                        } else if(item.meshType == 2) {
                             branch = "direct.operateMesh";
                             renderLayer->OperateMesh(
-                                worldMeshPoints.data(), command.meshDivX,
-                                command.meshDivY, srcBmp.get(), sourceRect,
-                                blendMode, opa, stNearest,
-                                command.clearEnabled);
+                                worldMeshPoints.data(), item.meshDivX,
+                                item.meshDivY, srcBmp.get(), sourceRect,
+                                blendMode, opa, stNearest, _clearEnabled);
                         } else {
                             continue;
                         }
@@ -1999,18 +1915,18 @@ namespace motion {
                         motionPath, "execute.copy", "0x6C7440",
                         _clampedEvalTime,
                         "branch={} nodeIndex={} clipRect=[{},{},{},{}] dirtyRect=[{},{},{},{}] blendMode={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] visibleAncestorIndex={} clearEnabled={} renderPath=direct workLayer=0x0 renderLayer={}x{}",
-                        branch, command.nodeIndex,
-                        command.clipRect[0], command.clipRect[1],
-                        command.clipRect[2], command.clipRect[3],
-                        command.dirtyRect[0], command.dirtyRect[1],
-                        command.dirtyRect[2], command.dirtyRect[3],
-                        command.blendMode, opa,
-                        command.packedColors[0], command.packedColors[1],
-                        command.packedColors[2], command.packedColors[3],
+                        branch, item.nodeIndex,
+                        item.clipRect[0], item.clipRect[1],
+                        item.clipRect[2], item.clipRect[3],
+                        item.dirtyRect[0], item.dirtyRect[1],
+                        item.dirtyRect[2], item.dirtyRect[3],
+                        item.blendMode, opa,
+                        item.packedColors[0], item.packedColors[1],
+                        item.packedColors[2], item.packedColors[3],
                         effectiveColor[0], effectiveColor[1],
                         effectiveColor[2], effectiveColor[3],
-                        command.visibleAncestorIndex,
-                        command.clearEnabled ? 1 : 0,
+                        item.visibleAncestorIndex,
+                        _clearEnabled ? 1 : 0,
                         renderLayer->GetWidth(), renderLayer->GetHeight());
                     if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                        motionPath.find("m2logo.mtn") != std::string::npos &&
@@ -2018,68 +1934,68 @@ namespace motion {
                         std::fprintf(stderr,
                                      "SNAPCOPY order=%d frame=%.3f nodeIndex=%d source=%s branch=%s clipRect=[%d,%d,%d,%d] opacity=%d blend=%d\n",
                                      snapshotCopyOrder++, _clampedEvalTime,
-                                     command.nodeIndex,
-                                     command.sourceKey.empty()
+                                     item.nodeIndex,
+                                     item.sourceKey.empty()
                                          ? "<none>"
-                                         : command.sourceKey.c_str(),
+                                         : item.sourceKey.c_str(),
                                      branch.c_str(),
-                                     command.clipRect[0], command.clipRect[1],
-                                     command.clipRect[2], command.clipRect[3],
-                                     opa, command.blendMode);
+                                     item.clipRect[0], item.clipRect[1],
+                                     item.clipRect[2], item.clipRect[3],
+                                     opa, item.blendMode);
                     }
-                        continue;
-                    }
+                    continue;
+                }
 
-                    auto *outputLayerObject = chooseCommandOutputLayerObject(command);
-                    auto *outputLayer = resolveNativeLayer(outputLayerObject);
-                    if(!outputLayerObject || !outputLayer) {
-                        continue;
-                    }
+                auto *outputLayerObject = chooseItemOutputLayerObject(item);
+                auto *outputLayer = resolveNativeLayer(outputLayerObject);
+                if(!outputLayerObject || !outputLayer) {
+                    continue;
+                }
 
-                    const auto localRect = localRectFromCommand(command);
-                    renderLayer->OperateRect(command.clipRect[0], command.clipRect[1],
-                                             outputLayer->GetMainImage(), localRect,
-                                             blendMode, opa);
-                    detail::logoChainTraceLogf(
-                        motionPath, "execute.copy", "0x6C7440", _clampedEvalTime,
-                        "branch={} nodeIndex={} clipRect=[{},{},{},{}] dirtyRect=[{},{},{},{}] blendMode={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] visibleAncestorIndex={} clearEnabled={} renderPath=buffered outputLayer={}x{} renderLayer={}x{} childCount={} phase={}",
-                        command.composedBuilt ? "buffered.operateRect.composed"
-                                              : "buffered.operateRect.leaf",
-                        command.nodeIndex,
-                        command.clipRect[0], command.clipRect[1],
-                        command.clipRect[2], command.clipRect[3],
-                        command.dirtyRect[0], command.dirtyRect[1],
-                        command.dirtyRect[2], command.dirtyRect[3],
-                        command.blendMode, opa,
-                        command.packedColors[0], command.packedColors[1],
-                        command.packedColors[2], command.packedColors[3],
-                        effectiveColor[0], effectiveColor[1],
-                        effectiveColor[2], effectiveColor[3],
-                        command.visibleAncestorIndex,
-                        command.clearEnabled ? 1 : 0,
-                        localRect.get_width(), localRect.get_height(),
-                        renderLayer->GetWidth(), renderLayer->GetHeight(),
-                        command.childCommandPtrs.size(),
-                        0);
-                    if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
-                       motionPath.find("m2logo.mtn") != std::string::npos &&
-                       _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0) {
-                        const char *snapBranch = command.composedBuilt
-                            ? "buffered.operateRect.composed"
-                            : "buffered.operateRect.leaf";
-                        std::fprintf(stderr,
-                                     "SNAPCOPY order=%d frame=%.3f nodeIndex=%d source=%s branch=%s clipRect=[%d,%d,%d,%d] opacity=%d blend=%d childCount=%zu phase=%d\n",
-                                     snapshotCopyOrder++, _clampedEvalTime,
-                                     command.nodeIndex,
-                                     command.sourceKey.empty()
-                                         ? "<none>"
-                                         : command.sourceKey.c_str(),
-                                     snapBranch,
-                                     command.clipRect[0], command.clipRect[1],
-                                     command.clipRect[2], command.clipRect[3],
-                                     opa, command.blendMode,
-                                     command.childCommandPtrs.size(),
-                                     0);
+                const auto localRect = localRectFromItem(item);
+                renderLayer->OperateRect(item.clipRect[0], item.clipRect[1],
+                                         outputLayer->GetMainImage(), localRect,
+                                         blendMode, opa);
+                detail::logoChainTraceLogf(
+                    motionPath, "execute.copy", "0x6C7440", _clampedEvalTime,
+                    "branch={} nodeIndex={} clipRect=[{},{},{},{}] dirtyRect=[{},{},{},{}] blendMode={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] visibleAncestorIndex={} clearEnabled={} renderPath=buffered outputLayer={}x{} renderLayer={}x{} childCount={} phase={}",
+                    item.composedBuilt ? "buffered.operateRect.composed"
+                                       : "buffered.operateRect.leaf",
+                    item.nodeIndex,
+                    item.clipRect[0], item.clipRect[1],
+                    item.clipRect[2], item.clipRect[3],
+                    item.dirtyRect[0], item.dirtyRect[1],
+                    item.dirtyRect[2], item.dirtyRect[3],
+                    item.blendMode, opa,
+                    item.packedColors[0], item.packedColors[1],
+                    item.packedColors[2], item.packedColors[3],
+                    effectiveColor[0], effectiveColor[1],
+                    effectiveColor[2], effectiveColor[3],
+                    item.visibleAncestorIndex,
+                    _clearEnabled ? 1 : 0,
+                    localRect.get_width(), localRect.get_height(),
+                    renderLayer->GetWidth(), renderLayer->GetHeight(),
+                    item.childItems.size(),
+                    0);
+                if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+                   motionPath.find("m2logo.mtn") != std::string::npos &&
+                   _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0) {
+                    const char *snapBranch = item.composedBuilt
+                        ? "buffered.operateRect.composed"
+                        : "buffered.operateRect.leaf";
+                    std::fprintf(stderr,
+                                 "SNAPCOPY order=%d frame=%.3f nodeIndex=%d source=%s branch=%s clipRect=[%d,%d,%d,%d] opacity=%d blend=%d childCount=%zu phase=%d\n",
+                                 snapshotCopyOrder++, _clampedEvalTime,
+                                 item.nodeIndex,
+                                 item.sourceKey.empty()
+                                     ? "<none>"
+                                     : item.sourceKey.c_str(),
+                                 snapBranch,
+                                 item.clipRect[0], item.clipRect[1],
+                                 item.clipRect[2], item.clipRect[3],
+                                 opa, item.blendMode,
+                                 item.childItems.size(),
+                                 0);
                 }
             } catch(const eTJS &) {
             } catch(...) {

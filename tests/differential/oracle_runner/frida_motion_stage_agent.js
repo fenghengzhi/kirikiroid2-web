@@ -1020,6 +1020,15 @@ function readRectF(p, off) {
     ];
 }
 
+function readRectS32(p, off) {
+    return [
+        readS32(p, off),
+        readS32(p, off + 4),
+        readS32(p, off + 8),
+        readS32(p, off + 12),
+    ];
+}
+
 function readRenderItem(itemPtr, index) {
     const item = ptr(itemPtr);
     return {
@@ -1039,6 +1048,9 @@ function readRenderItem(itemPtr, index) {
         },
         clipRect: readRectF(item, 184),
         viewportRect: readRectF(item, 200),
+        diagnostics: {
+            itemPlus216Rect: readRectS32(item, 216),
+        },
         sourceGate232: readU32(item, 232),
         stencilType244: readU32(item, 244),
         parentItem264: ptrHex(readPointer(item, 264)),

@@ -298,17 +298,21 @@ namespace motion::detail {
             bool rawFlag16 = false; // original item +16 = node+201
             bool skipFlag0 = false; // original render item +17 (0x6C2334 / 0x6C7440)
             bool skipFlag1 = false; // original render item +18 (0x6C2334 / 0x6C7440)
-            bool clipFlag = false;  // reserved for explicit +20/+21 alignment
             bool drawFlag = false;  // original render item +19
+            bool rawFlag20 = false; // original item +20, set by sub_6C4E28 requireLayerId path
+            bool rawFlag21 = false; // original item +21, drawable clip valid after sub_6C4E28
             double sortKey = 0.0;
             int blendMode = 16;
             tTJSVariant contextVariant; // original item +248 (player+1012 copy)
             std::array<float, 8> corners{};
+            std::array<float, 8> localCorners{};
             std::array<std::uint32_t, 4> packedColors{
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
             };
             std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f};
             std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f};
+            std::array<int, 4> clipRect{0, 0, 0, 0}; // build-stage clip rect after sub_6C4E28
+            std::array<int, 4> dirtyRect{0, 0, 0, 0};
             bool hasViewport = false;
             int opacity = 255;
             // item+244 in libkrkr2.so sub_6C2334 @ 0x6C2A90 — stencil/composite
@@ -322,67 +326,23 @@ namespace motion::detail {
             int meshDivY = 0;
             int meshType = 0;
             std::vector<float> meshPoints;
+            std::vector<float> localMeshPoints;
             int layerId = 0;
             int layerId2 = 0;
             PreparedRenderItem *parentItem = nullptr; // semantic mapping of item +264
             std::vector<PreparedRenderItem *> childItems; // semantic mapping of item +24
-        };
-        struct RenderCommand {
-            int nodeIndex = 0;
-            tTJSVariant srcRef;
-            std::string sourceKey;
-            bool hasOwnSource = false;
-            bool groupOnly = false;
-            bool topLevelList = true;
-            bool groupList = false;
-            bool rawFlag16 = false;
-            bool rawFlag17 = false;
-            bool rawFlag18 = false;
-            bool rawFlag19 = false;
-            bool rawFlag20 = false;
-            bool rawFlag21 = false;
-            int blendMode = 16;
-            tTJSVariant contextVariant; // maps original item +248 variant
-            int opacity = 255;
-            int itemFlags = 0;
-            int parentNodeIndex = -1; // semantic mapping of original item +264 parent pointer
-            const PreparedRenderItem *preparedItem = nullptr;
-            bool hasRenderParent = false;
-            std::array<std::uint32_t, 4> packedColors{
-                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
-            };
-            int visibleAncestorIndex = -1;
-            bool clearEnabled = false;
-            std::array<int, 4> clipRect{0, 0, 0, 0};
-            std::array<int, 4> dirtyRect{0, 0, 0, 0};
-            std::array<float, 8> worldCorners{};
-            std::array<float, 8> localCorners{};
-            std::vector<float> worldMeshPoints;
-            std::vector<float> localMeshPoints;
-            int meshDivX = 0;
-            int meshDivY = 0;
-            int meshType = 0;
-            int layerId = 0;
-            int layerId2 = 0;
-            // semantic mapping of the original std::vector<item*> at item +24
-            RenderCommand *parentCommand = nullptr; // semantic mapping of item +264
-            std::vector<RenderCommand *> childCommandPtrs; // semantic mapping of item +24
-            tTJSVariant leafLayer;
-            tTJSVariant composedLayer;
+            tTJSVariant leafLayer;      // item+304 variant
+            tTJSVariant composedLayer;  // item+324 variant
             std::array<int, 4> builtRect{0, 0, 0, 0};
             bool leafBuilt = false;
             bool composedBuilt = false;
             bool executedDirect = false;
         };
         std::vector<PreparedRenderItem> preparedRenderItems;  // player+936/944
-        std::vector<RenderCommand> renderCommands;
-        // Local approximation of the native a2/a3 split passed through
-        // sub_6C2334 -> sub_6C4E28 -> sub_6C7440.
-        // renderCommandsTopLevel mirrors the single list walked by 0x6C7440
-        // after it calls 0x6C4E28; renderCommandsGroup mirrors the auxiliary
-        // list consumed inside 0x6C4E28.
-        std::vector<RenderCommand *> renderCommandsTopLevel;
-        std::vector<RenderCommand *> renderCommandsGroup;
+        // Native-shaped a2/a3 split passed through sub_6C2334 -> sub_6C4E28
+        // -> sub_6C7440. Both lists point directly into preparedRenderItems.
+        std::vector<PreparedRenderItem *> preparedRenderItemsTopLevel;
+        std::vector<PreparedRenderItem *> preparedRenderItemsGroup;
 
         // Legacy local scratch for old diagnostics. libkrkr2.so player+384 is
         // the parameter table initialized by Player_initNonEmoteMotion

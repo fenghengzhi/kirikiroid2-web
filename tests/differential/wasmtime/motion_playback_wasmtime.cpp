@@ -190,15 +190,6 @@ int preparedIndexFor(const motion::detail::PlayerRuntime *runtime,
     return static_cast<int>(item - base);
 }
 
-int commandIndexFor(const motion::detail::PlayerRuntime *runtime,
-                    const motion::detail::PlayerRuntime::RenderCommand *command) {
-    if(!runtime || !command || runtime->renderCommands.empty()) return -1;
-    const auto *base = runtime->renderCommands.data();
-    const auto *end = base + runtime->renderCommands.size();
-    if(command < base || command >= end) return -1;
-    return static_cast<int>(command - base);
-}
-
 void appendPreparedItemJson(
     std::string &out,
     const motion::detail::PlayerRuntime *runtime,
@@ -216,23 +207,27 @@ void appendPreparedItemJson(
     out += ",\"flag17\":";
     out += item.skipFlag0 ? "1" : "0";
     out += ",\"flag18\":";
-    out += item.skipFlag1 ? "1" : "0";
+    out += item.skipFlag1 ? "0" : "1";
     out += ",\"drawFlag19\":";
     out += item.drawFlag ? "1" : "0";
     out += ",\"layerResolved20\":";
-    out += item.clipFlag ? "1" : "0";
+    out += item.rawFlag20 ? "1" : "0";
     out += ",\"clipValid21\":";
-    out += item.hasViewport ? "1" : "0";
+    out += item.rawFlag21 ? "1" : "0";
     out += "},\"layerIds\":{\"primary\":";
     out += std::to_string(item.layerId);
     out += ",\"secondary\":";
     out += std::to_string(item.layerId2);
     out += "},\"paintBox\":";
     appendNumberArray(out, item.paintBox);
+    out += ",\"clipRect\":";
+    appendNumberArray(out, item.clipRect);
+    out += ",\"dirtyRect\":";
+    appendNumberArray(out, item.dirtyRect);
     out += ",\"viewportRect\":";
     appendNumberArray(out, item.viewport);
     out += ",\"sourceGate232\":";
-    out += item.hasOwnSource ? "1" : "0";
+    out += std::to_string(item.opacity);
     out += ",\"stencilType244\":";
     out += std::to_string(item.stencilComposite);
     out += ",\"parentItemIndex\":";
@@ -241,7 +236,43 @@ void appendPreparedItemJson(
     out += std::to_string(item.childItems.size());
     out += ",\"meshType280\":";
     out += std::to_string(item.meshType);
+    out += ",\"leafLayerVariantTag\":";
+    out += std::to_string(static_cast<int>(item.leafLayer.Type()));
+    out += ",\"composedLayerVariantTag\":";
+    out += std::to_string(static_cast<int>(item.composedLayer.Type()));
+    out += ",\"leafBuilt\":";
+    out += item.leafBuilt ? "true" : "false";
+    out += ",\"composedBuilt\":";
+    out += item.composedBuilt ? "true" : "false";
+    out += ",\"executedDirect\":";
+    out += item.executedDirect ? "true" : "false";
     out += "}";
+}
+
+template <typename Predicate>
+void appendPreparedItemList(std::string &out,
+                            const motion::detail::PlayerRuntime *runtime,
+                            const char *name,
+                            Predicate predicate) {
+    constexpr size_t kLimit = 256;
+    out += ",\"";
+    out += name;
+    out += "\":[";
+    if(runtime) {
+        size_t emitted = 0;
+        for(size_t i = 0; i < runtime->preparedRenderItems.size(); ++i) {
+            const auto &item = runtime->preparedRenderItems[i];
+            if(!predicate(item)) {
+                continue;
+            }
+            if(emitted >= kLimit) {
+                break;
+            }
+            appendPreparedItemJson(out, runtime, item, i);
+            ++emitted;
+        }
+    }
+    out.push_back(']');
 }
 
 void appendPreparedItemsPayload(std::string &out,
@@ -262,85 +293,45 @@ void appendPreparedItemsPayload(std::string &out,
     }
 }
 
-void appendRenderCommandJson(
-    std::string &out,
-    const motion::detail::PlayerRuntime *runtime,
-    const motion::detail::PlayerRuntime::RenderCommand &command,
-    size_t index) {
-    if(index) out.push_back(',');
-    out += "{\"index\":";
-    out += std::to_string(index);
-    out += ",\"nodeIndex\":";
-    out += std::to_string(command.nodeIndex);
-    out += ",\"sourceKey\":";
-    appendJsonString(out, command.sourceKey);
-    out += ",\"flags\":{\"flag16\":";
-    out += command.rawFlag16 ? "1" : "0";
-    out += ",\"flag17\":";
-    out += command.rawFlag17 ? "1" : "0";
-    out += ",\"flag18\":";
-    out += command.rawFlag18 ? "1" : "0";
-    out += ",\"drawFlag19\":";
-    out += command.rawFlag19 ? "1" : "0";
-    out += ",\"layerResolved20\":";
-    out += command.rawFlag20 ? "1" : "0";
-    out += ",\"clipValid21\":";
-    out += command.rawFlag21 ? "1" : "0";
-    out += "},\"layerIds\":{\"primary\":";
-    out += std::to_string(command.layerId);
-    out += ",\"secondary\":";
-    out += std::to_string(command.layerId2);
-    out += "},\"clipRect\":";
-    appendNumberArray(out, command.clipRect);
-    out += ",\"dirtyRect\":";
-    appendNumberArray(out, command.dirtyRect);
-    out += ",\"sourceGate232\":";
-    out += command.hasOwnSource ? "1" : "0";
-    out += ",\"stencilType244\":";
-    out += std::to_string(command.itemFlags);
-    out += ",\"parentItemIndex\":";
-    out += std::to_string(preparedIndexFor(runtime, command.preparedItem));
-    out += ",\"parentCommandIndex\":";
-    out += std::to_string(commandIndexFor(runtime, command.parentCommand));
-    out += ",\"childCommandCount\":";
-    out += std::to_string(command.childCommandPtrs.size());
-    out += ",\"meshType280\":";
-    out += std::to_string(command.meshType);
-    out += ",\"leafLayerVariantTag\":";
-    out += std::to_string(static_cast<int>(command.leafLayer.Type()));
-    out += ",\"composedLayerVariantTag\":";
-    out += std::to_string(static_cast<int>(command.composedLayer.Type()));
-    out += ",\"leafBuilt\":";
-    out += command.leafBuilt ? "true" : "false";
-    out += ",\"composedBuilt\":";
-    out += command.composedBuilt ? "true" : "false";
-    out += ",\"executedDirect\":";
-    out += command.executedDirect ? "true" : "false";
-    out += "}";
-}
-
-void appendRenderCommandsPayload(std::string &out,
-                                 const motion::detail::PlayerRuntime *runtime) {
-    constexpr size_t kLimit = 256;
+void appendRenderItemsPayload(std::string &out,
+                              const motion::detail::PlayerRuntime *runtime) {
+    const size_t preparedCount =
+        runtime ? runtime->preparedRenderItems.size() : 0;
+    size_t validDrawableCount = 0;
+    size_t leafBuiltCount = 0;
+    size_t composedBuiltCount = 0;
+    auto hasValidClipRect = [](const std::array<int, 4> &rect) {
+        return rect[0] < rect[2] && rect[1] < rect[3];
+    };
+    if(runtime) {
+        for(const auto &item : runtime->preparedRenderItems) {
+            if(hasValidClipRect(item.clipRect)) ++validDrawableCount;
+            if(item.leafBuilt) ++leafBuiltCount;
+            if(item.composedBuilt) ++composedBuiltCount;
+        }
+    }
     out += "\"preparedItemCount\":";
-    out += std::to_string(runtime ? runtime->preparedRenderItems.size() : 0);
-    const size_t count = runtime ? runtime->renderCommands.size() : 0;
-    out += ",\"renderCommandCount\":";
-    out += std::to_string(count);
-    out += ",\"topLevelCommandCount\":";
-    out += std::to_string(runtime ? runtime->renderCommandsTopLevel.size() : 0);
-    out += ",\"groupCommandCount\":";
-    out += std::to_string(runtime ? runtime->renderCommandsGroup.size() : 0);
-    out += ",\"renderCommands\":[";
-    const size_t n = std::min(count, kLimit);
-    for(size_t i = 0; i < n; ++i) {
-        appendRenderCommandJson(out, runtime, runtime->renderCommands[i], i);
-    }
-    out.push_back(']');
-    if(count > n) {
-        out += ",\"renderCommandsTruncated\":";
-        out += std::to_string(count - n);
-    }
+    out += std::to_string(preparedCount);
+    out += ",\"inputItemCount\":";
+    out += std::to_string(preparedCount);
+    out += ",\"builtItemCount\":";
+    out += std::to_string(preparedCount);
+    out += ",\"validDrawableItemCount\":";
+    out += std::to_string(validDrawableCount);
+    out += ",\"leafBuiltCount\":";
+    out += std::to_string(leafBuiltCount);
+    out += ",\"composedBuiltCount\":";
+    out += std::to_string(composedBuiltCount);
+    appendPreparedItemList(
+        out, runtime, "mainListSemanticItems",
+        [](const motion::detail::PlayerRuntime::PreparedRenderItem &item) {
+            return item.topLevelList;
+        });
+    appendPreparedItemList(
+        out, runtime, "auxListSemanticItems",
+        [](const motion::detail::PlayerRuntime::PreparedRenderItem &item) {
+            return item.groupList;
+        });
 }
 
 std::string playerDiagnostics(motion::Player *player) {
@@ -760,7 +751,7 @@ MotionTraceRenderExecuteScope::MotionTraceRenderExecuteScope(
     _skipUpdate(skipUpdate) {
     const auto *runtime = player ? player->runtime() : nullptr;
     std::string payload;
-    appendRenderCommandsPayload(payload, runtime);
+    appendRenderItemsPayload(payload, runtime);
     payload += ",\"renderLayerObject\":";
     payload += ptrHex(renderLayerObject);
     payload += ",\"skipUpdate\":";
@@ -774,7 +765,7 @@ MotionTraceRenderExecuteScope::MotionTraceRenderExecuteScope(
 MotionTraceRenderExecuteScope::~MotionTraceRenderExecuteScope() {
     const auto *runtime = _player ? _player->runtime() : nullptr;
     std::string payload;
-    appendRenderCommandsPayload(payload, runtime);
+    appendRenderItemsPayload(payload, runtime);
     payload += ",\"renderLayerObject\":";
     payload += ptrHex(_renderLayerObject);
     payload += ",\"skipUpdate\":";
@@ -808,7 +799,7 @@ void motionTraceRenderCommands(Player *player, const char *kind,
                                int canvasWidth, int canvasHeight) {
     const auto *runtime = player ? player->runtime() : nullptr;
     std::string payload;
-    appendRenderCommandsPayload(payload, runtime);
+    appendRenderItemsPayload(payload, runtime);
     payload += ",\"canvas\":{\"width\":";
     payload += std::to_string(canvasWidth);
     payload += ",\"height\":";

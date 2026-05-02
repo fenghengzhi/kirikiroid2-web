@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare motion_playback render command flow and execute image checkpoints."""
+"""Compare motion_playback render item flow and execute image checkpoints."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
 from oracle_runner.png_artifacts import image_pixel_hash, rgba_sha256_file
 
 
-COMMAND_FIELDS = (
+ITEM_FIELDS = (
     "index",
     "nodeIndex",
     "sourceKey",
@@ -27,26 +27,22 @@ COMMAND_FIELDS = (
     "sourceGate232",
     "stencilType244",
     "parentItemIndex",
-    "parentCommandIndex",
     "parentItem264",
     "childItemCount",
-    "childCommandCount",
     "meshType280",
     "leafLayerVariantTag",
     "composedLayerVariantTag",
-    "leafLayerVariantTag320",
-    "composedLayerVariantTag340",
     "leafBuilt",
     "composedBuilt",
     "executedDirect",
 )
 BUILD_FLOW_FIELDS = (
     "inputItemCount",
-    "renderCommandCount",
-    "topLevelCommandCount",
-    "groupCommandCount",
+    "builtItemCount",
+    "validDrawableItemCount",
+    "leafBuiltCount",
+    "composedBuiltCount",
 )
-
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -75,22 +71,67 @@ def case_ids(oracle_root: Path) -> list[str]:
         for path in event_dir.glob("*.oracle.json"))
 
 
-def _semantic_command(command: dict[str, Any]) -> dict[str, Any]:
-    return {field: command.get(field) for field in COMMAND_FIELDS}
+def _normalized_item_value(item: dict[str, Any], field: str) -> Any:
+    if field == "flags":
+        value = item.get("flags")
+        if not isinstance(value, dict):
+            return value
+        flags = dict(value)
+        rect = item.get("clipRect")
+        if isinstance(rect, list) and len(rect) == 4:
+            try:
+                left, top, right, bottom = (float(part) for part in rect)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if left < right and top < bottom:
+                    flags["clipValid21"] = 1
+        return flags
+    if field == "leafLayerVariantTag":
+        value = item.get("leafLayerVariantTag")
+        return item.get("leafLayerVariantTag320") if value is None else value
+    if field == "composedLayerVariantTag":
+        value = item.get("composedLayerVariantTag")
+        return item.get("composedLayerVariantTag340") if value is None else value
+    value = item.get(field)
+    if field == "viewportRect" and value == [1, 1, -1, -1]:
+        return None
+    return value
+
+
+def _semantic_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: _normalized_item_value(item, field)
+        for field in ITEM_FIELDS
+    }
 
 
 def _build_flow(event: dict[str, Any]) -> dict[str, Any]:
     flow = event.get("buildFlow")
     if not isinstance(flow, dict):
         return {}
-    commands = flow.get("commands")
-    semantic_commands = [
-        _semantic_command(command)
-        for command in commands if isinstance(command, dict)
-    ] if isinstance(commands, list) else []
+    legacy_items_raw = flow.get("items")
+    if not isinstance(legacy_items_raw, list):
+        legacy_items_raw = flow.get("commands")
+    legacy_items = [
+        _semantic_item(item)
+        for item in legacy_items_raw if isinstance(item, dict)
+    ] if isinstance(legacy_items_raw, list) else []
+    main_items = flow.get("mainListSemanticItems")
+    semantic_main_items = [
+        _semantic_item(item)
+        for item in main_items if isinstance(item, dict)
+    ] if isinstance(main_items, list) else legacy_items
+    aux_items = flow.get("auxListSemanticItems")
+    semantic_aux_items = [
+        _semantic_item(item)
+        for item in aux_items if isinstance(item, dict)
+    ] if isinstance(aux_items, list) else []
     return {
         **{field: flow.get(field) for field in BUILD_FLOW_FIELDS},
-        "commands": semantic_commands,
+        "mainListSemanticItems": semantic_main_items,
+        "auxListSemanticItems": semantic_aux_items,
+        "items": semantic_main_items,
     }
 
 
@@ -150,20 +191,22 @@ def _value_summary(value: Any) -> str:
     return text[:217] + "..."
 
 
-def _compare_command_lists(
-    oracle_commands: list[dict[str, Any]],
-    wasmtime_commands: list[dict[str, Any]],
+def _compare_item_lists(
+    oracle_items: list[dict[str, Any]],
+    wasmtime_items: list[dict[str, Any]],
 ) -> tuple[str, Any, Any] | None:
-    if len(oracle_commands) != len(wasmtime_commands):
-        return ("commands.length", len(oracle_commands), len(wasmtime_commands))
-    for index, (oracle_command, wasmtime_command) in enumerate(
-        zip(oracle_commands, wasmtime_commands)):
-        for field in COMMAND_FIELDS:
-            oracle_value = oracle_command.get(field)
-            wasmtime_value = wasmtime_command.get(field)
+    if len(oracle_items) != len(wasmtime_items):
+        return ("items.length", len(oracle_items), len(wasmtime_items))
+    for index, (oracle_item, wasmtime_item) in enumerate(
+        zip(oracle_items, wasmtime_items)):
+        for field in ITEM_FIELDS:
+            oracle_value = oracle_item.get(field)
+            wasmtime_value = wasmtime_item.get(field)
+            if oracle_value is None or wasmtime_value is None:
+                continue
             if oracle_value != wasmtime_value:
                 return (
-                    f"commands[{index}].{field}",
+                    f"items[{index}].{field}",
                     oracle_value,
                     wasmtime_value,
                 )
@@ -177,12 +220,25 @@ def _compare_build_flow(
     for field in BUILD_FLOW_FIELDS:
         oracle_value = oracle_flow.get(field)
         wasmtime_value = wasmtime_flow.get(field)
+        if oracle_value is None or wasmtime_value is None:
+            continue
         if oracle_value != wasmtime_value:
             return (field, oracle_value, wasmtime_value)
-    return _compare_command_lists(
-        oracle_flow.get("commands") or [],
-        wasmtime_flow.get("commands") or [],
+    main_diff = _compare_item_lists(
+        oracle_flow.get("items") or [],
+        wasmtime_flow.get("items") or [],
     )
+    if main_diff is not None:
+        return ("mainListSemanticItems." + main_diff[0],
+                main_diff[1], main_diff[2])
+    aux_diff = _compare_item_lists(
+        oracle_flow.get("auxListSemanticItems") or [],
+        wasmtime_flow.get("auxListSemanticItems") or [],
+    )
+    if aux_diff is not None:
+        return ("auxListSemanticItems." + aux_diff[0],
+                aux_diff[1], aux_diff[2])
+    return None
 
 
 def _event_frame_label(event: dict[str, Any], fallback: int) -> str:
@@ -200,10 +256,10 @@ def compare_case(
     wasmtime_root: Path,
     case_id: str,
 ) -> bool:
-    oracle_commands = build_flow_leaves(load_events(
+    oracle_build_events = build_flow_leaves(load_events(
         oracle_root / "events" / "render_commands" /
         f"{case_id}.oracle.json"))
-    wasmtime_commands = build_flow_leaves(load_events(
+    wasmtime_build_events = build_flow_leaves(load_events(
         wasmtime_root / "events" / "render_commands" /
         f"{case_id}.wasmtime.json"))
     oracle_execute = execute_leaves(load_events(
@@ -222,25 +278,25 @@ def compare_case(
     wasmtime_cache: dict[Path, str] = {}
 
     frame_count = max(
-        len(oracle_commands),
-        len(wasmtime_commands),
+        len(oracle_build_events),
+        len(wasmtime_build_events),
         len(oracle_execute),
         len(wasmtime_execute),
     )
     for index in range(frame_count):
-        if index >= len(oracle_commands) or index >= len(wasmtime_commands):
+        if index >= len(oracle_build_events) or index >= len(wasmtime_build_events):
             build_flow_mismatches += 1
             if first_mismatch is None:
                 first_mismatch = (
                     index,
                     "build_flow",
                     "event_count",
-                    index < len(oracle_commands),
-                    index < len(wasmtime_commands),
+                    index < len(oracle_build_events),
+                    index < len(wasmtime_build_events),
                 )
         else:
-            oracle_flow = _build_flow(oracle_commands[index])
-            wasmtime_flow = _build_flow(wasmtime_commands[index])
+            oracle_flow = _build_flow(oracle_build_events[index])
+            wasmtime_flow = _build_flow(wasmtime_build_events[index])
             field_diff = _compare_build_flow(oracle_flow, wasmtime_flow)
             if field_diff is not None:
                 build_flow_mismatches += 1
@@ -330,7 +386,7 @@ def compare_case(
         index, stage, field, oracle_value, wasmtime_value = first_mismatch
         label_event = (
             oracle_execute[index] if index < len(oracle_execute)
-            else oracle_commands[index] if index < len(oracle_commands)
+            else oracle_build_events[index] if index < len(oracle_build_events)
             else {}
         )
         print(
