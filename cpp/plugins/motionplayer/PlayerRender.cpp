@@ -2246,21 +2246,30 @@ namespace motion {
         return true;
     }
 
-    bool Player::renderToLayer(iTJSDispatch2 *layerObject, bool skipUpdate) {
-        if(!layerObject) {
+    bool Player::renderToCanvasLike_0x6C7440(
+        tTJSVariant *target, bool willCallUpdateLayerAfterDraw) {
+        if(!target) {
             return false;
         }
 
         ensureMotionLoaded();
-        if(!_runtime->activeMotion) {
+        if(!_runtime || !_runtime->activeMotion) {
             return false;
         }
         const auto motionPath = _runtime->activeMotion->path;
 
-        iTJSDispatch2 *resolvedLayerObject = layerObject;
-        tTJSVariant wrapper(layerObject, layerObject);
-        if(auto *resolved = tryResolveLayerDispatch(wrapper)) {
-            resolvedLayerObject = resolved;
+        iTJSDispatch2 *resolvedLayerObject = tryResolveLayerDispatch(*target);
+        if(!resolvedLayerObject && target->Type() == tvtObject) {
+            resolvedLayerObject = target->AsObjectNoAddRef();
+        }
+        if(!resolvedLayerObject) {
+            detail::logoChainTraceCheck(
+                motionPath, "draw.renderToCanvas", "0x6C7440",
+                _clampedEvalTime,
+                "target variant should resolve to a Layer object",
+                "target did not resolve", false,
+                "Player_renderToCanvas_guess could not resolve target variant");
+            return false;
         }
 
         int canvasWidth = 0;
@@ -2273,17 +2282,19 @@ namespace motion {
         if(canvasWidth <= 0 || canvasHeight <= 0) {
             return false;
         }
-        detail::logoChainTraceLogf(
-            motionPath, "draw.layer", "0x6C7440/0x6CE7D8", _clampedEvalTime,
-            "targetLayerCanvas={}x{} skipUpdate={} needsInternalAssignImages={}",
-            canvasWidth, canvasHeight, skipUpdate ? 1 : 0,
-            _needsInternalAssignImages ? 1 : 0);
 
-        prepareRenderItems();
-        applyPreparedRenderItemTranslateOffsets();
+        const bool useInternalRenderLayer =
+            _needsInternalAssignImages && willCallUpdateLayerAfterDraw;
+        detail::logoChainTraceLogf(
+            motionPath, "draw.renderToCanvas", "0x6C7440", _clampedEvalTime,
+            "targetLayerCanvas={}x{} willCallUpdateLayerAfterDraw={} needsInternalAssignImages={} useInternalRenderLayer={}",
+            canvasWidth, canvasHeight,
+            willCallUpdateLayerAfterDraw ? 1 : 0,
+            _needsInternalAssignImages ? 1 : 0,
+            useInternalRenderLayer ? 1 : 0);
 
         iTJSDispatch2 *renderLayerObject = resolvedLayerObject;
-        if(_needsInternalAssignImages && !skipUpdate) {
+        if(useInternalRenderLayer) {
             renderLayerObject = ensureReusableLayerObject(
                 _runtime->internalRenderLayer,
                 resolveLayerTreeOwnerObject(resolvedLayerObject),
@@ -2310,9 +2321,60 @@ namespace motion {
             return false;
         }
 
+        _runtime->lastCanvas =
+            tTJSVariant(resolvedLayerObject, resolvedLayerObject);
+        detail::logoChainTraceSummary(
+            motionPath, "renderToCanvasLike_0x6C7440", _clampedEvalTime,
+            useInternalRenderLayer ? "internalRenderLayer=1"
+                                   : "internalRenderLayer=0");
+        return true;
+    }
+
+    bool Player::renderToLayer(iTJSDispatch2 *layerObject, bool skipUpdate) {
+        if(!layerObject) {
+            return false;
+        }
+
+        ensureMotionLoaded();
+        if(!_runtime || !_runtime->activeMotion) {
+            return false;
+        }
+        const auto motionPath = _runtime->activeMotion->path;
+
+        tTJSVariant target(layerObject, layerObject);
+        iTJSDispatch2 *resolvedLayerObject = layerObject;
+        if(auto *resolved = tryResolveLayerDispatch(target)) {
+            resolvedLayerObject = resolved;
+        }
+
+        int canvasWidth = 0;
+        int canvasHeight = 0;
+        if(!queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight) &&
+            _runtime->activeMotion) {
+            canvasWidth = static_cast<int>(_runtime->activeMotion->width);
+            canvasHeight = static_cast<int>(_runtime->activeMotion->height);
+        }
+        if(canvasWidth <= 0 || canvasHeight <= 0) {
+            return false;
+        }
+        detail::logoChainTraceLogf(
+            motionPath, "draw.layer", "0x6C7440/0x6CE7D8", _clampedEvalTime,
+            "targetLayerCanvas={}x{} skipUpdate={} needsInternalAssignImages={}",
+            canvasWidth, canvasHeight, skipUpdate ? 1 : 0,
+            _needsInternalAssignImages ? 1 : 0);
+
+        prepareRenderItems();
+        applyPreparedRenderItemTranslateOffsets();
+
+        const bool needsInternalAssignBeforeRender =
+            _needsInternalAssignImages && !skipUpdate;
+        if(!renderToCanvasLike_0x6C7440(&target, !skipUpdate)) {
+            return false;
+        }
+
         if(!skipUpdate) {
-            if(renderLayerObject != resolvedLayerObject) {
-                updateLayerAfterDraw(resolvedLayerObject);
+            if(needsInternalAssignBeforeRender) {
+                updateLayerAfterDrawLike_0x6CE7D8(&target);
             } else if(auto *layer = resolveNativeLayer(resolvedLayerObject)) {
                 if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                    motionPath.find("m2logo.mtn") != std::string::npos &&
@@ -2338,8 +2400,6 @@ namespace motion {
             }
         }
 
-        _runtime->lastCanvas =
-            tTJSVariant(resolvedLayerObject, resolvedLayerObject);
         detail::logoChainTraceSummary(
             motionPath, "renderToLayer", _clampedEvalTime,
             skipUpdate ? "skipUpdate=1" : "skipUpdate=0");
@@ -2444,7 +2504,7 @@ namespace motion {
         return true;
     }
 
-    bool Player::updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject) {
+    bool Player::updateLayerAfterDrawLike_0x6CE7D8(tTJSVariant *target) {
         if(!_needsInternalAssignImages) {
             return true;
         }
@@ -2453,7 +2513,7 @@ namespace motion {
                                                : std::string{};
 
         _needsInternalAssignImages = false;
-        if(!targetLayerObject) {
+        if(!target || !_runtime) {
             return false;
         }
 
@@ -2466,7 +2526,8 @@ namespace motion {
         }
 
         try {
-            tTJSVariant targetVar(targetLayerObject, targetLayerObject);
+            tTJSVariant targetVar;
+            targetVar = *target;
             tTJSVariant *args[] = { &targetVar };
             const bool ok = TJS_SUCCEEDED(renderLayerObject->FuncCall(
                 0, TJS_W("assignImages"), nullptr, nullptr, 1, args,
@@ -2474,8 +2535,8 @@ namespace motion {
             detail::logoChainTraceCheck(
                 motionPath, "post.assignImages", "0x6CE7D8",
                 _clampedEvalTime,
-                "internal render layer assignImages(targetLayer)",
-                ok ? "assignImages(targetLayer)" : "assignImages(failed)",
+                "internal render layer assignImages(original target variant)",
+                ok ? "assignImages(target)" : "assignImages(failed)",
                 ok,
                 "sub_6CE7D8 failed to assign internal render layer to target");
             return ok;
@@ -2483,11 +2544,19 @@ namespace motion {
             detail::logoChainTraceCheck(
                 motionPath, "post.assignImages", "0x6CE7D8",
                 _clampedEvalTime,
-                "internal render layer assignImages(targetLayer)",
+                "internal render layer assignImages(original target variant)",
                 "assignImages(threw)", false,
                 "sub_6CE7D8 threw while assigning internal render layer");
             return false;
         }
+    }
+
+    bool Player::updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject) {
+        if(!targetLayerObject) {
+            return !_needsInternalAssignImages;
+        }
+        tTJSVariant target(targetLayerObject, targetLayerObject);
+        return updateLayerAfterDrawLike_0x6CE7D8(&target);
     }
 
     bool Player::updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject) {

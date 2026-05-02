@@ -522,6 +522,9 @@ namespace motion {
                                               double value);
         bool renderToLayer(iTJSDispatch2 *layerObject,
                            bool skipUpdate = false);
+        bool renderToCanvasLike_0x6C7440(
+            tTJSVariant *target,
+            bool willCallUpdateLayerAfterDraw);
         bool renderToSeparateLayerAdaptor(iTJSDispatch2 *slaObject);
         bool renderToD3DAdaptor(D3DAdaptor *adaptor);
         bool renderViaSharedD3DAdaptor(iTJSDispatch2 *targetLayerObject);
@@ -543,6 +546,7 @@ namespace motion {
         bool buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight);
         bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
                                         bool skipUpdate);
+        bool updateLayerAfterDrawLike_0x6CE7D8(tTJSVariant *target);
         bool updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject);
         bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)

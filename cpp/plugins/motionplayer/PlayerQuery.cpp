@@ -1469,6 +1469,23 @@ namespace motion {
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::MotionTraceRenderDrawScope renderTrace(this, arg, paramObj);
 #endif
+        const auto logDrawMatrix = [&](const char *route) {
+            if(!_runtime) {
+                return;
+            }
+            detail::logoChainTraceLogf(
+                motionPath, "drawCompat.matrix", "0x6D5FB8",
+                _clampedEvalTime,
+                "route={} drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
+                route ? route : "",
+                _runtime->drawAffineMatrix[0],
+                _runtime->drawAffineMatrix[1],
+                _runtime->drawAffineMatrix[2],
+                _runtime->drawAffineMatrix[3],
+                _runtime->drawAffineMatrix[4],
+                _runtime->drawAffineMatrix[5],
+                _cameraOffsetX, _cameraOffsetY);
+        };
 
         if(!paramObj) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
@@ -1477,14 +1494,7 @@ namespace motion {
             detail::logoChainTraceLogf(
                 motionPath, "drawCompat.dispatch", "0x6D5FB8",
                 _clampedEvalTime,
-                "route=no-param drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f})",
-                _runtime->drawAffineMatrix[0],
-                _runtime->drawAffineMatrix[1],
-                _runtime->drawAffineMatrix[2],
-                _runtime->drawAffineMatrix[3],
-                _runtime->drawAffineMatrix[4],
-                _runtime->drawAffineMatrix[5],
-                _cameraOffsetX, _cameraOffsetY);
+                "route=no-param");
             return;
         }
 
@@ -1503,17 +1513,7 @@ namespace motion {
                     "D3DAdaptor -> Player_drawD3D",
                     "D3DAdaptor -> Player_drawD3D", true,
                     "drawCompat D3D routing mismatch");
-                detail::logoChainTraceLogf(
-                    motionPath, "drawCompat.matrix", "0x6D5FB8",
-                    _clampedEvalTime,
-                    "route=d3d drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
-                    _runtime->drawAffineMatrix[0],
-                    _runtime->drawAffineMatrix[1],
-                    _runtime->drawAffineMatrix[2],
-                    _runtime->drawAffineMatrix[3],
-                    _runtime->drawAffineMatrix[4],
-                    _runtime->drawAffineMatrix[5],
-                    _cameraOffsetX, _cameraOffsetY);
+                logDrawMatrix("d3d");
                 _d3dDrawMode = true;
                 renderToD3DAdaptor(d3dAdaptor);
                 return;
@@ -1539,95 +1539,76 @@ namespace motion {
                     "SeparateLayerAdaptor -> Player_DrawSLA",
                     "SeparateLayerAdaptor -> Player_DrawSLA", true,
                     "drawCompat SLA routing mismatch");
-                detail::logoChainTraceLogf(
-                    motionPath, "drawCompat.matrix", "0x6D5FB8",
-                    _clampedEvalTime,
-                    "route=sla drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
-                    _runtime->drawAffineMatrix[0],
-                    _runtime->drawAffineMatrix[1],
-                    _runtime->drawAffineMatrix[2],
-                    _runtime->drawAffineMatrix[3],
-                    _runtime->drawAffineMatrix[4],
-                    _runtime->drawAffineMatrix[5],
-                    _cameraOffsetX, _cameraOffsetY);
+                logDrawMatrix("sla");
                 renderToSeparateLayerAdaptor(paramObj);
                 return;
             }
         }
 
-        // Step 3: param is a Layer (or resolves to one)
-        tTJSNI_BaseLayer *layer = nullptr;
-        if(tryGetLayerObject(*arg, layer)) {
+        // Step 3: ordinary render-list path. Android does not dispatch plain
+        // Layer objects at the top of Player_drawCompat @ 0x6D5FB8; it builds
+        // render items first, then branches on d3dDrawMode and only then hands
+        // a copied target variant to Player_renderToCanvas_guess @ 0x6C7440.
+        ensureMotionLoaded();
+        if(!_runtime || !_runtime->activeMotion) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
-            renderTrace.setRoute(_d3dDrawMode
-                ? "layer-via-d3d"
-                : "layer");
+            renderTrace.setRoute("no-motion");
+#endif
+            detail::logoChainTraceLogf(
+                motionPath, "drawCompat.dispatch", "0x6D5FB8",
+                _clampedEvalTime,
+                "route=no-motion");
+            return;
+        }
+
+        if(!prepareRenderItems()) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            renderTrace.setRoute("prepare_empty");
 #endif
             detail::logoChainTraceCheck(
                 motionPath, "drawCompat.dispatch", "0x6D5FB8",
                 _clampedEvalTime,
-                "Layer -> renderToLayer/renderViaSharedD3DAdaptor",
-                _d3dDrawMode
-                    ? "Layer -> renderViaSharedD3DAdaptor"
-                    : "Layer -> renderToLayer",
-                true, "drawCompat Layer routing mismatch");
-            detail::logoChainTraceLogf(
-                motionPath, "drawCompat.matrix", "0x6D5FB8",
-                _clampedEvalTime,
-                "route={} drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
-                _d3dDrawMode ? "layer-via-d3d" : "layer",
-                _runtime->drawAffineMatrix[0],
-                _runtime->drawAffineMatrix[1],
-                _runtime->drawAffineMatrix[2],
-                _runtime->drawAffineMatrix[3],
-                _runtime->drawAffineMatrix[4],
-                _runtime->drawAffineMatrix[5],
-                _cameraOffsetX, _cameraOffsetY);
-            if(_d3dDrawMode) {
-                renderViaSharedD3DAdaptor(paramObj);
-            } else {
-                renderToLayer(paramObj);
-            }
+                "prepareRenderItems should produce a render list",
+                "prepareRenderItems returned false", false,
+                "drawCompat ordinary path stopped before renderToCanvas");
             return;
         }
 
-        // Step 4: param resolves to a Layer via property chain
-        {
-            iTJSDispatch2 *resolved = tryResolveSeparateAdaptorOwner(*arg);
-            if(resolved) {
+        if(_d3dDrawMode) {
+            const bool ok = renderViaSharedD3DAdaptor(paramObj);
 #if defined(KRKR2_WASMTIME_HEADLESS)
-                renderTrace.setRoute(_d3dDrawMode
-                    ? "resolved-owner-layer-via-d3d"
-                    : "resolved-owner-layer");
+            renderTrace.setRoute(ok ? "shared_d3d" : "shared_d3d_failed");
 #endif
-                detail::logoChainTraceCheck(
-                    motionPath, "drawCompat.dispatch", "0x6D5FB8",
-                    _clampedEvalTime,
-                    "Resolved owner Layer -> renderToLayer/renderViaSharedD3DAdaptor",
-                    _d3dDrawMode
-                        ? "Resolved owner Layer -> renderViaSharedD3DAdaptor"
-                        : "Resolved owner Layer -> renderToLayer",
-                    true, "drawCompat owner-layer routing mismatch");
-                if(_d3dDrawMode) {
-                    renderViaSharedD3DAdaptor(resolved);
-                } else {
-                    renderToLayer(resolved);
-                }
-                return;
-            }
+            detail::logoChainTraceCheck(
+                motionPath, "drawCompat.dispatch", "0x6D5FB8",
+                _clampedEvalTime,
+                "prepareRenderItems -> shared D3D render path",
+                ok ? "shared_d3d" : "shared_d3d_failed",
+                ok, "drawCompat shared D3D path failed");
+            logDrawMatrix(ok ? "shared_d3d" : "shared_d3d_failed");
+            return;
         }
 
-        // Fallback: no SLA/Layer match
+        applyPreparedRenderItemTranslateOffsets();
+        tTJSVariant targetCopy;
+        targetCopy = *arg;
+        const bool rendered =
+            renderToCanvasLike_0x6C7440(&targetCopy, true);
+        const bool updated =
+            rendered && updateLayerAfterDrawLike_0x6CE7D8(arg);
+        const bool ok = rendered && updated;
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        renderTrace.setRoute("unresolved");
+        renderTrace.setRoute(ok
+            ? "render_to_canvas"
+            : "render_to_canvas_failed");
 #endif
         detail::logoChainTraceCheck(
             motionPath, "drawCompat.dispatch", "0x6D5FB8",
             _clampedEvalTime,
-            "D3DAdaptor | SeparateLayerAdaptor | Layer",
-            "unresolved target", false,
-            "drawCompat could not classify the target object");
-        return;
+            "prepareRenderItems -> applyTranslateOffset -> renderToCanvas(copy(target)) -> updateLayerAfterDraw(target)",
+            ok ? "render_to_canvas" : "render_to_canvas_failed",
+            ok, "drawCompat ordinary render path failed");
+        logDrawMatrix(ok ? "render_to_canvas" : "render_to_canvas_failed");
     }
 
     tjs_error Player::playCompat(tTJSVariant *result, tjs_int numparams,
