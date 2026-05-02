@@ -393,7 +393,8 @@ public:
         const auto origTexId = origTex ? origTex->getName() : 0u;
         bool updated = false;
         bool recreated = false;
-        if(auto logger = spdlog::get("core")) {
+        if(lowLevelLogoTraceEnabled()) {
+            if(auto logger = spdlog::get("core")) {
             const auto samplePixelTL =
                 (BmpData && Pitch >= 4) ? *((const uint32_t *)BmpData) : 0u;
             uint32_t samplePixelCenter = 0u;
@@ -408,6 +409,7 @@ public:
                 "sampleTL=0x{:08x} sampleCenter=0x{:08x}",
                 (void *)this, (void *)origTex, Width, Height, Pitch,
                 samplePixelTL, samplePixelCenter);
+            }
         }
         if(!origTex || origTex->getPixelsWide() != Width ||
            origTex->getPixelsHigh() != Height) {
@@ -421,12 +423,14 @@ public:
         } else {
             updated = origTex->updateWithData(BmpData, 0, 0, Pitch / 4, Height);
         }
-        if(auto logger = spdlog::get("core")) {
+        if(lowLevelLogoTraceEnabled()) {
+            if(auto logger = spdlog::get("core")) {
             logger->warn(
                 "WCHAIN stage=texture.getAdapterTexture.result func=0xAA6268 "
                 "kind=static ptr={} recreated={} updated={} origTexId={} newTexId={}",
                 (void *)this, recreated ? 1 : 0, updated ? 1 : 0, origTexId,
                 origTex ? origTex->getName() : 0u);
+            }
         }
         return origTex;
     }
@@ -532,7 +536,8 @@ public:
         const auto origTexId = origTex ? origTex->getName() : 0u;
         bool updated = false;
         bool recreated = false;
-        if(auto logger = spdlog::get("core")) {
+        if(lowLevelLogoTraceEnabled()) {
+            if(auto logger = spdlog::get("core")) {
             const auto samplePixelTL =
                 (BmpData && Pitch >= 4) ? *((const uint32_t *)BmpData) : 0u;
             uint32_t samplePixelCenter = 0u;
@@ -547,6 +552,7 @@ public:
                 "sampleTL=0x{:08x} sampleCenter=0x{:08x}",
                 (void *)this, (void *)origTex, Width, Height, Pitch,
                 samplePixelTL, samplePixelCenter);
+            }
         }
         if(!origTex || origTex->getPixelsWide() != Width ||
            origTex->getPixelsHigh() != Height) {
@@ -560,12 +566,14 @@ public:
         } else {
             updated = origTex->updateWithData(BmpData, 0, 0, Width, Height);
         }
-        if(auto logger = spdlog::get("core")) {
+        if(lowLevelLogoTraceEnabled()) {
+            if(auto logger = spdlog::get("core")) {
             logger->warn(
                 "WCHAIN stage=texture.getAdapterTexture.result func=0xAA6268 "
                 "kind=compress ptr={} recreated={} updated={} origTexId={} newTexId={}",
                 (void *)this, recreated ? 1 : 0, updated ? 1 : 0, origTexId,
                 origTex ? origTex->getName() : 0u);
+            }
         }
         return origTex;
     }
@@ -649,7 +657,8 @@ public:
     GetAdapterTexture(cocos2d::Texture2D *origTex) override {
         const auto origTexId = origTex ? origTex->getName() : 0u;
         bool recreated = false;
-        if(auto logger = spdlog::get("core")) {
+        if(lowLevelLogoTraceEnabled()) {
+            if(auto logger = spdlog::get("core")) {
             const auto samplePixelTL =
                 (_scanline.empty() || !_scanline.front()) ? 0u
                                                           : *((const uint32_t *)_scanline.front());
@@ -666,6 +675,7 @@ public:
                 "sampleTL=0x{:08x} sampleCenter=0x{:08x}",
                 (void *)this, (void *)origTex, Width, Height,
                 (unsigned)_scanline.size(), samplePixelTL, samplePixelCenter);
+            }
         }
         if(!origTex || origTex->getPixelsWide() != Width ||
            origTex->getPixelsHigh() != _scanline.size()) {
@@ -683,13 +693,15 @@ public:
                 ++updatedLines;
             ++y;
         }
-        if(auto logger = spdlog::get("core")) {
+        if(lowLevelLogoTraceEnabled()) {
+            if(auto logger = spdlog::get("core")) {
             logger->warn(
                 "WCHAIN stage=texture.getAdapterTexture.result func=0xAA6268 "
                 "kind=half ptr={} recreated={} updatedLines={} totalLines={} "
                 "origTexId={} newTexId={}",
                 (void *)this, recreated ? 1 : 0, updatedLines, y, origTexId,
                 origTex ? origTex->getName() : 0u);
+            }
         }
         return origTex;
     }

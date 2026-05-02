@@ -19,6 +19,7 @@
 #include "base/CCEventListenerController.h"
 #include "base/CCController.h"
 #else
+#include <emscripten.h>
 #include <emscripten/html5.h>
 #endif
 #include "2d/CCCamera.h"
@@ -73,6 +74,30 @@ static tjs_uint16 _keymap[0x200];
 static Label *_fpsLabel = nullptr;
 
 #include "CCKeyCodeConv.h"
+
+namespace {
+bool lowLevelLogoTraceEnabled() {
+#ifdef EMSCRIPTEN
+    return EM_ASM_INT({
+               try {
+                   if(typeof window !== 'undefined' &&
+                      window.__KRKR_TRACE_LOGO_CHAIN__) {
+                       return 1;
+                   }
+                   const params = new URLSearchParams(window.location.search);
+                   const traceParam = params.get('trace') || "";
+                   return params.has('traceLogoChain') ||
+                       traceParam === 'logo' || traceParam === 'logo-chain' ||
+                       traceParam === '1';
+               } catch (e) {
+                   return 0;
+               }
+           }) != 0;
+#else
+    return false;
+#endif
+}
+} // namespace
 
 #ifndef GL_UNPACK_ROW_LENGTH
 #define GL_UNPACK_ROW_LENGTH 0x0CF2
@@ -926,7 +951,8 @@ public:
             DrawSprite->setPosition(Vec2(0, size.height));
             PrimaryLayerArea->setContentSize(size);
             PrimaryLayerArea->setScale(scale);
-            if(auto logger = spdlog::get("core")) {
+            if(lowLevelLogoTraceEnabled()) {
+                if(auto logger = spdlog::get("core")) {
                 const auto spriteRect = DrawSprite->getTextureRect();
                 const auto primarySize = PrimaryLayerArea->getContentSize();
                 logger->warn(
@@ -942,6 +968,7 @@ public:
                     spriteRect.size.height, DrawSprite->getPositionX(),
                     DrawSprite->getPositionY(), primarySize.width,
                     primarySize.height, PrimaryLayerArea->getScale());
+                }
             }
         }
     }
@@ -970,7 +997,8 @@ public:
         setZoomScale(scale);
         setContentOffset(offset);
         updateInset();
-        if(auto logger = spdlog::get("core")) {
+        if(lowLevelLogoTraceEnabled()) {
+            if(auto logger = spdlog::get("core")) {
             const auto viewSize = getViewSize();
             const auto contentSize = getContentSize();
             const auto appliedOffset = getContentOffset();
@@ -984,6 +1012,7 @@ public:
                 scale, offset.x, offset.y, getZoomScale(),
                 appliedOffset.x, appliedOffset.y, _drawTextureScaleX,
                 _drawTextureScaleY);
+            }
         }
     }
 
@@ -1056,9 +1085,10 @@ public:
         // 		}
         Texture2D *tex2d = DrawSprite->getTexture();
         Texture2D *newtex = tex->GetAdapterTexture(tex2d);
-        float loggedScaleX = 1.f, loggedScaleY = 1.f;
-        tex->GetScale(loggedScaleX, loggedScaleY);
-        if(auto logger = spdlog::get("core")) {
+        if(lowLevelLogoTraceEnabled()) {
+            float loggedScaleX = 1.f, loggedScaleY = 1.f;
+            tex->GetScale(loggedScaleX, loggedScaleY);
+            if(auto logger = spdlog::get("core")) {
             const auto viewSize = getViewSize();
             const auto contentSize = getContentSize();
             const auto spriteRect =
@@ -1107,6 +1137,7 @@ public:
                 PrimaryLayerArea ? (PrimaryLayerArea->isRunning() ? 1 : 0) : 0,
                 isRunning() ? 1 : 0, (const void *)spriteParent,
                 (const void *)primaryParent, (const void *)windowParent);
+            }
         }
         if(tex2d != newtex) {
             DrawSprite->setTexture(newtex);
@@ -1128,7 +1159,8 @@ public:
             }
             DrawSprite->setTextureRect(cocos2d::Rect(0, 0, sw, sh));
             DrawSprite->setBlendFunc(BlendFunc::DISABLE);
-            if(auto logger = spdlog::get("core")) {
+            if(lowLevelLogoTraceEnabled()) {
+                if(auto logger = spdlog::get("core")) {
                 const auto spriteRect = DrawSprite->getTextureRect();
                 logger->warn(
                     "WCHAIN stage=window.updateDrawBuffer.apply func=0xAA6268 "
@@ -1138,6 +1170,7 @@ public:
                     _drawTextureScaleY, spriteRect.origin.x,
                     spriteRect.origin.y, spriteRect.size.width,
                     spriteRect.size.height);
+                }
             }
             ResetDrawSprite();
         }

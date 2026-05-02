@@ -6354,11 +6354,13 @@ void tTJSNI_BaseLayer::InternalUpdate(const tTVPRect &rect, bool tempupdate) {
         c.Or(cr);
         bool vis = GetVisible();
         bool nodeVis = GetNodeVisible();
-        if(!vis || !nodeVis) {
-            spdlog::get("core")->warn("InternalUpdate: layer {} SKIPPED "
-                                      "visible={} nodeVisible={} rect=({},{},{},{})",
-                                      (void*)this, vis, nodeVis,
-                                      cr.left, cr.top, cr.right, cr.bottom);
+        if(lowLevelLogoTraceEnabled() && (!vis || !nodeVis)) {
+            if(auto logger = spdlog::get("core")) {
+                logger->warn("InternalUpdate: layer {} SKIPPED "
+                             "visible={} nodeVisible={} rect=({},{},{},{})",
+                             (void *)this, vis, nodeVis, cr.left, cr.top,
+                             cr.right, cr.bottom);
+            }
         }
         Parent->UpdateChildRegion(this, c, tempupdate, vis, nodeVis);
     } else {

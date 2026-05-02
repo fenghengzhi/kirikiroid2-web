@@ -579,6 +579,7 @@
                 <div id="picker-divider" class="picker-divider" style="display:none">or load a copy into memory</div>
                 <button id="pick-file-btn">Select .xp3 File</button>
                 <button id="pick-dir-btn">Upload Folder</button>
+@KRKR2_DEBUG_OPEN_ZIP_BUTTON@
             </div>
             <div id="picker-status"></div>
             <div id="picker-progress"><div id="picker-progress-fill"></div></div>
@@ -595,6 +596,7 @@
 
     <input type="file" id="file-input" style="display:none;">
     <input type="file" id="dir-input" webkitdirectory style="display:none;">
+@KRKR2_DEBUG_OPEN_ZIP_INPUT@
 
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin="anonymous"></script>
     <script>
@@ -1170,6 +1172,52 @@
             return data;
         }
 
+        function collectZipEntries(zip) {
+            var entries = [];
+            zip.forEach(function(relativePath, zipEntry) {
+                if (!zipEntry.dir) entries.push({ path: relativePath, entry: zipEntry });
+            });
+            return entries;
+        }
+
+        function findCommonZipPrefix(entries) {
+            if (entries.length === 0) return '';
+            var firstSlash = entries[0].path.indexOf('/');
+            if (firstSlash <= 0) return '';
+            var candidate = entries[0].path.substring(0, firstSlash + 1);
+            return entries.every(function(e) { return e.path.startsWith(candidate); }) ? candidate : '';
+        }
+
+        async function extractZipEntriesToFS(entries, onProgress) {
+            var commonPrefix = findCommonZipPrefix(entries);
+            var xp3Paths = [];
+            var total = entries.length;
+
+            await waitForFS();
+            for (var i = 0; i < total; i++) {
+                var e = entries[i];
+                var innerPath = commonPrefix ? e.path.substring(commonPrefix.length) : e.path;
+                if (!innerPath) continue;
+                var fsPath = '/' + innerPath;
+                var lowerName = innerPath.substring(innerPath.lastIndexOf('/') + 1).toLowerCase();
+
+                if (onProgress) {
+                    onProgress(
+                        Math.round(i / total * 100),
+                        'Extracting (' + (i + 1) + '/' + total + ') ' + innerPath
+                    );
+                }
+
+                var fileData = await e.entry.async('uint8array');
+                writeFileToFS(fsPath, fileData);
+                fileData = null;
+
+                if (lowerName.endsWith('.xp3')) xp3Paths.push(fsPath);
+            }
+
+            return xp3Paths;
+        }
+
         async function fetchAndExtractZip(url, entryFile) {
             loadingOverlay.classList.remove('hidden');
             statusElement.textContent = 'Downloading game archive...';
@@ -1190,41 +1238,10 @@
                 var zip = await JSZip.loadAsync(zipData);
                 zipData = null;
 
-                var entries = [];
-                zip.forEach(function(relativePath, zipEntry) {
-                    if (!zipEntry.dir) entries.push({ path: relativePath, entry: zipEntry });
+                var xp3Paths = await extractZipEntriesToFS(collectZipEntries(zip), function(pct, text) {
+                    progressFill.style.width = (50 + Math.round(pct * 0.5)) + '%';
+                    statusElement.textContent = text;
                 });
-
-                var commonPrefix = '';
-                if (entries.length > 0) {
-                    var firstSlash = entries[0].path.indexOf('/');
-                    if (firstSlash > 0) {
-                        var candidate = entries[0].path.substring(0, firstSlash + 1);
-                        var allMatch = entries.every(function(e) { return e.path.startsWith(candidate); });
-                        if (allMatch) commonPrefix = candidate;
-                    }
-                }
-
-                var xp3Paths = [];
-                var total = entries.length;
-                await waitForFS();
-                for (var i = 0; i < total; i++) {
-                    var e = entries[i];
-                    var innerPath = commonPrefix ? e.path.substring(commonPrefix.length) : e.path;
-                    if (!innerPath) continue;
-                    var fsPath = '/' + innerPath;
-                    var lowerName = innerPath.substring(innerPath.lastIndexOf('/') + 1).toLowerCase();
-
-                    var pct = 50 + Math.round(i / total * 50);
-                    progressFill.style.width = pct + '%';
-                    statusElement.textContent = 'Extracting (' + (i + 1) + '/' + total + ') ' + innerPath;
-
-                    var fileData = await e.entry.async('uint8array');
-                    writeFileToFS(fsPath, fileData);
-                    fileData = null;
-
-                    if (lowerName.endsWith('.xp3')) xp3Paths.push(fsPath);
-                }
 
                 progressFill.style.width = '100%';
                 statusElement.textContent = 'Starting game...';
@@ -1406,6 +1423,8 @@
             if (files.length > 0) handleFolder(files);
             e.target.value = '';
         });
+
+@KRKR2_DEBUG_OPEN_ZIP_SCRIPT@
 
         // Drag & drop
         var dropZone = document.getElementById('drop-zone');

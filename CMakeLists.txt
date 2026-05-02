@@ -119,6 +119,49 @@ elseif(WEB)
         --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio@/
     )
     target_compile_options(${PROJECT_NAME} PRIVATE "SHELL:-s USE_SDL=2" "SHELL:-s USE_SDL_TTF=2" -fwasm-exceptions)
+    # Debug-only local ZIP opener for browser-side game archive testing.
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(KRKR2_DEBUG_OPEN_ZIP_BUTTON "                <button id=\"pick-zip-btn\">Select .zip File</button>")
+        set(KRKR2_DEBUG_OPEN_ZIP_INPUT "    <input type=\"file\" id=\"zip-input\" accept=\".zip,application/zip,application/x-zip-compressed\" style=\"display:none;\">")
+        set(KRKR2_DEBUG_OPEN_ZIP_SCRIPT [=[
+        async function handleZipFile(file) {
+            try {
+                setPickerProgress(0, 'Reading ' + file.name + '...');
+                var zipData = await readFileWithProgress(file);
+                setPickerProgress(50, 'Extracting archive...');
+                var zip = await JSZip.loadAsync(zipData);
+                zipData = null;
+
+                var xp3Paths = await extractZipEntriesToFS(collectZipEntries(zip), function(pct, text) {
+                    setPickerProgress(50 + Math.round(pct * 0.5), text);
+                });
+
+                setPickerProgress(100, 'Starting...');
+                checkAndStartGame(xp3Paths, '');
+            } catch (err) {
+                pickerStatus.textContent = 'Error: ' + err.message;
+                pickerProgress.classList.remove('visible');
+                console.error('handleZipFile error:', err);
+            }
+        }
+
+        document.getElementById('pick-zip-btn').addEventListener('click', function() {
+            ensureSpaceThen(function() {
+                document.getElementById('zip-input').click();
+            });
+        });
+
+        document.getElementById('zip-input').addEventListener('change', function(e) {
+            var file = e.target.files[0];
+            if (file) handleZipFile(file);
+            e.target.value = '';
+        });
+]=])
+    else()
+        set(KRKR2_DEBUG_OPEN_ZIP_BUTTON "")
+        set(KRKR2_DEBUG_OPEN_ZIP_INPUT "")
+        set(KRKR2_DEBUG_OPEN_ZIP_SCRIPT "")
+    endif()
     # PWA: only enabled for non-Debug builds
     if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         file(READ ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/pwa-head.html KRKR2_PWA_HEAD)
