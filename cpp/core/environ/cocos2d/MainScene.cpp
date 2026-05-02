@@ -416,7 +416,7 @@ class TVPWindowLayer : public cocos2d::extension::ScrollView,
     bool UseMouseKey = false, MouseLeftButtonEmulatedPushed = false,
          MouseRightButtonEmulatedPushed = false;
     bool LastMouseMoved = false, Visible = false;
-    bool MouseClickDispatchedForPress = false;
+    bool MouseEventOwnsCurrentPress = false;
     tjs_uint32 LastMouseKeyTick = 0;
     tjs_int MouseKeyXAccel = 0;
     tjs_int MouseKeyYAccel = 0;
@@ -493,9 +493,8 @@ public:
 
     static Vec2 mouseEventWorldPoint(EventMouse *e) {
 #ifdef __EMSCRIPTEN__
-        // libkrkr2.so TVPWindowLayer mouse handlers at 0xAA79F0/0xAA7A9C
-        // consume the Cocos world point. The Web GLViewImpl already stores it
-        // in EventMouse's cursor fields, while getLocation() converts again.
+        // Web GLViewImpl stores the already-normalized Cocos world point in
+        // EventMouse's cursor fields; getLocation() would convert it again.
         return Vec2(e->getCursorX(), e->getCursorY());
 #else
         return e->getLocation();
@@ -548,14 +547,17 @@ public:
         switch(e->getMouseButton()) {
             case EventMouse::MouseButton::BUTTON_LEFT:
                 _mouseBtn = mbLeft;
+                MouseEventOwnsCurrentPress = true;
                 onMouseDown(pt);
                 break;
             case EventMouse::MouseButton::BUTTON_RIGHT:
                 _mouseBtn = mbRight;
+                MouseEventOwnsCurrentPress = true;
                 onMouseDown(pt);
                 break;
             case EventMouse::MouseButton::BUTTON_MIDDLE:
                 _mouseBtn = mbMiddle;
+                MouseEventOwnsCurrentPress = true;
                 onMouseDown(pt);
                 break;
             default:
@@ -570,14 +572,17 @@ public:
             case EventMouse::MouseButton::BUTTON_LEFT:
                 _mouseBtn = mbLeft;
                 onMouseUp(pt, true);
+                MouseEventOwnsCurrentPress = false;
                 break;
             case EventMouse::MouseButton::BUTTON_RIGHT:
                 _mouseBtn = mbRight;
                 onMouseUp(pt);
+                MouseEventOwnsCurrentPress = false;
                 break;
             case EventMouse::MouseButton::BUTTON_MIDDLE:
                 _mouseBtn = mbMiddle;
                 onMouseUp(pt);
+                MouseEventOwnsCurrentPress = false;
                 break;
             default:
                 break;
@@ -648,6 +653,8 @@ public:
     void onTouchMoved(Touch *touch, Event *unused_event) override {
         if(_windowMgrOverlay)
             return inherit::onTouchMoved(touch, unused_event);
+        if(MouseEventOwnsCurrentPress)
+            return;
         if(TJSNativeInstance) {
             if(_touches.size() == 1) {
                 if(!_touchMoved &&
@@ -690,7 +697,7 @@ public:
         auto touchIter = std::find(_touches.begin(), _touches.end(), touch);
 
         if(touchIter != _touches.end()) {
-            if(_touches.size() == 1) {
+            if(_touches.size() == 1 && !MouseEventOwnsCurrentPress) {
                 if(TJSNativeInstance) {
                     Vec2 nsp = PrimaryLayerArea->convertTouchToNodeSpace(touch);
                     _LastMouseX = nsp.x,
@@ -711,11 +718,9 @@ public:
                             _mouseBtn, TVPGetCurrentShiftKeyState()));
                         TVPPostInputEvent(new tTVPOnClickInputEvent(
                             TJSNativeInstance, _LastMouseX, _LastMouseY));
-                        MouseClickDispatchedForPress = true;
                     } else if(nearStart) {
                         TVPPostInputEvent(new tTVPOnClickInputEvent(
                             TJSNativeInstance, _LastMouseX, _LastMouseY));
-                        MouseClickDispatchedForPress = true;
                     }
                     _scancode[TVPConvertMouseBtnToVKCode(_mouseBtn)] = 0x10;
                     TVPPostInputEvent(new tTVPOnMouseUpInputEvent(
@@ -745,7 +750,7 @@ public:
             _dragging = false;
             _touchMoved = false;
 
-            if(TJSNativeInstance) {
+            if(TJSNativeInstance && !MouseEventOwnsCurrentPress) {
                 Vec2 nsp = PrimaryLayerArea->convertTouchToNodeSpace(touch);
                 _LastMouseX = nsp.x,
                 _LastMouseY = PrimaryLayerArea->getContentSize().height - nsp.y;
@@ -762,7 +767,6 @@ public:
         _LastMouseY = PrimaryLayerArea->getContentSize().height - nsp.y;
         LastMouseDownX = _LastMouseX;
         LastMouseDownY = _LastMouseY;
-        MouseClickDispatchedForPress = false;
         _scancode[TVPConvertMouseBtnToVKCode(_mouseBtn)] = 0x11;
         TVPPostInputEvent(new tTVPOnMouseDownInputEvent(
             TJSNativeInstance, _LastMouseX, _LastMouseY, _mouseBtn,
@@ -773,18 +777,14 @@ public:
         Vec2 nsp = PrimaryLayerArea->convertToNodeSpace(pt);
         _LastMouseX = nsp.x,
         _LastMouseY = PrimaryLayerArea->getContentSize().height - nsp.y;
-        if(emitClick && _mouseBtn == mbLeft && !MouseClickDispatchedForPress) {
+        if(emitClick && _mouseBtn == mbLeft) {
             TVPPostInputEvent(new tTVPOnClickInputEvent(
                 TJSNativeInstance, LastMouseDownX, LastMouseDownY));
-            MouseClickDispatchedForPress = true;
         }
         _scancode[TVPConvertMouseBtnToVKCode(_mouseBtn)] &= 0x10;
         TVPPostInputEvent(new tTVPOnMouseUpInputEvent(
             TJSNativeInstance, _LastMouseX, _LastMouseY, _mouseBtn,
             TVPGetCurrentShiftKeyState()));
-        if(_mouseBtn == mbLeft) {
-            MouseClickDispatchedForPress = false;
-        }
     }
 
     void onMouseMove(const Vec2 &pt) {
@@ -813,7 +813,6 @@ public:
             TVPGetCurrentShiftKeyState()));
         TVPPostInputEvent(new tTVPOnClickInputEvent(TJSNativeInstance,
                                                     _LastMouseX, _LastMouseY));
-        MouseClickDispatchedForPress = true;
         TVPPostInputEvent(new tTVPOnMouseUpInputEvent(
             TJSNativeInstance, _LastMouseX, _LastMouseY, _mouseBtn,
             TVPGetCurrentShiftKeyState()));
