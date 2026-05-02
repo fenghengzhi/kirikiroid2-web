@@ -15,6 +15,7 @@ import sys
 import struct
 import tempfile
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,18 @@ FRAMEBUFFER_CAPTURE_SURFACE = (
     "Layer main image immediately after Motion.Player.draw(base)"
 )
 FRAMEBUFFER_CAPTURE_GUEST_ROOT = "/framebuffer_capture"
+RENDER_SCHEMA = "motion-render-stage-wasmtime-v1"
+RENDER_EVENT_SCHEMA = "motion-render-stage-wasmtime-v1-event"
+RENDER_SOURCE = "wasmtime-port-render-stage"
+RENDER_CAPTURE_GUEST_ROOT = "/render_stage_capture"
+RENDER_CAPTURE_SURFACES: tuple[str, ...] = ("pre_draw", "post_draw")
+RENDER_STAGES: tuple[str, ...] = (
+    "draw_dispatch",
+    "render_prepare",
+    "render_commands",
+    "render_execute",
+    "layer_save",
+)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -68,12 +81,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Framebuffer artifact output directory. Default: "
                         "tests/differential/artifacts/"
                         "motion_playback_framebuffer_wasmtime/<run-id>")
+    p.add_argument("--record-render-stages", action="store_true",
+                   help="Save Wasmtime render_path stage artifacts: "
+                        "pre/post draw PNGs plus render stage JSON")
+    p.add_argument("--render-artifact-dir", type=Path, default=None,
+                   help="Render stage artifact output directory. Default: "
+                        "tests/differential/artifacts/"
+                        "motion_playback_render_stages_wasmtime/<run-id>")
     p.add_argument("--host-mode", action="store_true",
                    help=argparse.SUPPRESS)
     p.add_argument("--host-output", type=Path, help=argparse.SUPPRESS)
     p.add_argument("--host-frames", type=int, default=0,
                    help=argparse.SUPPRESS)
     p.add_argument("--manifest-startup-xp3", type=Path, default=None,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--render-stage-out", type=Path, default=None,
                    help=argparse.SUPPRESS)
     return p.parse_args(argv)
 
@@ -83,6 +105,14 @@ def default_framebuffer_dir() -> Path:
     return (
         REPO_ROOT / "tests" / "differential" / "artifacts"
         / "motion_playback_framebuffer_wasmtime" / run_id
+    )
+
+
+def default_render_artifact_dir() -> Path:
+    run_id = time.strftime("%Y%m%d-%H%M%S")
+    return (
+        REPO_ROOT / "tests" / "differential" / "artifacts"
+        / "motion_playback_render_stages_wasmtime" / run_id
     )
 
 
@@ -830,6 +860,41 @@ def read_string(store, memory, ptr: int, length: int) -> str:
     return bytes(buf).decode("utf-8", errors="replace")
 
 
+def _read_render_probe_events(store, exports, memory) -> list[dict[str, Any]]:
+    try:
+        get_ptr = exports["krkr2_wasm_get_render_probe_ptr"]
+        get_len = exports["krkr2_wasm_get_render_probe_len"]
+        clear = exports["krkr2_wasm_clear_render_probe"]
+    except KeyError as exc:
+        raise RuntimeError(
+            "Wasmtime guest does not expose render probe buffer exports; "
+            "rebuild krkr2_wasmtime_guest") from exc
+
+    length = int(get_len(store))
+    if length <= 0:
+        clear(store)
+        return []
+    ptr = int(get_ptr(store))
+    text = read_string(store, memory, ptr, length)
+    clear(store)
+    events: list[dict[str, Any]] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"render probe JSONL decode failed at line {lineno}: {exc}"
+            ) from exc
+        if not isinstance(event, dict):
+            raise RuntimeError(
+                f"render probe JSONL line {lineno} is not an object: {event!r}")
+        events.append(event)
+    return events
+
+
 def call_with_guest_bytes(store, memory, malloc, free, data: bytes, callback):
     ptr = malloc(store, len(data))
     if ptr == 0 and data:
@@ -873,6 +938,17 @@ def _build_framebuffer_capture_xp3(specs: list[dict], work_dir: Path) -> Path:
         raise RuntimeError(
             "motion_playback adapter does not expose framebuffer XP3 builder")
     return builder(specs_by_id, FRAMEBUFFER_CAPTURE_GUEST_ROOT, work_dir)
+
+
+def _build_render_stage_capture_xp3(specs: list[dict], work_dir: Path) -> Path:
+    from oracle_runner.adapters import motion_playback as mpb
+
+    specs_by_id = {s["id"]: s for s in specs}
+    builder = getattr(mpb, "_build_render_stage_capture_xp3", None)
+    if builder is None:
+        raise RuntimeError(
+            "motion_playback adapter does not expose render stage XP3 builder")
+    return builder(specs_by_id, RENDER_CAPTURE_GUEST_ROOT, work_dir)
 
 
 def _write_wasmtime_framebuffer_manifest(
@@ -958,6 +1034,98 @@ def _write_wasmtime_framebuffer_manifest(
     return target
 
 
+def _collect_wasmtime_render_stage_capture(
+    bootstrap: BrowserBootstrapInfo,
+    render_artifact_dir: Path,
+    specs: list[dict],
+) -> dict[str, Any]:
+    from oracle_runner.adapters import motion_playback as mpb
+
+    capture_root = bootstrap.root / RENDER_CAPTURE_GUEST_ROOT.lstrip("/")
+    if not capture_root.is_dir():
+        raise RuntimeError(
+            f"Wasmtime render stage capture directory missing: {capture_root}")
+
+    render_artifact_dir.mkdir(parents=True, exist_ok=True)
+    images_root = render_artifact_dir / "images"
+    if images_root.exists():
+        shutil.rmtree(images_root)
+    images_root.mkdir(parents=True, exist_ok=True)
+
+    specs_by_id = {s["id"]: s for s in specs}
+    cases: list[dict[str, Any]] = []
+    total_images = 0
+    for spec_id in mpb.SEGMENT_ORDER:
+        spec = specs_by_id.get(spec_id)
+        if spec is None:
+            continue
+        src_case = capture_root / spec_id
+        if not src_case.is_dir():
+            raise RuntimeError(
+                f"Wasmtime render stage case directory missing: {src_case}")
+        dst_case = images_root / spec_id
+        shutil.copytree(src_case, dst_case)
+
+        expected = int(spec["frames"])
+        phases: dict[str, list[dict[str, Any]]] = {}
+        for phase in RENDER_CAPTURE_SURFACES:
+            phase_dir = dst_case / phase
+            if not phase_dir.is_dir():
+                raise RuntimeError(
+                    f"missing Wasmtime render stage image directory: {phase_dir}")
+            images: list[dict[str, Any]] = []
+            for frame in range(expected):
+                rel = Path("images") / spec_id / phase / f"frame_{frame:04d}.png"
+                path = render_artifact_dir / rel
+                if not path.exists():
+                    raise RuntimeError(
+                        f"missing Wasmtime render stage PNG: {path}")
+                width, height = _png_dimensions(path)
+                images.append({
+                    "frame": frame,
+                    "phase": phase,
+                    "path": rel.as_posix(),
+                    "width": width,
+                    "height": height,
+                    "bytes": path.stat().st_size,
+                    "sha256": _sha256_file(path),
+                })
+            extras = sorted(phase_dir.glob("frame_*.png"))[expected:]
+            if extras:
+                raise RuntimeError(
+                    f"unexpected extra Wasmtime render stage PNG(s) for "
+                    f"{spec_id}/{phase}: {[p.name for p in extras[:5]]}"
+                )
+            phases[phase] = images
+            total_images += len(images)
+
+        cases.append({
+            "caseId": spec_id,
+            "mtnPath": spec.get("mtn_path"),
+            "chara": spec.get("chara"),
+            "label": spec.get("label"),
+            "frames": expected,
+            "phases": phases,
+        })
+
+    image_manifest = {
+        "guestCaptureRoot": RENDER_CAPTURE_GUEST_ROOT,
+        "captureSurfaces": list(RENDER_CAPTURE_SURFACES),
+        "cases": cases,
+        "summary": {
+            "caseCount": len(cases),
+            "imageCount": total_images,
+        },
+    }
+    image_manifest_path = render_artifact_dir / "image_manifest.json"
+    image_manifest_path.write_text(
+        json.dumps(image_manifest, indent=2, ensure_ascii=True,
+                   allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return image_manifest
+
+
 def _collect_wasmtime_framebuffer_capture(
     bootstrap: BrowserBootstrapInfo,
     framebuffer_dir: Path,
@@ -1003,6 +1171,8 @@ def _collect_wasmtime_framebuffer_capture(
 def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                      frames: int, *,
                      framebuffer_dir: Path | None = None,
+                     render_artifact_dir: Path | None = None,
+                     render_stage_out: Path | None = None,
                      specs: list[dict] | None = None,
                      manifest_startup_xp3: Path | None = None) -> dict[str, Any]:
     if not wasm_path.exists():
@@ -1027,8 +1197,20 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                 for spec in specs:
                     (capture_root / str(spec["id"])).mkdir(
                         parents=True, exist_ok=True)
+            if render_artifact_dir is not None:
+                if specs is None:
+                    raise RuntimeError(
+                        "render stage capture requires motion_playback specs")
+                capture_root = (
+                    bootstrap.root / RENDER_CAPTURE_GUEST_ROOT.lstrip("/")
+                )
+                for spec in specs:
+                    for phase in RENDER_CAPTURE_SURFACES:
+                        (capture_root / str(spec["id"]) / phase).mkdir(
+                            parents=True, exist_ok=True)
             summary = _drive_full_guest_with_bootstrap(
-                wasmtime, wasm_path, bootstrap, frames)
+                wasmtime, wasm_path, bootstrap, frames,
+                render_stage_out=render_stage_out)
             if framebuffer_dir is not None:
                 manifest = _collect_wasmtime_framebuffer_capture(
                     bootstrap, framebuffer_dir, specs,
@@ -1037,6 +1219,10 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                     manifest_startup_xp3=(
                         manifest_startup_xp3 or startup_xp3))
                 summary["framebufferManifest"] = str(manifest)
+            if render_artifact_dir is not None:
+                image_manifest = _collect_wasmtime_render_stage_capture(
+                    bootstrap, render_artifact_dir, specs)
+                summary["renderStageImageManifest"] = image_manifest["summary"]
             return summary
         except Exception as exc:
             raise RuntimeError(f"{exc}\n{bootstrap.summary()}") from exc
@@ -1044,7 +1230,9 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
 
 def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                                      bootstrap: BrowserBootstrapInfo,
-                                     frames: int) -> dict[str, Any]:
+                                     frames: int, *,
+                                     render_stage_out: Path | None = None
+                                     ) -> dict[str, Any]:
     store, exports = instantiate_module(
         wasmtime, wasm_path, enable_gl=True, wasi_root=bootstrap.root)
     memory = exports["memory"]
@@ -1092,6 +1280,16 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                               exports["krkr2_wasm_get_error_len"](store))
             raise RuntimeError(err or "krkr2_wasm_tick returned false")
 
+    render_probe_summary: dict[str, Any] | None = None
+    if render_stage_out is not None:
+        events = _read_render_probe_events(store, exports, memory)
+        render_stage_out.parent.mkdir(parents=True, exist_ok=True)
+        render_stage_out.write_text(
+            json.dumps(events, ensure_ascii=False, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        render_probe_summary = {"eventCount": len(events)}
+
     return {
         "ok": True,
         "runner": "motion-playback-wasmtime-python-host",
@@ -1102,17 +1300,22 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
             "font": bootstrap.font_guest_path,
             "xp3": bootstrap.xp3_guest_path,
         },
+        "renderProbe": render_probe_summary,
     }
 
 
 def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
                            frames: int, output: Path, *,
                            framebuffer_dir: Path | None = None,
+                           render_artifact_dir: Path | None = None,
+                           render_stage_out: Path | None = None,
                            specs: list[dict] | None = None,
                            manifest_startup_xp3: Path | None = None) -> int:
     summary = drive_full_guest(
         wasm_path, startup_xp3, frames,
         framebuffer_dir=framebuffer_dir,
+        render_artifact_dir=render_artifact_dir,
+        render_stage_out=render_stage_out,
         specs=specs,
         manifest_startup_xp3=manifest_startup_xp3)
     output.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -1125,7 +1328,9 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                          timeout: float,
                          host_python: Path,
                          framebuffer_dir: Path | None = None,
-                         manifest_startup_xp3: Path | None = None) -> list[dict]:
+                         render_artifact_dir: Path | None = None,
+                         manifest_startup_xp3: Path | None = None
+                         ) -> tuple[list[dict], list[dict]]:
     if host_python is None or not host_python.exists():
         raise FileNotFoundError(f"host Python not found: {host_python}")
     if not wasm_path.exists():
@@ -1141,6 +1346,7 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
     with tempfile.TemporaryDirectory(prefix="krkr2-motion-wasmtime-lldb-") as td:
         temp = Path(td)
         trace_path = temp / "trace.json"
+        render_stage_path = temp / "render_stages.json"
         host_report = temp / "host.json"
         tracer = REPO_ROOT / "tests" / "differential" / "python" / \
             "wasm_lldb_motion_trace.py"
@@ -1166,6 +1372,12 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                 cmd += [
                     "--manifest-startup-xp3", str(manifest_startup_xp3),
                 ]
+        if render_artifact_dir is not None:
+            cmd += [
+                "--record-render-stages",
+                "--render-artifact-dir", str(render_artifact_dir),
+                "--render-stage-out", str(render_stage_path),
+            ]
         try:
             proc = subprocess.run(
                 cmd,
@@ -1199,9 +1411,27 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                 f"Wasmtime LLDB trace JSON decode failed: {exc}\n"
                 f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
             ) from exc
+        render_events: list[dict[str, Any]] = []
+        if render_artifact_dir is not None:
+            if not render_stage_path.exists():
+                raise RuntimeError(
+                    "Wasmtime LLDB tracer did not write render stage output\n"
+                    f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+                )
+            try:
+                render_events = json.loads(
+                    render_stage_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"Wasmtime render stage JSON decode failed: {exc}\n"
+                    f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+                ) from exc
     if not isinstance(events, list):
         raise RuntimeError(f"Wasmtime LLDB trace root is not a list: {type(events)}")
-    return events
+    if render_artifact_dir is not None and not isinstance(render_events, list):
+        raise RuntimeError(
+            f"Wasmtime render stage trace root is not a list: {type(render_events)}")
+    return events, render_events
 
 
 def _segment_events(events: list[dict]) -> list[dict]:
@@ -1251,6 +1481,300 @@ def partition_port_frames(events: list[dict], specs: list[dict], mpb) -> dict:
     return results
 
 
+def render_case_segments(events: list[dict], specs: list[dict], mpb) -> list[dict]:
+    specs_by_id = {s["id"]: s for s in specs}
+    segments = _segment_events(events)
+    substantive = [s for s in segments if len(s["frames"]) >= 30]
+    out: list[dict[str, Any]] = []
+    for i, spec_id in enumerate(mpb.SEGMENT_ORDER):
+        spec = specs_by_id.get(spec_id)
+        if spec is None:
+            continue
+        if i >= len(substantive):
+            raise RuntimeError(
+                f"missing Wasmtime segment for render stage case {spec_id}")
+        wanted = int(spec["frames"])
+        frames = substantive[i]["frames"]
+        if len(frames) < wanted:
+            raise RuntimeError(
+                f"Wasmtime segment {i} ({spec_id}) has {len(frames)} frame(s); "
+                f"render stage capture requires {wanted}.")
+        selected = frames[:wanted]
+        frame_ids = [int(frame["frameId"]) for frame in selected]
+        out.append({
+            "caseId": spec_id,
+            "player": substantive[i].get("player"),
+            "firstFrameId": min(frame_ids),
+            "lastFrameId": max(frame_ids),
+            "frames": selected,
+        })
+    return out
+
+
+def _assign_render_case(ev: dict[str, Any],
+                        case_segments: list[dict[str, Any]]) -> str | None:
+    frame_id = ev.get("frameId")
+    if not isinstance(frame_id, int):
+        return None
+    for segment in case_segments:
+        if int(segment["firstFrameId"]) <= frame_id <= int(segment["lastFrameId"]):
+            return str(segment["caseId"])
+    return None
+
+
+def _render_stage_summary(events: list[dict[str, Any]],
+                          trace_frame_count: int) -> dict[str, Any]:
+    frame_ids = [
+        int(ev["frameId"]) for ev in events if isinstance(ev.get("frameId"), int)
+    ]
+    seqs = [int(ev["seq"]) for ev in events if isinstance(ev.get("seq"), int)]
+    kinds = Counter(str(ev.get("kind")) for ev in events)
+    summary: dict[str, Any] = {
+        "eventCount": len(events),
+        "kindCounts": dict(sorted(kinds.items())),
+        "traceFrameCount": trace_frame_count,
+        "framesWithEvents": len(set(frame_ids)),
+    }
+    if frame_ids:
+        summary["eventFrameIdRange"] = [min(frame_ids), max(frame_ids)]
+    if seqs:
+        summary["eventSeqRange"] = [min(seqs), max(seqs)]
+    return summary
+
+
+def _split_render_events_by_stage_case(
+    events: list[dict[str, Any]],
+    case_segments: list[dict[str, Any]],
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    out: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for ev in events:
+        stage = str(ev.get("stage") or "")
+        if stage not in RENDER_STAGES or stage == "layer_save":
+            continue
+        case_id = _assign_render_case(ev, case_segments)
+        if case_id is None:
+            continue
+        cloned = dict(ev)
+        cloned["caseId"] = case_id
+        out.setdefault(stage, {}).setdefault(case_id, []).append(cloned)
+    return out
+
+
+def _layer_save_events_for_case(case_images: dict[str, Any],
+                                case_segment: dict[str, Any]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    case_id = str(case_images["caseId"])
+    first_frame_id = int(case_segment["firstFrameId"])
+    seq = 0
+    for phase in RENDER_CAPTURE_SURFACES:
+        for image in case_images.get("phases", {}).get(phase, []):
+            local_frame = int(image["frame"])
+            events.append({
+                "schema": RENDER_EVENT_SCHEMA,
+                "source": RENDER_SOURCE,
+                "stage": "layer_save",
+                "kind": "save_layer_image",
+                "samplePoint": f"startup.tjs.{phase}",
+                "caseId": case_id,
+                "frameId": first_frame_id + local_frame,
+                "frame": local_frame,
+                "seq": seq,
+                "phase": phase,
+                "path": image["path"],
+                "width": image["width"],
+                "height": image["height"],
+                "bytes": image["bytes"],
+                "sha256": image["sha256"],
+                "diagnostics": {
+                    "synthetic": True,
+                    "source": "wasmtime-render-png-manifest",
+                },
+            })
+            seq += 1
+    return events
+
+
+def _phase_images_by_frame(
+    case_images: dict[str, Any],
+    phase: str,
+) -> dict[int, dict[str, Any]]:
+    out: dict[int, dict[str, Any]] = {}
+    for image in case_images.get("phases", {}).get(phase, []):
+        frame = image.get("frame")
+        if isinstance(frame, int):
+            out[frame] = dict(image)
+    return out
+
+
+def _add_image_manifest_error(
+    event: dict[str, Any],
+    message: str,
+) -> None:
+    diagnostics = dict(event.get("diagnostics") or {})
+    existing = diagnostics.get("imageManifestError")
+    if existing:
+        diagnostics["imageManifestError"] = f"{existing}; {message}"
+    else:
+        diagnostics["imageManifestError"] = message
+    event["diagnostics"] = diagnostics
+
+
+def _enrich_draw_dispatch_events_for_case(
+    events: list[dict[str, Any]],
+    case_segment: dict[str, Any],
+    case_images: dict[str, Any],
+) -> list[dict[str, Any]]:
+    first_frame_id = int(case_segment["firstFrameId"])
+    last_frame_id = int(case_segment["lastFrameId"])
+    pre_by_frame = _phase_images_by_frame(case_images, "pre_draw")
+    post_by_frame = _phase_images_by_frame(case_images, "post_draw")
+    enriched: list[dict[str, Any]] = []
+
+    for source_event in events:
+        event = dict(source_event)
+        frame_id = event.get("frameId")
+        if not isinstance(frame_id, int):
+            _add_image_manifest_error(event, "event has no integer frameId")
+            enriched.append(event)
+            continue
+        if frame_id < first_frame_id or frame_id > last_frame_id:
+            _add_image_manifest_error(
+                event,
+                f"frameId {frame_id} outside case segment "
+                f"{first_frame_id}..{last_frame_id}",
+            )
+            enriched.append(event)
+            continue
+
+        local_frame = frame_id - first_frame_id
+        pre_draw = pre_by_frame.get(local_frame)
+        post_draw = post_by_frame.get(local_frame)
+
+        kind = str(event.get("kind") or "")
+        if kind == "draw_enter":
+            event["preDrawImage"] = pre_draw
+            if pre_draw is None:
+                _add_image_manifest_error(
+                    event, f"missing pre_draw image for frame {local_frame}")
+        elif kind == "draw_leave":
+            event["preDrawImage"] = pre_draw
+            event["postDrawImage"] = post_draw
+            event["imageChanged"] = (
+                None if pre_draw is None or post_draw is None
+                else pre_draw.get("sha256") != post_draw.get("sha256")
+            )
+            if pre_draw is None:
+                _add_image_manifest_error(
+                    event, f"missing pre_draw image for frame {local_frame}")
+            if post_draw is None:
+                _add_image_manifest_error(
+                    event, f"missing post_draw image for frame {local_frame}")
+
+        enriched.append(event)
+
+    return enriched
+
+
+def write_render_stage_artifacts(
+    *,
+    artifact_dir: Path,
+    specs: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    case_segments: list[dict[str, Any]],
+    image_manifest: dict[str, Any],
+    wasm_path: Path,
+    startup_xp3: Path,
+    capture_xp3: Path,
+) -> Path:
+    events_by_stage_case = _split_render_events_by_stage_case(
+        events, case_segments)
+    case_segment_by_id = {
+        str(segment["caseId"]): segment for segment in case_segments
+    }
+    image_case_by_id = {
+        str(case["caseId"]): case for case in image_manifest.get("cases", [])
+    }
+    events_root = artifact_dir / "events"
+    total_event_count = 0
+    specs_by_id = {str(spec["id"]): spec for spec in specs}
+
+    for stage in RENDER_STAGES:
+        for spec_id in [sid for sid in case_segment_by_id if sid in specs_by_id]:
+            case_segment = case_segment_by_id[spec_id]
+            if stage == "layer_save":
+                stage_events = _layer_save_events_for_case(
+                    image_case_by_id.get(spec_id, {
+                        "caseId": spec_id,
+                        "phases": {},
+                    }),
+                    case_segment,
+                )
+            else:
+                stage_events = (
+                    events_by_stage_case.get(stage, {}).get(spec_id, [])
+                )
+                if stage == "draw_dispatch":
+                    stage_events = _enrich_draw_dispatch_events_for_case(
+                        stage_events,
+                        case_segment,
+                        image_case_by_id.get(spec_id, {
+                            "caseId": spec_id,
+                            "phases": {},
+                        }),
+                    )
+            total_event_count += len(stage_events)
+            payload = {
+                "schema": RENDER_SCHEMA,
+                "source": RENDER_SOURCE,
+                "stage": stage,
+                "caseId": spec_id,
+                "events": stage_events,
+                "summary": _render_stage_summary(
+                    stage_events, len(case_segment["frames"])),
+            }
+            target = events_root / stage / f"{spec_id}.wasmtime.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=True,
+                           allow_nan=False) + "\n",
+                encoding="utf-8",
+            )
+
+    manifest = {
+        "schema": RENDER_SCHEMA,
+        "source": RENDER_SOURCE,
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "localRoot": str(artifact_dir),
+        "wasm": str(wasm_path),
+        "startupXp3": str(startup_xp3),
+        "captureXp3": str(capture_xp3),
+        "fixture": {
+            "guestCaptureRoot": RENDER_CAPTURE_GUEST_ROOT,
+            "window": {"width": 1920, "height": 1080},
+            "deltaMs": 1000.0 / 60.0,
+            "segmentOrder": [str(segment["caseId"]) for segment in case_segments],
+        },
+        "stages": list(RENDER_STAGES),
+        "eventsRoot": "events",
+        "imagesRoot": "images",
+        "images": image_manifest,
+        "summary": {
+            "caseCount": len(case_segments),
+            "traceFlattenFrameCount": sum(
+                len(segment["frames"]) for segment in case_segments),
+            "renderEventCount": total_event_count,
+            "imageCount": image_manifest.get("summary", {}).get("imageCount", 0),
+        },
+    }
+    target = artifact_dir / "manifest.json"
+    target.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=True,
+                   allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return target
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     spec_dir = Path(args.spec_dir)
@@ -1261,6 +1785,16 @@ def main(argv: list[str]) -> int:
         Path(args.framebuffer_dir) if args.framebuffer_dir is not None
         else default_framebuffer_dir()
     ) if args.record_framebuffer else None
+    render_artifact_dir = (
+        Path(args.render_artifact_dir) if args.render_artifact_dir is not None
+        else default_render_artifact_dir()
+    ) if args.record_render_stages else None
+
+    if framebuffer_dir is not None and render_artifact_dir is not None:
+        print("--record-framebuffer and --record-render-stages currently use "
+              "different capture XP3 fixtures; run them separately",
+              file=sys.stderr)
+        return 2
 
     if args.host_mode:
         if args.host_output is None:
@@ -1271,11 +1805,17 @@ def main(argv: list[str]) -> int:
             print("--host-frames must be positive in --host-mode",
                   file=sys.stderr)
             return 2
+        if render_artifact_dir is not None and args.render_stage_out is None:
+            print("--render-stage-out is required with --record-render-stages "
+                  "in --host-mode", file=sys.stderr)
+            return 2
         try:
             specs = load_specs(spec_dir)
             return run_python_host_driver(
                 wasm_path, startup_xp3, frames, args.host_output,
                 framebuffer_dir=framebuffer_dir,
+                render_artifact_dir=render_artifact_dir,
+                render_stage_out=args.render_stage_out,
                 specs=specs,
                 manifest_startup_xp3=(
                     Path(args.manifest_startup_xp3)
@@ -1305,8 +1845,13 @@ def main(argv: list[str]) -> int:
                 prefix="krkr2-motion-wasmtime-framebuffer-xp3-")
             trace_startup_xp3 = _build_framebuffer_capture_xp3(
                 specs, Path(temp_capture.name))
+        elif render_artifact_dir is not None:
+            temp_capture = tempfile.TemporaryDirectory(
+                prefix="krkr2-motion-wasmtime-render-stage-xp3-")
+            trace_startup_xp3 = _build_render_stage_capture_xp3(
+                specs, Path(temp_capture.name))
         try:
-            port_events = run_lldb_guest_trace(
+            port_events, render_events = run_lldb_guest_trace(
                 wasm_path,
                 trace_startup_xp3,
                 spec_dir=spec_dir,
@@ -1314,13 +1859,34 @@ def main(argv: list[str]) -> int:
                 timeout=args.lldb_timeout,
                 host_python=args.host_python,
                 framebuffer_dir=framebuffer_dir,
+                render_artifact_dir=render_artifact_dir,
                 manifest_startup_xp3=startup_xp3
-                if framebuffer_dir is not None else None,
+                if (framebuffer_dir is not None or render_artifact_dir is not None)
+                else None,
             )
         finally:
             if temp_capture is not None:
                 temp_capture.cleanup()
         port_frames_by_id = partition_port_frames(port_events, specs, mpb)
+        render_manifest: Path | None = None
+        if render_artifact_dir is not None:
+            image_manifest_path = render_artifact_dir / "image_manifest.json"
+            if not image_manifest_path.exists():
+                raise RuntimeError(
+                    f"Wasmtime render image manifest missing: {image_manifest_path}")
+            image_manifest = json.loads(
+                image_manifest_path.read_text(encoding="utf-8"))
+            render_manifest = write_render_stage_artifacts(
+                artifact_dir=render_artifact_dir,
+                specs=specs,
+                events=render_events,
+                case_segments=render_case_segments(port_events, specs, mpb),
+                image_manifest=image_manifest,
+                wasm_path=wasm_path,
+                startup_xp3=startup_xp3,
+                capture_xp3=trace_startup_xp3,
+            )
+            image_manifest_path.unlink(missing_ok=True)
     except Exception as exc:
         print(f"FAIL: Wasmtime LLDB trace error: {exc}", file=sys.stderr)
         return 1
@@ -1363,6 +1929,10 @@ def main(argv: list[str]) -> int:
         manifest = framebuffer_dir / "manifest.json"
         if manifest.exists():
             print(f"[record] framebuffer manifest: {manifest}")
+    if render_artifact_dir is not None:
+        manifest = render_artifact_dir / "manifest.json"
+        if manifest.exists():
+            print(f"[record] render stage manifest: {manifest}")
     return 1 if failures else 0
 
 

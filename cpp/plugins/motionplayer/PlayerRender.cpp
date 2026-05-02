@@ -3,6 +3,7 @@
 //
 #include "PlayerInternal.h"
 #include "ConfigManager/IndividualConfigManager.h"
+#include "MotionTraceWeb.h"
 
 using namespace motion::internal;
 
@@ -1309,6 +1310,12 @@ namespace motion {
             _runtime->renderCommands.size(),
             _runtime->renderCommandsTopLevel.size(),
             _runtime->renderCommandsGroup.size());
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderCommands(
+            this, "build_commands_leave",
+            "Player::buildRenderCommands.leave",
+            static_cast<int>(canvasWidth), static_cast<int>(canvasHeight));
+#endif
         return !_runtime->renderCommands.empty();
     }
 
@@ -1317,6 +1324,10 @@ namespace motion {
         if(!renderLayerObject || !_runtime || !_runtime->activeMotion) {
             return false;
         }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::MotionTraceRenderExecuteScope renderTrace(
+            this, renderLayerObject, skipUpdate);
+#endif
         const auto motionPath = _runtime->activeMotion->path;
 
         auto *renderLayer = resolveNativeLayer(renderLayerObject);
@@ -2077,6 +2088,9 @@ namespace motion {
                 "renderLayer.Update(false) size={}x{}",
                 renderLayer->GetWidth(), renderLayer->GetHeight());
         }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        renderTrace.setResult(true);
+#endif
         return true;
     }
 

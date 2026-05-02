@@ -393,6 +393,87 @@ def layer_save_events_for_case(
     return events
 
 
+def _phase_images_by_frame(
+    case_images: dict[str, Any],
+    phase: str,
+) -> dict[int, dict[str, Any]]:
+    out: dict[int, dict[str, Any]] = {}
+    for image in case_images.get("phases", {}).get(phase, []):
+        frame = image.get("frame")
+        if isinstance(frame, int):
+            out[frame] = dict(image)
+    return out
+
+
+def _add_image_manifest_error(
+    event: dict[str, Any],
+    message: str,
+) -> None:
+    diagnostics = dict(event.get("diagnostics") or {})
+    existing = diagnostics.get("imageManifestError")
+    if existing:
+        diagnostics["imageManifestError"] = f"{existing}; {message}"
+    else:
+        diagnostics["imageManifestError"] = message
+    event["diagnostics"] = diagnostics
+
+
+def enrich_draw_dispatch_events_for_case(
+    events: list[dict[str, Any]],
+    case_segment: dict[str, Any],
+    case_images: dict[str, Any],
+) -> list[dict[str, Any]]:
+    first_frame_id = int(case_segment["firstFrameId"])
+    last_frame_id = int(case_segment["lastFrameId"])
+    pre_by_frame = _phase_images_by_frame(case_images, "pre_draw")
+    post_by_frame = _phase_images_by_frame(case_images, "post_draw")
+    enriched: list[dict[str, Any]] = []
+
+    for source_event in events:
+        event = dict(source_event)
+        frame_id = event.get("frameId")
+        if not isinstance(frame_id, int):
+            _add_image_manifest_error(event, "event has no integer frameId")
+            enriched.append(event)
+            continue
+        if frame_id < first_frame_id or frame_id > last_frame_id:
+            _add_image_manifest_error(
+                event,
+                f"frameId {frame_id} outside case segment "
+                f"{first_frame_id}..{last_frame_id}",
+            )
+            enriched.append(event)
+            continue
+
+        local_frame = frame_id - first_frame_id
+        pre_draw = pre_by_frame.get(local_frame)
+        post_draw = post_by_frame.get(local_frame)
+
+        kind = str(event.get("kind") or "")
+        if kind == "draw_enter":
+            event["preDrawImage"] = pre_draw
+            if pre_draw is None:
+                _add_image_manifest_error(
+                    event, f"missing pre_draw image for frame {local_frame}")
+        elif kind == "draw_leave":
+            event["preDrawImage"] = pre_draw
+            event["postDrawImage"] = post_draw
+            event["imageChanged"] = (
+                None if pre_draw is None or post_draw is None
+                else pre_draw.get("sha256") != post_draw.get("sha256")
+            )
+            if pre_draw is None:
+                _add_image_manifest_error(
+                    event, f"missing pre_draw image for frame {local_frame}")
+            if post_draw is None:
+                _add_image_manifest_error(
+                    event, f"missing post_draw image for frame {local_frame}")
+
+        enriched.append(event)
+
+    return enriched
+
+
 def write_render_stage_artifacts(
     *,
     artifact_dir: Path,
@@ -433,6 +514,15 @@ def write_render_stage_artifacts(
                 stage_events = (
                     events_by_stage_case.get(stage, {}).get(case_id, [])
                 )
+                if stage == "draw_dispatch":
+                    stage_events = enrich_draw_dispatch_events_for_case(
+                        stage_events,
+                        case_segment,
+                        image_case_by_id.get(case_id, {
+                            "caseId": case_id,
+                            "phases": {},
+                        }),
+                    )
             total_event_count += len(stage_events)
             payload = {
                 "schema": RENDER_SCHEMA,

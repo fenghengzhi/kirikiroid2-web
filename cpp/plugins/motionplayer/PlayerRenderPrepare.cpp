@@ -2,6 +2,7 @@
 // Split from PlayerUpdateLayers.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "MotionTraceWeb.h"
 
 using namespace motion::internal;
 
@@ -968,6 +969,10 @@ namespace motion {
                     item.objTriPriority);
             }
         }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderPreparedItems(
+            this, "prepare_leave", "Player::prepareRenderItems.leave");
+#endif
         _renderItemInheritedFlag18 = savedInheritedFlag18;
         return !_runtime->preparedRenderItems.empty();
     }
@@ -1075,6 +1080,11 @@ namespace motion {
                     "Player_applyTranslateOffset added more than cameraOffset");
             }
         }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderPreparedItems(
+            this, "apply_translate_leave",
+            "Player::applyPreparedRenderItemTranslateOffsets.leave");
+#endif
     }
 
 } // namespace motion

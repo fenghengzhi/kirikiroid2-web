@@ -116,6 +116,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Ask the host-mode driver to write framebuffer PNGs")
     p.add_argument("--framebuffer-dir", default=None,
                    help="Host path where framebuffer PNGs should be copied")
+    p.add_argument("--record-render-stages", action="store_true",
+                   help="Collect Wasmtime render stage diagnostics and images")
+    p.add_argument("--render-artifact-dir", default=None,
+                   help="Host path where render stage artifacts should be copied")
+    p.add_argument("--render-stage-out", default=None,
+                   help="Path to write LLDB-collected render stage JSON events")
     p.add_argument("--manifest-startup-xp3", default=None,
                    help="Original startup XP3 path to record in manifest")
     p.add_argument("--expected-frames", type=int, default=332,
@@ -143,6 +149,9 @@ class WasmMotionTracer:
         timeout: float,
         record_framebuffer: bool = False,
         framebuffer_dir: Path | None = None,
+        record_render_stages: bool = False,
+        render_artifact_dir: Path | None = None,
+        render_stage_out: Path | None = None,
         manifest_startup_xp3: Path | None = None,
     ) -> None:
         self.lldb = lldb
@@ -157,6 +166,9 @@ class WasmMotionTracer:
         self.timeout = timeout
         self.record_framebuffer = record_framebuffer
         self.framebuffer_dir = framebuffer_dir
+        self.record_render_stages = record_render_stages
+        self.render_artifact_dir = render_artifact_dir
+        self.render_stage_out = render_stage_out
         self.manifest_startup_xp3 = manifest_startup_xp3
         self.events: list[dict[str, Any]] = []
         self.frame_records: dict[int, dict[str, Any]] = {}
@@ -167,6 +179,8 @@ class WasmMotionTracer:
         self.begin_hits = 0
         self.layer_hits = 0
         self.end_hits = 0
+        self.last_completed_frame_id: int | None = None
+        self.last_top_player: str | None = None
 
     def run(self) -> list[dict[str, Any]]:
         lldb = self.lldb
@@ -223,6 +237,20 @@ class WasmMotionTracer:
                             "--manifest-startup-xp3",
                             str(self.manifest_startup_xp3),
                         ]
+                if self.record_render_stages:
+                    if self.render_artifact_dir is None:
+                        raise RuntimeError(
+                            "record_render_stages requires render_artifact_dir")
+                    if self.render_stage_out is None:
+                        raise RuntimeError(
+                            "record_render_stages requires render_stage_out")
+                    launch_args += [
+                        "--record-render-stages",
+                        "--render-artifact-dir",
+                        str(self.render_artifact_dir),
+                        "--render-stage-out",
+                        str(self.render_stage_out),
+                    ]
                 launch = lldb.SBLaunchInfo(launch_args)
                 launch.SetWorkingDirectory(str(self.repo_root))
                 launch.AddOpenFileAction(1, str(stdout_path), False, True)
@@ -418,6 +446,8 @@ class WasmMotionTracer:
             "layers": layers,
         }
         self.events.append(event)
+        self.last_completed_frame_id = frame_id
+        self.last_top_player = event.get("topPlayer")
 
     def _format_backtrace(self, process) -> str:
         lines = ["thread backtrace all:"]
@@ -461,6 +491,14 @@ def main(argv: list[str]) -> int:
         Path(args.framebuffer_dir) if args.framebuffer_dir is not None
         else None
     )
+    render_artifact_dir = (
+        Path(args.render_artifact_dir)
+        if args.render_artifact_dir is not None else None
+    )
+    render_stage_out = (
+        Path(args.render_stage_out) if args.render_stage_out is not None
+        else None
+    )
     manifest_startup_xp3 = (
         Path(args.manifest_startup_xp3)
         if args.manifest_startup_xp3 is not None else None
@@ -484,6 +522,14 @@ def main(argv: list[str]) -> int:
         print("--framebuffer-dir is required with --record-framebuffer",
               file=sys.stderr)
         return 2
+    if args.record_render_stages and render_artifact_dir is None:
+        print("--render-artifact-dir is required with --record-render-stages",
+              file=sys.stderr)
+        return 2
+    if args.record_render_stages and render_stage_out is None:
+        print("--render-stage-out is required with --record-render-stages",
+              file=sys.stderr)
+        return 2
 
     try:
         lldb = _load_lldb()
@@ -500,6 +546,9 @@ def main(argv: list[str]) -> int:
             timeout=args.timeout,
             record_framebuffer=args.record_framebuffer,
             framebuffer_dir=framebuffer_dir,
+            record_render_stages=args.record_render_stages,
+            render_artifact_dir=render_artifact_dir,
+            render_stage_out=render_stage_out,
             manifest_startup_xp3=manifest_startup_xp3,
         )
         events = tracer.run()

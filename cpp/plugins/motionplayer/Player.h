@@ -323,6 +323,7 @@ namespace motion {
         void setSize(tjs_int w, tjs_int h);
         void copyRect(tTJSVariant args);
         void adjustGamma(tTJSVariant args);
+        void draw(tTJSVariant target);
         void draw();
         void frameProgress(double dt);
 
@@ -397,9 +398,7 @@ namespace motion {
                                              tjs_int numparams,
                                              tTJSVariant **param,
                                              Player *nativeInstance);
-        static tjs_error drawCompat(tTJSVariant *result, tjs_int numparams,
-                                    tTJSVariant **param,
-                                    iTJSDispatch2 *objthis);
+        void drawCompat(tTJSVariant *target);
         static tjs_error playCompat(tTJSVariant *result, tjs_int numparams,
                                     tTJSVariant **param, iTJSDispatch2 *objthis);
         static tjs_error progressCompatMethod(tTJSVariant *result,

@@ -224,7 +224,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(setSize);
     NCB_METHOD(copyRect);
     NCB_METHOD(adjustGamma);
-    NCB_METHOD_RAW_CALLBACK(draw, &Player::drawCompat, 0);
+    NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant));
     NCB_METHOD(frameProgress);
 
     // Viewport/display

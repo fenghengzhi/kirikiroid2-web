@@ -948,26 +948,28 @@ function installHook() {
     attachAt(PLAYER_DRAW_COMPAT_OFF, 'Player_drawCompat', {
         onEnter(args) {
             this.player = args[0];
+            this.argVariant = args[1];
             this.ctx = enterRenderContext(this.player);
             applyRenderContext(this.ctx, this.player);
             emitRender(STAGE_DRAW_DISPATCH, 'draw_enter', {
-                numparamsOrArg: readArgInt(args[1]),
+                argVariant: ptrHex(this.argVariant),
             }, {
                 addr: PLAYER_DRAW_COMPAT_OFF,
                 player: ptrHex(this.player),
-                arg0: ptrHex(args[0]),
-                arg1: ptrHex(args[1]),
-                arg2: ptrHex(args[2]),
-                arg3: ptrHex(args[3]),
-            }, 'Player_drawCompat.enter');
+                rawArgs: {
+                    arg0: ptrHex(args[0]),
+                    arg1: ptrHex(args[1]),
+                    arg2: ptrHex(args[2]),
+                    arg3: ptrHex(args[3]),
+                },
+            }, 'Player_drawCompat_0x6D5FB8.enter');
         },
-        onLeave(retval) {
-            emitRender(STAGE_DRAW_DISPATCH, 'draw_leave', {
-                retval: ptrHex(retval),
-            }, {
+        onLeave() {
+            emitRender(STAGE_DRAW_DISPATCH, 'draw_leave', {}, {
                 addr: PLAYER_DRAW_COMPAT_OFF,
                 player: ptrHex(this.player),
-            }, 'Player_drawCompat.leave');
+                argVariant: ptrHex(this.argVariant),
+            }, 'Player_drawCompat_0x6D5FB8.leave');
             leaveRenderContext(this.ctx);
         },
     });
