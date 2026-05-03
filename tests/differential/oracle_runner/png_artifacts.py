@@ -40,6 +40,23 @@ def rgba_sha256_file(path: Path) -> str:
     return png_rgba_info(path)[2]
 
 
+def bgra_rgba_sha256_bytes(data: bytes) -> str:
+    """Return SHA-256 for BGRA32 bytes interpreted as decoded RGBA pixels."""
+    if len(data) % 4 != 0:
+        raise RuntimeError(
+            f"raw BGRA size is not pixel-aligned: {len(data)} bytes")
+    rgba = bytearray(len(data))
+    rgba[0::4] = data[2::4]
+    rgba[1::4] = data[1::4]
+    rgba[2::4] = data[0::4]
+    rgba[3::4] = data[3::4]
+    return hashlib.sha256(rgba).hexdigest()
+
+
+def bgra_rgba_sha256_file(path: Path) -> str:
+    return bgra_rgba_sha256_bytes(path.read_bytes())
+
+
 def write_bgra_png(
     *,
     raw_path: Path,

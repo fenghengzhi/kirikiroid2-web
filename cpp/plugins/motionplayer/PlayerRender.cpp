@@ -1866,9 +1866,6 @@ namespace motion {
             "Player::buildRenderCommands.leave",
             renderLayer ? static_cast<int>(renderLayer->GetWidth()) : 0,
             renderLayer ? static_cast<int>(renderLayer->GetHeight()) : 0);
-        detail::motionTraceRenderImageCheckpoint(
-            this, renderLayerObject, "execute_pre",
-            "Player::executeLayerRenderCommands.execute_pre");
 #endif
 
         for(auto *itemPtr : _runtime->preparedRenderItemsTopLevel) {
@@ -2047,9 +2044,6 @@ namespace motion {
                 renderLayer->GetWidth(), renderLayer->GetHeight());
         }
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderImageCheckpoint(
-            this, renderLayerObject, "execute_post",
-            "Player::executeLayerRenderCommands.execute_post");
         renderTrace.setResult(true);
 #endif
         return true;
@@ -2466,6 +2460,24 @@ namespace motion {
     }
 
     bool Player::updateLayerAfterDrawLike_0x6CE7D8(tTJSVariant *target) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        iTJSDispatch2 *rawProbeLayerObject =
+            target ? tryResolveLayerDispatch(*target) : nullptr;
+        if(!rawProbeLayerObject && target && target->Type() == tvtObject) {
+            rawProbeLayerObject = target->AsObjectNoAddRef();
+        }
+        detail::motionTraceLayerRawProbe(
+            this, rawProbeLayerObject, "updateLayerAfterDraw_0x6CE7D8.enter");
+        struct RawProbeLeave {
+            Player *player;
+            iTJSDispatch2 *layerObject;
+            ~RawProbeLeave() {
+                detail::motionTraceLayerRawProbe(
+                    player, layerObject,
+                    "updateLayerAfterDraw_0x6CE7D8.leave");
+            }
+        } rawProbeLeave{this, rawProbeLayerObject};
+#endif
         if(!_needsInternalAssignImages) {
             return true;
         }

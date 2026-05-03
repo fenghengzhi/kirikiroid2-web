@@ -121,10 +121,12 @@ public:
     virtual TVPTextureFormat::e GetFormat() const = 0;
     virtual const void *GetScanLineForRead(tjs_uint l) { return nullptr; }
     virtual const void *GetPixelData() { return GetScanLineForRead(0); }
+    virtual const void *GetRawPixelDataNoSync() const { return nullptr; }
     virtual void *GetScanLineForWrite(tjs_uint l) {
         return (void *)GetScanLineForRead(l);
     }
     virtual tjs_int GetPitch() const { return 0x100000; }
+    virtual tjs_int GetRawPitchNoSync() const { return GetPitch(); }
     bool IsIndependent() const { return RefCount == 1; }
 
     // virtual tGLTexture* GetTexture() = 0;

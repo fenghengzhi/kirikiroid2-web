@@ -121,6 +121,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--record-render-step-checkpoints", action="store_true",
                    help="Ask host-mode driver to save execute_pre/"
                         "execute_post render checkpoints")
+    p.add_argument("--record-layer-raw-probes", action="store_true",
+                   help="Ask host-mode driver to capture raw Layer "
+                        "MainImage probe events")
     p.add_argument("--render-artifact-dir", default=None,
                    help="Host path where render stage artifacts should be copied")
     p.add_argument("--render-stage-out", default=None,
@@ -154,6 +157,7 @@ class WasmMotionTracer:
         framebuffer_dir: Path | None = None,
         record_render_stages: bool = False,
         record_render_step_checkpoints: bool = False,
+        record_layer_raw_probes: bool = False,
         render_artifact_dir: Path | None = None,
         render_stage_out: Path | None = None,
         manifest_startup_xp3: Path | None = None,
@@ -172,6 +176,7 @@ class WasmMotionTracer:
         self.framebuffer_dir = framebuffer_dir
         self.record_render_stages = record_render_stages
         self.record_render_step_checkpoints = record_render_step_checkpoints
+        self.record_layer_raw_probes = record_layer_raw_probes
         self.render_artifact_dir = render_artifact_dir
         self.render_stage_out = render_stage_out
         self.manifest_startup_xp3 = manifest_startup_xp3
@@ -259,6 +264,8 @@ class WasmMotionTracer:
                     if self.record_render_step_checkpoints:
                         launch_args.append(
                             "--record-render-step-checkpoints")
+                    if self.record_layer_raw_probes:
+                        launch_args.append("--record-layer-raw-probes")
                 launch = lldb.SBLaunchInfo(launch_args)
                 launch.SetWorkingDirectory(str(self.repo_root))
                 launch.AddOpenFileAction(1, str(stdout_path), False, True)
@@ -542,6 +549,10 @@ def main(argv: list[str]) -> int:
         print("--record-render-step-checkpoints requires "
               "--record-render-stages", file=sys.stderr)
         return 2
+    if args.record_layer_raw_probes and not args.record_render_stages:
+        print("--record-layer-raw-probes requires --record-render-stages",
+              file=sys.stderr)
+        return 2
 
     try:
         lldb = _load_lldb()
@@ -561,6 +572,7 @@ def main(argv: list[str]) -> int:
             record_render_stages=args.record_render_stages,
             record_render_step_checkpoints=(
                 args.record_render_step_checkpoints),
+            record_layer_raw_probes=args.record_layer_raw_probes,
             render_artifact_dir=render_artifact_dir,
             render_stage_out=render_stage_out,
             manifest_startup_xp3=manifest_startup_xp3,

@@ -49,6 +49,14 @@
 #include <cstdlib>
 #include "FontImpl.h"
 
+extern "C" {
+#if defined(__GNUC__)
+__attribute__((weak))
+#endif
+void krkr2_wasm_motion_trace_layer_raw_probe_native(
+    const char *, const void *) {}
+}
+
 extern void TVPSetFontRasterizer(tjs_int index);
 
 extern tjs_int TVPGetFontRasterizer();
@@ -2699,6 +2707,8 @@ void tTJSNI_BaseLayer::IndependProvinceImage(bool copy) {
 
 //---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::SaveLayerImage(const ttstr &name, const ttstr &type) {
+    krkr2_wasm_motion_trace_layer_raw_probe_native(
+        "saveLayerImage_0x80963C.enter", this);
     if(!MainImage)
         TVPThrowExceptionMessage(TVPNotDrawableLayerType);
 
@@ -2808,6 +2818,8 @@ void tTJSNI_BaseLayer::SaveLayerImage(const ttstr &name, const ttstr &type) {
         throw;
     }
     dic->Release();
+    krkr2_wasm_motion_trace_layer_raw_probe_native(
+        "saveLayerImage_0x80963C.leave", this);
 }
 
 //---------------------------------------------------------------------------
@@ -3023,6 +3035,25 @@ tjs_int tTJSNI_BaseLayer::GetMainImagePixelBufferPitch() const {
     if(!MainImage)
         return 0;
     return MainImage->GetPitchBytes();
+}
+
+//---------------------------------------------------------------------------
+tTVPBaseTexture *tTJSNI_BaseLayer::GetMainImageRawBackingNoSync() const {
+    return MainImage;
+}
+
+//---------------------------------------------------------------------------
+const void *tTJSNI_BaseLayer::GetMainImageRawPixelBufferNoSync() const {
+    if(!MainImage)
+        return nullptr;
+    return MainImage->GetRawPixelDataNoSync();
+}
+
+//---------------------------------------------------------------------------
+tjs_int tTJSNI_BaseLayer::GetMainImageRawPixelBufferPitchNoSync() const {
+    if(!MainImage)
+        return 0;
+    return MainImage->GetRawPitchNoSync();
 }
 
 //---------------------------------------------------------------------------
@@ -4276,8 +4307,11 @@ void tTJSNI_BaseLayer::FillRect(const tTVPRect &rect, tjs_uint32 color) {
     // this method does not do transparent coloring.
 
     tTVPRect destrect;
-    if(!TVPIntersectRect(&destrect, rect, ClipRect))
+    if(!TVPIntersectRect(&destrect, rect, ClipRect)) {
+        krkr2_wasm_motion_trace_layer_raw_probe_native(
+            "fillRect_0x80EBAC.leave", this);
         return; // out of the clipping rectangle
+    }
 
     if(DrawFace == dfAlpha || DrawFace == dfAddAlpha ||
        (DrawFace == dfOpaque && !HoldAlpha)) {
@@ -4334,6 +4368,8 @@ void tTJSNI_BaseLayer::FillRect(const tTVPRect &rect, tjs_uint32 color) {
     } else {
         Update(destrect);
     }
+    krkr2_wasm_motion_trace_layer_raw_probe_native(
+        "fillRect_0x80EBAC.leave", this);
 }
 
 //---------------------------------------------------------------------------

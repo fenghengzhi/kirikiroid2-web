@@ -24,6 +24,8 @@ const PLAYER_BUILD_ITEMS_OFF     = 0x6C2334;
 const PLAYER_BUILD_COMMANDS_OFF  = 0x6C4E28;
 const PLAYER_RENDER_EXECUTE_OFF  = 0x6C7440;
 const PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF = 0x6CE7D8;
+const LAYER_FILL_RECT_OFF        = 0x80EBAC;
+const LAYER_SAVE_LAYER_IMAGE_OFF = 0x80963C;
 const LAYER_CLASS_ID_OFF = 0x1ADE668;
 const LAYER_NATIVE_MAIN_IMAGE_OFF = 280;
 const BITMAP_NATIVE_IMPL_OFF = 88;
@@ -65,6 +67,7 @@ const STAGE_RENDER_PREPARE = 'render_prepare';
 const STAGE_RENDER_COMMANDS = 'render_commands';
 const STAGE_RENDER_EXECUTE = 'render_execute';
 const STAGE_LAYER_SAVE = 'layer_save';
+const STAGE_LAYER_RAW_PROBE = 'layer_raw_probe';
 
 const ALL_STAGES = [
     STAGE_STATIC_PARSE,
@@ -81,6 +84,7 @@ const RENDER_STAGES = [
     STAGE_RENDER_COMMANDS,
     STAGE_RENDER_EXECUTE,
     STAGE_LAYER_SAVE,
+    STAGE_LAYER_RAW_PROBE,
 ];
 
 const NODE_OFF = {
@@ -140,6 +144,7 @@ let currentRenderPlayer = null;
 let drawIdCounter = 0;
 let activeDrawContexts = [];
 let recordRenderStepCheckpoints = false;
+let recordLayerRawProbes = false;
 let nativeInstanceSupportCache = {};
 let bitmapBufferFunctionCache = {};
 let bitmapPitchFunctionCache = {};
@@ -325,11 +330,20 @@ function resolveLayerNativeInstance(layerObject) {
     }
 }
 
-function readLayerImageSnapshot(layerObject) {
-    const resolved = resolveLayerNativeInstance(layerObject);
-    if (!resolved.layer) return { ok: false, error: resolved.error || 'no layer' };
+function readNativeLayerImageSnapshot(nativeLayer, layerObject) {
+    const native = nativeLayer ? ptr(nativeLayer) : NULL;
+    if (native.isNull()) {
+        return {
+            ok: false,
+            error: 'null native layer',
+            diagnostics: {
+                layerObject: ptrHex(layerObject),
+                nativeLayer: null,
+            },
+        };
+    }
     try {
-        const mainImage = readPointer(resolved.layer, LAYER_NATIVE_MAIN_IMAGE_OFF);
+        const mainImage = readPointer(native, LAYER_NATIVE_MAIN_IMAGE_OFF);
         if (mainImage === null) return { ok: false, error: 'layer has no main image' };
         const bitmapImpl = readPointer(mainImage, BITMAP_NATIVE_IMPL_OFF);
         if (bitmapImpl === null) {
@@ -386,15 +400,43 @@ function readLayerImageSnapshot(layerObject) {
             data: packed.readByteArray(packedSize),
             diagnostics: {
                 layerObject: ptrHex(layerObject),
-                nativeLayer: ptrHex(resolved.layer),
+                nativeLayer: ptrHex(native),
                 mainImage: ptrHex(mainImage),
                 bitmapImpl: ptrHex(bitmapImpl),
                 buffer: ptrHex(buffer),
             },
         };
     } catch (e) {
-        return { ok: false, error: String(e), layerObject: ptrHex(layerObject) };
+        return {
+            ok: false,
+            error: String(e),
+            diagnostics: {
+                layerObject: ptrHex(layerObject),
+                nativeLayer: ptrHex(native),
+            },
+        };
     }
+}
+
+function readLayerImageSnapshot(layerObject) {
+    const resolved = resolveLayerNativeInstance(layerObject);
+    if (!resolved.layer) {
+        return {
+            ok: false,
+            error: resolved.error || 'no layer',
+            diagnostics: {
+                layerObject: ptrHex(layerObject),
+                nativeLayer: null,
+                classId: resolved.classId || null,
+                hresult: resolved.hresult || null,
+            },
+        };
+    }
+    const snapshot = readNativeLayerImageSnapshot(resolved.layer, layerObject);
+    if (snapshot.diagnostics) {
+        snapshot.diagnostics.classId = resolved.classId || null;
+    }
+    return snapshot;
 }
 
 function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint) {
@@ -426,6 +468,71 @@ function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint) {
         return;
     }
     send(payload, snapshot.data);
+}
+
+function sendLayerRawProbe(player, layerObject, nativeLayer, samplePoint,
+                           semanticPayload, diagnostics) {
+    if (!recordLayerRawProbes || !recording ||
+        !stageEnabled(STAGE_LAYER_RAW_PROBE)) {
+        return;
+    }
+    let frameId = renderFrameIdFor(player);
+    const snapshot = nativeLayer
+        ? readNativeLayerImageSnapshot(nativeLayer, layerObject)
+        : readLayerImageSnapshot(layerObject);
+    const diag = {};
+    const snapshotDiag = snapshot.diagnostics || {};
+    for (const k of Object.keys(snapshotDiag)) diag[k] = snapshotDiag[k];
+    if (diagnostics) {
+        for (const k of Object.keys(diagnostics)) diag[k] = diagnostics[k];
+    }
+    const payload = semanticPayload || {};
+    payload.schema = 'motion-render-stage-oracle-v1-event';
+    payload.source = 'android-frida-layer-main-image-raw-probe';
+    payload.stage = STAGE_LAYER_RAW_PROBE;
+    payload.kind = 'raw_probe';
+    payload.samplePoint = samplePoint || 'layer_raw_probe';
+    if (frameId !== null && frameId !== undefined) {
+        payload.frameId = frameId;
+    }
+    payload.player = ptrHex(player || currentRenderPlayer);
+    payload.ok = snapshot.ok === true;
+    payload.width = snapshot.width || null;
+    payload.height = snapshot.height || null;
+    payload.pitch = snapshot.pitch || null;
+    payload.pixelFormat = snapshot.pixelFormat || 'bgra32';
+    payload.nativeLayer = diag.nativeLayer || ptrHex(nativeLayer);
+    payload.mainImage = diag.mainImage || null;
+    payload.bitmapImpl = diag.bitmapImpl || null;
+    payload.buffer = diag.buffer || null;
+    payload.diagnostics = diag;
+    payload.seq = seqCounter++;
+    payload.timeMs = Date.now() - startTimeMs;
+    if (!snapshot.ok) {
+        payload.error = snapshot.error || 'snapshot failed';
+        events.push(payload);
+        send({
+            type: 'layer_raw_probe',
+            ok: false,
+            seq: payload.seq,
+            samplePoint: payload.samplePoint,
+            frameId: payload.frameId,
+            error: payload.error,
+        });
+        return;
+    }
+    events.push(payload);
+    send({
+        type: 'layer_raw_probe',
+        ok: true,
+        seq: payload.seq,
+        samplePoint: payload.samplePoint,
+        frameId: payload.frameId,
+        width: snapshot.width,
+        height: snapshot.height,
+        pitch: snapshot.pitch,
+        pixelFormat: snapshot.pixelFormat || 'bgra32',
+    }, snapshot.data);
 }
 
 function readD0(ctx) {
@@ -1275,6 +1382,16 @@ function installHook() {
             this.ctx = enterRenderContext(this.player);
             applyRenderContext(this.ctx, this.player);
             this.drawCtx = beginDrawContext(this.player, this.argVariant);
+            sendLayerRawProbe(
+                this.player, this.drawCtx.targetObject, null,
+                'Player_drawCompat_0x6D5FB8.enter',
+                { drawId: this.drawCtx.drawId },
+                {
+                    addr: PLAYER_DRAW_COMPAT_OFF,
+                    targetObject: ptrHex(this.drawCtx.targetObject),
+                    targetObjThis: ptrHex(this.drawCtx.targetObjThis),
+                    targetError: this.drawCtx.targetVariantError,
+                });
             emitRender(STAGE_DRAW_DISPATCH, 'draw_enter', {
                 drawId: this.drawCtx.drawId,
             }, {
@@ -1294,6 +1411,23 @@ function installHook() {
             }, 'Player_drawCompat_0x6D5FB8.enter');
         },
         onLeave() {
+            sendLayerRawProbe(
+                this.player,
+                this.drawCtx ? this.drawCtx.targetObject : null,
+                null,
+                'Player_drawCompat_0x6D5FB8.leave',
+                {
+                    drawId: this.drawCtx ? this.drawCtx.drawId : null,
+                },
+                {
+                    addr: PLAYER_DRAW_COMPAT_OFF,
+                    targetObject: this.drawCtx
+                        ? ptrHex(this.drawCtx.targetObject) : null,
+                    targetObjThis: this.drawCtx
+                        ? ptrHex(this.drawCtx.targetObjThis) : null,
+                    targetError: this.drawCtx
+                        ? this.drawCtx.targetVariantError : null,
+                });
             emitRender(STAGE_DRAW_DISPATCH, 'draw_leave', {
                 drawId: this.drawCtx ? this.drawCtx.drawId : null,
                 route: this.drawCtx
@@ -1483,6 +1617,20 @@ function installHook() {
                 : null;
             this.mainList = args[2];
             this.auxList = args[3];
+            sendLayerRawProbe(
+                this.player, this.target, null,
+                'sub_6C7440.enter',
+                {},
+                {
+                    addr: PLAYER_RENDER_EXECUTE_OFF,
+                    targetVariant: ptrHex(this.targetVariant),
+                    target: ptrHex(this.target),
+                    targetObjThis: ptrHex(this.targetVariantObject.objThis),
+                    targetError: this.targetVariantObject.error,
+                    drawTarget: this.drawCtx
+                        ? ptrHex(this.drawCtx.targetObject) : null,
+                    targetMatchesDrawArg: this.targetMatchesDrawArg,
+                });
             sendRenderImageCheckpoint(
                 this.player, this.target, 'execute_pre',
                 'sub_6C7440.enter.after-target-resolve');
@@ -1524,6 +1672,20 @@ function installHook() {
                     ? ptrHex(this.drawCtx.targetObject) : null,
                 targetMatchesDrawArg: this.targetMatchesDrawArg,
             }, 'sub_6C7440.leave');
+            sendLayerRawProbe(
+                this.player, this.target, null,
+                'sub_6C7440.leave',
+                {},
+                {
+                    addr: PLAYER_RENDER_EXECUTE_OFF,
+                    targetVariant: ptrHex(this.targetVariant),
+                    target: ptrHex(this.target),
+                    targetObjThis: ptrHex(this.targetVariantObject.objThis),
+                    targetError: this.targetVariantObject.error,
+                    drawTarget: this.drawCtx
+                        ? ptrHex(this.drawCtx.targetObject) : null,
+                    targetMatchesDrawArg: this.targetMatchesDrawArg,
+                });
             sendRenderImageCheckpoint(
                 this.player, this.target, 'execute_post',
                 'sub_6C7440.leave.before-return');
@@ -1533,10 +1695,41 @@ function installHook() {
     attachAt(PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF, 'Player_updateLayerAfterDraw', {
         onEnter(args) {
             this.player = args[0];
+            this.targetVariant = args[1];
+            this.targetVariantObject = readVariantObject(this.targetVariant);
+            this.target = this.targetVariantObject.object;
             this.internalAssignRequested = readBool(
                 this.player, PLAYER_OFF.internalAssignRequested);
+            sendLayerRawProbe(
+                this.player, this.target, null,
+                'updateLayerAfterDraw_0x6CE7D8.enter',
+                {
+                    internalAssignRequested:
+                        this.internalAssignRequested === true,
+                },
+                {
+                    addr: PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF,
+                    targetVariant: ptrHex(this.targetVariant),
+                    target: ptrHex(this.target),
+                    targetObjThis: ptrHex(this.targetVariantObject.objThis),
+                    targetError: this.targetVariantObject.error,
+                });
         },
         onLeave() {
+            sendLayerRawProbe(
+                this.player, this.target, null,
+                'updateLayerAfterDraw_0x6CE7D8.leave',
+                {
+                    internalAssignRequested:
+                        this.internalAssignRequested === true,
+                },
+                {
+                    addr: PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF,
+                    targetVariant: ptrHex(this.targetVariant),
+                    target: ptrHex(this.target),
+                    targetObjThis: ptrHex(this.targetVariantObject.objThis),
+                    targetError: this.targetVariantObject.error,
+                });
             const ctx = currentDrawContextFor(this.player);
             if (!ctx) return;
             ctx.updateLayerAfterDrawCalled = true;
@@ -1547,6 +1740,60 @@ function installHook() {
                 'done',
                 'ordinary_layer',
                 { internalAssignRequested: this.internalAssignRequested });
+        },
+    });
+
+    attachAt(LAYER_FILL_RECT_OFF, 'Layer_fillRect', {
+        onEnter(args) {
+            this.nativeLayer = args[0];
+            this.player = currentRenderPlayer || lastCompletedTopPlayer;
+        },
+        onLeave() {
+            sendLayerRawProbe(
+                this.player, null, this.nativeLayer,
+                'fillRect_0x80EBAC.leave',
+                {},
+                {
+                    addr: LAYER_FILL_RECT_OFF,
+                    nativeLayerArg: ptrHex(this.nativeLayer),
+                });
+        },
+    });
+
+    attachAt(LAYER_SAVE_LAYER_IMAGE_OFF, 'Layer_saveLayerImage', {
+        onEnter(args) {
+            this.nativeLayer = args[0];
+            this.player = currentRenderPlayer || lastCompletedTopPlayer;
+            this.mainImageAtEnter =
+                readPointer(this.nativeLayer, LAYER_NATIVE_MAIN_IMAGE_OFF);
+            sendLayerRawProbe(
+                this.player, null, this.nativeLayer,
+                'saveLayerImage_0x80963C.enter',
+                {},
+                {
+                    addr: LAYER_SAVE_LAYER_IMAGE_OFF,
+                    nativeLayerArg: ptrHex(this.nativeLayer),
+                    saveLayerImageMainImageA1Plus280:
+                        ptrHex(this.mainImageAtEnter),
+                });
+        },
+        onLeave() {
+            const mainImageAtLeave =
+                readPointer(this.nativeLayer, LAYER_NATIVE_MAIN_IMAGE_OFF);
+            sendLayerRawProbe(
+                this.player, null, this.nativeLayer,
+                'saveLayerImage_0x80963C.leave',
+                {},
+                {
+                    addr: LAYER_SAVE_LAYER_IMAGE_OFF,
+                    nativeLayerArg: ptrHex(this.nativeLayer),
+                    saveLayerImageMainImageA1Plus280:
+                        ptrHex(mainImageAtLeave),
+                    saveLayerImageMainImageA1Plus280Enter:
+                        ptrHex(this.mainImageAtEnter),
+                    mainImagePointerStable:
+                        ptrEqual(this.mainImageAtEnter, mainImageAtLeave),
+                });
         },
     });
 
@@ -1735,6 +1982,8 @@ rpc.exports = {
                 buildRenderCommands: PLAYER_BUILD_COMMANDS_OFF,
                 renderExecute: PLAYER_RENDER_EXECUTE_OFF,
                 updateLayerAfterDraw: PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF,
+                layerFillRect: LAYER_FILL_RECT_OFF,
+                layerSaveLayerImage: LAYER_SAVE_LAYER_IMAGE_OFF,
                 layerClassId: LAYER_CLASS_ID_OFF,
             },
         };
@@ -1745,6 +1994,8 @@ rpc.exports = {
         enabledStages.add(STAGE_TRACE_FLATTEN);
         recordRenderStepCheckpoints =
             !!(options && options.recordRenderStepCheckpoints);
+        recordLayerRawProbes =
+            !!(options && options.recordLayerRawProbes);
         events = [];
         frameCounter = 0;
         seqCounter = 0;

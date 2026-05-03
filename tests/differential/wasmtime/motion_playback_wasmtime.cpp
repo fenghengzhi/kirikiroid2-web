@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -44,6 +45,7 @@ int g_framebuffer_frame_no = 0;
 std::string g_render_probe_jsonl;
 int g_render_probe_seq = 0;
 int g_render_draw_id = 0;
+bool g_record_layer_raw_probes = false;
 constexpr const char *kRenderStageCaptureRoot = "/render_stage_capture";
 
 struct TraceState {
@@ -118,6 +120,158 @@ void appendNumberArray(std::string &out, const std::array<T, N> &values) {
     out.push_back(']');
 }
 
+std::uint32_t rotr32(std::uint32_t value, int bits) {
+    return (value >> bits) | (value << (32 - bits));
+}
+
+class Sha256 {
+public:
+    void update(const unsigned char *data, std::size_t len) {
+        _totalBytes += len;
+        if(_bufferSize != 0) {
+            const auto take = std::min<std::size_t>(64 - _bufferSize, len);
+            std::memcpy(_buffer + _bufferSize, data, take);
+            _bufferSize += take;
+            data += take;
+            len -= take;
+            if(_bufferSize == 64) {
+                transform(_buffer);
+                _bufferSize = 0;
+            }
+        }
+        while(len >= 64) {
+            transform(data);
+            data += 64;
+            len -= 64;
+        }
+        if(len > 0) {
+            std::memcpy(_buffer, data, len);
+            _bufferSize = len;
+        }
+    }
+
+    std::string finalHex() {
+        const std::uint64_t bitLen = _totalBytes * 8u;
+        _buffer[_bufferSize++] = 0x80u;
+        if(_bufferSize > 56) {
+            while(_bufferSize < 64) _buffer[_bufferSize++] = 0;
+            transform(_buffer);
+            _bufferSize = 0;
+        }
+        while(_bufferSize < 56) _buffer[_bufferSize++] = 0;
+        for(int i = 7; i >= 0; --i) {
+            _buffer[_bufferSize++] =
+                static_cast<unsigned char>((bitLen >> (i * 8)) & 0xffu);
+        }
+        transform(_buffer);
+
+        static constexpr char kHex[] = "0123456789abcdef";
+        std::string out;
+        out.reserve(64);
+        for(std::uint32_t word : _state) {
+            for(int shift = 24; shift >= 0; shift -= 8) {
+                const auto byte =
+                    static_cast<unsigned char>((word >> shift) & 0xffu);
+                out.push_back(kHex[byte >> 4]);
+                out.push_back(kHex[byte & 0x0f]);
+            }
+        }
+        return out;
+    }
+
+private:
+    void transform(const unsigned char block[64]) {
+        static constexpr std::uint32_t k[64] = {
+            0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u,
+            0x3956c25bu, 0x59f111f1u, 0x923f82a4u, 0xab1c5ed5u,
+            0xd807aa98u, 0x12835b01u, 0x243185beu, 0x550c7dc3u,
+            0x72be5d74u, 0x80deb1feu, 0x9bdc06a7u, 0xc19bf174u,
+            0xe49b69c1u, 0xefbe4786u, 0x0fc19dc6u, 0x240ca1ccu,
+            0x2de92c6fu, 0x4a7484aau, 0x5cb0a9dcu, 0x76f988dau,
+            0x983e5152u, 0xa831c66du, 0xb00327c8u, 0xbf597fc7u,
+            0xc6e00bf3u, 0xd5a79147u, 0x06ca6351u, 0x14292967u,
+            0x27b70a85u, 0x2e1b2138u, 0x4d2c6dfcu, 0x53380d13u,
+            0x650a7354u, 0x766a0abbu, 0x81c2c92eu, 0x92722c85u,
+            0xa2bfe8a1u, 0xa81a664bu, 0xc24b8b70u, 0xc76c51a3u,
+            0xd192e819u, 0xd6990624u, 0xf40e3585u, 0x106aa070u,
+            0x19a4c116u, 0x1e376c08u, 0x2748774cu, 0x34b0bcb5u,
+            0x391c0cb3u, 0x4ed8aa4au, 0x5b9cca4fu, 0x682e6ff3u,
+            0x748f82eeu, 0x78a5636fu, 0x84c87814u, 0x8cc70208u,
+            0x90befffau, 0xa4506cebu, 0xbef9a3f7u, 0xc67178f2u,
+        };
+
+        std::uint32_t m[64];
+        for(int i = 0; i < 16; ++i) {
+            m[i] = (static_cast<std::uint32_t>(block[i * 4]) << 24) |
+                (static_cast<std::uint32_t>(block[i * 4 + 1]) << 16) |
+                (static_cast<std::uint32_t>(block[i * 4 + 2]) << 8) |
+                static_cast<std::uint32_t>(block[i * 4 + 3]);
+        }
+        for(int i = 16; i < 64; ++i) {
+            const auto s0 = rotr32(m[i - 15], 7) ^ rotr32(m[i - 15], 18) ^
+                (m[i - 15] >> 3);
+            const auto s1 = rotr32(m[i - 2], 17) ^ rotr32(m[i - 2], 19) ^
+                (m[i - 2] >> 10);
+            m[i] = m[i - 16] + s0 + m[i - 7] + s1;
+        }
+
+        std::uint32_t a = _state[0], b = _state[1], c = _state[2],
+            d = _state[3], e = _state[4], f = _state[5],
+            g = _state[6], h = _state[7];
+        for(int i = 0; i < 64; ++i) {
+            const auto s1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+            const auto ch = (e & f) ^ ((~e) & g);
+            const auto temp1 = h + s1 + ch + k[i] + m[i];
+            const auto s0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+            const auto maj = (a & b) ^ (a & c) ^ (b & c);
+            const auto temp2 = s0 + maj;
+            h = g;
+            g = f;
+            f = e;
+            e = d + temp1;
+            d = c;
+            c = b;
+            b = a;
+            a = temp1 + temp2;
+        }
+        _state[0] += a;
+        _state[1] += b;
+        _state[2] += c;
+        _state[3] += d;
+        _state[4] += e;
+        _state[5] += f;
+        _state[6] += g;
+        _state[7] += h;
+    }
+
+    std::uint32_t _state[8] = {
+        0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
+        0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u,
+    };
+    unsigned char _buffer[64] = {};
+    std::size_t _bufferSize = 0;
+    std::uint64_t _totalBytes = 0;
+};
+
+std::string rgbaSha256FromBgraRows(const unsigned char *pixels, int width,
+                                   int height, int pitch) {
+    Sha256 sha;
+    std::vector<unsigned char> row(static_cast<std::size_t>(width) * 4u);
+    for(int y = 0; y < height; ++y) {
+        const auto *src = pixels + static_cast<std::size_t>(y) *
+            static_cast<std::size_t>(pitch);
+        for(int x = 0; x < width; ++x) {
+            const auto dst = static_cast<std::size_t>(x) * 4u;
+            row[dst] = src[x * 4 + 2];
+            row[dst + 1u] = src[x * 4 + 1];
+            row[dst + 2u] = src[x * 4];
+            row[dst + 3u] = src[x * 4 + 3];
+        }
+        sha.update(row.data(), row.size());
+    }
+    return sha.finalHex();
+}
+
 int renderFrameIdFor(motion::Player *player) {
     auto &state = traceState();
     if(state.inRender && state.currentRenderFrameId >= 0) {
@@ -147,7 +301,6 @@ void appendRenderEvent(motion::Player *player,
                        const std::string &payload,
                        const std::string &diagnostics) {
     const int frameId = renderFrameIdFor(player);
-    if(frameId < 0) return;
     motion::Player *eventPlayer = renderPlayerFor(player);
     std::string ev;
     ev.reserve(payload.size() + diagnostics.size() + 256);
@@ -374,7 +527,7 @@ bool directoryExists(const std::string &path) {
 
 std::string framePath(const char *phase, int frameId) {
     char name[128];
-    std::snprintf(name, sizeof(name), "%s/_execute/%s/frame_%04d.png",
+    std::snprintf(name, sizeof(name), "%s/_execute/%s/frame_%04d.bgra",
                   kRenderStageCaptureRoot, phase ? phase : "unknown",
                   frameId);
     return std::string(name);
@@ -383,11 +536,27 @@ std::string framePath(const char *phase, int frameId) {
 void appendImageCheckpointEvent(motion::Player *player, const char *phase,
                                 const char *samplePoint, bool ok,
                                 const std::string &path,
-                                const std::string &error) {
+                                const std::string &error,
+                                int width = 0,
+                                int height = 0,
+                                int pitch = 0) {
     std::string payload = "\"phase\":";
     appendJsonString(payload, phase ? phase : "");
     payload += ",\"ok\":";
     payload += ok ? "true" : "false";
+    if(width > 0) {
+        payload += ",\"width\":";
+        payload += std::to_string(width);
+    }
+    if(height > 0) {
+        payload += ",\"height\":";
+        payload += std::to_string(height);
+    }
+    if(pitch > 0) {
+        payload += ",\"pitch\":";
+        payload += std::to_string(pitch);
+    }
+    payload += ",\"pixelFormat\":\"bgra32\"";
     if(!path.empty()) {
         payload += ",\"guestPath\":";
         appendJsonString(payload, path);
@@ -399,6 +568,101 @@ void appendImageCheckpointEvent(motion::Player *player, const char *phase,
     appendRenderEvent(player, "render_execute", "execute_image_checkpoint",
                       samplePoint ? samplePoint : "execute_image_checkpoint",
                       payload, playerDiagnostics(player));
+}
+
+bool writePackedBgraRows(const std::string &path, const unsigned char *pixels,
+                         int width, int height, int pitch) {
+    std::FILE *file = std::fopen(path.c_str(), "wb");
+    if(!file) return false;
+    bool ok = true;
+    const auto rowBytes = static_cast<std::size_t>(width) * 4u;
+    for(int y = 0; y < height; ++y) {
+        const auto *row = pixels + static_cast<std::size_t>(y) *
+            static_cast<std::size_t>(pitch);
+        if(std::fwrite(row, 1, rowBytes, file) != rowBytes) {
+            ok = false;
+            break;
+        }
+    }
+    if(std::fclose(file) != 0) ok = false;
+    return ok;
+}
+
+void appendLayerRawProbeEvent(motion::Player *player,
+                              const char *samplePoint,
+                              const tTJSNI_BaseLayer *layer,
+                              bool ok,
+                              const std::string &error,
+                              const std::string &rgbaSha256,
+                              int width,
+                              int height,
+                              int pitch,
+                              const void *mainImage,
+                              const void *bitmapImpl,
+                              const void *buffer) {
+    const int frameId = renderFrameIdFor(player);
+    if(frameId < 0) return;
+    motion::Player *eventPlayer = renderPlayerFor(player);
+    const int seq = g_render_probe_seq++;
+    std::string ev;
+    ev += "{\"schema\":\"motion-render-stage-wasmtime-v1-event\"";
+    ev += ",\"source\":\"wasmtime-port-layer-main-image-raw-probe\"";
+    ev += ",\"stage\":\"layer_raw_probe\"";
+    ev += ",\"kind\":\"raw_probe\"";
+    ev += ",\"samplePoint\":";
+    appendJsonString(ev, samplePoint ? samplePoint : "layer_raw_probe");
+    ev += ",\"frameId\":";
+    if(frameId >= 0) {
+        ev += std::to_string(frameId);
+    } else {
+        ev += "null";
+    }
+    ev += ",\"player\":";
+    ev += ptrHex(eventPlayer);
+    ev += ",\"seq\":";
+    ev += std::to_string(seq);
+    ev += ",\"ok\":";
+    ev += ok ? "true" : "false";
+    if(width > 0) {
+        ev += ",\"width\":";
+        ev += std::to_string(width);
+    }
+    if(height > 0) {
+        ev += ",\"height\":";
+        ev += std::to_string(height);
+    }
+    if(pitch > 0) {
+        ev += ",\"pitch\":";
+        ev += std::to_string(pitch);
+    }
+    ev += ",\"pixelFormat\":\"bgra32\"";
+    if(!rgbaSha256.empty()) {
+        ev += ",\"rgbaSha256\":";
+        appendJsonString(ev, rgbaSha256);
+    }
+    if(!error.empty()) {
+        ev += ",\"error\":";
+        appendJsonString(ev, error);
+    }
+    ev += ",\"nativeLayer\":";
+    ev += ptrHex(layer);
+    ev += ",\"mainImage\":";
+    ev += ptrHex(mainImage);
+    ev += ",\"bitmapImpl\":";
+    ev += ptrHex(bitmapImpl);
+    ev += ",\"buffer\":";
+    ev += ptrHex(buffer);
+    ev += ",\"diagnostics\":{\"samplingMode\":\"guest-cpp-raw-no-sync\"";
+    ev += ",\"nativeLayer\":";
+    ev += ptrHex(layer);
+    ev += ",\"mainImage\":";
+    ev += ptrHex(mainImage);
+    ev += ",\"bitmapImpl\":";
+    ev += ptrHex(bitmapImpl);
+    ev += ",\"buffer\":";
+    ev += ptrHex(buffer);
+    ev += "}}\n";
+    g_render_probe_jsonl += ev;
 }
 
 extern "C" __attribute__((noinline, used))
@@ -548,6 +812,7 @@ void resetState() {
     g_render_probe_jsonl.clear();
     g_render_probe_seq = 0;
     g_render_draw_id = 0;
+    g_record_layer_raw_probes = false;
     auto &state = traceState();
     state.inProgress = false;
     state.inRender = false;
@@ -629,9 +894,13 @@ MotionTraceRenderDrawScope::MotionTraceRenderDrawScope(
     appendRenderEvent(player, "draw_dispatch", "draw_enter",
                       "Player::drawCompat_0x6D5FB8.enter", payload,
                       diagnostics);
+    motionTraceLayerRawProbe(
+        player, targetObject, "Player_drawCompat_0x6D5FB8.enter");
 }
 
 MotionTraceRenderDrawScope::~MotionTraceRenderDrawScope() {
+    motionTraceLayerRawProbe(
+        _player, _targetObject, "Player_drawCompat_0x6D5FB8.leave");
     const char *route = _route ? _route : (_steps.empty() ? "no_target" : "failed");
     std::string payload = "\"route\":";
     appendJsonString(payload, route);
@@ -781,12 +1050,19 @@ MotionTraceRenderExecuteScope::MotionTraceRenderExecuteScope(
     payload += ",\"skipUpdate\":";
     payload += skipUpdate ? "true" : "false";
     std::string diagnostics = playerDiagnostics(player);
+    motionTraceRenderImageCheckpoint(
+        player, renderLayerObject, "execute_pre",
+        "Player::executeLayerRenderCommands.enter.after-target-resolve");
+    motionTraceLayerRawProbe(
+        player, renderLayerObject, "sub_6C7440.enter");
     appendRenderEvent(player, "render_execute", "execute_enter",
                       "Player::executeLayerRenderCommands.enter",
                       payload, diagnostics);
 }
 
 MotionTraceRenderExecuteScope::~MotionTraceRenderExecuteScope() {
+    motionTraceLayerRawProbe(
+        _player, _renderLayerObject, "sub_6C7440.leave");
     const auto *runtime = _player ? _player->runtime() : nullptr;
     std::string payload;
     appendRenderItemsPayload(payload, runtime);
@@ -797,6 +1073,9 @@ MotionTraceRenderExecuteScope::~MotionTraceRenderExecuteScope() {
     payload += ",\"ok\":";
     payload += _ok ? "true" : "false";
     std::string diagnostics = playerDiagnostics(_player);
+    motionTraceRenderImageCheckpoint(
+        _player, _renderLayerObject, "execute_post",
+        "Player::executeLayerRenderCommands.leave.before-return");
     appendRenderEvent(_player, "render_execute", "execute_leave",
                       "Player::executeLayerRenderCommands.leave",
                       payload, diagnostics);
@@ -861,24 +1140,100 @@ void motionTraceRenderImageCheckpoint(Player *player,
     }
 
     const auto path = framePath(phase, frameId);
-    try {
-        layer->SaveLayerImage(motion::detail::widen(path), TJS_W("png"));
-        appendImageCheckpointEvent(player, phase, samplePoint, true, path, {});
-    } catch(const eTJS &e) {
+    const int width = static_cast<int>(layer->GetWidth());
+    const int height = static_cast<int>(layer->GetHeight());
+    const int pitch = static_cast<int>(
+        layer->GetMainImageRawPixelBufferPitchNoSync());
+    if(width <= 0 || height <= 0) {
         appendImageCheckpointEvent(
             player, phase, samplePoint, false, path,
-            motion::detail::narrow(e.GetMessage()));
-    } catch(const std::exception &e) {
-        appendImageCheckpointEvent(
-            player, phase, samplePoint, false, path, e.what());
-    } catch(...) {
-        appendImageCheckpointEvent(
-            player, phase, samplePoint, false, path,
-            "unknown exception while saving Layer image checkpoint");
+            "Layer main image has invalid dimensions", width, height, pitch);
+        return;
     }
+    if(pitch < width * 4) {
+        appendImageCheckpointEvent(
+            player, phase, samplePoint, false, path,
+            "Layer main image has invalid pitch", width, height, pitch);
+        return;
+    }
+    const auto *pixels = static_cast<const unsigned char *>(
+        layer->GetMainImageRawPixelBufferNoSync());
+    if(!pixels) {
+        appendImageCheckpointEvent(
+            player, phase, samplePoint, false, path,
+            "Layer raw main image pixel buffer is null", width, height, pitch);
+        return;
+    }
+
+    bool ok = writePackedBgraRows(path, pixels, width, height, pitch);
+    appendImageCheckpointEvent(
+        player, phase, samplePoint, ok, path,
+        ok ? std::string() : std::string("failed to write raw BGRA checkpoint"),
+        width, height, pitch);
+}
+
+void motionTraceLayerRawProbeNative(Player *player, const void *nativeLayer,
+                                    const char *samplePoint) {
+    if(!g_record_layer_raw_probes || !nativeLayer) return;
+
+    const auto *layer =
+        static_cast<const tTJSNI_BaseLayer *>(nativeLayer);
+    const auto *mainImage = layer->GetMainImageRawBackingNoSync();
+    const auto *bitmapImpl = mainImage ? mainImage->GetTexture() : nullptr;
+    const int width = mainImage ? static_cast<int>(mainImage->GetWidth()) : 0;
+    const int height = mainImage ? static_cast<int>(mainImage->GetHeight()) : 0;
+    const int pitch = static_cast<int>(
+        layer->GetMainImageRawPixelBufferPitchNoSync());
+    const auto *pixels = static_cast<const unsigned char *>(
+        layer->GetMainImageRawPixelBufferNoSync());
+    if(!mainImage || width <= 0 || height <= 0) {
+        appendLayerRawProbeEvent(
+            player, samplePoint, layer, false,
+            "Layer has no raw main image", {}, width, height, pitch,
+            mainImage, bitmapImpl, pixels);
+        return;
+    }
+    if(pitch < width * 4) {
+        appendLayerRawProbeEvent(
+            player, samplePoint, layer, false,
+            "Layer raw main image has invalid pitch", {}, width, height, pitch,
+            mainImage, bitmapImpl, pixels);
+        return;
+    }
+    if(!pixels) {
+        appendLayerRawProbeEvent(
+            player, samplePoint, layer, false,
+            "Layer raw main image pixel buffer is null", {}, width, height,
+            pitch,
+            mainImage, bitmapImpl, pixels);
+        return;
+    }
+    appendLayerRawProbeEvent(
+        player, samplePoint, layer, true, {},
+        rgbaSha256FromBgraRows(pixels, width, height, pitch),
+        width, height, pitch, mainImage, bitmapImpl, pixels);
+}
+
+void motionTraceLayerRawProbe(Player *player, void *renderLayerObject,
+                              const char *samplePoint) {
+    if(!g_record_layer_raw_probes || !renderLayerObject) return;
+    auto *layerObject = static_cast<iTJSDispatch2 *>(renderLayerObject);
+    tTJSNI_BaseLayer *layer = nullptr;
+    if(TJS_FAILED(layerObject->NativeInstanceSupport(
+           TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+           reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
+        return;
+    }
+    motionTraceLayerRawProbeNative(player, layer, samplePoint);
 }
 
 } // namespace motion::detail
+
+extern "C" void krkr2_wasm_motion_trace_layer_raw_probe_native(
+    const char *samplePoint, const void *nativeLayer) {
+    motion::detail::motionTraceLayerRawProbeNative(
+        nullptr, nativeLayer, samplePoint);
+}
 
 extern "C" {
 
@@ -899,6 +1254,11 @@ EMSCRIPTEN_KEEPALIVE
 void krkr2_wasm_clear_render_probe() {
     g_render_probe_jsonl.clear();
     g_render_probe_seq = 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void krkr2_wasm_set_record_layer_raw_probes(int enabled) {
+    g_record_layer_raw_probes = enabled != 0;
 }
 
 } // extern "C"

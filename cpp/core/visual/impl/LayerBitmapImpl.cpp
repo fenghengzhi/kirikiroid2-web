@@ -649,6 +649,18 @@ tjs_int tTVPNativeBaseBitmap::GetPitchBytes() const {
     return 0;
 }
 //---------------------------------------------------------------------------
+const void *tTVPNativeBaseBitmap::GetRawPixelDataNoSync() const {
+    if(Bitmap)
+        return Bitmap->GetRawPixelDataNoSync();
+    return nullptr;
+}
+//---------------------------------------------------------------------------
+tjs_int tTVPNativeBaseBitmap::GetRawPitchNoSync() const {
+    if(Bitmap)
+        return Bitmap->GetRawPitchNoSync();
+    return 0;
+}
+//---------------------------------------------------------------------------
 void tTVPNativeBaseBitmap::Independ() {
     // sever Bitmap's image sharing
     if(Bitmap->IsIndependent() && !Bitmap->IsStatic())

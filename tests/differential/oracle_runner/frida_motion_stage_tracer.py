@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+from oracle_runner.png_artifacts import bgra_rgba_sha256_bytes
+
 try:
     import frida  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - raised at attach time
@@ -73,6 +75,8 @@ class FridaMotionStageTracer:
         self._info: dict[str, Any] | None = None
         self._image_checkpoint_dir: Path | None = None
         self._image_checkpoints: list[dict[str, Any]] = []
+        self._layer_raw_probe_dir: Path | None = None
+        self._layer_raw_probe_updates: dict[int, dict[str, Any]] = {}
 
     def attach(self) -> None:
         if self._session is not None:
@@ -135,8 +139,15 @@ class FridaMotionStageTracer:
     def configure_image_checkpoints(self, raw_dir: Path | None) -> None:
         self._image_checkpoint_dir = raw_dir
         self._image_checkpoints = []
+        self._layer_raw_probe_dir = (
+            raw_dir.parent / ".oracle_layer_raw_probe"
+            if raw_dir is not None else None
+        )
+        self._layer_raw_probe_updates = {}
         if raw_dir is not None:
             raw_dir.mkdir(parents=True, exist_ok=True)
+        if self._layer_raw_probe_dir is not None:
+            self._layer_raw_probe_dir.mkdir(parents=True, exist_ok=True)
 
     def image_checkpoints(self) -> list[dict[str, Any]]:
         return [dict(item) for item in self._image_checkpoints]
@@ -146,19 +157,30 @@ class FridaMotionStageTracer:
         stages: Sequence[str],
         *,
         record_render_step_checkpoints: bool = False,
+        record_layer_raw_probes: bool = False,
     ) -> None:
         if self._api is None:
             raise RuntimeError("tracer not attached; call attach() first")
         self._api.start_record(list(stages), {
             "recordRenderStepCheckpoints": bool(
                 record_render_step_checkpoints),
+            "recordLayerRawProbes": bool(record_layer_raw_probes),
         })
 
     def stop_record(self) -> list[dict[str, Any]]:
         if self._api is None:
             return []
         raw = self._api.stop_record()
-        return list(raw or [])
+        events = list(raw or [])
+        for ev in events:
+            if ev.get("stage") != "layer_raw_probe":
+                continue
+            seq = ev.get("seq")
+            if isinstance(seq, int):
+                update = self._layer_raw_probe_updates.get(seq)
+                if update:
+                    ev.update(update)
+        return events
 
     def event_count(self) -> int:
         if self._api is None:
@@ -198,7 +220,11 @@ class FridaMotionStageTracer:
         payload = message.get("payload")
         if not isinstance(payload, dict):
             return
-        if payload.get("type") != "render_image_checkpoint":
+        payload_type = payload.get("type")
+        if payload_type == "layer_raw_probe":
+            self._handle_layer_raw_probe_message(payload, data)
+            return
+        if payload_type != "render_image_checkpoint":
             return
         record = dict(payload)
         record.pop("type", None)
@@ -220,3 +246,22 @@ class FridaMotionStageTracer:
                 raw_path.write_bytes(bytes(data))
                 record["rawPath"] = str(raw_path)
         self._image_checkpoints.append(record)
+
+    def _handle_layer_raw_probe_message(self, payload, data) -> None:
+        record = dict(payload)
+        record.pop("type", None)
+        seq = record.get("seq")
+        if not isinstance(seq, int):
+            return
+        update: dict[str, Any] = {"ok": bool(record.get("ok"))}
+        if record.get("ok") and data is not None:
+            raw_bytes = bytes(data)
+            update["bytes"] = len(raw_bytes)
+            try:
+                update["rgbaSha256"] = bgra_rgba_sha256_bytes(raw_bytes)
+            except RuntimeError as exc:
+                update["ok"] = False
+                update["error"] = str(exc)
+        elif not record.get("ok"):
+            update["error"] = record.get("error") or "snapshot failed"
+        self._layer_raw_probe_updates[seq] = update

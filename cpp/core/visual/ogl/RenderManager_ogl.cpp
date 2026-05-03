@@ -1102,6 +1102,9 @@ public:
     }
 
     const void *GetScanLineForRead(tjs_uint l) override;
+    const void *GetRawPixelDataNoSync() const override {
+        return PixelData;
+    }
 
     tjs_uint32 GetPoint(int x, int y) override {
         if(PixelData)
@@ -1121,6 +1124,7 @@ public:
             return internalW * 4;
         return tjs_int(internalW / _scaleW) * 4;
     }
+    tjs_int GetRawPitchNoSync() const override { return GetPitch(); }
     tjs_uint GetInternalWidth() const override { return internalW; }
     tjs_uint GetInternalHeight() const override { return internalH; }
     virtual void AsTarget() { assert(false); }

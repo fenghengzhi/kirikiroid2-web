@@ -94,6 +94,10 @@ namespace motion::detail {
                                           void *renderLayerObject,
                                           const char *phase,
                                           const char *samplePoint);
+    void motionTraceLayerRawProbe(Player *player, void *renderLayerObject,
+                                  const char *samplePoint);
+    void motionTraceLayerRawProbeNative(Player *player, const void *nativeLayer,
+                                        const char *samplePoint);
 #endif
 
 } // namespace motion::detail

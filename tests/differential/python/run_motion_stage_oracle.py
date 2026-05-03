@@ -34,6 +34,7 @@ RENDER_STAGES: tuple[str, ...] = (
     "render_commands",
     "render_execute",
     "layer_save",
+    "layer_raw_probe",
 )
 RENDER_STEP_CHECKPOINT_PHASES: tuple[str, ...] = (
     "execute_pre",
@@ -67,6 +68,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--record-render-step-checkpoints", action="store_true",
                    help="With --stage render_path, capture execute_pre/"
                         "execute_post Layer images around sub_6C7440")
+    p.add_argument("--record-layer-raw-probes", action="store_true",
+                   help="With --stage render_path, capture raw Layer "
+                        "MainImage probes at fillRect/saveLayerImage/"
+                        "drawCompat/render execute/update boundaries")
     p.add_argument("--playback-timeout", type=float, default=90.0,
                    help="Seconds to wait for deterministic playback")
     p.add_argument("--raw-out", default=None,
@@ -898,6 +903,10 @@ def main(argv: list[str]) -> int:
         print("--record-render-step-checkpoints requires --stage render_path",
               file=sys.stderr)
         return 2
+    if args.record_layer_raw_probes and not render_path:
+        print("--record-layer-raw-probes requires --stage render_path",
+              file=sys.stderr)
+        return 2
     render_artifact_dir = (
         Path(args.render_artifact_dir)
         if args.render_artifact_dir is not None
@@ -946,7 +955,10 @@ def main(argv: list[str]) -> int:
                     engine, device_id=args.serial) as tracer:
                     checkpoint_raw_dir = (
                         render_artifact_dir / ".oracle_execute_raw"
-                        if args.record_render_step_checkpoints and
+                        if (
+                            args.record_render_step_checkpoints or
+                            args.record_layer_raw_probes
+                        ) and
                         render_artifact_dir is not None else None
                     )
                     tracer.configure_image_checkpoints(checkpoint_raw_dir)
@@ -954,6 +966,8 @@ def main(argv: list[str]) -> int:
                         stages,
                         record_render_step_checkpoints=(
                             args.record_render_step_checkpoints),
+                        record_layer_raw_probes=(
+                            args.record_layer_raw_probes),
                     )
                     engine.tjs_init()
                     mpb.trigger_startup(engine, remote_game)

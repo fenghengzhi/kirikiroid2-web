@@ -387,6 +387,8 @@ public:
         return BmpData + Pitch * l;
     }
     tjs_int GetPitch() const override { return Pitch; }
+    const void *GetRawPixelDataNoSync() const override { return BmpData; }
+    tjs_int GetRawPitchNoSync() const override { return Pitch; }
 
     cocos2d::Texture2D *
     GetAdapterTexture(cocos2d::Texture2D *origTex) override {

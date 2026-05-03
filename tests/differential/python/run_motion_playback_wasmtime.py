@@ -22,7 +22,11 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
-from oracle_runner.png_artifacts import png_manifest_entry
+from oracle_runner.png_artifacts import (
+    bgra_rgba_sha256_file,
+    png_manifest_entry,
+    write_bgra_png,
+)
 
 DEFAULT_HOST_PYTHON_RAW = os.environ.get("KRKR2_HOST_PYTHON") or shutil.which("python3")
 DEFAULT_HOST_PYTHON = (
@@ -49,6 +53,7 @@ RENDER_STAGES: tuple[str, ...] = (
     "render_commands",
     "render_execute",
     "layer_save",
+    "layer_raw_probe",
 )
 
 
@@ -93,6 +98,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--record-render-step-checkpoints", action="store_true",
                    help="With --record-render-stages, save execute_pre/"
                         "execute_post images around executeLayerRenderCommands")
+    p.add_argument("--record-layer-raw-probes", action="store_true",
+                   help="With --record-render-stages, capture raw Layer "
+                        "MainImage probes at fillRect/saveLayerImage/"
+                        "drawCompat/render execute/update boundaries")
     p.add_argument("--render-artifact-dir", type=Path, default=None,
                    help="Render stage artifact output directory. Default: "
                         "tests/differential/artifacts/"
@@ -937,6 +946,74 @@ def _build_render_stage_capture_xp3(specs: list[dict], work_dir: Path) -> Path:
     return builder(specs_by_id, RENDER_CAPTURE_GUEST_ROOT, work_dir)
 
 
+def _load_render_checkpoint_events(path: Path | None) -> list[dict[str, Any]]:
+    if path is None:
+        raise RuntimeError(
+            "Wasmtime execute checkpoint collection requires render stage events")
+    if not path.exists():
+        raise RuntimeError(f"Wasmtime render stage event file missing: {path}")
+    try:
+        events = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Wasmtime render stage event JSON decode failed: {exc}") from exc
+    if not isinstance(events, list):
+        raise RuntimeError(
+            f"Wasmtime render stage event root is not a list: {type(events)}")
+    return [
+        event for event in events
+        if isinstance(event, dict)
+        and event.get("kind") == "execute_image_checkpoint"
+    ]
+
+
+def _annotate_wasmtime_layer_raw_probe_events(
+    bootstrap: BrowserBootstrapInfo,
+    render_stage_events_path: Path | None,
+) -> None:
+    if render_stage_events_path is None or not render_stage_events_path.exists():
+        return
+    try:
+        events = json.loads(render_stage_events_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Wasmtime render stage event JSON decode failed: {exc}") from exc
+    if not isinstance(events, list):
+        raise RuntimeError(
+            f"Wasmtime render stage event root is not a list: {type(events)}")
+
+    changed = False
+    for event in events:
+        if not isinstance(event, dict) or event.get("stage") != "layer_raw_probe":
+            continue
+        guest_path = event.get("guestPath")
+        if not isinstance(guest_path, str):
+            continue
+        raw_path = bootstrap.root / guest_path.lstrip("/")
+        if not raw_path.exists():
+            event["ok"] = False
+            event["error"] = f"raw probe BGRA file not found: {guest_path}"
+            changed = True
+            continue
+        try:
+            event["rgbaSha256"] = bgra_rgba_sha256_file(raw_path)
+            event["bytes"] = raw_path.stat().st_size
+        except RuntimeError as exc:
+            event["ok"] = False
+            event["error"] = str(exc)
+        try:
+            raw_path.unlink()
+        except FileNotFoundError:
+            pass
+        changed = True
+
+    if changed:
+        render_stage_events_path.write_text(
+            json.dumps(events, ensure_ascii=False, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+
+
 def _write_wasmtime_framebuffer_manifest(
     framebuffer_dir: Path,
     specs: list[dict],
@@ -1022,6 +1099,7 @@ def _collect_wasmtime_render_stage_capture(
     specs: list[dict],
     *,
     record_render_step_checkpoints: bool = False,
+    render_stage_events_path: Path | None = None,
 ) -> dict[str, Any]:
     from oracle_runner.adapters import motion_playback as mpb
 
@@ -1029,6 +1107,8 @@ def _collect_wasmtime_render_stage_capture(
     if not capture_root.is_dir():
         raise RuntimeError(
             f"Wasmtime render stage capture directory missing: {capture_root}")
+    _annotate_wasmtime_layer_raw_probe_events(
+        bootstrap, render_stage_events_path)
 
     render_artifact_dir.mkdir(parents=True, exist_ok=True)
     images_root = render_artifact_dir / "images"
@@ -1037,6 +1117,14 @@ def _collect_wasmtime_render_stage_capture(
     images_root.mkdir(parents=True, exist_ok=True)
 
     specs_by_id = {s["id"]: s for s in specs}
+    checkpoint_by_frame_phase: dict[tuple[int, str], dict[str, Any]] = {}
+    if record_render_step_checkpoints:
+        for checkpoint in _load_render_checkpoint_events(render_stage_events_path):
+            frame_id = checkpoint.get("frameId")
+            phase = checkpoint.get("phase")
+            if isinstance(frame_id, int) and isinstance(phase, str):
+                checkpoint_by_frame_phase[(frame_id, phase)] = checkpoint
+
     cases: list[dict[str, Any]] = []
     total_images = 0
     global_frame_offset = 0
@@ -1054,24 +1142,51 @@ def _collect_wasmtime_render_stage_capture(
 
         if record_render_step_checkpoints:
             for phase in RENDER_STEP_CHECKPOINT_SURFACES:
-                src_phase = capture_root / "_execute" / phase
-                if not src_phase.is_dir():
-                    raise RuntimeError(
-                        "missing Wasmtime execute checkpoint directory: "
-                        f"{src_phase}")
                 dst_phase = dst_case / phase
                 if dst_phase.exists():
                     shutil.rmtree(dst_phase)
                 dst_phase.mkdir(parents=True, exist_ok=True)
                 for local_frame in range(expected):
                     global_frame = global_frame_offset + local_frame
-                    src_png = src_phase / f"frame_{global_frame:04d}.png"
-                    if not src_png.exists():
+                    checkpoint = checkpoint_by_frame_phase.get(
+                        (global_frame, phase))
+                    if checkpoint is None:
                         raise RuntimeError(
-                            "missing Wasmtime execute checkpoint PNG: "
-                            f"{src_png}")
-                    shutil.copy2(
-                        src_png, dst_phase / f"frame_{local_frame:04d}.png")
+                            f"missing Wasmtime {phase} checkpoint for "
+                            f"{spec_id} frame {local_frame} "
+                            f"(frameId {global_frame})")
+                    if not checkpoint.get("ok"):
+                        raise RuntimeError(
+                            f"Wasmtime {phase} checkpoint failed for "
+                            f"{spec_id} frame {local_frame}: "
+                            f"{checkpoint.get('error')}")
+                    guest_path_value = checkpoint.get("guestPath")
+                    if not isinstance(guest_path_value, str):
+                        raise RuntimeError(
+                            f"Wasmtime {phase} checkpoint has no guestPath for "
+                            f"{spec_id} frame {local_frame}")
+                    if checkpoint.get("pixelFormat") != "bgra32":
+                        raise RuntimeError(
+                            f"Wasmtime {phase} checkpoint has unsupported "
+                            f"pixelFormat for {spec_id} frame {local_frame}: "
+                            f"{checkpoint.get('pixelFormat')}")
+                    raw_path = bootstrap.root / guest_path_value.lstrip("/")
+                    if not raw_path.exists():
+                        raise RuntimeError(
+                            "missing Wasmtime execute checkpoint raw BGRA: "
+                            f"{raw_path}")
+                    rel = Path("images") / spec_id / phase / \
+                        f"frame_{local_frame:04d}.png"
+                    write_bgra_png(
+                        raw_path=raw_path,
+                        path=render_artifact_dir / rel,
+                        width=int(checkpoint["width"]),
+                        height=int(checkpoint["height"]),
+                    )
+                    try:
+                        raw_path.unlink()
+                    except FileNotFoundError:
+                        pass
 
         phases: dict[str, list[dict[str, Any]]] = {}
         phases_to_collect = list(RENDER_CAPTURE_SURFACES)
@@ -1185,6 +1300,7 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                      framebuffer_dir: Path | None = None,
                      render_artifact_dir: Path | None = None,
                      record_render_step_checkpoints: bool = False,
+                     record_layer_raw_probes: bool = False,
                      render_stage_out: Path | None = None,
                      specs: list[dict] | None = None,
                      manifest_startup_xp3: Path | None = None) -> dict[str, Any]:
@@ -1227,6 +1343,7 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                             parents=True, exist_ok=True)
             summary = _drive_full_guest_with_bootstrap(
                 wasmtime, wasm_path, bootstrap, frames,
+                record_layer_raw_probes=record_layer_raw_probes,
                 render_stage_out=render_stage_out)
             if framebuffer_dir is not None:
                 manifest = _collect_wasmtime_framebuffer_capture(
@@ -1240,7 +1357,8 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                 image_manifest = _collect_wasmtime_render_stage_capture(
                     bootstrap, render_artifact_dir, specs,
                     record_render_step_checkpoints=(
-                        record_render_step_checkpoints))
+                        record_render_step_checkpoints),
+                    render_stage_events_path=render_stage_out)
                 summary["renderStageImageManifest"] = image_manifest["summary"]
             return summary
         except Exception as exc:
@@ -1250,6 +1368,7 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
 def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                                      bootstrap: BrowserBootstrapInfo,
                                      frames: int, *,
+                                     record_layer_raw_probes: bool = False,
                                      render_stage_out: Path | None = None
                                      ) -> dict[str, Any]:
     store, exports = instantiate_module(
@@ -1260,6 +1379,11 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
     init = exports["krkr2_wasm_init"]
     startup = exports["krkr2_wasm_startup_from"]
     tick = exports["krkr2_wasm_tick"]
+    try:
+        set_record_layer_raw_probes = exports[
+            "krkr2_wasm_set_record_layer_raw_probes"]
+    except Exception:
+        set_record_layer_raw_probes = None
 
     guest_path = bootstrap.xp3_guest_path.encode("utf-8")
     config = json.dumps({
@@ -1280,6 +1404,10 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                           exports["krkr2_wasm_get_error_ptr"](store),
                           exports["krkr2_wasm_get_error_len"](store))
         raise RuntimeError(err or "krkr2_wasm_init returned false")
+
+    if set_record_layer_raw_probes is not None:
+        set_record_layer_raw_probes(
+            store, 1 if record_layer_raw_probes else 0)
 
     startup_ok = call_with_guest_bytes(
         store, memory, malloc, free, guest_path,
@@ -1328,6 +1456,7 @@ def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
                            framebuffer_dir: Path | None = None,
                            render_artifact_dir: Path | None = None,
                            record_render_step_checkpoints: bool = False,
+                           record_layer_raw_probes: bool = False,
                            render_stage_out: Path | None = None,
                            specs: list[dict] | None = None,
                            manifest_startup_xp3: Path | None = None) -> int:
@@ -1336,6 +1465,7 @@ def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
         framebuffer_dir=framebuffer_dir,
         render_artifact_dir=render_artifact_dir,
         record_render_step_checkpoints=record_render_step_checkpoints,
+        record_layer_raw_probes=record_layer_raw_probes,
         render_stage_out=render_stage_out,
         specs=specs,
         manifest_startup_xp3=manifest_startup_xp3)
@@ -1351,6 +1481,7 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                          framebuffer_dir: Path | None = None,
                          render_artifact_dir: Path | None = None,
                          record_render_step_checkpoints: bool = False,
+                         record_layer_raw_probes: bool = False,
                          manifest_startup_xp3: Path | None = None
                          ) -> tuple[list[dict], list[dict]]:
     if host_python is None or not host_python.exists():
@@ -1402,6 +1533,8 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
             ]
             if record_render_step_checkpoints:
                 cmd.append("--record-render-step-checkpoints")
+            if record_layer_raw_probes:
+                cmd.append("--record-layer-raw-probes")
         try:
             proc = subprocess.run(
                 cmd,
@@ -2029,6 +2162,10 @@ def main(argv: list[str]) -> int:
         print("--record-render-step-checkpoints requires "
               "--record-render-stages", file=sys.stderr)
         return 2
+    if args.record_layer_raw_probes and render_artifact_dir is None:
+        print("--record-layer-raw-probes requires --record-render-stages",
+              file=sys.stderr)
+        return 2
 
     if args.host_mode:
         if args.host_output is None:
@@ -2051,6 +2188,7 @@ def main(argv: list[str]) -> int:
                 render_artifact_dir=render_artifact_dir,
                 record_render_step_checkpoints=(
                     args.record_render_step_checkpoints),
+                record_layer_raw_probes=args.record_layer_raw_probes,
                 render_stage_out=args.render_stage_out,
                 specs=specs,
                 manifest_startup_xp3=(
@@ -2098,6 +2236,7 @@ def main(argv: list[str]) -> int:
                 render_artifact_dir=render_artifact_dir,
                 record_render_step_checkpoints=(
                     args.record_render_step_checkpoints),
+                record_layer_raw_probes=args.record_layer_raw_probes,
                 manifest_startup_xp3=startup_xp3
                 if (framebuffer_dir is not None or render_artifact_dir is not None)
                 else None,
