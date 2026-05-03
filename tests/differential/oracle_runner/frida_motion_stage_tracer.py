@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -36,6 +37,8 @@ RENDER_STAGES: tuple[str, ...] = (
     "render_commands",
     "render_execute",
     "layer_save",
+    "layer_raw_probe",
+    "layer_visual_readback",
 )
 
 
@@ -77,6 +80,7 @@ class FridaMotionStageTracer:
         self._image_checkpoints: list[dict[str, Any]] = []
         self._layer_raw_probe_dir: Path | None = None
         self._layer_raw_probe_updates: dict[int, dict[str, Any]] = {}
+        self._layer_visual_readback_updates: dict[int, dict[str, Any]] = {}
 
     def attach(self) -> None:
         if self._session is not None:
@@ -144,6 +148,7 @@ class FridaMotionStageTracer:
             if raw_dir is not None else None
         )
         self._layer_raw_probe_updates = {}
+        self._layer_visual_readback_updates = {}
         if raw_dir is not None:
             raw_dir.mkdir(parents=True, exist_ok=True)
         if self._layer_raw_probe_dir is not None:
@@ -158,6 +163,9 @@ class FridaMotionStageTracer:
         *,
         record_render_step_checkpoints: bool = False,
         record_layer_raw_probes: bool = False,
+        record_save_layer_visual_readback_probes: bool = False,
+        save_layer_visual_readback_frame_start: int = 0,
+        save_layer_visual_readback_frame_count: int = 1,
     ) -> None:
         if self._api is None:
             raise RuntimeError("tracer not attached; call attach() first")
@@ -165,6 +173,12 @@ class FridaMotionStageTracer:
             "recordRenderStepCheckpoints": bool(
                 record_render_step_checkpoints),
             "recordLayerRawProbes": bool(record_layer_raw_probes),
+            "recordSaveLayerVisualReadbackProbes": bool(
+                record_save_layer_visual_readback_probes),
+            "saveLayerVisualReadbackFrameStart": int(
+                save_layer_visual_readback_frame_start),
+            "saveLayerVisualReadbackFrameCount": int(
+                save_layer_visual_readback_frame_count),
         })
 
     def stop_record(self) -> list[dict[str, Any]]:
@@ -173,11 +187,15 @@ class FridaMotionStageTracer:
         raw = self._api.stop_record()
         events = list(raw or [])
         for ev in events:
-            if ev.get("stage") != "layer_raw_probe":
-                continue
             seq = ev.get("seq")
-            if isinstance(seq, int):
+            if not isinstance(seq, int):
+                continue
+            if ev.get("stage") == "layer_raw_probe":
                 update = self._layer_raw_probe_updates.get(seq)
+                if update:
+                    ev.update(update)
+            elif ev.get("stage") == "layer_visual_readback":
+                update = self._layer_visual_readback_updates.get(seq)
                 if update:
                     ev.update(update)
         return events
@@ -224,6 +242,9 @@ class FridaMotionStageTracer:
         if payload_type == "layer_raw_probe":
             self._handle_layer_raw_probe_message(payload, data)
             return
+        if payload_type == "layer_visual_readback_probe":
+            self._handle_layer_visual_readback_message(payload, data)
+            return
         if payload_type != "render_image_checkpoint":
             return
         record = dict(payload)
@@ -265,3 +286,20 @@ class FridaMotionStageTracer:
         elif not record.get("ok"):
             update["error"] = record.get("error") or "snapshot failed"
         self._layer_raw_probe_updates[seq] = update
+
+    def _handle_layer_visual_readback_message(self, payload, data) -> None:
+        record = dict(payload)
+        record.pop("type", None)
+        seq = record.get("seq")
+        if not isinstance(seq, int):
+            return
+        update: dict[str, Any] = {"ok": bool(record.get("ok"))}
+        if record.get("ok") and data is not None:
+            raw_bytes = bytes(data)
+            update["bytes"] = len(raw_bytes)
+            update["rowSha256"] = hashlib.sha256(raw_bytes).hexdigest()
+            update["rowPrefixHex"] = raw_bytes[:64].hex()
+            update["rowSuffixHex"] = raw_bytes[-64:].hex()
+        elif not record.get("ok"):
+            update["error"] = record.get("error") or "snapshot failed"
+        self._layer_visual_readback_updates[seq] = update

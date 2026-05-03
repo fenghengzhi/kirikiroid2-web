@@ -46,6 +46,8 @@ RENDER_CAPTURE_SURFACES: tuple[str, ...] = ("initial", "post_draw")
 RENDER_STEP_CHECKPOINT_SURFACES: tuple[str, ...] = (
     "execute_pre",
     "execute_post",
+    "updateLayerAfterDraw_pre",
+    "updateLayerAfterDraw_post",
 )
 RENDER_STAGES: tuple[str, ...] = (
     "draw_dispatch",
@@ -54,6 +56,7 @@ RENDER_STAGES: tuple[str, ...] = (
     "render_execute",
     "layer_save",
     "layer_raw_probe",
+    "layer_visual_readback",
 )
 
 
@@ -97,11 +100,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         "initial/post draw PNGs plus render stage JSON")
     p.add_argument("--record-render-step-checkpoints", action="store_true",
                    help="With --record-render-stages, save execute_pre/"
-                        "execute_post images around executeLayerRenderCommands")
+                        "execute_post images around executeLayerRenderCommands "
+                        "and updateLayerAfterDraw_pre/post images around "
+                        "updateLayerAfterDraw")
     p.add_argument("--record-layer-raw-probes", action="store_true",
                    help="With --record-render-stages, capture raw Layer "
                         "MainImage probes at fillRect/saveLayerImage/"
                         "drawCompat/render execute/update boundaries")
+    p.add_argument("--record-save-layer-visual-readback-probes",
+                   action="store_true",
+                   help="With --record-render-stages, capture saveLayerImage "
+                        "visual readback row hashes")
+    p.add_argument("--save-layer-visual-readback-frame-start", type=int,
+                   default=0,
+                   help="First global frame id for saveLayerImage visual "
+                        "readback row probes")
+    p.add_argument("--save-layer-visual-readback-frame-count", type=int,
+                   default=1,
+                   help="Number of global frames to capture visual readback "
+                        "rows for; use -1 for all frames")
     p.add_argument("--render-artifact-dir", type=Path, default=None,
                    help="Render stage artifact output directory. Default: "
                         "tests/differential/artifacts/"
@@ -949,7 +966,7 @@ def _build_render_stage_capture_xp3(specs: list[dict], work_dir: Path) -> Path:
 def _load_render_checkpoint_events(path: Path | None) -> list[dict[str, Any]]:
     if path is None:
         raise RuntimeError(
-            "Wasmtime execute checkpoint collection requires render stage events")
+            "Wasmtime render checkpoint collection requires render stage events")
     if not path.exists():
         raise RuntimeError(f"Wasmtime render stage event file missing: {path}")
     try:
@@ -1173,7 +1190,7 @@ def _collect_wasmtime_render_stage_capture(
                     raw_path = bootstrap.root / guest_path_value.lstrip("/")
                     if not raw_path.exists():
                         raise RuntimeError(
-                            "missing Wasmtime execute checkpoint raw BGRA: "
+                            "missing Wasmtime render checkpoint raw BGRA: "
                             f"{raw_path}")
                     rel = Path("images") / spec_id / phase / \
                         f"frame_{local_frame:04d}.png"
@@ -1301,6 +1318,9 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                      render_artifact_dir: Path | None = None,
                      record_render_step_checkpoints: bool = False,
                      record_layer_raw_probes: bool = False,
+                     record_save_layer_visual_readback_probes: bool = False,
+                     save_layer_visual_readback_frame_start: int = 0,
+                     save_layer_visual_readback_frame_count: int = 1,
                      render_stage_out: Path | None = None,
                      specs: list[dict] | None = None,
                      manifest_startup_xp3: Path | None = None) -> dict[str, Any]:
@@ -1344,6 +1364,12 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
             summary = _drive_full_guest_with_bootstrap(
                 wasmtime, wasm_path, bootstrap, frames,
                 record_layer_raw_probes=record_layer_raw_probes,
+                record_save_layer_visual_readback_probes=(
+                    record_save_layer_visual_readback_probes),
+                save_layer_visual_readback_frame_start=(
+                    save_layer_visual_readback_frame_start),
+                save_layer_visual_readback_frame_count=(
+                    save_layer_visual_readback_frame_count),
                 render_stage_out=render_stage_out)
             if framebuffer_dir is not None:
                 manifest = _collect_wasmtime_framebuffer_capture(
@@ -1369,6 +1395,9 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                                      bootstrap: BrowserBootstrapInfo,
                                      frames: int, *,
                                      record_layer_raw_probes: bool = False,
+                                     record_save_layer_visual_readback_probes: bool = False,
+                                     save_layer_visual_readback_frame_start: int = 0,
+                                     save_layer_visual_readback_frame_count: int = 1,
                                      render_stage_out: Path | None = None
                                      ) -> dict[str, Any]:
     store, exports = instantiate_module(
@@ -1384,6 +1413,11 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
             "krkr2_wasm_set_record_layer_raw_probes"]
     except Exception:
         set_record_layer_raw_probes = None
+    try:
+        set_record_save_layer_visual_readback_probes = exports[
+            "krkr2_wasm_set_record_save_layer_visual_readback_probes"]
+    except Exception:
+        set_record_save_layer_visual_readback_probes = None
 
     guest_path = bootstrap.xp3_guest_path.encode("utf-8")
     config = json.dumps({
@@ -1408,6 +1442,12 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
     if set_record_layer_raw_probes is not None:
         set_record_layer_raw_probes(
             store, 1 if record_layer_raw_probes else 0)
+    if set_record_save_layer_visual_readback_probes is not None:
+        set_record_save_layer_visual_readback_probes(
+            store,
+            1 if record_save_layer_visual_readback_probes else 0,
+            int(save_layer_visual_readback_frame_start),
+            int(save_layer_visual_readback_frame_count))
 
     startup_ok = call_with_guest_bytes(
         store, memory, malloc, free, guest_path,
@@ -1457,6 +1497,9 @@ def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
                            render_artifact_dir: Path | None = None,
                            record_render_step_checkpoints: bool = False,
                            record_layer_raw_probes: bool = False,
+                           record_save_layer_visual_readback_probes: bool = False,
+                           save_layer_visual_readback_frame_start: int = 0,
+                           save_layer_visual_readback_frame_count: int = 1,
                            render_stage_out: Path | None = None,
                            specs: list[dict] | None = None,
                            manifest_startup_xp3: Path | None = None) -> int:
@@ -1466,6 +1509,12 @@ def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
         render_artifact_dir=render_artifact_dir,
         record_render_step_checkpoints=record_render_step_checkpoints,
         record_layer_raw_probes=record_layer_raw_probes,
+        record_save_layer_visual_readback_probes=(
+            record_save_layer_visual_readback_probes),
+        save_layer_visual_readback_frame_start=(
+            save_layer_visual_readback_frame_start),
+        save_layer_visual_readback_frame_count=(
+            save_layer_visual_readback_frame_count),
         render_stage_out=render_stage_out,
         specs=specs,
         manifest_startup_xp3=manifest_startup_xp3)
@@ -1482,6 +1531,9 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                          render_artifact_dir: Path | None = None,
                          record_render_step_checkpoints: bool = False,
                          record_layer_raw_probes: bool = False,
+                         record_save_layer_visual_readback_probes: bool = False,
+                         save_layer_visual_readback_frame_start: int = 0,
+                         save_layer_visual_readback_frame_count: int = 1,
                          manifest_startup_xp3: Path | None = None
                          ) -> tuple[list[dict], list[dict]]:
     if host_python is None or not host_python.exists():
@@ -1535,6 +1587,14 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                 cmd.append("--record-render-step-checkpoints")
             if record_layer_raw_probes:
                 cmd.append("--record-layer-raw-probes")
+            if record_save_layer_visual_readback_probes:
+                cmd.append("--record-save-layer-visual-readback-probes")
+                cmd += [
+                    "--save-layer-visual-readback-frame-start",
+                    str(save_layer_visual_readback_frame_start),
+                    "--save-layer-visual-readback-frame-count",
+                    str(save_layer_visual_readback_frame_count),
+                ]
         try:
             proc = subprocess.run(
                 cmd,
@@ -1979,6 +2039,10 @@ def _enrich_render_execute_events_for_case(
     last_frame_id = int(case_segment["lastFrameId"])
     pre_by_frame = _phase_images_by_frame(case_images, "execute_pre")
     post_by_frame = _phase_images_by_frame(case_images, "execute_post")
+    update_pre_by_frame = _phase_images_by_frame(
+        case_images, "updateLayerAfterDraw_pre")
+    update_post_by_frame = _phase_images_by_frame(
+        case_images, "updateLayerAfterDraw_post")
     enriched: list[dict[str, Any]] = []
 
     for source_event in events:
@@ -2000,6 +2064,8 @@ def _enrich_render_execute_events_for_case(
         local_frame = frame_id - first_frame_id
         execute_pre = pre_by_frame.get(local_frame)
         execute_post = post_by_frame.get(local_frame)
+        update_pre = update_pre_by_frame.get(local_frame)
+        update_post = update_post_by_frame.get(local_frame)
         kind = str(event.get("kind") or "")
         if kind == "execute_enter":
             event["executePreImage"] = execute_pre
@@ -2011,6 +2077,8 @@ def _enrich_render_execute_events_for_case(
         elif kind == "execute_leave":
             event["executePreImage"] = execute_pre
             event["executePostImage"] = execute_post
+            event["updateLayerAfterDrawPreImage"] = update_pre
+            event["updateLayerAfterDrawPostImage"] = update_post
             if execute_pre is None:
                 _add_image_manifest_error(
                     event,
@@ -2020,6 +2088,18 @@ def _enrich_render_execute_events_for_case(
                 _add_image_manifest_error(
                     event,
                     f"missing execute_post image for frame {local_frame}",
+                )
+            if update_pre is None:
+                _add_image_manifest_error(
+                    event,
+                    "missing updateLayerAfterDraw_pre image for frame "
+                    f"{local_frame}",
+                )
+            if update_post is None:
+                _add_image_manifest_error(
+                    event,
+                    "missing updateLayerAfterDraw_post image for frame "
+                    f"{local_frame}",
                 )
         enriched.append(event)
 
@@ -2166,6 +2246,10 @@ def main(argv: list[str]) -> int:
         print("--record-layer-raw-probes requires --record-render-stages",
               file=sys.stderr)
         return 2
+    if args.record_save_layer_visual_readback_probes and render_artifact_dir is None:
+        print("--record-save-layer-visual-readback-probes requires "
+              "--record-render-stages", file=sys.stderr)
+        return 2
 
     if args.host_mode:
         if args.host_output is None:
@@ -2189,6 +2273,12 @@ def main(argv: list[str]) -> int:
                 record_render_step_checkpoints=(
                     args.record_render_step_checkpoints),
                 record_layer_raw_probes=args.record_layer_raw_probes,
+                record_save_layer_visual_readback_probes=(
+                    args.record_save_layer_visual_readback_probes),
+                save_layer_visual_readback_frame_start=(
+                    args.save_layer_visual_readback_frame_start),
+                save_layer_visual_readback_frame_count=(
+                    args.save_layer_visual_readback_frame_count),
                 render_stage_out=args.render_stage_out,
                 specs=specs,
                 manifest_startup_xp3=(
@@ -2237,6 +2327,12 @@ def main(argv: list[str]) -> int:
                 record_render_step_checkpoints=(
                     args.record_render_step_checkpoints),
                 record_layer_raw_probes=args.record_layer_raw_probes,
+                record_save_layer_visual_readback_probes=(
+                    args.record_save_layer_visual_readback_probes),
+                save_layer_visual_readback_frame_start=(
+                    args.save_layer_visual_readback_frame_start),
+                save_layer_visual_readback_frame_count=(
+                    args.save_layer_visual_readback_frame_count),
                 manifest_startup_xp3=startup_xp3
                 if (framebuffer_dir is not None or render_artifact_dir is not None)
                 else None,

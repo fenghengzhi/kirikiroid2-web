@@ -35,10 +35,13 @@ RENDER_STAGES: tuple[str, ...] = (
     "render_execute",
     "layer_save",
     "layer_raw_probe",
+    "layer_visual_readback",
 )
 RENDER_STEP_CHECKPOINT_PHASES: tuple[str, ...] = (
     "execute_pre",
     "execute_post",
+    "updateLayerAfterDraw_pre",
+    "updateLayerAfterDraw_post",
 )
 RENDER_CAPTURE_SURFACES: tuple[str, ...] = ("initial", "post_draw")
 
@@ -67,11 +70,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         "motion_playback_render_stages/<run-id>)")
     p.add_argument("--record-render-step-checkpoints", action="store_true",
                    help="With --stage render_path, capture execute_pre/"
-                        "execute_post Layer images around sub_6C7440")
+                        "execute_post Layer images around sub_6C7440 and "
+                        "updateLayerAfterDraw_pre/post images around "
+                        "updateLayerAfterDraw")
     p.add_argument("--record-layer-raw-probes", action="store_true",
                    help="With --stage render_path, capture raw Layer "
                         "MainImage probes at fillRect/saveLayerImage/"
                         "drawCompat/render execute/update boundaries")
+    p.add_argument("--record-save-layer-visual-readback-probes",
+                   action="store_true",
+                   help="With --stage render_path, capture saveLayerImage "
+                        "visual readback row hashes")
+    p.add_argument("--save-layer-visual-readback-frame-start", type=int,
+                   default=0,
+                   help="First global frame id for saveLayerImage visual "
+                        "readback row probes")
+    p.add_argument("--save-layer-visual-readback-frame-count", type=int,
+                   default=1,
+                   help="Number of global frames to capture visual readback "
+                        "rows for; use -1 for all frames")
     p.add_argument("--playback-timeout", type=float, default=90.0,
                    help="Seconds to wait for deterministic playback")
     p.add_argument("--raw-out", default=None,
@@ -639,6 +656,10 @@ def enrich_render_execute_events_for_case(
     last_frame_id = int(case_segment["lastFrameId"])
     pre_by_frame = _phase_images_by_frame(case_images, "execute_pre")
     post_by_frame = _phase_images_by_frame(case_images, "execute_post")
+    update_pre_by_frame = _phase_images_by_frame(
+        case_images, "updateLayerAfterDraw_pre")
+    update_post_by_frame = _phase_images_by_frame(
+        case_images, "updateLayerAfterDraw_post")
     enriched: list[dict[str, Any]] = []
 
     for source_event in events:
@@ -659,6 +680,8 @@ def enrich_render_execute_events_for_case(
         local_frame = frame_id - first_frame_id
         execute_pre = pre_by_frame.get(local_frame)
         execute_post = post_by_frame.get(local_frame)
+        update_pre = update_pre_by_frame.get(local_frame)
+        update_post = update_post_by_frame.get(local_frame)
         kind = str(event.get("kind") or "")
         if kind == "execute_enter":
             event["executePreImage"] = execute_pre
@@ -668,12 +691,24 @@ def enrich_render_execute_events_for_case(
         elif kind == "execute_leave":
             event["executePreImage"] = execute_pre
             event["executePostImage"] = execute_post
+            event["updateLayerAfterDrawPreImage"] = update_pre
+            event["updateLayerAfterDrawPostImage"] = update_post
             if execute_pre is None:
                 _add_image_manifest_error(
                     event, f"missing execute_pre image for frame {local_frame}")
             if execute_post is None:
                 _add_image_manifest_error(
                     event, f"missing execute_post image for frame {local_frame}")
+            if update_pre is None:
+                _add_image_manifest_error(
+                    event,
+                    "missing updateLayerAfterDraw_pre image for frame "
+                    f"{local_frame}")
+            if update_post is None:
+                _add_image_manifest_error(
+                    event,
+                    "missing updateLayerAfterDraw_post image for frame "
+                    f"{local_frame}")
         enriched.append(event)
     return enriched
 
@@ -714,10 +749,15 @@ def add_oracle_execute_checkpoint_images(
                         f"missing oracle {phase} checkpoint for "
                         f"{case_id} frame {local_frame} (frameId {frame_id})")
                 if not checkpoint.get("ok"):
+                    diagnostics = checkpoint.get("diagnostics")
+                    diagnostic_suffix = (
+                        f" diagnostics={json.dumps(diagnostics, sort_keys=True)}"
+                        if isinstance(diagnostics, dict) and diagnostics else ""
+                    )
                     raise RuntimeError(
                         f"oracle {phase} checkpoint failed for "
                         f"{case_id} frame {local_frame}: "
-                        f"{checkpoint.get('error')}")
+                        f"{checkpoint.get('error')}{diagnostic_suffix}")
                 raw_path_value = checkpoint.get("rawPath")
                 if not isinstance(raw_path_value, str):
                     raise RuntimeError(
@@ -907,6 +947,10 @@ def main(argv: list[str]) -> int:
         print("--record-layer-raw-probes requires --stage render_path",
               file=sys.stderr)
         return 2
+    if args.record_save_layer_visual_readback_probes and not render_path:
+        print("--record-save-layer-visual-readback-probes requires "
+              "--stage render_path", file=sys.stderr)
+        return 2
     render_artifact_dir = (
         Path(args.render_artifact_dir)
         if args.render_artifact_dir is not None
@@ -968,6 +1012,12 @@ def main(argv: list[str]) -> int:
                             args.record_render_step_checkpoints),
                         record_layer_raw_probes=(
                             args.record_layer_raw_probes),
+                        record_save_layer_visual_readback_probes=(
+                            args.record_save_layer_visual_readback_probes),
+                        save_layer_visual_readback_frame_start=(
+                            args.save_layer_visual_readback_frame_start),
+                        save_layer_visual_readback_frame_count=(
+                            args.save_layer_visual_readback_frame_count),
                     )
                     engine.tjs_init()
                     mpb.trigger_startup(engine, remote_game)

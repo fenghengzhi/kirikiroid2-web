@@ -26,6 +26,8 @@ const PLAYER_RENDER_EXECUTE_OFF  = 0x6C7440;
 const PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF = 0x6CE7D8;
 const LAYER_FILL_RECT_OFF        = 0x80EBAC;
 const LAYER_SAVE_LAYER_IMAGE_OFF = 0x80963C;
+const TVP_SAVE_AS_PNG_OFF        = 0x83EDA4;
+const BITMAP_GET_SCANLINE_OFF    = 0xA75DE4;
 const LAYER_CLASS_ID_OFF = 0x1ADE668;
 const LAYER_NATIVE_MAIN_IMAGE_OFF = 280;
 const BITMAP_NATIVE_IMPL_OFF = 88;
@@ -68,6 +70,7 @@ const STAGE_RENDER_COMMANDS = 'render_commands';
 const STAGE_RENDER_EXECUTE = 'render_execute';
 const STAGE_LAYER_SAVE = 'layer_save';
 const STAGE_LAYER_RAW_PROBE = 'layer_raw_probe';
+const STAGE_LAYER_VISUAL_READBACK = 'layer_visual_readback';
 
 const ALL_STAGES = [
     STAGE_STATIC_PARSE,
@@ -85,6 +88,7 @@ const RENDER_STAGES = [
     STAGE_RENDER_EXECUTE,
     STAGE_LAYER_SAVE,
     STAGE_LAYER_RAW_PROBE,
+    STAGE_LAYER_VISUAL_READBACK,
 ];
 
 const NODE_OFF = {
@@ -145,6 +149,11 @@ let drawIdCounter = 0;
 let activeDrawContexts = [];
 let recordRenderStepCheckpoints = false;
 let recordLayerRawProbes = false;
+let recordSaveLayerVisualReadbackProbes = false;
+let saveLayerVisualReadbackFrameStart = 0;
+let saveLayerVisualReadbackFrameCount = 1;
+let activeSaveLayerImageContexts = [];
+let activePngSaveContexts = [];
 let nativeInstanceSupportCache = {};
 let bitmapBufferFunctionCache = {};
 let bitmapPitchFunctionCache = {};
@@ -342,15 +351,27 @@ function readNativeLayerImageSnapshot(nativeLayer, layerObject) {
             },
         };
     }
+    const diagnostics = {
+        layerObject: ptrHex(layerObject),
+        nativeLayer: ptrHex(native),
+    };
     try {
         const mainImage = readPointer(native, LAYER_NATIVE_MAIN_IMAGE_OFF);
+        diagnostics.mainImage = ptrHex(mainImage);
         if (mainImage === null) return { ok: false, error: 'layer has no main image' };
         const bitmapImpl = readPointer(mainImage, BITMAP_NATIVE_IMPL_OFF);
+        diagnostics.bitmapImpl = ptrHex(bitmapImpl);
         if (bitmapImpl === null) {
-            return { ok: false, error: 'main image has no bitmap impl' };
+            return {
+                ok: false,
+                error: 'main image has no bitmap impl',
+                diagnostics: diagnostics,
+            };
         }
         const width = readU32(bitmapImpl, 12);
         const height = readU32(bitmapImpl, 16);
+        diagnostics.width = width;
+        diagnostics.height = height;
         if (!width || !height || width <= 0 || height <= 0 ||
             width > 8192 || height > 8192) {
             return {
@@ -358,9 +379,11 @@ function readNativeLayerImageSnapshot(nativeLayer, layerObject) {
                 error: 'invalid bitmap dimensions',
                 width: width,
                 height: height,
+                diagnostics: diagnostics,
             };
         }
         const vtable = bitmapImpl.readPointer();
+        diagnostics.vtable = ptrHex(vtable);
         const bufferFn = getCachedNativeFunction(
             bitmapBufferFunctionCache,
             vtable.add(56).readPointer(),
@@ -371,8 +394,14 @@ function readNativeLayerImageSnapshot(nativeLayer, layerObject) {
             'int', ['pointer']);
         const buffer = bufferFn(bitmapImpl);
         const pitch = pitchFn(bitmapImpl);
+        diagnostics.buffer = ptrHex(buffer);
+        diagnostics.pitch = pitch;
         if (!buffer || buffer.isNull()) {
-            return { ok: false, error: 'bitmap buffer is null' };
+            return {
+                ok: false,
+                error: 'bitmap buffer is null',
+                diagnostics: diagnostics,
+            };
         }
         if (!pitch || pitch < width * 4 || pitch > width * 16) {
             return {
@@ -381,9 +410,11 @@ function readNativeLayerImageSnapshot(nativeLayer, layerObject) {
                 width: width,
                 height: height,
                 pitch: pitch,
+                diagnostics: diagnostics,
             };
         }
         const packedSize = width * height * 4;
+        diagnostics.packedSize = packedSize;
         const packed = Memory.alloc(packedSize);
         for (let y = 0; y < height; y++) {
             Memory.copy(
@@ -398,22 +429,13 @@ function readNativeLayerImageSnapshot(nativeLayer, layerObject) {
             pitch: pitch,
             pixelFormat: 'bgra32',
             data: packed.readByteArray(packedSize),
-            diagnostics: {
-                layerObject: ptrHex(layerObject),
-                nativeLayer: ptrHex(native),
-                mainImage: ptrHex(mainImage),
-                bitmapImpl: ptrHex(bitmapImpl),
-                buffer: ptrHex(buffer),
-            },
+            diagnostics: diagnostics,
         };
     } catch (e) {
         return {
             ok: false,
             error: String(e),
-            diagnostics: {
-                layerObject: ptrHex(layerObject),
-                nativeLayer: ptrHex(native),
-            },
+            diagnostics: diagnostics,
         };
     }
 }
@@ -533,6 +555,85 @@ function sendLayerRawProbe(player, layerObject, nativeLayer, samplePoint,
         pitch: snapshot.pitch,
         pixelFormat: snapshot.pixelFormat || 'bgra32',
     }, snapshot.data);
+}
+
+function saveLayerVisualReadbackFrameEnabled(frameId) {
+    if (!recordSaveLayerVisualReadbackProbes) return false;
+    if (frameId === null || frameId === undefined) return false;
+    const start = Math.max(0, saveLayerVisualReadbackFrameStart | 0);
+    const count = saveLayerVisualReadbackFrameCount | 0;
+    if (frameId < start) return false;
+    return count < 0 || frameId < start + count;
+}
+
+function sendSaveLayerVisualReadbackRow(ctx, rowIndex, rowPtr) {
+    if (!recordSaveLayerVisualReadbackProbes || !recording ||
+        !stageEnabled(STAGE_LAYER_VISUAL_READBACK) || !ctx) {
+        return;
+    }
+    const frameId = renderFrameIdFor(ctx.player);
+    if (!saveLayerVisualReadbackFrameEnabled(frameId)) return;
+    const width = ctx.width || 0;
+    const height = ctx.height || 0;
+    const rowBytes = ctx.rowBytes || 0;
+    const payload = {
+        schema: 'motion-render-stage-oracle-v1-event',
+        source: 'android-frida-saveLayerImage-visual-readback',
+        stage: STAGE_LAYER_VISUAL_READBACK,
+        kind: 'save_layer_visual_readback_row',
+        samplePoint: 'saveLayerImage_0x80963C.visual_readback_row',
+        frameId: frameId,
+        player: ptrHex(ctx.player),
+        image: ptrHex(ctx.image),
+        row: rowIndex,
+        width: width,
+        height: height,
+        rowBytes: rowBytes,
+        bpp: ctx.bpp || 32,
+        pixelFormat: 'rgba32-source-row',
+        rowPtr: ptrHex(rowPtr),
+        ok: true,
+        diagnostics: {
+            nativeLayer: ptrHex(ctx.nativeLayer),
+            mainImage: ptrHex(ctx.mainImage),
+            bitmapImpl: ptrHex(ctx.bitmapImpl),
+            saveLayerImageMainImageA1Plus280: ptrHex(ctx.mainImage),
+            pngSaveFunction: hexOff(TVP_SAVE_AS_PNG_OFF),
+            getScanLineFunction: hexOff(BITMAP_GET_SCANLINE_OFF),
+        },
+        seq: seqCounter++,
+        timeMs: Date.now() - startTimeMs,
+    };
+    let data = null;
+    try {
+        if (!rowPtr || ptr(rowPtr).isNull()) {
+            payload.ok = false;
+            payload.error = 'visual readback row pointer is null';
+        } else if (rowBytes <= 0 || width <= 0 || height <= 0 ||
+                   rowIndex < 0 || rowIndex >= height) {
+            payload.ok = false;
+            payload.error = 'invalid visual readback row metadata';
+        } else {
+            data = ptr(rowPtr).readByteArray(rowBytes);
+        }
+    } catch (e) {
+        payload.ok = false;
+        payload.error = String(e);
+    }
+    events.push(payload);
+    send({
+        type: 'layer_visual_readback_probe',
+        ok: payload.ok === true,
+        seq: payload.seq,
+        samplePoint: payload.samplePoint,
+        frameId: payload.frameId,
+        row: rowIndex,
+        width: width,
+        height: height,
+        rowBytes: rowBytes,
+        pixelFormat: payload.pixelFormat,
+        error: payload.error || null,
+    }, data);
 }
 
 function readD0(ctx) {
@@ -1700,6 +1801,9 @@ function installHook() {
             this.target = this.targetVariantObject.object;
             this.internalAssignRequested = readBool(
                 this.player, PLAYER_OFF.internalAssignRequested);
+            sendRenderImageCheckpoint(
+                this.player, this.target, 'updateLayerAfterDraw_pre',
+                'updateLayerAfterDraw_0x6CE7D8.enter.after-target-resolve');
             sendLayerRawProbe(
                 this.player, this.target, null,
                 'updateLayerAfterDraw_0x6CE7D8.enter',
@@ -1716,6 +1820,9 @@ function installHook() {
                 });
         },
         onLeave() {
+            sendRenderImageCheckpoint(
+                this.player, this.target, 'updateLayerAfterDraw_post',
+                'updateLayerAfterDraw_0x6CE7D8.leave.before-return');
             sendLayerRawProbe(
                 this.player, this.target, null,
                 'updateLayerAfterDraw_0x6CE7D8.leave',
@@ -1766,6 +1873,22 @@ function installHook() {
             this.player = currentRenderPlayer || lastCompletedTopPlayer;
             this.mainImageAtEnter =
                 readPointer(this.nativeLayer, LAYER_NATIVE_MAIN_IMAGE_OFF);
+            const bitmapImpl = this.mainImageAtEnter
+                ? readPointer(this.mainImageAtEnter, BITMAP_NATIVE_IMPL_OFF)
+                : null;
+            const width = bitmapImpl ? readU32(bitmapImpl, 12) : 0;
+            const height = bitmapImpl ? readU32(bitmapImpl, 16) : 0;
+            this.saveVisualCtx = {
+                player: this.player,
+                nativeLayer: this.nativeLayer,
+                mainImage: this.mainImageAtEnter,
+                bitmapImpl: bitmapImpl,
+                width: width || 0,
+                height: height || 0,
+                rowBytes: width ? width * 4 : 0,
+                bpp: 32,
+            };
+            activeSaveLayerImageContexts.push(this.saveVisualCtx);
             sendLayerRawProbe(
                 this.player, null, this.nativeLayer,
                 'saveLayerImage_0x80963C.enter',
@@ -1778,6 +1901,11 @@ function installHook() {
                 });
         },
         onLeave() {
+            if (this.saveVisualCtx) {
+                const idx = activeSaveLayerImageContexts.lastIndexOf(
+                    this.saveVisualCtx);
+                if (idx >= 0) activeSaveLayerImageContexts.splice(idx, 1);
+            }
             const mainImageAtLeave =
                 readPointer(this.nativeLayer, LAYER_NATIVE_MAIN_IMAGE_OFF);
             sendLayerRawProbe(
@@ -1794,6 +1922,50 @@ function installHook() {
                     mainImagePointerStable:
                         ptrEqual(this.mainImageAtEnter, mainImageAtLeave),
                 });
+        },
+    });
+
+    attachAt(TVP_SAVE_AS_PNG_OFF, 'TVP_saveAsPNG', {
+        onEnter(args) {
+            this.image = args[2];
+            this.ctx = null;
+            const imageHex = ptrHex(this.image);
+            for (let i = activeSaveLayerImageContexts.length - 1; i >= 0; --i) {
+                const candidate = activeSaveLayerImageContexts[i];
+                if (ptrHex(candidate.mainImage) === imageHex) {
+                    this.ctx = Object.assign({}, candidate, {
+                        image: this.image,
+                    });
+                    break;
+                }
+            }
+            if (this.ctx) activePngSaveContexts.push(this.ctx);
+        },
+        onLeave() {
+            if (!this.ctx) return;
+            const idx = activePngSaveContexts.lastIndexOf(this.ctx);
+            if (idx >= 0) activePngSaveContexts.splice(idx, 1);
+        },
+    });
+
+    attachAt(BITMAP_GET_SCANLINE_OFF, 'Bitmap_getScanLineForRead', {
+        onEnter(args) {
+            this.ctx = null;
+            this.rowIndex = readArgInt(args[1]);
+            if (activePngSaveContexts.length === 0) return;
+            const imageHex = ptrHex(args[0]);
+            for (let i = activePngSaveContexts.length - 1; i >= 0; --i) {
+                const candidate = activePngSaveContexts[i];
+                if (ptrHex(candidate.image) === imageHex) {
+                    this.ctx = candidate;
+                    break;
+                }
+            }
+        },
+        onLeave(retval) {
+            if (!this.ctx) return;
+            sendSaveLayerVisualReadbackRow(
+                this.ctx, this.rowIndex === null ? -1 : this.rowIndex, retval);
         },
     });
 
@@ -1984,6 +2156,8 @@ rpc.exports = {
                 updateLayerAfterDraw: PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF,
                 layerFillRect: LAYER_FILL_RECT_OFF,
                 layerSaveLayerImage: LAYER_SAVE_LAYER_IMAGE_OFF,
+                tvpSaveAsPng: TVP_SAVE_AS_PNG_OFF,
+                bitmapGetScanLine: BITMAP_GET_SCANLINE_OFF,
                 layerClassId: LAYER_CLASS_ID_OFF,
             },
         };
@@ -1996,6 +2170,14 @@ rpc.exports = {
             !!(options && options.recordRenderStepCheckpoints);
         recordLayerRawProbes =
             !!(options && options.recordLayerRawProbes);
+        recordSaveLayerVisualReadbackProbes =
+            !!(options && options.recordSaveLayerVisualReadbackProbes);
+        saveLayerVisualReadbackFrameStart =
+            options && Number.isInteger(options.saveLayerVisualReadbackFrameStart)
+                ? options.saveLayerVisualReadbackFrameStart : 0;
+        saveLayerVisualReadbackFrameCount =
+            options && Number.isInteger(options.saveLayerVisualReadbackFrameCount)
+                ? options.saveLayerVisualReadbackFrameCount : 1;
         events = [];
         frameCounter = 0;
         seqCounter = 0;
@@ -2006,6 +2188,8 @@ rpc.exports = {
         currentRenderPlayer = null;
         drawIdCounter = 0;
         activeDrawContexts = [];
+        activeSaveLayerImageContexts = [];
+        activePngSaveContexts = [];
         recording = true;
         return true;
     },

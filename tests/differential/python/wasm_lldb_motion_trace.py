@@ -124,6 +124,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--record-layer-raw-probes", action="store_true",
                    help="Ask host-mode driver to capture raw Layer "
                         "MainImage probe events")
+    p.add_argument("--record-save-layer-visual-readback-probes",
+                   action="store_true",
+                   help="Ask host-mode driver to capture saveLayerImage "
+                        "visual readback row hashes")
+    p.add_argument("--save-layer-visual-readback-frame-start", type=int,
+                   default=0,
+                   help="First global frame id for saveLayerImage visual "
+                        "readback row probes")
+    p.add_argument("--save-layer-visual-readback-frame-count", type=int,
+                   default=1,
+                   help="Number of global frames to capture visual readback "
+                        "rows for; use -1 for all frames")
     p.add_argument("--render-artifact-dir", default=None,
                    help="Host path where render stage artifacts should be copied")
     p.add_argument("--render-stage-out", default=None,
@@ -158,6 +170,9 @@ class WasmMotionTracer:
         record_render_stages: bool = False,
         record_render_step_checkpoints: bool = False,
         record_layer_raw_probes: bool = False,
+        record_save_layer_visual_readback_probes: bool = False,
+        save_layer_visual_readback_frame_start: int = 0,
+        save_layer_visual_readback_frame_count: int = 1,
         render_artifact_dir: Path | None = None,
         render_stage_out: Path | None = None,
         manifest_startup_xp3: Path | None = None,
@@ -177,6 +192,12 @@ class WasmMotionTracer:
         self.record_render_stages = record_render_stages
         self.record_render_step_checkpoints = record_render_step_checkpoints
         self.record_layer_raw_probes = record_layer_raw_probes
+        self.record_save_layer_visual_readback_probes = (
+            record_save_layer_visual_readback_probes)
+        self.save_layer_visual_readback_frame_start = (
+            save_layer_visual_readback_frame_start)
+        self.save_layer_visual_readback_frame_count = (
+            save_layer_visual_readback_frame_count)
         self.render_artifact_dir = render_artifact_dir
         self.render_stage_out = render_stage_out
         self.manifest_startup_xp3 = manifest_startup_xp3
@@ -266,6 +287,15 @@ class WasmMotionTracer:
                             "--record-render-step-checkpoints")
                     if self.record_layer_raw_probes:
                         launch_args.append("--record-layer-raw-probes")
+                    if self.record_save_layer_visual_readback_probes:
+                        launch_args.append(
+                            "--record-save-layer-visual-readback-probes")
+                        launch_args += [
+                            "--save-layer-visual-readback-frame-start",
+                            str(self.save_layer_visual_readback_frame_start),
+                            "--save-layer-visual-readback-frame-count",
+                            str(self.save_layer_visual_readback_frame_count),
+                        ]
                 launch = lldb.SBLaunchInfo(launch_args)
                 launch.SetWorkingDirectory(str(self.repo_root))
                 launch.AddOpenFileAction(1, str(stdout_path), False, True)
@@ -553,6 +583,11 @@ def main(argv: list[str]) -> int:
         print("--record-layer-raw-probes requires --record-render-stages",
               file=sys.stderr)
         return 2
+    if (args.record_save_layer_visual_readback_probes and
+            not args.record_render_stages):
+        print("--record-save-layer-visual-readback-probes requires "
+              "--record-render-stages", file=sys.stderr)
+        return 2
 
     try:
         lldb = _load_lldb()
@@ -573,6 +608,12 @@ def main(argv: list[str]) -> int:
             record_render_step_checkpoints=(
                 args.record_render_step_checkpoints),
             record_layer_raw_probes=args.record_layer_raw_probes,
+            record_save_layer_visual_readback_probes=(
+                args.record_save_layer_visual_readback_probes),
+            save_layer_visual_readback_frame_start=(
+                args.save_layer_visual_readback_frame_start),
+            save_layer_visual_readback_frame_count=(
+                args.save_layer_visual_readback_frame_count),
             render_artifact_dir=render_artifact_dir,
             render_stage_out=render_stage_out,
             manifest_startup_xp3=manifest_startup_xp3,

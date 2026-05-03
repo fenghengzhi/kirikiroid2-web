@@ -15,6 +15,14 @@
 #include "tjsDictionary.h"
 #include "ScriptMgnIntf.h"
 
+extern "C" {
+#if defined(__GNUC__)
+__attribute__((weak))
+#endif
+void krkr2_wasm_motion_trace_save_layer_visual_readback_row(
+    const void *, int, const void *, int, int, int, int) {}
+}
+
 bool TVPAcceptSaveAsPNG(void *formatdata, const ttstr &type,
                         class iTJSDispatch2 **dic) {
     bool result = false;
@@ -550,13 +558,22 @@ void TVPSaveAsPNG(void *formatdata, tTJSBinaryStream *dst,
         tjs_uint8 *buff = new tjs_uint8[width_byte];
         if(bpp == 32) {
             for(tjs_uint32 y = 0; y < height; y++) {
-                memcpy(buff, image->GetScanLine(y), width_byte);
+                const void *src = image->GetScanLine(y);
+                krkr2_wasm_motion_trace_save_layer_visual_readback_row(
+                    image, static_cast<int>(y), src,
+                    static_cast<int>(width * 4), static_cast<int>(width),
+                    static_cast<int>(height), bpp);
+                memcpy(buff, src, width_byte);
                 png_write_row(png_ptr, (png_bytep)buff);
             }
         } else {
             for(tjs_uint32 y = 0; y < height; y++) {
                 const tjs_uint8 *src =
                     reinterpret_cast<const tjs_uint8 *>(image->GetScanLine(y));
+                krkr2_wasm_motion_trace_save_layer_visual_readback_row(
+                    image, static_cast<int>(y), src,
+                    static_cast<int>(width * 4), static_cast<int>(width),
+                    static_cast<int>(height), bpp);
                 tjs_uint8 *dst = buff;
                 for(tjs_uint32 x = 0; x < width; x++) {
                     *dst = *src;

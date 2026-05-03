@@ -2466,17 +2466,23 @@ namespace motion {
         if(!rawProbeLayerObject && target && target->Type() == tvtObject) {
             rawProbeLayerObject = target->AsObjectNoAddRef();
         }
+        detail::motionTraceRenderImageCheckpoint(
+            this, rawProbeLayerObject, "updateLayerAfterDraw_pre",
+            "Player::updateLayerAfterDraw_0x6CE7D8.enter.after-target-resolve");
         detail::motionTraceLayerRawProbe(
             this, rawProbeLayerObject, "updateLayerAfterDraw_0x6CE7D8.enter");
-        struct RawProbeLeave {
+        struct UpdateLayerAfterDrawTraceLeave {
             Player *player;
             iTJSDispatch2 *layerObject;
-            ~RawProbeLeave() {
+            ~UpdateLayerAfterDrawTraceLeave() {
+                detail::motionTraceRenderImageCheckpoint(
+                    player, layerObject, "updateLayerAfterDraw_post",
+                    "Player::updateLayerAfterDraw_0x6CE7D8.leave.before-return");
                 detail::motionTraceLayerRawProbe(
                     player, layerObject,
                     "updateLayerAfterDraw_0x6CE7D8.leave");
             }
-        } rawProbeLeave{this, rawProbeLayerObject};
+        } updateLayerAfterDrawTraceLeave{this, rawProbeLayerObject};
 #endif
         if(!_needsInternalAssignImages) {
             return true;

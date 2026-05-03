@@ -46,6 +46,9 @@ std::string g_render_probe_jsonl;
 int g_render_probe_seq = 0;
 int g_render_draw_id = 0;
 bool g_record_layer_raw_probes = false;
+bool g_record_save_layer_visual_readback_probes = false;
+int g_save_layer_visual_readback_frame_start = 0;
+int g_save_layer_visual_readback_frame_count = 1;
 constexpr const char *kRenderStageCaptureRoot = "/render_stage_capture";
 
 struct TraceState {
@@ -269,6 +272,12 @@ std::string rgbaSha256FromBgraRows(const unsigned char *pixels, int width,
         }
         sha.update(row.data(), row.size());
     }
+    return sha.finalHex();
+}
+
+std::string sha256Bytes(const unsigned char *data, std::size_t len) {
+    Sha256 sha;
+    sha.update(data, len);
     return sha.finalHex();
 }
 
@@ -1227,12 +1236,75 @@ void motionTraceLayerRawProbe(Player *player, void *renderLayerObject,
     motionTraceLayerRawProbeNative(player, layer, samplePoint);
 }
 
+bool saveLayerVisualReadbackFrameEnabled(int frameId) {
+    if(!g_record_save_layer_visual_readback_probes || frameId < 0) {
+        return false;
+    }
+    const int start = std::max(0, g_save_layer_visual_readback_frame_start);
+    const int count = g_save_layer_visual_readback_frame_count;
+    if(frameId < start) return false;
+    return count < 0 || frameId < start + count;
+}
+
+void motionTraceSaveLayerVisualReadbackRow(const void *image,
+                                           int y,
+                                           const void *row,
+                                           int rowBytes,
+                                           int width,
+                                           int height,
+                                           int bpp) {
+    motion::Player *player = renderPlayerFor(nullptr);
+    const int frameId = renderFrameIdFor(player);
+    if(!saveLayerVisualReadbackFrameEnabled(frameId)) return;
+
+    std::string payload;
+    payload += "\"sourceDetail\":\"wasmtime-port-saveLayerImage-visual-readback\"";
+    payload += ",\"image\":";
+    payload += ptrHex(image);
+    payload += ",\"row\":";
+    payload += std::to_string(y);
+    payload += ",\"width\":";
+    payload += std::to_string(width);
+    payload += ",\"height\":";
+    payload += std::to_string(height);
+    payload += ",\"rowBytes\":";
+    payload += std::to_string(rowBytes);
+    payload += ",\"bpp\":";
+    payload += std::to_string(bpp);
+    payload += ",\"pixelFormat\":\"rgba32-source-row\"";
+    payload += ",\"rowPtr\":";
+    payload += ptrHex(row);
+    if(!row || rowBytes <= 0 || width <= 0 || height <= 0 ||
+       y < 0 || y >= height) {
+        payload += ",\"ok\":false";
+        payload += ",\"error\":\"invalid visual readback row\"";
+    } else {
+        const auto *bytes = static_cast<const unsigned char *>(row);
+        payload += ",\"ok\":true";
+        payload += ",\"rowSha256\":";
+        appendJsonString(
+            payload,
+            sha256Bytes(bytes, static_cast<std::size_t>(rowBytes)));
+    }
+    appendRenderEvent(player, "layer_visual_readback",
+                      "save_layer_visual_readback_row",
+                      "saveLayerImage_0x80963C.visual_readback_row",
+                      payload, playerDiagnostics(player));
+}
+
 } // namespace motion::detail
 
 extern "C" void krkr2_wasm_motion_trace_layer_raw_probe_native(
     const char *samplePoint, const void *nativeLayer) {
     motion::detail::motionTraceLayerRawProbeNative(
         nullptr, nativeLayer, samplePoint);
+}
+
+extern "C" void krkr2_wasm_motion_trace_save_layer_visual_readback_row(
+    const void *image, int y, const void *row, int rowBytes, int width,
+    int height, int bpp) {
+    motion::detail::motionTraceSaveLayerVisualReadbackRow(
+        image, y, row, rowBytes, width, height, bpp);
 }
 
 extern "C" {
@@ -1259,6 +1331,14 @@ void krkr2_wasm_clear_render_probe() {
 EMSCRIPTEN_KEEPALIVE
 void krkr2_wasm_set_record_layer_raw_probes(int enabled) {
     g_record_layer_raw_probes = enabled != 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void krkr2_wasm_set_record_save_layer_visual_readback_probes(
+    int enabled, int frame_start, int frame_count) {
+    g_record_save_layer_visual_readback_probes = enabled != 0;
+    g_save_layer_visual_readback_frame_start = frame_start;
+    g_save_layer_visual_readback_frame_count = frame_count;
 }
 
 } // extern "C"

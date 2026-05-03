@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare motion_playback render item flow and execute image checkpoints."""
+"""Compare motion_playback render flow and raw image checkpoints."""
 
 from __future__ import annotations
 
@@ -339,27 +339,27 @@ def compare_case(
     build_flow_mismatches = 0
     execute_pre_mismatches = 0
     execute_post_mismatches = 0
+    update_layer_after_draw_pre_mismatches = 0
+    update_layer_after_draw_post_mismatches = 0
     layer_save_mismatches = 0
     oracle_cache: dict[Path, str] = {}
     wasmtime_cache: dict[Path, str] = {}
+    checkpoint_fields = (
+        "executePreImage",
+        "executePostImage",
+        "updateLayerAfterDrawPreImage",
+        "updateLayerAfterDrawPostImage",
+    )
     execute_checkpoint_enabled = any(
-        decoded_image_hash(oracle_root, event.get("executePreImage"), oracle_cache)
+        decoded_image_hash(oracle_root, event.get(field), oracle_cache)
         is not None
         for event in oracle_execute
+        for field in checkpoint_fields
     ) or any(
-        decoded_image_hash(
-            wasmtime_root, event.get("executePreImage"), wasmtime_cache)
+        decoded_image_hash(wasmtime_root, event.get(field), wasmtime_cache)
         is not None
         for event in wasmtime_execute
-    ) or any(
-        decoded_image_hash(oracle_root, event.get("executePostImage"), oracle_cache)
-        is not None
-        for event in oracle_execute
-    ) or any(
-        decoded_image_hash(
-            wasmtime_root, event.get("executePostImage"), wasmtime_cache)
-        is not None
-        for event in wasmtime_execute
+        for field in checkpoint_fields
     )
 
     frame_count = max(
@@ -405,6 +405,8 @@ def compare_case(
             if execute_checkpoint_enabled:
                 execute_pre_mismatches += 1
                 execute_post_mismatches += 1
+                update_layer_after_draw_pre_mismatches += 1
+                update_layer_after_draw_post_mismatches += 1
             if first_mismatch is None:
                 first_mismatch = (
                     index,
@@ -450,6 +452,48 @@ def compare_case(
                         wasmtime_post,
                     )
 
+            oracle_update_pre = decoded_image_hash(
+                oracle_root,
+                oracle_event.get("updateLayerAfterDrawPreImage"),
+                oracle_cache,
+            )
+            wasmtime_update_pre = decoded_image_hash(
+                wasmtime_root,
+                wasmtime_event.get("updateLayerAfterDrawPreImage"),
+                wasmtime_cache,
+            )
+            if oracle_update_pre != wasmtime_update_pre:
+                update_layer_after_draw_pre_mismatches += 1
+                if first_mismatch is None:
+                    first_mismatch = (
+                        index,
+                        "render_execute",
+                        "updateLayerAfterDraw_pre.rgbaSha256",
+                        oracle_update_pre,
+                        wasmtime_update_pre,
+                    )
+
+            oracle_update_post = decoded_image_hash(
+                oracle_root,
+                oracle_event.get("updateLayerAfterDrawPostImage"),
+                oracle_cache,
+            )
+            wasmtime_update_post = decoded_image_hash(
+                wasmtime_root,
+                wasmtime_event.get("updateLayerAfterDrawPostImage"),
+                wasmtime_cache,
+            )
+            if oracle_update_post != wasmtime_update_post:
+                update_layer_after_draw_post_mismatches += 1
+                if first_mismatch is None:
+                    first_mismatch = (
+                        index,
+                        "render_execute",
+                        "updateLayerAfterDraw_post.rgbaSha256",
+                        oracle_update_post,
+                        wasmtime_update_post,
+                    )
+
     layer_save_mismatches, layer_save_first = _compare_layer_save_images(
         oracle_root,
         wasmtime_root,
@@ -488,6 +532,10 @@ def compare_case(
         f"{case_id}: summary build_flow_mismatch={build_flow_mismatches} "
         f"execute_pre_mismatch={execute_pre_mismatches} "
         f"execute_post_mismatch={execute_post_mismatches} "
+        "update_layer_after_draw_pre_mismatch="
+        f"{update_layer_after_draw_pre_mismatches} "
+        "update_layer_after_draw_post_mismatch="
+        f"{update_layer_after_draw_post_mismatches} "
         f"layer_save_mismatch={layer_save_mismatches}")
     return ok
 
