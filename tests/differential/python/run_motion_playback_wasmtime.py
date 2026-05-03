@@ -776,6 +776,16 @@ def prepare_browser_bootstrap(root: Path,
     for dirname in ("savedata", "save", "tmp", "reference/xp3"):
         (root / dirname).mkdir(parents=True, exist_ok=True)
 
+    renderer = os.environ.get("KRKR2_WASMTIME_RENDERER") or "software"
+    pref = root / "save" / "GlobalPreference.xml"
+    pref.write_text(
+        "<?xml version=\"1.0\"?>\n"
+        "<GlobalPreference>\n"
+        f"    <Item key=\"renderer\" value=\"{renderer}\"/>\n"
+        "</GlobalPreference>\n",
+        encoding="utf-8",
+    )
+
     preload_count = 0
     for src in preload_src.rglob("*"):
         if not src.is_file():

@@ -7,6 +7,8 @@ import sys
 import logging
 import os
 import ctypes
+import hashlib
+import json
 import struct
 from collections import deque
 from typing import Any
@@ -94,6 +96,7 @@ class WasmtimeGLProvider:
         self._shader_sources: dict[int, str] = {}
         self._shader_compile_logs: dict[int, str] = {}
         self._program_shaders: dict[int, set[int]] = {}
+        self._program_shader_sources: dict[int, list[dict[str, Any]]] = {}
         self._program_active_attribs: dict[int, set[int]] = {}
         self._bound_buffers: dict[int, int] = {}
         self._default_vao = 0
@@ -101,9 +104,36 @@ class WasmtimeGLProvider:
         self._client_attribs: dict[int, tuple[int, int, int, int, int]] = {}
         self._client_attrib_buffers: dict[int, int] = {}
         self._client_element_buffer = 0
+        self._active_texture_unit = 0
+        self._bound_textures: dict[tuple[int, int], int] = {}
+        self._texture_info: dict[int, dict[str, Any]] = {}
+        self._bound_framebuffer = 0
+        self._bound_draw_framebuffer = 0
+        self._framebuffer_color_texture: dict[int, int] = {}
+        self._pixel_store: dict[int, int] = {
+            0x0CF2: 0,  # GL_UNPACK_ROW_LENGTH
+            0x0D02: 0,  # GL_PACK_ROW_LENGTH
+            0x0CF5: 4,  # GL_UNPACK_ALIGNMENT
+            0x0D05: 4,  # GL_PACK_ALIGNMENT
+        }
         self._guest_strings: dict[bytes, int] = {}
         self._recent_calls: deque[str] = deque(maxlen=80)
         self._trace_calls = os.environ.get("KRKR2_WASMTIME_GL_TRACE") == "1"
+        self._readpixels_probe_path = os.environ.get(
+            "KRKR2_WASMTIME_GL_READPIXELS_PROBE")
+        self._readpixels_probe_limit = int(os.environ.get(
+            "KRKR2_WASMTIME_GL_READPIXELS_PROBE_LIMIT", "16"))
+        self._readpixels_probe_count = 0
+        self._texture_probe_path = os.environ.get(
+            "KRKR2_WASMTIME_GL_TEXTURE_PROBE")
+        self._texture_probe_limit = int(os.environ.get(
+            "KRKR2_WASMTIME_GL_TEXTURE_PROBE_LIMIT", "32"))
+        self._texture_probe_count = 0
+        self._draw_probe_path = os.environ.get(
+            "KRKR2_WASMTIME_GL_DRAW_PROBE")
+        self._draw_probe_limit = int(os.environ.get(
+            "KRKR2_WASMTIME_GL_DRAW_PROBE_LIMIT", "64"))
+        self._draw_probe_count = 0
 
     def define_imports(self, linker: Any, module: Any) -> None:
         gl_imports = [
@@ -295,6 +325,29 @@ class WasmtimeGLProvider:
     def _gl_string(self, name: int) -> str:
         value = self._gl.glGetString(name)
         return self._bytes_to_text(value) if value else "<none>"
+
+    def _extension_string(self) -> bytes:
+        GL = self._gl
+        extensions: set[str] = {"GL_EXT_unpack_subimage"}
+        get_stringi = getattr(GL, "glGetStringi", None)
+        if get_stringi is not None:
+            try:
+                count = int(GL.glGetIntegerv(GL.GL_NUM_EXTENSIONS))
+                for index in range(count):
+                    value = get_stringi(GL.GL_EXTENSIONS, index)
+                    text = self._bytes_to_text(value)
+                    if text:
+                        extensions.add(text)
+            except Exception:
+                pass
+        else:
+            try:
+                value = GL.glGetString(GL.GL_EXTENSIONS)
+            except Exception:
+                value = None
+            text = self._bytes_to_text(value) if value else ""
+            extensions.update(part for part in text.split() if part)
+        return " ".join(sorted(extensions)).encode("utf-8")
 
     @staticmethod
     def _bytes_to_text(value: Any) -> str:
@@ -533,11 +586,8 @@ class WasmtimeGLProvider:
                                         flags=re.MULTILINE)
         return text
 
-    def _texture_byte_size(self, width: int, height: int, fmt: int,
-                           typ: int) -> int:
+    def _pixel_byte_width(self, width: int, fmt: int, typ: int) -> int:
         GL = self._gl
-        if width <= 0 or height <= 0:
-            return 0
         if typ == GL.GL_UNSIGNED_BYTE:
             channels = {
                 GL.GL_RGBA: 4,
@@ -552,19 +602,52 @@ class WasmtimeGLProvider:
                 raise RuntimeError(
                     f"unsupported unsigned-byte texture format 0x{fmt:x}"
                 )
-            return width * height * channels
+            return width * channels
         if typ in {
             GL.GL_UNSIGNED_SHORT_4_4_4_4,
             GL.GL_UNSIGNED_SHORT_5_5_5_1,
             GL.GL_UNSIGNED_SHORT_5_6_5,
         }:
-            return width * height * 2
+            return width * 2
         if typ in {
             getattr(GL, "GL_UNSIGNED_INT_8_8_8_8", 0x8035),
             getattr(GL, "GL_UNSIGNED_INT_8_8_8_8_REV", 0x8367),
         }:
-            return width * height * 4
+            return width * 4
         raise RuntimeError(f"unsupported texture type 0x{typ:x}")
+
+    @staticmethod
+    def _align(value: int, alignment: int) -> int:
+        if alignment <= 1:
+            return value
+        return (value + alignment - 1) & ~(alignment - 1)
+
+    def _texture_byte_size(self, width: int, height: int, fmt: int,
+                           typ: int, *, row_length: int = 0,
+                           alignment: int = 1) -> int:
+        if width <= 0 or height <= 0:
+            return 0
+        effective_width = row_length if row_length > 0 else width
+        if effective_width < width:
+            effective_width = width
+        row_stride = self._align(
+            self._pixel_byte_width(effective_width, fmt, typ), alignment)
+        last_row = self._pixel_byte_width(width, fmt, typ)
+        return (height - 1) * row_stride + last_row
+
+    def _unpack_byte_size(self, width: int, height: int, fmt: int,
+                          typ: int) -> int:
+        return self._texture_byte_size(
+            width, height, fmt, typ,
+            row_length=self._pixel_store.get(0x0CF2, 0),
+            alignment=self._pixel_store.get(0x0CF5, 4))
+
+    def _pack_byte_size(self, width: int, height: int, fmt: int,
+                        typ: int) -> int:
+        return self._texture_byte_size(
+            width, height, fmt, typ,
+            row_length=self._pixel_store.get(0x0D02, 0),
+            alignment=self._pixel_store.get(0x0D05, 4))
 
     def _normalize_texture_formats(self, internalformat: int,
                                    fmt: int) -> tuple[int, int]:
@@ -590,7 +673,7 @@ class WasmtimeGLProvider:
                       fmt: int, typ: int) -> Any:
         if ptr == 0:
             return None
-        size = self._texture_byte_size(width, height, fmt, typ)
+        size = self._unpack_byte_size(width, height, fmt, typ)
         return self._buffer_ptr(caller, size, ptr)
 
     @staticmethod
@@ -780,8 +863,10 @@ class WasmtimeGLProvider:
             self._memory_base(caller, memory) + ptr)
 
     def glPixelStorei(self, caller: Any, pname: int, param: int) -> None:
-        return self._call("glPixelStorei", (pname, param),
-                          lambda: self._gl.glPixelStorei(pname, param))
+        def run() -> None:
+            self._pixel_store[int(pname)] = int(param)
+            self._gl.glPixelStorei(pname, param)
+        return self._call("glPixelStorei", (pname, param), run)
 
     def glGenTextures(self, caller: Any, n: int, textures: int) -> None:
         def run() -> None:
@@ -824,9 +909,11 @@ class WasmtimeGLProvider:
                 value = self._gl.glGetString(name)
             except Exception:
                 if name == self._gl.GL_EXTENSIONS:
-                    value = b""
+                    value = self._extension_string()
                 else:
                     raise
+            if name == self._gl.GL_EXTENSIONS and not value:
+                value = self._extension_string()
             if self._trace_calls:
                 text = self._bytes_to_text(value) if value else "<none>"
                 print(f"[wasmtime-gl] glGetString({name}) -> {text}",
@@ -843,7 +930,26 @@ class WasmtimeGLProvider:
                      internalformat: int, width: int, height: int,
                      border: int, fmt: int, typ: int, pixels: int) -> None:
         def run() -> None:
+            size = self._unpack_byte_size(width, height, fmt, typ)
             data = self._pixel_buffer(caller, pixels, width, height, fmt, typ)
+            bound_texture = self._bound_texture(target)
+            self._record_texture_probe(
+                "glTexImage2D", target, level, internalformat, width, height,
+                fmt, typ, pixels, data, size, border=int(border),
+                boundTexture=int(bound_texture))
+            if bound_texture:
+                raw = bytes(data) if data is not None and size > 0 else b""
+                self._texture_info[bound_texture] = {
+                    "width": int(width),
+                    "height": int(height),
+                    "format": int(fmt),
+                    "internalformat": int(internalformat),
+                    "type": int(typ),
+                    "bytes": len(raw),
+                    "sha256": (
+                        hashlib.sha256(raw).hexdigest() if raw else None),
+                    "prefixHex": raw[:32].hex(),
+                }
             upload_internal, upload_format = self._normalize_texture_formats(
                 internalformat, fmt)
             self._gl.glTexImage2D(target, level, upload_internal, width,
@@ -868,12 +974,168 @@ class WasmtimeGLProvider:
                           (target, level, internalformat, width, height,
                            border, image_size, data_ptr), run)
 
+    def _record_readpixels_probe(
+        self,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        fmt: int,
+        typ: int,
+        pixels: int,
+        data: Any,
+        size: int,
+    ) -> None:
+        path = self._readpixels_probe_path
+        if not path or self._readpixels_probe_count >= self._readpixels_probe_limit:
+            return
+        if data is None or size <= 0:
+            return
+        try:
+            raw = bytes(data)
+        except Exception as exc:
+            raw = b""
+            error = str(exc)
+        else:
+            error = None
+        record = {
+            "index": self._readpixels_probe_count,
+            "x": int(x),
+            "y": int(y),
+            "width": int(width),
+            "height": int(height),
+            "format": int(fmt),
+            "type": int(typ),
+            "guestPixels": int(pixels),
+            "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest() if raw else None,
+            "prefixHex": raw[:64].hex(),
+            "suffixHex": raw[-64:].hex() if raw else "",
+        }
+        if error is not None:
+            record["error"] = error
+        with open(path, "a", encoding="utf-8") as file:
+            file.write(json.dumps(record, sort_keys=True) + "\n")
+        self._readpixels_probe_count += 1
+
+    def _record_texture_probe(
+        self,
+        kind: str,
+        target: int,
+        level: int,
+        internalformat: int | None,
+        width: int,
+        height: int,
+        fmt: int,
+        typ: int,
+        pixels: int,
+        data: Any,
+        size: int,
+        **extra: Any,
+    ) -> None:
+        path = self._texture_probe_path
+        if not path or self._texture_probe_count >= self._texture_probe_limit:
+            return
+        raw = b""
+        error = None
+        if data is not None and size > 0:
+            try:
+                raw = bytes(data)
+            except Exception as exc:
+                error = str(exc)
+        record = {
+            "index": self._texture_probe_count,
+            "kind": kind,
+            "target": int(target),
+            "level": int(level),
+            "internalformat": (
+                None if internalformat is None else int(internalformat)),
+            "width": int(width),
+            "height": int(height),
+            "format": int(fmt),
+            "type": int(typ),
+            "guestPixels": int(pixels),
+            "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest() if raw else None,
+            "prefixHex": raw[:64].hex(),
+            "suffixHex": raw[-64:].hex() if raw else "",
+        }
+        record.update(extra)
+        if error is not None:
+            record["error"] = error
+        with open(path, "a", encoding="utf-8") as file:
+            file.write(json.dumps(record, sort_keys=True) + "\n")
+        self._texture_probe_count += 1
+
+    def _bound_texture(self, target: int) -> int:
+        return self._bound_textures.get((self._active_texture_unit, target), 0)
+
+    def _texture_summary(self, texture: int) -> dict[str, Any] | None:
+        info = self._texture_info.get(texture)
+        if not info:
+            return None
+        return dict(info)
+
+    def _record_draw_probe(self, kind: str, mode: int, first_or_count: int,
+                           count: int) -> None:
+        path = self._draw_probe_path
+        if not path or self._draw_probe_count >= self._draw_probe_limit:
+            return
+        GL = self._gl
+        try:
+            program = int(GL.glGetIntegerv(GL.GL_CURRENT_PROGRAM))
+        except Exception:
+            program = 0
+        attached = []
+        for shader in sorted(self._program_shaders.get(program, set())):
+            attached.append({
+                "shader": shader,
+                "type": self._shader_types.get(shader, 0),
+                "sourcePrefix": self._shader_sources.get(shader, "")[:320],
+            })
+        if not attached:
+            attached = self._program_shader_sources.get(program, [])
+        framebuffer = self._bound_framebuffer
+        target_texture = self._framebuffer_color_texture.get(framebuffer, 0)
+        textures = []
+        texture_2d = GL.GL_TEXTURE_2D
+        for unit in sorted({unit for unit, target in self._bound_textures
+                            if target == texture_2d}):
+            texture = self._bound_textures.get((unit, texture_2d), 0)
+            textures.append({
+                "unit": unit,
+                "texture": texture,
+                "info": self._texture_summary(texture),
+            })
+        record = {
+            "index": self._draw_probe_count,
+            "kind": kind,
+            "mode": int(mode),
+            "firstOrCount": int(first_or_count),
+            "count": int(count),
+            "program": program,
+            "framebuffer": framebuffer,
+            "targetTexture": target_texture,
+            "targetInfo": self._texture_summary(target_texture),
+            "textures": textures,
+            "attachedShaders": attached,
+        }
+        with open(path, "a", encoding="utf-8") as file:
+            file.write(json.dumps(record, sort_keys=True) + "\n")
+        self._draw_probe_count += 1
+
     def glReadPixels(self, caller: Any, x: int, y: int, width: int,
                      height: int, fmt: int, typ: int, pixels: int) -> None:
         def run() -> None:
-            size = self._texture_byte_size(width, height, fmt, typ)
-            data = self._buffer_ptr(caller, size, pixels)
+            size = self._pack_byte_size(width, height, fmt, typ)
+            data = None
+            if pixels:
+                data = (ctypes.c_ubyte * size)()
             self._gl.glReadPixels(x, y, width, height, fmt, typ, data)
+            if pixels and data is not None:
+                self._write(caller, pixels, bytes(data))
+            self._record_readpixels_probe(
+                x, y, width, height, fmt, typ, pixels, data, size)
         return self._call("glReadPixels",
                           (x, y, width, height, fmt, typ, pixels), run)
 
@@ -891,6 +1153,14 @@ class WasmtimeGLProvider:
         def run() -> None:
             self._gl.glLinkProgram(program)
             self._program_active_attribs.pop(program, None)
+            self._program_shader_sources[program] = [
+                {
+                    "shader": shader,
+                    "type": self._shader_types.get(shader, 0),
+                    "sourcePrefix": self._shader_sources.get(shader, "")[:320],
+                }
+                for shader in sorted(self._program_shaders.get(program, set()))
+            ]
         return self._call("glLinkProgram", (program,), run)
 
     def glGetProgramiv(self, caller: Any, program: int, pname: int,
@@ -1119,7 +1389,28 @@ class WasmtimeGLProvider:
                         xoffset: int, yoffset: int, width: int, height: int,
                         fmt: int, typ: int, pixels: int) -> None:
         def run() -> None:
+            size = self._unpack_byte_size(width, height, fmt, typ)
             data = self._pixel_buffer(caller, pixels, width, height, fmt, typ)
+            bound_texture = self._bound_texture(target)
+            self._record_texture_probe(
+                "glTexSubImage2D", target, level, None, width, height,
+                fmt, typ, pixels, data, size, xoffset=int(xoffset),
+                yoffset=int(yoffset), boundTexture=int(bound_texture))
+            if bound_texture:
+                raw = bytes(data) if data is not None and size > 0 else b""
+                self._texture_info[bound_texture] = {
+                    "width": int(width),
+                    "height": int(height),
+                    "format": int(fmt),
+                    "internalformat": None,
+                    "type": int(typ),
+                    "bytes": len(raw),
+                    "sha256": (
+                        hashlib.sha256(raw).hexdigest() if raw else None),
+                    "prefixHex": raw[:32].hex(),
+                    "xoffset": int(xoffset),
+                    "yoffset": int(yoffset),
+                }
             _, upload_format = self._normalize_texture_formats(fmt, fmt)
             self._gl.glTexSubImage2D(target, level, xoffset, yoffset, width,
                                      height, upload_format, typ, data)
@@ -1131,6 +1422,7 @@ class WasmtimeGLProvider:
         def run() -> None:
             self._program_active_attribs.pop(program, None)
             self._program_shaders.pop(program, None)
+            self._program_shader_sources.pop(program, None)
             self._gl.glDeleteProgram(program)
         return self._call("glDeleteProgram", (program,), run)
 
@@ -1139,12 +1431,16 @@ class WasmtimeGLProvider:
                           lambda: self._gl.glUseProgram(program))
 
     def glActiveTexture(self, caller: Any, texture: int) -> None:
-        return self._call("glActiveTexture", (texture,),
-                          lambda: self._gl.glActiveTexture(texture))
+        def run() -> None:
+            self._active_texture_unit = int(texture - self._gl.GL_TEXTURE0)
+            self._gl.glActiveTexture(texture)
+        return self._call("glActiveTexture", (texture,), run)
 
     def glBindTexture(self, caller: Any, target: int, texture: int) -> None:
-        return self._call("glBindTexture", (target, texture),
-                          lambda: self._gl.glBindTexture(target, texture))
+        def run() -> None:
+            self._bound_textures[(self._active_texture_unit, target)] = texture
+            self._gl.glBindTexture(target, texture)
+        return self._call("glBindTexture", (target, texture), run)
 
     def glDeleteTextures(self, caller: Any, n: int, textures: int) -> None:
         def run() -> None:
@@ -1280,6 +1576,7 @@ class WasmtimeGLProvider:
     def glDrawElements(self, caller: Any, mode: int, count: int, typ: int,
                        indices: int) -> None:
         def run() -> None:
+            self._record_draw_probe("glDrawElements", mode, count, count)
             GL = self._gl
             if self._bound_buffers.get(GL.GL_ELEMENT_ARRAY_BUFFER, 0) == 0:
                 raw_indices, max_index = self._read_indices(
@@ -1358,6 +1655,7 @@ class WasmtimeGLProvider:
     def glDrawArrays(self, caller: Any, mode: int, first: int,
                      count: int) -> None:
         def run() -> None:
+            self._record_draw_probe("glDrawArrays", mode, first, count)
             self._upload_client_attribs(caller, first, count)
             suspended = self._suspend_inactive_attribs()
             try:
@@ -1406,9 +1704,13 @@ class WasmtimeGLProvider:
 
     def glBindFramebuffer(self, caller: Any, target: int,
                           framebuffer: int) -> None:
-        return self._call("glBindFramebuffer", (target, framebuffer),
-                          lambda: self._gl.glBindFramebuffer(target,
-                                                             framebuffer))
+        def run() -> None:
+            if target in (self._gl.GL_FRAMEBUFFER,
+                          getattr(self._gl, "GL_DRAW_FRAMEBUFFER",
+                                  self._gl.GL_FRAMEBUFFER)):
+                self._bound_framebuffer = int(framebuffer)
+            self._gl.glBindFramebuffer(target, framebuffer)
+        return self._call("glBindFramebuffer", (target, framebuffer), run)
 
     def glBindRenderbuffer(self, caller: Any, target: int,
                            renderbuffer: int) -> None:
@@ -1419,10 +1721,15 @@ class WasmtimeGLProvider:
     def glFramebufferTexture2D(self, caller: Any, target: int,
                                attachment: int, textarget: int, texture: int,
                                level: int) -> None:
+        def run() -> None:
+            if attachment == self._gl.GL_COLOR_ATTACHMENT0:
+                self._framebuffer_color_texture[self._bound_framebuffer] = (
+                    int(texture))
+            self._gl.glFramebufferTexture2D(
+                target, attachment, textarget, texture, level)
         return self._call("glFramebufferTexture2D",
                           (target, attachment, textarget, texture, level),
-                          lambda: self._gl.glFramebufferTexture2D(
-                              target, attachment, textarget, texture, level))
+                          run)
 
     def glFramebufferRenderbuffer(self, caller: Any, target: int,
                                   attachment: int, renderbuffertarget: int,

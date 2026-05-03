@@ -810,6 +810,7 @@ def write_render_stage_artifacts(
     events: list[dict[str, Any]],
     case_segments: list[dict[str, Any]],
     image_manifest: dict[str, Any],
+    renderer_metadata: dict[str, str],
 ) -> list[Path]:
     events_by_stage_case = split_render_events_by_stage_and_case(
         events, case_segments)
@@ -885,6 +886,7 @@ def write_render_stage_artifacts(
     manifest = {
         "schema": RENDER_SCHEMA,
         "source": RENDER_SOURCE,
+        **renderer_metadata,
         "generatedAt": datetime.now(timezone.utc)
         .replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "localRoot": str(artifact_dir),
@@ -970,6 +972,7 @@ def main(argv: list[str]) -> int:
     from oracle_runner.adapters import motion_playback as mpb
     from oracle_runner.frida_motion_stage_tracer import FridaMotionStageTracer
 
+    renderer_metadata = mpb.oracle_renderer_metadata()
     expected_frames = sum(int(spec["frames"]) for spec in specs)
     specs_by_id = {spec["id"]: spec for spec in specs}
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
@@ -977,6 +980,7 @@ def main(argv: list[str]) -> int:
 
     try:
         try:
+            mpb.ensure_oracle_renderer_software(args.serial)
             with AdbHarnessEngine(serial=args.serial) as engine:
                 print(
                     f"[record-stage] capturing stages={stages} "
@@ -994,6 +998,8 @@ def main(argv: list[str]) -> int:
                     remote_game = mpb._ensure_logo_test_xp3_pushed(
                         args.serial)
                     remote_render_root = None
+                mpb.ensure_oracle_renderer_software(
+                    args.serial, remote_game=remote_game, write_global=False)
 
                 with FridaMotionStageTracer(
                     engine, device_id=args.serial) as tracer:
@@ -1043,6 +1049,7 @@ def main(argv: list[str]) -> int:
                 json.dumps({
                     "schema": RENDER_SCHEMA if render_path else SCHEMA,
                     "source": RENDER_SOURCE if render_path else SOURCE,
+                    **renderer_metadata,
                     "events": events,
                     "summary": {
                         "eventCount": len(events),
@@ -1075,6 +1082,7 @@ def main(argv: list[str]) -> int:
                 events=events,
                 case_segments=case_segments,
                 image_manifest=image_manifest,
+                renderer_metadata=renderer_metadata,
             )
             print(
                 f"[record-stage] render artifact manifest: "

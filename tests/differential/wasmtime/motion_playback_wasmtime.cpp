@@ -395,6 +395,12 @@ void appendPreparedItemJson(
     appendNumberArray(out, item.viewport);
     out += ",\"sourceGate232\":";
     out += std::to_string(item.opacity);
+    out += ",\"packedColors\":[";
+    for(size_t ci = 0; ci < item.packedColors.size(); ++ci) {
+        if(ci) out.push_back(',');
+        out += std::to_string(item.packedColors[ci]);
+    }
+    out += "]";
     out += ",\"stencilType244\":";
     out += std::to_string(item.stencilComposite);
     out += ",\"parentItemIndex\":";

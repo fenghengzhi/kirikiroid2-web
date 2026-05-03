@@ -37,7 +37,7 @@ import subprocess
 import tempfile
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from oracle_runner.png_artifacts import png_manifest_entry
@@ -75,6 +75,15 @@ SEGMENT_ORDER: tuple[str, ...] = ("yuzulogo", "m2logo")
 # whenever the spec frame counts change.
 _LOGO_TEST_XP3_REL = "reference/xp3/logo_test_oracle.xp3"
 _REMOTE_APP_FILES_DIR = "/sdcard/Android/data/org.github.krkr2/files"
+ORACLE_RENDERER = "software"
+ORACLE_RENDERER_SOURCE = "explicit-oracle-preference"
+_ORACLE_GLOBAL_PREFERENCE_PATH = (
+    "/data/user/0/org.github.krkr2/files/.preference/GlobalPreference.xml"
+)
+_ORACLE_GAME_PREFERENCE_FILE = "Kirikiroid2Preference.xml"
+_ORACLE_TMP_PREFERENCE_PATH = (
+    "/data/local/tmp/krkr2-motion-oracle-renderer-preference.xml"
+)
 _FRAMEBUFFER_SCHEMA = "motion-framebuffer-oracle-v1"
 _FRAMEBUFFER_SOURCE = "android-libkrkr2-saveLayerImage"
 _FRAMEBUFFER_CAPTURE_SURFACE = (
@@ -104,12 +113,154 @@ def _adb_shell(serial: str | None, cmdline: str) -> str:
     return out.stdout.decode(errors="replace")
 
 
+def _adb_shell_root(serial: str | None, args: list[str]) -> str:
+    cmd = ["adb"]
+    if serial:
+        cmd += ["-s", serial]
+    cmd += ["shell", "su", "0"] + args
+    out = subprocess.run(cmd, check=True, capture_output=True)
+    return out.stdout.decode(errors="replace")
+
+
 def _adb_pull(serial: str | None, remote: str, local: Path) -> None:
     cmd = ["adb"]
     if serial:
         cmd += ["-s", serial]
     cmd += ["pull", remote, str(local)]
     subprocess.run(cmd, check=True, capture_output=True)
+
+
+def _subprocess_error_text(exc: subprocess.CalledProcessError) -> str:
+    parts: list[str] = []
+    for name in ("stdout", "stderr"):
+        data = getattr(exc, name, None)
+        if not data:
+            continue
+        if isinstance(data, bytes):
+            text = data.decode(errors="replace").strip()
+        else:
+            text = str(data).strip()
+        if text:
+            parts.append(f"{name}: {text}")
+    return "; ".join(parts) or str(exc)
+
+
+def _renderer_preference_xml(renderer: str = ORACLE_RENDERER) -> str:
+    return (
+        "<?xml version=\"1.0\"?>\n"
+        "<GlobalPreference>\n"
+        f"    <Item key=\"renderer\" value=\"{renderer}\"/>\n"
+        "</GlobalPreference>\n"
+    )
+
+
+def _write_local_temp_text(text: str) -> Path:
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", delete=False,
+        prefix="krkr2-oracle-renderer-", suffix=".xml",
+    ) as fp:
+        fp.write(text)
+        return Path(fp.name)
+
+
+def _write_remote_text(
+    serial: str | None,
+    remote_path: str,
+    text: str,
+    *,
+    root: bool,
+) -> None:
+    local = _write_local_temp_text(text)
+    try:
+        if root:
+            push_fixture(serial, local, _ORACLE_TMP_PREFERENCE_PATH)
+            parent = str(PurePosixPath(remote_path).parent)
+            _adb_shell_root(serial, ["mkdir", "-p", parent])
+            _adb_shell_root(
+                serial, ["cp", _ORACLE_TMP_PREFERENCE_PATH, remote_path])
+            _adb_shell_root(serial, ["chmod", "644", remote_path])
+            try:
+                _adb_shell(
+                    serial,
+                    f"rm -f {shlex.quote(_ORACLE_TMP_PREFERENCE_PATH)}",
+                )
+            except subprocess.CalledProcessError:
+                pass
+        else:
+            parent = str(PurePosixPath(remote_path).parent)
+            _adb_shell(serial, f"mkdir -p {shlex.quote(parent)}")
+            push_fixture(serial, local, remote_path)
+    finally:
+        local.unlink(missing_ok=True)
+
+
+def _read_remote_text(
+    serial: str | None,
+    remote_path: str,
+    *,
+    root: bool,
+) -> str:
+    if root:
+        return _adb_shell_root(serial, ["cat", remote_path])
+    return _adb_shell(serial, f"cat {shlex.quote(remote_path)}")
+
+
+def _game_preference_path(remote_game: str | None = None) -> str:
+    if remote_game:
+        return str(
+            PurePosixPath(remote_game).parent / _ORACLE_GAME_PREFERENCE_FILE
+        )
+    return f"{_REMOTE_APP_FILES_DIR}/{_ORACLE_GAME_PREFERENCE_FILE}"
+
+
+def oracle_renderer_metadata() -> dict[str, str]:
+    return {
+        "renderer": ORACLE_RENDERER,
+        "rendererSource": ORACLE_RENDERER_SOURCE,
+    }
+
+
+def ensure_oracle_renderer_software(
+    serial: str | None,
+    *,
+    remote_game: str | None = None,
+    write_global: bool = True,
+) -> None:
+    """Force Android oracle playback to use libkrkr2's software renderer.
+
+    The global preference must be written before HarnessActivity starts;
+    the per-game preference is written again immediately before startupFrom
+    so stale device state cannot switch the parity lane to OpenGL/hardware.
+    """
+    xml = _renderer_preference_xml()
+    try:
+        if write_global:
+            _write_remote_text(
+                serial, _ORACLE_GLOBAL_PREFERENCE_PATH, xml, root=True)
+            global_text = _read_remote_text(
+                serial, _ORACLE_GLOBAL_PREFERENCE_PATH, root=True)
+            if global_text.strip() != xml.strip():
+                raise RuntimeError(
+                    "Android Oracle renderer=software verification failed; "
+                    "Oracle renderer cannot be guaranteed. "
+                    "Global preference did not match: "
+                    f"{_ORACLE_GLOBAL_PREFERENCE_PATH}")
+
+        game_pref = _game_preference_path(remote_game)
+        _write_remote_text(serial, game_pref, xml, root=False)
+        game_text = _read_remote_text(serial, game_pref, root=False)
+        if game_text.strip() != xml.strip():
+            raise RuntimeError(
+                "Android Oracle renderer=software verification failed; "
+                "Oracle renderer cannot be guaranteed. "
+                "Per-game preference did not match: "
+                f"{game_pref}")
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "failed to enforce Android Oracle renderer=software; "
+            "Oracle renderer cannot be guaranteed. "
+            f"ADB error: {_subprocess_error_text(exc)}"
+        ) from exc
 
 
 def _ensure_logo_test_xp3_pushed(serial: str | None) -> str:
@@ -805,6 +956,8 @@ def record_all_oracles(
         remote_game = _ensure_logo_test_xp3_pushed(serial)
 
     try:
+        ensure_oracle_renderer_software(
+            serial, remote_game=remote_game, write_global=False)
         with FridaMotionTracer(engine, device_id=serial) as tracer:
             tracer.start_record()
 

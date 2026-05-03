@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import subprocess
 import sys
 import tempfile
@@ -298,6 +299,14 @@ class WasmMotionTracer:
                         ]
                 launch = lldb.SBLaunchInfo(launch_args)
                 launch.SetWorkingDirectory(str(self.repo_root))
+                gl_probe_env = [
+                    f"{name}={value}"
+                    for name, value in os.environ.items()
+                    if (name.startswith("KRKR2_WASMTIME_GL_") or
+                        name == "KRKR2_WASMTIME_RENDERER")
+                ]
+                if gl_probe_env:
+                    launch.SetEnvironmentEntries(gl_probe_env, True)
                 launch.AddOpenFileAction(1, str(stdout_path), False, True)
                 launch.AddOpenFileAction(2, str(stderr_path), False, True)
 
