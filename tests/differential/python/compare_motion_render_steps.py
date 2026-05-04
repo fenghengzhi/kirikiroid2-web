@@ -46,6 +46,14 @@ BUILD_FLOW_FIELDS = (
     "leafBuiltCount",
     "composedBuiltCount",
 )
+EXPECTED_STAGE_KIND_SEQUENCES = {
+    "render_prepare": (
+        "prepare_enter",
+        "prepare_leave",
+        "apply_translate_enter",
+        "apply_translate_leave",
+    ),
+}
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -153,6 +161,49 @@ def _flow_digest(flow: dict[str, Any]) -> str:
 def build_flow_leaves(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [event for event in events
             if event.get("kind") == "build_commands_leave"]
+
+
+def _kind_sequence_by_frame(
+    events: list[dict[str, Any]],
+) -> dict[int, list[str]]:
+    out: dict[int, list[str]] = {}
+    for event in events:
+        frame_id = event.get("frameId")
+        kind = event.get("kind")
+        if isinstance(frame_id, int) and isinstance(kind, str):
+            out.setdefault(frame_id, []).append(kind)
+    return out
+
+
+def _compare_stage_kind_sequences(
+    oracle_events: list[dict[str, Any]],
+    wasmtime_events: list[dict[str, Any]],
+    expected: tuple[str, ...] | None = None,
+) -> tuple[int, tuple[int, str, Any, Any] | None]:
+    oracle_by_frame = _kind_sequence_by_frame(oracle_events)
+    wasmtime_by_frame = _kind_sequence_by_frame(wasmtime_events)
+    frame_ids = sorted(set(oracle_by_frame) | set(wasmtime_by_frame))
+    mismatches = 0
+    first_mismatch: tuple[int, str, Any, Any] | None = None
+    expected_list = list(expected) if expected is not None else None
+    for local_index, frame_id in enumerate(frame_ids):
+        oracle_seq = oracle_by_frame.get(frame_id, [])
+        wasmtime_seq = wasmtime_by_frame.get(frame_id, [])
+        if expected_list is not None:
+            matched = oracle_seq == expected_list and wasmtime_seq == expected_list
+        else:
+            matched = oracle_seq == wasmtime_seq
+        if matched:
+            continue
+        mismatches += 1
+        if first_mismatch is None:
+            first_mismatch = (
+                local_index,
+                "kind_sequence",
+                {"frameId": frame_id, "kinds": oracle_seq},
+                {"frameId": frame_id, "kinds": wasmtime_seq},
+            )
+    return mismatches, first_mismatch
 
 
 def execute_leaves(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -316,12 +367,20 @@ def compare_case(
     wasmtime_root: Path,
     case_id: str,
 ) -> bool:
-    oracle_build_events = build_flow_leaves(load_events(
+    oracle_prepare_events = load_events(
+        oracle_root / "events" / "render_prepare" /
+        f"{case_id}.oracle.json")
+    wasmtime_prepare_events = load_events(
+        wasmtime_root / "events" / "render_prepare" /
+        f"{case_id}.wasmtime.json")
+    oracle_command_events = load_events(
         oracle_root / "events" / "render_commands" /
-        f"{case_id}.oracle.json"))
-    wasmtime_build_events = build_flow_leaves(load_events(
+        f"{case_id}.oracle.json")
+    wasmtime_command_events = load_events(
         wasmtime_root / "events" / "render_commands" /
-        f"{case_id}.wasmtime.json"))
+        f"{case_id}.wasmtime.json")
+    oracle_build_events = build_flow_leaves(oracle_command_events)
+    wasmtime_build_events = build_flow_leaves(wasmtime_command_events)
     oracle_execute = execute_leaves(load_events(
         oracle_root / "events" / "render_execute" /
         f"{case_id}.oracle.json"))
@@ -336,6 +395,8 @@ def compare_case(
         f"{case_id}.wasmtime.json"))
 
     first_mismatch: tuple[int, str, str, Any, Any] | None = None
+    render_prepare_shape_mismatches = 0
+    render_commands_shape_mismatches = 0
     build_flow_mismatches = 0
     execute_pre_mismatches = 0
     execute_post_mismatches = 0
@@ -361,6 +422,22 @@ def compare_case(
         for event in wasmtime_execute
         for field in checkpoint_fields
     )
+
+    for stage, oracle_events, wasmtime_events in (
+        ("render_prepare", oracle_prepare_events, wasmtime_prepare_events),
+        ("render_commands", oracle_command_events, wasmtime_command_events),
+    ):
+        mismatch_count, stage_first = _compare_stage_kind_sequences(
+            oracle_events, wasmtime_events,
+            EXPECTED_STAGE_KIND_SEQUENCES.get(stage))
+        if stage == "render_prepare":
+            render_prepare_shape_mismatches = mismatch_count
+        else:
+            render_commands_shape_mismatches = mismatch_count
+        if stage_first is not None and first_mismatch is None:
+            index, field, oracle_value, wasmtime_value = stage_first
+            first_mismatch = (
+                index, stage, field, oracle_value, wasmtime_value)
 
     frame_count = max(
         len(oracle_build_events),
@@ -529,7 +606,10 @@ def compare_case(
             f"wasmtime={_value_summary(wasmtime_value)}")
 
     print(
-        f"{case_id}: summary build_flow_mismatch={build_flow_mismatches} "
+        f"{case_id}: summary "
+        f"render_prepare_shape_mismatch={render_prepare_shape_mismatches} "
+        f"render_commands_shape_mismatch={render_commands_shape_mismatches} "
+        f"build_flow_mismatch={build_flow_mismatches} "
         f"execute_pre_mismatch={execute_pre_mismatches} "
         f"execute_post_mismatch={execute_post_mismatches} "
         "update_layer_after_draw_pre_mismatch="

@@ -1061,10 +1061,19 @@ namespace motion {
     }
 
     bool Player::buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderBuildCommandsEnter(
+            this, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight));
+#endif
         // Equivalent to sub_6D5164 @ 0x6D5178's `player+544` null gate —
         // the port has no explicit +544 mirror, so an absent runtime is
         // the canonical "no render list yet" signal.
         if(!_runtime) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            detail::motionTraceRenderBuildCommandsLeave(
+                this, static_cast<int>(canvasWidth),
+                static_cast<int>(canvasHeight));
+#endif
             return false;
         }
 
@@ -1238,7 +1247,12 @@ namespace motion {
             canvasWidth, canvasHeight, _runtime->preparedRenderItems.size(),
             _runtime->preparedRenderItemsTopLevel.size(),
             _runtime->preparedRenderItemsGroup.size());
-        return !_runtime->preparedRenderItems.empty();
+        const bool ok = !_runtime->preparedRenderItems.empty();
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderBuildCommandsLeave(
+            this, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight));
+#endif
+        return ok;
     }
 
     bool Player::executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
@@ -1859,14 +1873,6 @@ namespace motion {
             }
             buildItemOutput(buildItemOutput, &item);
         }
-
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderCommands(
-            this, "build_commands_leave",
-            "Player::buildRenderCommands.leave",
-            renderLayer ? static_cast<int>(renderLayer->GetWidth()) : 0,
-            renderLayer ? static_cast<int>(renderLayer->GetHeight()) : 0);
-#endif
 
         for(auto *itemPtr : _runtime->preparedRenderItemsTopLevel) {
             if(!itemPtr) {

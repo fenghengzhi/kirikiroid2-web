@@ -85,11 +85,18 @@ namespace motion::detail {
         bool _ok = false;
     };
 
-    void motionTraceRenderPreparedItems(Player *player, const char *kind,
-                                        const char *samplePoint);
-    void motionTraceRenderCommands(Player *player, const char *kind,
-                                   const char *samplePoint,
-                                   int canvasWidth, int canvasHeight);
+    void motionTraceRenderPrepareEnter(Player *player);
+    void motionTraceRenderPrepareLeave(Player *player, bool ok);
+    void motionTraceRenderApplyTranslateEnter(Player *player);
+    void motionTraceRenderApplyTranslateLeave(Player *player);
+    void motionTraceRenderBuildItemsEnter(Player *player);
+    void motionTraceRenderBuildItemsLeave(Player *player);
+    void motionTraceRenderBuildCommandsEnter(Player *player,
+                                             int canvasWidth,
+                                             int canvasHeight);
+    void motionTraceRenderBuildCommandsLeave(Player *player,
+                                             int canvasWidth,
+                                             int canvasHeight);
     void motionTraceRenderImageCheckpoint(Player *player,
                                           void *renderLayerObject,
                                           const char *phase,

@@ -303,6 +303,11 @@ motion::Player *renderPlayerFor(motion::Player *player) {
     return state.lastCompletedTopPlayer;
 }
 
+bool isCurrentRenderPlayer(motion::Player *player) {
+    auto &state = traceState();
+    return state.inRender && player && state.currentRenderPlayer == player;
+}
+
 void appendRenderEvent(motion::Player *player,
                        const char *stage,
                        const char *kind,
@@ -357,8 +362,9 @@ void appendPreparedItemJson(
     std::string &out,
     const motion::detail::PlayerRuntime *runtime,
     const motion::detail::PlayerRuntime::PreparedRenderItem &item,
-    size_t index) {
-    if(index) out.push_back(',');
+    size_t index,
+    bool prependComma) {
+    if(prependComma) out.push_back(',');
     out += "{\"index\":";
     out += std::to_string(index);
     out += ",\"nodeIndex\":";
@@ -441,7 +447,7 @@ void appendPreparedItemList(std::string &out,
             if(emitted >= kLimit) {
                 break;
             }
-            appendPreparedItemJson(out, runtime, item, i);
+            appendPreparedItemJson(out, runtime, item, i, emitted > 0);
             ++emitted;
         }
     }
@@ -457,13 +463,121 @@ void appendPreparedItemsPayload(std::string &out,
     out += ",\"preparedItems\":[";
     const size_t n = std::min(count, kLimit);
     for(size_t i = 0; i < n; ++i) {
-        appendPreparedItemJson(out, runtime, runtime->preparedRenderItems[i], i);
+        appendPreparedItemJson(out, runtime, runtime->preparedRenderItems[i],
+                               i, i > 0);
     }
     out.push_back(']');
     if(count > n) {
         out += ",\"preparedItemsTruncated\":";
         out += std::to_string(count - n);
     }
+}
+
+void appendRenderListHeader(std::string &out,
+                            const void *vectorPtr,
+                            const void *beginPtr,
+                            const void *endPtr,
+                            size_t count) {
+    out += "{\"vector\":";
+    out += ptrHex(vectorPtr);
+    out += ",\"begin\":";
+    out += ptrHex(beginPtr);
+    out += ",\"end\":";
+    out += ptrHex(endPtr);
+    out += ",\"count\":";
+    out += std::to_string(count);
+    out += ",\"items\":[";
+}
+
+void appendEmptyRenderList(std::string &out) {
+    appendRenderListHeader(out, nullptr, nullptr, nullptr, 0);
+    out += "]}";
+}
+
+void appendPreparedVectorRenderList(
+    std::string &out,
+    const motion::detail::PlayerRuntime *runtime) {
+    constexpr size_t kLimit = 256;
+    const auto *items = runtime ? &runtime->preparedRenderItems : nullptr;
+    const size_t count = items ? items->size() : 0;
+    const void *beginPtr = count ? static_cast<const void *>(items->data()) : nullptr;
+    const void *endPtr = count
+        ? static_cast<const void *>(items->data() + items->size())
+        : nullptr;
+    appendRenderListHeader(out, items, beginPtr, endPtr, count);
+    if(items) {
+        const size_t n = std::min(count, kLimit);
+        for(size_t i = 0; i < n; ++i) {
+            appendPreparedItemJson(out, runtime, (*items)[i], i, i > 0);
+        }
+        out.push_back(']');
+        if(count > n) {
+            out += ",\"itemsTruncated\":";
+            out += std::to_string(count - n);
+        }
+        out.push_back('}');
+        return;
+    }
+    out += "]}";
+}
+
+void appendPreparedPointerRenderList(
+    std::string &out,
+    const motion::detail::PlayerRuntime *runtime,
+    const std::vector<motion::detail::PlayerRuntime::PreparedRenderItem *> *items) {
+    constexpr size_t kLimit = 256;
+    const size_t count = items ? items->size() : 0;
+    const void *beginPtr = count ? static_cast<const void *>(items->data()) : nullptr;
+    const void *endPtr = count
+        ? static_cast<const void *>(items->data() + items->size())
+        : nullptr;
+    appendRenderListHeader(out, items, beginPtr, endPtr, count);
+    if(items) {
+        const size_t n = std::min(count, kLimit);
+        size_t emitted = 0;
+        for(size_t i = 0; i < n; ++i) {
+            const auto *item = (*items)[i];
+            if(!item) continue;
+            const int preparedIndex = preparedIndexFor(runtime, item);
+            appendPreparedItemJson(
+                out, runtime, *item,
+                preparedIndex >= 0 ? static_cast<size_t>(preparedIndex) : i,
+                emitted > 0);
+            ++emitted;
+        }
+        out.push_back(']');
+        if(count > n) {
+            out += ",\"itemsTruncated\":";
+            out += std::to_string(count - n);
+        }
+        out.push_back('}');
+        return;
+    }
+    out += "]}";
+}
+
+void appendPreparedRenderListsPayload(
+    std::string &out,
+    const motion::detail::PlayerRuntime *runtime) {
+    out += "\"renderLists\":{\"mainList\":";
+    appendPreparedVectorRenderList(out, runtime);
+    out += ",\"auxList\":";
+    appendEmptyRenderList(out);
+    out.push_back('}');
+}
+
+void appendCommandRenderListsPayload(
+    std::string &out,
+    const motion::detail::PlayerRuntime *runtime) {
+    out += "\"renderLists\":{\"mainList\":";
+    appendPreparedPointerRenderList(
+        out, runtime,
+        runtime ? &runtime->preparedRenderItemsTopLevel : nullptr);
+    out += ",\"auxList\":";
+    appendPreparedPointerRenderList(
+        out, runtime,
+        runtime ? &runtime->preparedRenderItemsGroup : nullptr);
+    out.push_back('}');
 }
 
 void appendRenderItemsPayload(std::string &out,
@@ -1100,23 +1214,89 @@ void MotionTraceRenderExecuteScope::setResult(bool ok) {
     _ok = ok;
 }
 
-void motionTraceRenderPreparedItems(Player *player, const char *kind,
-                                    const char *samplePoint) {
+void motionTraceRenderPrepareEnter(Player *player) {
+    if(!isCurrentRenderPlayer(player)) return;
+    std::string diagnostics = playerDiagnostics(player);
+    appendRenderEvent(player, "render_prepare", "prepare_enter",
+                      "Player::prepareRenderItems.enter", "", diagnostics);
+}
+
+void motionTraceRenderPrepareLeave(Player *player, bool ok) {
+    if(!isCurrentRenderPlayer(player)) return;
     const auto *runtime = player ? player->runtime() : nullptr;
     std::string payload;
-    appendPreparedItemsPayload(payload, runtime);
+    payload += "\"ok\":";
+    payload += ok ? "1" : "0";
+    payload.push_back(',');
+    appendPreparedRenderListsPayload(payload, runtime);
     std::string diagnostics = playerDiagnostics(player);
-    appendRenderEvent(player, "render_prepare",
-                      kind ? kind : "prepared_items",
-                      samplePoint ? samplePoint : "Player::prepareRenderItems",
+    appendRenderEvent(player, "render_prepare", "prepare_leave",
+                      "Player::prepareRenderItems.leave", payload,
+                      diagnostics);
+}
+
+void motionTraceRenderApplyTranslateEnter(Player *player) {
+    if(!isCurrentRenderPlayer(player)) return;
+    std::string diagnostics = playerDiagnostics(player);
+    appendRenderEvent(player, "render_prepare", "apply_translate_enter",
+                      "Player::applyPreparedRenderItemTranslateOffsets.enter",
+                      "", diagnostics);
+}
+
+void motionTraceRenderApplyTranslateLeave(Player *player) {
+    if(!isCurrentRenderPlayer(player)) return;
+    const auto *runtime = player ? player->runtime() : nullptr;
+    std::string payload;
+    appendPreparedRenderListsPayload(payload, runtime);
+    std::string diagnostics = playerDiagnostics(player);
+    appendRenderEvent(player, "render_prepare", "apply_translate_leave",
+                      "Player::applyPreparedRenderItemTranslateOffsets.leave",
                       payload, diagnostics);
 }
 
-void motionTraceRenderCommands(Player *player, const char *kind,
-                               const char *samplePoint,
-                               int canvasWidth, int canvasHeight) {
+void motionTraceRenderBuildItemsEnter(Player *player) {
+    std::string diagnostics = playerDiagnostics(player);
+    appendRenderEvent(player, "render_commands", "build_items_enter",
+                      "Player::buildPreparedRenderItems.enter", "",
+                      diagnostics);
+}
+
+void motionTraceRenderBuildItemsLeave(Player *player) {
     const auto *runtime = player ? player->runtime() : nullptr;
     std::string payload;
+    appendPreparedRenderListsPayload(payload, runtime);
+    std::string diagnostics = playerDiagnostics(player);
+    appendRenderEvent(player, "render_commands", "build_items_leave",
+                      "Player::buildPreparedRenderItems.leave", payload,
+                      diagnostics);
+}
+
+void motionTraceRenderBuildCommandsEnter(Player *player,
+                                         int canvasWidth,
+                                         int canvasHeight) {
+    if(!isCurrentRenderPlayer(player)) return;
+    const auto *runtime = player ? player->runtime() : nullptr;
+    std::string payload;
+    appendPreparedRenderListsPayload(payload, runtime);
+    payload += ",\"canvas\":{\"width\":";
+    payload += std::to_string(canvasWidth);
+    payload += ",\"height\":";
+    payload += std::to_string(canvasHeight);
+    payload += "}";
+    std::string diagnostics = playerDiagnostics(player);
+    appendRenderEvent(player, "render_commands", "build_commands_enter",
+                      "Player::buildRenderCommands.enter", payload,
+                      diagnostics);
+}
+
+void motionTraceRenderBuildCommandsLeave(Player *player,
+                                         int canvasWidth,
+                                         int canvasHeight) {
+    if(!isCurrentRenderPlayer(player)) return;
+    const auto *runtime = player ? player->runtime() : nullptr;
+    std::string payload;
+    appendCommandRenderListsPayload(payload, runtime);
+    payload.push_back(',');
     appendRenderItemsPayload(payload, runtime);
     payload += ",\"canvas\":{\"width\":";
     payload += std::to_string(canvasWidth);
@@ -1124,10 +1304,9 @@ void motionTraceRenderCommands(Player *player, const char *kind,
     payload += std::to_string(canvasHeight);
     payload += "}";
     std::string diagnostics = playerDiagnostics(player);
-    appendRenderEvent(player, "render_commands",
-                      kind ? kind : "render_commands_ready",
-                      samplePoint ? samplePoint : "Player::buildRenderCommands.leave",
-                      payload, diagnostics);
+    appendRenderEvent(player, "render_commands", "build_commands_leave",
+                      "Player::buildRenderCommands.leave", payload,
+                      diagnostics);
 }
 
 void motionTraceRenderImageCheckpoint(Player *player,

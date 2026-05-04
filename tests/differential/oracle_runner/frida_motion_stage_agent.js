@@ -155,8 +155,7 @@ let saveLayerVisualReadbackFrameCount = 1;
 let activeSaveLayerImageContexts = [];
 let activePngSaveContexts = [];
 let nativeInstanceSupportCache = {};
-let bitmapBufferFunctionCache = {};
-let bitmapPitchFunctionCache = {};
+let bitmapGetScanLineFunctionCache = {};
 
 function ensureBase() {
     if (base !== null) return base;
@@ -384,44 +383,40 @@ function readNativeLayerImageSnapshot(nativeLayer, layerObject) {
         }
         const vtable = bitmapImpl.readPointer();
         diagnostics.vtable = ptrHex(vtable);
-        const bufferFn = getCachedNativeFunction(
-            bitmapBufferFunctionCache,
-            vtable.add(56).readPointer(),
-            'pointer', ['pointer']);
-        const pitchFn = getCachedNativeFunction(
-            bitmapPitchFunctionCache,
-            vtable.add(80).readPointer(),
-            'int', ['pointer']);
-        const buffer = bufferFn(bitmapImpl);
-        const pitch = pitchFn(bitmapImpl);
-        diagnostics.buffer = ptrHex(buffer);
-        diagnostics.pitch = pitch;
-        if (!buffer || buffer.isNull()) {
-            return {
-                ok: false,
-                error: 'bitmap buffer is null',
-                diagnostics: diagnostics,
-            };
-        }
-        if (!pitch || pitch < width * 4 || pitch > width * 16) {
-            return {
-                ok: false,
-                error: 'invalid bitmap pitch',
-                width: width,
-                height: height,
-                pitch: pitch,
-                diagnostics: diagnostics,
-            };
-        }
+        const getScanLinePtr = ensureBase().add(BITMAP_GET_SCANLINE_OFF);
+        const getScanLineFn = getCachedNativeFunction(
+            bitmapGetScanLineFunctionCache,
+            getScanLinePtr,
+            'pointer', ['pointer', 'uint']);
+        const pitch = width * 4;
         const packedSize = width * height * 4;
+        diagnostics.captureMethod = 'bitmap-get-scanline';
+        diagnostics.getScanLineFunction = ptrHex(getScanLinePtr);
+        diagnostics.pitch = pitch;
         diagnostics.packedSize = packedSize;
         const packed = Memory.alloc(packedSize);
         for (let y = 0; y < height; y++) {
+            diagnostics.currentRow = y;
+            const row = getScanLineFn(mainImage, y);
+            diagnostics.rowPtr = ptrHex(row);
+            if (!row || row.isNull()) {
+                diagnostics.failedRow = y;
+                return {
+                    ok: false,
+                    error: 'bitmap scanline is null',
+                    width: width,
+                    height: height,
+                    pitch: pitch,
+                    diagnostics: diagnostics,
+                };
+            }
             Memory.copy(
                 packed.add(y * width * 4),
-                buffer.add(y * pitch),
+                row,
                 width * 4);
         }
+        delete diagnostics.currentRow;
+        delete diagnostics.rowPtr;
         return {
             ok: true,
             width: width,

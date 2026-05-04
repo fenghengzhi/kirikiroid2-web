@@ -791,7 +791,13 @@ namespace motion {
     }
 
     bool Player::prepareRenderItems(bool inheritedFlag18) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderPrepareEnter(this);
+#endif
         if(!_runtime) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            detail::motionTraceRenderPrepareLeave(this, false);
+#endif
             return false;
         }
 
@@ -802,6 +808,9 @@ namespace motion {
             _runtime->activeMotion ? _runtime->activeMotion->path
                                    : std::string{};
 
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderBuildItemsEnter(this);
+#endif
         appendPreparedRenderItems();
         std::vector<double> beforeSortKeys;
         beforeSortKeys.reserve(_runtime->preparedRenderItems.size());
@@ -934,6 +943,9 @@ namespace motion {
             }
             entry.parentItem = it->second;
         }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderBuildItemsLeave(this);
+#endif
 
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&
@@ -958,16 +970,22 @@ namespace motion {
                     item.objTriPriority);
             }
         }
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderPreparedItems(
-            this, "prepare_leave", "Player::prepareRenderItems.leave");
-#endif
         _renderItemInheritedFlag18 = savedInheritedFlag18;
-        return !_runtime->preparedRenderItems.empty();
+        const bool ok = !_runtime->preparedRenderItems.empty();
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderPrepareLeave(this, ok);
+#endif
+        return ok;
     }
 
     void Player::applyPreparedRenderItemTranslateOffsets() {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderApplyTranslateEnter(this);
+#endif
         if(!_runtime) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            detail::motionTraceRenderApplyTranslateLeave(this);
+#endif
             return;
         }
 
@@ -1070,9 +1088,7 @@ namespace motion {
             }
         }
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderPreparedItems(
-            this, "apply_translate_leave",
-            "Player::applyPreparedRenderItemTranslateOffsets.leave");
+        detail::motionTraceRenderApplyTranslateLeave(this);
 #endif
     }
 
