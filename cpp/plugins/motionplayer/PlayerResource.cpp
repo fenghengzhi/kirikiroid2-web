@@ -2,6 +2,7 @@
 // Split from Player.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "SourceCache.h"
 
 using namespace motion::internal;
 
@@ -28,19 +29,16 @@ namespace motion {
             }
         }
 
-        for(auto it = _runtime->sourcesByKey.begin();
-            it != _runtime->sourcesByKey.end();) {
-            if(it->first == key) {
-                it = _runtime->sourcesByKey.erase(it);
-            } else {
-                ++it;
-            }
+        if(_runtime->sourceCacheNative) {
+            _runtime->sourceCacheNative->eraseSource(name);
         }
     }
 
     void Player::unloadAll() {
         _runtime->motionsByKey.clear();
-        _runtime->sourcesByKey.clear();
+        if(_runtime->sourceCacheNative) {
+            _runtime->sourceCacheNative->clearCache();
+        }
         _runtime->activeMotion.reset();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();

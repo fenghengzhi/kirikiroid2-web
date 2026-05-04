@@ -5,6 +5,7 @@
 #include "BitmapIntf.h"
 #include "ConfigManager/IndividualConfigManager.h"
 #include "MotionTraceWeb.h"
+#include "SourceCache.h"
 
 using namespace motion::internal;
 
@@ -32,7 +33,21 @@ namespace {
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
 
+    bool getLayerClassDispatchVariantLike_0x5CB08C(tTJSVariant &layerClassVar) {
+        iTJSDispatch2 *global = TVPGetScriptDispatch();
+        if(!global) {
+            return false;
+        }
+        const bool ok = TJS_SUCCEEDED(global->PropGet(
+            0, TJS_W("Layer"), nullptr, &layerClassVar, global)) &&
+            layerClassVar.Type() == tvtObject &&
+            layerClassVar.AsObjectNoAddRef();
+        global->Release();
+        return ok;
+    }
+
     tjs_error callLayerOperateAffineLike_0x6C7440(
+        const tTJSVariant &layerClassObject,
         iTJSDispatch2 *renderLayerObject,
         const tTVPPointD *points,
         const tTJSVariant &sourceObject,
@@ -40,7 +55,9 @@ namespace {
         tTVPBlendOperationMode blendMode,
         tjs_int opacity,
         tTVPBBStretchType type) {
-        if(!renderLayerObject || !points) {
+        if(!renderLayerObject || !points ||
+           layerClassObject.Type() != tvtObject ||
+           !layerClassObject.AsObjectNoAddRef()) {
             return TJS_E_FAIL;
         }
         if(sourceObject.Type() != tvtObject ||
@@ -71,21 +88,11 @@ namespace {
         };
 
         static tjs_uint32 operateAffineHint = 0;
-        // Matches libkrkr2.so 0x6C7440 FuncCall("operateAffine") dispatch shape.
-        return renderLayerObject->FuncCall(
+        // libkrkr2.so 0x6C7440 dispatches through the Layer class object and
+        // passes the render layer only as objthis.
+        return layerClassObject.AsObjectNoAddRef()->FuncCall(
             0, TJS_W("operateAffine"), &operateAffineHint, nullptr, 15, args,
             renderLayerObject);
-    }
-
-    bool packedColorsAreDefault(std::uint32_t c0, std::uint32_t c1,
-                                std::uint32_t c2, std::uint32_t c3) {
-        return c0 == 0xFF808080u && c1 == 0xFF808080u && c2 == 0xFF808080u &&
-            c3 == 0xFF808080u;
-    }
-
-    bool packedColorsAreOpaqueWhite(std::uint32_t c0, std::uint32_t c1,
-                                    std::uint32_t c2, std::uint32_t c3) {
-        return (c0 & c1 & c2 & c3) == 0xFFFFFFFFu;
     }
 
     std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor) {
@@ -95,97 +102,6 @@ namespace {
             static_cast<int>((packedColor >> 16) & 0xFFu),
             static_cast<int>((packedColor >> 24) & 0xFFu),
         };
-    }
-
-    std::shared_ptr<tTVPBaseBitmap> cloneBitmap32(const tTVPBaseBitmap &src) {
-        auto copy = std::make_shared<tTVPBaseBitmap>(
-            static_cast<tjs_uint>(src.GetWidth()),
-            static_cast<tjs_uint>(src.GetHeight()), 32);
-        for(tjs_uint y = 0; y < src.GetHeight(); ++y) {
-            const auto *srcRow = static_cast<const std::uint8_t *>(
-                src.GetScanLine(y));
-            auto *dstRow = static_cast<std::uint8_t *>(
-                copy->GetScanLineForWrite(y));
-            std::memcpy(dstRow, srcRow,
-                        static_cast<size_t>(src.GetWidth()) * 4u);
-        }
-        return copy;
-    }
-
-    void applyPackedCornerTintLike_0x6A7518(
-        tTVPBaseBitmap &bitmap,
-        const std::array<std::uint32_t, 4> &packedColors,
-        bool halfAlphaBlend) {
-        const auto c0 = packedColors[0];
-        const auto c1 = packedColors[1];
-        const auto c2 = packedColors[2];
-        const auto c3 = packedColors[3];
-        if(packedColorsAreDefault(c0, c1, c2, c3) ||
-           packedColorsAreOpaqueWhite(c0, c1, c2, c3)) {
-            return;
-        }
-
-        const auto topLeft = unpackPackedRgba(c0);
-        const auto topRight = unpackPackedRgba(c1);
-        const auto bottomRight = unpackPackedRgba(c2);
-        const auto bottomLeft = unpackPackedRgba(c3);
-        const int width = static_cast<int>(bitmap.GetWidth());
-        const int height = static_cast<int>(bitmap.GetHeight());
-        if(width <= 0 || height <= 0) {
-            return;
-        }
-
-        const int colorDivisor = halfAlphaBlend ? 128 : 255;
-        const int spanX = std::max(width - 1, 1);
-        const int spanY = std::max(height - 1, 1);
-        const auto lerpChannel = [](int a, int b, int pos, int span) -> int {
-            if(span <= 0) {
-                return a;
-            }
-            return a + (pos * (b - a)) / span;
-        };
-
-        for(int y = 0; y < height; ++y) {
-            auto *row = static_cast<std::uint8_t *>(
-                bitmap.GetScanLineForWrite(static_cast<tjs_uint>(y)));
-            const int rowLeftR =
-                lerpChannel(topLeft[0], bottomLeft[0], y, spanY);
-            const int rowLeftG =
-                lerpChannel(topLeft[1], bottomLeft[1], y, spanY);
-            const int rowLeftB =
-                lerpChannel(topLeft[2], bottomLeft[2], y, spanY);
-            const int rowLeftA =
-                lerpChannel(topLeft[3], bottomLeft[3], y, spanY);
-            const int rowRightR =
-                lerpChannel(topRight[0], bottomRight[0], y, spanY);
-            const int rowRightG =
-                lerpChannel(topRight[1], bottomRight[1], y, spanY);
-            const int rowRightB =
-                lerpChannel(topRight[2], bottomRight[2], y, spanY);
-            const int rowRightA =
-                lerpChannel(topRight[3], bottomRight[3], y, spanY);
-
-            for(int x = 0; x < width; ++x) {
-                auto *dst = row + static_cast<size_t>(x) * 4u;
-                const int tintR =
-                    lerpChannel(rowLeftR, rowRightR, x, spanX);
-                const int tintG =
-                    lerpChannel(rowLeftG, rowRightG, x, spanX);
-                const int tintB =
-                    lerpChannel(rowLeftB, rowRightB, x, spanX);
-                const int tintA =
-                    lerpChannel(rowLeftA, rowRightA, x, spanX);
-                dst[2] = static_cast<std::uint8_t>(std::min(
-                    255, tintR * static_cast<int>(dst[2]) / colorDivisor));
-                dst[1] = static_cast<std::uint8_t>(std::min(
-                    255, tintG * static_cast<int>(dst[1]) / colorDivisor));
-                dst[0] = static_cast<std::uint8_t>(std::min(
-                    255, tintB * static_cast<int>(dst[0]) / colorDivisor));
-                dst[3] = static_cast<std::uint8_t>(std::min(
-                    255, tintA * static_cast<int>(dst[3]) / 255));
-    }
-
-}
     }
 
     iTJSDispatch2 *resolveLayerTreeOwnerObject(iTJSDispatch2 *object) {
@@ -359,18 +275,10 @@ namespace {
             return nullptr;
         }
 
-        iTJSDispatch2 *global = TVPGetScriptDispatch();
-        if(!global) {
-            return nullptr;
-        }
-
         tTJSVariant layerClassVar;
         iTJSDispatch2 *created = nullptr;
         const bool haveLayerClass =
-            TJS_SUCCEEDED(global->PropGet(
-                0, TJS_W("Layer"), nullptr, &layerClassVar, global))
-            && layerClassVar.Type() == tvtObject
-            && layerClassVar.AsObjectNoAddRef();
+            getLayerClassDispatchVariantLike_0x5CB08C(layerClassVar);
         if(haveLayerClass) {
             tTJSVariant ownerVar(layerTreeOwnerObject, layerTreeOwnerObject);
             tTJSVariant parentVar =
@@ -384,7 +292,6 @@ namespace {
             }
         }
 
-        global->Release();
         return created;
     }
 
@@ -498,25 +405,6 @@ namespace {
         layer->SetClip(0, 0, width, height);
         tTVPRect rect(0, 0, width, height);
         layer->FillRect(rect, clearColor);
-        return true;
-    }
-
-    bool prepareSourceLayerForOperateAffineLike_0x6948E8(
-        tTJSNI_BaseLayer *sourceLayer,
-        const iTVPBaseBitmap &src) {
-        if(!sourceLayer || src.GetWidth() <= 0 || src.GetHeight() <= 0) {
-            return false;
-        }
-
-        // Matches libkrkr2.so 0x6948E8/0x6C7440 source-object dispatch shape.
-        if(!sourceLayer->GetHasImage()) {
-            sourceLayer->SetHasImage(true);
-        }
-        sourceLayer->SetType(ltAlpha);
-        sourceLayer->AssignMainImageWithUpdate(
-            const_cast<iTVPBaseBitmap *>(&src));
-        sourceLayer->SetSize(src.GetWidth(), src.GetHeight());
-        sourceLayer->SetClip(0, 0, src.GetWidth(), src.GetHeight());
         return true;
     }
 
@@ -1195,7 +1083,11 @@ namespace motion {
 
     void Player::setResizable(bool v) { _runtime->resizable = v; }
 
-    void Player::removeAllTextures() { _runtime->sourcesByKey.clear(); }
+    void Player::removeAllTextures() {
+        if(_runtime && _runtime->sourceCacheNative) {
+            _runtime->sourceCacheNative->clearCache();
+        }
+    }
 
     void Player::removeAllBg() { _runtime->backgrounds.clear(); }
 
@@ -1687,158 +1579,58 @@ namespace motion {
         }
 
         using PreparedRenderItem = detail::PlayerRuntime::PreparedRenderItem;
-        std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
-            baseSourceCache;
-        std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
-            preparedSourceCache;
-        tTJSVariant directOperateAffineSourceLayer;
-        auto resolveBaseSourceBitmap =
-            [&](const PreparedRenderItem &item)
-                -> std::shared_ptr<tTVPBaseBitmap> {
-            if(item.sourceKey.empty()) {
-                return nullptr;
-            }
-            if(auto it = baseSourceCache.find(item.sourceKey);
-               it != baseSourceCache.end()) {
-                return it->second;
-            }
+        tTJSVariant layerClassObject;
+        if(!getLayerClassDispatchVariantLike_0x5CB08C(layerClassObject)) {
+            detail::logoChainTraceCheck(
+                motionPath, "execute.layerClass", "0x6C7440", _clampedEvalTime,
+                "Layer class dispatch should resolve before operateAffine",
+                "global.Layer unavailable", false,
+                "sub_6C7440 could not resolve Layer class dispatch");
+            return false;
+        }
 
-            std::shared_ptr<tTVPBaseBitmap> srcBmp;
-            std::string sourceOrigin("unresolved");
-            const auto resolvedPath =
-                resolveMotionSourcePath(*_runtime->activeMotion, item.sourceKey);
-            if(!resolvedPath.IsEmpty()) {
-                ttstr loadPath = resolvedPath;
-                const auto pathString = detail::narrow(resolvedPath);
-                if(pathString.rfind('.') == std::string::npos ||
-                   pathString.rfind('.') < pathString.rfind('/')) {
-                    loadPath = resolvedPath + TJS_W(".png");
-                }
-                try {
-                    auto bmp = std::make_shared<tTVPBaseBitmap>(1, 1, 32);
-                    TVPLoadGraphic(bmp.get(), loadPath, TVP_clNone, 0, 0,
-                                   glmNormal, nullptr, nullptr);
-                    if(bmp->GetWidth() > 0 && bmp->GetHeight() > 0) {
-                        srcBmp = bmp;
-                        sourceOrigin = detail::narrow(loadPath);
-                    }
-                } catch(...) {
-                }
-            }
-
-            if(!srcBmp) {
-                int width = 0;
-                int height = 0;
-                double originX = 0.0;
-                double originY = 0.0;
-                std::vector<std::uint8_t> decodedPixels;
-                bool decodedPixelsAreBgra = false;
-                const auto *resource = findPSBResourceBySourceName(
-                    *_runtime->activeMotion, item.sourceKey, width, height,
-                    decodedPixels, originX, originY, &decodedPixelsAreBgra);
-                if(resource && width > 0 && height > 0 && !resource->data.empty()) {
-                    const auto &pixelData =
-                        decodedPixels.empty() ? resource->data : decodedPixels;
-                    auto bmp = std::make_shared<tTVPBaseBitmap>(
-                        static_cast<tjs_uint>(width),
-                        static_cast<tjs_uint>(height), 32);
-                    tTVPRect fillRect(0, 0, width, height);
-                    bmp->Fill(fillRect, 0x00000000);
-                    const auto *src = pixelData.data();
-                    for(int y = 0; y < height; ++y) {
-                        auto *row = static_cast<std::uint8_t *>(
-                            bmp->GetScanLineForWrite(static_cast<tjs_uint>(y)));
-                        for(int x = 0; x < width; ++x) {
-                            const size_t sourceIndex =
-                                (static_cast<size_t>(y) * width + x) * 4u;
-                            if(sourceIndex + 3 >= pixelData.size()) {
-                                break;
-                            }
-                            auto *dst = row + x * 4;
-                            if(decodedPixelsAreBgra) {
-                                dst[0] = src[sourceIndex + 0];
-                                dst[1] = src[sourceIndex + 1];
-                                dst[2] = src[sourceIndex + 2];
-                            } else {
-                                dst[0] = src[sourceIndex + 2];
-                                dst[1] = src[sourceIndex + 1];
-                                dst[2] = src[sourceIndex + 0];
-                            }
-                            dst[3] = src[sourceIndex + 3];
-                        }
-                    }
-                    srcBmp = bmp;
-                    sourceOrigin = fmt::format(
-                        "psb:{}:{}x{}:origin=({:.3f},{:.3f}):bgra={}",
-                        item.sourceKey, width, height, originX, originY,
-                        decodedPixelsAreBgra ? 1 : 0);
-                }
-            }
-
-            detail::logoChainTraceLogf(
-                motionPath, "execute.source", "0x6C7440", _clampedEvalTime,
-                "source={} resolve={} bitmap={}x{}",
-                item.sourceKey.empty() ? std::string("<none>")
-                                       : item.sourceKey,
-                sourceOrigin,
-                srcBmp ? srcBmp->GetWidth() : 0,
-                srcBmp ? srcBmp->GetHeight() : 0);
-
-            baseSourceCache.emplace(item.sourceKey, srcBmp);
-            return srcBmp;
+        struct ResolvedSourceObject {
+            tTJSVariant object;
+            iTJSDispatch2 *layerObject = nullptr;
+            tTJSNI_BaseLayer *layer = nullptr;
+            iTVPBaseBitmap *image = nullptr;
+            tjs_int width = 0;
+            tjs_int height = 0;
         };
-        auto resolveSourceBitmap =
-            [&](const PreparedRenderItem &item)
-                -> std::shared_ptr<tTVPBaseBitmap> {
-            if(item.sourceKey.empty()) {
-                return nullptr;
+
+        auto resolveSourceObjectLike_0x6C1B70 =
+            [&](const PreparedRenderItem &item) -> ResolvedSourceObject {
+            ResolvedSourceObject resolved;
+            if(item.sourceKey.empty() || !_runtime->sourceCacheNative) {
+                return resolved;
             }
 
-            const bool useHalfAlphaTint =
-                (item.blendMode & 0xF0) == 0x10;
-            const auto tintKey = fmt::format(
-                "{}|{:08x}|{:08x}|{:08x}|{:08x}|{}",
-                item.sourceKey, item.packedColors[0],
-                item.packedColors[1], item.packedColors[2],
-                item.packedColors[3], useHalfAlphaTint ? 1 : 0);
-            if(auto it = preparedSourceCache.find(tintKey);
-               it != preparedSourceCache.end()) {
-                return it->second;
+            resolved.object = _runtime->sourceCacheNative->loadRenderSourceByName(
+                detail::widen(item.sourceKey), item.srcRef, item.blendMode,
+                item.packedColors, scratchOwner, scratchParent);
+            if(resolved.object.Type() != tvtObject ||
+               !resolved.object.AsObjectNoAddRef()) {
+                return resolved;
             }
 
-            auto srcBmp = resolveBaseSourceBitmap(item);
-            if(!srcBmp) {
-                preparedSourceCache.emplace(tintKey, nullptr);
-                return nullptr;
+            resolved.layerObject = resolved.object.AsObjectNoAddRef();
+            resolved.layer = resolveNativeLayer(resolved.layerObject);
+            resolved.image = resolved.layer ? resolved.layer->GetMainImage()
+                                            : nullptr;
+            if(resolved.image) {
+                resolved.width = static_cast<tjs_int>(resolved.image->GetWidth());
+                resolved.height = static_cast<tjs_int>(resolved.image->GetHeight());
             }
 
-            const bool needsTint =
-                !packedColorsAreDefault(item.packedColors[0],
-                                        item.packedColors[1],
-                                        item.packedColors[2],
-                                        item.packedColors[3]) &&
-                !packedColorsAreOpaqueWhite(item.packedColors[0],
-                                            item.packedColors[1],
-                                            item.packedColors[2],
-                                            item.packedColors[3]);
-            if(!needsTint) {
-                preparedSourceCache.emplace(tintKey, srcBmp);
-                return srcBmp;
-            }
-
-            auto tinted = cloneBitmap32(*srcBmp);
-            applyPackedCornerTintLike_0x6A7518(*tinted, item.packedColors,
-                                              useHalfAlphaTint);
             detail::logoChainTraceLogf(
-                motionPath, "execute.sourceTint", "0x6C1B70/0x6A7518",
+                motionPath, "execute.source", "0x6C1B70/0x6A7BA8",
                 _clampedEvalTime,
-                "source={} halfAlphaTint={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] bitmap={}x{}",
-                item.sourceKey, useHalfAlphaTint ? 1 : 0,
-                item.packedColors[0], item.packedColors[1],
-                item.packedColors[2], item.packedColors[3],
-                tinted->GetWidth(), tinted->GetHeight());
-            preparedSourceCache.emplace(tintKey, tinted);
-            return tinted;
+                "source={} sourceObject={} nativeLayer={} image={}x{}",
+                item.sourceKey,
+                static_cast<const void *>(resolved.layerObject),
+                static_cast<const void *>(resolved.layer),
+                resolved.width, resolved.height);
+            return resolved;
         };
 
         const int playerStencilType = _maskMode;
@@ -1915,7 +1707,7 @@ namespace motion {
             [&](PreparedRenderItem &item,
                 iTJSDispatch2 *targetLayerObject,
                 tTJSNI_BaseLayer *targetLayer,
-                const std::shared_ptr<tTVPBaseBitmap> &srcBmp,
+                iTVPBaseBitmap *srcImage,
                 const tTVPRect &sourceRect,
                 const char *branch) -> bool {
             if(!targetLayerObject || !targetLayer) {
@@ -1930,7 +1722,7 @@ namespace motion {
                                       0x00000000)) {
                 return false;
             }
-            if(!srcBmp || srcBmp->GetWidth() <= 0 || srcBmp->GetHeight() <= 0) {
+            if(!srcImage || srcImage->GetWidth() <= 0 || srcImage->GetHeight() <= 0) {
                 return true;
             }
             if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
@@ -1973,7 +1765,7 @@ namespace motion {
             if(item.meshType == 0) {
                 const auto localPts =
                     buildAffineTrianglePoints(item.localCorners, 0.0f, 0.0f);
-                targetLayer->AffineCopy(localPts.data(), srcBmp.get(),
+                targetLayer->AffineCopy(localPts.data(), srcImage,
                                         sourceRect, stNearest, _clearEnabled);
             } else {
                 if(item.localMeshPoints.empty() || item.meshDivX < 2 ||
@@ -1985,12 +1777,12 @@ namespace motion {
                 if(item.meshType == 1) {
                     targetLayer->BezierPatchCopy(
                         localMeshPoints.data(), item.meshDivX,
-                        item.meshDivY, srcBmp.get(), sourceRect, stNearest,
+                        item.meshDivY, srcImage, sourceRect, stNearest,
                         _clearEnabled);
                 } else if(item.meshType == 2) {
                     targetLayer->MeshCopy(localMeshPoints.data(),
                                           item.meshDivX, item.meshDivY,
-                                          srcBmp.get(), sourceRect, stNearest,
+                                          srcImage, sourceRect, stNearest,
                                           _clearEnabled);
                 } else {
                     return false;
@@ -2061,33 +1853,33 @@ namespace motion {
                 return false;
             }
 
-            auto srcBmp = resolveSourceBitmap(item);
+            auto source = resolveSourceObjectLike_0x6C1B70(item);
             const bool hasSourceBitmap =
-                srcBmp && srcBmp->GetWidth() > 0 && srcBmp->GetHeight() > 0;
+                source.image && source.width > 0 && source.height > 0;
             if(!hasSourceBitmap && item.childItems.empty()) {
                 detail::logoChainTraceCheck(
                     motionPath, "execute.source", "0x6C7440",
                     _clampedEvalTime,
-                    "resolved bitmap should exist with positive size",
-                    fmt::format("nodeIndex={} source={} bitmap={}x{}",
+                    "resolved source object should exist with positive image size",
+                    fmt::format("nodeIndex={} source={} object={} image={}x{}",
                                 item.nodeIndex, item.sourceKey,
-                                srcBmp ? srcBmp->GetWidth() : 0,
-                                srcBmp ? srcBmp->GetHeight() : 0),
+                                static_cast<const void *>(source.layerObject),
+                                source.width, source.height),
                     false,
-                    "sub_6C7440 could not resolve a drawable source bitmap");
+                    "sub_6C1B70 could not resolve a drawable source object");
                 return false;
             }
 
             const tTVPRect sourceRect(
                 0, 0,
-                hasSourceBitmap ? static_cast<tjs_int>(srcBmp->GetWidth()) : 0,
-                hasSourceBitmap ? static_cast<tjs_int>(srcBmp->GetHeight()) : 0);
+                hasSourceBitmap ? source.width : 0,
+                hasSourceBitmap ? source.height : 0);
             if(hasSourceBitmap) {
                 detail::logoChainTraceCheck(
                     motionPath, "execute.srcRect", "0x6C7440",
                     _clampedEvalTime,
                     fmt::format("full texture rect exp=[0,0,{},{}]",
-                                srcBmp->GetWidth(), srcBmp->GetHeight()),
+                                source.width, source.height),
                     fmt::format("nodeIndex={} act=[{},{},{},{}]",
                                 item.nodeIndex, sourceRect.left,
                                 sourceRect.top, sourceRect.right,
@@ -2130,7 +1922,7 @@ namespace motion {
             }
 
             if(!renderItemSourceToLayer(item, leafLayerObject, leafLayer,
-                                        srcBmp, sourceRect,
+                                        source.image, sourceRect,
                                         "item.leaf.affineCopy")) {
                 return false;
             }
@@ -2286,14 +2078,11 @@ namespace motion {
 
             try {
                 if(item.executedDirect) {
-                    auto srcBmp = resolveSourceBitmap(item);
-                    if(!srcBmp || srcBmp->GetWidth() <= 0 ||
-                       srcBmp->GetHeight() <= 0) {
+                    auto source = resolveSourceObjectLike_0x6C1B70(item);
+                    if(!source.image || source.width <= 0 || source.height <= 0) {
                         continue;
                     }
-                    const tTVPRect sourceRect(
-                        0, 0, static_cast<tjs_int>(srcBmp->GetWidth()),
-                        static_cast<tjs_int>(srcBmp->GetHeight()));
+                    const tTVPRect sourceRect(0, 0, source.width, source.height);
                     std::string branch("direct.operateAffine");
 #if defined(KRKR2_WASMTIME_HEADLESS)
                     const auto emitDirectProbe =
@@ -2304,34 +2093,26 @@ namespace motion {
                             const char *sourceArgClass = nullptr) {
                         emitDirectExecuteDiagnostics(
                             this, samplePoint, phase, branch.c_str(),
-                            executionMethod, item, renderLayer, srcBmp,
+                            executionMethod, item, renderLayer,
+                            std::shared_ptr<tTVPBaseBitmap>{},
                             sourceArgObject, sourceArgLayer, sourceArgClass,
                             blendMode, opa, stNearest);
                     };
 #endif
                     if(item.meshType == 0) {
-                        iTJSDispatch2 *sourceLayerObject =
-                            ensureReusableLayerObject(
-                                directOperateAffineSourceLayer, scratchOwner,
-                                scratchParent, static_cast<tTVPLayerType>(ltAlpha),
-                                false);
-                        auto *sourceLayer = resolveNativeLayer(sourceLayerObject);
-                        if(!sourceLayerObject || !sourceLayer ||
-                           !prepareSourceLayerForOperateAffineLike_0x6948E8(
-                               sourceLayer, *srcBmp)) {
+                        if(!source.layerObject || !source.layer) {
                             detail::logoChainTraceCheck(
                                 motionPath, "execute.directSourceLayer",
                                 "0x6948E8/0x6C7440", _clampedEvalTime,
-                                "direct affine source should materialize as Layer",
-                                fmt::format("nodeIndex={} source={} layer={}",
+                                "direct affine source should be cached as Layer",
+                                fmt::format("nodeIndex={} source={} object={} layer={}",
                                             item.nodeIndex, item.sourceKey,
-                                            static_cast<const void *>(sourceLayer)),
+                                            static_cast<const void *>(source.layerObject),
+                                            static_cast<const void *>(source.layer)),
                                 false,
-                                "sub_6C7440 direct affine source object setup failed");
+                                "sub_6C1B70 direct affine source object setup failed");
                             continue;
                         }
-                        tTJSVariant sourceLayerArg(sourceLayerObject,
-                                                   sourceLayerObject);
                         const auto worldPts =
                             buildAffineTrianglePoints(item.corners,
                                                      -0.5f, -0.5f);
@@ -2341,12 +2122,12 @@ namespace motion {
                             "Player::executeLayerRenderCommands.direct.beforeOperateAffine",
                             "before",
                             "tjs-funcall-operateAffine",
-                            sourceLayerObject, sourceLayer, "Layer");
+                            source.layerObject, source.layer, "Layer");
 #endif
                         const tjs_error operateResult =
                             callLayerOperateAffineLike_0x6C7440(
-                                renderLayerObject, worldPts.data(),
-                                sourceLayerArg,
+                                layerClassObject, renderLayerObject,
+                                worldPts.data(), source.object,
                                 sourceRect, blendMode, opa, stNearest);
                         if(TJS_FAILED(operateResult)) {
                             detail::logoChainTraceCheck(
@@ -2364,7 +2145,7 @@ namespace motion {
                             "Player::executeLayerRenderCommands.direct.afterOperateAffine",
                             "after",
                             "tjs-funcall-operateAffine",
-                            sourceLayerObject, sourceLayer, "Layer");
+                            source.layerObject, source.layer, "Layer");
 #endif
                     } else {
                         if(item.meshPoints.empty() ||
@@ -2382,7 +2163,7 @@ namespace motion {
 #endif
                             renderLayer->OperateBezierPatch(
                                 worldMeshPoints.data(), item.meshDivX,
-                                item.meshDivY, srcBmp.get(), sourceRect,
+                                item.meshDivY, source.image, sourceRect,
                                 blendMode, opa, stNearest, _clearEnabled);
 #if defined(KRKR2_WASMTIME_HEADLESS)
                             emitDirectProbe(
@@ -2398,7 +2179,7 @@ namespace motion {
 #endif
                             renderLayer->OperateMesh(
                                 worldMeshPoints.data(), item.meshDivX,
-                                item.meshDivY, srcBmp.get(), sourceRect,
+                                item.meshDivY, source.image, sourceRect,
                                 blendMode, opa, stNearest, _clearEnabled);
 #if defined(KRKR2_WASMTIME_HEADLESS)
                             emitDirectProbe(
@@ -3029,47 +2810,22 @@ namespace motion {
     }
 
     tTJSVariant Player::findSource(ttstr name) {
-        loadSource(name);
-        const auto key = detail::narrow(name);
-        if(const auto it = _runtime->sourcesByKey.find(key);
-           it != _runtime->sourcesByKey.end()) {
-            return it->second;
+        if(!_runtime || !_runtime->sourceCacheNative) {
+            return {};
         }
-        return {};
+        return _runtime->sourceCacheNative->findSource(std::move(name));
     }
 
     void Player::loadSource(ttstr name) {
-        const auto requestKey = detail::narrow(name);
-        if(requestKey.empty() ||
-           _runtime->sourcesByKey.find(requestKey) !=
-               _runtime->sourcesByKey.end()) {
-            return;
+        if(_runtime && _runtime->sourceCacheNative) {
+            _runtime->sourceCacheNative->loadSourceByName(name, {});
         }
-
-        ttstr resolved;
-        if(!detail::resolveExistingPath(buildSourceCandidates(*_runtime, name),
-                                        resolved)) {
-            return;
-        }
-
-        const auto resolvedKey = detail::narrow(resolved);
-        if(const auto existing = _runtime->sourcesByKey.find(resolvedKey);
-           existing != _runtime->sourcesByKey.end()) {
-            _runtime->sourcesByKey.emplace(requestKey, existing->second);
-            return;
-        }
-
-        const auto source = _resourceManagerNative.load(resolved);
-        if(source.Type() == tvtVoid) {
-            return;
-        }
-
-        _runtime->sourcesByKey.emplace(requestKey, source);
-        _runtime->sourcesByKey.emplace(resolvedKey, source);
     }
 
     void Player::clearCache() {
-        _runtime->sourcesByKey.clear();
+        if(_runtime && _runtime->sourceCacheNative) {
+            _runtime->sourceCacheNative->clearCache();
+        }
         _runtime->lastCanvas.Clear();
     }
 

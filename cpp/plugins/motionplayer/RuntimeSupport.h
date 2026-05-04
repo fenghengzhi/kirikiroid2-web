@@ -20,6 +20,10 @@
 #include "psbfile/PSBFile.h"
 #include "MotionNode.h"
 
+namespace motion {
+    class SourceCache;
+}
+
 namespace motion::detail {
 
     struct VariableFrameInfo {
@@ -218,7 +222,9 @@ namespace motion::detail {
 
     struct PlayerRuntime {
         std::unordered_map<std::string, std::shared_ptr<MotionSnapshot>> motionsByKey;
-        std::unordered_map<std::string, tTJSVariant> sourcesByKey;
+        // Aligned to libkrkr2.so player+656: SourceCache object variant.
+        motion::SourceCache *sourceCacheNative = nullptr;
+        tTJSVariant sourceCacheObject;
         std::shared_ptr<MotionSnapshot> activeMotion;
         std::unordered_map<std::string, TimelineState> timelines;
         std::vector<std::string> playingTimelineLabels;

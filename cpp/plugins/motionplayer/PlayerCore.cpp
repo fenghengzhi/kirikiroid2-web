@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "PlayerInternal.h"
+#include "SourceCache.h"
 #include "ncbind.hpp"
 
 using namespace motion::internal;
@@ -185,6 +186,20 @@ namespace motion {
                    new ResourceManager(_resourceManagerNative))) {
             _resourceManager = tTJSVariant(dispatch, dispatch);
             dispatch->Release();
+        }
+        // Aligned to libkrkr2.so SourceCache constructor/owner lifetime
+        // (0x6A78F4): Player stores a TJS SourceCache object and calls through
+        // that dispatch for source resolution rather than owning a map directly.
+        using SourceCacheAdaptor = ncbInstanceAdaptor<SourceCache>;
+        auto *sourceCache = new SourceCache();
+        sourceCache->bindRuntime(_runtime.get(), &_resourceManagerNative);
+        if(auto *dispatch = SourceCacheAdaptor::CreateAdaptor(sourceCache)) {
+            _runtime->sourceCacheNative = sourceCache;
+            _runtime->sourceCacheObject = tTJSVariant(dispatch, dispatch);
+            sourceCache->setSelfObject(_runtime->sourceCacheObject);
+            dispatch->Release();
+        } else {
+            delete sourceCache;
         }
         // Aligned to sub_6A88CC (0x6A8988): create TJS Math.RandomGenerator
         // and store at player+992. Child Players inherit via sub_6CED30.
@@ -1097,7 +1112,9 @@ namespace motion {
     void Player::debugPrint() {
         LOGGER->info("motionKey={}, motions={}, sources={}, timelines={}",
                      _motionKey.AsStdString(), _runtime->motionsByKey.size(),
-                     _runtime->sourcesByKey.size(), _runtime->timelines.size());
+                     _runtime->sourceCacheNative ? _runtime->sourceCacheNative->size()
+                                                 : 0,
+                     _runtime->timelines.size());
     }
 
 

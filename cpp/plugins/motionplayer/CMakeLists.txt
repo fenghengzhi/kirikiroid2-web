@@ -14,6 +14,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     PlayerUpdateLayers.cpp
     PlayerQuery.cpp
     ResourceManager.cpp
+    SourceCache.cpp
     RuntimeSupport.cpp
     NodeTree.cpp
     MotionNodeBridge.cpp

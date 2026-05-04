@@ -24,7 +24,12 @@ using namespace motion;
 // Subclass registrations (used as Motion.XXX)
 // ============================================================
 
-NCB_REGISTER_SUBCLASS_DELAY(SourceCache) { NCB_CONSTRUCTOR(()); }
+NCB_REGISTER_SUBCLASS_DELAY(SourceCache) {
+    NCB_CONSTRUCTOR((tTJSVariant, tjs_int));
+    NCB_METHOD(loadSource);
+    NCB_METHOD(clearCache);
+    NCB_PROPERTY_RO(bufLayer, getBufLayer);
+}
 NCB_REGISTER_SUBCLASS_DELAY(ObjSource) { NCB_CONSTRUCTOR(()); }
 
 // Aligned to libkrkr2.so Motion.Point/Circle/Rect/Quad/LayerGetter (0x690FBC~0x69B350)

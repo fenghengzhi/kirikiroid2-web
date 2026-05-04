@@ -7,18 +7,116 @@
 //
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <list>
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "tjs.h"
+
+class iTVPBaseBitmap;
+class tTVPBaseBitmap;
 
 namespace motion {
 
+    class ResourceManager;
+
+    namespace detail {
+        struct PlayerRuntime;
+    }
+
+    // Aligned to libkrkr2.so SourceCache:
+    //   0x6A78F4 constructor stores owner/primaryLayer/bufLayer/list state.
+    //   0x6A7BA8 loadSource scans a list cache before materializing a Layer.
+    //   0x6A8438 clearCache releases cached layer image entries.
+    //   0x6A84FC bufLayer returns the cached bufLayer variant.
     class SourceCache {
     public:
-        SourceCache() = default;
+        struct Entry {
+            std::string key;
+            std::string resolvedKey;
+            int blendMode = 0;
+            std::array<std::uint32_t, 4> packedColors{
+                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
+            };
+            tTJSVariant rawSource;
+            tTJSVariant sourceObject;
+            std::shared_ptr<tTVPBaseBitmap> backingBitmap;
+        };
+
+        SourceCache();
+        SourceCache(tTJSVariant owner, tjs_int layerType);
+        ~SourceCache();
+
+        void bindRuntime(detail::PlayerRuntime *runtime,
+                         ResourceManager *resourceManager);
+        void setSelfObject(tTJSVariant selfObject);
+        void setLayerOwner(tTJSVariant owner, tjs_int layerType);
+
+        tTJSVariant loadSource(tTJSVariant keyOrSource, tTJSVariant currentSource);
+        tTJSVariant loadSourceByName(const ttstr &name,
+                                     const tTJSVariant &currentSource);
+        tTJSVariant loadRenderSourceByName(
+            const ttstr &name,
+            const tTJSVariant &currentSource,
+            int blendMode,
+            const std::array<std::uint32_t, 4> &packedColors,
+            iTJSDispatch2 *layerTreeOwnerObject,
+            iTJSDispatch2 *parentLayerObject);
+        tTJSVariant findSource(ttstr name);
+        void clearCache();
+        void eraseSource(ttstr name);
+        tTJSVariant getBufLayer() const;
+        std::size_t size() const;
+
+        const Entry *findEntry(const std::string &key,
+                               int blendMode,
+                               const std::array<std::uint32_t, 4> &packedColors) const;
+
+    private:
+        Entry *findEntry(const std::string &key,
+                         int blendMode,
+                         const std::array<std::uint32_t, 4> &packedColors);
+        Entry *findEntryByKey(const std::string &key);
+        Entry &ensureEntry(const std::string &key,
+                           const std::string &resolvedKey,
+                           int blendMode,
+                           const std::array<std::uint32_t, 4> &packedColors);
+        tTJSVariant loadRawSourceVariant(const ttstr &name,
+                                         std::string &resolvedKey) const;
+
+        tTJSVariant _selfObject;
+        tTJSVariant _owner;
+        tTJSVariant _primaryLayer;
+        tTJSVariant _bufLayer;
+        tjs_int _layerType = 0;
+        detail::PlayerRuntime *_runtime = nullptr;
+        ResourceManager *_resourceManager = nullptr;
+        std::list<Entry> _entries;
     };
 
     class ObjSource {
     public:
         ObjSource() = default;
+        ObjSource(ttstr key, ttstr src, tjs_int blendMode, tTJSVariant color) :
+            _key(std::move(key)),
+            _src(std::move(src)),
+            _blendMode(blendMode),
+            _color(std::move(color)) {}
+
+        const ttstr &key() const { return _key; }
+        const ttstr &src() const { return _src; }
+        tjs_int blendMode() const { return _blendMode; }
+        tTJSVariant color() const { return _color; }
+
+    private:
+        ttstr _key;
+        ttstr _src;
+        tjs_int _blendMode = 0;
+        tTJSVariant _color;
     };
 
     // Aligned to libkrkr2.so Motion.Point (0x690FBC)
