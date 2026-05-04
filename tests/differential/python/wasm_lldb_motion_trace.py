@@ -145,6 +145,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Original startup XP3 path to record in manifest")
     p.add_argument("--expected-frames", type=int, default=332,
                    help="Minimum expected event count")
+    p.add_argument("--capture-frame-start", type=int, default=0,
+                   help="First global frame id to record in host probes")
+    p.add_argument("--capture-frame-count", type=int, default=-1,
+                   help="Number of global frames to record; -1 records all")
     p.add_argument("--timeout", type=float, default=600.0,
                    help="Soft timeout checked between LLDB stops")
     p.add_argument("--repo-root", default=str(REPO_ROOT),
@@ -174,6 +178,8 @@ class WasmMotionTracer:
         record_save_layer_visual_readback_probes: bool = False,
         save_layer_visual_readback_frame_start: int = 0,
         save_layer_visual_readback_frame_count: int = 1,
+        capture_frame_start: int = 0,
+        capture_frame_count: int = -1,
         render_artifact_dir: Path | None = None,
         render_stage_out: Path | None = None,
         manifest_startup_xp3: Path | None = None,
@@ -199,6 +205,8 @@ class WasmMotionTracer:
             save_layer_visual_readback_frame_start)
         self.save_layer_visual_readback_frame_count = (
             save_layer_visual_readback_frame_count)
+        self.capture_frame_start = capture_frame_start
+        self.capture_frame_count = capture_frame_count
         self.render_artifact_dir = render_artifact_dir
         self.render_stage_out = render_stage_out
         self.manifest_startup_xp3 = manifest_startup_xp3
@@ -251,9 +259,16 @@ class WasmMotionTracer:
                     "--spec-dir",
                     str(self.spec_dir),
                     "--host-frames",
-                    str(max(self.expected_frames, 1)),
+                    # startupFrom schedules the first motion update a few host
+                    # ticks later; the TJS fixture still stops after the
+                    # selected global frame window is complete.
+                    str(max(self.expected_frames + 10, 1)),
                     "--host-output",
                     str(self.host_output),
+                    "--capture-frame-start",
+                    str(self.capture_frame_start),
+                    "--capture-frame-count",
+                    str(self.capture_frame_count),
                 ]
                 if self.record_framebuffer:
                     if self.framebuffer_dir is None:
@@ -623,6 +638,8 @@ def main(argv: list[str]) -> int:
                 args.save_layer_visual_readback_frame_start),
             save_layer_visual_readback_frame_count=(
                 args.save_layer_visual_readback_frame_count),
+            capture_frame_start=args.capture_frame_start,
+            capture_frame_count=args.capture_frame_count,
             render_artifact_dir=render_artifact_dir,
             render_stage_out=render_stage_out,
             manifest_startup_xp3=manifest_startup_xp3,

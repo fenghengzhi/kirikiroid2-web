@@ -21,6 +21,12 @@ from oracle_runner.png_artifacts import (
     png_manifest_entry,
     write_bgra_png,
 )
+from oracle_runner.motion_capture_window import (
+    FrameCaptureWindow,
+    add_frame_capture_args,
+    captured_case_ranges,
+    frame_capture_window_from_args,
+)
 
 
 SCHEMA = "motion-stage-oracle-v1"
@@ -93,6 +99,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Seconds to wait for deterministic playback")
     p.add_argument("--raw-out", default=None,
                    help="Optional path for the unsplit raw staged event stream")
+    add_frame_capture_args(p)
     return p.parse_args(argv)
 
 
@@ -128,6 +135,7 @@ def wait_for_stage_trace(
     timeout: float,
     poll_interval: float = 0.4,
     stabilise_seconds: float = 2.0,
+    require_substantive_segments: bool = True,
 ) -> list[dict[str, Any]]:
     deadline = time.time() + timeout
     last_count = -1
@@ -146,6 +154,8 @@ def wait_for_stage_trace(
             frames = trace_flatten_frames(events)
             segments = segment_trace_frames(frames)
             substantive = [s for s in segments if len(s["frames"]) >= 30]
+            if not require_substantive_segments:
+                return events
             if len(substantive) >= 2:
                 return events
             raise RuntimeError(
@@ -191,6 +201,7 @@ def build_case_segments(
     events: list[dict[str, Any]],
     specs: list[dict[str, Any]],
     mpb,
+    capture_window: FrameCaptureWindow | None = None,
 ) -> list[dict[str, Any]]:
     specs_by_id = {s["id"]: s for s in specs}
     unknown = [sid for sid in specs_by_id if sid not in mpb.SEGMENT_ORDER]
@@ -199,6 +210,49 @@ def build_case_segments(
             f"unknown motion_playback spec id(s): {unknown}. Expected ids "
             f"are fixed by logo_test_oracle.xp3: {mpb.SEGMENT_ORDER}."
         )
+
+    if capture_window is not None and capture_window.enabled:
+        frames_by_id = {
+            int(frame["frameId"]): frame
+            for frame in trace_flatten_frames(events)
+            if isinstance(frame.get("frameId"), int)
+        }
+        out: list[dict[str, Any]] = []
+        for case in captured_case_ranges(
+            specs_by_id, mpb.SEGMENT_ORDER, capture_window):
+            selected = [
+                frames_by_id[frame_id]
+                for frame_id in case["capturedFrameIds"]
+                if frame_id in frames_by_id
+            ]
+            if len(selected) != len(case["capturedFrameIds"]):
+                missing = [
+                    frame_id for frame_id in case["capturedFrameIds"]
+                    if frame_id not in frames_by_id
+                ]
+                raise RuntimeError(
+                    f"missing trace_flatten frame(s) for {case['caseId']}: "
+                    f"{missing[:8]}"
+                )
+            seqs = [int(frame.get("seq", -1)) for frame in selected]
+            out.append({
+                "caseId": str(case["caseId"]),
+                "spec": case["spec"],
+                "player": (
+                    selected[0].get("diagnostics", {}).get("topPlayer")
+                    if selected else None
+                ),
+                "frames": selected,
+                "firstSeq": min(seqs) if seqs else -1,
+                "lastSeq": max(seqs) if seqs else -1,
+                "firstFrameId": int(case["capturedFrameIdRange"][0]),
+                "lastFrameId": int(case["capturedFrameIdRange"][1]) - 1,
+                "caseFrameIdBase": int(case["fullFrameIdRange"][0]),
+                "fullFrameIdRange": case["fullFrameIdRange"],
+                "capturedFrameIdRange": case["capturedFrameIdRange"],
+                "capturedLocalFrames": case["capturedLocalFrames"],
+            })
+        return out
 
     frames = trace_flatten_frames(events)
     segments = segment_trace_frames(frames)
@@ -210,6 +264,18 @@ def build_case_segments(
         )
 
     out: list[dict[str, Any]] = []
+    full_ranges = {
+        case["caseId"]: case
+        for case in captured_case_ranges(
+            specs_by_id, mpb.SEGMENT_ORDER,
+            FrameCaptureWindow(
+                mode="all",
+                total_frames=sum(int(s["frames"])
+                                 for s in specs_by_id.values()),
+                start=0,
+                end=sum(int(s["frames"]) for s in specs_by_id.values()),
+            ))
+    }
     for i, spec_id in enumerate(mpb.SEGMENT_ORDER):
         if spec_id not in specs_by_id:
             continue
@@ -230,6 +296,13 @@ def build_case_segments(
             "lastSeq": int(clipped[-1]["seq"]),
             "firstFrameId": int(clipped[0].get("frameId", 0)),
             "lastFrameId": int(clipped[-1].get("frameId", wanted - 1)),
+            "caseFrameIdBase": int(
+                full_ranges[spec_id]["fullFrameIdRange"][0]),
+            "fullFrameIdRange": full_ranges[spec_id]["fullFrameIdRange"],
+            "capturedFrameIdRange": full_ranges[spec_id][
+                "capturedFrameIdRange"],
+            "capturedLocalFrames": full_ranges[spec_id][
+                "capturedLocalFrames"],
         })
     return out
 
@@ -255,6 +328,18 @@ def split_events_by_stage_and_case(
         stage = str(ev.get("stage") or "")
         if not stage:
             continue
+        frame_id = ev.get("frameId")
+        if isinstance(frame_id, int):
+            matched = False
+            for i, seg in enumerate(case_segments):
+                if int(seg["firstFrameId"]) <= frame_id <= \
+                        int(seg["lastFrameId"]):
+                    case_id = str(case_segments[i]["caseId"])
+                    out.setdefault(stage, {}).setdefault(case_id, []).append(ev)
+                    matched = True
+                    break
+            if matched:
+                continue
         seq = int(ev.get("seq", -1))
         case_index = assign_case_index(seq, case_segments)
         case_id = str(case_segments[case_index]["caseId"])
@@ -398,7 +483,8 @@ def layer_save_events_for_case(
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     case_id = str(case_images["caseId"])
-    first_frame_id = int(case_segment["firstFrameId"])
+    first_frame_id = int(case_segment.get(
+        "caseFrameIdBase", case_segment["firstFrameId"]))
     seq = 0
     for phase in RENDER_CAPTURE_SURFACES:
         for image in case_images.get("phases", {}).get(phase, []):
@@ -459,7 +545,8 @@ def enrich_draw_dispatch_events_for_case(
     case_segment: dict[str, Any],
     case_images: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    first_frame_id = int(case_segment["firstFrameId"])
+    first_frame_id = int(case_segment.get(
+        "caseFrameIdBase", case_segment["firstFrameId"]))
     last_frame_id = int(case_segment["lastFrameId"])
     initial_image = _phase_images_by_frame(case_images, "initial").get(0)
     post_by_frame = _phase_images_by_frame(case_images, "post_draw")
@@ -652,7 +739,8 @@ def enrich_render_execute_events_for_case(
     case_segment: dict[str, Any],
     case_images: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    first_frame_id = int(case_segment["firstFrameId"])
+    first_frame_id = int(case_segment.get(
+        "caseFrameIdBase", case_segment["firstFrameId"]))
     last_frame_id = int(case_segment["lastFrameId"])
     pre_by_frame = _phase_images_by_frame(case_images, "execute_pre")
     post_by_frame = _phase_images_by_frame(case_images, "execute_post")
@@ -737,11 +825,15 @@ def add_oracle_execute_checkpoint_images(
         if case is None:
             continue
         phases = case.setdefault("phases", {})
-        first_frame_id = int(segment["firstFrameId"])
-        frame_count = len(segment["frames"])
+        first_frame_id = int(segment.get(
+            "caseFrameIdBase", segment["firstFrameId"]))
+        local_frames = list(segment.get(
+            "capturedLocalFrames",
+            range(len(segment["frames"])),
+        ))
         for phase in RENDER_STEP_CHECKPOINT_PHASES:
             images: list[dict[str, Any]] = []
-            for local_frame in range(frame_count):
+            for local_frame in local_frames:
                 frame_id = first_frame_id + local_frame
                 checkpoint = by_frame_phase.get((frame_id, phase))
                 if checkpoint is None:
@@ -811,6 +903,7 @@ def write_render_stage_artifacts(
     case_segments: list[dict[str, Any]],
     image_manifest: dict[str, Any],
     renderer_metadata: dict[str, str],
+    capture_window: FrameCaptureWindow,
 ) -> list[Path]:
     events_by_stage_case = split_render_events_by_stage_and_case(
         events, case_segments)
@@ -908,11 +1001,15 @@ def write_render_stage_artifacts(
             "imageCount": image_manifest.get("summary", {}).get(
                 "imageCount", 0),
         },
+        **capture_window.manifest_fields(),
         "cases": [
             {
                 "caseId": seg["caseId"],
                 "frames": len(seg["frames"]),
                 "frameIdRange": [seg["firstFrameId"], seg["lastFrameId"]],
+                "fullFrameIdRange": seg.get("fullFrameIdRange"),
+                "capturedFrameIdRange": seg.get("capturedFrameIdRange"),
+                "capturedLocalFrames": seg.get("capturedLocalFrames", []),
                 "traceSeqRange": [seg["firstSeq"], seg["lastSeq"]],
                 "eventFiles": {
                     stage: str(
@@ -973,7 +1070,13 @@ def main(argv: list[str]) -> int:
     from oracle_runner.frida_motion_stage_tracer import FridaMotionStageTracer
 
     renderer_metadata = mpb.oracle_renderer_metadata()
-    expected_frames = sum(int(spec["frames"]) for spec in specs)
+    total_frames = sum(int(spec["frames"]) for spec in specs)
+    try:
+        capture_window = frame_capture_window_from_args(args, total_frames)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    expected_frames = capture_window.driven_frames
     specs_by_id = {spec["id"]: spec for spec in specs}
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
     render_step_checkpoints: list[dict[str, Any]] = []
@@ -984,7 +1087,8 @@ def main(argv: list[str]) -> int:
             with AdbHarnessEngine(serial=args.serial) as engine:
                 print(
                     f"[record-stage] capturing stages={stages} "
-                    f"expected_trace_flatten_frames={expected_frames}"
+                    f"driven_frames={expected_frames} "
+                    f"capture={capture_window.filter_manifest()}"
                 )
                 if render_path:
                     assert render_artifact_dir is not None
@@ -993,7 +1097,8 @@ def main(argv: list[str]) -> int:
                     remote_game, remote_render_root = \
                         mpb._prepare_render_stage_capture(
                             args.serial, specs_by_id,
-                            render_artifact_dir, Path(temp_dir.name))
+                            render_artifact_dir, Path(temp_dir.name),
+                            capture_window)
                 else:
                     remote_game = mpb._ensure_logo_test_xp3_pushed(
                         args.serial)
@@ -1024,6 +1129,10 @@ def main(argv: list[str]) -> int:
                             args.save_layer_visual_readback_frame_start),
                         save_layer_visual_readback_frame_count=(
                             args.save_layer_visual_readback_frame_count),
+                        capture_frame_start=capture_window.start,
+                        capture_frame_count=(
+                            -1 if not capture_window.enabled
+                            else capture_window.count),
                     )
                     engine.tjs_init()
                     mpb.trigger_startup(engine, remote_game)
@@ -1032,13 +1141,16 @@ def main(argv: list[str]) -> int:
                         expected_frames=expected_frames,
                         timeout=args.playback_timeout,
                         stabilise_seconds=5.0 if render_path else 2.0,
+                        require_substantive_segments=(
+                            not capture_window.enabled),
                     )
                     render_step_checkpoints = tracer.image_checkpoints()
         finally:
             if temp_dir is not None:
                 temp_dir.cleanup()
 
-        case_segments = build_case_segments(events, specs, mpb)
+        case_segments = build_case_segments(
+            events, specs, mpb, capture_window)
         segment_lengths = [len(seg["frames"]) for seg in case_segments]
         print(f"[record-stage] trace_flatten segments={segment_lengths}")
 
@@ -1056,6 +1168,7 @@ def main(argv: list[str]) -> int:
                         "traceFlattenFrameCount":
                             len(trace_flatten_frames(events)),
                         "segmentLengths": segment_lengths,
+                        **capture_window.manifest_fields(),
                     },
                 }, indent=2, ensure_ascii=True, allow_nan=False) + "\n",
                 encoding="utf-8",
@@ -1067,7 +1180,8 @@ def main(argv: list[str]) -> int:
             assert remote_render_root is not None
             image_manifest = mpb._collect_render_stage_capture(
                 args.serial, specs_by_id, render_artifact_dir,
-                remote_render_root, timeout=args.playback_timeout)
+                remote_render_root, timeout=args.playback_timeout,
+                capture_window=capture_window)
             if args.record_render_step_checkpoints:
                 image_manifest = add_oracle_execute_checkpoint_images(
                     artifact_dir=render_artifact_dir,
@@ -1083,6 +1197,7 @@ def main(argv: list[str]) -> int:
                 case_segments=case_segments,
                 image_manifest=image_manifest,
                 renderer_metadata=renderer_metadata,
+                capture_window=capture_window,
             )
             print(
                 f"[record-stage] render artifact manifest: "

@@ -154,6 +154,8 @@ let recordLayerRawProbes = false;
 let recordSaveLayerVisualReadbackProbes = false;
 let saveLayerVisualReadbackFrameStart = 0;
 let saveLayerVisualReadbackFrameCount = 1;
+let captureFrameStart = 0;
+let captureFrameCount = -1;
 let activeSaveLayerImageContexts = [];
 let activePngSaveContexts = [];
 let activeRenderExecuteContexts = [];
@@ -187,6 +189,14 @@ function attachAt(offset, name, callbacks) {
 
 function stageEnabled(stage) {
     return enabledStages.has(stage);
+}
+
+function captureFrameEnabled(frameId) {
+    if (frameId === null || frameId === undefined) return false;
+    const start = Math.max(0, captureFrameStart | 0);
+    const count = captureFrameCount | 0;
+    if (frameId < start) return false;
+    return count < 0 || frameId < start + count;
 }
 
 function ptrHex(value) {
@@ -594,6 +604,7 @@ function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint) {
     }
     const frameId = renderFrameIdFor(player);
     if (frameId === null || frameId === undefined) return;
+    if (!captureFrameEnabled(frameId)) return;
     const snapshot = readLayerImageSnapshot(layerObject);
     const payload = {
         type: 'render_image_checkpoint',
@@ -625,6 +636,7 @@ function sendLayerRawProbe(player, layerObject, nativeLayer, samplePoint,
         return;
     }
     let frameId = renderFrameIdFor(player);
+    if (!captureFrameEnabled(frameId)) return;
     const snapshot = nativeLayer
         ? readNativeLayerImageSnapshot(nativeLayer, layerObject)
         : readLayerImageSnapshot(layerObject);
@@ -686,6 +698,7 @@ function sendLayerRawProbe(player, layerObject, nativeLayer, samplePoint,
 function saveLayerVisualReadbackFrameEnabled(frameId) {
     if (!recordSaveLayerVisualReadbackProbes) return false;
     if (frameId === null || frameId === undefined) return false;
+    if (!captureFrameEnabled(frameId)) return false;
     const start = Math.max(0, saveLayerVisualReadbackFrameStart | 0);
     const count = saveLayerVisualReadbackFrameCount | 0;
     if (frameId < start) return false;
@@ -779,6 +792,7 @@ function readD0Raw(ctx) {
 
 function emit(stage, kind, payload) {
     if (!recording || !stageEnabled(stage)) return;
+    if (inCompat && !captureFrameEnabled(currentFrameId)) return;
     const ev = payload || {};
     ev.schema = 'motion-stage-oracle-v1-event';
     ev.stage = stage;
@@ -796,6 +810,7 @@ function emit(stage, kind, payload) {
 
 function emitStaticParse(kind, semanticPayload, diagnostics) {
     if (!recording || !stageEnabled(STAGE_STATIC_PARSE)) return;
+    if (inCompat && !captureFrameEnabled(currentFrameId)) return;
     const diag = diagnostics || {};
     if (inCompat) {
         diag.frameId = currentFrameId;
@@ -815,6 +830,7 @@ function emitStaticParse(kind, semanticPayload, diagnostics) {
 
 function emitInitMotion(kind, semanticPayload, diagnostics) {
     if (!recording || !stageEnabled(STAGE_INIT_MOTION)) return;
+    if (inCompat && !captureFrameEnabled(currentFrameId)) return;
     const diag = diagnostics || {};
     if (inCompat) {
         diag.frameId = currentFrameId;
@@ -845,6 +861,7 @@ function semanticFrameSelectionNode(raw) {
 
 function emitFrameSelection(kind, semanticPayload, diagnostics) {
     if (!recording || !stageEnabled(STAGE_FRAME_SELECTION)) return;
+    if (inCompat && !captureFrameEnabled(currentFrameId)) return;
     const diag = diagnostics || {};
     if (inCompat) {
         diag.objthis = ptrHex(capturedObjthis);
@@ -890,6 +907,7 @@ function emitRender(stage, kind, semanticPayload, diagnostics, samplePoint) {
     }
     const frameId = renderFrameIdFor(player);
     if (frameId === null || frameId === undefined) return;
+    if (!captureFrameEnabled(frameId)) return;
     const diag = diagnostics || {};
     const ev = semanticPayload || {};
     ev.schema = 'motion-render-stage-oracle-v1-event';
@@ -913,6 +931,7 @@ function emitDirectExecuteProbe(ctx, phase, samplePoint, extra) {
     if (!recording || !stageEnabled(STAGE_RENDER_EXECUTE) || !ctx) return;
     const frameId = renderFrameIdFor(ctx.player);
     if (frameId === null || frameId === undefined) return;
+    if (!captureFrameEnabled(frameId)) return;
     const payload = extra || {};
     payload.schema = 'motion-render-stage-oracle-v1-event';
     payload.source = 'android-frida-direct-execute-probe';
@@ -2500,6 +2519,12 @@ rpc.exports = {
         saveLayerVisualReadbackFrameCount =
             options && Number.isInteger(options.saveLayerVisualReadbackFrameCount)
                 ? options.saveLayerVisualReadbackFrameCount : 1;
+        captureFrameStart =
+            options && Number.isInteger(options.captureFrameStart)
+                ? options.captureFrameStart : 0;
+        captureFrameCount =
+            options && Number.isInteger(options.captureFrameCount)
+                ? options.captureFrameCount : -1;
         events = [];
         frameCounter = 0;
         seqCounter = 0;

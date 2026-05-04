@@ -49,6 +49,8 @@ bool g_record_layer_raw_probes = false;
 bool g_record_save_layer_visual_readback_probes = false;
 int g_save_layer_visual_readback_frame_start = 0;
 int g_save_layer_visual_readback_frame_count = 1;
+int g_capture_frame_start = 0;
+int g_capture_frame_count = -1;
 constexpr const char *kRenderStageCaptureRoot = "/render_stage_capture";
 
 struct TraceState {
@@ -296,6 +298,13 @@ int renderFrameIdFor(motion::Player *player) {
     return -1;
 }
 
+bool captureFrameEnabled(int frameId) {
+    if(frameId < 0) return false;
+    const int start = std::max(0, g_capture_frame_start);
+    if(frameId < start) return false;
+    return g_capture_frame_count < 0 || frameId < start + g_capture_frame_count;
+}
+
 motion::Player *renderPlayerFor(motion::Player *player) {
     auto &state = traceState();
     if(player) return player;
@@ -315,6 +324,7 @@ void appendRenderEvent(motion::Player *player,
                        const std::string &payload,
                        const std::string &diagnostics) {
     const int frameId = renderFrameIdFor(player);
+    if(!captureFrameEnabled(frameId)) return;
     motion::Player *eventPlayer = renderPlayerFor(player);
     std::string ev;
     ev.reserve(payload.size() + diagnostics.size() + 256);
@@ -1350,7 +1360,8 @@ void motionTraceRenderImageCheckpoint(Player *player,
                                       const char *phase,
                                       const char *samplePoint) {
     const int frameId = renderFrameIdFor(player);
-    if(frameId < 0 || !phase || !renderLayerObject) {
+    if(frameId < 0 || !captureFrameEnabled(frameId) ||
+       !phase || !renderLayerObject) {
         return;
     }
     const std::string phaseDir =
@@ -1426,6 +1437,8 @@ void motionTraceRenderDirectExecuteProbe(Player *player,
 void motionTraceLayerRawProbeNative(Player *player, const void *nativeLayer,
                                     const char *samplePoint) {
     if(!g_record_layer_raw_probes || !nativeLayer) return;
+    const int frameId = renderFrameIdFor(player);
+    if(!captureFrameEnabled(frameId)) return;
 
     const auto *layer =
         static_cast<const tTJSNI_BaseLayer *>(nativeLayer);
@@ -1482,6 +1495,7 @@ bool saveLayerVisualReadbackFrameEnabled(int frameId) {
     if(!g_record_save_layer_visual_readback_probes || frameId < 0) {
         return false;
     }
+    if(!captureFrameEnabled(frameId)) return false;
     const int start = std::max(0, g_save_layer_visual_readback_frame_start);
     const int count = g_save_layer_visual_readback_frame_count;
     if(frameId < start) return false;
@@ -1581,6 +1595,13 @@ void krkr2_wasm_set_record_save_layer_visual_readback_probes(
     g_record_save_layer_visual_readback_probes = enabled != 0;
     g_save_layer_visual_readback_frame_start = frame_start;
     g_save_layer_visual_readback_frame_count = frame_count;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void krkr2_wasm_set_render_capture_frame_filter(int frame_start,
+                                                int frame_count) {
+    g_capture_frame_start = frame_start;
+    g_capture_frame_count = frame_count;
 }
 
 } // extern "C"

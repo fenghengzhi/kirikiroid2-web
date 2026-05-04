@@ -27,6 +27,13 @@ from oracle_runner.png_artifacts import (
     png_manifest_entry,
     write_bgra_png,
 )
+from oracle_runner.motion_capture_window import (
+    FrameCaptureWindow,
+    add_frame_capture_args,
+    captured_case_ranges,
+    frame_capture_window_from_bounds,
+    frame_capture_window_from_args,
+)
 
 DEFAULT_HOST_PYTHON_RAW = os.environ.get("KRKR2_HOST_PYTHON") or shutil.which("python3")
 DEFAULT_HOST_PYTHON = (
@@ -132,6 +139,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help=argparse.SUPPRESS)
     p.add_argument("--render-stage-out", type=Path, default=None,
                    help=argparse.SUPPRESS)
+    p.add_argument("--capture-frame-start", type=int, default=0,
+                   help=argparse.SUPPRESS)
+    p.add_argument("--capture-frame-count", type=int, default=-1,
+                   help=argparse.SUPPRESS)
+    add_frame_capture_args(p)
     return p.parse_args(argv)
 
 
@@ -951,7 +963,11 @@ def call_with_guest_bytes(store, memory, malloc, free, data: bytes, callback):
         free(store, ptr)
 
 
-def _build_framebuffer_capture_xp3(specs: list[dict], work_dir: Path) -> Path:
+def _build_framebuffer_capture_xp3(
+    specs: list[dict],
+    work_dir: Path,
+    capture_window: FrameCaptureWindow | None = None,
+) -> Path:
     from oracle_runner.adapters import motion_playback as mpb
 
     specs_by_id = {s["id"]: s for s in specs}
@@ -959,10 +975,16 @@ def _build_framebuffer_capture_xp3(specs: list[dict], work_dir: Path) -> Path:
     if builder is None:
         raise RuntimeError(
             "motion_playback adapter does not expose framebuffer XP3 builder")
-    return builder(specs_by_id, FRAMEBUFFER_CAPTURE_GUEST_ROOT, work_dir)
+    return builder(
+        specs_by_id, FRAMEBUFFER_CAPTURE_GUEST_ROOT, work_dir,
+        capture_window)
 
 
-def _build_render_stage_capture_xp3(specs: list[dict], work_dir: Path) -> Path:
+def _build_render_stage_capture_xp3(
+    specs: list[dict],
+    work_dir: Path,
+    capture_window: FrameCaptureWindow | None = None,
+) -> Path:
     from oracle_runner.adapters import motion_playback as mpb
 
     specs_by_id = {s["id"]: s for s in specs}
@@ -970,7 +992,8 @@ def _build_render_stage_capture_xp3(specs: list[dict], work_dir: Path) -> Path:
     if builder is None:
         raise RuntimeError(
             "motion_playback adapter does not expose render stage XP3 builder")
-    return builder(specs_by_id, RENDER_CAPTURE_GUEST_ROOT, work_dir)
+    return builder(
+        specs_by_id, RENDER_CAPTURE_GUEST_ROOT, work_dir, capture_window)
 
 
 def _load_render_checkpoint_events(path: Path | None) -> list[dict[str, Any]]:
@@ -1041,6 +1064,16 @@ def _annotate_wasmtime_layer_raw_probe_events(
         )
 
 
+def _png_frame_number(path: Path) -> int | None:
+    stem = path.stem
+    if not stem.startswith("frame_"):
+        return None
+    try:
+        return int(stem[len("frame_"):])
+    except ValueError:
+        return None
+
+
 def _write_wasmtime_framebuffer_manifest(
     framebuffer_dir: Path,
     specs: list[dict],
@@ -1049,20 +1082,23 @@ def _write_wasmtime_framebuffer_manifest(
     startup_xp3: Path,
     manifest_startup_xp3: Path,
     bootstrap: BrowserBootstrapInfo,
+    capture_window: FrameCaptureWindow,
 ) -> Path:
     from oracle_runner.adapters import motion_playback as mpb
 
     specs_by_id = {s["id"]: s for s in specs}
     cases: list[dict[str, Any]] = []
     total_frames = 0
-    for spec_id in mpb.SEGMENT_ORDER:
-        spec = specs_by_id.get(spec_id)
-        if spec is None:
-            continue
+    for case in captured_case_ranges(specs_by_id, mpb.SEGMENT_ORDER,
+                                     capture_window):
+        spec_id = str(case["caseId"])
+        spec = case["spec"]
         expected = int(spec["frames"])
         case_dir = framebuffer_dir / spec_id
         images: list[dict[str, Any]] = []
-        for frame in range(expected):
+        expected_frames = list(case["capturedLocalFrames"])
+        expected_set = set(expected_frames)
+        for frame in expected_frames:
             rel = Path(spec_id) / f"frame_{frame:04d}.png"
             path = framebuffer_dir / rel
             if not path.exists():
@@ -1072,7 +1108,10 @@ def _write_wasmtime_framebuffer_manifest(
                 path=path,
                 rel=rel,
             ))
-        extras = sorted(case_dir.glob("frame_*.png"))[expected:]
+        extras = [
+            p for p in sorted(case_dir.glob("frame_*.png"))
+            if _png_frame_number(p) not in expected_set
+        ]
         if extras:
             raise RuntimeError(
                 f"unexpected extra Wasmtime framebuffer PNG(s) for {spec_id}: "
@@ -1085,6 +1124,9 @@ def _write_wasmtime_framebuffer_manifest(
             "chara": spec.get("chara"),
             "label": spec.get("label"),
             "frames": expected,
+            "fullFrameIdRange": case["fullFrameIdRange"],
+            "capturedFrameIdRange": case["capturedFrameIdRange"],
+            "capturedLocalFrames": expected_frames,
             "images": images,
         })
 
@@ -1109,6 +1151,7 @@ def _write_wasmtime_framebuffer_manifest(
             "caseCount": len(cases),
             "frameCount": total_frames,
         },
+        **capture_window.manifest_fields(),
         "cases": cases,
     }
     target = framebuffer_dir / "manifest.json"
@@ -1127,6 +1170,7 @@ def _collect_wasmtime_render_stage_capture(
     *,
     record_render_step_checkpoints: bool = False,
     render_stage_events_path: Path | None = None,
+    capture_window: FrameCaptureWindow,
 ) -> dict[str, Any]:
     from oracle_runner.adapters import motion_playback as mpb
 
@@ -1154,12 +1198,13 @@ def _collect_wasmtime_render_stage_capture(
 
     cases: list[dict[str, Any]] = []
     total_images = 0
-    global_frame_offset = 0
-    for spec_id in mpb.SEGMENT_ORDER:
-        spec = specs_by_id.get(spec_id)
-        if spec is None:
-            continue
+    for case in captured_case_ranges(specs_by_id, mpb.SEGMENT_ORDER,
+                                     capture_window):
+        spec_id = str(case["caseId"])
+        spec = case["spec"]
         expected = int(spec["frames"])
+        captured_local_frames = list(case["capturedLocalFrames"])
+        case_frame_id_base = int(case["fullFrameIdRange"][0])
         src_case = capture_root / spec_id
         if not src_case.is_dir():
             raise RuntimeError(
@@ -1173,8 +1218,8 @@ def _collect_wasmtime_render_stage_capture(
                 if dst_phase.exists():
                     shutil.rmtree(dst_phase)
                 dst_phase.mkdir(parents=True, exist_ok=True)
-                for local_frame in range(expected):
-                    global_frame = global_frame_offset + local_frame
+                for local_frame in captured_local_frames:
+                    global_frame = case_frame_id_base + local_frame
                     checkpoint = checkpoint_by_frame_phase.get(
                         (global_frame, phase))
                     if checkpoint is None:
@@ -1225,10 +1270,11 @@ def _collect_wasmtime_render_stage_capture(
                 raise RuntimeError(
                     f"missing Wasmtime render stage image directory: {phase_dir}")
             expected_phase_frames = (
-                1 if phase == "initial" else expected
+                [0] if phase == "initial" else captured_local_frames
             )
+            expected_set = set(expected_phase_frames)
             images: list[dict[str, Any]] = []
-            for frame in range(expected_phase_frames):
+            for frame in expected_phase_frames:
                 rel = Path("images") / spec_id / phase / f"frame_{frame:04d}.png"
                 path = render_artifact_dir / rel
                 if not path.exists():
@@ -1240,7 +1286,10 @@ def _collect_wasmtime_render_stage_capture(
                     path=path,
                     rel=rel,
                 ))
-            extras = sorted(phase_dir.glob("frame_*.png"))[expected_phase_frames:]
+            extras = [
+                p for p in sorted(phase_dir.glob("frame_*.png"))
+                if _png_frame_number(p) not in expected_set
+            ]
             if extras:
                 raise RuntimeError(
                     f"unexpected extra Wasmtime render stage PNG(s) for "
@@ -1255,9 +1304,11 @@ def _collect_wasmtime_render_stage_capture(
             "chara": spec.get("chara"),
             "label": spec.get("label"),
             "frames": expected,
+            "fullFrameIdRange": case["fullFrameIdRange"],
+            "capturedFrameIdRange": case["capturedFrameIdRange"],
+            "capturedLocalFrames": captured_local_frames,
             "phases": phases,
         })
-        global_frame_offset += expected
 
     capture_surfaces = list(RENDER_CAPTURE_SURFACES)
     if record_render_step_checkpoints:
@@ -1270,6 +1321,7 @@ def _collect_wasmtime_render_stage_capture(
             "caseCount": len(cases),
             "imageCount": total_images,
         },
+        **capture_window.manifest_fields(),
     }
     image_manifest_path = render_artifact_dir / "image_manifest.json"
     image_manifest_path.write_text(
@@ -1288,6 +1340,7 @@ def _collect_wasmtime_framebuffer_capture(
     wasm_path: Path,
     startup_xp3: Path,
     manifest_startup_xp3: Path,
+    capture_window: FrameCaptureWindow,
 ) -> Path:
     from oracle_runner.adapters import motion_playback as mpb
 
@@ -1300,11 +1353,15 @@ def _collect_wasmtime_framebuffer_capture(
     manifest_path = framebuffer_dir / "manifest.json"
     if manifest_path.exists():
         manifest_path.unlink()
-
     specs_by_id = {s["id"]: s for s in specs}
-    for spec_id in mpb.SEGMENT_ORDER:
-        if spec_id not in specs_by_id:
-            continue
+    for spec_id in specs_by_id:
+        old_case = framebuffer_dir / str(spec_id)
+        if old_case.exists():
+            shutil.rmtree(old_case)
+
+    for case in captured_case_ranges(specs_by_id, mpb.SEGMENT_ORDER,
+                                     capture_window):
+        spec_id = str(case["caseId"])
         src_case = capture_root / spec_id
         if not src_case.is_dir():
             raise RuntimeError(
@@ -1319,7 +1376,8 @@ def _collect_wasmtime_framebuffer_capture(
         wasm_path=wasm_path,
         startup_xp3=startup_xp3,
         manifest_startup_xp3=manifest_startup_xp3,
-        bootstrap=bootstrap)
+        bootstrap=bootstrap,
+        capture_window=capture_window)
 
 
 def drive_full_guest(wasm_path: Path, startup_xp3: Path,
@@ -1331,6 +1389,7 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                      record_save_layer_visual_readback_probes: bool = False,
                      save_layer_visual_readback_frame_start: int = 0,
                      save_layer_visual_readback_frame_count: int = 1,
+                     capture_window: FrameCaptureWindow,
                      render_stage_out: Path | None = None,
                      specs: list[dict] | None = None,
                      manifest_startup_xp3: Path | None = None) -> dict[str, Any]:
@@ -1341,6 +1400,8 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
         )
     if not startup_xp3.exists():
         raise FileNotFoundError(f"oracle bootstrap xp3 missing: {startup_xp3}")
+
+    from oracle_runner.adapters import motion_playback as mpb
 
     wasmtime = load_wasmtime()
     with tempfile.TemporaryDirectory(prefix="krkr2-wasmtime-browserfs-") as tmp:
@@ -1353,8 +1414,9 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                 capture_root = (
                     bootstrap.root / FRAMEBUFFER_CAPTURE_GUEST_ROOT.lstrip("/")
                 )
-                for spec in specs:
-                    (capture_root / str(spec["id"])).mkdir(
+                for case in captured_case_ranges(
+                    specs, mpb.SEGMENT_ORDER, capture_window):
+                    (capture_root / str(case["caseId"])).mkdir(
                         parents=True, exist_ok=True)
             if render_artifact_dir is not None:
                 if specs is None:
@@ -1363,9 +1425,11 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                 capture_root = (
                     bootstrap.root / RENDER_CAPTURE_GUEST_ROOT.lstrip("/")
                 )
-                for spec in specs:
+                for case in captured_case_ranges(
+                    specs, mpb.SEGMENT_ORDER, capture_window):
+                    spec_id = str(case["caseId"])
                     for phase in RENDER_CAPTURE_SURFACES:
-                        (capture_root / str(spec["id"]) / phase).mkdir(
+                        (capture_root / spec_id / phase).mkdir(
                             parents=True, exist_ok=True)
                 if record_render_step_checkpoints:
                     for phase in RENDER_STEP_CHECKPOINT_SURFACES:
@@ -1380,6 +1444,10 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                     save_layer_visual_readback_frame_start),
                 save_layer_visual_readback_frame_count=(
                     save_layer_visual_readback_frame_count),
+                capture_frame_start=capture_window.start,
+                capture_frame_count=(
+                    -1 if not capture_window.enabled
+                    else capture_window.count),
                 render_stage_out=render_stage_out)
             if framebuffer_dir is not None:
                 manifest = _collect_wasmtime_framebuffer_capture(
@@ -1387,14 +1455,16 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                     wasm_path=wasm_path,
                     startup_xp3=startup_xp3,
                     manifest_startup_xp3=(
-                        manifest_startup_xp3 or startup_xp3))
+                        manifest_startup_xp3 or startup_xp3),
+                    capture_window=capture_window)
                 summary["framebufferManifest"] = str(manifest)
             if render_artifact_dir is not None:
                 image_manifest = _collect_wasmtime_render_stage_capture(
                     bootstrap, render_artifact_dir, specs,
                     record_render_step_checkpoints=(
                         record_render_step_checkpoints),
-                    render_stage_events_path=render_stage_out)
+                    render_stage_events_path=render_stage_out,
+                    capture_window=capture_window)
                 summary["renderStageImageManifest"] = image_manifest["summary"]
             return summary
         except Exception as exc:
@@ -1408,6 +1478,8 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                                      record_save_layer_visual_readback_probes: bool = False,
                                      save_layer_visual_readback_frame_start: int = 0,
                                      save_layer_visual_readback_frame_count: int = 1,
+                                     capture_frame_start: int = 0,
+                                     capture_frame_count: int = -1,
                                      render_stage_out: Path | None = None
                                      ) -> dict[str, Any]:
     store, exports = instantiate_module(
@@ -1428,6 +1500,11 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
             "krkr2_wasm_set_record_save_layer_visual_readback_probes"]
     except Exception:
         set_record_save_layer_visual_readback_probes = None
+    try:
+        set_render_capture_frame_filter = exports[
+            "krkr2_wasm_set_render_capture_frame_filter"]
+    except Exception:
+        set_render_capture_frame_filter = None
 
     guest_path = bootstrap.xp3_guest_path.encode("utf-8")
     config = json.dumps({
@@ -1458,6 +1535,9 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
             1 if record_save_layer_visual_readback_probes else 0,
             int(save_layer_visual_readback_frame_start),
             int(save_layer_visual_readback_frame_count))
+    if set_render_capture_frame_filter is not None:
+        set_render_capture_frame_filter(
+            store, int(capture_frame_start), int(capture_frame_count))
 
     startup_ok = call_with_guest_bytes(
         store, memory, malloc, free, guest_path,
@@ -1510,6 +1590,7 @@ def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
                            record_save_layer_visual_readback_probes: bool = False,
                            save_layer_visual_readback_frame_start: int = 0,
                            save_layer_visual_readback_frame_count: int = 1,
+                           capture_window: FrameCaptureWindow,
                            render_stage_out: Path | None = None,
                            specs: list[dict] | None = None,
                            manifest_startup_xp3: Path | None = None) -> int:
@@ -1525,6 +1606,7 @@ def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
             save_layer_visual_readback_frame_start),
         save_layer_visual_readback_frame_count=(
             save_layer_visual_readback_frame_count),
+        capture_window=capture_window,
         render_stage_out=render_stage_out,
         specs=specs,
         manifest_startup_xp3=manifest_startup_xp3)
@@ -1544,6 +1626,7 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                          record_save_layer_visual_readback_probes: bool = False,
                          save_layer_visual_readback_frame_start: int = 0,
                          save_layer_visual_readback_frame_count: int = 1,
+                         capture_window: FrameCaptureWindow,
                          manifest_startup_xp3: Path | None = None
                          ) -> tuple[list[dict], list[dict]]:
     if host_python is None or not host_python.exists():
@@ -1575,6 +1658,9 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
             "--trace-out", str(trace_path),
             "--host-output", str(host_report),
             "--expected-frames", str(expected_frames),
+            "--capture-frame-start", str(capture_window.start),
+            "--capture-frame-count",
+            str(-1 if not capture_window.enabled else capture_window.count),
             "--timeout", str(timeout),
             "--repo-root", str(REPO_ROOT),
         ]
@@ -1671,7 +1757,12 @@ def _segment_events(events: list[dict]) -> list[dict]:
     return segments
 
 
-def partition_port_frames(events: list[dict], specs: list[dict], mpb) -> dict:
+def partition_port_frames(
+    events: list[dict],
+    specs: list[dict],
+    mpb,
+    capture_window: FrameCaptureWindow | None = None,
+) -> dict:
     specs_by_id = {s["id"]: s for s in specs}
     unknown = [sid for sid in specs_by_id if sid not in mpb.SEGMENT_ORDER]
     if unknown:
@@ -1680,6 +1771,27 @@ def partition_port_frames(events: list[dict], specs: list[dict], mpb) -> dict:
             f"Expected ids are fixed by logo_test_oracle.xp3: "
             f"{mpb.SEGMENT_ORDER}."
         )
+
+    if capture_window is not None and capture_window.enabled:
+        frames_by_id = {
+            int(ev["frameId"]): ev for ev in events
+            if isinstance(ev.get("frameId"), int)
+        }
+        results: dict[str, list[dict]] = {}
+        for case in captured_case_ranges(
+            specs_by_id, mpb.SEGMENT_ORDER, capture_window):
+            case_frames: list[dict] = []
+            for frame_id, local_frame in zip(
+                case["capturedFrameIds"], case["capturedLocalFrames"]):
+                frame = frames_by_id.get(frame_id)
+                if frame is None:
+                    raise RuntimeError(
+                        f"missing Wasmtime frameId {frame_id} for "
+                        f"{case['caseId']}"
+                    )
+                case_frames.append(mpb.normalize_frame(frame, local_frame))
+            results[str(case["caseId"])] = case_frames
+        return results
 
     segments = _segment_events(events)
     substantive = [s for s in segments if len(s["frames"]) >= 30]
@@ -1708,8 +1820,48 @@ def partition_port_frames(events: list[dict], specs: list[dict], mpb) -> dict:
     return results
 
 
-def render_case_segments(events: list[dict], specs: list[dict], mpb) -> list[dict]:
+def render_case_segments(
+    events: list[dict],
+    specs: list[dict],
+    mpb,
+    capture_window: FrameCaptureWindow | None = None,
+) -> list[dict]:
     specs_by_id = {s["id"]: s for s in specs}
+    if capture_window is not None and capture_window.enabled:
+        frames_by_id = {
+            int(ev["frameId"]): ev for ev in events
+            if isinstance(ev.get("frameId"), int)
+        }
+        out: list[dict[str, Any]] = []
+        for case in captured_case_ranges(
+            specs_by_id, mpb.SEGMENT_ORDER, capture_window):
+            selected = [
+                frames_by_id[frame_id]
+                for frame_id in case["capturedFrameIds"]
+                if frame_id in frames_by_id
+            ]
+            if len(selected) != len(case["capturedFrameIds"]):
+                missing = [
+                    frame_id for frame_id in case["capturedFrameIds"]
+                    if frame_id not in frames_by_id
+                ]
+                raise RuntimeError(
+                    f"missing Wasmtime trace frame(s) for {case['caseId']}: "
+                    f"{missing[:8]}"
+                )
+            out.append({
+                "caseId": str(case["caseId"]),
+                "player": selected[0].get("topPlayer") if selected else None,
+                "firstFrameId": int(case["capturedFrameIdRange"][0]),
+                "lastFrameId": int(case["capturedFrameIdRange"][1]) - 1,
+                "caseFrameIdBase": int(case["fullFrameIdRange"][0]),
+                "fullFrameIdRange": case["fullFrameIdRange"],
+                "capturedFrameIdRange": case["capturedFrameIdRange"],
+                "capturedLocalFrames": case["capturedLocalFrames"],
+                "frames": selected,
+            })
+        return out
+
     segments = _segment_events(events)
     substantive = [s for s in segments if len(s["frames"]) >= 30]
     out: list[dict[str, Any]] = []
@@ -1733,6 +1885,10 @@ def render_case_segments(events: list[dict], specs: list[dict], mpb) -> list[dic
             "player": substantive[i].get("player"),
             "firstFrameId": min(frame_ids),
             "lastFrameId": max(frame_ids),
+            "caseFrameIdBase": min(frame_ids),
+            "fullFrameIdRange": [min(frame_ids), max(frame_ids) + 1],
+            "capturedFrameIdRange": [min(frame_ids), max(frame_ids) + 1],
+            "capturedLocalFrames": list(range(len(selected))),
             "frames": selected,
         })
     return out
@@ -1791,7 +1947,8 @@ def _layer_save_events_for_case(case_images: dict[str, Any],
                                 case_segment: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     case_id = str(case_images["caseId"])
-    first_frame_id = int(case_segment["firstFrameId"])
+    first_frame_id = int(case_segment.get(
+        "caseFrameIdBase", case_segment["firstFrameId"]))
     seq = 0
     for phase in RENDER_CAPTURE_SURFACES:
         for image in case_images.get("phases", {}).get(phase, []):
@@ -1852,7 +2009,8 @@ def _enrich_draw_dispatch_events_for_case(
     case_segment: dict[str, Any],
     case_images: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    first_frame_id = int(case_segment["firstFrameId"])
+    first_frame_id = int(case_segment.get(
+        "caseFrameIdBase", case_segment["firstFrameId"]))
     last_frame_id = int(case_segment["lastFrameId"])
     initial_image = _phase_images_by_frame(case_images, "initial").get(0)
     post_by_frame = _phase_images_by_frame(case_images, "post_draw")
@@ -2045,7 +2203,8 @@ def _enrich_render_execute_events_for_case(
     case_segment: dict[str, Any],
     case_images: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    first_frame_id = int(case_segment["firstFrameId"])
+    first_frame_id = int(case_segment.get(
+        "caseFrameIdBase", case_segment["firstFrameId"]))
     last_frame_id = int(case_segment["lastFrameId"])
     pre_by_frame = _phase_images_by_frame(case_images, "execute_pre")
     post_by_frame = _phase_images_by_frame(case_images, "execute_post")
@@ -2126,6 +2285,7 @@ def write_render_stage_artifacts(
     wasm_path: Path,
     startup_xp3: Path,
     capture_xp3: Path,
+    capture_window: FrameCaptureWindow,
 ) -> Path:
     events_by_stage_case = _split_render_events_by_stage_case(
         events, case_segments)
@@ -2218,6 +2378,26 @@ def write_render_stage_artifacts(
             "renderEventCount": total_event_count,
             "imageCount": image_manifest.get("summary", {}).get("imageCount", 0),
         },
+        **capture_window.manifest_fields(),
+        "cases": [
+            {
+                "caseId": segment["caseId"],
+                "frames": len(segment["frames"]),
+                "frameIdRange": [
+                    segment["firstFrameId"], segment["lastFrameId"]],
+                "fullFrameIdRange": segment.get("fullFrameIdRange"),
+                "capturedFrameIdRange": segment.get("capturedFrameIdRange"),
+                "capturedLocalFrames": segment.get("capturedLocalFrames", []),
+                "eventFiles": {
+                    stage: str(
+                        (Path("events") / stage /
+                         f"{segment['caseId']}.wasmtime.json").as_posix()
+                    )
+                    for stage in RENDER_STAGES
+                },
+            }
+            for segment in case_segments
+        ],
     }
     target = artifact_dir / "manifest.json"
     target.write_text(
@@ -2276,6 +2456,12 @@ def main(argv: list[str]) -> int:
             return 2
         try:
             specs = load_specs(spec_dir)
+            total_frames = sum(int(spec["frames"]) for spec in specs)
+            capture_window = frame_capture_window_from_bounds(
+                total_frames=total_frames,
+                start=int(args.capture_frame_start),
+                count=int(args.capture_frame_count),
+            )
             return run_python_host_driver(
                 wasm_path, startup_xp3, frames, args.host_output,
                 framebuffer_dir=framebuffer_dir,
@@ -2289,6 +2475,7 @@ def main(argv: list[str]) -> int:
                     args.save_layer_visual_readback_frame_start),
                 save_layer_visual_readback_frame_count=(
                     args.save_layer_visual_readback_frame_count),
+                capture_window=capture_window,
                 render_stage_out=args.render_stage_out,
                 specs=specs,
                 manifest_startup_xp3=(
@@ -2310,20 +2497,27 @@ def main(argv: list[str]) -> int:
 
     from oracle_runner.adapters import motion_playback as mpb
 
+    total_frames = sum(int(spec["frames"]) for spec in specs)
     try:
-        expected_frames = sum(int(spec["frames"]) for spec in specs)
+        capture_window = frame_capture_window_from_args(args, total_frames)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    try:
+        expected_frames = capture_window.driven_frames
         trace_startup_xp3 = startup_xp3
         temp_capture: tempfile.TemporaryDirectory[str] | None = None
         if framebuffer_dir is not None:
             temp_capture = tempfile.TemporaryDirectory(
                 prefix="krkr2-motion-wasmtime-framebuffer-xp3-")
             trace_startup_xp3 = _build_framebuffer_capture_xp3(
-                specs, Path(temp_capture.name))
+                specs, Path(temp_capture.name), capture_window)
         elif render_artifact_dir is not None:
             temp_capture = tempfile.TemporaryDirectory(
                 prefix="krkr2-motion-wasmtime-render-stage-xp3-")
             trace_startup_xp3 = _build_render_stage_capture_xp3(
-                specs, Path(temp_capture.name))
+                specs, Path(temp_capture.name), capture_window)
         try:
             port_events, render_events = run_lldb_guest_trace(
                 wasm_path,
@@ -2343,6 +2537,7 @@ def main(argv: list[str]) -> int:
                     args.save_layer_visual_readback_frame_start),
                 save_layer_visual_readback_frame_count=(
                     args.save_layer_visual_readback_frame_count),
+                capture_window=capture_window,
                 manifest_startup_xp3=startup_xp3
                 if (framebuffer_dir is not None or render_artifact_dir is not None)
                 else None,
@@ -2350,7 +2545,15 @@ def main(argv: list[str]) -> int:
         finally:
             if temp_capture is not None:
                 temp_capture.cleanup()
-        port_frames_by_id = partition_port_frames(port_events, specs, mpb)
+        port_frames_by_id = partition_port_frames(
+            port_events, specs, mpb, capture_window)
+        captured_cases_by_id = {
+            str(case["caseId"]): case for case in captured_case_ranges(
+                {spec["id"]: spec for spec in specs},
+                mpb.SEGMENT_ORDER,
+                capture_window,
+            )
+        }
         render_manifest: Path | None = None
         if render_artifact_dir is not None:
             image_manifest_path = render_artifact_dir / "image_manifest.json"
@@ -2363,11 +2566,13 @@ def main(argv: list[str]) -> int:
                 artifact_dir=render_artifact_dir,
                 specs=specs,
                 events=render_events,
-                case_segments=render_case_segments(port_events, specs, mpb),
+                case_segments=render_case_segments(
+                    port_events, specs, mpb, capture_window),
                 image_manifest=image_manifest,
                 wasm_path=wasm_path,
                 startup_xp3=startup_xp3,
                 capture_xp3=trace_startup_xp3,
+                capture_window=capture_window,
             )
             image_manifest_path.unlink(missing_ok=True)
     except Exception as exc:
@@ -2376,6 +2581,10 @@ def main(argv: list[str]) -> int:
 
     failures = 0
     for spec in specs:
+        captured_case = captured_cases_by_id.get(str(spec["id"]))
+        if capture_window.enabled and captured_case is None:
+            print(f"SKIP: {spec['id']} outside capture window")
+            continue
         oracle_path = trace_dir / f"{spec['id']}.oracle.json"
         if not oracle_path.exists():
             msg = f"no oracle for {spec['id']} at {oracle_path}"
@@ -2386,6 +2595,11 @@ def main(argv: list[str]) -> int:
                 print(f"SKIP: {msg}")
             continue
         oracle_frames = json.loads(oracle_path.read_text(encoding="utf-8"))
+        if captured_case is not None:
+            oracle_frames = [
+                oracle_frames[int(local_frame)]
+                for local_frame in captured_case["capturedLocalFrames"]
+            ]
 
         port_frames = port_frames_by_id.get(spec["id"])
         if port_frames is None:
