@@ -37,6 +37,9 @@ extern "C" {
 #include <emscripten.h>
 #endif
 
+TVP_GL_FUNC_DECL(void, TVPAlphaBlend_d_c,
+                 (tjs_uint32 * dest, const tjs_uint32 *src, tjs_int len));
+
 // #define USE_SWSCALE
 #define USE_CV_AFFINE
 
@@ -62,7 +65,141 @@ bool lowLevelLogoTraceEnabled() {
     return false;
 #endif
 }
+
+struct SoftwareAffineDiagnostics {
+    std::string path;
+    std::string renderer;
+    bool alphaBlendDReady = false;
+    bool tempFirstPixelValid = false;
+    tjs_uint32 tempFirstPixel = 0;
+    bool targetFirstPixelBeforeValid = false;
+    tjs_uint32 targetFirstPixelBefore = 0;
+    bool targetFirstPixelAfterValid = false;
+    tjs_uint32 targetFirstPixelAfter = 0;
+    bool alphaBlendDProbeValid = false;
+    tjs_uint32 alphaBlendDProbePixel = 0;
+    bool alphaBlendDCProbeValid = false;
+    tjs_uint32 alphaBlendDCProbePixel = 0;
+    bool alphaBlendDPointsToC = false;
+    tjs_int renderMethodOpacity = -1;
+    std::string renderMethodBranch;
+};
+
+thread_local SoftwareAffineDiagnostics gSoftwareAffineDiagnostics;
+
+void recordSoftwareAffineDiagnostics(const char *path,
+                                      iTVPRenderMethod *method) {
+    gSoftwareAffineDiagnostics.path = path ? path : "";
+    gSoftwareAffineDiagnostics.renderer = method ? method->GetName() : "";
+    gSoftwareAffineDiagnostics.alphaBlendDReady = TVPAlphaBlend_d != nullptr;
+}
+
+void recordSoftwareAffineTempFirstPixel(tjs_uint32 pixel) {
+    gSoftwareAffineDiagnostics.tempFirstPixelValid = true;
+    gSoftwareAffineDiagnostics.tempFirstPixel = pixel;
+}
+
+void recordSoftwareAffineTargetFirstPixelBefore(tjs_uint32 pixel) {
+    gSoftwareAffineDiagnostics.targetFirstPixelBeforeValid = true;
+    gSoftwareAffineDiagnostics.targetFirstPixelBefore = pixel;
+}
+
+void recordSoftwareAffineTargetFirstPixelAfter(tjs_uint32 pixel) {
+    gSoftwareAffineDiagnostics.targetFirstPixelAfterValid = true;
+    gSoftwareAffineDiagnostics.targetFirstPixelAfter = pixel;
+}
+
+void recordSoftwareAffineAlphaBlendDProbe() {
+    if(!TVPAlphaBlend_d) {
+        return;
+    }
+    tjs_uint32 dest = 0xff000000u;
+    const tjs_uint32 src = 0xffffffffu;
+    TVPAlphaBlend_d(&dest, &src, 1);
+    gSoftwareAffineDiagnostics.alphaBlendDProbeValid = true;
+    gSoftwareAffineDiagnostics.alphaBlendDProbePixel = dest;
+    gSoftwareAffineDiagnostics.alphaBlendDPointsToC =
+        TVPAlphaBlend_d == TVPAlphaBlend_d_c;
+
+    tjs_uint32 directDest = 0xff000000u;
+    TVPAlphaBlend_d_c(&directDest, &src, 1);
+    gSoftwareAffineDiagnostics.alphaBlendDCProbeValid = true;
+    gSoftwareAffineDiagnostics.alphaBlendDCProbePixel = directDest;
+}
+
+void recordSoftwareAffineRenderMethodBranch(tjs_int opa, const char *branch) {
+    gSoftwareAffineDiagnostics.renderMethodOpacity = opa;
+    gSoftwareAffineDiagnostics.renderMethodBranch = branch ? branch : "";
+}
 } // namespace
+
+extern "C" void TVPResetSoftwareAffineDiagnosticsForWasmtime() {
+    gSoftwareAffineDiagnostics = SoftwareAffineDiagnostics{};
+}
+
+extern "C" const char *TVPGetSoftwareAffinePathForWasmtime() {
+    return gSoftwareAffineDiagnostics.path.c_str();
+}
+
+extern "C" const char *TVPGetSoftwareAffineRendererForWasmtime() {
+    return gSoftwareAffineDiagnostics.renderer.c_str();
+}
+
+extern "C" int TVPGetSoftwareAffineAlphaBlendDReadyForWasmtime() {
+    return gSoftwareAffineDiagnostics.alphaBlendDReady ? 1 : 0;
+}
+
+extern "C" int TVPGetSoftwareAffineTempFirstPixelValidForWasmtime() {
+    return gSoftwareAffineDiagnostics.tempFirstPixelValid ? 1 : 0;
+}
+
+extern "C" unsigned int TVPGetSoftwareAffineTempFirstPixelForWasmtime() {
+    return gSoftwareAffineDiagnostics.tempFirstPixel;
+}
+
+extern "C" int TVPGetSoftwareAffineTargetFirstPixelBeforeValidForWasmtime() {
+    return gSoftwareAffineDiagnostics.targetFirstPixelBeforeValid ? 1 : 0;
+}
+
+extern "C" unsigned int TVPGetSoftwareAffineTargetFirstPixelBeforeForWasmtime() {
+    return gSoftwareAffineDiagnostics.targetFirstPixelBefore;
+}
+
+extern "C" int TVPGetSoftwareAffineTargetFirstPixelAfterValidForWasmtime() {
+    return gSoftwareAffineDiagnostics.targetFirstPixelAfterValid ? 1 : 0;
+}
+
+extern "C" unsigned int TVPGetSoftwareAffineTargetFirstPixelAfterForWasmtime() {
+    return gSoftwareAffineDiagnostics.targetFirstPixelAfter;
+}
+
+extern "C" int TVPGetSoftwareAffineAlphaBlendDProbeValidForWasmtime() {
+    return gSoftwareAffineDiagnostics.alphaBlendDProbeValid ? 1 : 0;
+}
+
+extern "C" unsigned int TVPGetSoftwareAffineAlphaBlendDProbePixelForWasmtime() {
+    return gSoftwareAffineDiagnostics.alphaBlendDProbePixel;
+}
+
+extern "C" int TVPGetSoftwareAffineAlphaBlendDCProbeValidForWasmtime() {
+    return gSoftwareAffineDiagnostics.alphaBlendDCProbeValid ? 1 : 0;
+}
+
+extern "C" unsigned int TVPGetSoftwareAffineAlphaBlendDCProbePixelForWasmtime() {
+    return gSoftwareAffineDiagnostics.alphaBlendDCProbePixel;
+}
+
+extern "C" int TVPGetSoftwareAffineAlphaBlendDPointsToCForWasmtime() {
+    return gSoftwareAffineDiagnostics.alphaBlendDPointsToC ? 1 : 0;
+}
+
+extern "C" int TVPGetSoftwareAffineRenderMethodOpacityForWasmtime() {
+    return gSoftwareAffineDiagnostics.renderMethodOpacity;
+}
+
+extern "C" const char *TVPGetSoftwareAffineRenderMethodBranchForWasmtime() {
+    return gSoftwareAffineDiagnostics.renderMethodBranch.c_str();
+}
 
 //---------------------------------------------------------------------------
 // heap allocation functions for bitmap bits
@@ -2038,6 +2175,7 @@ public:
                      tjs_int sy, tjs_int dx, tjs_int dy, tjs_int w,
                      tjs_int h) override {
         if(opa == 255) {
+            recordSoftwareAffineRenderMethodBranch(opa, "alpha-no-opa");
             for(tjs_int y = 0; y < h; ++y) {
                 tjs_uint32 *dst =
                     ((tjs_uint32 *)_dst->GetScanLineForWrite(dy + y)) + dx;
@@ -2046,6 +2184,7 @@ public:
                      w);
             }
         } else {
+            recordSoftwareAffineRenderMethodBranch(opa, "alpha-with-opa");
             for(tjs_int y = 0; y < h; ++y) {
                 tjs_uint32 *dst =
                     ((tjs_uint32 *)_dst->GetScanLineForWrite(dy + y)) + dx;
@@ -3364,6 +3503,17 @@ public:
                 }
             }
 #endif
+            if(dw > 0 && dh > 0) {
+                recordSoftwareAffineTempFirstPixel(
+                    *reinterpret_cast<const tjs_uint32 *>(ddata));
+            }
+            if(rctar.left == 0 && rctar.top == 0 &&
+               rctar.right > rctar.left && rctar.bottom > rctar.top) {
+                recordSoftwareAffineTargetFirstPixelBefore(
+                    *reinterpret_cast<const tjs_uint32 *>(
+                        tar->GetScanLineForRead(0)));
+            }
+            recordSoftwareAffineAlphaBlendDProbe();
             tTVPRect rc(0, 0, dw, dh);
             if(lowLevelLogoTraceEnabled()) {
                 if(auto logger = spdlog::get("core")) {
@@ -3377,6 +3527,12 @@ public:
             }
             ((tTVPRenderMethod_Software *)method)
                 ->DoRender(tar, rctar, tar, rctar, tmp, rc, nullptr, rc);
+            if(rctar.left == 0 && rctar.top == 0 &&
+               rctar.right > rctar.left && rctar.bottom > rctar.top) {
+                recordSoftwareAffineTargetFirstPixelAfter(
+                    *reinterpret_cast<const tjs_uint32 *>(
+                        tar->GetScanLineForRead(0)));
+            }
         } else {
             if(lowLevelLogoTraceEnabled()) {
                 if(auto logger = spdlog::get("core")) {
@@ -3389,6 +3545,12 @@ public:
             }
             ((tTVPRenderMethod_Software *)method)
                 ->DoRender(tar, rctar, tar, rctar, src, rcsrc, nullptr, rcsrc);
+            if(rctar.left == 0 && rctar.top == 0 &&
+               rctar.right > rctar.left && rctar.bottom > rctar.top) {
+                recordSoftwareAffineTargetFirstPixelAfter(
+                    *reinterpret_cast<const tjs_uint32 *>(
+                        tar->GetScanLineForRead(0)));
+            }
         }
     }
 
@@ -3869,6 +4031,7 @@ public:
                 }
                 tTVPRect rcdest;
                 if(!TVPIntersectRect(&rcdest, cr, dstrect)) {
+                    recordSoftwareAffineDiagnostics("rect-skip", method);
                     if(lowLevelLogoTraceEnabled()) {
                         if(auto logger = spdlog::get("core")) {
                             logger->warn(
@@ -3929,6 +4092,12 @@ public:
                 // cr.left, 0, clipW * 4);
                 // 					}
                 // 				}
+                recordSoftwareAffineDiagnostics(
+                    refrect.get_width() == rcdest.get_width() &&
+                            refrect.get_height() == rcdest.get_height()
+                        ? "rect-dorender"
+                        : "rect-resize-dorender",
+                    method);
                 OperateRect(method, target, rcdest, src, refrect);
                 return;
             }
@@ -3987,12 +4156,14 @@ public:
 
             cv::Mat dst_img;
             cv::Size dst_size(rcclip.get_width(), rcclip.get_height());
+            const char *softwareAffinePath = "quad-temp-perspective-dorender";
 #ifdef USE_CV_AFFINE
             if(isSrcRect && checkQuadSquared(dstpt)) {
                 cv::Mat affine_matrix =
                     cv::getAffineTransform(pts_src, pts_dst);
                 cv::warpAffine(src_img, dst_img, affine_matrix, dst_size,
                                cvFlags[StretchType]);
+                softwareAffinePath = "quad-temp-affine-dorender";
             } else
 #endif
             {
@@ -4007,6 +4178,11 @@ public:
                 dst_size.height, TVPTextureFormat::RGBA);
             tTVPRect rc(0, 0, dst_size.width, dst_size.height);
 
+            recordSoftwareAffineDiagnostics(softwareAffinePath, method);
+            if(dst_size.width > 0 && dst_size.height > 0) {
+                recordSoftwareAffineTempFirstPixel(
+                    *reinterpret_cast<const tjs_uint32 *>(dst_img.ptr(0)));
+            }
             ((tTVPRenderMethod_Software *)method)
                 ->DoRender(target, rcclip, target, rcclip, tmp, rc, nullptr,
                            rc);
@@ -4022,6 +4198,7 @@ public:
             // rcclip.get_height(), TVPTextureFormat::RGBA);
             // 			memset(tmp->GetScanLineForWrite(0), 0,
             // tmp->GetPitch() * rcclip.get_height());
+            recordSoftwareAffineDiagnostics("legacy-lintrans-fallback", method);
             TAffuncFunc affineloop = GetStretchFunction(
                 static_cast<tTVPRenderMethod_Software *>(method));
 

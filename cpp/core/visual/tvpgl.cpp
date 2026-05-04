@@ -13837,6 +13837,27 @@ TVP_GL_FUNC_PTR_DECL(void, TVPUpscale65_255, (tjs_uint8 * dest, tjs_int len));
 TVP_GL_FUNC_PTR_DECL(void, TVPConvert32BitTo24Bit,
                      (tjs_uint8 * dest, const tjs_uint8 *buf, tjs_int len));
 
+static void TVPRestoreNativeTVPGLBlendSlots() {
+    // Matches libkrkr2.so 0x8AB7DC final ordinary blend slot writes.
+    TVPAlphaBlend = TVPAlphaBlend_c;
+    TVPAlphaBlend_HDA = TVPAlphaBlend_HDA_c;
+    TVPAlphaBlend_o = TVPAlphaBlend_o_c;
+    TVPAlphaBlend_HDA_o = TVPAlphaBlend_HDA_o_c;
+    TVPAlphaBlend_d = TVPAlphaBlend_d_c;
+    TVPAlphaBlend_a = TVPAlphaBlend_a_c;
+    TVPAlphaBlend_do = TVPAlphaBlend_do_c;
+    TVPAlphaBlend_ao = TVPAlphaBlend_ao_c;
+    TVPAlphaColorMat = TVPAlphaColorMat_c;
+    TVPAdditiveAlphaBlend = TVPAdditiveAlphaBlend_c;
+    TVPAdditiveAlphaBlend_HDA = TVPAdditiveAlphaBlend_HDA_c;
+    TVPAdditiveAlphaBlend_o = TVPAdditiveAlphaBlend_o_c;
+    TVPAdditiveAlphaBlend_HDA_o = TVPAdditiveAlphaBlend_HDA_o_c;
+    TVPAdditiveAlphaBlend_a = TVPAdditiveAlphaBlend_a_c;
+    TVPAdditiveAlphaBlend_ao = TVPAdditiveAlphaBlend_ao_c;
+    TVPConvertAdditiveAlphaToAlpha = TVPConvertAdditiveAlphaToAlpha_c;
+    TVPConvertAlphaToAdditiveAlpha = TVPConvertAlphaToAdditiveAlpha_c;
+}
+
 /* suffix "_c" : function is written in C */
 // #include "tvpgl_route.h"
 
@@ -13844,25 +13865,6 @@ TVP_GL_FUNC_PTR_DECL(void, TVPConvert32BitTo24Bit,
 TVP_GL_FUNC_DECL(void, TVPInitTVPGL, ()) {
     //_Initialize_Route_Ptr();
 #if 1
-#if 0 // krkrz's blend_function
-	TVPAlphaBlend = TVPAlphaBlend_c;
-	TVPAlphaBlend_HDA = TVPAlphaBlend_HDA_c;
-	TVPAlphaBlend_o = TVPAlphaBlend_o_c;
-	TVPAlphaBlend_HDA_o = TVPAlphaBlend_HDA_o_c;
-	TVPAlphaBlend_d = TVPAlphaBlend_d_c;
-	TVPAlphaBlend_a = TVPAlphaBlend_a_c;
-	TVPAlphaBlend_do = TVPAlphaBlend_do_c;
-	TVPAlphaBlend_ao = TVPAlphaBlend_ao_c;
-	TVPAlphaColorMat = TVPAlphaColorMat_c;
-	TVPAdditiveAlphaBlend = TVPAdditiveAlphaBlend_c;
-	TVPAdditiveAlphaBlend_HDA = TVPAdditiveAlphaBlend_HDA_c;
-	TVPAdditiveAlphaBlend_o = TVPAdditiveAlphaBlend_o_c;
-	TVPAdditiveAlphaBlend_HDA_o = TVPAdditiveAlphaBlend_HDA_o_c;
-	TVPAdditiveAlphaBlend_a = TVPAdditiveAlphaBlend_a_c;
-	TVPAdditiveAlphaBlend_ao = TVPAdditiveAlphaBlend_ao_c;
-	TVPConvertAdditiveAlphaToAlpha = TVPConvertAdditiveAlphaToAlpha_c;
-	TVPConvertAlphaToAdditiveAlpha = TVPConvertAlphaToAdditiveAlpha_c;
-#endif
     TVPStretchAlphaBlend = TVPStretchAlphaBlend_c;
     TVPStretchAlphaBlend_HDA = TVPStretchAlphaBlend_HDA_c;
     TVPStretchAlphaBlend_o = TVPStretchAlphaBlend_o_c;
@@ -14129,6 +14131,7 @@ TVP_GL_FUNC_DECL(void, TVPInitTVPGL, ()) {
 #endif
     TVPCreateTable();
     TVPGL_C_Init();
+    TVPRestoreNativeTVPGLBlendSlots();
 }
 
 /*export*/

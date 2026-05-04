@@ -1,5 +1,11 @@
 # KrKr2 WebAssembly 移植
 
+## 项目目标
+
+本项目的最高目标不是功能等价的 WebAssembly 移植，而是尽可能 100% 一比一复原 Android kirikiroid2 `libkrkr2.so` 的源代码结构、数据流、调用链、对象生命周期、内部容器实现和边界行为。
+
+`libkrkr2.so` 反编译结果是唯一权威来源。本地代码、变量名、现有抽象、Web/Cocos/Emscripten 适配层都不能反向推导原始行为。除明确标注且不可避免的平台边界外，`cpp/` 实现必须优先复刻 `libkrkr2.so` 的架构和中间步骤，而不是追求表面行为一致。
+
 ## 构建
 - 调试版：`cmake --preset "Web Debug Config"` → `cmake --build out/web/debug`
 - 发布版：`cmake --preset "Web Release Config"` → `cmake --build out/web/release`

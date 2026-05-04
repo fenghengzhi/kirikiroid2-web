@@ -8,6 +8,26 @@
 
 using namespace motion::internal;
 
+#if defined(KRKR2_WASMTIME_HEADLESS)
+extern "C" void TVPResetSoftwareAffineDiagnosticsForWasmtime();
+extern "C" const char *TVPGetSoftwareAffinePathForWasmtime();
+extern "C" const char *TVPGetSoftwareAffineRendererForWasmtime();
+extern "C" int TVPGetSoftwareAffineAlphaBlendDReadyForWasmtime();
+extern "C" int TVPGetSoftwareAffineTempFirstPixelValidForWasmtime();
+extern "C" unsigned int TVPGetSoftwareAffineTempFirstPixelForWasmtime();
+extern "C" int TVPGetSoftwareAffineTargetFirstPixelBeforeValidForWasmtime();
+extern "C" unsigned int TVPGetSoftwareAffineTargetFirstPixelBeforeForWasmtime();
+extern "C" int TVPGetSoftwareAffineTargetFirstPixelAfterValidForWasmtime();
+extern "C" unsigned int TVPGetSoftwareAffineTargetFirstPixelAfterForWasmtime();
+extern "C" int TVPGetSoftwareAffineAlphaBlendDProbeValidForWasmtime();
+extern "C" unsigned int TVPGetSoftwareAffineAlphaBlendDProbePixelForWasmtime();
+extern "C" int TVPGetSoftwareAffineAlphaBlendDCProbeValidForWasmtime();
+extern "C" unsigned int TVPGetSoftwareAffineAlphaBlendDCProbePixelForWasmtime();
+extern "C" int TVPGetSoftwareAffineAlphaBlendDPointsToCForWasmtime();
+extern "C" int TVPGetSoftwareAffineRenderMethodOpacityForWasmtime();
+extern "C" const char *TVPGetSoftwareAffineRenderMethodBranchForWasmtime();
+#endif
+
 namespace {
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
@@ -1013,6 +1033,48 @@ namespace {
             srcBmp ? static_cast<int>(srcBmp->GetHeight()) : 0,
             renderLayer ? static_cast<int>(renderLayer->GetWidth()) : 0,
             renderLayer ? static_cast<int>(renderLayer->GetHeight()) : 0);
+        payload += fmt::format(
+            ",\"softwareAffinePath\":\"{}\","
+            "\"softwareAffineRenderer\":\"{}\","
+            "\"softwareAffineAlphaBlendDReady\":{},"
+            "\"softwareAffineTempFirstPixelValid\":{},"
+            "\"softwareAffineTempFirstPixel\":\"0x{:08x}\","
+            "\"softwareAffineTargetFirstPixelBeforeValid\":{},"
+            "\"softwareAffineTargetFirstPixelBefore\":\"0x{:08x}\","
+            "\"softwareAffineTargetFirstPixelAfterValid\":{},"
+            "\"softwareAffineTargetFirstPixelAfter\":\"0x{:08x}\","
+            "\"softwareAffineAlphaBlendDProbeValid\":{},"
+            "\"softwareAffineAlphaBlendDProbePixel\":\"0x{:08x}\","
+            "\"softwareAffineAlphaBlendDCProbeValid\":{},"
+            "\"softwareAffineAlphaBlendDCProbePixel\":\"0x{:08x}\","
+            "\"softwareAffineAlphaBlendDPointsToC\":{},"
+            "\"softwareAffineRenderMethodOpacity\":{},"
+            "\"softwareAffineRenderMethodBranch\":\"{}\"",
+            TVPGetSoftwareAffinePathForWasmtime(),
+            TVPGetSoftwareAffineRendererForWasmtime(),
+            TVPGetSoftwareAffineAlphaBlendDReadyForWasmtime() ? "true"
+                                                              : "false",
+            TVPGetSoftwareAffineTempFirstPixelValidForWasmtime() ? "true"
+                                                                 : "false",
+            TVPGetSoftwareAffineTempFirstPixelForWasmtime(),
+            TVPGetSoftwareAffineTargetFirstPixelBeforeValidForWasmtime()
+                ? "true"
+                : "false",
+            TVPGetSoftwareAffineTargetFirstPixelBeforeForWasmtime(),
+            TVPGetSoftwareAffineTargetFirstPixelAfterValidForWasmtime()
+                ? "true"
+                : "false",
+            TVPGetSoftwareAffineTargetFirstPixelAfterForWasmtime(),
+            TVPGetSoftwareAffineAlphaBlendDProbeValidForWasmtime() ? "true"
+                                                                   : "false",
+            TVPGetSoftwareAffineAlphaBlendDProbePixelForWasmtime(),
+            TVPGetSoftwareAffineAlphaBlendDCProbeValidForWasmtime() ? "true"
+                                                                    : "false",
+            TVPGetSoftwareAffineAlphaBlendDCProbePixelForWasmtime(),
+            TVPGetSoftwareAffineAlphaBlendDPointsToCForWasmtime() ? "true"
+                                                                  : "false",
+            TVPGetSoftwareAffineRenderMethodOpacityForWasmtime(),
+            TVPGetSoftwareAffineRenderMethodBranchForWasmtime());
         appendPixelProbeJson(payload, "sourceFirstPixel", sourcePixel);
         appendPixelProbeJson(payload, "targetFirstPixel", targetPixel);
         motion::detail::motionTraceRenderDirectExecuteProbe(
@@ -2144,6 +2206,7 @@ namespace motion {
                             buildAffineTrianglePoints(item.corners,
                                                      -0.5f, -0.5f);
 #if defined(KRKR2_WASMTIME_HEADLESS)
+                        TVPResetSoftwareAffineDiagnosticsForWasmtime();
                         emitDirectProbe(
                             "Player::executeLayerRenderCommands.direct.beforeOperateAffine",
                             "before",
