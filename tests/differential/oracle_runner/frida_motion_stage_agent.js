@@ -23,6 +23,8 @@ const PLAYER_APPLY_TRANSLATE_OFF = 0x6D5264;
 const PLAYER_BUILD_ITEMS_OFF     = 0x6C2334;
 const PLAYER_BUILD_COMMANDS_OFF  = 0x6C4E28;
 const PLAYER_RENDER_EXECUTE_OFF  = 0x6C7440;
+const PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_CALL_OFF = 0x6C8D74;
+const PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_AFTER_OFF = 0x6C8D78;
 const PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF = 0x6CE7D8;
 const LAYER_FILL_RECT_OFF        = 0x80EBAC;
 const LAYER_SAVE_LAYER_IMAGE_OFF = 0x80963C;
@@ -154,6 +156,8 @@ let saveLayerVisualReadbackFrameStart = 0;
 let saveLayerVisualReadbackFrameCount = 1;
 let activeSaveLayerImageContexts = [];
 let activePngSaveContexts = [];
+let activeRenderExecuteContexts = [];
+let directOperateAffineFuncCallHookCache = {};
 let nativeInstanceSupportCache = {};
 let bitmapGetScanLineFunctionCache = {};
 
@@ -300,6 +304,45 @@ function readVariantObject(variantPtr) {
     }
 }
 
+function readVariantScalar(variantPtr) {
+    try {
+        const variant = ptr(variantPtr);
+        if (variant.isNull()) {
+            return { type: null, int32: null, double: null, error: 'null variant' };
+        }
+        const type = readS32(variant, 16);
+        return {
+            type: type,
+            int32: readS32(variant, 0),
+            double: readDouble(variant, 0),
+            error: null,
+        };
+    } catch (e) {
+        return { type: null, int32: null, double: null, error: String(e) };
+    }
+}
+
+function readVariantArg(argArrayPtr, index) {
+    try {
+        const array = ptr(argArrayPtr);
+        if (array.isNull()) {
+            return { variant: null, object: null, scalar: null, error: 'null arg array' };
+        }
+        const variant = array.add(index * Process.pointerSize).readPointer();
+        if (variant.isNull()) {
+            return { variant: null, object: null, scalar: null, error: 'null arg variant' };
+        }
+        return {
+            variant: variant,
+            object: readVariantObject(variant),
+            scalar: readVariantScalar(variant),
+            error: null,
+        };
+    } catch (e) {
+        return { variant: null, object: null, scalar: null, error: String(e) };
+    }
+}
+
 function ptrEqual(a, b) {
     if (!a || !b) return false;
     try {
@@ -307,6 +350,84 @@ function ptrEqual(a, b) {
     } catch (e) {
         return false;
     }
+}
+
+function readNativeLayerFirstPixel(nativeLayer, layerObject) {
+    const native = nativeLayer ? ptr(nativeLayer) : NULL;
+    const diagnostics = {
+        layerObject: ptrHex(layerObject),
+        nativeLayer: ptrHex(native),
+        captureMethod: 'bitmap-get-scanline-first-pixel',
+    };
+    if (native.isNull()) {
+        return { ok: false, error: 'null native layer', diagnostics: diagnostics };
+    }
+    try {
+        const mainImage = readPointer(native, LAYER_NATIVE_MAIN_IMAGE_OFF);
+        diagnostics.mainImage = ptrHex(mainImage);
+        if (mainImage === null) {
+            return { ok: false, error: 'layer has no main image', diagnostics: diagnostics };
+        }
+        const bitmapImpl = readPointer(mainImage, BITMAP_NATIVE_IMPL_OFF);
+        diagnostics.bitmapImpl = ptrHex(bitmapImpl);
+        if (bitmapImpl === null) {
+            return { ok: false, error: 'main image has no bitmap impl', diagnostics: diagnostics };
+        }
+        const width = readU32(bitmapImpl, 12);
+        const height = readU32(bitmapImpl, 16);
+        diagnostics.width = width;
+        diagnostics.height = height;
+        if (!width || !height || width <= 0 || height <= 0 ||
+            width > 8192 || height > 8192) {
+            return { ok: false, error: 'invalid bitmap dimensions', diagnostics: diagnostics };
+        }
+        const getScanLinePtr = ensureBase().add(BITMAP_GET_SCANLINE_OFF);
+        const getScanLineFn = getCachedNativeFunction(
+            bitmapGetScanLineFunctionCache,
+            getScanLinePtr,
+            'pointer', ['pointer', 'uint']);
+        diagnostics.getScanLineFunction = ptrHex(getScanLinePtr);
+        const row = getScanLineFn(mainImage, 0);
+        diagnostics.rowPtr = ptrHex(row);
+        if (!row || row.isNull()) {
+            return { ok: false, error: 'bitmap scanline is null', diagnostics: diagnostics };
+        }
+        const bgra = row.readU32();
+        return {
+            ok: true,
+            bgra: '0x' + ('00000000' + bgra.toString(16)).slice(-8),
+            b: bgra & 0xff,
+            g: (bgra >>> 8) & 0xff,
+            r: (bgra >>> 16) & 0xff,
+            a: (bgra >>> 24) & 0xff,
+            width: width,
+            height: height,
+            diagnostics: diagnostics,
+        };
+    } catch (e) {
+        return { ok: false, error: String(e), diagnostics: diagnostics };
+    }
+}
+
+function readLayerFirstPixel(layerObject) {
+    const resolved = resolveLayerNativeInstance(layerObject);
+    if (!resolved.layer) {
+        return {
+            ok: false,
+            error: resolved.error || 'no layer',
+            diagnostics: {
+                layerObject: ptrHex(layerObject),
+                nativeLayer: null,
+                classId: resolved.classId || null,
+                hresult: resolved.hresult || null,
+            },
+        };
+    }
+    const pixel = readNativeLayerFirstPixel(resolved.layer, layerObject);
+    if (pixel.diagnostics) {
+        pixel.diagnostics.classId = resolved.classId || null;
+    }
+    return pixel;
 }
 
 function resolveLayerNativeInstance(layerObject) {
@@ -436,6 +557,16 @@ function readNativeLayerImageSnapshot(nativeLayer, layerObject) {
 }
 
 function readLayerImageSnapshot(layerObject) {
+    if (!layerObject) {
+        return {
+            ok: false,
+            error: 'null layer object',
+            diagnostics: {
+                layerObject: null,
+                nativeLayer: null,
+            },
+        };
+    }
     const resolved = resolveLayerNativeInstance(layerObject);
     if (!resolved.layer) {
         return {
@@ -771,6 +902,30 @@ function emitRender(stage, kind, semanticPayload, diagnostics, samplePoint) {
     ev.seq = seqCounter++;
     ev.timeMs = Date.now() - startTimeMs;
     events.push(ev);
+}
+
+function currentRenderExecuteContext() {
+    if (activeRenderExecuteContexts.length === 0) return null;
+    return activeRenderExecuteContexts[activeRenderExecuteContexts.length - 1];
+}
+
+function emitDirectExecuteProbe(ctx, phase, samplePoint, extra) {
+    if (!recording || !stageEnabled(STAGE_RENDER_EXECUTE) || !ctx) return;
+    const frameId = renderFrameIdFor(ctx.player);
+    if (frameId === null || frameId === undefined) return;
+    const payload = extra || {};
+    payload.schema = 'motion-render-stage-oracle-v1-event';
+    payload.source = 'android-frida-direct-execute-probe';
+    payload.stage = STAGE_RENDER_EXECUTE;
+    payload.kind = 'direct_execute_probe';
+    payload.samplePoint = samplePoint || 'sub_6C7440.direct.operateAffine';
+    payload.frameId = frameId;
+    payload.player = ptrHex(ctx.player);
+    payload.probePhase = phase;
+    payload.branch = 'direct.operateAffine';
+    payload.seq = seqCounter++;
+    payload.timeMs = Date.now() - startTimeMs;
+    events.push(payload);
 }
 
 function currentDrawContextFor(player) {
@@ -1375,6 +1530,146 @@ function leaveRenderContext(ctx) {
     currentRenderPlayer = ctx.player;
 }
 
+function intArgValue(arg) {
+    if (!arg || !arg.scalar) return null;
+    return arg.scalar.int32;
+}
+
+function readUtf16StringSafe(value) {
+    try {
+        const p = ptr(value);
+        if (p.isNull()) return null;
+        return p.readUtf16String();
+    } catch (e) {
+        return null;
+    }
+}
+
+function likelyDirectRenderItem(ctx) {
+    if (!ctx || !ctx.mainList) return null;
+    try {
+        const mainList = readRenderItemVector(ctx.mainList, 16);
+        if (!mainList || !mainList.items) return null;
+        for (const item of mainList.items) {
+            if (item && item.sourceGate232 && !item.parentItem264) return item;
+        }
+    } catch (e) {}
+    return null;
+}
+
+function directOperateAffinePayload(ctx, phase, machineContext) {
+    const targetObject = phase === 'before' && machineContext && machineContext.x0
+        ? ptr(machineContext.x0) : (ctx ? ctx.target : null);
+    const argArray = machineContext && machineContext.x6
+        ? ptr(machineContext.x6) : null;
+    const sourceArg = argArray ? readVariantArg(argArray, 0) : null;
+    const affineArg = argArray ? readVariantArg(argArray, 5) : null;
+    const modeArg = argArray ? readVariantArg(argArray, 12) : null;
+    const opacityArg = argArray ? readVariantArg(argArray, 13) : null;
+    const typeArg = argArray ? readVariantArg(argArray, 14) : null;
+    const itemPtr = machineContext && machineContext.x23
+        ? ptr(machineContext.x23) : null;
+    let renderItem = null;
+    try {
+        if (itemPtr && !itemPtr.isNull()) renderItem = readRenderItem(itemPtr, null);
+    } catch (e) {
+        renderItem = { item: ptrHex(itemPtr), error: String(e) };
+    }
+    if (!renderItem) renderItem = likelyDirectRenderItem(ctx);
+    const sourceObject = sourceArg && sourceArg.object
+        ? sourceArg.object.object : null;
+    const targetFirstPixel = targetObject
+        ? readLayerFirstPixel(targetObject) : { ok: false, error: 'no target object' };
+    const sourceFirstPixel = sourceObject
+        ? readLayerFirstPixel(sourceObject) : { ok: false, error: 'no source layer object' };
+    return {
+        probePhase: phase,
+        branch: 'direct.operateAffine',
+        nodeIndex: null,
+        meshType: renderItem ? renderItem.meshType280 : null,
+        blendMode: intArgValue(modeArg),
+        opacity: intArgValue(opacityArg),
+        stretchType: intArgValue(typeArg),
+        affine: intArgValue(affineArg),
+        targetFace: null,
+        targetDrawFace: null,
+        targetHoldAlpha: null,
+        resolvedBltMethod: null,
+        resolvedBltMethodName: null,
+        target: ptrHex(targetObject),
+        sourceObject: ptrHex(sourceObject),
+        argArray: ptrHex(argArray),
+        sourceVariant: sourceArg ? ptrHex(sourceArg.variant) : null,
+        sourceVariantType: sourceArg && sourceArg.object
+            ? sourceArg.object.type : null,
+        sourceVariantError: sourceArg
+            ? (sourceArg.error ||
+               (sourceArg.object ? sourceArg.object.error : null))
+            : null,
+        renderItem: renderItem,
+        sourceFirstPixel: sourceFirstPixel,
+        targetFirstPixel: targetFirstPixel,
+        diagnostics: {
+            callSite: hexOff(PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_CALL_OFF),
+            afterSite: hexOff(PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_AFTER_OFF),
+            targetPixelDiagnostics: targetFirstPixel.diagnostics || null,
+            sourcePixelDiagnostics: sourceFirstPixel.diagnostics || null,
+        },
+    };
+}
+
+function ensureDirectOperateAffineFuncCallHook(fnPtr) {
+    const key = ptrHex(fnPtr);
+    if (!key || directOperateAffineFuncCallHookCache[key]) return;
+    directOperateAffineFuncCallHookCache[key] = true;
+    Interceptor.attach(ptr(fnPtr), {
+        onEnter(args) {
+            const ctx = currentRenderExecuteContext();
+            if (!ctx) return;
+            const methodName = readUtf16StringSafe(args[2]);
+            const argc = readArgInt(args[5]);
+            if (argc !== 15) return;
+            this.directOperateAffineCtx = ctx;
+            this.directOperateAffinePayload = directOperateAffinePayload(
+                ctx, 'before', {
+                    x0: args[0],
+                    x6: args[6],
+                    x23: NULL,
+                });
+            this.directOperateAffinePayload.target = ptrHex(ctx.target);
+            this.directOperateAffinePayload.targetFirstPixel =
+                readLayerFirstPixel(ctx.target);
+            this.directOperateAffinePayload.funcCallMethodName = methodName;
+            this.directOperateAffinePayload.funcCallTarget = ptrHex(args[0]);
+            this.directOperateAffinePayload.funcCallMatchesExecuteTarget =
+                ptrEqual(args[0], ctx.target);
+            emitDirectExecuteProbe(
+                ctx,
+                'before',
+                'sub_6C7440.direct.beforeOperateAffine',
+                this.directOperateAffinePayload);
+        },
+        onLeave() {
+            const ctx = this.directOperateAffineCtx;
+            if (!ctx) return;
+            const payload = Object.assign(
+                {}, this.directOperateAffinePayload || {});
+            payload.probePhase = 'after';
+            payload.samplePoint = 'sub_6C7440.direct.afterOperateAffine';
+            payload.targetFirstPixel = readLayerFirstPixel(ctx.target);
+            payload.beforeTargetFirstPixel =
+                this.directOperateAffinePayload
+                    ? this.directOperateAffinePayload.targetFirstPixel || null
+                    : null;
+            emitDirectExecuteProbe(
+                ctx,
+                'after',
+                'sub_6C7440.direct.afterOperateAffine',
+                payload);
+        },
+    });
+}
+
 function installHook() {
     if (hooked) return;
     ensureBase();
@@ -1713,6 +2008,21 @@ function installHook() {
                 : null;
             this.mainList = args[2];
             this.auxList = args[3];
+            this.executeCtx = {
+                player: this.player,
+                target: this.target,
+                targetVariant: this.targetVariant,
+                targetVariantObject: this.targetVariantObject,
+                mainList: this.mainList,
+                auxList: this.auxList,
+            };
+            activeRenderExecuteContexts.push(this.executeCtx);
+            try {
+                if (this.target) {
+                    const fnPtr = ptr(this.target).readPointer().add(0x10).readPointer();
+                    ensureDirectOperateAffineFuncCallHook(fnPtr);
+                }
+            } catch (e) {}
             sendLayerRawProbe(
                 this.player, this.target, null,
                 'sub_6C7440.enter',
@@ -1736,10 +2046,13 @@ function installHook() {
                 addr: PLAYER_RENDER_EXECUTE_OFF,
                 player: ptrHex(this.player),
                 targetVariant: ptrHex(this.targetVariant),
-                targetVariantType: this.targetVariantObject.type,
+                targetVariantType: this.targetVariantObject
+                    ? this.targetVariantObject.type : null,
                 target: ptrHex(this.target),
-                targetObjThis: ptrHex(this.targetVariantObject.objThis),
-                targetError: this.targetVariantObject.error,
+                targetObjThis: this.targetVariantObject
+                    ? ptrHex(this.targetVariantObject.objThis) : null,
+                targetError: this.targetVariantObject
+                    ? this.targetVariantObject.error : null,
                 drawTarget: this.drawCtx
                     ? ptrHex(this.drawCtx.targetObject) : null,
                 targetMatchesDrawArg: this.targetMatchesDrawArg,
@@ -1748,6 +2061,11 @@ function installHook() {
             }, 'sub_6C7440.enter');
         },
         onLeave(retval) {
+            const leaveTarget = this.target ||
+                (this.executeCtx ? this.executeCtx.target : null);
+            const leaveTargetVariantObject =
+                this.targetVariantObject ||
+                (this.executeCtx ? this.executeCtx.targetVariantObject : null);
             const ctx = currentDrawContextFor(this.player);
             if (ctx) {
                 ctx.renderToCanvasCalled = true;
@@ -1760,31 +2078,40 @@ function installHook() {
                 addr: PLAYER_RENDER_EXECUTE_OFF,
                 player: ptrHex(this.player),
                 targetVariant: ptrHex(this.targetVariant),
-                targetVariantType: this.targetVariantObject.type,
-                target: ptrHex(this.target),
-                targetObjThis: ptrHex(this.targetVariantObject.objThis),
-                targetError: this.targetVariantObject.error,
+                targetVariantType: leaveTargetVariantObject
+                    ? leaveTargetVariantObject.type : null,
+                target: ptrHex(leaveTarget),
+                targetObjThis: leaveTargetVariantObject
+                    ? ptrHex(leaveTargetVariantObject.objThis) : null,
+                targetError: leaveTargetVariantObject
+                    ? leaveTargetVariantObject.error : null,
                 drawTarget: this.drawCtx
                     ? ptrHex(this.drawCtx.targetObject) : null,
                 targetMatchesDrawArg: this.targetMatchesDrawArg,
             }, 'sub_6C7440.leave');
             sendLayerRawProbe(
-                this.player, this.target, null,
+                this.player, leaveTarget, null,
                 'sub_6C7440.leave',
                 {},
                 {
                     addr: PLAYER_RENDER_EXECUTE_OFF,
                     targetVariant: ptrHex(this.targetVariant),
-                    target: ptrHex(this.target),
-                    targetObjThis: ptrHex(this.targetVariantObject.objThis),
-                    targetError: this.targetVariantObject.error,
+                    target: ptrHex(leaveTarget),
+                    targetObjThis: leaveTargetVariantObject
+                        ? ptrHex(leaveTargetVariantObject.objThis) : null,
+                    targetError: leaveTargetVariantObject
+                        ? leaveTargetVariantObject.error : null,
                     drawTarget: this.drawCtx
                         ? ptrHex(this.drawCtx.targetObject) : null,
                     targetMatchesDrawArg: this.targetMatchesDrawArg,
                 });
             sendRenderImageCheckpoint(
-                this.player, this.target, 'execute_post',
+                this.player, leaveTarget, 'execute_post',
                 'sub_6C7440.leave.before-return');
+            if (this.executeCtx) {
+                const idx = activeRenderExecuteContexts.lastIndexOf(this.executeCtx);
+                if (idx >= 0) activeRenderExecuteContexts.splice(idx, 1);
+            }
         },
     });
 

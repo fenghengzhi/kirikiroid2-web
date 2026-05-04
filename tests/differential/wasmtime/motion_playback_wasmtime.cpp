@@ -1413,6 +1413,16 @@ void motionTraceRenderImageCheckpoint(Player *player,
         width, height, rowBytes, diagnostics(failedRow));
 }
 
+void motionTraceRenderDirectExecuteProbe(Player *player,
+                                         const char *samplePoint,
+                                         const char *payload) {
+    if(!isCurrentRenderPlayer(player)) return;
+    appendRenderEvent(
+        player, "render_execute", "direct_execute_probe",
+        samplePoint ? samplePoint : "Player::executeLayerRenderCommands.direct",
+        payload ? payload : "", playerDiagnostics(player));
+}
+
 void motionTraceLayerRawProbeNative(Player *player, const void *nativeLayer,
                                     const char *samplePoint) {
     if(!g_record_layer_raw_probes || !nativeLayer) return;

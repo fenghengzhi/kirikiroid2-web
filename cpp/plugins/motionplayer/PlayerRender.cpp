@@ -2,6 +2,7 @@
 // Split from Player.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "BitmapIntf.h"
 #include "ConfigManager/IndividualConfigManager.h"
 #include "MotionTraceWeb.h"
 
@@ -10,6 +11,88 @@ using namespace motion::internal;
 namespace {
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
+
+    struct DispatchReleaseGuard {
+        explicit DispatchReleaseGuard(iTJSDispatch2 *object) : object(object) {}
+        ~DispatchReleaseGuard() {
+            if(object) {
+                object->Release();
+            }
+        }
+
+        DispatchReleaseGuard(const DispatchReleaseGuard &) = delete;
+        DispatchReleaseGuard &operator=(const DispatchReleaseGuard &) = delete;
+
+        iTJSDispatch2 *object = nullptr;
+    };
+
+    bool createBitmapVariantFromBaseBitmapLike_0x6C7440(
+        const iTVPBaseBitmap &src,
+        tTJSVariant &out) {
+        iTJSDispatch2 *bitmapObject = TVPCreateBitmapObject();
+        if(!bitmapObject) {
+            return false;
+        }
+        DispatchReleaseGuard releaseBitmapObject(bitmapObject);
+
+        tTJSNI_Bitmap *bitmapNative = nullptr;
+        if(TJS_FAILED(bitmapObject->NativeInstanceSupport(
+               TJS_NIS_GETINSTANCE, tTJSNC_Bitmap::ClassID,
+               reinterpret_cast<iTJSNativeInstance **>(&bitmapNative))) ||
+           !bitmapNative) {
+            return false;
+        }
+
+        bitmapNative->CopyFrom(&src);
+        out = tTJSVariant(bitmapObject, bitmapObject);
+        return true;
+    }
+
+    tjs_error callLayerOperateAffineLike_0x6C7440(
+        iTJSDispatch2 *renderLayerObject,
+        const tTVPPointD *points,
+        const iTVPBaseBitmap &src,
+        const tTVPRect &sourceRect,
+        tTVPBlendOperationMode blendMode,
+        tjs_int opacity,
+        tTVPBBStretchType type) {
+        if(!renderLayerObject || !points) {
+            return TJS_E_FAIL;
+        }
+
+        tTJSVariant sourceBitmap;
+        if(!createBitmapVariantFromBaseBitmapLike_0x6C7440(src,
+                                                           sourceBitmap)) {
+            return TJS_E_NATIVECLASSCRASH;
+        }
+
+        tTJSVariant srcLeft(sourceRect.left);
+        tTJSVariant srcTop(sourceRect.top);
+        tTJSVariant srcWidth(sourceRect.get_width());
+        tTJSVariant srcHeight(sourceRect.get_height());
+        tTJSVariant useAffineMatrix(false);
+        tTJSVariant x0(points[0].x);
+        tTJSVariant y0(points[0].y);
+        tTJSVariant x1(points[1].x);
+        tTJSVariant y1(points[1].y);
+        tTJSVariant x2(points[2].x);
+        tTJSVariant y2(points[2].y);
+        tTJSVariant mode(static_cast<tjs_int32>(blendMode));
+        tTJSVariant opa(static_cast<tjs_int32>(opacity));
+        tTJSVariant stretchType(static_cast<tjs_int32>(type));
+
+        tTJSVariant *args[] = {
+            &sourceBitmap, &srcLeft, &srcTop, &srcWidth, &srcHeight,
+            &useAffineMatrix, &x0, &y0, &x1, &y1, &x2, &y2,
+            &mode, &opa, &stretchType,
+        };
+
+        static tjs_uint32 operateAffineHint = 0;
+        // Matches libkrkr2.so 0x6C7440 FuncCall("operateAffine") dispatch shape.
+        return renderLayerObject->FuncCall(
+            0, TJS_W("operateAffine"), &operateAffineHint, nullptr, 15, args,
+            renderLayerObject);
+    }
 
     bool packedColorsAreDefault(std::uint32_t c0, std::uint32_t c1,
                                 std::uint32_t c2, std::uint32_t c3) {
@@ -812,6 +895,130 @@ namespace {
             overlapRect.right, overlapRect.bottom);
         return true;
     }
+
+#if defined(KRKR2_WASMTIME_HEADLESS)
+    struct FirstPixelProbe {
+        bool ok = false;
+        std::uint32_t bgra = 0;
+        int b = 0;
+        int g = 0;
+        int r = 0;
+        int a = 0;
+    };
+
+    FirstPixelProbe readFirstPixelForDiagnostics(const iTVPBaseBitmap *bitmap) {
+        FirstPixelProbe probe;
+        if(!bitmap || bitmap->GetWidth() <= 0 || bitmap->GetHeight() <= 0) {
+            return probe;
+        }
+        const auto *row = static_cast<const std::uint8_t *>(
+            bitmap->GetScanLine(0));
+        if(!row) {
+            return probe;
+        }
+        std::memcpy(&probe.bgra, row, sizeof(probe.bgra));
+        probe.b = static_cast<int>(probe.bgra & 0xffu);
+        probe.g = static_cast<int>((probe.bgra >> 8) & 0xffu);
+        probe.r = static_cast<int>((probe.bgra >> 16) & 0xffu);
+        probe.a = static_cast<int>((probe.bgra >> 24) & 0xffu);
+        probe.ok = true;
+        return probe;
+    }
+
+    void appendPointerJson(std::string &out, const char *name, const void *ptr) {
+        out += ",\"";
+        out += name;
+        out += "\":";
+        if(ptr) {
+            out += "\"";
+            out += fmt::format("{}", ptr);
+            out += "\"";
+        } else {
+            out += "null";
+        }
+    }
+
+    void appendPixelProbeJson(std::string &out, const char *name,
+                              const FirstPixelProbe &probe) {
+        out += fmt::format(
+            ",\"{}\":{{\"ok\":{},\"bgra\":\"0x{:08x}\",\"b\":{},\"g\":{},\"r\":{},\"a\":{}}}",
+            name, probe.ok ? "true" : "false", probe.bgra,
+            probe.b, probe.g, probe.r, probe.a);
+    }
+
+    const char *bltMethodNameForDiagnostics(tTVPBBBltMethod method) {
+        switch(method) {
+            case bmCopy: return "bmCopy";
+            case bmCopyOnAlpha: return "bmCopyOnAlpha";
+            case bmAlpha: return "bmAlpha";
+            case bmAlphaOnAlpha: return "bmAlphaOnAlpha";
+            case bmAddAlphaOnAlpha: return "bmAddAlphaOnAlpha";
+            case bmAlphaOnAddAlpha: return "bmAlphaOnAddAlpha";
+            case bmCopyOnAddAlpha: return "bmCopyOnAddAlpha";
+            default: return "other";
+        }
+    }
+
+    void emitDirectExecuteDiagnostics(
+        motion::Player *player,
+        const char *samplePoint,
+        const char *probePhase,
+        const char *branch,
+        const char *executionMethod,
+        const motion::detail::PlayerRuntime::PreparedRenderItem &item,
+        tTJSNI_BaseLayer *renderLayer,
+        const std::shared_ptr<tTVPBaseBitmap> &srcBmp,
+        tTVPBlendOperationMode blendMode,
+        tjs_int opacity,
+        tTVPBBStretchType type) {
+        tTVPBBBltMethod bltMethod = bmCopy;
+        const bool bltMethodOk =
+            renderLayer &&
+            renderLayer->ResolveBltMethodForDiagnostics(bltMethod, blendMode);
+        auto *targetImage = renderLayer ? renderLayer->GetMainImage() : nullptr;
+        const auto sourcePixel =
+            readFirstPixelForDiagnostics(srcBmp.get());
+        const auto targetPixel =
+            readFirstPixelForDiagnostics(targetImage);
+
+        std::string payload;
+        payload += fmt::format(
+            "\"probePhase\":\"{}\",\"branch\":\"{}\","
+            "\"executionMethod\":\"{}\",\"nodeIndex\":{},"
+            "\"meshType\":{},\"blendMode\":{},\"opacity\":{},\"stretchType\":{},"
+            "\"targetFace\":{},\"targetDrawFace\":{},\"targetHoldAlpha\":{},"
+            "\"resolvedBltMethodOk\":{},\"resolvedBltMethod\":{},"
+            "\"resolvedBltMethodName\":\"{}\"",
+            probePhase ? probePhase : "",
+            branch ? branch : "",
+            executionMethod ? executionMethod : "",
+            item.nodeIndex,
+            item.meshType,
+            static_cast<int>(blendMode),
+            opacity,
+            static_cast<int>(type),
+            renderLayer ? static_cast<int>(renderLayer->GetFace()) : -1,
+            renderLayer ? static_cast<int>(
+                              renderLayer->GetDrawFaceForDiagnostics()) : -1,
+            renderLayer && renderLayer->GetHoldAlpha() ? 1 : 0,
+            bltMethodOk ? "true" : "false",
+            bltMethodOk ? static_cast<int>(bltMethod) : -1,
+            bltMethodOk ? bltMethodNameForDiagnostics(bltMethod) : "unresolved");
+        appendPointerJson(payload, "renderLayer", renderLayer);
+        appendPointerJson(payload, "targetImage", targetImage);
+        appendPointerJson(payload, "sourceBitmap", srcBmp.get());
+        payload += fmt::format(
+            ",\"sourceSize\":[{},{}],\"targetSize\":[{},{}]",
+            srcBmp ? static_cast<int>(srcBmp->GetWidth()) : 0,
+            srcBmp ? static_cast<int>(srcBmp->GetHeight()) : 0,
+            renderLayer ? static_cast<int>(renderLayer->GetWidth()) : 0,
+            renderLayer ? static_cast<int>(renderLayer->GetHeight()) : 0);
+        appendPixelProbeJson(payload, "sourceFirstPixel", sourcePixel);
+        appendPixelProbeJson(payload, "targetFirstPixel", targetPixel);
+        motion::detail::motionTraceRenderDirectExecuteProbe(
+            player, samplePoint, payload.c_str());
+    }
+#endif
 
 } // namespace
 
@@ -1921,13 +2128,48 @@ namespace motion {
                         0, 0, static_cast<tjs_int>(srcBmp->GetWidth()),
                         static_cast<tjs_int>(srcBmp->GetHeight()));
                     std::string branch("direct.operateAffine");
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                    const auto emitDirectProbe =
+                        [&](const char *samplePoint, const char *phase,
+                            const char *executionMethod =
+                                "native-direct-call") {
+                        emitDirectExecuteDiagnostics(
+                            this, samplePoint, phase, branch.c_str(),
+                            executionMethod, item, renderLayer, srcBmp,
+                            blendMode, opa, stNearest);
+                    };
+#endif
                     if(item.meshType == 0) {
                         const auto worldPts =
                             buildAffineTrianglePoints(item.corners,
                                                      -0.5f, -0.5f);
-                        renderLayer->OperateAffine(worldPts.data(), srcBmp.get(),
-                                                   sourceRect, blendMode, opa,
-                                                   stNearest);
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                        emitDirectProbe(
+                            "Player::executeLayerRenderCommands.direct.beforeOperateAffine",
+                            "before",
+                            "tjs-funcall-operateAffine");
+#endif
+                        const tjs_error operateResult =
+                            callLayerOperateAffineLike_0x6C7440(
+                                renderLayerObject, worldPts.data(), *srcBmp,
+                                sourceRect, blendMode, opa, stNearest);
+                        if(TJS_FAILED(operateResult)) {
+                            detail::logoChainTraceCheck(
+                                motionPath, "execute.directOperateAffine",
+                                "0x6C7440", _clampedEvalTime,
+                                "FuncCall(\"operateAffine\") should succeed",
+                                fmt::format("nodeIndex={} hr={}",
+                                            item.nodeIndex, operateResult),
+                                false,
+                                "sub_6C7440 direct affine dispatch failed");
+                            continue;
+                        }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                        emitDirectProbe(
+                            "Player::executeLayerRenderCommands.direct.afterOperateAffine",
+                            "after",
+                            "tjs-funcall-operateAffine");
+#endif
                     } else {
                         if(item.meshPoints.empty() ||
                            item.meshDivX < 2 || item.meshDivY < 2) {
@@ -1937,16 +2179,36 @@ namespace motion {
                             buildMeshPoints(item.meshPoints, -0.5f, -0.5f);
                         if(item.meshType == 1) {
                             branch = "direct.operateBezierPatch";
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                            emitDirectProbe(
+                                "Player::executeLayerRenderCommands.direct.beforeOperateBezierPatch",
+                                "before");
+#endif
                             renderLayer->OperateBezierPatch(
                                 worldMeshPoints.data(), item.meshDivX,
                                 item.meshDivY, srcBmp.get(), sourceRect,
                                 blendMode, opa, stNearest, _clearEnabled);
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                            emitDirectProbe(
+                                "Player::executeLayerRenderCommands.direct.afterOperateBezierPatch",
+                                "after");
+#endif
                         } else if(item.meshType == 2) {
                             branch = "direct.operateMesh";
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                            emitDirectProbe(
+                                "Player::executeLayerRenderCommands.direct.beforeOperateMesh",
+                                "before");
+#endif
                             renderLayer->OperateMesh(
                                 worldMeshPoints.data(), item.meshDivX,
                                 item.meshDivY, srcBmp.get(), sourceRect,
                                 blendMode, opa, stNearest, _clearEnabled);
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                            emitDirectProbe(
+                                "Player::executeLayerRenderCommands.direct.afterOperateMesh",
+                                "after");
+#endif
                         } else {
                             continue;
                         }

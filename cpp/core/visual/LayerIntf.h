@@ -747,6 +747,13 @@ public:
         UpdateDrawFace();
     }
     tTVPDrawFace GetFace() const { return Face; }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+    tTVPDrawFace GetDrawFaceForDiagnostics() const { return DrawFace; }
+    bool ResolveBltMethodForDiagnostics(tTVPBBBltMethod &result,
+                                        tTVPBlendOperationMode mode) {
+        return GetBltMethodFromOperationModeAndDrawFace(result, mode);
+    }
+#endif
 
     void SetHoldAlpha(bool b) { HoldAlpha = b; }
     bool GetHoldAlpha() const { return HoldAlpha; }
