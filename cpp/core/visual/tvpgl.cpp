@@ -704,6 +704,65 @@ TVP_GL_FUNC_DECL(void, TVPAlphaBlend_d_c,
     }
 }
 
+static inline tjs_uint32 TVPAlphaBlendDFormulaLike_0xA862C8(tjs_uint32 d,
+                                                            tjs_uint32 s) {
+    const tjs_uint32 addr = ((s >> 16) & 0xff00) + (d >> 24);
+    const tjs_uint32 alpha = TVPOpacityOnOpacityTable[addr];
+    tjs_uint32 d1 = d & 0xff00ff;
+    d1 = (d1 + (((s & 0xff00ff) - d1) * alpha >> 8)) & 0xff00ff;
+    d &= 0xff00;
+    s &= 0xff00;
+    return d1 + ((d + ((s - d) * alpha >> 8)) & 0xff00) +
+        (TVPNegativeMulTable[addr] << 24);
+}
+
+TVP_GL_FUNC_DECL(void, TVPAlphaBlend_d_0xA862C8_c,
+                 (tjs_uint32 * dest, const tjs_uint32 *src, tjs_int len)) {
+    if(len <= 0) {
+        return;
+    }
+
+    // Matches libkrkr2.so 0xA862C8 optimized TVPAlphaBlend_d dispatch shape.
+    tjs_int prefix = (reinterpret_cast<tjs_uintptr_t>(dest) & 4) ? 1 : 0;
+    if(prefix > len) {
+        prefix = len;
+    }
+    if(prefix > 0) {
+        TVPAlphaBlend_d_c(dest, src, prefix);
+        dest += prefix;
+        src += prefix;
+        len -= prefix;
+    }
+
+    while(len >= 8) {
+        bool allOpaque = true;
+        bool allTransparent = true;
+        for(int i = 0; i < 8; ++i) {
+            const tjs_uint32 alpha = src[i] >> 24;
+            allOpaque = allOpaque && alpha == 0xff;
+            allTransparent = allTransparent && alpha == 0;
+        }
+
+        if(allOpaque) {
+            for(int i = 0; i < 8; ++i) {
+                dest[i] = src[i];
+            }
+        } else if(!allTransparent) {
+            for(int i = 0; i < 8; ++i) {
+                dest[i] = TVPAlphaBlendDFormulaLike_0xA862C8(dest[i], src[i]);
+            }
+        }
+
+        dest += 8;
+        src += 8;
+        len -= 8;
+    }
+
+    if(len > 0) {
+        TVPAlphaBlend_d_c(dest, src, len);
+    }
+}
+
 /*export*/
 TVP_GL_FUNC_DECL(void, TVPAlphaBlend_a_c,
                  (tjs_uint32 * dest, const tjs_uint32 *src, tjs_int len)) {
@@ -13838,12 +13897,13 @@ TVP_GL_FUNC_PTR_DECL(void, TVPConvert32BitTo24Bit,
                      (tjs_uint8 * dest, const tjs_uint8 *buf, tjs_int len));
 
 static void TVPRestoreNativeTVPGLBlendSlots() {
-    // Matches libkrkr2.so 0x8AB7DC final ordinary blend slot writes.
+    // Matches libkrkr2.so 0x8AB7DC ordinary blend slot writes plus
+    // 0xA862C8 runtime TVPAlphaBlend_d optimized slot.
     TVPAlphaBlend = TVPAlphaBlend_c;
     TVPAlphaBlend_HDA = TVPAlphaBlend_HDA_c;
     TVPAlphaBlend_o = TVPAlphaBlend_o_c;
     TVPAlphaBlend_HDA_o = TVPAlphaBlend_HDA_o_c;
-    TVPAlphaBlend_d = TVPAlphaBlend_d_c;
+    TVPAlphaBlend_d = TVPAlphaBlend_d_0xA862C8_c;
     TVPAlphaBlend_a = TVPAlphaBlend_a_c;
     TVPAlphaBlend_do = TVPAlphaBlend_do_c;
     TVPAlphaBlend_ao = TVPAlphaBlend_ao_c;

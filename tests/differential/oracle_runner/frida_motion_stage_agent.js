@@ -26,6 +26,7 @@ const PLAYER_RENDER_EXECUTE_OFF  = 0x6C7440;
 const PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_CALL_OFF = 0x6C8D74;
 const PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_AFTER_OFF = 0x6C8D78;
 const PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF = 0x6CE7D8;
+const SOFTWARE_OPERATE_RECT_HELPER_OFF = 0x85F718;
 const LAYER_FILL_RECT_OFF        = 0x80EBAC;
 const LAYER_SAVE_LAYER_IMAGE_OFF = 0x80963C;
 const TVP_SAVE_AS_PNG_OFF        = 0x83EDA4;
@@ -33,6 +34,8 @@ const BITMAP_GET_SCANLINE_OFF    = 0xA75DE4;
 const LAYER_CLASS_ID_OFF = 0x1ADE668;
 const LAYER_NATIVE_MAIN_IMAGE_OFF = 280;
 const BITMAP_NATIVE_IMPL_OFF = 88;
+const TVP_ALPHA_BLEND_D_SLOT_OFF = 0x1CE1650;
+const TVP_ALPHA_BLEND_DO_SLOT_OFF = 0x1CBCB68;
 
 const STATIC_PARSE_PROJECTION = 'static_parse-semantic-v1';
 const STATIC_PARSE_SAMPLE_POINTS = {
@@ -162,6 +165,8 @@ let activeRenderExecuteContexts = [];
 let directOperateAffineFuncCallHookCache = {};
 let nativeInstanceSupportCache = {};
 let bitmapGetScanLineFunctionCache = {};
+let textureGetPixelDataFunctionCache = {};
+let textureGetPitchFunctionCache = {};
 
 function ensureBase() {
     if (base !== null) return base;
@@ -362,12 +367,14 @@ function ptrEqual(a, b) {
     }
 }
 
-function readNativeLayerFirstPixel(nativeLayer, layerObject) {
+function readNativeLayerPixel(nativeLayer, layerObject, x, y) {
     const native = nativeLayer ? ptr(nativeLayer) : NULL;
     const diagnostics = {
         layerObject: ptrHex(layerObject),
         nativeLayer: ptrHex(native),
-        captureMethod: 'bitmap-get-scanline-first-pixel',
+        captureMethod: 'bitmap-get-scanline-pixel',
+        x: x,
+        y: y,
     };
     if (native.isNull()) {
         return { ok: false, error: 'null native layer', diagnostics: diagnostics };
@@ -391,18 +398,21 @@ function readNativeLayerFirstPixel(nativeLayer, layerObject) {
             width > 8192 || height > 8192) {
             return { ok: false, error: 'invalid bitmap dimensions', diagnostics: diagnostics };
         }
+        if (x < 0 || y < 0 || x >= width || y >= height) {
+            return { ok: false, error: 'pixel coordinate out of range', diagnostics: diagnostics };
+        }
         const getScanLinePtr = ensureBase().add(BITMAP_GET_SCANLINE_OFF);
         const getScanLineFn = getCachedNativeFunction(
             bitmapGetScanLineFunctionCache,
             getScanLinePtr,
             'pointer', ['pointer', 'uint']);
         diagnostics.getScanLineFunction = ptrHex(getScanLinePtr);
-        const row = getScanLineFn(mainImage, 0);
+        const row = getScanLineFn(mainImage, y);
         diagnostics.rowPtr = ptrHex(row);
         if (!row || row.isNull()) {
             return { ok: false, error: 'bitmap scanline is null', diagnostics: diagnostics };
         }
-        const bgra = row.readU32();
+        const bgra = row.add(x * 4).readU32();
         return {
             ok: true,
             bgra: '0x' + ('00000000' + bgra.toString(16)).slice(-8),
@@ -417,6 +427,14 @@ function readNativeLayerFirstPixel(nativeLayer, layerObject) {
     } catch (e) {
         return { ok: false, error: String(e), diagnostics: diagnostics };
     }
+}
+
+function readNativeLayerFirstPixel(nativeLayer, layerObject) {
+    const pixel = readNativeLayerPixel(nativeLayer, layerObject, 0, 0);
+    if (pixel.diagnostics) {
+        pixel.diagnostics.captureMethod = 'bitmap-get-scanline-first-pixel';
+    }
+    return pixel;
 }
 
 function readLayerFirstPixel(layerObject) {
@@ -438,6 +456,137 @@ function readLayerFirstPixel(layerObject) {
         pixel.diagnostics.classId = resolved.classId || null;
     }
     return pixel;
+}
+
+function readLayerDrawFaceDiagnostics(layerObject) {
+    const resolved = resolveLayerNativeInstance(layerObject);
+    if (!resolved.layer) {
+        return {
+            ok: false,
+            error: resolved.error || 'no layer',
+            nativeLayer: null,
+            classId: resolved.classId || null,
+            hresult: resolved.hresult || null,
+        };
+    }
+    return {
+        ok: true,
+        nativeLayer: ptrHex(resolved.layer),
+        classId: resolved.classId || null,
+        offset400S32: readS32(resolved.layer, 400),
+        offset404S32: readS32(resolved.layer, 404),
+        offset408U8: readU8(resolved.layer, 408),
+        offset408S32: readS32(resolved.layer, 408),
+    };
+}
+
+function readLayerPixel(layerObject, x, y) {
+    const resolved = resolveLayerNativeInstance(layerObject);
+    if (!resolved.layer) {
+        return {
+            ok: false,
+            error: resolved.error || 'no layer',
+            diagnostics: {
+                layerObject: ptrHex(layerObject),
+                nativeLayer: null,
+                classId: resolved.classId || null,
+                hresult: resolved.hresult || null,
+                x: x,
+                y: y,
+            },
+        };
+    }
+    const pixel = readNativeLayerPixel(resolved.layer, layerObject, x, y);
+    if (pixel.diagnostics) {
+        pixel.diagnostics.classId = resolved.classId || null;
+    }
+    return pixel;
+}
+
+function readLayerPixelSamples(layerObject, points) {
+    const samples = [];
+    for (const point of points) {
+        samples.push({
+            x: point[0],
+            y: point[1],
+            pixel: readLayerPixel(layerObject, point[0], point[1]),
+        });
+    }
+    return samples;
+}
+
+function unpackRectPair(leftTop, rightBottom) {
+    const lt = ptr(leftTop);
+    const rb = ptr(rightBottom);
+    return {
+        left: lt.toInt32(),
+        top: lt.shr(32).toInt32(),
+        right: rb.toInt32(),
+        bottom: rb.shr(32).toInt32(),
+    };
+}
+
+function readTexturePixel(texture, x, y) {
+    const tex = texture ? ptr(texture) : NULL;
+    const diagnostics = {
+        texture: ptrHex(tex),
+        captureMethod: 'texture-pixel-data',
+        x: x,
+        y: y,
+    };
+    if (tex.isNull()) {
+        return { ok: false, error: 'null texture', diagnostics: diagnostics };
+    }
+    try {
+        const vtable = readPointer(tex, 0);
+        diagnostics.vtable = ptrHex(vtable);
+        const getPixelDataPtr = readPointer(vtable, 64);
+        const getPitchPtr = readPointer(vtable, 80);
+        diagnostics.getPixelDataFunction = ptrHex(getPixelDataPtr);
+        diagnostics.getPitchFunction = ptrHex(getPitchPtr);
+        const getPixelData = getCachedNativeFunction(
+            textureGetPixelDataFunctionCache,
+            getPixelDataPtr,
+            'pointer', ['pointer']);
+        const getPitch = getCachedNativeFunction(
+            textureGetPitchFunctionCache,
+            getPitchPtr,
+            'int', ['pointer']);
+        const pixelData = getPixelData(tex);
+        const pitch = getPitch(tex);
+        diagnostics.pixelData = ptrHex(pixelData);
+        diagnostics.pitch = pitch;
+        if (!pixelData || pixelData.isNull()) {
+            return { ok: false, error: 'null pixel data', diagnostics: diagnostics };
+        }
+        if (pitch <= 0 || x < 0 || y < 0) {
+            return { ok: false, error: 'invalid pitch or coordinate', diagnostics: diagnostics };
+        }
+        const bgra = pixelData.add(y * pitch + x * 4).readU32();
+        return {
+            ok: true,
+            bgra: '0x' + ('00000000' + bgra.toString(16)).slice(-8),
+            b: bgra & 0xff,
+            g: (bgra >>> 8) & 0xff,
+            r: (bgra >>> 16) & 0xff,
+            a: (bgra >>> 24) & 0xff,
+            diagnostics: diagnostics,
+        };
+    } catch (e) {
+        return { ok: false, error: String(e), diagnostics: diagnostics };
+    }
+}
+
+function readTexturePixelSamples(texture, points) {
+    const samples = [];
+    for (const point of points) {
+        samples.push({
+            x: point[0],
+            y: point[1],
+            pixel: readTexturePixel(texture, point[0], point[1]),
+        });
+    }
+    return samples;
 }
 
 function resolveLayerNativeInstance(layerObject) {
@@ -1434,6 +1583,14 @@ function readRectF(p, off) {
     ];
 }
 
+function readFloatArray(p, off, count) {
+    const out = [];
+    for (let i = 0; i < count; i++) {
+        out.push(readFloat(p, off + i * 4));
+    }
+    return out;
+}
+
 function readRectS32(p, off) {
     return [
         readS32(p, off),
@@ -1463,6 +1620,7 @@ function readRenderItem(itemPtr, index) {
             secondary: readS32(item, 56),
         },
         sortKey64: readDouble(item, 64),
+        corners: readFloatArray(item, 136, 8),
         paintBox: paintBox,
         clipRect: buildClipRect,
         buildClipRect: buildClipRect,
@@ -1554,6 +1712,11 @@ function intArgValue(arg) {
     return arg.scalar.int32;
 }
 
+function doubleArgValue(arg) {
+    if (!arg || !arg.scalar) return null;
+    return arg.scalar.double;
+}
+
 function readUtf16StringSafe(value) {
     try {
         const p = ptr(value);
@@ -1577,12 +1740,26 @@ function likelyDirectRenderItem(ctx) {
 }
 
 function directOperateAffinePayload(ctx, phase, machineContext) {
-    const targetObject = phase === 'before' && machineContext && machineContext.x0
-        ? ptr(machineContext.x0) : (ctx ? ctx.target : null);
+    const targetObject = machineContext && machineContext.x7
+        ? ptr(machineContext.x7) : (ctx ? ctx.target : null);
     const argArray = machineContext && machineContext.x6
         ? ptr(machineContext.x6) : null;
     const sourceArg = argArray ? readVariantArg(argArray, 0) : null;
+    const srcLeftArg = argArray ? readVariantArg(argArray, 1) : null;
+    const srcTopArg = argArray ? readVariantArg(argArray, 2) : null;
+    const srcWidthArg = argArray ? readVariantArg(argArray, 3) : null;
+    const srcHeightArg = argArray ? readVariantArg(argArray, 4) : null;
     const affineArg = argArray ? readVariantArg(argArray, 5) : null;
+    const pointArgs = argArray
+        ? [
+            [doubleArgValue(readVariantArg(argArray, 6)),
+             doubleArgValue(readVariantArg(argArray, 7))],
+            [doubleArgValue(readVariantArg(argArray, 8)),
+             doubleArgValue(readVariantArg(argArray, 9))],
+            [doubleArgValue(readVariantArg(argArray, 10)),
+             doubleArgValue(readVariantArg(argArray, 11))],
+        ]
+        : null;
     const modeArg = argArray ? readVariantArg(argArray, 12) : null;
     const opacityArg = argArray ? readVariantArg(argArray, 13) : null;
     const typeArg = argArray ? readVariantArg(argArray, 14) : null;
@@ -1601,6 +1778,25 @@ function directOperateAffinePayload(ctx, phase, machineContext) {
         ? readLayerFirstPixel(targetObject) : { ok: false, error: 'no target object' };
     const sourceFirstPixel = sourceObject
         ? readLayerFirstPixel(sourceObject) : { ok: false, error: 'no source layer object' };
+    const targetDrawFaceDiagnostics = targetObject
+        ? readLayerDrawFaceDiagnostics(targetObject)
+        : { ok: false, error: 'no target object', nativeLayer: null };
+    const sourceDrawFaceDiagnostics = sourceObject
+        ? readLayerDrawFaceDiagnostics(sourceObject)
+        : { ok: false, error: 'no source layer object', nativeLayer: null };
+    const sourcePixelSamples = sourceObject
+        ? readLayerPixelSamples(sourceObject, [
+            [0, 0], [1, 42], [2, 42], [3, 42],
+            [1, 43], [2, 43], [3, 43], [1, 49],
+            [3, 49], [1, 50], [3, 50],
+        ])
+        : [];
+    const targetPixelSamples = targetObject
+        ? readLayerPixelSamples(targetObject, [
+            [725, 693], [725, 694], [725, 695], [725, 696],
+            [725, 697], [726, 700], [726, 701],
+        ])
+        : [];
     return {
         probePhase: phase,
         branch: 'direct.operateAffine',
@@ -1610,9 +1806,15 @@ function directOperateAffinePayload(ctx, phase, machineContext) {
         opacity: intArgValue(opacityArg),
         stretchType: intArgValue(typeArg),
         affine: intArgValue(affineArg),
-        targetFace: null,
-        targetDrawFace: null,
-        targetHoldAlpha: null,
+        sourceRectArgs: {
+            left: intArgValue(srcLeftArg),
+            top: intArgValue(srcTopArg),
+            width: intArgValue(srcWidthArg),
+            height: intArgValue(srcHeightArg),
+        },
+        targetFace: targetDrawFaceDiagnostics.offset404S32,
+        targetDrawFace: targetDrawFaceDiagnostics.offset400S32,
+        targetHoldAlpha: targetDrawFaceDiagnostics.offset408U8,
         resolvedBltMethod: null,
         resolvedBltMethodName: null,
         target: ptrHex(targetObject),
@@ -1625,14 +1827,23 @@ function directOperateAffinePayload(ctx, phase, machineContext) {
             ? (sourceArg.error ||
                (sourceArg.object ? sourceArg.object.error : null))
             : null,
+        operateAffinePointArgs: pointArgs,
         renderItem: renderItem,
         sourceFirstPixel: sourceFirstPixel,
         targetFirstPixel: targetFirstPixel,
+        sourcePixelSamples: sourcePixelSamples,
+        targetPixelSamples: targetPixelSamples,
         diagnostics: {
             callSite: hexOff(PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_CALL_OFF),
             afterSite: hexOff(PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_AFTER_OFF),
+            funcCallDispatch: machineContext && machineContext.x0
+                ? ptrHex(machineContext.x0) : null,
+            funcCallObjThis: machineContext && machineContext.x7
+                ? ptrHex(machineContext.x7) : null,
             targetPixelDiagnostics: targetFirstPixel.diagnostics || null,
             sourcePixelDiagnostics: sourceFirstPixel.diagnostics || null,
+            targetDrawFaceDiagnostics: targetDrawFaceDiagnostics,
+            sourceDrawFaceDiagnostics: sourceDrawFaceDiagnostics,
         },
     };
 }
@@ -2131,6 +2342,65 @@ function installHook() {
                 const idx = activeRenderExecuteContexts.lastIndexOf(this.executeCtx);
                 if (idx >= 0) activeRenderExecuteContexts.splice(idx, 1);
             }
+        },
+    });
+
+    attachAt(SOFTWARE_OPERATE_RECT_HELPER_OFF, 'SoftwareOperateRectHelper', {
+        onEnter(args) {
+            const ctx = currentRenderExecuteContext();
+            if (!ctx || !recording || !stageEnabled(STAGE_RENDER_EXECUTE)) {
+                return;
+            }
+            this.ctx = ctx;
+            this.method = args[1];
+            this.targetTexture = args[2];
+            this.sourceTexture = args[5];
+            try {
+                const methodVtable = readPointer(this.method, 0);
+                this.methodDoRender = readPointer(methodVtable, 96);
+                this.methodWorker = readPointer(methodVtable, 104);
+            } catch (e) {
+                this.methodDoRender = NULL;
+                this.methodWorker = NULL;
+            }
+            this.destRect = unpackRectPair(args[3], args[4]);
+            this.sourceRect = unpackRectPair(args[6], args[7]);
+            this.targetBefore = readTexturePixelSamples(this.targetTexture, [
+                [725, 693], [725, 694], [725, 695], [725, 696],
+                [725, 697], [726, 700], [726, 701],
+            ]);
+            this.sourceSamples = readTexturePixelSamples(this.sourceTexture, [
+                [0, 43], [1, 43], [2, 43], [3, 43],
+                [0, 49], [1, 49], [2, 49], [3, 49],
+                [0, 50], [1, 50], [2, 50], [3, 50],
+            ]);
+        },
+        onLeave(retval) {
+            const ctx = this.ctx;
+            if (!ctx) return;
+            emitRender(STAGE_RENDER_EXECUTE, 'software_affine_rect_helper', {
+                source: 'android-frida-software-affine-probe',
+                destRect: this.destRect,
+                sourceRect: this.sourceRect,
+                method: ptrHex(this.method),
+                methodDoRender: ptrHex(this.methodDoRender),
+                methodWorker: ptrHex(this.methodWorker),
+                targetTexture: ptrHex(this.targetTexture),
+                sourceTexture: ptrHex(this.sourceTexture),
+                tvpAlphaBlendD: ptrHex(ensureBase().add(TVP_ALPHA_BLEND_D_SLOT_OFF).readPointer()),
+                tvpAlphaBlendDo: ptrHex(ensureBase().add(TVP_ALPHA_BLEND_DO_SLOT_OFF).readPointer()),
+                targetSamplesBefore: this.targetBefore || [],
+                targetSamplesAfter: readTexturePixelSamples(this.targetTexture, [
+                    [725, 693], [725, 694], [725, 695], [725, 696],
+                    [725, 697], [726, 700], [726, 701],
+                ]),
+                sourceTextureSamples: this.sourceSamples || [],
+                retval: ptrHex(retval),
+            }, {
+                addr: SOFTWARE_OPERATE_RECT_HELPER_OFF,
+                player: ptrHex(ctx.player),
+                target: ptrHex(ctx.target),
+            }, 'sub_85F718.rectHelper');
         },
     });
 

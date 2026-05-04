@@ -32,46 +32,10 @@ namespace {
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
 
-    struct DispatchReleaseGuard {
-        explicit DispatchReleaseGuard(iTJSDispatch2 *object) : object(object) {}
-        ~DispatchReleaseGuard() {
-            if(object) {
-                object->Release();
-            }
-        }
-
-        DispatchReleaseGuard(const DispatchReleaseGuard &) = delete;
-        DispatchReleaseGuard &operator=(const DispatchReleaseGuard &) = delete;
-
-        iTJSDispatch2 *object = nullptr;
-    };
-
-    bool createBitmapVariantFromBaseBitmapLike_0x6C7440(
-        const iTVPBaseBitmap &src,
-        tTJSVariant &out) {
-        iTJSDispatch2 *bitmapObject = TVPCreateBitmapObject();
-        if(!bitmapObject) {
-            return false;
-        }
-        DispatchReleaseGuard releaseBitmapObject(bitmapObject);
-
-        tTJSNI_Bitmap *bitmapNative = nullptr;
-        if(TJS_FAILED(bitmapObject->NativeInstanceSupport(
-               TJS_NIS_GETINSTANCE, tTJSNC_Bitmap::ClassID,
-               reinterpret_cast<iTJSNativeInstance **>(&bitmapNative))) ||
-           !bitmapNative) {
-            return false;
-        }
-
-        bitmapNative->CopyFrom(&src);
-        out = tTJSVariant(bitmapObject, bitmapObject);
-        return true;
-    }
-
     tjs_error callLayerOperateAffineLike_0x6C7440(
         iTJSDispatch2 *renderLayerObject,
         const tTVPPointD *points,
-        const iTVPBaseBitmap &src,
+        const tTJSVariant &sourceObject,
         const tTVPRect &sourceRect,
         tTVPBlendOperationMode blendMode,
         tjs_int opacity,
@@ -79,13 +43,12 @@ namespace {
         if(!renderLayerObject || !points) {
             return TJS_E_FAIL;
         }
-
-        tTJSVariant sourceBitmap;
-        if(!createBitmapVariantFromBaseBitmapLike_0x6C7440(src,
-                                                           sourceBitmap)) {
+        if(sourceObject.Type() != tvtObject ||
+           !sourceObject.AsObjectNoAddRef()) {
             return TJS_E_NATIVECLASSCRASH;
         }
 
+        tTJSVariant sourceArg(sourceObject);
         tTJSVariant srcLeft(sourceRect.left);
         tTJSVariant srcTop(sourceRect.top);
         tTJSVariant srcWidth(sourceRect.get_width());
@@ -102,7 +65,7 @@ namespace {
         tTJSVariant stretchType(static_cast<tjs_int32>(type));
 
         tTJSVariant *args[] = {
-            &sourceBitmap, &srcLeft, &srcTop, &srcWidth, &srcHeight,
+            &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
             &useAffineMatrix, &x0, &y0, &x1, &y1, &x2, &y2,
             &mode, &opa, &stretchType,
         };
@@ -538,6 +501,25 @@ namespace {
         return true;
     }
 
+    bool prepareSourceLayerForOperateAffineLike_0x6948E8(
+        tTJSNI_BaseLayer *sourceLayer,
+        const iTVPBaseBitmap &src) {
+        if(!sourceLayer || src.GetWidth() <= 0 || src.GetHeight() <= 0) {
+            return false;
+        }
+
+        // Matches libkrkr2.so 0x6948E8/0x6C7440 source-object dispatch shape.
+        if(!sourceLayer->GetHasImage()) {
+            sourceLayer->SetHasImage(true);
+        }
+        sourceLayer->SetType(ltAlpha);
+        sourceLayer->AssignMainImageWithUpdate(
+            const_cast<iTVPBaseBitmap *>(&src));
+        sourceLayer->SetSize(src.GetWidth(), src.GetHeight());
+        sourceLayer->SetClip(0, 0, src.GetWidth(), src.GetHeight());
+        return true;
+    }
+
     std::string summarizeLayerChildren(tTJSNI_BaseLayer *layer, int maxChildren = 12) {
         if(!layer) {
             return "<null-layer>";
@@ -924,25 +906,41 @@ namespace {
         int g = 0;
         int r = 0;
         int a = 0;
+        int x = 0;
+        int y = 0;
     };
 
-    FirstPixelProbe readFirstPixelForDiagnostics(const iTVPBaseBitmap *bitmap) {
+    FirstPixelProbe readPixelForDiagnostics(const iTVPBaseBitmap *bitmap,
+                                            int x,
+                                            int y) {
         FirstPixelProbe probe;
+        probe.x = x;
+        probe.y = y;
         if(!bitmap || bitmap->GetWidth() <= 0 || bitmap->GetHeight() <= 0) {
             return probe;
         }
+        if(x < 0 || y < 0 ||
+           x >= static_cast<int>(bitmap->GetWidth()) ||
+           y >= static_cast<int>(bitmap->GetHeight())) {
+            return probe;
+        }
         const auto *row = static_cast<const std::uint8_t *>(
-            bitmap->GetScanLine(0));
+            bitmap->GetScanLine(static_cast<tjs_uint>(y)));
         if(!row) {
             return probe;
         }
-        std::memcpy(&probe.bgra, row, sizeof(probe.bgra));
+        std::memcpy(&probe.bgra, row + static_cast<size_t>(x) * 4u,
+                    sizeof(probe.bgra));
         probe.b = static_cast<int>(probe.bgra & 0xffu);
         probe.g = static_cast<int>((probe.bgra >> 8) & 0xffu);
         probe.r = static_cast<int>((probe.bgra >> 16) & 0xffu);
         probe.a = static_cast<int>((probe.bgra >> 24) & 0xffu);
         probe.ok = true;
         return probe;
+    }
+
+    FirstPixelProbe readFirstPixelForDiagnostics(const iTVPBaseBitmap *bitmap) {
+        return readPixelForDiagnostics(bitmap, 0, 0);
     }
 
     void appendPointerJson(std::string &out, const char *name, const void *ptr) {
@@ -961,9 +959,61 @@ namespace {
     void appendPixelProbeJson(std::string &out, const char *name,
                               const FirstPixelProbe &probe) {
         out += fmt::format(
-            ",\"{}\":{{\"ok\":{},\"bgra\":\"0x{:08x}\",\"b\":{},\"g\":{},\"r\":{},\"a\":{}}}",
-            name, probe.ok ? "true" : "false", probe.bgra,
+            ",\"{}\":{{\"ok\":{},\"x\":{},\"y\":{},\"bgra\":\"0x{:08x}\",\"b\":{},\"g\":{},\"r\":{},\"a\":{}}}",
+            name, probe.ok ? "true" : "false", probe.x, probe.y, probe.bgra,
             probe.b, probe.g, probe.r, probe.a);
+    }
+
+    void appendPixelSamplesJson(
+        std::string &out,
+        const char *name,
+        const std::vector<FirstPixelProbe> &samples) {
+        out += ",\"";
+        out += name;
+        out += "\":[";
+        for(size_t i = 0; i < samples.size(); ++i) {
+            const auto &probe = samples[i];
+            if(i != 0) {
+                out += ",";
+            }
+            out += fmt::format(
+                "{{\"ok\":{},\"x\":{},\"y\":{},\"bgra\":\"0x{:08x}\",\"b\":{},\"g\":{},\"r\":{},\"a\":{}}}",
+                probe.ok ? "true" : "false", probe.x, probe.y, probe.bgra,
+                probe.b, probe.g, probe.r, probe.a);
+        }
+        out += "]";
+    }
+
+    template <size_t N>
+    void appendFloatArrayJson(std::string &out,
+                              const char *name,
+                              const std::array<float, N> &values) {
+        out += ",\"";
+        out += name;
+        out += "\":[";
+        for(size_t i = 0; i < values.size(); ++i) {
+            if(i != 0) {
+                out += ",";
+            }
+            out += fmt::format("{:.9g}", values[i]);
+        }
+        out += "]";
+    }
+
+    void appendPointArrayJson(std::string &out,
+                              const char *name,
+                              const std::array<tTVPPointD, 3> &points) {
+        out += ",\"";
+        out += name;
+        out += "\":[";
+        for(size_t i = 0; i < points.size(); ++i) {
+            if(i != 0) {
+                out += ",";
+            }
+            out += fmt::format("[{:.17g},{:.17g}]", points[i].x,
+                               points[i].y);
+        }
+        out += "]";
     }
 
     const char *bltMethodNameForDiagnostics(tTVPBBBltMethod method) {
@@ -988,6 +1038,9 @@ namespace {
         const motion::detail::PlayerRuntime::PreparedRenderItem &item,
         tTJSNI_BaseLayer *renderLayer,
         const std::shared_ptr<tTVPBaseBitmap> &srcBmp,
+        iTJSDispatch2 *sourceArgObject,
+        tTJSNI_BaseLayer *sourceArgLayer,
+        const char *sourceArgClass,
         tTVPBlendOperationMode blendMode,
         tjs_int opacity,
         tTVPBBStretchType type) {
@@ -995,11 +1048,48 @@ namespace {
         const bool bltMethodOk =
             renderLayer &&
             renderLayer->ResolveBltMethodForDiagnostics(bltMethod, blendMode);
+        const iTVPBaseBitmap *sourceImage =
+            sourceArgLayer
+                ? static_cast<const iTVPBaseBitmap *>(
+                      sourceArgLayer->GetMainImage())
+                : static_cast<const iTVPBaseBitmap *>(srcBmp.get());
         auto *targetImage = renderLayer ? renderLayer->GetMainImage() : nullptr;
         const auto sourcePixel =
-            readFirstPixelForDiagnostics(srcBmp.get());
+            readFirstPixelForDiagnostics(sourceImage);
         const auto targetPixel =
             readFirstPixelForDiagnostics(targetImage);
+        const auto affinePointArgs =
+            buildAffineTrianglePoints(item.corners, -0.5f, -0.5f);
+        std::vector<FirstPixelProbe> sourcePixelSamples;
+        for(const auto &[x, y] : {
+                std::pair<int, int>{0, 0},
+                std::pair<int, int>{1, 42},
+                std::pair<int, int>{2, 42},
+                std::pair<int, int>{3, 42},
+                std::pair<int, int>{1, 43},
+                std::pair<int, int>{2, 43},
+                std::pair<int, int>{3, 43},
+                std::pair<int, int>{1, 49},
+                std::pair<int, int>{3, 49},
+                std::pair<int, int>{1, 50},
+                std::pair<int, int>{3, 50},
+            }) {
+            sourcePixelSamples.push_back(
+                readPixelForDiagnostics(sourceImage, x, y));
+        }
+        std::vector<FirstPixelProbe> targetPixelSamples;
+        for(const auto &[x, y] : {
+                std::pair<int, int>{725, 693},
+                std::pair<int, int>{725, 694},
+                std::pair<int, int>{725, 695},
+                std::pair<int, int>{725, 696},
+                std::pair<int, int>{725, 697},
+                std::pair<int, int>{726, 700},
+                std::pair<int, int>{726, 701},
+            }) {
+            targetPixelSamples.push_back(
+                readPixelForDiagnostics(targetImage, x, y));
+        }
 
         std::string payload;
         payload += fmt::format(
@@ -1027,12 +1117,22 @@ namespace {
         appendPointerJson(payload, "renderLayer", renderLayer);
         appendPointerJson(payload, "targetImage", targetImage);
         appendPointerJson(payload, "sourceBitmap", srcBmp.get());
+        appendPointerJson(payload, "sourceObject", sourceArgObject);
+        appendPointerJson(payload, "sourceNativeLayer", sourceArgLayer);
+        appendPointerJson(payload, "sourceImage", sourceImage);
+        payload += fmt::format(
+            ",\"sourceArgClass\":\"{}\"",
+            sourceArgClass ? sourceArgClass
+                           : (sourceArgLayer ? "Layer" : "Bitmap"));
         payload += fmt::format(
             ",\"sourceSize\":[{},{}],\"targetSize\":[{},{}]",
-            srcBmp ? static_cast<int>(srcBmp->GetWidth()) : 0,
-            srcBmp ? static_cast<int>(srcBmp->GetHeight()) : 0,
+            sourceImage ? static_cast<int>(sourceImage->GetWidth()) : 0,
+            sourceImage ? static_cast<int>(sourceImage->GetHeight()) : 0,
             renderLayer ? static_cast<int>(renderLayer->GetWidth()) : 0,
             renderLayer ? static_cast<int>(renderLayer->GetHeight()) : 0);
+        appendFloatArrayJson(payload, "renderItemCorners", item.corners);
+        appendPointArrayJson(payload, "operateAffinePointArgs",
+                             affinePointArgs);
         payload += fmt::format(
             ",\"softwareAffinePath\":\"{}\","
             "\"softwareAffineRenderer\":\"{}\","
@@ -1077,6 +1177,10 @@ namespace {
             TVPGetSoftwareAffineRenderMethodBranchForWasmtime());
         appendPixelProbeJson(payload, "sourceFirstPixel", sourcePixel);
         appendPixelProbeJson(payload, "targetFirstPixel", targetPixel);
+        appendPixelSamplesJson(payload, "sourcePixelSamples",
+                               sourcePixelSamples);
+        appendPixelSamplesJson(payload, "targetPixelSamples",
+                               targetPixelSamples);
         motion::detail::motionTraceRenderDirectExecuteProbe(
             player, samplePoint, payload.c_str());
     }
@@ -1587,6 +1691,7 @@ namespace motion {
             baseSourceCache;
         std::unordered_map<std::string, std::shared_ptr<tTVPBaseBitmap>>
             preparedSourceCache;
+        tTJSVariant directOperateAffineSourceLayer;
         auto resolveBaseSourceBitmap =
             [&](const PreparedRenderItem &item)
                 -> std::shared_ptr<tTVPBaseBitmap> {
@@ -2193,15 +2298,40 @@ namespace motion {
 #if defined(KRKR2_WASMTIME_HEADLESS)
                     const auto emitDirectProbe =
                         [&](const char *samplePoint, const char *phase,
-                            const char *executionMethod =
-                                "native-direct-call") {
+                            const char *executionMethod = "native-direct-call",
+                            iTJSDispatch2 *sourceArgObject = nullptr,
+                            tTJSNI_BaseLayer *sourceArgLayer = nullptr,
+                            const char *sourceArgClass = nullptr) {
                         emitDirectExecuteDiagnostics(
                             this, samplePoint, phase, branch.c_str(),
                             executionMethod, item, renderLayer, srcBmp,
+                            sourceArgObject, sourceArgLayer, sourceArgClass,
                             blendMode, opa, stNearest);
                     };
 #endif
                     if(item.meshType == 0) {
+                        iTJSDispatch2 *sourceLayerObject =
+                            ensureReusableLayerObject(
+                                directOperateAffineSourceLayer, scratchOwner,
+                                scratchParent, static_cast<tTVPLayerType>(ltAlpha),
+                                false);
+                        auto *sourceLayer = resolveNativeLayer(sourceLayerObject);
+                        if(!sourceLayerObject || !sourceLayer ||
+                           !prepareSourceLayerForOperateAffineLike_0x6948E8(
+                               sourceLayer, *srcBmp)) {
+                            detail::logoChainTraceCheck(
+                                motionPath, "execute.directSourceLayer",
+                                "0x6948E8/0x6C7440", _clampedEvalTime,
+                                "direct affine source should materialize as Layer",
+                                fmt::format("nodeIndex={} source={} layer={}",
+                                            item.nodeIndex, item.sourceKey,
+                                            static_cast<const void *>(sourceLayer)),
+                                false,
+                                "sub_6C7440 direct affine source object setup failed");
+                            continue;
+                        }
+                        tTJSVariant sourceLayerArg(sourceLayerObject,
+                                                   sourceLayerObject);
                         const auto worldPts =
                             buildAffineTrianglePoints(item.corners,
                                                      -0.5f, -0.5f);
@@ -2210,11 +2340,13 @@ namespace motion {
                         emitDirectProbe(
                             "Player::executeLayerRenderCommands.direct.beforeOperateAffine",
                             "before",
-                            "tjs-funcall-operateAffine");
+                            "tjs-funcall-operateAffine",
+                            sourceLayerObject, sourceLayer, "Layer");
 #endif
                         const tjs_error operateResult =
                             callLayerOperateAffineLike_0x6C7440(
-                                renderLayerObject, worldPts.data(), *srcBmp,
+                                renderLayerObject, worldPts.data(),
+                                sourceLayerArg,
                                 sourceRect, blendMode, opa, stNearest);
                         if(TJS_FAILED(operateResult)) {
                             detail::logoChainTraceCheck(
@@ -2231,7 +2363,8 @@ namespace motion {
                         emitDirectProbe(
                             "Player::executeLayerRenderCommands.direct.afterOperateAffine",
                             "after",
-                            "tjs-funcall-operateAffine");
+                            "tjs-funcall-operateAffine",
+                            sourceLayerObject, sourceLayer, "Layer");
 #endif
                     } else {
                         if(item.meshPoints.empty() ||

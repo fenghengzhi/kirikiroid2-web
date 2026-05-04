@@ -1584,7 +1584,100 @@ namespace internal {
                             outOriginX = *ox;
                         if(auto oy = psbDictionaryNumber(iconNode, "originY"))
                             outOriginY = *oy;
-                        // Get the pixel resource
+
+                        const auto iconLeft =
+                            static_cast<int>(
+                                psbDictionaryNumber(iconNode, "left")
+                                    .value_or(0.0));
+                        const auto iconTop =
+                            static_cast<int>(
+                                psbDictionaryNumber(iconNode, "top")
+                                    .value_or(0.0));
+                        const auto texturePath =
+                            "source/" + group + "/texture";
+                        auto textureNode =
+                            navigatePSBPath(snapshot.root, texturePath);
+                        if(textureNode && outWidth > 0 && outHeight > 0) {
+                            int textureWidth = 0;
+                            int textureHeight = 0;
+                            if(auto w =
+                                   psbDictionaryNumber(textureNode, "width"))
+                                textureWidth = static_cast<int>(*w);
+                            if(auto h =
+                                   psbDictionaryNumber(textureNode, "height"))
+                                textureHeight = static_cast<int>(*h);
+                            if(textureWidth <= 0) {
+                                if(auto tw = psbDictionaryNumber(
+                                       textureNode, "truncated_width"))
+                                    textureWidth = static_cast<int>(*tw);
+                            }
+                            if(textureHeight <= 0) {
+                                if(auto th = psbDictionaryNumber(
+                                       textureNode, "truncated_height"))
+                                    textureHeight = static_cast<int>(*th);
+                            }
+
+                            const auto texturePixelPath =
+                                texturePath + "/pixel";
+                            auto textureResIt =
+                                snapshot.resourcesByPath.find(texturePixelPath);
+                            if(textureResIt != snapshot.resourcesByPath.end() &&
+                               textureResIt->second &&
+                               !textureResIt->second->data.empty() &&
+                               textureWidth > 0 && textureHeight > 0 &&
+                               iconLeft >= 0 && iconTop >= 0 &&
+                               iconLeft + outWidth <= textureWidth &&
+                               iconTop + outHeight <= textureHeight) {
+                                bool texturePixelsAreBgra = false;
+                                std::vector<std::uint8_t> texturePixels;
+                                const auto textureCompress =
+                                    psbDictionaryString(textureNode,
+                                                        "compress");
+                                decodePsbPixelResource(
+                                    snapshot, texturePath,
+                                    *textureResIt->second,
+                                    textureWidth, textureHeight,
+                                    textureCompress == "RL",
+                                    texturePixels, &texturePixelsAreBgra);
+                                const auto &pixelData =
+                                    texturePixels.empty()
+                                        ? textureResIt->second->data
+                                        : texturePixels;
+                                const size_t requiredSize =
+                                    static_cast<size_t>(textureWidth) *
+                                    static_cast<size_t>(textureHeight) * 4u;
+                                if(pixelData.size() >= requiredSize) {
+                                    decompressedOut.assign(
+                                        static_cast<size_t>(outWidth) *
+                                            static_cast<size_t>(outHeight) * 4u,
+                                        0);
+                                    const size_t targetStride =
+                                        static_cast<size_t>(outWidth) * 4u;
+                                    for(int y = 0; y < outHeight; ++y) {
+                                        const size_t sourceOffset =
+                                            (static_cast<size_t>(iconTop + y) *
+                                                 static_cast<size_t>(
+                                                     textureWidth) +
+                                             static_cast<size_t>(iconLeft)) *
+                                            4u;
+                                        std::memcpy(
+                                            decompressedOut.data() +
+                                                static_cast<size_t>(y) *
+                                                    targetStride,
+                                            pixelData.data() + sourceOffset,
+                                            targetStride);
+                                    }
+                                    if(outDecodedIsBgra) {
+                                        *outDecodedIsBgra =
+                                            !texturePixels.empty() &&
+                                            texturePixelsAreBgra;
+                                    }
+                                    return textureResIt->second.get();
+                                }
+                            }
+                        }
+
+                        // Fallback: older local assets may carry per-icon pixels.
                         const auto pixelPath = iconPath + "/pixel";
                         auto resIt = snapshot.resourcesByPath.find(pixelPath);
                         if(resIt != snapshot.resourcesByPath.end() &&

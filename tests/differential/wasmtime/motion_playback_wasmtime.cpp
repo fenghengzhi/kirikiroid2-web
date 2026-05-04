@@ -401,12 +401,16 @@ void appendPreparedItemJson(
     out += std::to_string(item.sortKey);
     out += ",\"paintBox\":";
     appendNumberArray(out, item.paintBox);
+    out += ",\"corners\":";
+    appendNumberArray(out, item.corners);
     out += ",\"clipRect\":";
     appendNumberArray(out, item.clipRect);
     out += ",\"buildClipRect\":";
     appendNumberArray(out, item.clipRect);
     out += ",\"dirtyRect\":";
     appendNumberArray(out, item.dirtyRect);
+    out += ",\"localCorners\":";
+    appendNumberArray(out, item.localCorners);
     out += ",\"viewportRect\":";
     appendNumberArray(out, item.viewport);
     out += ",\"sourceGate232\":";
