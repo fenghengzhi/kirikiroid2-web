@@ -6,6 +6,8 @@
 
 `libkrkr2.so` 反编译结果是唯一权威来源。本地代码、变量名、现有抽象、Web/Cocos/Emscripten 适配层都不能反向推导原始行为。除明确标注且不可避免的平台边界外，`cpp/` 实现必须优先复刻 `libkrkr2.so` 的架构和中间步骤，而不是追求表面行为一致。
 
+如果在修复某个具体问题的过程中，发现当前代码修改对该问题本身没有直接帮助，但它推进了“尽可能 100% 一比一复原 Android kirikiroid2 `libkrkr2.so` 的源代码结构、数据流、调用链、对象生命周期、内部容器实现和边界行为”这个方向，则该修改不应因为当前问题未被解决而自动撤销。只要该修改有反编译证据支撑、没有引入已知回归，并且让本地实现更接近 `libkrkr2.so`，可以保留它作为架构复原进展。
+
 ## 构建
 - 调试版：`cmake --preset "Web Debug Config"` → `cmake --build out/web/debug`
 - 发布版：`cmake --preset "Web Release Config"` → `cmake --build out/web/release`
