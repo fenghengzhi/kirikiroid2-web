@@ -668,7 +668,8 @@ void appendImageCheckpointEvent(motion::Player *player, const char *phase,
                                 const std::string &error,
                                 int width = 0,
                                 int height = 0,
-                                int pitch = 0) {
+                                int pitch = 0,
+                                const std::string &diagnostics = {}) {
     std::string payload = "\"phase\":";
     appendJsonString(payload, phase ? phase : "");
     payload += ",\"ok\":";
@@ -694,21 +695,56 @@ void appendImageCheckpointEvent(motion::Player *player, const char *phase,
         payload += ",\"error\":";
         appendJsonString(payload, error);
     }
-    appendRenderEvent(player, "render_execute", "execute_image_checkpoint",
-                      samplePoint ? samplePoint : "execute_image_checkpoint",
-                      payload, playerDiagnostics(player));
+    appendRenderEvent(
+        player, "render_execute", "execute_image_checkpoint",
+        samplePoint ? samplePoint : "execute_image_checkpoint",
+        payload, diagnostics.empty() ? playerDiagnostics(player) : diagnostics);
 }
 
-bool writePackedBgraRows(const std::string &path, const unsigned char *pixels,
-                         int width, int height, int pitch) {
+std::string checkpointDiagnostics(motion::Player *player,
+                                  const char *captureMethod,
+                                  const void *mainImage,
+                                  int rowBytes,
+                                  int failedRow = -1) {
+    std::string diag = playerDiagnostics(player);
+    if(!diag.empty() && diag.back() == '}') {
+        diag.pop_back();
+    }
+    diag += ",\"captureMethod\":";
+    appendJsonString(diag, captureMethod ? captureMethod : "");
+    diag += ",\"mainImage\":";
+    diag += ptrHex(mainImage);
+    if(rowBytes > 0) {
+        diag += ",\"rowBytes\":";
+        diag += std::to_string(rowBytes);
+    }
+    if(failedRow >= 0) {
+        diag += ",\"failedRow\":";
+        diag += std::to_string(failedRow);
+    }
+    diag.push_back('}');
+    return diag;
+}
+
+bool writePackedBgraRowsFromScanLines(const std::string &path,
+                                      const tTVPBaseTexture *mainImage,
+                                      int width,
+                                      int height,
+                                      int *failedRow) {
     std::FILE *file = std::fopen(path.c_str(), "wb");
     if(!file) return false;
     bool ok = true;
     const auto rowBytes = static_cast<std::size_t>(width) * 4u;
     for(int y = 0; y < height; ++y) {
-        const auto *row = pixels + static_cast<std::size_t>(y) *
-            static_cast<std::size_t>(pitch);
+        const auto *row = static_cast<const unsigned char *>(
+            mainImage->GetScanLine(static_cast<tjs_uint>(y)));
+        if(!row) {
+            if(failedRow) *failedRow = y;
+            ok = false;
+            break;
+        }
         if(std::fwrite(row, 1, rowBytes, file) != rowBytes) {
+            if(failedRow) *failedRow = y;
             ok = false;
             break;
         }
@@ -1329,41 +1365,52 @@ void motionTraceRenderImageCheckpoint(Player *player,
            reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
         appendImageCheckpointEvent(
             player, phase, samplePoint, false, {},
-            "renderLayerObject did not resolve to Layer native instance");
+            "renderLayerObject did not resolve to Layer native instance",
+            0, 0, 0,
+            checkpointDiagnostics(
+                player, "main-image-get-scanline", nullptr, 0));
         return;
     }
 
     const auto path = framePath(phase, frameId);
     const int width = static_cast<int>(layer->GetWidth());
     const int height = static_cast<int>(layer->GetHeight());
-    const int pitch = static_cast<int>(
-        layer->GetMainImageRawPixelBufferPitchNoSync());
+    auto *mainImage = layer->GetMainImage();
+    const int rowBytes = width * 4;
+    const auto diagnostics = [&](int failedRow = -1) {
+        return checkpointDiagnostics(
+            player, "main-image-get-scanline", mainImage, rowBytes, failedRow);
+    };
     if(width <= 0 || height <= 0) {
         appendImageCheckpointEvent(
             player, phase, samplePoint, false, path,
-            "Layer main image has invalid dimensions", width, height, pitch);
+            "Layer main image has invalid dimensions", width, height, rowBytes,
+            diagnostics());
         return;
     }
-    if(pitch < width * 4) {
+    if(!mainImage) {
         appendImageCheckpointEvent(
             player, phase, samplePoint, false, path,
-            "Layer main image has invalid pitch", width, height, pitch);
+            "Layer main image is null", width, height, rowBytes, diagnostics());
         return;
     }
-    const auto *pixels = static_cast<const unsigned char *>(
-        layer->GetMainImageRawPixelBufferNoSync());
-    if(!pixels) {
+    if(static_cast<int>(mainImage->GetWidth()) != width ||
+       static_cast<int>(mainImage->GetHeight()) != height) {
         appendImageCheckpointEvent(
             player, phase, samplePoint, false, path,
-            "Layer raw main image pixel buffer is null", width, height, pitch);
+            "Layer main image dimensions differ from layer dimensions",
+            width, height, rowBytes, diagnostics());
         return;
     }
 
-    bool ok = writePackedBgraRows(path, pixels, width, height, pitch);
+    int failedRow = -1;
+    bool ok = writePackedBgraRowsFromScanLines(
+        path, mainImage, width, height, &failedRow);
     appendImageCheckpointEvent(
         player, phase, samplePoint, ok, path,
-        ok ? std::string() : std::string("failed to write raw BGRA checkpoint"),
-        width, height, pitch);
+        ok ? std::string()
+           : std::string("failed to write scanline BGRA checkpoint"),
+        width, height, rowBytes, diagnostics(failedRow));
 }
 
 void motionTraceLayerRawProbeNative(Player *player, const void *nativeLayer,
