@@ -330,12 +330,12 @@ class LldbGuestProbeRun:
                 prefix="krkr2-wasmtime-lldb-"
             ) as temp_dir:
                 temp = Path(temp_dir)
-                output_path = temp / "host.json"
-                stdout_path = temp / "host.stdout"
-                stderr_path = temp / "host.stderr"
+                output_path = temp / "driver.json"
+                stdout_path = temp / "driver.stdout"
+                stderr_path = temp / "driver.stderr"
                 launch = lldb.SBLaunchInfo([
                     str(self.driver),
-                    "--host-mode",
+                    "--driver-mode",
                     "--wasm",
                     str(self.wasm),
                     "--spec-dir",
@@ -356,12 +356,12 @@ class LldbGuestProbeRun:
                 stdout, stderr = self._read_stdio(stdout_path, stderr_path)
                 if process.GetExitStatus() not in (0, -1):
                     raise RuntimeError(
-                        f"Python host exited with {process.GetExitStatus()}\n"
+                        f"driver process exited with {process.GetExitStatus()}\n"
                         f"stdout:\n{stdout}\nstderr:\n{stderr}"
                     )
                 if not output_path.exists():
                     raise RuntimeError(
-                        "Python host did not write result JSON\n"
+                        "driver process did not write result JSON\n"
                         f"stdout:\n{stdout}\nstderr:\n{stderr}"
                     )
                 report = json.loads(output_path.read_text(encoding="utf-8"))

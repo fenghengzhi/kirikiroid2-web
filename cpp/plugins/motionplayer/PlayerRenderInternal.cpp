@@ -3,11 +3,11 @@
 //
 #include "PlayerRenderInternal.h"
 #include "ConfigManager/IndividualConfigManager.h"
+#include "MotionTraceWeb.h"
 
 using namespace motion::internal;
 
 #if defined(KRKR2_WASMTIME_HEADLESS)
-extern "C" void TVPResetSoftwareAffineDiagnosticsForWasmtime();
 extern "C" const char *TVPGetSoftwareAffinePathForWasmtime();
 extern "C" const char *TVPGetSoftwareAffineRendererForWasmtime();
 extern "C" int TVPGetSoftwareAffineAlphaBlendDReadyForWasmtime();

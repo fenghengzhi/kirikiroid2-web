@@ -100,7 +100,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Trace motion_playback Wasmtime guest via LLDB")
     p.add_argument("--driver", required=True,
-                   help="Path to run_motion_playback_wasmtime.py")
+                   help="Path to the private Wasmtime LLDB driver")
     p.add_argument("--host-python", required=True,
                    help="Python interpreter LLDB launches as host")
     p.add_argument("--wasm", required=True,
@@ -111,23 +111,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Directory of motion_playback spec JSON files")
     p.add_argument("--trace-out", required=True,
                    help="Path to write LLDB-collected JSON trace events")
-    p.add_argument("--host-output", required=True,
-                   help="Path for host-mode bootstrap summary JSON")
+    p.add_argument("--driver-output", required=True,
+                   help="Path for driver process bootstrap summary JSON")
     p.add_argument("--record-framebuffer", action="store_true",
-                   help="Ask the host-mode driver to write framebuffer PNGs")
+                   help="Ask the driver process to write framebuffer PNGs")
     p.add_argument("--framebuffer-dir", default=None,
                    help="Host path where framebuffer PNGs should be copied")
     p.add_argument("--record-render-stages", action="store_true",
                    help="Collect Wasmtime render stage diagnostics and images")
     p.add_argument("--record-render-step-checkpoints", action="store_true",
-                   help="Ask host-mode driver to save execute_pre/"
+                   help="Ask the driver process to save execute_pre/"
                         "execute_post render checkpoints")
     p.add_argument("--record-layer-raw-probes", action="store_true",
-                   help="Ask host-mode driver to capture raw Layer "
+                   help="Ask the driver process to capture raw Layer "
                         "MainImage probe events")
     p.add_argument("--record-save-layer-visual-readback-probes",
                    action="store_true",
-                   help="Ask host-mode driver to capture saveLayerImage "
+                   help="Ask the driver process to capture saveLayerImage "
                         "visual readback row hashes")
     p.add_argument("--save-layer-visual-readback-frame-start", type=int,
                    default=0,
@@ -146,13 +146,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--expected-frames", type=int, default=332,
                    help="Minimum expected event count")
     p.add_argument("--capture-frame-start", type=int, default=0,
-                   help="First global frame id to record in host probes")
+                   help="First global frame id to record in driver probes")
     p.add_argument("--capture-frame-count", type=int, default=-1,
                    help="Number of global frames to record; -1 records all")
     p.add_argument("--timeout", type=float, default=600.0,
                    help="Soft timeout checked between LLDB stops")
     p.add_argument("--repo-root", default=str(REPO_ROOT),
-                   help="Repository root for host working directory")
+                   help="Repository root for driver working directory")
     return p.parse_args(argv)
 
 
@@ -166,7 +166,7 @@ class WasmMotionTracer:
         wasm: Path,
         startup_xp3: Path,
         spec_dir: Path,
-        host_output: Path,
+        driver_output: Path,
         repo_root: Path,
         expected_frames: int,
         timeout: float,
@@ -190,7 +190,7 @@ class WasmMotionTracer:
         self.wasm = wasm
         self.startup_xp3 = startup_xp3
         self.spec_dir = spec_dir
-        self.host_output = host_output
+        self.driver_output = driver_output
         self.repo_root = repo_root
         self.expected_frames = expected_frames
         self.timeout = timeout
@@ -244,27 +244,26 @@ class WasmMotionTracer:
             self.end_bp_id = end_bp.GetID()
 
             with tempfile.TemporaryDirectory(
-                prefix="krkr2-motion-wasmtime-host-"
+                prefix="krkr2-motion-wasmtime-driver-"
             ) as temp_dir:
                 temp = Path(temp_dir)
-                stdout_path = temp / "host.stdout"
-                stderr_path = temp / "host.stderr"
+                stdout_path = temp / "driver.stdout"
+                stderr_path = temp / "driver.stderr"
                 launch_args = [
                     str(self.driver),
-                    "--host-mode",
                     "--wasm",
                     str(self.wasm),
                     "--startup-xp3",
                     str(self.startup_xp3),
                     "--spec-dir",
                     str(self.spec_dir),
-                    "--host-frames",
+                    "--frames",
                     # startupFrom schedules the first motion update a few host
                     # ticks later; the TJS fixture still stops after the
                     # selected global frame window is complete.
                     str(max(self.expected_frames + 10, 1)),
-                    "--host-output",
-                    str(self.host_output),
+                    "--output",
+                    str(self.driver_output),
                     "--capture-frame-start",
                     str(self.capture_frame_start),
                     "--capture-frame-count",
@@ -554,7 +553,7 @@ def main(argv: list[str]) -> int:
     startup_xp3 = Path(args.startup_xp3)
     spec_dir = Path(args.spec_dir)
     trace_out = Path(args.trace_out)
-    host_output = Path(args.host_output)
+    driver_output = Path(args.driver_output)
     repo_root = Path(args.repo_root)
     framebuffer_dir = (
         Path(args.framebuffer_dir) if args.framebuffer_dir is not None
@@ -622,7 +621,7 @@ def main(argv: list[str]) -> int:
             wasm=wasm,
             startup_xp3=startup_xp3,
             spec_dir=spec_dir,
-            host_output=host_output,
+            driver_output=driver_output,
             repo_root=repo_root,
             expected_frames=args.expected_frames,
             timeout=args.timeout,

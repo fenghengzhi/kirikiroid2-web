@@ -5,6 +5,10 @@
 
 namespace motion::internal::render_detail {
 
+#if defined(KRKR2_WASMTIME_HEADLESS)
+extern "C" void TVPResetSoftwareAffineDiagnosticsForWasmtime();
+#endif
+
 bool getLayerClassDispatchVariantLike_0x5CB08C(tTJSVariant &layerClassVar);
 tjs_error callLayerOperateAffineLike_0x6C7440(
     const tTJSVariant &layerClassObject,
@@ -101,28 +105,20 @@ bool applyMotionAlphaMaskLike_0x6AF104(
     double frameTime,
     int dstNodeIndex,
     int srcNodeIndex);
-void appendPointerJson(std::string &out, const char *name, const void *ptr);
-void appendFloatArrayJson(std::string &out,
-                          const char *name,
-                          const std::array<float, 8> &values);
-void appendPointArrayJson(std::string &out,
-                          const char *name,
-                          const tTVPPointD *points,
-                          size_t count);
 void emitDirectExecuteDiagnostics(
     motion::Player *player,
     const char *samplePoint,
+    const char *probePhase,
+    const char *branch,
+    const char *executionMethod,
     const motion::detail::PlayerRuntime::PreparedRenderItem &item,
     tTJSNI_BaseLayer *renderLayer,
-    const tTJSVariant &sourceObject,
+    const std::shared_ptr<tTVPBaseBitmap> &srcBmp,
     iTJSDispatch2 *sourceArgObject,
     tTJSNI_BaseLayer *sourceArgLayer,
-    tTVPBaseBitmap *sourceImage,
+    const char *sourceArgClass,
     tTVPBlendOperationMode blendMode,
     tjs_int opacity,
-    bool resolvedDiagnosticMode,
-    bool clearEnabled,
-    const tTVPPointD *points,
-    size_t pointCount);
+    tTVPBBStretchType type);
 
 } // namespace motion::internal::render_detail

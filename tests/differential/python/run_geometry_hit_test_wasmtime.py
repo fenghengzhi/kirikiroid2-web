@@ -227,11 +227,11 @@ class LldbGuestRun:
             ) as temp_dir:
                 temp = Path(temp_dir)
                 output_path = temp / "result.json"
-                stdout_path = temp / "host.stdout"
-                stderr_path = temp / "host.stderr"
+                stdout_path = temp / "driver.stdout"
+                stderr_path = temp / "driver.stderr"
                 launch = lldb.SBLaunchInfo([
                     str(Path(__file__).resolve()),
-                    "--host-mode",
+                    "--driver-mode",
                     "--wasm",
                     str(self.wasm),
                     "--spec-dir",
@@ -255,12 +255,12 @@ class LldbGuestRun:
                 exit_status = process.GetExitStatus()
                 if exit_status != 0:
                     raise RuntimeError(
-                        f"geometry_hit_test Python host exited with {exit_status}\n"
+                        f"geometry_hit_test driver process exited with {exit_status}\n"
                         f"stdout:\n{stdout}\nstderr:\n{stderr}"
                     )
                 if not output_path.exists():
                     raise RuntimeError(
-                        "geometry_hit_test Python host did not write result JSON\n"
+                        "geometry_hit_test driver process did not write result JSON\n"
                         f"stdout:\n{stdout}\nstderr:\n{stderr}"
                     )
                 report = json.loads(output_path.read_text(encoding="utf-8"))
@@ -528,7 +528,7 @@ def flatten_case(spec: dict) -> list[float]:
     ]
 
 
-def run_python_host(wasm_path: Path, spec_dir: Path, output: Path) -> int:
+def run_python_driver(wasm_path: Path, spec_dir: Path, output: Path) -> int:
     wasmtime = load_wasmtime()
     store, run_fn = instantiate_module(wasmtime, wasm_path)
     cases = []
@@ -538,7 +538,7 @@ def run_python_host(wasm_path: Path, spec_dir: Path, output: Path) -> int:
 
     report = {
         "ok": True,
-        "runner": "geometry-hit-test-wasmtime-python-host",
+        "runner": "geometry-hit-test-wasmtime-python-driver",
         "cases": cases,
         "host_calls": len(cases),
     }
@@ -552,16 +552,16 @@ def main() -> int:
     parser.add_argument("--wasm", required=True, type=Path)
     parser.add_argument("--host-python", default=DEFAULT_HOST_PYTHON, type=Path)
     parser.add_argument("--lldb-timeout", default=120.0, type=float)
-    parser.add_argument("--host-mode", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--driver-mode", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--output", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if not args.wasm.exists():
         raise RuntimeError(f"wasm module not found: {args.wasm}")
-    if args.host_mode:
+    if args.driver_mode:
         if args.output is None:
-            raise RuntimeError("--output is required in --host-mode")
-        return run_python_host(args.wasm, args.spec_dir, args.output)
+            raise RuntimeError("--output is required in --driver-mode")
+        return run_python_driver(args.wasm, args.spec_dir, args.output)
 
     if args.host_python is None or not args.host_python.exists():
         raise RuntimeError(f"host Python not found: {args.host_python}")

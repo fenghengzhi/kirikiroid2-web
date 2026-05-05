@@ -130,19 +130,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Render stage artifact output directory. Default: "
                         "tests/differential/artifacts/"
                         "motion_playback_render_stages_wasmtime/<run-id>")
-    p.add_argument("--host-mode", action="store_true",
-                   help=argparse.SUPPRESS)
-    p.add_argument("--host-output", type=Path, help=argparse.SUPPRESS)
-    p.add_argument("--host-frames", type=int, default=0,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--manifest-startup-xp3", type=Path, default=None,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--render-stage-out", type=Path, default=None,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--capture-frame-start", type=int, default=0,
-                   help=argparse.SUPPRESS)
-    p.add_argument("--capture-frame-count", type=int, default=-1,
-                   help=argparse.SUPPRESS)
     add_frame_capture_args(p)
     return p.parse_args(argv)
 
@@ -1569,7 +1556,7 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
 
     return {
         "ok": True,
-        "runner": "motion-playback-wasmtime-python-host",
+        "runner": "motion-playback-wasmtime-lldb-driver",
         "framesDriven": frames,
         "bootstrap": {
             "guestRoot": str(bootstrap.root),
@@ -1579,39 +1566,6 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
         },
         "renderProbe": render_probe_summary,
     }
-
-
-def run_python_host_driver(wasm_path: Path, startup_xp3: Path,
-                           frames: int, output: Path, *,
-                           framebuffer_dir: Path | None = None,
-                           render_artifact_dir: Path | None = None,
-                           record_render_step_checkpoints: bool = False,
-                           record_layer_raw_probes: bool = False,
-                           record_save_layer_visual_readback_probes: bool = False,
-                           save_layer_visual_readback_frame_start: int = 0,
-                           save_layer_visual_readback_frame_count: int = 1,
-                           capture_window: FrameCaptureWindow,
-                           render_stage_out: Path | None = None,
-                           specs: list[dict] | None = None,
-                           manifest_startup_xp3: Path | None = None) -> int:
-    summary = drive_full_guest(
-        wasm_path, startup_xp3, frames,
-        framebuffer_dir=framebuffer_dir,
-        render_artifact_dir=render_artifact_dir,
-        record_render_step_checkpoints=record_render_step_checkpoints,
-        record_layer_raw_probes=record_layer_raw_probes,
-        record_save_layer_visual_readback_probes=(
-            record_save_layer_visual_readback_probes),
-        save_layer_visual_readback_frame_start=(
-            save_layer_visual_readback_frame_start),
-        save_layer_visual_readback_frame_count=(
-            save_layer_visual_readback_frame_count),
-        capture_window=capture_window,
-        render_stage_out=render_stage_out,
-        specs=specs,
-        manifest_startup_xp3=manifest_startup_xp3)
-    output.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    return 0
 
 
 def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
@@ -1645,18 +1599,20 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
         temp = Path(td)
         trace_path = temp / "trace.json"
         render_stage_path = temp / "render_stages.json"
-        host_report = temp / "host.json"
+        driver_report = temp / "driver.json"
         tracer = REPO_ROOT / "tests" / "differential" / "python" / \
             "wasm_lldb_motion_trace.py"
+        driver = REPO_ROOT / "tests" / "differential" / "python" / \
+            "wasmtime_motion_playback_driver.py"
         cmd = [
             "xcrun", "python3", str(tracer),
-            "--driver", str(Path(__file__).resolve()),
+            "--driver", str(driver),
             "--host-python", str(host_python),
             "--wasm", str(wasm_path),
             "--startup-xp3", str(startup_xp3),
             "--spec-dir", str(spec_dir),
             "--trace-out", str(trace_path),
-            "--host-output", str(host_report),
+            "--driver-output", str(driver_report),
             "--expected-frames", str(expected_frames),
             "--capture-frame-start", str(capture_window.start),
             "--capture-frame-count",
@@ -2440,51 +2396,6 @@ def main(argv: list[str]) -> int:
         print("--record-save-layer-visual-readback-probes requires "
               "--record-render-stages", file=sys.stderr)
         return 2
-
-    if args.host_mode:
-        if args.host_output is None:
-            print("--host-output is required in --host-mode", file=sys.stderr)
-            return 2
-        frames = int(args.host_frames or 0)
-        if frames <= 0:
-            print("--host-frames must be positive in --host-mode",
-                  file=sys.stderr)
-            return 2
-        if render_artifact_dir is not None and args.render_stage_out is None:
-            print("--render-stage-out is required with --record-render-stages "
-                  "in --host-mode", file=sys.stderr)
-            return 2
-        try:
-            specs = load_specs(spec_dir)
-            total_frames = sum(int(spec["frames"]) for spec in specs)
-            capture_window = frame_capture_window_from_bounds(
-                total_frames=total_frames,
-                start=int(args.capture_frame_start),
-                count=int(args.capture_frame_count),
-            )
-            return run_python_host_driver(
-                wasm_path, startup_xp3, frames, args.host_output,
-                framebuffer_dir=framebuffer_dir,
-                render_artifact_dir=render_artifact_dir,
-                record_render_step_checkpoints=(
-                    args.record_render_step_checkpoints),
-                record_layer_raw_probes=args.record_layer_raw_probes,
-                record_save_layer_visual_readback_probes=(
-                    args.record_save_layer_visual_readback_probes),
-                save_layer_visual_readback_frame_start=(
-                    args.save_layer_visual_readback_frame_start),
-                save_layer_visual_readback_frame_count=(
-                    args.save_layer_visual_readback_frame_count),
-                capture_window=capture_window,
-                render_stage_out=args.render_stage_out,
-                specs=specs,
-                manifest_startup_xp3=(
-                    Path(args.manifest_startup_xp3)
-                    if args.manifest_startup_xp3 is not None
-                    else None))
-        except Exception as exc:
-            print(f"FAIL: Wasmtime host driver error: {exc}", file=sys.stderr)
-            return 1
 
     if not spec_dir.exists():
         print(f"spec dir not found: {spec_dir}", file=sys.stderr)

@@ -9,15 +9,28 @@ add_library(krkr2_wasmtime_guest_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerCore.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerFrameProgress.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerResource.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerMotionLoad.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerVariable.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerTimeline.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerLayerQuery.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerDrawDispatch.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRender.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRenderPrepare.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRenderInternal.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRenderItems.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRenderExecute.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerRenderTargets.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateLayers.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerQuery.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateLayerEval.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateGeometry.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateChildMotion.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateParticles.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateAnchor.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/ResourceManager.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/SourceCache.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/RuntimeSupport.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/NodeTree.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/MotionNodeBridge.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/MotionTraceWeb.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/SeparateLayerAdaptor.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBValue.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBFile.cpp

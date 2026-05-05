@@ -48,7 +48,7 @@ def write_int32s_at(base: int, ptr: int, values: list[int]) -> None:
     ctypes.memmove(base + ptr, data, len(data))
 
 
-def run_python_host(wasm_path: Path, spec_dir: Path, output: Path) -> int:
+def run_python_driver(wasm_path: Path, spec_dir: Path, output: Path) -> int:
     wasmtime = load_wasmtime()
     store, exports = instantiate_standalone_module(wasmtime, wasm_path)
     memory = exports["memory"]
@@ -101,7 +101,7 @@ def run_python_host(wasm_path: Path, spec_dir: Path, output: Path) -> int:
 
     output.write_text(json.dumps({
         "ok": True,
-        "runner": "position-interp-wasmtime-python-host",
+        "runner": "position-interp-wasmtime-python-driver",
         "cases": cases,
         "host_calls": len(cases),
     }, indent=2), encoding="utf-8")
@@ -140,16 +140,16 @@ def main() -> int:
     parser.add_argument("--wasm", required=True, type=Path)
     parser.add_argument("--host-python", default=DEFAULT_HOST_PYTHON, type=Path)
     parser.add_argument("--lldb-timeout", default=120.0, type=float)
-    parser.add_argument("--host-mode", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--driver-mode", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--output", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if not args.wasm.exists():
         raise RuntimeError(f"wasm module not found: {args.wasm}")
-    if args.host_mode:
+    if args.driver_mode:
         if args.output is None:
-            raise RuntimeError("--output is required in --host-mode")
-        return run_python_host(args.wasm, args.spec_dir, args.output)
+            raise RuntimeError("--output is required in --driver-mode")
+        return run_python_driver(args.wasm, args.spec_dir, args.output)
     if args.host_python is None or not args.host_python.exists():
         raise RuntimeError(f"host Python not found: {args.host_python}")
 
