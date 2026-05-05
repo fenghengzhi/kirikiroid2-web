@@ -1608,6 +1608,11 @@ void krkr2_wasm_set_render_capture_frame_filter(int frame_start,
     g_capture_frame_count = frame_count;
 }
 
+EMSCRIPTEN_KEEPALIVE
+int krkr2_wasm_get_motion_trace_frame_count() {
+    return traceState().frameCounter;
+}
+
 } // extern "C"
 
 int wasmtimeStartupFrom(const char *path, int len) {
