@@ -14,6 +14,7 @@ add_library(krkr2_wasmtime_guest_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerUpdateLayers.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerQuery.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/ResourceManager.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/SourceCache.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/RuntimeSupport.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/NodeTree.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/MotionNodeBridge.cpp
