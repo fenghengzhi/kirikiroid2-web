@@ -496,8 +496,18 @@ jobs:
         run: |
           set -euo pipefail
           rm -f tests/differential/traces/motion_playback/*.oracle.json
+          set +e
           python3 tests/differential/python/run_motion_playback.py \
             --record-oracle --serial "${ANDROID_SERIAL}" 2>&1 | tee /tmp/record.log
+          record_rc=${PIPESTATUS[0]}
+          set -e
+          if [ "${record_rc}" -ne 0 ]; then
+            echo "::group::motion_playback oracle failure diagnostics"
+            adb -s "${ANDROID_SERIAL}" shell "pidof org.github.krkr2 || true"
+            adb -s "${ANDROID_SERIAL}" shell "logcat -d -t 500" || true
+            echo "::endgroup::"
+            exit "${record_rc}"
+          fi
           echo "--- recorded oracle traces ---"
           ls -la tests/differential/traces/motion_playback/ || true
           python3 - <<'PY'

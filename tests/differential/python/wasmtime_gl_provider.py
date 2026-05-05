@@ -145,7 +145,6 @@ class WasmtimeGLProvider:
         if not gl_imports:
             return
 
-        self._ensure_context()
         for imp in gl_imports:
             linker.define_func(
                 "env",
@@ -374,20 +373,20 @@ class WasmtimeGLProvider:
         if method is not None:
             return method
 
-        gl_fn = getattr(self._gl, local_name, None)
-        if gl_fn is not None:
-            def generic(caller: Any, *args: Any) -> Any:
-                return self._call(import_name, tuple(args),
-                                  lambda: gl_fn(*args))
-            return generic
-
-        def unsupported(_caller: Any, *args: Any) -> Any:
-            recent = "\n".join(f"  {call}" for call in self._recent_calls)
-            raise RuntimeError(
-                f"{import_name}{tuple(args)} is not supported by the "
-                f"PyOpenGL provider\n{recent}"
-            )
-        return unsupported
+        def generic(caller: Any, *args: Any) -> Any:
+            del caller
+            self._ensure_context()
+            gl_fn = getattr(self._gl, local_name, None)
+            if gl_fn is None:
+                recent = "\n".join(
+                    f"  {call}" for call in self._recent_calls)
+                raise RuntimeError(
+                    f"{import_name}{tuple(args)} is not supported by the "
+                    f"PyOpenGL provider\n{recent}"
+                )
+            return self._call(import_name, tuple(args),
+                              lambda: gl_fn(*args))
+        return generic
 
     @staticmethod
     def _local_gl_name(import_name: str) -> str:

@@ -171,14 +171,13 @@ class AdbHarnessEngine:
 
     # ------------------------------------------------------------------ lifecycle
     def start(self, timeout: float = 60.0) -> None:
-        self._start_apk(timeout)
+        line = self._start_apk(timeout)
 
         # Drain until READY.
-        line = None
         for _ in range(8):
-            line = self._readline(timeout)
             if line.startswith("READY "):
                 break
+            line = self._readline(timeout)
         else:
             raise RuntimeError(f"no READY line (last: {line!r})")
         parts = line.split()
@@ -193,7 +192,7 @@ class AdbHarnessEngine:
         self.heap = GuestHeap(self._heap_backing, base=HEAP_VA, size=HEAP_SIZE)
         self.pid = self._query_guest_pid()
 
-    def _start_apk(self, timeout: float) -> None:
+    def _start_apk(self, timeout: float) -> str:
         """Launch HarnessActivity inside the already-installed krkr2-harness.apk
         and open a TCP connection to its RPC socket.
 
@@ -216,13 +215,13 @@ class AdbHarnessEngine:
             check=True, capture_output=True,
         )
 
-        # Poll until the in-process ServerSocket is listening. HarnessActivity
-        # only binds after onWindowFocusChanged(true), which fires AFTER
-        # activity resume — so `am start -W`'s return signal is too early.
-        # Verify via a ready probe: try the connection and demand that we
-        # see READY within the small per-conn timeout before declaring
-        # success. If the server isn't bound yet, adb forward returns
-        # ECONNREFUSED which we retry.
+        # Poll until the in-process ServerSocket is listening and has emitted
+        # its first line. HarnessActivity only binds after
+        # onWindowFocusChanged(true), which fires AFTER activity resume — so
+        # `am start -W`'s return signal is too early. `adb forward` can also
+        # accept the host-side TCP connection before the device-side socket is
+        # genuinely ready; requiring the first line avoids returning a socket
+        # that immediately closes in start() on slow CI runners.
         deadline = time.time() + timeout
         last_err: Exception | None = None
         while time.time() < deadline:
@@ -231,26 +230,20 @@ class AdbHarnessEngine:
                     ("127.0.0.1", self.apk_port), timeout=2.0,
                 )
                 s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                # The adb forward tunnel accepts connects on the host side
-                # even before the device-side ServerSocket has bound — in
-                # that case a recv returns 0 (EOF) immediately. Probe with
-                # a small recv; if we got EOF/reset, back off and retry.
-                s.settimeout(2.0)
+                self._socket = s
+                self._socket_buf = b""
                 try:
-                    peek = s.recv(6, socket.MSG_PEEK)
-                except socket.timeout:
-                    peek = b"?"   # data not ready yet but connection alive
-                if not peek:
-                    s.close()
-                    last_err = RuntimeError("remote not listening yet (EOF)")
+                    line = self._read_socket_line(timeout=2.0)
+                except Exception as exc:
+                    last_err = exc
+                    self._invalidate_socket()
                     time.sleep(0.2)
                     continue
                 s.settimeout(None)
-                self._socket = s
-                self._socket_buf = b""
-                return
+                return line
             except (ConnectionRefusedError, socket.timeout, OSError) as exc:
                 last_err = exc
+                self._invalidate_socket()
                 time.sleep(0.2)
         raise RuntimeError(
             f"apk harness never accepted on {self.apk_port}: {last_err!r}"
