@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -82,15 +83,46 @@ def case_ids(oracle_root: Path) -> list[str]:
         for path in event_dir.glob("*.oracle.json"))
 
 
-def _normalized_item_value(item: dict[str, Any], field: str) -> Any:
+def _raw_flag(item: dict[str, Any], name: str) -> bool:
     flags = item.get("flags")
+    return bool(flags.get(name)) if isinstance(flags, dict) else False
+
+
+def _is_direct_item_with_undefined_build_clip(item: dict[str, Any]) -> bool:
+    # libkrkr2.so sub_6C4E28 @ 0x6C5DBC only defines item+21 and
+    # item+216..228 inside the item+19 branch. Direct top-level items with
+    # item+19 == 0 are submitted later by sub_6C7440 from paintBox/viewport;
+    # any Oracle bytes left in +21/+216..228 are native object-slot residue,
+    # not stable build-flow semantics.
+    if _raw_flag(item, "drawFlag19"):
+        return False
+    parent_ptr = item.get("parentItem264")
+    parent_index = item.get("parentItemIndex")
+    has_parent_ptr = isinstance(parent_ptr, str) and parent_ptr != "null"
+    has_parent_index = isinstance(parent_index, int) and parent_index >= 0
+    child_count = item.get("childItemCount")
+    has_children = isinstance(child_count, int) and child_count > 0
+    return not has_parent_ptr and not has_parent_index and not has_children
+
+
+def _normalized_flags(item: dict[str, Any]) -> dict[str, Any] | Any:
+    flags = item.get("flags")
+    if not isinstance(flags, dict):
+        return flags
+    normalized = dict(flags)
+    if _is_direct_item_with_undefined_build_clip(item):
+        normalized["clipValid21"] = 0
+    return normalized
+
+
+def _normalized_item_value(item: dict[str, Any], field: str) -> Any:
+    flags = _normalized_flags(item)
     clip_valid = (
         bool(flags.get("clipValid21"))
         if isinstance(flags, dict) else False
     )
     if field == "flags":
-        value = flags
-        return dict(value) if isinstance(value, dict) else value
+        return flags
     if field == "leafLayerVariantTag":
         value = item.get("leafLayerVariantTag")
         return item.get("leafLayerVariantTag320") if value is None else value
@@ -123,6 +155,52 @@ def _semantic_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _semantic_item_has_valid_drawable(item: dict[str, Any]) -> bool:
+    flags = item.get("flags")
+    if isinstance(flags, dict) and (
+        bool(flags.get("flag16")) or bool(flags.get("flag17"))
+    ):
+        return False
+    source_gate = item.get("sourceGate232")
+    try:
+        if int(source_gate) == 0:
+            return False
+    except (TypeError, ValueError):
+        pass
+    clip_valid = (
+        bool(flags.get("clipValid21"))
+        if isinstance(flags, dict) else False
+    )
+    rect = item.get("buildClipRect") if clip_valid else item.get("paintBox")
+    if rect is None and clip_valid:
+        rect = item.get("clipRect")
+    if not clip_valid:
+        viewport = item.get("viewportRect")
+        if isinstance(rect, list) and len(rect) == 4 and \
+                isinstance(viewport, list) and len(viewport) == 4:
+            try:
+                v_left, v_top, v_right, v_bottom = (
+                    float(value) for value in viewport)
+                left, top, right, bottom = (float(value) for value in rect)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if v_right >= v_left and v_bottom >= v_top:
+                    rect = [
+                        max(left, math.floor(v_left)),
+                        max(top, math.floor(v_top)),
+                        min(right, math.ceil(v_right)),
+                        min(bottom, math.ceil(v_bottom)),
+                    ]
+    if not isinstance(rect, list) or len(rect) != 4:
+        return False
+    try:
+        left, top, right, bottom = (float(value) for value in rect)
+    except (TypeError, ValueError):
+        return False
+    return left < right and top < bottom
+
+
 def _build_flow(event: dict[str, Any]) -> dict[str, Any]:
     flow = event.get("buildFlow")
     if not isinstance(flow, dict):
@@ -144,8 +222,14 @@ def _build_flow(event: dict[str, Any]) -> dict[str, Any]:
         _semantic_item(item)
         for item in aux_items if isinstance(item, dict)
     ] if isinstance(aux_items, list) else []
+    summary = {field: flow.get(field) for field in BUILD_FLOW_FIELDS}
+    if semantic_main_items:
+        summary["validDrawableItemCount"] = sum(
+            1 for item in semantic_main_items
+            if _semantic_item_has_valid_drawable(item)
+        )
     return {
-        **{field: flow.get(field) for field in BUILD_FLOW_FIELDS},
+        **summary,
         "mainListSemanticItems": semantic_main_items,
         "auxListSemanticItems": semantic_aux_items,
         "items": semantic_main_items,
