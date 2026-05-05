@@ -292,7 +292,38 @@ namespace motion::detail {
         // assignment, queried by sub_6F2228 equivalent.
         std::map<std::string, int> nodeLabelMap;
 
-        struct PreparedRenderItem {
+        // Native render-item fields from the anonymous 0x1B0 item built by
+        // libkrkr2.so 0x6C2334 and consumed in-place by 0x6C4E28 / 0x6C7440.
+        // These fields intentionally keep the native write lifecycle: +21 and
+        // +216..228 are not blanket-cleared every frame.
+        struct NativeRenderItemFields {
+            bool rawFlag16 = false; // original item +16 = node+201
+            bool skipFlag0 = false; // original render item +17 (0x6C2334 / 0x6C7440)
+            bool skipFlag1 = false; // original render item +18 (0x6C2334 / 0x6C7440)
+            bool drawFlag = false;  // original render item +19
+            bool rawFlag20 = false; // original item +20, set by sub_6C4E28 requireLayerId path
+            bool rawFlag21 = false; // original item +21, drawable clip valid after sub_6C4E28
+            std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f}; // item+184..196
+            std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f}; // item+200..212
+            std::array<int, 4> clipRect{0, 0, 0, 0}; // item+216..228
+            std::array<int, 4> dirtyRect{0, 0, 0, 0};
+            int opacity = 255; // item+232
+            // item+244 in libkrkr2.so sub_6C2334 @ 0x6C2A90 — stencil/composite
+            // flags copied from node.stencilType; consumed by sub_6C7440 alpha
+            // mask path `(item+244 & 4)` / `(item+244 & 3)==1`.
+            int stencilComposite = 0;
+        };
+
+        struct RenderItemNativeFieldLifetime {
+            bool rawFlag20 = false;
+            bool rawFlag21 = false;
+            std::array<int, 4> clipRect{0, 0, 0, 0};
+            std::array<int, 4> dirtyRect{0, 0, 0, 0};
+            std::array<float, 8> localCorners{};
+            std::vector<float> localMeshPoints;
+        };
+
+        struct PreparedRenderItem : NativeRenderItemFields {
             int nodeIndex = 0;
             tTJSVariant srcRef;
             std::string sourceKey;
@@ -301,12 +332,8 @@ namespace motion::detail {
             bool topLevelList = true;
             bool groupList = false;
             bool selfSeedChildList = false;
-            bool rawFlag16 = false; // original item +16 = node+201
-            bool skipFlag0 = false; // original render item +17 (0x6C2334 / 0x6C7440)
-            bool skipFlag1 = false; // original render item +18 (0x6C2334 / 0x6C7440)
-            bool drawFlag = false;  // original render item +19
-            bool rawFlag20 = false; // original item +20, set by sub_6C4E28 requireLayerId path
-            bool rawFlag21 = false; // original item +21, drawable clip valid after sub_6C4E28
+            PlayerRuntime *nativeLifetimeOwner = nullptr;
+            int nativeLifetimeKey = 0;
             double sortKey = 0.0;
             int blendMode = 16;
             tTJSVariant contextVariant; // original item +248 (player+1012 copy)
@@ -315,16 +342,7 @@ namespace motion::detail {
             std::array<std::uint32_t, 4> packedColors{
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
             };
-            std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f};
-            std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f};
-            std::array<int, 4> clipRect{0, 0, 0, 0}; // build-stage clip rect after sub_6C4E28
-            std::array<int, 4> dirtyRect{0, 0, 0, 0};
             bool hasViewport = false;
-            int opacity = 255;
-            // item+244 in libkrkr2.so sub_6C2334 @ 0x6C2A90 — stencil/composite
-            // flags copied from node.stencilType; consumed by sub_6C7440 alpha
-            // mask path `(item+244 & 4)` / `(item+244 & 3)==1`.
-            int stencilComposite = 0;
             int coordinateMode = 0;
             int objTriPriority = 0;
             int visibleAncestorIndex = -1;
@@ -349,6 +367,8 @@ namespace motion::detail {
         // -> sub_6C7440. Both lists point directly into preparedRenderItems.
         std::vector<PreparedRenderItem *> preparedRenderItemsTopLevel;
         std::vector<PreparedRenderItem *> preparedRenderItemsGroup;
+        std::unordered_map<int, RenderItemNativeFieldLifetime>
+            renderItemNativeFieldLifetimeByNode;
 
         // Legacy local scratch for old diagnostics. libkrkr2.so player+384 is
         // the parameter table initialized by Player_initNonEmoteMotion

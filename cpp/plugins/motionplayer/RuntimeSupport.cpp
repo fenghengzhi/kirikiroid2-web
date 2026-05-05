@@ -1205,6 +1205,7 @@ namespace motion::detail {
             runtime.nodes.erase(std::next(runtime.nodes.begin()), runtime.nodes.end());
         }
         runtime.nodeLabelMap.clear();
+        runtime.renderItemNativeFieldLifetimeByNode.clear();
     }
 
     std::shared_ptr<PlayerRuntime> makePlayerRuntime() {

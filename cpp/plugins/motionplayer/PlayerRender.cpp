@@ -603,6 +603,22 @@ namespace {
                         item.clipRect[3] - item.clipRect[1]);
     }
 
+    void persistNativeRenderItemFieldLifetimeLike_0x6C4E28(
+        motion::detail::PlayerRuntime::PreparedRenderItem &item) {
+        auto *owner = item.nativeLifetimeOwner;
+        if(!owner) {
+            return;
+        }
+        auto &state =
+            owner->renderItemNativeFieldLifetimeByNode[item.nativeLifetimeKey];
+        state.rawFlag20 = item.rawFlag20;
+        state.rawFlag21 = item.rawFlag21;
+        state.clipRect = item.clipRect;
+        state.dirtyRect = item.dirtyRect;
+        state.localCorners = item.localCorners;
+        state.localMeshPoints = item.localMeshPoints;
+    }
+
     bool clearLayerAlphaOutsideRect(tTJSNI_BaseLayer *layer,
                                     const tTVPRect &outerRect,
                                     const tTVPRect &innerRect) {
@@ -1348,14 +1364,10 @@ namespace motion {
             _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
         for(auto &entry : _runtime->preparedRenderItems) {
             // libkrkr2.so sub_6C4E28 works in-place on the render item list
-            // built by sub_6C2334. Keep every item in the list and write
-            // +20/+21/clip/local geometry products onto PreparedRenderItem.
-            entry.rawFlag20 = false;
-            entry.rawFlag21 = false;
-            entry.clipRect = {0, 0, 0, 0};
-            entry.dirtyRect = {0, 0, 0, 0};
-            entry.localCorners = {};
-            entry.localMeshPoints.clear();
+            // built by sub_6C2334. It does not blanket-clear +20/+21 or
+            // +216..228: item+19==0 leaves those fields untouched, and failed
+            // intersections only write item+21=0. Local execution-only state
+            // is reset here; native fields were restored in 0x6C2334 setup.
             entry.builtRect = {0, 0, 0, 0};
             entry.leafBuilt = false;
             entry.composedBuilt = false;
@@ -1368,9 +1380,12 @@ namespace motion {
                 // libkrkr2.so sub_6C4E28 only materializes item+21 and
                 // item+216..228 for item+19 entries. Ordinary direct items are
                 // clipped and submitted later by sub_6C7440 from item+184..212.
+                // Because this branch skips the native writer entirely, keep
+                // the restored +21/+216..228 values intact.
             } else if(!drawableGate ||
                       !computeRenderClipRect(entry, canvasWidth, canvasHeight,
                                              clipRect, &clipFailureReason)) {
+                entry.rawFlag21 = false;
                 detail::logoChainTraceCheck(
                     motionPath, "renderItem.clip", "0x6C4E28",
                     _clampedEvalTime,
@@ -1401,6 +1416,7 @@ namespace motion {
                         entry.corners[ci + 1] - 0.5f - static_cast<float>(clipRect.top);
                 }
 
+                entry.localMeshPoints.clear();
                 entry.localMeshPoints.reserve(entry.meshPoints.size());
                 for(size_t pi = 0; pi + 1 < entry.meshPoints.size(); pi += 2) {
                     entry.localMeshPoints.push_back(
@@ -1459,6 +1475,7 @@ namespace motion {
                     "sub_6C4E28 local corner translation diverged from clip-local expectation");
             }
 
+            persistNativeRenderItemFieldLifetimeLike_0x6C4E28(entry);
             if(entry.groupList) {
                 _runtime->preparedRenderItemsGroup.push_back(&entry);
             }
@@ -1669,6 +1686,7 @@ namespace motion {
                 return nullptr;
             }
             item.rawFlag20 = true;
+            persistNativeRenderItemFieldLifetimeLike_0x6C4E28(item);
 
             setObjectIntProperty(layerObject, TJS_W("absolute"), state.absolute);
             setObjectIntProperty(layerObject, TJS_W("hitThreshold"),
@@ -1812,12 +1830,8 @@ namespace motion {
             }
             return nullptr;
         };
-        auto targetDrawableRect =
-            [&](const PreparedRenderItem &item,
-                RenderClipRect *outRect = nullptr) -> bool {
-            if(item.rawFlag16 || item.skipFlag0 || item.opacity <= 0) {
-                return false;
-            }
+        auto computeDirectTargetRectLike_0x6C7440 =
+            [&](const PreparedRenderItem &item, RenderClipRect &outRect) -> bool {
             RenderClipRect rect;
             if(!computeRenderClipRect(
                    item,
@@ -1826,9 +1840,7 @@ namespace motion {
                    rect)) {
                 return false;
             }
-            if(outRect) {
-                *outRect = rect;
-            }
+            outRect = rect;
             return true;
         };
 
@@ -1840,17 +1852,22 @@ namespace motion {
             if(item.executedDirect || item.leafBuilt || item.composedBuilt) {
                 return true;
             }
-            RenderClipRect directTargetRect;
-            const bool hasDirectTargetRect =
-                targetDrawableRect(item, &directTargetRect);
-            if(!item.rawFlag21 && !hasDirectTargetRect) {
-                return false;
-            }
+            const bool hasChildren = !item.childItems.empty();
+            const bool useDirectRenderPath =
+                shouldUseDirectRenderPathLike_0x6C7440(item, _clearEnabled) &&
+                !hasChildren && item.parentItem == nullptr &&
+                !item.skipFlag0 && !item.rawFlag16 &&
+                !(_preview && item.skipFlag1) && item.opacity > 0;
 
             const int clipWidth = item.clipRect[2] - item.clipRect[0];
             const int clipHeight = item.clipRect[3] - item.clipRect[1];
-            if(item.rawFlag21 && (clipWidth <= 0 || clipHeight <= 0)) {
-                return false;
+            if(!useDirectRenderPath) {
+                if(item.rawFlag21 && (clipWidth <= 0 || clipHeight <= 0)) {
+                    return false;
+                }
+                if(!item.rawFlag21) {
+                    return false;
+                }
             }
 
             auto source = resolveSourceObjectLike_0x6C1B70(item);
@@ -1888,11 +1905,11 @@ namespace motion {
                     "sub_6C7440 source rect was not the full texture bounds");
             }
 
-            const bool hasChildren = !item.childItems.empty();
-            const bool useDirectRenderPath =
-                shouldUseDirectRenderPathLike_0x6C7440(item, _clearEnabled) &&
-                !hasChildren && item.parentItem == nullptr;
             if(useDirectRenderPath) {
+                RenderClipRect directTargetRect;
+                if(!computeDirectTargetRectLike_0x6C7440(item, directTargetRect)) {
+                    return false;
+                }
                 item.executedDirect = true;
                 item.builtRect = {
                     directTargetRect.left,
@@ -2030,16 +2047,6 @@ namespace motion {
             return true;
         };
 
-        for(auto &item : _runtime->preparedRenderItems) {
-            if(!item.topLevelList || item.rawFlag16) {
-                continue;
-            }
-            if(!item.rawFlag21 && !targetDrawableRect(item)) {
-                continue;
-            }
-            buildItemOutput(buildItemOutput, &item);
-        }
-
         for(auto *itemPtr : _runtime->preparedRenderItemsTopLevel) {
             if(!itemPtr) {
                 continue;
@@ -2055,9 +2062,6 @@ namespace motion {
                 continue;
             }
 
-            if(!item.rawFlag21 && !targetDrawableRect(item)) {
-                continue;
-            }
             // libkrkr2.so 0x6C7440 reads item+17/item+16/item+18 in the
             // top-level walk before it enters the per-item output path.
             if(item.skipFlag0) {

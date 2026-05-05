@@ -300,6 +300,29 @@ namespace motion {
             1.0f, 1.0f, -1.0f, -1.0f
         };
 
+        auto restoreNativeFieldLifetime =
+            [&](detail::PlayerRuntime::PreparedRenderItem &entry) {
+                entry.nativeLifetimeOwner = _runtime.get();
+                entry.nativeLifetimeKey = entry.nodeIndex;
+                const auto it =
+                    _runtime->renderItemNativeFieldLifetimeByNode.find(
+                        entry.nativeLifetimeKey);
+                if(it == _runtime->renderItemNativeFieldLifetimeByNode.end()) {
+                    return;
+                }
+                // libkrkr2.so 0x6C2334 does not blanket-initialize item+20,
+                // item+21, or item+216..228 on every population path. The
+                // local item object is reconstructed each frame, so restore
+                // the native field lifetime explicitly before 0x6C4E28 writes
+                // the subset reached by this frame's branches.
+                entry.rawFlag20 = it->second.rawFlag20;
+                entry.rawFlag21 = it->second.rawFlag21;
+                entry.clipRect = it->second.clipRect;
+                entry.dirtyRect = it->second.dirtyRect;
+                entry.localCorners = it->second.localCorners;
+                entry.localMeshPoints = it->second.localMeshPoints;
+            };
+
         auto updatePaintBox =
             [](detail::PlayerRuntime::PreparedRenderItem &entry, double x,
                double y, bool firstPoint) {
@@ -421,6 +444,7 @@ namespace motion {
 
             detail::PlayerRuntime::PreparedRenderItem entry;
             entry.nodeIndex = static_cast<int>(i);
+            restoreNativeFieldLifetime(entry);
             entry.hasOwnSource = hasOwnSource;
             entry.groupOnly = !hasOwnSource && needsGroupEntry;
             entry.topLevelList = true;
