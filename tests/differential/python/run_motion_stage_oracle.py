@@ -985,7 +985,7 @@ def write_render_stage_artifacts(
         "localRoot": str(artifact_dir),
         "remoteCaptureRoot": image_manifest.get("remoteCaptureRoot"),
         "fixture": {
-            "xp3": "logo_test_render_stage_oracle.xp3",
+            "xp3": "logo_test_oracle.xp3",
             "window": {"width": 1920, "height": 1080},
             "deltaMs": 1000.0 / 60.0,
             "segmentOrder": [s["caseId"] for s in case_segments],
@@ -1078,76 +1078,68 @@ def main(argv: list[str]) -> int:
         return 2
     expected_frames = capture_window.driven_frames
     specs_by_id = {spec["id"]: spec for spec in specs}
-    temp_dir: tempfile.TemporaryDirectory[str] | None = None
     render_step_checkpoints: list[dict[str, Any]] = []
 
     try:
-        try:
-            mpb.ensure_oracle_renderer_software(args.serial)
-            with AdbHarnessEngine(serial=args.serial) as engine:
-                print(
-                    f"[record-stage] capturing stages={stages} "
-                    f"driven_frames={expected_frames} "
-                    f"capture={capture_window.filter_manifest()}"
-                )
-                if render_path:
-                    assert render_artifact_dir is not None
-                    temp_dir = tempfile.TemporaryDirectory(
-                        prefix="krkr2-motion-render-stage-xp3-")
-                    remote_game, remote_render_root = \
-                        mpb._prepare_render_stage_capture(
-                            args.serial, specs_by_id,
-                            render_artifact_dir, Path(temp_dir.name),
-                            capture_window)
-                else:
-                    remote_game = mpb._ensure_logo_test_xp3_pushed(
-                        args.serial)
-                    remote_render_root = None
-                mpb.ensure_oracle_renderer_software(
-                    args.serial, remote_game=remote_game, write_global=False)
+        mpb.ensure_oracle_renderer_software(args.serial)
+        with AdbHarnessEngine(serial=args.serial) as engine:
+            print(
+                f"[record-stage] capturing stages={stages} "
+                f"driven_frames={expected_frames} "
+                f"capture={capture_window.filter_manifest()}"
+            )
+            if render_path:
+                assert render_artifact_dir is not None
+                remote_game, remote_render_root = \
+                    mpb._prepare_render_stage_capture(
+                        args.serial, specs_by_id,
+                        render_artifact_dir, capture_window)
+            else:
+                remote_game = mpb._ensure_logo_test_xp3_pushed(
+                    args.serial)
+                remote_render_root = None
+            mpb.ensure_oracle_renderer_software(
+                args.serial, remote_game=remote_game, write_global=False)
 
-                with FridaMotionStageTracer(
-                    engine, device_id=args.serial) as tracer:
-                    checkpoint_raw_dir = (
-                        render_artifact_dir / ".oracle_execute_raw"
-                        if (
-                            args.record_render_step_checkpoints or
-                            args.record_layer_raw_probes
-                        ) and
-                        render_artifact_dir is not None else None
-                    )
-                    tracer.configure_image_checkpoints(checkpoint_raw_dir)
-                    tracer.start_record(
-                        stages,
-                        record_render_step_checkpoints=(
-                            args.record_render_step_checkpoints),
-                        record_layer_raw_probes=(
-                            args.record_layer_raw_probes),
-                        record_save_layer_visual_readback_probes=(
-                            args.record_save_layer_visual_readback_probes),
-                        save_layer_visual_readback_frame_start=(
-                            args.save_layer_visual_readback_frame_start),
-                        save_layer_visual_readback_frame_count=(
-                            args.save_layer_visual_readback_frame_count),
-                        capture_frame_start=capture_window.start,
-                        capture_frame_count=(
-                            -1 if not capture_window.enabled
-                            else capture_window.count),
-                    )
-                    engine.tjs_init()
-                    mpb.trigger_startup(engine, remote_game)
-                    events = wait_for_stage_trace(
-                        tracer,
-                        expected_frames=expected_frames,
-                        timeout=args.playback_timeout,
-                        stabilise_seconds=5.0 if render_path else 2.0,
-                        require_substantive_segments=(
-                            not capture_window.enabled),
-                    )
-                    render_step_checkpoints = tracer.image_checkpoints()
-        finally:
-            if temp_dir is not None:
-                temp_dir.cleanup()
+            with FridaMotionStageTracer(
+                engine, device_id=args.serial) as tracer:
+                checkpoint_raw_dir = (
+                    render_artifact_dir / ".oracle_execute_raw"
+                    if (
+                        args.record_render_step_checkpoints or
+                        args.record_layer_raw_probes
+                    ) and
+                    render_artifact_dir is not None else None
+                )
+                tracer.configure_image_checkpoints(checkpoint_raw_dir)
+                tracer.start_record(
+                    stages,
+                    record_render_step_checkpoints=(
+                        args.record_render_step_checkpoints),
+                    record_layer_raw_probes=(
+                        args.record_layer_raw_probes),
+                    record_save_layer_visual_readback_probes=(
+                        args.record_save_layer_visual_readback_probes),
+                    save_layer_visual_readback_frame_start=(
+                        args.save_layer_visual_readback_frame_start),
+                    save_layer_visual_readback_frame_count=(
+                        args.save_layer_visual_readback_frame_count),
+                    capture_frame_start=capture_window.start,
+                    capture_frame_count=(
+                        -1 if not capture_window.enabled
+                        else capture_window.count),
+                )
+                engine.tjs_init()
+                mpb.trigger_startup(engine, remote_game)
+                events = wait_for_stage_trace(
+                    tracer,
+                    expected_frames=expected_frames,
+                    timeout=args.playback_timeout,
+                    stabilise_seconds=5.0 if render_path else 2.0,
+                    require_substantive_segments=(
+                        not capture_window.enabled),
+                )
+                render_step_checkpoints = tracer.image_checkpoints()
 
         case_segments = build_case_segments(
             events, specs, mpb, capture_window)
