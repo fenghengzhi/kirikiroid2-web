@@ -92,6 +92,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         "auto-skipping the case")
     p.add_argument("--only-structural", action="store_true",
                    help="Diff only structural Motion state fields")
+    p.add_argument("--skip-golden-diff", action="store_true",
+                   help="Only capture and optionally write Wasmtime port "
+                        "traces; do not compare against cached oracle JSONs")
+    p.add_argument("--write-port-traces", type=Path, default=None,
+                   help="Write normalized Wasmtime port frames per spec as "
+                        "<id>.port.json into this directory")
     p.add_argument("--lldb-timeout", type=float, default=600.0,
                    help="Timeout for the LLDB Wasm guest tracer")
     p.add_argument("--host-python", default=DEFAULT_HOST_PYTHON, type=Path,
@@ -1391,19 +1397,18 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
     with tempfile.TemporaryDirectory(prefix="krkr2-wasmtime-browserfs-") as tmp:
         bootstrap = prepare_browser_bootstrap(Path(tmp), startup_xp3)
         try:
-            if framebuffer_dir is not None or render_artifact_dir is not None:
-                if specs is None:
-                    raise RuntimeError(
-                        "render artifact capture requires motion_playback specs")
-                capture_root = (
-                    bootstrap.root / RENDER_CAPTURE_GUEST_ROOT.lstrip("/")
-                )
-                for case in captured_case_ranges(
-                    specs, mpb.SEGMENT_ORDER, capture_window):
-                    spec_id = str(case["caseId"])
-                    for phase in RENDER_CAPTURE_SURFACES:
-                        (capture_root / spec_id / phase).mkdir(
-                            parents=True, exist_ok=True)
+            if specs is None:
+                raise RuntimeError(
+                    "motion_playback Wasmtime fixture requires specs")
+            capture_root = (
+                bootstrap.root / RENDER_CAPTURE_GUEST_ROOT.lstrip("/")
+            )
+            for case in captured_case_ranges(
+                specs, mpb.SEGMENT_ORDER, capture_window):
+                spec_id = str(case["caseId"])
+                for phase in RENDER_CAPTURE_SURFACES:
+                    (capture_root / spec_id / phase).mkdir(
+                        parents=True, exist_ok=True)
             if render_artifact_dir is not None:
                 if record_render_step_checkpoints:
                     for phase in RENDER_STEP_CHECKPOINT_SURFACES:
@@ -2360,6 +2365,20 @@ def write_render_stage_artifacts(
     return target
 
 
+def write_port_traces(port_frames_by_id: dict[str, list],
+                      output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for spec_id, frames in sorted(port_frames_by_id.items()):
+        target = output_dir / f"{spec_id}.port.json"
+        target.write_text(
+            json.dumps(frames, indent=2, sort_keys=True,
+                       allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        print(f"[record] {spec_id}: wrote {len(frames)} Wasmtime frames "
+              f"to {target}")
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     spec_dir = Path(args.spec_dir)
@@ -2467,11 +2486,24 @@ def main(argv: list[str]) -> int:
                 capture_window=capture_window,
             )
             image_manifest_path.unlink(missing_ok=True)
+        if args.write_port_traces is not None:
+            write_port_traces(port_frames_by_id, args.write_port_traces)
     except Exception as exc:
         print(f"FAIL: Wasmtime LLDB trace error: {exc}", file=sys.stderr)
         return 1
 
     failures = 0
+    if args.skip_golden_diff:
+        for spec in specs:
+            port_frames = port_frames_by_id.get(spec["id"])
+            if port_frames is None:
+                print(f"FAIL: {spec['id']}: no Wasmtime frames captured",
+                      file=sys.stderr)
+                failures += 1
+                continue
+            print(f"TRACE: {spec['id']} ({len(port_frames)} frames)")
+        return 1 if failures else 0
+
     for spec in specs:
         captured_case = captured_cases_by_id.get(str(spec["id"]))
         if capture_window.enabled and captured_case is None:

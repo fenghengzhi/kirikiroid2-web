@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       record_motion_playback_oracle:
-        description: "Re-record motion_playback goldens from Redroid (uploads them as an artifact)"
+        description: "Also upload fresh motion_playback oracle traces as a goldens refresh artifact"
         type: boolean
         default: false
   push:
@@ -118,11 +118,21 @@ jobs:
       - name: Run motion_playback Wasmtime LLDB guest-debug
         run: |
           source "${EMSDK}/emsdk_env.sh"
+          rm -rf tests/differential/artifacts/motion_playback_wasmtime_traces
+          mkdir -p tests/differential/artifacts/motion_playback_wasmtime_traces
           python3 tests/differential/python/run_motion_playback_wasmtime.py \
             --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm \
             --startup-xp3 reference/xp3/logo_test_oracle.xp3 \
-            --strict-missing-trace \
+            --skip-golden-diff \
+            --write-port-traces tests/differential/artifacts/motion_playback_wasmtime_traces \
             --lldb-timeout 600
+
+      - name: Upload motion_playback Wasmtime traces
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-wasmtime-traces
+          path: tests/differential/artifacts/motion_playback_wasmtime_traces/*.port.json
+          if-no-files-found: error
 
   # ── Build the legacy gnustl harness on a native x86_64 Linux host.
   #    Android NDK r17c only ships linux-x86_64 host tools, while the
@@ -205,7 +215,7 @@ jobs:
   #    Same kernel means no hardware virtualisation required; Android
   #    runs as a privileged container sharing the host kernel's binder.
   adb-frida:
-    needs: [wasmtime, build-legacy-harness]
+    needs: [build-legacy-harness]
     runs-on: ubuntu-24.04-arm
     env:
       # Android 12 = API 31. _64only variant drops the 32-bit system
@@ -480,26 +490,36 @@ jobs:
           done
           exit $trace_failed
 
-      # ── motion_playback oracle recorder. Opt-in via workflow_dispatch
-      #    input `record_motion_playback_oracle=true`. Produces
-      #    tests/differential/traces/motion_playback/*.oracle.json, uploaded
-      #    as an artifact. Operator downloads, commits to the repo, pushes;
-      #    normal Tests workflow runs then diff the Browser-WASM motionTrace
-      #    output against the recorded goldens.
-      - name: Record motion_playback goldens
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.record_motion_playback_oracle == 'true'
+      - name: Record motion_playback oracle for fresh compare
         env:
           ANDROID_SERIAL: localhost:5555
         run: |
           set -euo pipefail
+          rm -f tests/differential/traces/motion_playback/*.oracle.json
           python3 tests/differential/python/run_motion_playback.py \
             --record-oracle --serial "${ANDROID_SERIAL}" 2>&1 | tee /tmp/record.log
-          echo "--- recorded goldens ---"
+          echo "--- recorded oracle traces ---"
           ls -la tests/differential/traces/motion_playback/ || true
-          # Basic sanity: non-empty array, non-empty layers on frame 0.
-          for f in tests/differential/traces/motion_playback/*.oracle.json; do
-            python3 -c "import json,sys; d=json.load(open('$f')); assert len(d)>0 and len(d[0].get('layers',[]))>0, '$f empty'; print('$f: frames=', len(d), ', layer_count=', len(d[0]['layers']))"
-          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          spec_dir = Path("tests/differential/specs/motion_playback")
+          trace_dir = Path("tests/differential/traces/motion_playback")
+          for spec_path in sorted(spec_dir.glob("*.json")):
+              spec = json.loads(spec_path.read_text(encoding="utf-8"))
+              path = trace_dir / f"{spec['id']}.oracle.json"
+              assert path.exists(), f"{path} missing"
+              frames = json.loads(path.read_text(encoding="utf-8"))
+              assert frames and frames[0].get("layers"), f"{path} empty"
+              print(f"{path}: frames={len(frames)}, layer_count={len(frames[0]['layers'])}")
+          PY
+
+      - name: Upload motion_playback oracle traces
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-oracle-traces
+          path: tests/differential/traces/motion_playback/*.oracle.json
+          if-no-files-found: error
 
       - name: Upload motion_playback goldens artifact
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.record_motion_playback_oracle == 'true'
@@ -512,3 +532,30 @@ jobs:
       - name: Stop Redroid
         if: always()
         run: docker stop redroid || true
+
+  motion-playback-compare:
+    needs: [wasmtime, adb-frida]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Download motion_playback Wasmtime traces
+        uses: actions/download-artifact@v4
+        with:
+          name: motion_playback-wasmtime-traces
+          path: /tmp/motion_playback/wasmtime
+
+      - name: Download motion_playback oracle traces
+        uses: actions/download-artifact@v4
+        with:
+          name: motion_playback-oracle-traces
+          path: /tmp/motion_playback/oracle
+
+      - name: Compare fresh motion_playback traces
+        run: |
+          python3 tests/differential/python/compare_motion_playback_traces.py \
+            --spec-dir tests/differential/specs/motion_playback \
+            --port-trace-dir /tmp/motion_playback/wasmtime \
+            --oracle-trace-dir /tmp/motion_playback/oracle

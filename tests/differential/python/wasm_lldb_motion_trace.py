@@ -221,6 +221,10 @@ class WasmMotionTracer:
         self.end_hits = 0
         self.last_completed_frame_id: int | None = None
         self.last_top_player: str | None = None
+        self.driver_exit_status: int | None = None
+        self.driver_stdout = ""
+        self.driver_stderr = ""
+        self.driver_summary = ""
 
     def run(self) -> list[dict[str, Any]]:
         lldb = self.lldb
@@ -330,15 +334,31 @@ class WasmMotionTracer:
                     raise RuntimeError(f"LLDB launch failed: {error.GetCString()}")
 
                 self._drive_process(process, stdout_path, stderr_path)
+                self.driver_exit_status = process.GetExitStatus()
+                self.driver_stdout, self.driver_stderr = self._read_stdio(
+                    stdout_path, stderr_path)
+                if self.driver_output.exists():
+                    self.driver_summary = self.driver_output.read_text(
+                        encoding="utf-8", errors="replace")
+                if self.driver_exit_status not in (0, -1):
+                    raise RuntimeError(
+                        f"driver process exited with {self.driver_exit_status}\n"
+                        f"driver summary:\n{self.driver_summary}"
+                        f"stdout:\n{self.driver_stdout}"
+                        f"stderr:\n{self.driver_stderr}"
+                    )
         finally:
             lldb.SBDebugger.Destroy(debugger)
 
         if self.begin_hits == 0:
-            raise RuntimeError(f"LLDB breakpoint was not hit: {FRAME_BEGIN_SYMBOL}")
+            raise RuntimeError(self._missing_breakpoint_message(
+                FRAME_BEGIN_SYMBOL))
         if self.layer_hits == 0:
-            raise RuntimeError(f"LLDB breakpoint was not hit: {LAYER_SAMPLE_SYMBOL}")
+            raise RuntimeError(self._missing_breakpoint_message(
+                LAYER_SAMPLE_SYMBOL))
         if self.end_hits == 0:
-            raise RuntimeError(f"LLDB breakpoint was not hit: {FRAME_END_SYMBOL}")
+            raise RuntimeError(self._missing_breakpoint_message(
+                FRAME_END_SYMBOL))
         if self.expected_frames and len(self.events) < self.expected_frames:
             raise RuntimeError(
                 f"Wasmtime LLDB trace captured only {len(self.events)} "
@@ -347,6 +367,15 @@ class WasmMotionTracer:
                 f"layer={self.layer_hits}, end={self.end_hits}"
             )
         return self.events
+
+    def _missing_breakpoint_message(self, symbol: str) -> str:
+        return (
+            f"LLDB breakpoint was not hit: {symbol}\n"
+            f"driverExitStatus={self.driver_exit_status}\n"
+            f"driver summary:\n{self.driver_summary}"
+            f"stdout:\n{self.driver_stdout}"
+            f"stderr:\n{self.driver_stderr}"
+        )
 
     def _drive_process(self, process, stdout_path: Path,
                        stderr_path: Path) -> None:
