@@ -275,12 +275,12 @@ namespace motion::detail {
 
         // Path B visibility flag (node+1960), written by sub_6BD8DC @
         // 0x6BD958. Consumed by: the visibleAncestor chain walk in the
-        // same sub_6BD8DC pass (PlayerUpdateLayers.cpp:1613), copied to
+        // same sub_6BD8DC pass (PlayerUpdateLayerEval.cpp), copied to
         // PreparedRenderItem::drawFlag (item+19) in sub_6C2334's item
         // build, and exposed to TJS via the layerVisible getter
-        // (PlayerQuery.cpp:43). NOT read by Player_calcBounds — that
+        // (PlayerLayerQuery.cpp). NOT read by Player_calcBounds — that
         // function gates on nodeType mask + renderTreeFlag200 instead
-        // (see PlayerRenderPrepare.cpp:75 comment). NOT the Path A main
+        // (see PlayerRenderItems.cpp comment). NOT the Path A main
         // render gate either.
         bool drawFlag = false;
 

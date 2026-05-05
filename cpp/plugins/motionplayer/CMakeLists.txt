@@ -9,10 +9,22 @@ target_sources(${PROJECT_NAME} PUBLIC
     PlayerCore.cpp
     PlayerFrameProgress.cpp
     PlayerResource.cpp
+    PlayerMotionLoad.cpp
+    PlayerVariable.cpp
+    PlayerTimeline.cpp
+    PlayerLayerQuery.cpp
+    PlayerDrawDispatch.cpp
     PlayerRender.cpp
-    PlayerRenderPrepare.cpp
+    PlayerRenderInternal.cpp
+    PlayerRenderItems.cpp
+    PlayerRenderExecute.cpp
+    PlayerRenderTargets.cpp
     PlayerUpdateLayers.cpp
-    PlayerQuery.cpp
+    PlayerUpdateLayerEval.cpp
+    PlayerUpdateGeometry.cpp
+    PlayerUpdateChildMotion.cpp
+    PlayerUpdateParticles.cpp
+    PlayerUpdateAnchor.cpp
     ResourceManager.cpp
     SourceCache.cpp
     RuntimeSupport.cpp

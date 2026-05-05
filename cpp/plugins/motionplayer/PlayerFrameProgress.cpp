@@ -2,6 +2,8 @@
 // Split from PlayerRender.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "MotionTraceWeb.h"
+#include "ncbind.hpp"
 
 using namespace motion::internal;
 
@@ -859,6 +861,103 @@ namespace motion {
 
         _allplaying = !_runtime->playingTimelineLabels.empty();
         _syncActive = _syncWaiting && _allplaying;
+    }
+
+
+    tjs_error Player::progressCompatMethod(tTJSVariant *result, tjs_int numparams,
+                                           tTJSVariant **param,
+                                           iTJSDispatch2 *objthis) {
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+
+        self->ensureMotionLoaded();
+        detail::MotionTraceProgressScope motionTraceScope(self, objthis);
+
+        double delta = 0.0;
+        if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid) {
+            delta = param[0]->AsReal();
+        }
+        // Clamp delta to sane range: TJS tick differences can overflow
+        // when uint32 wraps (e.g. 4294967381 = 2^32 + 85)
+        if(delta < 0 || delta > 60000) {
+            delta = 0;
+        }
+
+        self->_runtime->pendingEvents.clear();
+        self->frameProgress(delta * kMotionFramesPerMillisecond);
+        const auto motionPath =
+            self->_runtime && self->_runtime->activeMotion
+                ? self->_runtime->activeMotion->path
+                : std::string{};
+        detail::logoChainTraceCheck(
+            motionPath, "progressCompat.dt", "0x6D2A98",
+            self->_clampedEvalTime,
+            fmt::format("dt_ms*60/1000={:.6f}", delta * kMotionFramesPerMillisecond),
+            fmt::format("dt_frames={:.6f}", self->_frameLastTime),
+            std::fabs(self->_frameLastTime - delta * kMotionFramesPerMillisecond) <
+                0.000001,
+            "progressCompat dt(ms)->frame conversion diverged from 0x6D2A98");
+
+        // Aligned to libkrkr2.so Player_progressCompat (0x6D2A98):
+        // progress_inner -> updateLayers -> calcBounds -> dispatchEvents.
+        // The binary assumes the node tree is already built (it was built
+        // eagerly inside play()/setMotion()), so there is no lazy build here.
+        if(!self->_runtime->nodes.empty()) {
+            detail::logoChainTraceLogf(
+                motionPath, "progressCompat.update", "0x6D2A98",
+                self->_clampedEvalTime,
+                "timelineCurrentTime={:.3f} pendingEvents={} nodes={}",
+                self->_clampedEvalTime, self->_runtime->pendingEvents.size(),
+                self->_runtime->nodes.size());
+            self->updateLayers();
+        }
+        self->calcBounds();
+
+        if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+           motionPath.find("m2logo.mtn") != std::string::npos &&
+           self->_clampedEvalTime >= 0.0 && self->_clampedEvalTime <= 60.0) {
+            std::fprintf(stderr,
+                         "SNAPTIME motion=%s frame=%.3f playing=%d nodes=%zu\n",
+                         motionPath.c_str(), self->_clampedEvalTime,
+                         self->_allplaying ? 1 : 0,
+                         self->_runtime ? self->_runtime->nodes.size() : 0);
+        }
+
+        if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+           motionPath.find("m2logo.mtn") != std::string::npos &&
+           self->_clampedEvalTime >= 30.0 && self->_clampedEvalTime <= 50.0) {
+            std::fprintf(stderr, "SHOTMARK motion=%s frame=%.3f\n",
+                         motionPath.c_str(), self->_clampedEvalTime);
+        }
+
+        // Aligned to libkrkr2.so Player_dispatchEvents (0x6C4490):
+        // After stepping timelines, dispatch queued onAction/onSync events.
+        if(!self->_runtime->pendingEvents.empty()) {
+            for(const auto &ev : self->_runtime->pendingEvents) {
+                try {
+                    if(ev.type == 0) {
+                        // onAction(param1, param2)
+                        tTJSVariant p1(detail::widen(ev.param1));
+                        tTJSVariant p2(detail::widen(ev.param2));
+                        tTJSVariant *args[] = { &p1, &p2 };
+                        objthis->FuncCall(0, TJS_W("onAction"),
+                            nullptr, nullptr, 2, args, objthis);
+                    } else if(ev.type == 1) {
+                        // onSync()
+                        objthis->FuncCall(0, TJS_W("onSync"),
+                            nullptr, nullptr, 0, nullptr, objthis);
+                    }
+                } catch(...) {}
+            }
+            self->_runtime->pendingEvents.clear();
+        }
+
+        if(result) {
+            *result = tTJSVariant(self->getProgressCompat());
+        }
+        return TJS_S_OK;
     }
 
 } // namespace motion

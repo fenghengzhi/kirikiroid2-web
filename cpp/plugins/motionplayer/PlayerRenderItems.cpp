@@ -1,4 +1,4 @@
-// PlayerRenderPrepare.cpp — calcBounds and prepared render-item build
+// PlayerRenderItems.cpp — calcBounds and prepared render-item build
 // Split from PlayerUpdateLayers.cpp for maintainability.
 //
 #include "PlayerInternal.h"
