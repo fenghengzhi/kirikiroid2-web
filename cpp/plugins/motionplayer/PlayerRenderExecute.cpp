@@ -499,17 +499,72 @@ namespace motion {
             }
             return nullptr;
         };
-        auto computeDirectTargetRectLike_0x6C7440 =
+        auto computeTargetLayerClipLike_0x6C7440 =
+            [&](const PreparedRenderItem &item, RenderClipRect &outRect,
+                bool &hasViewportClip) -> bool {
+            hasViewportClip = false;
+            if(item.hasViewport && item.viewport[2] >= item.viewport[0] &&
+               item.viewport[3] >= item.viewport[1]) {
+                const float clipLeft =
+                    std::max(item.paintBox[0], floorf(item.viewport[0]));
+                const float clipTop =
+                    std::max(item.paintBox[1], floorf(item.viewport[1]));
+                const float clipRight =
+                    std::min(item.paintBox[2], ceilf(item.viewport[2]));
+                const float clipBottom =
+                    std::min(item.paintBox[3], ceilf(item.viewport[3]));
+                if(clipLeft > clipRight || clipTop > clipBottom) {
+                    return false;
+                }
+
+                const int left = static_cast<int>(clipLeft);
+                const int top = static_cast<int>(clipTop);
+                const int width = static_cast<int>(clipRight - clipLeft);
+                const int height = static_cast<int>(clipBottom - clipTop);
+                outRect = {
+                    left,
+                    top,
+                    left + width,
+                    top + height,
+                };
+                hasViewportClip = true;
+                return true;
+            }
+
+            outRect = {
+                0,
+                0,
+                renderLayer ? static_cast<int>(renderLayer->GetWidth()) : 0,
+                renderLayer ? static_cast<int>(renderLayer->GetHeight()) : 0,
+            };
+            return true;
+        };
+        auto applyTargetLayerClipLike_0x6C7440 =
             [&](const PreparedRenderItem &item, RenderClipRect &outRect) -> bool {
-            RenderClipRect rect;
-            if(!computeRenderClipRect(
-                   item,
-                   renderLayer ? static_cast<int>(renderLayer->GetWidth()) : 0,
-                   renderLayer ? static_cast<int>(renderLayer->GetHeight()) : 0,
-                   rect)) {
+            bool hasViewportClip = false;
+            if(!computeTargetLayerClipLike_0x6C7440(
+                   item, outRect, hasViewportClip)) {
                 return false;
             }
-            outRect = rect;
+
+            // libkrkr2.so Player_renderToCanvas_guess @ 0x6C77C4..0x6C78DC:
+            // set target Layer clip before both direct and composed output. The
+            // later operateAffine call still receives the full source rect.
+            if(hasViewportClip) {
+                renderLayer->SetClip(outRect.left, outRect.top,
+                                     outRect.right - outRect.left,
+                                     outRect.bottom - outRect.top);
+            } else {
+                renderLayer->ResetClip();
+            }
+
+            const auto &actualClip = renderLayer->GetClip();
+            outRect = {
+                actualClip.left,
+                actualClip.top,
+                actualClip.right,
+                actualClip.bottom,
+            };
             return true;
         };
 
@@ -576,7 +631,9 @@ namespace motion {
 
             if(useDirectRenderPath) {
                 RenderClipRect directTargetRect;
-                if(!computeDirectTargetRectLike_0x6C7440(item, directTargetRect)) {
+                bool hasViewportClip = false;
+                if(!computeTargetLayerClipLike_0x6C7440(
+                       item, directTargetRect, hasViewportClip)) {
                     return false;
                 }
                 item.executedDirect = true;
@@ -731,14 +788,23 @@ namespace motion {
                 continue;
             }
 
-            // libkrkr2.so 0x6C7440 reads item+17/item+16/item+18 in the
-            // top-level walk before it enters the per-item output path.
+            // libkrkr2.so 0x6C7440 reads item+17/item+16 first, then updates
+            // target Layer clip, and only then applies the preview item+18 gate.
             if(item.skipFlag0) {
                 continue;
             }
             if(item.rawFlag16) {
                 continue;
             }
+            RenderClipRect targetLayerClip;
+            if(!applyTargetLayerClipLike_0x6C7440(item, targetLayerClip)) {
+                continue;
+            }
+            detail::logoChainTraceLogf(
+                motionPath, "execute.setClip", "0x6C7440", _clampedEvalTime,
+                "nodeIndex={} targetClip=[{},{},{},{}]",
+                item.nodeIndex, targetLayerClip.left, targetLayerClip.top,
+                targetLayerClip.right, targetLayerClip.bottom);
             if(_preview && item.skipFlag1) {
                 continue;
             }
@@ -954,6 +1020,9 @@ namespace motion {
             }
         }
 
+        // libkrkr2.so Player_renderToCanvas_guess @ 0x6C8FCC resets the target
+        // Layer clip once the top-level render-item walk is complete.
+        renderLayer->ResetClip();
         if(!skipUpdate) {
             renderLayer->Update(false);
             detail::logoChainTraceLogf(
