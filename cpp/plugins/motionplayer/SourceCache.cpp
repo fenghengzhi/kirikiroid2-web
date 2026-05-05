@@ -438,8 +438,7 @@ namespace motion {
         iTJSDispatch2 *parentLayer =
             _primaryLayer.Type() == tvtObject ? _primaryLayer.AsObjectNoAddRef()
                                               : nullptr;
-        const tTJSVariant &layerOwner =
-            _selfObject.Type() == tvtObject ? _selfObject : _owner;
+        const tTJSVariant &layerOwner = _owner;
         if(layerOwner.Type() == tvtObject) {
             ensureLayerObject(_bufLayer, layerOwner, parentLayer, false);
         }
@@ -557,11 +556,11 @@ namespace motion {
                                      ? _primaryLayer.AsObjectNoAddRef()
                                      : nullptr);
         const tTJSVariant owner =
-            _selfObject.Type() == tvtObject
-                ? _selfObject
+            _owner.Type() == tvtObject
+                ? _owner
                 : (layerTreeOwnerObject ? tTJSVariant(layerTreeOwnerObject,
                                                       layerTreeOwnerObject)
-                                        : _owner);
+                                        : tTJSVariant());
         auto *sourceLayerObject =
             ensureLayerObject(entry.sourceObject, owner, parentLayer, false);
         auto *sourceLayer = resolveNativeLayer(sourceLayerObject);
