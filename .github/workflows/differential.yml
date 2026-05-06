@@ -489,7 +489,8 @@ jobs:
           adb -s "${ANDROID_SERIAL}" logcat -c || true
           set +e
           python3 tests/differential/python/run_motion_playback.py \
-            --record-oracle --serial "${ANDROID_SERIAL}" 2>&1 | tee /tmp/record.log
+            --record-oracle --serial "${ANDROID_SERIAL}" \
+            --playback-timeout 300 2>&1 | tee /tmp/record.log
           record_rc=${PIPESTATUS[0]}
           set -e
           if [ "${record_rc}" -ne 0 ]; then
