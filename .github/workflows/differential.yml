@@ -44,7 +44,7 @@ jobs:
         id: emsdk-cache
         with:
           path: ${{ env.EMSDK }}
-          key: emsdk-${{ env.EMSDK_VERSION }}-${{ runner.os }}
+          key: emsdk-${{ env.EMSDK_VERSION }}-${{ runner.os }}-ports-v1
 
       - name: Setup Emscripten SDK
         if: steps.emsdk-cache.outputs.cache-hit != 'true'
