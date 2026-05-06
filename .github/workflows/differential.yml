@@ -364,27 +364,37 @@ jobs:
           sudo chmod +x /usr/local/bin/apktool
           apktool --version
 
-      - name: Cache built harness APK
-        uses: actions/cache@v4
-        id: harness-apk-cache
-        with:
-          path: tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk
-          # Rebuild only when any repack input changes. The reference APK
-          # lives in the private submodule — its submodule SHA is already
-          # part of the main repo tree hash (via the gitlink), so hashing
-          # the parent .gitmodules + the pointer is enough.
-          # Hash libharness.so SOURCES (not the binary) since the binary
-          # is produced by the "Build libharness.so" step earlier in this
-          # job — not a repo asset. Cross-compiler output isn't guaranteed
-          # bit-for-bit reproducible across NDK patch versions, so hashing
-          # the sources + legacy build files is the stable signal.
-          key: harness-apk-v3-${{ hashFiles('tests/differential/oracle_runner/harness-apk/HarnessActivity.java', 'tests/differential/oracle_runner/harness-apk/manifest-patch.xml', 'tests/differential/oracle_runner/harness-apk/patch_manifest.py', 'tests/differential/oracle_runner/harness-apk/build.sh', 'tests/differential/oracle_runner/harness-apk/keystore/harness-test.jks', 'tests/differential/oracle_runner/harness-apk/keystore/harness-test.password', 'tests/differential/oracle_runner/harness/harness.cpp', 'tests/differential/oracle_runner/harness/jni_bridge.cpp', 'tests/differential/oracle_runner/harness/Android.mk', 'tests/differential/oracle_runner/harness/Application.mk', 'tests/differential/oracle_runner/harness/CMakeLists.txt', 'tests/differential/oracle_runner/harness/build_legacy.sh', 'tests/differential/oracle_runner/check_harness_abi.py', 'reference/apk/krkr2 1.4.4.apk') }}
-
       - name: Build harness APK
-        if: steps.harness-apk-cache.outputs.cache-hit != 'true'
         env:
           ANDROID_HOME: ${{ runner.temp }}/android-sdk
         run: tests/differential/oracle_runner/harness-apk/build.sh
+
+      - name: Verify harness APK payload
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          for p in (
+              Path("tests/differential/oracle_runner/harness-apk/HarnessActivity.java"),
+              Path("tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk"),
+          ):
+              print(f"{p}: sha256={hashlib.sha256(p.read_bytes()).hexdigest()}")
+          PY
+          unzip -p \
+            tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk \
+            classes2.dex > /tmp/harness-classes2.dex
+          python3 - <<'PY'
+          from pathlib import Path
+          dex = Path("/tmp/harness-classes2.dex").read_bytes()
+          for needle in (
+              b"server thread started from ",
+              b"onCreate",
+              b"listening on 127.0.0.1:",
+          ):
+              assert needle in dex, f"classes2.dex missing marker: {needle!r}"
+              print(f"classes2.dex marker ok: {needle.decode()}")
+          PY
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -480,6 +490,8 @@ jobs:
           set -e
           if [ "${record_rc}" -ne 0 ]; then
             echo "::group::motion_playback oracle failure diagnostics"
+            echo "--- run_motion_playback output tail ---"
+            tail -200 /tmp/record.log || true
             adb -s "${ANDROID_SERIAL}" shell "pidof org.github.krkr2 || true"
             adb -s "${ANDROID_SERIAL}" forward --list || true
             adb -s "${ANDROID_SERIAL}" shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -i ':13AF' || true" || true

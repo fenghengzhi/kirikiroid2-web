@@ -90,6 +90,20 @@ mkdir -p "$BUILD/dex"
 "$D8" --release --min-api 29 --output "$BUILD/dex" \
     "$BUILD/java/org/github/krkr2/HarnessActivity.class"
 mv "$BUILD/dex/classes.dex" "$BUILD/decoded/classes2.dex"
+python3 - "$BUILD/decoded/classes2.dex" <<'PY'
+import sys
+from pathlib import Path
+
+dex = Path(sys.argv[1]).read_bytes()
+for needle in (
+    b"server thread started from ",
+    b"onCreate",
+    b"listening on 127.0.0.1:",
+):
+    if needle not in dex:
+        raise SystemExit(f"classes2.dex missing marker: {needle!r}")
+print("classes2.dex contains HarnessActivity startup markers")
+PY
 
 echo "[4/6] Patching AndroidManifest.xml + copying libharness.so..."
 python3 "$HERE/patch_manifest.py" \
