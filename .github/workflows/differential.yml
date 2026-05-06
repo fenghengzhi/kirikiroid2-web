@@ -480,6 +480,7 @@ jobs:
       - name: Record motion_playback oracle for fresh compare
         env:
           ANDROID_SERIAL: localhost:5555
+          KRKR2_ADB_RPC_TRANSPORT: shell-nc
         run: |
           set -euo pipefail
           rm -f tests/differential/traces/motion_playback/*.oracle.json

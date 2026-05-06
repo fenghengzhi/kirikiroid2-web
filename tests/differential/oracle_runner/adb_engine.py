@@ -26,6 +26,7 @@ Public surface used by adapters:
 from __future__ import annotations
 
 import os
+import select
 import socket
 import struct
 import subprocess
@@ -43,6 +44,7 @@ HEAP_SIZE = 16 * 1024 * 1024
 ENV_ADB = "KRKR2_ADB"
 ENV_SERIAL = "KRKR2_ADB_SERIAL"
 ENV_REMOTE_DIR = "KRKR2_DEVICE_DIR"
+ENV_RPC_TRANSPORT = "KRKR2_ADB_RPC_TRANSPORT"
 
 DEFAULT_REMOTE_DIR = "/data/local/tmp"
 DEFAULT_START_TIMEOUT = 120.0
@@ -82,6 +84,63 @@ class _QlFacade:
 class _HeapBacking:
     def __init__(self, mem: _MemShim):
         self.mem = mem
+
+
+class _AdbShellTcpSocket:
+    """Socket-like wrapper around `adb shell nc 127.0.0.1 <port>`.
+
+    Redroid CI has shown flaky host-side `adb forward` behaviour for the
+    long-lived motion oracle connection. This transport keeps the TCP
+    connection entirely inside Android and uses adb only as a byte stream.
+    """
+
+    def __init__(self, proc: subprocess.Popen[bytes]):
+        self._proc = proc
+        self._timeout: float | None = None
+
+    def setsockopt(self, *args) -> None:
+        return None
+
+    def settimeout(self, timeout: float | None) -> None:
+        self._timeout = timeout
+
+    def sendall(self, data: bytes) -> None:
+        if self._proc.stdin is None:
+            raise RuntimeError("adb shell transport stdin is closed")
+        try:
+            self._proc.stdin.write(data)
+            self._proc.stdin.flush()
+        except BrokenPipeError as exc:
+            raise RuntimeError("adb shell transport write failed") from exc
+
+    def recv(self, n: int) -> bytes:
+        if self._proc.stdout is None:
+            raise RuntimeError("adb shell transport stdout is closed")
+        fd = self._proc.stdout.fileno()
+        timeout = self._timeout
+        if timeout is not None:
+            ready, _, _ = select.select([fd], [], [], max(0.0, timeout))
+            if not ready:
+                raise socket.timeout("adb shell transport recv timed out")
+        try:
+            return os.read(fd, n)
+        except OSError as exc:
+            raise RuntimeError("adb shell transport read failed") from exc
+
+    def close(self) -> None:
+        for pipe in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+        if self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait(timeout=1.0)
 
 
 def setup_device(
@@ -242,6 +301,23 @@ class AdbHarnessEngine:
                 f"am start stderr:\n{stderr}"
             )
 
+        if os.environ.get(ENV_RPC_TRANSPORT) == "shell-nc":
+            print(
+                f"[adb-engine] connecting harness via adb shell nc "
+                f"127.0.0.1:{self.apk_port}",
+                flush=True,
+            )
+            self._socket = self._connect_adb_shell_nc(prefix)
+            self._socket_buf = b""
+            try:
+                line = self._read_socket_line(
+                    timeout=max(1.0, deadline - time.time()))
+            except Exception:
+                self._invalidate_socket()
+                raise
+            self._socket.settimeout(None)
+            return line
+
         subprocess.run(
             prefix + ["forward", f"tcp:{self.apk_port}", f"tcp:{self.apk_port}"],
             check=True, capture_output=True,
@@ -272,6 +348,22 @@ class AdbHarnessEngine:
         raise RuntimeError(
             f"apk harness never accepted on {self.apk_port}: {last_err!r}"
         )
+
+    def _connect_adb_shell_nc(self, prefix: list[str]) -> _AdbShellTcpSocket:
+        cmd = (
+            f"toybox nc 127.0.0.1 {self.apk_port} 2>/dev/null "
+            f"|| nc 127.0.0.1 {self.apk_port} 2>/dev/null"
+        )
+        proc = subprocess.Popen(
+            prefix + ["shell", cmd],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        sock = _AdbShellTcpSocket(proc)
+        sock.settimeout(2.0)
+        return sock
 
     def _device_port_listening(self, prefix: list[str]) -> bool:
         port_hex = f"{self.apk_port:04X}"
