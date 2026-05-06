@@ -498,6 +498,9 @@ jobs:
         run: |
           set -euo pipefail
           rm -f tests/differential/traces/motion_playback/*.oracle.json
+          adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
+          adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
+          adb -s "${ANDROID_SERIAL}" logcat -c || true
           set +e
           python3 tests/differential/python/run_motion_playback.py \
             --record-oracle --serial "${ANDROID_SERIAL}" 2>&1 | tee /tmp/record.log
@@ -506,7 +509,14 @@ jobs:
           if [ "${record_rc}" -ne 0 ]; then
             echo "::group::motion_playback oracle failure diagnostics"
             adb -s "${ANDROID_SERIAL}" shell "pidof org.github.krkr2 || true"
-            adb -s "${ANDROID_SERIAL}" shell "logcat -d -t 500" || true
+            adb -s "${ANDROID_SERIAL}" forward --list || true
+            adb -s "${ANDROID_SERIAL}" shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -i ':13AF' || true" || true
+            adb -s "${ANDROID_SERIAL}" shell "dumpsys activity activities 2>/dev/null | grep -E -C 3 'org.github.krkr2|mResumed|mFocused' || true" || true
+            adb -s "${ANDROID_SERIAL}" logcat -d -v time 2>/dev/null \
+              | grep -E 'HarnessRpc|AndroidRuntime|org.github.krkr2|krkr2|harness|Cocos2dx|libc|DEBUG' \
+              | tail -300 || true
+            echo "--- recent raw logcat tail ---"
+            adb -s "${ANDROID_SERIAL}" logcat -d -t 120 || true
             echo "::endgroup::"
             exit "${record_rc}"
           fi

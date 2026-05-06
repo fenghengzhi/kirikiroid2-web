@@ -45,6 +45,7 @@ ENV_SERIAL = "KRKR2_ADB_SERIAL"
 ENV_REMOTE_DIR = "KRKR2_DEVICE_DIR"
 
 DEFAULT_REMOTE_DIR = "/data/local/tmp"
+DEFAULT_START_TIMEOUT = 120.0
 
 
 def _adb_binary() -> str:
@@ -170,7 +171,7 @@ class AdbHarnessEngine:
         self._heap_backing = _HeapBacking(self._mem)
 
     # ------------------------------------------------------------------ lifecycle
-    def start(self, timeout: float = 60.0) -> None:
+    def start(self, timeout: float = DEFAULT_START_TIMEOUT) -> None:
         line = self._start_apk(timeout)
 
         # Drain until READY.
@@ -206,24 +207,46 @@ class AdbHarnessEngine:
             check=False, capture_output=True,
         )
         subprocess.run(
-            prefix + ["forward", f"tcp:{self.apk_port}", f"tcp:{self.apk_port}"],
+            prefix + ["forward", "--remove", f"tcp:{self.apk_port}"],
+            check=False, capture_output=True,
+        )
+        subprocess.run(
+            prefix + ["wait-for-device"],
             check=True, capture_output=True,
         )
-        # am start -W waits for the activity to be resumed.
-        subprocess.run(
+        start_out = subprocess.run(
             prefix + ["shell", "am", "start", "-W", "-n", self.apk_activity],
             check=True, capture_output=True,
         )
 
-        # Poll until the in-process ServerSocket is listening and has emitted
-        # its first line. HarnessActivity only binds after
-        # onWindowFocusChanged(true), which fires AFTER activity resume — so
-        # `am start -W`'s return signal is too early. `adb forward` can also
-        # accept the host-side TCP connection before the device-side socket is
-        # genuinely ready; requiring the first line avoids returning a socket
-        # that immediately closes in start() on slow CI runners.
+        # Poll the device-side socket table before creating the host adb
+        # forward. Redroid's adbd can accept host-side forwarded TCP before
+        # the device ServerSocket is really ready; probing that host socket
+        # repeatedly leaves CI with "timeout expired while flushing socket"
+        # noise and can starve the actual harness connection.
         deadline = time.time() + timeout
         last_err: Exception | None = None
+        while time.time() < deadline:
+            try:
+                if self._device_port_listening(prefix):
+                    break
+            except Exception as exc:
+                last_err = exc
+            time.sleep(0.5)
+        else:
+            stdout = start_out.stdout.decode("utf-8", "replace").strip()
+            stderr = start_out.stderr.decode("utf-8", "replace").strip()
+            raise RuntimeError(
+                f"apk harness never listened on {self.apk_port}: "
+                f"{last_err!r}\nam start stdout:\n{stdout}\n"
+                f"am start stderr:\n{stderr}"
+            )
+
+        subprocess.run(
+            prefix + ["forward", f"tcp:{self.apk_port}", f"tcp:{self.apk_port}"],
+            check=True, capture_output=True,
+        )
+
         while time.time() < deadline:
             try:
                 s = socket.create_connection(
@@ -233,21 +256,41 @@ class AdbHarnessEngine:
                 self._socket = s
                 self._socket_buf = b""
                 try:
-                    line = self._read_socket_line(timeout=2.0)
+                    line = self._read_socket_line(
+                        timeout=max(1.0, deadline - time.time()))
                 except Exception as exc:
                     last_err = exc
                     self._invalidate_socket()
-                    time.sleep(0.2)
+                    time.sleep(0.5)
                     continue
                 s.settimeout(None)
                 return line
             except (ConnectionRefusedError, socket.timeout, OSError) as exc:
                 last_err = exc
                 self._invalidate_socket()
-                time.sleep(0.2)
+                time.sleep(0.5)
         raise RuntimeError(
             f"apk harness never accepted on {self.apk_port}: {last_err!r}"
         )
+
+    def _device_port_listening(self, prefix: list[str]) -> bool:
+        port_hex = f"{self.apk_port:04X}"
+        out = subprocess.run(
+            prefix + [
+                "shell",
+                "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null || true",
+            ],
+            check=False,
+            capture_output=True,
+            timeout=5.0,
+        )
+        text = out.stdout.decode("utf-8", "replace")
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and parts[1].upper().endswith(
+                    f":{port_hex}") and parts[3] == "0A":
+                return True
+        return False
 
     def _query_guest_pid(self) -> int:
         """Resolve the harness process's PID inside the guest.
