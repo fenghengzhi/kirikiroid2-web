@@ -134,6 +134,8 @@ class WasmtimeGLProvider:
         self._draw_probe_limit = int(os.environ.get(
             "KRKR2_WASMTIME_GL_DRAW_PROBE_LIMIT", "64"))
         self._draw_probe_count = 0
+        self._noop = os.environ.get("KRKR2_WASMTIME_GL_MODE") == "noop"
+        self._next_gl_id = 1
 
     def define_imports(self, linker: Any, module: Any) -> None:
         gl_imports = [
@@ -150,7 +152,7 @@ class WasmtimeGLProvider:
                 "env",
                 imp.name,
                 imp.type,
-                self._make_import_callback(imp.name),
+                self._make_import_callback(imp.name, imp.type),
                 access_caller=True,
             )
 
@@ -367,7 +369,11 @@ class WasmtimeGLProvider:
             recent = "\n".join(f"  {call}" for call in self._recent_calls)
             raise RuntimeError(f"{name}{args} failed: {exc}\n{recent}") from exc
 
-    def _make_import_callback(self, import_name: str) -> Any:
+    def _make_import_callback(self, import_name: str,
+                              func_type: Any) -> Any:
+        if self._noop:
+            return self._make_noop_callback(import_name, func_type)
+
         local_name = self._local_gl_name(import_name)
         method = getattr(self, local_name, None)
         if method is not None:
@@ -387,6 +393,140 @@ class WasmtimeGLProvider:
             return self._call(import_name, tuple(args),
                               lambda: gl_fn(*args))
         return generic
+
+    def _alloc_noop_gl_ids(self, count: int) -> list[int]:
+        count = max(0, int(count))
+        ids = list(range(self._next_gl_id, self._next_gl_id + count))
+        self._next_gl_id += count
+        return ids
+
+    @staticmethod
+    def _default_return(func_type: Any) -> Any:
+        results = getattr(func_type, "results", [])
+        if not results:
+            return None
+        kind = str(results[0]).lower()
+        if "f32" in kind or "f64" in kind or "float" in kind:
+            return 0.0
+        return 0
+
+    def _noop_gl_string(self, name: int) -> bytes:
+        strings = {
+            0x1F00: b"krkr2-wasmtime",  # GL_VENDOR
+            0x1F01: b"noop",  # GL_RENDERER
+            0x1F02: b"OpenGL ES 2.0 krkr2 noop",  # GL_VERSION
+            0x1F03: b"GL_EXT_unpack_subimage",  # GL_EXTENSIONS
+            0x8B8C: b"OpenGL ES GLSL ES 1.00",  # GL_SHADING_LANGUAGE_VERSION
+        }
+        return strings.get(int(name), b"")
+
+    def _noop_get_integer(self, pname: int) -> int:
+        values = {
+            0x0D33: 4096,  # GL_MAX_TEXTURE_SIZE
+            0x8D57: 4096,  # GL_MAX_RENDERBUFFER_SIZE
+            0x8869: 16,  # GL_MAX_VERTEX_ATTRIBS
+            0x8872: 16,  # GL_MAX_TEXTURE_IMAGE_UNITS
+            0x8B4C: 16,  # GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS
+            0x8B4D: 256,  # GL_MAX_VERTEX_UNIFORM_VECTORS
+            0x8DFB: 256,  # GL_MAX_FRAGMENT_UNIFORM_VECTORS
+            0x8B4B: 32,  # GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS
+        }
+        return values.get(int(pname), 0)
+
+    def _noop_program_param(self, pname: int) -> int:
+        if int(pname) in (0x8B82, 0x8B83):  # LINK_STATUS, VALIDATE_STATUS
+            return 1
+        return 0
+
+    def _noop_shader_param(self, pname: int) -> int:
+        if int(pname) == 0x8B81:  # COMPILE_STATUS
+            return 1
+        return 0
+
+    def _noop_readpixels_size(self, width: int, height: int,
+                              fmt: int, typ: int) -> int:
+        del typ
+        channels = {
+            0x1906: 1,  # GL_ALPHA
+            0x1907: 3,  # GL_RGB
+            0x1908: 4,  # GL_RGBA
+            0x1909: 1,  # GL_LUMINANCE
+            0x190A: 2,  # GL_LUMINANCE_ALPHA
+            0x80E1: 4,  # GL_BGRA
+        }.get(int(fmt), 4)
+        return max(0, int(width)) * max(0, int(height)) * channels
+
+    def _make_noop_callback(self, import_name: str,
+                            func_type: Any) -> Any:
+        local_name = self._local_gl_name(import_name)
+
+        def noop(caller: Any, *args: Any) -> Any:
+            if self._trace_calls:
+                print(f"[wasmtime-gl-noop] {import_name}{args}",
+                      file=sys.stderr)
+            self._recent_calls.append(f"{import_name}{args}")
+
+            if local_name in {
+                "glGenTextures", "glGenBuffers", "glGenFramebuffers",
+                "glGenRenderbuffers", "glGenVertexArrays",
+            } and len(args) >= 2:
+                self._write_u32_array(
+                    caller, int(args[1]), self._alloc_noop_gl_ids(int(args[0])))
+                return None
+            if local_name in {"glCreateProgram", "glCreateShader"}:
+                return self._alloc_noop_gl_ids(1)[0]
+            if local_name == "glGetError":
+                return 0
+            if local_name == "glGetString" and args:
+                return self._guest_c_string(
+                    caller, self._noop_gl_string(int(args[0])))
+            if local_name == "glGetIntegerv" and len(args) >= 2:
+                self._write_i32(caller, int(args[1]),
+                                self._noop_get_integer(int(args[0])))
+                return None
+            if local_name == "glGetFloatv" and len(args) >= 2:
+                self._write_f32_array(caller, int(args[1]), [0.0])
+                return None
+            if local_name == "glGetBooleanv" and len(args) >= 2:
+                self._write(caller, int(args[1]), b"\0")
+                return None
+            if local_name == "glGetProgramiv" and len(args) >= 3:
+                self._write_i32(caller, int(args[2]),
+                                self._noop_program_param(int(args[1])))
+                return None
+            if local_name == "glGetShaderiv" and len(args) >= 3:
+                self._write_i32(caller, int(args[2]),
+                                self._noop_shader_param(int(args[1])))
+                return None
+            if local_name in {
+                "glGetShaderSource", "glGetShaderInfoLog",
+                "glGetProgramInfoLog",
+            } and len(args) >= 4:
+                self._write_gl_string(caller, int(args[-3]), int(args[-2]),
+                                      int(args[-1]), "")
+                return None
+            if local_name in {"glGetActiveAttrib", "glGetActiveUniform"}:
+                if len(args) >= 7:
+                    self._write_i32(caller, int(args[4]), 0)
+                    self._write_i32(caller, int(args[5]), 0)
+                    self._write_gl_string(caller, int(args[2]),
+                                          int(args[3]), int(args[6]), "")
+                return None
+            if local_name in {"glGetUniformLocation", "glGetAttribLocation"}:
+                return 0
+            if local_name == "glCheckFramebufferStatus":
+                return 0x8CD5  # GL_FRAMEBUFFER_COMPLETE
+            if local_name == "glReadPixels" and len(args) >= 7:
+                size = self._noop_readpixels_size(
+                    int(args[2]), int(args[3]), int(args[4]), int(args[5]))
+                if int(args[6]) and size:
+                    self._write(caller, int(args[6]), b"\0" * size)
+                return None
+            if local_name.startswith("glIs"):
+                return 0
+            return self._default_return(func_type)
+
+        return noop
 
     @staticmethod
     def _local_gl_name(import_name: str) -> str:

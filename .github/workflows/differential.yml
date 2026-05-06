@@ -116,6 +116,8 @@ jobs:
           cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest
 
       - name: Run motion_playback Wasmtime LLDB guest-debug
+        env:
+          KRKR2_WASMTIME_GL_MODE: noop
         run: |
           source "${EMSDK}/emsdk_env.sh"
           rm -rf tests/differential/artifacts/motion_playback_wasmtime_traces

@@ -350,7 +350,10 @@ def main(argv: list[str]) -> int:
         # and cocos2d only accepts one scheduleOnce("startup", ...) per
         # Activity lifetime. mpb.record_all_oracles returns
         # {spec_id: frames} in one shot.
-        mpb.ensure_oracle_renderer_software(args.serial)
+        # record_all_oracles writes the per-game renderer=software preference
+        # before startupFrom. Do not write the global preference before
+        # HarnessActivity starts: Redroid CI can hang before READY there, and
+        # libkrkr2's renderer default is already software.
         with AdbHarnessEngine(serial=args.serial) as engine:
             print(f"[record] capturing all {len(specs)} specs in one "
                   f"playback (Frida-hooked Motion.Player progress)")
