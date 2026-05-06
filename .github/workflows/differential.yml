@@ -598,7 +598,26 @@ jobs:
 
       - name: Compare fresh motion_playback traces
         run: |
+          set +e
           python3 tests/differential/python/compare_motion_playback_traces.py \
             --spec-dir tests/differential/specs/motion_playback \
             --port-trace-dir /tmp/motion_playback/wasmtime \
-            --oracle-trace-dir /tmp/motion_playback/oracle
+            --oracle-trace-dir /tmp/motion_playback/oracle \
+            --markdown-report /tmp/motion_playback/motion_playback_compare.md
+          compare_rc=$?
+          set -e
+
+          echo "--- motion_playback markdown report ---"
+          cat /tmp/motion_playback/motion_playback_compare.md || true
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f /tmp/motion_playback/motion_playback_compare.md ]; then
+            cat /tmp/motion_playback/motion_playback_compare.md >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          exit "${compare_rc}"
+
+      - name: Upload motion_playback compare report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-compare-report
+          path: /tmp/motion_playback/motion_playback_compare.md
+          if-no-files-found: warn
