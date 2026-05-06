@@ -3,9 +3,9 @@
 `krkr2-harness.apk` is the upstream `reference/apk/krkr2 1.4.4.apk` with:
 
 1. A new `org.github.krkr2.HarnessActivity` class (extends `KR2Activity`)
-   shipped as `classes2.dex`. Binds a TCP socket on `127.0.0.1:5039` once
-   cocos2d finishes initializing and hands each accepted connection's
-   fd to `libharness.so::harness_rpc_main_fd`.
+   shipped as `classes2.dex`. Binds a TCP socket on `127.0.0.1:5039` from
+   Activity creation and hands each accepted connection's fd to
+   `libharness.so::harness_rpc_main_fd`.
 2. `libharness.so` dropped into `lib/arm64-v8a/` alongside `libkrkr2.so`.
 3. A `<activity>` entry in `AndroidManifest.xml` wiring HarnessActivity
    to an exported intent.
@@ -25,7 +25,8 @@ under `app_process` without a Surface can't hit that init path.
 
 By extending the real KR2Activity inside the real APK we get cocos2d's
 2000 lines of initialization for free — then just bolt a socket server
-on top.
+on top. Commands that need TVPMainScene retry until the GL-thread
+bootstrap has produced the native scene.
 
 ## Building
 

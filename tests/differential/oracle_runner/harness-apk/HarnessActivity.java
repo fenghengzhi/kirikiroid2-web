@@ -1,5 +1,6 @@
 package org.github.krkr2;
 
+import android.os.Bundle;
 import android.util.Log;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -13,11 +14,12 @@ import org.tvp.kirikiri2.KR2Activity;
  *
  *   am start -W -n org.github.krkr2/.HarnessActivity
  *
- * Extends {@link KR2Activity} so cocos2d's full init chain runs (GL thread
- * → Cocos2dxRenderer.onSurfaceCreated → nativeInit → TVPInitScriptEngine).
- * Once onWindowFocusChanged(true) fires all TJS globals — including the
- * TVPScriptEngine pointer at libkrkr2+0x1AE2FD0 — are populated and we
- * can accept RPC commands without faking cocos2d state.
+ * Extends {@link KR2Activity} so cocos2d's full init chain runs. The RPC
+ * socket is started from Activity creation instead of waiting for a later
+ * window-focus callback: headless Redroid runs can display the Activity while
+ * omitting or delaying focus/resume callbacks enough for the host startup
+ * probe to time out. Native commands that need TVPMainScene still retry until
+ * cocos2d finishes its GL-thread bootstrap.
  *
  * A background thread binds 127.0.0.1:{@value #RPC_PORT} and hands each
  * accepted connection's raw file descriptor to {@link #runRpcServeFd},
@@ -39,20 +41,27 @@ public final class HarnessActivity extends KR2Activity {
     private Thread serverThread;
 
     @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        startRpcServer("onCreate");
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
-        // onResume fires after Cocos2dxActivity.onResume, which resumes
-        // the GL thread; by the time we're here cocos2d's
-        // applicationDidFinishLaunching has already run (or is about to,
-        // but the Java-side init is done so we're safe to start
-        // accepting). onWindowFocusChanged isn't reliable on headless
-        // emulators (no real window focus events).
-        if (!started) {
-            started = true;
-            serverThread = new Thread(this::serveLoop, "harness-rpc");
-            serverThread.setDaemon(true);
-            serverThread.start();
+        startRpcServer("onResume");
+    }
+
+    private synchronized void startRpcServer(String source) {
+        if (started) {
+            Log.i(TAG, "server already started before " + source);
+            return;
         }
+        started = true;
+        serverThread = new Thread(this::serveLoop, "harness-rpc");
+        serverThread.setDaemon(true);
+        serverThread.start();
+        Log.i(TAG, "server thread started from " + source);
     }
 
     private void serveLoop() {

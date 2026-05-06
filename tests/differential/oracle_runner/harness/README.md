@@ -4,11 +4,11 @@ Native side of the APK-launch oracle runner. `harness.cpp` +
 `jni_bridge.cpp` compile into `libharness.so`, which is packaged into
 `krkr2-harness.apk` (see [../harness-apk/](../harness-apk/)). Inside
 the APK, `HarnessActivity` extends `Cocos2dxActivity` so cocos2d's init
-chain runs; by the time it invokes
-`Java_org_github_krkr2_HarnessActivity_runRpcServeFd` via JNI the
-global `TVPScriptEngine` slot is populated and every NCB class is
-registered with TJS. The Activity opens a `ServerSocket` on port 5039
-from `onResume`; the host connects via `adb forward tcp:5039 tcp:5039`.
+chain runs in the same process. The Activity opens a `ServerSocket` on
+port 5039 from Activity creation; the host connects via
+`adb forward tcp:5039 tcp:5039`. Commands that need the native scene or
+script engine wait/retry at the Python adapter layer until cocos2d's
+GL-thread bootstrap has reached that state.
 
 ## Protocol
 
@@ -80,8 +80,7 @@ Everything goes through `AdbHarnessEngine` in
 
 1. `adb forward tcp:5039 tcp:5039`
 2. `am start -W -n org.github.krkr2/.HarnessActivity`
-3. Retries TCP connect until `HarnessActivity`'s `ServerSocket` binds
-   (started from `onResume`).
+3. Retries TCP connect until `HarnessActivity`'s `ServerSocket` binds.
 4. Reads the `READY` line and starts issuing RPC commands.
 
 See [../README.md](../README.md) for end-to-end provisioning

@@ -2,8 +2,9 @@
  *
  * Loaded as `libharness.so` inside the repacked `krkr2-harness.apk`
  * (HarnessActivity extends Cocos2dxActivity). Cocos2dx runs its normal
- * init chain so by the time we serve RPC the global TVPScriptEngine
- * slot is populated and every NCB class is registered with TJS.
+ * init chain in this process; commands that need TVPMainScene or the
+ * full TVPScriptEngine must wait until that GL-thread bootstrap reaches
+ * the corresponding state.
  *
  * The host (adb_engine.py) speaks line-oriented ASCII over a TCP
  * socket forwarded by `adb forward tcp:5039 tcp:5039`. The single
@@ -85,11 +86,9 @@
 
 /* TVPScriptEngine global slot (0x1AE2FD0 relative to libkrkr2 base).
  * cocos2d's applicationDidFinishLaunching path (TVPMainScene::doStartup
- * → TVPInitScriptEngine) parks a live tTJS* here. When the harness runs
- * inside the repacked krkr2-harness.apk (HarnessActivity extends
- * Cocos2dxActivity) this slot is already populated by the time we serve
- * the first RPC, so we just read it — no manual ttstr globals or call
- * into TVPInitScriptEngine required.
+ * → TVPInitScriptEngine) parks a live tTJS* here. Under the APK launch
+ * path this slot is populated only after the native startup chain reaches
+ * script-engine init; early RPC commands may still see it as NULL.
  *
  * (Historical note: the ELF / app_process launch paths used to fall back
  * to a minimal tTJS ctor on a static buffer when the slot was NULL; those
@@ -317,13 +316,12 @@ static void handle_write(const char *args) {
 /* handle_tjs_init picks a strategy at runtime:
  *
  *   1. If the TVPScriptEngine global at libkrkr2+0x1AE2FD0 is already
- *      populated (i.e. cocos2d's applicationDidFinishLaunching already
- *      ran — HarnessActivity extends Cocos2dxActivity so this is always
- *      true under the APK launch path), read it.
+ *      populated (i.e. cocos2d's native startup chain already initialized
+ *      TVPScriptEngine), read it.
  *      This is "Full TJS" — every NCB class registered, Motion.* etc.
  *   2. Fallback: call the tTJS C++ ctor (sub_97EA40) on a static 0x68-byte
  *      buffer. Registers Array/Dict/Math only. Kept for defensiveness —
- *      the supported launch path (APK) always hits mode 1. */
+ *      the APK scalar runners still use this mode before startupFrom. */
 static uint64_t g_so_base = 0;
 static uint8_t  g_tjs_buf[0x68];    /* fallback static tTJS storage */
 static void    *g_tjs_ptr = NULL;   /* filled by handle_tjs_init */

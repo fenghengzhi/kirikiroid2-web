@@ -3,9 +3,8 @@
  *
  * The APK path is the only supported launch mode: HarnessActivity
  * (inside the repacked krkr2-harness.apk) extends Cocos2dxActivity, so
- * cocos2d's init chain runs and System.loadLibrary("krkr2") has already
- * loaded libkrkr2 by SONAME before we arrive here. The Activity accepts
- * a TCP connection on port 5039 and hands the fd to this JNI export. */
+ * cocos2d's init chain runs in the same process. The Activity accepts a
+ * TCP connection on port 5039 and hands the fd to this JNI export. */
 
 #include <jni.h>
 

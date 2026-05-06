@@ -787,10 +787,6 @@ def record_all_oracles(
         serial, remote_game=remote_game, write_global=False)
     with FridaMotionTracer(engine, device_id=serial) as tracer:
         tracer.start_record()
-
-        # tjs_init only to make sure the harness has a usable engine
-        # pointer for subsequent calls; it does not touch cocos2d state.
-        engine.tjs_init()
         trigger_startup(engine, remote_game)
 
         events = _wait_for_two_segments(
