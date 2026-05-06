@@ -439,7 +439,7 @@ jobs:
           done
           adb devices -l
 
-      - name: Run ADB+Frida differential oracle
+      - name: Set up ADB+Frida oracle runtime
         run: |
           set -euo pipefail
           export ANDROID_SERIAL=localhost:5555
@@ -463,34 +463,6 @@ jobs:
           sleep 3
           test -n "$(adb -s "${ANDROID_SERIAL}" shell pidof frida-server | tr -d '[:space:]')" \
             || { echo 'frida-server did not start' >&2; exit 1; }
-
-          # Runners exit non-zero on BOTH trace-vs-golden divergences
-          # AND port-vs-libkrkr2 value divergences. The Frida job's
-          # purpose is only the former — port-value divergences are
-          # documented findings (see oracle_runner/README.md "Status")
-          # and get addressed in the port, not here. Fail only if a
-          # trace diff or missing-golden error fires.
-          trace_failed=0
-          for f in geometry_hit_test local_transform bezier_curve position_interp; do
-            echo "::group::run_${f}_adb --trace"
-            set +e
-            python3 tests/differential/python/run_${f}_adb.py \
-                    --spec-dir tests/differential/specs/${f} \
-                    --serial "${ANDROID_SERIAL}" \
-                    --trace \
-                    > /tmp/run.${f}.stdout 2> /tmp/run.${f}.stderr
-            runner_rc=$?
-            set -e
-            cat /tmp/run.${f}.stdout
-            cat /tmp/run.${f}.stderr >&2
-            if grep -qE '^TRACE (MISMATCH|MISSING)' /tmp/run.${f}.stderr; then
-              echo "::error family=${f}::Frida trace regression" >&2
-              trace_failed=1
-            fi
-            echo "::endgroup::"
-            echo "${f}: runner_rc=${runner_rc}"
-          done
-          exit $trace_failed
 
       - name: Record motion_playback oracle for fresh compare
         env:
@@ -550,6 +522,38 @@ jobs:
           name: motion_playback-goldens
           path: tests/differential/traces/motion_playback/*.oracle.json
           if-no-files-found: error
+
+      - name: Run ADB+Frida scalar differential oracle
+        run: |
+          set -euo pipefail
+          export ANDROID_SERIAL=localhost:5555
+          # Runners exit non-zero on BOTH trace-vs-golden divergences
+          # AND port-vs-libkrkr2 value divergences. The Frida job's
+          # purpose is only the former — port-value divergences are
+          # documented findings (see oracle_runner/README.md "Status")
+          # and get addressed in the port, not here. Fail only if a
+          # trace diff or missing-golden error fires.
+          trace_failed=0
+          for f in geometry_hit_test local_transform bezier_curve position_interp; do
+            echo "::group::run_${f}_adb --trace"
+            set +e
+            python3 tests/differential/python/run_${f}_adb.py \
+                    --spec-dir tests/differential/specs/${f} \
+                    --serial "${ANDROID_SERIAL}" \
+                    --trace \
+                    > /tmp/run.${f}.stdout 2> /tmp/run.${f}.stderr
+            runner_rc=$?
+            set -e
+            cat /tmp/run.${f}.stdout
+            cat /tmp/run.${f}.stderr >&2
+            if grep -qE '^TRACE (MISMATCH|MISSING)' /tmp/run.${f}.stderr; then
+              echo "::error family=${f}::Frida trace regression" >&2
+              trace_failed=1
+            fi
+            echo "::endgroup::"
+            echo "${f}: runner_rc=${runner_rc}"
+          done
+          exit $trace_failed
 
       - name: Stop Redroid
         if: always()
