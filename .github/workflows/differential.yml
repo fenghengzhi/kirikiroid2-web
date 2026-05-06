@@ -388,8 +388,11 @@ jobs:
           from pathlib import Path
           dex = Path("/tmp/harness-classes2.dex").read_bytes()
           for needle in (
+              b"libharness loaded; starting RPC server",
+              b"classLoad",
               b"server thread started from ",
               b"onCreate",
+              b"onWindowFocusChanged",
               b"listening on 127.0.0.1:",
           ):
               assert needle in dex, f"classes2.dex missing marker: {needle!r}"
@@ -489,9 +492,10 @@ jobs:
           record_rc=${PIPESTATUS[0]}
           set -e
           if [ "${record_rc}" -ne 0 ]; then
+            echo "::error::motion_playback oracle recording failed; stdout diagnostics follow"
             echo "::group::motion_playback oracle failure diagnostics"
-            echo "--- run_motion_playback output tail ---"
-            tail -200 /tmp/record.log || true
+            echo "--- run_motion_playback captured stdout/stderr ---"
+            cat /tmp/record.log || true
             adb -s "${ANDROID_SERIAL}" shell "pidof org.github.krkr2 || true"
             adb -s "${ANDROID_SERIAL}" forward --list || true
             adb -s "${ANDROID_SERIAL}" shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -i ':13AF' || true" || true

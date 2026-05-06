@@ -96,8 +96,11 @@ from pathlib import Path
 
 dex = Path(sys.argv[1]).read_bytes()
 for needle in (
+    b"libharness loaded; starting RPC server",
+    b"classLoad",
     b"server thread started from ",
     b"onCreate",
+    b"onWindowFocusChanged",
     b"listening on 127.0.0.1:",
 ):
     if needle not in dex:

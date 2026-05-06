@@ -15,9 +15,9 @@ import org.tvp.kirikiri2.KR2Activity;
  *   am start -W -n org.github.krkr2/.HarnessActivity
  *
  * Extends {@link KR2Activity} so cocos2d's full init chain runs. The RPC
- * socket is started from Activity creation instead of waiting for a later
- * window-focus callback: headless Redroid runs can display the Activity while
- * omitting or delaying focus/resume callbacks enough for the host startup
+ * socket is process-level and starts as soon as this Activity class is loaded,
+ * with lifecycle callbacks only kept as retries. Headless Redroid can display
+ * the Activity while delaying individual callbacks enough for the host startup
  * probe to time out. Native commands that need TVPMainScene still retry until
  * cocos2d finishes its GL-thread bootstrap.
  *
@@ -30,15 +30,16 @@ import org.tvp.kirikiri2.KR2Activity;
 public final class HarnessActivity extends KR2Activity {
     private static final String TAG = "HarnessRpc";
     private static final int RPC_PORT = 5039;
+    private static volatile boolean started = false;
+    private static Thread serverThread;
 
     static {
         System.loadLibrary("harness");
+        Log.i(TAG, "libharness loaded; starting RPC server");
+        startRpcServer("classLoad");
     }
 
     public static native int runRpcServeFd(int fd);
-
-    private volatile boolean started = false;
-    private Thread serverThread;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -52,19 +53,32 @@ public final class HarnessActivity extends KR2Activity {
         startRpcServer("onResume");
     }
 
-    private synchronized void startRpcServer(String source) {
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            startRpcServer("onWindowFocusChanged");
+        }
+    }
+
+    private static synchronized void startRpcServer(String source) {
         if (started) {
             Log.i(TAG, "server already started before " + source);
             return;
         }
         started = true;
-        serverThread = new Thread(this::serveLoop, "harness-rpc");
+        serverThread = new Thread(HarnessActivity::serveLoop, "harness-rpc");
         serverThread.setDaemon(true);
         serverThread.start();
         Log.i(TAG, "server thread started from " + source);
     }
 
-    private void serveLoop() {
+    private static synchronized void markServerStopped() {
+        started = false;
+        serverThread = null;
+    }
+
+    private static void serveLoop() {
         try (ServerSocket server = new ServerSocket(RPC_PORT, 1,
                 InetAddress.getByName("127.0.0.1"))) {
             Log.i(TAG, "listening on 127.0.0.1:" + RPC_PORT);
@@ -86,6 +100,8 @@ public final class HarnessActivity extends KR2Activity {
             }
         } catch (Exception e) {
             Log.e(TAG, "serveLoop died", e);
+        } finally {
+            markServerStopped();
         }
     }
 

@@ -30,6 +30,7 @@ import mimetypes
 import sys
 import threading
 import time
+import traceback
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -340,44 +341,49 @@ def main(argv: list[str]) -> int:
         if not args.serial:
             print("--record-oracle requires --serial", file=sys.stderr)
             return 2
-        trace_dir.mkdir(parents=True, exist_ok=True)
-        framebuffer_dir = (
-            Path(args.framebuffer_dir) if args.framebuffer_dir is not None
-            else default_framebuffer_dir()
-        ) if args.record_framebuffer else None
-        # Single playback covers every spec: startup.tjs inside
-        # logo_test_oracle.xp3 plays all SEGMENT_ORDER motions sequentially,
-        # and cocos2d only accepts one scheduleOnce("startup", ...) per
-        # Activity lifetime. mpb.record_all_oracles returns
-        # {spec_id: frames} in one shot.
-        # record_all_oracles writes the per-game renderer=software preference
-        # before startupFrom. Do not write the global preference before
-        # HarnessActivity starts: Redroid CI can hang before READY there, and
-        # libkrkr2's renderer default is already software.
-        with AdbHarnessEngine(serial=args.serial) as engine:
-            print(f"[record] capturing all {len(specs)} specs in one "
-                  f"playback (Frida-hooked Motion.Player progress)")
-            all_frames = mpb.record_all_oracles(
-                engine, specs, serial=args.serial,
-                playback_timeout=args.playback_timeout,
-                framebuffer_dir=framebuffer_dir)
-        for spec in specs:
-            frames = all_frames.get(spec["id"])
-            if frames is None:
-                print(f"[record] {spec['id']}: no frames captured — "
-                      f"spec id not in SEGMENT_ORDER or playback ended "
-                      f"early", file=sys.stderr)
-                continue
-            target = trace_dir / f"{spec['id']}.oracle.json"
-            with target.open("w") as f:
-                json.dump(frames, f, indent=2, sort_keys=True)
-            print(f"[record] {spec['id']}: wrote {len(frames)} frames "
-                  f"to {target}")
-        if framebuffer_dir is not None:
-            manifest = framebuffer_dir / "manifest.json"
-            if manifest.exists():
-                print(f"[record] framebuffer manifest: {manifest}")
-        return 0
+        try:
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            framebuffer_dir = (
+                Path(args.framebuffer_dir) if args.framebuffer_dir is not None
+                else default_framebuffer_dir()
+            ) if args.record_framebuffer else None
+            # Single playback covers every spec: startup.tjs inside
+            # logo_test_oracle.xp3 plays all SEGMENT_ORDER motions sequentially,
+            # and cocos2d only accepts one scheduleOnce("startup", ...) per
+            # Activity lifetime. mpb.record_all_oracles returns
+            # {spec_id: frames} in one shot.
+            # record_all_oracles writes the per-game renderer=software preference
+            # before startupFrom. Do not write the global preference before
+            # HarnessActivity starts: Redroid CI can hang before READY there, and
+            # libkrkr2's renderer default is already software.
+            with AdbHarnessEngine(serial=args.serial) as engine:
+                print(f"[record] capturing all {len(specs)} specs in one "
+                      f"playback (Frida-hooked Motion.Player progress)")
+                all_frames = mpb.record_all_oracles(
+                    engine, specs, serial=args.serial,
+                    playback_timeout=args.playback_timeout,
+                    framebuffer_dir=framebuffer_dir)
+            for spec in specs:
+                frames = all_frames.get(spec["id"])
+                if frames is None:
+                    print(f"[record] {spec['id']}: no frames captured — "
+                          f"spec id not in SEGMENT_ORDER or playback ended "
+                          f"early", file=sys.stderr)
+                    continue
+                target = trace_dir / f"{spec['id']}.oracle.json"
+                with target.open("w") as f:
+                    json.dump(frames, f, indent=2, sort_keys=True)
+                print(f"[record] {spec['id']}: wrote {len(frames)} frames "
+                      f"to {target}")
+            if framebuffer_dir is not None:
+                manifest = framebuffer_dir / "manifest.json"
+                if manifest.exists():
+                    print(f"[record] framebuffer manifest: {manifest}")
+            return 0
+        except Exception:
+            print("FAIL: Android motion_playback oracle recording error")
+            traceback.print_exc(file=sys.stdout)
+            return 1
 
     try:
         port_events = run_web_port_trace(web_build_dir, specs,
