@@ -6,6 +6,7 @@
 #include <catch2/catch_approx.hpp>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -16,6 +17,7 @@
 #include "motionplayer/ResourceManager.h"
 #include "motionplayer/RuntimeSupport.h"
 #include "psbfile/PSBValue.h"
+#include "RenderManager.h"
 #include "test_config.h"
 #include "tjsError.h"
 #include "tjsObject.h"
@@ -275,12 +277,64 @@ TEST_CASE("D3DAdaptor constructor follows libkrkr2 parameter boundary") {
     REQUIRE(adaptor->getCenterX() == 512);
     REQUIRE(adaptor->getCenterY() == 384);
     REQUIRE(adaptor->getBufferSize() == 1024u * 768u * 4u);
+    REQUIRE_FALSE(adaptor->getVisible());
+    REQUIRE_FALSE(adaptor->getCanvasCaptureEnabled());
+    REQUIRE(adaptor->getClearEnabled());
+    REQUIRE_FALSE(adaptor->getAlphaOpAdd());
+    REQUIRE(adaptor->hasTargetTexture());
+    REQUIRE(adaptor->targetTexture()->GetWidth() == 1024);
+    REQUIRE(adaptor->targetTexture()->GetHeight() == 768);
 
     adaptor->setSize(320, 200);
     REQUIRE(adaptor->getWidth() == 320);
     REQUIRE(adaptor->getHeight() == 200);
     REQUIRE(adaptor->getCenterX() == 512);
     REQUIRE(adaptor->getCenterY() == 384);
+    REQUIRE(adaptor->getBufferSize() == 320u * 200u * 4u);
+    REQUIRE(adaptor->hasTargetTexture());
+    REQUIRE(adaptor->targetTexture()->GetWidth() == 320);
+    REQUIRE(adaptor->targetTexture()->GetHeight() == 200);
+}
+
+TEST_CASE("D3DAdaptor captureCanvas reads back target texture rows") {
+    FakeWindowDispatch windowObject;
+    tTJSVariant windowArg(&windowObject, &windowObject);
+    tTJSVariant width(2);
+    tTJSVariant height(2);
+    tTJSVariant centerX(1);
+    tTJSVariant centerY(1);
+    tTJSVariant *validParams[] = {
+        &windowArg, &width, &height, &centerX, &centerY,
+    };
+
+    motion::D3DAdaptor *rawAdaptor = nullptr;
+    REQUIRE(motion::D3DAdaptor::factory(&rawAdaptor, 5, validParams,
+                                        nullptr) == TJS_S_OK);
+    REQUIRE(rawAdaptor != nullptr);
+    std::unique_ptr<motion::D3DAdaptor> adaptor(rawAdaptor);
+    REQUIRE(adaptor->hasTargetTexture());
+
+    auto *texture = adaptor->targetTexture();
+    REQUIRE(texture != nullptr);
+    auto *row0 = static_cast<std::uint8_t *>(texture->GetScanLineForWrite(0));
+    auto *row1 = static_cast<std::uint8_t *>(texture->GetScanLineForWrite(1));
+    REQUIRE(row0 != nullptr);
+    REQUIRE(row1 != nullptr);
+    REQUIRE(texture->GetPitch() >= 8);
+    const std::uint8_t expectedRow0[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    const std::uint8_t expectedRow1[] = { 9, 10, 11, 12, 13, 14, 15, 16 };
+    std::copy(std::begin(expectedRow0), std::end(expectedRow0), row0);
+    std::copy(std::begin(expectedRow1), std::end(expectedRow1), row1);
+
+    std::array<std::uint8_t, 32> captured {};
+    constexpr tjs_int dstPitch = 16;
+    REQUIRE(adaptor->copyTargetTextureRowsForCaptureLike_0x6AD92C(
+        captured.data(), dstPitch));
+    const auto *dstRow0 = captured.data();
+    REQUIRE(std::equal(std::begin(expectedRow0), std::end(expectedRow0),
+                       dstRow0));
+    REQUIRE(std::equal(std::begin(expectedRow1), std::end(expectedRow1),
+                       dstRow0 + dstPitch));
 }
 
 TEST_CASE("motionplayer resource chain and query surface") {

@@ -3,12 +3,384 @@
 //
 #include "PlayerRenderInternal.h"
 #include "MotionTraceWeb.h"
+#include "RenderManager.h"
+#include "SourceCache.h"
 #include "ncbind.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+
+#if defined(__EMSCRIPTEN__)
+#include <GLES2/gl2.h>
+#elif !defined(KRKR2_WASMTIME_HEADLESS)
+#include "ogl/ogl_common.h"
+#endif
 
 using namespace motion::internal;
 using namespace motion::internal::render_detail;
 
 namespace motion {
+    namespace {
+        using PreparedRenderItem = detail::PlayerRuntime::PreparedRenderItem;
+
+        std::array<tTVPPointD, 6> makeTextureQuad(double w, double h) {
+            return {{
+                {0.0, 0.0},
+                {w, 0.0},
+                {0.0, h},
+                {w, 0.0},
+                {0.0, h},
+                {w, h},
+            }};
+        }
+
+        std::array<tTVPPointD, 6> makeAffineTargetQuad(
+            const PreparedRenderItem &item,
+            double xOffset,
+            double yOffset) {
+            return {{
+                {item.corners[0] + xOffset, item.corners[1] + yOffset},
+                {item.corners[2] + xOffset, item.corners[3] + yOffset},
+                {item.corners[6] + xOffset, item.corners[7] + yOffset},
+                {item.corners[2] + xOffset, item.corners[3] + yOffset},
+                {item.corners[6] + xOffset, item.corners[7] + yOffset},
+                {item.corners[4] + xOffset, item.corners[5] + yOffset},
+            }};
+        }
+
+        std::vector<tTVPPointD> tessellateBezierPatch(
+            const std::vector<float> &controlPoints,
+            int divx,
+            int divy,
+            double xOffset,
+            double yOffset) {
+            std::vector<tTVPPointD> out;
+            if(controlPoints.size() < 32u || divx < 2 || divy < 2) {
+                return out;
+            }
+            const auto cubicBlend = [](double p0, double p1, double p2,
+                                       double p3, double t) {
+                const double mt = 1.0 - t;
+                return mt * mt * mt * p0 + 3.0 * mt * mt * t * p1 +
+                    3.0 * mt * t * t * p2 + t * t * t * p3;
+            };
+            const auto samplePatch = [&](double u, double v) {
+                tTVPPointD curve[4];
+                for(int row = 0; row < 4; ++row) {
+                    const size_t base = static_cast<size_t>(row) * 8u;
+                    curve[row].x = cubicBlend(
+                        controlPoints[base + 0], controlPoints[base + 2],
+                        controlPoints[base + 4], controlPoints[base + 6], u);
+                    curve[row].y = cubicBlend(
+                        controlPoints[base + 1], controlPoints[base + 3],
+                        controlPoints[base + 5], controlPoints[base + 7], u);
+                }
+                return tTVPPointD{
+                    cubicBlend(curve[0].x, curve[1].x, curve[2].x,
+                               curve[3].x, v) + xOffset,
+                    cubicBlend(curve[0].y, curve[1].y, curve[2].y,
+                               curve[3].y, v) + yOffset,
+                };
+            };
+            out.reserve(static_cast<size_t>(divx) * static_cast<size_t>(divy));
+            for(int y = 0; y < divy; ++y) {
+                const double v = static_cast<double>(y) /
+                    static_cast<double>(divy - 1);
+                for(int x = 0; x < divx; ++x) {
+                    const double u = static_cast<double>(x) /
+                        static_cast<double>(divx - 1);
+                    out.push_back(samplePatch(u, v));
+                }
+            }
+            return out;
+        }
+
+        std::vector<tTVPPointD> buildOffsetMeshPoints(
+            const std::vector<float> &points,
+            double xOffset,
+            double yOffset) {
+            std::vector<tTVPPointD> out;
+            out.reserve(points.size() / 2u);
+            for(size_t i = 0; i + 1 < points.size(); i += 2) {
+                out.push_back({points[i] + xOffset, points[i + 1] + yOffset});
+            }
+            return out;
+        }
+
+        unsigned int d3dPackedColorWithOpacity(
+            const PreparedRenderItem &item,
+            int opacity) {
+            const auto base = item.packedColors[0];
+            const auto rgb = base == 0xFF808080u ? 0x00FFFFFFu
+                                                 : (base & 0x00FFFFFFu);
+            return rgb | (static_cast<unsigned int>(opacity) << 24u);
+        }
+
+        tTVPBBBltMethod softwareMethodForD3DBlend(int blendLowNibble) {
+            switch(blendLowNibble) {
+                case 1: return bmPsAdditive;
+                case 2:
+                case 5: return bmPsSubtractive;
+                case 3: return bmPsMultiplicative;
+                case 4: return bmPsScreen;
+                default: return bmAlpha;
+            }
+        }
+
+        const char *gpuMethodNameForD3DBlend(int blendLowNibble,
+                                             bool alphaOpAdd,
+                                             bool alphaTest) {
+            switch(blendLowNibble) {
+                case 1:
+                    return alphaTest ? "PsAddBlend_color_AlphaTest"
+                                     : "PsAddBlend_color";
+                case 2:
+                case 5:
+                    return alphaTest ? "PsSubBlend_color_AlphaTest"
+                                     : "PsSubBlend_color";
+                case 3:
+                    return alphaTest ? "PsMulBlend_color_AlphaTest"
+                                     : "PsMulBlend_color";
+                case 4:
+                    return alphaTest ? "PsScreenBlend_color_AlphaTest"
+                                     : "PsScreenBlend_color";
+                default:
+                    if(alphaOpAdd) {
+                        return alphaTest ? "AlphaBlend_color_a_AlphaTest"
+                                         : "AlphaBlend_color_a";
+                    }
+                    return alphaTest ? "AlphaBlend_color_AlphaTest"
+                                     : "AlphaBlend_color";
+            }
+        }
+
+        iTVPRenderMethod *selectD3DRenderMethod(int blendLowNibble,
+                                                unsigned int color,
+                                                bool alphaOpAdd,
+                                                bool alphaTest,
+                                                int opacity) {
+            auto *mgr = TVPGetRenderManager();
+            if(mgr->IsSoftware()) {
+                return mgr->GetRenderMethod(
+                    opacity, false, softwareMethodForD3DBlend(blendLowNibble));
+            }
+
+            auto *method = mgr->GetRenderMethod(
+                gpuMethodNameForD3DBlend(blendLowNibble, alphaOpAdd,
+                                         alphaTest));
+            if(!method) {
+                return nullptr;
+            }
+            const int colorId = method->EnumParameterID("color");
+            method->SetParameterColor4B(colorId, color);
+            if(alphaTest) {
+                const int thresholdId = method->EnumParameterID("alpha_threshold");
+                method->SetParameterOpa(thresholdId, 64);
+            }
+            return method;
+        }
+
+        bool markStencilMaskChainLike_0x6ADFBC(PreparedRenderItem *item,
+                                               std::uint8_t ref) {
+            if(!item) {
+                return false;
+            }
+            bool hasDrawableMaskTarget = false;
+            for(auto *ancestor = item; ancestor; ancestor = ancestor->parentItem) {
+                ancestor->stencilMaskRef = ref;
+                if(!ancestor->rawFlag16 && !ancestor->skipFlag0 &&
+                   ancestor->opacity != 0) {
+                    hasDrawableMaskTarget = true;
+                }
+                for(auto *child : ancestor->childItems) {
+                    if(!child || child == ancestor) {
+                        continue;
+                    }
+                    child->stencilMaskRef = ref;
+                    if(!child->rawFlag16 && !child->skipFlag0 &&
+                       child->opacity != 0) {
+                        hasDrawableMaskTarget = true;
+                    }
+                }
+            }
+            return hasDrawableMaskTarget;
+        }
+
+        int assignStencilRefsLike_0x6ADFBC(
+            std::vector<PreparedRenderItem> &items) {
+            for(auto &item : items) {
+                item.stencilMaskRef = 0;
+                item.stencilWriteRef = 0;
+            }
+
+            int stencilCount = 0;
+            for(auto &item : items) {
+                if((item.blendMode & 0xF) == 6 || !item.drawFlag ||
+                   item.rawFlag16 || item.opacity == 0 || !item.parentItem) {
+                    continue;
+                }
+                if(stencilCount >= 255) {
+                    break;
+                }
+                const auto ref = static_cast<std::uint8_t>(++stencilCount);
+                item.stencilWriteRef = ref;
+                if(!markStencilMaskChainLike_0x6ADFBC(item.parentItem, ref)) {
+                    item.stencilWriteRef = 0;
+                }
+            }
+            return stencilCount;
+        }
+
+        void beginD3DStencilIfNeeded(iTVPTexture2D *target, bool enabled) {
+            if(!enabled) {
+                return;
+            }
+            auto *mgr = TVPGetRenderManager();
+            mgr->SetRenderTarget(target);
+            mgr->BeginStencil(target);
+#if !defined(KRKR2_WASMTIME_HEADLESS)
+            if(!mgr->IsSoftware()) {
+                glDisable(GL_DEPTH_TEST);
+                glStencilMask(255);
+                glClearStencil(0);
+                glClear(GL_STENCIL_BUFFER_BIT);
+                glStencilOp(GL_REPLACE, GL_KEEP, GL_KEEP);
+                glDepthMask(GL_FALSE);
+                glDisable(GL_STENCIL_TEST);
+            }
+#endif
+        }
+
+        void applyD3DStencilState(const PreparedRenderItem &item,
+                                  bool enabled) {
+            if(!enabled) {
+                return;
+            }
+#if !defined(KRKR2_WASMTIME_HEADLESS)
+            auto *mgr = TVPGetRenderManager();
+            if(mgr->IsSoftware()) {
+                return;
+            }
+            const auto maskRef = item.stencilMaskRef;
+            const auto writeRef = item.stencilWriteRef;
+            if(writeRef) {
+                glEnable(GL_STENCIL_TEST);
+                glStencilFunc(GL_LEQUAL, writeRef, 255);
+                if(maskRef) {
+                    glStencilMask(maskRef);
+                    glStencilOp(GL_KEEP, GL_REPLACE, GL_REPLACE);
+                } else {
+                    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+                }
+            } else if(maskRef) {
+                glEnable(GL_STENCIL_TEST);
+                glStencilMask(maskRef);
+                glStencilFunc(GL_ALWAYS, maskRef, 255);
+                glStencilOp(GL_REPLACE, GL_REPLACE, GL_REPLACE);
+            } else {
+                glDisable(GL_STENCIL_TEST);
+            }
+#endif
+        }
+
+        void endD3DStencilIfNeeded(bool enabled) {
+            if(!enabled) {
+                return;
+            }
+#if !defined(KRKR2_WASMTIME_HEADLESS)
+            if(!TVPGetRenderManager()->IsSoftware()) {
+                glDepthMask(GL_TRUE);
+            }
+#endif
+            TVPGetRenderManager()->EndStencil();
+        }
+
+        bool operateD3DAffine(iTVPRenderMethod *method,
+                              iTVPTexture2D *target,
+                              const tTVPRect &targetRect,
+                              const PreparedRenderItem &item,
+                              iTVPTexture2D *sourceTexture) {
+            auto dst = makeAffineTargetQuad(item, 0.5, 0.5);
+            auto src = makeTextureQuad(sourceTexture->GetWidth(),
+                                       sourceTexture->GetHeight());
+            tRenderTexQuadArray::Element srcTex[] = {
+                tRenderTexQuadArray::Element(sourceTexture, src.data())
+            };
+            TVPGetRenderManager()->OperateTriangles(
+                method, 2, target, target, targetRect, dst.data(),
+                tRenderTexQuadArray(srcTex));
+            return true;
+        }
+
+        bool operateD3DMesh(iTVPRenderMethod *method,
+                            iTVPTexture2D *target,
+                            const tTVPRect &targetRect,
+                            const PreparedRenderItem &item,
+                            iTVPTexture2D *sourceTexture,
+                            const std::vector<tTVPPointD> &meshPoints) {
+            if(item.meshDivX < 2 || item.meshDivY < 2 ||
+               meshPoints.size() <
+                   static_cast<size_t>(item.meshDivX) *
+                       static_cast<size_t>(item.meshDivY)) {
+                return false;
+            }
+
+            const double srcW = sourceTexture->GetWidth();
+            const double srcH = sourceTexture->GetHeight();
+            for(int y = 0; y < item.meshDivY - 1; ++y) {
+                const double v0 = static_cast<double>(y) /
+                    static_cast<double>(item.meshDivY - 1);
+                const double v1 = static_cast<double>(y + 1) /
+                    static_cast<double>(item.meshDivY - 1);
+                for(int x = 0; x < item.meshDivX - 1; ++x) {
+                    const double u0 = static_cast<double>(x) /
+                        static_cast<double>(item.meshDivX - 1);
+                    const double u1 = static_cast<double>(x + 1) /
+                        static_cast<double>(item.meshDivX - 1);
+                    const auto &p0 = meshPoints[y * item.meshDivX + x];
+                    const auto &p1 = meshPoints[y * item.meshDivX + x + 1];
+                    const auto &p2 = meshPoints[(y + 1) * item.meshDivX + x];
+                    const auto &p3 =
+                        meshPoints[(y + 1) * item.meshDivX + x + 1];
+                    std::array<tTVPPointD, 6> dst{{
+                        p0, p1, p2, p1, p2, p3,
+                    }};
+                    std::array<tTVPPointD, 6> src{{
+                        {std::floor(srcW * u0), std::floor(srcH * v0)},
+                        {std::ceil(srcW * u1), std::floor(srcH * v0)},
+                        {std::floor(srcW * u0), std::ceil(srcH * v1)},
+                        {std::ceil(srcW * u1), std::floor(srcH * v0)},
+                        {std::floor(srcW * u0), std::ceil(srcH * v1)},
+                        {std::ceil(srcW * u1), std::ceil(srcH * v1)},
+                    }};
+                    tRenderTexQuadArray::Element srcTex[] = {
+                        tRenderTexQuadArray::Element(sourceTexture, src.data())
+                    };
+                    TVPGetRenderManager()->OperateTriangles(
+                        method, 2, target, target, targetRect, dst.data(),
+                        tRenderTexQuadArray(srcTex));
+                }
+            }
+            return true;
+        }
+
+        bool shouldSkipD3DRenderItemLike_0x6ADFBC(
+            const PreparedRenderItem &item,
+            bool preview) {
+            if((item.blendMode & 0xF) == 6) {
+                return true;
+            }
+            if(item.skipFlag0 || item.rawFlag16) {
+                return true;
+            }
+            return preview && item.skipFlag1;
+        }
+    } // namespace
+
     bool Player::renderViaSharedD3DAdaptor(iTJSDispatch2 *targetLayerObject) {
         if(!targetLayerObject) {
             return false;
@@ -145,60 +517,117 @@ namespace motion {
 
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
+        return renderFromPlayerLike_0x6ADE24(adaptor);
+    }
 
-        iTJSDispatch2 *renderLayerObject =
-            ensureReusableLayerObject(_runtime->internalRenderLayer,
-                                      adaptor->getWindowObject(),
-                                      nullptr,
-                                      static_cast<tTVPLayerType>(ltAlpha),
-                                      false);
-        if(!renderLayerObject) {
+    bool Player::renderFromPlayerLike_0x6ADE24(D3DAdaptor *adaptor) {
+        if(!adaptor || adaptor->getWidth() <= 0 || adaptor->getHeight() <= 0) {
             return false;
         }
-        if(!prepareLayerForRender(renderLayerObject, adaptor->getWidth(),
-                                  adaptor->getHeight(), 0x00000000)) {
+        // libkrkr2.so D3DAdaptor_renderFromPlayer @ 0x6ADE24 gates the whole
+        // GPU texture pipeline on adaptor+21 canvasCaptureEnabled.
+        if(!adaptor->getCanvasCaptureEnabled()) {
+            return true;
+        }
+        if(!adaptor->ensureTargetTexture()) {
+            return false;
+        }
+        if(adaptor->getClearEnabled()) {
+            adaptor->clearTargetTexture();
+        }
+        return renderItemsToD3DTextureLike_0x6ADFBC(adaptor);
+    }
+
+    bool Player::renderItemsToD3DTextureLike_0x6ADFBC(D3DAdaptor *adaptor) {
+        if(!adaptor || !_runtime || !_runtime->activeMotion ||
+           !_runtime->sourceCacheNative) {
+            return false;
+        }
+        auto *targetTexture = adaptor->targetTexture();
+        if(!targetTexture) {
             return false;
         }
 
-        buildRenderCommands(adaptor->getWidth(), adaptor->getHeight());
-        executeLayerRenderCommands(renderLayerObject, true);
+        const int width = adaptor->getWidth();
+        const int height = adaptor->getHeight();
+        const tTVPRect targetRect(0, 0, width, height);
+        buildRenderCommands(width, height);
 
-        // D3D backend still ends with copying pixels into the adaptor buffer,
-        // but it now consumes prepared items directly instead of recursing into
-        // renderToLayer().
-        tTJSNI_BaseLayer *layer = nullptr;
-        if(TJS_FAILED(renderLayerObject->NativeInstanceSupport(
-               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-               reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
-            return false;
+        int stencilRefs = 0;
+        if(!_preview) {
+            // Mirrors 0x6ADFBC's non-preview prepass: clear item+22/+23,
+            // assign stencil refs, then operate on the freshly clipped items.
+            stencilRefs =
+                assignStencilRefsLike_0x6ADFBC(_runtime->preparedRenderItems);
         }
+        const bool stencilEnabled = stencilRefs > 0;
+        beginD3DStencilIfNeeded(targetTexture, stencilEnabled);
+        struct StencilGuard {
+            bool enabled;
+            ~StencilGuard() { endD3DStencilIfNeeded(enabled); }
+        } stencilGuard{ stencilEnabled };
 
-        const int w = adaptor->getWidth();
-        const int h = adaptor->getHeight();
-        const int layerW = static_cast<int>(layer->GetImageWidth());
-        const int layerH = static_cast<int>(layer->GetImageHeight());
-        const auto *srcBuf = reinterpret_cast<const std::uint8_t *>(
-            layer->GetMainImagePixelBuffer());
-        auto srcPitch = layer->GetMainImagePixelBufferPitch();
+        const auto motionPath = _runtime->activeMotion->path;
+        detail::logoChainTraceLogf(
+            motionPath, "draw.d3d.renderItemsToTexture", "0x6ADFBC",
+            _clampedEvalTime,
+            "target={} targetRect=[0,0,{},{}] items={} preview={} stencilRefs={}",
+            static_cast<const void *>(targetTexture),
+            width, height, _runtime->preparedRenderItems.size(),
+            _preview ? 1 : 0, stencilRefs);
 
-        if(!srcBuf || srcPitch <= 0 || layerW <= 0 || layerH <= 0) return false;
+        for(auto &item : _runtime->preparedRenderItems) {
+            if(shouldSkipD3DRenderItemLike_0x6ADFBC(item, _preview)) {
+                continue;
+            }
 
-        // Resize adaptor buffer if needed
-        if(w != layerW || h != layerH) {
-            adaptor->setSize(layerW, layerH);
-        }
-        adaptor->clearBuffer();
+            int opacity = item.opacity;
+            if(_preview) {
+                opacity = opacity >= 0 ? opacity / 2 : (opacity + 1) / 2;
+            }
+            opacity = std::clamp(opacity, 0, 255);
+            if(opacity <= 0 && item.stencilMaskRef == 0) {
+                continue;
+            }
+            if(item.sourceKey.empty()) {
+                continue;
+            }
 
-        auto *dstBuf = adaptor->getBuffer();
-        const auto dstPitch = adaptor->getBufferPitch();
-        const int copyH = std::min(layerH, adaptor->getHeight());
-        const int copyRowBytes = std::min(
-            static_cast<int>(layerW * 4), dstPitch);
+            auto *sourceTexture =
+                _runtime->sourceCacheNative->loadRenderSourceTextureByName(
+                    detail::widen(item.sourceKey), item.srcRef,
+                    item.blendMode, item.packedColors);
+            if(!sourceTexture || sourceTexture->GetWidth() <= 0 ||
+               sourceTexture->GetHeight() <= 0) {
+                continue;
+            }
 
-        for(int y = 0; y < copyH; ++y) {
-            std::memcpy(dstBuf + dstPitch * y,
-                        srcBuf + srcPitch * y,
-                        static_cast<size_t>(copyRowBytes));
+            applyD3DStencilState(item, stencilEnabled);
+            auto *method = selectD3DRenderMethod(
+                item.blendMode & 0xF,
+                d3dPackedColorWithOpacity(item, opacity),
+                adaptor->getAlphaOpAdd(),
+                item.stencilMaskRef != 0,
+                opacity);
+            if(!method) {
+                continue;
+            }
+
+            if(item.meshType == 0) {
+                operateD3DAffine(method, targetTexture, targetRect, item,
+                                 sourceTexture);
+            } else if(item.meshType == 1) {
+                const auto meshPoints =
+                    tessellateBezierPatch(item.meshPoints, item.meshDivX,
+                                          item.meshDivY, 0.5, 0.5);
+                operateD3DMesh(method, targetTexture, targetRect, item,
+                               sourceTexture, meshPoints);
+            } else if(item.meshType == 2) {
+                const auto meshPoints =
+                    buildOffsetMeshPoints(item.meshPoints, 0.5, 0.5);
+                operateD3DMesh(method, targetTexture, targetRect, item,
+                               sourceTexture, meshPoints);
+            }
         }
 
         return true;

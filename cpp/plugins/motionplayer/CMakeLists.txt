@@ -25,6 +25,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     PlayerUpdateChildMotion.cpp
     PlayerUpdateParticles.cpp
     PlayerUpdateAnchor.cpp
+    D3DAdaptor.cpp
     ResourceManager.cpp
     SourceCache.cpp
     RuntimeSupport.cpp

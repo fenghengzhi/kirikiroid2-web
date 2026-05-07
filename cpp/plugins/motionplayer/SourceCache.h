@@ -18,6 +18,7 @@
 #include "tjs.h"
 
 class iTVPBaseBitmap;
+class iTVPTexture2D;
 class tTVPBaseBitmap;
 
 namespace motion {
@@ -45,6 +46,7 @@ namespace motion {
             tTJSVariant rawSource;
             tTJSVariant sourceObject;
             std::shared_ptr<tTVPBaseBitmap> backingBitmap;
+            iTVPTexture2D *sourceTexture = nullptr;
         };
 
         SourceCache();
@@ -66,6 +68,11 @@ namespace motion {
             const std::array<std::uint32_t, 4> &packedColors,
             iTJSDispatch2 *layerTreeOwnerObject,
             iTJSDispatch2 *parentLayerObject);
+        iTVPTexture2D *loadRenderSourceTextureByName(
+            const ttstr &name,
+            const tTJSVariant &currentSource,
+            int blendMode,
+            const std::array<std::uint32_t, 4> &packedColors);
         tTJSVariant findSource(ttstr name);
         void clearCache();
         void eraseSource(ttstr name);
@@ -85,6 +92,11 @@ namespace motion {
                            const std::string &resolvedKey,
                            int blendMode,
                            const std::array<std::uint32_t, 4> &packedColors);
+        bool ensureEntryBackingBitmap(Entry &entry,
+                                      const std::string &key,
+                                      int blendMode,
+                                      const std::array<std::uint32_t, 4> &packedColors);
+        void releaseEntryTexture(Entry &entry);
         tTJSVariant loadRawSourceVariant(const ttstr &name,
                                          std::string &resolvedKey) const;
 

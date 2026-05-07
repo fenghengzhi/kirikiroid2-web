@@ -303,6 +303,8 @@ namespace motion::detail {
             bool drawFlag = false;  // original render item +19
             bool rawFlag20 = false; // original item +20, set by sub_6C4E28 requireLayerId path
             bool rawFlag21 = false; // original item +21, drawable clip valid after sub_6C4E28
+            std::uint8_t stencilMaskRef = 0; // original item +22
+            std::uint8_t stencilWriteRef = 0; // original item +23
             std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f}; // item+184..196
             std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f}; // item+200..212
             std::array<int, 4> clipRect{0, 0, 0, 0}; // item+216..228

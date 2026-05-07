@@ -529,6 +529,8 @@ namespace motion {
         bool updateLayerAfterDrawLike_0x6CE7D8(tTJSVariant *target);
         bool updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject);
         bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
+        bool renderFromPlayerLike_0x6ADE24(D3DAdaptor *adaptor);
+        bool renderItemsToD3DTextureLike_0x6ADFBC(D3DAdaptor *adaptor);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);

@@ -11,6 +11,7 @@
 #include "LayerBitmapIntf.h"
 #include "LayerIntf.h"
 #include "PlayerInternal.h"
+#include "RenderManager.h"
 #include "ResourceManager.h"
 #include "ScriptMgnIntf.h"
 #include "StorageIntf.h"
@@ -408,7 +409,9 @@ namespace motion {
         setLayerOwner(std::move(owner), layerType);
     }
 
-    SourceCache::~SourceCache() = default;
+    SourceCache::~SourceCache() {
+        clearCache();
+    }
 
     void SourceCache::bindRuntime(detail::PlayerRuntime *runtime,
                                   ResourceManager *resourceManager) {
@@ -519,35 +522,8 @@ namespace motion {
             key, resolvedKey.empty() ? key : resolvedKey, blendMode, packedColors);
         entry.rawSource = rawSource;
 
-        if(!entry.backingBitmap) {
-            std::shared_ptr<tTVPBaseBitmap> baseBitmap;
-            if(_runtime && _runtime->activeMotion) {
-                const auto path = resolveMotionSourcePathLike_0x6948E8(
-                    *_runtime->activeMotion, key);
-                baseBitmap = loadGraphicBitmap(path);
-                if(!baseBitmap) {
-                    baseBitmap = loadPsbBitmap(*_runtime->activeMotion, key);
-                }
-            }
-            if(!baseBitmap || baseBitmap->GetWidth() <= 0 ||
-               baseBitmap->GetHeight() <= 0) {
-                return entry.rawSource;
-            }
-
-            const bool useHalfAlphaTint = (blendMode & 0xF0) == 0x10;
-            const bool needsTint =
-                !packedColorsAreDefault(packedColors[0], packedColors[1],
-                                        packedColors[2], packedColors[3]) &&
-                !packedColorsAreOpaqueWhite(packedColors[0], packedColors[1],
-                                            packedColors[2], packedColors[3]);
-            if(needsTint) {
-                entry.backingBitmap = cloneBitmap32(*baseBitmap);
-                applyPackedCornerTintLike_0x6A7518(*entry.backingBitmap,
-                                                  packedColors,
-                                                  useHalfAlphaTint);
-            } else {
-                entry.backingBitmap = baseBitmap;
-            }
+        if(!ensureEntryBackingBitmap(entry, key, blendMode, packedColors)) {
+            return entry.rawSource;
         }
 
         iTJSDispatch2 *parentLayer =
@@ -573,6 +549,56 @@ namespace motion {
         return entry.sourceObject;
     }
 
+    iTVPTexture2D *SourceCache::loadRenderSourceTextureByName(
+        const ttstr &name,
+        const tTJSVariant &currentSource,
+        int blendMode,
+        const std::array<std::uint32_t, 4> &packedColors) {
+        const auto key = detail::narrow(name);
+        if(key.empty()) {
+            return nullptr;
+        }
+
+        if(auto *entry = findEntry(key, blendMode, packedColors)) {
+            if(entry->sourceTexture) {
+                return entry->sourceTexture;
+            }
+        }
+
+        std::string resolvedKey;
+        auto rawSource =
+            currentSource.Type() != tvtVoid ? currentSource
+                                            : loadRawSourceVariant(name, resolvedKey);
+        auto &entry = ensureEntry(
+            key, resolvedKey.empty() ? key : resolvedKey, blendMode, packedColors);
+        entry.rawSource = rawSource;
+
+        if(!ensureEntryBackingBitmap(entry, key, blendMode, packedColors)) {
+            return nullptr;
+        }
+        if(entry.sourceTexture) {
+            return entry.sourceTexture;
+        }
+
+        const auto width = entry.backingBitmap->GetWidth();
+        const auto height = entry.backingBitmap->GetHeight();
+        const auto pitch = entry.backingBitmap->GetPitchBytes();
+        const auto *pixels = entry.backingBitmap->GetScanLine(0);
+        if(!pixels || pitch <= 0 || width <= 0 || height <= 0) {
+            return nullptr;
+        }
+
+        // D3DAdaptor_renderFromPlayer @ 0x6ADE24 passes a source texture
+        // getter into 0x6ADFBC, so this path returns texture data directly
+        // instead of materializing an intermediate SourceCache Layer.
+        entry.sourceTexture = TVPGetRenderManager()->CreateTexture2D(
+            pixels, pitch, width, height,
+            entry.backingBitmap->Is8BPP() ? TVPTextureFormat::Gray
+                                          : TVPTextureFormat::RGBA,
+            RENDER_CREATE_TEXTURE_FLAG_ANY);
+        return entry.sourceTexture;
+    }
+
     tTJSVariant SourceCache::findSource(ttstr name) {
         return loadSourceByName(name, {});
     }
@@ -585,6 +611,7 @@ namespace motion {
                     layer->SetHasImage(false);
                 }
             }
+            releaseEntryTexture(entry);
         }
         _entries.clear();
     }
@@ -597,6 +624,7 @@ namespace motion {
 
         for(auto it = _entries.begin(); it != _entries.end();) {
             if(it->key == key || it->resolvedKey == key) {
+                releaseEntryTexture(*it);
                 it = _entries.erase(it);
             } else {
                 ++it;
@@ -667,6 +695,54 @@ namespace motion {
         entry.packedColors = packedColors;
         _entries.push_front(std::move(entry));
         return _entries.front();
+    }
+
+    bool SourceCache::ensureEntryBackingBitmap(
+        Entry &entry,
+        const std::string &key,
+        int blendMode,
+        const std::array<std::uint32_t, 4> &packedColors) {
+        if(entry.backingBitmap) {
+            return entry.backingBitmap->GetWidth() > 0 &&
+                entry.backingBitmap->GetHeight() > 0;
+        }
+
+        std::shared_ptr<tTVPBaseBitmap> baseBitmap;
+        if(_runtime && _runtime->activeMotion) {
+            const auto path = resolveMotionSourcePathLike_0x6948E8(
+                *_runtime->activeMotion, key);
+            baseBitmap = loadGraphicBitmap(path);
+            if(!baseBitmap) {
+                baseBitmap = loadPsbBitmap(*_runtime->activeMotion, key);
+            }
+        }
+        if(!baseBitmap || baseBitmap->GetWidth() <= 0 ||
+           baseBitmap->GetHeight() <= 0) {
+            return false;
+        }
+
+        const bool useHalfAlphaTint = (blendMode & 0xF0) == 0x10;
+        const bool needsTint =
+            !packedColorsAreDefault(packedColors[0], packedColors[1],
+                                    packedColors[2], packedColors[3]) &&
+            !packedColorsAreOpaqueWhite(packedColors[0], packedColors[1],
+                                        packedColors[2], packedColors[3]);
+        if(needsTint) {
+            entry.backingBitmap = cloneBitmap32(*baseBitmap);
+            applyPackedCornerTintLike_0x6A7518(*entry.backingBitmap,
+                                              packedColors,
+                                              useHalfAlphaTint);
+        } else {
+            entry.backingBitmap = baseBitmap;
+        }
+        return true;
+    }
+
+    void SourceCache::releaseEntryTexture(Entry &entry) {
+        if(entry.sourceTexture) {
+            entry.sourceTexture->Release();
+            entry.sourceTexture = nullptr;
+        }
     }
 
     tTJSVariant SourceCache::loadRawSourceVariant(
