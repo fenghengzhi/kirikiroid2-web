@@ -503,27 +503,29 @@ namespace motion::internal::render_detail {
     }
 
     motion::D3DAdaptor *ensureSharedD3DAdaptor(iTJSDispatch2 *targetLayerObject) {
+        (void)targetLayerObject;
+        if(!TVPMainWindow) {
+            return nullptr;
+        }
+        iTJSDispatch2 *windowObject = TVPMainWindow->GetOwnerNoAddRef();
+        if(!windowObject) {
+            return nullptr;
+        }
+
         static std::unique_ptr<motion::D3DAdaptor> s_sharedAdaptor;
         if(!s_sharedAdaptor) {
             s_sharedAdaptor = std::make_unique<motion::D3DAdaptor>();
-        }
-
-        int width = 0;
-        int height = 0;
-        if(auto *layer = resolveNativeLayer(targetLayerObject)) {
-            width = static_cast<int>(layer->GetWidth());
-            height = static_cast<int>(layer->GetHeight());
-            if(width <= 0 || height <= 0) {
-                width = static_cast<int>(layer->GetImageWidth());
-                height = static_cast<int>(layer->GetImageHeight());
-            }
-        }
-
-        if(width > 0 && height > 0) {
-            if(s_sharedAdaptor->getWidth() != width ||
-               s_sharedAdaptor->getHeight() != height) {
-                s_sharedAdaptor->setSize(width, height);
-            }
+            // Player_drawCompat @ 0x6D5FB8 constructs the shared adaptor from
+            // the main Window size, not from the destination Layer size.
+            const int width = static_cast<int>(TVPMainWindow->GetWidth());
+            const int height = static_cast<int>(TVPMainWindow->GetHeight());
+            const auto halfLike_0x6D5FB8 = [](int value) {
+                return (value >= 0 ? value : value + 1) >> 1;
+            };
+            tTJSVariant window(windowObject, windowObject);
+            s_sharedAdaptor->initializeLike_0x6ADB10(
+                window, width, height, halfLike_0x6D5FB8(width),
+                halfLike_0x6D5FB8(height));
         }
         s_sharedAdaptor->setVisible(true);
         return s_sharedAdaptor.get();

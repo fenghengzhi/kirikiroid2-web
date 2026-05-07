@@ -1,6 +1,7 @@
 //
 // D3DAdaptor — matches libkrkr2.so Motion.D3DAdaptor
-// Reverse-engineered from sub_6ADB10 (constructor) and sub_6ACE94 (members)
+// Reverse-engineered from D3DAdaptor_constructor @ 0x6AD518,
+// D3DAdaptor_init @ 0x6ADB10, and sub_6ACE94 (members).
 //
 #pragma once
 
@@ -9,6 +10,7 @@
 #include <spdlog/spdlog.h>
 #include "tjs.h"
 #include "LayerIntf.h"
+#include "MsgIntf.h"
 
 namespace motion {
 
@@ -25,17 +27,25 @@ namespace motion {
             if(logger) {
                 logger->warn("D3DAdaptor::factory called, numparams={}", numparams);
             }
-            if(numparams < 1) return TJS_E_BADPARAMCOUNT;
+            if(numparams < 5) return TJS_E_BADPARAMCOUNT;
             if(!result) return TJS_E_INVALIDPARAM;
+            if(!param || !param[0]) return TJS_E_INVALIDPARAM;
+
+            iTJSDispatch2 *windowObject = param[0]->AsObjectNoAddRef();
+            if(!windowObject ||
+               windowObject->IsInstanceOf(0, nullptr, nullptr,
+                                          TJS_W("Window"),
+                                          windowObject) != TJS_S_TRUE) {
+                TVPThrowExceptionMessage(TJS_W("must set Window object"));
+            }
+
             auto *obj = new D3DAdaptor();
-            obj->_window = *param[0];
-            if(numparams > 1) obj->_width = static_cast<int>(param[1]->AsInteger());
-            if(numparams > 2) obj->_height = static_cast<int>(param[2]->AsInteger());
-            if(numparams > 3) obj->_centerX = static_cast<int>(param[3]->AsInteger());
-            else obj->_centerX = obj->_width / 2;
-            if(numparams > 4) obj->_centerY = static_cast<int>(param[4]->AsInteger());
-            else obj->_centerY = obj->_height / 2;
-            obj->allocBuffer();
+            obj->initializeLike_0x6ADB10(
+                *param[0],
+                static_cast<int>(param[1]->AsInteger()),
+                static_cast<int>(param[2]->AsInteger()),
+                static_cast<int>(param[3]->AsInteger()),
+                static_cast<int>(param[4]->AsInteger()));
             if(logger) {
                 logger->warn("D3DAdaptor::factory OK, w={} h={} center=({}, {})",
                              obj->_width, obj->_height, obj->_centerX,
@@ -132,6 +142,22 @@ namespace motion {
         size_t getBufferSize() const { return _buffer.size(); }
         int getCenterX() const { return _centerX; }
         int getCenterY() const { return _centerY; }
+
+        // Mirrors libkrkr2.so D3DAdaptor_init @ 0x6ADB10: window, width,
+        // height, centerX, centerY are written together before texture/buffer
+        // allocation.
+        void initializeLike_0x6ADB10(const tTJSVariant &window,
+                                     int width,
+                                     int height,
+                                     int centerX,
+                                     int centerY) {
+            _window = window;
+            _width = width;
+            _height = height;
+            _centerX = centerX;
+            _centerY = centerY;
+            allocBuffer();
+        }
 
         void clearBuffer() {
             if(!_buffer.empty()) {

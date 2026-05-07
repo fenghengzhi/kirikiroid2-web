@@ -8,13 +8,16 @@
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 
+#include "motionplayer/D3DAdaptor.h"
 #include "motionplayer/EmotePlayer.h"
 #include "motionplayer/Player.h"
 #include "motionplayer/ResourceManager.h"
 #include "motionplayer/RuntimeSupport.h"
 #include "psbfile/PSBValue.h"
 #include "test_config.h"
+#include "tjsError.h"
 #include "tjsObject.h"
 
 namespace {
@@ -201,7 +204,84 @@ namespace {
         return false;
     }
 
+    struct FakeWindowDispatch : tTJSDispatch {
+        tjs_error IsInstanceOf(tjs_uint32, const tjs_char *membername,
+                               tjs_uint32 *, const tjs_char *classname,
+                               iTJSDispatch2 *) override {
+            if(!membername && classname &&
+               !TJS_strcmp(classname, TJS_W("Window"))) {
+                return TJS_S_TRUE;
+            }
+            return TJS_S_FALSE;
+        }
+    };
+
+    struct FakeObjectDispatch : tTJSDispatch {
+        tjs_error IsInstanceOf(tjs_uint32, const tjs_char *,
+                               tjs_uint32 *, const tjs_char *,
+                               iTJSDispatch2 *) override {
+            return TJS_S_FALSE;
+        }
+    };
+
 } // namespace
+
+TEST_CASE("D3DAdaptor constructor follows libkrkr2 parameter boundary") {
+    motion::D3DAdaptor *badCountAdaptor = nullptr;
+    REQUIRE(motion::D3DAdaptor::factory(&badCountAdaptor, 4, nullptr,
+                                        nullptr) == TJS_E_BADPARAMCOUNT);
+    REQUIRE(badCountAdaptor == nullptr);
+
+    FakeObjectDispatch object;
+    tTJSVariant objectArg(&object, &object);
+    tTJSVariant width(640);
+    tTJSVariant height(480);
+    tTJSVariant centerX(320);
+    tTJSVariant centerY(240);
+    tTJSVariant *nonWindowParams[] = {
+        &objectArg, &width, &height, &centerX, &centerY,
+    };
+
+    motion::D3DAdaptor *nonWindowAdaptor = nullptr;
+    bool threwWindowError = false;
+    try {
+        (void)motion::D3DAdaptor::factory(&nonWindowAdaptor, 5,
+                                          nonWindowParams, nullptr);
+    } catch(const eTJSError &e) {
+        threwWindowError = true;
+        REQUIRE(e.GetMessage() == ttstr(TJS_W("must set Window object")));
+    }
+    REQUIRE(threwWindowError);
+    REQUIRE(nonWindowAdaptor == nullptr);
+
+    FakeWindowDispatch windowObject;
+    tTJSVariant windowArg(&windowObject, &windowObject);
+    tTJSVariant validWidth(1024);
+    tTJSVariant validHeight(768);
+    tTJSVariant validCenterX(512);
+    tTJSVariant validCenterY(384);
+    tTJSVariant *validParams[] = {
+        &windowArg, &validWidth, &validHeight, &validCenterX, &validCenterY,
+    };
+
+    motion::D3DAdaptor *rawAdaptor = nullptr;
+    REQUIRE(motion::D3DAdaptor::factory(&rawAdaptor, 5, validParams,
+                                        nullptr) == TJS_S_OK);
+    REQUIRE(rawAdaptor != nullptr);
+    std::unique_ptr<motion::D3DAdaptor> adaptor(rawAdaptor);
+    REQUIRE(adaptor->getWindowObject() == &windowObject);
+    REQUIRE(adaptor->getWidth() == 1024);
+    REQUIRE(adaptor->getHeight() == 768);
+    REQUIRE(adaptor->getCenterX() == 512);
+    REQUIRE(adaptor->getCenterY() == 384);
+    REQUIRE(adaptor->getBufferSize() == 1024u * 768u * 4u);
+
+    adaptor->setSize(320, 200);
+    REQUIRE(adaptor->getWidth() == 320);
+    REQUIRE(adaptor->getHeight() == 200);
+    REQUIRE(adaptor->getCenterX() == 512);
+    REQUIRE(adaptor->getCenterY() == 384);
+}
 
 TEST_CASE("motionplayer resource chain and query surface") {
     setEmoteSeed();
