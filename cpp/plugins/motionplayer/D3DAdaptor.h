@@ -31,9 +31,15 @@ namespace motion {
             obj->_window = *param[0];
             if(numparams > 1) obj->_width = static_cast<int>(param[1]->AsInteger());
             if(numparams > 2) obj->_height = static_cast<int>(param[2]->AsInteger());
+            if(numparams > 3) obj->_centerX = static_cast<int>(param[3]->AsInteger());
+            else obj->_centerX = obj->_width / 2;
+            if(numparams > 4) obj->_centerY = static_cast<int>(param[4]->AsInteger());
+            else obj->_centerY = obj->_height / 2;
             obj->allocBuffer();
             if(logger) {
-                logger->warn("D3DAdaptor::factory OK, w={} h={}", obj->_width, obj->_height);
+                logger->warn("D3DAdaptor::factory OK, w={} h={} center=({}, {})",
+                             obj->_width, obj->_height, obj->_centerX,
+                             obj->_centerY);
             }
             *result = obj;
             return TJS_S_OK;
@@ -124,6 +130,8 @@ namespace motion {
         const std::uint8_t *getBuffer() const { return _buffer.data(); }
         tjs_int getBufferPitch() const { return _width * 4; }
         size_t getBufferSize() const { return _buffer.size(); }
+        int getCenterX() const { return _centerX; }
+        int getCenterY() const { return _centerY; }
 
         void clearBuffer() {
             if(!_buffer.empty()) {
@@ -143,6 +151,8 @@ namespace motion {
         tTJSVariant _window;
         int _width = 0;
         int _height = 0;
+        int _centerX = 0;
+        int _centerY = 0;
         bool _visible = true;
         bool _canvasCaptureEnabled = false;
         bool _clearEnabled = false;

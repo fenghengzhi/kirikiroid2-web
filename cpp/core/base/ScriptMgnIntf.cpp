@@ -733,65 +733,6 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
         }
     }
 
-    // Web build: after AffineSourceMotion.tjs loads, override its canWaitMovie
-    // to return _playing for ALL types (not just emote).
-    // D3DAffineSourceMotion.canWaitMovie returns _playing unconditionally,
-    // but AffineSourceMotion only returns _playing for emote type.
-    // Also override stopMovie to properly stop non-emote motions.
-    {
-        static bool patchedCanWaitMovie = false;
-        if(!patchedCanWaitMovie) {
-            auto sn = name.AsStdString();
-            if(sn.find("AffineSourceMotion") != std::string::npos &&
-               sn.find("D3D") == std::string::npos) {
-                patchedCanWaitMovie = true;
-                try {
-                    tTJSVariant dummy;
-                    TVPExecuteExpression(
-                        TJS_W("(function(){"
-                              "AffineSourceMotion.canWaitMovie = function(){"
-                              "  if(this._player !== void && this._player.motion !== '') return this._playing;"
-                              "  return 0;"
-                              "};"
-                              "AffineSourceMotion.stopMovie = function(){"
-                              "  if(this._player !== void && this._player.motion !== ''){"
-                              "    this._player.stop();"
-                              "  }"
-                              "};"
-                              "})()"),
-                        &dummy);
-                } catch(...) {}
-            }
-        }
-    }
-
-    // Web build: after AffineSourceFlip.tjs loads, override canWaitMovie
-    // on AffineSourceFlip to delegate to _image.canWaitMovie when _flip is void.
-    // This ensures [ev waitmovie] waits for motion animations loaded via extSourceMap.
-    {
-        static bool patchedFlipCanWait = false;
-        if(!patchedFlipCanWait) {
-            auto sn = name.AsStdString();
-            if(sn.find("AffineSourceFlip") != std::string::npos) {
-                patchedFlipCanWait = true;
-                try {
-                    tTJSVariant dummy;
-                    TVPExecuteExpression(
-                        TJS_W("(function(){"
-                              "AffineSourceFlip.canWaitMovie = function(){"
-                              "  if(this._flip !== void && typeof this._flip.canWaitMovie !== 'undefined')"
-                              "    return this._flip.canWaitMovie();"
-                              "  if(this._image !== void && typeof this._image.canWaitMovie !== 'undefined')"
-                              "    return this._image.canWaitMovie();"
-                              "  return 0;"
-                              "};"
-                              "})()"),
-                        &dummy);
-                } catch(...) {}
-            }
-        }
-    }
-
     // Web build: wrap AfterInit.tjs execution to catch keybinder exceptions.
     {
         static bool inAfterInit = false;

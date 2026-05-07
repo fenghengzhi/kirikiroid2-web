@@ -123,9 +123,6 @@ NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
 NCB_REGISTER_CLASS(Player) {
     NCB_CONSTRUCTOR((ResourceManager));
 
-    NCB_PROPERTY_RAW_CALLBACK(useD3D, Player::getUseD3DStatic,
-                              Player::setUseD3DStatic, TJS_STATICMEMBER);
-
     // Properties
     // Root node position — aligned to libkrkr2.so NCB registration (0x6D69C8)
     NCB_PROPERTY(x, getX, setX);
@@ -466,9 +463,6 @@ static void PostRegistCallback() {
                 }
             }
 
-            tTJSVariant enableD3D{(tjs_int)1};
-            motion->PropSet(TJS_MEMBERENSURE | TJS_IGNOREPROP | TJS_STATICMEMBER,
-                            TJS_W("enableD3D"), nullptr, &enableD3D, motion);
         }
     }
 

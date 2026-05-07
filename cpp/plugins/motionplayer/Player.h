@@ -231,31 +231,11 @@ namespace motion {
         void setProject(tTJSVariant v) { _project = v; }
         tTJSVariant getProject() const { return _project; }
 
-        void setUseD3D(bool v) { _useD3D = v; }
-        bool getUseD3D() const { return _useD3D; }
-
-        // Static accessors for class-level property access
-        // (patch.tjs uses: with(Motion.Player) { .useD3D = 0; })
-        static tjs_error setUseD3DStatic(tTJSVariant *, tjs_int count,
-                                         tTJSVariant **p, iTJSDispatch2 *) {
-            if (count == 1 && (*p)->Type() == tvtInteger) {
-                bool old = _useD3D;
-                _useD3D = static_cast<bool>(**p);
-                auto logger = spdlog::get("plugin");
-                if(logger) {
-                    logger->warn("Motion.Player.useD3D: {} -> {}",
-                                 old, _useD3D);
-                }
-                return TJS_S_OK;
-            }
-            return TJS_E_INVALIDPARAM;
-        }
-
-        static tjs_error getUseD3DStatic(tTJSVariant *r, tjs_int,
-                                         tTJSVariant **, iTJSDispatch2 *) {
-            *r = tTJSVariant{_useD3D};
-            return TJS_S_OK;
-        }
+        // libkrkr2.so Player_setUseD3DFlag @ 0x6D9920 and getter
+        // sub_695DE0 read/write player+909, the same byte draw(D3DAdaptor)
+        // sets before entering Player_drawD3D @ 0x6D5B90.
+        void setUseD3D(bool v) { _d3dDrawMode = v; }
+        bool getUseD3D() const { return _d3dDrawMode; }
 
         // Aligned to libkrkr2.so +1052: ttstr, not bool
         void setMeshline(ttstr v) { _meshline = v; }
@@ -611,7 +591,7 @@ namespace motion {
         bool _cameraAlive = false;
         bool _canvasCaptureEnabled = false;
         bool _clearEnabled = false;
-        bool _d3dDrawMode = false; // libkrkr2.so byte_909: set when draw(D3DAdaptor) called
+        bool _d3dDrawMode = false; // libkrkr2.so player+909
         double _hitThreshold = 0.0;
         bool _preview = false; // libkrkr2.so +1096
         bool _renderItemInheritedFlag18 = false; // sub_6C2334 arg6 low-bit lineage
@@ -621,7 +601,6 @@ namespace motion {
         ttstr _stealthMotion;
         tTJSVariant _tags;
         tTJSVariant _project;
-        inline static bool _useD3D;
         ttstr _meshline;  // Aligned to libkrkr2.so +1052: ttstr
         bool _busy = false;
 
