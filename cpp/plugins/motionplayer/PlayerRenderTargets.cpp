@@ -435,9 +435,28 @@ namespace motion {
             return nullptr;
         }
 
+        const auto originalTargetLayer = sla->getTargetLayer();
+        const auto fallbackOwnerValue =
+            fallbackOwner ? tTJSVariant(fallbackOwner, fallbackOwner)
+                          : tTJSVariant();
+
+        // libkrkr2.so Player_ResolveSLATarget @ 0x6D5948 keeps SLA+20 as
+        // the original target variant and stores the private render target in
+        // SLA+40. Resolve the layer-tree owner before reducing wrappers like
+        // EnvGraphicLayer to their raw Layer dispatch.
+        iTJSDispatch2 *layerTreeOwnerObject =
+            resolveLayerTreeOwnerObject(originalTargetLayer);
+        if(!layerTreeOwnerObject) {
+            layerTreeOwnerObject =
+                resolveLayerTreeOwnerObject(fallbackOwnerValue);
+        }
+
         iTJSDispatch2 *targetLayerObject = nullptr;
-        if(auto *resolved = tryResolveLayerDispatch(sla->getTargetLayer())) {
+        if(auto *resolved = tryResolveLayerDispatch(originalTargetLayer)) {
             targetLayerObject = resolved;
+        }
+        if(!targetLayerObject && fallbackOwner) {
+            targetLayerObject = tryResolveLayerDispatch(fallbackOwnerValue);
         }
         if(!targetLayerObject) {
             targetLayerObject = fallbackOwner;
@@ -445,15 +464,17 @@ namespace motion {
         if(!targetLayerObject) {
             return nullptr;
         }
+        if(!layerTreeOwnerObject) {
+            layerTreeOwnerObject = resolveLayerTreeOwnerObject(targetLayerObject);
+        }
 
-        sla->setTargetLayer(tTJSVariant(targetLayerObject, targetLayerObject));
         if(!queryLayerCanvasSize(targetLayerObject, canvasWidth, canvasHeight)) {
             return nullptr;
         }
 
         iTJSDispatch2 *renderTarget = ensureReusableLayerObject(
             sla->privateRenderTargetSlot(),
-            resolveLayerTreeOwnerObject(targetLayerObject),
+            layerTreeOwnerObject,
             targetLayerObject,
             static_cast<tTVPLayerType>(ltAlpha),
             true,

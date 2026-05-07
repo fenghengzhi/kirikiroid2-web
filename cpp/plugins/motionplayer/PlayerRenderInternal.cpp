@@ -101,29 +101,66 @@ namespace motion::internal::render_detail {
         };
     }
 
+    namespace {
+        iTJSDispatch2 *resolveLayerTreeOwnerObjectInternal(iTJSDispatch2 *object,
+                                                           int depth) {
+            if(!object || depth > 8) {
+                return nullptr;
+            }
+
+            tTJSVariant objectVar(object, object);
+            tTJSVariant value;
+            if(getObjectProperty(objectVar, TJS_W("layerTreeOwnerInterface"), value) &&
+               value.Type() != tvtVoid) {
+                return object;
+            }
+
+            if(getObjectProperty(objectVar, TJS_W("window"), value) &&
+               value.Type() == tvtObject && value.AsObjectNoAddRef()) {
+                if(auto *owner = resolveLayerTreeOwnerObjectInternal(
+                       value.AsObjectNoAddRef(), depth + 1)) {
+                    return owner;
+                }
+            }
+
+            if(auto *resolvedLayer = tryResolveLayerDispatch(objectVar);
+               resolvedLayer && resolvedLayer != object) {
+                return resolveLayerTreeOwnerObjectInternal(resolvedLayer,
+                                                           depth + 1);
+            }
+
+            return nullptr;
+        }
+
+        iTJSDispatch2 *resolveLayerTreeOwnerObjectInternal(
+            const tTJSVariant &value,
+            int depth) {
+            if(value.Type() != tvtObject || !value.AsObjectNoAddRef()) {
+                return nullptr;
+            }
+            if(auto *owner = resolveLayerTreeOwnerObjectInternal(
+                   value.AsObjectNoAddRef(), depth)) {
+                return owner;
+            }
+
+            const auto closure = value.AsObjectClosureNoAddRef();
+            if(closure.Object && closure.Object != value.AsObjectNoAddRef()) {
+                return resolveLayerTreeOwnerObjectInternal(closure.Object,
+                                                           depth + 1);
+            }
+            return nullptr;
+        }
+    } // namespace
+
     iTJSDispatch2 *resolveLayerTreeOwnerObject(iTJSDispatch2 *object) {
         if(!object) {
             return nullptr;
         }
+        return resolveLayerTreeOwnerObjectInternal(object, 0);
+    }
 
-        tTJSVariant objectVar(object, object);
-        tTJSVariant value;
-        if(getObjectProperty(objectVar, TJS_W("layerTreeOwnerInterface"), value) &&
-           value.Type() != tvtVoid) {
-            return object;
-        }
-
-        if(getObjectProperty(objectVar, TJS_W("window"), value) &&
-           value.Type() == tvtObject && value.AsObjectNoAddRef()) {
-            return value.AsObjectNoAddRef();
-        }
-
-        if(auto *resolvedLayer = tryResolveLayerDispatch(objectVar);
-           resolvedLayer && resolvedLayer != object) {
-            return resolveLayerTreeOwnerObject(resolvedLayer);
-        }
-
-        return nullptr;
+    iTJSDispatch2 *resolveLayerTreeOwnerObject(const tTJSVariant &value) {
+        return resolveLayerTreeOwnerObjectInternal(value, 0);
     }
 
     iTJSDispatch2 *resolvePrimaryLayerObject(iTJSDispatch2 *layerTreeOwnerObject) {
