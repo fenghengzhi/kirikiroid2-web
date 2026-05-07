@@ -89,6 +89,9 @@ class StrictMotionPlaybackOracleTest(unittest.TestCase):
         def mutate_huge_float(frames: list[dict]) -> None:
             frames[0]["layers"][0]["posY"] = 1.0e74
 
+        def mutate_non_finite_float(frames: list[dict]) -> None:
+            frames[0]["layers"][0]["posZ"] = float("nan")
+
         def mutate_bad_opacity(frames: list[dict]) -> None:
             frames[0]["layers"][0]["opacity"] = 999
 
@@ -98,6 +101,7 @@ class StrictMotionPlaybackOracleTest(unittest.TestCase):
             "bad-layer-count": mutate_bad_layer_count,
             "missing-field": mutate_missing_field,
             "huge-float": mutate_huge_float,
+            "non-finite-float": mutate_non_finite_float,
             "bad-opacity": mutate_bad_opacity,
         }
         for name, mutate in cases.items():

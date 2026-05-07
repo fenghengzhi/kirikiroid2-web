@@ -783,6 +783,58 @@ def _segment_trace_flatten_frames(
     return segments
 
 
+def _trace_flatten_capture_summary(events: list[dict[str, Any]]) -> str:
+    frames = _trace_flatten_frames(events)
+    segments = _segment_trace_flatten_frames(frames)
+    lines = [
+        f"events={len(events)}",
+        f"trace_flatten_frames={len(frames)}",
+        f"segments={[len(s['frames']) for s in segments]}",
+    ]
+    if frames:
+        last = frames[-1]
+        diagnostics = last.get("diagnostics") or {}
+        players = diagnostics.get("players") or []
+        lines.append(
+            "last_frame="
+            f"frameId={last.get('frameId')} "
+            f"topPlayer={diagnostics.get('topPlayer') or last.get('topPlayer')} "
+            f"playerCount={last.get('playerCount')} "
+            f"layerCount={len(last.get('layers') or [])} "
+            f"diagnosticsError={diagnostics.get('error')!r} "
+            f"playerLayouts={[p.get('layout') for p in players]}"
+        )
+
+    errors: list[str] = []
+    for local_index, frame in enumerate(frames):
+        diagnostics = frame.get("diagnostics") or {}
+        diag_error = diagnostics.get("error")
+        if diag_error:
+            errors.append(
+                f"frame[{local_index}] diagnostics.error={diag_error!r}"
+            )
+        for player in diagnostics.get("players") or []:
+            player_error = player.get("error")
+            if player_error:
+                errors.append(
+                    f"frame[{local_index}] player={player.get('ptr')} "
+                    f"layout={player.get('layout')} error={player_error!r}"
+                )
+        if len(errors) >= 5:
+            break
+    if errors:
+        lines.append("first_errors=" + " | ".join(errors[:5]))
+    return "\n".join(lines)
+
+
+def _stop_record_for_failure_summary(tracer) -> str:
+    try:
+        events = tracer.stop_record()
+    except Exception as exc:
+        return f"failed to collect partial trace: {exc!r}"
+    return _trace_flatten_capture_summary(events)
+
+
 def _sanity_count_for_frame(
     spec: dict,
     frame_index: int,
@@ -1000,6 +1052,9 @@ def record_all_oracles(
     adapter deliberately records every spec in one go rather than per-
     spec. Returns `{spec_id: frames_list}`.
     """
+    global _startup_triggered
+    _startup_triggered = False
+
     # Local import keeps disk-only compare paths free of the frida dependency.
     from oracle_runner.frida_motion_stage_tracer import FridaMotionStageTracer
 
@@ -1110,15 +1165,19 @@ def _wait_for_trace_flatten_segments(
             substantive = [s for s in segments if len(s["frames"]) >= 30]
             if len(substantive) >= needed_substantive:
                 return events
+            summary = _trace_flatten_capture_summary(events)
             raise RuntimeError(
                 f"trace_flatten frame count stabilised at "
                 f"{len(_trace_flatten_frames(events))}, but only "
                 f"{len(substantive)} substantive segment(s) were captured "
-                f"(raw segments: {[len(s['frames']) for s in segments]})")
+                f"(raw segments: {[len(s['frames']) for s in segments]})\n"
+                f"partial trace summary:\n{summary}")
         time.sleep(poll_interval)
+    summary = _stop_record_for_failure_summary(tracer)
     raise RuntimeError(
         f"motion playback did not stabilise within {timeout}s "
-        f"(last event count: {last_count}, needed ≥ {needed_frames})")
+        f"(last event count: {last_count}, needed >= {needed_frames})\n"
+        f"partial trace summary:\n{summary}")
 
 
 # ------------------------------------------------------------ diff helpers

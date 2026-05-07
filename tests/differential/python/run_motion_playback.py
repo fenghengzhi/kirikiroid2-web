@@ -380,8 +380,11 @@ def main(argv: list[str]) -> int:
                 if manifest.exists():
                     print(f"[record] framebuffer manifest: {manifest}")
             return 0
-        except Exception:
-            print("FAIL: Android motion_playback oracle recording error")
+        except Exception as exc:
+            print(
+                "FAIL: Android motion_playback oracle recording error: "
+                f"{type(exc).__name__}: {exc}"
+            )
             traceback.print_exc(file=sys.stdout)
             return 1
 

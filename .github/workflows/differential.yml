@@ -481,23 +481,67 @@ jobs:
         env:
           ANDROID_SERIAL: localhost:5555
           KRKR2_ADB_RPC_TRANSPORT: shell-nc
+          MOTION_PLAYBACK_ORACLE_RECORD_ATTEMPTS: "3"
         run: |
           set -euo pipefail
-          rm -f tests/differential/traces/motion_playback/*.oracle.json
-          adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
-          adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
-          adb -s "${ANDROID_SERIAL}" logcat -c || true
-          set +e
-          python3 tests/differential/python/run_motion_playback.py \
-            --record-oracle --serial "${ANDROID_SERIAL}" \
-            --playback-timeout 300 2>&1 | tee /tmp/record.log
-          record_rc=${PIPESTATUS[0]}
-          set -e
+          log_dir=/tmp/motion_playback_record_logs
+          rm -rf "${log_dir}"
+          mkdir -p "${log_dir}"
+
+          record_rc=1
+          attempts="${MOTION_PLAYBACK_ORACLE_RECORD_ATTEMPTS}"
+          for attempt in $(seq 1 "${attempts}"); do
+            echo "::group::motion_playback oracle record attempt ${attempt}/${attempts}"
+            rm -f tests/differential/traces/motion_playback/*.oracle.json
+            adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
+            adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
+            adb -s "${ANDROID_SERIAL}" logcat -c || true
+
+            if [ "${attempt}" -gt 1 ]; then
+              adb -s "${ANDROID_SERIAL}" shell "pkill -f frida-server || killall frida-server || true" || true
+              adb -s "${ANDROID_SERIAL}" shell "nohup /data/local/tmp/frida-server -D >/dev/null 2>&1 &"
+              sleep 3
+              test -n "$(adb -s "${ANDROID_SERIAL}" shell pidof frida-server | tr -d '[:space:]')" \
+                || { echo 'frida-server did not restart' >&2; record_rc=1; echo "::endgroup::"; continue; }
+            fi
+
+            set +e
+            python3 tests/differential/python/run_motion_playback.py \
+              --record-oracle --serial "${ANDROID_SERIAL}" \
+              --playback-timeout 300 2>&1 | tee "${log_dir}/attempt-${attempt}.log"
+            record_rc=${PIPESTATUS[0]}
+            set -e
+            echo "::endgroup::"
+            if [ "${record_rc}" -eq 0 ]; then
+              echo "motion_playback oracle recording succeeded on attempt ${attempt}/${attempts}"
+              break
+            fi
+            echo "::warning::motion_playback oracle recording attempt ${attempt}/${attempts} failed with exit code ${record_rc}"
+            rm -f tests/differential/traces/motion_playback/*.oracle.json
+            {
+              echo "--- attempt ${attempt} diagnostics ---"
+              adb -s "${ANDROID_SERIAL}" shell "pidof org.github.krkr2 || true"
+              adb -s "${ANDROID_SERIAL}" forward --list || true
+              adb -s "${ANDROID_SERIAL}" shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -i ':13AF' || true" || true
+              adb -s "${ANDROID_SERIAL}" shell "dumpsys activity activities 2>/dev/null | grep -E -C 3 'org.github.krkr2|mResumed|mFocused' || true" || true
+              adb -s "${ANDROID_SERIAL}" logcat -d -v time 2>/dev/null \
+                | grep -E 'HarnessRpc|AndroidRuntime|org.github.krkr2|krkr2|harness|Cocos2dx|libc|DEBUG' \
+                | tail -300 || true
+              echo "--- recent raw logcat tail ---"
+              adb -s "${ANDROID_SERIAL}" logcat -d -t 120 || true
+            } | tee "${log_dir}/attempt-${attempt}-diagnostics.log"
+            sleep 5
+          done
+
           if [ "${record_rc}" -ne 0 ]; then
             echo "::error::motion_playback oracle recording failed; stdout diagnostics follow"
             echo "::group::motion_playback oracle failure diagnostics"
-            echo "--- run_motion_playback captured stdout/stderr ---"
-            cat /tmp/record.log || true
+            echo "--- run_motion_playback captured stdout/stderr by attempt ---"
+            for f in "${log_dir}"/attempt-*.log; do
+              [ -f "${f}" ] || continue
+              echo "--- ${f} ---"
+              cat "${f}" || true
+            done
             adb -s "${ANDROID_SERIAL}" shell "pidof org.github.krkr2 || true"
             adb -s "${ANDROID_SERIAL}" forward --list || true
             adb -s "${ANDROID_SERIAL}" shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -i ':13AF' || true" || true
@@ -525,6 +569,14 @@ jobs:
               assert frames and frames[0].get("layers"), f"{path} empty"
               print(f"{path}: frames={len(frames)}, layer_count={len(frames[0]['layers'])}")
           PY
+
+      - name: Upload motion_playback oracle record logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-oracle-record-logs
+          path: /tmp/motion_playback_record_logs/*
+          if-no-files-found: ignore
 
       - name: Upload motion_playback oracle traces
         uses: actions/upload-artifact@v4
