@@ -217,24 +217,44 @@ function ptrHex(value) {
     }
 }
 
+function canonicalPtr(value) {
+    const p = ptr(value);
+    if (Process.pointerSize !== 8 || p.isNull()) return p;
+    // Android 11+ arm64 can hand Frida top-byte-tagged heap pointers
+    // (TBI/MTE style, e.g. 0xb4...). Native code can dereference them, but
+    // Frida's range lookup/read helpers expect the canonical address.
+    return p.and(ptr('0x00ffffffffffffff'));
+}
+
+function ptrHexCanonical(value) {
+    if (value === null || value === undefined) return null;
+    try {
+        const p = canonicalPtr(value);
+        if (p.isNull()) return null;
+        return p.toString();
+    } catch (e) {
+        return ptrHex(value);
+    }
+}
+
 function ptrToNumber(value) {
     try {
-        return parseInt(ptr(value).toString(), 16);
+        return parseInt(canonicalPtr(value).toString(), 16);
     } catch (e) {
         return 0;
     }
 }
 
 function readS32(p, off) {
-    try { return p.add(off).readS32(); } catch (e) { return null; }
+    try { return canonicalPtr(p).add(off).readS32(); } catch (e) { return null; }
 }
 
 function readU32(p, off) {
-    try { return p.add(off).readU32(); } catch (e) { return null; }
+    try { return canonicalPtr(p).add(off).readU32(); } catch (e) { return null; }
 }
 
 function readU8(p, off) {
-    try { return p.add(off).readU8(); } catch (e) { return null; }
+    try { return canonicalPtr(p).add(off).readU8(); } catch (e) { return null; }
 }
 
 function readBool(p, off) {
@@ -244,7 +264,7 @@ function readBool(p, off) {
 
 function readDouble(p, off) {
     try {
-        const v = p.add(off).readDouble();
+        const v = canonicalPtr(p).add(off).readDouble();
         return Number.isFinite(v) ? v : null;
     } catch (e) {
         return null;
@@ -253,7 +273,7 @@ function readDouble(p, off) {
 
 function readFloat(p, off) {
     try {
-        const v = p.add(off).readFloat();
+        const v = canonicalPtr(p).add(off).readFloat();
         return Number.isFinite(v) ? v : null;
     } catch (e) {
         return null;
@@ -262,8 +282,8 @@ function readFloat(p, off) {
 
 function readPointer(p, off) {
     try {
-        const q = p.add(off).readPointer();
-        return q.isNull() ? null : q;
+        const q = canonicalPtr(p).add(off).readPointer();
+        return q.isNull() ? null : canonicalPtr(q);
     } catch (e) {
         return null;
     }
@@ -271,7 +291,7 @@ function readPointer(p, off) {
 
 function hasReadableBytes(p, byteCount) {
     try {
-        const q = ptr(p);
+        const q = canonicalPtr(p);
         const range = Process.findRangeByAddress(q);
         if (range === null || range.protection.indexOf('r') < 0) return false;
         const start = ptrToNumber(q);
@@ -285,7 +305,10 @@ function hasReadableBytes(p, byteCount) {
 
 function requireReadable(p, byteCount, name) {
     if (!hasReadableBytes(p, byteCount)) {
-        throw new Error(name + ' is not readable: ' + ptrHex(p));
+        throw new Error(
+            name + ' is not readable: raw=' + ptrHex(p) +
+            ' canonical=' + ptrHexCanonical(p)
+        );
     }
 }
 
@@ -1407,16 +1430,16 @@ function walkDeque(playerPtr, stride, options) {
         if (strict) throw new Error(message);
         return null;
     };
-    const player = ptr(playerPtr);
+    const player = canonicalPtr(playerPtr);
     if (strict) requireReadable(player, 264, 'Player');
-    const startCurPtr = player.add(200).readPointer();
-    const startFirstPtr = player.add(208).readPointer();
-    const startLastPtr = player.add(216).readPointer();
-    const startNodePtr = player.add(224).readPointer();
-    const finishCurPtr = player.add(232).readPointer();
-    const finishFirstPtr = player.add(240).readPointer();
-    const finishLastPtr = player.add(248).readPointer();
-    const finishNodePtr = player.add(256).readPointer();
+    const startCurPtr = readPointer(player, 200);
+    const startFirstPtr = readPointer(player, 208);
+    const startLastPtr = readPointer(player, 216);
+    const startNodePtr = readPointer(player, 224);
+    const finishCurPtr = readPointer(player, 232);
+    const finishFirstPtr = readPointer(player, 240);
+    const finishLastPtr = readPointer(player, 248);
+    const finishNodePtr = readPointer(player, 256);
 
     const startCur = ptrToNumber(startCurPtr);
     const startFirst = ptrToNumber(startFirstPtr);
@@ -1479,7 +1502,7 @@ function walkDeque(playerPtr, stride, options) {
             return fail('Node deque map walk exceeded safety limit');
         }
         if (strict) requireReadable(mapIter, 8, 'Node deque map entry');
-        const blockPtr = mapIter.readPointer();
+        const blockPtr = readPointer(mapIter, 0);
         const blockRaw = ptrToNumber(blockPtr);
         if (blockRaw === 0) return fail('Node deque block pointer is null');
         if (strict) {
@@ -1518,7 +1541,7 @@ function walkDeque(playerPtr, stride, options) {
 }
 
 function readNodeAccum(nodePtr) {
-    const node = ptr(nodePtr);
+    const node = canonicalPtr(nodePtr);
     return {
         nodeType: readS32(node, NODE_OFF.nodeType),
         active: readBool(node, NODE_OFF.active),
@@ -1590,7 +1613,7 @@ function validateTraceFlattenLayer(layer, index, nodePtr) {
 }
 
 function readNodeBrief(nodePtr, index) {
-    const node = ptr(nodePtr);
+    const node = canonicalPtr(nodePtr);
     const paramEntry = readPointer(node, NODE_OFF.parameterEntry);
     let param = null;
     if (paramEntry !== null) {
@@ -1644,7 +1667,7 @@ function walkNodes(playerPtr, options) {
             nodeCount: 0,
         };
     }
-    const rootPtr = readPointer(ptr(playerPtr), 200);
+    const rootPtr = readPointer(canonicalPtr(playerPtr), 200);
     if (rootPtr === null) return { layout: 'empty', layers: [], nodeCount: 0 };
     const accum = readNodeAccum(rootPtr);
     accum.index = 0;
@@ -1652,7 +1675,7 @@ function walkNodes(playerPtr, options) {
 }
 
 function playerOverview(playerPtr) {
-    const player = ptr(playerPtr);
+    const player = canonicalPtr(playerPtr);
     const walked = walkNodes(player);
     return {
         player: ptrHex(player),
