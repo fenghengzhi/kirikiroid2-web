@@ -431,21 +431,54 @@ namespace motion {
         int &canvasHeight) {
         canvasWidth = 0;
         canvasHeight = 0;
+        const auto motionPath =
+            _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
+                                               : std::string{};
+        auto traceResolveFailure = [&](const char *reason,
+                                       const tTJSVariant &target,
+                                       iTJSDispatch2 *layerTreeOwnerObject,
+                                       iTJSDispatch2 *targetLayerObject) {
+            iTJSDispatch2 *targetObject = nullptr;
+            iTJSDispatch2 *targetObjThis = nullptr;
+            if(target.Type() == tvtObject && target.AsObjectNoAddRef()) {
+                const auto closure = target.AsObjectClosureNoAddRef();
+                targetObject = closure.Object;
+                targetObjThis = closure.ObjThis;
+            }
+            detail::logoChainTraceLogf(
+                motionPath, "sla.resolveTarget.fail", "0x6D5948",
+                _clampedEvalTime,
+                "reason={} targetType={} targetObject={} targetObjThis={} fallbackOwner={} layerTreeOwner={} targetLayer={} canvas={}x{}",
+                reason ? reason : "<unknown>",
+                static_cast<int>(target.Type()),
+                static_cast<const void *>(targetObject),
+                static_cast<const void *>(targetObjThis),
+                static_cast<const void *>(fallbackOwner),
+                static_cast<const void *>(layerTreeOwnerObject),
+                static_cast<const void *>(targetLayerObject),
+                canvasWidth, canvasHeight);
+        };
         if(!sla) {
             return nullptr;
         }
 
+        const auto originalOwnerLayer = sla->getOwnerVariant();
         const auto originalTargetLayer = sla->getTargetLayer();
         const auto fallbackOwnerValue =
             fallbackOwner ? tTJSVariant(fallbackOwner, fallbackOwner)
                           : tTJSVariant();
 
-        // libkrkr2.so Player_ResolveSLATarget @ 0x6D5948 keeps SLA+20 as
-        // the original target variant and stores the private render target in
-        // SLA+40. Resolve the layer-tree owner before reducing wrappers like
-        // EnvGraphicLayer to their raw Layer dispatch.
+        // libkrkr2.so Player_ResolveSLATarget @ 0x6D5948 constructs
+        // PrivateMotionGLL(owner, targetLayer) from SLA+0 and SLA+20, then
+        // stores it in SLA+40. Resolve the layer-tree owner from the original
+        // owner variant before reducing wrappers like EnvGraphicLayer to their
+        // raw Layer dispatch.
         iTJSDispatch2 *layerTreeOwnerObject =
-            resolveLayerTreeOwnerObject(originalTargetLayer);
+            resolveLayerTreeOwnerObject(originalOwnerLayer);
+        if(!layerTreeOwnerObject) {
+            layerTreeOwnerObject =
+                resolveLayerTreeOwnerObject(originalTargetLayer);
+        }
         if(!layerTreeOwnerObject) {
             layerTreeOwnerObject =
                 resolveLayerTreeOwnerObject(fallbackOwnerValue);
@@ -462,6 +495,8 @@ namespace motion {
             targetLayerObject = fallbackOwner;
         }
         if(!targetLayerObject) {
+            traceResolveFailure("no-target-layer", originalTargetLayer,
+                                layerTreeOwnerObject, targetLayerObject);
             return nullptr;
         }
         if(!layerTreeOwnerObject) {
@@ -469,6 +504,8 @@ namespace motion {
         }
 
         if(!queryLayerCanvasSize(targetLayerObject, canvasWidth, canvasHeight)) {
+            traceResolveFailure("no-canvas-size", originalTargetLayer,
+                                layerTreeOwnerObject, targetLayerObject);
             return nullptr;
         }
 
@@ -480,6 +517,9 @@ namespace motion {
             true,
             sla->getAbsolute());
         if(!renderTarget) {
+            traceResolveFailure("ensure-private-target-failed",
+                                originalTargetLayer, layerTreeOwnerObject,
+                                targetLayerObject);
             return nullptr;
         }
 

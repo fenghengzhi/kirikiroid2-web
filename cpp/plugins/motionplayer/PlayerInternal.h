@@ -378,9 +378,13 @@ namespace internal {
             if(object.Type() != tvtObject || object.AsObjectNoAddRef() == nullptr) {
                 return false;
             }
-            return TJS_SUCCEEDED(object.AsObjectNoAddRef()->PropGet(
-                TJS_IGNOREPROP, name, nullptr, &result,
-                object.AsObjectNoAddRef()));
+            const auto closure = object.AsObjectClosureNoAddRef();
+            iTJSDispatch2 *dispatch =
+                closure.Object ? closure.Object : object.AsObjectNoAddRef();
+            iTJSDispatch2 *objthis =
+                closure.ObjThis ? closure.ObjThis : dispatch;
+            return TJS_SUCCEEDED(dispatch->PropGet(
+                TJS_IGNOREPROP, name, nullptr, &result, objthis));
         }
 
         inline tjs_int getObjectCount(const tTJSVariant &object) {
@@ -427,14 +431,37 @@ namespace internal {
 
             iTJSDispatch2 *obj = value.AsObjectNoAddRef();
 
-            // Direct Layer check
-            {
+            auto resolveDirectLayer = [](iTJSDispatch2 *candidate) {
+                if(!candidate) {
+                    return static_cast<iTJSDispatch2 *>(nullptr);
+                }
                 tTJSNI_BaseLayer *layer = nullptr;
-                if(TJS_SUCCEEDED(obj->NativeInstanceSupport(
+                if(TJS_SUCCEEDED(candidate->NativeInstanceSupport(
                        TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
                        reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
                    layer) {
-                    return obj;
+                    return candidate;
+                }
+                return static_cast<iTJSDispatch2 *>(nullptr);
+            };
+
+            // Direct Layer check. Player_ResolveSLATarget @ 0x6D5948 calls
+            // sub_A7A050 @ 0xA7A050 to coerce the SLA target variant to the
+            // real native Layer before creating PrivateMotionGLL. TJS closure
+            // values such as Layer(this) can carry that real receiver in
+            // ObjThis, so check the full closure, not only Object.
+            if(auto *direct = resolveDirectLayer(obj)) {
+                return direct;
+            }
+            const auto closure = value.AsObjectClosureNoAddRef();
+            if(closure.ObjThis && closure.ObjThis != obj) {
+                if(auto *direct = resolveDirectLayer(closure.ObjThis)) {
+                    return direct;
+                }
+            }
+            if(closure.Object && closure.Object != obj) {
+                if(auto *direct = resolveDirectLayer(closure.Object)) {
+                    return direct;
                 }
             }
 
