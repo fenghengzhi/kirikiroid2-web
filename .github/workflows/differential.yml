@@ -91,6 +91,35 @@ jobs:
           test -x "${VCPKG_ROOT}/vcpkg" || "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
           echo "${VCPKG_ROOT}" >> $GITHUB_PATH
 
+      - name: Check NuGet API key
+        run: |
+          if [ -n "${{ secrets.NUGET_API_KEY }}" ]; then
+            echo "HAS_NUGET_KEY=true" >> $GITHUB_ENV
+          fi
+
+      - name: Add NuGet sources
+        if: ${{ env.HAS_NUGET_KEY == 'true' }}
+        run: |
+          if ! command -v mono >/dev/null 2>&1; then
+            brew install mono
+          fi
+          mono `${{ env.VCPKG_ROOT }}/vcpkg fetch nuget | tail -n 1` \
+            sources add \
+            -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+            -StorePasswordInClearText \
+            -Name GitHubPackages \
+            -UserName "${{ github.actor }}" \
+            -Password "${{ secrets.NUGET_API_KEY }}"
+          mono `${{ env.VCPKG_ROOT }}/vcpkg fetch nuget | tail -n 1` \
+            setapikey "${{ secrets.NUGET_API_KEY }}" \
+            -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          echo "VCPKG_BINARY_SOURCES=clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,readwrite" >> $GITHUB_ENV
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.18
+        with:
+          key: ${{ github.job }}
+
       - name: Build WASM + run LLDB guest-debug differential tests
         run: |
           source "${EMSDK}/emsdk_env.sh"
