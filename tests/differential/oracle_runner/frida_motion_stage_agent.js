@@ -221,9 +221,55 @@ function canonicalPtr(value) {
     const p = ptr(value);
     if (Process.pointerSize !== 8 || p.isNull()) return p;
     // Android 11+ arm64 can hand Frida top-byte-tagged heap pointers
-    // (TBI/MTE style, e.g. 0xb4...). Native code can dereference them, but
-    // Frida's range lookup/read helpers expect the canonical address.
+    // (TBI/MTE style, e.g. 0xb4...). Some Frida APIs want the canonical
+    // address, while reads can still need the original tag.
     return p.and(ptr('0x00ffffffffffffff'));
+}
+
+function retagPtr(value, tagSource) {
+    try {
+        const low = canonicalPtr(value);
+        if (Process.pointerSize !== 8 || low.isNull() ||
+                tagSource === null || tagSource === undefined) {
+            return low;
+        }
+        const tag = ptr(tagSource).and(ptr('0xff00000000000000'));
+        return tag.isNull() ? low : low.or(tag);
+    } catch (e) {
+        return null;
+    }
+}
+
+function addPtrCandidate(out, seen, value) {
+    try {
+        const p = ptr(value);
+        if (p.isNull()) return;
+        const key = p.toString();
+        if (!seen[key]) {
+            seen[key] = true;
+            out.push(p);
+        }
+    } catch (e) {
+    }
+}
+
+function ptrCandidates(value, options) {
+    const out = [];
+    const seen = {};
+    addPtrCandidate(out, seen, value);
+    try {
+        addPtrCandidate(out, seen, canonicalPtr(value));
+    } catch (e) {
+    }
+    if (options && options.tagSource !== undefined) {
+        addPtrCandidate(out, seen, retagPtr(value, options.tagSource));
+    }
+    if (options && Array.isArray(options.tagSources)) {
+        for (const source of options.tagSources) {
+            addPtrCandidate(out, seen, retagPtr(value, source));
+        }
+    }
+    return out;
 }
 
 function ptrHexCanonical(value) {
@@ -245,16 +291,26 @@ function ptrToNumber(value) {
     }
 }
 
-function readS32(p, off) {
-    try { return canonicalPtr(p).add(off).readS32(); } catch (e) { return null; }
+function readWithCandidates(p, off, fn, options) {
+    for (const base of ptrCandidates(p, options)) {
+        try {
+            return fn(base.add(off));
+        } catch (e) {
+        }
+    }
+    return null;
 }
 
-function readU32(p, off) {
-    try { return canonicalPtr(p).add(off).readU32(); } catch (e) { return null; }
+function readS32(p, off, options) {
+    return readWithCandidates(p, off, (q) => q.readS32(), options);
 }
 
-function readU8(p, off) {
-    try { return canonicalPtr(p).add(off).readU8(); } catch (e) { return null; }
+function readU32(p, off, options) {
+    return readWithCandidates(p, off, (q) => q.readU32(), options);
+}
+
+function readU8(p, off, options) {
+    return readWithCandidates(p, off, (q) => q.readU8(), options);
 }
 
 function readBool(p, off) {
@@ -262,39 +318,32 @@ function readBool(p, off) {
     return v === null ? null : v !== 0;
 }
 
-function readDouble(p, off) {
-    try {
-        const v = canonicalPtr(p).add(off).readDouble();
+function readDouble(p, off, options) {
+    const v = readWithCandidates(p, off, (q) => q.readDouble(), options);
+    if (v !== null) {
         return Number.isFinite(v) ? v : null;
-    } catch (e) {
-        return null;
     }
+    return null;
 }
 
-function readFloat(p, off) {
-    try {
-        const v = canonicalPtr(p).add(off).readFloat();
+function readFloat(p, off, options) {
+    const v = readWithCandidates(p, off, (q) => q.readFloat(), options);
+    if (v !== null) {
         return Number.isFinite(v) ? v : null;
-    } catch (e) {
-        return null;
     }
+    return null;
 }
 
-function readPointer(p, off) {
-    try {
-        const q = canonicalPtr(p).add(off).readPointer();
-        return q.isNull() ? null : canonicalPtr(q);
-    } catch (e) {
-        return null;
-    }
+function readPointer(p, off, options) {
+    const q = readWithCandidates(p, off, (r) => r.readPointer(), options);
+    return q === null || q.isNull() ? null : q;
 }
 
-function hasReadableBytes(p, byteCount) {
+function rangeHasReadableBytes(p, byteCount) {
     try {
-        const q = canonicalPtr(p);
-        const range = Process.findRangeByAddress(q);
+        const range = Process.findRangeByAddress(p);
         if (range === null || range.protection.indexOf('r') < 0) return false;
-        const start = ptrToNumber(q);
+        const start = ptrToNumber(p);
         const rangeStart = ptrToNumber(range.base);
         const rangeEnd = rangeStart + range.size;
         return start >= rangeStart && start + byteCount <= rangeEnd;
@@ -303,13 +352,39 @@ function hasReadableBytes(p, byteCount) {
     }
 }
 
-function requireReadable(p, byteCount, name) {
-    if (!hasReadableBytes(p, byteCount)) {
-        throw new Error(
-            name + ' is not readable: raw=' + ptrHex(p) +
-            ' canonical=' + ptrHexCanonical(p)
-        );
+function probeReadableBytes(p, byteCount) {
+    try {
+        p.readU8();
+        if (byteCount > 1) p.add(byteCount - 1).readU8();
+        return true;
+    } catch (e) {
+        return false;
     }
+}
+
+function findReadablePtr(p, byteCount, options) {
+    for (const q of ptrCandidates(p, options)) {
+        if (rangeHasReadableBytes(q, byteCount) ||
+                probeReadableBytes(q, byteCount)) {
+            return q;
+        }
+    }
+    return null;
+}
+
+function hasReadableBytes(p, byteCount, options) {
+    return findReadablePtr(p, byteCount, options) !== null;
+}
+
+function requireReadable(p, byteCount, name, options) {
+    const q = findReadablePtr(p, byteCount, options);
+    if (q !== null) return q;
+    const tried = ptrCandidates(p, options).map((v) => v.toString()).join(',');
+    throw new Error(
+        name + ' is not readable: raw=' + ptrHex(p) +
+        ' canonical=' + ptrHexCanonical(p) +
+        (tried ? ' tried=' + tried : '')
+    );
 }
 
 function readArgInt(arg) {
@@ -1430,8 +1505,10 @@ function walkDeque(playerPtr, stride, options) {
         if (strict) throw new Error(message);
         return null;
     };
-    const player = canonicalPtr(playerPtr);
-    if (strict) requireReadable(player, 264, 'Player');
+    const playerRaw = ptr(playerPtr);
+    const player = strict
+        ? requireReadable(playerRaw, 264, 'Player')
+        : (findReadablePtr(playerRaw, 264) || playerRaw);
     const startCurPtr = readPointer(player, 200);
     const startFirstPtr = readPointer(player, 208);
     const startLastPtr = readPointer(player, 216);
@@ -1476,9 +1553,13 @@ function walkDeque(playerPtr, stride, options) {
     if (!(finishFirst <= finishCur && finishCur <= finishLast)) {
         return fail('Node deque finish cursor is outside its block');
     }
+    let startNodeReadable = startNodePtr;
     if (strict) {
-        requireReadable(startNodePtr, 8, 'Node deque start map iterator');
-        requireReadable(finishNodePtr, 8, 'Node deque finish map iterator');
+        const tagOptions = { tagSource: playerRaw };
+        startNodeReadable = requireReadable(
+            startNodePtr, 8, 'Node deque start map iterator', tagOptions);
+        requireReadable(
+            finishNodePtr, 8, 'Node deque finish map iterator', tagOptions);
     }
 
     let bufElems = 1;
@@ -1495,18 +1576,24 @@ function walkDeque(playerPtr, stride, options) {
     }
 
     const nodes = [];
-    let mapIter = startNodePtr;
+    let mapIter = startNodeReadable;
     let safety = 0;
-    while (ptrToNumber(mapIter) <= ptrToNumber(finishNodePtr)) {
+    while (ptrToNumber(mapIter) <= finishNode) {
         if (++safety > TRACE_FLATTEN_MAX_NODES) {
             return fail('Node deque map walk exceeded safety limit');
         }
-        if (strict) requireReadable(mapIter, 8, 'Node deque map entry');
-        const blockPtr = readPointer(mapIter, 0);
-        const blockRaw = ptrToNumber(blockPtr);
-        if (blockRaw === 0) return fail('Node deque block pointer is null');
+        const tagOptions = { tagSources: [playerRaw, startCurPtr, finishCurPtr] };
         if (strict) {
-            requireReadable(blockPtr, stride, 'Node deque block');
+            mapIter = requireReadable(
+                mapIter, 8, 'Node deque map entry', tagOptions);
+        }
+        const blockPtrRaw = readPointer(mapIter, 0);
+        const blockRaw = ptrToNumber(blockPtrRaw);
+        if (blockRaw === 0) return fail('Node deque block pointer is null');
+        const blockPtr = findReadablePtr(blockPtrRaw, stride, tagOptions) ||
+            blockPtrRaw;
+        if (strict) {
+            requireReadable(blockPtr, stride, 'Node deque block', tagOptions);
         }
         let first = 0;
         let last = bufElems;
@@ -1525,7 +1612,8 @@ function walkDeque(playerPtr, stride, options) {
         for (let k = first; k < last; k++) {
             const node = blockPtr.add(k * stride);
             if (strict) {
-                requireReadable(node, NODE_OFF.opacity + 4, 'Node');
+                requireReadable(
+                    node, NODE_OFF.opacity + 4, 'Node', tagOptions);
             }
             nodes.push(node);
             if (nodes.length > TRACE_FLATTEN_MAX_NODES) {
@@ -1541,7 +1629,7 @@ function walkDeque(playerPtr, stride, options) {
 }
 
 function readNodeAccum(nodePtr) {
-    const node = canonicalPtr(nodePtr);
+    const node = ptr(nodePtr);
     return {
         nodeType: readS32(node, NODE_OFF.nodeType),
         active: readBool(node, NODE_OFF.active),
@@ -1613,7 +1701,7 @@ function validateTraceFlattenLayer(layer, index, nodePtr) {
 }
 
 function readNodeBrief(nodePtr, index) {
-    const node = canonicalPtr(nodePtr);
+    const node = ptr(nodePtr);
     const paramEntry = readPointer(node, NODE_OFF.parameterEntry);
     let param = null;
     if (paramEntry !== null) {
@@ -1667,7 +1755,7 @@ function walkNodes(playerPtr, options) {
             nodeCount: 0,
         };
     }
-    const rootPtr = readPointer(canonicalPtr(playerPtr), 200);
+    const rootPtr = readPointer(ptr(playerPtr), 200);
     if (rootPtr === null) return { layout: 'empty', layers: [], nodeCount: 0 };
     const accum = readNodeAccum(rootPtr);
     accum.index = 0;
@@ -1675,7 +1763,7 @@ function walkNodes(playerPtr, options) {
 }
 
 function playerOverview(playerPtr) {
-    const player = canonicalPtr(playerPtr);
+    const player = ptr(playerPtr);
     const walked = walkNodes(player);
     return {
         player: ptrHex(player),
