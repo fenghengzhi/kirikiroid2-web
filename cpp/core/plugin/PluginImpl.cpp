@@ -48,29 +48,6 @@
 //---------------------------------------------------------------------------
 bool TVPLoadInternalPlugin(const ttstr &_name);
 
-// Force isD3D=true on the KAG window so the game's D3D motion path
-// (used for logo animations) is enabled. Called after plugins are loaded
-// and the KAG window is initialized.
-static bool s_d3dForced = false;
-static void forceD3DOnKAGWindow() {
-    if(s_d3dForced) return;
-    iTJSDispatch2 *global = TVPGetScriptDispatch();
-    if(!global) return;
-
-    tTJSVariant kagVar;
-    if(TJS_SUCCEEDED(global->PropGet(0, TJS_W("kag"), nullptr, &kagVar, global)) &&
-       kagVar.Type() == tvtObject && kagVar.AsObjectNoAddRef()) {
-        // Set isD3D = true on the kag window
-        tTJSVariant trueVal((tjs_int)1);
-        kagVar.AsObjectNoAddRef()->PropSet(
-            TJS_MEMBERENSURE, TJS_W("isD3D"), nullptr, &trueVal,
-            kagVar.AsObjectNoAddRef());
-        s_d3dForced = true;
-        TVPAddLog(TJS_W("(info) Forced kag.isD3D = true for web build"));
-    }
-    global->Release();
-}
-
 void TVPLoadPlugin(const ttstr &name) {
     auto pluginName = name;
 
