@@ -74,12 +74,13 @@ TRACE_FLATTEN_ABS_FLOAT_LIMIT = 1_000_000.0
 
 
 # Deterministic oracle-recording xp3. Its startup.tjs runs fixed-step
-# `player.progress(1000/60)` loops (241 frames for yuzulogo, 91 for
-# m2logo). The Browser-WASM verifier loads this same xp3 and collects the
-# port-side `motionTrace=1` samples, instead of using logo_test.xp3's
-# real-time variable-step doFrame. Sources live in the reference submodule
-# (reference/xp3/logo_test_oracle/startup.tjs + the shared mtn files in
-# reference/xp3/logo_test/). Regenerate via
+# AffineSourceMotion-shaped frames (241 for yuzulogo, 91 for m2logo):
+# progress(delta) -> setDrawAffineTranslateMatrix(...) -> completionType ->
+# draw(motionWorkLayer) -> assignImages(base). The Browser-WASM verifier
+# loads this same xp3 and collects the port-side `motionTrace=1` samples,
+# instead of using logo_test.xp3's real-time variable-step doFrame. Sources
+# live in the reference submodule (reference/xp3/logo_test_oracle/startup.tjs
+# + the shared mtn files in reference/xp3/logo_test/). Regenerate via
 # `tests/differential/oracle_runner/fixtures/build_logo_test_oracle.sh`
 # whenever the spec frame counts change.
 _LOGO_TEST_XP3_REL = "reference/xp3/logo_test_oracle.xp3"

@@ -864,6 +864,25 @@ namespace motion {
     }
 
 
+    void Player::progressMsLike_0x6D2A54(double deltaMs) {
+        ensureMotionLoaded();
+        if(deltaMs < 0 || deltaMs > 60000) {
+            deltaMs = 0;
+        }
+
+        if(_runtime) {
+            _runtime->pendingEvents.clear();
+        }
+        frameProgress(deltaMs * kMotionFramesPerMillisecond);
+        if(_runtime && !_runtime->nodes.empty()) {
+            updateLayers();
+        }
+        calcBounds();
+        if(_runtime) {
+            _runtime->pendingEvents.clear();
+        }
+    }
+
     tjs_error Player::progressCompatMethod(tTJSVariant *result, tjs_int numparams,
                                            tTJSVariant **param,
                                            iTJSDispatch2 *objthis) {

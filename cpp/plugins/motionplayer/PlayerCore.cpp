@@ -214,6 +214,56 @@ namespace motion {
 
     Player::~Player() = default;
 
+    bool Player::getPlaying() const {
+        // Player_getPlaying @ 0x6D9794: return byte player+1099.
+        static int traceCount = 0;
+        if(_runtime && detail::logoChainTraceEnabled(_runtime->activeMotion) &&
+           traceCount < 80) {
+            ++traceCount;
+            detail::logoChainTraceLogf(
+                _runtime->activeMotion->path, "getPlaying", "0x6D9794",
+                _clampedEvalTime, "value={} timelineCount={} playingLabels={}",
+                _allplaying ? 1 : 0, _runtime->timelines.size(),
+                _runtime->playingTimelineLabels.size());
+        }
+        return _allplaying;
+    }
+
+    bool Player::getAllplaying() const {
+        // Player_getAllplaying @ 0x6CCE34: child Motion players can keep the
+        // aggregate playing state true after the owner-level flag is clear.
+        static int traceCount = 0;
+        if(_runtime) {
+            for(const auto &node : _runtime->nodes) {
+                if(auto *child = node.getChildPlayer()) {
+                    if(child->getAllplaying()) {
+                        if(detail::logoChainTraceEnabled(_runtime->activeMotion) &&
+                           traceCount < 80) {
+                            ++traceCount;
+                            detail::logoChainTraceLogf(
+                                _runtime->activeMotion->path, "getAllplaying",
+                                "0x6CCE34", _clampedEvalTime,
+                                "value=1 reason=child nodeIndex={} localPlaying={} labels={}",
+                                node.index, _allplaying ? 1 : 0,
+                                _runtime->playingTimelineLabels.size());
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+        if(_runtime && detail::logoChainTraceEnabled(_runtime->activeMotion) &&
+           traceCount < 80) {
+            ++traceCount;
+            detail::logoChainTraceLogf(
+                _runtime->activeMotion->path, "getAllplaying", "0x6CCE34",
+                _clampedEvalTime, "value={} reason=local labels={}",
+                _allplaying ? 1 : 0,
+                _runtime->playingTimelineLabels.size());
+        }
+        return _allplaying;
+    }
+
     // Aligned to libkrkr2.so Player_getRootX (0x6D98A8) / Player_setRootX (0x6CD028):
     //   sub_6CD028: if (root.delta.posX != v) { root.delta.posX = v; root.delta.dirty = 1; }
     //   — writes node+1592 (delta.posX) and sets node+1584 (delta.dirty).
@@ -374,6 +424,8 @@ namespace motion {
                                       tTJSVariant **, iTJSDispatch2 *objthis) {
         auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
         if(!self) return TJS_E_INVALIDOBJECT;
+        // Player_getMotion_ncb @ 0x6D9544 returns native player+976.
+        // _motionKey is the local mirror of that getter-visible slot.
         if(result) *result = tTJSVariant(self->_motionKey);
         return TJS_S_OK;
     }

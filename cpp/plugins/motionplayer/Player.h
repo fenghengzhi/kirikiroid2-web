@@ -143,7 +143,8 @@ namespace motion {
         tTJSVariant getVariableKeys();
 
         void setAllplaying(bool v) { _allplaying = v; }
-        bool getAllplaying() const { return _allplaying; }
+        bool getPlaying() const;
+        bool getAllplaying() const;
 
         void setSyncWaiting(bool v) { _syncWaiting = v; }
         bool getSyncWaiting() const { return _syncWaiting; }
@@ -362,6 +363,8 @@ namespace motion {
         bool getD3DAvailable();
         void doAlphaMaskOperation();
         void onFindMotion(ttstr name, int flags = 0);
+        bool playMotionLike_0x6B2284(ttstr label, tjs_int flags);
+        void progressMsLike_0x6D2A54(double deltaMs);
         void setParentPlayerLike_0x6B1ABC(Player *parentPlayer) {
             _parentPlayer = parentPlayer;
         }

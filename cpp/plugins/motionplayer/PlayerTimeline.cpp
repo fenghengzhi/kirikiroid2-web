@@ -285,6 +285,110 @@ namespace motion {
         return detail::makeArray(timelineInfoVariants(*_runtime));
     }
 
+    bool Player::playMotionLike_0x6B2284(ttstr label, tjs_int flags) {
+        if(!_runtime->activeMotion && _project.Type() == tvtObject) {
+            if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
+                activateMotion(*_runtime, snapshot);
+                syncVariableKeysFromActiveMotion();
+            }
+        }
+
+        auto commitRequestedMotionLike_0x6B2380 = [&]() {
+            if(label.IsEmpty() || !_runtime->activeMotion) {
+                return;
+            }
+            if((flags & PlayFlagStealth) != 0) {
+                _stealthMotion = label;
+                return;
+            }
+            // Player_playImpl @ 0x6B2284 writes player+976 before
+            // Player_initNonEmoteMotion @ 0x6B365C. Player_getMotion_ncb
+            // @ 0x6D9544 then exposes that same slot to TJS.
+            _motionKey = label;
+        };
+
+        ensureMotionLoaded();
+        commitRequestedMotionLike_0x6B2380();
+        initNonEmoteMotionLike_0x6B365C(
+            static_cast<std::uint32_t>(flags));
+        if(_runtime->activeMotion && _runtime->timelines.empty()) {
+            detail::primeTimelineStates(_runtime->timelines,
+                                        *_runtime->activeMotion);
+        }
+
+        if(!label.IsEmpty() && !_runtime->activeMotion) {
+            setMotion(label);
+            ensureMotionLoaded();
+            commitRequestedMotionLike_0x6B2380();
+            initNonEmoteMotionLike_0x6B365C(
+                static_cast<std::uint32_t>(flags));
+            if(_runtime->activeMotion && _runtime->timelines.empty()) {
+                detail::primeTimelineStates(_runtime->timelines,
+                                            *_runtime->activeMotion);
+            }
+        }
+
+        if(!_runtime->activeMotion) {
+            return false;
+        }
+
+        if((flags & PlayFlagForce) != 0) {
+            stopTimeline(TJS_W(""));
+        }
+
+        const bool chainMode = (flags & PlayFlagChain) != 0;
+        const auto playOne = [&](const std::string &timelineLabel) {
+            auto &state = _runtime->timelines[timelineLabel];
+            state.label = timelineLabel;
+            state.flags = flags;
+            state.blendRatio = 1.0;
+            state.playing = true;
+            if(!chainMode) {
+                state.currentTime = 0.0;
+                state.controlInitialized = false;
+                state.controlLastAppliedTime = 0.0;
+                state.controlFrameCursor.clear();
+                state.controlTrackValues.clear();
+                state.controlTrackAnimators.clear();
+            }
+            if(std::find(_runtime->playingTimelineLabels.begin(),
+                         _runtime->playingTimelineLabels.end(),
+                         timelineLabel) == _runtime->playingTimelineLabels.end()) {
+                _runtime->playingTimelineLabels.push_back(timelineLabel);
+            }
+            if(state.totalFrames <= 0.0 && _runtime->activeMotion) {
+                const auto it =
+                    _runtime->activeMotion->timelineTotalFrames.find(timelineLabel);
+                if(it != _runtime->activeMotion->timelineTotalFrames.end()) {
+                    state.totalFrames = it->second;
+                }
+            }
+        };
+
+        bool started = false;
+        if(!label.IsEmpty()) {
+            const auto key = detail::narrow(label);
+            if(_runtime->timelines.find(key) != _runtime->timelines.end()) {
+                playOne(key);
+                started = true;
+            }
+        }
+
+        if(!started) {
+            const auto &primary =
+                !_runtime->activeMotion->mainTimelineLabels.empty()
+                    ? _runtime->activeMotion->mainTimelineLabels
+                    : _runtime->activeMotion->diffTimelineLabels;
+            for(const auto &timelineLabel : primary) {
+                playOne(timelineLabel);
+                started = true;
+            }
+        }
+
+        _allplaying = !_runtime->playingTimelineLabels.empty();
+        return started;
+    }
+
     tjs_error Player::playCompat(tTJSVariant *result, tjs_int numparams,
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
         if(result) {
@@ -316,12 +420,27 @@ namespace motion {
             }
         }
 
+        auto commitRequestedMotionLike_0x6B2380 = [&]() {
+            if(label.IsEmpty() || !self->_runtime->activeMotion) {
+                return;
+            }
+            if((flags & PlayFlagStealth) != 0) {
+                self->_stealthMotion = label;
+                return;
+            }
+            // Player_playImpl @ 0x6B2284 writes player+976 before
+            // Player_initNonEmoteMotion @ 0x6B365C. Player_getMotion_ncb
+            // @ 0x6D9544 then exposes that same slot to TJS.
+            self->_motionKey = label;
+        };
+
         // Aligned to libkrkr2.so Player_playImpl (0x6B2284) ->
         // Player_initNonEmoteMotion (0x6B365C): after loadMotion, the binary
         // synchronously calls Player_buildNodeTree (0x6B51F0) and
         // Player_initVariables (0x6CD750) before setting any playing state.
         // No lazy gate exists in the binary.
         self->ensureMotionLoaded();
+        commitRequestedMotionLike_0x6B2380();
         self->initNonEmoteMotionLike_0x6B365C(
             static_cast<std::uint32_t>(flags));
         if(self->_runtime->activeMotion && self->_runtime->timelines.empty()) {
@@ -332,6 +451,7 @@ namespace motion {
         if(!label.IsEmpty() && !self->_runtime->activeMotion) {
             self->setMotion(label);
             self->ensureMotionLoaded();
+            commitRequestedMotionLike_0x6B2380();
             self->initNonEmoteMotionLike_0x6B365C(
                 static_cast<std::uint32_t>(flags));
             if(self->_runtime->activeMotion && self->_runtime->timelines.empty()) {
@@ -412,6 +532,25 @@ namespace motion {
         }
 
         self->_allplaying = !self->_runtime->playingTimelineLabels.empty();
+
+        if(self->_runtime->activeMotion &&
+           detail::logoChainTraceEnabled(self->_runtime->activeMotion)) {
+            std::string playingLabels;
+            for(const auto &timelineLabel : self->_runtime->playingTimelineLabels) {
+                if(!playingLabels.empty()) {
+                    playingLabels += ",";
+                }
+                playingLabels += timelineLabel;
+            }
+            detail::logoChainTraceLogf(
+                self->_runtime->activeMotion->path, "playCompat", "0x6B2284",
+                self->_clampedEvalTime,
+                "label={} flags={} started={} timelineCount={} playingLabels={} allplaying={}",
+                detail::narrow(label), flags, started ? 1 : 0,
+                self->_runtime->timelines.size(),
+                playingLabels.empty() ? std::string("<none>") : playingLabels,
+                self->_allplaying ? 1 : 0);
+        }
 
         if(result) {
             *result = tTJSVariant(started);
