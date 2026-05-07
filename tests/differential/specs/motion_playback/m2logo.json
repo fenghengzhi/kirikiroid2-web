@@ -5,6 +5,42 @@
   "chara": "m2cheeseware_logo",
   "label": "back_white",
   "frames": 91,
+  "oracle_sanity": {
+    "playerCountRanges": [
+      {
+        "start": 0,
+        "end": 12,
+        "count": 1
+      },
+      {
+        "start": 12,
+        "end": 43,
+        "count": 5
+      },
+      {
+        "start": 43,
+        "end": 91,
+        "count": 1
+      }
+    ],
+    "layerCountRanges": [
+      {
+        "start": 0,
+        "end": 12,
+        "count": 31
+      },
+      {
+        "start": 12,
+        "end": 43,
+        "count": 39
+      },
+      {
+        "start": 43,
+        "end": 91,
+        "count": 31
+      }
+    ]
+  },
   "expected_trace": "traces/motion_playback/m2logo.oracle.json",
   "notes": "type0-only fixture covering the Phase 2 PlayerRender drawFlag-gate fix."
 }

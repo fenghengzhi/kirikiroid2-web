@@ -5,6 +5,23 @@
   "chara": "LOGO",
   "label": "yuzulogo",
   "frames": 241,
+  "oracle_sanity": {
+    "playerCount": 1,
+    "playerCountRanges": [
+      {
+        "start": 0,
+        "end": 241,
+        "count": 1
+      }
+    ],
+    "layerCountRanges": [
+      {
+        "start": 0,
+        "end": 241,
+        "count": 25
+      }
+    ]
+  },
   "expected_trace": "traces/motion_playback/yuzulogo.oracle.json",
   "notes": "type0-only fixture covering the Phase 2 PlayerRender drawFlag-gate fix."
 }

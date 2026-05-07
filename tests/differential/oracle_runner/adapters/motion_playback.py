@@ -31,6 +31,7 @@ the whole problem.
 from __future__ import annotations
 
 import json
+import math
 import re
 import shlex
 import subprocess
@@ -67,6 +68,9 @@ COMPARE_FIELDS_STR: tuple[str, ...] = ()
 # Frida trace by player pointer; the first segment is yuzulogo, second
 # is m2logo. Adapter-level contract: spec ids must be one of these.
 SEGMENT_ORDER: tuple[str, ...] = ("yuzulogo", "m2logo")
+TRACE_FLATTEN_PROJECTION = "trace_flatten-semantic-v1"
+TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
+TRACE_FLATTEN_ABS_FLOAT_LIMIT = 1_000_000.0
 
 
 # Deterministic oracle-recording xp3. Its startup.tjs runs fixed-step
@@ -741,11 +745,244 @@ def normalize_frame(frame: dict, index: int) -> dict:
     to the oracle schema consumed by the port-side motionTrace hook."""
     layers = []
     for layer in frame.get("layers", []):
-        layers.append({k: layer.get(k) for k in (
+        out = {k: layer.get(k) for k in (
             LAYER_FIELDS_NUM + LAYER_FIELDS_INT
             + LAYER_FIELDS_BOOL + LAYER_FIELDS_STR
-        )})
+        )}
+        if out.get("blendMode") is None and "stencilType" in layer:
+            out["blendMode"] = layer.get("stencilType")
+        for key in LAYER_FIELDS_STR:
+            if out.get(key) is None:
+                out[key] = ""
+        layers.append(out)
     return {"frame": index, "layers": layers}
+
+
+def _trace_flatten_frames(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        ev for ev in events
+        if ev.get("stage") == "trace_flatten" and ev.get("kind") == "frame"
+    ]
+
+
+def _segment_trace_flatten_frames(
+    frames: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    segments: list[dict[str, Any]] = []
+    for frame in frames:
+        diagnostics = frame.get("diagnostics") or {}
+        key = (
+            diagnostics.get("objthis")
+            or diagnostics.get("topPlayer")
+            or frame.get("objthis")
+            or frame.get("topPlayer")
+        )
+        if not segments or segments[-1]["player"] != key:
+            segments.append({"player": key, "frames": []})
+        segments[-1]["frames"].append(frame)
+    return segments
+
+
+def _sanity_count_for_frame(
+    spec: dict,
+    frame_index: int,
+    range_key: str,
+) -> int:
+    sanity = spec.get("oracle_sanity") or {}
+    ranges = sanity.get(range_key) or []
+    for item in ranges:
+        start = int(item.get("start", -1))
+        end = int(item.get("end", -1))
+        if start <= frame_index < end:
+            return int(item["count"])
+    raise RuntimeError(
+        f"strict oracle validation failed: case={spec.get('id')} "
+        f"frame={frame_index} has no oracle_sanity {range_key} entry")
+
+
+def _player_count_for_frame(spec: dict, frame_index: int) -> int:
+    sanity = spec.get("oracle_sanity") or {}
+    if sanity.get("playerCountRanges"):
+        return _sanity_count_for_frame(spec, frame_index, "playerCountRanges")
+    return int(sanity.get("playerCount", 1))
+
+
+def _layer_count_for_frame(spec: dict, frame_index: int) -> int:
+    return _sanity_count_for_frame(spec, frame_index, "layerCountRanges")
+
+
+def _strict_error(
+    *,
+    spec_id: str,
+    frame: dict[str, Any] | None,
+    local_frame: int,
+    error: str,
+) -> RuntimeError:
+    frame = frame or {}
+    diagnostics = frame.get("diagnostics") or {}
+    players = diagnostics.get("players") or []
+    first_player = players[0] if players else {}
+    layers = frame.get("layers") or []
+    return RuntimeError(
+        "strict motion_playback oracle validation failed: "
+        f"case={spec_id} "
+        f"localFrame={local_frame} "
+        f"frameId={frame.get('frameId')} "
+        f"player={first_player.get('ptr') or diagnostics.get('topPlayer')} "
+        f"layout={first_player.get('layout') or diagnostics.get('layout')} "
+        f"layerCount={len(layers)} "
+        f"error={error}"
+    )
+
+
+def _validate_trace_flatten_layer(
+    *,
+    spec_id: str,
+    frame: dict[str, Any],
+    local_frame: int,
+    layer_index: int,
+    layer: dict[str, Any],
+) -> None:
+    for key in LAYER_FIELDS_NUM:
+        value = layer.get(key)
+        if not isinstance(value, (int, float)) or \
+                not math.isfinite(float(value)) or \
+                abs(float(value)) > TRACE_FLATTEN_ABS_FLOAT_LIMIT:
+            raise _strict_error(
+                spec_id=spec_id, frame=frame, local_frame=local_frame,
+                error=(
+                    f"layer[{layer_index}].{key} invalid: "
+                    f"{value!r}"))
+
+    for key in ("index", "nodeType", "opacity", "stencilType"):
+        value = layer.get(key)
+        if not isinstance(value, int):
+            raise _strict_error(
+                spec_id=spec_id, frame=frame, local_frame=local_frame,
+                error=(
+                    f"layer[{layer_index}].{key} is not int: "
+                    f"{value!r}"))
+
+    for key in LAYER_FIELDS_BOOL:
+        value = layer.get(key)
+        if not isinstance(value, bool):
+            raise _strict_error(
+                spec_id=spec_id, frame=frame, local_frame=local_frame,
+                error=(
+                    f"layer[{layer_index}].{key} is not bool: "
+                    f"{value!r}"))
+
+    if layer.get("index") != layer_index:
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error=(
+                f"layer[{layer_index}].index mismatch: "
+                f"{layer.get('index')!r}"))
+    opacity = int(layer["opacity"])
+    if opacity < 0 or opacity > 255:
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error=f"layer[{layer_index}].opacity out of range: {opacity}")
+    node_type = int(layer["nodeType"])
+    if node_type < 0 or node_type > 32:
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error=f"layer[{layer_index}].nodeType out of range: {node_type}")
+    stencil_type = int(layer["stencilType"])
+    if abs(stencil_type) > 1024:
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error=(
+                f"layer[{layer_index}].stencilType out of range: "
+                f"{stencil_type}"))
+
+
+def _validate_trace_flatten_frame(
+    spec: dict,
+    frame: dict[str, Any],
+    local_frame: int,
+) -> None:
+    spec_id = str(spec["id"])
+    if frame.get("projection") != TRACE_FLATTEN_PROJECTION:
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error=f"unexpected projection: {frame.get('projection')!r}")
+    if frame.get("samplePoint") != TRACE_FLATTEN_SAMPLE_POINT:
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error=f"unexpected samplePoint: {frame.get('samplePoint')!r}")
+
+    diagnostics = frame.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error="missing diagnostics")
+    if diagnostics.get("error"):
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error=f"diagnostics.error: {diagnostics.get('error')}")
+
+    expected_player_count = _player_count_for_frame(spec, local_frame)
+    player_count = frame.get("playerCount")
+    if player_count != expected_player_count:
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error=(
+                f"playerCount mismatch: {player_count!r} != "
+                f"{expected_player_count}"))
+    players = diagnostics.get("players")
+    if not isinstance(players, list) or len(players) != expected_player_count:
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error=(
+                f"diagnostics.players count mismatch: "
+                f"{len(players) if isinstance(players, list) else None}"))
+    for player in players:
+        if player.get("layout") != "deque":
+            raise _strict_error(
+                spec_id=spec_id, frame=frame, local_frame=local_frame,
+                error=f"player layout is not deque: {player.get('layout')!r}")
+        if player.get("error"):
+            raise _strict_error(
+                spec_id=spec_id, frame=frame, local_frame=local_frame,
+                error=f"player error: {player.get('error')}")
+
+    layers = frame.get("layers")
+    if not isinstance(layers, list):
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error="layers is not a list")
+    expected_layer_count = _layer_count_for_frame(spec, local_frame)
+    if len(layers) != expected_layer_count:
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=local_frame,
+            error=(
+                f"layer count mismatch: {len(layers)} != "
+                f"{expected_layer_count}"))
+    for layer_index, layer in enumerate(layers):
+        if not isinstance(layer, dict):
+            raise _strict_error(
+                spec_id=spec_id, frame=frame, local_frame=local_frame,
+                error=f"layer[{layer_index}] is not an object")
+        _validate_trace_flatten_layer(
+            spec_id=spec_id,
+            frame=frame,
+            local_frame=local_frame,
+            layer_index=layer_index,
+            layer=layer,
+        )
+
+
+def _validate_trace_flatten_segment(spec: dict, frames: list[dict]) -> None:
+    wanted = int(spec["frames"])
+    spec_id = str(spec["id"])
+    if len(frames) != wanted:
+        frame = frames[-1] if frames else None
+        raise _strict_error(
+            spec_id=spec_id, frame=frame, local_frame=len(frames) - 1,
+            error=f"segment frame count mismatch: {len(frames)} != {wanted}")
+    for local_frame, frame in enumerate(frames):
+        _validate_trace_flatten_frame(spec, frame, local_frame)
 
 
 def record_all_oracles(
@@ -763,10 +1000,8 @@ def record_all_oracles(
     adapter deliberately records every spec in one go rather than per-
     spec. Returns `{spec_id: frames_list}`.
     """
-    from oracle_runner.frida_motion_tracer import (  # local import to
-        FridaMotionTracer,                           # keep disk-only
-        segment_by_player,                           # fast path free of
-    )                                                # frida dep.
+    # Local import keeps disk-only compare paths free of the frida dependency.
+    from oracle_runner.frida_motion_stage_tracer import FridaMotionStageTracer
 
     specs_by_id = {s["id"]: s for s in specs}
     unknown = [sid for sid in specs_by_id if sid not in SEGMENT_ORDER]
@@ -785,26 +1020,30 @@ def record_all_oracles(
 
     ensure_oracle_renderer_software(
         serial, remote_game=remote_game, write_global=False)
-    with FridaMotionTracer(engine, device_id=serial) as tracer:
-        tracer.start_record()
+    with FridaMotionStageTracer(engine, device_id=serial) as tracer:
+        tracer.start_record(["trace_flatten"])
+        engine.tjs_init()
         trigger_startup(engine, remote_game)
 
-        events = _wait_for_two_segments(
+        events = _wait_for_trace_flatten_segments(
             tracer, specs_by_id, timeout=playback_timeout,
             stabilise_seconds=5.0 if framebuffer_dir is not None else 2.0)
-
-        # Safety: ensure we actually stop before detaching.
-        tracer.stop_record()
-    segments = segment_by_player(events)
+    segments = _segment_trace_flatten_frames(_trace_flatten_frames(events))
     # Filter out any "warmup" segments that fire before startup.tjs's
     # own Motion.Player instances exist (e.g. if libkrkr2 runs an
     # internal Motion.Player for an intro clip). The startup.tjs
     # playback guarantees two Motion.Player instances with ≥ 60 frames
     # each; anything shorter is noise.
     substantive = [s for s in segments if len(s["frames"]) >= 30]
-    if len(substantive) < 2:
+    if set(specs_by_id) == set(SEGMENT_ORDER) and \
+            len(substantive) != len(SEGMENT_ORDER):
         raise RuntimeError(
-            f"only {len(substantive)} substantive player segment(s) "
+            f"expected exactly {len(SEGMENT_ORDER)} substantive "
+            f"trace_flatten segment(s), captured {len(substantive)} "
+            f"(raw segments: {[len(s['frames']) for s in segments]})")
+    if len(substantive) < len(specs_by_id):
+        raise RuntimeError(
+            f"only {len(substantive)} substantive trace_flatten segment(s) "
             f"captured (raw segments: {[len(s['frames']) for s in segments]}). "
             f"startup.tjs should produce two (yuzulogo + m2logo); check "
             f"logcat for Motion.Player creation or GL-surface failures.")
@@ -816,13 +1055,14 @@ def record_all_oracles(
         spec = specs_by_id[spec_id]
         wanted = int(spec["frames"])
         frames = substantive[i]["frames"]
-        if len(frames) < wanted:
+        if len(frames) != wanted:
             raise RuntimeError(
-                f"segment {i} ({spec_id}) only has {len(frames)} frames; "
-                f"spec requires {wanted}. Increase playback_timeout or "
-                f"check Motion.Player's per-motion frame count.")
+                f"segment {i} ({spec_id}) has {len(frames)} frames; "
+                f"spec requires exactly {wanted}. Check Motion.Player's "
+                f"per-motion frame count and startup.tjs determinism.")
+        _validate_trace_flatten_segment(spec, frames)
         results[spec_id] = [
-            normalize_frame(fr, fi) for fi, fr in enumerate(frames[:wanted])
+            normalize_frame(fr, fi) for fi, fr in enumerate(frames)
         ]
     if framebuffer_dir is not None:
         assert framebuffer_remote_root is not None
@@ -832,7 +1072,7 @@ def record_all_oracles(
     return results
 
 
-def _wait_for_two_segments(
+def _wait_for_trace_flatten_segments(
     tracer,
     specs_by_id: dict[str, dict],
     *,
@@ -840,17 +1080,15 @@ def _wait_for_two_segments(
     poll_interval: float = 0.4,
     stabilise_seconds: float = 2.0,
 ) -> list[dict]:
-    """Poll until we have ≥ len(specs) substantive player segments AND
+    """Poll until we have ≥ len(specs) substantive trace_flatten segments AND
     the event count has been stable for `stabilise_seconds`. Returns the
     full event list.
 
     We can't peek at the buffer incrementally (rpc.exports round-trips
-    freeze the whole array), so we only call stop_record() on the final
-    return. Intermediate polls use `event_count` which is cheap (one
-    integer over RPC).
+    freeze the whole array), so we only call stop_record() once the frame
+    count has stabilised. Intermediate polls use `event_count` which is cheap
+    (one integer over RPC).
     """
-    from oracle_runner.frida_motion_tracer import segment_by_player
-
     needed_substantive = len(specs_by_id)
     needed_frames = sum(int(s["frames"]) for s in specs_by_id.values())
 
@@ -867,13 +1105,16 @@ def _wait_for_two_segments(
         if stable_since is not None and \
                 time.time() - stable_since >= stabilise_seconds:
             events = tracer.stop_record()
-            segments = segment_by_player(events)
+            segments = _segment_trace_flatten_frames(
+                _trace_flatten_frames(events))
             substantive = [s for s in segments if len(s["frames"]) >= 30]
             if len(substantive) >= needed_substantive:
                 return events
-            # Not enough yet; resume recording and keep waiting.
-            tracer.start_record()
-            stable_since = None
+            raise RuntimeError(
+                f"trace_flatten frame count stabilised at "
+                f"{len(_trace_flatten_frames(events))}, but only "
+                f"{len(substantive)} substantive segment(s) were captured "
+                f"(raw segments: {[len(s['frames']) for s in segments]})")
         time.sleep(poll_interval)
     raise RuntimeError(
         f"motion playback did not stabilise within {timeout}s "

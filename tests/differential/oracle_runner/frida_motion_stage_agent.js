@@ -55,6 +55,8 @@ const INIT_MOTION_SAMPLE_POINTS = {
 
 const TRACE_FLATTEN_PROJECTION = 'trace_flatten-semantic-v1';
 const TRACE_FLATTEN_SAMPLE_POINT = 'progressCompat.phase3-end.pre-cleanup';
+const TRACE_FLATTEN_MAX_NODES = 512;
+const TRACE_FLATTEN_ABS_FLOAT_LIMIT = 1000000.0;
 const FRAME_SELECTION_SPEC = __FRAME_SELECTION_PROJECTION_JSON__;
 const FRAME_SELECTION_PROJECTION = FRAME_SELECTION_SPEC.projection;
 const FRAME_SELECTION_SAMPLE_POINT = FRAME_SELECTION_SPEC.samplePoint;
@@ -264,6 +266,26 @@ function readPointer(p, off) {
         return q.isNull() ? null : q;
     } catch (e) {
         return null;
+    }
+}
+
+function hasReadableBytes(p, byteCount) {
+    try {
+        const q = ptr(p);
+        const range = Process.findRangeByAddress(q);
+        if (range === null || range.protection.indexOf('r') < 0) return false;
+        const start = ptrToNumber(q);
+        const rangeStart = ptrToNumber(range.base);
+        const rangeEnd = rangeStart + range.size;
+        return start >= rangeStart && start + byteCount <= rangeEnd;
+    } catch (e) {
+        return false;
+    }
+}
+
+function requireReadable(p, byteCount, name) {
+    if (!hasReadableBytes(p, byteCount)) {
+        throw new Error(name + ' is not readable: ' + ptrHex(p));
     }
 }
 
@@ -1379,13 +1401,21 @@ function parameterTableChanges(before, after) {
     return changes;
 }
 
-function walkDeque(playerPtr, stride) {
+function walkDeque(playerPtr, stride, options) {
+    const strict = !!(options && options.strict);
+    const fail = (message) => {
+        if (strict) throw new Error(message);
+        return null;
+    };
     const player = ptr(playerPtr);
+    if (strict) requireReadable(player, 264, 'Player');
     const startCurPtr = player.add(200).readPointer();
     const startFirstPtr = player.add(208).readPointer();
     const startLastPtr = player.add(216).readPointer();
     const startNodePtr = player.add(224).readPointer();
     const finishCurPtr = player.add(232).readPointer();
+    const finishFirstPtr = player.add(240).readPointer();
+    const finishLastPtr = player.add(248).readPointer();
     const finishNodePtr = player.add(256).readPointer();
 
     const startCur = ptrToNumber(startCurPtr);
@@ -1393,29 +1423,68 @@ function walkDeque(playerPtr, stride) {
     const startLast = ptrToNumber(startLastPtr);
     const startNode = ptrToNumber(startNodePtr);
     const finishCur = ptrToNumber(finishCurPtr);
+    const finishFirst = ptrToNumber(finishFirstPtr);
+    const finishLast = ptrToNumber(finishLastPtr);
     const finishNode = ptrToNumber(finishNodePtr);
 
-    if (startCur === 0 || finishCur === 0) return null;
-    if (startNode === 0 || finishNode === 0) return null;
-    if (finishNode < startNode) return null;
+    if (startCur === 0 || finishCur === 0) {
+        return fail('Node deque has null current pointer');
+    }
+    if (startFirst === 0 || startLast === 0 ||
+            finishFirst === 0 || finishLast === 0) {
+        return fail('Node deque has null block boundary pointer');
+    }
+    if (startNode === 0 || finishNode === 0) {
+        return fail('Node deque has null map iterator');
+    }
+    if (finishNode < startNode) {
+        return fail('Node deque finish node precedes start node');
+    }
+    if ((finishNode - startNode) % 8 !== 0) {
+        return fail('Node deque map span is not pointer-aligned');
+    }
+    const mapEntries = Math.floor((finishNode - startNode) / 8) + 1;
+    if (mapEntries <= 0 || mapEntries > TRACE_FLATTEN_MAX_NODES) {
+        return fail('Node deque map entry count out of range: ' + mapEntries);
+    }
+    if (!(startFirst <= startCur && startCur <= startLast)) {
+        return fail('Node deque start cursor is outside its block');
+    }
+    if (!(finishFirst <= finishCur && finishCur <= finishLast)) {
+        return fail('Node deque finish cursor is outside its block');
+    }
+    if (strict) {
+        requireReadable(startNodePtr, 8, 'Node deque start map iterator');
+        requireReadable(finishNodePtr, 8, 'Node deque finish map iterator');
+    }
 
     let bufElems = 1;
     if (startLast > startFirst) {
         const span = startLast - startFirst;
         if (span % stride === 0 && span > 0) {
             bufElems = Math.floor(span / stride);
+        } else if (strict) {
+            return fail('Node deque block span is not a stride multiple');
         }
     }
-    if (bufElems < 1) bufElems = 1;
+    if (bufElems < 1 || bufElems > TRACE_FLATTEN_MAX_NODES) {
+        return fail('Node deque block element count out of range: ' + bufElems);
+    }
 
     const nodes = [];
     let mapIter = startNodePtr;
     let safety = 0;
     while (ptrToNumber(mapIter) <= ptrToNumber(finishNodePtr)) {
-        if (++safety > 4096) break;
+        if (++safety > TRACE_FLATTEN_MAX_NODES) {
+            return fail('Node deque map walk exceeded safety limit');
+        }
+        if (strict) requireReadable(mapIter, 8, 'Node deque map entry');
         const blockPtr = mapIter.readPointer();
         const blockRaw = ptrToNumber(blockPtr);
-        if (blockRaw === 0) break;
+        if (blockRaw === 0) return fail('Node deque block pointer is null');
+        if (strict) {
+            requireReadable(blockPtr, stride, 'Node deque block');
+        }
         let first = 0;
         let last = bufElems;
         if (ptrToNumber(mapIter) === startNode) {
@@ -1424,10 +1493,26 @@ function walkDeque(playerPtr, stride) {
         if (ptrToNumber(mapIter) === finishNode) {
             last = Math.floor((finishCur - blockRaw) / stride);
         }
+        if (first < 0 || last < first || last > bufElems) {
+            return fail(
+                'Node deque block cursor range is invalid: first=' +
+                first + ' last=' + last + ' bufElems=' + bufElems
+            );
+        }
         for (let k = first; k < last; k++) {
-            nodes.push(blockPtr.add(k * stride));
+            const node = blockPtr.add(k * stride);
+            if (strict) {
+                requireReadable(node, NODE_OFF.opacity + 4, 'Node');
+            }
+            nodes.push(node);
+            if (nodes.length > TRACE_FLATTEN_MAX_NODES) {
+                return fail('Node count exceeded strict trace limit');
+            }
         }
         mapIter = mapIter.add(8);
+    }
+    if (strict && nodes.length === 0) {
+        return fail('Node deque produced zero nodes');
     }
     return nodes;
 }
@@ -1451,6 +1536,57 @@ function readNodeAccum(nodePtr) {
         opacity: readS32(node, NODE_OFF.opacity),
         stencilType: readS32(node, NODE_OFF.stencilType),
     };
+}
+
+function validateTraceFlattenLayer(layer, index, nodePtr) {
+    const intFields = ['nodeType', 'opacity', 'stencilType'];
+    const boolFields = ['active', 'visible', 'flipX', 'flipY'];
+    const numFields = [
+        'posX', 'posY', 'posZ', 'angleDeg',
+        'scaleX', 'scaleY', 'slantX', 'slantY',
+    ];
+    for (const field of intFields) {
+        if (!Number.isInteger(layer[field])) {
+            throw new Error(
+                'Node ' + index + ' field ' + field +
+                ' is not an integer at ' + ptrHex(nodePtr)
+            );
+        }
+    }
+    for (const field of boolFields) {
+        if (typeof layer[field] !== 'boolean') {
+            throw new Error(
+                'Node ' + index + ' field ' + field +
+                ' is not boolean at ' + ptrHex(nodePtr)
+            );
+        }
+    }
+    for (const field of numFields) {
+        const value = layer[field];
+        if (typeof value !== 'number' || !Number.isFinite(value) ||
+                Math.abs(value) > TRACE_FLATTEN_ABS_FLOAT_LIMIT) {
+            throw new Error(
+                'Node ' + index + ' field ' + field +
+                ' is invalid: ' + value + ' at ' + ptrHex(nodePtr)
+            );
+        }
+    }
+    if (layer.opacity < 0 || layer.opacity > 255) {
+        throw new Error(
+            'Node ' + index + ' opacity out of range: ' + layer.opacity
+        );
+    }
+    if (layer.nodeType < 0 || layer.nodeType > 32) {
+        throw new Error(
+            'Node ' + index + ' nodeType out of range: ' + layer.nodeType
+        );
+    }
+    if (Math.abs(layer.stencilType) > 1024) {
+        throw new Error(
+            'Node ' + index + ' stencilType out of range: ' +
+            layer.stencilType
+        );
+    }
 }
 
 function readNodeBrief(nodePtr, index) {
@@ -1481,13 +1617,17 @@ function readNodeBrief(nodePtr, index) {
     };
 }
 
-function walkNodes(playerPtr) {
+function walkNodes(playerPtr, options) {
+    const strict = !!(options && options.strict);
     try {
-        const nodes = walkDeque(playerPtr, NODE_STRIDE);
+        const nodes = walkDeque(playerPtr, NODE_STRIDE, options);
         if (nodes !== null && nodes.length > 0) {
             const layers = [];
             for (let i = 0; i < nodes.length; i++) {
                 const accum = readNodeAccum(nodes[i]);
+                if (strict) {
+                    validateTraceFlattenLayer(accum, i, nodes[i]);
+                }
                 accum.index = i;
                 layers.push(accum);
             }
@@ -1495,6 +1635,14 @@ function walkNodes(playerPtr) {
         }
     } catch (e) {
         return { layout: 'deque-error', error: String(e), layers: [], nodeCount: 0 };
+    }
+    if (strict) {
+        return {
+            layout: 'deque-error',
+            error: 'strict trace_flatten requires a valid Node deque',
+            layers: [],
+            nodeCount: 0,
+        };
     }
     const rootPtr = readPointer(ptr(playerPtr), 200);
     if (rootPtr === null) return { layout: 'empty', layers: [], nodeCount: 0 };
@@ -1978,7 +2126,7 @@ function installHook() {
             if (!inCompat || !recording) return;
             const player = this.player;
             try {
-                const w = walkNodes(player);
+                const w = walkNodes(player, { strict: true });
                 samplesInFrame.push({
                     player: player,
                     layout: w.layout,

@@ -1,4 +1,8 @@
-// Frida agent for the motion_playback oracle family.
+// Legacy Frida agent for the motion_playback oracle family.
+//
+// Fresh CI oracle recording uses frida_motion_stage_agent.js trace_flatten
+// with strict validation. Keep this file only for historical debugging of the
+// original best-effort per-frame layer walker.
 //
 // Unlike `frida_agent.js` (which captures AAPCS64 register snapshots at
 // generic call boundaries for the other 4 adapter families), this agent
