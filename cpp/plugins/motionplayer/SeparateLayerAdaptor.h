@@ -14,16 +14,16 @@ namespace motion {
 
     class SeparateLayerAdaptor {
     public:
-        explicit SeparateLayerAdaptor(tTJSVariant owner = {});
+        explicit SeparateLayerAdaptor(tTJSVariant targetLayer = {});
         ~SeparateLayerAdaptor();
 
         static tjs_error factory(SeparateLayerAdaptor **result, tjs_int numparams,
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
-            tTJSVariant owner;
+            tTJSVariant targetLayer;
             if(numparams > 0 && param[0]) {
-                owner = *param[0];
+                targetLayer = *param[0];
             }
-            if(result) *result = new SeparateLayerAdaptor(owner);
+            if(result) *result = new SeparateLayerAdaptor(targetLayer);
             return TJS_S_OK;
         }
 

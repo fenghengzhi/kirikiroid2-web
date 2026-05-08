@@ -17,16 +17,32 @@ namespace {
             ownerInterface.Type() != tvtVoid;
     }
 
-    iTJSDispatch2 *createPrivateLayerObjectLike_0x800438(
-        const tTJSVariant &ownerVariant,
-        iTJSDispatch2 *targetLayerObject) {
-        if(ownerVariant.Type() != tvtObject || !ownerVariant.AsObjectNoAddRef() ||
-           !targetLayerObject) {
+    iTJSDispatch2 *resolveLayerTreeOwnerObjectLike_0x800438(
+        const tTJSVariant &ownerVariant) {
+        if(ownerVariant.Type() != tvtObject || !ownerVariant.AsObjectNoAddRef()) {
             return nullptr;
         }
-        // libkrkr2.so PrivateMotionGLL constructor @ 0x800438 keeps the
-        // original owner closure for PropGet("layerTreeOwnerInterface").
         if(!hasLayerTreeOwnerInterfaceLike_0x800438(ownerVariant)) {
+            return nullptr;
+        }
+
+        // Native PrivateMotionGLL @ 0x800438 uses owner.ObjThis when present,
+        // otherwise owner.Object, for layerTreeOwnerInterface. The Web port's
+        // public Layer constructor needs that owner dispatch as its first arg.
+        const auto closure = ownerVariant.AsObjectClosureNoAddRef();
+        if(closure.ObjThis) {
+            return closure.ObjThis;
+        }
+        if(closure.Object) {
+            return closure.Object;
+        }
+        return ownerVariant.AsObjectNoAddRef();
+    }
+
+    iTJSDispatch2 *createLayerObjectForPrivateMotionGLLLike_0x800438(
+        iTJSDispatch2 *layerTreeOwnerObject,
+        iTJSDispatch2 *parentLayerObject) {
+        if(!layerTreeOwnerObject) {
             return nullptr;
         }
 
@@ -35,17 +51,40 @@ namespace {
             return nullptr;
         }
 
-        tTJSVariant ownerArg(ownerVariant);
-        tTJSVariant parentArg(targetLayerObject, targetLayerObject);
-        tTJSVariant *args[] = { &ownerArg, &parentArg };
-
         iTJSDispatch2 *created = nullptr;
-        if(TJS_FAILED(layerClassVar.AsObjectNoAddRef()->CreateNew(
-               0, nullptr, nullptr, &created, 2, args,
-               layerClassVar.AsObjectNoAddRef()))) {
+        tTJSVariant ownerVar(layerTreeOwnerObject, layerTreeOwnerObject);
+        tTJSVariant parentVar =
+            parentLayerObject ? tTJSVariant(parentLayerObject, parentLayerObject)
+                              : tTJSVariant();
+        tTJSVariant *args[] = { &ownerVar, &parentVar };
+        const tjs_error hr = layerClassVar.AsObjectNoAddRef()->CreateNew(
+            0, nullptr, nullptr, &created, 2, args,
+            layerClassVar.AsObjectNoAddRef());
+        if(TJS_FAILED(hr)) {
             return nullptr;
         }
         return created;
+    }
+
+    iTJSDispatch2 *createPrivateLayerObjectLike_0x800438(
+        const tTJSVariant &ownerVariant,
+        iTJSDispatch2 *targetLayerObject) {
+        if(ownerVariant.Type() != tvtObject || !ownerVariant.AsObjectNoAddRef() ||
+           !targetLayerObject) {
+            return nullptr;
+        }
+        // libkrkr2.so PrivateMotionGLL constructor @ 0x800438 reads
+        // owner.layerTreeOwnerInterface from the original owner closure, then
+        // creates the backing layer from that layer-tree owner. The local Layer
+        // public constructor needs the owner dispatch rather than the raw
+        // interface pointer, so pass through the same owner closure boundary.
+        auto *layerTreeOwnerObject =
+            resolveLayerTreeOwnerObjectLike_0x800438(ownerVariant);
+        if(!layerTreeOwnerObject) {
+            return nullptr;
+        }
+        return createLayerObjectForPrivateMotionGLLLike_0x800438(
+            layerTreeOwnerObject, targetLayerObject);
     }
 
 } // namespace

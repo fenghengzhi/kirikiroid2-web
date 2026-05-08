@@ -5,6 +5,21 @@ using namespace motion::internal;
 
 namespace {
 
+    tTJSVariant separateLayerOwnerLike_0x6C69D4(
+        const tTJSVariant &targetLayer) {
+        tTJSVariant owner;
+        if(targetLayer.Type() != tvtObject || !targetLayer.AsObjectNoAddRef()) {
+            return owner;
+        }
+
+        // SeparateLayerAdaptor_ctor @ 0x6C69D4 stores target.window at SLA+0
+        // and stores the original target layer variant at SLA+20.
+        auto *targetObject = targetLayer.AsObjectNoAddRef();
+        targetObject->PropGet(0, TJS_W("window"), nullptr, &owner,
+                              targetObject);
+        return owner;
+    }
+
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject) {
         if(!layerObject) {
             return nullptr;
@@ -59,8 +74,9 @@ namespace {
 
 namespace motion {
 
-    SeparateLayerAdaptor::SeparateLayerAdaptor(tTJSVariant owner)
-        : _owner(owner), _targetLayer(owner) {}
+    SeparateLayerAdaptor::SeparateLayerAdaptor(tTJSVariant targetLayer)
+        : _owner(separateLayerOwnerLike_0x6C69D4(targetLayer)),
+          _targetLayer(targetLayer) {}
 
     SeparateLayerAdaptor::~SeparateLayerAdaptor() { clearPrivateRenderState(); }
 
