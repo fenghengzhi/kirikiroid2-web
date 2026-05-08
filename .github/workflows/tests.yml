@@ -144,7 +144,7 @@ jobs:
         run: cmake --preset "Wasmtime Headless Debug Config" -DENABLE_TESTS=ON -DBUILD_TOOLS=OFF -DKRKR2_WEB_DEBUG_ENABLE_ASAN=OFF
 
       - name: Build motion playback Wasmtime target
-        run: cmake --build out/wasmtime/debug --target motion_playback_wasmtime
+        run: cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest
 
       - name: Run motion playback state diff
-        run: python3 tests/differential/python/run_motion_playback_wasmtime.py --strict-missing-trace --wasm out/wasmtime/debug/tests/differential/wasmtime/motion_playback_wasmtime.wasm
+        run: python3 tests/differential/python/run_motion_playback_wasmtime.py --strict-missing-trace --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm

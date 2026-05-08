@@ -52,10 +52,10 @@ Current oracle-runner side status:
   `TVPMainScene::startupFrom(const std::string&)`. This avoids the old
   Python-side fake `std::string` ABI risk.
 - The recording fixture is `reference/xp3/logo_test_oracle.xp3`, a
-  deterministic wrapper around the two shared `.mtn` files. It plays
-  `yuzulogo.mtn` first, then `m2logo.mtn`, using fixed
-  `player.progress(1000/60)` steps so the recorded frame counts match
-  the specs.
+  deterministic wrapper around the `logo_test.xp3` playback path. It
+  preserves the KAGParser `[ev]` / `[ev waitmovie]` boundary and drives
+  `.mtn` playback through `AffineLayer` / `AffineSourceMotion` / `onPaint`,
+  using fixed delta timing so the recorded segments match the specs.
 - `FridaMotionTracer` attaches to the harness process and the in-process
   JS agent hooks `Motion.Player.progress` and `Player_updateLayers`.
   Recording happens from natural playback on the GL thread; the host
@@ -83,9 +83,9 @@ What it does not prove yet:
 - `label` and `currentImage` in the current motion oracle schema are not
   populated with authoritative runtime names/textures, so texture
   identity and source image selection are not covered.
-- The deterministic wrapper uses fixed-step `progress()` calls; it does
-  not prove the original `logo_test.xp3` real-time scheduling path or
-  wall-clock timing behaviour.
+- The deterministic wrapper now uses the same AffineSourceMotion playback
+  path as `logo_test.xp3`, but still fixes delta timing; it does not prove
+  the original wall-clock timing behaviour.
 - Normal push CI validates the Wasmtime port trace against the checked-in
   `motion_playback` goldens. Re-recording those goldens from libkrkr2
   remains opt-in via `run_motion_playback.py --record-oracle`; the

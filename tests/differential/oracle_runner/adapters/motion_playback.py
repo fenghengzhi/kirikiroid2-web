@@ -2,7 +2,7 @@
 
 Two modes:
   * Live oracle (`record_all_oracles`): attach Frida to the APK harness,
-    drop `logo_test.xp3` on the device, trigger
+    drop `logo_test_oracle.xp3` on the device, trigger
     `TVPMainScene::startupFrom` via the harness-RPC engine (pure
     scheduler call; doesn't touch GL thread state), and let the embedded
     `startup.tjs` play yuzulogo then m2logo on the cocos2d GL thread.
@@ -73,18 +73,18 @@ TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
 TRACE_FLATTEN_ABS_FLOAT_LIMIT = 1_000_000.0
 
 
-# Deterministic oracle-recording xp3. Its startup.tjs runs fixed-step
-# AffineSourceMotion-shaped frames (241 for yuzulogo, 91 for m2logo):
-# progress(delta) -> setDrawAffineTranslateMatrix(...) -> completionType ->
-# draw(motionWorkLayer) -> assignImages(base). The Browser-WASM verifier
-# loads this same xp3 and collects the port-side `motionTrace=1` samples,
-# instead of using logo_test.xp3's real-time variable-step doFrame. Sources
-# live in the reference submodule (reference/xp3/logo_test_oracle/startup.tjs
-# + the shared mtn files in reference/xp3/logo_test/). Regenerate via
+# Deterministic oracle-recording xp3. Its startup.tjs keeps the same
+# KAGParser -> AffineLayer -> AffineSourceMotion -> onPaint() playback path
+# as logo_test.xp3, with fixed delta timing so fresh oracles remain
+# comparable. The Browser-WASM verifier loads this same xp3 and collects the
+# port-side `motionTrace=1` samples. Sources live in the reference submodule
+# (reference/xp3/logo_test_oracle/startup.tjs + the shared logo_test
+# scripts/assets). Regenerate via
 # `tests/differential/oracle_runner/fixtures/build_logo_test_oracle.sh`
 # whenever the spec frame counts change.
 _LOGO_TEST_XP3_REL = "reference/xp3/logo_test_oracle.xp3"
 _REMOTE_APP_FILES_DIR = "/sdcard/Android/data/org.github.krkr2/files"
+_REMOTE_STARTUP_FILES_DIR = "/data/user/0/org.github.krkr2/files"
 ORACLE_RENDERER = "software"
 ORACLE_RENDERER_SOURCE = "explicit-oracle-preference"
 _ORACLE_GLOBAL_PREFERENCE_PATH = (
@@ -285,9 +285,11 @@ def _ensure_logo_test_xp3_pushed(serial: str | None) -> str:
             f"oracle bootstrap xp3 missing: {local}. "
             f"Build it via tests/differential/oracle_runner/fixtures/"
             f"build_logo_test_oracle.sh (requires the xp3pack tool).")
-    # app's scoped-storage dir: write access guaranteed on API 29+.
-    remote_dir = _REMOTE_APP_FILES_DIR
-    _adb_shell(serial, f"mkdir -p {remote_dir}")
+    # Use the internal app files dir for startup assets/preferences. On API31
+    # the external scoped-storage preference file can be root-owned after adb
+    # setup and unreadable to the app under SELinux.
+    remote_dir = _REMOTE_STARTUP_FILES_DIR
+    _adb_shell_root(serial, ["mkdir", "-p", remote_dir])
     remote_path = f"{remote_dir}/logo_test_oracle.xp3"
     push_fixture(serial, local, remote_path)
     return remote_path
@@ -318,14 +320,7 @@ def _prepare_framebuffer_capture(
                 f"{shlex.quote(remote_capture_root + '/' + spec_id + '/' + phase)}",
             )
 
-    local_xp3 = Path(__file__).resolve().parents[4] / _LOGO_TEST_XP3_REL
-    if not local_xp3.exists():
-        raise FileNotFoundError(
-            f"reference oracle XP3 missing: {local_xp3}. Regenerate with "
-            "tests/differential/oracle_runner/fixtures/"
-            "build_logo_test_oracle.sh")
-    remote_xp3 = f"{_REMOTE_APP_FILES_DIR}/logo_test_oracle.xp3"
-    push_fixture(serial, local_xp3, remote_xp3)
+    remote_xp3 = _ensure_logo_test_xp3_pushed(serial)
     return remote_xp3, remote_capture_root
 
 
@@ -354,14 +349,7 @@ def _prepare_render_stage_capture(
                 f"{shlex.quote(remote_capture_root + '/' + spec_id + '/' + phase)}",
             )
 
-    local_xp3 = Path(__file__).resolve().parents[4] / _LOGO_TEST_XP3_REL
-    if not local_xp3.exists():
-        raise FileNotFoundError(
-            f"reference oracle XP3 missing: {local_xp3}. Regenerate with "
-            "tests/differential/oracle_runner/fixtures/"
-            "build_logo_test_oracle.sh")
-    remote_xp3 = f"{_REMOTE_APP_FILES_DIR}/logo_test_oracle.xp3"
-    push_fixture(serial, local_xp3, remote_xp3)
+    remote_xp3 = _ensure_logo_test_xp3_pushed(serial)
     return remote_xp3, remote_capture_root
 
 
@@ -1048,8 +1036,8 @@ def record_all_oracles(
 ) -> dict[str, list[dict]]:
     """Capture per-frame layer state for all specs in a single playback.
 
-    `logo_test.xp3`'s startup.tjs plays yuzulogo then m2logo back-to-
-    back; we can only trigger startupFrom once per session, so this
+    `logo_test_oracle.xp3`'s startup.tjs plays yuzulogo then m2logo
+    back-to-back; we can only trigger startupFrom once per session, so this
     adapter deliberately records every spec in one go rather than per-
     spec. Returns `{spec_id: frames_list}`.
     """

@@ -1765,14 +1765,14 @@ def partition_port_frames(
         spec = specs_by_id[spec_id]
         wanted = int(spec["frames"])
         frames = substantive[i]["frames"]
-        if len(frames) < wanted:
+        if len(frames) != wanted:
             raise RuntimeError(
                 f"Wasmtime segment {i} ({spec_id}) has "
-                f"{len(frames)} frames; spec requires {wanted}."
+                f"{len(frames)} frames; spec requires exactly {wanted}."
             )
         results[spec_id] = [
             mpb.normalize_frame(fr, fi)
-            for fi, fr in enumerate(frames[:wanted])
+            for fi, fr in enumerate(frames)
         ]
     return results
 
@@ -1831,11 +1831,11 @@ def render_case_segments(
                 f"missing Wasmtime segment for render stage case {spec_id}")
         wanted = int(spec["frames"])
         frames = substantive[i]["frames"]
-        if len(frames) < wanted:
+        if len(frames) != wanted:
             raise RuntimeError(
                 f"Wasmtime segment {i} ({spec_id}) has {len(frames)} frame(s); "
-                f"render stage capture requires {wanted}.")
-        selected = frames[:wanted]
+                f"render stage capture requires exactly {wanted}.")
+        selected = frames
         frame_ids = [int(frame["frameId"]) for frame in selected]
         out.append({
             "caseId": spec_id,

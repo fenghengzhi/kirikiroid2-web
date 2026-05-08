@@ -4,20 +4,20 @@
   "mtn_path": "reference/xp3/logo_test/yuzulogo.mtn",
   "chara": "LOGO",
   "label": "yuzulogo",
-  "frames": 241,
+  "frames": 243,
   "oracle_sanity": {
     "playerCount": 1,
     "playerCountRanges": [
       {
         "start": 0,
-        "end": 241,
+        "end": 243,
         "count": 1
       }
     ],
     "layerCountRanges": [
       {
         "start": 0,
-        "end": 241,
+        "end": 243,
         "count": 25
       }
     ]

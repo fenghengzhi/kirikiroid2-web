@@ -303,14 +303,14 @@ def partition_port_frames(events: list[dict], specs: list[dict], mpb) -> dict:
         spec = specs_by_id[spec_id]
         wanted = int(spec["frames"])
         frames = substantive[i]["frames"]
-        if len(frames) < wanted:
+        if len(frames) != wanted:
             raise RuntimeError(
                 f"Browser-WASM segment {i} ({spec_id}) has "
-                f"{len(frames)} frames; spec requires {wanted}."
+                f"{len(frames)} frames; spec requires exactly {wanted}."
             )
         results[spec_id] = [
             mpb.normalize_frame(fr, fi)
-            for fi, fr in enumerate(frames[:wanted])
+            for fi, fr in enumerate(frames)
         ]
     return results
 

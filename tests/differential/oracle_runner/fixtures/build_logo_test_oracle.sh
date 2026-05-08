@@ -2,8 +2,9 @@
 # Repack reference/xp3/logo_test.xp3 and logo_test_oracle.xp3 from their
 # sources in the `reference` submodule. The live fixture is a minimal Senren
 # logo repro that preserves the .ks-facing [ev]/[waitmovie] boundary and then
-# delegates motion to the game's AffineSourceMotion.tjs; the oracle fixture
-# keeps deterministic frame counts for differential recording.
+# delegates motion to the game's AffineSourceMotion.tjs. The oracle fixture
+# uses the same KAG/AffineSourceMotion playback path with deterministic delta
+# timing for differential recording.
 #
 # Sources live in the submodule so they travel alongside the other
 # reference assets (.mtn files, the original logo_test.xp3, etc):
@@ -49,11 +50,15 @@ rm -f "$OUT" "$OUT_LIVE"
 # shipping the file under `logo_test/startup.tjs` makes it invisible and
 # cocos2d silently does nothing after mounting (reproducible: 0 Frida
 # events, no "Loading startup script" log line).
-"$XP3PACK" -o "$OUT" \
-    --map \
-        "startup.tjs=$SRC_TJS" \
-        "yuzulogo.mtn=$SRC_MTN_DIR/yuzulogo.mtn" \
-        "m2logo.mtn=$SRC_MTN_DIR/m2logo.mtn"
+oracle_maps=("startup.tjs=$SRC_TJS")
+while IFS= read -r -d '' file; do
+    rel="${file#$SRC_LIVE_DIR/}"
+    if [[ "$rel" == "startup.tjs" ]]; then
+        continue
+    fi
+    oracle_maps+=("$rel=$file")
+done < <(find "$SRC_LIVE_DIR" -type f -print0 | sort -z)
+"$XP3PACK" -o "$OUT" --map "${oracle_maps[@]}"
 
 (
     cd "$SRC_LIVE_DIR"

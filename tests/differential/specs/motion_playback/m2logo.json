@@ -4,7 +4,7 @@
   "mtn_path": "reference/xp3/logo_test/m2logo.mtn",
   "chara": "m2cheeseware_logo",
   "label": "back_white",
-  "frames": 91,
+  "frames": 93,
   "oracle_sanity": {
     "playerCountRanges": [
       {
@@ -21,6 +21,11 @@
         "start": 43,
         "end": 91,
         "count": 1
+      },
+      {
+        "start": 91,
+        "end": 93,
+        "count": 5
       }
     ],
     "layerCountRanges": [
@@ -38,6 +43,11 @@
         "start": 43,
         "end": 91,
         "count": 31
+      },
+      {
+        "start": 91,
+        "end": 93,
+        "count": 35
       }
     ]
   },
