@@ -1,5 +1,4 @@
 wasmtime
-playwright
 PyOpenGL
 glfw
 Pillow

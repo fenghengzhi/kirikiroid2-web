@@ -16,7 +16,7 @@ Two modes:
     section in /Users/bytedance/.claude/plans/
     oracle-runner-panda-floofy-garden.md.
 
-  * Disk oracle (`run_case`): compare Browser-WASM port trace output
+  * Disk oracle (`run_case`): compare supplied port trace frames
     against a checked-in golden JSON. No Android device is required.
 
 Previous revisions of this file shipped a TJS snapshot script executed
@@ -49,11 +49,11 @@ from oracle_runner.motion_capture_window import (
 from oracle_runner.png_artifacts import png_manifest_entry
 
 
-# Schema fields, kept in sync with the Browser-WASM motionTrace hook.
+# Schema fields, kept in sync with the port-side motion trace schema.
 # The default golden diff intentionally compares Motion node state only.
 # Strings/images and draw diagnostics are kept in JSON snapshots to aid
-# investigation, but libkrkr2's Frida trace and the Browser-WASM port trace
-# do not need their diagnostic labels to match byte-for-byte for state parity.
+# investigation, but libkrkr2's Frida trace and the Wasmtime port trace do not
+# need their diagnostic labels to match byte-for-byte for state parity.
 LAYER_FIELDS_NUM = (
     "posX", "posY", "posZ", "angleDeg",
     "scaleX", "scaleY", "slantX", "slantY",
@@ -76,8 +76,8 @@ TRACE_FLATTEN_ABS_FLOAT_LIMIT = 1_000_000.0
 # Deterministic oracle-recording xp3. Its startup.tjs keeps the same
 # KAGParser -> AffineLayer -> AffineSourceMotion -> onPaint() playback path
 # as logo_test.xp3, with fixed delta timing so fresh oracles remain
-# comparable. The Browser-WASM verifier loads this same xp3 and collects the
-# port-side `motionTrace=1` samples. Sources live in the reference submodule
+# comparable. The Wasmtime verifier loads this same xp3 and collects the
+# port-side trace samples. Sources live in the reference submodule
 # (reference/xp3/logo_test_oracle/startup.tjs + the shared logo_test
 # scripts/assets). Regenerate via
 # `tests/differential/oracle_runner/fixtures/build_logo_test_oracle.sh`

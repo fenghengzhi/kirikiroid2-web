@@ -2,8 +2,8 @@
 //
 // This file deliberately stays below the engine/platform boundary: it owns the
 // exported test ABI, error buffer, framebuffer buffer, and MotionTraceWeb
-// linkage symbols. Browser, Cocos, Window, FS, thread, event behavior, and
-// differential trace collection must come from the normal engine sources plus
+// linkage symbols. Cocos, Window, FS, thread, event behavior, and differential
+// trace collection must come from the normal engine sources plus
 // host-provided env/WASI imports and LLDB guest inspection.
 
 #include <algorithm>

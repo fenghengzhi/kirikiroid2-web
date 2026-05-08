@@ -79,7 +79,7 @@ function ensureBase() {
 }
 
 // Read a Node's accum fields. Returns a plain object matching the oracle
-// schema consumed by the Browser-WASM motionTrace hook. Fields with
+// schema consumed by port-side motion trace comparators. Fields with
 // special encoding (label, currentImage) are filled by the walker that
 // owns the labelMap context.
 function readNodeAccum(nodePtr) {

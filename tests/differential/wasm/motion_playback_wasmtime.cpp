@@ -3,7 +3,7 @@
 // This module intentionally executes the real logo_test_oracle.xp3
 // startup.tjs path through TJS. It supplies a headless Window layer and a
 // test-local implementation of the MotionTraceWeb symbols so the production
-// Browser trace hook remains untouched.
+// trace hook remains untouched.
 
 #include <algorithm>
 #include <chrono>

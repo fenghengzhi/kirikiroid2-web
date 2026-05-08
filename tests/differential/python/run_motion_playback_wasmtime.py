@@ -177,7 +177,7 @@ def load_wasmtime():
 
 
 class WasmtimeEnvProvider:
-    """Headless env::* provider for browser/Emscripten imports."""
+    """Headless env::* provider for Emscripten imports."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -759,7 +759,7 @@ def define_emscripten_imports(wasmtime, linker, module, root: Path) -> None:
 
 
 @dataclass(frozen=True)
-class BrowserBootstrapInfo:
+class WasmtimeBootstrapInfo:
     root: Path
     preload_files: int
     font_guest_path: str
@@ -773,11 +773,11 @@ class BrowserBootstrapInfo:
         )
 
 
-def prepare_browser_bootstrap(root: Path,
-                              startup_xp3: Path) -> BrowserBootstrapInfo:
+def prepare_wasmtime_bootstrap(root: Path,
+                              startup_xp3: Path) -> WasmtimeBootstrapInfo:
     preload_src = REPO_ROOT / "ui" / "cocos-studio"
     if not preload_src.is_dir():
-        raise FileNotFoundError(f"browser preload source missing: {preload_src}")
+        raise FileNotFoundError(f"Wasmtime preload source missing: {preload_src}")
 
     for dirname in ("savedata", "save", "tmp", "reference/xp3"):
         (root / dirname).mkdir(parents=True, exist_ok=True)
@@ -805,7 +805,7 @@ def prepare_browser_bootstrap(root: Path,
     font_path = root / "NotoSansCJK-Regular.ttc"
     if not font_path.is_file():
         raise FileNotFoundError(
-            "browser preload did not provide /NotoSansCJK-Regular.ttc"
+            "Wasmtime preload did not provide /NotoSansCJK-Regular.ttc"
         )
 
     xp3_guest_rel = Path("reference/xp3/logo_test_oracle.xp3")
@@ -813,7 +813,7 @@ def prepare_browser_bootstrap(root: Path,
     xp3_dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(startup_xp3, xp3_dst)
 
-    return BrowserBootstrapInfo(
+    return WasmtimeBootstrapInfo(
         root=root,
         preload_files=preload_count,
         font_guest_path="/NotoSansCJK-Regular.ttc",
@@ -984,7 +984,7 @@ def _load_render_checkpoint_events(path: Path | None) -> list[dict[str, Any]]:
 
 
 def _annotate_wasmtime_layer_raw_probe_events(
-    bootstrap: BrowserBootstrapInfo,
+    bootstrap: WasmtimeBootstrapInfo,
     render_stage_events_path: Path | None,
 ) -> None:
     if render_stage_events_path is None or not render_stage_events_path.exists():
@@ -1047,7 +1047,7 @@ def _write_wasmtime_framebuffer_manifest(
     wasm_path: Path,
     startup_xp3: Path,
     manifest_startup_xp3: Path,
-    bootstrap: BrowserBootstrapInfo,
+    bootstrap: WasmtimeBootstrapInfo,
     capture_window: FrameCaptureWindow,
 ) -> Path:
     from oracle_runner.adapters import motion_playback as mpb
@@ -1131,7 +1131,7 @@ def _write_wasmtime_framebuffer_manifest(
 
 
 def _collect_wasmtime_render_stage_capture(
-    bootstrap: BrowserBootstrapInfo,
+    bootstrap: WasmtimeBootstrapInfo,
     render_artifact_dir: Path,
     specs: list[dict],
     *,
@@ -1316,7 +1316,7 @@ def _collect_wasmtime_render_stage_capture(
 
 
 def _collect_wasmtime_framebuffer_capture(
-    bootstrap: BrowserBootstrapInfo,
+    bootstrap: WasmtimeBootstrapInfo,
     framebuffer_dir: Path,
     specs: list[dict],
     *,
@@ -1394,8 +1394,8 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
     from oracle_runner.adapters import motion_playback as mpb
 
     wasmtime = load_wasmtime()
-    with tempfile.TemporaryDirectory(prefix="krkr2-wasmtime-browserfs-") as tmp:
-        bootstrap = prepare_browser_bootstrap(Path(tmp), startup_xp3)
+    with tempfile.TemporaryDirectory(prefix="krkr2-wasmtime-guestfs-") as tmp:
+        bootstrap = prepare_wasmtime_bootstrap(Path(tmp), startup_xp3)
         try:
             if specs is None:
                 raise RuntimeError(
@@ -1451,7 +1451,7 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
 
 
 def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
-                                     bootstrap: BrowserBootstrapInfo,
+                                     bootstrap: WasmtimeBootstrapInfo,
                                      frames: int, *,
                                      record_layer_raw_probes: bool = False,
                                      record_save_layer_visual_readback_probes: bool = False,

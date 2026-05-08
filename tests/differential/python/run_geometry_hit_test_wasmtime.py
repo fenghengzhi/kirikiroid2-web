@@ -176,7 +176,7 @@ def verify_wasm_debug_info(wasm_path: Path) -> None:
     if missing:
         raise RuntimeError(
             f"{wasm_path} is missing debug section(s): {', '.join(missing)}. "
-            "Rebuild with `cmake --build out/web/debug --target "
+            "Rebuild with `cmake --build out/wasmtime/debug --target "
             "geometry_hit_test_wasm`."
         )
 
