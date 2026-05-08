@@ -1178,7 +1178,9 @@ def _collect_wasmtime_render_stage_capture(
         spec_id = str(case["caseId"])
         spec = case["spec"]
         expected = int(spec["frames"])
-        captured_local_frames = list(case["capturedLocalFrames"])
+        requested_local_frames = list(case["capturedLocalFrames"])
+        requested_set = set(requested_local_frames)
+        captured_local_frames: list[int] | None = None
         case_frame_id_base = int(case["fullFrameIdRange"][0])
         src_case = capture_root / spec_id
         if not src_case.is_dir():
@@ -1193,7 +1195,7 @@ def _collect_wasmtime_render_stage_capture(
                 if dst_phase.exists():
                     shutil.rmtree(dst_phase)
                 dst_phase.mkdir(parents=True, exist_ok=True)
-                for local_frame in captured_local_frames:
+                for local_frame in requested_local_frames:
                     global_frame = case_frame_id_base + local_frame
                     checkpoint = checkpoint_by_frame_phase.get(
                         (global_frame, phase))
@@ -1244,9 +1246,36 @@ def _collect_wasmtime_render_stage_capture(
             if not phase_dir.is_dir():
                 raise RuntimeError(
                     f"missing Wasmtime render stage image directory: {phase_dir}")
-            expected_phase_frames = (
-                [0] if phase == "initial" else captured_local_frames
-            )
+            present_frames = [
+                frame for frame in (
+                    _png_frame_number(p)
+                    for p in sorted(phase_dir.glob("frame_*.png"))
+                )
+                if frame is not None
+            ]
+            if phase == "initial":
+                expected_phase_frames = [0]
+            elif phase == "post_draw":
+                extras = [
+                    frame for frame in present_frames
+                    if frame not in requested_set
+                ]
+                if extras:
+                    raise RuntimeError(
+                        f"unexpected extra Wasmtime render stage PNG frame(s) "
+                        f"for {spec_id}/{phase}: {extras[:5]}"
+                    )
+                expected_phase_frames = [
+                    frame for frame in present_frames
+                    if frame in requested_set
+                ]
+                if not expected_phase_frames:
+                    raise RuntimeError(
+                        f"no Wasmtime render stage PNGs captured for "
+                        f"{spec_id}/{phase}")
+                captured_local_frames = expected_phase_frames
+            else:
+                expected_phase_frames = requested_local_frames
             expected_set = set(expected_phase_frames)
             images: list[dict[str, Any]] = []
             for frame in expected_phase_frames:
@@ -1280,6 +1309,8 @@ def _collect_wasmtime_render_stage_capture(
                 )
             phases[phase] = images
             total_images += len(images)
+        if captured_local_frames is None:
+            captured_local_frames = []
 
         cases.append({
             "caseId": spec_id,
@@ -1290,6 +1321,7 @@ def _collect_wasmtime_render_stage_capture(
             "fullFrameIdRange": case["fullFrameIdRange"],
             "capturedFrameIdRange": case["capturedFrameIdRange"],
             "capturedLocalFrames": captured_local_frames,
+            "requestedLocalFrames": requested_local_frames,
             "phases": phases,
         })
 

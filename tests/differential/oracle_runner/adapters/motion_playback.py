@@ -101,7 +101,7 @@ _FRAMEBUFFER_CAPTURE_SURFACE = (
 )
 _RENDER_STAGE_CAPTURE_SURFACES = ("initial", "post_draw")
 _REFERENCE_RENDER_STAGE_CAPTURE_ROOT = (
-    f"{_REMOTE_APP_FILES_DIR}/savedata/motion_render_stage_capture"
+    f"{_REMOTE_STARTUP_FILES_DIR}/savedata/motion_render_stage_capture"
 )
 
 
@@ -131,6 +131,38 @@ def _adb_shell_root(serial: str | None, args: list[str]) -> str:
     cmd += ["shell", "su", "0"] + args
     out = subprocess.run(cmd, check=True, capture_output=True)
     return out.stdout.decode(errors="replace")
+
+
+def _chown_to_app_files_owner(serial: str | None, remote_path: str) -> None:
+    package_uid_lines = _adb_shell(
+        serial,
+        "cmd package list packages -U org.github.krkr2 2>/dev/null "
+        "| sed -n 's/.*uid://p' || true",
+    ).strip().splitlines()
+    if package_uid_lines:
+        uid = package_uid_lines[-1].strip()
+        if re.fullmatch(r"\d+", uid):
+            _adb_shell(
+                serial,
+                f"chown -R {uid}:{uid} {shlex.quote(remote_path)} "
+                "2>/dev/null || true",
+            )
+            return
+
+    owner_lines = _adb_shell(
+        serial,
+        "stat -c '%u:%g' "
+        f"{shlex.quote(_REMOTE_STARTUP_FILES_DIR)} 2>/dev/null || true",
+    ).strip().splitlines()
+    if not owner_lines:
+        return
+    uid_gid = owner_lines[-1].strip()
+    if not re.fullmatch(r"\d+:\d+", uid_gid):
+        return
+    _adb_shell(
+        serial,
+        f"chown -R {uid_gid} {shlex.quote(remote_path)} 2>/dev/null || true",
+    )
 
 
 def _adb_pull(serial: str | None, remote: str, local: Path) -> None:
@@ -319,6 +351,7 @@ def _prepare_framebuffer_capture(
                 "mkdir -p "
                 f"{shlex.quote(remote_capture_root + '/' + spec_id + '/' + phase)}",
             )
+    _chown_to_app_files_owner(serial, remote_capture_root)
 
     remote_xp3 = _ensure_logo_test_xp3_pushed(serial)
     return remote_xp3, remote_capture_root
@@ -348,6 +381,7 @@ def _prepare_render_stage_capture(
                 "mkdir -p "
                 f"{shlex.quote(remote_capture_root + '/' + spec_id + '/' + phase)}",
             )
+    _chown_to_app_files_owner(serial, remote_capture_root)
 
     remote_xp3 = _ensure_logo_test_xp3_pushed(serial)
     return remote_xp3, remote_capture_root
@@ -390,6 +424,47 @@ def _wait_for_remote_framebuffer_files(
     raise RuntimeError(
         f"framebuffer capture did not finish within {timeout:.1f}s "
         f"(remote files: {last_count}, expected: {expected_frames})"
+    )
+
+
+def _wait_for_remote_render_stage_files(
+    serial: str | None,
+    remote_capture_root: str,
+    *,
+    min_files: int,
+    timeout: float,
+    settle_seconds: float = 2.0,
+) -> int:
+    deadline = time.time() + timeout
+    stable_since: float | None = None
+    last_count = -1
+    quoted_root = shlex.quote(remote_capture_root)
+    while time.time() < deadline:
+        out = _adb_shell(
+            serial,
+            f"find {quoted_root} -type f -name 'frame_*.png' "
+            "2>/dev/null | wc -l",
+        )
+        try:
+            count = int(out.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            count = 0
+
+        if count != last_count:
+            stable_since = None
+            last_count = count
+        elif count >= min_files and stable_since is None:
+            stable_since = time.time()
+
+        if stable_since is not None and \
+                time.time() - stable_since >= settle_seconds:
+            return count
+        time.sleep(0.5)
+
+    raise RuntimeError(
+        f"render-stage capture did not settle within {timeout:.1f}s "
+        f"(remote files: {last_count}, minimum expected: {min_files}, "
+        f"remote root: {remote_capture_root})"
     )
 
 
@@ -553,10 +628,8 @@ def _collect_render_stage_capture(
         capture_window = frame_capture_window_from_args(_Args(), total_frames)
     captured_cases = captured_case_ranges(specs_by_id, SEGMENT_ORDER,
                                           capture_window)
-    expected_files = sum(
-        len(case["capturedLocalFrames"]) + 1 for case in captured_cases)
-    _wait_for_remote_framebuffer_files(
-        serial, remote_capture_root, expected_files,
+    _wait_for_remote_render_stage_files(
+        serial, remote_capture_root, min_files=len(captured_cases),
         timeout=max(30.0, timeout))
 
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -586,16 +659,42 @@ def _collect_render_stage_capture(
         _normalize_pulled_render_case_dir(local_case_dir, spec_id)
 
         expected = int(spec["frames"])
-        captured_local_frames = list(case["capturedLocalFrames"])
+        requested_local_frames = list(case["capturedLocalFrames"])
+        requested_set = set(requested_local_frames)
+        captured_local_frames: list[int] | None = None
         phases: dict[str, list[dict[str, Any]]] = {}
         for phase in _RENDER_STAGE_CAPTURE_SURFACES:
             phase_dir = local_case_dir / phase
             if not phase_dir.is_dir():
                 raise RuntimeError(
                     f"missing render stage image directory: {phase_dir}")
-            expected_phase_frames = (
-                [0] if phase == "initial" else captured_local_frames
-            )
+            present_frames = [
+                frame for frame in (
+                    _png_frame_number(p)
+                    for p in sorted(phase_dir.glob("frame_*.png"))
+                )
+                if frame is not None
+            ]
+            if phase == "initial":
+                expected_phase_frames = [0]
+            else:
+                extras = [
+                    frame for frame in present_frames
+                    if frame not in requested_set
+                ]
+                if extras:
+                    raise RuntimeError(
+                        f"unexpected extra render stage PNG frame(s) for "
+                        f"{spec_id}/{phase}: {extras[:5]}"
+                    )
+                expected_phase_frames = [
+                    frame for frame in present_frames
+                    if frame in requested_set
+                ]
+                if not expected_phase_frames:
+                    raise RuntimeError(
+                        f"no render stage PNGs captured for {spec_id}/{phase}")
+                captured_local_frames = expected_phase_frames
             expected_set = set(expected_phase_frames)
             images: list[dict[str, Any]] = []
             for frame in expected_phase_frames:
@@ -622,6 +721,8 @@ def _collect_render_stage_capture(
                 )
             phases[phase] = images
             total_images += len(images)
+        if captured_local_frames is None:
+            captured_local_frames = []
 
         cases.append({
             "caseId": spec_id,
@@ -632,6 +733,7 @@ def _collect_render_stage_capture(
             "fullFrameIdRange": case["fullFrameIdRange"],
             "capturedFrameIdRange": case["capturedFrameIdRange"],
             "capturedLocalFrames": captured_local_frames,
+            "requestedLocalFrames": requested_local_frames,
             "phases": phases,
         })
 
