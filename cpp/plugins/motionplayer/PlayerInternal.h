@@ -384,7 +384,7 @@ namespace internal {
             iTJSDispatch2 *objthis =
                 closure.ObjThis ? closure.ObjThis : dispatch;
             return TJS_SUCCEEDED(dispatch->PropGet(
-                TJS_IGNOREPROP, name, nullptr, &result, objthis));
+                0, name, nullptr, &result, objthis));
         }
 
         inline tjs_int getObjectCount(const tTJSVariant &object) {
@@ -422,76 +422,23 @@ namespace internal {
             return false;
         }
 
-        // Resolve a real Layer dispatch from a TJS value that might be
-        // a SeparateLayerAdaptor, an AffineLayer wrapper, or a raw Layer.
+        // Resolve a real Layer dispatch like libkrkr2.so sub_A7A050:
+        // use only the variant's Object and ask it for the Layer native
+        // instance. Do not chase ObjThis, SeparateLayerAdaptor owner, or TJS
+        // properties here; Player_ResolveSLATarget @ 0x6D5948 only applies
+        // this coercion to SLA+20 targetLayer.
         inline iTJSDispatch2 *tryResolveLayerDispatch(const tTJSVariant &value) {
             if(value.Type() != tvtObject || value.AsObjectNoAddRef() == nullptr) {
                 return nullptr;
             }
 
             iTJSDispatch2 *obj = value.AsObjectNoAddRef();
-
-            auto resolveDirectLayer = [](iTJSDispatch2 *candidate) {
-                if(!candidate) {
-                    return static_cast<iTJSDispatch2 *>(nullptr);
-                }
-                tTJSNI_BaseLayer *layer = nullptr;
-                if(TJS_SUCCEEDED(candidate->NativeInstanceSupport(
-                       TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-                       reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
-                   layer) {
-                    return candidate;
-                }
-                return static_cast<iTJSDispatch2 *>(nullptr);
-            };
-
-            // Direct Layer check. Player_ResolveSLATarget @ 0x6D5948 calls
-            // sub_A7A050 @ 0xA7A050 to coerce the SLA target variant to the
-            // real native Layer before creating PrivateMotionGLL. TJS closure
-            // values such as Layer(this) can carry that real receiver in
-            // ObjThis, so check the full closure, not only Object.
-            if(auto *direct = resolveDirectLayer(obj)) {
-                return direct;
-            }
-            const auto closure = value.AsObjectClosureNoAddRef();
-            if(closure.ObjThis && closure.ObjThis != obj) {
-                if(auto *direct = resolveDirectLayer(closure.ObjThis)) {
-                    return direct;
-                }
-            }
-            if(closure.Object && closure.Object != obj) {
-                if(auto *direct = resolveDirectLayer(closure.Object)) {
-                    return direct;
-                }
-            }
-
-            // ncb SeparateLayerAdaptor → owner
-            if(auto *adaptor =
-                   ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
-                       obj, false)) {
-                auto *ownerObj = adaptor->getOwner();
-                if(ownerObj) {
-                    auto ownerResolved = tryResolveLayerDispatch(
-                        tTJSVariant(ownerObj, ownerObj));
-                    if(ownerResolved) return ownerResolved;
-                }
-            }
-
-            // TJS property chain: owner, _owner, targetLayer
-            static const tjs_char *propNames[] = {
-                TJS_W("owner"), TJS_W("_owner"), TJS_W("targetLayer"),
-                TJS_W("layer"), TJS_W("_layer"), TJS_W("baseLayer"),
-                TJS_W("_base"), TJS_W("parent"), nullptr };
-
-            for(int i = 0; propNames[i]; ++i) {
-                tTJSVariant propVal;
-                if(getObjectProperty(value, propNames[i], propVal) &&
-                   propVal.Type() == tvtObject &&
-                   propVal.AsObjectNoAddRef() != nullptr &&
-                   propVal.AsObjectNoAddRef() != obj) {
-                    auto *resolved = tryResolveLayerDispatch(propVal);
-                    if(resolved) return resolved;
-                }
+            tTJSNI_BaseLayer *layer = nullptr;
+            if(TJS_SUCCEEDED(obj->NativeInstanceSupport(
+                   TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+                   reinterpret_cast<iTJSNativeInstance **>(&layer))) &&
+               layer) {
+                return obj;
             }
 
             return nullptr;

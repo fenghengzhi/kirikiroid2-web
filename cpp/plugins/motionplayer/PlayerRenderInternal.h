@@ -20,8 +20,6 @@ tjs_error callLayerOperateAffineLike_0x6C7440(
     tjs_int opacity,
     tTVPBBStretchType type);
 std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor);
-iTJSDispatch2 *resolveLayerTreeOwnerObject(iTJSDispatch2 *object);
-iTJSDispatch2 *resolveLayerTreeOwnerObject(const tTJSVariant &value);
 iTJSDispatch2 *resolvePrimaryLayerObject(iTJSDispatch2 *layerTreeOwnerObject);
 iTJSDispatch2 *resolveMainWindowOwnerObject();
 iTJSDispatch2 *resolveMainWindowPrimaryLayerObject();

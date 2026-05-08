@@ -710,7 +710,7 @@ namespace motion {
         if(useInternalRenderLayer) {
             renderLayerObject = ensureReusableLayerObject(
                 _runtime->internalRenderLayer,
-                resolveLayerTreeOwnerObject(resolvedLayerObject),
+                resolveMainWindowOwnerObject(),
                 resolvedLayerObject,
                 static_cast<tTVPLayerType>(ltAlpha),
                 false);
@@ -827,11 +827,11 @@ namespace motion {
         SeparateLayerAdaptor *sla =
             ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
                 slaObject, false);
-        iTJSDispatch2 *ownerLayer =
-            sla ? tryResolveLayerDispatch(sla->getOwnerVariant()) : nullptr;
-        if(!ownerLayer) {
+        if(!sla) {
             return false;
         }
+        iTJSDispatch2 *ownerLayer =
+            tryResolveLayerDispatch(sla->getOwnerVariant());
 
         ensureMotionLoaded();
         if(!_runtime->activeMotion) {
@@ -907,7 +907,8 @@ namespace motion {
                 "Player_RenderMotionFrame finished but SLA target lacked a native layer");
         }
 
-        _runtime->lastCanvas = tTJSVariant(ownerLayer, ownerLayer);
+        iTJSDispatch2 *lastCanvasObject = ownerLayer ? ownerLayer : renderTarget;
+        _runtime->lastCanvas = tTJSVariant(lastCanvasObject, lastCanvasObject);
         detail::logoChainTraceSummary(
             motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,
             isAccurateSlaRenderEnabled() ? "accurate=1" : "accurate=0");

@@ -101,117 +101,6 @@ namespace motion::internal::render_detail {
         };
     }
 
-    namespace {
-        iTJSDispatch2 *resolveLayerTreeOwnerObjectInternal(iTJSDispatch2 *object,
-                                                           int depth) {
-            if(!object || depth > 8) {
-                return nullptr;
-            }
-
-            tTJSVariant objectVar(object, object);
-            tTJSVariant value;
-            if(getObjectProperty(objectVar, TJS_W("layerTreeOwnerInterface"), value) &&
-               value.Type() != tvtVoid) {
-                return object;
-            }
-
-            if(getObjectProperty(objectVar, TJS_W("window"), value) &&
-               value.Type() == tvtObject && value.AsObjectNoAddRef()) {
-                if(auto *owner = resolveLayerTreeOwnerObjectInternal(
-                       value.AsObjectNoAddRef(), depth + 1)) {
-                    return owner;
-                }
-            }
-
-            // PrivateMotionGLL ctor sub_800438 ultimately needs the
-            // layer-tree owner interface. When the script wrapper has already
-            // been reduced to a raw Layer object, recover the same owner from
-            // the native layer manager instead of falling back to a global.
-            if(auto *layer = resolveNativeLayer(object)) {
-                if(auto *layerTreeOwner = layer->GetLayerTreeOwner()) {
-                    if(auto *owner = layerTreeOwner->GetOwnerNoAddRef()) {
-                        return owner;
-                    }
-                }
-            }
-
-            if(auto *resolvedLayer = tryResolveLayerDispatch(objectVar);
-               resolvedLayer && resolvedLayer != object) {
-                return resolveLayerTreeOwnerObjectInternal(resolvedLayer,
-                                                           depth + 1);
-            }
-
-            return nullptr;
-        }
-
-        iTJSDispatch2 *resolveLayerTreeOwnerObjectInternal(
-            const tTJSVariant &value,
-            int depth) {
-            if(value.Type() != tvtObject || !value.AsObjectNoAddRef() ||
-               depth > 8) {
-                return nullptr;
-            }
-
-            // PrivateMotionGLL constructor body sub_800438 keeps the
-            // original TJS closure when reading layerTreeOwnerInterface from
-            // its owner argument. Preserve ObjThis here too; reducing the
-            // variant to Object loses EnvGraphicLayer/Window owner context.
-            tTJSVariant ownerInterface;
-            if(getObjectProperty(value, TJS_W("layerTreeOwnerInterface"),
-                                 ownerInterface) &&
-               ownerInterface.Type() != tvtVoid) {
-                const auto closure = value.AsObjectClosureNoAddRef();
-                if(closure.ObjThis) {
-                    return closure.ObjThis;
-                }
-                if(closure.Object) {
-                    return closure.Object;
-                }
-                return value.AsObjectNoAddRef();
-            }
-
-            tTJSVariant windowValue;
-            if(getObjectProperty(value, TJS_W("window"), windowValue) &&
-               windowValue.Type() == tvtObject &&
-               windowValue.AsObjectNoAddRef()) {
-                if(auto *owner = resolveLayerTreeOwnerObjectInternal(
-                       windowValue, depth + 1)) {
-                    return owner;
-                }
-            }
-
-            if(auto *owner = resolveLayerTreeOwnerObjectInternal(
-                   value.AsObjectNoAddRef(), depth)) {
-                return owner;
-            }
-
-            const auto closure = value.AsObjectClosureNoAddRef();
-            if(closure.ObjThis &&
-               closure.ObjThis != value.AsObjectNoAddRef()) {
-                if(auto *owner = resolveLayerTreeOwnerObjectInternal(
-                       closure.ObjThis, depth + 1)) {
-                    return owner;
-                }
-            }
-            if(closure.Object && closure.Object != value.AsObjectNoAddRef()) {
-                return resolveLayerTreeOwnerObjectInternal(closure.Object,
-                                                           depth + 1);
-            }
-            return nullptr;
-        }
-    } // namespace
-
-    iTJSDispatch2 *resolveLayerTreeOwnerObject(iTJSDispatch2 *object) {
-        if(!object) {
-            return nullptr;
-        }
-        return resolveLayerTreeOwnerObjectInternal(object, 0);
-    }
-
-    iTJSDispatch2 *resolveLayerTreeOwnerObject(const tTJSVariant &value) {
-        return resolveLayerTreeOwnerObjectInternal(value, 0);
-    }
-
     iTJSDispatch2 *resolvePrimaryLayerObject(iTJSDispatch2 *layerTreeOwnerObject) {
         if(!layerTreeOwnerObject) {
             return nullptr;
@@ -407,9 +296,6 @@ namespace motion::internal::render_detail {
                                              tTVPLayerType layerType,
                                              bool visible,
                                              bool absoluteOrderMode) {
-        if(!layerTreeOwnerObject && parentLayerObject) {
-            layerTreeOwnerObject = resolveLayerTreeOwnerObject(parentLayerObject);
-        }
         if(!parentLayerObject && layerTreeOwnerObject) {
             parentLayerObject = resolvePrimaryLayerObject(layerTreeOwnerObject);
         }
@@ -417,6 +303,9 @@ namespace motion::internal::render_detail {
         iTJSDispatch2 *layerObject =
             slot.Type() == tvtObject ? slot.AsObjectNoAddRef() : nullptr;
         if(!layerObject) {
+            if(!layerTreeOwnerObject) {
+                return nullptr;
+            }
             layerObject = createLayerObject(layerTreeOwnerObject, parentLayerObject);
             if(!layerObject) {
                 return nullptr;

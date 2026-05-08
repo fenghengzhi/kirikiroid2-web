@@ -220,9 +220,6 @@ namespace motion {
         auto *renderLayer = resolveNativeLayer(renderLayerObject);
         iTJSDispatch2 *scratchOwner = resolveMainWindowOwnerObject();
         iTJSDispatch2 *scratchParent = resolveMainWindowPrimaryLayerObject();
-        if(!scratchOwner) {
-            scratchOwner = resolveLayerTreeOwnerObject(renderLayerObject);
-        }
         if(scratchParent && !resolveNativeLayer(scratchParent)) {
             if(auto *resolved =
                    tryResolveLayerDispatch(tTJSVariant(scratchParent, scratchParent))) {
