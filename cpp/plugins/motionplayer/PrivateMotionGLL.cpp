@@ -1,5 +1,6 @@
 #include "PrivateMotionGLL.h"
 
+#include "MsgIntf.h"
 #include "PlayerInternal.h"
 #include "PlayerRenderInternal.h"
 #include "SeparateLayerAdaptor.h"
@@ -9,158 +10,150 @@ using namespace motion::internal::render_detail;
 
 namespace {
 
-    bool hasLayerTreeOwnerInterfaceLike_0x800438(
-        const tTJSVariant &ownerVariant) {
-        tTJSVariant ownerInterface;
-        return getObjectProperty(ownerVariant, TJS_W("layerTreeOwnerInterface"),
-                                 ownerInterface) &&
-            ownerInterface.Type() != tvtVoid;
-    }
+    struct OwnerResolutionLike_0x800438 {
+        tTJSVariantClosure closure;
+        iTVPLayerTreeOwner *layerTreeOwner = nullptr;
+    };
 
-    iTJSDispatch2 *resolveLayerTreeOwnerObjectLike_0x800438(
+    OwnerResolutionLike_0x800438 requireOwnerClosureLike_0x800438(
         const tTJSVariant &ownerVariant) {
         if(ownerVariant.Type() != tvtObject || !ownerVariant.AsObjectNoAddRef()) {
-            return nullptr;
-        }
-        if(!hasLayerTreeOwnerInterfaceLike_0x800438(ownerVariant)) {
-            return nullptr;
+            TVPThrowExceptionMessage(
+                TJS_W("Please specify layerTreeOwnerInterface object"));
         }
 
-        // Native PrivateMotionGLL @ 0x800438 uses owner.ObjThis when present,
-        // otherwise owner.Object, for layerTreeOwnerInterface. The Web port's
-        // public Layer constructor needs that owner dispatch as its first arg.
-        const auto closure = ownerVariant.AsObjectClosureNoAddRef();
-        if(closure.ObjThis) {
-            return closure.ObjThis;
+        auto closure = ownerVariant.AsObjectClosureNoAddRef();
+        if(!closure.Object) {
+            TVPThrowExceptionMessage(
+                TJS_W("Please specify layerTreeOwnerInterface object"));
         }
-        if(closure.Object) {
-            return closure.Object;
+
+        tTJSVariant ownerInterface;
+        iTJSDispatch2 *objthis = closure.ObjThis ? closure.ObjThis
+                                                 : closure.Object;
+        const tjs_error hr = closure.Object->PropGet(
+            0, TJS_W("layerTreeOwnerInterface"), nullptr, &ownerInterface,
+            objthis);
+        if(TJS_FAILED(hr)) {
+            TVPThrowExceptionMessage(
+                TJS_W("Cannot Retrive Layer Tree Owner Interface."));
         }
-        return ownerVariant.AsObjectNoAddRef();
+        auto *layerTreeOwner = reinterpret_cast<iTVPLayerTreeOwner *>(
+            static_cast<tjs_intptr_t>(static_cast<tjs_int64>(ownerInterface)));
+        if(!layerTreeOwner) {
+            TVPThrowExceptionMessage(
+                TJS_W("Cannot Retrive Layer Tree Owner Interface."));
+        }
+        return { closure, layerTreeOwner };
     }
 
-    iTJSDispatch2 *createLayerObjectForPrivateMotionGLLLike_0x800438(
-        iTJSDispatch2 *layerTreeOwnerObject,
-        iTJSDispatch2 *parentLayerObject) {
-        if(!layerTreeOwnerObject) {
-            return nullptr;
+    tTJSNI_BaseLayer *requireTargetLayerNativeLike_0x800438(
+        const tTJSVariant &targetLayerVariant,
+        iTJSDispatch2 *targetLayerObject) {
+        if(targetLayerVariant.Type() != tvtObject ||
+           !targetLayerVariant.AsObjectNoAddRef() || !targetLayerObject) {
+            TVPThrowExceptionMessage(TJS_W("Please specify Layer object."));
         }
 
-        tTJSVariant layerClassVar;
-        if(!getLayerClassDispatchVariantLike_0x5CB08C(layerClassVar)) {
-            return nullptr;
+        tTJSNI_BaseLayer *layer = nullptr;
+        if(TJS_FAILED(targetLayerVariant.AsObjectNoAddRef()->NativeInstanceSupport(
+               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+               reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
+            TVPThrowExceptionMessage(TJS_W("Please specify Layer object."));
         }
+        return layer;
+    }
 
+    class tTJSNI_PrivateMotionGLLLayerLike_0x800438 final : public tTJSNI_Layer {
+    public:
+        tjs_error Construct(tjs_int numparams,
+                            tTJSVariant **param,
+                            iTJSDispatch2 *tjs_obj) override {
+            if(numparams < 2) {
+                return TJS_E_BADPARAMCOUNT;
+            }
+
+            auto owner =
+                requireOwnerClosureLike_0x800438(*param[0]);
+            iTJSDispatch2 *targetObject =
+                param[1]->Type() == tvtObject ? param[1]->AsObjectNoAddRef()
+                                               : nullptr;
+            auto *parentLayer =
+                requireTargetLayerNativeLike_0x800438(*param[1], targetObject);
+
+            if(parentLayer == this) {
+                TVPThrowExceptionMessage(TVPCannotSetParentSelf);
+            }
+            if(parentLayer->GetLayerTreeOwner() != owner.layerTreeOwner) {
+                TVPThrowExceptionMessage(TVPCannotMoveToUnderOtherPrimaryLayer);
+            }
+
+            // PrivateMotionGLL @ 0x800438 resolves the owner LTO and target
+            // native Layer before the raw child-layer attach. This bypasses
+            // the public Layer constructor's script-side lookup while keeping
+            // the resulting object registered as a normal Layer native class.
+            const tjs_error hr = ConstructResolvedTreeOwnerLike_0x800438(
+                owner.layerTreeOwner, parentLayer, tjs_obj, owner.closure);
+            if(TJS_FAILED(hr)) {
+                return hr;
+            }
+
+            // sub_8361A8 binds the child owner and immediately applies
+            // visible=true and opacity=255 to the new layer.
+            SetVisible(true);
+            SetOpacity(255);
+            return TJS_S_OK;
+        }
+    };
+
+    class tTJSNC_PrivateMotionGLLLayerLike_0x800438 final : public tTJSNC_Layer {
+    protected:
+        tTJSNativeInstance *CreateNativeInstance() override {
+            return new tTJSNI_PrivateMotionGLLLayerLike_0x800438();
+        }
+    };
+
+    iTJSDispatch2 *createPrivateLayerObjectWithNativeClassLike_0x800438(
+        const tTJSVariant &ownerVariant,
+        const tTJSVariant &targetLayerVariant) {
+        tTJSNC_PrivateMotionGLLLayerLike_0x800438 layerClass;
         iTJSDispatch2 *created = nullptr;
-        tTJSVariant ownerVar(layerTreeOwnerObject, layerTreeOwnerObject);
-        tTJSVariant parentVar =
-            parentLayerObject ? tTJSVariant(parentLayerObject, parentLayerObject)
-                              : tTJSVariant();
-        tTJSVariant *args[] = { &ownerVar, &parentVar };
-        const tjs_error hr = layerClassVar.AsObjectNoAddRef()->CreateNew(
-            0, nullptr, nullptr, &created, 2, args,
-            layerClassVar.AsObjectNoAddRef());
-        if(TJS_FAILED(hr)) {
-            return nullptr;
+        tTJSVariant ownerArg(ownerVariant);
+        tTJSVariant targetArg(targetLayerVariant);
+        tTJSVariant *args[] = { &ownerArg, &targetArg };
+        const tjs_error hr = layerClass.CreateNew(0, nullptr, nullptr, &created,
+                                                  2, args, &layerClass);
+        if(TJS_FAILED(hr) || !created) {
+            TVPThrowExceptionMessage(TJS_W("Cannot create PrivateMotionGLL."));
         }
         return created;
     }
 
     iTJSDispatch2 *createPrivateLayerObjectLike_0x800438(
         const tTJSVariant &ownerVariant,
+        const tTJSVariant &targetLayerVariant,
         iTJSDispatch2 *targetLayerObject) {
-        if(ownerVariant.Type() != tvtObject || !ownerVariant.AsObjectNoAddRef() ||
-           !targetLayerObject) {
-            return nullptr;
+        requireOwnerClosureLike_0x800438(ownerVariant);
+        requireTargetLayerNativeLike_0x800438(targetLayerVariant,
+                                             targetLayerObject);
+
+        return createPrivateLayerObjectWithNativeClassLike_0x800438(
+            ownerVariant, targetLayerVariant);
+    }
+
+    void invalidateObjectVariantLike_0x6AC27C(tTJSVariant &value) {
+        if(value.Type() == tvtObject && value.AsObjectNoAddRef()) {
+            auto closure = value.AsObjectClosureNoAddRef();
+            if(closure.Object) {
+                closure.Invalidate(0, nullptr, nullptr, nullptr);
+            }
         }
-        // libkrkr2.so PrivateMotionGLL constructor @ 0x800438 reads
-        // owner.layerTreeOwnerInterface from the original owner closure, then
-        // creates the backing layer from that layer-tree owner. The local Layer
-        // public constructor needs the owner dispatch rather than the raw
-        // interface pointer, so pass through the same owner closure boundary.
-        auto *layerTreeOwnerObject =
-            resolveLayerTreeOwnerObjectLike_0x800438(ownerVariant);
-        if(!layerTreeOwnerObject) {
-            return nullptr;
-        }
-        return createLayerObjectForPrivateMotionGLLLike_0x800438(
-            layerTreeOwnerObject, targetLayerObject);
+        value.Clear();
     }
 
 } // namespace
 
 namespace motion {
-
-    PrivateMotionGLL::PrivateMotionGLL(const tTJSVariant &ownerVariant,
-                                       const tTJSVariant &targetLayerVariant)
-        : _ownerVariant(ownerVariant), _targetLayerVariant(targetLayerVariant) {}
-
-    PrivateMotionGLL::~PrivateMotionGLL() { invalidate(); }
-
-    iTJSDispatch2 *PrivateMotionGLL::ensureLayerObject(
-        iTJSDispatch2 *targetLayerObject,
-        bool absolute) {
-        if(auto *existing = layerObject()) {
-            return existing;
-        }
-
-        auto *created =
-            createPrivateLayerObjectLike_0x800438(_ownerVariant,
-                                                  targetLayerObject);
-        if(!created) {
-            return nullptr;
-        }
-
-        _layerObject = tTJSVariant(created, created);
-        created->Release();
-
-        // First creation mirrors Player_ResolveSLATarget @ 0x6D5948:
-        // PrivateMotionGLL(owner, targetLayer), then absolute and visible=true.
-        if(auto *layer = resolveNativeLayer(layerObject())) {
-            layer->SetType(static_cast<tTVPLayerType>(ltAlpha));
-            layer->SetAbsoluteOrderMode(absolute);
-            layer->SetVisible(true);
-        }
-        return layerObject();
-    }
-
-    iTJSDispatch2 *PrivateMotionGLL::layerObject() const {
-        return _layerObject.Type() == tvtObject
-                   ? _layerObject.AsObjectNoAddRef()
-                   : nullptr;
-    }
-
-    tTJSVariant PrivateMotionGLL::layerVariant() const { return _layerObject; }
-
-    void PrivateMotionGLL::setSize(int width, int height) {
-        if(auto *layer = resolveNativeLayer(layerObject())) {
-            layer->SetSize(width, height);
-        }
-    }
-
-    void PrivateMotionGLL::setVisible(bool visible) {
-        if(auto *layer = resolveNativeLayer(layerObject())) {
-            layer->SetVisible(visible);
-        }
-    }
-
-    void PrivateMotionGLL::setAbsolute(bool absolute) {
-        if(auto *layer = resolveNativeLayer(layerObject())) {
-            layer->SetAbsoluteOrderMode(absolute);
-        }
-    }
-
-    void PrivateMotionGLL::invalidate() {
-        if(_layerObject.Type() == tvtObject && _layerObject.AsObjectNoAddRef()) {
-            // SeparateLayerAdaptor.clear @ 0x6AC27C invalidates the private
-            // object stored in SLA+40 before clearing the slot.
-            auto closure = _layerObject.AsObjectClosureNoAddRef();
-            if(closure.Object) {
-                closure.Invalidate(0, nullptr, nullptr, nullptr);
-            }
-        }
-        _layerObject.Clear();
-    }
 
     iTJSDispatch2 *ensurePrivateMotionGLLLike_0x6D5948(
         SeparateLayerAdaptor &sla,
@@ -173,28 +166,37 @@ namespace motion {
             return nullptr;
         }
 
-        if(!sla._privateMotionGLL) {
-            auto privateLayer =
-                std::make_unique<PrivateMotionGLL>(ownerVariant,
-                                                   targetLayerVariant);
-            auto *layerObject =
-                privateLayer->ensureLayerObject(targetLayerObject,
-                                                sla.getAbsolute());
-            if(!layerObject) {
-                return nullptr;
+        if(sla._privateTarget.Type() != tvtObject) {
+            if(sla._privateTarget.Type() != tvtVoid) {
+                sla._privateTarget.Clear();
             }
-            sla._privateMotionGLL = std::move(privateLayer);
-            sla.trackManagedTarget(sla._privateMotionGLL->layerVariant());
+
+            iTJSDispatch2 *created = createPrivateLayerObjectLike_0x800438(
+                ownerVariant, targetLayerVariant, targetLayerObject);
+            sla._privateTarget = tTJSVariant(created, created);
+            created->Release();
+
+            if(auto *layer =
+                   resolveNativeLayer(sla._privateTarget.AsObjectNoAddRef())) {
+                // Player_ResolveSLATarget @ 0x6D5948 performs these writes
+                // immediately after the newly created object is stored in
+                // SLA+40, before the per-frame SetSize call.
+                layer->SetType(static_cast<tTVPLayerType>(ltAlpha));
+                layer->SetAbsoluteOrderMode(sla.getAbsolute());
+                layer->SetVisible(true);
+            }
+            sla.trackManagedTargetLike_0x6AC410(sla._privateTarget, 0);
         }
 
-        auto *layerObject = sla._privateMotionGLL->layerObject();
+        iTJSDispatch2 *layerObject = sla.getPrivateRenderTargetObject();
         if(!layerObject || !resolveNativeLayer(layerObject)) {
+            invalidateObjectVariantLike_0x6AC27C(sla._privateTarget);
             return nullptr;
         }
 
-        // Reuse path matches 0x6D5948: no targetLayer/absolute rebind here;
-        // only Layer_SetSize is applied after fetching the private layer.
-        sla._privateMotionGLL->setSize(canvasWidth, canvasHeight);
+        // The native reuse path always applies Layer_SetSize_thunk after the
+        // PrivateMotionGLL native instance is fetched from SLA+40.
+        resolveNativeLayer(layerObject)->SetSize(canvasWidth, canvasHeight);
         return layerObject;
     }
 

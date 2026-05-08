@@ -100,6 +100,9 @@ NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {
     NCB_PROPERTY(targetLayer, getTargetLayer, setTargetLayer);
     NCB_METHOD(c);
     RawCallback(TJS_W("assign"), &SeparateLayerAdaptor::assignCompat, 0);
+    RawCallback(TJS_W("layerTreeOwnerInterface"),
+                &SeparateLayerAdaptor::getLayerTreeOwnerInterfaceCompat,
+                (int)0, TJS_HIDDENMEMBER);
 }
 NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
     Factory(&D3DAdaptor::factory);

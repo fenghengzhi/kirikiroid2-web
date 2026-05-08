@@ -522,6 +522,41 @@ tjs_error tTJSNI_BaseLayer::Construct(tjs_int numparams, tTJSVariant **param,
 }
 
 //---------------------------------------------------------------------------
+tjs_error tTJSNI_BaseLayer::ConstructResolvedTreeOwnerLike_0x800438(
+    iTVPLayerTreeOwner *layerTreeOwner,
+    tTJSNI_BaseLayer *parentLayer,
+    iTJSDispatch2 *tjs_obj,
+    const tTJSVariantClosure &actionOwner) {
+    if(!layerTreeOwner)
+        TVPThrowExceptionMessage(
+            TJS_W("Cannot Retrive Layer Tree Owner Interface."));
+
+    Owner = tjs_obj; // no addref, matching Construct and native +24 owner slot
+
+    if(parentLayer) {
+        Manager = parentLayer->GetManager();
+        if(Manager)
+            Manager->AddRef();
+        Join(parentLayer);
+    }
+
+    if(!parentLayer) {
+        Manager = new tTVPLayerManager(layerTreeOwner);
+        Manager->AttachPrimary(this);
+        Manager->RegisterSelfToWindow();
+
+        Type = DisplayType = ltOpaque;
+        NeutralColor = TransparentColor = TVP_RGBA2COLOR(255, 255, 255, 255);
+        UpdateDrawFace();
+        HitThreshold = 0;
+    }
+
+    ActionOwner = actionOwner;
+    ActionOwner.AddRef();
+    return TJS_S_OK;
+}
+
+//---------------------------------------------------------------------------
 void tTJSNI_BaseLayer::Invalidate() {
     Shutdown = true;
 
