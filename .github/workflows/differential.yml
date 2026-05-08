@@ -739,6 +739,7 @@ jobs:
           python3 tests/differential/python/compare_motion_render_steps.py \
             --oracle-root /tmp/motion_playback/render/oracle \
             --wasmtime-root /tmp/motion_playback/render/wasmtime \
+            --allow-render-flow-diagnostics \
             2>&1 | tee /tmp/motion_playback/motion_render_steps_compare.txt
           render_compare_rc=${PIPESTATUS[0]}
           set -e

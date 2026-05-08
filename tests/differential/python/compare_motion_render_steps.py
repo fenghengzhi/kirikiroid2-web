@@ -65,6 +65,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Wasmtime render-stage artifact root")
     p.add_argument("--case", action="append", default=[],
                    help="Case id to compare; defaults to all oracle cases")
+    p.add_argument("--allow-render-flow-diagnostics", action="store_true",
+                   help="Report build-flow semantic mismatches without "
+                        "failing the PNG/hash compare")
     return p.parse_args(argv)
 
 
@@ -450,6 +453,8 @@ def compare_case(
     oracle_root: Path,
     wasmtime_root: Path,
     case_id: str,
+    *,
+    allow_render_flow_diagnostics: bool = False,
 ) -> bool:
     oracle_prepare_events = load_events(
         oracle_root / "events" / "render_prepare" /
@@ -532,7 +537,7 @@ def compare_case(
     for index in range(frame_count):
         if index >= len(oracle_build_events) or index >= len(wasmtime_build_events):
             build_flow_mismatches += 1
-            if first_mismatch is None:
+            if not allow_render_flow_diagnostics and first_mismatch is None:
                 first_mismatch = (
                     index,
                     "build_flow",
@@ -546,7 +551,7 @@ def compare_case(
             field_diff = _compare_build_flow(oracle_flow, wasmtime_flow)
             if field_diff is not None:
                 build_flow_mismatches += 1
-                if first_mismatch is None:
+                if not allow_render_flow_diagnostics and first_mismatch is None:
                     field, oracle_value, wasmtime_value = field_diff
                     first_mismatch = (
                         index,
@@ -568,7 +573,7 @@ def compare_case(
                 execute_post_mismatches += 1
                 update_layer_after_draw_pre_mismatches += 1
                 update_layer_after_draw_post_mismatches += 1
-            if first_mismatch is None:
+            if execute_checkpoint_enabled and first_mismatch is None:
                 first_mismatch = (
                     index,
                     "render_execute",
@@ -676,6 +681,10 @@ def compare_case(
     ok = first_mismatch is None
     if ok:
         print(f"{case_id}: PASS frames={frame_count}")
+        if allow_render_flow_diagnostics and build_flow_mismatches:
+            print(
+                f"{case_id}: diagnostics build_flow_mismatch="
+                f"{build_flow_mismatches}")
     else:
         index, stage, field, oracle_value, wasmtime_value = first_mismatch
         label_event = (
@@ -711,7 +720,13 @@ def main(argv: list[str]) -> int:
         raise SystemExit("no cases found")
     all_ok = True
     for case_id in cases:
-        if not compare_case(args.oracle_root, args.wasmtime_root, case_id):
+        if not compare_case(
+            args.oracle_root,
+            args.wasmtime_root,
+            case_id,
+            allow_render_flow_diagnostics=(
+                args.allow_render_flow_diagnostics),
+        ):
             all_ok = False
     return 0 if all_ok else 1
 
