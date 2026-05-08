@@ -41,7 +41,9 @@ add_library(motion_playback_native_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/NodeTree.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/MotionNodeBridge.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/MotionTraceWeb.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PrivateMotionGLL.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/SeparateLayerAdaptor.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/D3DAdaptor.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBValue.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBFile.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBMedia.cpp

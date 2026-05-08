@@ -3,6 +3,7 @@
 //
 #include "PlayerRenderInternal.h"
 #include "MotionTraceWeb.h"
+#include "PrivateMotionGLL.h"
 #include "RenderManager.h"
 #include "SourceCache.h"
 #include "ncbind.hpp"
@@ -426,7 +427,6 @@ namespace motion {
 
     iTJSDispatch2 *Player::resolveSeparateLayerRenderTarget(
         SeparateLayerAdaptor *sla,
-        iTJSDispatch2 *fallbackOwner,
         int &canvasWidth,
         int &canvasHeight) {
         canvasWidth = 0;
@@ -436,7 +436,6 @@ namespace motion {
                                                : std::string{};
         auto traceResolveFailure = [&](const char *reason,
                                        const tTJSVariant &target,
-                                       iTJSDispatch2 *layerTreeOwnerObject,
                                        iTJSDispatch2 *targetLayerObject) {
             iTJSDispatch2 *targetObject = nullptr;
             iTJSDispatch2 *targetObjThis = nullptr;
@@ -448,13 +447,11 @@ namespace motion {
             detail::logoChainTraceLogf(
                 motionPath, "sla.resolveTarget.fail", "0x6D5948",
                 _clampedEvalTime,
-                "reason={} targetType={} targetObject={} targetObjThis={} fallbackOwner={} layerTreeOwner={} targetLayer={} canvas={}x{}",
+                "reason={} targetType={} targetObject={} targetObjThis={} targetLayer={} canvas={}x{}",
                 reason ? reason : "<unknown>",
                 static_cast<int>(target.Type()),
                 static_cast<const void *>(targetObject),
                 static_cast<const void *>(targetObjThis),
-                static_cast<const void *>(fallbackOwner),
-                static_cast<const void *>(layerTreeOwnerObject),
                 static_cast<const void *>(targetLayerObject),
                 canvasWidth, canvasHeight);
         };
@@ -464,70 +461,38 @@ namespace motion {
 
         const auto originalOwnerLayer = sla->getOwnerVariant();
         const auto originalTargetLayer = sla->getTargetLayer();
-        const auto fallbackOwnerValue =
-            fallbackOwner ? tTJSVariant(fallbackOwner, fallbackOwner)
-                          : tTJSVariant();
 
         // libkrkr2.so Player_ResolveSLATarget @ 0x6D5948 constructs
         // PrivateMotionGLL(owner, targetLayer) from SLA+0 and SLA+20, then
-        // stores it in SLA+40. Resolve the layer-tree owner from the original
-        // owner variant before reducing wrappers like EnvGraphicLayer to their
-        // raw Layer dispatch.
-        iTJSDispatch2 *layerTreeOwnerObject =
-            resolveLayerTreeOwnerObject(originalOwnerLayer);
-        if(!layerTreeOwnerObject) {
-            layerTreeOwnerObject =
-                resolveLayerTreeOwnerObject(originalTargetLayer);
-        }
-        if(!layerTreeOwnerObject) {
-            layerTreeOwnerObject =
-                resolveLayerTreeOwnerObject(fallbackOwnerValue);
-        }
-
-        iTJSDispatch2 *targetLayerObject = nullptr;
-        if(auto *resolved = tryResolveLayerDispatch(originalTargetLayer)) {
-            targetLayerObject = resolved;
-        }
-        if(!targetLayerObject && fallbackOwner) {
-            targetLayerObject = tryResolveLayerDispatch(fallbackOwnerValue);
-        }
-        if(!targetLayerObject) {
-            targetLayerObject = fallbackOwner;
-        }
+        // stores it in SLA+40. targetLayer remains the original SLA+20
+        // variant; only this local variable is reduced like sub_A7A050.
+        iTJSDispatch2 *targetLayerObject =
+            tryResolveLayerDispatch(originalTargetLayer);
         if(!targetLayerObject) {
             traceResolveFailure("no-target-layer", originalTargetLayer,
-                                layerTreeOwnerObject, targetLayerObject);
-            return nullptr;
-        }
-        if(!layerTreeOwnerObject) {
-            layerTreeOwnerObject = resolveLayerTreeOwnerObject(targetLayerObject);
-        }
-
-        if(!queryLayerCanvasSize(targetLayerObject, canvasWidth, canvasHeight)) {
-            traceResolveFailure("no-canvas-size", originalTargetLayer,
-                                layerTreeOwnerObject, targetLayerObject);
-            return nullptr;
-        }
-
-        iTJSDispatch2 *renderTarget = ensureReusableLayerObject(
-            sla->privateRenderTargetSlot(),
-            layerTreeOwnerObject,
-            targetLayerObject,
-            static_cast<tTVPLayerType>(ltAlpha),
-            true,
-            sla->getAbsolute());
-        if(!renderTarget) {
-            traceResolveFailure("ensure-private-target-failed",
-                                originalTargetLayer, layerTreeOwnerObject,
                                 targetLayerObject);
             return nullptr;
         }
 
-        sla->setPrivateRenderTarget(tTJSVariant(renderTarget, renderTarget));
-        if(auto *renderLayer = resolveNativeLayer(renderTarget)) {
-            renderLayer->SetSize(canvasWidth, canvasHeight);
-            renderLayer->SetVisible(true);
+        if(!queryLayerCanvasSize(targetLayerObject, canvasWidth, canvasHeight)) {
+            traceResolveFailure("no-canvas-size", originalTargetLayer,
+                                targetLayerObject);
+            return nullptr;
         }
+
+        iTJSDispatch2 *renderTarget = ensurePrivateMotionGLLLike_0x6D5948(
+            *sla,
+            originalOwnerLayer,
+            originalTargetLayer,
+            targetLayerObject,
+            canvasWidth,
+            canvasHeight);
+        if(!renderTarget) {
+            traceResolveFailure("ensure-private-target-failed",
+                                originalTargetLayer, targetLayerObject);
+            return nullptr;
+        }
+
         return renderTarget;
     }
 
@@ -862,10 +827,8 @@ namespace motion {
         SeparateLayerAdaptor *sla =
             ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(
                 slaObject, false);
-        iTJSDispatch2 *ownerLayer = sla ? sla->getOwner() : nullptr;
-        if(!ownerLayer) {
-            ownerLayer = tryResolveSeparateAdaptorOwner(tTJSVariant(slaObject, slaObject));
-        }
+        iTJSDispatch2 *ownerLayer =
+            sla ? tryResolveLayerDispatch(sla->getOwnerVariant()) : nullptr;
         if(!ownerLayer) {
             return false;
         }
@@ -879,8 +842,7 @@ namespace motion {
         int canvasWidth = 0;
         int canvasHeight = 0;
         iTJSDispatch2 *renderTarget =
-            resolveSeparateLayerRenderTarget(sla, ownerLayer, canvasWidth,
-                                             canvasHeight);
+            resolveSeparateLayerRenderTarget(sla, canvasWidth, canvasHeight);
         if(!renderTarget) {
             detail::logoChainTraceSummary(
                 motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,

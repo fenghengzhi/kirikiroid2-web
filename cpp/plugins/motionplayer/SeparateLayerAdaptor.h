@@ -3,16 +3,19 @@
 //
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include "tjs.h"
 
 namespace motion {
 
+    class PrivateMotionGLL;
+
     class SeparateLayerAdaptor {
     public:
-        explicit SeparateLayerAdaptor(tTJSVariant owner = {})
-            : _owner(owner), _targetLayer(owner) {}
+        explicit SeparateLayerAdaptor(tTJSVariant owner = {});
+        ~SeparateLayerAdaptor();
 
         static tjs_error factory(SeparateLayerAdaptor **result, tjs_int numparams,
                                  tTJSVariant **param, iTJSDispatch2 *objthis) {
@@ -38,27 +41,29 @@ namespace motion {
         tTJSVariant getTargetLayer() const { return _targetLayer; }
         void setTargetLayer(tTJSVariant v) { _targetLayer = v; }
 
-        tTJSVariant getPrivateRenderTarget() const { return _privateRenderTarget; }
-        tTJSVariant &privateRenderTargetSlot() { return _privateRenderTarget; }
-        iTJSDispatch2 *getPrivateRenderTargetObject() const {
-            return _privateRenderTarget.Type() == tvtObject
-                       ? _privateRenderTarget.AsObjectNoAddRef()
-                       : nullptr;
-        }
-        void setPrivateRenderTarget(tTJSVariant v);
+        tTJSVariant getPrivateRenderTarget() const;
+        iTJSDispatch2 *getPrivateRenderTargetObject() const;
         void c();
         static tjs_error assignCompat(tTJSVariant *result, tjs_int numparams,
                                       tTJSVariant **param,
                                       iTJSDispatch2 *objthis);
 
     private:
+        friend iTJSDispatch2 *ensurePrivateMotionGLLLike_0x6D5948(
+            SeparateLayerAdaptor &sla,
+            const tTJSVariant &ownerVariant,
+            const tTJSVariant &targetLayerVariant,
+            iTJSDispatch2 *targetLayerObject,
+            int canvasWidth,
+            int canvasHeight);
+
         void trackManagedTarget(const tTJSVariant &target);
         void clearPrivateRenderState();
 
         tTJSVariant _owner;
         bool _absolute = false;
         tTJSVariant _targetLayer;
-        tTJSVariant _privateRenderTarget;
+        std::unique_ptr<PrivateMotionGLL> _privateMotionGLL;
         std::vector<tTJSVariant> _managedTargets;
     };
 } // namespace motion

@@ -512,7 +512,6 @@ namespace motion {
         bool renderToD3DAdaptor(D3DAdaptor *adaptor);
         bool renderViaSharedD3DAdaptor(iTJSDispatch2 *targetLayerObject);
         iTJSDispatch2 *resolveSeparateLayerRenderTarget(SeparateLayerAdaptor *sla,
-                                                        iTJSDispatch2 *fallbackOwner,
                                                         int &canvasWidth,
                                                         int &canvasHeight);
         bool renderMotionFrameToTarget(iTJSDispatch2 *renderTargetObject,

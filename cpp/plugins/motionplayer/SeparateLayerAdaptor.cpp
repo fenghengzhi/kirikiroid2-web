@@ -1,4 +1,5 @@
 #include "PlayerInternal.h"
+#include "PrivateMotionGLL.h"
 
 using namespace motion::internal;
 
@@ -58,6 +59,20 @@ namespace {
 
 namespace motion {
 
+    SeparateLayerAdaptor::SeparateLayerAdaptor(tTJSVariant owner)
+        : _owner(owner), _targetLayer(owner) {}
+
+    SeparateLayerAdaptor::~SeparateLayerAdaptor() { clearPrivateRenderState(); }
+
+    tTJSVariant SeparateLayerAdaptor::getPrivateRenderTarget() const {
+        return _privateMotionGLL ? _privateMotionGLL->layerVariant()
+                                 : tTJSVariant();
+    }
+
+    iTJSDispatch2 *SeparateLayerAdaptor::getPrivateRenderTargetObject() const {
+        return _privateMotionGLL ? _privateMotionGLL->layerObject() : nullptr;
+    }
+
     void SeparateLayerAdaptor::trackManagedTarget(const tTJSVariant &target) {
         if(target.Type() != tvtObject || !target.AsObjectNoAddRef()) {
             return;
@@ -71,23 +86,33 @@ namespace motion {
         _managedTargets.push_back(target);
     }
 
-    void SeparateLayerAdaptor::setPrivateRenderTarget(tTJSVariant v) {
-        _privateRenderTarget = v;
-        trackManagedTarget(v);
-    }
-
     void SeparateLayerAdaptor::clearPrivateRenderState() {
+        iTJSDispatch2 *privateLayerObject = getPrivateRenderTargetObject();
+        // libkrkr2.so SeparateLayerAdaptor.clear @ 0x6AC27C invalidates the
+        // private object stored in SLA+40 before releasing the slot.
+        if(_privateMotionGLL) {
+            _privateMotionGLL->invalidate();
+            _privateMotionGLL.reset();
+        }
+
         for(auto &target : _managedTargets) {
             if(target.Type() != tvtObject || !target.AsObjectNoAddRef()) {
+                continue;
+            }
+            if(target.AsObjectNoAddRef() == privateLayerObject) {
+                target.Clear();
                 continue;
             }
             if(auto *layer = resolveNativeLayer(target.AsObjectNoAddRef())) {
                 layer->SetVisible(false);
             }
+            auto closure = target.AsObjectClosureNoAddRef();
+            if(closure.Object) {
+                closure.Invalidate(0, nullptr, nullptr, nullptr);
+            }
             target.Clear();
         }
         _managedTargets.clear();
-        _privateRenderTarget.Clear();
     }
 
     void SeparateLayerAdaptor::c() { clearPrivateRenderState(); }

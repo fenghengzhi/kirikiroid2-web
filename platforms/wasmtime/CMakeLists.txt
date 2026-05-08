@@ -30,6 +30,7 @@ add_library(krkr2_wasmtime_guest_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/RuntimeSupport.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/NodeTree.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/MotionNodeBridge.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PrivateMotionGLL.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/SeparateLayerAdaptor.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/D3DAdaptor.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBValue.cpp
