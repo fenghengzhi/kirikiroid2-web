@@ -290,8 +290,23 @@ jobs:
         run: |
           source "${EMSDK}/emsdk_env.sh"
           export BISON_EXECUTABLE="$(command -v bison)"
-          cmake --preset "Wasmtime Headless Debug Config" \
-            -DBISON_EXECUTABLE="${BISON_EXECUTABLE}"
+          configure_rc=1
+          for attempt in 1 2 3; do
+            echo "::group::CMake configure attempt ${attempt}/3"
+            set +e
+            cmake --preset "Wasmtime Headless Debug Config" \
+              -DBISON_EXECUTABLE="${BISON_EXECUTABLE}"
+            configure_rc=$?
+            set -e
+            echo "::endgroup::"
+            if [ "${configure_rc}" -eq 0 ]; then
+              break
+            fi
+            sleep $((attempt * 15))
+          done
+          if [ "${configure_rc}" -ne 0 ]; then
+            exit "${configure_rc}"
+          fi
           cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest
 
       - name: Run motion_playback Wasmtime LLDB guest-debug
