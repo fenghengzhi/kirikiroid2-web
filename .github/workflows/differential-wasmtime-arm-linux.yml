@@ -46,6 +46,8 @@ jobs:
             ninja-build \
             pkg-config \
             python3 \
+            python3-pip \
+            python3-venv \
             wabt \
             xvfb
           sudo apt-get install -y --no-install-recommends lldb python3-lldb || \
@@ -74,10 +76,12 @@ jobs:
           echo "${EMSDK}/upstream/emscripten" >> "${GITHUB_PATH}"
           echo "${EMSDK}/upstream/bin" >> "${GITHUB_PATH}"
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Setup Python venv
+        run: |
+          python3 -m venv --system-site-packages .venv
+          echo "${GITHUB_WORKSPACE}/.venv/bin" >> "${GITHUB_PATH}"
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
 
       - name: Install Python dependencies
         run: |
@@ -85,6 +89,7 @@ jobs:
 
       - name: Probe LLDB Python
         run: |
+          which python3
           python3 - <<'PY'
           import platform
           import sys
