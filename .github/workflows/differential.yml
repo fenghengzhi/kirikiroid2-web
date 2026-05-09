@@ -23,10 +23,7 @@ env:
 jobs:
   # ── Port vs libkrkr2 value diff under Wasmtime LLDB guest-debug.
   wasmtime:
-    # post_draw framebuffer capture requires a real hidden OpenGL context.
-    # macos-latest currently resolves to arm64 hosted runners where GLFW/NSGL
-    # cannot create a usable headless context; keep this job on Intel macOS.
-    runs-on: macos-13
+    runs-on: macos-latest
     env:
       EMSDK: ${{ github.workspace }}/.emsdk
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
