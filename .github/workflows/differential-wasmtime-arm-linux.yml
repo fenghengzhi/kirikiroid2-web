@@ -76,16 +76,15 @@ jobs:
           echo "${EMSDK}/upstream/emscripten" >> "${GITHUB_PATH}"
           echo "${EMSDK}/upstream/bin" >> "${GITHUB_PATH}"
 
-      - name: Setup Python venv
+      - name: Prepare system Python
         run: |
-          python3 -m venv --system-site-packages .venv
-          echo "${GITHUB_WORKSPACE}/.venv/bin" >> "${GITHUB_PATH}"
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
+          python3 --version
+          python3 -m pip install --break-system-packages --upgrade pip
 
       - name: Install Python dependencies
         run: |
-          python3 -m pip install -r tests/differential/python/requirements-wasm.txt
+          python3 -m pip install --break-system-packages \
+            -r tests/differential/python/requirements-wasm.txt
 
       - name: Probe LLDB Python
         run: |
