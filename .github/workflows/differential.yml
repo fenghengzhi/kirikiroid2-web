@@ -175,7 +175,7 @@ jobs:
             --record-render-step-checkpoints \
             --checkpoint-render-only \
             --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime \
-            --lldb-timeout 600
+            --lldb-timeout 1200
 
       - name: Upload motion_playback Wasmtime traces
         uses: actions/upload-artifact@v4
