@@ -106,12 +106,23 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get install -y --no-install-recommends "lldb-server-${LLVM_VERSION}" || true
-          server="$(command -v "lldb-server-${LLVM_VERSION}" || true)"
-          if [ -z "${server}" ] && [ -x "/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server" ]; then
-            server="/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server"
-          fi
+          server=""
+          for candidate in \
+            "/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server" \
+            "$(command -v "lldb-server-${LLVM_VERSION}" || true)"
+          do
+            if [ -z "${candidate}" ]; then
+              continue
+            fi
+            resolved="$(readlink -f "${candidate}" || true)"
+            if [ -n "${resolved}" ] && [ -x "${resolved}" ]; then
+              server="${resolved}"
+              break
+            fi
+          done
           if [ -z "${server}" ]; then
             echo "lldb-server executable not found" >&2
+            ls -l /usr/bin/lldb-server* 2>/dev/null || true
             find "/usr/lib/llvm-${LLVM_VERSION}" -name 'lldb-server*' -print || true
             exit 1
           fi
@@ -124,7 +135,6 @@ jobs:
           sudo ln -sf "${server}" "/usr/local/bin/lldb-server-${version}"
           sudo ln -sf "${server}" "/usr/local/bin/lldb-server-${LLVM_VERSION}"
           sudo ln -sf "${server}" "/usr/bin/lldb-server-${version}"
-          sudo ln -sf "${server}" "/usr/bin/lldb-server-${LLVM_VERSION}"
           sudo ln -sf "${server}" "/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server-${version}"
           echo "lldb-server-${version} -> ${server}"
           "${server}" --version || true
