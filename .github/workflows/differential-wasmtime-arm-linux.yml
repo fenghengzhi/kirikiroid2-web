@@ -1,0 +1,201 @@
+name: Differential Wasmtime ARM Linux
+
+on:
+  workflow_dispatch:
+
+env:
+  EMSDK_VERSION: "4.0.23"
+
+jobs:
+  wasmtime-arm-linux:
+    name: Wasmtime ARM Linux
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      EMSDK: ${{ github.workspace }}/.emsdk
+      VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init submodules (public + private reference)
+        env:
+          PRIVATE_SUBMODULE_PAT: ${{ secrets.PRIVATE_SUBMODULE_PAT }}
+        run: |
+          git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
+          git -c submodule.reference.update=checkout submodule update --init --recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bison \
+            ca-certificates \
+            cmake \
+            git \
+            libgl1-mesa-dev \
+            libgl1-mesa-dri \
+            libglfw3 \
+            libglfw3-dev \
+            libglu1-mesa-dev \
+            libglx-mesa0 \
+            mesa-utils \
+            ninja-build \
+            pkg-config \
+            python3 \
+            wabt \
+            xvfb
+          sudo apt-get install -y --no-install-recommends lldb python3-lldb || \
+            sudo apt-get install -y --no-install-recommends lldb-18 python3-lldb-18
+
+      - name: Cache Emscripten SDK
+        uses: actions/cache@v4
+        id: emsdk-cache
+        with:
+          path: ${{ env.EMSDK }}
+          key: emsdk-${{ env.EMSDK_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ports-v1
+
+      - name: Setup Emscripten SDK
+        if: steps.emsdk-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git "${EMSDK}"
+          "${EMSDK}/emsdk" install "${EMSDK_VERSION}"
+          "${EMSDK}/emsdk" activate "${EMSDK_VERSION}"
+
+      - name: Activate Emscripten SDK
+        run: |
+          source "${EMSDK}/emsdk_env.sh"
+          echo "EMSDK=${EMSDK}" >> "${GITHUB_ENV}"
+          echo "EM_CONFIG=${EMSDK}/.emscripten" >> "${GITHUB_ENV}"
+          echo "${EMSDK}" >> "${GITHUB_PATH}"
+          echo "${EMSDK}/upstream/emscripten" >> "${GITHUB_PATH}"
+          echo "${EMSDK}/upstream/bin" >> "${GITHUB_PATH}"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install -r tests/differential/python/requirements-wasm.txt
+
+      - name: Probe LLDB Python
+        run: |
+          python3 - <<'PY'
+          import platform
+          import sys
+          sys.path.insert(0, "tests/differential/python")
+          from wasm_lldb_runner import load_lldb
+          lldb = load_lldb()
+          print("lldb:", lldb.SBDebugger)
+          print("python:", sys.executable)
+          print("platform:", sys.platform, platform.machine())
+          PY
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        id: vcpkg-cache
+        with:
+          path: ${{ env.VCPKG_ROOT }}
+          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/**') }}
+
+      - name: Setup vcpkg
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "${VCPKG_ROOT}"
+          "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Ensure vcpkg is bootstrapped
+        run: |
+          test -x "${VCPKG_ROOT}/vcpkg" || "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
+          echo "${VCPKG_ROOT}" >> "${GITHUB_PATH}"
+
+      - name: Check NuGet API key
+        run: |
+          if [ -n "${{ secrets.NUGET_API_KEY }}" ]; then
+            echo "HAS_NUGET_KEY=true" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Install Mono (for NuGet)
+        if: ${{ env.HAS_NUGET_KEY == 'true' }}
+        run: |
+          sudo apt-get install -y mono-complete
+
+      - name: Add NuGet sources
+        if: ${{ env.HAS_NUGET_KEY == 'true' }}
+        run: |
+          mono `${{ env.VCPKG_ROOT }}/vcpkg fetch nuget | tail -n 1` \
+            sources add \
+            -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+            -StorePasswordInClearText \
+            -Name GitHubPackages \
+            -UserName "${{ github.actor }}" \
+            -Password "${{ secrets.NUGET_API_KEY }}"
+          mono `${{ env.VCPKG_ROOT }}/vcpkg fetch nuget | tail -n 1` \
+            setapikey "${{ secrets.NUGET_API_KEY }}" \
+            -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          echo "VCPKG_BINARY_SOURCES=clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,readwrite" >> "${GITHUB_ENV}"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.18
+        with:
+          key: wasmtime-arm-linux-${{ runner.arch }}
+
+      - name: Build WASM + run LLDB guest-debug differential tests
+        run: |
+          source "${EMSDK}/emsdk_env.sh"
+          python3 tests/differential/run_all.py
+
+      - name: Prewarm Emscripten ports for Wasmtime full guest
+        run: |
+          source "${EMSDK}/emsdk_env.sh"
+          embuilder.py build freetype
+          embuilder.py build harfbuzz harfbuzz-mt
+          embuilder.py build sdl2 sdl2-mt
+          embuilder.py build sdl2_ttf sdl2_ttf-mt
+
+      - name: Build Wasmtime full guest for motion_playback
+        run: |
+          source "${EMSDK}/emsdk_env.sh"
+          export BISON_EXECUTABLE="$(command -v bison)"
+          cmake --preset "Wasmtime Headless Debug Config" \
+            -DBISON_EXECUTABLE="${BISON_EXECUTABLE}"
+          cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest
+
+      - name: Run motion_playback Wasmtime LLDB guest-debug
+        run: |
+          source "${EMSDK}/emsdk_env.sh"
+          rm -rf tests/differential/artifacts/motion_playback_wasmtime_traces
+          mkdir -p tests/differential/artifacts/motion_playback_wasmtime_traces
+          xvfb-run -a -s "-screen 0 1920x1080x24" glxinfo -B
+          xvfb-run -a -s "-screen 0 1920x1080x24" \
+            python3 tests/differential/python/run_motion_playback_wasmtime.py \
+              --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm \
+              --startup-xp3 reference/xp3/logo_test_oracle.xp3 \
+              --skip-golden-diff \
+              --write-port-traces tests/differential/artifacts/motion_playback_wasmtime_traces \
+              --record-render-stages \
+              --record-render-step-checkpoints \
+              --checkpoint-render-only \
+              --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime \
+              --lldb-timeout 600
+
+      - name: Upload motion_playback Wasmtime traces
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-wasmtime-arm-linux-traces
+          path: tests/differential/artifacts/motion_playback_wasmtime_traces/*.port.json
+          if-no-files-found: error
+
+      - name: Upload motion_playback Wasmtime render-stage hashes
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-wasmtime-arm-linux-render-stages
+          path: |
+            tests/differential/artifacts/motion_playback_render_stages_wasmtime/manifest.json
+            tests/differential/artifacts/motion_playback_render_stages_wasmtime/events/**
+          if-no-files-found: error

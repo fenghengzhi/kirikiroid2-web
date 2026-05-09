@@ -7,12 +7,18 @@ import argparse
 import json
 import math
 import os
-import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+from wasm_lldb_runner import (
+    load_lldb,
+    register_double_arg,
+    register_int_arg,
+    run_lldb_command,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -21,76 +27,22 @@ LAYER_SAMPLE_SYMBOL = "krkr2_lldb_motion_layer_sample"
 FRAME_END_SYMBOL = "krkr2_lldb_motion_frame_end"
 
 
-def _load_lldb():
-    try:
-        lldb_python = subprocess.check_output(
-            ["xcrun", "lldb", "-P"],
-            text=True,
-            stderr=subprocess.STDOUT,
-        ).strip()
-        if lldb_python and lldb_python not in sys.path:
-            sys.path.insert(0, lldb_python)
-        import lldb  # type: ignore
-        return lldb
-    except Exception as exc:
-        raise RuntimeError(
-            "failed to import LLDB Python module. Run this verifier through "
-            "`xcrun python3`, or verify Xcode Command Line Tools with:\n"
-            "  xcrun lldb -P\n"
-            "  xcrun python3 -c 'import sys; "
-            "sys.path.insert(0, __import__(\"subprocess\").check_output("
-            "[\"xcrun\", \"lldb\", \"-P\"], text=True).strip()); "
-            "import lldb; print(lldb.SBDebugger)'"
-        ) from exc
-
-
-def _run_lldb_command(lldb, debugger, command: str) -> None:
-    result = lldb.SBCommandReturnObject()
-    debugger.GetCommandInterpreter().HandleCommand(command, result)
-    if not result.Succeeded():
-        raise RuntimeError(
-            f"LLDB command failed: {command}\n{result.GetError()}"
-        )
-
-
 def ptr_to_hex(value: int | None) -> str | None:
     if not value:
         return None
     return f"0x{value:x}"
 
 
-def sb_unsigned(value, default: int = 0) -> int:
-    if not value or not value.IsValid():
-        return default
+def probe_int(frame, index: int, default: int | None = None) -> int | None:
     try:
-        return int(value.GetValueAsUnsigned(default))
+        return register_int_arg(frame, index)
     except Exception:
-        raw = value.GetValue()
-        return int(raw, 0) if raw else default
+        return default
 
 
-def register_int(frame, name: str, default: int | None = None) -> int | None:
-    return sb_unsigned(frame.FindRegister(name), default)
-
-
-def register_double(frame, name: str) -> float | None:
-    value = frame.FindRegister(name)
-    if not value or not value.IsValid():
-        return None
-    raw = value.GetValue()
-    if raw is not None:
-        try:
-            parsed = float(raw)
-            return parsed if math.isfinite(parsed) else None
-        except Exception:
-            pass
-    bits = sb_unsigned(value, None)
-    if bits is None:
-        return None
+def probe_double(frame, index: int) -> float | None:
     try:
-        import struct
-
-        parsed = struct.unpack("<d", int(bits).to_bytes(8, "little"))[0]
+        parsed = register_double_arg(frame, index)
         return parsed if math.isfinite(parsed) else None
     except Exception:
         return None
@@ -236,11 +188,15 @@ class WasmMotionTracer:
         debugger = lldb.SBDebugger.Create()
         debugger.SetAsync(False)
         try:
-            _run_lldb_command(
-                lldb,
-                debugger,
-                "settings set plugin.jit-loader.gdb.enable on",
-            )
+            try:
+                run_lldb_command(
+                    lldb,
+                    debugger,
+                    "settings set plugin.jit-loader.gdb.enable on",
+                )
+            except RuntimeError:
+                if sys.platform == "darwin":
+                    raise
             target = debugger.CreateTarget(str(self.host_python))
             if not target or not target.IsValid():
                 raise RuntimeError(f"failed to create LLDB target: {self.host_python}")
@@ -328,7 +284,16 @@ class WasmMotionTracer:
                     f"{name}={value}"
                     for name, value in os.environ.items()
                     if (name.startswith("KRKR2_WASMTIME_GL_") or
-                        name == "KRKR2_WASMTIME_RENDERER")
+                        name.startswith("MESA_") or
+                        name in {
+                            "DISPLAY",
+                            "EGL_PLATFORM",
+                            "KRKR2_WASMTIME_RENDERER",
+                            "LIBGL_ALWAYS_SOFTWARE",
+                            "WAYLAND_DISPLAY",
+                            "XAUTHORITY",
+                            "XDG_RUNTIME_DIR",
+                        })
                 ]
                 if gl_probe_env:
                     launch.SetEnvironmentEntries(gl_probe_env, True)
@@ -451,16 +416,16 @@ class WasmMotionTracer:
 
     def _on_frame_begin(self, frame) -> None:
         self.begin_hits += 1
-        frame_id = register_int(frame, "x4")
+        frame_id = probe_int(frame, 0)
         if frame_id is None:
             self.callback_errors.append(
                 f"{FRAME_BEGIN_SYMBOL} had no frameId register")
             return
         record: dict[str, Any] = {
             "frameId": frame_id,
-            "objthis": ptr_to_hex(register_int(frame, "x5")),
-            "topPlayer": ptr_to_hex(register_int(frame, "x6")),
-            "playerCount": register_int(frame, "x7", 0) or 0,
+            "objthis": ptr_to_hex(probe_int(frame, 1)),
+            "topPlayer": ptr_to_hex(probe_int(frame, 2)),
+            "playerCount": probe_int(frame, 3, 0) or 0,
             "layer_map": {},
         }
         self.frame_records[frame_id] = record
@@ -489,15 +454,15 @@ class WasmMotionTracer:
 
     def _on_layer_sample(self, frame) -> None:
         self.layer_hits += 1
-        frame_id = register_int(frame, "x4")
-        index = register_int(frame, "x5")
+        frame_id = probe_int(frame, 0)
+        index = probe_int(frame, 1)
         if frame_id is None or index is None:
             self.callback_errors.append(
                 f"{LAYER_SAMPLE_SYMBOL} missing frame/index registers")
             return
         layer = self._layer_for(frame_id, index)
-        node_flags = register_int(frame, "x6", 0) or 0
-        opacity_blend = register_int(frame, "x7", 0) or 0
+        node_flags = probe_int(frame, 2, 0) or 0
+        opacity_blend = probe_int(frame, 3, 0) or 0
         flags = int(node_flags & 0xffffffff)
         node_type = int((node_flags >> 32) & 0xffffffff)
         if node_type >= 0x80000000:
@@ -516,20 +481,20 @@ class WasmMotionTracer:
         layer["flipX"] = bool(flags & (1 << 2))
         layer["flipY"] = bool(flags & (1 << 3))
         for key, reg in (
-            ("posX", "d0"),
-            ("posY", "d1"),
-            ("posZ", "d2"),
-            ("angleDeg", "d3"),
-            ("scaleX", "d4"),
-            ("scaleY", "d5"),
-            ("slantX", "d6"),
-            ("slantY", "d7"),
+            ("posX", 0),
+            ("posY", 1),
+            ("posZ", 2),
+            ("angleDeg", 3),
+            ("scaleX", 4),
+            ("scaleY", 5),
+            ("slantX", 6),
+            ("slantY", 7),
         ):
-            layer[key] = register_double(frame, reg)
+            layer[key] = probe_double(frame, reg)
 
     def _on_frame_end(self, frame) -> None:
         self.end_hits += 1
-        frame_id = register_int(frame, "x4")
+        frame_id = probe_int(frame, 0)
         if frame_id is None:
             self.callback_errors.append(
                 f"{FRAME_END_SYMBOL} had no frameId register")
@@ -608,10 +573,6 @@ def main(argv: list[str]) -> int:
         if args.manifest_startup_xp3 is not None else None
     )
 
-    if sys.platform != "darwin":
-        print("Wasmtime LLDB motion trace is only supported on macOS",
-              file=sys.stderr)
-        return 2
     for label, path in (
         ("driver", driver),
         ("host Python", host_python),
@@ -653,7 +614,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     try:
-        lldb = _load_lldb()
+        lldb = load_lldb()
         tracer = WasmMotionTracer(
             lldb=lldb,
             driver=driver,

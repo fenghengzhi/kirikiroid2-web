@@ -1933,9 +1933,6 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
         )
     if not startup_xp3.exists():
         raise FileNotFoundError(f"oracle bootstrap xp3 missing: {startup_xp3}")
-    if sys.platform != "darwin":
-        raise RuntimeError("Wasmtime LLDB guest trace is only supported on macOS")
-
     with tempfile.TemporaryDirectory(prefix="krkr2-motion-wasmtime-lldb-") as td:
         temp = Path(td)
         trace_path = temp / "trace.json"
@@ -1945,8 +1942,13 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
             "wasm_lldb_motion_trace.py"
         driver = REPO_ROOT / "tests" / "differential" / "python" / \
             "wasmtime_motion_playback_driver.py"
+        tracer_python = (
+            ["xcrun", "python3"] if sys.platform == "darwin"
+            else [sys.executable]
+        )
         cmd = [
-            "xcrun", "python3", str(tracer),
+            *tracer_python,
+            str(tracer),
             "--driver", str(driver),
             "--host-python", str(host_python),
             "--wasm", str(wasm_path),
