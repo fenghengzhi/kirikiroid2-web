@@ -51,7 +51,10 @@ jobs:
             python3-venv \
             wabt \
             xvfb
-          sudo apt-get install -y --no-install-recommends lldb-18 python3-lldb-18
+          sudo apt-get install -y --reinstall --no-install-recommends \
+            liblldb-18 \
+            lldb-18 \
+            python3-lldb-18
 
       - name: Cache Emscripten SDK
         uses: actions/cache@v4
