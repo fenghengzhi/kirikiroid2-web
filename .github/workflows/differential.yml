@@ -19,7 +19,6 @@ env:
   ANDROID_CMDLINE_TOOLS_VERSION: "11076708"
   LEGACY_NDK_BASENAME: "android-ndk-r17c"
   LEGACY_NDK_SHA1: "12cacc70c3fd2f40574015631c00f41fb8a39048"
-  LLVM_VERSION: "20"
 
 jobs:
   # ── Port vs libkrkr2 value diff under Wasmtime LLDB guest-debug.
@@ -126,279 +125,12 @@ jobs:
           source "${EMSDK}/emsdk_env.sh"
           python3 tests/differential/run_all.py
 
-  wasmtime-motion-arm-linux:
-    name: Wasmtime motion ARM Linux
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90
-    env:
-      EMSDK: ${{ github.workspace }}/.emsdk
-      VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
-      LIBGL_ALWAYS_SOFTWARE: "1"
-      LD_LIBRARY_PATH: /usr/lib/llvm-20/lib/python3/dist-packages/lldb:/usr/lib/llvm-20/lib
-      MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Init submodules (public + private reference)
-        env:
-          PRIVATE_SUBMODULE_PAT: ${{ secrets.PRIVATE_SUBMODULE_PAT }}
-        run: |
-          git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
-          git -c submodule.reference.update=checkout submodule update --init --recursive
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            bison \
-            ca-certificates \
-            cmake \
-            git \
-            gnupg \
-            libgl1-mesa-dev \
-            libgl1-mesa-dri \
-            libglfw3 \
-            libglfw3-dev \
-            libglu1-mesa-dev \
-            libglx-mesa0 \
-            mesa-utils \
-            ninja-build \
-            pkg-config \
-            python3 \
-            python3-pip \
-            python3-venv \
-            wabt \
-            wget \
-            xvfb
-          sudo rm -f /usr/share/keyrings/apt.llvm.org.gpg
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo gpg --dearmor -o /usr/share/keyrings/apt.llvm.org.gpg
-          echo "deb [signed-by=/usr/share/keyrings/apt.llvm.org.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-${LLVM_VERSION} main" \
-            | sudo tee /etc/apt/sources.list.d/apt.llvm.org.list
-          sudo apt-get update
-          sudo apt-get install -y --reinstall --no-install-recommends \
-            liblldb-${LLVM_VERSION} \
-            lldb-${LLVM_VERSION} \
-            python3-lldb-${LLVM_VERSION}
-
-      - name: Repair LLDB Python extension symlink
-        run: |
-          sudo LLVM_VERSION="${LLVM_VERSION}" python3 - <<'PY'
-          import importlib.machinery
-          import os
-          from pathlib import Path
-          import subprocess
-
-          llvm_version = os.environ["LLVM_VERSION"]
-          llvm_root = Path(f"/usr/lib/llvm-{llvm_version}")
-          lldb_python = subprocess.check_output(
-              [f"lldb-{llvm_version}", "-P"], text=True).strip()
-          package_dir = Path(lldb_python) / "lldb"
-          suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
-          extension = package_dir / ("_lldb" + suffix)
-          if extension.exists():
-              print(f"LLDB extension exists: {extension}")
-              raise SystemExit(0)
-          wrapper_roots = [
-              llvm_root / "lib/python3/dist-packages/lldb",
-              Path("/usr/lib/python3/dist-packages/lldb"),
-          ]
-          targets = [
-              candidate
-              for root in wrapper_roots
-              for candidate in sorted(root.glob("_lldb*.so"))
-              if candidate.exists()
-          ]
-          target = next((p for p in targets if p.exists()), None)
-          if target is None:
-              raise SystemExit("_lldb wrapper target not found")
-          if extension.exists() or extension.is_symlink():
-              extension.unlink()
-          extension.symlink_to(target)
-          print(f"linked {extension} -> {target}")
-          PY
-
-      - name: Repair LLDB server executable name
-        run: |
-          set -euo pipefail
-          sudo apt-get install -y --no-install-recommends "lldb-server-${LLVM_VERSION}" || true
-          server=""
-          for candidate in \
-            "/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server" \
-            "$(command -v "lldb-server-${LLVM_VERSION}" || true)"
-          do
-            if [ -z "${candidate}" ]; then
-              continue
-            fi
-            resolved="$(readlink -f "${candidate}" || true)"
-            if [ -n "${resolved}" ] && [ -x "${resolved}" ]; then
-              server="${resolved}"
-              break
-            fi
-          done
-          if [ -z "${server}" ]; then
-            echo "lldb-server executable not found" >&2
-            ls -l /usr/bin/lldb-server* 2>/dev/null || true
-            find "/usr/lib/llvm-${LLVM_VERSION}" -name 'lldb-server*' -print || true
-            exit 1
-          fi
-          version="$("lldb-${LLVM_VERSION}" --version | sed -n 's/^lldb version //p' | awk '{print $1}' | head -n 1)"
-          if [ -z "${version}" ]; then
-            echo "failed to parse lldb version" >&2
-            "lldb-${LLVM_VERSION}" --version >&2
-            exit 1
-          fi
-          sudo ln -sf "${server}" "/usr/local/bin/lldb-server-${version}"
-          sudo ln -sf "${server}" "/usr/local/bin/lldb-server-${LLVM_VERSION}"
-          sudo ln -sf "${server}" "/usr/bin/lldb-server-${version}"
-          sudo ln -sf "${server}" "/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server-${version}"
-          echo "lldb-server-${version} -> ${server}"
-          "${server}" --version || true
-
-      - name: Cache Emscripten SDK
-        uses: actions/cache@v4
-        id: emsdk-cache
-        with:
-          path: ${{ env.EMSDK }}
-          key: emsdk-${{ env.EMSDK_VERSION }}-${{ runner.os }}-${{ runner.arch }}-ports-v1
-
-      - name: Setup Emscripten SDK
-        if: steps.emsdk-cache.outputs.cache-hit != 'true'
-        run: |
-          git clone https://github.com/emscripten-core/emsdk.git "${EMSDK}"
-          "${EMSDK}/emsdk" install "${EMSDK_VERSION}"
-          "${EMSDK}/emsdk" activate "${EMSDK_VERSION}"
-
-      - name: Activate Emscripten SDK
-        run: |
-          source "${EMSDK}/emsdk_env.sh"
-          echo "EMSDK=${EMSDK}" >> "${GITHUB_ENV}"
-          echo "EM_CONFIG=${EMSDK}/.emscripten" >> "${GITHUB_ENV}"
-          echo "${EMSDK}" >> "${GITHUB_PATH}"
-          echo "${EMSDK}/upstream/emscripten" >> "${GITHUB_PATH}"
-          echo "${EMSDK}/upstream/bin" >> "${GITHUB_PATH}"
-
-      - name: Prepare system Python
-        run: |
-          python3 --version
-          python3 -m pip install --break-system-packages --upgrade pip
-
-      - name: Install Python dependencies
-        run: |
-          python3 -m pip install --break-system-packages \
-            -r tests/differential/python/requirements-wasm.txt
-
-      - name: Probe LLDB Python
-        run: |
-          which python3
-          command -v "lldb-${LLVM_VERSION}"
-          "lldb-${LLVM_VERSION}" -P
-          python3 - <<'PY'
-          import importlib.machinery
-          import importlib.util
-          from pathlib import Path
-          import subprocess
-          import traceback
-
-          import os
-          llvm_version = os.environ["LLVM_VERSION"]
-          lldb_python = subprocess.check_output(
-              [f"lldb-{llvm_version}", "-P"], text=True).strip()
-          package_dir = Path(lldb_python) / "lldb"
-          print("lldb package dir:", package_dir)
-          print("extension suffixes:", importlib.machinery.EXTENSION_SUFFIXES)
-          print("lldb package files:",
-                [p.name for p in sorted(package_dir.glob("*_lldb*"))])
-          for path in sorted(package_dir.glob("_lldb*.so")):
-              for name in ("_lldb", "lldb._lldb"):
-                  print(f"trying extension load {name} from {path}")
-                  try:
-                      spec = importlib.util.spec_from_file_location(name, path)
-                      assert spec is not None and spec.loader is not None
-                      module = importlib.util.module_from_spec(spec)
-                      spec.loader.exec_module(module)
-                      print("extension load ok:", name, module)
-                  except Exception:
-                      traceback.print_exc()
-          PY
-          python3 - <<'PY'
-          import platform
-          import sys
-          sys.path.insert(0, "tests/differential/python")
-          from wasm_lldb_runner import load_lldb
-          lldb = load_lldb()
-          print("lldb:", lldb.SBDebugger)
-          print("python:", sys.executable)
-          print("platform:", sys.platform, platform.machine())
-          PY
-
-      - name: Cache vcpkg
-        uses: actions/cache@v4
-        id: vcpkg-cache
-        with:
-          path: ${{ env.VCPKG_ROOT }}
-          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg/**') }}
-
-      - name: Setup vcpkg
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git "${VCPKG_ROOT}"
-          "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
-
-      - name: Ensure vcpkg is bootstrapped
-        run: |
-          test -x "${VCPKG_ROOT}/vcpkg" || "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
-          echo "${VCPKG_ROOT}" >> "${GITHUB_PATH}"
-
-      - name: Check NuGet API key
-        run: |
-          if [ -n "${{ secrets.NUGET_API_KEY }}" ]; then
-            echo "HAS_NUGET_KEY=true" >> "${GITHUB_ENV}"
-          fi
-
-      - name: Install Mono (for NuGet)
-        if: ${{ env.HAS_NUGET_KEY == 'true' }}
-        run: |
-          sudo apt-get install -y mono-complete
-
-      - name: Add NuGet sources
-        if: ${{ env.HAS_NUGET_KEY == 'true' }}
-        run: |
-          set -euo pipefail
-          nuget_log="$(mktemp)"
-          nuget_exe="$("${{ env.VCPKG_ROOT }}/vcpkg" fetch nuget 2>"${nuget_log}" | tail -n 1 || true)"
-          if [ ! -f "${nuget_exe}" ]; then
-            echo "::warning::vcpkg fetch nuget did not return a usable NuGet executable; disabling NuGet binary cache for this run"
-            cat "${nuget_log}" || true
-            exit 0
-          fi
-          mono "${nuget_exe}" \
-            sources add \
-            -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
-            -StorePasswordInClearText \
-            -Name GitHubPackages \
-            -UserName "${{ github.actor }}" \
-            -Password "${{ secrets.NUGET_API_KEY }}"
-          mono "${nuget_exe}" \
-            setapikey "${{ secrets.NUGET_API_KEY }}" \
-            -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
-          echo "VCPKG_BINARY_SOURCES=clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,readwrite" >> "${GITHUB_ENV}"
-
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.18
-        with:
-          key: wasmtime-arm-linux-${{ runner.arch }}
-
-      - name: Build WASM + run LLDB guest-debug differential tests
-        run: |
-          source "${EMSDK}/emsdk_env.sh"
-          python3 tests/differential/run_all.py
-
       - name: Prewarm Emscripten ports for Wasmtime full guest
         run: |
           source "${EMSDK}/emsdk_env.sh"
+          # SDL2_ttf's port build invokes emcc with USE_FREETYPE/USE_HARFBUZZ.
+          # Build those dependencies first so the nested port build does not
+          # try to reacquire Emscripten's cache lock in CI.
           embuilder.py build freetype
           embuilder.py build harfbuzz harfbuzz-mt
           embuilder.py build sdl2 sdl2-mt
@@ -407,24 +139,9 @@ jobs:
       - name: Build Wasmtime full guest for motion_playback
         run: |
           source "${EMSDK}/emsdk_env.sh"
-          export BISON_EXECUTABLE="$(command -v bison)"
-          configure_rc=1
-          for attempt in 1 2 3; do
-            echo "::group::CMake configure attempt ${attempt}/3"
-            set +e
-            cmake --preset "Wasmtime Headless Debug Config" \
-              -DBISON_EXECUTABLE="${BISON_EXECUTABLE}"
-            configure_rc=$?
-            set -e
-            echo "::endgroup::"
-            if [ "${configure_rc}" -eq 0 ]; then
-              break
-            fi
-            sleep $((attempt * 15))
-          done
-          if [ "${configure_rc}" -ne 0 ]; then
-            exit "${configure_rc}"
-          fi
+          export BISON_EXECUTABLE="$(brew --prefix bison)/bin/bison"
+          cmake --preset "Wasmtime Headless Debug Config" \
+            -DBISON_EXECUTABLE="${BISON_EXECUTABLE}"
           cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest
 
       - name: Run motion_playback Wasmtime LLDB guest-debug
@@ -432,18 +149,16 @@ jobs:
           source "${EMSDK}/emsdk_env.sh"
           rm -rf tests/differential/artifacts/motion_playback_wasmtime_traces
           mkdir -p tests/differential/artifacts/motion_playback_wasmtime_traces
-          xvfb-run -a -s "-screen 0 1920x1080x24" glxinfo -B
-          xvfb-run -a -s "-screen 0 1920x1080x24" \
-            python3 tests/differential/python/run_motion_playback_wasmtime.py \
-              --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm \
-              --startup-xp3 reference/xp3/logo_test_oracle.xp3 \
-              --skip-golden-diff \
-              --write-port-traces tests/differential/artifacts/motion_playback_wasmtime_traces \
-              --record-render-stages \
-              --record-render-step-checkpoints \
-              --checkpoint-render-only \
-              --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime \
-              --lldb-timeout 600
+          python3 tests/differential/python/run_motion_playback_wasmtime.py \
+            --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm \
+            --startup-xp3 reference/xp3/logo_test_oracle.xp3 \
+            --skip-golden-diff \
+            --write-port-traces tests/differential/artifacts/motion_playback_wasmtime_traces \
+            --record-render-stages \
+            --record-render-step-checkpoints \
+            --checkpoint-render-only \
+            --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime \
+            --lldb-timeout 600
 
       - name: Upload motion_playback Wasmtime traces
         uses: actions/upload-artifact@v4
@@ -982,7 +697,7 @@ jobs:
         run: docker stop redroid || true
 
   motion-playback-compare:
-    needs: [wasmtime-motion-arm-linux, adb-frida]
+    needs: [wasmtime, adb-frida]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
