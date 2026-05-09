@@ -70,8 +70,16 @@ def instantiate_standalone_module(wasmtime, wasm_path: Path):
 
 
 def load_lldb():
+    attempts: list[str] = []
+
     def valid_lldb_module(module) -> bool:
         return hasattr(module, "SBDebugger")
+
+    def describe_lldb_module(module) -> str:
+        return (
+            f"file={getattr(module, '__file__', None)!r}, "
+            f"path={list(getattr(module, '__path__', []))!r}"
+        )
 
     def forget_invalid_lldb_module() -> None:
         module = sys.modules.get("lldb")
@@ -119,8 +127,13 @@ def load_lldb():
         import lldb  # type: ignore
         if valid_lldb_module(lldb):
             return lldb
+        attempts.append(
+            "direct import produced invalid lldb module: "
+            f"{describe_lldb_module(lldb)}"
+        )
         forget_invalid_lldb_module()
-    except Exception:
+    except Exception as exc:
+        attempts.append(f"direct import failed: {exc!r}")
         forget_invalid_lldb_module()
         pass
 
@@ -140,15 +153,21 @@ def load_lldb():
             forget_invalid_lldb_module()
             import lldb  # type: ignore
             if not valid_lldb_module(lldb):
+                attempts.append(
+                    f"{binary} -P -> {lldb_python!r} produced invalid "
+                    f"lldb module: {describe_lldb_module(lldb)}"
+                )
                 forget_invalid_lldb_module()
                 continue
             return lldb
-        except Exception:
+        except Exception as exc:
+            attempts.append(f"{binary} failed: {exc!r}")
             forget_invalid_lldb_module()
             continue
     raise RuntimeError(
         "failed to import LLDB Python module. Install lldb and python lldb "
-        "bindings, then verify `python3 -c 'import lldb'` or `lldb -P`."
+        "bindings, then verify `python3 -c 'import lldb'` or `lldb -P`.\n"
+        "Attempts:\n  " + "\n  ".join(attempts)
     )
 
 
