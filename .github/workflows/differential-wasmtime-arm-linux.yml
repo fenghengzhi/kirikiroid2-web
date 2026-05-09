@@ -56,6 +56,31 @@ jobs:
             lldb-18 \
             python3-lldb-18
 
+      - name: Repair LLDB Python extension symlink
+        run: |
+          sudo python3 - <<'PY'
+          import importlib.machinery
+          from pathlib import Path
+          import subprocess
+
+          lldb_python = subprocess.check_output(
+              ["lldb-18", "-P"], text=True).strip()
+          package_dir = Path(lldb_python) / "lldb"
+          suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
+          extension = package_dir / ("_lldb" + suffix)
+          targets = [
+              Path("/usr/lib/llvm-18/lib/liblldb.so.1"),
+              *sorted(Path("/usr/lib/llvm-18/lib").glob("liblldb.so*")),
+          ]
+          target = next((p for p in targets if p.exists()), None)
+          if target is None:
+              raise SystemExit("liblldb.so target not found")
+          if extension.exists() or extension.is_symlink():
+              extension.unlink()
+          extension.symlink_to(target)
+          print(f"linked {extension} -> {target}")
+          PY
+
       - name: Cache Emscripten SDK
         uses: actions/cache@v4
         id: emsdk-cache
