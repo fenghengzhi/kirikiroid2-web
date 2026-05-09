@@ -136,6 +136,9 @@ def load_lldb():
             ).strip()
             if lldb_python and lldb_python not in sys.path:
                 sys.path.insert(0, lldb_python)
+            lldb_package = str(Path(lldb_python) / "lldb") if lldb_python else ""
+            if lldb_package and lldb_package not in sys.path:
+                sys.path.insert(1, lldb_package)
             forget_invalid_lldb_module()
             import lldb  # type: ignore
             if not valid_lldb_module(lldb):
