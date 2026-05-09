@@ -15,6 +15,7 @@ jobs:
       EMSDK: ${{ github.workspace }}/.emsdk
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       LIBGL_ALWAYS_SOFTWARE: "1"
+      LD_LIBRARY_PATH: /usr/lib/llvm-18/lib/python3/dist-packages/lldb:/usr/lib/llvm-18/lib
       MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
     steps:
       - uses: actions/checkout@v4
