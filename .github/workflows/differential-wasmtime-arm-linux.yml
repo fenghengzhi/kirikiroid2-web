@@ -92,6 +92,32 @@ jobs:
           command -v lldb-18
           lldb-18 -P
           python3 - <<'PY'
+          import importlib.machinery
+          import importlib.util
+          from pathlib import Path
+          import subprocess
+          import traceback
+
+          lldb_python = subprocess.check_output(
+              ["lldb-18", "-P"], text=True).strip()
+          package_dir = Path(lldb_python) / "lldb"
+          print("lldb package dir:", package_dir)
+          print("extension suffixes:", importlib.machinery.EXTENSION_SUFFIXES)
+          print("lldb package files:",
+                [p.name for p in sorted(package_dir.glob("*_lldb*"))])
+          for path in sorted(package_dir.glob("_lldb*.so")):
+              for name in ("_lldb", "lldb._lldb"):
+                  print(f"trying extension load {name} from {path}")
+                  try:
+                      spec = importlib.util.spec_from_file_location(name, path)
+                      assert spec is not None and spec.loader is not None
+                      module = importlib.util.module_from_spec(spec)
+                      spec.loader.exec_module(module)
+                      print("extension load ok:", name, module)
+                  except Exception:
+                      traceback.print_exc()
+          PY
+          python3 - <<'PY'
           import platform
           import sys
           sys.path.insert(0, "tests/differential/python")
