@@ -91,6 +91,12 @@ class WasmtimeGLProvider:
         self._gl = None
         self._window = None
         self._profile = ""
+        self._platform = os.environ.get(
+            "KRKR2_WASMTIME_GL_PLATFORM", "").strip().lower()
+        self._context_api = os.environ.get(
+            "KRKR2_WASMTIME_GL_CONTEXT_API", "").strip().lower()
+        if self._context_api == "osmesa":
+            os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
         self._is_gles = False
         self._shader_types: dict[int, int] = {}
         self._shader_sources: dict[int, str] = {}
@@ -180,6 +186,20 @@ class WasmtimeGLProvider:
                 "`python3 -m pip install -r "
                 "tests/differential/python/requirements-wasm.txt`"
             ) from exc
+        osmesa_library = os.environ.get(
+            "KRKR2_WASMTIME_OSMESA_LIBRARY", "").strip()
+        if osmesa_library:
+            import ctypes.util as ctypes_util
+
+            original_find_library = ctypes_util.find_library
+
+            def find_library(name: str) -> str | None:
+                if name.lower() == "osmesa":
+                    return osmesa_library
+                return original_find_library(name)
+
+            ctypes_util.find_library = find_library
+            ctypes.CDLL(osmesa_library, mode=ctypes.RTLD_GLOBAL)
         try:
             logging.getLogger("OpenGL.plugins").setLevel(logging.ERROR)
             from OpenGL import GL  # type: ignore
@@ -197,16 +217,15 @@ class WasmtimeGLProvider:
             errors.append(f"GLFW {code}: {text}")
 
         glfw.set_error_callback(error_callback)
+        platform_hint = self._glfw_platform_hint(glfw)
+        if platform_hint is not None:
+            glfw.init_hint(glfw.PLATFORM, platform_hint)
         if not glfw.init():
             raise RuntimeError(
                 "glfw.init() failed: " + ("; ".join(errors) or "no detail")
             )
 
-        attempts = [
-            ("gles", self._hint_gles),
-            ("desktop_compat", self._hint_desktop_compat),
-            ("desktop_core", self._hint_desktop_core),
-        ]
+        attempts = self._context_attempts()
         last_error = ""
         for profile, apply_hints in attempts:
             glfw.default_window_hints()
@@ -239,6 +258,40 @@ class WasmtimeGLProvider:
         glfw.terminate()
         raise RuntimeError(
             "failed to create a usable hidden OpenGL context: " + last_error
+        )
+
+    def _glfw_platform_hint(self, glfw: Any) -> int | None:
+        if self._platform in ("", "auto"):
+            return None
+        values = {
+            "cocoa": glfw.PLATFORM_COCOA,
+            "null": glfw.PLATFORM_NULL,
+            "x11": glfw.PLATFORM_X11,
+            "wayland": glfw.PLATFORM_WAYLAND,
+        }
+        if self._platform not in values:
+            raise RuntimeError(
+                "unsupported KRKR2_WASMTIME_GL_PLATFORM: "
+                f"{self._platform!r}"
+            )
+        return values[self._platform]
+
+    def _context_attempts(self):
+        if self._context_api in ("", "auto"):
+            return [
+                ("gles", self._hint_gles),
+                ("desktop_compat", self._hint_desktop_compat),
+                ("desktop_core", self._hint_desktop_core),
+            ]
+        if self._context_api == "osmesa":
+            return [("osmesa", self._hint_osmesa)]
+        if self._context_api == "egl":
+            return [("egl", self._hint_egl)]
+        if self._context_api == "nsgl":
+            return [("desktop_compat", self._hint_desktop_compat)]
+        raise RuntimeError(
+            "unsupported KRKR2_WASMTIME_GL_CONTEXT_API: "
+            f"{self._context_api!r}"
         )
 
     def _ensure_window_size(self, width: int, height: int) -> None:
@@ -274,6 +327,16 @@ class WasmtimeGLProvider:
     @staticmethod
     def _hint_desktop_compat(glfw: Any) -> None:
         glfw.window_hint(glfw.CLIENT_API, glfw.OPENGL_API)
+
+    @staticmethod
+    def _hint_osmesa(glfw: Any) -> None:
+        glfw.window_hint(glfw.CLIENT_API, glfw.OPENGL_API)
+        glfw.window_hint(glfw.CONTEXT_CREATION_API, glfw.OSMESA_CONTEXT_API)
+
+    @staticmethod
+    def _hint_egl(glfw: Any) -> None:
+        glfw.window_hint(glfw.CLIENT_API, glfw.OPENGL_API)
+        glfw.window_hint(glfw.CONTEXT_CREATION_API, glfw.EGL_CONTEXT_API)
 
     def _probe_context(self) -> None:
         GL = self._gl

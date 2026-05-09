@@ -287,9 +287,13 @@ class WasmMotionTracer:
                         name.startswith("MESA_") or
                         name in {
                             "DISPLAY",
+                            "DYLD_FALLBACK_LIBRARY_PATH",
+                            "DYLD_LIBRARY_PATH",
                             "EGL_PLATFORM",
                             "KRKR2_WASMTIME_RENDERER",
+                            "KRKR2_WASMTIME_OSMESA_LIBRARY",
                             "LIBGL_ALWAYS_SOFTWARE",
+                            "PYOPENGL_PLATFORM",
                             "WAYLAND_DISPLAY",
                             "XAUTHORITY",
                             "XDG_RUNTIME_DIR",

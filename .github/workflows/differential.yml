@@ -27,6 +27,9 @@ jobs:
     env:
       EMSDK: ${{ github.workspace }}/.emsdk
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
+      KRKR2_WASMTIME_GL_PLATFORM: "null"
+      KRKR2_WASMTIME_GL_CONTEXT_API: "osmesa"
+      PYOPENGL_PLATFORM: "osmesa"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -70,7 +73,21 @@ jobs:
       - name: Install Wasmtime LLDB test dependencies
         run: |
           brew update
-          brew install bison cmake glfw ninja pkg-config wabt
+          brew install bison cmake glfw ninja pkg-config wabt zstd
+          osmesa_root="${RUNNER_TEMP}/osmesa"
+          osmesa_pkg="${RUNNER_TEMP}/mesalib-24.3.4-h5c1a3a9_1.conda"
+          curl -fsSL -o "${osmesa_pkg}" \
+            "https://conda.anaconda.org/conda-forge/osx-arm64/mesalib-24.3.4-h5c1a3a9_1.conda"
+          echo "6b141d5241d97f658834af7148c8c68701b9bdd5a2ffdae07ccffece4990282e  ${osmesa_pkg}" \
+            | shasum -a 256 -c -
+          mkdir -p "${osmesa_root}"
+          unzip -p "${osmesa_pkg}" pkg-mesalib-24.3.4-h5c1a3a9_1.tar.zst \
+            > "${osmesa_root}/pkg.tar.zst"
+          tar --use-compress-program=unzstd -xf "${osmesa_root}/pkg.tar.zst" \
+            -C "${osmesa_root}"
+          test -f "${osmesa_root}/lib/libOSMesa.dylib"
+          echo "KRKR2_WASMTIME_OSMESA_LIBRARY=${osmesa_root}/lib/libOSMesa.dylib" >> "${GITHUB_ENV}"
+          echo "DYLD_LIBRARY_PATH=${osmesa_root}/lib:$(brew --prefix zstd)/lib:${DYLD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
           python3 -m pip install -r tests/differential/python/requirements-wasm.txt
 
       - name: Cache vcpkg
