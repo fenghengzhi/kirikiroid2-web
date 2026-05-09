@@ -211,14 +211,22 @@ jobs:
       - name: Add NuGet sources
         if: ${{ env.HAS_NUGET_KEY == 'true' }}
         run: |
-          mono `${{ env.VCPKG_ROOT }}/vcpkg fetch nuget | tail -n 1` \
+          set -euo pipefail
+          nuget_log="$(mktemp)"
+          nuget_exe="$("${{ env.VCPKG_ROOT }}/vcpkg" fetch nuget 2>"${nuget_log}" | tail -n 1 || true)"
+          if [ ! -f "${nuget_exe}" ]; then
+            echo "::warning::vcpkg fetch nuget did not return a usable NuGet executable; disabling NuGet binary cache for this run"
+            cat "${nuget_log}" || true
+            exit 0
+          fi
+          mono "${nuget_exe}" \
             sources add \
             -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
             -StorePasswordInClearText \
             -Name GitHubPackages \
             -UserName "${{ github.actor }}" \
             -Password "${{ secrets.NUGET_API_KEY }}"
-          mono `${{ env.VCPKG_ROOT }}/vcpkg fetch nuget | tail -n 1` \
+          mono "${nuget_exe}" \
             setapikey "${{ secrets.NUGET_API_KEY }}" \
             -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
           echo "VCPKG_BINARY_SOURCES=clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,readwrite" >> "${GITHUB_ENV}"
