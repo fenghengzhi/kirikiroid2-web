@@ -216,11 +216,6 @@ def register_int_arg(frame, index: int) -> int:
     machine = platform.machine().lower()
     if machine in ("arm64", "aarch64"):
         reg = f"x{4 + index}"
-    elif machine in ("x86_64", "amd64"):
-        regs = ["r8", "r9", "r10", "r11", "r12", "r13"]
-        if index >= len(regs):
-            raise RuntimeError(f"unsupported integer probe arg index: {index}")
-        reg = regs[index]
     else:
         raise RuntimeError(f"unsupported LLDB probe architecture: {machine}")
     value = sb_uint(frame.FindRegister(reg))
