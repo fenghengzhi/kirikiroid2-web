@@ -102,6 +102,33 @@ jobs:
           print(f"linked {extension} -> {target}")
           PY
 
+      - name: Repair LLDB server executable name
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends "lldb-server-${LLVM_VERSION}" || true
+          server="$(command -v "lldb-server-${LLVM_VERSION}" || true)"
+          if [ -z "${server}" ] && [ -x "/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server" ]; then
+            server="/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server"
+          fi
+          if [ -z "${server}" ]; then
+            echo "lldb-server executable not found" >&2
+            find "/usr/lib/llvm-${LLVM_VERSION}" -name 'lldb-server*' -print || true
+            exit 1
+          fi
+          version="$("lldb-${LLVM_VERSION}" --version | sed -n 's/^lldb version //p' | awk '{print $1}' | head -n 1)"
+          if [ -z "${version}" ]; then
+            echo "failed to parse lldb version" >&2
+            "lldb-${LLVM_VERSION}" --version >&2
+            exit 1
+          fi
+          sudo ln -sf "${server}" "/usr/local/bin/lldb-server-${version}"
+          sudo ln -sf "${server}" "/usr/local/bin/lldb-server-${LLVM_VERSION}"
+          sudo ln -sf "${server}" "/usr/bin/lldb-server-${version}"
+          sudo ln -sf "${server}" "/usr/bin/lldb-server-${LLVM_VERSION}"
+          sudo ln -sf "${server}" "/usr/lib/llvm-${LLVM_VERSION}/bin/lldb-server-${version}"
+          echo "lldb-server-${version} -> ${server}"
+          "${server}" --version || true
+
       - name: Cache Emscripten SDK
         uses: actions/cache@v4
         id: emsdk-cache

@@ -12,6 +12,9 @@ import tempfile
 import time
 from pathlib import Path
 
+from wasm_lldb_runner import load_lldb as _shared_load_lldb
+from wasm_lldb_runner import run_lldb_command as _shared_run_lldb_command
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_HOST_PYTHON_RAW = os.environ.get("KRKR2_HOST_PYTHON") or shutil.which("python3")
 DEFAULT_HOST_PYTHON = (
@@ -48,49 +51,11 @@ def load_specs(spec_dir: Path) -> list[dict]:
 
 
 def _load_lldb():
-    try:
-        lldb_python = subprocess.check_output(
-            ["xcrun", "lldb", "-P"],
-            text=True,
-            stderr=subprocess.STDOUT,
-        ).strip()
-        if lldb_python and lldb_python not in sys.path:
-            sys.path.insert(0, lldb_python)
-        import lldb  # type: ignore
-        return lldb
-    except Exception as exc:
-        if os.environ.get("KRKR2_LLDB_PYTHON_REEXEC") != "1":
-            try:
-                xcrun_python = subprocess.check_output(
-                    ["xcrun", "--find", "python3"],
-                    text=True,
-                    stderr=subprocess.STDOUT,
-                ).strip()
-            except Exception:
-                xcrun_python = ""
-            if xcrun_python:
-                env = dict(os.environ)
-                env["KRKR2_LLDB_PYTHON_REEXEC"] = "1"
-                env.setdefault("KRKR2_HOST_PYTHON", sys.executable)
-                os.execve(xcrun_python, [xcrun_python, *sys.argv], env)
-        raise RuntimeError(
-            "failed to import LLDB Python module. Run this verifier through "
-            "`xcrun python3`, or verify Xcode Command Line Tools with:\n"
-            "  xcrun lldb -P\n"
-            "  xcrun python3 -c 'import sys; "
-            "sys.path.insert(0, __import__(\"subprocess\").check_output("
-            "[\"xcrun\", \"lldb\", \"-P\"], text=True).strip()); "
-            "import lldb; print(lldb.SBDebugger)'"
-        ) from exc
+    return _shared_load_lldb()
 
 
 def _run_lldb_command(lldb, debugger, command: str) -> None:
-    result = lldb.SBCommandReturnObject()
-    debugger.GetCommandInterpreter().HandleCommand(command, result)
-    if not result.Succeeded():
-        raise RuntimeError(
-            f"LLDB command failed: {command}\n{result.GetError()}"
-        )
+    _shared_run_lldb_command(lldb, debugger, command)
 
 
 def _sb_int(value, default: int | None = None) -> int | None:
