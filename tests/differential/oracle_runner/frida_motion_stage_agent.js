@@ -1114,12 +1114,14 @@ function readLayerImageSnapshot(layerObject) {
     return snapshot;
 }
 
-function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint) {
+function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint,
+                                   frameIdOverride) {
     if (!recordRenderStepCheckpoints || !recording ||
         !stageEnabled(STAGE_RENDER_EXECUTE)) {
         return;
     }
-    const frameId = renderFrameIdFor(player);
+    const frameId = Number.isInteger(frameIdOverride)
+        ? frameIdOverride : renderFrameIdFor(player);
     if (frameId === null || frameId === undefined) return;
     if (!captureFrameEnabled(frameId)) return;
     const snapshot = readLayerImageSnapshot(layerObject);
@@ -1147,12 +1149,14 @@ function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint) {
 }
 
 function sendRenderNativeImageCheckpoint(player, nativeLayer, layerObject,
-                                         phase, samplePoint, diagnostics) {
+                                         phase, samplePoint, diagnostics,
+                                         frameIdOverride) {
     if (!recordRenderStepCheckpoints || !recording ||
         !stageEnabled(STAGE_RENDER_EXECUTE)) {
         return;
     }
-    const frameId = renderFrameIdFor(player);
+    const frameId = Number.isInteger(frameIdOverride)
+        ? frameIdOverride : renderFrameIdFor(player);
     if (frameId === null || frameId === undefined) return;
     if (!captureFrameEnabled(frameId)) return;
     const snapshot = readNativeLayerImageSnapshot(nativeLayer, layerObject);
@@ -1459,6 +1463,24 @@ function renderFrameIdFor(player) {
     return ptrHex(player) === ptrHex(lastCompletedTopPlayer)
         ? lastCompletedFrameId
         : null;
+}
+
+function postDrawFrameIdFromMarkerArgs(argArray, numParams) {
+    if (numParams <= 2) return null;
+    const caseArg = readVariantArg(argArray, 1);
+    const frameArg = readVariantArg(argArray, 2);
+    if (!caseArg.variant || !frameArg.scalar) return null;
+    const caseText = readVariantText(caseArg.variant);
+    let baseFrame = null;
+    if (caseText.value === 'yuzulogo') {
+        baseFrame = 0;
+    } else if (caseText.value === 'm2logo') {
+        baseFrame = 243;
+    }
+    if (baseFrame === null) return null;
+    const localFrame = frameArg.scalar.int32;
+    if (!Number.isInteger(localFrame) || localFrame < 0) return null;
+    return baseFrame + localFrame;
 }
 
 function emitRender(stage, kind, semanticPayload, diagnostics, samplePoint) {
@@ -2468,11 +2490,49 @@ function installHook() {
             if (!markerArg.variant) return;
             const marker = readVariantText(markerArg.variant);
             if (marker.value !== '__krkr2_motion_post_draw') return;
+            let markerFrameId = postDrawFrameIdFromMarkerArgs(
+                argArray, numParams);
+            if (!Number.isInteger(markerFrameId) ||
+                !captureFrameEnabled(markerFrameId)) {
+                markerFrameId = renderFrameIdFor(null);
+            }
             const explicitLayerDiagnostics = [];
+            const sendResolvedPostDraw = (layerObject, label) => {
+                if (!layerObject) return false;
+                const resolvedLayerObject =
+                    resolveLayerObjectForCheckpoint(layerObject);
+                explicitLayerDiagnostics.push({
+                    label: label,
+                    object: ptrHex(layerObject),
+                    resolved: resolvedLayerObject.diagnostics || null,
+                    selected: resolvedLayerObject.object ? true : false,
+                });
+                if (!resolvedLayerObject.object) return false;
+                sendRenderImageCheckpoint(
+                    null, resolvedLayerObject.object, 'post_draw',
+                    'startup.tjs.post_draw.after_onPaint', markerFrameId);
+                return true;
+            };
+            if (sendResolvedPostDraw(
+                    lastRenderLayerObject, 'lastRenderLayerObject')) {
+                return;
+            }
+            if (lastSlaRenderNativeLayer) {
+                sendRenderNativeImageCheckpoint(
+                    null, lastSlaRenderNativeLayer, lastDrawTargetObject,
+                    'post_draw', 'startup.tjs.post_draw.after_onPaint',
+                    {
+                        route: 'sla_native_layer_fallback',
+                        addr: PLAYER_SLA_RESOLVE_TARGET_OFF,
+                        explicitLayers: explicitLayerDiagnostics,
+                    },
+                    markerFrameId);
+                return;
+            }
             for (const candidateSpec of [
-                { index: 5, label: 'base' },
-                { index: 3, label: 'motionWorkLayer' },
                 { index: 4, label: 'currentSource' },
+                { index: 3, label: 'motionWorkLayer' },
+                { index: 5, label: 'base' },
             ]) {
                 if (numParams <= candidateSpec.index) continue;
                 const candidateArg = readVariantArg(argArray, candidateSpec.index);
@@ -2497,32 +2557,24 @@ function installHook() {
                         candidateDiag.selected = true;
                         sendRenderImageCheckpoint(
                             null, resolvedCandidate.object, 'post_draw',
-                            'startup.tjs.post_draw.after_onPaint');
+                            'startup.tjs.post_draw.after_onPaint',
+                            markerFrameId);
                         return;
                     }
                 } else {
                     explicitLayerDiagnostics.push(candidateDiag);
                 }
             }
-            if (!lastRenderLayerObject && lastSlaRenderNativeLayer) {
-                sendRenderNativeImageCheckpoint(
-                    null, lastSlaRenderNativeLayer, lastDrawTargetObject,
-                    'post_draw', 'startup.tjs.post_draw.after_onPaint',
-                    {
-                        route: 'sla_native_layer_fallback',
-                        addr: PLAYER_SLA_RESOLVE_TARGET_OFF,
-                        explicitLayers: explicitLayerDiagnostics,
-                    });
-                return;
-            }
-            const layerObject = lastDrawTargetObject || lastRenderLayerObject;
+            const layerObject = lastDrawTargetObject;
+            const errorFrameId =
+                markerFrameId !== null ? markerFrameId : renderFrameIdFor(null);
             if (!layerObject) {
                 send({
                     type: 'render_image_checkpoint',
                     source: 'android-frida-layer-main-image',
                     phase: 'post_draw',
                     samplePoint: 'startup.tjs.post_draw.after_onPaint',
-                    frameId: renderFrameIdFor(null),
+                    frameId: errorFrameId,
                     player: null,
                     layerObject: null,
                     ok: false,
@@ -2544,7 +2596,7 @@ function installHook() {
                     source: 'android-frida-layer-main-image',
                     phase: 'post_draw',
                     samplePoint: 'startup.tjs.post_draw.after_onPaint',
-                    frameId: renderFrameIdFor(null),
+                    frameId: errorFrameId,
                     player: null,
                     layerObject: ptrHex(layerObject),
                     ok: false,
@@ -2558,7 +2610,7 @@ function installHook() {
             }
             sendRenderImageCheckpoint(
                 null, resolvedLayerObject.object, 'post_draw',
-                'startup.tjs.post_draw.after_onPaint');
+                'startup.tjs.post_draw.after_onPaint', markerFrameId);
         },
     });
 

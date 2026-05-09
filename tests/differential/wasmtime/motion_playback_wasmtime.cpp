@@ -341,13 +341,13 @@ void *variantLayerObjectAt(tjs_int numparams, tTJSVariant **param,
     return object;
 }
 
-void appendRenderEvent(motion::Player *player,
-                       const char *stage,
-                       const char *kind,
-                       const char *samplePoint,
-                       const std::string &payload,
-                       const std::string &diagnostics) {
-    const int frameId = renderFrameIdFor(player);
+void appendRenderEventForFrame(int frameId,
+                               motion::Player *player,
+                               const char *stage,
+                               const char *kind,
+                               const char *samplePoint,
+                               const std::string &payload,
+                               const std::string &diagnostics) {
     if(!captureFrameEnabled(frameId)) return;
     motion::Player *eventPlayer = renderPlayerFor(player);
     std::string ev;
@@ -374,6 +374,16 @@ void appendRenderEvent(motion::Player *player,
     ev += diagnostics.empty() ? "{}" : diagnostics;
     ev += "}\n";
     g_render_probe_jsonl += ev;
+}
+
+void appendRenderEvent(motion::Player *player,
+                       const char *stage,
+                       const char *kind,
+                       const char *samplePoint,
+                       const std::string &payload,
+                       const std::string &diagnostics) {
+    appendRenderEventForFrame(renderFrameIdFor(player), player, stage, kind,
+                              samplePoint, payload, diagnostics);
 }
 
 std::string activeMotionPath(const motion::Player *player) {
@@ -707,7 +717,8 @@ void appendImageCheckpointEvent(motion::Player *player, const char *phase,
                                 int width = 0,
                                 int height = 0,
                                 int pitch = 0,
-                                const std::string &diagnostics = {}) {
+                                const std::string &diagnostics = {},
+                                int frameIdOverride = -1) {
     std::string payload = "\"phase\":";
     appendJsonString(payload, phase ? phase : "");
     payload += ",\"ok\":";
@@ -733,10 +744,20 @@ void appendImageCheckpointEvent(motion::Player *player, const char *phase,
         payload += ",\"error\":";
         appendJsonString(payload, error);
     }
-    appendRenderEvent(
-        player, "render_execute", "execute_image_checkpoint",
-        samplePoint ? samplePoint : "execute_image_checkpoint",
-        payload, diagnostics.empty() ? playerDiagnostics(player) : diagnostics);
+    const std::string diag =
+        diagnostics.empty() ? playerDiagnostics(player) : diagnostics;
+    if(frameIdOverride >= 0) {
+        appendRenderEventForFrame(
+            frameIdOverride, player, "render_execute",
+            "execute_image_checkpoint",
+            samplePoint ? samplePoint : "execute_image_checkpoint",
+            payload, diag);
+    } else {
+        appendRenderEvent(
+            player, "render_execute", "execute_image_checkpoint",
+            samplePoint ? samplePoint : "execute_image_checkpoint",
+            payload, diag);
+    }
 }
 
 std::string checkpointDiagnostics(motion::Player *player,
@@ -1431,11 +1452,11 @@ void motionTraceRenderBuildCommandsLeave(Player *player,
                       diagnostics);
 }
 
-void motionTraceRenderImageCheckpoint(Player *player,
-                                      void *renderLayerObject,
-                                      const char *phase,
-                                      const char *samplePoint) {
-    const int frameId = renderFrameIdFor(player);
+void motionTraceRenderImageCheckpointAtFrame(Player *player,
+                                             void *renderLayerObject,
+                                             const char *phase,
+                                             const char *samplePoint,
+                                             int frameId) {
     if(frameId < 0 || !captureFrameEnabled(frameId) ||
        !phase || !renderLayerObject) {
         return;
@@ -1455,7 +1476,8 @@ void motionTraceRenderImageCheckpoint(Player *player,
             "renderLayerObject did not resolve to Layer native instance",
             0, 0, 0,
             checkpointDiagnostics(
-                player, "main-image-get-scanline", nullptr, 0));
+                player, "main-image-get-scanline", nullptr, 0),
+            frameId);
         return;
     }
 
@@ -1472,13 +1494,14 @@ void motionTraceRenderImageCheckpoint(Player *player,
         appendImageCheckpointEvent(
             player, phase, samplePoint, false, path,
             "Layer main image has invalid dimensions", width, height, rowBytes,
-            diagnostics());
+            diagnostics(), frameId);
         return;
     }
     if(!mainImage) {
         appendImageCheckpointEvent(
             player, phase, samplePoint, false, path,
-            "Layer main image is null", width, height, rowBytes, diagnostics());
+            "Layer main image is null", width, height, rowBytes, diagnostics(),
+            frameId);
         return;
     }
     if(static_cast<int>(mainImage->GetWidth()) != width ||
@@ -1486,7 +1509,7 @@ void motionTraceRenderImageCheckpoint(Player *player,
         appendImageCheckpointEvent(
             player, phase, samplePoint, false, path,
             "Layer main image dimensions differ from layer dimensions",
-            width, height, rowBytes, diagnostics());
+            width, height, rowBytes, diagnostics(), frameId);
         return;
     }
 
@@ -1497,7 +1520,16 @@ void motionTraceRenderImageCheckpoint(Player *player,
         player, phase, samplePoint, ok, path,
         ok ? std::string()
            : std::string("failed to write scanline BGRA checkpoint"),
-        width, height, rowBytes, diagnostics(failedRow));
+        width, height, rowBytes, diagnostics(failedRow), frameId);
+}
+
+void motionTraceRenderImageCheckpoint(Player *player,
+                                      void *renderLayerObject,
+                                      const char *phase,
+                                      const char *samplePoint) {
+    motionTraceRenderImageCheckpointAtFrame(
+        player, renderLayerObject, phase, samplePoint,
+        renderFrameIdFor(player));
 }
 
 void motionTraceRenderDirectExecuteProbe(Player *player,
@@ -1639,31 +1671,51 @@ extern "C" void krkr2_wasm_motion_trace_save_layer_visual_readback_row(
         image, y, row, rowBytes, width, height, bpp);
 }
 
+namespace {
+
+int postDrawFrameIdFromMarker(tjs_int numparams, tTJSVariant **param) {
+    if(numparams <= 2 || !param || !param[1] || !param[2]) return -1;
+    const ttstr caseId(*param[1]);
+    int base = -1;
+    if(caseId == TJS_W("yuzulogo")) {
+        base = 0;
+    } else if(caseId == TJS_W("m2logo")) {
+        base = 243;
+    }
+    if(base < 0) return -1;
+    const auto localFrame = static_cast<int>(param[2]->AsInteger());
+    if(localFrame < 0) return -1;
+    return base + localFrame;
+}
+
+} // namespace
+
 extern "C" bool krkr2_wasm_motion_trace_debug_message_probe(
     tjs_int numparams, tTJSVariant **param) {
     if(numparams < 1 || !param || !param[0]) return false;
     const ttstr marker(*param[0]);
     if(marker != TJS_W("__krkr2_motion_post_draw")) return false;
     auto &state = traceState();
-    void *layerObject = nullptr;
+    void *layerObject = state.lastCompletedRenderLayerObject;
     if(!layerObject) {
-        layerObject = variantLayerObjectAt(numparams, param, 5);
-    }
-    if(!layerObject) {
-        layerObject = variantLayerObjectAt(numparams, param, 3);
+        layerObject = state.lastDrawTargetObject;
     }
     if(!layerObject) {
         layerObject = variantLayerObjectAt(numparams, param, 4);
     }
     if(!layerObject) {
-        layerObject = state.lastDrawTargetObject;
+        layerObject = variantLayerObjectAt(numparams, param, 3);
     }
     if(!layerObject) {
-        layerObject = state.lastCompletedRenderLayerObject;
+        layerObject = variantLayerObjectAt(numparams, param, 5);
     }
-    motion::detail::motionTraceRenderImageCheckpoint(
+    int frameId = postDrawFrameIdFromMarker(numparams, param);
+    if(frameId < 0 || !captureFrameEnabled(frameId)) {
+        frameId = renderFrameIdFor(nullptr);
+    }
+    motion::detail::motionTraceRenderImageCheckpointAtFrame(
         nullptr, layerObject, "post_draw",
-        "startup.tjs.post_draw.after_onPaint");
+        "startup.tjs.post_draw.after_onPaint", frameId);
     return true;
 }
 
