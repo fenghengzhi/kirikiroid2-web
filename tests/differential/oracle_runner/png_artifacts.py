@@ -78,6 +78,35 @@ def write_bgra_png(
     image.save(path, "PNG")
 
 
+def write_rgba_png(
+    *,
+    raw_path: Path,
+    path: Path,
+    width: int,
+    height: int,
+    bottom_left_origin: bool = False,
+) -> None:
+    """Write a tightly packed RGBA32 raw buffer as a PNG."""
+    Image = _require_pillow()
+    data = raw_path.read_bytes()
+    expected = width * height * 4
+    if len(data) != expected:
+        raise RuntimeError(
+            f"raw RGBA size mismatch for {raw_path}: "
+            f"got {len(data)}, expected {expected}"
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.frombytes("RGBA", (width, height), data, "raw", "RGBA")
+    if bottom_left_origin:
+        transpose = getattr(Image, "Transpose", None)
+        flip_top_bottom = (
+            transpose.FLIP_TOP_BOTTOM if transpose is not None
+            else Image.FLIP_TOP_BOTTOM
+        )
+        image = image.transpose(flip_top_bottom)
+    image.save(path, "PNG")
+
+
 def png_manifest_entry(
     *,
     frame: int,

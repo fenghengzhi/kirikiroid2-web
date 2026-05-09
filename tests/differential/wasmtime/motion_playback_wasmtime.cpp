@@ -1695,27 +1695,14 @@ extern "C" bool krkr2_wasm_motion_trace_debug_message_probe(
     if(numparams < 1 || !param || !param[0]) return false;
     const ttstr marker(*param[0]);
     if(marker != TJS_W("__krkr2_motion_post_draw")) return false;
-    auto &state = traceState();
-    void *layerObject = state.lastCompletedRenderLayerObject;
-    if(!layerObject) {
-        layerObject = state.lastDrawTargetObject;
+    const int frameId = postDrawFrameIdFromMarker(numparams, param);
+    if(frameId >= 0 && captureFrameEnabled(frameId)) {
+        appendRenderEventForFrame(
+            frameId, nullptr, "render_execute", "post_draw_marker",
+            "startup.tjs.post_draw.after_onPaint",
+            "\"phase\":\"post_draw\",\"ok\":true",
+            "{\"captureMethod\":\"startup.tjs Debug.message marker\"}");
     }
-    if(!layerObject) {
-        layerObject = variantLayerObjectAt(numparams, param, 4);
-    }
-    if(!layerObject) {
-        layerObject = variantLayerObjectAt(numparams, param, 3);
-    }
-    if(!layerObject) {
-        layerObject = variantLayerObjectAt(numparams, param, 5);
-    }
-    int frameId = postDrawFrameIdFromMarker(numparams, param);
-    if(frameId < 0 || !captureFrameEnabled(frameId)) {
-        frameId = renderFrameIdFor(nullptr);
-    }
-    motion::detail::motionTraceRenderImageCheckpointAtFrame(
-        nullptr, layerObject, "post_draw",
-        "startup.tjs.post_draw.after_onPaint", frameId);
     return true;
 }
 

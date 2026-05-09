@@ -110,6 +110,12 @@ class WasmtimeGLProvider:
         self._bound_framebuffer = 0
         self._bound_draw_framebuffer = 0
         self._framebuffer_color_texture: dict[int, int] = {}
+        self._window_width = int(os.environ.get(
+            "KRKR2_WASMTIME_GL_WINDOW_WIDTH", "1920"))
+        self._window_height = int(os.environ.get(
+            "KRKR2_WASMTIME_GL_WINDOW_HEIGHT", "1080"))
+        self._default_framebuffer_viewport = (
+            0, 0, self._window_width, self._window_height)
         self._pixel_store: dict[int, int] = {
             0x0CF2: 0,  # GL_UNPACK_ROW_LENGTH
             0x0D02: 0,  # GL_PACK_ROW_LENGTH
@@ -134,6 +140,11 @@ class WasmtimeGLProvider:
         self._draw_probe_limit = int(os.environ.get(
             "KRKR2_WASMTIME_GL_DRAW_PROBE_LIMIT", "64"))
         self._draw_probe_count = 0
+        self._uniform_probe_path = os.environ.get(
+            "KRKR2_WASMTIME_GL_UNIFORM_PROBE")
+        self._final_read_buffer = os.environ.get(
+            "KRKR2_WASMTIME_GL_FINAL_READ_BUFFER", "back").strip().lower()
+        self._last_default_framebuffer_read: dict[str, Any] = {}
         self._noop = os.environ.get("KRKR2_WASMTIME_GL_MODE") == "noop"
         self._next_gl_id = 1
 
@@ -201,8 +212,9 @@ class WasmtimeGLProvider:
             glfw.default_window_hints()
             glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
             apply_hints(glfw)
-            window = glfw.create_window(64, 64, "krkr2-wasmtime-gl", None,
-                                        None)
+            window = glfw.create_window(
+                self._window_width, self._window_height,
+                "krkr2-wasmtime-gl", None, None)
             if not window:
                 last_error = "; ".join(errors) or f"{profile} create failed"
                 continue
@@ -228,6 +240,21 @@ class WasmtimeGLProvider:
         raise RuntimeError(
             "failed to create a usable hidden OpenGL context: " + last_error
         )
+
+    def _ensure_window_size(self, width: int, height: int) -> None:
+        self._ensure_context()
+        if width <= 0 or height <= 0:
+            raise RuntimeError(
+                f"invalid framebuffer read size {width}x{height}")
+        if self._window_width == width and self._window_height == height:
+            return
+        self._glfw.set_window_size(self._window, width, height)
+        try:
+            self._glfw.poll_events()
+        except Exception:
+            pass
+        self._window_width = width
+        self._window_height = height
 
     @staticmethod
     def _hint_gles(glfw: Any) -> None:
@@ -1062,8 +1089,88 @@ class WasmtimeGLProvider:
 
     def glViewport(self, caller: Any, x: int, y: int, width: int,
                    height: int) -> None:
-        return self._call("glViewport", (x, y, width, height),
-                          lambda: self._gl.glViewport(x, y, width, height))
+        def run() -> None:
+            if self._bound_framebuffer == 0:
+                self._default_framebuffer_viewport = (
+                    int(x), int(y), int(width), int(height))
+            self._gl.glViewport(x, y, width, height)
+        return self._call("glViewport", (x, y, width, height), run)
+
+    def read_default_framebuffer_bgra(self, width: int, height: int) -> bytes:
+        """Read the window default framebuffer as top-left-origin BGRA32."""
+        width = int(width)
+        height = int(height)
+        self._ensure_window_size(width, height)
+        GL = self._gl
+        row_bytes = width * 4
+        size = row_bytes * height
+        read_target = getattr(GL, "GL_READ_FRAMEBUFFER", GL.GL_FRAMEBUFFER)
+        read_binding_enum = getattr(
+            GL, "GL_READ_FRAMEBUFFER_BINDING",
+            getattr(GL, "GL_FRAMEBUFFER_BINDING", 0x8CA6))
+        old_read_fb = int(GL.glGetIntegerv(read_binding_enum))
+        old_pack_alignment = int(GL.glGetIntegerv(GL.GL_PACK_ALIGNMENT))
+        old_read_buffer = None
+        if not self._is_gles and hasattr(GL, "GL_READ_BUFFER"):
+            try:
+                old_read_buffer = int(GL.glGetIntegerv(GL.GL_READ_BUFFER))
+            except Exception:
+                old_read_buffer = None
+
+        data = (ctypes.c_ubyte * size)()
+        read_buffer_name = self._final_read_buffer or "back"
+        try:
+            GL.glBindFramebuffer(read_target, 0)
+            selected_read_buffer = None
+            if not self._is_gles and hasattr(GL, "glReadBuffer"):
+                read_buffers = {
+                    "back": getattr(GL, "GL_BACK", None),
+                    "front": getattr(GL, "GL_FRONT", None),
+                }
+                selected_read_buffer = read_buffers.get(read_buffer_name)
+                if selected_read_buffer is not None:
+                    GL.glReadBuffer(selected_read_buffer)
+            GL.glPixelStorei(GL.GL_PACK_ALIGNMENT, 1)
+            GL.glReadPixels(0, 0, width, height, GL.GL_RGBA,
+                            GL.GL_UNSIGNED_BYTE, data)
+            gl_error = None
+            try:
+                gl_error = int(GL.glGetError())
+            except Exception:
+                pass
+            self._last_default_framebuffer_read = {
+                "width": width,
+                "height": height,
+                "readBuffer": read_buffer_name,
+                "readBufferEnum": (
+                    int(selected_read_buffer)
+                    if selected_read_buffer is not None else None),
+                "oldReadFramebuffer": old_read_fb,
+                "oldReadBuffer": old_read_buffer,
+                "glError": gl_error,
+            }
+        finally:
+            try:
+                if old_read_buffer is not None:
+                    GL.glReadBuffer(old_read_buffer)
+            finally:
+                GL.glBindFramebuffer(read_target, old_read_fb)
+                GL.glPixelStorei(GL.GL_PACK_ALIGNMENT, old_pack_alignment)
+
+        rgba = bytes(data)
+        bgra = bytearray(size)
+        for dst_y, src_y in enumerate(range(height - 1, -1, -1)):
+            src_off = src_y * row_bytes
+            dst_off = dst_y * row_bytes
+            row = rgba[src_off:src_off + row_bytes]
+            bgra[dst_off:dst_off + row_bytes:4] = row[2::4]
+            bgra[dst_off + 1:dst_off + row_bytes:4] = row[1::4]
+            bgra[dst_off + 2:dst_off + row_bytes:4] = row[0::4]
+            bgra[dst_off + 3:dst_off + row_bytes:4] = row[3::4]
+        return bytes(bgra)
+
+    def last_default_framebuffer_read_diagnostics(self) -> dict[str, Any]:
+        return dict(self._last_default_framebuffer_read)
 
     def glTexImage2D(self, caller: Any, target: int, level: int,
                      internalformat: int, width: int, height: int,
@@ -1486,6 +1593,19 @@ class WasmtimeGLProvider:
         self._write_i32(caller, type_ptr, int(typ))
         self._write_gl_string(caller, buf_size, length, name_ptr, text)
 
+    def _record_uniform_probe(self, program: int, index: int,
+                              result: Any) -> None:
+        path = self._uniform_probe_path
+        if not path:
+            return
+        record = {
+            "program": int(program),
+            "index": int(index),
+            "result": repr(result),
+        }
+        with open(path, "a", encoding="utf-8") as file:
+            file.write(json.dumps(record, sort_keys=True) + "\n")
+
     def glGetActiveAttrib(self, caller: Any, program: int, index: int,
                           buf_size: int, length: int, size_ptr: int,
                           type_ptr: int, name_ptr: int) -> None:
@@ -1518,6 +1638,7 @@ class WasmtimeGLProvider:
                            type_ptr: int, name_ptr: int) -> None:
         def run() -> None:
             result = self._gl.glGetActiveUniform(program, index)
+            self._record_uniform_probe(program, index, result)
             self._write_active_info(caller, result, buf_size, length,
                                     size_ptr, type_ptr, name_ptr)
         return self._call("glGetActiveUniform",

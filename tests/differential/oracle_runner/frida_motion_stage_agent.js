@@ -170,6 +170,11 @@ let lastRenderLayerObject = null;
 let lastDrawTargetObject = null;
 let lastSlaRenderTargetObject = null;
 let lastSlaRenderNativeLayer = null;
+let pendingPostDrawFrameIds = [];
+let finalFramebufferHookInstalled = false;
+let finalFramebufferHookReady = false;
+let finalFramebufferHookError = null;
+let finalFramebufferExports = null;
 let directOperateAffineFuncCallHookCache = {};
 let nativeInstanceSupportCache = {};
 let propGetFunctionCache = {};
@@ -178,6 +183,15 @@ let adaptorRenderTargetCache = {};
 let bitmapGetScanLineFunctionCache = {};
 let textureGetPixelDataFunctionCache = {};
 let textureGetPitchFunctionCache = {};
+
+const FINAL_FRAMEBUFFER_WIDTH = 1920;
+const FINAL_FRAMEBUFFER_HEIGHT = 1080;
+const GL_RGBA = 0x1908;
+const GL_UNSIGNED_BYTE = 0x1401;
+const GL_PACK_ALIGNMENT = 0x0D05;
+const GL_FRAMEBUFFER = 0x8D40;
+const GL_FRAMEBUFFER_BINDING = 0x8CA6;
+const GL_NO_ERROR = 0;
 
 function ensureBase() {
     if (base !== null) return base;
@@ -223,6 +237,216 @@ function ptrHex(value) {
         return p.toString();
     } catch (e) {
         return String(value);
+    }
+}
+
+function findExportAny(names, modules) {
+    for (const name of names) {
+        for (const moduleName of modules) {
+            try {
+                const addr = Module.findExportByName(moduleName, name);
+                if (addr) return addr;
+            } catch (e) {}
+        }
+    }
+    return null;
+}
+
+function ensureFinalFramebufferExports() {
+    if (finalFramebufferExports) {
+        return { ok: true, exports: finalFramebufferExports };
+    }
+    const modules = [null, 'libGLESv2.so', 'libGLESv3.so'];
+    const eglModules = [null, 'libEGL.so'];
+    const glReadPixels = findExportAny(['glReadPixels'], modules);
+    if (!glReadPixels) {
+        return { ok: false, error: 'glReadPixels export not found' };
+    }
+    const exports = {
+        glReadPixels: new NativeFunction(
+            glReadPixels, 'void',
+            ['int', 'int', 'int', 'int', 'int', 'int', 'pointer']),
+        glGetError: null,
+        glGetIntegerv: null,
+        glPixelStorei: null,
+        glBindFramebuffer: null,
+        eglSwapBuffers: findExportAny(['eglSwapBuffers'], eglModules),
+    };
+    const glGetError = findExportAny(['glGetError'], modules);
+    if (glGetError) {
+        exports.glGetError = new NativeFunction(glGetError, 'int', []);
+    }
+    const glGetIntegerv = findExportAny(['glGetIntegerv'], modules);
+    if (glGetIntegerv) {
+        exports.glGetIntegerv = new NativeFunction(
+            glGetIntegerv, 'void', ['int', 'pointer']);
+    }
+    const glPixelStorei = findExportAny(['glPixelStorei'], modules);
+    if (glPixelStorei) {
+        exports.glPixelStorei = new NativeFunction(
+            glPixelStorei, 'void', ['int', 'int']);
+    }
+    const glBindFramebuffer = findExportAny(['glBindFramebuffer'], modules);
+    if (glBindFramebuffer) {
+        exports.glBindFramebuffer = new NativeFunction(
+            glBindFramebuffer, 'void', ['int', 'int']);
+    }
+    finalFramebufferExports = exports;
+    return { ok: true, exports: exports };
+}
+
+function readGlInt(gl, pname) {
+    if (!gl.glGetIntegerv) return null;
+    const out = Memory.alloc(4);
+    gl.glGetIntegerv(pname, out);
+    return out.readS32();
+}
+
+function readFinalFramebufferSnapshot(frameId) {
+    const resolved = ensureFinalFramebufferExports();
+    const diagnostics = {
+        captureMethod: 'eglSwapBuffers.glReadPixels-default-framebuffer',
+        origin: 'bottom-left',
+        channelOrder: 'RGBA',
+        frameId: frameId,
+    };
+    if (!resolved.ok) {
+        return {
+            ok: false,
+            error: resolved.error,
+            diagnostics: diagnostics,
+        };
+    }
+    const gl = resolved.exports;
+    const width = FINAL_FRAMEBUFFER_WIDTH;
+    const height = FINAL_FRAMEBUFFER_HEIGHT;
+    const pitch = width * 4;
+    const size = pitch * height;
+    const oldPackAlignment = readGlInt(gl, GL_PACK_ALIGNMENT);
+    const oldFramebuffer = readGlInt(gl, GL_FRAMEBUFFER_BINDING);
+    diagnostics.oldPackAlignment = oldPackAlignment;
+    diagnostics.oldFramebuffer = oldFramebuffer;
+    try {
+        if (gl.glBindFramebuffer) {
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+        if (gl.glPixelStorei) {
+            gl.glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        }
+        const pixels = Memory.alloc(size);
+        gl.glReadPixels(
+            0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        const glError = gl.glGetError ? gl.glGetError() : GL_NO_ERROR;
+        diagnostics.glError = glError;
+        if (glError !== GL_NO_ERROR) {
+            return {
+                ok: false,
+                error: 'glReadPixels failed with GL error 0x' +
+                    glError.toString(16),
+                width: width,
+                height: height,
+                pitch: pitch,
+                pixelFormat: 'rgba32-bottom-left',
+                diagnostics: diagnostics,
+            };
+        }
+        return {
+            ok: true,
+            width: width,
+            height: height,
+            pitch: pitch,
+            pixelFormat: 'rgba32-bottom-left',
+            data: pixels.readByteArray(size),
+            diagnostics: diagnostics,
+        };
+    } catch (e) {
+        return {
+            ok: false,
+            error: String(e),
+            width: width,
+            height: height,
+            pitch: pitch,
+            pixelFormat: 'rgba32-bottom-left',
+            diagnostics: diagnostics,
+        };
+    } finally {
+        try {
+            if (gl.glBindFramebuffer && oldFramebuffer !== null) {
+                gl.glBindFramebuffer(GL_FRAMEBUFFER, oldFramebuffer);
+            }
+        } catch (e) {}
+        try {
+            if (gl.glPixelStorei && oldPackAlignment !== null) {
+                gl.glPixelStorei(GL_PACK_ALIGNMENT, oldPackAlignment);
+            }
+        } catch (e) {}
+    }
+}
+
+function sendFinalFramebufferCheckpoint(frameId, snapshot, samplePoint) {
+    const payload = {
+        type: 'render_image_checkpoint',
+        source: 'android-frida-final-framebuffer',
+        phase: 'post_draw',
+        samplePoint: samplePoint,
+        frameId: frameId,
+        player: null,
+        layerObject: null,
+        ok: snapshot.ok === true,
+        width: snapshot.width || FINAL_FRAMEBUFFER_WIDTH,
+        height: snapshot.height || FINAL_FRAMEBUFFER_HEIGHT,
+        pitch: snapshot.pitch || FINAL_FRAMEBUFFER_WIDTH * 4,
+        pixelFormat: snapshot.pixelFormat || 'rgba32-bottom-left',
+        diagnostics: snapshot.diagnostics || {},
+    };
+    if (!snapshot.ok) {
+        payload.error = snapshot.error || 'final framebuffer snapshot failed';
+        send(payload);
+        return;
+    }
+    send(payload, snapshot.data);
+}
+
+function capturePendingFinalFramebuffer() {
+    if (!recordRenderStepCheckpoints || !recording ||
+        !stageEnabled(STAGE_RENDER_EXECUTE)) {
+        return;
+    }
+    if (pendingPostDrawFrameIds.length === 0) return;
+    const frameId = pendingPostDrawFrameIds.shift();
+    if (!Number.isInteger(frameId) || !captureFrameEnabled(frameId)) return;
+    const snapshot = readFinalFramebufferSnapshot(frameId);
+    sendFinalFramebufferCheckpoint(
+        frameId, snapshot,
+        'eglSwapBuffers.before-swap.after_startup_post_draw_marker');
+}
+
+function installFinalFramebufferHook() {
+    if (finalFramebufferHookInstalled) return finalFramebufferHookReady;
+    const resolved = ensureFinalFramebufferExports();
+    if (!resolved.ok) {
+        finalFramebufferHookError = resolved.error;
+        return false;
+    }
+    if (!resolved.exports.eglSwapBuffers) {
+        finalFramebufferHookError = 'eglSwapBuffers export not found';
+        return false;
+    }
+    try {
+        Interceptor.attach(resolved.exports.eglSwapBuffers, {
+            onEnter(args) {
+                capturePendingFinalFramebuffer();
+            },
+        });
+        finalFramebufferHookInstalled = true;
+        finalFramebufferHookReady = true;
+        finalFramebufferHookError = null;
+        return true;
+    } catch (e) {
+        finalFramebufferHookInstalled = true;
+        finalFramebufferHookReady = false;
+        finalFramebufferHookError = String(e);
+        return false;
     }
 }
 
@@ -2477,6 +2701,7 @@ function ensureDirectOperateAffineFuncCallHook(fnPtr) {
 function installHook() {
     if (hooked) return;
     ensureBase();
+    installFinalFramebufferHook();
 
     attachAt(DEBUG_MESSAGE_OFF, 'Debug_message', {
         onEnter(args) {
@@ -2492,125 +2717,29 @@ function installHook() {
             if (marker.value !== '__krkr2_motion_post_draw') return;
             let markerFrameId = postDrawFrameIdFromMarkerArgs(
                 argArray, numParams);
-            if (!Number.isInteger(markerFrameId) ||
-                !captureFrameEnabled(markerFrameId)) {
+            if (!Number.isInteger(markerFrameId)) {
                 markerFrameId = renderFrameIdFor(null);
             }
-            const explicitLayerDiagnostics = [];
-            const sendResolvedPostDraw = (layerObject, label) => {
-                if (!layerObject) return false;
-                const resolvedLayerObject =
-                    resolveLayerObjectForCheckpoint(layerObject);
-                explicitLayerDiagnostics.push({
-                    label: label,
-                    object: ptrHex(layerObject),
-                    resolved: resolvedLayerObject.diagnostics || null,
-                    selected: resolvedLayerObject.object ? true : false,
-                });
-                if (!resolvedLayerObject.object) return false;
-                sendRenderImageCheckpoint(
-                    null, resolvedLayerObject.object, 'post_draw',
-                    'startup.tjs.post_draw.after_onPaint', markerFrameId);
-                return true;
-            };
-            if (sendResolvedPostDraw(
-                    lastRenderLayerObject, 'lastRenderLayerObject')) {
+            if (!Number.isInteger(markerFrameId) ||
+                !captureFrameEnabled(markerFrameId)) {
                 return;
             }
-            if (lastSlaRenderNativeLayer) {
-                sendRenderNativeImageCheckpoint(
-                    null, lastSlaRenderNativeLayer, lastDrawTargetObject,
-                    'post_draw', 'startup.tjs.post_draw.after_onPaint',
-                    {
-                        route: 'sla_native_layer_fallback',
-                        addr: PLAYER_SLA_RESOLVE_TARGET_OFF,
-                        explicitLayers: explicitLayerDiagnostics,
-                    },
-                    markerFrameId);
-                return;
-            }
-            for (const candidateSpec of [
-                { index: 4, label: 'currentSource' },
-                { index: 3, label: 'motionWorkLayer' },
-                { index: 5, label: 'base' },
-            ]) {
-                if (numParams <= candidateSpec.index) continue;
-                const candidateArg = readVariantArg(argArray, candidateSpec.index);
-                const candidateObject = candidateArg.object
-                    ? candidateArg.object.object : null;
-                const candidateDiag = {
-                    label: candidateSpec.label,
-                    index: candidateSpec.index,
-                    object: ptrHex(candidateObject),
-                    type: candidateArg.object
-                        ? candidateArg.object.type : null,
-                    error: candidateArg.error ||
-                        (candidateArg.object ? candidateArg.object.error : null),
-                };
-                if (candidateObject) {
-                    const resolvedCandidate =
-                        resolveLayerObjectForCheckpoint(candidateObject);
-                    candidateDiag.resolved =
-                        resolvedCandidate.diagnostics || null;
-                    explicitLayerDiagnostics.push(candidateDiag);
-                    if (resolvedCandidate.object) {
-                        candidateDiag.selected = true;
-                        sendRenderImageCheckpoint(
-                            null, resolvedCandidate.object, 'post_draw',
-                            'startup.tjs.post_draw.after_onPaint',
-                            markerFrameId);
-                        return;
-                    }
-                } else {
-                    explicitLayerDiagnostics.push(candidateDiag);
-                }
-            }
-            const layerObject = lastDrawTargetObject;
-            const errorFrameId =
-                markerFrameId !== null ? markerFrameId : renderFrameIdFor(null);
-            if (!layerObject) {
-                send({
-                    type: 'render_image_checkpoint',
-                    source: 'android-frida-layer-main-image',
-                    phase: 'post_draw',
-                    samplePoint: 'startup.tjs.post_draw.after_onPaint',
-                    frameId: errorFrameId,
-                    player: null,
-                    layerObject: null,
+            if (!installFinalFramebufferHook()) {
+                sendFinalFramebufferCheckpoint(markerFrameId, {
                     ok: false,
-                    pixelFormat: 'bgra32',
-                    error: 'post_draw marker has no previous draw target',
+                    error: finalFramebufferHookError ||
+                        'final framebuffer hook is unavailable',
                     diagnostics: {
-                        addr: DEBUG_MESSAGE_OFF,
+                        captureMethod:
+                            'eglSwapBuffers.glReadPixels-default-framebuffer',
                         markerType: marker.type,
-                        explicitLayers: explicitLayerDiagnostics,
+                        hookInstalled: finalFramebufferHookInstalled,
+                        hookReady: finalFramebufferHookReady,
                     },
-                });
+                }, 'startup.tjs.post_draw.after_onPaint');
                 return;
             }
-            const resolvedLayerObject =
-                resolveLayerObjectForCheckpoint(layerObject);
-            if (!resolvedLayerObject.object) {
-                send({
-                    type: 'render_image_checkpoint',
-                    source: 'android-frida-layer-main-image',
-                    phase: 'post_draw',
-                    samplePoint: 'startup.tjs.post_draw.after_onPaint',
-                    frameId: errorFrameId,
-                    player: null,
-                    layerObject: ptrHex(layerObject),
-                    ok: false,
-                    pixelFormat: 'bgra32',
-                    error: 'post_draw target did not resolve to Layer',
-                    diagnostics: Object.assign(
-                        { explicitLayers: explicitLayerDiagnostics },
-                        resolvedLayerObject.diagnostics || {}),
-                });
-                return;
-            }
-            sendRenderImageCheckpoint(
-                null, resolvedLayerObject.object, 'post_draw',
-                'startup.tjs.post_draw.after_onPaint', markerFrameId);
+            pendingPostDrawFrameIds.push(markerFrameId);
         },
     });
 
@@ -3540,6 +3669,7 @@ rpc.exports = {
         lastDrawTargetObject = null;
         lastSlaRenderTargetObject = null;
         lastSlaRenderNativeLayer = null;
+        pendingPostDrawFrameIds = [];
         adaptorRenderTargetCache = {};
         drawIdCounter = 0;
         activeDrawContexts = [];

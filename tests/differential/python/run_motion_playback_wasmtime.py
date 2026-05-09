@@ -187,16 +187,28 @@ def load_wasmtime():
 class WasmtimeEnvProvider:
     """Headless env::* provider for Emscripten imports."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, gl_provider=None) -> None:
         self.root = root
+        self.gl_provider = gl_provider
         self.canvas_width = 1920
         self.canvas_height = 1080
         self.css_width = 1920.0
         self.css_height = 1080.0
         self.main_loop: tuple[int, int, int, int] | None = None
+        self.startup_xp3_path = ""
         self._next_al_id = 1
         self._next_fd = 100
         self._fds: dict[int, dict[str, Any]] = {}
+        self.capture_swap_framebuffer = False
+        self._swap_framebuffers: list[dict[str, Any]] = []
+
+    def begin_swap_framebuffer_capture(self) -> None:
+        self._swap_framebuffers = []
+
+    def last_swap_framebuffer(self) -> dict[str, Any] | None:
+        if not self._swap_framebuffers:
+            return None
+        return self._swap_framebuffers[-1]
 
     def define_imports(self, linker: Any, module: Any) -> None:
         unknown: list[str] = []
@@ -328,8 +340,9 @@ class WasmtimeEnvProvider:
             return lambda caller, *args: self._emscripten_get(
                 name, func_type, caller, *args)
         exact = {
-            "emscripten_asm_const_int": self._return_zero,
-            "emscripten_asm_const_int_sync_on_main_thread": self._return_zero,
+            "emscripten_asm_const_int": self._asm_const_int,
+            "emscripten_asm_const_int_sync_on_main_thread":
+                self._asm_const_int,
             "emscripten_asm_const_double": self._return_one_double,
             "emscripten_asm_const_ptr_sync_on_main_thread": self._return_zero,
             "emscripten_notify_memory_growth": self._return_none,
@@ -340,7 +353,7 @@ class WasmtimeEnvProvider:
             "emscripten_check_blocking_allowed": self._return_one,
             "emscripten_num_logical_cores": self._return_one,
             "js_decode_text": self._return_zero,
-            "krkr2_get_startup_xp3_path": self._return_zero,
+            "krkr2_get_startup_xp3_path": self._startup_xp3_path,
             "execve": self._return_minus_one,
             "flock": self._return_zero,
             "getgrnam": self._return_zero,
@@ -403,9 +416,37 @@ class WasmtimeEnvProvider:
                            *args: Any) -> float:
         return 1.0
 
+    def _asm_const_int(self, _func_type: Any, _caller: Any,
+                       *args: Any) -> int:
+        if os.environ.get("KRKR2_WASMTIME_TRACE_LOGO_CHAIN") == "1":
+            for arg in args[:2]:
+                try:
+                    text = self._read_c_string(_caller, int(arg))
+                except Exception:
+                    continue
+                if ("traceLogoChain" in text or
+                        "__KRKR_TRACE_LOGO_CHAIN__" in text):
+                    return 1
+        return 0
+
     def _pthread_create(self, _func_type: Any, _caller: Any,
                         *args: Any) -> int:
         return 0
+
+    def _startup_xp3_path(self, _func_type: Any, caller: Any,
+                          *args: Any) -> int:
+        del args
+        if not self.startup_xp3_path:
+            return 0
+        malloc = caller.get("malloc")
+        if malloc is None:
+            return 0
+        data = self.startup_xp3_path.encode("utf-8") + b"\0"
+        ptr = int(malloc(caller, len(data)))
+        if ptr == 0:
+            return 0
+        self._write(caller, ptr, data)
+        return ptr
 
     def _syscall(self, name: str, caller: Any, *args: Any) -> int:
         if name == "__syscall_getcwd" and len(args) >= 2:
@@ -723,7 +764,28 @@ class WasmtimeEnvProvider:
             return 1
         if name in {"eglCreateContext", "eglCreateWindowSurface"}:
             return 1
-        if name in {"eglMakeCurrent", "eglBindAPI", "eglSwapBuffers",
+        if name == "eglSwapBuffers":
+            if self.capture_swap_framebuffer and self.gl_provider is not None:
+                try:
+                    data = self.gl_provider.read_default_framebuffer_bgra(
+                        POST_DRAW_CANVAS_SIZE[0], POST_DRAW_CANVAS_SIZE[1])
+                    self._swap_framebuffers.append({
+                        "ok": True,
+                        "data": data,
+                        "width": POST_DRAW_CANVAS_SIZE[0],
+                        "height": POST_DRAW_CANVAS_SIZE[1],
+                        "pitch": POST_DRAW_CANVAS_SIZE[0] * 4,
+                        "diagnostics": (
+                            self.gl_provider
+                            .last_default_framebuffer_read_diagnostics()),
+                    })
+                except Exception as exc:
+                    self._swap_framebuffers.append({
+                        "ok": False,
+                        "error": str(exc),
+                    })
+            return 1
+        if name in {"eglMakeCurrent", "eglBindAPI",
                     "eglSwapInterval", "eglWaitGL", "eglWaitNative",
                     "eglTerminate", "eglDestroyContext",
                     "eglDestroySurface"}:
@@ -761,9 +823,10 @@ class WasmtimeEnvProvider:
         return None
 
 
-def define_emscripten_imports(wasmtime, linker, module, root: Path) -> None:
+def define_emscripten_imports(wasmtime, linker, module,
+                              env_provider: WasmtimeEnvProvider) -> None:
     del wasmtime
-    WasmtimeEnvProvider(root).define_imports(linker, module)
+    env_provider.define_imports(linker, module)
 
 
 @dataclass(frozen=True)
@@ -849,6 +912,12 @@ def instantiate_module(wasmtime, wasm_path: Path, enable_gl: bool,
     store.set_wasi(wasi)
 
     linker = wasmtime.Linker(engine)
+    gl_provider = None
+    if enable_gl:
+        from wasmtime_gl_provider import WasmtimeGLProvider
+
+        gl_provider = WasmtimeGLProvider()
+    env_provider = WasmtimeEnvProvider(wasi_root, gl_provider)
     for imp in module.imports:
         if imp.module == "env" and imp.name == "memory":
             memory_type = imp.type
@@ -868,11 +937,8 @@ def instantiate_module(wasmtime, wasm_path: Path, enable_gl: bool,
             else:
                 memory = wasmtime.Memory(store, memory_type)
             linker.define(store, "env", "memory", memory)
-    define_emscripten_imports(wasmtime, linker, module, wasi_root)
+    define_emscripten_imports(wasmtime, linker, module, env_provider)
     if enable_gl:
-        from wasmtime_gl_provider import WasmtimeGLProvider
-
-        gl_provider = WasmtimeGLProvider()
         gl_provider.define_imports(linker, module)
     else:
         gl_imports = [
@@ -897,7 +963,7 @@ def instantiate_module(wasmtime, wasm_path: Path, enable_gl: bool,
     if initialize is not None:
         initialize(store)
 
-    return store, exports
+    return store, exports, gl_provider, env_provider
 
 
 def mem_base(store, memory) -> int:
@@ -989,6 +1055,52 @@ def _load_render_checkpoint_events(path: Path | None) -> list[dict[str, Any]]:
         event for event in _load_render_stage_events(path)
         if event.get("kind") == "execute_image_checkpoint"
     ]
+
+
+def _capture_frame_id_enabled(frame_id: int, start: int, count: int) -> bool:
+    if frame_id < max(0, int(start)):
+        return False
+    return int(count) < 0 or frame_id < max(0, int(start)) + int(count)
+
+
+def _host_final_framebuffer_checkpoint_event(
+    *,
+    frame_id: int,
+    guest_path: str,
+    ok: bool,
+    seq: int,
+    error: str | None = None,
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    merged_diagnostics: dict[str, Any] = {
+        "captureMethod": "eglSwapBuffers.glReadPixels-default-framebuffer",
+        "origin": "top-left",
+        "channelOrder": "BGRA",
+        "sampleTiming": "inside env.eglSwapBuffers before returning",
+    }
+    if diagnostics:
+        merged_diagnostics.update(diagnostics)
+    event: dict[str, Any] = {
+        "schema": RENDER_EVENT_SCHEMA,
+        "source": "wasmtime-host-final-framebuffer",
+        "stage": "render_execute",
+        "kind": "execute_image_checkpoint",
+        "samplePoint": "wasmtime.tick.after-main-loop.default-framebuffer",
+        "frameId": int(frame_id),
+        "player": None,
+        "seq": int(seq),
+        "phase": "post_draw",
+        "ok": bool(ok),
+        "width": POST_DRAW_CANVAS_SIZE[0],
+        "height": POST_DRAW_CANVAS_SIZE[1],
+        "pitch": POST_DRAW_CANVAS_SIZE[0] * 4,
+        "pixelFormat": "bgra32",
+        "guestPath": guest_path,
+        "diagnostics": merged_diagnostics,
+    }
+    if error:
+        event["error"] = error
+    return event
 
 
 def _annotate_wasmtime_layer_raw_probe_events(
@@ -1164,14 +1276,6 @@ def _collect_wasmtime_render_stage_capture(
     images_root.mkdir(parents=True, exist_ok=True)
 
     specs_by_id = {s["id"]: s for s in specs}
-    draw_leave_frames: set[int] = set()
-    if render_stage_events_path is not None:
-        for event in _load_render_stage_events(render_stage_events_path):
-            if (event.get("kind") == "draw_leave" and
-                    event.get("samplePoint") ==
-                    "Player::drawCompat_0x6D5FB8.leave" and
-                    isinstance(event.get("frameId"), int)):
-                draw_leave_frames.add(int(event["frameId"]))
     checkpoint_by_frame_phase: dict[tuple[int, str], dict[str, Any]] = {}
     if record_render_step_checkpoints:
         for checkpoint in _load_render_checkpoint_events(render_stage_events_path):
@@ -1234,6 +1338,12 @@ def _collect_wasmtime_render_stage_capture(
                             f"pixelFormat for {spec_id} frame {local_frame}: "
                             f"{checkpoint.get('pixelFormat')}")
                     if phase == "post_draw":
+                        if checkpoint.get("source") != (
+                                "wasmtime-host-final-framebuffer"):
+                            raise RuntimeError(
+                                f"Wasmtime post_draw checkpoint for {spec_id} "
+                                f"frame {local_frame} was not captured from "
+                                "the host final framebuffer")
                         size = (
                             int(checkpoint["width"]),
                             int(checkpoint["height"]),
@@ -1314,14 +1424,6 @@ def _collect_wasmtime_render_stage_capture(
                 if not path.exists():
                     raise RuntimeError(
                         f"missing Wasmtime render stage PNG: {path}")
-                if phase == "post_draw":
-                    global_frame = case_frame_id_base + frame
-                    if global_frame not in draw_leave_frames:
-                        raise RuntimeError(
-                            f"Wasmtime post_draw PNG for {spec_id} frame "
-                            f"{frame} has no matching "
-                            "Player::drawCompat_0x6D5FB8.leave event "
-                            f"(frameId {global_frame})")
                 images.append(png_manifest_entry(
                     frame=frame,
                     phase=phase,
@@ -1491,11 +1593,13 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                     for phase in RENDER_STEP_CHECKPOINT_SURFACES:
                         (checkpoint_root / "_execute" / phase).mkdir(
                             parents=True, exist_ok=True)
-            summary = _drive_full_guest_with_bootstrap(
-                wasmtime, wasm_path, bootstrap, frames,
-                record_layer_raw_probes=record_layer_raw_probes,
-                record_save_layer_visual_readback_probes=(
-                    record_save_layer_visual_readback_probes),
+                summary = _drive_full_guest_with_bootstrap(
+                    wasmtime, wasm_path, bootstrap, frames,
+                    record_render_step_checkpoints=(
+                        record_render_step_checkpoints),
+                    record_layer_raw_probes=record_layer_raw_probes,
+                    record_save_layer_visual_readback_probes=(
+                        record_save_layer_visual_readback_probes),
                 save_layer_visual_readback_frame_start=(
                     save_layer_visual_readback_frame_start),
                 save_layer_visual_readback_frame_count=(
@@ -1531,6 +1635,7 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
 def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                                      bootstrap: WasmtimeBootstrapInfo,
                                      frames: int, *,
+                                     record_render_step_checkpoints: bool = False,
                                      record_layer_raw_probes: bool = False,
                                      record_save_layer_visual_readback_probes: bool = False,
                                      save_layer_visual_readback_frame_start: int = 0,
@@ -1539,13 +1644,12 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                                      capture_frame_count: int = -1,
                                      render_stage_out: Path | None = None
                                      ) -> dict[str, Any]:
-    store, exports = instantiate_module(
+    store, exports, gl_provider, env_provider = instantiate_module(
         wasmtime, wasm_path, enable_gl=True, wasi_root=bootstrap.root)
     memory = exports["memory"]
     malloc = exports["malloc"]
     free = exports["free"]
     init = exports["krkr2_wasm_init"]
-    startup = exports["krkr2_wasm_startup_from"]
     tick = exports["krkr2_wasm_tick"]
     try:
         set_record_layer_raw_probes = exports[
@@ -1578,6 +1682,7 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
             "font": bootstrap.font_guest_path,
         },
     }).encode("utf-8")
+    env_provider.startup_xp3_path = guest_path.decode("utf-8")
 
     init_ok = call_with_guest_bytes(
         store, memory, malloc, free, config,
@@ -1601,33 +1706,140 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
         set_render_capture_frame_filter(
             store, int(capture_frame_start), int(capture_frame_count))
 
-    startup_ok = call_with_guest_bytes(
-        store, memory, malloc, free, guest_path,
-        lambda ptr, length: startup(store, ptr, length))
-
     err = read_string(store, memory,
                       exports["krkr2_wasm_get_error_ptr"](store),
                       exports["krkr2_wasm_get_error_len"](store))
-    if not startup_ok:
-        raise RuntimeError(err or "krkr2_wasm_startup_from returned false")
+    if err:
+        raise RuntimeError(err)
 
-    for _ in range(frames):
+    render_events: list[dict[str, Any]] = []
+    host_framebuffer_events: list[dict[str, Any]] = []
+    captured_host_framebuffer_frames: set[int] = set()
+    required_host_framebuffer_frames: set[int] = set()
+    if record_render_step_checkpoints:
+        required_start = max(0, int(capture_frame_start))
+        if int(capture_frame_count) < 0:
+            required_end = int(frames)
+        else:
+            required_end = required_start + int(capture_frame_count)
+        required_host_framebuffer_frames = set(
+            range(required_start, required_end))
+    checkpoint_root = (
+        bootstrap.root / RENDER_CHECKPOINT_GUEST_ROOT.lstrip("/") /
+        "_execute" / "post_draw"
+    )
+    if record_render_step_checkpoints:
+        checkpoint_root.mkdir(parents=True, exist_ok=True)
+        if gl_provider is None:
+            raise RuntimeError(
+                "final framebuffer capture requires Wasmtime GL provider")
+        env_provider.capture_swap_framebuffer = True
+
+    max_ticks = int(frames)
+    if record_render_step_checkpoints:
+        max_ticks += max(30, len(required_host_framebuffer_frames) // 4)
+    ticks_driven = 0
+    for tick_index in range(max_ticks):
+        if record_render_step_checkpoints:
+            env_provider.begin_swap_framebuffer_capture()
         tick_ok = tick(store, 1000.0 / 60.0)
+        ticks_driven += 1
         if not tick_ok:
             err = read_string(store, memory,
                               exports["krkr2_wasm_get_error_ptr"](store),
                               exports["krkr2_wasm_get_error_len"](store))
             raise RuntimeError(err or "krkr2_wasm_tick returned false")
+        tick_framebuffer_bgra: bytes | None = None
+        tick_framebuffer_error: str | None = None
+        tick_framebuffer_diagnostics: dict[str, Any] | None = None
+        if record_render_step_checkpoints:
+            swap_framebuffer = env_provider.last_swap_framebuffer()
+            if swap_framebuffer and swap_framebuffer.get("ok"):
+                data = swap_framebuffer.get("data")
+                if isinstance(data, bytes):
+                    tick_framebuffer_bgra = data
+                    diagnostics = swap_framebuffer.get("diagnostics")
+                    if isinstance(diagnostics, dict):
+                        tick_framebuffer_diagnostics = diagnostics
+                else:
+                    tick_framebuffer_error = (
+                        "eglSwapBuffers framebuffer capture had no bytes")
+            elif swap_framebuffer:
+                tick_framebuffer_error = str(
+                    swap_framebuffer.get("error") or
+                    "eglSwapBuffers framebuffer capture failed")
+            else:
+                tick_framebuffer_error = (
+                    "tick did not call eglSwapBuffers before post_draw marker")
+        tick_events = (
+            _read_render_probe_events(store, exports, memory)
+            if render_stage_out is not None else []
+        )
+        render_events.extend(tick_events)
+        if record_render_step_checkpoints:
+            post_draw_marker_frames = [
+                int(event["frameId"]) for event in tick_events
+                if event.get("kind") == "post_draw_marker"
+                and isinstance(event.get("frameId"), int)
+            ]
+            for frame_id in post_draw_marker_frames:
+                if not _capture_frame_id_enabled(
+                        frame_id, capture_frame_start, capture_frame_count):
+                    continue
+                if frame_id in captured_host_framebuffer_frames:
+                    continue
+                guest_path = (
+                    f"{RENDER_CHECKPOINT_GUEST_ROOT}/_execute/post_draw/"
+                    f"frame_{frame_id:04d}.bgra"
+                )
+                raw_path = bootstrap.root / guest_path.lstrip("/")
+                seq = 100_000_000 + len(host_framebuffer_events)
+                if tick_framebuffer_bgra is not None:
+                    raw_path.write_bytes(tick_framebuffer_bgra)
+                    host_framebuffer_events.append(
+                        _host_final_framebuffer_checkpoint_event(
+                            frame_id=frame_id,
+                            guest_path=guest_path,
+                            ok=True,
+                            seq=seq,
+                            diagnostics=tick_framebuffer_diagnostics))
+                else:
+                    host_framebuffer_events.append(
+                        _host_final_framebuffer_checkpoint_event(
+                            frame_id=frame_id,
+                            guest_path=guest_path,
+                            ok=False,
+                            seq=seq,
+                            error=tick_framebuffer_error or
+                            "final framebuffer read failed"))
+                captured_host_framebuffer_frames.add(frame_id)
+        if tick_index + 1 >= frames:
+            if (not required_host_framebuffer_frames or
+                    required_host_framebuffer_frames.issubset(
+                        captured_host_framebuffer_frames)):
+                break
 
     render_probe_summary: dict[str, Any] | None = None
     if render_stage_out is not None:
-        events = _read_render_probe_events(store, exports, memory)
+        events = render_events + _read_render_probe_events(
+            store, exports, memory)
+        post_draw_marker_frames = {
+            int(event["frameId"]) for event in events
+            if event.get("kind") == "post_draw_marker"
+            and isinstance(event.get("frameId"), int)
+        }
+        events.extend(host_framebuffer_events)
         render_stage_out.parent.mkdir(parents=True, exist_ok=True)
         render_stage_out.write_text(
             json.dumps(events, ensure_ascii=False, allow_nan=False) + "\n",
             encoding="utf-8",
         )
-        render_probe_summary = {"eventCount": len(events)}
+        render_probe_summary = {
+            "eventCount": len(events),
+            "ticksDriven": ticks_driven,
+            "hostFinalFramebufferCheckpointCount": len(host_framebuffer_events),
+            "postDrawMarkerCount": len(post_draw_marker_frames),
+        }
     motion_trace_frames = None
     if get_motion_trace_frame_count is not None:
         motion_trace_frames = int(get_motion_trace_frame_count(store))
@@ -1635,7 +1847,7 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
     return {
         "ok": True,
         "runner": "motion-playback-wasmtime-lldb-driver",
-        "framesDriven": frames,
+        "framesDriven": ticks_driven,
         "motionTraceFrames": motion_trace_frames,
         "bootstrap": {
             "guestRoot": str(bootstrap.root),

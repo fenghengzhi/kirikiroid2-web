@@ -22,6 +22,7 @@ sys.path.insert(0, str(REPO_ROOT / "tests" / "differential"))
 from oracle_runner.png_artifacts import (
     png_manifest_entry,
     write_bgra_png,
+    write_rgba_png,
 )
 from oracle_runner.motion_capture_window import (
     FrameCaptureWindow,
@@ -887,12 +888,27 @@ def add_oracle_execute_checkpoint_images(
                 rel = Path("images") / case_id / phase / \
                     f"frame_{local_frame:04d}.png"
                 path = artifact_dir / rel
-                write_bgra_png(
-                    raw_path=Path(raw_path_value),
-                    path=path,
-                    width=int(checkpoint["width"]),
-                    height=int(checkpoint["height"]),
-                )
+                pixel_format = checkpoint.get("pixelFormat")
+                if pixel_format == "bgra32":
+                    write_bgra_png(
+                        raw_path=Path(raw_path_value),
+                        path=path,
+                        width=int(checkpoint["width"]),
+                        height=int(checkpoint["height"]),
+                    )
+                elif pixel_format == "rgba32-bottom-left":
+                    write_rgba_png(
+                        raw_path=Path(raw_path_value),
+                        path=path,
+                        width=int(checkpoint["width"]),
+                        height=int(checkpoint["height"]),
+                        bottom_left_origin=True,
+                    )
+                else:
+                    raise RuntimeError(
+                        f"oracle {phase} checkpoint has unsupported "
+                        f"pixelFormat for {case_id} frame {local_frame}: "
+                        f"{pixel_format}")
                 entry = png_manifest_entry(
                     frame=local_frame,
                     phase=phase,

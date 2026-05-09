@@ -267,7 +267,12 @@ class FridaMotionStageTracer:
                     return
                 frame_id = int(frame_value)
                 phase = str(record.get("phase") or "unknown")
-                raw_path = raw_dir / f"frame_{frame_id:04d}_{phase}.bgra"
+                pixel_format = str(record.get("pixelFormat") or "bgra32")
+                suffix = (
+                    "rgba" if pixel_format.startswith("rgba32")
+                    else "bgra"
+                )
+                raw_path = raw_dir / f"frame_{frame_id:04d}_{phase}.{suffix}"
                 raw_path.write_bytes(bytes(data))
                 record["rawPath"] = str(raw_path)
         self._image_checkpoints.append(record)
