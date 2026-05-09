@@ -70,6 +70,14 @@ def instantiate_standalone_module(wasmtime, wasm_path: Path):
 
 
 def load_lldb():
+    def valid_lldb_module(module) -> bool:
+        return hasattr(module, "SBDebugger")
+
+    def forget_invalid_lldb_module() -> None:
+        module = sys.modules.get("lldb")
+        if module is not None and not valid_lldb_module(module):
+            del sys.modules["lldb"]
+
     if sys.platform == "darwin":
         try:
             lldb_python = subprocess.check_output(
@@ -80,6 +88,8 @@ def load_lldb():
             if lldb_python and lldb_python not in sys.path:
                 sys.path.insert(0, lldb_python)
             import lldb  # type: ignore
+            if not valid_lldb_module(lldb):
+                raise RuntimeError("imported lldb module has no SBDebugger")
             return lldb
         except Exception as exc:
             if os.environ.get("KRKR2_LLDB_PYTHON_REEXEC") != "1":
@@ -107,8 +117,11 @@ def load_lldb():
 
     try:
         import lldb  # type: ignore
-        return lldb
+        if valid_lldb_module(lldb):
+            return lldb
+        forget_invalid_lldb_module()
     except Exception:
+        forget_invalid_lldb_module()
         pass
 
     candidates = ["lldb", "lldb-20", "lldb-19", "lldb-18", "lldb-17"]
@@ -124,9 +137,14 @@ def load_lldb():
             ).strip()
             if lldb_python and lldb_python not in sys.path:
                 sys.path.insert(0, lldb_python)
+            forget_invalid_lldb_module()
             import lldb  # type: ignore
+            if not valid_lldb_module(lldb):
+                forget_invalid_lldb_module()
+                continue
             return lldb
         except Exception:
+            forget_invalid_lldb_module()
             continue
     raise RuntimeError(
         "failed to import LLDB Python module. Install lldb and python lldb "
