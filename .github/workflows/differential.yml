@@ -23,7 +23,10 @@ env:
 jobs:
   # ── Port vs libkrkr2 value diff under Wasmtime LLDB guest-debug.
   wasmtime:
-    runs-on: macos-latest
+    # post_draw framebuffer capture requires a real hidden OpenGL context.
+    # macos-latest currently resolves to arm64 hosted runners where GLFW/NSGL
+    # cannot create a usable headless context; keep this job on Intel macOS.
+    runs-on: macos-13
     env:
       EMSDK: ${{ github.workspace }}/.emsdk
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
@@ -145,8 +148,6 @@ jobs:
           cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest
 
       - name: Run motion_playback Wasmtime LLDB guest-debug
-        env:
-          KRKR2_WASMTIME_GL_MODE: noop
         run: |
           source "${EMSDK}/emsdk_env.sh"
           rm -rf tests/differential/artifacts/motion_playback_wasmtime_traces
