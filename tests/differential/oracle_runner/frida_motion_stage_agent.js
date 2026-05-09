@@ -170,10 +170,6 @@ let lastRenderLayerObject = null;
 let lastDrawTargetObject = null;
 let lastSlaRenderTargetObject = null;
 let lastSlaRenderNativeLayer = null;
-let pendingPostDrawFrameIds = [];
-let finalFramebufferHookInstalled = false;
-let finalFramebufferHookReady = false;
-let finalFramebufferHookError = null;
 let finalFramebufferExports = null;
 let directOperateAffineFuncCallHookCache = {};
 let nativeInstanceSupportCache = {};
@@ -257,7 +253,6 @@ function ensureFinalFramebufferExports() {
         return { ok: true, exports: finalFramebufferExports };
     }
     const modules = [null, 'libGLESv2.so', 'libGLESv3.so'];
-    const eglModules = [null, 'libEGL.so'];
     const glReadPixels = findExportAny(['glReadPixels'], modules);
     if (!glReadPixels) {
         return { ok: false, error: 'glReadPixels export not found' };
@@ -270,7 +265,6 @@ function ensureFinalFramebufferExports() {
         glGetIntegerv: null,
         glPixelStorei: null,
         glBindFramebuffer: null,
-        eglSwapBuffers: findExportAny(['eglSwapBuffers'], eglModules),
     };
     const glGetError = findExportAny(['glGetError'], modules);
     if (glGetError) {
@@ -305,7 +299,7 @@ function readGlInt(gl, pname) {
 function readFinalFramebufferSnapshot(frameId) {
     const resolved = ensureFinalFramebufferExports();
     const diagnostics = {
-        captureMethod: 'eglSwapBuffers.glReadPixels-default-framebuffer',
+        captureMethod: 'glReadPixels-default-framebuffer',
         origin: 'bottom-left',
         channelOrder: 'RGBA',
         frameId: frameId,
@@ -405,49 +399,6 @@ function sendFinalFramebufferCheckpoint(frameId, snapshot, samplePoint) {
         return;
     }
     send(payload, snapshot.data);
-}
-
-function capturePendingFinalFramebuffer() {
-    if (!recordRenderStepCheckpoints || !recording ||
-        !stageEnabled(STAGE_RENDER_EXECUTE)) {
-        return;
-    }
-    if (pendingPostDrawFrameIds.length === 0) return;
-    const frameId = pendingPostDrawFrameIds.shift();
-    if (!Number.isInteger(frameId) || !captureFrameEnabled(frameId)) return;
-    const snapshot = readFinalFramebufferSnapshot(frameId);
-    sendFinalFramebufferCheckpoint(
-        frameId, snapshot,
-        'eglSwapBuffers.before-swap.after_startup_post_draw_marker');
-}
-
-function installFinalFramebufferHook() {
-    if (finalFramebufferHookInstalled) return finalFramebufferHookReady;
-    const resolved = ensureFinalFramebufferExports();
-    if (!resolved.ok) {
-        finalFramebufferHookError = resolved.error;
-        return false;
-    }
-    if (!resolved.exports.eglSwapBuffers) {
-        finalFramebufferHookError = 'eglSwapBuffers export not found';
-        return false;
-    }
-    try {
-        Interceptor.attach(resolved.exports.eglSwapBuffers, {
-            onEnter(args) {
-                capturePendingFinalFramebuffer();
-            },
-        });
-        finalFramebufferHookInstalled = true;
-        finalFramebufferHookReady = true;
-        finalFramebufferHookError = null;
-        return true;
-    } catch (e) {
-        finalFramebufferHookInstalled = true;
-        finalFramebufferHookReady = false;
-        finalFramebufferHookError = String(e);
-        return false;
-    }
 }
 
 function canonicalPtr(value) {
@@ -2701,7 +2652,6 @@ function ensureDirectOperateAffineFuncCallHook(fnPtr) {
 function installHook() {
     if (hooked) return;
     ensureBase();
-    installFinalFramebufferHook();
 
     attachAt(DEBUG_MESSAGE_OFF, 'Debug_message', {
         onEnter(args) {
@@ -2724,22 +2674,18 @@ function installHook() {
                 !captureFrameEnabled(markerFrameId)) {
                 return;
             }
-            if (!installFinalFramebufferHook()) {
-                sendFinalFramebufferCheckpoint(markerFrameId, {
-                    ok: false,
-                    error: finalFramebufferHookError ||
-                        'final framebuffer hook is unavailable',
-                    diagnostics: {
-                        captureMethod:
-                            'eglSwapBuffers.glReadPixels-default-framebuffer',
-                        markerType: marker.type,
-                        hookInstalled: finalFramebufferHookInstalled,
-                        hookReady: finalFramebufferHookReady,
-                    },
-                }, 'startup.tjs.post_draw.after_onPaint');
-                return;
+            const snapshot = readFinalFramebufferSnapshot(markerFrameId);
+            if (!snapshot.diagnostics) {
+                snapshot.diagnostics = {};
             }
-            pendingPostDrawFrameIds.push(markerFrameId);
+            snapshot.diagnostics.captureMethod =
+                'Debug.message.glReadPixels-default-framebuffer';
+            snapshot.diagnostics.markerType = marker.type;
+            snapshot.diagnostics.sampleTiming =
+                'inside startup.tjs post_draw Debug.message before eglSwapBuffers';
+            sendFinalFramebufferCheckpoint(
+                markerFrameId, snapshot,
+                'startup.tjs.post_draw.after_onPaint.glReadPixels');
         },
     });
 
@@ -3669,7 +3615,6 @@ rpc.exports = {
         lastDrawTargetObject = null;
         lastSlaRenderTargetObject = null;
         lastSlaRenderNativeLayer = null;
-        pendingPostDrawFrameIds = [];
         adaptorRenderTargetCache = {};
         drawIdCounter = 0;
         activeDrawContexts = [];

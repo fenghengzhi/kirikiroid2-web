@@ -854,6 +854,8 @@ def add_oracle_execute_checkpoint_images(
                 frame_id = first_frame_id + local_frame
                 checkpoint = by_frame_phase.get((frame_id, phase))
                 if checkpoint is None:
+                    if phase == "post_draw":
+                        continue
                     if not strict and phase != "post_draw":
                         continue
                     raise RuntimeError(
@@ -927,6 +929,9 @@ def add_oracle_execute_checkpoint_images(
                     pass
             phases[phase] = images
             total_added += len(images)
+            if phase == "post_draw" and not images:
+                raise RuntimeError(
+                    f"no oracle post_draw checkpoints captured for {case_id}")
 
     surfaces = list(image_manifest.get("captureSurfaces", []))
     for phase in RENDER_STEP_CHECKPOINT_PHASES:

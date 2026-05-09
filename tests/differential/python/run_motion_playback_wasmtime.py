@@ -201,14 +201,20 @@ class WasmtimeEnvProvider:
         self._fds: dict[int, dict[str, Any]] = {}
         self.capture_swap_framebuffer = False
         self._swap_framebuffers: list[dict[str, Any]] = []
+        self.capture_post_draw_framebuffer = False
+        self._post_draw_framebuffers: dict[int, dict[str, Any]] = {}
 
     def begin_swap_framebuffer_capture(self) -> None:
         self._swap_framebuffers = []
+        self._post_draw_framebuffers = {}
 
     def last_swap_framebuffer(self) -> dict[str, Any] | None:
         if not self._swap_framebuffers:
             return None
         return self._swap_framebuffers[-1]
+
+    def post_draw_framebuffer(self, frame_id: int) -> dict[str, Any] | None:
+        return self._post_draw_framebuffers.get(int(frame_id))
 
     def define_imports(self, linker: Any, module: Any) -> None:
         unknown: list[str] = []
@@ -363,6 +369,8 @@ class WasmtimeEnvProvider:
             "vfork": self._return_minus_one,
             "web_alert": self._return_zero,
             "web_confirm": self._return_zero,
+            "krkr2_wasmtime_capture_post_draw_framebuffer":
+                self._capture_post_draw_framebuffer,
             "_cc_canvas_render_text": self._return_zero,
             "emscripten_exit_fullscreen": self._return_zero,
             "emscripten_exit_pointerlock": self._return_zero,
@@ -380,6 +388,37 @@ class WasmtimeEnvProvider:
         if callback is None:
             return None
         return lambda caller, *args: callback(func_type, caller, *args)
+
+    def _capture_post_draw_framebuffer(self, _func_type: Any, _caller: Any,
+                                       *args: Any) -> None:
+        frame_id = int(args[0]) if args else -1
+        if not self.capture_post_draw_framebuffer:
+            return None
+        if self.gl_provider is None:
+            self._post_draw_framebuffers[frame_id] = {
+                "ok": False,
+                "error": "final framebuffer capture requires Wasmtime GL provider",
+            }
+            return None
+        try:
+            data = self.gl_provider.read_default_framebuffer_bgra(
+                POST_DRAW_CANVAS_SIZE[0], POST_DRAW_CANVAS_SIZE[1])
+            self._post_draw_framebuffers[frame_id] = {
+                "ok": True,
+                "data": data,
+                "width": POST_DRAW_CANVAS_SIZE[0],
+                "height": POST_DRAW_CANVAS_SIZE[1],
+                "pitch": POST_DRAW_CANVAS_SIZE[0] * 4,
+                "diagnostics": (
+                    self.gl_provider
+                    .last_default_framebuffer_read_diagnostics()),
+            }
+        except Exception as exc:
+            self._post_draw_framebuffers[frame_id] = {
+                "ok": False,
+                "error": str(exc),
+            }
+        return None
 
     def _wasi_callback_for(self, name: str, func_type: Any) -> Any | None:
         exact = {
@@ -1073,10 +1112,12 @@ def _host_final_framebuffer_checkpoint_event(
     diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     merged_diagnostics: dict[str, Any] = {
-        "captureMethod": "eglSwapBuffers.glReadPixels-default-framebuffer",
+        "captureMethod": "Debug.message.glReadPixels-default-framebuffer",
         "origin": "top-left",
         "channelOrder": "BGRA",
-        "sampleTiming": "inside env.eglSwapBuffers before returning",
+        "sampleTiming": (
+            "inside host import called from startup.tjs post_draw "
+            "Debug.message before eglSwapBuffers"),
     }
     if diagnostics:
         merged_diagnostics.update(diagnostics)
@@ -1085,7 +1126,7 @@ def _host_final_framebuffer_checkpoint_event(
         "source": "wasmtime-host-final-framebuffer",
         "stage": "render_execute",
         "kind": "execute_image_checkpoint",
-        "samplePoint": "wasmtime.tick.after-main-loop.default-framebuffer",
+        "samplePoint": "startup.tjs.post_draw.after_onPaint.host-glReadPixels",
         "frameId": int(frame_id),
         "player": None,
         "seq": int(seq),
@@ -1316,6 +1357,8 @@ def _collect_wasmtime_render_stage_capture(
                     checkpoint = checkpoint_by_frame_phase.get(
                         (global_frame, phase))
                     if checkpoint is None:
+                        if phase == "post_draw":
+                            continue
                         if checkpoint_render_only and phase != "post_draw":
                             continue
                         raise RuntimeError(
@@ -1733,7 +1776,7 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
         if gl_provider is None:
             raise RuntimeError(
                 "final framebuffer capture requires Wasmtime GL provider")
-        env_provider.capture_swap_framebuffer = True
+        env_provider.capture_post_draw_framebuffer = True
 
     max_ticks = int(frames)
     if record_render_step_checkpoints:
@@ -1749,28 +1792,6 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                               exports["krkr2_wasm_get_error_ptr"](store),
                               exports["krkr2_wasm_get_error_len"](store))
             raise RuntimeError(err or "krkr2_wasm_tick returned false")
-        tick_framebuffer_bgra: bytes | None = None
-        tick_framebuffer_error: str | None = None
-        tick_framebuffer_diagnostics: dict[str, Any] | None = None
-        if record_render_step_checkpoints:
-            swap_framebuffer = env_provider.last_swap_framebuffer()
-            if swap_framebuffer and swap_framebuffer.get("ok"):
-                data = swap_framebuffer.get("data")
-                if isinstance(data, bytes):
-                    tick_framebuffer_bgra = data
-                    diagnostics = swap_framebuffer.get("diagnostics")
-                    if isinstance(diagnostics, dict):
-                        tick_framebuffer_diagnostics = diagnostics
-                else:
-                    tick_framebuffer_error = (
-                        "eglSwapBuffers framebuffer capture had no bytes")
-            elif swap_framebuffer:
-                tick_framebuffer_error = str(
-                    swap_framebuffer.get("error") or
-                    "eglSwapBuffers framebuffer capture failed")
-            else:
-                tick_framebuffer_error = (
-                    "tick did not call eglSwapBuffers before post_draw marker")
         tick_events = (
             _read_render_probe_events(store, exports, memory)
             if render_stage_out is not None else []
@@ -1794,15 +1815,42 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                 )
                 raw_path = bootstrap.root / guest_path.lstrip("/")
                 seq = 100_000_000 + len(host_framebuffer_events)
-                if tick_framebuffer_bgra is not None:
-                    raw_path.write_bytes(tick_framebuffer_bgra)
+                marker_framebuffer = env_provider.post_draw_framebuffer(
+                    frame_id)
+                if marker_framebuffer and marker_framebuffer.get("ok"):
+                    data = marker_framebuffer.get("data")
+                    if isinstance(data, bytes):
+                        raw_path.write_bytes(data)
+                        diagnostics = marker_framebuffer.get("diagnostics")
+                        host_framebuffer_events.append(
+                            _host_final_framebuffer_checkpoint_event(
+                                frame_id=frame_id,
+                                guest_path=guest_path,
+                                ok=True,
+                                seq=seq,
+                                diagnostics=(
+                                    diagnostics if isinstance(
+                                        diagnostics, dict) else None)))
+                    else:
+                        host_framebuffer_events.append(
+                            _host_final_framebuffer_checkpoint_event(
+                                frame_id=frame_id,
+                                guest_path=guest_path,
+                                ok=False,
+                                seq=seq,
+                                error=(
+                                    "Debug.message framebuffer capture had "
+                                    "no bytes")))
+                elif marker_framebuffer:
                     host_framebuffer_events.append(
                         _host_final_framebuffer_checkpoint_event(
                             frame_id=frame_id,
                             guest_path=guest_path,
-                            ok=True,
+                            ok=False,
                             seq=seq,
-                            diagnostics=tick_framebuffer_diagnostics))
+                            error=str(
+                                marker_framebuffer.get("error") or
+                                "Debug.message framebuffer capture failed")))
                 else:
                     host_framebuffer_events.append(
                         _host_final_framebuffer_checkpoint_event(
@@ -1810,8 +1858,9 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                             guest_path=guest_path,
                             ok=False,
                             seq=seq,
-                            error=tick_framebuffer_error or
-                            "final framebuffer read failed"))
+                            error=(
+                                "tick did not call host framebuffer capture "
+                                "before post_draw marker")))
                 captured_host_framebuffer_frames.add(frame_id)
         if tick_index + 1 >= frames:
             if (not required_host_framebuffer_frames or

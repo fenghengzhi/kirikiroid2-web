@@ -30,6 +30,10 @@
 #include "motionplayer/Player.h"
 #include "motionplayer/RuntimeSupport.h"
 
+extern "C" void krkr2_wasmtime_capture_post_draw_framebuffer(int frameId)
+    __attribute__((import_module("env"),
+                   import_name("krkr2_wasmtime_capture_post_draw_framebuffer")));
+
 void setError(const std::string &message);
 
 namespace {
@@ -1702,6 +1706,7 @@ extern "C" bool krkr2_wasm_motion_trace_debug_message_probe(
             "startup.tjs.post_draw.after_onPaint",
             "\"phase\":\"post_draw\",\"ok\":true",
             "{\"captureMethod\":\"startup.tjs Debug.message marker\"}");
+        krkr2_wasmtime_capture_post_draw_framebuffer(frameId);
     }
     return true;
 }
