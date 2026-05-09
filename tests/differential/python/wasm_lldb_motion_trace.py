@@ -122,6 +122,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--record-render-step-checkpoints", action="store_true",
                    help="Ask the driver process to save execute_pre/"
                         "execute_post render checkpoints")
+    p.add_argument("--checkpoint-render-only", action="store_true",
+                   help="Ask the driver process to build render PNG artifacts "
+                        "only from direct render checkpoints")
     p.add_argument("--record-layer-raw-probes", action="store_true",
                    help="Ask the driver process to capture raw Layer "
                         "MainImage probe events")
@@ -174,6 +177,7 @@ class WasmMotionTracer:
         framebuffer_dir: Path | None = None,
         record_render_stages: bool = False,
         record_render_step_checkpoints: bool = False,
+        checkpoint_render_only: bool = False,
         record_layer_raw_probes: bool = False,
         record_save_layer_visual_readback_probes: bool = False,
         save_layer_visual_readback_frame_start: int = 0,
@@ -198,6 +202,7 @@ class WasmMotionTracer:
         self.framebuffer_dir = framebuffer_dir
         self.record_render_stages = record_render_stages
         self.record_render_step_checkpoints = record_render_step_checkpoints
+        self.checkpoint_render_only = checkpoint_render_only
         self.record_layer_raw_probes = record_layer_raw_probes
         self.record_save_layer_visual_readback_probes = (
             record_save_layer_visual_readback_probes)
@@ -304,6 +309,8 @@ class WasmMotionTracer:
                     if self.record_render_step_checkpoints:
                         launch_args.append(
                             "--record-render-step-checkpoints")
+                    if self.checkpoint_render_only:
+                        launch_args.append("--checkpoint-render-only")
                     if self.record_layer_raw_probes:
                         launch_args.append("--record-layer-raw-probes")
                     if self.record_save_layer_visual_readback_probes:
@@ -631,6 +638,10 @@ def main(argv: list[str]) -> int:
         print("--record-render-step-checkpoints requires "
               "--record-render-stages", file=sys.stderr)
         return 2
+    if args.checkpoint_render_only and not args.record_render_step_checkpoints:
+        print("--checkpoint-render-only requires "
+              "--record-render-step-checkpoints", file=sys.stderr)
+        return 2
     if args.record_layer_raw_probes and not args.record_render_stages:
         print("--record-layer-raw-probes requires --record-render-stages",
               file=sys.stderr)
@@ -659,6 +670,7 @@ def main(argv: list[str]) -> int:
             record_render_stages=args.record_render_stages,
             record_render_step_checkpoints=(
                 args.record_render_step_checkpoints),
+            checkpoint_render_only=args.checkpoint_render_only,
             record_layer_raw_probes=args.record_layer_raw_probes,
             record_save_layer_visual_readback_probes=(
                 args.record_save_layer_visual_readback_probes),

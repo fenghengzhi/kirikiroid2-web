@@ -68,6 +68,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--allow-render-flow-diagnostics", action="store_true",
                    help="Report build-flow semantic mismatches without "
                         "failing the PNG/hash compare")
+    p.add_argument("--ignore-layer-save", action="store_true",
+                   help="Do not compare fixture saveLayerImage initial/"
+                        "post_draw PNGs; use direct render checkpoint PNGs")
     return p.parse_args(argv)
 
 
@@ -455,6 +458,7 @@ def compare_case(
     case_id: str,
     *,
     allow_render_flow_diagnostics: bool = False,
+    ignore_layer_save: bool = False,
 ) -> bool:
     oracle_prepare_events = load_events(
         oracle_root / "events" / "render_prepare" /
@@ -491,6 +495,7 @@ def compare_case(
     execute_post_mismatches = 0
     update_layer_after_draw_pre_mismatches = 0
     update_layer_after_draw_post_mismatches = 0
+    post_draw_mismatches = 0
     layer_save_mismatches = 0
     oracle_cache: dict[Path, str] = {}
     wasmtime_cache: dict[Path, str] = {}
@@ -499,6 +504,17 @@ def compare_case(
         "executePostImage",
         "updateLayerAfterDrawPreImage",
         "updateLayerAfterDrawPostImage",
+        "postDrawImage",
+    )
+    post_draw_checkpoint_enabled = any(
+        decoded_image_hash(oracle_root, event.get("postDrawImage"), oracle_cache)
+        is not None
+        for event in oracle_execute
+    ) or any(
+        decoded_image_hash(wasmtime_root, event.get("postDrawImage"),
+                           wasmtime_cache)
+        is not None
+        for event in wasmtime_execute
     )
     execute_checkpoint_enabled = any(
         decoded_image_hash(oracle_root, event.get(field), oracle_cache)
@@ -511,6 +527,14 @@ def compare_case(
         for event in wasmtime_execute
         for field in checkpoint_fields
     )
+    if ignore_layer_save and not post_draw_checkpoint_enabled:
+        first_mismatch = (
+            0,
+            "render_execute",
+            "post_draw_checkpoint_images.present",
+            True,
+            False,
+        )
 
     for stage, oracle_events, wasmtime_events in (
         ("render_prepare", oracle_prepare_events, wasmtime_prepare_events),
@@ -573,6 +597,7 @@ def compare_case(
                 execute_post_mismatches += 1
                 update_layer_after_draw_pre_mismatches += 1
                 update_layer_after_draw_post_mismatches += 1
+                post_draw_mismatches += 1
             if execute_checkpoint_enabled and first_mismatch is None:
                 first_mismatch = (
                     index,
@@ -586,6 +611,22 @@ def compare_case(
         oracle_event = oracle_execute[index]
         wasmtime_event = wasmtime_execute[index]
         if execute_checkpoint_enabled:
+            oracle_post_draw = decoded_image_hash(
+                oracle_root, oracle_event.get("postDrawImage"), oracle_cache)
+            wasmtime_post_draw = decoded_image_hash(
+                wasmtime_root, wasmtime_event.get("postDrawImage"),
+                wasmtime_cache)
+            if oracle_post_draw != wasmtime_post_draw:
+                post_draw_mismatches += 1
+                if first_mismatch is None:
+                    first_mismatch = (
+                        index,
+                        "render_execute",
+                        "post_draw.rgbaSha256",
+                        oracle_post_draw,
+                        wasmtime_post_draw,
+                    )
+
             oracle_pre = decoded_image_hash(
                 oracle_root, oracle_event.get("executePreImage"), oracle_cache)
             wasmtime_pre = decoded_image_hash(
@@ -660,23 +701,24 @@ def compare_case(
                         wasmtime_update_post,
                     )
 
-    layer_save_mismatches, layer_save_first = _compare_layer_save_images(
-        oracle_root,
-        wasmtime_root,
-        oracle_layer_save,
-        wasmtime_layer_save,
-        oracle_cache,
-        wasmtime_cache,
-    )
-    if layer_save_first is not None and first_mismatch is None:
-        field, oracle_value, wasmtime_value = layer_save_first
-        first_mismatch = (
-            0,
-            "layer_save",
-            field,
-            oracle_value,
-            wasmtime_value,
+    if not ignore_layer_save:
+        layer_save_mismatches, layer_save_first = _compare_layer_save_images(
+            oracle_root,
+            wasmtime_root,
+            oracle_layer_save,
+            wasmtime_layer_save,
+            oracle_cache,
+            wasmtime_cache,
         )
+        if layer_save_first is not None and first_mismatch is None:
+            field, oracle_value, wasmtime_value = layer_save_first
+            first_mismatch = (
+                0,
+                "layer_save",
+                field,
+                oracle_value,
+                wasmtime_value,
+            )
 
     ok = first_mismatch is None
     if ok:
@@ -698,6 +740,9 @@ def compare_case(
             f"field={field} oracle={_value_summary(oracle_value)} "
             f"wasmtime={_value_summary(wasmtime_value)}")
 
+    layer_save_summary = (
+        "ignored" if ignore_layer_save else str(layer_save_mismatches)
+    )
     print(
         f"{case_id}: summary "
         f"render_prepare_shape_mismatch={render_prepare_shape_mismatches} "
@@ -709,7 +754,8 @@ def compare_case(
         f"{update_layer_after_draw_pre_mismatches} "
         "update_layer_after_draw_post_mismatch="
         f"{update_layer_after_draw_post_mismatches} "
-        f"layer_save_mismatch={layer_save_mismatches}")
+        f"post_draw_mismatch={post_draw_mismatches} "
+        f"layer_save_mismatch={layer_save_summary}")
     return ok
 
 
@@ -726,6 +772,7 @@ def main(argv: list[str]) -> int:
             case_id,
             allow_render_flow_diagnostics=(
                 args.allow_render_flow_diagnostics),
+            ignore_layer_save=args.ignore_layer_save,
         ):
             all_ok = False
     return 0 if all_ok else 1

@@ -157,6 +157,8 @@ jobs:
             --skip-golden-diff \
             --write-port-traces tests/differential/artifacts/motion_playback_wasmtime_traces \
             --record-render-stages \
+            --record-render-step-checkpoints \
+            --checkpoint-render-only \
             --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime \
             --lldb-timeout 600
 
@@ -623,6 +625,8 @@ jobs:
           python3 tests/differential/python/run_motion_stage_oracle.py \
             --serial "${ANDROID_SERIAL}" \
             --stage render_path \
+            --record-render-step-checkpoints \
+            --checkpoint-render-only \
             --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_oracle \
             --playback-timeout 300
 
@@ -740,6 +744,7 @@ jobs:
             --oracle-root /tmp/motion_playback/render/oracle \
             --wasmtime-root /tmp/motion_playback/render/wasmtime \
             --allow-render-flow-diagnostics \
+            --ignore-layer-save \
             2>&1 | tee /tmp/motion_playback/motion_render_steps_compare.txt
           render_compare_rc=${PIPESTATUS[0]}
           set -e

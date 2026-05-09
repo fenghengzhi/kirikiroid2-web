@@ -4,6 +4,7 @@
 #include "PlayerRenderInternal.h"
 #include "ConfigManager/IndividualConfigManager.h"
 #include "MotionTraceWeb.h"
+#include "RenderManager.h"
 
 using namespace motion::internal;
 
@@ -556,6 +557,10 @@ namespace motion::internal::render_detail {
     }
 
     bool isAccurateSlaRenderEnabled() {
+        auto *renderManager = TVPGetRenderManager();
+        if(renderManager && renderManager->IsSoftware()) {
+            return true;
+        }
         auto *config = IndividualConfigManager::GetInstance();
         if(!config) {
             return false;

@@ -18,6 +18,7 @@ const PLAYER_PHASE3_LAST_OFF     = 0x6C0528;
 const PLAYER_DRAW_COMPAT_OFF     = 0x6D5FB8;
 const PLAYER_DRAW_D3D_OFF        = 0x6D5B90;
 const PLAYER_DRAW_SLA_OFF        = 0x6D5658;
+const PLAYER_SLA_RESOLVE_TARGET_OFF = 0x6D5948;
 const PLAYER_RENDER_PREPARE_OFF  = 0x6D5164;
 const PLAYER_APPLY_TRANSLATE_OFF = 0x6D5264;
 const PLAYER_BUILD_ITEMS_OFF     = 0x6C2334;
@@ -31,6 +32,7 @@ const LAYER_FILL_RECT_OFF        = 0x80EBAC;
 const LAYER_SAVE_LAYER_IMAGE_OFF = 0x80963C;
 const TVP_SAVE_AS_PNG_OFF        = 0x83EDA4;
 const BITMAP_GET_SCANLINE_OFF    = 0xA75DE4;
+const DEBUG_MESSAGE_OFF          = 0xA18FBC;
 const LAYER_CLASS_ID_OFF = 0x1ADE668;
 const LAYER_NATIVE_MAIN_IMAGE_OFF = 280;
 const BITMAP_NATIVE_IMPL_OFF = 88;
@@ -164,8 +166,15 @@ let captureFrameCount = -1;
 let activeSaveLayerImageContexts = [];
 let activePngSaveContexts = [];
 let activeRenderExecuteContexts = [];
+let lastRenderLayerObject = null;
+let lastDrawTargetObject = null;
+let lastSlaRenderTargetObject = null;
+let lastSlaRenderNativeLayer = null;
 let directOperateAffineFuncCallHookCache = {};
 let nativeInstanceSupportCache = {};
+let propGetFunctionCache = {};
+let funcCallFunctionCache = {};
+let adaptorRenderTargetCache = {};
 let bitmapGetScanLineFunctionCache = {};
 let textureGetPixelDataFunctionCache = {};
 let textureGetPitchFunctionCache = {};
@@ -478,6 +487,27 @@ function readVariantArg(argArrayPtr, index) {
     }
 }
 
+function readVariantText(variantPtr) {
+    try {
+        const variant = ptr(variantPtr);
+        if (variant.isNull()) {
+            return { value: null, type: null, error: 'null variant' };
+        }
+        const type = readS32(variant, 16);
+        const stringPtr = readPointer(variant, 0);
+        if (stringPtr === null) {
+            return { value: null, type: type, error: 'variant string is null' };
+        }
+        return {
+            value: readVariantString(stringPtr),
+            type: type,
+            error: null,
+        };
+    } catch (e) {
+        return { value: null, type: null, error: String(e) };
+    }
+}
+
 function ptrEqual(a, b) {
     if (!a || !b) return false;
     try {
@@ -738,6 +768,224 @@ function resolveLayerNativeInstance(layerObject) {
     }
 }
 
+function nativeInstanceForClassId(objectValue, classId) {
+    const obj = ptr(objectValue);
+    if (obj.isNull()) return { native: null, hresult: null, error: 'null object' };
+    try {
+        const vtable = obj.readPointer();
+        const fnPtr = vtable.add(200).readPointer();
+        const fn = getCachedNativeFunction(
+            nativeInstanceSupportCache, fnPtr,
+            'int64', ['pointer', 'int64', 'uint32', 'pointer']);
+        if (!fn) {
+            return { native: null, hresult: null, error: 'NativeInstanceSupport missing' };
+        }
+        const out = Memory.alloc(Process.pointerSize);
+        out.writePointer(NULL);
+        const hr = fn(obj, 2, classId, out);
+        const native = out.readPointer();
+        if ((Number(hr) & 0x80000000) !== 0 || native.isNull()) {
+            return { native: null, hresult: String(hr), error: 'no native instance' };
+        }
+        return { native: native, hresult: String(hr), error: null };
+    } catch (e) {
+        return { native: null, hresult: null, error: String(e) };
+    }
+}
+
+function propGetObject(dispatchObject, name, flag) {
+    try {
+        const obj = ptr(dispatchObject);
+        if (obj.isNull()) return { object: null, error: 'null dispatch object' };
+        const vtable = obj.readPointer();
+        const fnPtr = vtable.add(32).readPointer();
+        const fn = getCachedNativeFunction(
+            propGetFunctionCache, fnPtr,
+            'int64', ['pointer', 'uint32', 'pointer', 'pointer', 'pointer', 'pointer']);
+        const result = Memory.alloc(32);
+        Memory.writeByteArray(result, new Uint8Array(32));
+        const memberName = Memory.allocUtf16String(name);
+        const hr = fn(obj, flag || 0, memberName, NULL, result, obj);
+        if ((Number(hr) & 0x80000000) !== 0) {
+            return { object: null, hresult: String(hr), error: 'PropGet failed' };
+        }
+        const variant = readVariantObject(result);
+        return {
+            object: variant.object,
+            objThis: variant.objThis,
+            type: variant.type,
+            hresult: String(hr),
+            error: variant.error,
+        };
+    } catch (e) {
+        return { object: null, error: String(e) };
+    }
+}
+
+function funcCallObject(dispatchObject, name, flag) {
+    try {
+        const obj = ptr(dispatchObject);
+        if (obj.isNull()) return { object: null, error: 'null dispatch object' };
+        const vtable = obj.readPointer();
+        const fnPtr = vtable.add(16).readPointer();
+        const fn = getCachedNativeFunction(
+            funcCallFunctionCache, fnPtr,
+            'int64',
+            ['pointer', 'uint32', 'pointer', 'pointer', 'pointer', 'int',
+             'pointer', 'pointer']);
+        const result = Memory.alloc(32);
+        Memory.writeByteArray(result, new Uint8Array(32));
+        const memberName = Memory.allocUtf16String(name);
+        const hr = fn(obj, flag || 0, memberName, NULL, result, 0, NULL, obj);
+        if ((Number(hr) & 0x80000000) !== 0) {
+            return { object: null, hresult: String(hr), error: 'FuncCall failed' };
+        }
+        const variant = readVariantObject(result);
+        return {
+            object: variant.object,
+            objThis: variant.objThis,
+            type: variant.type,
+            hresult: String(hr),
+            error: variant.error,
+        };
+    } catch (e) {
+        return { object: null, error: String(e) };
+    }
+}
+
+function probeLayerImageObject(layerObject) {
+    const resolved = resolveLayerNativeInstance(layerObject);
+    if (!resolved.layer) {
+        return {
+            ok: false,
+            resolved: resolved,
+            error: resolved.error || 'not a Layer',
+        };
+    }
+    try {
+        const mainImage = readPointer(resolved.layer, LAYER_NATIVE_MAIN_IMAGE_OFF);
+        const bitmapImpl = mainImage ? readPointer(mainImage, BITMAP_NATIVE_IMPL_OFF) : null;
+        return {
+            ok: mainImage !== null && bitmapImpl !== null,
+            resolved: resolved,
+            mainImage: ptrHex(mainImage),
+            bitmapImpl: ptrHex(bitmapImpl),
+            error: mainImage === null
+                ? 'layer has no main image'
+                : bitmapImpl === null
+                    ? 'main image has no bitmap impl'
+                    : null,
+        };
+    } catch (e) {
+        return { ok: false, resolved: resolved, error: String(e) };
+    }
+}
+
+function resolveLayerObjectForCheckpoint(objectValue) {
+    if (!objectValue) return { object: null, diagnostics: { error: 'null object' } };
+    const key = ptrHex(objectValue);
+    if (key && adaptorRenderTargetCache[key]) {
+        return adaptorRenderTargetCache[key];
+    }
+    const directProbe = probeLayerImageObject(objectValue);
+    if (directProbe.ok) {
+        const result = {
+            object: objectValue,
+            diagnostics: {
+                route: 'direct_layer',
+                classId: directProbe.resolved.classId || null,
+                mainImage: directProbe.mainImage || null,
+            },
+        };
+        if (key) adaptorRenderTargetCache[key] = result;
+        return result;
+    }
+
+    const propDiagnostics = [];
+    for (const propSpec of [
+        { name: 'targetLayer', flag: 0, access: 'PropGet' },
+        { name: 'layerTreeOwnerInterface', flag: 0x1000, access: 'FuncCall' },
+    ]) {
+        const propName = propSpec.name;
+        const prop = propSpec.access === 'FuncCall'
+            ? funcCallObject(objectValue, propName, propSpec.flag)
+            : propGetObject(objectValue, propName, propSpec.flag);
+        const propDiag = {
+            property: propName,
+            access: propSpec.access,
+            object: ptrHex(prop.object),
+            type: prop.type === undefined ? null : prop.type,
+            hresult: prop.hresult || null,
+            error: prop.error || null,
+        };
+        if (!prop.object) {
+            propDiagnostics.push(propDiag);
+            continue;
+        }
+        const resolved = probeLayerImageObject(prop.object);
+        propDiag.layerProbe = {
+            ok: resolved.ok,
+            error: resolved.error || null,
+            classId: resolved.resolved ? resolved.resolved.classId || null : null,
+            hresult: resolved.resolved ? resolved.resolved.hresult || null : null,
+            mainImage: resolved.mainImage || null,
+            bitmapImpl: resolved.bitmapImpl || null,
+        };
+        propDiagnostics.push(propDiag);
+        if (!resolved.ok) continue;
+        const result = {
+            object: prop.object,
+            diagnostics: {
+                route: 'dispatch_property_layer',
+                sourceObject: key,
+                property: propName,
+                propertyType: prop.type,
+                layerClassId: resolved.resolved.classId || null,
+                mainImage: resolved.mainImage || null,
+            },
+        };
+        if (key) adaptorRenderTargetCache[key] = result;
+        return result;
+    }
+
+    for (let classId = 1; classId < 256; classId++) {
+        const native = nativeInstanceForClassId(objectValue, classId);
+        if (!native.native) continue;
+        for (const variantOff of [40, 20, 0]) {
+            const candidate = readVariantObject(native.native.add(variantOff));
+            if (!candidate || !candidate.object) continue;
+            const resolved = probeLayerImageObject(candidate.object);
+            if (!resolved.ok) continue;
+            const result = {
+                object: candidate.object,
+                diagnostics: {
+                    route: 'native_variant_layer',
+                    sourceObject: key,
+                    nativeClassId: classId,
+                    nativeObject: ptrHex(native.native),
+                    variantOffset: variantOff,
+                    layerClassId: resolved.resolved.classId || null,
+                    mainImage: resolved.mainImage || null,
+                },
+            };
+            if (key) adaptorRenderTargetCache[key] = result;
+            return result;
+        }
+    }
+
+    return {
+        object: null,
+        diagnostics: {
+            route: 'unresolved_object',
+            sourceObject: key,
+            directError: directProbe.error || null,
+            directClassId: directProbe.resolved ? directProbe.resolved.classId || null : null,
+            directHresult: directProbe.resolved ? directProbe.resolved.hresult || null : null,
+            properties: propDiagnostics,
+        },
+    };
+}
+
 function readNativeLayerImageSnapshot(nativeLayer, layerObject) {
     const native = nativeLayer ? ptr(nativeLayer) : NULL;
     if (native.isNull()) {
@@ -889,6 +1137,51 @@ function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint) {
         pitch: snapshot.pitch || null,
         pixelFormat: snapshot.pixelFormat || 'bgra32',
         diagnostics: snapshot.diagnostics || {},
+    };
+    if (!snapshot.ok) {
+        payload.error = snapshot.error || 'snapshot failed';
+        send(payload);
+        return;
+    }
+    send(payload, snapshot.data);
+}
+
+function sendRenderNativeImageCheckpoint(player, nativeLayer, layerObject,
+                                         phase, samplePoint, diagnostics) {
+    if (!recordRenderStepCheckpoints || !recording ||
+        !stageEnabled(STAGE_RENDER_EXECUTE)) {
+        return;
+    }
+    const frameId = renderFrameIdFor(player);
+    if (frameId === null || frameId === undefined) return;
+    if (!captureFrameEnabled(frameId)) return;
+    const snapshot = readNativeLayerImageSnapshot(nativeLayer, layerObject);
+    const mergedDiagnostics = {};
+    if (snapshot.diagnostics) {
+        for (const key of Object.keys(snapshot.diagnostics)) {
+            mergedDiagnostics[key] = snapshot.diagnostics[key];
+        }
+    }
+    if (diagnostics) {
+        for (const key of Object.keys(diagnostics)) {
+            mergedDiagnostics[key] = diagnostics[key];
+        }
+    }
+    const payload = {
+        type: 'render_image_checkpoint',
+        source: 'android-frida-native-layer-main-image',
+        phase: phase,
+        samplePoint: samplePoint,
+        frameId: frameId,
+        player: ptrHex(player),
+        layerObject: ptrHex(layerObject),
+        nativeLayer: ptrHex(nativeLayer),
+        ok: snapshot.ok === true,
+        width: snapshot.width || null,
+        height: snapshot.height || null,
+        pitch: snapshot.pitch || null,
+        pixelFormat: snapshot.pixelFormat || 'bgra32',
+        diagnostics: mergedDiagnostics,
     };
     if (!snapshot.ok) {
         payload.error = snapshot.error || 'snapshot failed';
@@ -2163,6 +2456,112 @@ function installHook() {
     if (hooked) return;
     ensureBase();
 
+    attachAt(DEBUG_MESSAGE_OFF, 'Debug_message', {
+        onEnter(args) {
+            const numParams = readArgInt(args[1]);
+            const argArray = args[2];
+            if (numParams === null || numParams < 1 || !argArray ||
+                ptr(argArray).isNull()) {
+                return;
+            }
+            const markerArg = readVariantArg(argArray, 0);
+            if (!markerArg.variant) return;
+            const marker = readVariantText(markerArg.variant);
+            if (marker.value !== '__krkr2_motion_post_draw') return;
+            const explicitLayerDiagnostics = [];
+            for (const candidateSpec of [
+                { index: 5, label: 'base' },
+                { index: 3, label: 'motionWorkLayer' },
+                { index: 4, label: 'currentSource' },
+            ]) {
+                if (numParams <= candidateSpec.index) continue;
+                const candidateArg = readVariantArg(argArray, candidateSpec.index);
+                const candidateObject = candidateArg.object
+                    ? candidateArg.object.object : null;
+                const candidateDiag = {
+                    label: candidateSpec.label,
+                    index: candidateSpec.index,
+                    object: ptrHex(candidateObject),
+                    type: candidateArg.object
+                        ? candidateArg.object.type : null,
+                    error: candidateArg.error ||
+                        (candidateArg.object ? candidateArg.object.error : null),
+                };
+                if (candidateObject) {
+                    const resolvedCandidate =
+                        resolveLayerObjectForCheckpoint(candidateObject);
+                    candidateDiag.resolved =
+                        resolvedCandidate.diagnostics || null;
+                    explicitLayerDiagnostics.push(candidateDiag);
+                    if (resolvedCandidate.object) {
+                        candidateDiag.selected = true;
+                        sendRenderImageCheckpoint(
+                            null, resolvedCandidate.object, 'post_draw',
+                            'startup.tjs.post_draw.after_onPaint');
+                        return;
+                    }
+                } else {
+                    explicitLayerDiagnostics.push(candidateDiag);
+                }
+            }
+            if (!lastRenderLayerObject && lastSlaRenderNativeLayer) {
+                sendRenderNativeImageCheckpoint(
+                    null, lastSlaRenderNativeLayer, lastDrawTargetObject,
+                    'post_draw', 'startup.tjs.post_draw.after_onPaint',
+                    {
+                        route: 'sla_native_layer_fallback',
+                        addr: PLAYER_SLA_RESOLVE_TARGET_OFF,
+                        explicitLayers: explicitLayerDiagnostics,
+                    });
+                return;
+            }
+            const layerObject = lastDrawTargetObject || lastRenderLayerObject;
+            if (!layerObject) {
+                send({
+                    type: 'render_image_checkpoint',
+                    source: 'android-frida-layer-main-image',
+                    phase: 'post_draw',
+                    samplePoint: 'startup.tjs.post_draw.after_onPaint',
+                    frameId: renderFrameIdFor(null),
+                    player: null,
+                    layerObject: null,
+                    ok: false,
+                    pixelFormat: 'bgra32',
+                    error: 'post_draw marker has no previous draw target',
+                    diagnostics: {
+                        addr: DEBUG_MESSAGE_OFF,
+                        markerType: marker.type,
+                        explicitLayers: explicitLayerDiagnostics,
+                    },
+                });
+                return;
+            }
+            const resolvedLayerObject =
+                resolveLayerObjectForCheckpoint(layerObject);
+            if (!resolvedLayerObject.object) {
+                send({
+                    type: 'render_image_checkpoint',
+                    source: 'android-frida-layer-main-image',
+                    phase: 'post_draw',
+                    samplePoint: 'startup.tjs.post_draw.after_onPaint',
+                    frameId: renderFrameIdFor(null),
+                    player: null,
+                    layerObject: ptrHex(layerObject),
+                    ok: false,
+                    pixelFormat: 'bgra32',
+                    error: 'post_draw target did not resolve to Layer',
+                    diagnostics: Object.assign(
+                        { explicitLayers: explicitLayerDiagnostics },
+                        resolvedLayerObject.diagnostics || {}),
+                });
+                return;
+            }
+            sendRenderImageCheckpoint(
+                null, resolvedLayerObject.object, 'post_draw',
+                'startup.tjs.post_draw.after_onPaint');
+        },
+    });
+
     attachAt(PLAYER_PROGRESS_COMPAT_OFF, 'Player_progressCompat', {
         onEnter(args) {
             inCompat = true;
@@ -2181,6 +2580,10 @@ function installHook() {
             currentFrameId = null;
             lastCompletedFrameId = completedFrameId;
             lastCompletedTopPlayer = completedTopPlayer;
+            lastRenderLayerObject = null;
+            lastDrawTargetObject = null;
+            lastSlaRenderTargetObject = null;
+            lastSlaRenderNativeLayer = null;
 
             if (!recording || !stageEnabled(STAGE_TRACE_FLATTEN)) {
                 samplesInFrame = [];
@@ -2262,6 +2665,9 @@ function installHook() {
             this.ctx = enterRenderContext(this.player);
             applyRenderContext(this.ctx, this.player);
             this.drawCtx = beginDrawContext(this.player, this.argVariant);
+            if (this.drawCtx && this.drawCtx.targetObject) {
+                lastDrawTargetObject = this.drawCtx.targetObject;
+            }
             sendLayerRawProbe(
                 this.player, this.drawCtx.targetObject, null,
                 'Player_drawCompat_0x6D5FB8.enter',
@@ -2351,6 +2757,17 @@ function installHook() {
             }
             emitDrawStep(
                 ctx, 'target_check_sla', 'hit', 'separate_layer_adaptor');
+        },
+    });
+
+    attachAt(PLAYER_SLA_RESOLVE_TARGET_OFF, 'Player_slaResolveTarget', {
+        onLeave(retval) {
+            try {
+                if (retval && !retval.isNull() && rangeHasReadableBytes(retval, 8)) {
+                    lastSlaRenderTargetObject = retval;
+                    lastSlaRenderNativeLayer = retval;
+                }
+            } catch (e) {}
         },
     });
 
@@ -2597,6 +3014,9 @@ function installHook() {
             sendRenderImageCheckpoint(
                 this.player, leaveTarget, 'execute_post',
                 'sub_6C7440.leave.before-return');
+            if (leaveTarget) {
+                lastRenderLayerObject = leaveTarget;
+            }
             if (this.executeCtx) {
                 const idx = activeRenderExecuteContexts.lastIndexOf(this.executeCtx);
                 if (idx >= 0) activeRenderExecuteContexts.splice(idx, 1);
@@ -3018,6 +3438,7 @@ rpc.exports = {
                 drawCompat: PLAYER_DRAW_COMPAT_OFF,
                 drawD3D: PLAYER_DRAW_D3D_OFF,
                 drawSLA: PLAYER_DRAW_SLA_OFF,
+                slaResolveTarget: PLAYER_SLA_RESOLVE_TARGET_OFF,
                 renderPrepare: PLAYER_RENDER_PREPARE_OFF,
                 applyTranslate: PLAYER_APPLY_TRANSLATE_OFF,
                 buildRenderItems: PLAYER_BUILD_ITEMS_OFF,
@@ -3028,6 +3449,7 @@ rpc.exports = {
                 layerSaveLayerImage: LAYER_SAVE_LAYER_IMAGE_OFF,
                 tvpSaveAsPng: TVP_SAVE_AS_PNG_OFF,
                 bitmapGetScanLine: BITMAP_GET_SCANLINE_OFF,
+                debugMessage: DEBUG_MESSAGE_OFF,
                 layerClassId: LAYER_CLASS_ID_OFF,
             },
         };
@@ -3062,6 +3484,11 @@ rpc.exports = {
         lastCompletedTopPlayer = null;
         currentRenderFrameId = null;
         currentRenderPlayer = null;
+        lastRenderLayerObject = null;
+        lastDrawTargetObject = null;
+        lastSlaRenderTargetObject = null;
+        lastSlaRenderNativeLayer = null;
+        adaptorRenderTargetCache = {};
         drawIdCounter = 0;
         activeDrawContexts = [];
         activeSaveLayerImageContexts = [];

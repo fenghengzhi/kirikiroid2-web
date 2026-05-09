@@ -50,13 +50,16 @@ RENDER_SOURCE = "wasmtime-port-render-stage"
 RENDER_CAPTURE_GUEST_ROOT = (
     "/reference/xp3/savedata/motion_render_stage_capture"
 )
+RENDER_CHECKPOINT_GUEST_ROOT = "/render_stage_capture"
 RENDER_CAPTURE_SURFACES: tuple[str, ...] = ("initial", "post_draw")
 RENDER_STEP_CHECKPOINT_SURFACES: tuple[str, ...] = (
     "execute_pre",
     "execute_post",
     "updateLayerAfterDraw_pre",
     "updateLayerAfterDraw_post",
+    "post_draw",
 )
+POST_DRAW_CANVAS_SIZE = (1920, 1080)
 RENDER_STAGES: tuple[str, ...] = (
     "draw_dispatch",
     "render_prepare",
@@ -116,7 +119,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="With --record-render-stages, save execute_pre/"
                         "execute_post images around executeLayerRenderCommands "
                         "and updateLayerAfterDraw_pre/post images around "
-                        "updateLayerAfterDraw")
+                        "updateLayerAfterDraw, plus true post_draw after "
+                        "startup.tjs onPaint")
+    p.add_argument("--checkpoint-render-only", action="store_true",
+                   help="With --record-render-step-checkpoints, build render "
+                        "PNG artifacts only from guest Layer MainImage "
+                        "checkpoints instead of fixture saveLayerImage PNGs")
     p.add_argument("--record-layer-raw-probes", action="store_true",
                    help="With --record-render-stages, capture raw Layer "
                         "MainImage probes at fillRect/saveLayerImage/"
@@ -1136,6 +1144,7 @@ def _collect_wasmtime_render_stage_capture(
     specs: list[dict],
     *,
     record_render_step_checkpoints: bool = False,
+    checkpoint_render_only: bool = False,
     render_stage_events_path: Path | None = None,
     capture_window: FrameCaptureWindow,
 ) -> dict[str, Any]:
@@ -1182,12 +1191,15 @@ def _collect_wasmtime_render_stage_capture(
         requested_set = set(requested_local_frames)
         captured_local_frames: list[int] | None = None
         case_frame_id_base = int(case["fullFrameIdRange"][0])
-        src_case = capture_root / spec_id
-        if not src_case.is_dir():
-            raise RuntimeError(
-                f"Wasmtime render stage case directory missing: {src_case}")
         dst_case = images_root / spec_id
-        shutil.copytree(src_case, dst_case)
+        if checkpoint_render_only:
+            dst_case.mkdir(parents=True, exist_ok=True)
+        else:
+            src_case = capture_root / spec_id
+            if not src_case.is_dir():
+                raise RuntimeError(
+                    f"Wasmtime render stage case directory missing: {src_case}")
+            shutil.copytree(src_case, dst_case)
 
         if record_render_step_checkpoints:
             for phase in RENDER_STEP_CHECKPOINT_SURFACES:
@@ -1200,6 +1212,8 @@ def _collect_wasmtime_render_stage_capture(
                     checkpoint = checkpoint_by_frame_phase.get(
                         (global_frame, phase))
                     if checkpoint is None:
+                        if checkpoint_render_only and phase != "post_draw":
+                            continue
                         raise RuntimeError(
                             f"missing Wasmtime {phase} checkpoint for "
                             f"{spec_id} frame {local_frame} "
@@ -1219,6 +1233,17 @@ def _collect_wasmtime_render_stage_capture(
                             f"Wasmtime {phase} checkpoint has unsupported "
                             f"pixelFormat for {spec_id} frame {local_frame}: "
                             f"{checkpoint.get('pixelFormat')}")
+                    if phase == "post_draw":
+                        size = (
+                            int(checkpoint["width"]),
+                            int(checkpoint["height"]),
+                        )
+                        if size != POST_DRAW_CANVAS_SIZE:
+                            raise RuntimeError(
+                                f"Wasmtime post_draw checkpoint for {spec_id} "
+                                f"frame {local_frame} captured {size[0]}x{size[1]}, "
+                                f"expected {POST_DRAW_CANVAS_SIZE[0]}x"
+                                f"{POST_DRAW_CANVAS_SIZE[1]} canvas")
                     raw_path = bootstrap.root / guest_path_value.lstrip("/")
                     if not raw_path.exists():
                         raise RuntimeError(
@@ -1238,7 +1263,9 @@ def _collect_wasmtime_render_stage_capture(
                         pass
 
         phases: dict[str, list[dict[str, Any]]] = {}
-        phases_to_collect = list(RENDER_CAPTURE_SURFACES)
+        phases_to_collect = (
+            [] if checkpoint_render_only else list(RENDER_CAPTURE_SURFACES)
+        )
         if record_render_step_checkpoints:
             phases_to_collect.extend(RENDER_STEP_CHECKPOINT_SURFACES)
         for phase in phases_to_collect:
@@ -1275,7 +1302,10 @@ def _collect_wasmtime_render_stage_capture(
                         f"{spec_id}/{phase}")
                 captured_local_frames = expected_phase_frames
             else:
-                expected_phase_frames = requested_local_frames
+                if checkpoint_render_only:
+                    expected_phase_frames = present_frames
+                else:
+                    expected_phase_frames = requested_local_frames
             expected_set = set(expected_phase_frames)
             images: list[dict[str, Any]] = []
             for frame in expected_phase_frames:
@@ -1310,7 +1340,9 @@ def _collect_wasmtime_render_stage_capture(
             phases[phase] = images
             total_images += len(images)
         if captured_local_frames is None:
-            captured_local_frames = []
+            captured_local_frames = (
+                requested_local_frames if checkpoint_render_only else []
+            )
 
         cases.append({
             "caseId": spec_id,
@@ -1325,11 +1357,16 @@ def _collect_wasmtime_render_stage_capture(
             "phases": phases,
         })
 
-    capture_surfaces = list(RENDER_CAPTURE_SURFACES)
+    capture_surfaces = (
+        [] if checkpoint_render_only else list(RENDER_CAPTURE_SURFACES)
+    )
     if record_render_step_checkpoints:
         capture_surfaces.extend(RENDER_STEP_CHECKPOINT_SURFACES)
     image_manifest = {
-        "guestCaptureRoot": RENDER_CAPTURE_GUEST_ROOT,
+        "guestCaptureRoot": (
+            RENDER_CHECKPOINT_GUEST_ROOT if checkpoint_render_only
+            else RENDER_CAPTURE_GUEST_ROOT
+        ),
         "captureSurfaces": capture_surfaces,
         "cases": cases,
         "summary": {
@@ -1407,6 +1444,7 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                      framebuffer_dir: Path | None = None,
                      render_artifact_dir: Path | None = None,
                      record_render_step_checkpoints: bool = False,
+                     checkpoint_render_only: bool = False,
                      record_layer_raw_probes: bool = False,
                      record_save_layer_visual_readback_probes: bool = False,
                      save_layer_visual_readback_frame_start: int = 0,
@@ -1438,13 +1476,20 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
             for case in captured_case_ranges(
                 specs, mpb.SEGMENT_ORDER, capture_window):
                 spec_id = str(case["caseId"])
-                for phase in RENDER_CAPTURE_SURFACES:
-                    (capture_root / spec_id / phase).mkdir(
-                        parents=True, exist_ok=True)
+                if checkpoint_render_only:
+                    (capture_root / spec_id).mkdir(parents=True, exist_ok=True)
+                else:
+                    for phase in RENDER_CAPTURE_SURFACES:
+                        (capture_root / spec_id / phase).mkdir(
+                            parents=True, exist_ok=True)
             if render_artifact_dir is not None:
                 if record_render_step_checkpoints:
+                    checkpoint_root = (
+                        bootstrap.root /
+                        RENDER_CHECKPOINT_GUEST_ROOT.lstrip("/")
+                    )
                     for phase in RENDER_STEP_CHECKPOINT_SURFACES:
-                        (capture_root / "_execute" / phase).mkdir(
+                        (checkpoint_root / "_execute" / phase).mkdir(
                             parents=True, exist_ok=True)
             summary = _drive_full_guest_with_bootstrap(
                 wasmtime, wasm_path, bootstrap, frames,
@@ -1474,6 +1519,7 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                     bootstrap, render_artifact_dir, specs,
                     record_render_step_checkpoints=(
                         record_render_step_checkpoints),
+                    checkpoint_render_only=checkpoint_render_only,
                     render_stage_events_path=render_stage_out,
                     capture_window=capture_window)
                 summary["renderStageImageManifest"] = image_manifest["summary"]
@@ -1609,6 +1655,7 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                          framebuffer_dir: Path | None = None,
                          render_artifact_dir: Path | None = None,
                          record_render_step_checkpoints: bool = False,
+                         checkpoint_render_only: bool = False,
                          record_layer_raw_probes: bool = False,
                          record_save_layer_visual_readback_probes: bool = False,
                          save_layer_visual_readback_frame_start: int = 0,
@@ -1670,6 +1717,8 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
             ]
             if record_render_step_checkpoints:
                 cmd.append("--record-render-step-checkpoints")
+            if checkpoint_render_only:
+                cmd.append("--checkpoint-render-only")
             if record_layer_raw_probes:
                 cmd.append("--record-layer-raw-probes")
             if record_save_layer_visual_readback_probes:
@@ -2201,6 +2250,7 @@ def _enrich_render_execute_events_for_case(
         case_images, "updateLayerAfterDraw_pre")
     update_post_by_frame = _phase_images_by_frame(
         case_images, "updateLayerAfterDraw_post")
+    post_draw_by_frame = _phase_images_by_frame(case_images, "post_draw")
     enriched: list[dict[str, Any]] = []
 
     for source_event in events:
@@ -2224,6 +2274,7 @@ def _enrich_render_execute_events_for_case(
         execute_post = post_by_frame.get(local_frame)
         update_pre = update_pre_by_frame.get(local_frame)
         update_post = update_post_by_frame.get(local_frame)
+        post_draw = post_draw_by_frame.get(local_frame)
         kind = str(event.get("kind") or "")
         if kind == "execute_enter":
             event["executePreImage"] = execute_pre
@@ -2237,6 +2288,7 @@ def _enrich_render_execute_events_for_case(
             event["executePostImage"] = execute_post
             event["updateLayerAfterDrawPreImage"] = update_pre
             event["updateLayerAfterDrawPostImage"] = update_post
+            event["postDrawImage"] = post_draw
             if execute_pre is None:
                 _add_image_manifest_error(
                     event,
@@ -2258,6 +2310,11 @@ def _enrich_render_execute_events_for_case(
                     event,
                     "missing updateLayerAfterDraw_post image for frame "
                     f"{local_frame}",
+                )
+            if post_draw is None:
+                _add_image_manifest_error(
+                    event,
+                    f"missing post_draw image for frame {local_frame}",
                 )
         enriched.append(event)
 
@@ -2351,7 +2408,7 @@ def write_render_stage_artifacts(
         "startupXp3": str(startup_xp3),
         "captureXp3": str(capture_xp3),
         "fixture": {
-            "guestCaptureRoot": RENDER_CAPTURE_GUEST_ROOT,
+            "guestCaptureRoot": image_manifest.get("guestCaptureRoot"),
             "window": {"width": 1920, "height": 1080},
             "deltaMs": 1000.0 / 60.0,
             "segmentOrder": [str(segment["caseId"]) for segment in case_segments],
@@ -2435,6 +2492,10 @@ def main(argv: list[str]) -> int:
         print("--record-render-step-checkpoints requires "
               "--record-render-stages", file=sys.stderr)
         return 2
+    if args.checkpoint_render_only and not args.record_render_step_checkpoints:
+        print("--checkpoint-render-only requires "
+              "--record-render-step-checkpoints", file=sys.stderr)
+        return 2
     if args.record_layer_raw_probes and render_artifact_dir is None:
         print("--record-layer-raw-probes requires --record-render-stages",
               file=sys.stderr)
@@ -2476,6 +2537,7 @@ def main(argv: list[str]) -> int:
             render_artifact_dir=render_artifact_dir,
             record_render_step_checkpoints=(
                 args.record_render_step_checkpoints),
+            checkpoint_render_only=args.checkpoint_render_only,
             record_layer_raw_probes=args.record_layer_raw_probes,
             record_save_layer_visual_readback_probes=(
                 args.record_save_layer_visual_readback_probes),

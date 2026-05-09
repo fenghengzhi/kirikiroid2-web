@@ -38,6 +38,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="Collect render stage diagnostics and images")
     p.add_argument("--record-render-step-checkpoints", action="store_true",
                    help="Save execute_pre/execute_post render checkpoints")
+    p.add_argument("--checkpoint-render-only", action="store_true",
+                   help="Build render PNG artifacts only from direct render "
+                        "checkpoints")
     p.add_argument("--record-layer-raw-probes", action="store_true",
                    help="Capture raw Layer MainImage probe events")
     p.add_argument("--record-save-layer-visual-readback-probes",
@@ -89,6 +92,10 @@ def main(argv: list[str]) -> int:
         print("--record-render-step-checkpoints requires "
               "--record-render-stages", file=sys.stderr)
         return 2
+    if args.checkpoint_render_only and not args.record_render_step_checkpoints:
+        print("--checkpoint-render-only requires "
+              "--record-render-step-checkpoints", file=sys.stderr)
+        return 2
     if args.record_layer_raw_probes and not args.record_render_stages:
         print("--record-layer-raw-probes requires --record-render-stages",
               file=sys.stderr)
@@ -116,6 +123,7 @@ def main(argv: list[str]) -> int:
                 args.render_artifact_dir if args.record_render_stages else None),
             record_render_step_checkpoints=(
                 args.record_render_step_checkpoints),
+            checkpoint_render_only=args.checkpoint_render_only,
             record_layer_raw_probes=args.record_layer_raw_probes,
             record_save_layer_visual_readback_probes=(
                 args.record_save_layer_visual_readback_probes),

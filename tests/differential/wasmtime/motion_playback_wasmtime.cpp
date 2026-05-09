@@ -61,8 +61,15 @@ struct TraceState {
     int frameCounter = 0;
     int lastCompletedFrameId = -1;
     motion::Player *lastCompletedTopPlayer = nullptr;
+    void *lastCompletedRenderLayerObject = nullptr;
+    bool lastCompletedRenderLayerFromAccurateSla = false;
+    void *lastDrawTargetObject = nullptr;
+    motion::Player *lastPostDrawLayerPlayer = nullptr;
+    void *lastPostDrawLayerObject = nullptr;
+    std::string lastPostDrawLayerSamplePoint;
     int currentRenderFrameId = -1;
     motion::Player *currentRenderPlayer = nullptr;
+    int accurateSlaRenderDepth = 0;
 };
 
 TraceState &traceState() {
@@ -315,6 +322,23 @@ motion::Player *renderPlayerFor(motion::Player *player) {
 bool isCurrentRenderPlayer(motion::Player *player) {
     auto &state = traceState();
     return state.inRender && player && state.currentRenderPlayer == player;
+}
+
+void *variantLayerObjectAt(tjs_int numparams, tTJSVariant **param,
+                           tjs_int index) {
+    if(index < 0 || index >= numparams || !param || !param[index] ||
+       param[index]->Type() != tvtObject) {
+        return nullptr;
+    }
+    auto *object = param[index]->AsObjectNoAddRef();
+    if(!object) return nullptr;
+    tTJSNI_BaseLayer *layer = nullptr;
+    if(TJS_FAILED(object->NativeInstanceSupport(
+           TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+           reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
+        return nullptr;
+    }
+    return object;
 }
 
 void appendRenderEvent(motion::Player *player,
@@ -926,6 +950,12 @@ void emitProgressSample(motion::Player *fallbackPlayer) {
         !state.players.empty() ? state.players.front() : fallbackPlayer;
     state.lastCompletedFrameId = frameId;
     state.lastCompletedTopPlayer = topPlayer;
+    state.lastCompletedRenderLayerObject = nullptr;
+    state.lastCompletedRenderLayerFromAccurateSla = false;
+    state.lastDrawTargetObject = nullptr;
+    state.lastPostDrawLayerPlayer = nullptr;
+    state.lastPostDrawLayerObject = nullptr;
+    state.lastPostDrawLayerSamplePoint.clear();
     krkr2_lldb_motion_frame_begin(
         frameId, state.objthis, topPlayer,
         static_cast<std::int32_t>(state.players.size()));
@@ -1000,8 +1030,15 @@ void resetState() {
     state.frameCounter = 0;
     state.lastCompletedFrameId = -1;
     state.lastCompletedTopPlayer = nullptr;
+    state.lastCompletedRenderLayerObject = nullptr;
+    state.lastCompletedRenderLayerFromAccurateSla = false;
+    state.lastDrawTargetObject = nullptr;
+    state.lastPostDrawLayerPlayer = nullptr;
+    state.lastPostDrawLayerObject = nullptr;
+    state.lastPostDrawLayerSamplePoint.clear();
     state.currentRenderFrameId = -1;
     state.currentRenderPlayer = nullptr;
+    state.accurateSlaRenderDepth = 0;
 }
 
 void setError(const std::string &message) {
@@ -1063,6 +1100,10 @@ MotionTraceRenderDrawScope::MotionTraceRenderDrawScope(
     state.inRender = true;
     state.currentRenderFrameId = state.lastCompletedFrameId;
     state.currentRenderPlayer = player;
+    state.lastDrawTargetObject = targetObject;
+    state.lastPostDrawLayerPlayer = nullptr;
+    state.lastPostDrawLayerObject = nullptr;
+    state.lastPostDrawLayerSamplePoint.clear();
     std::string payload = "\"drawId\":";
     payload += std::to_string(_drawId);
     std::string diagnostics = "{\"argVariant\":";
@@ -1255,6 +1296,12 @@ MotionTraceRenderExecuteScope::~MotionTraceRenderExecuteScope() {
     motionTraceRenderImageCheckpoint(
         _player, _renderLayerObject, "execute_post",
         "Player::executeLayerRenderCommands.leave.before-return");
+    if(_renderLayerObject) {
+        auto &state = traceState();
+        state.lastCompletedRenderLayerObject = _renderLayerObject;
+        state.lastCompletedRenderLayerFromAccurateSla =
+            state.accurateSlaRenderDepth > 0;
+    }
     appendRenderEvent(_player, "render_execute", "execute_leave",
                       "Player::executeLayerRenderCommands.leave",
                       payload, diagnostics);
@@ -1262,6 +1309,31 @@ MotionTraceRenderExecuteScope::~MotionTraceRenderExecuteScope() {
 
 void MotionTraceRenderExecuteScope::setResult(bool ok) {
     _ok = ok;
+}
+
+void motionTraceBeginAccurateSlaRender(Player *, void *) {
+    auto &state = traceState();
+    ++state.accurateSlaRenderDepth;
+}
+
+void motionTraceEndAccurateSlaRender(Player *, void *) {
+    auto &state = traceState();
+    if(state.accurateSlaRenderDepth > 0) {
+        --state.accurateSlaRenderDepth;
+    }
+}
+
+bool motionTraceIsAccurateSlaRenderActive() {
+    return traceState().accurateSlaRenderDepth > 0;
+}
+
+void motionTraceRecordPostDrawLayerCandidate(Player *player, void *layerObject,
+                                             const char *samplePoint) {
+    if(!layerObject) return;
+    auto &state = traceState();
+    state.lastPostDrawLayerPlayer = renderPlayerFor(player);
+    state.lastPostDrawLayerObject = layerObject;
+    state.lastPostDrawLayerSamplePoint = samplePoint ? samplePoint : "";
 }
 
 void motionTraceRenderPrepareEnter(Player *player) {
@@ -1565,6 +1637,34 @@ extern "C" void krkr2_wasm_motion_trace_save_layer_visual_readback_row(
     int height, int bpp) {
     motion::detail::motionTraceSaveLayerVisualReadbackRow(
         image, y, row, rowBytes, width, height, bpp);
+}
+
+extern "C" bool krkr2_wasm_motion_trace_debug_message_probe(
+    tjs_int numparams, tTJSVariant **param) {
+    if(numparams < 1 || !param || !param[0]) return false;
+    const ttstr marker(*param[0]);
+    if(marker != TJS_W("__krkr2_motion_post_draw")) return false;
+    auto &state = traceState();
+    void *layerObject = nullptr;
+    if(!layerObject) {
+        layerObject = variantLayerObjectAt(numparams, param, 5);
+    }
+    if(!layerObject) {
+        layerObject = variantLayerObjectAt(numparams, param, 3);
+    }
+    if(!layerObject) {
+        layerObject = variantLayerObjectAt(numparams, param, 4);
+    }
+    if(!layerObject) {
+        layerObject = state.lastDrawTargetObject;
+    }
+    if(!layerObject) {
+        layerObject = state.lastCompletedRenderLayerObject;
+    }
+    motion::detail::motionTraceRenderImageCheckpoint(
+        nullptr, layerObject, "post_draw",
+        "startup.tjs.post_draw.after_onPaint");
+    return true;
 }
 
 extern "C" {

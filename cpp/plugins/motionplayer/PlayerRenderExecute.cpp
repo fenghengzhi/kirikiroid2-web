@@ -262,6 +262,32 @@ namespace motion {
         }
 
         using PreparedRenderItem = detail::PlayerRuntime::PreparedRenderItem;
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        const auto recordPostDrawCandidate =
+            [&](iTJSDispatch2 *layerObject, const char *samplePoint) {
+            detail::motionTraceRecordPostDrawLayerCandidate(
+                this, layerObject, samplePoint);
+        };
+        int accurateSlaMinimumLayerWidth = 0;
+        const auto directItemCoversRenderTarget =
+            [&](const PreparedRenderItem &item) {
+            if(!renderLayer) return false;
+            float minX = item.corners[0];
+            float maxX = item.corners[0];
+            float minY = item.corners[1];
+            float maxY = item.corners[1];
+            for(size_t i = 2; i + 1 < item.corners.size(); i += 2) {
+                minX = std::min(minX, item.corners[i]);
+                maxX = std::max(maxX, item.corners[i]);
+                minY = std::min(minY, item.corners[i + 1]);
+                maxY = std::max(maxY, item.corners[i + 1]);
+            }
+            return minX <= 0.0f && minY <= 0.0f &&
+                maxX >= static_cast<float>(renderLayer->GetWidth()) &&
+                maxY >= static_cast<float>(renderLayer->GetHeight());
+        };
+#endif
+
         tTJSVariant layerClassObject;
         if(!getLayerClassDispatchVariantLike_0x5CB08C(layerClassObject)) {
             detail::logoChainTraceCheck(
@@ -451,6 +477,11 @@ namespace motion {
                     buildAffineTrianglePoints(item.localCorners, 0.0f, 0.0f);
                 targetLayer->AffineCopy(localPts.data(), srcImage,
                                         sourceRect, stNearest, _clearEnabled);
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                recordPostDrawCandidate(
+                    targetLayerObject,
+                    "Player::executeLayerRenderCommands.item.afterAffineCopy");
+#endif
             } else {
                 if(item.localMeshPoints.empty() || item.meshDivX < 2 ||
                    item.meshDivY < 2) {
@@ -463,11 +494,21 @@ namespace motion {
                         localMeshPoints.data(), item.meshDivX,
                         item.meshDivY, srcImage, sourceRect, stNearest,
                         _clearEnabled);
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                    recordPostDrawCandidate(
+                        targetLayerObject,
+                        "Player::executeLayerRenderCommands.item.afterBezierPatchCopy");
+#endif
                 } else if(item.meshType == 2) {
                     targetLayer->MeshCopy(localMeshPoints.data(),
                                           item.meshDivX, item.meshDivY,
                                           srcImage, sourceRect, stNearest,
                                           _clearEnabled);
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                    recordPostDrawCandidate(
+                        targetLayerObject,
+                        "Player::executeLayerRenderCommands.item.afterMeshCopy");
+#endif
                 } else {
                     return false;
                 }
@@ -481,6 +522,116 @@ namespace motion {
                 clipWidth, clipHeight, _clearEnabled ? 1 : 0);
             return true;
         };
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        auto renderAccurateSlaPostDrawCandidateLike_0x6C9CA8 =
+            [&](PreparedRenderItem &item,
+                const ResolvedSourceObject &source,
+                const tTVPRect &sourceRect) -> bool {
+            if(!detail::motionTraceIsAccurateSlaRenderActive() ||
+               !renderLayer || !source.image) {
+                return false;
+            }
+
+            // libkrkr2.so sub_6C9CA8 clips item+184..196 to the target
+            // Layer, then sizes the tracked Layer to right-left/bottom-top
+            // before calling affineCopy/meshCopy/bezierPatchCopy on it.
+            float clipLeft = std::max(item.paintBox[0], 0.0f);
+            float clipTop = std::max(item.paintBox[1], 0.0f);
+            float clipRight = std::min(
+                item.paintBox[2],
+                static_cast<float>(renderLayer->GetWidth()));
+            float clipBottom = std::min(
+                item.paintBox[3],
+                static_cast<float>(renderLayer->GetHeight()));
+            if(!item.corners.empty()) {
+                float minX = item.corners[0];
+                float maxX = item.corners[0];
+                float minY = item.corners[1];
+                float maxY = item.corners[1];
+                for(size_t i = 2; i + 1 < item.corners.size(); i += 2) {
+                    minX = std::min(minX, item.corners[i]);
+                    maxX = std::max(maxX, item.corners[i]);
+                    minY = std::min(minY, item.corners[i + 1]);
+                    maxY = std::max(maxY, item.corners[i + 1]);
+                }
+                clipLeft = std::max(clipLeft, std::floor(minX));
+                clipTop = std::max(clipTop, std::floor(minY));
+                clipRight = std::min(clipRight, std::ceil(maxX));
+                clipBottom = std::min(clipBottom, std::ceil(maxY));
+            }
+            if(clipRight <= clipLeft || clipBottom <= clipTop) {
+                return false;
+            }
+            const int clipWidth = static_cast<int>(clipRight - clipLeft);
+            const int clipHeight = static_cast<int>(clipBottom - clipTop);
+            int layerWidth = clipWidth;
+            int layerHeight = clipHeight;
+            const bool useMinimumBackdropWidth =
+                !directItemCoversRenderTarget(item) &&
+                accurateSlaMinimumLayerWidth > layerWidth;
+            if(useMinimumBackdropWidth) {
+                layerWidth = accurateSlaMinimumLayerWidth;
+            }
+            if(source.width > 0 && source.width < 512) {
+                layerWidth = std::max(layerWidth, source.width + 1);
+            }
+            if(source.height > 0 && source.width < 512) {
+                layerHeight = std::max(layerHeight, source.height + 1);
+            }
+            const bool expandedLayerBounds =
+                layerWidth > clipWidth || layerHeight > clipHeight;
+            if(layerWidth <= 0 || layerHeight <= 0) {
+                return false;
+            }
+
+            iTJSDispatch2 *candidateLayerObject = ensureLeafItemLayer(item);
+            auto *candidateLayer = resolveNativeLayer(candidateLayerObject);
+            if(!candidateLayerObject || !candidateLayer ||
+               !prepareLayerForRender(
+                   candidateLayerObject, layerWidth, layerHeight,
+                   expandedLayerBounds ? 0x00FFFFFF : 0x00000000)) {
+                return false;
+            }
+
+            const float offsetX = -0.5f - clipLeft;
+            const float offsetY = -0.5f - clipTop;
+            if(item.meshType == 0) {
+                const auto localPts =
+                    buildAffineTrianglePoints(item.corners, offsetX, offsetY);
+                candidateLayer->AffineCopy(localPts.data(), source.image,
+                                           sourceRect, stNearest, true);
+                recordPostDrawCandidate(
+                    candidateLayerObject,
+                    "Player::executeLayerRenderCommands.accurateSla.item.afterAffineCopy");
+                return true;
+            }
+            if(item.meshPoints.empty() || item.meshDivX < 2 ||
+               item.meshDivY < 2) {
+                return false;
+            }
+            auto localMeshPoints =
+                buildMeshPoints(item.meshPoints, offsetX, offsetY);
+            if(item.meshType == 1) {
+                candidateLayer->BezierPatchCopy(
+                    localMeshPoints.data(), item.meshDivX, item.meshDivY,
+                    source.image, sourceRect, stNearest, true);
+                recordPostDrawCandidate(
+                    candidateLayerObject,
+                    "Player::executeLayerRenderCommands.accurateSla.item.afterBezierPatchCopy");
+                return true;
+            }
+            if(item.meshType == 2) {
+                candidateLayer->MeshCopy(
+                    localMeshPoints.data(), item.meshDivX, item.meshDivY,
+                    source.image, sourceRect, stNearest, true);
+                recordPostDrawCandidate(
+                    candidateLayerObject,
+                    "Player::executeLayerRenderCommands.accurateSla.item.afterMeshCopy");
+                return true;
+            }
+            return false;
+        };
+#endif
         auto chooseItemOutputLayerObject =
             [&](PreparedRenderItem &item) -> iTJSDispatch2 * {
             const bool preferLeafLayer = (item.stencilComposite & 4) == 0;
@@ -849,6 +1000,13 @@ namespace motion {
                                 "sub_6C1B70 direct affine source object setup failed");
                             continue;
                         }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+                        if(detail::motionTraceIsAccurateSlaRenderActive() &&
+                           accurateSlaMinimumLayerWidth == 0 &&
+                           source.width > 0) {
+                            accurateSlaMinimumLayerWidth = source.width;
+                        }
+#endif
                         const auto worldPts =
                             buildAffineTrianglePoints(item.corners,
                                                      -0.5f, -0.5f);
@@ -877,6 +1035,16 @@ namespace motion {
                             continue;
                         }
 #if defined(KRKR2_WASMTIME_HEADLESS)
+                        if(detail::motionTraceIsAccurateSlaRenderActive()) {
+                            if(!renderAccurateSlaPostDrawCandidateLike_0x6C9CA8(
+                                   item, source, sourceRect)) {
+                                recordPostDrawCandidate(
+                                    directItemCoversRenderTarget(item)
+                                        ? renderLayerObject
+                                        : source.layerObject,
+                                    "Player::executeLayerRenderCommands.direct.afterOperateAffine.accurateSlaCandidateFallback");
+                            }
+                        }
                         emitDirectProbe(
                             "Player::executeLayerRenderCommands.direct.afterOperateAffine",
                             "after",

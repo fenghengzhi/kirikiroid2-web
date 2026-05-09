@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import shlex
+import shutil
 import sys
 import tempfile
 import time
@@ -48,8 +50,10 @@ RENDER_STEP_CHECKPOINT_PHASES: tuple[str, ...] = (
     "execute_post",
     "updateLayerAfterDraw_pre",
     "updateLayerAfterDraw_post",
+    "post_draw",
 )
 RENDER_CAPTURE_SURFACES: tuple[str, ...] = ("initial", "post_draw")
+POST_DRAW_CANVAS_SIZE = (1920, 1080)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -78,7 +82,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="With --stage render_path, capture execute_pre/"
                         "execute_post Layer images around sub_6C7440 and "
                         "updateLayerAfterDraw_pre/post images around "
-                        "updateLayerAfterDraw")
+                        "updateLayerAfterDraw, plus true post_draw after "
+                        "startup.tjs onPaint")
+    p.add_argument("--checkpoint-render-only", action="store_true",
+                   help="With --record-render-step-checkpoints, build render "
+                        "PNG artifacts only from Frida Layer MainImage "
+                        "checkpoints instead of fixture saveLayerImage PNGs")
     p.add_argument("--record-layer-raw-probes", action="store_true",
                    help="With --stage render_path, capture raw Layer "
                         "MainImage probes at fillRect/saveLayerImage/"
@@ -748,6 +757,7 @@ def enrich_render_execute_events_for_case(
         case_images, "updateLayerAfterDraw_pre")
     update_post_by_frame = _phase_images_by_frame(
         case_images, "updateLayerAfterDraw_post")
+    post_draw_by_frame = _phase_images_by_frame(case_images, "post_draw")
     enriched: list[dict[str, Any]] = []
 
     for source_event in events:
@@ -770,6 +780,7 @@ def enrich_render_execute_events_for_case(
         execute_post = post_by_frame.get(local_frame)
         update_pre = update_pre_by_frame.get(local_frame)
         update_post = update_post_by_frame.get(local_frame)
+        post_draw = post_draw_by_frame.get(local_frame)
         kind = str(event.get("kind") or "")
         if kind == "execute_enter":
             event["executePreImage"] = execute_pre
@@ -781,6 +792,7 @@ def enrich_render_execute_events_for_case(
             event["executePostImage"] = execute_post
             event["updateLayerAfterDrawPreImage"] = update_pre
             event["updateLayerAfterDrawPostImage"] = update_post
+            event["postDrawImage"] = post_draw
             if execute_pre is None:
                 _add_image_manifest_error(
                     event, f"missing execute_pre image for frame {local_frame}")
@@ -797,6 +809,9 @@ def enrich_render_execute_events_for_case(
                     event,
                     "missing updateLayerAfterDraw_post image for frame "
                     f"{local_frame}")
+            if post_draw is None:
+                _add_image_manifest_error(
+                    event, f"missing post_draw image for frame {local_frame}")
         enriched.append(event)
     return enriched
 
@@ -807,6 +822,7 @@ def add_oracle_execute_checkpoint_images(
     image_manifest: dict[str, Any],
     checkpoints: list[dict[str, Any]],
     case_segments: list[dict[str, Any]],
+    strict: bool = True,
 ) -> dict[str, Any]:
     by_frame_phase: dict[tuple[int, str], dict[str, Any]] = {}
     for checkpoint in checkpoints:
@@ -837,6 +853,8 @@ def add_oracle_execute_checkpoint_images(
                 frame_id = first_frame_id + local_frame
                 checkpoint = by_frame_phase.get((frame_id, phase))
                 if checkpoint is None:
+                    if not strict and phase != "post_draw":
+                        continue
                     raise RuntimeError(
                         f"missing oracle {phase} checkpoint for "
                         f"{case_id} frame {local_frame} (frameId {frame_id})")
@@ -855,6 +873,17 @@ def add_oracle_execute_checkpoint_images(
                     raise RuntimeError(
                         f"oracle {phase} checkpoint has no rawPath for "
                         f"{case_id} frame {local_frame}")
+                if phase == "post_draw":
+                    size = (
+                        int(checkpoint["width"]),
+                        int(checkpoint["height"]),
+                    )
+                    if size != POST_DRAW_CANVAS_SIZE:
+                        raise RuntimeError(
+                            f"oracle post_draw checkpoint for {case_id} "
+                            f"frame {local_frame} captured {size[0]}x{size[1]}, "
+                            f"expected {POST_DRAW_CANVAS_SIZE[0]}x"
+                            f"{POST_DRAW_CANVAS_SIZE[1]} canvas")
                 rel = Path("images") / case_id / phase / \
                     f"frame_{local_frame:04d}.png"
                 path = artifact_dir / rel
@@ -892,6 +921,51 @@ def add_oracle_execute_checkpoint_images(
     summary["imageCount"] = int(summary.get("imageCount", 0)) + total_added
     image_manifest["summary"] = summary
     return image_manifest
+
+
+def checkpoint_only_image_manifest(
+    *,
+    artifact_dir: Path,
+    specs: list[dict[str, Any]],
+    case_segments: list[dict[str, Any]],
+    remote_capture_root: str | None,
+    capture_window: FrameCaptureWindow,
+) -> dict[str, Any]:
+    images_root = artifact_dir / "images"
+    if images_root.exists():
+        shutil.rmtree(images_root)
+    images_root.mkdir(parents=True, exist_ok=True)
+
+    specs_by_id = {str(spec["id"]): spec for spec in specs}
+    cases: list[dict[str, Any]] = []
+    for segment in case_segments:
+        case_id = str(segment["caseId"])
+        spec = segment.get("spec") or specs_by_id.get(case_id, {})
+        captured_local_frames = list(segment.get(
+            "capturedLocalFrames", range(len(segment.get("frames", [])))))
+        cases.append({
+            "caseId": case_id,
+            "mtnPath": spec.get("mtn_path"),
+            "chara": spec.get("chara"),
+            "label": spec.get("label"),
+            "frames": int(spec.get("frames", len(segment.get("frames", [])))),
+            "fullFrameIdRange": segment.get("fullFrameIdRange"),
+            "capturedFrameIdRange": segment.get("capturedFrameIdRange"),
+            "capturedLocalFrames": captured_local_frames,
+            "requestedLocalFrames": captured_local_frames,
+            "phases": {},
+        })
+
+    return {
+        "remoteCaptureRoot": remote_capture_root,
+        "captureSurfaces": [],
+        "cases": cases,
+        "summary": {
+            "caseCount": len(cases),
+            "imageCount": 0,
+        },
+        **capture_window.manifest_fields(),
+    }
 
 
 def write_render_stage_artifacts(
@@ -1042,6 +1116,10 @@ def main(argv: list[str]) -> int:
         print("--record-render-step-checkpoints requires --stage render_path",
               file=sys.stderr)
         return 2
+    if args.checkpoint_render_only and not args.record_render_step_checkpoints:
+        print("--checkpoint-render-only requires "
+              "--record-render-step-checkpoints", file=sys.stderr)
+        return 2
     if args.record_layer_raw_probes and not render_path:
         print("--record-layer-raw-probes requires --stage render_path",
               file=sys.stderr)
@@ -1169,17 +1247,27 @@ def main(argv: list[str]) -> int:
 
         if render_path:
             assert render_artifact_dir is not None
-            assert remote_render_root is not None
-            image_manifest = mpb._collect_render_stage_capture(
-                args.serial, specs_by_id, render_artifact_dir,
-                remote_render_root, timeout=args.playback_timeout,
-                capture_window=capture_window)
+            if args.checkpoint_render_only:
+                image_manifest = checkpoint_only_image_manifest(
+                    artifact_dir=render_artifact_dir,
+                    specs=specs,
+                    case_segments=case_segments,
+                    remote_capture_root=remote_render_root,
+                    capture_window=capture_window,
+                )
+            else:
+                assert remote_render_root is not None
+                image_manifest = mpb._collect_render_stage_capture(
+                    args.serial, specs_by_id, render_artifact_dir,
+                    remote_render_root, timeout=args.playback_timeout,
+                    capture_window=capture_window)
             if args.record_render_step_checkpoints:
                 image_manifest = add_oracle_execute_checkpoint_images(
                     artifact_dir=render_artifact_dir,
                     image_manifest=image_manifest,
                     checkpoints=render_step_checkpoints,
                     case_segments=case_segments,
+                    strict=not args.checkpoint_render_only,
                 )
             written = write_render_stage_artifacts(
                 artifact_dir=render_artifact_dir,
@@ -1191,6 +1279,9 @@ def main(argv: list[str]) -> int:
                 renderer_metadata=renderer_metadata,
                 capture_window=capture_window,
             )
+            if args.checkpoint_render_only and remote_render_root is not None:
+                mpb._adb_shell(
+                    args.serial, f"rm -rf {shlex.quote(remote_render_root)}")
             print(
                 f"[record-stage] render artifact manifest: "
                 f"{render_artifact_dir / 'manifest.json'}"

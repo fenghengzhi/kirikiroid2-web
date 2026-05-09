@@ -870,6 +870,26 @@ namespace motion {
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
 
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        struct AccurateSlaRenderTraceScope {
+            Player *player = nullptr;
+            iTJSDispatch2 *target = nullptr;
+            bool active = false;
+            AccurateSlaRenderTraceScope(Player *p, iTJSDispatch2 *t, bool enabled)
+                : player(p), target(t), active(enabled) {
+                if(active) {
+                    detail::motionTraceBeginAccurateSlaRender(player, target);
+                }
+            }
+            ~AccurateSlaRenderTraceScope() {
+                if(active) {
+                    detail::motionTraceEndAccurateSlaRender(player, target);
+                }
+            }
+        } accurateSlaRenderTrace{
+            this, renderTarget, isAccurateSlaRenderEnabled()};
+#endif
+
         if(!renderMotionFrameToTarget(renderTarget, canvasWidth, canvasHeight,
                                       isAccurateSlaRenderEnabled()
                                           ? "0x6C9CA8"
@@ -967,6 +987,13 @@ namespace motion {
             const bool ok = TJS_SUCCEEDED(renderLayerObject->FuncCall(
                 0, TJS_W("assignImages"), nullptr, nullptr, 1, args,
                 renderLayerObject));
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            if(ok) {
+                detail::motionTraceRecordPostDrawLayerCandidate(
+                    this, renderLayerObject,
+                    "Player::updateLayerAfterDraw_0x6CE7D8.afterAssignImages");
+            }
+#endif
             detail::logoChainTraceCheck(
                 motionPath, "post.assignImages", "0x6CE7D8",
                 _clampedEvalTime,

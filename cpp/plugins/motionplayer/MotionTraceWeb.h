@@ -101,6 +101,14 @@ namespace motion::detail {
                                           void *renderLayerObject,
                                           const char *phase,
                                           const char *samplePoint);
+    void motionTraceBeginAccurateSlaRender(Player *player,
+                                           void *renderTargetObject);
+    void motionTraceEndAccurateSlaRender(Player *player,
+                                         void *renderTargetObject);
+    bool motionTraceIsAccurateSlaRenderActive();
+    void motionTraceRecordPostDrawLayerCandidate(Player *player,
+                                                 void *layerObject,
+                                                 const char *samplePoint);
     void motionTraceRenderDirectExecuteProbe(Player *player,
                                              const char *samplePoint,
                                              const char *payload);

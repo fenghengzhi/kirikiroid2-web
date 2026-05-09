@@ -26,6 +26,11 @@
 #include "Application.h"
 #include "SystemControl.h"
 
+#if defined(__EMSCRIPTEN__)
+extern "C" bool krkr2_wasm_motion_trace_debug_message_probe(
+    tjs_int numparams, tTJSVariant **param) __attribute__((weak));
+#endif
+
 //---------------------------------------------------------------------------
 // global variables
 //---------------------------------------------------------------------------
@@ -578,6 +583,13 @@ tTJSNC_Debug::tTJSNC_Debug() : tTJSNativeClass(TJS_W("Debug")) {
     TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/ message) {
         if(numparams < 1)
             return TJS_E_BADPARAMCOUNT;
+
+#if defined(__EMSCRIPTEN__)
+        if(krkr2_wasm_motion_trace_debug_message_probe &&
+           krkr2_wasm_motion_trace_debug_message_probe(numparams, param)) {
+            return TJS_S_OK;
+        }
+#endif
 
         if(numparams == 1) {
             TVPAddLog(*param[0]);

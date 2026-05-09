@@ -193,6 +193,7 @@ def _renderer_preference_xml(renderer: str = ORACLE_RENDERER) -> str:
         "<?xml version=\"1.0\"?>\n"
         "<GlobalPreference>\n"
         f"    <Item key=\"renderer\" value=\"{renderer}\"/>\n"
+        "    <Item key=\"ogl_accurate_render\" value=\"false\"/>\n"
         "</GlobalPreference>\n"
     )
 
