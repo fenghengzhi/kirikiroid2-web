@@ -68,13 +68,19 @@ jobs:
           package_dir = Path(lldb_python) / "lldb"
           suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
           extension = package_dir / ("_lldb" + suffix)
+          wrapper_roots = [
+              Path("/usr/lib/llvm-18/lib/python3/dist-packages/lldb"),
+              Path("/usr/lib/python3/dist-packages/lldb"),
+          ]
           targets = [
-              Path("/usr/lib/llvm-18/lib/liblldb.so.1"),
-              *sorted(Path("/usr/lib/llvm-18/lib").glob("liblldb.so*")),
+              candidate
+              for root in wrapper_roots
+              for candidate in sorted(root.glob("_lldb*.so"))
+              if candidate.exists()
           ]
           target = next((p for p in targets if p.exists()), None)
           if target is None:
-              raise SystemExit("liblldb.so target not found")
+              raise SystemExit("_lldb wrapper target not found")
           if extension.exists() or extension.is_symlink():
               extension.unlink()
           extension.symlink_to(target)
