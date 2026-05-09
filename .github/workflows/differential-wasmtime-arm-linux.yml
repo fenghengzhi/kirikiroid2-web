@@ -67,7 +67,7 @@ jobs:
 
       - name: Repair LLDB Python extension symlink
         run: |
-          sudo python3 - <<'PY'
+          sudo LLVM_VERSION="${LLVM_VERSION}" python3 - <<'PY'
           import importlib.machinery
           import os
           from pathlib import Path
