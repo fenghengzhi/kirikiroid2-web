@@ -858,15 +858,41 @@ class WasmtimeGLProvider:
         except TypeError:
             return [value]
 
-    def _active_info_name(self, result: Any) -> bytes:
-        if result is None:
+    @staticmethod
+    def _active_info_item_name(item: Any) -> bytes:
+        if isinstance(item, (int, float)):
             return b""
+        if isinstance(item, bytes):
+            raw = item
+        elif isinstance(item, str):
+            raw = item.encode("utf-8")
+        else:
+            try:
+                raw = bytes(item)
+            except (TypeError, ValueError):
+                return b""
+        return raw.split(b"\0", 1)[0]
+
+    def _active_info_parts(self, result: Any) -> tuple[bytes, int, int]:
+        if result is None:
+            return b"", 0, 0
+        name = b""
+        numeric: list[int] = []
         for item in result:
-            if isinstance(item, bytes):
-                return item
-            if isinstance(item, str):
-                return item.encode("utf-8")
-        return b""
+            item_name = self._active_info_item_name(item)
+            if item_name:
+                name = item_name
+                continue
+            try:
+                numeric.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        if len(numeric) >= 2:
+            return name, int(numeric[0]), int(numeric[1])
+        return name, 0, 0
+
+    def _active_info_name(self, result: Any) -> bytes:
+        return self._active_info_parts(result)[0]
 
     def _active_attrib_locations(self, program: int) -> set[int]:
         cached = self._program_active_attribs.get(program)
@@ -1574,21 +1600,8 @@ class WasmtimeGLProvider:
     def _write_active_info(self, caller: Any, result: Any, buf_size: int,
                            length: int, size_ptr: int, type_ptr: int,
                            name_ptr: int) -> None:
-        if result is None:
-            name, size, typ = b"", 0, 0
-        else:
-            name = b""
-            numeric: list[int] = []
-            for item in result:
-                try:
-                    numeric.append(int(item))
-                except (TypeError, ValueError):
-                    name = item
-            if len(numeric) >= 2:
-                size, typ = numeric[0], numeric[1]
-            else:
-                size, typ = 0, 0
-        text = self._bytes_to_text(name)
+        name, size, typ = self._active_info_parts(result)
+        text = name.decode("utf-8", errors="replace")
         self._write_i32(caller, size_ptr, int(size))
         self._write_i32(caller, type_ptr, int(typ))
         self._write_gl_string(caller, buf_size, length, name_ptr, text)
@@ -1598,9 +1611,13 @@ class WasmtimeGLProvider:
         path = self._uniform_probe_path
         if not path:
             return
+        name, size, typ = self._active_info_parts(result)
         record = {
             "program": int(program),
             "index": int(index),
+            "name": name.decode("utf-8", errors="replace"),
+            "size": int(size),
+            "type": int(typ),
             "result": repr(result),
         }
         with open(path, "a", encoding="utf-8") as file:
