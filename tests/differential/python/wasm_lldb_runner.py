@@ -123,20 +123,6 @@ def load_lldb():
                 "import lldb; print(lldb.SBDebugger)'"
             ) from exc
 
-    try:
-        import lldb  # type: ignore
-        if valid_lldb_module(lldb):
-            return lldb
-        attempts.append(
-            "direct import produced invalid lldb module: "
-            f"{describe_lldb_module(lldb)}"
-        )
-        forget_invalid_lldb_module()
-    except Exception as exc:
-        attempts.append(f"direct import failed: {exc!r}")
-        forget_invalid_lldb_module()
-        pass
-
     candidates = ["lldb", "lldb-20", "lldb-19", "lldb-18", "lldb-17"]
     for binary in candidates:
         path = shutil.which(binary)
@@ -164,6 +150,19 @@ def load_lldb():
             attempts.append(f"{binary} failed: {exc!r}")
             forget_invalid_lldb_module()
             continue
+
+    try:
+        import lldb  # type: ignore
+        if valid_lldb_module(lldb):
+            return lldb
+        attempts.append(
+            "direct import produced invalid lldb module: "
+            f"{describe_lldb_module(lldb)}"
+        )
+        forget_invalid_lldb_module()
+    except Exception as exc:
+        attempts.append(f"direct import failed: {exc!r}")
+        forget_invalid_lldb_module()
     raise RuntimeError(
         "failed to import LLDB Python module. Install lldb and python lldb "
         "bindings, then verify `python3 -c 'import lldb'` or `lldb -P`.\n"
