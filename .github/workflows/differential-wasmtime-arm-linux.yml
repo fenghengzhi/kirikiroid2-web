@@ -5,6 +5,7 @@ on:
 
 env:
   EMSDK_VERSION: "4.0.23"
+  LLVM_VERSION: "20"
 
 jobs:
   wasmtime-arm-linux:
@@ -15,7 +16,7 @@ jobs:
       EMSDK: ${{ github.workspace }}/.emsdk
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       LIBGL_ALWAYS_SOFTWARE: "1"
-      LD_LIBRARY_PATH: /usr/lib/llvm-18/lib/python3/dist-packages/lldb:/usr/lib/llvm-18/lib
+      LD_LIBRARY_PATH: /usr/lib/llvm-20/lib/python3/dist-packages/lldb:/usr/lib/llvm-20/lib
       MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +38,7 @@ jobs:
             ca-certificates \
             cmake \
             git \
+            gnupg \
             libgl1-mesa-dev \
             libgl1-mesa-dri \
             libglfw3 \
@@ -50,26 +52,39 @@ jobs:
             python3-pip \
             python3-venv \
             wabt \
+            wget \
             xvfb
+          sudo rm -f /usr/share/keyrings/apt.llvm.org.gpg
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/apt.llvm.org.gpg
+          echo "deb [signed-by=/usr/share/keyrings/apt.llvm.org.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-${LLVM_VERSION} main" \
+            | sudo tee /etc/apt/sources.list.d/apt.llvm.org.list
+          sudo apt-get update
           sudo apt-get install -y --reinstall --no-install-recommends \
-            liblldb-18 \
-            lldb-18 \
-            python3-lldb-18
+            liblldb-${LLVM_VERSION} \
+            lldb-${LLVM_VERSION} \
+            python3-lldb-${LLVM_VERSION}
 
       - name: Repair LLDB Python extension symlink
         run: |
           sudo python3 - <<'PY'
           import importlib.machinery
+          import os
           from pathlib import Path
           import subprocess
 
+          llvm_version = os.environ["LLVM_VERSION"]
+          llvm_root = Path(f"/usr/lib/llvm-{llvm_version}")
           lldb_python = subprocess.check_output(
-              ["lldb-18", "-P"], text=True).strip()
+              [f"lldb-{llvm_version}", "-P"], text=True).strip()
           package_dir = Path(lldb_python) / "lldb"
           suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
           extension = package_dir / ("_lldb" + suffix)
+          if extension.exists():
+              print(f"LLDB extension exists: {extension}")
+              raise SystemExit(0)
           wrapper_roots = [
-              Path("/usr/lib/llvm-18/lib/python3/dist-packages/lldb"),
+              llvm_root / "lib/python3/dist-packages/lldb",
               Path("/usr/lib/python3/dist-packages/lldb"),
           ]
           targets = [
@@ -123,8 +138,8 @@ jobs:
       - name: Probe LLDB Python
         run: |
           which python3
-          command -v lldb-18
-          lldb-18 -P
+          command -v "lldb-${LLVM_VERSION}"
+          "lldb-${LLVM_VERSION}" -P
           python3 - <<'PY'
           import importlib.machinery
           import importlib.util
@@ -132,8 +147,10 @@ jobs:
           import subprocess
           import traceback
 
+          import os
+          llvm_version = os.environ["LLVM_VERSION"]
           lldb_python = subprocess.check_output(
-              ["lldb-18", "-P"], text=True).strip()
+              [f"lldb-{llvm_version}", "-P"], text=True).strip()
           package_dir = Path(lldb_python) / "lldb"
           print("lldb package dir:", package_dir)
           print("extension suffixes:", importlib.machinery.EXTENSION_SUFFIXES)
