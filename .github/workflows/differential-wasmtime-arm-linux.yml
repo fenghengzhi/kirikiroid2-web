@@ -2,9 +2,21 @@ name: Differential Wasmtime ARM Linux
 
 on:
   workflow_dispatch:
+    inputs:
+      record_motion_playback_oracle:
+        description: "Also upload fresh motion_playback oracle traces as a goldens refresh artifact"
+        type: boolean
+        default: false
 
 env:
   EMSDK_VERSION: "4.0.23"
+  FRIDA_VERSION: "16.4.10"
+  APKTOOL_VERSION: "3.0.1"
+  ANDROID_BUILD_TOOLS_VERSION: "34.0.0"
+  ANDROID_PLATFORM_VERSION: "34"
+  ANDROID_CMDLINE_TOOLS_VERSION: "11076708"
+  LEGACY_NDK_BASENAME: "android-ndk-r17c"
+  LEGACY_NDK_SHA1: "12cacc70c3fd2f40574015631c00f41fb8a39048"
   LLVM_VERSION: "20"
 
 jobs:
@@ -342,3 +354,543 @@ jobs:
             tests/differential/artifacts/motion_playback_render_stages_wasmtime/manifest.json
             tests/differential/artifacts/motion_playback_render_stages_wasmtime/events/**
           if-no-files-found: error
+
+  build-legacy-harness:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init submodules (public + private reference)
+        env:
+          PRIVATE_SUBMODULE_PAT: ${{ secrets.PRIVATE_SUBMODULE_PAT }}
+        run: |
+          git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
+          git -c submodule.reference.update=checkout submodule update --init --recursive
+
+      - name: Install harness build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates curl make python3 unzip file
+
+      - name: Cache libharness.so build
+        uses: actions/cache@v4
+        id: libharness-cache
+        with:
+          path: tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          key: libharness-gnustl-v2-${{ hashFiles('tests/differential/oracle_runner/harness/harness.cpp', 'tests/differential/oracle_runner/harness/jni_bridge.cpp', 'tests/differential/oracle_runner/harness/Android.mk', 'tests/differential/oracle_runner/harness/Application.mk', 'tests/differential/oracle_runner/harness/CMakeLists.txt', 'tests/differential/oracle_runner/harness/build_legacy.sh', 'tests/differential/oracle_runner/check_harness_abi.py') }}
+
+      - name: Cache legacy Android NDK
+        if: steps.libharness-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        id: legacy-ndk-cache
+        with:
+          path: ${{ runner.temp }}/${{ env.LEGACY_NDK_BASENAME }}
+          key: ${{ env.LEGACY_NDK_BASENAME }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install legacy Android NDK (build libharness only)
+        if: steps.libharness-cache.outputs.cache-hit != 'true' && steps.legacy-ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/ndk.zip \
+            "https://dl.google.com/android/repository/${LEGACY_NDK_BASENAME}-linux-x86_64.zip"
+          echo "${LEGACY_NDK_SHA1}  /tmp/ndk.zip" | sha1sum -c -
+          unzip -q /tmp/ndk.zip -d "${{ runner.temp }}"
+
+      - name: Build libharness.so (legacy GNU C++ ABI)
+        if: steps.libharness-cache.outputs.cache-hit != 'true'
+        env:
+          KRKR2_LEGACY_NDK: ${{ runner.temp }}/${{ env.LEGACY_NDK_BASENAME }}
+        run: |
+          set -eux
+          tests/differential/oracle_runner/harness/build_legacy.sh
+
+      - name: Check libharness.so C++ ABI
+        run: |
+          file tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          python3 tests/differential/oracle_runner/check_harness_abi.py \
+            --harness tests/differential/oracle_runner/harness/prebuilt/libharness.so \
+            --libkrkr2 reference/libkrkr2/libkrkr2.so
+
+      - name: Upload libharness.so artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libharness-gnustl-arm64
+          path: tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          if-no-files-found: error
+
+  adb-frida:
+    needs: [build-legacy-harness]
+    runs-on: ubuntu-24.04-arm
+    env:
+      REDROID_IMAGE: redroid/redroid:12.0.0_64only-240527
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init submodules (public + private reference)
+        env:
+          PRIVATE_SUBMODULE_PAT: ${{ secrets.PRIVATE_SUBMODULE_PAT }}
+        run: |
+          git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
+          git -c submodule.reference.update=checkout submodule update --init --recursive
+
+      - name: Set up Android binder
+        run: |
+          set -x
+          uname -a
+          cat /boot/config-$(uname -r) 2>/dev/null | grep -iE 'CONFIG_ANDROID|BINDER' || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            "linux-modules-extra-$(uname -r)" || true
+          ls -la /lib/modules/$(uname -r)/kernel/drivers/android/ 2>/dev/null || true
+          sudo modprobe binder_linux num_binders=3 || \
+            sudo modprobe binder num_binders=3 || true
+          lsmod | grep -E '^binder' || \
+            { echo "::error::binder kernel module unavailable on $(uname -r) - Redroid cannot run on this GitHub-hosted runner" >&2; exit 1; }
+          sudo mkdir -p /dev/binderfs
+          mountpoint -q /dev/binderfs || \
+            sudo mount -t binder binder /dev/binderfs
+          ls /dev/binderfs
+
+      - name: Install adb + tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            adb make xz-utils unzip qemu-user-static binfmt-support
+          adb version
+
+      - name: Enable amd64 multiarch for x86_64 build-tools runtime
+        run: |
+          set -eux
+          echo "--- before ---"
+          cat /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i 's/^Signed-By:/Architectures: arm64\nSigned-By:/g' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          echo "--- after ---"
+          cat /etc/apt/sources.list.d/ubuntu.sources
+          sudo tee /etc/apt/sources.list.d/amd64.sources >/dev/null <<'EOF'
+          Types: deb
+          URIs: http://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates noble-security
+          Components: main universe
+          Architectures: amd64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo dpkg --add-architecture amd64
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libc6:amd64 libstdc++6:amd64 zlib1g:amd64
+
+      - name: Setup JDK for APK repack
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Download libharness.so artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: libharness-gnustl-arm64
+          path: tests/differential/oracle_runner/harness/prebuilt
+
+      - name: Check libharness.so C++ ABI
+        run: |
+          file tests/differential/oracle_runner/harness/prebuilt/libharness.so
+          python3 tests/differential/oracle_runner/check_harness_abi.py \
+            --harness tests/differential/oracle_runner/harness/prebuilt/libharness.so \
+            --libkrkr2 reference/libkrkr2/libkrkr2.so
+
+      - name: Cache Android SDK build-tools
+        uses: actions/cache@v4
+        id: android-sdk-cache
+        with:
+          path: ${{ runner.temp }}/android-sdk
+          key: android-sdk-${{ env.ANDROID_CMDLINE_TOOLS_VERSION }}-bt${{ env.ANDROID_BUILD_TOOLS_VERSION }}-p${{ env.ANDROID_PLATFORM_VERSION }}
+
+      - name: Install Android SDK build-tools
+        if: steps.android-sdk-cache.outputs.cache-hit != 'true'
+        env:
+          ANDROID_HOME: ${{ runner.temp }}/android-sdk
+        run: |
+          set -eux
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL -o /tmp/cmdtools.zip \
+            "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS_VERSION}_latest.zip"
+          unzip -q /tmp/cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
+            "platforms;android-${ANDROID_PLATFORM_VERSION}" >/dev/null
+
+      - name: Install apktool
+        run: |
+          set -eux
+          sudo curl -fsSL -o /opt/apktool.jar \
+            "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar"
+          sudo tee /usr/local/bin/apktool >/dev/null <<'EOF'
+          #!/bin/sh
+          exec java -Xmx1g -jar /opt/apktool.jar "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/apktool
+          apktool --version
+
+      - name: Build harness APK
+        env:
+          ANDROID_HOME: ${{ runner.temp }}/android-sdk
+        run: tests/differential/oracle_runner/harness-apk/build.sh
+
+      - name: Verify harness APK payload
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          for p in (
+              Path("tests/differential/oracle_runner/harness-apk/HarnessActivity.java"),
+              Path("tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk"),
+          ):
+              print(f"{p}: sha256={hashlib.sha256(p.read_bytes()).hexdigest()}")
+          PY
+          unzip -p \
+            tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk \
+            classes2.dex > /tmp/harness-classes2.dex
+          python3 - <<'PY'
+          from pathlib import Path
+          dex = Path("/tmp/harness-classes2.dex").read_bytes()
+          for needle in (
+              b"libharness loaded; starting RPC server",
+              b"classLoad",
+              b"server thread started from ",
+              b"onCreate",
+              b"onWindowFocusChanged",
+              b"listening on 127.0.0.1:",
+          ):
+              assert needle in dex, f"classes2.dex missing marker: {needle!r}"
+              print(f"classes2.dex marker ok: {needle.decode()}")
+          PY
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Frida host deps
+        run: pip install -r tests/differential/oracle_runner/requirements-oracle.txt
+
+      - name: Cache frida-server binary
+        uses: actions/cache@v4
+        id: frida-server-cache
+        with:
+          path: tools/bin/android/frida-server
+          key: frida-server-${{ env.FRIDA_VERSION }}-android-arm64
+
+      - name: Download frida-server
+        if: steps.frida-server-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p tools/bin/android
+          curl -L -o /tmp/frida-server.xz \
+            "https://github.com/frida/frida/releases/download/${FRIDA_VERSION}/frida-server-${FRIDA_VERSION}-android-arm64.xz"
+          xz -d /tmp/frida-server.xz
+          mv /tmp/frida-server tools/bin/android/frida-server
+          chmod 755 tools/bin/android/frida-server
+
+      - name: Start Redroid container
+        run: |
+          set -x
+          docker pull "${REDROID_IMAGE}"
+          docker run -d --rm --name redroid \
+            --privileged \
+            --network=host \
+            "${REDROID_IMAGE}"
+          for i in $(seq 1 60); do
+            sleep 5
+            adb connect localhost:5555 2>&1 | grep -qE 'connected|already' || continue
+            bc=$(adb -s localhost:5555 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')
+            echo "boot_completed=${bc} (attempt ${i}/60)"
+            if [ "${bc}" = "1" ]; then
+              echo "Redroid ready"
+              break
+            fi
+            if [ "${i}" = "60" ]; then
+              echo "::error::Redroid didn't boot within 5 minutes" >&2
+              docker logs redroid >&2 || true
+              exit 1
+            fi
+          done
+          adb devices -l
+
+      - name: Set up ADB+Frida oracle runtime
+        run: |
+          set -euo pipefail
+          export ANDROID_SERIAL=localhost:5555
+          adb -s "${ANDROID_SERIAL}" root || true
+          adb -s "${ANDROID_SERIAL}" wait-for-device
+          adb -s "${ANDROID_SERIAL}" install -r -t \
+                   tests/differential/oracle_runner/harness-apk/prebuilt/krkr2-harness.apk
+          adb -s "${ANDROID_SERIAL}" push tools/bin/android/frida-server   /data/local/tmp/
+          adb -s "${ANDROID_SERIAL}" shell "chmod 755 /data/local/tmp/frida-server"
+          adb -s "${ANDROID_SERIAL}" shell "nohup /data/local/tmp/frida-server -D >/dev/null 2>&1 &"
+          sleep 3
+          test -n "$(adb -s "${ANDROID_SERIAL}" shell pidof frida-server | tr -d '[:space:]')" \
+            || { echo 'frida-server did not start' >&2; exit 1; }
+
+      - name: Record motion_playback oracle for fresh compare
+        env:
+          ANDROID_SERIAL: localhost:5555
+          KRKR2_ADB_RPC_TRANSPORT: shell-nc
+          MOTION_PLAYBACK_ORACLE_RECORD_ATTEMPTS: "3"
+        run: |
+          set -euo pipefail
+          log_dir=/tmp/motion_playback_record_logs
+          rm -rf "${log_dir}"
+          mkdir -p "${log_dir}"
+
+          record_rc=1
+          attempts="${MOTION_PLAYBACK_ORACLE_RECORD_ATTEMPTS}"
+          for attempt in $(seq 1 "${attempts}"); do
+            echo "::group::motion_playback oracle record attempt ${attempt}/${attempts}"
+            rm -f tests/differential/traces/motion_playback/*.oracle.json
+            adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
+            adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
+            adb -s "${ANDROID_SERIAL}" logcat -c || true
+
+            if [ "${attempt}" -gt 1 ]; then
+              adb -s "${ANDROID_SERIAL}" shell "pkill -f frida-server || killall frida-server || true" || true
+              adb -s "${ANDROID_SERIAL}" shell "nohup /data/local/tmp/frida-server -D >/dev/null 2>&1 &"
+              sleep 3
+              test -n "$(adb -s "${ANDROID_SERIAL}" shell pidof frida-server | tr -d '[:space:]')" \
+                || { echo 'frida-server did not restart' >&2; record_rc=1; echo "::endgroup::"; continue; }
+            fi
+
+            set +e
+            python3 tests/differential/python/run_motion_playback.py \
+              --record-oracle --serial "${ANDROID_SERIAL}" \
+              --playback-timeout 300 2>&1 | tee "${log_dir}/attempt-${attempt}.log"
+            record_rc=${PIPESTATUS[0]}
+            set -e
+            echo "::endgroup::"
+            if [ "${record_rc}" -eq 0 ]; then
+              echo "motion_playback oracle recording succeeded on attempt ${attempt}/${attempts}"
+              break
+            fi
+            echo "::warning::motion_playback oracle recording attempt ${attempt}/${attempts} failed with exit code ${record_rc}"
+            rm -f tests/differential/traces/motion_playback/*.oracle.json
+            {
+              echo "--- attempt ${attempt} diagnostics ---"
+              adb -s "${ANDROID_SERIAL}" shell "pidof org.github.krkr2 || true"
+              adb -s "${ANDROID_SERIAL}" forward --list || true
+              adb -s "${ANDROID_SERIAL}" shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -i ':13AF' || true" || true
+              adb -s "${ANDROID_SERIAL}" shell "dumpsys activity activities 2>/dev/null | grep -E -C 3 'org.github.krkr2|mResumed|mFocused' || true" || true
+              adb -s "${ANDROID_SERIAL}" logcat -d -v time 2>/dev/null \
+                | grep -E 'HarnessRpc|AndroidRuntime|org.github.krkr2|krkr2|harness|Cocos2dx|libc|DEBUG' \
+                | tail -300 || true
+              echo "--- recent raw logcat tail ---"
+              adb -s "${ANDROID_SERIAL}" logcat -d -t 120 || true
+            } | tee "${log_dir}/attempt-${attempt}-diagnostics.log"
+            sleep 5
+          done
+
+          if [ "${record_rc}" -ne 0 ]; then
+            echo "::error::motion_playback oracle recording failed; stdout diagnostics follow"
+            echo "::group::motion_playback oracle failure diagnostics"
+            echo "--- run_motion_playback captured stdout/stderr by attempt ---"
+            for f in "${log_dir}"/attempt-*.log; do
+              [ -f "${f}" ] || continue
+              echo "--- ${f} ---"
+              cat "${f}" || true
+            done
+            adb -s "${ANDROID_SERIAL}" shell "pidof org.github.krkr2 || true"
+            adb -s "${ANDROID_SERIAL}" forward --list || true
+            adb -s "${ANDROID_SERIAL}" shell "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -i ':13AF' || true" || true
+            adb -s "${ANDROID_SERIAL}" shell "dumpsys activity activities 2>/dev/null | grep -E -C 3 'org.github.krkr2|mResumed|mFocused' || true" || true
+            adb -s "${ANDROID_SERIAL}" logcat -d -v time 2>/dev/null \
+              | grep -E 'HarnessRpc|AndroidRuntime|org.github.krkr2|krkr2|harness|Cocos2dx|libc|DEBUG' \
+              | tail -300 || true
+            echo "--- recent raw logcat tail ---"
+            adb -s "${ANDROID_SERIAL}" logcat -d -t 120 || true
+            echo "::endgroup::"
+            exit "${record_rc}"
+          fi
+          echo "--- recorded oracle traces ---"
+          ls -la tests/differential/traces/motion_playback/ || true
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          spec_dir = Path("tests/differential/specs/motion_playback")
+          trace_dir = Path("tests/differential/traces/motion_playback")
+          for spec_path in sorted(spec_dir.glob("*.json")):
+              spec = json.loads(spec_path.read_text(encoding="utf-8"))
+              path = trace_dir / f"{spec['id']}.oracle.json"
+              assert path.exists(), f"{path} missing"
+              frames = json.loads(path.read_text(encoding="utf-8"))
+              assert frames and frames[0].get("layers"), f"{path} empty"
+              print(f"{path}: frames={len(frames)}, layer_count={len(frames[0]['layers'])}")
+          PY
+
+      - name: Record motion_playback render-stage oracle PNG hashes
+        env:
+          ANDROID_SERIAL: localhost:5555
+          KRKR2_ADB_RPC_TRANSPORT: shell-nc
+        run: |
+          set -euo pipefail
+          rm -rf tests/differential/artifacts/motion_playback_render_stages_oracle
+          adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
+          adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
+          adb -s "${ANDROID_SERIAL}" logcat -c || true
+          python3 tests/differential/python/run_motion_stage_oracle.py \
+            --serial "${ANDROID_SERIAL}" \
+            --stage render_path \
+            --record-render-step-checkpoints \
+            --checkpoint-render-only \
+            --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_oracle \
+            --playback-timeout 300
+
+      - name: Upload motion_playback oracle record logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-oracle-record-logs
+          path: /tmp/motion_playback_record_logs/*
+          if-no-files-found: ignore
+
+      - name: Upload motion_playback oracle traces
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-oracle-traces
+          path: tests/differential/traces/motion_playback/*.oracle.json
+          if-no-files-found: error
+
+      - name: Upload motion_playback oracle render-stage hashes
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-oracle-render-stages
+          path: |
+            tests/differential/artifacts/motion_playback_render_stages_oracle/manifest.json
+            tests/differential/artifacts/motion_playback_render_stages_oracle/events/**
+          if-no-files-found: error
+
+      - name: Upload motion_playback goldens artifact
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.record_motion_playback_oracle == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-goldens
+          path: tests/differential/traces/motion_playback/*.oracle.json
+          if-no-files-found: error
+
+      - name: Run ADB+Frida scalar differential oracle
+        run: |
+          set -euo pipefail
+          export ANDROID_SERIAL=localhost:5555
+          trace_failed=0
+          for f in geometry_hit_test local_transform bezier_curve position_interp; do
+            echo "::group::run_${f}_adb --trace"
+            set +e
+            python3 tests/differential/python/run_${f}_adb.py \
+                    --spec-dir tests/differential/specs/${f} \
+                    --serial "${ANDROID_SERIAL}" \
+                    --trace \
+                    > /tmp/run.${f}.stdout 2> /tmp/run.${f}.stderr
+            runner_rc=$?
+            set -e
+            cat /tmp/run.${f}.stdout
+            cat /tmp/run.${f}.stderr >&2
+            if grep -qE '^TRACE (MISMATCH|MISSING)' /tmp/run.${f}.stderr; then
+              echo "::error family=${f}::Frida trace regression" >&2
+              trace_failed=1
+            fi
+            echo "::endgroup::"
+            echo "${f}: runner_rc=${runner_rc}"
+          done
+          exit $trace_failed
+
+      - name: Stop Redroid
+        if: always()
+        run: docker stop redroid || true
+
+  motion-playback-compare:
+    needs: [wasmtime-arm-linux, adb-frida]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Download motion_playback Wasmtime traces
+        uses: actions/download-artifact@v4
+        with:
+          name: motion_playback-wasmtime-arm-linux-traces
+          path: /tmp/motion_playback/wasmtime
+
+      - name: Download motion_playback oracle traces
+        uses: actions/download-artifact@v4
+        with:
+          name: motion_playback-oracle-traces
+          path: /tmp/motion_playback/oracle
+
+      - name: Download motion_playback Wasmtime render-stage hashes
+        uses: actions/download-artifact@v4
+        with:
+          name: motion_playback-wasmtime-arm-linux-render-stages
+          path: /tmp/motion_playback/render/wasmtime
+
+      - name: Download motion_playback oracle render-stage hashes
+        uses: actions/download-artifact@v4
+        with:
+          name: motion_playback-oracle-render-stages
+          path: /tmp/motion_playback/render/oracle
+
+      - name: Compare fresh motion_playback traces and PNG hashes
+        run: |
+          set +e
+          python3 tests/differential/python/compare_motion_playback_traces.py \
+            --spec-dir tests/differential/specs/motion_playback \
+            --port-trace-dir /tmp/motion_playback/wasmtime \
+            --oracle-trace-dir /tmp/motion_playback/oracle \
+            --markdown-report /tmp/motion_playback/motion_playback_compare.md
+          trace_compare_rc=$?
+
+          python3 tests/differential/python/compare_motion_render_steps.py \
+            --oracle-root /tmp/motion_playback/render/oracle \
+            --wasmtime-root /tmp/motion_playback/render/wasmtime \
+            --allow-render-flow-diagnostics \
+            --ignore-layer-save \
+            2>&1 | tee /tmp/motion_playback/motion_render_steps_compare.txt
+          render_compare_rc=${PIPESTATUS[0]}
+          set -e
+
+          echo "--- motion_playback markdown report ---"
+          cat /tmp/motion_playback/motion_playback_compare.md || true
+          echo "--- motion_playback render PNG/hash report ---"
+          cat /tmp/motion_playback/motion_render_steps_compare.txt || true
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f /tmp/motion_playback/motion_playback_compare.md ]; then
+            cat /tmp/motion_playback/motion_playback_compare.md >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f /tmp/motion_playback/motion_render_steps_compare.txt ]; then
+            {
+              echo ""
+              echo "# motion_playback Render PNG/Hash Compare"
+              echo ""
+              echo '```text'
+              cat /tmp/motion_playback/motion_render_steps_compare.txt
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+          if [ "${trace_compare_rc}" -ne 0 ] || [ "${render_compare_rc}" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Upload motion_playback compare report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-arm-linux-compare-report
+          path: |
+            /tmp/motion_playback/motion_playback_compare.md
+            /tmp/motion_playback/motion_render_steps_compare.txt
+          if-no-files-found: warn
