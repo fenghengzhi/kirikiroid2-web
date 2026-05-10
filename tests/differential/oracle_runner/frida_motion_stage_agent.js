@@ -173,6 +173,7 @@ let lastDrawTargetObject = null;
 let lastSlaRenderTargetObject = null;
 let lastSlaRenderNativeLayer = null;
 let lastFullCanvasUploadCandidate = null;
+let pendingExecutePostUploadCheckpoint = null;
 let finalFramebufferExports = null;
 let directOperateAffineFuncCallHookCache = {};
 let nativeInstanceSupportCache = {};
@@ -504,17 +505,31 @@ function rememberFullCanvasUpload(textureLikeObject) {
         sourceData,
         sequence: seqCounter,
     };
+    if (pendingExecutePostUploadCheckpoint &&
+        Number.isInteger(pendingExecutePostUploadCheckpoint.frameId)) {
+        const pending = pendingExecutePostUploadCheckpoint;
+        pendingExecutePostUploadCheckpoint = null;
+        sendStoredCanvasUploadCheckpoint(
+            pending.frameId,
+            pending.markerType || 'execute_post_upload',
+            'execute_post',
+            pending.samplePoint ||
+                'execute_leave.after-next-drawdevice-upload');
+    }
 }
 
-function sendStoredCanvasUploadCheckpoint(frameId, markerType) {
+function sendStoredCanvasUploadCheckpoint(
+    frameId, markerType, phase, samplePoint) {
+    const checkpointPhase = phase || 'post_draw';
+    const checkpointSamplePoint = samplePoint ||
+        'startup.tjs.post_draw.after_onPaint.drawdevice-upload';
     const candidate = lastFullCanvasUploadCandidate;
     if (!candidate) {
         send({
             type: 'render_image_checkpoint',
             source: 'android-frida-drawdevice-upload-texture',
-            phase: 'post_draw',
-            samplePoint:
-                'startup.tjs.post_draw.after_onPaint.drawdevice-upload',
+            phase: checkpointPhase,
+            samplePoint: checkpointSamplePoint,
             frameId,
             player: null,
             layerObject: null,
@@ -534,9 +549,8 @@ function sendStoredCanvasUploadCheckpoint(frameId, markerType) {
         send({
             type: 'render_image_checkpoint',
             source: 'android-frida-drawdevice-upload-texture',
-            phase: 'post_draw',
-            samplePoint:
-                'startup.tjs.post_draw.after_onPaint.drawdevice-upload',
+            phase: checkpointPhase,
+            samplePoint: checkpointSamplePoint,
             frameId,
             player: null,
             layerObject: null,
@@ -555,16 +569,16 @@ function sendStoredCanvasUploadCheckpoint(frameId, markerType) {
     }
     const diagnostics = Object.assign({}, snapshot.diagnostics || {}, {
         markerType,
-        sampleTiming:
-            'latest 1920x1080 DrawDevice upload before startup.tjs post_draw marker',
+        sampleTiming: checkpointSamplePoint,
+        phase: checkpointPhase,
         rememberedSourceData: ptrHex(candidate.sourceData),
         uploadSequence: candidate.sequence,
     });
     send({
         type: 'render_image_checkpoint',
         source: 'android-frida-drawdevice-upload-texture',
-        phase: 'post_draw',
-        samplePoint: 'startup.tjs.post_draw.after_onPaint.drawdevice-upload',
+        phase: checkpointPhase,
+        samplePoint: checkpointSamplePoint,
         frameId,
         player: null,
         layerObject: null,
@@ -576,6 +590,16 @@ function sendStoredCanvasUploadCheckpoint(frameId, markerType) {
         diagnostics,
     }, snapshot.data);
     return true;
+}
+
+function scheduleExecutePostUploadCheckpoint(player, samplePoint) {
+    const frameId = renderFrameIdFor(player);
+    if (!Number.isInteger(frameId) || !captureFrameEnabled(frameId)) return;
+    pendingExecutePostUploadCheckpoint = {
+        frameId,
+        markerType: 'execute_post',
+        samplePoint,
+    };
 }
 
 function canonicalPtr(value) {
@@ -1466,8 +1490,23 @@ function readLayerImageSnapshot(layerObject) {
     return snapshot;
 }
 
+function readResolvedLayerImageSnapshot(requestedObject) {
+    const resolved = resolveLayerObjectForCheckpoint(requestedObject);
+    const objectForRead = resolved.object || requestedObject;
+    const snapshot = readLayerImageSnapshot(objectForRead);
+    if (!snapshot.diagnostics) snapshot.diagnostics = {};
+    snapshot.diagnostics.requestedLayerObject = ptrHex(requestedObject);
+    snapshot.diagnostics.resolvedLayerObject = ptrHex(objectForRead);
+    snapshot.diagnostics.resolution =
+        resolved.diagnostics || { route: resolved.object ? 'unknown' : 'direct' };
+    return {
+        snapshot: snapshot,
+        objectForRead: objectForRead,
+    };
+}
+
 function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint,
-                                   frameIdOverride) {
+                                   frameIdOverride, fallbackLayerObject) {
     if (!recordRenderStepCheckpoints || !recording ||
         !stageEnabled(STAGE_RENDER_EXECUTE)) {
         return;
@@ -1476,7 +1515,22 @@ function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint,
         ? frameIdOverride : renderFrameIdFor(player);
     if (frameId === null || frameId === undefined) return;
     if (!captureFrameEnabled(frameId)) return;
-    const snapshot = readLayerImageSnapshot(layerObject);
+    let resolvedSnapshot = readResolvedLayerImageSnapshot(layerObject);
+    let fallbackUsed = false;
+    if (!resolvedSnapshot.snapshot.ok && fallbackLayerObject &&
+        !ptrEqual(layerObject, fallbackLayerObject)) {
+        const fallbackSnapshot =
+            readResolvedLayerImageSnapshot(fallbackLayerObject);
+        if (fallbackSnapshot.snapshot.ok) {
+            resolvedSnapshot = fallbackSnapshot;
+            fallbackUsed = true;
+        }
+    }
+    const snapshot = resolvedSnapshot.snapshot;
+    if (snapshot.diagnostics) {
+        snapshot.diagnostics.fallbackLayerObject = ptrHex(fallbackLayerObject);
+        snapshot.diagnostics.fallbackUsed = fallbackUsed;
+    }
     const payload = {
         type: 'render_image_checkpoint',
         source: 'android-frida-layer-main-image',
@@ -1484,7 +1538,10 @@ function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint,
         samplePoint: samplePoint,
         frameId: frameId,
         player: ptrHex(player),
-        layerObject: ptrHex(layerObject),
+        layerObject: ptrHex(resolvedSnapshot.objectForRead),
+        requestedLayerObject: ptrHex(layerObject),
+        fallbackLayerObject: ptrHex(fallbackLayerObject),
+        fallbackUsed: fallbackUsed,
         ok: snapshot.ok === true,
         width: snapshot.width || null,
         height: snapshot.height || null,
@@ -1892,6 +1949,10 @@ function currentDrawContextFor(player) {
         if (!playerHex || ctx.playerHex === playerHex) return ctx;
     }
     return null;
+}
+
+function checkpointTargetForDrawContext(drawCtx, fallbackTarget) {
+    return drawCtx && drawCtx.targetObject ? drawCtx.targetObject : fallbackTarget;
 }
 
 function drawPathSummary(ctx) {
@@ -2863,9 +2924,11 @@ function enterAccurateSlaRenderExecute(ctx) {
             targetMatchesDrawArg: ctx.targetMatchesDrawArg,
             slaAdaptor: ptrHex(ctx.slaAdaptor),
         });
+    const checkpointTarget =
+        checkpointTargetForDrawContext(ctx.drawCtx, ctx.target);
     sendRenderImageCheckpoint(
-        ctx.player, ctx.target, 'execute_pre',
-        'sub_6C9CA8.enter.after-target-resolve');
+        ctx.player, checkpointTarget, 'execute_pre',
+        'sub_6C9CA8.enter.after-target-resolve', undefined, ctx.target);
     emitRender(STAGE_RENDER_EXECUTE, 'execute_enter', {
         accurateSla: true,
     }, {
@@ -2930,12 +2993,16 @@ function leaveAccurateSlaRenderExecute(ctx, retval) {
             targetMatchesDrawArg: ctx.targetMatchesDrawArg,
             slaAdaptor: ptrHex(ctx.slaAdaptor),
         });
+    const leaveCheckpointTarget =
+        checkpointTargetForDrawContext(ctx.drawCtx, leaveTarget);
     sendRenderImageCheckpoint(
-        ctx.player, leaveTarget, 'execute_post',
-        'sub_6C9CA8.leave.before-return');
-    if (leaveTarget) {
-        lastRenderLayerObject = leaveTarget;
-        lastSlaRenderTargetObject = leaveTarget;
+        ctx.player, leaveCheckpointTarget, 'execute_post',
+        'sub_6C9CA8.leave.before-return', undefined, leaveTarget);
+    scheduleExecutePostUploadCheckpoint(
+        ctx.player, 'sub_6C9CA8.leave.after-next-drawdevice-upload');
+    if (leaveCheckpointTarget) {
+        lastRenderLayerObject = leaveCheckpointTarget;
+        lastSlaRenderTargetObject = leaveCheckpointTarget;
     }
     if (ctx.executeCtx) {
         removeContext(activeRenderExecuteContexts, ctx.executeCtx);
@@ -3417,9 +3484,12 @@ function installHook() {
                         ? ptrHex(this.drawCtx.targetObject) : null,
                     targetMatchesDrawArg: this.targetMatchesDrawArg,
                 });
+            const checkpointTarget =
+                checkpointTargetForDrawContext(this.drawCtx, this.target);
             sendRenderImageCheckpoint(
-                this.player, this.target, 'execute_pre',
-                'sub_6C7440.enter.after-target-resolve');
+                this.player, checkpointTarget, 'execute_pre',
+                'sub_6C7440.enter.after-target-resolve', undefined,
+                this.target);
             emitRender(STAGE_RENDER_EXECUTE, 'execute_enter', {
                 renderLists: readRenderLists(this.mainList, this.auxList),
             }, {
@@ -3485,11 +3555,15 @@ function installHook() {
                         ? ptrHex(this.drawCtx.targetObject) : null,
                     targetMatchesDrawArg: this.targetMatchesDrawArg,
                 });
+            const leaveCheckpointTarget =
+                checkpointTargetForDrawContext(this.drawCtx, leaveTarget);
             sendRenderImageCheckpoint(
-                this.player, leaveTarget, 'execute_post',
-                'sub_6C7440.leave.before-return');
-            if (leaveTarget) {
-                lastRenderLayerObject = leaveTarget;
+                this.player, leaveCheckpointTarget, 'execute_post',
+                'sub_6C7440.leave.before-return', undefined, leaveTarget);
+            scheduleExecutePostUploadCheckpoint(
+                this.player, 'sub_6C7440.leave.after-next-drawdevice-upload');
+            if (leaveCheckpointTarget) {
+                lastRenderLayerObject = leaveCheckpointTarget;
             }
             if (this.executeCtx) {
                 const idx = activeRenderExecuteContexts.lastIndexOf(this.executeCtx);
