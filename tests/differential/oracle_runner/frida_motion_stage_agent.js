@@ -23,6 +23,7 @@ const PLAYER_RENDER_PREPARE_OFF  = 0x6D5164;
 const PLAYER_APPLY_TRANSLATE_OFF = 0x6D5264;
 const PLAYER_BUILD_ITEMS_OFF     = 0x6C2334;
 const PLAYER_BUILD_COMMANDS_OFF  = 0x6C4E28;
+const PLAYER_ACCURATE_SLA_RENDER_OFF = 0x6C9CA8;
 const PLAYER_RENDER_EXECUTE_OFF  = 0x6C7440;
 const PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_CALL_OFF = 0x6C8D74;
 const PLAYER_RENDER_EXECUTE_DIRECT_OPERATE_AFFINE_AFTER_OFF = 0x6C8D78;
@@ -2649,6 +2650,122 @@ function ensureDirectOperateAffineFuncCallHook(fnPtr) {
     });
 }
 
+function removeContext(list, ctx) {
+    if (!ctx) return;
+    const idx = list.lastIndexOf(ctx);
+    if (idx >= 0) list.splice(idx, 1);
+}
+
+function enterAccurateSlaRenderExecute(ctx) {
+    if (!ctx || ctx.entered) return;
+    ctx.entered = true;
+    ctx.executeCtx = {
+        player: ctx.player,
+        target: ctx.target,
+        targetVariant: ctx.targetVariant,
+        targetVariantObject: ctx.targetVariantObject,
+        mainList: ctx.mainList,
+        auxList: ctx.auxList,
+        accurateSla: true,
+        slaAdaptor: ctx.slaAdaptor,
+    };
+    activeRenderExecuteContexts.push(ctx.executeCtx);
+    sendLayerRawProbe(
+        ctx.player, ctx.target, null,
+        'sub_6C9CA8.enter',
+        {},
+        {
+            addr: PLAYER_ACCURATE_SLA_RENDER_OFF,
+            targetVariant: ptrHex(ctx.targetVariant),
+            targetVariantOffset: 20,
+            target: ptrHex(ctx.target),
+            targetObjThis: ctx.targetVariantObject
+                ? ptrHex(ctx.targetVariantObject.objThis) : null,
+            targetError: ctx.targetVariantObject
+                ? ctx.targetVariantObject.error : null,
+            drawTarget: ctx.drawCtx ? ptrHex(ctx.drawCtx.targetObject) : null,
+            targetMatchesDrawArg: ctx.targetMatchesDrawArg,
+            slaAdaptor: ptrHex(ctx.slaAdaptor),
+        });
+    sendRenderImageCheckpoint(
+        ctx.player, ctx.target, 'execute_pre',
+        'sub_6C9CA8.enter.after-target-resolve');
+    emitRender(STAGE_RENDER_EXECUTE, 'execute_enter', {
+        accurateSla: true,
+    }, {
+        addr: PLAYER_ACCURATE_SLA_RENDER_OFF,
+        player: ptrHex(ctx.player),
+        targetVariant: ptrHex(ctx.targetVariant),
+        targetVariantOffset: 20,
+        targetVariantType: ctx.targetVariantObject
+            ? ctx.targetVariantObject.type : null,
+        target: ptrHex(ctx.target),
+        targetObjThis: ctx.targetVariantObject
+            ? ptrHex(ctx.targetVariantObject.objThis) : null,
+        targetError: ctx.targetVariantObject
+            ? ctx.targetVariantObject.error : null,
+        drawTarget: ctx.drawCtx ? ptrHex(ctx.drawCtx.targetObject) : null,
+        targetMatchesDrawArg: ctx.targetMatchesDrawArg,
+        slaAdaptor: ptrHex(ctx.slaAdaptor),
+        mainListPtr: ptrHex(ctx.mainList),
+        auxListPtr: ptrHex(ctx.auxList),
+    }, 'sub_6C9CA8.enter');
+}
+
+function leaveAccurateSlaRenderExecute(ctx, retval) {
+    if (!ctx || !ctx.entered) return;
+    const leaveTarget = ctx.target ||
+        (ctx.executeCtx ? ctx.executeCtx.target : null);
+    const leaveTargetVariantObject = ctx.targetVariantObject ||
+        (ctx.executeCtx ? ctx.executeCtx.targetVariantObject : null);
+    emitRender(STAGE_RENDER_EXECUTE, 'execute_leave', {
+        accurateSla: true,
+        retval: ptrHex(retval),
+    }, {
+        addr: PLAYER_ACCURATE_SLA_RENDER_OFF,
+        player: ptrHex(ctx.player),
+        targetVariant: ptrHex(ctx.targetVariant),
+        targetVariantOffset: 20,
+        targetVariantType: leaveTargetVariantObject
+            ? leaveTargetVariantObject.type : null,
+        target: ptrHex(leaveTarget),
+        targetObjThis: leaveTargetVariantObject
+            ? ptrHex(leaveTargetVariantObject.objThis) : null,
+        targetError: leaveTargetVariantObject
+            ? leaveTargetVariantObject.error : null,
+        drawTarget: ctx.drawCtx ? ptrHex(ctx.drawCtx.targetObject) : null,
+        targetMatchesDrawArg: ctx.targetMatchesDrawArg,
+        slaAdaptor: ptrHex(ctx.slaAdaptor),
+    }, 'sub_6C9CA8.leave');
+    sendLayerRawProbe(
+        ctx.player, leaveTarget, null,
+        'sub_6C9CA8.leave',
+        {},
+        {
+            addr: PLAYER_ACCURATE_SLA_RENDER_OFF,
+            targetVariant: ptrHex(ctx.targetVariant),
+            targetVariantOffset: 20,
+            target: ptrHex(leaveTarget),
+            targetObjThis: leaveTargetVariantObject
+                ? ptrHex(leaveTargetVariantObject.objThis) : null,
+            targetError: leaveTargetVariantObject
+                ? leaveTargetVariantObject.error : null,
+            drawTarget: ctx.drawCtx ? ptrHex(ctx.drawCtx.targetObject) : null,
+            targetMatchesDrawArg: ctx.targetMatchesDrawArg,
+            slaAdaptor: ptrHex(ctx.slaAdaptor),
+        });
+    sendRenderImageCheckpoint(
+        ctx.player, leaveTarget, 'execute_post',
+        'sub_6C9CA8.leave.before-return');
+    if (leaveTarget) {
+        lastRenderLayerObject = leaveTarget;
+        lastSlaRenderTargetObject = leaveTarget;
+    }
+    if (ctx.executeCtx) {
+        removeContext(activeRenderExecuteContexts, ctx.executeCtx);
+    }
+}
+
 function installHook() {
     if (hooked) return;
     ensureBase();
@@ -3026,6 +3143,51 @@ function installHook() {
                 player: ptrHex(this.player),
                 retval: ptrHex(retval),
             }, 'sub_6C4E28.leave');
+        },
+    });
+
+    attachAt(PLAYER_ACCURATE_SLA_RENDER_OFF, 'Player_accurateSlaRender', {
+        onEnter(args) {
+            this.player = args[0];
+            this.slaAdaptor = args[1];
+            this.mainList = args[2];
+            this.auxList = args[3];
+            this.targetVariant = null;
+            this.targetVariantObject = {
+                object: null,
+                objThis: null,
+                type: null,
+                error: null,
+            };
+            try {
+                this.targetVariant = this.slaAdaptor.add(20);
+                this.targetVariantObject =
+                    readVariantObject(this.targetVariant);
+            } catch (e) {
+                this.targetVariantObject.error = String(e);
+            }
+            this.target = this.targetVariantObject.object;
+            this.drawCtx = currentDrawContextFor(this.player);
+            this.targetMatchesDrawArg = this.drawCtx
+                ? ptrEqual(this.target, this.drawCtx.targetObject)
+                : null;
+            this.accurateSlaCtx = {
+                player: this.player,
+                slaAdaptor: this.slaAdaptor,
+                targetVariant: this.targetVariant,
+                targetVariantObject: this.targetVariantObject,
+                target: this.target,
+                mainList: this.mainList,
+                auxList: this.auxList,
+                drawCtx: this.drawCtx,
+                targetMatchesDrawArg: this.targetMatchesDrawArg,
+                entered: false,
+                executeCtx: null,
+            };
+            enterAccurateSlaRenderExecute(this.accurateSlaCtx);
+        },
+        onLeave(retval) {
+            leaveAccurateSlaRenderExecute(this.accurateSlaCtx, retval);
         },
     });
 
@@ -3570,6 +3732,7 @@ rpc.exports = {
                 applyTranslate: PLAYER_APPLY_TRANSLATE_OFF,
                 buildRenderItems: PLAYER_BUILD_ITEMS_OFF,
                 buildRenderCommands: PLAYER_BUILD_COMMANDS_OFF,
+                accurateSlaRender: PLAYER_ACCURATE_SLA_RENDER_OFF,
                 renderExecute: PLAYER_RENDER_EXECUTE_OFF,
                 updateLayerAfterDraw: PLAYER_UPDATE_LAYER_AFTER_DRAW_OFF,
                 layerFillRect: LAYER_FILL_RECT_OFF,
@@ -3620,6 +3783,7 @@ rpc.exports = {
         activeDrawContexts = [];
         activeSaveLayerImageContexts = [];
         activePngSaveContexts = [];
+        activeRenderExecuteContexts = [];
         recording = true;
         return true;
     },
