@@ -42,6 +42,13 @@
 
 USING_NS_CC;
 
+#if defined(KRKR2_WASMTIME_HEADLESS)
+namespace motion::detail {
+void motionTraceRecordPostDrawCanvasTexture(iTVPTexture2D *texture,
+                                            const char *samplePoint);
+}
+#endif
+
 enum SCENE_ORDER {
     GAME_SCENE_ORDER,
     GAME_CONSOLE_ORDER,
@@ -1091,6 +1098,10 @@ public:
     void UpdateDrawBuffer(iTVPTexture2D *tex) override {
         if(!tex)
             return;
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        motion::detail::motionTraceRecordPostDrawCanvasTexture(
+            tex, "TVPWindowLayer::UpdateDrawBuffer");
+#endif
         //		iTVPRenderManager *mgr = TVPGetRenderManager();
         // 		if (!mgr->IsSoftware()) {
         // 			static iTVPRenderMethod *method =

@@ -24,15 +24,13 @@
 #include "Application.h"
 #include "LayerIntf.h"
 #include "MainScene.h"
+#include "RenderManager.h"
+#include "WindowIntf.h"
 #include "tjsError.h"
 #include "motionplayer/MotionNode.h"
 #include "motionplayer/MotionTraceWeb.h"
 #include "motionplayer/Player.h"
 #include "motionplayer/RuntimeSupport.h"
-
-extern "C" void krkr2_wasmtime_capture_post_draw_framebuffer(int frameId)
-    __attribute__((import_module("env"),
-                   import_name("krkr2_wasmtime_capture_post_draw_framebuffer")));
 
 void setError(const std::string &message);
 
@@ -71,6 +69,8 @@ struct TraceState {
     motion::Player *lastPostDrawLayerPlayer = nullptr;
     void *lastPostDrawLayerObject = nullptr;
     std::string lastPostDrawLayerSamplePoint;
+    iTVPTexture2D *lastPostDrawCanvasTexture = nullptr;
+    std::string lastPostDrawCanvasSamplePoint;
     int currentRenderFrameId = -1;
     motion::Player *currentRenderPlayer = nullptr;
     int accurateSlaRenderDepth = 0;
@@ -816,6 +816,63 @@ bool writePackedBgraRowsFromScanLines(const std::string &path,
     return ok;
 }
 
+bool writePackedBgraRowsFromTexture(const std::string &path,
+                                    iTVPTexture2D *texture,
+                                    int width,
+                                    int height,
+                                    int *failedRow) {
+    std::FILE *file = std::fopen(path.c_str(), "wb");
+    if(!file) return false;
+    bool ok = true;
+    const auto rowBytes = static_cast<std::size_t>(width) * 4u;
+    for(int y = 0; y < height; ++y) {
+        const auto *row = static_cast<const unsigned char *>(
+            texture->GetScanLineForRead(static_cast<tjs_uint>(y)));
+        if(!row) {
+            if(failedRow) *failedRow = y;
+            ok = false;
+            break;
+        }
+        if(std::fwrite(row, 1, rowBytes, file) != rowBytes) {
+            if(failedRow) *failedRow = y;
+            ok = false;
+            break;
+        }
+    }
+    if(std::fclose(file) != 0) ok = false;
+    return ok;
+}
+
+std::string canvasTextureDiagnostics(const char *captureMethod,
+                                     iTVPTexture2D *texture,
+                                     const char *recordSamplePoint,
+                                     int rowBytes,
+                                     int sourcePitch,
+                                     int failedRow = -1) {
+    std::string diag = "{\"player\":null,\"activeMotion\":\"\"";
+    diag += ",\"samplingMode\":\"guest-cpp-probe\"";
+    diag += ",\"captureMethod\":";
+    appendJsonString(diag, captureMethod ? captureMethod : "");
+    diag += ",\"texture\":";
+    diag += ptrHex(texture);
+    diag += ",\"recordSamplePoint\":";
+    appendJsonString(diag, recordSamplePoint ? recordSamplePoint : "");
+    diag += ",\"rowBytes\":";
+    diag += std::to_string(rowBytes);
+    diag += ",\"sourcePitch\":";
+    diag += std::to_string(sourcePitch);
+    if(texture) {
+        diag += ",\"format\":";
+        diag += std::to_string(static_cast<int>(texture->GetFormat()));
+    }
+    if(failedRow >= 0) {
+        diag += ",\"failedRow\":";
+        diag += std::to_string(failedRow);
+    }
+    diag.push_back('}');
+    return diag;
+}
+
 void appendLayerRawProbeEvent(motion::Player *player,
                               const char *samplePoint,
                               const tTJSNI_BaseLayer *layer,
@@ -981,6 +1038,8 @@ void emitProgressSample(motion::Player *fallbackPlayer) {
     state.lastPostDrawLayerPlayer = nullptr;
     state.lastPostDrawLayerObject = nullptr;
     state.lastPostDrawLayerSamplePoint.clear();
+    state.lastPostDrawCanvasTexture = nullptr;
+    state.lastPostDrawCanvasSamplePoint.clear();
     krkr2_lldb_motion_frame_begin(
         frameId, state.objthis, topPlayer,
         static_cast<std::int32_t>(state.players.size()));
@@ -1061,6 +1120,8 @@ void resetState() {
     state.lastPostDrawLayerPlayer = nullptr;
     state.lastPostDrawLayerObject = nullptr;
     state.lastPostDrawLayerSamplePoint.clear();
+    state.lastPostDrawCanvasTexture = nullptr;
+    state.lastPostDrawCanvasSamplePoint.clear();
     state.currentRenderFrameId = -1;
     state.currentRenderPlayer = nullptr;
     state.accurateSlaRenderDepth = 0;
@@ -1129,6 +1190,8 @@ MotionTraceRenderDrawScope::MotionTraceRenderDrawScope(
     state.lastPostDrawLayerPlayer = nullptr;
     state.lastPostDrawLayerObject = nullptr;
     state.lastPostDrawLayerSamplePoint.clear();
+    state.lastPostDrawCanvasTexture = nullptr;
+    state.lastPostDrawCanvasSamplePoint.clear();
     std::string payload = "\"drawId\":";
     payload += std::to_string(_drawId);
     std::string diagnostics = "{\"argVariant\":";
@@ -1352,6 +1415,12 @@ bool motionTraceIsAccurateSlaRenderActive() {
     return traceState().accurateSlaRenderDepth > 0;
 }
 
+void motionTraceRenderImageCheckpointAtFrame(Player *player,
+                                             void *renderLayerObject,
+                                             const char *phase,
+                                             const char *samplePoint,
+                                             int frameId);
+
 void motionTraceRecordPostDrawLayerCandidate(Player *player, void *layerObject,
                                              const char *samplePoint) {
     if(!layerObject) return;
@@ -1359,6 +1428,215 @@ void motionTraceRecordPostDrawLayerCandidate(Player *player, void *layerObject,
     state.lastPostDrawLayerPlayer = renderPlayerFor(player);
     state.lastPostDrawLayerObject = layerObject;
     state.lastPostDrawLayerSamplePoint = samplePoint ? samplePoint : "";
+}
+
+void motionTraceRecordPostDrawCanvasTexture(iTVPTexture2D *texture,
+                                            const char *samplePoint) {
+    if(!texture) return;
+    const int width = static_cast<int>(texture->GetWidth());
+    const int height = static_cast<int>(texture->GetHeight());
+    const int pitch = static_cast<int>(texture->GetPitch());
+    if(width != 1920 || height != 1080 || pitch < width * 4) {
+        return;
+    }
+    if(!texture->GetScanLineForRead(0)) {
+        return;
+    }
+    auto &state = traceState();
+    state.lastPostDrawCanvasTexture = texture;
+    state.lastPostDrawCanvasSamplePoint =
+        samplePoint ? samplePoint : "";
+}
+
+bool forcePostDrawDrawDeviceShow() {
+    if(!TVPMainWindow) return false;
+    TVPMainWindow->DeliverDrawDeviceShow();
+    return true;
+}
+
+void motionTraceRenderPostDrawLayerManagerCheckpointAtFrame(
+    int frameId, void *markerBaseLayerObject) {
+    const std::string phase = "post_draw";
+    const std::string samplePoint =
+        "startup.tjs.post_draw.after_onPaint.layer-manager-draw-buffer";
+    auto diagnostics = [](const char *captureMethod,
+                          void *layerObject,
+                          tTJSNI_BaseLayer *nativeLayer,
+                          iTVPLayerManager *manager,
+                          iTVPBaseBitmap *drawBuffer,
+                          iTVPTexture2D *texture,
+                          int rowBytes,
+                          int sourcePitch,
+                          int failedRow = -1) {
+        std::string diag = "{\"player\":null,\"activeMotion\":\"\"";
+        diag += ",\"samplingMode\":\"guest-cpp-probe\"";
+        diag += ",\"captureMethod\":";
+        appendJsonString(diag, captureMethod ? captureMethod : "");
+        diag += ",\"layerObject\":";
+        diag += ptrHex(layerObject);
+        diag += ",\"nativeLayer\":";
+        diag += ptrHex(nativeLayer);
+        diag += ",\"manager\":";
+        diag += ptrHex(manager);
+        diag += ",\"drawBuffer\":";
+        diag += ptrHex(drawBuffer);
+        diag += ",\"texture\":";
+        diag += ptrHex(texture);
+        diag += ",\"rowBytes\":";
+        diag += std::to_string(rowBytes);
+        diag += ",\"sourcePitch\":";
+        diag += std::to_string(sourcePitch);
+        if(texture) {
+            diag += ",\"format\":";
+            diag += std::to_string(static_cast<int>(texture->GetFormat()));
+        }
+        if(failedRow >= 0) {
+            diag += ",\"failedRow\":";
+            diag += std::to_string(failedRow);
+        }
+        diag.push_back('}');
+        return diag;
+    };
+    auto fail = [&](const std::string &message,
+                    void *layerObject = nullptr,
+                    tTJSNI_BaseLayer *nativeLayer = nullptr,
+                    iTVPLayerManager *manager = nullptr,
+                    iTVPBaseBitmap *drawBuffer = nullptr,
+                    iTVPTexture2D *texture = nullptr,
+                    int width = 0,
+                    int height = 0,
+                    int pitch = 0) {
+        appendImageCheckpointEvent(
+            nullptr, phase.c_str(), samplePoint.c_str(), false, {},
+            message, width, height, pitch,
+            diagnostics("LayerManager.GetDrawBuffer.texture-scanline",
+                        layerObject, nativeLayer, manager, drawBuffer,
+                        texture, pitch, texture ? texture->GetPitch() : 0),
+            frameId);
+    };
+
+    if(!markerBaseLayerObject) {
+        fail("post_draw marker did not provide a base Layer object");
+        return;
+    }
+    auto *layerObject = static_cast<iTJSDispatch2 *>(markerBaseLayerObject);
+    tTJSNI_BaseLayer *layer = nullptr;
+    if(TJS_FAILED(layerObject->NativeInstanceSupport(
+           TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+           reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
+        fail("post_draw marker base object did not resolve to Layer native instance",
+             layerObject);
+        return;
+    }
+    auto *manager = layer->GetManager();
+    if(!manager) {
+        fail("post_draw marker base Layer has no LayerManager",
+             layerObject, layer);
+        return;
+    }
+    manager->UpdateToDrawDevice();
+    auto *drawBuffer = manager->GetDrawBuffer();
+    if(!drawBuffer) {
+        fail("LayerManager draw buffer is null",
+             layerObject, layer, manager);
+        return;
+    }
+    auto *texture = drawBuffer->GetTexture();
+    if(!texture) {
+        fail("LayerManager draw buffer texture is null",
+             layerObject, layer, manager, drawBuffer);
+        return;
+    }
+
+    const int width = static_cast<int>(texture->GetWidth());
+    const int height = static_cast<int>(texture->GetHeight());
+    const int sourcePitch = static_cast<int>(texture->GetPitch());
+    const int rowBytes = width * 4;
+    if(width != 1920 || height != 1080 || sourcePitch < rowBytes) {
+        fail("LayerManager draw buffer texture has invalid dimensions",
+             layerObject, layer, manager, drawBuffer, texture,
+             width, height, rowBytes);
+        return;
+    }
+
+    const auto path = framePath(phase.c_str(), frameId);
+    int failedRow = -1;
+    const bool ok = writePackedBgraRowsFromTexture(
+        path, texture, width, height, &failedRow);
+    appendImageCheckpointEvent(
+        nullptr, phase.c_str(), samplePoint.c_str(), ok, path,
+        ok ? std::string()
+           : std::string("failed to write LayerManager draw buffer BGRA checkpoint"),
+        width, height, rowBytes,
+        diagnostics("LayerManager.GetDrawBuffer.texture-scanline",
+                    layerObject, layer, manager, drawBuffer, texture,
+                    rowBytes, sourcePitch, failedRow),
+        frameId);
+}
+
+void motionTraceRenderPostDrawCanvasTextureCheckpointAtFrame(
+    int frameId, void *markerBaseLayerObject) {
+    if(frameId < 0 || !captureFrameEnabled(frameId)) return;
+    const std::string phase = "post_draw";
+    const std::string phaseDir =
+        std::string(kRenderStageCaptureRoot) + "/_execute/" + phase;
+    if(!directoryExists(phaseDir)) return;
+
+    auto &state = traceState();
+    auto *texture = state.lastPostDrawCanvasTexture;
+    const std::string samplePoint =
+        "startup.tjs.post_draw.after_onPaint.drawdevice-upload";
+    if(!texture) {
+        forcePostDrawDrawDeviceShow();
+        texture = state.lastPostDrawCanvasTexture;
+    }
+    const char *recordSamplePoint =
+        state.lastPostDrawCanvasSamplePoint.empty()
+            ? nullptr
+            : state.lastPostDrawCanvasSamplePoint.c_str();
+    if(!texture && markerBaseLayerObject) {
+        motionTraceRenderPostDrawLayerManagerCheckpointAtFrame(
+            frameId, markerBaseLayerObject);
+        return;
+    }
+    if(!texture) {
+        appendImageCheckpointEvent(
+            nullptr, phase.c_str(), samplePoint.c_str(), false, {},
+            "no 1920x1080 DrawDevice canvas texture or marker base Layer was recorded before marker",
+            0, 0, 0,
+            canvasTextureDiagnostics(
+                "DrawDevice_UpdateDrawBuffer.texture-scanline",
+                nullptr, recordSamplePoint, 0, 0),
+            frameId);
+        return;
+    }
+
+    const int width = static_cast<int>(texture->GetWidth());
+    const int height = static_cast<int>(texture->GetHeight());
+    const int sourcePitch = static_cast<int>(texture->GetPitch());
+    const int rowBytes = width * 4;
+    const auto diagnostics = [&](int failedRow = -1) {
+        return canvasTextureDiagnostics(
+            "DrawDevice_UpdateDrawBuffer.texture-scanline",
+            texture, recordSamplePoint, rowBytes, sourcePitch, failedRow);
+    };
+    if(width != 1920 || height != 1080 || sourcePitch < rowBytes) {
+        appendImageCheckpointEvent(
+            nullptr, phase.c_str(), samplePoint.c_str(), false, {},
+            "recorded DrawDevice canvas texture has invalid dimensions",
+            width, height, rowBytes, diagnostics(), frameId);
+        return;
+    }
+
+    const auto path = framePath(phase.c_str(), frameId);
+    int failedRow = -1;
+    const bool ok = writePackedBgraRowsFromTexture(
+        path, texture, width, height, &failedRow);
+    appendImageCheckpointEvent(
+        nullptr, phase.c_str(), samplePoint.c_str(), ok, path,
+        ok ? std::string()
+           : std::string("failed to write DrawDevice texture BGRA checkpoint"),
+        width, height, rowBytes, diagnostics(failedRow), frameId);
 }
 
 void motionTraceRenderPrepareEnter(Player *player) {
@@ -1701,12 +1979,15 @@ extern "C" bool krkr2_wasm_motion_trace_debug_message_probe(
     if(marker != TJS_W("__krkr2_motion_post_draw")) return false;
     const int frameId = postDrawFrameIdFromMarker(numparams, param);
     if(frameId >= 0 && captureFrameEnabled(frameId)) {
+        void *markerBaseLayerObject = variantLayerObjectAt(
+            numparams, param, 5);
         appendRenderEventForFrame(
             frameId, nullptr, "render_execute", "post_draw_marker",
             "startup.tjs.post_draw.after_onPaint",
             "\"phase\":\"post_draw\",\"ok\":true",
             "{\"captureMethod\":\"startup.tjs Debug.message marker\"}");
-        krkr2_wasmtime_capture_post_draw_framebuffer(frameId);
+        motion::detail::motionTraceRenderPostDrawCanvasTextureCheckpointAtFrame(
+            frameId, markerBaseLayerObject);
     }
     return true;
 }

@@ -32,6 +32,7 @@ const SOFTWARE_OPERATE_RECT_HELPER_OFF = 0x85F718;
 const LAYER_FILL_RECT_OFF        = 0x80EBAC;
 const LAYER_SAVE_LAYER_IMAGE_OFF = 0x80963C;
 const TVP_SAVE_AS_PNG_OFF        = 0x83EDA4;
+const DRAW_DEVICE_UPLOAD_LAYER_TO_TEXTURE_OFF = 0x850528;
 const BITMAP_GET_SCANLINE_OFF    = 0xA75DE4;
 const DEBUG_MESSAGE_OFF          = 0xA18FBC;
 const LAYER_CLASS_ID_OFF = 0x1ADE668;
@@ -171,6 +172,7 @@ let lastRenderLayerObject = null;
 let lastDrawTargetObject = null;
 let lastSlaRenderTargetObject = null;
 let lastSlaRenderNativeLayer = null;
+let lastFullCanvasUploadCandidate = null;
 let finalFramebufferExports = null;
 let directOperateAffineFuncCallHookCache = {};
 let nativeInstanceSupportCache = {};
@@ -300,7 +302,7 @@ function readGlInt(gl, pname) {
 function readFinalFramebufferSnapshot(frameId) {
     const resolved = ensureFinalFramebufferExports();
     const diagnostics = {
-        captureMethod: 'glReadPixels-default-framebuffer',
+        captureMethod: 'glReadPixels-current-framebuffer',
         origin: 'bottom-left',
         channelOrder: 'RGBA',
         frameId: frameId,
@@ -320,11 +322,8 @@ function readFinalFramebufferSnapshot(frameId) {
     const oldPackAlignment = readGlInt(gl, GL_PACK_ALIGNMENT);
     const oldFramebuffer = readGlInt(gl, GL_FRAMEBUFFER_BINDING);
     diagnostics.oldPackAlignment = oldPackAlignment;
-    diagnostics.oldFramebuffer = oldFramebuffer;
+    diagnostics.readFramebuffer = oldFramebuffer;
     try {
-        if (gl.glBindFramebuffer) {
-            gl.glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        }
         if (gl.glPixelStorei) {
             gl.glPixelStorei(GL_PACK_ALIGNMENT, 1);
         }
@@ -366,11 +365,6 @@ function readFinalFramebufferSnapshot(frameId) {
         };
     } finally {
         try {
-            if (gl.glBindFramebuffer && oldFramebuffer !== null) {
-                gl.glBindFramebuffer(GL_FRAMEBUFFER, oldFramebuffer);
-            }
-        } catch (e) {}
-        try {
             if (gl.glPixelStorei && oldPackAlignment !== null) {
                 gl.glPixelStorei(GL_PACK_ALIGNMENT, oldPackAlignment);
             }
@@ -381,7 +375,7 @@ function readFinalFramebufferSnapshot(frameId) {
 function sendFinalFramebufferCheckpoint(frameId, snapshot, samplePoint) {
     const payload = {
         type: 'render_image_checkpoint',
-        source: 'android-frida-final-framebuffer',
+        source: 'android-frida-current-framebuffer',
         phase: 'post_draw',
         samplePoint: samplePoint,
         frameId: frameId,
@@ -400,6 +394,188 @@ function sendFinalFramebufferCheckpoint(frameId, snapshot, samplePoint) {
         return;
     }
     send(payload, snapshot.data);
+}
+
+function readDrawDeviceUploadTextureSnapshot(textureLikeObject) {
+    const tex = ptr(textureLikeObject);
+    const diagnostics = {
+        captureMethod: 'DrawDevice_UploadLayerToTexture.raw-data',
+        textureLikeObject: ptrHex(tex),
+    };
+    if (tex.isNull()) {
+        return { ok: false, error: 'null upload texture object', diagnostics };
+    }
+    try {
+        const width = readU32(tex, 12);
+        const height = readU32(tex, 16);
+        const sourcePitch = readU32(tex, 20);
+        const format = readU32(tex, 24);
+        const sourceData = readPointer(tex, 32);
+        diagnostics.width = width;
+        diagnostics.height = height;
+        diagnostics.sourcePitch = sourcePitch;
+        diagnostics.format = format;
+        diagnostics.sourceData = ptrHex(sourceData);
+        if (!width || !height || width <= 0 || height <= 0 ||
+            width > 8192 || height > 8192) {
+            return {
+                ok: false,
+                error: 'invalid upload texture dimensions',
+                width,
+                height,
+                diagnostics,
+            };
+        }
+        if (!sourceData) {
+            return {
+                ok: false,
+                error: 'upload texture has no source data',
+                width,
+                height,
+                diagnostics,
+            };
+        }
+        const rowBytes = width * 4;
+        if (sourcePitch < rowBytes) {
+            return {
+                ok: false,
+                error: 'upload texture pitch is smaller than row bytes',
+                width,
+                height,
+                pitch: sourcePitch,
+                diagnostics,
+            };
+        }
+        const packedSize = rowBytes * height;
+        const packed = Memory.alloc(packedSize);
+        for (let y = 0; y < height; y++) {
+            Memory.copy(
+                packed.add(y * rowBytes),
+                sourceData.add(y * sourcePitch),
+                rowBytes);
+        }
+        return {
+            ok: true,
+            width,
+            height,
+            pitch: rowBytes,
+            pixelFormat: 'bgra32',
+            data: packed.readByteArray(packedSize),
+            diagnostics,
+        };
+    } catch (e) {
+        return { ok: false, error: String(e), diagnostics };
+    }
+}
+
+function rememberFullCanvasUpload(textureLikeObject) {
+    if (!recordRenderStepCheckpoints || !recording ||
+        !stageEnabled(STAGE_RENDER_EXECUTE)) {
+        return;
+    }
+    const tex = ptr(textureLikeObject);
+    if (tex.isNull()) return;
+    let width = 0;
+    let height = 0;
+    let sourcePitch = 0;
+    let format = 0;
+    let sourceData = null;
+    try {
+        width = readU32(tex, 12);
+        height = readU32(tex, 16);
+        sourcePitch = readU32(tex, 20);
+        format = readU32(tex, 24);
+        sourceData = readPointer(tex, 32);
+    } catch (e) {
+        return;
+    }
+    if (width !== FINAL_FRAMEBUFFER_WIDTH ||
+        height !== FINAL_FRAMEBUFFER_HEIGHT ||
+        sourcePitch < width * 4 ||
+        !sourceData) {
+        return;
+    }
+    lastFullCanvasUploadCandidate = {
+        textureLikeObject: tex,
+        width,
+        height,
+        sourcePitch,
+        format,
+        sourceData,
+        sequence: seqCounter,
+    };
+}
+
+function sendStoredCanvasUploadCheckpoint(frameId, markerType) {
+    const candidate = lastFullCanvasUploadCandidate;
+    if (!candidate) {
+        send({
+            type: 'render_image_checkpoint',
+            source: 'android-frida-drawdevice-upload-texture',
+            phase: 'post_draw',
+            samplePoint:
+                'startup.tjs.post_draw.after_onPaint.drawdevice-upload',
+            frameId,
+            player: null,
+            layerObject: null,
+            ok: false,
+            pixelFormat: 'bgra32',
+            error: 'no 1920x1080 DrawDevice upload was captured before marker',
+            diagnostics: {
+                markerType,
+                captureMethod: 'DrawDevice_UploadLayerToTexture.raw-data',
+            },
+        });
+        return false;
+    }
+    const snapshot =
+        readDrawDeviceUploadTextureSnapshot(candidate.textureLikeObject);
+    if (!snapshot.ok) {
+        send({
+            type: 'render_image_checkpoint',
+            source: 'android-frida-drawdevice-upload-texture',
+            phase: 'post_draw',
+            samplePoint:
+                'startup.tjs.post_draw.after_onPaint.drawdevice-upload',
+            frameId,
+            player: null,
+            layerObject: null,
+            ok: false,
+            pixelFormat: 'bgra32',
+            error: snapshot.error || 'DrawDevice upload snapshot failed',
+            diagnostics: Object.assign({}, snapshot.diagnostics || {}, {
+                markerType,
+                rememberedTextureLikeObject:
+                    ptrHex(candidate.textureLikeObject),
+                rememberedSourceData: ptrHex(candidate.sourceData),
+                rememberedSequence: candidate.sequence,
+            }),
+        });
+        return false;
+    }
+    const diagnostics = Object.assign({}, snapshot.diagnostics || {}, {
+        markerType,
+        sampleTiming:
+            'latest 1920x1080 DrawDevice upload before startup.tjs post_draw marker',
+        rememberedSourceData: ptrHex(candidate.sourceData),
+        uploadSequence: candidate.sequence,
+    });
+    send({
+        type: 'render_image_checkpoint',
+        source: 'android-frida-drawdevice-upload-texture',
+        phase: 'post_draw',
+        samplePoint: 'startup.tjs.post_draw.after_onPaint.drawdevice-upload',
+        frameId,
+        player: null,
+        layerObject: null,
+        ok: true,
+        width: snapshot.width,
+        height: snapshot.height,
+        pitch: snapshot.pitch,
+        pixelFormat: snapshot.pixelFormat || 'bgra32',
+        diagnostics,
+    }, snapshot.data);
+    return true;
 }
 
 function canonicalPtr(value) {
@@ -2791,18 +2967,27 @@ function installHook() {
                 !captureFrameEnabled(markerFrameId)) {
                 return;
             }
+            if (sendStoredCanvasUploadCheckpoint(
+                    markerFrameId, marker.type)) {
+                return;
+            }
             const snapshot = readFinalFramebufferSnapshot(markerFrameId);
             if (!snapshot.diagnostics) {
                 snapshot.diagnostics = {};
             }
-            snapshot.diagnostics.captureMethod =
-                'Debug.message.glReadPixels-default-framebuffer';
             snapshot.diagnostics.markerType = marker.type;
             snapshot.diagnostics.sampleTiming =
                 'inside startup.tjs post_draw Debug.message before eglSwapBuffers';
             sendFinalFramebufferCheckpoint(
                 markerFrameId, snapshot,
-                'startup.tjs.post_draw.after_onPaint.glReadPixels');
+                'startup.tjs.post_draw.after_onPaint.current-glReadPixels');
+        },
+    });
+
+    attachAt(DRAW_DEVICE_UPLOAD_LAYER_TO_TEXTURE_OFF,
+        'DrawDevice_UploadLayerToTexture', {
+        onEnter(args) {
+            rememberFullCanvasUpload(args[0]);
         },
     });
 

@@ -201,20 +201,14 @@ class WasmtimeEnvProvider:
         self._fds: dict[int, dict[str, Any]] = {}
         self.capture_swap_framebuffer = False
         self._swap_framebuffers: list[dict[str, Any]] = []
-        self.capture_post_draw_framebuffer = False
-        self._post_draw_framebuffers: dict[int, dict[str, Any]] = {}
 
     def begin_swap_framebuffer_capture(self) -> None:
         self._swap_framebuffers = []
-        self._post_draw_framebuffers = {}
 
     def last_swap_framebuffer(self) -> dict[str, Any] | None:
         if not self._swap_framebuffers:
             return None
         return self._swap_framebuffers[-1]
-
-    def post_draw_framebuffer(self, frame_id: int) -> dict[str, Any] | None:
-        return self._post_draw_framebuffers.get(int(frame_id))
 
     def define_imports(self, linker: Any, module: Any) -> None:
         unknown: list[str] = []
@@ -369,8 +363,6 @@ class WasmtimeEnvProvider:
             "vfork": self._return_minus_one,
             "web_alert": self._return_zero,
             "web_confirm": self._return_zero,
-            "krkr2_wasmtime_capture_post_draw_framebuffer":
-                self._capture_post_draw_framebuffer,
             "_cc_canvas_render_text": self._return_zero,
             "emscripten_exit_fullscreen": self._return_zero,
             "emscripten_exit_pointerlock": self._return_zero,
@@ -388,37 +380,6 @@ class WasmtimeEnvProvider:
         if callback is None:
             return None
         return lambda caller, *args: callback(func_type, caller, *args)
-
-    def _capture_post_draw_framebuffer(self, _func_type: Any, _caller: Any,
-                                       *args: Any) -> None:
-        frame_id = int(args[0]) if args else -1
-        if not self.capture_post_draw_framebuffer:
-            return None
-        if self.gl_provider is None:
-            self._post_draw_framebuffers[frame_id] = {
-                "ok": False,
-                "error": "final framebuffer capture requires Wasmtime GL provider",
-            }
-            return None
-        try:
-            data = self.gl_provider.read_default_framebuffer_bgra(
-                POST_DRAW_CANVAS_SIZE[0], POST_DRAW_CANVAS_SIZE[1])
-            self._post_draw_framebuffers[frame_id] = {
-                "ok": True,
-                "data": data,
-                "width": POST_DRAW_CANVAS_SIZE[0],
-                "height": POST_DRAW_CANVAS_SIZE[1],
-                "pitch": POST_DRAW_CANVAS_SIZE[0] * 4,
-                "diagnostics": (
-                    self.gl_provider
-                    .last_default_framebuffer_read_diagnostics()),
-            }
-        except Exception as exc:
-            self._post_draw_framebuffers[frame_id] = {
-                "ok": False,
-                "error": str(exc),
-            }
-        return None
 
     def _wasi_callback_for(self, name: str, func_type: Any) -> Any | None:
         exact = {
@@ -1102,48 +1063,6 @@ def _capture_frame_id_enabled(frame_id: int, start: int, count: int) -> bool:
     return int(count) < 0 or frame_id < max(0, int(start)) + int(count)
 
 
-def _host_final_framebuffer_checkpoint_event(
-    *,
-    frame_id: int,
-    guest_path: str,
-    ok: bool,
-    seq: int,
-    error: str | None = None,
-    diagnostics: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    merged_diagnostics: dict[str, Any] = {
-        "captureMethod": "Debug.message.glReadPixels-default-framebuffer",
-        "origin": "top-left",
-        "channelOrder": "BGRA",
-        "sampleTiming": (
-            "inside host import called from startup.tjs post_draw "
-            "Debug.message before eglSwapBuffers"),
-    }
-    if diagnostics:
-        merged_diagnostics.update(diagnostics)
-    event: dict[str, Any] = {
-        "schema": RENDER_EVENT_SCHEMA,
-        "source": "wasmtime-host-final-framebuffer",
-        "stage": "render_execute",
-        "kind": "execute_image_checkpoint",
-        "samplePoint": "startup.tjs.post_draw.after_onPaint.host-glReadPixels",
-        "frameId": int(frame_id),
-        "player": None,
-        "seq": int(seq),
-        "phase": "post_draw",
-        "ok": bool(ok),
-        "width": POST_DRAW_CANVAS_SIZE[0],
-        "height": POST_DRAW_CANVAS_SIZE[1],
-        "pitch": POST_DRAW_CANVAS_SIZE[0] * 4,
-        "pixelFormat": "bgra32",
-        "guestPath": guest_path,
-        "diagnostics": merged_diagnostics,
-    }
-    if error:
-        event["error"] = error
-    return event
-
-
 def _annotate_wasmtime_layer_raw_probe_events(
     bootstrap: WasmtimeBootstrapInfo,
     render_stage_events_path: Path | None,
@@ -1382,11 +1301,11 @@ def _collect_wasmtime_render_stage_capture(
                             f"{checkpoint.get('pixelFormat')}")
                     if phase == "post_draw":
                         if checkpoint.get("source") != (
-                                "wasmtime-host-final-framebuffer"):
+                                "wasmtime-port-render-stage"):
                             raise RuntimeError(
                                 f"Wasmtime post_draw checkpoint for {spec_id} "
                                 f"frame {local_frame} was not captured from "
-                                "the host final framebuffer")
+                                "the guest render stage")
                         size = (
                             int(checkpoint["width"]),
                             int(checkpoint["height"]),
@@ -1756,35 +1675,16 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
         raise RuntimeError(err)
 
     render_events: list[dict[str, Any]] = []
-    host_framebuffer_events: list[dict[str, Any]] = []
-    captured_host_framebuffer_frames: set[int] = set()
-    required_host_framebuffer_frames: set[int] = set()
-    if record_render_step_checkpoints:
-        required_start = max(0, int(capture_frame_start))
-        if int(capture_frame_count) < 0:
-            required_end = int(frames)
-        else:
-            required_end = required_start + int(capture_frame_count)
-        required_host_framebuffer_frames = set(
-            range(required_start, required_end))
     checkpoint_root = (
         bootstrap.root / RENDER_CHECKPOINT_GUEST_ROOT.lstrip("/") /
         "_execute" / "post_draw"
     )
     if record_render_step_checkpoints:
         checkpoint_root.mkdir(parents=True, exist_ok=True)
-        if gl_provider is None:
-            raise RuntimeError(
-                "final framebuffer capture requires Wasmtime GL provider")
-        env_provider.capture_post_draw_framebuffer = True
 
     max_ticks = int(frames)
-    if record_render_step_checkpoints:
-        max_ticks += max(30, len(required_host_framebuffer_frames) // 4)
     ticks_driven = 0
     for tick_index in range(max_ticks):
-        if record_render_step_checkpoints:
-            env_provider.begin_swap_framebuffer_capture()
         tick_ok = tick(store, 1000.0 / 60.0)
         ticks_driven += 1
         if not tick_ok:
@@ -1797,76 +1697,8 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
             if render_stage_out is not None else []
         )
         render_events.extend(tick_events)
-        if record_render_step_checkpoints:
-            post_draw_marker_frames = [
-                int(event["frameId"]) for event in tick_events
-                if event.get("kind") == "post_draw_marker"
-                and isinstance(event.get("frameId"), int)
-            ]
-            for frame_id in post_draw_marker_frames:
-                if not _capture_frame_id_enabled(
-                        frame_id, capture_frame_start, capture_frame_count):
-                    continue
-                if frame_id in captured_host_framebuffer_frames:
-                    continue
-                guest_path = (
-                    f"{RENDER_CHECKPOINT_GUEST_ROOT}/_execute/post_draw/"
-                    f"frame_{frame_id:04d}.bgra"
-                )
-                raw_path = bootstrap.root / guest_path.lstrip("/")
-                seq = 100_000_000 + len(host_framebuffer_events)
-                marker_framebuffer = env_provider.post_draw_framebuffer(
-                    frame_id)
-                if marker_framebuffer and marker_framebuffer.get("ok"):
-                    data = marker_framebuffer.get("data")
-                    if isinstance(data, bytes):
-                        raw_path.write_bytes(data)
-                        diagnostics = marker_framebuffer.get("diagnostics")
-                        host_framebuffer_events.append(
-                            _host_final_framebuffer_checkpoint_event(
-                                frame_id=frame_id,
-                                guest_path=guest_path,
-                                ok=True,
-                                seq=seq,
-                                diagnostics=(
-                                    diagnostics if isinstance(
-                                        diagnostics, dict) else None)))
-                    else:
-                        host_framebuffer_events.append(
-                            _host_final_framebuffer_checkpoint_event(
-                                frame_id=frame_id,
-                                guest_path=guest_path,
-                                ok=False,
-                                seq=seq,
-                                error=(
-                                    "Debug.message framebuffer capture had "
-                                    "no bytes")))
-                elif marker_framebuffer:
-                    host_framebuffer_events.append(
-                        _host_final_framebuffer_checkpoint_event(
-                            frame_id=frame_id,
-                            guest_path=guest_path,
-                            ok=False,
-                            seq=seq,
-                            error=str(
-                                marker_framebuffer.get("error") or
-                                "Debug.message framebuffer capture failed")))
-                else:
-                    host_framebuffer_events.append(
-                        _host_final_framebuffer_checkpoint_event(
-                            frame_id=frame_id,
-                            guest_path=guest_path,
-                            ok=False,
-                            seq=seq,
-                            error=(
-                                "tick did not call host framebuffer capture "
-                                "before post_draw marker")))
-                captured_host_framebuffer_frames.add(frame_id)
         if tick_index + 1 >= frames:
-            if (not required_host_framebuffer_frames or
-                    required_host_framebuffer_frames.issubset(
-                        captured_host_framebuffer_frames)):
-                break
+            break
 
     render_probe_summary: dict[str, Any] | None = None
     if render_stage_out is not None:
@@ -1877,7 +1709,6 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
             if event.get("kind") == "post_draw_marker"
             and isinstance(event.get("frameId"), int)
         }
-        events.extend(host_framebuffer_events)
         render_stage_out.parent.mkdir(parents=True, exist_ok=True)
         render_stage_out.write_text(
             json.dumps(events, ensure_ascii=False, allow_nan=False) + "\n",
@@ -1886,7 +1717,10 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
         render_probe_summary = {
             "eventCount": len(events),
             "ticksDriven": ticks_driven,
-            "hostFinalFramebufferCheckpointCount": len(host_framebuffer_events),
+            "postDrawCheckpointCount": sum(
+                1 for event in events
+                if event.get("kind") == "execute_image_checkpoint"
+                and event.get("phase") == "post_draw"),
             "postDrawMarkerCount": len(post_draw_marker_frames),
         }
     motion_trace_frames = None
@@ -2852,6 +2686,10 @@ def main(argv: list[str]) -> int:
     failures = 0
     if args.skip_golden_diff:
         for spec in specs:
+            captured_case = captured_cases_by_id.get(str(spec["id"]))
+            if capture_window.enabled and captured_case is None:
+                print(f"SKIP: {spec['id']} outside capture window")
+                continue
             port_frames = port_frames_by_id.get(spec["id"])
             if port_frames is None:
                 print(f"FAIL: {spec['id']}: no Wasmtime frames captured",
