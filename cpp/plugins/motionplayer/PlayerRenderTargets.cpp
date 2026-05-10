@@ -507,11 +507,6 @@ namespace motion {
         if(!renderLayer) {
             return false;
         }
-        const auto clearColor = renderLayer->GetNeutralColor();
-        if(!prepareLayerForRender(renderTargetObject, canvasWidth, canvasHeight,
-                                  clearColor)) {
-            return false;
-        }
 
         const auto motionPath =
             _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
@@ -524,6 +519,8 @@ namespace motion {
             canvasWidth, canvasHeight,
             traceFunc ? traceFunc : "0x6DE738");
 
+        // Player_ResolveSLATarget @ 0x6D5948 owns PrivateMotionGLL sizing;
+        // Player_RenderMotionFrame @ 0x6DE738 only emits render commands.
         buildRenderCommands(canvasWidth, canvasHeight);
         return executeLayerRenderCommands(renderTargetObject, true);
     }
