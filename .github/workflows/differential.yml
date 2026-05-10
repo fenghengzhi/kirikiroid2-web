@@ -7,6 +7,10 @@ on:
         description: "Also upload fresh motion_playback oracle traces as a goldens refresh artifact"
         type: boolean
         default: false
+      upload_render_pngs:
+        description: "Upload motion_playback render-stage PNG files"
+        type: boolean
+        default: true
   push:
     branches: [web]
 
@@ -184,14 +188,21 @@ jobs:
           path: tests/differential/artifacts/motion_playback_wasmtime_traces/*.port.json
           if-no-files-found: error
 
-      - name: Upload motion_playback Wasmtime render-stage artifacts
+      - name: Upload motion_playback Wasmtime render-stage metadata
         uses: actions/upload-artifact@v4
         with:
           name: motion_playback-wasmtime-render-stages
           path: |
             tests/differential/artifacts/motion_playback_render_stages_wasmtime/manifest.json
             tests/differential/artifacts/motion_playback_render_stages_wasmtime/events/**
-            tests/differential/artifacts/motion_playback_render_stages_wasmtime/images/**
+          if-no-files-found: error
+
+      - name: Upload motion_playback Wasmtime render-stage PNGs
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.upload_render_pngs }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-wasmtime-render-stage-pngs
+          path: tests/differential/artifacts/motion_playback_render_stages_wasmtime/images/**
           if-no-files-found: error
 
   # ── Build the legacy gnustl harness on a native x86_64 Linux host.
@@ -661,14 +672,21 @@ jobs:
           path: tests/differential/traces/motion_playback/*.oracle.json
           if-no-files-found: error
 
-      - name: Upload motion_playback oracle render-stage artifacts
+      - name: Upload motion_playback oracle render-stage metadata
         uses: actions/upload-artifact@v4
         with:
           name: motion_playback-oracle-render-stages
           path: |
             tests/differential/artifacts/motion_playback_render_stages_oracle/manifest.json
             tests/differential/artifacts/motion_playback_render_stages_oracle/events/**
-            tests/differential/artifacts/motion_playback_render_stages_oracle/images/**
+          if-no-files-found: error
+
+      - name: Upload motion_playback oracle render-stage PNGs
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.upload_render_pngs }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion_playback-oracle-render-stage-pngs
+          path: tests/differential/artifacts/motion_playback_render_stages_oracle/images/**
           if-no-files-found: error
 
       - name: Upload motion_playback goldens artifact
