@@ -26,6 +26,7 @@ from oracle_runner.png_artifacts import (
     bgra_rgba_sha256_file,
     png_manifest_entry,
     write_bgra_png,
+    write_rgba_png,
 )
 from oracle_runner.motion_capture_window import (
     FrameCaptureWindow,
@@ -1294,11 +1295,12 @@ def _collect_wasmtime_render_stage_capture(
                         raise RuntimeError(
                             f"Wasmtime {phase} checkpoint has no guestPath for "
                             f"{spec_id} frame {local_frame}")
-                    if checkpoint.get("pixelFormat") != "bgra32":
+                    pixel_format = checkpoint.get("pixelFormat")
+                    if pixel_format not in {"bgra32", "rgba32"}:
                         raise RuntimeError(
                             f"Wasmtime {phase} checkpoint has unsupported "
                             f"pixelFormat for {spec_id} frame {local_frame}: "
-                            f"{checkpoint.get('pixelFormat')}")
+                            f"{pixel_format}")
                     if phase == "post_draw":
                         if checkpoint.get("source") != (
                                 "wasmtime-port-render-stage"):
@@ -1319,16 +1321,24 @@ def _collect_wasmtime_render_stage_capture(
                     raw_path = bootstrap.root / guest_path_value.lstrip("/")
                     if not raw_path.exists():
                         raise RuntimeError(
-                            "missing Wasmtime render checkpoint raw BGRA: "
+                            "missing Wasmtime render checkpoint raw pixels: "
                             f"{raw_path}")
                     rel = Path("images") / spec_id / phase / \
                         f"frame_{local_frame:04d}.png"
-                    write_bgra_png(
-                        raw_path=raw_path,
-                        path=render_artifact_dir / rel,
-                        width=int(checkpoint["width"]),
-                        height=int(checkpoint["height"]),
-                    )
+                    if pixel_format == "bgra32":
+                        write_bgra_png(
+                            raw_path=raw_path,
+                            path=render_artifact_dir / rel,
+                            width=int(checkpoint["width"]),
+                            height=int(checkpoint["height"]),
+                        )
+                    else:
+                        write_rgba_png(
+                            raw_path=raw_path,
+                            path=render_artifact_dir / rel,
+                            width=int(checkpoint["width"]),
+                            height=int(checkpoint["height"]),
+                        )
                     try:
                         raw_path.unlink()
                     except FileNotFoundError:

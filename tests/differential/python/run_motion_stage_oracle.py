@@ -898,6 +898,13 @@ def add_oracle_execute_checkpoint_images(
                         width=int(checkpoint["width"]),
                         height=int(checkpoint["height"]),
                     )
+                elif pixel_format == "rgba32":
+                    write_rgba_png(
+                        raw_path=Path(raw_path_value),
+                        path=path,
+                        width=int(checkpoint["width"]),
+                        height=int(checkpoint["height"]),
+                    )
                 elif pixel_format == "rgba32-bottom-left":
                     write_rgba_png(
                         raw_path=Path(raw_path_value),

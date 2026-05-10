@@ -459,7 +459,7 @@ function readDrawDeviceUploadTextureSnapshot(textureLikeObject) {
             width,
             height,
             pitch: rowBytes,
-            pixelFormat: 'bgra32',
+            pixelFormat: 'rgba32',
             data: packed.readByteArray(packedSize),
             diagnostics,
         };
@@ -519,7 +519,7 @@ function sendStoredCanvasUploadCheckpoint(frameId, markerType) {
             player: null,
             layerObject: null,
             ok: false,
-            pixelFormat: 'bgra32',
+            pixelFormat: 'rgba32',
             error: 'no 1920x1080 DrawDevice upload was captured before marker',
             diagnostics: {
                 markerType,
@@ -541,7 +541,7 @@ function sendStoredCanvasUploadCheckpoint(frameId, markerType) {
             player: null,
             layerObject: null,
             ok: false,
-            pixelFormat: 'bgra32',
+            pixelFormat: 'rgba32',
             error: snapshot.error || 'DrawDevice upload snapshot failed',
             diagnostics: Object.assign({}, snapshot.diagnostics || {}, {
                 markerType,
@@ -572,7 +572,7 @@ function sendStoredCanvasUploadCheckpoint(frameId, markerType) {
         width: snapshot.width,
         height: snapshot.height,
         pitch: snapshot.pitch,
-        pixelFormat: snapshot.pixelFormat || 'bgra32',
+        pixelFormat: snapshot.pixelFormat || 'rgba32',
         diagnostics,
     }, snapshot.data);
     return true;
@@ -1489,7 +1489,7 @@ function sendRenderImageCheckpoint(player, layerObject, phase, samplePoint,
         width: snapshot.width || null,
         height: snapshot.height || null,
         pitch: snapshot.pitch || null,
-        pixelFormat: snapshot.pixelFormat || 'bgra32',
+        pixelFormat: 'rgba32',
         diagnostics: snapshot.diagnostics || {},
     };
     if (!snapshot.ok) {
@@ -1536,7 +1536,7 @@ function sendRenderNativeImageCheckpoint(player, nativeLayer, layerObject,
         width: snapshot.width || null,
         height: snapshot.height || null,
         pitch: snapshot.pitch || null,
-        pixelFormat: snapshot.pixelFormat || 'bgra32',
+        pixelFormat: 'rgba32',
         diagnostics: mergedDiagnostics,
     };
     if (!snapshot.ok) {

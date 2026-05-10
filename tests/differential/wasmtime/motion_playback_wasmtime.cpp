@@ -706,11 +706,12 @@ bool directoryExists(const std::string &path) {
     return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-std::string framePath(const char *phase, int frameId) {
+std::string framePath(const char *phase, int frameId,
+                      const char *rawSuffix = "bgra") {
     char name[128];
-    std::snprintf(name, sizeof(name), "%s/_execute/%s/frame_%04d.bgra",
+    std::snprintf(name, sizeof(name), "%s/_execute/%s/frame_%04d.%s",
                   kRenderStageCaptureRoot, phase ? phase : "unknown",
-                  frameId);
+                  frameId, rawSuffix ? rawSuffix : "raw");
     return std::string(name);
 }
 
@@ -722,7 +723,8 @@ void appendImageCheckpointEvent(motion::Player *player, const char *phase,
                                 int height = 0,
                                 int pitch = 0,
                                 const std::string &diagnostics = {},
-                                int frameIdOverride = -1) {
+                                int frameIdOverride = -1,
+                                const char *pixelFormat = "bgra32") {
     std::string payload = "\"phase\":";
     appendJsonString(payload, phase ? phase : "");
     payload += ",\"ok\":";
@@ -739,7 +741,8 @@ void appendImageCheckpointEvent(motion::Player *player, const char *phase,
         payload += ",\"pitch\":";
         payload += std::to_string(pitch);
     }
-    payload += ",\"pixelFormat\":\"bgra32\"";
+    payload += ",\"pixelFormat\":";
+    appendJsonString(payload, pixelFormat ? pixelFormat : "bgra32");
     if(!path.empty()) {
         payload += ",\"guestPath\":";
         appendJsonString(payload, path);
@@ -789,11 +792,11 @@ std::string checkpointDiagnostics(motion::Player *player,
     return diag;
 }
 
-bool writePackedBgraRowsFromScanLines(const std::string &path,
-                                      const tTVPBaseTexture *mainImage,
-                                      int width,
-                                      int height,
-                                      int *failedRow) {
+bool writePackedRowsFromScanLines(const std::string &path,
+                                  const tTVPBaseTexture *mainImage,
+                                  int width,
+                                  int height,
+                                  int *failedRow) {
     std::FILE *file = std::fopen(path.c_str(), "wb");
     if(!file) return false;
     bool ok = true;
@@ -816,11 +819,11 @@ bool writePackedBgraRowsFromScanLines(const std::string &path,
     return ok;
 }
 
-bool writePackedBgraRowsFromTexture(const std::string &path,
-                                    iTVPTexture2D *texture,
-                                    int width,
-                                    int height,
-                                    int *failedRow) {
+bool writePackedRowsFromTexture(const std::string &path,
+                                iTVPTexture2D *texture,
+                                int width,
+                                int height,
+                                int *failedRow) {
     std::FILE *file = std::fopen(path.c_str(), "wb");
     if(!file) return false;
     bool ok = true;
@@ -1512,7 +1515,7 @@ void motionTraceRenderPostDrawLayerManagerCheckpointAtFrame(
             diagnostics("LayerManager.GetDrawBuffer.texture-scanline",
                         layerObject, nativeLayer, manager, drawBuffer,
                         texture, pitch, texture ? texture->GetPitch() : 0),
-            frameId);
+            frameId, "rgba32");
     };
 
     if(!markerBaseLayerObject) {
@@ -1559,19 +1562,19 @@ void motionTraceRenderPostDrawLayerManagerCheckpointAtFrame(
         return;
     }
 
-    const auto path = framePath(phase.c_str(), frameId);
+    const auto path = framePath(phase.c_str(), frameId, "rgba");
     int failedRow = -1;
-    const bool ok = writePackedBgraRowsFromTexture(
+    const bool ok = writePackedRowsFromTexture(
         path, texture, width, height, &failedRow);
     appendImageCheckpointEvent(
         nullptr, phase.c_str(), samplePoint.c_str(), ok, path,
         ok ? std::string()
-           : std::string("failed to write LayerManager draw buffer BGRA checkpoint"),
+           : std::string("failed to write LayerManager draw buffer RGBA checkpoint"),
         width, height, rowBytes,
         diagnostics("LayerManager.GetDrawBuffer.texture-scanline",
                     layerObject, layer, manager, drawBuffer, texture,
                     rowBytes, sourcePitch, failedRow),
-        frameId);
+        frameId, "rgba32");
 }
 
 void motionTraceRenderPostDrawCanvasTextureCheckpointAtFrame(
@@ -1607,7 +1610,7 @@ void motionTraceRenderPostDrawCanvasTextureCheckpointAtFrame(
             canvasTextureDiagnostics(
                 "DrawDevice_UpdateDrawBuffer.texture-scanline",
                 nullptr, recordSamplePoint, 0, 0),
-            frameId);
+            frameId, "rgba32");
         return;
     }
 
@@ -1624,19 +1627,19 @@ void motionTraceRenderPostDrawCanvasTextureCheckpointAtFrame(
         appendImageCheckpointEvent(
             nullptr, phase.c_str(), samplePoint.c_str(), false, {},
             "recorded DrawDevice canvas texture has invalid dimensions",
-            width, height, rowBytes, diagnostics(), frameId);
+            width, height, rowBytes, diagnostics(), frameId, "rgba32");
         return;
     }
 
-    const auto path = framePath(phase.c_str(), frameId);
+    const auto path = framePath(phase.c_str(), frameId, "rgba");
     int failedRow = -1;
-    const bool ok = writePackedBgraRowsFromTexture(
+    const bool ok = writePackedRowsFromTexture(
         path, texture, width, height, &failedRow);
     appendImageCheckpointEvent(
         nullptr, phase.c_str(), samplePoint.c_str(), ok, path,
         ok ? std::string()
-           : std::string("failed to write DrawDevice texture BGRA checkpoint"),
-        width, height, rowBytes, diagnostics(failedRow), frameId);
+           : std::string("failed to write DrawDevice texture RGBA checkpoint"),
+        width, height, rowBytes, diagnostics(failedRow), frameId, "rgba32");
 }
 
 void motionTraceRenderPrepareEnter(Player *player) {
@@ -1763,7 +1766,7 @@ void motionTraceRenderImageCheckpointAtFrame(Player *player,
         return;
     }
 
-    const auto path = framePath(phase, frameId);
+    const auto path = framePath(phase, frameId, "rgba");
     const int width = static_cast<int>(layer->GetWidth());
     const int height = static_cast<int>(layer->GetHeight());
     auto *mainImage = layer->GetMainImage();
@@ -1796,13 +1799,13 @@ void motionTraceRenderImageCheckpointAtFrame(Player *player,
     }
 
     int failedRow = -1;
-    bool ok = writePackedBgraRowsFromScanLines(
+    bool ok = writePackedRowsFromScanLines(
         path, mainImage, width, height, &failedRow);
     appendImageCheckpointEvent(
         player, phase, samplePoint, ok, path,
         ok ? std::string()
-           : std::string("failed to write scanline BGRA checkpoint"),
-        width, height, rowBytes, diagnostics(failedRow), frameId);
+           : std::string("failed to write scanline RGBA checkpoint"),
+        width, height, rowBytes, diagnostics(failedRow), frameId, "rgba32");
 }
 
 void motionTraceRenderImageCheckpoint(Player *player,
