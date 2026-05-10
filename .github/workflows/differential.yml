@@ -184,13 +184,14 @@ jobs:
           path: tests/differential/artifacts/motion_playback_wasmtime_traces/*.port.json
           if-no-files-found: error
 
-      - name: Upload motion_playback Wasmtime render-stage hashes
+      - name: Upload motion_playback Wasmtime render-stage artifacts
         uses: actions/upload-artifact@v4
         with:
           name: motion_playback-wasmtime-render-stages
           path: |
             tests/differential/artifacts/motion_playback_render_stages_wasmtime/manifest.json
             tests/differential/artifacts/motion_playback_render_stages_wasmtime/events/**
+            tests/differential/artifacts/motion_playback_render_stages_wasmtime/images/**
           if-no-files-found: error
 
   # ── Build the legacy gnustl harness on a native x86_64 Linux host.
@@ -660,13 +661,14 @@ jobs:
           path: tests/differential/traces/motion_playback/*.oracle.json
           if-no-files-found: error
 
-      - name: Upload motion_playback oracle render-stage hashes
+      - name: Upload motion_playback oracle render-stage artifacts
         uses: actions/upload-artifact@v4
         with:
           name: motion_playback-oracle-render-stages
           path: |
             tests/differential/artifacts/motion_playback_render_stages_oracle/manifest.json
             tests/differential/artifacts/motion_playback_render_stages_oracle/events/**
+            tests/differential/artifacts/motion_playback_render_stages_oracle/images/**
           if-no-files-found: error
 
       - name: Upload motion_playback goldens artifact
