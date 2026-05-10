@@ -503,8 +503,13 @@ namespace motion {
         if(!renderTargetObject || canvasWidth <= 0 || canvasHeight <= 0) {
             return false;
         }
+        auto *renderLayer = resolveNativeLayer(renderTargetObject);
+        if(!renderLayer) {
+            return false;
+        }
+        const auto clearColor = renderLayer->GetNeutralColor();
         if(!prepareLayerForRender(renderTargetObject, canvasWidth, canvasHeight,
-                                  0x00000000)) {
+                                  clearColor)) {
             return false;
         }
 
