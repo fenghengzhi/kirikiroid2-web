@@ -101,7 +101,7 @@ namespace motion {
 
         tTJSVariant getPrivateRenderTarget() const;
         iTJSDispatch2 *getPrivateRenderTargetObject() const;
-        void c();
+        void clear();
         static tjs_error assignCompat(tTJSVariant *result, tjs_int numparams,
                                       tTJSVariant **param,
                                       iTJSDispatch2 *objthis);

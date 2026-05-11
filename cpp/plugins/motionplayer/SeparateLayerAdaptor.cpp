@@ -278,7 +278,7 @@ namespace motion {
         _assignTargets.clear(false);
     }
 
-    void SeparateLayerAdaptor::c() { clearPrivateRenderState(); }
+    void SeparateLayerAdaptor::clear() { clearPrivateRenderState(); }
 
     tjs_error SeparateLayerAdaptor::getLayerTreeOwnerInterfaceCompat(
         tTJSVariant *result,

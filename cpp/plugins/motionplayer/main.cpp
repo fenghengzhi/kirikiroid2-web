@@ -98,7 +98,7 @@ NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {
     Factory(&SeparateLayerAdaptor::factory);
     NCB_PROPERTY(absolute, getAbsolute, setAbsolute);
     NCB_PROPERTY(targetLayer, getTargetLayer, setTargetLayer);
-    NCB_METHOD(c);
+    NCB_METHOD(clear);
     RawCallback(TJS_W("assign"), &SeparateLayerAdaptor::assignCompat, 0);
     RawCallback(TJS_W("layerTreeOwnerInterface"),
                 &SeparateLayerAdaptor::getLayerTreeOwnerInterfaceCompat,
