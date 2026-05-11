@@ -113,16 +113,25 @@ namespace {
         }
     };
 
+    tTJSNC_PrivateMotionGLLLayerLike_0x800438 *
+    privateMotionGLLClassDispatchLike_0x6D5948() {
+        // Player_ResolveSLATarget @ 0x6D5948 guards qword_1AB8578, initialized
+        // by PrivateMotionGLL_CreateClass @ 0x6DD284, then reuses it forever.
+        static auto *klass =
+            new tTJSNC_PrivateMotionGLLLayerLike_0x800438();
+        return klass;
+    }
+
     iTJSDispatch2 *createPrivateLayerObjectWithNativeClassLike_0x800438(
         const tTJSVariant &ownerVariant,
         const tTJSVariant &targetLayerVariant) {
-        tTJSNC_PrivateMotionGLLLayerLike_0x800438 layerClass;
+        auto *layerClass = privateMotionGLLClassDispatchLike_0x6D5948();
         iTJSDispatch2 *created = nullptr;
         tTJSVariant ownerArg(ownerVariant);
         tTJSVariant targetArg(targetLayerVariant);
         tTJSVariant *args[] = { &ownerArg, &targetArg };
-        const tjs_error hr = layerClass.CreateNew(0, nullptr, nullptr, &created,
-                                                  2, args, &layerClass);
+        const tjs_error hr = layerClass->CreateNew(0, nullptr, nullptr, &created,
+                                                   2, args, layerClass);
         if(TJS_FAILED(hr) || !created) {
             TVPThrowExceptionMessage(TJS_W("Cannot create PrivateMotionGLL."));
         }
