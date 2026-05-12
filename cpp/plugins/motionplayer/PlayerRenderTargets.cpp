@@ -606,7 +606,10 @@ namespace motion {
                 privateMotionGLLRenderQueueSizeLike_0x6DE738(
                     renderTargetObject));
         }
-        return executeLayerRenderCommands(renderTargetObject, true);
+        // Player_DrawSLA @ 0x6D5658 calls Player_RenderMotionFrame @ 0x6DE738
+        // only to populate the private +824 queue; Layer_UpdateRect @ 0x800F4C
+        // later dispatches __Private_Motion_GLLayer::Draw_GPU @ 0x6DD56C.
+        return true;
     }
 
     bool Player::renderToD3DAdaptor(D3DAdaptor *adaptor) {

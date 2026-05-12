@@ -1837,6 +1837,49 @@ void motionTraceRenderDirectExecuteProbe(Player *player,
         payload ? payload : "", playerDiagnostics(player));
 }
 
+void motionTracePrivateMotionGLLDraw(void *nativeLayer,
+                                     int queuedItems,
+                                     int clipLeft,
+                                     int clipTop,
+                                     int clipRight,
+                                     int clipBottom,
+                                     int targetLeft,
+                                     int targetTop,
+                                     int targetRight,
+                                     int targetBottom,
+                                     bool visibleCheck) {
+    auto &state = traceState();
+    if(!state.inRender) return;
+    Player *player = renderPlayerFor(nullptr);
+    std::string payload;
+    payload += "\"nativeLayer\":";
+    payload += ptrHex(nativeLayer);
+    payload += ",\"queuedItems\":";
+    payload += std::to_string(queuedItems);
+    payload += ",\"clipRect\":[";
+    payload += std::to_string(clipLeft);
+    payload += ",";
+    payload += std::to_string(clipTop);
+    payload += ",";
+    payload += std::to_string(clipRight);
+    payload += ",";
+    payload += std::to_string(clipBottom);
+    payload += "],\"targetRect\":[";
+    payload += std::to_string(targetLeft);
+    payload += ",";
+    payload += std::to_string(targetTop);
+    payload += ",";
+    payload += std::to_string(targetRight);
+    payload += ",";
+    payload += std::to_string(targetBottom);
+    payload += "],\"visibleCheck\":";
+    payload += visibleCheck ? "true" : "false";
+    appendRenderEvent(
+        player, "private_motion_gll", "draw_gpu",
+        "__Private_Motion_GLLayer::Draw_GPU@0x6DD56C",
+        payload, playerDiagnostics(player));
+}
+
 void motionTraceLayerRawProbeNative(Player *player, const void *nativeLayer,
                                     const char *samplePoint) {
     if(!g_record_layer_raw_probes || !nativeLayer) return;

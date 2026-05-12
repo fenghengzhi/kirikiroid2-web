@@ -112,6 +112,17 @@ namespace motion::detail {
     void motionTraceRenderDirectExecuteProbe(Player *player,
                                              const char *samplePoint,
                                              const char *payload);
+    void motionTracePrivateMotionGLLDraw(void *nativeLayer,
+                                         int queuedItems,
+                                         int clipLeft,
+                                         int clipTop,
+                                         int clipRight,
+                                         int clipBottom,
+                                         int targetLeft,
+                                         int targetTop,
+                                         int targetRight,
+                                         int targetBottom,
+                                         bool visibleCheck);
     void motionTraceLayerRawProbe(Player *player, void *renderLayerObject,
                                   const char *samplePoint);
     void motionTraceLayerRawProbeNative(Player *player, const void *nativeLayer,

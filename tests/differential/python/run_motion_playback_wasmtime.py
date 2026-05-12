@@ -66,6 +66,7 @@ RENDER_STAGES: tuple[str, ...] = (
     "render_prepare",
     "render_commands",
     "render_execute",
+    "private_motion_gll",
     "layer_save",
     "layer_raw_probe",
     "layer_visual_readback",

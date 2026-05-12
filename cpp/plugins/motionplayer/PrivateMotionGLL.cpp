@@ -2,6 +2,7 @@
 
 #include "LayerBitmapIntf.h"
 #include "MsgIntf.h"
+#include "MotionTraceWeb.h"
 #include "PlayerInternal.h"
 #include "PlayerRenderInternal.h"
 #include "RenderManager.h"
@@ -551,6 +552,14 @@ namespace {
             y += rect.top - r.top;
             tTVPRect targetRect(rect);
             targetRect.set_offsets(x, y);
+
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            motion::detail::motionTracePrivateMotionGLLDraw(
+                this, static_cast<int>(_renderQueueLike_0x6DDBD8.size()),
+                rect.left, rect.top, rect.right, rect.bottom,
+                targetRect.left, targetRect.top,
+                targetRect.right, targetRect.bottom, visiblecheck);
+#endif
 
             CurrentDrawTarget = target;
             auto resetTarget = [&] { CurrentDrawTarget = nullptr; };
