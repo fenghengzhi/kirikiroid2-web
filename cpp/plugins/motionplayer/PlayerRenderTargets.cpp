@@ -1369,26 +1369,6 @@ namespace motion {
         if(!targetLayerObject) {
             return false;
         }
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderImageCheckpoint(
-            this, targetLayerObject, "updateLayerAfterDraw_pre",
-            "Player::updateAccurateSLAAfterDraw_0x6CE938.enter");
-        detail::motionTraceLayerRawProbe(
-            this, targetLayerObject,
-            "Player::updateAccurateSLAAfterDraw_0x6CE938.enter");
-        struct AccurateSlaAfterDrawTraceLeave {
-            Player *player;
-            iTJSDispatch2 *layerObject;
-            ~AccurateSlaAfterDrawTraceLeave() {
-                detail::motionTraceRenderImageCheckpoint(
-                    player, layerObject, "updateLayerAfterDraw_post",
-                    "Player::updateAccurateSLAAfterDraw_0x6CE938.leave");
-                detail::motionTraceLayerRawProbe(
-                    player, layerObject,
-                    "Player::updateAccurateSLAAfterDraw_0x6CE938.leave");
-            }
-        } accurateSlaAfterDrawTraceLeave{this, targetLayerObject};
-#endif
         const auto motionPath =
             _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
                                                : std::string{};
