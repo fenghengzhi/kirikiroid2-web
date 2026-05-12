@@ -3,6 +3,7 @@
 //
 #include "PlayerRenderInternal.h"
 #include "MotionTraceWeb.h"
+#include "PrivateMotionGLL.h"
 #include "SourceCache.h"
 
 using namespace motion::internal;
@@ -218,6 +219,10 @@ namespace motion {
         const auto motionPath = _runtime->activeMotion->path;
 
         auto *renderLayer = resolveNativeLayer(renderLayerObject);
+        if(!renderLayer) {
+            renderLayer =
+                resolvePrivateMotionGLLNativeLike_0x6DE24C(renderLayerObject);
+        }
         iTJSDispatch2 *scratchOwner = resolveMainWindowOwnerObject();
         iTJSDispatch2 *scratchParent = resolveMainWindowPrimaryLayerObject();
         if(scratchParent && !resolveNativeLayer(scratchParent)) {

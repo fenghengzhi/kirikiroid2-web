@@ -30,6 +30,7 @@
 #include "motionplayer/MotionNode.h"
 #include "motionplayer/MotionTraceWeb.h"
 #include "motionplayer/Player.h"
+#include "motionplayer/PrivateMotionGLL.h"
 #include "motionplayer/RuntimeSupport.h"
 
 void setError(const std::string &message);
@@ -790,6 +791,17 @@ std::string checkpointDiagnostics(motion::Player *player,
     }
     diag.push_back('}');
     return diag;
+}
+
+tTJSNI_BaseLayer *resolveTraceLayerLikeNative(iTJSDispatch2 *layerObject) {
+    if(!layerObject) return nullptr;
+    tTJSNI_BaseLayer *layer = nullptr;
+    if(TJS_SUCCEEDED(layerObject->NativeInstanceSupport(
+           TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+           reinterpret_cast<iTJSNativeInstance **>(&layer))) && layer) {
+        return layer;
+    }
+    return motion::resolvePrivateMotionGLLNativeLike_0x6DE24C(layerObject);
 }
 
 bool writePackedRowsFromScanLines(const std::string &path,
@@ -1752,13 +1764,11 @@ void motionTraceRenderImageCheckpointAtFrame(Player *player,
         return;
     }
     auto *layerObject = static_cast<iTJSDispatch2 *>(renderLayerObject);
-    tTJSNI_BaseLayer *layer = nullptr;
-    if(TJS_FAILED(layerObject->NativeInstanceSupport(
-           TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-           reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
+    tTJSNI_BaseLayer *layer = resolveTraceLayerLikeNative(layerObject);
+    if(!layer) {
         appendImageCheckpointEvent(
             player, phase, samplePoint, false, {},
-            "renderLayerObject did not resolve to Layer native instance",
+            "renderLayerObject did not resolve to Layer/private native instance",
             0, 0, 0,
             checkpointDiagnostics(
                 player, "main-image-get-scanline", nullptr, 0),
@@ -1875,12 +1885,8 @@ void motionTraceLayerRawProbe(Player *player, void *renderLayerObject,
                               const char *samplePoint) {
     if(!g_record_layer_raw_probes || !renderLayerObject) return;
     auto *layerObject = static_cast<iTJSDispatch2 *>(renderLayerObject);
-    tTJSNI_BaseLayer *layer = nullptr;
-    if(TJS_FAILED(layerObject->NativeInstanceSupport(
-           TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
-           reinterpret_cast<iTJSNativeInstance **>(&layer))) || !layer) {
-        return;
-    }
+    tTJSNI_BaseLayer *layer = resolveTraceLayerLikeNative(layerObject);
+    if(!layer) return;
     motionTraceLayerRawProbeNative(player, layer, samplePoint);
 }
 

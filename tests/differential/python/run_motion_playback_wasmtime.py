@@ -1565,13 +1565,13 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                     for phase in RENDER_STEP_CHECKPOINT_SURFACES:
                         (checkpoint_root / "_execute" / phase).mkdir(
                             parents=True, exist_ok=True)
-                summary = _drive_full_guest_with_bootstrap(
-                    wasmtime, wasm_path, bootstrap, frames,
-                    record_render_step_checkpoints=(
-                        record_render_step_checkpoints),
-                    record_layer_raw_probes=record_layer_raw_probes,
-                    record_save_layer_visual_readback_probes=(
-                        record_save_layer_visual_readback_probes),
+            summary = _drive_full_guest_with_bootstrap(
+                wasmtime, wasm_path, bootstrap, frames,
+                record_render_step_checkpoints=(
+                    record_render_step_checkpoints),
+                record_layer_raw_probes=record_layer_raw_probes,
+                record_save_layer_visual_readback_probes=(
+                    record_save_layer_visual_readback_probes),
                 save_layer_visual_readback_frame_start=(
                     save_layer_visual_readback_frame_start),
                 save_layer_visual_readback_frame_count=(

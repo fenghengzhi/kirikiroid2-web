@@ -112,6 +112,48 @@ namespace motion {
             return out;
         }
 
+        bool shouldQueuePrivateMotionGLLRenderItemLike_0x6DE738(
+            const PreparedRenderItem &item,
+            bool preview) {
+            if((item.blendMode & 0xF) == 6 || item.skipFlag0 ||
+               item.rawFlag16 || item.opacity == 0) {
+                return false;
+            }
+            if(preview && !item.skipFlag1) {
+                return false;
+            }
+            return !item.sourceKey.empty();
+        }
+
+        int privateMotionGLLOpacityLike_0x6DE738(
+            const PreparedRenderItem &item,
+            bool preview) {
+            int opacity = item.opacity;
+            if(preview) {
+                opacity = opacity >= 0 ? opacity / 2 : (opacity + 1) / 2;
+            }
+            return opacity;
+        }
+
+        void populatePrivateMotionGLLPointsLike_0x6DE738(
+            const PreparedRenderItem &item,
+            PrivateMotionGLLRenderItemInputLike_0x6DE738 &queueItem) {
+            if(item.meshType == 0) {
+                queueItem.points = {
+                    { item.corners[0], item.corners[1] },
+                    { item.corners[2], item.corners[3] },
+                    { item.corners[6], item.corners[7] },
+                };
+                return;
+            }
+
+            queueItem.points.reserve(item.meshPoints.size() / 2u);
+            for(size_t i = 0; i + 1 < item.meshPoints.size(); i += 2) {
+                queueItem.points.push_back(
+                    { item.meshPoints[i], item.meshPoints[i + 1] });
+            }
+        }
+
         unsigned int d3dPackedColorWithOpacity(
             const PreparedRenderItem &item,
             int opacity) {
@@ -503,11 +545,13 @@ namespace motion {
         if(!renderTargetObject || canvasWidth <= 0 || canvasHeight <= 0) {
             return false;
         }
-        auto *renderLayer = resolveNativeLayer(renderTargetObject);
+        auto *renderLayer =
+            resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTargetObject);
         if(!renderLayer) {
             return false;
         }
 
+        clearPrivateMotionGLLRenderQueueLike_0x6DE738(renderTargetObject);
         const auto motionPath =
             _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
                                                : std::string{};
@@ -522,6 +566,46 @@ namespace motion {
         // Player_ResolveSLATarget @ 0x6D5948 owns PrivateMotionGLL sizing;
         // Player_RenderMotionFrame @ 0x6DE738 only emits render commands.
         buildRenderCommands(canvasWidth, canvasHeight);
+        if(_runtime && _runtime->sourceCacheNative) {
+            for(const auto &item : _runtime->preparedRenderItems) {
+                if(!shouldQueuePrivateMotionGLLRenderItemLike_0x6DE738(
+                       item, _preview)) {
+                    continue;
+                }
+                auto *sourceTexture =
+                    _runtime->sourceCacheNative->loadRenderSourceTextureByName(
+                        detail::widen(item.sourceKey), item.srcRef,
+                        item.blendMode, item.packedColors);
+                PrivateMotionGLLRenderItemInputLike_0x6DE738 queueItem;
+                queueItem.opacity =
+                    privateMotionGLLOpacityLike_0x6DE738(item, _preview);
+                queueItem.stencilMaskRef = item.stencilMaskRef;
+                queueItem.stencilWriteRef = item.stencilWriteRef;
+                queueItem.blendMode = item.blendMode;
+                queueItem.geometryType = item.meshType;
+                queueItem.meshDivX = item.meshDivX;
+                queueItem.meshDivY = item.meshDivY;
+                queueItem.packedColors = item.packedColors;
+                if(sourceTexture) {
+                    queueItem.sourceRect = {
+                        0,
+                        0,
+                        static_cast<std::int32_t>(sourceTexture->GetWidth()),
+                        static_cast<std::int32_t>(sourceTexture->GetHeight()),
+                    };
+                    queueItem.sourceTexture = sourceTexture;
+                }
+                populatePrivateMotionGLLPointsLike_0x6DE738(item, queueItem);
+                appendPrivateMotionGLLRenderItemLike_0x6DE738(renderTargetObject,
+                                                              queueItem);
+            }
+            detail::logoChainTraceLogf(
+                motionPath, "sla.renderMotionFrame.queue", "0x6DE738",
+                _clampedEvalTime,
+                "queuedItems={}",
+                privateMotionGLLRenderQueueSizeLike_0x6DE738(
+                    renderTargetObject));
+        }
         return executeLayerRenderCommands(renderTargetObject, true);
     }
 
@@ -914,7 +998,8 @@ namespace motion {
                 motionPath, "sla.accurate.end", "0x6CE938",
                 _clampedEvalTime,
                 "target={}", static_cast<const void *>(renderTarget));
-        } else if(auto *renderLayer = resolveNativeLayer(renderTarget)) {
+        } else if(auto *renderLayer =
+                      resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget)) {
             renderLayer->Update(false);
             detail::logoChainTraceLogf(
                 motionPath, "sla.updateRect", "0x800F4C", _clampedEvalTime,

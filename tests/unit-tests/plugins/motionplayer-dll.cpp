@@ -14,13 +14,19 @@
 #include "motionplayer/D3DAdaptor.h"
 #include "motionplayer/EmotePlayer.h"
 #include "motionplayer/Player.h"
+#include "motionplayer/PrivateMotionGLL.h"
 #include "motionplayer/ResourceManager.h"
 #include "motionplayer/RuntimeSupport.h"
+#include "motionplayer/SeparateLayerAdaptor.h"
 #include "psbfile/PSBValue.h"
+#include "LayerIntf.h"
+#include "LayerTreeOwner.h"
+#include "impl/LayerImpl.h"
 #include "RenderManager.h"
 #include "test_config.h"
 #include "tjsError.h"
 #include "tjsObject.h"
+#include "tvpgl.h"
 
 namespace {
 
@@ -226,7 +232,169 @@ namespace {
         }
     };
 
+    struct FakeLayerOwnerDispatch : tTJSDispatch {
+        iTVPLayerTreeOwner *treeOwner = nullptr;
+
+        tjs_error PropGet(tjs_uint32 flag,
+                          const tjs_char *membername,
+                          tjs_uint32 *hint,
+                          tTJSVariant *result,
+                          iTJSDispatch2 *objthis) override {
+            if(membername &&
+               !TJS_strcmp(membername, TJS_W("layerTreeOwnerInterface"))) {
+                if(result) {
+                    *result = static_cast<tjs_int64>(
+                        reinterpret_cast<tjs_intptr_t>(treeOwner));
+                }
+                return TJS_S_OK;
+            }
+            return tTJSDispatch::PropGet(flag, membername, hint, result,
+                                         objthis);
+        }
+    };
+
+    struct FakeLayerTreeOwner : iTVPLayerTreeOwner {
+        iTJSDispatch2 *owner = nullptr;
+
+        void RegisterLayerManager(iTVPLayerManager *) override {}
+        void UnregisterLayerManager(iTVPLayerManager *) override {}
+        void StartBitmapCompletion(iTVPLayerManager *) override {}
+        void NotifyBitmapCompleted(iTVPLayerManager *,
+                                   tjs_int,
+                                   tjs_int,
+                                   tTVPBaseTexture *,
+                                   const tTVPRect &,
+                                   tTVPLayerType,
+                                   tjs_int) override {}
+        void EndBitmapCompletion(iTVPLayerManager *) override {}
+        void SetMouseCursor(iTVPLayerManager *, tjs_int) override {}
+        void GetCursorPos(iTVPLayerManager *, tjs_int &x, tjs_int &y) override {
+            x = 0;
+            y = 0;
+        }
+        void SetCursorPos(iTVPLayerManager *, tjs_int, tjs_int) override {}
+        void ReleaseMouseCapture(iTVPLayerManager *) override {}
+        void SetHint(iTVPLayerManager *, iTJSDispatch2 *, const ttstr &) override {}
+        void NotifyLayerResize(iTVPLayerManager *) override {}
+        void NotifyLayerImageChange(iTVPLayerManager *) override {}
+        void SetAttentionPoint(iTVPLayerManager *,
+                               tTJSNI_BaseLayer *,
+                               tjs_int,
+                               tjs_int) override {}
+        void DisableAttentionPoint(iTVPLayerManager *) override {}
+        void SetImeMode(iTVPLayerManager *, tjs_int) override {}
+        void ResetImeMode(iTVPLayerManager *) override {}
+        iTJSDispatch2 *GetOwnerNoAddRef() const override { return owner; }
+    };
+
+    struct TestLayerHandle {
+        iTJSDispatch2 *object = nullptr;
+        tTJSNI_Layer *native = nullptr;
+    };
+
+    TestLayerHandle createRegisteredTestLayer(
+        iTVPLayerTreeOwner *treeOwner,
+        tTJSNI_BaseLayer *parent,
+        const tTJSVariantClosure &ownerClosure) {
+        static const bool graphicsInitialized = [] {
+            TVPInitTVPGL();
+            return true;
+        }();
+        (void)graphicsInitialized;
+
+        if(tTJSNC_Layer::ClassID == static_cast<tjs_uint32>(-1)) {
+            tTJSNC_Layer::ClassID = TJSRegisterNativeClass(TJS_W("Layer"));
+        }
+
+        auto *object = new tTJSCustomObject();
+        auto *native = new tTJSNI_Layer();
+        iTJSNativeInstance *nativeBase = native;
+        REQUIRE(TJS_SUCCEEDED(object->NativeInstanceSupport(
+            TJS_NIS_REGISTER, tTJSNC_Layer::ClassID, &nativeBase)));
+        REQUIRE(TJS_SUCCEEDED(native->ConstructResolvedTreeOwnerLike_0x800438(
+            treeOwner, parent, object, ownerClosure)));
+        return { object, native };
+    }
+
 } // namespace
+
+TEST_CASE("__Private_Motion_GLLayer uses private ClassID only") {
+    FakeLayerTreeOwner treeOwner;
+    FakeLayerOwnerDispatch ownerDispatch;
+    ownerDispatch.treeOwner = &treeOwner;
+    treeOwner.owner = &ownerDispatch;
+
+    tTJSVariant ownerVariant(&ownerDispatch, &ownerDispatch);
+    const auto ownerClosure = ownerVariant.AsObjectClosureNoAddRef();
+    auto primaryLayer =
+        createRegisteredTestLayer(&treeOwner, nullptr, ownerClosure);
+    auto targetLayer = createRegisteredTestLayer(
+        &treeOwner, primaryLayer.native, ownerClosure);
+    tTJSVariant targetVariant(targetLayer.object, targetLayer.object);
+
+    motion::SeparateLayerAdaptor adaptor(targetVariant);
+    iTJSDispatch2 *privateObject = motion::ensurePrivateMotionGLLLike_0x6D5948(
+        adaptor, ownerVariant, targetVariant, targetLayer.object, 64, 32);
+    REQUIRE(privateObject != nullptr);
+
+    auto *privateLayer =
+        motion::resolvePrivateMotionGLLNativeLike_0x6DE24C(privateObject);
+    REQUIRE(privateLayer != nullptr);
+    REQUIRE(privateLayer->GetWidth() == 64);
+    REQUIRE(privateLayer->GetHeight() == 32);
+    REQUIRE(privateLayer->GetVisible());
+    REQUIRE(motion::privateMotionGLLRenderQueueSizeLike_0x6DE738(
+                privateObject) == 0);
+    motion::clearPrivateMotionGLLRenderQueueLike_0x6DE738(privateObject);
+    REQUIRE(motion::privateMotionGLLRenderQueueSizeLike_0x6DE738(
+                privateObject) == 0);
+    motion::PrivateMotionGLLRenderItemInputLike_0x6DE738 queueItem;
+    queueItem.opacity = 255;
+    queueItem.sourceRect = { 0, 0, 4, 4 };
+    queueItem.points = {
+        { 0.0f, 0.0f },
+        { 4.0f, 0.0f },
+        { 0.0f, 4.0f },
+    };
+    motion::appendPrivateMotionGLLRenderItemLike_0x6DE738(privateObject,
+                                                          queueItem);
+    REQUIRE(motion::privateMotionGLLRenderQueueSizeLike_0x6DE738(
+                privateObject) == 1);
+    motion::clearPrivateMotionGLLRenderQueueLike_0x6DE738(privateObject);
+    REQUIRE(motion::privateMotionGLLRenderQueueSizeLike_0x6DE738(
+                privateObject) == 0);
+
+    tTJSNI_BaseLayer *layerByPublicClass = nullptr;
+    REQUIRE(TJS_FAILED(privateObject->NativeInstanceSupport(
+        TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+        reinterpret_cast<iTJSNativeInstance **>(&layerByPublicClass))));
+    REQUIRE(layerByPublicClass == nullptr);
+
+    tTJSVariant width(17);
+    tTJSVariant height(19);
+    tTJSVariant *sizeArgs[] = { &width, &height };
+    REQUIRE(TJS_SUCCEEDED(privateObject->FuncCall(
+        0, TJS_W("setSize"), nullptr, nullptr, 2, sizeArgs, privateObject)));
+    REQUIRE(privateLayer->GetWidth() == 17);
+    REQUIRE(privateLayer->GetHeight() == 19);
+
+    tTJSVariant visible(false);
+    REQUIRE(TJS_SUCCEEDED(privateObject->PropSet(
+        0, TJS_W("visible"), nullptr, &visible, privateObject)));
+    REQUIRE_FALSE(privateLayer->GetVisible());
+    tTJSVariant visibleResult;
+    REQUIRE(TJS_SUCCEEDED(privateObject->PropGet(
+        0, TJS_W("visible"), nullptr, &visibleResult, privateObject)));
+    REQUIRE(visibleResult.AsInteger() == 0);
+
+    tTJSVariant absolute(3);
+    REQUIRE(TJS_SUCCEEDED(privateObject->PropSet(
+        0, TJS_W("absolute"), nullptr, &absolute, privateObject)));
+    REQUIRE(privateLayer->GetAbsoluteOrderIndex() == 3);
+
+    targetLayer.object->Release();
+    primaryLayer.object->Release();
+}
 
 TEST_CASE("D3DAdaptor constructor follows libkrkr2 parameter boundary") {
     motion::D3DAdaptor *badCountAdaptor = nullptr;
