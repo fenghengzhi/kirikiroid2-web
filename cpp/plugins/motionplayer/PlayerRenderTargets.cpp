@@ -174,6 +174,58 @@ namespace motion {
             }
         }
 
+        tTVPLayerType accurateSlaLayerTypeLike_0x6C9CA8(int rawBlendMode) {
+            switch(rawBlendMode & 0x0F) {
+                case 1: return ltPsAdditive;
+                case 2:
+                case 5: return ltPsSubtractive;
+                case 3: return ltPsMultiplicative;
+                case 4: return ltPsScreen;
+                default: return ltAlpha;
+            }
+        }
+
+        bool shouldRenderAccurateSlaItemLike_0x6C9CA8(
+            const PreparedRenderItem &item) {
+            return !item.skipFlag0 && !item.rawFlag16 && item.opacity != 0 &&
+                !item.sourceKey.empty();
+        }
+
+        bool computeAccurateSlaClipLike_0x6C9CA8(
+            const PreparedRenderItem &item,
+            int canvasWidth,
+            int canvasHeight,
+            RenderClipRect &out) {
+            float clipLeft = std::max(item.paintBox[0], 0.0f);
+            float clipTop = std::max(item.paintBox[1], 0.0f);
+            float clipRight = std::min(item.paintBox[2],
+                                       static_cast<float>(canvasWidth));
+            float clipBottom = std::min(item.paintBox[3],
+                                        static_cast<float>(canvasHeight));
+
+            if(item.hasViewport && item.viewport[2] >= item.viewport[0] &&
+               item.viewport[3] >= item.viewport[1]) {
+                clipLeft = std::max(
+                    clipLeft, static_cast<float>(std::floor(item.viewport[0])));
+                clipTop = std::max(
+                    clipTop, static_cast<float>(std::floor(item.viewport[1])));
+                clipRight = std::min(
+                    clipRight, static_cast<float>(std::ceil(item.viewport[2])));
+                clipBottom = std::min(
+                    clipBottom, static_cast<float>(std::ceil(item.viewport[3])));
+            }
+
+            if(!(clipLeft < clipRight && clipTop < clipBottom)) {
+                return false;
+            }
+
+            out.left = static_cast<int>(clipLeft);
+            out.top = static_cast<int>(clipTop);
+            out.right = static_cast<int>(clipRight);
+            out.bottom = static_cast<int>(clipBottom);
+            return out.left < out.right && out.top < out.bottom;
+        }
+
         const char *gpuMethodNameForD3DBlend(int blendLowNibble,
                                              bool alphaOpAdd,
                                              bool alphaTest) {
@@ -612,6 +664,182 @@ namespace motion {
         return true;
     }
 
+    bool Player::renderAccurateSlaLike_0x6C9CA8(
+        SeparateLayerAdaptor *sla,
+        iTJSDispatch2 *targetLayerObject,
+        tjs_int canvasWidth,
+        tjs_int canvasHeight) {
+        (void)sla;
+        if(!targetLayerObject || canvasWidth <= 0 || canvasHeight <= 0 ||
+           !_runtime || !_runtime->activeMotion || !_runtime->sourceCacheNative) {
+            return false;
+        }
+
+        const auto motionPath = _runtime->activeMotion->path;
+
+        buildRenderCommands(canvasWidth, canvasHeight);
+
+        iTJSDispatch2 *layerTreeOwner = resolveMainWindowOwnerObject();
+        if(!layerTreeOwner) {
+            layerTreeOwner = targetLayerObject;
+        }
+
+        auto ensureAccurateSlaItemLayer =
+            [&](PreparedRenderItem &item,
+                tTVPLayerType layerType) -> iTJSDispatch2 * {
+            const tjs_int stateLayerId = item.layerId;
+            if(stateLayerId == 0) {
+                return ensureReusableLayerObject(
+                    item.leafLayer,
+                    layerTreeOwner,
+                    targetLayerObject,
+                    layerType,
+                    false);
+            }
+
+            auto &state = _runtime->renderLayerStates[stateLayerId];
+            if(!state.initialized) {
+                state.layerId = stateLayerId;
+                state.absolute = _runtime->nextLayerAbsolute++;
+                state.hitThreshold = 256;
+                state.initialized = true;
+                if(item.nodeIndex >= 0 &&
+                   item.nodeIndex < static_cast<int>(_runtime->nodes.size())) {
+                    const auto &node = _runtime->nodes[item.nodeIndex];
+                    state.layerGetter = getLayerGetter(detail::widen(node.layerName));
+                }
+            }
+
+            auto *layerObject = ensureReusableLayerObject(
+                state.layerObject,
+                layerTreeOwner,
+                targetLayerObject,
+                layerType,
+                false);
+            if(!layerObject) {
+                return nullptr;
+            }
+
+            item.rawFlag20 = true;
+            persistNativeRenderItemFieldLifetimeLike_0x6C4E28(item);
+            setObjectIntProperty(layerObject, TJS_W("absolute"), state.absolute);
+            setObjectIntProperty(layerObject, TJS_W("hitThreshold"),
+                                 state.hitThreshold);
+            state.packedColors = item.packedColors;
+            state.isDirty = true;
+            item.leafLayer = state.layerObject;
+            return layerObject;
+        };
+
+        int renderedItems = 0;
+        for(auto *itemPtr : _runtime->preparedRenderItemsTopLevel) {
+            if(!itemPtr || !shouldRenderAccurateSlaItemLike_0x6C9CA8(*itemPtr)) {
+                continue;
+            }
+            auto &item = *itemPtr;
+
+            RenderClipRect clip;
+            if(!computeAccurateSlaClipLike_0x6C9CA8(
+                   item, static_cast<int>(canvasWidth),
+                   static_cast<int>(canvasHeight), clip)) {
+                continue;
+            }
+
+            tTJSVariant sourceObject =
+                _runtime->sourceCacheNative->loadRenderSourceByName(
+                    detail::widen(item.sourceKey), item.srcRef,
+                    item.blendMode, item.packedColors,
+                    layerTreeOwner, targetLayerObject);
+            if(sourceObject.Type() != tvtObject ||
+               !sourceObject.AsObjectNoAddRef()) {
+                continue;
+            }
+            auto *sourceLayerObject = sourceObject.AsObjectNoAddRef();
+            auto *sourceLayer = resolveNativeLayer(sourceLayerObject);
+            auto *sourceImage = sourceLayer ? sourceLayer->GetMainImage()
+                                            : nullptr;
+            if(!sourceImage || sourceImage->GetWidth() <= 0 ||
+               sourceImage->GetHeight() <= 0) {
+                continue;
+            }
+
+            const int clipWidth = clip.right - clip.left;
+            const int clipHeight = clip.bottom - clip.top;
+            const auto layerType =
+                accurateSlaLayerTypeLike_0x6C9CA8(item.blendMode);
+            auto *itemLayerObject =
+                ensureAccurateSlaItemLayer(item, layerType);
+            auto *itemLayer = resolveNativeLayer(itemLayerObject);
+            if(!itemLayerObject || !itemLayer ||
+               !prepareLayerForRender(itemLayerObject, clipWidth, clipHeight,
+                                      0x00000000)) {
+                continue;
+            }
+
+            const tTVPRect sourceRect(
+                0, 0,
+                static_cast<tjs_int>(sourceImage->GetWidth()),
+                static_cast<tjs_int>(sourceImage->GetHeight()));
+            const float offsetX = -0.5f - static_cast<float>(clip.left);
+            const float offsetY = -0.5f - static_cast<float>(clip.top);
+            bool copied = false;
+            if(item.meshType == 0) {
+                const auto localPts =
+                    buildAffineTrianglePoints(item.corners, offsetX, offsetY);
+                itemLayer->AffineCopy(localPts.data(), sourceImage, sourceRect,
+                                      stNearest, true);
+                copied = true;
+            } else if(item.meshType == 1 && item.meshDivX >= 2 &&
+                      item.meshDivY >= 2 && !item.meshPoints.empty()) {
+                auto localMeshPoints =
+                    buildMeshPoints(item.meshPoints, offsetX, offsetY);
+                itemLayer->BezierPatchCopy(
+                    localMeshPoints.data(), item.meshDivX, item.meshDivY,
+                    sourceImage, sourceRect, stNearest, true);
+                copied = true;
+            } else if(item.meshType == 2 && item.meshDivX >= 2 &&
+                      item.meshDivY >= 2 && !item.meshPoints.empty()) {
+                auto localMeshPoints =
+                    buildMeshPoints(item.meshPoints, offsetX, offsetY);
+                itemLayer->MeshCopy(localMeshPoints.data(), item.meshDivX,
+                                    item.meshDivY, sourceImage, sourceRect,
+                                    stNearest, true);
+                copied = true;
+            }
+            if(!copied) {
+                continue;
+            }
+
+            itemLayer->SetPosition(clip.left, clip.top);
+            itemLayer->SetType(layerType);
+            itemLayer->SetVisible(true);
+            itemLayer->SetOpacity(std::clamp(item.opacity, 0, 255));
+            ++renderedItems;
+
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            detail::motionTraceRecordPostDrawLayerCandidate(
+                this, itemLayerObject,
+                "Player::renderAccurateSla_0x6C9CA8.item.afterCopy");
+#endif
+            detail::logoChainTraceLogf(
+                motionPath, "sla.accurate.item", "0x6C9CA8",
+                _clampedEvalTime,
+                "nodeIndex={} layerId={} clip=[{},{},{},{}] meshType={} type={} opacity={} source={}",
+                item.nodeIndex, item.layerId,
+                clip.left, clip.top, clip.right, clip.bottom,
+                item.meshType, static_cast<int>(layerType), item.opacity,
+                item.sourceKey);
+        }
+
+        detail::logoChainTraceLogf(
+            motionPath, "sla.accurate.rendered", "0x6C9CA8",
+            _clampedEvalTime,
+            "targetLayer={} canvas={}x{} renderedItems={}",
+            static_cast<const void *>(targetLayerObject),
+            canvasWidth, canvasHeight, renderedItems);
+        return true;
+    }
+
     bool Player::renderToD3DAdaptor(D3DAdaptor *adaptor) {
         if(!adaptor || adaptor->getWidth() <= 0 || adaptor->getHeight() <= 0) {
             return false;
@@ -930,8 +1158,23 @@ namespace motion {
 
         int canvasWidth = 0;
         int canvasHeight = 0;
-        iTJSDispatch2 *renderTarget =
-            resolveSeparateLayerRenderTarget(sla, canvasWidth, canvasHeight);
+        const bool accurateSla = isAccurateSlaRenderEnabled();
+        iTJSDispatch2 *targetLayerObject =
+            tryResolveLayerDispatch(sla->getTargetLayer());
+        iTJSDispatch2 *renderTarget = nullptr;
+        if(accurateSla) {
+            if(targetLayerObject) {
+                queryLayerCanvasSize(targetLayerObject, canvasWidth,
+                                     canvasHeight);
+                renderTarget = targetLayerObject;
+            }
+        } else {
+            renderTarget =
+                resolveSeparateLayerRenderTarget(sla, canvasWidth, canvasHeight);
+            if(!targetLayerObject) {
+                targetLayerObject = tryResolveLayerDispatch(sla->getTargetLayer());
+            }
+        }
         if(!renderTarget) {
             detail::logoChainTraceSummary(
                 motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,
@@ -943,15 +1186,15 @@ namespace motion {
             "ownerLayer={} targetCanvas={}x{} accurate={} route={}",
             static_cast<const void *>(ownerLayer),
             canvasWidth, canvasHeight,
-            isAccurateSlaRenderEnabled() ? 1 : 0,
-            isAccurateSlaRenderEnabled()
+            accurateSla ? 1 : 0,
+            accurateSla
                 ? "0x6C9CA8 -> 0x6CE938"
                 : "Player_RenderMotionFrame -> Layer_UpdateRect");
         detail::logoChainTraceLogf(
             motionPath, "sla.resolveTarget", "0x6D5948",
             _clampedEvalTime,
             "targetLayer={} privateTarget={} absolute={} canvas={}x{}",
-            static_cast<const void *>(tryResolveLayerDispatch(sla->getTargetLayer())),
+            static_cast<const void *>(targetLayerObject),
             static_cast<const void *>(renderTarget),
             sla->getAbsolute() ? 1 : 0,
             canvasWidth, canvasHeight);
@@ -976,31 +1219,42 @@ namespace motion {
                 }
             }
         } accurateSlaRenderTrace{
-            this, renderTarget, isAccurateSlaRenderEnabled()};
+            this, renderTarget, accurateSla};
 #endif
 
-        if(!renderMotionFrameToTarget(renderTarget, canvasWidth, canvasHeight,
-                                      isAccurateSlaRenderEnabled()
-                                          ? "0x6C9CA8"
-                                          : "0x6DE738")) {
-            detail::logoChainTraceSummary(
-                motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,
-                "fail=renderMotionFrameToTarget");
-            return false;
-        }
-
-        if(isAccurateSlaRenderEnabled()) {
+        if(accurateSla) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            detail::MotionTraceRenderExecuteScope renderTrace(
+                this, targetLayerObject, false);
+#endif
+            if(!renderAccurateSlaLike_0x6C9CA8(
+                   sla, targetLayerObject, canvasWidth, canvasHeight)) {
+                detail::logoChainTraceSummary(
+                    motionPath, "renderToSeparateLayerAdaptor",
+                    _clampedEvalTime,
+                    "fail=renderAccurateSlaLike_0x6C9CA8");
+                return false;
+            }
             detail::logoChainTraceLogf(
                 motionPath, "sla.accurate.begin", "0x6C9CA8",
                 _clampedEvalTime,
                 "target={} canvas={}x{}",
-                static_cast<const void *>(renderTarget),
+                static_cast<const void *>(targetLayerObject),
                 canvasWidth, canvasHeight);
-            updateAccurateSLAAfterDraw(renderTarget);
+            updateAccurateSLAAfterDraw(targetLayerObject);
             detail::logoChainTraceLogf(
                 motionPath, "sla.accurate.end", "0x6CE938",
                 _clampedEvalTime,
-                "target={}", static_cast<const void *>(renderTarget));
+                "target={}", static_cast<const void *>(targetLayerObject));
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            renderTrace.setResult(true);
+#endif
+        } else if(!renderMotionFrameToTarget(renderTarget, canvasWidth,
+                                             canvasHeight, "0x6DE738")) {
+            detail::logoChainTraceSummary(
+                motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,
+                "fail=renderMotionFrameToTarget");
+            return false;
         } else if(auto *renderLayer =
                       resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget)) {
             renderLayer->Update(false);
@@ -1021,7 +1275,7 @@ namespace motion {
         _runtime->lastCanvas = tTJSVariant(lastCanvasObject, lastCanvasObject);
         detail::logoChainTraceSummary(
             motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,
-            isAccurateSlaRenderEnabled() ? "accurate=1" : "accurate=0");
+            accurateSla ? "accurate=1" : "accurate=0");
         return true;
     }
 
@@ -1115,6 +1369,26 @@ namespace motion {
         if(!targetLayerObject) {
             return false;
         }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        detail::motionTraceRenderImageCheckpoint(
+            this, targetLayerObject, "updateLayerAfterDraw_pre",
+            "Player::updateAccurateSLAAfterDraw_0x6CE938.enter");
+        detail::motionTraceLayerRawProbe(
+            this, targetLayerObject,
+            "Player::updateAccurateSLAAfterDraw_0x6CE938.enter");
+        struct AccurateSlaAfterDrawTraceLeave {
+            Player *player;
+            iTJSDispatch2 *layerObject;
+            ~AccurateSlaAfterDrawTraceLeave() {
+                detail::motionTraceRenderImageCheckpoint(
+                    player, layerObject, "updateLayerAfterDraw_post",
+                    "Player::updateAccurateSLAAfterDraw_0x6CE938.leave");
+                detail::motionTraceLayerRawProbe(
+                    player, layerObject,
+                    "Player::updateAccurateSLAAfterDraw_0x6CE938.leave");
+            }
+        } accurateSlaAfterDrawTraceLeave{this, targetLayerObject};
+#endif
         const auto motionPath =
             _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
                                                : std::string{};

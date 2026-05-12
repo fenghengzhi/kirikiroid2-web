@@ -66,6 +66,7 @@ struct TraceState {
     motion::Player *lastCompletedTopPlayer = nullptr;
     void *lastCompletedRenderLayerObject = nullptr;
     bool lastCompletedRenderLayerFromAccurateSla = false;
+    int lastAccurateSlaExecutePostFrameId = -1;
     void *lastDrawTargetObject = nullptr;
     motion::Player *lastPostDrawLayerPlayer = nullptr;
     void *lastPostDrawLayerObject = nullptr;
@@ -1131,6 +1132,7 @@ void resetState() {
     state.lastCompletedTopPlayer = nullptr;
     state.lastCompletedRenderLayerObject = nullptr;
     state.lastCompletedRenderLayerFromAccurateSla = false;
+    state.lastAccurateSlaExecutePostFrameId = -1;
     state.lastDrawTargetObject = nullptr;
     state.lastPostDrawLayerPlayer = nullptr;
     state.lastPostDrawLayerObject = nullptr;
@@ -1652,6 +1654,29 @@ void motionTraceRenderPostDrawCanvasTextureCheckpointAtFrame(
         ok ? std::string()
            : std::string("failed to write DrawDevice texture RGBA checkpoint"),
         width, height, rowBytes, diagnostics(failedRow), frameId, "rgba32");
+
+    if(ok) {
+        const char *executePhase = "execute_post";
+        const std::string executePhaseDir =
+            std::string(kRenderStageCaptureRoot) + "/_execute/" + executePhase;
+        if(directoryExists(executePhaseDir)) {
+            const auto executePath = framePath(executePhase, frameId, "rgba");
+            int executeFailedRow = -1;
+            const bool executeOk = writePackedRowsFromTexture(
+                executePath, texture, width, height, &executeFailedRow);
+            appendImageCheckpointEvent(
+                nullptr, executePhase,
+                "startup.tjs.post_draw.after_onPaint.accurate_sla_execute_post",
+                executeOk, executePath,
+                executeOk ? std::string()
+                          : std::string("failed to write accurate SLA execute_post drawdevice checkpoint"),
+                width, height, rowBytes, diagnostics(executeFailedRow),
+                frameId, "rgba32");
+        }
+        if(state.lastAccurateSlaExecutePostFrameId == frameId) {
+            state.lastAccurateSlaExecutePostFrameId = -1;
+        }
+    }
 }
 
 void motionTraceRenderPrepareEnter(Player *player) {
@@ -1773,6 +1798,66 @@ void motionTraceRenderImageCheckpointAtFrame(Player *player,
             checkpointDiagnostics(
                 player, "main-image-get-scanline", nullptr, 0),
             frameId);
+        return;
+    }
+
+    if(phase && std::strcmp(phase, "execute_post") == 0 &&
+       traceState().accurateSlaRenderDepth > 0) {
+        traceState().lastAccurateSlaExecutePostFrameId = frameId;
+        auto *manager = layer->GetManager();
+        if(!manager) {
+            appendImageCheckpointEvent(
+                player, phase, samplePoint, false, {},
+                "accurate SLA execute_post target Layer has no manager",
+                0, 0, 0,
+                checkpointDiagnostics(
+                    player, "LayerManager.GetDrawBuffer.texture-scanline",
+                    nullptr, 0),
+                frameId, "rgba32");
+            return;
+        }
+
+        manager->UpdateToDrawDevice();
+        forcePostDrawDrawDeviceShow();
+        auto &state = traceState();
+        auto *texture = state.lastPostDrawCanvasTexture;
+        if(!texture) {
+            auto *drawBuffer = manager->GetDrawBuffer();
+            texture = drawBuffer ? drawBuffer->GetTexture() : nullptr;
+        }
+        const char *recordSamplePoint =
+            state.lastPostDrawCanvasSamplePoint.empty()
+                ? samplePoint
+                : state.lastPostDrawCanvasSamplePoint.c_str();
+        const int width = texture ? static_cast<int>(texture->GetWidth()) : 0;
+        const int height = texture ? static_cast<int>(texture->GetHeight()) : 0;
+        const int sourcePitch =
+            texture ? static_cast<int>(texture->GetPitch()) : 0;
+        const int rowBytes = width * 4;
+        const auto diagnostics = [&](int failedRow = -1) {
+            return canvasTextureDiagnostics(
+                "accurate-sla-execute-post.DrawDevice_UpdateDrawBuffer.texture-scanline",
+                texture, recordSamplePoint, rowBytes, sourcePitch, failedRow);
+        };
+        if(!texture || width != 1920 || height != 1080 ||
+           sourcePitch < rowBytes) {
+            appendImageCheckpointEvent(
+                player, phase, samplePoint, false, {},
+                "accurate SLA execute_post draw buffer texture is unavailable or has invalid dimensions",
+                width, height, rowBytes, diagnostics(), frameId, "rgba32");
+            return;
+        }
+
+        const auto path = framePath(phase, frameId, "rgba");
+        int failedRow = -1;
+        const bool ok = writePackedRowsFromTexture(
+            path, texture, width, height, &failedRow);
+        appendImageCheckpointEvent(
+            player, phase, samplePoint, ok, path,
+            ok ? std::string()
+               : std::string("failed to write accurate SLA execute_post draw buffer checkpoint"),
+            width, height, rowBytes, diagnostics(failedRow), frameId,
+            "rgba32");
         return;
     }
 
