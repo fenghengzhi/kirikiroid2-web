@@ -273,7 +273,6 @@ namespace motion {
             detail::motionTraceRecordPostDrawLayerCandidate(
                 this, layerObject, samplePoint);
         };
-        int accurateSlaMinimumLayerWidth = 0;
         const auto directItemCoversRenderTarget =
             [&](const PreparedRenderItem &item) {
             if(!renderLayer) return false;
@@ -569,22 +568,10 @@ namespace motion {
             }
             const int clipWidth = static_cast<int>(clipRight - clipLeft);
             const int clipHeight = static_cast<int>(clipBottom - clipTop);
+            // libkrkr2.so sub_6C9CA8 sizes the SLA item layer to the clipped
+            // draw bounds and clears it transparent before the affine copy.
             int layerWidth = clipWidth;
             int layerHeight = clipHeight;
-            const bool useMinimumBackdropWidth =
-                !directItemCoversRenderTarget(item) &&
-                accurateSlaMinimumLayerWidth > layerWidth;
-            if(useMinimumBackdropWidth) {
-                layerWidth = accurateSlaMinimumLayerWidth;
-            }
-            if(source.width > 0 && source.width < 512) {
-                layerWidth = std::max(layerWidth, source.width + 1);
-            }
-            if(source.height > 0 && source.width < 512) {
-                layerHeight = std::max(layerHeight, source.height + 1);
-            }
-            const bool expandedLayerBounds =
-                layerWidth > clipWidth || layerHeight > clipHeight;
             if(layerWidth <= 0 || layerHeight <= 0) {
                 return false;
             }
@@ -594,7 +581,7 @@ namespace motion {
             if(!candidateLayerObject || !candidateLayer ||
                !prepareLayerForRender(
                    candidateLayerObject, layerWidth, layerHeight,
-                   expandedLayerBounds ? 0x00FFFFFF : 0x00000000)) {
+                   0x00000000)) {
                 return false;
             }
 
@@ -1006,11 +993,6 @@ namespace motion {
                             continue;
                         }
 #if defined(KRKR2_WASMTIME_HEADLESS)
-                        if(detail::motionTraceIsAccurateSlaRenderActive() &&
-                           accurateSlaMinimumLayerWidth == 0 &&
-                           source.width > 0) {
-                            accurateSlaMinimumLayerWidth = source.width;
-                        }
 #endif
                         const auto worldPts =
                             buildAffineTrianglePoints(item.corners,

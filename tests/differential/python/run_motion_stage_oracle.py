@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import shlex
 import shutil
 import sys
 import tempfile
@@ -1308,8 +1307,8 @@ def main(argv: list[str]) -> int:
                 capture_window=capture_window,
             )
             if args.checkpoint_render_only and remote_render_root is not None:
-                mpb._adb_shell(
-                    args.serial, f"rm -rf {shlex.quote(remote_render_root)}")
+                mpb._adb_shell_root(args.serial, ["rm", "-rf",
+                                                  remote_render_root])
             print(
                 f"[record-stage] render artifact manifest: "
                 f"{render_artifact_dir / 'manifest.json'}"

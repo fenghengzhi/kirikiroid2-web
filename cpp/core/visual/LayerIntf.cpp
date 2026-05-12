@@ -6693,10 +6693,14 @@ void tTJSNI_BaseLayer::BltImage(iTVPBaseBitmap *dest,
 
         case ltAlpha: // formerly ltTransparent
             // alpha blend
-            if(TVPIsTypeUsingAlpha(destlayertype))
-                met = bmAlphaOnAlpha;
-            else if(TVPIsTypeUsingAddAlpha(destlayertype))
+            if(TVPIsTypeUsingAddAlpha(destlayertype))
                 met = bmAlphaOnAddAlpha;
+            // libkrkr2.so sub_8150A4 has a distinct bmAlphaOnAlpha path for
+            // ltAlpha sources; the SLA update buffer reaches this path with
+            // an opaque layer type but alpha-sensitive accumulated pixels.
+            else if(TVPIsTypeUsingAlpha(destlayertype) ||
+                    destlayertype == ltOpaque)
+                met = bmAlphaOnAlpha;
             else
                 met = bmAlpha;
             break;

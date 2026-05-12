@@ -291,8 +291,8 @@ def ensure_oracle_renderer_software(
                     f"{_ORACLE_GLOBAL_PREFERENCE_PATH}")
 
         game_pref = _game_preference_path(remote_game)
-        _write_remote_text(serial, game_pref, xml, root=False)
-        game_text = _read_remote_text(serial, game_pref, root=False)
+        _write_remote_text(serial, game_pref, xml, root=True)
+        game_text = _read_remote_text(serial, game_pref, root=True)
         if game_text.strip() != xml.strip():
             raise RuntimeError(
                 "Android Oracle renderer=software verification failed; "
@@ -324,7 +324,11 @@ def _ensure_logo_test_xp3_pushed(serial: str | None) -> str:
     remote_dir = _REMOTE_STARTUP_FILES_DIR
     _adb_shell_root(serial, ["mkdir", "-p", remote_dir])
     remote_path = f"{remote_dir}/logo_test_oracle.xp3"
-    push_fixture(serial, local, remote_path)
+    tmp_path = "/data/local/tmp/krkr2-logo_test_oracle.xp3"
+    push_fixture(serial, local, tmp_path)
+    _adb_shell_root(serial, ["cp", tmp_path, remote_path])
+    _adb_shell_root(serial, ["chmod", "644", remote_path])
+    _chown_to_app_files_owner(serial, remote_path)
     return remote_path
 
 
@@ -335,8 +339,8 @@ def _prepare_framebuffer_capture(
     capture_window: FrameCaptureWindow | None = None,
 ) -> tuple[str, str]:
     remote_capture_root = _REFERENCE_RENDER_STAGE_CAPTURE_ROOT
-    quoted_root = shlex.quote(remote_capture_root)
-    _adb_shell(serial, f"rm -rf {quoted_root} && mkdir -p {quoted_root}")
+    _adb_shell_root(serial, ["rm", "-rf", remote_capture_root])
+    _adb_shell_root(serial, ["mkdir", "-p", remote_capture_root])
     total_frames = sum(int(spec["frames"]) for spec in specs_by_id.values())
     if capture_window is None:
         class _Args:
@@ -347,10 +351,9 @@ def _prepare_framebuffer_capture(
                                      capture_window):
         spec_id = str(case["caseId"])
         for phase in _RENDER_STAGE_CAPTURE_SURFACES:
-            _adb_shell(
+            _adb_shell_root(
                 serial,
-                "mkdir -p "
-                f"{shlex.quote(remote_capture_root + '/' + spec_id + '/' + phase)}",
+                ["mkdir", "-p", remote_capture_root + "/" + spec_id + "/" + phase],
             )
     _chown_to_app_files_owner(serial, remote_capture_root)
 
@@ -365,8 +368,8 @@ def _prepare_render_stage_capture(
     capture_window: FrameCaptureWindow | None = None,
 ) -> tuple[str, str]:
     remote_capture_root = _REFERENCE_RENDER_STAGE_CAPTURE_ROOT
-    quoted_root = shlex.quote(remote_capture_root)
-    _adb_shell(serial, f"rm -rf {quoted_root} && mkdir -p {quoted_root}")
+    _adb_shell_root(serial, ["rm", "-rf", remote_capture_root])
+    _adb_shell_root(serial, ["mkdir", "-p", remote_capture_root])
     total_frames = sum(int(spec["frames"]) for spec in specs_by_id.values())
     if capture_window is None:
         class _Args:
@@ -377,10 +380,9 @@ def _prepare_render_stage_capture(
                                      capture_window):
         spec_id = str(case["caseId"])
         for phase in _RENDER_STAGE_CAPTURE_SURFACES:
-            _adb_shell(
+            _adb_shell_root(
                 serial,
-                "mkdir -p "
-                f"{shlex.quote(remote_capture_root + '/' + spec_id + '/' + phase)}",
+                ["mkdir", "-p", remote_capture_root + "/" + spec_id + "/" + phase],
             )
     _chown_to_app_files_owner(serial, remote_capture_root)
 
