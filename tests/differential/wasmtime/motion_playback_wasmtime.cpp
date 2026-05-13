@@ -707,6 +707,11 @@ bool directoryExists(const std::string &path) {
     return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+bool fileExists(const std::string &path) {
+    struct stat st {};
+    return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
 std::string framePath(const char *phase, int frameId,
                       const char *rawSuffix = "bgra") {
     char name[128];
@@ -886,6 +891,175 @@ std::string canvasTextureDiagnostics(const char *captureMethod,
     }
     diag.push_back('}');
     return diag;
+}
+
+iTJSDispatch2 *resolveCheckpointLayerObject(void *object,
+                                            tTJSVariant &propertyStorage) {
+    propertyStorage.Clear();
+    if(!object) return nullptr;
+    auto *dispatch = static_cast<iTJSDispatch2 *>(object);
+    if(resolveTraceLayerLikeNative(dispatch)) {
+        return dispatch;
+    }
+    if(TJS_SUCCEEDED(dispatch->PropGet(
+           0, TJS_W("targetLayer"), nullptr, &propertyStorage, dispatch)) &&
+       propertyStorage.Type() == tvtObject) {
+        auto *candidate = propertyStorage.AsObjectNoAddRef();
+        if(resolveTraceLayerLikeNative(candidate)) {
+            return candidate;
+        }
+    }
+    propertyStorage.Clear();
+    if(TJS_SUCCEEDED(dispatch->FuncCall(
+           0x1000, TJS_W("layerTreeOwnerInterface"), nullptr,
+           &propertyStorage, 0, nullptr, dispatch)) &&
+       propertyStorage.Type() == tvtObject) {
+        auto *candidate = propertyStorage.AsObjectNoAddRef();
+        if(resolveTraceLayerLikeNative(candidate)) {
+            return candidate;
+        }
+    }
+    return nullptr;
+}
+
+void motionTraceRenderAccurateSlaExecutePostUploadCheckpoint(
+    motion::Player *player, void *renderLayerObject, const char *samplePoint) {
+    const int frameId = renderFrameIdFor(player);
+    if(frameId < 0 || !captureFrameEnabled(frameId)) return;
+    const char *phase = "execute_post";
+    const std::string phaseDir =
+        std::string(kRenderStageCaptureRoot) + "/_execute/" + phase;
+    if(!directoryExists(phaseDir)) return;
+
+    auto &state = traceState();
+    void *candidateObject =
+        state.lastDrawTargetObject ? state.lastDrawTargetObject
+                                   : renderLayerObject;
+    tTJSVariant propertyStorage;
+    auto *layerObject =
+        resolveCheckpointLayerObject(candidateObject, propertyStorage);
+    if(!layerObject && candidateObject != renderLayerObject) {
+        layerObject =
+            resolveCheckpointLayerObject(renderLayerObject, propertyStorage);
+    }
+
+    auto diagnostics = [&](const char *captureMethod,
+                           void *sourceObject,
+                           iTJSDispatch2 *resolvedObject,
+                           tTJSNI_BaseLayer *nativeLayer,
+                           iTVPLayerManager *manager,
+                           iTVPBaseBitmap *drawBuffer,
+                           iTVPTexture2D *texture,
+                           int rowBytes,
+                           int sourcePitch,
+                           int failedRow = -1) {
+        std::string diag = "{\"player\":";
+        diag += ptrHex(player);
+        diag += ",\"activeMotion\":";
+        appendJsonString(diag, activeMotionPath(player));
+        diag += ",\"samplingMode\":\"guest-cpp-probe\"";
+        diag += ",\"captureMethod\":";
+        appendJsonString(diag, captureMethod ? captureMethod : "");
+        diag += ",\"sourceObject\":";
+        diag += ptrHex(sourceObject);
+        diag += ",\"resolvedLayerObject\":";
+        diag += ptrHex(resolvedObject);
+        diag += ",\"nativeLayer\":";
+        diag += ptrHex(nativeLayer);
+        diag += ",\"manager\":";
+        diag += ptrHex(manager);
+        diag += ",\"drawBuffer\":";
+        diag += ptrHex(drawBuffer);
+        diag += ",\"texture\":";
+        diag += ptrHex(texture);
+        diag += ",\"rowBytes\":";
+        diag += std::to_string(rowBytes);
+        diag += ",\"sourcePitch\":";
+        diag += std::to_string(sourcePitch);
+        if(texture) {
+            diag += ",\"format\":";
+            diag += std::to_string(static_cast<int>(texture->GetFormat()));
+        }
+        if(failedRow >= 0) {
+            diag += ",\"failedRow\":";
+            diag += std::to_string(failedRow);
+        }
+        diag.push_back('}');
+        return diag;
+    };
+    auto fail = [&](const std::string &message,
+                    iTJSDispatch2 *resolvedObject = nullptr,
+                    tTJSNI_BaseLayer *nativeLayer = nullptr,
+                    iTVPLayerManager *manager = nullptr,
+                    iTVPBaseBitmap *drawBuffer = nullptr,
+                    iTVPTexture2D *texture = nullptr,
+                    int width = 0,
+                    int height = 0,
+                    int pitch = 0) {
+        appendImageCheckpointEvent(
+            player, phase, samplePoint, false, {}, message,
+            width, height, pitch,
+            diagnostics("LayerManager.UpdateToDrawDevice.execute-post",
+                        candidateObject, resolvedObject, nativeLayer,
+                        manager, drawBuffer, texture, pitch,
+                        texture ? texture->GetPitch() : 0),
+            frameId, "rgba32");
+    };
+
+    if(!layerObject) {
+        fail("accurate SLA execute_post source did not resolve to a Layer");
+        return;
+    }
+    auto *nativeLayer = resolveTraceLayerLikeNative(layerObject);
+    if(!nativeLayer) {
+        fail("accurate SLA execute_post resolved object has no Layer native instance",
+             layerObject);
+        return;
+    }
+    auto *manager = nativeLayer->GetManager();
+    if(!manager) {
+        fail("accurate SLA execute_post Layer has no LayerManager",
+             layerObject, nativeLayer);
+        return;
+    }
+    manager->UpdateToDrawDevice();
+    auto *drawBuffer = manager->GetDrawBuffer();
+    if(!drawBuffer) {
+        fail("accurate SLA execute_post draw buffer is null",
+             layerObject, nativeLayer, manager);
+        return;
+    }
+    auto *texture = drawBuffer->GetTexture();
+    if(!texture) {
+        fail("accurate SLA execute_post draw buffer texture is null",
+             layerObject, nativeLayer, manager, drawBuffer);
+        return;
+    }
+
+    const int width = static_cast<int>(texture->GetWidth());
+    const int height = static_cast<int>(texture->GetHeight());
+    const int sourcePitch = static_cast<int>(texture->GetPitch());
+    const int rowBytes = width * 4;
+    if(width != 1920 || height != 1080 || sourcePitch < rowBytes) {
+        fail("accurate SLA execute_post texture has invalid dimensions",
+             layerObject, nativeLayer, manager, drawBuffer, texture,
+             width, height, rowBytes);
+        return;
+    }
+
+    const auto path = framePath(phase, frameId, "rgba");
+    int failedRow = -1;
+    const bool ok = writePackedRowsFromTexture(
+        path, texture, width, height, &failedRow);
+    appendImageCheckpointEvent(
+        player, phase, samplePoint, ok, path,
+        ok ? std::string()
+           : std::string("failed to write accurate SLA execute_post draw buffer checkpoint"),
+        width, height, rowBytes,
+        diagnostics("LayerManager.UpdateToDrawDevice.execute-post",
+                    candidateObject, layerObject, nativeLayer, manager,
+                    drawBuffer, texture, rowBytes, sourcePitch, failedRow),
+        frameId, "rgba32");
 }
 
 void appendLayerRawProbeEvent(motion::Player *player,
@@ -1399,15 +1573,21 @@ MotionTraceRenderExecuteScope::~MotionTraceRenderExecuteScope() {
     motionTraceRenderImageCheckpoint(
         _player, _renderLayerObject, "execute_post",
         "Player::executeLayerRenderCommands.leave.before-return");
+    const bool accurateSla = traceState().accurateSlaRenderDepth > 0;
     if(_renderLayerObject) {
         auto &state = traceState();
         state.lastCompletedRenderLayerObject = _renderLayerObject;
         state.lastCompletedRenderLayerFromAccurateSla =
-            state.accurateSlaRenderDepth > 0;
+            accurateSla;
     }
     appendRenderEvent(_player, "render_execute", "execute_leave",
                       "Player::executeLayerRenderCommands.leave",
                       payload, diagnostics);
+    if(accurateSla) {
+        motionTraceRenderAccurateSlaExecutePostUploadCheckpoint(
+            _player, _renderLayerObject,
+            "Player::executeLayerRenderCommands.leave.after-layer-manager-update");
+    }
 }
 
 void MotionTraceRenderExecuteScope::setResult(bool ok) {
@@ -1593,6 +1773,9 @@ void motionTraceRenderPostDrawLayerManagerCheckpointAtFrame(
             std::string(kRenderStageCaptureRoot) + "/_execute/" + executePhase;
         if(directoryExists(executePhaseDir)) {
             const auto executePath = framePath(executePhase, frameId, "rgba");
+            if(fileExists(executePath)) {
+                return;
+            }
             int executeFailedRow = -1;
             const bool executeOk = writePackedRowsFromTexture(
                 executePath, texture, width, height, &executeFailedRow);
@@ -1681,6 +1864,9 @@ void motionTraceRenderPostDrawCanvasTextureCheckpointAtFrame(
             std::string(kRenderStageCaptureRoot) + "/_execute/" + executePhase;
         if(directoryExists(executePhaseDir)) {
             const auto executePath = framePath(executePhase, frameId, "rgba");
+            if(fileExists(executePath)) {
+                return;
+            }
             int executeFailedRow = -1;
             const bool executeOk = writePackedRowsFromTexture(
                 executePath, texture, width, height, &executeFailedRow);
@@ -1820,10 +2006,8 @@ void motionTraceRenderImageCheckpointAtFrame(Player *player,
 
     if(phase && std::strcmp(phase, "execute_post") == 0 &&
        traceState().accurateSlaRenderDepth > 0) {
-        // Native oracle records accurate-SLA execute_post after the next
-        // DrawDevice upload. The upload is observable at the post_draw marker,
-        // so defer the actual checkpoint write to that marker instead of
-        // sampling the previous draw buffer here.
+        // Accurate-SLA execute_post matches Android's next DrawDevice upload,
+        // not the target Layer main image at sub_6C9CA8 leave.
         return;
     }
 
