@@ -226,6 +226,91 @@ namespace motion {
             return out.left < out.right && out.top < out.bottom;
         }
 
+        iTJSDispatch2 *resolveLayerWindowObjectLike_0x6CE19C(
+            iTJSDispatch2 *targetLayerObject,
+            tTJSVariant &ownerStorage) {
+            ownerStorage.Clear();
+            if(!targetLayerObject) {
+                return nullptr;
+            }
+            if(TJS_FAILED(targetLayerObject->PropGet(
+                   0, TJS_W("window"), nullptr, &ownerStorage,
+                   targetLayerObject))) {
+                return nullptr;
+            }
+            return ownerStorage.Type() == tvtObject
+                ? ownerStorage.AsObjectNoAddRef()
+                : nullptr;
+        }
+
+        bool setLayerSizeLike_0x6CE19C(iTJSDispatch2 *layerObject,
+                                       int width,
+                                       int height) {
+            if(!layerObject || width <= 0 || height <= 0) {
+                return false;
+            }
+            tTJSVariant widthArg(width);
+            tTJSVariant heightArg(height);
+            tTJSVariant *args[] = { &widthArg, &heightArg };
+            return TJS_SUCCEEDED(layerObject->FuncCall(
+                0, TJS_W("setSize"), nullptr, nullptr, 2, args, layerObject));
+        }
+
+        bool piledCopyLayerLike_0x6CE938(iTJSDispatch2 *destinationObject,
+                                         iTJSDispatch2 *sourceObject,
+                                         int width,
+                                         int height) {
+            auto *destination = resolveNativeLayer(destinationObject);
+            auto *source = resolveNativeLayer(sourceObject);
+            if(!destination || !source || width <= 0 || height <= 0) {
+                return false;
+            }
+            const tTVPRect sourceRect(0, 0, width, height);
+            destination->PiledCopy(0, 0, source, sourceRect);
+            return true;
+        }
+
+        iTJSDispatch2 *ensureAccurateSlaStateLayerLike_0x6C6B48(
+            tTJSVariant &slot,
+            iTJSDispatch2 *layerTreeOwnerObject,
+            iTJSDispatch2 *parentLayerObject,
+            tTVPLayerType layerType) {
+            if(!parentLayerObject && layerTreeOwnerObject) {
+                parentLayerObject =
+                    resolvePrimaryLayerObject(layerTreeOwnerObject);
+            }
+
+            iTJSDispatch2 *layerObject =
+                slot.Type() == tvtObject ? slot.AsObjectNoAddRef() : nullptr;
+            if(!layerObject) {
+                if(!layerTreeOwnerObject) {
+                    return nullptr;
+                }
+                layerObject =
+                    createLayerObject(layerTreeOwnerObject, parentLayerObject);
+                if(!layerObject) {
+                    return nullptr;
+                }
+                slot = tTJSVariant(layerObject, layerObject);
+                layerObject->Release();
+                layerObject = slot.AsObjectNoAddRef();
+            }
+
+            auto *layer = resolveNativeLayer(layerObject);
+            if(!layer) {
+                return nullptr;
+            }
+            if(parentLayerObject) {
+                if(auto *parentLayer = resolveNativeLayer(parentLayerObject);
+                   parentLayer && layer->GetParent() != parentLayer) {
+                    layer->SetParent(parentLayer);
+                }
+            }
+            layer->SetType(layerType);
+            layer->SetAbsoluteOrderMode(false);
+            return layerObject;
+        }
+
         const char *gpuMethodNameForD3DBlend(int blendLowNibble,
                                              bool alphaOpAdd,
                                              bool alphaTest) {
@@ -700,7 +785,6 @@ namespace motion {
             auto &state = _runtime->renderLayerStates[stateLayerId];
             if(!state.initialized) {
                 state.layerId = stateLayerId;
-                state.absolute = _runtime->nextLayerAbsolute++;
                 state.hitThreshold = 256;
                 state.initialized = true;
                 if(item.nodeIndex >= 0 &&
@@ -709,13 +793,16 @@ namespace motion {
                     state.layerGetter = getLayerGetter(detail::widen(node.layerName));
                 }
             }
+            // libkrkr2.so sub_6C6B48 refreshes Layer.absolute after every
+            // state-layer lookup, so draw order follows the current item list
+            // instead of the layer's original creation order.
+            state.absolute = _runtime->nextLayerAbsolute++;
 
-            auto *layerObject = ensureReusableLayerObject(
+            auto *layerObject = ensureAccurateSlaStateLayerLike_0x6C6B48(
                 state.layerObject,
                 layerTreeOwner,
                 targetLayerObject,
-                layerType,
-                false);
+                layerType);
             if(!layerObject) {
                 return nullptr;
             }
@@ -1373,22 +1460,70 @@ namespace motion {
             _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
                                                : std::string{};
 
-        if(auto *layer = resolveNativeLayer(targetLayerObject)) {
-            layer->Update(false);
+        if(!_needsInternalAssignImages) {
             detail::logoChainTraceLogf(
-                motionPath, "post.sla.accurate", "0x6C9CA8/0x6CE938",
-                _clampedEvalTime,
-                "route=renderTarget.Update(false) size={}x{}",
-                layer->GetWidth(), layer->GetHeight());
+                motionPath, "post.sla.accurate", "0x6CE938",
+                _clampedEvalTime, "needsInternalAssignImages=0");
             return true;
         }
-        detail::logoChainTraceCheck(
-            motionPath, "post.sla.accurate", "0x6C9CA8/0x6CE938",
-            _clampedEvalTime,
-            "accurate SLA should update the resolved render target",
-            "no post-update target", false,
-            "accurate SLA render finished without a target update");
-        return false;
+
+        int canvasWidth = 0;
+        int canvasHeight = 0;
+        if(!queryLayerCanvasSize(targetLayerObject, canvasWidth, canvasHeight)) {
+            detail::logoChainTraceCheck(
+                motionPath, "post.sla.accurate", "0x6CE938",
+                _clampedEvalTime,
+                "target layer width/height should be readable before piledCopy",
+                "target-size=0", false,
+                "sub_6CE938 failed to query target Layer width/height");
+            return false;
+        }
+
+        tTJSVariant ownerStorage;
+        iTJSDispatch2 *layerTreeOwner =
+            resolveLayerWindowObjectLike_0x6CE19C(targetLayerObject,
+                                                  ownerStorage);
+        if(!layerTreeOwner) {
+            layerTreeOwner = resolveMainWindowOwnerObject();
+        }
+
+        iTJSDispatch2 *internalLayerObject = ensureReusableLayerObject(
+            _runtime->internalRenderLayer, layerTreeOwner, targetLayerObject,
+            static_cast<tTVPLayerType>(ltAlpha), false);
+        if(!internalLayerObject ||
+           !setLayerSizeLike_0x6CE19C(internalLayerObject, canvasWidth,
+                                      canvasHeight)) {
+            detail::logoChainTraceCheck(
+                motionPath, "post.sla.accurate", "0x6CE19C/0x6CE938",
+                _clampedEvalTime,
+                "player+696 internal Layer should exist and match target size",
+                "internal-layer-setup-failed", false,
+                "sub_6CE19C failed to create/size the internal render layer");
+            return false;
+        }
+
+        try {
+            const bool ok = piledCopyLayerLike_0x6CE938(
+                internalLayerObject, targetLayerObject, canvasWidth,
+                canvasHeight);
+            detail::logoChainTraceCheck(
+                motionPath, "post.sla.accurate", "0x6CE938",
+                _clampedEvalTime,
+                fmt::format(
+                    "internalLayer.piledCopy(0,0,target,0,0,{},{})",
+                    canvasWidth, canvasHeight),
+                ok ? "piledCopy" : "piledCopy-failed", ok,
+                "sub_6CE938 accurate SLA post-copy diverged");
+            return ok;
+        } catch(...) {
+            detail::logoChainTraceCheck(
+                motionPath, "post.sla.accurate", "0x6CE938",
+                _clampedEvalTime,
+                "internalLayer.piledCopy should not throw",
+                "piledCopy-threw", false,
+                "sub_6CE938 threw while copying target into player+696");
+            return false;
+        }
     }
 
 } // namespace motion
