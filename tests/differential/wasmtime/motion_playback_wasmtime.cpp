@@ -922,7 +922,7 @@ iTJSDispatch2 *resolveCheckpointLayerObject(void *object,
     return nullptr;
 }
 
-void motionTraceRenderAccurateSlaExecutePostUploadCheckpoint(
+void motionTraceRenderAccurateSlaExecutePostLayerCheckpoint(
     motion::Player *player, void *renderLayerObject, const char *samplePoint) {
     const int frameId = renderFrameIdFor(player);
     if(frameId < 0 || !captureFrameEnabled(frameId)) return;
@@ -947,9 +947,7 @@ void motionTraceRenderAccurateSlaExecutePostUploadCheckpoint(
                            void *sourceObject,
                            iTJSDispatch2 *resolvedObject,
                            tTJSNI_BaseLayer *nativeLayer,
-                           iTVPLayerManager *manager,
-                           iTVPBaseBitmap *drawBuffer,
-                           iTVPTexture2D *texture,
+                           const void *image,
                            int rowBytes,
                            int sourcePitch,
                            int failedRow = -1) {
@@ -966,20 +964,12 @@ void motionTraceRenderAccurateSlaExecutePostUploadCheckpoint(
         diag += ptrHex(resolvedObject);
         diag += ",\"nativeLayer\":";
         diag += ptrHex(nativeLayer);
-        diag += ",\"manager\":";
-        diag += ptrHex(manager);
-        diag += ",\"drawBuffer\":";
-        diag += ptrHex(drawBuffer);
-        diag += ",\"texture\":";
-        diag += ptrHex(texture);
+        diag += ",\"image\":";
+        diag += ptrHex(image);
         diag += ",\"rowBytes\":";
         diag += std::to_string(rowBytes);
         diag += ",\"sourcePitch\":";
         diag += std::to_string(sourcePitch);
-        if(texture) {
-            diag += ",\"format\":";
-            diag += std::to_string(static_cast<int>(texture->GetFormat()));
-        }
         if(failedRow >= 0) {
             diag += ",\"failedRow\":";
             diag += std::to_string(failedRow);
@@ -990,19 +980,17 @@ void motionTraceRenderAccurateSlaExecutePostUploadCheckpoint(
     auto fail = [&](const std::string &message,
                     iTJSDispatch2 *resolvedObject = nullptr,
                     tTJSNI_BaseLayer *nativeLayer = nullptr,
-                    iTVPLayerManager *manager = nullptr,
-                    iTVPBaseBitmap *drawBuffer = nullptr,
-                    iTVPTexture2D *texture = nullptr,
+                    const void *image = nullptr,
                     int width = 0,
                     int height = 0,
-                    int pitch = 0) {
+                    int pitch = 0,
+                    int sourcePitch = 0) {
         appendImageCheckpointEvent(
             player, phase, samplePoint, false, {}, message,
             width, height, pitch,
-            diagnostics("LayerManager.UpdateToDrawDevice.execute-post",
+            diagnostics("target-layer-main-image.execute-post",
                         candidateObject, resolvedObject, nativeLayer,
-                        manager, drawBuffer, texture, pitch,
-                        texture ? texture->GetPitch() : 0),
+                        image, pitch, sourcePitch),
             frameId, "rgba32");
     };
 
@@ -1022,17 +1010,33 @@ void motionTraceRenderAccurateSlaExecutePostUploadCheckpoint(
              layerObject, nativeLayer);
         return;
     }
+    struct CallOnPaintSuppressor {
+        tTJSNI_BaseLayer *layer = nullptr;
+        bool saved = false;
+        explicit CallOnPaintSuppressor(tTJSNI_BaseLayer *l) : layer(l) {
+            if(layer) {
+                saved = layer->GetCallOnPaint();
+                layer->SetCallOnPaint(false);
+            }
+        }
+        ~CallOnPaintSuppressor() {
+            if(layer) {
+                layer->SetCallOnPaint(saved);
+            }
+        }
+    } suppressOnPaint(nativeLayer);
     manager->UpdateToDrawDevice();
+
     auto *drawBuffer = manager->GetDrawBuffer();
     if(!drawBuffer) {
         fail("accurate SLA execute_post draw buffer is null",
-             layerObject, nativeLayer, manager);
+             layerObject, nativeLayer);
         return;
     }
     auto *texture = drawBuffer->GetTexture();
     if(!texture) {
         fail("accurate SLA execute_post draw buffer texture is null",
-             layerObject, nativeLayer, manager, drawBuffer);
+             layerObject, nativeLayer, drawBuffer);
         return;
     }
 
@@ -1042,8 +1046,8 @@ void motionTraceRenderAccurateSlaExecutePostUploadCheckpoint(
     const int rowBytes = width * 4;
     if(width != 1920 || height != 1080 || sourcePitch < rowBytes) {
         fail("accurate SLA execute_post texture has invalid dimensions",
-             layerObject, nativeLayer, manager, drawBuffer, texture,
-             width, height, rowBytes);
+             layerObject, nativeLayer, texture, width, height, rowBytes,
+             sourcePitch);
         return;
     }
 
@@ -1056,9 +1060,9 @@ void motionTraceRenderAccurateSlaExecutePostUploadCheckpoint(
         ok ? std::string()
            : std::string("failed to write accurate SLA execute_post draw buffer checkpoint"),
         width, height, rowBytes,
-        diagnostics("LayerManager.UpdateToDrawDevice.execute-post",
-                    candidateObject, layerObject, nativeLayer, manager,
-                    drawBuffer, texture, rowBytes, sourcePitch, failedRow),
+        diagnostics("LayerManager.UpdateToDrawDevice.execute-post.no-onPaint",
+                    candidateObject, layerObject, nativeLayer, texture,
+                    rowBytes, sourcePitch, failedRow),
         frameId, "rgba32");
 }
 
@@ -1584,9 +1588,9 @@ MotionTraceRenderExecuteScope::~MotionTraceRenderExecuteScope() {
                       "Player::executeLayerRenderCommands.leave",
                       payload, diagnostics);
     if(accurateSla) {
-        motionTraceRenderAccurateSlaExecutePostUploadCheckpoint(
+        motionTraceRenderAccurateSlaExecutePostLayerCheckpoint(
             _player, _renderLayerObject,
-            "Player::executeLayerRenderCommands.leave.after-layer-manager-update");
+            "Player::executeLayerRenderCommands.leave.after-layer-manager-update-no-onPaint");
     }
 }
 
