@@ -3027,8 +3027,13 @@ function installHook() {
             if (marker.value !== '__krkr2_motion_post_draw') return;
             let markerFrameId = postDrawFrameIdFromMarkerArgs(
                 argArray, numParams);
-            if (!Number.isInteger(markerFrameId)) {
-                markerFrameId = renderFrameIdFor(null);
+            if (!Number.isInteger(markerFrameId) ||
+                !captureFrameEnabled(markerFrameId)) {
+                const tracedFrameId = renderFrameIdFor(null);
+                if (Number.isInteger(tracedFrameId) &&
+                    captureFrameEnabled(tracedFrameId)) {
+                    markerFrameId = tracedFrameId;
+                }
             }
             if (!Number.isInteger(markerFrameId) ||
                 !captureFrameEnabled(markerFrameId)) {
