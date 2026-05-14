@@ -165,6 +165,7 @@ let saveLayerVisualReadbackFrameStart = 0;
 let saveLayerVisualReadbackFrameCount = 1;
 let captureFrameStart = 0;
 let captureFrameCount = -1;
+let renderCaseFrameBases = {};
 let activeSaveLayerImageContexts = [];
 let activePngSaveContexts = [];
 let activeRenderExecuteContexts = [];
@@ -1881,7 +1882,10 @@ function postDrawFrameIdFromMarkerArgs(argArray, numParams) {
     if (!caseArg.variant || !frameArg.scalar) return null;
     const caseText = readVariantText(caseArg.variant);
     let baseFrame = null;
-    if (caseText.value === 'yuzulogo') {
+    if (Object.prototype.hasOwnProperty.call(
+            renderCaseFrameBases, caseText.value)) {
+        baseFrame = renderCaseFrameBases[caseText.value];
+    } else if (caseText.value === 'yuzulogo') {
         baseFrame = 0;
     } else if (caseText.value === 'm2logo') {
         baseFrame = 243;
@@ -4030,6 +4034,16 @@ rpc.exports = {
         captureFrameCount =
             options && Number.isInteger(options.captureFrameCount)
                 ? options.captureFrameCount : -1;
+        renderCaseFrameBases = {};
+        if (options && options.renderCaseFrameBases &&
+            typeof options.renderCaseFrameBases === 'object') {
+            Object.keys(options.renderCaseFrameBases).forEach((caseId) => {
+                const frameBase = options.renderCaseFrameBases[caseId];
+                if (Number.isInteger(frameBase)) {
+                    renderCaseFrameBases[String(caseId)] = frameBase;
+                }
+            });
+        }
         events = [];
         frameCounter = 0;
         seqCounter = 0;

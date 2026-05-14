@@ -168,6 +168,7 @@ class FridaMotionStageTracer:
         save_layer_visual_readback_frame_count: int = 1,
         capture_frame_start: int = 0,
         capture_frame_count: int = -1,
+        render_case_frame_bases: dict[str, int] | None = None,
     ) -> None:
         if self._api is None:
             raise RuntimeError("tracer not attached; call attach() first")
@@ -183,6 +184,11 @@ class FridaMotionStageTracer:
                 save_layer_visual_readback_frame_count),
             "captureFrameStart": int(capture_frame_start),
             "captureFrameCount": int(capture_frame_count),
+            "renderCaseFrameBases": {
+                str(case_id): int(frame_base)
+                for case_id, frame_base in (
+                    render_case_frame_bases or {}).items()
+            },
         })
 
     def stop_record(self) -> list[dict[str, Any]]:

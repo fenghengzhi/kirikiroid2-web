@@ -330,6 +330,20 @@ def build_case_segments(
     return out
 
 
+def render_case_frame_bases(
+    specs: list[dict[str, Any]],
+    mpb,
+    capture_window: FrameCaptureWindow,
+) -> dict[str, int]:
+    specs_by_id = {str(spec["id"]): spec for spec in specs}
+    segment_order = mpb.segment_order_for_specs(specs_by_id)
+    return {
+        str(case["caseId"]): int(case["fullFrameIdRange"][0])
+        for case in captured_case_ranges(
+            specs_by_id, segment_order, capture_window)
+    }
+
+
 def assign_case_index(seq: int, case_segments: list[dict[str, Any]]) -> int:
     if not case_segments:
         raise RuntimeError("no case segments available for event assignment")
@@ -1383,6 +1397,8 @@ def main(argv: list[str]) -> int:
                     capture_frame_count=(
                         -1 if not capture_window.enabled
                         else capture_window.count),
+                    render_case_frame_bases=render_case_frame_bases(
+                        specs, mpb, capture_window),
                 )
                 engine.tjs_init()
                 mpb.trigger_startup(engine, remote_game)
