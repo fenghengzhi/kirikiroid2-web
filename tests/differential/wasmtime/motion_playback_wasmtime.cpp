@@ -54,6 +54,8 @@ int g_save_layer_visual_readback_frame_start = 0;
 int g_save_layer_visual_readback_frame_count = 1;
 int g_capture_frame_start = 0;
 int g_capture_frame_count = -1;
+int g_yuzulogo_frame_base = 0;
+int g_m2logo_frame_base = 243;
 constexpr const char *kRenderStageCaptureRoot = "/render_stage_capture";
 
 struct TraceState {
@@ -2251,9 +2253,9 @@ int postDrawFrameIdFromMarker(tjs_int numparams, tTJSVariant **param) {
     const ttstr caseId(*param[1]);
     int base = -1;
     if(caseId == TJS_W("yuzulogo")) {
-        base = 0;
+        base = g_yuzulogo_frame_base;
     } else if(caseId == TJS_W("m2logo")) {
-        base = 243;
+        base = g_m2logo_frame_base;
     }
     if(base < 0) return -1;
     const auto localFrame = static_cast<int>(param[2]->AsInteger());
@@ -2322,6 +2324,19 @@ void krkr2_wasm_set_render_capture_frame_filter(int frame_start,
                                                 int frame_count) {
     g_capture_frame_start = frame_start;
     g_capture_frame_count = frame_count;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void krkr2_wasm_set_render_case_frame_base(const char *case_id,
+                                           int case_id_len,
+                                           int frame_base) {
+    if(!case_id || case_id_len <= 0) return;
+    const std::string id(case_id, static_cast<std::size_t>(case_id_len));
+    if(id == "yuzulogo") {
+        g_yuzulogo_frame_base = frame_base;
+    } else if(id == "m2logo") {
+        g_m2logo_frame_base = frame_base;
+    }
 }
 
 EMSCRIPTEN_KEEPALIVE

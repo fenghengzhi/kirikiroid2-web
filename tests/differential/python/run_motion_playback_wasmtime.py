@@ -1598,6 +1598,8 @@ def drive_full_guest(wasm_path: Path, startup_xp3: Path,
                 capture_frame_count=(
                     -1 if not capture_window.enabled
                     else capture_window.count),
+                render_case_frame_bases=_render_case_frame_bases(
+                    specs, mpb, capture_window),
                 render_stage_out=render_stage_out)
             if framebuffer_dir is not None:
                 manifest = _collect_wasmtime_framebuffer_capture(
@@ -1632,6 +1634,8 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
                                      save_layer_visual_readback_frame_count: int = 1,
                                      capture_frame_start: int = 0,
                                      capture_frame_count: int = -1,
+                                     render_case_frame_bases:
+                                     dict[str, int] | None = None,
                                      render_stage_out: Path | None = None
                                      ) -> dict[str, Any]:
     store, exports, gl_provider, env_provider = instantiate_module(
@@ -1656,6 +1660,11 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
             "krkr2_wasm_set_render_capture_frame_filter"]
     except Exception:
         set_render_capture_frame_filter = None
+    try:
+        set_render_case_frame_base = exports[
+            "krkr2_wasm_set_render_case_frame_base"]
+    except Exception:
+        set_render_case_frame_base = None
     try:
         get_motion_trace_frame_count = exports[
             "krkr2_wasm_get_motion_trace_frame_count"]
@@ -1695,6 +1704,14 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
     if set_render_capture_frame_filter is not None:
         set_render_capture_frame_filter(
             store, int(capture_frame_start), int(capture_frame_count))
+    if set_render_case_frame_base is not None and render_case_frame_bases:
+        for case_id, frame_base in sorted(render_case_frame_bases.items()):
+            encoded = str(case_id).encode("utf-8")
+            call_with_guest_bytes(
+                store, memory, malloc, free, encoded,
+                lambda ptr, length, base=int(frame_base):
+                    set_render_case_frame_base(store, ptr, length, base),
+            )
 
     err = read_string(store, memory,
                       exports["krkr2_wasm_get_error_ptr"](store),
@@ -2058,6 +2075,20 @@ def render_case_segments(
             "frames": selected,
         })
     return out
+
+
+def _render_case_frame_bases(
+    specs: list[dict],
+    mpb,
+    capture_window: FrameCaptureWindow,
+) -> dict[str, int]:
+    specs_by_id = {str(spec["id"]): spec for spec in specs}
+    segment_order = mpb.segment_order_for_specs(specs_by_id)
+    return {
+        str(case["caseId"]): int(case["fullFrameIdRange"][0])
+        for case in captured_case_ranges(
+            specs_by_id, segment_order, capture_window)
+    }
 
 
 def _assign_render_case(ev: dict[str, Any],
