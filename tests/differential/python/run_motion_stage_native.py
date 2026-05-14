@@ -257,12 +257,7 @@ def build_case_segments(
     mpb,
 ) -> list[dict[str, Any]]:
     specs_by_id = {s["id"]: s for s in specs}
-    unknown = [sid for sid in specs_by_id if sid not in mpb.SEGMENT_ORDER]
-    if unknown:
-        raise ValueError(
-            f"unknown motion_playback spec id(s): {unknown}. Expected ids "
-            f"are fixed by logo_test_oracle.xp3: {mpb.SEGMENT_ORDER}."
-        )
+    segment_order = mpb.segment_order_for_specs(specs_by_id)
 
     frames = trace_flatten_frames(events)
     segments = segment_trace_frames(frames)
@@ -275,9 +270,7 @@ def build_case_segments(
         )
 
     out: list[dict[str, Any]] = []
-    for i, spec_id in enumerate(mpb.SEGMENT_ORDER):
-        if spec_id not in specs_by_id:
-            continue
+    for i, spec_id in enumerate(segment_order):
         wanted = int(specs_by_id[spec_id]["frames"])
         frames_for_case = substantive[i]["frames"]
         if len(frames_for_case) < wanted:
@@ -1374,12 +1367,13 @@ def main(argv: list[str]) -> int:
         case_segments = build_case_segments(events, specs, mpb)
         segment_lengths = [len(seg["frames"]) for seg in case_segments]
         print(f"[native-stage] trace_flatten segments={segment_lengths}")
-        if segment_lengths != [int(spec["frames"]) for spec in
-                               sorted(specs, key=lambda s:
-                                      mpb.SEGMENT_ORDER.index(s["id"]))]:
+        segment_order = mpb.segment_order_for_specs(specs)
+        expected_by_id = {spec["id"]: spec for spec in specs}
+        if segment_lengths != [int(expected_by_id[spec_id]["frames"])
+                               for spec_id in segment_order]:
             raise RuntimeError(
                 f"native trace_flatten segment lengths {segment_lengths} do "
-                "not match expected [241, 91]"
+                f"not match expected {segment_order}"
             )
         payloads = build_native_payloads(
             stages=sorted(set(stages) | {"trace_flatten"}),

@@ -73,6 +73,21 @@ TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
 TRACE_FLATTEN_ABS_FLOAT_LIMIT = 1_000_000.0
 
 
+def segment_order_for_specs(specs_or_by_id) -> tuple[str, ...]:
+    specs_by_id = (
+        {str(k): v for k, v in specs_or_by_id.items()}
+        if isinstance(specs_or_by_id, dict)
+        else {str(spec["id"]): spec for spec in specs_or_by_id}
+    )
+    unknown = [sid for sid in specs_by_id if sid not in SEGMENT_ORDER]
+    if unknown:
+        raise ValueError(
+            f"unknown motion_playback spec id(s): {unknown}. Expected ids "
+            f"are fixed by logo_test oracle fixtures: {SEGMENT_ORDER}."
+        )
+    return tuple(sid for sid in SEGMENT_ORDER if sid in specs_by_id)
+
+
 # Deterministic oracle-recording xp3. Its startup.tjs keeps the same
 # KAGParser -> AffineLayer -> AffineSourceMotion -> onPaint() playback path
 # as logo_test.xp3, with fixed delta timing so fresh oracles remain
@@ -307,12 +322,19 @@ def ensure_oracle_renderer_software(
         ) from exc
 
 
-def _ensure_logo_test_xp3_pushed(serial: str | None) -> str:
-    """Push the oracle bootstrap xp3 (fixed-step startup.tjs wrapper
-    around logo_test's yuzulogo + m2logo motions) to a path that
-    TVPCheckStartupPath accepts. Returns the device-side absolute path."""
+def _ensure_logo_test_xp3_pushed(
+    serial: str | None,
+    startup_xp3: Path | None = None,
+) -> str:
+    """Push the oracle bootstrap xp3 to a device startup path.
+
+    `startup_xp3` lets callers run the single-motion fixtures while keeping the
+    old combined logo_test_oracle.xp3 path as the default.
+    """
     repo_root = Path(__file__).resolve().parents[4]
-    local = repo_root / _LOGO_TEST_XP3_REL
+    local = startup_xp3 or repo_root / _LOGO_TEST_XP3_REL
+    if not local.is_absolute():
+        local = repo_root / local
     if not local.exists():
         raise FileNotFoundError(
             f"oracle bootstrap xp3 missing: {local}. "
@@ -323,8 +345,9 @@ def _ensure_logo_test_xp3_pushed(serial: str | None) -> str:
     # setup and unreadable to the app under SELinux.
     remote_dir = _REMOTE_STARTUP_FILES_DIR
     _adb_shell_root(serial, ["mkdir", "-p", remote_dir])
-    remote_path = f"{remote_dir}/logo_test_oracle.xp3"
-    tmp_path = "/data/local/tmp/krkr2-logo_test_oracle.xp3"
+    remote_name = local.name
+    remote_path = f"{remote_dir}/{remote_name}"
+    tmp_path = f"/data/local/tmp/krkr2-{remote_name}"
     push_fixture(serial, local, tmp_path)
     _adb_shell_root(serial, ["cp", tmp_path, remote_path])
     _adb_shell_root(serial, ["chmod", "644", remote_path])
@@ -337,6 +360,7 @@ def _prepare_framebuffer_capture(
     specs_by_id: dict[str, dict],
     framebuffer_dir: Path,
     capture_window: FrameCaptureWindow | None = None,
+    startup_xp3: Path | None = None,
 ) -> tuple[str, str]:
     remote_capture_root = _REFERENCE_RENDER_STAGE_CAPTURE_ROOT
     _adb_shell_root(serial, ["rm", "-rf", remote_capture_root])
@@ -347,7 +371,8 @@ def _prepare_framebuffer_capture(
             record_only_frame = None
             record_first_frames = None
         capture_window = frame_capture_window_from_args(_Args(), total_frames)
-    for case in captured_case_ranges(specs_by_id, SEGMENT_ORDER,
+    segment_order = segment_order_for_specs(specs_by_id)
+    for case in captured_case_ranges(specs_by_id, segment_order,
                                      capture_window):
         spec_id = str(case["caseId"])
         for phase in _RENDER_STAGE_CAPTURE_SURFACES:
@@ -357,7 +382,7 @@ def _prepare_framebuffer_capture(
             )
     _chown_to_app_files_owner(serial, remote_capture_root)
 
-    remote_xp3 = _ensure_logo_test_xp3_pushed(serial)
+    remote_xp3 = _ensure_logo_test_xp3_pushed(serial, startup_xp3)
     return remote_xp3, remote_capture_root
 
 
@@ -366,6 +391,7 @@ def _prepare_render_stage_capture(
     specs_by_id: dict[str, dict],
     artifact_dir: Path,
     capture_window: FrameCaptureWindow | None = None,
+    startup_xp3: Path | None = None,
 ) -> tuple[str, str]:
     remote_capture_root = _REFERENCE_RENDER_STAGE_CAPTURE_ROOT
     _adb_shell_root(serial, ["rm", "-rf", remote_capture_root])
@@ -376,7 +402,8 @@ def _prepare_render_stage_capture(
             record_only_frame = None
             record_first_frames = None
         capture_window = frame_capture_window_from_args(_Args(), total_frames)
-    for case in captured_case_ranges(specs_by_id, SEGMENT_ORDER,
+    segment_order = segment_order_for_specs(specs_by_id)
+    for case in captured_case_ranges(specs_by_id, segment_order,
                                      capture_window):
         spec_id = str(case["caseId"])
         for phase in _RENDER_STAGE_CAPTURE_SURFACES:
@@ -386,7 +413,7 @@ def _prepare_render_stage_capture(
             )
     _chown_to_app_files_owner(serial, remote_capture_root)
 
-    remote_xp3 = _ensure_logo_test_xp3_pushed(serial)
+    remote_xp3 = _ensure_logo_test_xp3_pushed(serial, startup_xp3)
     return remote_xp3, remote_capture_root
 
 
@@ -493,7 +520,8 @@ def _write_framebuffer_manifest(
             _Args(), total_spec_frames)
     cases: list[dict[str, Any]] = []
     total_frames = 0
-    for case in captured_case_ranges(specs_by_id, SEGMENT_ORDER,
+    segment_order = segment_order_for_specs(specs_by_id)
+    for case in captured_case_ranges(specs_by_id, segment_order,
                                      capture_window):
         spec_id = str(case["caseId"])
         spec = case["spec"]
@@ -547,7 +575,7 @@ def _write_framebuffer_manifest(
             "xp3": "logo_test_oracle.xp3",
             "window": {"width": 1920, "height": 1080},
             "deltaMs": 1000.0 / 60.0,
-            "segmentOrder": list(SEGMENT_ORDER),
+            "segmentOrder": list(segment_order),
         },
         "summary": {
             "caseCount": len(cases),
@@ -595,7 +623,8 @@ def _collect_framebuffer_capture(
             import shutil
 
             shutil.rmtree(old_case_dir)
-    for case in captured_case_ranges(specs_by_id, SEGMENT_ORDER,
+    segment_order = segment_order_for_specs(specs_by_id)
+    for case in captured_case_ranges(specs_by_id, segment_order,
                                      capture_window):
         spec_id = str(case["caseId"])
         local_case_dir = framebuffer_dir / spec_id
@@ -629,7 +658,8 @@ def _collect_render_stage_capture(
             record_only_frame = None
             record_first_frames = None
         capture_window = frame_capture_window_from_args(_Args(), total_frames)
-    captured_cases = captured_case_ranges(specs_by_id, SEGMENT_ORDER,
+    segment_order = segment_order_for_specs(specs_by_id)
+    captured_cases = captured_case_ranges(specs_by_id, segment_order,
                                           capture_window)
     _wait_for_remote_render_stage_files(
         serial, remote_capture_root, min_files=len(captured_cases),
@@ -637,10 +667,6 @@ def _collect_render_stage_capture(
 
     artifact_dir.mkdir(parents=True, exist_ok=True)
     images_root = artifact_dir / "images"
-    if images_root.exists():
-        import shutil
-
-        shutil.rmtree(images_root)
     images_root.mkdir(parents=True, exist_ok=True)
     cases: list[dict[str, Any]] = []
     total_images = 0
@@ -1138,14 +1164,9 @@ def record_all_oracles(
     serial: str | None = None,
     playback_timeout: float = 60.0,
     framebuffer_dir: Path | None = None,
+    startup_xp3: Path | None = None,
 ) -> dict[str, list[dict]]:
-    """Capture per-frame layer state for all specs in a single playback.
-
-    `logo_test_oracle.xp3`'s startup.tjs plays yuzulogo then m2logo
-    back-to-back; we can only trigger startupFrom once per session, so this
-    adapter deliberately records every spec in one go rather than per-
-    spec. Returns `{spec_id: frames_list}`.
-    """
+    """Capture per-frame layer state for the requested specs."""
     global _startup_triggered
     _startup_triggered = False
 
@@ -1153,19 +1174,14 @@ def record_all_oracles(
     from oracle_runner.frida_motion_stage_tracer import FridaMotionStageTracer
 
     specs_by_id = {s["id"]: s for s in specs}
-    unknown = [sid for sid in specs_by_id if sid not in SEGMENT_ORDER]
-    if unknown:
-        raise ValueError(
-            f"unknown motion_playback spec id(s): {unknown}. "
-            f"Expected ids are fixed by logo_test.xp3's startup.tjs: "
-            f"{SEGMENT_ORDER}.")
+    segment_order = segment_order_for_specs(specs_by_id)
 
     framebuffer_remote_root: str | None = None
     if framebuffer_dir is not None:
         remote_game, framebuffer_remote_root = _prepare_framebuffer_capture(
-            serial, specs_by_id, framebuffer_dir)
+            serial, specs_by_id, framebuffer_dir, startup_xp3=startup_xp3)
     else:
-        remote_game = _ensure_logo_test_xp3_pushed(serial)
+        remote_game = _ensure_logo_test_xp3_pushed(serial, startup_xp3)
 
     ensure_oracle_renderer_software(
         serial, remote_game=remote_game, write_global=False)
@@ -1181,26 +1197,24 @@ def record_all_oracles(
     # Filter out any "warmup" segments that fire before startup.tjs's
     # own Motion.Player instances exist (e.g. if libkrkr2 runs an
     # internal Motion.Player for an intro clip). The startup.tjs
-    # playback guarantees two Motion.Player instances with ≥ 60 frames
+    # playback guarantees requested Motion.Player instances with >= 60 frames
     # each; anything shorter is noise.
     substantive = [s for s in segments if len(s["frames"]) >= 30]
-    if set(specs_by_id) == set(SEGMENT_ORDER) and \
-            len(substantive) != len(SEGMENT_ORDER):
+    if set(specs_by_id) == set(segment_order) and \
+            len(substantive) != len(segment_order):
         raise RuntimeError(
-            f"expected exactly {len(SEGMENT_ORDER)} substantive "
+            f"expected exactly {len(segment_order)} substantive "
             f"trace_flatten segment(s), captured {len(substantive)} "
             f"(raw segments: {[len(s['frames']) for s in segments]})")
     if len(substantive) < len(specs_by_id):
         raise RuntimeError(
             f"only {len(substantive)} substantive trace_flatten segment(s) "
             f"captured (raw segments: {[len(s['frames']) for s in segments]}). "
-            f"startup.tjs should produce two (yuzulogo + m2logo); check "
+            f"startup.tjs should produce {segment_order}; check "
             f"logcat for Motion.Player creation or GL-surface failures.")
 
     results: dict[str, list[dict]] = {}
-    for i, spec_id in enumerate(SEGMENT_ORDER):
-        if spec_id not in specs_by_id:
-            continue
+    for i, spec_id in enumerate(segment_order):
         spec = specs_by_id[spec_id]
         wanted = int(spec["frames"])
         frames = substantive[i]["frames"]

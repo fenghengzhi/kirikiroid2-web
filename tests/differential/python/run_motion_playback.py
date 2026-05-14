@@ -36,6 +36,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    default=str(REPO_ROOT / "tests" / "differential" /
                                "traces" / "motion_playback"),
                    help="Directory for recorded oracle JSONs")
+    p.add_argument("--startup-xp3",
+                   default=str(REPO_ROOT / "reference" / "xp3" /
+                               "logo_test_oracle.xp3"),
+                   help="Host path to the oracle startup XP3")
+    p.add_argument("--case", action="append", default=[],
+                   help="Motion case id to record; repeat for multiple cases. "
+                        "Defaults to all specs in --spec-dir")
     p.add_argument("--record-oracle", action="store_true",
                    help="Re-record disk goldens from a live APK harness "
                         "(required; requires --serial)")
@@ -70,6 +77,18 @@ def load_specs(spec_dir: Path) -> list[dict]:
     return specs
 
 
+def filter_specs(specs: list[dict], case_ids: list[str]) -> list[dict]:
+    if not case_ids:
+        return specs
+    wanted = {str(case_id) for case_id in case_ids}
+    selected = [spec for spec in specs if str(spec.get("id")) in wanted]
+    found = {str(spec.get("id")) for spec in selected}
+    missing = sorted(wanted - found)
+    if missing:
+        raise ValueError(f"unknown motion_playback case id(s): {missing}")
+    return selected
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     spec_dir = Path(args.spec_dir)
@@ -91,7 +110,11 @@ def main(argv: list[str]) -> int:
         print(f"spec dir not found: {spec_dir}", file=sys.stderr)
         return 2
 
-    specs = load_specs(spec_dir)
+    try:
+        specs = filter_specs(load_specs(spec_dir), args.case)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if not specs:
         print(f"no specs in {spec_dir}", file=sys.stderr)
         return 0
@@ -115,12 +138,14 @@ def main(argv: list[str]) -> int:
         # HarnessActivity starts: Redroid CI can hang before READY there, and
         # libkrkr2's renderer default is already software.
         with AdbHarnessEngine(serial=args.serial) as engine:
-            print(f"[record] capturing all {len(specs)} specs in one "
-                  f"playback (Frida-hooked Motion.Player progress)")
+            print(f"[record] capturing {len(specs)} spec(s) from "
+                  f"{Path(args.startup_xp3)} "
+                  "(Frida-hooked Motion.Player progress)")
             all_frames = mpb.record_all_oracles(
                 engine, specs, serial=args.serial,
                 playback_timeout=args.playback_timeout,
-                framebuffer_dir=framebuffer_dir)
+                framebuffer_dir=framebuffer_dir,
+                startup_xp3=Path(args.startup_xp3))
         for spec in specs:
             frames = all_frames.get(spec["id"])
             if frames is None:

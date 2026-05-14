@@ -169,17 +169,22 @@ jobs:
         run: |
           source "${EMSDK}/emsdk_env.sh"
           rm -rf tests/differential/artifacts/motion_playback_wasmtime_traces
+          rm -rf tests/differential/artifacts/motion_playback_render_stages_wasmtime
           mkdir -p tests/differential/artifacts/motion_playback_wasmtime_traces
-          python3 tests/differential/python/run_motion_playback_wasmtime.py \
-            --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm \
-            --startup-xp3 reference/xp3/logo_test_oracle.xp3 \
-            --skip-golden-diff \
-            --write-port-traces tests/differential/artifacts/motion_playback_wasmtime_traces \
-            --record-render-stages \
-            --record-render-step-checkpoints \
-            --checkpoint-render-only \
-            --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime \
-            --lldb-timeout 1200
+          for case in yuzulogo m2logo; do
+            xp3="reference/xp3/logo_test_oracle_${case}.xp3"
+            python3 tests/differential/python/run_motion_playback_wasmtime.py \
+              --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm \
+              --startup-xp3 "${xp3}" \
+              --case "${case}" \
+              --skip-golden-diff \
+              --write-port-traces tests/differential/artifacts/motion_playback_wasmtime_traces \
+              --record-render-stages \
+              --record-render-step-checkpoints \
+              --checkpoint-render-only \
+              --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_wasmtime \
+              --lldb-timeout 1200
+          done
 
       - name: Upload motion_playback Wasmtime traces
         uses: actions/upload-artifact@v4
@@ -575,9 +580,24 @@ jobs:
             fi
 
             set +e
-            python3 tests/differential/python/run_motion_playback.py \
-              --record-oracle --serial "${ANDROID_SERIAL}" \
-              --playback-timeout 300 2>&1 | tee "${log_dir}/attempt-${attempt}.log"
+            {
+              for case in yuzulogo m2logo; do
+                xp3="reference/xp3/logo_test_oracle_${case}.xp3"
+                echo "--- recording ${case} from ${xp3} ---"
+                adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
+                adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
+                adb -s "${ANDROID_SERIAL}" logcat -c || true
+                python3 tests/differential/python/run_motion_playback.py \
+                  --record-oracle --serial "${ANDROID_SERIAL}" \
+                  --startup-xp3 "${xp3}" \
+                  --case "${case}" \
+                  --playback-timeout 300
+                case_rc=$?
+                if [ "${case_rc}" -ne 0 ]; then
+                  exit "${case_rc}"
+                fi
+              done
+            } 2>&1 | tee "${log_dir}/attempt-${attempt}.log"
             record_rc=${PIPESTATUS[0]}
             set -e
             echo "::endgroup::"
@@ -646,16 +666,21 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf tests/differential/artifacts/motion_playback_render_stages_oracle
-          adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
-          adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
-          adb -s "${ANDROID_SERIAL}" logcat -c || true
-          python3 tests/differential/python/run_motion_stage_oracle.py \
-            --serial "${ANDROID_SERIAL}" \
-            --stage render_path \
-            --record-render-step-checkpoints \
-            --checkpoint-render-only \
-            --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_oracle \
-            --playback-timeout 300
+          for case in yuzulogo m2logo; do
+            xp3="reference/xp3/logo_test_oracle_${case}.xp3"
+            adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
+            adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true
+            adb -s "${ANDROID_SERIAL}" logcat -c || true
+            python3 tests/differential/python/run_motion_stage_oracle.py \
+              --serial "${ANDROID_SERIAL}" \
+              --startup-xp3 "${xp3}" \
+              --case "${case}" \
+              --stage render_path \
+              --record-render-step-checkpoints \
+              --checkpoint-render-only \
+              --render-artifact-dir tests/differential/artifacts/motion_playback_render_stages_oracle \
+              --playback-timeout 300
+          done
 
       - name: Upload motion_playback oracle record logs
         if: always()

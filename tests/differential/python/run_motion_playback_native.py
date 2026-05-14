@@ -159,13 +159,7 @@ def _segment_events(events: list[dict]) -> list[dict]:
 
 def partition_native_frames(events: list[dict], specs: list[dict], mpb) -> dict:
     specs_by_id = {s["id"]: s for s in specs}
-    unknown = [sid for sid in specs_by_id if sid not in mpb.SEGMENT_ORDER]
-    if unknown:
-        raise ValueError(
-            f"unknown motion_playback spec id(s): {unknown}. "
-            f"Expected ids are fixed by logo_test_oracle.xp3: "
-            f"{mpb.SEGMENT_ORDER}."
-        )
+    segment_order = mpb.segment_order_for_specs(specs_by_id)
 
     segments = _segment_events(events)
     substantive = [s for s in segments if len(s["frames"]) >= 30]
@@ -176,9 +170,7 @@ def partition_native_frames(events: list[dict], specs: list[dict], mpb) -> dict:
         )
 
     results: dict[str, list[dict]] = {}
-    for i, spec_id in enumerate(mpb.SEGMENT_ORDER):
-        if spec_id not in specs_by_id:
-            continue
+    for i, spec_id in enumerate(segment_order):
         spec = specs_by_id[spec_id]
         wanted = int(spec["frames"])
         frames = substantive[i]["frames"]

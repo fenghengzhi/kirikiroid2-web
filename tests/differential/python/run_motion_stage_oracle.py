@@ -69,6 +69,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    default=str(REPO_ROOT / "tests" / "differential" /
                                "traces" / "motion_playback_stages"),
                    help="Output root for staged oracle JSON files")
+    p.add_argument("--startup-xp3",
+                   default=str(REPO_ROOT / "reference" / "xp3" /
+                               "logo_test_oracle.xp3"),
+                   help="Host path to the oracle startup XP3")
+    p.add_argument("--case", action="append", default=[],
+                   help="Motion case id to record; repeat for multiple cases. "
+                        "Defaults to all specs in --spec-dir")
     p.add_argument("--serial", required=True,
                    help="ADB serial for the Android oracle harness")
     p.add_argument("--stage", default="all",
@@ -117,6 +124,19 @@ def load_specs(spec_dir: Path) -> list[dict[str, Any]]:
         json.loads(path.read_text(encoding="utf-8"))
         for path in sorted(spec_dir.glob("*.json"))
     ]
+
+
+def filter_specs(specs: list[dict[str, Any]],
+                 case_ids: list[str]) -> list[dict[str, Any]]:
+    if not case_ids:
+        return specs
+    wanted = {str(case_id) for case_id in case_ids}
+    selected = [spec for spec in specs if str(spec.get("id")) in wanted]
+    found = {str(spec.get("id")) for spec in selected}
+    missing = sorted(wanted - found)
+    if missing:
+        raise ValueError(f"unknown motion_playback case id(s): {missing}")
+    return selected
 
 
 def selected_stages(stage: str) -> list[str]:
@@ -213,12 +233,7 @@ def build_case_segments(
     capture_window: FrameCaptureWindow | None = None,
 ) -> list[dict[str, Any]]:
     specs_by_id = {s["id"]: s for s in specs}
-    unknown = [sid for sid in specs_by_id if sid not in mpb.SEGMENT_ORDER]
-    if unknown:
-        raise ValueError(
-            f"unknown motion_playback spec id(s): {unknown}. Expected ids "
-            f"are fixed by logo_test_oracle.xp3: {mpb.SEGMENT_ORDER}."
-        )
+    segment_order = mpb.segment_order_for_specs(specs_by_id)
 
     if capture_window is not None and capture_window.enabled:
         frames_by_id = {
@@ -228,7 +243,7 @@ def build_case_segments(
         }
         out: list[dict[str, Any]] = []
         for case in captured_case_ranges(
-            specs_by_id, mpb.SEGMENT_ORDER, capture_window):
+            specs_by_id, segment_order, capture_window):
             selected = [
                 frames_by_id[frame_id]
                 for frame_id in case["capturedFrameIds"]
@@ -273,21 +288,20 @@ def build_case_segments(
         )
 
     out: list[dict[str, Any]] = []
+    total_frames = sum(int(s["frames"]) for s in specs_by_id.values())
     full_ranges = {
         case["caseId"]: case
         for case in captured_case_ranges(
-            specs_by_id, mpb.SEGMENT_ORDER,
+            specs_by_id, segment_order,
             FrameCaptureWindow(
                 mode="all",
-                total_frames=sum(int(s["frames"])
-                                 for s in specs_by_id.values()),
+                total_frames=total_frames,
                 start=0,
-                end=sum(int(s["frames"]) for s in specs_by_id.values()),
-            ))
+                end=total_frames,
+            ),
+        )
     }
-    for i, spec_id in enumerate(mpb.SEGMENT_ORDER):
-        if spec_id not in specs_by_id:
-            continue
+    for i, spec_id in enumerate(segment_order):
         wanted = int(specs_by_id[spec_id]["frames"])
         frames_for_case = substantive[i]["frames"]
         if len(frames_for_case) < wanted:
@@ -484,6 +498,133 @@ def render_stage_summary(
     if seqs:
         summary["eventSeqRange"] = [min(seqs), max(seqs)]
     return summary
+
+
+def merge_case_lists(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    order: list[str] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    for item in [*existing, *incoming]:
+        case_id = str(item.get("caseId"))
+        if case_id not in by_id:
+            order.append(case_id)
+        by_id[case_id] = item
+    return [by_id[case_id] for case_id in order]
+
+
+def count_manifest_images(cases: list[dict[str, Any]]) -> int:
+    total = 0
+    for case in cases:
+        phases = case.get("phases", {})
+        if not isinstance(phases, dict):
+            continue
+        for images in phases.values():
+            if isinstance(images, list):
+                total += len(images)
+    return total
+
+
+def count_manifest_events(artifact_dir: Path,
+                          cases: list[dict[str, Any]]) -> int:
+    total = 0
+    for case in cases:
+        event_files = case.get("eventFiles", {})
+        if not isinstance(event_files, dict):
+            continue
+        for rel in event_files.values():
+            if not isinstance(rel, str):
+                continue
+            path = artifact_dir / rel
+            if not path.exists():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            events = data.get("events", [])
+            if isinstance(events, list):
+                total += len(events)
+    return total
+
+
+def merge_unique(existing: list[Any], incoming: list[Any]) -> list[Any]:
+    out: list[Any] = []
+    for value in [*existing, *incoming]:
+        if value is not None and value not in out:
+            out.append(value)
+    return out
+
+
+def merge_render_stage_manifest(
+    artifact_dir: Path,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    target = artifact_dir / "manifest.json"
+    if not target.exists():
+        return manifest
+
+    existing = json.loads(target.read_text(encoding="utf-8"))
+    merged = dict(existing)
+    merged["generatedAt"] = manifest.get("generatedAt")
+    merged["stages"] = merge_unique(
+        list(existing.get("stages", [])),
+        list(manifest.get("stages", [])),
+    )
+    merged["startupXp3s"] = merge_unique(
+        list(existing.get("startupXp3s", [
+            existing.get("fixture", {}).get("xp3")
+            if isinstance(existing.get("fixture"), dict) else None
+        ])),
+        [manifest.get("fixture", {}).get("xp3")
+         if isinstance(manifest.get("fixture"), dict) else None],
+    )
+
+    cases = merge_case_lists(
+        list(existing.get("cases", [])),
+        list(manifest.get("cases", [])),
+    )
+    merged["cases"] = cases
+
+    fixture = dict(existing.get("fixture", {}))
+    incoming_fixture = manifest.get("fixture", {})
+    if isinstance(incoming_fixture, dict):
+        fixture["segmentOrder"] = merge_unique(
+            list(fixture.get("segmentOrder", [])),
+            list(incoming_fixture.get("segmentOrder", [])),
+        )
+    merged["fixture"] = fixture
+
+    existing_images = existing.get("images", {})
+    incoming_images = manifest.get("images", {})
+    if isinstance(existing_images, dict) and isinstance(incoming_images, dict):
+        image_cases = merge_case_lists(
+            list(existing_images.get("cases", [])),
+            list(incoming_images.get("cases", [])),
+        )
+        image_manifest = dict(existing_images)
+        image_manifest["captureSurfaces"] = merge_unique(
+            list(existing_images.get("captureSurfaces", [])),
+            list(incoming_images.get("captureSurfaces", [])),
+        )
+        image_manifest["cases"] = image_cases
+        image_manifest["summary"] = {
+            **dict(existing_images.get("summary", {})),
+            "caseCount": len(image_cases),
+            "imageCount": count_manifest_images(image_cases),
+        }
+        merged["images"] = image_manifest
+
+    merged["summary"] = {
+        **dict(existing.get("summary", {})),
+        "caseCount": len(cases),
+        "traceFlattenFrameCount": sum(int(case.get("frames", 0))
+                                      for case in cases),
+        "eventCount": count_manifest_events(artifact_dir, cases),
+        "imageCount": (
+            merged.get("images", {}).get("summary", {}).get("imageCount", 0)
+            if isinstance(merged.get("images"), dict) else 0
+        ),
+    }
+    return merged
 
 
 def layer_save_events_for_case(
@@ -959,14 +1100,15 @@ def checkpoint_only_image_manifest(
     capture_window: FrameCaptureWindow,
 ) -> dict[str, Any]:
     images_root = artifact_dir / "images"
-    if images_root.exists():
-        shutil.rmtree(images_root)
     images_root.mkdir(parents=True, exist_ok=True)
 
     specs_by_id = {str(spec["id"]): spec for spec in specs}
     cases: list[dict[str, Any]] = []
     for segment in case_segments:
         case_id = str(segment["caseId"])
+        case_dir = images_root / case_id
+        if case_dir.exists():
+            shutil.rmtree(case_dir)
         spec = segment.get("spec") or specs_by_id.get(case_id, {})
         captured_local_frames = list(segment.get(
             "capturedLocalFrames", range(len(segment.get("frames", [])))))
@@ -1005,6 +1147,7 @@ def write_render_stage_artifacts(
     image_manifest: dict[str, Any],
     renderer_metadata: dict[str, str],
     capture_window: FrameCaptureWindow,
+    startup_xp3: Path,
 ) -> list[Path]:
     events_by_stage_case = split_render_events_by_stage_and_case(
         events, case_segments)
@@ -1086,7 +1229,7 @@ def write_render_stage_artifacts(
         "localRoot": str(artifact_dir),
         "remoteCaptureRoot": image_manifest.get("remoteCaptureRoot"),
         "fixture": {
-            "xp3": "logo_test_oracle.xp3",
+            "xp3": str(startup_xp3),
             "window": {"width": 1920, "height": 1080},
             "deltaMs": 1000.0 / 60.0,
             "segmentOrder": [s["caseId"] for s in case_segments],
@@ -1124,6 +1267,7 @@ def write_render_stage_artifacts(
         ],
     }
     manifest_path = artifact_dir / "manifest.json"
+    manifest = merge_render_stage_manifest(artifact_dir, manifest)
     manifest_path.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=True,
                    allow_nan=False) + "\n",
@@ -1137,6 +1281,7 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     spec_dir = Path(args.spec_dir)
     trace_dir = Path(args.trace_dir)
+    startup_xp3 = Path(args.startup_xp3)
     stages = selected_stages(args.stage)
     render_path = args.stage == RENDER_PATH_STAGE
     if args.record_render_step_checkpoints and not render_path:
@@ -1165,7 +1310,11 @@ def main(argv: list[str]) -> int:
         print(f"spec dir not found: {spec_dir}", file=sys.stderr)
         return 2
 
-    specs = load_specs(spec_dir)
+    try:
+        specs = filter_specs(load_specs(spec_dir), args.case)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if not specs:
         print(f"no specs in {spec_dir}", file=sys.stderr)
         return 0
@@ -1198,10 +1347,11 @@ def main(argv: list[str]) -> int:
                 remote_game, remote_render_root = \
                     mpb._prepare_render_stage_capture(
                         args.serial, specs_by_id,
-                        render_artifact_dir, capture_window)
+                        render_artifact_dir, capture_window,
+                        startup_xp3=startup_xp3)
             else:
                 remote_game = mpb._ensure_logo_test_xp3_pushed(
-                    args.serial)
+                    args.serial, startup_xp3)
                 remote_render_root = None
             mpb.ensure_oracle_renderer_software(
                 args.serial, remote_game=remote_game, write_global=False)
@@ -1305,6 +1455,7 @@ def main(argv: list[str]) -> int:
                 image_manifest=image_manifest,
                 renderer_metadata=renderer_metadata,
                 capture_window=capture_window,
+                startup_xp3=startup_xp3,
             )
             if args.checkpoint_render_only and remote_render_root is not None:
                 mpb._adb_shell_root(args.serial, ["rm", "-rf",
