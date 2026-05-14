@@ -1392,7 +1392,7 @@ def main(argv: list[str]) -> int:
                     timeout=args.playback_timeout,
                     stabilise_seconds=5.0 if render_path else 2.0,
                     require_substantive_segments=(
-                        not capture_window.enabled),
+                        not capture_window.enabled and len(specs) > 1),
                 )
                 render_step_checkpoints = tracer.image_checkpoints()
 

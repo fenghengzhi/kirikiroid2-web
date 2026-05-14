@@ -1772,6 +1772,7 @@ def _drive_full_guest_with_bootstrap(wasmtime, wasm_path: Path,
 
 def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
                          spec_dir: Path,
+                         specs: list[dict],
                          expected_frames: int,
                          timeout: float,
                          host_python: Path,
@@ -1800,6 +1801,15 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
         trace_path = temp / "trace.json"
         render_stage_path = temp / "render_stages.json"
         driver_report = temp / "driver.json"
+        trace_spec_dir = temp / "specs"
+        trace_spec_dir.mkdir(parents=True, exist_ok=True)
+        for spec in specs:
+            spec_id = str(spec["id"])
+            (trace_spec_dir / f"{spec_id}.json").write_text(
+                json.dumps(spec, indent=2, ensure_ascii=True,
+                           allow_nan=False) + "\n",
+                encoding="utf-8",
+            )
         tracer = REPO_ROOT / "tests" / "differential" / "python" / \
             "wasm_lldb_motion_trace.py"
         driver = REPO_ROOT / "tests" / "differential" / "python" / \
@@ -1815,7 +1825,7 @@ def run_lldb_guest_trace(wasm_path: Path, startup_xp3: Path, *,
             "--host-python", str(host_python),
             "--wasm", str(wasm_path),
             "--startup-xp3", str(startup_xp3),
-            "--spec-dir", str(spec_dir),
+            "--spec-dir", str(trace_spec_dir),
             "--trace-out", str(trace_path),
             "--driver-output", str(driver_report),
             "--expected-frames", str(expected_frames),
@@ -2780,6 +2790,7 @@ def main(argv: list[str]) -> int:
             wasm_path,
             trace_startup_xp3,
             spec_dir=spec_dir,
+            specs=specs,
             expected_frames=expected_frames,
             timeout=args.lldb_timeout,
             host_python=args.host_python,
