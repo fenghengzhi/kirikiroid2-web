@@ -1589,11 +1589,9 @@ MotionTraceRenderExecuteScope::~MotionTraceRenderExecuteScope() {
     appendRenderEvent(_player, "render_execute", "execute_leave",
                       "Player::executeLayerRenderCommands.leave",
                       payload, diagnostics);
-    if(accurateSla) {
-        motionTraceRenderAccurateSlaExecutePostLayerCheckpoint(
-            _player, _renderLayerObject,
-            "Player::executeLayerRenderCommands.leave.after-layer-manager-update-no-onPaint");
-    }
+    // Android's accurate-SLA execute_post checkpoint is the next DrawDevice
+    // upload, not the LayerManager no-onPaint buffer here. The post_draw
+    // checkpoint path backfills execute_post from that upload.
 }
 
 void MotionTraceRenderExecuteScope::setResult(bool ok) {

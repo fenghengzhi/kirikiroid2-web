@@ -280,6 +280,25 @@ namespace motion {
 
     void SeparateLayerAdaptor::clear() { clearPrivateRenderState(); }
 
+    void SeparateLayerAdaptor::beginAccurateRenderPassLike_0x6C9CA8() {
+        _managedTargets.swapWith(_assignTargets);
+        _managedTargets.clear(true);
+        _assignSequence = 0;
+    }
+
+    tTJSVariant SeparateLayerAdaptor::resolveRenderLayerNodeLike_0x6C6B48(
+        tjs_uint32 ordinal,
+        const NativeSLAPayloadLike_0x6DCD0C &sourcePayload,
+        iTJSDispatch2 *objthis,
+        bool &createdOrChanged) {
+        return resolveLayerNodeLike_0x6C6B48(
+            ordinal, sourcePayload, objthis, createdOrChanged);
+    }
+
+    void SeparateLayerAdaptor::endAccurateRenderPassLike_0x6C9CA8() {
+        _assignTargets.clear(true);
+    }
+
     tjs_error SeparateLayerAdaptor::getLayerTreeOwnerInterfaceCompat(
         tTJSVariant *result,
         tjs_int,
@@ -324,12 +343,12 @@ namespace motion {
         active.payload.layerVariant.Clear();
 
         auto retired = _assignTargets.find(ordinal);
-        if(retired != _assignTargets.end() &&
-           sourcePayload.compatibleWithLike_0x6DCB2C(
-               retired->second.payload)) {
+        if(retired != _assignTargets.end()) {
+            // libkrkr2.so sub_6C6B48 reuses the previous ordinal's Layer
+            // variant, but sub_6DCB2C always returns 1 in the shipped binary,
+            // so the caller still refreshes the layer image every pass.
             active.payload.layerVariant =
                 retired->second.payload.layerVariant;
-            createdOrChanged = false;
             _assignTargets.erase(retired);
         }
 

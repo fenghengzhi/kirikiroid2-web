@@ -247,7 +247,11 @@ namespace motion {
             }
             child->_renderItemInheritedFlag18 =
                 _renderItemInheritedFlag18 || nodePriorDraw;
+            const auto savedChildDrawAffine =
+                child->_runtime->drawAffineMatrix;
+            child->_runtime->drawAffineMatrix = dam;
             child->prepareRenderItems(inheritedFlag18 || (_priorDraw != 0.0));
+            child->_runtime->drawAffineMatrix = savedChildDrawAffine;
             auto &childEntries = child->_runtime->preparedRenderItems;
             if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                motionPath.find("m2logo.mtn") != std::string::npos &&

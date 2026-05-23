@@ -568,8 +568,10 @@ namespace motion {
             }
             const int clipWidth = static_cast<int>(clipRight - clipLeft);
             const int clipHeight = static_cast<int>(clipBottom - clipTop);
-            // libkrkr2.so sub_6C9CA8 sizes the SLA item layer to the clipped
-            // draw bounds and clears it transparent before the affine copy.
+            // libkrkr2.so sub_6C9CA8 sizes the SLA item layer and invokes
+            // affineCopy(clear=1) before this pass writes the final layer
+            // type, so the checkpoint helper must start from the ltAlpha
+            // transparent-white neutral color, not a stale reused type color.
             int layerWidth = clipWidth;
             int layerHeight = clipHeight;
             if(layerWidth <= 0 || layerHeight <= 0) {
@@ -581,7 +583,7 @@ namespace motion {
             if(!candidateLayerObject || !candidateLayer ||
                !prepareLayerForRender(
                    candidateLayerObject, layerWidth, layerHeight,
-                   0x00000000)) {
+                   0x00FFFFFFu)) {
                 return false;
             }
 

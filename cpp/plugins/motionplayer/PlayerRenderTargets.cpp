@@ -751,11 +751,12 @@ namespace motion {
 
     bool Player::renderAccurateSlaLike_0x6C9CA8(
         SeparateLayerAdaptor *sla,
+        iTJSDispatch2 *slaObject,
         iTJSDispatch2 *targetLayerObject,
         tjs_int canvasWidth,
         tjs_int canvasHeight) {
-        (void)sla;
-        if(!targetLayerObject || canvasWidth <= 0 || canvasHeight <= 0 ||
+        if(!sla || !slaObject || !targetLayerObject ||
+           canvasWidth <= 0 || canvasHeight <= 0 ||
            !_runtime || !_runtime->activeMotion || !_runtime->sourceCacheNative) {
             return false;
         }
@@ -769,53 +770,68 @@ namespace motion {
             layerTreeOwner = targetLayerObject;
         }
 
-        auto ensureAccurateSlaItemLayer =
-            [&](PreparedRenderItem &item,
-                tTVPLayerType layerType) -> iTJSDispatch2 * {
-            const tjs_int stateLayerId = item.layerId;
-            if(stateLayerId == 0) {
-                return ensureReusableLayerObject(
-                    item.leafLayer,
-                    layerTreeOwner,
-                    targetLayerObject,
-                    layerType,
-                    false);
-            }
-
-            auto &state = _runtime->renderLayerStates[stateLayerId];
-            if(!state.initialized) {
-                state.layerId = stateLayerId;
-                state.hitThreshold = 256;
-                state.initialized = true;
-                if(item.nodeIndex >= 0 &&
-                   item.nodeIndex < static_cast<int>(_runtime->nodes.size())) {
-                    const auto &node = _runtime->nodes[item.nodeIndex];
-                    state.layerGetter = getLayerGetter(detail::widen(node.layerName));
+        struct AccurateSlaStateScope {
+            SeparateLayerAdaptor *sla = nullptr;
+            explicit AccurateSlaStateScope(SeparateLayerAdaptor *value)
+                : sla(value) {
+                if(sla) {
+                    sla->beginAccurateRenderPassLike_0x6C9CA8();
                 }
             }
-            // libkrkr2.so sub_6C6B48 refreshes Layer.absolute after every
-            // state-layer lookup, so draw order follows the current item list
-            // instead of the layer's original creation order.
-            state.absolute = _runtime->nextLayerAbsolute++;
+            ~AccurateSlaStateScope() {
+                if(sla) {
+                    sla->endAccurateRenderPassLike_0x6C9CA8();
+                }
+            }
+        } stateScope(sla);
 
-            auto *layerObject = ensureAccurateSlaStateLayerLike_0x6C6B48(
-                state.layerObject,
-                layerTreeOwner,
-                targetLayerObject,
-                layerType);
+        struct AccurateSlaItemLayer {
+            iTJSDispatch2 *object = nullptr;
+            bool createdOrChanged = true;
+        };
+
+        auto ensureAccurateSlaItemLayer =
+            [&](PreparedRenderItem &item,
+                tTVPLayerType layerType) -> AccurateSlaItemLayer {
+            const tjs_int stateLayerId = item.layerId;
+            if(stateLayerId == 0) {
+                return {
+                    ensureReusableLayerObject(
+                        item.leafLayer,
+                        layerTreeOwner,
+                        targetLayerObject,
+                        layerType,
+                        false),
+                    true
+                };
+            }
+
+            NativeSLAPayloadLike_0x6DCD0C payload;
+            payload.type = static_cast<tjs_int>(layerType);
+            payload.visible = true;
+            payload.key = detail::widen(item.sourceKey);
+            payload.flags = item.blendMode;
+            payload.affine = {
+                item.paintBox[0], item.paintBox[1],
+                item.paintBox[2], item.paintBox[3],
+                item.viewport[0], item.viewport[1],
+                item.viewport[2], item.viewport[3]
+            };
+            bool createdOrChanged = false;
+            tTJSVariant layerVariant =
+                sla->resolveRenderLayerNodeLike_0x6C6B48(
+                    static_cast<tjs_uint32>(stateLayerId), payload,
+                    slaObject, createdOrChanged);
+
+            auto *layerObject = tryResolveLayerDispatch(layerVariant);
             if(!layerObject) {
-                return nullptr;
+                return {};
             }
 
             item.rawFlag20 = true;
             persistNativeRenderItemFieldLifetimeLike_0x6C4E28(item);
-            setObjectIntProperty(layerObject, TJS_W("absolute"), state.absolute);
-            setObjectIntProperty(layerObject, TJS_W("hitThreshold"),
-                                 state.hitThreshold);
-            state.packedColors = item.packedColors;
-            state.isDirty = true;
-            item.leafLayer = state.layerObject;
-            return layerObject;
+            item.leafLayer = layerVariant;
+            return { layerObject, createdOrChanged };
         };
 
         int renderedItems = 0;
@@ -832,69 +848,72 @@ namespace motion {
                 continue;
             }
 
-            tTJSVariant sourceObject =
-                _runtime->sourceCacheNative->loadRenderSourceByName(
-                    detail::widen(item.sourceKey), item.srcRef,
-                    item.blendMode, item.packedColors,
-                    layerTreeOwner, targetLayerObject);
-            if(sourceObject.Type() != tvtObject ||
-               !sourceObject.AsObjectNoAddRef()) {
-                continue;
-            }
-            auto *sourceLayerObject = sourceObject.AsObjectNoAddRef();
-            auto *sourceLayer = resolveNativeLayer(sourceLayerObject);
-            auto *sourceImage = sourceLayer ? sourceLayer->GetMainImage()
-                                            : nullptr;
-            if(!sourceImage || sourceImage->GetWidth() <= 0 ||
-               sourceImage->GetHeight() <= 0) {
-                continue;
-            }
-
             const int clipWidth = clip.right - clip.left;
             const int clipHeight = clip.bottom - clip.top;
             const auto layerType =
                 accurateSlaLayerTypeLike_0x6C9CA8(item.blendMode);
-            auto *itemLayerObject =
+            const auto itemLayerResult =
                 ensureAccurateSlaItemLayer(item, layerType);
+            auto *itemLayerObject = itemLayerResult.object;
             auto *itemLayer = resolveNativeLayer(itemLayerObject);
-            if(!itemLayerObject || !itemLayer ||
-               !prepareLayerForRender(itemLayerObject, clipWidth, clipHeight,
-                                      0x00000000)) {
+            if(!itemLayerObject || !itemLayer) {
                 continue;
             }
 
-            const tTVPRect sourceRect(
-                0, 0,
-                static_cast<tjs_int>(sourceImage->GetWidth()),
-                static_cast<tjs_int>(sourceImage->GetHeight()));
-            const float offsetX = -0.5f - static_cast<float>(clip.left);
-            const float offsetY = -0.5f - static_cast<float>(clip.top);
-            bool copied = false;
-            if(item.meshType == 0) {
-                const auto localPts =
-                    buildAffineTrianglePoints(item.corners, offsetX, offsetY);
-                itemLayer->AffineCopy(localPts.data(), sourceImage, sourceRect,
-                                      stNearest, true);
-                copied = true;
-            } else if(item.meshType == 1 && item.meshDivX >= 2 &&
-                      item.meshDivY >= 2 && !item.meshPoints.empty()) {
-                auto localMeshPoints =
-                    buildMeshPoints(item.meshPoints, offsetX, offsetY);
-                itemLayer->BezierPatchCopy(
-                    localMeshPoints.data(), item.meshDivX, item.meshDivY,
-                    sourceImage, sourceRect, stNearest, true);
-                copied = true;
-            } else if(item.meshType == 2 && item.meshDivX >= 2 &&
-                      item.meshDivY >= 2 && !item.meshPoints.empty()) {
-                auto localMeshPoints =
-                    buildMeshPoints(item.meshPoints, offsetX, offsetY);
-                itemLayer->MeshCopy(localMeshPoints.data(), item.meshDivX,
-                                    item.meshDivY, sourceImage, sourceRect,
-                                    stNearest, true);
-                copied = true;
-            }
-            if(!copied) {
-                continue;
+            if(itemLayerResult.createdOrChanged) {
+                tTJSVariant sourceObject =
+                    _runtime->sourceCacheNative->loadRenderSourceByName(
+                        detail::widen(item.sourceKey), item.srcRef,
+                        item.blendMode, item.packedColors,
+                        layerTreeOwner, targetLayerObject);
+                if(sourceObject.Type() != tvtObject ||
+                   !sourceObject.AsObjectNoAddRef()) {
+                    continue;
+                }
+                auto *sourceLayerObject = sourceObject.AsObjectNoAddRef();
+                auto *sourceLayer = resolveNativeLayer(sourceLayerObject);
+                auto *sourceImage = sourceLayer ? sourceLayer->GetMainImage()
+                                                : nullptr;
+                if(!sourceImage || sourceImage->GetWidth() <= 0 ||
+                   sourceImage->GetHeight() <= 0 ||
+                   !setLayerSizeLike_0x6CE19C(itemLayerObject, clipWidth,
+                                              clipHeight)) {
+                    continue;
+                }
+
+                const tTVPRect sourceRect(
+                    0, 0,
+                    static_cast<tjs_int>(sourceImage->GetWidth()),
+                    static_cast<tjs_int>(sourceImage->GetHeight()));
+                const float offsetX = -0.5f - static_cast<float>(clip.left);
+                const float offsetY = -0.5f - static_cast<float>(clip.top);
+                bool copied = false;
+                if(item.meshType == 0) {
+                    const auto localPts = buildAffineTrianglePoints(
+                        item.corners, offsetX, offsetY);
+                    itemLayer->AffineCopy(localPts.data(), sourceImage,
+                                          sourceRect, stNearest, true);
+                    copied = true;
+                } else if(item.meshType == 1 && item.meshDivX >= 2 &&
+                          item.meshDivY >= 2 && !item.meshPoints.empty()) {
+                    auto localMeshPoints =
+                        buildMeshPoints(item.meshPoints, offsetX, offsetY);
+                    itemLayer->BezierPatchCopy(
+                        localMeshPoints.data(), item.meshDivX, item.meshDivY,
+                        sourceImage, sourceRect, stNearest, true);
+                    copied = true;
+                } else if(item.meshType == 2 && item.meshDivX >= 2 &&
+                          item.meshDivY >= 2 && !item.meshPoints.empty()) {
+                    auto localMeshPoints =
+                        buildMeshPoints(item.meshPoints, offsetX, offsetY);
+                    itemLayer->MeshCopy(localMeshPoints.data(), item.meshDivX,
+                                        item.meshDivY, sourceImage, sourceRect,
+                                        stNearest, true);
+                    copied = true;
+                }
+                if(!copied) {
+                    continue;
+                }
             }
 
             itemLayer->SetPosition(clip.left, clip.top);
@@ -1315,7 +1334,8 @@ namespace motion {
                 this, targetLayerObject, false);
 #endif
             if(!renderAccurateSlaLike_0x6C9CA8(
-                   sla, targetLayerObject, canvasWidth, canvasHeight)) {
+                   sla, slaObject, targetLayerObject,
+                   canvasWidth, canvasHeight)) {
                 detail::logoChainTraceSummary(
                     motionPath, "renderToSeparateLayerAdaptor",
                     _clampedEvalTime,

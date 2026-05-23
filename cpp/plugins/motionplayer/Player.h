@@ -519,6 +519,7 @@ namespace motion {
                                        tjs_int canvasHeight,
                                        const char *traceFunc);
         bool renderAccurateSlaLike_0x6C9CA8(SeparateLayerAdaptor *sla,
+                                            iTJSDispatch2 *slaObject,
                                             iTJSDispatch2 *targetLayerObject,
                                             tjs_int canvasWidth,
                                             tjs_int canvasHeight);

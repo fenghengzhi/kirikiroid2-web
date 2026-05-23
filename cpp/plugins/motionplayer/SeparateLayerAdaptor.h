@@ -102,6 +102,13 @@ namespace motion {
         tTJSVariant getPrivateRenderTarget() const;
         iTJSDispatch2 *getPrivateRenderTargetObject() const;
         void clear();
+        void beginAccurateRenderPassLike_0x6C9CA8();
+        tTJSVariant resolveRenderLayerNodeLike_0x6C6B48(
+            tjs_uint32 ordinal,
+            const NativeSLAPayloadLike_0x6DCD0C &sourcePayload,
+            iTJSDispatch2 *objthis,
+            bool &createdOrChanged);
+        void endAccurateRenderPassLike_0x6C9CA8();
         static tjs_error assignCompat(tTJSVariant *result, tjs_int numparams,
                                       tTJSVariant **param,
                                       iTJSDispatch2 *objthis);

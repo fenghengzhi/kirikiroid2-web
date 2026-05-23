@@ -440,6 +440,70 @@ TVP_GL_FUNC_DECL(void, TVPAlphaBlend_HDA_c,
     }
 }
 
+static inline tjs_uint32 TVPAlphaBlendHDAMixedBlockFormulaLike_0xA85BB8(
+    tjs_uint32 d, tjs_uint32 s) {
+    const tjs_uint32 sopa = s >> 24;
+    const auto blendByte = [sopa](tjs_uint32 dest, tjs_uint32 src) {
+        const tjs_uint32 diff =
+            static_cast<tjs_uint16>((src * sopa) - (dest * sopa));
+        return (dest + (diff >> 8)) & 0xff;
+    };
+    const tjs_uint32 b = blendByte(d & 0xff, s & 0xff);
+    const tjs_uint32 g = blendByte((d >> 8) & 0xff, (s >> 8) & 0xff);
+    const tjs_uint32 r = blendByte((d >> 16) & 0xff, (s >> 16) & 0xff);
+    return (d & 0xff000000) | (r << 16) | (g << 8) | b;
+}
+
+TVP_GL_FUNC_DECL(void, TVPAlphaBlend_0xA85BB8_c,
+                 (tjs_uint32 * dest, const tjs_uint32 *src, tjs_int len)) {
+    if(len <= 0) {
+        return;
+    }
+
+    // libkrkr2.so sub_A85BB8 aligns to 8-byte dest, then processes 8 pixels
+    // per block with all-opaque/all-transparent shortcuts before the HDA tail.
+    tjs_int prefix = (reinterpret_cast<tjs_uintptr_t>(dest) & 4) ? 1 : 0;
+    if(prefix > len) {
+        prefix = len;
+    }
+    if(prefix > 0) {
+        TVPAlphaBlend_HDA_c(dest, src, prefix);
+        dest += prefix;
+        src += prefix;
+        len -= prefix;
+    }
+
+    while(len >= 8) {
+        bool allOpaque = true;
+        bool allTransparent = true;
+        for(int i = 0; i < 8; ++i) {
+            const tjs_uint32 alpha = src[i] >> 24;
+            allOpaque = allOpaque && alpha == 0xff;
+            allTransparent = allTransparent && alpha == 0;
+        }
+
+        if(allOpaque) {
+            for(int i = 0; i < 8; ++i) {
+                dest[i] = src[i];
+            }
+        } else if(!allTransparent) {
+            for(int i = 0; i < 8; ++i) {
+                dest[i] =
+                    TVPAlphaBlendHDAMixedBlockFormulaLike_0xA85BB8(dest[i],
+                                                                   src[i]);
+            }
+        }
+
+        dest += 8;
+        src += 8;
+        len -= 8;
+    }
+
+    if(len > 0) {
+        TVPAlphaBlend_HDA_c(dest, src, len);
+    }
+}
+
 /*export*/
 TVP_GL_FUNC_DECL(void, TVPAlphaBlend_o_c,
                  (tjs_uint32 * dest, const tjs_uint32 *src, tjs_int len,
@@ -13897,10 +13961,9 @@ TVP_GL_FUNC_PTR_DECL(void, TVPConvert32BitTo24Bit,
                      (tjs_uint8 * dest, const tjs_uint8 *buf, tjs_int len));
 
 static void TVPRestoreNativeTVPGLBlendSlots() {
-    // Matches libkrkr2.so 0x8AB7DC ordinary blend slot writes plus
-    // 0xA862C8 runtime TVPAlphaBlend_d optimized slot.
-    TVPAlphaBlend = TVPAlphaBlend_c;
-    TVPAlphaBlend_HDA = TVPAlphaBlend_HDA_c;
+    // Matches libkrkr2.so 0xA8EECC runtime blend slot writes.
+    TVPAlphaBlend = TVPAlphaBlend_0xA85BB8_c;
+    TVPAlphaBlend_HDA = TVPAlphaBlend_0xA85BB8_c;
     TVPAlphaBlend_o = TVPAlphaBlend_o_c;
     TVPAlphaBlend_HDA_o = TVPAlphaBlend_HDA_o_c;
     TVPAlphaBlend_d = TVPAlphaBlend_d_0xA862C8_c;
