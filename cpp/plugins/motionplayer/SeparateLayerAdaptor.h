@@ -94,8 +94,8 @@ namespace motion {
         }
 
         // Aligned to libkrkr2.so SeparateLayerAdaptor_ncb_registerMembers (0x6ABFAC)
-        bool getAbsolute() const { return _absolute; }
-        void setAbsolute(bool v) { _absolute = v; }
+        tjs_int getAbsolute() const { return _absolute; }
+        void setAbsolute(tjs_int v) { _absolute = v; }
         tTJSVariant getTargetLayer() const { return _targetLayer; }
         void setTargetLayer(tTJSVariant v) { _targetLayer = v; }
 
@@ -149,7 +149,7 @@ namespace motion {
         tTJSVariant _privateTarget;
         NativeSLAOrderedMapLike_0x6C6B48 _managedTargets;
         NativeSLAOrderedMapLike_0x6C6B48 _assignTargets;
-        tjs_uint32 _absolute = 0;
-        tjs_uint32 _assignSequence = 0;
+        tjs_int _absolute = 0;
+        tjs_int _assignSequence = 0;
     };
 } // namespace motion

@@ -1299,11 +1299,54 @@ namespace motion {
         detail::logoChainTraceLogf(
             motionPath, "sla.resolveTarget", "0x6D5948",
             _clampedEvalTime,
-            "targetLayer={} privateTarget={} absolute={} canvas={}x{}",
+            "targetLayer={} privateTarget={} absolute={} canvas={}x{} "
+            "targetName={} targetType={} targetFace={} targetChildren={} "
+            "targetParent={} targetParentType={} "
+            "privateType={} privateFace={} privateParent={} "
+            "privateParentType={}",
             static_cast<const void *>(targetLayerObject),
             static_cast<const void *>(renderTarget),
-            sla->getAbsolute() ? 1 : 0,
-            canvasWidth, canvasHeight);
+            sla->getAbsolute(),
+            canvasWidth, canvasHeight,
+            resolveNativeLayer(targetLayerObject)
+                ? resolveNativeLayer(targetLayerObject)->GetName().AsStdString()
+                : std::string("<not-layer>"),
+            resolveNativeLayer(targetLayerObject)
+                ? static_cast<int>(resolveNativeLayer(targetLayerObject)->GetType())
+                : -1,
+            resolveNativeLayer(targetLayerObject)
+                ? static_cast<int>(resolveNativeLayer(targetLayerObject)->GetFace())
+                : -1,
+            resolveNativeLayer(targetLayerObject)
+                ? static_cast<int>(resolveNativeLayer(targetLayerObject)->GetCount())
+                : -1,
+            resolveNativeLayer(targetLayerObject)
+                ? static_cast<const void *>(resolveNativeLayer(targetLayerObject)->GetParent())
+                : nullptr,
+            resolveNativeLayer(targetLayerObject) &&
+                    resolveNativeLayer(targetLayerObject)->GetParent()
+                ? static_cast<int>(
+                      resolveNativeLayer(targetLayerObject)->GetParent()->GetType())
+                : -1,
+            resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget)
+                ? static_cast<int>(
+                      resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget)->GetType())
+                : -1,
+            resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget)
+                ? static_cast<int>(
+                      resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget)->GetFace())
+                : -1,
+            resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget)
+                ? static_cast<const void *>(
+                      resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget)->GetParent())
+                : nullptr,
+            resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget) &&
+                    resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget)->GetParent()
+                ? static_cast<int>(
+                      resolvePrivateMotionGLLNativeLike_0x6DE24C(renderTarget)
+                          ->GetParent()
+                          ->GetType())
+                : -1);
 
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();

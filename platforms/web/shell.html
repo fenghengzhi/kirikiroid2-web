@@ -14,6 +14,64 @@
     <title>Kirikiroid2 Web — Browser-based KiriKiri2 Visual Novel Engine</title>
     <meta name="theme-color" content="#1a1a2e">
 @KRKR2_PWA_HEAD@
+    <script>
+        (function() {
+            try {
+                var params = new URLSearchParams(window.location.search);
+                if (params.get('debugEarlyLogs') === '1') {
+                    var logs = [];
+                    function capture(level, args) {
+                        var line = '[' + level + '] ' + Array.prototype.map.call(args, function(arg) {
+                            if (typeof arg === 'string') return arg;
+                            try { return JSON.stringify(arg); } catch (e) { return String(arg); }
+                        }).join(' ');
+                        logs.push(line);
+                        if (logs.length > 5000) logs.shift();
+                        try {
+                            sessionStorage.setItem('__krkr2EarlyLogs', JSON.stringify(logs));
+                        } catch (e) {}
+                    }
+                    window.__krkr2EarlyLogs = logs;
+                    ['log', 'warn', 'error'].forEach(function(level) {
+                        var original = console[level];
+                        console[level] = function() {
+                            capture(level, arguments);
+                            return original.apply(this, arguments);
+                        };
+                    });
+                }
+
+                var renderer = (params.get('renderer') || '').trim().toLowerCase();
+                var preserve = renderer === 'opengl';
+                if (params.has('webglPreserveDrawingBuffer')) {
+                    var preserveParam =
+                        (params.get('webglPreserveDrawingBuffer') || '').trim().toLowerCase();
+                    preserve = preserveParam === '1' || preserveParam === 'true';
+                }
+
+                var alpha = renderer === 'opengl' ? false : null;
+                if (params.has('webglAlpha')) {
+                    var alphaParam = (params.get('webglAlpha') || '').trim().toLowerCase();
+                    alpha = !(alphaParam === '0' || alphaParam === 'false');
+                }
+
+                if (preserve || alpha !== null) {
+                    var originalGetContext = HTMLCanvasElement.prototype.getContext;
+                    HTMLCanvasElement.prototype.getContext = function(type, attrs) {
+                        if (this && this.id === 'canvas' &&
+                            (type === 'webgl' || type === 'webgl2' ||
+                             type === 'experimental-webgl')) {
+                            attrs = Object.assign({}, attrs || {});
+                            attrs.preserveDrawingBuffer = preserve;
+                            if (alpha !== null) attrs.alpha = alpha;
+                            console.warn('[webgl] context attrs override', type, attrs);
+                        }
+                        return originalGetContext.call(this, type, attrs);
+                    };
+                }
+            } catch (e) {}
+        })();
+    </script>
     <style>
         * {
             margin: 0;
@@ -43,6 +101,7 @@
             display: block;
             width: 100%;
             height: 100%;
+            background: #000;
             border: none;
             outline: none;
             touch-action: none;
@@ -653,6 +712,7 @@
         var Module = {
             preRun: [function() {
                 FS.mkdir('/savedata');
+                applyRendererPreferenceFromUrl();
                 Module.addRunDependency('user-file');
                 userFileDepAdded = true;
                 if (gameFileReady) {
@@ -736,11 +796,74 @@
             }
         })();
 
-        var urlParams = new URLSearchParams(window.location.search);
+        var searchUrlParams = new URLSearchParams(window.location.search);
+        var urlParams = searchUrlParams;
         var xp3Url = urlParams.get('xp3');
         var gameZipUrl = urlParams.get('game');
         var entryXp3 = urlParams.get('entry');
+        var rendererUrlParam = normalizeRendererUrlParam(urlParams.get('renderer'));
         var localZipPickerEnabled = @KRKR2_LOCAL_ZIP_PICKER_DEFAULT_VISIBLE@ || urlParams.has('pickZip');
+
+        function normalizeRendererUrlParam(value) {
+            if (value === null) return '';
+            value = String(value).trim().toLowerCase();
+            if (value === 'software' || value === 'opengl') return value;
+            console.warn('[renderer] Ignoring unsupported URL renderer:', value);
+            return '';
+        }
+
+        function rendererPreferenceXml(existingXml, renderer) {
+            var doc = null;
+            if (existingXml) {
+                try {
+                    doc = new DOMParser().parseFromString(existingXml, 'application/xml');
+                    if (doc.getElementsByTagName('parsererror').length ||
+                        !doc.documentElement ||
+                        doc.documentElement.tagName !== 'GlobalPreference') {
+                        doc = null;
+                    }
+                } catch (e) {
+                    doc = null;
+                }
+            }
+            if (!doc) {
+                doc = document.implementation.createDocument('', 'GlobalPreference', null);
+            }
+
+            var root = doc.documentElement;
+            var items = root.getElementsByTagName('Item');
+            var rendererItem = null;
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].getAttribute('key') === 'renderer') {
+                    rendererItem = items[i];
+                    break;
+                }
+            }
+            if (!rendererItem) {
+                rendererItem = doc.createElement('Item');
+                rendererItem.setAttribute('key', 'renderer');
+                root.appendChild(rendererItem);
+            }
+            rendererItem.setAttribute('value', renderer);
+            return new XMLSerializer().serializeToString(doc);
+        }
+
+        function applyRendererPreferenceFromUrl() {
+            if (!rendererUrlParam || typeof FS === 'undefined') return;
+            try {
+                ensureDir('/save');
+                var path = '/save/GlobalPreference.xml';
+                var existing = '';
+                try {
+                    existing = FS.readFile(path, { encoding: 'utf8' });
+                } catch (e) {}
+                FS.writeFile(path, rendererPreferenceXml(existing, rendererUrlParam),
+                    { encoding: 'utf8' });
+                console.log('[renderer] URL override applied:', rendererUrlParam);
+            } catch (e) {
+                console.warn('[renderer] Failed to apply URL renderer override:', e);
+            }
+        }
 
         if (localZipPickerEnabled) {
             document.getElementById('pick-zip-btn').style.display = '';
@@ -1128,11 +1251,16 @@
 
             if (Module._saveSpaceId) {
                 statusElement.textContent = 'Restoring saves...';
-                idbRestoreSaves().then(releaseDep).catch(function(e) {
+                idbRestoreSaves().then(function() {
+                    applyRendererPreferenceFromUrl();
+                    releaseDep();
+                }).catch(function(e) {
                     console.warn('[IDB] Failed to restore saves:', e);
+                    applyRendererPreferenceFromUrl();
                     releaseDep();
                 });
             } else {
+                applyRendererPreferenceFromUrl();
                 releaseDep();
             }
         }

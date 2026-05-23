@@ -333,6 +333,7 @@ TEST_CASE("__Private_Motion_GLLayer uses private ClassID only") {
     tTJSVariant targetVariant(targetLayer.object, targetLayer.object);
 
     motion::SeparateLayerAdaptor adaptor(targetVariant);
+    adaptor.setAbsolute(3);
     iTJSDispatch2 *privateObject = motion::ensurePrivateMotionGLLLike_0x6D5948(
         adaptor, ownerVariant, targetVariant, targetLayer.object, 64, 32);
     REQUIRE(privateObject != nullptr);
@@ -343,6 +344,7 @@ TEST_CASE("__Private_Motion_GLLayer uses private ClassID only") {
     REQUIRE(privateLayer->GetWidth() == 64);
     REQUIRE(privateLayer->GetHeight() == 32);
     REQUIRE(privateLayer->GetVisible());
+    REQUIRE(privateLayer->GetAbsoluteOrderIndex() == 3);
     REQUIRE(motion::privateMotionGLLRenderQueueSizeLike_0x6DE738(
                 privateObject) == 0);
     motion::clearPrivateMotionGLLRenderQueueLike_0x6DE738(privateObject);

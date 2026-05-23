@@ -490,6 +490,13 @@ namespace {
 
     class tTJSNI_PrivateMotionGLLLayerLike_0x800438 final : public tTJSNI_Layer {
     public:
+        tTJSNI_PrivateMotionGLLLayerLike_0x800438() {
+            // __Private_Motion_GLLayer::CreateNativeInstance @ 0x6DD430
+            // runs the base Layer constructor path that allocates the default
+            // alpha image/clip before storing the private render queue.
+            AllocateImage();
+        }
+
         ~tTJSNI_PrivateMotionGLLLayerLike_0x800438() override {
             ClearRenderQueueLike_0x6DE738();
         }
@@ -552,6 +559,8 @@ namespace {
             y += rect.top - r.top;
             tTVPRect targetRect(rect);
             targetRect.set_offsets(x, y);
+            ParentRectToChildRect(rect);
+            SetFace(dfAuto);
 
 #if defined(KRKR2_WASMTIME_HEADLESS)
             motion::detail::motionTracePrivateMotionGLLDraw(
@@ -636,6 +645,7 @@ namespace {
             }
 
             endPrivateMotionGLLStencilLike_0x6DD56C(stencilEnabled);
+            ResetClip();
             resetTarget();
         }
 
@@ -929,8 +939,7 @@ namespace motion {
                 // Player_ResolveSLATarget @ 0x6D5948 performs these writes
                 // immediately after the newly created object is stored in
                 // SLA+40, before the per-frame SetSize call.
-                layer->SetAbsoluteOrderIndex(
-                    static_cast<tjs_int>(sla.getAbsolute()));
+                layer->SetAbsoluteOrderIndex(sla.getAbsolute());
                 layer->SetVisible(true);
             }
             sla.trackManagedTargetLike_0x6AC410(sla._privateTarget, 0);
