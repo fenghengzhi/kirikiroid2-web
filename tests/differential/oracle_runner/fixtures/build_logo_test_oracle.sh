@@ -14,6 +14,7 @@
 #   reference/xp3/logo_test_oracle.xp3               (build output)
 #   reference/xp3/logo_test_oracle_yuzulogo.xp3      (single-motion output)
 #   reference/xp3/logo_test_oracle_m2logo.xp3        (single-motion output)
+#   reference/xp3/logo_test_oracle_title_bg.xp3      (single-motion output)
 #
 # Run from repo root:
 #   tests/differential/oracle_runner/fixtures/build_logo_test_oracle.sh
@@ -23,13 +24,16 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 SRC_ORACLE_DIR="$REPO_ROOT/reference/xp3/logo_test_oracle"
 SRC_YUZU_DIR="$REPO_ROOT/reference/xp3/logo_test_oracle_yuzulogo"
 SRC_M2_DIR="$REPO_ROOT/reference/xp3/logo_test_oracle_m2logo"
+SRC_TITLE_BG_DIR="$REPO_ROOT/reference/xp3/logo_test_oracle_title_bg"
 SRC_TJS="$SRC_ORACLE_DIR/startup.tjs"
 SRC_LIVE_DIR="$REPO_ROOT/reference/xp3/logo_test"
 SRC_MTN_DIR="$REPO_ROOT/reference/xp3/logo_test"
+SRC_TITLE_BG_ASSET_DIR="$REPO_ROOT/reference/xp3/title_bg_motion"
 OUT="$REPO_ROOT/reference/xp3/logo_test_oracle.xp3"
 OUT_LIVE="$REPO_ROOT/reference/xp3/logo_test.xp3"
 OUT_YUZU="$REPO_ROOT/reference/xp3/logo_test_oracle_yuzulogo.xp3"
 OUT_M2="$REPO_ROOT/reference/xp3/logo_test_oracle_m2logo.xp3"
+OUT_TITLE_BG="$REPO_ROOT/reference/xp3/logo_test_oracle_title_bg.xp3"
 XP3PACK="${XP3PACK:-$REPO_ROOT/tools/bin/mac/rel/xp3pack}"
 
 if [[ ! -x "$XP3PACK" ]]; then
@@ -50,7 +54,12 @@ if [[ ! -f "$SRC_LIVE_DIR/startup.tjs" ]]; then
     echo "Initialise the reference submodule: git submodule update --init reference" >&2
     exit 1
 fi
-for dir in "$SRC_YUZU_DIR" "$SRC_M2_DIR"; do
+if [[ ! -f "$SRC_TITLE_BG_ASSET_DIR/title_bg.mtn" ]]; then
+    echo "title_bg.mtn missing at $SRC_TITLE_BG_ASSET_DIR/title_bg.mtn" >&2
+    echo "Initialise the reference submodule: git submodule update --init reference" >&2
+    exit 1
+fi
+for dir in "$SRC_YUZU_DIR" "$SRC_M2_DIR" "$SRC_TITLE_BG_DIR"; do
     if [[ ! -f "$dir/startup.tjs" || ! -f "$dir/logo.ks" ]]; then
         echo "single-motion oracle source missing in $dir" >&2
         echo "Expected startup.tjs and logo.ks in the reference submodule." >&2
@@ -58,7 +67,7 @@ for dir in "$SRC_YUZU_DIR" "$SRC_M2_DIR"; do
     fi
 done
 
-rm -f "$OUT" "$OUT_LIVE" "$OUT_YUZU" "$OUT_M2"
+rm -f "$OUT" "$OUT_LIVE" "$OUT_YUZU" "$OUT_M2" "$OUT_TITLE_BG"
 # Flat arcpaths (startup.tjs at archive root, no directory prefix). The
 # game's startup path lookup searches for "startup.tjs" at the xp3 root;
 # shipping the file under `logo_test/startup.tjs` makes it invisible and
@@ -68,6 +77,7 @@ build_oracle() {
     local out="$1"
     local src_dir="$2"
     local only_mtn="${3:-}"
+    local asset_dir="${4:-$SRC_LIVE_DIR}"
     local maps=("startup.tjs=$src_dir/startup.tjs")
     local rel
 
@@ -76,7 +86,7 @@ build_oracle() {
     fi
 
     while IFS= read -r -d '' file; do
-        rel="${file#$SRC_LIVE_DIR/}"
+        rel="${file#$asset_dir/}"
         if [[ "$rel" == "startup.tjs" ]]; then
             continue
         fi
@@ -87,13 +97,14 @@ build_oracle() {
             continue
         fi
         maps+=("$rel=$file")
-    done < <(find "$SRC_LIVE_DIR" -type f -print0 | sort -z)
+    done < <(find "$asset_dir" -type f -print0 | sort -z)
     "$XP3PACK" -o "$out" --map "${maps[@]}"
 }
 
 build_oracle "$OUT" "$SRC_ORACLE_DIR"
 build_oracle "$OUT_YUZU" "$SRC_YUZU_DIR" "yuzulogo.mtn"
 build_oracle "$OUT_M2" "$SRC_M2_DIR" "m2logo.mtn"
+build_oracle "$OUT_TITLE_BG" "$SRC_TITLE_BG_DIR" "title_bg.mtn" "$SRC_TITLE_BG_ASSET_DIR"
 
 (
     cd "$SRC_LIVE_DIR"
@@ -103,4 +114,5 @@ build_oracle "$OUT_M2" "$SRC_M2_DIR" "m2logo.mtn"
 echo "Built $OUT"
 echo "Built $OUT_YUZU"
 echo "Built $OUT_M2"
+echo "Built $OUT_TITLE_BG"
 echo "Built $OUT_LIVE"
