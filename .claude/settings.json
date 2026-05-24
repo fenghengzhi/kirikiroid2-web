@@ -1,6 +1,13 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "showThinkingSummaries": true,
+  "env": {
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CODE_EFFORT_LEVEL": "high",
+    "MCP_TIMEOUT": "600000",
+    "MCP_TOOL_TIMEOUT": "600000",
+    "MAX_MCP_OUTPUT_TOKENS": "500000"
+  },
   "permissions": {
     "allow": [
       "Read",
@@ -19,22 +26,18 @@
     ]
   },
   "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": ["ida-pro-mcp"],
+  "enabledMcpjsonServers": [
+    "ida-pro-mcp"
+  ],
   "enabledPlugins": {
     "ralph-wiggum@claude-code-plugins": true,
     "claude-md-management@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": true,
     "pua@pua-skills": false,
     "clangd-lsp@claude-plugins-official": true,
-    "superpowers@claude-plugins-official": false
+    "superpowers@claude-plugins-official": false,
+    "github@claude-plugins-official": true
   },
   "effortLevel": "high",
-  "env": {
-    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
-    "DISABLE_AUTOUPDATER": "1",
-    "CLAUDE_CODE_EFFORT_LEVEL": "high",
-    "MCP_TIMEOUT": "600000",
-    "MCP_TOOL_TIMEOUT": "600000",
-    "MAX_MCP_OUTPUT_TOKENS": "500000"
-  }
+  "showThinkingSummaries": true
 }

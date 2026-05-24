@@ -8,6 +8,14 @@ on:
         required: false
         type: boolean
         default: false
+      cloudflare_pages_environment:
+        description: Cloudflare Pages deployment environment
+        required: false
+        type: choice
+        default: preview
+        options:
+          - preview
+          - production
 
   workflow_run:
     workflows: ["Code Format Check"]
@@ -162,6 +170,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
+          CLOUDFLARE_PAGES_ENVIRONMENT: ${{ inputs.cloudflare_pages_environment }}
+          CLOUDFLARE_PAGES_PRODUCTION_BRANCH: ${{ vars.CLOUDFLARE_PAGES_PRODUCTION_BRANCH || secrets.CLOUDFLARE_PAGES_PRODUCTION_BRANCH || 'main' }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo "::error::CLOUDFLARE_API_TOKEN secret is required to upload to Cloudflare Pages"
@@ -175,6 +185,11 @@ jobs:
             echo "::error::CLOUDFLARE_PAGES_PROJECT_NAME variable or secret is required to upload to Cloudflare Pages"
             exit 1
           fi
+          deploy_branch="$GITHUB_REF_NAME"
+          if [ "$CLOUDFLARE_PAGES_ENVIRONMENT" = "production" ]; then
+            deploy_branch="$CLOUDFLARE_PAGES_PRODUCTION_BRANCH"
+          fi
+          echo "Uploading $CLOUDFLARE_PAGES_ENVIRONMENT deployment to Cloudflare Pages branch $deploy_branch"
           npx wrangler@latest pages deploy /tmp/cloudflare-pages \
             --project-name "$CLOUDFLARE_PAGES_PROJECT_NAME" \
-            --branch "${{ github.ref_name }}"
+            --branch "$deploy_branch"
