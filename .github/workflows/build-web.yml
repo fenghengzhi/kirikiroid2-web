@@ -2,6 +2,12 @@ name: Build Web
 
 on:
   workflow_dispatch:
+    inputs:
+      upload_cloudflare_pages:
+        description: Upload the Web build to Cloudflare Pages
+        required: false
+        type: boolean
+        default: false
 
   workflow_run:
     workflows: ["Code Format Check"]
@@ -132,3 +138,40 @@ jobs:
             out/web/release/manifest.webmanifest
             out/web/release/sw.js
             out/web/release/pwa/
+
+      - name: Prepare Cloudflare Pages upload
+        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.upload_cloudflare_pages }}
+        run: |
+          rm -rf /tmp/cloudflare-pages
+          mkdir -p /tmp/cloudflare-pages
+          cp out/web/release/index.html /tmp/cloudflare-pages/
+          cp out/web/release/index.js /tmp/cloudflare-pages/
+          cp out/web/release/index.wasm /tmp/cloudflare-pages/
+          cp out/web/release/index.data /tmp/cloudflare-pages/
+          cp out/web/release/index.worker.js /tmp/cloudflare-pages/
+          cp out/web/release/manifest.webmanifest /tmp/cloudflare-pages/
+          cp out/web/release/sw.js /tmp/cloudflare-pages/
+          cp -R out/web/release/pwa /tmp/cloudflare-pages/
+
+      - name: Upload to Cloudflare Pages
+        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.upload_cloudflare_pages }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN secret is required to upload to Cloudflare Pages"
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID secret is required to upload to Cloudflare Pages"
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_PAGES_PROJECT_NAME" ]; then
+            echo "::error::CLOUDFLARE_PAGES_PROJECT_NAME variable or secret is required to upload to Cloudflare Pages"
+            exit 1
+          fi
+          npx wrangler@latest pages deploy /tmp/cloudflare-pages \
+            --project-name "$CLOUDFLARE_PAGES_PROJECT_NAME" \
+            --branch "${{ github.ref_name }}"
