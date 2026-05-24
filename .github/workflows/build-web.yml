@@ -148,7 +148,9 @@ jobs:
           cp out/web/release/index.js /tmp/cloudflare-pages/
           cp out/web/release/index.wasm /tmp/cloudflare-pages/
           cp out/web/release/index.data /tmp/cloudflare-pages/
-          cp out/web/release/index.worker.js /tmp/cloudflare-pages/
+          if [ -f out/web/release/index.worker.js ]; then
+            cp out/web/release/index.worker.js /tmp/cloudflare-pages/
+          fi
           cp out/web/release/manifest.webmanifest /tmp/cloudflare-pages/
           cp out/web/release/sw.js /tmp/cloudflare-pages/
           cp -R out/web/release/pwa /tmp/cloudflare-pages/
