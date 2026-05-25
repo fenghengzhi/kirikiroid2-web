@@ -22,7 +22,7 @@ description: >
 | `mcp__ida-pro-mcp__decompile` | 反编译指定地址的函数 → 伪代码 |
 | `mcp__ida-pro-mcp__find` | 搜索字符串/立即数（仅 ASCII/UTF-8） |
 | `mcp__ida-pro-mcp__xrefs_to` | 查找某地址的交叉引用 |
-| `mcp__ida-pro-mcp__py_eval` | 运行 IDAPython 代码（用于复杂查询） |
+| `mcp__ida-pro-mcp__py_eval` | 运行 IDAPython 代码（用于复杂查询）— **调用前先 Read `.claude/skills/idapython/SKILL.md` 获取 `ida_*` 模块路由和反模式** |
 | `mcp__ida-pro-mcp__disasm` | 获取指定地址的反汇编代码 |
 | `mcp__ida-pro-mcp__list_funcs` | 列出匹配模式的函数 |
 | `mcp__ida-pro-mcp__get_bytes` | 读取指定地址的原始字节 |

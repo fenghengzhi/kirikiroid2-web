@@ -14,3 +14,4 @@
 - [sub_6C2334 render-list builder](project_sub6C2334_render_list_builder.md) — Player::updateLayers outer loop uses nodeType gate 0x1441/0x1449 (NOT stencilType). Never writes +52 or +1960. stencilType=0 nodes DO enter this path.
 - [Player.play eager vs lazy](project_play_eager_vs_lazy.md) — libkrkr2.so play()→playImpl→initNonEmoteMotion@0x6B3A80 unconditionally calls buildNodeTree (eager). Web port playCompat is lazy, defers to ensureNodeTreeBuilt. NCB name "play" at 0x14c0cca is UTF-16LE truncated to "p" by IDA.
 - [playTimeline vs play](project_playTimeline_vs_play.md) — Player_playTimeline @ 0x672F70 does NOT build tree; assumes play()/setMotion() ran first to populate labelMap. NCB "playTimeline"→sub_672E44→0x672F70, separate from "play" NCB path.
+- [Android timer-thread architecture](project_android_timer_thread.md) — libkrkr2.so 用独立 pthread tTVPTimerThread 驱动 TJS Timer，墙钟 tick + condvar_timedwait，主循环掉帧不影响 onTimer 节奏。NO tTVPTimerImpl/ProgressAllTimer。

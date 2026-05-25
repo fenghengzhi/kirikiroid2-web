@@ -35,8 +35,8 @@
     "skill-creator@claude-plugins-official": true,
     "pua@pua-skills": false,
     "clangd-lsp@claude-plugins-official": true,
-    "superpowers@claude-plugins-official": false,
-    "github@claude-plugins-official": true
+    "superpowers@claude-plugins-official": true,
+    "github@claude-plugins-official": false
   },
   "effortLevel": "high",
   "showThinkingSummaries": true
