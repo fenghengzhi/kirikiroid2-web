@@ -161,6 +161,13 @@ elseif(WEB)
             COMMENT "Copy PWA manifest, service worker, and icons"
         )
     endif()
+    add_custom_command(
+        TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/baidu_verify_codeva-3Z4bQwqyXI.html
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>
+        COMMENT "Copy Baidu site verification file"
+    )
 elseif(LINUX)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/linux/main.cpp)
 elseif(WINDOWS)
