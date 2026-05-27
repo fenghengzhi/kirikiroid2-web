@@ -147,6 +147,8 @@ jobs:
             out/web/release/sw.js
             out/web/release/pwa/
             out/web/release/baidu_verify_codeva-3Z4bQwqyXI.html
+            out/web/release/robots.txt
+            out/web/release/sitemap.xml
 
       - name: Prepare Cloudflare Pages upload
         if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.upload_cloudflare_pages }}
@@ -164,6 +166,8 @@ jobs:
           cp out/web/release/sw.js /tmp/cloudflare-pages/
           cp -R out/web/release/pwa /tmp/cloudflare-pages/
           cp out/web/release/baidu_verify_codeva-3Z4bQwqyXI.html /tmp/cloudflare-pages/
+          cp out/web/release/robots.txt /tmp/cloudflare-pages/
+          cp out/web/release/sitemap.xml /tmp/cloudflare-pages/
           cp _headers /tmp/cloudflare-pages/
 
       - name: Upload to Cloudflare Pages

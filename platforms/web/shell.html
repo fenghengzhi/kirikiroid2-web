@@ -5,14 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="description" content="Kirikiroid2 Web — Run KiriKiri2 visual novels directly in your browser. Load .xp3 game files or folders, no installation required. Supports save/load, WebGL rendering, and mobile devices.">
     <meta name="keywords" content="Kirikiroid2, KiriKiri2, KrKr2, visual novel, browser, WebAssembly, xp3, galgame">
+    <link rel="canonical" href="https://krkr2.fenghengzhi.com/">
     <meta property="og:title" content="Kirikiroid2 Web — Browser-based KiriKiri2 Engine">
     <meta property="og:description" content="Run KiriKiri2 visual novels directly in your browser. Load .xp3 game files, no installation required.">
     <meta property="og:type" content="website">
+    <meta property="og:url" content="https://krkr2.fenghengzhi.com/">
+    <meta property="og:site_name" content="Kirikiroid2 Web">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Kirikiroid2 Web — Browser-based KiriKiri2 Engine">
     <meta name="twitter:description" content="Run KiriKiri2 visual novels directly in your browser. Load .xp3 game files, no installation required.">
     <title>Kirikiroid2 Web — Browser-based KiriKiri2 Visual Novel Engine</title>
     <meta name="theme-color" content="#1a1a2e">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Kirikiroid2 Web",
+      "alternateName": ["KrKr2 Web", "吉里吉里2 Web", "kirikiroid2 web"],
+      "url": "https://krkr2.fenghengzhi.com/",
+      "applicationCategory": "GameApplication",
+      "operatingSystem": "Any (WebAssembly)",
+      "browserRequirements": "Requires WebAssembly and WebGL",
+      "description": "Browser port of the KiriKiri2 visual novel engine. Run .xp3 game archives directly in your browser via WebAssembly, with persistent saves and no installation required.",
+      "inLanguage": ["en", "zh", "ja"],
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "author": {
+        "@type": "Person",
+        "name": "fenghengzhi",
+        "url": "https://github.com/fenghengzhi"
+      }
+    }
+    </script>
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-X4FRTWKHGR"></script>
     <script>
@@ -116,18 +143,6 @@
             touch-action: none;
         }
 
-        #seo-content {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            padding: 0;
-            margin: -1px;
-            overflow: hidden;
-            clip: rect(0, 0, 0, 0);
-            white-space: nowrap;
-            border: 0;
-        }
-
         #loading {
             position: fixed;
             top: 0;
@@ -216,18 +231,20 @@
             top: 0; left: 0;
             width: 100%; height: 100%;
             display: none;
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
             background: #1a1a2e;
             z-index: 150;
+            overflow-y: auto;
+            padding: 40px 20px;
         }
 
         #file-picker.visible { display: flex; }
 
         #picker-box {
             text-align: center;
-            max-width: 480px;
-            width: 90%;
+            max-width: 640px;
+            width: 100%;
         }
 
         #picker-box h1 {
@@ -333,6 +350,55 @@
 
         .feedback-link a:hover {
             color: #e94560;
+        }
+
+        .about-content {
+            margin-top: 40px;
+            padding-top: 32px;
+            border-top: 1px solid #16213e;
+            text-align: left;
+            color: #aaa;
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        .about-content h2 {
+            color: #e94560;
+            font-size: 20px;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .about-content h3 {
+            color: #ccc;
+            font-size: 16px;
+            margin-top: 22px;
+            margin-bottom: 8px;
+        }
+
+        .about-content p { margin-bottom: 12px; }
+
+        .about-content ul,
+        .about-content ol {
+            margin-left: 22px;
+            margin-bottom: 12px;
+        }
+
+        .about-content li { margin-bottom: 4px; }
+
+        .about-content a {
+            color: #e94560;
+            text-decoration: none;
+        }
+
+        .about-content a:hover { text-decoration: underline; }
+
+        .about-content code {
+            background: #16213e;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 13px;
+            color: #ccc;
         }
 
         #picker-progress {
@@ -576,23 +642,13 @@
     </style>
 </head>
 <body>
-    <div id="seo-content">
-        <h1>Kirikiroid2 Web — Browser-based KiriKiri2 Engine</h1>
-        <p>Run KiriKiri2 (吉里吉里2) visual novels directly in your browser powered by WebAssembly. Load .xp3 game archives or game folders — no installation required. Supports game save/load persistence, WebGL hardware-accelerated rendering, and works on both desktop and mobile devices.</p>
-        <h2>Features</h2>
-        <ul>
-            <li>Load .xp3 game files via drag &amp; drop, file picker, or URL</li>
-            <li>Extract and run games from ZIP archives</li>
-            <li>Persistent save data with IndexedDB save spaces</li>
-            <li>File System Access API for direct directory access</li>
-            <li>WebGL rendering with mobile shader compatibility</li>
-            <li>Full KiriKiri2 TJS2 scripting engine support</li>
-        </ul>
-    </div>
     <noscript>
-        <div style="padding:40px;text-align:center;color:#e0e0e0;background:#1a1a2e;min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;">
+        <div style="padding:40px 20px;text-align:center;color:#e0e0e0;background:#1a1a2e;min-height:100vh;max-width:720px;margin:0 auto;line-height:1.7;">
             <h1 style="color:#e94560;margin-bottom:16px;">Kirikiroid2 Web</h1>
-            <p>This application requires JavaScript and WebAssembly to run KiriKiri2 visual novels in the browser. Please enable JavaScript to continue.</p>
+            <p style="margin-bottom:12px;">Kirikiroid2 Web is a browser port of the KiriKiri2 (吉里吉里2) visual novel engine — the runtime behind hundreds of Japanese ADV / galgame titles — compiled to WebAssembly via Emscripten.</p>
+            <p style="margin-bottom:12px;">Load .xp3 game archives or game folders directly in your browser. Save data persists locally in IndexedDB; nothing is uploaded.</p>
+            <p style="margin-bottom:12px;">This application requires JavaScript and WebAssembly to run. Please enable JavaScript and reload the page.</p>
+            <p><a href="https://github.com/fenghengzhi/krkr2" style="color:#e94560;">Source code on GitHub</a></p>
         </div>
     </noscript>
 
@@ -633,10 +689,10 @@
     </div>
     <input type="file" id="space-import-input" accept=".zip" style="display:none;">
 
-    <div id="file-picker" data-nosnippet>
+    <div id="file-picker">
         <div id="picker-box">
             <h1>Kirikiroid2 Web</h1>
-            <p class="subtitle">Select a game file to start</p>
+            <p class="subtitle">Run KiriKiri2 visual novels in your browser — no installation required</p>
             <div id="drop-zone">
                 <div class="icon">&#128193;</div>
                 <div class="label">Drag & drop .xp3 file here</div>
@@ -652,6 +708,36 @@
             <div id="picker-status"></div>
             <div id="picker-progress"><div id="picker-progress-fill"></div></div>
             <div class="feedback-link"><a href="https://github.com/fenghengzhi/krkr2/issues" target="_blank" rel="noopener">Feedback & Issues</a></div>
+            <section class="about-content">
+                <h2>About Kirikiroid2 Web</h2>
+                <p>Kirikiroid2 Web is a browser port of <strong>KiriKiri2</strong> (吉里吉里2), the visual novel engine behind hundreds of Japanese ADV / galgame titles. The engine is compiled to WebAssembly via Emscripten, so games run entirely client-side — your save data and game files never leave your device.</p>
+                <p>This port targets binary compatibility with the original Android <code>libkrkr2.so</code> runtime (kirikiroid2), reimplementing the same TJS2 scripting engine, XP3 archive loader, and rendering pipeline. The goal is not just functional equivalence but architectural fidelity to the upstream binary.</p>
+
+                <h3>Features</h3>
+                <ul>
+                    <li>Load <code>.xp3</code> game archives via drag &amp; drop, file picker, or folder upload</li>
+                    <li>Extract and run games packaged as <code>.zip</code> archives</li>
+                    <li>Direct directory access on Chromium browsers via the File System Access API</li>
+                    <li>Persistent save data in named save spaces, backed by IndexedDB</li>
+                    <li>Export and import save data as <code>.zip</code> for backup or device transfer</li>
+                    <li>WebGL hardware-accelerated rendering with mobile shader compatibility</li>
+                    <li>Full TJS2 scripting engine — runs original game scripts unmodified</li>
+                </ul>
+
+                <h3>How to use</h3>
+                <ol>
+                    <li>Obtain an <code>.xp3</code> archive or game folder for a KiriKiri2 game you own.</li>
+                    <li>Drag the file onto the drop zone above, or use one of the buttons.</li>
+                    <li>Choose or create a save space when prompted — your saves persist between sessions in the browser.</li>
+                </ol>
+                <p>You can also auto-load a game via URL parameters: <code>?xp3=&lt;url&gt;</code> loads a single archive, and <code>?game=&lt;url&gt;</code> loads a ZIP-packaged game directory.</p>
+
+                <h3>Browser requirements</h3>
+                <p>A modern browser with WebAssembly and WebGL support is required. The site is served with <code>Cross-Origin-Opener-Policy</code> and <code>Cross-Origin-Embedder-Policy</code> headers to enable <code>SharedArrayBuffer</code> and multi-threading. Tested on recent Chrome, Edge, Firefox, and Safari (desktop and mobile).</p>
+
+                <h3>Open source</h3>
+                <p>Kirikiroid2 Web is open source. The full source code, build instructions, and issue tracker are on GitHub: <a href="https://github.com/fenghengzhi/krkr2" target="_blank" rel="noopener">github.com/fenghengzhi/krkr2</a>.</p>
+            </section>
         </div>
     </div>
     <div id="xp3-selector" data-nosnippet>
