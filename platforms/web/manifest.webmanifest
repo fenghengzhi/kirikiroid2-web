@@ -1,7 +1,7 @@
 {
   "name": "KrKr2 Web",
   "short_name": "KrKr2",
-  "description": "Run KiriKiri2 visual novels in your browser with WebAssembly.",
+  "description": "Run Kirikiri2 visual novels in your browser with WebAssembly.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
