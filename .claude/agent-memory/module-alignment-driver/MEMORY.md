@@ -1,0 +1,1 @@
+- [motionplayer module status](module_motionplayer.md) — 中等成熟度；EmotePlayer 委托链已修，Player 类布局仍是 shared_ptr 而非 1384B flat

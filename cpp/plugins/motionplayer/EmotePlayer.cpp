@@ -16,8 +16,11 @@
 
 namespace motion {
 
+    // Aligned to libkrkr2.so D3DEmotePlayer 对象链:壳持有 EmoteObject(+24),
+    // EmoteObject 持有 EmoteEngine(+8),EmoteEngine 在 +1064 持有堆分配的 Player。
+    // 二进制在 load() 时懒建此链;本地构造期即建(eager),功能等价。
     EmotePlayer::EmotePlayer(ResourceManager rm) :
-        _player(std::move(rm)) {}
+        _emoteObj(std::make_unique<EmoteObject>(std::move(rm))) {}
 
     EmotePlayer::~EmotePlayer() = default;
 
@@ -25,85 +28,87 @@ namespace motion {
 
     void EmotePlayer::setVisible(bool v) {
         _visible = v;
-        _player.setVisible(v);
+        player().setVisible(v);
     }
 
     void EmotePlayer::setMeshDivisionRatio(double v) {
-        _meshDivisionRatio = v;
-        _player.setEmoteMeshDivisionRatio(v);
+        engine()._meshDivisionRatio = v;
+        player().setEmoteMeshDivisionRatio(v);
     }
 
     bool EmotePlayer::getAnimating() const {
-        return _player.getAllplaying();
+        return player().getAllplaying();
     }
 
     void EmotePlayer::setModule(tTJSVariant v) {
-        _module = v;
+        obj()._module = v;
         // Bridge loaded PSB snapshot into Player's animation pipeline.
         // Aligned to libkrkr2.so EmoteObject_init (sub_67DBAC):
         // After loading PSBs, the EmoteObject initializes its internal Player
         // with the loaded motion data.
-        auto snapshot = detail::lookupModuleSnapshot(_module);
+        auto snapshot = detail::lookupModuleSnapshot(obj()._module);
         if(snapshot) {
-            _player.loadFromSnapshot(snapshot);
+            player().loadFromSnapshot(snapshot);
         }
     }
 
-    tTJSVariant EmotePlayer::getModule() const { return _module; }
+    tTJSVariant EmotePlayer::getModule() const { return obj()._module; }
 
     // --- Methods ---
 
     // Aligned to libkrkr2.so sub_52FD84: create() is actually "destroy/reset"
     void EmotePlayer::create() {
-        _module.Clear();
-        _player.loadFromSnapshot(nullptr);
-        _modified = true;
+        obj()._module.Clear();
+        player().loadFromSnapshot(nullptr);
+        engine()._modified = true;
     }
 
     void EmotePlayer::load(tTJSVariant data) {
-        _module = data;
-        auto snapshot = detail::lookupModuleSnapshot(_module);
+        obj()._module = data;
+        auto snapshot = detail::lookupModuleSnapshot(obj()._module);
         if(snapshot) {
-            _player.loadFromSnapshot(snapshot);
+            player().loadFromSnapshot(snapshot);
         }
-        _modified = true;
+        engine()._modified = true;
     }
 
     tTJSVariant EmotePlayer::clone() {
         typedef ncbInstanceAdaptor<EmotePlayer> AdaptorT;
 
         auto *copy = new EmotePlayer(ResourceManager{});
-        // Copy EmotePlayer-specific state
-        copy->_module = _module;
+        // 壳层字段(EmotePlayer 自身)
         copy->_useD3D = _useD3D;
         copy->_smoothing = _smoothing;
-        copy->_meshDivisionRatio = _meshDivisionRatio;
-        copy->_queuing = _queuing;
-        copy->_hairScale = _hairScale;
-        copy->_partsScale = _partsScale;
-        copy->_bustScale = _bustScale;
-        copy->_bodyScale = _bodyScale;
-        copy->_progress = _progress;
-        copy->_modified = _modified;
         copy->_drawVisible = _drawVisible;
         copy->_drawOpacity = _drawOpacity;
         copy->_opengl = _opengl;
         copy->_visible = _visible;
-        copy->_playCallback = _playCallback;
         copy->_baseScale = _baseScale;
         copy->_userScale = _userScale;
-        copy->_rot = _rot;
-        copy->_coordX = _coordX;
-        copy->_coordY = _coordY;
-        copy->_mirrorBase = _mirrorBase;
-        copy->_mirrorRequested = _mirrorRequested;
-        copy->_mirrorChanged = _mirrorChanged;
-        copy->_color = _color;
+        // EmoteObject 层
+        copy->obj()._module = obj()._module;
+        // EmoteEngine 层(引擎字段 + getScale/Rot/Color 缓存)
+        copy->engine()._meshDivisionRatio = engine()._meshDivisionRatio;
+        copy->engine()._queuing = engine()._queuing;
+        copy->engine()._hairScale = engine()._hairScale;
+        copy->engine()._partsScale = engine()._partsScale;
+        copy->engine()._bustScale = engine()._bustScale;
+        copy->engine()._bodyScale = engine()._bodyScale;
+        copy->engine()._progress = engine()._progress;
+        copy->engine()._modified = engine()._modified;
+        copy->engine()._playCallback = engine()._playCallback;
+        copy->engine()._rot = engine()._rot;
+        copy->engine()._coordX = engine()._coordX;
+        copy->engine()._coordY = engine()._coordY;
+        copy->engine()._mirrorBase = engine()._mirrorBase;
+        copy->engine()._mirrorRequested = engine()._mirrorRequested;
+        copy->engine()._mirrorChanged = engine()._mirrorChanged;
+        copy->engine()._color = engine()._color;
 
         // Load the same snapshot into the cloned Player
-        auto snapshot = detail::lookupModuleSnapshot(_module);
+        auto snapshot = detail::lookupModuleSnapshot(obj()._module);
         if(snapshot) {
-            copy->_player.loadFromSnapshot(snapshot);
+            copy->player().loadFromSnapshot(snapshot);
         }
 
         tTJSVariant result;
@@ -118,12 +123,12 @@ namespace motion {
 
     void EmotePlayer::show() {
         _visible = true;
-        _player.setVisible(true);
+        player().setVisible(true);
     }
 
     void EmotePlayer::hide() {
         _visible = false;
-        _player.setVisible(false);
+        player().setVisible(false);
     }
 
     void EmotePlayer::assignState() { STUB_WARN(assignState); }
@@ -131,9 +136,9 @@ namespace motion {
 
     // Aligned to libkrkr2.so sub_5302E4: delegates to Player's rotAnimator
     void EmotePlayer::setRot(double rot, double transition, double ease) {
-        _rot = rot;
-        _player.setRotate(rot, transition, ease);
-        _modified = true;
+        engine()._rot = rot;
+        player().setRotate(rot, transition, ease);
+        engine()._modified = true;
     }
 
     tjs_error EmotePlayer::setRotCompat(tTJSVariant *, tjs_int numparams,
@@ -162,10 +167,10 @@ namespace motion {
     // Aligned to libkrkr2.so sub_5301EC: delegates to Player's coordAnimator
     void EmotePlayer::setCoord(double x, double y, double transition,
                                double ease) {
-        _coordX = x;
-        _coordY = y;
-        _player.setEmoteCoord(x, y, transition, ease);
-        _modified = true;
+        engine()._coordX = x;
+        engine()._coordY = y;
+        player().setEmoteCoord(x, y, transition, ease);
+        engine()._modified = true;
     }
 
     tjs_error EmotePlayer::setCoordCompat(tTJSVariant *, tjs_int numparams,
@@ -194,8 +199,8 @@ namespace motion {
         _userScale = static_cast<float>(s);
         const double finalScale =
             static_cast<double>(_baseScale) * static_cast<double>(_userScale);
-        _player.setEmoteScale(finalScale, transition, ease);
-        _modified = true;
+        player().setEmoteScale(finalScale, transition, ease);
+        engine()._modified = true;
     }
 
     tjs_error EmotePlayer::setScaleCompat(tTJSVariant *, tjs_int numparams,
@@ -226,16 +231,16 @@ namespace motion {
         // wrapper stores requested mirror, derives a root-flip delta against a
         // baseline bit, forwards that effective flip to Player_setRootFlipX,
         // then triggers the large controller reset path.
-        _mirrorRequested = mirror;
-        _mirrorChanged = (_mirrorRequested != _mirrorBase);
-        _player.setMirror(_mirrorChanged);
-        _modified = true;
+        engine()._mirrorRequested = mirror;
+        engine()._mirrorChanged = (engine()._mirrorRequested != engine()._mirrorBase);
+        player().setMirror(engine()._mirrorChanged);
+        engine()._modified = true;
     }
 
     void EmotePlayer::setColor(tjs_int color, double transition, double ease) {
-        _color = color;
-        _player.setEmoteColor(static_cast<tjs_uint32>(color), transition, ease);
-        _modified = true;
+        engine()._color = color;
+        player().setEmoteColor(static_cast<tjs_uint32>(color), transition, ease);
+        engine()._modified = true;
     }
 
     tjs_error EmotePlayer::setColorCompat(tTJSVariant *, tjs_int numparams,
@@ -265,8 +270,8 @@ namespace motion {
     // wrapper forwards label/value/transition/ease into Player_setVariable.
     void EmotePlayer::setVariable(ttstr label, double value, double transition,
                                   double ease) {
-        _player.setVariable(label, value, transition, ease);
-        _modified = true;
+        player().setVariable(label, value, transition, ease);
+        engine()._modified = true;
     }
 
     tjs_error EmotePlayer::setVariableCompat(tTJSVariant *, tjs_int numparams,
@@ -291,35 +296,35 @@ namespace motion {
     }
 
     double EmotePlayer::getVariable(ttstr label) {
-        return _player.getVariable(label);
+        return player().getVariable(label);
     }
 
     tjs_int EmotePlayer::countVariables() {
-        return _player.countVariables();
+        return player().countVariables();
     }
 
     ttstr EmotePlayer::getVariableLabelAt(tjs_int idx) {
-        return _player.getVariableLabelAt(idx);
+        return player().getVariableLabelAt(idx);
     }
 
     tjs_int EmotePlayer::countVariableFrameAt(tjs_int idx) {
-        return _player.countVariableFrameAt(idx);
+        return player().countVariableFrameAt(idx);
     }
 
     ttstr EmotePlayer::getVariableFrameLabelAt(tjs_int idx, tjs_int frameIdx) {
-        return _player.getVariableFrameLabelAt(idx, frameIdx);
+        return player().getVariableFrameLabelAt(idx, frameIdx);
     }
 
     double EmotePlayer::getVariableFrameValueAt(tjs_int idx, tjs_int frameIdx) {
-        return _player.getVariableFrameValueAt(idx, frameIdx);
+        return player().getVariableFrameValueAt(idx, frameIdx);
     }
 
     // --- Wind/Force ---
     void EmotePlayer::startWind(double minAngle, double maxAngle,
                                 double amplitude, double freqX,
                                 double freqY) {
-        _player.startWind(minAngle, maxAngle, amplitude, freqX, freqY);
-        _modified = true;
+        player().startWind(minAngle, maxAngle, amplitude, freqX, freqY);
+        engine()._modified = true;
     }
 
     tjs_error EmotePlayer::startWindCompat(tTJSVariant *, tjs_int numparams,
@@ -342,8 +347,8 @@ namespace motion {
     }
 
     void EmotePlayer::stopWind() {
-        _player.stopWind();
-        _modified = true;
+        player().stopWind();
+        engine()._modified = true;
     }
 
     tjs_error EmotePlayer::stopWindCompat(tTJSVariant *, tjs_int,
@@ -361,86 +366,86 @@ namespace motion {
     // --- Timeline methods: delegate to Player ---
 
     tjs_int EmotePlayer::countMainTimelines() {
-        return _player.countMainTimelines();
+        return player().countMainTimelines();
     }
 
     ttstr EmotePlayer::getMainTimelineLabelAt(tjs_int idx) {
-        return _player.getMainTimelineLabelAt(idx);
+        return player().getMainTimelineLabelAt(idx);
     }
 
     tjs_int EmotePlayer::countDiffTimelines() {
-        return _player.countDiffTimelines();
+        return player().countDiffTimelines();
     }
 
     ttstr EmotePlayer::getDiffTimelineLabelAt(tjs_int idx) {
-        return _player.getDiffTimelineLabelAt(idx);
+        return player().getDiffTimelineLabelAt(idx);
     }
 
     tjs_int EmotePlayer::countPlayingTimelines() {
-        return _player.countPlayingTimelines();
+        return player().countPlayingTimelines();
     }
 
     ttstr EmotePlayer::getPlayingTimelineLabelAt(tjs_int idx) {
-        return _player.getPlayingTimelineLabelAt(idx);
+        return player().getPlayingTimelineLabelAt(idx);
     }
 
     tjs_int EmotePlayer::getPlayingTimelineFlagsAt(tjs_int idx) {
-        return _player.getPlayingTimelineFlagsAt(idx);
+        return player().getPlayingTimelineFlagsAt(idx);
     }
 
     bool EmotePlayer::isLoopTimeline(ttstr label) {
-        return _player.getLoopTimeline(label);
+        return player().getLoopTimeline(label);
     }
 
     tjs_int EmotePlayer::getTimelineTotalFrameCount(ttstr label) {
-        return _player.getTimelineTotalFrameCount(label);
+        return player().getTimelineTotalFrameCount(label);
     }
 
     void EmotePlayer::playTimeline(ttstr label, tjs_int flags) {
-        _player.playTimeline(label, flags);
-        _modified = true;
+        player().playTimeline(label, flags);
+        engine()._modified = true;
     }
 
     bool EmotePlayer::isTimelinePlaying(ttstr label) {
-        return _player.getTimelinePlaying(label);
+        return player().getTimelinePlaying(label);
     }
 
     void EmotePlayer::stopTimeline(ttstr label) {
-        _player.stopTimeline(label);
+        player().stopTimeline(label);
     }
 
     void EmotePlayer::setTimelineBlendRatio(ttstr label, double ratio) {
-        _player.setTimelineBlendRatio(label, ratio);
+        player().setTimelineBlendRatio(label, ratio);
     }
 
     double EmotePlayer::getTimelineBlendRatio(ttstr label) {
-        return _player.getTimelineBlendRatio(label);
+        return player().getTimelineBlendRatio(label);
     }
 
     void EmotePlayer::fadeInTimeline(ttstr label, double duration,
                                      tjs_int flags) {
-        _player.fadeInTimeline(label, duration, flags);
+        player().fadeInTimeline(label, duration, flags);
     }
 
     void EmotePlayer::fadeOutTimeline(ttstr label, double duration,
                                       tjs_int flags) {
-        _player.fadeOutTimeline(label, duration, flags);
+        player().fadeOutTimeline(label, duration, flags);
     }
 
     void EmotePlayer::setTimeline(ttstr label, bool loop) {
         // Player doesn't have an exact equivalent; use playTimeline + loop flag
-        _player.playTimeline(label, 0);
+        player().playTimeline(label, 0);
     }
 
     bool EmotePlayer::play(ttstr label, tjs_int flags) {
-        const bool started = _player.playMotionLike_0x6B2284(label, flags);
-        _modified = true;
+        const bool started = player().playMotionLike_0x6B2284(label, flags);
+        engine()._modified = true;
         return started;
     }
 
     void EmotePlayer::draw(tTJSVariant target) {
-        _player.draw(target);
-        _modified = true;
+        player().draw(target);
+        engine()._modified = true;
     }
 
     tjs_error EmotePlayer::setDrawAffineTranslateMatrixCompat(
@@ -452,26 +457,26 @@ namespace motion {
             return TJS_E_INVALIDOBJECT;
         }
         return Player::setDrawAffineTranslateMatrixCompat(
-            result, numparams, param, &self->_player);
+            result, numparams, param, &self->player());
     }
 
     void EmotePlayer::addPlayCallback() {
-        _playCallback = true;
+        engine()._playCallback = true;
     }
 
     void EmotePlayer::skip() {
         // Aligned to libkrkr2.so sub_66EB8C: skip to end of all timelines
         // Player doesn't expose skip() directly, stop all timelines
-        _player.stopTimeline(TJS_W(""));
+        player().stopTimeline(TJS_W(""));
     }
 
     // Aligned to libkrkr2.so sub_6818B4 -> sub_6D2A54:
     // after wrapper-side animators, EmotePlayer advances its owned Player and
     // immediately updates layers/calcBounds.
     void EmotePlayer::pass(double dt) {
-        _progress += dt;
-        _player.progressMsLike_0x6D2A54(dt);
-        _modified = true;
+        engine()._progress += dt;
+        player().progressMsLike_0x6D2A54(dt);
+        engine()._modified = true;
     }
 
     void EmotePlayer::progress(double dt) {
@@ -485,8 +490,8 @@ namespace motion {
 
     void EmotePlayer::setOuterForce(ttstr label, double x, double y,
                                     double transition, double ease) {
-        _player.setOuterForce(label, x, y, transition, ease);
-        _modified = true;
+        player().setOuterForce(label, x, y, transition, ease);
+        engine()._modified = true;
     }
 
     tjs_error EmotePlayer::setOuterForceCompat(tTJSVariant *, tjs_int numparams,
@@ -525,23 +530,23 @@ namespace motion {
         // Aligned to libkrkr2.so sub_690DF0: supports circle/rect/quad;
         // we use AABB approximation for now.
         const double scale = static_cast<double>(_baseScale * _userScale);
-        const double width = _player.getActiveMotionWidth();
-        const double height = _player.getActiveMotionHeight();
+        const double width = player().getActiveMotionWidth();
+        const double height = player().getActiveMotionHeight();
         if(width <= 0.0 || height <= 0.0) {
             return false;
         }
 
         const auto scaledWidth = width * scale;
         const auto scaledHeight = height * scale;
-        return x >= _coordX && x <= (_coordX + scaledWidth) &&
-               y >= _coordY && y <= (_coordY + scaledHeight);
+        return x >= engine()._coordX && x <= (engine()._coordX + scaledWidth) &&
+               y >= engine()._coordY && y <= (engine()._coordY + scaledHeight);
     }
 
     bool EmotePlayer::contains(ttstr label, double x, double y) {
         if(!_visible || label.IsEmpty()) {
             return false;
         }
-        return _player.hitTestLayer(label, x, y);
+        return player().hitTestLayer(label, x, y);
     }
 
     tjs_error EmotePlayer::containsCompat(tTJSVariant *result, tjs_int numparams,
