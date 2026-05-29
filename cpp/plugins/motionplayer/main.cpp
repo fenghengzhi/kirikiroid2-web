@@ -293,93 +293,11 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(emoteEdit);
 }
 
+// Motion.EmotePlayer — minimal NCB class matching libkrkr2.so EmotePlayer_NCB_classInit
+// @ 0x686148. Binary only registers `finalize` (no script-facing API). The constructor
+// is bound for native instance allocation; D3DEmotePlayer is the class with the real API.
 NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
-    NCB_CONSTRUCTOR((ResourceManager));
-
-    // Properties
-    NCB_PROPERTY_RO(module, getModule);
-    NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
-    NCB_PROPERTY(chara, getChara, setChara);
-    NCB_PROPERTY(motion, getMotion, setMotion);
-    NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);
-    NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
-    NCB_PROPERTY(outline, getOutline, setOutline);
-    NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);
-    NCB_PROPERTY(frameLastTime, getFrameLastTime, setFrameLastTime);
-    NCB_PROPERTY(frameLoopTime, getFrameLoopTime, setFrameLoopTime);
-    NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
-    NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
-                 setProcessedMeshVerticesNum);
-    NCB_PROPERTY(visible, getVisible, setVisible);
-    NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
-    NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
-    NCB_PROPERTY(queing, getQueuing, setQueuing); // original typo preserved
-    NCB_PROPERTY(hairScale, getHairScale, setHairScale);
-    NCB_PROPERTY(partsScale, getPartsScale, setPartsScale);
-    NCB_PROPERTY(bustScale, getBustScale, setBustScale);
-    NCB_PROPERTY(bodyScale, getBodyScale, setBodyScale);
-    NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
-    NCB_PROPERTY(progress, getProgress, setProgress);
-    NCB_PROPERTY(modified, getModified, setModified);
-    NCB_PROPERTY(drawvisible, getDrawVisible, setDrawVisible);
-    NCB_PROPERTY(drawOpacity, getDrawOpacity, setDrawOpacity);
-    NCB_PROPERTY(opengl, getOpengl, setOpengl);
-    NCB_PROPERTY_RO(animating, getAnimating);
-    NCB_PROPERTY_RO(playCallback, getPlayCallback);
-
-    // Methods
-    NCB_METHOD(create);
-    NCB_METHOD(load);
-    NCB_METHOD(clone);
-    NCB_METHOD(show);
-    NCB_METHOD(hide);
-    NCB_METHOD(assignState);
-    NCB_METHOD(initPhysics);
-    NCB_METHOD_RAW_CALLBACK(setRot, &EmotePlayer::setRotCompat, 0);
-    NCB_METHOD(getRot);
-    NCB_METHOD_RAW_CALLBACK(setCoord, &EmotePlayer::setCoordCompat, 0);
-    NCB_METHOD_RAW_CALLBACK(setScale, &EmotePlayer::setScaleCompat, 0);
-    NCB_METHOD(getScale);
-    NCB_METHOD(setMirror);
-    NCB_METHOD_RAW_CALLBACK(setColor, &EmotePlayer::setColorCompat, 0);
-    NCB_METHOD(getColor);
-    NCB_METHOD(countVariables);
-    NCB_METHOD(getVariableLabelAt);
-    NCB_METHOD(countVariableFrameAt);
-    NCB_METHOD(getVariableFrameLabelAt);
-    NCB_METHOD(getVariableFrameValueAt);
-    NCB_METHOD_RAW_CALLBACK(setVariable, &EmotePlayer::setVariableCompat, 0);
-    NCB_METHOD(getVariable);
-    NCB_METHOD_RAW_CALLBACK(startWind, &EmotePlayer::startWindCompat, 0);
-    NCB_METHOD_RAW_CALLBACK(stopWind, &EmotePlayer::stopWindCompat, 0);
-    NCB_METHOD(countMainTimelines);
-    NCB_METHOD(getMainTimelineLabelAt);
-    NCB_METHOD(countDiffTimelines);
-    NCB_METHOD(getDiffTimelineLabelAt);
-    NCB_METHOD(countPlayingTimelines);
-    NCB_METHOD(getPlayingTimelineLabelAt);
-    NCB_METHOD(getPlayingTimelineFlagsAt);
-    NCB_METHOD(isLoopTimeline);
-    NCB_METHOD(getTimelineTotalFrameCount);
-    NCB_METHOD(play);
-    NCB_METHOD(playTimeline);
-    NCB_METHOD(isTimelinePlaying);
-    NCB_METHOD(stopTimeline);
-    NCB_METHOD(setTimeline);
-    NCB_METHOD(setTimelineBlendRatio);
-    NCB_METHOD(getTimelineBlendRatio);
-    NCB_METHOD(fadeInTimeline);
-    NCB_METHOD(fadeOutTimeline);
-    NCB_METHOD(skip);
-    NCB_METHOD(addPlayCallback);
-    NCB_METHOD(pass);
-    NCB_METHOD(progress);
-    NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant));
-    NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
-                            &EmotePlayer::setDrawAffineTranslateMatrixCompat, 0);
-    NCB_METHOD_RAW_CALLBACK(setOuterForce, &EmotePlayer::setOuterForceCompat, 0);
-    NCB_METHOD(getOuterForce);
-    NCB_METHOD_RAW_CALLBACK(contains, &EmotePlayer::containsCompat, 0);
+    NCB_CONSTRUCTOR(());
 }
 
 // ============================================================
@@ -617,23 +535,23 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(hide);
     NCB_METHOD(assignState);
     NCB_METHOD(initPhysics);
-    NCB_METHOD_RAW_CALLBACK(setRot, &EmotePlayer::setRotCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(setRot, &D3DEmotePlayer::setRotCompat, 0);
     NCB_METHOD(getRot);
-    NCB_METHOD_RAW_CALLBACK(setCoord, &EmotePlayer::setCoordCompat, 0);
-    NCB_METHOD_RAW_CALLBACK(setScale, &EmotePlayer::setScaleCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(setCoord, &D3DEmotePlayer::setCoordCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(setScale, &D3DEmotePlayer::setScaleCompat, 0);
     NCB_METHOD(getScale);
     NCB_METHOD(setMirror);
-    NCB_METHOD_RAW_CALLBACK(setColor, &EmotePlayer::setColorCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(setColor, &D3DEmotePlayer::setColorCompat, 0);
     NCB_METHOD(getColor);
     NCB_METHOD(countVariables);
     NCB_METHOD(getVariableLabelAt);
     NCB_METHOD(countVariableFrameAt);
     NCB_METHOD(getVariableFrameLabelAt);
     NCB_METHOD(getVariableFrameValueAt);
-    NCB_METHOD_RAW_CALLBACK(setVariable, &EmotePlayer::setVariableCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(setVariable, &D3DEmotePlayer::setVariableCompat, 0);
     NCB_METHOD(getVariable);
-    NCB_METHOD_RAW_CALLBACK(startWind, &EmotePlayer::startWindCompat, 0);
-    NCB_METHOD_RAW_CALLBACK(stopWind, &EmotePlayer::stopWindCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(startWind, &D3DEmotePlayer::startWindCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(stopWind, &D3DEmotePlayer::stopWindCompat, 0);
     NCB_METHOD(countMainTimelines);
     NCB_METHOD(getMainTimelineLabelAt);
     NCB_METHOD(countDiffTimelines);
@@ -658,8 +576,8 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(progress);
     NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant));
     NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
-                            &EmotePlayer::setDrawAffineTranslateMatrixCompat, 0);
-    NCB_METHOD_RAW_CALLBACK(setOuterForce, &EmotePlayer::setOuterForceCompat, 0);
+                            &D3DEmotePlayer::setDrawAffineTranslateMatrixCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(setOuterForce, &D3DEmotePlayer::setOuterForceCompat, 0);
     NCB_METHOD(getOuterForce);
-    NCB_METHOD_RAW_CALLBACK(contains, &EmotePlayer::containsCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(contains, &D3DEmotePlayer::containsCompat, 0);
 }

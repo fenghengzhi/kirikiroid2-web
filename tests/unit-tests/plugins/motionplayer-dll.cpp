@@ -619,7 +619,7 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
     const auto module = rm.load(motionFixturePath());
     REQUIRE(module.Type() == tvtObject);
 
-    motion::EmotePlayer player(rm);
+    motion::D3DEmotePlayer player(rm);
     player.setModule(module);
     REQUIRE(player.getModule().Type() == tvtObject);
 

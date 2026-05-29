@@ -21,6 +21,25 @@ namespace motion {
         TimelinePlayFlagSequential = 2
     };
 
+    // EmotePlayer — 二进制 EmotePlayer NCB 类(24B native instance,
+    //   EmotePlayerNativeInstance_create @ 0x68629C
+    //   EmotePlayer_NCB_classInit @ 0x686148)
+    // 二进制只注册一个 `finalize` 成员;无 script-facing API。
+    // 与 D3DEmotePlayer 是两个完全独立的 NCB 类(无继承关系)——二进制中分别
+    // 由 EmotePlayer_NCB_classInit 和 D3DEmotePlayer_ncb_register @ 0x541D98 注册。
+    // 字段 +8 ptr / +16 byte 语义尚未调查,留作后续 fidelity 改进(参见 review report)。
+    class EmotePlayer {
+    public:
+        EmotePlayer() = default;
+        explicit EmotePlayer(ResourceManager) {}
+        virtual ~EmotePlayer() = default;
+
+    private:
+        // 二进制布局: vtable +0 / ptr +8 / byte +16,sizeof = 24
+        void *_slot1 = nullptr; // 二进制 +8
+        bool _slot2 = false;    // 二进制 +16
+    };
+
     // === libkrkr2.so D3DEmotePlayer 对象链(已验证,见
     // analysis/EmotePlayer_Internal_Implementation.md §2.0)===
     // 二进制不是单一扁平对象,而是 4 级独立 operator new 堆对象,指针连接:
@@ -97,10 +116,16 @@ namespace motion {
         std::unique_ptr<EmoteEngine> _engine; // +8
     };
 
-    class EmotePlayer {
+    // D3DEmotePlayer — 二进制 D3DEmotePlayer NCB 类(≥56B 独立 native instance,
+    //   D3DEmotePlayer_ncb_register @ 0x541D98
+    //   D3DEmotePlayer_ncb_registerMembers @ 0x52E504)
+    // 持有 +24 EmoteObject 主链 + 壳层字段(+40 baseScale, +44 userScale,
+    // +48 visible, +49 smoothing) + 全部 NCB 暴露的 API 方法。
+    // 与 EmotePlayer 是两个完全独立的 NCB 类,无继承关系。
+    class D3DEmotePlayer {
     public:
-        explicit EmotePlayer(ResourceManager rm);
-        ~EmotePlayer();
+        explicit D3DEmotePlayer(ResourceManager rm);
+        ~D3DEmotePlayer();
 
         // --- Properties ---
         void setUseD3D(bool v) { _useD3D = v; }
@@ -316,12 +341,6 @@ namespace motion {
         // 二进制对象链(壳 +24 → EmoteObject +8 → EmoteEngine +1064 → Player)。
         // Player 由链尾的 EmoteEngine 用指针持有,不再 by-value 内嵌。
         std::unique_ptr<EmoteObject> _emoteObj;
-    };
-
-    // Thin wrapper for top-level NCB registration (avoids ncbind conflict)
-    class D3DEmotePlayer : public EmotePlayer {
-    public:
-        explicit D3DEmotePlayer(ResourceManager rm) : EmotePlayer(rm) {}
     };
 
 } // namespace motion
