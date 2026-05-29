@@ -6,6 +6,10 @@
 /**/out/
 /**/bin/
 
+# clangd: symlink to out/web/debug/compile_commands.json
+/compile_commands.json
+/.cache/clangd/
+
 .idea/
 .vscode/
 .vs/
