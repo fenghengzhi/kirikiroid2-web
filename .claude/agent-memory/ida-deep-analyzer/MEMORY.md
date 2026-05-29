@@ -18,3 +18,4 @@
 - [Texture upload path](project_texture_upload_path.md) — libkrkr2.so 是 100% 同步 glTexImage2D/glTexSubImage2D 主线程上传。无 PBO、无 eglMakeCurrent、无 GL 上传线程。Web 移植无优化缺口。5 个 pthread_create 全部分类记录。
 - [Player 4 hashmaps](project_player_four_hashmaps.md) — 1384B Player 的 4 张 libstdc++ unordered_map（+264 "::"-cascade / +320 raw→double / +1184 node-path→696B layer state / +1240 name→label alias）；本地 PlayerRuntime 6 个 map 对账：HM2≈_evalResultValues，HM3/HM4 完全无对应，type4..8 controller maps 应迁出
 - [Player containers libstdc++ spec](player_containers_libstdcxx_spec.md) — 6 容器 (4 HM + 2 deque) 全部是 libstdc++ STL 实例化 (非 KiriKiri 自定义); HM 控制结构 56B / deque 控制结构 80B; 完整 entry layout (HM1=96B/HM2=32B/HM3=720B/HM4=32B), hash 函数, API 表, 不可对齐评估
+- [Player value structs spec](player_value_structs_spec.md) — Phase B Step 2: HM1(72B PropGet cache)/HM3(688B node snapshot 带双向 init/restore 映射)/Controller@+1296(160B variable-label scope entries, 不是 animator) value 字段表; +864/+760/byte_1AB84A8 附加发现

@@ -126,3 +126,90 @@ TEST_CASE("DispatchAliasMap: stores and retrieves non-owning pointers",
     REQUIRE(m.find(ttstr(u"slot.a")) == m.end());
     REQUIRE(m.size() == 1);
 }
+
+TEST_CASE("EvalCascadeState: default-constructed destructor is safe",
+          "[motionplayer][value_struct]") {
+    using motion::detail::EvalCascadeState;
+    EvalCascadeState s;
+    REQUIRE(s.mainDispatch == nullptr);
+    REQUIRE(s.chainDispatches.empty());
+    REQUIRE(s.heapResult == nullptr);
+    // Destructor runs on scope exit; nullptr fast-paths must not crash.
+}
+
+TEST_CASE("EvalCascadeState: move construction transfers ownership",
+          "[motionplayer][value_struct]") {
+    using motion::detail::EvalCascadeState;
+    EvalCascadeState src;
+    src.heapResult = ::operator new(16);
+    src.keyCopy = ttstr(u"cascade.key");
+    void *owned = src.heapResult;
+
+    EvalCascadeState dst(std::move(src));
+    REQUIRE(dst.heapResult == owned);
+    REQUIRE(src.heapResult == nullptr);
+    REQUIRE(dst.keyCopy == ttstr(u"cascade.key"));
+    // dst destructor will free owned; src destructor is now a no-op for heap.
+}
+
+TEST_CASE("EvalCascadeState: move assignment transfers ownership",
+          "[motionplayer][value_struct]") {
+    using motion::detail::EvalCascadeState;
+    EvalCascadeState src;
+    src.heapResult = ::operator new(8);
+    src.keyCopy = ttstr(u"alpha");
+    void *owned = src.heapResult;
+
+    EvalCascadeState dst;
+    dst = std::move(src);
+
+    REQUIRE(dst.heapResult == owned);
+    REQUIRE(src.heapResult == nullptr);
+    REQUIRE(dst.keyCopy == ttstr(u"alpha"));
+}
+
+TEST_CASE("EvalCascadeMap: stores EvalCascadeState by ttstr key",
+          "[motionplayer][value_struct][container]") {
+    using motion::detail::EvalCascadeMap;
+    using motion::detail::EvalCascadeState;
+    EvalCascadeMap m;
+    {
+        EvalCascadeState s;
+        s.heapResult = ::operator new(8);
+        m.emplace(ttstr(u"first"), std::move(s));
+    }
+    REQUIRE(m.size() == 1);
+    REQUIRE(m.find(ttstr(u"first")) != m.end());
+    REQUIRE(m.find(ttstr(u"first"))->second.heapResult != nullptr);
+    REQUIRE(m.find(ttstr(u"missing")) == m.end());
+    // Map destructor releases the EvalCascadeState heap on scope exit.
+}
+
+TEST_CASE("VariableLabelScope: default flags are all true",
+          "[motionplayer][value_struct]") {
+    using motion::detail::VariableLabelScope;
+    VariableLabelScope s;
+    REQUIRE(s.flagActive);
+    REQUIRE(s.flagValidated);
+    REQUIRE(s.flagField124);
+    REQUIRE(s.cascadeKey == ttstr());
+    REQUIRE(s.labelName == ttstr());
+    REQUIRE(s.scope == ttstr());
+}
+
+TEST_CASE("VariableLabelScopeDeque: append-and-iterate preserves order",
+          "[motionplayer][value_struct][container]") {
+    using motion::detail::VariableLabelScope;
+    using motion::detail::VariableLabelScopeDeque;
+    VariableLabelScopeDeque d;
+    for (int i = 0; i < 5; ++i) {
+        VariableLabelScope s;
+        s.cascadeKey = ttstr(u"k") + ttstr(i);
+        s.labelName = ttstr(u"label_") + ttstr(i);
+        d.push_back(std::move(s));
+    }
+    REQUIRE(d.size() == 5);
+    REQUIRE(d.front().cascadeKey == ttstr(u"k0"));
+    REQUIRE(d.back().cascadeKey == ttstr(u"k4"));
+    REQUIRE(d[2].labelName == ttstr(u"label_2"));
+}
