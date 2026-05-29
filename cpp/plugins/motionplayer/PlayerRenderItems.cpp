@@ -233,7 +233,7 @@ namespace motion {
         }
 
         const bool inheritedFlag18 = _renderItemInheritedFlag18;
-        auto &entries = _runtime->preparedRenderItems;
+        auto &entries = _preparedRenderItems;
         const auto &nodes = _nodes;
         const auto motionPath = _activeMotion->path;
         const int bitmask = _isEmoteMode ? 5193 : 5185;
@@ -252,7 +252,7 @@ namespace motion {
             child->_drawAffineMatrix = dam;
             child->prepareRenderItems(inheritedFlag18 || (_priorDraw != 0.0));
             child->_drawAffineMatrix = savedChildDrawAffine;
-            auto &childEntries = child->_runtime->preparedRenderItems;
+            auto &childEntries = child->_preparedRenderItems;
             if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                motionPath.find("m2logo.mtn") != std::string::npos &&
                _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0) {
@@ -305,13 +305,13 @@ namespace motion {
         };
 
         auto restoreNativeFieldLifetime =
-            [&](detail::PlayerRuntime::PreparedRenderItem &entry) {
-                entry.nativeLifetimeOwner = _runtime.get();
+            [&](detail::PreparedRenderItem &entry) {
+                entry.nativeLifetimeOwner = this;
                 entry.nativeLifetimeKey = entry.nodeIndex;
                 const auto it =
-                    _runtime->renderItemNativeFieldLifetimeByNode.find(
+                    _renderItemNativeFieldLifetimeByNode.find(
                         entry.nativeLifetimeKey);
-                if(it == _runtime->renderItemNativeFieldLifetimeByNode.end()) {
+                if(it == _renderItemNativeFieldLifetimeByNode.end()) {
                     return;
                 }
                 // libkrkr2.so 0x6C2334 does not blanket-initialize item+20,
@@ -328,7 +328,7 @@ namespace motion {
             };
 
         auto updatePaintBox =
-            [](detail::PlayerRuntime::PreparedRenderItem &entry, double x,
+            [](detail::PreparedRenderItem &entry, double x,
                double y, bool firstPoint) {
                 const float fx = static_cast<float>(x);
                 const float fy = static_cast<float>(y);
@@ -446,7 +446,7 @@ namespace motion {
             }
             if(!hasOwnSource && !needsGroupEntry) continue;
 
-            detail::PlayerRuntime::PreparedRenderItem entry;
+            detail::PreparedRenderItem entry;
             entry.nodeIndex = static_cast<int>(i);
             restoreNativeFieldLifetime(entry);
             entry.hasOwnSource = hasOwnSource;
@@ -778,8 +778,8 @@ namespace motion {
         }
 
         auto unionPaintBox =
-            [](detail::PlayerRuntime::PreparedRenderItem &parent,
-               const detail::PlayerRuntime::PreparedRenderItem &child) {
+            [](detail::PreparedRenderItem &parent,
+               const detail::PreparedRenderItem &child) {
                 if(child.paintBox[2] < child.paintBox[0] ||
                    child.paintBox[3] < child.paintBox[1]) {
                     return;
@@ -831,7 +831,7 @@ namespace motion {
 
         const bool savedInheritedFlag18 = _renderItemInheritedFlag18;
         _renderItemInheritedFlag18 = inheritedFlag18;
-        _runtime->preparedRenderItems.clear();
+        _preparedRenderItems.clear();
         const auto motionPath =
             _activeMotion ? _activeMotion->path
                                    : std::string{};
@@ -841,16 +841,16 @@ namespace motion {
 #endif
         appendPreparedRenderItems();
         std::vector<double> beforeSortKeys;
-        beforeSortKeys.reserve(_runtime->preparedRenderItems.size());
-        for(const auto &item : _runtime->preparedRenderItems) {
+        beforeSortKeys.reserve(_preparedRenderItems.size());
+        for(const auto &item : _preparedRenderItems) {
             beforeSortKeys.push_back(item.sortKey);
         }
         // Aligned to sub_6D4F00 (0x6D4F00): compare render-item sort key.
         std::stable_sort(
-            _runtime->preparedRenderItems.begin(),
-            _runtime->preparedRenderItems.end(),
-            [](const detail::PlayerRuntime::PreparedRenderItem &lhs,
-               const detail::PlayerRuntime::PreparedRenderItem &rhs) {
+            _preparedRenderItems.begin(),
+            _preparedRenderItems.end(),
+            [](const detail::PreparedRenderItem &lhs,
+               const detail::PreparedRenderItem &rhs) {
                 return lhs.sortKey < rhs.sortKey;
             });
         if(detail::logoChainTraceEnabled(_activeMotion)) {
@@ -860,27 +860,27 @@ namespace motion {
                 if(i) beforeSort << ",";
                 beforeSort << beforeSortKeys[i];
             }
-            for(size_t i = 0; i < _runtime->preparedRenderItems.size(); ++i) {
+            for(size_t i = 0; i < _preparedRenderItems.size(); ++i) {
                 if(i) afterSort << ",";
-                afterSort << _runtime->preparedRenderItems[i].sortKey;
+                afterSort << _preparedRenderItems[i].sortKey;
             }
             detail::logoChainTraceLogf(
                 motionPath, "prepare.sort", "0x6D5164/0x6D4F00",
                 _clampedEvalTime,
                 "itemCount={} sortKeysBefore=[{}] sortKeysAfter=[{}]",
-                _runtime->preparedRenderItems.size(), beforeSort.str(),
+                _preparedRenderItems.size(), beforeSort.str(),
                 afterSort.str());
         }
 
-        std::unordered_map<int, detail::PlayerRuntime::PreparedRenderItem *>
+        std::unordered_map<int, detail::PreparedRenderItem *>
             entryPtrByNode;
-        entryPtrByNode.reserve(_runtime->preparedRenderItems.size());
-        for(auto &item : _runtime->preparedRenderItems) {
+        entryPtrByNode.reserve(_preparedRenderItems.size());
+        for(auto &item : _preparedRenderItems) {
             item.parentItem = nullptr;
             item.childItems.clear();
             entryPtrByNode.emplace(item.nodeIndex, &item);
         }
-        for(auto &item : _runtime->preparedRenderItems) {
+        for(auto &item : _preparedRenderItems) {
             if(item.selfSeedChildList) {
                 item.childItems.push_back(&item);
             }
@@ -906,12 +906,12 @@ namespace motion {
         // appended directly; nodeType 3 children append directly only in
         // preview mode, otherwise their child vector is spliced into the
         // parent's child vector.
-        for(auto &parentItem : _runtime->preparedRenderItems) {
+        for(auto &parentItem : _preparedRenderItems) {
             if(!parentItem.selfSeedChildList) {
                 continue;
             }
             const auto parentNodeIndex = parentItem.nodeIndex;
-            for(auto &candidate : _runtime->preparedRenderItems) {
+            for(auto &candidate : _preparedRenderItems) {
                 if(candidate.nodeIndex == parentNodeIndex) {
                     continue;
                 }
@@ -952,7 +952,7 @@ namespace motion {
         // Only fill when parentItem is still nullptr so the type12 composite
         // writes above remain authoritative for their covered cases. See
         // analysis/RenderPipeline_Path_A_ImplRef.md §7.3.
-        for(auto &entry : _runtime->preparedRenderItems) {
+        for(auto &entry : _preparedRenderItems) {
             if(entry.parentItem != nullptr) {
                 continue;
             }
@@ -978,8 +978,8 @@ namespace motion {
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&
            _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
-            for(size_t i = 0; i < _runtime->preparedRenderItems.size(); ++i) {
-                const auto &item = _runtime->preparedRenderItems[i];
+            for(size_t i = 0; i < _preparedRenderItems.size(); ++i) {
+                const auto &item = _preparedRenderItems[i];
                 if(!(item.nodeIndex == 14 || item.nodeIndex == 15 ||
                      item.nodeIndex == 19 ||
                      (item.nodeIndex >= 20 && item.nodeIndex <= 29))) {
@@ -999,7 +999,7 @@ namespace motion {
             }
         }
         _renderItemInheritedFlag18 = savedInheritedFlag18;
-        const bool ok = !_runtime->preparedRenderItems.empty();
+        const bool ok = !_preparedRenderItems.empty();
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderPrepareLeave(this, ok);
 #endif
@@ -1025,7 +1025,7 @@ namespace motion {
         const auto motionPath =
             _activeMotion ? _activeMotion->path
                                    : std::string{};
-        for(auto &entry : _runtime->preparedRenderItems) {
+        for(auto &entry : _preparedRenderItems) {
             const auto beforeCorners = entry.corners;
             const auto beforePaintBox = entry.paintBox;
             const auto beforeViewport = entry.viewport;

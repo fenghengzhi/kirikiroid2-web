@@ -241,113 +241,99 @@ namespace motion::detail {
         };
     };
 
+    // A9: render-item structs lifted from PlayerRuntime's inner scope to
+    // namespace detail:: so Player can hold the corresponding vectors / map
+    // without leaking PlayerRuntime's nested type surface.
+
+    // Native render-item fields from the anonymous 0x1B0 item built by
+    // libkrkr2.so 0x6C2334 and consumed in-place by 0x6C4E28 / 0x6C7440.
+    // These fields intentionally keep the native write lifecycle: +21 and
+    // +216..228 are not blanket-cleared every frame.
+    struct NativeRenderItemFields {
+        bool rawFlag16 = false; // original item +16 = node+201
+        bool skipFlag0 = false; // original render item +17 (0x6C2334 / 0x6C7440)
+        bool skipFlag1 = false; // original render item +18 (0x6C2334 / 0x6C7440)
+        bool drawFlag = false;  // original render item +19
+        bool rawFlag20 = false; // original item +20, set by sub_6C4E28 requireLayerId path
+        bool rawFlag21 = false; // original item +21, drawable clip valid after sub_6C4E28
+        std::uint8_t stencilMaskRef = 0; // original item +22
+        std::uint8_t stencilWriteRef = 0; // original item +23
+        std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f}; // item+184..196
+        std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f}; // item+200..212
+        std::array<int, 4> clipRect{0, 0, 0, 0}; // item+216..228
+        std::array<int, 4> dirtyRect{0, 0, 0, 0};
+        int opacity = 255; // item+232
+        // item+244 in libkrkr2.so sub_6C2334 @ 0x6C2A90 — stencil/composite
+        // flags copied from node.stencilType; consumed by sub_6C7440 alpha
+        // mask path `(item+244 & 4)` / `(item+244 & 3)==1`.
+        int stencilComposite = 0;
+    };
+
+    struct RenderItemNativeFieldLifetime {
+        bool rawFlag20 = false;
+        bool rawFlag21 = false;
+        std::array<int, 4> clipRect{0, 0, 0, 0};
+        std::array<int, 4> dirtyRect{0, 0, 0, 0};
+        std::array<float, 8> localCorners{};
+        std::vector<float> localMeshPoints;
+    };
+
+    struct PreparedRenderItem : NativeRenderItemFields {
+        int nodeIndex = 0;
+        tTJSVariant srcRef;
+        std::string sourceKey;
+        bool hasOwnSource = false;
+        bool groupOnly = false;
+        bool topLevelList = true;
+        bool groupList = false;
+        bool selfSeedChildList = false;
+        // A9: nativeLifetimeOwner moves from PlayerRuntime* to Player* so the
+        // lifetime owner survives the eventual A10 PlayerRuntime removal.
+        motion::Player *nativeLifetimeOwner = nullptr;
+        int nativeLifetimeKey = 0;
+        double sortKey = 0.0;
+        int blendMode = 16;
+        tTJSVariant contextVariant; // original item +248 (player+1012 copy)
+        std::array<float, 8> corners{};
+        std::array<float, 8> localCorners{};
+        std::array<std::uint32_t, 4> packedColors{
+            0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
+        };
+        bool hasViewport = false;
+        int coordinateMode = 0;
+        int objTriPriority = 0;
+        int visibleAncestorIndex = -1;
+        int meshDivX = 0;
+        int meshDivY = 0;
+        int meshType = 0;
+        std::vector<float> meshPoints;
+        std::vector<float> localMeshPoints;
+        int layerId = 0;
+        int layerId2 = 0;
+        PreparedRenderItem *parentItem = nullptr; // semantic mapping of item +264
+        std::vector<PreparedRenderItem *> childItems; // semantic mapping of item +24
+        tTJSVariant leafLayer;      // item+304 variant
+        tTJSVariant composedLayer;  // item+324 variant
+        std::array<int, 4> builtRect{0, 0, 0, 0};
+        bool leafBuilt = false;
+        bool composedBuilt = false;
+        bool executedDirect = false;
+    };
+
+    struct PerNodeEvalData {
+        double padding[5] = {};   // offsets 0-39 (unused in our current scope)
+        double evalTime = 0.0;
+        int dirtyFlag = 0;
+    };
+
     struct PlayerRuntime {
-        // Phase A3: motionsByKey / sourceCacheNative / sourceCacheObject /
-        // activeMotion moved to Player as flat members.
-        // Phase A4: timelines / playingTimelineLabels moved to Player.
-        // Phase A5: layerIdsByName / layerNamesById / renderLayerStates /
-        // backgrounds / captions moved to Player; LayerRenderState lifted
-        // to namespace detail scope (above).
-        // Phase A6: lastCanvas / lastViewParam / internalRenderLayer /
-        // scratchWorkLayer / drawAffineMatrix moved to Player.
-        // Phase A1: render-host scalars moved to Player as flat members.
-        // Phase A7: disabledSelectorTargets / pendingEvents / parameterEntries /
-        // parameterEntryById / defaultParameterEntry* / activeClip / isEmoteMode
-        // moved to Player.
-        // Phase A8: nodes / variableLabelEntries / nodeLabelMap moved to
-        // Player.
-
-        // Native render-item fields from the anonymous 0x1B0 item built by
-        // libkrkr2.so 0x6C2334 and consumed in-place by 0x6C4E28 / 0x6C7440.
-        // These fields intentionally keep the native write lifecycle: +21 and
-        // +216..228 are not blanket-cleared every frame.
-        struct NativeRenderItemFields {
-            bool rawFlag16 = false; // original item +16 = node+201
-            bool skipFlag0 = false; // original render item +17 (0x6C2334 / 0x6C7440)
-            bool skipFlag1 = false; // original render item +18 (0x6C2334 / 0x6C7440)
-            bool drawFlag = false;  // original render item +19
-            bool rawFlag20 = false; // original item +20, set by sub_6C4E28 requireLayerId path
-            bool rawFlag21 = false; // original item +21, drawable clip valid after sub_6C4E28
-            std::uint8_t stencilMaskRef = 0; // original item +22
-            std::uint8_t stencilWriteRef = 0; // original item +23
-            std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f}; // item+184..196
-            std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f}; // item+200..212
-            std::array<int, 4> clipRect{0, 0, 0, 0}; // item+216..228
-            std::array<int, 4> dirtyRect{0, 0, 0, 0};
-            int opacity = 255; // item+232
-            // item+244 in libkrkr2.so sub_6C2334 @ 0x6C2A90 — stencil/composite
-            // flags copied from node.stencilType; consumed by sub_6C7440 alpha
-            // mask path `(item+244 & 4)` / `(item+244 & 3)==1`.
-            int stencilComposite = 0;
-        };
-
-        struct RenderItemNativeFieldLifetime {
-            bool rawFlag20 = false;
-            bool rawFlag21 = false;
-            std::array<int, 4> clipRect{0, 0, 0, 0};
-            std::array<int, 4> dirtyRect{0, 0, 0, 0};
-            std::array<float, 8> localCorners{};
-            std::vector<float> localMeshPoints;
-        };
-
-        struct PreparedRenderItem : NativeRenderItemFields {
-            int nodeIndex = 0;
-            tTJSVariant srcRef;
-            std::string sourceKey;
-            bool hasOwnSource = false;
-            bool groupOnly = false;
-            bool topLevelList = true;
-            bool groupList = false;
-            bool selfSeedChildList = false;
-            PlayerRuntime *nativeLifetimeOwner = nullptr;
-            int nativeLifetimeKey = 0;
-            double sortKey = 0.0;
-            int blendMode = 16;
-            tTJSVariant contextVariant; // original item +248 (player+1012 copy)
-            std::array<float, 8> corners{};
-            std::array<float, 8> localCorners{};
-            std::array<std::uint32_t, 4> packedColors{
-                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
-            };
-            bool hasViewport = false;
-            int coordinateMode = 0;
-            int objTriPriority = 0;
-            int visibleAncestorIndex = -1;
-            int meshDivX = 0;
-            int meshDivY = 0;
-            int meshType = 0;
-            std::vector<float> meshPoints;
-            std::vector<float> localMeshPoints;
-            int layerId = 0;
-            int layerId2 = 0;
-            PreparedRenderItem *parentItem = nullptr; // semantic mapping of item +264
-            std::vector<PreparedRenderItem *> childItems; // semantic mapping of item +24
-            tTJSVariant leafLayer;      // item+304 variant
-            tTJSVariant composedLayer;  // item+324 variant
-            std::array<int, 4> builtRect{0, 0, 0, 0};
-            bool leafBuilt = false;
-            bool composedBuilt = false;
-            bool executedDirect = false;
-        };
-        std::vector<PreparedRenderItem> preparedRenderItems;  // player+936/944
-        // Native-shaped a2/a3 split passed through sub_6C2334 -> sub_6C4E28
-        // -> sub_6C7440. Both lists point directly into preparedRenderItems.
-        std::vector<PreparedRenderItem *> preparedRenderItemsTopLevel;
-        std::vector<PreparedRenderItem *> preparedRenderItemsGroup;
-        std::unordered_map<int, RenderItemNativeFieldLifetime>
-            renderItemNativeFieldLifetimeByNode;
-
-        // Legacy local scratch for old diagnostics. libkrkr2.so player+384 is
-        // the parameter table initialized by Player_initNonEmoteMotion
-        // (0x6B365C), not per-node storage; node+8 resolves into
-        // parameterEntries via MotionNode::parameterizeIndex.
-        struct PerNodeEvalData {
-            double padding[5] = {};   // offsets 0-39 (unused in our current scope)
-            double evalTime = 0.0;
-            int dirtyFlag = 0;
-        };
-        std::vector<PerNodeEvalData> perNodeEvalData;
-        // Phase A7: isEmoteMode moved to Player (alongside parameter system).
+        // Phase A1-A8: most fields hoisted to Player as flat members. Once
+        // A9 lifts the render-item vectors and A10 retires runtime() entirely,
+        // this struct can be deleted.
+        // Phase A9: render-item structs lifted to namespace scope (above);
+        // preparedRenderItems / preparedRenderItemsTopLevel /
+        // preparedRenderItemsGroup / renderItemNativeFieldLifetimeByNode /
+        // perNodeEvalData moved to Player.
     };
 
     void ensureRootNodeLike_0x6CED30(motion::Player &player);

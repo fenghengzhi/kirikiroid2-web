@@ -584,13 +584,17 @@ namespace motion {
         // production code.
         const detail::PlayerRuntime *runtime() const { return _runtime.get(); }
 
-        // A8: temporary mutable accessors for the hoisted node tree storage.
-        // Used by NodeTree.cpp's anonymous-namespace walkTree which we can't
-        // friend across translation units. To be removed in A10 cleanup if
-        // a public accessor is no longer needed.
+        // A8 / A9: temporary mutable accessors for hoisted storage used by
+        // anonymous-namespace helpers or by free functions in
+        // motion::internal::render_detail:: which we can't friend across TU
+        // boundaries cheaply. Marked for A10 cleanup review.
         std::deque<detail::MotionNode> &nodesForBuild() { return _nodes; }
         std::map<std::string, int> &nodeLabelMapForBuild() {
             return _nodeLabelMap;
+        }
+        std::unordered_map<int, detail::RenderItemNativeFieldLifetime> &
+        renderItemNativeFieldLifetimeByNode() {
+            return _renderItemNativeFieldLifetimeByNode;
         }
 
     private:
@@ -750,6 +754,21 @@ namespace motion {
         std::deque<detail::MotionNode> _nodes;
         std::vector<detail::VariableLabelEntry> _variableLabelEntries;
         std::map<std::string, int> _nodeLabelMap;
+
+        // === Render-item scratch state (Phase A9) ===
+        // preparedRenderItems is the per-frame scratch array of native-shape
+        // render items (libkrkr2.so player+936/944). preparedRenderItemsTopLevel
+        // and preparedRenderItemsGroup are the a2/a3 lists threaded through
+        // sub_6C2334 → sub_6C4E28 → sub_6C7440; both alias into
+        // preparedRenderItems. renderItemNativeFieldLifetimeByNode preserves
+        // the +21 / +216..228 cross-frame fields. perNodeEvalData is local
+        // diagnostic scratch (no binary equivalent).
+        std::vector<detail::PreparedRenderItem> _preparedRenderItems;
+        std::vector<detail::PreparedRenderItem *> _preparedRenderItemsTopLevel;
+        std::vector<detail::PreparedRenderItem *> _preparedRenderItemsGroup;
+        std::unordered_map<int, detail::RenderItemNativeFieldLifetime>
+            _renderItemNativeFieldLifetimeByNode;
+        std::vector<detail::PerNodeEvalData> _perNodeEvalData;
         // _variableValues removed: it duplicated HM2 @ Player+320; merged into _evalResultValues.
 
         // === Web port render-host state (no libkrkr2.so offset alignment) ===

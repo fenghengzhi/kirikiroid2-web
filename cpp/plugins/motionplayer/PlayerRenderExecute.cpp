@@ -27,11 +27,11 @@ namespace motion {
             return false;
         }
 
-        _runtime->preparedRenderItemsTopLevel.clear();
-        _runtime->preparedRenderItemsGroup.clear();
+        _preparedRenderItemsTopLevel.clear();
+        _preparedRenderItemsGroup.clear();
         const auto motionPath =
             _activeMotion ? _activeMotion->path : std::string{};
-        for(auto &entry : _runtime->preparedRenderItems) {
+        for(auto &entry : _preparedRenderItems) {
             // libkrkr2.so sub_6C4E28 works in-place on the render item list
             // built by sub_6C2334. It does not blanket-clear +20/+21 or
             // +216..228: item+19==0 leaves those fields untouched, and failed
@@ -146,17 +146,17 @@ namespace motion {
 
             persistNativeRenderItemFieldLifetimeLike_0x6C4E28(entry);
             if(entry.groupList) {
-                _runtime->preparedRenderItemsGroup.push_back(&entry);
+                _preparedRenderItemsGroup.push_back(&entry);
             }
             if(entry.topLevelList) {
-                _runtime->preparedRenderItemsTopLevel.push_back(&entry);
+                _preparedRenderItemsTopLevel.push_back(&entry);
             }
         }
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&
            _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
-            for(size_t i = 0; i < _runtime->preparedRenderItems.size(); ++i) {
-                const auto &item = _runtime->preparedRenderItems[i];
+            for(size_t i = 0; i < _preparedRenderItems.size(); ++i) {
+                const auto &item = _preparedRenderItems[i];
                 if(!(item.nodeIndex == 14 || item.nodeIndex == 15 ||
                      item.nodeIndex == 19 ||
                      (item.nodeIndex >= 20 && item.nodeIndex <= 29))) {
@@ -195,10 +195,10 @@ namespace motion {
             motionPath, "renderItem.count", "0x6C4E28",
             _clampedEvalTime,
             "canvas={}x{} preparedItems={} topLevelList={} groupList={}",
-            canvasWidth, canvasHeight, _runtime->preparedRenderItems.size(),
-            _runtime->preparedRenderItemsTopLevel.size(),
-            _runtime->preparedRenderItemsGroup.size());
-        const bool ok = !_runtime->preparedRenderItems.empty();
+            canvasWidth, canvasHeight, _preparedRenderItems.size(),
+            _preparedRenderItemsTopLevel.size(),
+            _preparedRenderItemsGroup.size());
+        const bool ok = !_preparedRenderItems.empty();
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderBuildCommandsLeave(
             this, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight));
@@ -248,9 +248,9 @@ namespace motion {
         detail::logoChainTraceLogf(
             motionPath, "execute.begin", "0x6C7440", _clampedEvalTime,
             "renderItems={} topLevelItems={} groupItems={} renderLayer={} scratchOwner={} scratchParent={} skipUpdate={}",
-            _runtime->preparedRenderItems.size(),
-            _runtime->preparedRenderItemsTopLevel.size(),
-            _runtime->preparedRenderItemsGroup.size(),
+            _preparedRenderItems.size(),
+            _preparedRenderItemsTopLevel.size(),
+            _preparedRenderItemsGroup.size(),
             static_cast<const void *>(renderLayer),
             static_cast<const void *>(scratchOwner),
             static_cast<const void *>(scratchParent), skipUpdate ? 1 : 0);
@@ -266,7 +266,7 @@ namespace motion {
             return false;
         }
 
-        using PreparedRenderItem = detail::PlayerRuntime::PreparedRenderItem;
+        using PreparedRenderItem = detail::PreparedRenderItem;
 #if defined(KRKR2_WASMTIME_HEADLESS)
         const auto recordPostDrawCandidate =
             [&](iTJSDispatch2 *layerObject, const char *samplePoint) {
@@ -915,7 +915,7 @@ namespace motion {
             return true;
         };
 
-        for(auto *itemPtr : _runtime->preparedRenderItemsTopLevel) {
+        for(auto *itemPtr : _preparedRenderItemsTopLevel) {
             if(!itemPtr) {
                 continue;
             }

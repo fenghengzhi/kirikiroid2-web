@@ -26,7 +26,7 @@ using namespace motion::internal::render_detail;
 
 namespace motion {
     namespace {
-        using PreparedRenderItem = detail::PlayerRuntime::PreparedRenderItem;
+        using PreparedRenderItem = detail::PreparedRenderItem;
 
         std::array<tTVPPointD, 6> makeTextureQuad(double w, double h) {
             return {{
@@ -704,7 +704,7 @@ namespace motion {
         // Player_RenderMotionFrame @ 0x6DE738 only emits render commands.
         buildRenderCommands(canvasWidth, canvasHeight);
         if(_runtime && _sourceCacheNative) {
-            for(const auto &item : _runtime->preparedRenderItems) {
+            for(const auto &item : _preparedRenderItems) {
                 if(!shouldQueuePrivateMotionGLLRenderItemLike_0x6DE738(
                        item, _preview)) {
                     continue;
@@ -835,7 +835,7 @@ namespace motion {
         };
 
         int renderedItems = 0;
-        for(auto *itemPtr : _runtime->preparedRenderItemsTopLevel) {
+        for(auto *itemPtr : _preparedRenderItemsTopLevel) {
             if(!itemPtr || !shouldRenderAccurateSlaItemLike_0x6C9CA8(*itemPtr)) {
                 continue;
             }
@@ -1007,7 +1007,7 @@ namespace motion {
             // Mirrors 0x6ADFBC's non-preview prepass: clear item+22/+23,
             // assign stencil refs, then operate on the freshly clipped items.
             stencilRefs =
-                assignStencilRefsLike_0x6ADFBC(_runtime->preparedRenderItems);
+                assignStencilRefsLike_0x6ADFBC(_preparedRenderItems);
         }
         const bool stencilEnabled = stencilRefs > 0;
         beginD3DStencilIfNeeded(targetTexture, stencilEnabled);
@@ -1022,10 +1022,10 @@ namespace motion {
             _clampedEvalTime,
             "target={} targetRect=[0,0,{},{}] items={} preview={} stencilRefs={}",
             static_cast<const void *>(targetTexture),
-            width, height, _runtime->preparedRenderItems.size(),
+            width, height, _preparedRenderItems.size(),
             _preview ? 1 : 0, stencilRefs);
 
-        for(auto &item : _runtime->preparedRenderItems) {
+        for(auto &item : _preparedRenderItems) {
             if(shouldSkipD3DRenderItemLike_0x6ADFBC(item, _preview)) {
                 continue;
             }

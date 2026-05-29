@@ -21,11 +21,11 @@ namespace motion {
 
         // Keep legacy diagnostic scratch in sync with node count. The native
         // node+8 path is parameterEntries; do not use this as player+384.
-        if (_runtime->perNodeEvalData.size() != nodes.size()) {
-            _runtime->perNodeEvalData.resize(nodes.size());
+        if (_perNodeEvalData.size() != nodes.size()) {
+            _perNodeEvalData.resize(nodes.size());
         }
         for (size_t ni = 0; ni < nodes.size(); ++ni) {
-            _runtime->perNodeEvalData[ni].evalTime = _clampedEvalTime;
+            _perNodeEvalData[ni].evalTime = _clampedEvalTime;
         }
 
         updateLayersPhase1_PreLoop(currentTime);
@@ -111,7 +111,7 @@ namespace motion {
         }
 
         // Clear legacy local scratch flags.
-        for (auto &evalData : _runtime->perNodeEvalData) {
+        for (auto &evalData : _perNodeEvalData) {
             evalData.dirtyFlag = 0;
         }
 

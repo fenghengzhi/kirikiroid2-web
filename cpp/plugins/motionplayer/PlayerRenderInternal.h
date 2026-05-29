@@ -49,7 +49,7 @@ bool prepareLayerForRender(iTJSDispatch2 *layerObject,
                            tjs_uint32 clearColor);
 std::string summarizeLayerChildren(tTJSNI_BaseLayer *layer, int maxChildren = 12);
 bool shouldUseDirectRenderPathLike_0x6C7440(
-    const motion::detail::PlayerRuntime::PreparedRenderItem &item,
+    const motion::detail::PreparedRenderItem &item,
     bool clearEnabled);
 
 tTVPBlendOperationMode resolveBlendOperationModeLike_0x6C7440(int rawBlendMode);
@@ -73,7 +73,7 @@ struct RenderClipRect {
 };
 
 bool computeRenderClipRect(
-    const motion::detail::PlayerRuntime::PreparedRenderItem &item,
+    const motion::detail::PreparedRenderItem &item,
     int renderWidth,
     int renderHeight,
     RenderClipRect &out,
@@ -81,10 +81,10 @@ bool computeRenderClipRect(
 bool isAccurateSlaRenderEnabled();
 
 tTVPRect localRectFromItem(
-    const motion::detail::PlayerRuntime::PreparedRenderItem &item);
+    const motion::detail::PreparedRenderItem &item);
 
 void persistNativeRenderItemFieldLifetimeLike_0x6C4E28(
-    motion::detail::PlayerRuntime::PreparedRenderItem &item);
+    motion::detail::PreparedRenderItem &item);
 bool clearLayerAlphaOutsideRect(tTJSNI_BaseLayer *layer,
                                 const tTVPRect &outerRect,
                                 const tTVPRect &innerRect);
@@ -110,7 +110,7 @@ void emitDirectExecuteDiagnostics(
     const char *probePhase,
     const char *branch,
     const char *executionMethod,
-    const motion::detail::PlayerRuntime::PreparedRenderItem &item,
+    const motion::detail::PreparedRenderItem &item,
     tTJSNI_BaseLayer *renderLayer,
     const std::shared_ptr<tTVPBaseBitmap> &srcBmp,
     iTJSDispatch2 *sourceArgObject,

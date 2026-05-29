@@ -440,7 +440,7 @@ namespace motion::internal::render_detail {
     }
 
     bool shouldUseDirectRenderPathLike_0x6C7440(
-        const motion::detail::PlayerRuntime::PreparedRenderItem &item,
+        const motion::detail::PreparedRenderItem &item,
         bool clearEnabled) {
         const unsigned lowNibble =
             static_cast<unsigned>(item.blendMode) & 0x0Fu;
@@ -508,7 +508,7 @@ namespace motion::internal::render_detail {
     }
 
     bool computeRenderClipRect(
-        const motion::detail::PlayerRuntime::PreparedRenderItem &entry,
+        const motion::detail::PreparedRenderItem &entry,
                                int canvasWidth, int canvasHeight,
                                RenderClipRect &out,
                                std::string *failureReason) {
@@ -569,20 +569,21 @@ namespace motion::internal::render_detail {
     }
 
     tTVPRect localRectFromItem(
-        const motion::detail::PlayerRuntime::PreparedRenderItem &item) {
+        const motion::detail::PreparedRenderItem &item) {
         return tTVPRect(0, 0,
                         item.clipRect[2] - item.clipRect[0],
                         item.clipRect[3] - item.clipRect[1]);
     }
 
     void persistNativeRenderItemFieldLifetimeLike_0x6C4E28(
-        motion::detail::PlayerRuntime::PreparedRenderItem &item) {
+        motion::detail::PreparedRenderItem &item) {
         auto *owner = item.nativeLifetimeOwner;
         if(!owner) {
             return;
         }
         auto &state =
-            owner->renderItemNativeFieldLifetimeByNode[item.nativeLifetimeKey];
+            owner->renderItemNativeFieldLifetimeByNode()
+                [item.nativeLifetimeKey];
         state.rawFlag20 = item.rawFlag20;
         state.rawFlag21 = item.rawFlag21;
         state.clipRect = item.clipRect;
@@ -911,7 +912,7 @@ namespace motion::internal::render_detail {
         const char *probePhase,
         const char *branch,
         const char *executionMethod,
-        const motion::detail::PlayerRuntime::PreparedRenderItem &item,
+        const motion::detail::PreparedRenderItem &item,
         tTJSNI_BaseLayer *renderLayer,
         const std::shared_ptr<tTVPBaseBitmap> &srcBmp,
         iTJSDispatch2 *sourceArgObject,
