@@ -1,2 +1,3 @@
 - [Phase2 alignment complete 2026-04-17](project_phase2_alignment_complete.md) — updateLayersPhase2_MainLoop vs sub_6BB33C: 8 audit deviations resolved
 - [Delta/override block must be separate struct](feedback_delta_override_block_architecture.md) — never混用 TJS-authored delta block with localState/accumulated
+- [EmoteEngine P0 layout refactor 2026-05-30](emoteengine_p0_refactor_2026-05-30.md) — split EmoteEngine.{h,cpp}, EmoteVar/AngleController POD, 10 binary-typed deques + 7 raw-ptr controllers + HM2@+1440, _emoteDirty/_meshDivisionRatio migrated
