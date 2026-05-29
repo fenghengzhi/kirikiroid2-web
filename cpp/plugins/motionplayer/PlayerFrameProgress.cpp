@@ -76,27 +76,33 @@ namespace {
         return 1.0 / (1.0 - ease);
     }
 
-    double activeClipTime(const motion::detail::PlayerRuntime &runtime,
-                          const motion::detail::MotionClip *clip) {
+} // anonymous namespace
+
+namespace motion {
+namespace internal {
+
+    // A4: friend of Player so it can read _timelines / _playingTimelineLabels
+    // for the active-clip evaluation path. Defined here because it has a
+    // single caller in this translation unit.
+    double activeClipTime(const Player &player, const detail::MotionClip *clip) {
         if(clip) {
-            if(const auto it = runtime.timelines.find(clip->label);
-               it != runtime.timelines.end()) {
+            if(const auto it = player._timelines.find(clip->label);
+               it != player._timelines.end()) {
                 return it->second.currentTime;
             }
         }
 
-        for(const auto &label : runtime.playingTimelineLabels) {
-            if(const auto it = runtime.timelines.find(label);
-               it != runtime.timelines.end()) {
+        for(const auto &label : player._playingTimelineLabels) {
+            if(const auto it = player._timelines.find(label);
+               it != player._timelines.end()) {
                 return it->second.currentTime;
             }
         }
         return 0.0;
     }
 
-} // anonymous namespace
+} // namespace internal
 
-namespace motion {
 
     void Player::scheduleTimelineControlAnimatorLike_0x671A50(
         detail::TimelineState &state, size_t trackIndex, float value,
@@ -143,8 +149,8 @@ namespace motion {
             return;
         }
 
-        auto timelineIt = _runtime->timelines.find(label);
-        if(timelineIt == _runtime->timelines.end()) {
+        auto timelineIt = _timelines.find(label);
+        if(timelineIt == _timelines.end()) {
             return;
         }
 
@@ -183,9 +189,9 @@ namespace motion {
     }
 
     void Player::stepTimelineControlAnimatorsLike_0x67D01C(double dt) {
-        for(const auto &label : _runtime->playingTimelineLabels) {
-            const auto timelineIt = _runtime->timelines.find(label);
-            if(timelineIt == _runtime->timelines.end()) {
+        for(const auto &label : _playingTimelineLabels) {
+            const auto timelineIt = _timelines.find(label);
+            if(timelineIt == _timelines.end()) {
                 continue;
             }
 
@@ -211,9 +217,9 @@ namespace motion {
     }
 
     void Player::stepTimelineBlendAnimatorsLike_0x67D01C(double dt) {
-        for(const auto &label : _runtime->playingTimelineLabels) {
-            const auto timelineIt = _runtime->timelines.find(label);
-            if(timelineIt == _runtime->timelines.end()) {
+        for(const auto &label : _playingTimelineLabels) {
+            const auto timelineIt = _timelines.find(label);
+            if(timelineIt == _timelines.end()) {
                 continue;
             }
 
@@ -280,11 +286,11 @@ namespace motion {
             return;
         }
 
-        for(const auto &timelineLabel : _runtime->playingTimelineLabels) {
-            const auto timelineIt = _runtime->timelines.find(timelineLabel);
+        for(const auto &timelineLabel : _playingTimelineLabels) {
+            const auto timelineIt = _timelines.find(timelineLabel);
             const auto controlIt =
                 activeMotion->timelineControlByLabel.find(timelineLabel);
-            if(timelineIt == _runtime->timelines.end() ||
+            if(timelineIt == _timelines.end() ||
                controlIt == activeMotion->timelineControlByLabel.end()) {
                 continue;
             }
@@ -411,10 +417,10 @@ namespace motion {
         const auto *activeMotion = _activeMotion.get();
         size_t writeIndex = 0;
         for(size_t readIndex = 0;
-            readIndex < _runtime->playingTimelineLabels.size(); ++readIndex) {
-            const std::string label = _runtime->playingTimelineLabels[readIndex];
-            const auto it = _runtime->timelines.find(label);
-            if(it == _runtime->timelines.end()) {
+            readIndex < _playingTimelineLabels.size(); ++readIndex) {
+            const std::string label = _playingTimelineLabels[readIndex];
+            const auto it = _timelines.find(label);
+            if(it == _timelines.end()) {
                 continue;
             }
 
@@ -575,10 +581,10 @@ namespace motion {
             }
 
             if(state.playing && keepPlaying) {
-                _runtime->playingTimelineLabels[writeIndex++] = label;
+                _playingTimelineLabels[writeIndex++] = label;
             }
         }
-        _runtime->playingTimelineLabels.resize(writeIndex);
+        _playingTimelineLabels.resize(writeIndex);
     }
 
     void Player::resetTimelineControlStateLike_0x671A50(
@@ -709,11 +715,11 @@ namespace motion {
             return;
         }
 
-        for(const auto &label : _runtime->playingTimelineLabels) {
-            const auto timelineIt = _runtime->timelines.find(label);
+        for(const auto &label : _playingTimelineLabels) {
+            const auto timelineIt = _timelines.find(label);
             const auto controlIt =
                 activeMotion->timelineControlByLabel.find(label);
-            if(timelineIt == _runtime->timelines.end() ||
+            if(timelineIt == _timelines.end() ||
                controlIt == activeMotion->timelineControlByLabel.end()) {
                 continue;
             }
@@ -795,7 +801,7 @@ namespace motion {
         // one-shot first-frame gate. While it is set, progress records the
         // incoming delta but does not advance player+1120/player+456.
         if(_queuing) {
-            _allplaying = !_runtime->playingTimelineLabels.empty();
+            _allplaying = !_playingTimelineLabels.empty();
             _syncActive = _syncWaiting && _allplaying;
             return;
         }
@@ -844,14 +850,14 @@ namespace motion {
         // Inference from libkrkr2.so Player_progress_inner (0x6C106C):
         // player+456 is the selected clip/timeline eval time consumed by
         // Player_updateLayers (0x6BB33C), not an arbitrary primary-label entry.
-        _clampedEvalTime = activeClipTime(*_runtime, selectActiveClip());
+        _clampedEvalTime = internal::activeClipTime(*this, selectActiveClip());
 
         // Scan PSB layers for action/sync events crossed this frame
         // Aligned to libkrkr2.so: updateLayers queues events during evaluation
         if(_activeMotion && actualDelta > 0) {
             for(const auto &[name, prev] : prevTimes) {
-                const auto stateIt = _runtime->timelines.find(name);
-                if(stateIt == _runtime->timelines.end()) {
+                const auto stateIt = _timelines.find(name);
+                if(stateIt == _timelines.end()) {
                     continue;
                 }
                 if(stateIt->second.currentTime > prev) {
@@ -862,7 +868,7 @@ namespace motion {
             }
         }
 
-        _allplaying = !_runtime->playingTimelineLabels.empty();
+        _allplaying = !_playingTimelineLabels.empty();
         _syncActive = _syncWaiting && _allplaying;
     }
 

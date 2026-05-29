@@ -223,8 +223,7 @@ namespace motion::detail {
     struct PlayerRuntime {
         // Phase A3: motionsByKey / sourceCacheNative / sourceCacheObject /
         // activeMotion moved to Player as flat members.
-        std::unordered_map<std::string, TimelineState> timelines;
-        std::vector<std::string> playingTimelineLabels;
+        // Phase A4: timelines / playingTimelineLabels moved to Player.
         std::unordered_map<std::string, tjs_int> layerIdsByName;
         std::unordered_map<tjs_int, std::string> layerNamesById;
         struct LayerRenderState {

@@ -556,7 +556,7 @@ namespace motion {
         // if playing (player+480): delta = 0; else: delta = currentPos - prevPos
         {
             bool anyPlaying = std::any_of(
-                _runtime->timelines.begin(), _runtime->timelines.end(),
+                _timelines.begin(), _timelines.end(),
                 [](const auto &e) { return e.second.playing; });
             for (size_t di = 1; di < nodes.size(); ++di) {
                 auto &dn = nodes[di];

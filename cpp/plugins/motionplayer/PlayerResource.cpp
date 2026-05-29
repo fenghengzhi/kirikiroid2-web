@@ -21,8 +21,8 @@ namespace motion {
             if(it->first == key || it->second->path == key) {
                 if(_activeMotion == it->second) {
                     _activeMotion.reset();
-                    _runtime->timelines.clear();
-                    _runtime->playingTimelineLabels.clear();
+                    _timelines.clear();
+                    _playingTimelineLabels.clear();
                 }
                 it = _motionsByKey.erase(it);
             } else {
@@ -41,8 +41,8 @@ namespace motion {
             _sourceCacheNative->clearCache();
         }
         _activeMotion.reset();
-        _runtime->timelines.clear();
-        _runtime->playingTimelineLabels.clear();
+        _timelines.clear();
+        _playingTimelineLabels.clear();
         _runtime->layerIdsByName.clear();
         _runtime->layerNamesById.clear();
         _resourceManagerNative.clearCache();

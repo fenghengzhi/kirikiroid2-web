@@ -260,8 +260,8 @@ namespace motion {
             detail::logoChainTraceLogf(
                 _activeMotion->path, "getPlaying", "0x6D9794",
                 _clampedEvalTime, "value={} timelineCount={} playingLabels={}",
-                _allplaying ? 1 : 0, _runtime->timelines.size(),
-                _runtime->playingTimelineLabels.size());
+                _allplaying ? 1 : 0, _timelines.size(),
+                _playingTimelineLabels.size());
         }
         return _allplaying;
     }
@@ -282,7 +282,7 @@ namespace motion {
                                 "0x6CCE34", _clampedEvalTime,
                                 "value=1 reason=child nodeIndex={} localPlaying={} labels={}",
                                 node.index, _allplaying ? 1 : 0,
-                                _runtime->playingTimelineLabels.size());
+                                _playingTimelineLabels.size());
                         }
                         return true;
                     }
@@ -296,7 +296,7 @@ namespace motion {
                 _activeMotion->path, "getAllplaying", "0x6CCE34",
                 _clampedEvalTime, "value={} reason=local labels={}",
                 _allplaying ? 1 : 0,
-                _runtime->playingTimelineLabels.size());
+                _playingTimelineLabels.size());
         }
         return _allplaying;
     }
@@ -345,8 +345,8 @@ namespace motion {
     void Player::loadFromSnapshot(
         std::shared_ptr<detail::MotionSnapshot> snapshot) {
         _activeMotion.reset();
-        _runtime->timelines.clear();
-        _runtime->playingTimelineLabels.clear();
+        _timelines.clear();
+        _playingTimelineLabels.clear();
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         if(_engineBack) _engineBack->_variableAnimators.clear();
@@ -375,8 +375,8 @@ namespace motion {
         }
         _motionKey = v;
         _activeMotion.reset();
-        _runtime->timelines.clear();
-        _runtime->playingTimelineLabels.clear();
+        _timelines.clear();
+        _playingTimelineLabels.clear();
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         if(_engineBack) _engineBack->_variableAnimators.clear();
@@ -439,8 +439,8 @@ namespace motion {
         // Reset state and load
         self->_motionKey = motionValue;
         self->_activeMotion.reset();
-        self->_runtime->timelines.clear();
-        self->_runtime->playingTimelineLabels.clear();
+        self->_timelines.clear();
+        self->_playingTimelineLabels.clear();
         self->_runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         self->_variableKeys.Clear();
         self->_evalResultValues.clear();
@@ -652,21 +652,21 @@ namespace motion {
                 ? _activeMotion->mainTimelineLabels
                 : _activeMotion->diffTimelineLabels;
         for(const auto &label : primaryLabels) {
-            if(const auto it = _runtime->timelines.find(label);
-               it != _runtime->timelines.end()) {
+            if(const auto it = _timelines.find(label);
+               it != _timelines.end()) {
                 return &it->second;
             }
         }
 
         if(!_motionKey.IsEmpty()) {
-            if(const auto it = _runtime->timelines.find(detail::narrow(_motionKey));
-               it != _runtime->timelines.end()) {
+            if(const auto it = _timelines.find(detail::narrow(_motionKey));
+               it != _timelines.end()) {
                 return &it->second;
             }
         }
 
-        return !_runtime->timelines.empty()
-            ? &(_runtime->timelines.begin()->second)
+        return !_timelines.empty()
+            ? &(_timelines.begin()->second)
             : nullptr;
     }
 
@@ -727,7 +727,7 @@ namespace motion {
             }
         }
 
-        for(const auto &label : _runtime->playingTimelineLabels) {
+        for(const auto &label : _playingTimelineLabels) {
             if(const auto *clip = selectByLabel(label)) {
                 return clip;
             }
@@ -780,8 +780,8 @@ namespace motion {
     void Player::setProgressCompat(double v) {
         ensureMotionLoaded();
         const auto progress = std::clamp(v, 0.0, 1.0);
-        _runtime->playingTimelineLabels.clear();
-        for(auto &[_, state] : _runtime->timelines) {
+        _playingTimelineLabels.clear();
+        for(auto &[_, state] : _timelines) {
             if(state.totalFrames > 0.0) {
                 state.currentTime = state.totalFrames * progress;
             } else {
@@ -796,10 +796,10 @@ namespace motion {
             state.controlTrackValues.clear();
             state.controlTrackAnimators.clear();
             if(state.playing) {
-                _runtime->playingTimelineLabels.push_back(state.label);
+                _playingTimelineLabels.push_back(state.label);
             }
         }
-        _allplaying = !_runtime->playingTimelineLabels.empty();
+        _allplaying = !_playingTimelineLabels.empty();
     }
 
     double Player::getProgressCompat() const {
@@ -807,7 +807,7 @@ namespace motion {
         bool anyPlaying = false;
         double progress = 0.0;
 
-        for(const auto &[_, state] : _runtime->timelines) {
+        for(const auto &[_, state] : _timelines) {
             sawTimeline = true;
             anyPlaying = anyPlaying || state.playing;
             if(state.totalFrames > 0.0) {
@@ -942,11 +942,11 @@ namespace motion {
         if(getObjectProperty(data, TJS_W("timelines"), value) &&
            value.Type() == tvtObject && value.AsObjectNoAddRef() != nullptr) {
             ensureMotionLoaded();
-            if(_activeMotion && _runtime->timelines.empty()) {
-                detail::primeTimelineStates(_runtime->timelines,
+            if(_activeMotion && _timelines.empty()) {
+                detail::primeTimelineStates(_timelines,
                                             *_activeMotion);
             }
-            _runtime->playingTimelineLabels.clear();
+            _playingTimelineLabels.clear();
 
             const auto count = getObjectCount(value);
             for(tjs_int index = 0; index < count; ++index) {
@@ -963,14 +963,14 @@ namespace motion {
                 }
 
                 const auto key = detail::narrow(labelValue);
-                auto it = _runtime->timelines.find(key);
-                if(it == _runtime->timelines.end()) {
+                auto it = _timelines.find(key);
+                if(it == _timelines.end()) {
                     continue;
                 }
 
                 restoredTimelines = true;
                 it->second.playing = true;
-                _runtime->playingTimelineLabels.push_back(key);
+                _playingTimelineLabels.push_back(key);
                 it->second.controlInitialized = false;
                 it->second.controlLastAppliedTime = it->second.currentTime;
                 it->second.controlFrameCursor.clear();
@@ -998,8 +998,8 @@ namespace motion {
         }
 
         if(!restoredTimelines && ensureMotionLoaded()) {
-            if(_runtime->timelines.empty()) {
-                detail::primeTimelineStates(_runtime->timelines,
+            if(_timelines.empty()) {
+                detail::primeTimelineStates(_timelines,
                                             *_activeMotion);
             }
             const auto &primary = !_activeMotion->mainTimelineLabels.empty()
@@ -1010,7 +1010,7 @@ namespace motion {
             }
         }
 
-        _allplaying = !_runtime->playingTimelineLabels.empty();
+        _allplaying = !_playingTimelineLabels.empty();
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setCoord (0x5301EC):
@@ -1191,7 +1191,7 @@ namespace motion {
                      _motionKey.AsStdString(), _motionsByKey.size(),
                      _sourceCacheNative ? _sourceCacheNative->size()
                                                  : 0,
-                     _runtime->timelines.size());
+                     _timelines.size());
     }
 
 

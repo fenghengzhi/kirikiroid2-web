@@ -88,9 +88,9 @@ namespace motion {
         CoordinateRecutangularXZ = 1
     };
 
-    // A3: forward-declare motion / source helpers so Player can grant them
-    // friend access to the migrated _motionsByKey / _activeMotion / _runtime
-    // members. Definitions live inline in PlayerInternal.h.
+    // A3 / A4: forward-declare motion / source / timeline helpers so Player
+    // can grant them friend access to migrated members. Definitions live
+    // inline in PlayerInternal.h.
     namespace internal {
         std::shared_ptr<detail::MotionSnapshot>
         cacheMotion(Player &, const std::string &, const std::string &,
@@ -102,6 +102,10 @@ namespace motion {
         std::shared_ptr<detail::MotionSnapshot>
         resolveMotion(Player &, const ttstr &, const ResourceManager *);
         std::vector<ttstr> buildSourceCandidates(const Player &, const ttstr &);
+        std::vector<tTJSVariant> timelineInfoVariants(const Player &);
+        const detail::TimelineState *
+        nthPlayingTimeline(const Player &, tjs_int);
+        double activeClipTime(const Player &, const detail::MotionClip *);
     }
 
     class Player {
@@ -674,6 +678,12 @@ namespace motion {
         SourceCache *_sourceCacheNative = nullptr;
         tTJSVariant _sourceCacheObject;
         std::shared_ptr<detail::MotionSnapshot> _activeMotion;
+
+        // === Timeline state (Phase A4) ===
+        // Per-label timeline runtime + the list of labels currently playing
+        // (driven by Player_playTimeline / Player_stopTimeline @ 0x66E000 ish).
+        std::unordered_map<std::string, detail::TimelineState> _timelines;
+        std::vector<std::string> _playingTimelineLabels;
         // _variableValues removed: it duplicated HM2 @ Player+320; merged into _evalResultValues.
 
         // === Web port render-host state (no libkrkr2.so offset alignment) ===
@@ -885,6 +895,16 @@ namespace motion {
             Player &, const ttstr &, const ResourceManager *);
         friend std::vector<ttstr> internal::buildSourceCandidates(
             const Player &, const ttstr &);
+        // A4: timeline helpers — read _timelines / _playingTimelineLabels.
+        friend std::vector<tTJSVariant> internal::timelineInfoVariants(
+            const Player &);
+        friend const detail::TimelineState *
+        internal::nthPlayingTimeline(const Player &, tjs_int);
+        // Defined in PlayerFrameProgress.cpp under motion::internal:: to
+        // keep its single-caller scope; granting friend access here lets
+        // it reach _timelines / _playingTimelineLabels.
+        friend double internal::activeClipTime(
+            const Player &, const detail::MotionClip *);
     };
 
 } // namespace motion

@@ -52,7 +52,7 @@ namespace motion {
                 child._allplaying = false;
                 if (child._runtime) {
                     // sub_6C0DE8: reset timeline keyframe cache
-                    child._runtime->timelines.clear();
+                    child._timelines.clear();
                     // sub_6B56F8: release layer IDs for non-root nodes, keep
                     // the constructor-created root, and clear the label map.
                     child.resetNodeTreeForBuildLike_0x6B56F8();

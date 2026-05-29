@@ -88,29 +88,29 @@ namespace motion {
         //   auto-start every primary clip
         // - Player_playTimeline (0x672F70) starts the requested label only
         //   when it exists
-        if (_activeMotion && _runtime->timelines.empty()) {
-            detail::primeTimelineStates(_runtime->timelines,
+        if (_activeMotion && _timelines.empty()) {
+            detail::primeTimelineStates(_timelines,
                                         *_activeMotion);
         }
 
-        if (_activeMotion && !_runtime->timelines.empty()) {
+        if (_activeMotion && !_timelines.empty()) {
             const auto requestedKey = detail::narrow(name);
             bool startedRequested = false;
             if(!requestedKey.empty() &&
-               _runtime->timelines.find(requestedKey) != _runtime->timelines.end()) {
+               _timelines.find(requestedKey) != _timelines.end()) {
                 playTimeline(name, flags & ~PlayFlagStealth);
                 startedRequested = true;
             }
 
             if(!startedRequested) {
                 double maxTF = 0.0;
-                _runtime->playingTimelineLabels.clear();
+                _playingTimelineLabels.clear();
                 const auto &primary =
                     !_activeMotion->mainTimelineLabels.empty()
                         ? _activeMotion->mainTimelineLabels
                         : _activeMotion->diffTimelineLabels;
                 for (const auto &timelineLabel : primary) {
-                    auto &state = _runtime->timelines[timelineLabel];
+                    auto &state = _timelines[timelineLabel];
                     state.flags = flags & ~PlayFlagStealth;
                     state.playing = true;
                     state.blendRatio = 1.0;
@@ -119,11 +119,11 @@ namespace motion {
                     state.controlFrameCursor.clear();
                     state.controlTrackValues.clear();
                     state.controlTrackAnimators.clear();
-                    _runtime->playingTimelineLabels.push_back(timelineLabel);
+                    _playingTimelineLabels.push_back(timelineLabel);
                     if (state.totalFrames > maxTF) maxTF = state.totalFrames;
                 }
                 _cachedTotalFrames = maxTF;
-                _allplaying = !_runtime->playingTimelineLabels.empty();
+                _allplaying = !_playingTimelineLabels.empty();
             }
         }
 
@@ -259,9 +259,9 @@ namespace motion {
                 _activeMotion->path.c_str(),
                 detail::narrow(_motionKey).c_str(),
                 clipLabel.empty() ? "<none>" : clipLabel.c_str(),
-                _runtime->playingTimelineLabels.empty()
+                _playingTimelineLabels.empty()
                     ? "<none>"
-                    : _runtime->playingTimelineLabels.front().c_str(),
+                    : _playingTimelineLabels.front().c_str(),
                 _activeMotion->clipList.size());
         }
 

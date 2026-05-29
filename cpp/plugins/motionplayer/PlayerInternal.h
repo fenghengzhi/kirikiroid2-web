@@ -210,7 +210,7 @@ namespace internal {
                        ResourceManager *resourceManager = nullptr) {
             auto &runtime = *player._runtime;
             player._activeMotion = snapshot;
-            runtime.timelines.clear();
+            player._timelines.clear();
             // Reset persistent node tree so it gets rebuilt for new motion
             // by the subsequent eager Player_buildNodeTree call (no gate).
             // Mirrors Player_resetAndReleaseNodes (0x6B56F8) shape: keep the
@@ -239,7 +239,7 @@ namespace internal {
                 }
             }
             if(snapshot) {
-                detail::primeTimelineStates(runtime.timelines, *snapshot);
+                detail::primeTimelineStates(player._timelines, *snapshot);
             }
             return snapshot;
         }
@@ -341,11 +341,11 @@ namespace internal {
         }
 
         inline std::vector<tTJSVariant>
-        timelineInfoVariants(const detail::PlayerRuntime &runtime) {
+        timelineInfoVariants(const Player &player) {
             std::vector<tTJSVariant> items;
-            for(const auto &label : runtime.playingTimelineLabels) {
-                const auto it = runtime.timelines.find(label);
-                if(it == runtime.timelines.end() || !it->second.playing) {
+            for(const auto &label : player._playingTimelineLabels) {
+                const auto it = player._timelines.find(label);
+                if(it == player._timelines.end() || !it->second.playing) {
                     continue;
                 }
                 const auto &state = it->second;
@@ -364,16 +364,16 @@ namespace internal {
         }
 
         inline const detail::TimelineState *
-        nthPlayingTimeline(const detail::PlayerRuntime &runtime, tjs_int idx) {
+        nthPlayingTimeline(const Player &player, tjs_int idx) {
             if(idx < 0) {
                 return nullptr;
             }
-            if(static_cast<size_t>(idx) >= runtime.playingTimelineLabels.size()) {
+            if(static_cast<size_t>(idx) >= player._playingTimelineLabels.size()) {
                 return nullptr;
             }
             const auto it =
-                runtime.timelines.find(runtime.playingTimelineLabels[idx]);
-            return it != runtime.timelines.end() ? &it->second : nullptr;
+                player._timelines.find(player._playingTimelineLabels[idx]);
+            return it != player._timelines.end() ? &it->second : nullptr;
         }
 
         inline bool getObjectProperty(const tTJSVariant &object, const tjs_char *name,
