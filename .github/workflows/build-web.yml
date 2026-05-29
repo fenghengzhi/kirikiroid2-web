@@ -3,17 +3,13 @@ name: Build Web
 on:
   workflow_dispatch:
     inputs:
-      upload_cloudflare_pages:
-        description: Upload the Web build to Cloudflare Pages
-        required: false
-        type: boolean
-        default: false
-      cloudflare_pages_environment:
-        description: Cloudflare Pages deployment environment
+      cloudflare_pages_deploy:
+        description: Cloudflare Pages deployment (none = don't upload)
         required: false
         type: choice
-        default: preview
+        default: none
         options:
+          - none
           - preview
           - production
 
@@ -151,7 +147,7 @@ jobs:
             out/web/release/sitemap.xml
 
       - name: Prepare Cloudflare Pages upload
-        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.upload_cloudflare_pages }}
+        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.cloudflare_pages_deploy != 'none' }}
         run: |
           rm -rf /tmp/cloudflare-pages
           mkdir -p /tmp/cloudflare-pages
@@ -171,12 +167,12 @@ jobs:
           cp _headers /tmp/cloudflare-pages/
 
       - name: Upload to Cloudflare Pages
-        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.upload_cloudflare_pages }}
+        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.cloudflare_pages_deploy != 'none' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
-          CLOUDFLARE_PAGES_ENVIRONMENT: ${{ inputs.cloudflare_pages_environment }}
+          CLOUDFLARE_PAGES_ENVIRONMENT: ${{ inputs.cloudflare_pages_deploy }}
           CLOUDFLARE_PAGES_PRODUCTION_BRANCH: ${{ vars.CLOUDFLARE_PAGES_PRODUCTION_BRANCH || secrets.CLOUDFLARE_PAGES_PRODUCTION_BRANCH || 'main' }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
