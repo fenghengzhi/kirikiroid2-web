@@ -1,2 +1,3 @@
 - [Player class container layout](player_container_layout.md) — 二进制 Player +264/+320/+1184/+1240 是 4 个 KiriKiri 哈希表(非vector),容器选型权威表
 - [Player pimpl split mapping](player_pimpl_split.md) — 本地 Player.h+PlayerRuntime 拆分映射,字段类型错/偏移误标/多出字段清单
+- [Player 1384B flat spec](player_1384b_flat_spec.md) — 78 NCB成员→偏移→类型→ctor初值表; setVariable a1+1384 是EmotePlayer不是Player

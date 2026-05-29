@@ -4,6 +4,7 @@ project(TestPlugins LANGUAGES CXX)
 set(SOURCES
         psbfile-dll.cpp
         motionplayer-dll.cpp
+        motionplayer-ttstr-hash-test.cpp
 )
 
 string(REPLACE ".cpp" "" BASENAMES_SOURCES "${SOURCES}")

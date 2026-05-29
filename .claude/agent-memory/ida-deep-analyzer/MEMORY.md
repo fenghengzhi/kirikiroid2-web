@@ -17,3 +17,4 @@
 - [Android timer-thread architecture](project_android_timer_thread.md) — libkrkr2.so 用独立 pthread tTVPTimerThread 驱动 TJS Timer，墙钟 tick + condvar_timedwait，主循环掉帧不影响 onTimer 节奏。NO tTVPTimerImpl/ProgressAllTimer。
 - [Texture upload path](project_texture_upload_path.md) — libkrkr2.so 是 100% 同步 glTexImage2D/glTexSubImage2D 主线程上传。无 PBO、无 eglMakeCurrent、无 GL 上传线程。Web 移植无优化缺口。5 个 pthread_create 全部分类记录。
 - [Player 4 hashmaps](project_player_four_hashmaps.md) — 1384B Player 的 4 张 libstdc++ unordered_map（+264 "::"-cascade / +320 raw→double / +1184 node-path→696B layer state / +1240 name→label alias）；本地 PlayerRuntime 6 个 map 对账：HM2≈_evalResultValues，HM3/HM4 完全无对应，type4..8 controller maps 应迁出
+- [Player containers libstdc++ spec](player_containers_libstdcxx_spec.md) — 6 容器 (4 HM + 2 deque) 全部是 libstdc++ STL 实例化 (非 KiriKiri 自定义); HM 控制结构 56B / deque 控制结构 80B; 完整 entry layout (HM1=96B/HM2=32B/HM3=720B/HM4=32B), hash 函数, API 表, 不可对齐评估

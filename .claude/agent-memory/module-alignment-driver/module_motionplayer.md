@@ -29,4 +29,10 @@ motionplayer 模块（cpp/plugins/motionplayer/，约 24.6K LOC，40+ 文件）�
 - P4：HM4 alias map 引入 `std::unordered_map<std::string, tTJSVariant*>` 消除线性扫描
 - 不要再单独修方法体——继续逐方法 fix 会把"方法等价但容器不一致"的差异越积越多
 
+**2026-05-29 review-only 增量发现：**
+1. `D3DEmotePlayer_ncb_registerMembers` (0x52E504) 含**二进制复制粘贴 bug**：`bustScale` 绑到 `get/setBodyScale`、`modified` (RO) 绑到 `getPlayCallback`、`queing` 绑到 `get/setBustScale`、`clear` 绑到 `D3DEmotePlayer_create`、`pass` 绑到 `addPlayCallback`。本地 main.cpp:496-583 全部"修正"为语义正确版本，**这反向违反 1:1 复原目标**。下次推进时需在 analysis/ 显式标注"保留二进制 bug 是对齐策略"，避免反复来回修。
+2. `EmoteObject_init` (0x67DBAC) 是真正的 "setModule" 入口，执行 ResourceManager_loadResource + 读 metadata/base/chara/motion + 调 Player_play 的完整链。本地 EmotePlayer.cpp 的 setModule 仅赋 `_module` 字段，初始化逻辑分散——测试用例 4 (logo.mtn 图层 0/15) 很可能就是此问题表征。
+3. macos debug 单元测试当前 3/7 用例通过、205/209 assertions 通过 (98%)；4 个失败用例分别命中 isExistMotion 异常边界、pimg findSource 链、isTimelinePlaying 语义、logo.mtn 图层枚举。
+4. 构建在 web/debug preset 下完全通过，无本模块编译错误。
+
 **容器迁移核查方法（防止重复误报）：** 在认为某个 `_xxx` 字段"应迁出 Player"之前，先 `grep -n "_xxx" cpp/plugins/motionplayer/Player.h` 确认 Player.h 是否真的声明该字段——很多容器**仅出现在 .cpp 的 `_engineBack->_xxx` 访问点**，并不在 Player 上。
