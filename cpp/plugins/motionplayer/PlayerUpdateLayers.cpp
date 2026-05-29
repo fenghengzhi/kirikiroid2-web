@@ -37,8 +37,8 @@ namespace motion {
                 "rootPos=({:.3f},{:.3f},{:.3f}) cameraVel=({:.3f},{:.3f},{:.3f}) damping={:.6f} variableCount={}",
                 root.accumulated.posX, root.accumulated.posY,
                 root.accumulated.posZ, _cameraVelocityX, _cameraVelocityY,
-                _cameraVelocityZ, _cameraDamping, _variableValues.size());
-            for(const auto &[label, value] : _variableValues) {
+                _cameraVelocityZ, _cameraDamping, _evalResultValues.size());
+            for(const auto &[label, value] : _evalResultValues) {
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase1.var", "0x6BB33C",
                     currentTime, "label={} value={:.6f}", label, value);

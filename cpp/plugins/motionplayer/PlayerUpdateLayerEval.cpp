@@ -616,7 +616,7 @@ namespace motion {
         // sub_6C4668 binding: resolves variable name to a source entry in
         // player+264 map, then updates child Player timeline parameters for
         // nodeType=3 and nodeType=4 nodes. In our architecture, variable values
-        // are stored in _variableValues and exposed via getVariable()/setVariable()
+        // are stored in _evalResultValues and exposed via getVariable()/setVariable()
         // TJS API. The binding to child Players happens implicitly when child
         // Players re-evaluate their timelines.
         if (_runtime->activeMotion) {
@@ -624,14 +624,14 @@ namespace motion {
             for (const auto &[label, frames] : varFrames) {
                 if (frames.empty()) continue;
                 // User-set value takes precedence
-                if (_variableValues.find(label) != _variableValues.end()) continue;
+                if (_evalResultValues.find(label) != _evalResultValues.end()) continue;
                 // Default: use first frame value
                 writeEvalResultValueLike_0x6C4668(label, 0,
                                                   frames.front().value);
             }
             // Aligned to sub_6C4668: refresh parameter entries directly. This
             // intentionally does not call public setVariable() on child players.
-            for (const auto &[label, value] : _variableValues) {
+            for (const auto &[label, value] : _evalResultValues) {
                 bindParameterValueLike_0x6C4668(label, 0, value);
             }
         }

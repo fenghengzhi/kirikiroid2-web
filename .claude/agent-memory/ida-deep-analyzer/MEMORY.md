@@ -16,3 +16,4 @@
 - [playTimeline vs play](project_playTimeline_vs_play.md) — Player_playTimeline @ 0x672F70 does NOT build tree; assumes play()/setMotion() ran first to populate labelMap. NCB "playTimeline"→sub_672E44→0x672F70, separate from "play" NCB path.
 - [Android timer-thread architecture](project_android_timer_thread.md) — libkrkr2.so 用独立 pthread tTVPTimerThread 驱动 TJS Timer，墙钟 tick + condvar_timedwait，主循环掉帧不影响 onTimer 节奏。NO tTVPTimerImpl/ProgressAllTimer。
 - [Texture upload path](project_texture_upload_path.md) — libkrkr2.so 是 100% 同步 glTexImage2D/glTexSubImage2D 主线程上传。无 PBO、无 eglMakeCurrent、无 GL 上传线程。Web 移植无优化缺口。5 个 pthread_create 全部分类记录。
+- [Player 4 hashmaps](project_player_four_hashmaps.md) — 1384B Player 的 4 张 libstdc++ unordered_map（+264 "::"-cascade / +320 raw→double / +1184 node-path→696B layer state / +1240 name→label alias）；本地 PlayerRuntime 6 个 map 对账：HM2≈_evalResultValues，HM3/HM4 完全无对应，type4..8 controller maps 应迁出

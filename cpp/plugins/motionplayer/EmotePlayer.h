@@ -37,7 +37,9 @@ namespace motion {
     class EmoteEngine {
     public:
         explicit EmoteEngine(ResourceManager rm)
-            : _player(std::make_unique<Player>(std::move(rm))) {}
+            : _player(std::make_unique<Player>(std::move(rm))) {
+            _player->_engineBack = this;
+        }
 
         Player &player() { return *_player; }
         [[nodiscard]] const Player &player() const { return *_player; }
@@ -61,6 +63,19 @@ namespace motion {
         bool _mirrorRequested = false;
         bool _mirrorChanged = false;
         tjs_int _color = 0xFFFFFF;
+
+        // ===== 5 个 type-controller deques(libkrkr2.so Player_setVariable @ 0x671228) =====
+        // 二进制是 std::deque<Animator>(每元素 ~0x80B);本地用 deque + 元素内嵌 label,
+        // 查找走线性扫描(与二进制一致,无 hash 索引)。
+        std::deque<Player::VariableAnimatorState> _type4ControllerAnimators; // EmoteEngine+256
+        std::deque<Player::VariableAnimatorState> _type5ControllerAnimators; // EmoteEngine+336
+        std::deque<Player::VariableAnimatorState> _type6ControllerAnimators; // EmoteEngine+416
+        std::deque<Player::VariableAnimatorState> _type7ControllerAnimators; // EmoteEngine+576
+        std::deque<Player::VariableAnimatorState> _type8ControllerAnimators; // EmoteEngine+656
+
+        // 二进制 EmoteEngine+1384 std::unordered_map<ttstr, Animator>
+        std::unordered_map<std::string, Player::VariableAnimatorState>
+            _variableAnimators; // EmoteEngine+1384
 
     private:
         std::unique_ptr<Player> _player; // 引擎+1064

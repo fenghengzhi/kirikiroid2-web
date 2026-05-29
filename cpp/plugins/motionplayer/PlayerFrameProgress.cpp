@@ -2,6 +2,7 @@
 // Split from PlayerRender.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
 #include "MotionTraceWeb.h"
 #include "ncbind.hpp"
 
@@ -241,22 +242,28 @@ namespace motion {
             double value = 0.0;
             const auto *bucket =
                 controllerAnimatorBucketLike_0x671228(binding.type);
+            const auto *bucketEntry = [&]() -> const Player::VariableAnimatorState* {
+                if(!bucket) return nullptr;
+                for(const auto &e : *bucket) {
+                    if(e.label == binding.label) return &e;
+                }
+                return nullptr;
+            }();
             if(bucket != nullptr) {
-                if(const auto it = bucket->find(binding.label);
-                   it != bucket->end()) {
-                    value = static_cast<double>(it->second.currentValue);
+                if(bucketEntry) {
+                    value = static_cast<double>(bucketEntry->currentValue);
                 } else if(const auto *state =
                               findControllerAnimatorStateLike_0x671228(
                                   binding.label)) {
                     value = static_cast<double>(state->currentValue);
-                } else if(const auto it = _variableValues.find(binding.label);
-                          it != _variableValues.end()) {
+                } else if(const auto it = _evalResultValues.find(binding.label);
+                          it != _evalResultValues.end()) {
                     value = it->second;
                 } else {
                     value = getVariable(detail::widen(binding.label));
                 }
-            } else if(const auto it = _variableValues.find(binding.label);
-                      it != _variableValues.end()) {
+            } else if(const auto it = _evalResultValues.find(binding.label);
+                      it != _evalResultValues.end()) {
                 value = it->second;
             } else {
                 value = getVariable(detail::widen(binding.label));
@@ -323,18 +330,12 @@ namespace motion {
             if(const auto it = _evalResultValues.find(binding.varLr);
                it != _evalResultValues.end()) {
                 lrValue = it->second;
-            } else if(const auto it = _variableValues.find(binding.varLr);
-                      it != _variableValues.end()) {
-                lrValue = it->second;
             } else {
                 lrValue = getVariable(detail::widen(binding.varLr));
             }
 
             if(const auto it = _evalResultValues.find(binding.varUd);
                it != _evalResultValues.end()) {
-                udValue = it->second;
-            } else if(const auto it = _variableValues.find(binding.varUd);
-                      it != _variableValues.end()) {
                 udValue = it->second;
             } else {
                 udValue = getVariable(detail::widen(binding.varUd));
@@ -811,11 +812,11 @@ namespace motion {
         double remainingControllerStep = actualDelta;
         const auto stepControllerBucket =
             [this](auto &bucket, double controllerDt) {
-                for(auto &[label, state] : bucket) {
+                for(auto &state : bucket) {
                     double steppedValue = state.currentValue;
                     const bool stillAnimating = stepQueuedAnimatorLike_0x67D01C(
                         state, controllerDt, steppedValue);
-                    writeEvalResultValueLike_0x6C4668(label, steppedValue);
+                    writeEvalResultValueLike_0x6C4668(state.label, steppedValue);
                     if(stillAnimating) {
                         _emoteDirty = true;
                     }
@@ -825,11 +826,13 @@ namespace motion {
             const double controllerDt = std::min(remainingControllerStep, 1.1);
             // Aligned to 0x67D01C container order: type4 -> type5 -> type6
             // -> type8 -> type7, then generic eval animators.
-            stepControllerBucket(_type4ControllerAnimators, controllerDt);
-            stepControllerBucket(_type5ControllerAnimators, controllerDt);
-            stepControllerBucket(_type6ControllerAnimators, controllerDt);
-            stepControllerBucket(_type8ControllerAnimators, controllerDt);
-            stepControllerBucket(_type7ControllerAnimators, controllerDt);
+            if(_engineBack) {
+                stepControllerBucket(_engineBack->_type4ControllerAnimators, controllerDt);
+                stepControllerBucket(_engineBack->_type5ControllerAnimators, controllerDt);
+                stepControllerBucket(_engineBack->_type6ControllerAnimators, controllerDt);
+                stepControllerBucket(_engineBack->_type8ControllerAnimators, controllerDt);
+                stepControllerBucket(_engineBack->_type7ControllerAnimators, controllerDt);
+            }
             refreshFixedControllerEvalOutputsLike_0x67D01C();
             remainingControllerStep -= controllerDt;
         }

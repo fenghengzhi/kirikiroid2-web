@@ -2,6 +2,7 @@
 // Split out for maintainability.
 //
 #include "PlayerInternal.h"
+#include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
 #include "ncbind.hpp"
 
 using namespace motion::internal;
@@ -282,8 +283,7 @@ namespace motion {
         for(const Player *player = this; player != nullptr;
             player = player->_parentPlayer) {
             double value = 0.0;
-            if(findValue(player->_variableValues, value) ||
-               findValue(player->_evalResultValues, value)) {
+            if(findValue(player->_evalResultValues, value)) {
                 return value;
             }
         }
@@ -330,7 +330,6 @@ namespace motion {
             return;
         }
         ensureEvalResultSlotLike_0x686944(label) = value;
-        _variableValues[label] = value;
         _evalResultValues[label] = value;
         bindParameterValueLike_0x6C4668(label, mode, value);
     }
@@ -398,8 +397,8 @@ namespace motion {
                     double requestedEaseWeight) {
                     queueControllerStateLikeBinary(
                         key, state,
-                        _variableValues.count(key) ? _variableValues[key]
-                                                   : getVariable(detail::widen(key)),
+                        _evalResultValues.count(key) ? _evalResultValues[key]
+                                                     : getVariable(detail::widen(key)),
                         requestedValue, requestedTransition,
                         requestedEaseWeight);
                 };
@@ -448,8 +447,8 @@ namespace motion {
                                 const double currentValue =
                                     currentIt != _evalResultValues.end()
                                         ? currentIt->second
-                                        : (_variableValues.count(option.label)
-                                               ? _variableValues[option.label]
+                                        : (_evalResultValues.count(option.label)
+                                               ? _evalResultValues[option.label]
                                                : getVariable(
                                                      detail::widen(option.label)));
                                 const double range =
@@ -460,7 +459,9 @@ namespace motion {
                                               range * transition
                                         : 0.0;
                                 auto &optionState =
-                                    _type8ControllerAnimators[option.label];
+                                    Player::findOrInsertControllerStateLike_0x671228(
+                                        _engineBack->_type8ControllerAnimators,
+                                        option.label);
                                 queueControllerStateLikeBinary(
                                     option.label, optionState, currentValue,
                                     targetValue, scaledTransition,
@@ -478,7 +479,9 @@ namespace motion {
                         _emoteDirty = true;
                         return;
                     }
-                    auto &state = (*bucket)[key];
+                    auto &state =
+                        Player::findOrInsertControllerStateLike_0x671228(
+                            *bucket, key);
                     ensureEvalResultSlotLike_0x686944(key);
                     queueControllerLikeBinary(state, value, transition,
                                               easeWeight);
@@ -494,7 +497,9 @@ namespace motion {
                         _emoteDirty = true;
                         return;
                     }
-                    auto &state = _type6ControllerAnimators[key];
+                    auto &state =
+                        Player::findOrInsertControllerStateLike_0x671228(
+                            _engineBack->_type6ControllerAnimators, key);
                     ensureEvalResultSlotLike_0x686944(key);
                     queueControllerLikeBinary(state, value, transition,
                                               easeWeight);
@@ -509,7 +514,7 @@ namespace motion {
 
         // Aligned to Player_setVariable (0x671228): labels without a controller
         // binding bypass animator queues and write the eval map immediately.
-        _variableAnimators.erase(key);
+        if(_engineBack) _engineBack->_variableAnimators.erase(key);
         writeEvalResultValueLike_0x6C4668(key, value);
         _emoteDirty = true;
     }
@@ -532,7 +537,7 @@ namespace motion {
             return 0.0;
         }
 
-        if(const auto it = _variableValues.find(key); it != _variableValues.end()) {
+        if(const auto it = _evalResultValues.find(key); it != _evalResultValues.end()) {
             return it->second;
         }
 

@@ -644,13 +644,15 @@ namespace motion {
         double _boundsMaxX = -std::numeric_limits<double>::max();
         double _boundsMaxY = -std::numeric_limits<double>::max();
         bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
-        std::unordered_map<std::string, double> _variableValues;
+        // _variableValues removed: it duplicated HM2 @ Player+320; merged into _evalResultValues.
+    public:
         struct VariableKeyframe {
             float value = 0.0f;
             float duration = 0.0f;
             float weight = 1.0f;
         };
         struct VariableAnimatorState {
+            std::string label; // for deque linear lookup (EmoteEngine +256..+656 deques)
             std::deque<VariableKeyframe> queue;
             bool active = false;
             float currentValue = 0.0f;
@@ -660,20 +662,19 @@ namespace motion {
             float duration = 0.0f;
             float weight = 1.0f;
         };
-        std::unordered_map<std::string, VariableAnimatorState> _variableAnimators;
-        std::unordered_map<std::string, VariableAnimatorState>
-            _type4ControllerAnimators;
-        std::unordered_map<std::string, VariableAnimatorState>
-            _type5ControllerAnimators;
-        std::unordered_map<std::string, VariableAnimatorState>
-            _type6ControllerAnimators;
-        std::unordered_map<std::string, VariableAnimatorState>
-            _type7ControllerAnimators;
-        std::unordered_map<std::string, VariableAnimatorState>
-            _type8ControllerAnimators;
-        std::unordered_map<std::string, VariableAnimatorState> *
+    private:
+        // The 7 animator containers below live on EmoteEngine, not Player.
+        // Per libkrkr2.so analysis (Player_setVariable @ 0x671228):
+        //   EmoteEngine+256  std::deque<Animator> type-4 controller
+        //   EmoteEngine+336  std::deque<Animator> type-5 controller
+        //   EmoteEngine+416  std::deque<Animator> type-6 controller
+        //   EmoteEngine+576  std::deque<Animator> type-7 controller
+        //   EmoteEngine+656  std::deque<Animator> type-8 controller
+        //   EmoteEngine+1384 std::unordered_map<ttstr, Animator> _variableAnimators
+        // Player accesses them through _engineBack (set by EmoteEngine ctor).
+        std::deque<VariableAnimatorState> *
         controllerAnimatorBucketLike_0x671228(int type);
-        const std::unordered_map<std::string, VariableAnimatorState> *
+        const std::deque<VariableAnimatorState> *
         controllerAnimatorBucketLike_0x671228(int type) const;
         VariableAnimatorState *
         findControllerAnimatorStateLike_0x671228(const std::string &label);
@@ -681,6 +682,12 @@ namespace motion {
         findControllerAnimatorStateLike_0x671228(const std::string &label) const;
         void eraseControllerAnimatorStateLike_0x671228(const std::string &label);
         void clearControllerAnimatorStateLike_0x671228();
+        // find-or-emplace helper for (*bucket)[label] / _typeNControllerAnimators[label]
+        // call sites (deque has no operator[] keyed by label).
+        static VariableAnimatorState &
+        findOrInsertControllerStateLike_0x671228(
+            std::deque<VariableAnimatorState> &bucket,
+            const std::string &label);
         std::unordered_map<std::string, double> _evalResultValues;
         struct EvalResultEntry {
             std::string label;
@@ -777,6 +784,15 @@ namespace motion {
         // then fed back into Player_loadMotion as the first argument to
         // "findMotion" (0x6B0F10 / 0x6B2284), including child-player copies.
         tTJSVariant _findMotionContextVariant;    // player+1012
+
+        // Web-port back-pointer: in libkrkr2.so, Player_setVariable (0x671228)
+        // and friends actually run with EmoteEngine `this` (the function is
+        // mis-named in the binary). Locally we keep methods on Player but route
+        // engine-resident state through this pointer. EmoteEngine ctor body sets
+        // it after Player is constructed; non-owning, always valid for the
+        // lifetime of the owning EmoteEngine.
+        class EmoteEngine *_engineBack = nullptr;
+        friend class EmoteEngine;
     };
 
 } // namespace motion

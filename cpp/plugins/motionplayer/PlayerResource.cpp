@@ -2,6 +2,7 @@
 // Split from Player.cpp for maintainability.
 //
 #include "PlayerInternal.h"
+#include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
 #include "SourceCache.h"
 
 using namespace motion::internal;
@@ -49,8 +50,7 @@ namespace motion {
         _runtime->lastViewParam.Clear();
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
-        _variableValues.clear();
-        _variableAnimators.clear();
+        if(_engineBack) _engineBack->_variableAnimators.clear();
         clearControllerAnimatorStateLike_0x671228();
         _evalResultValues.clear();
         _evalResultList.clear();
