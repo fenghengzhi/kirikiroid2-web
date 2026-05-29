@@ -394,10 +394,10 @@ void appendRenderEvent(motion::Player *player,
 }
 
 std::string activeMotionPath(const motion::Player *player) {
-    if(!player || !player || !player->activeMotion) {
+    if(!player || !player->activeMotion()) {
         return {};
     }
-    return player->activeMotion->path;
+    return player->activeMotion()->path;
 }
 
 int preparedIndexFor(const motion::Player *runtime,
