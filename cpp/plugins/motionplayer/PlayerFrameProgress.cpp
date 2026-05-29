@@ -576,7 +576,7 @@ namespace internal {
             }
 
             if(!keepPlaying && state.wasPlaying) {
-                _runtime->pendingEvents.push_back({1, label, {}});
+                _pendingEvents.push_back({1, label, {}});
                 state.wasPlaying = false;
             }
 
@@ -863,7 +863,7 @@ namespace internal {
                 if(stateIt->second.currentTime > prev) {
                     detail::scanLayerActions(*_activeMotion,
                                              prev, stateIt->second.currentTime,
-                                             _runtime->pendingEvents);
+                                             _pendingEvents);
                 }
             }
         }
@@ -880,7 +880,7 @@ namespace internal {
         }
 
         if(_runtime) {
-            _runtime->pendingEvents.clear();
+            _pendingEvents.clear();
         }
         frameProgress(deltaMs * kMotionFramesPerMillisecond);
         if(_runtime && !_runtime->nodes.empty()) {
@@ -888,7 +888,7 @@ namespace internal {
         }
         calcBounds();
         if(_runtime) {
-            _runtime->pendingEvents.clear();
+            _pendingEvents.clear();
         }
     }
 
@@ -913,7 +913,7 @@ namespace internal {
             delta = 0;
         }
 
-        self->_runtime->pendingEvents.clear();
+        self->_pendingEvents.clear();
         self->frameProgress(delta * kMotionFramesPerMillisecond);
         const auto motionPath =
             self->_runtime && self->_activeMotion
@@ -937,7 +937,7 @@ namespace internal {
                 motionPath, "progressCompat.update", "0x6D2A98",
                 self->_clampedEvalTime,
                 "timelineCurrentTime={:.3f} pendingEvents={} nodes={}",
-                self->_clampedEvalTime, self->_runtime->pendingEvents.size(),
+                self->_clampedEvalTime, self->_pendingEvents.size(),
                 self->_runtime->nodes.size());
             self->updateLayers();
         }
@@ -962,8 +962,8 @@ namespace internal {
 
         // Aligned to libkrkr2.so Player_dispatchEvents (0x6C4490):
         // After stepping timelines, dispatch queued onAction/onSync events.
-        if(!self->_runtime->pendingEvents.empty()) {
-            for(const auto &ev : self->_runtime->pendingEvents) {
+        if(!self->_pendingEvents.empty()) {
+            for(const auto &ev : self->_pendingEvents) {
                 try {
                     if(ev.type == 0) {
                         // onAction(param1, param2)
@@ -979,7 +979,7 @@ namespace internal {
                     }
                 } catch(...) {}
             }
-            self->_runtime->pendingEvents.clear();
+            self->_pendingEvents.clear();
         }
 
         if(result) {

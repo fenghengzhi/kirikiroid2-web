@@ -734,7 +734,7 @@ namespace motion {
             node.timelineParameterOverride = false;
             node.timelineParameterValue = 0.0;
             if (node.parameterizeIndex >= 0) {
-                auto *parameterEntry = resolveNodeParameterEntry(*_runtime, node);
+                auto *parameterEntry = resolveNodeParameterEntry(*this, node);
                 if (parameterEntry != nullptr && parameterEntry->mode != 0) {
                     node.timelineParameterOverride = true;
                     node.timelineParameterValue = parameterEntry->value;

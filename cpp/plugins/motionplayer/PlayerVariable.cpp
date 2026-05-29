@@ -202,8 +202,8 @@ namespace motion {
         entry.value = normalizeParameterValueLike_0x6B1718(
             entry, initialParameterRawValueLike_0x6B1ABC(entry.id));
 
-        _runtime->parameterEntries.push_back(std::move(entry));
-        return &_runtime->parameterEntries.back();
+        _parameterEntries.push_back(std::move(entry));
+        return &_parameterEntries.back();
     }
 
     bool Player::parseParameterListLike_0x6B202C(
@@ -217,8 +217,8 @@ namespace motion {
             return false;
         }
 
-        _runtime->parameterEntries.reserve(
-            _runtime->parameterEntries.size() + list->size());
+        _parameterEntries.reserve(
+            _parameterEntries.size() + list->size());
         for(const auto &item : *list) {
             auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
             appendParameterEntryLike_0x6B1718(dic);
@@ -232,11 +232,11 @@ namespace motion {
             return;
         }
 
-        _runtime->parameterEntryById.clear();
-        for(size_t i = 0; i < _runtime->parameterEntries.size(); ++i) {
-            const auto &entry = _runtime->parameterEntries[i];
+        _parameterEntryById.clear();
+        for(size_t i = 0; i < _parameterEntries.size(); ++i) {
+            const auto &entry = _parameterEntries[i];
             if(!entry.id.empty()) {
-                _runtime->parameterEntryById[entry.id] = i;
+                _parameterEntryById[entry.id] = i;
             }
         }
     }
@@ -284,7 +284,7 @@ namespace motion {
         }
 
         const auto parts = splitParameterLabelLike_0x6D0BF4(label);
-        bindParameterEntriesLike_0x6C4668(_runtime->parameterEntries, parts,
+        bindParameterEntriesLike_0x6C4668(_parameterEntries, parts,
                                           mode, value);
 
         for(auto &node : _runtime->nodes) {

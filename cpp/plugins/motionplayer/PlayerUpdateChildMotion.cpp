@@ -11,7 +11,7 @@ namespace motion {
         // Motion sub-node processing — aligned to sub_6BE0C0 (0x6BE0C0).
         // For each nodeType=3 (Motion) node, create/manage child Player instance.
         // Only runs when !isEmoteMode (0x6BE104).
-        if (_runtime->isEmoteMode) return;
+        if (_isEmoteMode) return;
 
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &mn = nodes[i];
@@ -20,7 +20,7 @@ namespace motion {
             // Aligned to libkrkr2.so sub_6BE0C0 (0x6BE204..0x6BE214):
             // v12 is parameterEntry->mode (entry+48), using the node entry
             // or the Player_initNonEmoteMotion default entry as fallback.
-            auto *parameterEntry = resolveNodeParameterEntry(*_runtime, mn);
+            auto *parameterEntry = resolveNodeParameterEntry(*this, mn);
             int v12 = parameterEntry ? parameterEntry->mode : 0;
 
             // Get child Player via TJS dispatch (0x6BE220..0x6BE260)
@@ -423,7 +423,7 @@ namespace motion {
 
                     // === Angle → child (0x6BEAA8..0x6BEB08) ===
                     if (hasAngle) {
-                        if (child._runtime->isEmoteMode) {
+                        if (child._isEmoteMode) {
                             // Emote mode: normalize angle [0,360), set player+464, reinit
                             double k = computedAngle;
                             while (k < 0.0) k += 360.0;

@@ -247,19 +247,12 @@ namespace motion::detail {
         // Phase A5: layerIdsByName / layerNamesById / renderLayerStates /
         // backgrounds / captions moved to Player; LayerRenderState lifted
         // to namespace detail scope (above).
-        std::unordered_map<std::string, bool> disabledSelectorTargets;
         // Phase A6: lastCanvas / lastViewParam / internalRenderLayer /
         // scratchWorkLayer / drawAffineMatrix moved to Player.
-        // Phase A1: render-host scalars (visible/flip/opacity/slant/zoom/
-        // resizable/clearColor/width/height/alphaOpCounter/nextLayerId/
-        // nextLayerAbsolute) moved to Player as flat members.
-        std::vector<MotionEvent> pendingEvents;
-        std::vector<MotionParameterEntry> parameterEntries;
-        std::unordered_map<std::string, size_t> parameterEntryById;
-        MotionParameterEntry defaultParameterEntry;
-        MotionParameterEntry *defaultParameterEntryPtr = nullptr;
-        int defaultParameterEntryIndex = -1;
-        const MotionClip *activeClip = nullptr;
+        // Phase A1: render-host scalars moved to Player as flat members.
+        // Phase A7: disabledSelectorTargets / pendingEvents / parameterEntries /
+        // parameterEntryById / defaultParameterEntry* / activeClip / isEmoteMode
+        // moved to Player.
         // Persistent node tree for updateLayers pipeline. Aligned to
         // libkrkr2.so Player+200 (std::deque of MotionNode). The constructor
         // creates index 0 as the root node; loaded layer trees append real
@@ -364,9 +357,7 @@ namespace motion::detail {
             int dirtyFlag = 0;
         };
         std::vector<PerNodeEvalData> perNodeEvalData;
-        // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
-        // PSB root "type" field: 0=non-emote (motion), 1=emote
-        bool isEmoteMode = false;
+        // Phase A7: isEmoteMode moved to Player (alongside parameter system).
     };
 
     void ensureRootNodeLike_0x6CED30(PlayerRuntime &runtime);

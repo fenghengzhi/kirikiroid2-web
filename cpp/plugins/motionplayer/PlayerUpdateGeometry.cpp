@@ -9,7 +9,7 @@ namespace motion {
         // --- sub_6BC000: Camera constraint (nodeType=9) ---
         // Aligned to 0x6BC000..0x6BC4EC. Only when !isEmoteMode.
         // 9 cases at 0x6BC1B0..0x6BC358 based on flipX/flipY + constraintType (node+2376).
-        if (!_runtime->isEmoteMode && nodes.size() >= 2) {
+        if (!_isEmoteMode && nodes.size() >= 2) {
             double offsetX = 0, offsetY = 0, offsetZ = 0;
             // Track which axes have constraints and their types
             bool hasMinX = false, hasMaxX = false, hasTrackX = false;
@@ -202,7 +202,7 @@ namespace motion {
             if (!vn.activeSlot().done) {
                 // Second visibility bitmask check (0x6BCE2C..0x6BCE40)
                 // Non-emote: 7233 = 0x1C41, Emote: 7241 = 0x1C49
-                const int vbm = _runtime->isEmoteMode ? 7241 : 7233;
+                const int vbm = _isEmoteMode ? 7241 : 7233;
                 const bool vertexEligible = vn.forceVisible
                     || ((vbm & (1 << vn.nodeType)) != 0);
 
@@ -583,7 +583,7 @@ namespace motion {
         // Non-emote: 6145 = 0x1801 → nodeTypes 0, 11, 12
         // Emote:     6153 = 0x1809 → nodeTypes 0, 3, 11, 12
         // Aligned to sub_6BD8DC (0x6BD8DC): visibility bitmask depends on emote mode.
-        const int visBitmask = _runtime->isEmoteMode ? 6153 : 6145;
+        const int visBitmask = _isEmoteMode ? 6153 : 6145;
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
 

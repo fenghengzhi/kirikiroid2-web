@@ -283,12 +283,12 @@ namespace motion {
         const auto key = detail::narrow(name);
         const auto &selectors = _activeMotion->selectorControls;
         return selectors.find(key) != selectors.end() &&
-            _runtime->disabledSelectorTargets.find(key) ==
-                _runtime->disabledSelectorTargets.end();
+            _disabledSelectorTargets.find(key) ==
+                _disabledSelectorTargets.end();
     }
 
     void Player::deactivateSelectorTarget(ttstr name) {
-        _runtime->disabledSelectorTargets[detail::narrow(name)] = true;
+        _disabledSelectorTargets[detail::narrow(name)] = true;
     }
 
     // --- Misc ---

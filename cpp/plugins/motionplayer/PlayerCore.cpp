@@ -217,6 +217,10 @@ namespace motion {
         _resourceManagerNative(std::move(rm)),
         _parentPlayer(parentPlayer) {
         LOGGER->info("Motion.Player constructor called");
+        // A7: mirror the rangeScale/mode defaults previously set inside
+        // makePlayerRuntime, now that defaultParameterEntry lives on Player.
+        _defaultParameterEntry.rangeScale = 1.0;
+        _defaultParameterEntry.mode = 0;
         using ResourceManagerAdaptor = ncbInstanceAdaptor<ResourceManager>;
         if(auto *dispatch =
                ResourceManagerAdaptor::CreateAdaptor(
@@ -513,21 +517,21 @@ namespace motion {
     }
 
     void Player::initNonEmoteMotionLike_0x6B365C(std::uint32_t playFlags) {
-        if(!_runtime || !_activeMotion || _runtime->isEmoteMode) {
+        if(!_runtime || !_activeMotion || _isEmoteMode) {
             return;
         }
 
         const auto *clip = selectActiveClip();
-        _runtime->activeClip = clip;
+        _activeClip = clip;
 
         resetNodeTreeForBuildLike_0x6B56F8();
-        _runtime->parameterEntries.clear();
-        _runtime->parameterEntryById.clear();
-        _runtime->defaultParameterEntry = {};
-        _runtime->defaultParameterEntry.rangeScale = 1.0;
-        _runtime->defaultParameterEntry.mode = 0;
-        _runtime->defaultParameterEntryPtr = nullptr;
-        _runtime->defaultParameterEntryIndex = -1;
+        _parameterEntries.clear();
+        _parameterEntryById.clear();
+        _defaultParameterEntry = {};
+        _defaultParameterEntry.rangeScale = 1.0;
+        _defaultParameterEntry.mode = 0;
+        _defaultParameterEntryPtr = nullptr;
+        _defaultParameterEntryIndex = -1;
 
         if(clip != nullptr) {
             _loopTime = clip->loopTime;
@@ -542,10 +546,10 @@ namespace motion {
                        parameterizeValue)) {
                 appendParameterEntryLike_0x6B1718(parameterizeObject);
                 finalizeParameterTableLike_0x6B1ECC();
-                if(!_runtime->parameterEntries.empty()) {
-                    _runtime->defaultParameterEntryIndex = 0;
-                    _runtime->defaultParameterEntryPtr =
-                        &_runtime->parameterEntries.front();
+                if(!_parameterEntries.empty()) {
+                    _defaultParameterEntryIndex = 0;
+                    _defaultParameterEntryPtr =
+                        &_parameterEntries.front();
                 }
             } else {
                 parseParameterListLike_0x6B202C((*motionObject)["parameter"]);
@@ -573,12 +577,12 @@ namespace motion {
                     }
                     if(index < 0 ||
                        static_cast<size_t>(index) >=
-                           _runtime->parameterEntries.size()) {
+                           _parameterEntries.size()) {
                         throw std::out_of_range("parameter id out of range.");
                     }
-                    _runtime->defaultParameterEntryIndex = index;
-                    _runtime->defaultParameterEntryPtr =
-                        &_runtime->parameterEntries[static_cast<size_t>(index)];
+                    _defaultParameterEntryIndex = index;
+                    _defaultParameterEntryPtr =
+                        &_parameterEntries[static_cast<size_t>(index)];
                 }
             }
         }

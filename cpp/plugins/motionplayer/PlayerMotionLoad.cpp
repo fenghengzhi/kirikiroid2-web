@@ -244,7 +244,7 @@ namespace motion {
 
         std::string clipLabel;
         const auto *clip =
-            _runtime->activeClip != nullptr ? _runtime->activeClip
+            _activeClip != nullptr ? _activeClip
                                             : selectActiveClip();
         if(clip != nullptr) {
             clipLabel = clip->label;

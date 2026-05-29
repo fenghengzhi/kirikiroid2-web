@@ -222,20 +222,20 @@ namespace internal {
                 }
             }
             detail::resetNodeTreeKeepRootLike_0x6B56F8(runtime);
-            runtime.parameterEntries.clear();
-            runtime.parameterEntryById.clear();
-            runtime.defaultParameterEntry = {};
-            runtime.defaultParameterEntryPtr = nullptr;
-            runtime.defaultParameterEntryIndex = -1;
-            runtime.activeClip = nullptr;
+            player._parameterEntries.clear();
+            player._parameterEntryById.clear();
+            player._defaultParameterEntry = {};
+            player._defaultParameterEntryPtr = nullptr;
+            player._defaultParameterEntryIndex = -1;
+            player._activeClip = nullptr;
             // Detect emote mode from PSB root "type" field.
             // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
             //   type=0 → non-emote (motion), type=1 → emote
-            runtime.isEmoteMode = false;
+            player._isEmoteMode = false;
             if(snapshot && snapshot->root) {
                 auto typeVal = (*snapshot->root)["type"];
                 if(auto num = std::dynamic_pointer_cast<PSB::PSBNumber>(typeVal)) {
-                    runtime.isEmoteMode = (num->getValue<int>() == 1);
+                    player._isEmoteMode = (num->getValue<int>() == 1);
                 }
             }
             if(snapshot) {
@@ -288,24 +288,24 @@ namespace internal {
         }
 
         inline detail::MotionParameterEntry *
-        resolveNodeParameterEntry(detail::PlayerRuntime &runtime,
+        resolveNodeParameterEntry(Player &player,
                                   const detail::MotionNode &node) {
             if(node.parameterEntry != nullptr) {
                 return node.parameterEntry;
             }
             if(node.parameterizeIndex >= 0 &&
                static_cast<size_t>(node.parameterizeIndex) <
-                   runtime.parameterEntries.size()) {
-                return &runtime.parameterEntries[static_cast<size_t>(
+                   player._parameterEntries.size()) {
+                return &player._parameterEntries[static_cast<size_t>(
                     node.parameterizeIndex)];
             }
             if(node.parameterizeIndex >= 0) {
                 throw std::out_of_range("parameter id out of range.");
             }
-            if(runtime.defaultParameterEntryPtr != nullptr) {
-                return runtime.defaultParameterEntryPtr;
+            if(player._defaultParameterEntryPtr != nullptr) {
+                return player._defaultParameterEntryPtr;
             }
-            return &runtime.defaultParameterEntry;
+            return &player._defaultParameterEntry;
         }
 
         inline std::vector<ttstr> buildSourceCandidates(

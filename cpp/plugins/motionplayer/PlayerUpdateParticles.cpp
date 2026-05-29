@@ -8,7 +8,7 @@ namespace motion {
         auto &nodes = _runtime->nodes;
         // --- sub_6BEDD0: Particle emitter state (nodeType=6) ---
         // Aligned to 0x6BEDD0. Only when !isEmoteMode.
-        if (_runtime->isEmoteMode) return;
+        if (_isEmoteMode) return;
 
         for (size_t ei = 1; ei < nodes.size(); ++ei) {
             auto &en = nodes[ei];
@@ -64,7 +64,7 @@ namespace motion {
                 // Aligned to 0x6BEF74..0x6BEFA8:
                 //   parentTime = node+8 ? parameterEntry->value : player+1120
                 // Falls back to _frameLoopTime if node+8 is null.
-                auto *parameterEntry = resolveNodeParameterEntry(*_runtime, en);
+                auto *parameterEntry = resolveNodeParameterEntry(*this, en);
                 double parentTime =
                     parameterEntry ? parameterEntry->value : _frameLoopTime;
                 double startTime = en.activeSlot().clipStartTime;
@@ -190,7 +190,7 @@ namespace motion {
         // Fully aligned to libkrkr2.so 0x6BF0DC (~800 lines decompiled).
         // Velocity stored on child Player _cameraVelocityX/Y/Z (player+784/792/800).
         // frameProgress + updateLayersPhase1_PreLoop auto-applies velocity+damping.
-        if (_runtime->isEmoteMode) return;
+        if (_isEmoteMode) return;
         auto &nodes = _runtime->nodes;
         const double dt = _frameLastTime;
         constexpr double PI = 3.14159265358979323846;

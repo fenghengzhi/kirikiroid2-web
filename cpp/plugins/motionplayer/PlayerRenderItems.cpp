@@ -236,7 +236,7 @@ namespace motion {
         auto &entries = _runtime->preparedRenderItems;
         const auto &nodes = _runtime->nodes;
         const auto motionPath = _activeMotion->path;
-        const int bitmask = _runtime->isEmoteMode ? 5193 : 5185;
+        const int bitmask = _isEmoteMode ? 5193 : 5185;
         const auto &dam = _drawAffineMatrix;
         std::unordered_set<int> requiredGroupNodeIndices;
 

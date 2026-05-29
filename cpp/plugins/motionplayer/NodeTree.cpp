@@ -7,6 +7,7 @@
 #include "MotionNode.h"
 #include "RuntimeSupport.h"
 #include "Player.h"
+#include "PlayerInternal.h"
 #include "ncbind.hpp"
 #include "tjsArray.h"
 #include "psbfile/PSBFile.h"
@@ -80,23 +81,9 @@ namespace motion::detail {
             return false;
         }
 
-        MotionParameterEntry *
-        resolveParameterEntryForNodeInit(PlayerRuntime &runtime,
-                                         const MotionNode &node) {
-            if(node.parameterizeIndex >= 0 &&
-               static_cast<size_t>(node.parameterizeIndex) <
-                   runtime.parameterEntries.size()) {
-                return &runtime.parameterEntries[static_cast<size_t>(
-                    node.parameterizeIndex)];
-            }
-            if(node.parameterizeIndex >= 0) {
-                throw std::out_of_range("parameter id out of range.");
-            }
-            if(runtime.defaultParameterEntryPtr != nullptr) {
-                return runtime.defaultParameterEntryPtr;
-            }
-            return &runtime.defaultParameterEntry;
-        }
+        // A7: replaced by motion::internal::resolveNodeParameterEntry which
+        // now reads from Player. Kept the call site below using the shared
+        // helper to avoid duplicating the parameter lookup logic.
 
         // Recursively walk PSB layer tree, appending nodes to the Player deque.
         void walkTree(const std::shared_ptr<const PSB::PSBDictionary> &psbNode,
@@ -137,7 +124,11 @@ namespace motion::detail {
             // "parameterize" → parameter table index (node+8 in libkrkr2.so)
             if (auto v = nodeTreePsbNumber(psbNode, "parameterize"))
                 node.parameterizeIndex = static_cast<int>(*v);
-            node.parameterEntry = resolveParameterEntryForNodeInit(runtime, node);
+            node.parameterEntry =
+                ownerPlayer
+                    ? motion::internal::resolveNodeParameterEntry(
+                          *ownerPlayer, node)
+                    : nullptr;
             if (node.nodeType == 0) {
                 if (auto v = nodeTreePsbNumber(psbNode, "objTriPriority"))
                     node.objTriPriority = static_cast<int>(*v);

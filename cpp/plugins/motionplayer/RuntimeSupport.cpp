@@ -1210,8 +1210,8 @@ namespace motion::detail {
 
     std::shared_ptr<PlayerRuntime> makePlayerRuntime() {
         auto runtime = std::make_shared<PlayerRuntime>();
-        runtime->defaultParameterEntry.rangeScale = 1.0;
-        runtime->defaultParameterEntry.mode = 0;
+        // A7: defaultParameterEntry moved to Player; its initialisation
+        // now happens in Player's constructor.
         ensureRootNodeLike_0x6CED30(*runtime);
         return runtime;
     }

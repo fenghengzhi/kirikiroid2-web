@@ -17,6 +17,7 @@
 #include <spdlog/spdlog.h>
 #include "tjs.h"
 #include "ResourceManager.h"
+#include "RuntimeSupport.h"
 #include "internal/player_containers.h"
 
 namespace PSB {
@@ -36,6 +37,7 @@ namespace motion {
     namespace detail {
         struct LayerRenderState;
         struct MotionClip;
+        struct MotionEvent;
         struct MotionNode;
         struct MotionParameterEntry;
         struct MotionSnapshot;
@@ -107,6 +109,8 @@ namespace motion {
         const detail::TimelineState *
         nthPlayingTimeline(const Player &, tjs_int);
         double activeClipTime(const Player &, const detail::MotionClip *);
+        detail::MotionParameterEntry *
+        resolveNodeParameterEntry(Player &, const detail::MotionNode &);
     }
 
     class Player {
@@ -708,6 +712,23 @@ namespace motion {
         tTJSVariant _scratchWorkLayer;
         std::array<double, 6> _drawAffineMatrix{1.0, 0.0, 0.0,
                                                 1.0, 0.0, 0.0};
+
+        // === Extension fields (Phase A7) ===
+        // disabledSelectorTargets / pendingEvents are Web port extensions
+        // without libkrkr2.so equivalents (binary handles selector and
+        // event flow differently). The parameter system + activeClip +
+        // isEmoteMode map directly to binary state used by the eval loop.
+        std::unordered_map<std::string, bool> _disabledSelectorTargets;
+        std::vector<detail::MotionEvent> _pendingEvents;
+        std::vector<detail::MotionParameterEntry> _parameterEntries;
+        std::unordered_map<std::string, size_t> _parameterEntryById;
+        detail::MotionParameterEntry _defaultParameterEntry;
+        detail::MotionParameterEntry *_defaultParameterEntryPtr = nullptr;
+        int _defaultParameterEntryIndex = -1;
+        const detail::MotionClip *_activeClip = nullptr;
+        // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
+        // PSB root "type" field: 0=non-emote (motion), 1=emote.
+        bool _isEmoteMode = false;
         // _variableValues removed: it duplicated HM2 @ Player+320; merged into _evalResultValues.
 
         // === Web port render-host state (no libkrkr2.so offset alignment) ===
@@ -929,6 +950,10 @@ namespace motion {
         // it reach _timelines / _playingTimelineLabels.
         friend double internal::activeClipTime(
             const Player &, const detail::MotionClip *);
+        // A7: parameter resolver needs _parameterEntries /
+        // _defaultParameterEntry{,Ptr,Index}.
+        friend detail::MotionParameterEntry *internal::resolveNodeParameterEntry(
+            Player &, const detail::MotionNode &);
     };
 
 } // namespace motion
