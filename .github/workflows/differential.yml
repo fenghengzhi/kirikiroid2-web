@@ -12,7 +12,9 @@ on:
         type: boolean
         default: false
   push:
-    branches: [web]
+    branches:
+      - web
+      - 'dev/*'
 
 env:
   EMSDK_VERSION: "4.0.23"
