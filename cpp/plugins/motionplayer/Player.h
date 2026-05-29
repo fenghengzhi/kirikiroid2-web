@@ -695,6 +695,19 @@ namespace motion {
         std::unordered_map<tjs_int, detail::LayerRenderState> _renderLayerStates;
         std::vector<tTJSVariant> _backgrounds;
         std::vector<tTJSVariant> _captions;
+
+        // === TJS variant slots (Phase A6) ===
+        // lastCanvas / lastViewParam cache the most recent draw target / view
+        // parameters. internalRenderLayer mirrors libkrkr2.so player+696 and
+        // is consumed by sub_6CE7D8 / sub_6CE938 post-draw paths.
+        // scratchWorkLayer is reused per-frame for sub_6C4E28-style clipping.
+        // drawAffineMatrix is the 2x3 affine applied during draw dispatch.
+        tTJSVariant _lastCanvas;
+        tTJSVariant _lastViewParam;
+        tTJSVariant _internalRenderLayer;
+        tTJSVariant _scratchWorkLayer;
+        std::array<double, 6> _drawAffineMatrix{1.0, 0.0, 0.0,
+                                                1.0, 0.0, 0.0};
         // _variableValues removed: it duplicated HM2 @ Player+320; merged into _evalResultValues.
 
         // === Web port render-host state (no libkrkr2.so offset alignment) ===

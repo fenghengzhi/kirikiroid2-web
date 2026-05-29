@@ -117,7 +117,7 @@ namespace motion {
     }
 
     void Player::calcViewParam() {
-        _runtime->lastViewParam = detail::makeDictionary({
+        _lastViewParam = detail::makeDictionary({
             { "flip", _flip },
             { "opacity", _opacity },
             { "visible", _visible },

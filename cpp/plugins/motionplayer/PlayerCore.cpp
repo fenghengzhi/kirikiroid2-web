@@ -347,7 +347,7 @@ namespace motion {
         _activeMotion.reset();
         _timelines.clear();
         _playingTimelineLabels.clear();
-        _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         if(_engineBack) _engineBack->_variableAnimators.clear();
         clearControllerAnimatorStateLike_0x671228();
@@ -377,7 +377,7 @@ namespace motion {
         _activeMotion.reset();
         _timelines.clear();
         _playingTimelineLabels.clear();
-        _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         if(_engineBack) _engineBack->_variableAnimators.clear();
         clearControllerAnimatorStateLike_0x671228();
@@ -441,7 +441,7 @@ namespace motion {
         self->_activeMotion.reset();
         self->_timelines.clear();
         self->_playingTimelineLabels.clear();
-        self->_runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        self->_drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         self->_variableKeys.Clear();
         self->_evalResultValues.clear();
         if(self->ensureMotionLoaded()) {

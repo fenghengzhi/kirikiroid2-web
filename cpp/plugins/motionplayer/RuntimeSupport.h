@@ -248,15 +248,8 @@ namespace motion::detail {
         // backgrounds / captions moved to Player; LayerRenderState lifted
         // to namespace detail scope (above).
         std::unordered_map<std::string, bool> disabledSelectorTargets;
-        tTJSVariant lastCanvas;
-        tTJSVariant lastViewParam;
-        // Aligned to libkrkr2.so player+696: internal render layer consumed by
-        // sub_6CE7D8 / sub_6CE938 style post-draw update.
-        tTJSVariant internalRenderLayer;
-        // Reusable work layer for sub_6C4E28-style per-item local clipping.
-        tTJSVariant scratchWorkLayer;
-        std::array<double, 6> drawAffineMatrix{ 1.0, 0.0, 0.0,
-                                                1.0, 0.0, 0.0 };
+        // Phase A6: lastCanvas / lastViewParam / internalRenderLayer /
+        // scratchWorkLayer / drawAffineMatrix moved to Player.
         // Phase A1: render-host scalars (visible/flip/opacity/slant/zoom/
         // resizable/clearColor/width/height/alphaOpCounter/nextLayerId/
         // nextLayerAbsolute) moved to Player as flat members.

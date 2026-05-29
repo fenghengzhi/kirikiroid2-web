@@ -33,10 +33,10 @@ namespace motion {
     tjs_int Player::alphaOpAdd() { return ++_alphaOpCounter; }
 
     tTJSVariant Player::captureCanvas() {
-        if(_runtime->lastCanvas.Type() == tvtVoid) {
+        if(_lastCanvas.Type() == tvtVoid) {
             draw();
         }
-        return _runtime->lastCanvas;
+        return _lastCanvas;
     }
 
     tTJSVariant Player::findSource(ttstr name) {
@@ -56,7 +56,7 @@ namespace motion {
         if(_runtime && _sourceCacheNative) {
             _sourceCacheNative->clearCache();
         }
-        _runtime->lastCanvas.Clear();
+        _lastCanvas.Clear();
     }
 
     void Player::setSize(tjs_int w, tjs_int h) {
@@ -72,7 +72,7 @@ namespace motion {
         // Keep the no-arg C++ method as a lightweight prepare pass. The real
         // libkrkr2.so draw dispatch happens in drawCompat based on argument type.
         if(!_visible) {
-            _runtime->lastCanvas.Clear();
+            _lastCanvas.Clear();
             return;
         }
 

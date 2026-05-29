@@ -46,9 +46,9 @@ namespace motion {
         _layerIdsByName.clear();
         _layerNamesById.clear();
         _resourceManagerNative.clearCache();
-        _runtime->lastCanvas.Clear();
-        _runtime->lastViewParam.Clear();
-        _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        _lastCanvas.Clear();
+        _lastViewParam.Clear();
+        _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
         if(_engineBack) _engineBack->_variableAnimators.clear();
         clearControllerAnimatorStateLike_0x671228();

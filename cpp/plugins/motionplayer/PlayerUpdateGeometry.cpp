@@ -639,7 +639,7 @@ namespace motion {
                 - (rootAcc.posY * _zFactor + rootAcc.posZ));
 
             // Transform by drawAffineMatrix (player+808..832)
-            const auto &dam = _runtime->drawAffineMatrix;
+            const auto &dam = _drawAffineMatrix;
             _cameraOffsetX = static_cast<float>(
                 static_cast<int>(dam[0] * dx + dam[2] * dy + 0.5));
             _cameraOffsetY = static_cast<float>(

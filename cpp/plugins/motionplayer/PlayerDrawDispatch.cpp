@@ -58,7 +58,7 @@ namespace motion {
             return TJS_E_BADPARAMCOUNT;
         }
 
-        nativeInstance->_runtime->drawAffineMatrix = matrix;
+        nativeInstance->_drawAffineMatrix = matrix;
         const auto motionPath =
             nativeInstance->_runtime && nativeInstance->_activeMotion
                 ? nativeInstance->_activeMotion->path
@@ -133,12 +133,12 @@ namespace motion {
                 _clampedEvalTime,
                 "route={} drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
                 route ? route : "",
-                _runtime->drawAffineMatrix[0],
-                _runtime->drawAffineMatrix[1],
-                _runtime->drawAffineMatrix[2],
-                _runtime->drawAffineMatrix[3],
-                _runtime->drawAffineMatrix[4],
-                _runtime->drawAffineMatrix[5],
+                _drawAffineMatrix[0],
+                _drawAffineMatrix[1],
+                _drawAffineMatrix[2],
+                _drawAffineMatrix[3],
+                _drawAffineMatrix[4],
+                _drawAffineMatrix[5],
                 _cameraOffsetX, _cameraOffsetY);
         };
 

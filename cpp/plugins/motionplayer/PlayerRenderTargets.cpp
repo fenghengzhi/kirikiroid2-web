@@ -599,7 +599,7 @@ namespace motion {
         }
 
         targetLayer->Update(false);
-        _runtime->lastCanvas = tTJSVariant(resolvedTarget, resolvedTarget);
+        _lastCanvas = tTJSVariant(resolvedTarget, resolvedTarget);
         return true;
     }
 
@@ -1132,7 +1132,7 @@ namespace motion {
         iTJSDispatch2 *renderLayerObject = resolvedLayerObject;
         if(useInternalRenderLayer) {
             renderLayerObject = ensureReusableLayerObject(
-                _runtime->internalRenderLayer,
+                _internalRenderLayer,
                 resolveMainWindowOwnerObject(),
                 resolvedLayerObject,
                 static_cast<tTVPLayerType>(ltAlpha),
@@ -1157,7 +1157,7 @@ namespace motion {
             return false;
         }
 
-        _runtime->lastCanvas =
+        _lastCanvas =
             tTJSVariant(resolvedLayerObject, resolvedLayerObject);
         detail::logoChainTraceSummary(
             motionPath, "renderToCanvasLike_0x6C7440", _clampedEvalTime,
@@ -1422,7 +1422,7 @@ namespace motion {
         }
 
         iTJSDispatch2 *lastCanvasObject = ownerLayer ? ownerLayer : renderTarget;
-        _runtime->lastCanvas = tTJSVariant(lastCanvasObject, lastCanvasObject);
+        _lastCanvas = tTJSVariant(lastCanvasObject, lastCanvasObject);
         detail::logoChainTraceSummary(
             motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,
             accurateSla ? "accurate=1" : "accurate=0");
@@ -1467,8 +1467,8 @@ namespace motion {
         }
 
         iTJSDispatch2 *renderLayerObject =
-            _runtime->internalRenderLayer.Type() == tvtObject
-                ? _runtime->internalRenderLayer.AsObjectNoAddRef()
+            _internalRenderLayer.Type() == tvtObject
+                ? _internalRenderLayer.AsObjectNoAddRef()
                 : nullptr;
         if(!renderLayerObject) {
             return false;
@@ -1551,7 +1551,7 @@ namespace motion {
         }
 
         iTJSDispatch2 *internalLayerObject = ensureReusableLayerObject(
-            _runtime->internalRenderLayer, layerTreeOwner, targetLayerObject,
+            _internalRenderLayer, layerTreeOwner, targetLayerObject,
             static_cast<tTVPLayerType>(ltAlpha), false);
         if(!internalLayerObject ||
            !setLayerSizeLike_0x6CE19C(internalLayerObject, canvasWidth,

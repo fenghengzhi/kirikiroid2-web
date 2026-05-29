@@ -237,7 +237,7 @@ namespace motion {
         const auto &nodes = _runtime->nodes;
         const auto motionPath = _activeMotion->path;
         const int bitmask = _runtime->isEmoteMode ? 5193 : 5185;
-        const auto &dam = _runtime->drawAffineMatrix;
+        const auto &dam = _drawAffineMatrix;
         std::unordered_set<int> requiredGroupNodeIndices;
 
         auto appendChildEntriesAtCurrentNode = [&](Player *child,
@@ -248,10 +248,10 @@ namespace motion {
             child->_renderItemInheritedFlag18 =
                 _renderItemInheritedFlag18 || nodePriorDraw;
             const auto savedChildDrawAffine =
-                child->_runtime->drawAffineMatrix;
-            child->_runtime->drawAffineMatrix = dam;
+                child->_drawAffineMatrix;
+            child->_drawAffineMatrix = dam;
             child->prepareRenderItems(inheritedFlag18 || (_priorDraw != 0.0));
-            child->_runtime->drawAffineMatrix = savedChildDrawAffine;
+            child->_drawAffineMatrix = savedChildDrawAffine;
             auto &childEntries = child->_runtime->preparedRenderItems;
             if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                motionPath.find("m2logo.mtn") != std::string::npos &&
