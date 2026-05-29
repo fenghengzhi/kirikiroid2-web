@@ -82,13 +82,13 @@ namespace motion {
         // label map is authoritative for any loaded motion; an empty
         // nodeLabelMap simply means no motion is loaded yet.
         if(_runtime) {
-            if(const auto it = _runtime->nodeLabelMap.find(key);
-               it != _runtime->nodeLabelMap.end()) {
+            if(const auto it = _nodeLabelMap.find(key);
+               it != _nodeLabelMap.end()) {
                 const auto nodeIndex = it->second;
                 if(nodeIndex >= 0 &&
-                   nodeIndex < static_cast<int>(_runtime->nodes.size()) &&
-                   _runtime->nodes[nodeIndex].layerId1 != 0) {
-                    return _runtime->nodes[nodeIndex].layerId1;
+                   nodeIndex < static_cast<int>(_nodes.size()) &&
+                   _nodes[nodeIndex].layerId1 != 0) {
+                    return _nodes[nodeIndex].layerId1;
                 }
             }
         }

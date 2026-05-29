@@ -104,8 +104,8 @@ namespace motion {
             return detail::makeArray({});
         }
         std::vector<std::string> labels;
-        labels.reserve(_runtime->nodeLabelMap.size());
-        for(const auto &[label, _] : _runtime->nodeLabelMap) {
+        labels.reserve(_nodeLabelMap.size());
+        for(const auto &[label, _] : _nodeLabelMap) {
             labels.push_back(label);
         }
         return detail::makeArray(detail::stringsToVariants(labels));
@@ -139,15 +139,15 @@ namespace motion {
         }
 
         const auto key = detail::narrow(name);
-        const auto it = _runtime->nodeLabelMap.find(key);
-        if(it == _runtime->nodeLabelMap.end()) {
+        const auto it = _nodeLabelMap.find(key);
+        if(it == _nodeLabelMap.end()) {
             return {};
         }
         const auto nodeIndex = it->second;
-        if(nodeIndex < 0 || nodeIndex >= static_cast<int>(_runtime->nodes.size())) {
+        if(nodeIndex < 0 || nodeIndex >= static_cast<int>(_nodes.size())) {
             return {};
         }
-        const auto &psb = _runtime->nodes[nodeIndex].psbNode;
+        const auto &psb = _nodes[nodeIndex].psbNode;
         return psb ? psb->toTJSVal() : tTJSVariant{};
     }
 
@@ -157,15 +157,15 @@ namespace motion {
             return {};
         }
         const auto key = detail::narrow(name);
-        const auto it = _runtime->nodeLabelMap.find(key);
-        if(it == _runtime->nodeLabelMap.end()) {
+        const auto it = _nodeLabelMap.find(key);
+        if(it == _nodeLabelMap.end()) {
             return {};
         }
         const auto nodeIndex = it->second;
-        if(nodeIndex < 0 || nodeIndex >= static_cast<int>(_runtime->nodes.size())) {
+        if(nodeIndex < 0 || nodeIndex >= static_cast<int>(_nodes.size())) {
             return {};
         }
-        return buildLayerGetterVariant(*this, _runtime->nodes[nodeIndex]);
+        return buildLayerGetterVariant(*this, _nodes[nodeIndex]);
     }
 
     tTJSVariant Player::getLayerGetterList() {
@@ -179,9 +179,9 @@ namespace motion {
         }
 
         std::vector<tTJSVariant> items;
-        items.reserve(_runtime->nodes.size());
-        for(size_t i = 1; i < _runtime->nodes.size(); ++i) {
-            const auto &node = _runtime->nodes[i];
+        items.reserve(_nodes.size());
+        for(size_t i = 1; i < _nodes.size(); ++i) {
+            const auto &node = _nodes[i];
             auto getter = buildLayerGetterVariant(*this, node);
             if(getter.Type() != tvtVoid) {
                 items.push_back(std::move(getter));
@@ -214,7 +214,7 @@ namespace motion {
             return false;
         }
 
-        if(!_runtime->nodes.empty()) {
+        if(!_nodes.empty()) {
             updateLayers();
             calcBounds();
         }
@@ -230,16 +230,16 @@ namespace motion {
                 return nullptr;
             }
 
-            if(const auto it = player->_runtime->nodeLabelMap.find(key);
-               it != player->_runtime->nodeLabelMap.end()) {
+            if(const auto it = player->_nodeLabelMap.find(key);
+               it != player->_nodeLabelMap.end()) {
                 const auto index = it->second;
                 if(index >= 0 &&
-                   index < static_cast<int>(player->_runtime->nodes.size())) {
-                    return &player->_runtime->nodes[static_cast<size_t>(index)];
+                   index < static_cast<int>(player->_nodes.size())) {
+                    return &player->_nodes[static_cast<size_t>(index)];
                 }
             }
 
-            for(auto &node : player->_runtime->nodes) {
+            for(auto &node : player->_nodes) {
                 if(node.nodeType == 3) {
                     if(auto *child = node.getChildPlayer()) {
                         if(const auto *found = self(self, child)) {

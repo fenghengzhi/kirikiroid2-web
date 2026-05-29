@@ -5,7 +5,7 @@
 
 namespace motion {
     void Player::updateLayersPhase3_CameraConstraint() {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         // --- sub_6BC000: Camera constraint (nodeType=9) ---
         // Aligned to 0x6BC000..0x6BC4EC. Only when !isEmoteMode.
         // 9 cases at 0x6BC1B0..0x6BC358 based on flipX/flipY + constraintType (node+2376).
@@ -112,7 +112,7 @@ namespace motion {
     }
 
     void Player::updateLayersPhase3_VertexComputation() {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         // --- sub_6BC4F0: Vertex computation ---
         // Aligned to 0x6BC4F0. Full implementation matching decompilation.
         for (size_t vi = 1; vi < nodes.size(); ++vi) {
@@ -573,7 +573,7 @@ namespace motion {
     }
 
     void Player::updateLayersPhase3_Visibility() {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         // Visibility flags — aligned to sub_6BD8DC at 0x6BD8DC.
         // Root node (index 0) is always visible.
         if (!nodes.empty()) {
@@ -622,7 +622,7 @@ namespace motion {
     }
 
     void Player::updateLayersPhase3_CameraNode() {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         // Camera node processing — aligned to sub_6BDA28 (0x6BDA28).
         // Find first nodeType=5 (camera) that is active, compute cameraOffset.
         _hasCamera = false;
@@ -672,7 +672,7 @@ namespace motion {
     }
 
     void Player::updateLayersPhase3_ShapeAABB() {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         // --- sub_6BDCC0: Shape AABB computation (nodeType=7) ---
         // Aligned to 0x6BDCC0. For nodeType=7 active nodes, compute AABB
         // from 2x2 matrix × 16-unit extent, origin offset, parent clip clamping.
@@ -740,7 +740,7 @@ namespace motion {
     }
 
     void Player::updateLayersPhase3_ShapeGeometry() {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         // --- sub_6BDE94: Shape geometry computation (nodeType=1) ---
         // Aligned to 0x6BDE94. For nodeType=1 nodes with active slot,
         // compute shape vertices based on shapeType (0=point,1=circle,2=rect,3=quad).

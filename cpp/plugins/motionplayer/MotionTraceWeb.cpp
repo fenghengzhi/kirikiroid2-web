@@ -181,11 +181,10 @@ namespace {
             if(!player) {
                 continue;
             }
-            const auto *runtime = player->runtime();
-            if(!runtime) {
+            if(!player->runtime()) {
                 continue;
             }
-            for(const auto &node : runtime->nodes) {
+            for(const auto &node : player->nodesForBuild()) {
                 if(!first) {
                     out << ",";
                 }

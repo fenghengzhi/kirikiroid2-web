@@ -22,12 +22,13 @@ namespace motion::detail {
     // is empty/not found) and append nodes after the persistent root node.
     // Index 0 is the constructor-created root; each real PSB layer points to
     // its parent node index, with top-level layers using parentIndex=0.
+    // A8: nodes / nodeLabelMap on Player; ownerPlayer parameter dropped (it
+    // IS the player).
     void buildNodeTree(
-        PlayerRuntime &runtime,
+        motion::Player &player,
         const MotionSnapshot &snapshot,
         const std::string &clipLabel,
         motion::ResourceManager *resourceManager = nullptr,
-        motion::Player *ownerPlayer = nullptr,
         int parentCompletionType = 0);
 
 } // namespace motion::detail

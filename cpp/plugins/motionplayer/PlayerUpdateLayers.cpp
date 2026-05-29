@@ -12,7 +12,7 @@ namespace motion {
     // Operates on persistent MotionNode deque instead of re-walking PSB tree.
     void Player::updateLayers() {
         detail::motionTraceRecordUpdatePlayer(this);
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         if (nodes.empty()) return;
         const auto motionPath =
             _runtime && _activeMotion ? _activeMotion->path

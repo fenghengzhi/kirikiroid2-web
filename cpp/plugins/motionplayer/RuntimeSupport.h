@@ -21,6 +21,7 @@
 #include "MotionNode.h"
 
 namespace motion {
+    class Player;
     class SourceCache;
 }
 
@@ -253,19 +254,8 @@ namespace motion::detail {
         // Phase A7: disabledSelectorTargets / pendingEvents / parameterEntries /
         // parameterEntryById / defaultParameterEntry* / activeClip / isEmoteMode
         // moved to Player.
-        // Persistent node tree for updateLayers pipeline. Aligned to
-        // libkrkr2.so Player+200 (std::deque of MotionNode). The constructor
-        // creates index 0 as the root node; loaded layer trees append real
-        // nodes at indices [1,end) during Player_buildNodeTree (0x6B51F0).
-        std::deque<MotionNode> nodes;
-        // Aligned to libkrkr2.so Player+1296 std::vector<LabelEntry>.
-        // Populated eagerly by Player_initVariables (0x6CD750) right after
-        // buildNodeTree on the play / setMotion path.
-        std::vector<VariableLabelEntry> variableLabelEntries;
-        // Node label → index map. Aligned to binary's std::map<ttstr,int> at
-        // player+24. Populated during recursive build with last-write-wins
-        // assignment, queried by sub_6F2228 equivalent.
-        std::map<std::string, int> nodeLabelMap;
+        // Phase A8: nodes / variableLabelEntries / nodeLabelMap moved to
+        // Player.
 
         // Native render-item fields from the anonymous 0x1B0 item built by
         // libkrkr2.so 0x6C2334 and consumed in-place by 0x6C4E28 / 0x6C7440.
@@ -360,8 +350,8 @@ namespace motion::detail {
         // Phase A7: isEmoteMode moved to Player (alongside parameter system).
     };
 
-    void ensureRootNodeLike_0x6CED30(PlayerRuntime &runtime);
-    void resetNodeTreeKeepRootLike_0x6B56F8(PlayerRuntime &runtime);
+    void ensureRootNodeLike_0x6CED30(motion::Player &player);
+    void resetNodeTreeKeepRootLike_0x6B56F8(motion::Player &player);
     std::shared_ptr<PlayerRuntime> makePlayerRuntime();
 
     std::string narrow(const ttstr &value);

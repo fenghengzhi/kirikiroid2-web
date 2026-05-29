@@ -5,7 +5,7 @@
 
 namespace motion {
     void Player::updateLayersPhase3_MotionSubNode(double currentTime) {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         const auto motionPath =
             _activeMotion ? _activeMotion->path : std::string{};
         // Motion sub-node processing — aligned to sub_6BE0C0 (0x6BE0C0).
@@ -132,7 +132,7 @@ namespace motion {
                                 child._runtime && child._activeMotion
                                     ? child._activeMotion->path.c_str()
                                     : "<none>",
-                                child._runtime && child._runtime->nodes.size() > 1 ? 1 : 0,
+                                child._runtime && child._nodes.size() > 1 ? 1 : 0,
                                 child._allplaying ? 1 : 0);
                         }
 
@@ -314,7 +314,7 @@ namespace motion {
                         // and angle computed. LABEL_119 sets hasAngle=false.
                         const auto &dtgt = mn.activeSlot().motionDtgt;
                         if (dtgt.empty()) break; // LABEL_119: hasAngle=false
-                        int targetIdx = findNodeByLabel(_runtime->nodeLabelMap, dtgt);
+                        int targetIdx = findNodeByLabel(_nodeLabelMap, dtgt);
                         if (targetIdx < 0) break; // LABEL_119: hasAngle=false
                         const auto &target = nodes[targetIdx];
                         double dy_comp, dx_comp;
@@ -365,8 +365,8 @@ namespace motion {
                 }
 
                 // === State propagation to child root node (0x6BEA18..0x6BEB74) ===
-                if (child._runtime && !child._runtime->nodes.empty()) {
-                    auto &cr = child._runtime->nodes[0];
+                if (child._runtime && !child._nodes.empty()) {
+                    auto &cr = child._nodes[0];
                     cr.delta.posX = posX;
                     cr.delta.posY = posY;
                     cr.delta.posZ = posZ;
@@ -497,12 +497,12 @@ namespace motion {
                         activeClip ? activeClip->label.c_str() : "<none>",
                         child._allplaying ? 1 : 0,
                         child._queuing ? 1 : 0,
-                        child._runtime && child._runtime->nodes.size() > 1 ? 1 : 0,
-                        child._runtime ? child._runtime->nodes.size() : 0,
+                        child._runtime && child._nodes.size() > 1 ? 1 : 0,
+                        child._runtime ? child._nodes.size() : 0,
                         child._needsInternalAssignImages ? 1 : 0);
                 }
-                if (child._runtime && !child._runtime->nodes.empty()) {
-                    auto &cr = child._runtime->nodes[0];
+                if (child._runtime && !child._nodes.empty()) {
+                    auto &cr = child._nodes[0];
                     // Clip chain propagation (0x6BE278..0x6BE29C)
                     // Binary: v17+1936 = v10+1936 (parentClipIndex)
                     //         v18 = v10; if (!node+1963) v18 = *(v10+1968)

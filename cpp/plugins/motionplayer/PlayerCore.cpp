@@ -207,7 +207,7 @@ namespace motion {
         }
 
         // libkrkr2.so 0x6CC9D4 compares player+1097 and marks node+1584 dirty.
-        for(auto &node : _runtime->nodes) {
+        for(auto &node : _nodes) {
             node.accumulated.dirty = true;
         }
     }
@@ -275,7 +275,7 @@ namespace motion {
         // aggregate playing state true after the owner-level flag is clear.
         static int traceCount = 0;
         if(_runtime) {
-            for(const auto &node : _runtime->nodes) {
+            for(const auto &node : _nodes) {
                 if(auto *child = node.getChildPlayer()) {
                     if(child->getAllplaying()) {
                         if(detail::logoChainTraceEnabled(_activeMotion) &&
@@ -309,15 +309,15 @@ namespace motion {
     //   sub_6CD028: if (root.delta.posX != v) { root.delta.posX = v; root.delta.dirty = 1; }
     //   — writes node+1592 (delta.posX) and sets node+1584 (delta.dirty).
     double Player::getX() const {
-        if (_runtime && !_runtime->nodes.empty())
-            return _runtime->nodes[0].delta.posX;
+        if (_runtime && !_nodes.empty())
+            return _nodes[0].delta.posX;
         return _hasPendingRootPos ? _pendingRootX : 0.0;
     }
     void Player::setX(double v) {
         _pendingRootX = v;
         _hasPendingRootPos = true;
-        if (_runtime && !_runtime->nodes.empty()) {
-            auto &root = _runtime->nodes[0];
+        if (_runtime && !_nodes.empty()) {
+            auto &root = _nodes[0];
             if (root.delta.posX != v) {
                 root.delta.posX = v;
                 root.delta.dirty = true;
@@ -327,15 +327,15 @@ namespace motion {
     // Aligned to libkrkr2.so Player_getRootY (0x6D98B4) / Player_setRootY (0x6CD048):
     // same shape as setRootX but at node+1600 (delta.posY).
     double Player::getY() const {
-        if (_runtime && !_runtime->nodes.empty())
-            return _runtime->nodes[0].delta.posY;
+        if (_runtime && !_nodes.empty())
+            return _nodes[0].delta.posY;
         return _hasPendingRootPos ? _pendingRootY : 0.0;
     }
     void Player::setY(double v) {
         _pendingRootY = v;
         _hasPendingRootPos = true;
-        if (_runtime && !_runtime->nodes.empty()) {
-            auto &root = _runtime->nodes[0];
+        if (_runtime && !_nodes.empty()) {
+            auto &root = _nodes[0];
             if (root.delta.posY != v) {
                 root.delta.posY = v;
                 root.delta.dirty = true;
@@ -685,8 +685,8 @@ namespace motion {
         _evalResultList.clear();
         _evalResultListIndex.clear();
 
-        if(_runtime && !_runtime->nodes.empty()) {
-            auto &root = _runtime->nodes.front();
+        if(_runtime && !_nodes.empty()) {
+            auto &root = _nodes.front();
             // Aligned to libkrkr2.so Player_setRootFlipX (0x6CD068):
             // writes node+1587 (delta.flipX), sets node+1584 (delta.dirty).
             root.delta.flipX = _rootFlipX;

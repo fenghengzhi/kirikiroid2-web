@@ -471,7 +471,7 @@ namespace motion::internal {
 namespace motion {
     // Phase 1: Camera velocity, root evaluation, variable interpolation
     void Player::updateLayersPhase1_PreLoop(double currentTime) {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         // === PHASE 1: Pre-loop setup ===
 
         // Camera velocity → root delta block (0x6BB360..0x6BB3DC).
@@ -640,7 +640,7 @@ namespace motion {
 
     // Phase 2: Main node evaluation loop (non-root nodes)
     void Player::updateLayersPhase2_MainLoop(double currentTime) {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         const std::string motionPath = _activeMotion
             ? _activeMotion->path
             : std::string();

@@ -883,7 +883,7 @@ namespace internal {
             _pendingEvents.clear();
         }
         frameProgress(deltaMs * kMotionFramesPerMillisecond);
-        if(_runtime && !_runtime->nodes.empty()) {
+        if(_runtime && !_nodes.empty()) {
             updateLayers();
         }
         calcBounds();
@@ -932,13 +932,13 @@ namespace internal {
         // progress_inner -> updateLayers -> calcBounds -> dispatchEvents.
         // The binary assumes the node tree is already built (it was built
         // eagerly inside play()/setMotion()), so there is no lazy build here.
-        if(!self->_runtime->nodes.empty()) {
+        if(!self->_nodes.empty()) {
             detail::logoChainTraceLogf(
                 motionPath, "progressCompat.update", "0x6D2A98",
                 self->_clampedEvalTime,
                 "timelineCurrentTime={:.3f} pendingEvents={} nodes={}",
                 self->_clampedEvalTime, self->_pendingEvents.size(),
-                self->_runtime->nodes.size());
+                self->_nodes.size());
             self->updateLayers();
         }
         self->calcBounds();
@@ -950,7 +950,7 @@ namespace internal {
                          "SNAPTIME motion=%s frame=%.3f playing=%d nodes=%zu\n",
                          motionPath.c_str(), self->_clampedEvalTime,
                          self->_allplaying ? 1 : 0,
-                         self->_runtime ? self->_runtime->nodes.size() : 0);
+                         self->_runtime ? self->_nodes.size() : 0);
         }
 
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&

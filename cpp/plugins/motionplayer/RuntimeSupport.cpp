@@ -3,6 +3,7 @@
 //
 
 #include "RuntimeSupport.h"
+#include "Player.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1184,36 +1185,43 @@ namespace motion::detail {
 
     } // namespace
 
-    void ensureRootNodeLike_0x6CED30(PlayerRuntime &runtime) {
-        if(!runtime.nodes.empty()) {
-            runtime.nodes.front().index = 0;
-            runtime.nodes.front().parentIndex = -1;
+    // A8: nodes / nodeLabelMap moved to Player. These helpers now take the
+    // Player so they can mutate the migrated containers while the still-
+    // PlayerRuntime renderItem lifetime map (A9 target) is reached via
+    // player._runtime.
+    void ensureRootNodeLike_0x6CED30(Player &player) {
+        if(!player._nodes.empty()) {
+            player._nodes.front().index = 0;
+            player._nodes.front().parentIndex = -1;
             return;
         }
         MotionNode root;
         root.index = 0;
         root.parentIndex = -1;
-        runtime.nodes.emplace_back(std::move(root));
+        player._nodes.emplace_back(std::move(root));
     }
 
-    void resetNodeTreeKeepRootLike_0x6B56F8(PlayerRuntime &runtime) {
-        ensureRootNodeLike_0x6CED30(runtime);
-        auto &root = runtime.nodes.front();
+    void resetNodeTreeKeepRootLike_0x6B56F8(Player &player) {
+        ensureRootNodeLike_0x6CED30(player);
+        auto &root = player._nodes.front();
         root.index = 0;
         root.parentIndex = -1;
-        if(runtime.nodes.size() > 1) {
-            runtime.nodes.erase(std::next(runtime.nodes.begin()), runtime.nodes.end());
+        if(player._nodes.size() > 1) {
+            player._nodes.erase(std::next(player._nodes.begin()),
+                                player._nodes.end());
         }
-        runtime.nodeLabelMap.clear();
-        runtime.renderItemNativeFieldLifetimeByNode.clear();
+        player._nodeLabelMap.clear();
+        player._runtime->renderItemNativeFieldLifetimeByNode.clear();
     }
 
     std::shared_ptr<PlayerRuntime> makePlayerRuntime() {
-        auto runtime = std::make_shared<PlayerRuntime>();
         // A7: defaultParameterEntry moved to Player; its initialisation
         // now happens in Player's constructor.
-        ensureRootNodeLike_0x6CED30(*runtime);
-        return runtime;
+        // A8: ensureRootNodeLike_0x6CED30 now takes Player, so the empty
+        // PlayerRuntime no longer triggers root insertion here; the Player
+        // constructor invokes ensureRootNodeLike on itself after
+        // makePlayerRuntime returns.
+        return std::make_shared<PlayerRuntime>();
     }
 
     std::string narrow(const ttstr &value) { return value.AsStdString(); }

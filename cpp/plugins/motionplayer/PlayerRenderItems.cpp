@@ -68,7 +68,7 @@ namespace motion {
             if(maxY > _boundsMaxY) _boundsMaxY = maxY;
         };
 
-        for(auto &node : _runtime->nodes) {
+        for(auto &node : _nodes) {
             node.bounds[0] = 1.0f;
             node.bounds[1] = 1.0f;
             node.bounds[2] = -1.0f;
@@ -182,8 +182,8 @@ namespace motion {
             }
         }
 
-        for(size_t ni = 1; ni < _runtime->nodes.size(); ++ni) {
-            auto &node = _runtime->nodes[ni];
+        for(size_t ni = 1; ni < _nodes.size(); ++ni) {
+            auto &node = _nodes[ni];
             if(node.nodeType == 3) {
                 if(auto *child = node.getChildPlayer()) {
                     child->calcBounds();
@@ -228,13 +228,13 @@ namespace motion {
         // Aligned to sub_6C2334 top: clear every node's drawnThisFrame
         // (node+1944) before rebuilding mainList, so downstream consumers
         // like calcBounds see only nodes that entered this frame's list.
-        for(auto &node : _runtime->nodes) {
+        for(auto &node : _nodes) {
             node.drawnThisFrame = false;
         }
 
         const bool inheritedFlag18 = _renderItemInheritedFlag18;
         auto &entries = _runtime->preparedRenderItems;
-        const auto &nodes = _runtime->nodes;
+        const auto &nodes = _nodes;
         const auto motionPath = _activeMotion->path;
         const int bitmask = _isEmoteMode ? 5193 : 5185;
         const auto &dam = _drawAffineMatrix;
@@ -266,8 +266,8 @@ namespace motion {
                         : "<none>",
                     detail::narrow(child->getMotion()).c_str(),
                     activeClip ? activeClip->label.c_str() : "<none>",
-                    child->_runtime->nodes.size() > 1 ? 1 : 0,
-                    child->_runtime->nodes.size(), childEntries.size(),
+                    child->_nodes.size() > 1 ? 1 : 0,
+                    child->_nodes.size(), childEntries.size(),
                     childEntries.empty() || childEntries.front().sourceKey.empty()
                         ? "<none>"
                         : childEntries.front().sourceKey.c_str());
@@ -343,7 +343,7 @@ namespace motion {
             };
 
         for(size_t i = 0; i < nodes.size(); ++i) {
-            auto &node = _runtime->nodes[i];
+            auto &node = _nodes[i];
             if(!node.accumulated.active) continue;
             if(!node.forceVisible && (((1 << node.nodeType) & bitmask) == 0)) {
                 if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
@@ -762,7 +762,7 @@ namespace motion {
             // the Path A render list; mark it so downstream consumers
             // (e.g. calcBounds) can distinguish Path A presence from the
             // Path B drawFlag.
-            _runtime->nodes[i].drawnThisFrame = true;
+            _nodes[i].drawnThisFrame = true;
 
             entries.push_back(std::move(entry));
         }
@@ -919,7 +919,7 @@ namespace motion {
                     continue;
                 }
                 const auto &candidateNode =
-                    _runtime->nodes[static_cast<size_t>(candidate.nodeIndex)];
+                    _nodes[static_cast<size_t>(candidate.nodeIndex)];
                 if(candidateNode.nodeType == 0) {
                     candidate.parentItem = &parentItem;
                     parentItem.childItems.push_back(&candidate);
@@ -957,7 +957,7 @@ namespace motion {
                 continue;
             }
             const auto &entryNode =
-                _runtime->nodes[static_cast<size_t>(entry.nodeIndex)];
+                _nodes[static_cast<size_t>(entry.nodeIndex)];
             if(entryNode.nodeType != 3) {
                 continue;
             }

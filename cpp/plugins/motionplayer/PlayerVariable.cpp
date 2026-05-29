@@ -287,7 +287,7 @@ namespace motion {
         bindParameterEntriesLike_0x6C4668(_parameterEntries, parts,
                                           mode, value);
 
-        for(auto &node : _runtime->nodes) {
+        for(auto &node : _nodes) {
             if(node.nodeType == 3) {
                 if(auto *child = node.getChildPlayer()) {
                     child->bindParameterValueLike_0x6C4668(label, mode, value);

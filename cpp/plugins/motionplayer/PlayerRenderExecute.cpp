@@ -366,8 +366,8 @@ namespace motion {
                 state.hitThreshold = 256;
                 state.initialized = true;
                 if(item.nodeIndex >= 0 &&
-                   item.nodeIndex < static_cast<int>(_runtime->nodes.size())) {
-                    const auto &node = _runtime->nodes[item.nodeIndex];
+                   item.nodeIndex < static_cast<int>(_nodes.size())) {
+                    const auto &node = _nodes[item.nodeIndex];
                     state.layerGetter = getLayerGetter(detail::widen(node.layerName));
                 }
             }

@@ -216,12 +216,12 @@ namespace internal {
             // Mirrors Player_resetAndReleaseNodes (0x6B56F8) shape: keep the
             // constructor-created root node and drop runtime children.
             if(resourceManager) {
-                for(size_t i = 1; i < runtime.nodes.size(); ++i) {
-                    resourceManager->releaseLayerId(runtime.nodes[i].layerId1);
-                    resourceManager->releaseLayerId(runtime.nodes[i].layerId2);
+                for(size_t i = 1; i < player._nodes.size(); ++i) {
+                    resourceManager->releaseLayerId(player._nodes[i].layerId1);
+                    resourceManager->releaseLayerId(player._nodes[i].layerId2);
                 }
             }
-            detail::resetNodeTreeKeepRootLike_0x6B56F8(runtime);
+            detail::resetNodeTreeKeepRootLike_0x6B56F8(player);
             player._parameterEntries.clear();
             player._parameterEntryById.clear();
             player._defaultParameterEntry = {};

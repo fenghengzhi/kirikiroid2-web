@@ -5,7 +5,7 @@
 
 namespace motion {
     void Player::updateLayersPhase3_ParticleEmitter() {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         // --- sub_6BEDD0: Particle emitter state (nodeType=6) ---
         // Aligned to 0x6BEDD0. Only when !isEmoteMode.
         if (_isEmoteMode) return;
@@ -84,7 +84,7 @@ namespace motion {
                 // Target position offset (0x6BF048..0x6BF0B8)
                 // sub_6F2228 resolves target node by name from slot+712 (motionDtgt).
                 // Compute position difference: target.pos - emitter.pos
-                int targetIdx = findNodeByLabel(_runtime->nodeLabelMap, en.activeSlot().motionDtgt);
+                int targetIdx = findNodeByLabel(_nodeLabelMap, en.activeSlot().motionDtgt);
                 if (targetIdx >= 0 && targetIdx < static_cast<int>(nodes.size())) {
                     auto &target = nodes[targetIdx];
                     en.emitterOffsetActive = true;
@@ -191,7 +191,7 @@ namespace motion {
         // Velocity stored on child Player _cameraVelocityX/Y/Z (player+784/792/800).
         // frameProgress + updateLayersPhase1_PreLoop auto-applies velocity+damping.
         if (_isEmoteMode) return;
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         const double dt = _frameLastTime;
         constexpr double PI = 3.14159265358979323846;
 
@@ -254,8 +254,8 @@ namespace motion {
 
                         for (int ci = 0; ci < childCount; ++ci) {
                             auto *child = pn.getParticleChild(ci);
-                            if (!child || !child->_runtime || child->_runtime->nodes.empty()) continue;
-                            auto &cr = child->_runtime->nodes[0];
+                            if (!child || !child->_runtime || child->_nodes.empty()) continue;
+                            auto &cr = child->_nodes[0];
 
                             // Rotate child angle (0x6BF4C4..0x6BF528)
                             // Binary checks child._directEdit (player+482) for emote path.
@@ -309,8 +309,8 @@ namespace motion {
                     // Matrix unchanged: just add delta position (0x6BF348..0x6BF384)
                     for (int ci = 0; ci < childCount; ++ci) {
                         auto *child = pn.getParticleChild(ci);
-                        if (!child || !child->_runtime || child->_runtime->nodes.empty()) continue;
-                        auto &cr = child->_runtime->nodes[0];
+                        if (!child || !child->_runtime || child->_nodes.empty()) continue;
+                        auto &cr = child->_nodes[0];
                         cr.accumulated.posX += pn.deltaPosX;
                         cr.accumulated.posY += pn.deltaPosY;
                         cr.accumulated.posZ += pn.deltaPosZ;
@@ -322,8 +322,8 @@ namespace motion {
                 // still add deltaPos to existing children's positions.
                 for (int ci = 0; ci < childCount; ++ci) {
                     auto *child = pn.getParticleChild(ci);
-                    if (!child || !child->_runtime || child->_runtime->nodes.empty()) continue;
-                    auto &cr = child->_runtime->nodes[0];
+                    if (!child || !child->_runtime || child->_nodes.empty()) continue;
+                    auto &cr = child->_nodes[0];
                     cr.accumulated.posX += pn.deltaPosX;
                     cr.accumulated.posY += pn.deltaPosY;
                     cr.accumulated.posZ += pn.deltaPosZ;
@@ -474,8 +474,8 @@ namespace motion {
 
                 // Set blendMode on child root node accumulated state (0x6BFAA8..0x6BFAC4)
                 // Binary writes to *(v99+1656) = root node accumulated blendMode, not activeSlot.
-                if (child->_runtime && !child->_runtime->nodes.empty()) {
-                    auto &cr = child->_runtime->nodes[0];
+                if (child->_runtime && !child->_nodes.empty()) {
+                    auto &cr = child->_nodes[0];
                     auto blendVal = pn.activeSlot().blendMode;
                     if (cr.accumulated.blendMode != blendVal) {
                         cr.accumulated.dirty = true;
@@ -603,8 +603,8 @@ namespace motion {
                 // Binary branches on coordinateMode (node+24), not inhVel.
                 double velX = 0.0, velY = 0.0, velZ = 0.0;
 
-                if (child->_runtime && !child->_runtime->nodes.empty()) {
-                    auto &cr = child->_runtime->nodes[0];
+                if (child->_runtime && !child->_nodes.empty()) {
+                    auto &cr = child->_nodes[0];
                     if (pn.coordinateMode == 1) {
                         // 3D mode (0x6BFEB4..0x6BFEDC)
                         cr.accumulated.posX = txOff + pn.accumulated.posX;
@@ -737,7 +737,7 @@ namespace motion {
                 for (int ci = 0; ci < pCount; ++ci) {
                     auto *child = pn.getParticleChild(ci);
                     bool shouldErase = false;
-                    if (!child || !child->_runtime || child->_runtime->nodes.empty()) {
+                    if (!child || !child->_runtime || child->_nodes.empty()) {
                         shouldErase = true;
                     } else if (child->_allplaying) {
                         // Playing: only check bounds if particleDeleteOutside (0x6C1888)
@@ -777,8 +777,8 @@ namespace motion {
                     auto *child = pn.getParticleChild(ci);
                     if (!child || !child->_runtime) continue;
                     child->_zFactor = _zFactor;
-                    if (!child->_runtime->nodes.empty()) {
-                        auto &cr = child->_runtime->nodes[0];
+                    if (!child->_nodes.empty()) {
+                        auto &cr = child->_nodes[0];
                         cr.parentClipIndex = pn.parentClipIndex;
                         cr.visibleAncestorIndex = meshParentIdx;
                         cr.forceVisible = pn.forceVisible;
@@ -787,7 +787,7 @@ namespace motion {
                     // binary does not lazy-build the child tree here; the tree
                     // was already built when the child's play/onFindMotion ran.
                     child->frameProgress(_frameLastTime);
-                    if (!child->_runtime->nodes.empty()) {
+                    if (!child->_nodes.empty()) {
                         child->updateLayers();
                     }
                 }

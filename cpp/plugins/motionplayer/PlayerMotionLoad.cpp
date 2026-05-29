@@ -148,7 +148,7 @@ namespace motion {
         if(!_runtime) {
             return;
         }
-        _runtime->variableLabelEntries.clear();
+        _variableLabelEntries.clear();
         if(!_activeMotion || !_activeMotion->root) {
             return;
         }
@@ -191,7 +191,7 @@ namespace motion {
                 }
             }
 
-            _runtime->variableLabelEntries.push_back(std::move(entry));
+            _variableLabelEntries.push_back(std::move(entry));
         }
     }
 
@@ -199,13 +199,13 @@ namespace motion {
         if(!_runtime) {
             return;
         }
-        detail::ensureRootNodeLike_0x6CED30(*_runtime);
-        for(size_t i = 1; i < _runtime->nodes.size(); ++i) {
-            auto &node = _runtime->nodes[i];
+        detail::ensureRootNodeLike_0x6CED30(*this);
+        for(size_t i = 1; i < _nodes.size(); ++i) {
+            auto &node = _nodes[i];
             _resourceManagerNative.releaseLayerId(node.layerId1);
             _resourceManagerNative.releaseLayerId(node.layerId2);
         }
-        detail::resetNodeTreeKeepRootLike_0x6B56F8(*_runtime);
+        detail::resetNodeTreeKeepRootLike_0x6B56F8(*this);
     }
 
     void Player::inheritChildPlayerStateLike_0x6B3C78(detail::MotionNode &node) {
@@ -218,8 +218,8 @@ namespace motion {
                        ? _activeMotion->moduleValue
                        : tTJSVariant{});
             if(child->_runtime) {
-                detail::ensureRootNodeLike_0x6CED30(*child->_runtime);
-                auto &root = child->_runtime->nodes.front();
+                detail::ensureRootNodeLike_0x6CED30(*child);
+                auto &root = child->_nodes.front();
                 root.coordinateMode = node.coordinateMode;
                 for(int i = 0; i < 4; ++i) {
                     root.transformOrder[i] = node.transformOrder[i];
@@ -266,11 +266,11 @@ namespace motion {
         }
 
         detail::buildNodeTree(
-            *_runtime, *_activeMotion, clipLabel, &_resourceManagerNative, this,
+            *this, *_activeMotion, clipLabel, &_resourceManagerNative,
             _completionType);
 
-        if(!_runtime->nodes.empty()) {
-            auto &root = _runtime->nodes[0];
+        if(!_nodes.empty()) {
+            auto &root = _nodes[0];
             // Aligned to libkrkr2.so Player_setRootFlipX/X/Y
             // (0x6CD028/0x6CD048/0x6CD068): these setters write the delta block
             // at node+1584..+1660, not the local post-interpolation mirror.
@@ -288,8 +288,8 @@ namespace motion {
                 motionPath, "buildNodeTree", "0x6B51F0", _clampedEvalTime,
                 "clipLabel={} rootLayers={} nodeCount={}",
                 clipLabel.empty() ? std::string("<root>") : clipLabel,
-                _activeMotion->layerList.size(), _runtime->nodes.size());
-            for(const auto &node : _runtime->nodes) {
+                _activeMotion->layerList.size(), _nodes.size());
+            for(const auto &node : _nodes) {
                 const bool hasStencilTypeKey =
                     node.psbNode && static_cast<bool>((*node.psbNode)["stencilType"]);
                 detail::logoChainTraceLogf(

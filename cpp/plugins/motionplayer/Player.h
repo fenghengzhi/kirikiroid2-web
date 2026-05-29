@@ -45,11 +45,10 @@ namespace motion {
         struct TimelineControlBinding;
         struct TimelineState;
 
-        void buildNodeTree(PlayerRuntime &runtime,
+        void buildNodeTree(motion::Player &player,
                            const MotionSnapshot &snapshot,
                            const std::string &clipLabel,
                            motion::ResourceManager *resourceManager,
-                           motion::Player *ownerPlayer,
                            int parentCompletionType);
     }
 
@@ -463,12 +462,13 @@ namespace motion {
         // Currently a placeholder; real implementation lands with the
         // std::vector<VariableLabelEntry> field (see RuntimeSupport.h).
         void initVariables();
-        friend void detail::buildNodeTree(detail::PlayerRuntime &runtime,
+        friend void detail::buildNodeTree(motion::Player &player,
                                           const detail::MotionSnapshot &snapshot,
                                           const std::string &clipLabel,
                                           motion::ResourceManager *resourceManager,
-                                          motion::Player *ownerPlayer,
                                           int parentCompletionType);
+        friend void detail::ensureRootNodeLike_0x6CED30(motion::Player &);
+        friend void detail::resetNodeTreeKeepRootLike_0x6B56F8(motion::Player &);
         void syncVariableKeysFromActiveMotion();
         void syncSelectorControlsLike_0x670D1C();
         const detail::TimelineState *primaryTimelineStateLike_0x66F80C() const;
@@ -583,6 +583,15 @@ namespace motion {
         // Not part of the engine's public contract — do not call from
         // production code.
         const detail::PlayerRuntime *runtime() const { return _runtime.get(); }
+
+        // A8: temporary mutable accessors for the hoisted node tree storage.
+        // Used by NodeTree.cpp's anonymous-namespace walkTree which we can't
+        // friend across translation units. To be removed in A10 cleanup if
+        // a public accessor is no longer needed.
+        std::deque<detail::MotionNode> &nodesForBuild() { return _nodes; }
+        std::map<std::string, int> &nodeLabelMapForBuild() {
+            return _nodeLabelMap;
+        }
 
     private:
         std::shared_ptr<detail::PlayerRuntime> _runtime;
@@ -729,6 +738,18 @@ namespace motion {
         // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
         // PSB root "type" field: 0=non-emote (motion), 1=emote.
         bool _isEmoteMode = false;
+
+        // === Node tree + variable label storage (Phase A8) ===
+        // _nodes: libkrkr2.so Player+184 (std::deque of MotionNode). Index 0
+        // is the constructor-created root; loaded layer trees append at
+        // indices [1,end) during Player_buildNodeTree (0x6B51F0).
+        // _variableLabelEntries: libkrkr2.so Player+1296 std::vector pending
+        // retype to VariableLabelScopeDeque (Phase B alias) in a follow-up.
+        // _nodeLabelMap: libkrkr2.so Player+24 std::map<ttstr,int>
+        // populated during recursive build with last-write-wins assignment.
+        std::deque<detail::MotionNode> _nodes;
+        std::vector<detail::VariableLabelEntry> _variableLabelEntries;
+        std::map<std::string, int> _nodeLabelMap;
         // _variableValues removed: it duplicated HM2 @ Player+320; merged into _evalResultValues.
 
         // === Web port render-host state (no libkrkr2.so offset alignment) ===

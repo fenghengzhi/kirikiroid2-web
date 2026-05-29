@@ -5,7 +5,7 @@
 
 namespace motion {
     void Player::updateLayersPhase3_AnchorNode() {
-        auto &nodes = _runtime->nodes;
+        auto &nodes = _nodes;
         // --- sub_6C0528: Anchor node processing (nodeType=10) ---
         // Aligned to 0x6C0528. For each nodeType=10 active node,
         // apply exponential damping toward root node values.
