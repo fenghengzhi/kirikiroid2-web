@@ -2,5 +2,6 @@
 #define KRKR2_TEST_CONFIG_H
 
 #cmakedefine TEST_FILES_PATH "@TEST_FILES_PATH@"
+#cmakedefine REFERENCE_PATH "@REFERENCE_PATH@"
 
 #endif

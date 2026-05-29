@@ -688,8 +688,8 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
 TEST_CASE("motionplayer can play internal logo motion clips") {
     setEmoteSeed();
 
-    const auto baseDir = std::filesystem::path(".debugtmp") / "titleprobe_hd" /
-        "data1080";
+    const auto baseDir = std::filesystem::path(REFERENCE_PATH) / "xp3" /
+        "logo_test";
     if(!std::filesystem::exists(baseDir / "yuzulogo.mtn") ||
        !std::filesystem::exists(baseDir / "m2logo.mtn")) {
         return;

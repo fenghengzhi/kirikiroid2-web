@@ -16,4 +16,5 @@ add_subdirectory(unit-tests/plugins)
 add_subdirectory(differential/native)
 
 set(TEST_FILES_PATH ${CMAKE_CURRENT_SOURCE_DIR}/test_files)
+set(REFERENCE_PATH ${CMAKE_SOURCE_DIR}/reference)
 configure_file(test_config.h.in test_config.h)
