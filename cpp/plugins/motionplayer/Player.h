@@ -645,6 +645,26 @@ namespace motion {
         double _boundsMaxY = -std::numeric_limits<double>::max();
         bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
         // _variableValues removed: it duplicated HM2 @ Player+320; merged into _evalResultValues.
+
+        // === Web port render-host state (no libkrkr2.so offset alignment) ===
+        // libkrkr2.so encapsulates this state in iTVPDrawDevice subclasses
+        // rather than on motion::Player itself, so these scalars have no binary
+        // offset to align against. They drive the Cocos2d-x / DOM host's
+        // drawDevice API: visibility / opacity / Y-axis flip / slant / zoom /
+        // resize policy / clear colour / framebuffer dimensions / alpha-op
+        // counter / layer-id allocation counters.
+        bool _resizable = false;
+        bool _flip = false;
+        bool _visible = true;
+        double _opacity = 1.0;
+        double _slant = 0.0;
+        double _zoom = 1.0;
+        tjs_int _clearColor = 0;
+        tjs_int _width = 0;
+        tjs_int _height = 0;
+        int _alphaOpCounter = 0;
+        tjs_int _nextLayerId = 1;
+        tjs_int _nextLayerAbsolute = 1;
     public:
         struct VariableKeyframe {
             float value = 0.0f;

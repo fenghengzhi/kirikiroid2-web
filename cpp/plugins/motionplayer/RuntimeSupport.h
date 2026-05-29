@@ -230,7 +230,6 @@ namespace motion::detail {
         std::vector<std::string> playingTimelineLabels;
         std::unordered_map<std::string, tjs_int> layerIdsByName;
         std::unordered_map<tjs_int, std::string> layerNamesById;
-        tjs_int nextLayerAbsolute = 1;
         struct LayerRenderState {
             tjs_int layerId = 0;
             bool clipEnabled = true;
@@ -260,17 +259,9 @@ namespace motion::detail {
         tTJSVariant scratchWorkLayer;
         std::array<double, 6> drawAffineMatrix{ 1.0, 0.0, 0.0,
                                                 1.0, 0.0, 0.0 };
-        tjs_int nextLayerId = 1;
-        tjs_int clearColor = 0;
-        tjs_int width = 0;
-        tjs_int height = 0;
-        int alphaOpCounter = 0;
-        bool resizable = false;
-        bool flip = false;
-        bool visible = true;
-        double opacity = 1.0;
-        double slant = 0.0;
-        double zoom = 1.0;
+        // Phase A1: render-host scalars (visible/flip/opacity/slant/zoom/
+        // resizable/clearColor/width/height/alphaOpCounter/nextLayerId/
+        // nextLayerAbsolute) moved to Player as flat members.
         std::vector<MotionEvent> pendingEvents;
         std::vector<MotionParameterEntry> parameterEntries;
         std::unordered_map<std::string, size_t> parameterEntryById;

@@ -747,8 +747,8 @@ namespace motion {
                             const double bMaxX = child->_boundsMaxX;
                             const double bMaxY = child->_boundsMaxY;
                             if (bMaxX >= bMinX && bMaxY >= bMinY) {
-                                const double sw = static_cast<double>(_runtime->width);
-                                const double sh = static_cast<double>(_runtime->height);
+                                const double sw = static_cast<double>(_width);
+                                const double sh = static_cast<double>(_height);
                                 if (!(bMaxY > 0.0 && bMinX < sw && bMaxX > 0.0 && bMinY < sh)) {
                                     shouldErase = true;
                                 }

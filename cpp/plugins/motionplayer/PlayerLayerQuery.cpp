@@ -84,15 +84,15 @@ namespace {
 
 namespace motion {
     // --- Viewport/display ---
-    void Player::setFlip(bool v) { _runtime->flip = v; }
+    void Player::setFlip(bool v) { _flip = v; }
 
-    void Player::setOpacity(double v) { _runtime->opacity = v; }
+    void Player::setOpacity(double v) { _opacity = v; }
 
-    void Player::setVisible(bool v) { _runtime->visible = v; }
+    void Player::setVisible(bool v) { _visible = v; }
 
-    void Player::setSlant(double v) { _runtime->slant = v; }
+    void Player::setSlant(double v) { _slant = v; }
 
-    void Player::setZoom(double v) { _runtime->zoom = v; }
+    void Player::setZoom(double v) { _zoom = v; }
 
     tTJSVariant Player::getLayerNames() {
         // Aligned to libkrkr2.so sub_6D1018 (getLayerNames NCB callback):
@@ -118,11 +118,11 @@ namespace motion {
 
     void Player::calcViewParam() {
         _runtime->lastViewParam = detail::makeDictionary({
-            { "flip", _runtime->flip },
-            { "opacity", _runtime->opacity },
-            { "visible", _runtime->visible },
-            { "slant", _runtime->slant },
-            { "zoom", _runtime->zoom },
+            { "flip", _flip },
+            { "opacity", _opacity },
+            { "visible", _visible },
+            { "slant", _slant },
+            { "zoom", _zoom },
             { "zFactor", _zFactor },
             { "colorWeight", getColorWeight() },
         });

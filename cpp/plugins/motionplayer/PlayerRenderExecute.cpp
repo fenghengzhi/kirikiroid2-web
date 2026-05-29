@@ -362,7 +362,7 @@ namespace motion {
             auto &state = _runtime->renderLayerStates[stateLayerId];
             if(!state.initialized) {
                 state.layerId = stateLayerId;
-                state.absolute = _runtime->nextLayerAbsolute++;
+                state.absolute = _nextLayerAbsolute++;
                 state.hitThreshold = 256;
                 state.initialized = true;
                 if(item.nodeIndex >= 0 &&

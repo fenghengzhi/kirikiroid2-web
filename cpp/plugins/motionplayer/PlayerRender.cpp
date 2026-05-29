@@ -8,9 +8,9 @@ using namespace motion::internal;
 
 namespace motion {
     // --- Drawing/rendering ---
-    void Player::setClearColor(tjs_int color) { _runtime->clearColor = color; }
+    void Player::setClearColor(tjs_int color) { _clearColor = color; }
 
-    void Player::setResizable(bool v) { _runtime->resizable = v; }
+    void Player::setResizable(bool v) { _resizable = v; }
 
     void Player::removeAllTextures() {
         if(_runtime && _runtime->sourceCacheNative) {
@@ -30,7 +30,7 @@ namespace motion {
 
     void Player::unloadUnusedTextures() {}
 
-    tjs_int Player::alphaOpAdd() { return ++_runtime->alphaOpCounter; }
+    tjs_int Player::alphaOpAdd() { return ++_alphaOpCounter; }
 
     tTJSVariant Player::captureCanvas() {
         if(_runtime->lastCanvas.Type() == tvtVoid) {
@@ -60,8 +60,8 @@ namespace motion {
     }
 
     void Player::setSize(tjs_int w, tjs_int h) {
-        _runtime->width = w;
-        _runtime->height = h;
+        _width = w;
+        _height = h;
     }
 
     void Player::copyRect(tTJSVariant) {}
@@ -71,7 +71,7 @@ namespace motion {
     void Player::draw() {
         // Keep the no-arg C++ method as a lightweight prepare pass. The real
         // libkrkr2.so draw dispatch happens in drawCompat based on argument type.
-        if(!_runtime->visible) {
+        if(!_visible) {
             _runtime->lastCanvas.Clear();
             return;
         }
