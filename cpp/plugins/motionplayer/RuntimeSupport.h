@@ -220,31 +220,33 @@ namespace motion::detail {
         bool flag124 = true;
     };
 
+    // A5: lifted from PlayerRuntime's inner type to namespace scope so Player
+    // can hold the renderLayerStates map without leaking the runtime's nested
+    // structure outward.
+    struct LayerRenderState {
+        tjs_int layerId = 0;
+        bool clipEnabled = true;
+        bool initialized = false;
+        bool isDirty = false;
+        tjs_int absolute = 0;
+        tjs_int hitThreshold = 256;
+        tTJSVariant layerObject;
+        tTJSVariant layerGetter;
+        std::array<float, 4> clipRect{0.f, 0.f, 0.f, 0.f};
+        std::array<float, 4> worldRect{0.f, 0.f, 0.f, 0.f};
+        std::array<float, 4> localRect{0.f, 0.f, 0.f, 0.f};
+        std::array<std::uint32_t, 4> packedColors{
+            0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
+        };
+    };
+
     struct PlayerRuntime {
         // Phase A3: motionsByKey / sourceCacheNative / sourceCacheObject /
         // activeMotion moved to Player as flat members.
         // Phase A4: timelines / playingTimelineLabels moved to Player.
-        std::unordered_map<std::string, tjs_int> layerIdsByName;
-        std::unordered_map<tjs_int, std::string> layerNamesById;
-        struct LayerRenderState {
-            tjs_int layerId = 0;
-            bool clipEnabled = true;
-            bool initialized = false;
-            bool isDirty = false;
-            tjs_int absolute = 0;
-            tjs_int hitThreshold = 256;
-            tTJSVariant layerObject;
-            tTJSVariant layerGetter;
-            std::array<float, 4> clipRect{0.f, 0.f, 0.f, 0.f};
-            std::array<float, 4> worldRect{0.f, 0.f, 0.f, 0.f};
-            std::array<float, 4> localRect{0.f, 0.f, 0.f, 0.f};
-            std::array<std::uint32_t, 4> packedColors{
-                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
-            };
-        };
-        std::unordered_map<tjs_int, LayerRenderState> renderLayerStates;
-        std::vector<tTJSVariant> backgrounds;
-        std::vector<tTJSVariant> captions;
+        // Phase A5: layerIdsByName / layerNamesById / renderLayerStates /
+        // backgrounds / captions moved to Player; LayerRenderState lifted
+        // to namespace detail scope (above).
         std::unordered_map<std::string, bool> disabledSelectorTargets;
         tTJSVariant lastCanvas;
         tTJSVariant lastViewParam;

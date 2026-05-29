@@ -359,7 +359,7 @@ namespace motion {
                     false);
             }
 
-            auto &state = _runtime->renderLayerStates[stateLayerId];
+            auto &state = _renderLayerStates[stateLayerId];
             if(!state.initialized) {
                 state.layerId = stateLayerId;
                 state.absolute = _nextLayerAbsolute++;

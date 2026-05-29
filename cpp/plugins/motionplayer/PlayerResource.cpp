@@ -43,8 +43,8 @@ namespace motion {
         _activeMotion.reset();
         _timelines.clear();
         _playingTimelineLabels.clear();
-        _runtime->layerIdsByName.clear();
-        _runtime->layerNamesById.clear();
+        _layerIdsByName.clear();
+        _layerNamesById.clear();
         _resourceManagerNative.clearCache();
         _runtime->lastCanvas.Clear();
         _runtime->lastViewParam.Clear();

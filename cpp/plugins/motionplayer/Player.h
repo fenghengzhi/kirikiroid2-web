@@ -34,6 +34,7 @@ namespace motion {
 
 namespace motion {
     namespace detail {
+        struct LayerRenderState;
         struct MotionClip;
         struct MotionNode;
         struct MotionParameterEntry;
@@ -684,6 +685,16 @@ namespace motion {
         // (driven by Player_playTimeline / Player_stopTimeline @ 0x66E000 ish).
         std::unordered_map<std::string, detail::TimelineState> _timelines;
         std::vector<std::string> _playingTimelineLabels;
+
+        // === Render-layer state (Phase A5) ===
+        // Web-only host adaptation: tracks Cocos2d / DOM-side layer ids,
+        // per-layer render snapshot used by the draw dispatch, plus the
+        // background / caption variant lists exposed to script.
+        std::unordered_map<std::string, tjs_int> _layerIdsByName;
+        std::unordered_map<tjs_int, std::string> _layerNamesById;
+        std::unordered_map<tjs_int, detail::LayerRenderState> _renderLayerStates;
+        std::vector<tTJSVariant> _backgrounds;
+        std::vector<tTJSVariant> _captions;
         // _variableValues removed: it duplicated HM2 @ Player+320; merged into _evalResultValues.
 
         // === Web port render-host state (no libkrkr2.so offset alignment) ===

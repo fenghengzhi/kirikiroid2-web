@@ -18,14 +18,14 @@ namespace motion {
         }
     }
 
-    void Player::removeAllBg() { _runtime->backgrounds.clear(); }
+    void Player::removeAllBg() { _backgrounds.clear(); }
 
-    void Player::removeAllCaption() { _runtime->captions.clear(); }
+    void Player::removeAllCaption() { _captions.clear(); }
 
-    void Player::registerBg(tTJSVariant bg) { _runtime->backgrounds.push_back(bg); }
+    void Player::registerBg(tTJSVariant bg) { _backgrounds.push_back(bg); }
 
     void Player::registerCaption(tTJSVariant caption) {
-        _runtime->captions.push_back(caption);
+        _captions.push_back(caption);
     }
 
     void Player::unloadUnusedTextures() {}
