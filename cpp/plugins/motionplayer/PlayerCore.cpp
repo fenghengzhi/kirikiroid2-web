@@ -202,10 +202,6 @@ namespace motion {
         }
 
         _independentLayerInherit = v;
-        if(!_runtime) {
-            return;
-        }
-
         // libkrkr2.so 0x6CC9D4 compares player+1097 and marks node+1584 dirty.
         for(auto &node : _nodes) {
             node.accumulated.dirty = true;
@@ -213,14 +209,15 @@ namespace motion {
     }
 
     Player::Player(ResourceManager rm, Player *parentPlayer) :
-        _runtime(detail::makePlayerRuntime()),
         _resourceManagerNative(std::move(rm)),
         _parentPlayer(parentPlayer) {
         LOGGER->info("Motion.Player constructor called");
-        // A7: mirror the rangeScale/mode defaults previously set inside
-        // makePlayerRuntime, now that defaultParameterEntry lives on Player.
+        // A10: makePlayerRuntime / ensureRootNodeLike previously ran inside
+        // makePlayerRuntime; the call now lives here so the synthetic root
+        // node lands on _nodes at index 0.
         _defaultParameterEntry.rangeScale = 1.0;
         _defaultParameterEntry.mode = 0;
+        detail::ensureRootNodeLike_0x6CED30(*this);
         using ResourceManagerAdaptor = ncbInstanceAdaptor<ResourceManager>;
         if(auto *dispatch =
                ResourceManagerAdaptor::CreateAdaptor(
@@ -258,7 +255,7 @@ namespace motion {
     bool Player::getPlaying() const {
         // Player_getPlaying @ 0x6D9794: return byte player+1099.
         static int traceCount = 0;
-        if(_runtime && detail::logoChainTraceEnabled(_activeMotion) &&
+        if(detail::logoChainTraceEnabled(_activeMotion) &&
            traceCount < 80) {
             ++traceCount;
             detail::logoChainTraceLogf(
@@ -274,7 +271,7 @@ namespace motion {
         // Player_getAllplaying @ 0x6CCE34: child Motion players can keep the
         // aggregate playing state true after the owner-level flag is clear.
         static int traceCount = 0;
-        if(_runtime) {
+        if(true) {
             for(const auto &node : _nodes) {
                 if(auto *child = node.getChildPlayer()) {
                     if(child->getAllplaying()) {
@@ -293,7 +290,7 @@ namespace motion {
                 }
             }
         }
-        if(_runtime && detail::logoChainTraceEnabled(_activeMotion) &&
+        if(detail::logoChainTraceEnabled(_activeMotion) &&
            traceCount < 80) {
             ++traceCount;
             detail::logoChainTraceLogf(
@@ -309,14 +306,14 @@ namespace motion {
     //   sub_6CD028: if (root.delta.posX != v) { root.delta.posX = v; root.delta.dirty = 1; }
     //   — writes node+1592 (delta.posX) and sets node+1584 (delta.dirty).
     double Player::getX() const {
-        if (_runtime && !_nodes.empty())
+        if (!_nodes.empty())
             return _nodes[0].delta.posX;
         return _hasPendingRootPos ? _pendingRootX : 0.0;
     }
     void Player::setX(double v) {
         _pendingRootX = v;
         _hasPendingRootPos = true;
-        if (_runtime && !_nodes.empty()) {
+        if (!_nodes.empty()) {
             auto &root = _nodes[0];
             if (root.delta.posX != v) {
                 root.delta.posX = v;
@@ -327,14 +324,14 @@ namespace motion {
     // Aligned to libkrkr2.so Player_getRootY (0x6D98B4) / Player_setRootY (0x6CD048):
     // same shape as setRootX but at node+1600 (delta.posY).
     double Player::getY() const {
-        if (_runtime && !_nodes.empty())
+        if (!_nodes.empty())
             return _nodes[0].delta.posY;
         return _hasPendingRootPos ? _pendingRootY : 0.0;
     }
     void Player::setY(double v) {
         _pendingRootY = v;
         _hasPendingRootPos = true;
-        if (_runtime && !_nodes.empty()) {
+        if (!_nodes.empty()) {
             auto &root = _nodes[0];
             if (root.delta.posY != v) {
                 root.delta.posY = v;
@@ -517,7 +514,7 @@ namespace motion {
     }
 
     void Player::initNonEmoteMotionLike_0x6B365C(std::uint32_t playFlags) {
-        if(!_runtime || !_activeMotion || _isEmoteMode) {
+        if(!_activeMotion || _isEmoteMode) {
             return;
         }
 
@@ -685,7 +682,7 @@ namespace motion {
         _evalResultList.clear();
         _evalResultListIndex.clear();
 
-        if(_runtime && !_nodes.empty()) {
+        if(!_nodes.empty()) {
             auto &root = _nodes.front();
             // Aligned to libkrkr2.so Player_setRootFlipX (0x6CD068):
             // writes node+1587 (delta.flipX), sets node+1584 (delta.dirty).

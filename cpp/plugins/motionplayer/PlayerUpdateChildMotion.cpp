@@ -50,7 +50,7 @@ namespace motion {
                 //    clears nodes (except root), resets label map
                 // 4. Release TJS variants at child+984 and child+976
                 child._allplaying = false;
-                if (child._runtime) {
+                if (true) {
                     // sub_6C0DE8: reset timeline keyframe cache
                     child._timelines.clear();
                     // sub_6B56F8: release layer IDs for non-root nodes, keep
@@ -129,10 +129,10 @@ namespace motion {
                                 mn.index,
                                 src.c_str(),
                                 detail::narrow(child.getMotion()).c_str(),
-                                child._runtime && child._activeMotion
+                                child._activeMotion
                                     ? child._activeMotion->path.c_str()
                                     : "<none>",
-                                child._runtime && child._nodes.size() > 1 ? 1 : 0,
+                                child._nodes.size() > 1 ? 1 : 0,
                                 child._allplaying ? 1 : 0);
                         }
 
@@ -178,7 +178,7 @@ namespace motion {
 
                 // Binary at 0x6BE534 unconditionally proceeds to angle/state
                 // propagation (no activeMotion guard). Only guard for null runtime.
-                if (!child._runtime) goto label_18;
+                if (!true) goto label_18;
 
                 // === Angle interpolation (0x6BE534..0x6BEC9C) ===
                 int angleMode = mn.activeSlot().motionDt;
@@ -365,7 +365,7 @@ namespace motion {
                 }
 
                 // === State propagation to child root node (0x6BEA18..0x6BEB74) ===
-                if (child._runtime && !child._nodes.empty()) {
+                if (!child._nodes.empty()) {
                     auto &cr = child._nodes[0];
                     cr.delta.posX = posX;
                     cr.delta.posY = posY;
@@ -490,18 +490,18 @@ namespace motion {
                         mn.activeSlot().src.empty() ? "<none>"
                                                     : mn.activeSlot().src.c_str(),
                         mn.parameterizeIndex,
-                        child._runtime && child._activeMotion
+                        child._activeMotion
                             ? child._activeMotion->path.c_str()
                             : "<none>",
                         detail::narrow(child.getMotion()).c_str(),
                         activeClip ? activeClip->label.c_str() : "<none>",
                         child._allplaying ? 1 : 0,
                         child._queuing ? 1 : 0,
-                        child._runtime && child._nodes.size() > 1 ? 1 : 0,
-                        child._runtime ? child._nodes.size() : 0,
+                        child._nodes.size() > 1 ? 1 : 0,
+                        true ? child._nodes.size() : 0,
                         child._needsInternalAssignImages ? 1 : 0);
                 }
-                if (child._runtime && !child._nodes.empty()) {
+                if (!child._nodes.empty()) {
                     auto &cr = child._nodes[0];
                     // Clip chain propagation (0x6BE278..0x6BE29C)
                     // Binary: v17+1936 = v10+1936 (parentClipIndex)

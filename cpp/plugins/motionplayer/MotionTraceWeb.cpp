@@ -181,9 +181,6 @@ namespace {
             if(!player) {
                 continue;
             }
-            if(!player->runtime()) {
-                continue;
-            }
             for(const auto &node : player->nodesForBuild()) {
                 if(!first) {
                     out << ",";

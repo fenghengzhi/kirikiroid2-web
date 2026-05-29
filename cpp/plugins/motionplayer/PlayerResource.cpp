@@ -81,7 +81,7 @@ namespace motion {
         // Aligned to libkrkr2.so: after eager Player_buildNodeTree, the
         // label map is authoritative for any loaded motion; an empty
         // nodeLabelMap simply means no motion is loaded yet.
-        if(_runtime) {
+        if(true) {
             if(const auto it = _nodeLabelMap.find(key);
                it != _nodeLabelMap.end()) {
                 const auto nodeIndex = it->second;

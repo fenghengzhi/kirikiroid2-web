@@ -60,7 +60,7 @@ namespace motion {
 
         nativeInstance->_drawAffineMatrix = matrix;
         const auto motionPath =
-            nativeInstance->_runtime && nativeInstance->_activeMotion
+            nativeInstance->_activeMotion
                 ? nativeInstance->_activeMotion->path
                 : std::string{};
         const bool isIdentity =
@@ -116,7 +116,7 @@ namespace motion {
     // boundary.
     void Player::drawCompat(tTJSVariant *arg) {
         const auto motionPath =
-            _runtime && _activeMotion
+            _activeMotion
                 ? _activeMotion->path
                 : std::string{};
         iTJSDispatch2 *paramObj =
@@ -125,7 +125,7 @@ namespace motion {
         detail::MotionTraceRenderDrawScope renderTrace(this, arg, paramObj);
 #endif
         const auto logDrawMatrix = [&](const char *route) {
-            if(!_runtime) {
+            if(false) {
                 return;
             }
             detail::logoChainTraceLogf(
@@ -213,7 +213,7 @@ namespace motion {
         // render items first, then branches on d3dDrawMode and only then hands
         // a copied target variant to Player_renderToCanvas_guess @ 0x6C7440.
         ensureMotionLoaded();
-        if(!_runtime || !_activeMotion) {
+        if(!_activeMotion) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
             renderTrace.setRoute("no_motion");
 #endif

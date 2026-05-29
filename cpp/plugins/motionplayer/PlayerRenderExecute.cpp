@@ -18,7 +18,7 @@ namespace motion {
         // Equivalent to sub_6D5164 @ 0x6D5178's `player+544` null gate —
         // the port has no explicit +544 mirror, so an absent runtime is
         // the canonical "no render list yet" signal.
-        if(!_runtime) {
+        if(false) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
             detail::motionTraceRenderBuildCommandsLeave(
                 this, static_cast<int>(canvasWidth),
@@ -209,7 +209,7 @@ namespace motion {
 
     bool Player::executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
                                             bool skipUpdate) {
-        if(!renderLayerObject || !_runtime || !_activeMotion) {
+        if(!renderLayerObject || !_activeMotion) {
             return false;
         }
 #if defined(KRKR2_WASMTIME_HEADLESS)

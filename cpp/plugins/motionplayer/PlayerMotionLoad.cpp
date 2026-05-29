@@ -21,7 +21,7 @@ namespace motion {
         // Player_playImpl (0x6B2284) only enters Player_loadMotion /
         // Player_initNonEmoteMotion when force/as-can is set or the requested
         // motion key differs from the stored key.
-        if(_runtime && _activeMotion && _motionKey == name &&
+        if(_activeMotion && _motionKey == name &&
            (flags & (PlayFlagForce | PlayFlagAsCan)) == 0) {
             return;
         }
@@ -44,7 +44,7 @@ namespace motion {
         std::shared_ptr<detail::MotionSnapshot> snapshot;
         const auto motionRaw = detail::narrow(name);
         const auto charaRaw = detail::narrow(_chara);
-        if(!_runtime || name.IsEmpty()) {
+        if(name.IsEmpty()) {
             snapshot.reset();
         } else {
             if(_project.Type() == tvtObject) {
@@ -145,7 +145,7 @@ namespace motion {
     //   label <- entry["label"]
     //   flag68/flag124 <- 1 (binary default; semantics not yet reversed)
     void Player::initVariables() {
-        if(!_runtime) {
+        if(false) {
             return;
         }
         _variableLabelEntries.clear();
@@ -196,7 +196,7 @@ namespace motion {
     }
 
     void Player::resetNodeTreeForBuildLike_0x6B56F8() {
-        if(!_runtime) {
+        if(false) {
             return;
         }
         detail::ensureRootNodeLike_0x6CED30(*this);
@@ -214,10 +214,10 @@ namespace motion {
             child->_tjsRandomGenerator = _tjsRandomGenerator;
             child->_project = _project.Type() == tvtObject
                 ? _project
-                : (_runtime && _activeMotion
+                : (_activeMotion
                        ? _activeMotion->moduleValue
                        : tTJSVariant{});
-            if(child->_runtime) {
+            if(true) {
                 detail::ensureRootNodeLike_0x6CED30(*child);
                 auto &root = child->_nodes.front();
                 root.coordinateMode = node.coordinateMode;
@@ -236,7 +236,7 @@ namespace motion {
     // check so calls on a Player without a loaded motion become a no-op
     // instead of crashing, but we do NOT call ensureMotionLoaded here.
     void Player::buildNodeTree() {
-        if(!_runtime || !_activeMotion) {
+        if(!_activeMotion) {
             return;
         }
 

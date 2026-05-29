@@ -169,7 +169,7 @@ namespace motion {
 
     detail::MotionParameterEntry *Player::appendParameterEntryLike_0x6B1718(
         const std::shared_ptr<const PSB::PSBDictionary> &dic) {
-        if(!_runtime || !dic) {
+        if(!dic) {
             return nullptr;
         }
 
@@ -208,7 +208,7 @@ namespace motion {
 
     bool Player::parseParameterListLike_0x6B202C(
         const std::shared_ptr<PSB::IPSBValue> &value) {
-        if(!_runtime || !value) {
+        if(!value) {
             return false;
         }
 
@@ -228,7 +228,7 @@ namespace motion {
     }
 
     void Player::finalizeParameterTableLike_0x6B1ECC() {
-        if(!_runtime) {
+        if(false) {
             return;
         }
 
@@ -279,7 +279,7 @@ namespace motion {
     void Player::bindParameterValueLike_0x6C4668(const std::string &label,
                                                  int mode,
                                                  double value) {
-        if(!_runtime || label.empty()) {
+        if(label.empty()) {
             return;
         }
 

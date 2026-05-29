@@ -579,11 +579,6 @@ namespace motion {
         void updateLayersPhase3_AnchorNode();                 // sub_6C0528
 
     public:
-        // Non-owning read access to the internal runtime for offline tooling.
-        // Not part of the engine's public contract — do not call from
-        // production code.
-        const detail::PlayerRuntime *runtime() const { return _runtime.get(); }
-
         // A8 / A9: temporary mutable accessors for hoisted storage used by
         // anonymous-namespace helpers or by free functions in
         // motion::internal::render_detail:: which we can't friend across TU
@@ -598,7 +593,6 @@ namespace motion {
         }
 
     private:
-        std::shared_ptr<detail::PlayerRuntime> _runtime;
         ResourceManager _resourceManagerNative;
         Player *_parentPlayer = nullptr; // non-owning, for 0x6B1ABC lookup
         // libkrkr2.so +1092: 1-byte bool. ctor (0x6CED30) sets byte=0;

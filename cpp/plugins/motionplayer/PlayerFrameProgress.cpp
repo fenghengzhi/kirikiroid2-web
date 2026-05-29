@@ -145,7 +145,7 @@ namespace internal {
                                                bool autoStop, double value,
                                                double transition,
                                                double ease) {
-        if(!_runtime || label.empty()) {
+        if(label.empty()) {
             return;
         }
 
@@ -879,15 +879,15 @@ namespace internal {
             deltaMs = 0;
         }
 
-        if(_runtime) {
+        if(true) {
             _pendingEvents.clear();
         }
         frameProgress(deltaMs * kMotionFramesPerMillisecond);
-        if(_runtime && !_nodes.empty()) {
+        if(!_nodes.empty()) {
             updateLayers();
         }
         calcBounds();
-        if(_runtime) {
+        if(true) {
             _pendingEvents.clear();
         }
     }
@@ -916,7 +916,7 @@ namespace internal {
         self->_pendingEvents.clear();
         self->frameProgress(delta * kMotionFramesPerMillisecond);
         const auto motionPath =
-            self->_runtime && self->_activeMotion
+            self->_activeMotion
                 ? self->_activeMotion->path
                 : std::string{};
         detail::logoChainTraceCheck(
@@ -950,7 +950,7 @@ namespace internal {
                          "SNAPTIME motion=%s frame=%.3f playing=%d nodes=%zu\n",
                          motionPath.c_str(), self->_clampedEvalTime,
                          self->_allplaying ? 1 : 0,
-                         self->_runtime ? self->_nodes.size() : 0);
+                         self->_nodes.size());
         }
 
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&

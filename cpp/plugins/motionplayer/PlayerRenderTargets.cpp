@@ -611,7 +611,7 @@ namespace motion {
         canvasWidth = 0;
         canvasHeight = 0;
         const auto motionPath =
-            _runtime && _activeMotion ? _activeMotion->path
+            _activeMotion ? _activeMotion->path
                                                : std::string{};
         auto traceResolveFailure = [&](const char *reason,
                                        const tTJSVariant &target,
@@ -690,7 +690,7 @@ namespace motion {
 
         clearPrivateMotionGLLRenderQueueLike_0x6DE738(renderTargetObject);
         const auto motionPath =
-            _runtime && _activeMotion ? _activeMotion->path
+            _activeMotion ? _activeMotion->path
                                                : std::string{};
         detail::logoChainTraceLogf(
             motionPath, "sla.renderMotionFrame", "0x6DE738",
@@ -703,7 +703,7 @@ namespace motion {
         // Player_ResolveSLATarget @ 0x6D5948 owns PrivateMotionGLL sizing;
         // Player_RenderMotionFrame @ 0x6DE738 only emits render commands.
         buildRenderCommands(canvasWidth, canvasHeight);
-        if(_runtime && _sourceCacheNative) {
+        if(_sourceCacheNative) {
             for(const auto &item : _preparedRenderItems) {
                 if(!shouldQueuePrivateMotionGLLRenderItemLike_0x6DE738(
                        item, _preview)) {
@@ -757,7 +757,7 @@ namespace motion {
         tjs_int canvasHeight) {
         if(!sla || !slaObject || !targetLayerObject ||
            canvasWidth <= 0 || canvasHeight <= 0 ||
-           !_runtime || !_activeMotion || !_sourceCacheNative) {
+           !_activeMotion || !_sourceCacheNative) {
             return false;
         }
 
@@ -988,7 +988,7 @@ namespace motion {
     }
 
     bool Player::renderItemsToD3DTextureLike_0x6ADFBC(D3DAdaptor *adaptor) {
-        if(!adaptor || !_runtime || !_activeMotion ||
+        if(!adaptor || !_activeMotion ||
            !_sourceCacheNative) {
             return false;
         }
@@ -1089,7 +1089,7 @@ namespace motion {
         }
 
         ensureMotionLoaded();
-        if(!_runtime || !_activeMotion) {
+        if(!_activeMotion) {
             return false;
         }
         const auto motionPath = _activeMotion->path;
@@ -1172,7 +1172,7 @@ namespace motion {
         }
 
         ensureMotionLoaded();
-        if(!_runtime || !_activeMotion) {
+        if(!_activeMotion) {
             return false;
         }
         const auto motionPath = _activeMotion->path;
@@ -1243,7 +1243,7 @@ namespace motion {
     }
 
     bool Player::renderToSeparateLayerAdaptor(iTJSDispatch2 *slaObject) {
-        if(!slaObject || !_runtime) {
+        if(!slaObject) {
             return false;
         }
 
@@ -1458,11 +1458,11 @@ namespace motion {
             return true;
         }
         const auto motionPath =
-            _runtime && _activeMotion ? _activeMotion->path
+            _activeMotion ? _activeMotion->path
                                                : std::string{};
 
         _needsInternalAssignImages = false;
-        if(!target || !_runtime) {
+        if(!target) {
             return false;
         }
 
@@ -1520,7 +1520,7 @@ namespace motion {
             return false;
         }
         const auto motionPath =
-            _runtime && _activeMotion ? _activeMotion->path
+            _activeMotion ? _activeMotion->path
                                                : std::string{};
 
         if(!_needsInternalAssignImages) {

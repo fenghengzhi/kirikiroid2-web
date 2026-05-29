@@ -1214,15 +1214,9 @@ namespace motion::detail {
         player._renderItemNativeFieldLifetimeByNode.clear();
     }
 
-    std::shared_ptr<PlayerRuntime> makePlayerRuntime() {
-        // A7: defaultParameterEntry moved to Player; its initialisation
-        // now happens in Player's constructor.
-        // A8: ensureRootNodeLike_0x6CED30 now takes Player, so the empty
-        // PlayerRuntime no longer triggers root insertion here; the Player
-        // constructor invokes ensureRootNodeLike on itself after
-        // makePlayerRuntime returns.
-        return std::make_shared<PlayerRuntime>();
-    }
+    // A10: makePlayerRuntime() deleted along with the now-empty PlayerRuntime
+    // struct. Player's constructor invokes ensureRootNodeLike_0x6CED30(*this)
+    // directly to seed the root node.
 
     std::string narrow(const ttstr &value) { return value.AsStdString(); }
 

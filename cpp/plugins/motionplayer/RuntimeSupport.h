@@ -326,19 +326,12 @@ namespace motion::detail {
         int dirtyFlag = 0;
     };
 
-    struct PlayerRuntime {
-        // Phase A1-A8: most fields hoisted to Player as flat members. Once
-        // A9 lifts the render-item vectors and A10 retires runtime() entirely,
-        // this struct can be deleted.
-        // Phase A9: render-item structs lifted to namespace scope (above);
-        // preparedRenderItems / preparedRenderItemsTopLevel /
-        // preparedRenderItemsGroup / renderItemNativeFieldLifetimeByNode /
-        // perNodeEvalData moved to Player.
-    };
-
+    // A10: PlayerRuntime struct deleted after Phase A1-A9 hoisted every field
+    // onto motion::Player. Forward declarations of the legacy type may still
+    // appear in unrelated headers but the type no longer has any members
+    // and is not instantiated anywhere.
     void ensureRootNodeLike_0x6CED30(motion::Player &player);
     void resetNodeTreeKeepRootLike_0x6B56F8(motion::Player &player);
-    std::shared_ptr<PlayerRuntime> makePlayerRuntime();
 
     std::string narrow(const ttstr &value);
     ttstr widen(const std::string &value);

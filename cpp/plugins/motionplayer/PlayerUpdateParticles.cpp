@@ -254,7 +254,7 @@ namespace motion {
 
                         for (int ci = 0; ci < childCount; ++ci) {
                             auto *child = pn.getParticleChild(ci);
-                            if (!child || !child->_runtime || child->_nodes.empty()) continue;
+                            if (!child || !true || child->_nodes.empty()) continue;
                             auto &cr = child->_nodes[0];
 
                             // Rotate child angle (0x6BF4C4..0x6BF528)
@@ -309,7 +309,7 @@ namespace motion {
                     // Matrix unchanged: just add delta position (0x6BF348..0x6BF384)
                     for (int ci = 0; ci < childCount; ++ci) {
                         auto *child = pn.getParticleChild(ci);
-                        if (!child || !child->_runtime || child->_nodes.empty()) continue;
+                        if (!child || !true || child->_nodes.empty()) continue;
                         auto &cr = child->_nodes[0];
                         cr.accumulated.posX += pn.deltaPosX;
                         cr.accumulated.posY += pn.deltaPosY;
@@ -322,7 +322,7 @@ namespace motion {
                 // still add deltaPos to existing children's positions.
                 for (int ci = 0; ci < childCount; ++ci) {
                     auto *child = pn.getParticleChild(ci);
-                    if (!child || !child->_runtime || child->_nodes.empty()) continue;
+                    if (!child || !true || child->_nodes.empty()) continue;
                     auto &cr = child->_nodes[0];
                     cr.accumulated.posX += pn.deltaPosX;
                     cr.accumulated.posY += pn.deltaPosY;
@@ -474,7 +474,7 @@ namespace motion {
 
                 // Set blendMode on child root node accumulated state (0x6BFAA8..0x6BFAC4)
                 // Binary writes to *(v99+1656) = root node accumulated blendMode, not activeSlot.
-                if (child->_runtime && !child->_nodes.empty()) {
+                if (!child->_nodes.empty()) {
                     auto &cr = child->_nodes[0];
                     auto blendVal = pn.activeSlot().blendMode;
                     if (cr.accumulated.blendMode != blendVal) {
@@ -603,7 +603,7 @@ namespace motion {
                 // Binary branches on coordinateMode (node+24), not inhVel.
                 double velX = 0.0, velY = 0.0, velZ = 0.0;
 
-                if (child->_runtime && !child->_nodes.empty()) {
+                if (!child->_nodes.empty()) {
                     auto &cr = child->_nodes[0];
                     if (pn.coordinateMode == 1) {
                         // 3D mode (0x6BFEB4..0x6BFEDC)
@@ -737,7 +737,7 @@ namespace motion {
                 for (int ci = 0; ci < pCount; ++ci) {
                     auto *child = pn.getParticleChild(ci);
                     bool shouldErase = false;
-                    if (!child || !child->_runtime || child->_nodes.empty()) {
+                    if (!child || !true || child->_nodes.empty()) {
                         shouldErase = true;
                     } else if (child->_allplaying) {
                         // Playing: only check bounds if particleDeleteOutside (0x6C1888)
@@ -775,7 +775,7 @@ namespace motion {
                 const int pCount2 = pn.getParticleCount();
                 for (int ci = 0; ci < pCount2; ++ci) {
                     auto *child = pn.getParticleChild(ci);
-                    if (!child || !child->_runtime) continue;
+                    if (!child || !true) continue;
                     child->_zFactor = _zFactor;
                     if (!child->_nodes.empty()) {
                         auto &cr = child->_nodes[0];

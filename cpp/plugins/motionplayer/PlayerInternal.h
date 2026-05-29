@@ -208,7 +208,6 @@ namespace internal {
         activateMotion(Player &player,
                        const std::shared_ptr<detail::MotionSnapshot> &snapshot,
                        ResourceManager *resourceManager = nullptr) {
-            auto &runtime = *player._runtime;
             player._activeMotion = snapshot;
             player._timelines.clear();
             // Reset persistent node tree so it gets rebuilt for new motion

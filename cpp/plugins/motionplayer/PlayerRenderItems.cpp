@@ -32,7 +32,7 @@ namespace motion {
     void Player::calcBounds() {
         // Equivalent to sub_6D5164 @ 0x6D5178's `player+544` null gate —
         // without a loaded motion there is no render list to measure.
-        if(!_runtime || !_activeMotion) {
+        if(!_activeMotion) {
             _boundsMinX = 0.0;
             _boundsMinY = 0.0;
             _boundsMaxX = 0.0;
@@ -40,7 +40,7 @@ namespace motion {
             return;
         }
         const auto motionPath =
-            _runtime && _activeMotion ? _activeMotion->path
+            _activeMotion ? _activeMotion->path
                                                : std::string{};
 
         _boundsMinX = 1e308;
@@ -221,7 +221,7 @@ namespace motion {
         // Port has no explicit `player+544` mirror; the equivalent gate
         // is a null activeMotion, since without a loaded motion there is
         // no render list to build.
-        if(!_runtime || !_activeMotion) {
+        if(!_activeMotion) {
             return;
         }
 
@@ -242,7 +242,7 @@ namespace motion {
 
         auto appendChildEntriesAtCurrentNode = [&](Player *child,
                                                    bool nodePriorDraw) {
-            if(!child || !child->_runtime) {
+            if(!child || !true) {
                 return;
             }
             child->_renderItemInheritedFlag18 =
@@ -822,7 +822,7 @@ namespace motion {
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderPrepareEnter(this);
 #endif
-        if(!_runtime) {
+        if(false) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
             detail::motionTraceRenderPrepareLeave(this, false);
 #endif
@@ -1010,7 +1010,7 @@ namespace motion {
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderApplyTranslateEnter(this);
 #endif
-        if(!_runtime) {
+        if(false) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
             detail::motionTraceRenderApplyTranslateLeave(this);
 #endif

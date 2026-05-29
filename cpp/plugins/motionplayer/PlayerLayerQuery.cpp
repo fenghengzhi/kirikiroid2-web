@@ -100,7 +100,7 @@ namespace motion {
         // That map is populated at 0x6B4CE4 during buildNodeTree_recursive with
         // operator[] — duplicates naturally collapse to one key per label.
         ensureMotionLoaded();
-        if(!_runtime || !_activeMotion) {
+        if(!_activeMotion) {
             return detail::makeArray({});
         }
         std::vector<std::string> labels;
@@ -134,7 +134,7 @@ namespace motion {
         // the resolved node. For duplicate labels this yields the last layer
         // that wrote the key during buildNodeTree_recursive.
         ensureMotionLoaded();
-        if(!_runtime) {
+        if(false) {
             return {};
         }
 
@@ -153,7 +153,7 @@ namespace motion {
 
     tTJSVariant Player::getLayerGetter(ttstr name) {
         ensureMotionLoaded();
-        if(!_runtime) {
+        if(false) {
             return {};
         }
         const auto key = detail::narrow(name);
@@ -174,7 +174,7 @@ namespace motion {
         // a getter per non-root node. Duplicates are NOT collapsed — every
         // node maps to its own getter, unlike getLayerNames.
         ensureMotionLoaded();
-        if(!_runtime || !_activeMotion) {
+        if(!_activeMotion) {
             return detail::makeArray({});
         }
 
@@ -210,7 +210,7 @@ namespace motion {
 
     bool Player::hitTestLayer(ttstr name, double x, double y) {
         ensureMotionLoaded();
-        if(!_runtime || !_activeMotion) {
+        if(!_activeMotion) {
             return false;
         }
 
@@ -226,7 +226,7 @@ namespace motion {
 
         auto findNodeRecursive =
             [&](auto &&self, Player *player) -> const detail::MotionNode * {
-            if(!player || !player->_runtime) {
+            if(!player || !true) {
                 return nullptr;
             }
 

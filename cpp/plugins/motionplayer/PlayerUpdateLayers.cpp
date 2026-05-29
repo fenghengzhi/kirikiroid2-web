@@ -15,7 +15,7 @@ namespace motion {
         auto &nodes = _nodes;
         if (nodes.empty()) return;
         const auto motionPath =
-            _runtime && _activeMotion ? _activeMotion->path
+            _activeMotion ? _activeMotion->path
                                                : std::string{};
         const double currentTime = _clampedEvalTime;
 
