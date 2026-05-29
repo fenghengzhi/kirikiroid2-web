@@ -141,24 +141,9 @@ namespace motion {
         if(!_mirrorEvalEnabled || label.empty() || !_runtime->activeMotion) {
             return false;
         }
-
-        if(_mirrorPositiveCache.find(label) != _mirrorPositiveCache.end()) {
-            return true;
-        }
-        if(_mirrorNegativeCache.find(label) != _mirrorNegativeCache.end()) {
-            return false;
-        }
-
         const auto &matchList = _runtime->activeMotion->mirrorVariableMatchList;
-        const bool matched =
-            std::find(matchList.begin(), matchList.end(), label) !=
-            matchList.end();
-        if(matched) {
-            _mirrorPositiveCache.insert(label);
-        } else {
-            _mirrorNegativeCache.insert(label);
-        }
-        return matched;
+        return std::find(matchList.begin(), matchList.end(), label) !=
+               matchList.end();
     }
 
     double &Player::ensureEvalResultSlotLike_0x686944(const std::string &label) {

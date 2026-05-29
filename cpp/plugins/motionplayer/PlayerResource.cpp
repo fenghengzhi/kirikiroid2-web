@@ -55,8 +55,6 @@ namespace motion {
         _evalResultValues.clear();
         _evalResultList.clear();
         _evalResultListIndex.clear();
-        _mirrorPositiveCache.clear();
-        _mirrorNegativeCache.clear();
         _motionKey.Clear();
     }
 

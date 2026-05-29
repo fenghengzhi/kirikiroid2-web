@@ -688,6 +688,9 @@ namespace motion {
         findOrInsertControllerStateLike_0x671228(
             std::deque<VariableAnimatorState> &bucket,
             const std::string &label);
+        // Aligned with libkrkr2.so motion::Player HM2 @ +320
+        // (raw label -> double). Upsert helper: Player_HM2_upsert_labelToValue
+        // @ 0x686944. Cleared on motion change / reset alongside HM3/HM4.
         std::unordered_map<std::string, double> _evalResultValues;
         struct EvalResultEntry {
             std::string label;
@@ -698,8 +701,6 @@ namespace motion {
             _evalResultListIndex;
         bool _rootFlipX = false;
         bool _mirrorEvalEnabled = false;
-        std::unordered_set<std::string> _mirrorPositiveCache;
-        std::unordered_set<std::string> _mirrorNegativeCache;
 
         // Parent color propagated from parent motion node (sub_6BE0C0 at 0x6BEB7C).
         // Binary: *(_DWORD *)(childPlayer + 1156) = *(_DWORD *)(node + 100)

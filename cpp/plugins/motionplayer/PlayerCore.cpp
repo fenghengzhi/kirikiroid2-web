@@ -354,8 +354,6 @@ namespace motion {
         _evalResultValues.clear();
         _evalResultList.clear();
         _evalResultListIndex.clear();
-        _mirrorPositiveCache.clear();
-        _mirrorNegativeCache.clear();
 
         if(snapshot) {
             activateMotion(*_runtime, snapshot, &_resourceManagerNative);
@@ -386,8 +384,6 @@ namespace motion {
         _evalResultValues.clear();
         _evalResultList.clear();
         _evalResultListIndex.clear();
-        _mirrorPositiveCache.clear();
-        _mirrorNegativeCache.clear();
         if(ensureMotionLoaded()) {
             initNonEmoteMotionLike_0x6B365C(0);
         }
@@ -684,8 +680,6 @@ namespace motion {
         _evalResultValues.clear();
         _evalResultList.clear();
         _evalResultListIndex.clear();
-        _mirrorPositiveCache.clear();
-        _mirrorNegativeCache.clear();
 
         if(_runtime && !_runtime->nodes.empty()) {
             auto &root = _runtime->nodes.front();
