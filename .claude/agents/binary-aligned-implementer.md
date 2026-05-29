@@ -79,9 +79,13 @@ memory: project
 
 ### 阶段 6：构建与运行时验证（不可跳过）
 1. 构建：`cmake --build out/web/debug`（若修改了 CMakeLists.txt 必须先重跑 preset）
-2. 构建失败：回到阶段 3 修复，**不算入迭代次数**
-3. 构建通过后，若该函数有对应的 differential test 或单元测试，跑一遍并报告结果
-4. 无测试覆盖时明确说明"无运行时验证"，不要谎称"已验证"
+2. **若本次新增/删除/重命名了 .cpp 源文件**：必须同步检查所有**手工维护的源文件列表**并构建消费它们的 target，否则 web/debug 链接整库会通过、但 CI 的子集 target 链接会报 unsupported import / undefined symbol。已知的手工源列表：
+   - `platforms/wasmtime/CMakeLists.txt`（`krkr2_wasmtime_guest_objects`）→ 验证 `cmake --preset "Wasmtime Headless Debug Config" -DBISON_EXECUTABLE=/opt/homebrew/opt/bison/bin/bison` + `cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest`
+   - 新增类后 grep 仓库里其它 `add_library`/`add_executable` 的显式源清单，确认无遗漏
+3. 构建失败：回到阶段 3 修复，**不算入迭代次数**
+4. 构建通过后，若该函数有对应的 differential test 或单元测试，跑一遍并报告结果
+5. 无测试覆盖时明确说明"无运行时验证"，不要谎称"已验证"
+6. **differential.yml 在 push 到 web / dev/* 分支时自动触发**，其 wasmtime job 构建的正是 `krkr2_wasmtime_guest`。本地跳过步骤 2 = CI 必红。
 
 ## 硬性禁止（来自 CLAUDE.md——阻塞性）
 - **禁止从 PSB 键名推导行为** — 必须反编译确认读取条件、默认值、数据类型

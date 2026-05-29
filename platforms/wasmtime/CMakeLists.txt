@@ -6,6 +6,9 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_library(krkr2_wasmtime_guest_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/main.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/EmotePlayer.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/EmoteEngine.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/EmoteVarController.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/EmoteAngleController.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerCore.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerFrameProgress.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerResource.cpp
