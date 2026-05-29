@@ -17,6 +17,7 @@
 #include <spdlog/spdlog.h>
 #include "tjs.h"
 #include "ResourceManager.h"
+#include "internal/player_containers.h"
 
 namespace PSB {
     class PSBDictionary;
@@ -708,9 +709,30 @@ namespace motion {
         findOrInsertControllerStateLike_0x671228(
             std::deque<VariableAnimatorState> &bucket,
             const std::string &label);
+        // === libkrkr2.so motion::Player inlined hash maps (Phase B aliases) ===
+        // HM1 (Player+264): cascaded PropGet result cache. Owns refcounts on
+        // its embedded dispatch + chain via EvalCascadeState's destructor;
+        // matches the binary's Player_HM1_value_destroy @0x6DD1A0 release
+        // sequence. Empty until A8 wires it into the cascade evaluator.
+        detail::EvalCascadeMap _evalCascadeMap;
+
+        // HM3 (Player+1184): per-node-path layer state snapshot keyed by
+        // Player_buildNodePathKey @0x6B5C1C output. PerNodeLayerState owns 8
+        // ttstr + 5 dispatch + 2 heap slots released in binary dtor order
+        // (Player_HM3_value_destroy @0x6DD06C). Empty until A8 wires it into
+        // the per-node update path.
+        detail::PerNodeLayerStateMap _perNodeLayerStateMap;
+
+        // HM4 (Player+1240): ttstr -> iTJSDispatch2* alias resolution map.
+        // Non-owning pointers (alias to a dispatch held elsewhere). Empty
+        // until A8 wires it into the alias resolver.
+        detail::DispatchAliasMap _dispatchAliasMap;
+
         // Aligned with libkrkr2.so motion::Player HM2 @ +320
         // (raw label -> double). Upsert helper: Player_HM2_upsert_labelToValue
         // @ 0x686944. Cleared on motion change / reset alongside HM3/HM4.
+        // TODO(A8): retype to detail::LabelValueMap (ttstr key + ttstr_hash)
+        // so bucket distribution and iteration order match the binary.
         std::unordered_map<std::string, double> _evalResultValues;
         struct EvalResultEntry {
             std::string label;
