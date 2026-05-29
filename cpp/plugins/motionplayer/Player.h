@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <list>
 #include <memory>
 #include <string>
@@ -92,8 +93,9 @@ namespace motion {
         ~Player();
 
         // --- Properties (getter/setter) ---
-        void setCompletionType(int v) { _completionType = v; }
-        int getCompletionType() const { return _completionType; }
+        // libkrkr2.so setter sub_6D963C: *(player+1092) = v & 1 (mask, not truncate)
+        void setCompletionType(int v) { _completionType = (v & 1) != 0; }
+        bool getCompletionType() const { return _completionType; }
 
         void setMetadata(tTJSVariant v) { _metadata = v; }
         tTJSVariant getMetadata() const { return _metadata; }
@@ -258,9 +260,6 @@ namespace motion {
                            double ease = 0.0);
         void setMirror(bool mirror);
         void setEmoteMeshDivisionRatio(double v);
-        void setHairScale(double s);
-        void setPartsScale(double s);
-        void setBustScale(double s);
         void startWind(double minAngle, double maxAngle, double amplitude,
                        double freqX, double freqY);
         void stopWind();
@@ -562,12 +561,16 @@ namespace motion {
         std::shared_ptr<detail::PlayerRuntime> _runtime;
         ResourceManager _resourceManagerNative;
         Player *_parentPlayer = nullptr; // non-owning, for 0x6B1ABC lookup
-        int _completionType = 0;
+        // libkrkr2.so +1092: 1-byte bool. ctor (0x6CED30) sets byte=0;
+        // setter sub_6D963C does *(player+1092)=v&1; getter sub_6D9634 reads byte.
+        bool _completionType = false;
         tTJSVariant _metadata;
         ttstr _chara;
         ttstr _motionKey;
         ttstr _outline;  // Aligned to libkrkr2.so +1032: ttstr
-        double _priorDraw = 0.0;  // Aligned to libkrkr2.so +1160: double
+        // libkrkr2.so +1160: double. ctor (0x6CED30) a1[145]=0x3FF8000000000000=1.5;
+        // getter sub_6D965C reads *(player+1160).
+        double _priorDraw = 1.5;
         double _frameLastTime = 0.0;
         double _frameLoopTime = 0.0;
         double _clampedEvalTime = 0.0; // player+456: min(_frameLoopTime, totalFrames)
@@ -604,7 +607,9 @@ namespace motion {
         double _hitThreshold = 0.0;
         bool _preview = false; // libkrkr2.so +1096
         bool _renderItemInheritedFlag18 = false; // sub_6C2334 arg6 low-bit lineage
-        double _outsideFactor = 0.0;
+        // libkrkr2.so +1176: double. ctor (0x6CED30) a1[147]=0x3FF0000000000000=1.0;
+        // getter sub_6D966C reads *(player+1176).
+        double _outsideFactor = 1.0;
         tTJSVariant _resourceManager;
         ttstr _stealthChara;
         ttstr _stealthMotion;
@@ -632,11 +637,12 @@ namespace motion {
         float _cameraOffsetY = 0.0f;    // player+148
 
         // Aligned to libkrkr2.so Player_calcBounds (0x6C3D04):
-        // AABB stored at player+152~176
-        double _boundsMinX = 1e308;
-        double _boundsMinY = 1e308;
-        double _boundsMaxX = -1e308;
-        double _boundsMaxY = -1e308;
+        // AABB stored at player+152~176. ctor (0x6CED30) inits
+        // a1[19]=0x7FEFFFFFFFFFFFFF (DBL_MAX), a1[22]=0xFFEFFFFFFFFFFFFF (-DBL_MAX).
+        double _boundsMinX = std::numeric_limits<double>::max();
+        double _boundsMinY = std::numeric_limits<double>::max();
+        double _boundsMaxX = -std::numeric_limits<double>::max();
+        double _boundsMaxY = -std::numeric_limits<double>::max();
         bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
         std::unordered_map<std::string, double> _variableValues;
         struct VariableKeyframe {
@@ -700,14 +706,14 @@ namespace motion {
         bool _noUpdateYet = true;  // player+608
 
         // Aligned to libkrkr2.so emote scale/rotate fields:
-        // sub_681F20: player+1184, sub_681F28: player+1192, sub_681F30: player+1200
         // player+1168/+1176 are the duplicated meshDivisionRatio doubles read by
         // Player_startWind (0x6709AC).
         double _emoteMeshDivisionRatio = 1.0;
         double _emoteMeshDivisionRatioDup = 1.0;
-        double _hairScale = 1.0;    // player+1184
-        double _partsScale = 1.0;   // player+1192
-        double _bustScale = 1.0;    // player+1200
+        // NOTE: hairScale/partsScale/bustScale are EmotePlayer/EmoteObject
+        // properties (sub_681F20/28/30 write EmoteObject+1184/+1192/+1200),
+        // NOT motion::Player fields — on the 1384B Player those offsets are
+        // hash table HM3. They live on EmotePlayer (EmotePlayer::_hairScale).
         double _rotateAngle = 0.0;  // sub_672568 rotation parameter
         bool _physicsDisabled = false;   // player+1159
         bool _emoteAnimatorFlag = false; // player+1161

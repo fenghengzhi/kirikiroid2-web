@@ -14,7 +14,7 @@
 ### 核心发现
 
 1. **D3DEmotePlayer 不是独立实现** — 它是一个极薄的壳（24 bytes 原生实例），所有逻辑委托给内部 Player 对象
-2. **Player 对象是一个 ~1500 字节的巨型结构体**，包含 6 种类型的动画控制器 deque、变量哈希表、时间线管理等
+2. **⚠️ 修正(2026-05-29)：sub_67E38C 创建的 0x5D8=1496B 巨型结构体不是 Player，而是 EmoteObject（emote 引擎）**，它包含 6 种动画控制器 deque、变量哈希表、时间线管理等，并在 **+1064 处持有一个独立的、真正的 Player 指针**。真正的 Player 永远是 **1384B（0x568）**，由 `operator new(0x568)+Player_ctor(0x6CED30)` 创建——与独立的 Motion.Player 完全同一个类。**本文档原先把这个 1496B EmoteObject 误标为 "Player"**。详见 §2.4 顶部修正框
 3. **progress() 实际跳转到 Player 引擎的 sub_67D01C**，这是一个完整的物理/动画步进引擎
 4. **setVariable 实际是一个复杂的类型分发系统**（switch 9 种 case），不是简单的 map 写入
 5. **contains() 支持三种几何体**：圆形、矩形、四边形凸多边形，不是简单的 AABB
@@ -22,6 +22,39 @@
 ---
 
 ## 2. 对象层次结构
+
+### 2.0 已验证的对象层级链(权威,反编译实证 2026-05-29)
+
+二进制**不是**单一扁平对象,而是 **4 级独立 `operator new` 堆对象**,层间靠**指针**连接。本地 `class EmotePlayer { Player _player; double _hairScale; ... }` 把后三层(EmoteObject + 1496B 引擎 + Player)拍扁成一个对象——**架构级偏差**。
+
+```
+┌─────────────────────────────────────┐
+│ D3DEmotePlayerNativeInstance  24B    │  new(0x18), sub_68629C, vtable off_1A18BB0
+│   +8  emoteObj ──────────────┐       │
+└──────────────────────────────┼───────┘
+                               ▼
+┌─────────────────────────────────────┐
+│ EmoteObject                   ~40B   │  sub_67DBAC (EmoteObject_init), 5×QWORD
+│   +0  resourceMgr ── new(0xE8)=232B  │  sub_6A88CC
+│   +8  engine ────────────────┐       │
+└──────────────────────────────┼───────┘
+                               ▼
+┌─────────────────────────────────────┐
+│ 1496B Emote 引擎              0x5D8  │  new(0x5D8), sub_67E38C
+│   +1064 player ──────────────┐       │  ← hairScale@+1184 / parts@+1192 / body@+1200 在此层
+│   +1072..1096 animators       │      │  ← 7×sub_667030 控制器(各0x80)、时间线哈希表、变量哈希表@+1384
+└──────────────────────────────┼───────┘
+                               ▼
+┌─────────────────────────────────────┐
+│ Player(动画引擎)             1384B   │  new(0x568), Player_ctor(0x6CED30)
+│   = 与独立 Motion.Player 完全同一个类  │  ← +1184 是哈希表 HM3,非 hairScale
+└─────────────────────────────────────┘
+```
+
+**关键反编译证据:**
+- `sub_67DBAC`(EmoteObject_init,0x67DBAC):`v5=new(0xE8); sub_6A88CC(v5,...); *a1=v5;`(+0=RM)→ `v7=new(0x5D8); sub_67E38C(v7,...); a1[1]=v7;`(+8=引擎)。后续 `Player_play(*(v24+1064), ...)` 经 引擎+1064 取 Player。
+- `sub_67E38C`(1496B 引擎构造,0x67E38C):`v13=operator new(0x568u); Player_ctor(v13, a2); a1[133]=v13;`(133×8=+1064)。
+- **只有一个 Player 类,永远 1384B,ctor sub_6CED30**;1496B 是引擎,不是 Player。详见 §2.4 修正框。
 
 ### 2.1 D3DEmotePlayer 原生实例 (24 bytes, 由 sub_68629C 创建)
 
@@ -61,14 +94,34 @@ NCB 方法中的 `a1` 参数是 D3DEmotePlayer 包装对象，其字段布局从
 // sub_67DBAC(a1, psbPaths):
 struct EmoteObject {       // size = 0x28 (40 bytes = 5 * QWORD)
     void*   resourceMgr;  // +0  → ResourceManager (sub_6A88CC)
-    void*   player;       // +8  → Player 对象 (sub_67E38C, size 0x5D8)
+    void*   emoteEngine;  // +8  → 1496B emote 引擎对象 (sub_67E38C, size 0x5D8) — 见 §2.4 修正
     ptr*    loadedPSBs[];  // +16,+24,+32 → 加载的 PSB 数据引用数组
 };
 ```
 
-### 2.4 Player 对象布局 (size = 0x5D8 = 1496 bytes)
+### 2.4 1496B EmoteObject 引擎布局 (size = 0x5D8 = 1496 bytes)
 
-从大量属性访问模式反推的 Player 关键字段偏移：
+> ## ⚠️ 重大修正(2026-05-29):这张表是 EmoteObject 引擎的布局,不是 Player 的
+>
+> **本节原标题"Player 对象布局"是错误的 conflation。** 反编译 sub_67E38C(此 0x5D8 对象的构造函数)证实:
+>
+> ```c
+> // sub_67E38C(a1 /* 1496B EmoteObject 引擎 */, a2 /* ResourceManager */):
+> v13 = operator new(0x568u);   // 0x568 = 1384 字节
+> Player_ctor(v13, a2);          // 同一个 Player_ctor (sub_6CED30)
+> a1[133] = v13;                 // 真正的 Player 指针存进 引擎+1064
+> ```
+>
+> **结论:**
+> 1. **只有一个 Player 类,永远是 1384B(0x568)**,ctor 是 sub_6CED30——无论独立 Motion.Player 还是 emote 路径都用它。**不存在 1496B 的 Player。**
+> 2. 这张表里的 0x5D8=1496B 对象是 **EmoteObject 引擎**(持有 7 个 sub_667030 控制器、时间线哈希表、动画器、物理、变量哈希表等),它在 **+1064(下表 "renderPlayer" 项)持有真正的 1384B Player 指针**。
+> 3. **下表所有偏移都是 EmoteObject 引擎的偏移,不是 Player 的。** 尤其:
+>    - `+1184 hairScale / +1192 partsScale / +1200 bodyScale` 是 **EmoteObject 引擎**字段(由 EmotePlayer NCB 访问器 sub_681F20/28/30 写入),**不是 Player 字段**。在真正的 1384B Player 上,+1184..+1232 是哈希表 HM3(ctor 0x6CED30 证实:桶指针 a1[148]、桶数 a1[149]=sub_149EDF8、负载因子 1.0f@+1216)。
+>    - `+1384 variableHashMap` 同理是引擎字段。
+> 4. **1384B Player 的权威布局见 [analysis/Player_Class_Layout_libkrkr2so.md](Player_Class_Layout_libkrkr2so.md)。** 本表与那份文档不要混用。
+> 5. 本地代码已清理(2026-05-29,commit 25b3de9):Motion.Player 曾错误地拥有 `_hairScale/_partsScale/_bustScale` 伪字段 + `Player::setHairScale` + `Motion.Player` 的 `NCB_METHOD(setHairScale)`。已**全部删除**——依据是 xrefs 证实 sub_681F20/28/30 仅被 `EmotePlayer_ncb_registerMembers`(0x67FAC8)引用,Player 注册(0x6D69C8)从不引用;且 1384B Player 的 +1184 是哈希表 HM3。正确实现保留在 `EmotePlayer` 类(`EmotePlayer::_hairScale` + main.cpp 的 EmotePlayer/D3DEmotePlayer NCB_PROPERTY)。
+
+从大量属性访问模式反推的 **EmoteObject 引擎**关键字段偏移(注:下表 "Player"/"player" 字样多数应理解为 "EmoteObject 引擎"):
 
 | 偏移 | 类型 | 字段名 | 来源证据 |
 |------|------|--------|---------|
@@ -86,7 +139,7 @@ struct EmoteObject {       // size = 0x28 (40 bytes = 5 * QWORD)
 | +1024 (0x400) | ptr | diffTimelinesEnd | |
 | +1040 (0x410) | vector<ptr> | playingTimelines | countPlayingTimelines |
 | +1048 (0x418) | ptr | playingTimelinesEnd | |
-| +1064 (0x428) | ptr* | renderPlayer | → 渲染子系统 Player 实例 |
+| +1064 (0x428) | ptr* | **player** | **a1[133] = operator new(0x568)+Player_ctor → 真正的 1384B Player（不是渲染子系统，就是 the Player）** |
 | +1072 (0x430) | ptr* | coordAnimator | setCoord 委托目标 |
 | +1080 (0x438) | ptr* | scaleAnimator | setScale 委托目标 |
 | +1088 (0x440) | ptr* | colorAnimator | setColor 委托目标 |
@@ -105,10 +158,10 @@ struct EmoteObject {       // size = 0x28 (40 bytes = 5 * QWORD)
 | +1162 (0x48A) | byte | dirtyFlag | setCoord/setScale/setRot/setColor/setVariable 设为1 |
 | +1168 (0x490) | double | meshDivisionRatio | startWind 中用于缩放 |
 | +1176 (0x498) | double | meshDivisionRatio_dup | meshDivisionRatio getter |
-| +1184 (0x4A0) | double | hairScale | hairScale getter |
-| +1192 (0x4A8) | double | partsScale | partsScale getter |
-| +1200 (0x4B0) | double | bodyScale | bodyScale getter |
-| +1384 (0x568) | hashmap | variableHashMap | setVariable 的变量查找表 |
+| +1184 (0x4A0) | double | hairScale | EmoteObject 引擎字段，setter sub_681F20。**注意：1384B Player 的 +1184 是哈希表 HM3，不是 hairScale** |
+| +1192 (0x4A8) | double | partsScale | EmoteObject 引擎字段，setter sub_681F28 |
+| +1200 (0x4B0) | double | bodyScale | EmoteObject 引擎字段，setter sub_681F30 |
+| +1384 (0x568) | hashmap | variableHashMap | EmoteObject 引擎字段，setVariable 的变量查找表（这是引擎+1384，不是 Player；Player 整个对象才 0x568=1384B） |
 | +1392 (0x570) | uint64 | variableMapBuckets | |
 | +1440 (0x5A0) | hashmap | evalResultMap | progress 中写入变量求值结果 |
 | +1456 (0x5B0) | ptr* | evalResultList | 链表头，progress 后处理遍历 |
@@ -186,10 +239,10 @@ void EmoteObject_init(EmoteObject* self, tjs_array** psbPaths) {
     // 2. 从 ResourceManager 获取 drawDevice (E-mote 渲染上下文)
     drawDevice = ResourceManager_getDrawDevice(self->resourceMgr, 1, 0);
 
-    // 3. 创建 Player 对象 (核心！)
-    player = new(0x5D8);  // Player, 1496 bytes
-    Player_init(player, drawDevice);  // sub_67E38C
-    self->player = player;
+    // 3. 创建 EmoteObject 引擎对象 (核心！) — ⚠️ 不是 Player！
+    engine = new(0x5D8);  // EmoteObject 引擎, 1496 bytes (NOT the Player)
+    sub_67E38C(engine, drawDevice);  // 引擎构造函数；它内部 new(0x568)+Player_ctor 建真正的 1384B Player 存进 引擎+1064
+    self->engine = engine;
 
     // 4. 逐个加载 PSB 文件到 ResourceManager
     for (path in *psbPaths) {
@@ -790,9 +843,11 @@ bool Player_isAnimating(player) {
 
 ## 4. 属性访问模式总结
 
-### 直接访问 Player 字段的属性
+### 直接访问 EmoteObject 引擎字段的属性
 
-| 属性 | 访问路径 | Player 偏移 |
+> ⚠️ 下表 "this+24→+8→+N" 的 "+8" 解引用到的是 **EmoteObject 引擎(1496B)**,不是 1384B Player。表中 "player+N" 一律应读作 "引擎+N"。真正的 Player 在 引擎+1064。
+
+| 属性 | 访问路径 | 引擎偏移（非 Player！） |
 |------|---------|-------------|
 | `meshDivisionRatio` | this+24→+8→+1176 | player+1176 |
 | `bustScale` | this+24→+8→+1161 | player+1161 (byte) |
@@ -851,7 +906,7 @@ D3DEmotePlayer NCB 方法
 
 | 项目 | 二进制实现 | 本地代码 | 差异程度 |
 |------|-----------|---------|---------|
-| **对象架构** | 24-byte 壳 → 40-byte EmoteObj → 1496-byte Player | shared_ptr<Runtime> 扁平结构 | 重大 |
+| **对象架构** | 24-byte 壳 → 40-byte EmoteObj → 1496-byte 引擎 → (引擎+1064) 1384-byte Player | shared_ptr<Runtime> 扁平结构 | 重大 |
 | **setScale** | baseScale * userScale 乘法 | 单一 _scale | 中等 |
 | **setVariable** | 9-case 类型分发到 deque 控制器 | std::map 写入 | 重大 |
 | **getVariable** | diff/normal 双路查询 | map 查找 + snapshot | 中等 |

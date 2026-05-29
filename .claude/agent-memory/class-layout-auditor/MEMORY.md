@@ -1,0 +1,2 @@
+- [Player class container layout](player_container_layout.md) — 二进制 Player +264/+320/+1184/+1240 是 4 个 KiriKiri 哈希表(非vector),容器选型权威表
+- [Player pimpl split mapping](player_pimpl_split.md) — 本地 Player.h+PlayerRuntime 拆分映射,字段类型错/偏移误标/多出字段清单

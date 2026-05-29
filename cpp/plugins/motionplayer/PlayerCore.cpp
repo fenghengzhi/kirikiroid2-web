@@ -1055,13 +1055,10 @@ namespace motion {
         _emoteMeshDivisionRatioDup = v;
     }
 
-    // Aligned to libkrkr2.so:
-    // sub_681F20: player+1184 = a2
-    void Player::setHairScale(double s) { _hairScale = s; }
-    // sub_681F28: player+1192 = a2
-    void Player::setPartsScale(double s) { _partsScale = s; }
-    // sub_681F30: player+1200 = a2
-    void Player::setBustScale(double s) { _bustScale = s; }
+    // hairScale/partsScale/bustScale removed from motion::Player: sub_681F20/28/30
+    // are EmotePlayer NCB accessors writing EmoteObject+1184/+1192/+1200, not
+    // Player fields (the 1384B Player has hash table HM3 at those offsets).
+    // See EmotePlayer::setHairScale.
 
     // Aligned to D3DEmotePlayer_startWind (0x530680) -> Player_startWind (0x6709AC):
     // normalize amplitude, optionally destroy/rebuild wind simulator state, then

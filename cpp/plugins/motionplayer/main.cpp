@@ -194,9 +194,8 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(unserialize);
     NCB_METHOD(setRotate);
     NCB_METHOD(setMirror);
-    NCB_METHOD(setHairScale);
-    NCB_METHOD(setPartsScale);
-    NCB_METHOD(setBustScale);
+    // hairScale/partsScale/bustScale removed: not Motion.Player members in
+    // libkrkr2.so (sub_681F20/28/30 are EmotePlayer-only NCB accessors).
     NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
                             &Player::setDrawAffineTranslateMatrixCompat, 0);
     NCB_METHOD(getCameraOffset);
