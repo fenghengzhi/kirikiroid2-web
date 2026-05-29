@@ -229,7 +229,7 @@ namespace motion {
     }
 
     void Player::refreshFixedControllerEvalOutputsLike_0x67D01C() {
-        const auto *activeMotion = _runtime->activeMotion.get();
+        const auto *activeMotion = _activeMotion.get();
         if(!activeMotion) {
             return;
         }
@@ -275,7 +275,7 @@ namespace motion {
 
     void Player::accumulateTimelineContributionLike_0x67C560(
         const std::string &label, double &value) {
-        const auto *activeMotion = _runtime->activeMotion.get();
+        const auto *activeMotion = _activeMotion.get();
         if(!activeMotion || label.empty()) {
             return;
         }
@@ -310,7 +310,7 @@ namespace motion {
     }
 
     void Player::applyClampControlsLike_0x67C8A8() {
-        const auto *activeMotion = _runtime->activeMotion.get();
+        const auto *activeMotion = _activeMotion.get();
         if(!activeMotion) {
             return;
         }
@@ -408,7 +408,7 @@ namespace motion {
             return;
         }
 
-        const auto *activeMotion = _runtime->activeMotion.get();
+        const auto *activeMotion = _activeMotion.get();
         size_t writeIndex = 0;
         for(size_t readIndex = 0;
             readIndex < _runtime->playingTimelineLabels.size(); ++readIndex) {
@@ -704,7 +704,7 @@ namespace motion {
 
     void Player::applyTimelineControlFrameCrossingLike_0x67CD20(
         const std::unordered_map<std::string, double> &prevTimes) {
-        const auto *activeMotion = _runtime->activeMotion.get();
+        const auto *activeMotion = _activeMotion.get();
         if(!activeMotion) {
             return;
         }
@@ -848,14 +848,14 @@ namespace motion {
 
         // Scan PSB layers for action/sync events crossed this frame
         // Aligned to libkrkr2.so: updateLayers queues events during evaluation
-        if(_runtime->activeMotion && actualDelta > 0) {
+        if(_activeMotion && actualDelta > 0) {
             for(const auto &[name, prev] : prevTimes) {
                 const auto stateIt = _runtime->timelines.find(name);
                 if(stateIt == _runtime->timelines.end()) {
                     continue;
                 }
                 if(stateIt->second.currentTime > prev) {
-                    detail::scanLayerActions(*_runtime->activeMotion,
+                    detail::scanLayerActions(*_activeMotion,
                                              prev, stateIt->second.currentTime,
                                              _runtime->pendingEvents);
                 }
@@ -910,8 +910,8 @@ namespace motion {
         self->_runtime->pendingEvents.clear();
         self->frameProgress(delta * kMotionFramesPerMillisecond);
         const auto motionPath =
-            self->_runtime && self->_runtime->activeMotion
-                ? self->_runtime->activeMotion->path
+            self->_runtime && self->_activeMotion
+                ? self->_activeMotion->path
                 : std::string{};
         detail::logoChainTraceCheck(
             motionPath, "progressCompat.dt", "0x6D2A98",

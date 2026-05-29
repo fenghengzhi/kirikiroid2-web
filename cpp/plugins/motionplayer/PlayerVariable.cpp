@@ -138,10 +138,10 @@ namespace {
 
 namespace motion {
     bool Player::shouldMirrorEvalLabelLike_0x67C6B0(const std::string &label) {
-        if(!_mirrorEvalEnabled || label.empty() || !_runtime->activeMotion) {
+        if(!_mirrorEvalEnabled || label.empty() || !_activeMotion) {
             return false;
         }
-        const auto &matchList = _runtime->activeMotion->mirrorVariableMatchList;
+        const auto &matchList = _activeMotion->mirrorVariableMatchList;
         return std::find(matchList.begin(), matchList.end(), label) !=
                matchList.end();
     }
@@ -322,7 +322,7 @@ namespace motion {
     void Player::setVariableResolvedWeightLike_0x671228(
         const std::string &key, double value, double transition,
         double easeWeight) {
-        const auto *activeMotion = _runtime->activeMotion.get();
+        const auto *activeMotion = _activeMotion.get();
         const auto bindingIt = activeMotion
             ? activeMotion->controllerBindings.find(key)
             : decltype(activeMotion->controllerBindings.find(key)){};
@@ -526,18 +526,18 @@ namespace motion {
             return it->second;
         }
 
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return 0.0;
         }
 
-        if(const auto it = _runtime->activeMotion->variableFrames.find(key);
-           it != _runtime->activeMotion->variableFrames.end() &&
+        if(const auto it = _activeMotion->variableFrames.find(key);
+           it != _activeMotion->variableFrames.end() &&
            !it->second.empty()) {
             return it->second.front().value;
         }
 
-        if(const auto it = _runtime->activeMotion->variableRanges.find(key);
-           it != _runtime->activeMotion->variableRanges.end()) {
+        if(const auto it = _activeMotion->variableRanges.find(key);
+           it != _activeMotion->variableRanges.end()) {
             return it->second.first;
         }
 
@@ -546,18 +546,18 @@ namespace motion {
 
     tjs_int Player::countVariables() {
         ensureMotionLoaded();
-        return _runtime->activeMotion
-            ? static_cast<tjs_int>(_runtime->activeMotion->variableLabels.size())
+        return _activeMotion
+            ? static_cast<tjs_int>(_activeMotion->variableLabels.size())
             : 0;
     }
 
     ttstr Player::getVariableLabelAt(tjs_int idx) {
         ensureMotionLoaded();
-        if(!_runtime->activeMotion || idx < 0 ||
-           static_cast<size_t>(idx) >= _runtime->activeMotion->variableLabels.size()) {
+        if(!_activeMotion || idx < 0 ||
+           static_cast<size_t>(idx) >= _activeMotion->variableLabels.size()) {
             return {};
         }
-        return detail::widen(_runtime->activeMotion->variableLabels[idx]);
+        return detail::widen(_activeMotion->variableLabels[idx]);
     }
 
     tjs_int Player::countVariableFrameAt(tjs_int idx) {
@@ -576,11 +576,11 @@ namespace motion {
         }
 
         const auto key = detail::narrow(label);
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return {};
         }
-        const auto it = _runtime->activeMotion->variableFrames.find(key);
-        if(it == _runtime->activeMotion->variableFrames.end() || frameIdx < 0 ||
+        const auto it = _activeMotion->variableFrames.find(key);
+        if(it == _activeMotion->variableFrames.end() || frameIdx < 0 ||
            static_cast<size_t>(frameIdx) >= it->second.size()) {
             return {};
         }
@@ -594,11 +594,11 @@ namespace motion {
         }
 
         const auto key = detail::narrow(label);
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return 0.0;
         }
-        const auto it = _runtime->activeMotion->variableFrames.find(key);
-        if(it == _runtime->activeMotion->variableFrames.end() || frameIdx < 0 ||
+        const auto it = _activeMotion->variableFrames.find(key);
+        if(it == _activeMotion->variableFrames.end() || frameIdx < 0 ||
            static_cast<size_t>(frameIdx) >= it->second.size()) {
             return 0.0;
         }
@@ -607,13 +607,13 @@ namespace motion {
 
     tTJSVariant Player::getVariableRange(ttstr label) {
         ensureMotionLoaded();
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return {};
         }
 
         const auto key = detail::narrow(label);
-        if(const auto it = _runtime->activeMotion->variableRanges.find(key);
-           it != _runtime->activeMotion->variableRanges.end()) {
+        if(const auto it = _activeMotion->variableRanges.find(key);
+           it != _activeMotion->variableRanges.end()) {
             return detail::makeArray(
                 { tTJSVariant(it->second.first), tTJSVariant(it->second.second) });
         }
@@ -622,13 +622,13 @@ namespace motion {
 
     tTJSVariant Player::getVariableFrameList(ttstr label) {
         ensureMotionLoaded();
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return detail::makeArray({});
         }
 
         const auto key = detail::narrow(label);
-        if(const auto it = _runtime->activeMotion->variableFrames.find(key);
-           it == _runtime->activeMotion->variableFrames.end()) {
+        if(const auto it = _activeMotion->variableFrames.find(key);
+           it == _activeMotion->variableFrames.end()) {
             return detail::makeArray({});
         } else {
             std::vector<tTJSVariant> frames;

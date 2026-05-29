@@ -29,6 +29,7 @@ namespace motion {
     class D3DAdaptor;
     class Player;
     class SeparateLayerAdaptor;
+    class SourceCache;
 }
 
 namespace motion {
@@ -86,6 +87,22 @@ namespace motion {
         CoordinateRecutangularXY = 0,
         CoordinateRecutangularXZ = 1
     };
+
+    // A3: forward-declare motion / source helpers so Player can grant them
+    // friend access to the migrated _motionsByKey / _activeMotion / _runtime
+    // members. Definitions live inline in PlayerInternal.h.
+    namespace internal {
+        std::shared_ptr<detail::MotionSnapshot>
+        cacheMotion(Player &, const std::string &, const std::string &,
+                    const std::shared_ptr<detail::MotionSnapshot> &);
+        std::shared_ptr<detail::MotionSnapshot>
+        activateMotion(Player &,
+                       const std::shared_ptr<detail::MotionSnapshot> &,
+                       ResourceManager *);
+        std::shared_ptr<detail::MotionSnapshot>
+        resolveMotion(Player &, const ttstr &, const ResourceManager *);
+        std::vector<ttstr> buildSourceCandidates(const Player &, const ttstr &);
+    }
 
     class Player {
     public:
@@ -645,6 +662,18 @@ namespace motion {
         double _boundsMaxX = -std::numeric_limits<double>::max();
         double _boundsMaxY = -std::numeric_limits<double>::max();
         bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
+
+        // === Motion / source caching state (Phase A3) ===
+        // motionsByKey caches MotionSnapshot loads by motion key; activeMotion
+        // points at the currently-loaded snapshot. sourceCacheNative +
+        // sourceCacheObject form the libkrkr2.so Player+656 SourceCache pair
+        // (raw pointer for fast C++ access, TJS variant for script reach).
+        std::unordered_map<std::string, std::shared_ptr<detail::MotionSnapshot>>
+            _motionsByKey;
+        // libkrkr2.so player+656: SourceCache object variant.
+        SourceCache *_sourceCacheNative = nullptr;
+        tTJSVariant _sourceCacheObject;
+        std::shared_ptr<detail::MotionSnapshot> _activeMotion;
         // _variableValues removed: it duplicated HM2 @ Player+320; merged into _evalResultValues.
 
         // === Web port render-host state (no libkrkr2.so offset alignment) ===
@@ -836,6 +865,26 @@ namespace motion {
         // lifetime of the owning EmoteEngine.
         class EmoteEngine *_engineBack = nullptr;
         friend class EmoteEngine;
+        // A3: SourceCache holds a back-pointer to Player so it can reach the
+        // migrated _activeMotion (and PlayerRuntime via _runtime until later
+        // sub-steps migrate the rest).
+        friend class SourceCache;
+
+        // A3: motion / source helpers in motion::internal:: access
+        // _motionsByKey / _activeMotion / _sourceCacheNative /
+        // _sourceCacheObject directly. Declared here so PlayerInternal.h's
+        // inline helpers can keep their non-member shape during the
+        // PlayerRuntime tear-down.
+        friend std::shared_ptr<detail::MotionSnapshot> internal::cacheMotion(
+            Player &, const std::string &, const std::string &,
+            const std::shared_ptr<detail::MotionSnapshot> &);
+        friend std::shared_ptr<detail::MotionSnapshot> internal::activateMotion(
+            Player &, const std::shared_ptr<detail::MotionSnapshot> &,
+            ResourceManager *);
+        friend std::shared_ptr<detail::MotionSnapshot> internal::resolveMotion(
+            Player &, const ttstr &, const ResourceManager *);
+        friend std::vector<ttstr> internal::buildSourceCandidates(
+            const Player &, const ttstr &);
     };
 
 } // namespace motion

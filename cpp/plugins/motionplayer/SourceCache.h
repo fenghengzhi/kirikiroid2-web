@@ -23,6 +23,7 @@ class tTVPBaseBitmap;
 
 namespace motion {
 
+    class Player;
     class ResourceManager;
 
     namespace detail {
@@ -53,8 +54,10 @@ namespace motion {
         SourceCache(tTJSVariant owner, tjs_int layerType);
         ~SourceCache();
 
-        void bindRuntime(detail::PlayerRuntime *runtime,
-                         ResourceManager *resourceManager);
+        // A3: bound to the Player so we can reach the migrated
+        // _activeMotion / _motionsByKey / _runtime via a single back-pointer.
+        void bindPlayer(Player *player,
+                        ResourceManager *resourceManager);
         void setSelfObject(tTJSVariant selfObject);
         void setLayerOwner(tTJSVariant owner, tjs_int layerType);
 
@@ -105,7 +108,7 @@ namespace motion {
         tTJSVariant _primaryLayer;
         tTJSVariant _bufLayer;
         tjs_int _layerType = 0;
-        detail::PlayerRuntime *_runtime = nullptr;
+        Player *_player = nullptr;
         ResourceManager *_resourceManager = nullptr;
         std::list<Entry> _entries;
     };

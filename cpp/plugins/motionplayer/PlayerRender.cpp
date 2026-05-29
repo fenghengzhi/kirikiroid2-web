@@ -13,8 +13,8 @@ namespace motion {
     void Player::setResizable(bool v) { _resizable = v; }
 
     void Player::removeAllTextures() {
-        if(_runtime && _runtime->sourceCacheNative) {
-            _runtime->sourceCacheNative->clearCache();
+        if(_runtime && _sourceCacheNative) {
+            _sourceCacheNative->clearCache();
         }
     }
 
@@ -40,21 +40,21 @@ namespace motion {
     }
 
     tTJSVariant Player::findSource(ttstr name) {
-        if(!_runtime || !_runtime->sourceCacheNative) {
+        if(!_runtime || !_sourceCacheNative) {
             return {};
         }
-        return _runtime->sourceCacheNative->findSource(std::move(name));
+        return _sourceCacheNative->findSource(std::move(name));
     }
 
     void Player::loadSource(ttstr name) {
-        if(_runtime && _runtime->sourceCacheNative) {
-            _runtime->sourceCacheNative->loadSourceByName(name, {});
+        if(_runtime && _sourceCacheNative) {
+            _sourceCacheNative->loadSourceByName(name, {});
         }
     }
 
     void Player::clearCache() {
-        if(_runtime && _runtime->sourceCacheNative) {
-            _runtime->sourceCacheNative->clearCache();
+        if(_runtime && _sourceCacheNative) {
+            _sourceCacheNative->clearCache();
         }
         _runtime->lastCanvas.Clear();
     }

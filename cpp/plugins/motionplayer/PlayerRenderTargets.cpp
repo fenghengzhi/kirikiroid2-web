@@ -611,7 +611,7 @@ namespace motion {
         canvasWidth = 0;
         canvasHeight = 0;
         const auto motionPath =
-            _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
+            _runtime && _activeMotion ? _activeMotion->path
                                                : std::string{};
         auto traceResolveFailure = [&](const char *reason,
                                        const tTJSVariant &target,
@@ -690,7 +690,7 @@ namespace motion {
 
         clearPrivateMotionGLLRenderQueueLike_0x6DE738(renderTargetObject);
         const auto motionPath =
-            _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
+            _runtime && _activeMotion ? _activeMotion->path
                                                : std::string{};
         detail::logoChainTraceLogf(
             motionPath, "sla.renderMotionFrame", "0x6DE738",
@@ -703,14 +703,14 @@ namespace motion {
         // Player_ResolveSLATarget @ 0x6D5948 owns PrivateMotionGLL sizing;
         // Player_RenderMotionFrame @ 0x6DE738 only emits render commands.
         buildRenderCommands(canvasWidth, canvasHeight);
-        if(_runtime && _runtime->sourceCacheNative) {
+        if(_runtime && _sourceCacheNative) {
             for(const auto &item : _runtime->preparedRenderItems) {
                 if(!shouldQueuePrivateMotionGLLRenderItemLike_0x6DE738(
                        item, _preview)) {
                     continue;
                 }
                 auto *sourceTexture =
-                    _runtime->sourceCacheNative->loadRenderSourceTextureByName(
+                    _sourceCacheNative->loadRenderSourceTextureByName(
                         detail::widen(item.sourceKey), item.srcRef,
                         item.blendMode, item.packedColors);
                 PrivateMotionGLLRenderItemInputLike_0x6DE738 queueItem;
@@ -757,11 +757,11 @@ namespace motion {
         tjs_int canvasHeight) {
         if(!sla || !slaObject || !targetLayerObject ||
            canvasWidth <= 0 || canvasHeight <= 0 ||
-           !_runtime || !_runtime->activeMotion || !_runtime->sourceCacheNative) {
+           !_runtime || !_activeMotion || !_sourceCacheNative) {
             return false;
         }
 
-        const auto motionPath = _runtime->activeMotion->path;
+        const auto motionPath = _activeMotion->path;
 
         buildRenderCommands(canvasWidth, canvasHeight);
 
@@ -862,7 +862,7 @@ namespace motion {
 
             if(itemLayerResult.createdOrChanged) {
                 tTJSVariant sourceObject =
-                    _runtime->sourceCacheNative->loadRenderSourceByName(
+                    _sourceCacheNative->loadRenderSourceByName(
                         detail::widen(item.sourceKey), item.srcRef,
                         item.blendMode, item.packedColors,
                         layerTreeOwner, targetLayerObject);
@@ -957,8 +957,8 @@ namespace motion {
         struct Guard { ~Guard() { s_inRenderToD3D = false; } } guard;
 
         ensureMotionLoaded();
-        if(!_runtime->activeMotion) return false;
-        const auto motionPath = _runtime->activeMotion->path;
+        if(!_activeMotion) return false;
+        const auto motionPath = _activeMotion->path;
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d", "0x6D5B90", _clampedEvalTime,
             "adaptorSize={}x{} route=D3DAdaptor_renderFromPlayer",
@@ -988,8 +988,8 @@ namespace motion {
     }
 
     bool Player::renderItemsToD3DTextureLike_0x6ADFBC(D3DAdaptor *adaptor) {
-        if(!adaptor || !_runtime || !_runtime->activeMotion ||
-           !_runtime->sourceCacheNative) {
+        if(!adaptor || !_runtime || !_activeMotion ||
+           !_sourceCacheNative) {
             return false;
         }
         auto *targetTexture = adaptor->targetTexture();
@@ -1016,7 +1016,7 @@ namespace motion {
             ~StencilGuard() { endD3DStencilIfNeeded(enabled); }
         } stencilGuard{ stencilEnabled };
 
-        const auto motionPath = _runtime->activeMotion->path;
+        const auto motionPath = _activeMotion->path;
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d.renderItemsToTexture", "0x6ADFBC",
             _clampedEvalTime,
@@ -1043,7 +1043,7 @@ namespace motion {
             }
 
             auto *sourceTexture =
-                _runtime->sourceCacheNative->loadRenderSourceTextureByName(
+                _sourceCacheNative->loadRenderSourceTextureByName(
                     detail::widen(item.sourceKey), item.srcRef,
                     item.blendMode, item.packedColors);
             if(!sourceTexture || sourceTexture->GetWidth() <= 0 ||
@@ -1089,10 +1089,10 @@ namespace motion {
         }
 
         ensureMotionLoaded();
-        if(!_runtime || !_runtime->activeMotion) {
+        if(!_runtime || !_activeMotion) {
             return false;
         }
-        const auto motionPath = _runtime->activeMotion->path;
+        const auto motionPath = _activeMotion->path;
 
         iTJSDispatch2 *resolvedLayerObject = tryResolveLayerDispatch(*target);
         if(!resolvedLayerObject && target->Type() == tvtObject) {
@@ -1111,9 +1111,9 @@ namespace motion {
         int canvasWidth = 0;
         int canvasHeight = 0;
         if(!queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight) &&
-           _runtime->activeMotion) {
-            canvasWidth = static_cast<int>(_runtime->activeMotion->width);
-            canvasHeight = static_cast<int>(_runtime->activeMotion->height);
+           _activeMotion) {
+            canvasWidth = static_cast<int>(_activeMotion->width);
+            canvasHeight = static_cast<int>(_activeMotion->height);
         }
         if(canvasWidth <= 0 || canvasHeight <= 0) {
             return false;
@@ -1172,10 +1172,10 @@ namespace motion {
         }
 
         ensureMotionLoaded();
-        if(!_runtime || !_runtime->activeMotion) {
+        if(!_runtime || !_activeMotion) {
             return false;
         }
-        const auto motionPath = _runtime->activeMotion->path;
+        const auto motionPath = _activeMotion->path;
 
         tTJSVariant target(layerObject, layerObject);
         iTJSDispatch2 *resolvedLayerObject = layerObject;
@@ -1186,9 +1186,9 @@ namespace motion {
         int canvasWidth = 0;
         int canvasHeight = 0;
         if(!queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight) &&
-            _runtime->activeMotion) {
-            canvasWidth = static_cast<int>(_runtime->activeMotion->width);
-            canvasHeight = static_cast<int>(_runtime->activeMotion->height);
+            _activeMotion) {
+            canvasWidth = static_cast<int>(_activeMotion->width);
+            canvasHeight = static_cast<int>(_activeMotion->height);
         }
         if(canvasWidth <= 0 || canvasHeight <= 0) {
             return false;
@@ -1257,10 +1257,10 @@ namespace motion {
             tryResolveLayerDispatch(sla->getOwnerVariant());
 
         ensureMotionLoaded();
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return false;
         }
-        const auto motionPath = _runtime->activeMotion->path;
+        const auto motionPath = _activeMotion->path;
 
         int canvasWidth = 0;
         int canvasHeight = 0;
@@ -1458,7 +1458,7 @@ namespace motion {
             return true;
         }
         const auto motionPath =
-            _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
+            _runtime && _activeMotion ? _activeMotion->path
                                                : std::string{};
 
         _needsInternalAssignImages = false;
@@ -1520,7 +1520,7 @@ namespace motion {
             return false;
         }
         const auto motionPath =
-            _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
+            _runtime && _activeMotion ? _activeMotion->path
                                                : std::string{};
 
         if(!_needsInternalAssignImages) {

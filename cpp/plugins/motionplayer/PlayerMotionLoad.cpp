@@ -21,7 +21,7 @@ namespace motion {
         // Player_playImpl (0x6B2284) only enters Player_loadMotion /
         // Player_initNonEmoteMotion when force/as-can is set or the requested
         // motion key differs from the stored key.
-        if(_runtime && _runtime->activeMotion && _motionKey == name &&
+        if(_runtime && _activeMotion && _motionKey == name &&
            (flags & (PlayFlagForce | PlayFlagAsCan)) == 0) {
             return;
         }
@@ -62,18 +62,18 @@ namespace motion {
                 const auto fullPath =
                     ttstr{ "motion/" + charaRaw + "/" + motionRaw };
                 snapshot =
-                    resolveMotion(*_runtime, fullPath, &_resourceManagerNative);
+                    resolveMotion(*this, fullPath, &_resourceManagerNative);
                 if(snapshot) {
-                    cacheMotion(*_runtime, motionRaw,
+                    cacheMotion(*this, motionRaw,
                                 detail::narrow(fullPath), snapshot);
                 }
             }
             if(!snapshot) {
-                snapshot = resolveMotion(*_runtime, name, &_resourceManagerNative);
+                snapshot = resolveMotion(*this, name, &_resourceManagerNative);
             }
         }
         if(snapshot) {
-            activateMotion(*_runtime, snapshot);
+            activateMotion(*this, snapshot);
             _motionKey = name;
             _project = snapshot->moduleValue;
             syncVariableKeysFromActiveMotion();
@@ -88,12 +88,12 @@ namespace motion {
         //   auto-start every primary clip
         // - Player_playTimeline (0x672F70) starts the requested label only
         //   when it exists
-        if (_runtime->activeMotion && _runtime->timelines.empty()) {
+        if (_activeMotion && _runtime->timelines.empty()) {
             detail::primeTimelineStates(_runtime->timelines,
-                                        *_runtime->activeMotion);
+                                        *_activeMotion);
         }
 
-        if (_runtime->activeMotion && !_runtime->timelines.empty()) {
+        if (_activeMotion && !_runtime->timelines.empty()) {
             const auto requestedKey = detail::narrow(name);
             bool startedRequested = false;
             if(!requestedKey.empty() &&
@@ -106,9 +106,9 @@ namespace motion {
                 double maxTF = 0.0;
                 _runtime->playingTimelineLabels.clear();
                 const auto &primary =
-                    !_runtime->activeMotion->mainTimelineLabels.empty()
-                        ? _runtime->activeMotion->mainTimelineLabels
-                        : _runtime->activeMotion->diffTimelineLabels;
+                    !_activeMotion->mainTimelineLabels.empty()
+                        ? _activeMotion->mainTimelineLabels
+                        : _activeMotion->diffTimelineLabels;
                 for (const auto &timelineLabel : primary) {
                     auto &state = _runtime->timelines[timelineLabel];
                     state.flags = flags & ~PlayFlagStealth;
@@ -149,11 +149,11 @@ namespace motion {
             return;
         }
         _runtime->variableLabelEntries.clear();
-        if(!_runtime->activeMotion || !_runtime->activeMotion->root) {
+        if(!_activeMotion || !_activeMotion->root) {
             return;
         }
 
-        const auto &root = _runtime->activeMotion->root;
+        const auto &root = _activeMotion->root;
         const auto variableList = std::dynamic_pointer_cast<PSB::PSBList>(
             (*root)["variable"]);
         if(!variableList) {
@@ -214,8 +214,8 @@ namespace motion {
             child->_tjsRandomGenerator = _tjsRandomGenerator;
             child->_project = _project.Type() == tvtObject
                 ? _project
-                : (_runtime && _runtime->activeMotion
-                       ? _runtime->activeMotion->moduleValue
+                : (_runtime && _activeMotion
+                       ? _activeMotion->moduleValue
                        : tTJSVariant{});
             if(child->_runtime) {
                 detail::ensureRootNodeLike_0x6CED30(*child->_runtime);
@@ -236,7 +236,7 @@ namespace motion {
     // check so calls on a Player without a loaded motion become a no-op
     // instead of crashing, but we do NOT call ensureMotionLoaded here.
     void Player::buildNodeTree() {
-        if(!_runtime || !_runtime->activeMotion) {
+        if(!_runtime || !_activeMotion) {
             return;
         }
 
@@ -250,23 +250,23 @@ namespace motion {
             clipLabel = clip->label;
         }
 
-        if(_runtime->activeMotion &&
-           detail::logoSnapshotMarkEnabledForPath(_runtime->activeMotion->path) &&
-           _runtime->activeMotion->path.find("m2logo.mtn") != std::string::npos) {
+        if(_activeMotion &&
+           detail::logoSnapshotMarkEnabledForPath(_activeMotion->path) &&
+           _activeMotion->path.find("m2logo.mtn") != std::string::npos) {
             std::fprintf(
                 stderr,
                 "SNAPCLIP motion=%s motionKey=%s clipLabel=%s playing=%s clipCount=%zu\n",
-                _runtime->activeMotion->path.c_str(),
+                _activeMotion->path.c_str(),
                 detail::narrow(_motionKey).c_str(),
                 clipLabel.empty() ? "<none>" : clipLabel.c_str(),
                 _runtime->playingTimelineLabels.empty()
                     ? "<none>"
                     : _runtime->playingTimelineLabels.front().c_str(),
-                _runtime->activeMotion->clipList.size());
+                _activeMotion->clipList.size());
         }
 
         detail::buildNodeTree(
-            *_runtime, *_runtime->activeMotion, clipLabel, &_resourceManagerNative, this,
+            *_runtime, *_activeMotion, clipLabel, &_resourceManagerNative, this,
             _completionType);
 
         if(!_runtime->nodes.empty()) {
@@ -282,13 +282,13 @@ namespace motion {
             root.delta.dirty = true;
         }
 
-        if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
-            const auto &motionPath = _runtime->activeMotion->path;
+        if(detail::logoChainTraceEnabled(_activeMotion)) {
+            const auto &motionPath = _activeMotion->path;
             detail::logoChainTraceLogf(
                 motionPath, "buildNodeTree", "0x6B51F0", _clampedEvalTime,
                 "clipLabel={} rootLayers={} nodeCount={}",
                 clipLabel.empty() ? std::string("<root>") : clipLabel,
-                _runtime->activeMotion->layerList.size(), _runtime->nodes.size());
+                _activeMotion->layerList.size(), _runtime->nodes.size());
             for(const auto &node : _runtime->nodes) {
                 const bool hasStencilTypeKey =
                     node.psbNode && static_cast<bool>((*node.psbNode)["stencilType"]);

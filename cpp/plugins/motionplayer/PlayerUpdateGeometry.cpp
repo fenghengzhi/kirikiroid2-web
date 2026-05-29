@@ -123,7 +123,7 @@ namespace motion {
 
             if (vn.hasSource) {
                 refreshSourceGeometryFromSourceName(
-                    vn, _runtime->activeMotion, vn.activeSlot().src);
+                    vn, _activeMotion, vn.activeSlot().src);
             }
 
             // priorDraw flag from emoteEdit (0x6BC648..0x6BC6C4)
@@ -448,8 +448,8 @@ namespace motion {
                         vn.vertices[5] = static_cast<float>(fy + m21*cw + m22*ch);
                         vn.vertices[6] = static_cast<float>(fx + m12*ch);
                         vn.vertices[7] = static_cast<float>(fy + m22*ch);
-                        if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
-                            const auto motionPath = _runtime->activeMotion->path;
+                        if(detail::logoChainTraceEnabled(_activeMotion)) {
+                            const auto motionPath = _activeMotion->path;
                             const std::array<float, 8> expectedVertices = {
                                 static_cast<float>(fx),
                                 static_cast<float>(fy),
@@ -715,8 +715,8 @@ namespace motion {
             }
             sn.parentClipIndex = static_cast<int>(si);
 
-            if(detail::logoSnapshotMarkEnabledForPath(_runtime->activeMotion->path) &&
-               _runtime->activeMotion->path.find("m2logo.mtn") != std::string::npos &&
+            if(detail::logoSnapshotMarkEnabledForPath(_activeMotion->path) &&
+               _activeMotion->path.find("m2logo.mtn") != std::string::npos &&
                _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0 &&
                sn.index == 18) {
                 std::fprintf(

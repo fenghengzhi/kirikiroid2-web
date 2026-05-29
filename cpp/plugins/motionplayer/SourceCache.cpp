@@ -413,9 +413,9 @@ namespace motion {
         clearCache();
     }
 
-    void SourceCache::bindRuntime(detail::PlayerRuntime *runtime,
-                                  ResourceManager *resourceManager) {
-        _runtime = runtime;
+    void SourceCache::bindPlayer(Player *player,
+                                 ResourceManager *resourceManager) {
+        _player = player;
         _resourceManager = resourceManager;
     }
 
@@ -708,12 +708,12 @@ namespace motion {
         }
 
         std::shared_ptr<tTVPBaseBitmap> baseBitmap;
-        if(_runtime && _runtime->activeMotion) {
+        if(_player && _player->_activeMotion) {
             const auto path = resolveMotionSourcePathLike_0x6948E8(
-                *_runtime->activeMotion, key);
+                *_player->_activeMotion, key);
             baseBitmap = loadGraphicBitmap(path);
             if(!baseBitmap) {
-                baseBitmap = loadPsbBitmap(*_runtime->activeMotion, key);
+                baseBitmap = loadPsbBitmap(*_player->_activeMotion, key);
             }
         }
         if(!baseBitmap || baseBitmap->GetWidth() <= 0 ||
@@ -749,13 +749,13 @@ namespace motion {
         const ttstr &name,
         std::string &resolvedKey) const {
         resolvedKey.clear();
-        if(!_runtime || !_resourceManager) {
+        if(!_player || !_resourceManager) {
             return {};
         }
 
         ttstr resolved;
         if(!detail::resolveExistingPath(
-               internal::buildSourceCandidates(*_runtime, name), resolved)) {
+               internal::buildSourceCandidates(*_player, name), resolved)) {
             return {};
         }
 

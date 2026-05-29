@@ -30,7 +30,7 @@ namespace motion {
         _runtime->preparedRenderItemsTopLevel.clear();
         _runtime->preparedRenderItemsGroup.clear();
         const auto motionPath =
-            _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
+            _activeMotion ? _activeMotion->path : std::string{};
         for(auto &entry : _runtime->preparedRenderItems) {
             // libkrkr2.so sub_6C4E28 works in-place on the render item list
             // built by sub_6C2334. It does not blanket-clear +20/+21 or
@@ -209,14 +209,14 @@ namespace motion {
 
     bool Player::executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
                                             bool skipUpdate) {
-        if(!renderLayerObject || !_runtime || !_runtime->activeMotion) {
+        if(!renderLayerObject || !_runtime || !_activeMotion) {
             return false;
         }
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::MotionTraceRenderExecuteScope renderTrace(
             this, renderLayerObject, skipUpdate);
 #endif
-        const auto motionPath = _runtime->activeMotion->path;
+        const auto motionPath = _activeMotion->path;
 
         auto *renderLayer = resolveNativeLayer(renderLayerObject);
         if(!renderLayer) {
@@ -314,11 +314,11 @@ namespace motion {
         auto resolveSourceObjectLike_0x6C1B70 =
             [&](const PreparedRenderItem &item) -> ResolvedSourceObject {
             ResolvedSourceObject resolved;
-            if(item.sourceKey.empty() || !_runtime->sourceCacheNative) {
+            if(item.sourceKey.empty() || !_sourceCacheNative) {
                 return resolved;
             }
 
-            resolved.object = _runtime->sourceCacheNative->loadRenderSourceByName(
+            resolved.object = _sourceCacheNative->loadRenderSourceByName(
                 detail::widen(item.sourceKey), item.srcRef, item.blendMode,
                 item.packedColors, scratchOwner, scratchParent);
             if(resolved.object.Type() != tvtObject ||

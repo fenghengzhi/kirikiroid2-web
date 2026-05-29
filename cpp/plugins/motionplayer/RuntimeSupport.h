@@ -221,11 +221,8 @@ namespace motion::detail {
     };
 
     struct PlayerRuntime {
-        std::unordered_map<std::string, std::shared_ptr<MotionSnapshot>> motionsByKey;
-        // Aligned to libkrkr2.so player+656: SourceCache object variant.
-        motion::SourceCache *sourceCacheNative = nullptr;
-        tTJSVariant sourceCacheObject;
-        std::shared_ptr<MotionSnapshot> activeMotion;
+        // Phase A3: motionsByKey / sourceCacheNative / sourceCacheObject /
+        // activeMotion moved to Player as flat members.
         std::unordered_map<std::string, TimelineState> timelines;
         std::vector<std::string> playingTimelineLabels;
         std::unordered_map<std::string, tjs_int> layerIdsByName;

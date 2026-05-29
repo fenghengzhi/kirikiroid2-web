@@ -16,31 +16,31 @@ namespace motion {
             return;
         }
 
-        for(auto it = _runtime->motionsByKey.begin();
-            it != _runtime->motionsByKey.end();) {
+        for(auto it = _motionsByKey.begin();
+            it != _motionsByKey.end();) {
             if(it->first == key || it->second->path == key) {
-                if(_runtime->activeMotion == it->second) {
-                    _runtime->activeMotion.reset();
+                if(_activeMotion == it->second) {
+                    _activeMotion.reset();
                     _runtime->timelines.clear();
                     _runtime->playingTimelineLabels.clear();
                 }
-                it = _runtime->motionsByKey.erase(it);
+                it = _motionsByKey.erase(it);
             } else {
                 ++it;
             }
         }
 
-        if(_runtime->sourceCacheNative) {
-            _runtime->sourceCacheNative->eraseSource(name);
+        if(_sourceCacheNative) {
+            _sourceCacheNative->eraseSource(name);
         }
     }
 
     void Player::unloadAll() {
-        _runtime->motionsByKey.clear();
-        if(_runtime->sourceCacheNative) {
-            _runtime->sourceCacheNative->clearCache();
+        _motionsByKey.clear();
+        if(_sourceCacheNative) {
+            _sourceCacheNative->clearCache();
         }
-        _runtime->activeMotion.reset();
+        _activeMotion.reset();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
         _runtime->layerIdsByName.clear();
@@ -60,17 +60,17 @@ namespace motion {
 
     bool Player::isExistMotion(ttstr name) {
         return static_cast<bool>(
-            resolveMotion(*_runtime, name, &_resourceManagerNative));
+            resolveMotion(*this, name, &_resourceManagerNative));
     }
 
     tTJSVariant Player::findMotion(ttstr name) {
         const auto snapshot =
-            resolveMotion(*_runtime, name, &_resourceManagerNative);
+            resolveMotion(*this, name, &_resourceManagerNative);
         if(!snapshot) {
             return {};
         }
 
-        activateMotion(*_runtime, snapshot);
+        activateMotion(*this, snapshot);
         _motionKey = name;
         syncVariableKeysFromActiveMotion();
         return snapshot->moduleValue;

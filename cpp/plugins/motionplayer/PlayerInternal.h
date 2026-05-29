@@ -182,30 +182,34 @@ namespace internal {
             return dot == std::string::npos ? fileName : fileName.substr(0, dot);
         }
 
+        // A3: take Player& so motionsByKey / activeMotion are accessed as
+        // flat Player members; other PlayerRuntime fields still routed via
+        // player._runtime->X until their own Phase A sub-step migrates them.
         inline std::shared_ptr<detail::MotionSnapshot>
-        cacheMotion(detail::PlayerRuntime &runtime, const std::string &requestKey,
+        cacheMotion(Player &player, const std::string &requestKey,
                     const std::string &resolvedKey,
                     const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
             if(!snapshot) {
                 return nullptr;
             }
             if(!requestKey.empty()) {
-                runtime.motionsByKey.emplace(requestKey, snapshot);
+                player._motionsByKey.emplace(requestKey, snapshot);
             }
             if(!resolvedKey.empty()) {
-                runtime.motionsByKey.emplace(resolvedKey, snapshot);
+                player._motionsByKey.emplace(resolvedKey, snapshot);
             }
             if(!snapshot->path.empty()) {
-                runtime.motionsByKey.emplace(snapshot->path, snapshot);
+                player._motionsByKey.emplace(snapshot->path, snapshot);
             }
             return snapshot;
         }
 
         inline std::shared_ptr<detail::MotionSnapshot>
-        activateMotion(detail::PlayerRuntime &runtime,
+        activateMotion(Player &player,
                        const std::shared_ptr<detail::MotionSnapshot> &snapshot,
                        ResourceManager *resourceManager = nullptr) {
-            runtime.activeMotion = snapshot;
+            auto &runtime = *player._runtime;
+            player._activeMotion = snapshot;
             runtime.timelines.clear();
             // Reset persistent node tree so it gets rebuilt for new motion
             // by the subsequent eager Player_buildNodeTree call (no gate).
@@ -241,15 +245,15 @@ namespace internal {
         }
 
         inline std::shared_ptr<detail::MotionSnapshot>
-        resolveMotion(detail::PlayerRuntime &runtime, const ttstr &name,
+        resolveMotion(Player &player, const ttstr &name,
                       const ResourceManager *resourceManager) {
             const auto requestKey = detail::narrow(name);
             if(requestKey.empty()) {
                 return nullptr;
             }
 
-            if(const auto it = runtime.motionsByKey.find(requestKey);
-               it != runtime.motionsByKey.end()) {
+            if(const auto it = player._motionsByKey.find(requestKey);
+               it != player._motionsByKey.end()) {
                 return it->second;
             }
 
@@ -257,16 +261,16 @@ namespace internal {
             ttstr resolved;
             if(detail::resolveExistingPath(candidates, resolved)) {
                 const auto resolvedKey = detail::narrow(resolved);
-                if(const auto it = runtime.motionsByKey.find(resolvedKey);
-                   it != runtime.motionsByKey.end()) {
-                    runtime.motionsByKey.emplace(requestKey, it->second);
+                if(const auto it = player._motionsByKey.find(resolvedKey);
+                   it != player._motionsByKey.end()) {
+                    player._motionsByKey.emplace(requestKey, it->second);
                     return it->second;
                 }
 
                 const auto snapshot = detail::loadMotionSnapshot(
                     resolved, ResourceManager::getEmotePSBDecryptSeed());
                 if(snapshot) {
-                    return cacheMotion(runtime, requestKey, resolvedKey, snapshot);
+                    return cacheMotion(player, requestKey, resolvedKey, snapshot);
                 }
             }
 
@@ -274,7 +278,7 @@ namespace internal {
                 for(const auto &candidate : candidates) {
                     const auto loaded = resourceManager->load(candidate);
                     if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
-                        return cacheMotion(runtime, requestKey,
+                        return cacheMotion(player, requestKey,
                                            detail::narrow(candidate), snapshot);
                     }
                 }
@@ -305,7 +309,7 @@ namespace internal {
         }
 
         inline std::vector<ttstr> buildSourceCandidates(
-            const detail::PlayerRuntime &runtime, const ttstr &name) {
+            const Player &player, const ttstr &name) {
             std::vector<ttstr> candidates;
             if(name.IsEmpty()) {
                 return candidates;
@@ -313,18 +317,18 @@ namespace internal {
 
             candidates.push_back(name);
             const auto requestKey = detail::narrow(name);
-            if(!runtime.activeMotion) {
+            if(!player._activeMotion) {
                 return candidates;
             }
 
             const auto baseDir = TVPExtractStoragePath(
-                detail::widen(runtime.activeMotion->path));
-            for(const auto &candidate : runtime.activeMotion->sourceCandidates) {
+                detail::widen(player._activeMotion->path));
+            for(const auto &candidate : player._activeMotion->sourceCandidates) {
                 if(candidate == requestKey ||
                    basenameWithoutExtension(candidate) == requestKey) {
                     candidates.emplace_back(detail::widen(candidate));
                     detail::appendEmbeddedSourceCandidates(
-                        *runtime.activeMotion, candidate, candidates);
+                        *player._activeMotion, candidate, candidates);
                     if(!baseDir.IsEmpty() &&
                        candidate.find('/') == std::string::npos &&
                        candidate.find('\\') == std::string::npos) {

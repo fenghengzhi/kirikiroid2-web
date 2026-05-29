@@ -32,7 +32,7 @@ namespace motion {
     void Player::calcBounds() {
         // Equivalent to sub_6D5164 @ 0x6D5178's `player+544` null gate —
         // without a loaded motion there is no render list to measure.
-        if(!_runtime || !_runtime->activeMotion) {
+        if(!_runtime || !_activeMotion) {
             _boundsMinX = 0.0;
             _boundsMinY = 0.0;
             _boundsMaxX = 0.0;
@@ -40,7 +40,7 @@ namespace motion {
             return;
         }
         const auto motionPath =
-            _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
+            _runtime && _activeMotion ? _activeMotion->path
                                                : std::string{};
 
         _boundsMinX = 1e308;
@@ -149,7 +149,7 @@ namespace motion {
             node.bounds[3] = expectedBounds[3];
             mergeBounds(node.bounds[0], node.bounds[1], node.bounds[2],
                         node.bounds[3]);
-            if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
+            if(detail::logoChainTraceEnabled(_activeMotion)) {
                 const std::array<float, 4> actualBounds = {
                     node.bounds[0], node.bounds[1], node.bounds[2],
                     node.bounds[3]
@@ -221,7 +221,7 @@ namespace motion {
         // Port has no explicit `player+544` mirror; the equivalent gate
         // is a null activeMotion, since without a loaded motion there is
         // no render list to build.
-        if(!_runtime || !_runtime->activeMotion) {
+        if(!_runtime || !_activeMotion) {
             return;
         }
 
@@ -235,7 +235,7 @@ namespace motion {
         const bool inheritedFlag18 = _renderItemInheritedFlag18;
         auto &entries = _runtime->preparedRenderItems;
         const auto &nodes = _runtime->nodes;
-        const auto motionPath = _runtime->activeMotion->path;
+        const auto motionPath = _activeMotion->path;
         const int bitmask = _runtime->isEmoteMode ? 5193 : 5185;
         const auto &dam = _runtime->drawAffineMatrix;
         std::unordered_set<int> requiredGroupNodeIndices;
@@ -261,8 +261,8 @@ namespace motion {
                     stderr,
                     "SNAPCHILD phase=prepare frame=%.3f childActiveMotion=%s childMotionKey=%s childClip=%s childNodesBuilt=%d childNodeCount=%zu childPreparedItemCount=%zu firstSource=%s\n",
                     _clampedEvalTime,
-                    child->_runtime->activeMotion
-                        ? child->_runtime->activeMotion->path.c_str()
+                    child->_activeMotion
+                        ? child->_activeMotion->path.c_str()
                         : "<none>",
                     detail::narrow(child->getMotion()).c_str(),
                     activeClip ? activeClip->label.c_str() : "<none>",
@@ -286,8 +286,8 @@ namespace motion {
                 motionPath, "prepare.childMerge", "0x6C2334/0x6D4F00",
                 _clampedEvalTime,
                 "childMotionPath={} appendedAtNode={} parentTotalAfterInsert={}",
-                child->_runtime->activeMotion
-                    ? child->_runtime->activeMotion->path
+                child->_activeMotion
+                    ? child->_activeMotion->path
                     : std::string("<none>"),
                 childEntries.size(), entries.size());
             childEntries.clear();
@@ -607,8 +607,8 @@ namespace motion {
                 }
             }
 
-            if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
-                const auto motionPath = _runtime->activeMotion->path;
+            if(detail::logoChainTraceEnabled(_activeMotion)) {
+                const auto motionPath = _activeMotion->path;
                 const std::array<float, 8> expectedCorners = {
                     static_cast<float>(dam[0] *
                                            static_cast<double>(node.vertices[0]) +
@@ -833,7 +833,7 @@ namespace motion {
         _renderItemInheritedFlag18 = inheritedFlag18;
         _runtime->preparedRenderItems.clear();
         const auto motionPath =
-            _runtime->activeMotion ? _runtime->activeMotion->path
+            _activeMotion ? _activeMotion->path
                                    : std::string{};
 
 #if defined(KRKR2_WASMTIME_HEADLESS)
@@ -853,7 +853,7 @@ namespace motion {
                const detail::PlayerRuntime::PreparedRenderItem &rhs) {
                 return lhs.sortKey < rhs.sortKey;
             });
-        if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
+        if(detail::logoChainTraceEnabled(_activeMotion)) {
             std::ostringstream beforeSort;
             std::ostringstream afterSort;
             for(size_t i = 0; i < beforeSortKeys.size(); ++i) {
@@ -1023,7 +1023,7 @@ namespace motion {
         const double ofsX = static_cast<double>(_cameraOffsetX);
         const double ofsY = static_cast<double>(_cameraOffsetY);
         const auto motionPath =
-            _runtime->activeMotion ? _runtime->activeMotion->path
+            _activeMotion ? _activeMotion->path
                                    : std::string{};
         for(auto &entry : _runtime->preparedRenderItems) {
             const auto beforeCorners = entry.corners;
@@ -1060,7 +1060,7 @@ namespace motion {
                 entry.meshPoints[pi + 1] = static_cast<float>(
                     static_cast<double>(entry.meshPoints[pi + 1]) + ofsY);
             }
-            if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
+            if(detail::logoChainTraceEnabled(_activeMotion)) {
                 bool ok = true;
                 for(size_t ci = 0; ci < entry.corners.size(); ci += 2) {
                     if(std::fabs((entry.corners[ci] - beforeCorners[ci]) -

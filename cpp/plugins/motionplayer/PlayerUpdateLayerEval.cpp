@@ -595,7 +595,7 @@ namespace motion {
             root.interpolatedCache.prtZ = rootState.prtZ;
             root.interpolatedCache.prtRange = rootState.prtRange;
 
-            refreshSourceGeometryFromSourceName(root, _runtime->activeMotion,
+            refreshSourceGeometryFromSourceName(root, _activeMotion,
                                                 rootState.src);
 
             // Step 3: Build root local 2x2 matrix via sub_699940
@@ -619,8 +619,8 @@ namespace motion {
         // are stored in _evalResultValues and exposed via getVariable()/setVariable()
         // TJS API. The binding to child Players happens implicitly when child
         // Players re-evaluate their timelines.
-        if (_runtime->activeMotion) {
-            const auto &varFrames = _runtime->activeMotion->variableFrames;
+        if (_activeMotion) {
+            const auto &varFrames = _activeMotion->variableFrames;
             for (const auto &[label, frames] : varFrames) {
                 if (frames.empty()) continue;
                 // User-set value takes precedence
@@ -641,8 +641,8 @@ namespace motion {
     // Phase 2: Main node evaluation loop (non-root nodes)
     void Player::updateLayersPhase2_MainLoop(double currentTime) {
         auto &nodes = _runtime->nodes;
-        const std::string motionPath = _runtime->activeMotion
-            ? _runtime->activeMotion->path
+        const std::string motionPath = _activeMotion
+            ? _activeMotion->path
             : std::string();
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
@@ -662,7 +662,7 @@ namespace motion {
             }
             const auto &parent = nodes[parentIdx];
 
-            if (detail::logoChainTraceEnabled(_runtime->activeMotion)) {
+            if (detail::logoChainTraceEnabled(_activeMotion)) {
                 const auto &parentNode = nodes[parentIdx];
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase2.parent_lookup", "0x6BB598",
@@ -685,7 +685,7 @@ namespace motion {
 
             auto state = advanceNodeFrameSelectionLike_0x6926B4(node,
                                                                  currentTime);
-            if (detail::logoChainTraceEnabled(_runtime->activeMotion)
+            if (detail::logoChainTraceEnabled(_activeMotion)
                 && state.debugEvaluated) {
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase2.framesel",
@@ -747,7 +747,7 @@ namespace motion {
             }
 
             refreshSourceGeometryFromSourceName(
-                node, _runtime->activeMotion, node.interpolatedCache.src);
+                node, _activeMotion, node.interpolatedCache.src);
 
             // Player_updateLayers clears node+1584 after evaluateTimeline but
             // keeps the active/visible override bytes intact.
@@ -964,7 +964,7 @@ namespace motion {
                 }
             }
 
-            if (detail::logoChainTraceEnabled(_runtime->activeMotion)) {
+            if (detail::logoChainTraceEnabled(_activeMotion)) {
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase2.accum_final", "0x6BBB6C",
                     currentTime,

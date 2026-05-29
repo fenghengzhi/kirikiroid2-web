@@ -15,7 +15,7 @@ namespace motion {
         auto &nodes = _runtime->nodes;
         if (nodes.empty()) return;
         const auto motionPath =
-            _runtime && _runtime->activeMotion ? _runtime->activeMotion->path
+            _runtime && _activeMotion ? _activeMotion->path
                                                : std::string{};
         const double currentTime = _clampedEvalTime;
 
@@ -30,7 +30,7 @@ namespace motion {
 
         updateLayersPhase1_PreLoop(currentTime);
         updateLayersPhase2_MainLoop(currentTime);
-        if(detail::logoChainTraceEnabled(_runtime->activeMotion)) {
+        if(detail::logoChainTraceEnabled(_activeMotion)) {
             const auto &root = nodes[0];
             detail::logoChainTraceLogf(
                 motionPath, "updateLayers.phase1", "0x6BB33C", currentTime,

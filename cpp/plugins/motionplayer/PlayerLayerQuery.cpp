@@ -100,7 +100,7 @@ namespace motion {
         // That map is populated at 0x6B4CE4 during buildNodeTree_recursive with
         // operator[] — duplicates naturally collapse to one key per label.
         ensureMotionLoaded();
-        if(!_runtime || !_runtime->activeMotion) {
+        if(!_runtime || !_activeMotion) {
             return detail::makeArray({});
         }
         std::vector<std::string> labels;
@@ -174,7 +174,7 @@ namespace motion {
         // a getter per non-root node. Duplicates are NOT collapsed — every
         // node maps to its own getter, unlike getLayerNames.
         ensureMotionLoaded();
-        if(!_runtime || !_runtime->activeMotion) {
+        if(!_runtime || !_activeMotion) {
             return detail::makeArray({});
         }
 
@@ -210,7 +210,7 @@ namespace motion {
 
     bool Player::hitTestLayer(ttstr name, double x, double y) {
         ensureMotionLoaded();
-        if(!_runtime || !_runtime->activeMotion) {
+        if(!_runtime || !_activeMotion) {
             return false;
         }
 
@@ -277,11 +277,11 @@ namespace motion {
         // PSB "selectorControl" array. The previous implementation incorrectly
         // checked layer existence via layersByName, which conflated layer
         // tree membership with selector-target registration.
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return false;
         }
         const auto key = detail::narrow(name);
-        const auto &selectors = _runtime->activeMotion->selectorControls;
+        const auto &selectors = _activeMotion->selectorControls;
         return selectors.find(key) != selectors.end() &&
             _runtime->disabledSelectorTargets.find(key) ==
                 _runtime->disabledSelectorTargets.end();
@@ -293,7 +293,7 @@ namespace motion {
 
     // --- Misc ---
     tTJSVariant Player::getCommandList() {
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return detail::makeArray({});
         }
         return detail::makeArray(
@@ -307,7 +307,7 @@ namespace motion {
     tTJSVariant Player::motionList() {
         std::vector<std::string> paths;
         std::unordered_set<std::string> seen;
-        for(const auto &[_, snapshot] : _runtime->motionsByKey) {
+        for(const auto &[_, snapshot] : _motionsByKey) {
             if(snapshot && seen.insert(snapshot->path).second) {
                 paths.push_back(snapshot->path);
             }

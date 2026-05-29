@@ -7,7 +7,7 @@ namespace motion {
     void Player::updateLayersPhase3_MotionSubNode(double currentTime) {
         auto &nodes = _runtime->nodes;
         const auto motionPath =
-            _runtime->activeMotion ? _runtime->activeMotion->path : std::string{};
+            _activeMotion ? _activeMotion->path : std::string{};
         // Motion sub-node processing — aligned to sub_6BE0C0 (0x6BE0C0).
         // For each nodeType=3 (Motion) node, create/manage child Player instance.
         // Only runs when !isEmoteMode (0x6BE104).
@@ -129,8 +129,8 @@ namespace motion {
                                 mn.index,
                                 src.c_str(),
                                 detail::narrow(child.getMotion()).c_str(),
-                                child._runtime && child._runtime->activeMotion
-                                    ? child._runtime->activeMotion->path.c_str()
+                                child._runtime && child._activeMotion
+                                    ? child._activeMotion->path.c_str()
                                     : "<none>",
                                 child._runtime && child._runtime->nodes.size() > 1 ? 1 : 0,
                                 child._allplaying ? 1 : 0);
@@ -490,8 +490,8 @@ namespace motion {
                         mn.activeSlot().src.empty() ? "<none>"
                                                     : mn.activeSlot().src.c_str(),
                         mn.parameterizeIndex,
-                        child._runtime && child._runtime->activeMotion
-                            ? child._runtime->activeMotion->path.c_str()
+                        child._runtime && child._activeMotion
+                            ? child._activeMotion->path.c_str()
                             : "<none>",
                         detail::narrow(child.getMotion()).c_str(),
                         activeClip ? activeClip->label.c_str() : "<none>",

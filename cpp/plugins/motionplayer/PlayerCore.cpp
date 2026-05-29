@@ -229,11 +229,11 @@ namespace motion {
         // that dispatch for source resolution rather than owning a map directly.
         using SourceCacheAdaptor = ncbInstanceAdaptor<SourceCache>;
         auto *sourceCache = new SourceCache();
-        sourceCache->bindRuntime(_runtime.get(), &_resourceManagerNative);
+        sourceCache->bindPlayer(this, &_resourceManagerNative);
         if(auto *dispatch = SourceCacheAdaptor::CreateAdaptor(sourceCache)) {
-            _runtime->sourceCacheNative = sourceCache;
-            _runtime->sourceCacheObject = tTJSVariant(dispatch, dispatch);
-            sourceCache->setSelfObject(_runtime->sourceCacheObject);
+            _sourceCacheNative = sourceCache;
+            _sourceCacheObject = tTJSVariant(dispatch, dispatch);
+            sourceCache->setSelfObject(_sourceCacheObject);
             dispatch->Release();
         } else {
             delete sourceCache;
@@ -254,11 +254,11 @@ namespace motion {
     bool Player::getPlaying() const {
         // Player_getPlaying @ 0x6D9794: return byte player+1099.
         static int traceCount = 0;
-        if(_runtime && detail::logoChainTraceEnabled(_runtime->activeMotion) &&
+        if(_runtime && detail::logoChainTraceEnabled(_activeMotion) &&
            traceCount < 80) {
             ++traceCount;
             detail::logoChainTraceLogf(
-                _runtime->activeMotion->path, "getPlaying", "0x6D9794",
+                _activeMotion->path, "getPlaying", "0x6D9794",
                 _clampedEvalTime, "value={} timelineCount={} playingLabels={}",
                 _allplaying ? 1 : 0, _runtime->timelines.size(),
                 _runtime->playingTimelineLabels.size());
@@ -274,11 +274,11 @@ namespace motion {
             for(const auto &node : _runtime->nodes) {
                 if(auto *child = node.getChildPlayer()) {
                     if(child->getAllplaying()) {
-                        if(detail::logoChainTraceEnabled(_runtime->activeMotion) &&
+                        if(detail::logoChainTraceEnabled(_activeMotion) &&
                            traceCount < 80) {
                             ++traceCount;
                             detail::logoChainTraceLogf(
-                                _runtime->activeMotion->path, "getAllplaying",
+                                _activeMotion->path, "getAllplaying",
                                 "0x6CCE34", _clampedEvalTime,
                                 "value=1 reason=child nodeIndex={} localPlaying={} labels={}",
                                 node.index, _allplaying ? 1 : 0,
@@ -289,11 +289,11 @@ namespace motion {
                 }
             }
         }
-        if(_runtime && detail::logoChainTraceEnabled(_runtime->activeMotion) &&
+        if(_runtime && detail::logoChainTraceEnabled(_activeMotion) &&
            traceCount < 80) {
             ++traceCount;
             detail::logoChainTraceLogf(
-                _runtime->activeMotion->path, "getAllplaying", "0x6CCE34",
+                _activeMotion->path, "getAllplaying", "0x6CCE34",
                 _clampedEvalTime, "value={} reason=local labels={}",
                 _allplaying ? 1 : 0,
                 _runtime->playingTimelineLabels.size());
@@ -344,7 +344,7 @@ namespace motion {
     // Used by EmotePlayer.setModule() to bridge loaded PSB data into the Player pipeline.
     void Player::loadFromSnapshot(
         std::shared_ptr<detail::MotionSnapshot> snapshot) {
-        _runtime->activeMotion.reset();
+        _activeMotion.reset();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
@@ -356,17 +356,17 @@ namespace motion {
         _evalResultListIndex.clear();
 
         if(snapshot) {
-            activateMotion(*_runtime, snapshot, &_resourceManagerNative);
+            activateMotion(*this, snapshot, &_resourceManagerNative);
             syncVariableKeysFromActiveMotion();
         }
     }
 
     double Player::getActiveMotionWidth() const {
-        return _runtime->activeMotion ? _runtime->activeMotion->width : 0.0;
+        return _activeMotion ? _activeMotion->width : 0.0;
     }
 
     double Player::getActiveMotionHeight() const {
-        return _runtime->activeMotion ? _runtime->activeMotion->height : 0.0;
+        return _activeMotion ? _activeMotion->height : 0.0;
     }
 
     void Player::setMotion(ttstr v) {
@@ -374,7 +374,7 @@ namespace motion {
             return;
         }
         _motionKey = v;
-        _runtime->activeMotion.reset();
+        _activeMotion.reset();
         _runtime->timelines.clear();
         _runtime->playingTimelineLabels.clear();
         _runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
@@ -438,7 +438,7 @@ namespace motion {
 
         // Reset state and load
         self->_motionKey = motionValue;
-        self->_runtime->activeMotion.reset();
+        self->_activeMotion.reset();
         self->_runtime->timelines.clear();
         self->_runtime->playingTimelineLabels.clear();
         self->_runtime->drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
@@ -462,7 +462,7 @@ namespace motion {
     }
 
     bool Player::ensureMotionLoaded() {
-        if(_runtime->activeMotion) {
+        if(_activeMotion) {
             return true;
         }
 
@@ -474,7 +474,7 @@ namespace motion {
 
         if(_project.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
-                activateMotion(*_runtime, snapshot, &_resourceManagerNative);
+                activateMotion(*this, snapshot, &_resourceManagerNative);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -482,8 +482,8 @@ namespace motion {
 
         if(motionKeyLooksLikeStorage) {
             if(const auto snapshot =
-                   resolveMotion(*_runtime, _motionKey, &_resourceManagerNative)) {
-                activateMotion(*_runtime, snapshot, &_resourceManagerNative);
+                   resolveMotion(*this, _motionKey, &_resourceManagerNative)) {
+                activateMotion(*this, snapshot, &_resourceManagerNative);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -492,7 +492,7 @@ namespace motion {
         if(const auto loaded = _resourceManagerNative.getLastLoadedModule();
            loaded.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
-                activateMotion(*_runtime, snapshot, &_resourceManagerNative);
+                activateMotion(*this, snapshot, &_resourceManagerNative);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -503,8 +503,8 @@ namespace motion {
         }
 
         if(const auto snapshot =
-               resolveMotion(*_runtime, _motionKey, &_resourceManagerNative)) {
-            activateMotion(*_runtime, snapshot, &_resourceManagerNative);
+               resolveMotion(*this, _motionKey, &_resourceManagerNative)) {
+            activateMotion(*this, snapshot, &_resourceManagerNative);
             syncVariableKeysFromActiveMotion();
             return true;
         }
@@ -513,7 +513,7 @@ namespace motion {
     }
 
     void Player::initNonEmoteMotionLike_0x6B365C(std::uint32_t playFlags) {
-        if(!_runtime || !_runtime->activeMotion || _runtime->isEmoteMode) {
+        if(!_runtime || !_activeMotion || _runtime->isEmoteMode) {
             return;
         }
 
@@ -596,18 +596,18 @@ namespace motion {
     }
 
     void Player::syncVariableKeysFromActiveMotion() {
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             _variableKeys = detail::makeArray({});
             return;
         }
 
         _variableKeys = detail::makeArray(
-            detail::stringsToVariants(_runtime->activeMotion->variableLabels));
+            detail::stringsToVariants(_activeMotion->variableLabels));
         syncSelectorControlsLike_0x670D1C();
     }
 
     void Player::syncSelectorControlsLike_0x670D1C() {
-        const auto *activeMotion = _runtime->activeMotion.get();
+        const auto *activeMotion = _activeMotion.get();
         if(!activeMotion) {
             return;
         }
@@ -643,14 +643,14 @@ namespace motion {
     }
 
     const detail::TimelineState *Player::primaryTimelineStateLike_0x66F80C() const {
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return nullptr;
         }
 
         const auto &primaryLabels =
-            !_runtime->activeMotion->mainTimelineLabels.empty()
-                ? _runtime->activeMotion->mainTimelineLabels
-                : _runtime->activeMotion->diffTimelineLabels;
+            !_activeMotion->mainTimelineLabels.empty()
+                ? _activeMotion->mainTimelineLabels
+                : _activeMotion->diffTimelineLabels;
         for(const auto &label : primaryLabels) {
             if(const auto it = _runtime->timelines.find(label);
                it != _runtime->timelines.end()) {
@@ -697,11 +697,11 @@ namespace motion {
     }
 
     const detail::MotionClip *Player::selectActiveClip() const {
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return nullptr;
         }
 
-        const auto &motion = *_runtime->activeMotion;
+        const auto &motion = *_activeMotion;
         const auto selectByLabel =
             [&motion](const std::string &label) -> const detail::MotionClip * {
                 if(label.empty()) {
@@ -757,7 +757,7 @@ namespace motion {
 
     const std::vector<std::string> &Player::activeSourceCandidates() const {
         static const std::vector<std::string> empty;
-        if(!_runtime->activeMotion) {
+        if(!_activeMotion) {
             return empty;
         }
 
@@ -766,7 +766,7 @@ namespace motion {
             return clip->sourceCandidates;
         }
 
-        return _runtime->activeMotion->sourceCandidates;
+        return _activeMotion->sourceCandidates;
     }
 
     tTJSVariant Player::getVariableKeys() {
@@ -870,8 +870,8 @@ namespace motion {
 
         std::vector<std::pair<std::string, tTJSVariant>> variables;
         std::unordered_set<std::string> seenVariables;
-        if(_runtime->activeMotion) {
-            for(const auto &label : _runtime->activeMotion->variableLabels) {
+        if(_activeMotion) {
+            for(const auto &label : _activeMotion->variableLabels) {
                 seenVariables.insert(label);
                 variables.emplace_back(label, getVariable(detail::widen(label)));
             }
@@ -942,9 +942,9 @@ namespace motion {
         if(getObjectProperty(data, TJS_W("timelines"), value) &&
            value.Type() == tvtObject && value.AsObjectNoAddRef() != nullptr) {
             ensureMotionLoaded();
-            if(_runtime->activeMotion && _runtime->timelines.empty()) {
+            if(_activeMotion && _runtime->timelines.empty()) {
                 detail::primeTimelineStates(_runtime->timelines,
-                                            *_runtime->activeMotion);
+                                            *_activeMotion);
             }
             _runtime->playingTimelineLabels.clear();
 
@@ -1000,11 +1000,11 @@ namespace motion {
         if(!restoredTimelines && ensureMotionLoaded()) {
             if(_runtime->timelines.empty()) {
                 detail::primeTimelineStates(_runtime->timelines,
-                                            *_runtime->activeMotion);
+                                            *_activeMotion);
             }
-            const auto &primary = !_runtime->activeMotion->mainTimelineLabels.empty()
-                ? _runtime->activeMotion->mainTimelineLabels
-                : _runtime->activeMotion->diffTimelineLabels;
+            const auto &primary = !_activeMotion->mainTimelineLabels.empty()
+                ? _activeMotion->mainTimelineLabels
+                : _activeMotion->diffTimelineLabels;
             for(const auto &label : primary) {
                 playTimeline(detail::widen(label), PlayFlagForce);
             }
@@ -1188,8 +1188,8 @@ namespace motion {
 
     void Player::debugPrint() {
         LOGGER->info("motionKey={}, motions={}, sources={}, timelines={}",
-                     _motionKey.AsStdString(), _runtime->motionsByKey.size(),
-                     _runtime->sourceCacheNative ? _runtime->sourceCacheNative->size()
+                     _motionKey.AsStdString(), _motionsByKey.size(),
+                     _sourceCacheNative ? _sourceCacheNative->size()
                                                  : 0,
                      _runtime->timelines.size());
     }
