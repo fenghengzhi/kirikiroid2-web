@@ -18,6 +18,18 @@
 
 namespace motion {
 
+    // EmoteObject ctor/dtor: raw EmoteEngine* with manual new/delete (aligned
+    // with libkrkr2.so EmoteObject_init sub_67DBAC which does
+    // `operator new(0x5D8); EmoteEngine_ctor(...)`).
+    EmoteObject::EmoteObject(ResourceManager rm) {
+        _engine = new EmoteEngine(std::move(rm));
+    }
+
+    EmoteObject::~EmoteObject() {
+        delete _engine;
+        _engine = nullptr;
+    }
+
     // Aligned to libkrkr2.so D3DEmotePlayer 对象链:壳持有 EmoteObject(+24),
     // EmoteObject 持有 EmoteEngine(+8),EmoteEngine 在 +1064 持有堆分配的 Player。
     // 二进制在 load() 时懒建此链;本地构造期即建(eager),功能等价。

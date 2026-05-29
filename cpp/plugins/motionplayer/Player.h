@@ -19,6 +19,7 @@
 #include "ResourceManager.h"
 #include "RuntimeSupport.h"
 #include "internal/player_containers.h"
+#include "internal/legacy_variable_state.h"
 
 namespace PSB {
     class PSBDictionary;
@@ -805,22 +806,12 @@ namespace motion {
         tjs_int _nextLayerId = 1;
         tjs_int _nextLayerAbsolute = 1;
     public:
-        struct VariableKeyframe {
-            float value = 0.0f;
-            float duration = 0.0f;
-            float weight = 1.0f;
-        };
-        struct VariableAnimatorState {
-            std::string label; // for deque linear lookup (EmoteEngine +256..+656 deques)
-            std::deque<VariableKeyframe> queue;
-            bool active = false;
-            float currentValue = 0.0f;
-            float startValue = 0.0f;
-            float targetValue = 0.0f;
-            float progress = 1.0f;
-            float duration = 0.0f;
-            float weight = 1.0f;
-        };
+        // PLATFORM_BOUNDARY: legacy uniform record used by EmoteEngine's
+        //   transitional 5 deques + 1 map. NOT a libkrkr2.so type — see
+        //   internal/legacy_variable_state.h header note for the binary's
+        //   actual 5 distinct POD element types.
+        using VariableKeyframe       = detail::LegacyVariableKeyframe;
+        using VariableAnimatorState  = detail::LegacyVariableAnimatorState;
     private:
         // The 7 animator containers below live on EmoteEngine, not Player.
         // Per libkrkr2.so analysis (Player_setVariable @ 0x671228):
@@ -893,19 +884,20 @@ namespace motion {
         // to interpolated derivative path instead of using deltaPos.
         bool _noUpdateYet = true;  // player+608
 
-        // Aligned to libkrkr2.so emote scale/rotate fields:
-        // player+1168/+1176 are the duplicated meshDivisionRatio doubles read by
-        // Player_startWind (0x6709AC).
-        double _emoteMeshDivisionRatio = 1.0;
-        double _emoteMeshDivisionRatioDup = 1.0;
+        // NOTE: _emoteMeshDivisionRatio / _emoteMeshDivisionRatioDup MIGRATED
+        // to EmoteEngine+1168/+1176 (per binary spec — these doubles live on
+        // EmoteEngine, not Player). Callers now read/write via
+        // _engineBack->_meshDivisionRatio[Dup].
+        //
         // NOTE: hairScale/partsScale/bustScale are EmotePlayer/EmoteObject
         // properties (sub_681F20/28/30 write EmoteObject+1184/+1192/+1200),
-        // NOT motion::Player fields — on the 1384B Player those offsets are
-        // hash table HM3. They live on EmotePlayer (EmotePlayer::_hairScale).
+        // NOT motion::Player fields.
         double _rotateAngle = 0.0;  // sub_672568 rotation parameter
         bool _physicsDisabled = false;   // player+1159
         bool _emoteAnimatorFlag = false; // player+1161
-        bool _emoteDirty = false;        // player+1162
+        // NOTE: _emoteDirty MIGRATED to EmoteEngine+1162 (per binary spec —
+        // the byte lives on EmoteEngine, not Player). Callers now use
+        // _engineBack->_dirty.
         struct EmoteCoordState {
             double x = 0.0;
             double y = 0.0;

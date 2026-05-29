@@ -6,6 +6,9 @@ add_library(${PROJECT_NAME} STATIC)
 target_sources(${PROJECT_NAME} PUBLIC
     main.cpp
     EmotePlayer.cpp
+    EmoteEngine.cpp
+    EmoteVarController.cpp
+    EmoteAngleController.cpp
     PlayerCore.cpp
     PlayerFrameProgress.cpp
     PlayerResource.cpp

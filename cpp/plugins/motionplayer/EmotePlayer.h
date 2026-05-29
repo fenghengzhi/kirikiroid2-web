@@ -11,6 +11,7 @@
 #include <spdlog/spdlog.h>
 #include "tjs.h"
 #include "Player.h"
+#include "EmoteEngine.h" // EmoteEngine declared in dedicated header (P0 step 1)
 
 namespace motion {
 
@@ -51,61 +52,20 @@ namespace motion {
     // 注:二进制在 D3DEmotePlayer_load(0x52FDD4) 中懒创建此链;本地当前为构造期
     // 即建(eager),功能等价,懒创建留作后续 fidelity 改进。
 
-    // EmoteEngine — 二进制 1496B emote 引擎(sub_67E38C)。+1064 持有 Player 指针,
-    // 其余为 emote 专属状态(hairScale 等引擎字段,见 §2.4)。
-    class EmoteEngine {
-    public:
-        explicit EmoteEngine(ResourceManager rm)
-            : _player(std::make_unique<Player>(std::move(rm))) {
-            _player->_engineBack = this;
-        }
+    // EmoteEngine class is now declared in EmoteEngine.h (P0 step 1 refactor).
 
-        Player &player() { return *_player; }
-        [[nodiscard]] const Player &player() const { return *_player; }
-
-        // 引擎字段(二进制 引擎+1184/+1192/+1200/+1168 等,非 Player 字段)
-        double _meshDivisionRatio = 1.0;
-        double _hairScale = 1.0;
-        double _partsScale = 1.0;
-        double _bustScale = 1.0;
-        double _bodyScale = 1.0;
-        double _progress = 0.0;
-        bool _queuing = false;
-        bool _modified = false;
-        bool _playCallback = false;
-
-        // getScale/getRot/getColor 的缓存(二进制 getter 返回硬编码值,本地跟踪)
-        double _rot = 0.0;
-        double _coordX = 0.0;
-        double _coordY = 0.0;
-        bool _mirrorBase = false;
-        bool _mirrorRequested = false;
-        bool _mirrorChanged = false;
-        tjs_int _color = 0xFFFFFF;
-
-        // ===== 5 个 type-controller deques(libkrkr2.so Player_setVariable @ 0x671228) =====
-        // 二进制是 std::deque<Animator>(每元素 ~0x80B);本地用 deque + 元素内嵌 label,
-        // 查找走线性扫描(与二进制一致,无 hash 索引)。
-        std::deque<Player::VariableAnimatorState> _type4ControllerAnimators; // EmoteEngine+256
-        std::deque<Player::VariableAnimatorState> _type5ControllerAnimators; // EmoteEngine+336
-        std::deque<Player::VariableAnimatorState> _type6ControllerAnimators; // EmoteEngine+416
-        std::deque<Player::VariableAnimatorState> _type7ControllerAnimators; // EmoteEngine+576
-        std::deque<Player::VariableAnimatorState> _type8ControllerAnimators; // EmoteEngine+656
-
-        // 二进制 EmoteEngine+1384 std::unordered_map<ttstr, Animator>
-        std::unordered_map<std::string, Player::VariableAnimatorState>
-            _variableAnimators; // EmoteEngine+1384
-
-    private:
-        std::unique_ptr<Player> _player; // 引擎+1064
-    };
-
-    // EmoteObject — 二进制 40B EmoteObject(sub_67DBAC)。+0 ResourceManager、
-    // +8 引擎、+16.. 已加载 PSB 引用。本地持有 module 变体 + 引擎指针。
+    // EmoteObject — 二进制 40B EmoteObject(sub_67DBAC)。+0 ResourceManager,
+    // +8 EmoteEngine*, +16.. 已加载 PSB 引用。
+    // CLAUDE.md rule: EmoteEngine* is a raw pointer (NOT unique_ptr) with
+    // manual new/delete in EmoteObject ctor/dtor — aligned with binary's
+    // explicit operator new / operator delete pattern.
     class EmoteObject {
     public:
-        explicit EmoteObject(ResourceManager rm)
-            : _engine(std::make_unique<EmoteEngine>(std::move(rm))) {}
+        explicit EmoteObject(ResourceManager rm);
+        ~EmoteObject();
+
+        EmoteObject(const EmoteObject&) = delete;
+        EmoteObject& operator=(const EmoteObject&) = delete;
 
         EmoteEngine &engine() { return *_engine; }
         [[nodiscard]] const EmoteEngine &engine() const { return *_engine; }
@@ -113,7 +73,7 @@ namespace motion {
         tTJSVariant _module; // 已加载的 PSB(对应二进制 +16.. loadedPSBs)
 
     private:
-        std::unique_ptr<EmoteEngine> _engine; // +8
+        EmoteEngine *_engine = nullptr; // +8 — raw pointer, manual new/delete
     };
 
     // D3DEmotePlayer — 二进制 D3DEmotePlayer NCB 类(≥56B 独立 native instance,
@@ -342,5 +302,11 @@ namespace motion {
         // Player 由链尾的 EmoteEngine 用指针持有,不再 by-value 内嵌。
         std::unique_ptr<EmoteObject> _emoteObj;
     };
+
+    // Inline EmoteEngine::player() definitions — placed after Player is
+    // complete (Player.h has been included above) so D3DEmotePlayer's inline
+    // accessors that ultimately call engine().player() resolve in headers.
+    inline Player& EmoteEngine::player() { return *_player; }
+    inline const Player& EmoteEngine::player() const { return *_player; }
 
 } // namespace motion

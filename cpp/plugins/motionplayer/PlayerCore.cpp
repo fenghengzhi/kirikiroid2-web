@@ -640,7 +640,7 @@ namespace motion {
             setVariable(detail::widen(selectorLabel), 0.0, 0.0, 0.0);
         }
 
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     const detail::TimelineState *Player::primaryTimelineStateLike_0x66F80C() const {
@@ -694,7 +694,7 @@ namespace motion {
         if(_selectorEnabled) {
             syncSelectorControlsLike_0x670D1C();
         }
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     const detail::MotionClip *Player::selectActiveClip() const {
@@ -1024,7 +1024,7 @@ namespace motion {
         _emoteCoordState.ease = ease;
         setX(x);
         setY(y);
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setScale (0x530260):
@@ -1034,7 +1034,7 @@ namespace motion {
         _emoteScaleState.value = scale;
         _emoteScaleState.transition = transition;
         _emoteScaleState.ease = ease;
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setRot (0x5302E4):
@@ -1045,7 +1045,7 @@ namespace motion {
         _emoteRotState.value = rot;
         _emoteRotState.transition = transition;
         _emoteRotState.ease = ease;
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setColor (0x530314):
@@ -1064,7 +1064,7 @@ namespace motion {
             static_cast<float>(static_cast<std::uint8_t>(color >> 24));
         _emoteColorState.transition = transition;
         _emoteColorState.ease = ease;
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     void Player::setMirror(bool mirror) {
@@ -1080,8 +1080,11 @@ namespace motion {
     }
 
     void Player::setEmoteMeshDivisionRatio(double v) {
-        _emoteMeshDivisionRatio = v;
-        _emoteMeshDivisionRatioDup = v;
+        // Migrated to EmoteEngine+1168/+1176 (per binary spec).
+        if (_engineBack) {
+            _engineBack->_meshDivisionRatio = v;
+            _engineBack->_meshDivisionRatioDup = v;
+        }
     }
 
     // hairScale/partsScale/bustScale removed from motion::Player: sub_681F20/28/30
@@ -1121,18 +1124,18 @@ namespace motion {
         const double direction = _windState.prevPhase > _windState.phase
             ? -1.0
             : 1.0;
-        const double ratio = _emoteMeshDivisionRatio != 0.0
-            ? _emoteMeshDivisionRatio
-            : 1.0;
+        // Migrated to EmoteEngine+1168 (per binary spec).
+        const double engineRatio = _engineBack ? _engineBack->_meshDivisionRatio : 1.0;
+        const double ratio = engineRatio != 0.0 ? engineRatio : 1.0;
         _windState.scaledAmplitude = direction * (absAmplitude / ratio);
         _windState.counter = 0;
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     // Aligned to sub_681A38: delete wind simulator and clear player+1128.
     void Player::stopWind() {
         _windState = {};
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     // Aligned to D3DEmotePlayer_setOuterForce (0x530A8C) ->
@@ -1157,7 +1160,7 @@ namespace motion {
         target->y = y;
         target->transition = transition;
         target->ease = ease;
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     // Aligned to libkrkr2.so sub_681EF8 at 0x681EF8:

@@ -395,12 +395,12 @@ namespace motion {
                     // Aligned to 0x671228 cases 0/1/2:
                     // these labels are routed to physics control groups, not to
                     // the generic eval-result map / animator sink.
-                    _emoteDirty = true;
+                    if (_engineBack) _engineBack->_dirty = true;
                     return;
                 case 3:
                     // Aligned to 0x671228 default route for loopControl-built
                     // entries: no generic eval-result write happens here.
-                    _emoteDirty = true;
+                    if (_engineBack) _engineBack->_dirty = true;
                     return;
                 case 4:
                 case 5:
@@ -453,7 +453,7 @@ namespace motion {
                                     resolvedEaseWeight);
                                 ++optionIndex;
                             }
-                            _emoteDirty = true;
+                            if (_engineBack) _engineBack->_dirty = true;
                             return;
                         }
                     }
@@ -461,7 +461,7 @@ namespace motion {
                         controllerAnimatorBucketLike_0x671228(
                             bindingIt->second.type);
                     if(!bucket) {
-                        _emoteDirty = true;
+                        if (_engineBack) _engineBack->_dirty = true;
                         return;
                     }
                     auto &state =
@@ -470,7 +470,7 @@ namespace motion {
                     ensureEvalResultSlotLike_0x686944(key);
                     queueControllerLikeBinary(state, value, transition,
                                               easeWeight);
-                    _emoteDirty = true;
+                    if (_engineBack) _engineBack->_dirty = true;
                     return;
                 }
                 case 6: {
@@ -479,7 +479,7 @@ namespace motion {
                         const double directValue =
                             static_cast<double>(static_cast<int>(value));
                         writeEvalResultValueLike_0x6C4668(key, directValue);
-                        _emoteDirty = true;
+                        if (_engineBack) _engineBack->_dirty = true;
                         return;
                     }
                     auto &state =
@@ -488,11 +488,11 @@ namespace motion {
                     ensureEvalResultSlotLike_0x686944(key);
                     queueControllerLikeBinary(state, value, transition,
                                               easeWeight);
-                    _emoteDirty = true;
+                    if (_engineBack) _engineBack->_dirty = true;
                     return;
                 }
                 default:
-                    _emoteDirty = true;
+                    if (_engineBack) _engineBack->_dirty = true;
                     return;
             }
         }
@@ -501,7 +501,7 @@ namespace motion {
         // binding bypass animator queues and write the eval map immediately.
         if(_engineBack) _engineBack->_variableAnimators.erase(key);
         writeEvalResultValueLike_0x6C4668(key, value);
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     void Player::setVariable(ttstr label, double value, double transition,
@@ -667,7 +667,7 @@ namespace motion {
                 : 0;
         self->writeEvalResultValueLike_0x6C4668(key, mode,
                                                 param[1]->AsReal());
-        self->_emoteDirty = true;
+        if (self->_engineBack) self->_engineBack->_dirty = true;
         return TJS_S_OK;
     }
 

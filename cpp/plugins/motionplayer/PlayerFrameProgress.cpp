@@ -185,7 +185,7 @@ namespace internal {
             state.blendAnimator.startValue = state.blendAnimator.currentValue;
             state.blendAnimator.targetValue = state.blendAnimator.currentValue;
         }
-        _emoteDirty = true;
+        if (_engineBack) _engineBack->_dirty = true;
     }
 
     void Player::stepTimelineControlAnimatorsLike_0x67D01C(double dt) {
@@ -210,7 +210,7 @@ namespace internal {
                 state.controlTrackValues[trackIndex] =
                     static_cast<float>(steppedValue);
                 if(stillAnimating) {
-                    _emoteDirty = true;
+                    if (_engineBack) _engineBack->_dirty = true;
                 }
             }
         }
@@ -229,7 +229,7 @@ namespace internal {
                 state.blendAnimator, dt, steppedBlend);
             state.blendRatio = steppedBlend;
             if(stillAnimating) {
-                _emoteDirty = true;
+                if (_engineBack) _engineBack->_dirty = true;
             }
         }
     }
@@ -474,7 +474,7 @@ namespace internal {
                                 state.blendAnimator, routeDt, steppedBlend);
                         state.blendRatio = steppedBlend;
                         if(blendAnimating) {
-                            _emoteDirty = true;
+                            if (_engineBack) _engineBack->_dirty = true;
                         }
 
                         if(state.controlTrackValues.size() <
@@ -505,7 +505,7 @@ namespace internal {
                             state.controlTrackValues[trackIndex] =
                                 static_cast<float>(steppedValue);
                             if(trackAnimating) {
-                                _emoteDirty = true;
+                                if (_engineBack) _engineBack->_dirty = true;
                             }
                         }
                     };
@@ -824,7 +824,7 @@ namespace internal {
                         state, controllerDt, steppedValue);
                     writeEvalResultValueLike_0x6C4668(state.label, steppedValue);
                     if(stillAnimating) {
-                        _emoteDirty = true;
+                        if (_engineBack) _engineBack->_dirty = true;
                     }
                 }
             };
