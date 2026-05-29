@@ -16,8 +16,10 @@
 //
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "tjs.h"
@@ -25,6 +27,93 @@
 #include "tjsString.h"
 
 namespace motion::detail {
+
+    // RAII wrapper around an owned iTJSDispatch2* that releases on destruction
+    // and nullifies the source on move. Composing a value struct out of these
+    // gives us automatic destructor ordering (reverse declaration order, which
+    // when fields are declared in ascending binary offset becomes descending
+    // binary offset on destruction — matching the libkrkr2.so dtor sequence).
+    struct DispatchRef {
+        iTJSDispatch2 *p = nullptr;
+
+        DispatchRef() = default;
+        explicit DispatchRef(iTJSDispatch2 *raw) noexcept : p(raw) {}
+        DispatchRef(const DispatchRef &) = delete;
+        DispatchRef &operator=(const DispatchRef &) = delete;
+        DispatchRef(DispatchRef &&other) noexcept : p(other.p) {
+            other.p = nullptr;
+        }
+        DispatchRef &operator=(DispatchRef &&other) noexcept {
+            if (this != &other) {
+                if (p) {
+                    p->Release();
+                }
+                p = other.p;
+                other.p = nullptr;
+            }
+            return *this;
+        }
+        ~DispatchRef() {
+            if (p) {
+                p->Release();
+                p = nullptr;
+            }
+        }
+
+        [[nodiscard]] iTJSDispatch2 *get() const noexcept { return p; }
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return p != nullptr;
+        }
+
+        void reset(iTJSDispatch2 *raw = nullptr) noexcept {
+            if (p) {
+                p->Release();
+            }
+            p = raw;
+        }
+    };
+
+    // RAII wrapper around an owned raw heap pointer freed by ::operator delete.
+    // libkrkr2.so allocates several PerNodeLayerState sub-blocks via
+    // operator new and frees them in the value destructor; this mirrors that
+    // ownership precisely without relying on placement-new + manual cleanup.
+    struct HeapRef {
+        void *p = nullptr;
+
+        HeapRef() = default;
+        explicit HeapRef(void *raw) noexcept : p(raw) {}
+        HeapRef(const HeapRef &) = delete;
+        HeapRef &operator=(const HeapRef &) = delete;
+        HeapRef(HeapRef &&other) noexcept : p(other.p) { other.p = nullptr; }
+        HeapRef &operator=(HeapRef &&other) noexcept {
+            if (this != &other) {
+                if (p) {
+                    ::operator delete(p);
+                }
+                p = other.p;
+                other.p = nullptr;
+            }
+            return *this;
+        }
+        ~HeapRef() {
+            if (p) {
+                ::operator delete(p);
+                p = nullptr;
+            }
+        }
+
+        [[nodiscard]] void *get() const noexcept { return p; }
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return p != nullptr;
+        }
+
+        void reset(void *raw = nullptr) noexcept {
+            if (p) {
+                ::operator delete(p);
+            }
+            p = raw;
+        }
+    };
 
     // EvalCascadeState — libkrkr2.so HM1 (Player+264) value type.
     //
@@ -118,20 +207,86 @@ namespace motion::detail {
         ~VariableLabelScope() = default;
     };
 
-    // PerNodeLayerState — libkrkr2.so HM3 (Player+1184) value type (688B).
+    // PerNodeLayerState — libkrkr2.so HM3 (Player+1184) value type.
     //
-    // Per-node-path layer state snapshot. Reverse-engineered partially in
-    // player_value_structs_spec.md; first ~170B is a current-frame MotionNode
-    // snapshot, +188..+688 contains 8+ ttstr / 5+ iTJSDispatch2* slots plus a
-    // 56B-strided per-frame skip array. Implementing the full 688B with all
-    // dtor-referenced refcount sites is deferred to a focused follow-up; until
-    // then HM3 is not used at the container-alias layer (see
-    // player_containers.h — no HM3Map alias yet).
+    // Per-node-path layer state snapshot keyed by the slash-joined node path
+    // built by Player_buildNodePathKey @0x6B5C1C. Reverse-engineered in
+    // player_value_structs_spec.md from:
+    //   * Player_HM3_initValueFromNode @0x699510 (snapshot Node→V)
+    //   * sub_6997F0                  @0x6997F0 (restore   V→Node)
+    //   * Player_HM3_value_destroy    @0x6DD06C (release order)
+    //   * Player_pruneHM3_byNodeIdentity @0x6B826C (frame skip read)
     //
-    // Risk noted here so future maintainers don't accidentally add an HM3Map
-    // alias without first defining this struct: any value type used by
-    // unordered_map must release the binary's 8+ ttstr and 5+ dispatch fields
-    // in the right order or the Web build will leak.
-    struct PerNodeLayerState; // forward-declare only — full definition pending
+    // Binary V layout is 688B; with ttstr=8B on Web vs 16B on Android the
+    // local sizeof necessarily differs. PLATFORM_BOUNDARY governs the size
+    // mismatch — what we replicate is field semantics, ownership, and the
+    // destruction sequence.
+    //
+    // Field declaration order is ASCENDING binary offset. Members are
+    // automatically destructed in REVERSE declaration order, which is
+    // DESCENDING binary offset — matching the libkrkr2.so dtor sequence
+    // (V+688 → V+584 heap → V+560 ttstr → V+516 → V+504 dispatch → … → V+8
+    // dispatch). DispatchRef / HeapRef handle release; ~ttstr handles its
+    // Ptr. No explicit destructor body is needed.
+    struct PerNodeLayerState {
+        // --- current-frame MotionNode snapshot ---
+        // (init: Player_HM3_initValueFromNode @0x699510, reverse:
+        //  sub_6997F0 @0x6997F0)
+        int nodeType = 0;                           // binary V+0   from Node+28
+        uint32_t _pad_4 = 0;                        // align
+        DispatchRef dispatch_8;                     // binary V+8   release in dtor
+        std::array<uint8_t, 16> _opaque_16_31 = {}; // binary V+16  unknown gap
+
+        int field_28 = 0;                           // binary V+28  from Node+340
+        std::array<uint8_t, 12> _opaque_32_43 = {}; // binary V+32  unknown gap
+
+        DispatchRef dispatch_44;                    // binary V+44  Node+356, refcount++, release in dtor
+        int field_52 = 0;                           // binary V+52  from Node+364
+        std::array<uint8_t, 8> _opaque_56_63 = {};  // align
+
+        std::array<uint8_t, 16> oword_64 = {};      // binary V+64  Node+376
+        int sourceRect_x = 0;                       // binary V+80  Player+100
+        int sourceRect_y = 0;                       // binary V+84  Player+104
+        int sourceRect_w = 0;                       // binary V+88  Player+108
+        int sourceRect_h = 0;                       // binary V+92  Player+112
+        int field_96 = 0;                           // binary V+96  Node+408
+        std::array<uint8_t, 4> _pad_100 = {};       // align
+
+        std::array<uint8_t, 16> oword_104 = {};     // binary V+104 Player+1512
+        int64_t qword_120 = 0;                      // binary V+120 Player+1528
+        uint8_t skipFlag_128 = 0;                   // binary V+128 Node+(536·frame)+344
+        uint8_t flag_129 = 0;                       // binary V+129 Player+1508
+        std::array<uint8_t, 6> _pad_130 = {};       // align
+        std::array<uint8_t, 16> oword_136 = {};     // binary V+136 Player+1544
+
+        // long double — 16B on ARM64 libstdc++, 8B on Emscripten libc++.
+        // Kept opaque to avoid platform-dependent slot sizing in the struct.
+        std::array<uint8_t, 16> ldouble_152 = {};   // binary V+152 Player+1560
+        int64_t qword_168 = 0;                      // binary V+168 Player+1536
+
+        // --- multi-slot region (dtor-referenced) ---
+        ttstr ttstr_188;                            // binary V+188 dtor 0x6DD0F8
+        ttstr ttstr_228;                            // binary V+228 dtor 0x6DD0E8
+        ttstr ttstr_268;                            // binary V+268 dtor 0x6DD0D8
+        DispatchRef dispatch_288;                   // binary V+288 dtor 0x6DD0CC
+        ttstr ttstr_296;                            // binary V+296 dtor 0x6DD0C4
+        HeapRef heap_320;                           // binary V+320 dtor 0x6DD0B4
+        ttstr ttstr_364;                            // binary V+364 dtor 0x6DD0A8
+        DispatchRef dispatch_392;                   // binary V+392 dtor 0x6DD098
+        DispatchRef dispatch_504;                   // binary V+504 dtor 0x6DD08C
+        ttstr ttstr_516;                            // binary V+516 dtor 0x6DD080
+        ttstr ttstr_544;                            // binary V+544 init nodeType==3 (Node+1912)
+        ttstr ttstr_560;                            // binary V+560 dtor 0x6DD040
+        ttstr ttstr_672;                            // binary V+672 init nodeType==4 (Node+2296)
+        HeapRef heap_584;                           // binary V+584 dtor 0x6DD030
+        ttstr ttstr_688;                            // binary V+688 dtor 0x6DD02C
+
+        PerNodeLayerState() = default;
+        PerNodeLayerState(const PerNodeLayerState &) = delete;
+        PerNodeLayerState &operator=(const PerNodeLayerState &) = delete;
+        PerNodeLayerState(PerNodeLayerState &&) noexcept = default;
+        PerNodeLayerState &operator=(PerNodeLayerState &&) noexcept = default;
+        ~PerNodeLayerState() = default;
+    };
 
 } // namespace motion::detail

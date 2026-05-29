@@ -213,3 +213,154 @@ TEST_CASE("VariableLabelScopeDeque: append-and-iterate preserves order",
     REQUIRE(d.back().cascadeKey == ttstr(u"k4"));
     REQUIRE(d[2].labelName == ttstr(u"label_2"));
 }
+
+TEST_CASE("HeapRef: default empty, frees on destruction, transfers on move",
+          "[motionplayer][raii]") {
+    using motion::detail::HeapRef;
+    {
+        HeapRef empty;
+        REQUIRE_FALSE(static_cast<bool>(empty));
+        REQUIRE(empty.get() == nullptr);
+    } // empty.~HeapRef on nullptr must not crash
+
+    HeapRef src(::operator new(32));
+    REQUIRE(static_cast<bool>(src));
+    void *owned = src.get();
+
+    HeapRef dst(std::move(src));
+    REQUIRE(dst.get() == owned);
+    REQUIRE(src.get() == nullptr);
+    REQUIRE_FALSE(static_cast<bool>(src));
+
+    HeapRef other(::operator new(16));
+    void *other_owned = other.get();
+    other = std::move(dst);
+    REQUIRE(other.get() == owned);
+    REQUIRE(dst.get() == nullptr);
+    (void)other_owned; // freed by move-assign before taking new pointer
+}
+
+TEST_CASE("HeapRef: reset releases current and adopts new",
+          "[motionplayer][raii]") {
+    using motion::detail::HeapRef;
+    HeapRef r(::operator new(8));
+    REQUIRE(static_cast<bool>(r));
+    r.reset();
+    REQUIRE(r.get() == nullptr);
+    void *fresh = ::operator new(8);
+    r.reset(fresh);
+    REQUIRE(r.get() == fresh);
+}
+
+TEST_CASE("DispatchRef: default empty, no crash on null destruction",
+          "[motionplayer][raii]") {
+    using motion::detail::DispatchRef;
+    {
+        DispatchRef empty;
+        REQUIRE_FALSE(static_cast<bool>(empty));
+        REQUIRE(empty.get() == nullptr);
+    }
+}
+
+TEST_CASE("DispatchRef: move transfers and nullifies source",
+          "[motionplayer][raii]") {
+    using motion::detail::DispatchRef;
+    // Without a live iTJSDispatch2 we test only the pointer plumbing using a
+    // null transition; the Release call path is exercised by integration
+    // tests where a real refcounted dispatch is available.
+    DispatchRef src;
+    DispatchRef dst(std::move(src));
+    REQUIRE(dst.get() == nullptr);
+    REQUIRE(src.get() == nullptr);
+}
+
+TEST_CASE("PerNodeLayerState: default-construct fields are zero / empty",
+          "[motionplayer][value_struct]") {
+    using motion::detail::PerNodeLayerState;
+    PerNodeLayerState s;
+    REQUIRE(s.nodeType == 0);
+    REQUIRE(s.field_28 == 0);
+    REQUIRE(s.field_52 == 0);
+    REQUIRE(s.sourceRect_x == 0);
+    REQUIRE(s.sourceRect_y == 0);
+    REQUIRE(s.sourceRect_w == 0);
+    REQUIRE(s.sourceRect_h == 0);
+    REQUIRE(s.field_96 == 0);
+    REQUIRE(s.qword_120 == 0);
+    REQUIRE(s.skipFlag_128 == 0);
+    REQUIRE(s.flag_129 == 0);
+    REQUIRE(s.qword_168 == 0);
+    REQUIRE_FALSE(static_cast<bool>(s.dispatch_8));
+    REQUIRE_FALSE(static_cast<bool>(s.dispatch_44));
+    REQUIRE_FALSE(static_cast<bool>(s.dispatch_288));
+    REQUIRE_FALSE(static_cast<bool>(s.dispatch_392));
+    REQUIRE_FALSE(static_cast<bool>(s.dispatch_504));
+    REQUIRE_FALSE(static_cast<bool>(s.heap_320));
+    REQUIRE_FALSE(static_cast<bool>(s.heap_584));
+    REQUIRE(s.ttstr_188 == ttstr());
+    REQUIRE(s.ttstr_688 == ttstr());
+}
+
+TEST_CASE("PerNodeLayerState: destructor frees owned heap blocks",
+          "[motionplayer][value_struct]") {
+    using motion::detail::PerNodeLayerState;
+    {
+        PerNodeLayerState s;
+        s.heap_320.reset(::operator new(64));
+        s.heap_584.reset(::operator new(128));
+        s.ttstr_188 = ttstr(u"frame.skip.head");
+        s.ttstr_516 = ttstr(u"transform.snap");
+        s.ttstr_688 = ttstr(u"variable.snap.tail");
+        // Verify population took effect before scope exit.
+        REQUIRE(static_cast<bool>(s.heap_320));
+        REQUIRE(static_cast<bool>(s.heap_584));
+        REQUIRE(s.ttstr_516 == ttstr(u"transform.snap"));
+    } // ~PerNodeLayerState: HeapRef frees both heap blocks, ttstr Releases.
+}
+
+TEST_CASE("PerNodeLayerState: move construction transfers heap ownership",
+          "[motionplayer][value_struct]") {
+    using motion::detail::PerNodeLayerState;
+    PerNodeLayerState src;
+    src.heap_320.reset(::operator new(64));
+    src.heap_584.reset(::operator new(128));
+    src.nodeType = 3;
+    src.sourceRect_w = 1920;
+    src.ttstr_544 = ttstr(u"node.path.snap");
+
+    void *h320 = src.heap_320.get();
+    void *h584 = src.heap_584.get();
+
+    PerNodeLayerState dst(std::move(src));
+    REQUIRE(dst.heap_320.get() == h320);
+    REQUIRE(dst.heap_584.get() == h584);
+    REQUIRE(src.heap_320.get() == nullptr);
+    REQUIRE(src.heap_584.get() == nullptr);
+    REQUIRE(dst.nodeType == 3);
+    REQUIRE(dst.sourceRect_w == 1920);
+    REQUIRE(dst.ttstr_544 == ttstr(u"node.path.snap"));
+}
+
+TEST_CASE("PerNodeLayerStateMap: emplace and lookup by node-path key",
+          "[motionplayer][value_struct][container]") {
+    using motion::detail::PerNodeLayerState;
+    using motion::detail::PerNodeLayerStateMap;
+    PerNodeLayerStateMap m;
+    {
+        PerNodeLayerState s;
+        s.nodeType = 4;
+        s.skipFlag_128 = 1;
+        s.ttstr_672 = ttstr(u"variable.snap.head");
+        s.heap_320.reset(::operator new(48));
+        m.emplace(ttstr(u"root/group/leaf"), std::move(s));
+    }
+    REQUIRE(m.size() == 1);
+    auto it = m.find(ttstr(u"root/group/leaf"));
+    REQUIRE(it != m.end());
+    REQUIRE(it->second.nodeType == 4);
+    REQUIRE(it->second.skipFlag_128 == 1);
+    REQUIRE(it->second.ttstr_672 == ttstr(u"variable.snap.head"));
+    REQUIRE(static_cast<bool>(it->second.heap_320));
+    REQUIRE(m.find(ttstr(u"root/missing")) == m.end());
+    // Map dtor releases all PerNodeLayerState entries on scope exit.
+}

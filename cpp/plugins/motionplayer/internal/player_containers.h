@@ -12,11 +12,10 @@
 // distribution algorithm, same lifetime. Byte-level offset equality is not
 // reachable inside Emscripten — see CLAUDE.md "明确标注且不可避免的平台边界".
 //
-// HM3 (PerNodeLayerState 688B value) is still deferred: its interior 8+ ttstr
-// / 5+ iTJSDispatch2* slots are only partially reverse-engineered, and a
-// premature implementation would leak Released refcounts. See
-// value_structs.h's forward declaration and
-// .claude/agent-memory/ida-deep-analyzer/player_value_structs_spec.md.
+// HM3 (PerNodeLayerState 688B value) now lives in value_structs.h with all
+// dtor-referenced ttstr / dispatch / heap slots declared in ascending binary
+// offset; reverse declaration-order destruction handles the descending-offset
+// release sequence libkrkr2.so's Player_HM3_value_destroy @0x6DD06C uses.
 //
 #pragma once
 
@@ -39,6 +38,13 @@ namespace motion::detail {
     // (NOT tTJSVariant). Used by setVariable / getVariable label→value path.
     using LabelValueMap =
         std::unordered_map<ttstr, double, ttstr_hash, ttstr_equal>;
+
+    // HM3 — libkrkr2.so Player+1184. ttstr (node-path key built by
+    // Player_buildNodePathKey @0x6B5C1C) → PerNodeLayerState. The value type
+    // owns its 8 ttstr / 5 dispatch / 2 heap slots and releases them in the
+    // libkrkr2.so dtor order via reverse declaration-order destruction.
+    using PerNodeLayerStateMap =
+        std::unordered_map<ttstr, PerNodeLayerState, ttstr_hash, ttstr_equal>;
 
     // HM4 — libkrkr2.so Player+1240. ttstr → iTJSDispatch2* (non-owning).
     // Used by name → dispatch alias resolution.
