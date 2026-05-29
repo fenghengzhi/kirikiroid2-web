@@ -394,25 +394,25 @@ void appendRenderEvent(motion::Player *player,
 }
 
 std::string activeMotionPath(const motion::Player *player) {
-    if(!player || !player->runtime() || !player->runtime()->activeMotion) {
+    if(!player || !player || !player->activeMotion) {
         return {};
     }
-    return player->runtime()->activeMotion->path;
+    return player->activeMotion->path;
 }
 
-int preparedIndexFor(const motion::detail::PlayerRuntime *runtime,
-                     const motion::detail::PlayerRuntime::PreparedRenderItem *item) {
-    if(!runtime || !item || runtime->preparedRenderItems.empty()) return -1;
-    const auto *base = runtime->preparedRenderItems.data();
-    const auto *end = base + runtime->preparedRenderItems.size();
+int preparedIndexFor(const motion::Player *runtime,
+                     const motion::detail::PreparedRenderItem *item) {
+    if(!runtime || !item || runtime->preparedRenderItems().empty()) return -1;
+    const auto *base = runtime->preparedRenderItems().data();
+    const auto *end = base + runtime->preparedRenderItems().size();
     if(item < base || item >= end) return -1;
     return static_cast<int>(item - base);
 }
 
 void appendPreparedItemJson(
     std::string &out,
-    const motion::detail::PlayerRuntime *runtime,
-    const motion::detail::PlayerRuntime::PreparedRenderItem &item,
+    const motion::Player *runtime,
+    const motion::detail::PreparedRenderItem &item,
     size_t index,
     bool prependComma) {
     if(prependComma) out.push_back(',');
@@ -485,7 +485,7 @@ void appendPreparedItemJson(
 
 template <typename Predicate>
 void appendPreparedItemList(std::string &out,
-                            const motion::detail::PlayerRuntime *runtime,
+                            const motion::Player *runtime,
                             const char *name,
                             Predicate predicate) {
     constexpr size_t kLimit = 256;
@@ -494,8 +494,8 @@ void appendPreparedItemList(std::string &out,
     out += "\":[";
     if(runtime) {
         size_t emitted = 0;
-        for(size_t i = 0; i < runtime->preparedRenderItems.size(); ++i) {
-            const auto &item = runtime->preparedRenderItems[i];
+        for(size_t i = 0; i < runtime->preparedRenderItems().size(); ++i) {
+            const auto &item = runtime->preparedRenderItems()[i];
             if(!predicate(item)) {
                 continue;
             }
@@ -510,15 +510,15 @@ void appendPreparedItemList(std::string &out,
 }
 
 void appendPreparedItemsPayload(std::string &out,
-                                const motion::detail::PlayerRuntime *runtime) {
+                                const motion::Player *runtime) {
     constexpr size_t kLimit = 256;
-    const size_t count = runtime ? runtime->preparedRenderItems.size() : 0;
+    const size_t count = runtime ? runtime->preparedRenderItems().size() : 0;
     out += "\"preparedItemCount\":";
     out += std::to_string(count);
     out += ",\"preparedItems\":[";
     const size_t n = std::min(count, kLimit);
     for(size_t i = 0; i < n; ++i) {
-        appendPreparedItemJson(out, runtime, runtime->preparedRenderItems[i],
+        appendPreparedItemJson(out, runtime, runtime->preparedRenderItems()[i],
                                i, i > 0);
     }
     out.push_back(']');
@@ -551,9 +551,9 @@ void appendEmptyRenderList(std::string &out) {
 
 void appendPreparedVectorRenderList(
     std::string &out,
-    const motion::detail::PlayerRuntime *runtime) {
+    const motion::Player *runtime) {
     constexpr size_t kLimit = 256;
-    const auto *items = runtime ? &runtime->preparedRenderItems : nullptr;
+    const auto *items = runtime ? &runtime->preparedRenderItems() : nullptr;
     const size_t count = items ? items->size() : 0;
     const void *beginPtr = count ? static_cast<const void *>(items->data()) : nullptr;
     const void *endPtr = count
@@ -578,8 +578,8 @@ void appendPreparedVectorRenderList(
 
 void appendPreparedPointerRenderList(
     std::string &out,
-    const motion::detail::PlayerRuntime *runtime,
-    const std::vector<motion::detail::PlayerRuntime::PreparedRenderItem *> *items) {
+    const motion::Player *runtime,
+    const std::vector<motion::detail::PreparedRenderItem *> *items) {
     constexpr size_t kLimit = 256;
     const size_t count = items ? items->size() : 0;
     const void *beginPtr = count ? static_cast<const void *>(items->data()) : nullptr;
@@ -613,7 +613,7 @@ void appendPreparedPointerRenderList(
 
 void appendPreparedRenderListsPayload(
     std::string &out,
-    const motion::detail::PlayerRuntime *runtime) {
+    const motion::Player *runtime) {
     out += "\"renderLists\":{\"mainList\":";
     appendPreparedVectorRenderList(out, runtime);
     out += ",\"auxList\":";
@@ -623,22 +623,22 @@ void appendPreparedRenderListsPayload(
 
 void appendCommandRenderListsPayload(
     std::string &out,
-    const motion::detail::PlayerRuntime *runtime) {
+    const motion::Player *runtime) {
     out += "\"renderLists\":{\"mainList\":";
     appendPreparedPointerRenderList(
         out, runtime,
-        runtime ? &runtime->preparedRenderItemsTopLevel : nullptr);
+        runtime ? &runtime->preparedRenderItemsTopLevel() : nullptr);
     out += ",\"auxList\":";
     appendPreparedPointerRenderList(
         out, runtime,
-        runtime ? &runtime->preparedRenderItemsGroup : nullptr);
+        runtime ? &runtime->preparedRenderItemsGroup() : nullptr);
     out.push_back('}');
 }
 
 void appendRenderItemsPayload(std::string &out,
-                              const motion::detail::PlayerRuntime *runtime) {
+                              const motion::Player *runtime) {
     const size_t preparedCount =
-        runtime ? runtime->preparedRenderItems.size() : 0;
+        runtime ? runtime->preparedRenderItems().size() : 0;
     size_t validDrawableCount = 0;
     size_t leafBuiltCount = 0;
     size_t composedBuiltCount = 0;
@@ -646,7 +646,7 @@ void appendRenderItemsPayload(std::string &out,
         return rect[0] < rect[2] && rect[1] < rect[3];
     };
     auto hasValidPaintOrViewportRect =
-        [](const motion::detail::PlayerRuntime::PreparedRenderItem &item) {
+        [](const motion::detail::PreparedRenderItem &item) {
         if(item.rawFlag16 || item.skipFlag0 || item.opacity <= 0) return false;
         float left = item.paintBox[0];
         float top = item.paintBox[1];
@@ -662,7 +662,7 @@ void appendRenderItemsPayload(std::string &out,
         return left < right && top < bottom;
     };
     if(runtime) {
-        for(const auto &item : runtime->preparedRenderItems) {
+        for(const auto &item : runtime->preparedRenderItems()) {
             if((item.rawFlag21 && hasValidClipRect(item.clipRect)) ||
                (!item.rawFlag21 && hasValidPaintOrViewportRect(item))) {
                 ++validDrawableCount;
@@ -685,12 +685,12 @@ void appendRenderItemsPayload(std::string &out,
     out += std::to_string(composedBuiltCount);
     appendPreparedItemList(
         out, runtime, "mainListSemanticItems",
-        [](const motion::detail::PlayerRuntime::PreparedRenderItem &item) {
+        [](const motion::detail::PreparedRenderItem &item) {
             return item.topLevelList;
         });
     appendPreparedItemList(
         out, runtime, "auxListSemanticItems",
-        [](const motion::detail::PlayerRuntime::PreparedRenderItem &item) {
+        [](const motion::detail::PreparedRenderItem &item) {
             return item.groupList;
         });
 }
@@ -1213,9 +1213,9 @@ void emitLayerSample(int frameId,
 
 void emitPlayerLayers(int frameId, int &flatIndex, motion::Player *player) {
     if(!player) return;
-    const auto *runtime = player->runtime();
+    const auto *runtime = player;
     if(!runtime) return;
-    for(const auto &node : runtime->nodes) {
+    for(const auto &node : runtime->nodes()) {
         emitLayerSample(frameId, flatIndex++, node);
     }
 }
@@ -1545,7 +1545,7 @@ MotionTraceRenderExecuteScope::MotionTraceRenderExecuteScope(
     _player(player),
     _renderLayerObject(renderLayerObject),
     _skipUpdate(skipUpdate) {
-    const auto *runtime = player ? player->runtime() : nullptr;
+    const auto *runtime = player;
     std::string payload;
     appendRenderItemsPayload(payload, runtime);
     payload += ",\"renderLayerObject\":";
@@ -1566,7 +1566,7 @@ MotionTraceRenderExecuteScope::MotionTraceRenderExecuteScope(
 MotionTraceRenderExecuteScope::~MotionTraceRenderExecuteScope() {
     motionTraceLayerRawProbe(
         _player, _renderLayerObject, "sub_6C7440.leave");
-    const auto *runtime = _player ? _player->runtime() : nullptr;
+    const auto *runtime = _player;
     std::string payload;
     appendRenderItemsPayload(payload, runtime);
     payload += ",\"renderLayerObject\":";
@@ -1895,7 +1895,7 @@ void motionTraceRenderPrepareEnter(Player *player) {
 
 void motionTraceRenderPrepareLeave(Player *player, bool ok) {
     if(!isCurrentRenderPlayer(player)) return;
-    const auto *runtime = player ? player->runtime() : nullptr;
+    const auto *runtime = player;
     std::string payload;
     payload += "\"ok\":";
     payload += ok ? "1" : "0";
@@ -1917,7 +1917,7 @@ void motionTraceRenderApplyTranslateEnter(Player *player) {
 
 void motionTraceRenderApplyTranslateLeave(Player *player) {
     if(!isCurrentRenderPlayer(player)) return;
-    const auto *runtime = player ? player->runtime() : nullptr;
+    const auto *runtime = player;
     std::string payload;
     appendPreparedRenderListsPayload(payload, runtime);
     std::string diagnostics = playerDiagnostics(player);
@@ -1934,7 +1934,7 @@ void motionTraceRenderBuildItemsEnter(Player *player) {
 }
 
 void motionTraceRenderBuildItemsLeave(Player *player) {
-    const auto *runtime = player ? player->runtime() : nullptr;
+    const auto *runtime = player;
     std::string payload;
     appendPreparedRenderListsPayload(payload, runtime);
     std::string diagnostics = playerDiagnostics(player);
@@ -1947,7 +1947,7 @@ void motionTraceRenderBuildCommandsEnter(Player *player,
                                          int canvasWidth,
                                          int canvasHeight) {
     if(!isCurrentRenderPlayer(player)) return;
-    const auto *runtime = player ? player->runtime() : nullptr;
+    const auto *runtime = player;
     std::string payload;
     appendPreparedRenderListsPayload(payload, runtime);
     payload += ",\"canvas\":{\"width\":";
@@ -1965,7 +1965,7 @@ void motionTraceRenderBuildCommandsLeave(Player *player,
                                          int canvasWidth,
                                          int canvasHeight) {
     if(!isCurrentRenderPlayer(player)) return;
-    const auto *runtime = player ? player->runtime() : nullptr;
+    const auto *runtime = player;
     std::string payload;
     appendCommandRenderListsPayload(payload, runtime);
     payload.push_back(',');

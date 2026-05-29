@@ -579,6 +579,26 @@ namespace motion {
         void updateLayersPhase3_AnchorNode();                 // sub_6C0528
 
     public:
+        // A10: read-only public accessors used by the differential test
+        // harness (tests/differential/wasmtime/motion_playback_wasmtime.cpp).
+        // Previously the harness reached these via the dropped runtime()
+        // accessor and `_runtime->X` chains; now it goes through Player.
+        [[nodiscard]] const std::shared_ptr<detail::MotionSnapshot> &
+        activeMotion() const { return _activeMotion; }
+        [[nodiscard]] const std::deque<detail::MotionNode> &nodes() const {
+            return _nodes;
+        }
+        [[nodiscard]] const std::vector<detail::PreparedRenderItem> &
+        preparedRenderItems() const { return _preparedRenderItems; }
+        [[nodiscard]] const std::vector<detail::PreparedRenderItem *> &
+        preparedRenderItemsTopLevel() const {
+            return _preparedRenderItemsTopLevel;
+        }
+        [[nodiscard]] const std::vector<detail::PreparedRenderItem *> &
+        preparedRenderItemsGroup() const {
+            return _preparedRenderItemsGroup;
+        }
+
         // A8 / A9: temporary mutable accessors for hoisted storage used by
         // anonymous-namespace helpers or by free functions in
         // motion::internal::render_detail:: which we can't friend across TU

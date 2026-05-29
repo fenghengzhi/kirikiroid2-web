@@ -1282,7 +1282,7 @@ class NativeMotionStageTracer:
             return count
         expr = (
             f"reinterpret_cast<motion::Player *>({player_ptr_hex})"
-            "->runtime()->nodes.size()"
+            "->nodes().size()"
         )
         value = frame.EvaluateExpression(expr)
         if not value.IsValid() or not value.GetError().Success():
@@ -1299,7 +1299,7 @@ class NativeMotionStageTracer:
         expr = (
             "(unsigned long long)(&("
             f"reinterpret_cast<motion::Player *>({player_ptr_hex})"
-            f"->runtime()->nodes[{index}]))"
+            f"->nodes()[{index}]))"
         )
         value = frame.EvaluateExpression(expr)
         if not value.IsValid() or not value.GetError().Success():
