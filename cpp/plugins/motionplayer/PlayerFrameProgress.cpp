@@ -818,7 +818,16 @@ namespace internal {
         }
 
         _frameLoopTime += actualDelta;
-        _loopTime += actualDelta;
+        // NOTE: _loopTime (player+1136) is the FIXED loop boundary set once from
+        // clip->loopTime (PlayerCore.cpp:557). libkrkr2.so Player_progress_inner
+        // @0x6C106C reads +1136 (loop-wrap target / loop-vs-stop sign test) but
+        // NEVER writes it; the child-motion consumer (PlayerUpdateChildMotion.cpp
+        // :151) likewise reads it as a fixed loopEnd. The previous
+        // `_loopTime += actualDelta` here was a local invention (duplicating the
+        // _frameLoopTime accumulation above) that corrupted +1136 — making it
+        // drift positive past _cachedTotalFrames, which forced the forward-at-end
+        // path into the LOOP branch (instead of STOP) and hung the loop-wrap
+        // do-while. Removed so +1136 stays = clip->loopTime, per the binary.
         // M1 P5/G3: Player_progress_inner @0x6C106C LABEL_48 advances the frame
         //   cursor by deltaTime(+592 = speedMul(+1168)*dt), gated by progressFlags
         //   (+480) — when the gate's LSB is set the cursor is frozen. Mirror that:
