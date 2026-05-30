@@ -84,15 +84,61 @@ namespace {
 
 namespace motion {
     // --- Viewport/display ---
-    void Player::setFlip(bool v) { _flip = v; }
+    // M20 P1 (cluster H): binary root setters write root node delta + dirty,
+    // not Player-level viewport scalars. Port now writes BOTH root delta
+    // (1:1 with binary) AND Player scalar (legacy debug compat). When the
+    // _flip/_opacity/_slant/_zoom scalars are confirmed unused, remove them.
+    void Player::setFlip(bool v) {
+        _flip = v;
+        if (!_nodes.empty()) {
+            auto &root = _nodes[0];
+            root.delta.flipX = v;
+            root.delta.flipY = v;
+            root.delta.dirty = true;
+        }
+    }
 
-    void Player::setOpacity(double v) { _opacity = v; }
+    void Player::setOpacity(double v) {
+        _opacity = v;
+        // Port DeltaState.opacity is int 0..255; convert from TJS 0..1 double.
+        if (!_nodes.empty()) {
+            auto &root = _nodes[0];
+            int op = static_cast<int>(v * 255.0);
+            if (op < 0) op = 0;
+            if (op > 255) op = 255;
+            root.delta.opacity = op;
+            root.delta.dirty = true;
+        }
+    }
 
-    void Player::setVisible(bool v) { _visible = v; }
+    void Player::setVisible(bool v) {
+        _visible = v;
+        if (!_nodes.empty()) {
+            auto &root = _nodes[0];
+            root.delta.visibleOverride = v;
+            root.delta.dirty = true;
+        }
+    }
 
-    void Player::setSlant(double v) { _slant = v; }
+    void Player::setSlant(double v) {
+        _slant = v;
+        if (!_nodes.empty()) {
+            auto &root = _nodes[0];
+            root.delta.slantX = v;
+            root.delta.slantY = v;
+            root.delta.dirty = true;
+        }
+    }
 
-    void Player::setZoom(double v) { _zoom = v; }
+    void Player::setZoom(double v) {
+        _zoom = v;
+        if (!_nodes.empty()) {
+            auto &root = _nodes[0];
+            root.delta.scaleX = v;
+            root.delta.scaleY = v;
+            root.delta.dirty = true;
+        }
+    }
 
     tTJSVariant Player::getLayerNames() {
         // PORT DIVERGENCE (out of node-path-key scope): the binary getLayerNames
