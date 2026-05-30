@@ -514,14 +514,20 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
-    NCB_PROPERTY(queing, getQueuing, setQueuing);
+    // M11 D-04: binary `queing` member is bound to set/getBustScale cb (float),
+    // not get/setQueuing(bool). 1:1 with libkrkr2.so sub_52E504.
+    NCB_PROPERTY(queing, getBustScale, setBustScale);
     NCB_PROPERTY(hairScale, getHairScale, setHairScale);
     NCB_PROPERTY(partsScale, getPartsScale, setPartsScale);
-    NCB_PROPERTY(bustScale, getBustScale, setBustScale);
+    // M11 D-05: binary `bustScale` member is bound to set/getBodyScale cb,
+    // not set/getBustScale. 1:1 with libkrkr2.so sub_52E504.
+    NCB_PROPERTY(bustScale, getBodyScale, setBodyScale);
     NCB_PROPERTY(bodyScale, getBodyScale, setBodyScale);
     NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
     NCB_PROPERTY(progress, getProgress, setProgress);
-    NCB_PROPERTY(modified, getModified, setModified);
+    // M11 D-08: binary `modified` is RO prop bound to getPlayCallback getter
+    // (not a bool modified prop). 1:1 with libkrkr2.so sub_52E504.
+    NCB_PROPERTY_RO(modified, getPlayCallback);
     NCB_PROPERTY(drawvisible, getDrawVisible, setDrawVisible);
     NCB_PROPERTY(drawOpacity, getDrawOpacity, setDrawOpacity);
     NCB_PROPERTY(opengl, getOpengl, setOpengl);
@@ -529,7 +535,10 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_PROPERTY_RO(playCallback, getPlayCallback);
 
     // Methods
-    NCB_METHOD(create);
+    // M11 D-03: binary registers member NAME "clear" bound to the create
+    // callback (which tears down the EmoteObject chain — naming is binary's
+    // apparent bug; CLAUDE.md mandates 1:1 reproduction).
+    NCB_METHOD_DETAIL(clear, Class, void, Class::create, ());
     NCB_METHOD(load);
     NCB_METHOD(clone);
     NCB_METHOD(show);
@@ -567,13 +576,18 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(isTimelinePlaying);
     NCB_METHOD(stopTimeline);
     NCB_METHOD(setTimeline);
-    NCB_METHOD(setTimelineBlendRatio);
+    // M11 D-06: binary `setTimelineBlendRatio` member is bound to setTimeline
+    // cb (signature (ttstr label, bool loop)), not a real blend-ratio method.
+    NCB_METHOD_DETAIL(setTimelineBlendRatio, Class, void, Class::setTimeline,
+                      (ttstr, bool));
     NCB_METHOD(getTimelineBlendRatio);
     NCB_METHOD(fadeInTimeline);
     NCB_METHOD(fadeOutTimeline);
     NCB_METHOD(skip);
     NCB_METHOD(addPlayCallback);
-    NCB_METHOD(pass);
+    // M11 D-07: binary `pass` member is bound to addPlayCallback cb (void()),
+    // not the real pass(double dt) method.
+    NCB_METHOD_DETAIL(pass, Class, void, Class::addPlayCallback, ());
     NCB_METHOD(progress);
     NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant));
     NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
