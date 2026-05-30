@@ -134,7 +134,8 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(top, getTop, setTop);
 
     NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
-    NCB_PROPERTY(metadata, getMetadata, setMetadata);
+    // M15 D-01 (cluster E §3.1): removed metadata Motion.Player NCB — port
+    // invention, no binary equivalent on 92-entry table.
     NCB_PROPERTY(chara, getChara, setChara);
     // Aligned to libkrkr2.so 0x681CAC: raw callback to access objthis
     // for onFindMotion TJS callback during motion loading
@@ -189,17 +190,16 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(stealthMotion, getStealthMotion, setStealthMotion);
     NCB_PROPERTY(tags, getTags, setTags);
     NCB_PROPERTY(project, getProject, setProject);
-    NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
-    NCB_PROPERTY(meshline, getMeshline, setMeshline);
-    NCB_PROPERTY_RO(busy, getBusy);
+    // M15 D-01 (cluster E §3.1): removed useD3D/meshline/busy Motion.Player
+    // NCB — port-invented Web-port properties without binary equivalent in
+    // 92-entry Motion.Player table (sub_6D69C8).
 
     // Core methods
-    NCB_METHOD(random);
-    NCB_METHOD(initPhysics);
-    // M15 D-01 (cluster E §3.1): removed serialize/unserialize Motion.Player
-    // NCB — port-invented debug methods without binary equivalent.
-    NCB_METHOD(setRotate);
-    NCB_METHOD(setMirror);
+    // M15 D-01 (cluster E §3.1): removed random/initPhysics/setRotate/setMirror
+    // Motion.Player NCB — port-invented helpers (random is Motion namespace,
+    // initPhysics is wrong class hoist, setRotate/setMirror are web-port). No
+    // binary equivalent on Motion.Player.
+    // (serialize/unserialize already removed above.)
     // hairScale/partsScale/bustScale removed: not Motion.Player members in
     // libkrkr2.so (sub_681F20/28/30 are EmotePlayer-only NCB accessors).
     NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
