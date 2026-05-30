@@ -206,6 +206,349 @@ namespace motion {
         }
     }
 
+    // ------------------------------------------------------------------------
+    // Physics-pass helpers (file-local). EmoteEngine is a friend of Player, so
+    // these free helpers read Player's private state directly, matching the
+    // binary's raw `*(player + off)` field reads.
+    // ------------------------------------------------------------------------
+    namespace {
+
+        // Aligned with libkrkr2.so sub_67B970 @ 0x67B970 — per-node "shape"
+        // anchor resolver shared by stepHairParts and stepBust.
+        //
+        // Binary pseudocode (condensed):
+        //   v7 = *labelPtr; AddRef(v7);
+        //   sub_6D38F4(player, &label, &resolved);     // label -> layer dispatch
+        //   if (!resolvedValid) return 0;
+        //   shape = resolved.PropGet("shape");          // vtable+32
+        //   if (!shapeIsObject) return 0;
+        //   if (sub_6635DC(shape,"type") != 0) return 0;// only type==0 proceeds
+        //   x = sub_662668(shape,"x"); y = sub_662668(shape,"y");
+        //   sub_6CD738(player, &rootX, &rootY);         // root node +1592/+1600
+        //   r = *(player_owner + 1176);                 // meshDivisionRatioDup
+        //   *outX = rootY + (y - rootY)*r;              // (binary's a3)
+        //   *outY = rootX + (x - rootX)*r;              // (binary's a4)
+        //   return 1;
+        //
+        // The local layer-dispatch resolver is Player::getLayerMotion (= the
+        // sub_6D38F4 -> sub_6B5AD8 path: returns the resolved node's PSB dict
+        // as a tTJSVariant). PropGet "shape"/"type"/"x"/"y" replicate
+        // sub_6635DC (int) / sub_662668 (double) which both call dispatch
+        // vtable+32 = PropGet. sub_6CD738 reads root node X(+1592)/Y(+1600)
+        // = Player::getX()/getY(). meshDivisionRatioDup is EmoteEngine+1176.
+        //
+        // Returns 1 on success (outX/outY written), 0 on any miss (outputs left
+        // unchanged — same as the binary, which only writes on the success path
+        // and returns 0 otherwise).
+        int resolveShapeAnchorLike_0x67B970(EmoteEngine* self, Player* player,
+                                            const ttstr& label,
+                                            float* outX, float* outY) {
+            // sub_6D38F4(player, &label, &resolved): resolve label -> dispatch.
+            tTJSVariant resolved = player->getLayerMotion(label); // /*0x67b9cc*/
+            if (resolved.Type() != tvtObject) {
+                return 0; // !v29 path -> v11 = 0                  /*0x67ba18*/
+            }
+            iTJSDispatch2* obj = resolved.AsObjectNoAddRef();
+            if (!obj) {
+                return 0;
+            }
+
+            // shape = obj.PropGet("shape") (vtable+32).               /*0x67ba64*/
+            tTJSVariant shapeVar;
+            if (TJS_FAILED(obj->PropGet(0, TJS_W("shape"), nullptr, &shapeVar, obj))
+                || shapeVar.Type() != tvtObject) {
+                return 0; // !v24 path -> v11 = 0                  /*0x67bac8*/
+            }
+            iTJSDispatch2* shape = shapeVar.AsObjectNoAddRef();
+            if (!shape) {
+                return 0;
+            }
+
+            // sub_6635DC(shape, "type"): int. Nonzero -> fail (v11=0).  /*0x67bb08*/
+            tTJSVariant typeVar;
+            tjs_int type = 0;
+            if (shape->PropGet(0, TJS_W("type"), nullptr, &typeVar, shape) == TJS_S_OK) {
+                type = static_cast<tjs_int>(typeVar.AsInteger());
+            }
+            if (type != 0) {
+                return 0; // sub_6635DC nonzero -> v11 = 0          /*0x67bb10*/
+            }
+
+            // x = sub_662668(shape,"x"); y = sub_662668(shape,"y") (doubles).
+            double x = 0.0, y = 0.0;                              // /*0x67bb38 / 0x67bb5c*/
+            tTJSVariant xVar, yVar;
+            if (shape->PropGet(0, TJS_W("x"), nullptr, &xVar, shape) == TJS_S_OK) {
+                x = xVar.AsReal();
+            }
+            if (shape->PropGet(0, TJS_W("y"), nullptr, &yVar, shape) == TJS_S_OK) {
+                y = yVar.AsReal();
+            }
+
+            // sub_6CD738(player, &rootX, &rootY): root node +1592 / +1600.
+            const double rootX = player->getX();                 // (player+200)+1592 /*0x67bb6c*/
+            const double rootY = player->getY();                 // (player+200)+1600
+            const double r = self->_meshDivisionRatioDup;        // EmoteEngine+1176  /*0x67bb74*/
+
+            // *a3 = rootY + (y - rootY)*r;  *a4 = rootX + (x - rootX)*r;
+            // (binary keeps the X/Y crossover verbatim — v14=y pairs with rootY
+            //  into the first output, v13=x pairs with rootX into the second.)
+            *outX = static_cast<float>(rootY + (y - rootY) * r); // /*0x67bb84*/
+            *outY = static_cast<float>(rootX + (x - rootX) * r); // /*0x67bb9c*/
+            return 1;                                            // /*0x67bba4*/
+        }
+
+    } // namespace
+
+    // Aligned with libkrkr2.so EmoteEngine_stepHairParts @ 0x67B748.
+    //
+    // Binary main loop (condensed):
+    //   ctl = _ctlHairPartsTarget@+1104; n = ctl->count(+80);
+    //   if (n>=1) memcpy(&cur, ctl->currentValue(+88), 4*n);  // cur[0..n)
+    //   v13 = dt - 0.0001;
+    //   for (node in deque#1) {
+    //       anchor = node[36..40];                              // prev anchor
+    //       resolveShapeAnchor(this, node+12, &anchor.x, &anchor.y);
+    //       if (node->initFlag) {
+    //           node->initFlag = 0; ang = getAngleDeg(player);
+    //           springStep(node->spring, &oX,&oY, anchor.x,anchor.y,
+    //                      cur[0],cur[1], dt, scalar1200, ang);
+    //       } else if (v13 > 0) {
+    //           acc=0;
+    //           do { st=fminf(dt-acc,1.1); acc+=st; f=acc/dt; w=1-f;
+    //                ax = w*node[36] + f*anchor.x; ay = w*node[40] + f*anchor.y;
+    //                ang=getAngleDeg(player);
+    //                springStep(node->spring,&oX,&oY, ax,ay, cur[0],cur[1],
+    //                           st, scalar1200, ang);
+    //           } while (v13 > acc);
+    //       }
+    //       node[36..40] = anchor;                              // write back
+    //       HM7[node->keyX] = oX;  HM7[node->keyY] = oY;        // double slots
+    //   }
+    void EmoteEngine::stepHairParts(float dt) {
+        Player* const player = _player;
+        EmoteVarController* const ctl = _ctlHairPartsTarget; // *(this+1104) /*0x67b788*/
+
+        // memcpy(&cur, ctl->currentValue, 4*count) — copy current controller out.
+        // cur[0]=v32, cur[1]=v33 (count==2 for hair/parts target).         /*0x67b7a4*/
+        float cur[8] = {};
+        const int count = ctl ? ctl->count : 0;
+        if (count >= 1 && ctl->currentValue) {
+            for (int i = 0; i < count && i < 8; ++i) {
+                cur[i] = ctl->currentValue[i];
+            }
+        }
+
+        const float v13 = dt - 0.0001f;                       // /*0x67b7d0*/
+
+        for (EmoteHairPartsNode48B& node : _hairPartsNodes) {
+            // anchor = node[36..40] (previous), then resolve overwrites it.   /*0x67b800*/
+            float anchorX = node.anchorX;
+            float anchorY = node.anchorY;
+            resolveShapeAnchorLike_0x67B970(this, player, node.shapeLabel,
+                                            &anchorX, &anchorY);  //          /*0x67b804*/
+
+            float oX = 0.0f, oY = 0.0f;
+            if (node.initFlag) {                              //              /*0x67b808*/
+                node.initFlag = 0;                            //              /*0x67b810*/
+                const float ang = static_cast<float>(player->emoteGetAngleRadLike_0x6CD0C0()); //  /*0x67b818*/
+                // springStep(spring,&oX,&oY, anchorX,anchorY, cur0,cur1,
+                //            dt, scalar1200, ang)                            /*0x67b844*/
+                EmotePhysics_springStep(node.spring, &oX, &oY,
+                                        anchorX, anchorY, cur[0], cur[1],
+                                        dt,
+                                        static_cast<float>(_scalarField_1200_1d),
+                                        ang);
+            } else if (v13 > 0.0f) {                          //              /*0x67b850*/
+                // sub-stepped integration toward the resolved anchor.
+                const float prevX = node.anchorX; // *((float*)v9+9)  /*0x67b8a8*/
+                const float prevY = node.anchorY; // *((float*)v9+10)
+                float acc = 0.0f;                              //             /*0x67b858*/
+                do {
+                    const float st = std::fmin(dt - acc, 1.1f); //           /*0x67b880*/
+                    acc = acc + st;                            //             /*0x67b88c*/
+                    const float f = acc / dt;                  //             /*0x67b894*/
+                    const float w = 1.0f - f;                  //             v22
+                    const float ax = (w * prevX) + (f * anchorX); //         /*0x67b8a8*/
+                    const float ay = (w * prevY) + (f * anchorY); //         /*0x67b8ac*/
+                    const float ang = static_cast<float>(player->emoteGetAngleRadLike_0x6CD0C0()); /*0x67b8c0*/
+                    EmotePhysics_springStep(node.spring, &oX, &oY,
+                                            ax, ay, cur[0], cur[1],
+                                            st,
+                                            static_cast<float>(_scalarField_1200_1d),
+                                            ang);              //             /*0x67b8dc*/
+                } while (v13 > acc);                            //            /*0x67b8e4*/
+            }
+
+            node.anchorX = anchorX;                            // write back  /*0x67b8f4*/
+            node.anchorY = anchorY;
+
+            // HM#7 double outputs (Player_HM2_upsert_labelToValue(this+1440,..)).
+            _labelToValueHM7[node.keyX] = oX;                  //             /*0x67b904*/
+            _labelToValueHM7[node.keyY] = oY;                  //             /*0x67b918*/
+        }
+    }
+
+    // Aligned with libkrkr2.so EmoteEngine_stepBust @ 0x67BCE8.
+    //
+    // Binary signature: stepBust(this, ctlTarget(a2), chainNodes(a3),
+    //                            springConst(a4 double), dt(a5 float)).
+    // Main loop (condensed):
+    //   n = ctlTarget->count(+80);
+    //   if (n>=1) memcpy(&cur, ctlTarget->currentValue(+88), 4*n);
+    //   v50 = (float)springConst;            // strength fed to chain spring (a10)
+    //   v47 = dt * 0.03125;  v49 = dt - 0.0001;
+    //   for (node in chain deque) {
+    //       anchor = node[44..48];
+    //       resolveShapeAnchor(this, node+12, &anchor.x, &anchor.y);
+    //       node->spring->collisionCurve(+168) = this->_matrixHeap1128(+1128);
+    //       if (node->initFlag) {
+    //           node->initFlag = 0; ang=getAngleDeg(player);
+    //           chainStep(spring,&oS0,&oS1,&oLast, anchor.x,anchor.y,
+    //                     cur0,cur1, dt, springConst, ang);
+    //           // depth ramp using |oLast|<=28 toward node->spring[13]:
+    //           ... (see inline) ...
+    //       } else if (v49>0) {
+    //           acc=0;
+    //           do { st=fminf(dt-acc,1.1); acc+=st; f=acc/dt; w=1-f;
+    //                ax = w*node[44] + f*anchor.x; ay = w*node[48] + f*anchor.y;
+    //                chainStep(...); depth ramp; } while (v49>acc);
+    //       }
+    //       node[44..48] = anchor;
+    //       HM7[node->keyA]=v23; HM7[node->keyB]=v7; HM7[node->keyC]=v8(oLastY);
+    //   }
+    //
+    // Output / jiggle mapping (verbatim from the binary):
+    //   chainStep(spring, &oSeg0(=v55), &oSeg1(=v54), &oLastY(=v53), ...);
+    //   v8 = oLastY (captured right after chainStep);
+    //   depth ramp gates on |oLastY| <= 28 toward spring[13];
+    //   spring[12] = fmod(spring[12] + depth*spring[7]*dt, 2*pi);
+    //   j = sin(spring[12]) * spring[13] * spring[8];
+    //   v23 = oSeg1 + j;   v7 = oSeg0 - j;   (oSeg0/oSeg1 also updated but dead)
+    //   HM7[keyA(node+20)] = v23;  HM7[keyB(node+28)] = v7;  HM7[keyC(node+36)] = v8;
+    // When neither branch runs (initFlag clear AND v49<=0): v23 = dt-0.0001 and
+    //   v7/v8 keep their prior value (the binary reads them un-refreshed — the
+    //   deques are empty at runtime so this path never executes; we seed v7/v8=0
+    //   for defined behaviour, matching the binary's effective state on entry).
+    void EmoteEngine::stepBust(EmoteVarController* ctlTarget,
+                               std::deque<EmoteBustChain1Node56B>& chainNodes,
+                               double springConst, float dt) {
+        Player* const player = _player;
+
+        // memcpy(&cur, ctlTarget->currentValue, 4*count).                  /*0x67bd4c*/
+        float cur[8] = {};
+        const int count = ctlTarget ? ctlTarget->count : 0;
+        if (count >= 1 && ctlTarget->currentValue) {
+            for (int i = 0; i < count && i < 8; ++i) {
+                cur[i] = ctlTarget->currentValue[i];
+            }
+        }
+
+        const float v50 = static_cast<float>(springConst);  // a4 -> chain a10 /*0x67bd6c*/
+        const float v47 = dt * 0.03125f;                     // depth ramp dt   /*0x67bdac*/
+        const float v49 = dt - 0.0001f;                      //                 /*0x67bdb0*/
+
+        for (EmoteBustChain1Node56B& node : chainNodes) {
+            float anchorX = node.anchorX;                    // node[44/48]     /*0x67be94*/
+            float anchorY = node.anchorY;
+            resolveShapeAnchorLike_0x67B970(this, player, node.shapeLabel,
+                                            &anchorX, &anchorY); //            /*0x67be98*/
+
+            // node->spring->collisionCurve = this->_matrixHeap1128 (v12[141]). /*0x67bea4*/
+            if (node.spring) {
+                node.spring->collisionCurve = _matrixHeap1128;
+            }
+
+            // Spring float-array view for the depth-ramp fields [7]/[8]/[12]/[13].
+            // (binary: v28 = (float*)*v15; reads v28[7],v28[8],v28[12],v28[13].)
+            float* const sp = reinterpret_cast<float*>(node.spring);
+
+            float oSeg0 = 0.0f;  // v55 (chainStep a2)
+            float oSeg1 = 0.0f;  // v54 (chainStep a3)
+            float oLastY = 0.0f; // v53 (chainStep a4)
+            float v23 = dt - 0.0001f; // keyA value (default when no branch runs)
+            float v7  = 0.0f;          // keyB value
+            float v8  = 0.0f;          // keyC value (= oLastY)
+
+            if (node.initFlag) {                             //                /*0x67bea8*/
+                node.initFlag = 0;                           //                /*0x67beb0*/
+                const float ang = static_cast<float>(player->emoteGetAngleRadLike_0x6CD0C0()); //   /*0x67beb8*/
+                EmoteBustChainSpring_step(node.spring, &oSeg0, &oSeg1, &oLastY,
+                                          anchorX, anchorY, cur[0], cur[1],
+                                          dt, v50, ang);      //               /*0x67bee4*/
+                v8 = oLastY;                                  // *(float*)&v8=v53 /*0x67bee8*/
+                // depth ramp (|oLastY| vs 28).                                /*0x67befc*/
+                float depth = sp ? sp[13] : 0.0f;             // v33           /*0x67beec*/
+                if (std::fabs(oLastY) <= 28.0f) {
+                    depth = depth - v47;                      //               /*0x67bdbc*/
+                    if (depth < 0.0f) depth = 0.0f;           //               /*0x67bdc8*/
+                } else {
+                    depth = v47 + depth;                      //               /*0x67bf04*/
+                    if (depth > 1.0f) depth = 1.0f;           //               /*0x67bf10*/
+                }
+                if (sp) {
+                    const float spd = sp[7];                  //               /*0x67bdcc*/
+                    sp[13] = depth;                           //               /*0x67bdd0*/
+                    const float ph = std::fmod(sp[12] + ((depth * spd) * dt),
+                                               6.28318531f);  //               /*0x67bdf4*/
+                    sp[12] = ph;                              //               /*0x67bdf8*/
+                    const float j = (std::sin(ph) * sp[13]) * sp[8]; //        /*0x67be10*/
+                    v23 = oSeg1 + j;                          // v54 + v22     /*0x67be14*/
+                    v7  = oSeg0 - j;                          // v55 - v22     /*0x67be18*/
+                    oSeg1 = oSeg1 + j;                        // v54 += (dead) /*0x67be1c*/
+                    oSeg0 = oSeg0 - j;                        // v55 -= (dead)
+                }
+            } else if (v49 > 0.0f) {                           //              /*0x67bf20*/
+                const float prevX = node.anchorX;             // *((float*)v15+11) /*0x67bf30*/
+                const float prevY = node.anchorY;             // *((float*)v15+12) /*0x67bf24*/
+                float acc = 0.0f;                              //              /*0x67bf2c*/
+                do {
+                    const float st = std::fmin(dt - acc, 1.1f); //           /*0x67bf48*/
+                    acc = acc + st;                           //               /*0x67bf50*/
+                    const float f = acc / dt;                 //               /*0x67bf58*/
+                    const float w = 1.0f - f;                 //               v36
+                    const float ax = (w * prevX) + (f * anchorX); //          /*0x67bf6c*/
+                    const float ay = (w * prevY) + (f * anchorY); //          /*0x67bf70*/
+                    const float ang = static_cast<float>(player->emoteGetAngleRadLike_0x6CD0C0()); /*0x67bf74*/
+                    EmoteBustChainSpring_step(node.spring, &oSeg0, &oSeg1, &oLastY,
+                                              ax, ay, cur[0], cur[1],
+                                              st, v50, ang);  //               /*0x67bfa8*/
+                    v8 = oLastY;                              // *(float*)&v8=v53 /*0x67bfac*/
+                    // depth ramp with per-substep dt (st).                    /*0x67bfc8*/
+                    float depth = sp ? sp[13] : 0.0f;         // v40           /*0x67bfb4*/
+                    const float v41 = st * 0.03125f;          //               /*0x67bfc4*/
+                    if (std::fabs(oLastY) <= 28.0f) {
+                        depth = depth - v41;                  //               /*0x67bfe0*/
+                        if (depth < 0.0f) depth = 0.0f;       //               /*0x67bfe8*/
+                    } else {
+                        depth = v41 + depth;                  //               /*0x67bfcc*/
+                        if (depth > 1.0f) depth = 1.0f;       //               /*0x67bfd4*/
+                    }
+                    if (sp) {
+                        const float spd = sp[7];              //               /*0x67bff0*/
+                        const float ph0 = sp[12];             //               /*0x67bff4*/
+                        sp[13] = depth;                       //               /*0x67bff8*/
+                        const float ph = std::fmod(ph0 + (st * (depth * spd)),
+                                                   6.28318531f); //            /*0x67c014*/
+                        sp[12] = ph;                          //               /*0x67c018*/
+                        const float j = (std::sin(ph) * sp[13]) * sp[8]; //    /*0x67c034*/
+                        v23 = oSeg1 + j;                      // v54 + v46     /*0x67c038*/
+                        v7  = oSeg0 - j;                      // v55 - v46     /*0x67c040*/
+                        oSeg1 = oSeg1 + j;                    // v54 += (dead) /*0x67c044*/
+                        oSeg0 = oSeg0 - j;                    // v55 -= (dead)
+                    }
+                } while (v49 > acc);                          //               /*0x67c048*/
+            }
+
+            node.anchorX = anchorX;                           // write back     /*0x67be30*/
+            node.anchorY = anchorY;
+
+            // HM#7 outputs (Player_HM2_upsert_labelToValue(this+1440,..)).
+            _labelToValueHM7[node.keyA] = v23;                //               /*0x67be38*/
+            _labelToValueHM7[node.keyB] = v7;                 //               /*0x67be4c*/
+            _labelToValueHM7[node.keyC] = v8;                 //               /*0x67be5c*/
+        }
+    }
+
     // Aligned with libkrkr2.so sub_67D01C EmoteEngine_progress @ 0x67D01C.
     //
     // Binary main loop (from EmoteEngine_controllers.md):
@@ -343,30 +686,22 @@ namespace motion {
             EmoteVarController_step(_ctlBust1Target,     scratch, physDt); // *(this+1112) @0x67d43c
             EmoteVarController_step(_ctlBust2Target,     scratch, physDt); // *(this+1120) @0x67d44c
 
-            // stepHairParts(this, physDt);                                 // @0x67d458
-            // stepBust(this, _ctlBust1Target, &_bustChain1Nodes,
-            //          _bustSpring1Const, physDt);                         // @0x67d470 (spring const @+1184)
-            // stepBust(this, _ctlBust2Target, &_bustChain2Nodes,
-            //          _bustSpring2Const, physDt);                         // @0x67d488 (spring const @+1192)
-            //
-            // DEFER (blocked, NOT done — see returned blocker report):
-            //   stepHairParts (sub_67B748) and stepBust (sub_67BCE8) both call
-            //   the per-node anchor resolver sub_67B970 @0x67B970, which
-            //   resolves a label -> dispatch (sub_6D38F4), PropGet "shape"
-            //   (vtable+32), and reads type/x/y via sub_6635DC/sub_662668 —
-            //   a deep TJS-dispatch path that is NOT yet reversed. stepBust
-            //   additionally calls sub_6689A4 (a SEPARATE 2-segment chain
-            //   spring, NOT EmotePhysics_springStep). Porting the spring math
-            //   alone without sub_67B970 would feed the springs garbage anchors
-            //   (CLAUDE.md: no patching on an architecturally-incomplete base).
-            //   The leaf EmotePhysics_springStep @0x662768 IS ported
-            //   (EmoteSpring.{h,cpp}) so stepHairParts can be completed once
-            //   sub_67B970 is reversed. The deques #1/#2/#3 are also empty until
-            //   the (un-ported) setVariable write path populates them, so this
-            //   pass has no observable effect today regardless.
-            STUB_WARN(stepHairParts);    // sub_67B748 — blocked on sub_67B970
-            STUB_WARN(stepBust_chain1);  // sub_67BCE8 — blocked on sub_67B970 + sub_6689A4
-            STUB_WARN(stepBust_chain2);  // sub_67BCE8 — blocked on sub_67B970 + sub_6689A4
+            // Physics step pass — now ported (sub_67B970 anchor resolver +
+            // EmotePhysics_springStep + EmoteBustChainSpring_step):
+            //   stepHairParts(this, physDt);                               @0x67d458
+            //   stepBust(this, _ctlBust1Target, &_bustChain1Nodes,
+            //            _bustSpring1Const@+1184, physDt);                 @0x67d470
+            //   stepBust(this, _ctlBust2Target, &_bustChain2Nodes,
+            //            _bustSpring2Const@+1192, physDt);                 @0x67d488
+            // The deques #1/#2/#3 are still empty until the (un-ported)
+            // setVariable write path populates them with spring nodes, so this
+            // pass has no observable effect today — but the structure now
+            // matches the binary exactly.
+            stepHairParts(physDt);                                      // @0x67d458
+            stepBust(_ctlBust1Target, _bustChain1Nodes,
+                     _bustSpring1Const, physDt);                        // @0x67d470
+            stepBust(_ctlBust2Target, _bustChain2Nodes,
+                     _bustSpring2Const, physDt);                        // @0x67d488
         }
     }
 

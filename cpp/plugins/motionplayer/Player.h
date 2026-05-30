@@ -426,6 +426,13 @@ namespace motion {
         tTJSVariant motionList();
         void emoteEdit(tTJSVariant args);
 
+        // Aligned with libkrkr2.so Player_getAngleDeg @ 0x6CD0C0. Returns the
+        // emote spring driver's angle in RADIANS:
+        //   if (_directEdit/+482) -> _emoteAngle/+464 else root node delta.angle
+        //   times 0.0174532925 (deg->rad). Used by EmoteEngine_stepHairParts /
+        //   stepBust. Despite the binary symbol "getAngleDeg" the return is rad.
+        double emoteGetAngleRadLike_0x6CD0C0() const;
+
         // Public accessor for EmotePlayer delegation
         double getActiveMotionWidth() const;
         double getActiveMotionHeight() const;
@@ -642,6 +649,15 @@ namespace motion {
         bool _hasCamera = false;
         bool _cameraActive = false;
         bool _stereovisionActive = false;
+        // Emote direct-edit angle (player+464). Aligned with libkrkr2.so
+        // Player_getAngleDeg @0x6CD0C0: when _directEdit (player+482) is set the
+        // angle source is *(double*)(player+464); otherwise it is the root node
+        // angle (_nodes[0].delta.angle = node+1616). Written by the emote
+        // direct-edit init path (PlayerUpdateChildMotion / PlayerUpdateParticles
+        // case at 0x6C0058 — "player+464 = emote angle", not yet wired in the
+        // web port, so this stays 0.0 until that path is ported). Read by the
+        // hair/parts + bust spring step (EmoteEngine_stepHairParts/stepBust).
+        double _emoteAngle = 0.0;  // player+464
         // Camera angle for stereovision (a1+472, sub_6BDA28 at 0x6BDC50)
         double _cameraAngle = 0.0;
         double _cameraPosX = 0, _cameraPosY = 0, _cameraPosZ = 0;

@@ -95,4 +95,189 @@ namespace motion {
         return result;                           // /*0x662964*/
     }
 
+    // ========================================================================
+    // EmoteBustChainSpring_step — line-by-line port of libkrkr2.so sub_6689A4
+    //   @ 0x6689A4. The bust chain solver. Two segments (v28 in {0,1}).
+    //
+    // Faithful representation note (CLAUDE.md): the binary indexes the object
+    // with `a1 + 12*v28` / `a1 + 8*v28` (per-segment field strides), so the
+    // step is ported against a raw byte base with explicit `*(float*)(p+off)`
+    // accesses mirroring the decompile 1:1, rather than re-deriving per-field
+    // names (which would risk mislabeling the interleaved +92/+96 QWORD copy
+    // and the +12*v28 segment arithmetic). Field meanings are documented in
+    // EmoteBustChainSpring (EmoteSpring.h). All float literals preserved exactly
+    // (0.03125, 6.28318531, 28.0, 0.015625, 0.0451603944, 0.0392699082, 4.0).
+    //
+    // Signature mirrors the binary:
+    //   sub_6689A4(a1, a2/*outSeg0*/, a3/*outSeg1*/, a4/*outLastY*/,
+    //              a5, a6, a7, a8, a9/*dt*/, a10, a11/*angleRad*/)
+    // (a2/a3 are the two per-segment X-angle outputs selected by `v28 ? a3 : a2`;
+    //  a4 is the last-segment Y-angle output.)
+    // ========================================================================
+    void EmoteBustChainSpring_step(EmoteBustChainSpring* self,
+                                   float* a2, float* a3, float* a4,
+                                   float a5, float a6, float a7, float a8,
+                                   float a9, float a10, float a11) {
+        // Raw byte base — `*(float*)(p+off)` reproduces the decompile verbatim.
+        uint8_t* const a1 = reinterpret_cast<uint8_t*>(self);
+        auto F  = [a1](int off) -> float&  { return *reinterpret_cast<float*>(a1 + off); };
+        auto I  = [a1](int off) -> int32_t& { return *reinterpret_cast<int32_t*>(a1 + off); };
+
+        float v20, v21, v22, v23, v24, v30, v31, v34, v35;
+
+        // if (*(_BYTE *)a1) { init } else { accumulate }            /*0x6689d8*/
+        if (self->firstFlag) {
+            v20 = F(80);                       // *(a1+80)            /*0x668a00*/
+            v21 = F(84);                       // *(a1+84)
+            self->firstFlag = 0;               // *(_BYTE*)a1 = 0     /*0x668a04*/
+            F(72) = v20 - a5;                  // *(a1+72)            /*0x668a10*/
+            F(76) = v21 - a6;                  // *(a1+76)
+        } else {
+            v22 = F(76) + a6;                  // *(a1+76)+a6         /*0x668a20*/
+            F(80) = F(72) + a5;                // *(a1+80)=*(a1+72)+a5 /*0x668a24*/
+            F(84) = v22;                       // *(a1+84)
+        }
+
+        // *(_QWORD *)(a1 + 92) = *(_QWORD *)(a1 + 80);              /*0x668a30*/
+        F(92) = F(80);
+        F(96) = F(84);
+        v24 = F(36);                            // restLen0           /*0x668a38*/
+        v23 = F(40);                            // restLen1
+        int32_t v25 = I(88);                    // rootFlag           /*0x668a3c*/
+        F(96) = v24 + F(96);                    // accum +restLen0    /*0x668a44*/
+        const float v26_lo = F(92);             // v26 QWORD lo       /*0x668a48*/
+        const float v26_hi = F(96);             // v26 QWORD hi
+        I(100) = v25;                           //                    /*0x668a4c*/
+        I(112) = v25;                           //                    /*0x668a50*/
+        F(104) = v26_lo;                        // *(a1+104)=v26      /*0x668a54*/
+        F(108) = v26_hi;
+        F(108) = v23 + F(108);                  // +restLen1          /*0x668a60*/
+
+        const float v27 = std::sin(-a11);       // sinf(-a11)         /*0x668a6c*/
+        const float v93 = std::cos(a11);        // cosf(a11)          /*0x668a80*/
+        const float v94 = v27;
+        // v92 = ((v93*a7) - (v27*a8)) * a9                          /*0x668acc*/
+        const float v92 = ((v93 * a7) - (v27 * a8)) * a9;
+        // v29 = ((v27*a7) + (v93*a8)) * a9                          /*0x668ad0*/
+        const float v29 = ((v27 * a7) + (v93 * a8)) * a9;
+
+        int64_t v28 = 0;                        // segment index      /*0x668ac0*/
+        while (true) {
+            // ---- spring constraint to the previous chain point ---- /*0x668bf8*/
+            const int seg12 = 12 * static_cast<int>(v28);
+            const float v48 = F(116 + seg12);    // v47 = *(a1+116+12*v28) /*0x668bfc*/
+            // v49 = v46-3 floats (= +104+12*v28); for v28==0 -> a1+80.
+            const int prevBase = (v28 == 0) ? 80 : (116 + seg12 - 12);
+            const float v50 = F(prevBase + 0);   // *v49               /*0x668c10*/
+            const float v51 = F(prevBase + 4);   // v49[1]
+            const float v53 = F(prevBase + 8);   // v49[2]             /*0x668c18*/
+            const float v55 = v50 - v48;         //                    /*0x668c24*/
+            const float v56 = v51 - F(120 + seg12); // v51 - v46[1]    /*0x668c28*/
+            const float v57 = v53 - F(124 + seg12); // v53 - v46[2]    /*0x668c30*/
+            const float v58 = ((v55 * v55) + (v56 * v56)) + (v57 * v57); /*0x668c40*/
+            if (v58 > (v24 * v24)) {             //                    /*0x668c4c*/
+                const float v59 = std::sqrt(v58);// sqrtf              /*0x668c50*/
+                if (v59 > 0.015625f) {           //                    /*0x668c5c*/
+                    const float v60 = v55 * (1.0f / v59);              /*0x668c6c*/
+                    const float v61 = v56 * (1.0f / v59);
+                    const float v62 = v57 * (1.0f / v59);
+                    const float v63 = v59 - v24;  //                    /*0x668c78*/
+                    if (v28 == 1) {               //                    /*0x668c7c*/
+                        const float v64 = v63 * v60;                   // /*0x668c88*/
+                        const float v65 = (v63 * v61) + F(132);        // /*0x668c98*/
+                        const float v66 = F(152);  //                    /*0x668c9c*/
+                        const float v67 = F(156);
+                        const float v68 = (v63 * v62) + F(136);        // /*0x668ca0*/
+                        const float v69 = F(160);  //                    /*0x668ca4*/
+                        F(128) = v64 + F(128);     //                    /*0x668ca8*/
+                        F(132) = v65;
+                        const float v70 = F(20);   // forceScale1        /*0x668cac*/
+                        F(136) = v68;
+                        // v71 = (v70 * ((v60*v66)+(v61*v67)+(v62*v69))) * a9  /*0x668ccc*/
+                        const float v71 = (v70 * (((v60 * v66) + (v61 * v67)) + (v62 * v69))) * a9;
+                        F(152) = v66 - (v60 * v71); //                   /*0x668ce8*/
+                        F(156) = v67 - (v61 * v71);
+                        F(160) = v69 - (v62 * v71); //                   /*0x668cec*/
+                    } else {
+                        // v72 = a1 + 12*v28 (=a1 for v28==0); v72[35..37] = +140..+148
+                        const float v73 = (v63 * F(16)) * a9;          // /*0x668d0c*/
+                        const float v74 = (v61 * v73) + F(144 + seg12); // v72[36] /*0x668d20*/
+                        const float v75 = (v62 * v73) + F(148 + seg12); // v72[37] /*0x668d24*/
+                        F(140 + seg12) = F(140 + seg12) + (v60 * v73);  // v72[35] /*0x668d28*/
+                        F(144 + seg12) = v74;
+                        F(148 + seg12) = v75;       //                   /*0x668d2c*/
+                    }
+                }
+            }
+
+            // ---- integrate this segment ---- (v76=a1+12*v28; v77=+140+12*v28) /*0x668d34*/
+            const float v78 = F(140 + seg12);     // *(v76+140)         /*0x668d38*/
+            F(140 + seg12) = v92 + v78;           // *v77               /*0x668d4c*/
+            const float v79 = v29 + F(144 + seg12); // v77[1]           /*0x668d54*/
+            F(144 + seg12) = v79;                 //                    /*0x668d58*/
+            const float v80 = (a9 * 0.0f) + F(148 + seg12); // v77[2]   /*0x668d64*/
+            F(148 + seg12) = v80;                 //                    /*0x668d68*/
+            const float v81 = F(4) * a9;          // *(a1+4)*a9         /*0x668d74*/
+            const float v82 = v93 * v81;          //                    /*0x668d7c*/
+            const float v83 = v81 * 0.0f;         //                    /*0x668d80*/
+            v31 = (v92 + v78) - (v94 * v81);      //                    /*0x668d84*/
+            const float v84 = v82 + v79;          //                    /*0x668d88*/
+            const float v85 = v83 + v80;          //                    /*0x668d8c*/
+            F(140 + seg12) = v31;                 // *v77               /*0x668d90*/
+            F(144 + seg12) = v84;                 // v77[1]             /*0x668d94*/
+            F(148 + seg12) = v83 + v80;           // v77[2]             /*0x668d98*/
+
+            // ---- optional collision-depth curve lookup at +168 ----  /*0x668d9c*/
+            const float v87 = F(116 + seg12);     // *v46               /*0x668da0*/
+            const uint8_t* v86 = *reinterpret_cast<uint8_t* const*>(a1 + 168);
+            if (v86) {                            //                    /*0x668da4*/
+                const float* v88 = reinterpret_cast<const float*>(v86 + 4); // +4 /*0x668da8*/
+                v30 = 0.0f;                        // default (v88 exhausted)
+                for (int64_t i = -1; i < 127; ++i) { //                 /*0x668dac*/
+                    if (*reinterpret_cast<const uint8_t*>(
+                            reinterpret_cast<const uint8_t*>(v88) - 4)) { // *((BYTE*)v88-4) /*0x668db0*/
+                        const float v90 = v88[1];  //                   /*0x668db8*/
+                        const float v91 = v90 * 0.5f + 4.0f;            // /*0x668dc8*/
+                        if ((v88[0] - v91) < v87 && (v88[0] + v91) > v87) { // /*0x668de0*/
+                            v30 = v90 * *reinterpret_cast<const float*>(v86 + 1556); // /*0x668af0*/
+                            break;                  // goto LABEL_6
+                        }
+                    }
+                    v88 += 3;                       //                   /*0x668dec*/
+                }
+                v31 = v30 + v31;                    //                   /*0x668af4*/
+                F(140 + seg12) = v31;               // *v77              /*0x668af8*/
+            }
+
+            // ---- velocity damping + position/angle output ----       /*0x668b00*/
+            const float v32 = v85 * a9;            //                   /*0x668b00*/
+            // v33 = a1 + 8*v28; v34 = v31 - v31*(*(a1+8))*a9
+            v34 = v31 - ((v31 * F(8)) * a9);       //                   /*0x668b14*/
+            F(140 + seg12) = v34;                  // *v77              /*0x668b18*/
+            v35 = (v34 * a9) + v87;                //                   /*0x668b24*/
+            float* const v36 = (v28 ? a3 : a2);    // seg X-angle sink  /*0x668b2c*/
+            const float v37 = v84 - ((v84 * F(12)) * a9);  //           /*0x668b34*/
+            F(144 + seg12) = v37;                  // v77[1]            /*0x668b38*/
+            F(116 + seg12) = v35;                  // *v46              /*0x668b3c*/
+            const float v39 = (v37 * a9) + F(120 + seg12); // *v52      /*0x668b4c*/
+            F(120 + seg12) = v39;                  //                   /*0x668b50*/
+            F(124 + seg12) = v32 + F(124 + seg12); // *v54              /*0x668b5c*/
+            const float v40 = F(96 + seg12);       // *(v38+96)         /*0x668b60*/
+            // v41 = (((*(v38+92) - v35) * *(v33+56)) * a10) * -0.0451603944
+            const int seg8 = 8 * static_cast<int>(v28);
+            const float v41 = (((F(92 + seg12) - v35) * F(56 + seg8)) * a10) * -0.0451603944f; /*0x668b80*/
+            const float v42 = std::atan(v41) / 0.0392699082f;  //       /*0x668b90*/
+            *v36 = v42;                            //                   /*0x668b94*/
+            if (v28 == I(24)) {                    // v28 == lastSeg    /*0x668ba0*/
+                // v43 = (((*(a1+44) - (v40 - v39)) * *(v33+60)) * a10) * 0.0451603944
+                const float v43 = (((F(44) - (v40 - v39)) * F(60 + seg8)) * a10) * 0.0451603944f; /*0x668bc8*/
+                const float v44 = std::atan(v43) / 0.0392699082f;  //   /*0x668bd8*/
+                *a4 = v44;                          //                  /*0x668bdc*/
+            }
+            if (++v28 == 2)                         //                  /*0x668be8*/
+                break;
+            v24 = F(36 + 4 * static_cast<int>(v28)); // next rest length /*0x668bf0*/
+        }
+    }
+
 } // namespace motion

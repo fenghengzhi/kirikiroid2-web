@@ -34,13 +34,49 @@ Constants: 0.0392699082 (=pi/80), 0.0451603944. Keep literally.
 - +0 spring ptr (sub_6689A4 a1); +8 byte init; +12 anchorXY; +20/+28/+36 three ttstr labels;
 - +44 prevAnchor qword. (float*)v15+11/+12 = +44/+48 lerp targets.
 
-## BLOCKERS (un-reversed dispatch deps; DEFER per CLAUDE.md)
-- sub_67B970 @0x67B970 — per-node "shape" anchor resolution via TJS dispatch:
-  resolves a label→dispatch (sub_6D38F4), PropGet "shape" (vtable+32), reads type/x/y
-  (sub_6635DC/sub_662668), lerps with *(double*)(this+1176)=_meshDivisionRatioDup.
-  Heavy TJS-dispatch path. Required by BOTH stepHairParts and stepBust.
-- sub_6689A4 @0x6689A4 — bust 2-segment chain spring (separate from springStep).
-- sub_6687E8, sub_67C560, sub_67C6B0, sub_67C8A8, sub_6D2A54, Player_bindParameterValue — bind-loop/post-loop deps.
+## RESOLVED 2026-05-30 (was BLOCKERS) — stepHairParts/stepBust now ported
+- EmoteEngine_resolveShapeAnchor @0x67B970 (renamed) — per-node "shape" anchor.
+  Flow: resolved=getLayerMotion(label) [=sub_6D38F4→sub_6B5AD8, returns PSB dict
+  dispatch]; if not object → return 0. shape=resolved.PropGet("shape") [vtable+32];
+  if not object → 0. type=sub_6635DC(shape,"type") [int]; if type!=0 → 0.
+  x=sub_662668(shape,"x"); y=sub_662668(shape,"y") [doubles]. rootX=getX()(node+1592),
+  rootY=getY()(node+1600) via sub_6CD738. r=*(EmoteEngine+1176)=_meshDivisionRatioDup.
+  **X/Y CROSSOVER (verbatim):** *outX(a3)=rootY+(y-rootY)*r; *outY(a4)=rootX+(x-rootX)*r.
+  return 1 only on success (outputs untouched on any miss). Local resolver =
+  Player::getLayerMotion(ttstr) (PlayerLayerQuery.cpp). Local impl =
+  resolveShapeAnchorLike_0x67B970 (anon ns in EmoteEngine.cpp).
+- EmoteBustChainSpring_step @0x6689A4 (renamed) — 176B 2-segment chain spring,
+  NOT springStep. Loop v28∈{0,1}: constraint to previous chain point (seg0 prev =
+  +80 root, seg1 prev = seg0 @+116), integrate, OPTIONAL collision-depth curve
+  lookup at +168 (128 entries from +4, stride 12B {byte enabled@-4,float center,
+  float halfW}; match val = halfW * *(curve+1556); null-guarded), velocity damping
+  (+8/+12), atan angle outputs (slope *(a1+8*v28+56)/+60). Constants 0.03125 (in
+  stepBust caller), 6.28318531, 28.0, 0.015625, 4.0, 0.0451603944, 0.0392699082.
+  Struct in EmoteSpring.h; step in EmoteSpring.cpp (raw `*(float*)(p+off)` accesses
+  to mirror +12*v28 / +8*v28 segment arithmetic faithfully).
+- Player_getAngleDeg @0x6CD0C0 — returns RADIANS despite the name. if(_directEdit
+  /player+482) angle=*(player+464)=_emoteAngle else angle=root node delta.angle
+  (node+1616); return angle*0.0174532925. Ported as Player::emoteGetAngleRadLike_
+  0x6CD0C0 (PlayerCore.cpp); added Player+464 _emoteAngle field (un-written until
+  emote direct-edit path ported). stepHairParts/stepBust call it per node/substep.
+- stepBust collisionCurve: node->spring->collisionCurve(+168) = EmoteEngine+1128
+  (_matrixHeap1128). stepBust output mapping: keyA(node+20)=oSeg1+jiggle,
+  keyB(node+28)=oSeg0-jiggle, keyC(node+36)=oLastY. depth ramp on spring[13],
+  phase spring[12]=fmod(...,2pi), jiggle=sin(phase)*spring[13]*spring[8].
+- DEFER still: sub_6687E8, sub_67C560/67C6B0/67C8A8, sub_6D2A54,
+  Player_bindParameterValue (bind-loop/post-loop). setVariable write path that
+  POPULATES deques #1/#2/#3 is also un-ported → these spring fns run on empty
+  deques at runtime (no observable effect yet, but structure now binary-aligned).
+
+## ALIGNMENT TRAPS hit this pass
+- `friend class EmoteEngine` does NOT grant access to anon-namespace free fns in
+  EmoteEngine.cpp — only to EmoteEngine member fns. Port Player-private reads as
+  Player methods (emoteGetAngleRadLike_0x6CD0C0), not free helpers.
+- EmoteBustChainSpring +168 is a QWORD (8B) on ARM64 but `void*` is 4B on wasm32;
+  static_assert sizeof==176 fails on web/wasmtime. Pin offsetof(...collisionCurve)
+  ==168 and sizeof==168+sizeof(void*) instead.
+- getLayerMotion path: returns the PSB dict variant; do tvtObject checks before
+  AsObjectNoAddRef / PropGet (binary's v29/v24 null gates).
 
 ## progress @0x67D01C control flow (VERIFIED)
 1. `if (a2 /*dt*/ != 0.0)` TOP-LEVEL GATE (P0-B2: local was missing this).

@@ -327,6 +327,23 @@ namespace motion {
             }
         }
     }
+    // Aligned to libkrkr2.so Player_getAngleDeg @ 0x6CD0C0:
+    //   if (*(BYTE*)(player+482)) v1 = player+464;       (directEdit emote angle)
+    //   else                      v1 = *(player+200)+1616; (root node delta.angle)
+    //   return *v1 * 0.0174532925;                        (deg -> rad; pi/180)
+    // player+482=_directEdit; player+464=_emoteAngle; (player+200)+1616 =
+    // _nodes[0].delta.angle. Returns radians (used by emote spring step pass).
+    double Player::emoteGetAngleRadLike_0x6CD0C0() const {
+        double angleDeg;
+        if (_directEdit) {                               // *(BYTE*)(player+482)  /*0x6cd0c0*/
+            angleDeg = _emoteAngle;                      // player+464           /*0x6cd0c8*/
+        } else {
+            angleDeg = _nodes.empty() ? 0.0
+                                      : _nodes[0].delta.angle; // node+1616      /*0x6cd0d4*/
+        }
+        return angleDeg * 0.0174532925;                  //                      /*0x6cd0e8*/
+    }
+
     // Aligned to libkrkr2.so Player_getRootY (0x6D98B4) / Player_setRootY (0x6CD048):
     // same shape as setRootX but at node+1600 (delta.posY).
     double Player::getY() const {
