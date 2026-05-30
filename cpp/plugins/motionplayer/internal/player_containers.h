@@ -46,10 +46,19 @@ namespace motion::detail {
     using PerNodeLayerStateMap =
         std::unordered_map<ttstr, PerNodeLayerState, ttstr_hash, ttstr_equal>;
 
-    // HM4 — libkrkr2.so Player+1240. ttstr → iTJSDispatch2* (non-owning).
-    // Used by name → dispatch alias resolution.
-    using DispatchAliasMap =
-        std::unordered_map<ttstr, iTJSDispatch2 *, ttstr_hash, ttstr_equal>;
+    // HM4 — libkrkr2.so Player+1240. ttstr → double, raw double @entry+16.
+    // (Same value-slot layout as HM2 — clearHM3_HM4 @0x6B80E4 only Releases the
+    // ttstr key and op-deletes the 32B entry; value slot is never AddRef'd or
+    // Release'd. Spike-grounded R-M4: prior `iTJSDispatch2 *` annotation was
+    // an audit misread; binary writer @0x6B2D40 stores a raw 8B controller
+    // snapshot, reader @0x6CD304 loads it directly to a NEON D-reg as double.)
+    //
+    // Semantics: variable-snapshot cache populated by
+    // Player_resetMotionState_clearAndRebuild's second loop (each controller
+    // writes its current value snapshot keyed by controller-name ttstr); the
+    // first stop of Player::getVariable's cascade (HM4 → HM2 → HM1).
+    using VariableSnapshotMap =
+        std::unordered_map<ttstr, double, ttstr_hash, ttstr_equal>;
 
     // Player+1296 std::deque<VariableLabelScope>. Populated by
     // Player_initVariables @0x6CD750 once per motion load with (variable,

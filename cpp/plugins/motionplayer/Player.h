@@ -935,10 +935,15 @@ namespace motion {
         // the Player+24 path map share one key generator.
         detail::PerNodeLayerStateMap _perNodeLayerStateMap;
 
-        // HM4 (Player+1240): ttstr -> iTJSDispatch2* alias resolution map.
-        // Non-owning pointers (alias to a dispatch held elsewhere). Empty
-        // until A8 wires it into the alias resolver.
-        detail::DispatchAliasMap _dispatchAliasMap;
+        // HM4 (Player+1240): ttstr -> double variable-snapshot cache.
+        // Populated by Player_resetMotionState_clearAndRebuild's second loop
+        // (binary 0x6B2D40: each active controller writes its raw 8B current
+        // value keyed by controller-name ttstr). Read by Player::getVariable's
+        // cascade as the first hit stop (HM4 → HM2 → HM1). Empty until that
+        // resetMotionState path is wired in port.
+        // (R-M4 spike-corrected: was annotated as `iTJSDispatch2*` alias map;
+        // binary actually uses 8B raw double, identical layout to HM2.)
+        detail::VariableSnapshotMap _variableSnapshotMap;
 
         // Aligned with libkrkr2.so motion::Player HM2 @ +320
         // (raw label -> double). Upsert helper: Player_HM2_upsert_labelToValue
