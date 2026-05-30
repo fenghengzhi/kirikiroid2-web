@@ -218,6 +218,14 @@ namespace motion {
         void setFrameTickCount(double v) { _frameTickCount = v; }
         double getFrameTickCount() const { return _frameTickCount; }
 
+        // M15 missing #19 (cluster E §1 ctor +912 / §3.1 missing list):
+        // binary Player_ctor stores 100 at +912 — pixelateDivision is an
+        // INSTANCE field, not D3DEmoteModule static (port misplaces it).
+        // R-pixelate phase 1: add Player instance field + NCB exposure here
+        // additively; D3DEmoteModule static remains for compat in phase 1.
+        void setPixelateDivision(int v) { _pixelateDivision = v; }
+        int getPixelateDivision() const { return _pixelateDivision; }
+
         // Aligned to libkrkr2.so 0x6CD724 / 0x6CD710: packed color int at +1156
         void setColorWeight(tjs_int v);
         tjs_int getColorWeight() const;
@@ -694,6 +702,9 @@ namespace motion {
                                       //   below. progress_inner @0x6C106C reads
                                       //   the multiplier from +1168, not +1093.)
         double _frameTickCount = 0.0;
+        // Binary Player+912: pixelateDivision, default 100 (cluster E §1 ctor).
+        // Port previously misplaced as D3DEmoteModule static with default 1.
+        int _pixelateDivision = 100;
 
         // === M1 stage P1: progress / frame-stepping core state fields ===
         // All byte-verified from Player_progress_inner @0x6C106C (this

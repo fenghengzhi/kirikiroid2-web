@@ -165,6 +165,9 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(tickCount, getTickCount, setTickCount);
     NCB_PROPERTY(speed, getSpeed, setSpeed);
     NCB_PROPERTY(frameTickCount, getFrameTickCount, setFrameTickCount);
+    // M15 missing #19: pixelateDivision is binary Player+912 instance field
+    // (default 100), NOT D3DEmoteModule static. Cluster E §1 ctor + §3.1.
+    NCB_PROPERTY(pixelateDivision, getPixelateDivision, setPixelateDivision);
     NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
     // M-colorWeight P1 (cluster E §4): binary Player NCB `colorWeight` getter
     // sub_6D9768 returns +1097 bool (independentLayerInherit), NOT the
