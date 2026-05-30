@@ -196,8 +196,8 @@ NCB_REGISTER_CLASS(Player) {
     // Core methods
     NCB_METHOD(random);
     NCB_METHOD(initPhysics);
-    NCB_METHOD(serialize);
-    NCB_METHOD(unserialize);
+    // M15 D-01 (cluster E §3.1): removed serialize/unserialize Motion.Player
+    // NCB — port-invented debug methods without binary equivalent.
     NCB_METHOD(setRotate);
     NCB_METHOD(setMirror);
     // hairScale/partsScale/bustScale removed: not Motion.Player members in
@@ -207,7 +207,8 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(getCameraOffset);
     NCB_METHOD(setCameraOffset);
     NCB_METHOD(modifyRoot);
-    NCB_METHOD(debugPrint);
+    // M15 D-01 (cluster E §3.1): removed debugPrint — port debug helper, no
+    // binary Motion.Player equivalent.
 
     // Resource management
     NCB_METHOD(unload);
@@ -290,16 +291,16 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(deactivateSelectorTarget);
 
     // Misc
-    NCB_METHOD(getCommandList);
+    // M15 D-01 (cluster E §3.1): removed 4 port-invented Motion.Player NCB
+    // methods (getCommandList/motionList/emoteEdit/onFindMotion) — debug/
+    // internal helpers without binary equivalent in the 92-entry Motion.Player
+    // table (sub_6D69C8). C++ methods kept; only TJS exposure removed.
     NCB_METHOD(getD3DAvailable);
     NCB_METHOD(doAlphaMaskOperation);
-    NCB_METHOD(onFindMotion);
     NCB_METHOD_RAW_CALLBACK(play, &Player::playCompat, 0);
     NCB_METHOD_RAW_CALLBACK(progress, &Player::progressCompatMethod, 0);
     NCB_METHOD_RAW_CALLBACK(isPlaying, &Player::isPlayingCompat, 0);
     NCB_METHOD_RAW_CALLBACK(stop, &Player::stopCompat, 0);
-    NCB_METHOD(motionList);
-    NCB_METHOD(emoteEdit);
 }
 
 // Motion.EmotePlayer — minimal NCB class matching libkrkr2.so EmotePlayer_NCB_classInit
