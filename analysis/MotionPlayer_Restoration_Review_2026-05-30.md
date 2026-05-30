@@ -188,3 +188,25 @@ if (item+19 /*drawFlag19*/) {
 - **oracle**（sub_6C4E28 LABEL_28）：render-build 循环内**惰性、每 drawable item 1 次** `requireLayerId`（对 player+992 解析出的 render-layer-tree 对象的属性/方法调用）。
 - 分配域 / 时机 / 次数全不同。port 当前提前方案**产出正确**（trace compare 0 mismatch 全绿）。
 - **结论**：对齐 build_flow 必须把 layer 对象解析 execute→build 搬迁 + 重做 layerId 物化模型（Phase B+C 不可分割），高回归风险，本地无 Android oracle 无法验证，须分阶段 CI 验证。**不应盲目推送拿全绿状态冒险**。
+
+---
+
+## build_flow 重构成功 (CI 26671670507, commit d51cce9)
+
+把 requireLayerId 物化 + rawFlag20 闩锁按 sub_6C4E28 LABEL_28 从 execute 搬回 build 循环（+ player+760 常驻 SLA 成员），**零回归**：
+- **trace compare：仍 0 mismatch 全绿**（m2logo 93帧 / yuzulogo 243帧逐层一致）。
+- **build_flow_mismatch：yuzulogo 242→0（完全对齐）；m2logo 92→81**。
+- 值域保真策略生效：`requireLayerId`→`node.layerId1` 同值 backing，layerId 值不变，仅物化时机 execute→build。
+
+### 下一目标：m2logo item+18 (skipFlag1) — frame12+ items[1]
+新 first_mismatch（layerResolved20 修复后浮现）：`mainListSemanticItems.items[1].flags flag18` oracle=0 / port=1。
+- **oracle 逻辑**（sub_6C2334 @ 0x6c3380-0x6c33c0，node stride 2632）：
+  ```
+  v298 = 1;                          // 默认
+  if ((a6 & 1) == 0)                 // a6&1 = 继承自父的 flag（递归 build 下传）
+      v298 = (node+48 != 0);
+  item+18 = v298;                    // == inheritedFlag18 || (node+48 != 0)
+  ```
+  （邻近：item+17 = `((preview?1097:1089) & (1<<node+28)) == 0`；item+16 = node+201）
+- **port**（PlayerRenderItems.cpp:471）：`skipFlag1 = !(inheritedFlag18 || (node.priorDraw != 0))`。
+- **差异性质**：yuzulogo 全匹配、m2logo 仅 items[1] frame12+ 差，说明**非普遍极性反转**，而是 `node+48` 的语义映射（是否真是 priorDraw）或 inheritedFlag18 递归传播在该 case 下不一致。下一轮须：(1) 反编译确认 binary node+48 字段语义（vs port node.priorDraw）；(2) 核对 inheritedFlag18 在 sub_6C2334 递归中如何下传（a6 参数）vs port inheritedFlag18 计算；(3) 据此对齐 PlayerRenderItems.cpp:471，CI 验证保持 trace 全绿。
