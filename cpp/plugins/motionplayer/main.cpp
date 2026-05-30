@@ -168,6 +168,16 @@ NCB_REGISTER_CLASS(Player) {
     // M15 missing #19: pixelateDivision is binary Player+912 instance field
     // (default 100), NOT D3DEmoteModule static. Cluster E §1 ctor + §3.1.
     NCB_PROPERTY(pixelateDivision, getPixelateDivision, setPixelateDivision);
+    // M15 missing transform properties (cluster E §3.1): binary Motion.Player
+    // exposes flipX/flipY/slantX/slantY/zoomX/zoomY as properties backed by
+    // root-node delta. Port also has single-axis setFlip/setSlant/setZoom
+    // methods (port-extras kept for compat).
+    NCB_PROPERTY(flipX, getFlipX, setFlipX);
+    NCB_PROPERTY(flipY, getFlipY, setFlipY);
+    NCB_PROPERTY(slantX, getSlantX, setSlantX);
+    NCB_PROPERTY(slantY, getSlantY, setSlantY);
+    NCB_PROPERTY(zoomX, getZoomX, setZoomX);
+    NCB_PROPERTY(zoomY, getZoomY, setZoomY);
     NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
     // M-colorWeight P1 (cluster E §4): binary Player NCB `colorWeight` getter
     // sub_6D9768 returns +1097 bool (independentLayerInherit), NOT the

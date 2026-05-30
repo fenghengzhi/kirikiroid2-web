@@ -226,6 +226,65 @@ namespace motion {
         void setPixelateDivision(int v) { _pixelateDivision = v; }
         int getPixelateDivision() const { return _pixelateDivision; }
 
+        // M15 missing transform properties (cluster E §3.1 24 missing list):
+        // binary Motion.Player exposes flipX/flipY/opacity/visible/slantX/
+        // slantY/zoomX/zoomY as PROPERTIES backed by root node accumulated
+        // transform state. Port previously exposed only setFlip/setOpacity/
+        // setVisible/setSlant/setZoom METHODS (single-axis) without getters.
+        // Adding NCB-bound X/Y-split property accessors that read/write the
+        // root node delta. Existing setFlip/etc. preserved (port-extra).
+        //
+        // Defensive empty-deque check: returns default / no-op if _nodes is
+        // empty (pre-motion-load state).
+        bool getFlipX() const {
+            return _nodes.empty() ? false : _nodes[0].delta.flipX;
+        }
+        void setFlipX(bool v) {
+            if (_nodes.empty()) return;
+            _nodes[0].delta.flipX = v;
+            _nodes[0].delta.dirty = true;
+        }
+        bool getFlipY() const {
+            return _nodes.empty() ? false : _nodes[0].delta.flipY;
+        }
+        void setFlipY(bool v) {
+            if (_nodes.empty()) return;
+            _nodes[0].delta.flipY = v;
+            _nodes[0].delta.dirty = true;
+        }
+        double getSlantX() const {
+            return _nodes.empty() ? 0.0 : _nodes[0].delta.slantX;
+        }
+        void setSlantX(double v) {
+            if (_nodes.empty()) return;
+            _nodes[0].delta.slantX = v;
+            _nodes[0].delta.dirty = true;
+        }
+        double getSlantY() const {
+            return _nodes.empty() ? 0.0 : _nodes[0].delta.slantY;
+        }
+        void setSlantY(double v) {
+            if (_nodes.empty()) return;
+            _nodes[0].delta.slantY = v;
+            _nodes[0].delta.dirty = true;
+        }
+        double getZoomX() const {
+            return _nodes.empty() ? 1.0 : _nodes[0].delta.scaleX;
+        }
+        void setZoomX(double v) {
+            if (_nodes.empty()) return;
+            _nodes[0].delta.scaleX = v;
+            _nodes[0].delta.dirty = true;
+        }
+        double getZoomY() const {
+            return _nodes.empty() ? 1.0 : _nodes[0].delta.scaleY;
+        }
+        void setZoomY(double v) {
+            if (_nodes.empty()) return;
+            _nodes[0].delta.scaleY = v;
+            _nodes[0].delta.dirty = true;
+        }
+
         // Aligned to libkrkr2.so 0x6CD724 / 0x6CD710: packed color int at +1156
         void setColorWeight(tjs_int v);
         tjs_int getColorWeight() const;
