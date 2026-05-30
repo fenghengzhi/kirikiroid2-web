@@ -2,12 +2,43 @@
 // Created by LiDon on 2025/9/15.
 //
 #pragma once
+#include <list>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include "tjs.h"
+#include "internal/ttstr_hash.h"
 
 namespace motion {
+
+    // ------------------------------------------------------------------
+    // R-M9 Phase 1 scaffolding (M9 spike 2026-05-31):
+    // Binary libkrkr2.so ResourceManager (~256B, NCB registered at 0x6AB8BC)
+    // exposes 14 TJS members and holds 3 internal containers + bufLayer +
+    // spec int. Phase 1 declares the binary-aligned C++ fields so phase 2
+    // (atomic findSource topology refactor) is a pure data migration rather
+    // than type discovery. None of the new fields are wired into the
+    // load/findSource paths yet — port's existing State<shared_ptr> backing
+    // store stays authoritative for behavior. Logo differential green is
+    // preserved by construction (new fields default-initialized empty).
+    // ------------------------------------------------------------------
+
+    // Intrusive list3 entry — binary RM @+72/+80 keeps a doubly-linked
+    // list of (PSB-path, target Layer name, color tag, Layer*, blendMode,
+    // color[4]) tuples cached by loadSource / clearCache (`bufLayer` is
+    // returned from the head entry). Per M9 spike Q1, binary node sizeof
+    // is ~96B and field types are inferred from the loadSource/clearCache
+    // pseudocode. Phase 1 uses std::list as placeholder — empty in phase 1,
+    // so the heap-vs-inline node difference vs binary's intrusive list is
+    // a zero-cost difference until phase 2 wires it.
+    struct SourceCacheEntry {
+        ttstr key;                    // node+16
+        ttstr value;                  // node+36
+        tjs_int32 colorTag = 0;       // node+52
+        iTJSDispatch2 *layer = nullptr; // node+56 (owning Layer dispatch)
+        tjs_int32 blendMode = 0;      // node+68
+        tjs_int32 colorRGBA[4] = {0, 0, 0, 0}; // node+72..+84
+    };
 
     class ResourceManager {
     public:
@@ -48,5 +79,38 @@ namespace motion {
 
         std::shared_ptr<State> _state;
         inline static int _decryptSeed;
+
+        // --- R-M9 Phase 1 binary-aligned scaffolding (empty in phase 1) ---
+
+        // +40 ttstr — NCB property `bufLayer` returns this. Per M9 spike Q1,
+        // populated by loadSource() to expose the most recent cached entry's
+        // target Layer name. Phase 2 wires loadSource() to update it.
+        ttstr _bufLayer;
+
+        // +72/+80 intrusive doubly-linked list3 — loadSource / clearCache
+        // / bufLayer facade. Phase 1 placeholder: std::list (heap-allocated
+        // nodes vs binary's inline 96B intrusive nodes). Empty in phase 1.
+        // Phase 2 (or 3) may switch to a true intrusive list if needed to
+        // satisfy a sizeof-aligned PLATFORM_BOUNDARY contract.
+        std::list<SourceCacheEntry> _sourceCacheList;
+
+        // +88/+96 libstdc++ std::unordered_map<ttstr group, iTJSDispatch2*
+        // psb_dict> — RM `load`/`unload`/`unloadAll`/`findSource` write/read
+        // this. Owning pointers (clearCache must Release each value). Empty
+        // in phase 1 — port's `_state->loadedModules` is still the authoritative
+        // PSB cache until phase 2 migrates data and ownership here.
+        std::unordered_map<ttstr, iTJSDispatch2 *, detail::ttstr_hash,
+                           detail::ttstr_equal>
+            _psbDictCache;
+
+        // +104 second container (forward_list of motion-level cache entries)
+        // — RM `findMotion`/`isExistMotion` walk this. Spike-detected as a
+        // single-linked node chain (`for (i = *(a1+104); i; i = *i)`); type
+        // pending phase 4 spike. Phase 1 placeholder: std::list. Empty.
+        std::list<iTJSDispatch2 *> _motionCacheList;
+
+        // +224 int32 spec flag — binary checks 1 (krkr) vs 2 (win) in
+        // loadResource path. Web port runs the krkr branch.
+        tjs_int _spec = 1;
     };
 } // namespace motion
