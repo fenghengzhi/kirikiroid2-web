@@ -189,6 +189,15 @@ namespace motion {
 
         // Aligned to libkrkr2.so: tickCount uses ms↔frame conversion (60fps internal)
         // Getter: frameTickCount * 1000/60; Setter: value * 60/1000
+        // M15 missing #3 (cluster E §3.1): binary `lastTime` NCB getter
+        // sub_6D9448 reads +1136 (_loopTime):
+        //   if (loopTime > 0) return loopTime * 1000/60   (frames → ms)
+        //   else              return loopTime             (0 or negative)
+        // RO property (no setter on binary).
+        double getLastTime() const {
+            return _loopTime > 0.0 ? _loopTime * 1000.0 / 60.0 : _loopTime;
+        }
+
         // M16 P1 (cluster E §4): binary setTickCount_ms @0x6D96C0 does
         //   +1120 = fmax(v * 60/1000, 0)       (frameTickCount cursor)
         //   *(WORD*)(+480) = 257               (STRH 0x0101 — +480 = _queuing,

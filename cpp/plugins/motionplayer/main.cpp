@@ -163,6 +163,9 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(stereovisionActive, getStereovisionActive,
                  setStereovisionActive);
     NCB_PROPERTY(tickCount, getTickCount, setTickCount);
+    // M15 missing #3 (cluster E §3.1): binary `lastTime` RO property reads
+    // +1136 _loopTime with frames→ms conversion (sub_6D9448).
+    NCB_PROPERTY_RO(lastTime, getLastTime);
     NCB_PROPERTY(speed, getSpeed, setSpeed);
     NCB_PROPERTY(frameTickCount, getFrameTickCount, setFrameTickCount);
     // M15 missing #19: pixelateDivision is binary Player+912 instance field
