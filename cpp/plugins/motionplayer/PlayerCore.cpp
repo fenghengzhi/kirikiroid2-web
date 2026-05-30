@@ -363,6 +363,29 @@ namespace motion {
         }
     }
 
+    // M15 missing `clear` method (cluster E §3.1): port-best-guess
+    // implementation of motion-state reset. Binary call-site spike pending;
+    // current impl resets active motion, nodes (kept as root), variable cache,
+    // cursor/loop state. Heavy-handed reset — TJS scripts calling clear()
+    // expect the player to be in a "no motion loaded" state afterward.
+    void Player::clear() {
+        _activeMotion.reset();
+        if(_nodes.size() > 1) {
+            _nodes.erase(_nodes.begin() + 1, _nodes.end());
+        }
+        _nodeLabelMap.clear();
+        _evalResultValues.clear();
+        _variableSnapshotMap.clear();
+        _frameTickCount = 0.0;
+        _clampedEvalTime = 0.0;
+        _loopTime = 0.0;
+        _cachedTotalFrames = 0.0;
+        _allplaying = false;
+        _queuing = false;
+        _firstFrame = false;
+        _motionCompleted = false;
+    }
+
     // M15 missing setAngleDeg (cluster E §4 setAngleDeg @0x6CD0EC): binary
     // takes radians as input, converts to degrees (×57.2957795), normalizes
     // to [0,360) if directEdit (emote angle), and stores in root.delta.angle

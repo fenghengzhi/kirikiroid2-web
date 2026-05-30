@@ -583,6 +583,14 @@ namespace motion {
             return hitTestLayer(label, x, y);
         }
 
+        // M15 missing `clear` method (cluster E §3.1 24 missing): binary
+        // Motion.Player exposes clear as a method (group with onAction/onSync/
+        // onGroundCorrection in audit — context suggests motion-state reset).
+        // Port implementation: reset active motion + node tree + variable cache
+        // + cursor/loop state. Pending binary spike to confirm full semantics;
+        // current impl mirrors port's motion-change reset logic.
+        void clear();
+
         // M15 missing event callbacks (cluster E §3.1 24 missing):
         // binary Motion.Player exposes onAction/onSync/onGroundCorrection
         // as TJS callback PROPERTIES. binary invokes these at specific
