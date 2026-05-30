@@ -194,6 +194,12 @@ namespace motion {
         // _boundsMinX/MinY/MaxX/MaxY (binary +152/+160/+168/+176 floats).
         tTJSVariant getBounds() const;
 
+        // M15 missing `meshDivisionRatio` (cluster E §3.1): binary Motion.Player
+        // exposes as property delegating to EmoteEngine +1168. Defined in
+        // PlayerCore.cpp where EmoteEngine.h is fully visible.
+        double getMeshDivisionRatio() const;
+        void setMeshDivisionRatio(double v);
+
         // M15 missing #3 (cluster E §3.1): binary `lastTime` NCB getter
         // sub_6D9448 reads +1136 (_loopTime):
         //   if (loopTime > 0) return loopTime * 1000/60   (frames → ms)

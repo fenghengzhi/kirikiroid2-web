@@ -175,6 +175,9 @@ NCB_REGISTER_CLASS(Player) {
     // M15 missing `bounds` (cluster E §3.1): RO dict {left,top,right,bottom}
     // from Player +152/+160/+168/+176.
     NCB_PROPERTY_RO(bounds, getBounds);
+    // M15 missing `meshDivisionRatio` (cluster E §3.1): delegate to
+    // EmoteEngine +1168/+1176 via _engineBack.
+    NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
     NCB_PROPERTY(speed, getSpeed, setSpeed);
     NCB_PROPERTY(frameTickCount, getFrameTickCount, setFrameTickCount);
     // M15 missing #19: pixelateDivision is binary Player+912 instance field

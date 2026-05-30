@@ -363,6 +363,21 @@ namespace motion {
         }
     }
 
+    // M15 missing `meshDivisionRatio` (cluster E §3.1): binary Motion.Player
+    // exposes as property delegating to EmoteEngine +1168 (cluster E §1 ctor
+    // confirmed +1168 lives on EmoteEngine, not Player; the NCB property on
+    // Motion.Player is a delegate). Defaults to 1.0 if no engine attached.
+    double Player::getMeshDivisionRatio() const {
+        return _engineBack ? _engineBack->_meshDivisionRatio : 1.0;
+    }
+
+    void Player::setMeshDivisionRatio(double v) {
+        if(_engineBack) {
+            _engineBack->_meshDivisionRatio = v;
+            _engineBack->_meshDivisionRatioDup = v;
+        }
+    }
+
     // M15 missing `bounds` property (cluster E §3.1): binary returns a TJS
     // dict {left, top, right, bottom} from _boundsMinX/MinY/MaxX/MaxY (binary
     // +152/+160/+168/+176 floats, init DBL_MAX/-DBL_MAX per ctor).
