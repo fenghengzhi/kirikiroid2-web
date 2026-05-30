@@ -150,9 +150,10 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
                  setProcessedMeshVerticesNum);
     NCB_PROPERTY_RO(playing, getPlaying);
-    NCB_PROPERTY(queuing, getQueuing, setQueuing);
-    NCB_PROPERTY(directEdit, getDirectEdit, setDirectEdit);
-    NCB_PROPERTY(selectorEnabled, getSelectorEnabled, setSelectorEnabled);
+    // M15 D-01 (cluster E §3.1): removed queuing/directEdit/selectorEnabled
+    // Motion.Player NCB — port-invented properties not in 92-entry binary
+    // table. _queuing/_directEdit/_selectorEnabled fields preserved for
+    // internal use.
     NCB_PROPERTY(variableKeys, getVariableKeys, setVariableKeys);
     NCB_PROPERTY_RO(allplaying, getAllplaying);
     NCB_PROPERTY(syncWaiting, getSyncWaiting, setSyncWaiting);
@@ -179,10 +180,9 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(cameraPosition, getCameraPosition, setCameraPosition);
     NCB_PROPERTY(cameraFOV, getCameraFOV, setCameraFOV);
     NCB_PROPERTY(cameraAlive, getCameraAlive, setCameraAlive);
-    NCB_PROPERTY(canvasCaptureEnabled, getCanvasCaptureEnabled,
-                 setCanvasCaptureEnabled);
-    NCB_PROPERTY(clearEnabled, getClearEnabled, setClearEnabled);
-    NCB_PROPERTY(hitThreshold, getHitThreshold, setHitThreshold);
+    // M15 D-01 (cluster E §3.1): removed canvasCaptureEnabled/clearEnabled/
+    // hitThreshold Motion.Player NCB — port-invented properties not in
+    // 92-entry binary table. C++ fields preserved.
     NCB_PROPERTY(preview, getPreview, setPreview);
     NCB_PROPERTY(outsideFactor, getOutsideFactor, setOutsideFactor);
     NCB_PROPERTY(resourceManager, getResourceManager, setResourceManager);
