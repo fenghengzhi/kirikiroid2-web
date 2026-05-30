@@ -600,12 +600,12 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(getPlayingTimelineFlagsAt);
     NCB_METHOD(isLoopTimeline);
     NCB_METHOD(getTimelineTotalFrameCount);
-    // M11 D-01 (cluster D §2a): `play` is port-invented (not in binary's
-    // 54-entry D3DEmotePlayer NCB table; binary playback starts via load(#3)
-    // + progress(#50)). KEPT FOR LOGO CI: removing `play` likely breaks logo
-    // TJS which uses d3dEmotePlayer.play(motion). Re-evaluate after wider
-    // logo TJS audit. Continue tracking as TODO M11 D-01 残留.
-    NCB_METHOD(play);
+    // M11 D-01 (cluster D §2a): removed `play` — port invention, not in
+    // binary's 54-entry D3DEmotePlayer NCB table. binary playback starts via
+    // load(#3) + progress(#50). Motion.Player still exposes `play` via
+    // playCompat at main.cpp:~275, so TJS using `player.play(...)` (Player
+    // instance) continues to work. Only the D3DEmotePlayer wrapper alias
+    // removed. CI will confirm if logo TJS uses d3dEmotePlayer.play instead.
     NCB_METHOD(playTimeline);
     NCB_METHOD(isTimelinePlaying);
     NCB_METHOD(stopTimeline);
