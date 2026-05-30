@@ -59,11 +59,14 @@ namespace motion {
     void EmoteAngleController_ctor(EmoteAngleController* self, int count);
 
     // Aligned with libkrkr2.so sub_666634 EmoteAngleController_step
-    //   @ 0x666634.
-    // Pops keyframe, applies shortest-path wrap:
-    //   if |target - current| > pi: target ± 2pi to take the short way
-    //   Power-curve interp on 1 scalar.
-    //   Wraps result into [0, 2pi).
+    //   @ 0x666634. (Full decompiled pseudocode in EmoteAngleController.cpp.)
+    // Binary structure: state branches are MUTUALLY EXCLUSIVE — `if (state==1)
+    //   {animate} else if (state==0) {setup}`. Setup pops a keyframe, applies
+    //   shortest-path wrap (target ± accurate-2pi when |target-current| > pi),
+    //   but does NOT advance phase or reset it; animation begins next step.
+    //   Completion stores phase=1.0 (so a reused controller's later keyframes
+    //   start >=1.0 and snap — a binary quirk preserved per CLAUDE.md). The
+    //   output is wrapped into [0, 6.2832) using the truncated literal 6.2832.
     void EmoteAngleController_step(EmoteAngleController* self, float* outRad, float dt);
 
     void EmoteAngleController_dtor(EmoteAngleController* self);
