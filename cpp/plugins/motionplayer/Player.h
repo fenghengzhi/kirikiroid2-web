@@ -663,7 +663,34 @@ namespace motion {
         double _cameraPosX = 0, _cameraPosY = 0, _cameraPosZ = 0;
         double _cameraTargetX = 0, _cameraTargetY = 0, _cameraTargetZ = 0;
         bool _speed = true;           // Aligned to libkrkr2.so +1093: bool flag
+                                      //   (NOTE: +1093 is NOT the speed
+                                      //   multiplier — that is _speedMul@+1168
+                                      //   below. progress_inner @0x6C106C reads
+                                      //   the multiplier from +1168, not +1093.)
         double _frameTickCount = 0.0;
+
+        // === M1 stage P1: progress / frame-stepping core state fields ===
+        // All byte-verified from Player_progress_inner @0x6C106C (this
+        // conversation). DECLARED ONLY — not yet read/written by the live
+        // PlayerFrameProgress path (that wiring is M1 stages P5/P6); these are
+        // groundwork so the frame-stepping machine can be ported incrementally
+        // without disturbing the currently-green logo differential.
+        //   v3 = *(double*)(a1+1168); *(double*)(a1+592) = v3 * dt;   // entry
+        //   *(BYTE*)(a1+483) = 0;                                     // entry
+        //   if (a1+481) { seed +1120/+456; a1+481=0; reseek; return } // firstFrame
+        //   LABEL_48: if (!*(BYTE*)(a1+480)) { a1+1120 += a1+592;     // gated advance
+        //                                      a1+456 = min(a1+1120,a1+1128); }
+        //   ... +1099 loopArmed / +609 reverseSeekFlag gate loop-wrap ...
+        double _speedMul = 1.0;        // player+1168: speed multiplier (dt scale)
+        double _deltaTime = 0.0;       // player+592 : _speedMul * dt (per-frame)
+        bool   _progressFlags = false; // player+480 : 1-byte gate; LSB set freezes
+                                       //   the +1120 cursor advance (LABEL_48)
+        bool   _firstFrame = false;    // player+481 : one-shot seed of +1120/+456
+        bool   _motionCompleted = false; // player+483: cleared each progress entry;
+                                         //   set mid-step to abort cooperatively
+        bool   _loopArmed = false;     // player+1099: loop re-arm latch
+        bool   _reverseSeekFlag = false; // player+609: one-shot reverse-seek request
+        // === end M1 P1 ===
         tjs_int _maskMode = 0;                         // libkrkr2.so +1148
         std::uint32_t _colorWeightPacked = 0xFF808080u; // libkrkr2.so +1156
         bool _independentLayerInherit = false;          // libkrkr2.so +1097
