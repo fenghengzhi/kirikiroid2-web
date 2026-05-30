@@ -333,6 +333,18 @@ namespace motion::detail {
     void ensureRootNodeLike_0x6CED30(motion::Player &player);
     void resetNodeTreeKeepRootLike_0x6B56F8(motion::Player &player);
 
+    // Aligned with libkrkr2.so Player_buildNodePathKey @0x6B5C1C.
+    // Walks the parentIndex chain from `nodeIndex` toward the synthetic root
+    // (index 0), accumulating each node's "label" (node+0) as a "/"-prefixed
+    // segment. Ancestors are prepended, so the result is the slash-joined
+    // hierarchical path "/topLevelLabel/.../selfLabel". The loop terminates
+    // when a node's parentIndex reaches 0 (the synthetic root is NOT emitted),
+    // matching the binary `while ( a2 )` on `*(node+36)` (parentIndex).
+    // This is the key used by the Player+24 node-path map (re-keyed from the
+    // former flat-label map) and by HM3 (Player+1184).
+    std::string buildNodePathKeyLike_0x6B5C1C(
+        const std::deque<motion::detail::MotionNode> &nodes, int nodeIndex);
+
     std::string narrow(const ttstr &value);
     ttstr widen(const std::string &value);
 

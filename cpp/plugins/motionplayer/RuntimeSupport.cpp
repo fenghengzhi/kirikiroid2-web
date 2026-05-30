@@ -1214,6 +1214,52 @@ namespace motion::detail {
         player._renderItemNativeFieldLifetimeByNode.clear();
     }
 
+    // Aligned with libkrkr2.so Player_buildNodePathKey @0x6B5C1C.
+    //
+    // Binary pseudocode (0x6B5C48..0x6B5DCC):
+    //   *a3 = nullptr; accumulated = nullptr;
+    //   while ( nodeIndex ) {                        // 0 == synthetic root → stop
+    //     node = deque_at(nodeIndex);                // 2632-byte stride
+    //     segment = ttstr("/") + *(node+0);          // sub_A0CC68(out,"/",node)
+    //                                                 //   *(node+0) = label ttstr
+    //     accumulated = segment + accumulated;       // sub_A1359C(segment, acc)
+    //     nodeIndex = *(node+36);                    // parentIndex
+    //   }
+    //   return accumulated;
+    //
+    // Each segment is the node's "label" prefixed with '/'. Newer (more
+    // ancestral) segments are prepended, yielding "/top/.../self". The
+    // synthetic root at index 0 contributes nothing. Empty labels still emit a
+    // bare "/" segment, exactly as the binary's concat path does (it does not
+    // skip empty names).
+    //
+    // PLATFORM_BOUNDARY: the binary key is a ttstr; here we materialize the
+    // same character sequence as std::string so it can key the ordered
+    // std::map<std::string,int> that mirrors the binary's Player+24 RB-tree.
+    std::string buildNodePathKeyLike_0x6B5C1C(
+        const std::deque<motion::detail::MotionNode> &nodes, int nodeIndex) {
+        std::string accumulated;
+        // 0x6B5C54: `if ( a2 )` — index 0 (root) produces an empty key.
+        while(nodeIndex) {
+            if(nodeIndex < 0 || nodeIndex >= static_cast<int>(nodes.size())) {
+                break;
+            }
+            const motion::detail::MotionNode &node =
+                nodes[static_cast<size_t>(nodeIndex)];
+            // segment = "/" + label  (sub_A0CC68(out, L"/", node))
+            std::string segment;
+            segment.reserve(1 + node.layerName.size() + accumulated.size());
+            segment.push_back('/');
+            segment.append(node.layerName);
+            // accumulated = segment + accumulated  (sub_A1359C(segment, acc))
+            segment.append(accumulated);
+            accumulated.swap(segment);
+            // 0x6B5D98: a2 = *(node+36) = parentIndex; loop while ( a2 ).
+            nodeIndex = node.parentIndex;
+        }
+        return accumulated;
+    }
+
     // A10: makePlayerRuntime() deleted along with the now-empty PlayerRuntime
     // struct. Player's constructor invokes ensureRootNodeLike_0x6CED30(*this)
     // directly to seed the root node.

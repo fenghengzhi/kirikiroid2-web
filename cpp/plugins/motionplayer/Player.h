@@ -780,8 +780,15 @@ namespace motion {
         // indices [1,end) during Player_buildNodeTree (0x6B51F0).
         // _variableLabelEntries: libkrkr2.so Player+1296 std::vector pending
         // retype to VariableLabelScopeDeque (Phase B alias) in a follow-up.
-        // _nodeLabelMap: libkrkr2.so Player+24 std::map<ttstr,int>
-        // populated during recursive build with last-write-wins assignment.
+        // _nodeLabelMap: libkrkr2.so Player+24 std::map<ttstr,int>. Despite the
+        // legacy port name, this is the node *path* map: keyed by the
+        // hierarchical "/top/.../self" string built by Player_buildNodePathKey
+        // @0x6B5C1C (NOT the flat PSB "label"). Populated unconditionally per
+        // node during Player_buildNodeTree_recursive @0x6B4CE4 via
+        // Player_nodePathMap_lowerBoundInsert @0x6B50B8 (ordered RB-tree
+        // insert, last-write-wins on path collision). All reads
+        // (getLayerMotion/getLayerGetter @0x6B5AD8, dtgt resolves @0x6F2228,
+        // stencil mask resolve @0x6B5454) match a raw path string verbatim.
         std::deque<detail::MotionNode> _nodes;
         std::vector<detail::VariableLabelEntry> _variableLabelEntries;
         std::map<std::string, int> _nodeLabelMap;
@@ -868,11 +875,26 @@ namespace motion {
         // sequence. Empty until A8 wires it into the cascade evaluator.
         detail::EvalCascadeMap _evalCascadeMap;
 
-        // HM3 (Player+1184): per-node-path layer state snapshot keyed by
-        // Player_buildNodePathKey @0x6B5C1C output. PerNodeLayerState owns 8
-        // ttstr + 5 dispatch + 2 heap slots released in binary dtor order
-        // (Player_HM3_value_destroy @0x6DD06C). Empty until A8 wires it into
-        // the per-node update path.
+        // HM3 (Player+1184): per-node-path layer state snapshot. KEY CONFIRMED
+        // (Cluster F): the key is the node *path* ttstr produced by
+        // Player_buildNodePathKey @0x6B5C1C — the SAME key space as the Player+24
+        // node-path map. Populated by Player_resetMotionState_clearAndRebuild
+        // loop3 @0x6B2DF8: for each visible node whose type ∈ {0,2,3,7,8}
+        //   key = Player_buildNodePathKey(player, nodeIndex)   // @0x6B2E08
+        //   V   = Player_HM3_upsert_perNodeLayerState(player+1184, &key) //@0x6F2674
+        //   Player_HM3_initValueFromNode(node, V)              // @0x699510
+        // PerNodeLayerState owns 8 ttstr + 5 dispatch + 2 heap slots released in
+        // binary dtor order (Player_HM3_value_destroy @0x6DD06C).
+        //
+        // DEFERRED (populate only — keying is already correct): the port has no
+        // resetMotionState equivalent and no caller for it, and the value-fill
+        // path Player_HM3_initValueFromNode @0x699510 is a 688-byte node→V
+        // snapshot that is itself unported. Wiring HM3 populate here would mean
+        // porting both functions wholesale, which is out of the node-tree
+        // keying scope and has no consumer yet, so this map stays empty. When
+        // resetMotionState is ported, build the key via
+        // detail::buildNodePathKeyLike_0x6B5C1C(_nodes, nodeIndex) so HM3 and
+        // the Player+24 path map share one key generator.
         detail::PerNodeLayerStateMap _perNodeLayerStateMap;
 
         // HM4 (Player+1240): ttstr -> iTJSDispatch2* alias resolution map.

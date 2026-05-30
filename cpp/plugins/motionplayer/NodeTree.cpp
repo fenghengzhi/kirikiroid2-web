@@ -106,9 +106,17 @@ namespace motion::detail {
 
             // "label" → layerName (node+0)
             node.layerName = nodeTreePsbString(psbNode, "label");
-            if(!node.layerName.empty()) {
-                player.nodeLabelMapForBuild()[node.layerName] = node.index;
-            }
+            // Aligned with libkrkr2.so Player_buildNodeTree_recursive @0x6B4CE4:
+            //   *(_DWORD *)Player_nodePathMap_lowerBoundInsert(a1 + 3, &key) = idx;
+            // The Player+24 map is keyed by the full hierarchical *path* built
+            // by Player_buildNodePathKey @0x6B5C1C ("/top/.../self"), NOT by the
+            // flat PSB "label". Value = node deque-index. The insert is
+            // unconditional (the binary emits a "/"-prefixed segment even for an
+            // empty label), so we do not gate on a non-empty label here.
+            // node.layerName is already set, so the path builder can see this
+            // node's own segment via the deque.
+            player.nodeLabelMapForBuild()[detail::buildNodePathKeyLike_0x6B5C1C(
+                player.nodesForBuild(), node.index)] = node.index;
 
             // "type" → nodeType (node+28)
             // 0=obj, 1=shape, 3=motion, 4=particle, 5=camera, 6=emitter,
@@ -312,8 +320,12 @@ namespace motion::detail {
 
         // Aligned to Player_buildNodeTree post-pass (0x6B51F0..0x6B55AC):
         // type==12 nodes with stencilType bit 2 set walk
-        // "stencilCompositeMaskLayerList", resolve label→node, and set node+1961
-        // on the referenced mask layers.
+        // "stencilCompositeMaskLayerList", resolve each entry against the
+        // Player+24 node-path map (Player_nodePathMap_find @0x6F2228, called at
+        // 0x6B5454 with the *raw* mask-list element as the key), and set
+        // node+1961 on the referenced mask layers. The mask-list strings are
+        // themselves hierarchical path keys ("/top/.../leaf"), matched verbatim
+        // against the path map — so we pass label->value unchanged.
         for(auto &node : player._nodes) {
             if(node.nodeType != 12 || (node.stencilType & 4) == 0 || !node.psbNode) {
                 continue;

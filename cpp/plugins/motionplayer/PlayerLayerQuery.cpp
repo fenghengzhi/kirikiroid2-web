@@ -95,10 +95,14 @@ namespace motion {
     void Player::setZoom(double v) { _zoom = v; }
 
     tTJSVariant Player::getLayerNames() {
-        // Aligned to libkrkr2.so sub_6D1018 (getLayerNames NCB callback):
-        // iterates Player+24 labelMap (std::map<ttstr,int>) and emits its keys.
-        // That map is populated at 0x6B4CE4 during buildNodeTree_recursive with
-        // operator[] — duplicates naturally collapse to one key per label.
+        // PORT DIVERGENCE (out of node-path-key scope): the binary getLayerNames
+        // (sub_6D1018 → sub_6B601C @0x6B601C) does NOT iterate the Player+24
+        // path map — it walks the Player+200 node deque with a visitor that
+        // descends into type==3 child players and type==4 particle arrays. This
+        // port instead iterates the Player+24 node-path map keys. Now that the
+        // map is path-keyed, these keys are hierarchical paths ("/top/.../leaf")
+        // rather than flat labels; one key per node path, last-write-wins on
+        // collision. Re-porting to sub_6B601C is tracked separately.
         ensureMotionLoaded();
         if(!_activeMotion) {
             return detail::makeArray({});
@@ -130,9 +134,10 @@ namespace motion {
 
     tTJSVariant Player::getLayerMotion(ttstr name) {
         // Aligned to libkrkr2.so sub_6D38F4 → sub_6B5AD8 (getLayerMotion):
-        // queries Player+24 labelMap (last-wins) and returns the PSB dict of
-        // the resolved node. For duplicate labels this yields the last layer
-        // that wrote the key during buildNodeTree_recursive.
+        // calls Player_nodePathMap_find @0x6F2228 on the Player+24 node-path map
+        // (0x6B5B14) with the raw TJS `name` and returns the PSB dict of the
+        // resolved node. The map is keyed by hierarchical path, so `name` is a
+        // path string ("/top/.../leaf") matched verbatim.
         ensureMotionLoaded();
         if(false) {
             return {};
