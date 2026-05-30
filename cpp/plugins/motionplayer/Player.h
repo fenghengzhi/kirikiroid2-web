@@ -561,6 +561,23 @@ namespace motion {
             return hitTestLayer(label, x, y);
         }
 
+        // M15 missing event callbacks (cluster E §3.1 24 missing):
+        // binary Motion.Player exposes onAction/onSync/onGroundCorrection
+        // as TJS callback PROPERTIES. binary invokes these at specific
+        // points (action triggered / sync event / ground correction); port
+        // adds storage now, invocation pending spike of binary call sites
+        // (cluster E §3.1 lists these without call-site addresses).
+        void setOnAction(tTJSVariant v) { _onAction = std::move(v); }
+        [[nodiscard]] tTJSVariant getOnAction() const { return _onAction; }
+        void setOnSync(tTJSVariant v) { _onSync = std::move(v); }
+        [[nodiscard]] tTJSVariant getOnSync() const { return _onSync; }
+        void setOnGroundCorrection(tTJSVariant v) {
+            _onGroundCorrection = std::move(v);
+        }
+        [[nodiscard]] tTJSVariant getOnGroundCorrection() const {
+            return _onGroundCorrection;
+        }
+
         // Root node position (x/y/left/top)
         // Aligned to libkrkr2.so:
         //   getter: Player_getRootX (0x6D98A8) reads root_node+1592
@@ -995,6 +1012,13 @@ namespace motion {
         // counter / layer-id allocation counters.
         bool _resizable = false;
         bool _flip = false;
+
+        // M15 missing event callbacks (cluster E §3.1): port storage for
+        // onAction/onSync/onGroundCorrection. Invocation pending binary
+        // call-site spike.
+        tTJSVariant _onAction;
+        tTJSVariant _onSync;
+        tTJSVariant _onGroundCorrection;
         bool _visible = true;
         double _opacity = 1.0;
         double _slant = 0.0;

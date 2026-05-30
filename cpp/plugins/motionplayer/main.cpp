@@ -138,6 +138,13 @@ NCB_REGISTER_CLASS(Player) {
     // M15 missing `contains` (cluster E §3.1): label-based hit test, delegates
     // to hitTestLayer (port's existing sub_6B5AD8-aligned path).
     NCB_METHOD(contains);
+    // M15 missing event callbacks (cluster E §3.1): onAction/onSync/
+    // onGroundCorrection TJS callback storage. Binary invokes these at
+    // specific points during motion playback; port storage + accessor only
+    // for now (invocation pending binary call-site spike).
+    NCB_PROPERTY(onAction, getOnAction, setOnAction);
+    NCB_PROPERTY(onSync, getOnSync, setOnSync);
+    NCB_PROPERTY(onGroundCorrection, getOnGroundCorrection, setOnGroundCorrection);
 
     NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
     // M15 D-01 (cluster E §3.1): removed metadata Motion.Player NCB — port
