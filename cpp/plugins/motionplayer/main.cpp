@@ -220,11 +220,14 @@ NCB_REGISTER_CLASS(Player) {
     // Drawing/rendering
     NCB_METHOD(setClearColor);
     NCB_METHOD(setResizable);
-    NCB_METHOD(removeAllTextures);
-    NCB_METHOD(removeAllBg);
-    NCB_METHOD(removeAllCaption);
-    NCB_METHOD(registerBg);
-    NCB_METHOD(registerCaption);
+    // M15 D-01 (cluster E §3.1): removed 5 draw-device internal NCB methods
+    // — not in binary Motion.Player 92-entry set (sub_6D69C8). These are
+    // web-port draw-device adapters with no binary Motion.Player equivalent
+    // and unlikely to be called from TJS scenarios; binary routes via
+    // iTVPDrawDevice/Motion.ResourceManager:
+    //   removeAllTextures, removeAllBg, removeAllCaption,
+    //   registerBg, registerCaption.
+    // C++ methods preserved (host adapter still calls them internally).
     NCB_METHOD(unloadUnusedTextures);
     NCB_METHOD(alphaOpAdd);
     NCB_METHOD_RAW_CALLBACK(captureCanvas, &Player::captureCanvasCompat, 0);
