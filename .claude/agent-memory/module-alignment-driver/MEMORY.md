@@ -1,1 +1,1 @@
-- [motionplayer module status](module_motionplayer.md) — 中等成熟度；EmotePlayer 委托链已修，Player 类布局仍是 shared_ptr 而非 1384B flat
+- [motionplayer module status](module_motionplayer.md) — EmoteEngine 容器布局已 P0-2 全量对齐(7 HM+4 vec+matrixHeap)；Player HM6→4 待办；测试基线 3/4+205/209

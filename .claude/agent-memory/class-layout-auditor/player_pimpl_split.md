@@ -1,38 +1,28 @@
 ---
 name: player-pimpl-split
-description: motion::Player 本地 pimpl 拆分映射 — 哪些二进制内联字段落在 Player.h 直接成员,哪些落在 PlayerRuntime;以及本地多出/类型错/偏移误标的字段清单
+description: [已过时-2026-05-30] PlayerRuntime pimpl 已在 A10 删除,容器全部内联进 motion::Player 本体;EmoteEngine 用 raw Player* + new/delete 持有。保留作历史。
 metadata:
   type: project
 ---
 
-# motion::Player 本地 pimpl 拆分 (Player.h + PlayerRuntime) vs 1384B 二进制
+# [过时] motion::Player pimpl 拆分 — A10 已移除
 
-二进制无 pimpl,1384B 全部内联。本地拆为:
-- `class Player` 直接成员 (Player.h:563-773): 标量/bool/ttstr/少量 tTJSVariant
-- `shared_ptr<PlayerRuntime>` (RuntimeSupport.h:223): 全部容器 + 渲染管线
+**2026-05-30 复审**: `shared_ptr<PlayerRuntime>` 拆分**已不存在**。
+A10 阶段把 PlayerRuntime 所有字段 hoist 进 `class Player` 本体(Player.h:616-807 直接成员)。
+RuntimeSupport.h:329 注释确认 "PlayerRuntime struct deleted after Phase A1-A9"。
 
-## PlayerRuntime 承载的二进制内联容器
-| 二进制偏移 | 容器 | PlayerRuntime 成员 |
-|---|---|---|
-| +24 node label map | std::map | nodeLabelMap |
-| +184 节点 deque (2632B) | KiriKiri deque | nodes (std::deque<MotionNode>) |
-| +264/+320/+1184/+1240 | 4 哈希表 | 🔬未定 ↔ motionsByKey/timelines/layerIdsByName/layerNamesById/renderLayerStates/disabledSelectorTargets (6个,映射未确定) |
-| +384 renderList (56B) | 裸数组 | preparedRenderItems (std::vector<PreparedRenderItem ~400B>) |
-| +936 variableList (44B) | 裸数组 | variableLabelEntries |
-| +1296 deque (160B) | KiriKiri deque | 🔬未定 |
+## 当前真实架构(替代旧 pimpl 描述)
+- `class Player`(Player.h)直接内联全部容器: `std::deque<MotionNode> _nodes`,
+  6×`std::unordered_map`, 多个 `std::vector`, `std::map<string,int> _nodeLabelMap`,
+  `std::list<EvalResultEntry>` 等 —— **不再有 pimpl 指针**
+- `EmoteEngine` 用 `Player* _player = new Player(...)` (EmoteEngine.cpp:40) +
+  `delete _player` (EmoteEngine.cpp:106) — raw ptr + manual new/delete,对齐二进制 `new(0x568)`
+- 子 Player 同样 `new Player(...)` (NodeTree.cpp:230, PlayerUpdateParticles.cpp:446)
 
-## 已知字段错误 (写入 TODO P0)
-- `_pixelateDivision` (+912=100) **缺失**
-- `_project` 类型错: tTJSVariant 应为 tjs_int (+1144)
-- `_completionType` 类型错: int 应为 bool (+1092)
-- `_tjsRandomGenerator` 偏移误标 player+992,实为 player+676
-- `ttstr _transformOrder` (+992) **缺失**
-- `_hairScale/_partsScale/_bustScale` 误标 player+1184/1192/1200 — 这是 **EmotePlayer 1496B 变体**偏移,1384B Player 的 +1184 是哈希表 HM3,误植
-- `_colorWeightPacked` 与 `_parentColorPacked` 都标 +1156,实为同一字段
+## 仍然有效的容器选型偏差(权威表见 [[player-container-layout]])
+- 6 个 std::unordered_map ↔ 二进制 4 个 KiriKiri inline HM(+264/+320/+1184/+1240) → ⚠️ 语义对齐容器不同
+- std::deque<MotionNode> ↔ KiriKiri deque(+184, node 2632B) → ⚠️
+- std::vector<PreparedRenderItem> ↔ 裸数组 stride 56B(+384) → ⚠️
+- std::vector<VariableLabelEntry> ↔ 裸数组 stride 44B(+936) → ⚠️
 
-## 本地多出 (二进制 1384B Player 不存在,疑似 EmotePlayer 变体或本地新增功能等价物)
-_variableAnimators, _type4..8ControllerAnimators, _evalResultList/Index,
-_mirrorPositive/NegativeCache, _emote*State, _windState, _*OuterForce — 需审计归属。
-
-参见 [[player-container-layout]]。权威偏移表: analysis/Player_Class_Layout_libkrkr2so.md;
-对齐 TODO: analysis/Player_Class_Layout_Alignment_TODO.md。
+权威字段表: [[player-1384b-flat-spec]]。

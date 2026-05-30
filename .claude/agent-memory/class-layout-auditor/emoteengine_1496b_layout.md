@@ -23,8 +23,8 @@ ctor=0x67E38C, progress=0x67D01C, size=0x5D8=1496B, **无 vtable** (POD)
 | 560 | std::deque<24B> #8 | 辅助单值 (sub_666BF8) |
 | 640 | std::deque<48B> #9 | 向量变量 6×QWORD (sub_668470) |
 | 720 | std::deque<16B> #10 | 预烘焙曲线查表 |
-| 800-864 | scalar (OWORD+5 int) + float=1.0f@856 | 未细分 |
-| 856..1023, 1272.., 1328.. | 4 个 KiriKiri inline `vector reserve(10)` 块 | **未详细反编译** _guess |
+| 800-823 | scalar (OWORD+int) | 未细分 |
+| **824/880/936/1272/1328/1384/1440** | **7 个内嵌 std::unordered_map (KiriKiri hashmap)** | 已反编译确认 (见下) |
 | 1064 | Player* (a1[133]) | 独立 0x568=1384B 堆对象 |
 | 1072 | EmoteVarController* 0x80 count=2 | **Position (x,y)** |
 | 1080 | EmoteVarController* 0x80 count=1 | **Scale (uniform)** |
@@ -40,8 +40,27 @@ ctor=0x67E38C, progress=0x67D01C, size=0x5D8=1496B, **无 vtable** (POD)
 | 1184 | double | bust chain #1 spring const |
 | 1192 | double | bust chain #2 spring const |
 | 1200 | double=1.0 | (a1[150]) |
-| **1440** | **libstdcxx std::unordered_map<ttstr,double>** HM2 | labelToValue physics 输出表 |
-| 1456 | linked list head | bind 链表 (progress 尾部遍历) |
+| **1440** | **std::unordered_map #7** (占满 1440..1495) | labelToValue physics 输出表 (HM2) |
+
+### 重大修正 (2026-05-30 复核 sub_67E38C)
+
+**此前记录"4 个 KiriKiri inline vector reserve(10) 块 @ 856/1023/1272/1328"是错的。**
+ctor 实际有 **7 处 `std_Prime_rehash_policy_M_next_bkt(ptr, 10)`** = 7 个内嵌
+std::unordered_map (libstdc++ `_Hashtable`, 各 56B/7 QWORD)。起始偏移:
+**824, 880, 936, 1272, 1328, 1384, 1440**。每个布局:
+buckets@+0 / bucket_count@+8 / before_begin@+16 / element_count@+24 /
+max_load_factor(float 1.0)@+32 / next_resize@+40 / single_bucket@+48。
+模式与 [[player-container-layout]] Player 的 4 个 hashmap 完全一致。
+992..1063 是 `memset(a1+124,0,0x48)` 72B 零块 (非容器)。
+value 类型待反编译各 map 的 insert/lookup 调用点确定。
+
+### 本地 EmoteEngine.h 当前偏差 (P0 提取后, 2026-05-30)
+- ✅ 已修复: 10 deque / 7 controller 裸指针 / Player 裸指针 / +1162 _dirty / 无 vtable
+- ❌ 6 个 unordered_map (824/880/936/1272/1328/1384) 建模为 uint8_t[] 裸字节 (`_inlineVectorBlocks_*` + `_scalarField_824..864`)
+- ❌ `_bindListHead@1456` 是伪字段, 与 HM#7@1440 物理重叠 (落在其 before_begin/element_count 上), 应删除
+- ⚠️ `_meshDivisionRatio@1168` 本地初值 1.0, 二进制 ctor 清零 (1.0 运行时写入)
+- ⚠️ applyVarControllers (sub_6766E0) 真实顺序 pos→color→scale→angle, 本地 cpp 写成 pos→scale→color→angle (方法体偏差)
+- ⚠️ ctor 4-controller reset 顺序应为 134/135/137/136 (angle 先于 color), 本地 cpp 未复刻
 
 ## 7 controllers 是 POD (两类不同 size, **没有 vtable**)
 

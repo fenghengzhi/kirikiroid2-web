@@ -1,0 +1,2 @@
+- [EmoteVarController alignment](emotevarcontroller_alignment.md) — ctor 0x667030 / step 0x666BF8 data flow, allocation size, inverted lerp roles
+- [EmoteEngine 1496B layout](emoteengine_1496b_hashmap_layout.md) — verified byte map: 7 inline unordered_maps + 4 vectors (NOT byte blocks); _bindListHead aliases HM7

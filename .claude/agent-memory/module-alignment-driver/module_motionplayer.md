@@ -20,7 +20,12 @@ motionplayer 模块（cpp/plugins/motionplayer/，约 24.6K LOC，40+ 文件）�
 
 ### A. EmotePlayer 链路（已大幅修正）
 - D3DEmotePlayerNativeInstance(24B) → EmoteObject(40B) → EmoteEngine(1496B) → Player(1384B) 4 级堆指针拓扑已就位
-- 但 EmoteEngine 的内部布局并未对齐：二进制 EmoteEngine_ctor (0x67E38C) 在 a1[0..720] 范围内排了**10 个 80B std::deque**（10 个不同的动画/控制器收集器），然后 a1[133]=Player*、a1[134..140]=7 个独立堆分配的 controller 对象（0x80B/0x70B）。本地 EmoteEngine.h 仅声明 5 个 deque + 1 个 unordered_map + 若干 scalar，**缺约 5 个 deque 与 7 个独立 controller heap 对象**。
+- **EmoteEngine 内部容器布局 2026-05-30 已对齐（P0-2 阶段 A+B+C，本驱动亲自执行）**：
+  - 10 个 80B std::deque @0..799、7 个 controller heap 对象 @1072..1120、Player* @1064、_dirty@1162、meshRatio@1168/1176 早已就位。
+  - 本次新增：6 个误建的裸字节块（_inlineVectorBlocks_*/_scalarField_8xx/_residual_*/_matrixRegion_*）替换为 typed 字段——**7 个 `unordered_map<ttstr,V>`**（@824/880/936/1272/1328/1384/1440，共享 detail::ttstr_hash）+ **4 个 `std::vector<tTJSVariant*>`**（@800/992/1016/1040）+ **void* _matrixHeap1128**。
+  - value 类型证据：HM#7@1440 = `<ttstr,double>` 完全验证（ttstr_doubleMap_upsert @0x686944 返回 node+16，progress 写 double）；HM#1/2/4/5/6 dtor 只 release key ttstr（value 占位 double + TODO(P-B)）；HM#3@936 value 走 sub_683E40 是 ~104B 复合对象（占位 EmoteHM3Value{opaque[104]} + TODO）。
+  - 删除 `_bindListHead`/`EmoteBindListEntry`——它物理上是 HM#7 的 `_M_before_begin._M_nxt`，不是真字段。
+  - **PLATFORM_BOUNDARY（用户已拍板接受）**：libc++ unordered_map header≠libstdc++ 56B，sizeof(EmoteEngine) 不再精确=1496B，选 typed 语义对齐而非字节级 1496B（同 Player STL 策略）。
 - D3DEmotePlayer wrapper 的字段集（baseScale +40 / userScale +44 / visible +48 / smoothing +49）布局正确；缺 ≥56B 总尺寸下其余字段的反编译验证。
 
 ### B. Player 内存布局（1384B flat vs Web port shared_ptr 拆分）
@@ -72,7 +77,22 @@ motionplayer 模块（cpp/plugins/motionplayer/，约 24.6K LOC，40+ 文件）�
 
 **容器迁移核查方法（防止重复误报）：** 在认为某个 `_xxx` 字段"应迁出 Player"之前，先 `grep -n "_xxx" cpp/plugins/motionplayer/Player.h` 确认 Player.h 是否真的声明该字段——很多容器**仅出现在 .cpp 的 `_engineBack->_xxx` 访问点**，并不在 Player 上。
 
-**测试入口/构建命令：**
-- macos debug 单元测试：`cmake --preset "MacOS Debug Config" -DBUILD_TESTS=ON && cmake --build out/macos/debug --target motionplayer-dll-tests && ./out/macos/debug/tests/unit-tests/plugins/motionplayer-dll-tests`
-- web 构建：`cmake --preset "Web Debug Config" && cmake --build out/web/debug`
+**测试入口/构建命令（2026-05-30 修正）：**
+- macos debug 单元测试 target 名是 `motionplayer-dll`（不是 motionplayer-dll-tests）：`cmake --build out/macos/debug --target motionplayer-dll && ./out/macos/debug/tests/unit-tests/plugins/motionplayer-dll`
+  - **基线（已用 git stash 验证）**：7 用例 3 通过 4 失败、209 assertions 205 通过。这 4 个失败（cpp:517/570/668/780）是**预存**的、与 EmoteEngine 布局无关（依赖未移植的 motion 加载/图层枚举/step 函数）。改 EmoteEngine 布局后结果不变 → 该模块布局类改动的回归基线就是"仍是 3/4 + 205/209"。
+- web 构建：`cmake --build out/web/debug`（本次 64/64 通过）
 - differential test 入口（如有）：tests/differential/wasmtime/motion_playback_wasmtime.cpp 通过 A10 暴露的 Player::activeMotion()/nodes()/preparedRenderItems*() accessors 工作
+
+**EmoteEngine 反编译符号锚点（本次确认/已 idb_save）：**
+- EmoteEngine_ctor @0x67E38C（1496B；7×M_next_bkt(ptr,10) 是 7 个 inline unordered_map 铁证；reset 顺序 134→135→137→136 = pos→scale→angle→color）
+- EmoteEngine_dtor @0x67F4B8（EmotePlayer/D3DEmotePlayer 共用；按降序 offset 释放 7 map + 4 vector + 7 controller + Player + matrixHeap）
+- EmoteEngine_progress @0x67D01C（deque-step 把输出 upsert 进 HM#7@1440；bind-loop 遍历 HM#7 的 _M_before_begin 节点链调 sub_67C560/67C6B0/Player_bindParameterValue，全是未移植 stub）
+- EmoteEngine_applyVarControllers @0x6766E0（顺序 pos→color→scale→angle，每个 apply 紧跟其 step；scale 写 *(this+1176)=1.0/(this+1168 * v)）
+- ttstr_doubleMap_upsert @0x686944（HM#7 与 Player HM2@+320 共用；node new(0x20)=32B {next@0,ttstr_key@8 atomic-incref,value@16,hash@24}，返回 node+16）
+- sub_683E40（HM#3 value 析构器：~104B 复合对象，按升序 offset +0 ttstr/+8/+16/+28/+96 释放）
+- 待确认：xmmword_14D68D0（color reset 4-float seed，rodata，仅 ctor@0x67e9c4 引用；MCP 无直接读 rodata 字节工具，留 TODO）
+
+**未收敛项（需用户决策）：**
+- **阶段 C 保序问题**：bind-loop 依赖 libstdc++ unordered_map 的 _M_before_begin 插入序单链表；libc++ 不暴露此链。当前 bind-loop body 全是 stub（无可观测行为），故改为直接迭代 typed map 并加 PLATFORM_BOUNDARY 注释。**若未来移植 sub_67C560 等且脚本观察顺序，需重新评估 KiriKiri 内联 hashtable**——本次按计划"风险/工作量过大则停下出方案"未做。
+- **HM#1/2/3/4/5/6 value 类型（阶段 B 未完成）**：需反编译 setVariable 写入路径定案。当前 HM#1/2/4/5/6=占位 double、HM#3=占位 opaque[104]，均带 TODO(P-B)。
+- **Player HM 6→4 映射（P1-3）**：属 Player 类、独立模块，本次按范围边界**未碰**。已确认 EmoteEngine HM#7 与 Player HM2@+320 共用同一 upsert/hash（ttstr_doubleMap_upsert）——这是两模块的耦合点，后续对齐 Player HM 时应复用此 helper 语义。
