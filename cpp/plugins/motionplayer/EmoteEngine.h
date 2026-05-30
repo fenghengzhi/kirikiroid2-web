@@ -14,7 +14,9 @@
 //   - 10 binary-typed deques have 10 distinct POD element types
 //   - _dirty is at EmoteEngine+1162 (NOT on Player)
 //   - _meshDivisionRatio* is at EmoteEngine+1168/+1176 (NOT on Player)
-//   - HM2 (label→value) is at EmoteEngine+1440 (NOT +1384)
+//   - the 7 inline unordered_map<ttstr,V> (@824/880/936/1272/1328/1384/1440)
+//     and 4 std::vector<tTJSVariant*> (@800/992/1016/1040) are typed fields,
+//     NOT raw byte blocks (P0-2, 2026-05-30). HM#7 (label→double) is @+1440.
 //
 // PLATFORM_BOUNDARY: sizeof(EmoteEngine) on Web build will not equal 1496B
 // due to libc++ deque (~64B header) vs libstdc++ (80B header) and unordered_map
@@ -27,17 +29,87 @@
 #include <deque>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "tjs.h"
 #include "EmoteVarController.h"
 #include "EmoteAngleController.h"
 #include "internal/player_containers.h"
 #include "internal/legacy_variable_state.h"
+#include "internal/ttstr_hash.h"
 
 namespace motion {
 
     class Player;
     class ResourceManager;
+
+    // ========================================================================
+    // EmoteEngine inline-container value typedefs (libkrkr2.so EmoteEngine_ctor
+    // @0x67E38C / EmoteEngine_dtor @0x67F4B8).
+    //
+    // The 1496B engine embeds 7 libstdc++ unordered_map<ttstr,V> (offsets
+    // 824/880/936/1272/1328/1384/1440) and 4 std::vector<tTJSVariant*>
+    // (offsets 800/992/1016/1040). All 7 maps share the KiriKiri ttstr hash
+    // (verified: ttstr_doubleMap_upsert @0x686944 uses the exact 1025/6/9/
+    // 32769/11 mix in detail::ttstr_hash_utf16). Each map node is
+    // operator new(0x20)=32B {next@0, ttstr key@8 (atomic-refcounted),
+    // value@16, cached_hash@24}.
+    //
+    // VALUE TYPES (evidence status):
+    //   HM#7 @1440 = <ttstr,double> — FULLY VERIFIED. ttstr_doubleMap_upsert
+    //     returns node+16 and progress() writes a double there; bind-loop
+    //     reads i[2] as double. dtor releases only the key ttstr.
+    //   HM#1 @824, HM#2 @880, HM#4 @1272, HM#6 @1384 — dtor does
+    //     tTJSVariant_Release(node[1]) i.e. releases ONLY the key ttstr; it
+    //     never touches node+16. So the value is NOT an owned dispatch/variant.
+    //     The exact value width is set by the (un-reversed) setVariable write
+    //     path. TODO(P-B): reverse setVariable to confirm; placeholder = double.
+    //   HM#5 @1328 — dtor runs sub_68577C(this+1328) first, then walks a
+    //     SEPARATE node chain at +1288 releasing key ttstr. The +1272/+1288
+    //     pairing means HM#4's footprint owns the +1288 chain; HM#5's own
+    //     value width is likewise un-reversed. TODO(P-B): placeholder = double.
+    //   HM#3 @936 — dtor walks nodes calling sub_683E40(node+1): a compound
+    //     ~104B value object (ttstr@0 + dispatch@8 + sub-object@16 + heap@96).
+    //     Distinct, owned value type. TODO(P-B): reverse the value struct;
+    //     placeholder = an opaque 104B POD until then.
+    //
+    // PLATFORM_BOUNDARY: libc++ unordered_map header (~32-40B) != libstdc++ 56B
+    // and libc++ vector (24B, matches). sizeof(EmoteEngine) on the Web build can
+    // therefore no longer equal 1496B exactly. User-accepted trade-off (same
+    // posture as player_containers.h): we align typed K/V semantics + shared
+    // hash + lifetime, not byte-level 1496B. Offset comments are for trace only.
+    // ========================================================================
+    namespace detail {
+
+        // HM#1/2/4/5/6 value placeholder. dtor releases only the ttstr key, so
+        // the value is a non-owned scalar. Width un-confirmed (setVariable write
+        // path not yet reversed). TODO(P-B): replace `double` once confirmed.
+        using EmoteScalarMap =
+            std::unordered_map<ttstr, double, ttstr_hash, ttstr_equal>;
+
+        // HM#3 value: compound object destroyed by sub_683E40 (releases an
+        // owned ttstr@0, dispatch@8, sub-object@16 via sub_683EB8, heap@96).
+        // Opaque until reversed. TODO(P-B): unpack into a typed struct mirroring
+        // sub_683E40's ascending-offset field destruction.
+        struct EmoteHM3Value {
+            // PLATFORM_BOUNDARY: 104B opaque. sub_683E40 frees in order:
+            //   +96 heap (operator delete), +28 sub-object (sub_A0F778),
+            //   +16 owned ptr (sub_683AA8 + delete), +8 owned ptr (sub_683EB8
+            //   + delete), +0 ttstr (tTJSVariant_Release). Reverse-declaration
+            //   destruction would be needed once typed. Held opaque for now so
+            //   no partial/incorrect lifetime is introduced.
+            unsigned char opaque[104] = {};
+        };
+        using EmoteHM3Map =
+            std::unordered_map<ttstr, EmoteHM3Value, ttstr_hash, ttstr_equal>;
+
+        // 4 std::vector<tTJSVariant*> (offsets 800/992/1016/1040). dtor walks
+        // [begin,end) releasing each non-null element via tTJSVariant_Release,
+        // then operator delete on the buffer. Non-owning of the variants beyond
+        // the release (raw pointers, owner is the variant refcount).
+        using VariantPtrVector = std::vector<tTJSVariant *>;
+
+    } // namespace detail
 
     // ============================================================================
     // 10 deque element POD types (per binary spec).
@@ -93,13 +165,6 @@ namespace motion {
     struct EmoteLookupCurve16B_Deque10 { char raw[16]; };
     static_assert(sizeof(EmoteLookupCurve16B_Deque10) == 16, "");
 
-    // Linked-list node @ +1456 — bind pending evals tail-loop in progress.
-    //   PLATFORM_BOUNDARY: only the head pointer + `next` traversal is reversed
-    //   (progress 0x67D01C tail loop).
-    struct EmoteBindListEntry {
-        EmoteBindListEntry* next = nullptr;
-    };
-
     // ============================================================================
     // EmoteEngine — 1496B (0x5D8), no vtable. Ctor sub_67E38C.
     // ============================================================================
@@ -150,33 +215,26 @@ namespace motion {
         // +720..+799:deque #10 — Pre-baked curve lookup
         std::deque<EmoteLookupCurve16B_Deque10> _lookupCurvesDeque10;
 
-        // +800..+815: OWORD zero block
-        // +816: int scalar; +840/+848: int scalars; +856: float=1.0 (a1[214]);
-        // +864: int (a1[108]). PLATFORM_BOUNDARY: semantics not detailed; _guess.
-        uint8_t  _scalarRegion_800_OWORD[16] = {}; // +800..+815
-        int32_t  _scalarField_816 = 0;             // +816
-        int32_t  _scalarField_820_guess = 0;       // +820 _guess
-        int32_t  _scalarField_824_guess = 0;       // +824 _guess
-        int32_t  _scalarField_828_guess = 0;       // +828 _guess
-        int32_t  _scalarField_832_guess = 0;       // +832 _guess
-        int32_t  _scalarField_836_guess = 0;       // +836 _guess
-        int32_t  _scalarField_840 = 0;             // +840
-        int32_t  _scalarField_844_guess = 0;       // +844 _guess
-        int32_t  _scalarField_848 = 0;             // +848
-        int32_t  _scalarField_852_guess = 0;       // +852 _guess
-        float    _scalarField_856_1f = 1.0f;       // +856 (a1[214]=1.0f)
-        int32_t  _scalarField_860_guess = 0;       // +860 _guess
-        int32_t  _scalarField_864 = 0;             // +864 (a1[108])
+        // +800..+823: std::vector<tTJSVariant*> (a1[100..102]).
+        //   ctor zeroes begin/end/cap; dtor releases each elem + delete buffer.
+        detail::VariantPtrVector _variantVector800; // +800
 
-        // +868..+1023: 3 KiriKiri inline `vector reserve(10)` blocks.
-        // PLATFORM_BOUNDARY: not detailed-reverse-engineered. 24B ptr/cap/size
-        //   vector control headers populated inside setVariable type-dispatch
-        //   (offsets 856/888/952). P2 TODO: reverse and unpack into typed fields.
-        uint8_t _inlineVectorBlocks_868_1023[1024 - 868] = {}; // 156B
+        // +824..+879: HM#1 unordered_map<ttstr,V> (libkrkr2.so +824).
+        //   ctor: M_next_bkt(this+107,10); dtor releases key ttstr only.
+        detail::EmoteScalarMap _scalarHM1_824; // +824
 
-        // +1024..+1063: residual unreversed scalars.
-        // PLATFORM_BOUNDARY: ctor body not exhaustively analyzed here.
-        uint8_t _residual_1024_1063[1064 - 1024] = {}; // 40B _guess
+        // +880..+935: HM#2 unordered_map<ttstr,V> (libkrkr2.so +880).
+        detail::EmoteScalarMap _scalarHM2_880; // +880
+
+        // +936..+991: HM#3 unordered_map<ttstr,EmoteHM3Value> (libkrkr2.so +936).
+        //   dtor walks nodes via sub_683E40(node+1): distinct compound value.
+        detail::EmoteHM3Map _compoundHM3_936; // +936
+
+        // +992..+1015 / +1016..+1039 / +1040..+1063: 3 std::vector<tTJSVariant*>
+        //   (a1[124..]). ctor memset(this+124,0,0x48); dtor releases+deletes.
+        detail::VariantPtrVector _variantVector992;  // +992
+        detail::VariantPtrVector _variantVector1016; // +1016
+        detail::VariantPtrVector _variantVector1040; // +1040
 
         // +1064: Player* (a1[133]) — independent 1384B heap object.
         //   `v13 = operator new(0x568); Player_ctor(v13)`.
@@ -198,9 +256,15 @@ namespace motion {
         // +1120: EmoteVarController* count=2 — Bust #2 physics target
         EmoteVarController*   _ctlBust2Target = nullptr;
 
-        // +1128..+1158: 2× OWORD matrix-ish block (zeroed by ctor).
-        // PLATFORM_BOUNDARY: matrix semantics not reversed.
-        uint8_t _matrixRegion_1128_1158[1159 - 1128] = {}; // 31B
+        // +1128: heap pointer (transform/matrix alloc). ctor zeroes it; dtor
+        //   does `if (p) operator delete(p)`. Allocation site is in a setup
+        //   path not reversed here. PLATFORM_BOUNDARY: payload semantics TODO.
+        void* _matrixHeap1128 = nullptr; // +1128
+
+        // +1136..+1158: zeroed scalar/state region (a1[141..143] OWORDs in ctor).
+        // PLATFORM_BOUNDARY: semantics not reversed; kept as raw filler so the
+        //   typed fields below land at their documented offsets logically.
+        uint8_t _stateRegion_1136_1158[1159 - 1136] = {}; // 23B
 
         // +1159: byte syncWaiting — read by progress physics-only pass
         //   (dt!=0 && !syncWaiting@1159).
@@ -232,25 +296,36 @@ namespace motion {
         // +1200: double = 1.0 (a1[150]).
         double _scalarField_1200_1d = 1.0; // +1200
 
-        // +1208..+1271: residual.
-        // PLATFORM_BOUNDARY: not detailed-reversed.
-        uint8_t _residual_1208_1271[1272 - 1208] = {}; // 64B
+        // +1208 / +1228 / +1248: 3 small objects, each freed by sub_A0F778
+        //   (20B stride). PLATFORM_BOUNDARY: payload semantics not reversed;
+        //   kept as raw filler. TODO(P-B): identify the 20B object type.
+        uint8_t _smallObj1208[20] = {}; // +1208
+        uint8_t _smallObj1228[20] = {}; // +1228
+        uint8_t _smallObj1248[24] = {}; // +1248 (pad to +1272 map boundary)
 
-        // +1272..+1439: 2 more inline vector blocks (~+1272, +1328).
-        // PLATFORM_BOUNDARY: not detailed-reverse-engineered. P2 TODO.
-        uint8_t _inlineVectorBlocks_1272_1439[1440 - 1272] = {}; // 168B
+        // +1272..+1327: HM#4 unordered_map<ttstr,V> (libkrkr2.so +1272).
+        //   dtor walks the +1288 node chain releasing key ttstr.
+        detail::EmoteScalarMap _scalarHM4_1272; // +1272
 
-        // +1440: HM2 — libstdc++ unordered_map<ttstr, double> label-to-value.
-        //   Aligned with libkrkr2.so EmoteEngine+1440. Written by physics step
-        //   functions in progress(), read by Player_bindParameterValue.
-        // PLATFORM_BOUNDARY: sizeof(std::unordered_map) on libc++ ~32B vs
-        //   libstdc++ 56B. Binary occupies offsets 1440..1495 (56B).
-        detail::LabelValueMap _labelToValueHM2; // +1440
+        // +1328..+1383: HM#5 unordered_map<ttstr,V> (libkrkr2.so +1328).
+        //   dtor runs sub_68577C(this+1328) before walking its node chain.
+        detail::EmoteScalarMap _scalarHM5_1328; // +1328
 
-        // +1456 (within HM2's binary footprint): linked-list head pointer for
-        //   pending bind evaluations. PLATFORM_BOUNDARY: positioned adjacent
-        //   on local build.
-        EmoteBindListEntry* _bindListHead = nullptr; // +1456
+        // +1384..+1439: HM#6 unordered_map<ttstr,V> (libkrkr2.so +1384).
+        detail::EmoteScalarMap _scalarHM6_1384; // +1384
+
+        // +1440..+1495: HM#7 unordered_map<ttstr,double> — VERIFIED.
+        //   Written by progress() deque-step loop via ttstr_doubleMap_upsert
+        //   @0x686944 (returns node+16), read by the bind-loop. Its
+        //   _M_before_begin._M_nxt single-linked node chain (insertion order)
+        //   IS what the binary's bind-loop and dtor walk; on libc++ this chain
+        //   is not exposed (see progress() / dtor notes for the consequence).
+        // PLATFORM_BOUNDARY: libc++ map header != libstdc++ 56B; binary
+        //   occupies 1440..1495 (the end of the 1496B struct).
+        detail::LabelValueMap _labelToValueHM7; // +1440
+
+        // (The former `_bindListHead@1456` pseudo-field was deleted: it was a
+        //  physical alias of HM#7's _M_before_begin._M_nxt, not a real member.)
 
         // ===== End binary-layout fields =====
 

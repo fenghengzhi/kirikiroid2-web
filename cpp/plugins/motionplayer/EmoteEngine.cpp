@@ -63,35 +63,73 @@ namespace motion {
         EmoteVarController_ctor(_ctlBust2Target,     2);
 
         // Step 6 partial: +1162 _dirty defaults to true via in-class initializer.
-        // Step 8: reset 4 direct controllers (pos/scale/angle/color) with
-        //   identity default values. (Detailed reset pattern in binary not yet
-        //   replicated — controller defaults are already zero-initialized via
-        //   EmoteVarController_ctor, and scale default 1.0 is seeded below.)
-        if (_ctlScale->currentValue && _ctlScale->count > 0) {
-            // Scale uniform default 1.0 (seed of "no scaling").
-            for (int i = 0; i < _ctlScale->count * 4; ++i) {
-                _ctlScale->currentValue[i] = 1.0f;
+        //
+        // Step 8: reset 4 direct controllers seeding their currentValue with a
+        // default. The binary inlines, for each controller, a "clear deque
+        // queue + memcpy(currentValue, &seed, 4*count)" block. The ORDER in the
+        // binary is a1[134] -> a1[135] -> a1[137] -> a1[136], i.e.
+        //   POSITION (134, seed 0.0f, count=2)
+        //   SCALE    (135, seed 1.0f, count=1)   [v73 = 1065353216 = 1.0f]
+        //   ANGLE    (137, no currentValue seed — angle controller has a
+        //             different block shape; only its deque is cleared)
+        //   COLOR    (136, seed = xmmword_14D68D0, count=4)
+        // (The local order previously did scale then color and skipped pos.)
+        //
+        // Reset == clear the keyframe queue + broadcast `seed` into every
+        // currentValue channel (matches the binary's deque-block free +
+        // memcpy(*(ctl+88), &seed, 4*count)).
+        auto resetVarController = [](EmoteVarController* c, float seed) {
+            if (!c) return;
+            c->queue.clear();
+            c->state = 0;
+            c->phase = 0.0f;
+            c->invDuration = 0.0f;
+            if (c->currentValue && c->count > 0) {
+                for (int i = 0; i < c->count; ++i) {
+                    c->currentValue[i] = seed;
+                }
             }
-        }
-        if (_ctlColor->currentValue && _ctlColor->count > 0) {
-            // Color default white (xmmword_14D68D0 _guess = (1,1,1,1) RGBA).
-            for (int i = 0; i < _ctlColor->count * 4; ++i) {
-                _ctlColor->currentValue[i] = 1.0f;
-            }
-        }
+        };
+
+        // 134: POSITION, seed 0.0f.
+        resetVarController(_ctlPosition, 0.0f);
+        // 135: SCALE, seed 1.0f.
+        resetVarController(_ctlScale, 1.0f);
+        // 137: ANGLE — binary only clears the deque (no currentValue memcpy
+        //   because the angle controller's 0x70 block has no currentValue
+        //   array seeded here). Clear its queue to match.
+        if (_ctlAngle) _ctlAngle->queue.clear();
+        // 136: COLOR, seed = xmmword_14D68D0 (a 4-float constant). The exact
+        //   bytes are NOT yet read out of libkrkr2.so (rodata @0x14D68D0,
+        //   referenced ONLY here). Per CLAUDE.md we do not guess the value;
+        //   the color controller's currentValue stays zero-initialized from
+        //   EmoteVarController_ctor until the constant is confirmed.
+        //   TODO(P-C): read xmmword_14D68D0 (4 floats) and seed _ctlColor here;
+        //   most likely identity white (1,1,1,1) but UNCONFIRMED.
+        //   resetVarController(_ctlColor, <xmmword_14D68D0 channels>);
     }
 
     // EmoteEngine dtor — manual cleanup of 7 controllers + Player + bind list.
     // PLATFORM_BOUNDARY: libkrkr2.so dtor not yet separately reverse-engineered;
     //   this follows the standard "reverse of ctor" pattern.
     EmoteEngine::~EmoteEngine() {
-        // Free bind linked list (PLATFORM_BOUNDARY: structure stubbed).
-        for (EmoteBindListEntry* e = _bindListHead; e; ) {
-            EmoteBindListEntry* next = e->next;
-            delete e;
-            e = next;
-        }
-        _bindListHead = nullptr;
+        // libkrkr2.so dtor EmoteEngine_dtor @0x67F4B8 walks HM#7's
+        // _M_before_begin._M_nxt node chain releasing each key ttstr, then
+        // frees its buckets. With the typed std::unordered_map<ttstr,double>
+        // _labelToValueHM7, the map's own destructor releases all key ttstrs
+        // automatically (and likewise for the 6 other maps + 4 variant
+        // vectors), so no manual bind-list free is needed here. The former
+        // `_bindListHead` manual loop was an alias of the map internals and
+        // has been removed.
+        //
+        // NOTE: the binary's dtor ALSO calls sub_67C8A8-adjacent cleanup and,
+        // for the 4 variant vectors, tTJSVariant_Release on each element before
+        // delete. The typed std::vector<tTJSVariant*> does NOT release the
+        // referenced variants (it only frees the pointer buffer). TODO(P-B):
+        // if/when those vectors are populated, add an explicit per-element
+        // tTJSVariant_Release pass mirroring EmoteEngine_dtor @0x67F8C0/+992/
+        // +1016/+1040 before the vector clears. Currently the vectors are
+        // never populated (setVariable write path un-ported), so this is inert.
 
         // Delete 7 controllers in reverse-of-ctor order.
         if (_ctlBust2Target)     { EmoteVarController_dtor(_ctlBust2Target);     delete _ctlBust2Target;     _ctlBust2Target = nullptr; }
@@ -110,41 +148,62 @@ namespace motion {
     // Aligned with libkrkr2.so sub_6766E0
     //   EmoteEngine_applyVarControllers_pos_scale_color_angle @ 0x6766E0.
     //
-    // Binary call shape (verified):
-    //   EmoteVarController_step(ctlPosition,    posOut[2],   dt);
-    //   EmoteVarController_step(ctlScale,       scaleOut[1], dt);
-    //   EmoteVarController_step(ctlColor,       colorOut[4], dt);
-    //   EmoteAngleController_step(ctlAngle,     &angleOut,   dt);
-    //   Player_setCoord(player, posOut[0], posOut[1]);
-    //   Player_setSlant(player, scaleOut[0], scaleOut[0]);
-    //   *(double*)(this+1176) = 1.0 / (this+1168 * scaleOut[0]);  // scale denom
-    //   sub_6CD724(player, packBytes(colorOut));                    // color apply
-    //   Player_setAngleDeg(player, angleOut);
+    // Binary call shape (VERIFIED by decompile of sub_6766E0):
+    //   step(ctlPosition@+1072, &v);  Player_setCoord(player, v[0], v[1]);
+    //   step(ctlColor@+1088,    &v);  sub_6CD724(player, packARGB(v[0..3]));
+    //   step(ctlScale@+1080,    &v);  *(double*)(this+1176) =
+    //                                     1.0 / (*(double*)(this+1168) * v[0]);
+    //                                 Player_setSlant(player, v[0], v[0]);
+    //   step(ctlAngle@+1096,    &v);  Player_setAngleDeg(player, v[0]);
     //
-    // PLATFORM_BOUNDARY: Player_setCoord/setSlant/setColor/setAngleDeg are
-    //   referenced by binary name but the local equivalents are STUB_WARN at
-    //   present (P1 will wire them up). Controllers run their step fns here.
+    // ORDER IS pos -> color -> scale -> angle (NOT pos/scale/color/angle).
+    // Each apply happens IMMEDIATELY after its own step, all reusing the same
+    // small output buffer (the binary reuses stack slot &v7 for every step).
+    //
+    // PLATFORM_BOUNDARY: Player_setCoord/setSlant/setAngleDeg and the color
+    //   pack sink (sub_6CD724) are referenced by binary name; the local
+    //   equivalents are not yet wired (P1). The controller steps + the +1176
+    //   scale-denominator write are real here.
     void EmoteEngine::applyVarControllers_pos_scale_color_angle(float dt) {
-        float posOut[2]   = {0.0f, 0.0f};
-        float scaleOut[1] = {1.0f};
-        float colorOut[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-        float angleOut    = 0.0f;
+        // Shared output buffer (mirrors the binary's single &v7 stack slot;
+        // 4 floats covers the widest controller, color count=4).
+        float out[4];
 
-        if (_ctlPosition) EmoteVarController_step(_ctlPosition,   posOut,   dt);
-        if (_ctlScale)    EmoteVarController_step(_ctlScale,      scaleOut, dt);
-        if (_ctlColor)    EmoteVarController_step(_ctlColor,      colorOut, dt);
-        if (_ctlAngle)    EmoteAngleController_step(_ctlAngle, &angleOut,   dt);
-
-        // Scale denominator at +1176 (per spec):
-        //   *(double*)(this+1176) = 1.0 / (this+1168 * scaleOut[0])
-        if (_meshDivisionRatio != 0.0 && scaleOut[0] != 0.0f) {
-            _meshDivisionRatioDup = 1.0 / (_meshDivisionRatio * scaleOut[0]);
+        // 1) POSITION (ctl@+1072, count=2) -> Player_setCoord(out[0], out[1]).
+        if (_ctlPosition) {
+            out[0] = out[1] = 0.0f;
+            EmoteVarController_step(_ctlPosition, out, dt);
+            // Player_setCoord(_player, out[0], out[1]);  // TODO(P1)
         }
 
-        // Apply to player — P1 stubs (binary calls Player_setCoord/setSlant/
-        // setColor/setAngleDeg). Avoid noisy logging here; caller progress()
-        // already STUB_WARN's.
-        (void)posOut; (void)scaleOut; (void)colorOut; (void)angleOut;
+        // 2) COLOR (ctl@+1088, count=4) -> sub_6CD724(packed ARGB32).
+        if (_ctlColor) {
+            out[0] = out[1] = out[2] = out[3] = 1.0f;
+            EmoteVarController_step(_ctlColor, out, dt);
+            // const uint32_t argb =
+            //     (uint8_t)(int)out[0]
+            //   | ((uint8_t)(int)out[1] << 8)
+            //   | ((uint8_t)(int)out[2] << 16)
+            //   | ((uint8_t)(int)out[3] << 24);
+            // sub_6CD724(_player, argb);                 // TODO(P1)
+        }
+
+        // 3) SCALE (ctl@+1080, count=1) -> +1176 denom + Player_setSlant.
+        if (_ctlScale) {
+            out[0] = 1.0f;
+            EmoteVarController_step(_ctlScale, out, dt);
+            // Binary: *(double*)(this+1176) = 1.0 / (*(double*)(this+1168) * out[0]);
+            // (no guard in the binary; division by zero yields inf as in libc).
+            _meshDivisionRatioDup = 1.0 / (_meshDivisionRatio * out[0]);
+            // Player_setSlant(_player, out[0], out[0]);  // TODO(P1)
+        }
+
+        // 4) ANGLE (ctl@+1096) -> Player_setAngleDeg(out[0]).
+        if (_ctlAngle) {
+            out[0] = 0.0f;
+            EmoteAngleController_step(_ctlAngle, out, dt);
+            // Player_setAngleDeg(_player, out[0]);       // TODO(P1)
+        }
     }
 
     // Aligned with libkrkr2.so sub_67D01C EmoteEngine_progress @ 0x67D01C.
@@ -206,12 +265,35 @@ namespace motion {
             dt -= step;
         }
 
-        // Post-loop: iterate linked list of pending bind evaluations at +1456.
-        // PLATFORM_BOUNDARY: sub_67C560/67C6B0/Player_bindParameterValue stubs.
-        for (EmoteBindListEntry* entry = _bindListHead; entry; entry = entry->next) {
-            // sub_67C560(this, ...);
-            // sub_67C6B0(this, ...);
-            // Player_bindParameterValue_writesHM1_HM2(...);
+        // Post-loop: the binary (EmoteEngine_progress @0x67D01C) walks HM#7's
+        // _M_before_begin._M_nxt node chain (insertion order) at +1456:
+        //   for (i = *(this+1456); i; i = *i) {
+        //       sub_67C560(this, &i.key, &i.value);
+        //       v68 = sub_67C6B0(this, &i.key);
+        //       Player_bindParameterValue(player, &i.key, 0, v68&1 ? -i.value : i.value);
+        //   }
+        // i.key = node+8 (ttstr), i.value = node+16 (double) — i.e. each
+        // _labelToValueHM7 entry. sub_67C560 / sub_67C6B0 /
+        // Player_bindParameterValue are not yet ported (stubs), so the loop
+        // body has no observable effect today.
+        //
+        // PLATFORM_BOUNDARY (insertion-order): libstdc++ chains nodes in
+        // insertion order on _M_before_begin; libc++ does NOT expose an
+        // insertion-ordered chain, so iterating _labelToValueHM7 here would
+        // use libc++'s bucket order. This only matters once the bind callbacks
+        // above are ported AND a script observes ordering. Since the body is
+        // inert, we iterate the typed map directly and accept the order
+        // boundary. TODO(P-C): if a future port needs insertion order,
+        // reconsider a KiriKiri inline hashtable (decision deferred — see the
+        // module-alignment report; not done because no observable consumer
+        // exists yet and the cost/risk was judged too high to do blindly).
+        for (auto& kv : _labelToValueHM7) {
+            const ttstr& label = kv.first;
+            const double value  = kv.second;
+            (void)label; (void)value;
+            // sub_67C560(this, &label, &value);
+            // const bool negate = (sub_67C6B0(this, &label) & 1) != 0;
+            // Player_bindParameterValue(player, &label, 0, negate ? -value : value);
         }
 
         // sub_67C8A8(this); sub_6D2A54(player, 0, dt);
