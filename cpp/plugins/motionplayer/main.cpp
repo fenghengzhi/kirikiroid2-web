@@ -256,39 +256,27 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(skipToSync);
     NCB_METHOD(setStereovisionCameraPosition);
 
-    // Timeline/variable queries
-    NCB_METHOD_RAW_CALLBACK(setVariable, &Player::setVariableCompatMethod, 0);
-    NCB_METHOD(getVariable);
-    NCB_METHOD(countVariables);
-    NCB_METHOD(getVariableLabelAt);
-    NCB_METHOD(countVariableFrameAt);
-    NCB_METHOD(getVariableFrameLabelAt);
-    NCB_METHOD(getVariableFrameValueAt);
-    NCB_METHOD(getTimelinePlaying);
-    NCB_METHOD(getVariableRange);
-    NCB_METHOD(getVariableFrameList);
-    NCB_METHOD(countMainTimelines);
-    NCB_METHOD(getMainTimelineLabelAt);
-    NCB_METHOD(getMainTimelineLabelList);
-    NCB_METHOD(countDiffTimelines);
-    NCB_METHOD(getDiffTimelineLabelAt);
-    NCB_METHOD(getDiffTimelineLabelList);
-    NCB_METHOD(getLoopTimeline);
-    NCB_METHOD(countPlayingTimelines);
-    NCB_METHOD(getPlayingTimelineLabelAt);
-    NCB_METHOD(getPlayingTimelineFlagsAt);
-    NCB_METHOD(getTimelineTotalFrameCount);
-    NCB_METHOD(playTimeline);
-    NCB_METHOD(stopTimeline);
-    NCB_METHOD(setTimelineBlendRatio);
-    NCB_METHOD(getTimelineBlendRatio);
-    NCB_METHOD(fadeInTimeline);
-    NCB_METHOD(fadeOutTimeline);
-    NCB_METHOD(getPlayingTimelineInfoList);
+    // M15 D-01 (cluster E §3.1): removed 22 timeline/variable-query NCB
+    // methods from Motion.Player — these are D3DEmotePlayer 54-entry table
+    // members (cluster D §1 #22-#26, #29-#47), not Motion.Player 92-entry
+    // table. Port hoisted them onto Motion.Player as convenience. 1:1
+    // reproduction places them only on D3DEmotePlayer (where they remain
+    // registered at main.cpp:553-590).
+    //
+    // Removed: setVariable, getVariable, countVariables, getVariableLabelAt,
+    //   countVariableFrameAt, getVariableFrameLabelAt, getVariableFrameValueAt,
+    //   getTimelinePlaying, getVariableRange, getVariableFrameList,
+    //   countMainTimelines, getMainTimelineLabelAt, getMainTimelineLabelList,
+    //   countDiffTimelines, getDiffTimelineLabelAt, getDiffTimelineLabelList,
+    //   getLoopTimeline, countPlayingTimelines, getPlayingTimelineLabelAt,
+    //   getPlayingTimelineFlagsAt, getTimelineTotalFrameCount,
+    //   playTimeline, stopTimeline, setTimelineBlendRatio, getTimelineBlendRatio,
+    //   fadeInTimeline, fadeOutTimeline, getPlayingTimelineInfoList
+    //
+    // C++ Player methods preserved (D3DEmotePlayer wrapper forwards to Player).
 
-    // Selector
-    NCB_METHOD(isSelectorTarget);
-    NCB_METHOD(deactivateSelectorTarget);
+    // Selector — also D3DEmotePlayer-only per cluster E §3.1
+    // Removed: isSelectorTarget, deactivateSelectorTarget
 
     // Misc
     // M15 D-01 (cluster E §3.1): removed 4 port-invented Motion.Player NCB
