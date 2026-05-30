@@ -599,15 +599,29 @@ namespace motion {
                         transformPoint(clipNode.shapeAABB[2], clipNode.shapeAABB[3]);
                     const auto p3 =
                         transformPoint(clipNode.shapeAABB[0], clipNode.shapeAABB[3]);
+                    // aligned with sub_6C2334 @0x6c2800-0x6c2954: the
+                    // transformed clip bbox is rounded floor(left)/floor(top)/
+                    // ceil(right)/ceil(bottom) before being stored into the
+                    // render item viewport (item+200..212). The oracle gates
+                    // this on item+208>=item+200 && item+212>=item+204 (the
+                    // shapeAABB validity check above) and writes:
+                    //   *(float*)(item+200) = floorf(minX);
+                    //   *(float*)(item+204) = floorf(minY);
+                    //   *(float*)(item+208) = ceilf(maxX);
+                    //   *(float*)(item+212) = ceilf(maxY);
+                    // The previous port stored the raw min/max bbox without the
+                    // floor/ceil, leaving fractional viewport values that
+                    // diverged from the oracle (e.g. m2logo items[9]:
+                    // [612.568,557.332,1293.251,632.964] vs [612,557,1294,633]).
                     entry.viewport = {
-                        static_cast<float>(std::min(
-                            std::min(p0.x, p1.x), std::min(p2.x, p3.x))),
-                        static_cast<float>(std::min(
-                            std::min(p0.y, p1.y), std::min(p2.y, p3.y))),
-                        static_cast<float>(std::max(
-                            std::max(p0.x, p1.x), std::max(p2.x, p3.x))),
-                        static_cast<float>(std::max(
-                            std::max(p0.y, p1.y), std::max(p2.y, p3.y)))
+                        static_cast<float>(std::floor(std::min(
+                            std::min(p0.x, p1.x), std::min(p2.x, p3.x)))),
+                        static_cast<float>(std::floor(std::min(
+                            std::min(p0.y, p1.y), std::min(p2.y, p3.y)))),
+                        static_cast<float>(std::ceil(std::max(
+                            std::max(p0.x, p1.x), std::max(p2.x, p3.x)))),
+                        static_cast<float>(std::ceil(std::max(
+                            std::max(p0.y, p1.y), std::max(p2.y, p3.y))))
                     };
                     entry.hasViewport = true;
                 }
