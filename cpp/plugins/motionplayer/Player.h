@@ -783,6 +783,13 @@ namespace motion {
         std::vector<detail::PreparedRenderItem *> _preparedRenderItemsGroup;
         std::unordered_map<int, detail::RenderItemNativeFieldLifetime>
             _renderItemNativeFieldLifetimeByNode;
+        // libkrkr2.so player+760: persistent SeparateLayerAdaptor used by the
+        // build-side requireLayerId materialization in sub_6C4E28 @ 0x6C5DBC.
+        // Lazily created (Window.mainWindow.primaryLayer) the first time a
+        // drawable render item reaches the LABEL_28 gate; owned by Player and
+        // destroyed in ~Player (raw pointer + manual new/delete, matching the
+        // binary's object lifetime). Aligned with sub_6C4E28 @0x6C5DBC.
+        SeparateLayerAdaptor *_renderSeparateLayerAdaptor = nullptr;
         std::vector<detail::PerNodeEvalData> _perNodeEvalData;
         // _variableValues removed: it duplicated HM2 @ Player+320; merged into _evalResultValues.
 

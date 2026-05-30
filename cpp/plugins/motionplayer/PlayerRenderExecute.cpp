@@ -78,6 +78,45 @@ namespace motion {
                 };
                 entry.dirtyRect = entry.clipRect;
 
+                // libkrkr2.so sub_6C4E28 @0x6C5DBC: the drawable branch
+                // (drawFlag19 && clip valid && !item+16) performs the
+                // requireLayerId materialization HERE, in the build loop, not
+                // in execute. Gate on player+760 (the persistent
+                // SeparateLayerAdaptor) — create it lazily from
+                // Window.mainWindow.primaryLayer when absent (the
+                // `player+760==0` branch at 0x6c4fa8..0x6c5138), then reach the
+                // LABEL_28 latch (0x6c514c): if item+20 is still 0, resolve the
+                // layer id via requireLayerId, write item+424 (layerId), and
+                // set item+20=1. The latch is once-only and never cleared in
+                // the loop, so it persists across frames.
+                if(!_renderSeparateLayerAdaptor) {
+                    iTJSDispatch2 *primaryLayer =
+                        resolveMainWindowPrimaryLayerObject();
+                    tTJSVariant targetLayer =
+                        primaryLayer ? tTJSVariant(primaryLayer, primaryLayer)
+                                     : tTJSVariant();
+                    _renderSeparateLayerAdaptor =
+                        new SeparateLayerAdaptor(targetLayer);
+                }
+                if(!entry.rawFlag20) {
+                    // LABEL_28 @0x6c514c: read the requireLayerId property off
+                    // the resolved render-layer object → item+424. The port's
+                    // Player::requireLayerId(name) returns node.layerId1 for a
+                    // labeled node (PlayerResource.cpp:90), i.e. the same value
+                    // domain already committed to entry.layerId. Re-resolving it
+                    // here gives the latch a real backing materialization (not a
+                    // hollow flag) while preserving the verified value domain.
+                    if(entry.nodeIndex >= 0 &&
+                       entry.nodeIndex < static_cast<int>(_nodes.size())) {
+                        const auto &node = _nodes[entry.nodeIndex];
+                        if(!node.layerName.empty()) {
+                            entry.layerId =
+                                requireLayerId(detail::widen(node.layerName));
+                        }
+                    }
+                    entry.rawFlag20 = true;
+                }
+
                 for(size_t ci = 0; ci < entry.corners.size(); ci += 2) {
                     entry.localCorners[ci] =
                         entry.corners[ci] - 0.5f - static_cast<float>(clipRect.left);
@@ -381,8 +420,10 @@ namespace motion {
             if(!layerObject) {
                 return nullptr;
             }
-            item.rawFlag20 = true;
-            persistNativeRenderItemFieldLifetimeLike_0x6C4E28(item);
+            // libkrkr2.so sub_6C4E28 @0x6C5DBC latches item+20 in the BUILD
+            // loop (LABEL_28), never in execute. The build pass already
+            // materialized rawFlag20/layerId under the oracle gate, so the
+            // execute stage only consumes them here.
 
             setObjectIntProperty(layerObject, TJS_W("absolute"), state.absolute);
             setObjectIntProperty(layerObject, TJS_W("hitThreshold"),

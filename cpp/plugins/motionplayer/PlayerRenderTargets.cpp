@@ -828,8 +828,10 @@ namespace motion {
                 return {};
             }
 
-            item.rawFlag20 = true;
-            persistNativeRenderItemFieldLifetimeLike_0x6C4E28(item);
+            // libkrkr2.so sub_6C4E28 @0x6C5DBC latches item+20 in the BUILD
+            // loop (LABEL_28), never in the accurate-SLA execute path. The
+            // build pass already materialized rawFlag20/layerId under the
+            // oracle gate, so this path only consumes them.
             item.leafLayer = layerVariant;
             return { layerObject, createdOrChanged };
         };

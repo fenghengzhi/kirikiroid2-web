@@ -250,7 +250,13 @@ namespace motion {
         }
     }
 
-    Player::~Player() = default;
+    Player::~Player() {
+        // libkrkr2.so player+760 SeparateLayerAdaptor is owned by Player and
+        // released on teardown (raw pointer + manual new/delete, matching the
+        // binary object lifetime). Aligned with sub_6C4E28 @0x6C5DBC.
+        delete _renderSeparateLayerAdaptor;
+        _renderSeparateLayerAdaptor = nullptr;
+    }
 
     bool Player::getPlaying() const {
         // Player_getPlaying @ 0x6D9794: return byte player+1099.

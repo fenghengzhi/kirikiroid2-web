@@ -20,3 +20,12 @@ motion::Player render-pipeline `build_flow_mismatch`（render-step compare 报 `
 **忠实 Phase B+C 的真实代价（确认过大）：** 须(1)给 Player 加 player+760 持久 SLA 成员并实现 build 期懒创建（含 Window.mainWindow.primaryLayer 解析）；(2)把 execute-only 的 layer-object 解析（scratchOwner/scratchParent/SLA）搬进 buildRenderCommands；(3)把 NodeTree.cpp:103 提前的全局 `ResourceManager::requireLayerId()`（分配域 A）改成 build 期对解析出的 render-layer 对象的 `requireLayerId` **属性**读（分配域 B，item+424）。(3) 改 layerId 值域，正是首度 fixer 指出会破坏当前正确输出的点。三者纠缠，无法产出「编译通过+不破坏绿 trace」的自洽改动。
 
 **给后续的建议：** 此项 correctness 已完美（trace 0-mismatch），build_flow 仅是 diagnostics 类保真度缺口、不 fail CI。除非先独立完成「Player 引入 player+760 SLA 成员 + layerId 惰性属性模型」的预备重构（自身就是大块对齐工作），否则不要再单独立 Phase B+C。优先级应低于会 fail CI 的对齐项。
+
+---
+
+**2026-05-30 UPDATE — Phase B+C 已实施并编译通过（验证模型变更后）。** 用户显式建立 push→CI 差分→回归则 revert 循环，完成标准改为「忠实 oracle + cmake 编译通过」，运行时回归由 CI 判定。先前「blocked」判定基于「本地无法验证不破坏绿 trace」——该约束在新模型下不再是停止理由。已实施改动（编译通过 [269/269] linking）：
+- **Player.h**：新增 `SeparateLayerAdaptor *_renderSeparateLayerAdaptor`（player+760，裸指针），`~Player()`（PlayerCore.cpp，原 `= default`）改为显式 `delete`。
+- **buildRenderCommands**（PlayerRenderExecute.cpp drawable 分支）：复刻 LABEL_28——`player+760` 不存在则 `new SeparateLayerAdaptor(Window.mainWindow.primaryLayer)`；`if(!rawFlag20)` 则 `entry.layerId = requireLayerId(node.layerName)` + `rawFlag20=true`。门控 = drawFlag19 && drawable && !rawFlag20，与 oracle 一致。
+- **execute 阶段去置位**：删 PlayerRenderExecute.cpp ensureLeafItemLayer + PlayerRenderTargets.cpp ensureAccurateSlaItemLayer 的 `rawFlag20=true`+re-persist，改为消费 build 已物化值。
+- **值域决策（避免不可验证的 Phase-C 回归）**：未删 NodeTree.cpp:103 的 eager `requireLayerId()`。port `Player::requireLayerId(name)` 对 labeled 节点 return `node.layerId1`（PlayerResource.cpp:90），即 build-side 重解析 = 同一已验证值域；这给 once-only latch 真实 backing 调用（非 hollow flag）而不改 layerId 值域。eager 分配（域 A）与 build 期重读共存、不冲突，故 task#4 的「若冲突则改惰性」条件未触发。
+- **回归风险点（供 push 后看 CI）**：(1) build_flow_mismatch 应转绿（rawFlag20 不再 execute 泄漏）；(2) lifetime-map 仍持久化 rawFlag20——符合 oracle 一次性 latch 跨帧持久语义；(3) layerId 值未变，leaf-layer state keying 不应回归；(4) SLA 在 build 期惰性创建——若 Window.mainWindow.primaryLayer 解析时机早于 execute 路径原有解析，可能影响 SLA 内部 absolute 计数顺序，重点看 accurate-SLA / SLA render compare case。
