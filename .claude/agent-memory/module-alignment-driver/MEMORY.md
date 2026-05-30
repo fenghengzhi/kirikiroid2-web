@@ -1,2 +1,2 @@
-- [motionplayer module status](module_motionplayer.md) — EmoteEngine 容器布局已 P0-2 全量对齐(7 HM+4 vec+matrixHeap)；Player HM6→4 待办；测试基线 3/4+205/209
+- [motionplayer module status](module_motionplayer.md) — 2026-05-30 二次审计: M2/M3/M5/M12/M13/M14 已落地；M1 P7 step-2 已 revert 回 step-1 基线(+1136 阻塞)；M6 NCB 暴露面/M9/M11/M15-22 仍 ❌
 - [build_flow Phase B+C 阻塞](build_flow_phaseBC_blocker.md) — layerResolved20/item+20 重构二度确认无法安全实施：port 缺 player+760 持久 SLA 成员；仅 diagnostics 缺口不 fail CI，勿再单独立项

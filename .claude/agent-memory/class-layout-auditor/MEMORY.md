@@ -4,3 +4,4 @@
 - [EmoteEngine 1496B layout](emoteengine_1496b_layout.md) — EmoteEngine 偏移表(10 deque+7 ctrl)+5大偏差+路线图; HM2@+1440 不在 Player; 本地 inline @ EmotePlayer.h:56-101
 - [Emote controllers audit](emote_controllers_audit.md) — VarCtrl(0x80)/AngleCtrl(0x70) POD 实测字段表; Var 堆数组 new[](4*count字节=count float) 本地误用 count*4; element duration@+12 非+4
 - [EmotePlayer 24B shell](emoteplayer_24b_shell.md) — 退化 NCB 类(vtable/+8 EmoteEngine/+16 ownership byte),只注册空 finalize 无 ctor; vtable@0x1A18BB0; 与 D3DEmotePlayer 独立两条链
+- [Player field collisions](player_field_collisions.md) — 5 处 binary 偏移有 ≥2 port 字段(H1+480/H2+1120/H3+481/H4+1099/H5+1156); H4 是本审计新发现
