@@ -877,27 +877,149 @@ namespace internal {
 
         // Camera velocity/friction moved to updateLayers pre-loop (0x6BB360..0x6BB42C)
 
-        // M1 P5/G4: Player_progress_inner @0x6C106C LABEL_48 computes the eval
-        //   time consumed by Player_updateLayers as +456 = min(+1120, +1128) =
-        //   min(frameTickCount, totalFrames) — a scalar clamp of the advanced
-        //   cursor, NOT a per-timeline currentTime lookup. The previous
-        //   activeClipTime(selectActiveClip()) read _timelines[label].currentTime;
-        //   since the port is differential-green, that value already tracks the
-        //   oracle's clamped cursor, so this structural realignment preserves it.
-        _clampedEvalTime = std::min(_frameTickCount, _cachedTotalFrames); // +456 = min(+1120,+1128)
+        // M1 P5/G4 + P7 step-2: Player_progress_inner @0x6C106C LABEL_48.
+        // After the gated cursor advance above (+1120 += +592; +456 =
+        // min(+1120,+1128) when the +480 gate is clear), the binary branches on
+        // the SIGN of deltaTime(+592) and on whether the cursor reached the end
+        // / start, into forward-normal / forward-to-end(loop|stop) /
+        // reverse-rewind / loop-wrap. Each terminal branch then re-seeks the
+        // node slots (binary: Player_advanceRootAndNodes 0x6B6ADC /
+        // Player_rewindRootAndNodes 0x6B9A3C, both via the per-node
+        // advanceNodeFrames seek). In the port that re-seek is
+        // progressSeekNodeSlotsLike_0x6C106C(+456): the live per-node seek
+        // (advanceNodeFrameSelectionLike_0x6926B4) is direction-agnostic — it has
+        // BOTH a forward AND a corrective-backward slot loop — so a single
+        // seek-to-(+456) reproduces advanceRootAndNodes AND rewindRootAndNodes.
+        //
+        // The clamp `+456 = min(+1120,+1128)` was already applied above (the
+        // gated-advance block). LABEL_48 below re-derives the SAME value for the
+        // forward-not-at-end (= logo) path, so that path stays bit-identical to
+        // P7 step-1; only the at-end / reverse / loop-wrap paths add behavior.
+        // gate v23 = +480 snapshot (was sampled at the gated-advance block);
+        // deltaTime v24 = +592.
+        const bool gate = _progressFlags;        // v23 = (BYTE)player+480
+        const double deltaTime = _deltaTime;     // v24 = player+592
 
-        // M1/P7 step-1: progress-pass cursor stepping.
+        // Gated clamp (0x6C1340..0x6C1354): when the +480 gate is clear,
+        //   v26 = +592 + +1120; +1120 = v26; if (v26 > +1128) v26 = +1128;
+        //   +456 = v26;  (= min(advanced cursor, totalFrames))
+        // The +1120 advance was already applied above (line ~831, the same
+        // `!_progressFlags` gate). Here we mirror only the +456 clamp half so the
+        // forward-not-at-end path keeps the P7 step-1 value bit-for-bit
+        // (+456 = min(+1120,+1128); for not-at-end that is +1120 = _frameTickCount).
+        if(!gate) {                              // 0x6C1330 !(BYTE)player+480
+            double v26 = _frameTickCount;        // +1120 (already += +592 above)
+            if(v26 > _cachedTotalFrames) {       // 0x6C1350
+                v26 = _cachedTotalFrames;
+            }
+            _clampedEvalTime = v26;              // +456 = min(+1120,+1128) (0x6C1354)
+        }
+
+        bool reseekNodes = false;                // whether to seek slots this frame
+
+        if(deltaTime >= 0.0) {                   // 0x6C135C: FORWARD
+            const double totalFrames = _cachedTotalFrames; // v29 = player+1128
+            if(totalFrames <= _frameTickCount) { // 0x6C13A0: reached/past end
+                // NOTE/DEFER (P7 step-2): the binary reads +1136 (loop-wrap
+                // target, set from clip->loopTime at PlayerCore.cpp:557) and
+                // NEVER mutates it inside progress_inner. The pre-existing
+                // accumulation `_loopTime += actualDelta` at line ~821 has NO
+                // counterpart in progress_inner @0x6C106C and corrupts this
+                // target; the loop-wrap math below is structurally aligned but
+                // will only be numerically correct once that accumulation is
+                // removed / relocated. This does NOT affect the logo path (these
+                // loop branches require _frameTickCount >= _cachedTotalFrames,
+                // which the forward not-at-end logo path never reaches). Left
+                // for a dedicated decompile-grounded pass on the +1136 accumulator.
+                const double loopTime = _loopTime; // v31 = player+1136
+                _clampedEvalTime = totalFrames;    // +456 = v29 (= totalFrames)
+                if(loopTime >= 0.0) {              // 0x6C13F0: LOOP
+                    // advanceRootAndNodes at the clamped end (+456 = totalFrames)
+                    progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C1468
+                    if(!_syncWaiting && !_motionCompleted) {              // 0x6C1474
+                        _clampedEvalTime = _loopTime; // +456 = player+1136 (0x6C1484)
+                        progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // reseek (0x6C1488)
+                        if(!_syncWaiting && !_motionCompleted) {          // 0x6C1498
+                            // LABEL_22/23 loop-wrap (0x6C14AC..0x6C14CC):
+                            //   v7 = +1120; if (+1128 > v7) goto LABEL_23;
+                            //   do v7 += +1136 - +1128; while (+1128 <= v7);
+                            //   +1120 = v7;  (LABEL_22)  +456 = v7; (LABEL_23)
+                            double v7 = _frameTickCount;            // 0x6C14B0
+                            if(_cachedTotalFrames > v7) {           // 0x6C14B8 -> LABEL_23
+                                _clampedEvalTime = v7;              // LABEL_23 (0x6C119C)
+                            } else {
+                                do {
+                                    v7 = v7 + _loopTime - _cachedTotalFrames; // 0x6C14C4
+                                } while(_cachedTotalFrames <= v7);  // 0x6C14CC
+                                _frameTickCount = v7;               // LABEL_22 (0x6C1198)
+                                _clampedEvalTime = v7;              // LABEL_23 (0x6C119C)
+                            }
+                            progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11B0
+                        }
+                    }
+                } else {                          // 0x6C13F4: NON-LOOP, hit end -> stop
+                    _loopArmed = false;           // player+1099 = 0 (0x6C13F4)
+                    if(!gate) {                   // 0x6C13F8
+                        reseekNodes = true;       // advanceRootAndNodes
+                    }
+                }
+            } else if(!gate) {                    // 0x6C13A4: NOT at end (= logo path)
+                reseekNodes = true;               // advanceRootAndNodes
+            }
+            // else: gate set & not-at-end -> no seek (binary returns result)
+        } else {                                  // 0x6C1360: REVERSE (deltaTime < 0)
+            const double frameTickCount = _frameTickCount; // v27 = player+1120
+            const double loopTime = _loopTime;             // v28 = player+1136
+            if(frameTickCount >= 0.0 && loopTime <= frameTickCount) { // 0x6C1374 -> LABEL_57
+                if(!gate) {                       // 0x6C138C
+                    reseekNodes = true;           // rewindRootAndNodes (LABEL_57)
+                }
+            } else if(loopTime < 0.0) {           // 0x6C137C: non-loop, hit start
+                _clampedEvalTime = 0.0;           // player+456 = 0 (0x6C1380)
+                _loopArmed = false;               // player+1099 = 0 (0x6C1384)
+                _frameTickCount = 0.0;            // player+1120 = 0 (0x6C1388)
+                if(!gate) {                       // LABEL_57 (0x6C138C)
+                    reseekNodes = true;           // rewindRootAndNodes
+                }
+            } else {                              // 0x6C1404: reverse loop-wrap
+                _clampedEvalTime = loopTime;      // player+456 = v28 (0x6C1404)
+                progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // rewindRootAndNodes (0x6C1408)
+                if(!_syncWaiting && !_motionCompleted) {              // 0x6C1414
+                    _clampedEvalTime = _cachedTotalFrames; // +456 = player+1128 (0x6C1424)
+                    progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // reseek (0x6C1428)
+                    if(!_syncWaiting && !_motionCompleted) {          // 0x6C1434
+                        // LABEL_27/28 reverse loop-wrap (0x6C143C..0x6C145C):
+                        //   v7 = +1120; if (+1136 <= v7) goto LABEL_28;
+                        //   do v7 += +1128 - +1136; while (+1136 > v7);
+                        //   +1120 = v7;  (LABEL_27)  +456 = v7; (LABEL_28)
+                        double v7 = _frameTickCount;            // 0x6C1440
+                        if(_loopTime <= v7) {                   // 0x6C1448 -> LABEL_28
+                            _clampedEvalTime = v7;              // LABEL_28 (0x6C11BC)
+                        } else {
+                            do {
+                                v7 = v7 - _loopTime + _cachedTotalFrames; // 0x6C1454
+                            } while(_loopTime > v7);            // 0x6C145C
+                            _frameTickCount = v7;               // LABEL_27 (0x6C11B8)
+                            _clampedEvalTime = v7;              // LABEL_28 (0x6C11BC)
+                        }
+                        progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11C0
+                    }
+                }
+            }
+        }
+
+        // M1/P7 step-1: progress-pass cursor stepping (forward-normal /
+        // non-loop-end / reverse-normal terminal: advance|rewindRootAndNodes).
         // Aligned to Player_progress_inner (0x6C106C) LABEL_48 / the node-deque
         // walk at 0x6C1288: once +456 (clampedEvalTime) is established, the
         // binary advances every node's frame cursor HERE (Player_advanceNodeFrames
         // 0x6B7E44, reached at 0x6C1264/0x6C130C), filling the two parsed-frame
         // slots (node+320/+856). The SEPARATE Player_updateLayers pass (0x6BB33C)
         // then only interpolates those slots (Player_evaluateTimeline 0x699AE4).
-        // This restores the binary's two-pass split: the per-node seek used to
-        // run inline inside updateLayersPhase2_MainLoop (collapsed model); it now
-        // runs in the progress pass, before updateLayers reads the slots.
-        // Forward-only for step-1 (reverse rewind = TODO, P7 step-2).
-        if(!_nodes.empty()) {
+        // The loop-wrap / reverse-wrap branches above already re-seeked inline
+        // (matching the binary's terminal advance/rewindRootAndNodes calls); this
+        // covers the forward-normal / reverse-normal / non-loop-end cases.
+        if(reseekNodes && !_nodes.empty()) {
             progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
         }
 
