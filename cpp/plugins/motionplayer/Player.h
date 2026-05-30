@@ -608,6 +608,20 @@ namespace motion {
             return _onGroundCorrection;
         }
 
+        // libkrkr2.so registers onAction/onSync/onGroundCorrection as Motion.Player
+        // *methods* (Function-kind descriptors @0x6D69C8), NOT properties.
+        //   onAction           cb = nullsub_87 @0x6D9A50          -> empty no-op
+        //   onSync             cb = nullsub_88 @0x6D9A54          -> empty no-op
+        //                      (registered via sub_6D993C @0x6d8edc, X2=nullsub_88)
+        //   onGroundCorrection cb = Player_onAction_ncb @0x6D9A58 -> sub_A0F5E0(out,a1):
+        //       a tTJSVariant copy/AddRef helper; performs no Player state change,
+        //       so the faithful native body is a no-op method.
+        // The getOn*/setOn* property accessors above are port-invented storage and
+        // are no longer NCB-exposed; kept only to avoid touching unrelated code.
+        void onAction() {}            // nullsub_87 @0x6D9A50
+        void onSync() {}              // nullsub_88 @0x6D9A54
+        void onGroundCorrection() {}  // Player_onAction_ncb @0x6D9A58 (variant-copy, no state change)
+
         // M15 missing transformOrder/coordinate int properties (cluster E
         // §3.1 24 missing): scaffold port int fields with default 0; binary
         // semantics not yet spiked, port stores value but doesn't drive any

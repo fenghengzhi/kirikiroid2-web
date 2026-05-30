@@ -5,3 +5,6 @@
 - [Emote controllers audit](emote_controllers_audit.md) — VarCtrl(0x80)/AngleCtrl(0x70) POD 实测字段表; Var 堆数组 new[](4*count字节=count float) 本地误用 count*4; element duration@+12 非+4
 - [EmotePlayer 24B shell](emoteplayer_24b_shell.md) — 退化 NCB 类(vtable/+8 EmoteEngine/+16 ownership byte),只注册空 finalize 无 ctor; vtable@0x1A18BB0; 与 D3DEmotePlayer 独立两条链
 - [Player field collisions](player_field_collisions.md) — 5 处 binary 偏移有 ≥2 port 字段(H1+480/H2+1120/H3+481/H4+1099/H5+1156); H4 是本审计新发现
+- [Player ctor/dtor lifecycle](player_ctor_dtor_lifecycle.md) — 本地 ctor=成员初始化器+dtor=default(RAII) vs 二进制 0x6CED30 手写扁平init/0x6CFADC 有序teardown; ctor 多 parentPlayer 参+ResourceManager*非dispatch
+- [EmotePlayer file topology](emoteplayer_file_topology.md) — 类族文件拓扑; 无 EmotePlayerImpl/PrimaryEmotePlayer/MotionLayerMgr; 4类3文件; 二进制无 PrimaryEmotePlayer
+- [Player local vs binary audit](player_local_vs_binary_audit.md) — 本地 Player.h:116 全面审计结论: 字段源码序/全std容器/无vtable✅/RAII ctor; ~35%对齐 + Top5未对齐项

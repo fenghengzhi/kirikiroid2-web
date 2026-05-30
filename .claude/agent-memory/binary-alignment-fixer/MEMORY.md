@@ -3,3 +3,4 @@
 - [sub_6C4E28 build/execute split](sub6C4E28_build_execute_split.md) — requireLayerId materialization (item+20/+424) belongs in BUILD loop; port wrongly moved it to EXECUTE → render-step build_flow_mismatch
 - [sub_6C2334 item+18 a6 propagation](sub6C2334_item18_a6_propagation.md) — item+18=(a6&1)||(node+48!=0); a6 propagates across child-Player recursion via NODE priorDraw, not Player _priorDraw (was 1.5 always-true bug); node+48 is bool not raw int
 - [viewport floor/ceil in sub_6C2334](viewport_floorceil_in_sub6C2334.md) — item+200..212 viewport rounded floor/floor/ceil/ceil by item-builder sub_6C2334 @0x6c2950, NOT sub_6C4E28 (which only reads vp, folds floor/ceil into FLOAT clipRect item+216..228)
+- [Player NCB table 0x6D69C8](player_ncb_0x6D69C8_registration.md) — authoritative Motion.Player members: 58 props(41RW+17RO)+32 methods; RO=null setter slot STP XZR,XZR,[+0x40]; colorWeight≠independentLayerInherit; onAction/onSync/onGroundCorrection are no-op methods

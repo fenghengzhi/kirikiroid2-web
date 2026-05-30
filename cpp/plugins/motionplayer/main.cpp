@@ -138,13 +138,18 @@ NCB_REGISTER_CLASS(Player) {
     // M15 missing `contains` (cluster E §3.1): label-based hit test, delegates
     // to hitTestLayer (port's existing sub_6B5AD8-aligned path).
     NCB_METHOD(contains);
-    // M15 missing event callbacks (cluster E §3.1): onAction/onSync/
-    // onGroundCorrection TJS callback storage. Binary invokes these at
-    // specific points during motion playback; port storage + accessor only
-    // for now (invocation pending binary call-site spike).
-    NCB_PROPERTY(onAction, getOnAction, setOnAction);
-    NCB_PROPERTY(onSync, getOnSync, setOnSync);
-    NCB_PROPERTY(onGroundCorrection, getOnGroundCorrection, setOnGroundCorrection);
+    // onAction/onSync/onGroundCorrection are binary Motion.Player *methods*
+    // (Function-kind descriptors @0x6D69C8), NOT properties. Verified via the
+    // descriptor build sites:
+    //   onAction           @0x6d8ed0  cb=nullsub_87 @0x6D9A50  (empty no-op)
+    //   onSync             @0x6d8edc  cb=nullsub_88 @0x6D9A54  (empty no-op;
+    //                                  registered via sub_6D993C, X2=nullsub_88)
+    //   onGroundCorrection @0x6d8f6c  cb=Player_onAction_ncb @0x6D9A58
+    //                                  -> sub_A0F5E0 (tTJSVariant copy/AddRef,
+    //                                     no Player state change) => no-op method
+    NCB_METHOD(onAction);
+    NCB_METHOD(onSync);
+    NCB_METHOD(onGroundCorrection);
     // M15 missing transformOrder/coordinate (cluster E §3.1): int property
     // scaffolding; semantics pending spike.
     NCB_PROPERTY(transformOrder, getTransformOrder, setTransformOrder);
@@ -154,28 +159,49 @@ NCB_REGISTER_CLASS(Player) {
     // M15 D-01 (cluster E §3.1): removed metadata Motion.Player NCB — port
     // invention, no binary equivalent on 92-entry table.
     NCB_PROPERTY(chara, getChara, setChara);
+    // stealthChara: binary RW property @0x6D69C8 (name xref @0x6d6d64);
+    // binary reuses Player_getChara/Player_setChara as the accessor pair.
+    NCB_PROPERTY(stealthChara, getStealthChara, setStealthChara);
     // Aligned to libkrkr2.so 0x681CAC: raw callback to access objthis
     // for onFindMotion TJS callback during motion loading
     NCB_PROPERTY_RAW_CALLBACK(motion, Player::getMotionCompat,
                               Player::setMotionCompat, 0);
+    // stealthMotion: binary RW property; get=Player_getStealthMotion,
+    // set=Player_setMotion_stealth (name xref @0x6D69C8).
+    NCB_PROPERTY(stealthMotion, getStealthMotion, setStealthMotion);
+    // tags: binary RO property; getter=Player_getStealthMotionStr @0x6D9768-
+    // adjacent (name xref @0x6d... aTags), setter slot is null (RO). Local
+    // getTags() returns _tags; do NOT expose a setter.
+    NCB_PROPERTY_RO(tags, getTags);
     NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);
+    // project: binary RW property (name xref @0x6D69C8 aProject); shares the
+    // generic accessor family with motionKey.
+    NCB_PROPERTY(project, getProject, setProject);
     NCB_PROPERTY(outline, getOutline, setOutline);
     NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);
-    NCB_PROPERTY(frameLastTime, getFrameLastTime, setFrameLastTime);
-    NCB_PROPERTY(frameLoopTime, getLoopTime, setLoopTime); // R1.H2: binary 0x6D97AC frameLoopTime getter reads +1136 (_loopTime), not +1120
-    NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
-    NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
-                 setProcessedMeshVerticesNum);
+    // frameLastTime/frameLoopTime/loopTime: binary RO properties @0x6D69C8
+    // (descriptor setter slot = XZR; verified `STP XZR,XZR,[X20,#0x40]`).
+    // getter kept unchanged (getLoopTime Array-vs-scalar is a separate open
+    // issue); only the RO/RW kind is corrected here.
+    NCB_PROPERTY_RO(frameLastTime, getFrameLastTime);
+    NCB_PROPERTY_RO(frameLoopTime, getLoopTime); // binary getter Player_getFrameLoopTime @0x6D69C8; RO
+    NCB_PROPERTY_RO(loopTime, getLoopTime);       // binary getter Player_getLastTime; RO
+    // processedMeshVerticesNum: binary RO property; getter sub_6D1018, setter
+    // slot null (verified `STP XZR,XZR,[X20,#0x40]` @0x6d883c).
+    NCB_PROPERTY_RO(processedMeshVerticesNum, getProcessedMeshVerticesNum);
     NCB_PROPERTY_RO(playing, getPlaying);
     // M15 D-01 (cluster E §3.1): removed queuing/directEdit/selectorEnabled
     // Motion.Player NCB — port-invented properties not in 92-entry binary
     // table. _queuing/_directEdit/_selectorEnabled fields preserved for
     // internal use.
-    NCB_PROPERTY(variableKeys, getVariableKeys, setVariableKeys);
+    // variableKeys: binary RO property (descriptor setter slot null @0x6D69C8).
+    NCB_PROPERTY_RO(variableKeys, getVariableKeys);
     NCB_PROPERTY_RO(allplaying, getAllplaying);
-    NCB_PROPERTY(syncWaiting, getSyncWaiting, setSyncWaiting);
+    // syncWaiting: binary RO property (descriptor setter slot null @0x6D69C8).
+    NCB_PROPERTY_RO(syncWaiting, getSyncWaiting);
     NCB_PROPERTY(syncActive, getSyncActive, setSyncActive);
-    NCB_PROPERTY(hasCamera, getHasCamera, setHasCamera);
+    // hasCamera: binary RO property (descriptor setter slot null @0x6D69C8).
+    NCB_PROPERTY_RO(hasCamera, getHasCamera);
     NCB_PROPERTY(cameraActive, getCameraActive, setCameraActive);
     NCB_PROPERTY(stereovisionActive, getStereovisionActive,
                  setStereovisionActive);
@@ -214,32 +240,46 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(opacity, getOpacity, setOpacity);
     NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
-    // M-colorWeight P1 (cluster E §4): binary Player NCB `colorWeight` getter
-    // sub_6D9768 returns +1097 bool (independentLayerInherit), NOT the
-    // _colorWeightPacked uint32 (+1156). The TJS name suggests packed color
-    // but the binary cb is the +1097 bool — apparent binary alias mis-naming.
-    // 1:1 with libkrkr2.so per CLAUDE.md.
-    NCB_PROPERTY(colorWeight, getIndependentLayerInherit,
+    // colorWeight: binary RW property @0x6D69C8 (name xref @0x6d7740).
+    //   get = sub_6CD710: reads Player+1156 (_colorWeightPacked uint32) with
+    //         R/B byte swap (b0<->b2).
+    //   set = sub_6CD724: writes Player+1156 with the same R/B swap.
+    // The prior claim (cb=+1097 bool / independentLayerInherit) was a
+    // mis-attribution from commit f675202 and is disproven by the descriptor
+    // build site. colorWeight maps to getColorWeight/setColorWeight which
+    // already implement the +1156 R/B-swap accessor pair.
+    NCB_PROPERTY(colorWeight, getColorWeight, setColorWeight);
+    // independentLayerInherit: distinct binary RW property @0x6D69C8 (name
+    // xref @0x6d77b8).
+    //   get = Player_getColorWeightFlag (sub_6D9768): reads Player+1097 bool.
+    //   set = sub_6CC9D4: writes +1097, marks each node+1584 dirty if changed.
+    // Maps to getIndependentLayerInherit/setIndependentLayerInherit.
+    NCB_PROPERTY(independentLayerInherit, getIndependentLayerInherit,
                  setIndependentLayerInherit);
-    // M-colorWeight: `independentLayerInherit` removed as port-extra (it was
-    // an alias of the correct binary `colorWeight` binding).
     NCB_PROPERTY(zFactor, getZFactor, setZFactor);
-    NCB_PROPERTY(cameraTarget, getCameraTarget, setCameraTarget);
-    NCB_PROPERTY(cameraPosition, getCameraPosition, setCameraPosition);
-    NCB_PROPERTY(cameraFOV, getCameraFOV, setCameraFOV);
-    NCB_PROPERTY(cameraAlive, getCameraAlive, setCameraAlive);
+    // cameraTarget/cameraPosition/cameraFOV/cameraAlive: binary RO properties
+    // @0x6D69C8 (descriptor setter slots null; verified `STP XZR,XZR,[+0x40]`).
+    NCB_PROPERTY_RO(cameraTarget, getCameraTarget);
+    NCB_PROPERTY_RO(cameraPosition, getCameraPosition);
+    NCB_PROPERTY_RO(cameraFOV, getCameraFOV);
+    NCB_PROPERTY_RO(cameraAlive, getCameraAlive);
     // M15 D-01 (cluster E §3.1): removed canvasCaptureEnabled/clearEnabled/
     // hitThreshold Motion.Player NCB — port-invented properties not in
     // 92-entry binary table. C++ fields preserved.
     NCB_PROPERTY(preview, getPreview, setPreview);
     NCB_PROPERTY(outsideFactor, getOutsideFactor, setOutsideFactor);
-    NCB_PROPERTY(resourceManager, getResourceManager, setResourceManager);
-    // M15 D-01 (cluster E §3.1): removed stealthChara/stealthMotion/tags/project
-    // Motion.Player NCB — port invention, not in binary 92-entry table.
-    // C++ fields preserved.
-    // M15 D-01 (cluster E §3.1): removed useD3D/meshline/busy Motion.Player
-    // NCB — port-invented Web-port properties without binary equivalent in
-    // 92-entry Motion.Player table (sub_6D69C8).
+    // resourceManager: binary RO property @0x6D69C8 (descriptor setter slot
+    // null; verified `STP XZR,XZR,[X20,#0x40]`).
+    NCB_PROPERTY_RO(resourceManager, getResourceManager);
+    // stealthChara/stealthMotion/tags/project recovered above (their binary
+    // name-xrefs are present in 0x6D69C8 — the earlier "port invention"
+    // claim was disproven by the descriptor build sites).
+    //
+    // useD3D / meshline: binary RW properties @0x6D69C8.
+    //   useD3D   get=sub_695DE0, set=Player_setUseD3DFlag (name xref @0x6d... aUsed3d)
+    //   meshline get=Player_getMeshline, set=Player_setMeshline (name xref aMeshline)
+    NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
+    NCB_PROPERTY(meshline, getMeshline, setMeshline);
 
     // Core methods
     // M15 D-01 (cluster E §3.1): removed random/initPhysics/setRotate/setMirror
@@ -304,33 +344,41 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(skipToSync);
     NCB_METHOD(setStereovisionCameraPosition);
 
-    // M15 D-01 (cluster E §3.1): removed 22 timeline/variable-query NCB
-    // methods from Motion.Player — these are D3DEmotePlayer 54-entry table
-    // members (cluster D §1 #22-#26, #29-#47), not Motion.Player 92-entry
-    // table. Port hoisted them onto Motion.Player as convenience. 1:1
-    // reproduction places them only on D3DEmotePlayer (where they remain
-    // registered at main.cpp:553-590).
-    //
-    // Removed: setVariable, getVariable, countVariables, getVariableLabelAt,
-    //   countVariableFrameAt, getVariableFrameLabelAt, getVariableFrameValueAt,
-    //   getTimelinePlaying, getVariableRange, getVariableFrameList,
-    //   countMainTimelines, getMainTimelineLabelAt, getMainTimelineLabelList,
-    //   countDiffTimelines, getDiffTimelineLabelAt, getDiffTimelineLabelList,
-    //   getLoopTimeline, countPlayingTimelines, getPlayingTimelineLabelAt,
-    //   getPlayingTimelineFlagsAt, getTimelineTotalFrameCount,
-    //   playTimeline, stopTimeline, setTimelineBlendRatio, getTimelineBlendRatio,
+    // setVariable / getVariable: binary Motion.Player methods @0x6D69C8.
+    //   setVariable cb = loc_6D0E70 (name xref @0x6d... aSetvariable) — bound
+    //               via raw callback to setVariableCompatMethod.
+    //   getVariable cb = HM1_cascadeJoinAndLookup (name xref aGetvariable).
+    NCB_METHOD_RAW_CALLBACK(setVariable, &Player::setVariableCompatMethod, 0);
+    NCB_METHOD(getVariable);
+
+    // The 24 timeline-query methods below are NOT in the binary Motion.Player
+    // table (verified absent from the full 0x6D69C8 name-xref enumeration);
+    // they are D3DEmotePlayer-only (registered at main.cpp D3DEmotePlayer
+    // block). Do NOT recover them here:
+    //   countVariables, getVariableLabelAt, countVariableFrameAt,
+    //   getVariableFrameLabelAt, getVariableFrameValueAt, getTimelinePlaying,
+    //   getVariableRange, getVariableFrameList, countMainTimelines,
+    //   getMainTimelineLabelAt, getMainTimelineLabelList, countDiffTimelines,
+    //   getDiffTimelineLabelAt, getDiffTimelineLabelList, getLoopTimeline,
+    //   countPlayingTimelines, getPlayingTimelineLabelAt,
+    //   getPlayingTimelineFlagsAt, getTimelineTotalFrameCount, playTimeline,
+    //   stopTimeline, setTimelineBlendRatio, getTimelineBlendRatio,
     //   fadeInTimeline, fadeOutTimeline, getPlayingTimelineInfoList
-    //
     // C++ Player methods preserved (D3DEmotePlayer wrapper forwards to Player).
 
     // Selector — also D3DEmotePlayer-only per cluster E §3.1
     // Removed: isSelectorTarget, deactivateSelectorTarget
 
     // Misc
-    // M15 D-01 (cluster E §3.1): removed 4 port-invented Motion.Player NCB
-    // methods (getCommandList/motionList/emoteEdit/onFindMotion) — debug/
-    // internal helpers without binary equivalent in the 92-entry Motion.Player
-    // table (sub_6D69C8). C++ methods kept; only TJS exposure removed.
+    // getCommandList / onFindMotion: binary Motion.Player methods @0x6D69C8
+    // (name xrefs aGetcommandlist / aOnfind[Motion]). The earlier "port
+    // invention" claim was disproven by the descriptor build sites.
+    //   getCommandList cb = loc_6D3A4C
+    //   onFindMotion   present in the 0x6D69C8 method set
+    // (motionList / emoteEdit are genuinely absent from the binary table and
+    // stay unbound.)
+    NCB_METHOD(getCommandList);
+    NCB_METHOD(onFindMotion);
     NCB_METHOD(getD3DAvailable);
     NCB_METHOD(doAlphaMaskOperation);
     NCB_METHOD_RAW_CALLBACK(play, &Player::playCompat, 0);
