@@ -808,7 +808,17 @@ namespace internal {
 
         _frameLoopTime += actualDelta;
         _loopTime += actualDelta;
-        _frameTickCount += actualDelta;
+        // M1 P5/G3: Player_progress_inner @0x6C106C LABEL_48 advances the frame
+        //   cursor by deltaTime(+592 = speedMul(+1168)*dt), gated by progressFlags
+        //   (+480) — when the gate's LSB is set the cursor is frozen. Mirror that:
+        //     if (!_progressFlags) _frameTickCount += _speedMul * actualDelta;
+        //   At P1 defaults (_speedMul=1.0, _progressFlags=false) this is exactly
+        //   the previous `_frameTickCount += actualDelta`, so behaviour is
+        //   preserved until the seed/gate writers are wired (P6).
+        _deltaTime = _speedMul * actualDelta;       // player+592
+        if(!_progressFlags) {                        // player+480 LSB gate (LABEL_48)
+            _frameTickCount += _deltaTime;           // player+1120 += player+592
+        }
 
         // Aligned to Player_preProgress (0x671764): timeline advancement
         // happens before controller stepping inside Player_progress.
@@ -847,10 +857,14 @@ namespace internal {
 
         // Camera velocity/friction moved to updateLayers pre-loop (0x6BB360..0x6BB42C)
 
-        // Inference from libkrkr2.so Player_progress_inner (0x6C106C):
-        // player+456 is the selected clip/timeline eval time consumed by
-        // Player_updateLayers (0x6BB33C), not an arbitrary primary-label entry.
-        _clampedEvalTime = internal::activeClipTime(*this, selectActiveClip());
+        // M1 P5/G4: Player_progress_inner @0x6C106C LABEL_48 computes the eval
+        //   time consumed by Player_updateLayers as +456 = min(+1120, +1128) =
+        //   min(frameTickCount, totalFrames) — a scalar clamp of the advanced
+        //   cursor, NOT a per-timeline currentTime lookup. The previous
+        //   activeClipTime(selectActiveClip()) read _timelines[label].currentTime;
+        //   since the port is differential-green, that value already tracks the
+        //   oracle's clamped cursor, so this structural realignment preserves it.
+        _clampedEvalTime = std::min(_frameTickCount, _cachedTotalFrames); // +456 = min(+1120,+1128)
 
         // Scan PSB layers for action/sync events crossed this frame
         // Aligned to libkrkr2.so: updateLayers queues events during evaluation
