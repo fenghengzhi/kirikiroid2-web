@@ -598,6 +598,17 @@ namespace motion {
             return 0.0;
         }
 
+        // M3 P0 READ cascade (cluster J): binary `Player_getVariable` @0x533E1C
+        // walks HM4-first → HM2 → PSB fallback. R-M4 spike confirmed HM4 is
+        // a variable-snapshot cache populated by `Player_resetMotionState_
+        // clearAndRebuild`'s second loop (each controller writes its raw 8B
+        // current value snapshot). Empty here until that wire is added; the
+        // cascade structure is in place so wiring becomes a one-line addition.
+        if(const auto it = _variableSnapshotMap.find(label);
+           it != _variableSnapshotMap.end()) {
+            return it->second;
+        }
+
         if(const auto it = _evalResultValues.find(key); it != _evalResultValues.end()) {
             return it->second;
         }
