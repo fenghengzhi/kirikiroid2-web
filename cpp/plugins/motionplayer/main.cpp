@@ -599,8 +599,13 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     // M11 D-07: binary `pass` member is bound to addPlayCallback cb (void()),
     // not the real pass(double dt) method.
     NCB_METHOD_DETAIL(pass, Class, void, Class::addPlayCallback, ());
-    NCB_METHOD(progress);
-    NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant));
+    // M11 D-01 (cluster D §2a): removed duplicate progress + draw NCB methods.
+    // - progress already registered above (line ~597) per cluster D §1 #50;
+    //   the second NCB_METHOD(progress) was a leftover from the property
+    //   removal commit and would have caused dup-name NCB registration.
+    // - draw is in cluster D §2a EXTRA list (not in binary 54-entry table);
+    //   binary routes drawing via D3DEmotePlayer_setDrawAffineTranslateMatrix
+    //   path which is also removed.
     // M11 D-01: removed `setDrawAffineTranslateMatrix` — not in binary's
     // 54-entry D3DEmotePlayer NCB table. Web-port draw-device helper.
     NCB_METHOD_RAW_CALLBACK(setOuterForce, &D3DEmotePlayer::setOuterForceCompat, 0);
