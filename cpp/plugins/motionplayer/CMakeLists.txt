@@ -7,6 +7,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     main.cpp
     EmotePlayer.cpp
     EmoteEngine.cpp
+    EmoteSpring.cpp
     EmoteVarController.cpp
     EmoteAngleController.cpp
     PlayerCore.cpp

@@ -233,6 +233,23 @@ namespace motion {
     // Physics step functions (stepHairParts, stepBust, 6 deque step fns) are
     // STUB_WARN here — structural alignment only. P1 will port them.
     void EmoteEngine::progress(float dt) {
+        // P0-B2 FIX: top-level gate. The binary (EmoteEngine_progress @0x67D01C,
+        // thunk 0x530a5c) opens with `if (*(double*)&a2 != 0.0)` at 0x530a60 and
+        // does NOTHING when dt == 0.0 — not even the _dirty drain loop nor the
+        // bind-loop / physics pass. The previous local code entered the
+        // `while(dt>0 || _dirty)` loop unconditionally, so a dt==0 frame with
+        // _dirty set incorrectly ran one slice. Gate the whole body on dt!=0.
+        if (dt == 0.0f) {
+            return; // /*0x530a60 false branch*/
+        }
+
+        // P0-B3 SETUP: the binary keeps the ORIGINAL dt in v12 across the whole
+        // function (set at 0x67d054 from a2) and reuses it for the final
+        // physics pass gate/argument (0x67d414/0x67d420). The dt-slice loop
+        // drains a SEPARATE copy (v14, from 0x67d080). Mirror that split here:
+        // `dt` is the drained working copy; `originalDt` is v12.
+        const float originalDt = dt; // v12 @0x67d054
+
         // Player_preProgress() stub — Player already has its own progress
         // pipeline (PlayerFrameProgress.cpp) that the EmotePlayer calls
         // directly. Keeping the call point as a documented anchor:
@@ -240,6 +257,11 @@ namespace motion {
         //   call yet.
 
         // dt-slice main loop with physics step cap = 1.1f.
+        // Binary: `if (dt>0) goto LABEL_6` enters the do-while body; the inner
+        // `do{...; dt-=step;}while(dt>0)` drains dt; the outer `while(_dirty)`
+        // re-runs while the dirty flag is still set. `while(dt>0 || _dirty)`
+        // is the faithful flattening (first iteration guaranteed when dt>0;
+        // subsequent iterations gated by remaining dt or the dirty flag).
         while (dt > 0.0f || _dirty) {
             const float step = std::fmin(dt, 1.1f);
             _dirty = false;
@@ -296,21 +318,55 @@ namespace motion {
             // Player_bindParameterValue(player, &label, 0, negate ? -value : value);
         }
 
-        // sub_67C8A8(this); sub_6D2A54(player, 0, dt);
-        //   PLATFORM_BOUNDARY: stubs.
+        // sub_67C8A8(this); sub_6D2A54(player, 0, originalDt);
+        //   PLATFORM_BOUNDARY: stubs. Note the binary passes v12 (ORIGINAL dt)
+        //   to sub_6D2A54 @0x67d408, not the drained copy.
 
-        // Physics-only pass when (dt != 0 && !_syncWaiting): step the 3
-        // physics-target controllers, then run stepHairParts + stepBust×2.
-        if (dt != 0.0f && !_syncWaiting) {
-            float discardOut[8] = {};
-            if (_ctlHairPartsTarget) EmoteVarController_step(_ctlHairPartsTarget, discardOut, dt);
-            if (_ctlBust1Target)     EmoteVarController_step(_ctlBust1Target,     discardOut, dt);
-            if (_ctlBust2Target)     EmoteVarController_step(_ctlBust2Target,     discardOut, dt);
+        // Physics-only pass. P0-B3 FIX: the binary gates on the ORIGINAL dt
+        // (v12) and the syncWaiting byte @+1159:
+        //     if (*(double*)&v12 != 0.0 && !*(_BYTE*)(this+1159))   /*0x67d414*/
+        // and feeds v12 (cast to float @0x67d420) into every step call. The
+        // previous local code used the post-loop `dt`, which the dt-slice loop
+        // has already drained to <= 0 — so this pass almost never ran. Use
+        // `originalDt`.
+        if (originalDt != 0.0f && !_syncWaiting) {
+            // The binary casts the double v12 to float once (0x67d420) and
+            // reuses that float for all six calls.
+            const float physDt = originalDt;
 
-            // PLATFORM_BOUNDARY: physics step functions stubbed (P1 scope).
-            STUB_WARN(stepHairParts);
-            STUB_WARN(stepBust_chain1);
-            STUB_WARN(stepBust_chain2);
+            // Step the 3 physics-target controllers (no output sink in the
+            // binary — &v71 is a scratch buffer whose result is unused here;
+            // the controllers' purpose is to advance their internal state and
+            // feed the spring targets read by stepHairParts/stepBust).
+            float scratch[8] = {};
+            EmoteVarController_step(_ctlHairPartsTarget, scratch, physDt); // *(this+1104) @0x67d42c
+            EmoteVarController_step(_ctlBust1Target,     scratch, physDt); // *(this+1112) @0x67d43c
+            EmoteVarController_step(_ctlBust2Target,     scratch, physDt); // *(this+1120) @0x67d44c
+
+            // stepHairParts(this, physDt);                                 // @0x67d458
+            // stepBust(this, _ctlBust1Target, &_bustChain1Nodes,
+            //          _bustSpring1Const, physDt);                         // @0x67d470 (spring const @+1184)
+            // stepBust(this, _ctlBust2Target, &_bustChain2Nodes,
+            //          _bustSpring2Const, physDt);                         // @0x67d488 (spring const @+1192)
+            //
+            // DEFER (blocked, NOT done — see returned blocker report):
+            //   stepHairParts (sub_67B748) and stepBust (sub_67BCE8) both call
+            //   the per-node anchor resolver sub_67B970 @0x67B970, which
+            //   resolves a label -> dispatch (sub_6D38F4), PropGet "shape"
+            //   (vtable+32), and reads type/x/y via sub_6635DC/sub_662668 —
+            //   a deep TJS-dispatch path that is NOT yet reversed. stepBust
+            //   additionally calls sub_6689A4 (a SEPARATE 2-segment chain
+            //   spring, NOT EmotePhysics_springStep). Porting the spring math
+            //   alone without sub_67B970 would feed the springs garbage anchors
+            //   (CLAUDE.md: no patching on an architecturally-incomplete base).
+            //   The leaf EmotePhysics_springStep @0x662768 IS ported
+            //   (EmoteSpring.{h,cpp}) so stepHairParts can be completed once
+            //   sub_67B970 is reversed. The deques #1/#2/#3 are also empty until
+            //   the (un-ported) setVariable write path populates them, so this
+            //   pass has no observable effect today regardless.
+            STUB_WARN(stepHairParts);    // sub_67B748 — blocked on sub_67B970
+            STUB_WARN(stepBust_chain1);  // sub_67BCE8 — blocked on sub_67B970 + sub_6689A4
+            STUB_WARN(stepBust_chain2);  // sub_67BCE8 — blocked on sub_67B970 + sub_6689A4
         }
     }
 

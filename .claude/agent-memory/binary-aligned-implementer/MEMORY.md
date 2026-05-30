@@ -2,3 +2,4 @@
 - [Delta/override block must be separate struct](feedback_delta_override_block_architecture.md) — never混用 TJS-authored delta block with localState/accumulated
 - [EmoteEngine P0 layout refactor 2026-05-30](emoteengine_p0_refactor_2026-05-30.md) — split EmoteEngine.{h,cpp}, EmoteVar/AngleController POD, 10 binary-typed deques + 7 raw-ptr controllers + HM2@+1440, _emoteDirty/_meshDivisionRatio migrated
 - [Build all 3 targets after motionplayer .cpp changes](feedback_build_all_targets.md) — new/removed motionplayer source ⇒ also update platforms/wasmtime/CMakeLists.txt + build krkr2_wasmtime_guest, else differential.yml fails on wasm import
+- [EmoteEngine physics+progress pass](emote_physics_pass.md) — springStep@662768 struct layout, qword_1AB7E74=(0,1), stepBust calls sub_6689A4 NOT springStep, progress P0-B2/B3 gating, sub_67B970 dispatch blocker
