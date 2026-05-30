@@ -614,8 +614,11 @@ namespace motion {
             _frameTickCount = 0.0;
             _clampedEvalTime = std::min(_cachedTotalFrames, 0.0);
             _queuing = true;
-            _allplaying = true;
         }
+        // R2: binary Player_initNonEmoteMotion @ 0x6B3A78 writes STRH 0x100
+        // unconditionally (no chain branch). Previously port set _allplaying
+        // twice (inside chain-skip branch + unconditional below); R2 spike
+        // confirmed only one write is needed. Single unconditional write.
         _allplaying = true;
     }
 

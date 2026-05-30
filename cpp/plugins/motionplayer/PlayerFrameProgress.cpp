@@ -953,7 +953,7 @@ namespace internal {
                         }
                     }
                 } else {                          // 0x6C13F4: NON-LOOP, hit end -> stop
-                    _loopArmed = false;           // player+1099 = 0 (0x6C13F4)
+                    _allplaying = false;          // player+1099 = 0 (0x6C13F4)
                     if(!gate) {                   // 0x6C13F8
                         reseekNodes = true;       // advanceRootAndNodes
                     }
@@ -971,7 +971,7 @@ namespace internal {
                 }
             } else if(loopTime < 0.0) {           // 0x6C137C: non-loop, hit start
                 _clampedEvalTime = 0.0;           // player+456 = 0 (0x6C1380)
-                _loopArmed = false;               // player+1099 = 0 (0x6C1384)
+                _allplaying = false;              // player+1099 = 0 (0x6C1384)
                 _frameTickCount = 0.0;            // player+1120 = 0 (0x6C1388)
                 if(!gate) {                       // LABEL_57 (0x6C138C)
                     reseekNodes = true;           // rewindRootAndNodes

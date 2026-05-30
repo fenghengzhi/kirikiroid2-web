@@ -695,7 +695,11 @@ namespace motion {
         bool   _firstFrame = false;    // player+481 : one-shot seed of +1120/+456
         bool   _motionCompleted = false; // player+483: cleared each progress entry;
                                          //   set mid-step to abort cooperatively
-        bool   _loopArmed = false;     // player+1099: loop re-arm latch
+        // R2: +1099 is _allplaying (declared above at line 655). Port previously
+        // had a separate `_loopArmed = false` here, but R2 spike confirmed binary
+        // treats +1099 as a single boolean isPlaying byte (STRH 0x100 set, STRB
+        // WZR clear; no bit-level RMW). progress_inner @0x6C13F4/0x6C1384 STRB
+        // WZR is "stop playing" semantics, not "disarm loop". Field merged.
         bool   _reverseSeekFlag = false; // player+609: one-shot reverse-seek request
         // === end M1 P1 ===
         tjs_int _maskMode = 0;                         // libkrkr2.so +1148
