@@ -109,7 +109,8 @@ namespace motion {
         copy->obj()._module = obj()._module;
         // EmoteEngine 层(引擎字段 + getScale/Rot/Color 缓存)
         copy->engine()._meshDivisionRatio = engine()._meshDivisionRatio;
-        copy->engine()._queuing = engine()._queuing;
+        // R3 phantom: _queuing is Player+480 (Player class), not EmoteEngine.
+        copy->player().setQueuing(player().getQueuing());
         copy->engine()._hairScale = engine()._hairScale;
         copy->engine()._partsScale = engine()._partsScale;
         copy->engine()._bustScale = engine()._bustScale;

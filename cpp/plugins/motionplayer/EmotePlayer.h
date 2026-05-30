@@ -143,8 +143,11 @@ namespace motion {
         void setMeshDivisionRatio(double v);
         [[nodiscard]] double getMeshDivisionRatio() const { return engine()._meshDivisionRatio; }
 
-        void setQueuing(bool v) { engine()._queuing = v; }
-        [[nodiscard]] bool getQueuing() const { return engine()._queuing; }
+        // R3 phantom (class-layout-auditor): route through player()._queuing
+        // (binary Player+480 byte); was routing to engine()._queuing shadow
+        // which has been removed.
+        void setQueuing(bool v) { player().setQueuing(v); }
+        [[nodiscard]] bool getQueuing() const { return player().getQueuing(); }
 
         void setHairScale(double v) { engine()._hairScale = v; }
         [[nodiscard]] double getHairScale() const { return engine()._hairScale; }

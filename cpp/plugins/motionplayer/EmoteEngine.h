@@ -419,7 +419,11 @@ namespace motion {
         double _bustScale = 1.0;
         double _bodyScale = 1.0;
         double _progress = 0.0;
-        bool _queuing = false;
+        // R3 phantom (class-layout-auditor): removed EmoteEngine `_queuing`
+        // shadow field — binary Player+480 _queuing is the authoritative byte;
+        // EmoteEngine has no equivalent +480 field. Port previously kept a
+        // duplicate here that EmotePlayer delegate routed to via engine().
+        // 1:1 fix: delegate now routes via player()._queuing (Player.h:159).
         bool _modified = false;
         bool _playCallback = false;
         double _rot = 0.0;
