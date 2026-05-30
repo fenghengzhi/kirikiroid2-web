@@ -189,10 +189,27 @@ namespace motion {
 
         // Aligned to libkrkr2.so: tickCount uses ms↔frame conversion (60fps internal)
         // Getter: frameTickCount * 1000/60; Setter: value * 60/1000
-        void setTickCount(double v) { _frameTickCount = v * 60.0 / 1000.0; }
-        double getTickCount() const {
-            return _frameTickCount > 0 ? _frameTickCount * 1000.0 / 60.0 : 0.0;
+        // M16 P1 (cluster E §4): binary setTickCount_ms @0x6D96C0 does
+        //   +1120 = fmax(v * 60/1000, 0)       (frameTickCount cursor)
+        //   *(WORD*)(+480) = 257               (STRH 0x0101 — +480 = _queuing,
+        //                                        +481 = _firstFrame both = 1)
+        //   +456 = min(+1120, +1128)           (clampedEvalTime = min cursor,
+        //                                        cachedTotalFrames)
+        // Port previously only wrote _frameTickCount and missed all three
+        // side effects.
+        void setTickCount(double v) {
+            double cursor = v * 60.0 / 1000.0;
+            if (cursor < 0.0) cursor = 0.0;
+            _frameTickCount = cursor;
+            _queuing = true;
+            _firstFrame = true;
+            _clampedEvalTime = (cursor < _cachedTotalFrames)
+                                   ? cursor
+                                   : _cachedTotalFrames;
         }
+        // M16 P2 (cluster E §4): binary getTickCount_ms @0x6D96A0 returns
+        // +1120 * 1000/60 UNCONDITIONALLY (no >0 guard). Removed port's guard.
+        double getTickCount() const { return _frameTickCount * 1000.0 / 60.0; }
 
         // Aligned to libkrkr2.so +1093: bool flag (defaultSyncActive), not double
         void setSpeed(bool v) { _speed = v; }
