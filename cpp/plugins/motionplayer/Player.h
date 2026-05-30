@@ -551,6 +551,9 @@ namespace motion {
         double getY() const;
         void setX(double v);
         void setY(double v);
+        // M15 missing #10 (cluster E §4): binary `setCoord` @0x6CCFF8 writes
+        // root+1592=x, root+1600=y, dirty if changed. Atomic combined writer.
+        void setCoord(double x, double y);
         double getLeft() const { return getX(); }
         double getTop() const { return getY(); }
         void setLeft(double v) { setX(v); }

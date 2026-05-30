@@ -363,6 +363,29 @@ namespace motion {
         }
     }
 
+    // M15 missing #10 (cluster E §4): binary `Player::setCoord` @0x6CCFF8
+    // writes root+1592=x, root+1600=y, with a single combined dirty flag if
+    // either changed. Atomic combined writer 1:1 with binary semantics.
+    void Player::setCoord(double x, double y) {
+        _pendingRootX = x;
+        _pendingRootY = y;
+        _hasPendingRootPos = true;
+        if (!_nodes.empty()) {
+            auto &root = _nodes[0];
+            bool changed = false;
+            if (root.delta.posX != x) {
+                root.delta.posX = x;
+                changed = true;
+            }
+            if (root.delta.posY != y) {
+                root.delta.posY = y;
+                changed = true;
+            }
+            if (changed)
+                root.delta.dirty = true;
+        }
+    }
+
     // Aligned to libkrkr2.so EmoteObject_init (sub_67DBAC):
     // Sets activeMotion directly from a pre-loaded snapshot, bypassing file I/O.
     // Used by EmotePlayer.setModule() to bridge loaded PSB data into the Player pipeline.

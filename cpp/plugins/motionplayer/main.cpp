@@ -132,6 +132,9 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(y, getY, setY);
     NCB_PROPERTY(left, getLeft, setLeft);
     NCB_PROPERTY(top, getTop, setTop);
+    // M15 missing #10 (cluster E §4): binary `setCoord` @0x6CCFF8 — combined
+    // root pos writer matching binary atomic write.
+    NCB_METHOD(setCoord);
 
     NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
     // M15 D-01 (cluster E §3.1): removed metadata Motion.Player NCB — port
