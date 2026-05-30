@@ -538,7 +538,8 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(show);
     NCB_METHOD(hide);
     NCB_METHOD(assignState);
-    NCB_METHOD(initPhysics);
+    // M11 D-01 (cluster D §2a): removed `initPhysics` — port-invented, not
+    // in binary's 54-entry D3DEmotePlayer NCB table.
     NCB_METHOD_RAW_CALLBACK(setRot, &D3DEmotePlayer::setRotCompat, 0);
     NCB_METHOD(getRot);
     NCB_METHOD_RAW_CALLBACK(setCoord, &D3DEmotePlayer::setCoordCompat, 0);
@@ -566,6 +567,11 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(getPlayingTimelineFlagsAt);
     NCB_METHOD(isLoopTimeline);
     NCB_METHOD(getTimelineTotalFrameCount);
+    // M11 D-01 (cluster D §2a): `play` is port-invented (not in binary's
+    // 54-entry D3DEmotePlayer NCB table; binary playback starts via load(#3)
+    // + progress(#50)). KEPT FOR LOGO CI: removing `play` likely breaks logo
+    // TJS which uses d3dEmotePlayer.play(motion). Re-evaluate after wider
+    // logo TJS audit. Continue tracking as TODO M11 D-01 残留.
     NCB_METHOD(play);
     NCB_METHOD(playTimeline);
     NCB_METHOD(isTimelinePlaying);
