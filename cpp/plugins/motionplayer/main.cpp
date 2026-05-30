@@ -145,6 +145,10 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(onAction, getOnAction, setOnAction);
     NCB_PROPERTY(onSync, getOnSync, setOnSync);
     NCB_PROPERTY(onGroundCorrection, getOnGroundCorrection, setOnGroundCorrection);
+    // M15 missing transformOrder/coordinate (cluster E §3.1): int property
+    // scaffolding; semantics pending spike.
+    NCB_PROPERTY(transformOrder, getTransformOrder, setTransformOrder);
+    NCB_PROPERTY(coordinate, getCoordinate, setCoordinate);
 
     NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
     // M15 D-01 (cluster E §3.1): removed metadata Motion.Player NCB — port

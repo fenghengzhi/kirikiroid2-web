@@ -578,6 +578,15 @@ namespace motion {
             return _onGroundCorrection;
         }
 
+        // M15 missing transformOrder/coordinate int properties (cluster E
+        // §3.1 24 missing): scaffold port int fields with default 0; binary
+        // semantics not yet spiked, port stores value but doesn't drive any
+        // behavior off them.
+        void setTransformOrder(tjs_int v) { _transformOrder = v; }
+        [[nodiscard]] tjs_int getTransformOrder() const { return _transformOrder; }
+        void setCoordinate(tjs_int v) { _coordinate = v; }
+        [[nodiscard]] tjs_int getCoordinate() const { return _coordinate; }
+
         // Root node position (x/y/left/top)
         // Aligned to libkrkr2.so:
         //   getter: Player_getRootX (0x6D98A8) reads root_node+1592
@@ -1019,6 +1028,10 @@ namespace motion {
         tTJSVariant _onAction;
         tTJSVariant _onSync;
         tTJSVariant _onGroundCorrection;
+        // M15 missing transformOrder/coordinate (cluster E §3.1): port int
+        // scaffolding, default 0; semantics pending spike.
+        tjs_int _transformOrder = 0;
+        tjs_int _coordinate = 0;
         bool _visible = true;
         double _opacity = 1.0;
         double _slant = 0.0;
