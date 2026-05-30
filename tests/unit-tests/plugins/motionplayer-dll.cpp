@@ -19,6 +19,7 @@
 #include "motionplayer/RuntimeSupport.h"
 #include "motionplayer/SeparateLayerAdaptor.h"
 #include "motionplayer/PlayerFrameStep.h"
+#include "motionplayer/PlayerFrameStepping.h"
 #include "psbfile/PSBValue.h"
 #include "LayerIntf.h"
 #include "LayerTreeOwner.h"
@@ -901,5 +902,203 @@ TEST_CASE("parseFrame/mergeFrameContent slot is binary-aligned (P2)") {
         ParsedFrameSlotLike_0x6926B4 slotOut;
         mergeFrameContentLike_0x692AB0(slotOut, /*nodeType*/ 1, content);
         REQUIRE(slotOut.src.empty());          // (1<<1)&0x1849 == 0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M1/P3+P4: binary-aligned node-deque frame cursor stepping (independent, not
+// wired into the live frame-progress path). Drives the pure cursor seek /
+// completion / gate logic of:
+//   Player_advanceNodeFrames     @0x6B7E44
+//   Player_advanceRootAndNodes   @0x6B6ADC
+//   Player_rewindRootAndNodes    @0x6B9A3C
+//   Player_reseekTimelineCursors @0x6B86C8
+namespace {
+    // Build one frame dict {time,type[,content]} for a synthetic frame stream.
+    std::shared_ptr<PSB::PSBDictionary>
+    mkFrame(double time, int type,
+            std::shared_ptr<PSB::PSBDictionary> content = nullptr) {
+        auto f = std::make_shared<PSB::PSBDictionary>();
+        f->emplace("time", std::make_shared<PSB::PSBNumber>(time));
+        f->emplace("type", psbInt(type));
+        if(content) f->emplace("content", content);
+        return f;
+    }
+    // Build a frame stream (PSBList) from an array of (time,type) pairs, all
+    // type-2 (static) with an empty content (mask 0).
+    std::shared_ptr<PSB::PSBList>
+    mkStream(std::initializer_list<double> times) {
+        auto list = std::make_shared<PSB::PSBList>(0);
+        for(double t : times) {
+            auto content = std::make_shared<PSB::PSBDictionary>();
+            content->emplace("mask", psbInt(0));
+            list->push_back(mkFrame(t, 2, content));
+        }
+        return list;
+    }
+}
+
+TEST_CASE("frame cursor stepping is binary-aligned (P3+P4)") {
+    using motion::detail::ParsedFrameSlotLike_0x6926B4;
+    using motion::detail::parseFrameLike_0x6926B4;
+    using motion::detail::NodeFrameStreamsLike;
+    using motion::detail::FrameStreamCursorLike;
+    using motion::detail::PlayerFrameStreamsLike;
+    using motion::detail::TimelineSeekStateLike;
+    using motion::detail::advanceNodeFramesLike_0x6B7E44;
+    using motion::detail::advanceRootAndNodesLike_0x6B6ADC;
+    using motion::detail::rewindRootAndNodesLike_0x6B9A3C;
+    using motion::detail::reseekTimelineCursorsLike_0x6B86C8;
+
+    // Seed a node's slot0 to frame `idx` of `frames` (parseFrame fills time).
+    auto seedNode = [&](NodeFrameStreamsLike &node,
+                        const std::shared_ptr<PSB::PSBList> &frames, int idx) {
+        node.frameList = frames;
+        node.nodeType = 0;
+        node.activeSlotIndex = 0;
+        parseFrameLike_0x6926B4(node.slots[0], nullptr, 0, 0);
+        node.slots[0].frameIndex = static_cast<std::uint32_t>(idx);
+        // seed both slots' time from the stream so the ping-pong has a baseline.
+        auto f = (*frames)[idx];
+        if(auto d = std::dynamic_pointer_cast<PSB::PSBDictionary>(f)) {
+            // re-parse so slots reflect the real frame time.
+            parseFrameLike_0x6926B4(node.slots[0], d,
+                                    static_cast<std::uint32_t>(idx), 0);
+        }
+        node.slots[1] = node.slots[0];
+        node.slots[1].frameIndex = static_cast<std::uint32_t>(idx);
+    };
+
+    SECTION("advanceNodeFrames seeks the active slot forward to childEvalTime") {
+        // Stream times 0,10,20,30,40 (5 frames). Seek toward childEvalTime=25.
+        auto frames = mkStream({0, 10, 20, 30, 40});
+        NodeFrameStreamsLike node;
+        node.hasChild = true;
+        node.childEvalTime = 25.0;
+        seedNode(node, frames, 0);  // start at frame 0 (time 0)
+
+        TimelineSeekStateLike state;  // emoteListFlag 0
+        advanceNodeFramesLike_0x6B7E44(node, state);
+
+        // The active slot must now bracket t=25: cursor advanced past time<=25.
+        // count-2 == 3 caps the cursor; the seek stops when next slot.time>25.
+        // Active slot frameIndex should be 2 (time 20) with the other at 3
+        // (time 30): 20 <= 25 < 30.
+        const auto &as = node.slots[node.activeSlotIndex];
+        REQUIRE(as.time <= 25.0);
+        REQUIRE(as.frameIndex <= 3u);
+        // merge ran (both slots merged): mergedFlag set on at least one slot.
+        REQUIRE((node.slots[0].mergedFlag == 1 ||
+                 node.slots[1].mergedFlag == 1));
+    }
+
+    SECTION("advanceNodeFrames no-op when at limit & target ahead (no merge)") {
+        // Seed at the last seekable frame (index count-2 == 3, time 30) with the
+        // child target between 30 and 40. The forward loop breaks immediately
+        // (cur.frameIndex >= limit), cur.time(30) is NOT > t(35) so no backward
+        // seek, and seeked==false -> 0x6B7F70 early return without merge.
+        auto frames = mkStream({0, 10, 20, 30, 40});
+        NodeFrameStreamsLike node;
+        node.hasChild = true;
+        node.childEvalTime = 35.0;
+        seedNode(node, frames, 3);  // both slots at frame 3 (time 30)
+        node.slots[0].mergedFlag = 0;
+        node.slots[1].mergedFlag = 0;
+
+        TimelineSeekStateLike state;
+        advanceNodeFramesLike_0x6B7E44(node, state);
+        REQUIRE(node.slots[0].mergedFlag == 0);
+        REQUIRE(node.slots[1].mergedFlag == 0);
+    }
+
+    SECTION("advanceRootAndNodes advances layer cursor to clampedEvalTime") {
+        PlayerFrameStreamsLike p;
+        p.state.clampedEvalTime = 25.0;
+        p.layerStream.frames = mkStream({0, 10, 20, 30, 40});
+        p.layerStream.frameCursor = 0;
+        p.layerStream.curTime = 0.0;
+        p.layerStream.nextTime = 10.0;  // frames[1].time
+        p.rootStream.frames = mkStream({0, 50});
+        p.rootStream.frameCursor = 0;
+        p.rootStream.nextTime = 50.0;
+        // node 0 is the root placeholder; add a real node at index 1.
+        p.nodes.resize(2);
+
+        advanceRootAndNodesLike_0x6B6ADC(p);
+        // Layer cursor stops where clampedEvalTime(25) < nextTime, capped at
+        // count-2 == 3. 20 <= 25 < 30 -> cursor at 2 (time 20, next 30).
+        REQUIRE(p.layerStream.frameCursor == 2);
+        REQUIRE(p.layerStream.curTime == Catch::Approx(20.0));
+        REQUIRE(p.layerStream.nextTime == Catch::Approx(30.0));
+    }
+
+    SECTION("align gate sets motionCompleted + snaps cursor (stopGate on)") {
+        // Layer stream frame[1] is a type-1 frame whose content has align=1 and
+        // whose time equals clampedEvalTime, with stop gate active.
+        auto alignContent = std::make_shared<PSB::PSBDictionary>();
+        alignContent->emplace("align", psbInt(1));
+        auto list = std::make_shared<PSB::PSBList>(0);
+        list->push_back(mkFrame(0, 2));
+        list->push_back(mkFrame(10, 1, alignContent));  // align frame at t=10
+        list->push_back(mkFrame(20, 2));
+        list->push_back(mkFrame(30, 2));
+
+        PlayerFrameStreamsLike p;
+        p.state.clampedEvalTime = 10.0;
+        p.state.motionStopGate = 1;
+        p.layerStream.frames = list;
+        p.layerStream.frameCursor = 0;
+        p.layerStream.curTime = 0.0;
+        p.layerStream.nextTime = 10.0;
+        p.rootStream.frames = mkStream({0, 40});
+        p.rootStream.nextTime = 40.0;
+        p.nodes.resize(1);
+
+        advanceRootAndNodesLike_0x6B6ADC(p);
+        // cursor advanced to frame 1 (curTime 10 == clampedEvalTime), align
+        // gate fired: motionCompleted set, frameTickCount snapped to 10.
+        REQUIRE(p.state.motionCompleted == 1);
+        REQUIRE(p.state.frameTickCount == Catch::Approx(10.0));
+    }
+
+    SECTION("rewindRootAndNodes decrements layer cursor backward") {
+        PlayerFrameStreamsLike p;
+        p.state.clampedEvalTime = 12.0;
+        p.layerStream.frames = mkStream({0, 10, 20, 30, 40});
+        // start at cursor 3 (curTime 30) — must rewind toward 12.
+        p.layerStream.frameCursor = 3;
+        p.layerStream.curTime = 30.0;
+        p.layerStream.nextTime = 40.0;
+        p.rootStream.frames = mkStream({0, 50});
+        p.rootStream.frameCursor = 1;
+        p.rootStream.curTime = 0.0;  // already <= clampedEvalTime, no rewind
+        p.nodes.resize(1);
+
+        rewindRootAndNodesLike_0x6B9A3C(p);
+        // curTime walked down: 30 -> 20 -> 10 (10 <= 12 stops). cursor at 1.
+        REQUIRE(p.layerStream.frameCursor == 1);
+        REQUIRE(p.layerStream.curTime == Catch::Approx(10.0));
+    }
+
+    SECTION("reseekTimelineCursors linear-scans layer cursor to target") {
+        PlayerFrameStreamsLike p;
+        p.state.clampedEvalTime = 22.0;
+        p.layerStream.frames = mkStream({0, 10, 20, 30, 40});
+        p.rootStream.frames = mkStream({0, 50});
+        p.nodes.resize(1);
+
+        reseekTimelineCursorsLike_0x6B86C8(p);
+        // The binary's reseek (0x6B8770) is a COARSE linear scan that
+        // double-increments i: the for-loop's own ++i AND the body's ++i fire on
+        // every "time < target" step. With target=22, frames=[0,10,20,30,40]:
+        //   i=0 (t0<22): body ++i->1, loop ++i->2
+        //   i=2 (t20<22): body ++i->3, loop ++i->4
+        //   i=4 (t40>22): --i->3, break
+        // cursor = min(3, count-2=3) = 3. curTime/nextTime are int-truncated:
+        // (int)frames[3].time=30, (int)frames[4].time=40. (advance/rewind later
+        // corrects this coarse seek — reseek intentionally overshoots.)
+        REQUIRE(p.layerStream.frameCursor == 3);
+        REQUIRE(p.layerStream.curTime == Catch::Approx(30.0));
+        REQUIRE(p.layerStream.nextTime == Catch::Approx(40.0));
     }
 }

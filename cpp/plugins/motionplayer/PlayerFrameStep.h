@@ -130,6 +130,21 @@ namespace motion {
             //                      (mask 0x2000000). DEFERRED — see .cpp note.
             std::vector<std::pair<float, float>> bezierPatch;  // +296.. (mesh)
 
+            // +328 clipStartTime — node-slot clip start time. NOT written by
+            //   parseFrame (0x6926B4) or mergeFrameContent (0x692AB0); the binary
+            //   populates it elsewhere (an init / evaluate pass outside P2-P4
+            //   scope). Read by Player_rewindRootAndNodes (0x6B9A3C) per-node gate
+            //   `*(double*)(node + 536*activeSlot + 328) > player+456` and by the
+            //   evaluate path. Kept here so the rewind cursor logic mirrors the
+            //   binary's +328 read exactly; population is DEFERRED (see
+            //   PlayerFrameStepping.cpp). Defaults to slot.time so a freshly
+            //   parsed slot has a sane start time for isolated unit driving.
+            //   LOGICAL offset: like every member past `src` (+36), the local
+            //   C++ representation does NOT occupy the binary's exact +328 byte
+            //   (the std::string/std::vector members above shift the layout — see
+            //   the header note); the offset is documented, not static_asserted.
+            double clipStartTime = 0.0;  // node-slot +328 (externally populated)
+
             // ---- mask 0x80000 "motion" sub-object (merge @ 0x6938CC) ----
             int  motionFlags = 0;     // sub-mask 0x1  "flags"  (v3[86])
             int  motionDt = 0;        // sub-mask 0x2  "dt"     (v3[87])

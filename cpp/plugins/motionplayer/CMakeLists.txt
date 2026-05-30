@@ -13,6 +13,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     PlayerCore.cpp
     PlayerFrameProgress.cpp
     PlayerFrameStep.cpp
+    PlayerFrameStepping.cpp
     PlayerResource.cpp
     PlayerMotionLoad.cpp
     PlayerVariable.cpp

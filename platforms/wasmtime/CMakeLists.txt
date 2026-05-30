@@ -13,6 +13,7 @@ add_library(krkr2_wasmtime_guest_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerCore.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerFrameProgress.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerFrameStep.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerFrameStepping.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerResource.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerMotionLoad.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerVariable.cpp
