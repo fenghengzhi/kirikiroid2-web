@@ -503,20 +503,15 @@ NCB_REGISTER_CLASS(D3DEmoteModule) {
 NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_CONSTRUCTOR((ResourceManager));
 
-    // Properties (same as EmotePlayer subclass, matching IDA registration order)
+    // Properties (binary 54-entry NCB table @ libkrkr2.so sub_52E504)
     NCB_PROPERTY_RO(module, getModule);
-    NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
-    NCB_PROPERTY(chara, getChara, setChara);
-    NCB_PROPERTY(motion, getMotion, setMotion);
-    NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);
-    NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
-    NCB_PROPERTY(outline, getOutline, setOutline);
-    NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);
-    NCB_PROPERTY(frameLastTime, getFrameLastTime, setFrameLastTime);
-    NCB_PROPERTY(frameLoopTime, getLoopTime, setLoopTime); // R1.H2: binary 0x6D97AC frameLoopTime getter reads +1136 (_loopTime), not +1120
-    NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
-    NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
-                 setProcessedMeshVerticesNum);
+    // M11 D-01 R-M11.4b: removed 10 EmotePlayer-style props that don't belong
+    // on D3DEmotePlayer per binary (completionType/chara/motion/motionKey/
+    // maskMode/outline/priorDraw/frameLastTime/frameLoopTime/loopTime/
+    // processedMeshVerticesNum). They are Player-class properties hoisted
+    // locally to D3DEmotePlayer — binary sub_52E504 exposes them on Motion.Player
+    // (sub_6D69C8), not on D3DEmotePlayer (which is the visible/smoothing/scale
+    // wrapper). 1:1 reproduction strips the hoist.
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
