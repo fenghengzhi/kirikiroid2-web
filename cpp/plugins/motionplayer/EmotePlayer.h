@@ -282,7 +282,9 @@ namespace motion {
                                              tTJSVariant **param,
                                              iTJSDispatch2 *objthis);
         tTJSVariant getOuterForce();
-        bool contains(double x, double y);
+        // M11 D-09 P0: removed AABB `contains(double x, double y)` overload
+        // — port invention. binary D3DEmotePlayer::contains @0x530b5c has
+        // a single (label, x, y) signature.
         bool contains(ttstr label, double x, double y);
         static tjs_error containsCompat(tTJSVariant *result, tjs_int numparams,
                                         tTJSVariant **param,

@@ -541,31 +541,18 @@ namespace motion {
         return tTJSVariant();
     }
 
-    bool D3DEmotePlayer::contains(double x, double y) {
-        if(!_visible) {
-            return false;
-        }
-
-        // Use local coordinate state for AABB test.
-        // Aligned to libkrkr2.so sub_690DF0: supports circle/rect/quad;
-        // we use AABB approximation for now.
-        const double scale = static_cast<double>(_baseScale * _userScale);
-        const double width = player().getActiveMotionWidth();
-        const double height = player().getActiveMotionHeight();
-        if(width <= 0.0 || height <= 0.0) {
-            return false;
-        }
-
-        const auto scaledWidth = width * scale;
-        const auto scaledHeight = height * scale;
-        return x >= engine()._coordX && x <= (engine()._coordX + scaledWidth) &&
-               y >= engine()._coordY && y <= (engine()._coordY + scaledHeight);
-    }
+    // M11 D-09 P0: removed `contains(double x, double y)` AABB overload — this
+    // was a port invention. libkrkr2.so sub_530b5c (D3DEmotePlayer::contains)
+    // has EXACTLY one code path: AddRef label-variant -> sub_6B5AD8 resolve
+    // layer node -> if node: Player_hitTest(node+1664, x, y) else 0 -> Release.
+    // No AABB branch, no _visible guard, no IsEmpty guard. CLAUDE.md mandates
+    // 1:1 reproduction.
 
     bool D3DEmotePlayer::contains(ttstr label, double x, double y) {
-        if(!_visible || label.IsEmpty()) {
-            return false;
-        }
+        // M11 D-09 P1: removed _visible / label.IsEmpty() guards — binary
+        // unconditionally resolves layer + hitTests (returns 0 if resolve
+        // fails). Visibility and empty-label cases are handled by the layer
+        // resolver returning null, which hitTestLayer then maps to false.
         return player().hitTestLayer(label, x, y);
     }
 
@@ -581,16 +568,13 @@ namespace motion {
             return TJS_E_INVALIDPARAM;
         }
 
+        // M11 D-09: binary contains is (label, x, y) only. 2-arg AABB form
+        // is removed — TJS callers passing 2 args now get INVALIDPARAM.
         if(numparams >= 3 && param[0] && param[1] && param[2]) {
             *result = tTJSVariant(
                 self->contains(ttstr(*param[0]),
                                param[1]->AsReal(),
                                param[2]->AsReal()));
-            return TJS_S_OK;
-        }
-        if(numparams >= 2 && param[0] && param[1]) {
-            *result = tTJSVariant(
-                self->contains(param[0]->AsReal(), param[1]->AsReal()));
             return TJS_S_OK;
         }
         return TJS_E_INVALIDPARAM;
