@@ -199,10 +199,9 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(preview, getPreview, setPreview);
     NCB_PROPERTY(outsideFactor, getOutsideFactor, setOutsideFactor);
     NCB_PROPERTY(resourceManager, getResourceManager, setResourceManager);
-    NCB_PROPERTY(stealthChara, getStealthChara, setStealthChara);
-    NCB_PROPERTY(stealthMotion, getStealthMotion, setStealthMotion);
-    NCB_PROPERTY(tags, getTags, setTags);
-    NCB_PROPERTY(project, getProject, setProject);
+    // M15 D-01 (cluster E §3.1): removed stealthChara/stealthMotion/tags/project
+    // Motion.Player NCB — port invention, not in binary 92-entry table.
+    // C++ fields preserved.
     // M15 D-01 (cluster E §3.1): removed useD3D/meshline/busy Motion.Player
     // NCB — port-invented Web-port properties without binary equivalent in
     // 92-entry Motion.Player table (sub_6D69C8).
@@ -243,7 +242,8 @@ NCB_REGISTER_CLASS(Player) {
     //   registerBg, registerCaption.
     // C++ methods preserved (host adapter still calls them internally).
     NCB_METHOD(unloadUnusedTextures);
-    NCB_METHOD(alphaOpAdd);
+    // M15 D-01 (cluster E §3.1): removed alphaOpAdd — port draw-device helper,
+    // not in binary 92-entry table. C++ method preserved.
     NCB_METHOD_RAW_CALLBACK(captureCanvas, &Player::captureCanvasCompat, 0);
     NCB_METHOD(findSource);
     NCB_METHOD(loadSource);
