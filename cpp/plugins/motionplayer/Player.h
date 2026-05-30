@@ -547,6 +547,13 @@ namespace motion {
         double getActiveMotionWidth() const;
         double getActiveMotionHeight() const;
         bool hitTestLayer(ttstr name, double x, double y);
+        // M15 missing `contains` (cluster E §3.1 24 missing): binary
+        // Motion.Player exposes contains(label, x, y) — alias of binary's
+        // sub_6B5AD8 layer-resolve + Player_hitTest. Port delegates to
+        // hitTestLayer (same path).
+        bool contains(ttstr label, double x, double y) {
+            return hitTestLayer(label, x, y);
+        }
 
         // Root node position (x/y/left/top)
         // Aligned to libkrkr2.so:

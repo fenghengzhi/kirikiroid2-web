@@ -135,6 +135,9 @@ NCB_REGISTER_CLASS(Player) {
     // M15 missing #10 (cluster E §4): binary `setCoord` @0x6CCFF8 — combined
     // root pos writer matching binary atomic write.
     NCB_METHOD(setCoord);
+    // M15 missing `contains` (cluster E §3.1): label-based hit test, delegates
+    // to hitTestLayer (port's existing sub_6B5AD8-aligned path).
+    NCB_METHOD(contains);
 
     NCB_PROPERTY(completionType, getCompletionType, setCompletionType);
     // M15 D-01 (cluster E §3.1): removed metadata Motion.Player NCB — port
