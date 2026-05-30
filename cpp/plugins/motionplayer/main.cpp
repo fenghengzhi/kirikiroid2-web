@@ -178,6 +178,8 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(slantY, getSlantY, setSlantY);
     NCB_PROPERTY(zoomX, getZoomX, setZoomX);
     NCB_PROPERTY(zoomY, getZoomY, setZoomY);
+    NCB_PROPERTY(visible, getVisible, setVisible);
+    NCB_PROPERTY(opacity, getOpacity, setOpacity);
     NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
     // M-colorWeight P1 (cluster E §4): binary Player NCB `colorWeight` getter
     // sub_6D9768 returns +1097 bool (independentLayerInherit), NOT the

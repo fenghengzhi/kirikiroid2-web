@@ -284,6 +284,21 @@ namespace motion {
             _nodes[0].delta.scaleY = v;
             _nodes[0].delta.dirty = true;
         }
+        // M15 missing visible/opacity (cluster E §3.1 24 missing): binary
+        // exposes both as PROPERTIES. Port has setVisible/setOpacity METHODS
+        // (no getters). Getters added here read from root node delta state
+        // (opacity int 0-255 ↔ TJS double 0..1 conversion). Port C++
+        // _visible/_opacity scalars still drive existing internal code paths.
+        bool getVisible() const {
+            return _nodes.empty() ? true : _nodes[0].delta.visibleOverride;
+        }
+        double getOpacity() const {
+            // DeltaState.opacity is int 0..255; expose to TJS as double 0..1
+            // matching binary semantics (binary 0..1 double float).
+            return _nodes.empty() ? 1.0
+                                  : static_cast<double>(_nodes[0].delta.opacity)
+                                        / 255.0;
+        }
 
         // Aligned to libkrkr2.so 0x6CD724 / 0x6CD710: packed color int at +1156
         void setColorWeight(tjs_int v);
