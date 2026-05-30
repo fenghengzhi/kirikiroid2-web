@@ -276,6 +276,35 @@ namespace motion {
         return 0.0;
     }
 
+    // Aligned with libkrkr2.so Player_bindParameterValue_writesHM1_HM2
+    // @0x6C4668. Mirrors the binary's two-region control flow:
+    //
+    //   [top half — HM1 cascade, gated by sub_6D0BF4(...)&1 at 0x6c46bc]
+    //     scopeJoin = scope ? scope : "::"                 (0x6c46c4..0x6c4708)
+    //     joinedKey = label ? join(scopeJoin,label) : scopeJoin (0x6c4720..0x6c4790)
+    //     node = HM1.find(joinedKey)                       (sub_6F51BC @0x6c4818)
+    //     if (!node) { node = HM1.upsert(joinedKey);       (0x6F52AC @0x6c4850)
+    //                  node.key = joinedKey;
+    //                  node.chainDispatches = sub_697D34(scope,"\\"); // DEFERRED
+    //                  node.weight = 1.0 }                  (0x3FF.. @0x6c4964)
+    //     node.writeVal = a4;                              (0x6c4968)
+    //     sub_6B9650(node);  // aux type-3/4 node list      // DEFERRED
+    //     ramp node+408 controller lists (type3/type4)      // DEFERRED
+    //
+    //   [LABEL_132 — HM2, unconditional, 0x6c4c0c]
+    //     HM2.upsert(rawLabel) = a4;   <-- green-critical, value-equivalent
+    //     ramp a1+408 controller list for rawLabel          // DEFERRED
+    //
+    // The web port mirrors the HM2 store via the existing _evalResultValues /
+    // _evalResultList path (raw label -> double, value-identical to a4) and
+    // the parameter-entry binding the differential trace depends on. The HM1
+    // cascade is added as additive structure (separate _evalCascadeMap, no
+    // feedback into HM2). The chainDispatches build, the aux node list and the
+    // controller ramps are DEFERRED with documented binary addresses because
+    // their inputs (sub_697D34 TJS-dispatch scope resolution, sub_6B9650 aux
+    // walk, and the unpopulated node+408 controller RB-trees) cannot be
+    // implemented without guessing and have no consumer in the port
+    // (getVariable reads HM2, not HM1).
     void Player::bindParameterValueLike_0x6C4668(const std::string &label,
                                                  int mode,
                                                  double value) {
@@ -286,6 +315,53 @@ namespace motion {
         const auto parts = splitParameterLabelLike_0x6D0BF4(label);
         bindParameterEntriesLike_0x6C4668(_parameterEntries, parts,
                                           mode, value);
+
+        // --- HM1 cascade upsert (binary top half, 0x6c46c4..0x6c4968) ---
+        // The binary runs this region only when sub_6D0BF4 splits the label
+        // (label contains "::" or "/"). Replicate that gate: parts.suffix is
+        // non-empty exactly in those two cases (rfind("::") / rfind('/')).
+        if(!parts.suffix.empty()) {
+            // scope = substring before the separator. scopeJoin = scope ? scope
+            // : "::"; here scope is always non-empty when a separator exists
+            // (binary 0x6c46c4: v102 is the scope side of the split).
+            std::string scope;
+            if(const auto sepPos = label.rfind("::");
+               sepPos != std::string::npos) {
+                scope = label.substr(0, sepPos);
+            } else if(const auto slashPos = label.rfind('/');
+                      slashPos != std::string::npos) {
+                scope = label.substr(0, slashPos);
+            }
+            const std::string scopeJoin = scope.empty() ? "::" : scope;
+            // joinedKey = label ? scopeJoin + label : scopeJoin. The binary's
+            // "label" (v101) is parts.suffix; sub_A1359C concatenates without a
+            // separator (0x6c4734: join(scopeJoin, label)).
+            const std::string joinedKey =
+                parts.suffix.empty() ? scopeJoin
+                                     : (scopeJoin + parts.suffix);
+            const ttstr cascadeKey = detail::widen(joinedKey);
+
+            // HM1 find/upsert into _evalCascadeMap (binary Player+264). The
+            // inline hash map is modeled by unordered_map<ttstr,...,ttstr_hash>;
+            // upsert == operator[] (insert-if-absent), matching sub_6F51BC +
+            // Player_HM1_upsert_evalCascade @0x6F52AC.
+            auto found = _evalCascadeMap.find(cascadeKey);
+            if(found == _evalCascadeMap.end()) {
+                // First insert (0x6c4850): seed key, weight=1.0 (0x6c4964).
+                // chainDispatches/aux/ramps DEFERRED (see header comment).
+                auto inserted = _evalCascadeMap.emplace(
+                    std::piecewise_construct,
+                    std::forward_as_tuple(cascadeKey),
+                    std::forward_as_tuple());
+                found = inserted.first;
+                found->second.keyCopy = cascadeKey;
+                found->second.weight = 1.0; // binary node+40 = 1.0
+            }
+            // node.writeVal = a4 on every bind (binary 0x6c4968, unconditional
+            // after the insert branch).
+            found->second.writeVal = value;
+        }
+        // --- end HM1 cascade ---
 
         for(auto &node : _nodes) {
             if(node.nodeType == 3) {

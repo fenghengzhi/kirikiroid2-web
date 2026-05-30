@@ -130,10 +130,22 @@ namespace motion::detail {
     // Binary dtor sequence: heap → vector elements release + backing delete →
     // main dispatch release → key release. Local destructor body mirrors that
     // order, then member destructors run in reverse declaration order.
+    //
+    // Binary node is operator new(0x60u) @0x6F5368. The fields the port's
+    // evidence-grounded write subset populates are:
+    //   V+32 double writeVal  (= a4, store at 0x6c4968)
+    //   V+40 double weight     (= 1.0, seeded once at 0x6c4964 on first insert)
+    // DEFERRED (no port consumer / unported input): chainDispatches (built by
+    // sub_697D34 @0x6c48bc — pure TJS-dispatch scope resolution), the V+48 aux
+    // node vector (sub_6B9650 @0x6c4974), and the V+408-keyed controller ramps.
     struct EvalCascadeState {
         ttstr keyCopy;
         iTJSDispatch2 *mainDispatch = nullptr;
         std::vector<iTJSDispatch2 *> chainDispatches;
+        // Binary V+32 / V+40. writeVal := a4 on every bind; weight is seeded to
+        // 1.0 only on first insert and left untouched on later upserts.
+        double writeVal = 0.0;
+        double weight = 0.0;
         void *heapResult = nullptr;
 
         EvalCascadeState() = default;
@@ -144,6 +156,8 @@ namespace motion::detail {
             : keyCopy(std::move(other.keyCopy)),
               mainDispatch(other.mainDispatch),
               chainDispatches(std::move(other.chainDispatches)),
+              writeVal(other.writeVal),
+              weight(other.weight),
               heapResult(other.heapResult) {
             other.mainDispatch = nullptr;
             other.heapResult = nullptr;
