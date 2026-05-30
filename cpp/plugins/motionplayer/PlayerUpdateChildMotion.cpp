@@ -138,14 +138,18 @@ namespace motion {
 
 
                         // Time sync from parent loop time (0x6BE478..0x6BE4E8)
-                        // Binary checks both _allplaying && _queuing (0x6BE478)
+                        // Binary checks both _allplaying (+1099) && _queuing (+480) at 0x6BE478
                         if (child._allplaying && child._queuing) {
-                            // Binary at 0x6BE49C: childTime = player+1120 - slot+8 + slot+376
-                            // = _frameLoopTime - clipStartTime + motionTimeOffset
-                            double childTime = _frameLoopTime
+                            // Binary at 0x6BE49C: childTime = self.+1120 - slot+8 + slot+376
+                            // = _frameTickCount - clipStartTime + motionTimeOffset
+                            // (R1.H2: was reading port-invented `_frameLoopTime`; binary +1120 = _frameTickCount)
+                            double childTime = _frameTickCount
                                 - mn.activeSlot().clipStartTime
                                 + mn.activeSlot().motionTimeOffset;
-                            if (_frameLastTime < 0.0) {
+                            // R1.B-audit C fix: binary 0x6BE4A0 reads self.+592 = _deltaTime
+                            // (speedMul * actualDelta), NOT _frameLastTime (raw dt).
+                            // Diverges when _speedMul < 0 but actualDelta > 0.
+                            if (_deltaTime < 0.0) {
                                 // Backward play: handle loop wrapping
                                 // Binary reads child+1136 (_loopTime) and child+1128 (_cachedTotalFrames)
                                 double loopEnd = child._loopTime;
@@ -159,18 +163,23 @@ namespace motion {
                             double totalFrames = child._cachedTotalFrames;
                             childTime = std::max(childTime, 0.0);
                             // Binary: writes unclamped time to player+1120 (0x6BE4D4)
-                            child._frameLoopTime = childTime;
+                            child._frameTickCount = childTime;
                             if (childTime > totalFrames) childTime = totalFrames;
                             // Binary: writes clamped time to player+456 (0x6BE4E4)
                             child._clampedEvalTime = childTime;
                             // Binary at 0x6BE4E8: writes word 0x0101 to child+480,
-                            // setting both _queuing (byte+480) and _allplaying (byte+481)
+                            // setting both _queuing (byte+480) and _firstFrame (byte+481)
                             // simultaneously. Does NOT iterate timelines.
-                            child._allplaying = true;
+                            // R1.H3 fix: was writing `_allplaying` (which is +1099, not +481);
+                            // +481 is _firstFrame per Player.h field map.
                             child._queuing = true;
-                            // Binary: if (!*(byte*)(v4 + 480)) — checks _queuing (0x6BE4EC)
+                            child._firstFrame = true;
+                            // Binary: if (!*(byte*)(v4 + 480)) — checks self.+480 = _queuing (0x6BE4EC)
+                            // Sets child.+609 = _reverseSeekFlag (0x6BE4F8).
+                            // R1.B-audit E5 fix: was writing `_needsInternalAssignImages`
+                            // (claimed +613); binary writes +609 = _reverseSeekFlag.
                             if (!_queuing) {
-                                child._needsInternalAssignImages = true;
+                                child._reverseSeekFlag = true;
                             }
                         }
                     }
@@ -409,11 +418,13 @@ namespace motion {
                     // Parent color propagation (0x6BEB7C)
                     // Binary: *(_DWORD *)(v16 + 1156) = *(_DWORD *)(v10 + 100)
                     // Reads node+100 (colorBytes[0..3] packed as uint32 RGBA), writes to
-                    // child player+1156 (_parentColorPacked). NOT a blend mode field.
+                    // child player+1156 (_colorWeightPacked). NOT a blend mode field.
+                    // (R1.H5: parent/child share +1156; was duplicated as
+                    // `_parentColorPacked` in the port — same binary offset.)
                     {
                         uint32_t packed;
                         std::memcpy(&packed, &mn.colorBytes[0], sizeof(uint32_t));
-                        child._parentColorPacked = packed;
+                        child._colorWeightPacked = packed;
                     }
 
                     // isEmoteMode check + zFactor (0x6BEA90..0x6BEA94)

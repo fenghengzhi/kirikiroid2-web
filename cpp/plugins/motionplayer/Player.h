@@ -150,9 +150,6 @@ namespace motion {
         void setProgressCompat(double v);
         double getProgressCompat() const;
 
-        void setFrameLoopTime(double v) { _frameLoopTime = v; }
-        double getFrameLoopTime() const { return _frameLoopTime; }
-
         void setLoopTime(double v) { _loopTime = v; }
         double getLoopTime() const { return _loopTime; }
 
@@ -647,8 +644,7 @@ namespace motion {
         // getter sub_6D965C reads *(player+1160).
         double _priorDraw = 1.5;
         double _frameLastTime = 0.0;
-        double _frameLoopTime = 0.0;
-        double _clampedEvalTime = 0.0; // player+456: min(_frameLoopTime, totalFrames)
+        double _clampedEvalTime = 0.0; // player+456: min(_frameTickCount, totalFrames)
         double _loopTime = 0.0;    // player+1136
         double _cachedTotalFrames = 0.0; // player+1128: cached max totalFrames across timelines
         int _processedMeshVerticesNum = 0;
@@ -696,8 +692,6 @@ namespace motion {
         //   ... +1099 loopArmed / +609 reverseSeekFlag gate loop-wrap ...
         double _speedMul = 1.0;        // player+1168: speed multiplier (dt scale)
         double _deltaTime = 0.0;       // player+592 : _speedMul * dt (per-frame)
-        bool   _progressFlags = false; // player+480 : 1-byte gate; LSB set freezes
-                                       //   the +1120 cursor advance (LABEL_48)
         bool   _firstFrame = false;    // player+481 : one-shot seed of +1120/+456
         bool   _motionCompleted = false; // player+483: cleared each progress entry;
                                          //   set mid-step to abort cooperatively
@@ -961,8 +955,6 @@ namespace motion {
         // Parent color propagated from parent motion node (sub_6BE0C0 at 0x6BEB7C).
         // Binary: *(_DWORD *)(childPlayer + 1156) = *(_DWORD *)(node + 100)
         // Stores colorBytes[0..3] packed as RGBA uint32 (default 0xFF808080).
-        uint32_t _parentColorPacked = 0xFF808080u;  // player+1156
-
         // Per-frame flag cleared at end of updateLayers (player+608, 0x6BBDF8).
         // Set to true in constructor; checked by sub_6BE0C0 case 2 (0x6BE664)
         // and sub_6BEDD0 case 2 (0x6BEFF4). When true, case 2 falls through

@@ -122,8 +122,10 @@ namespace motion {
         void setFrameLastTime(double v) { player().setFrameLastTime(v); }
         [[nodiscard]] double getFrameLastTime() const { return player().getFrameLastTime(); }
 
-        void setFrameLoopTime(double v) { player().setFrameLoopTime(v); }
-        [[nodiscard]] double getFrameLoopTime() const { return player().getFrameLoopTime(); }
+        // R1.H2: setFrameLoopTime/getFrameLoopTime delegates removed —
+        // backing field `_frameLoopTime` was a port-invented duplicate of
+        // _frameTickCount on +1120. The NCB property `frameLoopTime` is
+        // rebound directly to setLoopTime/getLoopTime (+1136) in main.cpp.
 
         void setLoopTime(double v) { player().setLoopTime(v); }
         [[nodiscard]] double getLoopTime() const { return player().getLoopTime(); }

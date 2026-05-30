@@ -144,7 +144,7 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(outline, getOutline, setOutline);
     NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);
     NCB_PROPERTY(frameLastTime, getFrameLastTime, setFrameLastTime);
-    NCB_PROPERTY(frameLoopTime, getFrameLoopTime, setFrameLoopTime);
+    NCB_PROPERTY(frameLoopTime, getLoopTime, setLoopTime); // R1.H2: binary 0x6D97AC frameLoopTime getter reads +1136 (_loopTime), not +1120
     NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
     NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
                  setProcessedMeshVerticesNum);
@@ -506,7 +506,7 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_PROPERTY(outline, getOutline, setOutline);
     NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);
     NCB_PROPERTY(frameLastTime, getFrameLastTime, setFrameLastTime);
-    NCB_PROPERTY(frameLoopTime, getFrameLoopTime, setFrameLoopTime);
+    NCB_PROPERTY(frameLoopTime, getLoopTime, setLoopTime); // R1.H2: binary 0x6D97AC frameLoopTime getter reads +1136 (_loopTime), not +1120
     NCB_PROPERTY(loopTime, getLoopTime, setLoopTime);
     NCB_PROPERTY(processedMeshVerticesNum, getProcessedMeshVerticesNum,
                  setProcessedMeshVerticesNum);

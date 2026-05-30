@@ -611,7 +611,7 @@ namespace motion {
         initVariables();
 
         if((playFlags & PlayFlagChain) == 0) {
-            _frameLoopTime = 0.0;
+            _frameTickCount = 0.0;
             _clampedEvalTime = std::min(_cachedTotalFrames, 0.0);
             _queuing = true;
             _allplaying = true;

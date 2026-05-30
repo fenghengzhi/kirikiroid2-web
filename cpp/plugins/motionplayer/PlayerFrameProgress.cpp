@@ -817,26 +817,21 @@ namespace internal {
             return;
         }
 
-        _frameLoopTime += actualDelta;
-        // NOTE: _loopTime (player+1136) is the FIXED loop boundary set once from
-        // clip->loopTime (PlayerCore.cpp:557). libkrkr2.so Player_progress_inner
-        // @0x6C106C reads +1136 (loop-wrap target / loop-vs-stop sign test) but
-        // NEVER writes it; the child-motion consumer (PlayerUpdateChildMotion.cpp
-        // :151) likewise reads it as a fixed loopEnd. The previous
-        // `_loopTime += actualDelta` here was a local invention (duplicating the
-        // _frameLoopTime accumulation above) that corrupted +1136 — making it
-        // drift positive past _cachedTotalFrames, which forced the forward-at-end
-        // path into the LOOP branch (instead of STOP) and hung the loop-wrap
-        // do-while. Removed so +1136 stays = clip->loopTime, per the binary.
+        // R1.H2: removed `_frameLoopTime += actualDelta;` — port-invented
+        // duplicate accumulator that collided with _frameTickCount on +1120.
+        // Binary's progress_inner @0x6C106C maintains a single cursor at +1120
+        // (= _frameTickCount); the previous _loopTime corruption stemmed from
+        // this twin-accumulator pattern (commit e11ecef formally removed the
+        // _loopTime side; R1.H2 deletes the field declaration itself).
+        //
         // M1 P5/G3: Player_progress_inner @0x6C106C LABEL_48 advances the frame
-        //   cursor by deltaTime(+592 = speedMul(+1168)*dt), gated by progressFlags
+        //   cursor by deltaTime(+592 = speedMul(+1168)*dt), gated by _queuing
         //   (+480) — when the gate's LSB is set the cursor is frozen. Mirror that:
-        //     if (!_progressFlags) _frameTickCount += _speedMul * actualDelta;
-        //   At P1 defaults (_speedMul=1.0, _progressFlags=false) this is exactly
-        //   the previous `_frameTickCount += actualDelta`, so behaviour is
-        //   preserved until the seed/gate writers are wired (P6).
+        //     if (!_queuing) _frameTickCount += _speedMul * actualDelta;
+        //   At P1 defaults (_speedMul=1.0, _queuing=false) this is exactly the
+        //   previous `_frameTickCount += actualDelta`, so behaviour is preserved.
         _deltaTime = _speedMul * actualDelta;       // player+592
-        if(!_progressFlags) {                        // player+480 LSB gate (LABEL_48)
+        if(!_queuing) {                              // player+480 LSB gate (LABEL_48)
             _frameTickCount += _deltaTime;           // player+1120 += player+592
         }
 
@@ -897,14 +892,14 @@ namespace internal {
         // P7 step-1; only the at-end / reverse / loop-wrap paths add behavior.
         // gate v23 = +480 snapshot (was sampled at the gated-advance block);
         // deltaTime v24 = +592.
-        const bool gate = _progressFlags;        // v23 = (BYTE)player+480
+        const bool gate = _queuing;              // v23 = (BYTE)player+480
         const double deltaTime = _deltaTime;     // v24 = player+592
 
         // Gated clamp (0x6C1340..0x6C1354): when the +480 gate is clear,
         //   v26 = +592 + +1120; +1120 = v26; if (v26 > +1128) v26 = +1128;
         //   +456 = v26;  (= min(advanced cursor, totalFrames))
         // The +1120 advance was already applied above (line ~831, the same
-        // `!_progressFlags` gate). Here we mirror only the +456 clamp half so the
+        // `!_queuing` gate). Here we mirror only the +456 clamp half so the
         // forward-not-at-end path keeps the P7 step-1 value bit-for-bit
         // (+456 = min(+1120,+1128); for not-at-end that is +1120 = _frameTickCount).
         if(!gate) {                              // 0x6C1330 !(BYTE)player+480

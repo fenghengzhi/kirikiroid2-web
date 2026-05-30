@@ -63,10 +63,11 @@ namespace motion {
                 // Timer = (parentTime - clipSlot.startTime) + clipSlot.timeOffset
                 // Aligned to 0x6BEF74..0x6BEFA8:
                 //   parentTime = node+8 ? parameterEntry->value : player+1120
-                // Falls back to _frameLoopTime if node+8 is null.
+                // Falls back to _frameTickCount if node+8 is null.
+                // (R1.H2: was `_frameLoopTime`; +1120 = _frameTickCount per binary)
                 auto *parameterEntry = resolveNodeParameterEntry(*this, en);
                 double parentTime =
-                    parameterEntry ? parameterEntry->value : _frameLoopTime;
+                    parameterEntry ? parameterEntry->value : _frameTickCount;
                 double startTime = en.activeSlot().clipStartTime;
                 double timeOffset = en.activeSlot().motionTimeOffset;
                 en.emitterTimer = (parentTime - startTime) + timeOffset;
@@ -461,11 +462,13 @@ namespace motion {
                 if (!_stealthMotion.IsEmpty()) {
                     child->onFindMotion(_stealthMotion, PlayFlagStealth);
                 }
-                // _parentColorPacked propagation (0x6BF9B4)
+                // _colorWeightPacked propagation (0x6BF9B4)
+                // (R1.H5: parent/child share +1156; was duplicated as
+                // `_parentColorPacked` in the port — same binary offset.)
                 {
                     uint32_t packed;
                     std::memcpy(&packed, &pn.colorBytes[0], sizeof(uint32_t));
-                    child->_parentColorPacked = packed;
+                    child->_colorWeightPacked = packed;
                 }
                 // emoteEdit propagation (0x6BF9C0..0x6BF9D4)
                 child->_findMotionContextVariant = _findMotionContextVariant;
