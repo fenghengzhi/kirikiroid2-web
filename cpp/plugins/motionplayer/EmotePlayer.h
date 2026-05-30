@@ -1,8 +1,12 @@
 //
 // Created by LiDon on 2025/9/15.
-// Aligned to libkrkr2.so D3DEmotePlayer architecture:
-// D3DEmotePlayerNativeInstance(24b) → EmoteObject(40b) → Player(1496b)
-// EmotePlayer is a thin shell that delegates all animation logic to an owned Player.
+// libkrkr2.so has TWO independent NCB classes here (no inheritance between them):
+//   D3DEmotePlayer chain (the class with the real API):
+//     D3DEmotePlayerNativeInstance(24B) → EmoteObject(40B, sub_67DBAC)
+//       → EmoteEngine(1496B, sub_67E38C) → Player(1384B, new(0x568)+0x6CED30)
+//   EmotePlayer chain (degenerate shell, only `finalize` registered):
+//     EmotePlayerNativeInstance(24B, 0x68629C) → +8 EmoteEngine(1496B) directly
+//       (same dtor sub_67F4B8 = EmoteEngine_dtor; NO EmoteObject middle layer)
 //
 #pragma once
 
@@ -28,7 +32,10 @@ namespace motion {
     // 二进制只注册一个 `finalize` 成员;无 script-facing API。
     // 与 D3DEmotePlayer 是两个完全独立的 NCB 类(无继承关系)——二进制中分别
     // 由 EmotePlayer_NCB_classInit 和 D3DEmotePlayer_ncb_register @ 0x541D98 注册。
-    // 字段 +8 ptr / +16 byte 语义尚未调查,留作后续 fidelity 改进(参见 review report)。
+    // 字段语义(经反编译 0x68629C/0x6862D0 确认):
+    //   +8  = EmoteEngine* payload,懒创建(工厂 0x68629C 置 0)
+    //   +16 = ownership/sticky 字节,destroy(0x6862D0) gate `if (+8 && !+16)`:
+    //         置位时跳过 delete(对应 ncbind 的 _sticky)
     class EmotePlayer {
     public:
         EmotePlayer() = default;
@@ -37,8 +44,8 @@ namespace motion {
 
     private:
         // 二进制布局: vtable +0 / ptr +8 / byte +16,sizeof = 24
-        void *_slot1 = nullptr; // 二进制 +8
-        bool _slot2 = false;    // 二进制 +16
+        EmoteEngine *_payload = nullptr; // 二进制 +8 — 懒创建的 EmoteEngine,sub_67F4B8 析构
+        bool _owned = false;             // 二进制 +16 — ownership/sticky 标志(destroy gate)
     };
 
     // === libkrkr2.so D3DEmotePlayer 对象链(已验证,见
