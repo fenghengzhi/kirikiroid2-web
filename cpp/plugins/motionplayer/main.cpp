@@ -164,9 +164,15 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(speed, getSpeed, setSpeed);
     NCB_PROPERTY(frameTickCount, getFrameTickCount, setFrameTickCount);
     NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
-    NCB_PROPERTY(colorWeight, getColorWeight, setColorWeight);
-    NCB_PROPERTY(independentLayerInherit, getIndependentLayerInherit,
+    // M-colorWeight P1 (cluster E §4): binary Player NCB `colorWeight` getter
+    // sub_6D9768 returns +1097 bool (independentLayerInherit), NOT the
+    // _colorWeightPacked uint32 (+1156). The TJS name suggests packed color
+    // but the binary cb is the +1097 bool — apparent binary alias mis-naming.
+    // 1:1 with libkrkr2.so per CLAUDE.md.
+    NCB_PROPERTY(colorWeight, getIndependentLayerInherit,
                  setIndependentLayerInherit);
+    // M-colorWeight: `independentLayerInherit` removed as port-extra (it was
+    // an alias of the correct binary `colorWeight` binding).
     NCB_PROPERTY(zFactor, getZFactor, setZFactor);
     NCB_PROPERTY(cameraTarget, getCameraTarget, setCameraTarget);
     NCB_PROPERTY(cameraPosition, getCameraPosition, setCameraPosition);
