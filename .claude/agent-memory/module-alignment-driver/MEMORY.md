@@ -1,2 +1,3 @@
 - [motionplayer module status](module_motionplayer.md) — 2026-05-30 二次审计: M2/M3/M5/M12/M13/M14 已落地；M1 P7 step-2 已 revert 回 step-1 基线(+1136 阻塞)；M6 NCB 暴露面/M9/M11/M15-22 仍 ❌
 - [build_flow Phase B+C 阻塞](build_flow_phaseBC_blocker.md) — layerResolved20/item+20 重构二度确认无法安全实施：port 缺 player+760 持久 SLA 成员；仅 diagnostics 缺口不 fail CI，勿再单独立项
+- [R-M11/R-M15 progress 2026-05-31](r_m11_m15_progress_2026_05_31.md) — 18 commits 1:1 推进 D3DEmotePlayer + Player NCB 重建 + R3 phantoms (14 green + 4 pending)；R2 _loopArmed 合并 / R-M11.3 6 alias rebind / R-M11.4a-b / R-M15.1a-e 移除 ~70 port-extras / R-M4 HM4 类型 / R-M9 phase 1 scaffolding / M16 setTickCount / M-colorWeight / D-09 contains / EmoteEngine _queuing shadow 移除
