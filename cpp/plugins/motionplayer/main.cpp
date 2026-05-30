@@ -523,14 +523,15 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     // not set/getBustScale. 1:1 with libkrkr2.so sub_52E504.
     NCB_PROPERTY(bustScale, getBodyScale, setBodyScale);
     NCB_PROPERTY(bodyScale, getBodyScale, setBodyScale);
-    NCB_PROPERTY(useD3D, getUseD3D, setUseD3D);
+    // M11 D-01: removed `useD3D` — not in binary's 54-entry D3DEmotePlayer
+    // NCB table (sub_52E504). Web-port draw-mode flag, no binary equivalent.
     NCB_PROPERTY(progress, getProgress, setProgress);
     // M11 D-08: binary `modified` is RO prop bound to getPlayCallback getter
     // (not a bool modified prop). 1:1 with libkrkr2.so sub_52E504.
     NCB_PROPERTY_RO(modified, getPlayCallback);
-    NCB_PROPERTY(drawvisible, getDrawVisible, setDrawVisible);
-    NCB_PROPERTY(drawOpacity, getDrawOpacity, setDrawOpacity);
-    NCB_PROPERTY(opengl, getOpengl, setOpengl);
+    // M11 D-01: removed `drawvisible/drawOpacity/opengl` — not in binary's
+    // 54-entry D3DEmotePlayer NCB table. Web-port rendering controls,
+    // no binary equivalent.
     NCB_PROPERTY_RO(animating, getAnimating);
     NCB_PROPERTY_RO(playCallback, getPlayCallback);
 
@@ -550,7 +551,8 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD_RAW_CALLBACK(setCoord, &D3DEmotePlayer::setCoordCompat, 0);
     NCB_METHOD_RAW_CALLBACK(setScale, &D3DEmotePlayer::setScaleCompat, 0);
     NCB_METHOD(getScale);
-    NCB_METHOD(setMirror);
+    // M11 D-01: removed `setMirror` — not in binary's 54-entry D3DEmotePlayer
+    // NCB table. Web-port method without binary equivalent.
     NCB_METHOD_RAW_CALLBACK(setColor, &D3DEmotePlayer::setColorCompat, 0);
     NCB_METHOD(getColor);
     NCB_METHOD(countVariables);
@@ -590,8 +592,8 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD_DETAIL(pass, Class, void, Class::addPlayCallback, ());
     NCB_METHOD(progress);
     NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant));
-    NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
-                            &D3DEmotePlayer::setDrawAffineTranslateMatrixCompat, 0);
+    // M11 D-01: removed `setDrawAffineTranslateMatrix` — not in binary's
+    // 54-entry D3DEmotePlayer NCB table. Web-port draw-device helper.
     NCB_METHOD_RAW_CALLBACK(setOuterForce, &D3DEmotePlayer::setOuterForceCompat, 0);
     NCB_METHOD(getOuterForce);
     NCB_METHOD_RAW_CALLBACK(contains, &D3DEmotePlayer::containsCompat, 0);
