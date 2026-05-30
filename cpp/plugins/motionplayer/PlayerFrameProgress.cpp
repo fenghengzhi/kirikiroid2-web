@@ -915,17 +915,13 @@ namespace internal {
         if(deltaTime >= 0.0) {                   // 0x6C135C: FORWARD
             const double totalFrames = _cachedTotalFrames; // v29 = player+1128
             if(totalFrames <= _frameTickCount) { // 0x6C13A0: reached/past end
-                // NOTE/DEFER (P7 step-2): the binary reads +1136 (loop-wrap
-                // target, set from clip->loopTime at PlayerCore.cpp:557) and
-                // NEVER mutates it inside progress_inner. The pre-existing
-                // accumulation `_loopTime += actualDelta` at line ~821 has NO
-                // counterpart in progress_inner @0x6C106C and corrupts this
-                // target; the loop-wrap math below is structurally aligned but
-                // will only be numerically correct once that accumulation is
-                // removed / relocated. This does NOT affect the logo path (these
-                // loop branches require _frameTickCount >= _cachedTotalFrames,
-                // which the forward not-at-end logo path never reaches). Left
-                // for a dedicated decompile-grounded pass on the +1136 accumulator.
+                // M1 P7 step-2 (5553dd2): binary reads +1136 as fixed loop-wrap
+                // target (set once at setMotion from clip->loopTime, see
+                // PlayerCore.cpp:~557) and NEVER mutates it inside progress_inner.
+                // R-M9 spike Q1/Q2 confirmed 5 reads + 0 writes of +1136 in
+                // progress_inner. The earlier `_loopTime += actualDelta` port-
+                // invented accumulator was removed in commit e11ecef so this
+                // path is now numerically aligned with binary's loop-wrap math.
                 const double loopTime = _loopTime; // v31 = player+1136
                 _clampedEvalTime = totalFrames;    // +456 = v29 (= totalFrames)
                 if(loopTime >= 0.0) {              // 0x6C13F0: LOOP
