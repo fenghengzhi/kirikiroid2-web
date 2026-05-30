@@ -31,8 +31,11 @@ namespace motion {
             return _protectTranslucentTextureColor;
         }
 
-        static void setPixelateDivision(int v) { _pixelateDivision = v; }
-        static int getPixelateDivision() { return _pixelateDivision; }
+        // R-pixelate phase 2: removed pixelateDivision from D3DEmoteModule.
+        // cluster E §1 ctor: binary stores pixelateDivision at Player+912
+        // (instance default 100), NOT D3DEmoteModule static. Migration done
+        // in commit 15e5ddc (Player field add) + this commit (D3DEmoteModule
+        // static remove). C++ static field also removed below.
 
         static void setMaxTextureSize(int w, int h) {
             spdlog::get("plugin")->warn(
@@ -45,7 +48,8 @@ namespace motion {
         inline static bool _mipMapEnabled = false;
         inline static int _alphaOp = 0;
         inline static bool _protectTranslucentTextureColor = false;
-        inline static int _pixelateDivision = 1;
+        // R-pixelate phase 2: removed _pixelateDivision static field (binary
+        // has it as Player +912 instance, not D3DEmoteModule static).
     };
 
 } // namespace motion
