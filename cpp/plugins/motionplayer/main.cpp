@@ -529,7 +529,7 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_PROPERTY(bodyScale, getBodyScale, setBodyScale);
     // M11 D-01: removed `useD3D` — not in binary's 54-entry D3DEmotePlayer
     // NCB table (sub_52E504). Web-port draw-mode flag, no binary equivalent.
-    NCB_PROPERTY(progress, getProgress, setProgress);
+    // (progress NCB binding moved to method section per cluster D §1 #50.)
     // M11 D-08: binary `modified` is RO prop bound to getPlayCallback getter
     // (not a bool modified prop). 1:1 with libkrkr2.so sub_52E504.
     NCB_PROPERTY_RO(modified, getPlayCallback);
@@ -590,6 +590,11 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(fadeInTimeline);
     NCB_METHOD(fadeOutTimeline);
     NCB_METHOD(skip);
+    // M11 D-01 (cluster D §1 #50): binary registers `progress` as a method,
+    // not a property. 港口之前在 property 区有 NCB_PROPERTY(progress, ...).
+    // Moved to method section here. C++ D3DEmotePlayer::progress(double dt)
+    // 签名匹配 binary D3DEmotePlayer_progress cb.
+    NCB_METHOD(progress);
     NCB_METHOD(addPlayCallback);
     // M11 D-07: binary `pass` member is bound to addPlayCallback cb (void()),
     // not the real pass(double dt) method.
