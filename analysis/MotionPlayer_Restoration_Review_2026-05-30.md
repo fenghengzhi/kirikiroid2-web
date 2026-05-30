@@ -182,3 +182,9 @@ if (item+19 /*drawFlag19*/) {
 - 需确认 port 哪个函数对应 sub_6C4E28 的 build 阶段、build_commands_leave trace 在哪个点采样、为何 items[0] 在 build 阶段就 rawFlag20=1。
 - 对齐目标：port 应只在「drawFlag19 && drawable && 原为0」时置 rawFlag20，与 oracle requireLayerId 门控一致；不满足时 build 阶段保持 0。
 - **回归风险**：trace compare 当前 0 mismatch（全绿），改 render-flow 须经 CI 验证不破坏 trace/render compare。
+
+### layerId 物化机制差异（de-risk 分析，三方确认 build_flow = Phase B+C 架构重构）
+- **port**（NodeTree.cpp:103-104）：tree-build 时**提前、无参、每节点 2 次** `ResourceManager::requireLayerId()`（layerId1/layerId2）。
+- **oracle**（sub_6C4E28 LABEL_28）：render-build 循环内**惰性、每 drawable item 1 次** `requireLayerId`（对 player+992 解析出的 render-layer-tree 对象的属性/方法调用）。
+- 分配域 / 时机 / 次数全不同。port 当前提前方案**产出正确**（trace compare 0 mismatch 全绿）。
+- **结论**：对齐 build_flow 必须把 layer 对象解析 execute→build 搬迁 + 重做 layerId 物化模型（Phase B+C 不可分割），高回归风险，本地无 Android oracle 无法验证，须分阶段 CI 验证。**不应盲目推送拿全绿状态冒险**。
