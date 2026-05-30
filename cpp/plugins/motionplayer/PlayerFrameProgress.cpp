@@ -803,6 +803,17 @@ namespace internal {
         if(_queuing) {
             _allplaying = !_playingTimelineLabels.empty();
             _syncActive = _syncWaiting && _allplaying;
+            // M1/P7 step-1 fix: the firstFrame gate freezes cursor ADVANCE, but
+            // the binary still seeks the node slots on this path (progress_inner
+            // 0x6C106C firstFrame branch seeds +456 then calls
+            // reseekTimelineCursors 0x6B86C8 — which seeks — before returning).
+            // The collapsed model seeked inline in updateLayers every frame
+            // regardless of _queuing, so without this the frame-0 slots stay
+            // unseeded (active=false, scale=1.0 defaults). Seek at the held
+            // _clampedEvalTime so updateLayers reads populated slots.
+            if(!_nodes.empty()) {
+                progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
+            }
             return;
         }
 
