@@ -126,13 +126,25 @@ namespace motion {
                     vn, _activeMotion, vn.activeSlot().src);
             }
 
-            // priorDraw flag from emoteEdit (0x6BC648..0x6BC6C4)
-            // priorDraw from emoteEdit (0x6BC648..0x6BC6C4)
+            // aligned with sub_6BC4F0 @0x6BC648..0x6BC6C4 (node+48 write):
+            //   if (*(node+1996) /* forceVisible */) {
+            //       materialize emoteEdit dispatch from node+1980;
+            //       node+48 = sub_6636D4("priorDraw") & 1;   // 0x6bc6c4
+            //   } else {
+            //       node+48 = 0;                              // 0x6bc67c
+            //   }
+            // sub_6636D4 @0x6636D4 is a BOOL property getter: for every TJS
+            // variant type it returns (value != 0) collapsed to 0/1 (v7 = !v6),
+            // and the call site masks & 1. So node+48 is a pure bool, NOT a raw
+            // int — store priorDraw as 0/1. (Earlier "& 5 bit flags" note was a
+            // speculation contradicted by the decompilation; no & 5 consumer
+            // exists in the binary.) emoteEditDict mirrors node+1980; a null
+            // dispatch yields a failed PropGet -> getter returns 0, matching
+            // the && emoteEditDict short-circuit here.
             if (vn.forceVisible && vn.emoteEditDict) {
-                // sub_6636D4: read bool "priorDraw" from emoteEdit dict
                 auto pdVal = (*vn.emoteEditDict)["priorDraw"];
                 if (auto num = std::dynamic_pointer_cast<PSB::PSBNumber>(pdVal))
-                    vn.priorDraw = num->getValue<int>();  // keep raw int — bit flags checked via (v12 & 5)
+                    vn.priorDraw = (num->getValue<int>() != 0) ? 1 : 0;
                 else if (auto bl = std::dynamic_pointer_cast<PSB::PSBBool>(pdVal))
                     vn.priorDraw = bl->value ? 1 : 0;
                 else

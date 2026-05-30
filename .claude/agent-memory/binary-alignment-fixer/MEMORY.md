@@ -1,3 +1,4 @@
 - [EmoteVarController alignment](emotevarcontroller_alignment.md) — ctor 0x667030 / step 0x666BF8 data flow, allocation size, inverted lerp roles
 - [EmoteEngine 1496B layout](emoteengine_1496b_hashmap_layout.md) — verified byte map: 7 inline unordered_maps + 4 vectors (NOT byte blocks); _bindListHead aliases HM7
 - [sub_6C4E28 build/execute split](sub6C4E28_build_execute_split.md) — requireLayerId materialization (item+20/+424) belongs in BUILD loop; port wrongly moved it to EXECUTE → render-step build_flow_mismatch
+- [sub_6C2334 item+18 a6 propagation](sub6C2334_item18_a6_propagation.md) — item+18=(a6&1)||(node+48!=0); a6 propagates across child-Player recursion via NODE priorDraw, not Player _priorDraw (was 1.5 always-true bug); node+48 is bool not raw int

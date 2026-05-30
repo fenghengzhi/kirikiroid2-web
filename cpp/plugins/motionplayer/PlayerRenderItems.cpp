@@ -245,12 +245,18 @@ namespace motion {
             if(!child || !true) {
                 return;
             }
-            child->_renderItemInheritedFlag18 =
-                _renderItemInheritedFlag18 || nodePriorDraw;
             const auto savedChildDrawAffine =
                 child->_drawAffineMatrix;
             child->_drawAffineMatrix = dam;
-            child->prepareRenderItems(inheritedFlag18 || (_priorDraw != 0.0));
+            // aligned with sub_6C2334 @0x6C2334 (recursion @0x6c2b5c/0x6c3124/
+            // 0x6c36ac): child a6 = (a6 & 1) || (node+48 != 0), i.e. the
+            // parent's inherited flag OR'd with THIS node's priorDraw bool
+            // (node+48 = sub_6636D4("priorDraw") != 0, written at 0x6bc6c4).
+            // Must use the node-level priorDraw (nodePriorDraw), NOT the
+            // Player-level scalar _priorDraw (which defaults to 1.5 and would
+            // force the term true). prepareRenderItems() latches its argument
+            // into _renderItemInheritedFlag18 (the build loop's a6).
+            child->prepareRenderItems(_renderItemInheritedFlag18 || nodePriorDraw);
             child->_drawAffineMatrix = savedChildDrawAffine;
             auto &childEntries = child->_preparedRenderItems;
             if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
