@@ -549,6 +549,28 @@ namespace motion {
         //   stepBust. Despite the binary symbol "getAngleDeg" the return is rad.
         double emoteGetAngleRadLike_0x6CD0C0() const;
 
+        // M15 missing angleDeg/angleRad (cluster E §3.1 + §4): binary
+        // Motion.Player exposes angleDeg/angleRad as TJS properties. Per
+        // cluster E §4 setAngleDeg @0x6CD0EC takes rad input and stores deg;
+        // getAngleDeg @0x6CD0C0 returns rad (already implemented above as
+        // emoteGetAngleRadLike_0x6CD0C0). Port aliases:
+        //   getAngleDeg = emoteGetAngleRadLike_0x6CD0C0 (rad output)
+        //   setAngleDeg(rad): input rad → convert to deg internally
+        // angleRad — port treats as TJS direct-rad accessor on root.delta.angle
+        // (which stores degrees in port; this expose the raw deg value as TJS
+        // float without conversion). Pending spike for true binary semantics.
+        double getAngleDeg() const { return emoteGetAngleRadLike_0x6CD0C0(); }
+        void setAngleDeg(double rad);  // impl in PlayerCore.cpp
+        double getAngleRad() const {
+            return _nodes.empty() ? 0.0 : _nodes[0].delta.angle;
+        }
+        void setAngleRad(double v) {
+            if(!_nodes.empty()) {
+                _nodes[0].delta.angle = v;
+                _nodes[0].delta.dirty = true;
+            }
+        }
+
         // Public accessor for EmotePlayer delegation
         double getActiveMotionWidth() const;
         double getActiveMotionHeight() const;

@@ -189,6 +189,11 @@ NCB_REGISTER_CLASS(Player) {
     // M15 missing `meshDivisionRatio` (cluster E §3.1): delegate to
     // EmoteEngine +1168/+1176 via _engineBack.
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
+    // M15 missing angleDeg/angleRad (cluster E §3.1 + §4): binary stores
+    // deg internally; angleDeg getter returns rad (binary apparent name vs
+    // semantics mismatch), angleRad returns raw stored deg (port scaffold).
+    NCB_PROPERTY(angleDeg, getAngleDeg, setAngleDeg);
+    NCB_PROPERTY(angleRad, getAngleRad, setAngleRad);
     NCB_PROPERTY(speed, getSpeed, setSpeed);
     NCB_PROPERTY(frameTickCount, getFrameTickCount, setFrameTickCount);
     // M15 missing #19: pixelateDivision is binary Player+912 instance field

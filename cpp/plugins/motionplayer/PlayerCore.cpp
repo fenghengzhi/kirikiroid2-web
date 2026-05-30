@@ -363,6 +363,28 @@ namespace motion {
         }
     }
 
+    // M15 missing setAngleDeg (cluster E §4 setAngleDeg @0x6CD0EC): binary
+    // takes radians as input, converts to degrees (×57.2957795), normalizes
+    // to [0,360) if directEdit (emote angle), and stores in root.delta.angle
+    // (else) or _emoteAngle (if directEdit). Port stores deg in
+    // root.delta.angle (matching binary storage convention).
+    // Player_initEmoteMotion(2) call when directEdit is set is omitted —
+    // port doesn't have an equivalent initEmoteMotion entry; that path is
+    // for emote-mode angle re-init and would need separate spike.
+    void Player::setAngleDeg(double rad) {
+        double deg = rad * 57.2957795;
+        if(_directEdit) {
+            while(deg < 0.0) deg += 360.0;
+            while(deg >= 360.0) deg -= 360.0;
+            _emoteAngle = deg;
+            // TODO M15: Player_initEmoteMotion(2) — pending spike of binary
+            // emote-mode angle re-init path; port omits for now.
+        } else if(!_nodes.empty()) {
+            _nodes[0].delta.angle = deg;
+            _nodes[0].delta.dirty = true;
+        }
+    }
+
     // M15 missing `meshDivisionRatio` (cluster E §3.1): binary Motion.Player
     // exposes as property delegating to EmoteEngine +1168 (cluster E §1 ctor
     // confirmed +1168 lives on EmoteEngine, not Player; the NCB property on
