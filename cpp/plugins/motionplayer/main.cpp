@@ -475,8 +475,9 @@ NCB_REGISTER_CLASS(D3DEmoteModule) {
     Variant(TJS_W("MaskModeAlpha"), (tjs_int)MaskModeAlpha);
     Variant(TJS_W("TimelinePlayFlagParallel"),
             (tjs_int)TimelinePlayFlagParallel);
-    Variant(TJS_W("TimelinePlayFlagSequential"),
-            (tjs_int)TimelinePlayFlagSequential);
+    // M11 D-02: 1:1 with libkrkr2.so D3DEmoteModule sub_52E504 constant table.
+    Variant(TJS_W("TimelinePlayFlagDifference"),
+            (tjs_int)TimelinePlayFlagDifference);
 
     // Properties
     NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);

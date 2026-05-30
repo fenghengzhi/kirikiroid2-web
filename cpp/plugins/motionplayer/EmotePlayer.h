@@ -23,7 +23,11 @@ namespace motion {
 
     enum TimelinePlayFlag {
         TimelinePlayFlagParallel = 1,
-        TimelinePlayFlagSequential = 2
+        // M11 D-02: binary D3DEmoteModule registers this as
+        // `TimelinePlayFlagDifference` (NOT `TimelinePlayFlagSequential`).
+        // Value 2 is unchanged; this is a TJS-exposed symbol rename to align
+        // with libkrkr2.so sub_52E504 NCB constant.
+        TimelinePlayFlagDifference = 2
     };
 
     // EmotePlayer — 二进制 EmotePlayer NCB 类(24B native instance,
