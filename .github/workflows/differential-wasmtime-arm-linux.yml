@@ -1,4 +1,9 @@
-name: Differential Wasmtime ARM Linux
+# DEPRECATED (2026-05): superseded by differential.yml, which runs the full
+#   wasmtime port-trace + freshly-recorded Android (Frida/Redroid) oracle compare
+#   and auto-triggers on push to `web` / `dev/*`. This ARM-Linux variant is kept
+#   for reference only and has been disabled (`gh workflow disable`) to prevent
+#   accidental manual dispatch. Use differential.yml instead.
+name: "[DEPRECATED] Differential Wasmtime ARM Linux — use differential.yml"
 
 on:
   workflow_dispatch:
