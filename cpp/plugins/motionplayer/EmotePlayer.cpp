@@ -34,9 +34,15 @@ namespace motion {
     // EmoteObject 持有 EmoteEngine(+8),EmoteEngine 在 +1064 持有堆分配的 Player。
     // 二进制在 load() 时懒建此链;本地构造期即建(eager),功能等价。
     D3DEmotePlayer::D3DEmotePlayer(ResourceManager rm) :
-        _emoteObj(std::make_unique<EmoteObject>(std::move(rm))) {}
+        _emoteObj(new EmoteObject(std::move(rm))) {}
 
-    D3DEmotePlayer::~D3DEmotePlayer() = default;
+    // Manual delete of the raw EmoteObject chain — aligned with libkrkr2.so
+    //   EmoteObject_destroy (0x67F420): the native instance frees its +8
+    //   EmoteObject via operator delete (no smart pointer).
+    D3DEmotePlayer::~D3DEmotePlayer() {
+        delete _emoteObj;
+        _emoteObj = nullptr;
+    }
 
     // --- Properties ---
 

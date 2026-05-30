@@ -307,7 +307,11 @@ namespace motion {
 
         // 二进制对象链(壳 +24 → EmoteObject +8 → EmoteEngine +1064 → Player)。
         // Player 由链尾的 EmoteEngine 用指针持有,不再 by-value 内嵌。
-        std::unique_ptr<EmoteObject> _emoteObj;
+        // CLAUDE.md 硬规则 + 二进制对齐:native instance 持有 EmoteObject* 为裸指针
+        //   (二进制 D3DEmotePlayer_load 0x52FDD4 `operator new(0x28)`,析构
+        //    EmoteObject_destroy 0x67F420 `operator delete`),手动 new/delete,
+        //   不用智能指针。
+        EmoteObject* _emoteObj = nullptr;
     };
 
     // Inline EmoteEngine::player() definitions — placed after Player is
