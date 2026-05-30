@@ -142,3 +142,43 @@ HM node = `new(0x20)`=32B：`{_M_nxt@0, ttstr_key@8, value@16, hash@24}`，7 个
 ## 容器选型说明（CLAUDE.md ⚠️ 类别）
 
 Player 的内部容器系统性采用 STL（std::deque/unordered_map/vector/list/map）替代二进制 KiriKiri 内联哈希表/deque。这是"语义对齐"的工程折中，不影响函数级方法体对齐推进，但按 CLAUDE.md「不接受功能等价」**永远算 ⚠️**。若追求字节级 1:1，需将 4 个 HM 替换为 prime-bucket+单链内联实现、deque 替换为 KiriKiri deque（P3 长期项）。
+
+---
+
+## 差分驱动追踪 (2026-05-30, CI run 26669751572)
+
+P0-1+P0-2 推送后 differential 全绿。motion_playback trace compare **完美**（m2logo 93帧 / yuzulogo 243帧，逐层 0 mismatch）。但 render-step compare 报 `build_flow_mismatch=92/242`（每帧），被 `--allow-render-flow-diagnostics` 容忍不 fail CI，是下一个「调用链/数据流」对齐目标。
+
+### 首个 build_flow mismatch（本地去掉 diagnostics flag 复现）
+```
+m2logo localFrame=1 stage=build_flow field=mainListSemanticItems.items[0].flags
+  oracle:   layerResolved20 = 0
+  wasmtime: layerResolved20 = 1
+```
+`layerResolved20` = render item `item+20` 字节（Frida `readU8(item,20)`；port 侧 `NativeRenderItemFields::rawFlag20`，RuntimeSupport.h:257）。系统性差异（92/242 帧全中）。
+
+### oracle 语义（反编译 sub_6C4E28 @ 0x6C5DBC）
+build 函数第一个循环（main list）对每个 item：
+```
+if (item+19 /*drawFlag19*/) {
+  ...compute clip bounds vs paintBox(+184)/viewport(+200)...
+  if (v80<v84 && v83<v85 && !item+16) {        // drawable
+    item+21 = 1; 写 clipRect item+216..228;
+    if (player+760 /*SeparateLayerAdaptor*/) { if(!item+20) goto LABEL_28; }
+    else { 创建 SLA(mainWindow.primaryLayer);
+           if(!item+20){ LABEL_28: requireLayerId(); item+424=layerId; item+20 = 1; } }
+  } else { item+21 = 0; }                       // 不 drawable：只清 +21，不碰 +20
+}
+```
+**结论**：oracle 只在 `LABEL_28`（requireLayerId 路径）置 `item+20=1`，门控 = `drawFlag19 置位 且 drawable 且 item+20 原为 0`。其它路径永不写 item+20（保持初始 0）。oracle items[0] 的 layerResolved20=0 → 它没满足该门控（drawFlag19=0 或不 drawable）。
+
+### port 现状（置 rawFlag20=true 的两处，均在 execute 阶段 layer 解析后）
+- PlayerRenderExecute.cpp:384 `ensureLeafItemLayer`（layerId!=0 且 layerObject 解析成功后）
+- PlayerRenderTargets.cpp:831 `ensureAccurateSlaItemLayer`（accurate SLA 路径）
+
+两处都在 execute-stage layer 解析成功后置位，对应 oracle requireLayerId 后的 item+20=1。但 trace 在 **build_commands_leave**（build 阶段，execute 之前）就读到 port=1，说明 port 的 build/execute 阶段划分与 oracle（sub_6C4E28 在 build 阶段即含 requireLayerId）不一致，或某 item 被过早 resolve。
+
+### 下一步（待 binary-alignment-fixer 处理，含回归风险）
+- 需确认 port 哪个函数对应 sub_6C4E28 的 build 阶段、build_commands_leave trace 在哪个点采样、为何 items[0] 在 build 阶段就 rawFlag20=1。
+- 对齐目标：port 应只在「drawFlag19 && drawable && 原为0」时置 rawFlag20，与 oracle requireLayerId 门控一致；不满足时 build 阶段保持 0。
+- **回归风险**：trace compare 当前 0 mismatch（全绿），改 render-flow 须经 CI 验证不破坏 trace/render compare。
