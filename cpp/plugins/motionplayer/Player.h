@@ -572,6 +572,19 @@ namespace motion {
         bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
         bool renderFromPlayerLike_0x6ADE24(D3DAdaptor *adaptor);
         bool renderItemsToD3DTextureLike_0x6ADFBC(D3DAdaptor *adaptor);
+        // M1/P7 step-1: progress-pass cursor-stepping driver.
+        // Aligned to libkrkr2.so Player_progress_inner (0x6C106C), the ONLY
+        // caller of the advance/rewind/reseek cursor machine. In the binary the
+        // per-node frame seek (Player_advanceNodeFrames 0x6B7E44, reached at
+        // 0x6C1264/0x6C130C) runs HERE — filling each node's two parsed-frame
+        // slots (node+320/+856) — and the SEPARATE Player_updateLayers pass
+        // (0x6BB33C) only reads those slots via Player_evaluateTimeline
+        // (0x699AE4, eval-at-time). This method hoists the live per-node seek
+        // (advanceNodeFrameSelectionLike_0x6926B4, which already operates on the
+        // live MotionNode::ClipSlot = the binary's node+320/+856 slots) out of
+        // updateLayers and into the progress pass, restoring the binary's
+        // two-pass split. Forward-only for step-1; reverse rewind is a TODO.
+        void progressSeekNodeSlotsLike_0x6C106C(double clampedEvalTime);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);

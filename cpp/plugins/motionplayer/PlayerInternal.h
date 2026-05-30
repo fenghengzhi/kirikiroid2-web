@@ -1470,6 +1470,17 @@ namespace internal {
         advanceNodeFrameSelectionLike_0x6926B4(detail::MotionNode &node,
                                                double currentTime);
 
+        // M1/P7 step-1: read the already-positioned node clip slots WITHOUT
+        // seeking. After the progress pass (Player::progressSeekNodeSlotsLike_
+        // 0x6C106C) has filled node+320/+856, updateLayers only reads them —
+        // mirroring libkrkr2.so Player_updateLayers (0x6BB33C), which calls
+        // Player_evaluateTimeline (0x699AE4) on the slots and never cursor-steps.
+        // This builds the FrameContentState (incl. trace debug fields) from the
+        // live slots, equivalent to the read half of the old inline seek.
+        FrameContentState
+        readNodeFrameSlotsLike_0x699AE4(detail::MotionNode &node,
+                                        double currentTime);
+
         bool evaluateTimelineLike_0x699AE4(detail::MotionNode &node,
                                            bool dirtyArg,
                                            double currentTime);

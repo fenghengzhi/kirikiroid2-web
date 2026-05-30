@@ -407,6 +407,21 @@ namespace motion::internal {
         return state;
     }
 
+    // M1/P7 step-1: read-only slot consumer for the updateLayers pass.
+    // After progressSeekNodeSlotsLike_0x6C106C has positioned node.slots[0/1],
+    // updateLayers reads them here — no seek. Mirrors the read half of the old
+    // inline seek: uses the same per-node selection time
+    // (frameSelectionTimeLike_0x6B7E44) so the debug interpolation ratio matches.
+    // Aligned to libkrkr2.so: Player_updateLayers (0x6BB33C) feeds the slots to
+    // Player_evaluateTimeline (0x699AE4) without cursor-stepping.
+    MOTIONPLAYER_NOINLINE FrameContentState
+    readNodeFrameSlotsLike_0x699AE4(detail::MotionNode &node,
+                                    double currentTime) {
+        const double selectionTime =
+            frameSelectionTimeLike_0x6B7E44(node, currentTime);
+        return frameStateFromNodeSlots(node, selectionTime);
+    }
+
     MOTIONPLAYER_NOINLINE bool
     evaluateTimelineLike_0x699AE4(detail::MotionNode &node,
                                   bool dirtyArg,
@@ -469,6 +484,56 @@ namespace motion::internal {
 }
 
 namespace motion {
+    // M1/P7 step-1: progress-pass per-node frame seek (cursor stepping).
+    //
+    // Aligned to libkrkr2.so Player_progress_inner (0x6C106C). In the binary the
+    // progress core walks the node-deque (player+200, 2632B stride) and, for
+    // each node whose child-timeline pointer node+8 is non-null, calls
+    // Player_advanceNodeFrames (0x6B7E44) at 0x6C1264 / 0x6C130C; the inline
+    // loop bodies start at deque index 1 (`for(j=1; ...; ++j)`), i.e. the root
+    // node (index 0) is NOT seeked here (it is reseeded by
+    // Player_advanceRootAndNodes / the root-content snapshot path). The seek
+    // FILLS each node's two parsed-frame slots (node+320 / node+856) that the
+    // SEPARATE Player_updateLayers pass (0x6BB33C) then reads via
+    // Player_evaluateTimeline (0x699AE4) at 0x6BB5F0.
+    //
+    // The live MotionNode::ClipSlot slots[2] ARE the binary's node+320/+856
+    // slots, and advanceNodeFrameSelectionLike_0x6926B4 already seeks them using
+    // the same per-node selection time (frameSelectionTimeLike_0x6B7E44 picks
+    // node.parameterEntry->value for parameterized nodes, else clampedEvalTime =
+    // player+456). So this driver is a faithful hoist: it runs the existing live
+    // seek in the progress pass (before updateLayers), restoring the binary's
+    // two-pass data flow with NO second slot copy.
+    //
+    // STEP-1 SCOPE: forward-only. The binary's reverse path (deltaTime<0 ->
+    // Player_rewindRootAndNodes 0x6B9A3C) and the full reseek
+    // (Player_reseekTimelineCursors 0x6B86C8 firstFrame/loop-wrap) are not yet
+    // wired; advanceNodeFrameSelectionLike already contains a corrective
+    // backward sub-loop (PlayerUpdateLayerEval.cpp:390) that covers small
+    // rewinds, so forward + corrective-backward is the step-1 coverage. Full
+    // reverse rewind = TODO (P7 step-2).
+    void Player::progressSeekNodeSlotsLike_0x6C106C(double clampedEvalTime) {
+        auto &nodes = _nodes;
+        if (nodes.empty()) {
+            return;
+        }
+        // Player_progress_inner node-deque loop starts at index 1 (0x6C1288:
+        // `for(j=1; ...)`). Root node (index 0) takes the root-stream path, not
+        // the per-node advanceNodeFrames seek. Matches the updateLayers phase2
+        // loop range exactly (PlayerUpdateLayerEval.cpp:647 `i = 1`).
+        for (size_t i = 1; i < nodes.size(); ++i) {
+            detail::MotionNode &node = nodes[i];
+            // Player_advanceNodeFrames (0x6B7E44) seeks this node's two slots to
+            // the node's selection time. The live seek writes node.slots[0/1],
+            // node.activeSlotIndex, node.flags |= 1 and clears
+            // node.hasTimelineEvalRatio — exactly the state Player_evaluateTimeline
+            // (0x699AE4) consumes in the updateLayers pass. Return value is only
+            // used for tracing in the collapsed model; here we discard it (the
+            // slots are the real output, mirroring the binary).
+            advanceNodeFrameSelectionLike_0x6926B4(node, clampedEvalTime);
+        }
+    }
+
     // Phase 1: Camera velocity, root evaluation, variable interpolation
     void Player::updateLayersPhase1_PreLoop(double currentTime) {
         auto &nodes = _nodes;
@@ -683,8 +748,17 @@ namespace motion {
                     _independentLayerInherit ? 1 : 0);
             }
 
-            auto state = advanceNodeFrameSelectionLike_0x6926B4(node,
-                                                                 currentTime);
+            // M1/P7 step-1: the per-node frame seek no longer runs here. In
+            // libkrkr2.so Player_updateLayers (0x6BB33C) does NOT cursor-step;
+            // the node's two parsed-frame slots (node+320/+856) were already
+            // filled by the progress pass (Player_progress_inner 0x6C106C ->
+            // Player_advanceNodeFrames 0x6B7E44, hoisted to
+            // Player::progressSeekNodeSlotsLike_0x6C106C). Here we only READ the
+            // already-positioned live ClipSlots — exactly what the binary's
+            // Player_evaluateTimeline (0x699AE4) consumes. frameStateFromNodeSlots
+            // builds the same FrameContentState (and trace fields) from the live
+            // slots without re-seeking.
+            auto state = readNodeFrameSlotsLike_0x699AE4(node, currentTime);
             if (detail::logoChainTraceEnabled(_activeMotion)
                 && state.debugEvaluated) {
                 detail::logoChainTraceLogf(

@@ -866,6 +866,21 @@ namespace internal {
         //   oracle's clamped cursor, so this structural realignment preserves it.
         _clampedEvalTime = std::min(_frameTickCount, _cachedTotalFrames); // +456 = min(+1120,+1128)
 
+        // M1/P7 step-1: progress-pass cursor stepping.
+        // Aligned to Player_progress_inner (0x6C106C) LABEL_48 / the node-deque
+        // walk at 0x6C1288: once +456 (clampedEvalTime) is established, the
+        // binary advances every node's frame cursor HERE (Player_advanceNodeFrames
+        // 0x6B7E44, reached at 0x6C1264/0x6C130C), filling the two parsed-frame
+        // slots (node+320/+856). The SEPARATE Player_updateLayers pass (0x6BB33C)
+        // then only interpolates those slots (Player_evaluateTimeline 0x699AE4).
+        // This restores the binary's two-pass split: the per-node seek used to
+        // run inline inside updateLayersPhase2_MainLoop (collapsed model); it now
+        // runs in the progress pass, before updateLayers reads the slots.
+        // Forward-only for step-1 (reverse rewind = TODO, P7 step-2).
+        if(!_nodes.empty()) {
+            progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
+        }
+
         // Scan PSB layers for action/sync events crossed this frame
         // Aligned to libkrkr2.so: updateLayers queues events during evaluation
         if(_activeMotion && actualDelta > 0) {
