@@ -4,3 +4,4 @@
 - [Build all 3 targets after motionplayer .cpp changes](feedback_build_all_targets.md) — new/removed motionplayer source ⇒ also update platforms/wasmtime/CMakeLists.txt + build krkr2_wasmtime_guest, else differential.yml fails on wasm import
 - [EmoteEngine physics+progress pass](emote_physics_pass.md) — springStep@662768 struct layout, qword_1AB7E74=(0,1), stepBust calls sub_6689A4 NOT springStep, progress P0-B2/B3 gating, sub_67B970 dispatch blocker
 - [Cluster F node-path key](cluster_f_node_path_key.md) — Player+24 map & HM3 are PATH-keyed /top/.../leaf via buildNodePathKey@0x6B5C1C; reads match raw string; HM3 populate deferred
+- [Parsed-frame slot P2](parsed_frame_slot_p2.md) — parseFrame@0x6926B4+mergeFrameContent@0x692AB0 -> PlayerFrameStep.{h,cpp}; 536B slot offset map, mask gates, propGet helper map; NOT wired to live

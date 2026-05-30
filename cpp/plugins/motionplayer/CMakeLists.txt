@@ -12,6 +12,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     EmoteAngleController.cpp
     PlayerCore.cpp
     PlayerFrameProgress.cpp
+    PlayerFrameStep.cpp
     PlayerResource.cpp
     PlayerMotionLoad.cpp
     PlayerVariable.cpp

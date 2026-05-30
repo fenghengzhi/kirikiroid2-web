@@ -18,6 +18,7 @@
 #include "motionplayer/ResourceManager.h"
 #include "motionplayer/RuntimeSupport.h"
 #include "motionplayer/SeparateLayerAdaptor.h"
+#include "motionplayer/PlayerFrameStep.h"
 #include "psbfile/PSBValue.h"
 #include "LayerIntf.h"
 #include "LayerTreeOwner.h"
@@ -794,4 +795,111 @@ TEST_CASE("motionplayer can play internal logo motion clips") {
 
     verifyOne(yuzuPath, TJS_W("yuzulogo"), 15, 241);
     verifyOne(m2Path, TJS_W("back_white"), 23, 91);
+}
+
+// M1/P2: binary-aligned parseFrame / mergeFrameContent (independent, not wired
+// into the live frame-progress path). Verifies the parsed-frame slot layout,
+// type-flag derivation, and mask-gated field merge from a synthetic PSB frame
+// dictionary. Aligned to libkrkr2.so Player_parseFrame @0x6926B4 +
+// Player_mergeFrameContent @0x692AB0.
+namespace {
+    std::shared_ptr<PSB::PSBNumber> psbInt(int v) {
+        return std::make_shared<PSB::PSBNumber>(v);
+    }
+    std::shared_ptr<PSB::PSBString> psbStr(const std::string &v) {
+        return std::make_shared<PSB::PSBString>(v);
+    }
+}
+
+TEST_CASE("parseFrame/mergeFrameContent slot is binary-aligned (P2)") {
+    using motion::detail::ParsedFrameSlotLike_0x6926B4;
+    using motion::detail::parseFrameLike_0x6926B4;
+    using motion::detail::mergeFrameContentLike_0x692AB0;
+
+    // Slot layout guards (mirrors node+320 / node+856 scalar region).
+    static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, time) == 8);
+    static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, mask) == 20);
+    static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, typeZeroFlag) == 24);
+
+    SECTION("type 0 -> invisible, merge early-returns") {
+        auto frame = std::make_shared<PSB::PSBDictionary>();
+        frame->emplace("time", psbInt(5));
+        frame->emplace("type", psbInt(0));
+        ParsedFrameSlotLike_0x6926B4 slot;
+        parseFrameLike_0x6926B4(slot, frame, 7, /*nodeType*/ 0);
+        REQUIRE(slot.frameIndex == 7u);
+        REQUIRE(slot.time == Catch::Approx(5.0));
+        REQUIRE(slot.typeZeroFlag == 1);
+        // merge must early-out (mergedFlag set, no fields applied)
+        auto content = std::make_shared<PSB::PSBDictionary>();
+        content->emplace("mask", psbInt(0x1));
+        content->emplace("ox", psbInt(99));
+        mergeFrameContentLike_0x692AB0(slot, 0, content);
+        REQUIRE(slot.mergedFlag == 1);
+        REQUIRE(slot.ox == Catch::Approx(0.0));  // not applied
+    }
+
+    SECTION("type 3 -> interpolate, mask-gated ox/oy + opa") {
+        auto content = std::make_shared<PSB::PSBDictionary>();
+        // mask 0x1 (ox/oy) | 0x400 (opa). opa group requires 0x20600 to enter,
+        // but 0x400 alone sets the 0x...600 group bit -> enters opa branch.
+        content->emplace("mask", psbInt(0x1 | 0x400 | 0x200));
+        content->emplace("ox", psbInt(12));
+        content->emplace("oy", psbInt(34));
+        content->emplace("opa", psbInt(128));
+        auto frame = std::make_shared<PSB::PSBDictionary>();
+        frame->emplace("time", psbInt(2));
+        frame->emplace("type", psbInt(3));
+        frame->emplace("content", content);
+
+        ParsedFrameSlotLike_0x6926B4 slot;
+        parseFrameLike_0x6926B4(slot, frame, 0, /*nodeType*/ 0);
+        REQUIRE(slot.typeZeroFlag == 0);
+        REQUIRE(slot.interpFlag == 1);
+        REQUIRE(slot.mask == 0x601u);
+
+        mergeFrameContentLike_0x692AB0(slot, /*nodeType*/ 0, content);
+        REQUIRE(slot.ox == Catch::Approx(12.0));
+        REQUIRE(slot.oy == Catch::Approx(34.0));
+        REQUIRE(slot.opacity == 128u);          // applied (mask & 0x400)
+        REQUIRE(slot.blendMode == 16u);         // default preserved (no 0x20000)
+    }
+
+    SECTION("mask defaults: opacity 255, blend 16 when bits absent") {
+        auto content = std::make_shared<PSB::PSBDictionary>();
+        content->emplace("mask", psbInt(0x10));  // angle only
+        content->emplace("angle", psbInt(90));
+        ParsedFrameSlotLike_0x6926B4 slot;
+        slot.interpFlag = 0;  // type 2 path
+        slot.mask = 0x10;     // merge reads v3[5] (slot.mask), set by parseFrame
+        mergeFrameContentLike_0x692AB0(slot, /*nodeType*/ 1, content);
+        REQUIRE(slot.angle == Catch::Approx(90.0));
+        REQUIRE(slot.opacity == 255u);
+        REQUIRE(slot.blendMode == 16u);
+    }
+
+    SECTION("act read only when mask & 0x40000 (parseFrame 0x6928EC)") {
+        auto content = std::make_shared<PSB::PSBDictionary>();
+        content->emplace("mask", psbInt(0x40000));
+        content->emplace("act", psbStr("jump"));
+        auto frame = std::make_shared<PSB::PSBDictionary>();
+        frame->emplace("time", psbInt(0));
+        frame->emplace("type", psbInt(2));
+        frame->emplace("content", content);
+        ParsedFrameSlotLike_0x6926B4 slot;
+        parseFrameLike_0x6926B4(slot, frame, 0, /*nodeType*/ 0);
+        REQUIRE(slot.act == "jump");
+    }
+
+    SECTION("src gate: nodeType 0 in 0x1849, nodeType 1 not") {
+        auto content = std::make_shared<PSB::PSBDictionary>();
+        content->emplace("mask", psbInt(0));
+        content->emplace("src", psbStr("chara/body"));
+        ParsedFrameSlotLike_0x6926B4 slotIn;
+        mergeFrameContentLike_0x692AB0(slotIn, /*nodeType*/ 0, content);
+        REQUIRE(slotIn.src == "chara/body");  // (1<<0)&0x1849 != 0
+        ParsedFrameSlotLike_0x6926B4 slotOut;
+        mergeFrameContentLike_0x692AB0(slotOut, /*nodeType*/ 1, content);
+        REQUIRE(slotOut.src.empty());          // (1<<1)&0x1849 == 0
+    }
 }
