@@ -363,6 +363,27 @@ namespace motion {
         }
     }
 
+    // M15 missing `bounds` property (cluster E §3.1): binary returns a TJS
+    // dict {left, top, right, bottom} from _boundsMinX/MinY/MaxX/MaxY (binary
+    // +152/+160/+168/+176 floats, init DBL_MAX/-DBL_MAX per ctor).
+    tTJSVariant Player::getBounds() const {
+        iTJSDispatch2 *dict = TJSCreateDictionaryObject();
+        if(!dict) {
+            return {};
+        }
+        tTJSVariant lx(_boundsMinX);
+        tTJSVariant ty(_boundsMinY);
+        tTJSVariant rx(_boundsMaxX);
+        tTJSVariant by(_boundsMaxY);
+        dict->PropSet(TJS_MEMBERENSURE, TJS_W("left"), nullptr, &lx, dict);
+        dict->PropSet(TJS_MEMBERENSURE, TJS_W("top"), nullptr, &ty, dict);
+        dict->PropSet(TJS_MEMBERENSURE, TJS_W("right"), nullptr, &rx, dict);
+        dict->PropSet(TJS_MEMBERENSURE, TJS_W("bottom"), nullptr, &by, dict);
+        tTJSVariant result(dict, dict);
+        dict->Release();
+        return result;
+    }
+
     // M15 missing #10 (cluster E §4): binary `Player::setCoord` @0x6CCFF8
     // writes root+1592=x, root+1600=y, with a single combined dirty flag if
     // either changed. Atomic combined writer 1:1 with binary semantics.

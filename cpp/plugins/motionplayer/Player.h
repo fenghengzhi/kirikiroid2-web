@@ -189,6 +189,11 @@ namespace motion {
 
         // Aligned to libkrkr2.so: tickCount uses ms↔frame conversion (60fps internal)
         // Getter: frameTickCount * 1000/60; Setter: value * 60/1000
+        // M15 missing transform `bounds` property (cluster E §3.1): binary
+        // exposes bounds as TJS dict {left, top, right, bottom} from
+        // _boundsMinX/MinY/MaxX/MaxY (binary +152/+160/+168/+176 floats).
+        tTJSVariant getBounds() const;
+
         // M15 missing #3 (cluster E §3.1): binary `lastTime` NCB getter
         // sub_6D9448 reads +1136 (_loopTime):
         //   if (loopTime > 0) return loopTime * 1000/60   (frames → ms)

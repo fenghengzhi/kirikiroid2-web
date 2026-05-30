@@ -169,6 +169,9 @@ NCB_REGISTER_CLASS(Player) {
     // M15 missing #3 (cluster E §3.1): binary `lastTime` RO property reads
     // +1136 _loopTime with frames→ms conversion (sub_6D9448).
     NCB_PROPERTY_RO(lastTime, getLastTime);
+    // M15 missing `bounds` (cluster E §3.1): RO dict {left,top,right,bottom}
+    // from Player +152/+160/+168/+176.
+    NCB_PROPERTY_RO(bounds, getBounds);
     NCB_PROPERTY(speed, getSpeed, setSpeed);
     NCB_PROPERTY(frameTickCount, getFrameTickCount, setFrameTickCount);
     // M15 missing #19: pixelateDivision is binary Player+912 instance field
