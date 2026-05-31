@@ -1,3 +1,4 @@
+- [Progress containers layout](project_progress_containers_layout.md) — 帧推进 2 deque 精确 80B 控制结构字段映射 + index公式(node÷329 / var-track÷3) + var-track 元素160B字段(两56B slot) + layer/root event-stream cursor。analysis/Player_progress_containers.md
 - [EmotePlayer architecture](project_emoteplayer_architecture.md) — 3-layer object hierarchy, Player struct layout (1496b), 9-case setVariable dispatch, physics engine in progress()
 - [Player class layout](project_player_class_layout.md) — Complete Player object layout (0x568=1384 bytes), NCB registration at 0x6D69C8, 90 functions renamed, root node field map
 - [drawAffineMatrix transform](project_drawAffineMatrix.md) — tx/ty are float (not double), only set by TJS script, ox/oy from calcMatrix provides centering offset
@@ -21,3 +22,4 @@
 - [Player value structs spec](player_value_structs_spec.md) — Phase B Step 2: HM1(72B PropGet cache)/HM3(688B node snapshot 带双向 init/restore 映射)/Controller@+1296(160B variable-label scope entries, 不是 animator) value 字段表; +864/+760/byte_1AB84A8 附加发现
 - [EmoteEngine 7 controllers + 10 deques](EmoteEngine_controllers.md) — EmoteEngine 1496B 完整布局: 10 个 std::deque @ 0..720 + Player* @+1064 + 7 个 controller (3 pos/scale/color + 1 angle + 3 physics target) @+1072..+1120; HM2 在 EmoteEngine+1440 不在 Player; controllers 无 vtable; progress 主循环骨架
 - [Player progress core M1/ClusterG](project_progress_core_M1.md) — progress_inner@0x6C106C byte-verified 字段图; reseekTimelineCursors@0x6B86C8 (新发现全量游标re-seek); +1093是motionStopGate不是speed(本端误标); +456=min标量非map; preProgress真正调0x6B6878非0x671764. Plan: analysis/Player_progress_frame_stepping_M1_plan.md
+- [MotionNode 2632B layout](project_motionnode_2632b_layout.md) — Player+200 deque 元素字节级字段表; stride 2632; slot[0]@320/slot[1]@856 各536B; activeSlotIndex@1392; nodeType@28 未证实
