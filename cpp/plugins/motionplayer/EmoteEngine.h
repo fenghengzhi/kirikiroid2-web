@@ -170,34 +170,19 @@ namespace motion {
     // Deque #3 @+160 — Bust chain #2 spring nodes (same shape as #2).
     using EmoteBustChain2Node56B = EmoteBustChain1Node56B;
 
-    // Deque #4 @+240 — Eye/mouth state-machine variable (sub_663BDC).
-    //   Writes 1 output to HM2. 16B element.
-    struct EmoteStateMachine16B_Deque4 { char raw[16]; };
-    static_assert(sizeof(EmoteStateMachine16B_Deque4) == 16, "");
-
-    // Deque #5 @+320 — Variable #2 single-value (sub_665600). 16B.
-    struct EmoteStateMachine16B_Deque5 { char raw[16]; };
-    static_assert(sizeof(EmoteStateMachine16B_Deque5) == 16, "");
-
-    // Deque #6 @+400 — Composite variable (sub_666068). 24B, 2 outputs.
-    struct EmoteCompositeVar24B_Deque6 { char raw[24]; };
-    static_assert(sizeof(EmoteCompositeVar24B_Deque6) == 24, "");
-
-    // Deque #7 @+480 — Setup/keyframe pool (no step function). 40B. _guess.
-    struct EmoteSetupEntry40B_Deque7 { char raw[40]; };
-    static_assert(sizeof(EmoteSetupEntry40B_Deque7) == 40, "");
-
-    // Deque #8 @+560 — Auxiliary single-value var (sub_666BF8). 24B.
-    struct EmoteAuxVar24B_Deque8 { char raw[24]; };
-    static_assert(sizeof(EmoteAuxVar24B_Deque8) == 24, "");
-
-    // Deque #9 @+640 — Vector variable (sub_668470, 6×QWORD step). 48B.
-    struct EmoteVectorVar48B_Deque9 { char raw[48]; };
-    static_assert(sizeof(EmoteVectorVar48B_Deque9) == 48, "");
-
-    // Deque #10 @+720 — Pre-baked curve lookup table. 16B element.
-    struct EmoteLookupCurve16B_Deque10 { char raw[16]; };
-    static_assert(sizeof(EmoteLookupCurve16B_Deque10) == 16, "");
+    // Deque #4-#10 — variable/state-machine element types whose step functions
+    // are not yet ported (see STUB_WARN in EmoteEngine.cpp). The `char raw[N]`
+    // is an honest "element stride known, internal fields not yet reversed"
+    // placeholder; the binary's ARM64 stride (N) is the provenance comment, not
+    // a wasm constraint, so no size assert. When a step fn is ported, replace
+    // the blob with the real named-field element type.
+    struct EmoteStateMachine16B_Deque4 { char raw[16]; };  // sub_663BDC, ARM64 16B
+    struct EmoteStateMachine16B_Deque5 { char raw[16]; };  // sub_665600, ARM64 16B
+    struct EmoteCompositeVar24B_Deque6 { char raw[24]; };  // sub_666068, ARM64 24B
+    struct EmoteSetupEntry40B_Deque7   { char raw[40]; };  // no step fn, ARM64 40B (_guess)
+    struct EmoteAuxVar24B_Deque8       { char raw[24]; };  // sub_666BF8, ARM64 24B
+    struct EmoteVectorVar48B_Deque9    { char raw[48]; };  // sub_668470, ARM64 48B
+    struct EmoteLookupCurve16B_Deque10 { char raw[16]; };  // lookup table, ARM64 16B
 
     // ============================================================================
     // EmoteEngine — 1496B (0x5D8), no vtable. Ctor sub_67E38C.

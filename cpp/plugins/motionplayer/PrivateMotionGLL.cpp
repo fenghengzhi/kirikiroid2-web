@@ -46,7 +46,6 @@ namespace {
         std::uint32_t opacity = 0; // item+24
         std::uint8_t stencilRefFromItem22 = 0; // item+28
         std::uint8_t stencilRefFromItem23 = 0; // item+29
-        std::uint16_t reserved30 = 0;
         std::int32_t blendMode = 0; // item+32
         std::int32_t geometryType = 0; // item+36
         std::int32_t meshDivX = 0; // item+40
@@ -59,12 +58,10 @@ namespace {
         std::uint64_t sourceTexture = 0; // item+80; AddRef/Release in native
     };
 
-    static_assert(sizeof(PrivateMotionGLLRenderItemLike_0x6DE738) == 88,
-                  "PrivateMotionGLL render item must mirror native 88-byte items");
-
-    static_assert(sizeof(motion::PrivateMotionGLLPackedPointLike_0x6DF33C) == 8,
-                  "PrivateMotionGLL points mirror native packed float pairs");
-
+    // Accessed by field name (item.sourceTexture / pointsBegin / color0 …); the
+    // item+N offsets are provenance comments only. No size assert — wasm layout
+    // need not mirror the native 88-byte stride (uint64-for-pointer keeps field
+    // width stable on wasm32; that is a width choice, not a byte-ABI pin).
     std::uint64_t storeNativePointerLike_0x6DE738(const void *ptr) {
         return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(ptr));
     }

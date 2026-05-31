@@ -14,11 +14,12 @@
 // node+856 in libkrkr2.so, 536-byte stride) plus byte-exact mask gating and
 // field placement, so that later phases (P4/P6) can wire it in.
 //
-// Field offsets below are taken verbatim from the decompiled field accesses in
-// 0x6926B4 / 0x692AB0 (slot base = a1 in parseFrame, = result/v3 in
+// Field offsets in the comments below are taken verbatim from the decompiled
+// field accesses in 0x6926B4 / 0x692AB0 (slot base = a1 in parseFrame, = v3 in
 // mergeFrameContent, where v3 is unsigned int* so v3[N] == byte 4N and
-// (double*)v3 + N == byte 8N). static_assert(offsetof(...)) guards every field
-// that the binary touches at a known offset.
+// (double*)v3 + N == byte 8N). They are PROVENANCE annotations only — the wasm
+// layout need not match the ARM64 byte stride; only field semantics/data flow
+// must. The authoritative offset table lives in analysis/ClipSlot_536B_layout.md.
 //
 // DATA SOURCE NOTE: the binary reads motion data through iTJSDispatch2 PropGet
 // dispatch wrappers (sub_662668=double, sub_6635DC=int, sub_6636D4=bool,
@@ -173,25 +174,6 @@ namespace motion {
             // ---- mask 0x8000000 "feedback" sub-object (merge @ 0x694130) ----
             double feedbackTimespan = 0.0;  // (double*)v3+66 "timespan"
         };
-
-        // Byte-offset guards for the leading scalar region the binary addresses
-        // by fixed offset. (Members past `src` hold variant-derived data whose
-        // C++ representation cannot occupy the binary's 20-byte tTJSVariant
-        // footprint; their logical offsets are documented above, not asserted.)
-        static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, frameIndex) == 0,
-                      "slot+0 frameIndex");
-        static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, time) == 8,
-                      "slot+8 time");
-        static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, ti) == 16,
-                      "slot+16 ti");
-        static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, mask) == 20,
-                      "slot+20 mask");
-        static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, typeZeroFlag) == 24,
-                      "slot+24 typeZeroFlag");
-        static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, interpFlag) == 25,
-                      "slot+25 interpFlag");
-        static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, mergedFlag) == 26,
-                      "slot+26 mergedFlag");
 
         // Reset slot to defaults (Frame_resetSlot @ 0x69260C). Because the local
         // struct is a normal C++ object, assignment from a fresh instance

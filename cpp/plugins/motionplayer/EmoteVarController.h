@@ -34,24 +34,19 @@
 
 namespace motion {
 
-    // Binary element layout for the deque @+0..+79.
-    //   sizeof = 20 bytes (must match libstdc++ block math: 25 * 20 = 500,
-    //   confirmed by sub_6878D8: a1[4]=v11+500, element stride 20).
-    //   Power-curve keyframe: the leading `count` floats are the per-channel
-    //   destination values (read as element[i], i in [0,count)); duration is at
-    //   element offset +12 and powCount (curve degree) at +16. The binary reads
-    //   element channels via *(float*)(elem + 4*i), so channels occupy +0,+4,+8
-    //   and (for count<=3) coexist with duration@+12 / powCount@+16 in 20 bytes.
-    // PACKED to enforce 20B size — natural alignment would otherwise pad.
-#pragma pack(push, 1)
+    // Power-curve keyframe element (binary: 20B deque element @+0..+79, stride
+    // 20 confirmed by sub_6878D8). The leading `count` floats are per-channel
+    // destination values; duration at +12, powCount (curve degree) at +16.
+    // Accessed by field name (elem.channel/duration/powCount) — the binary's
+    // *(float*)(elem+4*i) offsets are provenance comments only. The natural
+    // layout (3×float + float + uint32, all 4B-aligned) is already 20B with no
+    // padding, so no #pragma pack / size assert is needed (and wasm stride need
+    // not match the ARM64 block math regardless).
     struct EmoteVarKeyValue20B {
         float    channel[3]; // +0,+4,+8 — per-channel destination values (element[i])
-        float    duration;   // +12  (step reads *(float*)(elem+12))
-        uint32_t powCount;   // +16  (step reads *(uint32_t*)(elem+16))
+        float    duration;   // +12
+        uint32_t powCount;   // +16
     };
-#pragma pack(pop)
-    static_assert(sizeof(EmoteVarKeyValue20B) == 20,
-                  "EmoteVarKeyValue20B must be 20 bytes (libkrkr2.so block math)");
 
     // PLATFORM_BOUNDARY: sizeof(std::deque<>) on libstdc++ (Android, 80B) vs
     //   libc++ (Emscripten/Web, ~64B) differs. The deque header occupies
