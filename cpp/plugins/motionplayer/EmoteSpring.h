@@ -41,9 +41,12 @@ namespace motion {
     // libkrkr2.so spring-state object (pointed to by deque-node +0).
     // PLATFORM_BOUNDARY: 72B POD; field meanings are derived from sub_662768
     //   access patterns only (no symbol names in the binary).
+    // Fields accessed by NAME (a1->storedX etc.); binary byte offsets are kept
+    // as provenance comments only. No _padN: wasm layout need not match the
+    // ARM64 stride — only the field semantics/data flow must (the offset table
+    // lives in analysis/, not in struct padding).
     struct EmoteSpringState {
         uint8_t firstFlag;   // +0
-        uint8_t _pad1[3];    // +1..+3 (align to +4)
         float   k_a;         // +4
         float   k_b;         // +8
         float   drag;        // +12
@@ -62,8 +65,6 @@ namespace motion {
         float   velY;        // +64
         float   accZ;        // +68
     };
-    static_assert(sizeof(EmoteSpringState) == 72,
-                  "EmoteSpringState must be 72 bytes (libkrkr2.so sub_662768 layout)");
 
     // Aligned with libkrkr2.so EmotePhysics_springStep @ 0x662768.
     //
@@ -132,20 +133,21 @@ namespace motion {
     //   pointer (its allocation path is not reversed; the lookup is null-guarded
     //   exactly as in the binary so an un-populated table is inert).
     // ========================================================================
+    // Fields accessed by NAME; binary byte offsets kept as provenance comments
+    // only. No _padN / no offset static_assert: wasm layout need not match the
+    // ARM64 stride — the +28/+48 "untouched" gaps and the +168 QWORD/4B-ptr
+    // divergence are ABI details, not source structure. Offset table: analysis/.
     struct EmoteBustChainSpring {
         uint8_t firstFlag;        // +0
-        uint8_t _pad0[3];         // +1..+3
         float   velDampA;         // +4
         float   dragX;            // +8
         float   dragY;            // +12
         float   forceScaleN;      // +16
         float   forceScale1;      // +20
         int32_t lastSegIndex;     // +24
-        uint8_t _pad28[8];        // +28..+35 (untouched by sub_6689A4)
         float   restLen0;         // +36
         float   restLen1;         // +40
         float   restLenLastY;     // +44
-        uint8_t _pad48[8];        // +48..+55 (untouched)
         float   angScaleX0;       // +56
         float   angScaleY0;       // +60
         float   angScaleX1;       // +64
@@ -160,7 +162,6 @@ namespace motion {
         int32_t copyFlag1;        // +100
         float   rootCopy2X;       // +104 (low half of QWORD copy of +92)
         float   accumY;           // +108
-        uint8_t _pad112[4];       // +112 (copyFlag2 = +88 int, written but unread)
         float   seg0PosX;         // +116
         float   seg0PosY;         // +120
         float   seg0PosZ;         // +124
@@ -173,17 +174,8 @@ namespace motion {
         float   seg1VelX;         // +152
         float   seg1VelY;         // +156
         float   seg1VelZ;         // +160
-        uint8_t _pad164[4];       // +164 (align to +168)
         void*   collisionCurve;   // +168 (binary: QWORD; wasm32: 4B ptr)
     };
-    // PLATFORM_BOUNDARY: the binary's +168 slot is a QWORD (8B, ARM64). On a
-    // 32-bit pointer target (wasm32) `void*` is 4B, so the trailing field shrinks
-    // the struct to 172B there. Both are valid — the assert pins the field at
-    // offset +168 and the prefix at 168B; the tail is the platform pointer.
-    static_assert(offsetof(EmoteBustChainSpring, collisionCurve) == 168,
-                  "collisionCurve must land at +168 (libkrkr2.so sub_6689A4)");
-    static_assert(sizeof(EmoteBustChainSpring) == 168 + sizeof(void*),
-                  "EmoteBustChainSpring tail must be exactly the +168 pointer");
 
     // Aligned with libkrkr2.so sub_6689A4 @ 0x6689A4.
     //   void chainStep(self, float* outSeg0, float* outSeg1, float* outLastY,

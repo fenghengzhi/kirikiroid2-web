@@ -55,7 +55,6 @@ namespace motion {
         struct ParsedFrameSlotLike_0x6926B4 {
             // +0   frameIndex      parseFrame: *(_DWORD*)a1 = a3
             std::uint32_t frameIndex = 0;
-            std::uint32_t _pad4 = 0;                 // +4  (alignment to +8 time)
             // +8   time            parseFrame: *(double*)(a1+8) = PropGet("time")
             double time = 0.0;
             // +16  ti              merge: v3[4] (mask bit 0x...; node+25 gated)
@@ -70,9 +69,6 @@ namespace motion {
             std::uint8_t interpFlag = 0;
             // +26  mergedFlag      merge: *(result+26) = 1 (content merged).
             std::uint8_t mergedFlag = 0;
-            std::uint8_t _pad27 = 0;
-            std::uint32_t _pad28 = 0;
-            std::uint32_t _pad32 = 0;
             // +36  src             merge: tTJSVariant at *(v3+9). Decoded as the
             //                      "src" string (mask via (1<<nodeType)&0x1849).
             std::string src;        // logical view of the +36 tTJSVariant
@@ -90,7 +86,6 @@ namespace motion {
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u};
             // +88  opacity         merge: v3[22], default 255, mask 0x400 "opa".
             std::uint32_t opacity = 255;
-            std::uint32_t _pad92 = 0;
             // +96/104/112 coord    merge: (double*)v3+12/13/14, mask 0x2 "coord".
             double coordX = 0.0;
             double coordY = 0.0;
@@ -98,9 +93,6 @@ namespace motion {
             // +120/121 flip        merge: (byte*)v3+120/121, mask 0xC "fx"/"fy".
             std::uint8_t flipX = 0;
             std::uint8_t flipY = 0;
-            std::uint8_t _pad122 = 0;
-            std::uint8_t _pad123 = 0;
-            std::uint32_t _pad124 = 0;
             // +128 angle           merge: (double*)v3+16, mask 0x10 "angle".
             double angle = 0.0;
             // +136/144 zx/zy       merge: (double*)v3+17/18, mask 0x60 "zx"/"zy".

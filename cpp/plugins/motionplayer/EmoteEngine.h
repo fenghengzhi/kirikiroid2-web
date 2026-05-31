@@ -129,22 +129,19 @@ namespace motion {
     //     (char*)v9+28   (+28) HM7 key ttstr for the Y output (springStep *a3)
     //     *((float*)v9+9) (+36) anchorX  } resolved by sub_67B970, written back
     //     *((float*)v9+10)(+40) anchorY  } (v29 QWORD = {anchorX,anchorY})
-    //   PLATFORM_BOUNDARY: ttstr handles are 8B (atomic-refcounted ptr). The
-    //   spring object ptr is also 8B on ARM64 / 4B on wasm32, so on a 32-bit
-    //   target the trailing anchors would shift; we keep explicit field offsets
-    //   via a packed struct so the binary's *(float*)(v9+36/+40) math is exact
-    //   regardless. Deques are empty until the (un-ported) setVariable write
-    //   path populates them.
+    //   Fields accessed by NAME (node.anchorX / node.shapeLabel / node.spring);
+    //   binary byte offsets are provenance comments only. No _padN: wasm layout
+    //   need not match the ARM64 48B stride (ttstr/ptr are 8B on ARM64, 4B on
+    //   wasm32 anyway — byte equality is unreachable and not required). Deques
+    //   are empty until the (un-ported) setVariable write path populates them.
     struct EmoteHairPartsNode48B {
         EmoteSpringState* spring;     // +0
         uint8_t           initFlag;   // +8
-        uint8_t           _pad9[3];   // +9..+11
         ttstr             shapeLabel; // +12 (8B handle)
         ttstr             keyX;       // +20 — HM7 key for X output
         ttstr             keyY;       // +28 — HM7 key for Y output
         float             anchorX;    // +36
         float             anchorY;    // +40
-        uint8_t           _pad44[4];  // +44 (pad to 48B stride)
     };
 
     // Deque #2 @+80 — Bust chain #1 spring nodes. 56B per node (v15 += 7 QWORDs
@@ -157,17 +154,17 @@ namespace motion {
     //     (char*)v15+36   (+36) HM7 key ttstr — last-seg X output (v8)
     //     *((float*)v15+11)(+44) anchorX } resolved by sub_67B970, written back
     //     *((float*)v15+12)(+48) anchorY } (v52 QWORD)
+    // Fields accessed by NAME; binary offsets are provenance comments only.
+    // No _padN — wasm 56B stride need not match ARM64 (see note above).
     struct EmoteBustChain1Node56B {
         EmoteBustChainSpring* spring;     // +0
         uint8_t               initFlag;   // +8
-        uint8_t               _pad9[3];   // +9..+11
         ttstr                 shapeLabel; // +12
         ttstr                 keyA;       // +20 — HM7 key (v23, seg0 X)
         ttstr                 keyB;       // +28 — HM7 key (v7, last Y)
         ttstr                 keyC;       // +36 — HM7 key (v8, last X)
         float                 anchorX;    // +44
         float                 anchorY;    // +48
-        uint8_t               _pad52[4];  // +52 (pad to 56B stride)
     };
 
     // Deque #3 @+160 — Bust chain #2 spring nodes (same shape as #2).
