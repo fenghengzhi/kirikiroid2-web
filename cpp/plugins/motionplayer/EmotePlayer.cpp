@@ -30,18 +30,22 @@ namespace motion {
         _engine = nullptr;
     }
 
-    // Aligned to libkrkr2.so D3DEmotePlayer 对象链:壳持有 EmoteObject(+24),
-    // EmoteObject 持有 EmoteEngine(+8),EmoteEngine 在 +1064 持有堆分配的 Player。
-    // 二进制在 load() 时懒建此链;本地构造期即建(eager),功能等价。
+    // Aligned to libkrkr2.so D3DEmotePlayer 对象链:壳持有【两个】EmoteObject 槽
+    // (主 instance+24 / 次 instance+32),EmoteObject 持有 EmoteEngine(+8),
+    // EmoteEngine 在 +1064 持有堆分配的 Player。
+    // COMMIT-1 范围:保留构造期急建主槽(二进制是 load 时懒建,留作 commit-2)。
+    // _rm 保存以备 load 重建主槽。次槽 _secondaryObj 默认 null(二进制构造亦清零)。
     D3DEmotePlayer::D3DEmotePlayer(ResourceManager rm) :
-        _emoteObj(new EmoteObject(std::move(rm))) {}
+        _rm(rm),
+        _primaryObj(new EmoteObject(_rm)) {}
 
-    // Manual delete of the raw EmoteObject chain — aligned with libkrkr2.so
-    //   EmoteObject_destroy (0x67F420): the native instance frees its +8
-    //   EmoteObject via operator delete (no smart pointer).
+    // 析构 = 二进制 sub_533C00:依次拆次槽 +32、主槽 +24(各 EmoteObject_destroy
+    // + operator delete)。EmoteObject* 裸指针手动 delete,无智能指针。
     D3DEmotePlayer::~D3DEmotePlayer() {
-        delete _emoteObj;
-        _emoteObj = nullptr;
+        delete _secondaryObj;
+        _secondaryObj = nullptr;
+        delete _primaryObj;
+        _primaryObj = nullptr;
     }
 
     // --- Properties ---
@@ -76,14 +80,32 @@ namespace motion {
 
     // --- Methods ---
 
-    // Aligned to libkrkr2.so sub_52FD84: create() is actually "destroy/reset"
+    // Aligned to libkrkr2.so D3DEmotePlayer_create @0x52FD84 (注册名 "clear"):
+    //   if(+32){ EmoteObject_destroy(+32); delete; }
+    //   if(+24){ EmoteObject_destroy(+24); delete; }
+    //   +24 = 0; +32 = 0;
+    // 纯对象拆除 —— 销毁两个 EmoteObject 槽并置 null,不碰任何 motion cursor/
+    // 帧推进状态(in-place reset 猜测版曾导致帧推进 hang, 见 revert 9587e2c)。
+    // 拆除后下一次 load 重建主槽。
     void D3DEmotePlayer::create() {
-        obj()._module.Clear();
-        player().loadFromSnapshot(nullptr);
-        engine()._modified = true;
+        delete _secondaryObj;
+        _secondaryObj = nullptr;
+        delete _primaryObj;
+        _primaryObj = nullptr;
     }
 
+    // Aligned to libkrkr2.so D3DEmotePlayer_load @0x52FDD4:
+    //   拆除前半 == create(destroy +32/+24, 置 null), 再重建主槽:
+    //   v16 = operator new(0x28); EmoteObject_init(v16, &args); +24 = v16;
+    // 只重建主槽(+24), 次槽(+32)保持 null。
     void D3DEmotePlayer::load(tTJSVariant data) {
+        // teardown 双槽(== create)
+        delete _secondaryObj;
+        _secondaryObj = nullptr;
+        delete _primaryObj;
+        _primaryObj = nullptr;
+        // 重建主槽(二进制 operator new(0x28) + EmoteObject_init(args))
+        _primaryObj = new EmoteObject(_rm);
         obj()._module = data;
         auto snapshot = detail::lookupModuleSnapshot(obj()._module);
         if(snapshot) {

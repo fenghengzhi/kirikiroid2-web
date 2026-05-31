@@ -298,11 +298,14 @@ namespace motion {
         const Player &getPlayer() const { return player(); }
 
     private:
-        // 对象链访问器(链在 ctor 即建,析构前恒非空,故无需 null 守卫)
-        EmoteObject &obj() { return *_emoteObj; }
-        [[nodiscard]] const EmoteObject &obj() const { return *_emoteObj; }
-        EmoteEngine &engine() { return _emoteObj->engine(); }
-        [[nodiscard]] const EmoteEngine &engine() const { return _emoteObj->engine(); }
+        // 对象链访问器:读主槽 _primaryObj(二进制 instance+24)。
+        // 二进制 EmoteEngine_progress(0x67D01C 起)无条件解引用主槽 EmoteObject*,
+        // 不做 null 检查 —— 靠调用时序保证(clear 后必先 load 再 progress)。
+        // 故本地访问器同样不加 null 守卫,与二进制 1:1。
+        EmoteObject &obj() { return *_primaryObj; }
+        [[nodiscard]] const EmoteObject &obj() const { return *_primaryObj; }
+        EmoteEngine &engine() { return _primaryObj->engine(); }
+        [[nodiscard]] const EmoteEngine &engine() const { return _primaryObj->engine(); }
         Player &player() { return engine().player(); }
         [[nodiscard]] const Player &player() const { return engine().player(); }
 
@@ -316,13 +319,24 @@ namespace motion {
         bool _drawVisible = true;
         double _drawOpacity = 1.0;
 
-        // 二进制对象链(壳 +24 → EmoteObject +8 → EmoteEngine +1064 → Player)。
-        // Player 由链尾的 EmoteEngine 用指针持有,不再 by-value 内嵌。
-        // CLAUDE.md 硬规则 + 二进制对齐:native instance 持有 EmoteObject* 为裸指针
-        //   (二进制 D3DEmotePlayer_load 0x52FDD4 `operator new(0x28)`,析构
-        //    EmoteObject_destroy 0x67F420 `operator delete`),手动 new/delete,
-        //   不用智能指针。
-        EmoteObject* _emoteObj = nullptr;
+        // 二进制对象链:D3DEmotePlayer 持有【两个】EmoteObject 槽 —— 主槽
+        // instance+24 + 次槽 instance+32(见 analysis/D3DEmotePlayer_56B_layout.md)。
+        //   - 主槽 _primaryObj:load/clone 创建,clear/dtor 拆除。指向
+        //     EmoteObject(+8 EmoteEngine +1064 Player)。
+        //   - 次槽 _secondaryObj:二进制构造 sub_52FFBC 清零、全部已反编译生命周期
+        //     路径(construct/load/clear/destroy)只写 0,从不建非 null EmoteObject。
+        //     logo 用例下为保留但不激活的退化槽。本地建模为真实槽默认 null。
+        // 生命周期语义(二进制):
+        //   clear/create 0x52FD84: destroy(次); destroy(主); 主=次=null
+        //   load 0x52FDD4:         destroy(次); destroy(主); 主=次=null; 主=new
+        //   dtor sub_533C00:       destroy(次); destroy(主)
+        // CLAUDE.md 硬规则:EmoteObject* 裸指针 + 手动 new/delete,不用智能指针。
+        // _rm 在构造时保存(ResourceManager 持 shared_ptr<State>, 拷贝廉价),
+        // 供 load() 重建主槽时构造新 EmoteObject 用。声明在槽指针之前以保证
+        // 初始化顺序(_rm 先于 _primaryObj 初始化)。
+        ResourceManager _rm;
+        EmoteObject* _primaryObj = nullptr;    // instance+24
+        EmoteObject* _secondaryObj = nullptr;  // instance+32(保留, 生命周期主链恒 null)
     };
 
     // Inline EmoteEngine::player() definitions — placed after Player is
