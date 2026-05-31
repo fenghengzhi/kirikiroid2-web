@@ -33,11 +33,14 @@ namespace motion {
     // Aligned to libkrkr2.so D3DEmotePlayer 对象链:壳持有【两个】EmoteObject 槽
     // (主 instance+24 / 次 instance+32),EmoteObject 持有 EmoteEngine(+8),
     // EmoteEngine 在 +1064 持有堆分配的 Player。
-    // COMMIT-1 范围:保留构造期急建主槽(二进制是 load 时懒建,留作 commit-2)。
-    // _rm 保存以备 load 重建主槽。次槽 _secondaryObj 默认 null(二进制构造亦清零)。
+    // COMMIT-2:懒建。二进制 plain 构造(TJS `new Motion.D3DEmotePlayer`)留主槽
+    // null,只在 load(0x52FDD4)/clone(sub_52FFBC via sub_67F978)时才
+    // operator new(0x28) 建主槽。证据:全部已反编译路径中,仅 load 与 clone 建
+    // 主槽 EmoteObject;plain ctor 不建。_rm 保存供 load/clone 重建。
+    // 访问器无 null 守卫(与二进制 EmoteEngine_progress 一致),靠调用时序保证
+    // construct 后必先 load 再访问主槽。
     D3DEmotePlayer::D3DEmotePlayer(ResourceManager rm) :
-        _rm(rm),
-        _primaryObj(new EmoteObject(_rm)) {}
+        _rm(rm) {}
 
     // 析构 = 二进制 sub_533C00:依次拆次槽 +32、主槽 +24(各 EmoteObject_destroy
     // + operator delete)。EmoteObject* 裸指针手动 delete,无智能指针。
@@ -118,6 +121,9 @@ namespace motion {
         typedef ncbInstanceAdaptor<D3DEmotePlayer> AdaptorT;
 
         auto *copy = new D3DEmotePlayer(ResourceManager{});
+        // 懒建后 copy 主槽为 null;clone 需显式建主槽 —— 对齐二进制 sub_52FFBC
+        // clone 回调内 `+24 = sub_67F978(...)`(operator new(0x28)+EmoteObject_init)。
+        copy->_primaryObj = new EmoteObject(copy->_rm);
         // 壳层字段(EmotePlayer 自身)
         copy->_useD3D = _useD3D;
         copy->_smoothing = _smoothing;
