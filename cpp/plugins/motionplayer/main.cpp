@@ -220,8 +220,6 @@ NCB_REGISTER_CLASS(Player) {
     // semantics mismatch), angleRad returns raw stored deg (port scaffold).
     NCB_PROPERTY(angleDeg, getAngleDeg, setAngleDeg);
     NCB_PROPERTY(angleRad, getAngleRad, setAngleRad);
-    // M15 missing `clear` method (cluster E §3.1): motion-state reset.
-    NCB_METHOD(clear);
     NCB_PROPERTY(speed, getSpeed, setSpeed);
     NCB_PROPERTY(frameTickCount, getFrameTickCount, setFrameTickCount);
     // M15 missing #19: pixelateDivision is binary Player+912 instance field
