@@ -224,14 +224,21 @@ progress_inner 在 LABEL_48 终端各分支调用它 (forward) / rewindRootAndNo
 - key "action" (sub_529524 PropGet): 非空 → `sub_6B638C(player, &frameVariant, &actionVariant)`
   (push action event).
 
-### 8.3 事件 deque @player+936 (44B record) — sub_6B638C / sub_6B6294
-record = `{ int type@+0; tTJSVariant a@+4 (20B); tTJSVariant b@+24 (20B) }` = 44B.
+### 8.3 事件 deque @player+936 (44B record) — push 0x6B638C/0x6B6294, consume 0x6C4490
+record = `{ int type@+0; tTJSVariant a@+4 (20B); tTJSVariant b@+24 (20B) }` = 44B
+(stride 11 dwords, byte-verified at consumer `i += 11`).
 push 路径: `end=+944; if(end==+952) sub_6F23CC(grow); else 就地写 + (+944)+=44`.
-- **sub_6B6294**: type=**1** (sync), a/b = 空 tTJSVariant.
-- **sub_6B638C(a1,a2,a3)**: type=**2** (action), a=copy(a2 帧变量), b=copy(*a3 action变量, refcount++).
-- ⚠ **本端 type 码不一致**: 本端 `_pendingEvents` dispatch 用 type0=onAction / type1=onSync
-  (PlayerFrameProgress.cpp:1130-1140); 二进制是 type1=sync / type2=action. 重写事件机制时
-  需对齐 (并复核 Player_dispatchEvents @0x6C4490 的 type→callback 映射, **尚未反编译**).
+- **Player_pushSyncEvent_guess @0x6B6294**: type=**1** (sync), a/b = 空 tTJSVariant.
+- **Player_pushActionEvent_guess @0x6B638C**: type=**0** (action), a=copy(a2 帧变量), b=copy(*a3 action变量).
+  ⚠ 勘误(上轮误读): 0x6B638C 的 `v9=0` 才是 record.type(=0); 之前误把 `v12=2`(那是 v11 这个
+  action tTJSVariant 的 **type tag**, 非 record type) 当成 event type. **正确: action=0.**
+- **Player_dispatchEvents @0x6C4490** (consumer, byte-verified): `for(i=+936; i!=+944; i+=11){
+  if(*i){ if(*i==1) onSync(); /* type>=2 无 op */ } else onAction(a@+4, b@+24); }`.
+  即 **type0→onAction(a,b); type1→onSync(); 其余忽略**.
+- ✅ **与本端一致**: 本端 `MotionEvent` + dispatch (PlayerFrameProgress.cpp:1130-1140) 就是
+  type0=onAction / type1=onSync — **type 码已对齐, 无需改**. (RuntimeSupport.h:159 注释正确.)
+  onAction 参数: param1=record.a(+4), param2=record.b(+24=action 值). (record.a 即 0x6B638C 的 a2=&v87,
+  其具体内容待 sub_529524 反编译确认; 本端 scanLayerActions 推 {0, actionStr, layerLabel}, 参数序待核.)
 
 ### 8.4 洞1 Player_preProgressDirtyNodes @0x6B6878 (fresh)
 progress_inner @0x6C10AC 首先调用它 (本端缺). 逐 node (deque, idx≥1): 若

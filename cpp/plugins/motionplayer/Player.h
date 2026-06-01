@@ -895,6 +895,25 @@ namespace motion {
         // WZR clear; no bit-level RMW). progress_inner @0x6C13F4/0x6C1384 STRB
         // WZR is "stop playing" semantics, not "disarm loop". Field merged.
         bool   _reverseSeekFlag = false; // player+609: one-shot reverse-seek request
+        // --- 砖5/洞3: layer + root frame stream cursors (DECLARED ONLY) ---
+        // The two player-level frame streams Player_advanceRootAndNodes
+        // (0x6B6ADC) / Player_rewindRootAndNodes (0x6B9A3C) /
+        // Player_reseekTimelineCursors (0x6B86C8) walk. Stream sources are
+        // _activeMotion->tagFrames (layer = motion["tag"], Player+1072) and the
+        // priority clip array (root = motion["priority"], Player+548); both
+        // assigned by Player_initNonEmoteMotion @0x6B3778/0x6B37D0. The layer
+        // stream is the global onAction/onSync source (type==1 frames, gated by
+        // the +1093 stop-gate); the root stream only snapshots content into
+        // _rootContent. NOT yet read by the live frameProgress path — that is
+        // the next (behavioral) commit, which replaces scanLayerActions.
+        // See analysis/Player_progress_frame_stepping_M1_plan.md §8.
+        int    _layerFrameCursor = 0;  // player+916
+        double _layerCurTime = 0.0;    // player+920: tag[cursor].time
+        double _layerNextTime = 0.0;   // player+928: tag[cursor+1].time
+        int    _rootFrameCursor = 0;   // player+568
+        double _rootCurTime = 0.0;     // player+576: priority[cursor].time
+        double _rootNextTime = 0.0;    // player+584: priority[cursor+1].time
+        std::shared_ptr<const PSB::PSBDictionary> _rootContent; // player+616
         // === end M1 P1 ===
         tjs_int _maskMode = 0;                         // libkrkr2.so +1148
         std::uint32_t _colorWeightPacked = 0xFF808080u; // libkrkr2.so +1156
