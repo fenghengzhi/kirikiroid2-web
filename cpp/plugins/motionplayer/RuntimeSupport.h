@@ -197,6 +197,18 @@ namespace motion::detail {
         // last-wins semantics to mirror Player+24 labelMap behaviour.
         std::vector<MotionClip> clipList;
         std::unordered_map<std::string, int> clipIndexByLabel;
+        // Layer event stream (global onAction/onSync source).
+        // Aligned to libkrkr2.so Player+1072 = motion["tag"] (written by
+        // Player_initNonEmoteMotion @0x6B3778). The binary's
+        // Player_advanceRootAndNodes (0x6B6ADC) walks this array with the
+        // cursor at Player+916, firing align/sync/action on type==1 frames
+        // gated by the +1093 stop-gate. Each element is a frame dict
+        // {time:double, type:int, content:{align,sync,action,...}}.
+        // NOTE: the layout note's "+1072 = stealthMotionStr" is wrong — +1072
+        // holds this tag array; the `stealthMotion` getter (sub_6D9618) merely
+        // re-reads the same field. See analysis/Player_progress_frame_stepping_M1_plan.md §8.5.
+        // (Brick-5 commit 1: additive storage only — no reader yet.)
+        std::shared_ptr<PSB::PSBList> tagFrames;
         std::unordered_map<std::string, TimelineControlBinding>
             timelineControlByLabel;
         std::vector<std::string> resourceAliases;

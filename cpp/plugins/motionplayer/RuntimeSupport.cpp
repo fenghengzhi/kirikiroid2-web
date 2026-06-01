@@ -1336,6 +1336,11 @@ namespace motion::detail {
         snapshot->path = narrow(path);
         snapshot->file = file;
         snapshot->root = root;
+        // Brick-5 commit 1 (additive, no reader): cache the layer event stream.
+        // Aligned to libkrkr2.so Player_initNonEmoteMotion @0x6B3778:
+        //   +1072 (layer stream) = motion["tag"]  (motion dispatch = Player+528 ≈ root).
+        // Walked by Player_advanceRootAndNodes (0x6B6ADC) for global onAction/onSync.
+        snapshot->tagFrames = dictionaryList(root, {"tag"});
         snapshot->moduleValue = root->toTJSVal();
         if(logoChainTraceEnabled(snapshot)) {
             resetLogoChainTraceSession(snapshot->path);

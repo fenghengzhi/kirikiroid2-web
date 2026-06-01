@@ -186,3 +186,92 @@ CI 覆盖说明:
 - G2 说 "+480 progressFlags is a 16-bit gate (init 257)" — 本轮 byte-verify 显示 progress_inner 在 0x6C1330 用 **LDRB** 读 +480 (1-byte). "init 257" 可能来自别处的 16-bit 写入 (低字节=1), 但 progress_inner 只测 LSB. 待 init 函数反编译厘清宽度.
 - preProgress: progress_inner 调用的是 **Player_preProgressDirtyNodes @0x6B6878**, 不是 Player_preProgress @0x671764. 后者是 playing-list controller stepper, 与 progress core 解耦. 本端 `preProgressPlayingTimelinesLike_0x671764` 对应的是 0x671764, 接错了调用点.
 - reseekTimelineCursors @0x6B86C8 此前未被任何文档/memory 记录, 是 progress core 的关键缺失环节 (firstFrame 种子 + loop wrap 都经它).
+
+---
+
+## 8. 砖5 (brick 5) — 洞3 advanceRootAndNodes 事件流 fresh decompile (2026-06-01)
+
+> Authority: 本轮 re-decompile (非复用旧结论). 函数: 0x6B6ADC / 0x6B638C /
+> 0x6B6294 / 0x6C106C / 0x6B6878 / 0x6B51F0 / Player_initEmoteMotion / 0x6D9618.
+
+### 8.1 Player_advanceRootAndNodes @0x6B6ADC = 4 条流 (顺序固定)
+progress_inner 在 LABEL_48 终端各分支调用它 (forward) / rewindRootAndNodes
+0x6B9A3C (reverse). 4 条流按此顺序:
+
+1. **layer 事件流** (player+1072 dispatch, 游标 +916 / curTime +920 / nextTime +928):
+   `while(+916 < count-2){ if(+456 < +928) break; +916++;
+     curTime(+920)=frames[+916].time; nextTime(+928)=frames[+916+1].time;
+     if(frames[+916].type==1) <事件门>; }`
+2. **root 流** (player+548 dispatch, 游标 +568 / +576 / +584, content 快照 +616):
+   `while(+568 < count-2){ if(+456 < +584) break; +568++;
+     +616 = frames[+568].content (sub_A0FB64 copy); +576=+584;
+     +584=frames[+568+1].time; }`  ← 注意: root 流**无** type==1 事件门, 只快照 content.
+3. **variable-track deque** (player+1312/+1328/+1336/+1344/+1368, 160B stride record,
+   每 record 内 56B×2 slot @ +48/+(48+56), 游标 record+8 奇偶, sub_6B786C 步进 /
+   sub_6B7A70 merge). 仍 DEFERRED.
+4. **node-deque walk** (LABEL_86): 每 node (idx≥1) node+8 非空→Player_advanceNodeFrames
+   0x6B7E44; 否则 inline 2-slot seek (slot+0 SIGNED vs count-2) + mergeFrameContent +
+   (gated) findSource + (other.mask & 0x40000)→sub_6B638C action. 这条已被本端
+   progressSeekNodeSlotsLike 近似 (洞2).
+
+### 8.2 layer 事件门 (type==1 frame, byte-verified) — **prompt 要求确认项, 已确认**
+仅当 `*(BYTE)(player+1093)` (motionStopGate) 置位时处理 align/sync:
+- key "align" @0x14C9BAA byte-verified UTF-16LE `61 00 6C 00 69 00 67 00 6E 00`
+  = "align". `propGetBool(content,"align")` → `+483(motionCompleted)=1;
+  +456 = +1120 = +920(curTime)`.
+- key "sync": `propGetBool(content,"sync")` → `+1098(syncWaiting)=1;
+  +456 = +1120 = +920; sub_6B6294(player)` (push sync event).
+- key "action" (sub_529524 PropGet): 非空 → `sub_6B638C(player, &frameVariant, &actionVariant)`
+  (push action event).
+
+### 8.3 事件 deque @player+936 (44B record) — sub_6B638C / sub_6B6294
+record = `{ int type@+0; tTJSVariant a@+4 (20B); tTJSVariant b@+24 (20B) }` = 44B.
+push 路径: `end=+944; if(end==+952) sub_6F23CC(grow); else 就地写 + (+944)+=44`.
+- **sub_6B6294**: type=**1** (sync), a/b = 空 tTJSVariant.
+- **sub_6B638C(a1,a2,a3)**: type=**2** (action), a=copy(a2 帧变量), b=copy(*a3 action变量, refcount++).
+- ⚠ **本端 type 码不一致**: 本端 `_pendingEvents` dispatch 用 type0=onAction / type1=onSync
+  (PlayerFrameProgress.cpp:1130-1140); 二进制是 type1=sync / type2=action. 重写事件机制时
+  需对齐 (并复核 Player_dispatchEvents @0x6C4490 的 type→callback 映射, **尚未反编译**).
+
+### 8.4 洞1 Player_preProgressDirtyNodes @0x6B6878 (fresh)
+progress_inner @0x6C10AC 首先调用它 (本端缺). 逐 node (deque, idx≥1): 若
+`+1996(timelineDirty)!=0` → 读 node+1980 motion dict, `propGetBool(...,"modified")`;
+若 modified → `PropSet(512,"modified",0)` 清旗 + `Player_initNodeTimeline_guess(player,node)`
+重建该 node 时间线. 与 0x671764 (controller stepper) 无关.
+
+### 8.5 ✅ 已解: +1072 / +548 stream 来源身份 — writer = Player_initNonEmoteMotion @0x6B3694
+byte-verified (Player_initNonEmoteMotion, v24 = AsObject(player+528) = motion dispatch):
+- `+1136 = motion["loopTime"]` (=_loopTime), `+1128 = motion["lastTime"]` (=_cachedTotalFrames) @0x6B370C/0x6B372C.
+- **`+1072` (layer stream) = `motion["tag"]`** @0x6B3778 (`sub_A0FB64(a1+1072, PropGet "tag")`).
+- **`+548` (root stream) = `motion["priority"]`** @0x6B37D0 (`sub_A0FB64(a1+548, PropGet "priority")`).
+- **`+616` = `priority[0].content`** @0x6B38FC (PropGetByNum 0 → AsObject → PropGet "content").
+- `+1098/+1099 = 0/1` (STRH 256 @0x6B3A74); 若 `(a2&2)==0`: `+1120=0; +456=fmin(+1128,0); +480=257; +481=1`.
+- ⇒ Player_Class_Layout_libkrkr2so.md 的 **"+1072 = stealthMotionStr (ttstr)" 标注错误**:
+  +1072 实为 `motion["tag"]` 帧数组 dispatch; `stealthMotion` property (sub_6D9618) 只是复用该字段读出.
+  (待修正该 layout note + 把 +936 "variableList" 修正为 44B 事件 deque.)
+
+数据结构 (byte-verified from advance/rewind loops):
+- **layer stream `motion["tag"]`** = array of `{ time:double, type:int, content:{align,sync,action,...} }`.
+  仅 `type==1` 帧触发事件门 (见 §8.2). 这是**全局** onAction/onSync 来源.
+- **root stream `motion["priority"]`** = array of `{ time:double, content:{...} }`. 无事件门, 仅 content 快照→+616.
+
+### 8.6 live 集成现状 (gap) + 实现设计 (unblocked)
+- live frameProgress: node seek 用 progressSeekNodeSlotsLike_0x6C106C (简化, 仅 node 流);
+  事件用 scanLayerActions (RuntimeSupport.cpp:1711) + preProgressPlayingTimelinesLike 推 `_pendingEvents`.
+- ⚠ scanLayerActions 扫的是 `snapshot.layerList` (= motion["layer"], node 树) + 每 clip.layerList,
+  **不是 motion["tag"]**; 且缺 align / type==1 门 / +1093 stopgate / frameTickCount 吸附. 事件源+门控均错.
+- live `_activeMotion`: `+528`≈`snapshot.root`; `+548 priority`≈`snapshot.clipList` (RuntimeSupport.h:193 已对齐);
+  **`+1072 tag` 当前无对应存储 — 缺**.
+- 忠实端口 advance/rewind/reseekRootAndNodesLike_* 存在但仅 unit-test (PlayerFrameStreamsLike
+  stand-in 模型, 非 live MotionNode). 洞2/3/4 共同根因 = live 用简化 seek 而非忠实 4 流.
+- 洞4: 忠实反向端口 rewindRootAndNodesLike_0x6B9A3C **已存在** (PlayerFrameStepping.cpp:386); gap 是
+  live 双向都走 progressSeekNodeSlotsLike, 未接反向端口.
+- **实现序列 (最小可验证 commit, additive-first)**:
+  1. (additive, 0 回归) MotionSnapshot 加 `tagFrames` (PSBList/vector<PSBDictionary>), load 期从
+     `root["tag"]` 填充 (RuntimeSupport.cpp scanDictionary top-level). 无 reader → CI 必绿. 落数据地基.
+  2. (additive) Player 加 live layer-stream 游标 (cursor/curTime/nextTime = +916/+920/+928) + root-stream
+     游标 (+568/+576/+584) + rootContent (+616). 暂不读.
+  3. (行为变更, CI 裁决) frameProgress 在 +456 定下后跑忠实 layer+root 流 advance/rewind (含 align +
+     +1093 门 + frameTickCount/clampedEvalTime 吸附), 推 onAction/onSync 入 _pendingEvents, **替换
+     scanLayerActions**. 先反编译 Player_dispatchEvents 0x6C4490 确认 type→callback (binary sync=1/action=2
+     vs live 0/1).
