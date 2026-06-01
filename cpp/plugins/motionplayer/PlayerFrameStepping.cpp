@@ -518,12 +518,19 @@ namespace motion {
                 auto nextF = frameDictAt(layer.frames, layer.frameCursor + 1);
                 const int v13 = static_cast<int>(frameTime(nextF));
                 layer.nextTime = static_cast<double>(v13);
-                // 0x6B89FC: if curTime == clampedEvalTime && frames[cursor+1]
-                // .type == 1 -> action/align/sync gate on the *next* frame.
+                // 砖6/Stage B 修正: the precise-frame gate keys on the CURSOR
+                // frame, NOT frames[cursor+1]. Byte-verified at 0x6B89D4..0x6B8A28:
+                //   D0 = +456 (clampedEvalTime); D1 = +920 (curTime);
+                //   6B89D4 FCMP D0,D1; B.NE skip      -> gate: +456 == curTime
+                //   6B89DC propGetInt(&var_C0,"type") -> var_C0 = v99 bound to v100
+                //   6B8A28 (*(v100+32))(v100,"content") -> content of v100
+                // where v100 = PropGetByNum(+916) (0x6B879C) = the CURSOR frame.
+                // The earlier port read frames[cursor+1] (nextF) for both type and
+                // content, which is wrong: nextF only supplies +928 (nextTime).
                 if(layer.curTime == state.clampedEvalTime &&
-                   frameType(nextF) == 1) {
+                   frameType(curF) == 1) {
                     applyLayerActionGate(state, layer.curTime,
-                                         frameContent(nextF));
+                                         frameContent(curF));
                 }
             }
 

@@ -989,12 +989,34 @@ namespace internal {
             _frameTickCount += _deltaTime;           // player+1120 += player+592
         }
 
-        // Aligned to Player_preProgress (0x671764): timeline advancement
-        // happens before controller stepping inside Player_progress.
-        // 砖5/洞3: prevTimes was only consumed by the removed per-timeline
-        // scanLayerActions; the layer events now come from the motion["tag"]
-        // cursor (seekLayerEventStreamLike_0x6B6ADC), so no prevTimes snapshot is
-        // needed here.
+        // 砖6/Stage C (P7 teardown — 错位调用点 RE-confirmed, MIGRATION DEFERRED):
+        // CORRECTION of the prior attribution. Player_preProgress @0x671764 is NOT
+        // on the Player_progress_inner (0x6C106C) call chain — byte-verified via
+        // xrefs_to(0x671764): its only callers are EmoteEngine_progress (0x530A5C
+        //   -> 0x67D01C) and sub_675E40. progress_inner's own pre-progress step is
+        // Player_preProgressDirtyNodes (0x6B6878), already invoked above (line ~952).
+        // 0x671764 is a PLAYING-LIST controller stepper: it walks the playing-list
+        // variant array (player[130..131] = _playingTimelineLabels), steps each
+        // entry's EmoteVarController_step, and pops completed entries off the list
+        // — i.e. it belongs to the EmoteEngine progress chain, not the non-emote
+        // progress_inner port that frameProgress mirrors. The faithful fix is to
+        // migrate this call out of frameProgress into the EmoteEngine_progress port
+        // (cpp/plugins/motionplayer/EmoteEngine.cpp). That migration is a progress-
+        // topology refactor (frameProgress is currently an emote/non-emote blend)
+        // and is DEFERRED — see analysis/Player_progress_frame_stepping_M1_plan.md
+        // §7 + module-alignment-driver memory. Left in place to preserve the green
+        // logo differential; only the attribution comment is corrected this round.
+        //
+        // NOTE on _evalResultValues (frameProgress entry .clear() + this path's
+        // writeEvalResultValueLike_0x6C4668): RE-checked 0x6C4668
+        // (Player_bindParameterValue_writesHM1_HM2). Its LABEL_132 does
+        // HM2_upsert(player+320, label) = value — so _evalResultValues is the
+        // PORT MIRROR OF HM2 @+320 (a real binary container), NOT a port-invented
+        // construct (M1_plan §3's "凭空多出" list is wrong for this entry; the
+        // binary HM2 write is logo-differential-gated). The per-frame .clear()
+        // (line ~947) IS port-invented (binary HM2 is persistent; progress_inner
+        // entry clears only +1152/+483, never +320), but removing it converts HM2
+        // to cross-frame persistence — a high-risk behavior change DEFERRED.
         preProgressPlayingTimelinesLike_0x671764(actualDelta, nullptr);
 
         double remainingControllerStep = actualDelta;
@@ -1083,7 +1105,16 @@ namespace internal {
                 _clampedEvalTime = totalFrames;    // +456 = v29 (= totalFrames)
                 if(loopTime >= 0.0) {              // 0x6C13F0: LOOP
                     // advanceRootAndNodes at the clamped end (+456 = totalFrames)
-                    progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C1468
+                    // 砖6/Stage A (洞3 调用点重定位): Player_advanceRootAndNodes
+                    // (0x6B6ADC) runs the layer event stream (+916 cursor) BEFORE
+                    // the node-deque walk (LABEL_86), both keyed on the SAME +456.
+                    // The layer pass may align/sync-snap +456/+1120 (0x6B6DD8,
+                    // +1093-only gate), and that snap must reach this SAME advance
+                    // point's node walk. So seek the layer stream here, immediately
+                    // before progressSeekNodeSlotsLike (= the node walk), at each
+                    // advanceRoot/rewind equivalent point — not once at end-of-frame.
+                    seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime); // 0x6B6B80 layer pass
+                    progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C1468 node walk
                     if(!_syncWaiting && !_motionCompleted) {              // 0x6C1474
                         _clampedEvalTime = _loopTime; // +456 = player+1136 (0x6C1484)
                         progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // reseek (0x6C1488)
@@ -1102,6 +1133,9 @@ namespace internal {
                                 _frameTickCount = v7;               // LABEL_22 (0x6C1198)
                                 _clampedEvalTime = v7;              // LABEL_23 (0x6C119C)
                             }
+                            // Stage A: layer pass before node walk at this 2nd
+                            // advanceRoot (0x6C11B0, +456 = wrapped tick).
+                            seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
                             progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11B0
                         }
                     }
@@ -1131,6 +1165,10 @@ namespace internal {
                 }
             } else {                              // 0x6C1404: reverse loop-wrap
                 _clampedEvalTime = loopTime;      // player+456 = v28 (0x6C1404)
+                // Stage A: rewindRootAndNodes (0x6B9A3C) runs the BACKWARD layer
+                // pass (0x6B9AE8: --+916 while curTime>+456, same +1093-only gate)
+                // before its node walk. Layer pass before node walk here too.
+                seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
                 progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // rewindRootAndNodes (0x6C1408)
                 if(!_syncWaiting && !_motionCompleted) {              // 0x6C1414
                     _clampedEvalTime = _cachedTotalFrames; // +456 = player+1128 (0x6C1424)
@@ -1150,6 +1188,9 @@ namespace internal {
                             _frameTickCount = v7;               // LABEL_27 (0x6C11B8)
                             _clampedEvalTime = v7;              // LABEL_28 (0x6C11BC)
                         }
+                        // Stage A: layer pass before node walk at this 2nd rewind
+                        // (0x6C11C0, +456 = reverse-wrapped tick).
+                        seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
                         progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11C0
                     }
                 }
@@ -1167,20 +1208,40 @@ namespace internal {
         // The loop-wrap / reverse-wrap branches above already re-seeked inline
         // (matching the binary's terminal advance/rewindRootAndNodes calls); this
         // covers the forward-normal / reverse-normal / non-loop-end cases.
-        if(reseekNodes && !_nodes.empty()) {
-            progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
+        if(reseekNodes) {
+            // Stage A: this is the forward-not-at-end advanceRoot (0x6C13A4) OR
+            // the reverse LABEL_57 rewind (0x6C138C) — the normal-playback (logo)
+            // path. Both run the layer event stream before the node walk, keyed on
+            // the same +456. The seek-direction is encoded by deltaTime sign, and
+            // seekLayerEventStreamLike is bidirectional (forward 0x6B6B80 / backward
+            // 0x6B9AE8) self-selecting on cursor vs target, so one call covers both.
+            // Layer pass is NOT gated on _nodes.empty() (it walks motion["tag"], not
+            // the node deque); only the node walk is.
+            seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
+            if(!_nodes.empty()) {
+                progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
+            }
         }
 
-        // 砖5/洞3: faithful layer (motion["tag"]) event stream — replaces the
-        // port-invented per-timeline detail::scanLayerActions (which scanned
-        // motion["layer"], the node tree, the WRONG source). The binary's global
-        // onAction/onSync come from the layer stream Player+1072 = motion["tag"]
-        // walked by Player_advanceRootAndNodes/rewindRootAndNodes; this seeks that
-        // stream's cursor to _clampedEvalTime, firing +1093-gated align/sync (with
-        // snapping) + ungated action. (Per-node frame actions — node mask 0x40000,
-        // sub_6B638C from the node seek — remain a 洞2 follow-up; this commit
-        // corrects only the global layer-stream source.)
-        seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
+        // 砖6/Stage A (洞3 调用点重定位 — DONE): the faithful layer
+        // (motion["tag"]) event stream is now driven INSIDE each advanceRoot /
+        // rewind equivalent point above (each progressSeekNodeSlotsLike is now
+        // preceded by seekLayerEventStreamLike on the SAME +456), matching the
+        // binary where Player_advanceRootAndNodes (0x6B6ADC) / rewindRootAndNodes
+        // (0x6B9A3C) run [layer stream -> root -> var-track -> node walk] as one
+        // unit. This fixes the three defects of the old single end-of-frame call:
+        //   (1) loop-wrap segments (totalFrames then loopTime) each now scan the
+        //       layer stream, so align/sync/action inside a wrapped segment fire;
+        //   (2) align/sync snaps of +456/+1120 now propagate to the SAME advance's
+        //       node walk (was a 1-frame lag);
+        //   (3) the gate-set not-at-end / firstFrame-queuing paths correctly do
+        //       NOT scan the layer stream (binary returns without advanceRoot).
+        // (Player_reseekTimelineCursors 0x6B86C8 — the firstFrame seed + the two
+        // loop-wrap reseek points 0x6C1488/0x6C1428 — carries its OWN layer scan
+        // with a DIFFERENT gate (+920==+456 precise-frame, 0x6B8AC0); that is
+        // Stage B and intentionally NOT covered by these advance-form seeks.)
+        // (Per-node frame actions — node mask 0x40000 from the node seek — remain
+        // 洞2, already handled inside progressSeekNodeSlotsLike's _pendingEvents.)
 
         _allplaying = !_playingTimelineLabels.empty();
         _syncActive = _syncWaiting && _allplaying;

@@ -57,7 +57,7 @@ motionplayer 模块（cpp/plugins/motionplayer/，约 24.6K LOC，40+ 文件）�
 - 2026-04-05 报告引用的 0x6D69C8 仍准确，IDB 已演化但地址不变。
 
 ### G. 容器复刻冲突
-- 二进制 `_nodes` 是 `std::deque<MotionNode>` (2632B/element)；本地 detail::MotionNode 尺寸未与 2632B 对齐（PLATFORM_BOUNDARY allowed）
+- 二进制 `_nodes` 是 `std::deque<MotionNode>` (2632B/element)；**本地 `_nodes` 自 commit 8cee351("A8") 起已是 `std::deque<detail::MotionNode>`**（Player.h:1063；MotionNode.h:3 头注释确认；无 vector-only 操作残留）——容器选型已对齐，2026-06-01 Stage D 评估确认无迁移工作。detail::MotionNode 字节尺寸不与 2632B 对齐属 PLATFORM_BOUNDARY allowed（CLAUDE.md "对象 ABI 偏移永不需对齐"）。**任何称 "本地 std::vector<MotionNode>" 的旧记录（含 M1_plan §1）已过时。**
 - `_preparedRenderItems` 二进制是 `std::vector<RenderItem 56B>` @ Player+936/944；本地用 `std::vector<detail::PreparedRenderItem>`，element 大小未审计
 
 **How to apply:** 下一次推进该模块时优先级：
