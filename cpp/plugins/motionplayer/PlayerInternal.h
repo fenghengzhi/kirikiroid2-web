@@ -1466,9 +1466,16 @@ namespace internal {
         // then Player_evaluateTimeline (0x699AE4) consumes those slots and writes
         // node runtime state. These are intentionally non-inline in
         // PlayerUpdateLayers.cpp so native LLDB can hook the 0x699AE4 boundary.
+        // 砖5/洞2: optional pendingEvents sink — when non-null, per-node
+        // onAction events (node mask 0x40000 / content["act"], fired on each
+        // crossed action frame) are pushed as MotionEvent{type=0,
+        // param1=node label, param2=action}. Aligned to the per-node sub_6B638C
+        // calls in Player_advanceRootAndNodes/rewindRootAndNodes (node[0]=label,
+        // see analysis §9). Default null = no firing (read/test callers).
         FrameContentState
-        advanceNodeFrameSelectionLike_0x6926B4(detail::MotionNode &node,
-                                               double currentTime);
+        advanceNodeFrameSelectionLike_0x6926B4(
+            detail::MotionNode &node, double currentTime,
+            std::vector<detail::MotionEvent> *pendingEvents = nullptr);
 
         // M1/P7 step-1: read the already-positioned node clip slots WITHOUT
         // seeking. After the progress pass (Player::progressSeekNodeSlotsLike_

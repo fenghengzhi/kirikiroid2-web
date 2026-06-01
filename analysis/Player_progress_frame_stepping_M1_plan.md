@@ -304,3 +304,55 @@ byte-verified (Player_initNonEmoteMotion, v24 = AsObject(player+528) = motion di
      +1093 门 + frameTickCount/clampedEvalTime 吸附), 推 onAction/onSync 入 _pendingEvents, **替换
      scanLayerActions**. 先反编译 Player_dispatchEvents 0x6C4490 确认 type→callback (binary sync=1/action=2
      vs live 0/1).
+
+---
+
+## 9. 砖5/洞2 — node[0] (per-node onAction param1) RE 定案 (2026-06-01)
+
+> Authority: 本轮 decompile Player_initNodeFields @0x6B3DC8 + Player_buildNodeTree_recursive
+> @0x6B4AA0 + 三处 per-node sub_6B638C 调用点 (advance 0x6B74C0 / rewind 0x6BA248 /
+> initNodeTimeline 0x6B6758)。
+
+### 9.1 node[0] = layer["label"] (节点 label 字符串)
+Player_initNodeFields (0x6B3DC8):
+```
+sub_529524(v36, &v46, L"label", ...);   // v36 = layer["label"] (string variant)
+... refcount v36[0] ...
+*(QWORD)a2 = v36[0];                       // node[0] = label string value (tTJSVariantString*)
+```
+⇒ **node 的首 qword (node[0]) = 该 layer 的 "label" 字符串值** (一个 tTJSVariantString*)。
+
+### 9.2 per-node onAction(layerLabel, actionName) — 两参均字符串
+三处 per-node 动作派发都构造 param1 = `{type tag = 2 (tvtString), value = node[0]}`:
+- advance node inline seek: `v89=2; v87=*(node); ...; sub_6B638C(player, &v87, slot+288)`
+- rewind node seek:        `v62=2; v61[0]=*(node); ...; sub_6B638C(player, v61, slot+288)`
+- initNodeTimeline_guess:   `v36=2; v35[0]=*(node); ...; sub_6B638C(player, v35, node+608)`
+record.a (param1) = `{tvtString, node[0]}` = **layer label 字符串**; record.b (param2) =
+copy(*slot+288 / node+608) = **该 slot 的 action 值** (字符串)。
+⇒ **per-node onAction(layerLabel, actionName)** — 两参都是字符串。
+
+### 9.3 对照 / 勘误
+- 与 layer/tag 流 onAction(**void**, actionName) (§8.7) **param1 不同**: tag 流首参 void,
+  per-node 首参 = label 字符串。两个事件源的 onAction 签名不同。
+- 本端 scanLayerActions (已被洞3 替换) 对 per-node 推的是 onAction(actionStr, layerLabel) —— 即
+  param 序与二进制相反 (二进制 = label, action)。
+- ⚠ MotionNode.h:53-56 注释称 "node+0 ... *(node+0)+16 = layer's iTJSDispatch2*" 对 node[0]
+  的描述存疑: 0x6B3DC8 明确 node[0] = label 字符串值 (非 dispatch 包装结构)。onGroundCorrection
+  (sub_6BAA10) 取 layer dispatch 的路径需另行 RE 确认; 暂不改该 C++ 注释 (避免基于部分理解误导)。
+
+### 9.4 ✅ action-mask 位已解 + 洞2 已落地
+- **gate = mask bit 0x40000** = `slot+22 & 4` (mask 是 slot+20 的 32-bit; byte+2 bit2 = bit18 = 0x40000)。
+  三处一致: advance `(slot+22 & 4)`, rewind `(slot+22 & 4)`, initNodeTimeline `(node+342 & 4)`。
+- **action 值 = `content["act"]`** (key "act", 非 "action"); parseFrame 0x6926B4 @0x6928EC
+  `if(mask & 0x40000) slot.act = content["act"]` —— live parseFrameLike (PlayerFrameStep.cpp:444)
+  已复刻, 写入 ClipSlot.action。⇒ ClipSlot.action 非空 ⟺ 当前帧有 action (parseFrame 每帧重置)。
+- **fire 时机** (byte-verified): advance (0x6B6ADC inline) parseFrame 后 fire **被跨越的 `other`** 帧
+  (swap 前); rewind (0x6B9A3C) parseFrame 后 fire **刚进入的 prev** 帧 (other)。
+- **落地** (commit-5): advanceNodeFrameSelectionLike_0x6926B4 加 `pendingEvents` 出参; 前向循环
+  跨越前 fire otherSlot.action, 反向循环 populate 后 fire activeSlot.action; 均
+  `onAction(node.layerName, action)` (param1=label=node[0], param2=action)。progressSeekNodeSlotsLike
+  传 &_pendingEvents。
+- ⚠ 近似 (已文档化): live seek 不分 child/non-child, 对**所有** seeked node fire; 二进制只在
+  non-child inline seek fire (child 走 advanceNodeFrames 不 fire)。net-additive: 洞3 替换
+  scanLayerActions 后 per-node action 本已不触发, 本提交恢复之 (logo 差分若无 per-node action 帧则 inert)。
+- 对照: per-node onAction(**label**, action) 与 layer/tag 流 onAction(**void**, action)(§8.7) param1 不同。

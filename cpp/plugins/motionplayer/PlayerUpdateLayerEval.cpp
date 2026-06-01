@@ -354,8 +354,23 @@ namespace motion::internal {
     }
 
     MOTIONPLAYER_NOINLINE FrameContentState
-    advanceNodeFrameSelectionLike_0x6926B4(detail::MotionNode &node,
-                                           double currentTime) {
+    advanceNodeFrameSelectionLike_0x6926B4(
+        detail::MotionNode &node, double currentTime,
+        std::vector<detail::MotionEvent> *pendingEvents) {
+        // 砖5/洞2: fire a per-node onAction(node label, action) for each crossed
+        // action frame (node mask 0x40000 / content["act"], stored in
+        // ClipSlot.action). Aligned to the per-node sub_6B638C calls in
+        // Player_advanceRootAndNodes (0x6B6ADC, fires the CROSSED `other` slot)
+        // and Player_rewindRootAndNodes (0x6B9A3C, fires the just-entered prev
+        // slot). param1 = node[0] = layer["label"] = node.layerName (§9.1/9.2).
+        const auto fireNodeAction =
+            [&](const detail::MotionNode::ClipSlot &slot) {
+            if(pendingEvents && !slot.action.empty()) {
+                pendingEvents->push_back(
+                    {0, node.layerName, slot.action, false});
+            }
+        };
+
         const auto frames = psbDictionaryList(node.psbNode, "frameList");
         if(!frames || frames->size() == 0) {
             node.activeSlot().done = true;
@@ -379,6 +394,8 @@ namespace motion::internal {
         while(node.otherSlot().frameIndex >= 0 &&
               node.activeSlot().frameIndex < lastForwardFrameIndex &&
               selectionTime >= node.otherSlot().clipStartTime) {
+            // 0x6B6ADC: fire the crossed frame (`other`) before the swap.
+            fireNodeAction(node.otherSlot());
             node.activeSlotIndex ^= 1;
             const int nextIndex = node.activeSlot().frameIndex + 1;
             populateClipSlotFromFrameLike_0x6926B4(
@@ -393,6 +410,8 @@ namespace motion::internal {
             node.activeSlotIndex ^= 1;
             populateClipSlotFromFrameLike_0x6926B4(
                 node, frames, previousIndex, transformOrder, node.activeSlot());
+            // 0x6B9A3C: rewind fires the just-entered (previous) frame.
+            fireNodeAction(node.activeSlot());
             node.flags |= 0x01;
             node.hasTimelineEvalRatio = false;
         }
@@ -530,7 +549,15 @@ namespace motion {
             // (0x699AE4) consumes in the updateLayers pass. Return value is only
             // used for tracing in the collapsed model; here we discard it (the
             // slots are the real output, mirroring the binary).
-            advanceNodeFrameSelectionLike_0x6926B4(node, clampedEvalTime);
+            // 砖5/洞2: pass _pendingEvents so per-node onAction(label, action)
+            // fires on crossed action frames (node mask 0x40000), matching the
+            // per-node sub_6B638C dispatch inside advance/rewindRootAndNodes.
+            // APPROXIMATION vs binary: fires for ALL seeked nodes (the live seek
+            // does not split child/non-child); the binary fires only in the
+            // non-child inline seek. Documented; net-additive over the post-洞3
+            // state where per-node actions did not fire at all.
+            advanceNodeFrameSelectionLike_0x6926B4(node, clampedEvalTime,
+                                                   &_pendingEvents);
         }
     }
 
