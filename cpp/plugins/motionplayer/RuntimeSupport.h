@@ -430,10 +430,4 @@ namespace motion::detail {
                           fmt::format(format, std::forward<Args>(args)...));
     }
 
-    // Scan PSB layer tree for action/sync events between prevTime and newTime.
-    // Aligned to libkrkr2.so: updateLayers queues events during tree evaluation.
-    void scanLayerActions(const MotionSnapshot &snapshot,
-                          double prevTime, double newTime,
-                          std::vector<MotionEvent> &events);
-
 } // namespace motion::detail
