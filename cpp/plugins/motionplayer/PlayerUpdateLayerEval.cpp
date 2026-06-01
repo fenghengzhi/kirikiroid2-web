@@ -357,12 +357,26 @@ namespace motion::internal {
     advanceNodeFrameSelectionLike_0x6926B4(
         detail::MotionNode &node, double currentTime,
         std::vector<detail::MotionEvent> *pendingEvents) {
-        // 砖5/洞2: fire a per-node onAction(node label, action) for each crossed
-        // action frame (node mask 0x40000 / content["act"], stored in
-        // ClipSlot.action). Aligned to the per-node sub_6B638C calls in
-        // Player_advanceRootAndNodes (0x6B6ADC, fires the CROSSED `other` slot)
-        // and Player_rewindRootAndNodes (0x6B9A3C, fires the just-entered prev
-        // slot). param1 = node[0] = layer["label"] = node.layerName (§9.1/9.2).
+        // 砖5/洞2: fire a per-node onAction(label, action) for each crossed
+        // action frame (slot mask bit 0x40000 / content["act"], stored in
+        // ClipSlot.action). Aligned to the per-node sub_6B638C (0x6B638C) push
+        // in Player_advanceRootAndNodes (0x6B6ADC, push @0x6B74E4, fires the
+        // CROSSED `other` slot) and Player_rewindRootAndNodes (0x6B9A3C, push
+        // @0x6BA26C, fires the just-entered prev slot).
+        //
+        // param1 = *(node+0). VERIFIED via Player_initNodeFields (0x6B3C78):
+        // node+0 is seeded at 0x6B3DF4 with the object pointer of the
+        // PropGet("label") result (sub_529524 @0x6B3DC8) — i.e. node+0 IS the
+        // node's "label" string variant. The inline push (advance 0x6B74BC:
+        // `LDR X8,[X20]; STUR X8,[var_70]` then AddRef) copies exactly that
+        // label variant as record.a. node.layerName is this same PSB "label"
+        // (NodeTree.cpp:108). So param1 = node.layerName is the faithful port.
+        // NOTE: param1 is NOT the layer dispatch object (node.tjsLayerObject /
+        // *(node+0)+16); that misreading would diverge from the binary.
+        // param2 = slot+288 (advance push arg `node+0x120`) = ClipSlot.action.
+        // Residual ABI-level nuance (the binary's record.a variant tag vs a
+        // tvtString of the same text) is below the source-structure tier per
+        // CLAUDE.md (no byte/representation match required).
         const auto fireNodeAction =
             [&](const detail::MotionNode::ClipSlot &slot) {
             if(pendingEvents && !slot.action.empty()) {
@@ -549,15 +563,26 @@ namespace motion {
             // (0x699AE4) consumes in the updateLayers pass. Return value is only
             // used for tracing in the collapsed model; here we discard it (the
             // slots are the real output, mirroring the binary).
-            // 砖5/洞2: pass _pendingEvents so per-node onAction(label, action)
-            // fires on crossed action frames (node mask 0x40000), matching the
-            // per-node sub_6B638C dispatch inside advance/rewindRootAndNodes.
-            // APPROXIMATION vs binary: fires for ALL seeked nodes (the live seek
-            // does not split child/non-child); the binary fires only in the
-            // non-child inline seek. Documented; net-additive over the post-洞3
-            // state where per-node actions did not fire at all.
+            // 砖5/洞2: per-node onAction(label, action) on crossed action frames
+            // (slot mask bit 0x40000 -> ClipSlot.action), matching the inline
+            // sub_6B638C push inside Player_advanceRootAndNodes (0x6B6ADC,
+            // LABEL_86 / push @0x6B74E4) and Player_rewindRootAndNodes (0x6B9A3C,
+            // LABEL_76 / push @0x6BA26C).
+            //
+            // node+8 GATING (0x6B73B0/0x6B73D4 advance, 0x6BA1A8/0x6BA1C4 rewind):
+            // both node loops branch
+            //     if (*(node+8)) { Player_advanceNodeFrames(node, player); continue; }
+            // i.e. PARAMETERIZED nodes (node+8 = parameterEntry != 0) take the
+            // child-advance path (Player_advanceNodeFrames 0x6B7E44), which seeks
+            // its two slots but contains NO action-mask check and NO
+            // pushActionEvent call — so parameterized nodes fire NO per-node
+            // onAction. Only NON-parameterized nodes (node+8 == 0) run the inline
+            // seek that pushes the event. node+8 == parameterEntry (MotionNode.h:71,
+            // node init 0x6B3EA0). Gate accordingly: parameterized -> no events.
+            std::vector<detail::MotionEvent> *nodeEvents =
+                (node.parameterEntry == nullptr) ? &_pendingEvents : nullptr;
             advanceNodeFrameSelectionLike_0x6926B4(node, clampedEvalTime,
-                                                   &_pendingEvents);
+                                                   nodeEvents);
         }
     }
 

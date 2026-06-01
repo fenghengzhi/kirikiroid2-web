@@ -1,3 +1,5 @@
+- [砖5洞3 layer event stream](project_layer_event_stream_brick5_hole3.md) — 2026-06-01: seekLayerEventStream cursor/gate/event 1:1 ✅; 但调用点架构错(end-of-frameProgress vs binary INSIDE advance/rewind per-seek)+reseek(0x6B86C8)layer门控完全缺失=🔧
+- [砖5洞2 per-node action param1=label串](project_pernode_action_param1_object.md) — 2026-06-01: ✅纠错 param1 是 *(node+0)="label" tvtString(非dispatch对象), 本地widen(layerName)忠实; 参数化节点(node+8!=0)走advanceNodeFrames+continue不推action=本地原对所有node推=真bug(已修gate parameterEntry==null); 洞1 preProgressDirtyNodes inert移植忠实
 - [Player phase2 偏差清单](project_player_updateLayers_phase2_deviations.md) — 2026-04-17 updateLayersPhase2_MainLoop vs sub_6BB33C 架构级/越权/结构级偏差汇总
 - [delta/override 块是架构关键](feedback_motionplayer_delta_override_block.md) — libkrkr2.so node +1584..+1660 delta 块无法用单一 state + 双层合并等价替代
 - [EmoteEngine progress 数据流偏差](project_emoteengine_progress_dataflow.md) — 2026-05-30 cluster B: progress() 4 个真实数据流偏差(残留dt/缺dt守卫/缺HM7循环/map序bind),非纯stub
