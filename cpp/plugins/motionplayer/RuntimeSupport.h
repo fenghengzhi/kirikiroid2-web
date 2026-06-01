@@ -161,6 +161,12 @@ namespace motion::detail {
         int type = 0;
         std::string param1;
         std::string param2;
+        // 砖5/洞3: the layer (motion["tag"]) stream fires onAction(void, action)
+        // — Player_advanceRootAndNodes 0x6B6E68 passes a released/void variant as
+        // param1 (record.a) and content["action"] as param2 (record.b). When set,
+        // dispatch passes a void tTJSVariant for param1 instead of widen(param1).
+        // See analysis/Player_progress_frame_stepping_M1_plan.md §8.7.
+        bool voidParam1 = false;
     };
 
     struct MotionSnapshot {

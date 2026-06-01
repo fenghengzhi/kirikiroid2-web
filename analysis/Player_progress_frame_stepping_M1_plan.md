@@ -262,6 +262,28 @@ byte-verified (Player_initNonEmoteMotion, v24 = AsObject(player+528) = motion di
   仅 `type==1` 帧触发事件门 (见 §8.2). 这是**全局** onAction/onSync 来源.
 - **root stream `motion["priority"]`** = array of `{ time:double, content:{...} }`. 无事件门, 仅 content 快照→+616.
 
+### 8.7 advance/rewind gate form vs reseek + onAction 参数序 (commit-3 前置)
+- **advance (0x6B6DD8) 与 rewind (0x6B9D0C) 的事件门完全相同** (本轮 byte-verify rewind):
+  `if(+1093){ if(content["align"]){motionCompleted=1; +456=+1120=curTime;}
+              if(+1093 && content["sync"]){syncWaiting=1; +456=+1120=curTime; pushSync;} }
+   action=content["action"]; if(action) pushAction(player, &scratch, &action);  // action 不受 +1093 门`
+  ⚠ align **不** time-gate (与 reseek 0x6B89FC 的 `curTime==clampedEvalTime` 形式不同)。
+  现有 stand-in applyLayerActionGate 是 reseek 形式; live advance/rewind 端口须用此 +1093-only 形式。
+- rewind 循环条件: `do{ --cursor; curTime=tag[cursor].time; nextTime=tag[cursor+1].time; gate; }
+   while(curTime > clampedEvalTime)`; 入口 `count!=0 && curTime>clampedEvalTime`.
+- ✅ **已 RE 定 (commit-3 决): onAction(void, actionName)**:
+  - pushAction sub_6B638C(a1,a2,a3): record.a=copy(a2 处 tTJSVariant), record.b=copy({ptr=*a3, tag=2=string}).
+  - Player_dispatchEvents 0x6C4490: type0 → onAction(record.a, record.b) (2 args).
+  - record.b = content["action"] 值 (tag=2=tvtString, 即 action 名字符串)。 = **param2**.
+  - record.a = &v87 处的 tTJSVariant。v87 在 0x6B6D68 被 sub_A0F778 **释放→type(+16)=void(0)**;
+    随后只被 sub_529524 当 PropGet **hint(uint32@+0)** 写 (不动 +16 的 type)。Motion_propGetBool
+    **不读 a3=&v87**。⇒ record.a = type=void 的空变量 = **param1 = void**。
+  - 证据: sub_A0F5E0 读 type@(a2+16); Motion_propGetBool body 忽略 a3; sub_529524 a4=hint。
+  - ⇒ 二进制 **onAction(void, actionName)**; 本端 scanLayerActions 是 onAction(actionName, layerLabel)
+    (param 序 + 内容均不同)。commit-3 应改为 onAction(空, action名)。
+  - ⚠ param1=void 结论意外 (回调首参为空), 静态证据充分但建议有 tag-action 帧的 motion 时 runtime
+    复核 onAction 实参一次 (logo 差分可能不含 tag-action 帧, 不覆盖此路径)。
+
 ### 8.6 live 集成现状 (gap) + 实现设计 (unblocked)
 - live frameProgress: node seek 用 progressSeekNodeSlotsLike_0x6C106C (简化, 仅 node 流);
   事件用 scanLayerActions (RuntimeSupport.cpp:1711) + preProgressPlayingTimelinesLike 推 `_pendingEvents`.

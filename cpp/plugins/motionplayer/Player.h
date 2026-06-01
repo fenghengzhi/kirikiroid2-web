@@ -773,6 +773,14 @@ namespace motion {
         // updateLayers and into the progress pass, restoring the binary's
         // two-pass split. Forward-only for step-1; reverse rewind is a TODO.
         void progressSeekNodeSlotsLike_0x6C106C(double clampedEvalTime);
+        // 砖5/洞3: faithful layer (motion["tag"]) event stream — bidirectional
+        // incremental cursor seek toward targetTime (= _clampedEvalTime), porting
+        // the layer-stream loops of Player_advanceRootAndNodes (0x6B6ADC) +
+        // Player_rewindRootAndNodes (0x6B9A3C): fires +1093(_speed)-gated
+        // align/sync (with frameTickCount/clampedEvalTime snapping) and ungated
+        // action -> onAction(void, actionName)/onSync(). Replaces the
+        // port-invented per-timeline scanLayerActions.
+        void seekLayerEventStreamLike_0x6B6ADC(double targetTime);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);
@@ -914,6 +922,13 @@ namespace motion {
         double _rootCurTime = 0.0;     // player+576: priority[cursor].time
         double _rootNextTime = 0.0;    // player+584: priority[cursor+1].time
         std::shared_ptr<const PSB::PSBDictionary> _rootContent; // player+616
+        // 砖5/洞3: which tagFrames the layer cursor is currently valid for.
+        // When _activeMotion->tagFrames changes (motion (re)loaded), the cursor
+        // self-resets to 0 inside seekLayerEventStreamLike_0x6B6ADC. (The binary
+        // resets via Player_reseekTimelineCursors on the firstFrame seed; this
+        // pointer-identity guard reproduces that reset without coupling to the
+        // motion-load site.)
+        const void *_layerStreamSource = nullptr;
         // === end M1 P1 ===
         tjs_int _maskMode = 0;                         // libkrkr2.so +1148
         std::uint32_t _colorWeightPacked = 0xFF808080u; // libkrkr2.so +1156

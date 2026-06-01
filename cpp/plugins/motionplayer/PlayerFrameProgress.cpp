@@ -5,6 +5,7 @@
 #include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
 #include "MotionTraceWeb.h"
 #include "ncbind.hpp"
+#include "psbfile/PSBValue.h" // 砖5/洞3: read motion["tag"] frame dicts
 
 using namespace motion::internal;
 
@@ -786,6 +787,154 @@ namespace internal {
         }
     }
 
+    // 砖5/洞3: faithful layer (motion["tag"]) event stream.
+    // Bidirectional incremental cursor seek toward targetTime (= _clampedEvalTime),
+    // porting the layer-stream loops of Player_advanceRootAndNodes (0x6B6ADC,
+    // forward) + Player_rewindRootAndNodes (0x6B9A3C, backward). On each crossed
+    // type==1 frame applies the advance/rewind gate (0x6B6DD8 / 0x6B9D0C):
+    //   if (+1093 _speed): align -> _motionCompleted=1, snap _clampedEvalTime &
+    //     _frameTickCount = curTime; sync -> _syncWaiting=1, same snap, onSync().
+    //   (ungated) content["action"] -> onAction(void, actionName)  [§8.7].
+    // NOTE vs binary: the binary runs this INSIDE advanceRootAndNodes, before the
+    // node walk, so an align/sync snap propagates to the same-frame node seek. The
+    // live port runs it once at end-of-frameProgress (see caller), so a snap takes
+    // effect on the NEXT frame's node seek — documented 1-frame lag; the
+    // cursor/event/gate semantics are otherwise 1:1.
+    void Player::seekLayerEventStreamLike_0x6B6ADC(double targetTime) {
+        if (!_activeMotion) {
+            return;
+        }
+        const auto &frames = _activeMotion->tagFrames;
+        if (!frames) {
+            _layerStreamSource = nullptr;
+            return;
+        }
+        const int count = static_cast<int>(frames->size());
+
+        // Self-reset the cursor when the tag stream changes (motion (re)loaded).
+        // Mirrors Player_reseekTimelineCursors resetting cursors on the firstFrame
+        // seed, without coupling to the motion-load site.
+        if (_layerStreamSource != static_cast<const void *>(frames.get())) {
+            _layerStreamSource = static_cast<const void *>(frames.get());
+            _layerFrameCursor = 0;
+        }
+
+        const auto frameAt =
+            [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
+            if (i < 0 || i >= count) {
+                return nullptr;
+            }
+            return std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
+        };
+        const auto numValue =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            if (!n) {
+                return 0.0;
+            }
+            switch (n->numberType) {
+                case PSB::PSBNumberType::Float:  return n->getValue<float>();
+                case PSB::PSBNumberType::Double: return n->getValue<double>();
+                case PSB::PSBNumberType::Int:
+                    return static_cast<double>(n->getValue<int>());
+                default:
+                    return static_cast<double>(n->getValue<tjs_int64>());
+            }
+        };
+        const auto frameTimeOf =
+            [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> double {
+            return f ? numValue((*f)["time"]) : 0.0;
+        };
+        const auto frameTypeOf =
+            [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> int {
+            if (!f) {
+                return 0;
+            }
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>((*f)["type"]);
+            return n ? n->getValue<int>() : 0;
+        };
+        const auto contentBoolOf =
+            [](const std::shared_ptr<PSB::PSBDictionary> &content,
+               const char *key) -> bool {
+            if (!content) {
+                return false;
+            }
+            auto v = (*content)[key];
+            if (auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
+                return n->getValue<int>() != 0;
+            }
+            if (auto b = std::dynamic_pointer_cast<PSB::PSBBool>(v)) {
+                return b->value;
+            }
+            return false;
+        };
+
+        // type==1 frame gate (advance/rewind form: +1093-only, NOT time-gated;
+        // action ungated). Aligned to 0x6B6DD8 (advance) / 0x6B9D0C (rewind).
+        const auto gate =
+            [&](const std::shared_ptr<PSB::PSBDictionary> &cf, double curTime) {
+            auto content = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*cf)["content"]);
+            if (!content) {
+                return;
+            }
+            if (_speed) {                                   // +1093 stop gate
+                if (contentBoolOf(content, "align")) {      // 0x6B6DD8
+                    _motionCompleted = true;
+                    _clampedEvalTime = curTime;
+                    _frameTickCount = curTime;
+                }
+                if (_speed && contentBoolOf(content, "sync")) { // 0x6B6E14
+                    _syncWaiting = true;
+                    _clampedEvalTime = curTime;
+                    _frameTickCount = curTime;
+                    _pendingEvents.push_back({1, {}, {}, false}); // onSync()
+                }
+            }
+            // 0x6B6E4C: content["action"] (ungated) -> onAction(void, actionName).
+            if (auto actionStr = std::dynamic_pointer_cast<PSB::PSBString>(
+                    (*content)["action"])) {
+                if (!actionStr->value.empty()) {
+                    detail::MotionEvent ev;
+                    ev.type = 0;
+                    ev.param2 = actionStr->value;  // record.b = action name
+                    ev.voidParam1 = true;          // record.a = void [§8.7]
+                    _pendingEvents.push_back(ev);
+                }
+            }
+        };
+
+        // Derive curTime/nextTime from the (persistent) cursor.
+        _layerCurTime = frameTimeOf(frameAt(_layerFrameCursor));
+        _layerNextTime = frameTimeOf(frameAt(_layerFrameCursor + 1));
+
+        // Forward advance (0x6B6B80): while cursor<count-2 && target>=nextTime.
+        while (_layerFrameCursor < count - 2) {
+            if (targetTime < _layerNextTime) {
+                break;
+            }
+            ++_layerFrameCursor;
+            auto cf = frameAt(_layerFrameCursor);
+            _layerCurTime = frameTimeOf(cf);
+            _layerNextTime = frameTimeOf(frameAt(_layerFrameCursor + 1));
+            if (frameTypeOf(cf) == 1) {
+                gate(cf, _layerCurTime);
+            }
+        }
+        // Backward rewind (0x6B9AE8): while count!=0 && curTime>target.
+        // (cursor>0 guard: the binary relies on tag[0].time<=target; the guard
+        // prevents underflow on data where that does not hold.)
+        while (count != 0 && _layerCurTime > targetTime && _layerFrameCursor > 0) {
+            --_layerFrameCursor;
+            auto cf = frameAt(_layerFrameCursor);
+            _layerCurTime = frameTimeOf(cf);
+            _layerNextTime = frameTimeOf(frameAt(_layerFrameCursor + 1));
+            if (frameTypeOf(cf) == 1) {
+                gate(cf, _layerCurTime);
+            }
+        }
+    }
+
     void Player::frameProgress(double dt) {
         // Aligned to libkrkr2.so Player_progress_inner (0x6C106C):
         // _speed is a bool flag (play/pause). When false, skip progress entirely.
@@ -837,8 +986,11 @@ namespace internal {
 
         // Aligned to Player_preProgress (0x671764): timeline advancement
         // happens before controller stepping inside Player_progress.
-        std::unordered_map<std::string, double> prevTimes;
-        preProgressPlayingTimelinesLike_0x671764(actualDelta, &prevTimes);
+        // 砖5/洞3: prevTimes was only consumed by the removed per-timeline
+        // scanLayerActions; the layer events now come from the motion["tag"]
+        // cursor (seekLayerEventStreamLike_0x6B6ADC), so no prevTimes snapshot is
+        // needed here.
+        preProgressPlayingTimelinesLike_0x671764(actualDelta, nullptr);
 
         double remainingControllerStep = actualDelta;
         const auto stepControllerBucket =
@@ -1014,21 +1166,16 @@ namespace internal {
             progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
         }
 
-        // Scan PSB layers for action/sync events crossed this frame
-        // Aligned to libkrkr2.so: updateLayers queues events during evaluation
-        if(_activeMotion && actualDelta > 0) {
-            for(const auto &[name, prev] : prevTimes) {
-                const auto stateIt = _timelines.find(name);
-                if(stateIt == _timelines.end()) {
-                    continue;
-                }
-                if(stateIt->second.currentTime > prev) {
-                    detail::scanLayerActions(*_activeMotion,
-                                             prev, stateIt->second.currentTime,
-                                             _pendingEvents);
-                }
-            }
-        }
+        // 砖5/洞3: faithful layer (motion["tag"]) event stream — replaces the
+        // port-invented per-timeline detail::scanLayerActions (which scanned
+        // motion["layer"], the node tree, the WRONG source). The binary's global
+        // onAction/onSync come from the layer stream Player+1072 = motion["tag"]
+        // walked by Player_advanceRootAndNodes/rewindRootAndNodes; this seeks that
+        // stream's cursor to _clampedEvalTime, firing +1093-gated align/sync (with
+        // snapping) + ungated action. (Per-node frame actions — node mask 0x40000,
+        // sub_6B638C from the node seek — remain a 洞2 follow-up; this commit
+        // corrects only the global layer-stream source.)
+        seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
 
         _allplaying = !_playingTimelineLabels.empty();
         _syncActive = _syncWaiting && _allplaying;
@@ -1128,8 +1275,13 @@ namespace internal {
             for(const auto &ev : self->_pendingEvents) {
                 try {
                     if(ev.type == 0) {
-                        // onAction(param1, param2)
-                        tTJSVariant p1(detail::widen(ev.param1));
+                        // onAction(param1, param2). 砖5/洞3: the layer (tag)
+                        // stream passes a void param1 (record.a, §8.7); the
+                        // legacy per-node path uses a string param1.
+                        tTJSVariant p1;
+                        if(!ev.voidParam1) {
+                            p1 = tTJSVariant(detail::widen(ev.param1));
+                        }
                         tTJSVariant p2(detail::widen(ev.param2));
                         tTJSVariant *args[] = { &p1, &p2 };
                         objthis->FuncCall(0, TJS_W("onAction"),
