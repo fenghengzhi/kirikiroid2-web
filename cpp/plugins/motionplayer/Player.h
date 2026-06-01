@@ -773,6 +773,11 @@ namespace motion {
         // updateLayers and into the progress pass, restoring the binary's
         // two-pass split. Forward-only for step-1; reverse rewind is a TODO.
         void progressSeekNodeSlotsLike_0x6C106C(double clampedEvalTime);
+        // 砖5/洞1: Player_preProgressDirtyNodes (0x6B6878) — progress_inner's first
+        // step (0x6C10AC): per-node "modified" emoteEdit-dict check -> timeline
+        // rebuild. Inert in the web port (no modified-setter); ported for
+        // call-chain restoration. See PlayerUpdateLayerEval.cpp.
+        void preProgressDirtyNodesLike_0x6B6878();
         // 砖5/洞3: faithful layer (motion["tag"]) event stream — bidirectional
         // incremental cursor seek toward targetTime (= _clampedEvalTime), porting
         // the layer-stream loops of Player_advanceRootAndNodes (0x6B6ADC) +

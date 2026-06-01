@@ -946,6 +946,11 @@ namespace internal {
 
         _evalResultValues.clear();
 
+        // 砖5/洞1: progress_inner's first step is Player_preProgressDirtyNodes
+        // (0x6C10AC), before the firstFrame/cursor logic. Inert in the web port
+        // (no "modified"-setter) but ported for call-chain restoration.
+        preProgressDirtyNodesLike_0x6B6878();
+
         // Aligned to Player_progress_inner (0x6C106C): player+480 is a
         // one-shot first-frame gate. While it is set, progress records the
         // incoming delta but does not advance player+1120/player+456.

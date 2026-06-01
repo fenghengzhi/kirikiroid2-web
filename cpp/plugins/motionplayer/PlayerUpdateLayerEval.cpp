@@ -534,6 +534,43 @@ namespace motion {
         }
     }
 
+    // 砖5/洞1: Player_preProgressDirtyNodes (0x6B6878) — progress_inner's first
+    // step (called at 0x6C10AC, before the firstFrame/cursor logic). For each
+    // node (deque idx >= 1) whose forceVisible (node+1996) != 0 and whose
+    // emoteEdit dict (node+1980) has "modified" set: clear the flag and rebuild
+    // the node's two timeline slots via initializeNodeTimelineSlotsLike_0x6B64AC
+    // (= Player_initNodeTimeline_guess 0x6B64AC at 0x6B6A1C).
+    //
+    // INERT IN THE WEB PORT: no emote direct-edit path sets "modified" on the
+    // emoteEdit dict, so no node is ever rebuilt here. Ported for call-chain
+    // restoration (CLAUDE.md): this is progress_inner's documented first call,
+    // previously absent from the live path. The binary's clear via
+    // PropSet(512,"modified",0) (0x6B6A08) is unreachable while "modified" is
+    // never set, and the live PSB dicts are read-only, so the clear is omitted;
+    // if a modified-setter is later ported, the clear MUST be added here or the
+    // node would be rebuilt every frame.
+    void Player::preProgressDirtyNodesLike_0x6B6878() {
+        for (size_t i = 1; i < _nodes.size(); ++i) {
+            detail::MotionNode &node = _nodes[i];
+            if (node.forceVisible == 0 || !node.emoteEditDict) { // node+1996/+1980
+                continue;
+            }
+            // sub_6636D4(emoteEdit, "modified") — 0x6B69C0.
+            const bool modified =
+                psbDictionaryNumber(node.emoteEditDict, "modified").value_or(0.0)
+                    != 0.0;
+            if (!modified) {
+                continue;
+            }
+            // Player_initNodeTimeline_guess(player, node) — 0x6B6A1C.
+            const auto frames = psbDictionaryList(node.psbNode, "frameList");
+            const NodeTransformOrder transformOrder =
+                readNodeTransformOrder(node.psbNode);
+            initializeNodeTimelineSlotsLike_0x6B64AC(
+                node, frames, _clampedEvalTime, transformOrder);
+        }
+    }
+
     // Phase 1: Camera velocity, root evaluation, variable interpolation
     void Player::updateLayersPhase1_PreLoop(double currentTime) {
         auto &nodes = _nodes;
