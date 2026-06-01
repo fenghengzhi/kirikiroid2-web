@@ -610,6 +610,11 @@ int main(int argc, char *argv[]) {
         .help("root.accum.pos offset 'X,Y' — typically (player.x, player.y). "
               "For m2logo.mtn via startup.tjs this is '960,540'.")
         .default_value(std::string{"0,0"});
+    program.add_argument("--dump-tags")
+        .help("dump motion[\"tag\"] (layer event stream) frames "
+              "(time/type/content keys) then exit — Stage 0 fixture probe")
+        .default_value(false)
+        .implicit_value(true);
 
     try {
         program.parse_args(argc, argv);
@@ -641,6 +646,99 @@ int main(int argc, char *argv[]) {
         spdlog::error("failed to load motion snapshot (wrong seed?): {}",
                       inputPath.string());
         return 2;
+    }
+
+    // Stage 0 fixture probe: dump motion["tag"] event stream and exit.
+    // tagFrames = snapshot->tagFrames (= Player+1072, motion["tag"]); each
+    // element is a frame dict {time, type, content{align,sync,action,...}}.
+    // We report which frames are type==1 and whether content carries
+    // align/sync/action — i.e. whether this fixture exercises the
+    // onAction/onSync layer-event path (Stage A, commit 7edbd8f).
+    if(program.get<bool>("--dump-tags")) {
+        // Diagnostic: dump root-level keys so we can tell whether a top-level
+        // "tag" key exists at all (vs. tag living nested under a clip/layer).
+        {
+            std::string rootKeys;
+            for(const auto &kv : *snapshot->root) {
+                if(!rootKeys.empty()) rootKeys += ",";
+                rootKeys += kv.first;
+            }
+            spdlog::info("root keys: {{{}}}", rootKeys);
+        }
+        const auto &frames = snapshot->tagFrames;
+        if(!frames) {
+            spdlog::warn("motion has NO top-level \"tag\" stream "
+                         "(snapshot->tagFrames == null)");
+            return 0;
+        }
+        const auto numOf =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            if(!n) return 0.0;
+            switch(n->numberType) {
+                case PSB::PSBNumberType::Float:  return n->getValue<float>();
+                case PSB::PSBNumberType::Double: return n->getValue<double>();
+                case PSB::PSBNumberType::Int:
+                    return static_cast<double>(n->getValue<int>());
+                default:
+                    return static_cast<double>(n->getValue<tjs_int64>());
+            }
+        };
+        const int count = static_cast<int>(frames->size());
+        spdlog::info("tag stream: {} frame(s)", count);
+        int type1 = 0, withAlign = 0, withSync = 0, withAction = 0;
+        for(int i = 0; i < count; ++i) {
+            auto f = std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
+            if(!f) {
+                spdlog::info("  [{}] <non-dict frame>", i);
+                continue;
+            }
+            const double time = numOf((*f)["time"]);
+            const int type = static_cast<int>(numOf((*f)["type"]));
+            auto content =
+                std::dynamic_pointer_cast<PSB::PSBDictionary>((*f)["content"]);
+            std::string keys;
+            bool hasAlign = false, hasSync = false, hasAction = false;
+            std::string actionVal;
+            if(content) {
+                for(const auto &kv : *content) {
+                    if(!keys.empty()) keys += ",";
+                    keys += kv.first;
+                    if(kv.first == "align") hasAlign = true;
+                    if(kv.first == "sync") hasSync = true;
+                    if(kv.first == "action") {
+                        hasAction = true;
+                        if(auto s = std::dynamic_pointer_cast<PSB::PSBString>(
+                               kv.second))
+                            actionVal = s->value;
+                    }
+                }
+            }
+            if(type == 1) ++type1;
+            if(hasAlign) ++withAlign;
+            if(hasSync) ++withSync;
+            if(hasAction) ++withAction;
+            // Only print frames that are interesting (type==1 or carry an
+            // event key) to keep the probe readable on large streams.
+            if(type == 1 || hasAlign || hasSync || hasAction) {
+                spdlog::info(
+                    "  [{}] time={} type={} content={{{}}}{}{}{}{}",
+                    i, time, type, keys,
+                    hasAlign ? " ALIGN" : "",
+                    hasSync ? " SYNC" : "",
+                    hasAction ? " ACTION" : "",
+                    hasAction ? (" action=\"" + actionVal + "\"") : "");
+            }
+        }
+        spdlog::info(
+            "tag summary: total={} type1={} align={} sync={} action={}",
+            count, type1, withAlign, withSync, withAction);
+        if(type1 == 0 && withAlign == 0 && withSync == 0 && withAction == 0) {
+            spdlog::warn("FIXTURE DOES NOT EXERCISE onAction/onSync path");
+        } else {
+            spdlog::info("FIXTURE EXERCISES event path (see frames above)");
+        }
+        return 0;
     }
 
     const std::string clipLabel = program.get<std::string>("--clip");
