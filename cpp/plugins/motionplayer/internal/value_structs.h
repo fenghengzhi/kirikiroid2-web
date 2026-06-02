@@ -292,37 +292,36 @@ namespace motion::detail {
         // --- current-frame MotionNode snapshot ---
         // (init: Player_HM3_initValueFromNode @0x699510, reverse:
         //  sub_6997F0 @0x6997F0)
-        int nodeType = 0;                           // binary V+0   from Node+28
-        uint32_t _pad_4 = 0;                        // align
-        DispatchRef dispatch_8;                     // binary V+8   release in dtor
-        std::array<uint8_t, 16> _opaque_16_31 = {}; // binary V+16  unknown gap
-
-        int field_28 = 0;                           // binary V+28  from Node+340
-        std::array<uint8_t, 12> _opaque_32_43 = {}; // binary V+32  unknown gap
-
-        DispatchRef dispatch_44;                    // binary V+44  Node+356, refcount++, release in dtor
-        int field_52 = 0;                           // binary V+52  from Node+364
-        std::array<uint8_t, 8> _opaque_56_63 = {};  // align
-
-        std::array<uint8_t, 16> oword_64 = {};      // binary V+64  Node+376
-        int sourceRect_x = 0;                       // binary V+80  Player+100
-        int sourceRect_y = 0;                       // binary V+84  Player+104
-        int sourceRect_w = 0;                       // binary V+88  Player+108
-        int sourceRect_h = 0;                       // binary V+92  Player+112
-        int field_96 = 0;                           // binary V+96  Node+408
-        std::array<uint8_t, 4> _pad_100 = {};       // align
-
-        std::array<uint8_t, 16> oword_104 = {};     // binary V+104 Player+1512
-        int64_t qword_120 = 0;                      // binary V+120 Player+1528
-        uint8_t skipFlag_128 = 0;                   // binary V+128 Node+(536·frame)+344
-        uint8_t flag_129 = 0;                       // binary V+129 Player+1508
-        std::array<uint8_t, 6> _pad_130 = {};       // align
-        std::array<uint8_t, 16> oword_136 = {};     // binary V+136 Player+1544
-
-        // long double — 16B on ARM64 libstdc++, 8B on Emscripten libc++.
-        // Kept opaque to avoid platform-dependent slot sizing in the struct.
-        std::array<uint8_t, 16> ldouble_152 = {};   // binary V+152 Player+1560
-        int64_t qword_168 = 0;                      // binary V+168 Player+1536
+        // Semantic field set (HM3_initValueFromNode @0x699510 byte-verified):
+        // the snapshot copies the node's already-interpolated state (written by
+        // evaluateTimeline in resetMotionState loop1) + active ClipSlot fields.
+        // (Port models these by value — node.interpolatedCache + node.activeSlot()
+        // — so no node+1512 byte-mirror is needed; offsets are documentation.)
+        int nodeType = 0;                  // V+0   ← node+28
+        DispatchRef dispatch_8;            // V+8   (dtor-released; not init-written)
+        int contentMask = 0;              // V+28  ← active ClipSlot "mask" (slot+340)
+        uint8_t doneFlag = 0;             // V+32  ← active ClipSlot done (slot+344)
+        DispatchRef srcDispatch_44;       // V+44  ← active ClipSlot "src" dispatch (slot+356)
+        int blendMode = 16;               // V+52  ← active ClipSlot "bm" (slot+364)
+        double ox = 0.0;                  // V+64  ← active ClipSlot ox (slot+376)
+        double oy = 0.0;                  // V+72  ← active ClipSlot oy
+        std::array<std::uint32_t, 4> packedColors{   // V+80 ← interp RGBA (node+100..112)
+            0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u};
+        int opacity = 255;                // V+96  ← interp opacity 0-255 (node+1576)
+        double coordX = 0.0;              // V+104 ← interp x (node+1512)
+        double coordY = 0.0;              // V+112 ← interp y (node+1520)
+        double coordZ = 0.0;              // V+120 ← interp z (node+1528)
+        uint8_t flipX = 0;                // V+128 ← interp flipX (node+1507)
+        uint8_t flipY = 0;                // V+129 ← interp flipY (node+1508)
+        double angle = 0.0;               // V+136 ← interp angle (node+1536)
+        double scaleX = 1.0;              // V+144 ← interp scaleX (node+1544)
+        double scaleY = 1.0;              // V+152 ← interp scaleY (node+1552)
+        double slantX = 0.0;              // V+160 ← interp slantX (node+1560)
+        double slantY = 0.0;              // V+168 ← interp slantY (node+1568)
+        std::vector<float> meshControlPoints; // V+568 ← node+2024 (meshType==1)
+        // type-4 particle interpolation (node+2224..2288 / V+600..664): the
+        // port's evaluateTimeline type-4 branch is unported, so the port has no
+        // source for these — they stay default. DEFERRED.
 
         // --- multi-slot region (dtor-referenced) ---
         ttstr ttstr_188;                            // binary V+188 dtor 0x6DD0F8

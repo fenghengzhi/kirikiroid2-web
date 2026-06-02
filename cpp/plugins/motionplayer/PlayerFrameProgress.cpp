@@ -1163,18 +1163,43 @@ namespace internal {
     void Player::hm3InitValueFromNodeLike_0x699510(
         const detail::MotionNode &node, detail::PerNodeLayerState &v) const {
         // libkrkr2.so Player_HM3_initValueFromNode @0x699510 (a1=node, a2=V).
-        // PARTIAL: only V+0 (nodeType ← node+28) maps to an existing MotionNode
-        // member. The binary additionally copies, by raw byte offset:
-        //   type-3 branch: V+136 ← node+1912 (dispatch);
-        //   type-4 branch: V+168 ← node+2296, V+150..162 ← node+2224..2288;
-        //   common: V+44 dispatch ← slot+356, V+28 ← slot+340, V+52 ← slot+364,
-        //     V+64 ← slot+376, V+80..92 sourceRect ← node+100..112,
-        //     V+104 ← node+1512, V+120 ← node+1528, V+96 ← node+1576,
-        //     V+128 ← node+1507, V+129 ← node+1508, V+136 ← node+1536,
-        //     V+144 ← node+1544, V+80(double) ← node+1560, skipFlag ← slot+344.
-        // These offsets are not named MotionNode/ClipSlot members in the port;
-        // mapping each needs per-offset RE and is DEFERRED (HM3 is unread).
-        v.nodeType = node.nodeType;   // V+0 ← node+28
+        // The binary snapshots the node's ALREADY-INTERPOLATED state — written by
+        // Player_evaluateTimeline @0x699AE4 in resetMotionState loop1, into the
+        // node+1512.. byte-mirror — plus the active ClipSlot's raw fields. The
+        // port holds the interpolated values in node.interpolatedCache and the
+        // slot fields in node.activeSlot(), so we copy them semantically (the
+        // node+1512 byte mirror is an ABI detail the port does not need).
+        v.nodeType = node.nodeType;              // V+0   ← node+28
+        const auto &c = node.interpolatedCache;
+        const auto &slot = node.activeSlot();
+        // active ClipSlot fields (slot = node+320+536*activeSlotIndex):
+        v.doneFlag = slot.done ? 1 : 0;          // V+32  ← slot+344
+        v.blendMode = slot.blendMode;            // V+52  ← slot+364
+        v.ox = slot.ox;                          // V+64  ← slot+376
+        v.oy = slot.oy;                          // V+72
+        // interpolated transform state (evaluateTimeline outputs):
+        v.packedColors = c.packedColors;         // V+80  ← node+100..112
+        v.opacity = static_cast<int>(std::lround(c.opacity * 255.0)); // V+96 ← node+1576 (0-255 round)
+        v.coordX = c.x;                          // V+104 ← node+1512
+        v.coordY = c.y;                          // V+112 ← node+1520
+        v.coordZ = c.z;                          // V+120 ← node+1528
+        v.flipX = c.flipX ? 1 : 0;               // V+128 ← node+1507
+        v.flipY = c.flipY ? 1 : 0;               // V+129 ← node+1508
+        v.angle = c.angle;                       // V+136 ← node+1536
+        v.scaleX = c.scaleX;                     // V+144 ← node+1544
+        v.scaleY = c.scaleY;                     // V+152 ← node+1552
+        v.slantX = c.slantX;                     // V+160 ← node+1560
+        v.slantY = c.slantY;                     // V+168 ← node+1568
+        // mesh control points (meshType==1; copied by sub_6996E8 from node+2024):
+        if(node.meshType == 1) {
+            v.meshControlPoints = node.meshControlPoints; // V+568 ← node+2024
+        }
+        // DEFERRED (no clean port source): V+28 contentMask (slot+340 "mask" — the
+        //   port's ClipSlot does not retain the frame mask), V+44 srcDispatch
+        //   (port models src as std::string, not an iTJSDispatch2 handle), the
+        //   V+544/V+672 child-player / particle-array dispatch snapshots
+        //   (node+1912 / node+2296), and the type-4 particle interpolation block
+        //   (node+2224..2288 — evaluateTimeline type-4 branch unported).
     }
 
     void Player::frameProgress(double dt) {

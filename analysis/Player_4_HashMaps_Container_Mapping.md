@@ -211,6 +211,13 @@
 - 🔑 **关键定性**：`_perNodeLayerStateMap`(HM3) **无任何 reader**（只 declare + clear，从不读）。⇒ loop3 是 **dead-data**（填了没人读），与 brick 1-5 喂 getVariable（真 reader）本质不同。完整 25-字段 snapshot 是大 RE 工程且产物不可观察、不可验证。**本 brick 只落地结构 + nodeType，重 RE 留待 HM3 出现 consumer 时再投入**。
 - **验证**：web+guest 构建 + logo diff 0 mismatch（loop3 live 运行于 logo PlayFlagJoin，填 unread map，未回归）。
 
+## brick 6.5 — HM3 24-字段 RE + 全 snapshot（本对话）
+ida-deep-analyzer 逆向 HM3_initValueFromNode 每个源字段语义 + 调用链。**关键发现**：HM3 快照的是 node **已插值好的状态**（由 resetMotionState **loop1** 的 `Player_evaluateTimeline` @0x699AE4 写入 node+1512.. 字节镜像），不是原始帧。port 把这些值放在 `node.interpolatedCache` + `node.activeSlot()`（语义对，非字节镜像）。
+- ✅ **20/24 字段实装**：`hm3InitValueFromNodeLike_0x699510` 从 interpolatedCache + activeSlot 拷：nodeType / done / blendMode / ox,oy / packedColors / opacity(×255 round) / coordX,Y,Z / flipX,Y / angle / scaleX,Y / slantX,Y / meshControlPoints(meshType==1)。
+- ✅ **PerNodeLayerState 重构**：把误标的 byte-grouped 字段（sourceRect_x/y/w/h 实为 packedColor、oword_104 实为 coord、oword_136/ldouble_152 误分组）改为语义字段（agent 勘误：V+136 angle / V+144 scaleX / V+152 scaleY / V+160 slantX / V+168 slantY；V+96 源是 node+1576 插值 opacity 非 Node+408）。
+- ⚠️ **4 字段 DEFERRED（无 port 源）**：V+28 contentMask（ClipSlot 不留 frame mask）、V+44 srcDispatch（port src 建模为 std::string 非 dispatch）、V+544/V+672 child-player/particle-array dispatch（node+1912/2296）、type-4 粒子插值块 node+2224-2288（evaluateTimeline type-4 分支未移植，port 无源）。
+- **验证**：web+guest 构建 + logo diff 0 mismatch。仍是 dead-data（HM3 无 reader），但快照现在忠实复刻可获取的 20 字段。
+
 ### 忠实 brick 路线
 1. ✅ **基地重构（brick 1）DONE（2026-06-02）**：`VariableLabelScope` 补全为 {cascadeKey, activeSlotCursor, value, labelName, VarTrackSlot slot[2]}（slot 含 +20 gateFlag）；删死 struct `VariableLabelEntry`；Player 字段 `vector<VariableLabelEntry> _variableLabelEntries` → `deque<VariableLabelScope> _variableLabelScopes`（容器形态对齐 deque）；`initVariables` 改产出 binary 一致 cascadeKey=`scope+"::"+label`。**provably inert**（_variableLabelScopes 零 reader）→ web debug build 通过、logo diff 不受影响（构造上）。改动文件：value_structs.h / player_containers.h / RuntimeSupport.h / Player.h / PlayerMotionLoad.cpp。
 2. **stream③（brick 2）⚠️ 阻塞于数据模型矛盾**：var-track advance（sub_6B786C step / sub_6B7A70 merge）。
