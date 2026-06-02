@@ -201,7 +201,15 @@
   HM1-join = key 有"::"/"/"→ HM1.writeVal(node+48) : HM2(node+16)。**移除 port 发明的 PSB frames/ranges fallback**（R0-1 READ 路径 RESOLVED）。
 - 结构事实：scope-list = var-track cascadeKeys = HM4 keys，故 inScope 键走 HM1（非 HM4），值由 bindParameterValue 供（与 loop2 HM4 同值）。忠实复刻。
 - **验证**：web+guest 构建 + logo diff 0 mismatch（移除 PSB fallback + 加 router 未回归 logo）。scope-gated 变量读路径打通（HM1）；对现有内容仍 inert（无 variable）。
-- **仍 DEFERRED**：bindParameterValue 内 sub_697D34 chainDispatches + RenderItem/animator 更新；resetMotionState loop1(node evaluateTimeline)/loop3(HM3, HM3_initValueFromNode 0x699510)。
+- **仍 DEFERRED**：bindParameterValue 内 sub_697D34 chainDispatches + RenderItem/animator 更新；resetMotionState loop1(node evaluateTimeline)。
+
+## brick 6 — resetMotionState loop3 / HM3 结构（本对话）
+本对话 decompile 0x699510 (HM3_initValueFromNode) 验证（BLOCKING）。
+- ✅ **loop3 结构 DONE**：resetMotionState 内加 loop3 = 每 node(idx≥1) `nodeType ∈ {0,2,3,4,7,8}`(mask 0x19D) → `buildNodePathKeyLike_0x6B5C1C`(已有) → `_perNodeLayerStateMap[key]` upsert → `hm3InitValueFromNodeLike_0x699510`。
+- ⚠️ **HM3 snapshot PARTIAL（重要）**：`hm3InitValueFromNodeLike_0x699510` 只复刻 **V+0 nodeType ← node+28**（唯一映射到现有 MotionNode 成员的字段）。其余 ~24 个字段（V+28/44/52/64/80../128.. ← slot+340/356/364/376、node+100-112/1392/1507/1508/1512/1528/1536/1544/1560/1576/1912/2000/2024/2224-2296）读 raw node 字节偏移，**port MotionNode 未暴露为命名成员**；逐个映射需 per-offset RE，DEFERRED。
+- ⚠️ **node+46 门 DEFERRED**：loop3 二进制 gate 含 `node+46`(未在 port MotionNode 命名)，本端只用 type-mask 门（对 dead-data 无可观察差异）。
+- 🔑 **关键定性**：`_perNodeLayerStateMap`(HM3) **无任何 reader**（只 declare + clear，从不读）。⇒ loop3 是 **dead-data**（填了没人读），与 brick 1-5 喂 getVariable（真 reader）本质不同。完整 25-字段 snapshot 是大 RE 工程且产物不可观察、不可验证。**本 brick 只落地结构 + nodeType，重 RE 留待 HM3 出现 consumer 时再投入**。
+- **验证**：web+guest 构建 + logo diff 0 mismatch（loop3 live 运行于 logo PlayFlagJoin，填 unread map，未回归）。
 
 ### 忠实 brick 路线
 1. ✅ **基地重构（brick 1）DONE（2026-06-02）**：`VariableLabelScope` 补全为 {cascadeKey, activeSlotCursor, value, labelName, VarTrackSlot slot[2]}（slot 含 +20 gateFlag）；删死 struct `VariableLabelEntry`；Player 字段 `vector<VariableLabelEntry> _variableLabelEntries` → `deque<VariableLabelScope> _variableLabelScopes`（容器形态对齐 deque）；`initVariables` 改产出 binary 一致 cascadeKey=`scope+"::"+label`。**provably inert**（_variableLabelScopes 零 reader）→ web debug build 通过、logo diff 不受影响（构造上）。改动文件：value_structs.h / player_containers.h / RuntimeSupport.h / Player.h / PlayerMotionLoad.cpp。

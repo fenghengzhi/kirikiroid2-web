@@ -1142,8 +1142,39 @@ namespace internal {
                 _variableSnapshotMap[item.cascadeKey] = item.value;
             }
         }
-        // loop3 (0x6B2D68: HM3 perNodeLayerState via buildNodePathKey +
-        // Player_HM3_initValueFromNode @0x699510, both unported) — DEFERRED.
+        // loop3 (0x6B2D68): HM3 per-node-path layer state. STRUCTURE ported;
+        // snapshot PARTIAL (see hm3InitValueFromNodeLike). Gate: binary tests
+        // node+46 (DEFERRED — not exposed in port MotionNode) AND nodeType ∈
+        // {0,2,3,4,7,8} (mask 0x19D). key = buildNodePathKey (Player+24 path-key
+        // space); HM3.upsert → _perNodeLayerStateMap. (Unread map — inert.)
+        for(size_t k = 1; k < _nodes.size(); ++k) {
+            const auto &node = _nodes[k];
+            const int t = node.nodeType;
+            if(t >= 0 && t <= 8 && ((1 << t) & 0x19D) != 0) {
+                const ttstr key = detail::widen(
+                    detail::buildNodePathKeyLike_0x6B5C1C(
+                        _nodes, static_cast<int>(k)));
+                hm3InitValueFromNodeLike_0x699510(
+                    node, _perNodeLayerStateMap[key]);
+            }
+        }
+    }
+
+    void Player::hm3InitValueFromNodeLike_0x699510(
+        const detail::MotionNode &node, detail::PerNodeLayerState &v) const {
+        // libkrkr2.so Player_HM3_initValueFromNode @0x699510 (a1=node, a2=V).
+        // PARTIAL: only V+0 (nodeType ← node+28) maps to an existing MotionNode
+        // member. The binary additionally copies, by raw byte offset:
+        //   type-3 branch: V+136 ← node+1912 (dispatch);
+        //   type-4 branch: V+168 ← node+2296, V+150..162 ← node+2224..2288;
+        //   common: V+44 dispatch ← slot+356, V+28 ← slot+340, V+52 ← slot+364,
+        //     V+64 ← slot+376, V+80..92 sourceRect ← node+100..112,
+        //     V+104 ← node+1512, V+120 ← node+1528, V+96 ← node+1576,
+        //     V+128 ← node+1507, V+129 ← node+1508, V+136 ← node+1536,
+        //     V+144 ← node+1544, V+80(double) ← node+1560, skipFlag ← slot+344.
+        // These offsets are not named MotionNode/ClipSlot members in the port;
+        // mapping each needs per-offset RE and is DEFERRED (HM3 is unread).
+        v.nodeType = node.nodeType;   // V+0 ← node+28
     }
 
     void Player::frameProgress(double dt) {

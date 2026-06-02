@@ -818,6 +818,13 @@ namespace motion {
         // and loop3 (HM3 perNodeLayerState via HM3_initValueFromNode @0x699510,
         // unported) are DEFERRED.
         void resetMotionStateLike_0x6B2D3C();
+        // libkrkr2.so Player_HM3_initValueFromNode @0x699510 — snapshots node /
+        // active-slot fields into a PerNodeLayerState (HM3 value). PARTIAL: only
+        // nodeType maps to an existing MotionNode member; the other ~24 fields
+        // read raw node byte offsets the port does not expose and are DEFERRED
+        // (HM3 / _perNodeLayerStateMap has no consumer, so the snapshot is unread).
+        void hm3InitValueFromNodeLike_0x699510(
+            const detail::MotionNode &node, detail::PerNodeLayerState &v) const;
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);
