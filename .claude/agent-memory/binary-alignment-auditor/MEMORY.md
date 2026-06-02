@@ -1,3 +1,4 @@
+- [eye/deque#4 blink 切片对齐](project_eye_deque4_blink_slice.md) — 2026-06-03 ✅逐行对齐: ctor@0x662968/step@0x663BDC/RNG@0x9F1A08+0x9F17D0/buildEyeControl@0x66C77C 全 1:1; remap float分子÷double除数, lowerMask 0x7FFFFFFE, HM6={type,index}; open=sub_661F7C resolver(不阻塞 blink)
 - [砖5洞3 layer event stream](project_layer_event_stream_brick5_hole3.md) — 2026-06-01: seekLayerEventStream cursor/gate/event 1:1 ✅; 但调用点架构错(end-of-frameProgress vs binary INSIDE advance/rewind per-seek)+reseek(0x6B86C8)layer门控完全缺失=🔧
 - [砖5洞2 per-node action param1=label串](project_pernode_action_param1_object.md) — 2026-06-01: ✅纠错 param1 是 *(node+0)="label" tvtString(非dispatch对象), 本地widen(layerName)忠实; 参数化节点(node+8!=0)走advanceNodeFrames+continue不推action=本地原对所有node推=真bug(已修gate parameterEntry==null); 洞1 preProgressDirtyNodes inert移植忠实
 - [Player phase2 偏差清单](project_player_updateLayers_phase2_deviations.md) — 2026-04-17 updateLayersPhase2_MainLoop vs sub_6BB33C 架构级/越权/结构级偏差汇总
