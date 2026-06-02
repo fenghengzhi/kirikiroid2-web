@@ -609,11 +609,25 @@ namespace motion {
             const float step = std::fmin(dt, 1.1f);
             _dirty = false;
 
-            // 6 active deques iterated by step functions (per binary):
-            //   #4 sub_663BDC, #5 sub_665600, #6 sub_666068, #8 sub_666BF8,
-            //   #9 sub_668470, #10 inline table lookup.
-            // PLATFORM_BOUNDARY: step functions stubbed; deques are empty until
-            //   setVariable populates them with binary-typed POD elements (P2).
+            // 6 active deques iterated by step functions (per binary
+            //   EmoteEngine_progress @0x67D01C). Each is a deque OF POINTERS:
+            //   element = { EmoteVarController* ctl; ttstr key } (e.g. #4 elem
+            //   16B = ptr@0 + ttstr@8; #6/#8 24B add a 2nd/3rd ttstr key). The
+            //   loop calls the per-controller step then upserts the result into
+            //   HM7 keyed by elem's ttstr:
+            //     #4 sub_663BDC, #5 sub_665600, #6 sub_666068, #8 EmoteVarController_step,
+            //     #9 sub_668470, #10 inline curve lookup.
+            // POPULATION (corrected 2026-06-03, was wrongly "setVariable fills
+            //   these"): setVariable @0x671228 does NOT push elements — it hash-
+            //   looks-up an EXISTING HM@+1384 entry, reads its type tag (+16) and
+            //   pre-stored index (+20), and for type 4 indexes into this already-
+            //   built deque to drive the controller (sub_6638B0). The initial
+            //   builder (operator new controller + push {ctl,key} + register
+            //   HM entry {type,index}) lives in the EmoteObject_init motion-load
+            //   path and is NOT YET PORTED, so the deques stay empty (step inert).
+            //   sub_663FC8 deserializes a controller from a PSB dict; sub_678044's
+            //   per-category children (sub_678804 "eye" etc.) only RELOAD saved
+            //   state into already-built controllers — also not the builder.
             if (!_stateMachineDeque4.empty())   { STUB_WARN(stepDeque4_sub_663BDC); }
             if (!_stateMachineDeque5.empty())   { STUB_WARN(stepDeque5_sub_665600); }
             if (!_compositeVarDeque6.empty())   { STUB_WARN(stepDeque6_sub_666068); }
