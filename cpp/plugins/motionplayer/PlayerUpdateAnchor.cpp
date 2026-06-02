@@ -13,7 +13,12 @@ namespace motion {
             auto &an = nodes[ai];
             if (an.nodeType != 10 || !an.accumulated.active) continue;
             _needsInternalAssignImages = true;
-            if (_frameLastTime == 0.0) {
+            // 0x6C06E8 gate: binary tests Player+592 == _deltaTime (NOT
+            // _frameLastTime/Player+904). It also gates on `!*(Player+612)` (a
+            // second flag not yet identified in the port) — that second
+            // condition is unported (M7 follow-up). type-10 anchors are absent
+            // from the logo fixtures, so this path is inert there.
+            if (_deltaTime == 0.0) {
                 an.anchorEnabled = false;
                 an.renderTreeFlag200 = false;
                 continue;
@@ -30,11 +35,18 @@ namespace motion {
             an.originX = cw * 0.5;
             an.originY = ch * 0.5;
 
-            // Damping exponent (0x6C088C..0x6C08B8)
-            // From decompilation: v28 = dt * (v27*dt/v27) / v27 / 60 / damping
-            // where v27 = dt/fps. Simplifies to dt*fps/60/damping for dt~1 frame.
-            const double dampPow = std::abs(_frameLastTime) / 60.0
-                / std::max(an.anchorDamping, 0.001);
+            // Damping exponent — byte-verified disasm @0x6C0884-0x6C08B8:
+            //   v27     = (*a1+592)/(*a1+1168) = _deltaTime / _speedMul
+            //   dampPow = dt*(v27*dt/v27)/v27/60.0/anchorDamping,  dt = _deltaTime
+            // The redundant (v27*dt/v27) mul/div is preserved verbatim — FP is
+            // not associative, so it is kept to reproduce the exact value the
+            // binary computes (it does NOT collapse to dt). The binary divides by
+            // anchorDamping directly: the former max(.,0.001) guard and the
+            // _frameLastTime numerator were both port inventions.
+            const double dt = _deltaTime;
+            const double v27 = _deltaTime / _speedMul;
+            const double dampPow =
+                dt * (v27 * dt / v27) / v27 / 60.0 / an.anchorDamping;
 
             // Angle damping (0x6C08C0..0x6C08E0)
             double angle = an.accumulated.angle;
