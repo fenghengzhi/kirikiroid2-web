@@ -1092,15 +1092,17 @@ namespace motion {
         // (the var-track deque). Built by Player::initVariables (0x6CD750);
         // snapshotted into HM4 by resetMotionState loop2 (0x6B2D3C). Migrated
         // from the former std::vector<VariableLabelEntry> port model.
-        // _nodeLabelMap: libkrkr2.so Player+24 std::map<ttstr,int>. Despite the
-        // legacy port name, this is the node *path* map: keyed by the
-        // hierarchical "/top/.../self" string built by Player_buildNodePathKey
-        // @0x6B5C1C (NOT the flat PSB "label"). Populated unconditionally per
-        // node during Player_buildNodeTree_recursive @0x6B4CE4 via
-        // Player_nodePathMap_lowerBoundInsert @0x6B50B8 (ordered RB-tree
-        // insert, last-write-wins on path collision). All reads
-        // (getLayerMotion/getLayerGetter @0x6B5AD8, dtgt resolves @0x6F2228,
-        // stencil mask resolve @0x6B5454) match a raw path string verbatim.
+        // _nodeLabelMap: libkrkr2.so Player+24 std::map<ttstr,int>, keyed by the
+        // RAW PSB "label" (NOT a hierarchical path). buildNodeTree_recursive
+        // @0x6B4A6C inserts PropGet("label")'s raw return at 0x6B4CB0..0x6B4CB4
+        // via Player_nodePathMap_lowerBoundInsert (no buildNodePathKey call;
+        // xrefs_to(0x6B5C1C) shows the path builder feeds only HM3). Insert is
+        // unconditional (no non-empty gate) → last-write-wins on label
+        // collision. All reads (getLayerMotion/getLayerGetter @0x6B5AD8, dtgt
+        // resolves @0x6F2228, stencil mask resolve @0x6B5454) feed the raw
+        // query string verbatim, so the write key is raw to match. The
+        // hierarchical "/top/.../self" path (Player_buildNodePathKey @0x6B5C1C)
+        // is a SEPARATE key space used only by HM3 (_perNodeLayerStateMap).
         std::deque<detail::MotionNode> _nodes;
         detail::VariableLabelScopeDeque _variableLabelScopes;
         std::map<std::string, int> _nodeLabelMap;
@@ -1200,8 +1202,10 @@ namespace motion {
 
         // HM3 (Player+1184): per-node-path layer state snapshot. KEY CONFIRMED
         // (Cluster F): the key is the node *path* ttstr produced by
-        // Player_buildNodePathKey @0x6B5C1C — the SAME key space as the Player+24
-        // node-path map. Populated by Player_resetMotionState_clearAndRebuild
+        // Player_buildNodePathKey @0x6B5C1C. This is a SEPARATE key space from
+        // the Player+24 node-index map (which is raw-label keyed); HM3 is the
+        // ONLY consumer of the path builder (xrefs_to(0x6B5C1C) = 2 callers,
+        // both HM3). Populated by Player_resetMotionState_clearAndRebuild
         // loop3 @0x6B2DF8: for each visible node whose type ∈ {0,2,3,7,8}
         //   key = Player_buildNodePathKey(player, nodeIndex)   // @0x6B2E08
         //   V   = Player_HM3_upsert_perNodeLayerState(player+1184, &key) //@0x6F2674
@@ -1216,8 +1220,9 @@ namespace motion {
         // porting both functions wholesale, which is out of the node-tree
         // keying scope and has no consumer yet, so this map stays empty. When
         // resetMotionState is ported, build the key via
-        // detail::buildNodePathKeyLike_0x6B5C1C(_nodes, nodeIndex) so HM3 and
-        // the Player+24 path map share one key generator.
+        // detail::buildNodePathKeyLike_0x6B5C1C(_nodes, nodeIndex) — that path
+        // builder is HM3's own key generator (the Player+24 node-index map uses
+        // the raw label, a different key space).
         detail::PerNodeLayerStateMap _perNodeLayerStateMap;
 
         // HM4 (Player+1240): ttstr -> double variable-snapshot cache.

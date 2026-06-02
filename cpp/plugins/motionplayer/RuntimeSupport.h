@@ -348,8 +348,10 @@ namespace motion::detail {
     // hierarchical path "/topLevelLabel/.../selfLabel". The loop terminates
     // when a node's parentIndex reaches 0 (the synthetic root is NOT emitted),
     // matching the binary `while ( a2 )` on `*(node+36)` (parentIndex).
-    // This is the key used by the Player+24 node-path map (re-keyed from the
-    // former flat-label map) and by HM3 (Player+1184).
+    // This path is the key for HM3 (Player+1184, _perNodeLayerStateMap) ONLY —
+    // it is the path builder's sole consumer (xrefs_to(0x6B5C1C) = 2 callers,
+    // both HM3). The Player+24 node-index map (_nodeLabelMap) is keyed by the
+    // RAW label, a separate key space — do NOT use this for that map.
     std::string buildNodePathKeyLike_0x6B5C1C(
         const std::deque<motion::detail::MotionNode> &nodes, int nodeIndex);
 

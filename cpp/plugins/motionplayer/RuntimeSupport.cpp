@@ -1234,8 +1234,10 @@ namespace motion::detail {
     // skip empty names).
     //
     // PLATFORM_BOUNDARY: the binary key is a ttstr; here we materialize the
-    // same character sequence as std::string so it can key the ordered
-    // std::map<std::string,int> that mirrors the binary's Player+24 RB-tree.
+    // same character sequence as std::string. This path is HM3's key
+    // (_perNodeLayerStateMap, Player+1184) — the only consumer of this builder
+    // (xrefs_to(0x6B5C1C) = 2 callers, both HM3). It is NOT the Player+24
+    // node-index map key; that map uses the raw PSB label (see NodeTree.cpp).
     std::string buildNodePathKeyLike_0x6B5C1C(
         const std::deque<motion::detail::MotionNode> &nodes, int nodeIndex) {
         std::string accumulated;

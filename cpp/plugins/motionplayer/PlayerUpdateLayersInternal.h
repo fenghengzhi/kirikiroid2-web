@@ -483,15 +483,15 @@ namespace {
     }
 } // anonymous namespace
 
-    // Helper: find node by path key in the node-path map (Player+24).
+    // Helper: find node by raw label in the node-index map (Player+24).
     // Aligned to Player_nodePathMap_find @0x6F2228: ordered-map lookup keyed by
-    // the hierarchical "/top/.../self" path (built by Player_buildNodePathKey
-    // @0x6B5C1C at insert time), NOT the flat PSB label. The binary walks a
-    // red-black tree comparing wide strings (sub_9B1ED0); we use std::map::find
-    // over the path-keyed std::map. Callers pass the raw lookup string
-    // (motionDtgt etc.) verbatim, exactly as the binary feeds sub_6F2228.
-    static int findNodeByLabel(const std::map<std::string, int> &pathMap,
-                               const std::string &pathKey) {
-        auto it = pathMap.find(pathKey);
-        return (it != pathMap.end()) ? it->second : -1;
+    // the raw PSB "label" (the insert at 0x6B4CB0 uses PropGet("label")'s raw
+    // return, NOT a hierarchical path — see NodeTree.cpp write site). The binary
+    // walks a red-black tree comparing wide strings (sub_9B1ED0); we use
+    // std::map::find. Callers pass the raw lookup string (motionDtgt etc.)
+    // verbatim, exactly as the binary feeds sub_6F2228.
+    static int findNodeByLabel(const std::map<std::string, int> &labelMap,
+                               const std::string &label) {
+        auto it = labelMap.find(label);
+        return (it != labelMap.end()) ? it->second : -1;
     }

@@ -141,14 +141,13 @@ namespace motion {
     }
 
     tTJSVariant Player::getLayerNames() {
-        // PORT DIVERGENCE (out of node-path-key scope): the binary getLayerNames
+        // PORT DIVERGENCE (out of node-index-key scope): the binary getLayerNames
         // (sub_6D1018 → sub_6B601C @0x6B601C) does NOT iterate the Player+24
-        // path map — it walks the Player+200 node deque with a visitor that
-        // descends into type==3 child players and type==4 particle arrays. This
-        // port instead iterates the Player+24 node-path map keys. Now that the
-        // map is path-keyed, these keys are hierarchical paths ("/top/.../leaf")
-        // rather than flat labels; one key per node path, last-write-wins on
-        // collision. Re-porting to sub_6B601C is tracked separately.
+        // map — it walks the Player+200 node deque with a visitor that descends
+        // into type==3 child players and type==4 particle arrays. This port
+        // instead iterates the Player+24 node-index map keys (raw PSB labels,
+        // one key per label, last-write-wins on collision). Re-porting to
+        // sub_6B601C is tracked separately (M5-2).
         ensureMotionLoaded();
         if(!_activeMotion) {
             return detail::makeArray({});
@@ -180,10 +179,10 @@ namespace motion {
 
     tTJSVariant Player::getLayerMotion(ttstr name) {
         // Aligned to libkrkr2.so sub_6D38F4 → sub_6B5AD8 (getLayerMotion):
-        // calls Player_nodePathMap_find @0x6F2228 on the Player+24 node-path map
+        // calls Player_nodePathMap_find @0x6F2228 on the Player+24 node-index map
         // (0x6B5B14) with the raw TJS `name` and returns the PSB dict of the
-        // resolved node. The map is keyed by hierarchical path, so `name` is a
-        // path string ("/top/.../leaf") matched verbatim.
+        // resolved node. The map is keyed by the raw PSB "label", so `name` is a
+        // raw label matched verbatim (no path transform).
         ensureMotionLoaded();
         if(false) {
             return {};

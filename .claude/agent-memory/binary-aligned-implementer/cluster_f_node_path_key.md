@@ -1,51 +1,61 @@
 ---
 name: cluster-f-node-path-key
-description: Player+24 map and HM3 are PATH-keyed (/top/.../leaf) not flat-label; buildNodePathKey @0x6B5C1C generator + port mapping + HM3 defer
+description: CORRECTED 2026-06-02 — Player+24 node-index map is RAW-LABEL keyed, NOT path. buildNodePathKey @0x6B5C1C feeds ONLY HM3 (Player+1184). Earlier "path-keyed Player+24" claim (commit 98ac6e0) was wrong-direction; reverted in M5-1.
 metadata:
   type: project
 ---
 
-Cluster F / audit M5 (resolved 2026-05-30): the Player+24 node-index map is a
-node-PATH map, NOT a flat-label map.
+Cluster F / audit M5. **CORRECTION (2026-06-02, byte-verified by two independent
+agents)**: the earlier conclusion below (commit 98ac6e0, 2026-05-30) that the
+Player+24 node-index map is PATH-keyed was WRONG. Player+24 is keyed by the RAW
+PSB "label". The hierarchical path is HM3's key space ONLY.
 
-**Key generator** Player_buildNodePathKey @0x6B5C1C:
-- usercall: X0=player, W1=nodeIndex, X8=ttstr_out.
-- Walks parentIndex chain (node+36) leaf→root. Per node: segment = ttstr("/")+
-  label(node+0) via sub_A0CC68; accumulated = segment + accumulated via
-  sub_A1359C (ancestor PREPENDED). Loop `while(a2)` — stops when parentIndex==0
-  (synthetic root index 0 NOT emitted). Result = "/topLabel/.../selfLabel".
-  Inserts even for empty label (bare "/" segment).
-- Port: motion::detail::buildNodePathKeyLike_0x6B5C1C(nodes, nodeIndex) in
-  RuntimeSupport.cpp/.h.
+## DECISIVE EVIDENCE (why 98ac6e0 was wrong-direction)
 
-**Consumers of Player+24 path map (all match RAW string verbatim, no transform):**
-- Insert: Player_nodePathMap_lowerBoundInsert @0x6B50B8, called @0x6B4CE4 in
-  buildNodeTree_recursive @0x6B4A6C. value = deque-index. Port: NodeTree.cpp
-  walkTree → player._nodeLabelMap[buildNodePathKey]=index (unconditional).
-- Find: Player_nodePathMap_find @0x6F2228.
-- getLayerMotion/getLayerGetter: sub_6B5AD8 @0x6B5B14 — TJS name is a path.
-- stencil mask resolve: @0x6B5454 — raw stencilCompositeMaskLayerList element is
-  a path. Port: NodeTree.cpp post-pass.
-- dtgt resolves (angleMode=4 @0x6BE7B4, particle trigger=4 @0x6BF048): motionDtgt
-  is a path. Port: findNodeByLabel(_nodeLabelMap, dtgt) in PlayerUpdateChildMotion
-  /PlayerUpdateParticles.
-- requireLayerId @PlayerResource.cpp, hitTestLayer @PlayerLayerQuery.cpp.
+**Player+24 insert (buildNodeTree_recursive @0x6B4A6C, disasm 0x6B4CA8..0x6B4CE4):**
+```
+6b4ca8  BL Motion_propGetByName     ; v30 = PropGet("label") raw ttstr
+6b4cac  LDR X0, [SP,#var_140]       ; X0 = a1+0x18 = Player+24
+6b4cb0  ADD X1, SP, #var_F8         ; X1 = &v30  ← insert KEY = RAW label
+6b4cb4  BL Player_nodePathMap_lowerBoundInsert
+6b4ce4  STR W26, [X0]               ; *slot = node deque-index
+```
+There is NO `BL Player_buildNodePathKey` before the insert. Key = raw label.
 
-**getLayerNames divergence:** binary sub_6D1018→sub_6B601C @0x6B601C does NOT
-iterate the path map — walks Player+200 node deque with visitor descending into
-type3 child players / type4 particle arrays. Port iterates path-map keys instead
-(now emits paths). Re-port to sub_6B601C is separate, out of keying scope.
+**xrefs_to(0x6B5C1C) = exactly 2 callers, BOTH HM3 — never Player+24:**
+- 0x6B2E08 in Player_resetMotionState_clearAndRebuild → HM3_upsert (Player+1184)
+- 0x6B84C4 in Player_pruneHM3_byNodeIdentity → HM3 find
+Also `callees(0x6B4A6C)` does NOT include 0x6B5C1C. So buildNodeTree_recursive
+never calls the path builder → Player+24 cannot be path-keyed.
 
-**HM3 (Player+1184) populate DEFERRED:** key CONFIRMED = node-path ttstr (same
-generator). resetMotionState loop3 @0x6B2DF8: buildNodePathKey @0x6B2E08 →
-Player_HM3_upsert_perNodeLayerState @0x6F2674 → Player_HM3_initValueFromNode
-@0x699510 (688-byte node→V snapshot). Port has NO resetMotionState equivalent and
-no caller, and HM3_initValueFromNode is unported, so HM3 map stays empty. When
-ported, key via buildNodePathKeyLike_0x6B5C1C so HM3 + Player+24 share one key gen.
+**Empty-label gate:** NONE. PropGet→insert is a straight sequence with no
+non-empty branch; nodes with missing/empty "label" still insert key "" (LWW).
+The original port's `if(!node.layerName.empty())` guard was a divergence and was
+removed when reverting to raw.
 
-**Why:** binary is authoritative; flat-label keying was an architectural
-divergence (CLAUDE.md reject functional-equiv).
-**How to apply:** if touching getLayer*/dtgt/stencil/HM3 keying, the map is
-path-keyed; do NOT transform lookup strings (binary feeds raw path strings).
-Logo (yuzulogo, type0-only, no dup names) differential stays 0-mismatch.
-m2logo fails on pre-existing frame-count spec mismatch (100 vs 93), unrelated.
+## CORRECT key-space map
+| container | binary key | port |
+|---|---|---|
+| Player+24 node-index map | RAW PSB "label" (write @0x6B4CB0 + all reads @0x6F2228) | _nodeLabelMap, NodeTree.cpp:118 = `_nodeLabelMap[node.layerName]=index` |
+| HM3 Player+1184 | PATH `/top/.../leaf` (buildNodePathKey) | _perNodeLayerStateMap, populated by resetMotionState loop3 (brick 6); key via buildNodePathKeyLike_0x6B5C1C |
+
+**Reads (all RAW label, verbatim, were always correct):** getLayerMotion/
+getLayerGetter sub_6B5AD8 @0x6B5B14; stencil mask resolve @0x6B5454; dtgt
+resolves (angleMode=4 @0x6BE7B4, particle trigger=4 @0x6BF048) →
+findNodeByLabel(_nodeLabelMap, dtgt); requireLayerId; hitTestLayer.
+
+**buildNodePathKey @0x6B5C1C generator** (still accurate): usercall X0=player,
+W1=nodeIndex, X8=ttstr_out. Walks parentIndex chain (node+36) leaf→root, each
+segment = "/"+label(node+0) (sub_A0CC68), ancestor PREPENDED (sub_A1359C),
+`while(a2)` stops at root index 0. Port: buildNodePathKeyLike_0x6B5C1C in
+RuntimeSupport.cpp/.h — used ONLY for HM3.
+
+**getLayerNames divergence (unchanged, M5-2, out of scope):** binary
+sub_6D1018→sub_6B601C @0x6B601C walks Player+200 node deque (descend type3
+child / type4 particle); port iterates _nodeLabelMap keys (now raw labels).
+
+**Why:** binary is authoritative (CLAUDE.md). **How to apply:** Player+24 =
+_nodeLabelMap = RAW label; HM3 = _perNodeLayerStateMap = path. Do NOT cross the
+two key spaces. M5-1 (2026-06-02) reverted the write side path→raw; logo
+m2logo(93)+yuzulogo(243) 0-mismatch after revert (logo has no dup labels).
+See also [[hm3-init-value-from-node]].

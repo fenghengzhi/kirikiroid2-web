@@ -106,17 +106,25 @@ namespace motion::detail {
 
             // "label" → layerName (node+0)
             node.layerName = nodeTreePsbString(psbNode, "label");
-            // Aligned with libkrkr2.so Player_buildNodeTree_recursive @0x6B4CE4:
-            //   *(_DWORD *)Player_nodePathMap_lowerBoundInsert(a1 + 3, &key) = idx;
-            // The Player+24 map is keyed by the full hierarchical *path* built
-            // by Player_buildNodePathKey @0x6B5C1C ("/top/.../self"), NOT by the
-            // flat PSB "label". Value = node deque-index. The insert is
-            // unconditional (the binary emits a "/"-prefixed segment even for an
-            // empty label), so we do not gate on a non-empty label here.
-            // node.layerName is already set, so the path builder can see this
-            // node's own segment via the deque.
-            player.nodeLabelMapForBuild()[detail::buildNodePathKeyLike_0x6B5C1C(
-                player.nodesForBuild(), node.index)] = node.index;
+            // Aligned with libkrkr2.so Player_buildNodeTree_recursive @0x6B4A6C,
+            // Player+24 insert (disasm 0x6B4CA8..0x6B4CE4, byte-verified):
+            //   6b4ca8  BL Motion_propGetByName        ; v30 = PropGet("label")
+            //   6b4cac  LDR X0, [SP,#var_140]          ; X0 = a1+0x18 = Player+24
+            //   6b4cb0  ADD X1, SP, #var_F8            ; X1 = &v30  ← key = RAW label
+            //   6b4cb4  BL Player_nodePathMap_lowerBoundInsert
+            //   6b4ce4  STR W26, [X0]                  ; *slot = node deque-index
+            // The Player+24 map is keyed by the RAW PSB "label" ttstr — there is
+            // NO `BL Player_buildNodePathKey` before the insert, and
+            // xrefs_to(0x6B5C1C) shows the path builder's only two callers both
+            // feed HM3 (Player+1184), never Player+24. The hierarchical path is
+            // an HM3-only key space; the node-index map uses the flat label.
+            // (Reverts the wrong-direction re-key in commit 98ac6e0, which is
+            // contradicted by the insert-point disasm above.) All reads of this
+            // map feed the raw query string verbatim, so write must match: raw.
+            // The insert is unconditional — there is no non-empty-label branch
+            // between PropGet and the insert, so empty/missing "label" still
+            // inserts key "" (last-write-wins).
+            player.nodeLabelMapForBuild()[node.layerName] = node.index;
 
             // "type" → nodeType (node+28)
             // 0=obj, 1=shape, 3=motion, 4=particle, 5=camera, 6=emitter,
@@ -321,11 +329,11 @@ namespace motion::detail {
         // Aligned to Player_buildNodeTree post-pass (0x6B51F0..0x6B55AC):
         // type==12 nodes with stencilType bit 2 set walk
         // "stencilCompositeMaskLayerList", resolve each entry against the
-        // Player+24 node-path map (Player_nodePathMap_find @0x6F2228, called at
+        // Player+24 node-index map (Player_nodePathMap_find @0x6F2228, called at
         // 0x6B5454 with the *raw* mask-list element as the key), and set
-        // node+1961 on the referenced mask layers. The mask-list strings are
-        // themselves hierarchical path keys ("/top/.../leaf"), matched verbatim
-        // against the path map — so we pass label->value unchanged.
+        // node+1961 on the referenced mask layers. The map is keyed by the raw
+        // PSB "label" (see write site above), and the mask-list strings are raw
+        // labels matched verbatim — so we pass label->value unchanged.
         for(auto &node : player._nodes) {
             if(node.nodeType != 12 || (node.stencilType & 4) == 0 || !node.psbNode) {
                 continue;
