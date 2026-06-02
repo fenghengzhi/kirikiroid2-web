@@ -173,6 +173,12 @@
   - 找到的 var-track 完整调用图（brick 3 蓝图）：`resetMotionState`(0x6B2B7C) = clearHM3_HM4
     → **interpolateVarTrackValues**(item+16 + bindHM1/HM2) → loop1(node evaluateTimeline)
     → **loop2**(item+16 → HM4@+1240) → loop3(HM3@+1184 perNodePath)。caller = playImpl(0x6B2284)。
+- ✅ **brick 3 DONE（slice: clear+interp+loop2）**：`resetMotionStateLike_0x6B2D3C` = body-gate
+  `!_queuing`(+480) → clearHM3_HM4(`_perNodeLayerStateMap`/`_variableSnapshotMap`.clear) →
+  interpolateVarTrackValues → **loop2**(每 var-track `!active.typeZeroFlag` → `_variableSnapshotMap[cascadeKey]=item.value`，HM4 populate)。**接线**：playMotionLike_0x6B2284 在 `flags&PlayFlagJoin(8)` 时调用（playImpl 0x6B22E4 同点）。本对话 decompile playImpl 0x6B2284 验证接线点 + PlayFlagJoin=8。
+  - **DEFERRED**：loop1(node evaluateTimeline)、loop3(HM3 perNodeLayerState，依赖未移植的 `HM3_initValueFromNode` 0x699510)。bindParameterValue(HM1/HM2) 仍 DEFERRED。
+  - **验证**：web+guest 构建 + logo diff 0 mismatch（live 接线，已验未回归）。**HM4 数据通路打通**（stream③→interp→loop2→HM4），仍对现有内容 inert（无 variable）。
+  - **剩余 brick 4**：getVariable READ cascade（evalKey_cascade 0x6CD23C：HM4-first by raw key → HM1 join → HM2）接 `_variableSnapshotMap`。
 
 ### 忠实 brick 路线
 1. ✅ **基地重构（brick 1）DONE（2026-06-02）**：`VariableLabelScope` 补全为 {cascadeKey, activeSlotCursor, value, labelName, VarTrackSlot slot[2]}（slot 含 +20 gateFlag）；删死 struct `VariableLabelEntry`；Player 字段 `vector<VariableLabelEntry> _variableLabelEntries` → `deque<VariableLabelScope> _variableLabelScopes`（容器形态对齐 deque）；`initVariables` 改产出 binary 一致 cascadeKey=`scope+"::"+label`。**provably inert**（_variableLabelScopes 零 reader）→ web debug build 通过、logo diff 不受影响（构造上）。改动文件：value_structs.h / player_containers.h / RuntimeSupport.h / Player.h / PlayerMotionLoad.cpp。

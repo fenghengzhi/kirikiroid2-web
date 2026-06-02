@@ -307,6 +307,13 @@ namespace motion {
             _motionKey = label;
         };
 
+        // Player_playImpl @0x6B22E4: when (flags & 8 == PlayFlagJoin), rebuild
+        // the var-track HM4 snapshot from the CURRENT motion before loading the
+        // new one. Inert for content without a "variable" list (empty deque).
+        if((flags & PlayFlagJoin) != 0) {
+            resetMotionStateLike_0x6B2D3C();
+        }
+
         ensureMotionLoaded();
         commitRequestedMotionLike_0x6B2380();
         initNonEmoteMotionLike_0x6B365C(

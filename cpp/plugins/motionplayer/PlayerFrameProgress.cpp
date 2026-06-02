@@ -1119,6 +1119,32 @@ namespace internal {
         }
     }
 
+    void Player::resetMotionStateLike_0x6B2D3C() {
+        // libkrkr2.so Player_resetMotionState_clearAndRebuild @0x6B2D3C. Called
+        // from playImpl (0x6B22E4) when (flags & 8 == PlayFlagJoin), before
+        // loadMotion. Body-gated on !*(BYTE)(player+480) == !_queuing.
+        if (_queuing) {
+            return;
+        }
+        // clearHM3_HM4 (0x6B80E4): HM3(+1184) + HM4(+1240).
+        _perNodeLayerStateMap.clear();
+        _variableSnapshotMap.clear();
+        // interpolateVarTrackValues (0x6BBE20): compute item+16 per var-track.
+        interpolateVarTrackValuesLike_0x6BBE20(_clampedEvalTime);
+        // loop1 (0x6B2BDC: node-deque evaluateTimeline) — DEFERRED.
+        // loop2 (0x6B2C64): snapshot each var-track item+16 → HM4
+        // (_variableSnapshotMap), gated on the active slot's typeZeroFlag
+        // (binary `!*(BYTE)(item + 56*cursor + 68)`); key = item+0 cascadeKey.
+        for (const auto &item : _variableLabelScopes) {
+            const int cursor = item.activeSlotCursor & 1;
+            if (!item.slot[cursor].typeZeroFlag) {
+                _variableSnapshotMap[item.cascadeKey] = item.value;
+            }
+        }
+        // loop3 (0x6B2D68: HM3 perNodeLayerState via buildNodePathKey +
+        // Player_HM3_initValueFromNode @0x699510, both unported) — DEFERRED.
+    }
+
     void Player::frameProgress(double dt) {
         // Aligned to libkrkr2.so Player_progress_inner (0x6C106C):
         // _speed is a bool flag (play/pause). When false, skip progress entirely.

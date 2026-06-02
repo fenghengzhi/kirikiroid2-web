@@ -800,6 +800,13 @@ namespace motion {
         // bezier eased (Player_applyBezierEasing @0x69A754). Currently unwired
         // (the port has no resetMotionState yet); lands the value computation.
         void interpolateVarTrackValuesLike_0x6BBE20(double clampedEvalTime);
+        // libkrkr2.so Player_resetMotionState_clearAndRebuild @0x6B2D3C, called
+        // by playImpl when (flags & 8 == PlayFlagJoin). Body-gated on !_queuing
+        // (+480). SLICE: clearHM3_HM4 + interpolateVarTrackValues + loop2
+        // (item+16 → HM4 @ _variableSnapshotMap). loop1 (node evaluateTimeline)
+        // and loop3 (HM3 perNodeLayerState via HM3_initValueFromNode @0x699510,
+        // unported) are DEFERRED.
+        void resetMotionStateLike_0x6B2D3C();
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);
