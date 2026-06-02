@@ -46,7 +46,15 @@ bucket = h % bucketCount
 - 签名:`(out* a1, Player* a2, ttstr** a3=name, ttstr** a4=icon/2nd-name)`
 - a1 输出结构:+0 found bool,+1 blank bool,+4 source variant,+20 ?,+24 **texture handle**,+32 width,+40 height,+48 originX,+56 originY,+64..88 clip(left/top/right/bottom doubles),+96..108 截断rect int,+112 source variant cache
 - 流程:PropGet(player+636 RM-self, idx dword_1AB8098) → v10=RM native。spec(+224): ==2 走 PSB texture 上传路径;==1 走 KAG.findSource 回调路径;其它/blank → 走 player-self dispatch "findSource" 脚本回调(LABEL_142)
-- spec==2 路径:HashMap A lookup(name)→PSB dict;nested texture-cache(dict-value+16 处的第二层 ttstrHashMap,key=name)。miss→读 dict["source"]["texture"]{truncated_width/height,width,height,type,pixel} → **RAW GPU UPLOAD**:`Motion_createTextureFromPixels()`(=opengl draw device,__cxa_guard 单例 sub_84B3A4("opengl")) → vtable+24 CreateTexture(rawBGRA buf, pitch=4*w, w, h, fmt=4, mip=1)。type=="RGBA8"→TVPReverseRGB;type=="A8L8"→手工 L,A→BGRA 展开;else 报 "Unsupported texture format"。结果存回 nested map(findOrInsert sub_6E2150)。最后读 dict["icon"][iconName] 的 originX/originY/width/height/left/top 填 a1
+- spec==2 路径:HashMap A lookup(name)→PSB-group entry(v23);nested texture-cache 内嵌于 entry:base=entry+24(=v24+1=libstdc++ _Hashtable head),bucketCount=entry+32(=v24[2])。miss→读 dict["source"][name]["texture"]{truncated_width/height(丢弃),width,height,type,pixel} → **RAW GPU UPLOAD**:`Motion_createTextureFromPixels()`(误名!实为 getDrawDevice("opengl"),__cxa_guard 懒init全局 qword_1AB8528=sub_84B3A4("opengl")) → device->vtable+24 CreateTexture(buf=解码BGRA, pitch=4*w, w, h, fmt=4, mip=1) → 返回值 v74=iTVPTexture2D* handle。type=="RGBA8"→TVPReverseRGB(RGBA→BGRA,count=pixelBytes/4);type=="A8L8"→手工展开 dst={A,A,A,L}(B=G=R=A,末字节=L);else throw "Unsupported texture format '%1'"。结果存回 nested map(findOrInsert sub_6E2150)。最后读 dict["icon"][iconName] 的 originX/originY/width/height/left/top 填 a1
+
+### nested texture-cache(D1 关键)
+- **缓存键=纯 name ttstr**(a3),不含 blendMode/color。findNode/findOrInsert 第三参都只传 a3,node[1] 只存这一个 ttstr。证据确凿
+- node 布局(operator new 0x20=32B):[0]+0 next,[1]+8 key ttstr(AddRef),[2]+16 value=裸 iTVPTexture2D* handle(findOrInsert 返回&node[2]),[3]+24 keyhash(findNode 比 node+24==hash)
+- **CPU bitmap upload 完即弃**:v65=sub_A0DE48 分配的解码buf,upload 后立刻 sub_A0DE90(v65) 释放。nested map 只存 GPU handle,不缓存像素。每次 miss 重新解码+alloc/free
+- handle Release/AddRef = vtable+16,refcount 在 handle+8(v74[2])
+- **缓存键分离**:blendMode/color 缓存属于 Player+72 layer-list(loadSource 路径),与本 by-name texture nested-map(entry+24)物理分离,findSource 全程不碰 +72。D1 改 hashmap 时:键=纯 name,value=裸 GPU handle,CPU bitmap 不缓存
+- by-name HashMap A(sub_6EB8F4) 的 node key-hash 在 node+136;nested map(sub_6E2060) 的 node key-hash 在 node+24。同算法不同 node 布局,两份 findNode
 
 ## ObjSource(0x69CCB8 register)= TJS dict facade,非 struct
 ObjSource 实例 = operator new(0x18) 3 qword:[0]=tTJSVariant 持 PSB source dict,[1]=?,[2]=0。所有 NCB getter(originX/originY/width/height/clip + drawLayer method)都是 `dict[key]` 读取(sub_598C58 取字典项),**没有 _key/_src/_blendMode/_color 结构字段**。本地 SourceCache.h:116 ObjSource 的 4 个私有字段是 port 发明;它"缺的6个成员"实际上不存在——真实 ObjSource 只有 1 个 dict variant backing。getters: originX@0x69D014 originY@0x69D0D8 width@0x69D19C(需变体type==7 dict,否则返回32) height@0x69D27C clip@0x69D35C(构造Rect对象) drawLayer@0x69D6D8(type==7时 SetSize+绘制)
