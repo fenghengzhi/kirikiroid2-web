@@ -12,7 +12,8 @@
 namespace motion {
 
     // ------------------------------------------------------------------
-    // R-M9 Phase 1 scaffolding (M9 spike 2026-05-31):
+    // R-M9 Phase 1 scaffolding (M9 spike 2026-05-31; architecture confirmed
+    // 2026-06-03 by full findSource-chain decompile, cluster K):
     // Binary libkrkr2.so ResourceManager (~256B, NCB registered at 0x6AB8BC)
     // exposes 14 TJS members and holds 3 internal containers + bufLayer +
     // spec int. Phase 1 declares the binary-aligned C++ fields so phase 2
@@ -21,6 +22,22 @@ namespace motion {
     // load/findSource paths yet — port's existing State<shared_ptr> backing
     // store stays authoritative for behavior. Logo differential green is
     // preserved by construction (new fields default-initialized empty).
+    //
+    // TWO ARCHITECTURE FACTS the binary makes the eventual target (phase D):
+    //  (1) There is NO separate SourceCache class. ResourceManager *is* the
+    //      SourceCache: the single ncb_registerMembers @0x6AB8BC registers all
+    //      14 members on one ~256B object — both the "RM" members (load/unload/
+    //      unloadAll/findSource/findMotion/isExistMotion/random) and the
+    //      "SourceCache" members (loadSource/clearCache/bufLayer). unloadAll
+    //      @0x6A8B94 touches +72/+88/+104/+144/+168 in one body. The port's
+    //      separate `SourceCache` class (SourceCache.h) is an invention; phase D
+    //      merges it back into this one class.
+    //  (2) ObjSource (SourceCache.h:116) is NOT a fields struct in the binary —
+    //      ncb_registerMembers @0x69CCB8 builds a `operator new(0x18)` dict
+    //      facade (qword[0] = tTJSVariant holding the PSB "source" dict) whose
+    //      originX/originY/width/height/clip/drawLayer getters all read
+    //      dict[key]. The port's _key/_src/_blendMode/_color fields are an
+    //      invention. (MASTER's "ObjSource missing 6 members" is inverted.)
     // ------------------------------------------------------------------
 
     // Intrusive list3 entry — binary RM @+72/+80 keeps a doubly-linked
@@ -94,19 +111,26 @@ namespace motion {
         // satisfy a sizeof-aligned PLATFORM_BOUNDARY contract.
         std::list<SourceCacheEntry> _sourceCacheList;
 
-        // +88/+96 libstdc++ std::unordered_map<ttstr group, iTJSDispatch2*
-        // psb_dict> — RM `load`/`unload`/`unloadAll`/`findSource` write/read
-        // this. Owning pointers (clearCache must Release each value). Empty
-        // in phase 1 — port's `_state->loadedModules` is still the authoritative
-        // PSB cache until phase 2 migrates data and ownership here.
+        // +88/+96 "HashMap A" — binary is NOT libstdc++ std::unordered_map but
+        // a KiriKiri inline bucket hashmap: +88 = bucket-array ptr, +96 =
+        // bucket count, bucket = FNV-variant-hash(key) % count (selection via
+        // sub_6EB8F4; node walk Motion_ttstrHashMap_findNode @0x6E2060). key =
+        // group/path ttstr, value = PSB-group dict dispatch. RM load/unload/
+        // unloadAll/findSource/findMotion/isExistMotion read/write it; clearCache
+        // does NOT touch it (layer-list only). The std::unordered_map here is the
+        // port's STL stand-in (container-implementation divergence, ❌ systemic);
+        // phase D replaces it with the inline FNV bucket map. Owning pointers
+        // (Release each value on erase). Empty in phase 1 — `_state->loadedModules`
+        // stays authoritative until phase D migrates data + ownership.
         std::unordered_map<ttstr, iTJSDispatch2 *, detail::ttstr_hash,
                            detail::ttstr_equal>
             _psbDictCache;
 
-        // +104 second container (forward_list of motion-level cache entries)
-        // — RM `findMotion`/`isExistMotion` walk this. Spike-detected as a
-        // single-linked node chain (`for (i = *(a1+104); i; i = *i)`); type
-        // pending phase 4 spike. Phase 1 placeholder: std::list. Empty.
+        // +104 second container — singly-linked node list, confirmed layout
+        // node[0]=next, node[1]=key ttstr, node[2]=PSB dict (`for (i =
+        // *(a1+104); i; i = *i)`). RM findMotion @0x6A9ED4 / isExistMotion
+        // @0x6A96F8 walk it as the motion-cache fallback after HashMap A misses.
+        // Phase 1 placeholder: std::list. Empty.
         std::list<iTJSDispatch2 *> _motionCacheList;
 
         // +224 int32 spec flag — binary checks 1 (krkr) vs 2 (win) in
