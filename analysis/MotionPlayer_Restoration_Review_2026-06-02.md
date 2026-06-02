@@ -89,7 +89,7 @@
 | M1（剩余） | G | progress 主推进 LABEL_48 已 live；reseek 三流 Stage B、root/var 流、emote/non-emote 分派拆分仍 open | M1_plan §4 P6/P7 |
 | M2 | B | EmoteEngine 6-deque step 全 STUB_WARN，hair/bust 物理未实现，bind-loop 空体 | MASTER P0 |
 | M3 | J | getVariable 实为 2-branch scope-router + HM1 join("scope::label") + HM4-first 级联；本端扁平 4 级 fallback，HM4 恒空、HM1 从不读、PSB ranges 是发明 fallback | 05-31 R0-1 |
-| M5 | F | buildNodePathKey 完全缺失；节点按扁平 PSB label 索引→重名碰撞 | MASTER P0 |
+| M5 | F | ~~buildNodePathKey 完全缺失；节点按扁平 PSB label 索引→重名碰撞~~ **【06-03 证伪】** buildNodePathKey 存在(@0x6B5C1C, HM3-only)，Player+24 node-index 用 raw PSB label 是二进制**正确行为**非缺陷，无重名碰撞 bug。详见 06-03 review §四 | MASTER P0 |
 | M6 | K | doAlphaMaskOperation 整体缺失，且误挂 Player 而非 namespace | MASTER P0 |
 | M9 | K | ObjSource 缺 6 成员；RM↔SourceCache 共享实现被拆开；findSource 走 list+shared_ptr 而非双 hashmap+raw upload | MASTER P0 |
 | R0-2 | E | setChara 二进制为 tTJSVariant*@+776 + 引用计数 + replay dispatch；本端 ttstr 平凡赋值 | 05-31 R0-2 |

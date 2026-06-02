@@ -132,13 +132,18 @@ namespace motion {
             // Color damping (0x6C0A68..0x6C0C58)
             // Per-channel pow(channel/base, dampPow)*base*colorScale
             {
-                // RGB-channel base (0x6C0A68 region): the binary selects from
-                // qword_14D7C50[] = (blendMode & 0xF0) == 0x10 ? 255.0 : 128.0.
-                // The port previously had 255.0 : 255.0 (the 128.0 branch was
-                // lost). Alpha always uses 255.0 (below).
+                // RGB-channel base (0x6C0A68 region): the binary at 0x6c0aac does
+                //   v1 = qword_14D7C50[(blend & 0xF0) == 0x10]
+                // where qword_14D7C50 = {255.0, 128.0} (byte-verified @0x14D7C50).
+                // So the boolean (==0x10) indexes the array: TRUE  -> index 1 -> 128.0,
+                //                                            FALSE -> index 0 -> 255.0.
+                // i.e. default-blend (==0x10) uses 128.0; non-default uses 255.0.
+                // (commit 5018087 restored the lost 128.0 branch but wired it to the
+                //  wrong side; corrected here per 0x6C0528 decompile. Alpha base below
+                //  is always 255.0.)
                 const bool isDefaultBlend =
                     (an.interpolatedCache.blendMode & 0xF0) == 0x10;
-                const double base = isDefaultBlend ? 255.0 : 128.0;
+                const double base = isDefaultBlend ? 128.0 : 255.0;
                 const auto packedColors = copyPackedColorsFromBytes(an.colorBytes);
                 const bool allEqual =
                     packedColors[0] == packedColors[1]

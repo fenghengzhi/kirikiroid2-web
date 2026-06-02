@@ -1,1 +1,5 @@
 - [Phase2 MainLoop mapping](project_phase2_mainloop_mapping.md) — 本地 updateLayersPhase2_MainLoop 与 libkrkr2.so sub_6BB33C phase2 段的对应与已知偏离
+- [M5 node-index map raw label](m5_node_index_map_raw_label.md) — Player+24 map keyed by RAW PSB label (not path); buildNodePathKey is HM3-only; getLayerNames substring filter semantics. 3ecd554/73cc3ac correct.
+- [M9 source subsystem verdict](m9_source_subsystem_verdict.md) — RM=SourceCache 12-member single class @0x6AB8BC; ObjSource 0x18 dict facade @0x69CCB8; findSource @0x6AAB3C/0x6948E8 double-hashmap+raw upload. phase-D per-vertex-color boundary needs draw-path verification (recheck).
+- [M3 getVariable review gaps](project_m3_getvariable_review_gaps.md) — 2026-06-03 fresh-decompile 复核 M3 确认 10 地址；2 open 缺口(0x6BBE20/0x69A754 未复编, HM3 slantY 缺证); 已澄清伪矛盾.
+- [Anchor node 0x6C0528](project_anchor_node_0x6C0528.md) — anchor type10 ↔ PlayerUpdateAnchor.cpp; dampPow/612-gate/wh ✅; color base 255:128 方向颠倒(OPEN 高); 字节核实常量
