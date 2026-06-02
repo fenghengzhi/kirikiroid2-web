@@ -786,6 +786,12 @@ namespace motion {
         // action -> onAction(void, actionName)/onSync(). Replaces the
         // port-invented per-timeline scanLayerActions.
         void seekLayerEventStreamLike_0x6B6ADC(double targetTime);
+        // libkrkr2.so var-track stream ③ (the 3rd of [layer → root → var-track →
+        // node] inside Player_advanceRootAndNodes 0x6B6ADC). Advances each
+        // VariableLabelScope's two 56B slots so they bracket clampedEvalTime, via
+        // the inlined step (sub_6B786C) + merge (sub_6B7A70). Inert for every
+        // currently-available motion (none expose a populated "variable" list).
+        void advanceVariableTracksLike_0x6B6ADC(double clampedEvalTime);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);

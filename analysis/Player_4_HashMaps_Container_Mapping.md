@@ -148,6 +148,22 @@
 4. **slot 误映**：`VariableLabelScope` 的 scope@+64 / flagValidated@+108 实落在 +48/+104 两个 56B slot **内部**（gate flag = slot+20 = +68/+124），非顶层字段。
 5. **value-writer 延迟**：item+16 仅由 var-track advance **stream③**（sub_6B786C/sub_6B7A70）写；DEFERRED。⇒ loop2 即使移植也 **inert-by-data**（gate `!flag` 永不通过）——与二进制"无轨道前进"行为一致，非 bug。
 
+### brick 2 实现状态（2026-06-02，按 CLAUDE.md「证据是阻塞项，验证是尽力项」）
+- ✅ **brick 2a DONE**：VarTrackSlot 补全为 byte+disasm-verified 完整 56B
+  {frameIndex+0, time+8, interval+16, typeZeroFlag+20, interpFlag+21, merged+22, value+24, easing+32}；
+  item+24 从误判的 labelName 改为 frameSource（keyframe 列表，node+64 "frameList" 类比）。commit 8bd6629。
+- ✅ **brick 2b DONE**：`advanceVariableTracksLike_0x6B6ADC`（step sub_6B786C + merge sub_6B7A70 +
+  step 循环 0x6B7274 + disasm 确认的双 slot0 merge 0x6B7178）实现并接入全部 5 个 advance 点
+  （layer→var-track→node 单元）。
+- **验证（现有 oracle，无新建物料）**：web debug build 通过；wasmtime guest 重建通过；
+  **logo differential m2logo(93)+yuzulogo(243) 0 mismatch PASS**（证明 live-path 接入未破坏 Motion 状态）。
+- **验证缺口（标注，不硬凑）**：所有可用 motion 均无 variable 列表（36 .mtn + e-mote .psb，
+  motionsim --dump-variable --seed 742877301 确认），故 stream③ 对现有内容**必然 no-op**，
+  其 frame-stepping 路径**无 fixture 可验证**；按策略不从零造 fixture，留此缺口。item+16 value 的
+  **插值**（slot bracket → HM4 value）尚未实现（brick 2.5，仍 inert）。
+- **遗留疑点（inert，不阻塞）**：item+0 cascadeKey 对 array-label 的 ttstr_c_str 形态、双 slot0 merge
+  是否 IDA 之外另有语义——现有材料无法判，按忠实复刻 disasm 落地。
+
 ### 忠实 brick 路线
 1. ✅ **基地重构（brick 1）DONE（2026-06-02）**：`VariableLabelScope` 补全为 {cascadeKey, activeSlotCursor, value, labelName, VarTrackSlot slot[2]}（slot 含 +20 gateFlag）；删死 struct `VariableLabelEntry`；Player 字段 `vector<VariableLabelEntry> _variableLabelEntries` → `deque<VariableLabelScope> _variableLabelScopes`（容器形态对齐 deque）；`initVariables` 改产出 binary 一致 cascadeKey=`scope+"::"+label`。**provably inert**（_variableLabelScopes 零 reader）→ web debug build 通过、logo diff 不受影响（构造上）。改动文件：value_structs.h / player_containers.h / RuntimeSupport.h / Player.h / PlayerMotionLoad.cpp。
 2. **stream③（brick 2）⚠️ 阻塞于数据模型矛盾**：var-track advance（sub_6B786C step / sub_6B7A70 merge）。

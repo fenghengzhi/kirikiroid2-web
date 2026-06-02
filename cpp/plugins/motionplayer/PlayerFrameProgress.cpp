@@ -935,6 +935,109 @@ namespace internal {
         }
     }
 
+    void Player::advanceVariableTracksLike_0x6B6ADC(double clampedEvalTime) {
+        // libkrkr2.so Player_advanceRootAndNodes (0x6B6ADC) var-track loop
+        // (0x6B7124..0x6B71C8) — stream ③. For each VariableLabelScope
+        // (Player+1296 deque), advance its two 56B slots so they bracket
+        // clampedEvalTime (+456) via the inlined step (sub_6B786C) + merge
+        // (sub_6B7A70). Inert when frameSource is not a keyframe list (binary
+        // PropGetCount ~0 → loop never runs); true for every currently-available
+        // motion (no fixture exposes a populated "variable" list — see
+        // analysis/Player_4_HashMaps_Container_Mapping.md §四之二).
+        const auto numValue =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            if (!n) return 0.0;
+            switch (n->numberType) {
+                case PSB::PSBNumberType::Float:  return n->getValue<float>();
+                case PSB::PSBNumberType::Double: return n->getValue<double>();
+                case PSB::PSBNumberType::Int:
+                    return static_cast<double>(n->getValue<int>());
+                default:
+                    return static_cast<double>(n->getValue<tjs_int64>());
+            }
+        };
+        const auto intValue =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> int {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            return n ? n->getValue<int>() : 0;
+        };
+
+        for (auto &item : _variableLabelScopes) {
+            const auto frames =
+                std::dynamic_pointer_cast<PSB::PSBList>(item.frameSource);
+            if (!frames) {
+                continue;     // non-list → binary PropGetCount ~0 → no-op
+            }
+            const int count = static_cast<int>(frames->size());
+            const auto frameAt =
+                [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
+                if (i < 0 || i >= count) return nullptr;
+                return std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
+            };
+            // step (sub_6B786C): slot.frameIndex=idx; slot.time=frame["time"];
+            //   slot.merged=0.
+            const auto step = [&](detail::VarTrackSlot &slot, std::uint32_t idx) {
+                slot.frameIndex = idx;
+                auto f = frameAt(static_cast<int>(idx));
+                slot.time = f ? numValue((*f)["time"]) : 0.0;
+                slot.merged = false;
+            };
+            // merge (sub_6B7A70): slot.merged=1; type=frame["type"]; type==0 ->
+            //   typeZeroFlag=1 (0x6B7BB0 early return); else typeZeroFlag=0,
+            //   interpFlag=(type==3), interval/value=content["interval"/"value"],
+            //   easing=content["easing"].
+            const auto merge = [&](detail::VarTrackSlot &slot) {
+                slot.merged = true;
+                auto f = frameAt(static_cast<int>(slot.frameIndex));
+                const int type = f ? intValue((*f)["type"]) : 0;
+                if (type == 0) {
+                    slot.typeZeroFlag = true;
+                    return;
+                }
+                slot.typeZeroFlag = false;
+                if (type == 2)      slot.interpFlag = 0;
+                else if (type == 3) slot.interpFlag = 1;
+                auto content = f ? std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                                       (*f)["content"])
+                                 : nullptr;
+                if (content) {
+                    slot.interval = static_cast<std::uint32_t>(
+                        intValue((*content)["interval"]));
+                    slot.value = numValue((*content)["value"]);
+                    // easing (slot+32) is a raw variant in the binary; we keep its
+                    // string form (curve-form easing is lossy here — inert path).
+                    if (auto e = std::dynamic_pointer_cast<PSB::PSBString>(
+                            (*content)["easing"])) {
+                        slot.easing = detail::widen(e->value);
+                    }
+                }
+            };
+
+            // active=slot[cursor], other=slot[!cursor] (0x6B7264).
+            int cursor = item.activeSlotCursor & 1;
+            detail::VarTrackSlot *active = &item.slot[cursor];
+            detail::VarTrackSlot *other = &item.slot[cursor ^ 1];
+            const int limit = count - 2;
+            // step loop (0x6B7274): until active.frameIndex>=count-2 OR
+            //   clampedEvalTime < other.time.
+            while (static_cast<int>(active->frameIndex) < limit
+                   && clampedEvalTime >= other->time) {
+                const std::uint32_t nextIdx = other->frameIndex + 1;
+                item.activeSlotCursor =
+                    (item.activeSlotCursor & 1) == 0;   // toggle (0x6B7150)
+                step(*active, nextIdx);
+                detail::VarTrackSlot *tmp = active;     // swap roles (0x6B7160)
+                active = other;
+                other = tmp;
+            }
+            // merge (0x6B7178, disasm-confirmed): merge slot[0] if !slot0.merged,
+            // then slot[0] AGAIN if !slot1.merged — both BL sub_6B7A70(item+48,..).
+            if (!item.slot[0].merged) merge(item.slot[0]);
+            if (!item.slot[1].merged) merge(item.slot[0]);
+        }
+    }
+
     void Player::frameProgress(double dt) {
         // Aligned to libkrkr2.so Player_progress_inner (0x6C106C):
         // _speed is a bool flag (play/pause). When false, skip progress entirely.
@@ -1114,6 +1217,7 @@ namespace internal {
                     // before progressSeekNodeSlotsLike (= the node walk), at each
                     // advanceRoot/rewind equivalent point — not once at end-of-frame.
                     seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime); // 0x6B6B80 layer pass
+                    advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // 0x6B7124 var-track ③
                     progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C1468 node walk
                     if(!_syncWaiting && !_motionCompleted) {              // 0x6C1474
                         _clampedEvalTime = _loopTime; // +456 = player+1136 (0x6C1484)
@@ -1136,6 +1240,7 @@ namespace internal {
                             // Stage A: layer pass before node walk at this 2nd
                             // advanceRoot (0x6C11B0, +456 = wrapped tick).
                             seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
+                            advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③
                             progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11B0
                         }
                     }
@@ -1169,6 +1274,7 @@ namespace internal {
                 // pass (0x6B9AE8: --+916 while curTime>+456, same +1093-only gate)
                 // before its node walk. Layer pass before node walk here too.
                 seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
+                advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③
                 progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // rewindRootAndNodes (0x6C1408)
                 if(!_syncWaiting && !_motionCompleted) {              // 0x6C1414
                     _clampedEvalTime = _cachedTotalFrames; // +456 = player+1128 (0x6C1424)
@@ -1191,6 +1297,7 @@ namespace internal {
                         // Stage A: layer pass before node walk at this 2nd rewind
                         // (0x6C11C0, +456 = reverse-wrapped tick).
                         seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
+                        advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③
                         progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11C0
                     }
                 }
@@ -1218,6 +1325,7 @@ namespace internal {
             // Layer pass is NOT gated on _nodes.empty() (it walks motion["tag"], not
             // the node deque); only the node walk is.
             seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
+            advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③ (not _nodes-gated)
             if(!_nodes.empty()) {
                 progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
             }
