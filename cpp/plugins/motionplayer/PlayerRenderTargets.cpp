@@ -1456,6 +1456,10 @@ namespace motion {
             }
         } updateLayerAfterDrawTraceLeave{this, rawProbeLayerObject};
 #endif
+        // 0x6CE7F4 first action: unconditional +612 = +613 snapshot (runs every
+        // post-draw, even when +613 is clear). anchor type-10 (0x6C0528) reads
+        // this next frame to gate on the internal render Layer being ready.
+        _internalRenderLayerReady = _needsInternalAssignImages;
         if(!_needsInternalAssignImages) {
             return true;
         }

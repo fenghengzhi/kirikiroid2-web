@@ -13,45 +13,43 @@ namespace motion {
             auto &an = nodes[ai];
             if (an.nodeType != 10 || !an.accumulated.active) continue;
             _needsInternalAssignImages = true;
-            // 0x6C06E8 gate: binary tests Player+592 == _deltaTime (NOT
-            // _frameLastTime/Player+904). It also gates on `!*(Player+612)`.
-            // KNOWN DIVERGENCE — DEFERRED (do NOT patch via +613): Player+612 is
-            // a POST-DRAW snapshot of +613 (_needsInternalAssignImages), copied
-            // in updateLayerAfterDraw/assignImages (`+612 = +613`); it means "the
-            // render Layer was ready last frame". The port has +613
-            // (_needsInternalAssignImages) but neither the +612 snapshot field
-            // nor an updateLayerAfterDraw step to write it. Reading +613 here
-            // instead would be a phase-shifted substitute (this-frame eval write
-            // vs last-frame post-draw write), so the second condition stays
-            // unported until that post-draw data flow is ported (a separate
-            // brick). type-10 anchors are absent from the logo fixtures, so this
-            // path is inert there.
-            if (_deltaTime == 0.0) {
+            // 0x6C06E8 gate: binary tests `Player+592 == 0.0 || !*(Player+612)`.
+            // Player+592 = _deltaTime (NOT _frameLastTime/Player+904). Player+612
+            // = the post-draw snapshot of +613 (_internalRenderLayerReady, written
+            // by updateLayerAfterDrawLike_0x6CE7D8) — "the internal render Layer
+            // was materialized last frame", which the w/h read below depends on.
+            // type-10 anchors are absent from the logo fixtures, so this path is
+            // inert there.
+            if (_deltaTime == 0.0 || !_internalRenderLayerReady) {
                 an.anchorEnabled = false;
                 an.renderTreeFlag200 = false;
                 continue;
             }
             an.anchorEnabled = true;
             an.renderTreeFlag200 = true;
-            // Read width/height (0x6C0790..0x6C0848).
-            // KNOWN DIVERGENCE — DEFERRED (architecture prerequisite missing, do
-            // NOT patch via node source): the binary reads w/h from a per-PLAYER
-            // render Layer dispatch — sub_A0F5E0(player+696) then
-            // PropGet(L"width"/L"height") — so every anchor node shares ONE w/h =
-            // the source Layer's size (set by sub_6CE19C setSize). It has NO
-            // `<=0?32` clamp (a failed PropGet yields w=0 -> pow(scale*32/0)=inf,
-            // which is the real binary behavior). The port's _internalRenderLayer
-            // (Player.h:1079, the player+696 mirror) is not materialized on this
-            // path, so the faithful read source does not yet exist. Reading
-            // node.interpolatedCache here (per-node, clamped) is the current
-            // stand-in; switching to the Layer source requires first porting the
-            // sub_6CE19C render-Layer materialization data flow (a separate
-            // brick) — patching it onto node.psbNode would introduce a per-node
-            // divergence the binary does not have.
-            double cw = an.interpolatedCache.width;
-            double ch = an.interpolatedCache.height;
-            if (cw <= 0.0) cw = 32.0;
-            if (ch <= 0.0) ch = 32.0;
+            // Read width/height (0x6C0790..0x6C0848): the binary reads them from
+            // the per-PLAYER internal render Layer — sub_A0F5E0(player+696) then
+            // PropGet(L"width"/L"height") — so all anchor nodes share ONE w/h =
+            // that Layer's size (set to the window size by setLayerSizeLike_
+            // 0x6CE19C). The port's mirror is _internalRenderLayer; the +612 gate
+            // above guarantees it was materialized last frame. NO `<=0?32` clamp
+            // (the binary has none; a failed PropGet yields w=0 -> pow(scale*32/0)
+            // = inf, the real binary behavior).
+            double cw = 0.0;
+            double ch = 0.0;
+            if (_internalRenderLayer.Type() == tvtObject) {
+                iTJSDispatch2 *rl = _internalRenderLayer.AsObjectNoAddRef();
+                tTJSVariant wv;
+                tTJSVariant hv;
+                if (rl && TJS_SUCCEEDED(rl->PropGet(0, TJS_W("width"), nullptr,
+                                                    &wv, rl))) {
+                    cw = static_cast<double>(static_cast<tjs_int>(wv));
+                }
+                if (rl && TJS_SUCCEEDED(rl->PropGet(0, TJS_W("height"), nullptr,
+                                                    &hv, rl))) {
+                    ch = static_cast<double>(static_cast<tjs_int>(hv));
+                }
+            }
             an.clipW = cw;
             an.clipH = ch;
             an.originX = cw * 0.5;

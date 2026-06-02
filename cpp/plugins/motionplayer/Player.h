@@ -1039,6 +1039,11 @@ namespace motion {
         double _boundsMaxX = -std::numeric_limits<double>::max();
         double _boundsMaxY = -std::numeric_limits<double>::max();
         bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
+        // +612: post-draw snapshot of +613. The binary updateLayerAfterDraw
+        // @0x6CE7F4 unconditionally copies +613 -> +612 each frame; anchor
+        // type-10 (0x6C0528) gates on it ("internal render Layer was materialized
+        // last frame") and reads its width/height as the per-player source size.
+        bool _internalRenderLayerReady = false;
 
         // === Motion / source caching state (Phase A3) ===
         // motionsByKey caches MotionSnapshot loads by motion key; activeMotion
