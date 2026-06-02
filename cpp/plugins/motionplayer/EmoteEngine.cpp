@@ -151,6 +151,16 @@ namespace motion {
         }
         _stateMachineDeque5.clear();
 
+        // Delete deque#6 (mouth) controllers (M2 mouth vertical). Same pattern as
+        //   deque#4/#5: the entry owns the operator new(0x70) controller; the two
+        //   ttstr keys (label + talkLabel) are released by their own destructors.
+        for (EmoteMouthControlEntry_Deque6& entry : _compositeVarDeque6) {
+            EmoteMouthController_dtor(entry.ctl);
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _compositeVarDeque6.clear();
+
         // Delete 7 controllers in reverse-of-ctor order.
         if (_ctlBust2Target)     { EmoteVarController_dtor(_ctlBust2Target);     delete _ctlBust2Target;     _ctlBust2Target = nullptr; }
         if (_ctlBust1Target)     { EmoteVarController_dtor(_ctlBust1Target);     delete _ctlBust1Target;     _ctlBust1Target = nullptr; }
@@ -706,6 +716,90 @@ namespace motion {
         }
     }
 
+    // Aligned with libkrkr2.so EmoteEngine_buildMouthControl @ 0x66CFBC.
+    // Decompiled pseudocode (this conversation):
+    //   count = Motion_propGetCount(mouthControl);          // 0x66d054
+    //   for (v5 = 0; v5 < count; ++v5) {                    // 0x66d088
+    //     elem = mouthControl[v5];                          // PropGet(0, v5)  0x66d0a4
+    //     if ((Motion_propGetBool(elem,"enabled") & 1) == 0) continue; // 0x66d128 gate
+    //     v9 = operator new(0x70);                          // 0x66d134
+    //     EmoteMouthController_ctor(v9, elem);              // 0x66d140
+    //     push_back deque#6 {ctl=v9, label=0, talkLabel=0}; // 0x66d158 (both slots zeroed)
+    //     label     = propGet(elem, "label");     back().label     = label;     // 0x66d220..0x66d26c
+    //     talkLabel = propGet(elem, "talkLabel");  back().talkLabel = talkLabel; // 0x66d2a8..0x66d2f4
+    //     ref1 = HM6_findOrInsert(this+1384, &back().label);     // 0x66d30c (a1+173)
+    //     ref1->type = 6; ref1->index = v5;                       // 0x66d314
+    //     ref2 = HM6_findOrInsert(this+1384, &back().talkLabel);  // 0x66d320
+    //     ref2->type = 6; ref2->index = v5;                       // 0x66d32c
+    //   }
+    // UNIQUE to the mouth category vs eye/eyebrow:
+    //   * the deque#6 element is 24B {ctl, label, talkLabel} (a THIRD ttstr).
+    //   * the builder inserts TWO HM#6 VarRef entries for a single controller
+    //     (label AND talkLabel), both {type=6, index=v5}. The progress loop then
+    //     stepping this controller writes *outBeginFrame into HM7[label] and
+    //     *outCurrentValue into HM7[talkLabel].
+    //   The HM#6 index is the LOOP index v5 (NOT the deque size), matching the
+    //   binary (a skipped element still advances v5).
+    void EmoteEngine::buildMouthControl(const PSB::PSBList* mouthControl) {
+        if (!mouthControl) {
+            return;
+        }
+        const int count = static_cast<int>(mouthControl->size()); // Motion_propGetCount
+        for (int v5 = 0; v5 < count; ++v5) {                       // 0x66d088
+            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*mouthControl)[v5]);                              // PropGet(0, v5)
+            // enabled gate (0x66d128): skip when "enabled" is not truthy.
+            bool enabled = false;
+            if (elem) {
+                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
+                        (*elem)[std::string("enabled")])) {
+                    enabled = b->value;
+                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                               (*elem)[std::string("enabled")])) {
+                    enabled = n->getLongValue() != 0;
+                }
+            }
+            if (!enabled) {
+                continue;                                          // goto LABEL_34
+            }
+
+            // operator new(0x70) + ctor (raw pointer, manual lifetime — the deque
+            //   entry owns the controller; dtor is responsible for delete).
+            EmoteMouthController* ctl = new EmoteMouthController(); // 0x66d134
+            EmoteMouthController_ctor(ctl, elem.get());            // 0x66d140
+
+            // label = elem["label"] (HM7 key for *outBeginFrame).          /*0x66d220*/
+            ttstr label;
+            if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
+                    (*elem)[std::string("label")])) {
+                label = ttstr(s->value.c_str());
+            }
+            // talkLabel = elem["talkLabel"] (HM7 key for *outCurrentValue). /*0x66d2a8*/
+            ttstr talkLabel;
+            if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
+                    (*elem)[std::string("talkLabel")])) {
+                talkLabel = ttstr(s->value.c_str());
+            }
+
+            // push {ctl, label, talkLabel} onto deque#6 (binary pushes {ctl,0,0}
+            //   then writes label@+8 / talkLabel@+16 into the slot; same end state).
+            EmoteMouthControlEntry_Deque6 entry;
+            entry.ctl       = ctl;
+            entry.label     = label;
+            entry.talkLabel = talkLabel;
+            _compositeVarDeque6.push_back(std::move(entry));
+
+            // TWO HM#6 VarRef inserts {type=6, index=v5} — label AND talkLabel.
+            //   (0x66d30c..0x66d314 and 0x66d320..0x66d32c.)
+            detail::EmoteVarRef& ref1 = _scalarHM6_1384[label];     // 0x66d30c
+            ref1.type  = 6;   // *v24 = 6
+            ref1.index = v5;  // v24[1] = v5
+            detail::EmoteVarRef& ref2 = _scalarHM6_1384[talkLabel]; // 0x66d320
+            ref2.type  = 6;   // *v25 = 6
+            ref2.index = v5;  // v25[1] = v5
+        }
+    }
+
     // Aligned with libkrkr2.so sub_67D01C EmoteEngine_progress @ 0x67D01C.
     //
     // Binary main loop (from EmoteEngine_controllers.md):
@@ -806,7 +900,20 @@ namespace motion {
                 EmoteEyebrowController_step(entry.ctl, &out, step); // sub_665600
                 _labelToValueHM7[entry.label] = out;                // HM7 upsert @0x67d150
             }
-            if (!_compositeVarDeque6.empty())   { STUB_WARN(stepDeque6_sub_666068); }
+            // Deque#6 (mouth) step — PORTED (M2 mouth vertical). Per binary
+            //   EmoteEngine_progress @0x67d168..0x67d1d8: for each 24B {ctl,label,
+            //   talkLabel} entry, sub_666068(ctl, &outBeginFrame, &outCurrentValue,
+            //   step) then HM7[label] = outBeginFrame (Player_HM2_upsert via v30+1)
+            //   and HM7[talkLabel] = outCurrentValue (via v30+2); advance v30+=3
+            //   (24B stride). This is the only deque whose step feeds TWO HM7 keys.
+            for (EmoteMouthControlEntry_Deque6& entry : _compositeVarDeque6) {
+                float outBeginFrame   = 0.0f;
+                float outCurrentValue = 0.0f;
+                EmoteMouthController_step(entry.ctl, &outBeginFrame,
+                                          &outCurrentValue, step);   // sub_666068
+                _labelToValueHM7[entry.label]     = outBeginFrame;   // HM7 upsert @0x67d1b4
+                _labelToValueHM7[entry.talkLabel] = outCurrentValue; // HM7 upsert @0x67d1c8
+            }
             if (!_auxVarDeque8.empty())         { STUB_WARN(stepDeque8_sub_666BF8); }
             if (!_vectorVarDeque9.empty())      { STUB_WARN(stepDeque9_sub_668470); }
             if (!_lookupCurvesDeque10.empty())  { STUB_WARN(stepDeque10_lookup); }

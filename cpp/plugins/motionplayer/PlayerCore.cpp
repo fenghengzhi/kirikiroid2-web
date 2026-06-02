@@ -504,6 +504,21 @@ namespace motion {
                     }
                     _engineBack->_stateMachineDeque5.clear();
                     _engineBack->buildEyebrowControl(eyebrowControl.get());
+
+                    // M2 mouth vertical: metadata["mouthControl"] ->
+                    //   EmoteEngine::buildMouthControl (libkrkr2.so 0x66CFBC).
+                    //   Same fresh-build/re-load semantics (drop prior controllers
+                    //   first so we never double-populate). The mouth builder
+                    //   registers TWO HM#6 keys per controller (label+talkLabel).
+                    const auto mouthControl = std::dynamic_pointer_cast<PSB::PSBList>(
+                        (*metadata)["mouthControl"]);
+                    for(auto& entry : _engineBack->_compositeVarDeque6) {
+                        motion::EmoteMouthController_dtor(entry.ctl);
+                        delete entry.ctl;
+                        entry.ctl = nullptr;
+                    }
+                    _engineBack->_compositeVarDeque6.clear();
+                    _engineBack->buildMouthControl(mouthControl.get());
                 }
             }
         }

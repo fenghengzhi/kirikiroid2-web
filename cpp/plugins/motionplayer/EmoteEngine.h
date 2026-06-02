@@ -37,6 +37,7 @@
 #include "EmoteAngleController.h"
 #include "EmoteBlinkController.h"
 #include "EmoteEyebrowController.h"
+#include "EmoteMouthController.h"
 #include "internal/player_containers.h"
 #include "internal/legacy_variable_state.h"
 #include "internal/ttstr_hash.h"
@@ -218,7 +219,19 @@ namespace motion {
         EmoteEyebrowController* ctl = nullptr; // +0 — operator new(0x150) controller
         ttstr                   label;          // +8 — HM7 output key (PSB "label")
     };
-    struct EmoteCompositeVar24B_Deque6 { char raw[24]; };  // sub_666068, ARM64 24B
+    // Deque #6 (mouth, TYPE 6) element — verified by EmoteEngine_buildMouthControl
+    //   @0x66CFBC (push 24B {ctl@+0, label@+8, talkLabel@+16}; advance elem+=24;
+    //   block 504 = 21 elems) and the progress deque#6 step loop @0x67d168
+    //   (reads *v30 as ctl, v30+1 as the "label" HM7 key, v30+2 as the "talkLabel"
+    //   HM7 key, advances v30+=3 = 24B). This is the ONLY controller-deque whose
+    //   element carries TWO ttstr keys, and the ONLY builder that inserts TWO HM#6
+    //   VarRef entries (label + talkLabel, both {type=6, index=loopIndex}) for a
+    //   single controller. Corrects the prior `char raw[24]` placeholder.
+    struct EmoteMouthControlEntry_Deque6 {
+        EmoteMouthController* ctl = nullptr; // +0 — operator new(0x70) controller
+        ttstr                 label;          // +8  — HM7 key for *outBeginFrame
+        ttstr                 talkLabel;      // +16 — HM7 key for *outCurrentValue
+    };
     struct EmoteSetupEntry40B_Deque7   { char raw[40]; };  // no step fn, ARM64 40B (_guess)
     struct EmoteAuxVar24B_Deque8       { char raw[24]; };  // sub_666BF8, ARM64 24B
     struct EmoteVectorVar48B_Deque9    { char raw[48]; };  // sub_668470, ARM64 48B
@@ -282,6 +295,15 @@ namespace motion {
         //   VarRef {type=5, index=loopIndex} keyed by the element's "label".
         void buildEyebrowControl(const PSB::PSBList* eyebrowControl);
 
+        // Aligned with libkrkr2.so EmoteEngine_buildMouthControl @ 0x66CFBC.
+        //   For each enabled element in the metadata "mouthControl" PSB array:
+        //   operator new(0x70) an EmoteMouthController, run its ctor over the
+        //   element dict, push {ctl, label, talkLabel} (24B) onto deque#6, and
+        //   register TWO HM#6 VarRefs {type=6, index=loopIndex} — one keyed by the
+        //   element's "label", one keyed by the element's "talkLabel" (the unique
+        //   double-HM-insert that distinguishes the mouth category).
+        void buildMouthControl(const PSB::PSBList* mouthControl);
+
     public:
         // ====== Binary field layout (ascending offset order) ======
 
@@ -303,8 +325,13 @@ namespace motion {
         //   frame by EmoteEyebrowController_step (sub_665600) writing the scalar
         //   result into HM#7 keyed by elem.label.
         std::deque<EmoteEyebrowControlEntry_Deque5> _stateMachineDeque5;
-        // +400..+479:deque #6 — Composite variable
-        std::deque<EmoteCompositeVar24B_Deque6> _compositeVarDeque6;
+        // +400..+479:deque #6 — Mouth controllers (TYPE 6). Element =
+        //   {EmoteMouthController* ctl; ttstr label; ttstr talkLabel} (24B).
+        //   Populated by EmoteEngine::buildMouthControl (libkrkr2.so 0x66CFBC);
+        //   stepped each frame by EmoteMouthController_step (sub_666068) writing
+        //   beginFrame into HM#7 keyed by elem.label and currentValue into HM#7
+        //   keyed by elem.talkLabel.
+        std::deque<EmoteMouthControlEntry_Deque6> _compositeVarDeque6;
         // +480..+559:deque #7 — Setup/keyframe pool (no step)
         std::deque<EmoteSetupEntry40B_Deque7>   _setupPoolDeque7;
         // +560..+639:deque #8 — Auxiliary single-value var
