@@ -401,13 +401,22 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
 
 NCB_REGISTER_SUBCLASS(ResourceManager) {
     NCB_CONSTRUCTOR((iTJSDispatch2 *, tjs_int));
-    NCB_METHOD(load);
+    // M9 brick B: expose the binary ResourceManager's 12 members in the
+    // ncb_registerMembers @0x6AB8BC registration order. (setEmotePSBDecrypt*
+    // below are port extras, not part of the binary's 12.)
     NCB_METHOD(loadSource);
-    NCB_METHOD(unload);
     NCB_METHOD(clearCache);
+    NCB_PROPERTY_RO(bufLayer, getBufLayer);
+    NCB_METHOD(load);
+    NCB_METHOD(unload);
+    NCB_METHOD(unloadAll);
+    NCB_METHOD(isExistMotion);
+    NCB_METHOD(findMotion);
     NCB_METHOD(findSource);
+    NCB_METHOD_RAW_CALLBACK(random, &ResourceManager::random, 0);
     NCB_METHOD(requireLayerId);
     NCB_METHOD(releaseLayerId);
+    // port extras (not in the binary RM 12-member table):
     NCB_METHOD_RAW_CALLBACK(setEmotePSBDecryptSeed,
                             &ResourceManager::setEmotePSBDecryptSeed,
                             TJS_STATICMEMBER);

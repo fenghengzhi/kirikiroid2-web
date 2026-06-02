@@ -192,3 +192,67 @@ void motion::ResourceManager::releaseLayerId(tjs_int id) {
         _state->layerNamesById.erase(it);
     }
 }
+
+// --- M9 brick B: binary ResourceManager members missing from the port surface
+// (ncb_registerMembers @0x6AB8BC). See ResourceManager.h for the per-member
+// fidelity notes; faithful where _state maps cleanly, STUB (with addr) where the
+// real body needs the HashMap A / motion-list topology parked behind phase D. ---
+
+ttstr motion::ResourceManager::getBufLayer() const {
+    // bufLayer getter @0x6A84FC returns the ttstr @RM+40 (the most-recent cached
+    // layer-list entry's target Layer name). Port mirror: the _bufLayer
+    // scaffolding field — empty until the +72 layer-list path is wired, which is
+    // parked behind the phase-D texture-topology platform boundary.
+    return _bufLayer;
+}
+
+void motion::ResourceManager::unloadAll() const {
+    // unloadAll @0x6A8BBC clears every RM container (layer-list +72, HashMap A
+    // +88, motion-list +104, layerId Rb_tree +168, bufLayer +144). Port: clear
+    // the _state caches (the live PSB/module + layerId backing). Distinct from
+    // clearCache @0x6A8438, which in the binary clears only the +72 layer-list.
+    LOGGER->debug("ResourceManager::unloadAll()");
+    if(!_state) {
+        return;
+    }
+    _state->loadedModules.clear();
+    _state->lastLoadedPath.clear();
+    _state->lastLoadedModule.Clear();
+    _state->layerIdsByName.clear();
+    _state->layerNamesById.clear();
+    _state->usedLayerIds.clear();
+    _state->nextLayerId = 1;
+}
+
+bool motion::ResourceManager::isExistMotion(ttstr name) const {
+    // isExistMotion @0x6A96F8 walks HashMap A (+88) by motion name then the +104
+    // motion-list, returning whether dict["object"][name]["motion"] exists. The
+    // port's _state->loadedModules is keyed by load PATH, not motion name, so it
+    // is NOT a faithful substitute (CLAUDE.md: do not infer semantics from a
+    // similar name) — STUB returns false. Real body deferred with the HashMap A /
+    // motion-list topology.
+    LOGGER->warn("ResourceManager::isExistMotion() stub called: {}",
+                 name.AsStdString());
+    return false;
+}
+
+tTJSVariant motion::ResourceManager::findMotion(ttstr name) const {
+    // findMotion @0x6A9ED4 returns the motion-label array from
+    // dict["object"][name]["motion"] via HashMap A (+88) / +104 list. No port
+    // _state equivalent — STUB returns void. Real body deferred (HashMap A
+    // topology).
+    LOGGER->warn("ResourceManager::findMotion() stub called: {}",
+                 name.AsStdString());
+    return {};
+}
+
+tjs_error motion::ResourceManager::random(tTJSVariant *r, tjs_int,
+                                          tTJSVariant **, iTJSDispatch2 *) {
+    // random @0x6AB56C forwards a "random" PropGet to the KAG window object — a
+    // host concern unrelated to source caching. STUB: no-op void.
+    LOGGER->warn("ResourceManager::random() stub called");
+    if(r) {
+        r->Clear();
+    }
+    return TJS_S_OK;
+}

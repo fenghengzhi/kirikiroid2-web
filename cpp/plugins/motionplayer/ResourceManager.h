@@ -93,6 +93,19 @@ namespace motion {
         tjs_int requireLayerId();
         tjs_int requireLayerIdForName(ttstr name);
         void releaseLayerId(tjs_int id);
+
+        // M9 brick B: binary ResourceManager NCB members (ncb_registerMembers
+        // @0x6AB8BC, 12 members total) missing from the port surface. Faithful
+        // where _state maps cleanly (bufLayer/unloadAll); STUB (cite addr) where
+        // the real body needs the HashMap A (+88) / motion-list (+104) walks that
+        // are parked behind the phase-D texture-topology platform boundary.
+        [[nodiscard]] ttstr getBufLayer() const;        // prop-ro; binary +40 @0x6A84FC
+        void unloadAll() const;                         // @0x6A8BBC
+        [[nodiscard]] bool isExistMotion(ttstr name) const;     // @0x6A96F8 (STUB)
+        [[nodiscard]] tTJSVariant findMotion(ttstr name) const; // @0x6A9ED4 (STUB)
+        static tjs_error random(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+                                iTJSDispatch2 *obj);            // @0x6AB56C (STUB)
+
         [[nodiscard]] static tjs_int getEmotePSBDecryptSeed();
 
         static tjs_error setEmotePSBDecryptSeed(tTJSVariant *r, tjs_int count,
