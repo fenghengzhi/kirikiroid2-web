@@ -14,6 +14,26 @@ namespace motion {
     // ------------------------------------------------------------------
     // R-M9 Phase 1 scaffolding (M9 spike 2026-05-31; architecture confirmed
     // 2026-06-03 by full findSource-chain decompile, cluster K):
+    //
+    // PLATFORM_BOUNDARY (phase D BLOCKED, verdict 2026-06-03): the binary caches
+    // the source texture by PURE NAME (color is NOT baked) and recombines the
+    // 4-corner color gradient (packedColors[0..3]) as real PER-VERTEX vertex
+    // colors in its GPU draw. The local render stack has NO per-vertex/4-corner
+    // color primitive on ANY path: iTVPTexture2D has no Draw; iTVPRenderManager
+    // OperateRect/OperateTriangles/OperatePerspective take no per-vertex color
+    // (color only via SetParameterColor4B = one scalar RGBA/quad); GLVertexInfo
+    // has position+texcoord only; the PrivateMotionGLL port forwards just
+    // color0 and discards color1/2/3; the wasmtime oracle compares CPU-Layer
+    // pixels (software renderer). So the 4-corner gradient MUST be CPU-baked into
+    // the bitmap (SourceCache::applyPackedCornerTintLike_0x6A7518), which FORCES
+    // the (name, blendMode, packedColors) cache key. Re-keying the texture cache
+    // to name-only is therefore impossible without first adding a per-vertex
+    // color attribute to the core renderer (RenderManager.h + RenderManager_ogl
+    // + software backend) — out of motionplayer scope. The port's CPU-bake +
+    // (name,blendMode,color) keying is the CORRECT adaptation of the binary's
+    // GPU draw-time color, not a divergence to fix. Phase D (texture topology +
+    // RM/SourceCache class merge) stays parked behind this boundary; brick A
+    // (this scaffolding) is M9's faithful endpoint on the port side.
     // Binary libkrkr2.so ResourceManager (~256B, NCB registered at 0x6AB8BC)
     // exposes 14 TJS members and holds 3 internal containers + bufLayer +
     // spec int. Phase 1 declares the binary-aligned C++ fields so phase 2
