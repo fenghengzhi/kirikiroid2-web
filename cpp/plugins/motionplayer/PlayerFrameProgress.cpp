@@ -937,6 +937,96 @@ namespace internal {
         }
     }
 
+    // 砖G2: faithful root (motion["priority"]) content-snapshot stream — stream ②
+    // of Player_advanceRootAndNodes (0x6B6ADC), the root loop 0x6B6EE4..0x6B7124,
+    // run AFTER the layer stream and BEFORE the var-track/node walk. Forward-only
+    // (the binary's root loop has no backward branch — rewindRootAndNodes 0x6B9A3C
+    // also only forward-advances +568; there is no reverse root scan). On each
+    // crossed frame it snapshots priority[cursor]["content"] into _rootContent
+    // (Player+616) via sub_A0FB64 (a tTJSVariant copy-assign — the port copies the
+    // shared_ptr, semantically equivalent). NO event gate and NO "type" read,
+    // unlike the layer stream. Inert for every currently-available motion whose
+    // priority array has <2 frames (binary count-2<cursor → loop body never runs).
+    void Player::seekRootContentStreamLike_0x6B6ADC(double targetTime) {
+        if (!_activeMotion) {
+            return;
+        }
+        const auto &frames = _activeMotion->priorityFrames;
+        if (!frames) {
+            _rootStreamSource = nullptr;
+            return;
+        }
+        const int count = static_cast<int>(frames->size());
+
+        // Self-reset cursor + seed snapshot when the priority stream changes
+        // (motion (re)loaded). Mirrors the binary's firstFrame reseed of +568 and
+        // the +616 = priority[0].content seed at 0x6B38FC.
+        if (_rootStreamSource != static_cast<const void *>(frames.get())) {
+            _rootStreamSource = static_cast<const void *>(frames.get());
+            _rootFrameCursor = 0;
+            _rootContent = nullptr;
+        }
+
+        const auto frameAt =
+            [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
+            if (i < 0 || i >= count) {
+                return nullptr;
+            }
+            return std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
+        };
+        const auto numValue =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            if (!n) {
+                return 0.0;
+            }
+            switch (n->numberType) {
+                case PSB::PSBNumberType::Float:  return n->getValue<float>();
+                case PSB::PSBNumberType::Double: return n->getValue<double>();
+                case PSB::PSBNumberType::Int:
+                    return static_cast<double>(n->getValue<int>());
+                default:
+                    return static_cast<double>(n->getValue<tjs_int64>());
+            }
+        };
+        const auto frameTimeOf =
+            [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> double {
+            return f ? numValue((*f)["time"]) : 0.0;
+        };
+        const auto contentOf =
+            [](const std::shared_ptr<PSB::PSBDictionary> &f)
+            -> std::shared_ptr<const PSB::PSBDictionary> {
+            if (!f) {
+                return nullptr;
+            }
+            return std::dynamic_pointer_cast<PSB::PSBDictionary>((*f)["content"]);
+        };
+
+        // Seed the initial snapshot/nextTime from the (persistent) cursor — the
+        // binary holds +616/+576/+584 across calls; on the very first call after
+        // a reseed _rootContent is the priority[0] content (mirrors 0x6B38FC seed).
+        if (!_rootContent && count > 0) {
+            _rootContent = contentOf(frameAt(_rootFrameCursor));
+        }
+        // Derive nextTime (+584) from the persistent cursor (= priority[cursor+1].time).
+        _rootNextTime = frameTimeOf(frameAt(_rootFrameCursor + 1));
+
+        // Forward advance (0x6B6F48): while cursor < count-2 && target >= nextTime.
+        // Per step (0x6B6F78..0x6B70E4): ++cursor; +616 = priority[cursor].content;
+        // +576 = old +584; +584 = priority[cursor+1].time.
+        while (_rootFrameCursor < count - 2) {
+            if (targetTime < _rootNextTime) {           // 0x6B6F70
+                break;
+            }
+            ++_rootFrameCursor;                          // 0x6B6F78: +568 = v14+1
+            // +616 = priority[cursor].content (sub_A0FB64 snapshot @0x6B7034)
+            _rootContent = contentOf(frameAt(_rootFrameCursor));
+            _rootCurTime = _rootNextTime;                // 0x6B7044: +576 = +584
+            // +584 = priority[cursor+1].time (0x6B70E4)
+            _rootNextTime = frameTimeOf(frameAt(_rootFrameCursor + 1));
+        }
+    }
+
     void Player::advanceVariableTracksLike_0x6B6ADC(double clampedEvalTime) {
         // libkrkr2.so Player_advanceRootAndNodes (0x6B6ADC) var-track loop
         // (0x6B7124..0x6B71C8) — stream ③. For each VariableLabelScope
@@ -1380,9 +1470,10 @@ namespace internal {
                     // point's node walk. So seek the layer stream here, immediately
                     // before progressSeekNodeSlotsLike (= the node walk), at each
                     // advanceRoot/rewind equivalent point — not once at end-of-frame.
-                    seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime); // 0x6B6B80 layer pass
+                    seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime); // 0x6B6B80 layer ①
+                    seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // 0x6B6EE4 root ②
                     advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // 0x6B7124 var-track ③
-                    progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C1468 node walk
+                    progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C1468 node walk ④
                     if(!_syncWaiting && !_motionCompleted) {              // 0x6C1474
                         _clampedEvalTime = _loopTime; // +456 = player+1136 (0x6C1484)
                         progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // reseek (0x6C1488)
@@ -1404,6 +1495,7 @@ namespace internal {
                             // Stage A: layer pass before node walk at this 2nd
                             // advanceRoot (0x6C11B0, +456 = wrapped tick).
                             seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
+                            seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ②
                             advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③
                             progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11B0
                         }
@@ -1438,6 +1530,7 @@ namespace internal {
                 // pass (0x6B9AE8: --+916 while curTime>+456, same +1093-only gate)
                 // before its node walk. Layer pass before node walk here too.
                 seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
+                seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ② (rewind: root loop is still forward-only 0x6B6EE4)
                 advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③
                 progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // rewindRootAndNodes (0x6C1408)
                 if(!_syncWaiting && !_motionCompleted) {              // 0x6C1414
@@ -1461,6 +1554,7 @@ namespace internal {
                         // Stage A: layer pass before node walk at this 2nd rewind
                         // (0x6C11C0, +456 = reverse-wrapped tick).
                         seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
+                        seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ②
                         advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③
                         progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11C0
                     }
@@ -1489,6 +1583,7 @@ namespace internal {
             // Layer pass is NOT gated on _nodes.empty() (it walks motion["tag"], not
             // the node deque); only the node walk is.
             seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
+            seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ② (not _nodes-gated)
             advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③ (not _nodes-gated)
             if(!_nodes.empty()) {
                 progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);

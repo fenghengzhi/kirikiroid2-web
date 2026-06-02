@@ -215,6 +215,21 @@ namespace motion::detail {
         // re-reads the same field. See analysis/Player_progress_frame_stepping_M1_plan.md §8.5.
         // (Brick-5 commit 1: additive storage only — no reader yet.)
         std::shared_ptr<PSB::PSBList> tagFrames;
+        // Root content-snapshot stream (NO event gate; content snapshot only).
+        // Aligned to libkrkr2.so Player+548 = motion["priority"] (written by
+        // Player_initNonEmoteMotion @0x6B37D0). The binary's
+        // Player_advanceRootAndNodes (0x6B6ADC) walks this array (root loop
+        // 0x6B6EE4..0x6B7124) with the cursor at Player+568, snapshotting
+        // priority[cursor]["content"] into Player+616 (sub_A0FB64 variant copy)
+        // on each crossed frame. curTime=Player+576, nextTime=Player+584. The
+        // initial snapshot is priority[0]["content"] (0x6B38FC). Each element is
+        // a frame dict {time:double, content:{...}} — NO "type"/event read,
+        // unlike the layer (tag) stream. This is the RAW priority frame array,
+        // distinct from clipList (which decodes priority entries as clips for
+        // the node-tree build path); the binary's +548 stream is the flat
+        // frame array indexed priority[cursor]. (Stream ② of the 4-stream
+        // advance unit — see analysis/Player_progress_frame_stepping_M1_plan.md §8.)
+        std::shared_ptr<PSB::PSBList> priorityFrames;
         std::unordered_map<std::string, TimelineControlBinding>
             timelineControlByLabel;
         std::vector<std::string> resourceAliases;

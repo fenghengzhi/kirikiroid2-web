@@ -830,6 +830,14 @@ namespace motion {
         // action -> onAction(void, actionName)/onSync(). Replaces the
         // port-invented per-timeline scanLayerActions.
         void seekLayerEventStreamLike_0x6B6ADC(double targetTime);
+        // libkrkr2.so root content-snapshot stream ② (the 2nd of [layer → root →
+        // var-track → node] inside Player_advanceRootAndNodes 0x6B6ADC, root loop
+        // 0x6B6EE4..0x6B7124). Forward-only cursor advance over motion["priority"]
+        // (Player+548): on each crossed frame snapshots priority[cursor]["content"]
+        // into _rootContent (Player+616, sub_A0FB64 variant copy). NO event gate /
+        // NO "type" read. curTime=_rootCurTime(+576), nextTime=_rootNextTime(+584).
+        // Inert for logo (priority is single-clip → count<2 → loop never runs).
+        void seekRootContentStreamLike_0x6B6ADC(double targetTime);
         // libkrkr2.so var-track stream ③ (the 3rd of [layer → root → var-track →
         // node] inside Player_advanceRootAndNodes 0x6B6ADC). Advances each
         // VariableLabelScope's two 56B slots so they bracket clampedEvalTime, via
@@ -1006,6 +1014,11 @@ namespace motion {
         // pointer-identity guard reproduces that reset without coupling to the
         // motion-load site.)
         const void *_layerStreamSource = nullptr;
+        // 砖G2: which priorityFrames the root cursor is currently valid for.
+        // Same pointer-identity self-reset as _layerStreamSource (mirrors the
+        // binary's Player_reseekTimelineCursors firstFrame seed resetting +568,
+        // and the +616 = priority[0].content seed at 0x6B38FC).
+        const void *_rootStreamSource = nullptr;
         // === end M1 P1 ===
         tjs_int _maskMode = 0;                         // libkrkr2.so +1148
         std::uint32_t _colorWeightPacked = 0xFF808080u; // libkrkr2.so +1156

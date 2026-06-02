@@ -1343,6 +1343,14 @@ namespace motion::detail {
         //   +1072 (layer stream) = motion["tag"]  (motion dispatch = Player+528 ≈ root).
         // Walked by Player_advanceRootAndNodes (0x6B6ADC) for global onAction/onSync.
         snapshot->tagFrames = dictionaryList(root, {"tag"});
+        // Brick-G2 (stream ②, additive): cache the root content-snapshot stream.
+        // Aligned to libkrkr2.so Player_initNonEmoteMotion @0x6B37D0:
+        //   +548 (root stream) = motion["priority"] (motion dispatch = Player+528
+        //   ≈ root; tag and priority are sibling arrays off the same object,
+        //   read via the same dispatch v24 at 0x6B3758 / 0x6B37AC).
+        // Walked by Player_advanceRootAndNodes (0x6B6ADC, root loop 0x6B6EE4) to
+        // snapshot priority[cursor]["content"] into Player+616 — NO event gate.
+        snapshot->priorityFrames = dictionaryList(root, {"priority"});
         snapshot->moduleValue = root->toTJSVal();
         if(logoChainTraceEnabled(snapshot)) {
             resetLogoChainTraceSession(snapshot->path);
