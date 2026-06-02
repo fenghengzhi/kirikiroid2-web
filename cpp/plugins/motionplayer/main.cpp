@@ -333,7 +333,10 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD(setVisible);
     NCB_METHOD(setSlant);
     NCB_METHOD(setZoom);
-    NCB_METHOD(getLayerNames);
+    // M5-2: raw callback so the optional args[0] substring filter of the binary
+    // getLayerNames @0x6D10E0 (NCB name @0x6D88C8) is honored; the no-arg path
+    // still emits every key.
+    NCB_METHOD_RAW_CALLBACK(getLayerNames, &Player::getLayerNamesCompat, 0);
     NCB_METHOD(releaseSyncWait);
     NCB_METHOD(calcViewParam);
     NCB_METHOD(getLayerMotion);

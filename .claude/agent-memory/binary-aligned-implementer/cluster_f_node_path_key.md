@@ -50,9 +50,19 @@ segment = "/"+label(node+0) (sub_A0CC68), ancestor PREPENDED (sub_A1359C),
 `while(a2)` stops at root index 0. Port: buildNodePathKeyLike_0x6B5C1C in
 RuntimeSupport.cpp/.h — used ONLY for HM3.
 
-**getLayerNames divergence (unchanged, M5-2, out of scope):** binary
-sub_6D1018→sub_6B601C @0x6B601C walks Player+200 node deque (descend type3
-child / type4 particle); port iterates _nodeLabelMap keys (now raw labels).
+**getLayerNames (M5-2 DONE 2026-06-03, premise corrected):** the REAL
+getLayerNames is @0x6D10E0 (NCB name "getLayerNames" @0x6D88C8; IDA had MERGED
+it into sub_6D1018, which is actually processedMeshVerticesNum; sub_6B601C is
+that getter's mesh-count visitor — NOT layer names). getLayerNames does an
+in-order walk of the Player+24 std::map<ttstr,int> emitting each KEY (raw label)
+as a string variant, ascending; NO value, NO type3/4 descent, NO sub_6B601C.
+Optional args[0] = substring filter: ttstr_indexOf(key,arg)>=0 → push (contains,
+case-sensitive); void/absent arg → emit all; empty-string arg → emit none
+(indexOf returns -1). Port (PlayerLayerQuery.cpp): collectLayerNames(filter) +
+getLayerNamesCompat raw NCB callback; std::map iteration already key-ascending.
+The earlier "re-port to sub_6B601C node-deque walk" task was based on the IDA
+merge artifact and is VOID — local was already correct, only the filter was
+missing.
 
 **Why:** binary is authoritative (CLAUDE.md). **How to apply:** Player+24 =
 _nodeLabelMap = RAW label; HM3 = _perNodeLayerStateMap = path. Do NOT cross the

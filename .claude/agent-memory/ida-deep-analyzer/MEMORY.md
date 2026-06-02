@@ -1,3 +1,4 @@
+- [getLayerNames mapping correction](project_getlayernames_mapping.md) — 真 getLayerNames@0x6D10E0(IDA合并进sub_6D1018);发raw label遍历Player+24 map,args[0]子串过滤;sub_6D1018=processedMeshVerticesNum;sub_6B601C=mesh-count visitor非layer names
 - [Progress containers layout](project_progress_containers_layout.md) — 帧推进 2 deque 精确 80B 控制结构字段映射 + index公式(node÷329 / var-track÷3) + var-track 元素160B字段(两56B slot) + layer/root event-stream cursor。analysis/Player_progress_containers.md
 - [EmotePlayer architecture](project_emoteplayer_architecture.md) — 3-layer object hierarchy, Player struct layout (1496b), 9-case setVariable dispatch, physics engine in progress()
 - [Player class layout](project_player_class_layout.md) — Complete Player object layout (0x568=1384 bytes), NCB registration at 0x6D69C8, 90 functions renamed, root node field map

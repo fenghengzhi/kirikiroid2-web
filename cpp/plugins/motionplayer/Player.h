@@ -457,6 +457,11 @@ namespace motion {
         void setSlant(double v);
         void setZoom(double v);
         tTJSVariant getLayerNames();
+        // M5-2: core of getLayerNames @0x6D10E0 — in-order walk of the Player+24
+        // node-index map emitting each raw-label key as a string variant. When
+        // `filter` is non-null, only keys CONTAINING it are emitted (substring,
+        // case-sensitive; an empty filter emits none — see getLayerNamesCompat).
+        tTJSVariant collectLayerNames(const ttstr *filter);
         void releaseSyncWait();
         void calcViewParam();
         tTJSVariant getLayerMotion(ttstr name);
@@ -527,6 +532,15 @@ namespace motion {
                                          tTJSVariant **param, iTJSDispatch2 *objthis);
         static tjs_error getMotionCompat(tTJSVariant *result, tjs_int numparams,
                                          tTJSVariant **param, iTJSDispatch2 *objthis);
+        // M5-2: raw NCB callback for getLayerNames @0x6D10E0 (registered as
+        // "getLayerNames" @0x6D88C8). The binary takes an optional args[0]
+        // substring filter — its absence (void type tag, `*a2==0`) emits all
+        // keys; a string arg emits only keys containing it. Matches the raw
+        // (this, args, result) calling convention of the binary callback.
+        static tjs_error getLayerNamesCompat(tTJSVariant *result,
+                                             tjs_int numparams,
+                                             tTJSVariant **param,
+                                             iTJSDispatch2 *objthis);
         static tjs_error setDrawAffineTranslateMatrixCompat(
             tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
             Player *nativeInstance);

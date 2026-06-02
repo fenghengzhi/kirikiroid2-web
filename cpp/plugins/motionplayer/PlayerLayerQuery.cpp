@@ -140,24 +140,71 @@ namespace motion {
         }
     }
 
-    tTJSVariant Player::getLayerNames() {
-        // PORT DIVERGENCE (out of node-index-key scope): the binary getLayerNames
-        // (sub_6D1018 → sub_6B601C @0x6B601C) does NOT iterate the Player+24
-        // map — it walks the Player+200 node deque with a visitor that descends
-        // into type==3 child players and type==4 particle arrays. This port
-        // instead iterates the Player+24 node-index map keys (raw PSB labels,
-        // one key per label, last-write-wins on collision). Re-porting to
-        // sub_6B601C is tracked separately (M5-2).
+    tTJSVariant Player::collectLayerNames(const ttstr *filter) {
+        // Aligned to libkrkr2.so Player_getLayerNames @0x6D10E0 (NCB-registered
+        // as "getLayerNames" @0x6D88C8; IDA had merged it into sub_6D1018 —
+        // sub_6B601C is the SEPARATE processedMeshVerticesNum visitor, unrelated
+        // to layer names). The binary creates a TJS Array and walks the Player+24
+        // node-index std::map<ttstr,int> in-order (leftmost @+48 then
+        // _Rb_tree_increment @sub_1485230), emitting each KEY (raw PSB "label")
+        // as a string variant — never the value (node index), no nodeType /
+        // visible gating, no type3/type4 descent.
         ensureMotionLoaded();
         if(!_activeMotion) {
             return detail::makeArray({});
         }
+        // 0x6D1134: `if (*a2 == 0)` — void/absent args[0] emits every key;
+        // otherwise apply the substring filter below.
+        std::string needle;
+        const bool hasFilter = filter != nullptr;
+        if(hasFilter) {
+            needle = detail::narrow(*filter);
+        }
         std::vector<std::string> labels;
         labels.reserve(_nodeLabelMap.size());
+        // std::map iteration is key-ascending = the binary's in-order RB-tree
+        // walk; _nodeLabelMap keys are raw labels (M5-1).
         for(const auto &[label, _] : _nodeLabelMap) {
+            if(hasFilter) {
+                // 0x6D114C: push only when ttstr_indexOf(key, args[0]) >= 0,
+                // i.e. the key CONTAINS the filter (case-sensitive). An empty
+                // filter string makes ttstr_indexOf return -1 for every key, so
+                // an empty (but present) arg emits NOTHING — distinct from the
+                // void/absent arg above which emits all.
+                if(needle.empty() || label.find(needle) == std::string::npos) {
+                    continue;
+                }
+            }
             labels.push_back(label);
         }
         return detail::makeArray(detail::stringsToVariants(labels));
+    }
+
+    tTJSVariant Player::getLayerNames() {
+        // No-filter entry point (the no-arg TJS call path + C++ callers such as
+        // the unit tests). Equivalent to the binary's void-args[0] branch.
+        return collectLayerNames(nullptr);
+    }
+
+    tjs_error Player::getLayerNamesCompat(tTJSVariant *result, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          iTJSDispatch2 *objthis) {
+        auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        // 0x6D1134 void gate: a present, non-void args[0] enables the substring
+        // filter; absence/void emits all keys.
+        ttstr filter;
+        const bool hasFilter =
+            numparams > 0 && param && param[0] && param[0]->Type() != tvtVoid;
+        if(hasFilter) {
+            filter = *param[0];
+        }
+        if(result) {
+            *result = self->collectLayerNames(hasFilter ? &filter : nullptr);
+        }
+        return TJS_S_OK;
     }
 
     void Player::releaseSyncWait() {
