@@ -30,7 +30,17 @@ NCB_REGISTER_SUBCLASS_DELAY(SourceCache) {
     NCB_METHOD(clearCache);
     NCB_PROPERTY_RO(bufLayer, getBufLayer);
 }
-NCB_REGISTER_SUBCLASS_DELAY(ObjSource) { NCB_CONSTRUCTOR(()); }
+NCB_REGISTER_SUBCLASS_DELAY(ObjSource) {
+    NCB_CONSTRUCTOR(());
+    // M9 brick C: binary ObjSource dict-facade members (ncb_registerMembers
+    // @0x69CCB8): 4 numeric prop-ro + clip prop-ro + drawLayer method.
+    NCB_PROPERTY_RO(originX, getOriginX);
+    NCB_PROPERTY_RO(originY, getOriginY);
+    NCB_PROPERTY_RO(width, getWidth);
+    NCB_PROPERTY_RO(height, getHeight);
+    NCB_PROPERTY_RO(clip, getClip);
+    NCB_METHOD(drawLayer);
+}
 
 // Aligned to libkrkr2.so Motion.Point/Circle/Rect/Quad/LayerGetter (0x690FBC~0x69B350)
 NCB_REGISTER_SUBCLASS_DELAY(Point) {

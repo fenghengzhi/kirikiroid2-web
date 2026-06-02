@@ -113,25 +113,57 @@ namespace motion {
         std::list<Entry> _entries;
     };
 
+    // Aligned to libkrkr2.so ObjSource (ncb_registerMembers @0x69CCB8). The
+    // binary ObjSource is NOT a fields struct — it is a thin dict FACADE:
+    // operator new(0x18) holds a single tTJSVariant (qword[0]) referencing the
+    // PSB "source" dict, and every member reads dict[key]. The former
+    // _key/_src/_blendMode/_color fields were a port invention (MASTER's
+    // "ObjSource missing 6 members" was inverted — it has no struct fields).
+    //
+    // Still constructed NOWHERE in the port: the binary RM findSource @0x6AAB3C
+    // builds it from dict["source"][...]; the port findSource returns the loaded
+    // module instead. Wiring findSource->ObjSource is part of the source-
+    // resolution topology parked behind the phase-D texture/render platform
+    // boundary, so this class is shape-faithful but currently dead.
     class ObjSource {
     public:
         ObjSource() = default;
-        ObjSource(ttstr key, ttstr src, tjs_int blendMode, tTJSVariant color) :
-            _key(std::move(key)),
-            _src(std::move(src)),
-            _blendMode(blendMode),
-            _color(std::move(color)) {}
+        explicit ObjSource(tTJSVariant sourceDict) :
+            _sourceDict(std::move(sourceDict)) {}
 
-        const ttstr &key() const { return _key; }
-        const ttstr &src() const { return _src; }
-        tjs_int blendMode() const { return _blendMode; }
-        tTJSVariant color() const { return _color; }
+        // originX/originY @0x69D014/0x69D0D8 = dict["originX"/"originY"] (int).
+        tjs_int getOriginX() const { return readInt(TJS_W("originX"), 0); }
+        tjs_int getOriginY() const { return readInt(TJS_W("originY"), 0); }
+        // width/height @0x69D19C/0x69D27C = dict["width"/"height"]; the binary
+        // returns 32 when the backing source variant is not a dict object (its
+        // `type != 7` gate), which readInt's default branch reproduces.
+        tjs_int getWidth() const { return readInt(TJS_W("width"), 32); }
+        tjs_int getHeight() const { return readInt(TJS_W("height"), 32); }
+        // clip @0x69D35C (prop-ro) builds a Motion.Rect from
+        // dict["clip"].{left,top,right,bottom}; drawLayer @0x69D6D8 (method) does
+        // a SetSize + Layer draw (a draw-time op, platform-boundary-adjacent).
+        // Both bodies deferred — registered for surface fidelity, void / no-op.
+        tTJSVariant getClip() const { return {}; }
+        void drawLayer(tTJSVariant /*target*/) {}
 
     private:
-        ttstr _key;
-        ttstr _src;
-        tjs_int _blendMode = 0;
-        tTJSVariant _color;
+        // Reads an int member from the backing source dict; returns `dflt` unless
+        // the backing is a dict object (binary `type == 7` gate) holding `key`.
+        tjs_int readInt(const tjs_char *key, tjs_int dflt) const {
+            if(_sourceDict.Type() != tvtObject) {
+                return dflt;
+            }
+            iTJSDispatch2 *obj = _sourceDict.AsObjectNoAddRef();
+            tTJSVariant v;
+            if(obj &&
+               TJS_SUCCEEDED(obj->PropGet(0, key, nullptr, &v, obj)) &&
+               v.Type() != tvtVoid) {
+                return static_cast<tjs_int>(v);
+            }
+            return dflt;
+        }
+
+        tTJSVariant _sourceDict;  // qword[0]: the PSB "source" dict facade
     };
 
     // Aligned to libkrkr2.so Motion.Point (0x690FBC)
