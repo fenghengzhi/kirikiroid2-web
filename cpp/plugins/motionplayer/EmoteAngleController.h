@@ -10,7 +10,7 @@
 //   +88       float    targetRad     // after shortest-path wrap
 //   +92       float    startRad
 //   +96       float    invDuration
-//   +100      int32_t  powCount
+//   +100      float    powCount (raw float bits from keyframe[+8], read *(float*))
 //   +104      float    phase
 //   +108      int32_t  pad
 //
@@ -48,7 +48,7 @@ namespace motion {
         float   targetRad  = 0.0f;  // +88
         float   startRad   = 0.0f;  // +92
         float   invDuration = 0.0f; // +96
-        int32_t powCount = 0;       // +100
+        float   powCount = 0.0f;    // +100 — raw float bits (read *(float*), not int)
         float   phase = 0.0f;       // +104
         int32_t pad = 0;            // +108
     };

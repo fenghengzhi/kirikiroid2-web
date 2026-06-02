@@ -4,6 +4,7 @@
 #include "EmoteAngleController.h"
 
 #include <cmath>
+#include <cstring> // std::memcpy for the raw-bits powCount reinterpret
 
 namespace motion {
 
@@ -82,7 +83,7 @@ namespace motion {
                 self->currentRad = v;                              // *(a1+84)
                 self->state = 0;
             } else {
-                float v = std::pow(p, static_cast<float>(self->powCount))
+                float v = std::pow(p, self->powCount)
                           * (self->targetRad - self->startRad) + self->startRad;
                 while (v < 0.0f)     v += 6.2832f;
                 while (v >= 6.2832f) v -= 6.2832f;
@@ -102,7 +103,12 @@ namespace motion {
                 self->targetRad = dest;                            // *(a1+88) = destination
                 self->state = 1;                                   // *(a1+80) = 1
                 self->invDuration = 1.0f / elem.duration;          // *(a1+96) = 1.0/elem.duration
-                self->powCount = static_cast<int32_t>(elem.powCount);
+                // powCount(+100) = keyframe[+8] RAW BITS: binary writes
+                //   *(a1+100) = *(uint*)(v6+8) (DWORD copy) and reads it via
+                //   pow(v11, *(float*)(a1+100)) at 0x6666f8 (no SCVTF). Raw float
+                //   bit reinterpret, not int->float (same class as eye/eyebrow/
+                //   mouth/transition, fixed 2316276/2870209).
+                std::memcpy(&self->powCount, &elem.powCount, sizeof(float));
                 self->queue.pop_front();                           // advance front / free block
                 // NOTE: binary does NOT write phase (a1+104) in the setup branch.
             }
