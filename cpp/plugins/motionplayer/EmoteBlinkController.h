@@ -33,7 +33,7 @@
 //   +312       float   trackSpan
 //   +316       float   trackAccum
 //   +320       float   trackInvDur
-//   +324       int32_t trackPow
+//   +324       float   trackPow (raw float bits from keyframe[+8], read *(float*))
 //   +328       int32_t beginFrame   (PSB "beginFrame", int)
 //   +332       int32_t endFrame     (PSB "endFrame", int)
 //   +340       float   blinkIntervalMin (PSB "blinkIntervalMin", double->float)
@@ -106,7 +106,7 @@ namespace motion {
         float   trackSpan   = 0.0f;// +312
         float   trackAccum  = 0.0f;// +316
         float   trackInvDur = 0.0f;// +320
-        int32_t trackPow    = 0;   // +324
+        float   trackPow    = 0.0f;// +324 — raw float bits (read *(float*), not int)
 
         // +328..+360 — blink state machine.
         int32_t beginFrame  = 0;   // +328  (PSB "beginFrame")

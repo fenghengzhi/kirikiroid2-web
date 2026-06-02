@@ -4,6 +4,7 @@
 #include "EmoteBlinkRng.h"
 
 #include <cmath>
+#include <cstring> // std::memcpy for the raw-bits trackPow reinterpret
 
 #include "psbfile/PSBValue.h"
 
@@ -259,7 +260,12 @@ namespace motion {
                 self->trackAccum  = 0.0f;                   // *(a1+316)=0
                 self->trackSpan   = self->trackResolvedSpan;// *(a1+312)=*(a1+288)
                 self->trackInvDur = 1.0f / kf.duration;     // *(a1+320)=1/v11
-                self->trackPow    = static_cast<int32_t>(kf.powCount); // *(a1+324)
+                // trackPow(+324) = keyframe[+8] RAW BITS. The binary copies the
+                //   keyframe's powCount dword (v12 = *(_DWORD*)(v10+8)) into
+                //   *(_DWORD*)(a1+324) and later reads it as *(float*)(a1+324)
+                //   (0x663cf0 store / 0x663d50,0x663d90 LDR S, no SCVTF). It is a
+                //   raw float-bit reinterpret, NOT an int->float conversion.
+                std::memcpy(&self->trackPow, &kf.powCount, sizeof(float)); // *(a1+324)
                 v5 = self->trackState + 1;                  // v19+1
                 self->trackState = v5;                      // *(a1+296)=v5
                 if (v5 != 2) {
@@ -272,7 +278,7 @@ namespace motion {
             {
                 const float span = self->trackSpan;
                 const float invDur = self->trackInvDur;
-                const float pw = static_cast<float>(self->trackPow);
+                const float pw = self->trackPow; // raw float bits, read as-is
                 const float v23 =
                     std::pow(self->trackAccum / span, 1.0f / pw) + invDur * a3;
                 const float v24 = std::pow(v23, pw);

@@ -8,6 +8,7 @@
 #include "EmoteEyebrowController.h"
 
 #include <cmath>
+#include <cstring> // std::memcpy for the raw-bits trackPow reinterpret
 
 #include "psbfile/PSBValue.h"
 
@@ -152,10 +153,10 @@ namespace motion {
                 //                                                      /*0x6656fc*/
                 const float v14 =
                     std::pow(self->trackAccum / self->trackSpan,
-                             1.0f / static_cast<float>(self->trackPow)) +
+                             1.0f / self->trackPow) +
                     (self->trackInvDur * a3);
                 const double v15 = std::pow(v14,
-                    static_cast<float>(self->trackPow)); // double /*0x665708*/
+                    self->trackPow); // double /*0x665708*/
                 const float v16 = self->trackAccum;      // *(a1+312)  /*0x665710*/
                 const float v17 = self->trackDir;        // *(a1+308)  /*0x665714*/
                 // v18 = v15*span(+316) - accum(+312).               /*0x66572c*/
@@ -224,7 +225,9 @@ namespace motion {
                 self->trackAccum  = 0.0f;                    // *(a1+312)=0  /*0x665684*/
                 self->trackSpan   = self->trackResolvedSpan; // *(a1+316)=*(a1+288) /*0x665690*/
                 self->trackInvDur = 1.0f / kf.duration;      // *(a1+324)=1/*(v10+4) /*0x6656a4*/
-                self->trackPow    = static_cast<int32_t>(kf.powCount); // *(a1+320)=*(v10+8) /*0x6656b0*/
+                // trackPow(+320) = keyframe[+8] RAW BITS (read *(float*), no SCVTF),
+                //   same raw-float-bit semantics as eye/mouth — not int->float.
+                std::memcpy(&self->trackPow, &kf.powCount, sizeof(float)); // *(a1+320)=*(v10+8) /*0x6656b0*/
 
                 self->valueTrack12B.queue.pop_front();       // advance +16 / free block /*0x6656b4*/
                 self->trackState = self->trackState + 1;     // ++*(a1+296) /*0x6657fc*/

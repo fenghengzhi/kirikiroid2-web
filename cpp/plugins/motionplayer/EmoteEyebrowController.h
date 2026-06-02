@@ -58,7 +58,7 @@
 //   +308       float   trackDir     (+1/-1 ramp direction)
 //   +312       float   trackAccum   (NOTE: eye uses +316 for accum — swapped)
 //   +316       float   trackSpan    (NOTE: eye uses +312 for span — swapped)
-//   +320       int32_t trackPow     (NOTE: eye uses +324 for pow — swapped)
+//   +320       float   trackPow     (raw float bits; eye uses +324 for pow — swapped)
 //   +324       float   trackInvDur  (NOTE: eye uses +320 for invDur — swapped)
 //   +328       int32_t beginFrame   (PSB "beginFrame", int; ctor-only read)
 //
@@ -127,7 +127,7 @@ namespace motion {
         float   trackDir    = 0.0f;// +308
         float   trackAccum  = 0.0f;// +312 (eye: +316)
         float   trackSpan   = 0.0f;// +316 (eye: +312)
-        int32_t trackPow    = 0;   // +320 (eye: +324)
+        float   trackPow    = 0.0f;// +320 (eye: +324) — raw float bits, read *(float*)
         float   trackInvDur = 0.0f;// +324 (eye: +320)
 
         // +328 — PSB "beginFrame" (int). Read by the ctor only (to seed
