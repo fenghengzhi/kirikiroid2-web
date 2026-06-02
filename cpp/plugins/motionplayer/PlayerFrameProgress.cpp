@@ -1,6 +1,8 @@
 // PlayerFrameProgress.cpp — frameProgress timeline/control stepping
 // Split from PlayerRender.cpp for maintainability.
 //
+#include <cmath> // std::floor — var-track interp interval quantize
+
 #include "PlayerInternal.h"
 #include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
 #include "MotionTraceWeb.h"
@@ -1005,12 +1007,11 @@ namespace internal {
                     slot.interval = static_cast<std::uint32_t>(
                         intValue((*content)["interval"]));
                     slot.value = numValue((*content)["value"]);
-                    // easing (slot+32) is a raw variant in the binary; we keep its
-                    // string form (curve-form easing is lossy here — inert path).
-                    if (auto e = std::dynamic_pointer_cast<PSB::PSBString>(
-                            (*content)["easing"])) {
-                        slot.easing = detail::widen(e->value);
-                    }
+                    // easing (slot+32) = content["easing"] raw value — a bezier
+                    // {x,y} dict consumed by applyBezierEasing (NOT a string).
+                    slot.easing = (*content)["easing"];
+                } else {
+                    slot.easing = nullptr;
                 }
             };
 
@@ -1035,6 +1036,86 @@ namespace internal {
             // then slot[0] AGAIN if !slot1.merged — both BL sub_6B7A70(item+48,..).
             if (!item.slot[0].merged) merge(item.slot[0]);
             if (!item.slot[1].merged) merge(item.slot[0]);
+        }
+    }
+
+    void Player::interpolateVarTrackValuesLike_0x6BBE20(double clampedEvalTime) {
+        // libkrkr2.so Player_interpolateVarTrackValues @0x6BBE20. Writes item+16
+        // (the value HM4 caches) for each VariableLabelScope. active=slot[cursor]
+        // is prev (lower frame), other=slot[!cursor] is next. Gate (0x6BBF14):
+        // skip if active.typeZeroFlag (type==0 → no value). Then HOLD vs LERP.
+        const auto numValue =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            if (!n) return 0.0;
+            switch (n->numberType) {
+                case PSB::PSBNumberType::Float:  return n->getValue<float>();
+                case PSB::PSBNumberType::Double: return n->getValue<double>();
+                case PSB::PSBNumberType::Int:
+                    return static_cast<double>(n->getValue<int>());
+                default:
+                    return static_cast<double>(n->getValue<tjs_int64>());
+            }
+        };
+        // Player_applyBezierEasing @0x69A754: easing = {x:[...], y:[...]} control
+        // points (count multiple of 3). Clamp t to [x[0], x[n-1]] → y end; else
+        // stride-3 scan locates the segment and the curve uses t DIRECTLY:
+        //   B(t) = (1-t)³y0 + 3(1-t)²t·y1 + 3(1-t)t²·y2 + t³y3
+        // (the x values only locate the segment; they do not re-parameterise t —
+        // faithful to the binary's discard of the xs reads).
+        const auto applyBezierEasing =
+            [&](const std::shared_ptr<PSB::IPSBValue> &easing,
+                double t) -> double {
+            auto dict = std::dynamic_pointer_cast<PSB::PSBDictionary>(easing);
+            if (!dict) return t;
+            auto xs = std::dynamic_pointer_cast<PSB::PSBList>((*dict)["x"]);
+            auto ys = std::dynamic_pointer_cast<PSB::PSBList>((*dict)["y"]);
+            if (!xs || !ys) return t;
+            const int count = static_cast<int>(xs->size());
+            if (count == 0 || static_cast<int>(ys->size()) < count) return t;
+            const auto xAt = [&](int i) { return numValue((*xs)[i]); };
+            const auto yAt = [&](int i) { return numValue((*ys)[i]); };
+            if (xAt(0) >= t) return yAt(0);            // 0x69A938
+            if (xAt(count - 1) <= t) return yAt(count - 1);  // 0x69A958
+            int s = 0;
+            do { s += 3; } while (s < count && xAt(s) < t);  // 0x69A960 stride-3
+            const double y0 = yAt(s - 3), y1 = yAt(s - 2),
+                         y2 = yAt(s - 1), y3 = yAt(s);
+            const double u = 1.0 - t;                  // 0x69AA80 cubic bezier
+            return u * u * u * y0 + 3.0 * u * u * t * y1
+                 + 3.0 * u * t * t * y2 + t * t * t * y3;
+        };
+
+        for (auto &item : _variableLabelScopes) {
+            const int cursor = item.activeSlotCursor & 1;
+            detail::VarTrackSlot &active = item.slot[cursor];     // prev
+            detail::VarTrackSlot &other = item.slot[cursor ^ 1];  // next
+            if (active.typeZeroFlag) {
+                continue;                       // 0x6BBF14 gate: type==0 → no value
+            }
+            double v;
+            if (active.interpFlag == 0 || other.typeZeroFlag) {
+                v = active.value;               // HOLD (0x6BBF40)
+            } else {
+                double d = clampedEvalTime - active.time;   // evalTime - prevTime
+                if (active.interval != 0) {                 // 0x6BBF74 quantize
+                    d = std::floor(d / active.interval) * active.interval;
+                }
+                const double Vp = active.value, Vo = other.value;
+                if (Vo == Vp) {
+                    v = Vp;                     // degenerate → hold
+                } else {
+                    double t = d / (other.time - active.time);  // 0x6BBFBC
+                    if (active.easing) {        // slot+48 easingPresent ~ easing!=null
+                        t = applyBezierEasing(active.easing, t); // 0x6BBFC8
+                    }
+                    v = Vo * t + Vp * (1.0 - t); // LERP (0x6BBFD8)
+                }
+            }
+            item.value = v;                     // item+16 (0x6BBF54)
+            // The binary then calls Player_bindParameterValue_writesHM1_HM2(
+            //   player, item, 0, v) to populate HM1/HM2 — DEFERRED to the HM1/HM2
+            //   bind port; item+16 alone feeds HM4 via resetMotionState loop2.
         }
     }
 

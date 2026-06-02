@@ -222,7 +222,11 @@ namespace motion::detail {
         std::uint8_t interpFlag = 0;   // +21 merge: type==2→0, type==3→1
         bool merged = false;           // +22 step→0, merge→1 (advance merge-gate)
         double value = 0.0;            // +24 merge: *((double*)a1+3) = frame["value"]
-        ttstr easing;                  // +32 merge: frame["content"]["easing"]
+        // +32 easing — merge: frame["content"]["easing"]. A bezier control-point
+        // dict {x:[...], y:[...]} (NOT a string), consumed by
+        // Player_applyBezierEasing @0x69A754. slot+48 easingPresent is modelled as
+        // (easing != null).
+        std::shared_ptr<PSB::IPSBValue> easing;
     };
 
     // VariableLabelScope — libkrkr2.so Player+1296 std::deque element (160B).

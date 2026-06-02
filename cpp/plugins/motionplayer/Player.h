@@ -792,6 +792,14 @@ namespace motion {
         // the inlined step (sub_6B786C) + merge (sub_6B7A70). Inert for every
         // currently-available motion (none expose a populated "variable" list).
         void advanceVariableTracksLike_0x6B6ADC(double clampedEvalTime);
+        // libkrkr2.so Player_interpolateVarTrackValues @0x6BBE20 — the var-track
+        // item+16 writer (the value HM4 caches). Called at the start of
+        // Player_resetMotionState_clearAndRebuild before its loop2 snapshots
+        // item+16 → HM4. Per VariableLabelScope: HOLD or LERP between the
+        // active(prev)/other(next) slot brackets, t interval-quantized + cubic-
+        // bezier eased (Player_applyBezierEasing @0x69A754). Currently unwired
+        // (the port has no resetMotionState yet); lands the value computation.
+        void interpolateVarTrackValuesLike_0x6BBE20(double clampedEvalTime);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);

@@ -163,6 +163,16 @@
   **插值**（slot bracket → HM4 value）尚未实现（brick 2.5，仍 inert）。
 - **遗留疑点（inert，不阻塞）**：item+0 cascadeKey 对 array-label 的 ttstr_c_str 形态、双 slot0 merge
   是否 IDA 之外另有语义——现有材料无法判，按忠实复刻 disasm 落地。
+- ✅ **brick 2.5 DONE**：`interpolateVarTrackValuesLike_0x6BBE20`（item+16 = HOLD/LERP，
+  active=prev/other=next，t=(eval−prevTime)/(nextTime−prevTime) 经 interval 量化 +
+  cubic-bezier easing `applyBezierEasing_0x69A754`）+ easing 类型修正（VarTrackSlot.easing
+  ttstr→`{x,y}` bezier dict）。本对话 decompile 0x6BBE20/0x69A754 验证。**当前 unwired**
+  （port 无 resetMotionState；该函数在 resetMotionState 开头被调，brick 3 接线）。
+  build 通过 + logo diff 0 mismatch（easing 类型改动触及 live merge，已复验未回归）。
+  bindParameterValue(HM1/HM2) 调用 DEFERRED（HM1/HM2 写侧，brick 3b）。
+  - 找到的 var-track 完整调用图（brick 3 蓝图）：`resetMotionState`(0x6B2B7C) = clearHM3_HM4
+    → **interpolateVarTrackValues**(item+16 + bindHM1/HM2) → loop1(node evaluateTimeline)
+    → **loop2**(item+16 → HM4@+1240) → loop3(HM3@+1184 perNodePath)。caller = playImpl(0x6B2284)。
 
 ### 忠实 brick 路线
 1. ✅ **基地重构（brick 1）DONE（2026-06-02）**：`VariableLabelScope` 补全为 {cascadeKey, activeSlotCursor, value, labelName, VarTrackSlot slot[2]}（slot 含 +20 gateFlag）；删死 struct `VariableLabelEntry`；Player 字段 `vector<VariableLabelEntry> _variableLabelEntries` → `deque<VariableLabelScope> _variableLabelScopes`（容器形态对齐 deque）；`initVariables` 改产出 binary 一致 cascadeKey=`scope+"::"+label`。**provably inert**（_variableLabelScopes 零 reader）→ web debug build 通过、logo diff 不受影响（构造上）。改动文件：value_structs.h / player_containers.h / RuntimeSupport.h / Player.h / PlayerMotionLoad.cpp。
