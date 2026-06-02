@@ -144,10 +144,11 @@ namespace motion {
     //   cascadeKey (item+0)  <- scope present ? scope+"::"+label : label
     //       (binary 0x6CDAEC..0x6CDBB4: v25 = sub_A1359C(scope, "::");
     //        item+0 = sub_A1359C(v25, label) — concat, NOT scope-suffix split)
-    //   labelName (item+24)  <- entry["label"]   (sub_A0FB64 snapshot @0x6CDA98)
-    //   value (item+16)      <- 0  (written later by var-track stream③; HM4 reads it)
+    //   frameSource (item+24) <- entry["label"] raw value (sub_A0FB64 @0x6CDA98) —
+    //       the keyframe list stream③ iterates; SAME value as item+0
+    //   value (item+16)      <- 0  (interpolated later; HM4 reads it)
     //   cursor (item+8)      <- 0
-    //   slot[0/1].gateFlag   <- 1  (binary item+68/+124 seeded =1 @0x6CD9C0)
+    //   slot[0/1].typeZeroFlag <- 1  (binary item+68/+124 seeded =1 @0x6CD9C0)
     void Player::initVariables() {
         if(false) {
             return;
@@ -173,20 +174,23 @@ namespace motion {
 
             detail::VariableLabelScope entry;
 
-            // labelName (item+24) = entry["label"].
-            std::string label;
-            if(const auto labelVal = (*entryDic)["label"]) {
-                if(const auto labelStr = std::dynamic_pointer_cast<
-                       PSB::PSBString>(labelVal)) {
-                    label = labelStr->value;
-                }
-            }
-            entry.labelName = detail::widen(label);
+            // frameSource (item+24) = entry["label"] raw value — the keyframe list
+            // the var-track advance (stream③) iterates. The binary stores this same
+            // entry["label"] at both item+0 (key) and item+24 (frames).
+            const auto labelVal = (*entryDic)["label"];
+            entry.frameSource = labelVal;
 
-            // cascadeKey (item+0): scope concatenated with "::" then label, per
-            // the binary's two sub_A1359C concats — NOT the scope suffix. The
-            // join is gated on scope resolving (v38 != null), mirrored here by
+            // cascadeKey (item+0): ttstr_c_str(entry["label"]) joined with scope —
+            // the binary's two sub_A1359C concats (NOT the scope suffix). The string
+            // form is the label's text when it is a PSBString; a non-string label
+            // yields an empty base (the binary's ttstr_c_str on a non-string
+            // variant). Join gated on scope resolving (v38 != null), mirrored by
             // the PSBString cast succeeding.
+            std::string label;
+            if(const auto labelStr =
+                   std::dynamic_pointer_cast<PSB::PSBString>(labelVal)) {
+                label = labelStr->value;
+            }
             std::string scope;
             bool scopePresent = false;
             if(const auto scopeVal = (*entryDic)["scope"]) {
