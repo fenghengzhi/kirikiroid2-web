@@ -1,6 +1,6 @@
 ---
 name: anchor-node-type10
-description: Player_evaluateAnchorNodes_type10 @0x6C0528 — dampPow formula byte-verified, w/h from PSB PropGet not cache, +592/+1168/+2432 field map
+description: Player_evaluateAnchorNodes_type10 @0x6C0528 — dampPow formula byte-verified, w/h from internal render Layer (player+696) PropGet, +592=_deltaTime gate, +612=post-draw snapshot. RESOLVED in port (commits 7caf558/5018087/eb347f5).
 type: project
 ---
 
@@ -15,8 +15,14 @@ Player_evaluateAnchorNodes_type10 @0x6C0528 (local: Player::updateLayersPhase3_A
 - Note `(v27*dt/v27)` algebraically == dt, so v28 == dt*dt / v27 / 60 / anchorDamping. Compiler kept the redundant mul/div (not simplified). The /60.0 const is qword_14D67D8=0x404E000000000000=60.0 (verified).
 - dampPow is then used as **pow exponent** for scale(node+1544/1552), opacity(node+1576), color channels — AND as **lerp factor** for angle(node+1536), slant(node+1560/1568), position(node+1512/1520/1528 toward root node[0] v14[189..191]).
 
-**w/h source = PSB dispatch PropGet, NOT cache (byte-verified @0x6C0770-0x6C0848):**
-- v83 = dispatch obtained from sub_A0F5E0(player+696) [player+696 = PSB dict]. v82=off_19FD968 vtable.
+**w/h source = internal render Layer PropGet, NOT cache (byte-verified @0x6C0770-0x6C0848):**
+- CORRECTION (2026): player+696 is NOT a PSB dict — it is the per-player internal
+  render LAYER dispatch (a window.Layer instance materialized by sub_6CE19C from
+  canvas->window->CreateNew("Layer")->setSize(window.w/h)). w/h are that Layer's
+  width/height (window-sized), shared by all anchor nodes. Port mirror =
+  _internalRenderLayer (Player.h); the +612 gate guarantees it was materialized
+  last frame. (NOT node.psbNode, NOT node.interpolatedCache.)
+- v83 = dispatch obtained from sub_A0F5E0(player+696). v82=off_19FD968 vtable.
 - width: v83->vtbl[32](PropGet, flags=0x400, key=L"width"(aRwidth+2, real UTF-16LE), out=v85) -> if >=0 sub_6635DC(&v82,L"width",...) -> (double) -> node+232.
 - height: same with L"height" -> node+240.
 - node+248 = w*0.5 (originX), node+256 = h*0.5 (originY). node+264/272 zeroed. node+280 = identity oword (1.0,1.0). NO 32.0 default clamp in binary (local PlayerUpdateAnchor.cpp cw<=0?32 is WRONG/extra). 32.0 appears only as scale normalizer: pow(scaleX*32.0/w, dampPow).
@@ -31,10 +37,13 @@ Player_evaluateAnchorNodes_type10 @0x6C0528 (local: Player::updateLayersPhase3_A
 - node+232=clipW node+240=clipH node+248=originX node+256=originY
 - node+1536=angle 1544=scaleX 1552=scaleY 1560=slantX 1568=slantY 1576=opacity(int)
 - node+1512/1520/1528 = posX/Y/Z (lerp toward root v14[189/190/191] = root+1512/1520/1528)
-- node+100..115 = color bytes (4 RGBA sets) ; player+613 = needsAssignImages (set 1)
-- player+612 = second gate (frameLastTime==0 || !*(player+612) -> clear)
+- node+100..115 = color bytes (4 RGBA sets) ; player+613 = needsAssignImages (set 1) = _needsInternalAssignImages
+- player+612 = second gate. Gate = `Player+592(=_deltaTime, NOT frameLastTime) == 0 || !*(player+612) -> clear`. +612 = POST-DRAW snapshot of +613, written `+612 = +613` first thing in updateLayerAfterDraw @0x6CE7F4 (port: updateLayerAfterDrawLike_0x6CE7D8). Means "internal render Layer materialized last frame". Port mirror = _internalRenderLayerReady.
 - qword_14D7C50[(blendMode&0xF0)==0x10] = color base: [0]=255.0 [1]=128.0
 
-**Local mismatch flags (PlayerUpdateAnchor.cpp):**
-- cw<=0?32 / ch<=0?32 default: NOT in binary. Binary takes raw PropGet value (could be 0).
-- dampPow local = abs(frameLastTime)/60/max(damp,.001) — drops the dt*dt/v27 structure. WRONG vs binary v28=dt*dt/v27/60/damp.
+**Resolution (port, all aligned):**
+- dampPow: fixed to dt*(v27*dt/v27)/v27/60/anchorDamping, dt=_deltaTime, v27=_deltaTime/_speedMul, removed max(.,0.001). commit 7caf558.
+- color base 255:128 (was 255:255). commit 5018087.
+- w/h from _internalRenderLayer PropGet("width"/"height") + removed <=0?32 clamp; +612 gate via _internalRenderLayerReady (snapshot in updateLayerAfterDrawLike). commit eb347f5.
+- NOTE: a transient commit (5018087) wrongly marked w/h + 612 "architecture-blocked / prerequisite missing" — that was a faulty-grep error; the port already had updateLayerAfterDrawLike_0x6CE7D8 + _internalRenderLayer. Corrected in eb347f5.
+- Remaining: gate field naming aside, anchor type-10 is byte-aligned. Non-anchor paths (SLA piledCopy @0x6CE938) separate.
