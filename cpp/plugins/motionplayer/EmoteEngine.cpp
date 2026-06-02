@@ -161,6 +161,18 @@ namespace motion {
         }
         _compositeVarDeque6.clear();
 
+        // Delete deque#8 (transition) controllers (M2 transition vertical). The
+        //   entry owns the operator new(0x80) EmoteVarController; release its 3
+        //   heap arrays then delete. These controllers are the SELECTOR's borrowed
+        //   refCtl targets — the selector dtor (below) does NOT delete them, so we
+        //   are the sole owner. The ttstr label is released by its own destructor.
+        for (EmoteTransitionControlEntry_Deque8& entry : _auxVarDeque8) {
+            EmoteVarController_dtor(entry.ctl);
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _auxVarDeque8.clear();
+
         // Delete deque#9 (selector) controllers (M2 selector vertical). Same
         //   pattern: the entry owns the operator new(0x80) controller; the ttstr
         //   label is released by its own destructor. The controller's optionList
@@ -912,19 +924,27 @@ namespace motion {
                 }
 
                 // Resolve optLabel against the TRANSITION deque (engine+576 =
-                //   local _auxVarDeque8). That deque is the still-open transition
-                //   category; until it is built it is empty, so this search
-                //   resolves refCtl to nullptr (matching the binary's v26=0 when
-                //   the deque has no matching element). The search structure is
-                //   preserved 1:1: linear scan, compare elem.label == optLabel.
-                //   /*0x66db0c..0x66db98*/
+                //   local _auxVarDeque8). Linear scan, compare elem.label ==
+                //   optLabel; on match borrow elem.ctl, clear the matched entry's
+                //   flag byte@+16 to 0, remove the var binding (sub_66E248), and
+                //   break. The match is the FIRST hit. /*0x66db0c..0x66db98*/
+                //   This requires buildTransitionControl to have run already (it
+                //   does — PlayerCore dispatches transition before selector,
+                //   mirroring applyMetadata's per-key order @0x67D4D0). When the
+                //   motion declares no transitionControl the deque is empty and
+                //   refCtl stays null (faithful to the binary's v26=0 no-match).
                 EmoteVarController* refCtl = nullptr;                 // v26 = 0
-                // NOTE: _auxVarDeque8 elements are the opaque 24B transition
-                //   placeholder ({ctl@+0, ttstr label@+8} in the binary). With no
-                //   typed accessor yet (transition not ported) and the deque
-                //   empty, the loop body never executes; refCtl stays null. When
-                //   the transition category is ported this becomes a real lookup.
-                //   (Empty-deque -> no iteration -> faithful null result.)
+                for (EmoteTransitionControlEntry_Deque8& tentry : _auxVarDeque8) {
+                    if (tentry.label == optLabel) {                  // 0x66db0c compare
+                        refCtl       = tentry.ctl;                   // v26 = e.ctl
+                        tentry.flag  = 0;                            // e.flag@+16 = 0
+                        // sub_66E248(this, &optLabel) removes the var binding; that
+                        //   dispatch is on the variable-list TJS object (not part
+                        //   of this vertical) — skipped, same as the disabled-elem
+                        //   path elsewhere in this builder.
+                        break;
+                    }
+                }
 
                 // offValue / onValue (default 0.0).  /*0x66dbbc / 0x66dbdc*/
                 float offValue = 0.0f;
@@ -966,6 +986,81 @@ namespace motion {
             detail::EmoteVarRef& ref = _scalarHM6_1384[label];
             ref.type  = 8;   // payload low 32 bits
             ref.index = v6;  // payload high 32 bits
+        }
+    }
+
+    // Aligned with libkrkr2.so EmoteEngine_buildTransitionControl @ 0x66D4C4.
+    // Decompiled pseudocode (this conversation):
+    //   count = Motion_propGetCount(transitionControl);             // 0x66d558
+    //   for (v5 = 0; v5 < count; ++v5) {                            // 0x66d58c
+    //     elem = transitionControl[v5];                             // PropGet(0,v5) 0x66d5a8
+    //     if ((Motion_propGetBool(elem,"enabled") & 1) == 0) continue; // 0x66d62c gate -> LABEL_28
+    //     v7 = operator new(0x80);                                  // 0x66d638
+    //     EmoteVarController_ctor_20Bdeque(v7, 1);                  // 0x66d644 (count=1)
+    //     push_back deque#8 {ctl=v7, label=0, flag@+16=1};          // 0x66d660..0x66d664
+    //     label = propGet(elem, "label");                           // 0x66d724
+    //     deque#8.back().label = label;                             // 0x66d770 (AddRef into +8 slot)
+    //     ref = HM6_findOrInsert(this+1384, &back().label);         // 0x66d788 (a1+173)
+    //     ref->type = 7; ref->index = v5;                           // 0x66d790 (*v18=7; v18[1]=v5)
+    //   }
+    // Structure mirrors buildEyeControl/buildSelectorControl: enabled gate, new
+    //   the controller, push {ctl,label} (here with the extra flag byte@+16=1),
+    //   register HM#6 {type=7, index=loopIndex}. The flag byte is written by the
+    //   builder (binary: *(_BYTE*)(v8+16)=1) and read only by setVariable case7's
+    //   Animator_setKeyframes gate — the progress step (sub_666BF8) ignores it.
+    //   HM#6 index is the LOOP index v5 (a skipped/disabled element still
+    //   advances v5). MUST run before buildSelectorControl (the selector resolves
+    //   each option's refCtl by scanning THIS deque @0x66db0c).
+    void EmoteEngine::buildTransitionControl(const PSB::PSBList* transitionControl) {
+        if (!transitionControl) {
+            return;
+        }
+        const int count = static_cast<int>(transitionControl->size()); // Motion_propGetCount
+        for (int v5 = 0; v5 < count; ++v5) {                            // 0x66d58c
+            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*transitionControl)[v5]);                              // PropGet(0,v5)
+
+            // enabled gate (0x66d62c): skip when "enabled" is not truthy.
+            bool enabled = false;
+            if (elem) {
+                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
+                        (*elem)[std::string("enabled")])) {
+                    enabled = b->value;
+                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                               (*elem)[std::string("enabled")])) {
+                    enabled = n->getLongValue() != 0;
+                }
+            }
+            if (!enabled) {
+                continue;                                               // goto LABEL_28
+            }
+
+            // operator new(0x80) + ctor count=1 (raw pointer, manual lifetime —
+            //   the deque entry owns the controller; dtor delete). /*0x66d638/0x66d644*/
+            EmoteVarController* ctl = new EmoteVarController();
+            EmoteVarController_ctor(ctl, 1);                            // count=1
+
+            // label = elem["label"] as ttstr (the HM7 output key). /*0x66d724*/
+            ttstr label;
+            if (elem) {
+                if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
+                        (*elem)[std::string("label")])) {
+                    label = ttstr(s->value.c_str());
+                }
+            }
+
+            // push {ctl, label, flag=1} onto deque#8 (binary pushes {ctl, 0,
+            //   flag@+16=1} then writes label@+8; same end state). /*0x66d660..0x66d770*/
+            EmoteTransitionControlEntry_Deque8 entry;
+            entry.ctl   = ctl;
+            entry.label = label;
+            entry.flag  = 1;   // *(_BYTE*)(v8+16) = 1
+            _auxVarDeque8.push_back(std::move(entry));
+
+            // HM#6 VarRef {type=7, index=v5} keyed by label. /*0x66d788/0x66d790*/
+            detail::EmoteVarRef& ref = _scalarHM6_1384[label];
+            ref.type  = 7;   // *v18 = 7
+            ref.index = v5;  // v18[1] = v5
         }
     }
 
@@ -1098,10 +1193,21 @@ namespace motion {
                 EmoteSelectorController_step(entry.ctl, &out, step); // sub_668470
                 _labelToValueHM7[entry.label] = out;                // HM7 upsert @0x67d228
             }
-            // Deque#8 (transition, engine+576) step — still OPEN (builder 0x66D4C4
-            //   + 20B-deque controller not ported). Stepped by EmoteVarController_step
-            //   (sub_666BF8) in the binary @0x67d240. Stays a stub.
-            if (!_auxVarDeque8.empty())         { STUB_WARN(stepDeque8_sub_666BF8); }
+            // Deque#8 (transition) step — PORTED (M2 transition vertical). Per
+            //   binary EmoteEngine_progress @0x67d240..0x67d298: for each 24B
+            //   {ctl,label,flag} entry, EmoteVarController_step(ctl, v71, step)
+            //   then HM7[label] = v71[0] (the Player_HM2_upsert_labelToValue(
+            //   v13+1440, v45+1) call IS the HM#7 double-map upsert keyed by
+            //   elem.label; advance v45+=3 = 24B stride, block boundary node+63 =
+            //   504B). The controller is count=1, so out[0] is the single channel.
+            //   The flag byte@+16 is NOT read by this loop (only by setVariable
+            //   case7). Stepped AFTER selector (binary @0x67d1e0 selector, then
+            //   @0x67d240 transition).
+            for (EmoteTransitionControlEntry_Deque8& entry : _auxVarDeque8) {
+                float out = 0.0f;
+                EmoteVarController_step(entry.ctl, &out, step);  // sub_666BF8
+                _labelToValueHM7[entry.label] = out;             // HM7 upsert @0x67d288
+            }
             if (!_lookupCurvesDeque10.empty())  { STUB_WARN(stepDeque10_lookup); }
 
             // Apply the 4 direct controllers (pos/scale/color/angle).

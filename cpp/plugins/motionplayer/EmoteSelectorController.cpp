@@ -59,12 +59,14 @@ namespace motion {
                 kf.channel[i] = values[i];
             }
             kf.duration = dur;
-            // pow is a float in the binary keyframe element's powCount slot. The
-            //   element field is uint32 powCount but it is read back with LDR S
-            //   (raw float bits) in EmoteVarController_step, so store the float
-            //   bits directly (consistent with the mouth/eye/eyebrow powField
-            //   raw-bits rule — Animator_setKeyframes receives a float `pow`).
-            std::memcpy(&kf.powCount, &pow, sizeof(uint32_t));
+            // pow is a float in the binary keyframe element's powCount slot
+            //   (+16). The whole pipeline treats +16 as raw float bits: it is
+            //   written by Animator_setKeyframes (0x667300) via a DWORD copy of a
+            //   float arg, and read back with `LDR S1` (no SCVTF) in
+            //   EmoteVarController_step (0x666df4). EmoteVarKeyValue20B::powCount
+            //   is now a `float`, so this memcpy is a plain raw-bit store of the
+            //   float `pow` (consistent with the mouth/eye/eyebrow powField rule).
+            std::memcpy(&kf.powCount, &pow, sizeof(float));
             ctl->queue.push_back(kf);
         }
 

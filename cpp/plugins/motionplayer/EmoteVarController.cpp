@@ -64,7 +64,7 @@ namespace motion {
     //     for (i=0;i<count;++i) currentValue[i] = startValue[i];  // (a1+88)[i]=(a1+104)[i]
     //     state = 0;
     //   } else {
-    //     f = powf(phase, (float)powCount);
+    //     f = powf(phase, powCount);   // powCount@+112 read as float (raw bits), NO SCVTF
     //     for (i=0;i<count;++i)                      // current = target + f*(start-target)
     //       currentValue[i] = targetValue[i] + f*(startValue[i] - targetValue[i]);
     //   }
@@ -98,7 +98,12 @@ namespace motion {
             }
             self->state = 1;
             self->invDuration = 1.0f / elem.duration;          // 1.0 / *(float*)(elem+12)
-            self->powCount = static_cast<int32_t>(elem.powCount);
+            // *(_DWORD *)(a1 + 112) = *(_DWORD *)(elem + 16) — RAW 32-bit copy.
+            //   The binary moves the word verbatim (no int<->float conversion).
+            //   Both fields are `float`, so a plain assignment IS the bit copy;
+            //   memcpy makes the raw-bit intent explicit and immune to any future
+            //   field-type drift.
+            std::memcpy(&self->powCount, &elem.powCount, sizeof(float));
             self->queue.pop_front();
             self->phase = 0.0f;
             // fall through into the state==1 update (binary: v33==1 -> LABEL_24)
@@ -115,7 +120,11 @@ namespace motion {
             }
             self->state = 0;
         } else {
-            const float f = std::pow(self->phase, static_cast<float>(self->powCount));
+            // powf(phase, *(float*)(a1+112)) — the exponent is read as a float
+            //   directly (LDR S1, [X20,#0x70] @0x666df4; NO SCVTF). self->powCount
+            //   IS already a float (raw bits from the keyframe), so it is passed
+            //   straight in — no static_cast<float>(int) round-trip.
+            const float f = std::pow(self->phase, self->powCount);
             for (int i = 0; i < count; ++i) {
                 self->currentValue[i] = self->targetValue[i] +
                     f * (self->startValue[i] - self->targetValue[i]);

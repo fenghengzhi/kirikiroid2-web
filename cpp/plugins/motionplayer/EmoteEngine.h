@@ -234,7 +234,21 @@ namespace motion {
         ttstr                 talkLabel;      // +16 — HM7 key for *outCurrentValue
     };
     struct EmoteSetupEntry40B_Deque7   { char raw[40]; };  // no step fn, ARM64 40B (_guess)
-    struct EmoteAuxVar24B_Deque8       { char raw[24]; };  // sub_666BF8 (transition), ARM64 24B
+    // Deque #8 (transition, TYPE 7) element — 24B. Verified by
+    //   EmoteEngine_buildTransitionControl @0x66D4C4 (push 24B
+    //   {ctl@+0, ttstr label@+8, byte flag@+16 = 1}; advance elem+=24; block 504)
+    //   and the progress deque#8 step loop @0x67d240 (reads *v45 as the ctl ptr,
+    //   v45+1 (elem+8) as the HM7 "label" key, advances v45+=3 = 24B; block
+    //   boundary v46=node+63 = 504B). The controller is EmoteVarController
+    //   (operator new(0x80), ctor count=1). The flag byte@+16 is set to 1 by the
+    //   builder and read only by setVariable case7 (the Animator_setKeyframes
+    //   gate) — the progress step does NOT read it. Corrects the prior
+    //   `char raw[24]` placeholder.
+    struct EmoteTransitionControlEntry_Deque8 {
+        EmoteVarController* ctl = nullptr; // +0 — operator new(0x80) controller (count=1)
+        ttstr               label;          // +8 — HM7 output key (PSB "label")
+        uint8_t             flag = 1;       // +16 — builder writes 1; setVariable case7 gate
+    };
     // Deque #9 (selector, TYPE 8) element — 48B. Verified by
     //   EmoteEngine_buildSelectorControl @0x66D8FC: push to a1[86] (engine+688 =
     //   end._M_cur of the deque whose header base is engine+640 / begin._M_cur
@@ -337,6 +351,20 @@ namespace motion {
         //   here mirrored by skipping the element (no controller built).
         void buildSelectorControl(const PSB::PSBList* selectorControl);
 
+        // Aligned with libkrkr2.so EmoteEngine_buildTransitionControl @ 0x66D4C4.
+        //   For each enabled element in the metadata "transitionControl" PSB array:
+        //   operator new(0x80) an EmoteVarController (ctor count=1), push
+        //   {ctl, label, flag=1} (24B) onto deque#8 (engine+560), and register a
+        //   HM#6 VarRef {type=7, index=loopIndex} keyed by the element's "label".
+        //   A non-enabled element is skipped (the binary's `enabled` gate at
+        //   0x66d62c skips straight to LABEL_28 without building a controller).
+        //   The flag byte@+16 is set to 1 (read only by setVariable case7's
+        //   Animator_setKeyframes gate, not by the progress step). This builder
+        //   MUST run before buildSelectorControl: the selector's per-option
+        //   refCtl is resolved by scanning THIS deque (engine+576) for a matching
+        //   option label (buildSelectorControl @0x66db0c).
+        void buildTransitionControl(const PSB::PSBList* transitionControl);
+
     public:
         // ====== Binary field layout (ascending offset order) ======
 
@@ -367,10 +395,12 @@ namespace motion {
         std::deque<EmoteMouthControlEntry_Deque6> _compositeVarDeque6;
         // +480..+559:deque #7 — Setup/keyframe pool (no step)
         std::deque<EmoteSetupEntry40B_Deque7>   _setupPoolDeque7;
-        // +560..+639:deque #8 — Transition controllers (TYPE 7). 24B element;
-        //   stepped by EmoteVarController_step (sub_666BF8). Builder 0x66D4C4
-        //   not yet ported (still open).
-        std::deque<EmoteAuxVar24B_Deque8>       _auxVarDeque8;
+        // +560..+639:deque #8 — Transition controllers (TYPE 7). Element =
+        //   {EmoteVarController* ctl; ttstr label; uint8_t flag=1} (24B).
+        //   Populated by EmoteEngine::buildTransitionControl (libkrkr2.so
+        //   0x66D4C4); stepped each frame by EmoteVarController_step (sub_666BF8)
+        //   writing out[0] into HM#7 keyed by elem.label (progress @0x67d240).
+        std::deque<EmoteTransitionControlEntry_Deque8> _auxVarDeque8;
         // +640..+719:deque #9 — Selector controllers (TYPE 8). Element =
         //   {EmoteSelectorController* ctl; ttstr label} (48B, begin._M_cur at
         //   engine+656). Populated by EmoteEngine::buildSelectorControl

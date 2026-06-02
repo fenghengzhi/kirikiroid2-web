@@ -4,7 +4,7 @@
 //
 // Layout (verified by reverse-engineering sub_667030 / sub_666BF8):
 //   +0..+79   std::deque<KeyValue20B>  (libstdc++ ABI, 25 elem/block × 20B)
-//             element (20B): float channel[0..count); float duration@+12; uint32_t powCount@+16
+//             element (20B): float channel[0..count); float duration@+12; float powCount@+16 (raw bits)
 //   +80       int32_t  count          // # of float channels (2 = pos, 1 = scale, 4 = color)
 //   +84       int32_t  state          // 0=idle, 1=animating
 //   +88       float*   currentValue   // new[count] heap (zero-init)  -- output value
@@ -45,7 +45,18 @@ namespace motion {
     struct EmoteVarKeyValue20B {
         float    channel[3]; // +0,+4,+8 — per-channel destination values (element[i])
         float    duration;   // +12
-        uint32_t powCount;   // +16
+        // +16 — curve exponent. STORED AND USED AS RAW FLOAT BITS, not an int.
+        //   The whole pipeline treats +16 as a float:
+        //     - Animator_setKeyframes (0x667300) / pushback (0x667490) write it
+        //       via a DWORD copy of the float 5th argument a5
+        //       (`*(_DWORD*)(elem+16) = *a5`, where a5 is a `float`).
+        //     - step (0x666BF8) copies it to controller+112 via DWORD copy
+        //       (`*(_DWORD*)(a1+112) = *(_DWORD*)(elem+16)`) then loads it as a
+        //       float exponent directly (`LDR S1, [X20,#0x70]; powf(phase, S1)`
+        //       @0x666df4 — NO SCVTF). Modeling it as uint32 + static_cast<float>
+        //       would inject a spurious int->float conversion (SCVTF) the binary
+        //       never performs. Field is `float` so the bits round-trip exactly.
+        float    powCount;   // +16 — curve exponent (raw float bits)
     };
 
     // PLATFORM_BOUNDARY: sizeof(std::deque<>) on libstdc++ (Android, 80B) vs
@@ -65,7 +76,11 @@ namespace motion {
         float*  currentValue = nullptr; // +88 (heap, new[count]) — output value
         float*  targetValue  = nullptr; // +96 (heap, new[count]) — lerp "from"
         float*  startValue   = nullptr; // +104 (heap, new[count]) — lerp "to"
-        int32_t powCount = 0;         // +112
+        // +112 — curve exponent. RAW FLOAT BITS (see EmoteVarKeyValue20B::powCount):
+        //   step (0x666BF8) copies the keyframe's +16 word here via a DWORD copy
+        //   and later reads it with `LDR S1, [X20,#0x70]` straight into powf's
+        //   exponent (no SCVTF). Must be `float`, not int.
+        float   powCount = 0.0f;      // +112 (raw float bits)
         float   phase = 0.0f;         // +116
         float   invDuration = 0.0f;   // +120
         int32_t pad = 0;              // +124

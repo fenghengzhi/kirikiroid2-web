@@ -520,6 +520,26 @@ namespace motion {
                     _engineBack->_compositeVarDeque6.clear();
                     _engineBack->buildMouthControl(mouthControl.get());
 
+                    // M2 transition vertical: metadata["transitionControl"] ->
+                    //   EmoteEngine::buildTransitionControl (libkrkr2.so 0x66D4C4).
+                    //   Same fresh-build/re-load semantics (drop prior controllers
+                    //   first so we never double-populate). Each controller is
+                    //   operator new(0x80); the deque entry owns it. MUST run
+                    //   BEFORE buildSelectorControl below: the selector resolves
+                    //   each option's borrowed refCtl by scanning THIS deque
+                    //   (engine+576), so transition must be populated first
+                    //   (mirrors applyMetadata's per-key order @0x67D4D0:
+                    //   transitionControl is dispatched before selectorControl).
+                    const auto transitionControl = std::dynamic_pointer_cast<PSB::PSBList>(
+                        (*metadata)["transitionControl"]);
+                    for(auto& entry : _engineBack->_auxVarDeque8) {
+                        motion::EmoteVarController_dtor(entry.ctl);
+                        delete entry.ctl;
+                        entry.ctl = nullptr;
+                    }
+                    _engineBack->_auxVarDeque8.clear();
+                    _engineBack->buildTransitionControl(transitionControl.get());
+
                     // M2 selector vertical: metadata["selectorControl"] ->
                     //   EmoteEngine::buildSelectorControl (libkrkr2.so 0x66D8FC).
                     //   Same fresh-build/re-load semantics (drop prior controllers
