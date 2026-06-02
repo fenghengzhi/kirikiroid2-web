@@ -14,10 +14,18 @@ namespace motion {
             if (an.nodeType != 10 || !an.accumulated.active) continue;
             _needsInternalAssignImages = true;
             // 0x6C06E8 gate: binary tests Player+592 == _deltaTime (NOT
-            // _frameLastTime/Player+904). It also gates on `!*(Player+612)` (a
-            // second flag not yet identified in the port) — that second
-            // condition is unported (M7 follow-up). type-10 anchors are absent
-            // from the logo fixtures, so this path is inert there.
+            // _frameLastTime/Player+904). It also gates on `!*(Player+612)`.
+            // KNOWN DIVERGENCE — DEFERRED (do NOT patch via +613): Player+612 is
+            // a POST-DRAW snapshot of +613 (_needsInternalAssignImages), copied
+            // in updateLayerAfterDraw/assignImages (`+612 = +613`); it means "the
+            // render Layer was ready last frame". The port has +613
+            // (_needsInternalAssignImages) but neither the +612 snapshot field
+            // nor an updateLayerAfterDraw step to write it. Reading +613 here
+            // instead would be a phase-shifted substitute (this-frame eval write
+            // vs last-frame post-draw write), so the second condition stays
+            // unported until that post-draw data flow is ported (a separate
+            // brick). type-10 anchors are absent from the logo fixtures, so this
+            // path is inert there.
             if (_deltaTime == 0.0) {
                 an.anchorEnabled = false;
                 an.renderTreeFlag200 = false;
@@ -25,7 +33,21 @@ namespace motion {
             }
             an.anchorEnabled = true;
             an.renderTreeFlag200 = true;
-            // Read width/height (0x6C0790..0x6C0848)
+            // Read width/height (0x6C0790..0x6C0848).
+            // KNOWN DIVERGENCE — DEFERRED (architecture prerequisite missing, do
+            // NOT patch via node source): the binary reads w/h from a per-PLAYER
+            // render Layer dispatch — sub_A0F5E0(player+696) then
+            // PropGet(L"width"/L"height") — so every anchor node shares ONE w/h =
+            // the source Layer's size (set by sub_6CE19C setSize). It has NO
+            // `<=0?32` clamp (a failed PropGet yields w=0 -> pow(scale*32/0)=inf,
+            // which is the real binary behavior). The port's _internalRenderLayer
+            // (Player.h:1079, the player+696 mirror) is not materialized on this
+            // path, so the faithful read source does not yet exist. Reading
+            // node.interpolatedCache here (per-node, clamped) is the current
+            // stand-in; switching to the Layer source requires first porting the
+            // sub_6CE19C render-Layer materialization data flow (a separate
+            // brick) — patching it onto node.psbNode would introduce a per-node
+            // divergence the binary does not have.
             double cw = an.interpolatedCache.width;
             double ch = an.interpolatedCache.height;
             if (cw <= 0.0) cw = 32.0;
@@ -112,9 +134,13 @@ namespace motion {
             // Color damping (0x6C0A68..0x6C0C58)
             // Per-channel pow(channel/base, dampPow)*base*colorScale
             {
+                // RGB-channel base (0x6C0A68 region): the binary selects from
+                // qword_14D7C50[] = (blendMode & 0xF0) == 0x10 ? 255.0 : 128.0.
+                // The port previously had 255.0 : 255.0 (the 128.0 branch was
+                // lost). Alpha always uses 255.0 (below).
                 const bool isDefaultBlend =
                     (an.interpolatedCache.blendMode & 0xF0) == 0x10;
-                const double base = isDefaultBlend ? 255.0 : 255.0;
+                const double base = isDefaultBlend ? 255.0 : 128.0;
                 const auto packedColors = copyPackedColorsFromBytes(an.colorBytes);
                 const bool allEqual =
                     packedColors[0] == packedColors[1]
