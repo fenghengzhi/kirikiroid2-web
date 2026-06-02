@@ -14,6 +14,7 @@
 #include "D3DEmoteModule.h"
 #include "SourceCache.h"
 #include "D3DAdaptor.h"
+#include "PlayerRenderInternal.h"
 
 using namespace motion;
 
@@ -390,8 +391,11 @@ NCB_REGISTER_CLASS(Player) {
     // stay unbound.)
     NCB_METHOD(getCommandList);
     NCB_METHOD(onFindMotion);
-    NCB_METHOD(getD3DAvailable);
-    NCB_METHOD(doAlphaMaskOperation);
+    // getD3DAvailable / doAlphaMaskOperation are NOT Motion.Player methods.
+    // libkrkr2.so motionplayer_ncb_register @0x6D9B08 (0x6da1f0/0x6da260)
+    // registers them as namespace-level free functions on the Motion namespace
+    // object. Relocated to NCB_ATTACH_FUNCTION(..., Motion, ...) below the
+    // NCB_REGISTER_CLASS(Motion) block. (was: wrong owner on Player)
     NCB_METHOD_RAW_CALLBACK(play, &Player::playCompat, 0);
     NCB_METHOD_RAW_CALLBACK(progress, &Player::progressCompatMethod, 0);
     NCB_METHOD_RAW_CALLBACK(isPlaying, &Player::isPlayingCompat, 0);
@@ -490,6 +494,61 @@ NCB_REGISTER_CLASS(Motion) {
     Variant(TJS_W("CoordinateRecutangularXZ"),
             (tjs_int)CoordinateRecutangularXZ);
 }
+
+// ============================================================
+// Motion namespace-level free functions
+// Aligned with libkrkr2.so motionplayer_ncb_register @0x6D9B08
+// (0x6da154..0x6da260): after the 10 subclasses, two functions are
+// registered directly on the Motion namespace dispatch object via
+// sub_6FCAAC(*Motion, name, descriptor) — they are namespace-level free
+// functions, NOT Motion.Player methods. Earlier the port mis-attached
+// these to Player (NCB_METHOD on the Player subclass) — wrong owner.
+// ============================================================
+
+// Aligned with libkrkr2.so Motion_doAlphaMaskOperation @0x6AF104.
+// The binary function (xref'd from both motionplayer_ncb_register @0x6d9b08
+// AND the render path @0x6c4e28/0x6c7440/0x6c9ca8) is a single 11-arg free
+// function: (dstLayer,dstX,dstY,srcLayer,srcX,srcY,w,h,threshold,maskMode,op).
+// Its body (clip-intersect against dst PropGet("clip*"), per-pixel alpha
+// composite switching on op/maskMode, border fillRect, then update()) is
+// already faithfully ported in render_detail::applyMotionAlphaMaskLike_0x6AF104
+// (PlayerRenderInternal.cpp:627), which the live render path uses. The NCB
+// namespace entry is the very same address in the binary, so it delegates to
+// the same compositor here rather than duplicating the pixel loops.
+//   a9  = threshold        -> threshold
+//   a10 = maskMode (0/1/2) -> playerStencilType (thresholdMaskMode = a10==0)
+//   a11 = op (1/2/5/6)     -> itemFlags
+static void motion_doAlphaMaskOperation(iTJSDispatch2 *dstLayer,
+                                        int dstX,
+                                        int dstY,
+                                        iTJSDispatch2 *srcLayer,
+                                        int srcX,
+                                        int srcY,
+                                        int width,
+                                        int height,
+                                        int threshold,
+                                        int maskMode,
+                                        int op) {
+    motion::internal::render_detail::applyMotionAlphaMaskLike_0x6AF104(
+        dstLayer, dstX, dstY, srcLayer, srcX, srcY, width, height, threshold,
+        maskMode, op,
+        // motionPath/frameTime/dstNode/srcNode are port-only diagnostics on the
+        // compositor; the NCB script entry has no node/time context.
+        std::string(), 0.0, -1, -1);
+}
+
+// Aligned with libkrkr2.so Motion_getD3DAvailable @0x6B0960:
+//   return (hasGPUAccel_guess() & 1) == 0;   // D3D available iff NOT GLES-accel
+// Namespace-level free function (registered on Motion @0x6da260), NOT a
+// Motion.Player method. Platform boundary: the web port has no GLES-GPU-accel
+// vs D3D split (single software-affine path), so there is no hasGPUAccel probe
+// to invert; the port reports D3D as available. The wrong-owner relocation is
+// the binary-aligned change; the constant value is a pre-existing platform
+// boundary.
+static bool motion_getD3DAvailable() { return true; }
+
+NCB_ATTACH_FUNCTION(doAlphaMaskOperation, Motion, motion_doAlphaMaskOperation);
+NCB_ATTACH_FUNCTION(getD3DAvailable, Motion, motion_getD3DAvailable);
 
 // ============================================================
 // Callbacks (must be under motionplayer.dll module)

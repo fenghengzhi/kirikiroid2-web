@@ -518,8 +518,10 @@ namespace motion {
 
         // Misc
         tTJSVariant getCommandList();
-        bool getD3DAvailable();
-        void doAlphaMaskOperation();
+        // getD3DAvailable / doAlphaMaskOperation moved off Player: in
+        // libkrkr2.so (motionplayer_ncb_register @0x6D9B08) they are Motion
+        // namespace-level free functions, not Motion.Player methods. See
+        // main.cpp motion_getD3DAvailable / motion_doAlphaMaskOperation.
         void onFindMotion(ttstr name, int flags = 0);
         bool playMotionLike_0x6B2284(ttstr label, tjs_int flags);
         void progressMsLike_0x6D2A54(double deltaMs);

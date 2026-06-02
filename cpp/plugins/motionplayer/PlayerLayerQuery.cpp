@@ -397,9 +397,10 @@ namespace motion {
             detail::stringsToVariants(activeSourceCandidates()));
     }
 
-    bool Player::getD3DAvailable() { return true; }
-
-    void Player::doAlphaMaskOperation() {}
+    // getD3DAvailable / doAlphaMaskOperation relocated to Motion namespace-level
+    // free functions (motion_getD3DAvailable / motion_doAlphaMaskOperation in
+    // main.cpp). libkrkr2.so registers them on the Motion namespace object, not
+    // on Motion.Player (motionplayer_ncb_register @0x6D9B08, 0x6da1f0/0x6da260).
 
     tTJSVariant Player::motionList() {
         std::vector<std::string> paths;

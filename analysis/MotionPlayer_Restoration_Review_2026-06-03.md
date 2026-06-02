@@ -143,7 +143,7 @@ NCB 残留（06-02 §三未动）：D3DEmotePlayer 表 4 处别名重复注册�
    应在该文档/相关 memory 标注纠正（buildNodePathKey 存在且 HM3-only，raw-label 索引是正确行为）。
 3. **M9 phase D 边界注释补证**：反编译消费 findSource texHandle 的 draw 路径，确证或重开 per-vertex-color。
 4. **低风险即修**：删 D3DEmotePlayer 4 处别名重复注册。
-5. **架构级 open P0**（M1 剩余 / M2 / M6 / 容器 STL→HM 替换）维持分层计划，禁止盲改（差分不覆盖、无 Android oracle）。
+5. **架构级 open P0**（M1 剩余 / M2 / M6 / 容器 STL→HM 替换）——这些 open 的唯一原因是「反编译→实装」工作尚未做，**不是**「无 oracle 所以碰不得」。推进门槛 = 先 fresh decompile 拿伪代码证据（避免**无证据盲改** = CLAUDE.md BLOCKING：禁止从本地/键名/变量名推断、禁止先改后验），有证据即照常实装+构建验证，运行时验证尽力补即可（证据是阻塞项、验证是尽力项，CLAUDE.md:94）。**「差分不覆盖 / 无 Android oracle」按 CLAUDE.md:96-97 明确不是 defer/降优先级的合法理由。**
 
 ## 本轮反编译符号参考
 | 符号 | 地址 | 本轮确认 |
