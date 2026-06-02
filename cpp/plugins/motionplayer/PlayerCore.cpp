@@ -519,6 +519,21 @@ namespace motion {
                     }
                     _engineBack->_compositeVarDeque6.clear();
                     _engineBack->buildMouthControl(mouthControl.get());
+
+                    // M2 selector vertical: metadata["selectorControl"] ->
+                    //   EmoteEngine::buildSelectorControl (libkrkr2.so 0x66D8FC).
+                    //   Same fresh-build/re-load semantics (drop prior controllers
+                    //   first so we never double-populate). Each controller is
+                    //   operator new(0x80); the deque entry owns it.
+                    const auto selectorControl = std::dynamic_pointer_cast<PSB::PSBList>(
+                        (*metadata)["selectorControl"]);
+                    for(auto& entry : _engineBack->_vectorVarDeque9) {
+                        motion::EmoteSelectorController_dtor(entry.ctl);
+                        delete entry.ctl;
+                        entry.ctl = nullptr;
+                    }
+                    _engineBack->_vectorVarDeque9.clear();
+                    _engineBack->buildSelectorControl(selectorControl.get());
                 }
             }
         }

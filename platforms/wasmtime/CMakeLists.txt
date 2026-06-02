@@ -13,6 +13,7 @@ add_library(krkr2_wasmtime_guest_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/EmoteBlinkController.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/EmoteEyebrowController.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/EmoteMouthController.cpp
+    ${KRKR2PLUGIN_PATH}/motionplayer/EmoteSelectorController.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/EmoteBlinkRng.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerCore.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerFrameProgress.cpp

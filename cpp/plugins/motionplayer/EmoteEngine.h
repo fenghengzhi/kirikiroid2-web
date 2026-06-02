@@ -38,6 +38,7 @@
 #include "EmoteBlinkController.h"
 #include "EmoteEyebrowController.h"
 #include "EmoteMouthController.h"
+#include "EmoteSelectorController.h"
 #include "internal/player_containers.h"
 #include "internal/legacy_variable_state.h"
 #include "internal/ttstr_hash.h"
@@ -233,8 +234,28 @@ namespace motion {
         ttstr                 talkLabel;      // +16 — HM7 key for *outCurrentValue
     };
     struct EmoteSetupEntry40B_Deque7   { char raw[40]; };  // no step fn, ARM64 40B (_guess)
-    struct EmoteAuxVar24B_Deque8       { char raw[24]; };  // sub_666BF8, ARM64 24B
-    struct EmoteVectorVar48B_Deque9    { char raw[48]; };  // sub_668470, ARM64 48B
+    struct EmoteAuxVar24B_Deque8       { char raw[24]; };  // sub_666BF8 (transition), ARM64 24B
+    // Deque #9 (selector, TYPE 8) element — 48B. Verified by
+    //   EmoteEngine_buildSelectorControl @0x66D8FC: push to a1[86] (engine+688 =
+    //   end._M_cur of the deque whose header base is engine+640 / begin._M_cur
+    //   engine+656); the binary writes *v52=ctl (+0), then v52[1]/[3]/[4]/[5]=0
+    //   (+8/+24/+32/+40), then *v57=label at elem+8 (LABEL_63 @0x66ddec). The
+    //   progress step loop @0x67d1e0 reads *v38 as ctl, v38+1 (elem+8) as the
+    //   HM7 "label" key, advances v38+=6 (48B), block boundary v39=node+60
+    //   (60 qwords = 480B). So the element is {ctl, ttstr label, 32B unused}.
+    //   This is the SELECTOR controller-deque (engine+656), stepped by
+    //   sub_668470 — NOT the transition deque (engine+576, sub_666BF8). The
+    //   member name "Deque9" is the engine-member ordinal; the brief calls the
+    //   same deque "deque#8" (1-based controller-deque ordinal). engine+656 is
+    //   the unambiguous ground truth shared by both names.
+    struct EmoteSelectorControlEntry_Deque9 {
+        EmoteSelectorController* ctl = nullptr; // +0 — operator new(0x80) controller
+        ttstr                    label;          // +8 — HM7 output key (PSB "label")
+        // +24/+32/+40 zeroed by the binary; no further fields are read by the
+        //   progress step. (The 48B stride is preserved as the element size; the
+        //   trailing slots are unused dead space — kept implicit, not padded, per
+        //   the byte-layout methodology.)
+    };
     struct EmoteLookupCurve16B_Deque10 { char raw[16]; };  // lookup table, ARM64 16B
 
     // ============================================================================
@@ -304,6 +325,18 @@ namespace motion {
         //   double-HM-insert that distinguishes the mouth category).
         void buildMouthControl(const PSB::PSBList* mouthControl);
 
+        // Aligned with libkrkr2.so EmoteEngine_buildSelectorControl @ 0x66D8FC.
+        //   For each enabled element in the metadata "selectorControl" PSB array:
+        //   assemble an optionList[] (each option resolves its "label" against the
+        //   TRANSITION controller-deque to a borrowed EmoteVarController*, and
+        //   reads "offValue"/"onValue"); operator new(0x80) an
+        //   EmoteSelectorController (ctor swaps in the optionList + applies index
+        //   0); push {ctl, label} (48B) onto deque#9 (engine+640); and register a
+        //   HM#6 VarRef {type=8, index=loopIndex} keyed by the element's "label".
+        //   A non-enabled element instead removes its var binding (sub_66E248) —
+        //   here mirrored by skipping the element (no controller built).
+        void buildSelectorControl(const PSB::PSBList* selectorControl);
+
     public:
         // ====== Binary field layout (ascending offset order) ======
 
@@ -334,10 +367,18 @@ namespace motion {
         std::deque<EmoteMouthControlEntry_Deque6> _compositeVarDeque6;
         // +480..+559:deque #7 — Setup/keyframe pool (no step)
         std::deque<EmoteSetupEntry40B_Deque7>   _setupPoolDeque7;
-        // +560..+639:deque #8 — Auxiliary single-value var
+        // +560..+639:deque #8 — Transition controllers (TYPE 7). 24B element;
+        //   stepped by EmoteVarController_step (sub_666BF8). Builder 0x66D4C4
+        //   not yet ported (still open).
         std::deque<EmoteAuxVar24B_Deque8>       _auxVarDeque8;
-        // +640..+719:deque #9 — Vector variable
-        std::deque<EmoteVectorVar48B_Deque9>    _vectorVarDeque9;
+        // +640..+719:deque #9 — Selector controllers (TYPE 8). Element =
+        //   {EmoteSelectorController* ctl; ttstr label} (48B, begin._M_cur at
+        //   engine+656). Populated by EmoteEngine::buildSelectorControl
+        //   (libkrkr2.so 0x66D8FC); stepped each frame by
+        //   EmoteSelectorController_step (sub_668470) writing the selected index
+        //   (as float) into HM#7 keyed by elem.label. This is the deque the brief
+        //   calls "deque#8 selector"; the engine-member ordinal name is "Deque9".
+        std::deque<EmoteSelectorControlEntry_Deque9> _vectorVarDeque9;
         // +720..+799:deque #10 — Pre-baked curve lookup
         std::deque<EmoteLookupCurve16B_Deque10> _lookupCurvesDeque10;
 
