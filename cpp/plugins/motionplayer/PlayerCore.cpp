@@ -491,6 +491,19 @@ namespace motion {
                     }
                     _engineBack->_stateMachineDeque4.clear();
                     _engineBack->buildEyeControl(eyeControl.get());
+
+                    // M2 eyebrow vertical: metadata["eyebrowControl"] ->
+                    //   EmoteEngine::buildEyebrowControl (libkrkr2.so 0x66CB9C).
+                    //   Same fresh-build/re-load semantics as the eye category
+                    //   (drop prior controllers first so we never double-populate).
+                    const auto eyebrowControl = std::dynamic_pointer_cast<PSB::PSBList>(
+                        (*metadata)["eyebrowControl"]);
+                    for(auto& entry : _engineBack->_stateMachineDeque5) {
+                        delete entry.ctl;
+                        entry.ctl = nullptr;
+                    }
+                    _engineBack->_stateMachineDeque5.clear();
+                    _engineBack->buildEyebrowControl(eyebrowControl.get());
                 }
             }
         }

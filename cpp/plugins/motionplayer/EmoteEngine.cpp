@@ -142,6 +142,15 @@ namespace motion {
         }
         _stateMachineDeque4.clear();
 
+        // Delete deque#5 (eyebrow) controllers (M2 eyebrow vertical). Same
+        //   pattern as deque#4: the entry owns the operator new(0x150) slim
+        //   controller; the ttstr label is released by its own destructor.
+        for (EmoteEyebrowControlEntry_Deque5& entry : _stateMachineDeque5) {
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _stateMachineDeque5.clear();
+
         // Delete 7 controllers in reverse-of-ctor order.
         if (_ctlBust2Target)     { EmoteVarController_dtor(_ctlBust2Target);     delete _ctlBust2Target;     _ctlBust2Target = nullptr; }
         if (_ctlBust1Target)     { EmoteVarController_dtor(_ctlBust1Target);     delete _ctlBust1Target;     _ctlBust1Target = nullptr; }
@@ -629,6 +638,74 @@ namespace motion {
         }
     }
 
+    // Aligned with libkrkr2.so EmoteEngine_buildEyebrowControl @ 0x66CB9C.
+    // Decompiled pseudocode (this conversation):
+    //   count = Motion_propGetCount(eyebrowControl);        // 0x66cc30
+    //   for (v5 = 0; v5 < count; ++v5) {                    // 0x66cc64
+    //     elem = eyebrowControl[v5];                        // PropGet(0, v5)  0x66cc80
+    //     if ((Motion_propGetBool(elem,"enabled") & 1) == 0) continue; // 0x66cd04 gate
+    //     v7 = operator new(0x150);                         // 0x66cd10
+    //     EmoteBlinkController_ctor_slim(v7, elem);         // 0x66cd1c
+    //     push_back deque#5 {ctl=v7, label=0};              // 0x66cd34 (label slot zeroed)
+    //     label = propGet(elem, "label");                   // 0x66cde4
+    //     deque#5.back().label = label;                     // 0x66ce30 (AddRef into slot)
+    //     ref = HM6_findOrInsert(this+1384, label);         // 0x66ce48 (a1+173)
+    //     ref->type = 5; ref->index = v5;                   // 0x66ce50
+    //   }
+    // Same structure as buildEyeControl (0x66C77C) except: new(0x150) slim
+    //   controller (not 0x170), pushes onto deque#5 (engine+320, a1[46..49]),
+    //   and writes HM#6 type=5. The HM#6 index is the LOOP index v5 (NOT the
+    //   deque size), matching the binary (a skipped element still advances v5).
+    void EmoteEngine::buildEyebrowControl(const PSB::PSBList* eyebrowControl) {
+        if (!eyebrowControl) {
+            return;
+        }
+        const int count = static_cast<int>(eyebrowControl->size()); // Motion_propGetCount
+        for (int v5 = 0; v5 < count; ++v5) {                        // 0x66cc64
+            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*eyebrowControl)[v5]);                             // PropGet(0, v5)
+            // enabled gate (0x66cd04): skip when "enabled" is not truthy.
+            bool enabled = false;
+            if (elem) {
+                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
+                        (*elem)[std::string("enabled")])) {
+                    enabled = b->value;
+                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                               (*elem)[std::string("enabled")])) {
+                    enabled = n->getLongValue() != 0;
+                }
+            }
+            if (!enabled) {
+                continue;                                           // goto LABEL_28
+            }
+
+            // operator new(0x150) + slim ctor (raw pointer, manual lifetime —
+            //   the deque entry owns the controller; dtor is responsible for
+            //   delete).
+            EmoteEyebrowController* ctl = new EmoteEyebrowController(); // 0x66cd10
+            EmoteEyebrowController_ctor(ctl, elem.get());              // 0x66cd1c
+
+            // label = elem["label"] as ttstr (the HM7 output key).
+            ttstr label;
+            if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
+                    (*elem)[std::string("label")])) {
+                label = ttstr(s->value.c_str());
+            }
+
+            // push {ctl, label} onto deque#5 (binary pushes {ctl,0} then writes
+            //   label into the slot at 0x66ce30; same end state).
+            EmoteEyebrowControlEntry_Deque5 entry;
+            entry.ctl   = ctl;
+            entry.label = label;
+            _stateMachineDeque5.push_back(std::move(entry));
+
+            // HM#6 VarRef {type=5, index=v5} keyed by label (0x66ce48..0x66ce50).
+            detail::EmoteVarRef& ref = _scalarHM6_1384[label];
+            ref.type  = 5;   // *v17 = 5
+            ref.index = v5;  // v17[1] = v5
+        }
+    }
+
     // Aligned with libkrkr2.so sub_67D01C EmoteEngine_progress @ 0x67D01C.
     //
     // Binary main loop (from EmoteEngine_controllers.md):
@@ -719,7 +796,16 @@ namespace motion {
                 EmoteBlinkController_step(entry.ctl, &out, step); // sub_663BDC
                 _labelToValueHM7[entry.label] = out;              // HM7 upsert @0x67d0f4
             }
-            if (!_stateMachineDeque5.empty())   { STUB_WARN(stepDeque5_sub_665600); }
+            // Deque#5 (eyebrow) step — PORTED (M2 eyebrow vertical). Per binary
+            //   EmoteEngine_progress @0x67d10c..0x67d160: for each {ctl,label}
+            //   entry, sub_665600(ctl, &out, step) then HM7[label] = out (the
+            //   Player_HM2_upsert_labelToValue(+1440, v23+1) call IS the HM#7
+            //   double-map upsert keyed by elem.label; 16B stride, advance v23+=2).
+            for (EmoteEyebrowControlEntry_Deque5& entry : _stateMachineDeque5) {
+                float out = 0.0f;
+                EmoteEyebrowController_step(entry.ctl, &out, step); // sub_665600
+                _labelToValueHM7[entry.label] = out;                // HM7 upsert @0x67d150
+            }
             if (!_compositeVarDeque6.empty())   { STUB_WARN(stepDeque6_sub_666068); }
             if (!_auxVarDeque8.empty())         { STUB_WARN(stepDeque8_sub_666BF8); }
             if (!_vectorVarDeque9.empty())      { STUB_WARN(stepDeque9_sub_668470); }

@@ -36,6 +36,7 @@
 #include "EmoteVarController.h"
 #include "EmoteAngleController.h"
 #include "EmoteBlinkController.h"
+#include "EmoteEyebrowController.h"
 #include "internal/player_containers.h"
 #include "internal/legacy_variable_state.h"
 #include "internal/ttstr_hash.h"
@@ -206,7 +207,17 @@ namespace motion {
         EmoteBlinkController* ctl = nullptr; // +0 — operator new(0x170) controller
         ttstr                 label;          // +8 — HM7 output key (PSB "label")
     };
-    struct EmoteStateMachine16B_Deque5 { char raw[16]; };  // sub_665600, ARM64 16B
+    // Deque #5 (eyebrow, TYPE 5) element — verified by
+    //   EmoteBlinkController_ctor_slim builder @0x66CB9C (push: *elem=ctl_ptr;
+    //   elem[1]=0/label; advances elem+=2 = 16B; block 512) and the slim step
+    //   sub_665600. The element is {EmoteEyebrowController* ctl@+0; ttstr
+    //   label@+8} (16B on ARM64), structurally identical to deque#4's element
+    //   but holding the slim 0x150 controller. Corrects the prior `char raw[16]`
+    //   placeholder.
+    struct EmoteEyebrowControlEntry_Deque5 {
+        EmoteEyebrowController* ctl = nullptr; // +0 — operator new(0x150) controller
+        ttstr                   label;          // +8 — HM7 output key (PSB "label")
+    };
     struct EmoteCompositeVar24B_Deque6 { char raw[24]; };  // sub_666068, ARM64 24B
     struct EmoteSetupEntry40B_Deque7   { char raw[40]; };  // no step fn, ARM64 40B (_guess)
     struct EmoteAuxVar24B_Deque8       { char raw[24]; };  // sub_666BF8, ARM64 24B
@@ -264,6 +275,13 @@ namespace motion {
         //   Motion_propGetCount).
         void buildEyeControl(const PSB::PSBList* eyeControl);
 
+        // Aligned with libkrkr2.so EmoteBlinkController_ctor_slim builder
+        //   @ 0x66CB9C (EmoteEngine_buildEyebrowControl). Same shape as
+        //   buildEyeControl but: operator new(0x150) the SLIM EmoteEyebrow
+        //   controller, push {ctl, label} onto deque#5, and register a HM#6
+        //   VarRef {type=5, index=loopIndex} keyed by the element's "label".
+        void buildEyebrowControl(const PSB::PSBList* eyebrowControl);
+
     public:
         // ====== Binary field layout (ascending offset order) ======
 
@@ -279,8 +297,12 @@ namespace motion {
         //   frame by EmoteBlinkController_step (sub_663BDC) writing the scalar
         //   result into HM#7 keyed by elem.label.
         std::deque<EmoteEyeControlEntry_Deque4> _stateMachineDeque4;
-        // +320..+399:deque #5 — Variable #2
-        std::deque<EmoteStateMachine16B_Deque5> _stateMachineDeque5;
+        // +320..+399:deque #5 — Eyebrow controllers (TYPE 5). Element =
+        //   {EmoteEyebrowController* ctl; ttstr label}. Populated by
+        //   EmoteEngine::buildEyebrowControl (libkrkr2.so 0x66CB9C); stepped each
+        //   frame by EmoteEyebrowController_step (sub_665600) writing the scalar
+        //   result into HM#7 keyed by elem.label.
+        std::deque<EmoteEyebrowControlEntry_Deque5> _stateMachineDeque5;
         // +400..+479:deque #6 — Composite variable
         std::deque<EmoteCompositeVar24B_Deque6> _compositeVarDeque6;
         // +480..+559:deque #7 — Setup/keyframe pool (no step)

@@ -11,6 +11,7 @@ target_sources(${PROJECT_NAME} PUBLIC
     EmoteVarController.cpp
     EmoteAngleController.cpp
     EmoteBlinkController.cpp
+    EmoteEyebrowController.cpp
     EmoteBlinkRng.cpp
     PlayerCore.cpp
     PlayerFrameProgress.cpp
