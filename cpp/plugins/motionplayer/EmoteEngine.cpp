@@ -186,6 +186,15 @@ namespace motion {
         }
         _vectorVarDeque9.clear();
 
+        // Deque#10 (loopControl) — each entry owns its operator new(0x20)
+        //   EmoteLoopController. No special dtor (the keyframe vector frees its own
+        //   buffer); just delete the controller.
+        for (EmoteLoopControlEntry_Deque10& entry : _lookupCurvesDeque10) {
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _lookupCurvesDeque10.clear();
+
         // Delete 7 controllers in reverse-of-ctor order.
         if (_ctlBust2Target)     { EmoteVarController_dtor(_ctlBust2Target);     delete _ctlBust2Target;     _ctlBust2Target = nullptr; }
         if (_ctlBust1Target)     { EmoteVarController_dtor(_ctlBust1Target);     delete _ctlBust1Target;     _ctlBust1Target = nullptr; }
@@ -1064,6 +1073,127 @@ namespace motion {
         }
     }
 
+    // Aligned with libkrkr2.so EmoteEngine_buildLoopControl (sub_66E480) @0x66E480.
+    // Decompiled pseudocode (this conversation):
+    //   count = Motion_propGetCount(loopControl);                    // 0x66e514
+    //   for (v6 = 0; v6 < count; ++v6) {                             // 0x66e550
+    //     elem = loopControl[v6];                                    // PropGet(0,v6)
+    //     if ((Motion_propGetBool(elem,"enabled") & 1) == 0) continue;// 0x66e5f0 gate -> LABEL_49
+    //     transitionList = elem["transitionList"];                   // 0x66e61c
+    //     kfCount = Motion_propGetCount(transitionList);             // 0x66e6a0
+    //     ctl = operator new(0x20); zero;                            // 0x66e688 (+0..+31=0)
+    //     ctl.keys.resize(kfCount);                                  // 0x66e6c4..0x66e6f4
+    //     for (v20 = 0; v20 < kfCount; ++v20) {                      // 0x66e810 do/while
+    //       kf = transitionList[v20];                                // 0x66e728
+    //       ctl.keys[v20].v0   = (float)propGetIndexDouble(kf,0);    // 0x66e7a8 STR S
+    //       ctl.keys[v20].v1   = (float)propGetIndexDouble(kf,1);    // 0x66e7c8 STR S
+    //       ctl.keys[v20].span = (float)propGetIndexDouble(kf,2);    // 0x66e7e4 STR S
+    //     }
+    //     push_back deque#10 {ctl, label=0};                         // 0x66e828 (16B elem)
+    //     label = elem["var_loop"];                                  // 0x66e8b4 (ttstr value)
+    //     deque#10.back().label = label;                             // 0x66e944
+    //     ref = HM6_findOrInsert(engine+1384, &back().label);        // 0x66e964 (a1+173)
+    //     ref->type = 3; ref->index = v6;                            // 0x66e96c
+    //   }
+    // Structure mirrors buildTransitionControl/buildSelectorControl: enabled gate,
+    //   new the controller, fill its keyframe vector, push {ctl,label} (16B),
+    //   register HM#6 {type=3, index=loopIndex}. The HM#6 index is the LOOP index
+    //   v6 (a skipped/disabled element still advances v6). The element label AND
+    //   the HM#6 key are BOTH the "var_loop" value (binary: sub_A0BAF4 @0x66e90c
+    //   produces the ttstr stored at elem+8 @0x66e944 and used as the HM6 key
+    //   @0x66e964). The step for this deque is INLINED into progress (no separate
+    //   step fn) — see EmoteLoopController_step / progress @0x67d2a0.
+    //
+    // FLOAT-BITS: each keyframe field is stored via `STR S` (single-precision)
+    //   after propGetDouble narrows double->single — i.e. raw float bits, no
+    //   integer remap. getFloatValue() is the local equivalent (NOT a (float)(int)
+    //   cast). The 12B keyframe POD {v0,v1,span} is a platform-independent data
+    //   contract per the byte-layout methodology.
+    void EmoteEngine::buildLoopControl(const PSB::PSBList* loopControl) {
+        if (!loopControl) {
+            return;
+        }
+        const int count = static_cast<int>(loopControl->size());     // Motion_propGetCount
+        for (int v6 = 0; v6 < count; ++v6) {                         // 0x66e550
+            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*loopControl)[v6]);                                 // PropGet(0,v6)
+
+            // enabled gate (0x66e5f0): skip when "enabled" is not truthy. The
+            //   skipped element still advances v6 (used as the HM#6 index).
+            bool enabled = false;
+            if (elem) {
+                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
+                        (*elem)[std::string("enabled")])) {
+                    enabled = b->value;
+                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                               (*elem)[std::string("enabled")])) {
+                    enabled = n->getLongValue() != 0;
+                }
+            }
+            if (!enabled) {
+                continue;                                            // goto LABEL_49
+            }
+
+            // transitionList = elem["transitionList"] (the keyframe triples). /*0x66e61c*/
+            const auto transitionList = elem
+                ? std::dynamic_pointer_cast<PSB::PSBList>(
+                      (*elem)[std::string("transitionList")])
+                : nullptr;
+            const int kfCount = transitionList
+                ? static_cast<int>(transitionList->size())           // Motion_propGetCount /*0x66e6a0*/
+                : 0;
+
+            // operator new(0x20) + zero-init (raw pointer, manual lifetime — the
+            //   deque entry owns the controller; dtor delete). /*0x66e688*/
+            EmoteLoopController* ctl = new EmoteLoopController();
+            ctl->keys.resize(static_cast<size_t>(kfCount));          // /*0x66e6c4..0x66e6f4*/
+
+            // Fill each 12B keyframe {v0, v1, span} from the triple. Each field is
+            //   propGetIndexDouble -> stored as float (STR S = raw float bits). /*0x66e810*/
+            for (int v20 = 0; v20 < kfCount; ++v20) {
+                const auto kf = std::dynamic_pointer_cast<PSB::PSBList>(
+                    (*transitionList)[v20]);                         // PropGet(0,v20) /*0x66e728*/
+                EmoteLoopKeyframe12B& dst = ctl->keys[static_cast<size_t>(v20)];
+                if (kf && kf->size() >= 3) {
+                    if (const auto n0 = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                            (*kf)[0])) {
+                        dst.v0 = n0->getFloatValue();                // /*0x66e7a8 STR S*/
+                    }
+                    if (const auto n1 = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                            (*kf)[1])) {
+                        dst.v1 = n1->getFloatValue();                // /*0x66e7c8 STR S*/
+                    }
+                    if (const auto n2 = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                            (*kf)[2])) {
+                        dst.span = n2->getFloatValue();              // /*0x66e7e4 STR S*/
+                    }
+                }
+            }
+
+            // label = elem["var_loop"] as ttstr — the deque element label AND the
+            //   HM#7 output key AND the HM#6 key. /*0x66e8b4 -> 0x66e90c*/
+            ttstr label;
+            if (elem) {
+                if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
+                        (*elem)[std::string("var_loop")])) {
+                    label = ttstr(s->value.c_str());
+                }
+            }
+
+            // push {ctl, label} onto deque#10 (binary pushes {ctl, 0} then writes
+            //   label@+8; same end state). /*0x66e828 -> 0x66e944*/
+            EmoteLoopControlEntry_Deque10 entry;
+            entry.ctl   = ctl;
+            entry.label = label;
+            _lookupCurvesDeque10.push_back(std::move(entry));
+
+            // HM#6 VarRef {type=3, index=v6} keyed by the var_loop label. /*0x66e964/0x66e96c*/
+            detail::EmoteVarRef& ref = _scalarHM6_1384[label];
+            ref.type  = 3;   // *v37 = 3
+            ref.index = v6;  // v37[1] = v6
+        }
+    }
+
     // Aligned with libkrkr2.so sub_67D01C EmoteEngine_progress @ 0x67D01C.
     //
     // Binary main loop (from EmoteEngine_controllers.md):
@@ -1208,7 +1338,20 @@ namespace motion {
                 EmoteVarController_step(entry.ctl, &out, step);  // sub_666BF8
                 _labelToValueHM7[entry.label] = out;             // HM7 upsert @0x67d288
             }
-            if (!_lookupCurvesDeque10.empty())  { STUB_WARN(stepDeque10_lookup); }
+            // Deque#10 (loopControl) step — PORTED (M2 loopControl vertical).
+            //   Per binary EmoteEngine_progress @0x67d2a0..0x67d370: for each 16B
+            //   {ctl,label} entry, run the INLINE curve sampler (advance accum by
+            //   step, wrap the keyframe index, blend v0/v1) then HM7[label] = out
+            //   (the Player_HM2_upsert_labelToValue(+1440, v52+1) call IS the HM#7
+            //   double-map upsert keyed by elem.label; advance v52+=2 = 16B stride,
+            //   block boundary node+64 = 512B). There is NO standalone step fn in
+            //   the binary — the sampler is open-coded here, factored into
+            //   EmoteLoopController_step so this loop mirrors the per-entry body.
+            //   The output is the curve blend cast float->double @0x67d35c.
+            for (EmoteLoopControlEntry_Deque10& entry : _lookupCurvesDeque10) {
+                const float out = EmoteLoopController_step(entry.ctl, step); // @0x67d2a0
+                _labelToValueHM7[entry.label] = out;                         // HM7 upsert @0x67d360
+            }
 
             // Apply the 4 direct controllers (pos/scale/color/angle).
             applyVarControllers_pos_scale_color_angle(step);

@@ -554,6 +554,26 @@ namespace motion {
                     }
                     _engineBack->_vectorVarDeque9.clear();
                     _engineBack->buildSelectorControl(selectorControl.get());
+
+                    // M2 loopControl vertical: metadata["loopControl"] ->
+                    //   EmoteEngine::buildLoopControl (libkrkr2.so 0x66E480). This
+                    //   is the LAST progress-stepped controller-deque (engine+736);
+                    //   its step is inlined into progress @0x67d2a0. Same fresh-
+                    //   build/re-load semantics (drop prior controllers first so we
+                    //   never double-populate). Each controller is operator
+                    //   new(0x20); the deque entry owns it. applyMetadata dispatches
+                    //   loopControl AFTER selectorControl (@0x67d93c, well after
+                    //   selector @0x67d8ec); the relative order is immaterial here
+                    //   (loopControl has no cross-controller dependency), but we
+                    //   keep the binary's per-key order for traceability.
+                    const auto loopControl = std::dynamic_pointer_cast<PSB::PSBList>(
+                        (*metadata)["loopControl"]);
+                    for(auto& entry : _engineBack->_lookupCurvesDeque10) {
+                        delete entry.ctl;
+                        entry.ctl = nullptr;
+                    }
+                    _engineBack->_lookupCurvesDeque10.clear();
+                    _engineBack->buildLoopControl(loopControl.get());
                 }
             }
         }

@@ -39,6 +39,7 @@
 #include "EmoteEyebrowController.h"
 #include "EmoteMouthController.h"
 #include "EmoteSelectorController.h"
+#include "EmoteLoopController.h"
 #include "internal/player_containers.h"
 #include "internal/legacy_variable_state.h"
 #include "internal/ttstr_hash.h"
@@ -270,7 +271,21 @@ namespace motion {
         //   trailing slots are unused dead space — kept implicit, not padded, per
         //   the byte-layout methodology.)
     };
-    struct EmoteLookupCurve16B_Deque10 { char raw[16]; };  // lookup table, ARM64 16B
+    // Deque #10 (loopControl, TYPE 3) element — 16B. Verified by
+    //   EmoteEngine_buildLoopControl @0x66E480 (push to finish._M_cur a1[96]=
+    //   engine+768, block 0x200=512) and the inline progress step
+    //   @0x67d2a0..0x67d370 (begin._M_cur engine+736, advance v52+=2 = 16B stride,
+    //   block boundary node+64 = 512B). The binary writes *v27=ctl (+0), v27[1]=0
+    //   (+8), then *v35=label (the "var_loop" value) at elem+8. So the element is
+    //   {EmoteLoopController* ctl; ttstr label}. The step reads *v52 as ctl and
+    //   v52+1 (elem+8) as the HM7 output key, identical to the other controller
+    //   deques. The member is historically named `_lookupCurvesDeque10` (the
+    //   engine-member ordinal); the brief calls it "deque#10". engine+736 is the
+    //   unambiguous ground truth.
+    struct EmoteLoopControlEntry_Deque10 {
+        EmoteLoopController* ctl = nullptr; // +0 — operator new(0x20) controller
+        ttstr                label;          // +8 — HM7 output key (PSB "var_loop")
+    };
 
     // ============================================================================
     // EmoteEngine — 1496B (0x5D8), no vtable. Ctor sub_67E38C.
@@ -365,6 +380,20 @@ namespace motion {
         //   option label (buildSelectorControl @0x66db0c).
         void buildTransitionControl(const PSB::PSBList* transitionControl);
 
+        // Aligned with libkrkr2.so EmoteEngine_buildLoopControl (sub_66E480)
+        //   @ 0x66E480. For each enabled element in the metadata "loopControl" PSB
+        //   array: read its "transitionList" sub-array of [v0,v1,span] triples,
+        //   operator new(0x20) an EmoteLoopController whose keyframe vector is
+        //   filled from those triples (each field stored as raw float bits — LDR S,
+        //   no SCVTF), push {ctl, label} (16B) onto deque#10 (engine+736), and
+        //   register a HM#6 VarRef {type=3, index=loopIndex} keyed by the element's
+        //   "var_loop" value (which is ALSO the deque element's label / HM7 output
+        //   key). A non-enabled element is skipped (binary `enabled` gate
+        //   @0x66e5f0 -> LABEL_49) but still advances the loop index v6. This is the
+        //   LAST progress-stepped controller-deque; its step is INLINED into
+        //   EmoteEngine::progress (no separate step fn).
+        void buildLoopControl(const PSB::PSBList* loopControl);
+
     public:
         // ====== Binary field layout (ascending offset order) ======
 
@@ -409,8 +438,14 @@ namespace motion {
         //   (as float) into HM#7 keyed by elem.label. This is the deque the brief
         //   calls "deque#8 selector"; the engine-member ordinal name is "Deque9".
         std::deque<EmoteSelectorControlEntry_Deque9> _vectorVarDeque9;
-        // +720..+799:deque #10 — Pre-baked curve lookup
-        std::deque<EmoteLookupCurve16B_Deque10> _lookupCurvesDeque10;
+        // +720..+799:deque #10 — Loop controllers (TYPE 3). Element =
+        //   {EmoteLoopController* ctl; ttstr label} (16B, begin._M_cur at
+        //   engine+736). Populated by EmoteEngine::buildLoopControl (libkrkr2.so
+        //   0x66E480); stepped each frame by the INLINE curve sampler in
+        //   EmoteEngine::progress (libkrkr2.so @0x67d2a0..0x67d370, no separate
+        //   step fn) writing the curve blend (as float->double) into HM#7 keyed by
+        //   elem.label. The label/HM6 key are both the PSB "var_loop" value.
+        std::deque<EmoteLoopControlEntry_Deque10> _lookupCurvesDeque10;
 
         // +800..+823: std::vector<tTJSVariant*> (a1[100..102]).
         //   ctor zeroes begin/end/cap; dtor releases each elem + delete buffer.
