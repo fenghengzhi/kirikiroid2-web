@@ -591,6 +591,49 @@ namespace motion {
             key, value, transition, variableEaseWeightLike_0x671228(ease));
     }
 
+    bool Player::isLabelInBindScopeListLike_0x6CD16C(const ttstr &key) const {
+        // libkrkr2.so Player_isLabelInBindScopeList @0x6CD16C: walks the var-track
+        // deque (Player+1312 = _variableLabelScopes), true if any item's
+        // cascadeKey (item+0) equals key (pointer-eq or strcmp).
+        for(const auto &item : _variableLabelScopes) {
+            if(item.cascadeKey == key) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void Player::bindParameterValueLike_0x6C4668(const ttstr &key, double value) {
+        // libkrkr2.so Player_bindParameterValue_writesHM1_HM2 @0x6C4668.
+        const auto narrowKey = detail::narrow(key);
+        // sub_6D0BF4 (0x6D0BF4): split on first "::" (else first "/"); the HM1
+        // join key = scope + "::" + label (normalises "/" → "::").
+        auto sep = narrowKey.find("::");
+        size_t sepLen = 2;
+        if(sep == std::string::npos) {
+            sep = narrowKey.find('/');
+            sepLen = 1;
+        }
+        if(sep != std::string::npos) {
+            // HM1 block (0x6C46BC..0x6C4968): _evalCascadeMap[joined].writeVal.
+            // weight seeded 1.0 on first insert (0x6C4964). chainDispatches build
+            // (sub_697D34) + RenderItem/animator passes DEFERRED (no getVariable
+            // consumer — the cascade only reads writeVal).
+            const ttstr joined = detail::widen(
+                narrowKey.substr(0, sep) + "::" + narrowKey.substr(sep + sepLen));
+            if(const auto it = _evalCascadeMap.find(joined);
+               it == _evalCascadeMap.end()) {
+                auto &state = _evalCascadeMap[joined];
+                state.weight = 1.0;     // 0x6C4964 first-insert seed
+                state.writeVal = value; // 0x6C4968
+            } else {
+                it->second.writeVal = value;
+            }
+        }
+        // LABEL_132 (0x6C4C0C, green-critical): HM2[rawKey] = value.
+        _evalResultValues[narrowKey] = value;
+    }
+
     double Player::getVariable(ttstr label) {
         ensureMotionLoaded();
         const auto key = detail::narrow(label);
@@ -598,43 +641,43 @@ namespace motion {
             return 0.0;
         }
 
-        // M3 P0 READ cascade (cluster J): binary `Player_evalKey_cascade`
-        // @0x6CD23C looks up HM4 (@+1240) by the RAW lookup key, value =
-        // *(node+16) double. HM4 IS NOW POPULATED: the var-track → HM4 path is
-        // wired (stream③ advanceVariableTracks → interpolateVarTrackValues
-        // item+16 → resetMotionState loop2 snapshot, on PlayFlagJoin). This read
-        // matches the binary's HM4-first-by-raw-key. (Inert for content without a
-        // "variable" list — the map stays empty and the cascade falls through.)
-        //   STILL OPEN (full M3, R0-1): the 2-branch scope router
-        //   (getVariable_wrapper 0x533E1C: isLabelInBindScopeList → HM1-join
-        //   path) and the HM1 (_evalCascadeMap) read are not yet wired — the
-        //   port goes HM4 → HM2, skipping HM1; the PSB frames/ranges tail below
-        //   is a port-invented fallback the binary lacks.
-        if(const auto it = _variableSnapshotMap.find(label);
-           it != _variableSnapshotMap.end()) {
-            return it->second;
+        // libkrkr2.so Player_getVariable_wrapper @0x533E1C — 2-branch scope
+        // router (M3 / R0-1). inScope → HM1_cascadeJoinAndLookup directly; else
+        // evalKey_cascade (HM4-first by raw key) → on miss HM1_cascadeJoinAndLookup.
+        const bool inScope = isLabelInBindScopeListLike_0x6CD16C(label);
+        if(!inScope) {
+            // evalKey_cascade (0x6CD23C): HM4 (@+1240) by raw key → node+16 double.
+            if(const auto it = _variableSnapshotMap.find(label);
+               it != _variableSnapshotMap.end()) {
+                return it->second;
+            }
         }
-
-        if(const auto it = _evalResultValues.find(key); it != _evalResultValues.end()) {
-            return it->second;
+        // HM1_cascadeJoinAndLookup (0x6CD39C): key splittable on "::"/"/" → HM1
+        // (_evalCascadeMap[joined].writeVal = node+48); else → HM2
+        // (_evalResultValues = node+16). Both populated by bindParameterValue.
+        auto sep = key.find("::");
+        size_t sepLen = 2;
+        if(sep == std::string::npos) {
+            sep = key.find('/');
+            sepLen = 1;
         }
-
-        if(!_activeMotion) {
+        if(sep != std::string::npos) {
+            const ttstr joined = detail::widen(
+                key.substr(0, sep) + "::" + key.substr(sep + sepLen));
+            if(const auto it = _evalCascadeMap.find(joined);
+               it != _evalCascadeMap.end()) {
+                return it->second.writeVal;
+            }
             return 0.0;
         }
-
-        if(const auto it = _activeMotion->variableFrames.find(key);
-           it != _activeMotion->variableFrames.end() &&
-           !it->second.empty()) {
-            return it->second.front().value;
+        if(const auto it = _evalResultValues.find(key);
+           it != _evalResultValues.end()) {
+            return it->second;
         }
-
-        if(const auto it = _activeMotion->variableRanges.find(key);
-           it != _activeMotion->variableRanges.end()) {
-            return it->second.first;
-        }
-
         return 0.0;
+        // (The former port-invented PSB frames/ranges fallback is removed — the
+        // binary's cascade has no such tail; values now flow var-track → interp →
+        // HM4 / bindParameterValue → HM1/HM2. R0-1 RESOLVED for the read path.)
     }
 
     tjs_int Player::countVariables() {

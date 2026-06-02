@@ -193,6 +193,16 @@
 | 4 | (本提交) | getVariable HM4-first read（已就位，注释更新） |
 全程：反编译证据 → 实现 → 现有 oracle(logo diff 0 mismatch) → 不硬凑 fixture。**var-track → HM4 → getVariable 数据通路端到端打通**，对现有内容全程 inert。
 
+## brick 5 — HM1 / scope-router（M3 / R0-1，本对话）
+本对话 decompile 0x6CD16C / 0x6CD39C / 0x6C4668 / 0x6D0BF4 验证（BLOCKING）。
+- ✅ **5a bindParameterValue**（`bindParameterValueLike_0x6C4668`）：HM2(`_evalResultValues`)[rawKey]=value 恒写；key 可 split("::"/"/")时 HM1(`_evalCascadeMap`)[joined].writeVal=value（weight 首插 1.0）。dispatch/animator 副作用 DEFERRED（无 getVariable consumer）。**接入 interp**（brick 2.5 的 deferred 调用）。
+- ✅ **5b getVariable 2-branch scope-router**（`isLabelInBindScopeListLike_0x6CD16C` + 重构 getVariable）：
+  inScope（key 匹配某 var-track cascadeKey）→ HM1-join 直走；else evalKey_cascade（HM4-first by raw key）→ miss → HM1-join。
+  HM1-join = key 有"::"/"/"→ HM1.writeVal(node+48) : HM2(node+16)。**移除 port 发明的 PSB frames/ranges fallback**（R0-1 READ 路径 RESOLVED）。
+- 结构事实：scope-list = var-track cascadeKeys = HM4 keys，故 inScope 键走 HM1（非 HM4），值由 bindParameterValue 供（与 loop2 HM4 同值）。忠实复刻。
+- **验证**：web+guest 构建 + logo diff 0 mismatch（移除 PSB fallback + 加 router 未回归 logo）。scope-gated 变量读路径打通（HM1）；对现有内容仍 inert（无 variable）。
+- **仍 DEFERRED**：bindParameterValue 内 sub_697D34 chainDispatches + RenderItem/animator 更新；resetMotionState loop1(node evaluateTimeline)/loop3(HM3, HM3_initValueFromNode 0x699510)。
+
 ### 忠实 brick 路线
 1. ✅ **基地重构（brick 1）DONE（2026-06-02）**：`VariableLabelScope` 补全为 {cascadeKey, activeSlotCursor, value, labelName, VarTrackSlot slot[2]}（slot 含 +20 gateFlag）；删死 struct `VariableLabelEntry`；Player 字段 `vector<VariableLabelEntry> _variableLabelEntries` → `deque<VariableLabelScope> _variableLabelScopes`（容器形态对齐 deque）；`initVariables` 改产出 binary 一致 cascadeKey=`scope+"::"+label`。**provably inert**（_variableLabelScopes 零 reader）→ web debug build 通过、logo diff 不受影响（构造上）。改动文件：value_structs.h / player_containers.h / RuntimeSupport.h / Player.h / PlayerMotionLoad.cpp。
 2. **stream③（brick 2）⚠️ 阻塞于数据模型矛盾**：var-track advance（sub_6B786C step / sub_6B7A70 merge）。

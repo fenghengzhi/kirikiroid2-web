@@ -1113,9 +1113,10 @@ namespace internal {
                 }
             }
             item.value = v;                     // item+16 (0x6BBF54)
-            // The binary then calls Player_bindParameterValue_writesHM1_HM2(
-            //   player, item, 0, v) to populate HM1/HM2 — DEFERRED to the HM1/HM2
-            //   bind port; item+16 alone feeds HM4 via resetMotionState loop2.
+            // 0x6BBF58: Player_bindParameterValue_writesHM1_HM2(player, item, 0,
+            // v) — populate HM1 (_evalCascadeMap, scope keys) + HM2
+            // (_evalResultValues) so getVariable's HM1-join branch resolves.
+            bindParameterValueLike_0x6C4668(item.cascadeKey, v);
         }
     }
 

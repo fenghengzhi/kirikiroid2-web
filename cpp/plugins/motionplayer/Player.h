@@ -469,6 +469,17 @@ namespace motion {
         void setVariable(ttstr label, double value, double transition = 0.0,
                          double ease = 0.0);
         double getVariable(ttstr label);
+        // libkrkr2.so Player_bindParameterValue_writesHM1_HM2 @0x6C4668: writes
+        // a var value into HM2 (_evalResultValues, always) and, when the key
+        // splits on "::"/"/", HM1 (_evalCascadeMap[joined].writeVal). Called by
+        // interpolateVarTrackValues per item. Dispatch/animator side-effects
+        // (sub_697D34, RenderItem updates) have no getVariable consumer → DEFERRED.
+        void bindParameterValueLike_0x6C4668(const ttstr &key, double value);
+        // libkrkr2.so Player_isLabelInBindScopeList @0x6CD16C: scans the
+        // var-track deque (_variableLabelScopes), true if any item's cascadeKey
+        // equals the lookup key. The scope gate of getVariable's 2-branch router.
+        [[nodiscard]] bool isLabelInBindScopeListLike_0x6CD16C(
+            const ttstr &key) const;
         tjs_int countVariables();
         ttstr getVariableLabelAt(tjs_int idx);
         tjs_int countVariableFrameAt(tjs_int idx);
