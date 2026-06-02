@@ -96,6 +96,32 @@ namespace motion {
             _activeMotion->diffTimelineLabels));
     }
 
+    // Aligned with libkrkr2.so Player_getLoopTime_array at 0x6D139C.
+    // Binary pseudocode:
+    //   arr = sub_704CB8()                       // TJSCreateArrayObject
+    //   it  = deque@Player+1296 begin (a1[164..168], 160B stride, 3-elem chunks)
+    //   while (it != end):
+    //       v = *it->element[0]                  // VariableLabelScope::cascadeKey (item+0)
+    //       push type-2 (string) variant of v into arr (AddRef)   // the new(0x1F4)
+    //                                                              // chunk-append is the
+    //                                                              // TJS Array internal impl
+    //       it += 160                            // advance one VariableLabelScope
+    //   return tTJSVariant(arr)                  // sub_A0F5E0 / sub_A0F778
+    // No label argument; the `loopTime` NCB property (RO, new(0x50)) binds here.
+    // detail::makeArray replicates sub_704CB8 + per-item add + variant-return; the
+    // transient std::vector is only a builder arg — the returned value is a real
+    // TJS Array. cascadeKey strings are pushed in deque (insertion) order.
+    tTJSVariant Player::getLoopTimeArrayLike_0x6D139C() const {
+        std::vector<tTJSVariant> items;
+        items.reserve(_variableLabelScopes.size());
+        for(size_t i = 0; i < _variableLabelScopes.size(); ++i) {
+            // *v4 == element[0] == cascadeKey (item+0). Pushed as a string
+            // variant (binary type=2). ttstr -> tTJSVariant yields tvtString.
+            items.push_back(tTJSVariant(_variableLabelScopes[i].cascadeKey));
+        }
+        return detail::makeArray(items);
+    }
+
     bool Player::getLoopTimeline(ttstr label) {
         ensureMotionLoaded();
         if(!_activeMotion) {

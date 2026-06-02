@@ -192,11 +192,17 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);
     // frameLastTime/frameLoopTime/loopTime: binary RO properties @0x6D69C8
     // (descriptor setter slot = XZR; verified `STP XZR,XZR,[X20,#0x40]`).
-    // getter kept unchanged (getLoopTime Array-vs-scalar is a separate open
-    // issue); only the RO/RW kind is corrected here.
     NCB_PROPERTY_RO(frameLastTime, getFrameLastTime);
-    NCB_PROPERTY_RO(frameLoopTime, getLoopTime); // binary getter Player_getFrameLoopTime @0x6D69C8; RO
-    NCB_PROPERTY_RO(loopTime, getLoopTime);       // binary getter Player_getLastTime; RO
+    // frameLoopTime getter == Player_getFrameLoopTime @0x6D97AC: scalar
+    // `return *(double*)(this+1136)` == local _loopTime. (Disasm: NCB reg
+    // @0x6d7d10 "frameLoopTime" -> Player_getFrameLoopTime.)
+    NCB_PROPERTY_RO(frameLoopTime, getLoopTime);
+    // loopTime getter == Player_getLoopTime_array @0x6D139C: builds a TJS Array
+    // of the var-track deque (Player+1296) cascadeKey strings, NOT a scalar.
+    // (Disasm: NCB reg @0x6d6c80 "loopTime" -> 0x6D139C, new(0x50)=property RO.)
+    // Corrected 2026-06-03 (R0-3): was wrongly bound to the scalar getLoopTime
+    // with a stale "getLastTime" comment.
+    NCB_PROPERTY_RO(loopTime, getLoopTimeArrayLike_0x6D139C);
     // processedMeshVerticesNum: binary RO property; getter sub_6D1018, setter
     // slot null (verified `STP XZR,XZR,[X20,#0x40]` @0x6d883c).
     NCB_PROPERTY_RO(processedMeshVerticesNum, getProcessedMeshVerticesNum);
