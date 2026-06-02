@@ -474,6 +474,62 @@ namespace motion {
         return _activeMotion ? _activeMotion->height : 0.0;
     }
 
+    // Aligned with libkrkr2.so Player_setChara @0x6D94B0 (NCB "chara" setter).
+    //
+    // Binary structure:
+    //   if (*(this+968) /* current chara variant slot */) {
+    //       sub_6B29C0(this, 16, &v);              // write chara -> +968 (dedup)
+    //       if (*(this+776)) {                     // pending chara override slot
+    //           sub_6B29C0(this, 16, this+776);    // re-apply pending into +968
+    //           Release(*(this+776)); *(this+776)=0;
+    //       }
+    //   } else {                                   // first-ever set: just stash raw
+    //       AddRef(v); Release(old +776); *(this+776) = v;
+    //   }
+    //
+    // sub_6B29C0 @0x6B29C0 (the chara/key slot writer) does two things that
+    // matter to the source-level architecture:
+    //   1. dedup via wcscmp (sub_9B1ED0): if the new chara equals the stored
+    //      chara it returns WITHOUT side effects.
+    //   2. on an actual change it clears the loaded-motion slots
+    //      (+976 motion, +984 motion2) and the motion-loaded byte (+1099),
+    //      i.e. a chara change invalidates the currently loaded motion so the
+    //      next play()/update reloads the PSB against the new chara.
+    //
+    // chara value storage: the binary keeps a tTJSVariant* at +968 with manual
+    // ldaxr/stlxr AddRef + Release of the old value. The local ttstr _chara is
+    // the platform-independent value-semantics equivalent of that refcounted
+    // slot (per the byte-layout methodology in CLAUDE.md) - covering +968's
+    // AddRef/Release is NOT a deviation, it is the same object lifetime.
+    //
+    // The architecturally load-bearing piece that the previous plain
+    // `_chara = v;` was missing is the chara-change -> motion-invalidation
+    // side effect. Without it, a chara change that keeps the same motion key
+    // would skip reload because the local same-motion guards in
+    // findMotion (PlayerMotionLoad.cpp:24,30) key only on the motion name,
+    // never on chara.
+    //
+    // The +776 "pending chara override" slot has no setChara-path producer in
+    // the local data flow (it is written only by the child-motion / stealth
+    // passes, e.g. Player_updateLayers_childMotionPass @0x6BE0C0), so there is
+    // no pending value to flush here; the first-set vs subsequent-set branch
+    // collapses to "dedup, then on change store + invalidate motion".
+    void Player::setChara(ttstr v) {
+        // sub_6B29C0 dedup (sub_9B1ED0 wcscmp): unchanged chara is a no-op.
+        if(_chara == v) {
+            return;
+        }
+        // *(this+968) = v  (refcount-equivalent value store).
+        _chara = v;
+        // sub_6B29C0 motion-slot invalidation: clear +976/+984 motion slots and
+        // the +1099 motion-loaded flag so the next play()/ensureMotionLoaded()
+        // reloads the motion against the new chara. _activeMotion is the local
+        // analog of the loaded-motion slots; clearing _motionKey forces
+        // ensureMotionLoaded/findMotion past their same-motion guards.
+        _activeMotion.reset();
+        _motionKey = ttstr();
+    }
+
     void Player::setMotion(ttstr v) {
         if(_motionKey == v) {
             return;

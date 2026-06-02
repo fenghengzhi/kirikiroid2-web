@@ -127,7 +127,10 @@ namespace motion {
         void setMetadata(tTJSVariant v) { _metadata = v; }
         tTJSVariant getMetadata() const { return _metadata; }
 
-        void setChara(ttstr v) { _chara = v; }
+        // Aligned to libkrkr2.so Player_setChara @0x6D94B0 (NCB "chara" setter).
+        // Not a plain assignment: a chara change must invalidate the loaded
+        // motion so the next play/update reloads against the new chara.
+        void setChara(ttstr v);
         ttstr getChara() const { return _chara; }
 
         void setMotion(ttstr v);

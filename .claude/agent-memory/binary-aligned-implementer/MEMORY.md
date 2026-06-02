@@ -1,3 +1,4 @@
+- [setChara field map](setchara_field_map.md) — CORRECTS lead's "+968 gate": +968 IS the chara value slot (getChara reads it), NOT a bool gate; +960=variableKeys cache; sub_6B29C0 = chara-change->motion-invalidate (+976/+984/+1099 clear), NOT replay. local setChara now dedup+invalidate
 - [Alpha-mask namespace fn](alpha_mask_namespace_fn.md) — 0x6AF104 is ONE fn = NCB Motion-ns free-fn + render-path compositor; doAlphaMaskOperation/getD3DAvailable are Motion namespace fns NOT Player methods (use NCB_ATTACH_FUNCTION(.,Motion,.))
 - [bindParameter HM1/HM2](bind_param_hm1_hm2.md) — 0x6C4668: HM2(+320)=rawLabel→a4 green-critical; HM1(+264) cascade additive (joinedKey,weight=1.0,writeVal); chainDispatches/aux/ramps DEFERRED no consumer
 - [Phase2 alignment complete 2026-04-17](project_phase2_alignment_complete.md) — updateLayersPhase2_MainLoop vs sub_6BB33C: 8 audit deviations resolved
