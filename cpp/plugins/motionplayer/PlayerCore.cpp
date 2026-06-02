@@ -479,6 +479,43 @@ namespace motion {
                 const auto metadata = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                     (*_activeMotion->root)["metadata"]);
                 if(metadata) {
+                    // M2 spring-physics population: applyMetadata @0x67D4D0
+                    //   dispatches bustControl/hairControl/partsControl BEFORE
+                    //   eyeControl. DESPITE the key names, "bustControl" feeds the
+                    //   SIMPLE spring (deque#1, stepHairParts) via sub_66B018, and
+                    //   "hairControl"/"partsControl" feed the CHAIN spring
+                    //   (deque#2/#3, stepBust) via sub_66B9D0(.,1)/(.,2). Same
+                    //   fresh-build/re-load semantics (drop prior nodes + free
+                    //   their springs first so we never double-populate / leak).
+                    const auto bustControl = std::dynamic_pointer_cast<PSB::PSBList>(
+                        (*metadata)["bustControl"]);
+                    for(auto& node : _engineBack->_hairPartsNodes) {
+                        delete node.spring;
+                        node.spring = nullptr;
+                    }
+                    _engineBack->_hairPartsNodes.clear();
+                    _engineBack->buildBustControl(bustControl.get());
+
+                    const auto hairControl = std::dynamic_pointer_cast<PSB::PSBList>(
+                        (*metadata)["hairControl"]);
+                    for(auto& node : _engineBack->_bustChain1Nodes) {
+                        delete node.spring;
+                        node.spring = nullptr;
+                    }
+                    _engineBack->_bustChain1Nodes.clear();
+                    _engineBack->buildChainControl(
+                        _engineBack->_bustChain1Nodes, 1, hairControl.get());
+
+                    const auto partsControl = std::dynamic_pointer_cast<PSB::PSBList>(
+                        (*metadata)["partsControl"]);
+                    for(auto& node : _engineBack->_bustChain2Nodes) {
+                        delete node.spring;
+                        node.spring = nullptr;
+                    }
+                    _engineBack->_bustChain2Nodes.clear();
+                    _engineBack->buildChainControl(
+                        _engineBack->_bustChain2Nodes, 2, partsControl.get());
+
                     const auto eyeControl = std::dynamic_pointer_cast<PSB::PSBList>(
                         (*metadata)["eyeControl"]);
                     // Fresh-build semantics: EmoteObject_init runs on a newly

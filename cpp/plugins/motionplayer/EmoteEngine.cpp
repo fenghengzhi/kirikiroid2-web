@@ -195,6 +195,30 @@ namespace motion {
         }
         _lookupCurvesDeque10.clear();
 
+        // Delete deque#1 (bustControl -> hair/parts simple-spring) nodes. Each
+        //   node owns its operator new(0x48) EmoteSpringState; the binary's dtor
+        //   walks the deque freeing each spring (operator delete). The node ttstr
+        //   keys (shapeLabel/keyX/keyY) are released by their own destructors.
+        for (EmoteHairPartsNode48B& node : _hairPartsNodes) {
+            delete node.spring;
+            node.spring = nullptr;
+        }
+        _hairPartsNodes.clear();
+
+        // Delete deque#2/#3 (hair/parts -> bust chain-spring) nodes. Each node
+        //   owns its operator new(0xB0) EmoteBustChainSpring. collisionCurve is a
+        //   BORROWED pointer (= EmoteEngine+1128 _matrixHeap1128), not owned here.
+        for (EmoteBustChain1Node56B& node : _bustChain1Nodes) {
+            delete node.spring;
+            node.spring = nullptr;
+        }
+        _bustChain1Nodes.clear();
+        for (EmoteBustChain2Node56B& node : _bustChain2Nodes) {
+            delete node.spring;
+            node.spring = nullptr;
+        }
+        _bustChain2Nodes.clear();
+
         // Delete 7 controllers in reverse-of-ctor order.
         if (_ctlBust2Target)     { EmoteVarController_dtor(_ctlBust2Target);     delete _ctlBust2Target;     _ctlBust2Target = nullptr; }
         if (_ctlBust1Target)     { EmoteVarController_dtor(_ctlBust1Target);     delete _ctlBust1Target;     _ctlBust1Target = nullptr; }
@@ -1194,6 +1218,253 @@ namespace motion {
         }
     }
 
+    // ------------------------------------------------------------------------
+    // Spring-physics deque builders (population path). File-local readers mirror
+    // the Motion property accessors: propGetDouble -> double -> (float) raw bits,
+    // propGetIndexDouble for list elements, sub_66B83C reads a dict's x/y/z.
+    // ------------------------------------------------------------------------
+    namespace {
+
+        // narrow double->float (FCVT), like the binary's `*(float*)&v=*(double*)&v`.
+        float springPropFloat(const PSB::PSBDictionary* d, const char* key) {
+            if (!d) return 0.0f;
+            const auto v = (*d)[std::string(key)];
+            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
+                switch (n->numberType) {
+                    case PSB::PSBNumberType::Float:  return static_cast<float>(n->getFloatValue());
+                    case PSB::PSBNumberType::Double: return static_cast<float>(n->getValue<double>());
+                    default: return static_cast<float>(n->getLongValue());
+                }
+            }
+            return 0.0f;
+        }
+
+        int springPropInt(const PSB::PSBDictionary* d, const char* key) {
+            if (!d) return 0;
+            const auto v = (*d)[std::string(key)];
+            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
+                return static_cast<int>(n->getLongValue());
+            }
+            return 0;
+        }
+
+        // These return shared_ptr by value; callers keep them alive for the scope
+        //   in which they read fields (the PSB child is owned by its parent too,
+        //   but returning the handle keeps lifetime obvious and leak-free).
+        std::shared_ptr<PSB::PSBDictionary> springDict(
+            const PSB::PSBDictionary* d, const char* key) {
+            if (!d) return nullptr;
+            return std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*d)[std::string(key)]);
+        }
+
+        std::shared_ptr<PSB::PSBList> springList(
+            const PSB::PSBDictionary* d, const char* key) {
+            if (!d) return nullptr;
+            return std::dynamic_pointer_cast<PSB::PSBList>((*d)[std::string(key)]);
+        }
+
+        std::shared_ptr<PSB::PSBDictionary> springListDict(
+            const PSB::PSBList* l, int idx) {
+            if (!l || idx < 0 || idx >= static_cast<int>(l->size())) return nullptr;
+            return std::dynamic_pointer_cast<PSB::PSBDictionary>((*l)[idx]);
+        }
+
+        // sub_66B83C(dict): reads x/y/z doubles, narrows each to float. The
+        //   decompiler "returns x" but the caller stores all three components
+        //   (the leftover y/z FP regs); we write all three into out[0..2].
+        void springVec3(const PSB::PSBDictionary* d, float out[3]) {
+            out[0] = springPropFloat(d, "x");
+            out[1] = springPropFloat(d, "y");
+            out[2] = springPropFloat(d, "z");
+        }
+
+        // enabled gate shared by both builders (PSBBool or PSBNumber truthiness).
+        bool springEnabled(const PSB::PSBDictionary* elem) {
+            if (!elem) return false;
+            const auto v = (*elem)[std::string("enabled")];
+            if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(v)) {
+                return b->value;
+            }
+            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
+                return n->getLongValue() != 0;
+            }
+            return false;
+        }
+
+        ttstr springLabel(const PSB::PSBDictionary* d, const char* key) {
+            ttstr label;
+            if (!d) return label;
+            if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
+                    (*d)[std::string(key)])) {
+                label = ttstr(s->value.c_str());
+            }
+            return label;
+        }
+
+    } // namespace
+
+    // Aligned with libkrkr2.so sub_66B018 @ 0x66B018 ("bustControl" -> deque#1,
+    //   the SIMPLE spring consumed by stepHairParts).
+    // Decompiled pseudocode (this conversation):
+    //   count = Motion_propGetCount(bustControl);                  // 0x66b0ac
+    //   for (v5 = 0; v5 < count; ++v5) {                           // 0x66b0e0
+    //     elem = bustControl[v5];                                  // PropGet(0,v5)
+    //     if ((propGetBool(elem,"enabled") & 1) == 0) continue;    // 0x66b180 gate
+    //     param = elem["param"];                                   // 0x66b1ac
+    //     spring = operator new(0x48); EmoteSpringState_ctor(spring, elem); // 0x66b220
+    //     op = param["op"];  spring[+36/+40/+44] = vec3(op);       // 0x66b280
+    //     p  = param["p"];   spring[+48/+52/+56] = vec3(p);        // 0x66b2dc
+    //     pv = param["pv"];  spring[+60/+64/+68] = vec3(pv);       // 0x66b338
+    //     spring[+16] = (float)propGetDouble(param,"ofs");         // 0x66b368
+    //     node = deque#1.emplace(); node.spring=spring; node.initFlag=1;       // 0x66b388
+    //     node.shapeLabel = elem["baseLayer"];                     // 0x66b498 (+12)
+    //     node.keyX = elem["var_lr"];                              // 0x66b530 (+20)
+    //     node.keyY = elem["var_ud"];                              // 0x66b5b8 (+28)
+    //     HM6[var_lr] = {type=0, index=v5};                        // 0x66b5d4
+    //     HM6[var_ud] = {type=0, index=v5};                        // 0x66b5e8
+    //   }
+    // The ctor's vec3 fields (storedXYZ/posXYZ/velXYZ) are seeded to 0 then
+    //   OVERWRITTEN here by op/p/pv (the binary writes after the ctor returns).
+    void EmoteEngine::buildBustControl(const PSB::PSBList* bustControl) {
+        if (!bustControl) {
+            return;
+        }
+        const int count = static_cast<int>(bustControl->size()); // Motion_propGetCount
+        for (int v5 = 0; v5 < count; ++v5) {                     // 0x66b0e0
+            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*bustControl)[v5]);                             // PropGet(0,v5)
+            if (!springEnabled(elem.get())) {
+                continue;                                        // 0x66b180 gate
+            }
+
+            const std::shared_ptr<PSB::PSBDictionary> param =
+                springDict(elem.get(), "param"); // 0x66b1ac
+
+            // operator new(0x48) + ctor over the ELEMENT dict (raw ptr, deque owns).
+            EmoteSpringState* spring = new EmoteSpringState();   // 0x66b220
+            EmoteSpringState_ctor(spring, elem.get());           // 0x66b22c
+
+            // op/p/pv vec3 (dict x/y/z) overwrite stored/pos/vel.  /*0x66b280..0x66b338*/
+            float v3[3];
+            springVec3(springDict(param.get(), "op").get(), v3);
+            spring->storedX = v3[0]; spring->storedY = v3[1]; spring->storedZ = v3[2]; // +36/+40/+44
+            springVec3(springDict(param.get(), "p").get(), v3);
+            spring->posX = v3[0]; spring->posY = v3[1]; spring->posZ = v3[2];          // +48/+52/+56
+            springVec3(springDict(param.get(), "pv").get(), v3);
+            spring->velX = v3[0]; spring->velY = v3[1]; spring->accZ = v3[2];          // +60/+64/+68
+            spring->biasY = springPropFloat(param.get(), "ofs");                      // +16  0x66b368
+
+            // push node onto deque#1; initFlag = 1 (binary 0x66b38c).
+            EmoteHairPartsNode48B node;
+            node.spring     = spring;
+            node.initFlag   = 1;                                  // *(v19+8)=1
+            node.shapeLabel = springLabel(elem.get(), "baseLayer"); // +12  0x66b498
+            node.keyX       = springLabel(elem.get(), "var_lr");    // +20  0x66b530
+            node.keyY       = springLabel(elem.get(), "var_ud");    // +28  0x66b5b8
+            _hairPartsNodes.push_back(std::move(node));
+
+            // HM#6 VarRef {type=0, index=v5} keyed by var_lr AND var_ud.
+            detail::EmoteVarRef& refLr = _scalarHM6_1384[springLabel(elem.get(), "var_lr")];
+            refLr.type = 0; refLr.index = v5;                     // 0x66b5d4
+            detail::EmoteVarRef& refUd = _scalarHM6_1384[springLabel(elem.get(), "var_ud")];
+            refUd.type = 0; refUd.index = v5;                     // 0x66b5e8
+        }
+    }
+
+    // Aligned with libkrkr2.so sub_66B9D0 @ 0x66B9D0 ("hairControl"/"partsControl"
+    //   -> deque#2/#3, the CHAIN spring consumed by stepBust). typeTag = 1 (hair)
+    //   or 2 (parts), written into the HM#6 VarRef type.
+    // Decompiled pseudocode (this conversation):
+    //   count = Motion_propGetCount(chainControl);                 // 0x66ba70
+    //   for (v10 = 0; v10 < count; ++v10) {                        // 0x66ba9c
+    //     elem = chainControl[v10];                                // PropGet(0,v10)
+    //     if ((propGetBool(elem,"enabled") & 1) == 0) continue;    // 0x66bb3c gate
+    //     param = elem["param"];                                   // 0x66bb6c
+    //     spring = operator new(0xB0); EmoteBustChainSpring_ctor(spring, elem);// 0x66bbdc
+    //     op = param["op"];  spring[+80/+84/+88] = vec3(op);       // 0x66bc3c (root)
+    //     spring[+44]=(float)propGetDouble(param,"ofs");           // 0x66bc6c
+    //     spring[+48]=(float)propGetDouble(param,"bendR");         // 0x66bc94
+    //     spring[+52]=(float)propGetDouble(param,"bendS");         // 0x66bcc0
+    //     bp = elem["bp"]; (list[2])                               // 0x66bcec ("bp")
+    //     p  = param["p"]; (list[2])                               // 0x66bd70
+    //     pv = param["pv"];(list[2])                               // 0x66bdf4
+    //     spring[+92..] = vec3(p[0]); spring[+104..] = vec3(p[1]); // 0x66be94/0x66bee4
+    //     spring[+116..]= vec3(pv[0]);spring[+128..] = vec3(pv[1]);// 0x66bf34/0x66bf84
+    //     spring[+140..]= vec3(bp[0]);spring[+152..] = vec3(bp[1]);// 0x66bfd4/0x66c024
+    //     node = deque.emplace(); node.spring=spring;              // 0x66c04c (node+8 NOT set)
+    //     node.shapeLabel=elem["baseLayer"]; node.keyA=elem["var_lr"];     // +12/+20
+    //     node.keyB=elem["var_lrm"]; node.keyC=elem["var_ud"];     // +28/+36
+    //     HM6[var_lr]=HM6[var_lrm]=HM6[var_ud]={type=tag, index=v10};      // 0x66c310..
+    //   }
+    void EmoteEngine::buildChainControl(
+        std::deque<EmoteBustChain1Node56B>& chainNodes, int typeTag,
+        const PSB::PSBList* chainControl) {
+        if (!chainControl) {
+            return;
+        }
+        const int count = static_cast<int>(chainControl->size()); // Motion_propGetCount
+        for (int v10 = 0; v10 < count; ++v10) {                   // 0x66ba9c
+            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*chainControl)[v10]);                            // PropGet(0,v10)
+            if (!springEnabled(elem.get())) {
+                continue;                                         // 0x66bb3c gate
+            }
+
+            const std::shared_ptr<PSB::PSBDictionary> param =
+                springDict(elem.get(), "param"); // 0x66bb6c
+
+            // operator new(0xB0) + chain ctor over the ELEMENT dict.
+            EmoteBustChainSpring* spring = new EmoteBustChainSpring(); // 0x66bbdc
+            EmoteBustChainSpring_ctor(spring, elem.get());            // 0x66bbe8
+
+            uint8_t* const sp = reinterpret_cast<uint8_t*>(spring);
+            auto SF = [sp](int off) -> float& { return *reinterpret_cast<float*>(sp + off); };
+
+            // op = param["op"] (dict) -> root @+80/+84/+88.        /*0x66bc3c*/
+            float v3[3];
+            springVec3(springDict(param.get(), "op").get(), v3);
+            SF(80) = v3[0]; SF(84) = v3[1]; SF(88) = v3[2];
+            // ofs/bendR/bendS (param doubles) -> +44/+48/+52.       /*0x66bc6c..*/
+            SF(44) = springPropFloat(param.get(), "ofs");
+            SF(48) = springPropFloat(param.get(), "bendR");
+            SF(52) = springPropFloat(param.get(), "bendS");
+
+            // p / pv are 2-element lists under "param"; bp is a 2-element list
+            //   directly under the element. Each entry is a dict x/y/z.
+            const std::shared_ptr<PSB::PSBList> p  = springList(param.get(), "p");  // 0x66bd70
+            const std::shared_ptr<PSB::PSBList> pv = springList(param.get(), "pv"); // 0x66bdf4
+            const std::shared_ptr<PSB::PSBList> bp = springList(elem.get(), "bp");  // 0x66bcec
+            springVec3(springListDict(p.get(),  0).get(), v3); SF(92)  = v3[0]; SF(96)  = v3[1]; SF(100) = v3[2];
+            springVec3(springListDict(p.get(),  1).get(), v3); SF(104) = v3[0]; SF(108) = v3[1]; SF(112) = v3[2];
+            springVec3(springListDict(pv.get(), 0).get(), v3); SF(116) = v3[0]; SF(120) = v3[1]; SF(124) = v3[2];
+            springVec3(springListDict(pv.get(), 1).get(), v3); SF(128) = v3[0]; SF(132) = v3[1]; SF(136) = v3[2];
+            springVec3(springListDict(bp.get(), 0).get(), v3); SF(140) = v3[0]; SF(144) = v3[1]; SF(148) = v3[2];
+            springVec3(springListDict(bp.get(), 1).get(), v3); SF(152) = v3[0]; SF(156) = v3[1]; SF(160) = v3[2];
+
+            // push node onto the chain deque. The binary does NOT write node+8
+            //   (init byte): the deque block is raw operator-new, so it is
+            //   indeterminate in libkrkr2.so. The local POD node value-inits it to
+            //   0 (initFlag=0) deterministically — a documented divergence on an
+            //   otherwise-untouched byte.
+            EmoteBustChain1Node56B node;
+            node.spring     = spring;
+            node.shapeLabel = springLabel(elem.get(), "baseLayer"); // +12  0x66c150
+            node.keyA       = springLabel(elem.get(), "var_lr");    // +20  0x66c1e8
+            node.keyB       = springLabel(elem.get(), "var_lrm");   // +28  0x66c270
+            node.keyC       = springLabel(elem.get(), "var_ud");    // +36  0x66c2f8
+            chainNodes.push_back(std::move(node));
+
+            // HM#6 VarRef {type=typeTag, index=v10} keyed by all three vars.
+            detail::EmoteVarRef& refLr = _scalarHM6_1384[springLabel(elem.get(), "var_lr")];
+            refLr.type = typeTag; refLr.index = v10;                // 0x66c318
+            detail::EmoteVarRef& refLrm = _scalarHM6_1384[springLabel(elem.get(), "var_lrm")];
+            refLrm.type = typeTag; refLrm.index = v10;              // 0x66c338
+            detail::EmoteVarRef& refUd = _scalarHM6_1384[springLabel(elem.get(), "var_ud")];
+            refUd.type = typeTag; refUd.index = v10;                // 0x66c354
+        }
+    }
+
     // Aligned with libkrkr2.so sub_67D01C EmoteEngine_progress @ 0x67D01C.
     //
     // Binary main loop (from EmoteEngine_controllers.md):
@@ -1218,8 +1489,13 @@ namespace motion {
     //       stepBust(_ctlBust1Target, _bustChain1Nodes, _bustSpring1Const, dt);
     //       stepBust(_ctlBust2Target, _bustChain2Nodes, _bustSpring2Const, dt);
     //
-    // Physics step functions (stepHairParts, stepBust, 6 deque step fns) are
-    // STUB_WARN here — structural alignment only. P1 will port them.
+    // Physics step functions (stepHairParts @0x67B748, stepBust @0x67BCE8) are
+    // fully ported and their deques are now POPULATED by buildBustControl
+    // (deque#1) / buildChainControl (deque#2/#3) from applyMetadata. They run on
+    // real spring nodes; the only remaining un-wired inputs are the controller
+    // TARGETS (_ctlHairPartsTarget/_ctlBust1/2Target @+1104/+1112/+1120) and the
+    // spring CONSTANTS (_bustSpring1/2Const @+1184/+1192), set by the variableList/
+    // setVariable resolution path (still open) — until then cur[]/springConst = 0.
     void EmoteEngine::progress(float dt) {
         // P0-B2 FIX: top-level gate. The binary (EmoteEngine_progress @0x67D01C,
         // thunk 0x530a5c) opens with `if (*(double*)&a2 != 0.0)` at 0x530a60 and
@@ -1425,10 +1701,12 @@ namespace motion {
             //            _bustSpring1Const@+1184, physDt);                 @0x67d470
             //   stepBust(this, _ctlBust2Target, &_bustChain2Nodes,
             //            _bustSpring2Const@+1192, physDt);                 @0x67d488
-            // The deques #1/#2/#3 are still empty until the (un-ported)
-            // setVariable write path populates them with spring nodes, so this
-            // pass has no observable effect today — but the structure now
-            // matches the binary exactly.
+            // The deques #1/#2/#3 are now POPULATED by buildBustControl /
+            // buildChainControl (applyMetadata @0x67D4D0 dispatch) so this pass
+            // runs on real spring nodes. Outputs are still inert on the logo
+            // fixture (no bustControl/hairControl/partsControl metadata -> empty
+            // deques) and driven by zero targets until the controller-target /
+            // spring-const wiring lands; structure matches the binary exactly.
             stepHairParts(physDt);                                      // @0x67d458
             stepBust(_ctlBust1Target, _bustChain1Nodes,
                      _bustSpring1Const, physDt);                        // @0x67d470

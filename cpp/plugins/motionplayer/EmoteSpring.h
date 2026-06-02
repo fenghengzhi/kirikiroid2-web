@@ -36,6 +36,10 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace PSB {
+    class PSBDictionary;
+} // namespace PSB
+
 namespace motion {
 
     // libkrkr2.so spring-state object (pointed to by deque-node +0).
@@ -78,6 +82,16 @@ namespace motion {
                                   float* outX, float* outY,
                                   float a4, float a5, float a6, float a7,
                                   float a8, float a9, float a10);
+
+    // Aligned with libkrkr2.so sub_662448 @ 0x662448 — EmoteSpringState ctor.
+    //   self = operator new(0x48). Seeds firstFlag=1, all stored/pos/vel = 0
+    //   (from .bss constants qword_1AB7E68/dword_1AB7E70 = 0), then reads the
+    //   per-node spring params from the PSB dict (narrow double->float, store
+    //   raw bits = getFloatValue): gravity->k_a, spring->k_b, friction->drag,
+    //   scale_x->leverX, scale_y->leverY. The vec3 fields (storedXYZ/posXYZ/
+    //   velXYZ) and biasY are overwritten by the builder (op/p/pv/ofs) afterward.
+    void EmoteSpringState_ctor(EmoteSpringState* self,
+                               const PSB::PSBDictionary* dict);
 
     // ========================================================================
     // EmoteBustChainSpring — 2-segment chain spring, aligned with libkrkr2.so
@@ -137,31 +151,49 @@ namespace motion {
     // only. No _padN / no offset static_assert: wasm layout need not match the
     // ARM64 stride — the +28/+48 "untouched" gaps and the +168 QWORD/4B-ptr
     // divergence are ABI details, not source structure. Offset table: analysis/.
+    //
+    // OFFSET-EXACT LAYOUT (data-contract, CLAUDE.md element-internal exception):
+    //   sub_6689A4 (step) and sub_668EF8 (ctor) BOTH access this object via raw
+    //   `*(float*)(self + off)` / `*(int*)(self + off)` at the byte offsets in the
+    //   comments above. The binary leaves genuine UNUSED slots at +28/+32 (used as
+    //   the depth-ramp scratch sp[7]/sp[8] by stepBust!), +48/+52 (sp[12]/sp[13]),
+    //   +112, +164. Those are part of the 176B data contract, NOT cosmetic ABI
+    //   padding — so they are declared as named members below to PIN the offsets
+    //   (C++ would otherwise pack the fields contiguously and the F(off) accesses
+    //   in the step/ctor would read the wrong slots). Every member is 4B; the only
+    //   ABI divergence is the final pointer (+168 QWORD on ARM64, 4B on wasm32),
+    //   and nothing is read past +168 by byte offset, so wasm32 stays consistent.
     struct EmoteBustChainSpring {
-        uint8_t firstFlag;        // +0
-        float   velDampA;         // +4
-        float   dragX;            // +8
-        float   dragY;            // +12
-        float   forceScaleN;      // +16
-        float   forceScale1;      // +20
-        int32_t lastSegIndex;     // +24
-        float   restLen0;         // +36
-        float   restLen1;         // +40
+        uint8_t firstFlag;        // +0   (byte; bytes +1..+3 are the natural gap)
+        uint8_t _pin1[3];
+        float   velDampA;         // +4   gravity
+        float   dragX;            // +8   friction_x
+        float   dragY;            // +12  friction_y
+        float   forceScaleN;      // +16  b_rate
+        float   forceScale1;      // +20  v_bound
+        int32_t lastSegIndex;     // +24  ud_eft (int)
+        float   bendSpd;          // +28  bend_spd   (= sp[7] depth-ramp speed)
+        float   bendVol;          // +32  bend_vol   (= sp[8] depth-ramp volume)
+        float   restLen0;         // +36  length[0]
+        float   restLen1;         // +40  length[1]
         float   restLenLastY;     // +44
-        float   angScaleX0;       // +56
-        float   angScaleY0;       // +60
-        float   angScaleX1;       // +64
-        float   angScaleY1;       // +68
+        float   rampPhase;        // +48  (= sp[12] fmod phase accumulator)
+        float   rampDepth;        // +52  (= sp[13] collision depth)
+        float   angScaleX0;       // +56  scale_x[0]
+        float   angScaleY0;       // +60  scale_y[0]
+        float   angScaleX1;       // +64  scale_x[1]
+        float   angScaleY1;       // +68  scale_y[1]
         float   prevDeltaX;       // +72
         float   prevDeltaY;       // +76
         float   rootX;            // +80
         float   rootY;            // +84
         int32_t rootFlag;         // +88
-        float   rootCopyX;        // +92
-        float   accumX;           // +96
-        int32_t copyFlag1;        // +100
-        float   rootCopy2X;       // +104 (low half of QWORD copy of +92)
-        float   accumY;           // +108
+        float   rootCopyX;        // +92   seg0 rest x
+        float   accumX;           // +96   seg0 rest y
+        int32_t copyFlag1;        // +100  seg0 rest z
+        float   rootCopy2X;       // +104  seg1 rest x
+        float   accumY;           // +108  seg1 rest y
+        float   _pin112;          // +112  seg1 rest z
         float   seg0PosX;         // +116
         float   seg0PosY;         // +120
         float   seg0PosZ;         // +124
@@ -174,6 +206,7 @@ namespace motion {
         float   seg1VelX;         // +152
         float   seg1VelY;         // +156
         float   seg1VelZ;         // +160
+        float   _pin164;          // +164
         void*   collisionCurve;   // +168 (binary: QWORD; wasm32: 4B ptr)
     };
 
@@ -187,5 +220,20 @@ namespace motion {
                                    float* outSeg0, float* outSeg1, float* outLastY,
                                    float a5, float a6, float a7, float a8,
                                    float a9, float a10, float a11);
+
+    // Aligned with libkrkr2.so sub_668EF8 @ 0x668EF8 — EmoteBustChainSpring ctor.
+    //   self = operator new(0xB0=176B). firstFlag=1, +48=0, collisionCurve=0,
+    //   rootX/Y(+80)=0, memset(+92,0,0x48). Reads (narrow double->float raw bits):
+    //   gravity->+4, friction_x->+8, friction_y->+12, b_rate->+16, v_bound->+20,
+    //   ud_eft->+24 (INT, propGetInt), bend_spd->+28, bend_vol->+32. The "length",
+    //   "scale_x", "scale_y" props are 2-element lists -> [0]/[1] each via index.
+    //   length[0]->+36(restLen0), length[1]->+40(restLen1); scale_x[0]->+56,[1]->
+    //   +64; scale_y[0]->+60,[1]->+68. Then the rest positions are derived from the
+    //   rest unit vector (0,1,0) (= floats of qword_1AB7E74/dword_1AB7E7C):
+    //     seg0 rest @+92/+96/+100 = restLen0 * (0,1,0); copy -> +116/+120/+124;
+    //     seg1 rest @+104/+108/+112 = restLen1 * (0,1,0); copy -> +128/+136(.., low
+    //     half of QWORD copy); +140/+148 = 0; +152/+160 = 0.
+    void EmoteBustChainSpring_ctor(EmoteBustChainSpring* self,
+                                   const PSB::PSBDictionary* dict);
 
 } // namespace motion

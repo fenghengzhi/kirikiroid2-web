@@ -15,6 +15,9 @@
 #include "EmoteSpring.h"
 
 #include <cmath>
+#include <cstring>
+
+#include "psbfile/PSBValue.h" // PSBDictionary / PSBList / PSBNumber
 
 namespace motion {
 
@@ -278,6 +281,148 @@ namespace motion {
                 break;
             v24 = F(36 + 4 * static_cast<int>(v28)); // next rest length /*0x668bf0*/
         }
+    }
+
+    // ========================================================================
+    // Spring-state constructors (population path). These read per-node physics
+    // params from the PSB dict exactly as the binary's Motion_propGetDouble path
+    // does: the value is fetched as a true double (type-correct conversion) and
+    // narrowed to float (`*(float*)&v = *(double*)&v` in the binary = an FCVT
+    // narrowing store, NOT a bit-reinterpret), then the raw float bits are stored.
+    // Absent keys default to 0.0 (the .bss default-value constants 1AB7E8C.. are
+    // all zero; only E68/E70/E74/E7C/E80/E88 are init'd by emoteplayer_static_init
+    // @0x42eb28, and those feed the rest-pos init below, not the prop defaults).
+    // ========================================================================
+    namespace {
+
+        // Motion_propGetDouble(dict, key) -> double (type-correct), then -> float.
+        // Mirrors EmoteBlinkController.cpp psbDouble (numberType switch).
+        float propFloat(const PSB::PSBDictionary* d, const char* key) {
+            if (!d) return 0.0f;
+            const auto v = (*d)[std::string(key)];
+            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
+                switch (n->numberType) {
+                    case PSB::PSBNumberType::Float:
+                        return static_cast<float>(n->getFloatValue());
+                    case PSB::PSBNumberType::Double:
+                        return static_cast<float>(n->getValue<double>());
+                    default:
+                        return static_cast<float>(n->getLongValue());
+                }
+            }
+            return 0.0f; // absent -> .bss default 0.0
+        }
+
+        // Motion_propGetInt(dict, key) -> int (default 0).
+        int32_t propInt(const PSB::PSBDictionary* d, const char* key) {
+            if (!d) return 0;
+            const auto v = (*d)[std::string(key)];
+            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
+                return static_cast<int32_t>(n->getLongValue());
+            }
+            return 0;
+        }
+
+        // Read element `idx` of a PSB list as a narrowed float (default 0.0).
+        //   Mirrors Motion_propGetIndexDouble -> (float).
+        float listFloat(const PSB::PSBList* lst, int idx) {
+            if (!lst || idx < 0 || idx >= static_cast<int>(lst->size())) {
+                return 0.0f;
+            }
+            const auto v = (*lst)[idx];
+            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
+                switch (n->numberType) {
+                    case PSB::PSBNumberType::Float:
+                        return static_cast<float>(n->getFloatValue());
+                    case PSB::PSBNumberType::Double:
+                        return static_cast<float>(n->getValue<double>());
+                    default:
+                        return static_cast<float>(n->getLongValue());
+                }
+            }
+            return 0.0f;
+        }
+
+    } // namespace
+
+    // Aligned with libkrkr2.so sub_662448 @ 0x662448 (EmoteSpringState ctor).
+    void EmoteSpringState_ctor(EmoteSpringState* self,
+                               const PSB::PSBDictionary* dict) {
+        // firstFlag = 1; stored/pos/vel seeded from .bss zeros (E68/E70 = 0). /*0x662478*/
+        self->firstFlag  = 1;
+        self->prevDeltaX = 0.0f;
+        self->prevDeltaY = 0.0f;
+        self->storedX = 0.0f; self->storedY = 0.0f; self->storedZ = 0.0f; // +36/+40/+44 = E68/E70
+        self->posX    = 0.0f; self->posY    = 0.0f; self->posZ    = 0.0f; // +48/+52/+56
+        self->velX    = 0.0f; self->velY    = 0.0f; self->accZ    = 0.0f; // +60/+64/+68
+        self->biasY   = 0.0f; // +16 (set later by builder from "ofs"; 0 until then)
+
+        // Per-node spring params (narrow double->float, raw bits).             /*0x662524..*/
+        self->k_a    = propFloat(dict, "gravity");  // +4   /*0x66252c*/
+        self->k_b    = propFloat(dict, "spring");   // +8   /*0x662554*/
+        self->drag   = propFloat(dict, "friction"); // +12  /*0x66257c*/
+        self->leverX = propFloat(dict, "scale_x");  // +20  /*0x6625a4*/
+        self->leverY = propFloat(dict, "scale_y");  // +24  /*0x6625cc*/
+    }
+
+    // Aligned with libkrkr2.so sub_668EF8 @ 0x668EF8 (EmoteBustChainSpring ctor).
+    void EmoteBustChainSpring_ctor(EmoteBustChainSpring* self,
+                                   const PSB::PSBDictionary* dict) {
+        uint8_t* const a1 = reinterpret_cast<uint8_t*>(self);
+        auto F = [a1](int off) -> float&   { return *reinterpret_cast<float*>(a1 + off); };
+        auto I = [a1](int off) -> int32_t& { return *reinterpret_cast<int32_t*>(a1 + off); };
+
+        // firstFlag=1; +48=0; collisionCurve(+168)=0; rootX(+80)=0; memset(+92,0,0x48). /*0x668f2c..*/
+        self->firstFlag = 1;
+        F(48) = 0.0f;
+        self->collisionCurve = nullptr;            // +168 = 0
+        F(80) = 0.0f; F(84) = 0.0f;                // +80 (rootX/Y) QWORD = E68 = 0
+        std::memset(a1 + 92, 0, 0x48u);            // +92..+163 zeroed
+
+        // Scalar params (narrow double->float, raw bits).                       /*0x668fdc..*/
+        F(4)  = propFloat(dict, "gravity");        // +4   gravity
+        F(8)  = propFloat(dict, "friction_x");     // +8
+        F(12) = propFloat(dict, "friction_y");     // +12
+        F(16) = propFloat(dict, "b_rate");         // +16
+        F(20) = propFloat(dict, "v_bound");        // +20
+        I(24) = propInt(dict, "ud_eft");           // +24  (INT, propGetInt)
+        F(28) = propFloat(dict, "bend_spd");       // +28
+        F(32) = propFloat(dict, "bend_vol");       // +32
+
+        // 2-element lists: length / scale_x / scale_y via index 0/1.            /*0x669128..*/
+        const auto length = dict ? std::dynamic_pointer_cast<PSB::PSBList>(
+                                       (*dict)[std::string("length")]) : nullptr;
+        F(36) = listFloat(length.get(), 0);        // +36 restLen0
+        F(40) = listFloat(length.get(), 1);        // +40 restLen1
+        const auto scaleX = dict ? std::dynamic_pointer_cast<PSB::PSBList>(
+                                       (*dict)[std::string("scale_x")]) : nullptr;
+        F(56) = listFloat(scaleX.get(), 0);        // +56
+        F(64) = listFloat(scaleX.get(), 1);        // +64
+        const auto scaleY = dict ? std::dynamic_pointer_cast<PSB::PSBList>(
+                                       (*dict)[std::string("scale_y")]) : nullptr;
+        F(60) = listFloat(scaleY.get(), 0);        // +60
+        F(68) = listFloat(scaleY.get(), 1);        // +68
+
+        // Rest positions from the rest unit vector (0,1,0)
+        //   (= floats of qword_1AB7E74 {0.0f,1.0f} and dword_1AB7E7C {0.0f}).   /*0x6693b0..*/
+        const float restLen0 = F(36);
+        const float restLen1 = F(40);
+        const float ux = kQword1AB7E74_0; // 0.0f
+        const float uy = kQword1AB7E74_1; // 1.0f
+        const float uz = 0.0f;            // dword_1AB7E7C
+        F(92)  = restLen0 * ux;            // +92  seg0 rest x
+        F(96)  = restLen0 * uy;            // +96  seg0 rest y
+        F(100) = restLen0 * uz;            // +100 seg0 rest z
+        // +116/+120/+124 = copy of +92/+96/+100 (QWORD +116=+92, DWORD +124=+100).
+        F(116) = F(92); F(120) = F(96); F(124) = F(100);
+        F(104) = restLen1 * ux;            // +104 seg1 rest x
+        F(108) = restLen1 * uy;            // +108 seg1 rest y
+        F(112) = restLen1 * uz;            // +112 seg1 rest z
+        // +128/+136 = copy(+104/+112): QWORD +128=+104(=x,y), DWORD +136=+112(z).
+        F(128) = F(104); F(132) = F(108); F(136) = F(112);
+        // +140/+148 = E68/E70 = 0 (seg0 vel); +152/+160 = E68/E70 = 0 (seg1 vel). /*0x669414..*/
+        F(140) = 0.0f; F(144) = 0.0f; F(148) = 0.0f;
+        F(152) = 0.0f; F(156) = 0.0f; F(160) = 0.0f;
     }
 
 } // namespace motion

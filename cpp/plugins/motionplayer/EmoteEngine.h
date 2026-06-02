@@ -394,6 +394,33 @@ namespace motion {
         //   EmoteEngine::progress (no separate step fn).
         void buildLoopControl(const PSB::PSBList* loopControl);
 
+        // Aligned with libkrkr2.so sub_66B018 @ 0x66B018 (the "bustControl"
+        //   builder). DESPITE the PSB key name "bustControl", this populates
+        //   deque#1 (_hairPartsNodes) with 48B nodes whose +0 is a 72B
+        //   EmoteSpringState — the SIMPLE spring consumed by stepHairParts (NOT
+        //   the bust chain). For each enabled element: operator new(0x48) +
+        //   EmoteSpringState_ctor, then overwrite the spring's vec3 fields from
+        //   "op"/"p"/"pv" (each a dict x/y/z -> storedXYZ/posXYZ/velXYZ) and
+        //   "ofs" -> biasY; node.initFlag = 1; node labels = baseLayer(shape),
+        //   var_lr (X key), var_ud (Y key); register TWO HM#6 VarRefs {type=0,
+        //   index=loopIndex} keyed by var_lr and var_ud.
+        void buildBustControl(const PSB::PSBList* bustControl);
+
+        // Aligned with libkrkr2.so sub_66B9D0 @ 0x66B9D0 (the "hairControl" /
+        //   "partsControl" builder; tag=1 -> deque#2 _bustChain1Nodes, tag=2 ->
+        //   deque#3 _bustChain2Nodes). DESPITE the key names, these populate the
+        //   56B chain nodes whose +0 is a 176B EmoteBustChainSpring — the CHAIN
+        //   spring consumed by stepBust. For each enabled element: operator
+        //   new(0xB0) + EmoteBustChainSpring_ctor, then overwrite "op" (dict
+        //   x/y/z -> +80/+92/.. root/accum) and the "p"/"pv" 2-segment lists
+        //   (each a list of 2 dicts -> seg0/seg1 pos & vel); node labels =
+        //   baseLayer(shape), var_lr (keyA), var_lrm (keyB), var_ud (keyC);
+        //   register THREE HM#6 VarRefs {type=tag, index=loopIndex}. The 56B
+        //   node's +8 init byte is NOT written by the binary (left indeterminate
+        //   from raw operator-new); the local POD node zero-inits it (initFlag=0).
+        void buildChainControl(std::deque<EmoteBustChain1Node56B>& chainNodes,
+                               int typeTag, const PSB::PSBList* chainControl);
+
     public:
         // ====== Binary field layout (ascending offset order) ======
 
