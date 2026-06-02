@@ -179,6 +179,19 @@
   - **DEFERRED**：loop1(node evaluateTimeline)、loop3(HM3 perNodeLayerState，依赖未移植的 `HM3_initValueFromNode` 0x699510)。bindParameterValue(HM1/HM2) 仍 DEFERRED。
   - **验证**：web+guest 构建 + logo diff 0 mismatch（live 接线，已验未回归）。**HM4 数据通路打通**（stream③→interp→loop2→HM4），仍对现有内容 inert（无 variable）。
   - **剩余 brick 4**：getVariable READ cascade（evalKey_cascade 0x6CD23C：HM4-first by raw key → HM1 join → HM2）接 `_variableSnapshotMap`。
+- ✅ **brick 4 CONNECTED（无新代码）**：port `getVariable`(PlayerVariable.cpp:607) **本就 HM4-first** 按 raw `label` 查 `_variableSnapshotMap`，与 evalKey_cascade(0x6CD23C) 的"HM4 按原始 key 查 → *(node+16) double"一致。brick 3 把 populate 侧接上后，**var-track → HM4 → getVariable 端到端打通**（内容有 variable 时值流通；现有内容 inert，map 空 → fall through，logo diff 绿）。仅更新注释。
+  - **仍 OPEN（完整 M3 / R0-1，架构级，非本 brick 链）**：2-branch scope router（getVariable_wrapper 0x533E1C：isLabelInBindScopeList → HM1-join 路径）+ HM1(`_evalCascadeMap`) 读（port 走 HM4→HM2 跳过 HM1）+ 去除 PSB frames/ranges 发明 fallback。
+
+## brick 链总结（1→2a→2b→2.5→3→4，本 session）
+| brick | commit | 内容 |
+|---|---|---|
+| 1 | 07faaf6 | var-track deque 基地重构 |
+| 2a | 8bd6629 | 56B slot 模型 + frameSource |
+| 2b | 9ddc25d | stream③ advance + 接入 |
+| 2.5 | 22a69e5 | item+16 插值 + bezier easing |
+| 3 | 66510ff | resetMotionState slice (HM4 populate) |
+| 4 | (本提交) | getVariable HM4-first read（已就位，注释更新） |
+全程：反编译证据 → 实现 → 现有 oracle(logo diff 0 mismatch) → 不硬凑 fixture。**var-track → HM4 → getVariable 数据通路端到端打通**，对现有内容全程 inert。
 
 ### 忠实 brick 路线
 1. ✅ **基地重构（brick 1）DONE（2026-06-02）**：`VariableLabelScope` 补全为 {cascadeKey, activeSlotCursor, value, labelName, VarTrackSlot slot[2]}（slot 含 +20 gateFlag）；删死 struct `VariableLabelEntry`；Player 字段 `vector<VariableLabelEntry> _variableLabelEntries` → `deque<VariableLabelScope> _variableLabelScopes`（容器形态对齐 deque）；`initVariables` 改产出 binary 一致 cascadeKey=`scope+"::"+label`。**provably inert**（_variableLabelScopes 零 reader）→ web debug build 通过、logo diff 不受影响（构造上）。改动文件：value_structs.h / player_containers.h / RuntimeSupport.h / Player.h / PlayerMotionLoad.cpp。

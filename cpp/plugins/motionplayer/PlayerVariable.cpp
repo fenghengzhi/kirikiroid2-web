@@ -598,12 +598,18 @@ namespace motion {
             return 0.0;
         }
 
-        // M3 P0 READ cascade (cluster J): binary `Player_getVariable` @0x533E1C
-        // walks HM4-first → HM2 → PSB fallback. R-M4 spike confirmed HM4 is
-        // a variable-snapshot cache populated by `Player_resetMotionState_
-        // clearAndRebuild`'s second loop (each controller writes its raw 8B
-        // current value snapshot). Empty here until that wire is added; the
-        // cascade structure is in place so wiring becomes a one-line addition.
+        // M3 P0 READ cascade (cluster J): binary `Player_evalKey_cascade`
+        // @0x6CD23C looks up HM4 (@+1240) by the RAW lookup key, value =
+        // *(node+16) double. HM4 IS NOW POPULATED: the var-track → HM4 path is
+        // wired (stream③ advanceVariableTracks → interpolateVarTrackValues
+        // item+16 → resetMotionState loop2 snapshot, on PlayFlagJoin). This read
+        // matches the binary's HM4-first-by-raw-key. (Inert for content without a
+        // "variable" list — the map stays empty and the cascade falls through.)
+        //   STILL OPEN (full M3, R0-1): the 2-branch scope router
+        //   (getVariable_wrapper 0x533E1C: isLabelInBindScopeList → HM1-join
+        //   path) and the HM1 (_evalCascadeMap) read are not yet wired — the
+        //   port goes HM4 → HM2, skipping HM1; the PSB frames/ranges tail below
+        //   is a port-invented fallback the binary lacks.
         if(const auto it = _variableSnapshotMap.find(label);
            it != _variableSnapshotMap.end()) {
             return it->second;
