@@ -9,7 +9,12 @@ type: project
 ## TL;DR — 谁建 6 个 controller-deque
 
 **builder 不在 EmoteEngine_ctor，不在 reloadVarsDispatch。** 真正的 builder 是按类目分散的 6 个函数，由
-`EmoteObject_init@0x67DBAC` → `EmoteEngine_applyMetadata_buildControllers@0x67D4D0` 在 motion `base` metadata 里逐 key 调度。
+`EmoteObject_init@0x67DBAC` → `EmoteEngine_applyMetadata_buildControllers@0x67D4D0` 在 motion metadata 里逐 key 调度。
+
+> **CORRECTION (2026-06-03, eye 垂直实装时复核 0x67DBAC)**：builder 读的是 **完整 `metadata` 字典**，**不是 `metadata["base"]`**。
+> EmoteObject_init: `base = metadata["base"]`(0x67dd6c) **只**给 chara/motion 用；applyMetadata 收到的是 `metadata` 的 COPY(v28, 0x67dfa0)，
+> eyeControl/variableList/mirror/scale 全部直接从 metadata 顶层读。下文"base metadata"措辞误导，以本 CORRECTION 为准。
+> 另：HM#6@+1384 value = `{int32 type; int32 index}`(EmoteVarRef)，**不是 scalar/double**(buildEyeControl 0x66ca30 写 `*ret=4;ret[1]=idx`)。
 
 每个 builder 干三件事（核心循环）：
 1. `operator new(size)` 一个 controller 堆对象 + 它的 ctor（从 PSB dict 读字段）

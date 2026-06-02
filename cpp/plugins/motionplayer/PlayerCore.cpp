@@ -8,6 +8,7 @@
 #include "PlayerInternal.h"
 #include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
 #include "SourceCache.h"
+#include "psbfile/PSBValue.h" // PSBDictionary / PSBList (metadata.eyeControl walk)
 #include "ncbind.hpp"
 
 using namespace motion::internal;
@@ -463,6 +464,35 @@ namespace motion {
         if(snapshot) {
             activateMotion(*this, snapshot, &_resourceManagerNative);
             syncVariableKeysFromActiveMotion();
+
+            // Aligned with libkrkr2.so EmoteObject_init @0x67DBAC: AFTER
+            //   Player_play it calls EmoteEngine_applyMetadata_buildControllers
+            //   (0x67D4D0) with the motion "metadata" dict (the FULL metadata,
+            //   NOT metadata["base"] — corrects the earlier "base metadata"
+            //   note: base @0x67dd6c is read only for chara/motion; the builder
+            //   reads eyeControl/variableList/... straight off the metadata dict
+            //   passed at 0x67dfa0). Here we wire the EYE category only (M2 eye
+            //   vertical): metadata["eyeControl"] -> EmoteEngine::buildEyeControl.
+            //   Remaining categories (eyebrow/mouth/transition/selector/timeline/
+            //   bust/hair/parts/...) stay open.
+            if(_engineBack && _activeMotion && _activeMotion->root) {
+                const auto metadata = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                    (*_activeMotion->root)["metadata"]);
+                if(metadata) {
+                    const auto eyeControl = std::dynamic_pointer_cast<PSB::PSBList>(
+                        (*metadata)["eyeControl"]);
+                    // Fresh-build semantics: EmoteObject_init runs on a newly
+                    //   ctor'd engine (deque#4 empty). On a re-load into an
+                    //   existing engine, drop the prior eye controllers first so
+                    //   we never double-populate.
+                    for(auto& entry : _engineBack->_stateMachineDeque4) {
+                        delete entry.ctl;
+                        entry.ctl = nullptr;
+                    }
+                    _engineBack->_stateMachineDeque4.clear();
+                    _engineBack->buildEyeControl(eyeControl.get());
+                }
+            }
         }
     }
 

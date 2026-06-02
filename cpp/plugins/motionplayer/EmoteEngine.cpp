@@ -12,6 +12,7 @@
 
 #include "EmotePlayer.h"  // Player + EmotePlayer + ResourceManager
 #include "Player.h"
+#include "psbfile/PSBValue.h" // PSBList / PSBDictionary / PSBBool / PSBString
 
 #define LOGGER spdlog::get("plugin")
 #define STUB_WARN(name) LOGGER->warn("EmoteEngine::" #name "() stub called")
@@ -130,6 +131,16 @@ namespace motion {
         // tTJSVariant_Release pass mirroring EmoteEngine_dtor @0x67F8C0/+992/
         // +1016/+1040 before the vector clears. Currently the vectors are
         // never populated (setVariable write path un-ported), so this is inert.
+
+        // Delete deque#4 (eye) controllers. The binary's dtor frees each
+        //   controller-deque's heap controllers (operator delete) before tearing
+        //   down the deque header; the entry's ttstr label is released by the
+        //   ttstr destructor. (M2 eye vertical: only deque#4 is populated so far.)
+        for (EmoteEyeControlEntry_Deque4& entry : _stateMachineDeque4) {
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _stateMachineDeque4.clear();
 
         // Delete 7 controllers in reverse-of-ctor order.
         if (_ctlBust2Target)     { EmoteVarController_dtor(_ctlBust2Target);     delete _ctlBust2Target;     _ctlBust2Target = nullptr; }
@@ -549,6 +560,75 @@ namespace motion {
         }
     }
 
+    // Aligned with libkrkr2.so EmoteEngine_buildEyeControl @ 0x66C77C.
+    // Decompiled pseudocode (this conversation):
+    //   count = Motion_propGetCount(eyeControl);            // 0x66c810
+    //   for (v5 = 0; v5 < count; ++v5) {                    // 0x66c844
+    //     elem = eyeControl[v5];                            // PropGet(0, v5)
+    //     if ((propGetBool(elem, "enabled") & 1) == 0) continue;  // 0x66c8e4 gate
+    //     v7 = operator new(0x170);                         // 0x66c8f0
+    //     EmoteBlinkController_ctor(v7, elem);              // 0x66c8fc
+    //     push_back deque#4 {ctl=v7, label=0};              // 0x66c914 (label slot zeroed)
+    //     label = propGet(elem, "label");                   // 0x66c9c4
+    //     deque#4.back().label = label;                     // 0x66ca10 (AddRef into slot)
+    //     ref = HM6_findOrInsert(this+1384, label);         // 0x66ca28
+    //     ref->type = 4; ref->index = v5;                   // 0x66ca30
+    //   }
+    // The binary pushes {ctl, 0} first then writes the label into the slot
+    //   (with ttstr AddRef); here the entry is constructed with the label
+    //   directly — same end state {ctl, label}. The HM#6 index is the LOOP
+    //   index v5 (NOT the deque size), matching the binary (an element skipped
+    //   by the enabled gate still advances v5 but pushes nothing, so deque index
+    //   and v5 can diverge — preserved verbatim).
+    void EmoteEngine::buildEyeControl(const PSB::PSBList* eyeControl) {
+        if (!eyeControl) {
+            return;
+        }
+        const int count = static_cast<int>(eyeControl->size()); // Motion_propGetCount
+        for (int v5 = 0; v5 < count; ++v5) {                     // 0x66c844
+            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                (*eyeControl)[v5]);                             // PropGet(0, v5)
+            // enabled gate (0x66c8e4): skip when "enabled" is not truthy.
+            bool enabled = false;
+            if (elem) {
+                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
+                        (*elem)[std::string("enabled")])) {
+                    enabled = b->value;
+                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                               (*elem)[std::string("enabled")])) {
+                    enabled = n->getLongValue() != 0;
+                }
+            }
+            if (!enabled) {
+                continue;                                       // goto LABEL_28
+            }
+
+            // operator new(0x170) + ctor (raw pointer, manual lifetime — the
+            //   deque entry owns the controller; dtor is responsible for delete).
+            EmoteBlinkController* ctl = new EmoteBlinkController(); // 0x66c8f0
+            EmoteBlinkController_ctor(ctl, elem.get());            // 0x66c8fc
+
+            // label = elem["label"] as ttstr (the HM7 output key).
+            ttstr label;
+            if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
+                    (*elem)[std::string("label")])) {
+                label = ttstr(s->value.c_str());
+            }
+
+            // push {ctl, label} onto deque#4 (binary pushes {ctl,0} then writes
+            //   label into the slot at 0x66ca10; same end state).
+            EmoteEyeControlEntry_Deque4 entry;
+            entry.ctl   = ctl;
+            entry.label = label;
+            _stateMachineDeque4.push_back(std::move(entry));
+
+            // HM#6 VarRef {type=4, index=v5} keyed by label (0x66ca28..0x66ca30).
+            detail::EmoteVarRef& ref = _scalarHM6_1384[label];
+            ref.type  = 4;   // *v17 = 4
+            ref.index = v5;  // v17[1] = v5
+        }
+    }
+
     // Aligned with libkrkr2.so sub_67D01C EmoteEngine_progress @ 0x67D01C.
     //
     // Binary main loop (from EmoteEngine_controllers.md):
@@ -628,7 +708,17 @@ namespace motion {
             //   sub_663FC8 deserializes a controller from a PSB dict; sub_678044's
             //   per-category children (sub_678804 "eye" etc.) only RELOAD saved
             //   state into already-built controllers — also not the builder.
-            if (!_stateMachineDeque4.empty())   { STUB_WARN(stepDeque4_sub_663BDC); }
+            //
+            // Deque#4 (eye) step — PORTED (M2 eye vertical). Per binary
+            //   EmoteEngine_progress @0x67d0a4..0x67d104: for each {ctl,label}
+            //   entry, sub_663BDC(ctl, &out, step) then HM7[label] = out (the
+            //   Player_HM2_upsert_labelToValue(+1440,..) call IS the HM#7
+            //   double-map upsert keyed by elem.label).
+            for (EmoteEyeControlEntry_Deque4& entry : _stateMachineDeque4) {
+                float out = 0.0f;
+                EmoteBlinkController_step(entry.ctl, &out, step); // sub_663BDC
+                _labelToValueHM7[entry.label] = out;              // HM7 upsert @0x67d0f4
+            }
             if (!_stateMachineDeque5.empty())   { STUB_WARN(stepDeque5_sub_665600); }
             if (!_compositeVarDeque6.empty())   { STUB_WARN(stepDeque6_sub_666068); }
             if (!_auxVarDeque8.empty())         { STUB_WARN(stepDeque8_sub_666BF8); }

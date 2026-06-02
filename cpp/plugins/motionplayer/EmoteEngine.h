@@ -35,9 +35,15 @@
 #include "EmoteSpring.h"
 #include "EmoteVarController.h"
 #include "EmoteAngleController.h"
+#include "EmoteBlinkController.h"
 #include "internal/player_containers.h"
 #include "internal/legacy_variable_state.h"
 #include "internal/ttstr_hash.h"
+
+namespace PSB {
+    class PSBDictionary;
+    class PSBList;
+} // namespace PSB
 
 namespace motion {
 
@@ -87,6 +93,20 @@ namespace motion {
         // path not yet reversed). TODO(P-B): replace `double` once confirmed.
         using EmoteScalarMap =
             std::unordered_map<ttstr, double, ttstr_hash, ttstr_equal>;
+
+        // HM#6 @1384 value: VarRef {int32 type; int32 index} — VERIFIED by
+        // EmoteEngine_buildEyeControl @0x66C77C (writes *ret=4 (type),
+        // ret[1]=loopIndex) and the other category builders (type 5/6/7/8). The
+        // setVariable READER @0x671228 reads type@+0/index@+4 and dispatches into
+        // the matching controller deque by index. Corrects the header's prior
+        // `double` placeholder for HM#6 (the dtor releases only the ttstr key, so
+        // the value is a non-owned POD — an 8B {type,index} pair fits exactly).
+        struct EmoteVarRef {
+            int32_t type  = 0; // +0 — controller category tag (4 = eye)
+            int32_t index = 0; // +4 — loop index into the category deque
+        };
+        using EmoteVarRefMap =
+            std::unordered_map<ttstr, EmoteVarRef, ttstr_hash, ttstr_equal>;
 
         // HM#3 value: compound object destroyed by sub_683E40 (releases an
         // owned ttstr@0, dispatch@8, sub-object@16 via sub_683EB8, heap@96).
@@ -176,7 +196,16 @@ namespace motion {
     // placeholder; the binary's ARM64 stride (N) is the provenance comment, not
     // a wasm constraint, so no size assert. When a step fn is ported, replace
     // the blob with the real named-field element type.
-    struct EmoteStateMachine16B_Deque4 { char raw[16]; };  // sub_663BDC, ARM64 16B
+    // Deque #4 (eye, TYPE 4) element — verified by EmoteEngine_buildEyeControl
+    //   @0x66C77C (push: *elem=ctl_ptr; elem[1]=0/label) and the progress
+    //   deque#4 step loop @0x67d0a4 (reads *v15 as the ctl ptr, v15+1 as the
+    //   HM7 key ttstr, advances v15+=2 = 16B). So the element is
+    //   {EmoteBlinkController* ctl@+0; ttstr label@+8} (16B on ARM64).
+    //   Corrects the prior `char raw[16]` placeholder (EmoteEngine.h:179).
+    struct EmoteEyeControlEntry_Deque4 {
+        EmoteBlinkController* ctl = nullptr; // +0 — operator new(0x170) controller
+        ttstr                 label;          // +8 — HM7 output key (PSB "label")
+    };
     struct EmoteStateMachine16B_Deque5 { char raw[16]; };  // sub_665600, ARM64 16B
     struct EmoteCompositeVar24B_Deque6 { char raw[24]; };  // sub_666068, ARM64 24B
     struct EmoteSetupEntry40B_Deque7   { char raw[40]; };  // no step fn, ARM64 40B (_guess)
@@ -225,6 +254,16 @@ namespace motion {
                       std::deque<EmoteBustChain1Node56B>& chainNodes,
                       double springConst, float dt);
 
+        // Aligned with libkrkr2.so EmoteEngine_buildEyeControl @ 0x66C77C.
+        //   For each enabled element in the metadata-base "eyeControl" PSB array:
+        //   operator new(0x170) an EmoteBlinkController, run its ctor over the
+        //   element dict, push {ctl, label} onto deque#4, and register a HM#6
+        //   VarRef {type=4, index=loopIndex} keyed by the element's "label".
+        //   `eyeControl` is the PSB list (= the binary's L"eyeControl" value
+        //   passed by applyMetadata @0x67d7a4; iterated by index, count via
+        //   Motion_propGetCount).
+        void buildEyeControl(const PSB::PSBList* eyeControl);
+
     public:
         // ====== Binary field layout (ascending offset order) ======
 
@@ -234,8 +273,12 @@ namespace motion {
         std::deque<EmoteBustChain1Node56B>    _bustChain1Nodes;
         // +160..+239:deque #3 — Bust chain #2 spring nodes
         std::deque<EmoteBustChain2Node56B>    _bustChain2Nodes;
-        // +240..+319:deque #4 — Eye/mouth state machine
-        std::deque<EmoteStateMachine16B_Deque4> _stateMachineDeque4;
+        // +240..+319:deque #4 — Eye blink controllers (TYPE 4). Element =
+        //   {EmoteBlinkController* ctl; ttstr label}. Populated by
+        //   EmoteEngine::buildEyeControl (libkrkr2.so 0x66C77C); stepped each
+        //   frame by EmoteBlinkController_step (sub_663BDC) writing the scalar
+        //   result into HM#7 keyed by elem.label.
+        std::deque<EmoteEyeControlEntry_Deque4> _stateMachineDeque4;
         // +320..+399:deque #5 — Variable #2
         std::deque<EmoteStateMachine16B_Deque5> _stateMachineDeque5;
         // +400..+479:deque #6 — Composite variable
@@ -346,7 +389,7 @@ namespace motion {
         detail::EmoteScalarMap _scalarHM5_1328; // +1328
 
         // +1384..+1439: HM#6 unordered_map<ttstr,V> (libkrkr2.so +1384).
-        detail::EmoteScalarMap _scalarHM6_1384; // +1384
+        detail::EmoteVarRefMap _scalarHM6_1384; // +1384 — {type,index} VarRef map
 
         // +1440..+1495: HM#7 unordered_map<ttstr,double> — VERIFIED.
         //   Written by progress() deque-step loop via ttstr_doubleMap_upsert
