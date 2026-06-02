@@ -138,17 +138,21 @@ namespace motion {
     // Aligned to libkrkr2.so Player_initVariables (0x6CD750). Called
     // synchronously from the play path after Player_buildNodeTree (0x6B51F0)
     // and before the (flags & Chain) playback-state gate. Reads the PSB
-    // "variable" array (from Player+528 == activeMotion->root) and appends
-    // one VariableLabelEntry per dict entry:
-    //   name  <- entry["scope"] split by "::" first, then ":" (right half),
-    //            or empty
-    //   label <- entry["label"]
-    //   flag68/flag124 <- 1 (binary default; semantics not yet reversed)
+    // "variable" array (from Player+528 == activeMotion->root) and pushes one
+    // VariableLabelScope (the 160B var-track item) per dict entry onto the
+    // Player+1296 deque:
+    //   cascadeKey (item+0)  <- scope present ? scope+"::"+label : label
+    //       (binary 0x6CDAEC..0x6CDBB4: v25 = sub_A1359C(scope, "::");
+    //        item+0 = sub_A1359C(v25, label) — concat, NOT scope-suffix split)
+    //   labelName (item+24)  <- entry["label"]   (sub_A0FB64 snapshot @0x6CDA98)
+    //   value (item+16)      <- 0  (written later by var-track stream③; HM4 reads it)
+    //   cursor (item+8)      <- 0
+    //   slot[0/1].gateFlag   <- 1  (binary item+68/+124 seeded =1 @0x6CD9C0)
     void Player::initVariables() {
         if(false) {
             return;
         }
-        _variableLabelEntries.clear();
+        _variableLabelScopes.clear();
         if(!_activeMotion || !_activeMotion->root) {
             return;
         }
@@ -167,31 +171,37 @@ namespace motion {
                 continue;
             }
 
-            detail::VariableLabelEntry entry;
+            detail::VariableLabelScope entry;
 
-            if(const auto scopeVal = (*entryDic)["scope"]) {
-                if(const auto scopeStr = std::dynamic_pointer_cast<
-                       PSB::PSBString>(scopeVal)) {
-                    const auto &scope = scopeStr->value;
-                    auto sep = scope.find("::");
-                    size_t sepLen = 2;
-                    if(sep == std::string::npos) {
-                        sep = scope.find(':');
-                        sepLen = 1;
-                    }
-                    if(sep != std::string::npos) {
-                        entry.name = detail::widen(scope.substr(sep + sepLen));
-                    }
-                }
-            }
+            // labelName (item+24) = entry["label"].
+            std::string label;
             if(const auto labelVal = (*entryDic)["label"]) {
                 if(const auto labelStr = std::dynamic_pointer_cast<
                        PSB::PSBString>(labelVal)) {
-                    entry.label = detail::widen(labelStr->value);
+                    label = labelStr->value;
                 }
             }
+            entry.labelName = detail::widen(label);
 
-            _variableLabelEntries.push_back(std::move(entry));
+            // cascadeKey (item+0): scope concatenated with "::" then label, per
+            // the binary's two sub_A1359C concats — NOT the scope suffix. The
+            // join is gated on scope resolving (v38 != null), mirrored here by
+            // the PSBString cast succeeding.
+            std::string scope;
+            bool scopePresent = false;
+            if(const auto scopeVal = (*entryDic)["scope"]) {
+                if(const auto scopeStr = std::dynamic_pointer_cast<
+                       PSB::PSBString>(scopeVal)) {
+                    scope = scopeStr->value;
+                    scopePresent = true;
+                }
+            }
+            entry.cascadeKey = detail::widen(
+                scopePresent ? (scope + "::" + label) : label);
+
+            // value/cursor default 0; slot gate flags default 1 (struct
+            // in-class initialisers mirror the binary memset+seed).
+            _variableLabelScopes.push_back(std::move(entry));
         }
     }
 

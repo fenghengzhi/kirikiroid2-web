@@ -222,22 +222,12 @@ namespace motion::detail {
         double height = 0.0;
     };
 
-    // Aligned to libkrkr2.so Player+1296 std::vector<LabelEntry> written by
-    // Player_initVariables (0x6CD750). Each entry is 160 bytes in the binary
-    // with these observed writes (offsets relative to entry base):
-    //   +0   ttstr name   — from entry["scope"], split by ':' and take the
-    //                       right half; empty when no scope / no colon.
-    //   +24  ttstr label  — from entry["label"].
-    //   +68  u8  flag68=1 — observed default (semantics not yet reversed).
-    //   +124 u8  flag124=1 — observed default (semantics not yet reversed).
-    // Read paths in the binary have not been fully traced; the struct exists
-    // so the eager initialisation sequence can land without drifting further.
-    struct VariableLabelEntry {
-        ttstr name;
-        ttstr label;
-        bool flag68 = true;
-        bool flag124 = true;
-    };
+    // (The former VariableLabelEntry port model of Player+1296 has been
+    // replaced by detail::VariableLabelScope / VariableLabelScopeDeque
+    // (internal/value_structs.h + player_containers.h) — the byte-verified
+    // 160B var-track item with cascadeKey/cursor/value/labelName/slot[2].
+    // initVariables now builds the deque directly; see Player_initVariables
+    // @0x6CD750 and analysis/Player_4_HashMaps_Container_Mapping.md §四之二.)
 
     // A5: lifted from PlayerRuntime's inner type to namespace scope so Player
     // can hold the renderLayerStates map without leaking the runtime's nested

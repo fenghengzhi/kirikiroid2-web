@@ -191,34 +191,49 @@ namespace motion::detail {
         }
     };
 
-    // VariableLabelScope — libkrkr2.so Player+1296 std::deque element.
+    // VarTrackSlot — libkrkr2.so 56B per-track frame slot. Two of these live
+    // inside each VariableLabelScope (binary item+48 / item+104, stride 56B).
+    // The var-track advance stream ③ inside Player_advanceRootAndNodes
+    // @0x6B6ADC (sub_6B786C step / sub_6B7A70 merge) toggles the owner's
+    // activeSlotCursor and steps these slots; that stream is DEFERRED, so only
+    // the byte-verified +20 gate flag is modelled here. The flag is seeded =1
+    // by Player_initVariables @0x6CD9C0 and read by the
+    // Player_resetMotionState_clearAndRebuild loop2 HM4-write gate @0x6B2D2C
+    // (`if(!*(BYTE)(item + 56*cursor + 68))` == `if(!slot[cursor].gateFlag)`).
+    // The remaining 56B (frame cursor / time / content) are stream③ state and
+    // intentionally NOT invented here.
+    struct VarTrackSlot {
+        bool gateFlag = true;   // slot+20 (item+68 for slot[0], item+124 for slot[1])
+    };
+
+    // VariableLabelScope — libkrkr2.so Player+1296 std::deque element (160B).
     //
-    // Populated by Player_initVariables @0x6CD750 while loading a motion. Each
-    // entry binds a (variable, label, scope) triple resolved from the motion's
-    // "variable" PSB array. Reverse-engineered from the deque push path at
-    // 0x6CD9C0..0x6CDBB4.
+    // Populated by Player_initVariables @0x6CD750 while loading a motion, one
+    // per entry of the motion's "variable" PSB array. Snapshotted into HM4
+    // (Player+1240) by Player_resetMotionState_clearAndRebuild loop2 @0x6B2D3C:
+    // key = cascadeKey (item+0), value = value (item+16), gated on the active
+    // slot's gateFlag. Read on the lookup side by Player_evalKey_cascade
+    // @0x6CD23C (HM4-first, keyed by the raw lookup ttstr == cascadeKey).
+    //
+    // Field offsets byte-verified from the deque push path 0x6CD940..0x6CDBB4:
+    //   +0  cascadeKey  ttstr  (scope present ? scope+"::"+label : label)
+    //   +8  cursor      int    (active-slot parity, selects slot[0]/slot[1])
+    //   +16 value       double (current variable value; written by stream③)
+    //   +24 labelName   ttstr  (PropGet("label"), sub_A0FB64 snapshot)
+    //   +48 slot[0]     56B    (gate flag @+68)
+    //   +104 slot[1]    56B    (gate flag @+124)
+    // (Local sizeof differs by ttstr's actual sizeof — PLATFORM_BOUNDARY — but
+    // field order / container selection match the binary.)
     //
     // NOT a controller animator — those are EmotePlayer's 5 deques at +256
-    // / +336 / +416 / +576 / +656 with 16-48B elements; this is a lookup
-    // table populated once per motion load and read by the cascade evaluator.
-    //
-    // Binary element is 160B with most interior bytes memset(0); the only
-    // populated regions are 3 ttstr fields and 3 byte flags. Local sizeof is
-    // dictated by ttstr's actual sizeof (8B on Web, 16B on Android).
+    // / +336 / +416 / +576 / +656 with 16-48B elements; this is a lookup table
+    // populated once per motion load and read by the cascade evaluator.
     struct VariableLabelScope {
-        ttstr cascadeKey;       // binary +0  — "scope::variable" joined key
-        ttstr labelName;        // binary +16 — from PropGet("label")
-        ttstr scope;            // binary +64 — from sub_A0BAF4 resolution
-        bool flagActive = true;     // binary +68
-        bool flagValidated = true;  // binary +108
-        bool flagField124 = true;   // binary +124
-
-        VariableLabelScope() = default;
-        VariableLabelScope(const VariableLabelScope &) = default;
-        VariableLabelScope &operator=(const VariableLabelScope &) = default;
-        VariableLabelScope(VariableLabelScope &&) noexcept = default;
-        VariableLabelScope &operator=(VariableLabelScope &&) noexcept = default;
-        ~VariableLabelScope() = default;
+        ttstr cascadeKey;            // item+0  — HM4/HM1 key
+        int activeSlotCursor = 0;    // item+8  — parity cursor
+        double value = 0.0;          // item+16 — HM4 value (stream③-written)
+        ttstr labelName;             // item+24 — from PropGet("label")
+        VarTrackSlot slot[2];        // item+48 / item+104
     };
 
     // PerNodeLayerState — libkrkr2.so HM3 (Player+1184) value type.

@@ -60,9 +60,14 @@ namespace motion::detail {
     using VariableSnapshotMap =
         std::unordered_map<ttstr, double, ttstr_hash, ttstr_equal>;
 
-    // Player+1296 std::deque<VariableLabelScope>. Populated by
-    // Player_initVariables @0x6CD750 once per motion load with (variable,
-    // label, scope) triples used by HM1/HM2 cascade evaluation.
+    // Player+1296 std::deque<VariableLabelScope> — the var-track deque.
+    // Populated by Player_initVariables @0x6CD750 once per motion load (one
+    // element per motion "variable" entry, cascadeKey = scope+"::"+label).
+    // Snapshotted into HM4 by Player_resetMotionState_clearAndRebuild loop2
+    // @0x6B2D3C; the lookup side (Player_evalKey_cascade @0x6CD23C) keys HM4
+    // by the raw cascadeKey. This is the active container backing Player's
+    // +1296 slot (the former std::vector<VariableLabelEntry> port model has
+    // been migrated onto it — single source of truth).
     //
     // Distinct from EmotePlayer's 5 controller animator deques at +256 /
     // +336 / +416 / +576 / +656 (per-nodeType animator state); this is a

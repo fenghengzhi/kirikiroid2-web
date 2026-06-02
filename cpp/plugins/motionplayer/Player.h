@@ -653,10 +653,10 @@ namespace motion {
         // eagerly from play/onFindMotion paths; the binary has no lazy gate.
         void buildNodeTree();
         void resetNodeTreeForBuildLike_0x6B56F8();
-        // Aligned to libkrkr2.so Player_initVariables (0x6CD750). Writes the
-        // Player+1296 std::vector<LabelEntry> from PSB content["variable"].
-        // Currently a placeholder; real implementation lands with the
-        // std::vector<VariableLabelEntry> field (see RuntimeSupport.h).
+        // Aligned to libkrkr2.so Player_initVariables (0x6CD750). Builds the
+        // Player+1296 std::deque<VariableLabelScope> (_variableLabelScopes)
+        // from PSB root["variable"]: one var-track item per entry, cascadeKey =
+        // scope+"::"+label. Snapshotted into HM4 by resetMotionState loop2.
         void initVariables();
         friend void detail::buildNodeTree(motion::Player &player,
                                           const detail::MotionSnapshot &snapshot,
@@ -1049,8 +1049,10 @@ namespace motion {
         // _nodes: libkrkr2.so Player+184 (std::deque of MotionNode). Index 0
         // is the constructor-created root; loaded layer trees append at
         // indices [1,end) during Player_buildNodeTree (0x6B51F0).
-        // _variableLabelEntries: libkrkr2.so Player+1296 std::vector pending
-        // retype to VariableLabelScopeDeque (Phase B alias) in a follow-up.
+        // _variableLabelScopes: libkrkr2.so Player+1296 std::deque<VariableLabelScope>
+        // (the var-track deque). Built by Player::initVariables (0x6CD750);
+        // snapshotted into HM4 by resetMotionState loop2 (0x6B2D3C). Migrated
+        // from the former std::vector<VariableLabelEntry> port model.
         // _nodeLabelMap: libkrkr2.so Player+24 std::map<ttstr,int>. Despite the
         // legacy port name, this is the node *path* map: keyed by the
         // hierarchical "/top/.../self" string built by Player_buildNodePathKey
@@ -1061,7 +1063,7 @@ namespace motion {
         // (getLayerMotion/getLayerGetter @0x6B5AD8, dtgt resolves @0x6F2228,
         // stencil mask resolve @0x6B5454) match a raw path string verbatim.
         std::deque<detail::MotionNode> _nodes;
-        std::vector<detail::VariableLabelEntry> _variableLabelEntries;
+        detail::VariableLabelScopeDeque _variableLabelScopes;
         std::map<std::string, int> _nodeLabelMap;
 
         // === Render-item scratch state (Phase A9) ===

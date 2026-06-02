@@ -56,14 +56,23 @@
 
 ### 1.2 哈希表区 (4 个 KiriKiri 哈希表)
 
-| 偏移 | 二进制类型 | 二进制语义 | 本地对应 | 状态 | TODO |
-|---|---|---|---|---|---|
-| +264..312 | hashMap (bucket+chain+float负载因子@+296+哨兵@+312) | HM1, 节点释放 sub_6DD1A0 | 🔬 候选: `PlayerRuntime::renderLayerStates` 或 `layerIdsByName` | ⚠️🔬 | 二进制哈希表;本地多个 unordered_map。**TODO: 反编译 HM1 的 insert/lookup 点确认它存什么(key/value 类型),再映射到本地哪个 map** |
-| +320..368 | hashMap (@+352负载/+368哨兵) | HM2, 节点 value 是 tTJSVariant* | 🔬 候选: `layerNamesById` / `disabledSelectorTargets` | ⚠️🔬 | value=tTJSVariant*。需反编译确认 |
-| +1184..1232 | hashMap (@+1216负载/+1232哨兵) | HM3, sub_6DD018 清理 | 🔬 | ⚠️🔬 | 需反编译确认存什么 |
-| +1240..1288 | hashMap (@+1272负载/+1288哨兵) | HM4, value=tTJSVariant* | 🔬 | ⚠️🔬 | 需反编译确认 |
+> ✅ **已解决（2026-06-02）**: 4↔N 映射经 insert/lookup 调用点逐个反编译 + byte-verify 确定。
+> 详见 [Player_4_HashMaps_Container_Mapping.md](Player_4_HashMaps_Container_Mapping.md)。本地 4 个 mirror
+> 命名/类型注释**全部正确**。下表更新为 RESOLVED；上方旧"候选/value=tTJSVariant*"判断均被推翻（4 HM value
+> 实为 double/double/696B-payload/double，无一是 tTJSVariant*）。
 
-> **前置依赖**: §1.2 全部 🔬 项的本地映射,依赖反编译 4 个哈希表各自的 insert/lookup 调用点。这是 TODO 中**最大的未知缺口**——本地 6 个 unordered_map 与二进制 4 个哈希表的对应关系尚未确定。
+| 偏移 | node size | key | value (byte-verified) | 本地镜像 | 状态 |
+|---|---|---|---|---|---|
+| +264 HM1 | 96B | joined "scope::label" ttstr | **node+48 double** (富 node) | `_evalCascadeMap` (L1158) | ✅ RESOLVED |
+| +320 HM2 | 32B | raw label ttstr | **node+16 double** | `_evalResultValues` (L1197) | ✅ RESOLVED |
+| +1184 HM3 | 720B | node-path ttstr | **node+16 696B PerNodeLayerState** | `_perNodeLayerStateMap` (L1180) | ✅ RESOLVED |
+| +1240 HM4 | 32B (共享 HM2 node) | label ttstr | **node+16 double** | `_variableSnapshotMap` (L1190) | ✅ RESOLVED |
+
+> **裁决（替代旧"最大未知缺口"）**: 二进制 1384B Player 仅 4 HM + +24 std::map = 5 关联容器。本地多出 ~7 个：
+> - **port 凭空发明**（binary 无）: `_motionsByKey`(995) / `_timelines`(1005) / `_disabledSelectorTargets`(1036) / `_parameterEntryById`(1039)
+> - **EmoteEngine(1496B) 字段误植**: `_layerIdsByName`(1012) / `_layerNamesById`(1013) / `_renderLayerStates`(1014)（语义 = engine+1440/+1384，Player* 存 engine+1064）
+> - 移除/迁移属 **P3 终极重构**（pimpl 内联回 1384B），差分依赖、本地无 oracle → 禁止盲改。
+> - **真正 open 的 P0**: 4 个 mirror 已就位但**多为空**，缺 WRITE 侧填充（bindParameterValue 0x6C4668 / resetMotionState 0x6B2D3C / initVariables 0x6CD750）。这是 M3 getVariable 级联的前置实施项。
 
 ### 1.3 渲染列表 / 时间线 / bounds 工作区
 
@@ -194,9 +203,10 @@
 - 本地: `std::vector<VariableLabelEntry>`。
 - **TODO 🔬**: 核对 VariableLabelEntry 是否 = {ttstr, ttstr, +数值},stride 44B。
 
-### 2.5 4 个哈希表 vs 本地 6 个 unordered_map (§1.2)
-- **最大未决项**。二进制 4 个 KiriKiri 哈希表(+264/+320/+1184/+1240);本地 PlayerRuntime 有 motionsByKey/timelines/layerIdsByName/layerNamesById/renderLayerStates/disabledSelectorTargets 共 6 个 unordered_map + nodeLabelMap(map)。
-- **TODO 🔬 (前置)**: 反编译每个哈希表的 insert/lookup 点(grep `+264`/`+320`/`+1184`/`+1240` 的访问),确定 key/value 类型,建立 4↔6 映射表。在此之前无法判断哪些本地 map 多余、哪些缺失。
+### 2.5 4 个哈希表 vs 本地 ~10 个 unordered_map (§1.2) — ✅ 已解决 (2026-06-02)
+- ✅ **映射已建立**。二进制 4 HM ↔ 本地 `_evalCascadeMap`/`_evalResultValues`/`_perNodeLayerStateMap`/`_variableSnapshotMap`（1:1，命名正确）+ `_nodeLabelMap`=+24 std::map。
+- ✅ **多余/误植已裁决**: 4 发明 map（motionsByKey/timelines/disabledSelectorTargets/parameterEntryById）+ 3 误植 EmoteEngine map（layerIdsByName/layerNamesById/renderLayerStates）。详见 [Player_4_HashMaps_Container_Mapping.md](Player_4_HashMaps_Container_Mapping.md)。
+- **后续 P0**: WRITE 侧填充（mirror 当前多为空）→ 解锁 M3 getVariable 级联。P3 才做 STL→内联 HM + 删/迁多余 map。
 
 ### 2.6 pimpl 拆分 (PlayerRuntime)
 - 二进制无 pimpl,全部内联在 1384B。本地拆 `Player` 直接成员 + `shared_ptr<PlayerRuntime>`。
