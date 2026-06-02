@@ -25,3 +25,6 @@ metadata:
 **deque#5 容器事实：** engine +320 base（80B deque obj）；progress 读 begin-iter @+336，builder 写 end-iter @ a1[46]=+368。元素 16B {EmoteEyebrowController* ctl@0; ttstr label@8}，block 0x200=512。HM6 {type=5,index=loop v5}(findOrInsert a1+173)。HM7 upsert Player_HM2_upsert_labelToValue(+1440, elem+1), stride 16B。
 
 **共享 SCOPE BOUNDARY（合法，不计偏差）：** sub_661F7C @0x661F7C(204 指令,4 参数 self+160/self+80/trackValue/endVal) = eye/eyebrow 共用 mesh resolver，未实装 → 8B-track 不重填 → value-track 插值 inert 但 trackValue 保持 popped 位置 + 标量输出忠实。**不影响 step 状态机本身逐行对齐**（状态机逻辑独立于 resolver 数据源）。
+
+---
+**CORRECTION (2026-06-03, commit 2316276):** this slice was NOT zero-deviation. trackPow(+320) was ported as int32_t + static_cast<float>, but the binary loads it as *(float*) (raw float bits, no SCVTF). Fixed to float + memcpy alongside eye. Lesson: scrutinize int-vs-float-bits on every pow/curve field.

@@ -24,3 +24,6 @@ EmoteEngine eye/deque#4 (TYPE 4) blink 物理垂直切片 — 2026-06-03 独立 
 
 **诚实的 open 边界（不阻塞 blink 对齐）：**
 - sub_661F7C→sub_660028 (1925行 mesh resolver) 未移植: 重建 8B 值轨道。轨道空时 step 走「empty→state0/跳 blink」路径, 与二进制空轨道路径一致, blink 状态机+remap 仅依赖 +328..+360 标量(ctor 填好), 不受影响。+288 trackResolvedSpan 由 resolver 写, 未移植时保持 0 = ctor 默认。
+
+---
+**CORRECTION (2026-06-03, commit 2316276):** this slice was NOT zero-deviation. trackPow(+324) was ported as int32_t + static_cast<float>, but the binary loads it as *(float*) (raw float bits, DWORD copy from keyframe[+8], no SCVTF). The mouth slice disasm audit caught it; fixed to float + memcpy. Lesson: scrutinize int-vs-float-bits on every pow/curve field (LDR S without SCVTF = raw bits).
