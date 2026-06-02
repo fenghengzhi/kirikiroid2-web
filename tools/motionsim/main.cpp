@@ -615,6 +615,11 @@ int main(int argc, char *argv[]) {
               "(time/type/content keys) then exit — Stage 0 fixture probe")
         .default_value(false)
         .implicit_value(true);
+    program.add_argument("--dump-variable")
+        .help("dump motion[\"variable\"] (var-track) entries — keys + "
+              "type/preview of label/scope — then exit (brick 2 data-model probe)")
+        .default_value(false)
+        .implicit_value(true);
 
     try {
         program.parse_args(argc, argv);
@@ -737,6 +742,70 @@ int main(int argc, char *argv[]) {
             spdlog::warn("FIXTURE DOES NOT EXERCISE onAction/onSync path");
         } else {
             spdlog::info("FIXTURE EXERCISES event path (see frames above)");
+        }
+        return 0;
+    }
+
+    // Brick 2 data-model probe: dump motion["variable"] (var-track @Player+1296,
+    // built by Player_initVariables 0x6CD750). Resolves whether entry["label"]
+    // is a name string (cascadeKey base) or a keyframe array (stream③ frame
+    // source) — the static-analysis contradiction in
+    // analysis/Player_4_HashMaps_Container_Mapping.md §四之二.
+    if(program.get<bool>("--dump-variable")) {
+        // Describe a PSB value's type + short content preview.
+        const auto describe =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> std::string {
+            if(!v) return "null";
+            if(auto s = std::dynamic_pointer_cast<PSB::PSBString>(v))
+                return "string=\"" + s->value + "\"";
+            if(auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v))
+                return "number";
+            if(auto l = std::dynamic_pointer_cast<PSB::PSBList>(v)) {
+                std::string firstKeys;
+                if(l->size() > 0) {
+                    if(auto d0 = std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                           (*l)[0])) {
+                        for(const auto &kv : *d0) {
+                            if(!firstKeys.empty()) firstKeys += ",";
+                            firstKeys += kv.first;
+                        }
+                    }
+                }
+                return "list[" + std::to_string(l->size()) + "]" +
+                       (firstKeys.empty() ? "" : " elem0.keys={" + firstKeys + "}");
+            }
+            if(auto d = std::dynamic_pointer_cast<PSB::PSBDictionary>(v)) {
+                std::string keys;
+                for(const auto &kv : *d) {
+                    if(!keys.empty()) keys += ",";
+                    keys += kv.first;
+                }
+                return "dict{" + keys + "}";
+            }
+            return "<other>";
+        };
+        const auto variable =
+            std::dynamic_pointer_cast<PSB::PSBList>((*snapshot->root)["variable"]);
+        if(!variable) {
+            spdlog::warn("motion has NO top-level \"variable\" list");
+            return 0;
+        }
+        spdlog::info("variable list: {} entry(ies)", variable->size());
+        const int n = std::min<int>(static_cast<int>(variable->size()), 4);
+        for(int i = 0; i < n; ++i) {
+            auto e = std::dynamic_pointer_cast<PSB::PSBDictionary>((*variable)[i]);
+            if(!e) {
+                spdlog::info("  [{}] <non-dict entry>", i);
+                continue;
+            }
+            std::string keys;
+            for(const auto &kv : *e) {
+                if(!keys.empty()) keys += ",";
+                keys += kv.first;
+            }
+            spdlog::info("  [{}] keys={{{}}}", i, keys);
+            spdlog::info("       label = {}", describe((*e)["label"]));
+            spdlog::info("       scope = {}", describe((*e)["scope"]));
         }
         return 0;
     }

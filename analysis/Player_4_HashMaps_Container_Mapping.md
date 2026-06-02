@@ -150,7 +150,13 @@
 
 ### 忠实 brick 路线
 1. ✅ **基地重构（brick 1）DONE（2026-06-02）**：`VariableLabelScope` 补全为 {cascadeKey, activeSlotCursor, value, labelName, VarTrackSlot slot[2]}（slot 含 +20 gateFlag）；删死 struct `VariableLabelEntry`；Player 字段 `vector<VariableLabelEntry> _variableLabelEntries` → `deque<VariableLabelScope> _variableLabelScopes`（容器形态对齐 deque）；`initVariables` 改产出 binary 一致 cascadeKey=`scope+"::"+label`。**provably inert**（_variableLabelScopes 零 reader）→ web debug build 通过、logo diff 不受影响（构造上）。改动文件：value_structs.h / player_containers.h / RuntimeSupport.h / Player.h / PlayerMotionLoad.cpp。
-2. **stream③（brick 2）**：var-track advance（sub_6B786C step / sub_6B7A70 merge）写 item+16 value + toggle activeSlotCursor + 清 slot gateFlag。
+2. **stream③（brick 2）⚠️ 阻塞于数据模型矛盾**：var-track advance（sub_6B786C step / sub_6B7A70 merge）。
+   - **56B slot 布局（byte-verified 本轮）**：`{frameIdx@+0, time@+8, interval@+16, flag20(type==0?1:0), flag21(type2→0/type3→1), merged@+22, value@+24(frame["value"] double), easing@+32(ttstr)}`。
+     - sub_6B786C(slot, frameSrc, idx)：slot+0=idx; slot+8=frame["time"]; slot+22=0。
+     - sub_6B7A70(slot, frameSrc)：slot+22=1; type=frame["type"]; type==0→slot+20=1(→LABEL_25 早退); 否则 slot+20=0 + slot+16=frame["interval"] + slot+24=frame["value"] + slot+32=frame["content"]["easing"]。
+   - **勘误 brick 1 的 VarTrackSlot**：loop2 HM4 gate 实为 slot+20（type==0 时=1→不写 HM4；type!=0 时=0→写）；keyframe value 在 slot+24，**非 item+16**。item+16（HM4 value）来源是**插值**（slot bracket → item+16），由另一步写（待定位 brick 2.5）。
+   - **item+0/item+24 同源疑点 + 经验裁决（2026-06-02）**：initVariables 中 item+0（cascadeKey）与 item+24（stream③ frame source）**都从 `entry["label"]` 写入**（两处同用 v8=L"label"，已三复核）。曾疑为矛盾（key-string vs keyframe-array）。**裁决**：若 `entry["label"]` 是变量**名字串**，则 stream③ 的 `PropGetCount(item+24)` 对字符串返回 ~0 → advance 循环 no-op，无矛盾，且与 **brick 1 一致**（labelName=entry["label"]、cascadeKey=scope+"::"+label）。真正未决的仅是"变量 keyframe 从何而来"（brick 2 范畴）。
+   - **🚫 brick 2 DEFERRED（unverifiable）**：`motionsim --dump-variable` 扫描全部 **36 个可用 .mtn fixture（logo + SD sprite），0 个含 "variable" 列表**——参数化变量只存在于完整 E-mote `.psb` 模型（该 .psb 现无法经 motionsim 解析：`PSBArray bad length type size`）。⇒ stream③ / HM4 / getVariable 变量路径**对所有现有内容 inert 且无 fixture 可验证**。强行实现 = 在矛盾未决 + 无 oracle 上写不可验证代码（CLAUDE.md 硬禁）。**解阻塞前置**：(a) 取得含 "variable" 的 E-mote 模型 motion fixture（或修 .psb parser），(b) runtime hook 真机确认 item+24 是否真作 frame source（device frida）。新增 `motionsim --dump-variable` 探针为永久诊断工具。
 3. **loop2（brick 3）**：HM4 populate（gate + upsert），可先做 inert free 函数 + 单测。
 4. **getVariable READ（brick 4）**：cascade 接 HM4（HM4-first by raw key → HM1 join → HM2）。
 
