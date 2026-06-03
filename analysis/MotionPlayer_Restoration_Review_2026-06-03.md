@@ -1,5 +1,17 @@
 # MotionPlayer 源代码还原 Review（2026-06-03）
 
+> **架构级 P0 推进进度（2026-06-03 同日实施，commit 15d2972..4ca8010）**：本轮 review 后按 `/goal`
+> 逐个攻克架构级 P0，全部 fresh-decompile 证据驱动 + 构建验证（多数另经独立 binary-alignment-auditor 审计）：
+> - **M6 alpha-mask** ✅ 解决：`doAlphaMaskOperation`/`getD3DAvailable` 从误挂 Player 改为 Motion 命名空间自由函数（0x6AF104 是 11 参 namespace fn）。
+> - **R0-2 setChara** ✅ 解决：补 chara-change→motion-invalidation 副作用（0x6D94B0/sub_6B29C0；纠正"+968 gate"/"replay" 误判）。
+> - **R0-3 getLoopTime** ✅ 解决：`loopTime` 改返回 TJS Array（0x6D139C，遍历 +1296 var-track deque），与 `frameLoopTime` 标量解纠缠。
+> - **M1 root-stream** ✅ 推进：advance 原子单元补流② root content-snapshot(+616)（0x6B6ADC）；纠正"var-track DEFERRED"过时结论（实已接入 5 点）。Stage B reseek 仍 open。
+> - **M2 EmoteEngine** 🟢 大幅推进：builder 定位（0x67D4D0，曾是硬阻塞）→ **6 个 progress-stepped controller deque 全部实装并审计**（eye/eyebrow/mouth/selector/transition/loop）→ bust/hair/parts 弹簧 deque population + chain-spring 偏移修正 → **setVariable cases 4-8 运行时分派 keystone**（0x671228，激活所有 controller）。**完整 float-bits bug 清扫**（trackPow/powCount raw-bits vs int→float）跨 6 个 controller 修复（2316276/2870209/3bcab50）。
+>   - **M2 仍 open**：bust/hair target+const bind-loop pass（sub_67C560）、`sub_661F7C` mesh resolver（1925 行，un-inert 值轨道插值）、clamp/mirror/instantVariable/timeline builders、HM2-map 统一（getVariable/setVariable 双表 fork）。
+> - **仍完全 open 的架构 P0**：M1 Stage B、容器内联（P3 终极重构）、M3 残留 HM2 fork。
+> - 全程 logo 非回归（emote 物理路径对 logo 差分 inert，是非回归守护非存在理由）；emote 路径无 fixture/oracle，验证=反编译+构建（CLAUDE.md 证据阻塞/验证尽力）。
+
+
 > 方法：以 [MotionPlayer_Restoration_Review_2026-06-02.md](MotionPlayer_Restoration_Review_2026-06-02.md) 为基线，
 >   对自 06-02 以来的全部 delta（M7 anchor 3 提交 / M9 source 子系统 5 提交 / M5 node-key 2 提交 /
 >   M3 getVariable+var-track ~12 提交）做 **fresh decompile 独立复核**（4 个 krkr2-impl-diff agent 并行，
