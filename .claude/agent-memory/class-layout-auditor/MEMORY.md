@@ -1,4 +1,5 @@
 - [Player class container layout](player_container_layout.md) — 二进制 Player +264/+320/+1184/+1240 是 4 个 KiriKiri 哈希表(非vector),容器选型权威表
+- [Motionplayer container audit](motionplayer_container_audit.md) — fresh-decompile裁决:4+7 HM全是libstdc++ unordered_map(仅hash自研非内联表);唯一偏差=2个std::string-key map应ttstr;纠正"P3替换内联HM"前提
 - [Player pimpl split mapping](player_pimpl_split.md) — [过时] PlayerRuntime 已删,容器内联进 Player 本体;EmoteEngine 用 raw Player*+new/delete
 - [Player 1384B flat spec](player_1384b_flat_spec.md) — 78 NCB成员→偏移→类型→ctor初值表; setVariable a1+1384 是EmotePlayer不是Player
 - [EmoteEngine 1496B layout](emoteengine_1496b_layout.md) — EmoteEngine 偏移表(10 deque+7 ctrl)+5大偏差+路线图; HM2@+1440 不在 Player; 本地 inline @ EmotePlayer.h:56-101

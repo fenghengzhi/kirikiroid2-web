@@ -8,6 +8,9 @@
 
 ## 结论：4 个 HM ↔ 本地 4 个 map 是 1:1 真实镜像，且本地命名/类型注释**已全部正确**。
 
+> **澄清（2026-06-03 fresh-decompile 复核回填，防误读）**：标题/正文的「内联哈希表」指**作为 by-value 成员内联在 1384B Player 结构里的 std::unordered_map**，**不是** KiriKiri 自研的定制 hashmap。下文 §一已证（base+8 = `std::_Prime_rehash_policy::_M_next_bkt`、base+32 = 1.0f load factor、base+16 = `_M_before_begin` 单链 head）——这 4 个 HM 的**容器本体就是 libstdc++ `std::unordered_map`**，仅 **hash 函数**自研（ttstr UTF-16LE hash）。
+> 推论：本地 `std::unordered_map<ttstr, V, ttstr_hash, ttstr_equal>` 是**正确的 1:1 容器选型**，不是被 CLAUDE.md 禁止的「STL 简化替代」。**不存在**「STL → 自研内联 HM」的 P3 重构目标（曾在多份 doc/review 里如此表述，系误判）。容器维度真正待办仅 2 处 `std::string → ttstr` key retype：HM2 镜像 `_evalResultValues`（Player.h:1294）与 +24 node-index map `_nodeLabelMap`（Player.h:1159）。
+
 二进制 1384B Player 只有 **4 个内联 HM + 1 个 +24 std::map** = 5 个关联容器。本地有 ~10 个。
 本分析把 5 个真实容器逐一锚定，并裁决其余 ~6 个的归属。
 

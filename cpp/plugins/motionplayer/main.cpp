@@ -232,9 +232,27 @@ NCB_REGISTER_CLASS(Player) {
     // M15 missing `meshDivisionRatio` (cluster E §3.1): delegate to
     // EmoteEngine +1168/+1176 via _engineBack.
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
-    // M15 missing angleDeg/angleRad (cluster E §3.1 + §4): binary stores
-    // deg internally; angleDeg getter returns rad (binary apparent name vs
-    // semantics mismatch), angleRad returns raw stored deg (port scaffold).
+    // angleDeg/angleRad — binary stores the angle in DEGREES internally
+    // (root+1616, or +464 when override flag +482).
+    //
+    // CORRECTION (2026-06-03, fresh decompile of Player_ncb_registerMembers
+    // @0x6D69C8, byte-verified at the registration sites 0x6d7db4 / 0x6d7e30):
+    // IDA's auto symbol names are SWAPPED vs the actual TJS member names — this
+    // misled the prior analysis. The real bindings are:
+    //   angleDeg member: getter = sub_6C1780  (returns the raw value, NO scale
+    //                    -> DEGREES); setter = Player_setAngleRad@0x6c0f84
+    //   angleRad member: getter = 0x6CD0C0    (value * 0.0174532925 -> RADIANS;
+    //                    IDA misnames this fn "Player_getAngleDeg");
+    //                    setter = Player_setAngleDeg@0x6cd0ec
+    // So both member names match their semantics: angleDeg->deg, angleRad->rad.
+    // There is NO name/semantics mismatch in the binary.
+    //
+    // KNOWN BUG (port binding is itself swapped): local getAngleDeg() currently
+    // returns emoteGetAngleRadLike_0x6CD0C0() = RAD (should be deg), and
+    // getAngleRad() returns the raw stored deg (should be rad). The local NCB
+    // properties below are therefore wired backwards relative to the binary.
+    // Fixing requires swapping the getter/setter bodies (see Player.h:589-611),
+    // tracked as a follow-up (behavior change, not a comment-only fix).
     NCB_PROPERTY(angleDeg, getAngleDeg, setAngleDeg);
     NCB_PROPERTY(angleRad, getAngleRad, setAngleRad);
     NCB_PROPERTY(speed, getSpeed, setSpeed);
@@ -408,9 +426,21 @@ NCB_REGISTER_CLASS(Player) {
     NCB_METHOD_RAW_CALLBACK(stop, &Player::stopCompat, 0);
 }
 
-// Motion.EmotePlayer — minimal NCB class matching libkrkr2.so EmotePlayer_NCB_classInit
-// @ 0x686148. Binary only registers `finalize` (no script-facing API). The constructor
-// is bound for native instance allocation; D3DEmotePlayer is the class with the real API.
+// Motion.EmotePlayer — port currently registers only the ctor; the full
+// script-facing API lives on D3DEmotePlayer below.
+//
+// CORRECTION (2026-06-03, fresh decompile of EmotePlayer_loadClass @0x685BC0):
+// the earlier claim that "binary only registers `finalize`" is WRONG.
+// 0x685BC0 calls EmotePlayer_NCB_classInit @0x686148 (registers `finalize`)
+// and THEN EmotePlayer_ncb_registerMembers @0x67FAC8, which registers the
+// full ~69-member API (progress/draw/play/setVariable/playTimeline/... +
+// TimelinePlayFlag* constants + chara/motion/bounds/... properties) into the
+// SAME class object. So Motion.EmotePlayer DOES expose the full API in the
+// binary. Putting that API on D3DEmotePlayer and leaving Motion.EmotePlayer
+// ctor-only is an architecture-P0 mismatch (audit cluster C). Open complication:
+// the D3DEmotePlayer<->EmotePlayer binary relationship (sub_52E504) is not yet
+// decompiled, so "API fully missing" is not yet a settled verdict — verify
+// sub_52E504 before relocating the member table here.
 NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_CONSTRUCTOR(());
 }

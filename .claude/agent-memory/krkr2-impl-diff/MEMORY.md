@@ -2,4 +2,7 @@
 - [M5 node-index map raw label](m5_node_index_map_raw_label.md) — Player+24 map keyed by RAW PSB label (not path); buildNodePathKey is HM3-only; getLayerNames substring filter semantics. 3ecd554/73cc3ac correct.
 - [M9 source subsystem verdict](m9_source_subsystem_verdict.md) — RM=SourceCache 12-member single class @0x6AB8BC; ObjSource 0x18 dict facade @0x69CCB8; findSource @0x6AAB3C/0x6948E8 double-hashmap+raw upload. phase-D per-vertex-color boundary needs draw-path verification (recheck).
 - [M3 getVariable review gaps](project_m3_getvariable_review_gaps.md) — 2026-06-03 fresh-decompile 复核 M3 确认 10 地址；2 open 缺口(0x6BBE20/0x69A754 未复编, HM3 slantY 缺证); 已澄清伪矛盾.
-- [Anchor node 0x6C0528](project_anchor_node_0x6C0528.md) — anchor type10 ↔ PlayerUpdateAnchor.cpp; dampPow/612-gate/wh ✅; color base 255:128 方向颠倒(OPEN 高); 字节核实常量
+- [Anchor node 0x6C0528](project_anchor_node_0x6C0528.md) — anchor type10 ↔ PlayerUpdateAnchor.cpp; dampPow/612-gate/wh/color-base ✅(255:128 颠倒已纠正); open=blend来源per-slot/通道序/allEqual/flag1024
+- [Render path 0x6C7440 per-vertex-color](project_render_path_0x6C7440_vertexcolor.md) — 0x6C7440 draw 仅传顶点位置(sub_6C715C)+单 blendmode；无 per-vertex/4-corner color 数组 → M9 phase-D boundary 理由(GPU per-vertex 重组)被证伪
+- [M2 setVariable+controller subsystem](m2_setvariable_controller_subsystem.md) — setVariable 0x671228=HM6+deque-index READER; local用 controllerBindings+Legacy-deque 并行模型(架构 ❌); getVariable 0x533E1C ✅; 5 handler+67C560+661F7C 未移植
+- [Progress/弹簧/帧步进裁决](progress_physics_framestep_verdict.md) — 2026-06-03 纠正"var-track统一DEFERRED"(前向已实装PlayerFrameProgress.cpp:1030/1132)与"弹簧是stub"误判; A/B两链;reseek merge陷阱;7 open gaps

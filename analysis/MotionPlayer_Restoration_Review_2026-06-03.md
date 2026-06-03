@@ -1,5 +1,11 @@
 # MotionPlayer 源代码还原 Review（2026-06-03）
 
+> **同日后续修订（2026-06-03，6 子系统并行 fresh-decompile 复核后回填）**：本轮 review 的两条结论已被随后的独立反编译证伪/超越，按 CLAUDE.md「证伪即就地纠正」回填：
+> - **§一 anchor color base「255:128 方向颠倒（回归 OPEN 高）」→ 已 CLOSED。** 当前 [PlayerUpdateAnchor.cpp:144-146](../cpp/plugins/motionplayer/PlayerUpdateAnchor.cpp#L144) 已是 `isDefaultBlend ? 128.0 : 255.0`（正确方向），注释 L135-143 亦已更正并自述「commit 5018087 wired to wrong side; corrected here」。本 review 的 §1.1 描述的是修复前代码，建议本项的高优先级 OPEN 状态视为 closed（仅余 §1.3 的 blend per-slot 源 / color 通道序等次要偏差 open）。
+> - **§三 M9 phase-D per-vertex-color 平台边界 → 论据被证伪。** 随后反编译 draw 路径 0x6C7440 + 顶点 builder sub_6C715C：builder 只 append (x,y) 位置对（variant type 5，20B），operate*/copy 原语只传单 blend mode，anchor 的 4-corner colorBytes(node+100) 在 0x6C7440 未被引用。故「binary recombines 4-corner gradient as per-vertex vertex colors」不成立；color 消费点未定位。[ResourceManager.h](../cpp/plugins/motionplayer/ResourceManager.h) 注释已据此更正（边界须由 draw-path color 消费点论证，非 findSource、非 per-vertex-color 论据）。
+> - **容器「STL→内联 HM 替换属 P3 终极重构」前提 → 有误。** 4 个 HM 二进制本就是 libstdc++ `std::unordered_map`（`_Prime_rehash_policy::_M_next_bkt` + 1.0f load factor + `_M_before_begin` 单链），仅 hash 函数自研（ttstr-hash）。本地用 `std::unordered_map<ttstr,…>` 是**对齐而非待重构偏差**，不存在需迁移到的「自研内联 HM」目标。真正待办仅 2 处 map 的 `std::string→ttstr` key retype（Player.h:1159 node-index map、Player.h:1294 HM2 镜像），属轻量级。下表「内部容器实现」与 §五容器行据此重新定性。
+
+
 > **架构级 P0 推进进度（2026-06-03 同日实施，commit 15d2972..4ca8010）**：本轮 review 后按 `/goal`
 > 逐个攻克架构级 P0，全部 fresh-decompile 证据驱动 + 构建验证（多数另经独立 binary-alignment-auditor 审计）：
 > - **M6 alpha-mask** ✅ 解决：`doAlphaMaskOperation`/`getD3DAvailable` 从误挂 Player 改为 Motion 命名空间自由函数（0x6AF104 是 11 参 namespace fn）。
@@ -8,7 +14,7 @@
 > - **M1 root-stream** ✅ 推进：advance 原子单元补流② root content-snapshot(+616)（0x6B6ADC）；纠正"var-track DEFERRED"过时结论（实已接入 5 点）。Stage B reseek 仍 open。
 > - **M2 EmoteEngine** 🟢 大幅推进：builder 定位（0x67D4D0，曾是硬阻塞）→ **6 个 progress-stepped controller deque 全部实装并审计**（eye/eyebrow/mouth/selector/transition/loop）→ bust/hair/parts 弹簧 deque population + chain-spring 偏移修正 → **setVariable cases 4-8 运行时分派 keystone**（0x671228，激活所有 controller）。**完整 float-bits bug 清扫**（trackPow/powCount raw-bits vs int→float）跨 6 个 controller 修复（2316276/2870209/3bcab50）。
 >   - **M2 仍 open**：bust/hair target+const bind-loop pass（sub_67C560）、`sub_661F7C` mesh resolver（1925 行，un-inert 值轨道插值）、clamp/mirror/instantVariable/timeline builders、HM2-map 统一（getVariable/setVariable 双表 fork）。
-> - **仍完全 open 的架构 P0**：M1 Stage B、容器内联（P3 终极重构）、M3 残留 HM2 fork。
+> - **仍完全 open 的架构 P0**：M1 Stage B、~~容器内联（P3 终极重构）~~（**修订：容器选型已对齐，无 STL→内联 HM 重构，仅 2 处 string→ttstr key retype，见顶部修订**）、M3 残留 HM2 fork。
 > - 全程 logo 非回归（emote 物理路径对 logo 差分 inert，是非回归守护非存在理由）；emote 路径无 fixture/oracle，验证=反编译+构建（CLAUDE.md 证据阻塞/验证尽力）。
 
 
@@ -19,7 +25,7 @@
 > 权威：libkrkr2.so 反编译。本轮主对话 byte-verify：`qword_14D7C50` + `Player_evaluateAnchorNodes_type10@0x6C0528`。
 > 性质：只读 review，未改 cpp/ 或 IDB。
 
-## 总结论：仍未达成 100% 还原；但本轮发现 **1 个真实回归**（anchor color base 方向颠倒）+ **1 条错误 memory 被纠正**（M5 buildNodePathKey「缺失」误判）。delta 区域多数主张成立。
+## 总结论：仍未达成 100% 还原；本轮发现 **1 个真实回归**（anchor color base 方向颠倒，~~OPEN~~ **已于同日修复，见顶部修订**）+ **1 条错误 memory 被纠正**（M5 buildNodePathKey「缺失」误判）。delta 区域多数主张成立。
 
 六维评分（沿用 05-30/06-02 框架，标注本轮变化）：
 
@@ -27,10 +33,10 @@
 |------|------|----------|
 | 对象布局 / 字段偏移 / vtable / 大小 | ✅ 普遍对齐 | 未触 |
 | 对象生命周期 | ⚠️ 多数对齐，pimpl/STL 析构序仍偏 | 未触 |
-| **内部容器实现** | ❌→🟡 | M3 var-track 56B-slot 模型 + HM1/HM4 WRITE 侧填充已 live；4 HM↔STL 系统性替换仍未根治 |
+| **内部容器实现** | ❌→🟡→✅(选型) | M3 var-track 56B-slot 模型 + HM1/HM4 WRITE 侧填充已 live。**修订：4 HM 二进制即 libstdc++ `std::unordered_map`，本地 `std::unordered_map<ttstr,…>` 选型已对齐**（非待替换）；仅余 2 处 `string→ttstr` key retype（见顶部修订）|
 | **数据流 / 调用链** | 🟡 持续忠实化 | M3 getVariable scope-router 已连通、M7 anchor 数据流对齐、M9 findSource 架构对照清楚 |
 | **NCB 类暴露面** | ⚠️ | M9 ResourceManager 12 成员表已对齐；ObjSource 6 成员 facade 已建 |
-| 边界行为（默认值 / 分支门控）| ⚠️→❌(1处回归) | **anchor color base 255:128 三元方向颠倒（回归）**；+612 gate / dampPow / getLayerNames 过滤已对齐 |
+| 边界行为（默认值 / 分支门控）| ⚠️ | ~~anchor color base 255:128 三元方向颠倒（回归）~~ **已同日修复（见顶部修订）**；+612 gate / dampPow / getLayerNames 过滤已对齐 |
 
 **差分现状**：与 06-02 一致——m2logo+yuzulogo 0 mismatch 仅覆盖非-emote logo 路径，不含 anchor/var-track/
 getVariable/event 路径。本轮回归（anchor color）对现有 logo 差分 **inert**（anchor 仅在 emote 角色帧触发），
@@ -63,8 +69,11 @@ const double base = isDefaultBlend ? 255.0 : 128.0;   // ← 颠倒
 ```
 
 **裁决：commit 5018087「anchor color base 255:128」主张 ✘ 推翻（方向颠倒）。** 该提交意在把丢失的
-128.0 分支补回，但接到了错误的一侧。正确应为 `isDefaultBlend ? 128.0 : 255.0`。code 注释 L135-137
-也跟着写反了（"== 0x10 ? 255.0 : 128.0"）。这是 P0-fix（有完整反编译证据，可直接修）。
+128.0 分支补回，但接到了错误的一侧。正确应为 `isDefaultBlend ? 128.0 : 255.0`。
+
+> **已修复（2026-06-03 同日）**：当前 [PlayerUpdateAnchor.cpp:144-146](../cpp/plugins/motionplayer/PlayerUpdateAnchor.cpp#L144)
+> 已是 `const double base = isDefaultBlend ? 128.0 : 255.0;`，注释 L135-143 亦更正并自述「commit 5018087
+> wired it to the wrong side; corrected here per 0x6C0528 decompile」。本项的高优先级 OPEN 视为 closed。
 
 ### 1.2 M7 其余主张：✅ 成立（本轮主对话反编译对照确认）
 
@@ -111,7 +120,13 @@ const double base = isDefaultBlend ? 255.0 : 128.0;   // ← 颠倒
 | ObjSource = 0x18 dict facade, 6 成员 | 6259f76 | ✅ `0x69CCB8` 注册 6 个 dict 读取成员；findSource 经 `operator new(0x18)` 构造，obj[0]=dict variant。06-02「缺 6 成员」**方向反了**，已确认。width getter@0x69D19C 在 type!=7 时返回 32，本地 `readInt(...,32)` 一致 |
 | findSource = 双 hashmap + raw upload | 3761a0b | ✅ 二进制 HashMap A(+88/+96 FNV) + 嵌套 per-group ttstrHashMap(纯 name→`iTVPTexture2D*`)，CPU buffer 上传后立即释放。本地仍 `std::list<Entry>` + `shared_ptr<bitmap>` keyed by (name,blendMode,packedColors)；RM.findSource 是 path-keyed 占位。两半皆如实记录差异 |
 
-**claim 4（07c4f05 phase-D per-vertex color 平台边界）：⚠️ 暂定成立但 in-code 论证越界。**
+**claim 4（07c4f05 phase-D per-vertex color 平台边界）：❌ 论据被证伪（2026-06-03 draw-path 已反编译）。**
+> **更新**：随后反编译 draw 路径 sub_6C7440 + 顶点 builder sub_6C715C(@0x6C715C)——builder 只 append (x,y)
+> 位置对（variant type 5，20B stride），operate*/copy 原语只传单 blend mode，anchor 的 4-corner colorBytes(node+100)
+> 在 0x6C7440 **未被引用**。故「binary recombines 4-corner gradient as per-vertex vertex colors」**不成立**；
+> color 真实消费点（若存在）未定位。ResourceManager.h 注释已据此更正：边界须由 draw-path color 消费点（地址待定）
+> 论证，而非 findSource、也非 per-vertex-color 论据。下列原 ⚠️ 分析作为历史保留。
+
 - 边界标签**不是** "oracle 看不到" 式遁词——它引用了具体渲染器能力原因（单标量 RGBA、无 per-vertex 属性），满足 CLAUDE.md。
 - **但** in-code 论证把证据挂在 findSource 上是错的：两个 findSource 函数**都不施加** 4-corner/per-vertex color，findSource 是纯 name→单贴图缓存。per-vertex-color 证据（若存在）在下游消费 texHandle(`a1+24`) 的 **Layer/mesh draw 路径**，本轮未反编译（超 M9 范围）。
 - **建议**（未改代码）：把 phase D 判为边界前，后续 session 应反编译消费 findSource texHandle 的 draw 路径，确证 per-vertex-color 缺失 **或** 发现 color 经本地已有 primitive 施加（则 phase D 重新可实装）。边界注释应引用 draw-path 地址而非 findSource。
@@ -140,7 +155,7 @@ const double base = isDefaultBlend ? 255.0 : 128.0;   // ← 颠倒
 | M6 | K | doAlphaMaskOperation 整体缺失，且误挂 Player 而非 namespace | MASTER P0 |
 | R0-2 | E | setChara 二进制 tTJSVariant*@+776 + 引用计数 + replay；本端 ttstr 平凡赋值 | 05-31 R0-2 |
 | R0-3 | E | getLoopTime 二进制返回 TJS Array；本端返回裸 double | 05-31 R0-3 |
-| 容器层 | 多 | 4 内联 HM → STL（mapping 已建，WRITE 侧 M3 已部分填充；STL→内联 HM 替换属 P3）| MASTER 根因 #1 |
+| 容器层 | 🟡→✅(选型) | **修订：4 HM 二进制即 libstdc++ `std::unordered_map`，本地选型已对齐**（非 STL 简化替代，无 P3「STL→内联 HM」重构）；WRITE 侧 M3 已部分填充；仅余 2 处 `string→ttstr` key retype（Player.h:1159/:1294）| MASTER 根因 #1（已重新定性）|
 
 NCB 残留（06-02 §三未动）：D3DEmotePlayer 表 4 处别名重复注册（bodyScale/playCallback/setTimeline/addPlayCallback）仍未删（低风险即修项）。
 
@@ -148,12 +163,14 @@ NCB 残留（06-02 §三未动）：D3DEmotePlayer 表 4 处别名重复注册�
 
 ## 六、建议下一步（按 ROI）
 
-1. **🔴 即修 anchor color base 方向**（最高，有完整 byte-verified 证据）：PlayerUpdateAnchor.cpp:139-141 改
-   `isDefaultBlend ? 128.0 : 255.0`，同步修 L135-137 注释。**注意**：blend 源本地是单值 `interpolatedCache.blendMode`，
-   二进制是 per-slot `node+536*slot+364`——修方向时确认读对 blend 源。
+1. ~~**🔴 即修 anchor color base 方向**~~ **✅ 已完成（2026-06-03 同日）**：PlayerUpdateAnchor.cpp:144-146 已为
+   `isDefaultBlend ? 128.0 : 255.0`，L135-143 注释已同步更正。**仍 open（次要）**：blend 源本地是单值
+   `interpolatedCache.blendMode`，二进制是 per-slot `node+536*slot+364`——color 通道序 / PropGet flag(1024) 亦待修。
 2. **就地纠正错误 memory**（CLAUDE.md 硬规则）：06-02 review M5「buildNodePathKey 缺失」行已被本轮证伪，
    应在该文档/相关 memory 标注纠正（buildNodePathKey 存在且 HM3-only，raw-label 索引是正确行为）。
-3. **M9 phase D 边界注释补证**：反编译消费 findSource texHandle 的 draw 路径，确证或重开 per-vertex-color。
+3. ~~**M9 phase D 边界注释补证**~~ **🟡 部分完成（2026-06-03 同日）**：已反编译 draw 路径 sub_6C7440 + 顶点 builder
+   sub_6C715C → per-vertex-color 论据被证伪（builder 仅位置对、原语仅单 blend mode）。ResourceManager.h 注释已更正。
+   **仍 open**：4-corner colorBytes(node+100) 的真实消费点未定位——后续需追踪该数据流以最终确证/重开 phase D。
 4. **低风险即修**：删 D3DEmotePlayer 4 处别名重复注册。
 5. **架构级 open P0**（M1 剩余 / M2 / M6 / 容器 STL→HM 替换）——这些 open 的唯一原因是「反编译→实装」工作尚未做，**不是**「无 oracle 所以碰不得」。推进门槛 = 先 fresh decompile 拿伪代码证据（避免**无证据盲改** = CLAUDE.md BLOCKING：禁止从本地/键名/变量名推断、禁止先改后验），有证据即照常实装+构建验证，运行时验证尽力补即可（证据是阻塞项、验证是尽力项，CLAUDE.md:94）。**「差分不覆盖 / 无 Android oracle」按 CLAUDE.md:96-97 明确不是 defer/降优先级的合法理由。**
 

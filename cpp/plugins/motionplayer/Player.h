@@ -586,23 +586,30 @@ namespace motion {
         tTJSVariant motionList();
         void emoteEdit(tTJSVariant args);
 
-        // Aligned with libkrkr2.so Player_getAngleDeg @ 0x6CD0C0. Returns the
-        // emote spring driver's angle in RADIANS:
+        // libkrkr2.so fn @0x6CD0C0 (IDA misnames it "Player_getAngleDeg").
+        // Returns the angle in RADIANS:
         //   if (_directEdit/+482) -> _emoteAngle/+464 else root node delta.angle
         //   times 0.0174532925 (deg->rad). Used by EmoteEngine_stepHairParts /
-        //   stepBust. Despite the binary symbol "getAngleDeg" the return is rad.
+        //   stepBust as the rad provider.
+        //
+        // CORRECTION (2026-06-03, fresh decompile of registration @0x6D69C8):
+        // 0x6CD0C0 backs the TJS **angleRad** member, NOT angleDeg. IDA's symbol
+        // "Player_getAngleDeg" is mislabeled. The TJS **angleDeg** member is
+        // backed by sub_6C1780 (raw value, no scale -> degrees). So:
+        //   angleDeg member -> DEG (sub_6C1780)
+        //   angleRad member -> RAD (this fn, 0x6CD0C0)
         double emoteGetAngleRadLike_0x6CD0C0() const;
 
-        // M15 missing angleDeg/angleRad (cluster E §3.1 + §4): binary
-        // Motion.Player exposes angleDeg/angleRad as TJS properties. Per
-        // cluster E §4 setAngleDeg @0x6CD0EC takes rad input and stores deg;
-        // getAngleDeg @0x6CD0C0 returns rad (already implemented above as
-        // emoteGetAngleRadLike_0x6CD0C0). Port aliases:
-        //   getAngleDeg = emoteGetAngleRadLike_0x6CD0C0 (rad output)
-        //   setAngleDeg(rad): input rad → convert to deg internally
-        // angleRad — port treats as TJS direct-rad accessor on root.delta.angle
-        // (which stores degrees in port; this expose the raw deg value as TJS
-        // float without conversion). Pending spike for true binary semantics.
+        // binary Motion.Player exposes angleDeg/angleRad as TJS properties.
+        // angleDeg getter = sub_6C1780 (raw -> deg); angleRad getter = 0x6CD0C0
+        // (* 0.0174532925 -> rad). Setters: angleDeg member set=Player_setAngleRad
+        // @0x6c0f84, angleRad member set=Player_setAngleDeg@0x6cd0ec.
+        //
+        // KNOWN BUG (binding swapped vs binary): getAngleDeg() below returns RAD
+        // (via emoteGetAngleRadLike_0x6CD0C0) but the binary angleDeg returns DEG;
+        // getAngleRad() returns raw deg but the binary angleRad returns RAD. The
+        // two should be swapped. Tracked as a follow-up behavior fix (must also
+        // confirm whether delta.angle stores deg or rad in the port before swap).
         double getAngleDeg() const { return emoteGetAngleRadLike_0x6CD0C0(); }
         void setAngleDeg(double rad);  // impl in PlayerCore.cpp
         double getAngleRad() const {
