@@ -553,8 +553,35 @@ static void motion_doAlphaMaskOperation(iTJSDispatch2 *dstLayer,
 // boundary.
 static bool motion_getD3DAvailable() { return true; }
 
-NCB_ATTACH_FUNCTION(doAlphaMaskOperation, Motion, motion_doAlphaMaskOperation);
-NCB_ATTACH_FUNCTION(getD3DAvailable, Motion, motion_getD3DAvailable);
+// Motion namespace-level free functions doAlphaMaskOperation / getD3DAvailable:
+// in-flow Motion-dispatch registration aligning libkrkr2.so motionplayer_ncb_register
+// (sub_6D9B08 @0x6D9B08), which registers both on the Motion namespace dispatch
+// *in-flow*, right after the last subclass (D3DAdaptor), via the same member-add
+// primitive as the subclasses (sub_6FCAAC -> ncb_registerMember @0x6da1f0 / 0x6da260)
+// — NOT as a separate deferred attach.
+//
+// Root-cause fix for the M6 motion-namespace regression: the port previously
+// registered these via two standalone NCB_ATTACH_FUNCTION auto-register units.
+// Those units run their Regist() at function-auto-register time (too early in the
+// NCB registration sequence); their presence silently disabled the entire motion
+// render pipeline (guest produced 0 render events, no trap/exception — see
+// project_m6_motion_namespace_attach_regression). Relocating the *same* member-add
+// (GetDispatch("Motion") -> PropSet TJS_MEMBERENSURE) into PostRegistCallback — the
+// local hook that already registers Motion-dispatch members (the Player alias),
+// running after the module's subclasses are registered, matching sub_6D9B08's
+// "after subclasses" timing — both aligns and fixes. Verified locally (wasmtime
+// guest, yuzulogo + m2logo): both functions present on Motion (PropGet rc=0,
+// tvtObject) AND render pipeline restored (306 / 346 events, 51 execute_post PNGs).
+// Residual minor mechanism difference vs binary: RegistFunction re-looks-up the
+// Motion dispatch (GetDispatch) rather than reusing the in-hand *a1; end-state
+// object graph is identical. The Player alias below uses the same re-lookup.
+//
+// Accessor to reach the protected static RegistFunction without constructing an
+// auto-register unit (which would re-introduce the early-timed standalone unit).
+struct MotionFreeFnRegistrar : ncbNativeFunctionAutoRegister {
+    MotionFreeFnRegistrar() : ncbNativeFunctionAutoRegister(NCB_MODULE_NAME) {}
+    using ncbNativeFunctionAutoRegister::RegistFunction;
+};
 
 // ============================================================
 // Callbacks (must be under motionplayer.dll module)
@@ -563,6 +590,17 @@ NCB_ATTACH_FUNCTION(getD3DAvailable, Motion, motion_getD3DAvailable);
 static void PostRegistCallback() {
     iTJSDispatch2 *global = TVPGetScriptDispatch();
     if (!global) return;
+
+    // In-flow Motion-dispatch registration of the two namespace free functions
+    // (see sub_6D9B08 alignment / M6-fix note above). Same member-add path
+    // (GetDispatch("Motion") -> PropSet TJS_MEMBERENSURE) the Player alias uses
+    // below. Order matches binary: doAlphaMaskOperation then getD3DAvailable
+    // (0x6da1f0 then 0x6da260).
+    MotionFreeFnRegistrar::RegistFunction(
+        TJS_W("doAlphaMaskOperation"), TJS_W("Motion"),
+        &motion_doAlphaMaskOperation);
+    MotionFreeFnRegistrar::RegistFunction(
+        TJS_W("getD3DAvailable"), TJS_W("Motion"), &motion_getD3DAvailable);
 
     auto ensurePlayerClassUseD3DProbe = [](iTJSDispatch2 *playerClass) {
         if(!playerClass) {
