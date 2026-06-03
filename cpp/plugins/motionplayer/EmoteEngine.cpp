@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <spdlog/spdlog.h>
 
 #include "EmotePlayer.h"  // Player + EmotePlayer + ResourceManager
@@ -1463,6 +1464,271 @@ namespace motion {
             detail::EmoteVarRef& refUd = _scalarHM6_1384[springLabel(elem.get(), "var_ud")];
             refUd.type = typeTag; refUd.index = v10;                // 0x66c354
         }
+    }
+
+    // ========================================================================
+    // setVariable value-dispatch (libkrkr2.so Player_setVariable @0x671228) and
+    // the 5 per-category enqueue functions it calls. Each enqueue pushes a
+    // transition keyframe {value, easing, factor} into the controller's internal
+    // keyframe std::deque (the libstdc++ deque the binary indexes at a1+16..+72),
+    // or — on the instant path (easing <= 0) — clears the deque and snaps the
+    // controller's scalar state. Element fields are the controllers' named
+    // keyframe types (EmoteAngleKeyValue12B / EmoteVarKeyValue20B); the binary's
+    // raw float-triple {a3,a4,a5} maps to {value, duration(=easing arg), powCount
+    // (=factor arg)} stored as RAW FLOAT BITS (the step reads powCount with
+    // `LDR S, no SCVTF`).
+    // ========================================================================
+    namespace {
+
+        // v22 transition factor (0x671304..0x671328). durationFrames is the 3rd
+        //   binary arg (TJS "ease"); == variableEaseWeightLike_0x671228.
+        float emoteTransitionFactorLike_0x671228(double durationFrames) {
+            if (durationFrames == 0.0) {
+                return 1.0f;                                       // 0x671308
+            }
+            if (durationFrames > 0.0) {
+                return static_cast<float>(durationFrames + 1.0);   // 0x671318
+            }
+            return static_cast<float>(1.0 / (1.0 - durationFrames)); // 0x671328
+        }
+
+        // Aligned with libkrkr2.so sub_6638B0 (case 4, eye enqueue).
+        //   if (easing <= 0): clear BOTH value-track deques (a1+16 / a1+96), then
+        //     trackValue(+300)=value, trackState(+296)=0.
+        //   else: if (flag&1) append to valueTrack12B.queue; else clear it (and
+        //     reset trackState(+296)=0) then append. Element {value, easing, factor}.
+        void emoteEnqueueEye_sub_6638B0(EmoteBlinkController* ctl, bool flag,
+                                        float value, float easing, float factor) {
+            if (easing <= 0.0f) {                                  // 0x6638e8
+                ctl->valueTrack12B.queue.clear();                  // a1+16 swap-clear
+                ctl->valueTrack8B.clear();                         // a1+96 swap-clear
+                ctl->trackValue = value;                           // 0x663978  (+300)
+                ctl->trackState = 0;                               // 0x66397c  (+296)
+                return;
+            }
+            if (!flag) {                                           // 0x6638ec else
+                ctl->valueTrack12B.queue.clear();                  // a1+16 swap-clear
+                ctl->trackState = 0;                               // 0x663a00  (+296)
+            }
+            // push {endRad=value, duration=easing, powCount=factor(raw bits)}.
+            EmoteAngleKeyValue12B kf;                              // 0x663a50 new block
+            kf.endRad   = value;                                   // *v39
+            kf.duration = easing;                                  // v39[1]
+            std::memcpy(&kf.powCount, &factor, sizeof(float));     // v39[2] raw bits
+            ctl->valueTrack12B.queue.push_back(kf);
+        }
+
+        // Aligned with libkrkr2.so sub_6652D4 (case 5, eyebrow enqueue).
+        //   STRUCTURALLY IDENTICAL to sub_6638B0 but on the slim eyebrow
+        //   controller (same +296/+300 track-state offsets, two value-track
+        //   deques cleared on the instant path).
+        void emoteEnqueueEyebrow_sub_6652D4(EmoteEyebrowController* ctl, bool flag,
+                                            float value, float easing,
+                                            float factor) {
+            if (easing <= 0.0f) {                                  // 0x66530c
+                ctl->valueTrack12B.queue.clear();                  // a1+16
+                ctl->valueTrack8B.clear();                         // a1+96
+                ctl->trackValue = value;                           // 0x66539c  (+300)
+                ctl->trackState = 0;                               // 0x6653a0  (+296)
+                return;
+            }
+            if (!flag) {                                           // 0x665310 else
+                ctl->valueTrack12B.queue.clear();
+                ctl->trackState = 0;                               // 0x665424  (+296)
+            }
+            EmoteAngleKeyValue12B kf;                              // 0x665474 new block
+            kf.endRad   = value;
+            kf.duration = easing;
+            std::memcpy(&kf.powCount, &factor, sizeof(float));
+            ctl->valueTrack12B.queue.push_back(kf);
+        }
+
+        // Aligned with libkrkr2.so sub_665E34 (case 6, mouth talk-ramp enqueue).
+        //   SINGLE value-track deque (a1+16 only). Instant path: clear queue,
+        //   currentValue(+84)=value, state(+80)=0. Push path mirrors the eye one
+        //   but writes state(+80) (not +296) when clearing.
+        void emoteEnqueueMouth_sub_665E34(EmoteMouthController* ctl, bool flag,
+                                          float value, float easing, float factor) {
+            if (easing <= 0.0f) {                                  // 0x665e68 false
+                ctl->valueTrack12B.queue.clear();                  // a1+16
+                ctl->currentValue = value;                         // 0x665ec8  (+84)
+                ctl->state = 0;                                    // 0x665ecc  (+80)
+                return;
+            }
+            if (!flag) {                                           // 0x665e6c else
+                ctl->valueTrack12B.queue.clear();
+                ctl->state = 0;                                    // 0x665f0c  (+80)
+            }
+            EmoteAngleKeyValue12B kf;                              // 0x665f68 new block
+            kf.endRad   = value;
+            kf.duration = easing;
+            std::memcpy(&kf.powCount, &factor, sizeof(float));
+            ctl->valueTrack12B.queue.push_back(kf);
+        }
+
+        // Aligned with libkrkr2.so Animator_setKeyframes @0x667300 (case 7,
+        //   transition controller). The "keyframe" pushed carries `count` float
+        //   channels (count=1 for transition controllers). value is a single
+        //   float (the binary passes &(float)value). Instant path: clear queue,
+        //   state(+84)=0, copy `count` floats from value into currentValue(+88).
+        void emoteAnimatorSetKeyframes_0x667300(EmoteVarController* ctl, bool flag,
+                                                float value, float easing,
+                                                float factor) {
+            if (easing <= 0.0f) {                                  // 0x667340
+                ctl->queue.clear();                                // a1+16
+                ctl->state = 0;                                    // 0x6673cc  (+84)
+                // copy count floats from the value-array into currentValue.
+                //   (0x6673d4..0x66745c: memcpy count ints.) Here value is a
+                //   single scalar broadcast to channel 0 (count==1 case).
+                if (ctl->count >= 1 && ctl->currentValue) {
+                    for (int i = 0; i < ctl->count; ++i) {
+                        ctl->currentValue[i] = value;              // count==1 -> [0]
+                    }
+                }
+                return;
+            }
+            if (!flag) {                                           // 0x667344 == 0
+                ctl->queue.clear();
+                ctl->state = 0;                                    // 0x667378  (+84)
+            }
+            // push a 20B keyframe {channel[0]=value, duration=easing, powCount=
+            //   factor(raw bits)} (EmoteVarController_deque20B_pushback 0x667390).
+            EmoteVarKeyValue20B kf;
+            kf.channel[0] = value;
+            kf.channel[1] = 0.0f;
+            kf.channel[2] = 0.0f;
+            kf.duration   = easing;
+            std::memcpy(&kf.powCount, &factor, sizeof(float));     // raw bits
+            ctl->queue.push_back(kf);
+        }
+
+        // Aligned with libkrkr2.so sub_6681E4 (case 8, selector command enqueue).
+        //   SINGLE command-track deque (a1+16, the base 12B track). Instant path:
+        //   clear queue, selState(+84)=0, then applySelection(ctl, (int)value,
+        //   0, 0). Push path appends {selIdx=value, dur=easing, fade=factor}.
+        void emoteEnqueueSelector_sub_6681E4(EmoteSelectorController* ctl, bool flag,
+                                             float value, float easing,
+                                             float factor) {
+            if (easing <= 0.0f) {                                  // 0x668218 false
+                ctl->commandTrack12B.queue.clear();                // a1+16
+                ctl->selState = 0;                                 // 0x668274  (+84)
+                EmoteSelectorController_applySelection(
+                    ctl, static_cast<int>(value), 0.0f, 0.0f);     // 0x6682a4
+                return;
+            }
+            if (!flag) {                                           // 0x66821c else
+                ctl->commandTrack12B.queue.clear();
+                ctl->selState = 0;                                 // 0x6682e0  (+84)
+            }
+            EmoteAngleKeyValue12B kf;                              // 0x66833c new block
+            kf.endRad   = value;                                   // selIdx
+            kf.duration = easing;                                  // dur
+            std::memcpy(&kf.powCount, &factor, sizeof(float));     // fade raw bits
+            ctl->commandTrack12B.queue.push_back(kf);
+        }
+
+    } // namespace
+
+    // Aligned with libkrkr2.so Player_setVariable @ 0x671228 (see header for the
+    //   arg-name mapping and the full step list). `this` IS the EmoteEngine.
+    void EmoteEngine::setVariable(const ttstr& key, double value, double easing,
+                                  double durationFrames) {
+        // HM6 lookup (sub_6887F4 @0x6712f0). Empty key hashes to 0; the binary
+        //   still performs the lookup. A miss => no entry => HM2 fallthrough.
+        auto it = _scalarHM6_1384.find(key);                       // 0x6712f0
+        if (it != _scalarHM6_1384.end()) {                         // result != 0  0x6712f4
+            const detail::EmoteVarRef& ref = it->second;           // *(QWORD*)result  0x6712f8
+            // v22 transition factor (0x671304..0x671328).
+            const float factor = emoteTransitionFactorLike_0x671228(durationFrames);
+            const float vEasing = static_cast<float>(easing);
+            const float vValue  = static_cast<float>(value);
+            const bool flag = _emoteAnimatorFlag;                  // *(BYTE*)(this+1161)
+
+            _dirty = true;                                         // 0x671330  (+1162)
+
+            switch (ref.type) {                                    // *(int*)(varref+16)  0x671350
+                case 0:
+                case 1:
+                case 2:
+                    // 0x671354: cases 0/1/2 fall through to the HM2 scalar write
+                    //   ONLY when _syncWaiting(+1159) is set (`if(this+1159) break;
+                    //   else return`). Otherwise they leave the value un-written
+                    //   here (the spring target/const feed is a SEPARATE pass).
+                    if (_syncWaiting) {                            // 0x671354
+                        break;                                     // -> HM2 write
+                    }
+                    return;                                        // 0x671358
+                case 4: {
+                    // deque#4[ref.index] -> enqueue eye (sub_6638B0).  0x67139c
+                    EmoteEyeControlEntry_Deque4& entry =
+                        _stateMachineDeque4[ref.index];
+                    emoteEnqueueEye_sub_6638B0(entry.ctl, flag, vValue,
+                                               vEasing, factor); // 0x67155c
+                    return;
+                }
+                case 5: {
+                    // deque#5[ref.index] -> enqueue eyebrow (sub_6652D4). 0x6713c4
+                    EmoteEyebrowControlEntry_Deque5& entry =
+                        _stateMachineDeque5[ref.index];
+                    emoteEnqueueEyebrow_sub_6652D4(entry.ctl, flag, vValue,
+                                                   vEasing, factor); // 0x671588
+                    return;
+                }
+                case 6: {
+                    // deque#6[ref.index]. Dual-key controller: if `key` equals the
+                    //   element's "label" -> write ctl->beginFrame(+108)=(int)value
+                    //   directly (LABEL_68 @0x6716a8). If `key` equals the
+                    //   element's "talkLabel" -> enqueue the talk ramp (sub_665E34
+                    //   @0x6716a0). (Binary compares pointer-eq then wcscmp.)
+                    EmoteMouthControlEntry_Deque6& entry =
+                        _compositeVarDeque6[ref.index];           // 0x6713ec
+                    if (entry.label == key) {                      // 0x6715d0 / LABEL_68
+                        entry.ctl->beginFrame = static_cast<int>(value); // 0x6716a8 (+108)
+                        return;
+                    }
+                    if (entry.talkLabel == key) {                  // 0x671688
+                        emoteEnqueueMouth_sub_665E34(entry.ctl, flag, vValue,
+                                                     vEasing, factor); // 0x6716a0
+                    }
+                    return;
+                }
+                case 7: {
+                    // deque#8[ref.index] (transition). The element flag byte@+16
+                    //   gates the enqueue (`if(!*(BYTE*)(v38+16)) return`).  0x671424
+                    EmoteTransitionControlEntry_Deque8& entry =
+                        _auxVarDeque8[ref.index];
+                    if (!entry.flag) {                             // 0x67145c / 0x6716f0
+                        return;
+                    }
+                    emoteAnimatorSetKeyframes_0x667300(entry.ctl, flag, vValue,
+                                                       vEasing, factor); // 0x671710
+                    return;
+                }
+                case 8: {
+                    // deque#9[ref.index] (selector). Element flag byte@+16 gates
+                    //   the enqueue (`if(!*(BYTE*)(v42+16)) return`).  0x671468
+                    EmoteSelectorControlEntry_Deque9& entry =
+                        _vectorVarDeque9[ref.index];
+                    // case8 enqueue gate (`LDRB [elem+16]; CBNZ` @0x6714a0 /
+                    //   0x671740). The builder leaves elem+16 un-initialised in
+                    //   the binary (only +0/+8/+24/+32/+40 written); modelled as
+                    //   entry.flag (default 1) — see the EmoteSelectorControlEntry
+                    //   _Deque9 +16 note for the indeterminacy rationale.
+                    if (!entry.flag) {                             // 0x6714a0 / 0x671740
+                        return;
+                    }
+                    emoteEnqueueSelector_sub_6681E4(entry.ctl, flag, vValue,
+                                                    vEasing, factor); // 0x671758
+                    return;
+                }
+                default:
+                    return;                                        // 0x671350 default
+            }
+        }
+
+        // HM2 upsert fallthrough (0x67135c..0x671368): reached on HM6 miss, or a
+        //   case 0/1/2 with _syncWaiting set. `*(double*)result = value`.
+        _labelToValueHM7[key] = value;                             // 0x671368
     }
 
     // Aligned with libkrkr2.so sub_67D01C EmoteEngine_progress @ 0x67D01C.

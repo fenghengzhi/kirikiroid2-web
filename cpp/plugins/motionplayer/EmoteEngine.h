@@ -266,6 +266,17 @@ namespace motion {
     struct EmoteSelectorControlEntry_Deque9 {
         EmoteSelectorController* ctl = nullptr; // +0 — operator new(0x80) controller
         ttstr                    label;          // +8 — HM7 output key (PSB "label")
+        // +16 — gate byte read by setVariable case8 (`LDRB [elem+16]; CBNZ` @
+        //   0x6714a0/0x671740: enqueue only when non-zero). The builder
+        //   (buildSelectorControl @0x66ddac..0x66de1c) zeroes elem+8/+24/+32/+40
+        //   and writes ctl@+0 / label@+8 but does NOT initialise elem+16 — it is
+        //   left as raw operator-new(0x1E0) memory, so the binary's gate value is
+        //   INDETERMINATE here. Modelled as an explicit flag defaulted to 1 to
+        //   match the sibling transition deque (whose +16 flag is explicitly 1)
+        //   and the typical non-zero new-memory case; this keeps case8 live when
+        //   a selector var is actually driven. (logo motion has no selector vars,
+        //   so this path is inert for the differential regardless.)
+        uint8_t                  flag = 1;        // +16 — case8 enqueue gate
         // +24/+32/+40 zeroed by the binary; no further fields are read by the
         //   progress step. (The 48B stride is preserved as the element size; the
         //   trailing slots are unused dead space — kept implicit, not padded, per
@@ -421,6 +432,42 @@ namespace motion {
         void buildChainControl(std::deque<EmoteBustChain1Node56B>& chainNodes,
                                int typeTag, const PSB::PSBList* chainControl);
 
+        // Aligned with libkrkr2.so Player_setVariable @ 0x671228.
+        //   THIS is the EmoteEngine (the ~1576B object holding HM6@+1384,
+        //   HM2/HM7@+1440 and the controller deques @+256/+336/+416/+576/+656);
+        //   the IDA auto-name "Player_setVariable" is misleading — the offsets
+        //   prove it is the engine, not the embedded 1384B motion::Player.
+        //
+        //   Binary signature: Player_setVariable(this, key, value, easing,
+        //     durationFrames). Arg names per the binary (NOT the TJS wrapper):
+        //     value         = d0 (the scalar to set),
+        //     easing        = d1 (instant gate: <=0 => snap; the TJS "transition"),
+        //     durationFrames= d2 (drives the transition factor v22; TJS "ease").
+        //
+        //   v22 (transition factor) = durationFrames==0 ? 1.0
+        //                            : durationFrames>0  ? durationFrames+1.0
+        //                            : 1.0/(1.0-durationFrames).
+        //   (= variableEaseWeightLike_0x671228(durationFrames).)
+        //
+        //   Steps (verbatim):
+        //     ref = HM6_lookup(_scalarHM6_1384, key);                  // sub_6887F4
+        //     if (ref && ref-is-bound) {
+        //       _dirty(+1162) = 1;                                      // 0x671330
+        //       switch (ref.type@+16) {
+        //         case 0/1/2: if (!_syncWaiting(+1159)) return; break;  // -> HM2 write
+        //         case 4: enqueue eye   (sub_6638B0, deque#4[ref.index]);
+        //         case 5: enqueue brow  (sub_6652D4, deque#5[ref.index]);
+        //         case 6: mouth: if (key==elem.label) ctl.beginFrame=(int)value;
+        //                        else if (key==elem.talkLabel) enqueue (sub_665E34);
+        //         case 7: transition: if (elem.flag) Animator_setKeyframes (0x667300);
+        //         case 8: enqueue selector (sub_6681E4, deque#9[ref.index]);
+        //         default: return;
+        //       }
+        //     }
+        //     _labelToValueHM7[key] = value;     // HM2 upsert (0x67135c) fallthrough
+        void setVariable(const ttstr& key, double value, double easing,
+                         double durationFrames);
+
     public:
         // ====== Binary field layout (ascending offset order) ======
 
@@ -531,6 +578,15 @@ namespace motion {
 
         // +1160: int32_t = 1 (a1[290]). _guess: state seed.
         int32_t _scalarField_1160_1 = 1; // +1160
+
+        // +1161: byte — the setVariable (0x671228) enqueue accumulate flag,
+        //   passed as a2 to every case 4/5/6/7/8 enqueue function (sub_6638B0
+        //   etc.). `(a2 & 1) != 0` => APPEND the new keyframe to the controller's
+        //   existing transition queue; `== 0` => CLEAR the queue first then push.
+        //   Read at 0x671340 (`*(BYTE*)(this+1161)`). Distinct from _dirty(+1162)
+        //   and _syncWaiting(+1159). (Was incorrectly modelled on Player+1161 as
+        //   Player::_emoteAnimatorFlag — the 0x671228 `this` is the EmoteEngine.)
+        bool _emoteAnimatorFlag = false; // +1161
 
         // +1162: byte _dirty — progress main-loop dirty check.
         //   `*((BYTE*)a1+1162) = 1` in ctor, cleared at top of each dt-slice.

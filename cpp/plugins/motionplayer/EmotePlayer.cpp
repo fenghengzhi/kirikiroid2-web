@@ -314,12 +314,33 @@ namespace motion {
     // Aligned to libkrkr2.so sub_530320: binary returns hardcoded 0
     tjs_int D3DEmotePlayer::getColor() { return 0; }
 
-    // --- Variable system: delegates to Player ---
-    // Aligned to libkrkr2.so sub_5305C8 → sub_671228:
-    // wrapper forwards label/value/transition/ease into Player_setVariable.
+    // --- Variable system ---
+    // Aligned to libkrkr2.so sub_5305C8 → Player_setVariable @0x671228. The
+    //   0x671228 `this` is the EmoteEngine (HM6@+1384 / HM2@+1440 / controller
+    //   deques@+256..+656), so the faithful dispatch is EmoteEngine::setVariable.
+    //   Binary arg mapping: (value=d0, easing=d1 [TJS "transition", the instant
+    //   gate], durationFrames=d2 [TJS "ease", the transition-factor driver]).
+    //
+    //   engine().setVariable IS the keystone that drives the eye/eyebrow/mouth/
+    //   transition/selector controllers (cases 4-8) and the type-0/1/2 HM2 write.
+    //
+    //   PORT FORK (documented, in-scope boundary): local getVariable reads the
+    //   Player-side cascade map (_evalResultValues / HM1 / HM4 — the M3/R0-1
+    //   subsystem modelling binary getVariable @0x6D69C8), NOT the engine's
+    //   HM2 (+1440 = _labelToValueHM7) that 0x671228 actually writes. In the
+    //   binary these are the SAME HM2; locally they are two disjoint maps. Until
+    //   that map unification (a separate M3-scope refactor, out of this slice's
+    //   "setVariable cases 4-8" boundary) is done, the Player-side
+    //   setVariableResolvedWeightLike_0x671228 call is retained so the existing
+    //   getVariable round-trip (and its unit test) keep working. The engine call
+    //   added here is what actually activates the controller deques; its HM2
+    //   fallthrough writes _labelToValueHM7 (read by the controller-step HM7
+    //   path, inert for scalar getVariable). No double-corruption: the two HM2
+    //   surfaces are read by disjoint consumers.
     void D3DEmotePlayer::setVariable(ttstr label, double value, double transition,
                                   double ease) {
-        player().setVariable(label, value, transition, ease);
+        engine().setVariable(label, value, transition, ease); // 0x671228 dispatch
+        player().setVariable(label, value, transition, ease); // getVariable cascade (M3 fork)
         engine()._modified = true;
     }
 
