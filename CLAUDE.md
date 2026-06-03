@@ -132,8 +132,12 @@
 - 一轮分析结束后调用 `idb_save` 持久化所有修正
 
 ### IDA 符号管理
-- **重命名必须以本地代码为依据** — 必须先 grep 本地项目找到对应的类名::方法名，用 `ClassName_MethodName` 格式重命名。禁止从二进制行为推断命名（如把 `StartProcess` 猜成 `Process`）
-- 无法在本地代码中找到对应标识符时，加 `_guess` 后缀（如 `Layer_Update_guess`）
+- **命名权威 = 二进制自身的名字证据，不是本地项目。** 优先级：
+  1. **二进制里字面存在的名字** —— NCB 注册的成员字符串（`ncb_addMember` 的 key）、字符串常量、RTTI/typeinfo、导出符号。这是 ground truth，**读取它 ≠ 推断**；与本地冲突时**以二进制为准**。本地代码是“待验证 / 可能错”的一方，**绝不能反过来当命名权威**。（反面教训：本仓库 angle 访问器 getAngleDeg/getAngleRad 本地一度接反，正确映射来自注册函数 `Player_ncb_registerMembers@0x6D69C8` 里字面绑定 "angleDeg"→`0x6C1780`/"angleRad"→`0x6CD0C0`；若“以本地为据”就会把错误命名灌进 IDB。）
+  2. **本地代码仅作交叉参照** —— 用于确认类名 + `ClassName_MethodName` 写法约定，且**仅在二进制无任何名字信号（纯 `sub_XXXX`）时**使用。
+- **禁止从二进制行为推断 / 猜测命名**（如把 `StartProcess` 猜成 `Process`）。“读二进制里字面存在的名字”属第 1 项（允许）；“看行为猜名字”才是被禁止的。
+- 二进制名字证据与本地标识符都找不到对应名时，加 `_guess` 后缀（如 `Layer_Update_guess`）。
+- **IDB 里发现的误命名 = 被证伪的产物，必须就地修复**（与 memory / 注释 / analysis 的「证伪即纠正」同规则，见工作流 BLOCKING 节）：`rename` 到正确名 + 函数头 `set_comments` 记录纠正依据（注册站点 / 字符串地址）+ `idb_save`；并同步更新代码里按旧符号写的注释。
 
 ## 字节布局复刻工作法（重要方法论）
 - 目标是复刻**源代码**（Android kirikiroid2 的 .cpp/.h），不是复刻 libkrkr2.so 这个**编译产物**。so 的 packed 偏移布局是 NDK clang(ARM64) 算出来的；我们的 wasm 是同一份源码经 emscripten clang(wasm32) 算出来的，**两者字节偏移不一致是 ABI 必然，可接受**
