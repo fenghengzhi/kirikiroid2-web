@@ -1339,7 +1339,18 @@ namespace internal {
         const double actualDelta = dt;
         _frameLastTime = actualDelta;
 
-        _evalResultValues.clear();
+        // HM2 (_evalResultValues @+320) is NOT cleared per-frame. Byte-verified
+        //   against Player_progress_inner @0x6C106C (2026-06-03): its entry clears
+        //   ONLY +1152 (`*(_DWORD*)(a1+1152)=0` @0x6c1088) and +483
+        //   (motionCompleted, @0x6c108c) — the full body never writes any of the
+        //   four hashmaps (+264 HM1 / +320 HM2 / +1184 HM3 / +1240 HM4). The binary
+        //   HM2 is persistent across frames (written by-overwrite via the bind-loop
+        //   / Player_bindParameterValue @0x6C4668 LABEL_132, read by getVariable
+        //   @0x533E1C, cleared only on motion reset/load — mirrored locally by
+        //   PlayerCore/PlayerResource resets). The previous per-frame `.clear()`
+        //   here was port-invented; it wiped the EmoteEngine_progress bind-loop's
+        //   step-5 HM2 writes before getVariable (called after the step-7
+        //   sub_6D2A54→frameProgress) could read them. Removed for 1:1 alignment.
 
         // 砖5/洞1: progress_inner's first step is Player_preProgressDirtyNodes
         // (0x6C10AC), before the firstFrame/cursor logic. Inert in the web port
@@ -1402,16 +1413,15 @@ namespace internal {
         // §7 + module-alignment-driver memory. Left in place to preserve the green
         // logo differential; only the attribution comment is corrected this round.
         //
-        // NOTE on _evalResultValues (frameProgress entry .clear() + this path's
-        // writeEvalResultValueLike_0x6C4668): RE-checked 0x6C4668
-        // (Player_bindParameterValue_writesHM1_HM2). Its LABEL_132 does
-        // HM2_upsert(player+320, label) = value — so _evalResultValues is the
-        // PORT MIRROR OF HM2 @+320 (a real binary container), NOT a port-invented
-        // construct (M1_plan §3's "凭空多出" list is wrong for this entry; the
-        // binary HM2 write is logo-differential-gated). The per-frame .clear()
-        // (line ~947) IS port-invented (binary HM2 is persistent; progress_inner
-        // entry clears only +1152/+483, never +320), but removing it converts HM2
-        // to cross-frame persistence — a high-risk behavior change DEFERRED.
+        // NOTE on _evalResultValues (= PORT MIRROR OF HM2 @+320, a real binary
+        // container — written by Player_bindParameterValue_writesHM1_HM2 @0x6C4668
+        // LABEL_132 `HM2_upsert(player+320,label)=value`, read by getVariable
+        // @0x533E1C): the former frameProgress-entry `.clear()` has been REMOVED
+        // (see the entry comment above) to align with the binary, where HM2 is
+        // persistent across frames and progress_inner @0x6C106C never touches +320.
+        // The stepControllerBucket writes below now overwrite their own labels in a
+        // persistent HM2 rather than repopulating a cleared one — matching the
+        // by-overwrite semantics of the binary bind-loop.
         preProgressPlayingTimelinesLike_0x671764(actualDelta, nullptr);
 
         double remainingControllerStep = actualDelta;
