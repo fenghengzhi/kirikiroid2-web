@@ -247,12 +247,10 @@ NCB_REGISTER_CLASS(Player) {
     // So both member names match their semantics: angleDeg->deg, angleRad->rad.
     // There is NO name/semantics mismatch in the binary.
     //
-    // KNOWN BUG (port binding is itself swapped): local getAngleDeg() currently
-    // returns emoteGetAngleRadLike_0x6CD0C0() = RAD (should be deg), and
-    // getAngleRad() returns the raw stored deg (should be rad). The local NCB
-    // properties below are therefore wired backwards relative to the binary.
-    // Fixing requires swapping the getter/setter bodies (see Player.h:589-611),
-    // tracked as a follow-up (behavior change, not a comment-only fix).
+    // FIXED 2026-06-03: the port binding was itself swapped (getAngleDeg returned
+    // rad, getAngleRad returned raw deg). The getter/setter bodies (Player.h /
+    // PlayerCore.cpp) were corrected so angleDeg->deg, angleRad->rad now match
+    // the binary. (Residual platform gap: directEdit path omits initEmoteMotion(2).)
     NCB_PROPERTY(angleDeg, getAngleDeg, setAngleDeg);
     NCB_PROPERTY(angleRad, getAngleRad, setAngleRad);
     NCB_PROPERTY(speed, getSpeed, setSpeed);

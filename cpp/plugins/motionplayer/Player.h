@@ -601,26 +601,26 @@ namespace motion {
         double emoteGetAngleRadLike_0x6CD0C0() const;
 
         // binary Motion.Player exposes angleDeg/angleRad as TJS properties.
-        // angleDeg getter = sub_6C1780 (raw -> deg); angleRad getter = 0x6CD0C0
-        // (* 0.0174532925 -> rad). Setters: angleDeg member set=Player_setAngleRad
-        // @0x6c0f84, angleRad member set=Player_setAngleDeg@0x6cd0ec.
-        //
-        // KNOWN BUG (binding swapped vs binary): getAngleDeg() below returns RAD
-        // (via emoteGetAngleRadLike_0x6CD0C0) but the binary angleDeg returns DEG;
-        // getAngleRad() returns raw deg but the binary angleRad returns RAD. The
-        // two should be swapped. Tracked as a follow-up behavior fix (must also
-        // confirm whether delta.angle stores deg or rad in the port before swap).
-        double getAngleDeg() const { return emoteGetAngleRadLike_0x6CD0C0(); }
-        void setAngleDeg(double rad);  // impl in PlayerCore.cpp
-        double getAngleRad() const {
-            return _nodes.empty() ? 0.0 : _nodes[0].delta.angle;
+        // Internal angle storage (root+1616 / _emoteAngle+464) is in DEGREES.
+        //   angleDeg member: getter = sub_6C1780 (raw stored -> DEG);
+        //                    setter = sub_6C0F84 @0x6C0F84 (input DEG, stored direct)
+        //   angleRad member: getter = 0x6CD0C0 (raw * 0.0174532925 -> RAD);
+        //                    setter = Player_setAngleDeg @0x6CD0EC (input RAD ->
+        //                             * 57.2957795 -> DEG -> same store path)
+        // Fixed 2026-06-03: bindings were previously swapped (getAngleDeg returned
+        // rad, getAngleRad returned raw deg). IDA's symbol names for the two getter
+        // fns are mislabeled (0x6CD0C0 is the angleRad getter, not angleDeg);
+        // verified against registration @0x6D69C8 (sites 0x6d7db4 / 0x6d7e30).
+        double getAngleDeg() const {            // sub_6C1780: raw stored -> deg
+            if (_directEdit) return _emoteAngle;            // +464  /*0x6c178c*/
+            return _nodes.empty() ? 0.0
+                                  : _nodes[0].delta.angle;  // root+1616 /*0x6c179c*/
         }
-        void setAngleRad(double v) {
-            if(!_nodes.empty()) {
-                _nodes[0].delta.angle = v;
-                _nodes[0].delta.dirty = true;
-            }
+        void setAngleDeg(double deg);  // sub_6C0F84 (deg-direct); impl in PlayerCore.cpp
+        double getAngleRad() const {            // 0x6CD0C0: stored deg * pi/180 -> rad
+            return emoteGetAngleRadLike_0x6CD0C0();
         }
+        void setAngleRad(double rad); // Player_setAngleDeg@0x6CD0EC; impl in PlayerCore.cpp
 
         // Public accessor for EmotePlayer delegation
         double getActiveMotionWidth() const;

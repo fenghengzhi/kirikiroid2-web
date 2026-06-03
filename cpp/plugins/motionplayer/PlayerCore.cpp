@@ -364,26 +364,34 @@ namespace motion {
         }
     }
 
-    // M15 missing setAngleDeg (cluster E §4 setAngleDeg @0x6CD0EC): binary
-    // takes radians as input, converts to degrees (×57.2957795), normalizes
-    // to [0,360) if directEdit (emote angle), and stores in root.delta.angle
-    // (else) or _emoteAngle (if directEdit). Port stores deg in
-    // root.delta.angle (matching binary storage convention).
-    // Player_initEmoteMotion(2) call when directEdit is set is omitted —
-    // port doesn't have an equivalent initEmoteMotion entry; that path is
-    // for emote-mode angle re-init and would need separate spike.
-    void Player::setAngleDeg(double rad) {
-        double deg = rad * 57.2957795;
+    // angleDeg member setter = libkrkr2.so sub_6C0F84 @0x6C0F84. Input is in
+    // DEGREES and stored directly (NO rad->deg conversion). If directEdit
+    // (+482): normalize to [0,360), store _emoteAngle(+464), Player_initEmoteMotion(2).
+    // Else: if root.delta.angle(+1616) != deg, set dirty(+1584) and store.
+    //   if (*(BYTE*)(this+482)) { while(a2<0)a2+=360; while(a2>=360)a2-=360;
+    //                             *(this+464)=a2; initEmoteMotion(this,2); }
+    //   else { v=*(this+200); if(*(v+1616)!=a2){ *(v+1584)=1; *(v+1616)=a2; } }
+    // Port stores deg in root.delta.angle (matching binary). initEmoteMotion(2)
+    // omitted — port has no equivalent emote-mode re-init entry (pending spike).
+    void Player::setAngleDeg(double deg) {
         if(_directEdit) {
             while(deg < 0.0) deg += 360.0;
             while(deg >= 360.0) deg -= 360.0;
             _emoteAngle = deg;
-            // TODO M15: Player_initEmoteMotion(2) — pending spike of binary
-            // emote-mode angle re-init path; port omits for now.
+            // TODO M15: Player_initEmoteMotion(2) — port omits for now.
         } else if(!_nodes.empty()) {
-            _nodes[0].delta.angle = deg;
-            _nodes[0].delta.dirty = true;
+            if(_nodes[0].delta.angle != deg) {
+                _nodes[0].delta.angle = deg;
+                _nodes[0].delta.dirty = true;
+            }
         }
+    }
+
+    // angleRad member setter = libkrkr2.so Player_setAngleDeg @0x6CD0EC (IDA
+    // misnames it). Input is RADIANS: deg = rad * 57.2957795, then the SAME
+    // store path as setAngleDeg above (binary inlines an identical body).
+    void Player::setAngleRad(double rad) {
+        setAngleDeg(rad * 57.2957795);
     }
 
     // M15 missing `meshDivisionRatio` (cluster E §3.1): binary Motion.Player
