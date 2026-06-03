@@ -164,14 +164,22 @@ namespace motion {
         labels.reserve(_nodeLabelMap.size());
         // std::map iteration is key-ascending = the binary's in-order RB-tree
         // walk; _nodeLabelMap keys are raw labels (M5-1).
-        for(const auto &[label, _] : _nodeLabelMap) {
+        for(const auto &[ttLabel, _] : _nodeLabelMap) {
+            // Player+24 map is ttstr-keyed (UTF-16 comparator sub_9B1ED0);
+            // narrow back to std::string for the substring filter / output list.
+            const std::string label = detail::narrow(ttLabel);
             if(hasFilter) {
                 // 0x6D114C: push only when ttstr_indexOf(key, args[0]) >= 0,
-                // i.e. the key CONTAINS the filter (case-sensitive). An empty
-                // filter string makes ttstr_indexOf return -1 for every key, so
-                // an empty (but present) arg emits NOTHING — distinct from the
-                // void/absent arg above which emits all.
-                if(needle.empty() || label.find(needle) == std::string::npos) {
+                // i.e. the key CONTAINS the filter (case-sensitive). CORRECTED
+                // 2026-06-03 (fresh decompile of 0x6D10E0 + ttstr_indexOf
+                // 0x9B1FF8): an empty (but present) filter string makes
+                // ttstr_indexOf return 0 (empty needle matches at index 0 of
+                // every key, wcsstr-like), so a present empty-string arg emits
+                // ALL keys — same as the void/absent arg branch. (The prior
+                // comment claiming it emits NOTHING was contradicted by the
+                // decompile.) std::string::find("") also returns 0 (!= npos),
+                // so dropping the needle.empty() guard reproduces this.
+                if(label.find(needle) == std::string::npos) {
                     continue;
                 }
             }
@@ -235,8 +243,9 @@ namespace motion {
             return {};
         }
 
-        const auto key = detail::narrow(name);
-        const auto it = _nodeLabelMap.find(key);
+        // Player+24 map is ttstr-keyed (UTF-16 comparator sub_9B1ED0); look up
+        // by the raw ttstr name verbatim (matches binary sub_6F2228 feed).
+        const auto it = _nodeLabelMap.find(name);
         if(it == _nodeLabelMap.end()) {
             return {};
         }
@@ -253,8 +262,8 @@ namespace motion {
         if(false) {
             return {};
         }
-        const auto key = detail::narrow(name);
-        const auto it = _nodeLabelMap.find(key);
+        // Player+24 map is ttstr-keyed; look up by the raw ttstr name verbatim.
+        const auto it = _nodeLabelMap.find(name);
         if(it == _nodeLabelMap.end()) {
             return {};
         }
@@ -320,6 +329,9 @@ namespace motion {
         if(key.empty()) {
             return false;
         }
+        // Player+24 map is ttstr-keyed (UTF-16 comparator sub_9B1ED0); use the
+        // raw ttstr name for the lookup.
+        const ttstr ttKey = name;
 
         auto findNodeRecursive =
             [&](auto &&self, Player *player) -> const detail::MotionNode * {
@@ -327,7 +339,7 @@ namespace motion {
                 return nullptr;
             }
 
-            if(const auto it = player->_nodeLabelMap.find(key);
+            if(const auto it = player->_nodeLabelMap.find(ttKey);
                it != player->_nodeLabelMap.end()) {
                 const auto index = it->second;
                 if(index >= 0 &&

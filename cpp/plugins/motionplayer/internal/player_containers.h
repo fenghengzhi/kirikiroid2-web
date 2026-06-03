@@ -20,6 +20,7 @@
 #pragma once
 
 #include <deque>
+#include <map>
 #include <unordered_map>
 
 #include "ttstr_hash.h"
@@ -73,6 +74,14 @@ namespace motion::detail {
     // +336 / +416 / +576 / +656 (per-nodeType animator state); this is a
     // lookup table, those are state machines.
     using VariableLabelScopeDeque = std::deque<VariableLabelScope>;
+
+    // Player+24 std::map<ttstr,int> — the node-index map keyed by the RAW PSB
+    // "label" ttstr (buildNodeTree_recursive @0x6B4A6C inserts PropGet("label")
+    // at 0x6B4CB0). The binary's RB-tree comparator is sub_9B1ED0 @0x9B1ED0,
+    // a UTF-16 code-unit lexicographic ordering (ttstr_utf16_less). For ASCII
+    // labels this matches std::string byte order; only non-ASCII labels
+    // reorder. Iteration is key-ascending = the binary's in-order tree walk.
+    using NodeLabelMap = std::map<ttstr, int, ttstr_utf16_less>;
 
     // The Player+184 deque carries motion::MotionNode (2632B in the binary).
     // The alias is intentionally not declared here to keep this header free

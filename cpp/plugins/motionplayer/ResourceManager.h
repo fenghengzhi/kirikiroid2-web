@@ -15,31 +15,36 @@ namespace motion {
     // R-M9 Phase 1 scaffolding (M9 spike 2026-05-31; architecture confirmed
     // 2026-06-03 by full findSource-chain decompile, cluster K):
     //
-    // PLATFORM_BOUNDARY (phase D parked) — CORRECTED 2026-06-03 (fresh decompile
-    // of the draw path 0x6C7440 + vertex builder sub_6C715C):
+    // PLATFORM_BOUNDARY (phase D parked) — color-consumer LOCATED 2026-06-03
+    // (fresh decompile of the full draw->color chain):
     //
-    // The earlier justification claimed the binary "recombines the 4-corner color
-    // gradient as real PER-VERTEX vertex colors in its GPU draw." That specific
-    // claim is NOT supported by the decompiled draw path: the vertex builder
-    // sub_6C715C @0x6C715C appends ONLY (x,y) position pairs (tTJSVariant type 5,
-    // 20B stride) into the geometry array; the operate*/copy primitives in
-    // sub_6C7440 (operateRect/operateMesh/operateBezierPatch/affineCopy/meshCopy/
-    // bezierPatchCopy) each take a single blend-op mode and a single source Layer,
-    // with NO per-vertex color array, and the anchor-damped 4-corner colorBytes
-    // (node+100..115) are not referenced anywhere in 0x6C7440. Where the 4-corner
-    // gradient is actually consumed (if at all) is NOT yet located — so the
-    // per-vertex-color rationale must NOT be cited as settled.
+    // The 4-corner color consumer is now found — it is NOT per-vertex vertex
+    // color. The chain is:
+    //   1. Anchor 0x6C0528 damps + writes the 4 corner RGBA quads to
+    //      node+100/104/108/112.
+    //   2. 0x6C7440 @0x6c7944 (and identically 0x6C4E28 @0x6c5528) writes those
+    //      4 colors as index-properties 0..3 onto the source-resolver object
+    //      player+716 (via vtbl+56). They are NOT passed to any draw primitive.
+    //   3. Source resolver 0x6C1B70 reads them back into v41[0..3] and calls
+    //      sub_6A7518(v41, bitmap, &dstRect, (blendMode&0xF0)==16).
+    //   4. sub_6A7518 = per-PIXEL 4-corner bilinear gradient MULTIPLY baked into
+    //      the source bitmap (divisor 128 if default-blend (a4&1) else 255); a
+    //      hasGPUAccel branch does the same bake on the locked GPU texture.
+    // After the bake the texture is drawn with positions + single blendMode +
+    // single opacity only (the vertex builder sub_6C715C appends only (x,y)
+    // pairs, tTJSVariant type 5, 20B stride; 0x6C7440/0x6C4E28 carry NO
+    // color/opacity/rgba scalar to any operate*/copy primitive).
     //
-    // What still holds for the boundary: the local render stack exposes color only
-    // as a single scalar RGBA (SetParameterColor4B), not per-vertex, so the port's
-    // CPU-bake of the gradient into the bitmap with a (name, blendMode,
-    // packedColors) cache key remains a defensible adaptation. But the boundary
-    // must be justified by the COLOR CONSUMER in the draw path (address TBD), not
-    // by findSource (a pure name->single-texture cache that applies no color) and
-    // not by the unverified per-vertex-color claim above. Phase D (texture
-    // topology + RM/SourceCache class merge) stays parked pending that consumer
-    // decompile; brick A (this scaffolding) is M9's faithful endpoint on the port
-    // side.
+    // The port is FAITHFUL to this mechanism, NOT a parked deviation: the local
+    // render stack exposes color only as a single scalar RGBA (no per-vertex),
+    // and SourceCache::applyPackedCornerTintLike_0x6A7518 (SourceCache.cpp:82)
+    // reproduces the per-pixel bilinear bake incl. the 128/255 divisor, keyed by
+    // (name, blendMode, packedColors[4]) (SourceCache.cpp:489 == 0x6C1B70). So
+    // the earlier "per-vertex vertex colors" justification was WRONG in
+    // mechanism (corrected), but the single-scalar-RGBA platform boundary itself
+    // is genuine and is justified by this located consumer (sub_6A7518 per-pixel
+    // bake), not by findSource. What remains parked under phase D is only the
+    // texture-topology + RM/SourceCache class merge, not the color path.
     // Binary libkrkr2.so ResourceManager (~256B, NCB registered at 0x6AB8BC)
     // exposes 14 TJS members and holds 3 internal containers + bufLayer +
     // spec int. Phase 1 declares the binary-aligned C++ fields so phase 2

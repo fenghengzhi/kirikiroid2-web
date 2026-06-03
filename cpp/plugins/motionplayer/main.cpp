@@ -862,7 +862,11 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     // M11 D-05: binary `bustScale` member is bound to set/getBodyScale cb,
     // not set/getBustScale. 1:1 with libkrkr2.so sub_52E504.
     NCB_PROPERTY(bustScale, getBodyScale, setBodyScale);
-    NCB_PROPERTY(bodyScale, getBodyScale, setBodyScale);
+    // M11 D-05 (corrected 2026-06-03): removed port-invented `bodyScale` alias.
+    // Fresh enumeration of all NCB member name strings in
+    // D3DEmotePlayer_ncb_registerMembers @0x52E504 confirms the binary registers
+    // the set/getBodyScale callbacks ONLY under the mismatched name `bustScale`
+    // (@0x52eb08); the real name `bodyScale` is absent from the table.
     // M11 D-01: removed `useD3D` — not in binary's 54-entry D3DEmotePlayer
     // NCB table (sub_52E504). Web-port draw-mode flag, no binary equivalent.
     // (progress NCB binding moved to method section per cluster D §1 #50.)
@@ -873,7 +877,10 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     // 54-entry D3DEmotePlayer NCB table. Web-port rendering controls,
     // no binary equivalent.
     NCB_PROPERTY_RO(animating, getAnimating);
-    NCB_PROPERTY_RO(playCallback, getPlayCallback);
+    // M11 D-08 (corrected 2026-06-03): removed port-invented `playCallback` RO
+    // alias. Fresh enumeration of D3DEmotePlayer_ncb_registerMembers @0x52E504
+    // confirms getPlayCallback is registered ONLY under the mismatched RO-prop
+    // name `modified` (@0x52f824); the real name `playCallback` is absent.
 
     // Methods
     // M11 D-03: binary registers member NAME "clear" bound to the create
@@ -923,7 +930,11 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_METHOD(playTimeline);
     NCB_METHOD(isTimelinePlaying);
     NCB_METHOD(stopTimeline);
-    NCB_METHOD(setTimeline);
+    // M11 D-06 (corrected 2026-06-03): removed port-invented `setTimeline`
+    // method alias. Fresh enumeration of D3DEmotePlayer_ncb_registerMembers
+    // @0x52E504 confirms the setTimeline callback is registered ONLY under the
+    // mismatched name `setTimelineBlendRatio` (@0x52f53c); the real name
+    // `setTimeline` is absent from the table.
     // M11 D-06: binary `setTimelineBlendRatio` member is bound to setTimeline
     // cb (signature (ttstr label, bool loop)), not a real blend-ratio method.
     NCB_METHOD_DETAIL(setTimelineBlendRatio, Class, void, Class::setTimeline,
@@ -937,7 +948,11 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     // Moved to method section here. C++ D3DEmotePlayer::progress(double dt)
     // 签名匹配 binary D3DEmotePlayer_progress cb.
     NCB_METHOD(progress);
-    NCB_METHOD(addPlayCallback);
+    // M11 D-07 (corrected 2026-06-03): removed port-invented `addPlayCallback`
+    // method alias. Fresh enumeration of D3DEmotePlayer_ncb_registerMembers
+    // @0x52E504 confirms the addPlayCallback callback is registered ONLY under
+    // the mismatched name `pass` (@0x52f730); the real name `addPlayCallback`
+    // is absent from the table.
     // M11 D-07: binary `pass` member is bound to addPlayCallback cb (void()),
     // not the real pass(double dt) method.
     NCB_METHOD_DETAIL(pass, Class, void, Class::addPlayCallback, ());

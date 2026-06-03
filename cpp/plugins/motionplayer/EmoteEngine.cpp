@@ -1960,8 +1960,32 @@ namespace motion {
                                                              : accumulated);
         }
 
-        // sub_67C8A8(this) @0x67d3f8:
-        //   PLATFORM_BOUNDARY: not reversed (stub, no live consumer modelled).
+        // sub_67C8A8(this) @0x67d3f8 — clampControl binder. Runs AFTER the HM7
+        //   bind-loop (above) and BEFORE the Player-level progress sub_6D2A54
+        //   (below). It strides the engine's 40B clampControl deque (deque#7
+        //   @engine+496, populated by EmoteEngine_buildClampControl @0x66EE5C;
+        //   element = {int type@+0, double min@+8, double max@+16, ttstr var_lr@+24,
+        //   ttstr var_ud@+32}), and per entry: reads two ENGINE-HM7 values keyed by
+        //   var_lr (X) / var_ud (Y) (sub_67C8A8 v6 = result+180 = engine+1440 = HM7,
+        //   NOT player HM2), runs the var-track cascade sub_67C560 on each, normalizes
+        //   to [-1,1] over [min,max], 2D disk-remaps by mode (0=squircle,
+        //   1=clamp-circle), then writes both back via Player_bindParameterValue
+        //   (engine+1064), the X result negated when sub_67C6B0 (mirror) is set.
+        //   The faithful per-entry BODY is ported as
+        //   Player::applyClampControlsLike_0x67C8A8 (reads engine HM7 via _engineBack
+        //   + the clampControl snapshot MotionSnapshot::clampControls, writes player
+        //   HM1/HM2).
+        //
+        //   TOPOLOGY (2026-06-03 approved migration): this clamp now runs HERE, in
+        //   EmoteEngine::progress, exactly where the binary places it — @0x67d3f8,
+        //   after the bind-loop @0x67d3a4 and before sub_6D2A54 @0x67d408. It was
+        //   formerly run on the Player progress path (Player::frameProgress ->
+        //   applyEvalResultPostProcessLike_0x67CC9C); that call has been REMOVED from
+        //   frameProgress. Player_progress_inner @0x6C106C and the child-motion pass
+        //   @0x6BE2A4 both run progress_inner WITHOUT any bind-loop or clamp (fresh-
+        //   decompile confirmed this round), so the Player progress path must not
+        //   carry it. Single invocation per frame here — no double-clamp.
+        player().applyClampControlsLike_0x67C8A8();                 // @0x67d3f8
 
         // Step 7 — Player-level progress @0x67d408:
         //     sub_6D2A54(*(this+1064)=Player, 0, v12=originalDt);

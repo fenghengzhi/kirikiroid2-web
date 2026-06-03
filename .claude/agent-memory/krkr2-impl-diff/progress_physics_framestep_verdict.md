@@ -21,3 +21,12 @@ metadata:
 **Open gaps:** G1 advance 路径漏接 var-track(与 Player 路径重复不一致); G2 rewind 反向 var-track 缺; G3 reseek var-track 双-slot 重播缺; G4 reseek 收尾 initNodeTimeline_guess(0x6B9228)/pruneHM3(0x6B9234)/+280 aux sub_6B9650(0x6B9248) 缺; G5 per-node mask&0x40000 action push sub_6B638C 缺(Stage A 盲区); G6 EmoteEngine bind 后处理 sub_67C560/67C6B0/bindParameterValue+sub_6687E8 stub; G7 Player+1296 var-track std::vector vs libstdc++ deque 选型偏离。
 
 边界行为均 ✅: fmin(dt,1.1) 物理cap 三处全保留; LABEL_48 gated clamp; loop-wrap do-while; depth-ramp 常量 0.03125/28.0/6.28318531 + chain 0.015625/4.0/0.0451603944/0.0392699082 逐一核对。
+
+**2026-06-03 M1 cluster READ-ONLY 二次复核 更正/确认:**
+- 8139222 移除 per-frame HM2.clear = 忠实(已字节核实)。0x6C106C 入口: ldr+1168 / ldrb+482 / `str wzr,+1152`(DWORD) / `strb wzr,+483`(BYTE) / fmul→str+592。仅写 +1152/+483/+592,全函数从不写 4 个 HM(+264/+320/+1184/+1240)。HM2 跨帧持久确认。
+- G1 误判更正: advance var-track(0x6B7124..0x6B71C8)在活路径 PlayerFrameProgress.cpp:1068 已实装且正确(slot[0] merge×2)。0x6B6ADC 反编译头注释"variable-track deque DEFERRED"是过时,实际有代码。G1 不是缺失,是"已实装"。
+- G2 rewind 反向 var-track 确认缺(活路径): 0x6B9FCC..0x6BA034 反向循环 sub_6B786C(frameIdx-1)+merge slot[0]@+48 然后 slot[1]@+104(注意是 +104,不是 advance 的 +48 双打)。活路径 reverse 分支(:1582/:1606)调的是 FORWARD advanceVariableTracksLike,无反向步进。真实 gap。
+- G3 reseek var-track 确认缺(活路径): 0x6B8F30.. = step(+48,v41)+merge(+48)+step(+104,v41+1)+merge(+104)+`*(+8)=0`。活路径所有 reseek 点(:1375 firstFrame / :1527 / :1586)只调 progressSeekNodeSlotsLike,无 var-track reseed。真实 gap。
+- 三入口单位确认: 0x6D2A98(Motion.Player NCB) v10*60/1000→inner; 0x6D2A54(raw,引擎调)收 frame 直传; 0x6818B4(EmotePlayer)入口 a2*60/1000 后→sub_6D2A54(frame)。kMotionFramesPerMillisecond=60/1000 ✅。
+- progressFramesLike 注释(:1692)误称中间 arg=pendingEvents cursor;实际 0x6D2A98 是 *(player+16)=a4(dispatch obj),dispatchEvents 回读它。inert 误注。
+- PlayerFrameStepping.cpp = unit-test-only 重复 port(非活路径),其 var-track/reseek-tail DEFERRED 与活路径缺口无关,勿混为一谈(其 PlayerFrameStep.cpp parseFrame/merge 同理仅 unit-test)。

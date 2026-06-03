@@ -124,7 +124,9 @@ namespace motion::detail {
             // The insert is unconditional — there is no non-empty-label branch
             // between PropGet and the insert, so empty/missing "label" still
             // inserts key "" (last-write-wins).
-            player.nodeLabelMapForBuild()[node.layerName] = node.index;
+            // Player+24 map is ttstr-keyed (UTF-16 comparator sub_9B1ED0);
+            // widen the raw std::string label.
+            player.nodeLabelMapForBuild()[widen(node.layerName)] = node.index;
 
             // "type" → nodeType (node+28)
             // 0=obj, 1=shape, 3=motion, 4=particle, 5=camera, 6=emitter,
@@ -348,7 +350,7 @@ namespace motion::detail {
                 if(!label || label->value.empty()) {
                     continue;
                 }
-                auto it = player._nodeLabelMap.find(label->value);
+                auto it = player._nodeLabelMap.find(widen(label->value));
                 if(it == player._nodeLabelMap.end()) {
                     continue;
                 }

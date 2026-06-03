@@ -19,6 +19,79 @@ tjs_error callLayerOperateAffineLike_0x6C7440(
     tTVPBlendOperationMode blendMode,
     tjs_int opacity,
     tTVPBBStretchType type);
+// Generalized per-primitive dispatch helpers mirroring sub_6C7440 @ 0x6C7440
+// and Player_emitRenderItem_requireLayer @ 0x6C4E28: each builds the exact
+// tTJSVariant arg array the binary packs and routes through
+// iTJSDispatch2::FuncCall on the render-layer INSTANCE (objthis = same
+// instance), not the Layer class object.
+//
+// buildMeshPointTJSArrayLike_0x6C715C builds a TJS Array of interleaved
+// doubles (x,y,x,y,...) translated by (xOffset,yOffset), exactly as
+// sub_6C715C @ 0x6C715C does for the mesh/bezier point arrays.
+iTJSDispatch2 *buildMeshPointTJSArrayLike_0x6C715C(
+    const std::vector<float> &points, float xOffset, float yOffset);
+
+// affineCopy (argc=14): [src, sx, sy, sw, sh, useMatrix=false,
+//   x0, y0, x1, y1, x2, y2, type, clear]. Dispatched on the render-layer
+//   instance, matching sub_6C7440's L"affineCopy" block.
+tjs_error callLayerAffineCopyLike_0x6C7440(
+    iTJSDispatch2 *renderLayerObject,
+    const tTVPPointD *points,
+    const tTJSVariant &sourceObject,
+    const tTVPRect &sourceRect,
+    tTVPBBStretchType type,
+    bool clear);
+
+tjs_error callLayerMeshCopyLike_0x6C7440(
+    iTJSDispatch2 *renderLayerObject,
+    const tTJSVariant &sourceObject,
+    const tTVPRect &sourceRect,
+    iTJSDispatch2 *meshPointArray,
+    tjs_int divx,
+    tjs_int divy,
+    tTVPBBStretchType type,
+    bool clear);
+tjs_error callLayerBezierPatchCopyLike_0x6C7440(
+    iTJSDispatch2 *renderLayerObject,
+    const tTJSVariant &sourceObject,
+    const tTVPRect &sourceRect,
+    iTJSDispatch2 *meshPointArray,
+    tjs_int divx,
+    tjs_int divy,
+    tTVPBBStretchType type,
+    bool clear);
+tjs_error callLayerOperateMeshLike_0x6C7440(
+    iTJSDispatch2 *renderLayerObject,
+    const tTJSVariant &sourceObject,
+    const tTVPRect &sourceRect,
+    iTJSDispatch2 *meshPointArray,
+    tjs_int divx,
+    tjs_int divy,
+    tTVPBlendOperationMode blendMode,
+    tjs_int opacity,
+    bool clear);
+tjs_error callLayerOperateBezierPatchLike_0x6C7440(
+    iTJSDispatch2 *renderLayerObject,
+    const tTJSVariant &sourceObject,
+    const tTVPRect &sourceRect,
+    iTJSDispatch2 *meshPointArray,
+    tjs_int divx,
+    tjs_int divy,
+    tTVPBlendOperationMode blendMode,
+    tjs_int opacity,
+    bool clear);
+
+// operateRect (argc=9): [dx, dy, src, sx, sy, sw, sh, mode, opa]. Dispatched
+//   on the render-layer instance, matching sub_6C7440's L"operateRect" block.
+tjs_error callLayerOperateRectLike_0x6C7440(
+    iTJSDispatch2 *renderLayerObject,
+    tjs_int destX,
+    tjs_int destY,
+    const tTJSVariant &sourceObject,
+    const tTVPRect &sourceRect,
+    tTVPBlendOperationMode blendMode,
+    tjs_int opacity);
+
 std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor);
 iTJSDispatch2 *resolvePrimaryLayerObject(iTJSDispatch2 *layerTreeOwnerObject);
 iTJSDispatch2 *resolveMainWindowOwnerObject();

@@ -41,7 +41,8 @@ namespace motion {
             for(const auto &[label, value] : _evalResultValues) {
                 detail::logoChainTraceLogf(
                     motionPath, "updateLayers.phase1.var", "0x6BB33C",
-                    currentTime, "label={} value={:.6f}", label, value);
+                    currentTime, "label={} value={:.6f}",
+                    detail::narrow(label), value);
             }
             for(const auto &node : nodes) {
                 const auto &ic = node.interpolatedCache;

@@ -245,14 +245,17 @@ namespace motion {
 
         const auto parts = splitParameterLabelLike_0x6D0BF4(id);
         const auto findValue =
-            [&parts](const std::unordered_map<std::string, double> &values,
+            [&parts](const detail::LabelValueMap &values,
                      double &out) -> bool {
-            if(const auto it = values.find(parts.full); it != values.end()) {
+            // HM2 (Player+320) is ttstr-keyed; widen the std::string label
+            // fragments to match the binary's UTF-16 key.
+            if(const auto it = values.find(detail::widen(parts.full));
+               it != values.end()) {
                 out = it->second;
                 return true;
             }
             if(!parts.suffix.empty()) {
-                if(const auto it = values.find(parts.suffix);
+                if(const auto it = values.find(detail::widen(parts.suffix));
                    it != values.end()) {
                     out = it->second;
                     return true;
@@ -387,7 +390,8 @@ namespace motion {
             return;
         }
         ensureEvalResultSlotLike_0x686944(label) = value;
-        _evalResultValues[label] = value;
+        // HM2 (Player+320) is ttstr-keyed; widen the raw std::string label.
+        _evalResultValues[detail::widen(label)] = value;
         bindParameterValueLike_0x6C4668(label, mode, value);
     }
 
@@ -445,8 +449,9 @@ namespace motion {
                 it->second.writeVal = value;
             }
         }
-        // LABEL_132 (0x6C4C0C, green-critical): HM2[rawKey] = value.
-        _evalResultValues[narrowKey] = value;
+        // LABEL_132 (0x6C4C0C, green-critical): HM2[rawKey] = value. HM2 is
+        // ttstr-keyed (Player+320); use the original ttstr key directly.
+        _evalResultValues[key] = value;
     }
 
     double Player::getVariable(ttstr label) {
@@ -485,7 +490,8 @@ namespace motion {
             }
             return 0.0;
         }
-        if(const auto it = _evalResultValues.find(key);
+        // HM2 (Player+320) ttstr-keyed: look up by the original ttstr label.
+        if(const auto it = _evalResultValues.find(label);
            it != _evalResultValues.end()) {
             return it->second;
         }

@@ -935,7 +935,8 @@ namespace motion {
                 }
                 if(_engineBack) _engineBack->_variableAnimators.erase(label);
                 eraseControllerAnimatorStateLike_0x671228(label);
-                _evalResultValues.erase(label);
+                // HM2 (Player+320) is ttstr-keyed; widen the std::string label.
+                _evalResultValues.erase(detail::widen(label));
                 removeEvalResultSlotLike_Reset(label);
             };
 
@@ -1208,8 +1209,11 @@ namespace motion {
             }
         }
         for(const auto &[label, value] : _evalResultValues) {
-            if(seenVariables.insert(label).second) {
-                variables.emplace_back(label, value);
+            // HM2 keys are ttstr (Player+320); narrow for the std::string-keyed
+            // seen-set / output dictionary.
+            const auto narrowLabel = detail::narrow(label);
+            if(seenVariables.insert(narrowLabel).second) {
+                variables.emplace_back(narrowLabel, value);
             }
         }
 

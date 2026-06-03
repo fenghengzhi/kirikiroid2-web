@@ -1,39 +1,45 @@
 ---
 name: render-path-0x6C7440-vertexcolor
-description: 0x6C7440 render-execute draw primitives carry vertex POSITIONS + single blend mode only; NO per-vertex/4-corner color → falsifies M9 phase-D per-vertex-color boundary justification
+description: RESOLVED node+100 4-corner color consumer = sub_6A7518 per-pixel bilinear bake into source texture (NOT per-vertex GPU color). Draw primitives carry positions+blendMode+opacity only. Local port faithful.
 metadata:
   type: project
 ---
 
-# Render execute draw path — per-vertex-color absence (fresh decompile 2026-06-03)
+# Render draw path + node+100 4-corner color consumption — RESOLVED (fresh decompile 2026-06-03, 2nd pass)
 
-`sub_6C7440` @0x6C7440 (Player render execute, ~62KB) — the draw path that consumes the
-findSource texHandle / bufLayer source. Fresh-decompiled this session.
+Re-decompiled this session: 0x6C7440 (top-level execute), 0x6C4E28 (per-item emit),
+0x6C715C (vertex builder), 0x6C0528 (anchor color writer), 0x6C1B70 (source resolver),
+0x6A7518 (THE color consumer), 0x6996E8 (mesh-pts vector copy).
 
-## Draw primitives (all via iTJSDispatch2 method dispatch, UTF-16LE keys)
-- `operateRect` (9 args), `operateMesh` (11), `operateBezierPatch` (11),
-  `affineCopy` (14), `meshCopy` (10), `bezierPatchCopy` (10), `fillRect` (4),
-  `drawMeshFrame`/`drawBezierPatchFrame`/`drawBezierPatchMeshFrame`, `drawLine`,
-  `bezierPatchCopy`. Source from `player+656`(SourceCache).bufLayer.
+## THE node+100 color consumption point — FOUND (closes the long-open question)
+Chain: anchor 0x6C0528 damps + writes 4-corner colorBytes to node+100/104/108/112
+  -> render-item snapshot copies them to item+168/172/176/180 (via 0x6C2334 setup;
+     0x6996E8 only copies mesh/bezier point std::vectors, NOT color)
+  -> 0x6C7440 @0x6c7944-0x6c7a7c writes the 4 colors as index-properties 0/1/2/3 onto
+     the source-resolver object (player+716) via vtbl+56. (0x6C4E28 does same @0x6c5528.)
+  -> 0x6C1B70 (source resolver) special branch reads them back from player+716 into
+     v41[0..3], then calls sub_6A7518(v41, player+736_bitmap, &dstRect, (blend&0xF0)==16).
+  -> **sub_6A7518 @0x6A7518 = per-pixel 4-corner BILINEAR gradient multiply baked into
+     the source bitmap pixels.** Reads 4 corner colors, lerps RGBA per row (v34..v47) and
+     per pixel, multiplies each texel; divisor 128 if (a4&1) else 255. GPU branch
+     (hasGPUAccel) locks texture bits sub_80A820/80A840 and bakes on GPU texture; non-GPU
+     fallback dispatches vtbl+200 (PrivateMotionGLL). EITHER WAY color is baked into the
+     texture, never a per-vertex attribute.
 
-## KEY EVIDENCE — no per-vertex color
-- `sub_6C715C` @0x6C715C builds the mesh/bezier vertex array fed to operateMesh
-  (node+344) / operateBezierPatch (node+400): it appends ONLY (x,y) point pairs
-  (variant type 5, 20-byte stride) = vertex POSITIONS + a constant offset (a2).
-  NO color/RGBA appended anywhere.
-- The draws pass a SINGLE blend-op mode `v48` (from `node+48 & 0xF` switch →
-  14/15/16/17/2) and a single source layer. No 4-corner color array.
-- node+100..115 (the 4 RGBA colorBytes quads damped by anchor 0x6C0528) are NOT
-  referenced in 0x6C7440 at all (grep "139 + 100" empty). Color, if applied, is
-  baked into the bufLayer precompose UPSTREAM (single-tint), not per-vertex.
-
-## Verdict on M9 phase-D boundary (CORRECTS m9-source-subsystem-verdict caveat)
-- ResourceManager.h:18-36 justification "the binary recombines the 4-corner
-  gradient as per-vertex vertex colors in its GPU draw" is **FALSIFIED for the
-  primary draw path 0x6C7440** — that path applies a single precomposited
-  tint + single blend mode, never a per-vertex color attribute.
-- **How to apply:** do NOT cite "binary uses per-vertex GPU color" as the platform
-  boundary reason. The defensible boundary (if any) is single-tint texture caching
-  by (name,color); the per-vertex-color claim should be removed/rewritten. If a
-  4-corner gradient is ever needed it would have to come from a DIFFERENT path not
-  found in 0x6C7440 — none observed this session.
+## VERDICT (supersedes both prior caveats)
+- M9 phase-D "binary recombines 4-corner gradient as per-vertex GPU vertex colors" is
+  WRONG in mechanism but the BOUNDARY ITSELF IS GENUINE. Correct mechanism = 4-corner
+  bilinear gradient baked per-pixel into the source texture (sub_6A7518), then drawn with
+  positions + single blendMode + single opacity. Draw primitives (operateRect/affineCopy/
+  meshCopy/bezierPatchCopy/OperateRect/AffineCopy/...) carry NO color arg — confirmed in
+  BOTH 0x6C7440 and 0x6C4E28 (grep color/opacity/rgba = 0 hits; only a1+1144 stretch-type
+  & a1+1148 stencil-type & neutralColor=literal-0).
+- LOCAL PORT IS FAITHFUL: SourceCache caches by (key, blendMode, packedColors[4]) and
+  applyPackedCornerTintLike_0x6A7518 (SourceCache.cpp:82) reproduces the bilinear per-pixel
+  bake incl. 128/255 divisor. Execute draws call OperateRect/AffineCopy/MeshCopy/
+  BezierPatchCopy(positions, image, srcRect, blend, opacity) — exact arg match. effectiveColor
+  (unpackPackedRgba) in PlayerRenderExecute.cpp is LOG-ONLY, never passed to a draw. Good.
+- So the defensible boundary statement = "single pre-tinted texture cached by
+  (name,blendMode,4-corner-color); per-pixel color bake done on CPU/GPU texture upstream,
+  drawn with positions+blend+opacity." NOT "per-vertex GPU color". Update ResourceManager.h
+  comment wording if it still says per-vertex.

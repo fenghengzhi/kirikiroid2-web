@@ -234,7 +234,35 @@ namespace motion {
         ttstr                 label;          // +8  — HM7 key for *outBeginFrame
         ttstr                 talkLabel;      // +16 — HM7 key for *outCurrentValue
     };
-    struct EmoteSetupEntry40B_Deque7   { char raw[40]; };  // no step fn, ARM64 40B (_guess)
+    // Deque #7 (clampControl) element — 40B. Verified by the clampControl
+    //   BUILDER EmoteEngine_buildClampControl @0x66EE5C and the per-entry binder
+    //   sub_67C8A8 @0x67C8A8 (both stride the same 40B deque whose header base is
+    //   engine+496; finish._M_cur at engine+528, block = 480B = 12 elems). The
+    //   builder zeroes 40B then writes:
+    //     +0  int32  type  (Motion_propGetInt "type",   default 0)  -> mode
+    //     +4         (padding, zeroed by the builder)
+    //     +8  double min   (Motion_propGetDouble "min",  default 0)
+    //     +16 double max   (Motion_propGetDouble "max",  default 0)
+    //     +24 ttstr  var_lr (Motion_propGetString "var_lr") -> X-axis HM2 key
+    //     +32 ttstr  var_ud (Motion_propGetString "var_ud") -> Y-axis HM2 key
+    //   Builder GATE: only entries whose "enabled" bool is set are pushed
+    //   (0x66efbc). The binder sub_67C8A8 reads +0 mode, +8/+16 lo/hi, +24/+32 the
+    //   two HM2-lookup keys, runs the var-track cascade (sub_67C560) on each,
+    //   normalizes to [-1,1], 2D disk-remaps by mode, then writes both back via
+    //   Player_bindParameterValue (engine+1064), the X-axis result negated when
+    //   sub_67C6B0 sets the mirror flag.
+    //   NOTE: the LIVE local model of this deque is the populated
+    //   MotionSnapshot::clampControls (RuntimeSupport::collectClampControlMetadata
+    //   mirrors the builder's reads at sub_66EE5C); this struct documents the
+    //   binary's on-deque element layout. Corrects the prior `char raw[40]`
+    //   placeholder (was mislabelled "no step fn / _guess").
+    struct EmoteClampControlEntry_Deque7 {
+        int    type     = 0;   // +0  — disk-remap mode (0 = squircle, 1 = clamp-circle)
+        double minValue = 0.0; // +8  — lo bound
+        double maxValue = 0.0; // +16 — hi bound
+        ttstr  varLr;          // +24 — X-axis HM2 key (var_lr)
+        ttstr  varUd;          // +32 — Y-axis HM2 key (var_ud)
+    };
     // Deque #8 (transition, TYPE 7) element — 24B. Verified by
     //   EmoteEngine_buildTransitionControl @0x66D4C4 (push 24B
     //   {ctl@+0, ttstr label@+8, byte flag@+16 = 1}; advance elem+=24; block 504)
@@ -496,8 +524,15 @@ namespace motion {
         //   beginFrame into HM#7 keyed by elem.label and currentValue into HM#7
         //   keyed by elem.talkLabel.
         std::deque<EmoteMouthControlEntry_Deque6> _compositeVarDeque6;
-        // +480..+559:deque #7 — Setup/keyframe pool (no step)
-        std::deque<EmoteSetupEntry40B_Deque7>   _setupPoolDeque7;
+        // +480..+559:deque #7 — clampControl pool (40B elem, NO per-frame step
+        //   fn; consumed by the binder sub_67C8A8 @0x67C8A8 once per progress,
+        //   between the HM7 bind-loop and the Player-level progress sub_6D2A54).
+        //   Populated by the clampControl builder EmoteEngine_buildClampControl
+        //   @0x66EE5C (header base engine+496, finish._M_cur engine+528, 480B
+        //   block). The LIVE local model of this deque is the populated
+        //   MotionSnapshot::clampControls; this typed deque documents the binary's
+        //   element layout and is reserved for a future on-deque port.
+        std::deque<EmoteClampControlEntry_Deque7> _clampControlDeque7;
         // +560..+639:deque #8 — Transition controllers (TYPE 7). Element =
         //   {EmoteVarController* ctl; ttstr label; uint8_t flag=1} (24B).
         //   Populated by EmoteEngine::buildTransitionControl (libkrkr2.so

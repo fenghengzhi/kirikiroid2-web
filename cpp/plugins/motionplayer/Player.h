@@ -928,7 +928,7 @@ namespace motion {
         // motion::internal::render_detail:: which we can't friend across TU
         // boundaries cheaply. Marked for A10 cleanup review.
         std::deque<detail::MotionNode> &nodesForBuild() { return _nodes; }
-        std::map<std::string, int> &nodeLabelMapForBuild() {
+        detail::NodeLabelMap &nodeLabelMapForBuild() {
             return _nodeLabelMap;
         }
         std::unordered_map<int, detail::RenderItemNativeFieldLifetime> &
@@ -1178,7 +1178,8 @@ namespace motion {
         // is a SEPARATE key space used only by HM3 (_perNodeLayerStateMap).
         std::deque<detail::MotionNode> _nodes;
         detail::VariableLabelScopeDeque _variableLabelScopes;
-        std::map<std::string, int> _nodeLabelMap;
+        // Player+24 std::map<ttstr,int>; UTF-16 code-unit comparator sub_9B1ED0.
+        detail::NodeLabelMap _nodeLabelMap;
 
         // === Render-item scratch state (Phase A9) ===
         // preparedRenderItems is the per-frame scratch array of native-shape
@@ -1260,7 +1261,17 @@ namespace motion {
         findControllerAnimatorStateLike_0x671228(const std::string &label) const;
         void eraseControllerAnimatorStateLike_0x671228(const std::string &label);
         void clearControllerAnimatorStateLike_0x671228();
-        // === libkrkr2.so motion::Player inlined hash maps (Phase B aliases) ===
+        // === libkrkr2.so motion::Player hash maps (Phase B aliases) ===
+        // NOTE (corrected 2026-06-03, fresh decompile of 0x686A4C/0x686C5C):
+        // these are STANDARD libstdc++ std::unordered_map (literal
+        // _Prime_rehash_policy::_M_need_rehash + textbook _M_rehash +
+        // _M_before_begin single-chain + 1.0 load factor); only the hash
+        // functor is custom (ttstr UTF-16 hash). The local std::unordered_map
+        // selection is ALREADY the aligned container — there is NO inline /
+        // open-addressing "KiriKiri HM" to migrate to. Do not rewrite these as
+        // open-addressing maps. The only remaining container deviation is
+        // key-type (std::string vs ttstr) on the two maps still keyed by
+        // std::string; see _evalResultValues (HM2) and _nodeLabelMap.
         // HM1 (Player+264): cascaded PropGet result cache. Owns refcounts on
         // its embedded dispatch + chain via EvalCascadeState's destructor;
         // matches the binary's Player_HM1_value_destroy @0x6DD1A0 release
@@ -1303,11 +1314,16 @@ namespace motion {
         detail::VariableSnapshotMap _variableSnapshotMap;
 
         // Aligned with libkrkr2.so motion::Player HM2 @ +320
-        // (raw label -> double). Upsert helper: Player_HM2_upsert_labelToValue
-        // @ 0x686944. Cleared on motion change / reset alongside HM3/HM4.
-        // TODO(A8): retype to detail::LabelValueMap (ttstr key + ttstr_hash)
-        // so bucket distribution and iteration order match the binary.
-        std::unordered_map<std::string, double> _evalResultValues;
+        // (ttstr label -> double). Upsert helper: Player_HM2_upsert_labelToValue
+        // @ 0x686944, which reads the key via ttstr_c_str() and hashes the
+        // UTF-16 code units (1025*x ^ (1025*x>>6), then 9*acc, then
+        // 32769*(h^(h>>11)), with the (uint32_t)-1 zero sentinel) — i.e. the
+        // shared ttstr_hash. Cleared on motion change / reset alongside HM3/HM4.
+        // Retyped (2026-06-03) from std::unordered_map<std::string,double> to
+        // the ttstr-keyed detail::LabelValueMap so the key type, custom hash and
+        // bucket distribution match the binary (was the only one of the four HMs
+        // still keyed by std::string).
+        detail::LabelValueMap _evalResultValues;
         struct EvalResultEntry {
             std::string label;
             double value = 0.0;

@@ -61,4 +61,29 @@ namespace motion::detail {
         }
     };
 
+    // UTF-16 code-unit lexicographic comparator, byte-for-byte matching the
+    // libkrkr2.so std::map<ttstr,int> (Player+24 node-index map) comparator
+    // sub_9B1ED0 @0x9B1ED0. That function compares two `unsigned __int16 *`
+    // (tjs_char*) one code unit at a time: it loops while the chars are equal
+    // and the right operand is non-zero, then returns sign(a[i] - b[i]). The
+    // std::map "less" predicate is therefore (compare < 0). std::string byte
+    // order (UTF-8) would reorder any non-ASCII label; this reproduces the
+    // binary's RB-tree key ordering exactly.
+    struct ttstr_utf16_less {
+        bool operator()(const ttstr &a, const ttstr &b) const noexcept {
+            const tjs_char *pa = a.c_str();
+            const tjs_char *pb = b.c_str();
+            // sub_9B1ED0: v2 = a[0] - b[0]; while (b[i] != 0 && v2 == 0) advance.
+            std::uint16_t ca = static_cast<std::uint16_t>(*pa);
+            std::uint16_t cb = static_cast<std::uint16_t>(*pb);
+            int diff = static_cast<int>(ca) - static_cast<int>(cb);
+            while (cb != 0 && diff == 0) {
+                ca = static_cast<std::uint16_t>(*++pa);
+                cb = static_cast<std::uint16_t>(*++pb);
+                diff = static_cast<int>(ca) - static_cast<int>(cb);
+            }
+            return diff < 0;
+        }
+    };
+
 } // namespace motion::detail

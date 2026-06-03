@@ -777,8 +777,8 @@ namespace motion {
             const auto &varFrames = _activeMotion->variableFrames;
             for (const auto &[label, frames] : varFrames) {
                 if (frames.empty()) continue;
-                // User-set value takes precedence
-                if (_evalResultValues.find(label) != _evalResultValues.end()) continue;
+                // User-set value takes precedence (HM2 is ttstr-keyed; widen).
+                if (_evalResultValues.find(detail::widen(label)) != _evalResultValues.end()) continue;
                 // Default: use first frame value
                 writeEvalResultValueLike_0x6C4668(label, 0,
                                                   frames.front().value);
@@ -786,7 +786,9 @@ namespace motion {
             // Aligned to sub_6C4668: refresh parameter entries directly. This
             // intentionally does not call public setVariable() on child players.
             for (const auto &[label, value] : _evalResultValues) {
-                bindParameterValueLike_0x6C4668(label, 0, value);
+                // HM2 keys are ttstr; the std::string bindParameterValue
+                // overload takes a narrow label.
+                bindParameterValueLike_0x6C4668(detail::narrow(label), 0, value);
             }
         }
 

@@ -265,13 +265,13 @@ namespace internal {
                               findControllerAnimatorStateLike_0x671228(
                                   binding.label)) {
                     value = static_cast<double>(state->currentValue);
-                } else if(const auto it = _evalResultValues.find(binding.label);
+                } else if(const auto it = _evalResultValues.find(detail::widen(binding.label));
                           it != _evalResultValues.end()) {
                     value = it->second;
                 } else {
                     value = getVariable(detail::widen(binding.label));
                 }
-            } else if(const auto it = _evalResultValues.find(binding.label);
+            } else if(const auto it = _evalResultValues.find(detail::widen(binding.label));
                       it != _evalResultValues.end()) {
                 value = it->second;
             } else {
@@ -319,71 +319,103 @@ namespace internal {
     }
 
     void Player::applyClampControlsLike_0x67C8A8() {
+        // Aligned with libkrkr2.so sub_67C8A8 @0x67C8A8 (clampControl binder),
+        // called from EmoteEngine_progress @0x67d3f8 — AFTER the HM7 bind-loop
+        // @0x67d3a4, BEFORE the step-7 Player progress sub_6D2A54 @0x67d408.
+        // 2026-06-03: migrated out of the Player progress path (frameProgress);
+        // now invoked from EmoteEngine::progress, the binary's true location.
+        //
+        // Binary strides the engine's 40B clampControl deque (deque#7, engine+496,
+        // populated by EmoteEngine_buildClampControl @0x66EE5C). Per entry:
+        //   v52[0]=HM7.find(var_lr)?node.value(+16):0.0   (@0x67c9b4..0x67c9cc)
+        //   v51   =HM7.find(var_ud)?node.value(+16):0.0   (@0x67ca68..0x67ca7c)
+        //   sub_67C560(this, var_lr, &v52[0]);            (@0x67ca8c — cascade)
+        //   sub_67C560(this, var_ud, &v51);               (@0x67ca9c — cascade)
+        //   range=max-min; norm=2*(val-min)/range-1 both axes (NO zero/empty guard)
+        //   if(lrNorm!=0 && udNorm!=0): disk-remap by mode
+        //   final=min+range*(norm+1)*0.5; X negated iff sub_67C6B0 mirror set.
+        // GAP-FIX 2026-06-03: reads ENGINE HM7 (_engineBack->_labelToValueHM7 =
+        //   engine+1440 = sub_67C8A8 v6=result+180), NOT player HM2; removed the
+        //   port-invented getVariable fallback + varLr/varUd empty-key guard +
+        //   zero-range guard (the binary has none of these). GAP-FIX: now runs the
+        //   sub_67C560 var-track cascade on each axis value (was omitted).
         const auto *activeMotion = _activeMotion.get();
         if(!activeMotion) {
             return;
         }
 
+        // HM7 source = engine+1440 (sub_67C8A8 v6 = engine+180 qwords). The engine
+        // is the owner of HM7; the clamp reads the RAW stepped values (pre-mirror).
+        const detail::LabelValueMap *hm7 =
+            _engineBack ? &_engineBack->_labelToValueHM7 : nullptr;
+
         for(const auto &binding : activeMotion->clampControls) {
-            if(binding.varLr.empty() || binding.varUd.empty()) {
-                continue;
-            }
-
-            const double range = binding.maxValue - binding.minValue;
-            if(std::abs(range) <= 0.0000001) {
-                continue;
-            }
-
+            // v52[0] / v51 default 0.0; HM7.find returns node value+16 when present.
             double lrValue = 0.0;
             double udValue = 0.0;
-            if(const auto it = _evalResultValues.find(binding.varLr);
-               it != _evalResultValues.end()) {
-                lrValue = it->second;
-            } else {
-                lrValue = getVariable(detail::widen(binding.varLr));
+            if(hm7 != nullptr) {
+                if(const auto it = hm7->find(detail::widen(binding.varLr));
+                   it != hm7->end()) {
+                    lrValue = it->second;            // @0x67c9cc node value+16
+                }
+                if(const auto it = hm7->find(detail::widen(binding.varUd));
+                   it != hm7->end()) {
+                    udValue = it->second;            // @0x67ca7c node value+16
+                }
             }
 
-            if(const auto it = _evalResultValues.find(binding.varUd);
-               it != _evalResultValues.end()) {
-                udValue = it->second;
-            } else {
-                udValue = getVariable(detail::widen(binding.varUd));
-            }
+            // sub_67C560(this, var_lr, &v52[0]) / (this, var_ud, &v51) — var-track
+            // weighted cascade mutates each axis value in place (@0x67ca8c/0x67ca9c).
+            accumulateTimelineContributionLike_0x67C560(binding.varLr, lrValue);
+            accumulateTimelineContributionLike_0x67C560(binding.varUd, udValue);
 
+            // range = max - min (@0x67caa8 v33). Binary applies NO zero-range guard.
+            const double range = binding.maxValue - binding.minValue;
+
+            // norm = 2*(val-min)/range - 1 for both axes (@0x67cac8/0x67cad0).
             double lrNorm =
                 ((lrValue - binding.minValue) / range) * 2.0 - 1.0;
             double udNorm =
                 ((udValue - binding.minValue) / range) * 2.0 - 1.0;
 
-            if(lrNorm != 0.0 && udNorm != 0.0) {
-                if(binding.type == 1) {
-                    const double radius =
-                        std::sqrt(lrNorm * lrNorm + udNorm * udNorm);
-                    if(radius > 1.0) {
+            // if(v52[0]!=0 && v35!=0) — i.e. lrNorm!=0 && udNorm!=0 (@0x67cadc).
+            if(udNorm != 0.0 && lrNorm != 0.0) {
+                // Binary: if(*(DWORD)v2)/type!=0 -> circle branch (acts when
+                // type==1 && radius>1); else (type==0) -> squircle (@0x67cae0).
+                if(binding.type != 0) {
+                    if(binding.type == 1 &&
+                       std::sqrt(lrNorm * lrNorm + udNorm * udNorm) > 1.0) {
                         const double angle = std::atan2(udNorm, lrNorm);
                         lrNorm = std::cos(angle);
                         udNorm = std::sin(angle);
                     }
                 } else {
-                    double ratio = std::abs(lrNorm / udNorm);
-                    if(ratio > 1.0) {
-                        ratio = 1.0 / ratio;
-                    }
+                    // type==0 squircle remap (@0x67cb18..0x67cb9c). Binary order:
+                    //   v36 = fabs(lrNorm/udNorm);
+                    //   v37 = (v36<=1.0) ? v36 : 1.0/v36;        // clamped ratio
+                    //   v38 = 1.0/sqrt(v37*v37+1.0);             // invLen
+                    //   v39 = lrNorm*v38; v40 = v38*udNorm;      // proj X / Y
+                    //   v41 = sqrt(v39*v39+v40*v40);             // projLen
+                    //   v42 = sin(v41*PI/2)/v41;
+                    //   v43 = (1-cos(v37*PI/2))*(v42-1)+1;       // scale (uses v37)
+                    //   lrNorm = v39*v43; udNorm = v43*v40;
+                    // No projLen>0 guard in the binary (port-invented guard removed).
+                    const double rawRatio = std::abs(lrNorm / udNorm);   // v36
+                    const double ratio =
+                        (rawRatio <= 1.0) ? rawRatio : (1.0 / rawRatio); // v37
                     const double invLen =
-                        1.0 / std::sqrt(ratio * ratio + 1.0);
-                    const double projX = lrNorm * invLen;
-                    const double projY = udNorm * invLen;
+                        1.0 / std::sqrt(ratio * ratio + 1.0);            // v38
+                    const double projX = lrNorm * invLen;                // v39
+                    const double projY = invLen * udNorm;                // v40
                     const double projLen =
-                        std::sqrt(projX * projX + projY * projY);
-                    if(projLen > 0.0) {
-                        const double scale =
-                            (1.0 - std::cos(ratio * 1.57079633)) *
-                                ((std::sin(projLen * 1.57079633) / projLen) -
-                                 1.0) +
-                            1.0;
-                        lrNorm = projX * scale;
-                        udNorm = projY * scale;
-                    }
+                        std::sqrt(projX * projX + projY * projY);        // v41
+                    const double scale =
+                        (1.0 - std::cos(ratio * 1.57079633)) *
+                            ((std::sin(projLen * 1.57079633) / projLen) -
+                             1.0) +
+                        1.0;                                             // v43
+                    lrNorm = projX * scale;
+                    udNorm = scale * projY;
                 }
             }
 
@@ -398,6 +430,15 @@ namespace internal {
         }
     }
 
+    // Aligned with libkrkr2.so sub_67CC9C @0x67CC9C — the bundled {HM7 bind-loop +
+    // sub_67C8A8 clamp}. sub_67CC9C is CALLER-LESS in the binary (dead code); the
+    // live emote post-process is open-coded inside EmoteEngine_progress @0x6818B4
+    // (bind-loop @0x67d3a4, clamp @0x67d3f8). 2026-06-03: this local model is now
+    // ALSO caller-less (the frameProgress invocation was removed during the
+    // progress-topology migration) — the live bind-loop is EmoteEngine::progress
+    // @ ~line 1939 and the live clamp is player().applyClampControlsLike_0x67C8A8()
+    // @ ~EmoteEngine.cpp:1963. Kept as the faithful model of the dead binary fn; do
+    // NOT call it from any progress path (that would double-bind / double-clamp).
     void Player::applyEvalResultPostProcessLike_0x67CC9C() {
         for(auto &entry : _evalResultList) {
             accumulateTimelineContributionLike_0x67C560(entry.label, entry.value);
@@ -1452,7 +1493,24 @@ namespace internal {
             remainingControllerStep -= controllerDt;
         }
 
-        applyEvalResultPostProcessLike_0x67CC9C();
+        // EMOTE POST-PROCESS MIGRATED OUT (2026-06-03 approved topology refactor).
+        // The binary Player_progress_inner @0x6C106C (which frameProgress models)
+        // contains NO HM7 bind-loop and NO clampControl binder — both live ONLY in
+        // EmoteEngine_progress @0x6818B4 (bind-loop @0x67d3a4, sub_67C8A8 clamp
+        // @0x67d3f8), BEFORE the step-7 Player progress sub_6D2A54 @0x67d408. The
+        // child-motion pass @0x6BE2A4 also calls progress_inner directly, with no
+        // post-process. Re-confirmed by fresh decompile of 0x6C106C / 0x6BE2A4 /
+        // 0x6818B4 / 0x67C8A8 this round. The post-process (bind-loop + cascade +
+        // clamp) was previously run here via applyEvalResultPostProcessLike_0x67CC9C
+        // — that was the WRONG topological location (it placed the emote-only clamp
+        // on the generic Player progress path, where the binary has none, and
+        // double-ran the bind-loop already present in EmoteEngine::progress). It now
+        // runs solely in EmoteEngine::progress (HM7 bind-loop @ ~line 1939 +
+        // applyClampControlsLike_0x67C8A8 @ ~line 1963). The logo path
+        // (Motion.Player.progress -> progressMsLike -> frameProgress) has no emote
+        // controllers and no clampControls, so removing the call here is byte-
+        // identical for logo (the post-process body was a no-op on empty
+        // _evalResultList / empty clampControls).
 
         // Camera velocity/friction moved to updateLayers pre-loop (0x6BB360..0x6BB42C)
 

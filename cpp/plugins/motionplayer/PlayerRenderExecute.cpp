@@ -463,6 +463,7 @@ namespace motion {
                 iTJSDispatch2 *targetLayerObject,
                 tTJSNI_BaseLayer *targetLayer,
                 iTVPBaseBitmap *srcImage,
+                const tTJSVariant &sourceObject,
                 const tTVPRect &sourceRect,
                 const char *branch) -> bool {
             if(!targetLayerObject || !targetLayer) {
@@ -517,11 +518,24 @@ namespace motion {
                     item.localCorners[6],
                     item.localCorners[7]);
             }
+            // libkrkr2.so sub_6C7440 routes the per-item leaf copy through the
+            // target Layer's TJS methods via FuncCall (affineCopy/meshCopy/
+            // bezierPatchCopy on the leaf-layer instance). The leaf layer is
+            // sized to the clip rect and the points are pre-translated to be
+            // clip-local (corners/meshPoints already had -0.5-clipOrigin baked
+            // in during build), so the dispatch uses a zero extra offset.
+            if(sourceObject.Type() != tvtObject ||
+               !sourceObject.AsObjectNoAddRef()) {
+                return false;
+            }
             if(item.meshType == 0) {
                 const auto localPts =
                     buildAffineTrianglePoints(item.localCorners, 0.0f, 0.0f);
-                targetLayer->AffineCopy(localPts.data(), srcImage,
-                                        sourceRect, stNearest, _clearEnabled);
+                if(TJS_FAILED(callLayerAffineCopyLike_0x6C7440(
+                       targetLayerObject, localPts.data(), sourceObject,
+                       sourceRect, stNearest, _clearEnabled))) {
+                    return false;
+                }
 #if defined(KRKR2_WASMTIME_HEADLESS)
                 recordPostDrawCandidate(
                     targetLayerObject,
@@ -532,29 +546,37 @@ namespace motion {
                    item.meshDivY < 2) {
                     return false;
                 }
-                auto localMeshPoints =
-                    buildMeshPoints(item.localMeshPoints, 0.0f, 0.0f);
+                iTJSDispatch2 *meshArray =
+                    buildMeshPointTJSArrayLike_0x6C715C(item.localMeshPoints,
+                                                        0.0f, 0.0f);
+                if(!meshArray) {
+                    return false;
+                }
+                tjs_error meshResult = TJS_E_FAIL;
                 if(item.meshType == 1) {
-                    targetLayer->BezierPatchCopy(
-                        localMeshPoints.data(), item.meshDivX,
-                        item.meshDivY, srcImage, sourceRect, stNearest,
-                        _clearEnabled);
+                    meshResult = callLayerBezierPatchCopyLike_0x6C7440(
+                        targetLayerObject, sourceObject, sourceRect, meshArray,
+                        item.meshDivX, item.meshDivY, stNearest, _clearEnabled);
 #if defined(KRKR2_WASMTIME_HEADLESS)
                     recordPostDrawCandidate(
                         targetLayerObject,
                         "Player::executeLayerRenderCommands.item.afterBezierPatchCopy");
 #endif
                 } else if(item.meshType == 2) {
-                    targetLayer->MeshCopy(localMeshPoints.data(),
-                                          item.meshDivX, item.meshDivY,
-                                          srcImage, sourceRect, stNearest,
-                                          _clearEnabled);
+                    meshResult = callLayerMeshCopyLike_0x6C7440(
+                        targetLayerObject, sourceObject, sourceRect, meshArray,
+                        item.meshDivX, item.meshDivY, stNearest, _clearEnabled);
 #if defined(KRKR2_WASMTIME_HEADLESS)
                     recordPostDrawCandidate(
                         targetLayerObject,
                         "Player::executeLayerRenderCommands.item.afterMeshCopy");
 #endif
                 } else {
+                    meshArray->Release();
+                    return false;
+                }
+                meshArray->Release();
+                if(TJS_FAILED(meshResult)) {
                     return false;
                 }
             }
@@ -628,13 +650,25 @@ namespace motion {
                 return false;
             }
 
+            (void)candidateLayer;
             const float offsetX = -0.5f - clipLeft;
             const float offsetY = -0.5f - clipTop;
+            // Keep the SLA checkpoint copy consistent with the converted main
+            // path: dispatch affineCopy/meshCopy/bezierPatchCopy through the
+            // candidate Layer instance via FuncCall (clear=1, matching
+            // sub_6C9CA8's affineCopy(clear=1) sizing pass).
+            if(source.object.Type() != tvtObject ||
+               !source.object.AsObjectNoAddRef()) {
+                return false;
+            }
             if(item.meshType == 0) {
                 const auto localPts =
                     buildAffineTrianglePoints(item.corners, offsetX, offsetY);
-                candidateLayer->AffineCopy(localPts.data(), source.image,
-                                           sourceRect, stNearest, true);
+                if(TJS_FAILED(callLayerAffineCopyLike_0x6C7440(
+                       candidateLayerObject, localPts.data(), source.object,
+                       sourceRect, stNearest, true))) {
+                    return false;
+                }
                 recordPostDrawCandidate(
                     candidateLayerObject,
                     "Player::executeLayerRenderCommands.accurateSla.item.afterAffineCopy");
@@ -644,27 +678,34 @@ namespace motion {
                item.meshDivY < 2) {
                 return false;
             }
-            auto localMeshPoints =
-                buildMeshPoints(item.meshPoints, offsetX, offsetY);
+            iTJSDispatch2 *meshArray =
+                buildMeshPointTJSArrayLike_0x6C715C(item.meshPoints, offsetX,
+                                                    offsetY);
+            if(!meshArray) {
+                return false;
+            }
+            bool ok = false;
             if(item.meshType == 1) {
-                candidateLayer->BezierPatchCopy(
-                    localMeshPoints.data(), item.meshDivX, item.meshDivY,
-                    source.image, sourceRect, stNearest, true);
-                recordPostDrawCandidate(
-                    candidateLayerObject,
-                    "Player::executeLayerRenderCommands.accurateSla.item.afterBezierPatchCopy");
-                return true;
+                ok = TJS_SUCCEEDED(callLayerBezierPatchCopyLike_0x6C7440(
+                    candidateLayerObject, source.object, sourceRect, meshArray,
+                    item.meshDivX, item.meshDivY, stNearest, true));
+                if(ok) {
+                    recordPostDrawCandidate(
+                        candidateLayerObject,
+                        "Player::executeLayerRenderCommands.accurateSla.item.afterBezierPatchCopy");
+                }
+            } else if(item.meshType == 2) {
+                ok = TJS_SUCCEEDED(callLayerMeshCopyLike_0x6C7440(
+                    candidateLayerObject, source.object, sourceRect, meshArray,
+                    item.meshDivX, item.meshDivY, stNearest, true));
+                if(ok) {
+                    recordPostDrawCandidate(
+                        candidateLayerObject,
+                        "Player::executeLayerRenderCommands.accurateSla.item.afterMeshCopy");
+                }
             }
-            if(item.meshType == 2) {
-                candidateLayer->MeshCopy(
-                    localMeshPoints.data(), item.meshDivX, item.meshDivY,
-                    source.image, sourceRect, stNearest, true);
-                recordPostDrawCandidate(
-                    candidateLayerObject,
-                    "Player::executeLayerRenderCommands.accurateSla.item.afterMeshCopy");
-                return true;
-            }
-            return false;
+            meshArray->Release();
+            return ok;
         };
 #endif
         auto chooseItemOutputLayerObject =
@@ -848,7 +889,7 @@ namespace motion {
             }
 
             if(!renderItemSourceToLayer(item, leafLayerObject, leafLayer,
-                                        source.image, sourceRect,
+                                        source.image, source.object, sourceRect,
                                         "item.leaf.affineCopy")) {
                 return false;
             }
@@ -943,10 +984,15 @@ namespace motion {
                 if(childOpacity <= 0) {
                     continue;
                 }
-                composedLayer->OperateRect(
+                (void)childOutputLayer;
+                // libkrkr2.so sub_6C7440 composes each visible child into the
+                // parent work layer via FuncCall(L"operateRect") on the
+                // composed-layer instance, source = child work layer object.
+                callLayerOperateRectLike_0x6C7440(
+                    composedLayerObject,
                     child.builtRect[0] - item.clipRect[0],
                     child.builtRect[1] - item.clipRect[1],
-                    childOutputLayer->GetMainImage(),
+                    tTJSVariant(childOutputLayerObject, childOutputLayerObject),
                     childLocalRect,
                     childBlendMode,
                     childOpacity);
@@ -1086,8 +1132,21 @@ namespace motion {
                            item.meshDivX < 2 || item.meshDivY < 2) {
                             continue;
                         }
-                        auto worldMeshPoints =
-                            buildMeshPoints(item.meshPoints, -0.5f, -0.5f);
+                        // libkrkr2.so sub_6C7440 operateMesh/operateBezierPatch
+                        // blocks build the point array with a -0.5,-0.5 world
+                        // offset (0xBF000000BF000000) and dispatch through the
+                        // render-layer instance via FuncCall. The clear flag in
+                        // those blocks is 0; the local _clearEnabled gate is
+                        // already false on the direct path
+                        // (shouldUseDirectRenderPathLike_0x6C7440 requires
+                        // !clearEnabled), so it is preserved here verbatim.
+                        iTJSDispatch2 *meshArray =
+                            buildMeshPointTJSArrayLike_0x6C715C(
+                                item.meshPoints, -0.5f, -0.5f);
+                        if(!meshArray) {
+                            continue;
+                        }
+                        tjs_error meshResult = TJS_E_FAIL;
                         if(item.meshType == 1) {
                             branch = "direct.operateBezierPatch";
 #if defined(KRKR2_WASMTIME_HEADLESS)
@@ -1095,10 +1154,12 @@ namespace motion {
                                 "Player::executeLayerRenderCommands.direct.beforeOperateBezierPatch",
                                 "before");
 #endif
-                            renderLayer->OperateBezierPatch(
-                                worldMeshPoints.data(), item.meshDivX,
-                                item.meshDivY, source.image, sourceRect,
-                                blendMode, opa, stNearest, _clearEnabled);
+                            meshResult =
+                                callLayerOperateBezierPatchLike_0x6C7440(
+                                    renderLayerObject, source.object,
+                                    sourceRect, meshArray, item.meshDivX,
+                                    item.meshDivY, blendMode, opa,
+                                    _clearEnabled);
 #if defined(KRKR2_WASMTIME_HEADLESS)
                             emitDirectProbe(
                                 "Player::executeLayerRenderCommands.direct.afterOperateBezierPatch",
@@ -1111,16 +1172,21 @@ namespace motion {
                                 "Player::executeLayerRenderCommands.direct.beforeOperateMesh",
                                 "before");
 #endif
-                            renderLayer->OperateMesh(
-                                worldMeshPoints.data(), item.meshDivX,
-                                item.meshDivY, source.image, sourceRect,
-                                blendMode, opa, stNearest, _clearEnabled);
+                            meshResult = callLayerOperateMeshLike_0x6C7440(
+                                renderLayerObject, source.object, sourceRect,
+                                meshArray, item.meshDivX, item.meshDivY,
+                                blendMode, opa, _clearEnabled);
 #if defined(KRKR2_WASMTIME_HEADLESS)
                             emitDirectProbe(
                                 "Player::executeLayerRenderCommands.direct.afterOperateMesh",
                                 "after");
 #endif
                         } else {
+                            meshArray->Release();
+                            continue;
+                        }
+                        meshArray->Release();
+                        if(TJS_FAILED(meshResult)) {
                             continue;
                         }
                     }
@@ -1166,9 +1232,16 @@ namespace motion {
                 }
 
                 const auto localRect = localRectFromItem(item);
-                renderLayer->OperateRect(item.clipRect[0], item.clipRect[1],
-                                         outputLayer->GetMainImage(), localRect,
-                                         blendMode, opa);
+                (void)outputLayer;
+                // libkrkr2.so sub_6C7440 submits the buffered work layer to the
+                // render layer via FuncCall(L"operateRect") on the render-layer
+                // instance, passing the work layer object as the source.
+                if(TJS_FAILED(callLayerOperateRectLike_0x6C7440(
+                       renderLayerObject, item.clipRect[0], item.clipRect[1],
+                       tTJSVariant(outputLayerObject, outputLayerObject),
+                       localRect, blendMode, opa))) {
+                    continue;
+                }
                 detail::logoChainTraceLogf(
                     motionPath, "execute.copy", "0x6C7440", _clampedEvalTime,
                     "branch={} nodeIndex={} clipRect=[{},{},{},{}] dirtyRect=[{},{},{},{}] blendMode={} opacity={} packedColor=[0x{:08x},0x{:08x},0x{:08x},0x{:08x}] effectiveColor=[{},{},{},{}] visibleAncestorIndex={} clearEnabled={} renderPath=buffered outputLayer={}x{} renderLayer={}x{} childCount={} phase={}",

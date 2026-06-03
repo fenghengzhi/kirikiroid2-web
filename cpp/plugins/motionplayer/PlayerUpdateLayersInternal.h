@@ -490,8 +490,10 @@ namespace {
     // walks a red-black tree comparing wide strings (sub_9B1ED0); we use
     // std::map::find. Callers pass the raw lookup string (motionDtgt etc.)
     // verbatim, exactly as the binary feeds sub_6F2228.
-    static int findNodeByLabel(const std::map<std::string, int> &labelMap,
+    static int findNodeByLabel(const motion::detail::NodeLabelMap &labelMap,
                                const std::string &label) {
-        auto it = labelMap.find(label);
+        // Player+24 map is ttstr-keyed (UTF-16 comparator sub_9B1ED0); widen
+        // the raw std::string lookup label to match the binary's key type.
+        auto it = labelMap.find(motion::detail::widen(label));
         return (it != labelMap.end()) ? it->second : -1;
     }

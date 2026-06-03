@@ -1,6 +1,9 @@
 - [EmoteVarController alignment](emotevarcontroller_alignment.md) — ctor 0x667030 / step 0x666BF8 data flow, allocation size, inverted lerp roles
 - [EmoteEngine 1496B layout](emoteengine_1496b_hashmap_layout.md) — verified byte map: 7 inline unordered_maps + 4 vectors (NOT byte blocks); _bindListHead aliases HM7
 - [sub_6C4E28 build/execute split](sub6C4E28_build_execute_split.md) — requireLayerId materialization (item+20/+424) belongs in BUILD loop; port wrongly moved it to EXECUTE → render-step build_flow_mismatch
+- [0x6C7440/0x6C4E28 draw dispatch contract](sub6C7440_6C4E28_dispatch_contract.md) — all draw prims go through FuncCall(vtbl+16) w/ UTF-16 keys+argc; local Layer registers only 4 of 12 needed TJS methods → migration LARGE not low-risk, reported for approval
 - [sub_6C2334 item+18 a6 propagation](sub6C2334_item18_a6_propagation.md) — item+18=(a6&1)||(node+48!=0); a6 propagates across child-Player recursion via NODE priorDraw, not Player _priorDraw (was 1.5 always-true bug); node+48 is bool not raw int
 - [viewport floor/ceil in sub_6C2334](viewport_floorceil_in_sub6C2334.md) — item+200..212 viewport rounded floor/floor/ceil/ceil by item-builder sub_6C2334 @0x6c2950, NOT sub_6C4E28 (which only reads vp, folds floor/ceil into FLOAT clipRect item+216..228)
 - [Player NCB table 0x6D69C8](player_ncb_0x6D69C8_registration.md) — authoritative Motion.Player members: 58 props(41RW+17RO)+32 methods; RO=null setter slot STP XZR,XZR,[+0x40]; colorWeight≠independentLayerInherit; onAction/onSync/onGroundCorrection are no-op methods
+- [Player hashmap key types](player_hashmap_key_types.md) — all 4 HMs + Player+24 node-index map are ttstr(UTF-16)-keyed; hash @0x686944, std::map comparator @0x9B1ED0
+- [D3DEmotePlayer NCB 0x52E504](d3demoteplayer_ncb_0x52E504.md) — 4 deliberate NAME/callback mismatches (bustScale/modified/setTimelineBlendRatio/pass); real names absent → port aliases removed

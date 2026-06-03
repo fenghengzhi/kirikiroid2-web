@@ -5,6 +5,7 @@
 #include "ConfigManager/IndividualConfigManager.h"
 #include "MotionTraceWeb.h"
 #include "RenderManager.h"
+#include "tjsArray.h"
 
 using namespace motion::internal;
 
@@ -91,6 +92,200 @@ namespace motion::internal::render_detail {
         return layerClassObject.AsObjectNoAddRef()->FuncCall(
             0, TJS_W("operateAffine"), &operateAffineHint, nullptr, 15, args,
             renderLayerObject);
+    }
+
+    tjs_error callLayerAffineCopyLike_0x6C7440(
+        iTJSDispatch2 *renderLayerObject,
+        const tTVPPointD *points,
+        const tTJSVariant &sourceObject,
+        const tTVPRect &sourceRect,
+        tTVPBBStretchType type,
+        bool clear) {
+        if(!renderLayerObject || !points ||
+           sourceObject.Type() != tvtObject ||
+           !sourceObject.AsObjectNoAddRef()) {
+            return TJS_E_FAIL;
+        }
+        // libkrkr2.so sub_6C7440 L"affineCopy" block (argc=14, points mode):
+        // [src, sx, sy, sw, sh, useMatrix=false, x0, y0, x1, y1, x2, y2,
+        //  type, clear]. Dispatched on the render-layer instance.
+        tTJSVariant sourceArg(sourceObject);
+        tTJSVariant srcLeft(sourceRect.left);
+        tTJSVariant srcTop(sourceRect.top);
+        tTJSVariant srcWidth(sourceRect.get_width());
+        tTJSVariant srcHeight(sourceRect.get_height());
+        tTJSVariant useAffineMatrix(false);
+        tTJSVariant x0(points[0].x);
+        tTJSVariant y0(points[0].y);
+        tTJSVariant x1(points[1].x);
+        tTJSVariant y1(points[1].y);
+        tTJSVariant x2(points[2].x);
+        tTJSVariant y2(points[2].y);
+        tTJSVariant typeArg(static_cast<tjs_int32>(type));
+        tTJSVariant clearArg(static_cast<tjs_int32>(clear ? 1 : 0));
+        tTJSVariant *args[] = {
+            &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
+            &useAffineMatrix, &x0, &y0, &x1, &y1, &x2, &y2,
+            &typeArg, &clearArg,
+        };
+        tjs_uint32 hint = 0;
+        return renderLayerObject->FuncCall(0, TJS_W("affineCopy"), &hint,
+                                           nullptr, 14, args,
+                                           renderLayerObject);
+    }
+
+    tjs_error callLayerOperateRectLike_0x6C7440(
+        iTJSDispatch2 *renderLayerObject,
+        tjs_int destX,
+        tjs_int destY,
+        const tTJSVariant &sourceObject,
+        const tTVPRect &sourceRect,
+        tTVPBlendOperationMode blendMode,
+        tjs_int opacity) {
+        if(!renderLayerObject || sourceObject.Type() != tvtObject ||
+           !sourceObject.AsObjectNoAddRef()) {
+            return TJS_E_FAIL;
+        }
+        // libkrkr2.so sub_6C7440 L"operateRect" block (argc=9):
+        // [dx, dy, src, sx, sy, sw, sh, mode, opa]. Dispatched on the
+        // render-layer instance. The registered Layer.operateRect method
+        // resolves the source object's main image internally.
+        tTJSVariant dx(destX);
+        tTJSVariant dy(destY);
+        tTJSVariant sourceArg(sourceObject);
+        tTJSVariant srcLeft(sourceRect.left);
+        tTJSVariant srcTop(sourceRect.top);
+        tTJSVariant srcWidth(sourceRect.get_width());
+        tTJSVariant srcHeight(sourceRect.get_height());
+        tTJSVariant mode(static_cast<tjs_int32>(blendMode));
+        tTJSVariant opa(static_cast<tjs_int32>(opacity));
+        tTJSVariant *args[] = {
+            &dx, &dy, &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
+            &mode, &opa,
+        };
+        tjs_uint32 hint = 0;
+        return renderLayerObject->FuncCall(0, TJS_W("operateRect"), &hint,
+                                           nullptr, 9, args, renderLayerObject);
+    }
+
+    iTJSDispatch2 *buildMeshPointTJSArrayLike_0x6C715C(
+        const std::vector<float> &points, float xOffset, float yOffset) {
+        // Mirror sub_6C715C @ 0x6C715C: produce a TJS Array of interleaved
+        // doubles (x,y,x,y,...) with each coordinate translated by the
+        // (xOffset,yOffset) the binary applies before the copy/operate call.
+        iTJSDispatch2 *array = TJSCreateArrayObject();
+        if(!array) {
+            return nullptr;
+        }
+        tjs_int index = 0;
+        for(size_t i = 0; i + 1 < points.size(); i += 2) {
+            tTJSVariant x(static_cast<tjs_real>(points[i] + xOffset));
+            tTJSVariant y(static_cast<tjs_real>(points[i + 1] + yOffset));
+            array->PropSetByNum(TJS_MEMBERENSURE, index++, &x, array);
+            array->PropSetByNum(TJS_MEMBERENSURE, index++, &y, array);
+        }
+        return array;
+    }
+
+    // Common packer for the copy-family (meshCopy/bezierPatchCopy, argc=10) and
+    // operate-family (operateMesh/operateBezierPatch, argc=11) primitives. The
+    // arg layout matches the binary's packed FuncCall arrays in sub_6C7440 /
+    // sub_6C4E28 exactly:
+    //   copy:    [src, sx=0, sy=0, sw, sh, points, divx, divy, type, clear]
+    //   operate: [src, sx=0, sy=0, sw, sh, points, divx, divy, mode, opa, clear]
+    static tjs_error callLayerMeshFamilyLike_0x6C7440(
+        const tjs_char *methodName,
+        iTJSDispatch2 *renderLayerObject,
+        const tTJSVariant &sourceObject,
+        const tTVPRect &sourceRect,
+        iTJSDispatch2 *meshPointArray,
+        tjs_int divx,
+        tjs_int divy,
+        bool isOperate,
+        tTVPBlendOperationMode blendMode,
+        tjs_int opacity,
+        tTVPBBStretchType type,
+        bool clear) {
+        if(!renderLayerObject || !meshPointArray ||
+           sourceObject.Type() != tvtObject ||
+           !sourceObject.AsObjectNoAddRef()) {
+            return TJS_E_FAIL;
+        }
+
+        tTJSVariant sourceArg(sourceObject);
+        tTJSVariant srcLeft(sourceRect.left);
+        tTJSVariant srcTop(sourceRect.top);
+        tTJSVariant srcWidth(sourceRect.get_width());
+        tTJSVariant srcHeight(sourceRect.get_height());
+        tTJSVariant pointsArg(meshPointArray, meshPointArray);
+        tTJSVariant divxArg(divx);
+        tTJSVariant divyArg(divy);
+
+        if(isOperate) {
+            // operateMesh / operateBezierPatch: argc=11
+            tTJSVariant modeArg(static_cast<tjs_int32>(blendMode));
+            tTJSVariant opaArg(static_cast<tjs_int32>(opacity));
+            tTJSVariant clearArg(static_cast<tjs_int32>(clear ? 1 : 0));
+            tTJSVariant *args[] = {
+                &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
+                &pointsArg, &divxArg, &divyArg, &modeArg, &opaArg, &clearArg,
+            };
+            tjs_uint32 hint = 0;
+            return renderLayerObject->FuncCall(0, methodName, &hint, nullptr,
+                                               11, args, renderLayerObject);
+        }
+
+        // meshCopy / bezierPatchCopy: argc=10
+        tTJSVariant typeArg(static_cast<tjs_int32>(type));
+        tTJSVariant clearArg(static_cast<tjs_int32>(clear ? 1 : 0));
+        tTJSVariant *args[] = {
+            &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
+            &pointsArg, &divxArg, &divyArg, &typeArg, &clearArg,
+        };
+        tjs_uint32 hint = 0;
+        return renderLayerObject->FuncCall(0, methodName, &hint, nullptr, 10,
+                                           args, renderLayerObject);
+    }
+
+    tjs_error callLayerMeshCopyLike_0x6C7440(
+        iTJSDispatch2 *renderLayerObject, const tTJSVariant &sourceObject,
+        const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
+        tjs_int divy, tTVPBBStretchType type, bool clear) {
+        return callLayerMeshFamilyLike_0x6C7440(
+            TJS_W("meshCopy"), renderLayerObject, sourceObject, sourceRect,
+            meshPointArray, divx, divy, false, omAlpha, 255, type, clear);
+    }
+
+    tjs_error callLayerBezierPatchCopyLike_0x6C7440(
+        iTJSDispatch2 *renderLayerObject, const tTJSVariant &sourceObject,
+        const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
+        tjs_int divy, tTVPBBStretchType type, bool clear) {
+        return callLayerMeshFamilyLike_0x6C7440(
+            TJS_W("bezierPatchCopy"), renderLayerObject, sourceObject,
+            sourceRect, meshPointArray, divx, divy, false, omAlpha, 255, type,
+            clear);
+    }
+
+    tjs_error callLayerOperateMeshLike_0x6C7440(
+        iTJSDispatch2 *renderLayerObject, const tTJSVariant &sourceObject,
+        const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
+        tjs_int divy, tTVPBlendOperationMode blendMode, tjs_int opacity,
+        bool clear) {
+        return callLayerMeshFamilyLike_0x6C7440(
+            TJS_W("operateMesh"), renderLayerObject, sourceObject, sourceRect,
+            meshPointArray, divx, divy, true, blendMode, opacity, stNearest,
+            clear);
+    }
+
+    tjs_error callLayerOperateBezierPatchLike_0x6C7440(
+        iTJSDispatch2 *renderLayerObject, const tTJSVariant &sourceObject,
+        const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
+        tjs_int divy, tTVPBlendOperationMode blendMode, tjs_int opacity,
+        bool clear) {
+        return callLayerMeshFamilyLike_0x6C7440(
+            TJS_W("operateBezierPatch"), renderLayerObject, sourceObject,
+            sourceRect, meshPointArray, divx, divy, true, blendMode, opacity,
+            stNearest, clear);
     }
 
     std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor) {
