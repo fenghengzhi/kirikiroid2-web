@@ -866,6 +866,24 @@ namespace motion {
         // the inlined step (sub_6B786C) + merge (sub_6B7A70). Inert for every
         // currently-available motion (none expose a populated "variable" list).
         void advanceVariableTracksLike_0x6B6ADC(double clampedEvalTime);
+        // libkrkr2.so var-track stream ③ REVERSE form — the backward-play
+        // counterpart inside Player_rewindRootAndNodes (0x6B9A3C, var-track loop
+        // 0x6B9FCC..0x6BA038). Same two-slot bracketing as the forward stepper
+        // but: (a) the inner loop steps while the ACTIVE slot's time > target
+        // (vs forward's other.time < target), (b) it steps the OTHER slot to
+        // (active.frameIndex - 1) — the decrement direction (vs forward's +1),
+        // and (c) the post-loop merge writes slot[0] then slot[1] (vs forward's
+        // slot[0] twice). Inert for every currently-available motion (none
+        // expose a populated "variable" list).
+        void rewindVariableTracksLike_0x6B9A3C(double clampedEvalTime);
+        // libkrkr2.so var-track reseed inside Player_reseekTimelineCursors
+        // (0x6B86C8, var-track block 0x6B8F30..0x6B8F60). The non-incremental
+        // re-seed form: per track, scans its keyframe list to k, clamps
+        // v41=min(k,count-2), then steps+merges slot[0] to v41 and slot[1] to
+        // v41+1 (both slots fresh — NOT the active/other toggle), and resets the
+        // activeSlotCursor (item+8) to 0. Called from the firstFrame seed and the
+        // two loop-wrap reseek points. Inert for every currently-available motion.
+        void reseedVariableTracksLike_0x6B86C8(double clampedEvalTime);
         // libkrkr2.so Player_interpolateVarTrackValues @0x6BBE20 — the var-track
         // item+16 writer (the value HM4 caches). Called at the start of
         // Player_resetMotionState_clearAndRebuild before its loop2 snapshots
@@ -1375,18 +1393,12 @@ namespace motion {
             double ease = 0.0;
         } _emoteColorState;
 
-        struct WindState {
-            bool active = false;
-            double minAngle = 0.0;
-            double maxAngle = 0.0;
-            double amplitude = 0.0;
-            double freqX = 0.0;
-            double freqY = 0.0;
-            double phase = 0.0;
-            double prevPhase = 0.0;
-            double scaledAmplitude = 0.0;
-            int counter = 0;
-        } _windState;
+        // The wind emitter state was a functional-equivalent invention; it has
+        //   been replaced by the faithful EmoteWindEmitter object (heap-owned at
+        //   EmoteEngine+1128) plus the engine-side wind param cache
+        //   (EmoteEngine::_windMin/_windMax/_windAmp/_windFreqX/_windFreqY).
+        //   Player::startWind/stopWind populate them via _engineBack, matching
+        //   Player_startWind_populate (sub_6709AC). See EmoteWindEmitter.{h,cpp}.
 
         struct OuterForceState {
             bool active = false;

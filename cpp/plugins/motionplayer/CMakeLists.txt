@@ -10,12 +10,14 @@ target_sources(${PROJECT_NAME} PUBLIC
     EmoteSpring.cpp
     EmoteVarController.cpp
     EmoteAngleController.cpp
+    EmoteMeshResolver.cpp
     EmoteBlinkController.cpp
     EmoteEyebrowController.cpp
     EmoteMouthController.cpp
     EmoteSelectorController.cpp
     EmoteLoopController.cpp
     EmoteBlinkRng.cpp
+    EmoteWindEmitter.cpp
     PlayerCore.cpp
     PlayerFrameProgress.cpp
     PlayerFrameStep.cpp

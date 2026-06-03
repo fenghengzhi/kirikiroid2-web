@@ -40,6 +40,7 @@
 #include "EmoteMouthController.h"
 #include "EmoteSelectorController.h"
 #include "EmoteLoopController.h"
+#include "EmoteWindEmitter.h"
 #include "internal/player_containers.h"
 #include "internal/legacy_variable_state.h"
 #include "internal/ttstr_hash.h"
@@ -597,15 +598,29 @@ namespace motion {
         // +1120: EmoteVarController* count=2 — Bust #2 physics target
         EmoteVarController*   _ctlBust2Target = nullptr;
 
-        // +1128: heap pointer (transform/matrix alloc). ctor zeroes it; dtor
-        //   does `if (p) operator delete(p)`. Allocation site is in a setup
-        //   path not reversed here. PLATFORM_BOUNDARY: payload semantics TODO.
-        void* _matrixHeap1128 = nullptr; // +1128
+        // +1128: EmoteWindEmitter* — the wind particle emitter heap object
+        //   (operator new(0x61C), 1564B). ctor zeroes it; allocated lazily by
+        //   Player_startWind_populate (sub_6709AC), freed there (and by
+        //   stopWind) with operator delete. Advanced per frame-slice via the
+        //   gated EmoteWindEmitter_step (sub_6687E8) in progress, and also fed
+        //   to the bust/hair springs as their collisionCurve input
+        //   (EmoteEngine_stepBust @0x67bea4: `spring->collisionCurve = *(+1128)`).
+        //   (Was previously the untyped _matrixHeap1128 placeholder.)
+        EmoteWindEmitter* _windEmitter = nullptr; // +1128
 
-        // +1136..+1158: zeroed scalar/state region (a1[141..143] OWORDs in ctor).
-        // PLATFORM_BOUNDARY: semantics not reversed; kept as raw filler so the
-        //   typed fields below land at their documented offsets logically.
-        uint8_t _stateRegion_1136_1158[1159 - 1136] = {}; // 23B
+        // +1136..+1152: wind parameter cache, written by Player_startWind_populate
+        //   (sub_6709AC). All floats. +1136 normalizedMin (v9), +1140
+        //   normalizedMax (v10), +1144 |amplitude| (v6), +1148 freqX (a5), +1152
+        //   freqY (a6). +1136/+1140 are also read back by startWind to decide
+        //   whether to reuse the existing emitter (same start/end) or rebuild.
+        float _windMin   = 0.f; // +1136
+        float _windMax   = 0.f; // +1140
+        float _windAmp   = 0.f; // +1144
+        float _windFreqX = 0.f; // +1148
+        float _windFreqY = 0.f; // +1152
+        // +1156..+1158: remaining bytes of the original a1[143] OWORD region;
+        //   zeroed in ctor, no reads observed. Kept as filler for documentation.
+        uint8_t _stateRegion_1156_1158[1159 - 1156] = {}; // 3B
 
         // +1159: byte syncWaiting — read by progress physics-only pass
         //   (dt!=0 && !syncWaiting@1159).

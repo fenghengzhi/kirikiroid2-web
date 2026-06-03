@@ -127,14 +127,14 @@ namespace motion {
         }
         if (edge) {
             const int count = static_cast<int>(edge->size()); // Motion_propGetCount
-            self->edgeTable.reserve(static_cast<size_t>(count));
+            self->mesh.edgeTable.reserve(static_cast<size_t>(count));
             for (int i = 0; i < count; ++i) {
                 const auto sub = dynamic_cast<const PSB::PSBList*>(
                     (*edge)[i].get());
                 const int x = psbArrayInt(sub, 0); // sub_6637BC(elem,0)
                 const int y = psbArrayInt(sub, 1); // sub_6637BC(elem,1)
-                self->edgeTable.emplace_back(static_cast<float>(x),
-                                             static_cast<float>(y));
+                self->mesh.edgeTable.emplace_back(static_cast<float>(x),
+                                                  static_cast<float>(y));
             }
         }
 
@@ -157,7 +157,7 @@ namespace motion {
                 for (int j = 0; j < rowCount; ++j) {
                     row.push_back(static_cast<float>(psbArrayInt(sub, j)));
                 }
-                self->nodeRows.push_back(std::move(row));
+                self->mesh.nodeRows.push_back(std::move(row));
             }
         }
     }
@@ -240,25 +240,18 @@ namespace motion {
                     self->valueTrack12B.queue.front(); // {endRad,duration,powCount}
                 self->valueTrack12B.queue.pop_front();  // advance +16 / free block
 
-                // SCOPE BOUNDARY (sub_661F7C @0x661F7C -> sub_660028, 1925-line
-                //   edge-table node-value-row mesh resolver). The binary calls
-                //   sub_661F7C(self+160, self+80, trackValue, kf.endRad) to
+                // Mesh resolver (sub_661F7C @0x661F7C -> sub_660028). The binary
+                //   calls sub_661F7C(self+160, self+80, trackValue, kf.endRad) to
                 //   rebuild the 8B value track (valueTrack8B) from the resolved
-                //   eye mesh rows (edgeTable + nodeRows). That mesh-resolver is a
-                //   SEPARATE large vertical and is NOT ported here; the call site
-                //   is kept as a documented anchor. Consequence: the 8B track is
-                //   not repopulated, so on the NEXT step the while(v5==1) loop
-                //   sees an empty track and returns to trackState 0 — i.e. the
-                //   track interpolation is inert until the resolver lands, while
-                //   trackValue holds the popped position. The blink machine +
-                //   final remap below are fully faithful and unaffected.
-                // resolveEyeMeshTrack_0x661F7C(self, self->trackValue, kf.endRad);
+                //   eye mesh rows (mesh.edgeTable + mesh.nodeRows) and to write the
+                //   resolved span to mesh.trackResolvedSpan(+288). Faithful port.
+                EmoteMeshResolver_resolve(&self->mesh, &self->valueTrack8B,
+                                          self->trackValue, kf.endRad);
 
                 // trackAccum=0; trackSpan=trackResolvedSpan(+288); invDur=1/dur;
-                //   pow=powCount. +288 is written by sub_661F7C (SCOPE BOUNDARY)
-                //   above; without the resolver it stays 0 so span==0 here.
+                //   pow=powCount. +288 was written by sub_661F7C just above.
                 self->trackAccum  = 0.0f;                   // *(a1+316)=0
-                self->trackSpan   = self->trackResolvedSpan;// *(a1+312)=*(a1+288)
+                self->trackSpan   = self->mesh.trackResolvedSpan;// *(a1+312)=*(a1+288)
                 self->trackInvDur = 1.0f / kf.duration;     // *(a1+320)=1/v11
                 // trackPow(+324) = keyframe[+8] RAW BITS. The binary copies the
                 //   keyframe's powCount dword (v12 = *(_DWORD*)(v10+8)) into

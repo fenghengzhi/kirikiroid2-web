@@ -1208,6 +1208,212 @@ namespace internal {
         }
     }
 
+    void Player::rewindVariableTracksLike_0x6B9A3C(double clampedEvalTime) {
+        // Aligned with libkrkr2.so Player_rewindRootAndNodes var-track loop at
+        // 0x6B9FCC (the for(i=0;...) over the Player+1296 deque, body
+        // 0x6B9FEC..0x6BA038). Backward-play counterpart of
+        // advanceVariableTracksLike_0x6B6ADC (0x6B7124). For each
+        // VariableLabelScope walk its two 56B slots backward so they re-bracket
+        // clampedEvalTime (+456), then merge slot[0] and slot[1]. step =
+        // sub_6B786C (inlined), merge = sub_6B7A70 (inlined), both identical to
+        // the forward port's helpers. Inert when frameSource is not a keyframe
+        // list (binary PropGetCount ~0 → loop never runs); true for every
+        // currently-available motion (no fixture exposes a populated "variable"
+        // list — see analysis/Player_4_HashMaps_Container_Mapping.md §四之二).
+        const auto numValue =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            if (!n) return 0.0;
+            switch (n->numberType) {
+                case PSB::PSBNumberType::Float:  return n->getValue<float>();
+                case PSB::PSBNumberType::Double: return n->getValue<double>();
+                case PSB::PSBNumberType::Int:
+                    return static_cast<double>(n->getValue<int>());
+                default:
+                    return static_cast<double>(n->getValue<tjs_int64>());
+            }
+        };
+        const auto intValue =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> int {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            return n ? n->getValue<int>() : 0;
+        };
+
+        for (auto &item : _variableLabelScopes) {
+            const auto frames =
+                std::dynamic_pointer_cast<PSB::PSBList>(item.frameSource);
+            if (!frames) {
+                continue;     // non-list → binary PropGetCount ~0 → no-op
+            }
+            const int count = static_cast<int>(frames->size());
+            const auto frameAt =
+                [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
+                if (i < 0 || i >= count) return nullptr;
+                return std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
+            };
+            // step (sub_6B786C): slot.frameIndex=idx; slot.time=frame["time"];
+            //   slot.merged=0.
+            const auto step = [&](detail::VarTrackSlot &slot, std::uint32_t idx) {
+                slot.frameIndex = idx;
+                auto f = frameAt(static_cast<int>(idx));
+                slot.time = f ? numValue((*f)["time"]) : 0.0;
+                slot.merged = false;
+            };
+            // merge (sub_6B7A70): same as forward port (see above).
+            const auto merge = [&](detail::VarTrackSlot &slot) {
+                slot.merged = true;
+                auto f = frameAt(static_cast<int>(slot.frameIndex));
+                const int type = f ? intValue((*f)["type"]) : 0;
+                if (type == 0) {
+                    slot.typeZeroFlag = true;
+                    return;
+                }
+                slot.typeZeroFlag = false;
+                if (type == 2)      slot.interpFlag = 0;
+                else if (type == 3) slot.interpFlag = 1;
+                auto content = f ? std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                                       (*f)["content"])
+                                 : nullptr;
+                if (content) {
+                    slot.interval = static_cast<std::uint32_t>(
+                        intValue((*content)["interval"]));
+                    slot.value = numValue((*content)["value"]);
+                    slot.easing = (*content)["easing"];
+                } else {
+                    slot.easing = nullptr;
+                }
+            };
+
+            // active=slot[cursor]=v14, other=slot[!cursor]=v13 (0x6BA0E8/0x6BA100).
+            int cursor = item.activeSlotCursor & 1;
+            detail::VarTrackSlot *active = &item.slot[cursor];
+            detail::VarTrackSlot *other = &item.slot[cursor ^ 1];
+            // backward step loop (0x6BA10C): until active.time <= target. Step
+            //   the OTHER slot to (active.frameIndex - 1) using UNSIGNED arith
+            //   (binary `(unsigned int)(*v14 - 1)`), toggle cursor, swap roles.
+            while (active->time > clampedEvalTime) {
+                const std::uint32_t prevIdx = active->frameIndex - 1u; // 0x6BA000
+                item.activeSlotCursor =
+                    (item.activeSlotCursor & 1) == 0;   // toggle (0x6B9FEC)
+                step(*other, prevIdx);                  // sub_6B786C(v13,...,*v14-1)
+                detail::VarTrackSlot *tmp = active;     // swap (0x6BA004/0x6BA008)
+                active = other;
+                other = tmp;
+            }
+            // merge (0x6BA010/0x6BA024): merge slot[0] if !slot0.merged, then
+            //   slot[1] if !slot1.merged — sub_6B7A70(item+48,..) then
+            //   sub_6B7A70(item+104,..). NOTE slot[1] target differs from the
+            //   forward stepper (which merges slot[0] both times).
+            if (!item.slot[0].merged) merge(item.slot[0]);
+            if (!item.slot[1].merged) merge(item.slot[1]);
+        }
+    }
+
+    void Player::reseedVariableTracksLike_0x6B86C8(double clampedEvalTime) {
+        // Aligned with libkrkr2.so Player_reseekTimelineCursors var-track block
+        // at 0x6B8F30 (inside the while(1) at 0x6B8F8C over the Player+1296
+        // deque, reseed at 0x6B8F30..0x6B8F60). Non-incremental re-seed: per
+        // track, scan its keyframe list to k (frames whose time<=target advance
+        // k; first time>target stops, --k), clamp v41=min(k,count-2), then
+        // step+merge slot[0] to v41 and slot[1] to v41+1, and reset
+        // activeSlotCursor (item+8) to 0. Both slots are seeded fresh — there is
+        // no active/other toggle here (that is the advance/rewind incremental
+        // form). Inert for every currently-available motion (no fixture exposes a
+        // populated "variable" list).
+        const auto numValue =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            if (!n) return 0.0;
+            switch (n->numberType) {
+                case PSB::PSBNumberType::Float:  return n->getValue<float>();
+                case PSB::PSBNumberType::Double: return n->getValue<double>();
+                case PSB::PSBNumberType::Int:
+                    return static_cast<double>(n->getValue<int>());
+                default:
+                    return static_cast<double>(n->getValue<tjs_int64>());
+            }
+        };
+        const auto intValue =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> int {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            return n ? n->getValue<int>() : 0;
+        };
+
+        for (auto &item : _variableLabelScopes) {
+            const auto frames =
+                std::dynamic_pointer_cast<PSB::PSBList>(item.frameSource);
+            if (!frames) {
+                continue;     // non-list → binary PropGetCount ~0 → no-op
+            }
+            const int count = static_cast<int>(frames->size());
+            const auto frameAt =
+                [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
+                if (i < 0 || i >= count) return nullptr;
+                return std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
+            };
+            // step (sub_6B786C) — identical to the advance/rewind ports.
+            const auto step = [&](detail::VarTrackSlot &slot, std::uint32_t idx) {
+                slot.frameIndex = idx;
+                auto f = frameAt(static_cast<int>(idx));
+                slot.time = f ? numValue((*f)["time"]) : 0.0;
+                slot.merged = false;
+            };
+            // merge (sub_6B7A70) — identical to the advance/rewind ports.
+            const auto merge = [&](detail::VarTrackSlot &slot) {
+                slot.merged = true;
+                auto f = frameAt(static_cast<int>(slot.frameIndex));
+                const int type = f ? intValue((*f)["type"]) : 0;
+                if (type == 0) {
+                    slot.typeZeroFlag = true;
+                    return;
+                }
+                slot.typeZeroFlag = false;
+                if (type == 2)      slot.interpFlag = 0;
+                else if (type == 3) slot.interpFlag = 1;
+                auto content = f ? std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                                       (*f)["content"])
+                                 : nullptr;
+                if (content) {
+                    slot.interval = static_cast<std::uint32_t>(
+                        intValue((*content)["interval"]));
+                    slot.value = numValue((*content)["value"]);
+                    slot.easing = (*content)["easing"];
+                } else {
+                    slot.easing = nullptr;
+                }
+            };
+
+            // forward keyframe scan (0x6B90A0): k advances while frame[k].time
+            //   compares against target. Mirror the reseek's per-element
+            //   compare (v53): time==target → stop (k stays); time<target → ++k;
+            //   time>target → --k, stop.
+            const int v49 = count;
+            int k = 0;
+            if (v49 >= 1) {
+                for (k = 0; k < v49; ++k) {
+                    auto f = frameAt(k);
+                    const double t = f ? numValue((*f)["time"]) : 0.0;
+                    if (t == clampedEvalTime) {
+                        break;                  // v53=0 (0x6B9150) → stop
+                    } else if (t <= clampedEvalTime) {
+                        continue;               // v53=1 (0x6B916C) → keep scanning
+                    } else {
+                        --k;                    // v53=0, --k (0x6B9164) → stop
+                        break;
+                    }
+                }
+            }
+            // v41 = min(k, count-2) (0x6B8F1C).
+            const int v41 = (k >= v49 - 2) ? (v49 - 2) : k;
+            // reseed both slots fresh (0x6B8F30..0x6B8F60).
+            step(item.slot[0], static_cast<std::uint32_t>(v41));      // 0x6B8F30
+            merge(item.slot[0]);                                       // 0x6B8F3C
+            step(item.slot[1], static_cast<std::uint32_t>(v41 + 1));  // 0x6B8F50
+            merge(item.slot[1]);                                       // 0x6B8F5C
+            item.activeSlotCursor = 0;                                 // 0x6B8F60
+        }
+    }
+
     void Player::interpolateVarTrackValuesLike_0x6BBE20(double clampedEvalTime) {
         // libkrkr2.so Player_interpolateVarTrackValues @0x6BBE20. Writes item+16
         // (the value HM4 caches) for each VariableLabelScope. active=slot[cursor]
@@ -1412,6 +1618,10 @@ namespace internal {
             // regardless of _queuing, so without this the frame-0 slots stay
             // unseeded (active=false, scale=1.0 defaults). Seek at the held
             // _clampedEvalTime so updateLayers reads populated slots.
+            // reseekTimelineCursors (0x6B86C8) re-seeds the var-track deque
+            // (0x6B8F30 block) BEFORE the per-node walk, ungated on the node
+            // deque. Mirror that here (the firstFrame seed = 0x6C10E0/0x6C131C).
+            reseedVariableTracksLike_0x6B86C8(_clampedEvalTime); // 0x6B8F30 var-track reseed
             if(!_nodes.empty()) {
                 progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
             }
@@ -1582,6 +1792,9 @@ namespace internal {
                     progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C1468 node walk ④
                     if(!_syncWaiting && !_motionCompleted) {              // 0x6C1474
                         _clampedEvalTime = _loopTime; // +456 = player+1136 (0x6C1484)
+                        // reseekTimelineCursors (0x6C1488) re-seeds the var-track
+                        // deque (0x6B8F30 reseed form) before the node walk.
+                        reseedVariableTracksLike_0x6B86C8(_clampedEvalTime); // 0x6B8F30 var-track reseed
                         progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // reseek (0x6C1488)
                         if(!_syncWaiting && !_motionCompleted) {          // 0x6C1498
                             // LABEL_22/23 loop-wrap (0x6C14AC..0x6C14CC):
@@ -1637,10 +1850,16 @@ namespace internal {
                 // before its node walk. Layer pass before node walk here too.
                 seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
                 seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ② (rewind: root loop is still forward-only 0x6B6EE4)
-                advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③
+                // rewindRootAndNodes (0x6B9A3C) uses the BACKWARD var-track
+                // stepper (0x6B9FCC), NOT the forward one. (Root/layer stream
+                // direction is handled inside those bidirectional seeks; only
+                // the var-track stepper is a distinct forward/reverse function.)
+                rewindVariableTracksLike_0x6B9A3C(_clampedEvalTime); // 0x6B9FCC var-track ③ (reverse)
                 progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // rewindRootAndNodes (0x6C1408)
                 if(!_syncWaiting && !_motionCompleted) {              // 0x6C1414
                     _clampedEvalTime = _cachedTotalFrames; // +456 = player+1128 (0x6C1424)
+                    // reseekTimelineCursors (0x6C1428) → var-track reseed.
+                    reseedVariableTracksLike_0x6B86C8(_clampedEvalTime); // 0x6B8F30 var-track reseed
                     progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // reseek (0x6C1428)
                     if(!_syncWaiting && !_motionCompleted) {          // 0x6C1434
                         // LABEL_27/28 reverse loop-wrap (0x6C143C..0x6C145C):
@@ -1661,7 +1880,8 @@ namespace internal {
                         // (0x6C11C0, +456 = reverse-wrapped tick).
                         seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
                         seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ②
-                        advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③
+                        // 2nd rewind (0x6C11C0) → reverse var-track stepper.
+                        rewindVariableTracksLike_0x6B9A3C(_clampedEvalTime); // 0x6B9FCC var-track ③ (reverse)
                         progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11C0
                     }
                 }
@@ -1690,7 +1910,17 @@ namespace internal {
             // the node deque); only the node walk is.
             seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
             seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ② (not _nodes-gated)
-            advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③ (not _nodes-gated)
+            // Unlike the layer/root seeks, the var-track stepper is a DISTINCT
+            // forward vs reverse function in the binary: forward-not-at-end /
+            // stop (0x6C13A4 / 0x6C13F8) reach here via advanceRootAndNodes
+            // (forward var-track 0x6B7124); reverse LABEL_57 (0x6C138C) reaches
+            // here via rewindRootAndNodes (reverse var-track 0x6B9FCC). Select on
+            // deltaTime sign — the SAME sign LABEL_48 used to pick the branch.
+            if(deltaTime >= 0.0) {
+                advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // 0x6B7124 var-track ③ (forward)
+            } else {
+                rewindVariableTracksLike_0x6B9A3C(_clampedEvalTime);  // 0x6B9FCC var-track ③ (reverse)
+            }
             if(!_nodes.empty()) {
                 progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
             }

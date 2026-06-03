@@ -1433,50 +1433,97 @@ namespace motion {
     // Player fields (the 1384B Player has hash table HM3 at those offsets).
     // See EmotePlayer::setHairScale.
 
-    // Aligned to D3DEmotePlayer_startWind (0x530680) -> Player_startWind (0x6709AC):
-    // normalize amplitude, optionally destroy/rebuild wind simulator state, then
-    // store min/max/amplitude/freq and reset the active counter.
+    // Aligned with libkrkr2.so Player_startWind_populate (sub_6709AC @0x6709AC).
+    //   NOTE: the binary's `a1` is the EmoteEngine (it writes engine+1128 =
+    //   wind emitter ptr, engine+1136..1152 = wind param cache, reads
+    //   engine+1168 = mesh division ratio). The arg names follow the NCB
+    //   `startWind(min, max, amplitude, freqX, freqY)` order.
+    //
+    //   void __fastcall (engine a1, float min a2, max a3, amp a4, fx a5, fy a6):
+    //     v6  = |a4|;                                      // |amplitude|
+    //     v9  = (a4 >= 0) ? a2 : a3;                       // normalized min
+    //     v10 = (a4 >= 0) ? a3 : a2;                       // normalized max
+    //     if (v6 == 0 || v10 == v9 || (a5 == 0 && a6 == 0)) {
+    //         delete *(a1+1128); *(a1+1128) = 0; return;   // stop
+    //     }
+    //     v13 = *(a1+1128);
+    //     if (!v13) goto ALLOC;
+    //     if (*(float*)(a1+1136) != v9 || *(float*)(a1+1140) != v10) {
+    //         delete *(a1+1128);
+    //     ALLOC:
+    //         v13 = operator new(0x61C);
+    //         div = *(double*)(a1+1168);
+    //         EmoteWindEmitter_init(v13, v9/div, v10/div);
+    //         *(a1+1128) = v13;
+    //     }
+    //     *(float*)(a1+1136) = v9; *(a1+1140) = v10; *(a1+1144) = v6;
+    //     *(float*)(a1+1148) = a5; *(a1+1152) = a6;
+    //     dir = (*(float*)(v13+1540) < *(float*)(v13+1536)) ? -1 : 1;  // endPos<startPos
+    //     *(float*)(v13+1548) = a5; *(v13+1552) = a6;                  // yHi, yLo
+    //     *(byte*)(v13+1544) = 1;                                      // gate on
+    //     *(float*)(v13+1556) = dir * (v6 / div);                      // velocity
+    //     *(DWORD*)(v13+1560) = 0;                                     // emit accumulator
     void Player::startWind(double minAngle, double maxAngle, double amplitude,
                            double freqX, double freqY) {
-        const double absAmplitude = std::abs(amplitude);
-        const double normalizedMin = amplitude >= 0.0 ? minAngle : maxAngle;
-        const double normalizedMax = amplitude >= 0.0 ? maxAngle : minAngle;
-
-        if(absAmplitude == 0.0 || normalizedMin == normalizedMax ||
-           (freqX == 0.0 && freqY == 0.0)) {
-            stopWind();
+        if (!_engineBack) {
             return;
         }
+        EmoteEngine* const eng = _engineBack;
 
-        const bool rebuild = !_windState.active ||
-            _windState.minAngle != normalizedMin ||
-            _windState.maxAngle != normalizedMax;
-        if(rebuild) {
-            _windState = {};
-            _windState.active = true;
+        const float v6  = static_cast<float>(std::abs(amplitude));        /*0x6709d8 |a4|*/
+        const float v9  = static_cast<float>(amplitude >= 0.0 ? minAngle : maxAngle); /*0x6709e4*/
+        const float v10 = static_cast<float>(amplitude >= 0.0 ? maxAngle : minAngle); /*0x6709e8*/
+        const float a5  = static_cast<float>(freqX);
+        const float a6  = static_cast<float>(freqY);
+
+        if (v6 == 0.0f || v10 == v9 || (a5 == 0.0f && a6 == 0.0f)) {       /*0x670a14*/
+            // stop: delete + null the emitter, leave caches as-is.
+            if (eng->_windEmitter) {                                       /*0x670a18*/
+                delete eng->_windEmitter;                                  /*0x670a20*/
+                eng->_windEmitter = nullptr;                               /*0x670a24*/
+            }
+            return;                                                        /*0x670a28*/
         }
 
-        _windState.active = true;
-        _windState.minAngle = normalizedMin;
-        _windState.maxAngle = normalizedMax;
-        _windState.amplitude = absAmplitude;
-        _windState.freqX = freqX;
-        _windState.freqY = freqY;
-        const double direction = _windState.prevPhase > _windState.phase
-            ? -1.0
-            : 1.0;
-        // Migrated to EmoteEngine+1168 (per binary spec).
-        const double engineRatio = _engineBack ? _engineBack->_meshDivisionRatio : 1.0;
-        const double ratio = engineRatio != 0.0 ? engineRatio : 1.0;
-        _windState.scaledAmplitude = direction * (absAmplitude / ratio);
-        _windState.counter = 0;
-        if (_engineBack) _engineBack->_dirty = true;
+        const double div = eng->_meshDivisionRatio;                       /*0x670a5c *(a1+1168)*/
+
+        EmoteWindEmitter* v13 = eng->_windEmitter;                        /*0x670a2c*/
+        if (!v13 ||                                                        /*0x670a30 !v13 -> ALLOC*/
+            eng->_windMin != v9 || eng->_windMax != v10) {                /*0x670a48 start/end changed*/
+            if (v13) {                                                     /*0x670a50 delete old when rebuilding*/
+                delete v13;
+            }
+            v13 = new EmoteWindEmitter();                                  /*0x670a54 operator new(0x61C)*/
+            v13->init(static_cast<float>(v9 / div),                        /*0x670a7c init(startPos, endPos)*/
+                      static_cast<float>(v10 / div));
+            eng->_windEmitter = v13;                                       /*0x670a80*/
+        }
+
+        eng->_windMin   = v9;                                             /*0x670a84 *(a1+1136)*/
+        eng->_windMax   = v10;                                            /*0x670a8c *(a1+1140)*/
+        eng->_windAmp   = v6;                                             /*0x670a90 *(a1+1144)*/
+        eng->_windFreqX = a5;                                             /*0x670a94 *(a1+1148)*/
+        eng->_windFreqY = a6;                                             /*0x670a98 *(a1+1152)*/
+
+        // v18 = endPos(+1540) < startPos(+1536) ; direction = v18 ? -1 : 1.
+        const bool v18 = v13->endPos < v13->startPos;                     /*0x670ab0*/
+        const float v20 = static_cast<float>(v6 / div);                  /*0x670ac8 v6/div*/
+        const float v21 = v18 ? -1.0f : 1.0f;                            /*0x670acc*/
+        v13->yHi = a5;                                                    /*0x670abc *(v13+1548)=a5*/
+        v13->yLo = a6;                                                    /*0x670ac0 *(v13+1552)=a6*/
+        v13->gate = 1;                                                    /*0x670ad4 *(v13+1544)=1*/
+        v13->velocity = v21 * v20;                                       /*0x670ad8 *(v13+1556)*/
+        v13->emitAccumulator = 0.0f;                                     /*0x670adc *(v13+1560)=0*/
     }
 
-    // Aligned to sub_681A38: delete wind simulator and clear player+1128.
+    // Aligned with libkrkr2.so D3DEmotePlayer_stopWind (0x53068C), which calls
+    //   Player_startWind_populate with all-zero amplitude/freq -> hits the stop
+    //   branch (delete + null the emitter at engine+1128).
     void Player::stopWind() {
-        _windState = {};
-        if (_engineBack) _engineBack->_dirty = true;
+        if (_engineBack && _engineBack->_windEmitter) {
+            delete _engineBack->_windEmitter;
+            _engineBack->_windEmitter = nullptr;
+        }
     }
 
     // Aligned to D3DEmotePlayer_setOuterForce (0x530A8C) ->

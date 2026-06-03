@@ -87,6 +87,7 @@
 
 #include "tjs.h"
 #include "EmoteAngleController.h"
+#include "EmoteMeshResolver.h"
 
 namespace PSB {
     class PSBDictionary;
@@ -105,17 +106,14 @@ namespace motion {
         // Stepped via cursor @+96 (2 floats/elem, 512-block).
         std::deque<std::pair<float, float>> valueTrack8B; // ctor 0x66487c
 
-        // +160..+167 — "edge" table: each PSB "edge" elem -> {x,y} float pair.
-        std::vector<std::pair<float, float>> edgeTable; // ctor edge loop 0x6649e4
+        // +160..+287 — mesh-resolver state embedded in the controller (same
+        //   cluster as the eye controller): +160 edgeTable, +184 nodeRows,
+        //   +264 outputRows, +288 trackResolvedSpan. Built in the ctor; consumed/
+        //   written by EmoteMeshResolver_resolve (sub_661F7C -> sub_660028).
+        EmoteMeshResolverState mesh;
 
-        // +184..+287 — "node" value-row pool: each PSB "node" elem -> a row of
-        // floats (504-block deque). Consumed by sub_660028 (mesh resolver).
-        std::deque<std::vector<float>> nodeRows; // ctor 0x6648a4 (sub_6828FC)
-
-        // +288 — resolved curve span, WRITTEN by the mesh resolver sub_661F7C
-        //   (SCOPE BOUNDARY). Read at track-setup (0x665680) into trackSpan(+316).
-        //   Until the resolver vertical is ported this stays 0 (its ctor value).
-        float   trackResolvedSpan = 0.0f; // +288
+        // +288 alias: trackResolvedSpan lives inside `mesh`; the step reads
+        //   mesh.trackResolvedSpan into trackSpan(+316).
 
         // +296..+324 — value-track animation state. NOTE the offset assignment
         //   differs from EmoteBlinkController (eye): the slim controller swaps

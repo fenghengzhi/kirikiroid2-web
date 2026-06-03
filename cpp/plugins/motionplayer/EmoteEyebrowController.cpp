@@ -75,14 +75,14 @@ namespace motion {
         }
         if (edge) {
             const int count = static_cast<int>(edge->size()); // sub_56C694
-            self->edgeTable.reserve(static_cast<size_t>(count));
+            self->mesh.edgeTable.reserve(static_cast<size_t>(count));
             for (int i = 0; i < count; ++i) {
                 const auto sub = dynamic_cast<const PSB::PSBList*>(
                     (*edge)[i].get());
                 const int x = psbArrayInt(sub, 0); // sub_6637BC(elem,0)
                 const int y = psbArrayInt(sub, 1); // sub_6637BC(elem,1)
-                self->edgeTable.emplace_back(static_cast<float>(x),
-                                             static_cast<float>(y));
+                self->mesh.edgeTable.emplace_back(static_cast<float>(x),
+                                                  static_cast<float>(y));
             }
         }
 
@@ -105,7 +105,7 @@ namespace motion {
                 for (int j = 0; j < rowCount; ++j) {
                     row.push_back(static_cast<float>(psbArrayInt(sub, j)));
                 }
-                self->nodeRows.push_back(std::move(row));
+                self->mesh.nodeRows.push_back(std::move(row));
             }
         }
 
@@ -208,22 +208,19 @@ namespace motion {
                 const EmoteAngleKeyValue12B kf =
                     self->valueTrack12B.queue.front();      // {endRad,dur,pow} /*0x665670*/
 
-                // SCOPE BOUNDARY (sub_661F7C @0x661F7C -> sub_660028 mesh
-                //   resolver) — identical boundary to the eye slice. The binary
-                //   calls sub_661F7C(self+160, self+80, trackValue, kf.endRad) to
-                //   rebuild the 8B value track (valueTrack8B) from the resolved
-                //   eyebrow mesh rows (edgeTable + nodeRows). NOT ported here; the
-                //   call site is kept as a documented anchor. Consequence: the 8B
-                //   track is not repopulated, so on the NEXT step the v5==1 branch
-                //   sees an empty track and returns to trackState 0 — i.e. the
-                //   track interpolation is inert until the resolver lands, while
-                //   trackValue holds the popped position.       /*0x66567c*/
-                // resolveMeshTrack_0x661F7C(self, self->trackValue, kf.endRad);
+                // Mesh resolver (sub_661F7C @0x661F7C -> sub_660028) — identical
+                //   to the eye slice. The binary calls sub_661F7C(self+160,
+                //   self+80, trackValue, kf.endRad) to rebuild the 8B value track
+                //   (valueTrack8B) from the resolved eyebrow mesh rows
+                //   (mesh.edgeTable + mesh.nodeRows) and writes the resolved span
+                //   to mesh.trackResolvedSpan(+288). Faithful port.   /*0x66567c*/
+                EmoteMeshResolver_resolve(&self->mesh, &self->valueTrack8B,
+                                          self->trackValue, kf.endRad);
 
                 // accum(+312)=0; span(+316)=resolvedSpan(+288);
                 //   invDur(+324)=1/dur; pow(+320)=powCount.       /*0x665680..*/
                 self->trackAccum  = 0.0f;                    // *(a1+312)=0  /*0x665684*/
-                self->trackSpan   = self->trackResolvedSpan; // *(a1+316)=*(a1+288) /*0x665690*/
+                self->trackSpan   = self->mesh.trackResolvedSpan; // *(a1+316)=*(a1+288) /*0x665690*/
                 self->trackInvDur = 1.0f / kf.duration;      // *(a1+324)=1/*(v10+4) /*0x6656a4*/
                 // trackPow(+320) = keyframe[+8] RAW BITS (read *(float*), no SCVTF),
                 //   same raw-float-bit semantics as eye/mouth — not int->float.

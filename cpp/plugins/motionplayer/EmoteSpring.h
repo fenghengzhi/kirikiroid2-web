@@ -139,10 +139,13 @@ namespace motion {
     //   +152 float  seg1VelX     (v77 for seg1 = a1+152)
     //   +156 float  seg1VelY
     //   +160 float  seg1VelZ
-    //   +168 ptr    collisionCurve (optional; *(a1+168). 128 entries stride 12B
-    //               from +4, each {byte enabled@-4, float center, float halfW};
-    //               match scale = halfW * *(curve+1556). Set by stepBust from
-    //               EmoteEngine+1128 (_matrixHeap1128). Null => skipped.)
+    //   +168 ptr    collisionCurve (optional; *(a1+168). Points at the wind
+    //               emitter's 128-slot particle pool (EmoteWindEmitter): 128
+    //               entries, 12B stride, each {byte active@+0, float lifePos@+4,
+    //               float yPos@+8} as established by EmoteWindEmitter_step
+    //               (sub_6687E8). The control float at curve+1556 is the wind
+    //               velocity. Set by stepBust from EmoteEngine+1128
+    //               (_windEmitter). Null => skipped.)
     // PLATFORM_BOUNDARY: 176B POD; the collisionCurve table is held as an opaque
     //   pointer (its allocation path is not reversed; the lookup is null-guarded
     //   exactly as in the binary so an un-populated table is inert).

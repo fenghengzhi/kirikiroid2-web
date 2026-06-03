@@ -209,7 +209,7 @@ namespace motion {
 
         // Delete deque#2/#3 (hair/parts -> bust chain-spring) nodes. Each node
         //   owns its operator new(0xB0) EmoteBustChainSpring. collisionCurve is a
-        //   BORROWED pointer (= EmoteEngine+1128 _matrixHeap1128), not owned here.
+        //   BORROWED pointer (= EmoteEngine+1128 _windEmitter), not owned here.
         for (EmoteBustChain1Node56B& node : _bustChain1Nodes) {
             delete node.spring;
             node.spring = nullptr;
@@ -229,6 +229,14 @@ namespace motion {
         if (_ctlColor)           { EmoteVarController_dtor(_ctlColor);           delete _ctlColor;           _ctlColor = nullptr; }
         if (_ctlScale)           { EmoteVarController_dtor(_ctlScale);           delete _ctlScale;           _ctlScale = nullptr; }
         if (_ctlPosition)        { EmoteVarController_dtor(_ctlPosition);        delete _ctlPosition;        _ctlPosition = nullptr; }
+
+        // Free the wind emitter heap object (+1128). The binary frees it in
+        //   Player_startWind_populate/stopWind (operator delete + null); on engine
+        //   teardown it must also be released since +1128 owns it. Any bust/hair
+        //   spring still holding it as collisionCurve has already been deleted
+        //   above, so no dangling borrow remains.
+        delete _windEmitter;
+        _windEmitter = nullptr;
 
         // Delete the Player heap object last (so _engineBack-using fields die first).
         delete _player;
@@ -490,7 +498,7 @@ namespace motion {
     //   for (node in chain deque) {
     //       anchor = node[44..48];
     //       resolveShapeAnchor(this, node+12, &anchor.x, &anchor.y);
-    //       node->spring->collisionCurve(+168) = this->_matrixHeap1128(+1128);
+    //       node->spring->collisionCurve(+168) = this->_windEmitter(+1128);
     //       if (node->initFlag) {
     //           node->initFlag = 0; ang=getAngleDeg(player);
     //           chainStep(spring,&oS0,&oS1,&oLast, anchor.x,anchor.y,
@@ -543,9 +551,11 @@ namespace motion {
             resolveShapeAnchorLike_0x67B970(this, player, node.shapeLabel,
                                             &anchorX, &anchorY); //            /*0x67be98*/
 
-            // node->spring->collisionCurve = this->_matrixHeap1128 (v12[141]). /*0x67bea4*/
+            // node->spring->collisionCurve = this->_windEmitter (v12[141]). /*0x67bea4*/
+            //   The spring physics reads the wind emitter's 128-slot particle
+            //   field as a collision/force curve. Borrowed pointer, not owned.
             if (node.spring) {
-                node.spring->collisionCurve = _matrixHeap1128;
+                node.spring->collisionCurve = _windEmitter;
             }
 
             // Spring float-array view for the depth-ramp fields [7]/[8]/[12]/[13].
@@ -1899,8 +1909,19 @@ namespace motion {
             // Apply the 4 direct controllers (pos/scale/color/angle).
             applyVarControllers_pos_scale_color_angle(step);
 
-            // if (player@1128 && player+1544 flag) sub_6687E8(step)
-            //   PLATFORM_BOUNDARY: sub_6687E8 and player+1544 not reversed.
+            // Wind emitter step (gated) — PORTED.
+            //   Per binary EmoteEngine_progress @0x67d384..0x67d398:
+            //       v65 = *(engine+1128);                       // wind emitter ptr
+            //       if (v65 && *(byte*)(v65+1544))              // alloc'd AND gate on
+            //           EmoteWindEmitter_step(v65, step);       // sub_6687E8(windObj, clampedStep)
+            //   The X0 arg to sub_6687E8 is the emitter object (engine+1128), the
+            //   float arg is `step` = fmin(dt,1.1) (the same clamped per-slice
+            //   delta the deque steps use, V0 = V9 = v5 in the binary). The gate
+            //   byte (+1544) is set by Player_startWind_populate; when wind is
+            //   inactive the emitter is null/gate-clear and this is skipped.
+            if (_windEmitter && _windEmitter->gate) {            /*0x67d384..0x67d390*/
+                _windEmitter->step(step);                        /*0x67d394..0x67d398*/
+            }
 
             dt -= step;
         }
