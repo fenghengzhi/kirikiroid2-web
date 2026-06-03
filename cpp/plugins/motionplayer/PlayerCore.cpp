@@ -328,7 +328,8 @@ namespace motion {
             }
         }
     }
-    // Aligned to libkrkr2.so Player_getAngleDeg @ 0x6CD0C0:
+    // Aligned to libkrkr2.so Player_getAngleRad @ 0x6CD0C0 (IDB symbol corrected
+    // 2026-06-03; was formerly mislabeled "Player_getAngleDeg"):
     //   if (*(BYTE*)(player+482)) v1 = player+464;       (directEdit emote angle)
     //   else                      v1 = *(player+200)+1616; (root node delta.angle)
     //   return *v1 * 0.0174532925;                        (deg -> rad; pi/180)
@@ -387,9 +388,10 @@ namespace motion {
         }
     }
 
-    // angleRad member setter = libkrkr2.so Player_setAngleDeg @0x6CD0EC (IDA
-    // misnames it). Input is RADIANS: deg = rad * 57.2957795, then the SAME
-    // store path as setAngleDeg above (binary inlines an identical body).
+    // angleRad member setter = libkrkr2.so Player_setAngleRad @0x6CD0EC (IDB
+    // symbol corrected 2026-06-03; was formerly mislabeled "Player_setAngleDeg").
+    // Input is RADIANS: deg = rad * 57.2957795, then the SAME store path as
+    // setAngleDeg above (binary inlines an identical body).
     void Player::setAngleRad(double rad) {
         setAngleDeg(rad * 57.2957795);
     }

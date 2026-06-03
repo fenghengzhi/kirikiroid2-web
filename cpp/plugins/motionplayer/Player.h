@@ -586,30 +586,30 @@ namespace motion {
         tTJSVariant motionList();
         void emoteEdit(tTJSVariant args);
 
-        // libkrkr2.so fn @0x6CD0C0 (IDA misnames it "Player_getAngleDeg").
+        // libkrkr2.so Player_getAngleRad @0x6CD0C0 (IDB symbol corrected
+        // 2026-06-03; was formerly mislabeled "Player_getAngleDeg").
         // Returns the angle in RADIANS:
         //   if (_directEdit/+482) -> _emoteAngle/+464 else root node delta.angle
         //   times 0.0174532925 (deg->rad). Used by EmoteEngine_stepHairParts /
         //   stepBust as the rad provider.
         //
-        // CORRECTION (2026-06-03, fresh decompile of registration @0x6D69C8):
-        // 0x6CD0C0 backs the TJS **angleRad** member, NOT angleDeg. IDA's symbol
-        // "Player_getAngleDeg" is mislabeled. The TJS **angleDeg** member is
-        // backed by sub_6C1780 (raw value, no scale -> degrees). So:
-        //   angleDeg member -> DEG (sub_6C1780)
-        //   angleRad member -> RAD (this fn, 0x6CD0C0)
+        // Per registration @0x6D69C8: 0x6CD0C0 backs the TJS **angleRad** member;
+        // the TJS **angleDeg** member is backed by Player_getAngleDeg @0x6C1780
+        // (raw value, no scale -> degrees). So:
+        //   angleDeg member -> DEG (Player_getAngleDeg @0x6C1780)
+        //   angleRad member -> RAD (this fn, Player_getAngleRad @0x6CD0C0)
         double emoteGetAngleRadLike_0x6CD0C0() const;
 
         // binary Motion.Player exposes angleDeg/angleRad as TJS properties.
         // Internal angle storage (root+1616 / _emoteAngle+464) is in DEGREES.
-        //   angleDeg member: getter = sub_6C1780 (raw stored -> DEG);
-        //                    setter = sub_6C0F84 @0x6C0F84 (input DEG, stored direct)
-        //   angleRad member: getter = 0x6CD0C0 (raw * 0.0174532925 -> RAD);
-        //                    setter = Player_setAngleDeg @0x6CD0EC (input RAD ->
+        //   angleDeg member: getter = Player_getAngleDeg @0x6C1780 (raw -> DEG);
+        //                    setter = Player_setAngleDeg @0x6C0F84 (input DEG, direct)
+        //   angleRad member: getter = Player_getAngleRad @0x6CD0C0 (raw*0.0174 -> RAD);
+        //                    setter = Player_setAngleRad @0x6CD0EC (input RAD ->
         //                             * 57.2957795 -> DEG -> same store path)
         // Fixed 2026-06-03: bindings were previously swapped (getAngleDeg returned
-        // rad, getAngleRad returned raw deg). IDA's symbol names for the two getter
-        // fns are mislabeled (0x6CD0C0 is the angleRad getter, not angleDeg);
+        // rad, getAngleRad returned raw deg). The IDB symbols for these 4 fns were
+        // also formerly mislabeled (swapped deg/rad) and have been corrected;
         // verified against registration @0x6D69C8 (sites 0x6d7db4 / 0x6d7e30).
         double getAngleDeg() const {            // sub_6C1780: raw stored -> deg
             if (_directEdit) return _emoteAngle;            // +464  /*0x6c178c*/
@@ -950,7 +950,7 @@ namespace motion {
         bool _cameraActive = false;
         bool _stereovisionActive = false;
         // Emote direct-edit angle (player+464). Aligned with libkrkr2.so
-        // Player_getAngleDeg @0x6CD0C0: when _directEdit (player+482) is set the
+        // Player_getAngleRad @0x6CD0C0: when _directEdit (player+482) is set the
         // angle source is *(double*)(player+464); otherwise it is the root node
         // angle (_nodes[0].delta.angle = node+1616). Written by the emote
         // direct-edit init path (PlayerUpdateChildMotion / PlayerUpdateParticles

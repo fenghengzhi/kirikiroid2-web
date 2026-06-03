@@ -237,13 +237,13 @@ NCB_REGISTER_CLASS(Player) {
     //
     // CORRECTION (2026-06-03, fresh decompile of Player_ncb_registerMembers
     // @0x6D69C8, byte-verified at the registration sites 0x6d7db4 / 0x6d7e30):
-    // IDA's auto symbol names are SWAPPED vs the actual TJS member names — this
-    // misled the prior analysis. The real bindings are:
-    //   angleDeg member: getter = sub_6C1780  (returns the raw value, NO scale
-    //                    -> DEGREES); setter = Player_setAngleRad@0x6c0f84
-    //   angleRad member: getter = 0x6CD0C0    (value * 0.0174532925 -> RADIANS;
-    //                    IDA misnames this fn "Player_getAngleDeg");
-    //                    setter = Player_setAngleDeg@0x6cd0ec
+    // IDA's auto symbol names were SWAPPED vs the actual TJS member names (the
+    // IDB symbols have since been corrected). The real bindings are:
+    //   angleDeg member: getter = Player_getAngleDeg @0x6C1780 (raw value, NO
+    //                    scale -> DEGREES); setter = Player_setAngleDeg @0x6C0F84
+    //   angleRad member: getter = Player_getAngleRad @0x6CD0C0 (value *
+    //                    0.0174532925 -> RADIANS);
+    //                    setter = Player_setAngleRad @0x6CD0EC
     // So both member names match their semantics: angleDeg->deg, angleRad->rad.
     // There is NO name/semantics mismatch in the binary.
     //
