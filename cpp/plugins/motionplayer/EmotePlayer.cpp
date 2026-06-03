@@ -18,16 +18,36 @@
 
 namespace motion {
 
-    // EmoteObject ctor/dtor: raw EmoteEngine* with manual new/delete (aligned
-    // with libkrkr2.so EmoteObject_init sub_67DBAC which does
-    // `operator new(0x5D8); EmoteEngine_ctor(...)`).
-    EmoteObject::EmoteObject(ResourceManager rm) {
-        _engine = new EmoteEngine(std::move(rm));
+    // EmoteObject ctor/dtor — aligned with libkrkr2.so EmoteObject_init
+    // @0x67DBAC. The binary, in order:
+    //   1. operator new(0xE8) RM -> sub_6A88CC(rm,...) -> store EmoteObject+0
+    //   2. sub_67E20C(rm,...) wraps RM in a TJS dispatch (2x AddRef)
+    //   3. operator new(0x5D8) EmoteEngine -> EmoteEngine_ctor(engine, &wrapper)
+    //      -> store EmoteObject+8 (Player+1064 gets the RM dispatch wrapper)
+    //   4. VariantPtrVector_assign_67F0CC(EmoteObject+16, psbArgs)
+    // G2-A: EmoteObject now self-owns the RM (member _rm, initialized first),
+    //   then constructs the EmoteEngine from a copy of it — the binary owns RM
+    //   at +0 and passes a wrapper down; the local ResourceManager value type
+    //   models that ownership (shared_ptr<State>, cheap copy).
+    EmoteObject::EmoteObject(ResourceManager rm) :
+        _rm(std::move(rm)) {
+        _engine = new EmoteEngine(_rm);
     }
 
+    // Dtor — aligned with libkrkr2.so EmoteObject_destroy @0x67F420. Order:
+    //   1. EmoteObject+8 EmoteEngine: sub_67F4B8 + operator delete
+    //   2. EmoteObject+0 ResourceManager: sub_6A8B94 + operator delete
+    //   3. EmoteObject+16 vector: per-element Release + delete buffer
+    // Local: delete _engine FIRST, then RM (member, destroyed after body) and
+    //   _modules (vector member) tear down in reverse-declaration order
+    //   (_engine declared after _rm; vector member cleanup is implicit). The
+    //   explicit `delete _engine` enforces the engine-before-RM order that the
+    //   binary's dtor body performs (engine teardown reads RM-derived state).
     EmoteObject::~EmoteObject() {
         delete _engine;
         _engine = nullptr;
+        // _modules (vector<tTJSVariant>) and _rm release after this body via
+        //   member destruction — matches binary steps 2/3 (RM then vector).
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer 对象链:壳持有【两个】EmoteObject 槽
@@ -68,18 +88,27 @@ namespace motion {
     }
 
     void D3DEmotePlayer::setModule(tTJSVariant v) {
-        obj()._module = v;
+        // G2-B: EmoteObject+16 is a vector<tTJSVariant*> (PSB reference array,
+        //   D3DEmotePlayer_load @0x52FDD4 pushes each PSB; EmoteObject_init
+        //   @0x67DBAC step4 assigns the whole array). setModule installs a
+        //   single PSB reference -> size()==1 (equivalent to the old single
+        //   variant). The vector teardown/Release happens in EmoteObject dtor.
+        obj()._modules.assign(1, v);
         // Bridge loaded PSB snapshot into Player's animation pipeline.
         // Aligned to libkrkr2.so EmoteObject_init (sub_67DBAC):
         // After loading PSBs, the EmoteObject initializes its internal Player
         // with the loaded motion data.
-        auto snapshot = detail::lookupModuleSnapshot(obj()._module);
+        auto snapshot = detail::lookupModuleSnapshot(obj()._modules.front());
         if(snapshot) {
             player().loadFromSnapshot(snapshot);
         }
     }
 
-    tTJSVariant D3DEmotePlayer::getModule() const { return obj()._module; }
+    // getModule returns the representative (first) loaded PSB reference, or
+    //   void when none loaded — single-PSB case mirrors the old single variant.
+    tTJSVariant D3DEmotePlayer::getModule() const {
+        return obj()._modules.empty() ? tTJSVariant() : obj()._modules.front();
+    }
 
     // --- Methods ---
 
@@ -109,8 +138,9 @@ namespace motion {
         _primaryObj = nullptr;
         // 重建主槽(二进制 operator new(0x28) + EmoteObject_init(args))
         _primaryObj = new EmoteObject(_rm);
-        obj()._module = data;
-        auto snapshot = detail::lookupModuleSnapshot(obj()._module);
+        // G2-B: assign the loaded PSB into the +16 vector (single PSB here).
+        obj()._modules.assign(1, data);
+        auto snapshot = detail::lookupModuleSnapshot(obj()._modules.front());
         if(snapshot) {
             player().loadFromSnapshot(snapshot);
         }
@@ -133,8 +163,8 @@ namespace motion {
         copy->_visible = _visible;
         copy->_baseScale = _baseScale;
         copy->_userScale = _userScale;
-        // EmoteObject 层
-        copy->obj()._module = obj()._module;
+        // EmoteObject 层 — G2-B: copy the whole +16 PSB reference vector.
+        copy->obj()._modules = obj()._modules;
         // EmoteEngine 层(引擎字段 + getScale/Rot/Color 缓存)
         copy->engine()._meshDivisionRatio = engine()._meshDivisionRatio;
         // R3 phantom: _queuing is Player+480 (Player class), not EmoteEngine.
@@ -154,8 +184,10 @@ namespace motion {
         copy->engine()._mirrorChanged = engine()._mirrorChanged;
         copy->engine()._color = engine()._color;
 
-        // Load the same snapshot into the cloned Player
-        auto snapshot = detail::lookupModuleSnapshot(obj()._module);
+        // Load the same snapshot into the cloned Player (G2-B: first PSB).
+        auto snapshot = obj()._modules.empty()
+                            ? nullptr
+                            : detail::lookupModuleSnapshot(obj()._modules.front());
         if(snapshot) {
             copy->player().loadFromSnapshot(snapshot);
         }
@@ -315,32 +347,33 @@ namespace motion {
     tjs_int D3DEmotePlayer::getColor() { return 0; }
 
     // --- Variable system ---
-    // Aligned to libkrkr2.so sub_5305C8 → Player_setVariable @0x671228. The
-    //   0x671228 `this` is the EmoteEngine (HM6@+1384 / HM2@+1440 / controller
-    //   deques@+256..+656), so the faithful dispatch is EmoteEngine::setVariable.
-    //   Binary arg mapping: (value=d0, easing=d1 [TJS "transition", the instant
-    //   gate], durationFrames=d2 [TJS "ease", the transition-factor driver]).
+    // Aligned to libkrkr2.so sub_5305C8 → EmoteEngine_setVariable @0x671228. The
+    //   0x671228 `this` is the EmoteEngine (HM6@+1384 / HM7@+1440 / controller
+    //   deques@+256..+656), so the faithful dispatch is the single
+    //   EmoteEngine::setVariable call. Binary arg mapping: (value=d0,
+    //   easing=d1 [TJS "transition", the instant gate], durationFrames=d2 [TJS
+    //   "ease", the transition-factor driver]).
     //
     //   engine().setVariable IS the keystone that drives the eye/eyebrow/mouth/
-    //   transition/selector controllers (cases 4-8) and the type-0/1/2 HM2 write.
+    //   transition/selector controllers (cases 4-8) and the type-0/1/2 HM7 write.
     //
-    //   PORT FORK (documented, in-scope boundary): local getVariable reads the
-    //   Player-side cascade map (_evalResultValues / HM1 / HM4 — the M3/R0-1
-    //   subsystem modelling binary getVariable @0x6D69C8), NOT the engine's
-    //   HM2 (+1440 = _labelToValueHM7) that 0x671228 actually writes. In the
-    //   binary these are the SAME HM2; locally they are two disjoint maps. Until
-    //   that map unification (a separate M3-scope refactor, out of this slice's
-    //   "setVariable cases 4-8" boundary) is done, the Player-side
-    //   setVariableResolvedWeightLike_0x671228 call is retained so the existing
-    //   getVariable round-trip (and its unit test) keep working. The engine call
-    //   added here is what actually activates the controller deques; its HM2
-    //   fallthrough writes _labelToValueHM7 (read by the controller-step HM7
-    //   path, inert for scalar getVariable). No double-corruption: the two HM2
-    //   surfaces are read by disjoint consumers.
+    //   DISJOINT-MAP TOPOLOGY (fresh-decompile 2026-06-03, confirmed faithful):
+    //   setVariable@0x671228 writes the EmoteEngine HM7 (+1440 = _labelToValueHM7;
+    //   miss path @0x67135c: Player_HM2_upsert_labelToValue(this+1440,key)=value).
+    //   getVariable@0x533E1C reads a DIFFERENT object: the inner Player at
+    //   *(a1+1064) → scope scan (sub_6CD16C) → Player HM1 (+264) /
+    //   HM4(+1240)→HM2; it NEVER reads EmoteEngine+1440. So in the binary,
+    //   setVariable(x) then getVariable() with NO progress() in between does NOT
+    //   return x — HM7 and Player HM1/HM2 are two disjoint maps. The ONLY bridge
+    //   is the progress() bind-loop (EmoteEngine::progress post-loop, G2-C LIVE):
+    //   HM7 → sub_67C560 (accumulate) → sub_67C6B0 (mirror) →
+    //   Player_bindParameterValue @0x6C4668 → Player HM1/HM2. There is NO
+    //   Player-side double-write at this site in the binary; the prior
+    //   `player().setVariable(...)` shim was a non-faithful local invention that
+    //   defeated the disjoint-map architecture, now removed.
     void D3DEmotePlayer::setVariable(ttstr label, double value, double transition,
                                   double ease) {
         engine().setVariable(label, value, transition, ease); // 0x671228 dispatch
-        player().setVariable(label, value, transition, ease); // getVariable cascade (M3 fork)
         engine()._modified = true;
     }
 
@@ -540,17 +573,32 @@ namespace motion {
         player().stopTimeline(TJS_W(""));
     }
 
-    // Aligned to libkrkr2.so sub_6818B4 -> sub_6D2A54:
-    // after wrapper-side animators, EmotePlayer advances its owned Player and
-    // immediately updates layers/calcBounds.
-    void D3DEmotePlayer::pass(double dt) {
-        engine()._progress += dt;
-        player().progressMsLike_0x6D2A54(dt);
+    // Aligned to libkrkr2.so D3DEmotePlayer NCB "progress" member
+    // (registration @0x52f76c) whose callback is EmoteEngine_progress @0x67D01C
+    // with this=EmoteEngine. The binary D3DEmotePlayer.progress is LITERALLY
+    // EmoteEngine_progress (no ms->frame conversion — dt arrives in frame units
+    // from the TJS caller), which runs: preProgress -> 6 controller-deque steps
+    // -> applyVarControllers -> wind gate -> G2-C bind-loop (HM7 -> Player
+    // HM1/HM2) -> sub_67C8A8 -> sub_6D2A54(Player,0,frameDt) [step 7, Player
+    // progress] -> bust/hair physics. Routing through engine().progress makes the
+    // G2-C bind-loop RUNTIME-LIVE (previously this called
+    // player().progressMsLike_0x6D2A54 directly, bypassing the engine entirely so
+    // EmoteEngine::progress had no live caller and the bind-loop was dead code).
+    // The Player-level progress is now driven exactly once, from inside
+    // engine().progress step 7 — NOT here — so Player progress is not double-run.
+    void D3DEmotePlayer::progress(double dt) {
+        engine()._progress += dt; // local getProgress() accumulator (not in binary)
+        engine().progress(static_cast<float>(dt)); // EmoteEngine_progress @0x67D01C
         engine()._modified = true;
     }
 
-    void D3DEmotePlayer::progress(double dt) {
-        pass(dt);
+    // C++-side pass(double): NOT the binary NCB "pass" member (that name is bound
+    // to addPlayCallback @0x52f730 — the play-callback setter, NOT a progress
+    // driver). This pass() is a local progress-driver convenience (used by the
+    // unit test as a frame stepper); route it through the same engine().progress
+    // so it exercises the bind-loop identically to progress().
+    void D3DEmotePlayer::pass(double dt) {
+        progress(dt);
     }
 
     // Aligned to libkrkr2.so sub_672D58: routes by label to bust/h/parts
@@ -629,5 +677,388 @@ namespace motion {
         }
         return TJS_E_INVALIDPARAM;
     }
+
+    // ============================================================
+    // Motion.EmotePlayer — full NCB surface (68 members + 2 consts)
+    //   Aligned with libkrkr2.so EmotePlayer_ncb_registerMembers @0x67FAC8.
+    //   Binary EmotePlayer is a parallel NCB facade over the SAME Player/
+    //   EmoteEngine machine as Motion.Player @0x6D69C8 and D3DEmotePlayer
+    //   @0x52E504 (member callbacks are the same Player_*/sub_* fns operating
+    //   on the underlying object — progress=sub_6818B4 -> Player_preProgress).
+    //   Local EmotePlayer reaches that machine via the same EmoteObject chain
+    //   D3DEmotePlayer uses (EmoteObject -> EmoteEngine -> Player). Each member
+    //   delegates to player()/engine(), matching the binary's per-member fn.
+    // ============================================================
+#undef STUB_WARN
+#define STUB_WARN(name) LOGGER->warn("EmotePlayer::" #name "() stub called")
+
+    // dtor — lazy primary slot teardown (binary EmotePlayer native instance is a
+    //   24B shell whose +8 EmoteEngine is destroyed by sub_67F4B8; local routes
+    //   that teardown through the EmoteObject chain delete).
+    EmotePlayer::~EmotePlayer() {
+        delete _primaryObj;
+        _primaryObj = nullptr;
+    }
+
+    // --- #1 progress (sub_6818B4). The binary EmotePlayer.progress NCB member is
+    //   EmotePlayer_progress_sub_6818B4 @0x6818B4, which is an INLINED copy of
+    //   EmoteEngine_progress @0x67D01C with ONE prologue difference: it converts
+    //   the incoming dt from MILLISECONDS to FRAME units first
+    //   (`a2 = a2 * 60.0 / 1000.0` @0x6818c8) and THEN runs the identical engine
+    //   body (preProgress / 6 deque steps / applyVarControllers / wind / G2-C
+    //   bind-loop / sub_67C8A8 / sub_6D2A54 / bust-hair physics). So faithfully:
+    //   EmotePlayer.progress(dt_ms) == EmoteEngine::progress(dt_ms * 60/1000).
+    //   Routing through engine().progress makes the G2-C bind-loop runtime-live
+    //   (was bypassed via a direct player().progressMsLike call). Player progress
+    //   is driven once, inside engine().progress step 7 — not here.
+    void EmotePlayer::progress(double dt) {
+        engine()._progress += dt; // local getProgress() accumulator (not in binary)
+        // sub_6818B4 @0x6818c8: dt(ms) -> frame units, then engine body.
+        const double frameDt = dt * 60.0 / 1000.0;
+        engine().progress(static_cast<float>(frameDt)); // EmoteEngine_progress body
+        engine()._modified = true;
+    }
+
+    // --- #2 frameProgress (sub_6817C0) ---
+    void EmotePlayer::frameProgress(double dt) { player().frameProgress(dt); }
+
+    // --- #3 draw (Player_draw_NCBWrapper) ---
+    void EmotePlayer::draw(tTJSVariant target) {
+        player().draw(target);
+        engine()._modified = true;
+    }
+
+    // --- #4 initPhysics (sub_67D4D0) — open: physics builder not yet ported ---
+    void EmotePlayer::initPhysics() { STUB_WARN(initPhysics); }
+
+    // --- #5 startWind (Player_startWind) ---
+    void EmotePlayer::startWind(double minAngle, double maxAngle, double amplitude,
+                                double freqX, double freqY) {
+        player().startWind(minAngle, maxAngle, amplitude, freqX, freqY);
+    }
+
+    // --- #6 stopWind (sub_681A38) ---
+    void EmotePlayer::stopWind() { player().stopWind(); }
+
+    // --- #7 play (Player_play_NCBWrapper) ---
+    bool EmotePlayer::play(ttstr label, tjs_int flags) {
+        const bool started = player().playMotionLike_0x6B2284(label, flags);
+        engine()._modified = true;
+        return started;
+    }
+
+    // --- #8 clear (sub_681A64) — tear down the primary slot (binary destroys the
+    //   +8 EmoteEngine; local deletes the EmoteObject chain and re-lazy-builds) ---
+    void EmotePlayer::clear() {
+        delete _primaryObj;
+        _primaryObj = nullptr;
+    }
+
+    // --- #9 getVariable (Player_getVariable_wrapper) ---
+    double EmotePlayer::getVariable(ttstr label) {
+        return player().getVariable(label);
+    }
+
+    // --- #10 contains (sub_681B0C -> hitTestLayer) ---
+    bool EmotePlayer::contains(ttstr label, double x, double y) {
+        return player().hitTestLayer(label, x, y);
+    }
+    tjs_error EmotePlayer::containsCompat(tTJSVariant *result, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(!result) {
+            return TJS_E_INVALIDPARAM;
+        }
+        if(numparams >= 3 && param[0] && param[1] && param[2]) {
+            *result = tTJSVariant(self->contains(
+                ttstr(*param[0]), param[1]->AsReal(), param[2]->AsReal()));
+            return TJS_S_OK;
+        }
+        return TJS_E_INVALIDPARAM;
+    }
+
+    // --- #11 serialize (sub_675E40 -> Player_serialize) ---
+    tTJSVariant EmotePlayer::serialize() { return player().serialize(); }
+
+    // --- #12 unserialize (sub_678044 -> Player_unserialize) ---
+    void EmotePlayer::unserialize(tTJSVariant data) { player().unserialize(data); }
+
+    // --- #13 pass (sub_681C48) — same progress driver as progress (binary
+    //   shares the sub_6818B4 advance body) ---
+    void EmotePlayer::pass(double dt) { progress(dt); }
+
+    // --- #14 setVariable (sub_671DF0 -> EmoteEngine setVariable keystone) ---
+    //   Single faithful dispatch into EmoteEngine::setVariable @0x671228. The
+    //   former `player().setVariable(...)` double-write was a non-faithful local
+    //   invention (the binary's HM7 and Player HM1/HM2 are disjoint maps bridged
+    //   only by the progress() bind-loop — see D3DEmotePlayer::setVariable).
+    void EmotePlayer::setVariable(ttstr label, double value, double transition,
+                                  double ease) {
+        engine().setVariable(label, value, transition, ease);
+        engine()._modified = true;
+    }
+    tjs_error EmotePlayer::setVariableCompat(tTJSVariant *, tjs_int numparams,
+                                             tTJSVariant **param,
+                                             iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 2 || !param[0] || !param[1]) {
+            return TJS_E_INVALIDPARAM;
+        }
+        const double transition =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
+        self->setVariable(ttstr(*param[0]), param[1]->AsReal(), transition, ease);
+        return TJS_S_OK;
+    }
+
+    // --- #15 setCoord (sub_672060) ---
+    void EmotePlayer::setCoord(double x, double y, double, double) {
+        player().setCoord(x, y);
+        engine()._modified = true;
+    }
+    tjs_error EmotePlayer::setCoordCompat(tTJSVariant *, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 2 || !param[0] || !param[1]) {
+            return TJS_E_INVALIDPARAM;
+        }
+        const double transition =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
+        self->setCoord(param[0]->AsReal(), param[1]->AsReal(), transition, ease);
+        return TJS_S_OK;
+    }
+
+    // --- #16 setScale (sub_67231C) ---
+    void EmotePlayer::setScale(double s, double transition, double ease) {
+        player().setEmoteScale(s, transition, ease);
+        engine()._modified = true;
+    }
+    tjs_error EmotePlayer::setScaleCompat(tTJSVariant *, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 1 || !param[0]) {
+            return TJS_E_INVALIDPARAM;
+        }
+        const double transition =
+            (numparams >= 2 && param[1]) ? param[1]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        self->setScale(param[0]->AsReal(), transition, ease);
+        return TJS_S_OK;
+    }
+
+    // --- #17 setRotate (sub_672568) ---
+    void EmotePlayer::setRotate(double rot, double transition, double ease) {
+        engine()._rot = rot;
+        player().setRotate(rot, transition, ease);
+        engine()._modified = true;
+    }
+    tjs_error EmotePlayer::setRotateCompat(tTJSVariant *, tjs_int numparams,
+                                           tTJSVariant **param,
+                                           iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 1 || !param[0]) {
+            return TJS_E_INVALIDPARAM;
+        }
+        const double transition =
+            (numparams >= 2 && param[1]) ? param[1]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        self->setRotate(param[0]->AsReal(), transition, ease);
+        return TJS_S_OK;
+    }
+
+    // --- #18 setColor (sub_67277C) ---
+    void EmotePlayer::setColor(tjs_int color, double transition, double ease) {
+        engine()._color = color;
+        player().setEmoteColor(static_cast<tjs_uint32>(color), transition, ease);
+        engine()._modified = true;
+    }
+    tjs_error EmotePlayer::setColorCompat(tTJSVariant *, tjs_int numparams,
+                                          tTJSVariant **param,
+                                          iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 1 || !param[0]) {
+            return TJS_E_INVALIDPARAM;
+        }
+        const double transition =
+            (numparams >= 2 && param[1]) ? param[1]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 3 && param[2]) ? param[2]->AsReal() : 0.0;
+        self->setColor(param[0]->AsInteger(), transition, ease);
+        return TJS_S_OK;
+    }
+
+    // --- #19 setOuterForce (sub_672A78) ---
+    void EmotePlayer::setOuterForce(ttstr label, double x, double y,
+                                    double transition, double ease) {
+        player().setOuterForce(label, x, y, transition, ease);
+        engine()._modified = true;
+    }
+    tjs_error EmotePlayer::setOuterForceCompat(tTJSVariant *, tjs_int numparams,
+                                               tTJSVariant **param,
+                                               iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        if(numparams < 3 || !param[0] || !param[1] || !param[2]) {
+            return TJS_E_INVALIDPARAM;
+        }
+        const ttstr label(*param[0]);
+        const double transition =
+            (numparams >= 4 && param[3]) ? param[3]->AsReal() : 0.0;
+        const double ease =
+            (numparams >= 5 && param[4]) ? param[4]->AsReal() : 0.0;
+        self->setOuterForce(label, param[1]->AsReal(), param[2]->AsReal(),
+                            transition, ease);
+        return TJS_S_OK;
+    }
+
+    // --- #26 meshDivisionRatio property setter (sub_681DDC) ---
+    void EmotePlayer::setMeshDivisionRatio(double v) {
+        engine()._meshDivisionRatio = v;
+        player().setEmoteMeshDivisionRatio(v);
+    }
+
+    // --- #35 setDrawAffineTranslateMatrix (-> Player) ---
+    tjs_error EmotePlayer::setDrawAffineTranslateMatrixCompat(
+        tTJSVariant *result, tjs_int numparams, tTJSVariant **param,
+        iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<EmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+        return Player::setDrawAffineTranslateMatrixCompat(
+            result, numparams, param, &self->player());
+    }
+
+    // --- #36 getCameraOffset (sub_681EF0 -> Player_getCameraOffset) ---
+    tTJSVariant EmotePlayer::getCameraOffset() { return player().getCameraOffset(); }
+
+    // --- #35 setCameraOffset (sub_681EF8 -> raw float write player+144/+148) ---
+    void EmotePlayer::setCameraOffset(double x, double y) {
+        player().setCameraOffsetXY_0x681EF8(x, y);
+    }
+
+    // --- #38 modifyRoot (sub_681F0C): NO args — sets flag byte
+    //   *(Player+1064 -> +200 -> +1584) = 1. Distinct from Motion.Player's
+    //   modifyRoot(tTJSVariant). open: the +200/+1584 root-modify flag is a
+    //   Player-internal field not yet surfaced as a named setter; faithful
+    //   thin set deferred until that field is modelled. ---
+    void EmotePlayer::modifyRoot() { STUB_WARN(modifyRoot); }
+
+    // setHairScale/setPartsScale/setBustScale (#39-41, sub_681F20/28/30) are
+    //   inline in the header (engine +1184/+1192/+1200 raw writes).
+
+    // --- #49 setMirror (sub_671DB0) ---
+    void EmotePlayer::setMirror(bool mirror) {
+        engine()._mirrorRequested = mirror;
+        engine()._mirrorChanged =
+            (engine()._mirrorRequested != engine()._mirrorBase);
+        player().setMirror(engine()._mirrorChanged);
+        engine()._modified = true;
+    }
+
+    // --- #50 skip (sub_66EB8C) ---
+    void EmotePlayer::skip() { player().stopTimeline(TJS_W("")); }
+
+    // --- #51-57 timeline methods ---
+    void EmotePlayer::playTimeline(ttstr label, tjs_int flags) {
+        player().playTimeline(label, flags);
+        engine()._modified = true;
+    }
+    void EmotePlayer::stopTimeline(ttstr label) { player().stopTimeline(label); }
+    bool EmotePlayer::getTimelinePlaying(ttstr label) {
+        return player().getTimelinePlaying(label);
+    }
+    void EmotePlayer::setTimelineBlendRatio(ttstr label, double ratio) {
+        player().setTimelineBlendRatio(label, ratio);
+    }
+    void EmotePlayer::fadeInTimeline(ttstr label, double duration, tjs_int flags) {
+        player().fadeInTimeline(label, duration, flags);
+    }
+    void EmotePlayer::fadeOutTimeline(ttstr label, double duration, tjs_int flags) {
+        player().fadeOutTimeline(label, duration, flags);
+    }
+    double EmotePlayer::getTimelineBlendRatio(ttstr label) {
+        return player().getTimelineBlendRatio(label);
+    }
+
+    // --- #58-64 variable/timeline query lists ---
+    tTJSVariant EmotePlayer::getVariableRange(ttstr label) {
+        return player().getVariableRange(label);
+    }
+    tTJSVariant EmotePlayer::getVariableFrameList(ttstr label) {
+        return player().getVariableFrameList(label);
+    }
+    tTJSVariant EmotePlayer::getMainTimelineLabelList() {
+        return player().getMainTimelineLabelList();
+    }
+    tTJSVariant EmotePlayer::getDiffTimelineLabelList() {
+        return player().getDiffTimelineLabelList();
+    }
+    // #62 getLoopTimeline (sub_67522C). binary returns the loop-timeline label
+    //   query result; local Player exposes a bool getLoopTimeline(label).
+    tTJSVariant EmotePlayer::getLoopTimeline(ttstr label) {
+        return tTJSVariant(player().getLoopTimeline(label));
+    }
+    tjs_int EmotePlayer::getTimelineTotalFrameCount(ttstr label) {
+        return player().getTimelineTotalFrameCount(label);
+    }
+    tTJSVariant EmotePlayer::getPlayingTimelineInfoList() {
+        return player().getPlayingTimelineInfoList();
+    }
+
+    // --- #65-67 selector methods ---
+    bool EmotePlayer::isSelectorTarget(ttstr label) {
+        return player().isSelectorTarget(label);
+    }
+    // #66 activateSelectorTarget (sub_67581C): scans the selector deque, finds
+    //   the option matching `label`, snapshots its keyframe set into the active
+    //   selector, then re-steps the selector + transition deques. Player has no
+    //   activate entry yet (only deactivate @0x675BF4) — open: faithful selector
+    //   activation needs the deque option-scan + applySelection re-step ported.
+    void EmotePlayer::activateSelectorTarget(ttstr label) {
+        STUB_WARN(activateSelectorTarget);
+    }
+    void EmotePlayer::deactivateSelectorTarget(ttstr label) {
+        player().deactivateSelectorTarget(label);
+    }
+
+    // --- #68 getCommandList (sub_682520 -> Player_getCommandList) ---
+    tTJSVariant EmotePlayer::getCommandList() { return player().getCommandList(); }
 
 } // namespace motion

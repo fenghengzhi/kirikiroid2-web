@@ -13,6 +13,7 @@
 
 #include "EmotePlayer.h"  // Player + EmotePlayer + ResourceManager
 #include "Player.h"
+#include "RuntimeSupport.h" // detail::narrow (G2-C bind-loop label conversion)
 #include "psbfile/PSBValue.h" // PSBList / PSBDictionary / PSBBool / PSBString
 
 #define LOGGER spdlog::get("plugin")
@@ -1743,8 +1744,8 @@ namespace motion {
     //       applyVarControllers_pos_scale_color_angle(step)
     //       if (player@1128 && player+1544 flag) sub_6687E8(step)
     //       dt -= step
-    //   // post-loop:
-    //   for (entry = _bindListHead; entry; entry = entry->next):
+    //   // post-loop (G2-C bind-loop, LIVE — bridges HM7 -> Player HM1/HM2):
+    //   for (entry = HM7@+1456; entry; entry = entry->next):
     //       sub_67C560 / sub_67C6B0 / Player_bindParameterValue
     //   sub_67C8A8(this); sub_6D2A54(player, 0, dt);
     //   if (dt != 0 && !syncWaiting@1159):
@@ -1904,40 +1905,81 @@ namespace motion {
             dt -= step;
         }
 
-        // Post-loop: the binary (EmoteEngine_progress @0x67D01C) walks HM#7's
+        // Post-loop bind-loop (G2-C keystone): the binary
+        // (EmoteEngine_progress @0x67D01C, body @0x67d3a4) walks HM#7's
         // _M_before_begin._M_nxt node chain (insertion order) at +1456:
         //   for (i = *(this+1456); i; i = *i) {
-        //       sub_67C560(this, &i.key, &i.value);
-        //       v68 = sub_67C6B0(this, &i.key);
-        //       Player_bindParameterValue(player, &i.key, 0, v68&1 ? -i.value : i.value);
+        //       sub_67C560(this, i+1, i+2);          // var-track weighted cascade,
+        //                                            //   mutates i.value (node+16) in place
+        //       v67 = i[2];                          // read accumulated value
+        //       v68 = sub_67C6B0(this, i+1);         // negate-flag resolver
+        //       v69 = (v68 & 1) ? -v67 : v67;
+        //       Player_bindParameterValue(*(this+1064), i+1, 0, v69);  // write Player HM1/HM2
         //   }
-        // i.key = node+8 (ttstr), i.value = node+16 (double) — i.e. each
-        // _labelToValueHM7 entry. sub_67C560 / sub_67C6B0 /
-        // Player_bindParameterValue are not yet ported (stubs), so the loop
-        // body has no observable effect today.
+        // i.key = node+8 (ttstr label), i.value = node+16 (double) — i.e. each
+        // _labelToValueHM7 entry.
         //
-        // PLATFORM_BOUNDARY (insertion-order): libstdc++ chains nodes in
-        // insertion order on _M_before_begin; libc++ does NOT expose an
-        // insertion-ordered chain, so iterating _labelToValueHM7 here would
-        // use libc++'s bucket order. This only matters once the bind callbacks
-        // above are ported AND a script observes ordering. Since the body is
-        // inert, we iterate the typed map directly and accept the order
-        // boundary. TODO(P-C): if a future port needs insertion order,
-        // reconsider a KiriKiri inline hashtable (decision deferred — see the
-        // module-alignment report; not done because no observable consumer
-        // exists yet and the cost/risk was judged too high to do blindly).
+        // The three callees are ported on the Player class (the port models the
+        // engine's timeline/mirror/eval tables on Player; binary sub_67C560 reads
+        // deque#10@+1040 + HM@+824/+880 + vector@+800, the port reads the
+        // equivalent _playingTimelineLabels / mirrorVariableMatchList / HM1/HM2):
+        //   sub_67C560            -> Player::accumulateTimelineContributionLike_0x67C560
+        //   sub_67C6B0            -> Player::shouldMirrorEvalLabelLike_0x67C6B0
+        //   Player_bindParameter  -> Player::bindParameterValueLike_0x6C4668 (ttstr,double)
+        //                            which writes HM1 (_evalCascadeMap[joined].writeVal)
+        //                            and HM2 (_evalResultValues[rawKey]) = the two maps
+        //                            getVariable reads (R0-1).
+        //
+        // PLATFORM_BOUNDARY (insertion-order): libstdc++ chains HM7 nodes in
+        // insertion order on _M_before_begin; libc++/this port has no
+        // insertion-ordered chain, so we iterate the typed _labelToValueHM7 in
+        // bucket order. Each bind writes a distinct label slot in Player HM1/HM2
+        // (no inter-label ordering dependence in the binary's bind body), so the
+        // observable HM1/HM2 result is order-independent; the boundary is benign.
+        Player& p = player();                                       // *(this+1064)
         for (auto& kv : _labelToValueHM7) {
             const ttstr& label = kv.first;
-            const double value  = kv.second;
-            (void)label; (void)value;
-            // sub_67C560(this, &label, &value);
-            // const bool negate = (sub_67C6B0(this, &label) & 1) != 0;
-            // Player_bindParameterValue(player, &label, 0, negate ? -value : value);
+            const std::string narrowLabel = detail::narrow(label);
+
+            // sub_67C560(this, &label, &value): accumulate var-track timeline
+            //   contribution into the HM7 node value in place (binary mutates
+            //   i.value at node+16; we mutate the map value).
+            double& value = kv.second;
+            p.accumulateTimelineContributionLike_0x67C560(narrowLabel, value);
+
+            // v67 = i[2] (read back the accumulated value).
+            const double accumulated = value;
+
+            // v68 = sub_67C6B0(this, &label); negate = v68 & 1.
+            const bool negate =
+                p.shouldMirrorEvalLabelLike_0x67C6B0(narrowLabel);
+
+            // Player_bindParameterValue(player, &label, 0, negate ? -v67 : v67):
+            //   write Player HM1/HM2 (the getVariable read surface).
+            p.bindParameterValueLike_0x6C4668(label, negate ? -accumulated
+                                                             : accumulated);
         }
 
-        // sub_67C8A8(this); sub_6D2A54(player, 0, originalDt);
-        //   PLATFORM_BOUNDARY: stubs. Note the binary passes v12 (ORIGINAL dt)
-        //   to sub_6D2A54 @0x67d408, not the drained copy.
+        // sub_67C8A8(this) @0x67d3f8:
+        //   PLATFORM_BOUNDARY: not reversed (stub, no live consumer modelled).
+
+        // Step 7 — Player-level progress @0x67d408:
+        //     sub_6D2A54(*(this+1064)=Player, 0, v12=originalDt);
+        //   sub_6D2A54 (= local Player::progressFramesLike_0x6D2A54) sets
+        //   player+16=0 (pendingEvents cursor -> _pendingEvents.clear()), runs
+        //   progress_inner / updateLayers / calcBounds / dispatchEvents. Placed
+        //   AFTER the G2-C bind-loop (so the bound HM1/HM2 values are already
+        //   written before the Player frame seek/eval reads them) and BEFORE the
+        //   bust/hair physics gate. The binary passes v12 (ORIGINAL FRAME dt), not
+        //   the drained dt-slice copy and NOT a ms value — sub_6D2A54 forwards it
+        //   straight to progress_inner with NO *60/1000 conversion (that lives in
+        //   the NCB wrappers). Use progressFramesLike_0x6D2A54 (frame-units), NOT
+        //   progressMsLike_0x6D2A54 (which would double-not-convert and re-scale a
+        //   frame value by 0.06). The progress ENTRY (D3DEmotePlayer::progress /
+        //   EmotePlayer::progress) routes through engine().progress, which calls
+        //   this once here — the entry no longer calls a Player progress directly,
+        //   so Player progress runs exactly once per frame (matches binary).
+        player().progressFramesLike_0x6D2A54(originalDt);          // @0x67d408
 
         // Physics-only pass. P0-B3 FIX: the binary gates on the ORIGINAL dt
         // (v12) and the syncWaiting byte @+1159:

@@ -428,6 +428,15 @@ namespace motion {
         void setDrawAffineTranslateMatrix(tTJSVariant m);
         tTJSVariant getCameraOffset();
         void setCameraOffset(tTJSVariant offset);
+        // Aligned with libkrkr2.so EmotePlayer setCameraOffset @0x681EF8:
+        //   raw float write player+144/+148 (= _cameraOffsetX/Y). The
+        //   Motion.EmotePlayer NCB #35 callback passes (x,y) doubles directly,
+        //   not a TJS offset object (that is Motion.Player's setCameraOffset
+        //   @0x6D9A38). Two distinct entry points → two setters.
+        void setCameraOffsetXY_0x681EF8(double x, double y) {
+            _cameraOffsetX = static_cast<float>(x);
+            _cameraOffsetY = static_cast<float>(y);
+        }
         void modifyRoot(tTJSVariant data);
         void debugPrint();
 
@@ -488,8 +497,10 @@ namespace motion {
         void setStereovisionCameraPosition(double x, double y, double z);
 
         // Timeline/variable queries
-        void setVariable(ttstr label, double value, double transition = 0.0,
-                         double ease = 0.0);
+        //   NOTE: there is no 4-arg Player::setVariable. The binary's
+        //   Motion.Player.setVariable NCB member (callback @0x6D0E70) maps to
+        //   Player_bindParameterValue @0x6C4668 (writes Player HM1/HM2), bound
+        //   locally via setVariableCompatMethod -> writeEvalResultValueLike_0x6C4668.
         double getVariable(ttstr label);
         // libkrkr2.so Player_bindParameterValue_writesHM1_HM2 @0x6C4668: writes
         // a var value into HM2 (_evalResultValues, always) and, when the key
@@ -542,6 +553,15 @@ namespace motion {
         void onFindMotion(ttstr name, int flags = 0);
         bool playMotionLike_0x6B2284(ttstr label, tjs_int flags);
         void progressMsLike_0x6D2A54(double deltaMs);
+        // Raw sub_6D2A54 @0x6D2A54: (player, 0, frameDt). Sets the pendingEvents
+        // cursor (player+16) to 0, runs Player_progress_inner with frameDt
+        // ALREADY in frame units (NO ms->frame *60/1000 conversion — that lives
+        // in the NCB wrappers Player_progressCompat@0x6D2A98 / sub_6818B4),
+        // updateLayers, calcBounds, dispatchEvents, then clears the cursor. This
+        // is the step-7 Player progress called from inside EmoteEngine::progress
+        // (EmoteEngine_progress @0x67d408 passes v12=ORIGINAL frame-dt). Distinct
+        // from progressMsLike_0x6D2A54 which takes MILLISECONDS and converts.
+        void progressFramesLike_0x6D2A54(double frameDt);
         void setParentPlayerLike_0x6B1ABC(Player *parentPlayer) {
             _parentPlayer = parentPlayer;
         }
@@ -750,11 +770,6 @@ namespace motion {
         void accumulateTimelineContributionLike_0x67C560(
             const std::string &label,
             double &value);
-        void setVariableResolvedWeightLike_0x671228(
-            const std::string &key,
-            double value,
-            double transition,
-            double easeWeight);
         void resetControllerStateLike_0x66EB8C();
         void applyEvalResultPostProcessLike_0x67CC9C();
         void applyClampControlsLike_0x67C8A8();
@@ -1245,12 +1260,6 @@ namespace motion {
         findControllerAnimatorStateLike_0x671228(const std::string &label) const;
         void eraseControllerAnimatorStateLike_0x671228(const std::string &label);
         void clearControllerAnimatorStateLike_0x671228();
-        // find-or-emplace helper for (*bucket)[label] / _typeNControllerAnimators[label]
-        // call sites (deque has no operator[] keyed by label).
-        static VariableAnimatorState &
-        findOrInsertControllerStateLike_0x671228(
-            std::deque<VariableAnimatorState> &bucket,
-            const std::string &label);
         // === libkrkr2.so motion::Player inlined hash maps (Phase B aliases) ===
         // HM1 (Player+264): cascaded PropGet result cache. Owns refcounts on
         // its embedded dispatch + chain via EvalCascadeState's destructor;

@@ -593,8 +593,13 @@ namespace motion {
         //   Migrated from Player::_emoteDirty (was incorrectly on Player).
         bool _dirty = true; // +1162
 
+        // +1163: byte — Motion.EmotePlayer `debugPrint` flag. NCB getter
+        //   sub_681F50 reads +1163; setter sub_681F58 sets +1163=1 (set-always-1
+        //   trigger, ignores arg). EmotePlayer-NCB-only field.
+        bool _debugPrintFlag = false; // +1163
+
         // padding to +1168 (double-aligned)
-        uint8_t _pad_1163_1167[1168 - 1163] = {}; // 5B
+        uint8_t _pad_1164_1167[1168 - 1164] = {}; // 4B
 
         // +1168: double — mesh division ratio (scale denominator).
         //   sub_6709AC (startWind) reads +1168/+1176 paired.

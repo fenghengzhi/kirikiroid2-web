@@ -8,15 +8,11 @@
 using namespace motion::internal;
 
 namespace {
-    float variableEaseWeightLike_0x671228(double ease) {
-        if(ease > 0.0) {
-            return static_cast<float>(ease + 1.0);
-        }
-        if(ease < 0.0) {
-            return static_cast<float>(1.0 / (1.0 - ease));
-        }
-        return 1.0f;
-    }
+    // variableEaseWeightLike_0x671228 (the TJS "ease" -> v22 factor formula)
+    //   was removed 2026-06-03 along with the non-faithful Player-side
+    //   setVariableResolvedWeightLike_0x671228 shim that was its only caller.
+    //   The faithful copy of this formula lives inside EmoteEngine::setVariable
+    //   (the real 0x671228 dispatch on `this`=EmoteEngine).
 
     struct ParameterLabelParts {
         std::string full;
@@ -395,201 +391,20 @@ namespace motion {
         bindParameterValueLike_0x6C4668(label, mode, value);
     }
 
-    void Player::setVariableResolvedWeightLike_0x671228(
-        const std::string &key, double value, double transition,
-        double easeWeight) {
-        const auto *activeMotion = _activeMotion.get();
-        const auto bindingIt = activeMotion
-            ? activeMotion->controllerBindings.find(key)
-            : decltype(activeMotion->controllerBindings.find(key)){};
-        const bool hasBinding =
-            activeMotion && bindingIt != activeMotion->controllerBindings.end();
-
-        if(hasBinding) {
-            const auto queueControllerStateLikeBinary =
-                [&](const std::string &targetKey,
-                    VariableAnimatorState &state,
-                    double currentValueInput,
-                    double requestedValue,
-                    double requestedTransition,
-                    double requestedEaseWeight) {
-                    const auto currentValue =
-                        static_cast<float>(currentValueInput);
-                    const auto targetValue =
-                        static_cast<float>(requestedValue);
-                    if(requestedTransition <= 0.0) {
-                        state.queue.clear();
-                        state.active = false;
-                        state.currentValue = targetValue;
-                        state.startValue = targetValue;
-                        state.targetValue = targetValue;
-                        state.progress = 1.0f;
-                        state.duration = 0.0f;
-                        state.weight =
-                            static_cast<float>(requestedEaseWeight);
-                        writeEvalResultValueLike_0x6C4668(targetKey,
-                                                          requestedValue);
-                        return;
-                    }
-
-                    if(!_emoteAnimatorFlag) {
-                        state.queue.clear();
-                        state.active = false;
-                        state.currentValue = currentValue;
-                        state.startValue = currentValue;
-                        state.targetValue = currentValue;
-                        state.progress = 1.0f;
-                        state.duration = 0.0f;
-                    }
-
-                    state.queue.push_back(VariableKeyframe{
-                        targetValue,
-                        static_cast<float>(requestedTransition),
-                        static_cast<float>(requestedEaseWeight),
-                    });
-                    writeEvalResultValueLike_0x6C4668(targetKey,
-                                                      state.currentValue);
-                };
-
-            const auto queueControllerLikeBinary =
-                [&](VariableAnimatorState &state,
-                    double requestedValue,
-                    double requestedTransition,
-                    double requestedEaseWeight) {
-                    queueControllerStateLikeBinary(
-                        key, state,
-                        _evalResultValues.count(key) ? _evalResultValues[key]
-                                                     : getVariable(detail::widen(key)),
-                        requestedValue, requestedTransition,
-                        requestedEaseWeight);
-                };
-
-            switch(bindingIt->second.type) {
-                case 0:
-                case 1:
-                case 2:
-                    // Aligned to 0x671228 cases 0/1/2:
-                    // these labels are routed to physics control groups, not to
-                    // the generic eval-result map / animator sink.
-                    if (_engineBack) _engineBack->_dirty = true;
-                    return;
-                case 3:
-                    // Aligned to 0x671228 default route for loopControl-built
-                    // entries: no generic eval-result write happens here.
-                    if (_engineBack) _engineBack->_dirty = true;
-                    return;
-                case 4:
-                case 5:
-                case 7:
-                case 8: {
-                    if(bindingIt->second.type == 8 && activeMotion) {
-                        const auto selectorIt =
-                            activeMotion->selectorControls.find(key);
-                        if(selectorIt != activeMotion->selectorControls.end()) {
-                            const int selectedIndex =
-                                static_cast<int>(value);
-                            eraseControllerAnimatorStateLike_0x671228(key);
-                            writeEvalResultValueLike_0x6C4668(
-                                key, static_cast<double>(selectedIndex));
-
-                            const double resolvedEaseWeight = easeWeight;
-                            int optionIndex = 0;
-                            for(const auto &option : selectorIt->second.options) {
-                                if(option.label.empty()) {
-                                    ++optionIndex;
-                                    continue;
-                                }
-                                const double targetValue =
-                                    optionIndex == selectedIndex
-                                        ? option.onValue
-                                        : option.offValue;
-                                const auto currentIt =
-                                    _evalResultValues.find(option.label);
-                                const double currentValue =
-                                    currentIt != _evalResultValues.end()
-                                        ? currentIt->second
-                                        : (_evalResultValues.count(option.label)
-                                               ? _evalResultValues[option.label]
-                                               : getVariable(
-                                                     detail::widen(option.label)));
-                                const double range =
-                                    std::abs(option.onValue - option.offValue);
-                                const double scaledTransition =
-                                    transition > 0.0 && range > 0.0000001
-                                        ? std::abs(targetValue - currentValue) /
-                                              range * transition
-                                        : 0.0;
-                                auto &optionState =
-                                    Player::findOrInsertControllerStateLike_0x671228(
-                                        _engineBack->_type8ControllerAnimators,
-                                        option.label);
-                                queueControllerStateLikeBinary(
-                                    option.label, optionState, currentValue,
-                                    targetValue, scaledTransition,
-                                    resolvedEaseWeight);
-                                ++optionIndex;
-                            }
-                            if (_engineBack) _engineBack->_dirty = true;
-                            return;
-                        }
-                    }
-                    auto *bucket =
-                        controllerAnimatorBucketLike_0x671228(
-                            bindingIt->second.type);
-                    if(!bucket) {
-                        if (_engineBack) _engineBack->_dirty = true;
-                        return;
-                    }
-                    auto &state =
-                        Player::findOrInsertControllerStateLike_0x671228(
-                            *bucket, key);
-                    ensureEvalResultSlotLike_0x686944(key);
-                    queueControllerLikeBinary(state, value, transition,
-                                              easeWeight);
-                    if (_engineBack) _engineBack->_dirty = true;
-                    return;
-                }
-                case 6: {
-                    if(bindingIt->second.role == "label") {
-                        eraseControllerAnimatorStateLike_0x671228(key);
-                        const double directValue =
-                            static_cast<double>(static_cast<int>(value));
-                        writeEvalResultValueLike_0x6C4668(key, directValue);
-                        if (_engineBack) _engineBack->_dirty = true;
-                        return;
-                    }
-                    auto &state =
-                        Player::findOrInsertControllerStateLike_0x671228(
-                            _engineBack->_type6ControllerAnimators, key);
-                    ensureEvalResultSlotLike_0x686944(key);
-                    queueControllerLikeBinary(state, value, transition,
-                                              easeWeight);
-                    if (_engineBack) _engineBack->_dirty = true;
-                    return;
-                }
-                default:
-                    if (_engineBack) _engineBack->_dirty = true;
-                    return;
-            }
-        }
-
-        // Aligned to Player_setVariable (0x671228): labels without a controller
-        // binding bypass animator queues and write the eval map immediately.
-        if(_engineBack) _engineBack->_variableAnimators.erase(key);
-        writeEvalResultValueLike_0x6C4668(key, value);
-        if (_engineBack) _engineBack->_dirty = true;
-    }
-
-    void Player::setVariable(ttstr label, double value, double transition,
-                             double ease) {
-        const auto key = detail::narrow(label);
-        if(key.empty()) {
-            return;
-        }
-
-        setVariableResolvedWeightLike_0x671228(
-            key, value, transition, variableEaseWeightLike_0x671228(ease));
-    }
+    // NOTE: the former Player::setVariableResolvedWeightLike_0x671228 and the
+    //   4-arg Player::setVariable(ttstr,double,double,double) were removed
+    //   2026-06-03. They were a NON-FAITHFUL local invention: a Player-side
+    //   reimplementation of the EmoteEngine HM6->controller-deque dispatch
+    //   (cases 0-8) that the binary performs EXCLUSIVELY inside
+    //   EmoteEngine_setVariable @0x671228 (`this`=EmoteEngine). No binary
+    //   function does that dispatch on a motion::Player. The genuine
+    //   Motion.Player.setVariable NCB member (Player_ncb_registerMembers
+    //   @0x6D69C8, callback thunk @0x6D0E70) maps to Player_bindParameterValue
+    //   @0x6C4668 (`this`=Player), which writes Player HM1 (+264) / HM2 (+320)
+    //   directly — ported as writeEvalResultValueLike_0x6C4668 and reached by
+    //   Player::setVariableCompatMethod below. The disjoint-map bridge
+    //   (EmoteEngine HM7 +1440 -> Player HM1/HM2) lives only in the progress()
+    //   bind-loop (G2-C), never in a setVariable double-write.
 
     bool Player::isLabelInBindScopeListLike_0x6CD16C(const ttstr &key) const {
         // libkrkr2.so Player_isLabelInBindScopeList @0x6CD16C: walks the var-track

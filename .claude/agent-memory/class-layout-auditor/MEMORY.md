@@ -1,11 +1,12 @@
 - [Player class container layout](player_container_layout.md) — 二进制 Player +264/+320/+1184/+1240 是 4 个 KiriKiri 哈希表(非vector),容器选型权威表
 - [Motionplayer container audit](motionplayer_container_audit.md) — fresh-decompile裁决:4+7 HM全是libstdc++ unordered_map(仅hash自研非内联表);唯一偏差=2个std::string-key map应ttstr;纠正"P3替换内联HM"前提
 - [Player pimpl split mapping](player_pimpl_split.md) — [过时] PlayerRuntime 已删,容器内联进 Player 本体;EmoteEngine 用 raw Player*+new/delete
-- [Player 1384B flat spec](player_1384b_flat_spec.md) — 78 NCB成员→偏移→类型→ctor初值表; setVariable a1+1384 是EmotePlayer不是Player
+- [Player 1384B flat spec](player_1384b_flat_spec.md) — 78 NCB成员→偏移→类型→ctor初值表; setVariable@0x671228 a1+1384 是 EmoteEngine(HM6) 不是 Player(纠正:也非EmotePlayer)
 - [EmoteEngine 1496B layout](emoteengine_1496b_layout.md) — EmoteEngine 偏移表(10 deque+7 ctrl)+5大偏差+路线图; HM2@+1440 不在 Player; 本地 inline @ EmotePlayer.h:56-101
 - [Emote controllers audit](emote_controllers_audit.md) — VarCtrl(0x80)/AngleCtrl(0x70) POD 实测字段表; Var 堆数组 new[](4*count字节=count float) 本地误用 count*4; element duration@+12 非+4
 - [EmotePlayer 24B shell](emoteplayer_24b_shell.md) — 退化 NCB 类(vtable/+8 EmoteEngine/+16 ownership byte),只注册空 finalize 无 ctor; vtable@0x1A18BB0; 与 D3DEmotePlayer 独立两条链
 - [Player field collisions](player_field_collisions.md) — 5 处 binary 偏移有 ≥2 port 字段(H1+480/H2+1120/H3+481/H4+1099/H5+1156); H4 是本审计新发现
 - [Player ctor/dtor lifecycle](player_ctor_dtor_lifecycle.md) — 本地 ctor=成员初始化器+dtor=default(RAII) vs 二进制 0x6CED30 手写扁平init/0x6CFADC 有序teardown; ctor 多 parentPlayer 参+ResourceManager*非dispatch
 - [EmotePlayer file topology](emoteplayer_file_topology.md) — 类族文件拓扑; 无 EmotePlayerImpl/PrimaryEmotePlayer/MotionLayerMgr; 4类3文件; 二进制无 PrimaryEmotePlayer
+- [EmoteObject 40B topology](emoteobject_40b_topology.md) — Gap2权威: EmoteObject(+0 RM232B/+8 Engine/+16 vector<variant*>); 本地缺RM字段+_module应是vector; getVariable↔setVariable桥=bind-loop stub(sub_67C560/67C6B0)
 - [Player local vs binary audit](player_local_vs_binary_audit.md) — 本地 Player.h:116 全面审计结论: 字段源码序/全std容器/无vtable✅/RAII ctor; ~35%对齐 + Top5未对齐项

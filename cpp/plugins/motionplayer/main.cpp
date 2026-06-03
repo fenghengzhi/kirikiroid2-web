@@ -439,8 +439,105 @@ NCB_REGISTER_CLASS(Player) {
 // the D3DEmotePlayer<->EmotePlayer binary relationship (sub_52E504) is not yet
 // decompiled, so "API fully missing" is not yet a settled verdict — verify
 // sub_52E504 before relocating the member table here.
+// Motion.EmotePlayer — full NCB surface (68 members + 2 constants), aligned
+//   with libkrkr2.so EmotePlayer_ncb_registerMembers @0x67FAC8. Registration
+//   ORDER matches the binary 1:1 (#1..#68). The binary native instance create
+//   @0x68629C is arg-less; constants (TimelinePlayFlag*) registered on the same
+//   class object. Member callbacks delegate to the shared Player/EmoteEngine
+//   machine (see EmotePlayer.cpp). These are SUBCLASS members (not Motion
+//   namespace free-functions) — they do NOT touch the M6 namespace-attach path.
 NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_CONSTRUCTOR(());
+    NCB_CONSTRUCTOR((ResourceManager));
+
+    // 2 constants (binary registers these before the member loop body)
+    Variant(TJS_W("TimelinePlayFlagParallel"),
+            (tjs_int)TimelinePlayFlagParallel);
+    Variant(TJS_W("TimelinePlayFlagDifference"),
+            (tjs_int)TimelinePlayFlagDifference);
+
+    // #1-19 Functions
+    NCB_METHOD(progress);                       // #1
+    NCB_METHOD(frameProgress);                  // #2
+    NCB_METHOD(draw);                           // #3
+    NCB_METHOD(initPhysics);                    // #4
+    NCB_METHOD(startWind);                      // #5
+    NCB_METHOD(stopWind);                       // #6
+    NCB_METHOD(play);                           // #7
+    NCB_METHOD(clear);                          // #8
+    NCB_METHOD(getVariable);                    // #9
+    NCB_METHOD_RAW_CALLBACK(contains, &EmotePlayer::containsCompat, 0); // #10
+    NCB_METHOD(serialize);                      // #11
+    NCB_METHOD(unserialize);                    // #12
+    NCB_METHOD(pass);                           // #13
+    NCB_METHOD_RAW_CALLBACK(setVariable, &EmotePlayer::setVariableCompat, 0); // #14
+    NCB_METHOD_RAW_CALLBACK(setCoord, &EmotePlayer::setCoordCompat, 0);       // #15
+    NCB_METHOD_RAW_CALLBACK(setScale, &EmotePlayer::setScaleCompat, 0);       // #16
+    NCB_METHOD_RAW_CALLBACK(setRotate, &EmotePlayer::setRotateCompat, 0);     // #17
+    NCB_METHOD_RAW_CALLBACK(setColor, &EmotePlayer::setColorCompat, 0);       // #18
+    NCB_METHOD_RAW_CALLBACK(setOuterForce, &EmotePlayer::setOuterForceCompat, 0); // #19
+
+    // #20-33 Properties
+    NCB_PROPERTY(completionType, getCompletionType, setCompletionType); // #20
+    NCB_PROPERTY(chara, getChara, setChara);                           // #21
+    NCB_PROPERTY(motion, getMotion, setMotion);                        // #22
+    NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);               // #23
+    NCB_PROPERTY(project, getProject, setProject);                     // #24
+    NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);                  // #25
+    NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio); // #26
+    NCB_PROPERTY(outline, getOutline, setOutline);                     // #27
+    NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);               // #28
+    NCB_PROPERTY_RO(frameLastTime, getFrameLastTime);                 // #29
+    NCB_PROPERTY_RO(frameLoopTime, getFrameLoopTime);                // #30
+    NCB_PROPERTY_RO(lastTime, getLastTime);                          // #31
+    NCB_PROPERTY_RO(loopTime, getLoopTime);                          // #32
+    NCB_PROPERTY_RO(bounds, getBounds);                              // #33
+    NCB_PROPERTY_RO(processedMeshVerticesNum, getProcessedMeshVerticesNum); // #34
+
+    // #35 setDrawAffineTranslateMatrix (Function)
+    NCB_METHOD_RAW_CALLBACK(setDrawAffineTranslateMatrix,
+                            &EmotePlayer::setDrawAffineTranslateMatrixCompat, 0); // #35
+
+    // #36-41 Functions
+    NCB_METHOD(getCameraOffset);                // #36
+    NCB_METHOD(setCameraOffset);                // #37
+    NCB_METHOD(modifyRoot);                      // #38
+    NCB_METHOD(setHairScale);                    // #39
+    NCB_METHOD(setPartsScale);                   // #40
+    NCB_METHOD(setBustScale);                    // #41
+
+    // #42-50 Properties
+    NCB_PROPERTY(hairScale, getHairScale, setHairScaleProp);     // #42
+    NCB_PROPERTY(bustScale, getBustScale, setBustScaleProp);     // #43
+    NCB_PROPERTY(partsScale, getPartsScale, setPartsScaleProp);  // #44
+    NCB_PROPERTY(debugPrint, getDebugPrint, setDebugPrint);      // #45
+    NCB_PROPERTY(queuing, getQueuing, setQueuing);               // #46
+    NCB_PROPERTY(directEdit, getDirectEdit, setDirectEdit);      // #47
+    NCB_PROPERTY(selectorEnabled, getSelectorEnabled, setSelectorEnabled); // #48
+    NCB_PROPERTY_RO(variableKeys, getVariableKeys);            // #49
+    NCB_PROPERTY_RO(animating, getAnimating);                 // #50
+
+    // #51-70 Functions
+    NCB_METHOD(setMirror);                       // #51
+    NCB_METHOD(skip);                            // #52
+    NCB_METHOD(playTimeline);                    // #53
+    NCB_METHOD(stopTimeline);                    // #54
+    NCB_METHOD(getTimelinePlaying);              // #55
+    NCB_METHOD(setTimelineBlendRatio);           // #56
+    NCB_METHOD(fadeInTimeline);                  // #57
+    NCB_METHOD(fadeOutTimeline);                 // #58
+    NCB_METHOD(getTimelineBlendRatio);           // #59
+    NCB_METHOD(getVariableRange);                // #60
+    NCB_METHOD(getVariableFrameList);            // #61
+    NCB_METHOD(getMainTimelineLabelList);        // #62
+    NCB_METHOD(getDiffTimelineLabelList);        // #63
+    NCB_METHOD(getLoopTimeline);                 // #64
+    NCB_METHOD(getTimelineTotalFrameCount);      // #65
+    NCB_METHOD(getPlayingTimelineInfoList);      // #66
+    NCB_METHOD(isSelectorTarget);                // #67
+    NCB_METHOD(activateSelectorTarget);          // #68
+    NCB_METHOD(deactivateSelectorTarget);        // #69
+    NCB_METHOD(getCommandList);                  // #70
 }
 
 // ============================================================

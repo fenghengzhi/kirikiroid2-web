@@ -632,9 +632,24 @@ namespace internal {
                     state, trackIndex, frame.value, transition,
                     frame.easingWeight);
             } else {
-                setVariableResolvedWeightLike_0x671228(
-                    track.label, static_cast<double>(frame.value), transition,
-                    frame.easingWeight);
+                // Aligned with libkrkr2.so sub_669E1C @0x669ebc: the binary
+                //   external route is a SINGLE EmoteEngine_setVariable(this,
+                //   key=track, value, easing=transition,
+                //   durationFrames=easingWeight_raw) call into 0x671228 — the
+                //   faithful EmoteEngine HM6->deque-index dispatch. That writes
+                //   EmoteEngine HM7; getVariable reads Player HM1/HM2, the two are
+                //   bridged only by the progress() bind-loop (G2-C). The binary
+                //   has NO Player-side write here, so the prior
+                //   setVariableResolvedWeightLike_0x671228 double-write (a local
+                //   invention defeating the disjoint-map architecture) is removed.
+                //   EmoteEngine::setVariable computes the v22 factor from the RAW
+                //   easingWeight internally, so pass frame.easingWeight unscaled.
+                if(_engineBack) {
+                    _engineBack->setVariable(
+                        detail::widen(track.label),
+                        static_cast<double>(frame.value), transition,
+                        frame.easingWeight);
+                }
             }
         }
         state.controlInitialized = true;
@@ -695,9 +710,20 @@ namespace internal {
                             state, trackIndex, nextFrame.value, transition,
                             nextFrame.easingWeight);
                     } else {
-                        setVariableResolvedWeightLike_0x671228(
-                            track.label, static_cast<double>(nextFrame.value),
-                            transition, nextFrame.easingWeight);
+                        // Aligned with libkrkr2.so sub_669E1C @0x669ebc external
+                        //   route — single 0x671228 (EmoteEngine HM6->deque-index)
+                        //   dispatch; raw easingWeight as durationFrames (factor
+                        //   computed inside the engine). The binary writes only
+                        //   EmoteEngine HM7 here; the prior Player-side
+                        //   setVariableResolvedWeightLike_0x671228 double-write was
+                        //   a non-faithful local invention and is removed (HM7 →
+                        //   Player HM1/HM2 crosses only via progress() bind-loop).
+                        if(_engineBack) {
+                            _engineBack->setVariable(
+                                detail::widen(track.label),
+                                static_cast<double>(nextFrame.value), transition,
+                                nextFrame.easingWeight);
+                        }
                     }
                 }
 
@@ -771,9 +797,21 @@ namespace internal {
                       track.frames[nextIndex].time <= state.currentTime) {
                     const auto &frame = track.frames[nextIndex];
                     if(!frame.isTypeZero) {
-                        setVariableResolvedWeightLike_0x671228(
-                            track.label, static_cast<double>(frame.value),
-                            frame.time, frame.easingWeight);
+                        // Aligned with libkrkr2.so sub_67CD20 @0x67cf0c: single
+                        //   EmoteEngine_setVariable(this, key=track, value=frame+12,
+                        //   easing=frame+0(time), durationFrames=frame+16) into
+                        //   0x671228 (EmoteEngine HM6->deque-index dispatch). Raw
+                        //   easingWeight as durationFrames (engine computes factor).
+                        //   The binary writes only EmoteEngine HM7; the prior
+                        //   Player-side setVariableResolvedWeightLike_0x671228
+                        //   double-write was a non-faithful local invention and is
+                        //   removed (HM7 → Player HM1/HM2 only via progress()).
+                        if(_engineBack) {
+                            _engineBack->setVariable(
+                                detail::widen(track.label),
+                                static_cast<double>(frame.value), frame.time,
+                                frame.easingWeight);
+                        }
                     }
                     cursor = static_cast<int>(nextIndex);
                     ++nextIndex;
@@ -1632,6 +1670,36 @@ namespace internal {
         if(true) {
             _pendingEvents.clear();
         }
+    }
+
+    // Aligned with libkrkr2.so sub_6D2A54 @0x6D2A54 (raw, frame-units):
+    //     *(player+16) = 0;                 // pendingEvents cursor
+    //     Player_progress_inner(player, frameDt);   // frameDt ALREADY frames
+    //     Player_updateLayers(player);
+    //     Player_calcBounds(player);
+    //     Player_dispatchEvents(player, *(player+16));
+    //     *(player+16) = 0;
+    // The middle arg in the binary call (sub_6D2A54(player, 0, frameDt)) is the
+    // pendingEvents cursor seed (always 0 at the EmoteEngine_progress @0x67d408
+    // call site) — modelled by the _pendingEvents.clear() bracket. NO ms->frame
+    // conversion here: that is the wrapper's job (Player_progressCompat@0x6D2A98
+    // does v10*60/1000 BEFORE calling progress_inner; sub_6818B4 does dt*60/1000
+    // before the engine body). EmoteEngine::progress receives frame-dt already,
+    // so it forwards frame-dt straight through. This is the step-7 Player progress
+    // run AFTER the G2-C bind-loop so the bound HM1/HM2 values are in place when
+    // the frame seek/eval reads them. NOTE: frameProgress (= progress_inner) wipes
+    // _evalResultValues(HM2) at entry; the binary progress_inner @0x6C106C does
+    // NOT clear +320, so the local HM2 clear vs the bind-loop write ordering is a
+    // PRE-EXISTING question independent of this routing (affects round-trip
+    // observability, see report) — not patched here per CLAUDE.md.
+    void Player::progressFramesLike_0x6D2A54(double frameDt) {
+        _pendingEvents.clear();                 // *(player+16)=0 @0x6d2a64
+        frameProgress(frameDt);                 // Player_progress_inner @0x6d2a68
+        if(!_nodes.empty()) {                   // updateLayers guard (port)
+            updateLayers();                     // Player_updateLayers @0x6d2a70
+        }
+        calcBounds();                           // Player_calcBounds @0x6d2a78
+        _pendingEvents.clear();                 // dispatchEvents + clear @0x6d2a84/88
     }
 
     tjs_error Player::progressCompatMethod(tTJSVariant *result, tjs_int numparams,

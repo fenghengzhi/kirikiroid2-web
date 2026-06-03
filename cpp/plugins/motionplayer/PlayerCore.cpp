@@ -156,20 +156,12 @@ namespace motion {
         _engineBack->_type8ControllerAnimators.clear();
     }
 
-    // find-or-emplace helper for the (*bucket)[label] / _typeNControllerAnimators[label]
-    // call sites. Returns a reference to the entry (existing or newly appended).
-    Player::VariableAnimatorState &
-    Player::findOrInsertControllerStateLike_0x671228(
-        std::deque<VariableAnimatorState> &bucket,
-        const std::string &label) {
-        if(auto *existing = findInDeque(bucket, label)) {
-            return *existing;
-        }
-        VariableAnimatorState state;
-        state.label = label;
-        bucket.push_back(std::move(state));
-        return bucket.back();
-    }
+    // findOrInsertControllerStateLike_0x671228 removed 2026-06-03: its only
+    //   call sites were inside the non-faithful Player-side
+    //   setVariableResolvedWeightLike_0x671228 shim (a local reimplementation of
+    //   the EmoteEngine HM6->deque dispatch that the binary does only inside
+    //   EmoteEngine_setVariable @0x671228). With that shim removed, this helper
+    //   is dead.
 
     void Player::setSelectorEnabled(bool v) {
         if(_selectorEnabled == v) {
@@ -952,18 +944,33 @@ namespace motion {
             for(const auto &option : binding.options) {
                 removeRuntimeState(option.label);
             }
-
-            if(!_selectorEnabled) {
-                continue;
-            }
-
-            // Aligned to libkrkr2.so sub_670D1C:
-            // selector-enabled path resets each selector controller and
-            // immediately applies sub_6680B0(..., index=0, transition=0, ease=0).
-            setVariable(detail::widen(selectorLabel), 0.0, 0.0, 0.0);
         }
 
-        if (_engineBack) _engineBack->_dirty = true;
+        if(!_selectorEnabled) {
+            if(_engineBack) _engineBack->_dirty = true;
+            return;
+        }
+
+        // Aligned to libkrkr2.so sub_670D1C @0x670d98..0x670e1c: the
+        //   selector-enabled path iterates the EmoteEngine selector deque #9
+        //   (engine+656 = _vectorVarDeque9) and, for each entry whose gate byte
+        //   (+1160) is set, resets the controller's selection state
+        //   (*(ctl+84)=0) and calls EmoteSelectorController_applySelection(ctl,
+        //   0, 0.0, 0.0) DIRECTLY @0x670e1c. It does NOT route through
+        //   setVariable/0x671228 — the prior local setVariable(...) call was a
+        //   non-faithful approximation that depended on the removed Player-side
+        //   shim. Drive the selector controllers in-place to match the binary.
+        if(_engineBack) {
+            for(auto &entry : _engineBack->_vectorVarDeque9) {
+                if(!entry.ctl) {
+                    continue;
+                }
+                entry.ctl->selectedIndex = 0; // *(ctl+84)=0 @0x670e0c
+                EmoteSelectorController_applySelection(entry.ctl, 0, 0.0f,
+                                                       0.0f); // @0x670e1c
+            }
+            _engineBack->_dirty = true;
+        }
     }
 
     const detail::TimelineState *Player::primaryTimelineStateLike_0x66F80C() const {
@@ -1257,7 +1264,14 @@ namespace motion {
                                                   value.AsObjectNoAddRef());
             for(const auto &[label, stored] : callback.entries) {
                 if(stored.Type() != tvtVoid) {
-                    setVariable(label, stored.AsReal());
+                    // Restore each saved variable straight into Player HM1/HM2
+                    //   (the map Player::serialize read via getVariable). This is
+                    //   the faithful Player-side write = Player_bindParameterValue
+                    //   @0x6C4668 (= the Motion.Player.setVariable NCB member,
+                    //   callback @0x6D0E70 -> 0x6C4668). The removed 4-arg
+                    //   Player::setVariable shim used to wrap this same write.
+                    writeEvalResultValueLike_0x6C4668(detail::narrow(label),
+                                                      stored.AsReal());
                 }
             }
         }
