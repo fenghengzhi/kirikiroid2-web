@@ -1475,7 +1475,33 @@ namespace internal {
         FrameContentState
         advanceNodeFrameSelectionLike_0x6926B4(
             detail::MotionNode &node, double currentTime,
-            std::vector<detail::MotionEvent> *pendingEvents = nullptr);
+            std::vector<detail::MotionEvent> *pendingEvents = nullptr,
+            bool doForward = true, bool doBackward = true);
+
+        // The two single-direction inline-seek boundaries the binary runs for
+        // NON-parameterized nodes (node+8 == 0) inside the node-deque walk:
+        //   • forward inline  @0x6B73DC (in Player_advanceRootAndNodes) — forward
+        //     seek only + onAction; reached for forward playback.
+        //   • backward inline @0x6BA1CC (in Player_rewindRootAndNodes) — backward
+        //     seek only + onAction; reached for reverse playback.
+        // Both delegate to advanceNodeFrameSelectionLike_0x6926B4 with the matching
+        // direction flag set and events enabled. (The parameterized node+8 != 0
+        // path uses advanceNodeFramesLike_0x6B7E44 = forward + corrective-backward,
+        // no events.)
+        inline FrameContentState advanceNodeFrameForwardInlineSeekLike_0x6B73DC(
+            detail::MotionNode &node, double currentTime,
+            std::vector<detail::MotionEvent> *pendingEvents) {
+            return advanceNodeFrameSelectionLike_0x6926B4(
+                node, currentTime, pendingEvents, /*doForward=*/true,
+                /*doBackward=*/false);
+        }
+        inline FrameContentState advanceNodeFrameBackwardInlineSeekLike_0x6BA1CC(
+            detail::MotionNode &node, double currentTime,
+            std::vector<detail::MotionEvent> *pendingEvents) {
+            return advanceNodeFrameSelectionLike_0x6926B4(
+                node, currentTime, pendingEvents, /*doForward=*/false,
+                /*doBackward=*/true);
+        }
 
         // Player_advanceNodeFrames @ 0x6B7E44 — the binary's per-node 2-slot
         // ping-pong frame seek for PARAMETERIZED nodes (caller branch at

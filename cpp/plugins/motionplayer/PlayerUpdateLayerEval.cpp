@@ -353,10 +353,29 @@ namespace motion::internal {
         }
     }
 
+    // The shared per-node seek primitive behind THREE binary functions that all
+    // run an identical forward / corrective-backward seek over node.slots[0/1]
+    // and an identical state-establish tail, differing only in WHICH direction
+    // loops run and whether per-node onAction fires:
+    //   • Player_advanceNodeFrames  @0x6B7E44 (parameterized): forward + corrective
+    //       backward, NO events  → doForward=true,  doBackward=true,  events=null
+    //   • forward inline seek       @0x6B73DC (advanceRootAndNodes, non-param):
+    //       forward only, WITH events → doForward=true, doBackward=false
+    //   • backward inline seek      @0x6BA1CC (rewindRootAndNodes, non-param):
+    //       backward only, WITH events → doForward=false, doBackward=true
+    // The forward/backward loops below are gated by doForward/doBackward so each
+    // binary variant gets exactly its loop set; the frames-empty handling, the
+    // init seed, and the tail are shared (byte-identical across all three).
+    // (doBackward off for the forward inline is the binary's reality — 0x6B73DC
+    // has NO corrective-backward; its loop-wrap repositioning is done earlier by
+    // Player_reseekTimelineCursors' node re-seed @0x6B91B0, ported as
+    // reseekNodeTimelineSlotsLike_0x6B91B0. Empirically the backward loop never
+    // fires for the logo cases, so the split is logo-identical.)
     MOTIONPLAYER_NOINLINE FrameContentState
     advanceNodeFrameSelectionLike_0x6926B4(
         detail::MotionNode &node, double currentTime,
-        std::vector<detail::MotionEvent> *pendingEvents) {
+        std::vector<detail::MotionEvent> *pendingEvents,
+        bool doForward, bool doBackward) {
         // 砖5/洞2: fire a per-node onAction(label, action) for each crossed
         // action frame (slot mask bit 0x40000 / content["act"], stored in
         // ClipSlot.action). Aligned to the per-node sub_6B638C (0x6B638C) push
@@ -405,7 +424,8 @@ namespace motion::internal {
 
         const int lastForwardFrameIndex =
             static_cast<int>(frames->size()) - 2;
-        while(node.otherSlot().frameIndex >= 0 &&
+        while(doForward &&
+              node.otherSlot().frameIndex >= 0 &&
               node.activeSlot().frameIndex < lastForwardFrameIndex &&
               selectionTime >= node.otherSlot().clipStartTime) {
             // 0x6B6ADC: fire the crossed frame (`other`) before the swap.
@@ -418,7 +438,8 @@ namespace motion::internal {
             node.hasTimelineEvalRatio = false;
         }
 
-        while(node.activeSlot().frameIndex > 0 &&
+        while(doBackward &&
+              node.activeSlot().frameIndex > 0 &&
               selectionTime < node.activeSlot().clipStartTime) {
             const int previousIndex = node.activeSlot().frameIndex - 1;
             node.activeSlotIndex ^= 1;
@@ -629,7 +650,8 @@ namespace motion {
     // backward sub-loop (PlayerUpdateLayerEval.cpp:390) that covers small
     // rewinds, so forward + corrective-backward is the step-1 coverage. Full
     // reverse rewind = TODO (P7 step-2).
-    void Player::progressSeekNodeSlotsLike_0x6C106C(double clampedEvalTime) {
+    void Player::progressSeekNodeSlotsLike_0x6C106C(double clampedEvalTime,
+                                                    bool forward) {
         auto &nodes = _nodes;
         if (nodes.empty()) {
             return;
@@ -676,11 +698,50 @@ namespace motion {
             // gated only by the selection time.
             if(node.parameterEntry != nullptr) {
                 // node+8 != 0 -> Player_advanceNodeFrames (0x6B7E44). NO events.
+                // Same forward+corrective-backward seek in both play directions.
                 advanceNodeFramesLike_0x6B7E44(node, clampedEvalTime);
                 continue;
             }
-            advanceNodeFrameSelectionLike_0x6926B4(node, clampedEvalTime,
-                                                   &_pendingEvents);
+            // node+8 == 0 -> single-direction inline seek WITH events: forward
+            // inline (0x6B73DC, advanceRootAndNodes) for forward playback,
+            // backward inline (0x6BA1CC, rewindRootAndNodes) for reverse. The
+            // binary runs exactly one direction's loop here; the forward inline
+            // has NO corrective-backward (loop-wrap repositioning is done by
+            // reseekNodeTimelineSlotsLike_0x6B91B0 in reseekTimelineCursors).
+            if(forward) {
+                advanceNodeFrameForwardInlineSeekLike_0x6B73DC(
+                    node, clampedEvalTime, &_pendingEvents);
+            } else {
+                advanceNodeFrameBackwardInlineSeekLike_0x6BA1CC(
+                    node, clampedEvalTime, &_pendingEvents);
+            }
+        }
+    }
+
+    // Player_reseekTimelineCursors node-deque re-seed loop @0x6B91B0 (STEP 4).
+    // ABSOLUTE two-slot re-seed of every non-root node to its target-bracketing
+    // frame, independent of the prior cursor:
+    //   for(m=1; m<dequeSize-1; ++m) Player_initNodeTimeline(player, node[m]);
+    // Player_initNodeTimeline (0x6B64AC) parses slot[0]=frame(v19) +
+    // slot[1]=frame(v19+1) (v19=min(scan(target),count-2)), merges both, sets
+    // activeSlotIndex(+1392)=0 and seeded(+44)=1; selection target per-node is
+    // (*(node+8)) ? *(node+8)+40 : player+456 — computed inside
+    // initializeNodeTimelineSlotsLike_0x6B64AC via frameSelectionTimeLike_0x6B7E44.
+    // This is what makes the loop-wrap path's subsequent FORWARD-ONLY inline seek
+    // sufficient (no corrective-backward needed). The binary breaks at
+    // m == dequeSize-1; the live deque maps 1:1 to _nodes, so the proven node-walk
+    // range `i < _nodes.size()` is used (matches progressSeekNodeSlotsLike). The
+    // 0x6B9234 pruneHM3 / 0x6B9650 aux-list tail is housekeeping (inert on node
+    // slots) and stays DEFERRED. (Only reached at loop-wrap, which the logo cases
+    // never hit — empirically reseekTimelineCursors is never called for m2logo.)
+    void Player::reseekNodeTimelineSlotsLike_0x6B91B0(double targetTime) {
+        auto &nodes = _nodes;
+        for (size_t i = 1; i < nodes.size(); ++i) {
+            detail::MotionNode &node = nodes[i];
+            const auto frames = psbDictionaryList(node.psbNode, "frameList");
+            const auto transformOrder = readNodeTransformOrder(node.psbNode);
+            initializeNodeTimelineSlotsLike_0x6B64AC(
+                node, frames, targetTime, transformOrder);
         }
     }
 

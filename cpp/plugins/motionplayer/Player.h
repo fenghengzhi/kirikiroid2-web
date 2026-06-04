@@ -847,7 +847,20 @@ namespace motion {
         // live MotionNode::ClipSlot = the binary's node+320/+856 slots) out of
         // updateLayers and into the progress pass, restoring the binary's
         // two-pass split. Forward-only for step-1; reverse rewind is a TODO.
-        void progressSeekNodeSlotsLike_0x6C106C(double clampedEvalTime);
+        // `forward` selects the non-parameterized node's single-direction inline
+        // seek: true → forward inline (0x6B73DC, advanceRootAndNodes), false →
+        // backward inline (0x6BA1CC, rewindRootAndNodes). Parameterized nodes
+        // (node+8 != 0) always run advanceNodeFrames (0x6B7E44, both directions).
+        void progressSeekNodeSlotsLike_0x6C106C(double clampedEvalTime,
+                                                bool forward = true);
+        // Player_reseekTimelineCursors node-deque re-seed loop @0x6B91B0 — the
+        // step-4 ABSOLUTE two-slot re-seed of every node (index ≥ 1) to its
+        // target-bracketing frame via Player_initNodeTimeline (= local
+        // initializeNodeTimelineSlotsLike_0x6B64AC). Repositions node slots
+        // independent of their prior cursor, so the loop-wrap path's subsequent
+        // forward-only inline seek needs no corrective-backward. Called from
+        // reseekTimelineCursors (STEP 4). See PlayerUpdateLayerEval.cpp.
+        void reseekNodeTimelineSlotsLike_0x6B91B0(double targetTime);
         // Player_advanceRootAndNodes @0x6B6ADC — the FORWARD 4-stream walk
         // (layer → root → var-track → node-deque) the binary runs at each forward
         // advance point inside Player_progress_inner (0x6C106C @0x6C13D4 /

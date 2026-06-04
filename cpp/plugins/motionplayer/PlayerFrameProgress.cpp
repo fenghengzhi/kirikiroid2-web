@@ -1671,11 +1671,17 @@ namespace internal {
         reseedVariableTracksLike_0x6B86C8(targetTime);
 
         // ---- STEP 4: NODE init loop @0x6B91B0 ----
-        // Player_initNodeTimeline (0x6B64E4) per node. The caller keeps
-        // progressSeekNodeSlotsLike_0x6C106C right after this call, which is the
-        // live per-node seek that fills the node+320/+856 parsed-frame slots
-        // (the same work initNodeTimeline does). Performed by the caller; not
-        // duplicated here so the node slots are not walked twice.
+        // Player_initNodeTimeline (0x6B64AC) per node — the ABSOLUTE two-slot
+        // re-seed that repositions every node independent of its prior cursor.
+        // Now ported (reseekNodeTimelineSlotsLike_0x6B91B0); the caller still runs
+        // progressSeekNodeSlotsLike right after (matching the binary's
+        // reseek-then-advanceRootAndNodes order), but with the node slots already
+        // absolutely positioned the subsequent forward-only inline seek is a
+        // ~no-op step rather than relying on a corrective-backward to undo a
+        // loop-wrap time jump. (Previously DEFERRED to the caller's node walk; the
+        // corrective-backward that stood in for this has been removed from the
+        // forward inline seek now that this re-seed exists.)
+        reseekNodeTimelineSlotsLike_0x6B91B0(targetTime);
 
         // ---- STEP 5: TAIL @0x6B9234 ----
         // DEFERRED 0x6B9234 Player_pruneHM3_byNodeIdentity (HM3 prune by node
@@ -1878,7 +1884,7 @@ namespace internal {
         seekLayerEventStreamLike_0x6B6ADC(clampedEvalTime);  // ① layer (bidirectional → backward 0x6B9AE8)
         seekRootContentStreamLike_0x6B6ADC(clampedEvalTime); // ② root (forward-only port approximation)
         rewindVariableTracksLike_0x6B9A3C(clampedEvalTime);  // ③ var-track 0x6B9FCC (reverse)
-        progressSeekNodeSlotsLike_0x6C106C(clampedEvalTime); // ④ node deque 0x6BA158
+        progressSeekNodeSlotsLike_0x6C106C(clampedEvalTime, /*forward=*/false); // ④ node deque 0x6BA158 (backward inline seek)
     }
 
     void Player::frameProgress(double dt) {

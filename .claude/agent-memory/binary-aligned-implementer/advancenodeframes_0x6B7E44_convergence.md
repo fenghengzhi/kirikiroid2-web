@@ -64,9 +64,39 @@ node ④ progressSeekNodeSlotsLike] was inlined at 5 advance/rewind-equivalent c
 deltaTime-sign dispatch in the common tail. Pure behavior-preserving extraction (streams
 already ported separately); m2logo 93 / yuzulogo 243 green. Blueprint: agent a027b3f7.
 
-**REMAINING (refinements — NOT YET DONE, entangled + fragile loop-wrap path, mostly
-oracle-inert; scoped + evidenced, recommend a focused separately-verified session)**:
+**STEP 3 DONE & GREEN (2026-06-05, commit pending)**: 3a + 3b both landed.
+EMPIRICAL BASIS (proc_exit probes, m2logo + yuzulogo): (i) logo NEVER loop-wraps —
+reseekTimelineCursors is never called (exit(88) in it never fired for m2logo); (ii) the
+conflated seek's corrective-backward loop NEVER fires for either logo case (exit(77) in the
+loop body never fired). So removing the corrective-backward from the forward path (3b) is
+PROVABLY logo-identical (the removed loop never executed — empirical, not assumed, unlike the
+step-1 "inert" miss), and the @0x6B91B0 re-seed (3a) is logo-inert (reseek uncalled). Both
+implemented faithfully per CLAUDE.md (decompile evidence + non-regressing build); m2logo 93 /
+yuzulogo 243 green.
+— 3a: reseekNodeTimelineSlotsLike_0x6B91B0 (PlayerUpdateLayerEval.cpp) added + called in
+reseekTimelineCursors STEP 4 (PlayerFrameProgress.cpp), closing the documented gap.
+— 3b: advanceNodeFrameSelectionLike_0x6926B4 took (bool doForward, bool doBackward); two
+inline-seek boundaries advanceNodeFrameForwardInlineSeekLike_0x6B73DC (true,false) /
+advanceNodeFrameBackwardInlineSeekLike_0x6BA1CC (false,true) (PlayerInternal.h);
+progressSeekNodeSlotsLike_0x6C106C took (bool forward); advanceRootAndNodes → forward,
+rewindRootAndNodes → backward. Param nodes still advanceNodeFramesLike (both dirs, no events)
+— preserves the step-1 fix (m2logo's param "レイヤ1" passed 93). CAVEAT kept: reseek node
+range uses `i < _nodes.size()` (proven walk range) vs binary `m < dequeSize-1`; logo-inert
+(reseek uncalled), documented in code.
 
+**STEP 4 DECISION (2026-06-05): KEEP the PlayerFrameStepping.cpp mock — do NOT retire.**
+The unit tests (tests/unit-tests/plugins/motionplayer-dll.cpp) exercise the MOCK
+(motion::detail::advanceNodeFramesLike_0x6B7E44 / advanceRootAndNodesLike_0x6B6ADC /
+rewindRootAndNodesLike_0x6B9A3C / reseekTimelineCursorsLike_0x6B86C8) on SYNTHETIC
+NodeFrameStreamsLike seeds with NO motion file. The live functions need a full Player + loaded
+motion (PSB) fixtures, which do NOT exist for these synthetic stepping scenarios. Per CLAUDE.md
+(no fabricating fixtures), retiring the mock would LOSE real synthetic unit coverage with no
+ready replacement → net negative. The live functions now supersede the mock's role IN THE LIVE
+PATH (all 3 convergences + 3a/3b are live), but the mock stays as standalone synthetic unit
+coverage. Genuine fixture-backed migration = a separate task only if motion fixtures for these
+cases materialize.
+
+HISTORICAL REMAINING (now resolved above):
 — **3a: port reseekTimelineCursors node-init loop @0x6B91B0** (PREREQUISITE for 3b). Local
 reseekTimelineCursors (PlayerFrameProgress.cpp STEP 4 ~line 1673) DEFERS @0x6B91B0,
 relying on the corrective-backward sub-loop in advanceNodeFrameSelectionLike to reposition
