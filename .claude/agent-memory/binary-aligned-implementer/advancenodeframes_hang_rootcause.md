@@ -1,55 +1,70 @@
 ---
 name: advancenodeframes-hang-rootcause
-description: ROOT CAUSE (pinned via watchdog backtrace + exit-probes 2026-06-04) of the m2logo CI hang from the advanceNodeFrames (0x6B7E44) convergence — a null-motion child Player ("レイヤ1") left _speed=1/totalFrames=0 spins the progress_inner loop-wrap do-loop PlayerFrameProgress.cpp:2100. Fix = make advanceNodeFramesLike leave the parameterized node's active-slot (done/src/index) identical to advanceNodeFrameSelectionLike so the child-motion play decision matches baseline.
+description: RESOLVED 2026-06-05. m2logo CI hang from the advanceNodeFrames (0x6B7E44) convergence — diagnosed (per-case xp3 + proc_exit bitmask probes) and FIXED via fix A. Root cause = the standalone literal transcription of 0x6B7E44's backward seek hit the live frame-parser's negative-index reset, landing the active slot on a different frame ({done=true,src=empty}) than the proven shared helper ({done=false,src=non-empty}), flipping the child-play gate → null-motion child spun PlayerFrameProgress.cpp:2100. Fix = advanceNodeFramesLike delegates to advanceNodeFrameSelectionLike_0x6926B4 (shared seek+tail) with events off + clampedEvalTime forwarded.
 metadata:
   type: project
 ---
 
-# advanceNodeFrames (0x6B7E44) 收敛 → m2logo CI 挂起:已钉死根因（2026-06-04）
+# advanceNodeFrames (0x6B7E44) 收敛 → m2logo CI 挂起:已诊断 + 已修复（2026-06-05）
 
-工具:本会话给 `wasm_lldb_motion_trace.py` 加的 watchdog backtrace(已提交 996d559)
-+ guest `exit(N)` 探针(命中即 guest 非零退出 → harness 经 driver-exit 路径回显 guest stderr,
-绕过"挂起时日志被 kill 丢弃")。**重要方法论:本地验证必须用 per-case xp3
-`reference/xp3/logo_test_oracle_m2logo.xp3`,不能用 runner 默认 xp3,见
-[[local-motion-playback-differential-per-case-xp3]]。**
+## 状态
+✅ RESOLVED。fix A 已落地，m2logo PASS 93 / yuzulogo PASS 243（本地 per-case xp3，
+LLDB tracer，无挂起）。见 [[advancenodeframes-0x6B7E44-convergence]] 的最终实现。
 
-## 死循环精确位置
-`PlayerFrameProgress.cpp:2100-2102`(progress_inner 前向 loop-wrap,忠实复刻二进制
-0x6C14C4/0x6C14CC):
-```
-do { v7 = v7 + _loopTime - _cachedTotalFrames; } while(_cachedTotalFrames <= v7);
-```
-当 `_cachedTotalFrames <= _loopTime`(实测都是 0)→ 减量 0 → 永不退出。**该 do 循环
-本身是忠实的,不要改它**;二进制不挂是因为其流程永不带 totalFrames=0 走到这里。
+## 诊断方法（关键）
+- **本地验证必须用 per-case xp3** `reference/xp3/logo_test_oracle_<case>.xp3`，
+  不能用 runner 默认 xp3，见 [[local-motion-playback-differential-per-case-xp3]]。
+- **wasmtime guest 的 fd1/fd2(stdout/stderr)在本 runner 里被丢弃**（LLDB driver 路径），
+  fprintf/fflush 都看不到。唯一可用诊断通道是 **guest `proc_exit(N)`**——driver 会回显
+  "guest called proc_exit(N)"，N 是原始 i32（可 >255，实测回显 600201）。把差分编码进退出码。
+- 差分手法:在 progressSeekNodeSlotsLike 路由处，对参数化节点先 `MotionNode probe = node`
+  深拷贝，新路径跑 probe、旧路径跑真 node（真 node 留旧路径→不挂），再用 proc_exit 位掩码
+  回显两侧 activeSlotIndex/frameIndex/done/src 的差异。
 
-## 触发状态(exit-probe 实测值)
-一个 nodeType=3 子动作节点 `mn.label='レイヤ1'`,其 child Player:
-`_speed=1`(在播放) / `_activeMotion=null` / `childMotionName='' `/ `_cachedTotalFrames=0`
-/ `_loopTime=0`。active slot:`src='' done=1 frameIdx=0 clipStartTime=0`,`paramVal=0`。
-→ child.frameProgress(dt=1) 进入前向 wrap,totalFrames=0 → 2100 空转。
+## 死循环精确位置（未改，忠实）
+`PlayerFrameProgress.cpp:2100`（progress_inner 前向 loop-wrap，复刻 0x6C14C4）：
+`do { v7 += _loopTime - _cachedTotalFrames; } while(_cachedTotalFrames <= v7);`
+当 totalFrames=loopTime=0 → 零步长永不退出。**该循环忠实，不改**;二进制不挂是因其流程
+永不带 totalFrames=0 走到这里。
 
-## 根因链
-1. reroute(progressSeekNodeSlotsLike 对参数化节点改走 `advanceNodeFramesLike_0x6B7E44`,
-   PlayerUpdateLayerEval.cpp)改变了 "レイヤ1" 的 **active-slot 定位 / done / src**,与旧路径
-   `advanceNodeFrameSelectionLike_0x6926B4`(其结尾 433-440 还会
-   frameStateFromNodeSlots + markNodeNoActiveFrame/currentFrameType/markNodePayloadDirtyFromState)
-   不一致。
-2. updateLayersPhase3_MotionSubNode(PlayerUpdateChildMotion.cpp)的子动作播放决策依赖该 slot 状态:
-   - line 45 `if (mn.activeSlot().done) { cleanup; continue; }` 跳过 frameProgress;
-   - line 66 `if (!src.empty())` 才 onFindMotion/play。
-   在某一帧 "レイヤ1" 因 reroute 呈现了一个会触发 play 但**加载失败**的 src →
-   child 变成 `_speed=1` 但 `_activeMotion=null`(totalFrames=0);后续帧 src='' 不再停止它 →
-   playing-but-motionless child 持续被 frameProgress → 2100 空转。
-3. 基线(reseek-only,advanceNodeFrames 回退)不播放该 null child(slot done/src 取值不同),故不挂。
+## 根因（已钉死）
+1. 被回退的 9f2a112 把参数化节点的帧 seek 写成一个**独立 literal 转写**
+   advanceNodeFramesLike_0x6B7E44，逐字复刻 0x6B7E44 的 forward+backward seek。
+2. 二进制 0x6B7E44 的 **backward seek（0x6B7FA4）** 调
+   `Player_parseFrame(other, cur.fi - 1)` **无下界 guard**，靠数据不变量
+   `target >= frame0.time` 保证永不真的解析负 index。
+3. 但 live 帧解析器 `populateClipSlotFromFrameLike_0x6926B4` 对负 index 是
+   **resetClipSlot → 默认 {done=true, src=empty}**。于是 literal 转写在 m2logo 的
+   参数化节点 "レイヤ1" 上把 active slot 落到 idx0/frame0 的默认态 {done=true,src=empty}，
+   而 proven 的 `advanceNodeFrameSelectionLike_0x6926B4`（带 `active.fi>0` 背向 guard +
+   `other.fi>=0` 前向 guard，忠实编码同一数据不变量）落到 idx1/frame1 的可见帧
+   {done=false,src=non-empty}。
+4. done/src 差异翻转下游 child-motion 播放门（PlayerUpdateChildMotion.cpp:45 读
+   activeSlot().done、:66 读 activeSlot().src）：literal 路径让某帧 child 被 play 但
+   motion 加载失败 → child `_speed=1` / `_activeMotion=null` / `totalFrames=0`；后续帧
+   不再停它 → 持续被 frameProgress → 2100 空转。
+5. **第二个坑（修复时踩到）**：delegation 若把 `currentTime` 硬编成 `0.0`，对
+   `parameterEntry!=null 但 parameterizeIndex<0` 的节点（路由 gate 只看 parameterEntry）
+   会让 frameSelectionTimeLike 回退到 currentTime=0 → seek 到 t=0 → 复挂。必须透传
+   真实 `clampedEvalTime`（= green 基线行为）。
 
-## 修复方向(用户已选 A=根因对齐;未实施)
-让 `advanceNodeFramesLike_0x6B7E44` 对参数化节点留下与
-`advanceNodeFrameSelectionLike_0x6926B4` **一致的 active-slot(activeSlotIndex/frameIndex/done/src)
-+ 节点 payload/active 状态**(很可能要补回旧路径 433-440 的 state-establish 尾,或确保 seek 终止后
-slot.done/src 与旧路径相同)。**下一步定位**:同一帧对 "レイヤ1" 同时打印 old-path 与 new-path
-留下的 activeSlotIndex/frameIndex/done/src 做差分,锁定具体偏差字段,再对齐。
-不要改 2100 do 循环本身(忠实)。改完用 watchdog 工具 + per-case xp3 跑 m2logo+yuzulogo 双 case 验证。
+## 反编译证据（0x6B7E44 尾部 = inline 尾部，逐字段一致）
+0x6B7E44 与 Player_advanceRootAndNodes 的非参数化 inline 兄弟路径（0x6B72BC..0x6B7338）
+共用同一段 seek + state-establish 尾部:`node+44=1` → 2× 门控 Player_mergeFrameContent
+(node+346/+882) → 门控 `Motion_Player_findSource(node+200, player, activeSlot+356/src,
++348/icon)`（写 active-slot 的 done@node+200+0 / src(texture)@+24）。唯一差异:参数化路径
+**不 push 任何 per-node onAction**。所以 0x6B7E44 的忠实行为 == 共享 seek+尾部 + 事件抑制。
+(agent a72c0cd4 反编译 + disasm 锁定 2026-06-05。)
 
-## 现状
-分支 dev/motion 绿(reseek-only)。advanceNodeFrames 仍 REVERTED(见 [[advancenodeframes-0x6B7E44-convergence]])。
-reseek 收敛(Player::reseekTimelineCursors)已落地并经 CI 验证(m2logo 93=93 / yuzulogo 243=243)。
+## fix A（已落地）
+`advanceNodeFramesLike_0x6B7E44(node, currentTime)` →
+`advanceNodeFrameSelectionLike_0x6926B4(node, currentTime, /*events=*/nullptr)`。
+路由:`if(parameterEntry) advanceNodeFramesLike(node, clampedEvalTime); else
+advanceNodeFrameSelectionLike(node, clampedEvalTime, &_pendingEvents);`。
+行为与 green 基线（reseek-only）**完全一致**——收敛的净增量 = 显式 node+8 路由 split +
+命名的 0x6B7E44 函数边界 + 完整反编译证据注释。不另写 literal 转写(它与 live 解析器的
+负 index 语义冲突;补上数据不变量 guard 后就与共享 helper 字节等价了)。
+
+## 仍 open（步骤 2/3，与本挂起无关）
+advanceRootAndNodes @0x6B6ADC（4-stream 前向 walk）+ rewindRootAndNodes @0x6B9A3C（反向），
+以及把 inline 非参数化 seek 拆到自己的 0x6B73D0 边界、删 PlayerFrameStepping.cpp mock。

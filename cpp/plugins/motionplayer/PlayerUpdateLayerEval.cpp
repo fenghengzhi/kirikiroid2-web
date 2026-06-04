@@ -440,6 +440,90 @@ namespace motion::internal {
         return state;
     }
 
+    // ==================================================================
+    // Player_advanceNodeFrames @ 0x6B7E44  (P7 convergence step 1 of 3)
+    // ------------------------------------------------------------------
+    // The binary's per-node 2-slot ping-pong frame seek for PARAMETERIZED
+    // nodes (the caller branch `if (*(node+8)) advanceNodeFrames(node,player)`
+    // at Player_advanceRootAndNodes 0x6B73B4/0x6B73D4, LABEL_104). It forward-
+    // seeks (with corrective backward seek) the node's active parsed-frame slot
+    // toward the node's CHILD eval time, then merges both slots + gated
+    // findSource.
+    //
+    // D-A1 RESOLUTION (decompiled, NOT trusted from stale comments):
+    //   The binary reads the seek target at 0x6B7E90 as
+    //       v6 = *(double *)(*(node+8) + 40)
+    //   node+8 is seeded by Player_initNodeFields (0x6B3EA0): when the PSB
+    //   "parameterize" value has variant type 4 (integer), node+8 =
+    //   player_paramTable[idx] (56-byte stride entry, 0x6B3E90/0x6B3EA0);
+    //   otherwise node+8 = 0. So node+8 is a *parameter-table entry*, NOT a
+    //   child Player. Offset +40 of that 56-byte entry is the interpolated
+    //   parameter VALUE: sub_6B1718 (the param-entry builder) writes the
+    //   entry's fields at base..base+48 and stores the eased value at
+    //   `*(double*)(v6-16)` = entry+40 (0x6B19E4). Cross-checked against
+    //   Player_initNodeTimeline (0x6B64AC, 0x6B6500):
+    //       v7 = (*(node+8)) ? (double*)(*(node+8)+40) : (double*)(player+456)
+    //   i.e. parameterized -> entry+40 value, else player+456 (clampedEvalTime).
+    //   The live MotionParameterEntry maps entry+40 -> ::value (RuntimeSupport.h
+    //   builds the 56-byte entry with `value` as the eased field). Therefore
+    //   *(node+8)+40 == node.parameterEntry->value == exactly what
+    //   frameSelectionTimeLike_0x6B7E44 returns for a parameterized node
+    //   (PlayerUpdateLayerEval.cpp). CONFIRMED EQUAL: child+40 == the live
+    //   parameterEntry->value. No behavior change for parameterized nodes.
+    //
+    // FAITHFUL BODY = the shared seek + state-establish tail, events suppressed.
+    // ------------------------------------------------------------------
+    // 0x6B7E44 and the NON-parameterized inline sibling path inside
+    // Player_advanceRootAndNodes (0x6B73B0, LABEL_88 @0x6B72BC..0x6B7338) execute
+    // the SAME source-level node-frame-advance: identical forward seek
+    // (0x6B7F14 / break `cur.fi >= count-2 || target < other.time`), identical
+    // corrective backward seek, and a field-for-field identical tail —
+    // `node+44 = 1` (content-established) → 2× gated Player_mergeFrameContent
+    // (node+346/+882) → gated Motion_Player_findSource(node+200, player,
+    // activeSlot+356/src, +348/icon) which writes the active slot's
+    // done(node+200 +0) / src(texture, +24). The ONLY binary difference: the
+    // parameterized path (0x6B7E44) fires NO per-node onAction events; the
+    // inline path pushes them in its seek loop (slot mask 0x40000). Verified by
+    // decompile (0x6B7E44 full body + 0x6B72BC..0x6B7338 disasm) 2026-06-05.
+    //
+    // The live faithful reproduction of that shared seek+tail is
+    // advanceNodeFrameSelectionLike_0x6926B4 (proven correct: logo 93/243).
+    // So the faithful 0x6B7E44 = that shared helper with pendingEvents = nullptr.
+    //
+    // WHY NOT a literal standalone transcription of 0x6B7E44's loops?  The binary
+    // backward seek (0x6B7FA4) calls Player_parseFrame(other, cur.fi - 1) with NO
+    // lower-bound guard, relying on the data invariant target >= frame0.time so
+    // it never actually parses a negative index. The live frame parser
+    // populateClipSlotFromFrameLike_0x6926B4 instead RESETS the slot to a default
+    // {done=true, src=empty} on a negative index — so a literal transcription
+    // diverged: for m2logo's parameterized "レイヤ1" node it produced active-slot
+    // {done=true, src=empty} where the shared helper produces {done=false,
+    // src=non-empty} (seek landed activeSlotIndex=0/frame0 vs 1/frame1). That
+    // {done=true,src=empty} flipped the child-motion play gates in sub_6BE0C0
+    // (0x6BE31C done / 0x6BE364 src), leaving a child Player playing-but-motionless
+    // (_speed=1 / null motion / totalFrames=0) which spun the progress_inner
+    // loop-wrap (PlayerFrameProgress.cpp:2100) forever → m2logo CI hang. The
+    // shared helper carries the data-invariant guards (active.fi > 0 backward,
+    // other.fi >= 0 forward) that faithfully encode the binary invariant the live
+    // parser requires, so it lands the seek identically and avoids the reset.
+    // (Differential pinned via per-case xp3 + proc_exit bitmask probes 2026-06-05.)
+    // ------------------------------------------------------------------
+    MOTIONPLAYER_NOINLINE void
+    advanceNodeFramesLike_0x6B7E44(detail::MotionNode &node, double currentTime) {
+        // 0x6B7E90 seek target = *(node+8)+40 = parameterEntry->value. The shared
+        // helper recomputes the selection time internally via
+        // frameSelectionTimeLike_0x6B7E44, which returns parameterEntry->value
+        // ONLY when (parameterizeIndex >= 0 && parameterEntry != nullptr); for a
+        // node that is parameterEntry-routed but has parameterizeIndex < 0 it
+        // falls back to `currentTime`. The caller gates on parameterEntry != null
+        // (the binary node+8 split) but NOT on parameterizeIndex, so we MUST
+        // forward the real clampedEvalTime — passing 0.0 here seeks such a node to
+        // t=0 and reintroduces the m2logo hang. Matches the green baseline routing
+        // exactly: advanceNodeFrameSelectionLike(node, clampedEvalTime, nullptr).
+        // pendingEvents = nullptr: the parameterized path fires no onAction.
+        advanceNodeFrameSelectionLike_0x6926B4(node, currentTime, nullptr);
+    }
+
     // M1/P7 step-1: read-only slot consumer for the updateLayers pass.
     // After progressSeekNodeSlotsLike_0x6C106C has positioned node.slots[0/1],
     // updateLayers reads them here — no seek. Mirrors the read half of the old
@@ -579,10 +663,24 @@ namespace motion {
             // onAction. Only NON-parameterized nodes (node+8 == 0) run the inline
             // seek that pushes the event. node+8 == parameterEntry (MotionNode.h:71,
             // node init 0x6B3EA0). Gate accordingly: parameterized -> no events.
-            std::vector<detail::MotionEvent> *nodeEvents =
-                (node.parameterEntry == nullptr) ? &_pendingEvents : nullptr;
+            //
+            // P7 convergence step 1: route the PARAMETERIZED branch through the
+            // dedicated faithful reproduction of Player_advanceNodeFrames
+            // (0x6B7E44) — the exact function the binary caller branches to at
+            // LABEL_104 (`if (*(node+8)) { Player_advanceNodeFrames(node,player);
+            // continue; }`). Non-parameterized nodes (node+8 == 0) keep the
+            // inline 2-slot seek (0x6B73D0..0x6B7338) modelled by
+            // advanceNodeFrameSelectionLike_0x6926B4, which fires the per-node
+            // onAction events the inline path pushes. This mirrors the binary's
+            // node+8 split precisely instead of conflating both into one helper
+            // gated only by the selection time.
+            if(node.parameterEntry != nullptr) {
+                // node+8 != 0 -> Player_advanceNodeFrames (0x6B7E44). NO events.
+                advanceNodeFramesLike_0x6B7E44(node, clampedEvalTime);
+                continue;
+            }
             advanceNodeFrameSelectionLike_0x6926B4(node, clampedEvalTime,
-                                                   nodeEvents);
+                                                   &_pendingEvents);
         }
     }
 

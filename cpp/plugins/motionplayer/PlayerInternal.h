@@ -1477,6 +1477,20 @@ namespace internal {
             detail::MotionNode &node, double currentTime,
             std::vector<detail::MotionEvent> *pendingEvents = nullptr);
 
+        // Player_advanceNodeFrames @ 0x6B7E44 — the binary's per-node 2-slot
+        // ping-pong frame seek for PARAMETERIZED nodes (caller branch at
+        // Player_advanceRootAndNodes 0x6B73B4 LABEL_104:
+        // `if (*(node+8)) Player_advanceNodeFrames(node,player)`). Forward
+        // (with corrective backward) seek of the active parsed-frame slot toward
+        // the node's CHILD eval time *(node+8)+40 == parameterEntry->value
+        // (D-A1 resolved: == frameSelectionTimeLike_0x6B7E44 for parameterized
+        // nodes), then re-merge both slots + gated findSource (both subsumed by
+        // the live ClipSlot parse + read-pass source refresh). Fires NO per-node
+        // onAction (the binary's parameterized path has no action push). Operates
+        // on the real MotionNode/ClipSlot state. See PlayerUpdateLayerEval.cpp.
+        void advanceNodeFramesLike_0x6B7E44(detail::MotionNode &node,
+                                            double currentTime);
+
         // M1/P7 step-1: read the already-positioned node clip slots WITHOUT
         // seeking. After the progress pass (Player::progressSeekNodeSlotsLike_
         // 0x6C106C) has filled node+320/+856, updateLayers only reads them —

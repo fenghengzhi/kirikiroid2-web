@@ -1,10 +1,26 @@
 ---
 name: advancenodeframes-0x6B7E44-convergence
-description: P7 convergence step 1/3 — faithful Player_advanceNodeFrames @0x6B7E44 — REVERTED 2026-06-04 (caused m2logo CI HANG / non-terminating loop; yuzulogo OK). Decompile analysis + D-A1 resolution below remain valid; the IMPLEMENTATION had a non-termination bug and was reverted. Re-do with per-case-xp3 verification.
+description: P7 convergence step 1/3 — Player_advanceNodeFrames @0x6B7E44 — RE-LANDED & GREEN 2026-06-05 via fix A (advanceNodeFramesLike delegates to the proven shared seek+tail advanceNodeFrameSelectionLike_0x6926B4 with events off + clampedEvalTime forwarded). The earlier standalone literal transcription (9f2a112) hung m2logo; root cause + fix in [[advancenodeframes-hang-rootcause]]. D-A1 resolution below still valid.
 metadata:
   type: project
 ---
 
+✅ STATUS 2026-06-05: RE-LANDED GREEN via fix A. advanceNodeFramesLike_0x6B7E44(node,
+currentTime) now DELEGATES to advanceNodeFrameSelectionLike_0x6926B4(node, currentTime,
+nullptr) — the proven shared seek+state-establish tail with per-node onAction suppressed
+(the only binary diff between 0x6B7E44 and the inline non-param path). m2logo PASS 93 /
+yuzulogo PASS 243 (local per-case xp3). Full root-cause diagnosis + the negative-index /
+0.0-currentTime traps in [[advancenodeframes-hang-rootcause]].
+
+⚠️ CORRECTION (the "ORACLE STATUS" line near the bottom was WRONG): logo is NOT
+all-non-parameterized. m2logo DOES route at least one parameterized node ("レイヤ1"),
+PROVEN by a guest proc_exit(99) on the first parameterEntry!=null node. The change is
+therefore NOT inert for logo — the parameterized branch IS exercised by m2logo, which is
+exactly why the buggy standalone transcription hung. Do not trust the old "INERT for logo"
+claim below.
+
+────────────────────────────────────────────────────────────
+HISTORICAL (the standalone transcription attempt, REVERTED 2026-06-04):
 ⚠️ STATUS: REVERTED 2026-06-04 (commit 9e1b607). The advanceNodeFrames implementation
 (committed in 9f2a112) caused m2logo to enter a non-terminating loop in CI → wasmtime job
 timed out at 1230s on the m2logo case (yuzulogo passed, 243 frames). Bisect (reseek-only vs
@@ -35,7 +51,7 @@ P7 convergence step 1 of 3 (advanceNodeFrames → advanceRootAndNodes → rewind
 
 **Build**: web/debug + krkr2_wasmtime_guest both clean. No .cpp added/removed (edits only) → wasmtime source list untouched.
 
-**ORACLE STATUS**: logo (m2/yuzu) all NON-parameterized → parameterized branch never taken → change INERT for logo (provable: non-param branch is byte-identical to old `advanceNodeFrameSelectionLike_0x6926B4(node, t, &_pendingEvents)`). NO parameterized-node fixture exists (honest verification gap; do NOT fabricate).
+**ORACLE STATUS** [❌ PROVEN WRONG 2026-06-05 — see CORRECTION at top]: ~~logo (m2/yuzu) all NON-parameterized → parameterized branch never taken → change INERT for logo~~. FALSE: m2logo routes a parameterized node ("レイヤ1"), confirmed by guest proc_exit(99) on the first parameterEntry!=null node. The parameterized branch IS exercised by m2logo and the standalone transcription hung there. The non-param branch IS byte-identical to green, but the PARAM branch is not inert.
 **PRE-EXISTING REGRESSION (NOT MINE)**: m2logo differential FAILs `has 100 frames; spec requires exactly 93` (oracle=93). REPRODUCED ON CLEAN HEAD f4cdc66 (stashed ALL wip incl. mine → still 100). So the 93→100 frame-count drift predates this session — almost certainly d74f41e (completionType +1144 / preview +1092 untangle, directly governs motion-completion → frame count) or f4cdc66. My change produces the SAME 100-frame trace as clean baseline = does NOT move the count. Fixing the completion-gating regression is OUT OF SCOPE for this convergence; flagged to user.
 
 **STILL OPEN (steps 2/3)**: advanceRootAndNodes @0x6B6ADC (the 4-stream forward walk wrapping advanceNodeFrames; layer/root/var-track streams already separately ported as seek*StreamLike) and rewindRootAndNodes @0x6B9A3C (reverse). The non-parameterized inline per-node seek still lives in advanceNodeFrameSelectionLike_0x6926B4 (not yet split to its own 0x6B73D0 boundary). B's PlayerFrameStepping.cpp mock advanceNodeFramesLike_0x6B7E44 (on NodeFrameStreamsLike) is the 1:1 reference; lead handles its deletion + unit-test migration after all 3 convergences.
