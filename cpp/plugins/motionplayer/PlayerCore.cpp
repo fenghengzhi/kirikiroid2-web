@@ -1565,15 +1565,19 @@ namespace motion {
     }
 
     // Aligned to D3DEmotePlayer_setOuterForce (0x530A8C) ->
-    // Player_setOuterForce (0x672D58): case-insensitive label dispatch for
-    // "bust", "h", and "parts", carrying transition/ease through the sink.
+    // Player_setOuterForce (0x672D58): CASE-SENSITIVE label dispatch (binary
+    // uses sub_9B1ED0 = plain wcscmp, NOT a case-folding compare) for "bust",
+    // "hair", and "parts", routing to the bust/hair/parts sinks (binary
+    // targets a1+1104/+1112/+1120) and carrying transition/ease through.
+    // FIX 2026-06-04: label was "h" (wrong — binary is L"hair" @0x672dca) and
+    // compare was lowerAscii (wrong — binary wcscmp is case-sensitive).
     void Player::setOuterForce(ttstr label, double x, double y,
                                double transition, double ease) {
-        const auto key = lowerAscii(detail::narrow(label));
+        const auto key = detail::narrow(label);
         OuterForceState *target = nullptr;
         if(key == "bust") {
             target = &_bustOuterForce;
-        } else if(key == "h") {
+        } else if(key == "hair") {
             target = &_hairOuterForce;
         } else if(key == "parts") {
             target = &_partsOuterForce;

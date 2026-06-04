@@ -21,7 +21,7 @@ description: >
 |------|------|
 | `mcp__ida-pro-mcp__decompile` | 反编译指定地址的函数 → 伪代码 |
 | `mcp__ida-pro-mcp__find` | 搜索字符串/立即数（仅 ASCII/UTF-8） |
-| `mcp__ida-pro-mcp__xrefs_to` | 查找某地址的交叉引用 |
+| `mcp__ida-pro-mcp__xrefs_to` | 查找某地址的交叉引用（参数名是 `addrs`，**不是** `address`；接受单字符串或数组）|
 | `mcp__ida-pro-mcp__py_eval` | 运行 IDAPython 代码（用于复杂查询）— **调用前先 Read `.claude/skills/idapython/SKILL.md` 获取 `ida_*` 模块路由和反模式** |
 | `mcp__ida-pro-mcp__disasm` | 获取指定地址的反汇编代码 |
 | `mcp__ida-pro-mcp__list_funcs` | 列出匹配模式的函数 |
@@ -37,8 +37,9 @@ description: >
 步骤 1：搜索函数使用的已知字符串
   mcp__ida-pro-mcp__find  type="string"  targets=["the string"]
 
-步骤 2：查找引用该字符串的代码
-  mcp__ida-pro-mcp__xrefs_to  addrs="0xADDRESS"
+步骤 2：查找引用该字符串的代码（参数名 addrs，可批量传数组）
+  mcp__ida-pro-mcp__xrefs_to  addrs=["0xADDRESS"]
+  # 一次查多个：addrs=["0xA", "0xB", "0xC"]；单个也可 addrs="0xADDRESS"
 
 步骤 3：反编译引用函数
   mcp__ida-pro-mcp__decompile  addr="0xFUNC_ADDR"

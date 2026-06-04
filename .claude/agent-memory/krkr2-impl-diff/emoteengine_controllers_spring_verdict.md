@@ -1,23 +1,23 @@
 ---
 name: emoteengine-controllers-spring-verdict
-description: 2026-06-03 fresh-decompile audit of EmoteEngine progress + 7 controllers + spring/rng vs libkrkr2.so. Two REAL open gaps (sub_67C8A8 mislabeled as boundary; sub_661F7C mesh resolver unported). Everything else faithful.
-type: project
+description: 2026-06-04 fresh-decompile re-audit of EmoteEngine progress + 6 controllers + spring/rng + mesh resolver + clamp binder vs libkrkr2.so. Both prior (06-03) open gaps NOW RESOLVED. Subsystem is faithful end-to-end.
+metadata:
+  type: project
 ---
 
-EmoteEngine + Emote controller/spring subsystem audit (fresh decompile 2026-06-03).
+EmoteEngine + Emote controller/spring/meshresolver/clamp subsystem audit. Re-verified 2026-06-04 (fresh decompile this session: 0x67D01C, 0x67C8A8, 0x661F7C, 0x660028, 0x6C4668).
 
-**Faithfully ported (verified line-by-line this round):**
-- EmoteEngine_progress 0x67D01C — 6 deque step loops + var-track HM7 bind-loop + Player progress + physics gate. ALIGNED.
-- setVariable 0x671228 (=EmotePlayer::setVariable; disjoint HM@+1384/+1392/+1440 + 5 handlers case4-8). ALIGNED.
-- Blink/eye step sub_663BDC (IDA name EmoteVarController4_step_guess is misleading — body IS the blink controller, switch+336 phases 0/A/B/C + RNG + final remap). ALIGNED, incl float-num/double-div remap mix.
-- Eyebrow step 0x665600, Mouth step 0x666068, Selector step 0x668470 + applySelection 0x6680B0 + Animator_setKeyframes 0x667330. ALIGNED (selector guard order matches: state||queue||fabs>=1e-7).
-- Loop sampler inline 0x67d2a0 -> EmoteLoopController_step. ALIGNED.
-- Angle 0x666634, Var 0x666BF8/EmoteVarController_step 0x666c0c. ALIGNED (count floats not count*4; raw-bit powCount).
-- EmotePhysics_springStep 0x662768, EmoteBustChainSpring_step 0x6689A4, EmoteEngine_stepBust 0x67BCE8, stepHairParts 0x67B748 — all CALLED from local progress (not stub). ALIGNED.
-- EmoteBlinkRng sub_9F1A08/sub_9F17D0. ALIGNED.
+**Both 2026-06-03 OPEN GAPS are now CLOSED (verified in code this session):**
+1. **sub_67C8A8 clamp binder — RESOLVED.** Now invoked as `player().applyClampControlsLike_0x67C8A8()` at EmoteEngine.cpp:2009, placed @0x67d3f8 topology (AFTER HM7 bind-loop @0x67d3a4, BEFORE sub_6D2A54 @0x67d408). Body in PlayerFrameProgress.cpp:321-431: faithful 2D disk remap — reads ENGINE HM7 (_engineBack->_labelToValueHM7, not player HM2), runs sub_67C560 cascade per axis, norm=2*(v-min)/range-1 (no zero/empty guards, matching binary), type!=0 -> circle (clamp when type==1 && r>1 via atan2/cos/sin), type==0 -> squircle (fabs ratio / invLen / projLen / sin-cos scale, exact binary order), final=min+range*(n+1)*0.5, X negated iff sub_67C6B0 mirror. Was formerly run on Player frameProgress path; migration removed it there (no double-clamp). VERIFIED faithful.
+2. **sub_661F7C / sub_660028 mesh resolver — RESOLVED.** EmoteMeshResolver.cpp now exists (EmoteMeshResolver_resolve + EmoteMeshResolver_search). Wired into BOTH EmoteBlinkController.cpp:248 and EmoteEyebrowController.cpp:217 (was commented-out anchor on 06-03). resolve() faithful: clears outputRows+valueTrack8B, runs search, selects min-dist row (sentinel 99999, skip d==-1, 88B/22-float stride), LABEL_37 fallback {endVal,endVal}+span=0, best-row path copy. Consequence: valueTrack8B repopulated, trackResolvedSpan(+288) live, eye/eyebrow track interp now functional (was inert). search() (sub_660028 ~1925 lines) is the big DFS — only spot-checked structurally this session, not full line-by-line.
 
-**REAL OPEN GAPS (not platform boundaries):**
-1. **sub_67C8A8 @0x67C8A8 MISLABELED as "PLATFORM_BOUNDARY: stub" in EmoteEngine.cpp:1963-1964.** It is a REAL ~150-line paired-parameter binder: walks deque@+62 (40B-stride entries = local opaque EmoteSetupEntry40B_Deque7 placeholder, EmoteEngine.h:237), reads 2 HM2 values/entry, runs sub_67C560 on both, does a 2D circular-disc remap (atan2/sin/cos, modes *(int)v2==0/1), then 2x Player_bindParameterValue(+24,+32). Called in binary progress @0x67d3f8 BETWEEN bind-loop and sub_6D2A54. Local progress does NOT call it. The "stub, no live consumer" comment is WRONG. Fix needs: parse/populate the 40B deque#7 entries + port the remap+bind.
-2. **sub_661F7C @0x661F7C (mesh resolver, dispatches sub_660028 ~1925 lines) NOT called** in EmoteBlinkController.cpp:255 and EmoteEyebrowController.cpp:221 (commented-out anchor). Consequence: valueTrack8B never repopulated, trackResolvedSpan(+288) stays 0, eye/eyebrow track interp inert. Labeled "SCOPE BOUNDARY" in headers — defensible as a separate large vertical, but it IS a functional gap, not a platform boundary.
+**bind-loop / write helper architecture (verified 0x6C4668 this session):** binary Player_bindParameterValue_writesHM1_HM2 @0x6C4668 ALWAYS writes HM2 (LABEL_132 unconditional `HM2[rawLabel]=a4`) and conditionally writes HM1 cascade (only when sub_6D0BF4 splits label on ::/ /). Both local entrypoints converge faithfully: bind-loop uses ttstr-overload bindParameterValueLike_0x6C4668 (PlayerVariable.cpp:425, writes HM1 gated + HM2 LABEL_132); clamp uses writeEvalResultValueLike_0x6C4668 (ensureEvalResultSlot + HM2 + HM1 via std::string overload). HM1 chainDispatches build (sub_697D34) + RenderItem/animator interp passes DEFERRED (no getVariable consumer — getVariable reads HM1.writeVal/HM2 only). Defensible.
 
-**Architecture wins:** controllers use std::deque/std::vector matching binary container SELECTION (deque-of-blocks); raw-bit powCount memcpy faithfully reproduced everywhere; spring uses raw byte-offset F(off)/I(off) accessors mirroring +12*seg / +8*seg strides 1:1.
+**Still faithful (re-confirmed):** progress 0x67D01C dt!=0 gate + originalDt/sliced-dt split + 1.1 step cap; 6-deque step order incl. NON-OBVIOUS selector(deque#9 @+656) BEFORE transition(deque#8 @+576) @0x67d1e0 vs 0x67d240; mouth feeds TWO HM7 keys; final physics gate on originalDt + syncWaiting byte+1159, 3 ctl-steps (1104/1112/1120) + stepHairParts + 2x stepBust (consts +1184/+1192).
+
+**NO STUB_WARN / TODO / FIXME** in any of the 11 files (AngleController/BlinkController/BlinkRng/EyebrowController/LoopController/MeshResolver/MouthController/SelectorController/Spring/VarController/WindEmitter). The obsolete 2026-04-05 "6 controllers all STUB_WARN" claim is FULLY resolved.
+
+**Remaining (minor, not platform boundaries, not stubs):**
+- bust/hair physics deques inert on logo fixture (no bustControl/hairControl/partsControl metadata) — structure correct, just no data. Controller TARGETS + spring CONSTS wiring lands via variableList/setVariable path (open elsewhere, not in this subsystem).
+- sub_660028 search() full line-by-line not re-verified this session (huge fn) — structural spot-check only.
+- Player_preProgress() @0x67d060 not isolated as separate call (Player has own pipeline) — labeled PLATFORM_BOUNDARY, benign.

@@ -55,14 +55,25 @@ namespace motion {
     // preserved by construction (new fields default-initialized empty).
     //
     // TWO ARCHITECTURE FACTS the binary makes the eventual target (phase D):
-    //  (1) There is NO separate SourceCache class. ResourceManager *is* the
-    //      SourceCache: the single ncb_registerMembers @0x6AB8BC registers all
-    //      14 members on one ~256B object — both the "RM" members (load/unload/
-    //      unloadAll/findSource/findMotion/isExistMotion/random) and the
-    //      "SourceCache" members (loadSource/clearCache/bufLayer). unloadAll
-    //      @0x6A8B94 touches +72/+88/+104/+144/+168 in one body. The port's
-    //      separate `SourceCache` class (SourceCache.h) is an invention; phase D
-    //      merges it back into this one class.
+    //  (1) CORRECTED 2026-06-04 (was: "there is NO separate SourceCache class").
+    //      The binary DOES register a separate `SourceCache` NCB class. Evidence:
+    //      Motion_SourceCache_ncb_register @0x6FE124 builds its own NCB class
+    //      object (sub_6FE288: operator new(0xB0) + ncb_classInit with class name
+    //      ttstr, registers a "finalize" member) and then calls
+    //      SourceCache_ncb_registerMembers @0x6A85A8, which registers exactly 3
+    //      members on it: loadSource (sub_6A7BA8), clearCache (sub_6A8438),
+    //      bufLayer property (sub_6A84FC). ResourceManager is a *separate* class:
+    //      ResourceManager_ncb_registerMembers @0x6AB8BC registers its 12 members
+    //      on a different object. Both class registrations are invoked from
+    //      Motion_namespace_ncb_register @0x6D9B08. SourceCache and RM merely
+    //      SHARE the same callback addresses for the 3 overlapping members
+    //      (loadSource/clearCache/bufLayer operate on the same +72 intrusive
+    //      list) — that is method-sharing, not class-identity. Therefore the
+    //      port's two-class split (SourceCache.h 3 members + ResourceManager 12
+    //      members) is ARCHITECTURALLY CORRECT, not an invention. There is no
+    //      phase-D "merge back into one class" to do. (The prior 06-03 memory
+    //      m9_source_subsystem_verdict.md "RM==SourceCache same class" was wrong,
+    //      direction-reversed; corrected per CLAUDE.md 证伪即就地纠正.)
     //  (2) ObjSource (SourceCache.h:116) is NOT a fields struct in the binary —
     //      ncb_registerMembers @0x69CCB8 builds a `operator new(0x18)` dict
     //      facade (qword[0] = tTJSVariant holding the PSB "source" dict) whose

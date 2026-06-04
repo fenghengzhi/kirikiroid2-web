@@ -329,11 +329,15 @@ namespace motion {
         void setMeshDivisionRatio(double v);
         [[nodiscard]] double getMeshDivisionRatio() const { return engine()._meshDivisionRatio; }
 
-        // R3 phantom (class-layout-auditor): route through player()._queuing
-        // (binary Player+480 byte); was routing to engine()._queuing shadow
-        // which has been removed.
-        void setQueuing(bool v) { player().setQueuing(v); }
-        [[nodiscard]] bool getQueuing() const { return player().getQueuing(); }
+        // FIX 2026-06-04: was routing to player().setQueuing (Player+480) per a
+        // falsified class-layout-auditor note. Fresh decompile of the actual NCB
+        // callbacks D3DEmotePlayer_setQueing@0x5300dc / getQueing@0x5300cc
+        // (member key L"queing") shows they read/write the EmoteEngine byte flag
+        // @engine+1161, set-always-1 (setter writes constant 1, ignores arg) —
+        // the SAME +1161 field EmotePlayer::setQueuing uses (_emoteAnimatorFlag).
+        // (IDB labels corrected in commit 222b176; this local code now matches.)
+        void setQueuing(bool) { engine()._emoteAnimatorFlag = true; }       // +1161 set-always-1
+        [[nodiscard]] bool getQueuing() const { return engine()._emoteAnimatorFlag; }
 
         void setHairScale(double v) { engine()._hairScale = v; }
         [[nodiscard]] double getHairScale() const { return engine()._hairScale; }

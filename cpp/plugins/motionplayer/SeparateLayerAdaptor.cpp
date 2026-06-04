@@ -433,7 +433,16 @@ namespace motion {
             getIntegerPropertyLike_0x6AC410(sourceLayerObject, TJS_W("top"),
                                             top);
 
-            (void)absolute;
+            // FIX 2026-06-04: binary 0x6ac7fc-0x6ac854 OVERWRITES the running-
+            // sequence absolute that sub_6C6B48 just set with a rebased value:
+            //   target.absolute = destAdaptor._absolute (a1+160)
+            //                   + sourceLayer.absolute (v32)
+            //                   - sourceAdaptor._absolute (a2+160)
+            // Set FIRST (before visible), matching the binary call order. The
+            // local previously discarded the source layer's absolute.
+            setIntegerPropertyLike_0x6AC410(
+                targetLayerObject, TJS_W("absolute"),
+                _absolute + absolute - source._absolute);
             setIntegerPropertyLike_0x6AC410(targetLayerObject, TJS_W("visible"),
                                             visible);
             setIntegerPropertyLike_0x6AC410(targetLayerObject, TJS_W("opacity"),
