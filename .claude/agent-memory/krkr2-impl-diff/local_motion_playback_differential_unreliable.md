@@ -1,40 +1,47 @@
 ---
-name: local-motion-playback-differential-unreliable
-description: LOCAL run_motion_playback_wasmtime.py reports m2logo=100 frames (FAIL vs spec 93) on this macOS-arm64 machine, but CI is GREEN (port 93 = oracle 93). Local motion_playback differential is NOT a reliable oracle here — trust CI's motion-playback-compare job, not local frame counts.
+name: local-motion-playback-differential-per-case-xp3
+description: LOCAL motion_playback verification MUST use the per-case xp3 (reference/xp3/logo_test_oracle_<case>.xp3) that CI uses — NOT the runner's default --startup-xp3 (reference/xp3/logo_test_oracle.xp3, a different/combined file). Using the default gives wrong frame counts (m2logo 100 vs correct 93) and never exercises the real per-case path, masking hangs/regressions.
 metadata:
   type: project
 ---
 
-2026-06-04. Confirmed by independent main-loop investigation after two implementer agents
-and I all misread a LOCAL anomaly as a code regression.
+2026-06-04. CORRECTED root cause (earlier version of this note WRONGLY blamed a
+"macOS-arm64 environment divergence" — that was wrong).
 
-## The trap
-- LOCAL `python3 tests/differential/python/run_motion_playback_wasmtime.py --case m2logo`
-  (both `--only-structural` AND CI's `--skip-golden-diff` mode) aborts with:
-  "Wasmtime segment 0 (m2logo) has 100 frames; spec requires exactly 93."
-- This reproduces on clean HEAD f4cdc66 (stash all changes + rebuild krkr2_wasmtime_guest + run)
-  AND with session changes — i.e. it is INDEPENDENT of any motionplayer edit.
-- BUT CI run 26944928172 (push of f4cdc66, dev/motion) is GREEN: the `motion-playback-compare`
-  job's `compare_motion_playback_traces.py` reports `| m2logo | ok | 93 | 93 | 31 | 31 | 0 |`
-  and `| yuzulogo | ok | 243 | 243 | ... | 0 |` — port frames == oracle frames, 0 mismatches.
+## The real trap
+`run_motion_playback_wasmtime.py` defaults `--startup-xp3` to
+`reference/xp3/logo_test_oracle.xp3` (a combined/legacy file). But CI
+(`.github/workflows/differential.yml`, the wasmtime job loop) runs each case with a
+PER-CASE xp3:
+```
+for case in yuzulogo m2logo; do
+  xp3="reference/xp3/logo_test_oracle_${case}.xp3"
+  python3 ... run_motion_playback_wasmtime.py --startup-xp3 "$xp3" --case "$case" --skip-golden-diff ...
+done
+```
+Files present locally: logo_test_oracle.xp3 (default, WRONG for per-case),
+logo_test_oracle_m2logo.xp3, logo_test_oracle_yuzulogo.xp3, logo_test_oracle_title_bg.xp3.
 
-## Conclusion
-- The committed code is CORRECT; CI (port=93=oracle) is the authoritative guard.
-- The local 100-frame result is an ENVIRONMENT divergence on this macOS-arm64 dev machine
-  (host wasm build and/or this machine's local `wasmtime` python runtime executes the port to
-  100 frames; CI's ubuntu-22.04 x86_64 to 93). Same source, same emsdk 4.0.23 — cause not
-  pinned (candidates: host-arch codegen leak, stale local incremental build dir, local wasmtime
-  package version vs CI). NOT a frame-count flag-mode artifact (both runner modes give 100).
+## Symptoms when you use the WRONG (default) xp3
+- m2logo reports 100 frames → runner aborts "has 100 frames; spec requires exactly 93"
+  (the frame-count gate fires even in `--skip-golden-diff` mode).
+- This is NOT a code regression and NOT an env/arch difference — it is the wrong input.
+- With the CORRECT `--startup-xp3 reference/xp3/logo_test_oracle_m2logo.xp3`, m2logo
+  matches CI: f4cdc66 → 93 frames PASS.
 
-## How to apply
-- Do NOT treat a local `run_motion_playback_wasmtime.py` frame-count FAIL as a code regression.
-- Do NOT use the local motion_playback differential as a green/red verification oracle on this
-  machine. For motion-subsystem non-regression, push the branch and read CI's
-  `motion-playback-compare` job (`gh run view --repo fenghengzhi/kirikiroid2-web --job <id> --log`),
-  or `gh run list`. Local `cmake --build` (clean compile) is still valid; only the local
-  differential frame count is not.
-- The reseek/advanceNodeFrames convergence work this session builds clean and is inert by
-  construction; its authoritative verification is CI, not local frame counts.
-- If the local-vs-CI divergence itself needs fixing (so local differential becomes usable),
-  triage separately: compare local vs CI wasmtime runtime version, and try a from-scratch
-  (non-incremental) out/wasmtime/debug rebuild first.
+## How to apply (ALWAYS, for local motion_playback verification)
+```
+python3 tests/differential/python/run_motion_playback_wasmtime.py \
+  --case m2logo  --startup-xp3 reference/xp3/logo_test_oracle_m2logo.xp3  --only-structural
+python3 tests/differential/python/run_motion_playback_wasmtime.py \
+  --case yuzulogo --startup-xp3 reference/xp3/logo_test_oracle_yuzulogo.xp3 --only-structural
+```
+- Local IS a reliable oracle WITH the per-case xp3. Build wasmtime guest first:
+  `cmake --build out/wasmtime/debug --target krkr2_wasmtime_guest`.
+- This mistake (using default xp3) burned multiple agents + the main loop on 2026-06-04:
+  it both produced the bogus "100-frame regression" scare AND hid a real m2logo HANG in the
+  advanceNodeFrames (0x6B7E44) convergence — yuzulogo passed, m2logo timed out (1230s) in CI
+  because the default-xp3 local run never executed m2logo's real per-case path. See
+  [[advancenodeframes-0x6b7e44-convergence]].
+- Instruct any implementer/auditor agent that touches frame-progress to verify BOTH cases
+  with their per-case xp3 locally before claiming "logo-inert".

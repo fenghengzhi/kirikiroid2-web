@@ -1,11 +1,24 @@
 ---
 name: advancenodeframes-0x6B7E44-convergence
-description: P7 convergence step 1/3 — faithful Player_advanceNodeFrames @0x6B7E44 (parameterized-node 2-slot ping-pong seek) ported onto real MotionNode, routed via progressSeekNodeSlotsLike node+8 split
+description: P7 convergence step 1/3 — faithful Player_advanceNodeFrames @0x6B7E44 — REVERTED 2026-06-04 (caused m2logo CI HANG / non-terminating loop; yuzulogo OK). Decompile analysis + D-A1 resolution below remain valid; the IMPLEMENTATION had a non-termination bug and was reverted. Re-do with per-case-xp3 verification.
 metadata:
   type: project
 ---
 
-P7 convergence step 1 of 3 (advanceNodeFrames → advanceRootAndNodes → rewindRootAndNodes) DONE 2026-06-04.
+⚠️ STATUS: REVERTED 2026-06-04 (commit 9e1b607). The advanceNodeFrames implementation
+(committed in 9f2a112) caused m2logo to enter a non-terminating loop in CI → wasmtime job
+timed out at 1230s on the m2logo case (yuzulogo passed, 243 frames). Bisect (reseek-only vs
++advanceNodeFrames, both with the CORRECT per-case xp3 reference/xp3/logo_test_oracle_m2logo.xp3)
+confirmed advanceNodeFrames is the culprit: reseek-only → m2logo PASS 93 frames; +advanceNodeFrames
+→ hang. ROOT CAUSE of the miss: the implementer verified locally with the runner's DEFAULT
+--startup-xp3 (logo_test_oracle.xp3) which never exercises m2logo's real per-case path, so the
+hang was invisible locally (see [[local-motion-playback-differential-per-case-xp3]]). The bug
+itself (non-termination in the new advanceNodeFramesLike_0x6B7E44 forward/backward seek on
+m2logo's parameterized node) is NOT yet diagnosed. The decompile facts + D-A1 resolution below
+are still correct and reusable; only the implementation must be redone (and verified with the
+per-case xp3 on BOTH cases) before re-landing.
+
+P7 convergence step 1 of 3 (advanceNodeFrames → advanceRootAndNodes → rewindRootAndNodes) — implementation attempted 2026-06-04, REVERTED (see status above).
 
 **What 0x6B7E44 IS**: the binary's per-node 2-slot ping-pong frame seek for PARAMETERIZED nodes only. In Player_advanceRootAndNodes (0x6B73B0, LABEL_86 node loop) the caller branches: `if (*(node+8)) { Player_advanceNodeFrames(node,player); continue; }` (LABEL_104 @0x6B73B4/0x6B73D4) else inline 2-slot seek WITH per-node onAction push (0x6B73D0..0x6B7338, push @0x6B74E4). So advanceNodeFrames = parameterized path (NO events); inline = non-parameterized path (fires onAction).
 
