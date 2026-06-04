@@ -125,8 +125,9 @@
 - 导入类型的优先级：高频基础类（iTJSDispatch2、tTJSVariant）> 当前分析的目标类 > 其余
 
 #### 函数/变量重命名
-- `rename` — 给 `sub_XXXX` 重命名为 `ClassName_MethodName`（命名规范见下方"IDA 符号管理"）
-- 局部变量无法持久重命名时，用 `set_comments` 在函数头部标注关键变量含义
+- `rename` — 批量重命名，`batch` 下分 4 类对象：`func`（函数，按 `addr`+`name`）、`data`（全局/数据变量，`old`→`new`）、`local`（Hex-Rays 伪代码局部变量，按 `func_addr`+`old`→`new`）、`stack`（栈变量，同 local 形参）。支持 `dry_run`（只校验不改）、`allow_overwrite`、`stop_on_error`
+- `sub_XXXX` 重命名为 `ClassName_MethodName`（命名规范见下方"IDA 符号管理"）走 `func`
+- **局部变量可持久重命名**：`rename(batch={local:{func_addr, old, new}})` 等价于 IDA UI 右键 Rename，重命名后整个反编译体的所有引用都会更新（已实测 0x692AB0 的 v3→slot 持久生效）。`set_comments` 仅在需要额外标注语义时补充使用，不是因为 rename 改不动局部变量
 
 #### 修正后保存
 - 一轮分析结束后调用 `idb_save` 持久化所有修正
