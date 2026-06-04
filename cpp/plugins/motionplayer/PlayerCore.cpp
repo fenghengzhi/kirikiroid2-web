@@ -31,130 +31,16 @@ namespace {
 
 namespace motion {
 
-    // Linear scan of a deque-backed controller bucket (binary EmoteEngine
-    // +256/+336/+416/+576/+656 are std::deque<Animator>; lookup is O(N)).
-    namespace {
-        Player::VariableAnimatorState *findInDeque(
-            std::deque<Player::VariableAnimatorState> &bucket,
-            const std::string &label) {
-            for(auto &entry : bucket) {
-                if(entry.label == label) {
-                    return &entry;
-                }
-            }
-            return nullptr;
-        }
-        const Player::VariableAnimatorState *findInDeque(
-            const std::deque<Player::VariableAnimatorState> &bucket,
-            const std::string &label) {
-            for(const auto &entry : bucket) {
-                if(entry.label == label) {
-                    return &entry;
-                }
-            }
-            return nullptr;
-        }
-        void eraseInDeque(
-            std::deque<Player::VariableAnimatorState> &bucket,
-            const std::string &label) {
-            for(auto it = bucket.begin(); it != bucket.end(); ++it) {
-                if(it->label == label) {
-                    bucket.erase(it);
-                    return;
-                }
-            }
-        }
-    } // namespace
-
-    std::deque<Player::VariableAnimatorState> *
-    Player::controllerAnimatorBucketLike_0x671228(int type) {
-        if(!_engineBack) {
-            return nullptr;
-        }
-        switch(type) {
-            case 4:
-                return &_engineBack->_type4ControllerAnimators;
-            case 5:
-                return &_engineBack->_type5ControllerAnimators;
-            case 6:
-                return &_engineBack->_type6ControllerAnimators;
-            case 7:
-                return &_engineBack->_type7ControllerAnimators;
-            case 8:
-                return &_engineBack->_type8ControllerAnimators;
-            default:
-                return nullptr;
-        }
-    }
-
-    const std::deque<Player::VariableAnimatorState> *
-    Player::controllerAnimatorBucketLike_0x671228(int type) const {
-        if(!_engineBack) {
-            return nullptr;
-        }
-        switch(type) {
-            case 4:
-                return &_engineBack->_type4ControllerAnimators;
-            case 5:
-                return &_engineBack->_type5ControllerAnimators;
-            case 6:
-                return &_engineBack->_type6ControllerAnimators;
-            case 7:
-                return &_engineBack->_type7ControllerAnimators;
-            case 8:
-                return &_engineBack->_type8ControllerAnimators;
-            default:
-                return nullptr;
-        }
-    }
-
-    Player::VariableAnimatorState *
-    Player::findControllerAnimatorStateLike_0x671228(const std::string &label) {
-        if(!_engineBack) {
-            return nullptr;
-        }
-        if(auto *s = findInDeque(_engineBack->_type4ControllerAnimators, label)) return s;
-        if(auto *s = findInDeque(_engineBack->_type5ControllerAnimators, label)) return s;
-        if(auto *s = findInDeque(_engineBack->_type6ControllerAnimators, label)) return s;
-        if(auto *s = findInDeque(_engineBack->_type8ControllerAnimators, label)) return s;
-        return findInDeque(_engineBack->_type7ControllerAnimators, label);
-    }
-
-    const Player::VariableAnimatorState *
-    Player::findControllerAnimatorStateLike_0x671228(
-        const std::string &label) const {
-        if(!_engineBack) {
-            return nullptr;
-        }
-        if(auto *s = findInDeque(_engineBack->_type4ControllerAnimators, label)) return s;
-        if(auto *s = findInDeque(_engineBack->_type5ControllerAnimators, label)) return s;
-        if(auto *s = findInDeque(_engineBack->_type6ControllerAnimators, label)) return s;
-        if(auto *s = findInDeque(_engineBack->_type8ControllerAnimators, label)) return s;
-        return findInDeque(_engineBack->_type7ControllerAnimators, label);
-    }
-
-    void Player::eraseControllerAnimatorStateLike_0x671228(
-        const std::string &label) {
-        if(!_engineBack) {
-            return;
-        }
-        eraseInDeque(_engineBack->_type4ControllerAnimators, label);
-        eraseInDeque(_engineBack->_type5ControllerAnimators, label);
-        eraseInDeque(_engineBack->_type6ControllerAnimators, label);
-        eraseInDeque(_engineBack->_type7ControllerAnimators, label);
-        eraseInDeque(_engineBack->_type8ControllerAnimators, label);
-    }
-
-    void Player::clearControllerAnimatorStateLike_0x671228() {
-        if(!_engineBack) {
-            return;
-        }
-        _engineBack->_type4ControllerAnimators.clear();
-        _engineBack->_type5ControllerAnimators.clear();
-        _engineBack->_type6ControllerAnimators.clear();
-        _engineBack->_type7ControllerAnimators.clear();
-        _engineBack->_type8ControllerAnimators.clear();
-    }
+    // (Removed 2026-06-05) controllerAnimatorBucketLike_0x671228 / find... /
+    //   erase... / clearControllerAnimatorStateLike_0x671228 + the findInDeque/
+    //   eraseInDeque helpers. They operated on a parallel per-Player animator
+    //   bucket set (`_type4..8ControllerAnimators` + `_variableAnimators`) that
+    //   was residue of a superseded stepping model — never written (zero
+    //   push/emplace across cpp/). Fresh decompile of EmoteEngine_progress
+    //   @0x67D01C / setVariable @0x671228 confirms controller stepping reads ONLY
+    //   the EmoteEngine typed deques #4-#9 (engine +256/+336/+416/+576/+656/+736)
+    //   and writes into HM7 (+1440); no independent Player-side bucket exists.
+    //   Removal is byte-neutral (containers were perpetually empty).
 
     // findOrInsertControllerStateLike_0x671228 removed 2026-06-03: its only
     //   call sites were inside the non-faithful Player-side
@@ -457,8 +343,6 @@ namespace motion {
         _playingTimelineLabels.clear();
         _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
-        if(_engineBack) _engineBack->_variableAnimators.clear();
-        clearControllerAnimatorStateLike_0x671228();
         _evalResultValues.clear();
         _evalResultList.clear();
         _evalResultListIndex.clear();
@@ -692,8 +576,6 @@ namespace motion {
         _playingTimelineLabels.clear();
         _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
-        if(_engineBack) _engineBack->_variableAnimators.clear();
-        clearControllerAnimatorStateLike_0x671228();
         _evalResultValues.clear();
         _evalResultList.clear();
         _evalResultListIndex.clear();
@@ -933,8 +815,6 @@ namespace motion {
                 if(label.empty()) {
                     return;
                 }
-                if(_engineBack) _engineBack->_variableAnimators.erase(label);
-                eraseControllerAnimatorStateLike_0x671228(label);
                 // HM2 (Player+320) is ttstr-keyed; widen the std::string label.
                 _evalResultValues.erase(detail::widen(label));
                 removeEvalResultSlotLike_Reset(label);
@@ -1007,8 +887,6 @@ namespace motion {
         // the binary performs a broad controller/reset sweep after wrapper-side
         // setMirror(). Keep the local reset focused on runtime controller state,
         // eval sinks, and root-node dirty propagation.
-        if(_engineBack) _engineBack->_variableAnimators.clear();
-        clearControllerAnimatorStateLike_0x671228();
         _evalResultValues.clear();
         _evalResultList.clear();
         _evalResultListIndex.clear();

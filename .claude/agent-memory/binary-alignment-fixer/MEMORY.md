@@ -1,3 +1,5 @@
+- [Root-stream two-tier: seed vs incremental](root_stream_two_tier_seed_vs_incremental.md) — +568/+576/+584/+616 reseek(0x6B86C8) recomputes from cursor; advance/rewind(0x6B6ADC/0x6B9A3C) only evolve, NEVER recompute at entry; init(0x6B3778) seeds only +548/+616
+- [Controller stepping: typed-deque vs dead buckets](controller_stepping_typed_deque_vs_dead_buckets.md) — 0x67D01C/0x671228 = ONE typed-deque model into HM7; _type4..8ControllerAnimators+_variableAnimators were dead port residue (removed 2026-06-05, byte-neutral)
 - [EmoteVarController alignment](emotevarcontroller_alignment.md) — ctor 0x667030 / step 0x666BF8 data flow, allocation size, inverted lerp roles
 - [EmoteEngine 1496B layout](emoteengine_1496b_hashmap_layout.md) — verified byte map: 7 inline unordered_maps + 4 vectors (NOT byte blocks); _bindListHead aliases HM7
 - [sub_6C4E28 build/execute split](sub6C4E28_build_execute_split.md) — requireLayerId materialization (item+20/+424) belongs in BUILD loop; port wrongly moved it to EXECUTE → render-step build_flow_mismatch

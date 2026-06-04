@@ -37,11 +37,14 @@ _M_max_load_factor@32 _M_next_resize@40 _M_single_bucket@48})。**不是** KiriK
 Player* @+1064 raw new(0x568)+manual delete ✅; 7 controllers @1072-1120 raw new+sub_683AA8+delete ✅.
 HM7 @+1440 = unordered_map<ttstr,double> 已 VERIFIED (旧结论正确).
 
-**唯一真实容器偏差 (open gaps, 都是 key 类型非容器选型):**
-1. `_evalResultValues` = `unordered_map<std::string,double>` (Player.h:1294) — 应为
-   `detail::LabelValueMap` (ttstr+ttstr_hash)。Player.h:1292 自带 TODO(A8)。bucket 分布/迭代序与二进制不一致。
-2. `_nodeLabelMap` = `std::map<std::string,int>` (Player.h:1159) — 二进制 key=ttstr。容器形态(_Rb_tree/map)对,
-   仅 key 字符类型差。
+**容器偏差: 全部 CLOSED (2026-06-05 fresh 复核)。** 此前 2 处 std::string→ttstr key retype 均已完成:
+1. `_evalResultValues` (Player.h:1446) = `detail::LabelValueMap`
+   = `unordered_map<ttstr,double,ttstr_hash,ttstr_equal>` ✅ (注释明确 "Retyped 2026-06-03 from
+   std::unordered_map<std::string,double>")。bucket 分布/迭代序现与二进制一致。
+2. `_nodeLabelMap` (Player.h:1292) = `detail::NodeLabelMap`
+   = `std::map<ttstr,int,ttstr_utf16_less>` ✅ (comparator 复刻 sub_9B1ED0 @0x9B1ED0 UTF-16 码元序)。
+⇒ Player 4 HM + var-track deque + node deque + +24 map + render array 容器维度 **无 open 偏差**。
+(旧 doc Player_4_HashMaps_Container_Mapping.md §澄清块仍写 "2 处 retype 待办" 已 stale。)
 
 容器**选型** (unordered_map/deque/map/vector 的实现类) **全部对齐**;偏差仅在 2 个 std::string-keyed map
 应改 ttstr-keyed。无任何 std::vector 误代 TJS-Array/dispatch 的情况 (4 vector 本就是 vector<tTJSVariant*>)。

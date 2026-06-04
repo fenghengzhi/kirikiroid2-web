@@ -248,31 +248,21 @@ namespace internal {
                 continue;
             }
 
+            // Aligned with libkrkr2.so EmoteEngine_progress @0x67D01C: the
+            //   binary's per-nodeType controller step loops (@0x67d0a4..0x67d370)
+            //   write their step outputs into HM7 (= EmoteEngine+1440, port
+            //   mirror _labelToValueHM7 / _evalResultValues), and the HM7
+            //   bind-loop @0x67d3a4 consumes them. There is NO independent
+            //   per-Player controller bucket in the binary — the previously read
+            //   `controllerAnimatorBucketLike_0x671228` / `_type[4-8]Controller
+            //   Animators` were a removed parallel-model residue (never written;
+            //   the LIVE step path is EmoteEngine::progress over the typed deques
+            //   _stateMachineDeque4/5/_compositeVarDeque6/_auxVarDeque8/
+            //   _vectorVarDeque9). The faithful eval-output source is HM7/HM2
+            //   (_evalResultValues), falling back to getVariable @0x533E1C.
             double value = 0.0;
-            const auto *bucket =
-                controllerAnimatorBucketLike_0x671228(binding.type);
-            const auto *bucketEntry = [&]() -> const Player::VariableAnimatorState* {
-                if(!bucket) return nullptr;
-                for(const auto &e : *bucket) {
-                    if(e.label == binding.label) return &e;
-                }
-                return nullptr;
-            }();
-            if(bucket != nullptr) {
-                if(bucketEntry) {
-                    value = static_cast<double>(bucketEntry->currentValue);
-                } else if(const auto *state =
-                              findControllerAnimatorStateLike_0x671228(
-                                  binding.label)) {
-                    value = static_cast<double>(state->currentValue);
-                } else if(const auto it = _evalResultValues.find(detail::widen(binding.label));
-                          it != _evalResultValues.end()) {
-                    value = it->second;
-                } else {
-                    value = getVariable(detail::widen(binding.label));
-                }
-            } else if(const auto it = _evalResultValues.find(detail::widen(binding.label));
-                      it != _evalResultValues.end()) {
+            if(const auto it = _evalResultValues.find(detail::widen(binding.label));
+               it != _evalResultValues.end()) {
                 value = it->second;
             } else {
                 value = getVariable(detail::widen(binding.label));
@@ -1016,16 +1006,22 @@ namespace internal {
         }
     }
 
-    // 砖G2: faithful root (motion["priority"]) content-snapshot stream — stream ②
-    // of Player_advanceRootAndNodes (0x6B6ADC), the root loop 0x6B6EE4..0x6B7124,
-    // run AFTER the layer stream and BEFORE the var-track/node walk. Forward-only
-    // (the binary's root loop has no backward branch — rewindRootAndNodes 0x6B9A3C
-    // also only forward-advances +568; there is no reverse root scan). On each
-    // crossed frame it snapshots priority[cursor]["content"] into _rootContent
-    // (Player+616) via sub_A0FB64 (a tTJSVariant copy-assign — the port copies the
-    // shared_ptr, semantically equivalent). NO event gate and NO "type" read,
-    // unlike the layer stream. Inert for every currently-available motion whose
-    // priority array has <2 frames (binary count-2<cursor → loop body never runs).
+    // 砖G2 / R-B1: faithful root (motion["priority"]) content-snapshot stream —
+    // stream ② shared by BOTH directions. Forward run = Player_advanceRootAndNodes
+    // (0x6B6ADC) root loop 0x6B6EE4..0x6B7124; reverse run = Player_rewindRootAndNodes
+    // (0x6B9A3C) reverse root loop @0x6B9E84. (CORRECTION: an earlier comment here
+    // claimed "the binary's root loop has no backward branch … no reverse root scan"
+    // — that was FALSIFIED by the @0x6B9E84 decrement loop; rewindRootAndNodes DOES
+    // reverse-scan +568. Both loops run AFTER the layer stream and BEFORE the
+    // var-track/node walk.) On each crossed frame it snapshots
+    // priority[cursor]["content"] into _rootContent (Player+616) via sub_A0FB64 (a
+    // tTJSVariant copy-assign — the port copies the shared_ptr, semantically
+    // equivalent). NO event gate and NO "type" read, unlike the layer stream. Like
+    // the layer seek (seekLayerEventStreamLike), this is bidirectional and
+    // self-selects direction from the persistent cursor's curTime(+576) vs
+    // target(+456). Inert for every currently-available motion whose priority array
+    // has <2 frames (forward: count-2<cursor; reverse: tag[0].time<=target →
+    // curTime>target false → loop body never runs).
     void Player::seekRootContentStreamLike_0x6B6ADC(double targetTime) {
         if (!_activeMotion) {
             return;
@@ -1081,14 +1077,27 @@ namespace internal {
             return std::dynamic_pointer_cast<PSB::PSBDictionary>((*f)["content"]);
         };
 
-        // Seed the initial snapshot/nextTime from the (persistent) cursor — the
-        // binary holds +616/+576/+584 across calls; on the very first call after
-        // a reseed _rootContent is the priority[0] content (mirrors 0x6B38FC seed).
+        // +616 content snapshot seed. The binary's init path Player_initNonEmoteMotion
+        // @0x6B38FC seeds +616 = priority[0].content (sub_A0FB64 from priority[0]
+        // ["content"]); +568/+576/+584 are NOT touched by init and begin at the
+        // Player object's construction zero-init. This reseed-time branch reproduces
+        // the 0x6B38FC content seed (priority[cursor].content with cursor==0 after a
+        // reseed) so the node walk reads a valid +616 before the first advance step.
         if (!_rootContent && count > 0) {
             _rootContent = contentOf(frameAt(_rootFrameCursor));
         }
-        // Derive nextTime (+584) from the persistent cursor (= priority[cursor+1].time).
-        _rootNextTime = frameTimeOf(frameAt(_rootFrameCursor + 1));
+        // NO entry recompute of +576/+584 from the cursor. CORRECTION (2026-06-05,
+        // confirmed by fresh decompile of 0x6B3778 / 0x6B6ADC / 0x6B9A3C): the binary
+        // NEVER recomputes _rootCurTime(+576)/_rootNextTime(+584) at function entry.
+        // They are persistent state — zero-initialized at object construction (init
+        // @0x6B3778 does not seed them), then evolved purely incrementally: the
+        // forward root loop @0x6B6F48 carries +576=+584 then refetches
+        // +584=priority[cursor+1].time; the reverse root loop @0x6B9E84 carries
+        // +584=+576 then refetches +576=priority[cursor].time. Recomputing from the
+        // cursor each tick discarded and rebuilt this persistent state, breaking the
+        // incremental-evolution contract and contradicting the adjacent +616 persist
+        // (which is faithfully held across calls). The fields persist via Player.h
+        // members (_rootCurTime/_rootNextTime default 0.0, reset only at reseed).
 
         // Forward advance (0x6B6F48): while cursor < count-2 && target >= nextTime.
         // Per step (0x6B6F78..0x6B70E4): ++cursor; +616 = priority[cursor].content;
@@ -1103,6 +1112,26 @@ namespace internal {
             _rootCurTime = _rootNextTime;                // 0x6B7044: +576 = +584
             // +584 = priority[cursor+1].time (0x6B70E4)
             _rootNextTime = frameTimeOf(frameAt(_rootFrameCursor + 1));
+        }
+
+        // Reverse rewind (Player_rewindRootAndNodes @0x6B9E84): while curTime(+576)
+        // > target(+456). Per step (0x6B9EA8..0x6B9F98), the structural mirror of
+        // the forward loop with a SINGLE byNum fetch (the decremented cursor):
+        //   --cursor (0x6B9EA8; the decremented value is also the byNum index);
+        //   +616 = priority[cursor].content (sub_A0FB64 snapshot @0x6B9F6C);
+        //   +584 = old +576 (0x6B9F7C: nextTime = curTime);
+        //   +576 = priority[cursor].time (0x6B9F94/98: curTime = item["time"]).
+        // The binary's outer/while gate is curTime > target only (NO count/cursor
+        // lower bound) — it relies on priority[0].time <= target. The cursor>0 guard
+        // mirrors the layer-stream port (0x6B9AE8) and prevents underflow on data
+        // where that does not hold; for in-bounds data it is transparent.
+        while (_rootCurTime > targetTime && _rootFrameCursor > 0) { // 0x6B9E84 / 0x6B9FC4
+            --_rootFrameCursor;                          // 0x6B9EA8: --(+568)
+            // +616 = priority[cursor].content (sub_A0FB64 snapshot @0x6B9F6C)
+            _rootContent = contentOf(frameAt(_rootFrameCursor));
+            _rootNextTime = _rootCurTime;                // 0x6B9F7C: +584 = +576
+            // +576 = priority[cursor].time (0x6B9F94/98)
+            _rootCurTime = frameTimeOf(frameAt(_rootFrameCursor));
         }
     }
 
@@ -1872,9 +1901,10 @@ namespace internal {
     // Player_rewindRootAndNodes @0x6B9A3C — reverse 4-stream walk. Same boundary
     // as advanceRootAndNodes but with the REVERSE var-track stepper
     // (rewindVariableTracksLike 0x6B9FCC). The layer seek is bidirectional and
-    // self-selects backward (0x6B9AE8); the root seek stays forward-only in the
-    // live port (a pre-existing approximation of the binary's reverse root loop
-    // 0x6B9E84 — orthogonal to this extraction, both inert for logo). The node
+    // self-selects backward (0x6B9AE8); the root seek is ALSO bidirectional now and
+    // self-selects backward via the reverse decrement loop @0x6B9E84 (R-B1 closed —
+    // the prior "forward-only approximation" missed the binary's reverse root scan).
+    // The node
     // deque walk (④) is shared with the forward path: progressSeekNodeSlotsLike's
     // advanceNodeFrameSelectionLike_0x6926B4 runs forward + corrective-backward,
     // so in reverse the forward sub-loop is a no-op and the backward sub-loop does
@@ -1882,7 +1912,7 @@ namespace internal {
     // (0x6B73DC, forward-only) and reverse inline (0x6BA1CC, backward-only) seeks.
     void Player::rewindRootAndNodes_0x6B9A3C(double clampedEvalTime) {
         seekLayerEventStreamLike_0x6B6ADC(clampedEvalTime);  // ① layer (bidirectional → backward 0x6B9AE8)
-        seekRootContentStreamLike_0x6B6ADC(clampedEvalTime); // ② root (forward-only port approximation)
+        seekRootContentStreamLike_0x6B6ADC(clampedEvalTime); // ② root (bidirectional → reverse 0x6B9E84)
         rewindVariableTracksLike_0x6B9A3C(clampedEvalTime);  // ③ var-track 0x6B9FCC (reverse)
         progressSeekNodeSlotsLike_0x6C106C(clampedEvalTime, /*forward=*/false); // ④ node deque 0x6BA158 (backward inline seek)
     }
@@ -1980,35 +2010,28 @@ namespace internal {
         // @0x533E1C): the former frameProgress-entry `.clear()` has been REMOVED
         // (see the entry comment above) to align with the binary, where HM2 is
         // persistent across frames and progress_inner @0x6C106C never touches +320.
-        // The stepControllerBucket writes below now overwrite their own labels in a
+        // The fixed-controller eval refresh below overwrites its own labels in a
         // persistent HM2 rather than repopulating a cleared one — matching the
         // by-overwrite semantics of the binary bind-loop.
         preProgressPlayingTimelinesLike_0x671764(actualDelta, nullptr);
 
+        // Controller stepping (EmoteEngine_progress @0x67D01C, step loops
+        //   @0x67d0a4..0x67d370) is performed by EmoteEngine::progress over the
+        //   typed-deque model (_stateMachineDeque4/5, _compositeVarDeque6,
+        //   _auxVarDeque8, _vectorVarDeque9, _lookupCurvesDeque10), writing step
+        //   outputs into HM7 (= EmoteEngine+1440, mirror _labelToValueHM7). A
+        //   prior parallel `stepControllerBucket` loop over a separate per-Player
+        //   `_type4..8ControllerAnimators` bucket set lived here; those buckets
+        //   were never written (zero push/emplace across cpp/) — a dead residue
+        //   of an earlier stepping model superseded by the EmoteEngine typed-deque
+        //   model. The binary has no such independent Player-side bucket: setVariable
+        //   @0x671228 cases 4-8 index the SAME EmoteEngine deques (engine
+        //   +256/+336/+416/+576/+656). The dead loop is removed this round; only the
+        //   HM7-backed eval-output refresh remains, sub-stepped at the binary's 1.1
+        //   slice (@0x67d0b0 fmin(dt,1.1)).
         double remainingControllerStep = actualDelta;
-        const auto stepControllerBucket =
-            [this](auto &bucket, double controllerDt) {
-                for(auto &state : bucket) {
-                    double steppedValue = state.currentValue;
-                    const bool stillAnimating = stepQueuedAnimatorLike_0x67D01C(
-                        state, controllerDt, steppedValue);
-                    writeEvalResultValueLike_0x6C4668(state.label, steppedValue);
-                    if(stillAnimating) {
-                        if (_engineBack) _engineBack->_dirty = true;
-                    }
-                }
-            };
         while(remainingControllerStep > 0.0) {
             const double controllerDt = std::min(remainingControllerStep, 1.1);
-            // Aligned to 0x67D01C container order: type4 -> type5 -> type6
-            // -> type8 -> type7, then generic eval animators.
-            if(_engineBack) {
-                stepControllerBucket(_engineBack->_type4ControllerAnimators, controllerDt);
-                stepControllerBucket(_engineBack->_type5ControllerAnimators, controllerDt);
-                stepControllerBucket(_engineBack->_type6ControllerAnimators, controllerDt);
-                stepControllerBucket(_engineBack->_type8ControllerAnimators, controllerDt);
-                stepControllerBucket(_engineBack->_type7ControllerAnimators, controllerDt);
-            }
             refreshFixedControllerEvalOutputsLike_0x67D01C();
             remainingControllerStep -= controllerDt;
         }

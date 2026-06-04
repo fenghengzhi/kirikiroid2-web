@@ -9,7 +9,13 @@ metadata:
 
 对象 0x568=1384 字节。容器全部内联在对象里,按固定偏移扁平排布。
 
-## 4 个 KiriKiri 哈希表 (std::unordered_map 风格,prime bucket + load-factor float)
+## 4 个哈希表 = 标准 libstdc++ std::unordered_map (仅 hash 自研)
+> 纠正(2026-06-05 fresh ctor 0x6CED30 复核): 措辞"KiriKiri 哈希表"会误导成自研内联/开放寻址表。
+> 实为 libstdc++ `std::unordered_map`: ctor 每个 HM 调 `std_Prime_rehash_policy_M_next_bkt(base,0xA)`
+> + load factor dword=1065353216(1.0f) + `operator new(8*nbkt)` bucket 数组 + `_M_before_begin` 单链。
+> 只有 **hash 函数**自研(ttstr UTF-16 hash)。本地 `unordered_map<ttstr,V,ttstr_hash,ttstr_equal>` 已是
+> 正确 1:1 选型, **不存在** "STL→KiriKiri 内联 HM" 的 P3 重构(此前提本身错)。详见 [[motionplayer-container-audit]]。
+
 每个哈希表布局:
 - `+0`: float 负载因子 (ctor 写 1065353216 = 1.0f)
 - bucket 数组 begin 指针 + bucket 计数 (sub_149EDF8 选 prime 桶数,初始 hint=10)
@@ -43,6 +49,9 @@ project_player_class_layout.md 同样标 hashMap。EmotePlayer 误配报告把�
 - `+432`/+440 list 哨兵 (ctor `a1[54]=a1[55]=a1+52`)
 - `+864` 容器 (sub_7E2344 init / sub_7E24AC destroy, 44B 区)
 
-**How to apply:** 本地 PlayerRuntime 用 std::unordered_map×6 / std::list / std::deque / std::vector
-全部属于"语义对齐但容器不同"⚠️。完全一比一复刻需替换为 KiriKiri 内部哈希表/deque 实现。
-参见 [[player-pimpl-split]]。
+**How to apply:** PlayerRuntime 已删,容器内联进 Player 本体。4 HM 容器选型(unordered_map)+deque+map+
+vector 全部对齐。**无需**替换成"KiriKiri 内部哈希表"(那是错的前提)。仅历史 2 处 std::string→ttstr
+key retype 待办 —— 此二者(_evalResultValues HM2 / _nodeLabelMap +24)均已于 2026-06-03 完成 retype
+(2026-06-05 复核: Player.h:1446 _evalResultValues=detail::LabelValueMap ttstr-key;
+Player.h:1292 _nodeLabelMap=detail::NodeLabelMap ttstr-key+ttstr_utf16_less comparator)。
+⇒ **容器维度无 open 偏差**。参见 [[motionplayer-container-audit]] [[player-local-vs-binary-audit]]。

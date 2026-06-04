@@ -19,7 +19,6 @@
 #include "ResourceManager.h"
 #include "RuntimeSupport.h"
 #include "internal/player_containers.h"
-#include "internal/legacy_variable_state.h"
 
 namespace PSB {
     class PSBDictionary;
@@ -905,9 +904,9 @@ namespace motion {
         // runs at each reverse advance point inside Player_progress_inner
         // (0x6C117C / 0x6C138C / 0x6C1408). Same 4 streams reversed: layer
         // (bidirectional seekLayerEventStreamLike self-selects backward 0x6B9AE8),
-        // root (seekRootContentStreamLike — root loop stays forward-only in the
-        // live port, a pre-existing approximation of the binary's 0x6B9E84 reverse
-        // root loop), rewindVariableTracksLike (③ reverse var-track 0x6B9FCC),
+        // root (seekRootContentStreamLike — ALSO bidirectional, self-selects backward
+        // via the reverse decrement loop 0x6B9E84; R-B1 closed),
+        // rewindVariableTracksLike (③ reverse var-track 0x6B9FCC),
         // progressSeekNodeSlotsLike (④ node deque 0x6BA158). See PlayerFrameProgress.cpp.
         void rewindRootAndNodes_0x6B9A3C(double clampedEvalTime);
         // 砖5/洞1: Player_preProgressDirtyNodes (0x6B6878) — progress_inner's first
@@ -925,10 +924,13 @@ namespace motion {
         void seekLayerEventStreamLike_0x6B6ADC(double targetTime);
         // libkrkr2.so root content-snapshot stream ② (the 2nd of [layer → root →
         // var-track → node] inside Player_advanceRootAndNodes 0x6B6ADC, root loop
-        // 0x6B6EE4..0x6B7124). Forward-only cursor advance over motion["priority"]
-        // (Player+548): on each crossed frame snapshots priority[cursor]["content"]
-        // into _rootContent (Player+616, sub_A0FB64 variant copy). NO event gate /
-        // NO "type" read. curTime=_rootCurTime(+576), nextTime=_rootNextTime(+584).
+        // 0x6B6EE4..0x6B7124) PLUS its reverse counterpart in Player_rewindRootAndNodes
+        // (0x6B9A3C, reverse loop 0x6B9E84). Bidirectional cursor seek over
+        // motion["priority"] (Player+548): self-selects forward/backward from the
+        // persistent cursor's curTime(+576) vs target(+456). On each crossed frame
+        // snapshots priority[cursor]["content"] into _rootContent (Player+616,
+        // sub_A0FB64 variant copy). NO event gate / NO "type" read.
+        // curTime=_rootCurTime(+576), nextTime=_rootNextTime(+584).
         // Inert for logo (priority is single-clip → count<2 → loop never runs).
         void seekRootContentStreamLike_0x6B6ADC(double targetTime);
         // libkrkr2.so var-track stream ③ (the 3rd of [layer → root → var-track →
@@ -1354,33 +1356,18 @@ namespace motion {
         int _alphaOpCounter = 0;
         tjs_int _nextLayerId = 1;
         tjs_int _nextLayerAbsolute = 1;
-    public:
-        // PLATFORM_BOUNDARY: legacy uniform record used by EmoteEngine's
-        //   transitional 5 deques + 1 map. NOT a libkrkr2.so type — see
-        //   internal/legacy_variable_state.h header note for the binary's
-        //   actual 5 distinct POD element types.
-        using VariableKeyframe       = detail::LegacyVariableKeyframe;
-        using VariableAnimatorState  = detail::LegacyVariableAnimatorState;
-    private:
-        // The 7 animator containers below live on EmoteEngine, not Player.
-        // Per libkrkr2.so analysis (Player_setVariable @ 0x671228):
-        //   EmoteEngine+256  std::deque<Animator> type-4 controller
-        //   EmoteEngine+336  std::deque<Animator> type-5 controller
-        //   EmoteEngine+416  std::deque<Animator> type-6 controller
-        //   EmoteEngine+576  std::deque<Animator> type-7 controller
-        //   EmoteEngine+656  std::deque<Animator> type-8 controller
-        //   EmoteEngine+1384 std::unordered_map<ttstr, Animator> _variableAnimators
-        // Player accesses them through _engineBack (set by EmoteEngine ctor).
-        std::deque<VariableAnimatorState> *
-        controllerAnimatorBucketLike_0x671228(int type);
-        const std::deque<VariableAnimatorState> *
-        controllerAnimatorBucketLike_0x671228(int type) const;
-        VariableAnimatorState *
-        findControllerAnimatorStateLike_0x671228(const std::string &label);
-        const VariableAnimatorState *
-        findControllerAnimatorStateLike_0x671228(const std::string &label) const;
-        void eraseControllerAnimatorStateLike_0x671228(const std::string &label);
-        void clearControllerAnimatorStateLike_0x671228();
+        // (Removed 2026-06-05) The `VariableKeyframe` / `VariableAnimatorState`
+        //   aliases (detail::LegacyVariable*) and the
+        //   `controllerAnimatorBucketLike_0x671228` / `find...` / `erase...` /
+        //   `clear...ControllerAnimatorStateLike_0x671228` accessors operated on a
+        //   parallel per-Player animator bucket set (`_type4..8ControllerAnimators`
+        //   + `_variableAnimators`) that was a residue of a superseded stepping
+        //   model — never written (zero push/emplace across cpp/). Per fresh
+        //   decompile of EmoteEngine_progress @0x67D01C / setVariable @0x671228,
+        //   controller stepping reads ONLY the EmoteEngine typed deques #4-#9
+        //   (engine +256/+336/+416/+576/+656/+736) and writes into HM7 (+1440);
+        //   there is no independent Player-side bucket. Removed with the dead
+        //   containers (byte-neutral).
         // === libkrkr2.so motion::Player hash maps (Phase B aliases) ===
         // NOTE (corrected 2026-06-03, fresh decompile of 0x686A4C/0x686C5C):
         // these are STANDARD libstdc++ std::unordered_map (literal

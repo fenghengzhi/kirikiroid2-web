@@ -24,3 +24,7 @@ metadata:
 **平台边界(合法)**: B-1 sub_A0FB64 tTJSVariant copy→shared_ptr(+616 root content); B-2 var easing 存 PSB value.
 
 **六维评分**: 源码结构🟡7(monolith→split) / 数据流✅9 / 调用链✅9 / 生命周期✅9 / 容器✅9 / 边界🟡7. 综合高度对齐,主遗留=结构性 split 偏离(已知)+3 inert真实缺口. 优先纠 R-1 错误注释.
+
+**追加复核 2026-06-05(第二轮 fresh):** 新增一处真实缺口未被上面记录——
+- R-4(🟡中): Player_initNodeTimeline(0x6B64AC) tail @0x6B674C 有 per-node action push: `if(+456==slot+328.clipStartTime && (slot+342 mask&4)){ pushAction(player, *(node+0)=label, slot+608) }`. 本地 initializeNodeTimelineSlotsLike_0x6B64AC(PlayerUpdateLayerEval.cpp:287-311) 完全缺这段. 影响 reseek loop-wrap(0x6B91B0 node-init loop) + frameProgress firstFrame seed(:1936) 两条路径的 onAction. body 其余(slot[0]=v19/slot[1]=v19+1 parse+merge, activeSlotIndex=0, flags|=1, gated findSource)✅对齐.
+- 复核重申: 0x6B91B0 确为 0x6B86C8(Player_reseekTimelineCursors) 内部 node-init for 循环体地址,跨度 0x6B86C8..0x6B92E8 单函数,非独立 reseek 函数.

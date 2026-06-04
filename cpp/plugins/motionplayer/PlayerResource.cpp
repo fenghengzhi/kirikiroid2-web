@@ -50,8 +50,6 @@ namespace motion {
         _lastViewParam.Clear();
         _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
         _variableKeys.Clear();
-        if(_engineBack) _engineBack->_variableAnimators.clear();
-        clearControllerAnimatorStateLike_0x671228();
         _evalResultValues.clear();
         _evalResultList.clear();
         _evalResultListIndex.clear();

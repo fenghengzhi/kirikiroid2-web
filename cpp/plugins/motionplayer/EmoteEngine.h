@@ -42,7 +42,6 @@
 #include "EmoteLoopController.h"
 #include "EmoteWindEmitter.h"
 #include "internal/player_containers.h"
-#include "internal/legacy_variable_state.h"
 #include "internal/ttstr_hash.h"
 
 namespace PSB {
@@ -700,34 +699,18 @@ namespace motion {
         // ===== End binary-layout fields =====
 
         // ============================================================================
-        // Legacy / local-only transitional storage.
-        // PLATFORM_BOUNDARY: NOT at any binary offset. The 5 deques + 1
-        //   unordered_map below hold Player::VariableAnimatorState records used
-        //   by PlayerVariable.cpp / PlayerCore.cpp until the binary's typed
-        //   step functions (sub_663BDC/665600/666068/666BF8/668470) are ported
-        //   in P2. The binary's equivalent state lives inside the typed deques
-        //   above (#4-#9) and HM2.
-        //
-        // Declared via forward-declaration handles to avoid pulling Player.h
-        // into this header (Player.h includes EmoteEngine.h via friend hooks).
+        // (Removed) Parallel controller-animator residue.
+        // The former `_type4..8ControllerAnimators` deques + `_variableAnimators`
+        //   map (type detail::LegacyVariableAnimatorState) modeled an earlier
+        //   per-Player parallel controller-stepping model that was superseded by
+        //   the EmoteEngine typed-deque model. Per fresh decompile of
+        //   EmoteEngine_progress @0x67D01C and setVariable @0x671228: the binary's
+        //   controller stepping reads ONLY the typed deques #4-#9 above (engine
+        //   +256/+336/+416/+576/+656/+736) and writes outputs into HM7 (+1440);
+        //   there is no independent Player-side animator bucket. The removed members
+        //   were never written (zero push/emplace/insert across cpp/ — clear()/erase()
+        //   only), so removal is byte-neutral. Removed 2026-06-05.
         // ============================================================================
-
-        // Defined inline in EmotePlayer.h (after Player.h include) so the
-        // VariableAnimatorState type is complete. Stored here as opaque
-        // storage members initialized in EmoteEngine ctor body via placement.
-
-        // Backward-compat legacy deques (consumed by PlayerCore.cpp
-        // controllerAnimatorBucketLike_0x671228 dispatch).
-        std::deque<detail::LegacyVariableAnimatorState> _type4ControllerAnimators;
-        std::deque<detail::LegacyVariableAnimatorState> _type5ControllerAnimators;
-        std::deque<detail::LegacyVariableAnimatorState> _type6ControllerAnimators;
-        std::deque<detail::LegacyVariableAnimatorState> _type7ControllerAnimators;
-        std::deque<detail::LegacyVariableAnimatorState> _type8ControllerAnimators;
-
-        // Backward-compat legacy label→state map (consumed by PlayerVariable.cpp
-        // / PlayerCore.cpp setVariable cleanup).
-        std::unordered_map<std::string, detail::LegacyVariableAnimatorState>
-            _variableAnimators;
 
         // Engine scalar fields (callers reference these by name; binary offset
         // homes pending audit). Used by EmotePlayer.cpp clone() and various
