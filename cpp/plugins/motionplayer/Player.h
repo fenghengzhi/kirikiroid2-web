@@ -604,6 +604,16 @@ namespace motion {
                                          iTJSDispatch2 *objthis);
         static tjs_error stopCompat(tTJSVariant *result, tjs_int numparams,
                                     tTJSVariant **param, iTJSDispatch2 *objthis);
+        // clear #72 — binary callback Player_drawToLayerCompat @0x6D2DA0
+        // (member named "clear"; impl is a gated recursive draw-to-layer that
+        // fills the root layer rect and recurses nodeType==3 children).
+        static tjs_error clearCompat(tTJSVariant *result, tjs_int numparams,
+                                     tTJSVariant **param, iTJSDispatch2 *objthis);
+        // Instance worker for the clear callback: the binary recurses on child
+        // players, so the body is a member taking the resolved target layer +
+        // fill value. Mirrors Player_drawToLayerCompat @0x6D2DA0 structure.
+        void drawToLayerCompat(const tTJSVariant &targetLayer,
+                               const tTJSVariant &fillValue);
         tTJSVariant motionList();
         void emoteEdit(tTJSVariant args);
 
@@ -702,6 +712,26 @@ namespace motion {
         [[nodiscard]] tTJSVariant getTransformOrder() const;
         void setCoordinate(tjs_int v) { _coordinate = v; }
         [[nodiscard]] tjs_int getCoordinate() const { return _coordinate; }
+
+        // M16 (92-set alignment): two CLASS-LEVEL (static/global) RW properties
+        // that head the binary Motion.Player member table @0x6D69C8. They back
+        // process-global state, not per-instance fields — the binary reads/writes
+        // module globals (byte_1AB84A8 / dword_1AA40D8..E4), so the port mirrors
+        // them with file-static storage exposed through instance accessors.
+        //
+        // defaultSyncActive: get=Player_getDefaultSyncActive @0x6D93F8 returns
+        //   (uint8)byte_1AB84A8; set=Player_setDefaultSyncActive @0x6D9404 stores
+        //   (value & 1). Default 0xff (verified get_bytes 0x1AB84A8 == 0xff) -> true.
+        [[nodiscard]] bool getDefaultSyncActive() const {
+            return s_defaultSyncActive;
+        }
+        void setDefaultSyncActive(bool v) { s_defaultSyncActive = (v & 1) != 0; }
+        // defaultTransformOrder: get=sub_6B097C builds a 4-element TJS Array from
+        //   the global int[4] dword_1AA40D8 = {0,3,2,1}; set=sub_6B0AB4 reads a
+        //   4-element permutation of {0,1,2,3} (range+uniqueness checked, typo'd
+        //   error strings preserved) into dword_1AA40D8..E4.
+        [[nodiscard]] tTJSVariant getDefaultTransformOrder() const;
+        void setDefaultTransformOrder(tTJSVariant arr);
 
         // Root node position (x/y/left/top)
         // Aligned to libkrkr2.so:
@@ -1305,6 +1335,15 @@ namespace motion {
         // permutation of {0,1,2,3}; coordinate is still a scalar int (node+24).
         int _transformOrder[4] = {0, 1, 2, 3};
         tjs_int _coordinate = 0;
+
+        // M16 (92-set alignment): class-level (process-global) state backing the
+        // binary defaultSyncActive / defaultTransformOrder properties. The binary
+        // stores these in module globals (byte_1AB84A8 / dword_1AA40D8..E4) shared
+        // across all Player instances, so the port uses file-static storage.
+        //   s_defaultSyncActive default = true  (byte_1AB84A8 == 0xff)
+        //   s_defaultTransformOrder default = {0,3,2,1} (dword_1AA40D8 bytes)
+        static bool s_defaultSyncActive;
+        static int s_defaultTransformOrder[4];
         bool _visible = true;
         double _opacity = 1.0;
         double _slant = 0.0;

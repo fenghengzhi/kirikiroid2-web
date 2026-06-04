@@ -1147,6 +1147,66 @@ namespace motion {
             _transformOrder[i] = order[i];
     }
 
+    // M16 (92-set alignment): class-level (process-global) state backing the
+    // binary defaultSyncActive / defaultTransformOrder properties. Defaults are
+    // taken verbatim from the libkrkr2.so module globals:
+    //   byte_1AB84A8 == 0xff  -> s_defaultSyncActive = true
+    //   dword_1AA40D8..E4 == {0,3,2,1} -> s_defaultTransformOrder
+    bool Player::s_defaultSyncActive = true;
+    int Player::s_defaultTransformOrder[4] = {0, 3, 2, 1};
+
+    // defaultTransformOrder getter — aligned with libkrkr2.so sub_6B097C
+    // @0x6B097C. The binary builds a 4-element TJS Array, pushing each
+    // dword_1AA40D8[i] (i=0..3) as an int variant (type=4). detail::makeArray
+    // replicates TJSCreateArrayObject + per-item append in the same order.
+    tTJSVariant Player::getDefaultTransformOrder() const {
+        return detail::makeArray({
+            tTJSVariant((tjs_int)s_defaultTransformOrder[0]),
+            tTJSVariant((tjs_int)s_defaultTransformOrder[1]),
+            tTJSVariant((tjs_int)s_defaultTransformOrder[2]),
+            tTJSVariant((tjs_int)s_defaultTransformOrder[3]),
+        });
+    }
+
+    // defaultTransformOrder setter — aligned with libkrkr2.so sub_6B0AB4
+    // @0x6B0AB4. The binary fetches 4 elements via PropGet(flag=1024, index
+    // 0..3); a PropGet failure (high bit set) throws L"illegul size of transform
+    // order"; each value is coerced to int and must be a unique value in [0,3]
+    // (tracked via a per-value used flag), else throws L"illegul variable for
+    // transform order" (binary sub_95440C, typos preserved). Values are written
+    // in order to dword_1AA40D8 / DC / E0 / E4.
+    void Player::setDefaultTransformOrder(tTJSVariant arr) {
+        iTJSDispatch2 *a =
+            arr.Type() == tvtObject ? arr.AsObjectNoAddRef() : nullptr;
+        if(!a)
+            TVPThrowExceptionMessage(
+                TJS_W("illegul size of transform order"));
+        // Binary writes each global immediately inside the loop (interleaved
+        // with the PropGet/validate of the next index), so a mid-loop throw
+        // leaves the earlier indices already written. Mirror that incremental
+        // write rather than deferring, to match the partial-write-on-error
+        // behavior of sub_6B0AB4.
+        bool used[4] = {false, false, false, false};
+        for(int i = 0; i < 4; i++) {
+            tTJSVariant elem;
+            // PropGetByNum(flags=TJS_MEMBERMUSTEXIST(0x400=1024), num=i) —
+            // binary (*(vtbl+40))(obj, 1024, i, &elem, obj). The must-exist flag
+            // is load-bearing: it makes a too-short array fail here so the
+            // L"illegul size of transform order" throw fires (flag 0 would let a
+            // missing index succeed-with-void and skip the error path).
+            if(TJS_FAILED(a->PropGetByNum(TJS_MEMBERMUSTEXIST, i, &elem, a)))
+                TVPThrowExceptionMessage(
+                    TJS_W("illegul size of transform order"));
+            const int v = static_cast<int>((tjs_int)elem);
+            if((unsigned)v > 3 || used[v])
+                TVPThrowExceptionMessage(
+                    TJS_W("illegul variable for transform order"));
+            // Binary: dword_1AA40D8[i] = v; *used_flag = 1; (in that order).
+            s_defaultTransformOrder[i] = v;
+            used[v] = true;
+        }
+    }
+
     void Player::setProgressCompat(double v) {
         ensureMotionLoaded();
         const auto progress = std::clamp(v, 0.0, 1.0);

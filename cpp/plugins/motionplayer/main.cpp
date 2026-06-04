@@ -138,6 +138,20 @@ NCB_REGISTER_CLASS(Player) {
     NCB_CONSTRUCTOR((ResourceManager));
 
     // Properties
+    // M16 (92-set alignment): two class-level (static) RW properties that head
+    // the binary Motion.Player member table (Player_ncb_registerMembers
+    // @0x6D69C8). They read/write process-global state, NOT per-instance fields:
+    //   defaultSyncActive  get=Player_getDefaultSyncActive @0x6D93F8
+    //                      (return (uint8)byte_1AB84A8; default 0xff=true)
+    //                      set=Player_setDefaultSyncActive @0x6D9404
+    //                      (byte_1AB84A8 = value & 1)
+    //   defaultTransformOrder get=sub_6B097C (build a 4-elem TJS Array from the
+    //                         global int[4] dword_1AA40D8 = {0,3,2,1})
+    //                         set=sub_6B0AB4 (read 4-elem permutation of {0,1,2,3}
+    //                         into dword_1AA40D8..E4, validating range+uniqueness)
+    NCB_PROPERTY(defaultSyncActive, getDefaultSyncActive, setDefaultSyncActive);
+    NCB_PROPERTY(defaultTransformOrder, getDefaultTransformOrder,
+                 setDefaultTransformOrder);
     // Root node position — aligned to libkrkr2.so NCB registration (0x6D69C8)
     NCB_PROPERTY(x, getX, setX);
     NCB_PROPERTY(y, getY, setY);
@@ -334,36 +348,24 @@ NCB_REGISTER_CLASS(Player) {
     // binary Motion.Player equivalent.
 
     // Resource management
-    NCB_METHOD(unload);
-    NCB_METHOD(unloadAll);
+    // M16 (92-set alignment): the full binary Motion.Player member set
+    // (Player_ncb_registerMembers @0x6D69C8) is exactly 92 entries. The
+    // following 17 NCB registrations were port-only surplus NOT present in
+    // that enumeration and have been removed to hit the precise 92-member
+    // set (C++ method bodies are preserved; host/internal callers still use
+    // them directly — only the TJS-exposed surface is dropped):
+    //   unload, unloadAll, findMotion, requireLayerId, releaseLayerId,
+    //   findSource, loadSource, clearCache, setClearColor, setResizable,
+    //   unloadUnusedTextures, captureCanvas, setSize, copyRect, adjustGamma,
+    //   frameProgress, isPlaying.
+    // KEEP (verified binary members of the 92-set):
+    //   isExistMotion (#90), draw (#77), play/progress/clear/stop (#70..#73),
+    //   setVariable/getVariable, get/setFlip... etc (registered elsewhere in
+    //   this block).
     NCB_METHOD(isExistMotion);
-    NCB_METHOD(findMotion);
-    NCB_METHOD(requireLayerId);
-    NCB_METHOD(releaseLayerId);
 
     // Drawing/rendering
-    NCB_METHOD(setClearColor);
-    NCB_METHOD(setResizable);
-    // M15 D-01 (cluster E §3.1): removed 5 draw-device internal NCB methods
-    // — not in binary Motion.Player 92-entry set (sub_6D69C8). These are
-    // web-port draw-device adapters with no binary Motion.Player equivalent
-    // and unlikely to be called from TJS scenarios; binary routes via
-    // iTVPDrawDevice/Motion.ResourceManager:
-    //   removeAllTextures, removeAllBg, removeAllCaption,
-    //   registerBg, registerCaption.
-    // C++ methods preserved (host adapter still calls them internally).
-    NCB_METHOD(unloadUnusedTextures);
-    // M15 D-01 (cluster E §3.1): removed alphaOpAdd — port draw-device helper,
-    // not in binary 92-entry table. C++ method preserved.
-    NCB_METHOD_RAW_CALLBACK(captureCanvas, &Player::captureCanvasCompat, 0);
-    NCB_METHOD(findSource);
-    NCB_METHOD(loadSource);
-    NCB_METHOD(clearCache);
-    NCB_METHOD(setSize);
-    NCB_METHOD(copyRect);
-    NCB_METHOD(adjustGamma);
     NCB_METHOD_DETAIL(draw, Class, void, Class::draw, (tTJSVariant));
-    NCB_METHOD(frameProgress);
 
     // Viewport/display
     NCB_METHOD(setFlip);
@@ -423,9 +425,16 @@ NCB_REGISTER_CLASS(Player) {
     // registers them as namespace-level free functions on the Motion namespace
     // object. Relocated to NCB_ATTACH_FUNCTION(..., Motion, ...) below the
     // NCB_REGISTER_CLASS(Motion) block. (was: wrong owner on Player)
+    // play #70 / progress #71 / clear #72 / stop #73 — binary registration
+    // order (Player_ncb_registerMembers @0x6D69C8). clear's callback is the
+    // gated recursive draw-to-layer routine Player_drawToLayerCompat @0x6D2DA0
+    // (binary name/impl quirk: the member is named "clear" but the callback
+    // fills the root layer rect + recurses nodeType==3 children).
+    // isPlaying removed from NCB (port surplus, not in binary 92-set);
+    // C++ Player::isPlayingCompat preserved for internal use.
     NCB_METHOD_RAW_CALLBACK(play, &Player::playCompat, 0);
     NCB_METHOD_RAW_CALLBACK(progress, &Player::progressCompatMethod, 0);
-    NCB_METHOD_RAW_CALLBACK(isPlaying, &Player::isPlayingCompat, 0);
+    NCB_METHOD_RAW_CALLBACK(clear, &Player::clearCompat, 0);
     NCB_METHOD_RAW_CALLBACK(stop, &Player::stopCompat, 0);
 }
 
@@ -444,9 +453,9 @@ NCB_REGISTER_CLASS(Player) {
 // the D3DEmotePlayer<->EmotePlayer binary relationship (sub_52E504) is not yet
 // decompiled, so "API fully missing" is not yet a settled verdict — verify
 // sub_52E504 before relocating the member table here.
-// Motion.EmotePlayer — full NCB surface (68 members + 2 constants), aligned
+// Motion.EmotePlayer — full NCB surface (69 members + 2 constants), aligned
 //   with libkrkr2.so EmotePlayer_ncb_registerMembers @0x67FAC8. Registration
-//   ORDER matches the binary 1:1 (#1..#68). The binary native instance create
+//   ORDER matches the binary 1:1 (#1..#69). The binary native instance create
 //   @0x68629C is arg-less; constants (TimelinePlayFlag*) registered on the same
 //   class object. Member callbacks delegate to the shared Player/EmoteEngine
 //   machine (see EmotePlayer.cpp). These are SUBCLASS members (not Motion
@@ -539,10 +548,17 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_METHOD(getLoopTimeline);                 // #64
     NCB_METHOD(getTimelineTotalFrameCount);      // #65
     NCB_METHOD(getPlayingTimelineInfoList);      // #66
+    // CORRECTION (2026-06-05, full member-string enumeration of
+    // EmotePlayer_ncb_registerMembers @0x67FAC8): the binary registers ONLY
+    // isSelectorTarget (#67) + deactivateSelectorTarget (#68); there is NO
+    // `activateSelectorTarget` member. The prior local extra has been removed so
+    // the table is now 69 members + 2 constants, 1:1 with the binary order
+    // (verified tail = isSelectorTarget, deactivateSelectorTarget, getCommandList).
+    // EmotePlayer::activateSelectorTarget (a STUB_WARN with no caller) is left as
+    // dead C++ but is no longer exposed to TJS.
     NCB_METHOD(isSelectorTarget);                // #67
-    NCB_METHOD(activateSelectorTarget);          // #68
-    NCB_METHOD(deactivateSelectorTarget);        // #69
-    NCB_METHOD(getCommandList);                  // #70
+    NCB_METHOD(deactivateSelectorTarget);        // #68
+    NCB_METHOD(getCommandList);                  // #69
 }
 
 // ============================================================
