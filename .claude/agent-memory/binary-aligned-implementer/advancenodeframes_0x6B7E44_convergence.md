@@ -54,4 +54,55 @@ P7 convergence step 1 of 3 (advanceNodeFrames → advanceRootAndNodes → rewind
 **ORACLE STATUS** [❌ PROVEN WRONG 2026-06-05 — see CORRECTION at top]: ~~logo (m2/yuzu) all NON-parameterized → parameterized branch never taken → change INERT for logo~~. FALSE: m2logo routes a parameterized node ("レイヤ1"), confirmed by guest proc_exit(99) on the first parameterEntry!=null node. The parameterized branch IS exercised by m2logo and the standalone transcription hung there. The non-param branch IS byte-identical to green, but the PARAM branch is not inert.
 **PRE-EXISTING REGRESSION (NOT MINE)**: m2logo differential FAILs `has 100 frames; spec requires exactly 93` (oracle=93). REPRODUCED ON CLEAN HEAD f4cdc66 (stashed ALL wip incl. mine → still 100). So the 93→100 frame-count drift predates this session — almost certainly d74f41e (completionType +1144 / preview +1092 untangle, directly governs motion-completion → frame count) or f4cdc66. My change produces the SAME 100-frame trace as clean baseline = does NOT move the count. Fixing the completion-gating regression is OUT OF SCOPE for this convergence; flagged to user.
 
-**STILL OPEN (steps 2/3)**: advanceRootAndNodes @0x6B6ADC (the 4-stream forward walk wrapping advanceNodeFrames; layer/root/var-track streams already separately ported as seek*StreamLike) and rewindRootAndNodes @0x6B9A3C (reverse). The non-parameterized inline per-node seek still lives in advanceNodeFrameSelectionLike_0x6926B4 (not yet split to its own 0x6B73D0 boundary). B's PlayerFrameStepping.cpp mock advanceNodeFramesLike_0x6B7E44 (on NodeFrameStreamsLike) is the 1:1 reference; lead handles its deletion + unit-test migration after all 3 convergences.
+**STEP 2 DONE & GREEN (2026-06-05, commit 27a3b08)**: advanceRootAndNodes @0x6B6ADC +
+rewindRootAndNodes @0x6B9A3C extracted as real function boundaries
+(Player::advanceRootAndNodes_0x6B6ADC / rewindRootAndNodes_0x6B9A3C in
+PlayerFrameProgress.cpp). The 4-stream sequence [layer ① seekLayerEventStreamLike →
+root ② seekRootContentStreamLike → var-track ③ advance|rewindVariableTracksLike →
+node ④ progressSeekNodeSlotsLike] was inlined at 5 advance/rewind-equivalent call points
+(fwd 0x6C13D4/0x6C13F8/0x6C1468, rev 0x6C117C/0x6C138C/0x6C1408); now one call per point +
+deltaTime-sign dispatch in the common tail. Pure behavior-preserving extraction (streams
+already ported separately); m2logo 93 / yuzulogo 243 green. Blueprint: agent a027b3f7.
+
+**REMAINING (refinements — NOT YET DONE, entangled + fragile loop-wrap path, mostly
+oracle-inert; scoped + evidenced, recommend a focused separately-verified session)**:
+
+— **3a: port reseekTimelineCursors node-init loop @0x6B91B0** (PREREQUISITE for 3b). Local
+reseekTimelineCursors (PlayerFrameProgress.cpp STEP 4 ~line 1673) DEFERS @0x6B91B0,
+relying on the corrective-backward sub-loop in advanceNodeFrameSelectionLike to reposition
+node slots after loop-wrap. Binary @0x6B91B0 (agent af0adcbd) =
+`for(m=1; m<dequeSize-1; ++m) Player_initNodeTimeline(player, node[m])` — ABSOLUTE two-slot
+re-seed (= local initializeNodeTimelineSlotsLike_0x6B64AC): parseFrame slot[0]=frame(v19) +
+slot[1]=frame(v19+1) (v19=min(scan(target),count-2)), merge both, activeSlotIndex(+1392)=0,
+seeded(+44)=1. selection target = (*(node+8)) ? *(node+8)+40 : player+456 (per-node param
+rule, inside 0x6B64AC @0x6B6500). Tail 0x6B9234 pruneHM3 / 0x6B9650 aux-list = housekeeping,
+inert on node slots → keep DEFERRED. CAVEATS: (a) binary loop range `m < dequeSize-1` may
+skip the last node vs the proven progressSeekNodeSlots `i < nodes.size()` — resolve the
+off-by-one (libstdc++ deque trailing-iterator) before trusting; (b) adding absolute re-seed
+SUPPRESSES the corrective-backward's per-frame onAction fires at loop-wrap (oracle-inert per
+[[project-motion-event-path-ci-blindspot]] but a real behavioral delta); (c) logo may not
+even loop-wrap (then 3a is logo-inert/unverifiable — implement faithfully + note gap, do NOT
+fabricate a looping fixture).
+
+— **3b: split inline seek to its 0x6B73D0 boundary** (needs 3a first). Binary forward inline
+(0x6B73DC, in advanceRootAndNodes) = forward-only + shared tail; reverse inline (0x6BA1CC, in
+rewindRootAndNodes) = backward-only + shared tail; both call Player_parseFrame@0x6926B4
+(= populateClipSlotFromFrameLike, NOT advanceNodeFrameSelectionLike — naming was confused).
+advanceNodeFrames@0x6B7E44 (param, both dirs) = forward+corrective-backward. Local
+advanceNodeFrameSelectionLike conflates forward+corrective-backward+tail+events and is shared
+by both directions; its corrective-backward STANDS IN for @0x6B91B0 — so the literal split
+(forward-only fwd / backward-only rev, removing corrective-backward) is only safe AFTER 3a
+re-seeds node slots at loop-wrap. HIGH exposure (most logo nodes are non-param). The three
+binary seeks share a FIELD-IDENTICAL tail (0x6B7FB4 / 0x6B72BC / 0x6BA288: node+44=1 →
+2×mergeFrameContent(node+346/+882 gates) → gated findSource(node+200, slot+356/+348)) →
+extract a shared establishNodeStateAfterSeekLike when splitting.
+
+— **4: retire PlayerFrameStepping.cpp mock + migrate unit tests** — the explicit "lead
+handles after all 3 convergences" follow-up. Needs the live functions
+(advanceNodeFramesLike / advanceRootAndNodes / rewindRootAndNodes) unit-testable so
+PlayerFrameStep.cpp tests can target them instead of the mock.
+
+HISTORICAL (pre step-2): ~~advanceRootAndNodes @0x6B6ADC ... rewindRootAndNodes @0x6B9A3C~~
+(DONE). The non-parameterized inline per-node seek still lives in
+advanceNodeFrameSelectionLike_0x6926B4 (not yet split to its 0x6B73D0 boundary — see 3b).
+B's PlayerFrameStepping.cpp mock is the 1:1 reference for unit-test migration (see 4).
