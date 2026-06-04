@@ -197,12 +197,17 @@ NCB_REGISTER_CLASS(Player) {
     // `return *(double*)(this+1136)` == local _loopTime. (Disasm: NCB reg
     // @0x6d7d10 "frameLoopTime" -> Player_getFrameLoopTime.)
     NCB_PROPERTY_RO(frameLoopTime, getLoopTime);
-    // loopTime getter == Player_getLoopTime_array @0x6D139C: builds a TJS Array
-    // of the var-track deque (Player+1296) cascadeKey strings, NOT a scalar.
-    // (Disasm: NCB reg @0x6d6c80 "loopTime" -> 0x6D139C, new(0x50)=property RO.)
-    // Corrected 2026-06-03 (R0-3): was wrongly bound to the scalar getLoopTime
-    // with a stale "getLastTime" comment.
-    NCB_PROPERTY_RO(loopTime, getLoopTimeArrayLike_0x6D139C);
+    // loopTime getter: binary Player_ncb_registerMembers binds member
+    // L"loopTime" -> Player_getLastTime (a SCALAR, RO property), verified at
+    // 0x6d6c68 (v9.getter=Player_getLastTime) + 0x6d6c88 (addMember L"loopTime",
+    // v9). The TJS-Array getter Player_getLoopTime_array (0x6D139C) is bound to
+    // member L"variableKeys" (0x6d6cec), NOT loopTime.
+    // REVERTS a343ce9 (R0-3), which mis-bound loopTime to the array getter on a
+    // misread of the registration table: AffineSourceMotion.canSync does
+    // `_player.loopTime < 0` on a (non-emote) Player, so an Array threw
+    // "Cannot convert (object Array) to real" at custom.ks:89 (Senren Banka
+    // logo). getLastTime returns the scalar +1136 _loopTime (frames->ms).
+    NCB_PROPERTY_RO(loopTime, getLastTime);
     // processedMeshVerticesNum: binary RO property; getter sub_6D1018, setter
     // slot null (verified `STP XZR,XZR,[X20,#0x40]` @0x6d883c).
     NCB_PROPERTY_RO(processedMeshVerticesNum, getProcessedMeshVerticesNum);

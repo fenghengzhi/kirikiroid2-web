@@ -156,19 +156,13 @@ namespace motion {
         void setLoopTime(double v) { _loopTime = v; }
         double getLoopTime() const { return _loopTime; }
 
-        // Aligned with libkrkr2.so Player_getLoopTime_array at 0x6D139C.
-        // The binary `loopTime` property getter does NOT read the scalar
-        // +1136 (that is `frameLoopTime` → Player_getFrameLoopTime @0x6D97AC,
-        // scalar read of *(double*)(this+1136)). Instead it builds a TJS Array
-        // (sub_704CB8 == TJSCreateArrayObject) and iterates the inline var-track
-        // std::deque<VariableLabelScope> @Player+1296 (iterator fields a1[164..168],
-        // 160B stride / 3-elem chunks). Per element it pushes a type-2 (string)
-        // variant holding *v4 == item+0 == VariableLabelScope::cascadeKey, AddRef'd.
-        // Returns the Array via tTJSVariant copy (sub_A0F5E0 / sub_A0F778).
-        // Takes no label argument. RUNTIME-VERIFICATION GAP: no fixture exercises
-        // this NCB property; evidence is the fresh decompile of 0x6D139C + the
-        // NCB registration disasm at 0x6d6c80 ("loopTime" -> 0x6D139C, new(0x50)=property).
-        tTJSVariant getLoopTimeArrayLike_0x6D139C() const;
+        // NOTE: a343ce9 added a getLoopTimeArrayLike_0x6D139C() here on the
+        // misread that member "loopTime" binds to 0x6D139C. Verified false:
+        // binary Player_ncb_registerMembers binds "loopTime" -> Player_getLastTime
+        // (scalar) and 0x6D139C -> member "variableKeys". Function removed; the
+        // var-track cascadeKey array for "variableKeys" is a separate alignment
+        // item (local "variableKeys" currently reads _activeMotion->variableLabels
+        // via getVariableKeys, NOT the Player+1296 cascadeKey deque 0x6D139C walks).
 
         void setProcessedMeshVerticesNum(int v) { _processedMeshVerticesNum = v; }
         int getProcessedMeshVerticesNum() const { return _processedMeshVerticesNum; }

@@ -182,7 +182,7 @@ namespace motion {
         [[nodiscard]] double getFrameLastTime() const { return player().getFrameLastTime(); } // #29 RO
         [[nodiscard]] double getFrameLoopTime() const { return player().getLoopTime(); }      // #30 RO
         [[nodiscard]] double getLastTime() const { return player().getLastTime(); }           // #31 RO
-        [[nodiscard]] tTJSVariant getLoopTime() const { return player().getLoopTimeArrayLike_0x6D139C(); } // #32 RO
+        [[nodiscard]] double getLoopTime() const { return player().getLoopTime(); } // #32 RO scalar (+1136 _loopTime); reverts 1053775 array mis-binding -- binary loopTime is scalar (Player loopTime -> getLastTime), array getter 0x6D139C is the variableKeys member
         [[nodiscard]] tTJSVariant getBounds() const { return player().getBounds(); }          // #33 RO
         [[nodiscard]] int getProcessedMeshVerticesNum() const { return player().getProcessedMeshVerticesNum(); } // #34 RO (sub_681EB4)
 
