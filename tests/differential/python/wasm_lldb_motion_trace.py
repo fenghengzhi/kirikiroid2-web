@@ -9,6 +9,7 @@ import math
 import os
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -357,36 +358,57 @@ class WasmMotionTracer:
                        stderr_path: Path) -> None:
         lldb = self.lldb
         deadline = time.monotonic() + self.timeout
-        while True:
-            if self.callback_errors:
-                backtrace = self._format_backtrace(process)
-                stdout, stderr = self._read_stdio(stdout_path, stderr_path)
-                process.Kill()
-                raise RuntimeError(
-                    "; ".join(self.callback_errors)
-                    + f"\n{backtrace}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-                )
-            state = process.GetState()
-            if state == lldb.eStateExited:
-                break
-            if time.monotonic() > deadline:
-                backtrace = self._format_backtrace(process)
-                stdout, stderr = self._read_stdio(stdout_path, stderr_path)
-                process.Kill()
-                raise RuntimeError(
-                    f"Wasmtime LLDB trace timed out after {self.timeout:.1f}s "
-                    f"with {len(self.events)} event(s); breakpoints: "
-                    f"begin={self.begin_hits}, layer={self.layer_hits}, "
-                    f"end={self.end_hits}\n"
-                    f"{backtrace}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-                )
-            if state == lldb.eStateStopped:
-                self._handle_stopped_process(process)
-            cont_error = process.Continue()
-            if not cont_error.Success():
-                raise RuntimeError(
-                    f"LLDB continue failed: {cont_error.GetCString()}"
-                )
+        # [BACKTRACE-DIAG] A synchronous Continue() blocks until the next stop.
+        # If the guest hangs in an infinite loop WITHIN a tick (no breakpoint
+        # hit), Continue() never returns, so the deadline check below can never
+        # run and the OUTER subprocess timeout hard-kills us with no backtrace.
+        # Arm a watchdog that interrupts the process after self.timeout so
+        # Continue() returns; the deadline path then dumps the stuck backtrace.
+        watchdog_fired = {"v": False}
+
+        def _watchdog():
+            watchdog_fired["v"] = True
+            try:
+                process.SendAsyncInterrupt()
+            except Exception:
+                pass
+
+        watchdog = threading.Timer(self.timeout, _watchdog)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            while True:
+                if self.callback_errors:
+                    backtrace = self._format_backtrace(process)
+                    stdout, stderr = self._read_stdio(stdout_path, stderr_path)
+                    process.Kill()
+                    raise RuntimeError(
+                        "; ".join(self.callback_errors)
+                        + f"\n{backtrace}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                    )
+                state = process.GetState()
+                if state == lldb.eStateExited:
+                    break
+                if watchdog_fired["v"] or time.monotonic() > deadline:
+                    backtrace = self._format_backtrace(process)
+                    stdout, stderr = self._read_stdio(stdout_path, stderr_path)
+                    process.Kill()
+                    raise RuntimeError(
+                        f"Wasmtime LLDB trace timed out after {self.timeout:.1f}s "
+                        f"with {len(self.events)} event(s); breakpoints: "
+                        f"begin={self.begin_hits}, layer={self.layer_hits}, "
+                        f"end={self.end_hits}\n"
+                        f"{backtrace}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                    )
+                if state == lldb.eStateStopped:
+                    self._handle_stopped_process(process)
+                cont_error = process.Continue()
+                if not cont_error.Success():
+                    raise RuntimeError(
+                        f"LLDB continue failed: {cont_error.GetCString()}"
+                    )
+        finally:
+            watchdog.cancel()
 
     @staticmethod
     def _read_stdio(stdout_path: Path, stderr_path: Path) -> tuple[str, str]:
