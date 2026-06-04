@@ -341,11 +341,18 @@ namespace motion {
         void setPartsScale(double v) { engine()._partsScale = v; }
         [[nodiscard]] double getPartsScale() const { return engine()._partsScale; }
 
-        void setBustScale(double v) { engine()._bustScale = v; }
-        [[nodiscard]] double getBustScale() const { return engine()._bustScale; }
-
-        void setBodyScale(double v) { engine()._bodyScale = v; }
-        [[nodiscard]] double getBodyScale() const { return engine()._bodyScale; }
+        // D3DEmotePlayer NCB member L"bustScale" reads the engine +1200 double
+        // (_scalarField_1200_1d) — verified get/setBustScale @0x530130/0x530140
+        // in libkrkr2.so sub_52E504, the SAME field the Player class #43 exposes.
+        // The former local getBodyScale (engine._bodyScale) was a behaviour-guess
+        // name with no +1200 backing; renamed here to match the binary member key.
+        // The earlier engine._bustScale-reading getBustScale was the bogus `queing`
+        // binding (queing is a byte flag, see setQueuing) and is removed.
+        // NOTE: sibling members hairScale(+1184)/partsScale(+1192) still read the
+        // port _hairScale/_partsScale (+1080) shadows above — same misalignment,
+        // left for a follow-up (out of this change's scope).
+        void setBustScale(double v) { engine()._scalarField_1200_1d = v; }
+        [[nodiscard]] double getBustScale() const { return engine()._scalarField_1200_1d; }
 
         void setVisible(bool v);
         [[nodiscard]] bool getVisible() const { return _visible; }

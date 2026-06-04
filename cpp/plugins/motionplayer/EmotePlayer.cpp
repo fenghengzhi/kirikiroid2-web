@@ -172,7 +172,9 @@ namespace motion {
         copy->engine()._hairScale = engine()._hairScale;
         copy->engine()._partsScale = engine()._partsScale;
         copy->engine()._bustScale = engine()._bustScale;
-        copy->engine()._bodyScale = engine()._bodyScale;
+        // bustScale member now backs onto the +1200 field (was _bodyScale);
+        // copy it so the cloned D3DEmotePlayer preserves its bust scale.
+        copy->engine()._scalarField_1200_1d = engine()._scalarField_1200_1d;
         copy->engine()._progress = engine()._progress;
         copy->engine()._modified = engine()._modified;
         copy->engine()._playCallback = engine()._playCallback;

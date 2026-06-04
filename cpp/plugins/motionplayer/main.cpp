@@ -854,19 +854,25 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_PROPERTY(visible, getVisible, setVisible);
     NCB_PROPERTY(smoothing, getSmoothing, setSmoothing);
     NCB_PROPERTY(meshDivisionRatio, getMeshDivisionRatio, setMeshDivisionRatio);
-    // M11 D-04: binary `queing` member is bound to set/getBustScale cb (float),
-    // not get/setQueuing(bool). 1:1 with libkrkr2.so sub_52E504.
-    NCB_PROPERTY(queing, getBustScale, setBustScale);
+    // M11 D-04 (corrected 2026-06-04): binary `queing` member is a BYTE FLAG, not
+    // a scale. Verified D3DEmotePlayer_getQueing @0x5300cc reads byte @engine+1161
+    // (_emoteAnimatorFlag) and setQueing @0x5300dc writes 1 unconditionally — a
+    // flag, not a float. The callbacks were previously mislabeled get/setBustScale
+    // in the IDB, which made `queing` look like a NAME/callback mismatch; reading
+    // the function bodies shows it is NOT — name and behaviour agree. IDB symbols
+    // renamed get/setQueing; this binding targets the byte-flag accessor.
+    NCB_PROPERTY(queing, getQueuing, setQueuing);
     NCB_PROPERTY(hairScale, getHairScale, setHairScale);
     NCB_PROPERTY(partsScale, getPartsScale, setPartsScale);
-    // M11 D-05: binary `bustScale` member is bound to set/getBodyScale cb,
-    // not set/getBustScale. 1:1 with libkrkr2.so sub_52E504.
-    NCB_PROPERTY(bustScale, getBodyScale, setBodyScale);
-    // M11 D-05 (corrected 2026-06-03): removed port-invented `bodyScale` alias.
-    // Fresh enumeration of all NCB member name strings in
-    // D3DEmotePlayer_ncb_registerMembers @0x52E504 confirms the binary registers
-    // the set/getBodyScale callbacks ONLY under the mismatched name `bustScale`
-    // (@0x52eb08); the real name `bodyScale` is absent from the table.
+    // M11 D-05 (corrected 2026-06-04): binary `bustScale` member reads the engine
+    // +1200 double. Verified get/setBustScale @0x530130/0x530140 in sub_52E504.
+    // The callbacks were previously mislabeled get/setBodyScale (a behaviour-guess
+    // with no member-key backing; no separate `body` scale field exists, +1200 IS
+    // the bust scale), which made `bustScale` look like a NAME/callback mismatch;
+    // it is NOT. IDB symbols renamed get/setBustScale; this binding targets them.
+    // The earlier port-invented `bodyScale` alias stays removed (absent from the
+    // 54-entry table).
+    NCB_PROPERTY(bustScale, getBustScale, setBustScale);
     // M11 D-01: removed `useD3D` — not in binary's 54-entry D3DEmotePlayer
     // NCB table (sub_52E504). Web-port draw-mode flag, no binary equivalent.
     // (progress NCB binding moved to method section per cluster D §1 #50.)
