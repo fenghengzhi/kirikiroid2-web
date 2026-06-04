@@ -90,7 +90,7 @@ namespace motion::detail {
                       int parentIdx,
                       motion::Player &player,
                       motion::ResourceManager *resourceManager,
-                      int parentCompletionType) {
+                      int parentPreview) {
             if (!psbNode) return;
 
             auto &nodes = player.nodesForBuild();
@@ -229,15 +229,16 @@ namespace motion::detail {
             // === TJS↔Native bridge: create child objects (sub_6B3C78 case 3/4) ===
             if (node.nodeType == 3) {
                 // Aligned to sub_6B3C78 case 3 (0x6B43A4..0x6B43B0):
-                // when the owning Player has completionType != 0, bit-2 of the
+                // when the owning Player has preview != 0, bit-2 of the
                 // node's stencilType is cleared so the nested MotionPlayer
                 // sub-node renders as an independent item rather than being
                 // composited through the parent alpha-mask.
-                //   6B43A4 LDRB W8, [X20,#0x444]   ; player.completionType
+                //   6B43A4 LDRB W8, [X20,#0x444]   ; player.preview (+1092)
                 //   6B43A8 CBZ  W8, 6B43B4         ; skip when zero
                 //   6B43AC AND  W8, W0, #~4        ; stencilType & ~4
                 //   6B43B0 STR  W8, [X19,#0x34]    ; write back
-                if (parentCompletionType != 0) {
+                // (+0x444=+1092 is `preview`, NOT completionType; off-by-one fix)
+                if (parentPreview != 0) {
                     node.stencilType &= ~4;
                 }
 
@@ -275,7 +276,7 @@ namespace motion::detail {
                     auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                         (*children)[i]);
                     walkTree(child, thisIdx, player, resourceManager,
-                             parentCompletionType);
+                             parentPreview);
                 }
             }
         }
@@ -287,7 +288,7 @@ namespace motion::detail {
         const MotionSnapshot &snapshot,
         const std::string &clipLabel,
         motion::ResourceManager *resourceManager,
-        int parentCompletionType) {
+        int parentPreview) {
 
         ensureRootNodeLike_0x6CED30(player);
         player._nodes.front().index = 0;
@@ -325,7 +326,7 @@ namespace motion::detail {
         for (const auto &layerDict : *layerList) {
             if (!layerDict) continue;
             walkTree(layerDict, 0, player, resourceManager,
-                     parentCompletionType);
+                     parentPreview);
         }
 
         // Aligned to Player_buildNodeTree post-pass (0x6B51F0..0x6B55AC):

@@ -29,6 +29,6 @@ namespace motion::detail {
         const MotionSnapshot &snapshot,
         const std::string &clipLabel,
         motion::ResourceManager *resourceManager = nullptr,
-        int parentCompletionType = 0);
+        int parentPreview = 0);
 
 } // namespace motion::detail

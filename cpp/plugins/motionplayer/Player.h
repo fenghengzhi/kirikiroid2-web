@@ -50,7 +50,7 @@ namespace motion {
                            const MotionSnapshot &snapshot,
                            const std::string &clipLabel,
                            motion::ResourceManager *resourceManager,
-                           int parentCompletionType);
+                           int parentPreview);
     }
 
     // Motion class enums
@@ -120,9 +120,11 @@ namespace motion {
         ~Player();
 
         // --- Properties (getter/setter) ---
-        // libkrkr2.so setter sub_6D963C: *(player+1092) = v & 1 (mask, not truncate)
-        void setCompletionType(int v) { _completionType = (v & 1) != 0; }
-        bool getCompletionType() const { return _completionType; }
+        // completionType: binary +1144 int (full value); getter
+        // Player_getCompletionType reads *(uint*)(this+1144). NOT the +1092 bool
+        // (that is `preview`) — Player-table off-by-one had conflated them.
+        void setCompletionType(tjs_int v) { _completionType = v; }
+        [[nodiscard]] tjs_int getCompletionType() const { return _completionType; }
 
         void setMetadata(tTJSVariant v) { _metadata = v; }
         tTJSVariant getMetadata() const { return _metadata; }
@@ -740,7 +742,7 @@ namespace motion {
                                           const detail::MotionSnapshot &snapshot,
                                           const std::string &clipLabel,
                                           motion::ResourceManager *resourceManager,
-                                          int parentCompletionType);
+                                          int parentPreview);
         friend void detail::ensureRootNodeLike_0x6CED30(motion::Player &);
         friend void detail::resetNodeTreeKeepRootLike_0x6B56F8(motion::Player &);
         void syncVariableKeysFromActiveMotion();
@@ -964,9 +966,13 @@ namespace motion {
     private:
         ResourceManager _resourceManagerNative;
         Player *_parentPlayer = nullptr; // non-owning, for 0x6B1ABC lookup
-        // libkrkr2.so +1092: 1-byte bool. ctor (0x6CED30) sets byte=0;
-        // setter sub_6D963C does *(player+1092)=v&1; getter sub_6D9634 reads byte.
-        bool _completionType = false;
+        // libkrkr2.so +1092: 1-byte bool = the "preview" NCB property (getter
+        // Player_getPreview reads *(u8*)(this+1092)). NOT completionType — the
+        // Player-table off-by-one IDB symbol had mislabeled +1092 as
+        // completionType. +1092 gates calcBounds (0x6c4030) and buildNodeTree
+        // (0x6B43A4) node-type visibility. The real completionType is the +1144
+        // int (_completionType field below).
+        bool _preview = false;
         tTJSVariant _metadata;
         ttstr _chara;
         ttstr _motionKey;
@@ -1079,7 +1085,10 @@ namespace motion {
         bool _clearEnabled = false;
         bool _d3dDrawMode = false; // libkrkr2.so player+909
         double _hitThreshold = 0.0;
-        bool _preview = false; // libkrkr2.so +1096
+        tjs_int _completionType = 0; // libkrkr2.so +1144: int (the real NCB
+                                     // completionType value). Off-by-one had
+                                     // mislabeled the +1092 bool (now _preview)
+                                     // as completionType; +1144 is the int.
         bool _renderItemInheritedFlag18 = false; // sub_6C2334 arg6 low-bit lineage
         // libkrkr2.so +1176: double. ctor (0x6CED30) a1[147]=0x3FF0000000000000=1.0;
         // getter sub_6D966C reads *(player+1176).

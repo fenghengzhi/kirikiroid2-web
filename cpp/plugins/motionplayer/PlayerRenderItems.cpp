@@ -91,7 +91,7 @@ namespace motion {
             // yet; hasSource is the current placeholder for "this node
             // has its own geometry to contribute to the bbox".
             const int visBitmaskCalc =
-                _completionType ? 0x1449 : 0x1441;
+                _preview ? 0x1449 : 0x1441;  // binary calcBounds gates on +1092 (preview)
             if(((1 << node.nodeType) & visBitmaskCalc) == 0 ||
                !node.renderTreeFlag200) {
                 continue;

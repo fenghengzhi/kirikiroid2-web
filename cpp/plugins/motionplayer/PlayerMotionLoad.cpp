@@ -281,7 +281,7 @@ namespace motion {
 
         detail::buildNodeTree(
             *this, *_activeMotion, clipLabel, &_resourceManagerNative,
-            _completionType);
+            _preview);  // binary buildNodeTree (0x6B43A4) gates on +1092 (preview)
 
         if(!_nodes.empty()) {
             auto &root = _nodes[0];
