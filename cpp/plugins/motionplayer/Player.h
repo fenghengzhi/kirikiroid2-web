@@ -893,6 +893,20 @@ namespace motion {
         // activeSlotCursor (item+8) to 0. Called from the firstFrame seed and the
         // two loop-wrap reseek points. Inert for every currently-available motion.
         void reseedVariableTracksLike_0x6B86C8(double clampedEvalTime);
+        // libkrkr2.so Player_reseekTimelineCursors @0x6B86C8 — the NON-incremental
+        // full re-seek of all timeline cursors to targetTime (= player+456). Unlike
+        // the incremental advance/rewindRootAndNodes seeks, this rescans each stream
+        // FROM SCRATCH: (1) the layer coarse scan @0x6B8770 over motion["tag"] with
+        // a DOUBLE-INCREMENT + int-truncated curTime/nextTime + the +1093-gated
+        // align/sync + ungated action gate keyed on the CURSOR frame; (2) the root
+        // single-step re-seek @0x6B8C1C over motion["priority"] (+616 content
+        // snapshot, NON-truncated curTime); (3) the var-track reseed @0x6B8F30
+        // (reuses reseedVariableTracksLike_0x6B86C8). The per-node init loop
+        // @0x6B91B0 (step 4) is performed by the progressSeekNodeSlotsLike node
+        // walk the caller keeps right after; the HM3-prune + aux-list tail
+        // (0x6B9234/0x6B9248, step 5) is DEFERRED. Called at the firstFrame seed
+        // (0x6C10E0/0x6C131C) + the two loop-wrap reseek points (0x6C1488/0x6C1428).
+        void reseekTimelineCursors(double targetTime);
         // libkrkr2.so Player_interpolateVarTrackValues @0x6BBE20 — the var-track
         // item+16 writer (the value HM4 caches). Called at the start of
         // Player_resetMotionState_clearAndRebuild before its loop2 snapshots

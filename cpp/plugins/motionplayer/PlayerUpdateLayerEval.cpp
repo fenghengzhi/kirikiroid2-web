@@ -440,6 +440,150 @@ namespace motion::internal {
         return state;
     }
 
+    // ==================================================================
+    // Player_advanceNodeFrames @ 0x6B7E44  (P7 convergence step 1 of 3)
+    // ------------------------------------------------------------------
+    // The binary's per-node 2-slot ping-pong frame seek for PARAMETERIZED
+    // nodes (the caller branch `if (*(node+8)) advanceNodeFrames(node,player)`
+    // at Player_advanceRootAndNodes 0x6B73B4/0x6B73D4, LABEL_104). It forward-
+    // seeks (with corrective backward seek) the node's active parsed-frame slot
+    // toward the node's CHILD eval time, then merges both slots + gated
+    // findSource.
+    //
+    // D-A1 RESOLUTION (decompiled, NOT trusted from stale comments):
+    //   The binary reads the seek target at 0x6B7E90 as
+    //       v6 = *(double *)(*(node+8) + 40)
+    //   node+8 is seeded by Player_initNodeFields (0x6B3EA0): when the PSB
+    //   "parameterize" value has variant type 4 (integer), node+8 =
+    //   player_paramTable[idx] (56-byte stride entry, 0x6B3E90/0x6B3EA0);
+    //   otherwise node+8 = 0. So node+8 is a *parameter-table entry*, NOT a
+    //   child Player. Offset +40 of that 56-byte entry is the interpolated
+    //   parameter VALUE: sub_6B1718 (the param-entry builder) writes the
+    //   entry's fields at base..base+48 and stores the eased value at
+    //   `*(double*)(v6-16)` = entry+40 (0x6B19E4). Cross-checked against
+    //   Player_initNodeTimeline (0x6B64AC, 0x6B6500):
+    //       v7 = (*(node+8)) ? (double*)(*(node+8)+40) : (double*)(player+456)
+    //   i.e. parameterized -> entry+40 value, else player+456 (clampedEvalTime).
+    //   The live MotionParameterEntry maps entry+40 -> ::value (RuntimeSupport.h
+    //   builds the 56-byte entry with `value` as the eased field). Therefore
+    //   *(node+8)+40 == node.parameterEntry->value == exactly what
+    //   frameSelectionTimeLike_0x6B7E44 returns for a parameterized node
+    //   (PlayerUpdateLayerEval.cpp). CONFIRMED EQUAL: child+40 == the live
+    //   parameterEntry->value. No behavior change for parameterized nodes.
+    //
+    // This is a faithful 1:1 reproduction of 0x6B7E44 operating on the real
+    // MotionNode/ClipSlot state (node.slots[2] = node+320/+856,
+    // node.activeSlotIndex = node+1392), driving the slot parser
+    // populateClipSlotFromFrameLike_0x6926B4 (= the live ClipSlot equivalent of
+    // the binary's Player_parseFrame 0x6926B4 + auto-merged content). Replaces
+    // the parameterized branch that previously rode the conflated split helper
+    // advanceNodeFrameSelectionLike_0x6926B4.
+    // ------------------------------------------------------------------
+    MOTIONPLAYER_NOINLINE void
+    advanceNodeFramesLike_0x6B7E44(detail::MotionNode &node) {
+        // 0x6B7E90: seek target t = *(node+8)+40 = parameterEntry->value.
+        // This function is only invoked for parameterized nodes (node+8 != 0),
+        // matching the binary caller gate; frameSelectionTimeLike returns
+        // parameterEntry->value for such nodes (the `currentTime` arg is unused
+        // here because parameterized nodes never fall through to it).
+        const double t = frameSelectionTimeLike_0x6B7E44(node, 0.0);
+
+        const auto frames = psbDictionaryList(node.psbNode, "frameList");
+        // 0x6B7EF0: count = Motion_propGetCount(node+64 frameList).
+        const int count =
+            frames ? static_cast<int>(frames->size()) : 0;
+        const NodeTransformOrder transformOrder =
+            readNodeTransformOrder(node.psbNode);
+
+        // The binary's advanceNodeFrames (0x6B7E44) assumes the two slots are
+        // already populated — they are seeded by Player_initNodeTimeline
+        // (0x6B64AC) during the firstFrame reseed (Player_reseekTimelineCursors
+        // 0x6B86C8 node-init loop @0x6B91B0) BEFORE the node walk that calls
+        // advanceNodeFrames. The live reseek defers that per-node seed to this
+        // node walk, so mirror the 0x6B64AC seed here when the slots are still
+        // unparsed (both frameIndex < 0). With slots seeded, the seek below is a
+        // byte-for-byte image of 0x6B7E44. (initializeNodeTimelineSlotsLike_
+        // 0x6B64AC uses the SAME selection time — frameSelectionTimeLike_0x6B7E44
+        // — so for parameterized nodes it also picks parameterEntry->value.)
+        if(node.activeSlot().frameIndex < 0 &&
+           node.otherSlot().frameIndex < 0) {
+            initializeNodeTimelineSlotsLike_0x6B64AC(
+                node, frames, t, transformOrder);
+        }
+
+        // 0x6B7F04..0x6B7F10: v9=false; cur=&slots[idx]; other=&slots[idx^1];
+        // limit = count - 2 (SIGNED; negative for empty stream keeps loop inert).
+        bool seeked = false;
+        int curIdx = node.activeSlotIndex;
+        int otherIdx = node.activeSlotIndex ^ 1;
+        const int limit = count - 2;
+
+        // 0x6B7F14 forward seek loop:
+        //   while (cur.frameIndex < limit && t >= other.time):
+        //     seeked=1; activeSlotIndex^=1;
+        //     parseFrame(cur, other.frameIndex+1);  // parse INTO cur
+        //     swap roles (new cur = old other, new other = old cur).
+        for(;;) {
+            const int v14 = node.slots[curIdx].frameIndex;     // 0x6B7F18
+            // 0x6B7F2C: break when cur.frameIndex >= count-2 OR t < other.time.
+            // ClipSlot.clipStartTime == binary slot+8 "time" (parseFrame sets it
+            // from frame["time"]; PlayerUpdateLayerEval.cpp).
+            if(v14 >= limit || t < node.slots[otherIdx].clipStartTime) {
+                break;
+            }
+            seeked = true;                                      // 0x6B7F34
+            node.activeSlotIndex ^= 1;                          // 0x6B7F40
+            // 0x6B7F54: parseFrame(cur, frameList, other.frameIndex + 1).
+            populateClipSlotFromFrameLike_0x6926B4(
+                node, frames, node.slots[otherIdx].frameIndex + 1,
+                transformOrder, node.slots[curIdx]);
+            node.flags |= 0x01;
+            node.hasTimelineEvalRatio = false;
+            // 0x6B7F58: swap (v10=other -> cur, v11=v13(old cur) -> other).
+            const int tmp = curIdx;
+            curIdx = otherIdx;
+            otherIdx = tmp;
+        }
+
+        // 0x6B7F6C: if cur.time > t -> corrective backward seek.
+        if(node.slots[curIdx].clipStartTime > t) {
+            int v14 = node.slots[curIdx].frameIndex;
+            for(;;) {
+                node.activeSlotIndex ^= 1;                      // 0x6B7F98
+                // 0x6B7FA4: parseFrame(other, frameList, cur.frameIndex - 1).
+                populateClipSlotFromFrameLike_0x6926B4(
+                    node, frames, v14 - 1, transformOrder,
+                    node.slots[otherIdx]);
+                node.flags |= 0x01;
+                node.hasTimelineEvalRatio = false;
+                // 0x6B7FB0: break when other.time <= t.
+                if(node.slots[otherIdx].clipStartTime <= t) {
+                    break;
+                }
+                // 0x6B7F78: swap, continue.
+                v14 = node.slots[otherIdx].frameIndex;
+                const int tmp = curIdx;
+                curIdx = otherIdx;
+                otherIdx = tmp;
+            }
+        } else if(!seeked) {
+            // 0x6B7F70: no movement -> skip merge/findSource (LABEL_25).
+            return;
+        }
+
+        // 0x6B7FB4 merge block: the binary re-merges each slot's content if its
+        // mergedFlag (node+346 / node+882 = slot+26) is clear, then resolves
+        // findSource (node+1996/type-mask). In the live model the slot parser
+        // populateClipSlotFromFrameLike_0x6926B4 ALWAYS fully parses + merges the
+        // content during parse (parseFrame -> FrameContentState), so each slot is
+        // already in its merged state; the mergedFlag re-merge is a no-op here.
+        // Source geometry (the binary's Motion_Player_findSource) is resolved in
+        // the SEPARATE read/updateLayers pass via refreshSourceGeometryFromSourceName
+        // (matching the two-pass hoist already established for
+        // progressSeekNodeSlotsLike_0x6C106C). node+44 dirty = 1 is folded into the
+        // node.flags |= 1 writes above.
+    }
+
     // M1/P7 step-1: read-only slot consumer for the updateLayers pass.
     // After progressSeekNodeSlotsLike_0x6C106C has positioned node.slots[0/1],
     // updateLayers reads them here — no seek. Mirrors the read half of the old
@@ -579,10 +723,24 @@ namespace motion {
             // onAction. Only NON-parameterized nodes (node+8 == 0) run the inline
             // seek that pushes the event. node+8 == parameterEntry (MotionNode.h:71,
             // node init 0x6B3EA0). Gate accordingly: parameterized -> no events.
-            std::vector<detail::MotionEvent> *nodeEvents =
-                (node.parameterEntry == nullptr) ? &_pendingEvents : nullptr;
+            //
+            // P7 convergence step 1: route the PARAMETERIZED branch through the
+            // dedicated faithful reproduction of Player_advanceNodeFrames
+            // (0x6B7E44) — the exact function the binary caller branches to at
+            // LABEL_104 (`if (*(node+8)) { Player_advanceNodeFrames(node,player);
+            // continue; }`). Non-parameterized nodes (node+8 == 0) keep the
+            // inline 2-slot seek (0x6B73D0..0x6B7338) modelled by
+            // advanceNodeFrameSelectionLike_0x6926B4, which fires the per-node
+            // onAction events the inline path pushes. This mirrors the binary's
+            // node+8 split precisely instead of conflating both into one helper
+            // gated only by the selection time.
+            if(node.parameterEntry != nullptr) {
+                // node+8 != 0 -> Player_advanceNodeFrames (0x6B7E44). NO events.
+                advanceNodeFramesLike_0x6B7E44(node);
+                continue;
+            }
             advanceNodeFrameSelectionLike_0x6926B4(node, clampedEvalTime,
-                                                   nodeEvents);
+                                                   &_pendingEvents);
         }
     }
 

@@ -1414,6 +1414,276 @@ namespace internal {
         }
     }
 
+    // Aligned with libkrkr2.so Player_reseekTimelineCursors @0x6B86C8.
+    // The binary's NON-incremental full re-seek of all timeline cursors to
+    // targetTime (= player+456 _clampedEvalTime). progress_inner (0x6C106C)
+    // calls this at the firstFrame seed (0x6C10E0/0x6C131C) and at the two
+    // loop-wrap reseek points (forward 0x6C1488, reverse 0x6C1428). Unlike the
+    // incremental advance/rewindRootAndNodes seeks (which step the existing
+    // cursor toward the target), this rescans each stream FROM SCRATCH.
+    //
+    // Structure (verified against the 0x6B86C8 decompile):
+    //   1. LAYER coarse scan @0x6B8770 over motion["tag"] (player+1072):
+    //      a from-scratch linear scan with a DOUBLE-INCREMENT (loop ++i AND a
+    //      body ++i when time<target) -> coarse overshoot; cursor=min(i,count-2);
+    //      curTime/nextTime INT-TRUNCATED; then the +1093-gated align/sync +
+    //      ungated action gate keyed on the CURSOR frame (NOT cursor+1).
+    //   2. ROOT scan @0x6B8C1C over motion["priority"] (player+548): single-step
+    //      (no double-increment); cursor=min(j,count-2); +616 content snapshot;
+    //      curTime(+576) NOT int-truncated; nextTime(+584).
+    //   3. VAR-TRACK reseed @0x6B8F30 -> reseedVariableTracksLike_0x6B86C8
+    //      (REUSED verbatim — the binary's var-track block is identical).
+    //   4. NODE init loop @0x6B91B0 (Player_initNodeTimeline @0x6B64E4 per node)
+    //      -> the caller keeps progressSeekNodeSlotsLike_0x6C106C right after
+    //      this call (the live per-node seek that fills node+320/+856), so the
+    //      node-init is performed there; not duplicated here.
+    //   5. TAIL @0x6B9234: Player_pruneHM3_byNodeIdentity + the player+280
+    //      aux-list pass (sub_6B9650). DEFERRED (see markers below).
+    void Player::reseekTimelineCursors(double targetTime) {
+        if (!_activeMotion) {
+            return;
+        }
+
+        const auto numValue =
+            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
+            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
+            if (!n) {
+                return 0.0;
+            }
+            switch (n->numberType) {
+                case PSB::PSBNumberType::Float:  return n->getValue<float>();
+                case PSB::PSBNumberType::Double: return n->getValue<double>();
+                case PSB::PSBNumberType::Int:
+                    return static_cast<double>(n->getValue<int>());
+                default:
+                    return static_cast<double>(n->getValue<tjs_int64>());
+            }
+        };
+
+        // ---- STEP 1: LAYER coarse scan @0x6B8770 (motion["tag"], player+1072) ----
+        {
+            const auto &frames = _activeMotion->tagFrames;
+            if (frames) {
+                _layerStreamSource = static_cast<const void *>(frames.get());
+                const int count = static_cast<int>(frames->size());
+
+                const auto frameAt =
+                    [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
+                    if (i < 0 || i >= count) {
+                        return nullptr;
+                    }
+                    return std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                        (*frames)[i]);
+                };
+                const auto frameTimeOf =
+                    [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> double {
+                    return f ? numValue((*f)["time"]) : 0.0;
+                };
+                const auto frameTypeOf =
+                    [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> int {
+                    if (!f) {
+                        return 0;
+                    }
+                    auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
+                        (*f)["type"]);
+                    return n ? n->getValue<int>() : 0;
+                };
+                const auto contentBoolOf =
+                    [](const std::shared_ptr<PSB::PSBDictionary> &content,
+                       const char *key) -> bool {
+                    if (!content) {
+                        return false;
+                    }
+                    auto v = (*content)[key];
+                    if (auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
+                        return n->getValue<int>() != 0;
+                    }
+                    if (auto b = std::dynamic_pointer_cast<PSB::PSBBool>(v)) {
+                        return b->value;
+                    }
+                    return false;
+                };
+
+                if (count >= 1) {                       // 0x6B8768
+                    // 0x6B8770: from-scratch linear scan i:0..count-1 with the
+                    // DOUBLE-INCREMENT. v8 = continue flag.
+                    int i = 0;
+                    for (; i < count; ++i) {
+                        auto cf = frameAt(i);
+                        const double v6 = frameTimeOf(cf);  // 0x6B8810
+                        const double v7 = targetTime;       // 0x6B8814: +456
+                        int v8;
+                        if (v6 <= v7) {                     // 0x6B881C
+                            if (v6 < v7) {                  // 0x6B882C
+                                ++i;                        // 0x6B8830 (DOUBLE-INC)
+                                v8 = 1;
+                            } else {
+                                v8 = 0;                     // 0x6B883C
+                            }
+                        } else {
+                            v8 = 0;                         // 0x6B8820
+                            --i;                            // 0x6B8824
+                        }
+                        if (!v8) {                          // 0x6B885C
+                            break;
+                        }
+                    }
+                    // 0x6B8874: cursor = min(i, count-2).
+                    _layerFrameCursor = (count - 2 >= i) ? i : (count - 2);
+                    // 0x6B891C: curTime = (double)(int)tag[cursor].time
+                    //   (INT-TRUNCATED).
+                    auto curF = frameAt(_layerFrameCursor);
+                    _layerCurTime = static_cast<double>(
+                        static_cast<int>(frameTimeOf(curF)));
+                    // 0x6B89D0: nextTime = (double)(int)tag[cursor+1].time
+                    //   (INT-TRUNCATED).
+                    auto nextF = frameAt(_layerFrameCursor + 1);
+                    _layerNextTime = static_cast<double>(
+                        static_cast<int>(frameTimeOf(nextF)));
+                    // 0x6B89D4..0x6B8B84: gate keyed on the CURSOR frame, fired
+                    // only when curTime(+920) == target(+456) && type==1.
+                    if (_layerCurTime == targetTime && frameTypeOf(curF) == 1) {
+                        auto content =
+                            std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                                (*curF)["content"]);
+                        if (content) {
+                            if (_speed) {                   // 0x6B8A8C: +1093 gate
+                                // 0x6B8AC0: align gate (re-tests +920==+456).
+                                if (_layerCurTime == targetTime &&
+                                    contentBoolOf(content, "align")) {
+                                    _motionCompleted = true;       // +483 = 1
+                                    _clampedEvalTime = _layerCurTime; // +456
+                                    _frameTickCount = _layerCurTime;  // +1120
+                                }
+                                // 0x6B8AFC: sync gate (re-tests +1093).
+                                if (_speed && contentBoolOf(content, "sync")) {
+                                    _syncWaiting = true;           // +1098 = 1
+                                    _clampedEvalTime = _layerCurTime; // +456
+                                    _frameTickCount = _layerCurTime;  // +1120
+                                    // Player_pushSyncEvent_guess (0x6B8B18) ->
+                                    // onSync().
+                                    _pendingEvents.push_back({1, {}, {}, false});
+                                }
+                            }
+                            // 0x6B8B38: content["action"] (ungated) ->
+                            // Player_pushActionEvent_guess -> onAction(void, name).
+                            if (auto actionStr =
+                                    std::dynamic_pointer_cast<PSB::PSBString>(
+                                        (*content)["action"])) {
+                                if (!actionStr->value.empty()) {
+                                    detail::MotionEvent ev;
+                                    ev.type = 0;
+                                    ev.param2 = actionStr->value;
+                                    ev.voidParam1 = true;
+                                    _pendingEvents.push_back(ev);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                _layerStreamSource = nullptr;
+            }
+        }
+
+        // ---- STEP 2: ROOT scan @0x6B8C1C (motion["priority"], player+548) ----
+        {
+            const auto &frames = _activeMotion->priorityFrames;
+            if (frames) {
+                _rootStreamSource = static_cast<const void *>(frames.get());
+                const int count = static_cast<int>(frames->size());
+
+                const auto frameAt =
+                    [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
+                    if (i < 0 || i >= count) {
+                        return nullptr;
+                    }
+                    return std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                        (*frames)[i]);
+                };
+                const auto frameTimeOf =
+                    [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> double {
+                    return f ? numValue((*f)["time"]) : 0.0;
+                };
+                const auto contentOf =
+                    [](const std::shared_ptr<PSB::PSBDictionary> &f)
+                    -> std::shared_ptr<const PSB::PSBDictionary> {
+                    if (!f) {
+                        return nullptr;
+                    }
+                    return std::dynamic_pointer_cast<PSB::PSBDictionary>(
+                        (*f)["content"]);
+                };
+
+                int j = 0;
+                if (count) {                                // 0x6B8C20
+                    if (count >= 1) {                       // 0x6B8C28
+                        // 0x6B8C30: single-step scan (NO double-increment).
+                        for (j = 0; j < count; ++j) {
+                            auto cf = frameAt(j);
+                            const double v23 = frameTimeOf(cf);  // 0x6B8CD0
+                            const double v24 = targetTime;       // 0x6B8CD4: +456
+                            int v25;
+                            if (v24 == v23) {                    // 0x6B8CDC
+                                v25 = 0;
+                            } else if (v23 <= v24) {             // 0x6B8CEC
+                                v25 = 1;
+                            } else {
+                                v25 = 0;                         // 0x6B8CF0
+                                --j;
+                            }
+                            if (!v25) {                          // 0x6B8D1C
+                                break;
+                            }
+                        }
+                        _rootFrameCursor = j;                    // 0x6B8D44
+                    }
+                } else {
+                    j = _rootFrameCursor;                        // 0x6B8D30
+                }
+                // 0x6B8D50: cursor = min(cursor, count-2).
+                {
+                    const int cur = _rootFrameCursor;
+                    _rootFrameCursor =
+                        (cur >= count - 2) ? (count - 2) : cur;
+                }
+                // 0x6B8E20: content snapshot = priority[cursor].content (+616,
+                // sub_A0FB64 variant copy — the port copies the shared_ptr).
+                {
+                    auto cf = frameAt(_rootFrameCursor);
+                    _rootContent = contentOf(cf);
+                    // 0x6B8E48: curTime(+576) = priority[cursor].time
+                    //   (NOT int-truncated, unlike the layer stream).
+                    _rootCurTime = frameTimeOf(cf);
+                    // 0x6B8F08: nextTime(+584) = priority[cursor+1].time.
+                    auto nf = frameAt(_rootFrameCursor + 1);
+                    _rootNextTime = frameTimeOf(nf);
+                }
+            } else {
+                _rootStreamSource = nullptr;
+            }
+        }
+
+        // ---- STEP 3: VAR-TRACK reseed @0x6B8F30 ----
+        // The binary's var-track block (0x6B8F8C while-loop over player+1296,
+        // reseed at 0x6B8F30) is byte-identical to reseedVariableTracksLike;
+        // reuse it verbatim (per brief — do not re-port).
+        reseedVariableTracksLike_0x6B86C8(targetTime);
+
+        // ---- STEP 4: NODE init loop @0x6B91B0 ----
+        // Player_initNodeTimeline (0x6B64E4) per node. The caller keeps
+        // progressSeekNodeSlotsLike_0x6C106C right after this call, which is the
+        // live per-node seek that fills the node+320/+856 parsed-frame slots
+        // (the same work initNodeTimeline does). Performed by the caller; not
+        // duplicated here so the node slots are not walked twice.
+
+        // ---- STEP 5: TAIL @0x6B9234 ----
+        // DEFERRED 0x6B9234 Player_pruneHM3_byNodeIdentity (HM3 prune by node
+        //   identity) — no live HM3-per-node-state population reaches this path.
+        // DEFERRED 0x6B9248 sub_6B9650 over the player+280 aux list — opaque
+        //   per-entry pass; no consumer in the live port. Do NOT invent.
+    }
+
     void Player::interpolateVarTrackValuesLike_0x6BBE20(double clampedEvalTime) {
         // libkrkr2.so Player_interpolateVarTrackValues @0x6BBE20. Writes item+16
         // (the value HM4 caches) for each VariableLabelScope. active=slot[cursor]
@@ -1792,10 +2062,13 @@ namespace internal {
                     progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C1468 node walk ④
                     if(!_syncWaiting && !_motionCompleted) {              // 0x6C1474
                         _clampedEvalTime = _loopTime; // +456 = player+1136 (0x6C1484)
-                        // reseekTimelineCursors (0x6C1488) re-seeds the var-track
-                        // deque (0x6B8F30 reseed form) before the node walk.
-                        reseedVariableTracksLike_0x6B86C8(_clampedEvalTime); // 0x6B8F30 var-track reseed
-                        progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // reseek (0x6C1488)
+                        // reseekTimelineCursors (0x6C1488) — the FULL non-
+                        // incremental re-seek: layer coarse scan (+916) + root
+                        // re-seek (+568/+616) + var-track reseed (0x6B8F30) before
+                        // the node walk. Previously this modelled ONLY the var-
+                        // track reseed, skipping the layer/root coarse re-scan.
+                        reseekTimelineCursors(_clampedEvalTime);             // 0x6C1488
+                        progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // node walk (step 4)
                         if(!_syncWaiting && !_motionCompleted) {          // 0x6C1498
                             // LABEL_22/23 loop-wrap (0x6C14AC..0x6C14CC):
                             //   v7 = +1120; if (+1128 > v7) goto LABEL_23;
@@ -1858,9 +2131,13 @@ namespace internal {
                 progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // rewindRootAndNodes (0x6C1408)
                 if(!_syncWaiting && !_motionCompleted) {              // 0x6C1414
                     _clampedEvalTime = _cachedTotalFrames; // +456 = player+1128 (0x6C1424)
-                    // reseekTimelineCursors (0x6C1428) → var-track reseed.
-                    reseedVariableTracksLike_0x6B86C8(_clampedEvalTime); // 0x6B8F30 var-track reseed
-                    progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // reseek (0x6C1428)
+                    // reseekTimelineCursors (0x6C1428) — the FULL non-incremental
+                    // re-seek: layer coarse scan (+916) + root re-seek (+568/+616)
+                    // + var-track reseed (0x6B8F30) before the node walk. Same
+                    // 0x6B86C8 boundary as the forward wrap-point (0x6C1488);
+                    // previously this modelled ONLY the var-track reseed.
+                    reseekTimelineCursors(_clampedEvalTime);             // 0x6C1428
+                    progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // node walk (step 4)
                     if(!_syncWaiting && !_motionCompleted) {          // 0x6C1434
                         // LABEL_27/28 reverse loop-wrap (0x6C143C..0x6C145C):
                         //   v7 = +1120; if (+1136 <= v7) goto LABEL_28;
