@@ -1109,6 +1109,44 @@ namespace motion {
         return _variableKeys;
     }
 
+    // transformOrder getter: libkrkr2.so sub_6CC188 (bound to L"transformOrder")
+    // builds a TJS Array of the 4 ints at node+84..96 (type-4 int variants), in
+    // order. detail::makeArray replicates TJSCreateArrayObject + per-item append.
+    tTJSVariant Player::getTransformOrder() const {
+        return detail::makeArray({
+            tTJSVariant((tjs_int)_transformOrder[0]),
+            tTJSVariant((tjs_int)_transformOrder[1]),
+            tTJSVariant((tjs_int)_transformOrder[2]),
+            tTJSVariant((tjs_int)_transformOrder[3]),
+        });
+    }
+
+    // transformOrder setter: libkrkr2.so sub_6CC2C4 reads 4 elements [0..3] of
+    // the assigned Array, coerces each to an int, rejects any value >3 or any
+    // duplicate with TVPThrowExceptionMessage(L"illegul variable for transform
+    // order") (binary sub_95440C, typo preserved), then stores to node+84..96.
+    void Player::setTransformOrder(tTJSVariant arr) {
+        iTJSDispatch2 *a =
+            arr.Type() == tvtObject ? arr.AsObjectNoAddRef() : nullptr;
+        if(!a)
+            return;
+        int order[4];
+        bool used[4] = {false, false, false, false};
+        for(int i = 0; i < 4; i++) {
+            tTJSVariant elem;
+            if(TJS_FAILED(a->PropGetByNum(0, i, &elem, a)))
+                return;
+            const int v = static_cast<int>((tjs_int)elem);
+            if(v < 0 || v > 3 || used[v])
+                TVPThrowExceptionMessage(
+                    TJS_W("illegul variable for transform order"));
+            used[v] = true;
+            order[i] = v;
+        }
+        for(int i = 0; i < 4; i++)
+            _transformOrder[i] = order[i];
+    }
+
     void Player::setProgressCompat(double v) {
         ensureMotionLoaded();
         const auto progress = std::clamp(v, 0.0, 1.0);
@@ -1221,7 +1259,7 @@ namespace motion {
             { "chara", _chara },
             { "motion", _motionKey },
             { "tickcount", getTickCount() },
-            { "speed", _speed },
+            { "speed", _speedMul },  // +1168 double rate, not the +1093 bool gate
             { "outline", tTJSVariant(_outline) },
             { "variables", detail::makeDictionary(variables) },
             { "timelines", getPlayingTimelineInfoList() },
@@ -1252,7 +1290,7 @@ namespace motion {
 
         if(getObjectProperty(data, TJS_W("speed"), value) &&
            value.Type() != tvtVoid) {
-            _speed = value.AsReal();
+            _speedMul = value.AsReal();  // "speed" save key = +1168 double rate
         }
 
         if(getObjectProperty(data, TJS_W("outline"), value) &&

@@ -242,9 +242,14 @@ namespace motion {
         // +1120 * 1000/60 UNCONDITIONALLY (no >0 guard). Removed port's guard.
         double getTickCount() const { return _frameTickCount * 1000.0 / 60.0; }
 
-        // Aligned to libkrkr2.so +1093: bool flag (defaultSyncActive), not double
-        void setSpeed(bool v) { _speed = v; }
-        bool getSpeed() const { return _speed; }
+        // NCB "speed" property = binary +1168 double speed multiplier (getter
+        // sub_6D967C `return *(double*)(this+1168)`, bound to L"speed" @0x6d7308)
+        // = local _speedMul, which already drives _deltaTime = _speedMul*dt. It
+        // is NOT the +1093 bool gate _speed (separate play/pause flag). Was
+        // mis-wired to the bool _speed; the IDB getter symbol is off-by-one
+        // mislabeled (Player_getMeshDivisionRatio).
+        void setSpeed(double v) { _speedMul = v; }
+        double getSpeed() const { return _speedMul; }
 
         void setFrameTickCount(double v) { _frameTickCount = v; }
         double getFrameTickCount() const { return _frameTickCount; }
@@ -683,8 +688,16 @@ namespace motion {
         // §3.1 24 missing): scaffold port int fields with default 0; binary
         // semantics not yet spiked, port stores value but doesn't drive any
         // behavior off them.
-        void setTransformOrder(tjs_int v) { _transformOrder = v; }
-        [[nodiscard]] tjs_int getTransformOrder() const { return _transformOrder; }
+        // transformOrder: binary property (getter sub_6CC188 / setter sub_6CC2C4,
+        // bound to L"transformOrder" @0x6d7838) is a 4-int TJS Array — a
+        // permutation of {0,1,2,3} (apply order of [0=Flip,1=Angle,2=Zoom,
+        // 3=Slant]) read/written at node+84..96 — NOT a scalar. A scalar here
+        // throws object->real if a script does arithmetic on it (same class as
+        // the loopTime crash). Port stores the 4 ints on the Player (matching
+        // the standalone-field choice for this NCB cluster; node-tree wiring is
+        // a separate pre-existing divergence shared with coordinate).
+        void setTransformOrder(tTJSVariant arr);
+        [[nodiscard]] tTJSVariant getTransformOrder() const;
         void setCoordinate(tjs_int v) { _coordinate = v; }
         [[nodiscard]] tjs_int getCoordinate() const { return _coordinate; }
 
@@ -1232,9 +1245,10 @@ namespace motion {
         tTJSVariant _onAction;
         tTJSVariant _onSync;
         tTJSVariant _onGroundCorrection;
-        // M15 missing transformOrder/coordinate (cluster E §3.1): port int
-        // scaffolding, default 0; semantics pending spike.
-        tjs_int _transformOrder = 0;
+        // M15 missing transformOrder/coordinate (cluster E §3.1): port fields.
+        // transformOrder spiked (2026-06-04): binary node+84..96 = 4-int
+        // permutation of {0,1,2,3}; coordinate is still a scalar int (node+24).
+        int _transformOrder[4] = {0, 1, 2, 3};
         tjs_int _coordinate = 0;
         bool _visible = true;
         double _opacity = 1.0;
