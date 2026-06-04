@@ -848,6 +848,25 @@ namespace motion {
         // updateLayers and into the progress pass, restoring the binary's
         // two-pass split. Forward-only for step-1; reverse rewind is a TODO.
         void progressSeekNodeSlotsLike_0x6C106C(double clampedEvalTime);
+        // Player_advanceRootAndNodes @0x6B6ADC — the FORWARD 4-stream walk
+        // (layer → root → var-track → node-deque) the binary runs at each forward
+        // advance point inside Player_progress_inner (0x6C106C @0x6C13D4 /
+        // 0x6C13F8 / 0x6C1468). Drives, in order: seekLayerEventStreamLike (①
+        // layer 0x6B6B8C), seekRootContentStreamLike (② root 0x6B6F48),
+        // advanceVariableTracksLike (③ forward var-track 0x6B7124),
+        // progressSeekNodeSlotsLike (④ node deque 0x6B7358, node+8 split →
+        // advanceNodeFrames / inline forward seek). Each stream is keyed on the
+        // SAME clampedEvalTime (player+456). See PlayerFrameProgress.cpp.
+        void advanceRootAndNodes_0x6B6ADC(double clampedEvalTime);
+        // Player_rewindRootAndNodes @0x6B9A3C — the REVERSE counterpart the binary
+        // runs at each reverse advance point inside Player_progress_inner
+        // (0x6C117C / 0x6C138C / 0x6C1408). Same 4 streams reversed: layer
+        // (bidirectional seekLayerEventStreamLike self-selects backward 0x6B9AE8),
+        // root (seekRootContentStreamLike — root loop stays forward-only in the
+        // live port, a pre-existing approximation of the binary's 0x6B9E84 reverse
+        // root loop), rewindVariableTracksLike (③ reverse var-track 0x6B9FCC),
+        // progressSeekNodeSlotsLike (④ node deque 0x6BA158). See PlayerFrameProgress.cpp.
+        void rewindRootAndNodes_0x6B9A3C(double clampedEvalTime);
         // 砖5/洞1: Player_preProgressDirtyNodes (0x6B6878) — progress_inner's first
         // step (0x6C10AC): per-node "modified" emoteEdit-dict check -> timeline
         // rebuild. Inert in the web port (no modified-setter); ported for

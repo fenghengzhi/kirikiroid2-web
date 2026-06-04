@@ -1847,6 +1847,40 @@ namespace internal {
         //   (node+2224..2288 — evaluateTimeline type-4 branch unported).
     }
 
+    // Player_advanceRootAndNodes @0x6B6ADC — forward 4-stream walk.
+    // Faithful function boundary for the [layer ① → root ② → var-track ③ →
+    // node-deque ④] sequence the binary runs at each forward advance point. The
+    // four stream seeks are already ported as separate methods; this groups them
+    // at the binary's function boundary so the call graph matches (one call per
+    // advance point instead of five inlined copies). All four are keyed on the
+    // SAME clampedEvalTime (player+456). progressSeekNodeSlotsLike (④) carries
+    // the node+8 split (parameterized → advanceNodeFrames 0x6B7E44 / non-param →
+    // inline forward seek) and self-guards on an empty node deque.
+    void Player::advanceRootAndNodes_0x6B6ADC(double clampedEvalTime) {
+        seekLayerEventStreamLike_0x6B6ADC(clampedEvalTime);  // ① layer 0x6B6B8C
+        seekRootContentStreamLike_0x6B6ADC(clampedEvalTime); // ② root 0x6B6F48
+        advanceVariableTracksLike_0x6B6ADC(clampedEvalTime); // ③ var-track 0x6B7124 (forward)
+        progressSeekNodeSlotsLike_0x6C106C(clampedEvalTime); // ④ node deque 0x6B7358
+    }
+
+    // Player_rewindRootAndNodes @0x6B9A3C — reverse 4-stream walk. Same boundary
+    // as advanceRootAndNodes but with the REVERSE var-track stepper
+    // (rewindVariableTracksLike 0x6B9FCC). The layer seek is bidirectional and
+    // self-selects backward (0x6B9AE8); the root seek stays forward-only in the
+    // live port (a pre-existing approximation of the binary's reverse root loop
+    // 0x6B9E84 — orthogonal to this extraction, both inert for logo). The node
+    // deque walk (④) is shared with the forward path: progressSeekNodeSlotsLike's
+    // advanceNodeFrameSelectionLike_0x6926B4 runs forward + corrective-backward,
+    // so in reverse the forward sub-loop is a no-op and the backward sub-loop does
+    // the rewind — the conflated live seek models both the binary's forward inline
+    // (0x6B73DC, forward-only) and reverse inline (0x6BA1CC, backward-only) seeks.
+    void Player::rewindRootAndNodes_0x6B9A3C(double clampedEvalTime) {
+        seekLayerEventStreamLike_0x6B6ADC(clampedEvalTime);  // ① layer (bidirectional → backward 0x6B9AE8)
+        seekRootContentStreamLike_0x6B6ADC(clampedEvalTime); // ② root (forward-only port approximation)
+        rewindVariableTracksLike_0x6B9A3C(clampedEvalTime);  // ③ var-track 0x6B9FCC (reverse)
+        progressSeekNodeSlotsLike_0x6C106C(clampedEvalTime); // ④ node deque 0x6BA158
+    }
+
     void Player::frameProgress(double dt) {
         // Aligned to libkrkr2.so Player_progress_inner (0x6C106C):
         // _speed is a bool flag (play/pause). When false, skip progress entirely.
@@ -2056,10 +2090,7 @@ namespace internal {
                     // point's node walk. So seek the layer stream here, immediately
                     // before progressSeekNodeSlotsLike (= the node walk), at each
                     // advanceRoot/rewind equivalent point — not once at end-of-frame.
-                    seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime); // 0x6B6B80 layer ①
-                    seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // 0x6B6EE4 root ②
-                    advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // 0x6B7124 var-track ③
-                    progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C1468 node walk ④
+                    advanceRootAndNodes_0x6B6ADC(_clampedEvalTime); // 0x6C1468 (1st forward advance)
                     if(!_syncWaiting && !_motionCompleted) {              // 0x6C1474
                         _clampedEvalTime = _loopTime; // +456 = player+1136 (0x6C1484)
                         // reseekTimelineCursors (0x6C1488) — the FULL non-
@@ -2084,12 +2115,8 @@ namespace internal {
                                 _frameTickCount = v7;               // LABEL_22 (0x6C1198)
                                 _clampedEvalTime = v7;              // LABEL_23 (0x6C119C)
                             }
-                            // Stage A: layer pass before node walk at this 2nd
-                            // advanceRoot (0x6C11B0, +456 = wrapped tick).
-                            seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
-                            seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ②
-                            advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // var-track ③
-                            progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11B0
+                            // 2nd forward advance (0x6C11B0, +456 = wrapped tick).
+                            advanceRootAndNodes_0x6B6ADC(_clampedEvalTime); // 0x6C11B0
                         }
                     }
                 } else {                          // 0x6C13F4: NON-LOOP, hit end -> stop
@@ -2118,17 +2145,7 @@ namespace internal {
                 }
             } else {                              // 0x6C1404: reverse loop-wrap
                 _clampedEvalTime = loopTime;      // player+456 = v28 (0x6C1404)
-                // Stage A: rewindRootAndNodes (0x6B9A3C) runs the BACKWARD layer
-                // pass (0x6B9AE8: --+916 while curTime>+456, same +1093-only gate)
-                // before its node walk. Layer pass before node walk here too.
-                seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
-                seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ② (rewind: root loop is still forward-only 0x6B6EE4)
-                // rewindRootAndNodes (0x6B9A3C) uses the BACKWARD var-track
-                // stepper (0x6B9FCC), NOT the forward one. (Root/layer stream
-                // direction is handled inside those bidirectional seeks; only
-                // the var-track stepper is a distinct forward/reverse function.)
-                rewindVariableTracksLike_0x6B9A3C(_clampedEvalTime); // 0x6B9FCC var-track ③ (reverse)
-                progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // rewindRootAndNodes (0x6C1408)
+                rewindRootAndNodes_0x6B9A3C(_clampedEvalTime); // 0x6C1408 (1st reverse rewind)
                 if(!_syncWaiting && !_motionCompleted) {              // 0x6C1414
                     _clampedEvalTime = _cachedTotalFrames; // +456 = player+1128 (0x6C1424)
                     // reseekTimelineCursors (0x6C1428) — the FULL non-incremental
@@ -2153,13 +2170,8 @@ namespace internal {
                             _frameTickCount = v7;               // LABEL_27 (0x6C11B8)
                             _clampedEvalTime = v7;              // LABEL_28 (0x6C11BC)
                         }
-                        // Stage A: layer pass before node walk at this 2nd rewind
-                        // (0x6C11C0, +456 = reverse-wrapped tick).
-                        seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
-                        seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ②
-                        // 2nd rewind (0x6C11C0) → reverse var-track stepper.
-                        rewindVariableTracksLike_0x6B9A3C(_clampedEvalTime); // 0x6B9FCC var-track ③ (reverse)
-                        progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime); // 0x6C11C0
+                        // 2nd reverse rewind (0x6C11C0, +456 = reverse-wrapped tick).
+                        rewindRootAndNodes_0x6B9A3C(_clampedEvalTime); // 0x6C11C0
                     }
                 }
             }
@@ -2177,29 +2189,18 @@ namespace internal {
         // (matching the binary's terminal advance/rewindRootAndNodes calls); this
         // covers the forward-normal / reverse-normal / non-loop-end cases.
         if(reseekNodes) {
-            // Stage A: this is the forward-not-at-end advanceRoot (0x6C13A4) OR
-            // the reverse LABEL_57 rewind (0x6C138C) — the normal-playback (logo)
-            // path. Both run the layer event stream before the node walk, keyed on
-            // the same +456. The seek-direction is encoded by deltaTime sign, and
-            // seekLayerEventStreamLike is bidirectional (forward 0x6B6B80 / backward
-            // 0x6B9AE8) self-selecting on cursor vs target, so one call covers both.
-            // Layer pass is NOT gated on _nodes.empty() (it walks motion["tag"], not
-            // the node deque); only the node walk is.
-            seekLayerEventStreamLike_0x6B6ADC(_clampedEvalTime);
-            seekRootContentStreamLike_0x6B6ADC(_clampedEvalTime); // root ② (not _nodes-gated)
-            // Unlike the layer/root seeks, the var-track stepper is a DISTINCT
-            // forward vs reverse function in the binary: forward-not-at-end /
-            // stop (0x6C13A4 / 0x6C13F8) reach here via advanceRootAndNodes
-            // (forward var-track 0x6B7124); reverse LABEL_57 (0x6C138C) reaches
-            // here via rewindRootAndNodes (reverse var-track 0x6B9FCC). Select on
-            // deltaTime sign — the SAME sign LABEL_48 used to pick the branch.
+            // The forward-not-at-end advanceRoot (0x6C13A4) OR the reverse LABEL_57
+            // rewind (0x6C138C) — the normal-playback (logo) path. Dispatch on the
+            // SAME deltaTime sign LABEL_48 used to pick the branch: forward reaches
+            // here via Player_advanceRootAndNodes (0x6B6ADC), reverse via
+            // Player_rewindRootAndNodes (0x6B9A3C). The two streams' direction is
+            // encoded inside those functions (seekLayerEventStreamLike is
+            // bidirectional; the var-track stepper is forward/reverse-distinct).
+            // The empty-node-deque guard now lives inside progressSeekNodeSlotsLike.
             if(deltaTime >= 0.0) {
-                advanceVariableTracksLike_0x6B6ADC(_clampedEvalTime); // 0x6B7124 var-track ③ (forward)
+                advanceRootAndNodes_0x6B6ADC(_clampedEvalTime); // 0x6C13A4 / 0x6C13F8
             } else {
-                rewindVariableTracksLike_0x6B9A3C(_clampedEvalTime);  // 0x6B9FCC var-track ③ (reverse)
-            }
-            if(!_nodes.empty()) {
-                progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
+                rewindRootAndNodes_0x6B9A3C(_clampedEvalTime);  // 0x6C138C (LABEL_57)
             }
         }
 
