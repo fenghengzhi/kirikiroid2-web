@@ -156,14 +156,20 @@ jobs:
       - name: Resolve Cloudflare Pages environment
         id: deploy_env
         run: |
-          # workflow_dispatch 用用户选择的环境；自动触发（push web / workflow_run）默认 preview。
+          # 环境解析规则：
+          #   - workflow_dispatch：用用户选择的环境（none/preview/production）
+          #   - push 到 web 分支：production
+          #   - push 到 dev/* 分支：preview
+          #   - 其它自动触发（workflow_run 等）：默认 preview
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             value="${{ inputs.cloudflare_pages_deploy }}"
+          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_name }}" = "web" ]; then
+            value="production"
           else
             value="preview"
           fi
           echo "value=$value" >> "$GITHUB_OUTPUT"
-          echo "Cloudflare Pages deploy environment resolved to: $value (event=${{ github.event_name }})"
+          echo "Cloudflare Pages deploy environment resolved to: $value (event=${{ github.event_name }}, ref=${{ github.ref_name }})"
 
       - name: Prepare Cloudflare Pages upload
         if: ${{ success() && steps.deploy_env.outputs.value != 'none' && (github.event_name == 'workflow_dispatch' || env.HAS_CLOUDFLARE_TOKEN == 'true') }}
