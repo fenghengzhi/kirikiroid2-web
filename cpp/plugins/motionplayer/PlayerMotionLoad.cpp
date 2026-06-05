@@ -62,14 +62,14 @@ namespace motion {
                 const auto fullPath =
                     ttstr{ "motion/" + charaRaw + "/" + motionRaw };
                 snapshot =
-                    resolveMotion(*this, fullPath, &_resourceManagerNative);
+                    resolveMotion(*this, fullPath, nativeRM());
                 if(snapshot) {
                     cacheMotion(*this, motionRaw,
                                 detail::narrow(fullPath), snapshot);
                 }
             }
             if(!snapshot) {
-                snapshot = resolveMotion(*this, name, &_resourceManagerNative);
+                snapshot = resolveMotion(*this, name, nativeRM());
             }
         }
         if(snapshot) {
@@ -216,15 +216,19 @@ namespace motion {
         detail::ensureRootNodeLike_0x6CED30(*this);
         for(size_t i = 1; i < _nodes.size(); ++i) {
             auto &node = _nodes[i];
-            _resourceManagerNative.releaseLayerId(node.layerId1);
-            _resourceManagerNative.releaseLayerId(node.layerId2);
+            nativeRM()->releaseLayerId(node.layerId1);
+            nativeRM()->releaseLayerId(node.layerId2);
         }
         detail::resetNodeTreeKeepRootLike_0x6B56F8(*this);
     }
 
     void Player::inheritChildPlayerStateLike_0x6B3C78(detail::MotionNode &node) {
         if(auto *child = node.getChildPlayer()) {
-            child->_resourceManagerNative = _resourceManagerNative;
+            // P3-B: the child already received the parent's RM dispatch at
+            //   construction (binary 0x6b43cc: `Player_ctor(child, parent+992)`),
+            //   so no native-RM copy is needed here. This site only sets the
+            //   parent link (binary 0x6b43dc: `*(child+8) = parent`).
+            child->setParentPlayerLike_0x6B1ABC(this);
             child->_tjsRandomGenerator = _tjsRandomGenerator;
             child->_project = _project.Type() == tvtObject
                 ? _project
@@ -280,7 +284,7 @@ namespace motion {
         }
 
         detail::buildNodeTree(
-            *this, *_activeMotion, clipLabel, &_resourceManagerNative,
+            *this, *_activeMotion, clipLabel, nativeRM(),
             _preview);  // binary buildNodeTree (0x6B43A4) gates on +1092 (preview)
 
         if(!_nodes.empty()) {

@@ -87,9 +87,18 @@ namespace motion {
         }
     }
 
-    Player::Player(ResourceManager rm, Player *parentPlayer) :
-        _resourceManagerNative(std::move(rm)),
-        _parentPlayer(parentPlayer) {
+    // P3-B (2026-06-05): RM dispatch-in. Aligned to Player_ctor @0x6CED30 —
+    //   single-param `(this, iTJSDispatch2* rm_dispatch)`. The RM dispatch
+    //   arrives from above (EmoteObject wraps the native RM via sub_67E20C and
+    //   flows it down; child Players inherit parent+992). The binary copies the
+    //   SAME dispatch pointer into +636/+656/+992 (sub_A0F5E0 each AddRef'd,
+    //   0x6cee9c/0x6ceeb0/0x6cef28); locally the single `_resourceManager`
+    //   variant stands for all three. Player no longer creates its own RM nor
+    //   owns one by value; the native is reached via nativeRM() (== binary
+    //   findSource unpack `*(dispatch+8)`). parentPlayer is set post-construct
+    //   (binary child+8=parent @0x6b43dc).
+    Player::Player(const tTJSVariant &rmDispatch) :
+        _resourceManager(rmDispatch) {
         LOGGER->info("Motion.Player constructor called");
         // A10: makePlayerRuntime / ensureRootNodeLike previously ran inside
         // makePlayerRuntime; the call now lives here so the synthetic root
@@ -97,19 +106,15 @@ namespace motion {
         _defaultParameterEntry.rangeScale = 1.0;
         _defaultParameterEntry.mode = 0;
         detail::ensureRootNodeLike_0x6CED30(*this);
-        using ResourceManagerAdaptor = ncbInstanceAdaptor<ResourceManager>;
-        if(auto *dispatch =
-               ResourceManagerAdaptor::CreateAdaptor(
-                   new ResourceManager(_resourceManagerNative))) {
-            _resourceManager = tTJSVariant(dispatch, dispatch);
-            dispatch->Release();
-        }
         // Aligned to libkrkr2.so SourceCache constructor/owner lifetime
         // (0x6A78F4): Player stores a TJS SourceCache object and calls through
         // that dispatch for source resolution rather than owning a map directly.
+        // SourceCache reaches the native RM through nativeRM() (dispatch unpack,
+        // == binary findSource +636->+8), valid for the Player's lifetime since
+        // `_resourceManager` holds the dispatch ref.
         using SourceCacheAdaptor = ncbInstanceAdaptor<SourceCache>;
         auto *sourceCache = new SourceCache();
-        sourceCache->bindPlayer(this, &_resourceManagerNative);
+        sourceCache->bindPlayer(this, nativeRM());
         if(auto *dispatch = SourceCacheAdaptor::CreateAdaptor(sourceCache)) {
             _sourceCacheNative = sourceCache;
             _sourceCacheObject = tTJSVariant(dispatch, dispatch);
@@ -127,6 +132,23 @@ namespace motion {
         } catch (...) {
             LOGGER->warn("Player: failed to create Math.RandomGenerator");
         }
+    }
+
+    // P3-B: dispatch->native unpack. Binary findSource @0x694928 takes the +636
+    //   RM dispatch, PropGet(hint, membername=NULL) returns the NCB instance
+    //   dispatch, then reads `*(instance+8)` = native ResourceManager pointer
+    //   (NCB tTJSNI_* layout). GetNativeInstance is the local equivalent of that
+    //   +8 unpack. The native is owned by the dispatch refcount (created at the
+    //   RM owner EmoteObject), so it outlives the Player as long as
+    //   `_resourceManager` holds the dispatch ref.
+    ResourceManager *Player::nativeRM() const {
+        iTJSDispatch2 *dispatch = _resourceManager.Type() == tvtObject
+                                      ? _resourceManager.AsObjectNoAddRef()
+                                      : nullptr;
+        if(!dispatch) {
+            return nullptr;
+        }
+        return ncbInstanceAdaptor<ResourceManager>::GetNativeInstance(dispatch);
     }
 
     Player::~Player() {
@@ -348,7 +370,7 @@ namespace motion {
         _evalResultListIndex.clear();
 
         if(snapshot) {
-            activateMotion(*this, snapshot, &_resourceManagerNative);
+            activateMotion(*this, snapshot, nativeRM());
             syncVariableKeysFromActiveMotion();
 
             // Aligned with libkrkr2.so EmoteObject_init @0x67DBAC: AFTER
@@ -669,7 +691,7 @@ namespace motion {
 
         if(_project.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
-                activateMotion(*this, snapshot, &_resourceManagerNative);
+                activateMotion(*this, snapshot, nativeRM());
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -677,17 +699,17 @@ namespace motion {
 
         if(motionKeyLooksLikeStorage) {
             if(const auto snapshot =
-                   resolveMotion(*this, _motionKey, &_resourceManagerNative)) {
-                activateMotion(*this, snapshot, &_resourceManagerNative);
+                   resolveMotion(*this, _motionKey, nativeRM())) {
+                activateMotion(*this, snapshot, nativeRM());
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
         }
 
-        if(const auto loaded = _resourceManagerNative.getLastLoadedModule();
+        if(const auto loaded = nativeRM()->getLastLoadedModule();
            loaded.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
-                activateMotion(*this, snapshot, &_resourceManagerNative);
+                activateMotion(*this, snapshot, nativeRM());
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -698,8 +720,8 @@ namespace motion {
         }
 
         if(const auto snapshot =
-               resolveMotion(*this, _motionKey, &_resourceManagerNative)) {
-            activateMotion(*this, snapshot, &_resourceManagerNative);
+               resolveMotion(*this, _motionKey, nativeRM())) {
+            activateMotion(*this, snapshot, nativeRM());
             syncVariableKeysFromActiveMotion();
             return true;
         }

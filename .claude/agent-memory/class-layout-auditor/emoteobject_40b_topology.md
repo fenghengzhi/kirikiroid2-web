@@ -1,11 +1,14 @@
 ---
 name: emoteobject-40b-topology
-description: EmoteObject 40B (init@0x67DBAC) 是 D3DEmotePlayer→Player 之间的中间层；+0 ResourceManager*(232B,sub_6A88CC) +8 EmoteEngine* +16/24 vector<tTJSVariant*>。本地 EmoteObject 缺 RM 字段(rm by-value 直传 EmoteEngine)且 _module 是单 variant 非 vector — Gap2 两处偏差权威
+description: EmoteObject 40B (init@0x67DBAC) 是 D3DEmotePlayer→Player 之间的中间层；+0 ResourceManager*(232B,sub_6A88CC) +8 EmoteEngine* +16/24 vector<tTJSVariant*>。P3-B(2026-06-05)后本地已补 RM 字段(_rm+_rmDispatch);唯余 _module 单 variant 偏差。RM dispatch ownership 链(EmoteObject 建→EmoteEngine→Player→child)已审计对齐
 metadata:
   type: project
 ---
 
 # EmoteObject(40B) 拓扑 + Gap2 偏差权威记忆
+
+> 更新 2026-06-05 (P3-B class-layout-auditor 审计): Gap2 偏差#1「EmoteObject 缺 RM 字段」**已修复**;
+> sub_67E20C 描述已纠正(是 NCB class-object 工厂,非简单封装)。详见末尾「P3-B RM ownership 审计」节。
 
 ## 二进制对象链(全部 fresh-decompile 2026-06-03 确认)
 
@@ -25,7 +28,7 @@ EmoteObject dtor = `EmoteObject_destroy@0x67F420`: 析构序 = `+8 EmoteEngine`(
 ## init@0x67DBAC 关键流程(ctor 即建,非懒)
 
 1. `operator new(0xE8)` RM → `sub_6A88CC(rm,...)` → 存 `EmoteObject+0`
-2. `sub_67E20C(rm,1,0)` 创建 TJS dispatch 包装(2× AddRef)
+2. `sub_67E20C(rm,1,0)` = **NCB class-object 工厂**(非简单封装): 用 class object `qword_1AB80A0` CreateNew 一个 NCB dispatch 实例 → 写 `*(dispatch+8)=native RM`(@0x67e2e0) + 按 a2=1 写 `dispatch+16=1`(ownership byte,@0x67e2ec, dispatch 拥有 native)。即 CreateAdaptor 语义。返回后 init 处 `(**v6)(v6)` ×2 AddRef 喂 EmoteEngine_ctor
 3. `operator new(0x5D8)` EmoteEngine → `EmoteEngine_ctor(engine, &dispatchWrapper)` → 存 `+8`。**EmoteEngine_ctor 第2参 a2 = dispatch 包装, 转发给 Player_ctor 作 resourceManager_dispatch**
 4. `VariantPtrVector_assign_67F0CC(EmoteObject+16, psbArgs)` 拷贝 PSB 引用数组到 +16 vector
 5. 逐个 PSB → `ResourceManager_loadResource` 加载 → 取 metadata/base/chara/motion dict
@@ -43,11 +46,11 @@ D3DEmotePlayer { _rm; _primaryObj; _secondaryObj; 壳字段 }  ✅ 双槽对齐
       Player(1384B by-pointer)                               ✅
 ```
 
-### Gap2 两处 EmoteObject 层偏差(强断言, 已交叉核实)
+### Gap2 EmoteObject 层偏差
 
-1. **EmoteObject 缺 ResourceManager* 字段(+0)**。本地 ctor `_engine = new EmoteEngine(std::move(rm))` 把 rm **by-value 直传 EmoteEngine→Player**, EmoteObject 自己不持有 RM。二进制 RM 是 EmoteObject 拥有的独立 232B 堆对象, EmoteObject dtor 显式 `sub_6A8B94 + delete`。本地把 RM 所有权下沉了一层。**核实**: grep `_rm`/`ResourceManager` in EmoteObject — 仅 ctor 形参, 无成员字段。
+1. ~~**EmoteObject 缺 ResourceManager* 字段(+0)**~~ **已修复(P3-B 2026-06-05)**。EmotePlayer.cpp:32-33 `EmoteObject::EmoteObject(ResourceManager rm) : _rm(std::move(rm))` 成员持有 RM(_rm, shared_ptr<State>); EmotePlayer.h:89 新增 `tTJSVariant _rmDispatch` 持 RM dispatch facade。EmoteObject 现在是 RM owner(对齐 binary +0)。
 
-2. **EmoteObject `_module` 是单 `tTJSVariant`, 二进制 +16 是 `vector<tTJSVariant*>`**。二进制 D3DEmotePlayer_load(0x52FDD4) 把 a2 个 PSB 引用全 push 进 vector(支持多 PSB 合成); 本地只存最后一个。**核实**: EmotePlayer.h:84 `tTJSVariant _module;` 单值。
+2. **EmoteObject `_module` 是单 `tTJSVariant`, 二进制 +16 是 `vector<tTJSVariant*>`**(仍 open)。二进制 D3DEmotePlayer_load(0x52FDD4) 把 a2 个 PSB 引用全 push 进 vector(支持多 PSB 合成); 本地只存最后一个。**核实**: EmotePlayer.h:84 `tTJSVariant _module;` 单值。
 
 ### 已对齐项(无需动)
 
@@ -68,6 +71,19 @@ D3DEmotePlayer { _rm; _primaryObj; _secondaryObj; 壳字段 }  ✅ 双槽对齐
 ## 1456 字段真相(纠正既有误判)
 
 EmoteEngine+1456 = HM7(@+1440 unordered_map<ttstr,double>) 的 `_M_before_begin._M_nxt`(libstdc++ insertion-order node 链头), **不是**独立 _bindListHead 字段。dtor(0x67F4B8) `for(v3=*(a1+1456); v3; v3=*v3)` 遍历释放每节点 key ttstr。本地正确建模为直接遍历 typed map(EmoteEngine.cpp:1927), 接受 libc++ 无 insertion-order 链的 PLATFORM_BOUNDARY。详见 [[emoteengine-1496b-layout]] "_bindListHead 是伪字段" 纠正。
+
+## P3-B RM ownership 审计裁决(2026-06-05, 全 fresh-decompile 核实, 6/6 对齐, 0 真实 bug)
+
+RM 全程是 **dispatch 持有 + nativeRM() 经 +8 解出唯一 native** 模型(删了 Player._resourceManagerNative value 成员):
+
+- **ctor 单参对齐**: Player_ctor@0x6CED30 头 `(this, resourceManager_dispatch)` 单参; 同 dispatch 经 sub_A0F5E0 写 +636/+656/+992 三槽(0x6cee9c/0x6ceeb0/0x6cef28)。本地 `Player(const tTJSVariant&)`(PlayerCore.cpp:100) + NCB_CONSTRUCTOR((tTJSVariant))(main.cpp:144) 单 variant 代三槽(同指针)。+992 ctor 里既存 RM dispatch 又随后被 Math.RandomGenerator 覆写→本地拆 _resourceManager + _tjsRandomGenerator 双字段(生命周期独立, 可接受)。
+- **nativeRM() = binary findSource +8 unpack**: findSource@0x694928 = +636 dispatch PropGet→NCB instance→`*(+8)`=native。本地 nativeRM()(PlayerCore.cpp:144) = AsObjectNoAddRef → ncbInstanceAdaptor<RM>::GetNativeInstance(ncbind.hpp:171 返回 adaptor->_instance = +8 native)。忠实等价。
+- **child 继承**: Player_initNodeFields case3 @0x6b43cc `Player_ctor(child, parent+992)` + @0x6b43dc `*(child+8)=parent`(两步: ctor 单参 + 构造后设 parent)。本地 NodeTree.cpp:254/PlayerUpdateParticles.cpp:450 `new Player(getResourceManager())` + setParentPlayerLike_0x6B1ABC。3 条 child 路径全设 parent, 无漏。
+- **EmoteObject ctor refcount**: CreateAdaptor(new RM(_rm)) → dispatch 持 state-shared copy; _rm + dispatch 共享 State(shared_ptr), 无双释放/泄漏。
+- **EmoteObject dtor 序**: binary EmoteObject_destroy@0x67F420 实测 = engine(a1[1], sub_67F4B8+delete) → RM(a1[0], sub_6A8B94+delete) → vector(a1[2..3])。本地 EmotePlayer.cpp:60 显式 delete _engine 先, 余成员逆声明序(_rmDispatch→_rm→_modules)。engine-before-RM 对齐。
+- **EmoteEngine dtor**: delete _player **最后**(EmoteEngine.cpp:243, _engineBack 反指针要求 engine 其他字段先死)。
+
+**残留**(非本轮): +656 渲染槽 bufLayer 本地未实装(defer); findMotion/loadMotion 未迁 +992 FuncCall(defer); EmoteEngine 4 variant-vector dtor 缺 per-element Release(当前 inert, vector 恒空, TODO@EmoteEngine.cpp:129)。
 
 ## 关键引用
 - EmoteEngine 字段表: [[emoteengine-1496b-layout]]

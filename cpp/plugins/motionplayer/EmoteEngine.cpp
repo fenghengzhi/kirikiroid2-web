@@ -37,10 +37,11 @@ namespace motion {
     //
     // C++ member-init handles deque default construction (empty); we replicate
     // steps 4, 5, 8 explicitly.
-    EmoteEngine::EmoteEngine(ResourceManager rm) {
+    EmoteEngine::EmoteEngine(const tTJSVariant &rmDispatch) {
         // Step 4: allocate and construct the Player heap object (+1064).
-        // Binary: `v13 = operator new(0x568); Player_ctor(v13, a2)`.
-        _player = new Player(std::move(rm));
+        // Binary: `v13 = operator new(0x568); Player_ctor(v13, a2)` — a2 is the
+        //   RM dispatch wrapper (P3-B single-param dispatch-in, @0x6CED30).
+        _player = new Player(rmDispatch);
         _player->_engineBack = this;
 
         // Step 5: allocate the 7 controllers (a1[134..140] = +1072..+1120).

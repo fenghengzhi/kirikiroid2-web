@@ -245,10 +245,13 @@ namespace motion::detail {
                 // Aligned to sub_6B3C78 case 3 (0x6B43C0..0x6B46E0):
                 // operator new(0x568) → Player constructor → sub_6F1794 (NCB CreateAdaptor)
                 // → store as tTJSVariant at node+1912.
+                // P3-B: child RM = parent+992 dispatch (binary 0x6b43cc
+                //   `Player_ctor(child, parent+992)`). Pass the parent Player's
+                //   RM dispatch variant directly (single-param dispatch-in). The
+                //   child+8=parent link is set right after by
+                //   inheritChildPlayerStateLike_0x6B3C78 (binary 0x6b43dc).
                 using PlayerAdaptor = ncbInstanceAdaptor<Player>;
-                auto *childNative = new Player(
-                    resourceManager ? *resourceManager : ResourceManager{},
-                    (&player));
+                auto *childNative = new Player(player.getResourceManager());
                 if (auto *dispatch = PlayerAdaptor::CreateAdaptor(childNative)) {
                     node.childPlayerVar = tTJSVariant(dispatch, dispatch);
                     dispatch->Release();

@@ -135,7 +135,7 @@ fresh decompile ctor `0x6CED30`、dtor `0x6CFADC`，逐字段比对 `player_cont
 | # | 偏差 | 严重度 |
 |---|------|--------|
 | ~~EmoteObject +0 scriptObject 槽缺失~~ **✅ 误判已证伪**：sub_6A88CC=RM ctor，本地内联 RM 已匹配 | ~~低(inert)~~ closed |
-| ctor 签名多 parentPlayer + RM native 非 dispatch（@0x6CED30 单参 dispatch-in，本地多 parentPlayer 链 + native RM）| 中(架构,**禁盲改 reframe P3**：需重做 RM-ownership/parent 链数据流) |
+| ~~ctor 签名多 parentPlayer + RM native 非 dispatch~~ **✅ P3-B 第一轮已解(2026-06-05)**：ctor 单参 dispatch-in(0x6CED30)、删 native value RM、nativeRM() 解包(0x694928)、parent 移出 ctor(0x6b43dc)、child 继承 parent dispatch(0x6b43cc)。auditor 0 bug + logo 逐位 PASS。残 defer：findMotion +992 FuncCall / +656 / layer-id 签名 | ~~中~~ 大部 closed |
 | ~6 个 port-invented map（_motionsByKey/_timelines 等，二进制无对应；render/timeline live path 依赖） | 中(P3 pimpl 重构，禁盲改) |
 
 ---
@@ -166,7 +166,7 @@ color 消费链 `0x6C7440→0x6C1B70→0x6A7518`、findSource。
 | 3 | blend 源单值 vs active-slot `node+536*activeSlotIndex+44` | ⑥ | 中 | **✅ 已修复(2026-06-05 后续)**（PlayerUpdateAnchor.cpp:144-152 改读 `activeSlot().blendMode`）|
 | 4 | ~~findSource 容器替换（SourceCache）~~ **类归属误判已纠正** → 真目标=ResourceManager::findSource@0x6AAB3C(FNV map→ObjSource)，已忠实重写函数体；SourceCache list 同构忠实不动；残留=RM 第一层容器 STL→内联 FNV bucket map(phase-D) | ⑤ | 中→低 | 函数体✅；容器选型 open(phase-D) |
 | 5 | `_type4..8ControllerAnimators`（LegacyVariableAnimatorState）死路径残骸 + 误导注释 | ① | 低 | **✅ 已移除**（反编译 0x67D01C/0x671228 证伪：二进制无独立 Player animator bucket；删 5 deque+map+6 访问器+死 loop+legacy_variable_state.h；差分逐位 PASS，见下 §七）|
-| 6 | EmoteObject +0 槽 / ctor 签名 / D3DEmotePlayer 4 常量类归属 | ④ | 低(inert) | **部分处理(2026-06-05 后续)**：(A) D3DEmotePlayer 4 常量已移到 D3DEmotePlayer 类(main.cpp，0x52E504 证据)✅；(B) EmoteObject「scriptObject 槽缺失」**误判已证伪**(sub_6A88CC=RM ctor，本地匹配)✅；(C) ctor 签名=架构级 reframe P3(禁盲改)，未改 |
+| 6 | EmoteObject +0 槽 / ctor 签名 / D3DEmotePlayer 4 常量类归属 | ④ | 低(inert) | **基本处理**：(A) D3DEmotePlayer 4 常量已移到 D3DEmotePlayer 类(main.cpp，0x52E504 证据)✅；(B) EmoteObject「scriptObject 槽缺失」**误判已证伪**(sub_6A88CC=RM ctor，本地匹配)✅；(C) **ctor 签名 = P3-B 第一轮已收敛单参 dispatch-in(2026-06-05)**✅：删 native value RM、ctor 单参(0x6CED30)、RM dispatch-in + nativeRM() 解包、child 继承 parent dispatch、parent 移出 ctor(0x6b43dc)；class-layout-auditor 0 真实 bug + logo 差分逐位 PASS。defer：findMotion +992 FuncCall / +656 渲染 / layer-id 无 name 签名 |
 
 **需就地纠正的被证伪注释（CLAUDE.md 硬规则）**：
 - ~~PlayerFrameProgress.cpp:1022「无反向 root scan」~~ **✅ 已纠正**（#1 实装时引用 0x6B9A3C/0x6B9E84）

@@ -31,7 +31,21 @@ namespace motion {
     //   models that ownership (shared_ptr<State>, cheap copy).
     EmoteObject::EmoteObject(ResourceManager rm) :
         _rm(std::move(rm)) {
-        _engine = new EmoteEngine(_rm);
+        // P3-B (2026-06-05): step 2 of EmoteObject_init @0x67DBAC —
+        //   `sub_67E20C(rm,...)` wraps the native RM in a TJS dispatch facade
+        //   (binary 2x AddRef) which is then passed to EmoteEngine_ctor (step 3,
+        //   Player+? gets the RM dispatch). EmoteObject remains the RM owner
+        //   (binary EmoteObject+0); locally `_rm` (shared_ptr<State>) is the
+        //   owner and the dispatch wraps a state-sharing handle. The single
+        //   dispatch flows down EmoteEngine -> Player -> child Players (each
+        //   holds an AddRef'd copy), so the native RM outlives all of them.
+        using RMAdaptor = ncbInstanceAdaptor<ResourceManager>;
+        if(auto *dispatch =
+               RMAdaptor::CreateAdaptor(new ResourceManager(_rm))) {
+            _rmDispatch = tTJSVariant(dispatch, dispatch);
+            dispatch->Release();
+        }
+        _engine = new EmoteEngine(_rmDispatch);
     }
 
     // Dtor — aligned with libkrkr2.so EmoteObject_destroy @0x67F420. Order:

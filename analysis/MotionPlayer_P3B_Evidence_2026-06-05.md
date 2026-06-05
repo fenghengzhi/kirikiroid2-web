@@ -194,7 +194,17 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 
 ---
 
-## 下次 session 动手步骤清单
+## ✅ 落地记录（2026-06-05 同 session 续，第一轮完成）
+
+步骤 2/3 + child 继承已实装并验证：
+- `Player` 删 `_resourceManagerNative`(native value 成员)；ctor → 单参 `Player(const tTJSVariant&)`（PlayerCore.cpp，对齐 0x6CED30）；新增 `Player::nativeRM()`=`GetNativeInstance(_resourceManager dispatch)`（= binary +8 解包 0x694928）。所有 native 消费者改 `nativeRM()`。
+- RM dispatch 上移到 EmoteObject（EmotePlayer.cpp，对齐 sub_67E20C）→ `EmoteEngine(const tTJSVariant&)`→`Player`。child(NodeTree/Particles) 用 `parent.getResourceManager()`（0x6b43cc）；parent 移到构造后 `setParentPlayerLike_0x6B1ABC`（0x6b43dc）；`inheritChildPlayerStateLike_0x6B3C78` 删 RM 拷贝改设 parent。
+- main.cpp Player NCB ctor `(ResourceManager)`→`(tTJSVariant)`（dispatch-in factory）。
+- 验证：class-layout-auditor 5/5 对齐 0 真实 bug；web debug 240/240、wasmtime guest 276/276、logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS。native catch2 motionplayer-dll 的 4 例失败(resource chain/logo/draw cache/emoteplayer SEGFAULT)经 git stash 对照确认为 **HEAD 既有失败，非 P3-B 回归**。
+
+**仍 defer**（证据不足或最大侵入，下一 session）：layer-id 容器/无 name 签名（块4.1，caller 路由未取证）、findMotion/loadMotion→+992 FuncCall（最大侵入）、+656 bufLayer 渲染分支（本地未实装，块4.2）。
+
+## 原「下次 session 动手步骤清单」（步骤 2/3 已落地，存档）
 
 1. **先反编译 layer-id 路径**：定位 binary RM dispatch 上 layer-id 分配/释放的 method 名（本 session 未覆盖）。grep RM ctor sub_6A88CC 内 RB-tree(+176) / refcount(+216)，及 `requireLayerIdForName` 对应。无证据不动 PlayerResource.cpp:93/97。
 2. **ctor 单参收敛**：PlayerCore.cpp:90 改单参 `Player::Player(rm_dispatch)`；parent 设置移到 child 构造点（PlayerUpdateParticles.cpp:447 + PlayerMotionLoad.cpp:227 构造后赋 `child._parentPlayer=this`，对齐 0x6b43dc）。
@@ -210,7 +220,43 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 
 ## 待决疑点
 
-1. **+656 渲染槽消费细节未逐行展开**（renderToCanvas/sub_6C9CA8）。P3-B 第一轮可保持现状，但完整对齐需后续反编译 0x6c75ac/0x6cb060。
-2. **parent 链每层的 parent+280 type3/type4 node-list 扫描**（sub_6B1ABC v21 链，0x6b1c1c..0x6b1d88）在本地 initialParameterRawValueLike 缺失（本地只查每层 HM2）。这是 parent 上溯的**完整语义缺口**，与 RM ownership 正交，可独立补。
-3. **layer-id RM method**：binary 对应 method 名未定位（块 3 步骤 1）。
-4. **findSource 的 dword_1AB8098 PropGet 属性名**：+636 解包 native 用的属性（dword_1AB8098 索引）未解 UTF-16 名，下次确认它是 RM dispatch 上哪个属性返回 native ptr。
+1. **+656 渲染槽消费细节未逐行展开**（renderToCanvas/sub_6C9CA8）。P3-B 第一轮可保持现状，但完整对齐需后续反编译 0x6c75ac/0x6cb060。 → **✅ 已解，见块 4.2**
+2. **parent 链每层的 parent+280 type3/type4 node-list 扫描**（sub_6B1ABC v21 链，0x6b1c1c..0x6b1d88）在本地 initialParameterRawValueLike 缺失（本地只查每层 HM2）。这是 parent 上溯的**完整语义缺口**，与 RM ownership 正交，可独立补。（本块未覆盖，保持 open）
+3. **layer-id RM method**：binary 对应 method 名未定位（块 3 步骤 1）。 → **✅ 已解，见块 4.1**
+4. **findSource 的 dword_1AB8098 PropGet 属性名**：+636 解包 native 用的属性（dword_1AB8098 索引）未解 UTF-16 名，下次确认它是 RM dispatch 上哪个属性返回 native ptr。 → **✅ 已解（dword_1AB8098 不是属性名，是 PropGet hint），见块 4.3**
+
+---
+
+## 块 4：3 待决疑点已解（2026-06-05 续，3 个 ida-deep-analyzer agent 并行 fresh decompile）
+
+### 4.1 layer-id RM method —— `requireLayerId@0x6AB694` / `releaseLayerId@0x6AB750`（**无 name 参**）
+
+- RB-tree(+176) **证伪为「name→id 映射」** —— 它是 `std::set<unsigned int>` 的 `_M_header`（容器对象在 **+168**，libstdc++ 标准 container+8=header 布局），存**已分配/占用的 layer-id 整型集合**，节点不含字符串、不含第二值。类型签名直接打印在符号里：`std::_Rb_tree<unsigned int, unsigned int, std::_Identity<unsigned int>, std::less<unsigned int>, ...>::_M_insert_unique / _M_erase_aux`（调用点 0x6AB694 / 0x6AB750，参数 a1+168）。
+- ctor `sub_6A88CC` 末尾 `operator new(0x28)` 预占 layer-id=0（节点 key 在 +32），`++*(a1+208)`(node_count)；`a1+216` 起始 `0x100000001`：低 32 = next-id 计数器（首发 1），高 32 = 相邻 refcount/flags dword（dossier 已记 +216）。
+- NCB registrar `Motion_ResourceManager_ncb_registerMembers@0x6AB8BC` 末两成员（UTF-16 由 `L"..."` 宽字面量直接给出，无截断陷阱）：
+  - `requireLayerId` → `sub_6AB694`（**无参**）：`while(set.contains(*nextId)) ++*nextId; set.insert(*nextId); r=*nextId; *nextId=r+1; return r;`（从计数器 +216 + set 去重发放下一个空闲 id，**与 layer name 无关**）。
+  - `releaseLayerId` → `sub_6AB750(id)`：`node=set.lower_bound(id); if(node==end||node.key!=id) return 0; set.erase(node); return rank;`（收 id 删 set，不回拨计数器）。
+- **裁决（与 RM ownership 正交，本块只记证据不动代码）**：binary `requireLayerId` **不接受任何参数**，尤其不接受 name；RM **不维护 name↔id 映射**（set<uint32_t> 只存 id）。本地 `requireLayerIdForName(ttstr name)`（PlayerResource.cpp:93，ResourceManager.cpp:311）的 **name-keyed 稳定分配（同 name 复用同 id）语义是 binary 不存在的本地新增**（本地 State 有 `layerIdsByName`/`layerNamesById` 三容器，binary 只有一个 set<uint32_t>）。
+  - ⚠️ 这是**方法签名 + 内部容器**层的偏差（维度①⑤），**与 P3-B 的 RM ownership(dispatch-in) 正交**，且**调用方路由（经 dispatch FuncCall 还是 native 直调）本块未取证** → 按「证据不足不动」，**P3-B 本轮不迁 layer-id**，列为独立 open 项（建议后续 session：本地 State 的 3 个 layer-id 容器 → 单 `std::set<uint32_t>` + 计数器；`requireLayerIdForName`→`requireLayerId` 无参；调用点改为不传 name）。
+
+### 4.2 +656 渲染槽 —— `renderToCanvas@0x6C7440` 内**唯一**消费，`PropGet(L"bufLayer")`
+
+- **dossier 块 1.3 的「sub_6C9CA8 多处 0x6cb060..0x6cb84c 引用 +656」证伪**：sub_6C9CA8 的 a1 是 `_DWORD*`（4B 步进），那些索引是 `a1+258`(=字节 +1032)/`a1+263`(=字节 +1052)，**不是 +656**（把 DWORD 索引误当字节偏移）。
+- **+656 唯一渲染消费点 = `renderToCanvas@0x6C7440`**（真函数入口 0x6C7440，0x6c75ac 只是其循环体；`X22=this`，`X22+0x290`=字节 656）。拷贝点 0x6c7bb0：`sub_A0F5E0(v343, a1+656)` → `sub_A0E48C(v343,1)` 强转 object → 取 dispatch v49 AddRef → `v49->vtable[+0x20](v49, 0, L"bufLayer", &hint, &result, v49)`（**vtable+0x20=PropGet**，对照同函数 +0x10=FuncCall/+0x30=PropSet）→ 拿到一个 Layer dispatch 作为本帧离屏**绘制目标缓冲**（后续 setSize + meshCopy/affineCopy/bezierPatchCopy 全画到它上）。
+- **门控**：仅在 blendMode switch 落到 `v48=2`（mesh/affine type2）或 `completionType(+1144)!=0` 或 `item+264`(子节点链)非空时触发。
+- **+656 vs +992 用途**：+656 = PropGet(L"bufLayer") 取**渲染目标缓冲层**（render target）；+992 = FuncCall(findMotion/loadMotion) 解析**资源**。职责正交，共享同一 dispatch 指针只因 bufLayer 属性挂在 RM 对象上。
+- **本地对照（交叉核实，非漂移空 grep）**：本地 `renderToCanvasLike_0x6C7440`(PlayerRenderTargets.cpp:1087) **完全没有 bufLayer / +656 RM PropGet 这条分支**（`grep bufLayer|_resourceManager|656|completionType` 在 PlayerRenderTargets.cpp/PlayerRenderExecute.cpp 零命中）。这是 completionType!=0 离屏缓冲合成分支，**本地整体未实装**，现有 fixture（logo）走 completionType==0 直绘路径触不到。
+- **裁决**：+656 是 RM dispatch 的**纯读消费方**，不是 RM 容器/所有权本身。**P3-B 本轮保持现状不迁**，本地单 `_resourceManager` variant 充当三槽近似可接受（三槽本就同一 dispatch 指针）。bufLayer 渲染分支列为独立待实装项（无 fixture，oracle 盲区）。
+
+### 4.3 +636 PropGet 的 `dword_1AB8098` —— **不是属性名，是 PropGet 的 `tjs_uint32 *hint`**
+
+- `get_bytes(0x1AB8098,32)` = 全 `0xFF`（BSS）。调用点反汇编 `LDR W2`（**32-bit 加载**，非 `LDR X2` 指针加载）+ 0xFFFFFFFF 初值 → 它是 KiriKiri 的 **member-hint cache 槽**（按值传 hint），不是 membername 指针、不是字符串地址。
+- 该 PropGet 实际签名 `PropGet(flag, membername, hint, result, objthis)`：本调用 **flag=2(TJS_MEMBERMUSTEXIST)、membername=NULL/未用、hint=*0x1AB8098(0xFFFFFFFF=未缓存)、result=&v137**。Hex-Rays 把 5 参压成 4 参显示，误把 hint 当成第 3 个「属性名」位置。
+- 机制：PropGet(membername=NULL+hint) 从 RM self-dispatch（+636，+652 flag!=1 时 sub_A0E48C 规范化）取回**NCB instance dispatch**，其 **+8 = native ResourceManager 指针**（NCB 内建 instance-wrapper 布局 `tTJSNI_*`+8=native this，**非具名属性**）。然后直读 native：`*(v10+224)`=spec(1=krkr/2=win)、`v10+88`=HashMap A bucket array、`*(v10+96)`=bucket count。
+- 交叉核实：RM registrar(0x6AB8BC) 注册 11 method + 1 个 `bufLayer` property，**无任何返回 native 实例的具名属性** → 进一步证明这条走的是 NCB instance 内建解包而非具名属性。
+- **本地对照**：真正对齐点**不在 dword_1AB8098（仅 hint cache，本地可用任意等价机制甚至无需 hint）**，而在解包后的 native 字段访问（spec@+224 / HashMap A bucket@+88 / count@+96，P3-A 已对齐）。本地等价机制 = `ncbInstanceAdaptor<ResourceManager>::GetNativeInstance(dispatch)`（ncbind.hpp:171，== binary 的 dispatch+8 解包）。
+
+### 块 4 小结（对 P3-B 范围的影响）
+- **疑点 2（+656）+ 疑点 3（dword_1AB8098）已解，确认 findSource 是 dispatch-facade-over-native 混合**（PropGet hint+NULL → NCB instance +8 → native 直读 HashMap A）：本地用 `GetNativeInstance` 解包 = 忠实等价。findSource 迁移**勿全改纯 dispatch**（约束 2）。
+- **疑点 1（layer-id）已解但移出 P3-B 范围**：binary `requireLayerId` 无 name 参，本地 name-keyed 是新增语义；属维度①⑤偏差 + 调用方路由未取证 → **本轮不动 PlayerResource.cpp:93/97**，独立 open 项。
+- **P3-B 本轮可动手的、证据充分的范围**：(2) ctor 单参 dispatch-in 收敛 + parent 设置移出 ctor；(3) RM 持有从 native value → dispatch variant（findSource/native 消费者经 `GetNativeInstance` 解包，混合保留）；child 继承 parent 的 RM dispatch + 构造后 `child._parentPlayer=parent`。**defer**：(4) findMotion/loadMotion FuncCall 化（最大侵入，建议最后做）、+656 bufLayer 渲染分支、layer-id 容器/签名。

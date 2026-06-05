@@ -443,8 +443,12 @@ namespace motion {
 
                 // 3b. Create child Player via TJS dispatch (0x6BF93C..0x6BFA00)
                 // Aligned to binary: new Player → CreateAdaptor → Array.add
+                // P3-B: child RM = parent's RM dispatch (single-param
+                //   dispatch-in, binary 0x6b43cc passes parent+992). parent link
+                //   set post-construct (binary 0x6b43dc child+8=parent).
                 using PlayerAdaptor = ncbInstanceAdaptor<Player>;
-                auto *childRaw = new Player(_resourceManagerNative, this);
+                auto *childRaw = new Player(getResourceManager());
+                childRaw->setParentPlayerLike_0x6B1ABC(this);
                 childRaw->_tjsRandomGenerator = _tjsRandomGenerator;
                 iTJSDispatch2 *childDisp = PlayerAdaptor::CreateAdaptor(childRaw);
                 if (!childDisp) { delete childRaw; goto physics_step; }

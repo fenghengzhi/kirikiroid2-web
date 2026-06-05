@@ -45,7 +45,7 @@ namespace motion {
         _playingTimelineLabels.clear();
         _layerIdsByName.clear();
         _layerNamesById.clear();
-        _resourceManagerNative.clearCache();
+        nativeRM()->clearCache();
         _lastCanvas.Clear();
         _lastViewParam.Clear();
         _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
@@ -58,12 +58,12 @@ namespace motion {
 
     bool Player::isExistMotion(ttstr name) {
         return static_cast<bool>(
-            resolveMotion(*this, name, &_resourceManagerNative));
+            resolveMotion(*this, name, nativeRM()));
     }
 
     tTJSVariant Player::findMotion(ttstr name) {
         const auto snapshot =
-            resolveMotion(*this, name, &_resourceManagerNative);
+            resolveMotion(*this, name, nativeRM());
         if(!snapshot) {
             return {};
         }
@@ -90,11 +90,11 @@ namespace motion {
                 }
             }
         }
-        return _resourceManagerNative.requireLayerIdForName(name);
+        return nativeRM()->requireLayerIdForName(name);
     }
 
     void Player::releaseLayerId(tjs_int id) {
-        _resourceManagerNative.releaseLayerId(id);
+        nativeRM()->releaseLayerId(id);
     }
 
 

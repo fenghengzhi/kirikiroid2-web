@@ -135,7 +135,13 @@ NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
 }
 
 NCB_REGISTER_CLASS(Player) {
-    NCB_CONSTRUCTOR((ResourceManager));
+    // P3-B (2026-06-05): RM dispatch-in. Binary Player factory (sub_6F6E6C /
+    //   Player_ncb_createInstance @0x6f6ce8) takes the FIRST TJS param — an RM
+    //   dispatch object — and passes it to the single-param ctor @0x6CED30. So
+    //   the NCB ctor binds a tTJSVariant (the dispatch), not a native
+    //   ResourceManager (which would force a dispatch->native conversion = the
+    //   old native-value model P3-B removes).
+    NCB_CONSTRUCTOR((tTJSVariant));
 
     // Properties
     // M16 (92-set alignment): two class-level (static) RW properties that head

@@ -108,6 +108,6 @@
 | 阶段 | 项 | 侵入度 | oracle | 前置 | 状态 |
 |------|----|--------|--------|------|------|
 | 1 | **P3-A** RM HashMap A 容器对齐 | 局部 | ✅ 有差分守护 | 无 | ✅ **完成(2026-06-05)**：选型 1:1（libstdc++ unordered_map + FNV functor）；前提「内联 bucket map」证伪 |
-| 2 | **P3-B** RM ownership dispatch-in（~~+ parent 链~~：parent 链已证忠实，移出范围）| 全局 | ⚠️ 多为 inert | P3-A 完成 | open，**证据已备齐**(dossier 2026-06-05)；独立 session + class-layout-auditor 守护；注意 facade-over-native 混合模型勿全 dispatch 化 |
+| 2 | **P3-B** RM ownership dispatch-in（~~+ parent 链~~：parent 链已证忠实，移出范围）| 全局 | ⚠️ 多为 inert | P3-A 完成 | ✅ **第一轮完成(2026-06-05)**：ctor 单参 dispatch-in + RM 持有 native value→dispatch variant + nativeRM() 解包 + child 继承 parent dispatch + parent 设置移出 ctor。class-layout-auditor 裁决 0 真实 bug；web debug 240/240 + wasmtime guest 276/276 + logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS。**defer**：findMotion/loadMotion +992 FuncCall 化、+656 bufLayer 渲染分支、layer-id 容器/无 name 签名（见 dossier 块4）|
 
 两项完成后，binary RM 对象模型（dispatch facade + 内联 FNV bucket map + SourceCache list + RNG + RB-tree）即与本地 1:1，配合本轮已对齐的 `ResourceManager::findSource` 函数体，关闭维度 ④（对象生命周期）与 ⑤（容器实现）在 RM 上的最后两处系统性偏差。

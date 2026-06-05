@@ -114,8 +114,20 @@ namespace motion {
 
     class Player {
     public:
-        explicit Player(ResourceManager rm = ResourceManager{},
-                        Player *parentPlayer = nullptr);
+        // P3-B (2026-06-05): RM ownership = dispatch-in, aligned to
+        //   Player_ctor @0x6CED30 — the binary ctor is SINGLE-PARAM
+        //   `(this, iTJSDispatch2* rm_dispatch)`. The same RM dispatch pointer is
+        //   copied (sub_A0F5E0, each AddRef'd) into three tTJSVariant slots
+        //   +636/+656/+992 (0x6cee9c/0x6ceeb0/0x6cef28); locally the single
+        //   `_resourceManager` variant stands for all three (same dispatch
+        //   pointer). Player no longer OWNS a native RM by value — it holds the
+        //   dispatch and reaches the native instance via nativeRM() (the local
+        //   equivalent of the binary's findSource unpack `*(dispatch+8)`,
+        //   0x694928). The dispatch is created once at the RM owner (EmoteObject,
+        //   sub_67E20C) and flows down EmoteEngine -> Player -> child Players.
+        //   parentPlayer is NOT a ctor param (binary sets child+8=parent
+        //   post-construct @0x6b43dc); use setParentPlayerLike_0x6B1ABC().
+        explicit Player(const tTJSVariant &rmDispatch = tTJSVariant{});
         ~Player();
 
         // --- Properties (getter/setter) ---
@@ -1041,8 +1053,18 @@ namespace motion {
             return _renderItemNativeFieldLifetimeByNode;
         }
 
+    public:
+        // P3-B: reach the native ResourceManager through the RM dispatch held in
+        //   `_resourceManager`. This mirrors the binary findSource path
+        //   (@0x694928): PropGet on the +636 RM dispatch (hint, membername=NULL)
+        //   returns the NCB instance dispatch whose +8 is the native RM pointer;
+        //   locally GetNativeInstance performs the same dispatch->native unpack.
+        //   Player does NOT own the native by value (it is owned by the dispatch
+        //   refcount, created at the RM owner EmoteObject). Returns nullptr if the
+        //   variant does not hold an NCB ResourceManager dispatch.
+        ResourceManager *nativeRM() const;
+
     private:
-        ResourceManager _resourceManagerNative;
         Player *_parentPlayer = nullptr; // non-owning, for 0x6B1ABC lookup
         // libkrkr2.so +1092: 1-byte bool = the "preview" NCB property (getter
         // Player_getPreview reads *(u8*)(this+1092)). NOT completionType — the

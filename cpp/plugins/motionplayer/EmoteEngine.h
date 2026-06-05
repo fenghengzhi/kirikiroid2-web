@@ -331,7 +331,11 @@ namespace motion {
     // ============================================================================
     class EmoteEngine {
     public:
-        explicit EmoteEngine(ResourceManager rm);
+        // P3-B: RM dispatch-in. Binary EmoteEngine_ctor (sub_67E38C) receives the
+        //   RM dispatch wrapper (sub_67E20C) and forwards it to Player_ctor
+        //   @0x6CED30 (single-param dispatch). The engine does not own the native
+        //   RM; it just passes the dispatch down.
+        explicit EmoteEngine(const tTJSVariant &rmDispatch);
         ~EmoteEngine();
 
         EmoteEngine(const EmoteEngine&) = delete;

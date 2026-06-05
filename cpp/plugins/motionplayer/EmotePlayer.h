@@ -80,6 +80,13 @@ namespace motion {
 
     private:
         ResourceManager _rm;            // +0 — EmoteObject 自持(G2-A)
+        // P3-B (2026-06-05): the RM dispatch facade (binary sub_67E20C wrapper).
+        //   EmoteObject creates it once from _rm and flows it down to EmoteEngine
+        //   -> Player -> child Players (RM dispatch-in, @0x6CED30). Declared after
+        //   _rm so it is released before _rm on teardown (facade before owner;
+        //   matches binary dtor engine->RM ordering once _engine is deleted
+        //   explicitly first).
+        tTJSVariant _rmDispatch;
         EmoteEngine *_engine = nullptr; // +8 — raw pointer, manual new/delete
     };
 
