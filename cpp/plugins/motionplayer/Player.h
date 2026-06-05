@@ -964,6 +964,15 @@ namespace motion {
         // activeSlotCursor (item+8) to 0. Called from the firstFrame seed and the
         // two loop-wrap reseek points. Inert for every currently-available motion.
         void reseedVariableTracksLike_0x6B86C8(double clampedEvalTime);
+        // libkrkr2.so Player_pruneHM3_byNodeIdentity @0x6B826C — the reseek STEP5
+        // tail (called UNGATED from Player_reseekTimelineCursors @0x6B9234). Two
+        // gated loops + terminal Player_clearHM3_HM4 @0x6B80E4:
+        //   loop1 (HM4 bucket!=0): restore each active var-track slot.value from
+        //     the HM4 snapshot keyed by item.cascadeKey — FULLY PORTED.
+        //   loop2 (HM3 elem!=0): prune+restore HM3 by node identity — the per-node
+        //     restore is DEFERRED (needs node+46 visible byte + the deferred
+        //     snapshot fields); only the terminal clearHM3_HM4 is applied.
+        void pruneHM3ByNodeIdentityLike_0x6B826C();
         // libkrkr2.so Player_reseekTimelineCursors @0x6B86C8 — the NON-incremental
         // full re-seek of all timeline cursors to targetTime (= player+456). Unlike
         // the incremental advance/rewindRootAndNodes seeks, this rescans each stream
@@ -974,8 +983,11 @@ namespace motion {
         // snapshot, NON-truncated curTime); (3) the var-track reseed @0x6B8F30
         // (reuses reseedVariableTracksLike_0x6B86C8). The per-node init loop
         // @0x6B91B0 (step 4) is performed by the progressSeekNodeSlotsLike node
-        // walk the caller keeps right after; the HM3-prune + aux-list tail
-        // (0x6B9234/0x6B9248, step 5) is DEFERRED. Called at the firstFrame seed
+        // walk the caller keeps right after; the STEP5 tail's HM3-prune
+        // (0x6B9234, pruneHM3ByNodeIdentityLike_0x6B826C) is now PORTED (loop1
+        // HM4→slot.value + terminal clearHM3_HM4; per-node restore DEFERRED), and
+        // the player+280 aux-list rebuild (0x6B9248, sub_6B9650) stays DEFERRED
+        // (its node+408 ramp consumer is unported). Called at the firstFrame seed
         // (0x6C10E0/0x6C131C) + the two loop-wrap reseek points (0x6C1488/0x6C1428).
         void reseekTimelineCursors(double targetTime);
         // libkrkr2.so Player_interpolateVarTrackValues @0x6BBE20 — the var-track
@@ -988,16 +1000,21 @@ namespace motion {
         void interpolateVarTrackValuesLike_0x6BBE20(double clampedEvalTime);
         // libkrkr2.so Player_resetMotionState_clearAndRebuild @0x6B2D3C, called
         // by playImpl when (flags & 8 == PlayFlagJoin). Body-gated on !_queuing
-        // (+480). SLICE: clearHM3_HM4 + interpolateVarTrackValues + loop2
-        // (item+16 → HM4 @ _variableSnapshotMap). loop1 (node evaluateTimeline)
-        // and loop3 (HM3 perNodeLayerState via HM3_initValueFromNode @0x699510,
-        // unported) are DEFERRED.
+        // (+480). clearHM3_HM4 + interpolateVarTrackValues + loop2 (item+16 → HM4
+        // @ _variableSnapshotMap) + loop3 (HM3 perNodeLayerState via
+        // HM3_initValueFromNode @0x699510) are PORTED. loop1 (node
+        // evaluateTimeline) stays DEFERRED — the port evaluates timelines on its
+        // own update path, not in this reset.
         void resetMotionStateLike_0x6B2D3C();
         // libkrkr2.so Player_HM3_initValueFromNode @0x699510 — snapshots node /
         // active-slot fields into a PerNodeLayerState (HM3 value). PARTIAL: only
         // nodeType maps to an existing MotionNode member; the other ~24 fields
-        // read raw node byte offsets the port does not expose and are DEFERRED
-        // (HM3 / _perNodeLayerStateMap has no consumer, so the snapshot is unread).
+        // read raw node byte offsets the port does not expose and are DEFERRED.
+        // HM3 (_perNodeLayerStateMap) now has a maintenance consumer
+        // (pruneHM3ByNodeIdentityLike_0x6B826C reads its element count + would
+        // restore matched-identity nodes); the per-node restore path is itself
+        // DEFERRED on the same missing snapshot fields, so the snapshot is still
+        // effectively read-for-existence only — but it is no longer unconsumed.
         void hm3InitValueFromNodeLike_0x699510(
             const detail::MotionNode &node, detail::PerNodeLayerState &v) const;
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)

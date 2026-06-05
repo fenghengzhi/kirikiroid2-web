@@ -1648,32 +1648,19 @@ namespace internal {
         // ---- STEP 5: TAIL @0x6B9234 (re-confirmed against fresh decompile of
         //   Player_reseekTimelineCursors 0x6B86C8; runs UNGATED every reseek) ----
         //
-        // The binary tail is two passes. Both are DEFERRED for ARCHITECTURE-
-        // PREREQUISITE-MISSING reasons (a CLAUDE.md legitimate stop), NOT for
-        // "oracle-inert / no consumer" — the container each pass operates on has
-        // no port writer yet, so a faithful port would iterate over a container
-        // that is structurally empty in the port for a different reason than the
-        // binary (the binary's is populated).
+        // The binary tail is two passes:
+        //   (A) 0x6B9234 Player_pruneHM3_byNodeIdentity @0x6B826C
+        //   (B) 0x6B923C..0x6B9248 the player+280 HM1-aux rebuild walk (sub_6B9650)
         //
-        // (A) 0x6B9234 Player_pruneHM3_byNodeIdentity. Three sub-passes:
-        //   - loop1: node-track hashmap @player+1240 — recompute each node's
-        //     path-key hash, write back node+72. Port has no node-track hashmap
-        //     populate (Player+1240 node-track stream unported).
-        //   - loop2: HM3 @player+1184 = _perNodeLayerStateMap — prune entries
-        //     whose node-path-key no longer matches a live node, via
-        //     Player_buildNodePathKey + Player_HM3_entry_destroy.
-        //   - tail Player_clearHM3_HM4 @0x6B80E8 — clears HM3 (_perNodeLayer-
-        //     StateMap) AND HM4 (_variableSnapshotMap).
-        //   PREREQUISITE: _perNodeLayerStateMap and _variableSnapshotMap BOTH
-        //   have no port writer. HM3 populate is Player_resetMotionState
-        //   loop3 @0x6B2DF8 + Player_HM3_initValueFromNode @0x699510 (688B
-        //   node->V snapshot), both unported (see Player.h HM3 field comment).
-        //   HM4 populate is resetMotionState loop2 @0x6B2D40, also unported.
-        //   With both maps permanently empty in the port, this prune+clear is a
-        //   provable no-op whose REAL data flow (resetMotionState) is the
-        //   missing prerequisite — porting an empty-container walk here would be
-        //   unverifiable and detached from the source it stands in for.
-        //
+        // (A) is now PORTED (pruneHM3ByNodeIdentityLike_0x6B826C) — the HM3/HM4
+        // populate prerequisite it stood blocked on is in place (resetMotionState
+        // loop2/loop3 @0x6B2D40/0x6B2DF8 + HM3_initValueFromNode @0x699510 were
+        // landed in a5de9fd). The prior "both maps permanently empty → provable
+        // no-op" framing is FALSIFIED for HM4 (it is populated by every
+        // PlayFlagJoin play); corrected here. See the method body for the loop1
+        // (HM4→active var-track slot.value) full port and the loop2 prune scope.
+        pruneHM3ByNodeIdentityLike_0x6B826C();
+
         // (B) 0x6B923C..0x6B9248: `for (n = player+280; n; n = *n)
         //     sub_6B9650(a1, n+16)`. player+280 is HM1's (_evalCascadeMap,
         //     Player+264) internal before-begin all-entries chain (std::unord-
@@ -1682,16 +1669,77 @@ namespace internal {
         //     affected-node list at entry+48 (= EvalCascadeState::heapResult):
         //     gate entry+40(weight)==0 -> skip; clear the entry+48 vector; scan
         //     the NODE deque and push nodeType in {3,4} nodes (deduped).
-        //   PREREQUISITE: EvalCascadeState::heapResult (entry+48 node list) has
-        //   no port writer AND no port reader — its sole consumer is the ramp-
-        //   write loop in Player_bindParameterValue @0x6C4978, itself DEFERRED
-        //   in bindParameterValueLike_0x6C4668 (the node+408 controller RB-trees
-        //   it ramps are unpopulated in the port). Rebuilding entry+48 here
-        //   without that consumer would write a list no code reads — the inverse
-        //   of port-invention. The faithful order is: port sub_6B9650 + the
-        //   bindParameter consumer loop FIRST (giving entry+48 a writer and a
-        //   reader), then wire this loop-wrap rebuild hook. Until then this stays
-        //   a prerequisite-gap DEFERRED, not an oracle-inert skip.
+        //   PREREQUISITE STILL MISSING (genuine, re-verified this pass): the
+        //   entry+48 node list has NO port reader. Its sole consumer is the ramp-
+        //   write loop in Player_bindParameterValue @0x6C4978, which iterates
+        //   each listed node's `node+408` controller RB-tree (a
+        //   std::map<ttstr,ControllerRamp>) and writes ramp+40 from an
+        //   interpolated weight. node+408 is NOT modeled on the port's MotionNode
+        //   (populated by the unported per-node controller-frame parse, not by
+        //   buildNodeTree_recursive @0x6B4A6C). Porting sub_6B9650 alone would
+        //   build a vector<MotionNode*> that no port code reads — the inverse of
+        //   port-invention (CLAUDE.md). The faithful order is: model node+408 +
+        //   port the @0x6C4978 ramp consumer FIRST, then this rebuild hook. Until
+        //   then this stays a documented prerequisite-gap DEFERRED, NOT an
+        //   oracle-inert skip.
+    }
+
+    void Player::pruneHM3ByNodeIdentityLike_0x6B826C() {
+        // libkrkr2.so Player_pruneHM3_byNodeIdentity @0x6B826C, the reseek STEP5
+        // tail (called from Player_reseekTimelineCursors @0x6B9234, UNGATED). Two
+        // gated loops then a terminal Player_clearHM3_HM4 @0x6B80E4.
+        //
+        // === loop1 (gate HM4 bucket-count != 0, binary a1[158]=Player+1264) ===
+        //   for each var-track item in the Player+1312 deque (_variableLabelScopes):
+        //     cursor = item.activeSlotCursor                         // item+8
+        //     if (!item.slot[cursor].typeZeroFlag) {                 // !*(item+56*cursor+68)
+        //       node = HM4.find(item.cascadeKey)                     // key = *item (item+0)
+        //       if (node) item.slot[cursor].value = node.value       // *(item+56*cursor+72) = node[2]
+        //     }
+        //   item+56*cursor+72 == slot[cursor]+24 == VarTrackSlot.value; item+...+68
+        //   == slot[cursor]+20 == VarTrackSlot.typeZeroFlag. This restores the
+        //   active slot's value from the HM4 snapshot so the loop-wrap reseed does
+        //   not lose a variable that resetMotionState cached. FULLY PORTED — every
+        //   field exists; HM4 (_variableSnapshotMap) is populated by every
+        //   PlayFlagJoin play (resetMotionState loop2 @0x6B2D40).
+        if (!_variableSnapshotMap.empty()) {
+            for (auto &item : _variableLabelScopes) {
+                const int cursor = item.activeSlotCursor & 1;
+                if (item.slot[cursor].typeZeroFlag) {
+                    continue;          // 0x6B8378 gate: type==0 slot → no value
+                }
+                if (const auto it = _variableSnapshotMap.find(item.cascadeKey);
+                    it != _variableSnapshotMap.end()) {
+                    item.slot[cursor].value = it->second;   // 0x6B8420
+                }
+            }
+        }
+
+        // === loop2 (gate HM3 element-count != 0, binary a1[151]=Player+1208) ===
+        // Net binary effect: for each live node whose path-key still resolves to an
+        // HM3 entry AND whose nodeType matches the snapshot's (HM3.value.nodeType ==
+        // node.nodeType), restore the snapshot into the node's active ClipSlot
+        // (sub_6997F0 @0x6997F0) + Motion_Player_findSource, then erase that HM3
+        // entry. The terminal Player_clearHM3_HM4 @0x6B80E4 then wipes whatever
+        // entries remain (both HM3 and HM4).
+        //
+        // PORTED HERE: only the terminal clear (clearHM3_HM4) — it is the
+        // observable container outcome (HM3 and HM4 do not survive a reseek) and is
+        // fully representable.
+        //
+        // DEFERRED (genuine prerequisite gap, re-verified this pass): the per-node
+        // restore branch. The binary's match gate reads node+46 (the in-tree
+        // visible/active byte) which the port's MotionNode does NOT expose, and the
+        // restore sub_6997F0 writes the FULL finalized ClipSlot region
+        // (slot+340..480) of which several fields are themselves DEFERRED in
+        // hm3InitValueFromNodeLike_0x699510 (V+28 contentMask, V+44 srcDispatch,
+        // the type-3/4 child-dispatch + particle interpolation block). Restoring a
+        // partial snapshot keyed off an unmodeled visibility gate would write stale
+        // partial state into the live slot — a regression risk, not a faithful
+        // port. So the prune/restore is left documented; only the terminal clear
+        // (the binary's guaranteed post-condition) is applied.
+        _perNodeLayerStateMap.clear();   // clearHM3_HM4 @0x6B80E4 (HM3 @+1184)
+        _variableSnapshotMap.clear();    // clearHM3_HM4 @0x6B80E4 (HM4 @+1240)
     }
 
     void Player::interpolateVarTrackValuesLike_0x6BBE20(double clampedEvalTime) {
@@ -1799,9 +1847,14 @@ namespace internal {
         }
         // loop3 (0x6B2D68): HM3 per-node-path layer state. STRUCTURE ported;
         // snapshot PARTIAL (see hm3InitValueFromNodeLike). Gate: binary tests
-        // node+46 (DEFERRED — not exposed in port MotionNode) AND nodeType ∈
-        // {0,2,3,4,7,8} (mask 0x19D). key = buildNodePathKey (Player+24 path-key
-        // space); HM3.upsert → _perNodeLayerStateMap. (Unread map — inert.)
+        // node+46 (the in-tree visible byte — DEFERRED, not exposed in port
+        // MotionNode) AND nodeType ∈ {0,2,3,4,7,8} (mask 0x19D). key =
+        // buildNodePathKey (Player+24 path-key space); HM3.upsert →
+        // _perNodeLayerStateMap. The map is now read on the maintenance side by
+        // pruneHM3ByNodeIdentityLike_0x6B826C (reseek STEP5); the node+46 gate
+        // omission means the port may snapshot a few extra (non-visible)
+        // matching-type nodes, but the prune's per-node restore (which is what
+        // would act on them) is itself DEFERRED, so this is currently inert.
         for(size_t k = 1; k < _nodes.size(); ++k) {
             const auto &node = _nodes[k];
             const int t = node.nodeType;
