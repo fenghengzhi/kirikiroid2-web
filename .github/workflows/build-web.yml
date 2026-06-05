@@ -146,8 +146,26 @@ jobs:
             out/web/release/robots.txt
             out/web/release/sitemap.xml
 
+      - name: Check Cloudflare credentials
+        run: |
+          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
+            echo "HAS_CLOUDFLARE_TOKEN=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Resolve Cloudflare Pages environment
+        id: deploy_env
+        run: |
+          # workflow_dispatch 用用户选择的环境；自动触发（push web / workflow_run）默认 preview。
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            value="${{ inputs.cloudflare_pages_deploy }}"
+          else
+            value="preview"
+          fi
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+          echo "Cloudflare Pages deploy environment resolved to: $value (event=${{ github.event_name }})"
+
       - name: Prepare Cloudflare Pages upload
-        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.cloudflare_pages_deploy != 'none' }}
+        if: ${{ success() && steps.deploy_env.outputs.value != 'none' && (github.event_name == 'workflow_dispatch' || env.HAS_CLOUDFLARE_TOKEN == 'true') }}
         run: |
           rm -rf /tmp/cloudflare-pages
           mkdir -p /tmp/cloudflare-pages
@@ -168,12 +186,12 @@ jobs:
 
       - name: Upload to Cloudflare Pages
         id: cloudflare_pages
-        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.cloudflare_pages_deploy != 'none' }}
+        if: ${{ success() && steps.deploy_env.outputs.value != 'none' && (github.event_name == 'workflow_dispatch' || env.HAS_CLOUDFLARE_TOKEN == 'true') }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
-          CLOUDFLARE_PAGES_ENVIRONMENT: ${{ inputs.cloudflare_pages_deploy }}
+          CLOUDFLARE_PAGES_ENVIRONMENT: ${{ steps.deploy_env.outputs.value }}
           CLOUDFLARE_PAGES_PRODUCTION_BRANCH: ${{ vars.CLOUDFLARE_PAGES_PRODUCTION_BRANCH || secrets.CLOUDFLARE_PAGES_PRODUCTION_BRANCH || 'main' }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
