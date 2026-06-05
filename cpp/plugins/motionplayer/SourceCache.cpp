@@ -507,8 +507,14 @@ namespace motion {
             _primaryLayer = tTJSVariant(parentLayerObject, parentLayerObject);
         }
 
+        // Aligned with loadSource @0x6A7BA8: a cached node may be reused only
+        // when its stored color (node+68..+80) still matches the requested
+        // color. A color change must NOT short-circuit here — the binary always
+        // reaches the 0x6a80d4 color comparison and re-bakes on mismatch — so we
+        // only fast-return when the stored color is unchanged.
         if(auto *entry = findEntry(key, blendMode, packedColors)) {
-            if(entry->sourceObject.Type() == tvtObject &&
+            if(entry->packedColors == packedColors &&
+               entry->sourceObject.Type() == tvtObject &&
                entry->sourceObject.AsObjectNoAddRef()) {
                 return entry->sourceObject;
             }
@@ -559,8 +565,10 @@ namespace motion {
             return nullptr;
         }
 
+        // (key, blendMode) single mutable node; a color change invalidates the
+        // baked texture so it is rebuilt below (aligned with 0x6A7BA8 hit path).
         if(auto *entry = findEntry(key, blendMode, packedColors)) {
-            if(entry->sourceTexture) {
+            if(entry->packedColors == packedColors && entry->sourceTexture) {
                 return entry->sourceTexture;
             }
         }
@@ -644,10 +652,11 @@ namespace motion {
         const std::string &key,
         int blendMode,
         const std::array<std::uint32_t, 4> &packedColors) const {
+        // (key, blendMode) match only — see non-const overload / 0x6A7BA8.
+        (void)packedColors;
         for(const auto &entry : _entries) {
             if((entry.key == key || entry.resolvedKey == key) &&
-               entry.blendMode == blendMode &&
-               entry.packedColors == packedColors) {
+               entry.blendMode == blendMode) {
                 return &entry;
             }
         }
@@ -658,10 +667,18 @@ namespace motion {
         const std::string &key,
         int blendMode,
         const std::array<std::uint32_t, 4> &packedColors) {
+        // Aligned with loadSource @0x6A7BA8 (match loop 0x6a8004-0x6a8074):
+        // the binary matches a cache node by (key @node+16, src @node+56,
+        // blendMode @node+64) only — color is NOT part of the match key. Each
+        // (key, blendMode) therefore has exactly ONE node; color (node+68..+80)
+        // is mutable. We mirror that by matching (key, blendMode) here and
+        // updating color in-place on hit (see below). packedColors is no longer
+        // a match dimension; it is carried so the hit path can detect a change.
+        (void)packedColors;
         for(auto it = _entries.begin(); it != _entries.end(); ++it) {
             if((it->key == key || it->resolvedKey == key) &&
-               it->blendMode == blendMode &&
-               it->packedColors == packedColors) {
+               it->blendMode == blendMode) {
+                // re-splice to head (0x6a8100-0x6a8114 clone-to-front / LRU)
                 _entries.splice(_entries.begin(), _entries, it);
                 return &_entries.front();
             }
@@ -685,6 +702,24 @@ namespace motion {
         int blendMode,
         const std::array<std::uint32_t, 4> &packedColors) {
         if(auto *entry = findEntry(key, blendMode, packedColors)) {
+            // Aligned with loadSource @0x6A7BA8 hit path (else branch
+            // 0x6a8098): each (key, blendMode) keeps ONE mutable node. When the
+            // requested color differs from the node's stored color
+            // (node+68..+80 vs v61..v64 at 0x6a80d4), the binary writes the new
+            // color in-place (0x6a80d8), re-bakes the source bitmap via
+            // sub_6A6BE0 (copyRect/fillRect/operateRect, per-pixel color bake),
+            // then clone-replaces the node at the list head. We reproduce the
+            // semantics: update the stored color and invalidate the baked
+            // image so ensureEntryBackingBitmap re-bakes it with the new color.
+            // (The binary clone+delete of the std::list node is an ABI detail of
+            // its container; we keep the same Entry via std::list and just
+            // refresh its fields — same data flow, no per-color entry growth.)
+            if(entry->packedColors != packedColors) {
+                entry->packedColors = packedColors;
+                entry->backingBitmap.reset();
+                entry->sourceObject.Clear();
+                releaseEntryTexture(*entry);
+            }
             return *entry;
         }
 
