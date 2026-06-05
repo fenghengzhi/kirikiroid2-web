@@ -167,6 +167,7 @@ jobs:
           cp _headers /tmp/cloudflare-pages/
 
       - name: Upload to Cloudflare Pages
+        id: cloudflare_pages
         if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.cloudflare_pages_deploy != 'none' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -192,6 +193,40 @@ jobs:
             deploy_branch="$CLOUDFLARE_PAGES_PRODUCTION_BRANCH"
           fi
           echo "Uploading $CLOUDFLARE_PAGES_ENVIRONMENT deployment to Cloudflare Pages branch $deploy_branch"
+          set -o pipefail
           npx wrangler@latest pages deploy /tmp/cloudflare-pages \
             --project-name "$CLOUDFLARE_PAGES_PROJECT_NAME" \
-            --branch "$deploy_branch"
+            --branch "$deploy_branch" 2>&1 | tee /tmp/wrangler-deploy.log
+
+          # 从 wrangler 输出提取部署 URL：
+          #   - deploy_url: "Take a peek over at https://<hash>.<project>.pages.dev"（每次部署唯一）
+          #   - alias_url:  "Deployment alias URL: https://<branch>.<project>.pages.dev"（分支别名）
+          deploy_url="$(grep -oiE 'https://[a-z0-9.-]+\.pages\.dev' /tmp/wrangler-deploy.log | head -n 1)"
+          alias_url="$(grep -ioE 'alias URL:[[:space:]]*https://[a-z0-9.-]+\.pages\.dev' /tmp/wrangler-deploy.log \
+            | grep -oiE 'https://[a-z0-9.-]+\.pages\.dev' | head -n 1)"
+
+          # 设为 step output，供后续 step 引用（steps.cloudflare_pages.outputs.*）。
+          echo "deploy_url=$deploy_url" >> "$GITHUB_OUTPUT"
+          echo "alias_url=$alias_url" >> "$GITHUB_OUTPUT"
+
+          # 写入 run Summary 页面，让部署地址直接显示在 CI 结果中。
+          {
+            echo "## Cloudflare Pages 部署"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 环境 | \`$CLOUDFLARE_PAGES_ENVIRONMENT\` |"
+            echo "| 分支 | \`$deploy_branch\` |"
+            if [ -n "$deploy_url" ]; then
+              echo "| 部署 URL | <$deploy_url> |"
+            fi
+            if [ -n "$alias_url" ]; then
+              echo "| 分支别名 URL | <$alias_url> |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -z "$deploy_url" ]; then
+            echo "::warning::未能从 wrangler 输出解析到部署 URL（输出格式可能已变化，请检查上方日志）"
+          else
+            echo "::notice title=Cloudflare Pages::部署地址 $deploy_url"
+          fi
