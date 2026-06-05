@@ -141,8 +141,14 @@ namespace motion {
                 // (commit 5018087 restored the lost 128.0 branch but wired it to the
                 //  wrong side; corrected here per 0x6C0528 decompile. Alpha base below
                 //  is always 255.0.)
+                //
+                // The blend byte the binary reads is *(node + 536*activeSlotIndex + 44)
+                // (0x6c0a80/0x6c0aac with slot index *(node+1392) @0x6c06d4) — i.e. the
+                // ACTIVE clip slot's per-slot blendMode (slot0@node+320, slot1@node+856,
+                // +44 = ClipSlot::blendMode), NOT the node-level interpolatedCache mirror.
+                // Read the active slot directly to match the binary's data source.
                 const bool isDefaultBlend =
-                    (an.interpolatedCache.blendMode & 0xF0) == 0x10;
+                    (an.activeSlot().blendMode & 0xF0) == 0x10;
                 const double base = isDefaultBlend ? 128.0 : 255.0;
                 const auto packedColors = copyPackedColorsFromBytes(an.colorBytes);
                 const bool allEqual =

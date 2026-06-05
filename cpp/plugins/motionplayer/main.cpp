@@ -833,14 +833,13 @@ NCB_PRE_REGIST_CALLBACK(EmotePlayerPreRegist);
 NCB_REGISTER_CLASS(D3DEmoteModule) {
     NCB_CONSTRUCTOR(());
 
-    // Constants
-    Variant(TJS_W("MaskModeStencil"), (tjs_int)MaskModeStencil);
-    Variant(TJS_W("MaskModeAlpha"), (tjs_int)MaskModeAlpha);
-    Variant(TJS_W("TimelinePlayFlagParallel"),
-            (tjs_int)TimelinePlayFlagParallel);
-    // M11 D-02: 1:1 with libkrkr2.so D3DEmoteModule sub_52E504 constant table.
-    Variant(TJS_W("TimelinePlayFlagDifference"),
-            (tjs_int)TimelinePlayFlagDifference);
+    // Constants — moved to NCB_REGISTER_CLASS(D3DEmotePlayer) below to match
+    // binary class placement. The 4 constants (MaskModeStencil/MaskModeAlpha/
+    // TimelinePlayFlagParallel/TimelinePlayFlagDifference) are registered by
+    // D3DEmotePlayer_ncb_registerMembers @0x52E504 (ncb_addConstant calls at
+    // 0x52e5a0-0x52e5e8) on the D3DEmotePlayer class context `a1`, NOT on
+    // D3DEmoteModule. Earlier "M11 D-02" comment misattributed sub_52E504 to
+    // D3DEmoteModule; sub_52E504 IS D3DEmotePlayer_ncb_registerMembers.
 
     // Properties
     NCB_PROPERTY(maskMode, getMaskMode, setMaskMode);
@@ -862,6 +861,23 @@ NCB_REGISTER_CLASS(D3DEmoteModule) {
 
 NCB_REGISTER_CLASS(D3DEmotePlayer) {
     NCB_CONSTRUCTOR((ResourceManager));
+
+    // 4 constants — registered on the D3DEmotePlayer class itself per binary.
+    // Aligned with libkrkr2.so D3DEmotePlayer_ncb_registerMembers @0x52E504:
+    //   ncb_addConstant(a1, L"MaskModeStencil",            0, 0x10000) @0x52e5a0
+    //   ncb_addConstant(a1, L"MaskModeAlpha",              1, 0x10000) @0x52e5b8
+    //   ncb_addConstant(a1, L"TimelinePlayFlagParallel",   1, 0x10000) @0x52e5d0
+    //   ncb_addConstant(a1, L"TimelinePlayFlagDifference", 2, 0x10000) @0x52e5e8
+    // `a1` is the D3DEmotePlayer NCB register context (sub_52E504 is
+    // D3DEmotePlayer_ncb_registerMembers, called by D3DEmotePlayer_ncb_register
+    // @0x541d98 + sub_541EFC sharing one member table). Were previously placed
+    // on D3DEmoteModule — class-placement divergence; scalar ints, additive-safe.
+    Variant(TJS_W("MaskModeStencil"), (tjs_int)MaskModeStencil);
+    Variant(TJS_W("MaskModeAlpha"), (tjs_int)MaskModeAlpha);
+    Variant(TJS_W("TimelinePlayFlagParallel"),
+            (tjs_int)TimelinePlayFlagParallel);
+    Variant(TJS_W("TimelinePlayFlagDifference"),
+            (tjs_int)TimelinePlayFlagDifference);
 
     // Properties (binary 54-entry NCB table @ libkrkr2.so sub_52E504)
     NCB_PROPERTY_RO(module, getModule);

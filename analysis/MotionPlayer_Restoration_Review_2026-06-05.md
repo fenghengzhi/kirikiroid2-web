@@ -124,16 +124,18 @@ fresh decompile ctor `0x6CED30`、dtor `0x6CFADC`，逐字段比对 `player_cont
 - dtor：二进制手写有序 teardown（HM4→HM3→...→HM2→HM1 逆序）vs 本地全靠 RAII 成员逆序析构。属「全 std 容器
   复刻源码」下游必然，框架内可接受；`EvalCascadeState`/`PerNodeLayerState` 成员声明序=升序偏移，逆序析构=降序，
   刻意对齐 `Player_HM1_value_destroy`(0x6DD1A0)/`Player_HM3_value_destroy`(0x6DD06C) release 顺序✅。
-- EmoteObject(40B)：本地 +0 是内联 RM，二进制 +0 是 scriptObject（`new(0xE8)` via sub_6A88CC）——本地缺
-  scriptObject 槽（D3DEmotePlayer 链特有，EmotePlayer 24B shell 路径不经此中间层，inert）。+16 vector
-  by-value vs by-ptr 是 variant 内含 refcount 的等价建模。
+- EmoteObject(40B)：✅ **「+0 是 scriptObject、本地缺槽」是误判，已证伪(2026-06-05 后续，亲自反编译 sub_6A88CC)**。
+  `new(0xE8)` via `sub_6A88CC` **就是 ResourceManager ctor 本身**（内含 `sub_6A78F4`=SourceCache intrusive list、
+  `a1+88=new(8*_M_next_bkt(0xA))`=findSource@0x6AAB3C 读的 FNV bucket map「HashMap A」、`new Math.RandomGenerator()`、
+  +176 RB-tree），**不是独立 scriptObject**。二进制 EmoteObject +0 = RM 对象，本地 +0 也是内联 RM → **匹配、忠实，无缺失**。
+  +16 vector by-value vs by-ptr 是 variant 内含 refcount 的等价建模。
 - MotionNode 2632B：deque 元素内部数据契约（按字节读 frame slot），属方法论允许保留的元素 POD 数据格式。
 
 ### Open
 | # | 偏差 | 严重度 |
 |---|------|--------|
-| EmoteObject +0 scriptObject 槽缺失（本地为内联 RM） | 低(inert) |
-| ctor 签名多 parentPlayer + RM native 非 dispatch | 中(架构) |
+| ~~EmoteObject +0 scriptObject 槽缺失~~ **✅ 误判已证伪**：sub_6A88CC=RM ctor，本地内联 RM 已匹配 | ~~低(inert)~~ closed |
+| ctor 签名多 parentPlayer + RM native 非 dispatch（@0x6CED30 单参 dispatch-in，本地多 parentPlayer 链 + native RM）| 中(架构,**禁盲改 reframe P3**：需重做 RM-ownership/parent 链数据流) |
 | ~6 个 port-invented map（_motionsByKey/_timelines 等，二进制无对应；render/timeline live path 依赖） | 中(P3 pimpl 重构，禁盲改) |
 
 ---
@@ -146,9 +148,9 @@ color 消费链 `0x6C7440→0x6C1B70→0x6A7518`、findSource。
 | 点 | 裁决 | 证据 |
 |---|---|---|
 | ① anchor color base 方向 | ✅ | `qword_14D7C50={255.0,128.0}` byte 确证，本地 `isDefaultBlend?128.0:255.0`（PlayerUpdateAnchor.cpp:144-146）正确 |
-| ② blend 源 | 🟡 | 二进制 per-slot `node+536*slot+364`(slot=`node+1392`)，本地仍单值 `interpolatedCache.blendMode`——真实 open 偏差，oracle-inert，注释未提 |
+| ② blend 源 | ✅ **已修复(2026-06-05 后续)** | 二进制 anchor type10@0x6C0528 在 `0x6c0a80/0x6c0aac` 读 `*(node+536*activeSlotIndex+44)`(=active slot 的 blendMode，slot0@node+320/slot1@node+856,+44=ClipSlot::blendMode；slot index `*(node+1392)`@0x6c06d4)。本地原读 node 级缓存 `interpolatedCache.blendMode`，已改为直读 `activeSlot().blendMode`(PlayerUpdateAnchor.cpp:144-152) |
 | ③ per-vertex color（phase-D）| ✅ **平台边界（已下钉证据）** | 消费点 `0x6C7440→0x6C1B70→0x6A7518` 是 4-corner per-pixel **bake into source bitmap**，**非 per-vertex**；vertex builder `0x6C715C` 只 push type-5/20B (x,y)，无 color。单 scalar RGBA 是正当平台边界，本地忠实。基线「论据被证伪」之后本轮**最终下钉到 bake 消费点**，phase-D 边界判定成立（非 findSource、非 per-vertex 论据）|
-| ④ findSource 容器 | 🟡/❌ | 二进制 KiriKiri inline FNV(本轮 byte 确证算法) bucket map + 嵌套 texture hashmap；本地 `unordered_map`+`std::list<Entry>`+`shared_ptr` keyed by (name,blendMode,packedColors)。系统性容器偏差；**FNV 算法已取齐 → HashMap A 容器替换可独立推进** |
+| ④ findSource 容器 | 🟡 **类归属已纠正(2026-06-05 后续)** | ⚠️ 本行原表述把 **ResourceManager::findSource@0x6AAB3C 的 FNV bucket map 误挂到 SourceCache** 头上。亲自反编译 NCB registrar 证实：`SourceCache_ncb_registerMembers@0x6A85A8` 只注册 ctor/loadSource(sub_6A7BA8)/clearCache/bufLayer **无 findSource**；其容器是 intrusive 双向链表(loadSource@0x6A7BA8)，与本地 `std::list<Entry>` **同构、忠实、不需改**。FNV bucket map(0x6AAB3C)仅被 `Motion_ResourceManager_ncb_registerMembers@0x6AB8BC` 注册 → 属 **ResourceManager 类**，产出 ObjSource。已忠实重写 `ResourceManager::findSource`(ResourceManager.cpp:149→重写) 复刻 split→"src"/"blank"→嵌套 dict→ObjSource；唯一残留=第一层容器仍 STL `unordered_map` 而非内联 FNV bucket map(this+88/+96)，phase-D 系统性容器分歧 |
 | ⑤ draw 原语 TJS dispatch | ✅ | 全部经 vtbl+16 FuncCall + UTF-16 method name 派发，vertex builder type-5/20B 忠实 |
 
 ---
@@ -159,12 +161,12 @@ color 消费链 `0x6C7440→0x6C1B70→0x6A7518`、findSource。
 |---|------|------|--------|------|
 | 1 | rewindRootAndNodes 反向 root 递减循环缺失（@0x6B9E84）+ 证伪注释 PlayerFrameProgress.cpp:1022 | ②① | **高** | **✅ 已实装**（反向循环体经 auditor 逐行确认 1:1，见下 §七）|
 | 1b | seekRootContentStreamLike 入口每-tick 重算 `_rootCurTime`/`_rootNextTime`，违背二进制 +576/+584 跨调用持久持有 | ② | 中 | **✅ 已修复**（删入口重算；seed 责任归 reseek tier 0x6B86C8，见下 §七）|
-| 1c | firstFrame `_queuing` 分支（~1950-1968）未调 reseekTimelineCursors，二进制 progress_inner firstFrame 分支会 → 潜在 firstFrame root seed 缺口（先前被 1b 入口重算掩盖）| ② | 中 | open（#1b 修复时带外发现，inert）|
-| 2 | initNodeTimeline tail per-node action push 缺失（loop-wrap onAction） | ② | 中 | open |
-| 3 | blend 源单值 vs per-slot `node+536*slot+364` | ⑥ | 中 | open |
-| 4 | findSource 容器替换（FNV 已取齐，可推进）/ HashMap A | ⑤ | 中 | open |
+| 1c | firstFrame `_queuing` 分支（~1950-1968）未调 reseekTimelineCursors，二进制 progress_inner firstFrame 分支会 → 潜在 firstFrame root seed 缺口（先前被 1b 入口重算掩盖）| ② | 中 | **✅ 已修复(2026-06-05 后续)**（_queuing 分支改调完整 `reseekTimelineCursors`，含 layer/root/var-track/绝对 node re-seed；progress_inner firstFrame @0x6C10E0/0x6C131C 证据；构建+差分 PASS）|
+| 2 | initNodeTimeline tail per-node action push 缺失（loop-wrap onAction） | ② | 中 | **✅ 已实装(2026-06-05 后续)**（tail @0x6B674C action push 复刻到 PlayerUpdateLayerEval.cpp，接 reseek/dirty-rebuild 两调用点；构建+差分 PASS）|
+| 3 | blend 源单值 vs active-slot `node+536*activeSlotIndex+44` | ⑥ | 中 | **✅ 已修复(2026-06-05 后续)**（PlayerUpdateAnchor.cpp:144-152 改读 `activeSlot().blendMode`）|
+| 4 | ~~findSource 容器替换（SourceCache）~~ **类归属误判已纠正** → 真目标=ResourceManager::findSource@0x6AAB3C(FNV map→ObjSource)，已忠实重写函数体；SourceCache list 同构忠实不动；残留=RM 第一层容器 STL→内联 FNV bucket map(phase-D) | ⑤ | 中→低 | 函数体✅；容器选型 open(phase-D) |
 | 5 | `_type4..8ControllerAnimators`（LegacyVariableAnimatorState）死路径残骸 + 误导注释 | ① | 低 | **✅ 已移除**（反编译 0x67D01C/0x671228 证伪：二进制无独立 Player animator bucket；删 5 deque+map+6 访问器+死 loop+legacy_variable_state.h；差分逐位 PASS，见下 §七）|
-| 6 | EmoteObject +0 scriptObject 槽 / ctor 签名 / D3DEmotePlayer 4 常量类归属 | ④ | 低(inert) | open |
+| 6 | EmoteObject +0 槽 / ctor 签名 / D3DEmotePlayer 4 常量类归属 | ④ | 低(inert) | **部分处理(2026-06-05 后续)**：(A) D3DEmotePlayer 4 常量已移到 D3DEmotePlayer 类(main.cpp，0x52E504 证据)✅；(B) EmoteObject「scriptObject 槽缺失」**误判已证伪**(sub_6A88CC=RM ctor，本地匹配)✅；(C) ctor 签名=架构级 reframe P3(禁盲改)，未改 |
 
 **需就地纠正的被证伪注释（CLAUDE.md 硬规则）**：
 - ~~PlayerFrameProgress.cpp:1022「无反向 root scan」~~ **✅ 已纠正**（#1 实装时引用 0x6B9A3C/0x6B9E84）

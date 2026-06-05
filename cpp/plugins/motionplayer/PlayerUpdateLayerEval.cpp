@@ -288,7 +288,8 @@ namespace motion::internal {
             detail::MotionNode &node,
             const std::shared_ptr<PSB::PSBList> &frames,
             double currentTime,
-            const NodeTransformOrder &transformOrder) {
+            const NodeTransformOrder &transformOrder,
+            std::vector<detail::MotionEvent> *pendingEvents = nullptr) {
             if(!frames || frames->size() == 0) {
                 resetClipSlot(node.slots[0]);
                 resetClipSlot(node.slots[1]);
@@ -307,6 +308,35 @@ namespace motion::internal {
                 node, frames, activeIndex + 1, transformOrder, node.slots[1]);
             node.flags |= 0x01;
             node.hasTimelineEvalRatio = false;
+
+            // 砖5/洞2 (initNodeTimeline tail): Aligned with libkrkr2.so
+            // Player_initNodeTimeline tail @0x6B674C. After parsing slot[0]
+            // (node+320) and slot[1], the binary fires a per-node onAction when the
+            // seed landed EXACTLY on slot[0]'s frame AND that frame carries an
+            // action:
+            //   if ( v8 == *(double*)(node+328)            // slot[0].time
+            //        && (*(_BYTE*)(node+342) & 4) != 0 )   // slot[0].mask & 0x40000
+            //     Player_pushActionEvent_guess(player, &node_label, node+608);
+            // where v8 = frameSelectionTimeLike_0x6B7E44(node) (the seed target,
+            // node+8 ? *(node+8)+40 : player+456), node+328 = slot[0]+8 = time
+            // (= ClipSlot.clipStartTime), the (node+342 & 4) byte = slot[0].mask
+            // & 0x40000 (parseFrame @0x6928EC sets slot+288='act' ONLY under that
+            // bit), and node+608 = slot[0]+288 = the action variant. The pushed
+            // event is {type=0(ACTION), param1=node label, param2=action} (same
+            // contract as Player_pushActionEvent_guess @0x6B63C0 -> onAction). The
+            // 0x40000 mask gate is mirrored here by !action.empty(): slot.action is
+            // populated exactly when the active frame carries one, matching the
+            // existing per-node fireNodeAction gate used by the advance/rewind
+            // inline seeks (advanceNodeFrameSelectionLike_0x6926B4). Fires for
+            // slot[0] (node.activeSlotIndex == 0 after the seed above).
+            if(pendingEvents) {
+                const detail::MotionNode::ClipSlot &slot0 = node.slots[0];
+                if(selectionTime == slot0.clipStartTime &&
+                   !slot0.action.empty()) {
+                    pendingEvents->push_back(
+                        {0, node.layerName, slot0.action, false});
+                }
+            }
             return true;
         }
 
@@ -418,6 +448,13 @@ namespace motion::internal {
         const double selectionTime =
             frameSelectionTimeLike_0x6B7E44(node, currentTime);
         if(node.activeSlot().frameIndex < 0 && node.otherSlot().frameIndex < 0) {
+            // No pendingEvents here: this is a port-local lazy first-seed safety
+            // net for the inline advance/rewind seeks (0x6B73DC / 0x6BA1CC), which
+            // do their OWN inline parse and have their OWN action push in the seek
+            // loop (fireNodeAction below). The binary's inline seeks never invoke
+            // Player_initNodeTimeline (0x6B64AC) — that is reseekTimelineCursors'
+            // node re-seed (0x6B91B0) — so its tail onAction must NOT fire here, or
+            // it would double-push with the seek loop's own action.
             initializeNodeTimelineSlotsLike_0x6B64AC(
                 node, frames, currentTime, transformOrder);
         }
@@ -740,8 +777,12 @@ namespace motion {
             detail::MotionNode &node = nodes[i];
             const auto frames = psbDictionaryList(node.psbNode, "frameList");
             const auto transformOrder = readNodeTransformOrder(node.psbNode);
+            // 砖5/洞2: Player_initNodeTimeline (0x6B64AC) fires a per-node onAction
+            // in its tail @0x6B674C when the re-seed lands exactly on an action
+            // frame; pass _pendingEvents so reseekTimelineCursors' node re-seed
+            // (the binary's @0x6B91B0 loop) reproduces those onAction pushes.
             initializeNodeTimelineSlotsLike_0x6B64AC(
-                node, frames, targetTime, transformOrder);
+                node, frames, targetTime, transformOrder, &_pendingEvents);
         }
     }
 
@@ -777,8 +818,11 @@ namespace motion {
             const auto frames = psbDictionaryList(node.psbNode, "frameList");
             const NodeTransformOrder transformOrder =
                 readNodeTransformOrder(node.psbNode);
+            // 砖5/洞2: the dirty-node rebuild is a direct Player_initNodeTimeline
+            // (0x6B64AC) call, so its tail @0x6B674C onAction push fires here too;
+            // pass _pendingEvents to reproduce it.
             initializeNodeTimelineSlotsLike_0x6B64AC(
-                node, frames, _clampedEvalTime, transformOrder);
+                node, frames, _clampedEvalTime, transformOrder, &_pendingEvents);
         }
     }
 

@@ -1950,21 +1950,27 @@ namespace internal {
         if(_queuing) {
             _allplaying = !_playingTimelineLabels.empty();
             _syncActive = _syncWaiting && _allplaying;
-            // M1/P7 step-1 fix: the firstFrame gate freezes cursor ADVANCE, but
-            // the binary still seeks the node slots on this path (progress_inner
-            // 0x6C106C firstFrame branch seeds +456 then calls
-            // reseekTimelineCursors 0x6B86C8 — which seeks — before returning).
-            // The collapsed model seeked inline in updateLayers every frame
-            // regardless of _queuing, so without this the frame-0 slots stay
-            // unseeded (active=false, scale=1.0 defaults). Seek at the held
-            // _clampedEvalTime so updateLayers reads populated slots.
-            // reseekTimelineCursors (0x6B86C8) re-seeds the var-track deque
-            // (0x6B8F30 block) BEFORE the per-node walk, ungated on the node
-            // deque. Mirror that here (the firstFrame seed = 0x6C10E0/0x6C131C).
-            reseedVariableTracksLike_0x6B86C8(_clampedEvalTime); // 0x6B8F30 var-track reseed
-            if(!_nodes.empty()) {
-                progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
-            }
+            // 缺口#1c: the firstFrame gate freezes cursor ADVANCE, but the binary
+            // progress_inner @0x6C106C firstFrame branch seeds +456 then calls the
+            // FULL Player_reseekTimelineCursors (0x6B86C8) before returning — at
+            // BOTH firstFrame seeds: the activeTimeline path (0x6C10E0, `return
+            // reseekTimelineCursors(player)`) AND the queuing path (0x6C131C, the
+            // reverseSeekFlag(+609)-clear branch, `reseekTimelineCursors(player)`).
+            // Previously this branch ran ONLY the var-track sub-piece
+            // (reseedVariableTracksLike_0x6B86C8 = the 0x6B8F30 block) + the inline
+            // node seek (progressSeekNodeSlotsLike) — it OMITTED reseek's LAYER
+            // coarse scan (0x6B8770 -> +916/+920/+928 + align/sync/action), ROOT
+            // single-step (0x6B8C1C -> +568/+616/+576/+584), and the ABSOLUTE node
+            // re-seed (0x6B91B0 -> Player_initNodeTimeline per node). That left the
+            // firstFrame root seed missing (a gap formerly masked by an entry-side
+            // per-tick recompute, removed in commit ea808b8). Call the full reseek
+            // instead so the firstFrame seed positions every stream cursor exactly
+            // as the binary does. reseekTimelineCursors' STEP 4
+            // (reseekNodeTimelineSlotsLike_0x6B91B0) does the absolute node re-seed,
+            // so the separate progressSeekNodeSlotsLike call is now subsumed and
+            // dropped (matching the binary, which RETURNS right after the reseek on
+            // the activeTimeline firstFrame path — 0x6C10E0).
+            reseekTimelineCursors(_clampedEvalTime); // 0x6C10E0 / 0x6C131C -> 0x6B86C8
             return;
         }
 

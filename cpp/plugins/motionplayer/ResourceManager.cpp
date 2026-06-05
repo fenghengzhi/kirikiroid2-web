@@ -7,10 +7,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
 #include "RuntimeSupport.h"
+#include "SourceCache.h"
+#include "ncbind.hpp"
 
 #define LOGGER spdlog::get("plugin")
 
@@ -21,6 +24,33 @@ namespace {
                            return static_cast<char>(std::tolower(ch));
                        });
         return value;
+    }
+
+    // Aligned with libkrkr2.so sub_697D34 at 0x697D34: the binary tokenises a
+    // ttstr by a single-char separator into a vector of ttstr pieces (each piece
+    // empty-string for an empty span). The "src"/"blank" prefix gate and the
+    // group/icon keys in findSource @0x6AAB3C are read out of this vector. The
+    // separator ttstr (L"/" / L":") is created via ttstr_createFromWide and the
+    // pieces are produced by repeated sub_A0CBEC (find) + sub_A0CA58 (substr).
+    std::vector<ttstr> splitTtstr(const ttstr &input, tjs_char separator) {
+        std::vector<ttstr> pieces;
+        const tjs_char *p = input.c_str();
+        if(!p) {
+            // Mirrors sub_697D34's terminal push of the whole (empty) remainder.
+            pieces.emplace_back();
+            return pieces;
+        }
+        const tjs_char *start = p;
+        for(;; ++p) {
+            if(*p == separator || *p == 0) {
+                pieces.emplace_back(start, static_cast<size_t>(p - start));
+                if(*p == 0) {
+                    break;
+                }
+                start = p + 1;
+            }
+        }
+        return pieces;
     }
 }
 
@@ -146,8 +176,115 @@ tTJSVariant motion::ResourceManager::findLoaded(ttstr path) const {
     return it != _state->loadedModules.end() ? it->second : tTJSVariant{};
 }
 
+namespace {
+    // PropGet helper mirroring the binary PSB dict member access sub_598C58
+    // @0x598C58 (member-by-key) on a TJS dictionary `tTJSVariant`. Returns false
+    // when the holder is not an object or the key is absent — equivalent to the
+    // sub_5995D8 @0x5995D8 hasKey gate (the binary aborts the chain on a miss).
+    bool psbGet(const tTJSVariant &holder, const tjs_char *key,
+                tTJSVariant &out) {
+        if(holder.Type() != tvtObject) {
+            return false;
+        }
+        iTJSDispatch2 *obj = holder.AsObjectNoAddRef();
+        if(!obj) {
+            return false;
+        }
+        tTJSVariant v;
+        if(TJS_FAILED(obj->PropGet(0, key, nullptr, &v, obj)) ||
+           v.Type() == tvtVoid) {
+            return false;
+        }
+        out = v;
+        return true;
+    }
+}
+
+// Aligned with libkrkr2.so ResourceManager::findSource (sub_6AAB3C) at 0x6AAB3C.
+// The binary:
+//   1. split name by "/" (sub_697D34); empty -> result void (LABEL_11).
+//   2. if pieces[0] != "src" (sub_9B1ED0): if "blank" build a blank-Layer dict
+//      (width/height/originX/originY from pieces[1] split by ":" + blank=1),
+//      else result void.
+//   3. for "src": HashMap A (this+88 buckets / this+96 count) lookup keyed by the
+//      ORIGINAL name (FNV hash cached in ttstr+68 via sub_6EB8F4). The port's
+//      _state->loadedModules is the same module-dict registry, keyed by load
+//      path; findLoaded(name) is the container-divergent equivalent lookup.
+//   4. navigate module["source"][group]["icon"][icon] with per-level hasKey
+//      gates (sub_598C58 / sub_5995D8); miss at any level -> result void.
+//   5. on hit: operator new(0x18) ObjSource facade holding the icon sub-dict
+//      (qword[0]=dict variant, [1]=?, [2]=0), wrapped as a TJS object via the
+//      NCB class object (sub_6EC124). Port: new ObjSource(iconEntry) +
+//      ncbInstanceAdaptor<ObjSource>::CreateAdaptor.
 tTJSVariant motion::ResourceManager::findSource(ttstr path) const {
-    return findLoaded(path);
+    // 1. split name by "/" (sub_697D34 @0x697D34).
+    const std::vector<ttstr> pieces = splitTtstr(path, TJS_W('/'));
+    if(pieces.empty() || pieces[0].IsEmpty()) {
+        return {}; // LABEL_11: *(a4+16)=0 -> void
+    }
+
+    // 2. prefix gate: "src" (sub_9B1ED0 @0x9B1ED0 == 0 means equal).
+    if(pieces[0] != ttstr(TJS_W("src"))) {
+        if(pieces[0] != ttstr(TJS_W("blank"))) {
+            return {}; // LABEL_11
+        }
+        // blank branch (@0x6aac74): split pieces[1] by ":" into
+        // width/height/originX/originY ints, build a blank-Layer dict + blank=1.
+        const ttstr blankSpec = pieces.size() > 1 ? pieces[1] : ttstr();
+        const std::vector<ttstr> dims = splitTtstr(blankSpec, TJS_W(':'));
+        const auto dimInt = [&dims](std::size_t i) -> tjs_int {
+            if(i >= dims.size() || dims[i].IsEmpty()) {
+                return 0;
+            }
+            return static_cast<tjs_int>(tTJSVariant(dims[i]));
+        };
+        return detail::makeDictionary({
+            { "width", tTJSVariant(dimInt(0)) },    // L"width"  @0x6aad0c
+            { "height", tTJSVariant(dimInt(1)) },   // L"height" @0x6aad54
+            { "originX", tTJSVariant(dimInt(2)) },  // L"originX"@0x6aad9c
+            { "originY", tTJSVariant(dimInt(3)) },  // L"originY"@0x6aade4
+            { "blank", tTJSVariant(static_cast<tjs_int>(1)) }, // L"blank" @0x6aae40
+        });
+    }
+
+    // 3. HashMap A lookup keyed by the original name (sub_6EB8F4 @0x6EB8F4).
+    // Port equivalent: the loaded-module registry by path.
+    const tTJSVariant module = findLoaded(path);
+    if(module.Type() != tvtObject) {
+        return {}; // !v27 || !*v27 -> LABEL_71 result void
+    }
+
+    // 4. module["source"][group]["icon"][icon] with per-level hasKey gates.
+    const ttstr group = pieces.size() > 1 ? pieces[1] : ttstr();
+    const ttstr icon = pieces.size() > 2 ? pieces[2] : ttstr();
+
+    tTJSVariant sourceDict;
+    if(!psbGet(module, TJS_W("source"), sourceDict)) {
+        return {};
+    }
+    tTJSVariant groupDict;
+    if(!psbGet(sourceDict, group.c_str(), groupDict)) { // sub_5995D8 gate
+        return {}; // LABEL_64 -> result void
+    }
+    tTJSVariant iconHolder;
+    if(!psbGet(groupDict, TJS_W("icon"), iconHolder)) {
+        return {};
+    }
+    tTJSVariant iconEntry;
+    if(!psbGet(iconHolder, icon.c_str(), iconEntry)) { // sub_5995D8 gate
+        return {};
+    }
+
+    // 5. construct the ObjSource dict facade (operator new(0x18) + sub_6EC124).
+    using ObjSourceAdaptor = ncbInstanceAdaptor<motion::ObjSource>;
+    motion::ObjSource *src = new motion::ObjSource(iconEntry);
+    if(iTJSDispatch2 *dispatch = ObjSourceAdaptor::CreateAdaptor(src)) {
+        tTJSVariant result(dispatch, dispatch);
+        dispatch->Release();
+        return result;
+    }
+    delete src;
+    return {};
 }
 
 tjs_int motion::ResourceManager::requireLayerId() {

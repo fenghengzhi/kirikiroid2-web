@@ -1,6 +1,6 @@
 ---
 name: m1-framestep-rootstream-verdict
-description: M1 帧步进/root-stream 子系统 fresh-decompile 复核(2026-06-05);LIVE split vs binary monolith;3 open gap R-1/R-2/R-3;R-1 注释证伪需纠正
+description: M1 帧步进/root-stream 子系统 fresh-decompile 复核(2026-06-05);LIVE split vs binary monolith;R-1 已 CLOSED(反向 root 段 1:1,独立复核确认);剩 R-2/R-3/R-4
 metadata:
   type: project
 ---
@@ -16,8 +16,8 @@ metadata:
 
 **byte-verified ✅**: action push arg2=slot+0x120(disasm 0x6B74D8 `add x2,x22,#0x120`); rev var merge slot[0]then slot[1](0x6BA010=+48/0x6BA024=+104) vs fwd merge slot[0]两次(0x6B7178/0x6B71A0 都+48); param1=*(node+0)=label(0x6B3DF4 seed); seek target *(node+8)+40==parameterEntry->value(D-A1链).
 
-**3 open gap(真实缺失,非平台边界):**
-- R-1(🟡中): seekRootContentStreamLike_0x6B6ADC 只有 forward 循环,缺 rewind root 反向段. binary 0x6B9E84..0x6B9FC4 确是 `--+568` 反向 do-while. **注释 PlayerFrameProgress.cpp:1022 断言"无反向 root scan"与 fresh decompile 直接矛盾,需就地纠正**(证伪即纠正). logo priority<2帧→inert.
+**R-1 CLOSED ✅(2026-06-05 独立 fresh-decompile 复核确认,不信任前 session 直接重验):** seekRootContentStreamLike_0x6B6ADC 现已双向(PlayerFrameProgress.cpp:1105 fwd while + 1128 rev while). 反向段 1128-1135 与 binary @0x6B9E84..0x6B9FC4 四个镜像陷阱维度全部 1:1: (a)索引方向=反向单次取值(content+time 同取 priority[cursor],无 cursor+1 二次取值)vs 前向双次取值,本地正确捕捉非对称; (b)时间赋值=反向 nextTime←旧curTime(0x6B9F7C)/curTime←item.time(0x6B9F94),本地 1132/1134 镜像不颠倒; (c)计算顺序 --cursor→content→nextTime=cur→curTime 一致; (d)严格 GT(0x6B9FC4 `curTime>target` do-while)vs 前向 GE(`target>=nextTime`),本地 1128 用 `>` 正确. 残留2处可接受偏离: 本地多 `&&cursor>0` underflow 守卫(binary 无,靠 priority[0].time<=target 契约,对 in-bounds 透明) + 前向/反向合并入同一函数(LIVE merge vs binary 双函数 advanceRootAndNodes/rewindRootAndNodes,功能自选向正确). 注释已就地纠正(PlayerFrameProgress.cpp:1012-1015 标 CORRECTION).
+**2 open gap(真实缺失,非平台边界):**
 - R-2(🟡低): reseekNodeTimelineSlots 用 i<nodes.size(), binary 是 m<dequeSize-1(off-by-one,本地多遍历末节点). loop-wrap 才触发,logo 不命中.
 - R-3(🟡低): reseek TAIL pruneHM3 0x6B9234 + sub_6B9650 aux-list 0x6B9248 DEFERRED(无 live consumer,但按 CLAUDE.md 仍应复原 → 记为未做,非平台边界).
 

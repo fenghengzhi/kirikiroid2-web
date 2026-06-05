@@ -120,11 +120,14 @@ namespace motion {
     // _key/_src/_blendMode/_color fields were a port invention (MASTER's
     // "ObjSource missing 6 members" was inverted — it has no struct fields).
     //
-    // Still constructed NOWHERE in the port: the binary RM findSource @0x6AAB3C
-    // builds it from dict["source"][...]; the port findSource returns the loaded
-    // module instead. Wiring findSource->ObjSource is part of the source-
-    // resolution topology parked behind the phase-D texture/render platform
-    // boundary, so this class is shape-faithful but currently dead.
+    // Now constructed by ResourceManager::findSource (ResourceManager.cpp,
+    // aligned with the binary RM findSource @0x6AAB3C): the "src" branch
+    // navigates module["source"][group]["icon"][icon] and wraps the resulting
+    // sub-dict in this facade via ncbInstanceAdaptor<ObjSource>::CreateAdaptor
+    // (mirrors operator new(0x18) + sub_6EC124). Reachable only through the TJS
+    // NCB binding Motion.ResourceManager.findSource — there is no internal C++
+    // caller, and the port unit tests exercise Player::findSource (a separate
+    // function), so this path is oracle-inert under the current fixtures.
     class ObjSource {
     public:
         ObjSource() = default;
