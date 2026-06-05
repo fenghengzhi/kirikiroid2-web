@@ -215,9 +215,10 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 - 删 Player 3 个死字段 `_layerIdsByName`/`_layerNamesById`/`_nextLayerId`（全 cpp/+tests/ 交叉核实仅 decl/clear 无读写）。
 - 验证：class-layout-auditor 6/6 忠实 0 真实 bug；web debug 248/248、wasmtime guest 链接、logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS；native catch2 同 4 例既有失败（无新回归）。
 
-**layer-id 仍 defer 的子项**（有证据，但有 diff 风险/需更大改动，下一轮）：
+**layer-id 仍 defer 的子项**：
 - (a) ctor 预占 id 0（binary 0x6A88CC 末尾 new(0x28) key=0）—— 当前 inert（counter 从 1 起）。
-- (b) **clearCache/unloadAll 不应清 layer-id set/counter**（binary clearCache@0x6A8438 只清 +72 链表，不碰 set）—— auditor 标为**既有旧偏差**（非本轮引入），建议下轮优先小改修掉。
+- (b) ✅ **已修(2026-06-05 续)**：clearCache/unloadAll 的 layer-id reset。亲自反编译确认：`clearCache@0x6A8438` **只**清 +72 layer-list（release Layer image via vtable+112 + free 节点 + 重置 +72/+80/+60），**不碰** set(+168)/counter(+216)/HashMap A(+88) → 本地 clearCache 删去 `usedLayerIds.clear()`+`nextLayerId=1`；`unloadAll@0x6A8BBC` **清** set（`_Rb_tree::_M_erase(a1+168)` @0x6a8c04）但**不 reset counter**（+216 全函数未写）→ 本地 unloadAll 保留 `usedLayerIds.clear()`、删 `nextLayerId=1`。构建 web 248 + wasmtime guest + logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS。
+  - 衍生 (b')（**未做**，更大独立偏差）：binary clearCache 也不碰 HashMap A/lastLoaded，但本地 clearCache 仍清 `loadedModules`/`lastLoaded`（且 binary clearCache 实清的 +72 layer-list 本地由独立 SourceCache 类承载）——属类拆分 + 模块缓存语义，diff 风险更高，单列。
 - (c) render 侧 `Player::requireLayerId` reuse-by-name → allocate-fresh（binary 0x6C4E28 零参分配新 id + item+20 latch，不复用）—— diff 热路径风险。
 - (d) 调用方 native→dispatch FuncCall(L"requireLayerId"/L"releaseLayerId") 路由（维度③，3 站点全经 +992 dispatch）。
 

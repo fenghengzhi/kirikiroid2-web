@@ -161,8 +161,16 @@ void motion::ResourceManager::clearCache() const {
     _state->loadedModules.clear();
     _state->lastLoadedPath.Clear();
     _state->lastLoadedModule.Clear();
-    _state->usedLayerIds.clear();
-    _state->nextLayerId = 1;
+    // P3-B (2026-06-05): clearCache@0x6A8438 touches ONLY the +72 layer-list
+    //   (releases each Layer image via vtable+112, frees nodes, resets +72/+80
+    //   sentinels and +60=0). It does NOT clear the layer-id std::set (+168) or
+    //   the next-id counter (+216) — fresh decompile confirmed. So the layer-id
+    //   namespace persists across clearCache (ids stay monotonic; only
+    //   unloadAll/releaseLayerId free them). Removed the non-faithful
+    //   usedLayerIds.clear()/nextLayerId reset.
+    //   (NOTE: binary clearCache also does NOT touch HashMap A / lastLoaded — the
+    //    loadedModules/lastLoaded clears above are a separate, larger pre-existing
+    //    deviation tracked apart from this layer-id fix.)
 }
 
 tTJSVariant motion::ResourceManager::getLastLoadedModule() const {
@@ -343,8 +351,12 @@ void motion::ResourceManager::unloadAll() const {
     _state->loadedModules.clear();
     _state->lastLoadedPath.Clear();
     _state->lastLoadedModule.Clear();
+    // P3-B (2026-06-05): unloadAll@0x6A8BBC DOES clear the layer-id set
+    //   (`std::_Rb_tree<unsigned int>::_M_erase(a1+168, ...)` @0x6a8c04) — keep
+    //   usedLayerIds.clear(). But it does NOT reset the next-id counter (+216 is
+    //   never written in the function) — removed the non-faithful nextLayerId
+    //   reset so the counter stays monotonic across unloadAll, matching binary.
     _state->usedLayerIds.clear();
-    _state->nextLayerId = 1;
 }
 
 bool motion::ResourceManager::isExistMotion(ttstr name) const {
