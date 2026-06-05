@@ -173,7 +173,7 @@ jobs:
           rm -rf tests/differential/artifacts/motion_playback_wasmtime_traces
           rm -rf tests/differential/artifacts/motion_playback_render_stages_wasmtime
           mkdir -p tests/differential/artifacts/motion_playback_wasmtime_traces
-          for case in yuzulogo m2logo; do
+          for case in yuzulogo m2logo title_bg; do
             xp3="reference/xp3/logo_test_oracle_${case}.xp3"
             python3 tests/differential/python/run_motion_playback_wasmtime.py \
               --wasm out/wasmtime/debug/krkr2_wasmtime_guest.wasm \
@@ -583,7 +583,7 @@ jobs:
 
             set +e
             {
-              for case in yuzulogo m2logo; do
+              for case in yuzulogo m2logo title_bg; do
                 xp3="reference/xp3/logo_test_oracle_${case}.xp3"
                 echo "--- recording ${case} from ${xp3} ---"
                 adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
@@ -668,7 +668,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf tests/differential/artifacts/motion_playback_render_stages_oracle
-          for case in yuzulogo m2logo; do
+          for case in yuzulogo m2logo title_bg; do
             xp3="reference/xp3/logo_test_oracle_${case}.xp3"
             adb -s "${ANDROID_SERIAL}" shell "am force-stop org.github.krkr2" || true
             adb -s "${ANDROID_SERIAL}" forward --remove tcp:5039 || true

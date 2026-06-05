@@ -67,7 +67,11 @@ COMPARE_FIELDS_STR: tuple[str, ...] = ()
 # Order that logo_test.xp3's startup.tjs plays motions. We partition the
 # Frida trace by player pointer; the first segment is yuzulogo, second
 # is m2logo. Adapter-level contract: spec ids must be one of these.
-SEGMENT_ORDER: tuple[str, ...] = ("yuzulogo", "m2logo")
+# title_bg is recorded standalone from its own single-motion oracle xp3
+# (logo_test_oracle_title_bg.xp3), one segment per run, so its position in
+# this tuple only matters as a membership whitelist — segment_order_for_specs
+# filters to the single spec selected by --case.
+SEGMENT_ORDER: tuple[str, ...] = ("yuzulogo", "m2logo", "title_bg")
 TRACE_FLATTEN_PROJECTION = "trace_flatten-semantic-v1"
 TRACE_FLATTEN_SAMPLE_POINT = "progressCompat.phase3-end.pre-cleanup"
 TRACE_FLATTEN_ABS_FLOAT_LIMIT = 1_000_000.0
