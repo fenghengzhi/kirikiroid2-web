@@ -370,7 +370,7 @@ namespace motion {
         _evalResultListIndex.clear();
 
         if(snapshot) {
-            activateMotion(*this, snapshot, nativeRM());
+            activateMotion(*this, snapshot);
             syncVariableKeysFromActiveMotion();
 
             // Aligned with libkrkr2.so EmoteObject_init @0x67DBAC: AFTER
@@ -691,7 +691,7 @@ namespace motion {
 
         if(_project.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
-                activateMotion(*this, snapshot, nativeRM());
+                activateMotion(*this, snapshot);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -700,7 +700,7 @@ namespace motion {
         if(motionKeyLooksLikeStorage) {
             if(const auto snapshot =
                    resolveMotion(*this, _motionKey, nativeRM())) {
-                activateMotion(*this, snapshot, nativeRM());
+                activateMotion(*this, snapshot);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -709,7 +709,7 @@ namespace motion {
         if(const auto loaded = nativeRM()->getLastLoadedModule();
            loaded.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
-                activateMotion(*this, snapshot, nativeRM());
+                activateMotion(*this, snapshot);
                 syncVariableKeysFromActiveMotion();
                 return true;
             }
@@ -721,7 +721,7 @@ namespace motion {
 
         if(const auto snapshot =
                resolveMotion(*this, _motionKey, nativeRM())) {
-            activateMotion(*this, snapshot, nativeRM());
+            activateMotion(*this, snapshot);
             syncVariableKeysFromActiveMotion();
             return true;
         }

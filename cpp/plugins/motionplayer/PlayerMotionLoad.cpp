@@ -216,8 +216,10 @@ namespace motion {
         detail::ensureRootNodeLike_0x6CED30(*this);
         for(size_t i = 1; i < _nodes.size(); ++i) {
             auto &node = _nodes[i];
-            nativeRM()->releaseLayerId(node.layerId1);
-            nativeRM()->releaseLayerId(node.layerId2);
+            // P3-B (d): release via Player+992 dispatch FuncCall (binary
+            //   resetAndReleaseNodes@0x6B56F8), not a native call.
+            dispatchReleaseLayerId(node.layerId1);
+            dispatchReleaseLayerId(node.layerId2);
         }
         detail::resetNodeTreeKeepRootLike_0x6B56F8(*this);
     }
@@ -284,7 +286,7 @@ namespace motion {
         }
 
         detail::buildNodeTree(
-            *this, *_activeMotion, clipLabel, nativeRM(),
+            *this, *_activeMotion, clipLabel,
             _preview);  // binary buildNodeTree (0x6B43A4) gates on +1092 (preview)
 
         if(!_nodes.empty()) {

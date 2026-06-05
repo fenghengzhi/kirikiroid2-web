@@ -206,19 +206,19 @@ namespace internal {
 
         inline std::shared_ptr<detail::MotionSnapshot>
         activateMotion(Player &player,
-                       const std::shared_ptr<detail::MotionSnapshot> &snapshot,
-                       ResourceManager *resourceManager = nullptr) {
+                       const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
             player._activeMotion = snapshot;
             player._timelines.clear();
             // Reset persistent node tree so it gets rebuilt for new motion
             // by the subsequent eager Player_buildNodeTree call (no gate).
             // Mirrors Player_resetAndReleaseNodes (0x6B56F8) shape: keep the
             // constructor-created root node and drop runtime children.
-            if(resourceManager) {
-                for(size_t i = 1; i < player._nodes.size(); ++i) {
-                    resourceManager->releaseLayerId(player._nodes[i].layerId1);
-                    resourceManager->releaseLayerId(player._nodes[i].layerId2);
-                }
+            // P3-B (d): release layer ids via the Player+992 dispatch FuncCall
+            //   (resetAndReleaseNodes@0x6B56F8), not a native call — so this no
+            //   longer needs a native ResourceManager* parameter.
+            for(size_t i = 1; i < player._nodes.size(); ++i) {
+                player.dispatchReleaseLayerId(player._nodes[i].layerId1);
+                player.dispatchReleaseLayerId(player._nodes[i].layerId2);
             }
             detail::resetNodeTreeKeepRootLike_0x6B56F8(player);
             player._parameterEntries.clear();

@@ -24,11 +24,13 @@ namespace motion::detail {
     // its parent node index, with top-level layers using parentIndex=0.
     // A8: nodes / nodeLabelMap on Player; ownerPlayer parameter dropped (it
     // IS the player).
+    // P3-B (d): no longer takes a native ResourceManager* — layer-id allocation
+    //   now routes through the Player+992 RM dispatch FuncCall (see Player.h
+    //   dispatchRequireLayerId), matching binary buildNodeTree_recursive@0x6B4A6C.
     void buildNodeTree(
         motion::Player &player,
         const MotionSnapshot &snapshot,
         const std::string &clipLabel,
-        motion::ResourceManager *resourceManager = nullptr,
         int parentPreview = 0);
 
 } // namespace motion::detail

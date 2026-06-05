@@ -48,7 +48,6 @@ namespace motion {
         void buildNodeTree(motion::Player &player,
                            const MotionSnapshot &snapshot,
                            const std::string &clipLabel,
-                           motion::ResourceManager *resourceManager,
                            int parentPreview);
     }
 
@@ -99,8 +98,7 @@ namespace motion {
                     const std::shared_ptr<detail::MotionSnapshot> &);
         std::shared_ptr<detail::MotionSnapshot>
         activateMotion(Player &,
-                       const std::shared_ptr<detail::MotionSnapshot> &,
-                       ResourceManager *);
+                       const std::shared_ptr<detail::MotionSnapshot> &);
         std::shared_ptr<detail::MotionSnapshot>
         resolveMotion(Player &, const ttstr &, const ResourceManager *);
         std::vector<ttstr> buildSourceCandidates(const Player &, const ttstr &);
@@ -782,7 +780,6 @@ namespace motion {
         friend void detail::buildNodeTree(motion::Player &player,
                                           const detail::MotionSnapshot &snapshot,
                                           const std::string &clipLabel,
-                                          motion::ResourceManager *resourceManager,
                                           int parentPreview);
         friend void detail::ensureRootNodeLike_0x6CED30(motion::Player &);
         friend void detail::resetNodeTreeKeepRootLike_0x6B56F8(motion::Player &);
@@ -1063,6 +1060,20 @@ namespace motion {
         //   refcount, created at the RM owner EmoteObject). Returns nullptr if the
         //   variant does not hold an NCB ResourceManager dispatch.
         ResourceManager *nativeRM() const;
+
+        // P3-B (d) (2026-06-05): layer-id allocation/release goes through the
+        //   Player+992 RM dispatch via TJS FuncCall, NOT a native call. Binary
+        //   buildNodeTree@0x6B4A6C / emitRenderItem@0x6C4E28 /
+        //   RenderMotionFrame@0x6DE738 all call
+        //   `RM_dispatch->FuncCall(0, L"requireLayerId", hint, &result, 0, NULL)`
+        //   (numparams=0) and resetAndReleaseNodes@0x6B56F8 calls
+        //   `FuncCall(0, L"releaseLayerId", hint, NULL, 1, {id})`. These wrap the
+        //   same native ResourceManager::requireLayerId/releaseLayerId (NCB
+        //   members) so the id values are identical — the routing is the faithful
+        //   call chain (CLAUDE.md: replicate the TJS dispatch, do not shortcut to
+        //   native). Returns 0 if `_resourceManager` is not an object dispatch.
+        tjs_int dispatchRequireLayerId() const;
+        void dispatchReleaseLayerId(tjs_int id) const;
 
     private:
         Player *_parentPlayer = nullptr; // non-owning, for 0x6B1ABC lookup
@@ -1567,8 +1578,7 @@ namespace motion {
             Player &, const std::string &, const std::string &,
             const std::shared_ptr<detail::MotionSnapshot> &);
         friend std::shared_ptr<detail::MotionSnapshot> internal::activateMotion(
-            Player &, const std::shared_ptr<detail::MotionSnapshot> &,
-            ResourceManager *);
+            Player &, const std::shared_ptr<detail::MotionSnapshot> &);
         friend std::shared_ptr<detail::MotionSnapshot> internal::resolveMotion(
             Player &, const ttstr &, const ResourceManager *);
         friend std::vector<ttstr> internal::buildSourceCandidates(

@@ -89,7 +89,6 @@ namespace motion::detail {
         void walkTree(const std::shared_ptr<const PSB::PSBDictionary> &psbNode,
                       int parentIdx,
                       motion::Player &player,
-                      motion::ResourceManager *resourceManager,
                       int parentPreview) {
             if (!psbNode) return;
 
@@ -99,10 +98,12 @@ namespace motion::detail {
             node.index = static_cast<int>(nodes.size() - 1);
             node.parentIndex = parentIdx;
             node.psbNode = psbNode;
-            if(resourceManager) {
-                node.layerId1 = resourceManager->requireLayerId();
-                node.layerId2 = resourceManager->requireLayerId();
-            }
+            // P3-B (d): binary buildNodeTree_recursive@0x6B4A6C allocates the
+            //   two layer ids via the Player+992 RM dispatch FuncCall
+            //   (L"requireLayerId", numparams=0, 0x6b4d24/0x6b4dbc), not a native
+            //   call. Route through the player's dispatch helper.
+            node.layerId1 = player.dispatchRequireLayerId();
+            node.layerId2 = player.dispatchRequireLayerId();
 
             // "label" → layerName (node+0)
             node.layerName = nodeTreePsbString(psbNode, "label");
@@ -278,8 +279,7 @@ namespace motion::detail {
                 for (int i = 0; i < static_cast<int>(children->size()); ++i) {
                     auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
                         (*children)[i]);
-                    walkTree(child, thisIdx, player, resourceManager,
-                             parentPreview);
+                    walkTree(child, thisIdx, player, parentPreview);
                 }
             }
         }
@@ -290,7 +290,6 @@ namespace motion::detail {
         motion::Player &player,
         const MotionSnapshot &snapshot,
         const std::string &clipLabel,
-        motion::ResourceManager *resourceManager,
         int parentPreview) {
 
         ensureRootNodeLike_0x6CED30(player);
@@ -328,8 +327,7 @@ namespace motion::detail {
         // top-level layers is the synthetic root at index 0.
         for (const auto &layerDict : *layerList) {
             if (!layerDict) continue;
-            walkTree(layerDict, 0, player, resourceManager,
-                     parentPreview);
+            walkTree(layerDict, 0, player, parentPreview);
         }
 
         // Aligned to Player_buildNodeTree post-pass (0x6B51F0..0x6B55AC):

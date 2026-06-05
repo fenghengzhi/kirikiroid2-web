@@ -97,11 +97,51 @@ namespace motion {
         //   the lookup above resolves to its already-allocated layerId1, so this
         //   path is inert for the live render flow. The render-side
         //   reuse-vs-fresh alignment to 0x6C4E28 is a separate deferred step.)
-        return nativeRM()->requireLayerId();
+        return dispatchRequireLayerId();
     }
 
     void Player::releaseLayerId(tjs_int id) {
-        nativeRM()->releaseLayerId(id);
+        dispatchReleaseLayerId(id);
+    }
+
+    // P3-B (d): layer-id alloc/release via the Player+992 RM dispatch FuncCall
+    //   (see Player.h note). FuncCall routes to the NCB-registered native
+    //   ResourceManager::requireLayerId/releaseLayerId, so the result is the same
+    //   id — only the call chain matches the binary (3 require sites + 1 release
+    //   site all go through the dispatch, never a direct native call).
+    tjs_int Player::dispatchRequireLayerId() const {
+        iTJSDispatch2 *rm = _resourceManager.Type() == tvtObject
+                                ? _resourceManager.AsObjectNoAddRef()
+                                : nullptr;
+        if(!rm) {
+            return 0;
+        }
+        // Per-callsite member-hint cache (binary passes a tjs_uint32* hint;
+        //   0xFFFFFFFF / 0 = uncached, filled on first lookup).
+        static tjs_uint32 hint = 0;
+        tTJSVariant result;
+        // FuncCall(flag, membername, hint, result, numparams=0, params=NULL,
+        //   objthis) — aligned to requireLayerId@0x6B4A6C/0x6C4E28/0x6DE738.
+        if(TJS_FAILED(rm->FuncCall(0, TJS_W("requireLayerId"), &hint, &result, 0,
+                                   nullptr, rm))) {
+            return 0;
+        }
+        return static_cast<tjs_int>(result.AsInteger());
+    }
+
+    void Player::dispatchReleaseLayerId(tjs_int id) const {
+        iTJSDispatch2 *rm = _resourceManager.Type() == tvtObject
+                                ? _resourceManager.AsObjectNoAddRef()
+                                : nullptr;
+        if(!rm) {
+            return;
+        }
+        static tjs_uint32 hint = 0;
+        tTJSVariant idVar(static_cast<tjs_int>(id));
+        tTJSVariant *args[1] = { &idVar };
+        // numparams=1 {id}, result discarded — aligned to releaseLayerId via
+        //   resetAndReleaseNodes@0x6B56F8.
+        rm->FuncCall(0, TJS_W("releaseLayerId"), &hint, nullptr, 1, args, rm);
     }
 
 
