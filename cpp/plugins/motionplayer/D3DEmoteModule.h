@@ -53,7 +53,12 @@ namespace motion {
         }
 
     private:
-        inline static int _maskMode = 1; // MaskModeAlpha
+        // D3DEmoteModule instance +8 (int). Binary ctor sub_52DF94 @0x52df94
+        // explicitly zeroes +8 via *(QWORD*)(+8)=0 -> default = MaskModeStencil(0),
+        // NOT MaskModeAlpha(1). Constants: MaskModeStencil=0 @0x52e5a0 (MOV W2,WZR)
+        // / MaskModeAlpha=1 @0x52e5b8 (MOV W2,#1). getter/setter sub_52E3F0/52E3F8
+        // read/write +8.
+        inline static int _maskMode = 0; // MaskModeStencil
         inline static bool _maskRegionClipping = false;
         inline static bool _mipMapEnabled = false;
         inline static int _alphaOp = 0;
