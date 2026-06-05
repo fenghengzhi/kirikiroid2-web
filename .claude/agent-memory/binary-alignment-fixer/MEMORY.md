@@ -1,4 +1,5 @@
 - [progress_inner firstFrame block](progress_inner_firstframe_block.md) — 0x6C1108 块: (b)reverse-from-end种子 +(a)+609方向性seek; 块尾必须 return(非fall-through,否则错位preProgress多跑一拍 243→242); 前置=PlayerCore补 _firstFrame=true(STRH 0x0101)
+- [requireLayerId 0x6AB694 已对齐](requirelayerid_0x6AB694_already_aligned.md) — 审计#5误判:二进制也有lower_bound跳过循环+本地nextLayerId持久单调,两边都不复用released id; counter+216 init=1,set+168预置{0}但inert; 未改逻辑
 - [Node-walk deque trailing sentinel](node_walk_deque_trailing_sentinel.md) — 二进制 node-deque = realNodeCount+1; 所有 node-walk 的 `dequeSize-1` 退出 == 本地 `i<_nodes.size()`,NO off-by-one; 改 i+1<size() 回归 468(yuzulogo); 审计"1:1"断言错
 - [Root-stream two-tier: seed vs incremental](root_stream_two_tier_seed_vs_incremental.md) — +568/+576/+584/+616 reseek(0x6B86C8) recomputes from cursor; advance/rewind(0x6B6ADC/0x6B9A3C) only evolve, NEVER recompute at entry; init(0x6B3778) seeds only +548/+616
 - [Controller stepping: typed-deque vs dead buckets](controller_stepping_typed_deque_vs_dead_buckets.md) — 0x67D01C/0x671228 = ONE typed-deque model into HM7; _type4..8ControllerAnimators+_variableAnimators were dead port residue (removed 2026-06-05, byte-neutral)

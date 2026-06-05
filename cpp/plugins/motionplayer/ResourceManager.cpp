@@ -304,6 +304,28 @@ tjs_int motion::ResourceManager::requireLayerId() {
         return 0;
     }
 
+    // Aligned with sub_6AB694 @0x6AB694. Binary topology (cross-verified by fresh
+    // decompile 2026-06-06, disasm 0x6ab694-0x6ab74c):
+    //   counter = (uint*)(this+216);            // ctor 0x6a8a3c seeds it to 1
+    //   lower_bound(set@+168, *counter):        // 0x6ab6a4-0x6ab728
+    //     while (*counter ∈ set) ++*counter;    // skip already-used ids, retry
+    //   set._M_insert_unique(*counter);         // 0x6ab734
+    //   ret = *counter; *counter += 1; return ret; // 0x6ab738-0x6ab74c
+    // The counter (+216) is monotone and only ever holds a value NOT yet handed
+    // out, so the skip-loop body never actually iterates and the function never
+    // reuses a released id (the counter never rewinds). nextLayerId here is the
+    // same persistent monotone counter, so this `while(find()!=end)++` mirrors
+    // the binary's lower_bound-skip exactly — it is NOT a "search lowest free
+    // slot / reuse released id" scheme. (2026-06-06 audit item #5 claimed local
+    // reuses released ids while binary is a pure monotone counter; BOTH halves
+    // were wrong — binary also has the skip-loop, local also never rewinds. No
+    // behavioral divergence under any require/release interleave. Audit #5 is a
+    // misjudgement; no change made.)
+    // The only ctor-level nuance — binary pre-inserts {0} into the set (0x6a8a08)
+    // — is functionally inert (counter starts at 1 so 0 is never returned, and
+    // unloadAll's _M_erase clears it) and lives in the RM ctor, not here; the
+    // port's default-constructed empty set is faithful, inserting a {0} sentinel
+    // would be a port-invention.
     while(_state->usedLayerIds.find(_state->nextLayerId) !=
           _state->usedLayerIds.end()) {
         ++_state->nextLayerId;
