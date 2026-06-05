@@ -2003,47 +2003,86 @@ namespace internal {
             return;
         }
         // 0x6C1104: if(firstFrame==0) goto LABEL_48（仅 loopArmed，跳过 firstFrame 块）。
-        // 本端 firstFrame 种子标志由 _queuing(+480) 承载 —— 二进制 STRH 0x0101 同置
-        // +480/+481（见 Player.h:236 setTickCount / initNonEmoteMotion @0x6B3AC0），本端
-        // play 路径仅更新 _queuing；故下方 `if(_queuing){ seed; return; }` 即 firstFrame
-        // 块，_queuing==false 时自然落向 LABEL_48 的 clamp+推进。
-        // 控制流差异（已审计为 observationally-inert）：二进制 firstFrame 块清 +481 后
-        // **fall-through 到 LABEL_48**，本端是 **return**。但 firstFrame 帧 +480 gate=1
-        // 主导：二进制 LABEL_48 的 cursor advance 被 +480 gate 跳过，forward-at-end 判断
-        // 落 `else if(!gate)` 因 gate=1 而不调 advanceRootAndNodes、直接 return result ——
-        // 与本端 reseek+return 净效果等价（都不推 +1120 游标、都不调 advance、都做 reseek）。
-        // 第二帧起 updateLayers 清 _queuing(+480)、二进制 firstFrame 自清 +481，两路同样落
-        // LABEL_48 正常推进。等价前提（每帧 frameProgress→updateLayers，见
-        // progressFramesLike_0x6D2A54）成立。
-
-        // Aligned to Player_progress_inner (0x6C106C): player+480 is a
-        // one-shot first-frame gate. While it is set, progress records the
-        // incoming delta but does not advance player+1120/player+456.
-        if(_queuing) {
+        // 本端 firstFrame 种子标志由 _firstFrame(+481) 承载（二进制此块 0x6C1104 读 +481、
+        // 0x6C110C 清 +481；STRH 0x0101 在 setTickCount/child-motion 写入时同置 +480/+481）。
+        //
+        // === firstFrame 块 (0x6C1108..0x6C132C) — 精确复刻 progress_inner ===
+        // 此前本端把整块坍缩成 blanket `reseekTimelineCursors(_clampedEvalTime); return`，
+        // 丢失了二进制的两段方向性逻辑（2026-06-06 fresh-decompile 审计缺口#4）：
+        //   (b) 0x6C1120 reverse-from-end 种子：v8(+592 deltaTime)<0 && +1120==0 时
+        //       +456 = +1128(lastTime); +1120 = +1128。
+        //   (a) 0x6C1130 +609 reverseSeekFlag 方向性 seek：
+        //         forward(v8>=0): save +456 → +456=0 → reseek → advanceRoot → restore
+        //         reverse(v8<0) : (+1128>+1120 才) save +456 → +456=+1128 → reseek →
+        //                         rewind → restore  (+1128<=+1120 直接 goto LABEL_48)
+        //       else(+609==0): plain reseek(@0x6C131C)。
+        // 二进制每步带 +1098(syncWaiting)/+483(motionCompleted) 早退；全块走完后
+        // **fall-through 到 LABEL_48**（不是 return），LABEL_48 的 cursor advance 被
+        // +480 gate(=_queuing，本帧仍为 1) 跳过。本端忠实复刻：用 reseekNodes 之外的
+        // 直接调用，块末不 return，自然落到下方 LABEL_48。
+        // 字段交叉核实（全部 disasm 直读，非命名推断）：+456=_clampedEvalTime(0x1C8)、
+        // +592=_deltaTime(0x250)、+609=_reverseSeekFlag(0x261，writer 0x6BE4F8 同字段)、
+        // +1120=_frameTickCount(0x460)、+1128=_cachedTotalFrames(0x468)。
+        if(_firstFrame) {                              // 0x6C1104: firstFrame!=0
             _allplaying = !_playingTimelineLabels.empty();
             _syncActive = _syncWaiting && _allplaying;
-            // 缺口#1c: the firstFrame gate freezes cursor ADVANCE, but the binary
-            // progress_inner @0x6C106C firstFrame branch seeds +456 then calls the
-            // FULL Player_reseekTimelineCursors (0x6B86C8) before returning — at
-            // BOTH firstFrame seeds: the activeTimeline path (0x6C10E0, `return
-            // reseekTimelineCursors(player)`) AND the queuing path (0x6C131C, the
-            // reverseSeekFlag(+609)-clear branch, `reseekTimelineCursors(player)`).
-            // Previously this branch ran ONLY the var-track sub-piece
-            // (reseedVariableTracksLike_0x6B86C8 = the 0x6B8F30 block) + the inline
-            // node seek (progressSeekNodeSlotsLike) — it OMITTED reseek's LAYER
-            // coarse scan (0x6B8770 -> +916/+920/+928 + align/sync/action), ROOT
-            // single-step (0x6B8C1C -> +568/+616/+576/+584), and the ABSOLUTE node
-            // re-seed (0x6B91B0 -> Player_initNodeTimeline per node). That left the
-            // firstFrame root seed missing (a gap formerly masked by an entry-side
-            // per-tick recompute, removed in commit ea808b8). Call the full reseek
-            // instead so the firstFrame seed positions every stream cursor exactly
-            // as the binary does. reseekTimelineCursors' STEP 4
-            // (reseekNodeTimelineSlotsLike_0x6B91B0) does the absolute node re-seed,
-            // so the separate progressSeekNodeSlotsLike call is now subsumed and
-            // dropped (matching the binary, which RETURNS right after the reseek on
-            // the activeTimeline firstFrame path — 0x6C10E0).
-            reseekTimelineCursors(_clampedEvalTime); // 0x6C10E0 / 0x6C131C -> 0x6B86C8
-            return;
+
+            const double deltaTime = _deltaTime;       // v8 = *(double*)(+592)  (0x6C1108)
+            _firstFrame = false;                       // *(BYTE*)(+481) = 0     (0x6C110C)
+
+            // (b) 0x6C1120: reverse-from-end seed
+            if(deltaTime < 0.0 && _frameTickCount == 0.0) {   // 0x6C1110/0x6C111C/0x6C1120
+                _clampedEvalTime = _cachedTotalFrames;        // +456 = +1128 (0x6C1128)
+                _frameTickCount  = _cachedTotalFrames;        // +1120 = +1128 (0x6C112C)
+            }
+
+            // (a) 0x6C1130: +609 reverseSeekFlag directional seek
+            if(_reverseSeekFlag) {                     // 0x6C1130
+                _reverseSeekFlag = false;              // *(BYTE*)(+609) = 0 (0x6C113C)
+                if(deltaTime >= 0.0) {                 // 0x6C1140 -> 0x6C13AC: FORWARD
+                    const double saved = _clampedEvalTime; // v30 = *(+456) (0x6C13AC)
+                    _clampedEvalTime = 0.0;            // +456 = 0 (0x6C13B4) — seek-to-0
+                    reseekTimelineCursors(_clampedEvalTime);          // 0x6C13B8
+                    if(_syncWaiting)     return;       // 0x6C13BC
+                    if(_motionCompleted) return;       // 0x6C13C4
+                    _clampedEvalTime = saved;          // +456 = v30 (0x6C13D0) — restore
+                    advanceRootAndNodes_0x6B6ADC(_clampedEvalTime);   // 0x6C13D4
+                    if(_syncWaiting)     return;       // 0x6C13D8
+                } else {                               // 0x6C1144: REVERSE
+                    const double lastTime = _cachedTotalFrames; // v10 = *(+1128) (0x6C1144)
+                    if(lastTime > _frameTickCount) {   // 0x6C114C: only seek if +1128 > +1120
+                        const double saved = _clampedEvalTime; // v11 = *(+456) (0x6C1154)
+                        _clampedEvalTime = lastTime;   // +456 = +1128 (0x6C115C) — seek-to-end
+                        reseekTimelineCursors(_clampedEvalTime);      // 0x6C1160
+                        if(_syncWaiting)     return;   // 0x6C1164
+                        if(_motionCompleted) return;   // 0x6C116C
+                        _clampedEvalTime = saved;      // +456 = v11 (0x6C1178) — restore
+                        rewindRootAndNodes_0x6B9A3C(_clampedEvalTime);// 0x6C117C
+                        if(_syncWaiting)     return;   // 0x6C1180
+                    }
+                    // else (+1128 <= +1120): 0x6C1150 -> goto LABEL_48 directly (no seek)
+                }
+            } else {                                   // 0x6C1318: +609==0, plain reseek
+                reseekTimelineCursors(_clampedEvalTime);              // 0x6C131C
+                if(_syncWaiting) return;               // 0x6C1320
+            }
+            if(_motionCompleted) return;               // 0x6C1328
+            // 二进制 0x6C1328 fall-through 到 LABEL_48(0x6C1330)。此帧 gate(+480=_queuing)
+            // 仍为 1，故 LABEL_48：(1) gated clamp(0x6C1338 CBNZ +480)被跳过；(2) forward
+            // 分支 not-at-end(tick<total) 落 `else if(!gate)`，gate=1 → 不调 advanceRoot →
+            // **return result(0x6C13A4)**。即二进制 firstFrame 路径的净效果 = 仅 reseek 后
+            // 返回，LABEL_48 不产生任何可观察副作用。
+            //
+            // 本端 LABEL_48 之前还插了两处二进制 progress_inner 没有、或位置不同的步骤：
+            //   - line ~2090 `_deltaTime=...; if(!_queuing)+1120+=...`(= LABEL_48 gated
+            //     advance 本身，gate=1 时 no-op)；
+            //   - line ~2094 preProgressPlayingTimelinesLike_0x671764（错位调用点：二进制
+            //     此函数@0x671764 根本不在 progress_inner 调用链内，见下方 2095 起注释）。
+            // 若 fall-through，这个错位的 preProgress 会在 firstFrame 帧被执行（二进制不会），
+            // 使标题脚本的帧循环提前一拍结束（yuzulogo 243→242，2026-06-06 实测）。故在此
+            // **return**，精确复刻二进制 firstFrame 路径"仅 reseek 后返回"的净效果（LABEL_48
+            // gated 分支可证为返回式 no-op，不丢任何二进制副作用）。
+            return;                                    // = 0x6C13A4 LABEL_48 gated forward return
         }
 
         // R1.H2: removed `_frameLoopTime += actualDelta;` — port-invented

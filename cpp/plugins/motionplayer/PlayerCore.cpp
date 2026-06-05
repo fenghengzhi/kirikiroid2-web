@@ -803,10 +803,21 @@ namespace motion {
         buildNodeTree();
         initVariables();
 
+        // Player_initNonEmoteMotion @0x6B3A8C: TBNZ playFlags&2(Chain) branch.
+        //   non-chain (0x6B3A90..0x6B3AAC): +1120=0; +456=min(+1128,0);
+        //     STRH 0x0101 @0x6B3AAC -> +480(_queuing)=1 AND +481(_firstFrame)=1.
+        //   chain    (0x6B3AB4..0x6B3AC0): STRB 1 @0x6B3AC0 -> +481(_firstFrame)=1 only.
+        // Port previously set ONLY _queuing in the non-chain branch and nothing in
+        // the chain branch — _firstFrame(+481) was never seeded here, so the
+        // progress_inner firstFrame block (0x6C1104, gated on +481) never ran on the
+        // play() path. Restored to the exact STRH 0x0101 / STRB 1 writes.
         if((playFlags & PlayFlagChain) == 0) {
-            _frameTickCount = 0.0;
-            _clampedEvalTime = std::min(_cachedTotalFrames, 0.0);
-            _queuing = true;
+            _frameTickCount = 0.0;                              // +1120 = 0 (0x6B3AA4)
+            _clampedEvalTime = std::min(_cachedTotalFrames, 0.0); // +456 (0x6B3AA8)
+            _queuing = true;                                   // +480 = 1 (0x6B3AAC STRH lo)
+            _firstFrame = true;                                // +481 = 1 (0x6B3AAC STRH hi)
+        } else {
+            _firstFrame = true;                                // +481 = 1 (0x6B3AC0 STRB)
         }
         // R2: binary Player_initNonEmoteMotion @ 0x6B3A78 writes STRH 0x100
         // unconditionally (no chain branch). Previously port set _allplaying
