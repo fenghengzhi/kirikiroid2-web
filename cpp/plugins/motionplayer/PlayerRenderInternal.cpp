@@ -168,6 +168,42 @@ namespace motion::internal::render_detail {
                                            nullptr, 9, args, renderLayerObject);
     }
 
+    tjs_error callLayerSetClipLike_0x6C7440(iTJSDispatch2 *renderLayerObject,
+                                            tjs_int left, tjs_int top,
+                                            tjs_int width, tjs_int height) {
+        if(!renderLayerObject) {
+            return TJS_E_FAIL;
+        }
+        // libkrkr2.so sub_6C7440 @ 0x6c78dc: viewport-clip branch dispatches
+        // (*(vtbl+16))(v370, 0, L"setClip", &hint, 0, 4, &v371, objthis) with
+        // argv = [left, top, width, height]. The argv floats are produced as
+        // v31/v32 (clip min) and (v36-v31)/(v37-v32) (clip extents); the
+        // registered Layer.setClip truncates to int (cpp/core/visual/
+        // LayerIntf.cpp:8889), so pass tjs_int directly.
+        tTJSVariant l(left);
+        tTJSVariant t(top);
+        tTJSVariant w(width);
+        tTJSVariant h(height);
+        tTJSVariant *args[] = {&l, &t, &w, &h};
+        static tjs_uint32 setClipHint = 0;
+        return renderLayerObject->FuncCall(0, TJS_W("setClip"), &setClipHint,
+                                           nullptr, 4, args, renderLayerObject);
+    }
+
+    tjs_error callLayerResetClipLike_0x6C7440(iTJSDispatch2 *renderLayerObject) {
+        if(!renderLayerObject) {
+            return TJS_E_FAIL;
+        }
+        // libkrkr2.so sub_6C7440 @ 0x6c7620 (and the post-walk reset @ 0x6c8fcc):
+        // (*(vtbl+16))(v370, 0, L"setClip", &hint, 0, 0, 0, objthis) with argc=0.
+        // Same method name as the set branch; numparams==0 routes to
+        // Layer.setClip's ResetClip() path (cpp/core/visual/LayerIntf.cpp:8882).
+        static tjs_uint32 resetClipHint = 0;
+        return renderLayerObject->FuncCall(0, TJS_W("setClip"), &resetClipHint,
+                                           nullptr, 0, nullptr,
+                                           renderLayerObject);
+    }
+
     iTJSDispatch2 *buildMeshPointTJSArrayLike_0x6C715C(
         const std::vector<float> &points, float xOffset, float yOffset) {
         // Mirror sub_6C715C @ 0x6C715C: produce a TJS Array of interleaved

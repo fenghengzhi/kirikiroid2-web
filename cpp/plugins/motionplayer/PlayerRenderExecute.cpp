@@ -765,15 +765,18 @@ namespace motion {
                 return false;
             }
 
-            // libkrkr2.so Player_renderToCanvas_guess @ 0x6C77C4..0x6C78DC:
-            // set target Layer clip before both direct and composed output. The
-            // later operateAffine call still receives the full source rect.
+            // libkrkr2.so sub_6C7440 dispatches setClip on the target work-layer
+            // (v370) via FuncCall, NOT a native Layer method:
+            //   - 0x6c78dc: argc=4 [left, top, width, height] (viewport clip)
+            //   - 0x6c7620: argc=0 (reset)
+            // The later operateAffine call still receives the full source rect.
             if(hasViewportClip) {
-                renderLayer->SetClip(outRect.left, outRect.top,
-                                     outRect.right - outRect.left,
-                                     outRect.bottom - outRect.top);
+                callLayerSetClipLike_0x6C7440(
+                    renderLayerObject, outRect.left, outRect.top,
+                    outRect.right - outRect.left,
+                    outRect.bottom - outRect.top);
             } else {
-                renderLayer->ResetClip();
+                callLayerResetClipLike_0x6C7440(renderLayerObject);
             }
 
             const auto &actualClip = renderLayer->GetClip();
@@ -1282,9 +1285,10 @@ namespace motion {
             }
         }
 
-        // libkrkr2.so Player_renderToCanvas_guess @ 0x6C8FCC resets the target
-        // Layer clip once the top-level render-item walk is complete.
-        renderLayer->ResetClip();
+        // libkrkr2.so sub_6C7440 @ 0x6c8fcc resets the target work-layer clip
+        // once the top-level render-item walk is complete, via setClip(argc=0)
+        // FuncCall on v370 (NOT a native Layer method).
+        callLayerResetClipLike_0x6C7440(renderLayerObject);
         if(!skipUpdate) {
             renderLayer->Update(false);
             detail::logoChainTraceLogf(

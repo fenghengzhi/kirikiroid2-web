@@ -92,6 +92,14 @@ tjs_error callLayerOperateRectLike_0x6C7440(
     tTVPBlendOperationMode blendMode,
     tjs_int opacity);
 
+// libkrkr2.so sub_6C7440 L"setClip" dispatch points (target work-layer v370):
+//   - 0x6c78dc: argc=4 [left, top, width, height]  → set clip rect
+//   - 0x6c7620: argc=0                              → reset clip (same method)
+tjs_error callLayerSetClipLike_0x6C7440(iTJSDispatch2 *renderLayerObject,
+                                        tjs_int left, tjs_int top,
+                                        tjs_int width, tjs_int height);
+tjs_error callLayerResetClipLike_0x6C7440(iTJSDispatch2 *renderLayerObject);
+
 std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor);
 iTJSDispatch2 *resolvePrimaryLayerObject(iTJSDispatch2 *layerTreeOwnerObject);
 iTJSDispatch2 *resolveMainWindowOwnerObject();
