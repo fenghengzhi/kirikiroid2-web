@@ -26,10 +26,22 @@ progress_inner @0x6C106C 调用链:
 - +592 deltaTime double = +1168 speedMul * dt; +1120 frameTickCount, +1128 totalFrames, +1136 loopTime 全 double
 - +1152 dword @entry 清零 (用途待定)
 
+## 入口门控 (ENTRY GATE, 控制能否到达 LABEL_48 loop-wrap) — 2026-06-06 新增
+Hex-Rays 把 +376==0 块乱序展示, 按反汇编地址重排后入口真实顺序:
+1. 无条件副作用 (0x6C1080..0x6C10AC): +592=speedMul*dt, +483=0, 清+1152, [emote]initEmoteMotion, preProgressDirtyNodes. **在任何 return 之前**.
+2. 0x6C10B0 `if(+376 activeTimeline)` 分发: !=0 走直接 node-deque walk(读+40当游标); ==0 走 loc_6C10E4.
+3. loc_6C10E4 (+376==0 路径): `if(+481 firstFrame==0 && +1099 loopArmed==0) goto loc_6C1270` (renderList 检查); 否则查 +1098/+483 短路后落 LABEL_48.
+4. loc_6C1270: `if(*(+384)==*(+392))` renderList 空 → return result. 非空 → node-deque walk → return.
+
+**关键**: do-while loop-wrap @0x6C14CC(fwd)/0x6C145C(rev) 嵌在 `(+481!=0 || +1099!=0)` 门控**之内**. 未播放 child(+376==0, +481=0, +1099=0, renderList 空) 在 0x6C1278 早返回, **根本到不了 LABEL_48**. 这(非 loopTime<lastTime invariant, 非 +1136<0 默认)才是二进制避免全0 child 空转的真正机制.
+
 ## 主推进逻辑 (LABEL_48 @0x6C1330)
 if !+480: +1120 += +592; +456 = min(+1120, +1128)   ← G3/G4 真正逻辑
 正向(d>=0) 到尾且 +1136 loopTime>=0 → loop wrap modulo; <0 → 停尾(+1099=0)
 反向(d<0) 对称 rewind + wrap to head
+
+## 本端 frameProgress 入口勘误 (PlayerFrameProgress.cpp:1928) — 2026-06-06
+本端开头 `if(!_speed) return;` 是 port-invented 错位守卫. 二进制 progress_inner 入口**无**此判断; _speed(+1093) 只是 advance/rewindRootAndNodes 内部 align/sync/action 事件 gate, 不门控整个 progress. 正确替换: 入口无条件副作用在前, 然后 `if(!_firstFrame && !_allplaying && renderListEmpty()) return;` (复刻 0x6C10E4/F0 + 0x6C1278). 本端 +1099=_allplaying(Player.h:1104), 无 +376 字段(恒走 +376==0 路径). renderList=二进制+384/+392 指针对, 本端对应容器待 grep 确认.
 
 ## 关键勘误 (本端 Player.h)
 - Player.h:665 `_speed` 注释 "Aligned to +1093: bool flag" 是**错的**. +1093 是 motionStopGate (action/sync/align 开关), 不是 speed. speed 倍率在 **+1168 (double)**, 本端无对应字段.

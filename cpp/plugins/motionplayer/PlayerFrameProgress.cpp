@@ -1949,6 +1949,24 @@ namespace internal {
         // (no "modified"-setter) but ported for call-chain restoration.
         preProgressDirtyNodesLike_0x6B6878();
 
+        // Binary Player_progress_inner @0x6C10E4 入口门控：cursor-advance + loop-wrap
+        // body 嵌在 (firstFrame(+481) || loopArmed(+1099)) 之内。本地无 activeTimeline
+        // (+376) 字段，恒走二进制的 +376==0 路径；该路径在 0x6C10F0 判
+        // `+481==0 && +1099==0` 成立时 goto loc_6C1270 → renderList(+384/+392) 空 →
+        // 0x6C1278 return，**永不到达 LABEL_48 的 forward/reverse loop-wrap do-while**。
+        // 一个从未 play 过的 child（无 motion：+481/+1099/+1120/+1128/+1136 全 0）正命中
+        // 此门控；缺它就会在 forward loop-wrap 空转（v7 += loopTime-totalFrames = 0-0，
+        // while(0<=v7) 永真）。运行时实测确认：LOOPWRAP-FWD-HANG，全零，motion=<none>。
+        // 字段映射（IDA 确认）：+481=_firstFrame、+1099=_allplaying(loopArmed)。
+        // 注：旧的入口 `if(!_speed) return;`（+1093）是 port-invented 错位守卫，二进制
+        // +1093 是 advance/rewind 内部事件 gate 而非 progress 入口门控；它对 _speed=true
+        // 的无 motion child 不生效（实测），故此处补真正的入口门控。
+        // 已知简化（平台边界）：二进制 loc_6C1270 在 renderList 非空且未播放时另有处理；
+        // 本地无 activeTimeline、且本卡死路径 renderList 恒空，故仅复刻 empty→return 分支。
+        if(!_firstFrame && !_allplaying) {
+            return;
+        }
+
         // Aligned to Player_progress_inner (0x6C106C): player+480 is a
         // one-shot first-frame gate. While it is set, progress records the
         // incoming delta but does not advance player+1120/player+456.
