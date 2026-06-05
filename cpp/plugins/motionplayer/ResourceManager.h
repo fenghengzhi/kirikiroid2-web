@@ -140,8 +140,20 @@ namespace motion {
 
     private:
         struct State {
-            std::unordered_map<std::string, tTJSVariant> loadedModules;
-            std::string lastLoadedPath;
+            // P3-A: HashMap A container-selection alignment with libkrkr2.so
+            // ResourceManager (RM ctor sub_6A88CC @0x6A88CC: this+88 =
+            // operator new(8 * _M_next_bkt(10)), this+96 = bucketCount — a
+            // libstdc++ std::unordered_map<ttstr, V> with the KiriKiri FNV
+            // hash functor). findOrInsert sub_6EB9E4 @0x6EB9E4 keys by the
+            // RAW PATH ttstr (no case-fold: the FNV at 0x6eba2c-0x6eba78 hashes
+            // raw UTF-16 code units; the node compare sub_9B1ED0 @0x9B1ED0 is a
+            // case-SENSITIVE ordinal wcscmp). So the key is ttstr + the
+            // ttstr_hash/ttstr_equal functors already used by the four Player
+            // HashMaps (internal/ttstr_hash.h), NOT std::string/lowercase.
+            std::unordered_map<ttstr, tTJSVariant, detail::ttstr_hash,
+                               detail::ttstr_equal>
+                loadedModules;
+            ttstr lastLoadedPath;
             tTJSVariant lastLoadedModule;
             std::unordered_map<std::string, tjs_int> layerIdsByName;
             std::unordered_map<tjs_int, std::string> layerNamesById;
@@ -166,20 +178,24 @@ namespace motion {
         // satisfy a sizeof-aligned PLATFORM_BOUNDARY contract.
         std::list<SourceCacheEntry> _sourceCacheList;
 
-        // +88/+96 "HashMap A" — binary is NOT libstdc++ std::unordered_map but
-        // a KiriKiri inline bucket hashmap: +88 = bucket-array ptr, +96 =
-        // bucket count, bucket = FNV-variant-hash(key) % count (selection via
-        // sub_6EB8F4; node walk Motion_ttstrHashMap_findNode @0x6E2060). key =
-        // group/path ttstr, value = PSB-group dict dispatch. RM load/unload/
-        // unloadAll/findSource/findMotion/isExistMotion read/write it; clearCache
-        // does NOT touch it (layer-list only). The std::unordered_map here is the
-        // port's STL stand-in (container-implementation divergence, ❌ systemic);
-        // phase D replaces it with the inline FNV bucket map. Owning pointers
-        // (Release each value on erase). Empty in phase 1 — `_state->loadedModules`
-        // stays authoritative until phase D migrates data + ownership.
-        std::unordered_map<ttstr, iTJSDispatch2 *, detail::ttstr_hash,
-                           detail::ttstr_equal>
-            _psbDictCache;
+        // +88/+96 "HashMap A" — P3-A CORRECTION 2026-06-05 (prior note FALSIFIED):
+        // fresh decompile of the RM ctor sub_6A88CC @0x6A88CC proves +88/+96 IS a
+        // libstdc++ std::unordered_map, NOT a "KiriKiri inline bucket hashmap":
+        //   * a1+96 = _M_next_bkt(10)  (sub_149EDF8, libstdc++ bucket-count helper)
+        //   * a1+88 = operator new(8 * bucketCount)  (the bucket-array of node-chain
+        //     head pointers; ==&single-bucket when count==1)
+        //   * lookup sub_6EB8F4 = _M_find_before_node walk: bucket = hash % a1[1],
+        //     node[0]=next, node[1]=key ttstr, node+136=cached hash, node+16=value
+        //   * findOrInsert sub_6EB9E4 @0x6EB9E4 returns node+16; hash functor is the
+        //     KiriKiri FNV (0x6eba2c-0x6eba78, cached at key+68), equal functor is
+        //     the case-SENSITIVE ordinal wcscmp sub_9B1ED0 @0x9B1ED0.
+        // The container-selection-aligned form is therefore exactly
+        //   std::unordered_map<ttstr, V, ttstr_hash, ttstr_equal>
+        // which is precisely `State::loadedModules` above (migrated to ttstr key in
+        // P3-A). So HashMap A is NOT a separate parked field — loadedModules IS it.
+        // The earlier `_psbDictCache` scaffolding (an empty stand-in awaiting a
+        // "phase-D inline bucket map") was based on the FALSIFIED "not std container"
+        // premise and is removed; no consumer ever read it.
 
         // +104 second container — singly-linked node list, confirmed layout
         // node[0]=next, node[1]=key ttstr, node[2]=PSB dict (`for (i =

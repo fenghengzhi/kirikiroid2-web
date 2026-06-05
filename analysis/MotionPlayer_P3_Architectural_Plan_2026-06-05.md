@@ -9,7 +9,7 @@
 
 `sub_6A88CC`（EmoteObject +0 的 RM ctor，new 0xE8=232B）本 session 反编译确证 binary RM 单一对象内含：
 - `sub_6A78F4` = SourceCache intrusive 双向链表（head/tail sentinel @+72/+80）—— ✅ 本地 `std::list<Entry>` 已同构
-- `this+88 = new(8 * _M_next_bkt(0xA))` + `this+96` = **HashMap A（findSource 的 FNV bucket map）** —— ❌ 本地是 `std::unordered_map<std::string,...> _state->loadedModules`
+- `this+88 = new(8 * _M_next_bkt(0xA))` + `this+96` = **HashMap A（findSource 的 map）** —— ✅ **P3-A 已对齐(2026-06-05)**：fresh decompile 证实它是 **libstdc++ `std::unordered_map` + 自研 FNV functor**（非内联 KiriKiri map），本地 `_state->loadedModules` 已迁为 `unordered_map<ttstr,V,ttstr_hash,ttstr_equal>` 同选型 1:1
 - `new Math.RandomGenerator()` @+144 RNG
 - `+176` std::_Rb_tree（RB-tree）
 - `+216 = 0x100000001` refcount/flags
@@ -20,7 +20,22 @@
 
 ---
 
-## P3-A：RM HashMap A —— STL `unordered_map` → 内联 FNV bucket map
+## P3-A：RM HashMap A —— ✅ **已完成(2026-06-05, commit 待提交)**
+
+> **前提纠正**：本节原标题「STL → 内联 FNV bucket map」基于被证伪的前提。fresh decompile（sub_6A88CC ctor /
+> sub_6EB9E4 findOrInsert / sub_6EB8F4 lookup）证实 binary HashMap A **就是 libstdc++ `std::unordered_map`**
+> （`_M_next_bkt(10)` bucket-count helper + `_M_find_before_node` + wcscmp equal functor），**仅 hash 自研 FNV**——
+> 与 06-05 review §四 已确证的「4 个 Player HM = libstdc++ unordered_map」同型。**没有「内联 bucket map」可迁移到**；
+> 正确目标形态 = `unordered_map<ttstr,V,ttstr_hash,ttstr_equal>`，已达成。**#4 残留容器偏差完全 CLOSED（非部分）。**
+>
+> 落地：`_state->loadedModules` 从 `unordered_map<std::string(raw path),V>` 迁到
+> `unordered_map<ttstr,tTJSVariant,ttstr_hash,ttstr_equal>`（+ `lastLoadedPath` std::string→ttstr）；所有 key 构造点
+> （load/unload/findLoaded/clearCache/unloadAll）同步；大小写归一化交叉核实：binary FNV/equal 均**大小写敏感**
+> （无 tolower），本地原本就 raw-path-keyed（lowercase 仅用于日志），迁移**无归一化语义丢失**。就地纠正 ResourceManager.h
+> 一条被证伪注释（「binary is NOT libstdc++ unordered_map」）+ 删死字段 `_psbDictCache`。构建 web+wasmtime PASS，
+> logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS（oracle-guarded，非 inert）。
+>
+> 原计划内容存档（已不适用，留作证据轨迹）：
 
 ### 证据
 | 项 | 地址 | 事实 |
@@ -81,9 +96,9 @@
 
 ## 执行顺序与挂载
 
-| 阶段 | 项 | 侵入度 | oracle | 前置 | 建议 session |
-|------|----|--------|--------|------|------------|
-| 1 | **P3-A** RM HashMap A 容器对齐 | 局部 | ✅ 有差分守护 | 无 | 可立即排期（module-alignment-driver 或 binary-aligned-implementer，限定 ResourceManager+State 范围）|
-| 2 | **P3-B** RM ownership dispatch-in + parent 链 | 全局 | ⚠️ 多为 inert | P3-A 完成 | 独立 session，class-layout-auditor 全程守护，先做证据交叉核实再动 |
+| 阶段 | 项 | 侵入度 | oracle | 前置 | 状态 |
+|------|----|--------|--------|------|------|
+| 1 | **P3-A** RM HashMap A 容器对齐 | 局部 | ✅ 有差分守护 | 无 | ✅ **完成(2026-06-05)**：选型 1:1（libstdc++ unordered_map + FNV functor）；前提「内联 bucket map」证伪 |
+| 2 | **P3-B** RM ownership dispatch-in + parent 链 | 全局 | ⚠️ 多为 inert | P3-A 完成 | open（独立 session，class-layout-auditor 全程守护，先做证据交叉核实再动）|
 
 两项完成后，binary RM 对象模型（dispatch facade + 内联 FNV bucket map + SourceCache list + RNG + RB-tree）即与本地 1:1，配合本轮已对齐的 `ResourceManager::findSource` 函数体，关闭维度 ④（对象生命周期）与 ⑤（容器实现）在 RM 上的最后两处系统性偏差。

@@ -122,9 +122,12 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
     }
     const auto loaded = detail::loadPSBVariant(path, _decryptSeed);
     if(loaded.Type() != tvtVoid && _state) {
-        const auto key = rawPath;
-        _state->loadedModules[key] = loaded;
-        _state->lastLoadedPath = key;
+        // P3-A: key by the RAW PATH ttstr, matching binary findOrInsert
+        // sub_6EB9E4 @0x6EB9E4 (this+88 HashMap A keyed by the un-folded path
+        // ttstr). rawPath here was already the raw, un-lowercased path; the
+        // ttstr `path` is the identical key, now stored directly.
+        _state->loadedModules[path] = loaded;
+        _state->lastLoadedPath = path;
         _state->lastLoadedModule = loaded;
     }
     return loaded;
@@ -140,10 +143,11 @@ void motion::ResourceManager::unload(ttstr path) const {
         return;
     }
 
-    const auto key = path.AsStdString();
-    _state->loadedModules.erase(key);
-    if(_state->lastLoadedPath == key) {
-        _state->lastLoadedPath.clear();
+    // P3-A: erase by the RAW PATH ttstr key (HashMap A is case-sensitive
+    // wcscmp-keyed, sub_9B1ED0 @0x9B1ED0).
+    _state->loadedModules.erase(path);
+    if(_state->lastLoadedPath == path) {
+        _state->lastLoadedPath.Clear();
         _state->lastLoadedModule.Clear();
     }
 }
@@ -155,7 +159,7 @@ void motion::ResourceManager::clearCache() const {
     }
 
     _state->loadedModules.clear();
-    _state->lastLoadedPath.clear();
+    _state->lastLoadedPath.Clear();
     _state->lastLoadedModule.Clear();
     _state->layerIdsByName.clear();
     _state->layerNamesById.clear();
@@ -172,7 +176,9 @@ tTJSVariant motion::ResourceManager::findLoaded(ttstr path) const {
         return {};
     }
 
-    const auto it = _state->loadedModules.find(path.AsStdString());
+    // P3-A: lookup by the RAW PATH ttstr key via the binary HashMap A functor
+    // (ttstr_hash == FNV @0x6eba2c, ttstr_equal == wcscmp @0x9B1ED0).
+    const auto it = _state->loadedModules.find(path);
     return it != _state->loadedModules.end() ? it->second : tTJSVariant{};
 }
 
@@ -353,7 +359,7 @@ void motion::ResourceManager::unloadAll() const {
         return;
     }
     _state->loadedModules.clear();
-    _state->lastLoadedPath.clear();
+    _state->lastLoadedPath.Clear();
     _state->lastLoadedModule.Clear();
     _state->layerIdsByName.clear();
     _state->layerNamesById.clear();
