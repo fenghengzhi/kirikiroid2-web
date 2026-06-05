@@ -1,3 +1,4 @@
+- [Player parent+RM slots (P3-B)](project_player_parent_and_rm_slots.md) — Player+8=parentPlayer(NOT 发明,写0x6b43dc/读0x6b1bb8); ctor单参; RM dispatch三槽+636(findSource native快路径)/+656(渲染)/+992(规范RM,findMotion FuncCall+child继承); dossier=analysis/MotionPlayer_P3B_Evidence_2026-06-05.md
 - [getLayerNames mapping correction](project_getlayernames_mapping.md) — 真 getLayerNames@0x6D10E0(IDA合并进sub_6D1018);发raw label遍历Player+24 map,args[0]子串过滤;sub_6D1018=processedMeshVerticesNum;sub_6B601C=mesh-count visitor非layer names
 - [Progress containers layout](project_progress_containers_layout.md) — 帧推进 2 deque 精确 80B 控制结构字段映射 + index公式(node÷329 / var-track÷3) + var-track 元素160B字段(两56B slot) + layer/root event-stream cursor。analysis/Player_progress_containers.md
 - [EmotePlayer architecture](project_emoteplayer_architecture.md) — 3-layer object hierarchy, Player struct layout (1496b), 9-case setVariable dispatch, physics engine in progress()

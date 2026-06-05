@@ -92,6 +92,15 @@
 - 风险**最高**：反转 ownership 触及对象生命周期（维度④）+ 字段顺序（维度①根因）+ 所有 RM 消费者。须在 P3-A 稳定后单独 session 做，class-layout-auditor 全程守护。
 - **依赖**：P3-A 先行（HashMap A 对齐后，RM 对象内部已更接近 binary，再处理 RM 如何被 Player 持有更安全）。
 
+### ✅ 证据已备齐（2026-06-05 只读核实 → analysis/MotionPlayer_P3B_Evidence_2026-06-05.md）
+**关键交叉核实结论（缩小 P3-B 范围）**：
+- **`_parentPlayer` 不是 port 发明 = binary `Player+8`**（写 `Player_initNodeFields@0x6b43dc` stencilType==3 child `*(child+8)=parent`；读 `sub_6B1ABC@0x6b1bb8` label-miss 上溯）。**→ parent 链已忠实，P3-B 不再含「parentPlayer 链迁移」，只剩 RM ownership 一项。删 `_parentPlayer` 是错的。**
+- ctor 单参确认；同一 RM dispatch 拷三槽（各 AddRef）：**+636**=findSource self（**dispatch-facade-over-native 混合**：解包回 native 直读 +224/+88/+96，即 P3-A 已对齐的 map）、**+656**=渲染期 RM、**+992**=规范 RM（NCB getter / findMotion / loadMotion / child 继承源）。
+- **混合模型警告**：findSource 迁移时**勿全改纯 dispatch**（binary 自己就解包回 native 直读 map）。
+- 14 处 `_resourceManagerNative` 消费者 + binary 证据 + 6 步迁移面见 dossier 块 3。
+- **正交新缺口（与 RM 无关，可独立补）**：本地上溯每层只查 HM2，省略 binary 每层 `parent+280` 的 type3/type4 node-list 扫描（PlayerVariable.cpp:267 缺口）。
+- **待决疑点**（动手前需补证据）：(1) layer-id RM method(requireLayerIdForName/releaseLayerId) binary 对应名未定位；(2) +656 渲染槽消费未逐行展开；(3) +636 解包 PropGet 属性名(dword_1AB8098) UTF-16 未解。
+
 ---
 
 ## 执行顺序与挂载
@@ -99,6 +108,6 @@
 | 阶段 | 项 | 侵入度 | oracle | 前置 | 状态 |
 |------|----|--------|--------|------|------|
 | 1 | **P3-A** RM HashMap A 容器对齐 | 局部 | ✅ 有差分守护 | 无 | ✅ **完成(2026-06-05)**：选型 1:1（libstdc++ unordered_map + FNV functor）；前提「内联 bucket map」证伪 |
-| 2 | **P3-B** RM ownership dispatch-in + parent 链 | 全局 | ⚠️ 多为 inert | P3-A 完成 | open（独立 session，class-layout-auditor 全程守护，先做证据交叉核实再动）|
+| 2 | **P3-B** RM ownership dispatch-in（~~+ parent 链~~：parent 链已证忠实，移出范围）| 全局 | ⚠️ 多为 inert | P3-A 完成 | open，**证据已备齐**(dossier 2026-06-05)；独立 session + class-layout-auditor 守护；注意 facade-over-native 混合模型勿全 dispatch 化 |
 
 两项完成后，binary RM 对象模型（dispatch facade + 内联 FNV bucket map + SourceCache list + RNG + RB-tree）即与本地 1:1，配合本轮已对齐的 `ResourceManager::findSource` 函数体，关闭维度 ④（对象生命周期）与 ⑤（容器实现）在 RM 上的最后两处系统性偏差。
