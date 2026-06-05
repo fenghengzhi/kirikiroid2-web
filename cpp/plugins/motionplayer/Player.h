@@ -806,15 +806,12 @@ namespace motion {
             bool inclusiveEnd);
         void applyTimelineControlFrameCrossingLike_0x67CD20(
             const std::unordered_map<std::string, double> &prevTimes);
-        void stepTimelineControlAnimatorsLike_0x67D01C(double dt);
-        void stepTimelineBlendAnimatorsLike_0x67D01C(double dt);
         void setTimelineBlendLike_0x6735AC(
             const std::string &label,
             bool autoStop,
             double value,
             double transition,
             double ease);
-        void refreshFixedControllerEvalOutputsLike_0x67D01C();
         void accumulateTimelineContributionLike_0x67C560(
             const std::string &label,
             double &value);

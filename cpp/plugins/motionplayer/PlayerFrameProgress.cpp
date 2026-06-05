@@ -191,91 +191,19 @@ namespace internal {
         if (_engineBack) _engineBack->_dirty = true;
     }
 
-    void Player::stepTimelineControlAnimatorsLike_0x67D01C(double dt) {
-        for(const auto &label : _playingTimelineLabels) {
-            const auto timelineIt = _timelines.find(label);
-            if(timelineIt == _timelines.end()) {
-                continue;
-            }
-
-            auto &state = timelineIt->second;
-            for(size_t trackIndex = 0;
-                trackIndex < state.controlTrackAnimators.size(); ++trackIndex) {
-                double steppedValue =
-                    trackIndex < state.controlTrackValues.size()
-                    ? static_cast<double>(state.controlTrackValues[trackIndex])
-                    : 0.0;
-                const bool stillAnimating = stepQueuedAnimatorLike_0x67D01C(
-                    state.controlTrackAnimators[trackIndex], dt, steppedValue);
-                if(trackIndex >= state.controlTrackValues.size()) {
-                    state.controlTrackValues.resize(trackIndex + 1, 0.0f);
-                }
-                state.controlTrackValues[trackIndex] =
-                    static_cast<float>(steppedValue);
-                if(stillAnimating) {
-                    if (_engineBack) _engineBack->_dirty = true;
-                }
-            }
-        }
-    }
-
-    void Player::stepTimelineBlendAnimatorsLike_0x67D01C(double dt) {
-        for(const auto &label : _playingTimelineLabels) {
-            const auto timelineIt = _timelines.find(label);
-            if(timelineIt == _timelines.end()) {
-                continue;
-            }
-
-            auto &state = timelineIt->second;
-            double steppedBlend = state.blendRatio;
-            const bool stillAnimating = stepQueuedAnimatorLike_0x67D01C(
-                state.blendAnimator, dt, steppedBlend);
-            state.blendRatio = steppedBlend;
-            if(stillAnimating) {
-                if (_engineBack) _engineBack->_dirty = true;
-            }
-        }
-    }
-
-    // 2026-06-05: CALLER-LESS。原唯一调用点（frameProgress 的子步进 while 循环）已
-    // 移除——那个循环是 EmoteEngine_progress @0x67D01C 的误植，progress_inner @0x6C106C
-    // 不含 controller step（详见 frameProgress 内的移除说明）。EmoteEngine::progress 的
-    // controller HM7 写入由各 deque 的 *_step(slice) 直接完成，不经此函数。保留定义以备
-    // 后续厘清其语义归属；当前无调用者。
-    void Player::refreshFixedControllerEvalOutputsLike_0x67D01C() {
-        const auto *activeMotion = _activeMotion.get();
-        if(!activeMotion) {
-            return;
-        }
-
-        for(const auto &binding : activeMotion->fixedControllerOutputs) {
-            if(binding.label.empty()) {
-                continue;
-            }
-
-            // Aligned with libkrkr2.so EmoteEngine_progress @0x67D01C: the
-            //   binary's per-nodeType controller step loops (@0x67d0a4..0x67d370)
-            //   write their step outputs into HM7 (= EmoteEngine+1440, port
-            //   mirror _labelToValueHM7 / _evalResultValues), and the HM7
-            //   bind-loop @0x67d3a4 consumes them. There is NO independent
-            //   per-Player controller bucket in the binary — the previously read
-            //   `controllerAnimatorBucketLike_0x671228` / `_type[4-8]Controller
-            //   Animators` were a removed parallel-model residue (never written;
-            //   the LIVE step path is EmoteEngine::progress over the typed deques
-            //   _stateMachineDeque4/5/_compositeVarDeque6/_auxVarDeque8/
-            //   _vectorVarDeque9). The faithful eval-output source is HM7/HM2
-            //   (_evalResultValues), falling back to getVariable @0x533E1C.
-            double value = 0.0;
-            if(const auto it = _evalResultValues.find(detail::widen(binding.label));
-               it != _evalResultValues.end()) {
-                value = it->second;
-            } else {
-                value = getVariable(detail::widen(binding.label));
-            }
-
-            writeEvalResultValueLike_0x6C4668(binding.label, value);
-        }
-    }
+    // Removed 2026-06-06: stepTimelineControlAnimatorsLike_0x67D01C /
+    // stepTimelineBlendAnimatorsLike_0x67D01C / refreshFixedControllerEvalOutputs
+    // Like_0x67D01C were caller-less residue of the 06-03 parallel model. Fresh
+    // decompile of EmoteEngine_progress @0x67D01C confirms controller stepping is
+    // owned entirely by the 6 EmoteEngine typed-deque step loops (+256/+336/+416/
+    // +576/+656/+736 -> Player_HM2_upsert -> HM7), consumed by the HM7 bind-loop
+    // @0x67d3a4. The binary has NO per-Player timeline-animator stepping that
+    // these 3 helpers correspond to (they mis-claimed alignment to 0x67D01C). The
+    // Player timeline containers themselves (_timelines/_playingTimelineLabels/
+    // controlTrackAnimators/blendAnimator/fixedControllerOutputs) stay — they back
+    // the live TJS timeline API (PlayerTimeline.cpp) and are unaffected. The
+    // helpers stepQueuedAnimatorLike_0x67D01C / writeEvalResultValueLike_0x6C4668
+    // still have live callers and stay.
 
     void Player::accumulateTimelineContributionLike_0x67C560(
         const std::string &label, double &value) {
@@ -1717,11 +1645,53 @@ namespace internal {
         // forward inline seek now that this re-seed exists.)
         reseekNodeTimelineSlotsLike_0x6B91B0(targetTime);
 
-        // ---- STEP 5: TAIL @0x6B9234 ----
-        // DEFERRED 0x6B9234 Player_pruneHM3_byNodeIdentity (HM3 prune by node
-        //   identity) — no live HM3-per-node-state population reaches this path.
-        // DEFERRED 0x6B9248 sub_6B9650 over the player+280 aux list — opaque
-        //   per-entry pass; no consumer in the live port. Do NOT invent.
+        // ---- STEP 5: TAIL @0x6B9234 (re-confirmed against fresh decompile of
+        //   Player_reseekTimelineCursors 0x6B86C8; runs UNGATED every reseek) ----
+        //
+        // The binary tail is two passes. Both are DEFERRED for ARCHITECTURE-
+        // PREREQUISITE-MISSING reasons (a CLAUDE.md legitimate stop), NOT for
+        // "oracle-inert / no consumer" — the container each pass operates on has
+        // no port writer yet, so a faithful port would iterate over a container
+        // that is structurally empty in the port for a different reason than the
+        // binary (the binary's is populated).
+        //
+        // (A) 0x6B9234 Player_pruneHM3_byNodeIdentity. Three sub-passes:
+        //   - loop1: node-track hashmap @player+1240 — recompute each node's
+        //     path-key hash, write back node+72. Port has no node-track hashmap
+        //     populate (Player+1240 node-track stream unported).
+        //   - loop2: HM3 @player+1184 = _perNodeLayerStateMap — prune entries
+        //     whose node-path-key no longer matches a live node, via
+        //     Player_buildNodePathKey + Player_HM3_entry_destroy.
+        //   - tail Player_clearHM3_HM4 @0x6B80E8 — clears HM3 (_perNodeLayer-
+        //     StateMap) AND HM4 (_variableSnapshotMap).
+        //   PREREQUISITE: _perNodeLayerStateMap and _variableSnapshotMap BOTH
+        //   have no port writer. HM3 populate is Player_resetMotionState
+        //   loop3 @0x6B2DF8 + Player_HM3_initValueFromNode @0x699510 (688B
+        //   node->V snapshot), both unported (see Player.h HM3 field comment).
+        //   HM4 populate is resetMotionState loop2 @0x6B2D40, also unported.
+        //   With both maps permanently empty in the port, this prune+clear is a
+        //   provable no-op whose REAL data flow (resetMotionState) is the
+        //   missing prerequisite — porting an empty-container walk here would be
+        //   unverifiable and detached from the source it stands in for.
+        //
+        // (B) 0x6B923C..0x6B9248: `for (n = player+280; n; n = *n)
+        //     sub_6B9650(a1, n+16)`. player+280 is HM1's (_evalCascadeMap,
+        //     Player+264) internal before-begin all-entries chain (std::unord-
+        //     ered_map's _M_before_begin._M_nxt — NOT a separately-addressable
+        //     port field). sub_6B9650 @0x6B9650 rebuilds each HM1 entry's
+        //     affected-node list at entry+48 (= EvalCascadeState::heapResult):
+        //     gate entry+40(weight)==0 -> skip; clear the entry+48 vector; scan
+        //     the NODE deque and push nodeType in {3,4} nodes (deduped).
+        //   PREREQUISITE: EvalCascadeState::heapResult (entry+48 node list) has
+        //   no port writer AND no port reader — its sole consumer is the ramp-
+        //   write loop in Player_bindParameterValue @0x6C4978, itself DEFERRED
+        //   in bindParameterValueLike_0x6C4668 (the node+408 controller RB-trees
+        //   it ramps are unpopulated in the port). Rebuilding entry+48 here
+        //   without that consumer would write a list no code reads — the inverse
+        //   of port-invention. The faithful order is: port sub_6B9650 + the
+        //   bindParameter consumer loop FIRST (giving entry+48 a writer and a
+        //   reader), then wire this loop-wrap rebuild hook. Until then this stays
+        //   a prerequisite-gap DEFERRED, not an oracle-inert skip.
     }
 
     void Player::interpolateVarTrackValuesLike_0x6BBE20(double clampedEvalTime) {
