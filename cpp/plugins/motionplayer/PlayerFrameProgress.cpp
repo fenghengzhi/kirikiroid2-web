@@ -237,6 +237,11 @@ namespace internal {
         }
     }
 
+    // 2026-06-05: CALLER-LESS。原唯一调用点（frameProgress 的子步进 while 循环）已
+    // 移除——那个循环是 EmoteEngine_progress @0x67D01C 的误植，progress_inner @0x6C106C
+    // 不含 controller step（详见 frameProgress 内的移除说明）。EmoteEngine::progress 的
+    // controller HM7 写入由各 deque 的 *_step(slice) 直接完成，不经此函数。保留定义以备
+    // 后续厘清其语义归属；当前无调用者。
     void Player::refreshFixedControllerEvalOutputsLike_0x67D01C() {
         const auto *activeMotion = _activeMotion.get();
         if(!activeMotion) {
@@ -2021,26 +2026,34 @@ namespace internal {
         // by-overwrite semantics of the binary bind-loop.
         preProgressPlayingTimelinesLike_0x671764(actualDelta, nullptr);
 
-        // Controller stepping (EmoteEngine_progress @0x67D01C, step loops
-        //   @0x67d0a4..0x67d370) is performed by EmoteEngine::progress over the
-        //   typed-deque model (_stateMachineDeque4/5, _compositeVarDeque6,
-        //   _auxVarDeque8, _vectorVarDeque9, _lookupCurvesDeque10), writing step
-        //   outputs into HM7 (= EmoteEngine+1440, mirror _labelToValueHM7). A
-        //   prior parallel `stepControllerBucket` loop over a separate per-Player
-        //   `_type4..8ControllerAnimators` bucket set lived here; those buckets
-        //   were never written (zero push/emplace across cpp/) — a dead residue
-        //   of an earlier stepping model superseded by the EmoteEngine typed-deque
-        //   model. The binary has no such independent Player-side bucket: setVariable
-        //   @0x671228 cases 4-8 index the SAME EmoteEngine deques (engine
-        //   +256/+336/+416/+576/+656). The dead loop is removed this round; only the
-        //   HM7-backed eval-output refresh remains, sub-stepped at the binary's 1.1
-        //   slice (@0x67d0b0 fmin(dt,1.1)).
-        double remainingControllerStep = actualDelta;
-        while(remainingControllerStep > 0.0) {
-            const double controllerDt = std::min(remainingControllerStep, 1.1);
-            refreshFixedControllerEvalOutputsLike_0x67D01C();
-            remainingControllerStep -= controllerDt;
-        }
+        // 子步进 controller 循环 REMOVED (2026-06-05 — 误植拓扑修正)。
+        //
+        // 此处曾有一个 `while(dt>0){ slice=fmin(dt,1.1); refreshFixed(); dt-=slice }`
+        // 子步进循环，自承"对齐 EmoteEngine_progress @0x67D01C step loops
+        // @0x67d0a4..0x67d370"。本轮 fresh-decompile（0x6C106C / 0x67D01C）证实这是
+        // 错误的拓扑放置：
+        //   - frameProgress 复刻的是 Player_progress_inner @0x6C106C（MotionPlayer 类）。
+        //     该函数对入参 dt 是一次性使用 —— @0x6c1090 `+592 = speedMul*frameDt`，此后
+        //     全程只读 +592，**没有任何 fmin(dt,1.1)、没有 while(dt>0) 子步进**。dt 经
+        //     LABEL_48 前进/后退分支一次性推进帧游标 +1120。
+        //   - fmin(dt,1.1) 子步进循环只属于 EmoteEngine_progress @0x67D01C（EmotePlayer
+        //     类）。二进制里每次迭代把 slice 作为 dt 传给 7 个 controller deque 的 step
+        //     （物理相位 @0x67d2d4 `phase += slice`，各 *_step(slice) 按 slice 推进时间
+        //     状态）——是有意义的物理积分细分。这段已正确实现于 EmoteEngine::progress
+        //     （EmoteEngine.cpp 子步进循环，每个 step 都传 `step`），循环结束后 bind-loop
+        //     写 Player HM1/HM2，再调 progressFramesLike_0x6D2A54 → progress_inner（=本
+        //     函数）恰好一次。
+        //   - 调用链证据：非 emote 的 `Player.progress → progressCompat @0x6D2A98 →
+        //     sub_6D2A54 → progress_inner` 全程不触及 @0x67D01C；progress_inner 的 callee
+        //     里没有任何 controller step。子步进与 progress_inner 是兄弟（EmoteEngine 调
+        //     progress_inner），不是父子。
+        //
+        // 误植后果（本轮定位的标题卡死元凶）：非 emote 的 Player.progress 路径在大 dt 时
+        // （progressCompat 把 ms clamp 到 [0,60000] → ×60/1000 → 最大 3600 帧）会空转
+        // ⌈dt/1.1⌉≈3273 次，且 refreshFixed() 不接收 controllerDt、每次迭代做完全相同的
+        // 工作（既无累积也无意义）；再经 updateLayersPhase3_MotionSubNode 对每个 Motion
+        // 子节点递归 child.frameProgress(同一 dt)，迭代数 × 节点数 → 单帧卡死。移除后
+        // frameProgress 与 progress_inner @0x6C106C 一一对应（一次性消费 dt）。
 
         // EMOTE POST-PROCESS MIGRATED OUT (2026-06-03 approved topology refactor).
         // The binary Player_progress_inner @0x6C106C (which frameProgress models)
