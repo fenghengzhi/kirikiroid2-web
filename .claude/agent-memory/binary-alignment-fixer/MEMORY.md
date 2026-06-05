@@ -1,6 +1,7 @@
 - [Root-stream two-tier: seed vs incremental](root_stream_two_tier_seed_vs_incremental.md) — +568/+576/+584/+616 reseek(0x6B86C8) recomputes from cursor; advance/rewind(0x6B6ADC/0x6B9A3C) only evolve, NEVER recompute at entry; init(0x6B3778) seeds only +548/+616
 - [Controller stepping: typed-deque vs dead buckets](controller_stepping_typed_deque_vs_dead_buckets.md) — 0x67D01C/0x671228 = ONE typed-deque model into HM7; _type4..8ControllerAnimators+_variableAnimators were dead port residue (removed 2026-06-05, byte-neutral)
 - [EmoteVarController alignment](emotevarcontroller_alignment.md) — ctor 0x667030 / step 0x666BF8 data flow, allocation size, inverted lerp roles
+- [applyVarControllers 0x6766E0 writeback](applyVarControllers_0x6766E0_writeback.md) — 4 direct-ctl writebacks pos/color/scale/angle + sink addrs/semantics; 0x67D380 is CALLSITE not body; setColorWeight R/B swizzle symmetric; logo-inert
 - [EmoteEngine 1496B layout](emoteengine_1496b_hashmap_layout.md) — verified byte map: 7 inline unordered_maps + 4 vectors (NOT byte blocks); _bindListHead aliases HM7
 - [sub_6C4E28 build/execute split](sub6C4E28_build_execute_split.md) — requireLayerId materialization (item+20/+424) belongs in BUILD loop; port wrongly moved it to EXECUTE → render-step build_flow_mismatch
 - [0x6C7440/0x6C4E28 draw dispatch contract](sub6C7440_6C4E28_dispatch_contract.md) — all draw prims go through FuncCall(vtbl+16) w/ UTF-16 keys+argc; local Layer registers only 4 of 12 needed TJS methods → migration LARGE not low-risk, reported for approval

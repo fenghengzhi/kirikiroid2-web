@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <spdlog/spdlog.h>
 
@@ -244,64 +245,81 @@ namespace motion {
         _player = nullptr;
     }
 
-    // Aligned with libkrkr2.so sub_6766E0
-    //   EmoteEngine_applyVarControllers_pos_scale_color_angle @ 0x6766E0.
+    // Aligned with libkrkr2.so
+    //   EmoteEngine_applyVarControllers_pos_scale_color_angle @ 0x6766E0
+    //   (call site inside EmoteEngine_progress @0x67d380).
     //
-    // Binary call shape (VERIFIED by decompile of sub_6766E0):
-    //   step(ctlPosition@+1072, &v);  Player_setCoord(player, v[0], v[1]);
-    //   step(ctlColor@+1088,    &v);  sub_6CD724(player, packARGB(v[0..3]));
-    //   step(ctlScale@+1080,    &v);  *(double*)(this+1176) =
-    //                                     1.0 / (*(double*)(this+1168) * v[0]);
-    //                                 Player_setSlant(player, v[0], v[0]);
-    //   step(ctlAngle@+1096,    &v);  Player_setAngleDeg(player, v[0]);
+    // Binary body (VERIFIED by fresh decompile of 0x6766E0 + all 4 sinks, 2026-06-06):
+    //   step(ctlPosition@+1072, &v7, dt);  Player_setCoord(player, v7, v8);   // @0x6CCFF8
+    //   step(ctlColor@+1088,    &v7, dt);  sub_6CD724(player, packARGB);       // @0x6CD724
+    //       packARGB = (u8)(int)v7 | (u8)(int)v8<<8 | (u8)(int)v9<<16 | (u8)(int)v10<<24;
+    //   step(ctlScale@+1080,    &v7, dt);  *(double*)(this+1176) =
+    //                                          1.0 / (*(double*)(this+1168) * v7);
+    //                                      Player_setSlant(player, v7, v7);    // @0x6C0F54
+    //   step(ctlAngle@+1096,    &v7, dt);  Player_setAngleDeg(player, v7);     // @0x6C0F84
     //
-    // ORDER IS pos -> color -> scale -> angle (NOT pos/scale/color/angle).
-    // Each apply happens IMMEDIATELY after its own step, all reusing the same
-    // small output buffer (the binary reuses stack slot &v7 for every step).
+    // ORDER IS pos -> color -> scale -> angle. Each apply happens IMMEDIATELY
+    // after its own step, all reusing the same small output buffer (the binary
+    // reuses stack slot &v7 for every step).
     //
-    // PLATFORM_BOUNDARY: Player_setCoord/setSlant/setAngleDeg and the color
-    //   pack sink (sub_6CD724) are referenced by binary name; the local
-    //   equivalents are not yet wired (P1). The controller steps + the +1176
-    //   scale-denominator write are real here.
+    // Sink semantics confirmed against the binary:
+    //   - Player_setCoord(0x6CCFF8): (x=v7, y=v8) -> root+1592/+1600. Local
+    //     Player::setCoord matches.
+    //   - sub_6CD724 = Player_setColorWeight(0x6CD724): takes the int packed by
+    //     THIS caller; the sink's internal R/B swizzle into +1156 is replicated
+    //     by Player::setColorWeight (swapPackedRbLike_0x6CD710). So we pass the
+    //     caller pack verbatim.
+    //   - Player_setSlant(0x6C0F54): two args (slantX=v7, slantY=v7) -> root
+    //     +1624/+1632. Local Player::setSlant(v) writes both axes = v, matching
+    //     setSlant(v7, v7).
+    //   - Player_setAngleDeg(0x6C0F84): input is DEGREES (no rad conversion),
+    //     fed directly from step output v7.
+    //
+    // Note: binary derefs the 4 controller ptrs unconditionally (no null guard);
+    // ctor (lines 48-58) always `new`s them so they are non-null at runtime. The
+    // local if(_ctlX) guards are a conservative no-op equivalent.
     void EmoteEngine::applyVarControllers_pos_scale_color_angle(float dt) {
         // Shared output buffer (mirrors the binary's single &v7 stack slot;
         // 4 floats covers the widest controller, color count=4).
         float out[4];
 
-        // 1) POSITION (ctl@+1072, count=2) -> Player_setCoord(out[0], out[1]).
+        // 1) POSITION (ctl@+1072, count=2) -> Player_setCoord(v7, v8) @0x6CCFF8.
         if (_ctlPosition) {
             out[0] = out[1] = 0.0f;
             EmoteVarController_step(_ctlPosition, out, dt);
-            // Player_setCoord(_player, out[0], out[1]);  // TODO(P1)
+            _player->setCoord(out[0], out[1]);
         }
 
-        // 2) COLOR (ctl@+1088, count=4) -> sub_6CD724(packed ARGB32).
+        // 2) COLOR (ctl@+1088, count=4) -> sub_6CD724(packed ARGB32) @0x6CD724.
+        //    Pack exactly as the binary caller does (out[0]=byte0 .. out[3]=byte3);
+        //    Player::setColorWeight reproduces the sink's internal R/B swizzle.
         if (_ctlColor) {
             out[0] = out[1] = out[2] = out[3] = 1.0f;
             EmoteVarController_step(_ctlColor, out, dt);
-            // const uint32_t argb =
-            //     (uint8_t)(int)out[0]
-            //   | ((uint8_t)(int)out[1] << 8)
-            //   | ((uint8_t)(int)out[2] << 16)
-            //   | ((uint8_t)(int)out[3] << 24);
-            // sub_6CD724(_player, argb);                 // TODO(P1)
+            const std::uint32_t argb =
+                  (std::uint32_t)(std::uint8_t)(int)out[0]
+                | ((std::uint32_t)(std::uint8_t)(int)out[1] << 8)
+                | ((std::uint32_t)(std::uint8_t)(int)out[2] << 16)
+                | ((std::uint32_t)(std::uint8_t)(int)out[3] << 24);
+            _player->setColorWeight((tjs_int)argb);
         }
 
-        // 3) SCALE (ctl@+1080, count=1) -> +1176 denom + Player_setSlant.
+        // 3) SCALE (ctl@+1080, count=1) -> +1176 denom + Player_setSlant @0x6C0F54.
         if (_ctlScale) {
             out[0] = 1.0f;
             EmoteVarController_step(_ctlScale, out, dt);
             // Binary: *(double*)(this+1176) = 1.0 / (*(double*)(this+1168) * out[0]);
             // (no guard in the binary; division by zero yields inf as in libc).
             _meshDivisionRatioDup = 1.0 / (_meshDivisionRatio * out[0]);
-            // Player_setSlant(_player, out[0], out[0]);  // TODO(P1)
+            // setSlant(v7, v7): both axes = out[0]; local setSlant writes slantX=slantY=v.
+            _player->setSlant(out[0]);
         }
 
-        // 4) ANGLE (ctl@+1096) -> Player_setAngleDeg(out[0]).
+        // 4) ANGLE (ctl@+1096) -> Player_setAngleDeg(out[0]) @0x6C0F84 (DEGREES).
         if (_ctlAngle) {
             out[0] = 0.0f;
             EmoteAngleController_step(_ctlAngle, out, dt);
-            // Player_setAngleDeg(_player, out[0]);       // TODO(P1)
+            _player->setAngleDeg(out[0]);
         }
     }
 
