@@ -4,6 +4,7 @@
 #pragma once
 #include <list>
 #include <memory>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include "tjs.h"
@@ -112,8 +113,15 @@ namespace motion {
         tTJSVariant getLastLoadedModule() const;
         tTJSVariant findLoaded(ttstr path) const;
         tTJSVariant findSource(ttstr path) const;
+        // P3-B (2026-06-05): binary RM exposes ONLY requireLayerId (no-arg) and
+        //   releaseLayerId(id) — NCB registrar @0x6AB8BC, bodies sub_6AB694 /
+        //   sub_6AB750. The string "requireLayerIdForName" has ZERO hits in the
+        //   entire libkrkr2.so (cross-verified full-binary scan); it was a local
+        //   invention. requireLayerId@0x6AB694 takes NO name (all 3 call sites —
+        //   buildNodeTree@0x6B4A6C / emitRenderItem@0x6C4E28 /
+        //   RenderMotionFrame@0x6DE738 — call it numparams=0). Removed the
+        //   by-name variant + the name<->id maps below.
         tjs_int requireLayerId();
-        tjs_int requireLayerIdForName(ttstr name);
         void releaseLayerId(tjs_int id);
 
         // M9 brick B: binary ResourceManager NCB members (ncb_registerMembers
@@ -155,9 +163,15 @@ namespace motion {
                 loadedModules;
             ttstr lastLoadedPath;
             tTJSVariant lastLoadedModule;
-            std::unordered_map<std::string, tjs_int> layerIdsByName;
-            std::unordered_map<tjs_int, std::string> layerNamesById;
-            std::unordered_set<tjs_int> usedLayerIds;
+            // P3-B (2026-06-05): binary RM layer-id allocator (ctor sub_6A88CC)
+            //   = std::set<unsigned int> @+168 (std::_Rb_tree<unsigned int,
+            //   _Identity, std::less> — type signature literal in
+            //   _M_insert_unique/_M_erase_aux callers 0x6AB694/0x6AB750) + a
+            //   next-id counter @+216. NO name<->id maps exist in the binary
+            //   (the by-name machinery was a local invention; see header note).
+            //   Container selection aligned: std::set (ordered RB-tree), not
+            //   std::unordered_set.
+            std::set<tjs_int> usedLayerIds;
             tjs_int nextLayerId = 1;
         };
 

@@ -1252,11 +1252,14 @@ namespace motion {
         std::vector<std::string> _playingTimelineLabels;
 
         // === Render-layer state (Phase A5) ===
-        // Web-only host adaptation: tracks Cocos2d / DOM-side layer ids,
-        // per-layer render snapshot used by the draw dispatch, plus the
-        // background / caption variant lists exposed to script.
-        std::unordered_map<std::string, tjs_int> _layerIdsByName;
-        std::unordered_map<tjs_int, std::string> _layerNamesById;
+        // Web-only host adaptation: per-layer render snapshot used by the draw
+        // dispatch, plus the background / caption variant lists exposed to
+        // script.
+        // P3-B (2026-06-05): removed dead `_layerIdsByName`/`_layerNamesById`
+        //   (declared + cleared in clear() but never written/read — verified by
+        //   full-repo grep). They were residue of the now-removed by-name
+        //   layer-id machinery (binary has no name<->id maps; "requireLayerId"
+        //   takes no name, see ResourceManager.h note).
         std::unordered_map<tjs_int, detail::LayerRenderState> _renderLayerStates;
         std::vector<tTJSVariant> _backgrounds;
         std::vector<tTJSVariant> _captions;
@@ -1376,7 +1379,9 @@ namespace motion {
         tjs_int _width = 0;
         tjs_int _height = 0;
         int _alphaOpCounter = 0;
-        tjs_int _nextLayerId = 1;
+        // P3-B (2026-06-05): removed dead `_nextLayerId` (declared, never used —
+        //   full-repo grep). Layer-id allocation lives entirely in the RM
+        //   (ResourceManager::requireLayerId, set<uint>+counter @0x6AB694).
         tjs_int _nextLayerAbsolute = 1;
         // (Removed 2026-06-05) The `VariableKeyframe` / `VariableAnimatorState`
         //   aliases (detail::LegacyVariable*) and the

@@ -10,3 +10,4 @@
 - [EmotePlayer file topology](emoteplayer_file_topology.md) — 类族文件拓扑; 无 EmotePlayerImpl/PrimaryEmotePlayer/MotionLayerMgr; 4类3文件; 二进制无 PrimaryEmotePlayer
 - [EmoteObject 40B topology](emoteobject_40b_topology.md) — Gap2权威: EmoteObject(+0 RM232B/+8 Engine/+16 vector<variant*>); 本地缺RM字段+_module应是vector; getVariable↔setVariable桥=bind-loop stub(sub_67C560/67C6B0)
 - [Player local vs binary audit](player_local_vs_binary_audit.md) — 本地 Player.h:116 全面审计结论: 字段源码序/全std容器/无vtable✅/RAII ctor; ~35%对齐 + Top5未对齐项
+- [RM layer-id container](rm_layerid_container.md) — RM layer-id=std::set<uint>@+168+counter@+216(ctor 0x6A88CC);无 name maps;requireLayerIdForName 本地发明(ForName 0命中);3站点 dispatch FuncCall numparams=0

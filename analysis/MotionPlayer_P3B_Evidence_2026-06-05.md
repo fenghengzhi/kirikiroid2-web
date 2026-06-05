@@ -202,7 +202,26 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 - main.cpp Player NCB ctor `(ResourceManager)`→`(tTJSVariant)`（dispatch-in factory）。
 - 验证：class-layout-auditor 5/5 对齐 0 真实 bug；web debug 240/240、wasmtime guest 276/276、logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS。native catch2 motionplayer-dll 的 4 例失败(resource chain/logo/draw cache/emoteplayer SEGFAULT)经 git stash 对照确认为 **HEAD 既有失败，非 P3-B 回归**。
 
-**仍 defer**（证据不足或最大侵入，下一 session）：layer-id 容器/无 name 签名（块4.1，caller 路由未取证）、findMotion/loadMotion→+992 FuncCall（最大侵入）、+656 bufLayer 渲染分支（本地未实装，块4.2）。
+### ✅ 第二轮（2026-06-05 续）：layer-id「无 name 签名」+ 容器选型对齐
+
+先补 3 块缺口证据（3 个 ida-deep-analyzer 并行）：
+- **caller 路由**：require/release **100% 经 Player+992 RM dispatch FuncCall**（`L"requireLayerId"`@0x14D9014 slot16 / `L"releaseLayerId"`），3 站点（buildNodeTree@0x6B4A6C / emitRenderItem@0x6C4E28 / RenderMotionFrame@0x6DE738）**全 numparams=0**（无 name）；release 3 站点（layerId1/layerId2/条件 child+424）。**无任何 native 直调。**
+- **render 侧 0x6C4E28**：item+424 由零参 requireLayerId FuncCall 分配新 id，`item+20==0` latch 门控只发一次，**不按 name 查/分配**。
+- **交叉核实**：`"requireLayerIdForName"` 全 binary **0 命中**（纯本地发明）；binary **无任何 name→id 路径**；RM 内部 = `std::set<unsigned int>`（_Rb_tree，ctor sub_6A88CC@+168，类型签名字面）+ 计数器@+216（ctor 预占 id 0）。
+
+实装（确信 diff-green 部分）：
+- RM State `usedLayerIds`：`std::unordered_set`→**`std::set<tjs_int>`**（维度⑤，对齐 _Rb_tree<uint>）；删 `layerIdsByName`/`layerNamesById` + `requireLayerIdForName`；`releaseLayerId` set-only（对齐 0x6AB750）；clearCache/unloadAll 去 name-map clear。
+- `Player::requireLayerId(name)` fallback `requireLayerIdForName(name)`→无参 `requireLayerId()`（render 路径 inert）。
+- 删 Player 3 个死字段 `_layerIdsByName`/`_layerNamesById`/`_nextLayerId`（全 cpp/+tests/ 交叉核实仅 decl/clear 无读写）。
+- 验证：class-layout-auditor 6/6 忠实 0 真实 bug；web debug 248/248、wasmtime guest 链接、logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS；native catch2 同 4 例既有失败（无新回归）。
+
+**layer-id 仍 defer 的子项**（有证据，但有 diff 风险/需更大改动，下一轮）：
+- (a) ctor 预占 id 0（binary 0x6A88CC 末尾 new(0x28) key=0）—— 当前 inert（counter 从 1 起）。
+- (b) **clearCache/unloadAll 不应清 layer-id set/counter**（binary clearCache@0x6A8438 只清 +72 链表，不碰 set）—— auditor 标为**既有旧偏差**（非本轮引入），建议下轮优先小改修掉。
+- (c) render 侧 `Player::requireLayerId` reuse-by-name → allocate-fresh（binary 0x6C4E28 零参分配新 id + item+20 latch，不复用）—— diff 热路径风险。
+- (d) 调用方 native→dispatch FuncCall(L"requireLayerId"/L"releaseLayerId") 路由（维度③，3 站点全经 +992 dispatch）。
+
+**整体 P3-B 仍 defer**：findMotion/loadMotion→+992 FuncCall（最大侵入，RM findMotion@0x6A9ED4 桩为硬 blocker）、+656 bufLayer 渲染分支（本地未实装，块4.2）。
 
 ## 原「下次 session 动手步骤清单」（步骤 2/3 已落地，存档）
 

@@ -43,8 +43,6 @@ namespace motion {
         _activeMotion.reset();
         _timelines.clear();
         _playingTimelineLabels.clear();
-        _layerIdsByName.clear();
-        _layerNamesById.clear();
         nativeRM()->clearCache();
         _lastCanvas.Clear();
         _lastViewParam.Clear();
@@ -90,7 +88,16 @@ namespace motion {
                 }
             }
         }
-        return nativeRM()->requireLayerIdForName(name);
+        // P3-B (2026-06-05): binary has NO by-name layer-id allocation
+        //   ("requireLayerIdForName" string: 0 hits in libkrkr2.so). The render
+        //   path (emitRenderItem @0x6C4E28) allocates via the no-arg
+        //   requireLayer@0x6AB694 (numparams=0). Fallback now uses the no-arg RM
+        //   requireLayerId. (This fallback is reached only when the labeled node
+        //   is absent — the render caller passes the node's own layerName, which
+        //   the lookup above resolves to its already-allocated layerId1, so this
+        //   path is inert for the live render flow. The render-side
+        //   reuse-vs-fresh alignment to 0x6C4E28 is a separate deferred step.)
+        return nativeRM()->requireLayerId();
     }
 
     void Player::releaseLayerId(tjs_int id) {

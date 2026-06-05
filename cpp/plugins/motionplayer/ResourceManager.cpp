@@ -161,8 +161,6 @@ void motion::ResourceManager::clearCache() const {
     _state->loadedModules.clear();
     _state->lastLoadedPath.Clear();
     _state->lastLoadedModule.Clear();
-    _state->layerIdsByName.clear();
-    _state->layerNamesById.clear();
     _state->usedLayerIds.clear();
     _state->nextLayerId = 1;
 }
@@ -308,32 +306,16 @@ tjs_int motion::ResourceManager::requireLayerId() {
     return id;
 }
 
-tjs_int motion::ResourceManager::requireLayerIdForName(ttstr name) {
-    if(!_state) {
-        return 0;
-    }
-    const auto key = name.AsStdString();
-    if(const auto it = _state->layerIdsByName.find(key);
-       it != _state->layerIdsByName.end()) {
-        return it->second;
-    }
-
-    const auto id = requireLayerId();
-    _state->layerIdsByName[key] = id;
-    _state->layerNamesById[id] = key;
-    return id;
-}
-
+// P3-B (2026-06-05): releaseLayerId aligned to sub_6AB750 @0x6AB750 —
+//   erase the id from the std::set<unsigned int> @+168 and nothing else. The
+//   binary keeps NO name<->id maps (requireLayerIdForName removed, its string
+//   has 0 hits in libkrkr2.so); the by-name cleanup that used to live here is
+//   gone.
 void motion::ResourceManager::releaseLayerId(tjs_int id) {
     if(!_state || id == 0) {
         return;
     }
     _state->usedLayerIds.erase(id);
-    if(const auto it = _state->layerNamesById.find(id);
-       it != _state->layerNamesById.end()) {
-        _state->layerIdsByName.erase(it->second);
-        _state->layerNamesById.erase(it);
-    }
 }
 
 // --- M9 brick B: binary ResourceManager members missing from the port surface
@@ -361,8 +343,6 @@ void motion::ResourceManager::unloadAll() const {
     _state->loadedModules.clear();
     _state->lastLoadedPath.Clear();
     _state->lastLoadedModule.Clear();
-    _state->layerIdsByName.clear();
-    _state->layerNamesById.clear();
     _state->usedLayerIds.clear();
     _state->nextLayerId = 1;
 }
