@@ -8,6 +8,8 @@ metadata:
 MotionNode = Player(EmotePlayer)+200/+204 deque 的元素，**stride 2632 (0xA48)**，字节级证据。
 完整字段表见 `analysis/MotionNode_2632B_layout.md`。
 
+**deque 容器拓扑裁决见 [[node-deque-no-sentinel]]**：node-deque **无 trailing sentinel**，dequeSize==realNodeCount(root+N)，walk 的 `dequeSize-1` 是 +1 偏置抵消(`start.last-start.cur` 代替 `start.cur-start.first`)非 sentinel。本地 _nodes 已正确，walk 上界=`_nodes.size()`。
+
 **重要方法论更正**：应以 `disasm`（带真实指令偏移 + load/store 宽度）为准，不要信 hex-rays `decompile` 的偏移。
 hex-rays 把 clip-slot 写成 node+320，实际汇编证明 slot stride=0x218 且活动 slot base = node+536*activeSlotIndex（slot[0]@node+0）。
 
