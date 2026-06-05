@@ -695,8 +695,25 @@ namespace motion {
         }
         // Player_progress_inner node-deque loop starts at index 1 (0x6C1288:
         // `for(j=1; ...)`). Root node (index 0) takes the root-stream path, not
-        // the per-node advanceNodeFrames seek. Matches the updateLayers phase2
-        // loop range exactly (PlayerUpdateLayerEval.cpp:647 `i = 1`).
+        // the per-node advanceNodeFrames seek.
+        //
+        // UPPER BOUND = `i < nodes.size()` — DO NOT change to `i+1 < size()`.
+        // The binary exit is `dequeSize - 1 <= idx` (0x6C12D8 / disasm 0x6B7390
+        // SUB X9,X9,#1 / 0x6B7398 B.LS), the term being the libstdc++
+        // std::deque::size() expansion. It LOOKS like `idx < size-1` (末节点排
+        // 除), but the binary deque carries ONE EXTRA trailing past-the-end slot
+        // beyond the real node count, so `dequeSize - 1 == realNodeCount ==
+        // _nodes.size()`. The `-1` cancels that trailing slot; the walk covers
+        // ALL real non-root nodes [1, realNodeCount-1], identical to the local
+        // `i < _nodes.size()`. Cross-checked vs Player_buildNodeTree @0x6B51F0
+        // (0x6B531C): its INDEPENDENT deque-size term ALSO subtracts 1 and its
+        // `v9=1; while(++v9 >= dequeSize-1)` loop reads real node fields (node+28
+        // type==12), confirming dequeSize = realNodeCount + 1, NOT 1:1.
+        // RUNTIME-PROVEN (2026-06-06): `i+1 < size()` regressed yuzulogo by 468
+        // mismatches (last real node, layer_index 24, stopped being seeked);
+        // baseline `i < size()` is byte-exact vs the libkrkr2.so oracle. The
+        // 2026-06-06 audit's "_nodes is 1:1 with the binary deque" claim is WRONG
+        // — the deque has a trailing sentinel the local container lacks.
         for (size_t i = 1; i < nodes.size(); ++i) {
             detail::MotionNode &node = nodes[i];
             // Player_advanceNodeFrames (0x6B7E44) seeks this node's two slots to
@@ -766,11 +783,18 @@ namespace motion {
     // initializeNodeTimelineSlotsLike_0x6B64AC via frameSelectionTimeLike_0x6B7E44.
     // This is what makes the loop-wrap path's subsequent FORWARD-ONLY inline seek
     // sufficient (no corrective-backward needed). The binary breaks at
-    // m == dequeSize-1; the live deque maps 1:1 to _nodes, so the proven node-walk
-    // range `i < _nodes.size()` is used (matches progressSeekNodeSlotsLike). The
-    // 0x6B9234 pruneHM3 / 0x6B9650 aux-list tail is housekeeping (inert on node
-    // slots) and stays DEFERRED. (Only reached at loop-wrap, which the logo cases
-    // never hit — empirically reseekTimelineCursors is never called for m2logo.)
+    // m == dequeSize-1; but the binary deque carries one trailing past-the-end
+    // slot beyond the real node count, so `dequeSize - 1 == realNodeCount ==
+    // _nodes.size()` and the proven node-walk range is `i < nodes.size()`
+    // (matches progressSeekNodeSlotsLike). UPPER BOUND verified vs fresh-decompile
+    // 0x6B9200 (`... - 1 <= m` -> break) — the same libstdc++ deque::size()-1 exit
+    // term as all node-walks; the `-1` cancels the trailing sentinel, NOT the last
+    // real node. (See progressSeekNodeSlotsLike_0x6C106C for the full
+    // dequeSize=realNodeCount+1 cross-check; do NOT change to `i+1 < size()`.)
+    // The 0x6B9234 pruneHM3 / 0x6B9650 aux-list tail is housekeeping (inert on
+    // node slots) and stays DEFERRED. (Only reached at loop-wrap, which the logo
+    // cases never hit — empirically reseekTimelineCursors is never called for
+    // m2logo.)
     void Player::reseekNodeTimelineSlotsLike_0x6B91B0(double targetTime) {
         auto &nodes = _nodes;
         for (size_t i = 1; i < nodes.size(); ++i) {
@@ -802,6 +826,14 @@ namespace motion {
     // if a modified-setter is later ported, the clear MUST be added here or the
     // node would be rebuilt every frame.
     void Player::preProgressDirtyNodesLike_0x6B6878() {
+        // UPPER BOUND = `i < _nodes.size()` — do NOT change to `i+1 < size()`.
+        // Fresh-decompile 0x6B6920 (`... - 1 <= v2` -> return; v2 starts at 1) is
+        // the SAME libstdc++ std::deque::size()-1 exit term as the other 3
+        // node-walks (progress_inner 0x6C12D8 / advanceRootAndNodes 0x6B7398 /
+        // reseek 0x6B9200). The `-1` cancels the binary deque's trailing
+        // past-the-end sentinel (dequeSize = realNodeCount + 1), so the walk
+        // covers all real nodes [1, realNodeCount-1] == `i < _nodes.size()`. (Full
+        // cross-check + runtime proof in progressSeekNodeSlotsLike_0x6C106C.)
         for (size_t i = 1; i < _nodes.size(); ++i) {
             detail::MotionNode &node = _nodes[i];
             if (node.forceVisible == 0 || !node.emoteEditDict) { // node+1996/+1980

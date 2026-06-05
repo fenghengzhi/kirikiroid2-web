@@ -1,3 +1,4 @@
+- [Node-walk deque trailing sentinel](node_walk_deque_trailing_sentinel.md) — 二进制 node-deque = realNodeCount+1; 所有 node-walk 的 `dequeSize-1` 退出 == 本地 `i<_nodes.size()`,NO off-by-one; 改 i+1<size() 回归 468(yuzulogo); 审计"1:1"断言错
 - [Root-stream two-tier: seed vs incremental](root_stream_two_tier_seed_vs_incremental.md) — +568/+576/+584/+616 reseek(0x6B86C8) recomputes from cursor; advance/rewind(0x6B6ADC/0x6B9A3C) only evolve, NEVER recompute at entry; init(0x6B3778) seeds only +548/+616
 - [Controller stepping: typed-deque vs dead buckets](controller_stepping_typed_deque_vs_dead_buckets.md) — 0x67D01C/0x671228 = ONE typed-deque model into HM7; _type4..8ControllerAnimators+_variableAnimators were dead port residue (removed 2026-06-05, byte-neutral)
 - [EmoteVarController alignment](emotevarcontroller_alignment.md) — ctor 0x667030 / step 0x666BF8 data flow, allocation size, inverted lerp roles
