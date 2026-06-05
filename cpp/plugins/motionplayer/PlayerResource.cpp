@@ -72,33 +72,14 @@ namespace motion {
         return snapshot->moduleValue;
     }
 
-    tjs_int Player::requireLayerId(ttstr name) {
-        // Aligned to libkrkr2.so: after eager Player_buildNodeTree, the
-        // label map is authoritative for any loaded motion; an empty
-        // nodeLabelMap simply means no motion is loaded yet.
-        if(true) {
-            // Player+24 map is ttstr-keyed; look up by the raw ttstr name.
-            if(const auto it = _nodeLabelMap.find(name);
-               it != _nodeLabelMap.end()) {
-                const auto nodeIndex = it->second;
-                if(nodeIndex >= 0 &&
-                   nodeIndex < static_cast<int>(_nodes.size()) &&
-                   _nodes[nodeIndex].layerId1 != 0) {
-                    return _nodes[nodeIndex].layerId1;
-                }
-            }
-        }
-        // P3-B (2026-06-05): binary has NO by-name layer-id allocation
-        //   ("requireLayerIdForName" string: 0 hits in libkrkr2.so). The render
-        //   path (emitRenderItem @0x6C4E28) allocates via the no-arg
-        //   requireLayer@0x6AB694 (numparams=0). Fallback now uses the no-arg RM
-        //   requireLayerId. (This fallback is reached only when the labeled node
-        //   is absent — the render caller passes the node's own layerName, which
-        //   the lookup above resolves to its already-allocated layerId1, so this
-        //   path is inert for the live render flow. The render-side
-        //   reuse-vs-fresh alignment to 0x6C4E28 is a separate deferred step.)
-        return dispatchRequireLayerId();
-    }
+    // P3-B (c) (2026-06-05): removed the port-invented by-name
+    //   `Player::requireLayerId(ttstr name)` (node-name reuse + by-name alloc).
+    //   binary has NO by-name layer-id path anywhere ("requireLayerIdForName"
+    //   string: 0 hits; "requireLayerId" only ever called numparams=0). The
+    //   render path (emitRenderItem@0x6C4E28 LABEL_28) allocates a FRESH id via
+    //   the no-arg RM dispatch FuncCall, gated only by the item+20 latch — it
+    //   does not look up or reuse a node's layerId by name. Render now calls
+    //   dispatchRequireLayerId() directly (PlayerRenderExecute.cpp).
 
     void Player::releaseLayerId(tjs_int id) {
         dispatchReleaseLayerId(id);

@@ -462,7 +462,8 @@ namespace motion {
         void unloadAll();
         bool isExistMotion(ttstr name);
         tTJSVariant findMotion(ttstr name);
-        tjs_int requireLayerId(ttstr name);
+        // P3-B (c): by-name `requireLayerId(ttstr)` removed (binary has no by-name
+        //   layer-id path). Allocation goes through dispatchRequireLayerId().
         void releaseLayerId(tjs_int id);
 
         // Drawing/rendering

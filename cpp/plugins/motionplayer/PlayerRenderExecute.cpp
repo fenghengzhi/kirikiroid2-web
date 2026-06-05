@@ -99,21 +99,15 @@ namespace motion {
                         new SeparateLayerAdaptor(targetLayer);
                 }
                 if(!entry.rawFlag20) {
-                    // LABEL_28 @0x6c514c: read the requireLayerId property off
-                    // the resolved render-layer object → item+424. The port's
-                    // Player::requireLayerId(name) returns node.layerId1 for a
-                    // labeled node (PlayerResource.cpp:90), i.e. the same value
-                    // domain already committed to entry.layerId. Re-resolving it
-                    // here gives the latch a real backing materialization (not a
-                    // hollow flag) while preserving the verified value domain.
-                    if(entry.nodeIndex >= 0 &&
-                       entry.nodeIndex < static_cast<int>(_nodes.size())) {
-                        const auto &node = _nodes[entry.nodeIndex];
-                        if(!node.layerName.empty()) {
-                            entry.layerId =
-                                requireLayerId(detail::widen(node.layerName));
-                        }
-                    }
+                    // P3-B (c): LABEL_28 @0x6c514c allocates a FRESH layer id via
+                    //   the no-arg RM dispatch FuncCall (requireLayerId,
+                    //   numparams=0, 0x6c51a4-c4) → item+424, then sets the
+                    //   item+20 latch so it is emitted once. Binary does NOT look
+                    //   up / reuse a node's layerId by name (the by-name reuse was
+                    //   a port invention; "requireLayerId" is only ever called
+                    //   numparams=0). Every drawable item that reaches this latch
+                    //   gets its own fresh id, unconditionally.
+                    entry.layerId = dispatchRequireLayerId();
                     entry.rawFlag20 = true;
                 }
 

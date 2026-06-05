@@ -536,10 +536,13 @@ TEST_CASE("motionplayer resource chain and query surface") {
     REQUIRE(player.getLayerGetter(firstLayer).Type() == tvtObject);
     REQUIRE(variantCount(player.getLayerGetterList()) == variantCount(layerNames));
 
-    const auto firstLayerId = player.requireLayerId(firstLayer);
+    // P3-B (c): binary has no by-name layer-id API; allocation is the no-arg RM
+    //   dispatch FuncCall (emitRenderItem@0x6C4E28 / buildNodeTree@0x6B4A6C all
+    //   numparams=0). Exercise the faithful no-arg path.
+    const auto firstLayerId = player.dispatchRequireLayerId();
     REQUIRE(firstLayerId > 0);
     player.releaseLayerId(firstLayerId);
-    REQUIRE(player.requireLayerId(firstLayer) > 0);
+    REQUIRE(player.dispatchRequireLayerId() > 0);
 
     const auto mainTimelineLabels = player.getMainTimelineLabelList();
     const auto diffTimelineLabels = player.getDiffTimelineLabelList();
