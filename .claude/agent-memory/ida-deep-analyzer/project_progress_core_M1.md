@@ -43,6 +43,16 @@ if !+480: +1120 += +592; +456 = min(+1120, +1128)   ← G3/G4 真正逻辑
 ## 本端 frameProgress 入口勘误 (PlayerFrameProgress.cpp:1928) — 2026-06-06
 本端开头 `if(!_speed) return;` 是 port-invented 错位守卫. 二进制 progress_inner 入口**无**此判断; _speed(+1093) 只是 advance/rewindRootAndNodes 内部 align/sync/action 事件 gate, 不门控整个 progress. 正确替换: 入口无条件副作用在前, 然后 `if(!_firstFrame && !_allplaying && renderListEmpty()) return;` (复刻 0x6C10E4/F0 + 0x6C1278). 本端 +1099=_allplaying(Player.h:1104), 无 +376 字段(恒走 +376==0 路径). renderList=二进制+384/+392 指针对, 本端对应容器待 grep 确认.
 
+### 已实施 (2026-06-06, commit 待提交; binary-alignment-auditor 复核通过)
+入口已重构为 progress_inner 真实拓扑(替换 commit 8883587 的临时门控 `if(!_firstFrame && !_allplaying)return`):
+- 删除 port-invented `if(!_speed) return;`.
+- 入口补 `_motionCompleted=false`(0x6C108C, Player.h:1148 早已注明"cleared each progress entry"但漏实现). +1152 DWORD 清零(0x6C1088)本端 Player 无该字段(所有 +1152 引用都是 EmoteEngine._windFreqY=engine+1152, 不同对象)→ 未建模字段缺口, 不臆造.
+- loc_6C10E4: `if(!_firstFrame && !_allplaying){ ... }` 内含 loc_6C1270 renderList 空检查.
+- **renderList(+384/+392) 身份已查实**: 56B element vector(begin/end/cap, 首字段 tTJSVariant*), ctor 清零@0x6CEE84, framesel(parse 0x6926B4/merge 0x692AB0/lerp 0x699AE4)产出, updateLayers@0x6BBD44 消费(count=bytelen/56), initNonEmoteMotion@0x6B3914 Release+end=begin 清空. **本端无 1:1 容器**(整个 node-deque 帧步进核心已 STL 化, 见下节), 其"有无可步进节点内容"语义用 `_nodes.empty()` 近似(ACCEPTABLE-PLATFORM-BOUNDARY); 非空分支(0x6C127C..0x6C130C node-deque walk → advanceNodeFrames)用 progressSeekNodeSlotsLike_0x6C106C 复刻.
+- 短路: `if(_syncWaiting)return`(0x6C10F8) 再 `if(_motionCompleted)return`(0x6C1100, 入口已清→dead-but-faithful).
+- firstFrame 块: 二进制 +481, 本端由 _queuing(+480) 承载(STRH 0x0101 同置 +480/+481, 本端 play 仅更新 _queuing). 控制流差异(二进制 fall-through vs 本端 return)经审计 observationally-inert(firstFrame 帧 +480 gate=1 主导, 二者净效果等价).
+- 验证: logo render-events 逐事件 byte-identical(5287, 指针归一化); 千恋万花标题渲染正常无死循环(rAF 持续推进, 无 LOOPWRAP-FWD-HANG).
+
 ## 关键勘误 (本端 Player.h)
 - Player.h:665 `_speed` 注释 "Aligned to +1093: bool flag" 是**错的**. +1093 是 motionStopGate (action/sync/align 开关), 不是 speed. speed 倍率在 **+1168 (double)**, 本端无对应字段.
 

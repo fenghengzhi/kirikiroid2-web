@@ -1923,13 +1923,27 @@ namespace internal {
     }
 
     void Player::frameProgress(double dt) {
-        // Aligned to libkrkr2.so Player_progress_inner (0x6C106C):
-        // _speed is a bool flag (play/pause). When false, skip progress entirely.
-        if(!_speed) {
-            return;
-        }
+        // === Player_progress_inner @0x6C106C 入口 ===
+        // 移除 port-invented `if(!_speed) return;`：二进制 progress_inner 入口
+        // (0x6C1080..0x6C10AC) 全是无条件副作用，**无** play/pause/null 守卫。
+        // +1093(_speed) 只是 advance/rewindRootAndNodes 内部的 align/sync/action
+        // 事件 gate，不门控整个 progress（progress_core_M1 note 勘误，本轮 IDA
+        // 复核 0x6C106C 入口拓扑确认）。
         const double actualDelta = dt;
         _frameLastTime = actualDelta;
+
+        // §1 入口无条件副作用 (0x6C108C): +483 motionCompleted 每帧清零。二进制在
+        // 任何分支/return 之前 STRB WZR,[X19,#0x1E3]；Player.h:1148 已注明
+        // "cleared each progress entry" 但此前漏实现 —— 此处补上。因此入口门控的
+        // `if(_motionCompleted) return`(0x6C1100) 读到的恒为 0（dead-but-faithful，
+        // 二进制为 emote 路径保留该检查）；帧内 loop-wrap 守卫(0x6C1474/0x6C1498 等)读
+        // 到的是 advanceRootAndNodes 在本帧内重新设置的值，不受入口清零影响（本端
+        // 这两处读取是 _motionCompleted 仅有的引用点，无跨帧依赖）。
+        // 二进制入口另清 +1152 DWORD（0x6C1088 `*(_DWORD*)(a1+1152)=0`，用途待定）；
+        // 本端 Player 类无 +1152 字段（grep 确认所有 +1152 引用均为 EmoteEngine 的
+        // _windFreqY=engine+1152 风缓存，不同对象），故该 DWORD 清零无可建模目标，属
+        // "未建模字段"缺口而非遗漏 —— 不臆造字段。
+        _motionCompleted = false;
 
         // HM2 (_evalResultValues @+320) is NOT cleared per-frame. Byte-verified
         //   against Player_progress_inner @0x6C106C (2026-06-03): its entry clears
@@ -1949,23 +1963,58 @@ namespace internal {
         // (no "modified"-setter) but ported for call-chain restoration.
         preProgressDirtyNodesLike_0x6B6878();
 
-        // Binary Player_progress_inner @0x6C10E4 入口门控：cursor-advance + loop-wrap
-        // body 嵌在 (firstFrame(+481) || loopArmed(+1099)) 之内。本地无 activeTimeline
-        // (+376) 字段，恒走二进制的 +376==0 路径；该路径在 0x6C10F0 判
-        // `+481==0 && +1099==0` 成立时 goto loc_6C1270 → renderList(+384/+392) 空 →
-        // 0x6C1278 return，**永不到达 LABEL_48 的 forward/reverse loop-wrap do-while**。
-        // 一个从未 play 过的 child（无 motion：+481/+1099/+1120/+1128/+1136 全 0）正命中
-        // 此门控；缺它就会在 forward loop-wrap 空转（v7 += loopTime-totalFrames = 0-0，
-        // while(0<=v7) 永真）。运行时实测确认：LOOPWRAP-FWD-HANG，全零，motion=<none>。
+        // === loc_6C10E4 入口门控 (二进制真实拓扑, 本轮 IDA 复核 0x6C10E4..0x6C1278) ===
+        // 本端无 +376 activeTimeline 字段（恒等价于二进制 +376==0 路径 -> loc_6C10E4）。
+        // 0x6C10F0: if(+481 firstFrame==0 && +1099 loopArmed==0) goto loc_6C1270。
         // 字段映射（IDA 确认）：+481=_firstFrame、+1099=_allplaying(loopArmed)。
-        // 注：旧的入口 `if(!_speed) return;`（+1093）是 port-invented 错位守卫，二进制
-        // +1093 是 advance/rewind 内部事件 gate 而非 progress 入口门控；它对 _speed=true
-        // 的无 motion child 不生效（实测），故此处补真正的入口门控。
-        // 已知简化（平台边界）：二进制 loc_6C1270 在 renderList 非空且未播放时另有处理；
-        // 本地无 activeTimeline、且本卡死路径 renderList 恒空，故仅复刻 empty→return 分支。
         if(!_firstFrame && !_allplaying) {
+            // loc_6C1270 (0x6C1270/0x6C1278): renderList(+384/+392) 空检查。
+            // renderList = 二进制每帧 framesel(parse 0x6926B4 / merge 0x692AB0 /
+            // lerp 0x699AE4) 产出、updateLayers(0x6BBD44) 消费、initNonEmoteMotion
+            // (0x6B3914) Release+清空的 56B 内容条目 vector(begin/end/cap, 首字段
+            // tTJSVariant*)。本端把含 renderList 的整个 node-deque 帧步进核心替换为
+            // STL _timelines + control-animator 状态机（architecture-level divergence，
+            // 见 progress_core_M1 note "本端缺失整个 node-deque 帧步进核心"），无 1:1
+            // renderList 容器；二进制此处「有无可步进的节点内容」语义由本端 node-deque
+            // (_nodes) 承载（非空分支正是遍历 node-deque 调 advanceNodeFrames）。
+            // 一个从未 play 过的 child（无 motion：firstFrame=0 / loopArmed=0 /
+            // _cachedTotalFrames=_loopTime=0 / _nodes 空）在此 0x6C1278 return，
+            // **永不到达 LABEL_48 forward loop-wrap do-while**（v7 += loopTime-totalFrames
+            // = 0-0，while(0<=v7) 永真 -> 千恋万花标题死循环）。这（非 loopTime<lastTime
+            // 不变量、非 +1136<0 默认）才是二进制避免全 0 child 空转的真正机制。
+            if(_nodes.empty()) {              // 0x6C1278 renderList 空 -> return result
+                return;
+            }
+            // 非空 (0x6C127C..0x6C130C): 遍历 node-deque，每个 node+8 有效者调
+            // Player_advanceNodeFrames(node, this)。本端等价 = 一次 seek-to-+456 的
+            // node 槽刷新（progressSeekNodeSlotsLike 内含 forward + corrective-backward
+            // 子环，方向无关），随后 return（二进制非空分支走完循环即 return result）。
+            progressSeekNodeSlotsLike_0x6C106C(_clampedEvalTime);
             return;
         }
+
+        // 到此 (firstFrame || loopArmed)，二进制 0x6C10F4 起的短路检查：
+        if(_syncWaiting) {                    // 0x6C10F8 syncWaiting!=0 -> return result
+            return;
+        }
+        if(_motionCompleted) {                // 0x6C1100 motionCompleted!=0 -> return
+            // 上方入口已清 _motionCompleted=0，故此处恒不成立（dead-but-faithful，
+            // 复刻二进制为 emote/initEmoteMotion 路径保留的检查点）。
+            return;
+        }
+        // 0x6C1104: if(firstFrame==0) goto LABEL_48（仅 loopArmed，跳过 firstFrame 块）。
+        // 本端 firstFrame 种子标志由 _queuing(+480) 承载 —— 二进制 STRH 0x0101 同置
+        // +480/+481（见 Player.h:236 setTickCount / initNonEmoteMotion @0x6B3AC0），本端
+        // play 路径仅更新 _queuing；故下方 `if(_queuing){ seed; return; }` 即 firstFrame
+        // 块，_queuing==false 时自然落向 LABEL_48 的 clamp+推进。
+        // 控制流差异（已审计为 observationally-inert）：二进制 firstFrame 块清 +481 后
+        // **fall-through 到 LABEL_48**，本端是 **return**。但 firstFrame 帧 +480 gate=1
+        // 主导：二进制 LABEL_48 的 cursor advance 被 +480 gate 跳过，forward-at-end 判断
+        // 落 `else if(!gate)` 因 gate=1 而不调 advanceRootAndNodes、直接 return result ——
+        // 与本端 reseek+return 净效果等价（都不推 +1120 游标、都不调 advance、都做 reseek）。
+        // 第二帧起 updateLayers 清 _queuing(+480)、二进制 firstFrame 自清 +481，两路同样落
+        // LABEL_48 正常推进。等价前提（每帧 frameProgress→updateLayers，见
+        // progressFramesLike_0x6D2A54）成立。
 
         // Aligned to Player_progress_inner (0x6C106C): player+480 is a
         // one-shot first-frame gate. While it is set, progress records the

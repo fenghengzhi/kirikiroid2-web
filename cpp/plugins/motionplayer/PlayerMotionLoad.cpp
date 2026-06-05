@@ -103,7 +103,18 @@ namespace motion {
             }
 
             if(!startedRequested) {
-                double maxTF = 0.0;
+                // 移除 port-invented `_cachedTotalFrames = maxTF`（max(state.totalFrames)）
+                // 覆盖：二进制无此逻辑。+1128(_cachedTotalFrames) 与 +1136(_loopTime)
+                // 全二进制唯一成对写入点是 Player_initNonEmoteMotion @0x6B370C/@0x6B372C
+                // （motion["loopTime"]/motion["lastTime"]，同源配对，见
+                // player-totalframes-looptime-invariant note）。本端 onFindMotion 上方
+                // 已调 initNonEmoteMotionLike_0x6B365C，由 PlayerCore.cpp:750-751
+                // 成对设 `_loopTime=clip->loopTime; _cachedTotalFrames=clip->totalFrames`。
+                // 此处再用 max(state.totalFrames) 单独覆盖 _cachedTotalFrames 而不动
+                // _loopTime，会破坏 loopTime<lastTime 不变量（maxTF 可能为 0 < 残留
+                // _loopTime），令 forward loop-wrap `v7 += loopTime - totalFrames` 在
+                // while(totalFrames<=v7) 下空转 -> 千恋万花标题死循环。删除覆盖后
+                // _cachedTotalFrames/_loopTime 保持 initNonEmoteMotion 的同源配对值。
                 _playingTimelineLabels.clear();
                 const auto &primary =
                     !_activeMotion->mainTimelineLabels.empty()
@@ -120,9 +131,7 @@ namespace motion {
                     state.controlTrackValues.clear();
                     state.controlTrackAnimators.clear();
                     _playingTimelineLabels.push_back(timelineLabel);
-                    if (state.totalFrames > maxTF) maxTF = state.totalFrames;
                 }
-                _cachedTotalFrames = maxTF;
                 _allplaying = !_playingTimelineLabels.empty();
             }
         }
