@@ -856,10 +856,12 @@ NCB_REGISTER_CLASS(D3DEmoteModule) {
     NCB_PROPERTY(protectTranslucentTextureColor,
                  getProtectTranslucentTextureColor,
                  setProtectTranslucentTextureColor);
-    // R-pixelate phase 2: removed D3DEmoteModule.pixelateDivision NCB binding.
-    // binary has pixelateDivision as Motion.Player instance property (+912),
-    // not on D3DEmoteModule. Phase 1 commit 15e5ddc added Player NCB; phase 2
-    // here removes D3DEmoteModule static + NCB exposure.
+    // pixelateDivision is registered on D3DEmoteModule too (sub_52DFA8 @0x52e318,
+    // 7th member in binary order). Property body sub_52E44C/sub_52E454 read/write
+    // module instance +20 (int), independent of Motion.Player's own
+    // pixelateDivision (Player+912). The earlier "binary has it only on Player,
+    // not D3DEmoteModule" removal was over-deletion — restored here.
+    NCB_PROPERTY(pixelateDivision, getPixelateDivision, setPixelateDivision);
 
     // Methods
     NCB_METHOD(setMaxTextureSize);

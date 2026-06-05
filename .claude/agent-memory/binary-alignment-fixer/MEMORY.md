@@ -12,3 +12,4 @@
 - [Player NCB table 0x6D69C8](player_ncb_0x6D69C8_registration.md) — authoritative Motion.Player members: 58 props(41RW+17RO)+32 methods; RO=null setter slot STP XZR,XZR,[+0x40]; colorWeight≠independentLayerInherit; onAction/onSync/onGroundCorrection are no-op methods
 - [Player hashmap key types](player_hashmap_key_types.md) — all 4 HMs + Player+24 node-index map are ttstr(UTF-16)-keyed; hash @0x686944, std::map comparator @0x9B1ED0
 - [D3DEmotePlayer NCB 0x52E504](d3demoteplayer_ncb_0x52E504.md) — 4 deliberate NAME/callback mismatches (bustScale/modified/setTimelineBlendRatio/pass); real names absent → port aliases removed
+- [D3DEmoteModule NCB 0x52DFA8](d3demotemodule_ncb_0x52DFA8.md) — 7-member map + instance offsets(+8/12/13/16/14/20/24,28); pixelateDivision on BOTH D3DEmoteModule+20(def 0) AND Player+912(def 100); ctor zeroes skip +20; maskMode binary def=0 vs local 1 (oos)
