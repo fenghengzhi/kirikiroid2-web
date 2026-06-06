@@ -869,6 +869,12 @@ namespace motion {
         bool prepareRenderItems(bool inheritedFlag18 = false);
         void appendPreparedRenderItems();
         void applyPreparedRenderItemTranslateOffsets();
+        // Faithful 1:1 of libkrkr2.so sub_6F363C-based child→parent aggregation
+        // of the DEAD player+936/944 render-item buffer, followed by clearing
+        // the child buffer (destroy each element's two variants, end=begin).
+        // Used by updateLayersPhase3_MotionSubNode (sub_6BE0C0 @0x6BE2C0) and
+        // the particle pass (sub_6C17A4 @0x6C1A00). Inert in this build.
+        void aggregateChildMotionRenderItemsLike_0x6F363C(Player &child);
         bool buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight);
         bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
                                         bool skipUpdate);
@@ -1377,15 +1383,40 @@ namespace motion {
 
         // === Render-item scratch state (Phase A9) ===
         // preparedRenderItems is the per-frame scratch array of native-shape
-        // render items (libkrkr2.so player+936/944). preparedRenderItemsTopLevel
-        // and preparedRenderItemsGroup are the a2/a3 lists threaded through
-        // sub_6C2334 → sub_6C4E28 → sub_6C7440; both alias into
+        // render items. It corresponds to libkrkr2.so's per-DRAW temporary
+        // vector (built by sub_6C2334, consumed at draw time via
+        // sub_6D5164 → sub_6C7440), NOT player+936/944.
+        // CORRECTION (2026-06-07, fresh decompile of 0x6BE0C0/sub_6F363C):
+        // player+936/944 is a DEAD residual buffer in this build — it has no
+        // producer (no leaf render-item is ever pushed into it; sub_6C2334
+        // writes into caller-stack temporaries) and no consumer (nothing reads
+        // it back). It is now reproduced 1:1 as the SEPARATE member
+        // _childMotionRenderAggregate below (NOT this _preparedRenderItems
+        // list). It is only fed by child players' equally-empty +936 via the
+        // sub_6BE0C0 @0x6BE2C0 / particleStepChildren sub_6C17A4 @0x6C1A00
+        // aggregation, so it stays empty→empty and is observably inert. The
+        // live child render aggregation lives at draw/build time in
+        // appendChildEntriesAtCurrentNode (PlayerRenderItems.cpp). prepared
+        // RenderItemsTopLevel and preparedRenderItemsGroup are the a2/a3 lists
+        // threaded through sub_6C2334 → sub_6C4E28 → sub_6C7440; both alias into
         // preparedRenderItems. renderItemNativeFieldLifetimeByNode preserves
         // the +21 / +216..228 cross-frame fields. perNodeEvalData is local
         // diagnostic scratch (no binary equivalent).
         std::vector<detail::PreparedRenderItem> _preparedRenderItems;
         std::vector<detail::PreparedRenderItem *> _preparedRenderItemsTopLevel;
         std::vector<detail::PreparedRenderItem *> _preparedRenderItemsGroup;
+        // libkrkr2.so player+936/944 (qword index 117/118): the DEAD residual
+        // child-motion render-item aggregate vector. Faithful 1:1 of the binary
+        // buffer (see detail::DeadChildMotionRenderItem). It is observably inert
+        // in this build (no producer, no consumer); the only writers are the
+        // child→parent begin-insert + child-clear in
+        // updateLayersPhase3_MotionSubNode (sub_6BE0C0 @0x6BE2C0) and the
+        // particle pass (Player_particleStepChildren sub_6C17A4 @0x6C1A00), both
+        // of which aggregate equally-empty child buffers. This is NOT the live
+        // draw render list (_preparedRenderItems above is); they are distinct
+        // buffers in the binary. ctor: player+936 zero-init @0x6CEF1C (empty
+        // vector). dtor: per-element variant destroy + free (the vector dtor).
+        std::vector<detail::DeadChildMotionRenderItem> _childMotionRenderAggregate;
         std::unordered_map<int, detail::RenderItemNativeFieldLifetime>
             _renderItemNativeFieldLifetimeByNode;
         // libkrkr2.so player+760: persistent SeparateLayerAdaptor used by the

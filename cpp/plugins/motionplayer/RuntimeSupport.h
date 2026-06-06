@@ -343,6 +343,38 @@ namespace motion::detail {
         bool executedDirect = false;
     };
 
+    // Faithful 1:1 element of libkrkr2.so player+936/944's
+    // std::vector<DeadChildMotionRenderItem> (44-byte stride element).
+    //
+    // Binary layout (sub_6F363C @0x6F363C, the vector::_M_range_insert that
+    // operates on this element type, copies each element as):
+    //   elem+0  : int32              (*v6 = *(_DWORD *)v5)
+    //   elem+4  : tTJSVariant        (sub_A0FB64(v6+1,  v5+4),  20 bytes)
+    //   elem+24 : tTJSVariant        (sub_A0FB64(v6+6,  v5+24), 20 bytes)
+    // total 44 bytes. Destroy path (sub_6BE2C0 / 0x6C1A00 / sub_6F363C
+    // shrink) destroys the two variants via sub_A0F778(elem+24)+sub_A0F778(elem+4).
+    //
+    // This is the DEAD residual render-item buffer: in this libkrkr2.so build
+    // it has NO producer (no leaf item is ever pushed in; sub_6C2334 writes
+    // caller-stack temporaries instead) and NO consumer (nothing reads it).
+    // It is only ever fed by aggregating child players' equally-empty +936
+    // buffers (Player_updateLayers_childMotionPass @0x6BE2C0 and
+    // Player_particleStepChildren @0x6C1A00), so it stays empty -> empty and
+    // is observably inert. It is reproduced here purely for 1:1 structural
+    // fidelity (the live draw-time render list is the SEPARATE
+    // _preparedRenderItems, which corresponds to the binary's per-draw temp
+    // vector built by sub_6C2334, NOT this buffer).
+    //
+    // Plain C++ POD with two tTJSVariant fields: a default std::vector of this
+    // type gives the binary's ctor (player+936 zero-init at 0x6CEF1C, OWORD
+    // store = empty vector) and dtor (per-element variant destroy + free)
+    // for free.
+    struct DeadChildMotionRenderItem {
+        int kind = 0;          // elem+0
+        tTJSVariant a;         // elem+4
+        tTJSVariant b;         // elem+24
+    };
+
     struct PerNodeEvalData {
         double padding[5] = {};   // offsets 0-39 (unused in our current scope)
         double evalTime = 0.0;

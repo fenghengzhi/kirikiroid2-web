@@ -809,6 +809,14 @@ namespace motion {
                     if (!child->_nodes.empty()) {
                         child->updateLayers();
                     }
+                    // Aggregate the particle child's DEAD render-item buffer
+                    // (player+936/944) into this parent's, then clear the
+                    // child's. Aligned with libkrkr2.so Player_particleStepChildren
+                    // sub_6C17A4 @0x6C1A00 (sub_6F363C begin-insert + child-clear:
+                    // sub_6F363C(a1+936, *(a1+936), v17[117], v17[118]) then
+                    // destroy each child elem's two variants + child.end=begin).
+                    // Inert in this build (both buffers always empty).
+                    aggregateChildMotionRenderItemsLike_0x6F363C(*child);
                 }
             }
         } // for each nodeType==4

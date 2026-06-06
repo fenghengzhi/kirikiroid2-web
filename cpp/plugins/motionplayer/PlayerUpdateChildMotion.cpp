@@ -4,6 +4,40 @@
 #include "PlayerUpdateLayersInternal.h"
 
 namespace motion {
+    // Faithful 1:1 of libkrkr2.so sub_6F363C (vector<DeadChildMotionRenderItem>
+    // ::_M_range_insert) + the child-clear epilogue, shared by the childMotion
+    // pass (sub_6BE0C0 @0x6BE2C0) and the particle pass (sub_6C17A4 @0x6C1A00).
+    //
+    // Binary (0x6BE2C0):
+    //   sub_6F363C(v112 /* &parent+936 */, v4[117] /* parent+936.begin */,
+    //              *(v16+936) /* child.begin */, *(v16+944) /* child.end */);
+    //   v19 = *(v16+936); v20 = *(v16+944);
+    //   if (v20 != v19) { v21 = *(v16+936);
+    //     do { sub_A0F778(v21+24); sub_A0F778(v21+4); v21 += 44; }
+    //     while (v20 != v21); }
+    //   *(v16+944) = v19;   // child.end = child.begin (clear, keep capacity)
+    //
+    // sub_6F363C inserts [child.begin, child.end) at the PARENT's begin()
+    // (insert position is parent+936 = parent.begin, NOT end). Then the child
+    // buffer is cleared: each element's two tTJSVariants (+24, +4) destroyed,
+    // end reset to begin (size 0, backing buffer kept). Since both parent and
+    // child buffers are always empty in this build, this is observably inert.
+    void Player::aggregateChildMotionRenderItemsLike_0x6F363C(Player &child) {
+        // sub_6F363C: parent.insert(parent.begin(), child.begin(), child.end()).
+        // The two tTJSVariant fields of each copied element are AddRef-copied
+        // (sub_A0FB64) by std::vector's element copy-construct.
+        _childMotionRenderAggregate.insert(
+            _childMotionRenderAggregate.begin(),
+            child._childMotionRenderAggregate.begin(),
+            child._childMotionRenderAggregate.end());
+        // Child-clear epilogue (0x6BE2C4..0x6BE2F8 / 0x6C1A04..0x6C1A3C):
+        // destroy each element's two variants then end=begin. std::vector::clear
+        // runs each element's destructor (which destroys the two tTJSVariants =
+        // sub_A0F778(+24)+sub_A0F778(+4)) and sets size to 0 while keeping
+        // capacity — matching the binary's "*(child+944) = *(child+936)".
+        child._childMotionRenderAggregate.clear();
+    }
+
     void Player::updateLayersPhase3_MotionSubNode(double currentTime) {
         auto &nodes = _nodes;
         const auto motionPath =
@@ -537,6 +571,11 @@ namespace motion {
                 // binary assumes nodes are already ready here.
                 child.frameProgress(_frameLastTime);
                 child.updateLayers();
+                // Aggregate the child's DEAD render-item buffer (player+936/944)
+                // into this parent's, then clear the child's. Aligned with
+                // libkrkr2.so sub_6BE0C0 @0x6BE2C0 (sub_6F363C begin-insert +
+                // child-clear). Inert in this build (both buffers always empty).
+                aggregateChildMotionRenderItemsLike_0x6F363C(child);
             }
         }
 

@@ -12,3 +12,4 @@
 - [Player local vs binary audit](player_local_vs_binary_audit.md) — 本地 Player.h:116 全面审计结论: 字段源码序/全std容器/无vtable✅/RAII ctor; ~35%对齐 + Top5未对齐项
 - [RM layer-id container](rm_layerid_container.md) — RM layer-id=std::set<uint>@+168+counter@+216(ctor 0x6A88CC);无 name maps;requireLayerIdForName 本地发明(ForName 0命中);3站点 dispatch FuncCall numparams=0
 - [P3-B ownership/dispatch-in audit](p3b_ownership_dispatchin_audit.md) — P3-B后裁决:4HM=libstdc++✅/2处string→ttstr已retype✅/ctor单参dispatch收敛✅/RM set+RBtree✅/无硬凑pad;残留std::string maps是no-offset port-extra非HM误用
+- [Three-class fresh audit 2026-06-07](motionplayer_three_class_fresh_audit.md) — 三类fresh裁决:4HM/var-deque/node-deque/+408multimap全✅+ctor单参dispatch+dtor逆序复刻;5 open偏差(D1 evalResultList影子/D2 EmotePlayer virtual多vptr/D3-5低)
