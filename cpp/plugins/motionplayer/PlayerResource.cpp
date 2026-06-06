@@ -43,7 +43,17 @@ namespace motion {
         _activeMotion.reset();
         _timelines.clear();
         _playingTimelineLabels.clear();
-        nativeRM()->clearCache();
+        // C-1 (2026-06-07): RM is now `class ResourceManager : public SourceCache`,
+        //   so RM::clearCache() resolves to the inherited SourceCache::clearCache()
+        //   (binary sub_6A8438) which clears ONLY the SourceCache base +72
+        //   layer-list — it does NOT clear the module HashMap A. The prior
+        //   `nativeRM()->clearCache()` here relied on the now-removed RM-own
+        //   clearCache override that (deviantly) cleared loadedModules. To keep the
+        //   module cache being released on full unload, route through
+        //   RM::unloadAll() (binary unloadAll @0x6A8BBC DOES clear HashMap A +88 /
+        //   lastLoaded / layer-id set), which is the faithful function for this
+        //   intent (clearCache != unloadAll in the binary).
+        nativeRM()->unloadAll();
         _lastCanvas.Clear();
         _lastViewParam.Clear();
         _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };

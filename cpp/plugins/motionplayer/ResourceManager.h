@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include "tjs.h"
 #include "internal/ttstr_hash.h"
+#include "SourceCache.h"
 
 namespace motion {
 
@@ -56,25 +57,37 @@ namespace motion {
     // preserved by construction (new fields default-initialized empty).
     //
     // TWO ARCHITECTURE FACTS the binary makes the eventual target (phase D):
-    //  (1) CORRECTED 2026-06-04 (was: "there is NO separate SourceCache class").
-    //      The binary DOES register a separate `SourceCache` NCB class. Evidence:
-    //      Motion_SourceCache_ncb_register @0x6FE124 builds its own NCB class
-    //      object (sub_6FE288: operator new(0xB0) + ncb_classInit with class name
-    //      ttstr, registers a "finalize" member) and then calls
-    //      SourceCache_ncb_registerMembers @0x6A85A8, which registers exactly 3
-    //      members on it: loadSource (sub_6A7BA8), clearCache (sub_6A8438),
-    //      bufLayer property (sub_6A84FC). ResourceManager is a *separate* class:
-    //      ResourceManager_ncb_registerMembers @0x6AB8BC registers its 12 members
-    //      on a different object. Both class registrations are invoked from
-    //      Motion_namespace_ncb_register @0x6D9B08. SourceCache and RM merely
-    //      SHARE the same callback addresses for the 3 overlapping members
-    //      (loadSource/clearCache/bufLayer operate on the same +72 intrusive
-    //      list) — that is method-sharing, not class-identity. Therefore the
-    //      port's two-class split (SourceCache.h 3 members + ResourceManager 12
-    //      members) is ARCHITECTURALLY CORRECT, not an invention. There is no
-    //      phase-D "merge back into one class" to do. (The prior 06-03 memory
-    //      m9_source_subsystem_verdict.md "RM==SourceCache same class" was wrong,
-    //      direction-reversed; corrected per CLAUDE.md 证伪即就地纠正.)
+    //  (1) C-1 RE-CORRECTED 2026-06-07: ResourceManager : public SourceCache.
+    //      The prior 06-04 note ("two unrelated classes that merely SHARE the 3
+    //      callback addresses = method-sharing, not class-identity") was WRONG and
+    //      is replaced. Fresh decompile proves C++ public inheritance:
+    //        * RM ctor sub_6A88CC @0x6A88CC FIRST instruction (0x6a88f8) calls the
+    //          SourceCache ctor sub_6A78F4 on the SAME `a1` at offset 0 (base
+    //          subobject), which initialises +20 primaryLayer / +40 bufLayer
+    //          (Layer variant) / +64 layerType / +72/+80 intrusive list head-tail
+    //          sentinel; RM ctor THEN initialises its own fields from +88 onward
+    //          (HashMap A, motion-list, RandomGenerator@+144, layerId set@+168,
+    //          counter@+216, spec@+224).
+    //        * sub_6A78F4 (SourceCache ctor) is called from EXACTLY ONE site —
+    //          0x6a88f8 inside the RM ctor (xrefs_to confirmed). There is NO
+    //          standalone SourceCache instance anywhere in the binary; SourceCache
+    //          exists only as the [0,88) base subobject of ResourceManager.
+    //        * The 3 callbacks RM registrar @0x6AB8BC re-lists (loadSource
+    //          sub_6A7BA8, clearCache sub_6A8438, bufLayer sub_6A84FC) are the
+    //          EXACT SAME function addresses SourceCache registrar @0x6A85A8
+    //          registers — i.e. inherited base members re-listed on the derived
+    //          class's NCB table, the C++ inheritance signature (not coincidental
+    //          method-sharing). bufLayer getter @0x6A84FC reads `a1+40`, the
+    //          SourceCache base Layer variant.
+    //      So `RM : public SourceCache` makes RM's loadSource/clearCache/bufLayer
+    //      run on the inherited SourceCache base state (+72 layer-list etc).
+    //      Player+656 is NOT a separate SourceCache: Player ctor @0x6CED30 copies
+    //      the SAME RM dispatch into +636/+656/+992 (sub_A0F5E0 each) — three
+    //      refs to one ResourceManager-which-IS-A-SourceCache. The local Player
+    //      standalone `_sourceCacheNative` (the live render-source workhorse)
+    //      remains as-is here: collapsing it into RM-as-SourceCache is the larger
+    //      P3-B ownership refactor, out of C-1 scope; C-1 only fixes the class
+    //      relationship. (Corrected per CLAUDE.md 证伪即就地纠正.)
     //  (2) ObjSource (SourceCache.h:116) is NOT a fields struct in the binary —
     //      ncb_registerMembers @0x69CCB8 builds a `operator new(0x18)` dict
     //      facade (qword[0] = tTJSVariant holding the PSB "source" dict) whose
@@ -83,33 +96,32 @@ namespace motion {
     //      invention. (MASTER's "ObjSource missing 6 members" is inverted.)
     // ------------------------------------------------------------------
 
-    // Intrusive list3 entry — binary RM @+72/+80 keeps a doubly-linked
-    // list of (PSB-path, target Layer name, color tag, Layer*, blendMode,
-    // color[4]) tuples cached by loadSource / clearCache (`bufLayer` is
-    // returned from the head entry). Per M9 spike Q1, binary node sizeof
-    // is ~96B and field types are inferred from the loadSource/clearCache
-    // pseudocode. Phase 1 uses std::list as placeholder — empty in phase 1,
-    // so the heap-vs-inline node difference vs binary's intrusive list is
-    // a zero-cost difference until phase 2 wires it.
-    struct SourceCacheEntry {
-        ttstr key;                    // node+16
-        ttstr value;                  // node+36
-        tjs_int32 colorTag = 0;       // node+52
-        iTJSDispatch2 *layer = nullptr; // node+56 (owning Layer dispatch)
-        tjs_int32 blendMode = 0;      // node+68
-        tjs_int32 colorRGBA[4] = {0, 0, 0, 0}; // node+72..+84
-    };
+    // C-1 (2026-06-07): the binary's RM +72/+80 intrusive layer-list is the
+    // SourceCache BASE subobject's list (SourceCache::_entries, ctor sub_6A78F4
+    // head/tail sentinel @+72/+80). It is NOT an RM-own container — the former
+    // RM-local `SourceCacheEntry` + `_sourceCacheList` placeholder was the
+    // pre-inheritance two-class split and is removed; the inherited
+    // SourceCache::_entries (SourceCache.h) serves it.
 
-    class ResourceManager {
+    // C-1 (2026-06-07): RM derives from SourceCache (binary
+    // `class ResourceManager : public SourceCache`, ctor sub_6A88CC @0x6A88CC
+    // calls the SourceCache base ctor sub_6A78F4 @0x6A78F4 at offset 0; NCB
+    // registrar @0x6AB8BC re-lists the SourceCache base members loadSource /
+    // clearCache / bufLayer with the SAME callback addresses sub_6A7BA8 /
+    // sub_6A8438 / sub_6A84FC that SourceCache registrar @0x6A85A8 binds).
+    // The inherited loadSource(tTJSVariant,tTJSVariant) / clearCache() /
+    // getBufLayer() now serve the RM NCB bindings, so the former RM-own
+    // overrides (loadSource(ttstr)->load forward, clearCache()->_state clear,
+    // getBufLayer()->ttstr) are removed — they were the pre-inheritance
+    // two-class artifacts.
+    class ResourceManager : public SourceCache {
     public:
         ResourceManager();
 
         explicit ResourceManager(iTJSDispatch2 *kag, tjs_int cacheSize);
 
         tTJSVariant load(ttstr path) const;
-        tTJSVariant loadSource(ttstr path) const;
         void unload(ttstr path) const;
-        void clearCache() const;
         tTJSVariant getLastLoadedModule() const;
         tTJSVariant findLoaded(ttstr path) const;
         tTJSVariant findSource(ttstr path) const;
@@ -126,10 +138,12 @@ namespace motion {
 
         // M9 brick B: binary ResourceManager NCB members (ncb_registerMembers
         // @0x6AB8BC, 12 members total) missing from the port surface. Faithful
-        // where _state maps cleanly (bufLayer/unloadAll); STUB (cite addr) where
-        // the real body needs the HashMap A (+88) / motion-list (+104) walks that
-        // are parked behind the phase-D texture-topology platform boundary.
-        [[nodiscard]] ttstr getBufLayer() const;        // prop-ro; binary +40 @0x6A84FC
+        // where _state maps cleanly (unloadAll); STUB (cite addr) where the real
+        // body needs the HashMap A (+88) / motion-list (+104) walks that are
+        // parked behind the phase-D texture-topology platform boundary.
+        // C-1: bufLayer (prop-ro @0x6A84FC = base +40 Layer variant) is now the
+        // INHERITED SourceCache::getBufLayer() — the RM-own ttstr getBufLayer()
+        // was the pre-inheritance two-class artifact and is removed.
         void unloadAll() const;                         // @0x6A8BBC
         [[nodiscard]] bool isExistMotion(ttstr name) const;     // @0x6A96F8 (STUB)
         [[nodiscard]] tTJSVariant findMotion(ttstr name) const; // @0x6A9ED4 (STUB)
@@ -180,17 +194,12 @@ namespace motion {
 
         // --- R-M9 Phase 1 binary-aligned scaffolding (empty in phase 1) ---
 
-        // +40 ttstr — NCB property `bufLayer` returns this. Per M9 spike Q1,
-        // populated by loadSource() to expose the most recent cached entry's
-        // target Layer name. Phase 2 wires loadSource() to update it.
-        ttstr _bufLayer;
-
-        // +72/+80 intrusive doubly-linked list3 — loadSource / clearCache
-        // / bufLayer facade. Phase 1 placeholder: std::list (heap-allocated
-        // nodes vs binary's inline 96B intrusive nodes). Empty in phase 1.
-        // Phase 2 (or 3) may switch to a true intrusive list if needed to
-        // satisfy a sizeof-aligned PLATFORM_BOUNDARY contract.
-        std::list<SourceCacheEntry> _sourceCacheList;
+        // C-1 (2026-06-07): the binary RM +40 bufLayer (Layer variant) and the
+        // +72/+80 intrusive layer-list both belong to the SourceCache BASE
+        // subobject — now INHERITED (SourceCache::_bufLayer / SourceCache::_entries,
+        // SourceCache.h). The former RM-own `ttstr _bufLayer` + `std::list<
+        // SourceCacheEntry> _sourceCacheList` placeholders were the
+        // pre-inheritance two-class split and are removed.
 
         // +88/+96 "HashMap A" — P3-A CORRECTION 2026-06-05 (prior note FALSIFIED):
         // fresh decompile of the RM ctor sub_6A88CC @0x6A88CC proves +88/+96 IS a

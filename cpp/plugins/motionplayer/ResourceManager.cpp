@@ -54,6 +54,18 @@ namespace {
     }
 }
 
+// C-1 (2026-06-07): RM : public SourceCache. The implicit SourceCache base
+//   subobject ctor (`SourceCache::SourceCache() = default`) runs before the RM
+//   body — mirroring binary RM ctor sub_6A88CC @0x6A88CC which calls the
+//   SourceCache base ctor sub_6A78F4 FIRST (0x6a88f8), then initialises the
+//   RM-own fields. GAP (oracle-inert, honest): the binary base ctor takes
+//   (this, rmDispatch, layerType=0) and seeds the base _owner / +40 bufLayer
+//   Layer from the RM dispatch; the local default base ctor leaves _owner /
+//   _bufLayer empty. Wiring the RM dispatch into the base owner is the larger
+//   P3-B RM-ownership refactor (out of C-1 scope) — and the RM NCB instance's
+//   inherited loadSource/clearCache/bufLayer members are not exercised by any
+//   fixture (Player's standalone _sourceCacheNative is the live render path), so
+//   the empty base is a non-regression guard, not a behavioural deviation.
 motion::ResourceManager::ResourceManager() : _state(std::make_shared<State>()) {}
 
 motion::ResourceManager::ResourceManager(iTJSDispatch2 *kag,
@@ -133,9 +145,13 @@ tTJSVariant motion::ResourceManager::load(ttstr path) const {
     return loaded;
 }
 
-tTJSVariant motion::ResourceManager::loadSource(ttstr path) const {
-    return load(path);
-}
+// C-1 (2026-06-07): RM-own loadSource(ttstr)->load(path) forward REMOVED. The
+//   binary RM `loadSource` NCB member (sub_6A7BA8) is the INHERITED
+//   SourceCache::loadSource(keyOrSource, currentSource) base method (the RM
+//   registrar @0x6AB8BC re-lists the SAME callback address sub_6A7BA8 that the
+//   SourceCache registrar @0x6A85A8 binds). It materialises a Layer into the
+//   SourceCache base +72 list — it is NOT a thin forward to RM::load. The
+//   inherited SourceCache::loadSource now serves the RM NCB binding.
 
 void motion::ResourceManager::unload(ttstr path) const {
     LOGGER->debug("ResourceManager::unload({})", path.AsStdString());
@@ -152,26 +168,17 @@ void motion::ResourceManager::unload(ttstr path) const {
     }
 }
 
-void motion::ResourceManager::clearCache() const {
-    LOGGER->debug("ResourceManager::clearCache()");
-    if(!_state) {
-        return;
-    }
-
-    _state->loadedModules.clear();
-    _state->lastLoadedPath.Clear();
-    _state->lastLoadedModule.Clear();
-    // P3-B (2026-06-05): clearCache@0x6A8438 touches ONLY the +72 layer-list
-    //   (releases each Layer image via vtable+112, frees nodes, resets +72/+80
-    //   sentinels and +60=0). It does NOT clear the layer-id std::set (+168) or
-    //   the next-id counter (+216) — fresh decompile confirmed. So the layer-id
-    //   namespace persists across clearCache (ids stay monotonic; only
-    //   unloadAll/releaseLayerId free them). Removed the non-faithful
-    //   usedLayerIds.clear()/nextLayerId reset.
-    //   (NOTE: binary clearCache also does NOT touch HashMap A / lastLoaded — the
-    //    loadedModules/lastLoaded clears above are a separate, larger pre-existing
-    //    deviation tracked apart from this layer-id fix.)
-}
+// C-1 (2026-06-07): RM-own clearCache() const REMOVED. The binary RM
+//   `clearCache` NCB member (sub_6A8438) is the INHERITED
+//   SourceCache::clearCache() base method (RM registrar @0x6AB8BC re-lists the
+//   SAME callback address sub_6A8438 the SourceCache registrar @0x6A85A8 binds).
+//   sub_6A8438 touches ONLY the SourceCache base +72 layer-list (releases each
+//   Layer image via vtable+112, frees nodes, resets +72/+80 sentinels and +60=0);
+//   it does NOT clear HashMap A / lastLoaded / the layer-id set — the prior
+//   RM-own body that cleared _state->loadedModules/lastLoaded was a documented
+//   deviation (see old NOTE), now correctly dropped: the inherited
+//   SourceCache::clearCache() serves the RM NCB binding faithfully. The module
+//   cache lifetime is governed by load/unload/unloadAll, not clearCache.
 
 tTJSVariant motion::ResourceManager::getLastLoadedModule() const {
     return _state ? _state->lastLoadedModule : tTJSVariant{};
@@ -353,13 +360,14 @@ void motion::ResourceManager::releaseLayerId(tjs_int id) {
 // fidelity notes; faithful where _state maps cleanly, STUB (with addr) where the
 // real body needs the HashMap A / motion-list topology parked behind phase D. ---
 
-ttstr motion::ResourceManager::getBufLayer() const {
-    // bufLayer getter @0x6A84FC returns the ttstr @RM+40 (the most-recent cached
-    // layer-list entry's target Layer name). Port mirror: the _bufLayer
-    // scaffolding field — empty until the +72 layer-list path is wired, which is
-    // parked behind the phase-D texture-topology platform boundary.
-    return _bufLayer;
-}
+// C-1 (2026-06-07): RM-own getBufLayer()->ttstr REMOVED. The binary RM
+//   `bufLayer` prop-ro (sub_6A84FC) reads `a1+40` = the SourceCache base
+//   bufLayer LAYER VARIANT (set by the SourceCache base ctor sub_6A78F4 via
+//   sub_A0FB64(a1+40, newLayer)), NOT a ttstr name. The RM registrar @0x6AB8BC
+//   re-lists the SAME callback address sub_6A84FC the SourceCache registrar
+//   @0x6A85A8 binds. So the inherited SourceCache::getBufLayer() (returns the
+//   base tTJSVariant _bufLayer) now serves the RM NCB binding faithfully; the
+//   former RM ttstr getBufLayer() was a misattributed two-class artifact.
 
 void motion::ResourceManager::unloadAll() const {
     // unloadAll @0x6A8BBC clears every RM container (layer-list +72, HashMap A
