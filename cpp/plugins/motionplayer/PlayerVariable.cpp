@@ -35,14 +35,6 @@ namespace {
         return parts;
     }
 
-    bool parameterIdMatchesLabelLike_0x6D0BF4(
-        const motion::detail::MotionParameterEntry &entry,
-        const ParameterLabelParts &parts) {
-        return !entry.id.empty() &&
-            (entry.id == parts.full ||
-             (!parts.suffix.empty() && entry.id == parts.suffix));
-    }
-
     double normalizeParameterValueLike_0x6B1718(
         const motion::detail::MotionParameterEntry &entry,
         double rawValue) {
@@ -59,17 +51,28 @@ namespace {
         return (value - entry.rangeBegin) * entry.rangeScale;
     }
 
-    void bindParameterEntriesLike_0x6C4668(
-        std::vector<motion::detail::MotionParameterEntry> &entries,
-        const ParameterLabelParts &parts,
+    // libkrkr2.so Player_bindParameterValue ramp loop (the structure shared by
+    // the HM2 tail @0x6C4C24 keyed by raw label and the per-node type3/4 loops
+    // @0x6C4B30/0x6C4A54 keyed by suffix). Walks the +408 multimap's equal_range
+    // for `key` (sub_6F2F98 returns [lower,upper); the body iterates every match
+    // via _Rb_tree_increment) and, for each matched MotionParameterEntry, writes
+    //   entry.mode  = mode                                  (0x6c4c48 *(v83+48))
+    //   entry.value = rangeScale * clamp(rawV) / range      (0x6c4ca4 *(v83+40))
+    // exactly via normalizeParameterValueLike_0x6B1718 (same clamp/scale math).
+    void applyParameterRampsLike_0x6C4C0C(
+        motion::detail::ParameterRampMap &rampMap,
+        const ttstr &key,
         int mode,
         double rawValue) {
-        for(auto &entry : entries) {
-            if(!parameterIdMatchesLabelLike_0x6D0BF4(entry, parts)) {
+        const auto range = rampMap.equal_range(key);
+        for(auto it = range.first; it != range.second; ++it) {
+            motion::detail::MotionParameterEntry *entry = it->second;
+            if(!entry) {
                 continue;
             }
-            entry.value = normalizeParameterValueLike_0x6B1718(entry, rawValue);
-            entry.mode = mode;
+            entry->mode = mode;
+            entry->value =
+                normalizeParameterValueLike_0x6B1718(*entry, rawValue);
         }
     }
 
@@ -223,16 +226,26 @@ namespace motion {
         return true;
     }
 
+    // libkrkr2.so Player_finalizeParameterTable @0x6B1ECC. Iterates the +384
+    // parameter-entry vector (v1[48]..v1[49] stepping 56B = one entry) and
+    // inserts each into the +408 multimap keyed by entry.id, value = &entry.
+    // The binary descent (0x6B1F44) walks the RB-tree comparing entry.id against
+    // node keys via wcscmp and inserts UNCONDITIONALLY at the leaf via
+    // sub_6F16AC (operator new(0x30); _Rb_tree_insert_and_rebalance; ++count) —
+    // duplicate ids are kept (multimap). The binary also AddRef's the id ttstr
+    // into the node key (sub_6F16AC 0x6f173c); ttstr's copy ctor does that here.
+    //
+    // The binary's outer v3=v3[1] loop populates each Player in the v3[1] chain
+    // from v1's (the calling Player's) +384 vector. For a standalone Player the
+    // chain is empty (Player_ctor sets this+8 = 0), so only the own map is built
+    // — modelled here as the single self-populate (the chain has no port model:
+    // motion::Player has no native +8 sibling pointer, the binary's +8 carries
+    // the EmoteEngine/parent dispatch which is not a Player-list head).
     void Player::finalizeParameterTableLike_0x6B1ECC() {
-        if(false) {
-            return;
-        }
-
-        _parameterEntryById.clear();
-        for(size_t i = 0; i < _parameterEntries.size(); ++i) {
-            const auto &entry = _parameterEntries[i];
+        _parameterRampMap.clear();
+        for(auto &entry : _parameterEntries) {
             if(!entry.id.empty()) {
-                _parameterEntryById[entry.id] = i;
+                _parameterRampMap.emplace(detail::widen(entry.id), &entry);
             }
         }
     }
@@ -287,23 +300,26 @@ namespace motion {
     //                  node.chainDispatches = sub_697D34(scope,"\\"); // DEFERRED
     //                  node.weight = 1.0 }                  (0x3FF.. @0x6c4964)
     //     node.writeVal = a4;                              (0x6c4968)
-    //     sub_6B9650(node);  // aux type-3/4 node list      // DEFERRED
-    //     ramp node+408 controller lists (type3/type4)      // DEFERRED
+    //     sub_6B9650(node);  // rebuild HM1 heapResult       // DEFERRED (Stage 2)
+    //     ramp node+408 for each heapResult type3/type4 node (suffix key)
+    //       -> reached here via the descendant recursion below
     //
     //   [LABEL_132 — HM2, unconditional, 0x6c4c0c]
     //     HM2.upsert(rawLabel) = a4;   <-- green-critical, value-equivalent
-    //     ramp a1+408 controller list for rawLabel          // DEFERRED
+    //     ramp a1+408 controller multimap for rawLabel  (PORTED: equal_range)
     //
     // The web port mirrors the HM2 store via the existing _evalResultValues /
-    // _evalResultList path (raw label -> double, value-identical to a4) and
-    // the parameter-entry binding the differential trace depends on. The HM1
-    // cascade is added as additive structure (separate _evalCascadeMap, no
-    // feedback into HM2). The chainDispatches build, the aux node list and the
-    // controller ramps are DEFERRED with documented binary addresses because
-    // their inputs (sub_697D34 TJS-dispatch scope resolution, sub_6B9650 aux
-    // walk, and the unpopulated node+408 controller RB-trees) cannot be
-    // implemented without guessing and have no consumer in the port
-    // (getVariable reads HM2, not HM1).
+    // _evalResultList path (raw label -> double, value-identical to a4). The HM2
+    // tail ramp loop is now PORTED: the +408 controller multimap
+    // (_parameterRampMap, built by finalizeParameterTableLike_0x6B1ECC) is walked
+    // by equal_range(rawLabel) and each matched MotionParameterEntry's value/mode
+    // is written — replacing the prior non-faithful full-vector scan that matched
+    // id==full||id==suffix on the own player (the suffix match belonged to the
+    // descendant path, not the own tail). The HM1 cascade is additive structure
+    // (separate _evalCascadeMap, no feedback into HM2). STILL DEFERRED: the
+    // chainDispatches build (sub_697D34) and the heapResult-driven dispatch
+    // (sub_6B9650 @0x6c4974) that the binary uses to reach descendant players by
+    // suffix — the web port approximates that reach via the live node recursion.
     void Player::bindParameterValueLike_0x6C4668(const std::string &label,
                                                  int mode,
                                                  double value) {
@@ -312,8 +328,6 @@ namespace motion {
         }
 
         const auto parts = splitParameterLabelLike_0x6D0BF4(label);
-        bindParameterEntriesLike_0x6C4668(_parameterEntries, parts,
-                                          mode, value);
 
         // --- HM1 cascade upsert (binary top half, 0x6c46c4..0x6c4968) ---
         // The binary runs this region only when sub_6D0BF4 splits the label
@@ -362,6 +376,22 @@ namespace motion {
         }
         // --- end HM1 cascade ---
 
+        // --- HM2 tail (binary LABEL_132 @0x6C4C0C, unconditional) ---
+        // Binary: HM2[rawLabel]=a4 (the _evalResultValues mirror, written by
+        // writeEvalResultValueLike_0x6C4668's caller), then the OWN player's
+        // +408 ramp loop keyed by the RAW label (sub_6F2F98(a1+408, a2),
+        // a2 = the original label ttstr — NOT the split suffix). The own ramp
+        // therefore matches only entries whose id == the full raw label.
+        applyParameterRampsLike_0x6C4C0C(_parameterRampMap, detail::widen(label),
+                                         mode, value);
+
+        // --- descendant propagation (binary HM1-block per-node ramp loops) ---
+        // The binary's top half iterates the HM1 entry's heapResult node list
+        // (type3/4 nodes, rebuilt by sub_6B9650) and looks up each child Player's
+        // +408 map by the "::"/"/" SUFFIX. The web port reaches the same child
+        // players by recursing on the live node tree; the child re-splits and
+        // applies its own +408 ramp. (Faithful heapResult-driven dispatch +
+        // suffix keying is staged separately with sub_6B9650.)
         for(auto &node : _nodes) {
             if(node.nodeType == 3) {
                 if(auto *child = node.getChildPlayer()) {

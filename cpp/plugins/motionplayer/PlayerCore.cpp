@@ -739,7 +739,7 @@ namespace motion {
 
         resetNodeTreeForBuildLike_0x6B56F8();
         _parameterEntries.clear();
-        _parameterEntryById.clear();
+        _parameterRampMap.clear();
         _defaultParameterEntry = {};
         _defaultParameterEntry.rangeScale = 1.0;
         _defaultParameterEntry.mode = 0;

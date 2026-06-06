@@ -1311,7 +1311,15 @@ namespace motion {
         std::unordered_map<std::string, bool> _disabledSelectorTargets;
         std::vector<detail::MotionEvent> _pendingEvents;
         std::vector<detail::MotionParameterEntry> _parameterEntries;
-        std::unordered_map<std::string, size_t> _parameterEntryById;
+        // libkrkr2.so Player+408 std::multimap<ttstr id, MotionParameterEntry*>.
+        // Built by finalizeParameterTableLike_0x6B1ECC; consumed by
+        // bindParameterValueLike_0x6C4668's equal_range ramp loop. Values point
+        // into _parameterEntries (the +384 vector); both hold the SAME entries,
+        // so the ramp writes (value/mode) land on the entries the node eval
+        // reads. NOTE: pointers stay valid because parseParameterListLike_0x6B202C
+        // reserve()s _parameterEntries before any append and the map is rebuilt
+        // (cleared+refilled) by finalize after the vector is final.
+        detail::ParameterRampMap _parameterRampMap;
         detail::MotionParameterEntry _defaultParameterEntry;
         detail::MotionParameterEntry *_defaultParameterEntryPtr = nullptr;
         int _defaultParameterEntryIndex = -1;

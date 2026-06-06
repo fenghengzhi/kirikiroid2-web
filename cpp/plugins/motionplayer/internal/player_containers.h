@@ -83,6 +83,27 @@ namespace motion::detail {
     // reorder. Iteration is key-ascending = the binary's in-order tree walk.
     using NodeLabelMap = std::map<ttstr, int, ttstr_utf16_less>;
 
+    struct MotionParameterEntry;
+
+    // Player+408 std::multimap<ttstr id, MotionParameterEntry*> — the controller
+    // ramp table. Built by Player_finalizeParameterTable @0x6B1ECC right after
+    // the +384 parameter-entry vector is populated (sub_6B202C loops sub_6B1718
+    // per PSB "parameterList" entry, then calls 0x6B1ECC). Each map node is
+    // operator new(0x30) (sub_6F16AC @0x6B1ECC's insert helper): a 32B
+    // _Rb_tree_node_base + a 16B std::pair{ttstr key @+32 = entry.id (AddRef'd),
+    // MotionParameterEntry* value @+40 = &entry into the +384 vector}. Inserted
+    // UNCONDITIONALLY via _Rb_tree_insert_and_rebalance (the descent in 0x6B1ECC
+    // goes right on equal keys and never skips), so duplicate ids are kept —
+    // multimap semantics, matching Player_bindParameterValue's equal_range walk
+    // (sub_6F2F98 @0x6F2F98 returns [lower,upper) and the consumer iterates all
+    // matches). Comparator = sub_9B1ED0 (UTF-16 lexicographic = ttstr_utf16_less,
+    // same as NodeLabelMap). Read by Player_bindParameterValue @0x6C4978 (own
+    // map keyed by raw label) and the per-descendant-player loops keyed by the
+    // "::"/"/" suffix; erased per param-entry by
+    // Player_purgeNodeLabelMap_byParent_guess @0x6CDE18.
+    using ParameterRampMap =
+        std::multimap<ttstr, MotionParameterEntry *, ttstr_utf16_less>;
+
     // The Player+184 deque carries motion::MotionNode (2632B in the binary).
     // The alias is intentionally not declared here to keep this header free
     // of the MotionNode dependency surface; consumers should spell it

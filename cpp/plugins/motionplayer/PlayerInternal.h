@@ -222,7 +222,7 @@ namespace internal {
             }
             detail::resetNodeTreeKeepRootLike_0x6B56F8(player);
             player._parameterEntries.clear();
-            player._parameterEntryById.clear();
+            player._parameterRampMap.clear();
             player._defaultParameterEntry = {};
             player._defaultParameterEntryPtr = nullptr;
             player._defaultParameterEntryIndex = -1;
