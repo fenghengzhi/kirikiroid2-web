@@ -1931,13 +1931,35 @@ namespace internal {
             v.childPlayerSnapshot = mnode.childPlayerVar;  // V+544 ← node+1912
             mnode.childPlayerVar.Clear();                  // sub_A0F790(node+1912)
         }
-        // V+32 doneFlag ← slot+344. The binary sets it (@0x6995c8 / @0x699608),
-        // and the COMMON BLOCK (V+28 contentMask + V+52.. transform) is only
-        // reached at LABEL_11 when doneFlag==0 (early-return @0x6995cc). type-3/4
-        // snapshots above run regardless of doneFlag.
-        v.doneFlag = slot.done ? 1 : 0;          // V+32  ← slot+344
-        if(v.doneFlag) {
-            return;                              // 0x6995cc early-return (skip common block)
+        // type-4 particle snapshot (@0x699550, LABEL_4). The binary does this
+        // BEFORE the doneFlag common-block gate:
+        //   sub_A0FB64(V+672, node+2296); sub_A0F790(node+2296)  -- move Array
+        //   if (slot+344 done): V+32 = done; return (skip interp block + common)
+        //   else: V+600..664 <- node+2224..2288; V+32 = 0; fall into common block
+        if(mnode.nodeType == 4) {
+            // V+672 ← node+2296 (tTJSVariant copy-assign), then clear node.
+            v.particleArraySnapshot = mnode.particleArrayVar; // V+672 ← node+2296
+            mnode.particleArrayVar.Clear();                   // sub_A0F790(node+2296)
+            if(slot.done) {                       // 0x699570 if(slot+344)
+                v.doneFlag = 1;                   // V+32 ← slot+344
+                return;                           // 0x69957c early-return
+            }
+            // 0x6995dc: V+600..664 (V+150 int*) <- node+2224..2288
+            // (MotionNode::particleInterp, the evaluateTimeline eval-output mirror).
+            for(int i = 0; i < 9; ++i) {
+                v.particleInterp[i] = mnode.particleInterp[i];
+            }
+            v.doneFlag = 0;                       // 0x699608 *((BYTE*)a2+32)=0
+            // fall through to the common block (LABEL_11) — NOT early-returned.
+        } else {
+            // V+32 doneFlag ← slot+344. The binary sets it (@0x6995c8 / @0x699608),
+            // and the COMMON BLOCK (V+28 contentMask + V+52.. transform) is only
+            // reached at LABEL_11 when doneFlag==0 (early-return @0x6995cc). type-3/4
+            // snapshots above run regardless of doneFlag.
+            v.doneFlag = slot.done ? 1 : 0;          // V+32  ← slot+344
+            if(v.doneFlag) {
+                return;                              // 0x6995cc early-return (skip common block)
+            }
         }
         // active ClipSlot fields (slot = node+320+536*activeSlotIndex):
         v.contentMask = slot.contentMask;        // V+28  ← slot+340 (frame "mask")
@@ -1957,11 +1979,11 @@ namespace internal {
         v.scaleY = c.scaleY;                     // V+152 ← node+1552
         v.slantX = c.slantX;                     // V+160 ← node+1560
         v.slantY = c.slantY;                     // V+168 ← node+1568
-        // STILL DEFERRED (no clean port source): V+44 srcDispatch (port models src
-        //   as std::string, not an iTJSDispatch2 handle — PLATFORM_BOUNDARY), the
-        //   V+672 particle-array dispatch snapshot (node+2296), and the type-4
-        //   particle interpolation block (V+600..664 ← node+2224..2288 —
-        //   evaluateTimeline type-4 branch unported, no source).
+        // type-4 (V+672 particle-array snapshot ← node+2296, V+600..664 ←
+        // node+2224..2288) is now ported above — the evaluateTimeline type-4
+        // mirror (MotionNode::particleInterp) is the source. STILL DEFERRED
+        // (no clean port source): V+44 srcDispatch — the port models src as a
+        // std::string, not an iTJSDispatch2 handle (PLATFORM_BOUNDARY).
     }
 
     void Player::hm3RestoreValueToNodeLike_0x6997F0(
@@ -2018,12 +2040,36 @@ namespace internal {
             const_cast<detail::PerNodeLayerState &>(v).childPlayerSnapshot.Clear();
         }
 
-        // type-4 particle-array dispatch restore (node+2296 <- V+168) + the
-        // particle interpolation block (slot+744 <- V+150, 0x48 bytes from
-        // node+2224..2288). DEFERRED: both snapshot sources (V+672 ttstr_672 and
-        // the V+600..664 interp block) are DEFERRED — the evaluateTimeline type-4
-        // branch is unported, so the port has no source for node+2224..2288, and
-        // slot+744 (the active particle-result region) has no modeled consumer.
+        // type-4 particle-array dispatch restore (@0x699868, gate V.nodeType==4):
+        //   sub_A0FB64(node+2296, V+672); sub_A0F790(V+672)  -- move Array back
+        //   if (!V+32): memcpy(slot+744 <- V+600, 0x48)       -- restore prt block
+        // The Array (node+2296 == node.particleArrayVar) ownership moves back from
+        // the V+672 snapshot; the particle block is reseeded from V+600..664 (the
+        // snapshot of node+2224..2288 taken by HM3 init @0x6995dc), gated on the
+        // SNAPSHOT having been of a live slot (V+32==0).
+        // ALIAS (self-disassembled @0x699880-0x699890): dest = node+536*idx+744
+        // (X8=X20+536*idx, ADD X0,X8,#0x2E8). node+536*idx+744 == slot+424, so the
+        // memcpy target IS the prt block prtFmin..prtRange (the same bytes
+        // mergeFrameContent writes each frame). The next evaluateTimeline COPY
+        // branch @0x699c2c then reads this same prt block into node+2224..2288.
+        if(v.nodeType == 4) {
+            node.particleArrayVar = v.particleArraySnapshot;  // node+2296 <- V+672
+            // sub_A0F790(V+672): clear the snapshot (consumed/transferred).
+            const_cast<detail::PerNodeLayerState &>(v).particleArraySnapshot.Clear();
+            if(v.doneFlag == 0) {                  // 0x699874 if(!V+32)
+                // memcpy(slot+744 <- V+600, 0x48): write the 9-double prt block
+                // (slot+424..488 == slot+744..808) from V's particleInterp snapshot.
+                slot.prtFmin  = v.particleInterp[0];   // slot+424
+                slot.prtF     = v.particleInterp[1];   // slot+432
+                slot.prtVmin  = v.particleInterp[2];   // slot+440
+                slot.prtV     = v.particleInterp[3];   // slot+448
+                slot.prtAmin  = v.particleInterp[4];   // slot+456
+                slot.prtA     = v.particleInterp[5];   // slot+464
+                slot.prtZmin  = v.particleInterp[6];   // slot+472
+                slot.prtZ     = v.particleInterp[7];   // slot+480
+                slot.prtRange = v.particleInterp[8];   // slot+488
+            }
+        }
 
         // COMMON SCALAR BLOCK (0x6998a4) — gate `!slot+344 && !V+32`:
         //   slot+344 = ClipSlot.done (active slot's done/invisible flag);

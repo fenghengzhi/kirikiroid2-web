@@ -305,9 +305,18 @@ namespace motion::detail {
         // NOT a ttstr copy — V+544 is a full tTJSVariant, corrected from the prior
         // (falsified) ttstr modeling.
         tTJSVariant childPlayerSnapshot;       // V+544 (nodeType==3, node+1912)
-        // type-4 particle interpolation (node+2224..2288 / V+600..664): the
-        // port's evaluateTimeline type-4 branch is unported, so the port has no
-        // source for these — they stay default. DEFERRED.
+        // V+600..664 — type-4 particle interpolation block snapshot (9 doubles).
+        // init @0x6995dc (nodeType==4 && active slot done==0): V+600..664 <-
+        //   node+2224..2288 (the evaluateTimeline particle eval-output mirror,
+        //   MotionNode::particleInterp). 4 OWORD + 1 QWORD = 0x48 bytes.
+        // restore @0x699890 (nodeType==4 && V+32==0): memcpy(slot+744 <- V+600,
+        //   0x48) — writes the active ClipSlot prt block. ALIAS (self-disassembled):
+        //   slot+744 == slot+424 (node+536*idx+744 == node+320+536*idx+424), so the
+        //   destination is the prtFmin..prtRange fields, the SAME bytes
+        //   mergeFrameContent writes each frame. We model V+600..664 as a flat
+        //   9-double array (the binary's V+150..164 int* view == V+600..664 byte
+        //   view) and restore writes it field-by-field into the prt block.
+        double particleInterp[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};  // V+600..664
 
         // --- multi-slot region (dtor-referenced) ---
         ttstr ttstr_188;                            // binary V+188 dtor 0x6DD0F8
@@ -324,7 +333,18 @@ namespace motion::detail {
         //  current-frame snapshot block since it is init/restore-written, not
         //  merely dtor-referenced.)
         ttstr ttstr_560;                            // binary V+560 dtor 0x6DD040
-        ttstr ttstr_672;                            // binary V+672 init nodeType==4 (Node+2296)
+        // V+672 — type-4 particle Array dispatch snapshot (a tTJSVariant holding
+        // the TJS Array at node+2296, NOT a ttstr — corrected from prior falsified
+        // ttstr modeling; the writer sub_A0FB64 @0x699550 is the tTJSVariant
+        // copy-assign, same as V+544 childPlayerSnapshot). init @0x699550
+        // (nodeType==4): sub_A0FB64(V+672, node+2296) then sub_A0F790(node+2296)
+        // — moves node.particleArrayVar into the snapshot. restore @0x699868:
+        // sub_A0FB64(node+2296, V+672) then sub_A0F790(V+672) — moves it back.
+        // NOTE: V+672 is NOT released by Player_HM3_value_destroy @0x6DD06C (it is
+        // transient, consumed/transferred by restore — same as V+544); tTJSVariant's
+        // own dtor handles any un-restored snapshot, matching the binary leaving the
+        // value tag to its move-out / consume lifecycle.
+        tTJSVariant particleArraySnapshot;          // binary V+672 (nodeType==4, node+2296)
         HeapRef heap_584;                           // binary V+584 dtor 0x6DD030
         ttstr ttstr_688;                            // binary V+688 dtor 0x6DD02C
 

@@ -192,7 +192,31 @@ namespace motion::detail {
             double motionTimeOffset = 0.0;
             std::string motionDtgt;
 
-            // Particle sub-object (mask 0x100000)
+            // Particle sub-object (mask 0x100000). slot+416..488 PSB prt block,
+            // written by Player_mergeFrameContent @0x693c64 (gate frame mask
+            // 0x100000, sub-mask PSB "prt.mask"). Reset defaults @0x693d20:
+            // {trigger=0, fmin=fmax=10.0, vmin=vmax=0, amin=amax=0, zmin=zmax=1.0,
+            // range=0}. Field offsets byte-verified: trigger slot+416(slot[104]),
+            // fmin slot+424, fmax slot+432, vmin slot+440, vmax slot+448, amin
+            // slot+456, amax slot+464, zmin slot+472, zmax slot+480, range slot+488.
+            //
+            // This slot+424..488 9-double block is the SINGLE physical particle
+            // block for type-4 nodes. It has TWO writers:
+            //   (1) mergeFrameContent @0x693d98..0x693ecc — main per-frame writer
+            //       during normal playback (PSB prt fields).
+            //   (2) Player_HM3_restoreValueToNode @0x699890 — HM3 restore path only
+            //       (memcpy V+600..664 -> slot+744, 0x48) when V.nodeType==4 &&
+            //       V+32==0.
+            // It has TWO readers, both in Player_evaluateTimeline's type-4 case:
+            //   - COPY branch @0x699c2c (single-slot / no-crossfade): node+2224..2288
+            //     <- slot+744..808 (v11[93..101], v11=node+536*idx).
+            //   - INTERP branch @0x69a0f8 (crossfade): per-field lerp of active/other
+            //     slots' slot+424..488 into node+2224..2288.
+            // ALIAS (self-disassembled, see PlayerUpdateLayerEval.cpp): the COPY
+            // offset 744 is slot-base 320: node+536*idx+744 == node+320+536*idx+424
+            // == slot+424. So slot+744 IS slot+424; COPY reads the SAME prt block
+            // INTERP reads and merge/restore write. There is NO separate result
+            // region — prtFmin..prtRange below cover the whole block.
             int prtTrigger = 0;
             double prtFmin = 10.0, prtF = 10.0;
             double prtVmin = 0.0, prtV = 0.0;
@@ -370,6 +394,24 @@ namespace motion::detail {
 
         // Camera constraint for nodeType=9 (sub_6BC000 at 0x6BC000)
         int cameraConstraintType = 0;  // node+2376: "anchor" type
+
+        // Particle eval-output mirror node+2224..2288 (9 doubles, the type-4
+        // analog of the +1512.. transform mirror). WRITTEN by
+        // Player_evaluateTimeline @0x699AE4 type-4 branches:
+        //   - COPY branch @0x699c2c (single slot / no crossfade): node+2224..2288
+        //     <- active slot prt block slot+744..808 (== slot+424..488, same bytes);
+        //   - INTERP branch @0x69a0f8 (crossfade): node+2224..2288 <- lerp(
+        //     activeSlot prt block slot+424..488, otherSlot prt block, ratio).
+        // READ by the particle emitter Player_particleEmitterPass @0x6BF0DC
+        // (node4[139..143] == node+2224..2288: fmin/fmax velocity/accel/zoom/range)
+        // and snapshotted into HM3 V+600..664 by Player_HM3_initValueFromNode
+        // @0x6995dc. Field map (binary slot+424..488 / prt names):
+        //   [0] node+2224 fmin (prtFmin)   [1] node+2232 fmax (prtF)
+        //   [2] node+2240 vmin (prtVmin)   [3] node+2248 vmax (prtV)
+        //   [4] node+2256 amin (prtAmin)   [5] node+2264 amax (prtA)
+        //   [6] node+2272 zmin (prtZmin)   [7] node+2280 zmax (prtZ)
+        //   [8] node+2288 range (prtRange)
+        double particleInterp[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};  // node+2224..2288
 
         // (particleChildren replaced by particleArrayVar above — TJS Array)
         int particleType = 0;          // node+2164: particle subtype

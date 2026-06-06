@@ -348,8 +348,13 @@ namespace motion {
             // Binary: slotDone skips emission but does NOT reset particleEmitterFlagActive.
             if (pn.activeSlot().done) goto physics_step;
             {
-                const double prtFmin = pn.activeSlot().prtFmin;
-                const double prtF = pn.activeSlot().prtF;
+                // Binary reads node+2224/2232 (Player_particleEmitterPass
+                // @0x6BF0DC node4[139].f64[0..1]), the evaluateTimeline eval-output
+                // mirror MotionNode::particleInterp[0]/[1], NOT the slot prt-block
+                // directly. Going through the mirror is what makes the HM3-restore
+                // path correct (restore writes slot+744 -> eval-copy -> node+2224).
+                const double prtFmin = pn.particleInterp[0]; // node+2224
+                const double prtF = pn.particleInterp[1];    // node+2232
                 const int prtTrigger = pn.activeSlot().prtTrigger;
 
                 if (prtTrigger == 0 && prtFmin == 0.0) goto physics_step;
@@ -551,10 +556,12 @@ namespace motion {
                 const double tyOff = m21 * (offX - clipOX) + m22 * (offY - clipOY);
 
                 // 3d. Speed = lerp(prtVmin, prtV, random()) (0x6BFC94..0x6BFCBC)
-                // Binary only calls random() when min != max to preserve RNG sequence.
-                double speed = pn.activeSlot().prtVmin;
-                if (speed != pn.activeSlot().prtV)
-                    speed = speed + (pn.activeSlot().prtV - speed) * random();
+                // Binary reads node+2240/2248 (node4[140].f64[0..1]), the eval
+                // mirror particleInterp[2]/[3]. Only calls random() when min != max
+                // to preserve RNG sequence.
+                double speed = pn.particleInterp[2];          // node+2240 (vmin)
+                if (speed != pn.particleInterp[3])            // node+2248 (vmax)
+                    speed = speed + (pn.particleInterp[3] - speed) * random();
 
                 // 3e. Direction based on particleFlyDirection (0x6BFCEC..0x6BFDE8)
                 // Binary uses node+2180 (particleFlyDirection) for direction mode,
@@ -589,7 +596,8 @@ namespace motion {
                 }
 
                 // Angle spread (0x6BFDEC..0x6BFE34)
-                double range = pn.activeSlot().prtRange;
+                // Binary reads node+2288 (node4[143].f64[0]) = particleInterp[8].
+                double range = pn.particleInterp[8];          // node+2288 (range)
                 double spreadRandom = -range;
                 if (range != -range) spreadRandom = (range + range) * random() - range;
                 double totalAngle = direction + spreadRandom * PI / 180.0;
@@ -642,8 +650,10 @@ namespace motion {
                     // 3i. Angle from prtA lerp — BEFORE zoom (0x6BFFA8..0x6C00AC)
                     // Binary order: angle lerp → angle computation → zoom lerp.
                     // Both call random(), so order matters for RNG sequence.
-                    double aMin = pn.activeSlot().prtAmin;
-                    double aMax = pn.activeSlot().prtA;
+                    // Binary reads node+2256/2264 (node4[141].f64[0..1]) =
+                    // particleInterp[4]/[5].
+                    double aMin = pn.particleInterp[4];       // node+2256 (amin)
+                    double aMax = pn.particleInterp[5];       // node+2264 (amax)
                     double prtAngle = aMin;
                     if (aMin != aMax) prtAngle = aMin + (aMax - aMin) * random();
                     // Binary uses PARENT flipX/Y for sign (0x6BFFD8..0x6BFFE0)
@@ -678,9 +688,11 @@ namespace motion {
                     }
 
                     // 3j. Zoom lerp — AFTER angle (0x6C00B0..0x6C00D8)
-                    double zoom = pn.activeSlot().prtZmin;
-                    if (zoom != pn.activeSlot().prtZ)
-                        zoom = zoom + (pn.activeSlot().prtZ - zoom) * random();
+                    // Binary reads node+2272/2280 (node4[142].f64[0..1]) =
+                    // particleInterp[6]/[7].
+                    double zoom = pn.particleInterp[6];        // node+2272 (zmin)
+                    if (zoom != pn.particleInterp[7])         // node+2280 (zmax)
+                        zoom = zoom + (pn.particleInterp[7] - zoom) * random();
                     if (cr.accumulated.scaleX != zoom || cr.accumulated.scaleY != zoom) {
                         cr.accumulated.dirty = true;
                         cr.accumulated.scaleX = zoom;

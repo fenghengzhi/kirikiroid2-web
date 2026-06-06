@@ -119,6 +119,52 @@ namespace motion::internal {
             populateInterpolatedCacheFromState(node, state);
         }
 
+        // Player_evaluateTimeline (0x699AE4) type-4 particle mirror.
+        // The binary's nodeType==4 switch case writes the node+2224..2288 eval
+        // mirror (MotionNode::particleInterp) from the active slot's particle block
+        // via one of two branches:
+        //   - COPY branch @0x699c2c (no crossfade / single slot): node+2224..2288
+        //     <- v11[93..101] where v11 = node+536*idx, i.e. node+536*idx+744..808.
+        //   - INTERP branch @0x69a0f8 (crossfade): per-field lerp of the active and
+        //     other slots' blocks at node+320+536*idx+424..488 with ratio r, copying
+        //     the active value when active==other (binary `if(a!=b) v=b*r+a*(1-r)`).
+        // ALIAS (self-disassembled): node+536*idx+744 == node+320+536*idx+424, so
+        // COPY's slot+744 and INTERP's slot+424 reference the SAME prt block. The
+        // block is written every frame during normal playback by mergeFrameContent
+        // (slot+424 = prtFmin) and on the HM3 path by restore @0x699890. The COPY
+        // branch therefore reads the same prtFmin..prtRange fields INTERP reads
+        // (its srcA), NOT a separate region. This mirror is what the particle
+        // emitter @0x6BF0DC reads (node4[139..143]).
+        void writeParticleInterpCopyLike_0x699c2c(detail::MotionNode &node) {
+            const detail::MotionNode::ClipSlot &slot = node.activeSlot();
+            // node+2224..2288 <- slot+424..488 (prt block, == COPY's slot+744..808).
+            const double src[9] = {slot.prtFmin, slot.prtF, slot.prtVmin, slot.prtV,
+                                   slot.prtAmin, slot.prtA, slot.prtZmin, slot.prtZ,
+                                   slot.prtRange};
+            for(int i = 0; i < 9; ++i) {
+                node.particleInterp[i] = src[i]; // node+2224.. <- slot+424.. (==+744)
+            }
+        }
+
+        void writeParticleInterpLerpLike_0x69a0f8(detail::MotionNode &node,
+                                                  double ratio) {
+            const auto &a = node.activeSlot();   // slot[active]+424..488
+            const auto &b = node.otherSlot();    // slot[other]+424..488
+            const double srcA[9] = {a.prtFmin, a.prtF, a.prtVmin, a.prtV,
+                                    a.prtAmin, a.prtA, a.prtZmin, a.prtZ,
+                                    a.prtRange};
+            const double srcB[9] = {b.prtFmin, b.prtF, b.prtVmin, b.prtV,
+                                    b.prtAmin, b.prtA, b.prtZmin, b.prtZ,
+                                    b.prtRange};
+            for(int i = 0; i < 9; ++i) {
+                double v = srcA[i];
+                if(srcA[i] != srcB[i]) {         // binary: lerp only when differ
+                    v = srcB[i] * ratio + srcA[i] * (1.0 - ratio);
+                }
+                node.particleInterp[i] = v;       // node+2224..2288
+            }
+        }
+
         void markNodePayloadDirtyFromState(
             detail::MotionNode &node,
             const FrameContentState &state) {
@@ -616,6 +662,10 @@ namespace motion::internal {
             FrameContentState state =
                 frameStateFromClipSlot(active, true, node.currentFrameType);
             writeTimelineStateLike_0x699AE4(node, state, true);
+            // type-4 COPY branch (@0x699c2c): node+2224..2288 <- slot+744..808.
+            if(node.nodeType == 4) {
+                writeParticleInterpCopyLike_0x699c2c(node);
+            }
             node.timelineEvalRatio = 0.0;
             node.hasTimelineEvalRatio = true;
             return true;
@@ -654,6 +704,15 @@ namespace motion::internal {
         }
 
         writeTimelineStateLike_0x699AE4(node, state, true);
+        // type-4 particle eval mirror (binary nodeType==4 switch case). When
+        // ratio>0 this is the crossfade INTERP branch (@0x69a0f8); when ratio==0
+        // (other.done falls to the no-crossfade path above, but a ratio==0
+        // crossfade still lerps to the active value) the lerp degenerates to the
+        // active slot's prt block. Either way node+2224..2288 is written from the
+        // slot prt blocks, NOT slot+744 (that is only the COPY branch above).
+        if(node.nodeType == 4) {
+            writeParticleInterpLerpLike_0x69a0f8(node, ratio);
+        }
         return true;
     }
 }
