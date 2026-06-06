@@ -153,6 +153,14 @@ namespace motion::detail {
             if (auto v = nodeTreePsbNumber(psbNode, "inheritMask"))
                 node.inheritFlags = static_cast<int>(*v);
 
+            // "joinTarget" → bool (node+46). Aligned with libkrkr2.so
+            // Player_initNodeFields @0x6b3ef0 (`*(BYTE)(node+46) =
+            // Motion_propGetBool("joinTarget", default 0) & 1`). Written
+            // immediately before groundCorrection (node+47), matching the
+            // binary's prop-read order. Gates HM3 populate/restore.
+            if (auto v = nodeTreePsbNumber(psbNode, "joinTarget"))
+                node.joinTarget = (*v != 0.0);
+
             // "groundCorrection" → bool (node+47)
             if (auto v = nodeTreePsbNumber(psbNode, "groundCorrection"))
                 node.groundCorrection = (*v != 0.0);

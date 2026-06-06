@@ -28,7 +28,11 @@ CORRECTED in-place this pass.
 - resetMotionState_clearAndRebuild @0x6B2B7C (loops at 2BDC/2C64/2D68), caller
   Player_playImpl @0x6B2284.
 - HM3_initValueFromNode @0x699510 (688B node→V snapshot, leaf). loop3 gate =
-  nodeType mask 0x19D = bits{0,2,3,4,7,8} AND node+46 (visible byte, NOT in port).
+  node+46 (joinTarget bool, FIRST @0x6b2dcc `if(!node+46)continue`) AND nodeType
+  mask 0x19D = bits{0,2,3,4,7,8} (@0x6b2df8). [CORRECTED 2026-06-06: node+46 is
+  joinTarget (PSB bool, writer Player_initNodeFields @0x6b3ef0), NOT a "visible
+  byte" — that label was falsified by fresh decompile. node+46 NOW MODELED on
+  MotionNode (joinTarget) + the loop3 gate is NOW PORTED.]
 - reseekTimelineCursors @0x6B86C8; STEP5 tail = pruneHM3 @0x6B9234 +
   Player+280 aux walk @0x6B9248.
 - pruneHM3_byNodeIdentity @0x6B826C: loop1 gate a1[158]=Player+1264 (HM4 bucket
@@ -46,10 +50,21 @@ reseek ALWAYS ends with pruneHM3.
 - loop1 FULLY ported: HM4 snapshot → active var-track slot.value. item+56*cursor+72
   = slot[cursor].value (VarTrackSlot +24); +68 = typeZeroFlag (+20). key = item+0
   cascadeKey. `find()!=end()` == binary `*v27!=0` node-exists.
-- loop2: ONLY the terminal clearHM3_HM4 (.clear() both maps). The per-node
-  restore (sub_6997F0 @0x6997F0 V→ClipSlot slot+340..480) DEFERRED — needs node+46
-  visible gate (unmodeled) + the DEFERRED snapshot fields → partial restore would
-  be regression risk.
+- loop2: per-node restore NOW PORTED 2026-06-06 (was DEFERRED). Iterate _nodes
+  k=1.., build path-key, find HM3; gate `node.joinTarget && V.nodeType==node.nodeType`
+  (@0x6b855c+0x6b8574); restore common scalar block (hm3RestoreValueToNodeLike_0x6997F0
+  @0x6997F0) + erase matched entry (@0x6b8644); terminal clearHM3_HM4. sub_6997F0
+  restore writes ACTIVE-SLOT MERGED fields (NOT a "finalized region"): the binary
+  node+536*idx+{340..480} resolve to slot-relative +{20,44,56,72,88,96,112,120,128,
+  136,144,160} = the SAME merged parse fields evaluateTimeline copy-branch reads.
+  Gate `!slot.done && !V.doneFlag` (@0x6998a4). Mapped to port ClipSlot:
+  blendMode/ox/oy/packedColors/opacity(/255)/x/y/z/flipX/flipY/angle/scaleX/scaleY/
+  slantY. SKIPS slot+152 slantX (binary writes slot+160 slantY but not slot+152 —
+  faithfully skipped). DEFERRED within restore: contentMask(slot+20←V+28, port
+  ClipSlot has no frame-mask field), findSource(0x6b85a0 nodeType==0&&!slot.done —
+  port src=std::string not iTJSDispatch2/icon pair), type-3 child dispatch
+  (node+1912←V+544, snapshot source DEFERRED), type-4 particle (node+2296←V+672 +
+  slot+744←V+150 0x48B, snapshot source DEFERRED), mesh (slot+640←V+71).
 
 **STILL GENUINELY GAPPED (prerequisite, NOT oracle-inert excuse):**
 - STEP5 (B) Player+280 aux walk → sub_6B9650 @0x6B9650 (builds HM1 entry+48 =

@@ -1719,28 +1719,52 @@ namespace internal {
         }
 
         // === loop2 (gate HM3 element-count != 0, binary a1[151]=Player+1208) ===
-        // Net binary effect: for each live node whose path-key still resolves to an
-        // HM3 entry AND whose nodeType matches the snapshot's (HM3.value.nodeType ==
-        // node.nodeType), restore the snapshot into the node's active ClipSlot
-        // (sub_6997F0 @0x6997F0) + Motion_Player_findSource, then erase that HM3
-        // entry. The terminal Player_clearHM3_HM4 @0x6B80E4 then wipes whatever
-        // entries remain (both HM3 and HM4).
+        // Binary (0x6B843C..0x6B869C): for j=1..nodeCount, build the node's
+        // path-key, look it up in HM3 (_perNodeLayerStateMap). If found AND
+        //   node+46 (joinTarget) != 0 AND HM3.value.nodeType == node.nodeType
+        // (0x6b855c gate + 0x6b8574 match), restore the snapshot into the node's
+        // active ClipSlot (Player_HM3_restoreValueToNode @0x6997F0, 0x6b857c),
+        // then — when node.nodeType==0 && slot+344==0 — call Motion_Player_findSource
+        // (0x6b85a0), then ERASE that HM3 entry (0x6b8644, --HM3.count). The
+        // terminal Player_clearHM3_HM4 @0x6B80E4 wipes whatever entries remain.
         //
-        // PORTED HERE: only the terminal clear (clearHM3_HM4) — it is the
-        // observable container outcome (HM3 and HM4 do not survive a reseek) and is
-        // fully representable.
+        // PORTED: the per-node restore (joinTarget+nodeType gate → restore common
+        // scalar block) + the matched-entry erase. node+46 = joinTarget is now
+        // modeled (the prior "visible byte / DEFERRED" was falsified by the
+        // 0x6b3ef0/0x6b2dcc/0x6b855c decompiles this pass). The restore itself is
+        // PARTIAL (hm3RestoreValueToNodeLike_0x6997F0 ports the common scalar
+        // block; contentMask/srcDispatch/type-3-4 child + particle restores stay
+        // DEFERRED on the same snapshot-source gaps).
         //
-        // DEFERRED (genuine prerequisite gap, re-verified this pass): the per-node
-        // restore branch. The binary's match gate reads node+46 (the in-tree
-        // visible/active byte) which the port's MotionNode does NOT expose, and the
-        // restore sub_6997F0 writes the FULL finalized ClipSlot region
-        // (slot+340..480) of which several fields are themselves DEFERRED in
-        // hm3InitValueFromNodeLike_0x699510 (V+28 contentMask, V+44 srcDispatch,
-        // the type-3/4 child-dispatch + particle interpolation block). Restoring a
-        // partial snapshot keyed off an unmodeled visibility gate would write stale
-        // partial state into the live slot — a regression risk, not a faithful
-        // port. So the prune/restore is left documented; only the terminal clear
-        // (the binary's guaranteed post-condition) is applied.
+        // DEFERRED within the matched branch:
+        //   - Motion_Player_findSource (0x6b85a0, gate nodeType==0 && slot+344==0):
+        //     resolves the clip src dispatch (node+356/+348 = slot+36 icon + the
+        //     src dispatch pair). The port models src as std::string in ClipSlot,
+        //     not the iTJSDispatch2*/icon pair, so there is no faithful target —
+        //     this is the same src-dispatch boundary as V+44 srcDispatch.
+        if(!_perNodeLayerStateMap.empty()) {
+            for(size_t k = 1; k < _nodes.size(); ++k) {
+                detail::MotionNode &node = _nodes[k];
+                const ttstr key = detail::widen(
+                    detail::buildNodePathKeyLike_0x6B5C1C(
+                        _nodes, static_cast<int>(k)));
+                const auto it = _perNodeLayerStateMap.find(key);
+                if(it == _perNodeLayerStateMap.end()) {
+                    continue;                       // 0x6b8550 HM3 miss
+                }
+                const detail::PerNodeLayerState &v = it->second;
+                // 0x6b855c joinTarget gate + 0x6b8574 nodeType match.
+                if(!node.joinTarget || v.nodeType != node.nodeType) {
+                    continue;
+                }
+                // 0x6b857c restore V -> active ClipSlot (partial).
+                hm3RestoreValueToNodeLike_0x6997F0(node, v);
+                // 0x6b8588 findSource gate (nodeType==0 && active slot.done==0):
+                // DEFERRED — see header comment (no faithful src-dispatch target).
+                // 0x6b8644 erase the matched HM3 entry (--HM3.count).
+                _perNodeLayerStateMap.erase(it);
+            }
+        }
         _perNodeLayerStateMap.clear();   // clearHM3_HM4 @0x6B80E4 (HM3 @+1184)
         _variableSnapshotMap.clear();    // clearHM3_HM4 @0x6B80E4 (HM4 @+1240)
     }
@@ -1849,19 +1873,26 @@ namespace internal {
             }
         }
         // loop3 (0x6B2D68): HM3 per-node-path layer state. STRUCTURE ported;
-        // snapshot PARTIAL (see hm3InitValueFromNodeLike). Gate: binary tests
-        // node+46 (the in-tree visible byte — DEFERRED, not exposed in port
-        // MotionNode) AND nodeType ∈ {0,2,3,4,7,8} (mask 0x19D). key =
-        // buildNodePathKey (Player+24 path-key space); HM3.upsert →
-        // _perNodeLayerStateMap. The map is now read on the maintenance side by
-        // pruneHM3ByNodeIdentityLike_0x6B826C (reseek STEP5); the node+46 gate
-        // omission means the port may snapshot a few extra (non-visible)
-        // matching-type nodes, but the prune's per-node restore (which is what
-        // would act on them) is itself DEFERRED, so this is currently inert.
+        // snapshot PARTIAL (see hm3InitValueFromNodeLike). Gate order matches the
+        // binary @0x6b2dcc/0x6b2df8 EXACTLY:
+        //   (1) if (!node+46) continue;            // joinTarget gate FIRST
+        //   (2) v30 = node+28;
+        //       if (v30 <= 8 && ((1<<v30) & 0x19D)) // nodeType mask SECOND
+        // The joinTarget gate (node+46) was previously MISSING here — a real
+        // divergence. node+46 = joinTarget (PSB "joinTarget" bool, writer
+        // Player_initNodeFields @0x6b3ef0; the prior "visible byte / DEFERRED"
+        // annotation was falsified by fresh decompile this pass). Now restored:
+        // only joinTarget nodes are snapshotted into HM3. key = buildNodePathKey
+        // (Player+24 path-key space); HM3.upsert → _perNodeLayerStateMap. The map
+        // is read on the maintenance side by pruneHM3ByNodeIdentityLike_0x6B826C
+        // (reseek STEP5), whose per-node restore is now PARTIALLY ported.
         for(size_t k = 1; k < _nodes.size(); ++k) {
             const auto &node = _nodes[k];
+            if(!node.joinTarget) {
+                continue;                          // 0x6b2dcc joinTarget gate
+            }
             const int t = node.nodeType;
-            if(t >= 0 && t <= 8 && ((1 << t) & 0x19D) != 0) {
+            if(t >= 0 && t <= 8 && ((1 << t) & 0x19D) != 0) {  // 0x6b2df8 mask
                 const ttstr key = detail::widen(
                     detail::buildNodePathKeyLike_0x6B5C1C(
                         _nodes, static_cast<int>(k)));
@@ -1911,6 +1942,85 @@ namespace internal {
         //   V+544/V+672 child-player / particle-array dispatch snapshots
         //   (node+1912 / node+2296), and the type-4 particle interpolation block
         //   (node+2224..2288 — evaluateTimeline type-4 branch unported).
+    }
+
+    void Player::hm3RestoreValueToNodeLike_0x6997F0(
+        detail::MotionNode &node, const detail::PerNodeLayerState &v) const {
+        // libkrkr2.so Player_HM3_restoreValueToNode @0x6997F0 (a1=node, a2=V).
+        // The reverse of HM3_initValueFromNode: writes the HM3 snapshot back into
+        // the node's active ClipSlot's merged-content region. Binary slot base =
+        // node + 536*activeSlotIndex (== node+320 + 536*idx == the active
+        // ClipSlot); the restore offsets node+536*idx+{340,364,376,...} resolve to
+        // slot-relative +{20,44,56,...} (= the merged parse fields, byte-verified
+        // against ClipSlot_536B_layout.md). The next evaluateTimeline copy-branch
+        // reads these SAME slot fields (slot+392..480 == slot+72.. == the merged
+        // fields) into the node mirror, so restoring them is the faithful inverse.
+        //
+        // Binary structure (slot = node+536*idx, slot-relative offsets):
+        //   if (node+2000 == 1) copyVector_meshControlPts(slot+640, V+71)  -- mesh
+        //   if (V.nodeType == 3) restore node+1912 <- V+136(dispatch); reset V
+        //   if (V.nodeType == 4) restore node+2296 <- V+168(dispatch); reset V;
+        //                        if (!V+32) memcpy(slot+744 <- V+150, 0x48)
+        //   COMMON BLOCK gate (0x6998a4): if (!slot+344 && !V+32):
+        //     slot+20  = V+28  contentMask
+        //     slot+44  = V+52  blendMode
+        //     slot+56  = V+64  ox ; slot+64 = V+72 oy
+        //     slot+72/76/80/84 = V+80/84/88/92  color[0..3]
+        //     slot+88  = V+96  opacity
+        //     slot+96  = V+104 coordX ; slot+104 = V+112 coordY
+        //     slot+112 = V+120 coordZ
+        //     slot+120 = V+128 flipX ; slot+121 = V+129 flipY
+        //     slot+128 = V+136 angle ; slot+136 = V+144 scaleX
+        //     slot+144 = V+152 scaleY
+        //     slot+160 = V+168 slantY     (NOTE: slot+152 / slantX NOT restored
+        //                                  by the binary — faithfully skipped)
+        detail::MotionNode::ClipSlot &slot = node.activeSlot();
+
+        // mesh control-point vector restore (slot+640 <- V+71). DEFERRED: the port
+        // does not model the slot+640 mesh-eval region (meshControlPoints lives on
+        // the node, not the active slot), and hm3InitValueFromNodeLike only
+        // snapshots node.meshControlPoints (V+568) — not the slot+640 target.
+        // node+2000==1 mesh restore is left for the mesh-eval pass.
+
+        // type-3 child-player dispatch restore (node+1912 <- V+136 dispatch).
+        // DEFERRED: the snapshot source (V+544 ttstr_544) is itself DEFERRED in
+        // hm3InitValueFromNodeLike (the port models V+544 as a ttstr, not the live
+        // iTJSDispatch2 child-Player handle node+1912 = node.childPlayerVar), so
+        // restoring it would write an empty/stale dispatch. Left unported.
+
+        // type-4 particle-array dispatch restore (node+2296 <- V+168) + the
+        // particle interpolation block (slot+744 <- V+150, 0x48 bytes from
+        // node+2224..2288). DEFERRED: both snapshot sources (V+672 ttstr_672 and
+        // the V+600..664 interp block) are DEFERRED — the evaluateTimeline type-4
+        // branch is unported, so the port has no source for node+2224..2288.
+
+        // COMMON SCALAR BLOCK (0x6998a4) — gate `!slot+344 && !V+32`:
+        //   slot+344 = ClipSlot.done (active slot's done/invisible flag);
+        //   V+32     = PerNodeLayerState.doneFlag (snapshotted slot.done at
+        //              populate time). Restore ONLY when both are 0 (active slot
+        //              has live content AND the snapshot was of a live slot).
+        if(slot.done || v.doneFlag != 0) {
+            return;                                // 0x6998a4 gate
+        }
+        // contentMask (slot+20 <- V+28). DEFERRED: the port's ClipSlot does not
+        // retain the raw frame mask (slot+20); hm3InitValueFromNodeLike leaves
+        // V.contentMask=0 (DEFERRED source). No port field to restore into.
+        slot.blendMode = v.blendMode;              // slot+44  <- V+52
+        slot.ox = v.ox;                            // slot+56  <- V+64
+        slot.oy = v.oy;                            // slot+64  <- V+72
+        slot.packedColors = v.packedColors;        // slot+72.. <- V+80..92
+        slot.opacity = static_cast<double>(v.opacity) / 255.0;  // slot+88 <- V+96 (0-255 → 0-1)
+        slot.x = v.coordX;                         // slot+96  <- V+104
+        slot.y = v.coordY;                         // slot+104 <- V+112
+        slot.z = v.coordZ;                         // slot+112 <- V+120
+        slot.flipX = v.flipX != 0;                 // slot+120 <- V+128
+        slot.flipY = v.flipY != 0;                 // slot+121 <- V+129
+        slot.angle = v.angle;                      // slot+128 <- V+136
+        slot.scaleX = v.scaleX;                    // slot+136 <- V+144
+        slot.scaleY = v.scaleY;                    // slot+144 <- V+152
+        // slot+152 (slantX/sx) intentionally NOT restored — the binary's restore
+        // common block writes slot+160 (slantY) but skips slot+152 (slantX).
+        slot.slantY = v.slantY;                    // slot+160 <- V+168
     }
 
     // Player_advanceRootAndNodes @0x6B6ADC — forward 4-stream walk.

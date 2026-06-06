@@ -975,9 +975,11 @@ namespace motion {
         // gated loops + terminal Player_clearHM3_HM4 @0x6B80E4:
         //   loop1 (HM4 bucket!=0): restore each active var-track slot.value from
         //     the HM4 snapshot keyed by item.cascadeKey — FULLY PORTED.
-        //   loop2 (HM3 elem!=0): prune+restore HM3 by node identity — the per-node
-        //     restore is DEFERRED (needs node+46 visible byte + the deferred
-        //     snapshot fields); only the terminal clearHM3_HM4 is applied.
+        //   loop2 (HM3 elem!=0): prune+restore HM3 by node identity — per-node
+        //     restore PORTED (joinTarget+nodeType gate → common scalar restore
+        //     via hm3RestoreValueToNodeLike_0x6997F0 + matched-entry erase);
+        //     findSource + contentMask/srcDispatch/type-3-4 restores stay DEFERRED
+        //     on snapshot-source gaps; terminal clearHM3_HM4 still applied.
         void pruneHM3ByNodeIdentityLike_0x6B826C();
         // libkrkr2.so Player_reseekTimelineCursors @0x6B86C8 — the NON-incremental
         // full re-seek of all timeline cursors to targetTime (= player+456). Unlike
@@ -991,7 +993,7 @@ namespace motion {
         // @0x6B91B0 (step 4) is performed by the progressSeekNodeSlotsLike node
         // walk the caller keeps right after; the STEP5 tail's HM3-prune
         // (0x6B9234, pruneHM3ByNodeIdentityLike_0x6B826C) is now PORTED (loop1
-        // HM4→slot.value + terminal clearHM3_HM4; per-node restore DEFERRED), and
+        // HM4→slot.value + loop2 per-node restore + terminal clearHM3_HM4), and
         // the player+280 HM1-entry walk (0x6B9248, sub_6B9650 per entry) is now
         // PORTED (rebuildEvalCascadeHeapResultLike_0x6B9650; its heapResult
         // consumer is the bindParameter child-Player +408 ramp). Called at the
@@ -1018,13 +1020,26 @@ namespace motion {
         // active-slot fields into a PerNodeLayerState (HM3 value). PARTIAL: only
         // nodeType maps to an existing MotionNode member; the other ~24 fields
         // read raw node byte offsets the port does not expose and are DEFERRED.
-        // HM3 (_perNodeLayerStateMap) now has a maintenance consumer
-        // (pruneHM3ByNodeIdentityLike_0x6B826C reads its element count + would
-        // restore matched-identity nodes); the per-node restore path is itself
-        // DEFERRED on the same missing snapshot fields, so the snapshot is still
-        // effectively read-for-existence only — but it is no longer unconsumed.
+        // HM3 (_perNodeLayerStateMap) is consumed on the maintenance side by
+        // pruneHM3ByNodeIdentityLike_0x6B826C, whose loop2 now restores the
+        // snapshotted common scalar block back into matched-identity nodes' active
+        // ClipSlot (hm3RestoreValueToNodeLike_0x6997F0). The DEFERRED snapshot
+        // fields (contentMask/srcDispatch/type-3-4 child + particle interp) are
+        // correspondingly DEFERRED on the restore side, so the round-trip is
+        // partial-but-symmetric (snapshot reads X → restore writes X for the
+        // ported subset; the unported fields are neither read nor written).
         void hm3InitValueFromNodeLike_0x699510(
             const detail::MotionNode &node, detail::PerNodeLayerState &v) const;
+        // libkrkr2.so Player_HM3_restoreValueToNode @0x6997F0 — the reverse of
+        // HM3_initValueFromNode: writes a PerNodeLayerState (HM3 value) back into
+        // a node's active ClipSlot. Called by pruneHM3 loop2 (@0x6b857c) for each
+        // node whose path-key HM3 entry survives AND whose joinTarget+nodeType
+        // match. PARTIAL: the common scalar block (slot+20..160 merged fields,
+        // gated `!slot.done && !V.doneFlag`) is ported; the type-3/4 child
+        // dispatch + type-4 particle interp + meshControlPoints restores are
+        // DEFERRED on the same snapshot-source gaps as hm3InitValueFromNodeLike.
+        void hm3RestoreValueToNodeLike_0x6997F0(
+            detail::MotionNode &node, const detail::PerNodeLayerState &v) const;
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);

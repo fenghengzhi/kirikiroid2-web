@@ -49,6 +49,15 @@ namespace motion::detail {
                                         // also tests byte(node+42)&0x40, i.e.
                                         // inheritMask bit 0x00400000.
         uint8_t flags = 0;             // node+44 (sub_6BE0C0 at 0x6BE37C, sub_6BF0DC at 0x6BF310)
+        // node+46 — PSB "joinTarget" bool. The ONLY writer is
+        // Player_initNodeFields @0x6b3ef0 (`*(BYTE)(node+46) =
+        // Motion_propGetBool("joinTarget",default 0) & 1`), set once at
+        // tree-build. NOT a visibility/active byte (the prior MEMORY annotation
+        // calling node+46 "visible" was falsified by the 0x6b3ef0 decompile).
+        // Gates HM3 populate (resetMotionState loop3 @0x6b2dcc:
+        // `if(!node+46) continue`) and HM3 restore (pruneHM3 loop2 @0x6b855c:
+        // `if(*(BYTE)(node+46))` before the nodeType match).
+        bool joinTarget = false;       // node+46
         bool groundCorrection = false; // node+47
         // TJS layer dispatch object for callbacks (sub_6BAA10 onGroundCorrection).
         // In libkrkr2.so this is at *(node+0)+16 (the layer's iTJSDispatch2*).
