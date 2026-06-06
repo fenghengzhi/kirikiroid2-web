@@ -1913,9 +1913,34 @@ namespace internal {
         // node+1512 byte mirror is an ABI detail the port does not need).
         v.nodeType = node.nodeType;              // V+0   ← node+28
         const auto &c = node.interpolatedCache;
-        const auto &slot = node.activeSlot();
-        // active ClipSlot fields (slot = node+320+536*activeSlotIndex):
+        // The init side reads the ACTIVE slot and may CLEAR node fields (type-3),
+        // so it needs a mutable node ref; the caller passes a const node, so cast
+        // here matching the binary which takes a1=node and writes node+1912.
+        detail::MotionNode &mnode = const_cast<detail::MotionNode &>(node);
+        auto &slot = mnode.activeSlot();
+        // mesh control points (meshType==1; sub_6996E8 copies V+568 <- node+2024).
+        // BINARY ORDER: the mesh snapshot happens FIRST, before the type-3/4 and
+        // common blocks (@0x699588), gated on node+2000==1.
+        if(mnode.meshType == 1) {                 // node+2000 == 1
+            v.meshControlPoints = mnode.meshControlPoints; // V+568 ← node+2024
+        }
+        // type-3 child-Player dispatch snapshot (@0x699598): copy node+1912 into
+        // V+544 (tTJSVariant copy-assign sub_A0FB64) then clear node+1912
+        // (sub_A0F790). The node's childPlayerVar ownership moves into the snapshot.
+        if(mnode.nodeType == 3) {
+            v.childPlayerSnapshot = mnode.childPlayerVar;  // V+544 ← node+1912
+            mnode.childPlayerVar.Clear();                  // sub_A0F790(node+1912)
+        }
+        // V+32 doneFlag ← slot+344. The binary sets it (@0x6995c8 / @0x699608),
+        // and the COMMON BLOCK (V+28 contentMask + V+52.. transform) is only
+        // reached at LABEL_11 when doneFlag==0 (early-return @0x6995cc). type-3/4
+        // snapshots above run regardless of doneFlag.
         v.doneFlag = slot.done ? 1 : 0;          // V+32  ← slot+344
+        if(v.doneFlag) {
+            return;                              // 0x6995cc early-return (skip common block)
+        }
+        // active ClipSlot fields (slot = node+320+536*activeSlotIndex):
+        v.contentMask = slot.contentMask;        // V+28  ← slot+340 (frame "mask")
         v.blendMode = slot.blendMode;            // V+52  ← slot+364
         v.ox = slot.ox;                          // V+64  ← slot+376
         v.oy = slot.oy;                          // V+72
@@ -1932,16 +1957,11 @@ namespace internal {
         v.scaleY = c.scaleY;                     // V+152 ← node+1552
         v.slantX = c.slantX;                     // V+160 ← node+1560
         v.slantY = c.slantY;                     // V+168 ← node+1568
-        // mesh control points (meshType==1; copied by sub_6996E8 from node+2024):
-        if(node.meshType == 1) {
-            v.meshControlPoints = node.meshControlPoints; // V+568 ← node+2024
-        }
-        // DEFERRED (no clean port source): V+28 contentMask (slot+340 "mask" — the
-        //   port's ClipSlot does not retain the frame mask), V+44 srcDispatch
-        //   (port models src as std::string, not an iTJSDispatch2 handle), the
-        //   V+544/V+672 child-player / particle-array dispatch snapshots
-        //   (node+1912 / node+2296), and the type-4 particle interpolation block
-        //   (node+2224..2288 — evaluateTimeline type-4 branch unported).
+        // STILL DEFERRED (no clean port source): V+44 srcDispatch (port models src
+        //   as std::string, not an iTJSDispatch2 handle — PLATFORM_BOUNDARY), the
+        //   V+672 particle-array dispatch snapshot (node+2296), and the type-4
+        //   particle interpolation block (V+600..664 ← node+2224..2288 —
+        //   evaluateTimeline type-4 branch unported, no source).
     }
 
     void Player::hm3RestoreValueToNodeLike_0x6997F0(
@@ -1976,23 +1996,34 @@ namespace internal {
         //                                  by the binary — faithfully skipped)
         detail::MotionNode::ClipSlot &slot = node.activeSlot();
 
-        // mesh control-point vector restore (slot+640 <- V+71). DEFERRED: the port
-        // does not model the slot+640 mesh-eval region (meshControlPoints lives on
-        // the node, not the active slot), and hm3InitValueFromNodeLike only
-        // snapshots node.meshControlPoints (V+568) — not the slot+640 target.
-        // node+2000==1 mesh restore is left for the mesh-eval pass.
+        // mesh control-point vector restore (@0x699828, FIRST, gate node+2000==1):
+        // copyVector_meshControlPts(slot+640, V+71) == slot+640 <- V+568. The
+        // per-slot mesh source (slot+640) is the value evaluateTimeline @0x699c08
+        // copies into node+2024; restoring V's snapshot of node+2024 into slot+640
+        // re-seeds that source for the next eval pass. Asymmetric vs init (init
+        // reads node-base node+2024 -> V+568; restore writes slot-base slot+640).
+        if(node.meshType == 1) {                       // node+2000 == 1
+            slot.meshControlPoints = v.meshControlPoints; // slot+640 <- V+568
+        }
 
-        // type-3 child-player dispatch restore (node+1912 <- V+136 dispatch).
-        // DEFERRED: the snapshot source (V+544 ttstr_544) is itself DEFERRED in
-        // hm3InitValueFromNodeLike (the port models V+544 as a ttstr, not the live
-        // iTJSDispatch2 child-Player handle node+1912 = node.childPlayerVar), so
-        // restoring it would write an empty/stale dispatch. Left unported.
+        // type-3 child-Player dispatch restore (@0x699844, gate V.nodeType==3):
+        // sub_A0FB64(node+1912, V+544) (tTJSVariant copy-assign) then
+        // sub_A0F790(V+544) (clear the snapshot). Moves the child-Player dispatch
+        // ownership back from the V+544 snapshot into node.childPlayerVar.
+        if(v.nodeType == 3) {
+            node.childPlayerVar = v.childPlayerSnapshot;  // node+1912 <- V+544
+            // sub_A0F790(V+544): clear the snapshot. v is const here (the snapshot
+            // is consumed/transferred), so cast to clear matching the binary which
+            // resets V+544's type tag to 0 after the move.
+            const_cast<detail::PerNodeLayerState &>(v).childPlayerSnapshot.Clear();
+        }
 
         // type-4 particle-array dispatch restore (node+2296 <- V+168) + the
         // particle interpolation block (slot+744 <- V+150, 0x48 bytes from
         // node+2224..2288). DEFERRED: both snapshot sources (V+672 ttstr_672 and
         // the V+600..664 interp block) are DEFERRED — the evaluateTimeline type-4
-        // branch is unported, so the port has no source for node+2224..2288.
+        // branch is unported, so the port has no source for node+2224..2288, and
+        // slot+744 (the active particle-result region) has no modeled consumer.
 
         // COMMON SCALAR BLOCK (0x6998a4) — gate `!slot+344 && !V+32`:
         //   slot+344 = ClipSlot.done (active slot's done/invisible flag);
@@ -2002,9 +2033,7 @@ namespace internal {
         if(slot.done || v.doneFlag != 0) {
             return;                                // 0x6998a4 gate
         }
-        // contentMask (slot+20 <- V+28). DEFERRED: the port's ClipSlot does not
-        // retain the raw frame mask (slot+20); hm3InitValueFromNodeLike leaves
-        // V.contentMask=0 (DEFERRED source). No port field to restore into.
+        slot.contentMask = v.contentMask;          // slot+340 (slot+20) <- V+28 (V[7])
         slot.blendMode = v.blendMode;              // slot+44  <- V+52
         slot.ox = v.ox;                            // slot+56  <- V+64
         slot.oy = v.oy;                            // slot+64  <- V+72

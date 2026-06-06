@@ -168,6 +168,23 @@ namespace motion::detail {
             // Time (slot+328)
             double clipStartTime = 0.0;
 
+            // Raw frame content mask (slot+340 = parseSlot+20). parseFrame
+            // @0x6926E8 writes content["mask"] (Motion_propGetInt) here; bit
+            // 0x40000 gates the "act" action field. resetFrameSlot defaults it
+            // to 0. Snapshotted into the HM3 PerNodeLayerState (V+28) by
+            // Player_HM3_initValueFromNode @0x699654 and restored from V by
+            // Player_HM3_restoreValueToNode @0x6998b8 (slot+340 <- V[7]).
+            int contentMask = 0;            // slot+340
+
+            // Mesh control-point vector (slot+640). Per-slot mesh source read by
+            // Player_evaluateTimeline @0x699c08 (copyVector node+2024 <- slot+640
+            // when node+2000==meshType==1), snapshotted node+2024 -> V+568 by
+            // Player_HM3_initValueFromNode @0x699588, and restored slot+640 <-
+            // V+568 by Player_HM3_restoreValueToNode @0x699828. Binary element is
+            // 8B {float x, float y}; the port keeps the same flat float view used
+            // by node.meshControlPoints (node+2024) for the data contract.
+            std::vector<float> meshControlPoints; // slot+640
+
             // Motion sub-object (mask 0x80000)
             int motionDt = 0, motionFlags = 0;
             double motionDofst = 0.0;

@@ -60,11 +60,30 @@ reseek ALWAYS ends with pruneHM3.
   Gate `!slot.done && !V.doneFlag` (@0x6998a4). Mapped to port ClipSlot:
   blendMode/ox/oy/packedColors/opacity(/255)/x/y/z/flipX/flipY/angle/scaleX/scaleY/
   slantY. SKIPS slot+152 slantX (binary writes slot+160 slantY but not slot+152 —
-  faithfully skipped). DEFERRED within restore: contentMask(slot+20←V+28, port
-  ClipSlot has no frame-mask field), findSource(0x6b85a0 nodeType==0&&!slot.done —
-  port src=std::string not iTJSDispatch2/icon pair), type-3 child dispatch
-  (node+1912←V+544, snapshot source DEFERRED), type-4 particle (node+2296←V+672 +
-  slot+744←V+150 0x48B, snapshot source DEFERRED), mesh (slot+640←V+71).
+  faithfully skipped). 3 sub-paths NOW PORTED 2026-06-06 (Stage 4, was DEFERRED):
+  (1) contentMask: ClipSlot.contentMask(int, slot+340=parseSlot+20=content["mask"]
+      via parseFrame 0x6926E8 Motion_propGetInt, bit0x40000 gates "act"; default 0
+      from resetFrameSlot) + V.contentMask(V+28). init @0x699654 V+28←slot+340 (in
+      common block, doneFlag==0 only); restore @0x6998b8 slot+340←V+28.
+  (2) type-3 child: V+544 CORRECTED ttstr→tTJSVariant childPlayerSnapshot. sub_A0FB64
+      (0xA0FB64)=tTJSVariant copy-assign (switch type@+16, AddRef object), NOT ttstr.
+      init @0x699598 V+544←node+1912(node.childPlayerVar) then sub_A0F790 clear
+      node+1912; restore @0x699844 node+1912←V+544 then sub_A0F790 clear V+544.
+      sub_A0F790=tTJSVariant Clear/destruct. Maps to tTJSVariant op= + .Clear().
+  (3) mesh restore: ClipSlot.meshControlPoints(vector<float>, slot+640). copyVector
+      0x6996E8=std::vector 8B-elem copy (>>3); node+2024 elem={float x,float y}
+      (sub_6BC4F0 vst2q). ASYMMETRY: eval @0x699c08 node+2024←slot+640; init @0x699588
+      V+568←node+2024; restore @0x699828 slot+640←V+568 (node-base read, slot-base
+      write). Port keeps flat float view (matches existing node.meshControlPoints).
+  ALSO added doneFlag early-return to init (@0x6995cc) — was missing; common block now
+  gated doneFlag==0 matching binary (snapshots run first, regardless). web+wasmtime
+  clean, m2logo93+yuzulogo243 PASS bit-identical (ORACLE-INERT: logos no Join→HM3
+  empty→init/restore never run with data; non-regression guard, honest gap).
+  STILL DEFERRED: findSource(0x6b85a0 — src=std::string not iTJSDispatch2/icon pair,
+  PLATFORM_BOUNDARY), srcDispatch V+44(same boundary), type-4 particle (node+2296←V+672
+  + slot+744←V+150 0x48B — needs mergeFrameContent prt block decompile for slot+424..488
+  source + slot+744 consumer xref, both unconfirmed; evaluateTimeline type-4 branch
+  unported = no V+600..664 source).
 
 **STILL GENUINELY GAPPED (prerequisite, NOT oracle-inert excuse):**
 - STEP5 (B) Player+280 aux walk → sub_6B9650 @0x6B9650 (builds HM1 entry+48 =

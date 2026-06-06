@@ -295,6 +295,16 @@ namespace motion::detail {
         double slantX = 0.0;              // V+160 ← interp slantX (node+1560)
         double slantY = 0.0;              // V+168 ← interp slantY (node+1568)
         std::vector<float> meshControlPoints; // V+568 ← node+2024 (meshType==1)
+        // V+544 — tTJSVariant snapshot of node+1912 (child Player dispatch),
+        // taken when nodeType==3. init @0x699598 does sub_A0FB64(V+544, node+1912)
+        // (variant copy-assign) then sub_A0F790(node+1912) (variant clear); the
+        // node's childPlayerVar ownership moves into this snapshot. restore
+        // @0x699844 does the reverse: sub_A0FB64(node+1912, V+544) then
+        // sub_A0F790(V+544). sub_A0FB64 (0xA0FB64) is the tTJSVariant copy ctor
+        // (switches on the value type tag at +16, AddRefs object dispatch); it is
+        // NOT a ttstr copy — V+544 is a full tTJSVariant, corrected from the prior
+        // (falsified) ttstr modeling.
+        tTJSVariant childPlayerSnapshot;       // V+544 (nodeType==3, node+1912)
         // type-4 particle interpolation (node+2224..2288 / V+600..664): the
         // port's evaluateTimeline type-4 branch is unported, so the port has no
         // source for these — they stay default. DEFERRED.
@@ -310,7 +320,9 @@ namespace motion::detail {
         DispatchRef dispatch_392;                   // binary V+392 dtor 0x6DD098
         DispatchRef dispatch_504;                   // binary V+504 dtor 0x6DD08C
         ttstr ttstr_516;                            // binary V+516 dtor 0x6DD080
-        ttstr ttstr_544;                            // binary V+544 init nodeType==3 (Node+1912)
+        // (V+544 = childPlayerSnapshot tTJSVariant, declared above with the
+        //  current-frame snapshot block since it is init/restore-written, not
+        //  merely dtor-referenced.)
         ttstr ttstr_560;                            // binary V+560 dtor 0x6DD040
         ttstr ttstr_672;                            // binary V+672 init nodeType==4 (Node+2296)
         HeapRef heap_584;                           // binary V+584 dtor 0x6DD030
