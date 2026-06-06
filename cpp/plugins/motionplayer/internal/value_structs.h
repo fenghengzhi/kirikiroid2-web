@@ -124,80 +124,56 @@ namespace motion::detail {
         }
     };
 
+    // Forward decl — heapResult holds non-owning MotionNode* into Player's
+    // _nodes deque (binary stride-2632 node pointers, see sub_6B9650).
+    struct MotionNode;
+
     // EvalCascadeState — libkrkr2.so HM1 (Player+264) value type.
     //
     // Cached result of "::"-cascade-joined PropGet lookup chains. Reverse-
-    // engineered from Player_HM1_upsert_evalCascade @0x6F52AC and
-    // Player_HM1_value_destroy @0x6DD1A0. Binary V layout (72B):
-    //   V+0  ttstr key copy
-    //   V+8  iTJSDispatch2 *mainDispatch
-    //   V+16 std::vector<iTJSDispatch2*> chainDispatches  (3 pointers V+16..+32)
-    //   V+40 padding
-    //   V+48 void *heapResult  (operator new / delete)
-    //   V+56..+72 padding
+    // engineered from Player_HM1_upsert_evalCascade @0x6F52AC, the writer
+    // Player_bindParameterValue_writesHM1_HM2 @0x6C4668 (v30 = value base) and
+    // Player_HM1_value_destroy @0x6DD1A0. Binary V (value base = node+16) layout:
+    //   V+0  ttstr key copy (the joinedKey)                     (store @0x6c4880)
+    //   V+8/+16/+24 std::vector<tTJSVariant*> chainSegments     (set @0x6c48c8..)
+    //              = the scope label split into "::"-segments by sub_697D34
+    //              @0x6c48bc; elements are tTJSVariant<string> (compared by
+    //              type tag +0x3C + ttstr_c_str/wcscmp inside sub_6B9650).
+    //   V+32 double writeVal  (= a4, store @0x6c4968 every bind)
+    //   V+40 double weight     (= 1.0, seeded once @0x6c4964 on first insert)
+    //   V+48/+56/+64 std::vector<MotionNode*> heapResult        (set @0x6b9778)
+    //              = type3/4 nodes whose ancestor-label-chain == chainSegments;
+    //              rebuilt by sub_6B9650 @0x6c4974 every bind.
     //
-    // Binary dtor sequence: heap → vector elements release + backing delete →
-    // main dispatch release → key release. Local destructor body mirrors that
-    // order, then member destructors run in reverse declaration order.
+    // Binary dtor sequence (@0x6DD1A0): heapResult backing delete → chainSegments
+    // element Release + backing delete → key release. heapResult holds NON-owning
+    // node pointers (no per-element Release), so only the backing is freed.
     //
-    // Binary node is operator new(0x60u) @0x6F5368. The fields the port's
-    // evidence-grounded write subset populates are:
-    //   V+32 double writeVal  (= a4, store at 0x6c4968)
-    //   V+40 double weight     (= 1.0, seeded once at 0x6c4964 on first insert)
-    // DEFERRED (no port consumer / unported input): chainDispatches (built by
-    // sub_697D34 @0x6c48bc — pure TJS-dispatch scope resolution), the V+48 aux
-    // node vector (sub_6B9650 @0x6c4974), and the V+408-keyed controller ramps.
+    // PORT NOTE: chainSegments is modeled as a vector<ttstr> of the scope split
+    // segments (the binary stores tTJSVariant<string>; we keep the string value
+    // which is all sub_6B9650's wcscmp dedup reads). heapResult is a
+    // vector<MotionNode*> (faithful element type; non-owning into _nodes deque).
     struct EvalCascadeState {
         ttstr keyCopy;
-        iTJSDispatch2 *mainDispatch = nullptr;
-        std::vector<iTJSDispatch2 *> chainDispatches;
+        std::vector<ttstr> chainSegments;
         // Binary V+32 / V+40. writeVal := a4 on every bind; weight is seeded to
         // 1.0 only on first insert and left untouched on later upserts.
         double writeVal = 0.0;
         double weight = 0.0;
-        void *heapResult = nullptr;
+        std::vector<MotionNode *> heapResult;
 
         EvalCascadeState() = default;
         EvalCascadeState(const EvalCascadeState &) = delete;
         EvalCascadeState &operator=(const EvalCascadeState &) = delete;
 
-        EvalCascadeState(EvalCascadeState &&other) noexcept
-            : keyCopy(std::move(other.keyCopy)),
-              mainDispatch(other.mainDispatch),
-              chainDispatches(std::move(other.chainDispatches)),
-              writeVal(other.writeVal),
-              weight(other.weight),
-              heapResult(other.heapResult) {
-            other.mainDispatch = nullptr;
-            other.heapResult = nullptr;
-        }
-
-        EvalCascadeState &operator=(EvalCascadeState &&other) noexcept {
-            if (this != &other) {
-                this->~EvalCascadeState();
-                ::new (this) EvalCascadeState(std::move(other));
-            }
-            return *this;
-        }
-
-        ~EvalCascadeState() {
-            // Binary dtor order: V+48 → V+16..+24 → V+8 → V+0.
-            if (heapResult) {
-                ::operator delete(heapResult);
-                heapResult = nullptr;
-            }
-            for (auto *d : chainDispatches) {
-                if (d) {
-                    d->Release();
-                }
-            }
-            chainDispatches.clear();
-            if (mainDispatch) {
-                mainDispatch->Release();
-                mainDispatch = nullptr;
-            }
-            // ~ttstr handles keyCopy (Release on its Ptr).
-        }
+        EvalCascadeState(EvalCascadeState &&other) noexcept = default;
+        EvalCascadeState &operator=(EvalCascadeState &&other) noexcept = default;
+        // ~EvalCascadeState: vector<ttstr> releases each ttstr (mirrors binary
+        // chainSegments element Release); vector<MotionNode*> just frees backing
+        // (non-owning, matches binary heapResult dtor — no per-node Release);
+        // ~ttstr handles keyCopy. Declaration order = ascending binary offset, so
+        // reverse-order member destruction matches the binary's V+48→V+8→V+0.
+        ~EvalCascadeState() = default;
     };
 
     // VarTrackSlot — libkrkr2.so 56B per-track frame slot. Two of these live

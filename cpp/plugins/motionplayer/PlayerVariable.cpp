@@ -35,6 +35,29 @@ namespace {
         return parts;
     }
 
+    // libkrkr2.so sub_697D34 @0x697D34: split the scope string into "::"-
+    // separated segments, pushing each as a tTJSVariant<string> into the
+    // chainSegments vector. The binary loops sub_A0CBEC (find first "::") +
+    // sub_A0CA58 (substring) until no separator remains, then pushes the tail.
+    // Port: returns the segment strings as ttstr (the wcscmp dedup in sub_6B9650
+    // reads only the string value). Empty scope -> single empty-string segment
+    // (matches the binary: the find fails immediately, the tail = whole string).
+    std::vector<ttstr> splitScopeSegmentsLike_0x697D34(const std::string &scope) {
+        std::vector<ttstr> segments;
+        std::string::size_type pos = 0;
+        for(;;) {
+            const auto sep = scope.find("::", pos);
+            if(sep == std::string::npos) {
+                segments.push_back(motion::detail::widen(scope.substr(pos)));
+                break;
+            }
+            segments.push_back(
+                motion::detail::widen(scope.substr(pos, sep - pos)));
+            pos = sep + 2;
+        }
+        return segments;
+    }
+
     double normalizeParameterValueLike_0x6B1718(
         const motion::detail::MotionParameterEntry &entry,
         double rawValue) {
@@ -250,6 +273,119 @@ namespace motion {
         }
     }
 
+    // Aligned with libkrkr2.so sub_6B9650 @0x6B9650. Rebuilds the HM1 entry's
+    // heapResult (entry+48 = std::vector<MotionNode*>): the set of type3/4 nodes
+    // whose ancestor label-chain (walked bottom-up via node.parentIndex / node+36)
+    // matches the entry's chainSegments reference (entry+8..+16).
+    //
+    // Binary pseudocode (verified against the 0x6b9650 decompile + disasm):
+    //   if (entry.weight == 0.0) return;             // 0x6b968c gate
+    //   chain = {};                                  // local vector<label>
+    //   scanNodeIndex = 1;                           // skip root (deque idx 0)
+    //   entry.weight = 0;                            // 0x6b96ac (cleared!)
+    //   entry.heapResult.clear();                    // 0x6b96b0 (end = begin)
+    //   while (scanNodeIndex < nodeCount - 1) {      // 0x6b97ec
+    //     node = nodes[scanNodeIndex];
+    //     if ((node.nodeType - 3) > 1) { ++scan; continue; }   // not 3/4
+    //     idx = scanNodeIndex;
+    //     for (;;) {                                 // ancestor walk 0x6b9834
+    //       chainNodeIndex = idx;
+    //       chain.insert(end, nodes[idx].label);     // sub_6BA5B4
+    //       if (chain.size > ref.size && !chain.empty) chain.pop_back(); // trunc
+    //       if (chain.size == ref.size) {
+    //         if (ref.empty()) goto MATCH;           // 0x6b98b8
+    //         if (chain elementwise == ref) goto MATCH;          // 0x6b98bc loop
+    //       }
+    //       parentIndex = nodes[chainNodeIndex].parentIndex;     // 0x6b9958
+    //       if (parentIndex <= 0) { ++scan; break; } // reached root / no parent
+    //       idx = parentIndex;
+    //     }
+    //     continue;
+    //   MATCH:
+    //     entry.heapResult.push_back(nodes[scanNodeIndex]);      // 0x6b96f0
+    //     ++scanNodeIndex;
+    //   }
+    //   // chain backing released at function exit (0x6b9968).
+    //
+    // The repeated re-compare of the frozen ref.size window during the climb is a
+    // binary artifact (truncation keeps dropping each newly-added deeper
+    // ancestor); it is reproduced faithfully — the climb only terminates at the
+    // root (parentIndex<=0). The comparison element type is the node's label
+    // (node+0 -> tTJSVariant<string>); the port uses MotionNode::layerName.
+    void Player::rebuildEvalCascadeHeapResultLike_0x6B9650(
+        detail::EvalCascadeState &entry) {
+        if(entry.weight == 0.0) {
+            return; // 0x6b968c
+        }
+        entry.weight = 0.0;        // 0x6b96ac — binary clears the gate weight
+        entry.heapResult.clear();  // 0x6b96b0 — end = begin (keep capacity)
+
+        const std::vector<ttstr> &ref = entry.chainSegments;
+        std::vector<ttstr> chain; // binary local p/v44 (released at 0x6b9968)
+
+        // Loop bound (0x6b97ec): `[deque-size-expr] - 1 > scanNodeIndex`. The
+        // deque-size expr (magic 0x18E6527AF1373F07 / 0xE719AD850EC8C0F9 =
+        // 329^-1 mod 2^64, 329 = 2632/8) is libstdc++ std::deque::size() inlined
+        // for the >512B (1-elem/block) MotionNode deque, which yields realSize+1;
+        // the literal `- 1` cancels that +1 bias, so the bound is realSize ==
+        // _nodes.size(). The author source is `scanNodeIndex < _nodes.size()`
+        // (NOT size()-1, NO trailing sentinel — same inlining cross-checked at
+        // PlayerUpdateLayerEval.cpp:700-720 / advanceNodeFrames 0x6B7E44). Root is
+        // index 0, scan starts at 1.
+        for(std::size_t scanNodeIndex = 1; scanNodeIndex < _nodes.size();
+            ++scanNodeIndex) {
+            detail::MotionNode &scanNode = _nodes[scanNodeIndex];
+            // (nodeType - 3) > 1 (unsigned) -> not in {3,4} (0x6b9824).
+            if(static_cast<unsigned>(scanNode.nodeType - 3) > 1u) {
+                continue;
+            }
+            std::size_t idx = scanNodeIndex;
+            bool matched = false;
+            for(;;) {
+                const std::size_t chainNodeIndex = idx;
+                // sub_6BA5B4: insert nodes[idx].label at chain end (0x6b985c).
+                chain.push_back(detail::widen(_nodes[idx].layerName));
+                // Truncate so chain never exceeds ref length (0x6b9874): drop the
+                // most-recently-added element when over and chain non-empty.
+                if(chain.size() > ref.size() && !chain.empty()) {
+                    chain.pop_back();
+                }
+                if(chain.size() == ref.size()) {
+                    if(ref.empty()) {
+                        matched = true; // 0x6b98b8 both empty -> push node
+                        break;
+                    }
+                    bool allEqual = true;
+                    for(std::size_t j = 0; j < ref.size(); ++j) {
+                        // 0x6b98bc: ptr-equal short-circuit, then type tag (+0x3C)
+                        // + wcscmp. Port compares the ttstr string value, which is
+                        // exactly what ttstr_c_str/sub_9B1ED0(wcscmp) reads.
+                        if(chain[j] != ref[j]) {
+                            allEqual = false;
+                            break;
+                        }
+                    }
+                    if(allEqual) {
+                        matched = true;
+                        break;
+                    }
+                }
+                // Climb to parent (0x6b9958): parentIndex = nodes[chainNodeIndex]
+                // .parentIndex (node+36). <=0 -> root / no parent -> give up.
+                const int parentIndex = _nodes[chainNodeIndex].parentIndex;
+                if(parentIndex <= 0) {
+                    break;
+                }
+                idx = static_cast<std::size_t>(parentIndex);
+            }
+            if(matched) {
+                // 0x6b96f0 / grow path: push nodes[scanNodeIndex] into heapResult.
+                entry.heapResult.push_back(&scanNode);
+            }
+        }
+        // chain (local) released here — matches binary 0x6b9968 cleanup.
+    }
+
     double Player::initialParameterRawValueLike_0x6B1ABC(
         const std::string &id) const {
         if(id.empty()) {
@@ -300,9 +436,9 @@ namespace motion {
     //                  node.chainDispatches = sub_697D34(scope,"\\"); // DEFERRED
     //                  node.weight = 1.0 }                  (0x3FF.. @0x6c4964)
     //     node.writeVal = a4;                              (0x6c4968)
-    //     sub_6B9650(node);  // rebuild HM1 heapResult       // DEFERRED (Stage 2)
-    //     ramp node+408 for each heapResult type3/type4 node (suffix key)
-    //       -> reached here via the descendant recursion below
+    //     sub_6B9650(node);  // rebuild HM1 heapResult       // PORTED (Stage 2)
+    //     ramp child-Player+408 for each heapResult type3/4 node (suffix key)
+    //       -> PORTED: heapResult-driven child ramp inside the HM1 block
     //
     //   [LABEL_132 — HM2, unconditional, 0x6c4c0c]
     //     HM2.upsert(rawLabel) = a4;   <-- green-critical, value-equivalent
@@ -316,10 +452,12 @@ namespace motion {
     // is written — replacing the prior non-faithful full-vector scan that matched
     // id==full||id==suffix on the own player (the suffix match belonged to the
     // descendant path, not the own tail). The HM1 cascade is additive structure
-    // (separate _evalCascadeMap, no feedback into HM2). STILL DEFERRED: the
-    // chainDispatches build (sub_697D34) and the heapResult-driven dispatch
-    // (sub_6B9650 @0x6c4974) that the binary uses to reach descendant players by
-    // suffix — the web port approximates that reach via the live node recursion.
+    // (separate _evalCascadeMap, no feedback into HM2). NOW PORTED (Stage 2): the
+    // chainSegments build (sub_697D34 -> splitScopeSegmentsLike_0x697D34), the
+    // heapResult rebuild (sub_6B9650 @0x6c4974 ->
+    // rebuildEvalCascadeHeapResultLike_0x6B9650), and the heapResult-driven child
+    // ramp (0x6c4978: each type3/4 node's child Player +408 map keyed by suffix).
+    // The prior _nodes full-recursion approximation was removed.
     void Player::bindParameterValueLike_0x6C4668(const std::string &label,
                                                  int mode,
                                                  double value) {
@@ -360,19 +498,55 @@ namespace motion {
             // Player_HM1_upsert_evalCascade @0x6F52AC.
             auto found = _evalCascadeMap.find(cascadeKey);
             if(found == _evalCascadeMap.end()) {
-                // First insert (0x6c4850): seed key, weight=1.0 (0x6c4964).
-                // chainDispatches/aux/ramps DEFERRED (see header comment).
+                // First insert (0x6c4850): seed key, chainSegments (sub_697D34),
+                // weight=1.0 (0x6c4964).
                 auto inserted = _evalCascadeMap.emplace(
                     std::piecewise_construct,
                     std::forward_as_tuple(cascadeKey),
                     std::forward_as_tuple());
                 found = inserted.first;
                 found->second.keyCopy = cascadeKey;
+                // chainSegments = scope split into "::"-segments (binary
+                // sub_697D34 @0x6c48bc: splits v96=scope by "::"). Built once on
+                // first insert and frozen — the dedup reference for sub_6B9650.
+                found->second.chainSegments =
+                    splitScopeSegmentsLike_0x697D34(scope);
                 found->second.weight = 1.0; // binary node+40 = 1.0
             }
             // node.writeVal = a4 on every bind (binary 0x6c4968, unconditional
             // after the insert branch).
             found->second.writeVal = value;
+
+            // sub_6B9650(a1, node) @0x6c4974: rebuild this entry's heapResult
+            // (type3/4 nodes whose ancestor label-chain == chainSegments). Gated
+            // internally by entry.weight!=0; it also clears weight to 0.
+            detail::EvalCascadeState &entry = found->second;
+            rebuildEvalCascadeHeapResultLike_0x6B9650(entry);
+
+            // Consume heapResult @0x6c4978: for each listed node, ramp the child
+            // Player(s)' +408 controller map (_parameterRampMap) by the SUFFIX
+            // (binary &v101 = parts.suffix), NOT by re-running HM1/HM2. type4
+            // (0x6c4b30): per-particle-child native Player; type3 (0x6c4a54): the
+            // node's own child Player. Each child's +408 == its _parameterRampMap.
+            const ttstr suffixKey = detail::widen(parts.suffix);
+            for(detail::MotionNode *node : entry.heapResult) {
+                if(!node) {
+                    continue;
+                }
+                if(node->nodeType == 4) {
+                    for(int i = 0; i < node->getParticleCount(); ++i) {
+                        if(Player *child = node->getParticleChild(i)) {
+                            applyParameterRampsLike_0x6C4C0C(
+                                child->_parameterRampMap, suffixKey, mode, value);
+                        }
+                    }
+                } else if(node->nodeType == 3) {
+                    if(Player *child = node->getChildPlayer()) {
+                        applyParameterRampsLike_0x6C4C0C(
+                            child->_parameterRampMap, suffixKey, mode, value);
+                    }
+                }
+            }
         }
         // --- end HM1 cascade ---
 
@@ -384,28 +558,12 @@ namespace motion {
         // therefore matches only entries whose id == the full raw label.
         applyParameterRampsLike_0x6C4C0C(_parameterRampMap, detail::widen(label),
                                          mode, value);
-
-        // --- descendant propagation (binary HM1-block per-node ramp loops) ---
-        // The binary's top half iterates the HM1 entry's heapResult node list
-        // (type3/4 nodes, rebuilt by sub_6B9650) and looks up each child Player's
-        // +408 map by the "::"/"/" SUFFIX. The web port reaches the same child
-        // players by recursing on the live node tree; the child re-splits and
-        // applies its own +408 ramp. (Faithful heapResult-driven dispatch +
-        // suffix keying is staged separately with sub_6B9650.)
-        for(auto &node : _nodes) {
-            if(node.nodeType == 3) {
-                if(auto *child = node.getChildPlayer()) {
-                    child->bindParameterValueLike_0x6C4668(label, mode, value);
-                }
-            } else if(node.nodeType == 4) {
-                for(int i = 0; i < node.getParticleCount(); ++i) {
-                    if(auto *child = node.getParticleChild(i)) {
-                        child->bindParameterValueLike_0x6C4668(label, mode,
-                                                               value);
-                    }
-                }
-            }
-        }
+        // The HM1-block heapResult-driven descendant ramp now runs above (inside
+        // the HM1 cascade block, binary order: before LABEL_132). The prior
+        // _nodes full-recursion approximation (which re-ran the entire
+        // HM1/HM2/split on every child by the FULL label) was replaced — the
+        // binary ramps each heapResult node's child Player directly by the
+        // SUFFIX over its +408 map, without recursing the var-bind.
     }
 
     void Player::writeEvalResultValueLike_0x6C4668(const std::string &label,

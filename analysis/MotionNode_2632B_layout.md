@@ -144,7 +144,10 @@
 
 ## 4. 仍未确定 / 需后续钉死
 1. **node 头部 [0, 0x64) 大部分语义未定**：已知 +8(childTimeline ptr)、+0x1C(nodeType)、+0x2C(forceFlag)、
-   +0x34(stencil)、+0x38(lastRatio)。未定：+0(vtable?)、+0x10、+0x14、+0x24（buildNodeTree 与 child 一同读）。
+   +0x34(stencil)、+0x38(lastRatio)、**+0x24(parentNodeIndex)**。未定：+0(vtable?)、+0x10、+0x14。
+   - **+0x24(36) = parentNodeIndex (int)**：父节点 0-based deque 索引（根的子节点=0）。
+     写：`Player_buildNodeTree_recursive`@0x6B4A6C `STR W8,[X27-0xA24]`@0x6b4bf8，写入 a2=递归传下的父自身 index v17。
+     读：`sub_6B9650`@0x6B9650 `LDR W10,[X10,#0x24]; B.GT`@0x6b9958，祖先链爬升的 climb-to-parent cursor，`<=0` 停（到根/无父）。证据无缺口。
 2. **slot 内部 536B**：已完整记录在 ClipSlot_536B_layout.md（slot[0]@node+320 / slot[1]@node+856）。
    注意 slot+0x158=344=hasContent、slot+0x159=345=secondaryFlag，与 node 绝对 +346/+882 mergedFlag(slot+26) 是
    **不同字段**，勿混。

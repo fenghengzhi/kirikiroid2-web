@@ -1399,8 +1399,9 @@ namespace internal {
     //      -> the caller keeps progressSeekNodeSlotsLike_0x6C106C right after
     //      this call (the live per-node seek that fills node+320/+856), so the
     //      node-init is performed there; not duplicated here.
-    //   5. TAIL @0x6B9234: Player_pruneHM3_byNodeIdentity + the player+280
-    //      aux-list pass (sub_6B9650). DEFERRED (see markers below).
+    //   5. TAIL @0x6B9234: Player_pruneHM3_byNodeIdentity (A, ported) + the
+    //      player+280 HM1-entry walk (B) calling sub_6B9650 per entry (now
+    //      ported — see STEP 5 below).
     void Player::reseekTimelineCursors(double targetTime) {
         if (!_activeMotion) {
             return;
@@ -1664,24 +1665,26 @@ namespace internal {
         // (B) 0x6B923C..0x6B9248: `for (n = player+280; n; n = *n)
         //     sub_6B9650(a1, n+16)`. player+280 is HM1's (_evalCascadeMap,
         //     Player+264) internal before-begin all-entries chain (std::unord-
-        //     ered_map's _M_before_begin._M_nxt — NOT a separately-addressable
-        //     port field). sub_6B9650 @0x6B9650 rebuilds each HM1 entry's
-        //     affected-node list at entry+48 (= EvalCascadeState::heapResult):
-        //     gate entry+40(weight)==0 -> skip; clear the entry+48 vector; scan
-        //     the NODE deque and push nodeType in {3,4} nodes (deduped).
-        //   PREREQUISITE STILL MISSING (genuine, re-verified this pass): the
-        //   entry+48 node list has NO port reader. Its sole consumer is the ramp-
-        //   write loop in Player_bindParameterValue @0x6C4978, which iterates
-        //   each listed node's `node+408` controller RB-tree (a
-        //   std::map<ttstr,ControllerRamp>) and writes ramp+40 from an
-        //   interpolated weight. node+408 is NOT modeled on the port's MotionNode
-        //   (populated by the unported per-node controller-frame parse, not by
-        //   buildNodeTree_recursive @0x6B4A6C). Porting sub_6B9650 alone would
-        //   build a vector<MotionNode*> that no port code reads — the inverse of
-        //   port-invention (CLAUDE.md). The faithful order is: model node+408 +
-        //   port the @0x6C4978 ramp consumer FIRST, then this rebuild hook. Until
-        //   then this stays a documented prerequisite-gap DEFERRED, NOT an
-        //   oracle-inert skip.
+        //     ered_map's _M_before_begin._M_nxt). The walk calls sub_6B9650 with
+        //     n+16 = the EvalCascadeState VALUE base for EVERY HM1 entry,
+        //     rebuilding each entry's heapResult (entry+48 = vector<MotionNode*>).
+        //   NOW PORTED (the prior "no port reader" DEFERRAL premise was a
+        //   MISIDENTIFICATION, corrected this pass): heapResult's consumer is the
+        //   loop at 0x6C4978 inside Player_bindParameterValue @0x6C4668 itself —
+        //   for each listed type3/4 node it ramps the node's CHILD Player's +408
+        //   map (= the child Player's _parameterRampMap, already modeled by
+        //   Stage 1), keyed by the suffix. node+408 is NOT a field on MotionNode;
+        //   it is Player+408 of the child reached THROUGH the node (sub_6C1678
+        //   PropGet member 200 -> native child Player). That consumer is now wired
+        //   in bindParameterValueLike_0x6C4668. The builder itself is
+        //   rebuildEvalCascadeHeapResultLike_0x6B9650.
+        //   The unordered_map's libstdc++ node-chain order differs from the port's
+        //   iteration order, but each entry's heapResult is computed independently
+        //   (reads _nodes + the entry's own chainSegments/weight, writes only that
+        //   entry's heapResult), so iteration order does not affect the outcome.
+        for(auto &kv : _evalCascadeMap) {
+            rebuildEvalCascadeHeapResultLike_0x6B9650(kv.second);
+        }
     }
 
     void Player::pruneHM3ByNodeIdentityLike_0x6B826C() {

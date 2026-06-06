@@ -831,6 +831,12 @@ namespace motion {
         void bindParameterValueLike_0x6C4668(const std::string &label,
                                              int mode,
                                              double value);
+        // libkrkr2.so sub_6B9650 @0x6B9650: rebuild an HM1 entry's heapResult
+        // (entry+48 = vector<MotionNode*>). Gate entry.weight==0 -> skip + clear
+        // weight; else scan the node deque, push each type3/4 node whose ancestor
+        // label-chain (walked via parentIndex) equals entry.chainSegments.
+        void rebuildEvalCascadeHeapResultLike_0x6B9650(
+            detail::EvalCascadeState &entry);
         void writeEvalResultValueLike_0x6C4668(const std::string &label,
                                               double value);
         void writeEvalResultValueLike_0x6C4668(const std::string &label,
@@ -986,8 +992,10 @@ namespace motion {
         // walk the caller keeps right after; the STEP5 tail's HM3-prune
         // (0x6B9234, pruneHM3ByNodeIdentityLike_0x6B826C) is now PORTED (loop1
         // HM4→slot.value + terminal clearHM3_HM4; per-node restore DEFERRED), and
-        // the player+280 aux-list rebuild (0x6B9248, sub_6B9650) stays DEFERRED
-        // (its node+408 ramp consumer is unported). Called at the firstFrame seed
+        // the player+280 HM1-entry walk (0x6B9248, sub_6B9650 per entry) is now
+        // PORTED (rebuildEvalCascadeHeapResultLike_0x6B9650; its heapResult
+        // consumer is the bindParameter child-Player +408 ramp). Called at the
+        // firstFrame seed
         // (0x6C10E0/0x6C131C) + the two loop-wrap reseek points (0x6C1488/0x6C1428).
         void reseekTimelineCursors(double targetTime);
         // libkrkr2.so Player_interpolateVarTrackValues @0x6BBE20 — the var-track
