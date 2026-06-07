@@ -876,6 +876,30 @@ namespace motion {
         // the particle pass (sub_6C17A4 @0x6C1A00). Inert in this build.
         void aggregateChildMotionRenderItemsLike_0x6F363C(Player &child);
         bool buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight);
+        // libkrkr2.so sub_6C4E28 @0x6C4F88..0x6C5D98 Loop A drawable body:
+        // materialize the per-item LEAF layer (item+304) on the persistent
+        // SeparateLayerAdaptor Rb_tree (player+760 _managedTargets, keyed by
+        // item+424 layerId), size it to the clip rect, and affineCopy/meshCopy/
+        // bezierPatchCopy the resolved source onto it. This is the J1/J7
+        // relocation: the leaf copy is emitted in the BUILD pass, not in
+        // execute. Returns true if the leaf layer was materialized.
+        bool emitLeafLayerCopyLike_0x6C4E28(
+            detail::PreparedRenderItem &item,
+            iTJSDispatch2 *scratchOwner,
+            iTJSDispatch2 *scratchParent,
+            const std::string &motionPath);
+        // libkrkr2.so sub_6C4E28 @0x6C5E7C..0x6C63AC Loop B: for each group
+        // item, union the visible child clip rects, intersect with the camera
+        // clip, and (if non-empty) create/refresh the COMPOSED layer (item+324)
+        // via Window.mainWindow Layer ctor, fillRect(0), then apply each
+        // visible child's leaf as an alpha mask. Inert for the logo fixtures
+        // (no group items reach a non-empty union).
+        void composeGroupLayersLike_0x6C4E28(
+            tjs_int canvasWidth,
+            tjs_int canvasHeight,
+            iTJSDispatch2 *scratchOwner,
+            iTJSDispatch2 *scratchParent,
+            const std::string &motionPath);
         bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
                                         bool skipUpdate);
         bool updateLayerAfterDrawLike_0x6CE7D8(tTJSVariant *target);

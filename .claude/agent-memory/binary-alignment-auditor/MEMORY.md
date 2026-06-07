@@ -22,3 +22,17 @@
 - [ClusterD D3DEmotePlayer NCB surface](project_clusterD_d3demoteplayer_ncb_surface.md) — 2026-05-31: 0x52E504=54 entries; 6 aliases replicated OK but 4 EXTRA honest-name dup-regs (bodyScale/playCallback/setTimeline/addPlayCallback) block M11; progress binds EmoteEngine_progress not D3DEmotePlayer_progress.
 - [M15/M16 accessor audit](project_player_m15m16_accessor_audit.md) — 2026-05-31: setTickCount/setCoord/setAngleDeg M16 fixes OK; getLoopTime scalar vs binary TJS-Array (SEVERE); setChara ttstr vs tTJSVariant*@+776+replay; angleDeg/angleRad unit naming swap; clear/contains/bounds/meshDiv binary getters NOT located.
 - [主路径根架构结论(STALL)](project_mainpath_root_arch_stall.md) — 2026-05-31: progress 帧推进根架构错(STL timeline vs node-deque frame-stepping)，连续多轮未解决=停滞；draw 是正确架构仅分支/相位差。
+
+<!-- 以下来自 2026-06-07 motionplayer 全量审计（cwd-drift 误放已修正回此处） -->
+- [Player cluster E accessor map](player_cluster_e_accessors.md) — 簇E Player accessor 二进制地址↔语义权威映射(chara/stealthChara/tickCount/angle/loopTime/variableKeys);多处旧 IDB 符号 off-by-one 已纠正
+- [Cluster D main/D3D/namespace](clusterD_main_d3d_namespace.md) — D3DEmotePlayer 54表/Motion namespace sub_6D9B08/D3DAdaptor 16/D3DEmoteModule 8 二进制addr+2026-06-07对齐(4残留P2/P3,M6已修)
+- [Cluster B EmoteEngine addr map](clusterB_emoteengine_addrs.md) — EmoteEngine 函数地址↔本地映射 + 2026-06-07 审计结论(已基本对齐,残留 COLOR seed/preProgress)
+- [Cluster F NodeTree path-key resolved](clusterF_nodetree_pathkey_resolved.md) — Player+24用RAW label(非path);buildNodePathKey仅喂HM3;2026-05-30 F1/F2/F3证伪;残留D1/D2 mesh门控偏差
+- [簇G frameProgress 审计](project_clusterG_frameprogress_audit.md) — PlayerFrameProgress.cpp vs progress_inner@0x6C106C: ⚠️3处局部偏差(firstFrame陈旧deltaTime/尾部port-invented覆写/emoteMode gate缺失);字段映射表;子函数对齐表
+- [簇I updateLayers/geometry/anchor 审计](project_clusterI_updatelayers_geometry_audit.md) — 旧clusterH P0/P1多数已修(anchor/calcBounds递归/root setters/translateOffset);残留🔧I-1:_deltaTime(player+592)从未赋值(只读不写),anchor物理全dead+phase1误用_frameLastTime;修在簇G frameProgress
+- [簇H timeline/frame-step 审计](project_clusterH_timeline_framestep_audit.md) — P2/P3/P4独立端口vs parse/merge/advance/rewind/advanceNode/reseek 6函数全byte-exact;唯一偏差H-P1(reseek非child init DEFERRED);旧簇G SEVERE表已过时;mergeFrame gate备忘
+- [簇K render items/targets/layer-query 审计](project_clusterK_render_items_targets.md) — 0x6CBCE4=acquireLayerById确证(已rename),SLA容器std::map对齐0x6DCD0C;残留P1-I3(requireLayerId build→execute phase,跨簇standing)+accurate composite子路径缺口
+- [簇L 变量系统/4-HM级联](clusterL_variables_resolved.md) — ✅对齐;HM4=raw double(旧J-1 owning-tTJSVariant*证伪,clear释放KEY非value);容器选型全对;deque@+1296≡_M_start@+1312;残留L-1(+1064 redirect层inert)
+- [簇M 粒子系统/childMotion 审计](project_clusterM_particles_childmotion_audit.md) — ✅05-30的L1(P0)/L8/L9/L10/L11全resolved;L9证伪(node+1504=accumulated.dirty);死缓冲splice=std::vector insert@begin 1:1;残留4×P2(M1 prevM/childCount,M2 emission trigger用node镜像非slot+736,M3 Pass2用_frameLastTime非_deltaTime,M4 cull rect未标平台边界)
+- [簇J render execute/internal/dispatch 审计](clusterJ_render_execute.md) — 双函数双层管线(0x6C4E28 leaf emit→0x6C7440 submit);blend/direct门/mesh-TJS-array/alphaMask对齐;❌J4额外Update/J6 absolute=x+y/⚠J9 preview opa减半缺失;🔧J1/J7/J8 leaf-composed双Rb_tree+accurate-SLA缺失;0x6CBCE4→acquireComposedLayerById(精化簇K命名),0x6C6B48→acquireLeafLayerById
+- [簇N resource/SourceCache/ObjSource 审计](clusterN_resource_sourcecache.md) — RM:public SourceCache(0x6A88CC调0x6A78F4确证);RM/SC registrar共享3回调=继承签名;ObjSource@0x69CCB8=dict facade(w/h默认32);🔧Player_findSource@0x6948E8双hashmap+裸GPU upload vs list+shared_ptr(phase-D边界);unloadAll真址=0x6A8CF8(非0x6A8BBC,注释待修);clip STUB
