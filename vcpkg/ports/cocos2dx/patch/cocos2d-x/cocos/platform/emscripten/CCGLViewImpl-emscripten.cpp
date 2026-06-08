@@ -99,7 +99,15 @@ bool GLViewImpl::initWithRect(const std::string& viewName, Rect rect, float fram
     SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
-    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
+    // 平台边界:Web canvas 必须不透明,对齐 Android 的 opaque EGL/GLSurfaceView surface。
+    // Emscripten SDL2 把 SDL_GL_ALPHA_SIZE>0 映射成 WebGL 上下文属性 alpha:true,
+    // 使 canvas 带 alpha 通道并叠在 HTML 页面上做 premultiplied 合成 —— 此时 KiriKiri
+    // 设计上为 0 的 framebuffer alpha(如系统设定 @bg 半透明装饰区,无 ltOpaque 层撑满 alpha,
+    // TVPAlphaBlend 又只混 RGB 保留 dst alpha)会被当成"透明",透出页底深色 → 背景纯黑。
+    // Android 的 surface 是 opaque、显示忽略 framebuffer alpha,故同样的 alpha=0 仍按 RGB 上屏。
+    // 设 ALPHA_SIZE=0 → alpha:false → canvas 不透明,与 Android 行为对齐。全屏游戏不存在
+    // 任何依赖 canvas 透明的界面,此改动只会让 alpha=0 区域按 RGB 上屏(原本应有的样子)。
+    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
 
     int width = static_cast<int>(rect.size.width * _frameZoomFactor);
     int height = static_cast<int>(rect.size.height * _frameZoomFactor);
