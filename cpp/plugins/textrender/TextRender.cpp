@@ -18,9 +18,14 @@
 //
 #include <spdlog/spdlog.h>
 #include <vector>
+#include <deque>
+#include <unordered_map>
+#include <algorithm>
+#include <cstring>
 #include "tjs.h"
 #include "tjsArray.h"
 #include "ncbind.hpp"
+#include "ScriptMgnIntf.h" // TVPExecuteExpression（onEval @0x5A0294 → sub_8E3FA4）
 
 #define NCB_MODULE_NAME TJS_W("TextRender.dll")
 #define LOGGER spdlog::get("plugin")
@@ -41,35 +46,135 @@ public:
     TextRenderBase() = default;
     ~TextRenderBase() = default;
 
-    // ---- 逐字符 / 行 / face 表（骨架阶段保持空；render 状态机后续填充）----
+    // ---- 逐字符 / 行 / face 表 ----
+    //   CharItem = 二进制 80B POD（charItem）的忠实复刻。字段语义/顺序经
+    //   sub_5A4838(拷贝)@0x5A4838 + appendChar@0x5A3880 + sub_5A4A7C@0x5A4A7C
+    //   + calcShowCount@0x5A0644 四处反编译交叉确认（analysis §3b-1）。
+    //   遵字节布局复刻工作法：写语义字段名，编译器自由算偏移；元素 POD 内部
+    //   字段是数据契约（拷贝/落字按字段读写），但对象 ABI 偏移不需对齐。
+    struct RubyItem {                    // charItem +56 vector 元素（20B/elem）
+        ttstr text;                      // +0 (refcounted ttstr*)
+        float x = 0;                     // +8  ruby x 偏移 (appendChar v28-3 = v41)
+        float y = 0;                     // +12 ruby y 偏移 (appendChar v28-2 = v40)
+        float span = 0;                  // +16 ruby span = rubySize*fontScale (v28-1 = v34*v36)
+    };
     struct CharItem {
-        ttstr text;
-        float x = 0, y = 0, cw = 0, size = 0, lineY = 0;
-        tjs_uint32 color = 0, shadowColor = 0, edgeColor = 0, shadowDiff = 0;
-        bool bold = false, italic = false, shadow = false, edge = false,
-             vertical = false;
-        int lineIdx = 0, delay = 0;
-        ttstr face;
+        ttstr text;                      // +0  单字符文本（onGetTextWidth 输入）
+        float x = 0;                     // +8  pen 横坐标（落字回填）
+        float y = 0;                     // +12 pen 纵坐标（落字回填）
+        float cw = 0;                    // +16 字宽（onGetTextWidth 返回）
+        float size = 0;                  // +20 有效字号 = fontScale×curFontSize
+        float renderPos = 0;             // +24 落字累积渲染位置（calcShowCount 倒扫读）
+        tjs_uint32 chColor = 0;          // +28
+        tjs_uint32 shadowColor = 0;      // +32
+        tjs_uint32 edgeColor = 0;        // +36
+        bool rubyFlag = false;           // +40 (构造置 0)
+        bool bold = false;               // +41
+        bool italic = false;             // +42
+        bool shadow = false;             // +43
+        bool edge = false;               // +44
+        bool vertical = false;           // +45
+        tjs_uint32 shadowDiff = 0;       // +48
+        int faceIndex = 0;               // +52
+        std::vector<RubyItem> ruby;      // +56/+64/+72 ruby 子标注
     };
+    // LineItem = 二进制 112B 行项（行列表 +432，stride 112）。前 80B 是该行 charItem
+    //   的嵌套 std::deque<charItem> 快照（finishLine 经 sub_5A4588 整体拷入），后 32B
+    //   是行 metric float（sub_5A4588 从 a1+400 拷 16B 到 lineItem+80、从 a1+413 拷 16B
+    //   到 lineItem+93）。源码层 = { deque<CharItem> chars; float 行 metric... }。
+    //   done@0x59FEE4 读 lineItem float[22..25] 算全局 bbox，读 +80(float[20]) 是 offset
+    //   累加器；calcLineOffset@0x5A05FC 返回 lineItem +80。下表 float 索引经 done/finishLine
+    //   交叉确认：+80=lineBottom(a1+400 v24), +84=lineHeight(a1+404 v11),
+    //   +88=left(a1+408), +92=top(a1+412), +96=right(a1+416), +100=bottom(a1+420 等)。
+    //   done 用的 bbox: v5[22]=+88(left) min, v5[23]=+92(top) min, v5[24]=+96(right) max,
+    //   v5[25]=+100(bottom) max；offset(+80) 是 valign 居中量加到每 char.y。
     struct LineItem {
-        float left = 0, top = 0, right = 0, bottom = 0; // bbox (+22..+25)
-        float offset = 0;                               // align 偏移 (+80)
+        std::deque<CharItem> chars;   // +0..+79 该行字符快照（嵌套 deque<charItem>）
+        float lineBottom = 0;         // +80  a1+400 行内 max(行高 + char.y)；done valign offset 写它
+        float lineHeight = 0;         // +84  a1+404 max(charSize, curLineSize)
+        float bboxLeft = 0;           // +88  a1+408
+        float bboxTop = 0;            // +92  a1+412
+        float bboxRight = 0;          // +96  a1+416
+        float bboxBottom = 0;         // +100 a1+420
     };
-    std::vector<CharItem> _charList; // 真对象 +296
-    std::vector<LineItem> _lineList; // 真对象 +432 (stride 112)
-    std::vector<ttstr> _faceTable;   // 真对象 +456 (index→face)
-    std::vector<int> _keyWaitList;   // 真对象 +480 (pos)
+    // char 列表：二进制 +296 是 std::vector<charItem*>（8B 元素=堆指针），
+    //   落字路径 new 80B charItem 后 push 指针。容器选型对齐二进制（vector<指针>）。
+    std::vector<CharItem *> _charList; // 真对象 +296
+    // pending-char deque：二进制 +320 是 std::deque<charItem>（行内禁则/kinsoku
+    //   重排缓冲，80B 元素，6/node）。容器选型对齐二进制 deque（analysis §3b-2）。
+    std::deque<CharItem> _pendingChars; // 真对象 +320
+    std::vector<LineItem> _lineList;     // 真对象 +432 (stride 112)
+    std::vector<ttstr> _faceTable;       // 真对象 +456 (index→face)
+    // keyWait 列表：二进制 +480 是 std::vector<KeyWaitItem>（8B 元素 = 两个 int）。
+    //   元素布局经 keyWaitList_pushBack@0x5A5874（operator new(8*n)、(end-begin)>>3 计数、
+    //   *(QWORD*)(slot)=*a2 存 renderCount 到低 int）+ done@0x59FEE4 keyWait 段（v39[1] =
+    //   charList[v39[0]].renderPos bits，写高 int，低 int 索引不动）+ getKeyWait@0x5A02DC
+    //   （LDRSW 读低 int=index）三处交叉确认。
+    //   - \k 落点：index = renderCount(+84)，time = 0。
+    //   - done 重写：time = charList[index].renderPos 的 float bits（高 int）。
+    //   - getKeyWait 消费：pos=time=index（**低 int**，renderPos bits 高 int 不被 getKeyWait
+    //     读取 → dead-but-faithful）。
+    //   纠正旧 §3b/memory "4B 元素=renderPos float bits"：实为 8B 双 int，getKeyWait 读 index。
+    struct KeyWaitItem {
+        int index = 0; // +0 低 int：\k push renderCount；getKeyWait 读它做 pos/time
+        int time = 0;  // +4 高 int：done 写 charList[index].renderPos bits（dead-for-getKeyWait）
+    };
+    std::vector<KeyWaitItem> _keyWaitList; // 真对象 +480
+    // face hash 表（resolveFaceIndex intern：face 名→index）。二进制 +536 起是
+    //   inline-bucket 链式 hashmap（sub_5A172C 查 / sub_5A181C intern，节点 {next,
+    //   ttstr*, idx}）。容器实现选型用 unordered_map（intern 表语义等价，与 _faceTable
+    //   互为正反），但 hash 算法忠实复刻二进制内联 hash（数据契约，见 FaceNameHash）。
+    //   resolveFaceIndex@0x5A14DC 内联 hash: 逐 UTF-16 码元
+    //     v7 = (1025*(v7+ch)) ^ ((1025*(v7+ch))>>6); 末尾 *9，再 *32769 折叠 ^>>11，
+    //     0 → 0xFFFFFFFF（空串→0）。
+    struct FaceNameHash {
+        size_t operator()(const ttstr &s) const {
+            const tjs_char *p = s.c_str();
+            unsigned int h;
+            if(!p || !*p) {
+                h = 0;
+            } else {
+                unsigned int acc = 0;
+                tjs_char ch = *p++;
+                do {
+                    unsigned int t = 1025u * (acc + (unsigned int)ch);
+                    acc = t ^ (t >> 6);
+                    ch = *p++;
+                } while(ch);
+                h = 9u * acc;
+            }
+            unsigned int v = 32769u * (h ^ (h >> 11));
+            return v ? v : 0xFFFFFFFFu;
+        }
+    };
+    struct FaceNameEq {
+        bool operator()(const ttstr &a, const ttstr &b) const { return a == b; }
+    };
+    std::unordered_map<ttstr, int, FaceNameHash, FaceNameEq> _faceHash; // 真对象 +536
 
     // ---- 选项 (setOption → byte 字段 +48..+59,+112) ----
-    bool _vertical = false;          // +48
-    bool _ignoreColor = false;       // +50
-    bool _ignoreSize = false;        // +51
-    bool _ignoreDelay = false;       // +52
-    bool _ignoreRuby = false;        // +56
-    bool _ignoreType = false;        // +57
-    bool _ignoreFace = false;        // +58
-    bool _ignoreStyle = false;       // +59
-    int _kinsokuMax = 0;             // +112
+    //   字段偏移/名称经 setOption@0x59D2AC 逐 key 反编译确认（key 字符串常量取自
+    //   PropGet L"..." 实参）。注意 ignore_over 与 ignore_overy 二进制同写 +54（后者
+    //   覆盖前者，忠实复刻）；kinsoku_max 是 bool-coerce 写入 DWORD（存 0/1，非整数值）。
+    bool _vertical = false;          // +48  L"vertical"
+    bool _wordBreak = false;         // +49  L"word_break"
+    bool _ignoreColor = false;       // +50  L"ignore_color"
+    bool _ignoreSize = false;        // +51  L"ignore_size"
+    bool _ignoreDelay = false;       // +52  L"ignore_delay"
+    bool _ignoreOverX = false;       // +53  L"ignore_overx"
+    bool _ignoreOverY = false;       // +54  L"ignore_over" / L"ignore_overy"（同址）
+    bool _widthTimeScale = false;    // +55  L"width_time_scale"
+    bool _ignoreRuby = false;        // +56  L"ignore_ruby"
+    bool _ignoreType = false;        // +57  L"ignore_type"
+    bool _ignoreFace = false;        // +58  L"ignore_face"
+    bool _ignoreStyle = false;       // +59  L"ignore_style"
+    int _kinsokuMax = 0;             // +112 L"kinsoku_max"（bool-coerce→0/1）
+    // 禁则字符集字符串 (setOption +8/+16/+24/+32)。二进制存 tTJSVariant*（refcounted
+    //   string），仅接受 string/void，object/octet/int/real 抛转换错误。语义=ttstr。
+    ttstr _following;                // +8  L"following"
+    ttstr _leading;                  // +16 L"leading"
+    ttstr _begin;                    // +24 L"begin"
+    ttstr _end;                      // +32 L"end"
 
     // ---- 当前样式 (setFont/setStyle 改写) ----
     bool _curBold = false;           // +62
@@ -77,18 +182,24 @@ public:
     bool _curEdge = false;           // +64
     bool _curItalic = false;         // +65
     int _curFaceIndex = 0;           // +72
+    int _curAlign = 0;               // +76  setStyle L"align"（当前样式 align，≠默认+100）
+    int _curValign = 0;              // +80  setStyle L"valign"（当前样式 valign，≠默认+104）
     float _curFontSize = 0;          // +116
+    float _curRubySize = 0;          // +128
+    float _curRubyOffset = 0;        // +132 setFont L"rubyoffset"（当前样式 ruby 偏移）
     float _curLineSpacing = 0;       // +136
     float _curPitch = 0;             // +140
     float _curLineSize = 0;          // +144
-    float _curRubySize = 0;          // +128
     tjs_uint32 _curChColor = 0;      // +200
     tjs_uint32 _curShadowColor = 0;  // +204
     tjs_uint32 _curShadowDiff = 0;   // +208
     tjs_uint32 _curEdgeColor = 0;    // +212
 
     // ---- 默认样式 (setDefault 改写；resetFont/Style 复位为这些) ----
-    ttstr _defaultFace;                  // 二进制为 +96 face index；骨架直接存 ttstr
+    //   二进制 +96 是 default face INDEX（int，setDefault 经 resolveFaceIndex 写入）。
+    //   defaultFace 属性 getter/setter 经 _faceTable/resolveFaceIndex 间接读写此 index
+    //   （0x5A0DA8/0x5A0E0C 确证），故无独立 _defaultFace ttstr 字段（旧占位已删，避免幻影字段）。
+    int _defaultFaceIndex = 0;           // +96  setDefault L"face" → resolveFaceIndex
     bool _defaultBold = false;           // +66
     bool _defaultShadow = false;         // +67
     bool _defaultEdge = false;           // +68
@@ -122,7 +233,44 @@ public:
     float _renderBottom = 0;         // +260
     bool _renderOver = false;        // +60
     int _renderCount = 0;            // +84
-    ttstr _renderText;               // +40 (tTJSVariant)
+    ttstr _renderText;               // +40 (tTJSVariant) 落字累积文本（finishLine 追加换行/缩进）
+
+    // ---- 落字/行布局运行时状态（appendChar/kinsoku/finishLine/clear 用，§3b 偏移对照）----
+    // 字段语义经 clear@0x59EC6C / appendChar@0x5A3880 / kinsoku@0x5A4A7C /
+    //   finishLine@0x5A34B8 反编译交叉确认，非字段名推导。
+    float _penX = 0;                 // +232 横排 pen X（竖排：列 X）
+    float _penY = 0;                 // +236 横排 pen Y（竖排：行内 Y）
+    float _renderPos = 0;            // +280 当前落字累积渲染位置（renderPos 源）
+    float _renderPosSnap = 0;        // +284 renderPos 快照
+    int   _state288 = 0;             // +288 clear 置 0（杂项状态）
+    int   _state92 = 0;             // +92  clear 置 0（杂项状态）
+    float _charDelayStep = 0;        // +192 每字 renderPos 步进（render %d 标签设置，clear 不重置）
+    float _lineStartX = 0;           // +196 行首 X（换行后 pen X 复位目标；clear 置 0）
+    int   _charBufCountdown = 0;     // +88  组合字符累积倒计数（clear 置 0）
+    int   _kinsokuUsed = 0;          // +108 本行 kinsoku 已用次数（clear 置 0）
+    // 行 metric 累加器（finishLine 写、push 进 lineItem）
+    float _lineBottomAccum = 0;      // +400 v24
+    float _lineHeightAccum = 0;      // +404 v11
+    float _lineBboxLeft = 0;         // +408（clear 竖排=renderSizeW，横排=0）
+    float _lineBboxTop = 0;          // +412
+    float _lineBboxRight = 0;        // +416（clear 竖排=renderSizeW，横排=0）
+    float _lineBboxBottom = 0;       // +420
+    // word_break trailing-run 状态
+    int  _wordBreakRun = 0;          // +424 行内 word-break run 起点字符数
+    bool _prevWasSpace = false;      // +428 上个落字是否空格
+    // ruby bbox 累加器（appendChar ruby 分支写 +264/+268/+272）
+    float _rubyTop = 0;              // +268
+    float _rubyLeft = 0;            // +264
+    float _rubyRight = 0;           // +272
+    // 当前 ruby 文本（render %... 设置，appendChar 消费后释放；clear 释放）
+    ttstr _curRubyText;             // +528
+    bool  _hasCurRubyText = false;  // +528 != 0 哨兵
+    // 内部 UTF-16 累积 buffer（+504/+512/+520 begin/end/cap，2B 元素）。源码层 = 字符 vector。
+    std::vector<tjs_char> _accumBuf; // +504
+    // render % 子码标签扫描的 cursor 回传槽（非二进制字段——二进制 render 是单函数，
+    //   cursor v136 是栈局部；本地把 % 分发拆成成员函数 renderPercentTag，需把推进后的
+    //   cursor 传回主循环，故引入此瞬态槽。实现细节，不进数据契约）。
+    int _percentCursor = 0;
 
     // ============================================================
     // Property accessors（RW/RO 拆分严格按二进制 setter==0 判定，§2）
@@ -138,7 +286,18 @@ public:
     TR_RW(bool, vertical, _vertical)                  // 0x5A0D74 / 0x5A0D7C
     TR_RW(double, timeScale, _timeScale)              // 0x5A0D88 / 0x5A0D90
     TR_RW(double, fontScale, _fontScale)              // 0x5A0D98 / 0x5A0DA0
-    TR_RW(ttstr, defaultFace, _defaultFace)           // 0x5A0DA8 / 0x5A0E0C
+    // defaultFace @0x5A0DA8(get) / 0x5A0E0C(set)：**INDEX-based**（后备字段是
+    //   _defaultFaceIndex/+96，非独立 ttstr）。getter 查 _faceTable[+96]（越界→空串
+    //   byte_1506A57）；setter 经 resolveFaceIndex 写 +96。1:1 复刻反编译。
+    ttstr get_defaultFace() const { // 0x5A0DA8
+        unsigned int idx = (unsigned int)_defaultFaceIndex; // +96
+        if((unsigned int)_faceTable.size() <= idx) // OOB
+            return ttstr();                         // sub_A13878(&byte_1506A57)
+        return _faceTable[idx];                     // _faceTable[+96]
+    }
+    void set_defaultFace(ttstr v) { // 0x5A0E0C
+        _defaultFaceIndex = resolveFaceIndex(v); // +96 = sub_5A14DC(name)
+    }
     TR_RW(double, defaultFontSize, _defaultFontSize)  // 0x5A0EAC / 0x5A0EB4
     TR_RW(double, defaultBigFontSize, _defaultBigFontSize)     // 0x5A0EBC
     TR_RW(double, defaultSmallFontSize, _defaultSmallFontSize) // 0x5A0ECC
@@ -177,7 +336,35 @@ public:
         return _vertical ? (_renderSizeW - _renderLeft)
                          : (_renderSizeH - _renderBottom);
     }
-    double get_maxScrollLine() const { return 0.0; }  // 0x5A1080 (行扫描；骨架=0)
+    // maxScrollLine @0x5A1080：从视口尺寸(竖排 +240/横排 +244)起，自最后一行向前逐行
+    //   减去 lineHeight(lineItem +84)，统计能从底部完整容纳的行号。1:1 复刻反编译。
+    //   - lineCount = (+440-+432)/112；count<1 → 0.0。
+    //   - v5 = vertical ? renderSizeW(+240) : renderSizeH(+244)；v6 = *v5（视口尺寸）。
+    //   - i 自 lineList[count-1].lineHeight(+84) 起，每次 i-=112B（向前一行）读 lineHeight：
+    //       v6 -= lineHeight; if(v6<0) break; --v4; if(count+v4<=0) return 1.0。
+    //   - break 后：v4!=0 → return count+v4；否则 fall-through → 0.0。
+    double get_maxScrollLine() const { // 0x5A1080
+        int count = (int)_lineList.size(); // v2 = (+440-+432)/112
+        float result = 0.0f;
+        if(count >= 1) {
+            int v4 = 0;
+            // v6 = 视口尺寸（竖排 renderSizeW，横排 renderSizeH）
+            float v6 = _vertical ? _renderSizeW : _renderSizeH; // *v5
+            int idx = count - 1; // i 起点：最后一行的 lineHeight(+84)
+            for(;;) {
+                v6 = v6 - _lineList[idx].lineHeight; // v6 -= *i
+                if(v6 < 0.0f)
+                    break;
+                --v4;
+                if(count + v4 <= 0)
+                    return 1.0; // 全部容纳 → 1.0
+                --idx;          // i -= 28 floats (-112B) → 前一行
+            }
+            if(v4 != 0)
+                return (float)(count + v4); // return count+v4
+        }
+        return result; // 0.0
+    }
 
 #undef TR_RW
 #undef TR_RO
@@ -190,16 +377,61 @@ public:
         _renderSizeH = (float)h;
         clear();
     }
-    void clear() { // 0x59EC6C — 复位渲染状态、重建列表
-        TR_STUB("clear");
-        _charList.clear();
+    // clear @0x59EC6C — 复位全部渲染状态、重建列表、压缩 face 表为仅 default face。
+    //   数据流 1:1 复刻反编译（pen/bbox 竖排横排分支、cur 样式从 default 复位、
+    //   face 表重 intern）。容器选型：STL clear 复刻源码 deque/vector 清空。
+    void clear() { // 0x59EC6C
+        // sub_5A1E68(+320)：pending deque 清空（释放 charItem，保留控制块）
+        clearPendingDeque();
+        if(_vertical) { // +48
+            // 竖排：pen X / left / right / line bbox left/right = renderSizeW(+240)
+            _penX = _renderSizeW;        // +232
+            _renderLeft = _renderSizeW;  // +248
+            _renderRight = _renderSizeW; // +256
+            _lineBboxRight = _renderSizeW; // +416
+            _lineBboxLeft = _renderSizeW;  // +408
+        } else {
+            _penX = 0;        // +232
+            _renderLeft = 0;  // +248
+            _renderRight = 0; // +256
+        }
+        _penY = 0;          // +236
+        _renderTop = 0;     // +252
+        _renderBottom = 0;  // +260
+        _kinsokuUsed = 0;   // +108
+        releaseCurRubyText(); // +528 release → null
+        _charBufCountdown = 0; // +88
+        _lineStartX = 0;       // +196
+        _accumBuf.clear();     // +512 = +504
+        resetFont();           // sub_59EEE0
+        // 当前样式从 default 复位（+140/+144/+136/+76/+80 ← +172/+176/+168/+100/+104）
+        _curPitch = _defaultPitch;             // +140
+        _curLineSize = _defaultLineSize;       // +144
+        _curLineSpacing = _defaultLineSpacing; // +136
+        _curAlign = _defaultAlign;             // +76
+        _curValign = _defaultValign;           // +80
+        // 行列表清空（析构每 lineItem 的嵌套 deque）+440=+432
         _lineList.clear();
+        // charList 清空（+304=+296）；元素是堆 charItem*，由 lineItem deque 拥有，此处不 delete
+        _charList.clear();
+        _renderPos = 0;       // +280
+        _state288 = 0;        // +288
+        _renderDelayAccum = 0; // +188
+        _state92 = 0;         // +92
+        _renderCount = 0;     // +84
+        _renderOver = false;  // +60
+        // keyWait 列表清空（+488=+480）
         _keyWaitList.clear();
-        _renderCount = 0;
-        _renderOver = false;
-        _renderLeft = _renderTop = _renderRight = _renderBottom = 0;
-        _renderText = ttstr();
-        _renderDelayAccum = 0;
+        _renderText = ttstr(); // +40 release → null
+        // face 表压缩：取旧 default face name → 清表 → 重 intern → 写回 +96
+        ttstr defFaceName;
+        if(_defaultFaceIndex >= 0 &&
+           _defaultFaceIndex < (int)_faceTable.size())
+            defFaceName = _faceTable[_defaultFaceIndex]; // a1+96 索引旧表
+        // 二进制越界 → byte_1506A57 = L""（空串）
+        _faceHash.clear();   // +536 inline-bucket hashmap 清空
+        _faceTable.clear();  // +456/+464 release 所有 ttstr
+        _defaultFaceIndex = resolveFaceIndex(defFaceName); // +96 = sub_5A14DC
     }
     void resetFont() { // 0x59EEE0 — 当前样式复位为 default*
         TR_STUB("resetFont");
@@ -221,17 +453,572 @@ public:
         _curPitch = _defaultPitch;
         _curLineSize = _defaultLineSize;
     }
-    void newline() { TR_STUB("newline"); }     // 0x59FECC — 强制换行
-    void done() { TR_STUB("done"); }           // 0x59FEE4 — 终结布局（align/bbox/排序）
-    double calcLineOffset(tjs_int lineIdx) {   // 0x5A05FC → float
-        TR_STUB("calcLineOffset");
-        if(lineIdx < 0 || lineIdx >= (tjs_int)_lineList.size())
-            return _renderBottom; // 越界返回 bottom（§4）
-        return _lineList[lineIdx].offset;
+    // ============================================================
+    // 落字 / 行布局层（appendChar/度量/kinsoku/finishLine）helper
+    // ============================================================
+    // pending deque 清空（sub_5A1E68@0x5A1E68：释放每元素 charItem，控制块保留）。
+    //   源码层 = std::deque<CharItem>::clear()。
+    void clearPendingDeque() { _pendingChars.clear(); } // sub_5A1E68
+    // 释放当前 ruby 文本（+528 release → null）。
+    void releaseCurRubyText() {
+        _curRubyText = ttstr();
+        _hasCurRubyText = false;
     }
-    tjs_int calcShowCount(tjs_int /*width*/) {  // 0x5A0644 → 可显示字符数
-        TR_STUB("calcShowCount");
-        return (tjs_int)_charList.size();
+
+    // 字宽度量回调 sub_5A426C@0x5A426C：FuncCall(L"onGetTextWidth", text[str], size[real])，
+    //   返回值按 result.type 强制转 double（忠实移植，脚本层取字宽——非平台边界）：
+    //   String→AsReal、Integer→(double)、Real→raw、Object/Octet→抛错、Void/失败→0.0。
+    //   脚本未提供该回调（FuncCall 失败）→ result 保持 void → 0.0（fallback 分支）。
+    static float onGetTextWidth(iTJSDispatch2 *objthis, const ttstr &text,
+                               float size) { // sub_5A426C
+        if(!objthis)
+            return 0.0f;
+        tTJSVariant result;
+        tTJSVariant vText(text);            // arg0: string
+        tTJSVariant vSize((tjs_real)size);  // arg1: real (a3)
+        tTJSVariant *args[2] = { &vText, &vSize };
+        tjs_error hr = objthis->FuncCall(0, TJS_W("onGetTextWidth"), nullptr,
+                                         &result, 2, args, objthis);
+        if(TJS_FAILED(hr))
+            return 0.0f; // FuncCall 失败 → default(void) → 0.0
+        // switch(result.type)：复刻反编译 case 表
+        switch(result.Type()) {
+        case tvtString:  // case2 → sub_A133A8(AsReal from string)
+        case tvtInteger: // case4 → (double)int
+        case tvtReal:    // case5 → raw real
+            return (float)result.AsReal();
+        case tvtObject: // case1 → throw（本地以 0.0 守护，避免打断脚本）
+        case tvtOctet:  // case3 → throw
+        default:        // void → 0.0
+            return 0.0f;
+        }
+    }
+
+    // appendChar @0x5A3880：累积 UTF-16 buffer + 度量 + ruby + 落字入口。
+    //   返回 bool（true=继续/落字成功，false=finishLine 失败）。a1+88 是组合字符
+    //   累积倒计数：每次 push 字符后 --countdown，>=0 时仅累积不落字；buffer 非单字符
+    //   也不落字（return false）。恰好 1 字符且计数耗尽 → 度量构造 charItem → kinsoku 落字。
+    bool appendChar(iTJSDispatch2 *objthis, tjs_char ch) { // 0x5A3880
+        // push ch 到内部 UTF-16 buffer（+504/+512），容器选型 = char vector
+        _accumBuf.push_back(ch);
+        // --countdown(+88)：>=0 → 仅累积，返回 true
+        if(--_charBufCountdown >= 0)
+            return true;
+        // buffer 非恰好 1 字符 → 不落字，返回 false（二进制 `(end-begin)!=2`）
+        if(_accumBuf.size() != 1)
+            return false;
+        // 恰好 1 字符且计数耗尽：度量字宽 + 构造 charItem 蓝图
+        ttstr text((tjs_char)ch); // 单字符文本（ttstr_createFromWide(&v66)，v66=ch/v67=0）
+        float effSize = _fontScale * _curFontSize; // +184 * +116
+        float cw = onGetTextWidth(objthis, text, effSize); // sub_5A426C → v23/v49
+        CharItem v;
+        v.text = text;             // +0
+        v.cw = cw;                 // +16 (v49)
+        v.size = effSize;          // +20 (v50)
+        v.rubyFlag = false;        // +40 (v54)
+        v.bold = _curBold;         // +41 (v55 = a1+62)
+        v.italic = _curItalic;     // +42 (v56 = a1+65)
+        v.shadow = _curShadow;     // +43 (v57 = a1+63)
+        v.edge = _curEdge;         // +44 (v58 = a1+64)
+        v.vertical = _vertical;    // +45 (v59 = a1+48)
+        v.chColor = _curChColor;       // +28 (v51 = a1+200)
+        v.shadowColor = _curShadowColor; // +32 (v52 = a1+204)
+        v.edgeColor = _curEdgeColor;     // +36 (v53 = a1+212)
+        v.shadowDiff = _curShadowDiff;   // +48 (v60 = a1+208)
+        v.faceIndex = _curFaceIndex;     // +52 (v61 = a1+72)
+        // ruby 分支：!vertical(v59==0) 且 有当前 ruby 文本(+528)
+        if(!_vertical && _hasCurRubyText) { // 0x5a3a48 / 0x5a3a4c
+            float rubyCw =
+                onGetTextWidth(objthis, _curRubyText,
+                               _fontScale * _curRubySize); // sub_5A426C(+128)
+            // ruby 子项：x = cw*0.5 - rubyCw*0.5；y = -(rubySize*fontScale) - rubyOffset
+            float rubyX = (float)(cw * 0.5f) - (float)(rubyCw * 0.5f); // v41
+            float rubyY = (float)-(float)(_curRubySize * _fontScale)
+                          - _curRubyOffset; // v40 = -(v31*v29)-v30
+            RubyItem r;
+            r.text = _curRubyText; // ruby 文本（incref → charItem 持有）
+            r.x = rubyX;           // ruby +8 (-3 float)
+            r.y = rubyY;           // ruby +12 (-2 float)
+            r.span = _curRubySize * _fontScale; // ruby +16 (-1 float = v34*v36)
+            v.ruby.push_back(r);
+            releaseCurRubyText(); // 消费后释放 +528
+            // ruby bbox 累加（+264 left / +268 top / +272 right）
+            float penX = _penX;       // +232 (v?)
+            float penYpos = _penY;    // +236 (v32)
+            float ry = rubyY + penYpos;            // v40 + v32
+            if(ry < _rubyTop)                       // a1+268
+                _rubyTop = ry;
+            float rx = rubyX + penX;                // v41 + a1+232
+            if(rx < _rubyLeft)                      // a1+264
+                _rubyLeft = rx;
+            float rxr = rubyCw + rx;                // v27 + v43
+            if(rxr > _rubyRight)                    // a1+272
+                _rubyRight = rxr;
+            if(penYpos < _rubyTop)                  // v32 >= v42 ? skip : *v33=v32
+                _rubyTop = penYpos;
+        } else if(!_vertical) {
+            // 无 ruby 但 horizontal：a1+268 = min(a1+268, penY)
+            if(_penY < _rubyTop)
+                _rubyTop = _penY;
+        }
+        // 清空 buffer（+512 = +504），落字
+        _accumBuf.clear();
+        return kinsoku(objthis, v); // sub_5A4A7C(a1, &v48)
+    }
+
+    // 落字 + kinsoku 禁则 @0x5A4A7C：把 char 落到 pending deque（+320），处理行尾/行首
+    //   禁则（following/leading 字符集）与 word_break，必要时换行（finishLine）并把回退
+    //   字符重排到下一行。返回 bool（true=成功，false=finishLine 失败）。
+    //   字段门控全部 1:1 复刻反编译，非字段名推导（_vertical/_ignoreOverX(+53)/_ignoreOverY
+    //   (+54)/_wordBreak(+49)/_kinsokuUsed(+108)/_kinsokuMax(+112)/_wordBreakRun(+424)）。
+    bool kinsoku(iTJSDispatch2 *objthis, CharItem &c) { // 0x5A4A7C
+        // 1. over 检测（是否超出渲染尺寸需换行）。命中 → 直接落字（placeHoriz=v6）。
+        if(_vertical) { // a1+48
+            float h = _renderSizeH; // +244
+            if(h <= 0.0f || h > (float)(_penY + c.size) || _ignoreOverY)
+                return placeChar(c, /*placeHoriz=v6=*/false);
+        } else {
+            float w = _renderSizeW; // +240
+            if(w <= 0.0f || w > (float)(_penX + c.cw) || _ignoreOverX)
+                return placeChar(c, /*placeHoriz=v6=*/true);
+        }
+        // 2. 需要换行：执行 kinsoku 重排（临时 deque 暂存回退字符）
+        {
+            std::deque<CharItem> tmp; // v81：pendingDeque_init(v81,0)
+            if(!_wordBreak) { // !a1+49：非 word_break
+                // 把超过 _wordBreakRun(+424) 个的尾部字符（trailing run）移到 tmp
+                int run = _wordBreakRun; // v33 = a1+424
+                if(run >= 1) {
+                    while((int)_pendingChars.size() > run) {
+                        // 弹 pending 末字符到 tmp 前端（v82 头插）
+                        tmp.push_front(_pendingChars.back()); // copy
+                        _pendingChars.pop_back();
+                        --_renderCount; // a1+84
+                    }
+                }
+                // → LABEL_107
+            } else if(_following.IndexOf(c.text) != -1) {
+                // 当前字在 following 集（following 字符，可触发 kinsoku 计数下移）
+                int used = _kinsokuUsed; // v30 = a1+108
+                if(used >= _kinsokuMax) { // a1+112：次数用尽
+                    while(_pendingChars.size() >= 2) {
+                        if(used < 1) {
+                            // max<=0 边界：仅当末字符在 leading 集时下移一个
+                            if(_leading.IndexOf(_pendingChars.back().text) != -1) {
+                                tmp.push_front(_pendingChars.back());
+                                _pendingChars.pop_back();
+                            }
+                            break; // → LABEL_107
+                        }
+                        tmp.push_front(_pendingChars.back());
+                        _pendingChars.pop_back();
+                        --_kinsokuUsed; // a1+108
+                        --_renderCount; // a1+84
+                        used = _kinsokuUsed; // refetch (v30 = a1+108 - 1)
+                    }
+                    // → LABEL_107
+                } else {
+                    // v30 < max：增加 kinsoku 使用次数
+                    _kinsokuUsed = used + 1; // a1+108
+                    // 边界：pending 空 → LABEL_107
+                    if(!_pendingChars.empty()) {
+                        // 首字符在 following 集 → 不下移（→ LABEL_107）；否则照常 LABEL_107
+                        // （二进制此处仅做首字符检查后落入 LABEL_107，无下移动作）
+                    }
+                    // → LABEL_107
+                }
+            } else {
+                // 当前字不在 following 集：行尾禁则（leading）处理
+                if(_pendingChars.size() >= 3) { // v45 >= 3
+                    // 倒数第2字符 v48
+                    const CharItem &second = _pendingChars[_pendingChars.size() - 2];
+                    if(_leading.IndexOf(second.text) == -1) {
+                        // 倒数第2字符不在 leading 集，且末字符在 leading 集 → 下移末字符
+                        if(_leading.IndexOf(_pendingChars.back().text) != -1) {
+                            tmp.push_front(_pendingChars.back());
+                            _pendingChars.pop_back();
+                            --_renderCount; // a1+84
+                        }
+                    }
+                }
+                // LABEL_94：pending size>=2 且末字符在 leading 集 → 再下移一个
+                if(_pendingChars.size() >= 2) {
+                    if(_leading.IndexOf(_pendingChars.back().text) != -1) {
+                        tmp.push_front(_pendingChars.back());
+                        _pendingChars.pop_back();
+                        --_renderCount; // a1+84
+                    }
+                }
+                // → LABEL_107
+            }
+            // LABEL_107：行结束
+            if(!finishLine(objthis)) // sub_5A34B8
+                return false;        // → LABEL_113
+            // drain tmp：把回退字符重排到下一行（自递归 kinsoku）
+            for(size_t i = 0; i < tmp.size(); ++i) {
+                if(!kinsoku(objthis, tmp[i]))
+                    return false; // → LABEL_113
+            }
+            // 换行后落字（v6 = !vertical）
+            return placeChar(c, /*placeHoriz=*/!_vertical); // 0x5a5348
+        }
+    }
+
+    // placeChar — kinsoku LABEL_10：把 char 落到 pending deque + 推进 pen + renderPos。
+    //   placeHoriz=v6（true→horizontal：char.y=penY-size；false→vertical：char.y=penY）。
+    bool placeChar(CharItem &c, bool placeHoriz) { // LABEL_10
+        // char.x(+8) = penX(+232)
+        c.x = _penX;
+        // char.y(+12)：horizontal → penY - size（v6=1 / placeHoriz）；vertical → penY
+        c.y = placeHoriz ? (_penY - c.size) : _penY; // v10
+        // char.renderPos(+24) = renderPos(+280)（v11；始终 = renderPos，不取 max）
+        c.renderPos = _renderPos; // v11 = a1+280；*(a2+24) = v11
+        // delayAccum(+188) = max(delayAccum, renderPos)（v9 默认指 char.renderPos；
+        //   仅当 delayAccum > renderPos 时 v9 指 a1+188 → delayAccum = max(两者)。
+        //   注意：char.renderPos 本身保持 = renderPos，不被改成 max）。
+        if(_renderDelayAccum <= _renderPos) // !(a1+188 > v11)
+            _renderDelayAccum = c.renderPos; // a1+188 = *v9 = char.renderPos
+        // else: a1+188 > v11 → v9 指 a1+188 → a1+188 = a1+188（不变）
+        // push char 副本到 pending deque（+368 finish.cur += 80）
+        _pendingChars.push_back(c); // TextRenderBase_charItem_copy / pushNode
+        // word_break：记录是否空格(+428) + 上字是空格则记 run(+424)
+        if(!_wordBreak) {          // a1+49 == 0 → 走 LABEL_16
+            updateWordBreakState(c); // 0x5a4b8c
+        }
+        // 推进 renderPos + pen（LABEL_22）
+        _renderPosSnap = _renderPos; // a1+284 = a1+280 (v16/v18)
+        if(_widthTimeScale) { // a1+55
+            float rate = _charDelayStep; // a1+192 (v19)
+            if(_vertical) { // a1+48
+                _renderCount += 1; // a1+84
+                _renderPos = (float)(rate * (float)(c.size /
+                              (float)(_fontScale * _curFontSize)))
+                              + _renderPosSnap;
+                advanceLineVertical(c); // LABEL_26
+                return true;
+            }
+            _renderCount += 1;
+            _renderPos = (float)(rate * (float)(c.cw /
+                          (float)(_fontScale * _curFontSize)))
+                          + _renderPosSnap;
+        } else {
+            // 非 width_time_scale：renderPos += charDelayStep(+192)
+            _renderPos = _charDelayStep + _renderPosSnap; // v22 = a1+192 + v16
+            _renderCount += 1;                            // a1+84
+            if(_vertical) {     // v21 = a1+48
+                advanceLineVertical(c); // LABEL_26
+                return true;
+            }
+        }
+        // horizontal pen advance（penX += cw；penX = pitch + penX）
+        {
+            float newPenX = c.cw + _penX; // v29 = a2+16 + a1+232
+            _penX = newPenX;              // a1+232
+            if(_lineBboxRight < newPenX)  // a1+416
+                _lineBboxRight = newPenX;
+            _penX = _curPitch + newPenX;  // a1+232 = a1+140 + v29
+        }
+        return true;
+    }
+
+    // word_break 落字后状态更新（kinsoku LABEL_16 / 0x5a4b8c）：检测当前字是否空格(L" ")，
+    //   更新 +428(prevWasSpace)；若上一字是空格，则把 +424(wordBreakRun) 记为当前 pending size。
+    void updateWordBreakState(const CharItem &c) { // 0x5a4b8c
+        bool isSpace = false; // v15
+        if(c.text.c_str()) {
+            // sub_9B1ED0(text, L" ") == 0 → 是空格（wcscmp）
+            isSpace = (c.text == ttstr(TJS_W(" ")));
+        }
+        if(isSpace) {
+            _prevWasSpace = true; // a1+428 = 1（LABEL_20）
+            return;
+        }
+        if(_prevWasSpace) // a1+428：上字是空格 → 记 run = 当前 pending size
+            _wordBreakRun = (int)_pendingChars.size(); // a1+424
+        _prevWasSpace = false; // a1+428 = 0（LABEL_20 写 v15=0）
+    }
+
+    // 竖排 pen advance（kinsoku LABEL_26 / 0x5a4c8c）：penY += size；penY = pitch + penY。
+    void advanceLineVertical(const CharItem &c) { // LABEL_26
+        float newPenY = c.size + _penY; // v25 = a2+20 + a1+236
+        _penY = newPenY;                // a1+236
+        if(_lineBboxBottom < newPenY)   // a1+420
+            _lineBboxBottom = newPenY;
+        _penY = _curPitch + newPenY;    // a1+236 = a1+140 + v25
+    }
+
+    // finishLine @0x5A34B8：行结束。横排路径（!vertical）= 行宽/over 检测 → align 偏移
+    //   → align 缩进填充 → 落字到行（写坐标 + 拼接 renderText）→ push lineItem → 清 pending
+    //   → renderText 追加换行 → pen 复位 + 行间距。竖排路径直接跳 LABEL_56 清理。
+    //   返回 bool（true=成功；over 且 !ignore_over → false）。1:1 复刻反编译。
+    bool finishLine(iTJSDispatch2 *objthis) { // 0x5A34B8
+        if(!_vertical) { // !a1+48：横排路径
+            // 1. 行内最大字号 v6
+            float v6 = 0.0f;
+            for(const CharItem &ci : _pendingChars) // 遍历 pending deque
+                if(ci.size > v6) // char.size(+20)
+                    v6 = ci.size;
+            // 行高 v11 = max(v6, _curLineSize(+144))
+            float v11 = (v6 <= _curLineSize) ? _curLineSize : v6;
+            // 2. over 检测：renderSizeH(+244) > 0 且 < v11 + penY(+236)
+            float h = _renderSizeH; // +244 (v10)
+            if(h > 0.0f && h < (float)(v11 + _penY)) {
+                _renderOver = true; // a1+60 = 1
+                if(!_ignoreOverY) { // !a1+54
+                    clearPendingDeque(); // sub_5A1E68(a1+320)
+                    return false;        // return 0
+                }
+            }
+            // 3. align 偏移 v14（v13 = _curAlign(+76)）
+            float v14;
+            int v13 = _curAlign; // a1+76
+            if(v13 == 1) {       // right align
+                v14 = _renderSizeW - _penX; // a1+240 - a1+232
+            } else if(v13 == 0) { // center
+                // 二进制：v14=0 然后 if(!v13) v14 = (a1+240-a1+232)*0.5
+                v14 = (float)(_renderSizeW - _penX) * 0.5f;
+            } else {              // left（其它）
+                v14 = 0.0f;
+            }
+            // 3b. align 缩进：v14>0 时按全角空格宽填充行首到 renderText
+            //   仅当 v13!=center-with-zero 路径... 二进制：v16>=1 时循环追加全角空格(0x3000)。
+            if(v14 != 0.0f && !_pendingChars.empty()) {
+                // v15 = onGetTextWidth(L"　"=0x3000, fontScale*fontsize); ==0 → fontsize
+                float v15 = onGetTextWidth(objthis, ttstr((tjs_char)0x3000),
+                                          _fontScale * _curFontSize); // sub_5A426C
+                if(v15 == 0.0f)
+                    v15 = _curFontSize; // a1+116
+                // v16 = (int)((v14 + 首字符.x(+8)) / v15)
+                int v16 = (int)((float)(v14 + _pendingChars.front().x) / v15);
+                for(; v16 >= 1; --v16)
+                    _renderText = _renderText + ttstr((tjs_char)0x3000); // word_14CA1EE 全角空格
+            }
+            // LABEL_32：落字到行（写坐标 + 拼接 renderText）
+            float v24 = 0.0f; // 行底累加 (a1+400)
+            for(CharItem &ci : _pendingChars) {
+                float v27 = v11 + ci.y; // 行内字底 = v11 + char.y(+12)
+                if(v24 < v27)
+                    v24 = v27;
+                ci.x += v14;  // char.x(+8) += align 偏移
+                ci.y = v27;   // char.y(+12) = v27
+                if(ci.text.c_str()) // 拼接非空文本到 renderText(+40)
+                    _renderText = _renderText + ci.text; // sub_A13ABC
+            }
+            // 写行 metric
+            _lineHeightAccum = v11;             // a1+404
+            _lineBottomAccum = v24;             // a1+400
+            float v32 = v14 + _lineBboxLeft;    // a1+408
+            float v34 = v14 + _lineBboxRight;   // a1+416
+            float v33 = v11 + _penY;            // a1+236 新行 Y
+            _lineBboxLeft = v32;                // a1+408
+            _lineBboxRight = v34;               // a1+416
+            _penY = v33;                        // a1+236
+            if(_lineBboxBottom < v33)           // a1+420
+                _lineBboxBottom = v33;
+            // push lineItem：把 pending deque 整体拷入 lineItem + metric（sub_5A4588）
+            pushLineItem();
+            clearPendingDeque(); // sub_5A1E68(a1+320)
+            // renderText += L"\n"（行尾换行）
+            _renderText = _renderText + ttstr(TJS_W("\n")); // sub_A13ABC(.., L"\n")
+            // pen X 复位到行首 + 行间距推进
+            _penX = _lineStartX;        // a1+232 = a1+196
+            if(_lineBboxLeft > _penX)   // a1+408 > a1+232
+                _lineBboxLeft = _penX;
+            _penY = _curLineSpacing + _penY; // a1+236 = a1+136 + a1+236
+        }
+        // LABEL_56：清理（横排路径走完也到这；竖排路径直接到这）
+        releaseCurRubyText(); // release a1+528 → null
+        _kinsokuUsed = 0;     // a1+108 = 0
+        _accumBuf.clear();    // a1+512 = a1+504
+        return true;          // return 1
+    }
+
+    // push lineItem（finishLine LABEL_32 / sub_5A4588@0x5A4588）：把当前 pending deque
+    //   整体拷入新 lineItem.chars，并拷行 metric。源码层 = lineList.push_back(LineItem{...}).
+    void pushLineItem() { // sub_5A4588 / sub_5A43E8
+        LineItem li;
+        li.chars = _pendingChars;   // deque<charItem> 整体拷贝（sub_5A46C0 逐元素 charItem_copy）
+        li.lineBottom = _lineBottomAccum; // +80 ← a1+400
+        li.lineHeight = _lineHeightAccum; // +84 ← a1+404
+        li.bboxLeft = _lineBboxLeft;      // +88 ← a1+408
+        li.bboxTop = _lineBboxTop;        // +92 ← a1+412
+        li.bboxRight = _lineBboxRight;    // +96 ← a1+416
+        li.bboxBottom = _lineBboxBottom;  // +100 ← a1+420
+        _lineList.push_back(std::move(li));
+    }
+
+    // newline @0x59FECC：pending deque 非空（finish.cur(+368) != start.cur(+336)）→ finishLine。
+    //   平台边界：二进制 native this 即 objthis（NativeClassBinder 风格，native+0=iTJSDispatch2
+    //   base），度量回调 sub_5A426C 用 native+0 调 FuncCall。本地走 ncbInstanceAdaptor，
+    //   native(TextRenderBase C++) 与 objthis(TJS dispatch) 是两个对象，故内部落字函数
+    //   须显式接收 objthis 以回调脚本 onGetTextWidth/onFontChange。
+    void newlineImpl(iTJSDispatch2 *objthis) { // 0x59FECC
+        if(!_pendingChars.empty()) // a1+368 != a1+336
+            finishLine(objthis);   // sub_5A34B8
+    }
+    static tjs_error newline(tTJSVariant *, tjs_int, tTJSVariant **,
+                             iTJSDispatch2 *objthis) { // ncb wrapper
+        TextRenderBase *t = self(objthis);
+        if(!t)
+            return TJS_E_INVALIDOBJECT;
+        t->newlineImpl(objthis);
+        return TJS_S_OK;
+    }
+    static tjs_error done(tTJSVariant *, tjs_int, tTJSVariant **,
+                          iTJSDispatch2 *objthis) { // ncb wrapper (0x59FEE4)
+        TextRenderBase *t = self(objthis);
+        if(!t)
+            return TJS_E_INVALIDOBJECT;
+        t->doneImpl(objthis);
+        return TJS_S_OK;
+    }
+
+    // done @0x59FEE4：终结布局。① pending 非空 → finishLine ② 遍历行列表算全局 bbox
+    //   ③ valign 偏移加到每 char.y + 调整全局 top/bottom ④ charList 从各行 deque 铺
+    //   charItem 指针 ⑤ keyWait 列表 index→renderPos 回填 ⑥ charList 按 renderPos 排序。
+    //   1:1 复刻反编译；字段语义经交叉确认（lineItem bbox float[22..25]，char.y=+12，
+    //   renderSizeH=+244，valign=+80，charItem.renderPos=+24）。
+    void doneImpl(iTJSDispatch2 *objthis) { // 0x59FEE4
+        // ① pending 非空 → finishLine（a1[46]!=a1[42] = +368!=+336）
+        if(!_pendingChars.empty())
+            finishLine(objthis); // sub_5A34B8
+        // ② 全局 bbox（遍历 lineList，stride 112；读 lineItem bbox float[22..25]）
+        for(const LineItem &li : _lineList) {
+            if(_renderTop > li.bboxTop)       // *v1+63(+252) > v5[23]
+                _renderTop = li.bboxTop;
+            if(_renderBottom < li.bboxBottom) // *v1+65(+260) < v5[25]
+                _renderBottom = li.bboxBottom;
+            if(_renderLeft > li.bboxLeft)     // *v1+62(+248) > v5[22]
+                _renderLeft = li.bboxLeft;
+            if(_renderRight < li.bboxRight)   // *v1+64(+256) < v5[24]
+                _renderRight = li.bboxRight;
+        }
+        // ③ valign 偏移（!vertical）：v10 = _curValign(+80)；v11 = renderBottom(+260)
+        if(!_vertical) {
+            int v10 = _curValign; // *(v1+20) = +80
+            float v11 = _renderBottom; // *(v1+65) = +260
+            int v12;
+            if(v10 == 1) // bottom align：renderSizeH - renderBottom
+                v12 = (int)(float)(_renderSizeH - v11); // *(v1+61)=+244 - v11
+            else if(v10 == 0) // center
+                v12 = (int)(float)((float)(_renderSizeH - v11) * 0.5f);
+            else // 其它：无偏移
+                v12 = 0;
+            if(v12 != 0) { // LABEL_18：把 v12 加到每行每 char.y(+12)
+                for(LineItem &li : _lineList)
+                    for(CharItem &ci : li.chars)
+                        ci.y = ci.y + (float)v12; // *(char+12) += v12
+            }
+            float v19 = _renderTop;         // *(v1+63) = +252
+            _renderBottom = v11 + (float)v12; // *(v1+65) = renderBottom + v12
+            _renderTop = v19 + (float)v12;    // *(v1+63) = renderTop + v12
+        }
+        // ④ charList 重建：从各行 deque 铺 charItem 指针（+304=+296 后逐 push）
+        _charList.clear();
+        for(LineItem &li : _lineList)
+            for(CharItem &ci : li.chars)
+                _charList.push_back(&ci); // 指向行 deque 内元素（deque 元素地址稳定）
+        // ⑤ keyWait 列表 time 段回填（done @0x59FEE4 keyWait 循环 0x5a0180..0x5a020c）：
+        //   v39[1] = *(int*)(charList[v39[0]] + 24)。读 index(低 int) 索引 charList，
+        //   把该 char.renderPos(+24) 的 float bits 写入 time(高 int)；index 不动。
+        //   二进制无边界检查（脚本保证 index 有效），本地加守护避免越界。
+        for(size_t i = 0; i < _keyWaitList.size(); ++i) {
+            int idx = _keyWaitList[i].index; // v39[0]（低 int）
+            if(idx >= 0 && idx < (int)_charList.size())
+                _keyWaitList[i].time =
+                    reinterpretFloatBits(_charList[idx]->renderPos); // v39[1]
+        }
+        // ⑥ charList 按 charItem.renderPos(+24) 升序排序（sub_5A59E8 introsort +
+        //   sub_5A5C34 insertion sort，比较键 = char+24）。本地用 stable_sort。
+        std::stable_sort(_charList.begin(), _charList.end(),
+                         [](const CharItem *a, const CharItem *b) {
+                             return a->renderPos < b->renderPos;
+                         });
+    }
+    // float bits 重解释为 int（done keyWait 段：renderPos float 存入 int 槽是按 bits，
+    //   getKeyWait 读回时再 bit-reinterpret 为 float —— 数据契约，1:1 复刻 *(v40+8*idx+24)
+    //   原样写入 int 数组）。
+    static int reinterpretFloatBits(float f) {
+        int i;
+        memcpy(&i, &f, sizeof(i));
+        return i;
+    }
+
+    // calcLineOffset @0x5A05FC：返回行列表第 lineIdx 项的 offset(+80)；越界返回 bottom。
+    //   二进制越界判定用无符号比较 (count <= (unsigned)a2)，故负 idx 也判越界。
+    double calcLineOffset(tjs_int lineIdx) { // 0x5A05FC
+        // count = (+440 - +432) / 112；二进制 unsigned 比较 lineCount <= (u64)lineIdx
+        if((tjs_uint64)_lineList.size() <= (tjs_uint64)(tjs_uint32)lineIdx)
+            return _renderBottom; // a1+260 (§4)
+        return _lineList[lineIdx].lineBottom; // +432 + 112*idx + 80 (lineItem float[20])
+    }
+    // calcShowCount @0x5A0644：char 列表(+296)倒扫，找在给定 width 内可显示的字符数。
+    //   count = (+304-+296)/8；若 count<=1 返回 0。timeScale=+180。
+    //   从末项倒扫：while(charItem->renderPos(+24) * timeScale > width) { --count; 若到头返回 0 }。
+    tjs_int calcShowCount(tjs_int width) { // 0x5A0644
+        tjs_int count = (tjs_int)_charList.size();
+        if(count - 1 < 1) // count <= 1
+            return 0;
+        float ts = _timeScale; // +180
+        tjs_int v6 = count - 1; // 末项索引
+        tjs_int result = count;
+        // 二进制 while 条件用 charItem +24 (renderPos)；元素是 charItem* 指针。
+        while((float)(_charList[v6]->renderPos * ts) > (float)width) {
+            bool atHead = (v6 <= 1);
+            --v6;
+            --result;
+            if(atHead)
+                return 0;
+        }
+        return result;
+    }
+
+    // ============================================================
+    // 内部 helper（非 NCB 成员）
+    // ============================================================
+    // resolveFaceIndex @0x5A14DC：face 名 → 稳定 index（intern）。
+    //   已 intern → 返回旧 idx；未 intern → 分配 idx = 当前 _faceTable.size()
+    //   ((+464-+456)>>3) 并存入 _faceHash。注意：本函数不向 _faceTable push，
+    //   仅在 hash 表登记（faceTable 的 push 在 setFont/setDefault face 解析处）。
+    int resolveFaceIndex(const ttstr &name) { // 0x5A14DC
+        auto it = _faceHash.find(name); // sub_5A172C by FaceNameHash
+        if(it != _faceHash.end())
+            return it->second; // 命中节点 idx (+16)
+        int idx = (int)_faceTable.size(); // (a1[58]-a1[57])>>3
+        _faceHash.emplace(name, idx); // sub_5A181C intern：节点 idx 写为 v15
+        // faceTable/faceHash 同步不变量：idx == 旧 size 意味着 name 追加到表尾。
+        //   二进制把 push 放在 resolveFaceIndex 的调用方（face 解析路径），本地无那条
+        //   独立路径，故合并到此处维护 faceTable[idx]==name 不变量（clear/onStyleChanged/
+        //   getCharacters 经 _faceTable[idx] 反查 name 依赖此不变量）。
+        _faceTable.push_back(name);
+        return idx;
+    }
+
+    // onStyleChanged @0x5A1F28：当前样式变化后，构造 dict{face, bold, italic}
+    //   并对脚本对象 FuncCall(L"onFontChange", dict)。纯 TJS dispatch。
+    //   face 值 = _faceTable[_curFaceIndex]（越界则空串，对齐二进制 sub_A13878(&byte) 空串路径）。
+    void onStyleChanged(iTJSDispatch2 *objthis) { // 0x5A1F28
+        if(!objthis)
+            return;
+        // 构造参数 dict
+        iTJSDispatch2 *dict = TJSCreateDictionaryObject();
+        // face: _faceTable[_curFaceIndex]；越界 → 空串
+        ttstr faceName;
+        if(_curFaceIndex >= 0 && _curFaceIndex < (int)_faceTable.size())
+            faceName = _faceTable[_curFaceIndex];
+        tTJSVariant vFace(faceName);
+        dict->PropSet(TJS_MEMBERENSURE, TJS_W("face"), nullptr, &vFace, dict);
+        tTJSVariant vBold((tjs_int)(_curBold ? 1 : 0));    // a1+62
+        dict->PropSet(TJS_MEMBERENSURE, TJS_W("bold"), nullptr, &vBold, dict);
+        tTJSVariant vItalic((tjs_int)(_curItalic ? 1 : 0)); // a1+65
+        dict->PropSet(TJS_MEMBERENSURE, TJS_W("italic"), nullptr, &vItalic,
+                      dict);
+        // FuncCall(L"onFontChange", dict)：objthis 上的脚本回调
+        tTJSVariant vDict(dict, dict);
+        dict->Release();
+        tTJSVariant *args[1] = { &vDict };
+        objthis->FuncCall(0, TJS_W("onFontChange"), nullptr, nullptr, 1, args,
+                          objthis);
     }
 
     // ============================================================
@@ -243,87 +1030,1150 @@ public:
                                                                      true);
     }
 
-    // setOption / setDefault / setFont / setStyle: (dict) 1 参，逐 key PropGet
-    static tjs_error setOption(tTJSVariant *, tjs_int, tTJSVariant **,
+    // ============================================================
+    // dict 解析层的三套值强制转换（1:1 复刻 setOption/setDefault/setFont/setStyle
+    //   反编译里的 switch(type) 内联体）。type tag = tTJSVariantType
+    //   (Void=0,Object=1,String=2,Octet=3,Integer=4,Real=5)。
+    //   - boolCoerce  = 二进制 bool 开关：case1/3/4→qword==0、case2→str→int==0、
+    //     case5→real==0.0、default(void)→false。等价 (bool)variant（operator bool）。
+    //   - intCoerce   = 二进制 int/color 开关：object/octet 走 sub_A0E48C(throw)、
+    //     string→sub_A13294、int→raw、real→(int)、void→0。等价 variant.AsInteger()。
+    //   - realCoerce  = 二进制 float 开关：object/octet→throw、string→sub_A133A8、
+    //     int→(double)、real→raw、void→0.0。等价 variant.AsReal()。
+    //   sub_A0E48C 实为 TJSThrowVariantConvertError(__noreturn)，故 object/octet 在
+    //   int/real 强制转换里抛错——与 AsInteger/AsReal 语义一致。
+    static bool boolCoerce(const tTJSVariant &v) { return (bool)v; }
+    static tjs_int intCoerce(const tTJSVariant &v) {
+        return (tjs_int)v.AsInteger();
+    }
+    static float realCoerce(const tTJSVariant &v) { return (float)v.AsReal(); }
+
+    // dict 逐 key PropGet(TJS_MEMBERMUSTEXIST=0x400, L"key")（= 二进制 vtable+32，
+    //   flag 1024）。key 不存在 → 高位置位 → 返回 false（调用方跳过该 key）。
+    static bool dictGet(iTJSDispatch2 *dict, const tjs_char *key,
+                        tTJSVariant *out) {
+        return TJS_SUCCEEDED(
+            dict->PropGet(TJS_MEMBERMUSTEXIST, key, nullptr, out, dict));
+    }
+    // 取参数 0 作为 dict 对象（二进制：sub_A0F5E0 拷贝 + 若 type!=1 则抛
+    //   TJSThrowVariantConvertError(Object) + AddRef）。返回 nullptr 表示非对象。
+    static iTJSDispatch2 *paramAsDict(tjs_int numparams, tTJSVariant **param) {
+        if(numparams < 1 || !param || !param[0])
+            return nullptr;
+        if(param[0]->Type() != tvtObject)
+            return nullptr; // 二进制此处抛转换错误；本地以 INVALIDOBJECT 返回守护
+        return param[0]->AsObjectNoAddRef();
+    }
+
+    // ============================================================
+    // setOption @0x59D2AC：(dict) → 选项 byte 字段 +48..+59,+112 + 禁则字符串 +8..+32
+    //   逐 key 顺序、key 字符串常量、读取条件、类型强制均 1:1 复刻反编译。
+    //   - following/leading/begin/end：仅接受 string/void（其它类型二进制抛转换错误，
+    //     本地按 ttstr 语义存：string→其值、void→空串）。
+    //   - 其余 byte 字段：boolCoerce；kinsoku_max 同 boolCoerce 但写 DWORD(0/1)。
+    // ============================================================
+    static tjs_error setOption(tTJSVariant *, tjs_int numparams,
+                               tTJSVariant **param,
                                iTJSDispatch2 *objthis) { // 0x59D2AC
-        if(!self(objthis))
+        TextRenderBase *t = self(objthis);
+        if(!t)
             return TJS_E_INVALIDOBJECT;
-        TR_STUB("setOption");
+        iTJSDispatch2 *dict = paramAsDict(numparams, param);
+        if(!dict)
+            return TJS_E_INVALIDOBJECT;
+        tTJSVariant v;
+        // --- 禁则字符串：string/void（store ttstr，见 §3b +8/+16/+24/+32）---
+        t->setOptionStr(dict, TJS_W("following"), t->_following);
+        t->setOptionStr(dict, TJS_W("leading"), t->_leading);
+        t->setOptionStr(dict, TJS_W("begin"), t->_begin);
+        t->setOptionStr(dict, TJS_W("end"), t->_end);
+        // --- byte/DWORD 选项（boolCoerce）：顺序同二进制 ---
+        if(dictGet(dict, TJS_W("vertical"), &v))
+            t->_vertical = boolCoerce(v);          // +48
+        if(dictGet(dict, TJS_W("kinsoku_max"), &v))
+            t->_kinsokuMax = boolCoerce(v) ? 1 : 0; // +112 DWORD (bool-coerce)
+        if(dictGet(dict, TJS_W("word_break"), &v))
+            t->_wordBreak = boolCoerce(v);         // +49
+        if(dictGet(dict, TJS_W("ignore_color"), &v))
+            t->_ignoreColor = boolCoerce(v);       // +50
+        if(dictGet(dict, TJS_W("ignore_size"), &v))
+            t->_ignoreSize = boolCoerce(v);        // +51
+        if(dictGet(dict, TJS_W("ignore_delay"), &v))
+            t->_ignoreDelay = boolCoerce(v);       // +52
+        if(dictGet(dict, TJS_W("ignore_over"), &v))
+            t->_ignoreOverY = boolCoerce(v);       // +54 (ignore_over)
+        if(dictGet(dict, TJS_W("ignore_overy"), &v))
+            t->_ignoreOverY = boolCoerce(v);       // +54 (ignore_overy 覆盖同址)
+        if(dictGet(dict, TJS_W("ignore_overx"), &v))
+            t->_ignoreOverX = boolCoerce(v);       // +53
+        if(dictGet(dict, TJS_W("width_time_scale"), &v))
+            t->_widthTimeScale = boolCoerce(v);    // +55
+        if(dictGet(dict, TJS_W("ignore_ruby"), &v))
+            t->_ignoreRuby = boolCoerce(v);        // +56
+        if(dictGet(dict, TJS_W("ignore_type"), &v))
+            t->_ignoreType = boolCoerce(v);        // +57
+        if(dictGet(dict, TJS_W("ignore_face"), &v))
+            t->_ignoreFace = boolCoerce(v);        // +58
+        if(dictGet(dict, TJS_W("ignore_style"), &v))
+            t->_ignoreStyle = boolCoerce(v);       // +59
         return TJS_S_OK;
     }
-    static tjs_error setDefault(tTJSVariant *, tjs_int, tTJSVariant **,
+    // following/leading/begin/end 的 string/void 存值（二进制：type∈{1,3,4,5}→抛
+    //   转换错误；type==2→store ttstr；void→空串）。本地以 ttstr 语义忠实存值。
+    void setOptionStr(iTJSDispatch2 *dict, const tjs_char *key, ttstr &field) {
+        tTJSVariant v;
+        if(!dictGet(dict, key, &v))
+            return; // key 不存在 → 不动该字段（二进制同样跳过）
+        switch(v.Type()) {
+        case tvtString:
+            field = v.AsStringNoAddRef() ? ttstr(v) : ttstr();
+            break;
+        case tvtVoid:
+            field = ttstr(); // 空串（二进制 v5=nullptr）
+            break;
+        default:
+            // 二进制对 object/octet/int/real 抛 TJSThrowVariantConvertError(String)。
+            //   本地以最近的忠实语义：转字符串存（避免抛异常打断脚本）。
+            field = ttstr(v);
+            break;
+        }
+    }
+
+    // ============================================================
+    // setDefault @0x59DEA8：(dict) → default* 字段（face/字号族/颜色族/对齐/间距）
+    //   1:1 复刻：face 经 resolveFaceIndex 写 +96；fontsize 存在时其值回填缺省的
+    //   big/small/ruby 字号（仅当对应 key 缺失）；linesize 缺失则回退读 fontsize key。
+    // ============================================================
+    static tjs_error setDefault(tTJSVariant *, tjs_int numparams,
+                                tTJSVariant **param,
                                 iTJSDispatch2 *objthis) { // 0x59DEA8
-        if(!self(objthis))
+        TextRenderBase *t = self(objthis);
+        if(!t)
             return TJS_E_INVALIDOBJECT;
-        TR_STUB("setDefault");
+        iTJSDispatch2 *dict = paramAsDict(numparams, param);
+        if(!dict)
+            return TJS_E_INVALIDOBJECT;
+        tTJSVariant v;
+        // face → resolveFaceIndex → +96（string/void；object/octet/int/real 抛错）
+        if(dictGet(dict, TJS_W("face"), &v)) {
+            ttstr faceName;
+            if(v.Type() == tvtString)
+                faceName = ttstr(v);
+            else if(v.Type() == tvtVoid)
+                faceName = ttstr();
+            else
+                faceName = ttstr(v); // 二进制抛错；本地忠实转字符串
+            t->_defaultFaceIndex = t->resolveFaceIndex(faceName); // +96
+        }
+        if(dictGet(dict, TJS_W("bold"), &v))
+            t->_defaultBold = boolCoerce(v);                 // +66
+        // fontsize 分支：存在→+148，并把缺省 big/small/ruby 字号回填为 fontsize 值
+        bool hasFontsize = dictGet(dict, TJS_W("fontsize"), &v);
+        if(hasFontsize) {
+            t->_defaultFontSize = realCoerce(v);             // +148
+            tTJSVariant tmp;
+            if(!dictGet(dict, TJS_W("bigfontsize"), &tmp))
+                t->_defaultBigFontSize = t->_defaultFontSize;   // +152=+148
+            if(!dictGet(dict, TJS_W("smallfontsize"), &tmp))
+                t->_defaultSmallFontSize = t->_defaultFontSize; // +156=+148
+            if(!dictGet(dict, TJS_W("rubysize"), &tmp))
+                t->_defaultRubySize = t->_defaultFontSize;      // +160=+148
+        } else {
+            // fontsize 缺失：独立读 big/small/ruby（缺失则保持默认 0.0，二进制 v=0.0）
+            if(dictGet(dict, TJS_W("bigfontsize"), &v))
+                t->_defaultBigFontSize = realCoerce(v);      // +152
+            if(dictGet(dict, TJS_W("smallfontsize"), &v))
+                t->_defaultSmallFontSize = realCoerce(v);    // +156
+            if(dictGet(dict, TJS_W("rubysize"), &v))
+                t->_defaultRubySize = realCoerce(v);         // +160
+        }
+        if(dictGet(dict, TJS_W("rubyoffset"), &v))
+            t->_defaultRubyOffset = realCoerce(v);           // +164
+        if(dictGet(dict, TJS_W("color"), &v))
+            t->_defaultChColor = (tjs_uint32)intCoerce(v);   // +216
+        if(dictGet(dict, TJS_W("shadow"), &v))
+            t->_defaultShadow = boolCoerce(v);               // +67
+        if(dictGet(dict, TJS_W("shadowcolor"), &v))
+            t->_defaultShadowColor = (tjs_uint32)intCoerce(v); // +220
+        if(dictGet(dict, TJS_W("shadowdiff"), &v))
+            t->_defaultShadowDiff = (tjs_uint32)intCoerce(v);  // +224
+        if(dictGet(dict, TJS_W("edge"), &v))
+            t->_defaultEdge = boolCoerce(v);                 // +68
+        if(dictGet(dict, TJS_W("edgecolor"), &v))
+            t->_defaultEdgeColor = (tjs_uint32)intCoerce(v); // +228
+        if(dictGet(dict, TJS_W("linespacing"), &v))
+            t->_defaultLineSpacing = realCoerce(v);          // +168
+        if(dictGet(dict, TJS_W("pitch"), &v))
+            t->_defaultPitch = realCoerce(v);                // +172
+        // linesize：存在→+176；缺失则回退读 fontsize key（二进制 LABEL_25 共享）
+        if(dictGet(dict, TJS_W("linesize"), &v))
+            t->_defaultLineSize = realCoerce(v);             // +176
+        else if(dictGet(dict, TJS_W("fontsize"), &v))
+            t->_defaultLineSize = realCoerce(v);             // +176 (fallback)
+        if(dictGet(dict, TJS_W("align"), &v))
+            t->_defaultAlign = intCoerce(v);                 // +100
+        if(dictGet(dict, TJS_W("valign"), &v))
+            t->_defaultValign = intCoerce(v);                // +104
         return TJS_S_OK;
     }
-    static tjs_error setFont(tTJSVariant *, tjs_int, tTJSVariant **,
+
+    // ============================================================
+    // setFont @0x59EFD8：(dict) → 当前样式字段；变化则调 onStyleChanged@0x5A1F28。
+    //   changed 仅由 face(idx 变)/bold(变)/fontsize(变或负哨兵) 触发；rubysize/rubyoffset/
+    //   color/shadow* /edge* 不置 changed（忠实复刻）。fontsize/rubysize 用 (<0 || !=)
+    //   脏哨兵判定（首次/未初始化 cur<0 视为必变）。
+    // ============================================================
+    static tjs_error setFont(tTJSVariant *, tjs_int numparams,
+                             tTJSVariant **param,
                              iTJSDispatch2 *objthis) { // 0x59EFD8
-        if(!self(objthis))
+        TextRenderBase *t = self(objthis);
+        if(!t)
             return TJS_E_INVALIDOBJECT;
-        TR_STUB("setFont");
+        iTJSDispatch2 *dict = paramAsDict(numparams, param);
+        if(!dict)
+            return TJS_E_INVALIDOBJECT;
+        tTJSVariant v;
+        bool changed = false; // v5
+        // face：present→resolveFaceIndex；idx 变则更新 +72 并 changed=true
+        if(dictGet(dict, TJS_W("face"), &v)) {
+            ttstr faceName;
+            if(v.Type() == tvtString)
+                faceName = ttstr(v);
+            else if(v.Type() == tvtVoid)
+                faceName = ttstr();
+            else
+                faceName = ttstr(v);
+            int idx = t->resolveFaceIndex(faceName);
+            if(t->_curFaceIndex != idx) {
+                t->_curFaceIndex = idx; // +72
+                changed = true;
+            }
+        }
+        if(dictGet(dict, TJS_W("bold"), &v)) {
+            bool b = boolCoerce(v);
+            if(t->_curBold != b) { // +62
+                t->_curBold = b;
+                changed = true;
+            }
+        }
+        if(dictGet(dict, TJS_W("fontsize"), &v)) {
+            float f = realCoerce(v);
+            if(t->_curFontSize < 0.0f || t->_curFontSize != f) { // +116 脏哨兵
+                t->_curFontSize = f;
+                changed = true;
+            }
+        }
+        if(dictGet(dict, TJS_W("rubysize"), &v)) {
+            float f = realCoerce(v);
+            if(t->_curRubySize < 0.0f || t->_curRubySize != f) // +128 (无 changed)
+                t->_curRubySize = f;
+        }
+        if(dictGet(dict, TJS_W("rubyoffset"), &v))
+            t->_curRubyOffset = realCoerce(v);                 // +132 无条件
+        if(dictGet(dict, TJS_W("color"), &v))
+            t->_curChColor = (tjs_uint32)intCoerce(v);         // +200
+        if(dictGet(dict, TJS_W("shadow"), &v))
+            t->_curShadow = boolCoerce(v);                     // +63
+        if(dictGet(dict, TJS_W("shadowcolor"), &v))
+            t->_curShadowColor = (tjs_uint32)intCoerce(v);     // +204
+        if(dictGet(dict, TJS_W("shadowdiff"), &v))
+            t->_curShadowDiff = (tjs_uint32)intCoerce(v);      // +208
+        if(dictGet(dict, TJS_W("edge"), &v))
+            t->_curEdge = boolCoerce(v);                       // +64
+        if(dictGet(dict, TJS_W("edgecolor"), &v))
+            t->_curEdgeColor = (tjs_uint32)intCoerce(v);       // +212
+        if(changed)
+            t->onStyleChanged(objthis); // sub_5A1F28
         return TJS_S_OK;
     }
-    static tjs_error setStyle(tTJSVariant *, tjs_int, tTJSVariant **,
+
+    // ============================================================
+    // setStyle @0x59F7AC：(dict) → 当前样式间距/对齐（NON setFont-isomorphic！二进制
+    //   只读 linespacing/pitch/linesize/align/valign，不读 font 系键、不调 onStyleChanged）。
+    //   linesize 缺失则回退读 fontsize key（二进制 LABEL_25 共享 fontsize 读取）。
+    //   align/valign 写当前样式 +76/+80（≠ setDefault 的默认 +100/+104）。
+    // ============================================================
+    static tjs_error setStyle(tTJSVariant *, tjs_int numparams,
+                              tTJSVariant **param,
                               iTJSDispatch2 *objthis) { // 0x59F7AC
-        if(!self(objthis))
+        TextRenderBase *t = self(objthis);
+        if(!t)
             return TJS_E_INVALIDOBJECT;
-        TR_STUB("setStyle");
+        iTJSDispatch2 *dict = paramAsDict(numparams, param);
+        if(!dict)
+            return TJS_E_INVALIDOBJECT;
+        tTJSVariant v;
+        if(dictGet(dict, TJS_W("linespacing"), &v))
+            t->_curLineSpacing = realCoerce(v);  // +136
+        if(dictGet(dict, TJS_W("pitch"), &v))
+            t->_curPitch = realCoerce(v);        // +140
+        if(dictGet(dict, TJS_W("linesize"), &v))
+            t->_curLineSize = realCoerce(v);     // +144
+        else if(dictGet(dict, TJS_W("fontsize"), &v))
+            t->_curLineSize = realCoerce(v);     // +144 (fallback fontsize key)
+        if(dictGet(dict, TJS_W("align"), &v))
+            t->_curAlign = intCoerce(v);         // +76
+        if(dictGet(dict, TJS_W("valign"), &v))
+            t->_curValign = intCoerce(v);        // +80
         return TJS_S_OK;
     }
 
-    // render: (string, int, int[, real, bool]) numparams≥3，返回 bool
+    // ============================================================
+    // render 状态机 helper（scanTagUntil / scanDigits / parseInt10 /
+    //   parseHexColor / evalDollarTag / renderPercentTag / renderBalancedChar）
+    // ============================================================
+    // scanTagUntil @0x5A3CE4：从 *cursor 起读字符直到遇到 delim（或到 len），
+    //   返回读到的子串 ttstr；cursor 推进到 delim 之后（或 len）。delim 自身不计入。
+    static ttstr scanTagUntil(const tjs_char *text, int *cursor, int len,
+                              tjs_char delim) { // 0x5A3CE4
+        std::vector<tjs_char> buf; // v9/v10/v11 动态 UTF-16 缓冲
+        int c = *cursor;
+        while(c < len) {
+            *cursor = c + 1;
+            tjs_char ch = text[c];
+            if(ch == delim)
+                break;
+            buf.push_back(ch);
+            c = *cursor;
+        }
+        if(buf.empty())
+            return ttstr(); // v22 = 0（空串）
+        buf.push_back(0);
+        return ttstr(&buf[0]); // ttstr_createFromWide(v9)
+    }
+    // scanDigits @0x5A3F18：从 *cursor 起读连续数字字符（0-9），停在非数字，
+    //   返回数字子串 ttstr；cursor 停在第一个非数字（或 len）。
+    static ttstr scanDigits(const tjs_char *text, int *cursor, int len) { // 0x5A3F18
+        std::vector<tjs_char> buf;
+        int c = *cursor;
+        while(c < len) {
+            *cursor = c + 1;
+            tjs_char ch = text[c];
+            if((unsigned int)(ch - 48) > 9) // 非 0-9 → break
+                break;
+            buf.push_back(ch);
+            c = *cursor;
+        }
+        if(buf.empty())
+            return ttstr();
+        buf.push_back(0);
+        return ttstr(&buf[0]);
+    }
+    // parseInt10 @0x9B111C：UTF-16 串转十进制 int（跳前导 <=0x20 空白，可选 '-'，
+    //   循环 *10+digit）。非数字起始 → 0。忠实复刻（≠ AsInteger 的 0x 前缀处理）。
+    static int parseInt10(const ttstr &s) { // 0x9B111C
+        const tjs_char *p = s.c_str();
+        if(!p)
+            return 0;
+        // 跳前导空白（1..0x20）：do { c=*p++; } while(c-1 < 0x20)
+        unsigned int c;
+        do {
+            c = (unsigned short)*p++;
+        } while(c - 1 < 0x20);
+        if(!c)
+            return 0;
+        int neg = 0; // v5
+        if(c == 45) { // '-'
+            do {
+                c = (unsigned short)*p++;
+            } while(c <= 0x20 && c);
+            if(!c)
+                return 0;
+            neg = 1;
+        }
+        unsigned int v7 = 0;
+        if((unsigned int)(c - 48) <= 9) { // 是数字
+            for(;;) {
+                v7 = 10 * v7 + c - 48;
+                c = (unsigned short)*p++;
+                if((unsigned int)(c - 48) >= 0xA)
+                    break;
+            }
+        }
+        return neg ? -(int)v7 : (int)v7;
+    }
+    // parseHexColor @0x5A228C(case '#')：把标签内容当 hex 颜色解析，写 _curChColor。
+    //   '0x'/'0X' 前缀 → 跳过后解析；否则从首字符解析。每位 hex digit 经掩码+减表
+    //   计算值；遇非 hex digit 即终止并写 _curChColor = (累积值) | 0xFF000000。
+    //   返回 true（有解析，恒写 _curChColor）。掩码 0x7E0000007E03FF / 减表逻辑
+    //   等价标准 hex decode（'0'-'9'→0-9, 'A'-'F'/'a'-'f'→10-15）。
+    bool parseHexColor(const ttstr &content) { // 0x5a25f0..0x5a256c
+        const tjs_char *p = content.c_str();
+        if(!p) {
+            _curChColor = _defaultChColor;
+            return true;
+        }
+        tjs_char first = p[0]; // v25
+        if(first == 48 && (p[1] | 0x20) == 0x78) // '0' 且 ('x'|'X')
+            p += 2; // v27 += 2
+        unsigned int acc = 0; // v28
+        for(;;) {
+            tjs_char ch = *p++; // v25
+            int hv = hexDigitValue(ch); // 掩码+减表
+            if(hv < 0) { // 非 hex digit → 终止
+                _curChColor = acc | 0xFF000000u; // +200 = v28 | 0xFF000000
+                return true;
+            }
+            acc = (unsigned int)hv | (16 * acc); // v28 = v26 | (16*v28)
+        }
+    }
+    // hexDigitValue：复刻 0x5A228C hex decode（掩码 0x7E0000007E03FF + 减表
+    //   qword_14CA200，索引 ch-48）。'0'-'9'→0-9,'A'-'F'→10-15,'a'-'f'→10-15，
+    //   其它→-1（无效）。
+    static int hexDigitValue(tjs_char ch) {
+        unsigned int idx = (unsigned int)(unsigned short)(ch - 48);
+        if(idx > 0x36u) // (ch-48) > 0x36 → 无效
+            return -1;
+        if(((0x7E0000007E03FFuLL >> idx) & 1) == 0) // 掩码门控有效 hex 位
+            return -1;
+        // 减表：table[ch-48] + ch（'0'-'9'→-48, 'A'-'F'→-55, 'a'-'f'→-87）
+        if(ch >= 48 && ch <= 57)
+            return (int)ch - 48; // 0-9
+        if(ch >= 65 && ch <= 70)
+            return (int)ch - 55; // A-F
+        if(ch >= 97 && ch <= 102)
+            return (int)ch - 87; // a-f
+        return -1;
+    }
+    // evalDollarTag @0x5A4148：对脚本对象 FuncCall(L"onEval", tagContent) → 返回值
+    //   若 type==2(string) 取其 ttstr，否则空串。平台边界：二进制用 native+0 调
+    //   FuncCall（NativeClassBinder native≡dispatch），本地传 objthis。
+    static ttstr evalDollarTag(iTJSDispatch2 *objthis,
+                               const ttstr &content) { // 0x5A4148
+        if(!objthis)
+            return ttstr();
+        tTJSVariant arg(content); // v10：tagContent（string）
+        tTJSVariant result;       // v12
+        tTJSVariant *args[1] = { &arg };
+        tjs_error hr = objthis->FuncCall(0, TJS_W("onEval"), nullptr, &result, 1,
+                                         args, objthis);
+        if(TJS_FAILED(hr))
+            return ttstr();
+        if(result.Type() == tvtString) // v13 == 2
+            return ttstr(result);
+        // type∈{3,4,5}(octet/int/real) 在二进制走 sub_A0E48C 抛错；本地以空串守护。
+        return ttstr();
+    }
+
+    // ============================================================
+    // % 样式控制分发 @0x5A228C（case '%'）。code = % 之后的控制字符。
+    //   next = code 在文本的索引；v36 = code 之后位置；i 已被调用方推进过 %X。
+    //   1:1 复刻每个子码的字段写入与门控（ignore_size/+51、ignore_delay/+52、
+    //   ignore_face/+58、ignore_type/+57、ignore_style/+59）。
+    // ============================================================
+    void renderPercentTag(iTJSDispatch2 *objthis, const tjs_char *p, int len,
+                          tjs_char code, int next, int v36, ttstr &tagAccum,
+                          int yParam) { // 0x5A228C case '%'
+        switch(code) {
+        case TJS_W('0'): case TJS_W('1'): case TJS_W('2'): case TJS_W('3'):
+        case TJS_W('4'): case TJS_W('5'): case TJS_W('6'): case TJS_W('7'):
+        case TJS_W('8'): case TJS_W('9'): {
+            // %数字：size 百分比。从 code 处（next）读数字串。
+            int cur = next; // v136 = v29+1（回退到 code 位置重读数字）
+            tagAccum = scanDigits(p, &cur, len); // sub_5A3F18
+            // 注意：scanDigits 推进 cursor，render 主循环用 i 续接——这里需把 i 同步。
+            //   通过返回 cur 让调用方更新（见 renderPercentTag 调用点 i 调整）。
+            _percentCursor = cur; // 把内部 cursor 回传（见调用点）
+            if(!_ignoreSize) { // !+51
+                float v41;
+                int val = parseInt10(tagAccum);
+                if(!tagAccum.IsEmpty() && val > 0)
+                    v41 = (float)((float)val / 100.0f) * _defaultFontSize; // +148
+                else
+                    v41 = _defaultFontSize; // +148
+                if(_curFontSize < 0.0f || _curFontSize != v41) {
+                    _curFontSize = v41; // +116
+                    onStyleChanged(objthis); // sub_5A1F28
+                }
+            }
+            break;
+        }
+        case TJS_W(';'): // %;：恢复 curFontSize = defaultFontSize(+148)
+            if(!_ignoreSize) {
+                if(_curFontSize < 0.0f || _curFontSize != _defaultFontSize)
+                    applyFontSize(objthis, _defaultFontSize); // LABEL_298
+            }
+            break;
+        case TJS_W('C'): // 居中对齐 → +76（cascade，见下）
+            if(_ignoreStyle) { // +59 → 直接走 bigfontsize
+                applyBigFontSizeTag(objthis);
+                break;
+            }
+            // 二进制 cascade：+76=0 → +76=1 → +76=-1（fall-through，最终 -1）。
+            //   忠实复刻三连写（源码结构对齐反编译 LABEL_226/227 fall-through）。
+            _curAlign = 0; _curAlign = 1; _curAlign = -1; // 最终 -1
+            applyBigFontSizeTag(objthis); // 落入 LABEL_228
+            break;
+        case TJS_W('R'): // 右对齐
+            if(_ignoreStyle) { applyBigFontSizeTag(objthis); break; }
+            _curAlign = 1; _curAlign = -1; // cascade → -1
+            applyBigFontSizeTag(objthis);
+            break;
+        case TJS_W('L'): // 左对齐
+            if(_ignoreStyle) { applyBigFontSizeTag(objthis); break; }
+            _curAlign = -1;
+            applyBigFontSizeTag(objthis);
+            break;
+        case TJS_W('B'): // %B：bigfontsize
+            applyBigFontSizeTag(objthis);
+            break;
+        case TJS_W('S'): // %S：smallfontsize(+156)。门控 +51(ignore_size)，在
+            //   applySmallFontSizeTag 内判（对齐反编译 case 'S' `if(*(a1+51))`）。
+            applySmallFontSizeTag(objthis);
+            break;
+        case TJS_W('b'): { // %b：bold（下一字符 0/1/其它）
+            if(v36 >= len)
+                break;
+            int dflt = _defaultBold ? 1 : 0; // +66 (v115)
+            bool gate = _ignoreType;          // +57 (v116)
+            tjs_char arg = p[next + 1];       // v15[v36]（code 之后字符）
+            // 注意 v36==next+1：码后字符。i 需再推进 1（v136=v29+3）。
+            _percentCursor = next + 2;
+            int val;
+            if(arg == 48) val = 0;
+            else if(arg == 49) val = 1;
+            else val = dflt;
+            if(gate) break; // +57 → 不写
+            if((_curBold ? 1 : 0) != val) { // +62
+                _curBold = (val != 0);
+                onStyleChanged(objthis);
+            }
+            break;
+        }
+        case TJS_W('i'): { // %i：italic
+            if(v36 >= len)
+                break;
+            int dflt = _defaultItalic ? 1 : 0; // +69
+            bool gate = _ignoreType;            // +57
+            tjs_char arg = p[next + 1];
+            _percentCursor = next + 2;
+            int val;
+            if(arg == 48) val = 0;
+            else if(arg == 49) val = 1;
+            else val = dflt;
+            if(gate) break;
+            if((_curItalic ? 1 : 0) != val) { // +65
+                _curItalic = (val != 0);
+                onStyleChanged(objthis);
+            }
+            break;
+        }
+        case TJS_W('e'): { // %e：edge（无 onStyleChanged）
+            if(v36 >= len)
+                break;
+            int dflt = _defaultEdge ? 1 : 0; // +68
+            bool gate = _ignoreType;          // +57
+            tjs_char arg = p[next + 1];
+            _percentCursor = next + 2;
+            int val;
+            if(arg == 48) val = 0;
+            else if(arg == 49) val = 1;
+            else val = dflt;
+            if(gate) break;
+            if((_curEdge ? 1 : 0) != val) // +64
+                _curEdge = (val != 0); // 注意：无 onStyleChanged
+            break;
+        }
+        case TJS_W('s'): { // %s：shadow（无 onStyleChanged）
+            if(v36 >= len)
+                break;
+            int dflt = _defaultShadow ? 1 : 0; // +67
+            bool gate = _ignoreType;            // +57
+            tjs_char arg = p[next + 1];
+            _percentCursor = next + 2;
+            int val;
+            if(arg == 48) val = 0;
+            else if(arg == 49) val = 1;
+            else val = dflt;
+            if(gate) break;
+            if((_curShadow ? 1 : 0) != val) // +63
+                _curShadow = (val != 0); // 无 onStyleChanged
+            break;
+        }
+        case TJS_W('f'): { // %f：face（标签内容到 ';' → resolveFaceIndex → +72）
+            int cur = v36; // 二进制 v136 = v29+2 = v36
+            tagAccum = scanTagUntil(p, &cur, len, TJS_W(';'));
+            _percentCursor = cur;
+            if(!_ignoreFace) { // !+58
+                if(!tagAccum.IsEmpty()) {
+                    int idx = resolveFaceIndex(tagAccum); // sub_5A14DC
+                    if(_curFaceIndex != idx) { // +72
+                        _curFaceIndex = idx;
+                        onStyleChanged(objthis);
+                    }
+                } else {
+                    int idx = _defaultFaceIndex; // +96
+                    if(_curFaceIndex != idx) {
+                        _curFaceIndex = idx;
+                        onStyleChanged(objthis);
+                    }
+                }
+            }
+            break;
+        }
+        case TJS_W('d'): { // %d：delay（标签到 ';' → charDelayStep = (val/100)*y）
+            int cur = v36;
+            tagAccum = scanTagUntil(p, &cur, len, TJS_W(';'));
+            _percentCursor = cur;
+            if(!_ignoreDelay) { // !+52
+                float v96 = (float)yParam; // a4
+                if(!tagAccum.IsEmpty())
+                    v96 = (float)((float)(int)parseInt10(tagAccum) / 100.0f)
+                          * (float)yParam;
+                _charDelayStep = v96; // +192
+            }
+            break;
+        }
+        case TJS_W('a'): { // %a：absolute delay（标签到 ';' → charDelayStep = val）
+            int cur = v36;
+            tagAccum = scanTagUntil(p, &cur, len, TJS_W(';'));
+            _percentCursor = cur;
+            if(!_ignoreDelay) { // !+52
+                int v104 = yParam; // a4
+                if(!tagAccum.IsEmpty())
+                    v104 = parseInt10(tagAccum);
+                _charDelayStep = (float)v104; // +192
+            }
+            break;
+        }
+        case TJS_W('p'): { // %p：pitch（标签到 ';' → curPitch(+140)；空→default+172）
+            int cur = v36;
+            tagAccum = scanTagUntil(p, &cur, len, TJS_W(';'));
+            _percentCursor = cur;
+            if(!_ignoreStyle) { // !+59
+                if(!tagAccum.IsEmpty())
+                    _curPitch = (float)parseInt10(tagAccum); // +140
+                else
+                    _curPitch = _defaultPitch; // +140 = +172
+            }
+            break;
+        }
+        case TJS_W('l'): { // %l：标签到 ';' → parseInt10（仅校验，无字段写）
+            int cur = v36;
+            tagAccum = scanTagUntil(p, &cur, len, TJS_W(';'));
+            _percentCursor = cur;
+            if(!_ignoreDelay) { // !+52
+                if(!tagAccum.IsEmpty())
+                    parseInt10(tagAccum); // sub_9B111C（结果丢弃）
+            }
+            break;
+        }
+        case TJS_W('t'): { // %t：标签到 ';' → parseInt10（无字段写）
+            int cur = v36;
+            tagAccum = scanTagUntil(p, &cur, len, TJS_W(';'));
+            _percentCursor = cur;
+            if(!_ignoreDelay) { // !+52
+                if(!tagAccum.IsEmpty())
+                    parseInt10(tagAccum);
+            }
+            break;
+        }
+        case TJS_W('w'): { // %w：标签到 ';' → parseInt10（无字段写）
+            int cur = v36;
+            tagAccum = scanTagUntil(p, &cur, len, TJS_W(';'));
+            _percentCursor = cur;
+            if(!_ignoreDelay && !tagAccum.IsEmpty()) // !+52
+                parseInt10(tagAccum);
+            break;
+        }
+        case TJS_W('r'): // %r：resetFont（sub_59EEE0）
+            resetFont();
+            break;
+        case TJS_W('D'): { // %D：若码后是 '$' → 嵌套 eval delay；否则当 delay 标签
+            int cur = v36;
+            if(p[v36] != 36) { // v15[v36] != '$'
+                tagAccum = scanTagUntil(p, &cur, len, TJS_W(';'));
+                _percentCursor = cur;
+                if(!tagAccum.IsEmpty())
+                    parseInt10(tagAccum); // sub_9B111C（无字段写）
+            } else {
+                cur = next + 2; // v136 = v29+3（跳过 '$'）
+                tagAccum = scanTagUntil(p, &cur, len, TJS_W(';'));
+                _percentCursor = cur;
+                if(!_ignoreDelay) { // !+52
+                    if(!tagAccum.IsEmpty())
+                        parseInt10(tagAccum);
+                }
+            }
+            break;
+        }
+        default: { // 其它 %X：标签到 ';' → 消费（refcount no-op，无字段写）
+            int cur = v36; // 二进制 v136 = v29+2 = v36
+            tagAccum = scanTagUntil(p, &cur, len, TJS_W(';'));
+            _percentCursor = cur;
+            break;
+        }
+        }
+    }
+    // %; / %B / %S / 数字 共享：applyFontSize（LABEL_298：+116=size, onStyleChanged）
+    void applyFontSize(iTJSDispatch2 *objthis, float size) { // LABEL_298
+        _curFontSize = size; // +116
+        onStyleChanged(objthis); // sub_5A1F28
+    }
+    // %B / %C / %L / %R 共享 LABEL_228：curFontSize ← bigFontSize(+152)（!ignore_size）
+    void applyBigFontSizeTag(iTJSDispatch2 *objthis) { // LABEL_228
+        if(_ignoreSize) // +51
+            return;
+        float v98 = _curFontSize; // +116
+        if(v98 < 0.0f) {
+            applyFontSize(objthis, _defaultBigFontSize); // +152
+            return;
+        }
+        if(v98 == _defaultBigFontSize) // 无变化
+            return;
+        applyFontSize(objthis, _defaultBigFontSize); // +152
+    }
+    // %S LABEL: curFontSize ← smallFontSize(+156)（!ignore_size，门控 +51）
+    void applySmallFontSizeTag(iTJSDispatch2 *objthis) {
+        if(_ignoreSize) // +51（二进制 %S 用 +0x33=51）
+            return;
+        float v109 = _curFontSize; // +116
+        if(v109 >= 0.0f) {
+            if(v109 == _defaultSmallFontSize) // +156 无变化
+                return;
+        }
+        applyFontSize(objthis, _defaultSmallFontSize); // +156
+    }
+
+    // ============================================================
+    // begin/end 平衡集普通字符落字 @0x5A228C（default 分支 a3!=0 路径）
+    //   appendChar 后，按 begin(+24)/end(+32) 字符集做缩进锚点管理：
+    //   - 字符 ∈ begin 集：首个（v17 && depth==0）记 lineStartX=pen + 记 begin 字符；
+    //     v17=0; ++depth。
+    //   - 字符 ∈ end 集且 --depth==0 且与起始 begin 字符配对（索引相同）→ lineStartX=0。
+    //   返回 false 表示 appendChar 失败（中断渲染）。
+    // ============================================================
+    bool renderBalancedChar(iTJSDispatch2 *objthis, tjs_char c, bool &v17,
+                            int &v133, tjs_char &v132) { // 0x5a263c..LABEL_319
+        // 是否在 begin 集（+24）
+        int beginIdx = (int)_begin.IndexOf(ttstr(c)); // v63 = found?
+        bool v63 = (beginIdx != -1);
+        char ok = appendChar(objthis, c); // sub_5A3880
+        if((ok & 1) == 0)
+            return false; // LABEL_325
+        if(v63) {
+            // begin 字符
+            if(v17 && v133 == 0) { // 首个 begin
+                _lineStartX = _vertical ? _penY : _penX; // +196 = pen
+                v132 = c; // 记起始 begin 字符
+            }
+            v17 = false;
+            ++v133; // ++depth
+            return true; // LABEL_320
+        }
+        // 非 begin → 检查 end 集（+32）
+        int endIdx = (int)_end.IndexOf(ttstr(c)); // v69 found?
+        if(endIdx != -1) {
+            // v73 = end 集中索引；有效且 --depth==0
+            if(endIdx >= 0 && --v133 == 0) {
+                // 校验起始 begin 字符 v132 在 begin 集的索引 == endIdx → 配对
+                int bIdx = (int)_begin.IndexOf(ttstr(v132));
+                if(bIdx == endIdx)
+                    _lineStartX = 0; // +196 = 0（LABEL_318）
+            }
+        }
+        v17 = false; // LABEL_319
+        return true;
+    }
+
+    // ============================================================
+    // render NCB 包装 @0x59FC28（TextRenderBase_ncb_render）
+    //   解包 (text, x, y[, size, flag]) → 调真 render(objthis,text,x,y,flag)。
+    //   1:1 复刻反编译：
+    //   - numparams(a2)<3 → 返回 4294966292(=0xFFFFFC14=TJS_E_BADPARAMCOUNT)。
+    //   - a2==3 → flag(v9)=0。
+    //   - a2>=4 → param[3](=size) 仅做类型强制（switch type: object/octet→抛错、
+    //     string→sub_A133A8 取实数、real→nullsub），但**结果被丢弃**——size 不传给
+    //     render，只是触发参数类型校验。a2<5 → flag=0。
+    //   - a2>=5 → param[4](=flag) boolCoerce → v9。
+    //   - text = param[0]（拷贝到本地 variant），x = intCoerce(param[1])，
+    //     y = intCoerce(param[2])。
+    //   - 调 render(objthis, &text, x, y, flag) → bool → sub_A0FEF0(result, ok&1)。
+    //   注意（BLOCKING，禁参数名推导）：x/y 在真 render 里语义**不是坐标**——
+    //     x = begin/end 平衡集启用标志（render `if(!a3)` 门控），
+    //     y = 每字 renderPos 步进初值（render 入口 `+192=(float)a4`）。
+    // ============================================================
     static tjs_error render(tTJSVariant *result, tjs_int numparams,
-                            tTJSVariant **, iTJSDispatch2 *objthis) { // 0x59FC28
-        if(!self(objthis))
+                            tTJSVariant **param,
+                            iTJSDispatch2 *objthis) { // 0x59FC28
+        if(numparams < 3) // a2 < 3
+            return TJS_E_BADPARAMCOUNT; // 4294966292 = 0xFFFFFC14
+        TextRenderBase *t = self(objthis);
+        if(!t)
             return TJS_E_INVALIDOBJECT;
-        if(numparams < 3)
-            return TJS_E_BADPARAMCOUNT; // 真函数 0x5A228C 同样门控（§4）
-        TR_STUB("render");
-        // 骨架：尚未排版，返回 true（=渲染成功）。状态机 0x5A228C 后续填充。
+        bool flag; // v9
+        if(numparams == 3) {
+            flag = false; // v9 = 0
+        } else {
+            // a2>=4：param[3]=size 仅类型强制后丢弃（object/octet 在二进制抛错，
+            //   本地以无副作用守护——只读 type 不取值）。
+            // a2<5 → flag=0；a2>=5 → flag = boolCoerce(param[4])。
+            if(numparams < 5)
+                flag = false; // LABEL_12
+            else
+                flag = boolCoerce(*param[4]); // v9 = !v12
+        }
+        ttstr text(*param[0]); // sub_A0BAF4(v17, *a3)：text 拷贝
+        tjs_int x = intCoerce(*param[1]); // v13
+        tjs_int y = intCoerce(*param[2]); // v15
+        bool ok = t->renderImpl(objthis, text, (int)x, (int)y, flag);
         if(result)
-            *result = (tjs_int)1;
+            *result = (tjs_int)(ok ? 1 : 0); // sub_A0FEF0(a1, v16 & 1)
         return TJS_S_OK;
     }
 
-    // onEval: (expr) → TJS eval；骨架不求值
-    static tjs_error onEval(tTJSVariant *result, tjs_int, tTJSVariant **,
+    // ============================================================
+    // 真 render 状态机 @0x5A228C（TextRenderBase_render）
+    //   KAG 风格转义标签状态机：遍历 UTF-16 文本，按首字符分发到 #/$/%/\/[/&/普通。
+    //   签名 render(this, &text, x, y, flag)：
+    //   - flag(a5) bit0：清(0)→复位行列表/renderDelayAccum(+188)/keyWaitList；置(1)→续接。
+    //   - x(a3)：begin/end 平衡集**启用标志**（!a3→普通 append；a3→begin/end 平衡逻辑）。
+    //   - y(a4)：charDelayStep(+192) 初值（每字 renderPos 步进）。
+    //   返回 bool（finishLine/appendChar 失败 → false=渲染中断；正常走完 → true）。
+    //   平台边界：二进制 native this 即 dispatch（NativeClassBinder 风格），度量/eval/
+    //     onFontChange 回调用 native+0；本地 native≠objthis，故落字层显式传 objthis。
+    // ============================================================
+    bool renderImpl(iTJSDispatch2 *objthis, const ttstr &text, int x, int y,
+                    bool flag) { // 0x5A228C
+        // --- 入口复位（a5&1==0 → 清行列表 + renderDelayAccum + keyWaitList）---
+        if((flag & 1) == 0) {
+            _lineList.clear();    // +432..+440：sub_5A1B24 逐项析构 lineItem
+            _renderDelayAccum = 0; // +188 = 0
+            _keyWaitList.clear(); // +480..+488
+        }
+        _renderPos = 0;             // +280 = 0
+        ttstr tagAccum;             // v137[0]：标签内容临时累加 ttstr（跨分支复用）
+        float curFontSizeSnap = _curFontSize; // v13 = *(float*)(a1+116)，给 \w 用
+        _charDelayStep = (float)y;  // +192 = (float)a4（y 参数语义=每字步进）
+        // cursor / len / ptr
+        const tjs_char *p = text.c_str(); // v15 = text c_str（空→off_1AA7EF8 空串）
+        int len = (int)text.length();     // v14 = text length（IDA 误标 operator delete）
+        int i = 0;                        // v136 = 0（cursor）
+        if(i >= len)                      // 空文本：直接 finishLine 收尾
+            return finishLine(objthis) & 1; // LABEL_321/322
+
+        bool v17 = true;  // begin-run 起点标志（首字符或换行后置 1）
+        int v133 = 0;     // begin/end 嵌套深度计数
+        tjs_char v132 = 0; // begin-run 起始字符（用于 end 匹配校验）
+
+        while(i < len) {
+            int ch = (unsigned short)p[i]; // v31
+            int next = i + 1; // v30 = v16+1
+            i = i + 1;        // v136 = v16+1（默认推进 1；标签分支会再调整）
+            tjs_char c = (tjs_char)ch;
+            // 注意：begin/end 平衡 + 标签分发都在下面。多数标签分支结束 → LABEL_320
+            //   (i=v136; 若 i>=len → 末尾 finishLine)；普通字符 → appendChar。
+            bool advanced = true; // 默认走 LABEL_320 推进；置 false 表示需中断返回
+
+            if(c == TJS_W('#')) {
+                // ----- # 颜色 hex 解析 -----
+                tagAccum = scanTagUntil(p, &i, len, TJS_W(';')); // sub_5A3CE4 delim=59
+                if(_ignoreColor)  // +50
+                    goto cont;    // → LABEL_320
+                if(!tagAccum.IsEmpty())
+                    parseHexColor(tagAccum); // 恒写 _curChColor（无效→|0xFF000000）
+                else
+                    _curChColor = _defaultChColor; // +200 = +216（空标签恢复默认）
+                goto cont;
+            } else if(c == TJS_W('$')) {
+                // ----- $ eval/face-run：标签内容当表达式 eval → 返回串逐字 append -----
+                tagAccum = scanTagUntil(p, &i, len, TJS_W(';')); // sub_5A3CE4 delim=59
+                ttstr evalResult = evalDollarTag(objthis, tagAccum); // sub_5A4148
+                tagAccum = evalResult;
+                int n = (int)tagAccum.length(); // v50 = operator delete(...)
+                if(n < 1)
+                    goto cont;
+                const tjs_char *q = tagAccum.c_str(); // v51
+                for(int k = 0; k < n; ++k) {
+                    if((appendChar(objthis, q[k]) & 1) == 0) {
+                        // appendChar 失败 → LABEL_325 中断
+                        return false;
+                    }
+                }
+                goto cont;
+            } else if(c == TJS_W('%')) {
+                // ----- % 样式控制 -----
+                if(next >= len) // (int)v30 >= len → 标签不完整，结束
+                    goto cont;
+                int v36 = i + 1;       // v36 = v16+2（%code 之后位置）
+                i = next + 1;          // v136 = v29+2（默认推进过 %X）
+                tjs_char code = p[next]; // v15[v30]
+                _percentCursor = i;    // 缺省 cursor（无标签扫描的子码用它）
+                renderPercentTag(objthis, p, len, code, next, v36, tagAccum,
+                                 y);
+                i = _percentCursor;    // 同步标签扫描推进的 cursor
+                goto cont;
+            } else if(c == TJS_W('&')) {
+                // ----- & ：消费标签内容（到 ';'），无字段副作用 -----
+                tagAccum = scanTagUntil(p, &i, len, TJS_W(';')); // sub_5A3CE4 delim=59
+                // goto LABEL_319：v17=0 后续接（等价 begin-run reset）
+                v17 = false;
+                goto cont;
+            } else if(c == TJS_W('[')) {
+                // ----- [ ：ruby 括号，消费到 ']'，!ignore_ruby 仅 refcount no-op -----
+                tagAccum = scanTagUntil(p, &i, len, TJS_W(']')); // sub_5A3CE4 delim=93
+                // if(!ignore_ruby) addref+release（净空操作，无 +528 写入——本 build
+                //   ruby-via-bracket 不写 curRubyText，忠实复刻 0x5A28B0 无字段写）。
+                (void)_ignoreRuby; // +56
+                goto cont;
+            } else if(c == TJS_W('\\')) {
+                // ----- \ 布局指令 -----
+                if(next >= len) // (int)v30 >= len
+                    goto cont;
+                i = next + 1; // v136 = v16+2
+                tjs_char code = p[next]; // v15[v30]
+                if(code == TJS_W('i')) {
+                    // \i：lineStartX(+196) = 当前 pen（竖排 penY/+236，横排 penX/+232）
+                    _lineStartX = _vertical ? _penY : _penX;
+                    goto cont;
+                } else if(code == TJS_W('k')) {
+                    // \k：keyWait push renderCount(+84) 到低 int（time 高 int 留 0）
+                    //   二进制 sub_5A5874 存 *(QWORD*)slot = *a2（renderCount 零扩展）。
+                    _keyWaitList.push_back(KeyWaitItem{ _renderCount, 0 });
+                    v17 = false;
+                    goto cont;
+                } else if(code == TJS_W('n')) {
+                    // \n（反斜杠 n）：finishLine；失败→中断
+                    if((finishLine(objthis) & 1) == 0)
+                        return false; // LABEL_325
+                    goto cont;
+                } else if(code == TJS_W('r')) {
+                    // \r：lineStartX(+196) = 0
+                    _lineStartX = 0;
+                    goto cont;
+                } else if(code == TJS_W('t')) {
+                    // \t：appendChar(9)（制表）
+                    char ok = appendChar(objthis, 9);
+                    v17 = false; // LABEL_116
+                    if((ok & 1) == 0)
+                        return false; // LABEL_116→LABEL_322（v57=0，不调 finishLine）
+                    goto cont;
+                } else if(code == TJS_W('w')) {
+                    // \w：pen += curFontSizeSnap（竖排 penY/+236，横排 penX/+232）
+                    if(_vertical)
+                        _penY = curFontSizeSnap + _penY;
+                    else
+                        _penX = curFontSizeSnap + _penX;
+                    v17 = false;
+                    goto cont;
+                } else if(code == TJS_W('x')) {
+                    // \x：goto LABEL_319（仅 v17=0 后续接，**不**终止渲染）
+                    v17 = false;
+                    goto cont;
+                } else {
+                    // 其它 \ ：忽略（default → LABEL_320）
+                    goto cont;
+                }
+            } else if(ch == 10) {
+                // ----- 裸 0x0A 换行 → finishLine -----
+                if((finishLine(objthis) & 1) == 0)
+                    return false; // LABEL_325
+                v17 = true;       // begin-run 复位
+                goto cont;
+            } else {
+                // ----- 普通字符 -----
+                if(!x) {
+                    // x==0：无 begin/end 平衡，直接 appendChar
+                    char ok = appendChar(objthis, c); // sub_5A3880
+                    v17 = false; // LABEL_116
+                    if((ok & 1) == 0)
+                        return false; // LABEL_116→LABEL_322（v57=0，不调 finishLine）
+                    goto cont;
+                }
+                // x!=0：begin/end 平衡集逻辑
+                if(!renderBalancedChar(objthis, c, v17, v133, v132))
+                    return false; // appendChar 失败 → LABEL_325
+                goto cont;
+            }
+        cont:
+            // LABEL_320：i 已由分支推进；若到末尾 → finishLine 收尾
+            (void)advanced;
+            if(i >= len)
+                return finishLine(objthis) & 1; // LABEL_321/322
+        }
+        // 循环正常退出（i>=len 在 cont 已处理；兜底）
+        return finishLine(objthis) & 1;
+    }
+
+    // onEval @0x5A0294：(expr) → TJS eval（在 this 上下文求值表达式 param[0]，结果写 result）。
+    //   1:1 复刻反编译：
+    //     *(result+16) = 0;                       // result.type = Void(0)
+    //     return sub_8E3FA4(a2=expr, *a1=this dispatch, a3=result);
+    //   sub_8E3FA4 = TVPExecuteExpression(expr, context, result)（内部 sub_97FE40，
+    //     字符串 ref "../../src/core/base/ScriptMgnIntf.cpp" 确证为 ScriptMgnIntf eval 路径）。
+    //   平台边界：二进制 native this 即 dispatch（NativeClassBinder native+0=iTJSDispatch2），
+    //     context = *a1 = native this[0]；本地 native≠objthis，context 用 objthis（脚本子类对象）。
+    static tjs_error onEval(tTJSVariant *result, tjs_int numparams,
+                            tTJSVariant **param,
                             iTJSDispatch2 *objthis) { // 0x5A0294
         if(!self(objthis))
             return TJS_E_INVALIDOBJECT;
-        TR_STUB("onEval");
         if(result)
-            result->Clear();
+            result->Clear(); // *(a3+16)=0：result.type = Void
+        if(numparams < 1 || !param || !param[0])
+            return TJS_S_OK;
+        ttstr expr(*param[0]); // a2：表达式字符串
+        // TVPExecuteExpression(expr, context=objthis, result) = sub_8E3FA4
+        TVPExecuteExpression(expr, objthis, result);
         return TJS_S_OK;
     }
 
-    // getKeyWait: () → TJS Array of {pos,time}；骨架返回空 Array
+    // getKeyWait @0x5A02DC：() → TJS Array of dict{pos, time}，源自 _keyWaitList(+480)。
+    //   1:1 复刻反编译：① 建 Array(sub_9876D4) ② 遍历 keyWait 列表，count=(+488-+480)>>3
+    //   ③ 每元素读 **低 int(index)**（LDRSW [base+8*i]）= v13 ④ 建 dict(sub_9C8440)，
+    //   pos=v13(Integer)、time=v13(Integer)（**两者同值=index**；renderPos bits 高 int 不读）
+    //   ⑤ dict add 到 Array（FuncCall L"add"）。
+    //   纠正旧桩（返回空 Array）。注意 pos/time 均为低 int(index)，非 renderPos——见 KeyWaitItem。
     static tjs_error getKeyWait(tTJSVariant *result, tjs_int, tTJSVariant **,
                                 iTJSDispatch2 *objthis) { // 0x5A02DC
-        if(!self(objthis))
+        TextRenderBase *t = self(objthis);
+        if(!t)
             return TJS_E_INVALIDOBJECT;
-        TR_STUB("getKeyWait");
-        if(result) {
-            iTJSDispatch2 *arr = TJSCreateArrayObject();
-            *result = tTJSVariant(arr, arr);
-            arr->Release();
+        iTJSDispatch2 *arr = TJSCreateArrayObject(); // sub_9876D4(0)
+        tTJSVariant addHint;
+        for(size_t i = 0; i < t->_keyWaitList.size(); ++i) {
+            int v13 = t->_keyWaitList[i].index; // LDRSW 低 int（pos 与 time 同值）
+            iTJSDispatch2 *dict = TJSCreateDictionaryObject(); // sub_9C8440(0)
+            tTJSVariant vPos((tjs_int)v13);  // v16=4 Integer
+            dict->PropSet(TJS_MEMBERENSURE, TJS_W("pos"), nullptr, &vPos, dict);
+            tTJSVariant vTime((tjs_int)v13); // v16=4 Integer（同 v13）
+            dict->PropSet(TJS_MEMBERENSURE, TJS_W("time"), nullptr, &vTime, dict);
+            // add dict 到数组（二进制 FuncCall L"add"）
+            tTJSVariant vDict(dict, dict);
+            dict->Release();
+            tTJSVariant *args[1] = { &vDict };
+            arr->FuncCall(0, TJS_W("add"), nullptr, nullptr, 1, args, arr);
         }
+        if(result)
+            *result = tTJSVariant(arr, arr);
+        arr->Release();
         return TJS_S_OK;
     }
 
-    // getCharacters: (start, count) → TJS Array of per-char dict；骨架返回空 Array
-    static tjs_error getCharacters(tTJSVariant *result, tjs_int, tTJSVariant **,
+    // getCharacters @0x5A0694：(int start=a2, int count=a3) → TJS Array of per-char dict。
+    //   1:1 复刻反编译：
+    //   - count==0(!a3) → count = renderCount(+84) - start（**非 charList 末尾**，纠正旧 §4）。
+    //   - charListCount = (+304-+296)>>3；clamp：v13 = (count+start<=charListCount)?count
+    //       :(charListCount-start)。v13<1 → 空 Array。
+    //   - 遍历 v14=0..v13：charItem = charList[v14+start]（8B 指针元素）。
+    //   - face 缓存：faceIndex(+52) 变化时查 _faceTable[faceIndex]（越界→空串 byte_1506A57），
+    //       缓存于 v30，每元素 face=该缓存名。
+    //   - dict 字段（key UTF-16LE 经反编译确认；类型经 sub_5A2160/5A614C/5A6020/A0FB64 helper）：
+    //       text(+0,string) x(+8,real) y(+12,real) cw(+16,real) size(+20,real)
+    //       face(缓存名,string) color(+28,int) bold(+41,int) italic(+42,int)
+    //       shadow(+43,int) edge(+44,int) shadowColor(+32,int) shadowDiff(+48,int)
+    //       edgeColor(+36,int) ruby(子 Array，仅 +56!=+64) vertical(+45,int) delay(+24,real)
+    //   - dict 经 sub_5A6550(arr, v14, dict) = PropSetByNum(index=v14) 落入数组。
+    static tjs_error getCharacters(tTJSVariant *result, tjs_int numparams,
+                                   tTJSVariant **param,
                                    iTJSDispatch2 *objthis) { // 0x5A0694
-        if(!self(objthis))
+        TextRenderBase *t = self(objthis);
+        if(!t)
             return TJS_E_INVALIDOBJECT;
-        TR_STUB("getCharacters");
-        if(result) {
-            iTJSDispatch2 *arr = TJSCreateArrayObject();
-            *result = tTJSVariant(arr, arr);
-            arr->Release();
+        int start = (numparams >= 1 && param && param[0])
+                        ? (int)param[0]->AsInteger()
+                        : 0; // a2
+        int count = (numparams >= 2 && param && param[1])
+                        ? (int)param[1]->AsInteger()
+                        : 0; // a3
+        iTJSDispatch2 *arr = TJSCreateArrayObject(); // sub_9876D4(0)
+        // count==0 → renderCount - start（+84）
+        if(!count)
+            count = t->_renderCount - start; // a3 = *(a1+84) - a2
+        int charListCount = (int)t->_charList.size(); // (+304-+296)>>3 = v12
+        int v13;
+        if(count + start <= charListCount)
+            v13 = count;
+        else
+            v13 = charListCount - start; // v12 - a2
+        if(v13 >= 1) {
+            int v15 = -1;     // 上一 faceIndex（-1 = 强制首次查）
+            ttstr faceName;   // v30：缓存的 face 名
+            for(int v14 = 0; v14 < v13; ++v14) {
+                int srcIdx = v14 + start;
+                if(srcIdx < 0 || srcIdx >= charListCount)
+                    break; // 守护（二进制无界，脚本保证有效）
+                CharItem *ci = t->_charList[srcIdx]; // charList[v14+a2]
+                // face 缓存刷新（faceIndex 变化时重查 _faceTable）
+                int fi = ci->faceIndex; // v17+52
+                if(v15 != fi) {
+                    if(fi < 0 || fi >= (int)t->_faceTable.size())
+                        faceName = ttstr(); // sub_A13878(&byte_1506A57) 空串
+                    else
+                        faceName = t->_faceTable[fi]; // _faceTable[faceIndex]
+                    v15 = fi;
+                }
+                iTJSDispatch2 *dict = TJSCreateDictionaryObject(); // sub_9C8440(0)
+                trDictSetStr(dict, TJS_W("text"), ci->text);         // +0
+                trDictSetReal(dict, TJS_W("x"), ci->x);              // +8
+                trDictSetReal(dict, TJS_W("y"), ci->y);              // +12
+                trDictSetReal(dict, TJS_W("cw"), ci->cw);            // +16
+                trDictSetReal(dict, TJS_W("size"), ci->size);        // +20
+                trDictSetStr(dict, TJS_W("face"), faceName);         // 缓存名
+                trDictSetInt(dict, TJS_W("color"), (int)ci->chColor); // +28
+                trDictSetInt(dict, TJS_W("bold"), ci->bold ? 1 : 0);   // +41
+                trDictSetInt(dict, TJS_W("italic"), ci->italic ? 1 : 0); // +42
+                trDictSetInt(dict, TJS_W("shadow"), ci->shadow ? 1 : 0); // +43
+                trDictSetInt(dict, TJS_W("edge"), ci->edge ? 1 : 0);     // +44
+                trDictSetInt(dict, TJS_W("shadowColor"),
+                             (int)ci->shadowColor); // +32
+                trDictSetInt(dict, TJS_W("shadowDiff"),
+                             (int)ci->shadowDiff); // +48
+                trDictSetInt(dict, TJS_W("edgeColor"),
+                             (int)ci->edgeColor); // +36
+                // ruby（仅 +56 != +64，即 ruby vector 非空）→ 子 Array
+                if(!ci->ruby.empty()) // *(v17+56) != *(v17+64)
+                    trDictSetRubyArray(dict, ci->ruby);
+                trDictSetInt(dict, TJS_W("vertical"),
+                             ci->vertical ? 1 : 0);          // +45
+                trDictSetReal(dict, TJS_W("delay"), ci->renderPos); // +24
+                // 落入数组：PropSetByNum(index=v14)（sub_5A6550）
+                tTJSVariant vDict(dict, dict);
+                dict->Release();
+                arr->PropSetByNum(TJS_MEMBERENSURE, v14, &vDict, arr);
+            }
         }
+        if(result)
+            *result = tTJSVariant(arr, arr);
+        arr->Release();
         return TJS_S_OK;
+    }
+    // getCharacters/getKeyWait dict 字段写 helper（对应 sub_5A2160/5A614C/5A6020/A0FB64
+    //   + dispatch vtable+48 = PropSet(MEMBERENSURE) 内联体）。
+    static void trDictSetStr(iTJSDispatch2 *dict, const tjs_char *key,
+                             const ttstr &val) { // sub_A0FE2C + vtable+48
+        tTJSVariant v(val);
+        dict->PropSet(TJS_MEMBERENSURE, key, nullptr, &v, dict);
+    }
+    static void trDictSetReal(iTJSDispatch2 *dict, const tjs_char *key,
+                              float val) { // sub_5A614C (type 5 Real)
+        tTJSVariant v((tjs_real)val);
+        dict->PropSet(TJS_MEMBERENSURE, key, nullptr, &v, dict);
+    }
+    static void trDictSetInt(iTJSDispatch2 *dict, const tjs_char *key,
+                             int val) { // sub_5A2160/5A6020/A0FB64 (type 4 Integer)
+        tTJSVariant v((tjs_int)val);
+        dict->PropSet(TJS_MEMBERENSURE, key, nullptr, &v, dict);
+    }
+    // ruby 子 Array（sub_5A6240@0x5A6240）：每 RubyItem → dict{text,x,y,size}，
+    //   PropSetByNum(index) 落入 Array；Array 作为 dict["ruby"] 值。
+    static void trDictSetRubyArray(iTJSDispatch2 *dict,
+                                   const std::vector<RubyItem> &ruby) { // sub_5A6240
+        iTJSDispatch2 *arr = TJSCreateArrayObject(); // sub_9876D4(0)
+        for(size_t i = 0; i < ruby.size(); ++i) {
+            const RubyItem &r = ruby[i];
+            iTJSDispatch2 *rd = TJSCreateDictionaryObject(); // sub_9C8440(0)
+            trDictSetStr(rd, TJS_W("text"), r.text); // +0
+            trDictSetReal(rd, TJS_W("x"), r.x);      // +8
+            trDictSetReal(rd, TJS_W("y"), r.y);      // +12
+            trDictSetReal(rd, TJS_W("size"), r.span); // +16
+            tTJSVariant vd(rd, rd);
+            rd->Release();
+            arr->PropSetByNum(TJS_MEMBERENSURE, (tjs_int)i, &vd, arr);
+        }
+        tTJSVariant vArr(arr, arr);
+        arr->Release();
+        dict->PropSet(TJS_MEMBERENSURE, TJS_W("ruby"), nullptr, &vArr, dict);
     }
 };
 
@@ -347,8 +2197,8 @@ NCB_REGISTER_CLASS(TextRenderBase) {
     NCB_METHOD_RAW_CALLBACK(setFont, &Class::setFont, 0);
     NCB_METHOD_RAW_CALLBACK(setStyle, &Class::setStyle, 0);
     NCB_METHOD_RAW_CALLBACK(render, &Class::render, 0);
-    NCB_METHOD(newline);
-    NCB_METHOD(done);
+    NCB_METHOD_RAW_CALLBACK(newline, &Class::newline, 0);
+    NCB_METHOD_RAW_CALLBACK(done, &Class::done, 0);
     NCB_METHOD_RAW_CALLBACK(onEval, &Class::onEval, 0);
     NCB_METHOD_RAW_CALLBACK(getKeyWait, &Class::getKeyWait, 0);
     NCB_METHOD(calcLineOffset);
