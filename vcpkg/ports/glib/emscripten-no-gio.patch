@@ -1,0 +1,59 @@
+--- a/meson.build	2026-06-08 06:09:47
++++ b/meson.build	2026-06-08 06:54:47
+@@ -270,6 +270,10 @@
+ if cc.has_argument('-fno-strict-aliasing')
+   add_project_arguments('-fno-strict-aliasing', language: 'c')
+ endif
++
++# emscripten/wasm32: gsize is 'unsigned int' while size_t is 'unsigned long' (same 4-byte width,
++# runtime-safe); clang upgrades the resulting pointer-type mismatches to errors. Demote to warnings.
++add_project_arguments(cc.get_supported_arguments(['-Wno-incompatible-function-pointer-types', '-Wno-incompatible-pointer-types']), language: 'c')
+ 
+ ########################
+ # Configuration begins #
+@@ -2722,14 +2726,14 @@
+ windows = import('windows')
+ gnome = import('gnome')
+ 
+-subdir('tools')
++subdir('tools')  # keep: defines gen_visibility_macros used by glib core; does not depend on gio
+ subdir('glib')
+ subdir('gobject')
+ subdir('gthread')
+ subdir('gmodule')
+-subdir('gio')
+-subdir('girepository')
+-subdir('fuzzing')
++# subdir('gio')  # emscripten: no DNS(res_query)/socket/spawn/inotify; libgdiplus uses only GLib core + GObject
++# subdir('girepository')  # emscripten: GObject-introspection unused, depends on gio
++# subdir('fuzzing')  # emscripten
+ if get_option('tests')
+   subdir('tests')
+ endif
+--- a/glib/meson.build	2025-12-08 23:46:06
++++ b/glib/meson.build	2026-06-08 06:59:43
+@@ -514,6 +514,9 @@
+       include_directories : configinc,
+       dependencies : [libglib_dep])
+   endif
++elif host_machine.system() == 'emscripten'
++  # emscripten: skip gtester tool exe (links pthread_getname_np/posix_spawnp, absent on wasm);
++  # only the static libs are needed by libgdiplus.
+ else
+   gtester = executable('gtester', 'gtester.c',
+     install : true,
+--- a/gobject/meson.build	2025-12-08 23:46:06
++++ b/gobject/meson.build	2026-06-08 06:59:53
+@@ -168,10 +168,12 @@
+ )
+ meson.override_dependency('gobject-2.0', libgobject_dep)
+ 
++if host_machine.system() != 'emscripten'  # emscripten: tool exe links missing syscalls; only static libs needed
+ gobject_query = executable('gobject-query', 'gobject-query.c',
+   install : true,
+   install_tag : 'bin-devel',
+   dependencies : [libglib_dep, libgobject_dep])
++endif
+ 
+ install_data('gobject_gdb.py',
+   install_dir : glib_pkgdatadir / 'gdb',

@@ -5,7 +5,7 @@
   "description": "Libgdiplus is the Mono library that provides a GDI+-compatible API on non-Windows operating systems. Our implementation uses Cairo to do most of the heavy lifting.",
   "homepage": "https://www.mono-project.com/docs/gui/libgdiplus/",
   "license": null,
-  "supports": "android | linux | windows | osx | ios",
+  "supports": "android | linux | windows | osx | ios | emscripten",
   "dependencies": [
     {
       "name": "vcpkg-pkgconfig-get-modules",
@@ -31,7 +31,7 @@
     "freetype",
     {
       "name": "pango",
-      "platform": "!android"
+      "platform": "!android & !emscripten"
     }
   ]
 }

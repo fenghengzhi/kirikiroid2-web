@@ -14,7 +14,13 @@ namespace libgdiplus {
         Pen(GpPen *gpPen) : _gpPen(gpPen) {}
 
         Pen(const BrushBase *brush, float width) {
-            GdipCreatePen2((Brush *)brush, width, UnitWorld, &this->_gpPen);
+            // brush 是多态 C++ 包装对象（BrushBase 带虚函数 → 首字是 C++ vptr），
+            // 不能直接 (Brush*)brush 当原生句柄传给 GdipCreatePen2——那样
+            // GdipCloneBrush 会把 C++ vtable 当成 BrushClass*，按 clone_brush 签名
+            // 间接调用到无关的虚槽，wasm call_indirect 严格类型检查下触发
+            // "function signature mismatch" 陷阱。必须经 explicit operator GpBrush*()
+            // 取真正的原生句柄（等价于 Windows Gdiplus::Pen 里的 brush->nativeBrush）。
+            GdipCreatePen2((GpBrush *)*brush, width, UnitWorld, &this->_gpPen);
         }
 
         Pen(const Color &color, float width) {

@@ -10,9 +10,8 @@ if(WINDOWS)
             windows/main.cpp
             windows/LayerExDraw.cpp
     )
-elseif(EMSCRIPTEN)
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/layerex_draw_stub.cpp" "")
-    target_sources(${PROJECT_NAME} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/layerex_draw_stub.cpp")
+# EMSCRIPTEN 走与 Linux/macOS 相同的 general 实现(libgdiplus+cairo+glib+freetype),
+# 这正是 libkrkr2.so layerExDraw 的后端选型(IDA 确认 NCB 0x42CD30 tag "GdiPlus")。
 else()
     target_sources(${PROJECT_NAME} PUBLIC
             general/main.cpp
