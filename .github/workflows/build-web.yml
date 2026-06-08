@@ -226,9 +226,12 @@ jobs:
           # 从 wrangler 输出提取部署 URL：
           #   - deploy_url: "Take a peek over at https://<hash>.<project>.pages.dev"（每次部署唯一）
           #   - alias_url:  "Deployment alias URL: https://<branch>.<project>.pages.dev"（分支别名）
-          deploy_url="$(grep -oiE 'https://[a-z0-9.-]+\.pages\.dev' /tmp/wrangler-deploy.log | head -n 1)"
+          # 注：本 step 跑在 bash -e + pipefail 下；grep 无匹配会返回 1，
+          # 故命令替换必须 `|| true`，否则 production(main) 部署无 alias URL 行时
+          # 解析失败会让已成功的部署整步报错(exit 1)。URL 为尽力提取,空值已被下方处理。
+          deploy_url="$(grep -oiE 'https://[a-z0-9.-]+\.pages\.dev' /tmp/wrangler-deploy.log | head -n 1 || true)"
           alias_url="$(grep -ioE 'alias URL:[[:space:]]*https://[a-z0-9.-]+\.pages\.dev' /tmp/wrangler-deploy.log \
-            | grep -oiE 'https://[a-z0-9.-]+\.pages\.dev' | head -n 1)"
+            | grep -oiE 'https://[a-z0-9.-]+\.pages\.dev' | head -n 1 || true)"
 
           # 设为 step output，供后续 step 引用（steps.cloudflare_pages.outputs.*）。
           echo "deploy_url=$deploy_url" >> "$GITHUB_OUTPUT"
