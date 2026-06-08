@@ -32,6 +32,7 @@ add_library(krkr2plugins_ncbind STATIC
     layerExRaster.cpp
     PackinOne.cpp
     DrawDeviceD3D.cpp
+    textrender/TextRender.cpp
 )
 set_source_files_properties(
     layerExImage/Main.cpp
