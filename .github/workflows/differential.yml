@@ -79,7 +79,7 @@ jobs:
       - name: Install Wasmtime LLDB test dependencies
         run: |
           brew update
-          brew install bison cmake glfw ninja pkg-config wabt zstd
+          brew install autoconf automake bison cmake glfw libtool ninja pkg-config wabt zstd
           osmesa_root="${RUNNER_TEMP}/osmesa"
           osmesa_pkg="${RUNNER_TEMP}/mesalib-24.3.4-h5c1a3a9_1.conda"
           curl -fsSL -o "${osmesa_pkg}" \

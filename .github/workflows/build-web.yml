@@ -40,7 +40,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bison ninja-build python3
+          sudo apt-get install -y bison ninja-build python3 autoconf automake libtool
 
       - name: Cache Emscripten SDK
         uses: actions/cache@v4
