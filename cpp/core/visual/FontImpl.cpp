@@ -219,14 +219,19 @@ void TVPInitFontNames() {
 #endif
 
         { // from internal storage
+            // libkrkr2.so TVPInitFontNames (sub_7E43E8 @0x7E43E8) 第 8 步：
+            // FileUtils::getInstance()->getDataFromFile("DroidSansFallback.ttf")
+            // 从 APK 内置资源加载后 TVPInternalEnumFonts 枚举。Web port 同样从
+            // index.data 内置资源读 DroidSansFallback.ttf，与二进制字面对齐。
+            // (原版步骤 9-11 的 /system/fonts 兜底无浏览器对应物，属平台边界，从略)
             auto data = cocos2d::FileUtils::getInstance()->getDataFromFile(
-                "NotoSansCJK-Regular.ttc");
+                "DroidSansFallback.ttf");
             if(data.isNull()) {
                 spdlog::critical("can't found internal font file!");
                 exit(-1);
             }
             if(TVPInternalEnumFonts(
-                   data.getBytes(), data.getSize(), "NotoSansCJK-Regular.ttc",
+                   data.getBytes(), data.getSize(), "DroidSansFallback.ttf",
                    [](TVPFontNamePathInfo *info) -> tTJSBinaryStream * {
                        auto data =
                            cocos2d::FileUtils::getInstance()->getDataFromFile(
