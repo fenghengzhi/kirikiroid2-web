@@ -890,10 +890,10 @@ def prepare_wasmtime_bootstrap(root: Path,
         shutil.copy2(src, dst)
         preload_count += 1
 
-    font_path = root / "NotoSansCJK-Regular.ttc"
+    font_path = root / "DroidSansFallback.ttf"
     if not font_path.is_file():
         raise FileNotFoundError(
-            "Wasmtime preload did not provide /NotoSansCJK-Regular.ttc"
+            "Wasmtime preload did not provide /DroidSansFallback.ttf"
         )
 
     xp3_guest_rel = Path("reference/xp3") / startup_xp3.name
@@ -904,7 +904,7 @@ def prepare_wasmtime_bootstrap(root: Path,
     return WasmtimeBootstrapInfo(
         root=root,
         preload_files=preload_count,
-        font_guest_path="/NotoSansCJK-Regular.ttc",
+        font_guest_path="/DroidSansFallback.ttf",
         xp3_guest_path="/" + xp3_guest_rel.as_posix(),
     )
 
