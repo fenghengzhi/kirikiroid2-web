@@ -126,7 +126,7 @@ namespace Csd {
         const auto titleBtn =
             Button::create("img/empty.png", "img/gray.png", "img/empty.png");
         cocos2d::Label *l = cocos2d::Label::create();
-        l->setSystemFontName("NotoSansCJK-Regular.ttc");
+        l->setSystemFontName("DroidSansFallback.ttf");
         titleBtn->ignoreContentAdaptWithSize(false);
         titleBtn->setTitleLabel(l);
         titleBtn->setName("title");
@@ -177,7 +177,7 @@ namespace Csd {
 
         // filename label
         const auto filename =
-            Text::create("", "NotoSansCJK-Regular.ttc", rootSize.height);
+            Text::create("", "DroidSansFallback.ttf", rootSize.height);
         filename->setName("filename");
         filename->setContentSize(filenameSize);
         filename->setSwallowTouches(false);
@@ -513,7 +513,7 @@ namespace Csd {
 
         // title
         const auto titleLabel =
-            Text::create("Title", "fonts/NotoSansCJK-Regular.ttc", 48);
+            Text::create("Title", "DroidSansFallback.ttf", 48);
         titleLabel->setPosition(cocos2d::Vec2(360, 441.5f));
         titleLabel->setAnchorPoint(cocos2d::Vec2(0.5f, 0.5f));
         titleLabel->enableOutline(cocos2d::Color4B(0, 0, 255, 255), 1);
@@ -699,7 +699,7 @@ namespace Csd {
 
         // Text 内容
         const auto label =
-            Text::create("Text cocos2d::Label", "NotoSansCJK-Regular.ttc", 56);
+            Text::create("Text cocos2d::Label", "DroidSansFallback.ttf", 56);
         label->setName("content");
         label->setTextColor(cocos2d::Color4B::WHITE);
         label->enableOutline(cocos2d::Color4B::BLUE, 1);
@@ -712,7 +712,7 @@ namespace Csd {
 
         // 标题 title
         const auto title =
-            Text::create("Text cocos2d::Label", "NotoSansCJK-Regular.ttc", 64);
+            Text::create("Text cocos2d::Label", "DroidSansFallback.ttf", 64);
         title->setName("title");
         title->setTextColor(cocos2d::Color4B::WHITE);
         title->enableOutline(cocos2d::Color4B::BLUE, 1);
@@ -759,7 +759,7 @@ namespace Csd {
             Button::create("img/empty.png", "img/gray.png", "img/gray.png");
         button->setName("btnBody");
         button->setTitleText("Button");
-        button->setTitleFontName("NotoSansCJK-Regular.ttc");
+        button->setTitleFontName("DroidSansFallback.ttf");
         button->setTitleFontSize(64);
         button->setTitleColor(cocos2d::Color3B::BLACK);
         button->setScale9Enabled(true);
@@ -827,7 +827,7 @@ namespace Csd {
 
         // Text progress_text_1
         const auto label1 = cocos2d::ui::Text::create(
-            "Text cocos2d::Label", "NotoSansCJK-Regular.ttc", 48);
+            "Text cocos2d::Label", "DroidSansFallback.ttf", 48);
         label1->setName("progress_text_1");
         label1->setPosition(cocos2d::Vec2(268, 32));
         label1->enableOutline(cocos2d::Color4B(77, 77, 77, 255), 3);
@@ -867,7 +867,7 @@ namespace Csd {
 
         // title文本
         const auto title =
-            Text::create("Text cocos2d::Label", "NotoSansCJK-Regular.ttc", 64);
+            Text::create("Text cocos2d::Label", "DroidSansFallback.ttf", 64);
         title->setAnchorPoint(cocos2d::Vec2(0, 1));
         title->setPosition(cocos2d::Vec2(5, 643)); // 以Panel_1为坐标系
         title->setTextColor(cocos2d::Color4B::WHITE);

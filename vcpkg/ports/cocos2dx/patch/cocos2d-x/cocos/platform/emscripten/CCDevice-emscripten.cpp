@@ -266,7 +266,6 @@ public:
             return "";
         };
         std::string result;
-        if (!(result = tryFont("NotoSansCJK-Regular.ttc")).empty()) { cache[fontName] = result; return result; }
         if (!(result = tryFont("DroidSansFallback.ttf")).empty()) { cache[fontName] = result; return result; }
 
         cache[fontName] = path;
