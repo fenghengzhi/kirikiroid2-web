@@ -372,15 +372,29 @@ public:
     // ============================================================
     // 简单签名方法（typed）— 桩
     // ============================================================
-    void setRenderSize(double w, double h) { // 0x59EB70 → 写 +240/+244 后调 clear
-        _renderSizeW = (float)w;
-        _renderSizeH = (float)h;
-        clear();
+    // setRenderSize @0x59EB70：写 +240/+244 后调 clear。clear→resetFont 可触发
+    //   onStyleChanged，故内部链路需 objthis。
+    void setRenderSizeImpl(iTJSDispatch2 *objthis, float w, float h) { // 0x59EB70
+        _renderSizeW = w; // +240
+        _renderSizeH = h; // +244
+        clearImpl(objthis); // sub_59EC6C
+    }
+    static tjs_error setRenderSize(tTJSVariant *, tjs_int numparams,
+                                   tTJSVariant **param,
+                                   iTJSDispatch2 *objthis) {
+        TextRenderBase *t = self(objthis);
+        if(!t)
+            return TJS_E_INVALIDOBJECT;
+        if(numparams < 2)
+            return TJS_E_BADPARAMCOUNT;
+        t->setRenderSizeImpl(objthis, (float)param[0]->AsReal(),
+                             (float)param[1]->AsReal());
+        return TJS_S_OK;
     }
     // clear @0x59EC6C — 复位全部渲染状态、重建列表、压缩 face 表为仅 default face。
     //   数据流 1:1 复刻反编译（pen/bbox 竖排横排分支、cur 样式从 default 复位、
     //   face 表重 intern）。容器选型：STL clear 复刻源码 deque/vector 清空。
-    void clear() { // 0x59EC6C
+    void clearImpl(iTJSDispatch2 *objthis) { // 0x59EC6C
         // sub_5A1E68(+320)：pending deque 清空（释放 charItem，保留控制块）
         clearPendingDeque();
         if(_vertical) { // +48
@@ -403,7 +417,7 @@ public:
         _charBufCountdown = 0; // +88
         _lineStartX = 0;       // +196
         _accumBuf.clear();     // +512 = +504
-        resetFont();           // sub_59EEE0
+        resetFontImpl(objthis); // sub_59EEE0
         // 当前样式从 default 复位（+140/+144/+136/+76/+80 ← +172/+176/+168/+100/+104）
         _curPitch = _defaultPitch;             // +140
         _curLineSize = _defaultLineSize;       // +144
@@ -433,25 +447,73 @@ public:
         _faceTable.clear();  // +456/+464 release 所有 ttstr
         _defaultFaceIndex = resolveFaceIndex(defFaceName); // +96 = sub_5A14DC
     }
-    void resetFont() { // 0x59EEE0 — 当前样式复位为 default*
-        TR_STUB("resetFont");
-        _curBold = _defaultBold;
-        _curItalic = _defaultItalic;
-        _curShadow = _defaultShadow;
-        _curEdge = _defaultEdge;
-        _curFontSize = _defaultFontSize;
-        _curChColor = _defaultChColor;
-        _curShadowColor = _defaultShadowColor;
-        _curShadowDiff = _defaultShadowDiff;
-        _curEdgeColor = _defaultEdgeColor;
-        _curRubySize = _defaultRubySize;
+    // clear NCB raw wrapper（clear→resetFont 可触发 onStyleChanged，需 objthis）。
+    static tjs_error clear(tTJSVariant *, tjs_int, tTJSVariant **,
+                           iTJSDispatch2 *objthis) {
+        TextRenderBase *t = self(objthis);
+        if(!t)
+            return TJS_E_INVALIDOBJECT;
+        t->clearImpl(objthis);
+        return TJS_S_OK;
     }
-    void resetStyle() { // 0x59EFBC — resetFont 同族
-        TR_STUB("resetStyle");
-        resetFont();
-        _curLineSpacing = _defaultLineSpacing;
-        _curPitch = _defaultPitch;
-        _curLineSize = _defaultLineSize;
+    // resetFont @0x59EEE0：当前样式从 default* 复位。
+    //   face/bold/italic/fontsize 作为一组——三路变化检测：curFaceIndex(+72)!=default(+96)
+    //   → 或 curBold(+62)!=default(+66) → 或 (curItalic(+65)!=default(+69) ||
+    //   defaultFontSize(+148)!=curFontSize(+116))，任一命中 → 全组复位(+72/+116/+62/+65)
+    //   + onStyleChanged；全等 → 跳过（**无回调**）。rubySize 单独门控复位(<0||!=)；
+    //   rubyOffset/shadow/edge + 4 色 DWORD 块无条件复位。
+    //   纠正旧实现：旧版无条件平铺复位、漏 _curFaceIndex/_curRubyOffset、无变化门控、
+    //   无 onStyleChanged（0x59EEE0 反编译证伪）。
+    //   平台边界：需 objthis 回调 onStyleChanged（二进制 native≡dispatch，直接用 a1）。
+    void resetFontImpl(iTJSDispatch2 *objthis) { // 0x59EEE0
+        int defFace = _defaultFaceIndex; // v2 = +96
+        bool doGroup;
+        if(_curFaceIndex != defFace)             // +72 != v2
+            doGroup = true;
+        else if(_curBold != _defaultBold)        // +62 != +66
+            doGroup = true;
+        else if(_curItalic != _defaultItalic     // +65 != +69
+                || _defaultFontSize != _curFontSize) // +148 != +116
+            doGroup = true;
+        else
+            doGroup = false;                     // → LABEL_9（无 onStyleChanged）
+        if(doGroup) { // LABEL_8
+            _curFontSize = _defaultFontSize;     // +116 = +148
+            _curFaceIndex = defFace;             // +72 = v2
+            _curBold = _defaultBold;             // *v3 = v4(=+66)
+            _curItalic = _defaultItalic;         // +65 = +69
+            onStyleChanged(objthis);             // sub_5A1F28
+        }
+        // LABEL_9：rubySize 门控复位（curRubySize<0 || defaultRubySize != curRubySize）
+        if(_curRubySize < 0.0f || _defaultRubySize != _curRubySize) // +128
+            _curRubySize = _defaultRubySize;     // +128 = +160
+        // LABEL_14：无条件复位
+        _curRubyOffset = _defaultRubyOffset;     // +132 = +164
+        _curShadow = _defaultShadow;             // +63 = +67
+        _curEdge = _defaultEdge;                 // +64 = +68
+        // 4 色 DWORD 块（二进制 16B q-reg 块拷 +200..215 ← +216..231）
+        _curChColor = _defaultChColor;           // +200 = +216
+        _curShadowColor = _defaultShadowColor;   // +204 = +220
+        _curShadowDiff = _defaultShadowDiff;     // +208 = +224
+        _curEdgeColor = _defaultEdgeColor;       // +212 = +228
+    }
+    // resetFont NCB raw wrapper（需 objthis 触发 onStyleChanged）。
+    static tjs_error resetFont(tTJSVariant *, tjs_int, tTJSVariant **,
+                               iTJSDispatch2 *objthis) {
+        TextRenderBase *t = self(objthis);
+        if(!t)
+            return TJS_E_INVALIDOBJECT;
+        t->resetFontImpl(objthis);
+        return TJS_S_OK;
+    }
+    // resetStyle @0x59EFBC：5 个字段从 default 复位。**不调 resetFont、无 onStyleChanged**
+    //   （纠正旧实现误调 resetFont 且漏 align/valign；0x59EFBC 反编译证伪）。
+    void resetStyle() { // 0x59EFBC
+        _curLineSpacing = _defaultLineSpacing; // +136 = +168
+        _curPitch = _defaultPitch;             // +140 = +172
+        _curLineSize = _defaultLineSize;       // +144 = +176
+        _curAlign = _defaultAlign;             // +76 = +100
+        _curValign = _defaultValign;           // +80 = +104
     }
     // ============================================================
     // 落字 / 行布局层（appendChar/度量/kinsoku/finishLine）helper
@@ -480,18 +542,15 @@ public:
         tjs_error hr = objthis->FuncCall(0, TJS_W("onGetTextWidth"), nullptr,
                                          &result, 2, args, objthis);
         if(TJS_FAILED(hr))
-            return 0.0f; // FuncCall 失败 → default(void) → 0.0
-        // switch(result.type)：复刻反编译 case 表
-        switch(result.Type()) {
-        case tvtString:  // case2 → sub_A133A8(AsReal from string)
-        case tvtInteger: // case4 → (double)int
-        case tvtReal:    // case5 → raw real
-            return (float)result.AsReal();
-        case tvtObject: // case1 → throw（本地以 0.0 守护，避免打断脚本）
-        case tvtOctet:  // case3 → throw
-        default:        // void → 0.0
+            return 0.0f; // FuncCall 失败 → result 保持 void → 0.0
+        // switch(result.type) 复刻 0x5A4338 case 表：
+        //   void(0)→0.0；string(2)→sub_A133A8 / int(4)→(double) / real(5)→raw 均=AsReal；
+        //   object(1)/octet(3)→二进制 sub_A0E48C(__noreturn) 抛转换错误——本地经
+        //   tTJSVariant::AsReal 对 object/octet 同样抛 TJS 转换异常（忠实复刻 throw，
+        //   纠正旧实现以 0.0 吞掉异常）。
+        if(result.Type() == tvtVoid)
             return 0.0f;
-        }
+        return (float)result.AsReal();
     }
 
     // appendChar @0x5A3880：累积 UTF-16 buffer + 度量 + ruby + 落字入口。
@@ -618,12 +677,21 @@ public:
                     }
                     // → LABEL_107
                 } else {
-                    // v30 < max：增加 kinsoku 使用次数
-                    _kinsokuUsed = used + 1; // a1+108
-                    // 边界：pending 空 → LABEL_107
-                    if(!_pendingChars.empty()) {
-                        // 首字符在 following 集 → 不下移（→ LABEL_107）；否则照常 LABEL_107
-                        // （二进制此处仅做首字符检查后落入 LABEL_107，无下移动作）
+                    // following 集 && used < max @0x5A4D90：++kinsokuUsed 后查 pending
+                    //   **末字符**（0x5A4DD0 `[+368]-0x50`，即 deque.back）是否在
+                    //   **following 集(+8)**：命中或 pending 空 → LABEL_107（finishLine
+                    //   换行）；未命中 → @0x5A5338 直接落字，**不 finishLine、不换行**。
+                    //   纠正旧实现：旧版无条件 fall 到 finishLine，对"末字符不在 following
+                    //   集"的情形产生多余换行（旧注释自承"含糊"，经 0x5A4D90 反编译证伪）。
+                    _kinsokuUsed = used + 1; // ++[+108]
+                    if(_pendingChars.empty()) {
+                        // [+368]==[+336]：pending 空 → LABEL_107（finishLine）
+                    } else if(_following.IndexOf(_pendingChars.back().text)
+                              != -1) {
+                        // back 在 following 集(a1+8) → LABEL_107（finishLine）
+                    } else {
+                        // back 不在 following 集 → @0x5A5338 直接落字，不换行
+                        return placeChar(c, /*placeHoriz=*/!_vertical);
                     }
                     // → LABEL_107
                 }
@@ -782,7 +850,10 @@ public:
             }
             // 3b. align 缩进：v14>0 时按全角空格宽填充行首到 renderText
             //   仅当 v13!=center-with-zero 路径... 二进制：v16>=1 时循环追加全角空格(0x3000)。
-            if(v14 != 0.0f && !_pendingChars.empty()) {
+            // 进入缩进段的唯一条件 = pending 非空（0x5A35A0/0x5A35B8 `CMP X8,X24` →
+            //   0x5A35C0），与 v14 是否为 0 无关。纠正旧实现多出的 `v14 != 0.0f` 门控
+            //   （left-align v14=0 但首字符 x≥全角空格宽时二进制仍缩进，0x5A35A0 证伪）。
+            if(!_pendingChars.empty()) {
                 // v15 = onGetTextWidth(L"　"=0x3000, fontScale*fontsize); ==0 → fontsize
                 float v15 = onGetTextWidth(objthis, ttstr((tjs_char)0x3000),
                                           _fontScale * _curFontSize); // sub_5A426C
@@ -929,8 +1000,10 @@ public:
                     reinterpretFloatBits(_charList[idx]->renderPos); // v39[1]
         }
         // ⑥ charList 按 charItem.renderPos(+24) 升序排序（sub_5A59E8 introsort +
-        //   sub_5A5C34 insertion sort，比较键 = char+24）。本地用 stable_sort。
-        std::stable_sort(_charList.begin(), _charList.end(),
+        //   sub_5A5C34 insertion sort，比较键 = char+24）。二进制是**非稳定** introsort；
+        //   本地用 std::sort（libstdc++ std::sort 即 introsort，对相等 renderPos 同为
+        //   不稳定，比旧版 stable_sort 更忠实）。
+        std::sort(_charList.begin(), _charList.end(),
                          [](const CharItem *a, const CharItem *b) {
                              return a->renderPos < b->renderPos;
                          });
@@ -986,11 +1059,13 @@ public:
             return it->second; // 命中节点 idx (+16)
         int idx = (int)_faceTable.size(); // (a1[58]-a1[57])>>3
         _faceHash.emplace(name, idx); // sub_5A181C intern：节点 idx 写为 v15
-        // faceTable/faceHash 同步不变量：idx == 旧 size 意味着 name 追加到表尾。
-        //   二进制把 push 放在 resolveFaceIndex 的调用方（face 解析路径），本地无那条
-        //   独立路径，故合并到此处维护 faceTable[idx]==name 不变量（clear/onStyleChanged/
-        //   getCharacters 经 _faceTable[idx] 反查 name 依赖此不变量）。
-        _faceTable.push_back(name);
+        // **不向 _faceTable push**：经 field-level 穷尽核实（288 处 #464 store + 全部 6
+        //   个 caller + intern 子函数 sub_5A181C 反编译），二进制从无 faceTable push——
+        //   face 名只进 faceHash 节点(+536)，faceTable(+456) 恒空，故 idx=size() 恒为 0，
+        //   所有 face 退化为 idx 0（原版退化行为，1:1 忠实复刻）。clear/onStyleChanged/
+        //   getCharacters 对 _faceTable[idx] 的读取在二进制亦为恒空 vector 的 inert 读
+        //   （编译器为通用 vector<ttstr*> 字段生成的标准访问，运行时因恒空而零迭代/空串）。
+        //   纠正旧实现：旧 push 使 faceTable 非空、face idx 分叉（注释"push 在调用方"被证伪）。
         return idx;
     }
 
@@ -1677,7 +1752,7 @@ public:
             break;
         }
         case TJS_W('r'): // %r：resetFont（sub_59EEE0）
-            resetFont();
+            resetFontImpl(objthis);
             break;
         case TJS_W('D'): { // %D：若码后是 '$' → 嵌套 eval delay；否则当 delay 标签
             int cur = v36;
@@ -2190,9 +2265,9 @@ NCB_REGISTER_CLASS(TextRenderBase) {
     // ---- 17 methods ----
     NCB_METHOD_RAW_CALLBACK(setOption, &Class::setOption, 0);
     NCB_METHOD_RAW_CALLBACK(setDefault, &Class::setDefault, 0);
-    NCB_METHOD(setRenderSize);
-    NCB_METHOD(clear);
-    NCB_METHOD(resetFont);
+    NCB_METHOD_RAW_CALLBACK(setRenderSize, &Class::setRenderSize, 0);
+    NCB_METHOD_RAW_CALLBACK(clear, &Class::clear, 0);
+    NCB_METHOD_RAW_CALLBACK(resetFont, &Class::resetFont, 0);
     NCB_METHOD(resetStyle);
     NCB_METHOD_RAW_CALLBACK(setFont, &Class::setFont, 0);
     NCB_METHOD_RAW_CALLBACK(setStyle, &Class::setStyle, 0);

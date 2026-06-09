@@ -60,8 +60,8 @@ NCB 类描述 vtable `off_1A0B970`（字节已核实）：
 | setDefault | 0x59DEA8 | off_1A0BAE8 | 解析默认样式 dict (face/bold/fontsize/big/small/rubysize/rubyoffset/color/shadow/...→字段 96..228) |
 | setRenderSize | 0x59EB70 | off_1A0BC08 | (float w, float h) → 写 +240/+244，然后调 clear |
 | clear | 0x59EC6C | off_1A0BD28 | 复位渲染状态，重建行列表/字符列表/keyWait 列表 |
-| resetFont | 0x59EEE0 | off_1A0BD28 | 把当前样式复位为 default* 字段 |
-| resetStyle | 0x59EFBC | off_1A0BD28 | (薄包装 resetFont 同族) |
+| resetFont | 0x59EEE0 | off_1A0BD28 | face/bold/italic/fontsize 变化门控组复位+onStyleChanged；rubySize 门控；rubyOffset/shadow/edge+4色块无条件 |
+| resetStyle | 0x59EFBC | off_1A0BD28 | **5 字段纯复位**(lineSpacing/pitch/lineSize/align/valign←default)；**不调 resetFont、无回调**(旧"薄包装 resetFont"已证伪) |
 | setFont | 0x59EFD8 | off_1A0BAE8 | 解析 font dict (face/bold/fontsize/rubysize/rubyoffset/color/shadow/edge/...) |
 | setStyle | 0x59F7AC | off_1A0BAE8 | 解析 style dict (含 linespacing/pitch/linesize/align/valign) |
 | render | 0x59FC28 | off_1A0BE48 | NCB 包装；解包 (str, x, y[, size, flag]) → 调真 render 0x5A228C |
@@ -471,8 +471,14 @@ maxScrollLine 算法（0x5A1080）：lineCount<1→0.0；v6=视口尺寸；自 l
   getCharacters 均不读**（交叉核实 clear 全表 + getCharacters dict 字段无此偏移 + 无其它 reader）→
   **确认 dead-but-faithful**（对象级 ruby bbox 在本 build 无消费者）。注意：getCharacters 的 ruby 字段读的是
   **charItem 级 ruby 子 vector(+56)**，是 LIVE 消费端，与对象级 bbox 是两个东西。
-- **resolveFaceIndex faceTable.push 不变量**：本地把二进制调用方的 faceTable.push 合并进 resolveFaceIndex
-  以维护 _faceTable[idx]==name（getCharacters/defaultFace getter/clear 依赖此反查）。✓
+- **resolveFaceIndex faceTable.push —— 旧"在调用方"断言已证伪（field-level 穷尽核实）**：
+  此前认为二进制在 resolveFaceIndex 调用方 push faceTable，本地合并到 resolveFaceIndex。**错**。
+  对全二进制 288 处 `STR [Xn,#464]`（vector end 指针）+ 全部 6 个 caller + intern 子函数
+  sub_5A181C 反编译核实：**二进制从无 faceTable push**。face 名只进 faceHash 节点(+536)；
+  faceTable(+456) 恒空 → idx=size() 恒 0 → 所有 face 退化为 idx 0（原版退化行为）。
+  clear/getCharacters/defaultFace getter/onStyleChanged 对 _faceTable[idx] 的读取在二进制是
+  恒空 vector 的 inert 读（编译器为通用 vector<ttstr*> 字段生成的标准访问）。本地已删除多余 push
+  （TextRender.cpp resolveFaceIndex），1:1 复刻恒空退化。
 - **keyWait float bits 转换消费端**：done 写高 int=renderPos bits，但 getKeyWait 读低 int=index →
   高 int 无消费者（dead-but-faithful，§9.2）。本地 KeyWaitItem{index,time} 忠实保留双 int。
 - **onStyleChanged 调用者链路**：setFont(face/bold/fontsize 变)/render %数字·%;·%B·%C/L/R·%S·%b·%i·%f →
