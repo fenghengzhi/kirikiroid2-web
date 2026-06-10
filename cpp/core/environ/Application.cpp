@@ -548,6 +548,12 @@ void tTVPApplication::Run() {
     }
 }
 
+#ifdef __EMSCRIPTEN__
+// 平台边界（Web）：每帧帧首在主线程同步执行 timer 到期扫描,
+// 详见 cpp/core/utils/win32/TimerImpl.cpp 的 tTVPTimerThread::FrameScan 注释
+void TVPTimerThreadFrameScan();
+#endif
+
 void tTVPApplication::ProcessMessages() {
     std::vector<std::tuple<void *, int, tMsg>> lstUserMsg;
     {
@@ -558,6 +564,13 @@ void tTVPApplication::ProcessMessages() {
         std::get<2>(it)();
     }
     TVPTimer::ProgressAllTimer();
+#ifdef __EMSCRIPTEN__
+    // 放在 ProcessMessages 末尾（即 Run() 中 TVPDeliverAllEvents 之前）:
+    // 高频 timer 的脚本回调每次都会重设 interval, 把下次到期锚定在脚本执行
+    // 时刻 +13ms; 在此处扫描可使"扫描→回调执行"间隔最小化, 到期判定不再
+    // 受帧内脚本时延 ε 影响
+    TVPTimerThreadFrameScan();
+#endif
 }
 
 #if 0

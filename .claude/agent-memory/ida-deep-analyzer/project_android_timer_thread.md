@@ -71,3 +71,19 @@ metadata:
 ## 重要：libkrkr2.so 中 NO `tTVPTimerImpl` / NO `ProgressAllTimer`
 本地 cpp/core/utils/win32/TVPTimer.cpp 的时间轮实现 *不存在* 于 Android 版本。
 Android 用的是这个独立 pthread + condvar 方案。
+
+## 2026-06-11 全链路钉死（已 rename + set_comments + idb_save）
+完整对照文档：analysis/Timer_Event_Dispatch_Chain_libkrkr2so.md
+已重命名（命名权威=KiriKiri 类方法语义/onTimer 字面证据）：
+- tTVPTimerThread_Execute @0xA36C70（n<0x29=41 截断, sleep clamp>=3）
+- tTVPTimerThread_FireQueuedTimers @0xA36AD4（主线程侧, tag==0x10001 遍历 pendingQueue+144）
+- tTJSNI_BaseTimer_FireOnIdle @0xA2C2E4（cap=LimitTimerCapacity?1:(t+36?:0xFFFF), flags 16/48/80, tag=(serial<<1)|1）
+- TVPGetRoughTickCount32 @0xA2BF90（steady_clock::now()/1e6=CLOCK_MONOTONIC ms + 32→64 wrap）
+- tTVPThreadEvent_WaitFor @0xA362DC（pthread_cond_timedwait, ms==0→无限 wait）
+- tTVPTimerThread_ctor @0xA369BC（SetPriority(LimitTimerCapacity?3:5)）; tTVPThread_SetPriority @0xA361D0（case5=highest→sched_other prio2）
+- TVPLimitTimerCapacity=byte_1AFA740, **.bss 无写入点→恒 0(false)** → 线程用 highest 优先级
+- 跨线程: NativeEventQueue_PostEvent @0x906DCC → postImpl @0x9156D8（mutex+std::vector<tuple>, queue=qword_1AF4388）。非 ALooper/JNI。
+- 消费泵每帧: TVPMainScene::update @0xAA0718 首行 → ProcessMessages @0x913FC0 → NativeEventQueue_processQueue @0x915570（swap 排空, trampoline @0xA379DC→FireQueuedTimers）→ TVPSystemWatchTimerTimer @0x927188 → TVPDeliverAllEvents @0x8DE7A0（排空 TVP 队列 qword_1AE2EC0, sub_8DF7AC(32) 按 priority 派发脚本 onTimer）。全部同帧。
+- TVPPostEvent @0x8DD324 / TVPCountEventsInQueue @0x8DE46C（遍历 qword_1AE2EC0..off_1AE2EC8）
+两个独立队列: qword_1AF4388=NativeEventQueue(跨线程), qword_1AE2EC0=TVP 事件队列(onTimer)。
+本地 TimerImpl.cpp:110 Execute / TimerIntf.cpp:69 Fire 经对照逐行一致, 无架构偏离。

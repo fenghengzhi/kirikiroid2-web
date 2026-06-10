@@ -30,6 +30,7 @@
 #define TVP_LEAST_TIMER_INTERVAL 3
 #define INFINITE 0xFFFFFFFF
 
+
 //---------------------------------------------------------------------------
 // tTVPTimerThread
 //---------------------------------------------------------------------------
@@ -85,6 +86,10 @@ public:
     static void RemoveFromPending(tTJSNI_Timer *item);
 
     static void RegisterToPending(tTJSNI_Timer *item);
+
+#ifdef __EMSCRIPTEN__
+    static void FrameScan();
+#endif
 
 } static *TVPTimerThread = nullptr;
 
@@ -303,6 +308,63 @@ void tTVPTimerThread::SetInterval(tTJSNI_Timer *item, tjs_uint64 interval) {
         Event.Set();
 }
 
+//---------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+// 平台边界（Web）：emscripten 的 pthread(Web Worker) 定时唤醒精度只有 ±5-10ms,
+// 且随页面运行时长进一步漂移(实测 ≥20ms 迟到占比 14%→25%)。13ms 名义间隔的
+// timer 对 16.7ms(60Hz) 帧边界只有 3.7ms 裕量, 唤醒迟到即错过当帧 ProcessMessages
+// 排空, 逐帧动画(如法娘 fgact 的 ActionManager flip timer)出现 1/2 帧混步
+// (实测最差 65% 双帧)。libkrkr2.so(Android) 同一链路依赖 OS 线程 ±1ms 精确唤醒
+// (tTVPTimerThread::Execute @0xA36C70, 见 analysis/Timer_Event_Dispatch_Chain_
+// libkrkr2so.md), 其可观察行为 = 每个到期 tick 必在下一帧边界前完成触发与派发。
+// Web 无法复刻 Worker 唤醒精度, 故主循环每帧帧首在主线程同步执行一次与 Execute
+// 完全相同的到期扫描, 并就地消费 Pending(等价 Proc), 保证"帧开始时已到期的 tick
+// 必在本帧被消费"。计时线程本体与跨线程通知路径原样保留(仍驱动长间隔 timer 及
+// 帧间隙到期的触发), 架构不变。
+void tTVPTimerThread::FrameScan() {
+    if(!TVPTimerThread)
+        return;
+    tTJSCriticalSectionHolder holder(TVPTimerThread->TVPTimerCS);
+
+    tjs_uint64 curtick = TVPGetTickCount() << TVP_SUBMILLI_FRAC_BITS;
+    std::vector<tTJSNI_Timer *>::iterator i;
+    for(i = TVPTimerThread->List.begin(); i != TVPTimerThread->List.end();
+        i++) {
+        tTJSNI_Timer *item = *i;
+
+        if(!item->GetEnabled() || item->GetInterval() == 0)
+            continue;
+
+        if(item->GetNextTick() < curtick) {
+            tjs_uint n = static_cast<tjs_uint>(
+                (curtick - item->GetNextTick()) / item->GetInterval());
+            n++;
+            if(n > 40) {
+                // too large amount of event at once; discard rest
+                item->Trigger(1);
+                item->SetNextTick(curtick + item->GetInterval());
+            } else {
+                item->Trigger(n);
+                item->SetNextTick(item->GetNextTick() +
+                                  n * item->GetInterval());
+            }
+        }
+    }
+
+    // 主线程就地消费 Pending（与 Proc 的派发路径等价）
+    if(!TVPTimerThread->Pending.empty()) {
+        for(i = TVPTimerThread->Pending.begin();
+            i != TVPTimerThread->Pending.end(); i++) {
+            tTJSNI_Timer *item = *i;
+            item->FirePendingEventsAndClear();
+        }
+        TVPTimerThread->Pending.clear();
+        TVPTimerThread->PendingEventsAvailable = false;
+    }
+}
+
+void TVPTimerThreadFrameScan() { tTVPTimerThread::FrameScan(); }
+#endif
 //---------------------------------------------------------------------------
 void tTVPTimerThread::Init() {
     if(!TVPTimerThread) {
