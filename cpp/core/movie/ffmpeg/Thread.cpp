@@ -43,7 +43,32 @@ void CThread::StopThread(bool bWait /*= true*/) {
 void CThread::Sleep(unsigned int milliseconds) {
     if(IsCurrentThread()) {
         std::unique_lock<std::mutex> lock(m_mtxStopEvent);
+#ifdef __EMSCRIPTEN__
+        // Platform boundary (emscripten): the futex emulation lets
+        // pthread_cond_timedwait return EAGAIN when a notify races the
+        // wait — semantically a normal wakeup. libc++'s noexcept
+        // __do_timed_wait treats anything other than 0/ETIMEDOUT as fatal
+        // and terminates the process (measured rc=EAGAIN here aborting
+        // movie playback). Wait on the native handle and treat
+        // EAGAIN/EINTR as spurious wakeups instead.
+        timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += milliseconds / 1000;
+        ts.tv_nsec += (long)(milliseconds % 1000) * 1000000L;
+        if(ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000L;
+        }
+        int rc = pthread_cond_timedwait(m_StopEvent.native_handle(),
+                                        lock.mutex()->native_handle(), &ts);
+        if(rc != 0 && rc != ETIMEDOUT && rc != EAGAIN && rc != EINTR) {
+            fprintf(stderr,
+                    "CThread::Sleep(%u): pthread_cond_timedwait rc=%d\n",
+                    milliseconds, rc);
+        }
+#else
         m_StopEvent.wait_for(lock, std::chrono::milliseconds(milliseconds));
+#endif
     } else {
         std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
     }
