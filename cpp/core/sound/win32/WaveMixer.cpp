@@ -694,7 +694,10 @@ public:
         tjs_int total = -offset;
         for(int i = 0; i < remainBuffers; ++i) {
             int idx = _bufferIdx + 1 - remainBuffers + i;
-            if(idx >= _bufferCount)
+            // _bufferCount is unsigned; without the cast a negative idx is
+            // promoted to a huge unsigned value, takes the wrong branch and
+            // indexes _bufferSize out of bounds (heap-buffer-overflow).
+            if(idx >= (int)_bufferCount)
                 idx -= _bufferCount;
             else if(idx < 0)
                 idx += _bufferCount;
