@@ -1143,11 +1143,32 @@ public:
     void CopyPixelRowsToRawBacking(const void *pixel,
                                    TVPTextureFormat::e sourceFormat, int pitch,
                                    int x, int y, int w, int h) {
-        if(!pixel || w <= 0 || h <= 0)
+        if(!pixel || w <= 0 || h <= 0 || x < 0 || y < 0)
             return;
         AllocateRawBacking(true);
         if(!RawBackingData)
             return;
+
+        // Clip to the backing surface (mirror of the clip in
+        // RenderManager_ogl.cpp CopyPixelRowsToRawBacking). Callers can
+        // pass rects taller than the texture: krmovie pushes coded-size
+        // video frames (608 rows of an 800x600 h264, coded height rounded
+        // up to 16 by upstream GetPicture) through
+        // tTVPSoftwareTexture2D::Update, whose Bitmap memcpy clamps to
+        // Bitmap->GetHeight() but used to forward the unclamped rect
+        // height here, overrunning the Pitch*Height backing by 8 rows
+        // (~25KB) every frame and corrupting the dlmalloc chunk headers
+        // behind it.
+        {
+            int backingW = RawBackingPitch / PixelSizeForFormat(Format);
+            int backingH = (int)Height;
+            if(x >= backingW || y >= backingH)
+                return;
+            if(w > backingW - x)
+                w = backingW - x;
+            if(h > backingH - y)
+                h = backingH - y;
+        }
 
         const auto *src = static_cast<const tjs_uint8 *>(pixel);
         tjs_uint8 *dstBase =

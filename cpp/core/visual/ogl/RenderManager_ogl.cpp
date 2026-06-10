@@ -988,7 +988,7 @@ protected:
     void CopyPixelRowsToRawBacking(const void *pixel,
                                    TVPTextureFormat::e sourceFormat, int pitch,
                                    int x, int y, int w, int h) {
-        if(!pixel || w <= 0 || h <= 0)
+        if(!pixel || w <= 0 || h <= 0 || x < 0 || y < 0)
             return;
 
         EnsureRawBackingAllocated(true);
@@ -997,6 +997,23 @@ protected:
 
         int dstPixSize = getPixelSize();
         int srcPixSize = GetPixelSizeForFormat(sourceFormat);
+        // Clip to the backing surface. Callers can pass rects larger than
+        // the texture — krmovie pushes coded-size video frames (e.g. 608
+        // rows of an 800x600 h264 into an 800x600 texture, coded height
+        // rounded up to 16 by upstream GetPicture). GL bounds-checks
+        // glTexSubImage2D; this CPU backing must clip the same way
+        // instead of overrunning the heap (it corrupted a freshly
+        // allocated pthread TCB right after the backing block).
+        {
+            int backingW = RawBackingPitch / dstPixSize;
+            int backingH = (int)GetBackingHeight();
+            if(x >= backingW || y >= backingH)
+                return;
+            if(w > backingW - x)
+                w = backingW - x;
+            if(h > backingH - y)
+                h = backingH - y;
+        }
         const unsigned char *src = static_cast<const unsigned char *>(pixel);
         unsigned char *dstBase = RawBackingData + y * RawBackingPitch +
                                  x * dstPixSize;
