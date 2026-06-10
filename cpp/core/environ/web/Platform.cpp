@@ -329,56 +329,6 @@ EM_JS(char *, krkr2_get_startup_xp3_path, (), {
     return 0;
 });
 
-// Auto-mount all sibling .xp3 files in the same directory as the startup xp3.
-// This ensures resolution-specific archives (data1080.xp3, bgimage1080.xp3, etc.)
-// are available even if the game's resolution detection doesn't add them.
-static void autoMountSiblingXp3(const std::string &startupPath) {
-    // Extract directory from startup path
-    auto lastSlash = startupPath.rfind('/');
-    std::string dir = (lastSlash != std::string::npos)
-        ? startupPath.substr(0, lastSlash + 1) : "./";
-    std::string startupName = (lastSlash != std::string::npos)
-        ? startupPath.substr(lastSlash + 1) : startupPath;
-
-    // Lowercase the startup name for comparison
-    std::string startupLower = startupName;
-    std::transform(startupLower.begin(), startupLower.end(),
-                   startupLower.begin(), ::tolower);
-
-    DIR *dirp = opendir(dir.c_str());
-    if (!dirp) return;
-
-    dirent *dp;
-    while ((dp = readdir(dirp))) {
-        std::string name = dp->d_name;
-        if (name.empty() || name[0] == '.') continue;
-
-        std::string lower = name;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-
-        // Skip non-xp3 files and the startup xp3 itself
-        if (lower.size() <= 4 ||
-            lower.compare(lower.size() - 4, 4, ".xp3") != 0) continue;
-        if (lower == startupLower) continue;
-
-        std::string full = dir + name;
-        struct stat st;
-        if (stat(full.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
-
-        // Add as auto path: "file://./name.xp3>"
-        ttstr autoPath = TJS_W("file://.");
-        autoPath += ttstr(full.c_str());
-        autoPath += TJS_W(">");
-        try {
-            TVPAddAutoPath(autoPath);
-            spdlog::info("Auto-mounted sibling xp3: {}", full);
-        } catch (...) {
-            spdlog::warn("Failed to auto-mount: {}", full);
-        }
-    }
-    closedir(dirp);
-}
-
 bool TVPCheckStartupArg() {
     TVPInstallLayerFrameDumperIfRequested();
 
@@ -386,7 +336,13 @@ bool TVPCheckStartupArg() {
     if (selectedXp3) {
         std::string path(selectedXp3);
         free(selectedXp3);
-        autoMountSiblingXp3(path);
+        // libkrkr2.so 数据流：TVPAddAutoPath(0x8EB4B4) 唯一调用者是
+        // Storages.addAutoPath 的 NCB 绑定(0x8EDF80)，引擎启动流不预挂任何
+        // 同级 xp3。此前 Web 独有的 autoMountSiblingXp3 会在脚本运行前把
+        // patch.xp3 等加入 autopath 列表前部，而 TVPAddAutoPath 对重复项
+        // no-op（保留早位置），破坏 Initialize.tjs "patch 最后挂载=最高
+        // 优先" 的覆盖语义（汉化补丁失效，如 夏空彼方KR）。挂载顺序必须
+        // 完全由游戏脚本决定。
         TVPMainScene::GetInstance()->startupFrom(path);
         return true;
     }
