@@ -510,9 +510,6 @@ public:
     const void *GetMainImagePixelBuffer() const;
     void *GetMainImagePixelBufferForWrite();
     tjs_int GetMainImagePixelBufferPitch() const;
-    tTVPBaseTexture *GetMainImageRawBackingNoSync() const;
-    const void *GetMainImageRawPixelBufferNoSync() const;
-    tjs_int GetMainImageRawPixelBufferPitchNoSync() const;
     const void *GetProvinceImagePixelBuffer() const;
     void *GetProvinceImagePixelBufferForWrite();
     tjs_int GetProvinceImagePixelBufferPitch() const;

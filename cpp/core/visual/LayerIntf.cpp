@@ -3073,25 +3073,6 @@ tjs_int tTJSNI_BaseLayer::GetMainImagePixelBufferPitch() const {
 }
 
 //---------------------------------------------------------------------------
-tTVPBaseTexture *tTJSNI_BaseLayer::GetMainImageRawBackingNoSync() const {
-    return MainImage;
-}
-
-//---------------------------------------------------------------------------
-const void *tTJSNI_BaseLayer::GetMainImageRawPixelBufferNoSync() const {
-    if(!MainImage)
-        return nullptr;
-    return MainImage->GetRawPixelDataNoSync();
-}
-
-//---------------------------------------------------------------------------
-tjs_int tTJSNI_BaseLayer::GetMainImageRawPixelBufferPitchNoSync() const {
-    if(!MainImage)
-        return 0;
-    return MainImage->GetRawPitchNoSync();
-}
-
-//---------------------------------------------------------------------------
 const void *tTJSNI_BaseLayer::GetProvinceImagePixelBuffer() const {
     if(!ProvinceImage)
         return nullptr;

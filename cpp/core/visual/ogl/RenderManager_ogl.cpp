@@ -898,12 +898,8 @@ protected:
     TVPTextureFormat::e Format;
     unsigned int internalW;
     unsigned int internalH;
-    unsigned char *VisualReadbackData = nullptr;
-    int VisualReadbackCounter = 0;
-    unsigned char *RawBackingData = nullptr;
-    int RawBackingPitch = 0;
-    size_t RawBackingSize = 0;
-    bool RawBackingDirty = false;
+    unsigned char *PixelData = nullptr; // read only
+    int PixelDataCounter = 0;
     float _scaleW = 1, _scaleH = 1;
 
     tTVPOGLTexture2D(unsigned int w, unsigned int h, TVPTextureFormat::e format,
@@ -923,14 +919,14 @@ protected:
 
     ~tTVPOGLTexture2D() override {
         _totalVMemSize -= internalW * internalH * getPixelSize();
-        FreeVisualReadback();
-        FreeRawBacking();
+        if(PixelData)
+            delete[] PixelData;
         if(texture)
             cocos2d::GL::deleteTexture(texture);
     }
 
-    static int GetPixelSizeForFormat(TVPTextureFormat::e format) {
-        switch(format) {
+    int getPixelSize() {
+        switch(Format) {
             case TVPTextureFormat::Gray:
                 return 1;
             case TVPTextureFormat::RGB:
@@ -938,135 +934,8 @@ protected:
             case TVPTextureFormat::RGBA:
                 return 4;
             default:
-                return (int)format;
+                return (int)Format;
         }
-    }
-
-    int getPixelSize() const { return GetPixelSizeForFormat(Format); }
-
-    void FreeVisualReadback() {
-        if(VisualReadbackData) {
-            delete[] VisualReadbackData;
-            VisualReadbackData = nullptr;
-        }
-        VisualReadbackCounter = 0;
-    }
-
-    void FreeRawBacking() {
-        if(RawBackingData) {
-            delete[] RawBackingData;
-            RawBackingData = nullptr;
-        }
-        RawBackingPitch = 0;
-        RawBackingSize = 0;
-        RawBackingDirty = false;
-    }
-
-    tjs_uint GetBackingHeight() const {
-        return _scaleW == 1.f && _scaleH == 1.f ? internalH : Height;
-    }
-
-    void EnsureRawBackingAllocated(bool clear) {
-        int pitch = GetPitch();
-        tjs_uint backingHeight = GetBackingHeight();
-        if(pitch <= 0 || backingHeight == 0)
-            return;
-
-        size_t size = (size_t)pitch * backingHeight;
-        if(RawBackingData && RawBackingPitch == pitch &&
-           RawBackingSize >= size)
-            return;
-
-        FreeRawBacking();
-        RawBackingPitch = pitch;
-        RawBackingSize = size;
-        RawBackingData = new unsigned char[size];
-        if(clear)
-            memset(RawBackingData, 0, size);
-    }
-
-    void CopyPixelRowsToRawBacking(const void *pixel,
-                                   TVPTextureFormat::e sourceFormat, int pitch,
-                                   int x, int y, int w, int h) {
-        if(!pixel || w <= 0 || h <= 0 || x < 0 || y < 0)
-            return;
-
-        EnsureRawBackingAllocated(true);
-        if(!RawBackingData)
-            return;
-
-        int dstPixSize = getPixelSize();
-        int srcPixSize = GetPixelSizeForFormat(sourceFormat);
-        // Clip to the backing surface. Callers can pass rects larger than
-        // the texture — krmovie pushes coded-size video frames (e.g. 608
-        // rows of an 800x600 h264 into an 800x600 texture, coded height
-        // rounded up to 16 by upstream GetPicture). GL bounds-checks
-        // glTexSubImage2D; this CPU backing must clip the same way
-        // instead of overrunning the heap (it corrupted a freshly
-        // allocated pthread TCB right after the backing block).
-        {
-            int backingW = RawBackingPitch / dstPixSize;
-            int backingH = (int)GetBackingHeight();
-            if(x >= backingW || y >= backingH)
-                return;
-            if(w > backingW - x)
-                w = backingW - x;
-            if(h > backingH - y)
-                h = backingH - y;
-        }
-        const unsigned char *src = static_cast<const unsigned char *>(pixel);
-        unsigned char *dstBase = RawBackingData + y * RawBackingPitch +
-                                 x * dstPixSize;
-
-        if(sourceFormat == Format) {
-            size_t rowBytes = (size_t)w * dstPixSize;
-            for(int row = 0; row < h; ++row) {
-                memcpy(dstBase + row * RawBackingPitch, src + row * pitch,
-                       rowBytes);
-            }
-        } else if(Format == TVPTextureFormat::RGBA &&
-                  sourceFormat == TVPTextureFormat::RGB) {
-            for(int row = 0; row < h; ++row) {
-                const unsigned char *srcRow = src + row * pitch;
-                unsigned char *dstRow = dstBase + row * RawBackingPitch;
-                for(int col = 0; col < w; ++col) {
-                    dstRow[col * 4 + 0] = srcRow[col * srcPixSize + 0];
-                    dstRow[col * 4 + 1] = srcRow[col * srcPixSize + 1];
-                    dstRow[col * 4 + 2] = srcRow[col * srcPixSize + 2];
-                    dstRow[col * 4 + 3] = 0xff;
-                }
-            }
-        }
-    }
-
-    void EnsureRawBackingFromVisual() {
-        const unsigned char *visual =
-            static_cast<const unsigned char *>(GetScanLineForRead(0));
-        if(!visual)
-            return;
-
-        EnsureRawBackingAllocated(false);
-        if(!RawBackingData)
-            return;
-
-        int pitch = GetPitch();
-        size_t rowBytes = std::min(RawBackingPitch, pitch);
-        for(tjs_uint row = 0; row < GetBackingHeight(); ++row) {
-            memcpy(RawBackingData + row * RawBackingPitch, visual + row * pitch,
-                   rowBytes);
-        }
-        RawBackingDirty = false;
-    }
-
-    void UploadRawBackingIfDirty() {
-        if(!RawBackingDirty || !RawBackingData)
-            return;
-
-        int uploadW = _scaleW == 1.f && _scaleH == 1.f ? internalW : Width;
-        int uploadH = _scaleW == 1.f && _scaleH == 1.f ? internalH : Height;
-        InternalUpdate(RawBackingData, RawBackingPitch, 0, 0, uploadW,
-                       uploadH);
-        RawBackingDirty = false;
     }
 
     void InternalInit(const void *pixel, unsigned int intw, unsigned int inth,
@@ -1116,7 +985,6 @@ protected:
         internalW = intw;
         internalH = inth;
         _totalVMemSize += internalW * internalH * getPixelSize();
-        FreeVisualReadback();
         CHECK_GL_ERROR_DEBUG();
     }
 
@@ -1163,7 +1031,6 @@ protected:
             glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         if(rearranged)
             delete[] src;
-        FreeVisualReadback();
         CHECK_GL_ERROR_DEBUG();
     }
 
@@ -1235,13 +1102,10 @@ public:
     }
 
     const void *GetScanLineForRead(tjs_uint l) override;
-    const void *GetRawPixelDataNoSync() const override {
-        return RawBackingData;
-    }
 
     tjs_uint32 GetPoint(int x, int y) override {
-        if(VisualReadbackData)
-            return *(uint32_t *)&VisualReadbackData[y * GetPitch() + x * 4];
+        if(PixelData)
+            return *(uint32_t *)&PixelData[y * GetPitch() + x * 4];
         unsigned long clr = 0;
         TVPSetRenderTarget(texture);
         glViewport(0, 0, internalW, internalH);
@@ -1257,19 +1121,14 @@ public:
             return internalW * 4;
         return tjs_int(internalW / _scaleW) * 4;
     }
-    tjs_int GetRawPitchNoSync() const override {
-        return RawBackingData ? RawBackingPitch : 0;
-    }
     tjs_uint GetInternalWidth() const override { return internalW; }
     tjs_uint GetInternalHeight() const override { return internalH; }
     virtual void AsTarget() { assert(false); }
     virtual void SyncPixel() {
-        UploadRawBackingIfDirty();
-        if(VisualReadbackData && --VisualReadbackCounter <= 0)
-            FreeVisualReadback();
-    }
-    void InvalidateVisualReadback() {
-        FreeVisualReadback();
+        if(PixelData && --PixelDataCounter <= 0) {
+            delete[] PixelData;
+            PixelData = nullptr;
+        }
     }
     virtual void ApplyVertex(GLVertexInfo &vtx, const tTVPRect &rc) {
         vtx.tex = this;
@@ -1394,11 +1253,7 @@ public:
     const void *GetScanLineForRead(tjs_uint l) override {
         return Bitmap->GetScanLine(l);
     }
-    const void *GetRawPixelDataNoSync() const override {
-        return Bitmap ? Bitmap->GetScanLine(0) : nullptr;
-    }
     tjs_int GetPitch() const override { return Bitmap->GetPitch(); }
-    tjs_int GetRawPitchNoSync() const override { return GetPitch(); }
     tjs_uint32 GetPoint(int x, int y) override {
         if(Bitmap->Is32bit()) {
             return ((uint32_t *)Bitmap->GetScanLine(y))[x];
@@ -1770,20 +1625,19 @@ public:
             InternalUpdate(pixel, pitch, 0, 0, iw, ih);
         } else { // rearrange
             InternalInit(nullptr, iw, ih, 0);
-            unsigned char *upload = new unsigned char[internalW * internalH * 4];
+            PixelData = new unsigned char[internalW * internalH * 4];
             int linesize = internalW * pixsize, dstpitch = internalW * 4;
             unsigned char *src = (unsigned char *)pixel;
-            unsigned char *dst = upload;
+            unsigned char *dst = (unsigned char *)PixelData;
             for(unsigned int y = 0; y < internalH; ++y) {
                 memcpy(dst, src, linesize);
                 src += pitch;
                 dst += dstpitch;
             }
-            InternalUpdate(upload, dstpitch, 0, 0, internalW, internalH);
-            delete[] upload;
+            InternalUpdate(PixelData, dstpitch, 0, 0, internalW, internalH);
+            delete[] PixelData;
+            PixelData = nullptr;
         }
-        if(pixel)
-            CopyPixelRowsToRawBacking(pixel, format, pitch, 0, 0, iw, ih);
         //_totalVMemSize += internalW * internalH * pixsize;
     }
 
@@ -1806,8 +1660,6 @@ public:
         IsCompressed = true;
         internalW = width;
         internalH = height;
-        FreeRawBacking();
-        FreeVisualReadback();
         _totalVMemSize += internalW * internalH * getPixelSize() /*len*/;
         CHECK_GL_ERROR_DEBUG();
     }
@@ -1845,9 +1697,10 @@ public:
 
     void Update(const void *pixel, TVPTextureFormat::e format, int pitch,
                 const tTVPRect &rc) override {
-        CopyPixelRowsToRawBacking(pixel, format, pitch, rc.left, rc.top,
-                                  rc.get_width(), rc.get_height());
-        RawBackingDirty = false;
+        if(PixelData) {
+            delete[] PixelData;
+            PixelData = nullptr;
+        }
         InternalUpdate(pixel, pitch, rc.left, rc.top, rc.get_width(),
                        rc.get_height());
     };
@@ -1859,16 +1712,11 @@ public:
 
     void SetPoint(int x, int y, uint32_t clr) override {
         if(texture) {
-            EnsureRawBackingFromVisual();
-            CopyPixelRowsToRawBacking(&clr, TVPTextureFormat::RGBA, 4, x, y, 1,
-                                      1);
             _glBindTexture2D(texture);
             // glBindTexture(GL_TEXTURE_2D, texture);
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
             glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, 1, 1, GL_RGBA,
                             GL_UNSIGNED_BYTE, &clr);
-            RawBackingDirty = false;
-            FreeVisualReadback();
         }
     }
 
@@ -1878,6 +1726,8 @@ public:
 };
 
 class tTVPOGLTexture2D_mutatble : public tTVPOGLTexture2D {
+    bool IsTextureDirty;
+
 public:
     tTVPOGLTexture2D_mutatble(const void *pixel, int pitch, unsigned int w,
                               unsigned int h, TVPTextureFormat::e format,
@@ -1896,7 +1746,7 @@ public:
             if(inth < h)
                 _scaleH = (float)inth / h;
             InternalInit(nullptr, intw, inth, 0);
-            EnsureRawBackingAllocated(true);
+            IsTextureDirty = false;
             return;
         }
         assert(sw == 1.f && sh == 1.f);
@@ -1909,9 +1759,10 @@ public:
         if(!pixel || pitch == intw * pixsize) {
             if(inth == h) {
                 InternalInit(pixel, intw, inth, pitch);
-                CopyPixelRowsToRawBacking(pixel, Format, pitch, 0, 0, w, h);
+                IsTextureDirty = false;
             } else {
                 InternalInit(nullptr, intw, inth, 0);
+                IsTextureDirty = false;
                 if(pixel)
                     Update(pixel, Format, pitch, tTVPRect(0, 0, w, h));
             }
@@ -1923,62 +1774,84 @@ public:
             Update(pixel, Format, pitch, tTVPRect(0, 0, w, h));
         } else {
             InternalInit(nullptr, intw, inth, 0);
-            EnsureRawBackingAllocated(true);
+            PixelData = new unsigned char[internalW * internalH * 4];
             int linesize = w * pixsize, dstpitch = internalW * 4;
             unsigned char *src = (unsigned char *)pixel;
-            unsigned char *dst = RawBackingData;
+            unsigned char *dst = (unsigned char *)PixelData;
             for(unsigned int y = 0; y < h; ++y) {
                 memcpy(dst, src, linesize);
                 src += pitch;
                 dst += dstpitch;
             }
-            RawBackingDirty = true;
+            IsTextureDirty = true;
         }
     }
 
     void SyncPixel() override {
-        tTVPOGLTexture2D::SyncPixel();
+        if(PixelData) {
+            if(IsTextureDirty) {
+                InternalUpdate(PixelData, internalW * 4, 0, 0, internalW,
+                               internalH);
+                IsTextureDirty = false;
+                delete[] PixelData;
+                PixelData = nullptr;
+            } else if(--PixelDataCounter <= 0) {
+                IsTextureDirty = false;
+                delete[] PixelData;
+                PixelData = nullptr;
+            }
+        }
     }
 
     void Update(const void *pixel, TVPTextureFormat::e format, int pitch,
                 const tTVPRect &rc) override {
-        CopyPixelRowsToRawBacking(pixel, format, pitch, rc.left, rc.top,
-                                  rc.get_width(), rc.get_height());
-        RawBackingDirty = false;
+        if(PixelData) {
+            if(rc.left > 0 || rc.top > 0 || rc.bottom < Height ||
+               rc.right < Width) {
+                unsigned char *src = (unsigned char *)pixel,
+                              *dst = (unsigned char *)PixelData;
+                int dpitch = internalW * 4;
+                for(int y = 0; y < Height; ++y) {
+                    memcpy(dst, src, dpitch);
+                    src += pitch;
+                    dst += dpitch;
+                }
+                pixel = PixelData;
+                pitch = internalW * 4;
+                PixelDataCounter = 5;
+            } else {
+                delete[] PixelData;
+                PixelData = nullptr;
+            }
+            IsTextureDirty = false;
+        }
         InternalUpdate(pixel, pitch, rc.left, rc.top, rc.get_width(),
                        rc.get_height());
     }
 
     void *GetScanLineForWrite(tjs_uint l) override {
-        EnsureRawBackingFromVisual();
-        RawBackingDirty = true;
-        FreeVisualReadback();
-        return RawBackingData ? RawBackingData + l * RawBackingPitch : nullptr;
+        IsTextureDirty = true;
+        return (void *)GetScanLineForRead(l);
     }
 
     void SetPoint(int x, int y, tjs_uint32 clr) override {
         if(texture) {
-            EnsureRawBackingFromVisual();
-            CopyPixelRowsToRawBacking(&clr, TVPTextureFormat::RGBA, 4, x, y, 1,
-                                      1);
-            RawBackingDirty = true;
             SyncPixel();
             _glBindTexture2D(texture);
             // glBindTexture(GL_TEXTURE_2D, texture);
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
             glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, 1, 1, GL_RGBA,
                             GL_UNSIGNED_BYTE, &clr);
-            RawBackingDirty = false;
-            FreeVisualReadback();
         }
     }
 
     void SetSize(unsigned int w, unsigned int h) override {
         if(w > internalW || h > internalH) {
-            FreeVisualReadback();
-            FreeRawBacking();
+            if(PixelData) {
+                delete[] PixelData;
+                PixelData = nullptr;
+            }
             InternalInit(nullptr, power_of_two(w), power_of_two(h), 0);
-            EnsureRawBackingAllocated(true);
         }
         Width = w;
         Height = h;
@@ -2545,16 +2418,15 @@ bool tTVPOGLTexture2D::RestoreNormalSize() {
 }
 
 const void *tTVPOGLTexture2D::GetScanLineForRead(tjs_uint l) {
-    VisualReadbackCounter = 5;
+    PixelDataCounter = 5;
     if(_scaleW == 1.f && _scaleH == 1.f) {
-        if(!VisualReadbackData) {
-            VisualReadbackData = new unsigned char[internalW * internalH * 4];
+        if(!PixelData) {
+            PixelData = new unsigned char[internalW * internalH * 4];
 #ifdef _MSC_VER
             if(GL::glGetTextureImage) {
                 GL::glGetTextureImage(texture, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                                      internalH * internalW * 4,
-                                      VisualReadbackData);
-                return &VisualReadbackData[l * internalW * 4];
+                                      internalH * internalW * 4, PixelData);
+                return &PixelData[l * internalW * 4];
             }
 #endif
             TVPSetRenderTarget(texture);
@@ -2562,17 +2434,17 @@ const void *tTVPOGLTexture2D::GetScanLineForRead(tjs_uint l) {
             glPixelStorei(GL_PACK_ALIGNMENT,
                           4); // always dword aligned
             glReadPixels(0, 0, internalW, internalH, GL_RGBA, GL_UNSIGNED_BYTE,
-                         VisualReadbackData);
+                         PixelData);
         }
-        return &VisualReadbackData[l * internalW * 4];
+        return &PixelData[l * internalW * 4];
     } else {
-        if(!VisualReadbackData) {
+        if(!PixelData) {
             if(RestoreNormalSize())
                 return GetScanLineForRead(l); // route of 1:1 size
             return nullptr;
         }
         tjs_int w = internalW / _scaleW;
-        return &VisualReadbackData[l * w * 4];
+        return &PixelData[l * w * 4];
     }
 }
 
@@ -4681,7 +4553,6 @@ public:
         if(method->CustomProc &&
            method->CustomProc(method, tar, (tTVPOGLTexture2D *)reftar, &rctar,
                               textures)) {
-            tar->InvalidateVisualReadback();
             return;
         }
 
@@ -4778,7 +4649,6 @@ public:
         //}
         method->onFinish();
         CHECK_GL_ERROR_DEBUG();
-        tar->InvalidateVisualReadback();
         // #ifdef _DEBUG
         //         static bool check = false;
         //         if(check) {
@@ -4942,7 +4812,6 @@ public:
         glDrawArrays(GL_TRIANGLES, 0, ptcount);
         method->onFinish();
         CHECK_GL_ERROR_DEBUG();
-        tar->InvalidateVisualReadback();
         // #ifdef _DEBUG
         //         static bool check = false;
         //         if(check) {

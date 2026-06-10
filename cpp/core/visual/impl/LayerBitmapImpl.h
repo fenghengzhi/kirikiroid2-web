@@ -140,8 +140,6 @@ public:
     [[nodiscard]] const void *GetScanLine(tjs_uint l) const;
     void *GetScanLineForWrite(tjs_uint l);
     [[nodiscard]] tjs_int GetPitchBytes() const;
-    [[nodiscard]] const void *GetRawPixelDataNoSync() const;
-    [[nodiscard]] tjs_int GetRawPitchNoSync() const;
 
     /* object lifetime management */
     void Independ();

@@ -524,8 +524,6 @@ public:
         return BmpData + Pitch * l;
     }
     tjs_int GetPitch() const override { return Pitch; }
-    const void *GetRawPixelDataNoSync() const override { return BmpData; }
-    tjs_int GetRawPitchNoSync() const override { return Pitch; }
 
     cocos2d::Texture2D *
     GetAdapterTexture(cocos2d::Texture2D *origTex) override {
@@ -1091,111 +1089,11 @@ class tTVPSoftwareTexture2D : public tTVPSoftwareTexture2D_static {
                                : TVPTextureFormat::RGBA) {
         Bitmap = bmp;
         /*if (Bitmap)*/ Bitmap->AddRef();
-        AllocateRawBacking(true);
-        CopyPixelRowsToRawBacking(BmpData, Format, Pitch, 0, 0, Width, Height);
         _totalVMemSize += Pitch * Height;
     }
 
 public:
     tTVPBitmap *Bitmap;
-    tjs_uint8 *RawBackingData = nullptr;
-    tjs_int RawBackingPitch = 0;
-    size_t RawBackingSize = 0;
-
-    static int PixelSizeForFormat(TVPTextureFormat::e format) {
-        switch(format) {
-            case TVPTextureFormat::Gray:
-                return 1;
-            case TVPTextureFormat::RGB:
-                return 3;
-            case TVPTextureFormat::RGBA:
-                return 4;
-            default:
-                return static_cast<int>(format);
-        }
-    }
-
-    void FreeRawBacking() {
-        if(RawBackingData) {
-            TVPFreeBitmapBits(RawBackingData);
-            RawBackingData = nullptr;
-        }
-        RawBackingPitch = 0;
-        RawBackingSize = 0;
-    }
-
-    void AllocateRawBacking(bool clear) {
-        if(Pitch <= 0 || Height <= 0)
-            return;
-        size_t size = static_cast<size_t>(Pitch) * Height;
-        if(RawBackingData && RawBackingPitch == Pitch &&
-           RawBackingSize >= size)
-            return;
-        FreeRawBacking();
-        RawBackingPitch = Pitch;
-        RawBackingSize = size;
-        RawBackingData =
-            static_cast<tjs_uint8 *>(TVPAllocBitmapBits(size, Width, Height));
-        if(clear)
-            memset(RawBackingData, 0, size);
-    }
-
-    void CopyPixelRowsToRawBacking(const void *pixel,
-                                   TVPTextureFormat::e sourceFormat, int pitch,
-                                   int x, int y, int w, int h) {
-        if(!pixel || w <= 0 || h <= 0 || x < 0 || y < 0)
-            return;
-        AllocateRawBacking(true);
-        if(!RawBackingData)
-            return;
-
-        // Clip to the backing surface (mirror of the clip in
-        // RenderManager_ogl.cpp CopyPixelRowsToRawBacking). Callers can
-        // pass rects taller than the texture: krmovie pushes coded-size
-        // video frames (608 rows of an 800x600 h264, coded height rounded
-        // up to 16 by upstream GetPicture) through
-        // tTVPSoftwareTexture2D::Update, whose Bitmap memcpy clamps to
-        // Bitmap->GetHeight() but used to forward the unclamped rect
-        // height here, overrunning the Pitch*Height backing by 8 rows
-        // (~25KB) every frame and corrupting the dlmalloc chunk headers
-        // behind it.
-        {
-            int backingW = RawBackingPitch / PixelSizeForFormat(Format);
-            int backingH = (int)Height;
-            if(x >= backingW || y >= backingH)
-                return;
-            if(w > backingW - x)
-                w = backingW - x;
-            if(h > backingH - y)
-                h = backingH - y;
-        }
-
-        const auto *src = static_cast<const tjs_uint8 *>(pixel);
-        tjs_uint8 *dstBase =
-            RawBackingData + y * RawBackingPitch +
-            x * PixelSizeForFormat(Format);
-
-        if(sourceFormat == Format) {
-            size_t rowBytes =
-                static_cast<size_t>(w) * PixelSizeForFormat(Format);
-            for(int row = 0; row < h; ++row) {
-                memcpy(dstBase + row * RawBackingPitch, src + row * pitch,
-                       rowBytes);
-            }
-        } else if(Format == TVPTextureFormat::RGBA &&
-                  sourceFormat == TVPTextureFormat::RGB) {
-            for(int row = 0; row < h; ++row) {
-                const tjs_uint8 *srcRow = src + row * pitch;
-                tjs_uint8 *dstRow = dstBase + row * RawBackingPitch;
-                for(int col = 0; col < w; ++col) {
-                    dstRow[col * 4 + 0] = srcRow[col * 3 + 0];
-                    dstRow[col * 4 + 1] = srcRow[col * 3 + 1];
-                    dstRow[col * 4 + 2] = srcRow[col * 3 + 2];
-                    dstRow[col * 4 + 3] = 0xff;
-                }
-            }
-        }
-    }
 
     tTVPSoftwareTexture2D(const void *pixel, int pitch, unsigned int w,
                           unsigned int h, TVPTextureFormat::e format) :
@@ -1217,9 +1115,6 @@ public:
         Bitmap = new tTVPBitmap(w, h, BPP);
         Pitch = Bitmap->GetPitch();
         BmpData = (tjs_uint8 *)Bitmap->GetBits();
-        AllocateRawBacking(true);
-        if(pixel)
-            CopyPixelRowsToRawBacking(pixel, format, pitch, 0, 0, w, h);
 
         _totalVMemSize += Pitch * Height;
     }
@@ -1278,23 +1173,10 @@ public:
         }
         Pitch = Bitmap->GetPitch();
         BmpData = (tjs_uint8 *)Bitmap->GetBits();
-        AllocateRawBacking(true);
-        if(tex) {
-            const auto *raw =
-                static_cast<const tjs_uint8 *>(tex->GetRawPixelDataNoSync());
-            const auto rawPitch = tex->GetRawPitchNoSync();
-            if(raw && rawPitch > 0) {
-                CopyPixelRowsToRawBacking(
-                    raw, tex->GetFormat(), rawPitch, 0, 0,
-                    std::min<unsigned int>(w, tex->GetWidth()),
-                    std::min<unsigned int>(h, tex->GetHeight()));
-            }
-        }
         _totalVMemSize += Pitch * Height;
     }
     ~tTVPSoftwareTexture2D() override {
         _totalVMemSize -= Pitch * Height;
-        FreeRawBacking();
         if(Bitmap)
             Bitmap->Release();
     }
@@ -1323,8 +1205,6 @@ public:
             }
         }
         Bitmap->IsOpaque = false;
-        CopyPixelRowsToRawBacking(pixel, format, pitch, rc.left, rc.top,
-                                  rc.get_width(), rc.get_height());
     }
 
     uint32_t GetPoint(int x, int y) override {
@@ -1343,12 +1223,6 @@ public:
     }
     bool IsStatic() override { return false; }
     bool IsOpaque() override { return Bitmap->IsOpaque; }
-    const void *GetRawPixelDataNoSync() const override {
-        return RawBackingData;
-    }
-    tjs_int GetRawPitchNoSync() const override {
-        return RawBackingData ? RawBackingPitch : 0;
-    }
     void *GetScanLineForWrite(tjs_uint l) override {
         Bitmap->IsOpaque = false;
         return (void *)GetScanLineForRead(l);

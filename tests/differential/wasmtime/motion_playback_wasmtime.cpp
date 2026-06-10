@@ -2125,16 +2125,20 @@ void motionTraceLayerRawProbeNative(Player *player, const void *nativeLayer,
     const int frameId = renderFrameIdFor(player);
     if(!captureFrameEnabled(frameId)) return;
 
-    const auto *layer =
-        static_cast<const tTJSNI_BaseLayer *>(nativeLayer);
-    const auto *mainImage = layer->GetMainImageRawBackingNoSync();
+    // Mirror of the Android oracle's frida agent sampling: the agent reads
+    // mainImage via the binary's tTVPNativeBaseBitmap::GetScanLine (live
+    // bitmap). GetMainImagePixelBuffer()/GetMainImagePixelBufferPitch() are
+    // the upstream accessors over exactly that path (GetScanLine(0) /
+    // GetPitchBytes).
+    auto *layer = const_cast<tTJSNI_BaseLayer *>(
+        static_cast<const tTJSNI_BaseLayer *>(nativeLayer));
+    const auto *mainImage = layer->GetMainImage();
     const auto *bitmapImpl = mainImage ? mainImage->GetTexture() : nullptr;
     const int width = mainImage ? static_cast<int>(mainImage->GetWidth()) : 0;
     const int height = mainImage ? static_cast<int>(mainImage->GetHeight()) : 0;
-    const int pitch = static_cast<int>(
-        layer->GetMainImageRawPixelBufferPitchNoSync());
+    const int pitch = static_cast<int>(layer->GetMainImagePixelBufferPitch());
     const auto *pixels = static_cast<const unsigned char *>(
-        layer->GetMainImageRawPixelBufferNoSync());
+        layer->GetMainImagePixelBuffer());
     if(!mainImage || width <= 0 || height <= 0) {
         appendLayerRawProbeEvent(
             player, samplePoint, layer, false,
