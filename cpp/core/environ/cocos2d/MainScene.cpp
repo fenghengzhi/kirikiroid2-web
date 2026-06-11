@@ -2243,8 +2243,15 @@ void TVPMainScene::onFrameSizeChanged() {
     }
 }
 
+#ifdef __EMSCRIPTEN__
+// 平台边界（Web）：主线程 vsync 锁相 tick 的每帧更新，
+// 详见 cpp/core/environ/web/Platform.cpp 的 TVPGetRoughTickCount32 注释
+void TVPWebFrameTickUpdate();
+#endif
+
 void TVPMainScene::update(float delta) {
 #ifdef __EMSCRIPTEN__
+    TVPWebFrameTickUpdate();
     int canvasW, canvasH;
     emscripten_get_canvas_element_size("#canvas", &canvasW, &canvasH);
     if(canvasW != static_cast<int>(_lastFrameSize.width) ||

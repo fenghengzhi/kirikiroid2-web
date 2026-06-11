@@ -32,7 +32,16 @@ static DWORD TVPCheckTickOverflow() {
         tTJSCriticalSectionHolder holder(TVPTickWatchCS);
 
         curtick = TVPGetRoughTickCount32();
+#ifdef __EMSCRIPTEN__
+        // 平台边界（Web）：主线程返回 vsync 锁相 tick、worker 返回原始时钟
+        // （见 cpp/core/environ/web/Platform.cpp），两时钟域相差 ±数 ms，
+        // 跨线程交错调用会观察到毫秒级回退；仅当回退幅度达 2^31 才判定为
+        // 真 32bit 溢出，避免把时钟域偏差当成 wrap（bias 误加 49.7 天）。
+        if(curtick < TVPWatchLastTick &&
+           (TVPWatchLastTick - curtick) > 0x80000000UL) {
+#else
         if(curtick < TVPWatchLastTick) {
+#endif
             // timeGetTime() was overflowed
             TVPTickCountBias += 0x100000000L; // add 1<<32
         }

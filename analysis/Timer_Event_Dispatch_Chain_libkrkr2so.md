@@ -214,3 +214,45 @@ pthread_mutex_unlock;
    - `onDrawFrame`（GLSurfaceView 每 vsync 回调）: `if (sAnimationInterval <= 1.66667e7 /*ns=1/60s*/) { nativeRender(); return; } else { 不足则 Thread.sleep 补齐再渲染 }`。
    - 1/60 设置恰好 ≤ 阈值 → 走**无节流分支**：每个 vsync 回调渲染一帧。该阈值 1.66667e7ns 本身就是上游 cocos2d-x 内嵌的"系统默认每秒回调 60 次"假设。
 4. **结论**：60Hz 假设不在引擎核心，而在帧泵配置（1/60 字面量）+ Java 渲染器阈值 + 2018 年代设备生态（全 60Hz vsync）。若 kirikiroid2 跑在 120Hz Android 上，onDrawFrame 同样会跑 120fps（阈值判定不节流），与 Web 120Hz RAF 处境相同。法娘 ActionManager 的 interval=16(ms) 是游戏脚本层最强的 60Hz 整拍假设（每帧恰好一拍）。
+
+---
+
+## 补充（2026-06-11 第二轮）：FrameScan 修后残留抖动的根因与 vsync 锁相 tick
+
+FrameScan shim（commit 3d06d30）修后仍残留 ~3-8% 的双帧步 + 偶发 in-fade 停顿。
+用 carousel3kag fixture（reference/xp3/）+ readPixels 帧哈希 + EM_ASM 探针
+（SetInterval/FrameScan fire/Proc fire 时间线推 globalThis._timerDiag）钉死：
+
+1. **归因（120Hz 屏实测，150s）**：106 个晚步异常中 96 个 = ActionManager
+   `tick - lasttick >= interval(16)` 整数毫秒门跳拍（探针直击 `timer.interval=1`
+   分支被执行，onTimer 到达时刻距 lasttick 仅 14/15 整数毫秒）；8 个 = 13ms
+   重锚到期错过下帧扫描；渲染滑帧仅 2。
+2. **根因是时钟采样抖动，不是派发链**：ActionManager 的门依赖
+   "逐帧采样 System.getTickCount 得到均匀时间步"。Android 上 Choreographer
+   回调执行时刻对 vsync 栅格抖动 ±0.2ms → delta 恒 ≥16.47 → 永不跳拍。
+   浏览器 RAF 时间戳本身对理想栅格残差 p95=1.17ms（实测），回调内脚本执行
+   时刻再叠 ±0.6ms 派发抖动，而门的裕量只有 16.67-16=0.67ms → 4.2% 跳拍。
+   135/347 个跳拍直接发生在"帧间距收缩到 15ms"的抖动帧上。
+3. **修复（平台边界 shim，web 分支）**：主线程 vsync 锁相 tick——
+   `TVPGetRoughTickCount32`（cpp/core/environ/web/Platform.cpp）主线程路径
+   返回软件锁相环输出的均匀帧栅格 tick；PLL 每帧由 `TVPWebFrameTickUpdate`
+   （TVPMainScene::update 帧首调用）用 RAF 时间戳驱动（period EWMA + 相位
+   10% 慢跟踪 + 失锁重同步）。Worker 线程（计时线程）不受影响仍读
+   CLOCK_MONOTONIC。RAF 停摆（模态自旋循环/标签页隐藏）>50ms 自动回退
+   原始时钟。配套：TickCount.cpp 的 32bit wrap 误判防护（两时钟域 ±数 ms
+   偏差不得触发 bias +2^32，阈值 2^31）。
+4. **实现陷阱（已踩）**：本机 emscripten 的 CLOCK_MONOTONIC/emscripten_get_now
+   是 timeOrigin 绝对毫秒（~1.78e12）而 RAF 时间戳是页面相对毫秒；
+   double→uint32 在 wasm 是 trunc_sat（超范围饱和成 0xFFFFFFFF）而非
+   mod 2^32 回卷——首版直接 (uint32)double 把主线程 tick 永久钉死在
+   0xFFFFFFFF，全部 timer 不再到期（白屏）。修正：PLL 统一在绝对域运行
+   （rafT + performance.timeOrigin），double→uint32 一律经 uint64 中转。
+5. **效果（120Hz，164s 稳态）**：标称步 93.3%→98.5%（晚步/3帧+ 步=0，余
+   1.5% 为 1 帧多余变化非停顿）；步长 std 3.04→0.80ms；gate 跳拍
+   347→5/150s；update 间距 99.86% 恰好 2 帧（mean 16.67ms）；in-fade
+   停顿（≥3帧）51 次/211s→**0**。
+6. **可观察行为对齐论证**：Android 的 tick 时钟连续（@0xA2BF90），但引擎
+   对它的每帧采样时刻被 Choreographer 锁在 vsync 栅格上——"逐帧采样值 =
+   均匀栅格"才是脚本可观察的行为。Web 锁相 tick 复刻的正是这一可观察
+   性质；牺牲的是帧内多次采样的亚毫秒分辨率（Android 上脚本帧内连读
+   会看到 +0.x ms 推进，Web 锁相后帧内恒值），KAG/ActionManager 无此依赖。

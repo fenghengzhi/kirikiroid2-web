@@ -18,6 +18,8 @@
 #include <spdlog/spdlog.h>
 #include <emscripten.h>
 #include <emscripten/html5.h>
+#include <emscripten/threading.h>
+#include <cmath>
 
 #include "EventIntf.h"
 #include "StorageIntf.h"
@@ -250,11 +252,118 @@ bool TVP_stat(const tjs_char *name, tTVP_stat &s) {
     return TVP_stat(ttstr{name}.AsStdString().c_str(), s);
 }
 
-tjs_uint32 TVPGetRoughTickCount32() {
+// ===== 平台边界（Web）：主线程 vsync 锁相 tick =====
+// libkrkr2.so 的 TVPGetRoughTickCount32 @0xA2BF90 = steady_clock 毫秒
+// (CLOCK_MONOTONIC)，主循环由 Choreographer 驱动：引擎主线程对该时钟的逐帧
+// 采样时刻精确落在 vsync 栅格上（执行时刻对栅格抖动 ±0.2ms），因此脚本层
+// 逐帧读 System.getTickCount 得到严格均匀的时间步。法娘 ActionManager 的
+// `tick - lasttick >= interval` 整数毫秒门依赖该性质（13ms 重锚 vs 16ms 门，
+// 裕量仅 0.67ms）。浏览器上 RAF 时间戳本身对 vsync 栅格抖动 ±1-2ms（实测
+// 栅格残差 p95=1.17ms），回调执行时刻再叠加派发延迟抖动 ±0.6ms；主线程若
+// 直接读 CLOCK_MONOTONIC，抖动会暴露给脚本，造成整数毫秒门偶发跳拍
+// （实测 4.2% → 渐变 25ms 视觉跳步）与 timer 重锚相位漂移。Web 无法获得
+// Android 级的回调时刻精度，故复刻其可观察行为：主线程 tick 在帧内冻结为
+// "锁相后的帧栅格时刻"——每帧用 RAF 时间戳驱动软件锁相环，输出均匀单调的
+// 栅格 tick（= Choreographer 采样的等价物）。Worker 线程（计时线程
+// tTVPTimerThread::Execute 等）不受影响，仍读原始时钟。RAF 停摆（模态
+// 自旋循环 / 标签页隐藏）超过 50ms 自动回退原始时钟。
+// 调查记录见 analysis/Timer_Event_Dispatch_Chain_libkrkr2so.md。
+static double TVPWebSnapTick = -1; // 当前帧锁相 tick（仅主线程读写）
+static double TVPWebSnapPeriod = 0; // 锁相周期估计（帧栅格间距 ms）
+static double TVPWebSnapUpdRaw = -1; // 上次锁相更新时的原始时钟（停摆检测）
+static double TVPWebLastRafT = -1; // 上一帧 RAF 时间戳
+static tjs_uint32 TVPWebMainLastTick = 0; // 主线程返回值单调护栏
+
+// 注意：本机 emscripten 的 CLOCK_MONOTONIC 是 timeOrigin 绝对毫秒（~1.78e12），
+// RAF 时间戳是页面相对毫秒——锁相环统一在绝对域运行（rafT + performance.timeOrigin）。
+// double→tjs_uint32 必须经 uint64 中转：wasm 的 trunc_sat 会把超出 uint32 范围的
+// double 饱和成 0xFFFFFFFF，而引擎语义是 mod 2^32 回卷（原整数算术行为）。
+static inline double TVPWebRawNowMS() {
     struct timespec ts;
     if(clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
-        return static_cast<tjs_uint32>(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+        return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
     return 0;
+}
+
+static inline tjs_uint32 TVPWebMSToTick32(double ms) {
+    return static_cast<tjs_uint32>(static_cast<tjs_uint64>(ms));
+}
+
+// 每帧帧首由 TVPMainScene::update（cocos RAF 回调内）调用
+void TVPWebFrameTickUpdate() {
+    // 首次调用时包裹 window.requestAnimationFrame 以捕获 vsync 对齐的
+    // RAF 时间戳（emscripten/cocos 主循环每帧重新注册 RAF，下一帧起生效）
+    double t = EM_ASM_DOUBLE({
+        if(!globalThis.__tvpRafWrapped) {
+            globalThis.__tvpRafWrapped = 1;
+            globalThis.__tvpRafT = -1;
+            var orig = window.requestAnimationFrame.bind(window);
+            window.requestAnimationFrame = function(cb) {
+                return orig(function(ts) {
+                    globalThis.__tvpRafT = ts;
+                    cb(ts);
+                });
+            };
+        }
+        // 换算到绝对时钟域（与 CLOCK_MONOTONIC/emscripten_get_now 一致）
+        return globalThis.__tvpRafT < 0
+            ? -1
+            : globalThis.__tvpRafT + performance.timeOrigin;
+    });
+    TVPWebSnapUpdRaw = TVPWebRawNowMS();
+    if(t < 0 || t == TVPWebLastRafT)
+        return;
+    double prev = TVPWebLastRafT;
+    TVPWebLastRafT = t;
+    if(prev < 0)
+        return;
+    double d = t - prev;
+    if(d < 2 || d > 250) {
+        // 离群帧间隔（标签页恢复 / 长卡顿）：丢弃锁相状态重新同步
+        TVPWebSnapTick = -1;
+        TVPWebSnapPeriod = 0;
+        return;
+    }
+    if(TVPWebSnapPeriod <= 0 || TVPWebSnapTick < 0) {
+        TVPWebSnapPeriod = d;
+        TVPWebSnapTick = t;
+        return;
+    }
+    double n = floor(d / TVPWebSnapPeriod + 0.5);
+    if(n < 1)
+        n = 1;
+    double slot = d / n;
+    if(fabs(slot - TVPWebSnapPeriod) < TVPWebSnapPeriod * 0.25)
+        TVPWebSnapPeriod += 0.05 * (slot - TVPWebSnapPeriod);
+    double pred = TVPWebSnapTick + n * TVPWebSnapPeriod;
+    double err = t - pred;
+    if(fabs(err) <= 2.5)
+        pred += err * 0.1; // 栅格内：慢相位跟踪，滤除 ±1-2ms 时间戳抖动
+    else
+        pred = t; // 失锁：重同步到当前时间戳
+    if(pred <= TVPWebSnapTick)
+        pred = TVPWebSnapTick + 0.01; // 单调
+    TVPWebSnapTick = pred;
+}
+
+tjs_uint32 TVPGetRoughTickCount32() {
+    double raw = TVPWebRawNowMS();
+    if(emscripten_is_main_runtime_thread()) {
+        tjs_uint32 r;
+        if(TVPWebSnapTick >= 0 && raw - TVPWebSnapUpdRaw <= 50.0) {
+            r = TVPWebMSToTick32(TVPWebSnapTick);
+        } else {
+            // 启动期 / RAF 停摆：原始时钟
+            r = TVPWebMSToTick32(raw);
+        }
+        // 锁相域与原始域相差 ±数 ms，切换时钳制保证主线程单调；
+        // 回退幅度达 2^31 视为 mod 2^32 真回卷，放行（TickCount.cpp 补偿）
+        if(r < TVPWebMainLastTick && (TVPWebMainLastTick - r) < 0x80000000UL)
+            r = TVPWebMainLastTick;
+        TVPWebMainLastTick = r;
+        return r;
+    }
+    return TVPWebMSToTick32(raw);
 }
 
 void TVPExitApplication(int code) {
