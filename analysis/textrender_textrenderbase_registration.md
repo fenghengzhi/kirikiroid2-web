@@ -50,7 +50,13 @@ NCB 类描述 vtable `off_1A0B970`（字节已核实）：
 
 ## 2. 完整成员注册表
 
-注册顺序即下表（17 方法 + 33 属性 = 50）。`Process Fn` = method 唯一处理函数；property 列出 getter/setter。RW = 读写，RO = 只读。
+注册顺序即下表（**1 构造器 + 16 方法** + 33 属性 = 50；旧"17 方法"计法把构造器混入方法，已更正——构造器也是 method-tag 成员，但语义是 TJS `new` 入口）。`Process Fn` = method 唯一处理函数；property 列出 getter/setter。RW = 读写，RO = 只读。
+
+### 构造器 (method-tag=1, flags=0/objectMember)
+
+| 名称 | Process 函数 | 备注 |
+|---|---|---|
+| (constructor) | TextRenderBase_ncb_constructor @0x59D160 | TJS `new` 时立即 `*slot = operator new(0x250); TextRenderBase_ctor(obj, objthis)`——**非惰性创建**。真 ctor = 0x5A111C（默认值群见 §3b-0） |
 
 ### 方法 (method, tag=1, flags=0/objectMember)
 
@@ -68,7 +74,7 @@ NCB 类描述 vtable `off_1A0B970`（字节已核实）：
 | newline | 0x59FECC | off_1A0BD28 | 强制换行 |
 | done | 0x59FEE4 | off_1A0BD28 | 终结布局：align 偏移、计算行 AABB、生成排序索引 |
 | onEval | 0x5A0294 | off_1A0BF68 | result.type=0；调 TJS eval sub_8E3FA4(arg, this) |
-| getKeyWait | 0x5A02DC | off_1A0C088 | 返回 TJS Array of {pos,time}，源自列表 +480/+488 (4B 元素) |
+| getKeyWait | 0x5A02DC | off_1A0C088 | 返回 TJS Array of {pos,time}，源自列表 +480/+488 (8B 双 int 元素，见 §9.2) |
 | calcLineOffset | 0x5A05FC | off_1A0C1A8 | (int lineIdx) → float；读行列表 +432 (stride 112, field+80) |
 | calcShowCount | 0x5A0644 | off_1A0C2C8 | (int width) → 可显示字符数；倒序扫字符列表 +296 |
 | getCharacters | 0x5A0694 | off_1A0C3E8 | (int start, int count) → TJS Array of per-char dict (text/x/y/cw/size/face/color/bold/italic/shadow/edge/shadowColor/shadowDiff/edgeColor/ruby/vertical/delay) |
@@ -122,7 +128,8 @@ NCB 有**两层对象**，勿混淆：
 ```c
 obj = new(0x18);             // 24 字节
 obj[0]  = off_1A0B990;       // NCB 实例 vtable
-obj[8]  = 0;                 // → 指向真正的 TextRenderBase C++ 对象（惰性创建）
+obj[8]  = 0;                 // → 指向真正的 TextRenderBase C++ 对象
+                             //   （由构造器成员 0x59D160 在 TJS new 时立即填入，非惰性——旧"惰性创建"已证伪）
 obj[16] = 0;                 // bool: 是否外部持有(不 delete)
 ```
 NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_nativeInstance_dtor@0x5A6A94, 0x5242B4]`。
@@ -145,7 +152,7 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 | +100/+104 | int | defaultAlign / defaultValign (setDefault) |
 | +108/+112 | int | / kinsoku_max(112，setOption；**bool-coerce 写 DWORD，存 0/1 非整数值**) |
 | +116..+184 | float×N | 当前样式 fontsize(116)/rubysize(128)/**rubyoffset-cur(132，setFont L"rubyoffset")**/linespacing-cur(136，setStyle)/pitch-cur(140，setStyle)/linesize-cur(144，setStyle)/default fontsize(148)/big(152)/small(156)/rubysize(160)/rubyoffset(164)/linespacing(168)/pitch(172)/linesize(176)/timeScale(180)/fontScale(184)/renderDelay accum(188) |
-| +192/+196 | float/int | render width / current x cursor |
+| +192/+196 | float | charDelayStep（每字 renderPos 步进；ctor=1.0f，render 入口=(float)a4，clear STUR 8B 连 +188 一起清零）/ lineStartX（行首 X） |
 | +200/+204/+208/+212 | u32 | cur chColor / shadowColor / shadowDiff / edgeColor |
 | +216/+220/+224/+228 | u32 | default chColor / shadowColor / shadowDiff / edgeColor |
 | +232/+236 | int | x-pen (horiz/vert) |
@@ -153,17 +160,44 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 | +248/+252/+256/+260 | float | renderLeft / renderTop / renderRight / renderBottom (bbox) |
 | +280/+288 | int | misc state |
 | +296 / +304 | ptr | **char 列表** std::vector<charItem*> begin/end (8B 元素=指针；charItem = 80B POD，字段表见 §3b-1) |
-| +320 / +328 / +336 / +344 / +352 / +360 / +368 / +376 / +384 / +392 | ptr×8 | **pending-char std::deque<charItem>**（行内禁则/kinsoku 重排缓冲）控制块，元素表见 §3b-2。+320 起即 sub_5A4A7C 的 `v4=a1+320` deque this |
-| +408/+416 | int | vert pen aux |
-| +424 | int | 行内 pending char 计数（kinsoku trailing run；sub_5A4A7C `*(a1+424)` 倒扫上界） |
-| +432 / +440 | ptr | **行列表** std::vector<lineItem> begin/end (**stride 112**；lineItem +22..+25 bbox floats,+80 offset float,+88/+96 ruby sub-vec) |
+| +320..+431 | **Line（112B 嵌套结构体）** | **pending 行缓冲，与 lineList 元素同型**（2026-06-11 确证，D2 修复依据）。+320..+399 = std::deque<charItem> 80B 控制块（行内禁则/kinsoku 重排缓冲，元素表见 §3b-2；+320 即 sub_5A4A7C 的 `v4=a1+320` deque this）；+400..+428 = 行 metric 内嵌字段（相对 +80..+108）：+400 lineBottom / +404 lineHeight / +408 bboxLeft / +412 bboxTop / +416 bboxRight / +420 bboxBottom / +424 wordBreakRun(int) / +428 prevWasSpace(bool)。同型三重证据：① Line::clear @0x5A1E68 取 +320 指针、deque 清空后零化相对 +80..+108（STR XZR,[X19,#0x50]+STP XZR,XZR,[X19,#0x58]+STUR XZR,[X19,#0x65]）；② finishLine push（0x5a3758/0x5a3768）与扩容 sub_5A43E8（0x5a44a8/0x5a44b0）都拷 a2+80/a2+93 两 OWORD（=+80..+108 全范围）入 lineItem+80/+93；③ Line dtor @0x5A1B24 同为 pending 行与 lineList 元素析构 |
+| +432 / +440 | ptr | **行列表** std::vector<Line> begin/end (**stride 112**；元素与 pending Line(+320) 同型：+0..+79 嵌套 deque<charItem>、+80..+108 metric 含 +104 wordBreakRun/+108 prevWasSpace；done 读 bbox float[22..25]、calcLineOffset 读 +80) |
 | +456 / +464 / (+472) | ptr | **face 表** std::vector<tTJSVariant*> begin/end/cap (8B 元素；index→face ttstr) |
-| +480 / +488 / +496 | ptr | **keyWait 列表** std::vector<int> begin/end/cap (4B 元素 = pos) |
+| +480 / +488 / +496 | ptr | **keyWait 列表** std::vector begin/end/cap (8B 双 int 元素 {index,time}，见 §9.2；纠正旧 "4B 元素=pos") |
 | +504 / +512 | ptr | (内部 buffer，clear 时 reset) |
 | +528 | tTJSVariant* | 当前 face ttstr (cache) |
 | +536 / +544 / +552 / +560 / (+584 inline) | — | **face hash 表** (resolveFaceIndex 用：bucket array @536, count @544, list head @552, size @560, inline buckets @584；hash 链表节点 {next, ttstr*, idx}) |
 
-无显式独立 ctor 被命名；真对象由 NCB method 首次调用时惰性 `new` 并存入 NCB 包装 obj+8。**基类**：tTJSVariant-style refcount base（sub_9F6D2C 初始化），无 KiriKiri Layer 继承——它是独立文本布局引擎，不是 Layer 子类。
+**真 ctor = `TextRenderBase_ctor` @0x5A111C**（旧"无显式独立 ctor/惰性创建"已证伪——构造器成员 `TextRenderBase_ncb_constructor` @0x59D160 在 TJS `new` 时立即 `operator new(0x250)` + ctor 并存入 NCB 包装 obj+8）。默认值群见 §3b-0。**基类**：tTJSVariant-style refcount base（sub_9F6D2C 初始化——注：0x5A111C 首句 `+0=objthis` 直接覆写，回指 dispatch），无 KiriKiri Layer 继承——它是独立文本布局引擎，不是 Layer 子类。
+
+### 3b-0. ctor 默认值群（TextRenderBase_ctor @0x5A111C，C1 偏差修复依据）
+
+| 偏移/字段 | ctor 默认值 | 二进制证据 |
+|---|---|---|
+| +0 | = objthis（dispatch 回指） | `*(QWORD*)a1 = a2`（平台边界：本地 ncbInstanceAdaptor 不持有） |
+| +8 following | 内置禁则集（68 码点）`%),:;]}。，、．：；゛゜ヽヾゝゞ々’”）〕］｝〉》」』】°′″℃￠％‰<U+3000>!.?・？！ーぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ` | ttstr_createFromWide(0x14C9DF8) |
+| +16 leading | 内置禁则集（19 码点）`\$([{‘“（〔［｛〈《「『【￥＄￡` | ttstr_createFromWide(0x14C9E82) |
+| +24 begin | 开括平衡集（10 码点）`「『（‘“〔［｛〈《` | ttstr_createFromWide(0x14C9EAA) |
+| +32 end | 闭括平衡集（10 码点）`」』）’”〕］｝〉》` | ttstr_createFromWide(0x14C9EC0) |
+| +40 renderText | null | `*(QWORD*)(a1+40)=0` |
+| +48/+49 | vertical=0、word_break=**1** | `WORD+48 = 0x0100` |
+| +50..+59 | ignore* / width_time_scale 全 0 | `QWORD+50=0`、`WORD+58=0` |
+| +61 | 0（未识别 byte） | `BYTE+61=0` |
+| +66..+69 | defaultBold=0、defaultShadow=**1**、defaultEdge=0、defaultItalic=0 | `BYTE+66=0`、`WORD+67=1`、`BYTE+69=0` |
+| +100/+104 | defaultAlign=**-1**、defaultValign=**-1** | `QWORD+100 = -1` |
+| +112 kinsoku_max | **1** | `QWORD+112 = 0xBF80000000000001` 低 32 位 |
+| +116 curFontSize | **-1.0f**（脏哨兵，保证首次 resetFont 组复位触发） | 同上高 32 位 = 0xBF800000 |
+| +128 curRubySize | **-1.0f**（脏哨兵） | `DWORD+128 = 0xBF800000` |
+| +148/+152 | defaultFontSize=24、defaultBigFontSize=**48** | `QWORD+148 = 0x4240000041C00000` |
+| +156..+168 | defaultSmall=**12**、defaultRubySize=**10**、defaultRubyOffset=**-2**、defaultLineSpacing=**6** | `OWORD+156 = xmmword_14C95D0 = (12,10,-2,6)f` |
+| +172..+184 | defaultPitch=0、defaultLineSize=**24**、timeScale=1、fontScale=1 | `OWORD+172 = xmmword_14C95E0 = (0,24,1,1)f` |
+| +192 charDelayStep | **1.0f** | `DWORD+192 = 0x3F800000` |
+| +216..+228 | defaultChColor=**0xFFFFFFFF**、defaultShadowColor=**0xFF000000**、defaultShadowDiff=**1**、defaultEdgeColor=**0xFF0080FF** | `OWORD+216 = xmmword_14C95F0` |
+| +240/+244 | renderSize w/h = 0 | `QWORD+240 = 0` |
+| +296..+399 / +432..+535 | 容器区清零（charList、pending deque 控制块、lineList、faceTable、keyWaitList、buffer、+528） | `memset(+296,0,0x68)` + dequeInit(+320) + `memset(+432,0,0x68)` |
+| +536..+584 faceHash | 空表，bucket hint = `_M_next_bkt(0xA)` | 0x5a125c |
+| +96 defaultFaceIndex | = resolveFaceIndex(L"normal")（intern "normal" 进 faceHash，恒 0） | 0x5a12a4..0x5a12b4 |
+| 其余（+60、+62..+65、+72..+92、+108、+400..+431 等） | **不初始化**（依赖随后 setRenderSize→clear；本地零值初始化是安全加固，可保留） | ctor 无对应 store |
 
 ### 3b-1. charItem POD（80 字节）
 
@@ -180,7 +214,7 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 | +28 | u32 | chColor | appendChar `v51=*(a1+200)` |
 | +32 | u32 | shadowColor | appendChar `v52=*(a1+204)` |
 | +36 | u32 | edgeColor | appendChar `v53=*(a1+212)` |
-| +40 | u8 | rubyFlag（构造置 0） | appendChar `v54=0` |
+| +40 | u8 | graph（构造置 0；脚本面真名经 getCharacters dict 首字段 L"graph" @0x5a081c 确认，串 @0x14CA19A） | appendChar `v54=0` |
 | +41 | u8 | bold | appendChar `v55=*(a1+62)` |
 | +42 | u8 | italic | appendChar `v56=*(a1+65)` |
 | +43 | u8 | shadow | appendChar `v57=*(a1+63)` |
@@ -193,7 +227,7 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 > **纠正**：旧 §3b 注释（“+40 text ttstr,+41 bold...,+8 x,+16 cw,+24 lineY,+28 color”）字段错位（text 实际在 +0 不在 +40，缺 renderPos/edgeColor/shadowDiff/faceIndex 准确位置），已被上表替换。证据为 sub_5A4838/sub_5A3880/sub_5A4A7C 三处反编译交叉确认。
 > char 列表（真对象 +296/+304）元素是 charItem* 指针（8B/elem），堆上 80B charItem 由落字路径 new。
 
-### 3b-2. pending-char std::deque<charItem>（真对象 +320，元素 80B）
+### 3b-2. pending Line 的嵌套 std::deque<charItem>（真对象 +320，元素 80B；= Line::chars，Line 整体见 §3b 表 +320..+431 行）
 
 证据：`sub_5A4A7C`@0x5A4A7C（kinsoku 重排主体，`v4=a1+320`）；node push `sub_5A57CC`@0x5A57CC（`operator new(0x1E0)`=480B node=6×80B）；元素析构 `sub_5A5760`@0x5A5760（释放 +0 ttstr + +56 ruby vec + operator delete）；临时 deque init `sub_5A15B0`@0x5A15B0；deque 析构 `sub_5A1B24`（TextRenderBase_dtor 对 +320 调用）。
 
@@ -237,7 +271,8 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 ## 5. 本地 cpp 骨架实现要点
 
 - 类名 `TextRenderBase`，注册到模块 `TextRender.dll`（NCB），全部成员 objectMember(flags=0)。
-- 17 个 `NCB_METHOD*`：setOption,setDefault,setRenderSize,clear,resetFont,resetStyle,setFont,setStyle,render,newline,done,onEval,getKeyWait,calcLineOffset,calcShowCount,getCharacters。
+- 1 个 `NCB_CONSTRUCTOR(())`（对应二进制构造器成员 0x59D160，TJS new 时立即建真对象）+ 16 个 `NCB_METHOD*`：setOption,setDefault,setRenderSize,clear,resetFont,resetStyle,setFont,setStyle,render,newline,done,onEval,getKeyWait,calcLineOffset,calcShowCount,getCharacters。
+- 默认构造函数复刻 0x5A111C 默认值群（§3b-0）：标量用字段初始化器、4 禁则集 + faceHash(10) + resolveFaceIndex(L"normal") 在 ctor 体。
 - 22 个 `NCB_PROPERTY(RW)` + 11 个 `NCB_PROPERTY_RO`（render*/maxScroll* 全 RO，见表 §2）。
 - numparams：render≥3；getCharacters=2；calcLineOffset=1；calcShowCount=1；setFont/setStyle/setDefault/setOption=1(dict)；setRenderSize=2；clear/resetFont/resetStyle/newline/done/onEval/getKeyWait=0~1。
 - 后备字段按 §3b 表落到 C++ 成员（用语义字段名，勿硬凑 ARM64 偏移——偏移仅供本文档对照）。
@@ -264,7 +299,7 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 - `TextRenderBase_measureTextWidth` @0x5A426C（字宽度量回调，FuncCall L"onGetTextWidth"）
 - `TextRenderBase_lineItem_copyFromPending` @0x5A4588（lineItem 拷贝构造：pending deque→lineItem 嵌套 deque + metric）
 - `TextRenderBase_deque_copyElems` @0x5A46C0（deque<charItem> 逐元素拷贝）
-- `TextRenderBase_pendingDeque_clear` @0x5A1E68（pending deque clear：释元素保控制块）
+- `TextRenderBase_pendingLine_clear` @0x5A1E68（**2026-06-11 由 pendingDeque_clear 改名**：实为 Line::clear——deque 清空（释元素保控制块）+ 零化相对 +80..+108 全部行 metric/wordBreakRun/prevWasSpace）
 - `TextRenderBase_charList_insertionSortByRenderPos` @0x5A5C34（done 末尾 charList 按 char+24 renderPos 排序）
 - `TextRenderBase_deque_pushFrontNode` @0x5A5548（临时 deque 头部追加 node）
 - `wcscmp_utf16` @0x9B1ED0（UTF-16 wcscmp，kinsoku word_break 空格检测用）
@@ -281,7 +316,7 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 
 ### 7.2 appendChar @0x5A3880
 1. push 字符(UTF-16)到内部累积 buffer（+504/+512，2B 元素 vector）。
-2. `--*(a1+88)`（组合字符倒计数）：`>=0` → 仅累积 return 1；buffer 长度 != 2（非单字符）→ return 0。
+2. 组合字符倒计数（0x5a3970..0x5a3984）：`v21 = *(a1+88) - 1; if(v21 >= 0){ *(a1+88) = v21; return 1; }` —— **先算后条件回写**，v21 为负不回写（+88 永不为负，非无条件 `--`）；buffer 长度 != 2（非单字符）→ return 0。
 3. 恰好 1 字符且计数耗尽：度量 cw → 构造 charItem 蓝图（v48..v64，§3b-1）→ ruby 处理 → 清 buffer → `sub_5A4A7C` 落字。
 - **ruby**（!vertical 且 +528 有 ruby 文本）：度量 ruby cw → push RubyItem{x=cw/2-rubyCw/2, y=-(rubySize·fontScale)-rubyOffset, span=rubySize·fontScale, text} → 释放 +528 → 更新 ruby bbox(+264 left/+268 top/+272 right)。无 ruby(horizontal) → 仅 +268=min(+268,penY)。vertical → 跳过 ruby 段。ruby bbox(+264/+268/+272) clear 不初始化、finishLine/done 不消费 → **dead-but-faithful**（消费者可能在批4 属性/render，标注）。
 
@@ -296,7 +331,7 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 - placeChar(LABEL_10)：char.x=penX；char.y=horizontal?penY-size:penY；char.renderPos=renderPos(始终)，delayAccum=max(delayAccum,renderPos)（**char.renderPos 不取 max，仅 delayAccum 取**）；push 到 pending deque；!word_break→更新 wordbreak state(+428 prevSpace/+424 run)；推进 renderPos（width_time_scale?rate·cw/size:charDelayStep+192）+pen（penX+=cw;penX=pitch+penX / 竖排 penY+=size;penY=pitch+penY）+行 bbox(+416/+420)。
 
 ### 7.4 finishLine @0x5A34B8（去 _guess）
-横排(!vertical)：① 行高 v11=max(行内 max char.size, curLineSize+144) ② over 检测(renderSizeH < v11+penY → renderOver=1，!ignore_over→清 pending return 0) ③ align 偏移 v14(curAlign+76：1→right=W-penX，0→center=(W-penX)/2，其它→0) ④ align 缩进：v14≠0 时按全角空格(0x3000)宽填充行首到 renderText ⑤ 落字到行：每 char.x+=v14、char.y=v11+char.y、拼接 char.text 到 renderText ⑥ 写行 metric(+400/+404/+408/+416)、penY+=v11 ⑦ push lineItem(pending deque 整体拷入 + metric) ⑧ 清 pending ⑨ renderText+=L"\n" ⑩ penX=lineStartX(+196)、penY+=linespacing(+136)。
+横排(!vertical)：① 行高 v11=max(行内 max char.size, curLineSize+144) ② over 检测(renderSizeH < v11+penY → renderOver=1，!ignore_over→Line::clear(0x5A1E68，deque+metric 全清) return 0) ③ align 偏移 v14(curAlign+76：1→right=W-penX，0→center=(W-penX)/2，其它→0) ④ align 缩进：pending 非空时按全角空格(0x3000)宽填充行首到 renderText ⑤ 落字到行：每 char.x+=v14、char.y=v11+char.y、拼接 char.text 到 renderText ⑥ 写 pending Line metric(+400/+404/+408/+416/+420，即 Line 相对 +80..+100)、penY+=v11 ⑦ push = 整个 pending Line 拷入 lineList（sub_5A4588 拷 deque + 0x5a3758/0x5a3768 两 OWORD 拷 +80..+108 **全范围含 +424 wordBreakRun/+428 prevWasSpace**；扩容 sub_5A43E8 同。源码层 = lineList.push_back(pendingLine)） ⑧ Line::clear(0x5a378c)——metric 全零化，随后 0x5a37c8 读 +408 做 `if(bboxLeft>penX)` 时左操作数恒 0 ⑨ renderText+=L"\n" ⑩ penX=lineStartX(+196)、penY+=linespacing(+136)。
 竖排：直接到 LABEL_56。LABEL_56：释放 +528 ruby、_kinsokuUsed=0、清 buffer、return 1。
 内联常量：L"　"(0x3000 全角空格，word_14CA1EE)、L"\n"(0x000A)。
 
@@ -305,7 +340,7 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 - done：① pending 非空→finishLine ② 遍历 lineList 算全局 bbox(读 lineItem bbox float[22..25]) ③ valign(+80) 偏移(1→W底对齐 H-bottom，0→center (H-bottom)/2)加到每 char.y、调整全局 top/bottom ④ charList 从各行 deque 铺 charItem 指针 ⑤ keyWait 列表 index→charList[idx].renderPos(float bits 存 int 槽) ⑥ charList 按 char.renderPos(+24) 排序(introsort sub_5A59E8 + insertion sort sub_5A5C34)。
 
 ### 7.6 clear @0x59EC6C（批3 重写，原为简化桩）
-pending clear；vertical→penX/left/right/lineBboxL/R=renderSizeW，horizontal→=0；penY/top/bottom/+108=0；释放 +528；buffer/+196/+88=0；resetFont；cur 样式从 default 复位(+140/+144/+136/+76/+80←+172/+176/+168/+100/+104)；lineList/charList/keyWait 清空；renderPos/+288/+188/+92/+84/+60=0；释放 renderText；face 表压缩(取旧 default face name→清 hash+table→重 intern→写回 +96)。
+Line::clear(0x5A1E68，pending deque 清空 + +400..+428 metric 全零化)；**随后** vertical→penX/left/right/pendingLine.bboxL/R(+408/+416)=renderSizeW，horizontal→penX/left/right=0（bbox 不写、保持 Line::clear 后的 0）；penY/top/bottom/+108=0；释放 +528；buffer/+196/+88=0；resetFont；cur 样式从 default 复位(+140/+144/+136/+76/+80←+172/+176/+168/+100/+104)；lineList/charList/keyWait 清空；`STR XZR,[#0x118]` 8B=+280 renderPos **及 +284 renderPosSnap** 清零；+288=0；`STUR XZR,[#0xBC]` 8B=+188 renderDelayAccum **及 +192 charDelayStep** 清零（D3 修复依据，证伪旧注释"clear 不重置 +192"）；+92/+84/+60=0；释放 renderText；face 表压缩(取旧 default face name→清 hash+table→重 intern→写回 +96)。
 
 ### 7.7 批4（render 状态机 0x5A228C）前置就绪情况
 render(objthis=a1, str, x, y, flag) 是 KAG 转义状态机，逐 UTF-16 遍历：`#`=color(sub_5A3CE4 取到 `;`)、`$`=emoji/face-run(sub_5A4148 + 逐字 sub_5A3880)、`%<code>`=样式(0-9/;=size%、b/i/s/e=bold/italic/shadow/edge、f=face、d/a=delay、C/L/R/S/B/D=align、p=pitch、t/l/w=度量)、`\i`=lineStartX=pen、`\k`=keyWait push renderCount、`\n`=finishLine、`\r`=lineStartX=0、`\t`=appendChar(9)、`\w`=pen+=fontsize、`\x`=结束、`\n`(0x0A)=finishLine、普通字符→sub_5A3880(begin/end 集成对 push/pop 平衡逻辑)。**被调用方 appendChar/finishLine/done 本批已就位**；render 本体需新增字段 +24/+32(begin/end 平衡集，已在 §3b)、render 入口复位(+440=+432 清行/+188=0/+280=0/+192=(float)flag)。批4 可直接复用本批落字层。
@@ -317,7 +352,7 @@ render(objthis=a1, str, x, y, flag) 是 KAG 转义状态机，逐 UTF-16 遍历�
 
 ### 8.1 NCB wrapper TextRenderBase_ncb_render @0x59FC28
 - `numparams(a2) < 3` → 返回 `4294966292`(=0xFFFFFC14=TJS_E_BADPARAMCOUNT)。
-- `a2==3` → flag(v9)=0。`a2>=4` → param[3]=size **仅类型强制后丢弃**（switch type：object/octet→sub_A0E48C 抛错、string→sub_A133A8、real→nullsub），不传给 render；`a2<5` → flag=0；`a2>=5` → flag=boolCoerce(param[4])。
+- `a2==3` → flag(v9)=0。`a2>=4` → param[3]=size **仅 real 类型强制后丢弃**（switch @0x59fcb0：object(1)/octet(3)→sub_A0E48C(,5u)=ConvertError(Real)、string(2)→sub_A133A8 解析、int/real/void→无操作 = `AsReal()` 丢弃），不传给 render；`a2<5` → flag=0；`a2>=5` → flag=boolCoerce(param[4])。
 - text=param[0]（sub_A0BAF4 拷贝），x=intCoerce(param[1])，y=intCoerce(param[2])。
 - 调 `TextRenderBase_render(objthis, &text, x, y, flag)` → bool → sub_A0FEF0(result, ok&1)。
 
@@ -372,10 +407,10 @@ render(objthis=a1, str, x, y, flag) 是 KAG 转义状态机，逐 UTF-16 遍历�
 ### 8.5 helper 子函数
 - `TextRenderBase_render_scanTagUntil` @0x5A3CE4：读到 delim（';'/']'）的子串 ttstr，cursor 推进到 delim 后。
 - `TextRenderBase_render_scanDigits` @0x5A3F18：读连续数字 0-9 的子串，cursor 停在非数字。
-- `TextRenderBase_render_evalDollarTag` @0x5A4148：native+0 上 FuncCall(L"onEval", content) → 返回 string 取值否则空（平台边界：本地传 objthis）。
+- `TextRenderBase_render_evalDollarTag` @0x5A4148：native+0 上 FuncCall(L"onEval", content)（返回码不检查）→ 按返回 variant type 分发：octet/int/real（(unsigned)(type-3)<3 @0x5a41d8）与 object（type==1 @0x5a41e8）→ sub_A0E48C(,2u)=TJSThrowVariantConvertError(String)；string(2)→取值；void(0)→空串（平台边界：本地传 objthis）。
 - `ttstr_parseInt10` @0x9B111C：UTF-16 串 → 十进制 int（跳 <=0x20 空白、可选 '-'、*10+digit）。≠ AsInteger（无 0x 前缀处理）。
 - `TextRenderBase_keyWaitList_pushBack` @0x5A5874：std::vector<int>::push_back（keyWait 满时重分配）。
-- `TextRenderBase_lineItem_destroy` @0x5A1B24：lineItem 析构（render 入口清行列表逐项调用）。
+- `TextRenderBase_pendingLine_dtor` @0x5A1B24：Line 析构（pending 行与 lineList 元素**同型共用**——render/clear 清行列表逐项调用；2026-06-11 与 lineItem_destroy 确认为同一函数。函数体只触及 +0..+79 deque 控制块：Line 尾部 metric 全是 POD，~Line ≡ ~deque 成员析构，故 kinsoku 的 80B 裸临时 deque LABEL_113/0x5a5338 也复用同一 helper——不与同型结论冲突）。
 
 ### 8.6 平台边界 / 实现细节
 - **native≠objthis**（NativeClassBinder native≡dispatch vs 本地 ncbInstanceAdaptor 双对象）：appendChar/finishLine/evalDollarTag/onStyleChanged 显式接收 objthis 以回调脚本 onGetTextWidth/onEval/onFontChange。技术原因见 §7.1。
@@ -407,6 +442,7 @@ render 状态机已忠实移植 + 构建/链接通过。无 textrender 单元测
 
 | key | charItem 偏移 | 类型 | setter helper |
 |---|---|---|---|
+| graph | +40 | int | sub_5A2160(byte→int)；**dict 首字段** @0x5a081c，先于 text；key 串 @0x14CA19A UTF-16LE "graph" |
 | text | +0 | string | sub_A0FE2C+vtable48 |
 | x | +8 | real | sub_5A614C |
 | y | +12 | real | sub_5A614C |
@@ -439,6 +475,10 @@ render 状态机已忠实移植 + 构建/链接通过。无 textrender 单元测
 - **renderPos bits(高 int) 是 dead-for-getKeyWait**（done 算了但 getKeyWait 不读）——dead-but-faithful。
 - getKeyWait 行为：建 Array(sub_9876D4)，每元素建 dict(sub_9C8440){pos=index(Integer), time=index(Integer)}，
   FuncCall L"add" 落入 Array。**纠正旧桩（返回空 Array）**。
+- **variant objthis 槽均为 null**：add 的 arg variant {Object=dict, ObjThis=0}（0x5a042c v16=1 / 0x5a0430
+  v15[0]=v12, v15[1]=0）；最终 result variant {Object=arr, ObjThis=0}（0x5a04c8/0x5a04cc *(a2+8)=0）。
+  注意 getCharacters 的 result 为 (obj,obj)——两函数二进制自身不一致，各自照抄。
+  onStyleChanged@0x5A1F28 的 onFontChange arg variant 同为 {dict, 0}（0x5a2050/0x5a2054 v12[1]=0）。
 
 ### 9.3 onEval @0x5A0294
 `*(result+16)=0`（result.type=Void）；`return sub_8E3FA4(a2=expr, *a1=this dispatch, a3=result)`。
@@ -463,7 +503,7 @@ maxScrollLine 算法（0x5A1080）：lineCount<1→0.0；v6=视口尺寸；自 l
 0x5A1018 renderLeft=+248 / 0x5A1038 renderText=+40）均与 §2 表/本地字段一致，无偏差。
 
 ### 9.5 集成审计结论
-- **数据流贯通**：render→appendChar→kinsoku→placeChar(push _pendingChars)→finishLine(pushLineItem→_lineList)
+- **数据流贯通**：render→appendChar→kinsoku→placeChar(push _pendingLine.chars)→finishLine(push_back(_pendingLine)→_lineList)
   →done(铺 _charList 指针 + valign + keyWait time 回填 + renderPos 排序)。消费端 getCharacters(读 _charList
   charItem 全字段 + ruby 子 vec)/getKeyWait(读 _keyWaitList.index)/calcLineOffset(_lineList[i].lineBottom)/
   calcShowCount(_charList renderPos 倒扫)/renderLines·maxScrollLine(_lineList) 全部正确消费。✓
@@ -491,9 +531,10 @@ maxScrollLine 算法（0x5A1080）：lineCount<1→0.0；v6=视口尺寸；自 l
 控制流与二进制 1:1，clang-tidy 警告消除。
 
 ### 9.7 全 50 成员对齐状态总表
-**17 method**：setOption/setDefault/setRenderSize/clear/resetFont/resetStyle/setFont/setStyle/render/newline/
-done/onEval/getKeyWait/calcLineOffset/calcShowCount/getCharacters + render(NCB wrapper) —— **全部完全对齐**
-（render 状态机批4、落字层批3、查询层批5）。
+**1 构造器 + 16 method**：(constructor @0x59D160→ctor 0x5A111C，C1 默认值群偏差已修复，见 §3b-0) +
+setOption/setDefault/setRenderSize/clear/resetFont/resetStyle/setFont/setStyle/render/newline/
+done/onEval/getKeyWait/calcLineOffset/calcShowCount/getCharacters —— **全部完全对齐**
+（render 状态机批4、落字层批3、查询层批5、ctor 默认值群批6/C1）。
 **33 property**：22 RW + 11 RO，全部 getter/setter 字段+公式经反编译核对 1:1（defaultFace 批5 修正为 index-based，
 maxScrollLine 批5 实装）。
 

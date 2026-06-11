@@ -5,7 +5,9 @@
 // 权威反编译归档：analysis/textrender_textrenderbase_registration.md
 //
 // 模块注册链   TextRenderBase_moduleRegister      @0x42D01C  (L"TextRender.dll"/L"TextRenderBase")
-// 成员注册     TextRenderBase_ncb_registerMembers @0x59BCCC  (17 method + 33 property)
+// 成员注册     TextRenderBase_ncb_registerMembers @0x59BCCC  (1 ctor + 16 method + 33 property)
+// 构造器成员   TextRenderBase_ncb_constructor     @0x59D160  (TJS new 时立即 new(0x250)+ctor，非惰性)
+// 真构造函数   TextRenderBase_ctor                @0x5A111C  (默认值群 + 内置禁则集 + resolveFaceIndex(L"normal"))
 // 真对象析构   TextRenderBase_dtor                @0x5A6B88  (揭示字段布局 ≥592B)
 //
 // 本阶段 = 骨架：注册全部成员的忠实签名（method/property 种类、RW/RO 拆分、
@@ -43,7 +45,47 @@ namespace textrender {
 // ============================================================
 class TextRenderBase {
 public:
-    TextRenderBase() = default;
+    // 真构造函数 = TextRenderBase_ctor @0x5A111C。调用时机：NCB 构造器成员
+    //   TextRenderBase_ncb_constructor @0x59D160 在 TJS `new` 时立即
+    //   `*slot = operator new(0x250); ctor(obj, objthis)`——非惰性创建。本地
+    //   NCB_CONSTRUCTOR(()) 同样在 TJS 构造时立即建 native 实例，时机一致
+    //   （二进制 ctor 首句 +0=objthis 回指属 NativeClassBinder native≡dispatch
+    //   平台边界，本地 ncbInstanceAdaptor 双对象由 adaptor 持有关联，见 §7.1）。
+    //   标量字段默认值落在下方各字段初始化器（逐项注 @0x5A111C）；此处补 4 个
+    //   禁则集字符串常量、faceHash bucket hint 与末尾 resolveFaceIndex。
+    //   二进制 ctor 还有 +61=0（未识别 byte，本地无对应字段）；+60/+62..+65/
+    //   +72..+92/+108/+400.. 区不初始化（依赖随后 setRenderSize→clear；本地
+    //   字段零值初始化是安全加固，保留）。
+    TextRenderBase() : _faceHash(10) { // bucket hint：_M_next_bkt(0xAu) @0x5a125c
+        // 内置日文禁则集 4 串（UTF-16 数据契约，逐码点复刻二进制常量；
+        //   ttstr_createFromWide @0x5a1158/0x5a1168/0x5a1178/0x5a1184）。
+        // following @0x14C9DF8（68 码点，行头禁则：闭括/句读/长音/拗促音等；
+        //   含 U+3000 全角空格，故全部用 \u 转义书写）
+        _following = ttstr(
+            TJS_W("\u0025\u0029\u002c\u003a\u003b\u005d\u007d\u3002\uff0c\u3001") // %),:;]}。，、
+            TJS_W("\uff0e\uff1a\uff1b\u309b\u309c\u30fd\u30fe\u309d\u309e\u3005") // ．：；゛゜ヽヾゝゞ々
+            TJS_W("\u2019\u201d\uff09\u3015\uff3d\uff5d\u3009\u300b\u300d\u300f") // ’”）〕］｝〉》」』
+            TJS_W("\u3011\u00b0\u2032\u2033\u2103\uffe0\uff05\u2030\u3000\u0021") // 】°′″℃￠％‰<U+3000>!
+            TJS_W("\u002e\u003f\u30fb\uff1f\uff01\u30fc\u3041\u3043\u3045\u3047") // .?・？！ーぁぃぅぇ
+            TJS_W("\u3049\u3063\u3083\u3085\u3087\u308e\u30a1\u30a3\u30a5\u30a7") // ぉっゃゅょゎァィゥェ
+            TJS_W("\u30a9\u30c3\u30e3\u30e5\u30e7\u30ee\u30f5\u30f6") // ォッャュョヮヵヶ
+            TJS_W("")); // -> +8
+        // leading @0x14C9E82（19 码点，行尾禁则：开括/通货记号）
+        _leading = ttstr(
+            TJS_W("\u005c\u0024\u0028\u005b\u007b\u2018\u201c\uff08\u3014\uff3b") // \$([{‘“（〔［
+            TJS_W("\uff5b\u3008\u300a\u300c\u300e\u3010\uffe5\uff04\uffe1") // ｛〈《「『【￥＄￡
+            TJS_W("")); // -> +16
+        // begin @0x14C9EAA（10 码点，开括平衡集）
+        _begin = ttstr(
+            TJS_W("\u300c\u300e\uff08\u2018\u201c\u3014\uff3b\uff5b\u3008\u300a") // 「『（‘“〔［｛〈《
+            TJS_W("")); // -> +24
+        // end @0x14C9EC0（10 码点，闭括平衡集，与 begin 按索引一一配对）
+        _end = ttstr(
+            TJS_W("\u300d\u300f\uff09\u2019\u201d\u3015\uff3d\uff5d\u3009\u300b") // 」』）’”〕］｝〉》
+            TJS_W("")); // -> +32
+        // ctor 末尾：+96 = resolveFaceIndex(L"normal")（intern 进 faceHash）@0x5a12a4
+        _defaultFaceIndex = resolveFaceIndex(ttstr(TJS_W("normal")));
+    }
     ~TextRenderBase() = default;
 
     // ---- 逐字符 / 行 / face 表 ----
@@ -68,7 +110,9 @@ public:
         tjs_uint32 chColor = 0;          // +28
         tjs_uint32 shadowColor = 0;      // +32
         tjs_uint32 edgeColor = 0;        // +36
-        bool rubyFlag = false;           // +40 (构造置 0)
+        bool graph = false;              // +40 (构造置 0)；脚本面真名 "graph"
+                                         //   （getCharacters@0x5a081c dict 首字段
+                                         //    L"graph"，串 @0x14CA19A UTF-16LE）
         bool bold = false;               // +41
         bool italic = false;             // +42
         bool shadow = false;             // +43
@@ -78,32 +122,53 @@ public:
         int faceIndex = 0;               // +52
         std::vector<RubyItem> ruby;      // +56/+64/+72 ruby 子标注
     };
-    // LineItem = 二进制 112B 行项（行列表 +432，stride 112）。前 80B 是该行 charItem
-    //   的嵌套 std::deque<charItem> 快照（finishLine 经 sub_5A4588 整体拷入），后 32B
-    //   是行 metric float（sub_5A4588 从 a1+400 拷 16B 到 lineItem+80、从 a1+413 拷 16B
-    //   到 lineItem+93）。源码层 = { deque<CharItem> chars; float 行 metric... }。
+    // Line = 二进制 112B 行结构（嵌套结构体，源码结构复刻）。pending 行缓冲（真对象
+    //   +320）与 lineList 元素（+432，stride 112）**同型**——三重证据：
+    //   ① Line::clear @0x5A1E68 接收 +320 指针，deque 清空后零化相对 +80..+108
+    //     （STR XZR,[X19,#0x50] + STP XZR,XZR,[X19,#0x58] + STUR XZR,[X19,#0x65]
+    //      = 对象绝对 +400..+428，覆盖全部行 metric + wordBreakRun + prevWasSpace）；
+    //   ② finishLine push（0x5a3758/0x5a3768 与扩容 sub_5A43E8 @0x5a44a8/0x5a44b0）
+    //     都把 a2+80 / a2+93 两 OWORD（= +80..+108 全范围）拷入 lineItem+80/+93；
+    //   ③ Line dtor @0x5A1B24 同为 pending 行与 lineList 元素的析构（0x5a5328/0x5a44d8）。
+    //   布局：+0..+79 = std::deque<charItem>（80B 控制块）；+80..+103 = 6 float metric；
+    //   +104 = int wordBreakRun；+108 = bool prevWasSpace。
     //   done@0x59FEE4 读 lineItem float[22..25] 算全局 bbox，读 +80(float[20]) 是 offset
     //   累加器；calcLineOffset@0x5A05FC 返回 lineItem +80。下表 float 索引经 done/finishLine
     //   交叉确认：+80=lineBottom(a1+400 v24), +84=lineHeight(a1+404 v11),
     //   +88=left(a1+408), +92=top(a1+412), +96=right(a1+416), +100=bottom(a1+420 等)。
     //   done 用的 bbox: v5[22]=+88(left) min, v5[23]=+92(top) min, v5[24]=+96(right) max,
     //   v5[25]=+100(bottom) max；offset(+80) 是 valign 居中量加到每 char.y。
-    struct LineItem {
-        std::deque<CharItem> chars;   // +0..+79 该行字符快照（嵌套 deque<charItem>）
-        float lineBottom = 0;         // +80  a1+400 行内 max(行高 + char.y)；done valign offset 写它
-        float lineHeight = 0;         // +84  a1+404 max(charSize, curLineSize)
-        float bboxLeft = 0;           // +88  a1+408
-        float bboxTop = 0;            // +92  a1+412
-        float bboxRight = 0;          // +96  a1+416
-        float bboxBottom = 0;         // +100 a1+420
+    struct Line {
+        std::deque<CharItem> chars;   // +0..+79 行内字符（嵌套 deque<charItem>，6/node）
+        float lineBottom = 0;         // +80  行内 max(行高 + char.y)；done valign offset 写它
+        float lineHeight = 0;         // +84  max(charSize, curLineSize)
+        float bboxLeft = 0;           // +88
+        float bboxTop = 0;            // +92
+        float bboxRight = 0;          // +96
+        float bboxBottom = 0;         // +100
+        int wordBreakRun = 0;         // +104 行内 word-break run 起点字符数
+        bool prevWasSpace = false;    // +108 上个落字是否空格
+        // Line::clear @0x5A1E68：deque 清空（释放元素、保留控制块/首 node——
+        //   即 std::deque::clear() 语义）+ 零化 +80..+108 全部 metric/wordBreak 字段。
+        void clear() { // sub_5A1E68 (TextRenderBase_pendingLine_clear)
+            chars.clear();        // sub_5A1C50 + 释放多余 map 槽，游标复位
+            lineBottom = 0;       // a1[10] 低 32 位（+80..+87 8B 清零）
+            lineHeight = 0;       // a1[10] 高 32 位
+            bboxLeft = 0;         // a1[11]（+88..+95）
+            bboxTop = 0;
+            bboxRight = 0;        // a1[12]（+96..+103）
+            bboxBottom = 0;
+            wordBreakRun = 0;     // STUR XZR,[X19,#0x65]（+101..+108 覆盖 +104/+108）
+            prevWasSpace = false;
+        }
     };
     // char 列表：二进制 +296 是 std::vector<charItem*>（8B 元素=堆指针），
     //   落字路径 new 80B charItem 后 push 指针。容器选型对齐二进制（vector<指针>）。
     std::vector<CharItem *> _charList; // 真对象 +296
-    // pending-char deque：二进制 +320 是 std::deque<charItem>（行内禁则/kinsoku
-    //   重排缓冲，80B 元素，6/node）。容器选型对齐二进制 deque（analysis §3b-2）。
-    std::deque<CharItem> _pendingChars; // 真对象 +320
-    std::vector<LineItem> _lineList;     // 真对象 +432 (stride 112)
+    // pending 行缓冲：真对象 +320，类型 = Line（与 lineList 元素同型，证据见 Line 注释）。
+    //   行 metric/wordBreak 状态是 Line 内嵌字段，不再摊平为 TextRenderBase 字段。
+    Line _pendingLine;                 // 真对象 +320..+431 (112B)
+    std::vector<Line> _lineList;       // 真对象 +432 (stride 112)
     std::vector<ttstr> _faceTable;       // 真对象 +456 (index→face)
     // keyWait 列表：二进制 +480 是 std::vector<KeyWaitItem>（8B 元素 = 两个 int）。
     //   元素布局经 keyWaitList_pushBack@0x5A5874（operator new(8*n)、(end-begin)>>3 计数、
@@ -156,8 +221,9 @@ public:
     //   字段偏移/名称经 setOption@0x59D2AC 逐 key 反编译确认（key 字符串常量取自
     //   PropGet L"..." 实参）。注意 ignore_over 与 ignore_overy 二进制同写 +54（后者
     //   覆盖前者，忠实复刻）；kinsoku_max 是 bool-coerce 写入 DWORD（存 0/1，非整数值）。
-    bool _vertical = false;          // +48  L"vertical"
-    bool _wordBreak = false;         // +49  L"word_break"
+    //   ctor 默认值 @0x5A111C：WORD+48=0x0100 → vertical=0、word_break=1。
+    bool _vertical = false;          // +48  L"vertical"（ctor=0）
+    bool _wordBreak = true;          // +49  L"word_break"（ctor=1）
     bool _ignoreColor = false;       // +50  L"ignore_color"
     bool _ignoreSize = false;        // +51  L"ignore_size"
     bool _ignoreDelay = false;       // +52  L"ignore_delay"
@@ -168,9 +234,11 @@ public:
     bool _ignoreType = false;        // +57  L"ignore_type"
     bool _ignoreFace = false;        // +58  L"ignore_face"
     bool _ignoreStyle = false;       // +59  L"ignore_style"
-    int _kinsokuMax = 0;             // +112 L"kinsoku_max"（bool-coerce→0/1）
+    int _kinsokuMax = 1;             // +112 L"kinsoku_max"（bool-coerce→0/1；ctor=1 @0x5A111C，QWORD+112=0xBF80000000000001 低 32 位）
     // 禁则字符集字符串 (setOption +8/+16/+24/+32)。二进制存 tTJSVariant*（refcounted
     //   string），仅接受 string/void，object/octet/int/real 抛转换错误。语义=ttstr。
+    //   ctor @0x5A111C 以内置日文禁则集 4 串初始化（常量 0x14C9DF8/0x14C9E82/
+    //   0x14C9EAA/0x14C9EC0，见构造函数体）。
     ttstr _following;                // +8  L"following"
     ttstr _leading;                  // +16 L"leading"
     ttstr _begin;                    // +24 L"begin"
@@ -184,8 +252,8 @@ public:
     int _curFaceIndex = 0;           // +72
     int _curAlign = 0;               // +76  setStyle L"align"（当前样式 align，≠默认+100）
     int _curValign = 0;              // +80  setStyle L"valign"（当前样式 valign，≠默认+104）
-    float _curFontSize = 0;          // +116
-    float _curRubySize = 0;          // +128
+    float _curFontSize = -1.0f;      // +116 ctor=-1.0f 脏哨兵 @0x5A111C（QWORD+112 高 32 位=0xBF800000；保证首次 resetFont 组复位必触发）
+    float _curRubySize = -1.0f;      // +128 ctor=-1.0f 脏哨兵 @0x5A111C（DWORD+128=0xBF800000；resetFont `<0||!=` 门控）
     float _curRubyOffset = 0;        // +132 setFont L"rubyoffset"（当前样式 ruby 偏移）
     float _curLineSpacing = 0;       // +136
     float _curPitch = 0;             // +140
@@ -200,28 +268,35 @@ public:
     //   defaultFace 属性 getter/setter 经 _faceTable/resolveFaceIndex 间接读写此 index
     //   （0x5A0DA8/0x5A0E0C 确证），故无独立 _defaultFace ttstr 字段（旧占位已删，避免幻影字段）。
     int _defaultFaceIndex = 0;           // +96  setDefault L"face" → resolveFaceIndex
+    //   ctor 默认值群 @0x5A111C（打包常量逐项展开）：
+    //   - BYTE+66=0 / WORD+67=0x0001 / BYTE+69=0 → bold=0,shadow=1,edge=0,italic=0
+    //   - QWORD+100=-1 → align=-1,valign=-1
+    //   - QWORD+148=0x4240000041C00000 → fontSize=24,bigFontSize=48
+    //   - OWORD+156=xmmword_14C95D0=(12,10,-2,6)f → small=12,rubySize=10,rubyOffset=-2,lineSpacing=6
+    //   - OWORD+172=xmmword_14C95E0=(0,24,1,1)f → pitch=0,lineSize=24（后两 lane 是 timeScale/fontScale）
+    //   - OWORD+216=xmmword_14C95F0 → chColor=0xFFFFFFFF,shadowColor=0xFF000000,shadowDiff=1,edgeColor=0xFF0080FF
     bool _defaultBold = false;           // +66
-    bool _defaultShadow = false;         // +67
+    bool _defaultShadow = true;          // +67
     bool _defaultEdge = false;           // +68
     bool _defaultItalic = false;         // +69
-    int _defaultAlign = 0;               // +100
-    int _defaultValign = 0;              // +104
+    int _defaultAlign = -1;              // +100
+    int _defaultValign = -1;             // +104
     float _defaultFontSize = 24.0f;      // +148
-    float _defaultBigFontSize = 0;       // +152
-    float _defaultSmallFontSize = 0;     // +156
-    float _defaultRubySize = 0;          // +160
-    float _defaultRubyOffset = 0;        // +164
-    float _defaultLineSpacing = 0;       // +168
+    float _defaultBigFontSize = 48.0f;   // +152
+    float _defaultSmallFontSize = 12.0f; // +156
+    float _defaultRubySize = 10.0f;      // +160
+    float _defaultRubyOffset = -2.0f;    // +164
+    float _defaultLineSpacing = 6.0f;    // +168
     float _defaultPitch = 0;             // +172
-    float _defaultLineSize = 0;          // +176
-    tjs_uint32 _defaultChColor = 0xffffff;   // +216
-    tjs_uint32 _defaultShadowColor = 0;      // +220
-    tjs_uint32 _defaultShadowDiff = 0;       // +224
-    tjs_uint32 _defaultEdgeColor = 0;        // +228
+    float _defaultLineSize = 24.0f;      // +176
+    tjs_uint32 _defaultChColor = 0xFFFFFFFF;     // +216
+    tjs_uint32 _defaultShadowColor = 0xFF000000; // +220
+    tjs_uint32 _defaultShadowDiff = 1;           // +224
+    tjs_uint32 _defaultEdgeColor = 0xFF0080FF;   // +228
 
     // ---- 全局缩放 ----
-    float _timeScale = 1.0f;         // +180
-    float _fontScale = 1.0f;         // +184
+    float _timeScale = 1.0f;         // +180 ctor=1.0f @0x5A111C（xmmword_14C95E0 lane2）
+    float _fontScale = 1.0f;         // +184 ctor=1.0f @0x5A111C（xmmword_14C95E0 lane3）
     float _renderDelayAccum = 0;     // +188
 
     // ---- 渲染尺寸 / 结果 bbox / 状态 ----
@@ -244,20 +319,13 @@ public:
     float _renderPosSnap = 0;        // +284 renderPos 快照
     int   _state288 = 0;             // +288 clear 置 0（杂项状态）
     int   _state92 = 0;             // +92  clear 置 0（杂项状态）
-    float _charDelayStep = 0;        // +192 每字 renderPos 步进（render %d 标签设置，clear 不重置）
+    float _charDelayStep = 1.0f;     // +192 每字 renderPos 步进（ctor=1.0f @0x5A111C；render %d 标签设置；clear@0x59EC6C STUR XZR,[#0xBC] 8B 连 +188 一起清零）
     float _lineStartX = 0;           // +196 行首 X（换行后 pen X 复位目标；clear 置 0）
     int   _charBufCountdown = 0;     // +88  组合字符累积倒计数（clear 置 0）
     int   _kinsokuUsed = 0;          // +108 本行 kinsoku 已用次数（clear 置 0）
-    // 行 metric 累加器（finishLine 写、push 进 lineItem）
-    float _lineBottomAccum = 0;      // +400 v24
-    float _lineHeightAccum = 0;      // +404 v11
-    float _lineBboxLeft = 0;         // +408（clear 竖排=renderSizeW，横排=0）
-    float _lineBboxTop = 0;          // +412
-    float _lineBboxRight = 0;        // +416（clear 竖排=renderSizeW，横排=0）
-    float _lineBboxBottom = 0;       // +420
-    // word_break trailing-run 状态
-    int  _wordBreakRun = 0;          // +424 行内 word-break run 起点字符数
-    bool _prevWasSpace = false;      // +428 上个落字是否空格
+    // 行 metric 累加器 / word_break trailing-run 状态：是 _pendingLine（+400..+428）的
+    //   内嵌字段，不是 TextRenderBase 摊平字段（旧摊平实现被 0x5A1E68/0x5A43E8 证伪，
+    //   已并入 struct Line，见上）。
     // ruby bbox 累加器（appendChar ruby 分支写 +264/+268/+272）
     float _rubyTop = 0;              // +268
     float _rubyLeft = 0;            // +264
@@ -395,16 +463,18 @@ public:
     //   数据流 1:1 复刻反编译（pen/bbox 竖排横排分支、cur 样式从 default 复位、
     //   face 表重 intern）。容器选型：STL clear 复刻源码 deque/vector 清空。
     void clearImpl(iTJSDispatch2 *objthis) { // 0x59EC6C
-        // sub_5A1E68(+320)：pending deque 清空（释放 charItem，保留控制块）
-        clearPendingDeque();
+        // sub_5A1E68(+320)：pending Line 清空（deque 清空 + +400..+428 metric 全零化）。
+        //   竖排分支随后写 bbox 初值，顺序与二进制一致（0x59ec98 → 0x59ecb4/0x59ecb8）。
+        _pendingLine.clear();
         if(_vertical) { // +48
-            // 竖排：pen X / left / right / line bbox left/right = renderSizeW(+240)
+            // 竖排：pen X / left / right / pending 行 bbox left/right = renderSizeW(+240)
             _penX = _renderSizeW;        // +232
             _renderLeft = _renderSizeW;  // +248
             _renderRight = _renderSizeW; // +256
-            _lineBboxRight = _renderSizeW; // +416
-            _lineBboxLeft = _renderSizeW;  // +408
+            _pendingLine.bboxRight = _renderSizeW; // +416
+            _pendingLine.bboxLeft = _renderSizeW;  // +408
         } else {
+            // 横排：bbox left/right 不写，保持 Line::clear 后的 0
             _penX = 0;        // +232
             _renderLeft = 0;  // +248
             _renderRight = 0; // +256
@@ -428,9 +498,11 @@ public:
         _lineList.clear();
         // charList 清空（+304=+296）；元素是堆 charItem*，由 lineItem deque 拥有，此处不 delete
         _charList.clear();
-        _renderPos = 0;       // +280
+        _renderPos = 0;       // +280  STR XZR,[#0x118] 8B：+280/+284 一并清零
+        _renderPosSnap = 0;   // +284  （同上一条 8B store）
         _state288 = 0;        // +288
-        _renderDelayAccum = 0; // +188
+        _renderDelayAccum = 0; // +188 STUR XZR,[#0xBC] 8B：+188/+192 一并清零
+        _charDelayStep = 0;   // +192  （同上一条 8B store；证伪旧注释"clear 不重置 +192"）
         _state92 = 0;         // +92
         _renderCount = 0;     // +84
         _renderOver = false;  // +60
@@ -518,9 +590,6 @@ public:
     // ============================================================
     // 落字 / 行布局层（appendChar/度量/kinsoku/finishLine）helper
     // ============================================================
-    // pending deque 清空（sub_5A1E68@0x5A1E68：释放每元素 charItem，控制块保留）。
-    //   源码层 = std::deque<CharItem>::clear()。
-    void clearPendingDeque() { _pendingChars.clear(); } // sub_5A1E68
     // 释放当前 ruby 文本（+528 release → null）。
     void releaseCurRubyText() {
         _curRubyText = ttstr();
@@ -560,9 +629,15 @@ public:
     bool appendChar(iTJSDispatch2 *objthis, tjs_char ch) { // 0x5A3880
         // push ch 到内部 UTF-16 buffer（+504/+512），容器选型 = char vector
         _accumBuf.push_back(ch);
-        // --countdown(+88)：>=0 → 仅累积，返回 true
-        if(--_charBufCountdown >= 0)
-            return true;
+        // 倒计数(+88)：先算 v21=(+88)-1，仅当 v21>=0 才回写并返回 true
+        //   （0x5a3970..0x5a3984：负值不回写，+88 永不为负）。
+        {
+            int v21 = _charBufCountdown - 1;
+            if(v21 >= 0) {
+                _charBufCountdown = v21; // *(a1+88) = v21
+                return true;
+            }
+        }
         // buffer 非恰好 1 字符 → 不落字，返回 false（二进制 `(end-begin)!=2`）
         if(_accumBuf.size() != 1)
             return false;
@@ -574,7 +649,7 @@ public:
         v.text = text;             // +0
         v.cw = cw;                 // +16 (v49)
         v.size = effSize;          // +20 (v50)
-        v.rubyFlag = false;        // +40 (v54)
+        v.graph = false;           // +40 (v54)
         v.bold = _curBold;         // +41 (v55 = a1+62)
         v.italic = _curItalic;     // +42 (v56 = a1+65)
         v.shadow = _curShadow;     // +43 (v57 = a1+63)
@@ -629,7 +704,7 @@ public:
     //   禁则（following/leading 字符集）与 word_break，必要时换行（finishLine）并把回退
     //   字符重排到下一行。返回 bool（true=成功，false=finishLine 失败）。
     //   字段门控全部 1:1 复刻反编译，非字段名推导（_vertical/_ignoreOverX(+53)/_ignoreOverY
-    //   (+54)/_wordBreak(+49)/_kinsokuUsed(+108)/_kinsokuMax(+112)/_wordBreakRun(+424)）。
+    //   (+54)/_wordBreak(+49)/_kinsokuUsed(+108)/_kinsokuMax(+112)/_pendingLine.wordBreakRun(+424)）。
     bool kinsoku(iTJSDispatch2 *objthis, CharItem &c) { // 0x5A4A7C
         // 1. over 检测（是否超出渲染尺寸需换行）。命中 → 直接落字（placeHoriz=v6）。
         if(_vertical) { // a1+48
@@ -645,13 +720,13 @@ public:
         {
             std::deque<CharItem> tmp; // v81：pendingDeque_init(v81,0)
             if(!_wordBreak) { // !a1+49：非 word_break
-                // 把超过 _wordBreakRun(+424) 个的尾部字符（trailing run）移到 tmp
-                int run = _wordBreakRun; // v33 = a1+424
+                // 把超过 wordBreakRun(+424) 个的尾部字符（trailing run）移到 tmp
+                int run = _pendingLine.wordBreakRun; // v33 = a1+424
                 if(run >= 1) {
-                    while((int)_pendingChars.size() > run) {
+                    while((int)_pendingLine.chars.size() > run) {
                         // 弹 pending 末字符到 tmp 前端（v82 头插）
-                        tmp.push_front(_pendingChars.back()); // copy
-                        _pendingChars.pop_back();
+                        tmp.push_front(_pendingLine.chars.back()); // copy
+                        _pendingLine.chars.pop_back();
                         --_renderCount; // a1+84
                     }
                 }
@@ -660,17 +735,22 @@ public:
                 // 当前字在 following 集（following 字符，可触发 kinsoku 计数下移）
                 int used = _kinsokuUsed; // v30 = a1+108
                 if(used >= _kinsokuMax) { // a1+112：次数用尽
-                    while(_pendingChars.size() >= 2) {
+                    while(_pendingLine.chars.size() >= 2) {
                         if(used < 1) {
-                            // max<=0 边界：仅当末字符在 leading 集时下移一个
-                            if(_leading.IndexOf(_pendingChars.back().text) != -1) {
-                                tmp.push_front(_pendingChars.back());
-                                _pendingChars.pop_back();
+                            // max<=0 边界：仅当末字符在 leading 集时下移一个。
+                            //   0x5a50a0/0x5a50a8 两路（pushFrontNode/charItem_copy）
+                            //   汇入与 LABEL_94 tail-merge 的共享尾
+                            //   （charItem_destroy@0x5a52cc + --(+84)@0x5a52d8）：
+                            //   下移时同样 --renderCount（仅 +84，不动 +108）。
+                            if(_leading.IndexOf(_pendingLine.chars.back().text) != -1) {
+                                tmp.push_front(_pendingLine.chars.back());
+                                _pendingLine.chars.pop_back();
+                                --_renderCount; // a1+84 @0x5a52d8
                             }
                             break; // → LABEL_107
                         }
-                        tmp.push_front(_pendingChars.back());
-                        _pendingChars.pop_back();
+                        tmp.push_front(_pendingLine.chars.back());
+                        _pendingLine.chars.pop_back();
                         --_kinsokuUsed; // a1+108
                         --_renderCount; // a1+84
                         used = _kinsokuUsed; // refetch (v30 = a1+108 - 1)
@@ -684,9 +764,9 @@ public:
                     //   纠正旧实现：旧版无条件 fall 到 finishLine，对"末字符不在 following
                     //   集"的情形产生多余换行（旧注释自承"含糊"，经 0x5A4D90 反编译证伪）。
                     _kinsokuUsed = used + 1; // ++[+108]
-                    if(_pendingChars.empty()) {
+                    if(_pendingLine.chars.empty()) {
                         // [+368]==[+336]：pending 空 → LABEL_107（finishLine）
-                    } else if(_following.IndexOf(_pendingChars.back().text)
+                    } else if(_following.IndexOf(_pendingLine.chars.back().text)
                               != -1) {
                         // back 在 following 集(a1+8) → LABEL_107（finishLine）
                     } else {
@@ -697,23 +777,24 @@ public:
                 }
             } else {
                 // 当前字不在 following 集：行尾禁则（leading）处理
-                if(_pendingChars.size() >= 3) { // v45 >= 3
+                if(_pendingLine.chars.size() >= 3) { // v45 >= 3
                     // 倒数第2字符 v48
-                    const CharItem &second = _pendingChars[_pendingChars.size() - 2];
+                    const CharItem &second =
+                        _pendingLine.chars[_pendingLine.chars.size() - 2];
                     if(_leading.IndexOf(second.text) == -1) {
                         // 倒数第2字符不在 leading 集，且末字符在 leading 集 → 下移末字符
-                        if(_leading.IndexOf(_pendingChars.back().text) != -1) {
-                            tmp.push_front(_pendingChars.back());
-                            _pendingChars.pop_back();
+                        if(_leading.IndexOf(_pendingLine.chars.back().text) != -1) {
+                            tmp.push_front(_pendingLine.chars.back());
+                            _pendingLine.chars.pop_back();
                             --_renderCount; // a1+84
                         }
                     }
                 }
                 // LABEL_94：pending size>=2 且末字符在 leading 集 → 再下移一个
-                if(_pendingChars.size() >= 2) {
-                    if(_leading.IndexOf(_pendingChars.back().text) != -1) {
-                        tmp.push_front(_pendingChars.back());
-                        _pendingChars.pop_back();
+                if(_pendingLine.chars.size() >= 2) {
+                    if(_leading.IndexOf(_pendingLine.chars.back().text) != -1) {
+                        tmp.push_front(_pendingLine.chars.back());
+                        _pendingLine.chars.pop_back();
                         --_renderCount; // a1+84
                     }
                 }
@@ -747,8 +828,8 @@ public:
         if(_renderDelayAccum <= _renderPos) // !(a1+188 > v11)
             _renderDelayAccum = c.renderPos; // a1+188 = *v9 = char.renderPos
         // else: a1+188 > v11 → v9 指 a1+188 → a1+188 = a1+188（不变）
-        // push char 副本到 pending deque（+368 finish.cur += 80）
-        _pendingChars.push_back(c); // TextRenderBase_charItem_copy / pushNode
+        // push char 副本到 pending 行 deque（+368 finish.cur += 80）
+        _pendingLine.chars.push_back(c); // TextRenderBase_charItem_copy / pushNode
         // word_break：记录是否空格(+428) + 上字是空格则记 run(+424)
         if(!_wordBreak) {          // a1+49 == 0 → 走 LABEL_16
             updateWordBreakState(c); // 0x5a4b8c
@@ -782,8 +863,8 @@ public:
         {
             float newPenX = c.cw + _penX; // v29 = a2+16 + a1+232
             _penX = newPenX;              // a1+232
-            if(_lineBboxRight < newPenX)  // a1+416
-                _lineBboxRight = newPenX;
+            if(_pendingLine.bboxRight < newPenX)  // a1+416
+                _pendingLine.bboxRight = newPenX;
             _penX = _curPitch + newPenX;  // a1+232 = a1+140 + v29
         }
         return true;
@@ -798,20 +879,20 @@ public:
             isSpace = (c.text == ttstr(TJS_W(" ")));
         }
         if(isSpace) {
-            _prevWasSpace = true; // a1+428 = 1（LABEL_20）
+            _pendingLine.prevWasSpace = true; // a1+428 = 1（LABEL_20）
             return;
         }
-        if(_prevWasSpace) // a1+428：上字是空格 → 记 run = 当前 pending size
-            _wordBreakRun = (int)_pendingChars.size(); // a1+424
-        _prevWasSpace = false; // a1+428 = 0（LABEL_20 写 v15=0）
+        if(_pendingLine.prevWasSpace) // a1+428：上字是空格 → 记 run = 当前 pending size
+            _pendingLine.wordBreakRun = (int)_pendingLine.chars.size(); // a1+424
+        _pendingLine.prevWasSpace = false; // a1+428 = 0（LABEL_20 写 v15=0）
     }
 
     // 竖排 pen advance（kinsoku LABEL_26 / 0x5a4c8c）：penY += size；penY = pitch + penY。
     void advanceLineVertical(const CharItem &c) { // LABEL_26
         float newPenY = c.size + _penY; // v25 = a2+20 + a1+236
         _penY = newPenY;                // a1+236
-        if(_lineBboxBottom < newPenY)   // a1+420
-            _lineBboxBottom = newPenY;
+        if(_pendingLine.bboxBottom < newPenY)   // a1+420
+            _pendingLine.bboxBottom = newPenY;
         _penY = _curPitch + newPenY;    // a1+236 = a1+140 + v25
     }
 
@@ -823,7 +904,7 @@ public:
         if(!_vertical) { // !a1+48：横排路径
             // 1. 行内最大字号 v6
             float v6 = 0.0f;
-            for(const CharItem &ci : _pendingChars) // 遍历 pending deque
+            for(const CharItem &ci : _pendingLine.chars) // 遍历 pending 行 deque
                 if(ci.size > v6) // char.size(+20)
                     v6 = ci.size;
             // 行高 v11 = max(v6, _curLineSize(+144))
@@ -833,8 +914,8 @@ public:
             if(h > 0.0f && h < (float)(v11 + _penY)) {
                 _renderOver = true; // a1+60 = 1
                 if(!_ignoreOverY) { // !a1+54
-                    clearPendingDeque(); // sub_5A1E68(a1+320)
-                    return false;        // return 0
+                    _pendingLine.clear(); // sub_5A1E68(a1+320) @0x5a384c
+                    return false;         // return 0
                 }
             }
             // 3. align 偏移 v14（v13 = _curAlign(+76)）
@@ -853,20 +934,20 @@ public:
             // 进入缩进段的唯一条件 = pending 非空（0x5A35A0/0x5A35B8 `CMP X8,X24` →
             //   0x5A35C0），与 v14 是否为 0 无关。纠正旧实现多出的 `v14 != 0.0f` 门控
             //   （left-align v14=0 但首字符 x≥全角空格宽时二进制仍缩进，0x5A35A0 证伪）。
-            if(!_pendingChars.empty()) {
+            if(!_pendingLine.chars.empty()) {
                 // v15 = onGetTextWidth(L"　"=0x3000, fontScale*fontsize); ==0 → fontsize
                 float v15 = onGetTextWidth(objthis, ttstr((tjs_char)0x3000),
                                           _fontScale * _curFontSize); // sub_5A426C
                 if(v15 == 0.0f)
                     v15 = _curFontSize; // a1+116
                 // v16 = (int)((v14 + 首字符.x(+8)) / v15)
-                int v16 = (int)((float)(v14 + _pendingChars.front().x) / v15);
+                int v16 = (int)((float)(v14 + _pendingLine.chars.front().x) / v15);
                 for(; v16 >= 1; --v16)
                     _renderText = _renderText + ttstr((tjs_char)0x3000); // word_14CA1EE 全角空格
             }
             // LABEL_32：落字到行（写坐标 + 拼接 renderText）
             float v24 = 0.0f; // 行底累加 (a1+400)
-            for(CharItem &ci : _pendingChars) {
+            for(CharItem &ci : _pendingLine.chars) {
                 float v27 = v11 + ci.y; // 行内字底 = v11 + char.y(+12)
                 if(v24 < v27)
                     v24 = v27;
@@ -875,26 +956,29 @@ public:
                 if(ci.text.c_str()) // 拼接非空文本到 renderText(+40)
                     _renderText = _renderText + ci.text; // sub_A13ABC
             }
-            // 写行 metric
-            _lineHeightAccum = v11;             // a1+404
-            _lineBottomAccum = v24;             // a1+400
-            float v32 = v14 + _lineBboxLeft;    // a1+408
-            float v34 = v14 + _lineBboxRight;   // a1+416
-            float v33 = v11 + _penY;            // a1+236 新行 Y
-            _lineBboxLeft = v32;                // a1+408
-            _lineBboxRight = v34;               // a1+416
-            _penY = v33;                        // a1+236
-            if(_lineBboxBottom < v33)           // a1+420
-                _lineBboxBottom = v33;
-            // push lineItem：把 pending deque 整体拷入 lineItem + metric（sub_5A4588）
-            pushLineItem();
-            clearPendingDeque(); // sub_5A1E68(a1+320)
+            // 写行 metric（pending Line 内嵌字段 +400..+420）
+            _pendingLine.lineHeight = v11;             // a1+404
+            _pendingLine.lineBottom = v24;             // a1+400
+            float v32 = v14 + _pendingLine.bboxLeft;   // a1+408
+            float v34 = v14 + _pendingLine.bboxRight;  // a1+416
+            float v33 = v11 + _penY;                   // a1+236 新行 Y
+            _pendingLine.bboxLeft = v32;               // a1+408
+            _pendingLine.bboxRight = v34;              // a1+416
+            _penY = v33;                               // a1+236
+            if(_pendingLine.bboxBottom < v33)          // a1+420
+                _pendingLine.bboxBottom = v33;
+            // push：整个 pending Line 拷入 lineList（sub_5A4588 拷 deque +
+            //   0x5a3758/0x5a3768 两 OWORD 拷 +80..+108 全 metric 含 wordBreakRun/
+            //   prevWasSpace；扩容路径 sub_5A43E8 同）。源码层 = push_back(pendingLine)。
+            _lineList.push_back(_pendingLine);
+            _pendingLine.clear(); // sub_5A1E68(a1+320) @0x5a378c：metric 全零化
             // renderText += L"\n"（行尾换行）
             _renderText = _renderText + ttstr(TJS_W("\n")); // sub_A13ABC(.., L"\n")
             // pen X 复位到行首 + 行间距推进
             _penX = _lineStartX;        // a1+232 = a1+196
-            if(_lineBboxLeft > _penX)   // a1+408 > a1+232
-                _lineBboxLeft = _penX;
+            // 二进制 0x5a37c8 读的是 Line::clear 后的 +408（左操作数恒 0）
+            if(_pendingLine.bboxLeft > _penX)   // a1+408 > a1+232
+                _pendingLine.bboxLeft = _penX;
             _penY = _curLineSpacing + _penY; // a1+236 = a1+136 + a1+236
         }
         // LABEL_56：清理（横排路径走完也到这；竖排路径直接到这）
@@ -904,28 +988,14 @@ public:
         return true;          // return 1
     }
 
-    // push lineItem（finishLine LABEL_32 / sub_5A4588@0x5A4588）：把当前 pending deque
-    //   整体拷入新 lineItem.chars，并拷行 metric。源码层 = lineList.push_back(LineItem{...}).
-    void pushLineItem() { // sub_5A4588 / sub_5A43E8
-        LineItem li;
-        li.chars = _pendingChars;   // deque<charItem> 整体拷贝（sub_5A46C0 逐元素 charItem_copy）
-        li.lineBottom = _lineBottomAccum; // +80 ← a1+400
-        li.lineHeight = _lineHeightAccum; // +84 ← a1+404
-        li.bboxLeft = _lineBboxLeft;      // +88 ← a1+408
-        li.bboxTop = _lineBboxTop;        // +92 ← a1+412
-        li.bboxRight = _lineBboxRight;    // +96 ← a1+416
-        li.bboxBottom = _lineBboxBottom;  // +100 ← a1+420
-        _lineList.push_back(std::move(li));
-    }
-
     // newline @0x59FECC：pending deque 非空（finish.cur(+368) != start.cur(+336)）→ finishLine。
     //   平台边界：二进制 native this 即 objthis（NativeClassBinder 风格，native+0=iTJSDispatch2
     //   base），度量回调 sub_5A426C 用 native+0 调 FuncCall。本地走 ncbInstanceAdaptor，
     //   native(TextRenderBase C++) 与 objthis(TJS dispatch) 是两个对象，故内部落字函数
     //   须显式接收 objthis 以回调脚本 onGetTextWidth/onFontChange。
     void newlineImpl(iTJSDispatch2 *objthis) { // 0x59FECC
-        if(!_pendingChars.empty()) // a1+368 != a1+336
-            finishLine(objthis);   // sub_5A34B8
+        if(!_pendingLine.chars.empty()) // a1+368 != a1+336
+            finishLine(objthis);        // sub_5A34B8
     }
     static tjs_error newline(tTJSVariant *, tjs_int, tTJSVariant **,
                              iTJSDispatch2 *objthis) { // ncb wrapper
@@ -951,10 +1021,10 @@ public:
     //   renderSizeH=+244，valign=+80，charItem.renderPos=+24）。
     void doneImpl(iTJSDispatch2 *objthis) { // 0x59FEE4
         // ① pending 非空 → finishLine（a1[46]!=a1[42] = +368!=+336）
-        if(!_pendingChars.empty())
+        if(!_pendingLine.chars.empty())
             finishLine(objthis); // sub_5A34B8
         // ② 全局 bbox（遍历 lineList，stride 112；读 lineItem bbox float[22..25]）
-        for(const LineItem &li : _lineList) {
+        for(const Line &li : _lineList) {
             if(_renderTop > li.bboxTop)       // *v1+63(+252) > v5[23]
                 _renderTop = li.bboxTop;
             if(_renderBottom < li.bboxBottom) // *v1+65(+260) < v5[25]
@@ -976,7 +1046,7 @@ public:
             else // 其它：无偏移
                 v12 = 0;
             if(v12 != 0) { // LABEL_18：把 v12 加到每行每 char.y(+12)
-                for(LineItem &li : _lineList)
+                for(Line &li : _lineList)
                     for(CharItem &ci : li.chars)
                         ci.y = ci.y + (float)v12; // *(char+12) += v12
             }
@@ -986,7 +1056,7 @@ public:
         }
         // ④ charList 重建：从各行 deque 铺 charItem 指针（+304=+296 后逐 push）
         _charList.clear();
-        for(LineItem &li : _lineList)
+        for(Line &li : _lineList)
             for(CharItem &ci : li.chars)
                 _charList.push_back(&ci); // 指向行 deque 内元素（deque 元素地址稳定）
         // ⑤ keyWait 列表 time 段回填（done @0x59FEE4 keyWait 循环 0x5a0180..0x5a020c）：
@@ -1052,7 +1122,7 @@ public:
     // resolveFaceIndex @0x5A14DC：face 名 → 稳定 index（intern）。
     //   已 intern → 返回旧 idx；未 intern → 分配 idx = 当前 _faceTable.size()
     //   ((+464-+456)>>3) 并存入 _faceHash。注意：本函数不向 _faceTable push，
-    //   仅在 hash 表登记（faceTable 的 push 在 setFont/setDefault face 解析处）。
+    //   仅在 hash 表登记。
     int resolveFaceIndex(const ttstr &name) { // 0x5A14DC
         auto it = _faceHash.find(name); // sub_5A172C by FaceNameHash
         if(it != _faceHash.end())
@@ -1088,8 +1158,10 @@ public:
         tTJSVariant vItalic((tjs_int)(_curItalic ? 1 : 0)); // a1+65
         dict->PropSet(TJS_MEMBERENSURE, TJS_W("italic"), nullptr, &vItalic,
                       dict);
-        // FuncCall(L"onFontChange", dict)：objthis 上的脚本回调
-        tTJSVariant vDict(dict, dict);
+        // FuncCall(L"onFontChange", dict)：objthis 上的脚本回调。
+        //   arg variant {Object=dict, ObjThis=null}（0x5a2050 v13=1 /
+        //   0x5a2054 v12[0]=v6, v12[1]=0）——objthis 槽为 null。
+        tTJSVariant vDict(dict, (iTJSDispatch2 *)nullptr);
         dict->Release();
         tTJSVariant *args[1] = { &vDict };
         objthis->FuncCall(0, TJS_W("onFontChange"), nullptr, nullptr, 1, args,
@@ -1130,21 +1202,24 @@ public:
         return TJS_SUCCEEDED(
             dict->PropGet(TJS_MEMBERMUSTEXIST, key, nullptr, out, dict));
     }
-    // 取参数 0 作为 dict 对象（二进制：sub_A0F5E0 拷贝 + 若 type!=1 则抛
-    //   TJSThrowVariantConvertError(Object) + AddRef）。返回 nullptr 表示非对象。
+    // 取参数 0 作为 dict 对象。二进制（setOption@0x59d2e4/setDefault@0x59dee0/
+    //   setFont@0x59f010/setStyle 同构）：sub_A0F5E0 拷贝 → 若 type!=1 则
+    //   sub_A0E48C(v, 1u) = TJSThrowVariantConvertError(v, tvtObject)。
+    //   type==object 但指针为 null 时二进制 v3=0（后续 PropGet 即崩）；本地返回
+    //   nullptr 由调用方守护（平台守护，不改变合法路径行为）。
     static iTJSDispatch2 *paramAsDict(tjs_int numparams, tTJSVariant **param) {
         if(numparams < 1 || !param || !param[0])
-            return nullptr;
+            return nullptr; // NCB 封送守护（二进制 native 直收 variant）
         if(param[0]->Type() != tvtObject)
-            return nullptr; // 二进制此处抛转换错误；本地以 INVALIDOBJECT 返回守护
+            TJSThrowVariantConvertError(*param[0], tvtObject); // sub_A0E48C(,1)
         return param[0]->AsObjectNoAddRef();
     }
 
     // ============================================================
     // setOption @0x59D2AC：(dict) → 选项 byte 字段 +48..+59,+112 + 禁则字符串 +8..+32
     //   逐 key 顺序、key 字符串常量、读取条件、类型强制均 1:1 复刻反编译。
-    //   - following/leading/begin/end：仅接受 string/void（其它类型二进制抛转换错误，
-    //     本地按 ttstr 语义存：string→其值、void→空串）。
+    //   - following/leading/begin/end：string→其值、void→空串；
+    //     object/octet/int/real → TJSThrowVariantConvertError(String)。
     //   - 其余 byte 字段：boolCoerce；kinsoku_max 同 boolCoerce 但写 DWORD(0/1)。
     // ============================================================
     static tjs_error setOption(tTJSVariant *, tjs_int numparams,
@@ -1193,8 +1268,11 @@ public:
             t->_ignoreStyle = boolCoerce(v);       // +59
         return TJS_S_OK;
     }
-    // following/leading/begin/end 的 string/void 存值（二进制：type∈{1,3,4,5}→抛
-    //   转换错误；type==2→store ttstr；void→空串）。本地以 ttstr 语义忠实存值。
+    // following/leading/begin/end 的 string/void 存值（setOption@0x59D2AC：
+    //   octet/int/real（(unsigned)(v58-3)<3 @0x59d358）与 object（v58==1
+    //   @0x59d368 → LABEL_10）均 sub_A0E48C(v57, 2u) =
+    //   TJSThrowVariantConvertError(v, tvtString)；string(2)→store ttstr；
+    //   void(0)→v5=nullptr 空串）。
     void setOptionStr(iTJSDispatch2 *dict, const tjs_char *key, ttstr &field) {
         tTJSVariant v;
         if(!dictGet(dict, key, &v))
@@ -1207,9 +1285,8 @@ public:
             field = ttstr(); // 空串（二进制 v5=nullptr）
             break;
         default:
-            // 二进制对 object/octet/int/real 抛 TJSThrowVariantConvertError(String)。
-            //   本地以最近的忠实语义：转字符串存（避免抛异常打断脚本）。
-            field = ttstr(v);
+            // object/octet/int/real → ConvertError(String)（sub_A0E48C(,2)）
+            TJSThrowVariantConvertError(v, tvtString);
             break;
         }
     }
@@ -1229,15 +1306,17 @@ public:
         if(!dict)
             return TJS_E_INVALIDOBJECT;
         tTJSVariant v;
-        // face → resolveFaceIndex → +96（string/void；object/octet/int/real 抛错）
+        // face → resolveFaceIndex → +96。类型分发 @0x59df54..0x59df74：
+        //   octet/int/real（(unsigned)(v55-3)<3）与 object（v55==1）均
+        //   sub_A0E48C(v54, 2) = ConvertError(String)；string→取值；void→空串。
         if(dictGet(dict, TJS_W("face"), &v)) {
             ttstr faceName;
             if(v.Type() == tvtString)
                 faceName = ttstr(v);
             else if(v.Type() == tvtVoid)
-                faceName = ttstr();
+                faceName = ttstr(); // v53 = nullptr
             else
-                faceName = ttstr(v); // 二进制抛错；本地忠实转字符串
+                TJSThrowVariantConvertError(v, tvtString); // sub_A0E48C(,2)
             t->_defaultFaceIndex = t->resolveFaceIndex(faceName); // +96
         }
         if(dictGet(dict, TJS_W("bold"), &v))
@@ -1309,15 +1388,18 @@ public:
             return TJS_E_INVALIDOBJECT;
         tTJSVariant v;
         bool changed = false; // v5
-        // face：present→resolveFaceIndex；idx 变则更新 +72 并 changed=true
+        // face：present→resolveFaceIndex；idx 变则更新 +72 并 changed=true。
+        //   类型分发 @0x59f084..0x59f0a4（与 setDefault face 同构）：
+        //   octet/int/real 与 object → sub_A0E48C(v28, 2u)=ConvertError(String)；
+        //   string→取值；void→空串。
         if(dictGet(dict, TJS_W("face"), &v)) {
             ttstr faceName;
             if(v.Type() == tvtString)
                 faceName = ttstr(v);
             else if(v.Type() == tvtVoid)
-                faceName = ttstr();
+                faceName = ttstr(); // v27 = nullptr
             else
-                faceName = ttstr(v);
+                TJSThrowVariantConvertError(v, tvtString); // sub_A0E48C(,2)
             int idx = t->resolveFaceIndex(faceName);
             if(t->_curFaceIndex != idx) {
                 t->_curFaceIndex = idx; // +72
@@ -1511,8 +1593,13 @@ public:
         return -1;
     }
     // evalDollarTag @0x5A4148：对脚本对象 FuncCall(L"onEval", tagContent) → 返回值
-    //   若 type==2(string) 取其 ttstr，否则空串。平台边界：二进制用 native+0 调
-    //   FuncCall（NativeClassBinder native≡dispatch），本地传 objthis。
+    //   按 type 分发：octet/int/real（(unsigned)(v13-3)<3 @0x5a41d8）与
+    //   object（v13==1 @0x5a41e8 → LABEL_6）均走 sub_A0E48C(v12, 2u) =
+    //   TJSThrowVariantConvertError(result, tvtString)（__noreturn 抛错）；
+    //   string(2) 取其值 @0x5a422c；void(0) → *a3=0 空串 @0x5a41f8。
+    //   FuncCall 返回码二进制不检查（vtbl+16 调用结果丢弃）。
+    //   平台边界：二进制用 native+0 调 FuncCall（NativeClassBinder
+    //   native≡dispatch），本地传 objthis。
     static ttstr evalDollarTag(iTJSDispatch2 *objthis,
                                const ttstr &content) { // 0x5A4148
         if(!objthis)
@@ -1520,14 +1607,16 @@ public:
         tTJSVariant arg(content); // v10：tagContent（string）
         tTJSVariant result;       // v12
         tTJSVariant *args[1] = { &arg };
-        tjs_error hr = objthis->FuncCall(0, TJS_W("onEval"), nullptr, &result, 1,
-                                         args, objthis);
-        if(TJS_FAILED(hr))
-            return ttstr();
-        if(result.Type() == tvtString) // v13 == 2
+        objthis->FuncCall(0, TJS_W("onEval"), nullptr, &result, 1, args,
+                          objthis); // 返回码不检查（二进制同）
+        tjs_int ty = (tjs_int)result.Type(); // v13
+        if((tjs_uint)(ty - 3) < 3) // octet(3)/int(4)/real(5) @0x5a41d8
+            TJSThrowVariantConvertError(result, tvtString); // sub_A0E48C(,2)
+        if(ty == tvtString) // v13 == 2 @0x5a41e0
             return ttstr(result);
-        // type∈{3,4,5}(octet/int/real) 在二进制走 sub_A0E48C 抛错；本地以空串守护。
-        return ttstr();
+        if(ty == tvtObject) // v13 == 1 @0x5a41e8 → LABEL_6 同抛
+            TJSThrowVariantConvertError(result, tvtString);
+        return ttstr(); // void → 空（*a3 = 0 @0x5a41f8）
     }
 
     // ============================================================
@@ -1841,10 +1930,15 @@ public:
         if(endIdx != -1) {
             // v73 = end 集中索引；有效且 --depth==0
             if(endIdx >= 0 && --v133 == 0) {
-                // 校验起始 begin 字符 v132 在 begin 集的索引 == endIdx → 配对
-                int bIdx = (int)_begin.IndexOf(ttstr(v132));
-                if(bIdx == endIdx)
-                    _lineStartX = 0; // +196 = 0（LABEL_318）
+                // 前置门 @0x5a2a5c/0x5a2a68（BL ttstr_length，IDA 误标
+                //   operator delete）：begin(+24) 与 end(+32) 串长度相等
+                //   （CMP W26,W0 @0x5a2a6c，B.NE 跳过配对判定 @0x5a2a70）。
+                if((int)_begin.GetLen() == (int)_end.GetLen()) {
+                    // 校验起始 begin 字符 v132 在 begin 集的索引 == endIdx → 配对
+                    int bIdx = (int)_begin.IndexOf(ttstr(v132));
+                    if(bIdx == endIdx)
+                        _lineStartX = 0; // +196 = 0（LABEL_318）
+                }
             }
         }
         v17 = false; // LABEL_319
@@ -1857,9 +1951,10 @@ public:
     //   1:1 复刻反编译：
     //   - numparams(a2)<3 → 返回 4294966292(=0xFFFFFC14=TJS_E_BADPARAMCOUNT)。
     //   - a2==3 → flag(v9)=0。
-    //   - a2>=4 → param[3](=size) 仅做类型强制（switch type: object/octet→抛错、
-    //     string→sub_A133A8 取实数、real→nullsub），但**结果被丢弃**——size 不传给
-    //     render，只是触发参数类型校验。a2<5 → flag=0。
+    //   - a2>=4 → param[3](=size) 仅做 real 类型强制（switch @0x59fcb0：
+    //     object(1)/octet(3)→sub_A0E48C(v10,5)=ConvertError(Real)、
+    //     string(2)→sub_A133A8 解析、int/real/void→无操作），**结果被丢弃**——
+    //     size 不传给 render，只触发参数类型校验。= AsReal() 后丢弃。a2<5 → flag=0。
     //   - a2>=5 → param[4](=flag) boolCoerce → v9。
     //   - text = param[0]（拷贝到本地 variant），x = intCoerce(param[1])，
     //     y = intCoerce(param[2])。
@@ -1880,8 +1975,11 @@ public:
         if(numparams == 3) {
             flag = false; // v9 = 0
         } else {
-            // a2>=4：param[3]=size 仅类型强制后丢弃（object/octet 在二进制抛错，
-            //   本地以无副作用守护——只读 type 不取值）。
+            // a2>=4：param[3]=size real 强制后丢弃（switch @0x59fcb0：
+            //   object/octet→ConvertError(Real)、string→解析、int/real/void→无操作）。
+            //   tTJSVariant::AsReal 逐 case 同构（object/octet 抛、string parse、
+            //   void→0.0 不抛），结果丢弃。
+            (void)param[3]->AsReal();
             // a2<5 → flag=0；a2>=5 → flag = boolCoerce(param[4])。
             if(numparams < 5)
                 flag = false; // LABEL_12
@@ -1965,6 +2063,9 @@ public:
                         return false;
                     }
                 }
+                // 全部展开成功（++v64>=v50 @0x5a295c → LABEL_319）：v17=0。
+                //   空结果（n<1）走 LABEL_320 不动 v17。
+                v17 = false;
                 goto cont;
             } else if(c == TJS_W('%')) {
                 // ----- % 样式控制 -----
@@ -2113,14 +2214,19 @@ public:
             dict->PropSet(TJS_MEMBERENSURE, TJS_W("pos"), nullptr, &vPos, dict);
             tTJSVariant vTime((tjs_int)v13); // v16=4 Integer（同 v13）
             dict->PropSet(TJS_MEMBERENSURE, TJS_W("time"), nullptr, &vTime, dict);
-            // add dict 到数组（二进制 FuncCall L"add"）
-            tTJSVariant vDict(dict, dict);
+            // add dict 到数组（二进制 FuncCall L"add"）。
+            //   arg variant {Object=dict, ObjThis=null}（0x5a042c v16=1 /
+            //   0x5a0430 v15[0]=v12, v15[1]=0）——objthis 槽为 null。
+            tTJSVariant vDict(dict, nullptr);
             dict->Release();
             tTJSVariant *args[1] = { &vDict };
             arr->FuncCall(0, TJS_W("add"), nullptr, nullptr, 1, args, arr);
         }
+        // result variant {Object=arr, ObjThis=null}（0x5a04c8 *(a2+16)=1 /
+        //   0x5a04cc *a2=v4, *(a2+8)=0）——objthis 槽为 null。
+        //   （注意：getCharacters 的 result 在二进制为 (obj,obj)，两函数不一致，各自照抄。）
         if(result)
-            *result = tTJSVariant(arr, arr);
+            *result = tTJSVariant(arr, nullptr);
         arr->Release();
         return TJS_S_OK;
     }
@@ -2134,10 +2240,11 @@ public:
     //   - face 缓存：faceIndex(+52) 变化时查 _faceTable[faceIndex]（越界→空串 byte_1506A57），
     //       缓存于 v30，每元素 face=该缓存名。
     //   - dict 字段（key UTF-16LE 经反编译确认；类型经 sub_5A2160/5A614C/5A6020/A0FB64 helper）：
-    //       text(+0,string) x(+8,real) y(+12,real) cw(+16,real) size(+20,real)
-    //       face(缓存名,string) color(+28,int) bold(+41,int) italic(+42,int)
-    //       shadow(+43,int) edge(+44,int) shadowColor(+32,int) shadowDiff(+48,int)
-    //       edgeColor(+36,int) ruby(子 Array，仅 +56!=+64) vertical(+45,int) delay(+24,real)
+    //       graph(+40,int 首字段 @0x5a081c) text(+0,string) x(+8,real) y(+12,real)
+    //       cw(+16,real) size(+20,real) face(缓存名,string) color(+28,int) bold(+41,int)
+    //       italic(+42,int) shadow(+43,int) edge(+44,int) shadowColor(+32,int)
+    //       shadowDiff(+48,int) edgeColor(+36,int) ruby(子 Array，仅 +56!=+64)
+    //       vertical(+45,int) delay(+24,real)
     //   - dict 经 sub_5A6550(arr, v14, dict) = PropSetByNum(index=v14) 落入数组。
     static tjs_error getCharacters(tTJSVariant *result, tjs_int numparams,
                                    tTJSVariant **param,
@@ -2179,6 +2286,8 @@ public:
                     v15 = fi;
                 }
                 iTJSDispatch2 *dict = TJSCreateDictionaryObject(); // sub_9C8440(0)
+                // 首字段 graph（+40 byte→Integer，sub_5A2160 @0x5a081c，先于 text）
+                trDictSetInt(dict, TJS_W("graph"), ci->graph ? 1 : 0); // +40
                 trDictSetStr(dict, TJS_W("text"), ci->text);         // +0
                 trDictSetReal(dict, TJS_W("x"), ci->x);              // +8
                 trDictSetReal(dict, TJS_W("y"), ci->y);              // +12
@@ -2260,9 +2369,14 @@ using textrender::TextRenderBase;
 // NCB 注册（模块 TextRender.dll；全部 objectMember/flags=0，§5）
 // ============================================================
 NCB_REGISTER_CLASS(TextRenderBase) {
-    NCB_CONSTRUCTOR(()); // TextRender.tjs 构造调 super()（默认构造）
+    // 构造器成员 = TextRenderBase_ncb_constructor @0x59D160（二进制 §2 的 17 个
+    //   method-tag 成员之一）：TJS `new` 时立即 `*slot = operator new(0x250);
+    //   TextRenderBase_ctor(obj, objthis)`——非惰性创建。本地 NCB_CONSTRUCTOR(())
+    //   同样在 TJS 构造时立即建 native 实例（真 ctor = TextRenderBase() @0x5A111C，
+    //   默认值群见类首）。
+    NCB_CONSTRUCTOR(());
 
-    // ---- 17 methods ----
+    // ---- 16 methods（+ 上面 1 构造器 = 二进制 17 个 method-tag 成员）----
     NCB_METHOD_RAW_CALLBACK(setOption, &Class::setOption, 0);
     NCB_METHOD_RAW_CALLBACK(setDefault, &Class::setDefault, 0);
     NCB_METHOD_RAW_CALLBACK(setRenderSize, &Class::setRenderSize, 0);
