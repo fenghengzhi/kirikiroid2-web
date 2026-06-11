@@ -86,6 +86,8 @@ if(ANDROID)
 elseif(WEB)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/main.cpp)
     set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "index" SUFFIX ".html")
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/jspi_jsc_mainloop_fix.js)
     target_link_options(${PROJECT_NAME} PRIVATE
         "SHELL:-s USE_SDL=2"
         "SHELL:-s USE_SDL_TTF=2"
@@ -110,13 +112,17 @@ elseif(WEB)
         "$<$<NOT:$<CONFIG:Debug>>:SHELL:-s PTHREAD_POOL_SIZE=24>"
         "SHELL:-s DEFAULT_PTHREAD_STACK_SIZE=1048576"
         # VirtualLazyFS: 主线程文件读经 JSPI 挂起等待 JS 异步供数
-        # （仅 Chromium 137+；EM_ASYNC_JS 导入自动包 WebAssembly.Suspending）。
+        # （Chromium 137+ / WebKit 26.4+，即 Safari 27 beta；EM_ASYNC_JS 导入
+        # 自动包 WebAssembly.Suspending）。
         # krkr2_main_loop_tick 是唯一可挂起的 wasm 入口（cocos 主循环 tick，
         # 见 vcpkg cocos2dx patch CCApplication-emscripten.cpp）：glue 的
         # getWasmTableEntry 会给"同时是 JSPI_EXPORTS 导出"的函数指针表项
-        # 包 WebAssembly.promising。
+        # 包 WebAssembly.promising。该识别靠函数对象身份比较，JSC 不满足
+        # table.get/export 身份等价，需用户库覆盖 set_main_loop_arg 兜底，
+        # 见 jspi_jsc_mainloop_fix.js。
         "SHELL:-s JSPI=1"
         "SHELL:-s JSPI_EXPORTS=['krkr2_main_loop_tick']"
+        "SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/jspi_jsc_mainloop_fix.js"
         -fwasm-exceptions
         $<$<CONFIG:Debug>:--emit-symbol-map>
         $<$<CONFIG:Debug>:-g2>

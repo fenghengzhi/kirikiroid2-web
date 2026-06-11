@@ -113,11 +113,13 @@ elif zip_real_path:
 else:
     url_param = ''
 
-http_server = http.server.HTTPServer(('0.0.0.0', args.http_port), COIHandler)
+# ThreadingHTTPServer 必需：WebKit/Safari 会 preconnect（先开 TCP 不发请求），
+# 单线程 HTTPServer 会被空连接阻塞，所有后续资源请求排队导致页面永远加载不完
+http_server = http.server.ThreadingHTTPServer(('0.0.0.0', args.http_port), COIHandler)
 print(f"  HTTP  -> http://localhost:{args.http_port}/index.html{url_param}  (localhost debug)")
 
 if os.path.exists(certfile) and os.path.exists(keyfile):
-    https_server = http.server.HTTPServer(('0.0.0.0', args.https_port), COIHandler)
+    https_server = http.server.ThreadingHTTPServer(('0.0.0.0', args.https_port), COIHandler)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(certfile, keyfile)
     https_server.socket = ctx.wrap_socket(https_server.socket, server_side=True)
