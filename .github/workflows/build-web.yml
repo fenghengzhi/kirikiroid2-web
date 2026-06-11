@@ -138,8 +138,9 @@ jobs:
             out/web/release/index.html
             out/web/release/index.js
             out/web/release/index.wasm
-            out/web/release/index.data
             out/web/release/index.worker.js
+            out/web/release/vlfs.js
+            out/web/release/assets.zip
             out/web/release/manifest.webmanifest
             out/web/release/sw.js
             out/web/release/pwa/
@@ -179,7 +180,10 @@ jobs:
           cp out/web/release/index.html /tmp/cloudflare-pages/
           cp out/web/release/index.js /tmp/cloudflare-pages/
           cp out/web/release/index.wasm /tmp/cloudflare-pages/
-          cp out/web/release/index.data /tmp/cloudflare-pages/
+          # VirtualLazyFS: index.data(--preload-file) 已移除，
+          # UI 资源改为 assets.zip + vlfs.js 懒加载
+          cp out/web/release/vlfs.js /tmp/cloudflare-pages/
+          cp out/web/release/assets.zip /tmp/cloudflare-pages/
           if [ -f out/web/release/index.worker.js ]; then
             cp out/web/release/index.worker.js /tmp/cloudflare-pages/
           fi
