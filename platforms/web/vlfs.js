@@ -7,7 +7,8 @@
  *
  * 内存驻留硬约束：不在内存持有任何全量文件数据。
  *  - 能 Blob 则 Blob（下载包/拖拽 File/ZIP stored 条目切片，off-heap）；
- *  - 不能 Blob 则 OPFS（ZIP deflate 条目流式解压落盘；初始化时清空）；
+ *  - 不能 Blob 则 OPFS（ZIP deflate 条目在注册阶段立即全部流式解压落盘，
+ *    不懒解压；OPFS 初始化时清空）；
  *  - 内存仅限有界块级 LRU 读缓存 + 写 overlay（存档级小文件）。
  *
  * 线程模型：所有方法只在浏览器主线程调用。wasm 主线程经 JSPI（EM_ASYNC_JS）
@@ -142,9 +143,12 @@
         },
 
         /*
-         * 解析 ZIP 中央目录（EOCD/ZIP64），把每个条目注册为懒加载文件。
-         * 不解压任何数据：stored 条目 = Blob 切片；deflate 条目首次访问时流式
-         * 解压落 OPFS。返回 { paths, xp3Paths }。
+         * 解析 ZIP 中央目录（EOCD/ZIP64），把每个条目注册为 VLFS 文件。
+         * stored 条目 = Blob 切片，永不解压；deflate 条目在注册阶段**立即
+         * 全部**流式解压落 OPFS（不懒解压，避免游戏中途首读卡顿），解压
+         * 走 DecompressionStream→OPFS 管道，内存恒定不驻留全量数据。
+         * opts.onProgress(done, total, path) 报告解压进度。
+         * 返回 { paths, xp3Paths }。
          */
         async registerZipBlob(blob, opts) {
             opts = opts || {};
@@ -153,7 +157,7 @@
             // 与旧 findCommonZipPrefix 语义一致：剥离唯一公共顶层目录
             var stripPrefix = opts.stripPrefix;
             if (stripPrefix === undefined) stripPrefix = findCommonZipPrefix(records);
-            var paths = [], xp3Paths = [];
+            var paths = [], xp3Paths = [], deflated = [];
             for (var i = 0; i < records.length; i++) {
                 var r = records[i];
                 var inner = stripPrefix ? r.name.substring(stripPrefix.length) : r.name;
@@ -162,7 +166,7 @@
                 if (r.method !== 0 && r.method !== 8) {
                     console.warn('[vlfs] unsupported zip method', r.method, 'for', r.name);
                 }
-                this._register(fsPath, {
+                var entry = this._register(fsPath, {
                     kind: 'zip', size: r.uncompSize, srcBlob: blob,
                     method: r.method, compSize: r.compSize,
                     localHeaderOffset: r.localHeaderOffset,
@@ -170,9 +174,19 @@
                     opfsFile: null,      // deflate 落盘后的 File
                     _spill: null         // 进行中的落盘 Promise（并发去重）
                 });
+                if (r.method === 8) deflated.push({ path: fsPath, entry: entry });
                 paths.push(fsPath);
                 if (fsPath.toLowerCase().endsWith('.xp3')) xp3Paths.push(fsPath);
             }
+            // 立即全量解压全部 deflate 条目（顺序执行，IO 受限；
+            // _ensureOpfsSpill 幂等，残留的读时兜底路径不会重复解压）
+            for (var j = 0; j < deflated.length; j++) {
+                if (opts.onProgress)
+                    opts.onProgress(j, deflated.length, deflated[j].path);
+                await this._ensureOpfsSpill(deflated[j].entry);
+            }
+            if (opts.onProgress && deflated.length)
+                opts.onProgress(deflated.length, deflated.length, '');
             return { paths: paths, xp3Paths: xp3Paths };
         },
 
@@ -473,8 +487,10 @@
         },
 
         /*
-         * deflate 条目首次访问：流式解压落 OPFS（恒定内存），之后随机读 OPFS。
-         * DEFLATE 不可随机访问是格式约束；OPFS 由 init() 整体清空。
+         * deflate 条目流式解压落 OPFS（恒定内存），之后随机读 OPFS。
+         * registerZipBlob 在注册阶段对全部 deflate 条目立即调用本函数
+         * （读路径保留调用仅作幂等兜底）。DEFLATE 不可随机访问是格式
+         * 约束；OPFS 由 init() 整体清空。
          */
         async _ensureOpfsSpill(e) {
             if (e.opfsFile) return;

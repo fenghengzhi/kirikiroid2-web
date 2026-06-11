@@ -1543,16 +1543,23 @@
                 var blob = await fetchBlobWithProgress(url, function(loaded, total) {
                     if (total > 0) {
                         var pct = Math.round(loaded / total * 100);
-                        progressFill.style.width = (pct * 0.9) + '%';
+                        progressFill.style.width = (pct * 0.6) + '%';
                         statusElement.textContent = 'Downloading... ' + pct + '% (' + (loaded / 1048576).toFixed(1) + ' MB)';
                     } else {
                         statusElement.textContent = 'Downloading... ' + (loaded / 1048576).toFixed(1) + ' MB';
                     }
                 });
 
-                statusElement.textContent = 'Indexing archive...';
-                progressFill.style.width = '95%';
-                var reg = await VLFS.registerZipBlob(blob);
+                statusElement.textContent = 'Extracting archive...';
+                progressFill.style.width = '60%';
+                // deflate 条目在注册阶段立即全部解压落 OPFS（stored 条目零成本）
+                var reg = await VLFS.registerZipBlob(blob, {
+                    onProgress: function(done, total, path) {
+                        progressFill.style.width = (60 + Math.round(done / total * 40)) + '%';
+                        statusElement.textContent =
+                            'Extracting (' + done + '/' + total + ') ' + path.substring(1);
+                    }
+                });
                 console.log('[vlfs] zip registered: ' + reg.paths.length + ' entries, ' +
                             reg.xp3Paths.length + ' xp3');
 
@@ -1676,9 +1683,15 @@
 
         async function handleZipFile(file) {
             try {
-                setPickerProgress(50, 'Indexing ' + file.name + '...');
+                setPickerProgress(10, 'Indexing ' + file.name + '...');
                 await vlfsReady;
-                var reg = await VLFS.registerZipBlob(file);
+                // deflate 条目在注册阶段立即全部解压落 OPFS（stored 条目零成本）
+                var reg = await VLFS.registerZipBlob(file, {
+                    onProgress: function(done, total, path) {
+                        setPickerProgress(10 + Math.round(done / total * 90),
+                            'Extracting (' + done + '/' + total + ') ' + path.substring(1));
+                    }
+                });
                 console.log('[vlfs] local zip registered: ' + reg.paths.length + ' entries');
                 setPickerProgress(100, 'Starting...');
                 checkAndStartGame(reg.xp3Paths, '');
