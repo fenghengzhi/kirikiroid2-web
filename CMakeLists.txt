@@ -109,6 +109,14 @@ elseif(WEB)
         "$<$<CONFIG:Debug>:SHELL:-s PTHREAD_POOL_SIZE=64>"
         "$<$<NOT:$<CONFIG:Debug>>:SHELL:-s PTHREAD_POOL_SIZE=24>"
         "SHELL:-s DEFAULT_PTHREAD_STACK_SIZE=1048576"
+        # VirtualLazyFS: 主线程文件读经 JSPI 挂起等待 JS 异步供数
+        # （仅 Chromium 137+；EM_ASYNC_JS 导入自动包 WebAssembly.Suspending）。
+        # krkr2_main_loop_tick 是唯一可挂起的 wasm 入口（cocos 主循环 tick，
+        # 见 vcpkg cocos2dx patch CCApplication-emscripten.cpp）：glue 的
+        # getWasmTableEntry 会给"同时是 JSPI_EXPORTS 导出"的函数指针表项
+        # 包 WebAssembly.promising。
+        "SHELL:-s JSPI=1"
+        "SHELL:-s JSPI_EXPORTS=['krkr2_main_loop_tick']"
         -fwasm-exceptions
         $<$<CONFIG:Debug>:--emit-symbol-map>
         $<$<CONFIG:Debug>:-g2>
@@ -116,8 +124,23 @@ elseif(WEB)
         -pthread
         -lopenal
         --shell-file ${CMAKE_CURRENT_BINARY_DIR}/shell.html
-        --preload-file ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio@/
     )
+    # UI 资源/字体改经 VirtualLazyFS 按需读取（cocos CCFileUtils →
+    # krkr2_vlfs_read_all 桥）：打成 store（不压缩）模式 assets.zip，
+    # shell.html 启动时 fetch 为 Blob 注册进 VLFS，条目即 Blob 切片，
+    # 不再像 --preload-file 那样全量驻留 MEMFS。
+    file(GLOB_RECURSE KRKR2_UI_ASSET_FILES ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio/*)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
+        COMMAND zip -0 -r -q -X ${CMAKE_CURRENT_BINARY_DIR}/assets.zip .
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ui/cocos-studio
+        DEPENDS ${KRKR2_UI_ASSET_FILES}
+        COMMENT "Packing UI assets (stored zip) for VirtualLazyFS"
+        VERBATIM
+    )
+    add_custom_target(krkr2_web_assets ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/assets.zip)
+    add_dependencies(${PROJECT_NAME} krkr2_web_assets)
     target_compile_options(${PROJECT_NAME} PRIVATE "SHELL:-s USE_SDL=2" "SHELL:-s USE_SDL_TTF=2" -fwasm-exceptions)
     # Local ZIP opener is visible by default in Debug, and can be enabled
     # explicitly in Release with ?pickZip=1.
@@ -167,8 +190,10 @@ elseif(WEB)
             ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/baidu_verify_codeva-3Z4bQwqyXI.html
             ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/robots.txt
             ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sitemap.xml
+            ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/vlfs.js
+            ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
-        COMMENT "Copy site verification, robots.txt, sitemap.xml"
+        COMMENT "Copy site verification, robots.txt, sitemap.xml, vlfs.js, assets.zip"
     )
 elseif(LINUX)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/linux/main.cpp)

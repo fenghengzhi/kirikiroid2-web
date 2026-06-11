@@ -43,15 +43,9 @@ class tTVPLocalFileStream : public tTJSBinaryStream {
     tjs_uint32 AccessFlags = 0;
 
 #ifdef __EMSCRIPTEN__
-    int HostStreamId = -1;
-    tjs_uint64 HostStreamSize = 0;
-    tjs_uint64 HostStreamPos = 0;
-    std::vector<uint8_t> ReadCache;
-    tjs_uint64 CacheOffset = 0;
-    tjs_uint64 CacheEnd = 0;
-    static constexpr size_t CACHE_BLOCK_SIZE = 1024 * 1024;
-
-    tjs_uint ReadFromHostStream(void *buffer, tjs_uint read_size);
+    // VirtualLazyFS 句柄（平台边界，见 environ/web/VirtualLazyFS.h）：
+    // 游戏文件由 JS 侧懒加载虚拟文件系统供数，不经 MEMFS
+    int VlfsFd = -1;
 #endif
 
 public:

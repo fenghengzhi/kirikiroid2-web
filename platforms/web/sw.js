@@ -14,7 +14,8 @@ var PRECACHE_ASSETS = [
     './index.html',
     './index.js',
     './index.wasm',
-    './index.data',
+    './assets.zip',
+    './vlfs.js',
     './manifest.webmanifest',
     './pwa/icon-192.png',
     './pwa/icon-512.png'

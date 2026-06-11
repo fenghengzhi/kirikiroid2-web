@@ -15,7 +15,7 @@
 - 调试版：`cmake --preset "Web Debug Config"` → `cmake --build out/web/debug`
 - 发布版：`cmake --preset "Web Release Config"` → `cmake --build out/web/release`
 - 依赖：emsdk 已 source、VCPKG_ROOT 已设置、ninja、cmake 3.31.1+、bison 3.8.2+
-- 输出：`out/web/{debug,release}/` → index.html, index.js, index.wasm, index.data, index.worker.js
+- 输出：`out/web/{debug,release}/` → index.html, index.js, index.wasm, index.worker.js, vlfs.js, assets.zip（UI 资源 stored-zip；--preload-file/index.data 已移除，游戏与 UI 文件经 VirtualLazyFS 懒加载，见 `cpp/core/environ/web/VirtualLazyFS.h`）
 - 环境变量：见 `.claude.local.md`（机器特定的 EMSDK/VCPKG_ROOT 路径）
 
 ### 构建陷阱
@@ -33,7 +33,8 @@
 - `cpp/core/visual/WindowIntf.cpp` — Window 类：drawDevice setter 要求 `interface` 属性返回 iTVPDrawDevice*
 - `cpp/core/plugin/PluginImpl.cpp` — TVPLoadPlugin（由 Plugins.link 调用）、TVPLoadInternalPlugins（启动时）
 - `cpp/core/base/StorageIntf.cpp` — 自动路径表、TVPAddAutoPath、TVPGetPlacedPath
-- `cpp/core/environ/web/Platform.cpp` — Web 平台启动逻辑，自动挂载 ZIP 中的同级 xp3 文件
+- `cpp/core/environ/web/Platform.cpp` — Web 平台启动逻辑
+- `cpp/core/environ/web/VirtualLazyFS.{h,cpp}` + `platforms/web/vlfs.js` — VirtualLazyFS：游戏/UI 文件懒加载（JSPI 挂起读 + pthread 代理 + OPFS spill + 写 overlay），仅 Chromium 137+
 - `tests/unit-tests/plugins/motionplayer-dll.cpp` — MotionPlayer/EmotePlayer 单元测试
 
 ## 代码模式
@@ -49,7 +50,7 @@
 
 ## 调试注意事项
 - 不要用单独的 XP3 文件测试 — 不完整的 XP3 集合会导致初始化失败，掩盖真正的 bug
-- 浏览器自动化：使用 `playwright-cli` 技能。游戏用触摸事件处理左键点击；用 CDP `Input.dispatchTouchEvent` 或确保 onMouseDownEvent 中使用 BUTTON_LEFT
+- 浏览器自动化：使用 `playwright-cli` 技能。**测游戏输入优先用 `page.mouse.click(x,y)`**。CDP `Input.dispatchTouchEvent` 有坑：每次 `run-code` 新建 CDP session，触摸 down/up 必须同一 session 配对，跨调用的悬挂触摸会让浏览器抑制后续全部鼠标事件，表现为"点击无反应"假回归；`page.touchscreen.tap` 需要 context `hasTouch:true` 否则 throw。判断输入是否进引擎：先在 window 挂 capture 计数器确认浏览器层派发
 - C++ 日志（`spdlog`/`printf`/`fprintf(stderr)`）均输出到浏览器控制台
 - **playwright-cli `console` 命令只保留最近约 200 条日志，WASM 引擎每秒产生数百条，绝大部分会丢失**。必须用 `addInitScript` 注入捕获脚本：先 `open` 空白页 → `run-code` 注入 `addInitScript` 过滤+收集日志 → 再 `goto` 目标页面 → 用 `eval` 取回 `window._filteredLogs`。详见 krkr2-debug skill
 - URL 参数：`?xp3=file.xp3` 加载单个 XP3，`?game=file.zip` 加载 ZIP 包。注意不要混用

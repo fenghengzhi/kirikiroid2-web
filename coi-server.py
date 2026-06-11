@@ -52,19 +52,47 @@ class COIHandler(http.server.SimpleHTTPRequestHandler):
             super().do_HEAD()
 
     def _serve_file(self, real_path, head_only=False):
+        # 支持 HTTP Range：VLFS 的 ?xp3= 远程懒加载按 1MiB 分块拉取
         try:
             size = os.path.getsize(real_path)
-            self.send_response(200)
+            start, end = 0, size - 1
+            range_header = self.headers.get('Range')
+            is_partial = False
+            if range_header and range_header.startswith('bytes='):
+                spec = range_header[len('bytes='):].split(',')[0].strip()
+                lo, _, hi = spec.partition('-')
+                if lo:
+                    start = int(lo)
+                    end = int(hi) if hi else size - 1
+                elif hi:  # 后缀范围 bytes=-N
+                    start = max(0, size - int(hi))
+                if start >= size:
+                    self.send_response(416)
+                    self.send_header('Content-Range', f'bytes */{size}')
+                    self.end_headers()
+                    return
+                end = min(end, size - 1)
+                is_partial = True
+
+            self.send_response(206 if is_partial else 200)
             self.send_header('Content-Type', 'application/octet-stream')
-            self.send_header('Content-Length', str(size))
+            self.send_header('Accept-Ranges', 'bytes')
+            self.send_header('Content-Length', str(end - start + 1))
+            if is_partial:
+                self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
             self.end_headers()
             if not head_only:
                 with open(real_path, 'rb') as f:
-                    while True:
-                        chunk = f.read(1024 * 1024)
+                    f.seek(start)
+                    remaining = end - start + 1
+                    while remaining > 0:
+                        chunk = f.read(min(1024 * 1024, remaining))
                         if not chunk:
                             break
+                        remaining -= len(chunk)
                         self.wfile.write(chunk)
+        except BrokenPipeError:
+            pass
         except Exception as e:
             self.send_error(500, str(e))
 

@@ -28,6 +28,7 @@
 #include "ui/MessageBox.h"
 #include "cocos2d/MainScene.h"
 #include "LayerFrameDumper.h"
+#include "VirtualLazyFS.h"
 
 void TVPGetMemoryInfo(TVPMemoryInfo &m) {
     size_t heapSize = (size_t)sbrk(0);
@@ -79,62 +80,9 @@ std::string TVPGetCurrentLanguage() {
 }
 
 // ---------------------------------------------------------------------------
-// FSAFS: save-persistence helpers (write-back to host via File System Access API)
-// ---------------------------------------------------------------------------
-
-EM_JS(void, fsafs_ensure_loaded, (const char *path_ptr), {});
-
-EM_JS(int, fsafs_is_host_stream, (const char *path_ptr), { return 0; });
-
-EM_JS(int, fsafs_open_stream, (const char *path_ptr), { return -1; });
-
-EM_JS(double, fsafs_get_stream_size, (int stream_id), { return 0; });
-
-EM_JS(int, fsafs_read_stream, (int stream_id, void *buf, double offset, int length), { return -1; });
-
-EM_JS(void, fsafs_close_stream, (int stream_id), {});
-
-EM_JS(void, fsafs_mark_written, (const char *path_ptr), {
-    var p = UTF8ToString(path_ptr);
-    if (!Module._loadedFiles) Module._loadedFiles = {};
-    Module._loadedFiles[p] = true;
-});
-
-EM_JS(void, fsafs_flush_file, (const char *path_ptr), {
-    var p = UTF8ToString(path_ptr);
-    if (!Module._hostDirHandle) {
-        if (Module._saveSpaceId && (p.startsWith('/savedata/') || p.startsWith('/save/'))) {
-            try { idbSaveFile(p, FS.readFile(p)); } catch (e) {
-                console.warn('[IDB] flush fallback failed:', p, e);
-            }
-        }
-        return;
-    }
-    var dirHandle = Module._hostDirHandle;
-    var prefix = Module._hostDirPrefix;
-    setTimeout(async function() {
-        try {
-            var data = FS.readFile(p);
-            var relPath = p;
-            if (prefix && relPath.startsWith(prefix + '/')) {
-                relPath = relPath.substring(prefix.length);
-            }
-            var parts = relPath.split('/').filter(Boolean);
-            var fileName = parts.pop();
-            var cur = dirHandle;
-            for (var i = 0; i < parts.length; i++) {
-                cur = await cur.getDirectoryHandle(parts[i], { create: true });
-            }
-            var fh = await cur.getFileHandle(fileName, { create: true });
-            var writable = await fh.createWritable();
-            await writable.write(data);
-            await writable.close();
-        } catch (err) {
-            console.warn('[FSAFS] flush_file FAILED: ' + p + ' - ' + err.message);
-        }
-    }, 0);
-});
-
+// 文件持久化：旧 fsafs_* host-stream/回写机制已被 VirtualLazyFS 吸收 ——
+// 写路径经 VLFS overlay，关闭时由 vlfs.js 的 onWriteClose 钩子（shell.html
+// 赋值）做 IndexedDB write-through + MEMFS 小文件镜像 + FSA 主机目录回写。
 // ---------------------------------------------------------------------------
 
 EM_JS(int, web_alert, (const char* msg, const char* title), {
@@ -214,6 +162,15 @@ static bool _TVPCreateFolders(const ttstr &folder) {
     if (!TVPCreateFolders(parent))
         return false;
 
+    // VLFS 命名空间下（如游戏目录内建 savedata/）目录只存在于 VLFS
+    // registry，MEMFS 上父链缺失会让 create_directory 报错——VLFS mkdir
+    // 自动补全父链；MEMFS 侧尽力同步（失败忽略）
+    if (VLFS::Enabled()) {
+        std::error_code ec;
+        std::filesystem::create_directory(folder.AsStdString().c_str(), ec);
+        return VLFS::MkDir(folder.AsStdString().c_str()) == 0;
+    }
+
     return !std::filesystem::create_directory(folder.AsStdString().c_str());
 }
 
@@ -234,6 +191,20 @@ bool TVPCreateFolders(const ttstr &folder) {
 }
 
 bool TVP_stat(const char *name, tTVP_stat &s) {
+    // VLFS（懒加载虚拟文件系统）优先：游戏文件不在 MEMFS 中
+    if (VLFS::Enabled()) {
+        uint64_t size = 0;
+        int isDir = 0;
+        if (VLFS::Stat(name, &size, &isDir)) {
+            s.st_mode = isDir ? S_IFDIR : S_IFREG;
+            s.st_size = size;
+            s.st_atime = 0;
+            s.st_mtime = 0;
+            s.st_ctime = 0;
+            return true;
+        }
+    }
+
     struct stat t;
     if (stat(name, &t) != 0) {
         return false;
@@ -376,44 +347,36 @@ void TVPExitApplication(int code) {
 }
 
 static bool tryStartFromDir(const std::string &dir) {
-    struct stat st;
-    std::string xp3File;
+    std::string dataXp3, xp3File;
     bool hasStartupTjs = false;
 
-    DIR *dirp = opendir(dir.c_str());
-    if (!dirp) return false;
-
-    dirent *dp;
-    while ((dp = readdir(dirp))) {
-        std::string name = dp->d_name;
-        if (name.empty() || name[0] == '.') continue;
+    // TVPListDir 合并枚举 VLFS（游戏文件）与 MEMFS（零碎小文件）
+    TVPListDir(dir, [&](const std::string &name, int mode) {
+        if (name.empty() || name[0] == '.' || !(mode & S_IFREG)) return;
 
         std::string full = dir;
         if (full.back() != '/') full += '/';
         full += name;
 
-        if (stat(full.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
-
         std::string lower = name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
         if (lower == "data.xp3") {
-            closedir(dirp);
-            spdlog::info("Found {}, auto-starting game", full);
-            TVPMainScene::GetInstance()->startupFrom(full);
-            return true;
-        }
-        if (lower.size() > 4 &&
-            lower.compare(lower.size() - 4, 4, ".xp3") == 0 &&
-            xp3File.empty()) {
+            dataXp3 = full;
+        } else if (lower.size() > 4 &&
+                   lower.compare(lower.size() - 4, 4, ".xp3") == 0 &&
+                   xp3File.empty()) {
             xp3File = full;
-        }
-        if (lower == "startup.tjs") {
+        } else if (lower == "startup.tjs") {
             hasStartupTjs = true;
         }
-    }
-    closedir(dirp);
+    });
 
+    if (!dataXp3.empty()) {
+        spdlog::info("Found {}, auto-starting game", dataXp3);
+        TVPMainScene::GetInstance()->startupFrom(dataXp3);
+        return true;
+    }
     if (!xp3File.empty()) {
         spdlog::info("Found {}, auto-starting game", xp3File);
         TVPMainScene::GetInstance()->startupFrom(xp3File);
@@ -458,24 +421,15 @@ bool TVPCheckStartupArg() {
 
     if (tryStartFromDir("/")) return true;
 
-    struct stat st;
-    DIR *rootDir = opendir("/");
-    if (rootDir) {
-        dirent *dp;
-        while ((dp = readdir(rootDir))) {
-            std::string name = dp->d_name;
-            if (name.empty() || name[0] == '.') continue;
-            if (name == "dev" || name == "proc" || name == "tmp" ||
-                name == "home" || name == "save") continue;
-            std::string full = "/" + name;
-            if (stat(full.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
-                if (tryStartFromDir(full)) {
-                    closedir(rootDir);
-                    return true;
-                }
-            }
-        }
-        closedir(rootDir);
+    std::vector<std::string> subdirs;
+    TVPListDir("/", [&](const std::string &name, int mode) {
+        if (name.empty() || name[0] == '.') return;
+        if (name == "dev" || name == "proc" || name == "tmp" ||
+            name == "home" || name == "save") return;
+        if (mode & S_IFDIR) subdirs.push_back("/" + name);
+    });
+    for (const auto &full : subdirs) {
+        if (tryStartFromDir(full)) return true;
     }
     return false;
 }
@@ -483,37 +437,79 @@ bool TVPCheckStartupArg() {
 void TVPProcessInputEvents() {}
 
 bool TVPDeleteFile(const std::string &filename) {
+    if (VLFS::Enabled() && VLFS::Has(filename.c_str()) == 1) {
+        bool ok = VLFS::Unlink(filename.c_str()) == 0;
+        unlink(filename.c_str()); // MEMFS 镜像（如有）一并清理
+        return ok;
+    }
     return unlink(filename.c_str()) == 0;
 }
 
+bool TVPCopyFile(const std::string &from, const std::string &to);
+
 bool TVPRenameFile(const std::string &from, const std::string &to) {
+    if (VLFS::Enabled() && VLFS::Has(from.c_str()) == 1) {
+        // VLFS 无原生 rename（罕见路径，如 XP3 重打包）：复制 + 删除
+        if (!TVPCopyFile(from, to)) return false;
+        return TVPDeleteFile(from);
+    }
     return rename(from.c_str(), to.c_str()) == 0;
 }
 
 bool TVPCopyFile(const std::string &from, const std::string &to) {
+    if (VLFS::Enabled() && VLFS::Has(from.c_str()) == 1) {
+        int src = VLFS::Open(from.c_str(), 0);
+        if (src < 0) return false;
+        int dst = VLFS::Open(to.c_str(), 1);
+        if (dst < 0) {
+            VLFS::Close(src);
+            return false;
+        }
+        char buf[65536];
+        int n;
+        while ((n = VLFS::Read(src, buf, sizeof(buf))) > 0) {
+            VLFS::Write(dst, buf, n);
+        }
+        VLFS::Close(src);
+        VLFS::Close(dst); // onWriteClose 钩子负责持久化/镜像
+        return n >= 0;
+    }
+
     FILE *src = fopen(from.c_str(), "rb");
     if (!src) {
-        spdlog::error("[FSAFS] TVPCopyFile fopen src FAILED: {}", from);
+        spdlog::error("TVPCopyFile fopen src FAILED: {}", from);
         return false;
     }
+
+    // MEMFS 源 → VLFS 写路径（统一持久化语义）
+    if (VLFS::Enabled()) {
+        int dst = VLFS::Open(to.c_str(), 1);
+        if (dst >= 0) {
+            char buf[65536];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
+                VLFS::Write(dst, buf, (int)n);
+            }
+            fclose(src);
+            VLFS::Close(dst);
+            return true;
+        }
+    }
+
     FILE *dst = fopen(to.c_str(), "wb");
     if (!dst) {
-        spdlog::error("[FSAFS] TVPCopyFile fopen dst FAILED: {}", to);
+        spdlog::error("TVPCopyFile fopen dst FAILED: {}", to);
         fclose(src);
         return false;
     }
 
     char buf[4096];
     size_t n;
-    size_t total = 0;
     while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
         fwrite(buf, 1, n, dst);
-        total += n;
     }
     fclose(src);
     fclose(dst);
-    fsafs_mark_written(to.c_str());
-    fsafs_flush_file(to.c_str());
     return true;
 }
 
@@ -533,17 +529,32 @@ const std::string &TVPGetInternalPreferencePath() {
 bool TVPWriteDataToFile(const ttstr &filepath, const void *data,
                         unsigned int len) {
     std::string path = filepath.AsStdString();
+
+    // VLFS overlay 写入；onWriteClose 钩子（shell.html）负责 IndexedDB
+    // write-through、MEMFS 小文件镜像（遗留 fopen 读兼容）、FSA 回写
+    if (VLFS::Enabled()) {
+        int fd = VLFS::Open(path.c_str(), 1);
+        if (fd >= 0) {
+            unsigned int total = 0;
+            while (total < len) {
+                int n = VLFS::Write(fd, (const char *)data + total, (int)(len - total));
+                if (n <= 0) break;
+                total += n;
+            }
+            VLFS::Close(fd);
+            if (total == len) return true;
+            spdlog::error("TVPWriteDataToFile VLFS short write: {}", path);
+            return false;
+        }
+    }
+
     FILE *handle = fopen(path.c_str(), "wb");
     if (handle) {
         bool ret = fwrite(data, 1, len, handle) == len;
         fclose(handle);
-        if (ret) {
-            fsafs_mark_written(path.c_str());
-            fsafs_flush_file(path.c_str());
-        }
         return ret;
     }
-    spdlog::error("[FSAFS] TVPWriteDataToFile fopen FAILED: {}", path);
+    spdlog::error("TVPWriteDataToFile fopen FAILED: {}", path);
     return false;
 }
 

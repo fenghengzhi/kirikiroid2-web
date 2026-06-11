@@ -20,6 +20,10 @@ public:
     virtual bool init() override;
     virtual std::string getWritablePath() const override;
 
+    using FileUtils::getContents;
+    virtual FileUtils::Status getContents(const std::string& filename,
+                                          ResizableBuffer* buffer) const override;
+
 protected:
     virtual bool isFileExistInternal(const std::string& filePath) const override;
 };

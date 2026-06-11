@@ -13,6 +13,7 @@
 // must before with Platform.h because marco will replece `st_atime` symbol!
 #include <fcntl.h>
 #include <filesystem>
+#include <set>
 #include <sys/stat.h>
 #include <cocos/cocos2d.h>
 
@@ -35,6 +36,12 @@
 #include "combase.h"
 
 #include "spdlog/spdlog.h"
+
+#ifdef __EMSCRIPTEN__
+// VirtualLazyFS（平台边界）：游戏文件懒加载，读经 JSPI/代理按需供数。
+// 取代旧 fsafs_* host-stream 机制（FSA 目录现以 provider 形式注册进 VLFS）。
+#include "../../environ/web/VirtualLazyFS.h"
+#endif
 
 #ifdef WIN32
 #include <io.h>
@@ -186,6 +193,19 @@ void TVPListDir(const std::string &u8folder,
 #else
     // ---------------- Linux/macOS 分支 ----------------
 
+#ifdef __EMSCRIPTEN__
+    // VLFS 与 MEMFS 合并枚举（游戏文件在 VLFS，/save //tmp 等零碎在 MEMFS；
+    // 根目录两边都有孩子）。VLFS 名字优先，MEMFS 侧去重。
+    std::set<std::string> vlfsNames;
+    if(VLFS::Enabled()) {
+        VLFS::ListDir(u8folder.c_str(),
+                      [&](const char *name, bool isDir, uint64_t) {
+                          vlfsNames.insert(name);
+                          cb(name, isDir ? S_IFDIR : S_IFREG);
+                      });
+    }
+#endif
+
     DIR *dirp = opendir(u8folder.c_str());
     if(!dirp)
         return;
@@ -195,6 +215,11 @@ void TVPListDir(const std::string &u8folder,
         std::string name = dp->d_name;
         if(name.empty() || name[0] == '.')
             continue;
+
+#ifdef __EMSCRIPTEN__
+        if(vlfsNames.count(name))
+            continue;
+#endif
 
         std::string full = u8folder + "/" + name;
         struct stat st{};
@@ -213,8 +238,39 @@ void TVPGetLocalFileListAt(
     dirent *direntp;
     tTVP_stat stat_buf;
     std::string folder(name.AsStdString());
+
+#ifdef __EMSCRIPTEN__
+    // VLFS 与 MEMFS 合并枚举（VLFS 名字优先，MEMFS 侧去重）
+    std::set<std::string> vlfsNames;
+    if(VLFS::Enabled()) {
+        VLFS::ListDir(folder.c_str(),
+                      [&](const char *fname, bool isDir, uint64_t fsize) {
+                          vlfsNames.insert(fname);
+                          ttstr file(fname);
+                          tjs_char *fp = file.Independ();
+                          while(*fp) {
+                              if(*fp >= TJS_W('A') && *fp <= TJS_W('Z'))
+                                  *fp += TJS_W('a') - TJS_W('A');
+                              fp++;
+                          }
+                          tTVPLocalFileInfo info;
+                          info.NativeName = fname;
+                          info.Mode = isDir ? S_IFDIR : S_IFREG;
+                          info.Size = fsize;
+                          info.AccessTime = 0;
+                          info.ModifyTime = 0;
+                          info.CreationTime = 0;
+                          cb(file, &info);
+                      });
+    }
+#endif
+
     if((dirp = opendir(folder.c_str()))) {
         while((direntp = readdir(dirp)) != nullptr) {
+#ifdef __EMSCRIPTEN__
+            if(vlfsNames.count(direntp->d_name))
+                continue;
+#endif
             std::string fullpath = folder + "/" + direntp->d_name;
             if(!TVP_stat(fullpath.c_str(), stat_buf))
                 continue;
@@ -342,6 +398,19 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
         name = TJS_W("/");
         return;
     }
+
+#ifdef __EMSCRIPTEN__
+    // VLFS 子树：registry 小写索引一次性大小写解析（替代逐级 readdir）。
+    // 未命中（路径不在 VLFS）则落入下方原有 MEMFS 逐级匹配。
+    if(VLFS::Enabled()) {
+        ttstr full = ttstr(TJS_W("/")) + ptr;
+        std::string resolved;
+        if(VLFS::ResolveCase(tTJSNarrowStringHolder(full.c_str()), resolved)) {
+            name = ttstr(resolved.c_str());
+            return;
+        }
+    }
+#endif
 #if CC_TARGET_PLATFORM == CC_PLATFORM_IOS
     {
         std::string prefix = "/";
@@ -484,6 +553,13 @@ ttstr TVPGetTemporaryName() {
 //---------------------------------------------------------------------------
 bool TVPRemoveFile(const ttstr &name) {
     tTJSNarrowStringHolder holder(name.c_str());
+#ifdef __EMSCRIPTEN__
+    if(VLFS::Enabled() && VLFS::Has(holder) == 1) {
+        bool ok = VLFS::Unlink(holder) == 0;
+        remove(holder); // MEMFS 小文件镜像（如有）一并清理
+        return ok;
+    }
+#endif
     return !remove(holder);
 }
 //---------------------------------------------------------------------------
@@ -535,6 +611,11 @@ bool TVPCheckExistentLocalFile(const ttstr &name) {
     else
         return true; // a file
 #endif
+#ifdef __EMSCRIPTEN__
+    if(VLFS::Enabled() &&
+       VLFS::Has(tTJSNarrowStringHolder(name.c_str())) == 1)
+        return true;
+#endif
     tTVP_stat s{};
     if(!TVP_stat(name.c_str(), s)) {
         return false; // not exist
@@ -547,6 +628,11 @@ bool TVPCheckExistentLocalFile(const ttstr &name) {
 // TVPCheckExistantLocalFolder
 //---------------------------------------------------------------------------
 bool TVPCheckExistentLocalFolder(const ttstr &name) {
+#ifdef __EMSCRIPTEN__
+    if(VLFS::Enabled() &&
+       VLFS::Has(tTJSNarrowStringHolder(name.c_str())) == 2)
+        return true;
+#endif
     tTVP_stat s{};
     if(!TVP_stat(name.c_str(), s)) {
         return false; // not exist
@@ -645,18 +731,6 @@ ttstr TVPLocalExtractFilePath(const ttstr &name) {
 //---------------------------------------------------------------------------
 // tTVPLocalFileStream
 //---------------------------------------------------------------------------
-#ifdef __EMSCRIPTEN__
-extern "C" {
-extern void fsafs_ensure_loaded(const char *);
-extern int fsafs_is_host_stream(const char *);
-extern int fsafs_open_stream(const char *);
-extern double fsafs_get_stream_size(int);
-extern int fsafs_read_stream(int, void *, double, int);
-extern void fsafs_close_stream(int);
-extern void fsafs_mark_written(const char *);
-extern void fsafs_flush_file(const char *);
-}
-#endif
 
 tTVPLocalFileStream::tTVPLocalFileStream(const ttstr &origname,
                                          const ttstr &localname,
@@ -682,16 +756,43 @@ tTVPLocalFileStream::tTVPLocalFileStream(const ttstr &origname,
     }
 
 #ifdef __EMSCRIPTEN__
-    {
+    if(VLFS::Enabled()) {
         tTJSNarrowStringHolder path(localname.c_str());
-        if(fsafs_is_host_stream(path)) {
-            HostStreamId = fsafs_open_stream(path);
-            if(HostStreamId >= 0) {
-                HostStreamSize = (tjs_uint64)fsafs_get_stream_size(HostStreamId);
-                return;
+        if(VLFS::Has(path) == 1) {
+            if(access == TJS_BS_READ) {
+                VlfsFd = VLFS::Open(path, 0);
+                if(VlfsFd >= 0)
+                    return;
+            } else {
+                // APPEND/UPDATE：与下方 posix 回退同形——整文件载入
+                // MemBuffer（≤4MB），析构时经 TVPWriteDataToFile 整体回写
+                // （Web 上该函数路由回 VLFS overlay + IDB 持久化）
+                int fd = VLFS::Open(path, 0);
+                if(fd >= 0) {
+                    tjs_int64 size = VLFS::Size(fd);
+                    if(size >= 0 && size < 4 * 1024 * 1024) {
+                        MemBuffer = new tTVPMemoryStream();
+                        MemBuffer->SetSize(size);
+                        tjs_int64 total = 0;
+                        while(total < size) {
+                            int n = VLFS::Read(
+                                fd, (uint8_t *)MemBuffer->GetInternalBuffer() + total,
+                                (int)(size - total));
+                            if(n <= 0)
+                                break;
+                            total += n;
+                        }
+                    }
+                    VLFS::Close(fd);
+                    if(MemBuffer) {
+                        if(access == TJS_BS_APPEND)
+                            MemBuffer->Seek(0, SEEK_END);
+                        return;
+                    }
+                }
+                TVPThrowExceptionMessage(TVPCannotOpenStorage, origname);
             }
         }
-        fsafs_ensure_loaded(path);
     }
 #endif
 
@@ -768,8 +869,8 @@ bool TVPWriteDataToFile(const ttstr &filepath, const void *data,
 
 tTVPLocalFileStream::~tTVPLocalFileStream() {
 #ifdef __EMSCRIPTEN__
-    if(HostStreamId >= 0) {
-        fsafs_close_stream(HostStreamId);
+    if(VlfsFd >= 0) {
+        VLFS::Close(VlfsFd);
         uint32_t tick = TVPGetRoughTickCount32();
         TVPPushEnvironNoise(&tick, sizeof(tick));
         return;
@@ -788,13 +889,6 @@ tTVPLocalFileStream::~tTVPLocalFileStream() {
     }
     if(Handle >= 0) {
         close(Handle);
-#ifdef __EMSCRIPTEN__
-        if(AccessFlags == TJS_BS_UPDATE || AccessFlags == TJS_BS_APPEND) {
-            tTJSNarrowStringHolder path(FileName.c_str());
-            fsafs_mark_written(path);
-            fsafs_flush_file(path);
-        }
-#endif
     }
 
     // push current tick as an environment noise
@@ -806,13 +900,9 @@ tTVPLocalFileStream::~tTVPLocalFileStream() {
 //---------------------------------------------------------------------------
 tjs_uint64 tTVPLocalFileStream::Seek(tjs_int64 offset, tjs_int whence) {
 #ifdef __EMSCRIPTEN__
-    if(HostStreamId >= 0) {
-        switch(whence) {
-            case SEEK_SET: HostStreamPos = (tjs_uint64)offset; break;
-            case SEEK_CUR: HostStreamPos = (tjs_uint64)((tjs_int64)HostStreamPos + offset); break;
-            case SEEK_END: HostStreamPos = (tjs_uint64)((tjs_int64)HostStreamSize + offset); break;
-        }
-        return HostStreamPos;
+    if(VlfsFd >= 0) {
+        // VLFS whence 语义与 SEEK_SET/CUR/END(0/1/2) 一致
+        return (tjs_uint64)VLFS::Seek(VlfsFd, offset, whence);
     }
 #endif
     if(MemBuffer) {
@@ -824,7 +914,10 @@ tjs_uint64 tTVPLocalFileStream::Seek(tjs_int64 offset, tjs_int whence) {
 //---------------------------------------------------------------------------
 tjs_uint tTVPLocalFileStream::Read(void *buffer, tjs_uint read_size) {
 #ifdef __EMSCRIPTEN__
-    if(HostStreamId >= 0) return ReadFromHostStream(buffer, read_size);
+    if(VlfsFd >= 0) {
+        int n = VLFS::Read(VlfsFd, buffer, (int)read_size);
+        return n < 0 ? 0 : (tjs_uint)n;
+    }
 #endif
     if(MemBuffer) {
         return MemBuffer->Read(buffer, read_size);
@@ -842,6 +935,12 @@ tjs_uint tTVPLocalFileStream::Write(const void *buffer, tjs_uint write_size) {
 
 //---------------------------------------------------------------------------
 void tTVPLocalFileStream::SetEndOfStorage() {
+#ifdef __EMSCRIPTEN__
+    if(VlfsFd >= 0) {
+        VLFS::Seek(VlfsFd, 0, SEEK_END);
+        return;
+    }
+#endif
     if(MemBuffer) {
         return MemBuffer->SetEndOfStorage();
     }
@@ -851,7 +950,10 @@ void tTVPLocalFileStream::SetEndOfStorage() {
 //---------------------------------------------------------------------------
 tjs_uint64 tTVPLocalFileStream::GetSize() {
 #ifdef __EMSCRIPTEN__
-    if(HostStreamId >= 0) return HostStreamSize;
+    if(VlfsFd >= 0) {
+        tjs_int64 size = VLFS::Size(VlfsFd);
+        return size < 0 ? 0 : (tjs_uint64)size;
+    }
 #endif
     if(MemBuffer) {
         return MemBuffer->GetSize();
@@ -862,49 +964,6 @@ tjs_uint64 tTVPLocalFileStream::GetSize() {
     lseek64(Handle, curpos, SEEK_SET);
     return ret;
 }
-
-#ifdef __EMSCRIPTEN__
-//---------------------------------------------------------------------------
-tjs_uint tTVPLocalFileStream::ReadFromHostStream(void *buffer, tjs_uint read_size) {
-    if(HostStreamPos >= HostStreamSize) return 0;
-    tjs_uint64 remaining = HostStreamSize - HostStreamPos;
-    if(read_size > remaining) read_size = (tjs_uint)remaining;
-
-    tjs_uint total = 0;
-    auto *dst = static_cast<uint8_t *>(buffer);
-
-    while(read_size > 0) {
-        if(HostStreamPos >= CacheOffset && HostStreamPos < CacheEnd) {
-            tjs_uint avail = (tjs_uint)std::min(
-                (tjs_uint64)read_size, CacheEnd - HostStreamPos);
-            memcpy(dst, ReadCache.data() + (HostStreamPos - CacheOffset), avail);
-            dst += avail;
-            HostStreamPos += avail;
-            read_size -= avail;
-            total += avail;
-        } else if(read_size >= CACHE_BLOCK_SIZE) {
-            int loaded = fsafs_read_stream(
-                HostStreamId, dst, (double)HostStreamPos, (int)read_size);
-            if(loaded <= 0) break;
-            dst += loaded;
-            HostStreamPos += loaded;
-            read_size -= loaded;
-            total += loaded;
-        } else {
-            CacheOffset = HostStreamPos;
-            tjs_uint blockSize = (tjs_uint)std::min(
-                (tjs_uint64)CACHE_BLOCK_SIZE, HostStreamSize - CacheOffset);
-            ReadCache.resize(blockSize);
-            int loaded = fsafs_read_stream(
-                HostStreamId, ReadCache.data(), (double)CacheOffset, (int)blockSize);
-            if(loaded <= 0) break;
-            CacheEnd = CacheOffset + loaded;
-        }
-    }
-
-    return total;
-}
-#endif
 
 /*
 this class provides COM's IStream adapter for tTJSBinaryStream

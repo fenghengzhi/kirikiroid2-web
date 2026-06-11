@@ -15,7 +15,19 @@ NS_CC_BEGIN
 Application * Application::sm_pSharedApplication = nullptr;
 static bool s_mainLoopRunning = false;
 
-static void emscripten_main_loop_callback(void *arg) {
+// VirtualLazyFS(JSPI): tick 必须是具名导出且列入 -sJSPI_EXPORTS，emscripten
+// glue 的 getWasmTableEntry 才会给该函数指针包 WebAssembly.promising，使
+// tick 内的文件读（EM_ASYNC_JS）可以挂起。挂起期间 RAF 仍会触发下一帧
+// （实测 100ms 挂起期间 12 次），引擎不可重入 —— 用守卫跳过这些帧。
+static bool s_inTick = false;
+
+extern "C" EMSCRIPTEN_KEEPALIVE void krkr2_main_loop_tick(void *arg) {
+    if (s_inTick)
+        return;
+    struct TickGuard {
+        TickGuard() { s_inTick = true; }
+        ~TickGuard() { s_inTick = false; }
+    } guard;
     auto app = static_cast<Application*>(arg);
     app->mainLoop();
 }
@@ -48,7 +60,11 @@ int Application::run()
     }
 
     s_mainLoopRunning = true;
-    emscripten_set_main_loop_arg(emscripten_main_loop_callback, this, 0, 1);
+    // simulate_infinite_loop=0：JSPI 下 main 是 promising 导出，
+    // simulate_infinite_loop=1 的 'unwind' 异常会变成 main promise 的
+    // rejection。改为正常返回，运行时因 noExitRuntime（EXIT_RUNTIME=0
+    // 默认）保活，主循环继续由 RAF 驱动。
+    emscripten_set_main_loop_arg(krkr2_main_loop_tick, this, 0, 0);
 
     return 0;
 }

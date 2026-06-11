@@ -774,7 +774,9 @@
     <input type="file" id="dir-input" webkitdirectory style="display:none;">
     <input type="file" id="zip-input" accept=".zip,application/zip,application/x-zip-compressed" style="display:none;">
 
+    <!-- JSZip 仅用于存档空间导入/导出；游戏加载已改为 VLFS 懒加载（vlfs.js） -->
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin="anonymous"></script>
+    <script src="vlfs.js"></script>
     <script>
         // Fix WebGL shader precision mismatch on mobile:
         // cocos2d-x injects uniforms (mat4/mat3) without explicit precision into both
@@ -813,6 +815,52 @@
         // --- File System Access API state ---
         var hostDirHandle = null;
 
+        // --- VirtualLazyFS 初始化（清空 OPFS 临时缓存）---
+        var vlfsReady = VLFS.init().catch(function(e) {
+            console.error('[vlfs] init failed:', e);
+        });
+
+        // VLFS 写关闭钩子：统一持久化链路（取代旧 fsafs_flush_file）。
+        // 1) MEMFS 小文件镜像 —— 兼容遗留 fopen 直读（GlobalConfigManager 等）；
+        // 2) IndexedDB write-through —— 存档空间持久化；
+        // 3) FSA 主机目录回写 —— 用户经 showDirectoryPicker 加载时同步回硬盘。
+        VLFS.onWriteClose = function(path, data) {
+            if (data.length <= 8 * 1024 * 1024 && typeof FS !== 'undefined') {
+                try { writeFileToFS(path, data); } catch (e) {}
+            }
+            // 游戏可能把存档写在游戏目录内的 savedata/ 下（如千恋万花
+            // mainwindow.tjs checkSave），一并纳入 IDB 持久化
+            var isSavePath = path.startsWith('/savedata/') || path.startsWith('/save/') ||
+                path.indexOf('/savedata/') >= 0;
+            if (!Module._hostDirHandle) {
+                if (Module._saveSpaceId && isSavePath) idbSaveFile(path, data);
+                return;
+            }
+            var dirHandle = Module._hostDirHandle;
+            var prefix = Module._hostDirPrefix;
+            var copy = data.slice();
+            setTimeout(async function() {
+                try {
+                    var relPath = path;
+                    if (prefix && relPath.startsWith(prefix + '/')) {
+                        relPath = relPath.substring(prefix.length);
+                    }
+                    var parts = relPath.split('/').filter(Boolean);
+                    var fileName = parts.pop();
+                    var cur = dirHandle;
+                    for (var i = 0; i < parts.length; i++) {
+                        cur = await cur.getDirectoryHandle(parts[i], { create: true });
+                    }
+                    var fh = await cur.getFileHandle(fileName, { create: true });
+                    var writable = await fh.createWritable();
+                    await writable.write(copy);
+                    await writable.close();
+                } catch (err) {
+                    console.warn('[vlfs] FSA write-back FAILED: ' + path + ' - ' + err.message);
+                }
+            }, 0);
+        };
+
         // Keep native dialog behavior, but mirror alert/confirm content
         // to the console for easier debugging.
         (function() {
@@ -830,6 +878,20 @@
             };
         })();
 
+        // --- UI 资源/字体（assets.zip, store 模式打包）注册进 VLFS ---
+        // 取代 --preload-file index.data：资源以 Blob 切片按需读取
+        // （cocos CCFileUtils 经 krkr2_vlfs_read_all 桥访问），不驻留内存。
+        var assetsLoaded = (async function() {
+            await vlfsReady;
+            var resp = await fetch('assets.zip');
+            if (!resp.ok) throw new Error('assets.zip HTTP ' + resp.status);
+            var blob = await resp.blob();
+            var r = await VLFS.registerZipBlob(blob, { stripPrefix: '' });
+            console.log('[vlfs] assets.zip registered: ' + r.paths.length + ' entries');
+        })().catch(function(e) {
+            console.error('[vlfs] assets.zip load failed:', e);
+        });
+
         var Module = {
             preRun: [function() {
                 FS.mkdir('/savedata');
@@ -839,6 +901,11 @@
                 if (gameFileReady) {
                     Module.removeRunDependency('user-file');
                 }
+                // UI 资源注册完成前引擎不得启动（cocos init 需要字体/UI）
+                Module.addRunDependency('vlfs-assets');
+                assetsLoaded.then(function() {
+                    Module.removeRunDependency('vlfs-assets');
+                });
             }],
             postRun: [function() {
                 loadingOverlay.classList.add('hidden');
@@ -986,8 +1053,10 @@
                 try {
                     existing = FS.readFile(path, { encoding: 'utf8' });
                 } catch (e) {}
-                FS.writeFile(path, rendererPreferenceXml(existing, rendererUrlParam),
-                    { encoding: 'utf8' });
+                var xml = rendererPreferenceXml(existing, rendererUrlParam);
+                FS.writeFile(path, xml, { encoding: 'utf8' });
+                // VLFS overlay 同步（引擎 TVP_stat/读流以 VLFS 优先）
+                VLFS.registerOverlayFile(path, new TextEncoder().encode(xml));
                 console.log('[renderer] URL override applied:', rendererUrlParam);
             } catch (e) {
                 console.warn('[renderer] Failed to apply URL renderer override:', e);
@@ -1106,7 +1175,9 @@
             if (files.length === 0) return;
             await waitForFS();
             for (var i = 0; i < files.length; i++) {
+                // MEMFS 镜像（遗留 fopen 读）+ VLFS overlay（引擎读流优先走 VLFS）
                 writeFileToFS(files[i].path, files[i].data);
+                VLFS.registerOverlayFile(files[i].path, new Uint8Array(files[i].data));
             }
             console.log('[IDB] Restored ' + files.length + ' save file(s)');
         }
@@ -1320,13 +1391,6 @@
             if (text) pickerStatus.textContent = text;
         }
 
-        async function readFileWithProgress(file) {
-            var sizeMB = (file.size / 1048576).toFixed(1);
-            setPickerProgress(50, 'Reading ' + file.name + ' (' + sizeMB + ' MB)...');
-            var buffer = await file.arrayBuffer();
-            return new Uint8Array(buffer);
-        }
-
         function showXp3Selector(xp3Paths, dirPrefix, callback) {
             var selectorEl = document.getElementById('xp3-selector');
             var listEl = document.getElementById('xp3-list');
@@ -1397,26 +1461,68 @@
             }
         }
 
-        // --- Auto-load from URL parameter: ?xp3=<url> ---
+        // --- VLFS 加载器：注册元数据即可玩，无全量下载/解压/复制 ---
+
+        // 流式下载为 Blob，带进度且 JS 堆峰值有界：每 64MB 块段合并为
+        // 段 Blob（Blob 拼接引用而非复制），下载中堆驻留 ≤64MB。
+        async function fetchBlobWithProgress(url, onProgress) {
+            var resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+            var total = parseInt(resp.headers.get('Content-Length') || '0', 10);
+            if (!resp.body) return await resp.blob();
+            var reader = resp.body.getReader();
+            var segments = [], chunks = [], chunkBytes = 0, loaded = 0;
+            var SEGMENT = 64 * 1024 * 1024;
+            while (true) {
+                var r = await reader.read();
+                if (r.done) break;
+                chunks.push(r.value);
+                chunkBytes += r.value.length;
+                loaded += r.value.length;
+                if (onProgress) onProgress(loaded, total);
+                if (chunkBytes >= SEGMENT) {
+                    segments.push(new Blob(chunks));
+                    chunks = [];
+                    chunkBytes = 0;
+                }
+            }
+            if (chunks.length) segments.push(new Blob(chunks));
+            return new Blob(segments);
+        }
+
+        // ?xp3=：优先 HTTP Range 懒加载；服务器不支持时整包 Blob（仍 off-heap）
         async function fetchXp3FromUrl(url) {
             loadingOverlay.classList.remove('hidden');
-            statusElement.textContent = 'Downloading game data...';
+            statusElement.textContent = 'Probing game data...';
             progressFill.style.width = '0%';
             try {
-                var data = await fetchWithProgress(url, function(loaded, total) {
-                    if (total > 0) {
-                        var pct = Math.round(loaded / total * 100);
-                        progressFill.style.width = pct + '%';
-                        statusElement.textContent = 'Downloading... ' + pct + '%';
-                    } else {
-                        statusElement.textContent = 'Downloading... ' + (loaded / 1048576).toFixed(1) + ' MB';
+                await vlfsReady;
+                var ranges = false, size = -1;
+                try {
+                    var head = await fetch(url, { method: 'HEAD' });
+                    if (head.ok) {
+                        ranges = (head.headers.get('Accept-Ranges') || '').toLowerCase() === 'bytes';
+                        size = parseInt(head.headers.get('Content-Length') || '-1', 10);
                     }
-                });
-                statusElement.textContent = 'Waiting for engine...';
-                await waitForFS();
-                statusElement.textContent = 'Writing to filesystem...';
-                writeFileToFS('/data.xp3', data);
-                data = null;
+                } catch (e) {}
+
+                if (ranges && size > 0) {
+                    VLFS.registerRemote('/data.xp3', url, size, true);
+                    console.log('[vlfs] remote xp3 (Range): ' + url + ', ' + size + ' bytes');
+                } else {
+                    statusElement.textContent = 'Downloading game data...';
+                    var blob = await fetchBlobWithProgress(url, function(loaded, total) {
+                        if (total > 0) {
+                            var pct = Math.round(loaded / total * 100);
+                            progressFill.style.width = pct + '%';
+                            statusElement.textContent = 'Downloading... ' + pct + '%';
+                        } else {
+                            statusElement.textContent = 'Downloading... ' + (loaded / 1048576).toFixed(1) + ' MB';
+                        }
+                    });
+                    VLFS.registerBlobFile('/data.xp3', blob);
+                    console.log('[vlfs] remote xp3 (whole blob): ' + blob.size + ' bytes');
+                }
                 startGame();
             } catch (err) {
                 statusElement.textContent = 'Download failed: ' + err.message;
@@ -1427,99 +1533,41 @@
             }
         }
 
-        async function fetchWithProgress(url, onProgress) {
-            var resp = await fetch(url);
-            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
-            var total = parseInt(resp.headers.get('Content-Length') || '0', 10);
-            if (onProgress) onProgress(0, total);
-            var data = new Uint8Array(await resp.arrayBuffer());
-            if (onProgress) onProgress(data.byteLength, total);
-            return data;
-        }
-
-        function collectZipEntries(zip) {
-            var entries = [];
-            zip.forEach(function(relativePath, zipEntry) {
-                if (!zipEntry.dir) entries.push({ path: relativePath, entry: zipEntry });
-            });
-            return entries;
-        }
-
-        function findCommonZipPrefix(entries) {
-            if (entries.length === 0) return '';
-            var firstSlash = entries[0].path.indexOf('/');
-            if (firstSlash <= 0) return '';
-            var candidate = entries[0].path.substring(0, firstSlash + 1);
-            return entries.every(function(e) { return e.path.startsWith(candidate); }) ? candidate : '';
-        }
-
-        async function extractZipEntriesToFS(entries, onProgress) {
-            var commonPrefix = findCommonZipPrefix(entries);
-            var xp3Paths = [];
-            var total = entries.length;
-
-            await waitForFS();
-            for (var i = 0; i < total; i++) {
-                var e = entries[i];
-                var innerPath = commonPrefix ? e.path.substring(commonPrefix.length) : e.path;
-                if (!innerPath) continue;
-                var fsPath = '/' + innerPath;
-                var lowerName = innerPath.substring(innerPath.lastIndexOf('/') + 1).toLowerCase();
-
-                if (onProgress) {
-                    onProgress(
-                        Math.round(i / total * 100),
-                        'Extracting (' + (i + 1) + '/' + total + ') ' + innerPath
-                    );
-                }
-
-                var fileData = await e.entry.async('uint8array');
-                writeFileToFS(fsPath, fileData);
-                fileData = null;
-
-                if (lowerName.endsWith('.xp3')) xp3Paths.push(fsPath);
-            }
-
-            return xp3Paths;
-        }
-
+        // ?game=：ZIP 下载为 Blob → 仅解析中央目录注册条目，不解压
         async function fetchAndExtractZip(url, entryFile) {
             loadingOverlay.classList.remove('hidden');
             statusElement.textContent = 'Downloading game archive...';
             progressFill.style.width = '0%';
             try {
-                var zipData = await fetchWithProgress(url, function(loaded, total) {
+                await vlfsReady;
+                var blob = await fetchBlobWithProgress(url, function(loaded, total) {
                     if (total > 0) {
                         var pct = Math.round(loaded / total * 100);
-                        progressFill.style.width = (pct * 0.5) + '%';
+                        progressFill.style.width = (pct * 0.9) + '%';
                         statusElement.textContent = 'Downloading... ' + pct + '% (' + (loaded / 1048576).toFixed(1) + ' MB)';
                     } else {
                         statusElement.textContent = 'Downloading... ' + (loaded / 1048576).toFixed(1) + ' MB';
                     }
                 });
 
-                statusElement.textContent = 'Extracting archive...';
-                progressFill.style.width = '50%';
-                var zip = await JSZip.loadAsync(zipData);
-                zipData = null;
-
-                var xp3Paths = await extractZipEntriesToFS(collectZipEntries(zip), function(pct, text) {
-                    progressFill.style.width = (50 + Math.round(pct * 0.5)) + '%';
-                    statusElement.textContent = text;
-                });
+                statusElement.textContent = 'Indexing archive...';
+                progressFill.style.width = '95%';
+                var reg = await VLFS.registerZipBlob(blob);
+                console.log('[vlfs] zip registered: ' + reg.paths.length + ' entries, ' +
+                            reg.xp3Paths.length + ' xp3');
 
                 progressFill.style.width = '100%';
                 statusElement.textContent = 'Starting game...';
 
                 if (entryFile) {
                     var entryLower = entryFile.toLowerCase();
-                    var matched = xp3Paths.find(function(p) {
+                    var matched = reg.xp3Paths.find(function(p) {
                         return p.substring(p.lastIndexOf('/') + 1).toLowerCase() === entryLower;
                     });
                     if (matched) Module._startupXp3Path = matched;
                     startGame();
-                } else if (xp3Paths.length > 1) {
-                    checkAndStartGame(xp3Paths, '');
+                } else if (reg.xp3Paths.length > 1) {
+                    checkAndStartGame(reg.xp3Paths, '');
                 } else {
                     startGame();
                 }
@@ -1572,6 +1620,7 @@
 
             try {
                 setPickerProgress(0, 'Scanning directory...');
+                await vlfsReady;
                 var dirPrefix = '/' + hostDirHandle.name;
                 var entries = await enumerateDir(hostDirHandle, dirPrefix);
                 var total = entries.length;
@@ -1585,26 +1634,20 @@
                 Module._hostDirHandle = hostDirHandle;
                 Module._hostDirPrefix = dirPrefix;
 
-                await waitForFS();
                 var xp3Paths = [];
-
                 for (var i = 0; i < total; i++) {
                     var entry = entries[i];
                     var innerPath = entry.path.substring(dirPrefix.length);
                     var lowerName = innerPath.substring(innerPath.lastIndexOf('/') + 1).toLowerCase();
-                    var isXp3 = lowerName.endsWith('.xp3');
 
                     setPickerProgress(
                         Math.round(i / total * 100),
-                        'Loading (' + (i + 1) + '/' + total + ') ' + innerPath.substring(1)
+                        'Indexing (' + (i + 1) + '/' + total + ') ' + innerPath.substring(1)
                     );
 
-                    var file = await entry.handle.getFile();
-                    var data = new Uint8Array(await file.arrayBuffer());
-                    writeFileToFS(innerPath, data);
-                    data = null;
-
-                    if (isXp3) xp3Paths.push(innerPath);
+                    // 仅注册句柄+尺寸元数据，内容按需经 FSA 切片读取
+                    await VLFS.registerFSAFileEager(innerPath, entry.handle);
+                    if (lowerName.endsWith('.xp3')) xp3Paths.push(innerPath);
                 }
 
                 setPickerProgress(100, 'Starting...');
@@ -1619,12 +1662,11 @@
         // --- Fallback: .xp3 file picker ---
         async function handleXp3File(file) {
             try {
-                setPickerProgress(0, 'Reading ' + file.name + '...');
-                var data = await readFileWithProgress(file);
-                await waitForFS();
-                setPickerProgress(100, 'Writing to filesystem...');
-                writeFileToFS('/data.xp3', data);
-                data = null;
+                setPickerProgress(50, 'Indexing ' + file.name + '...');
+                await vlfsReady;
+                // File 即 Blob：零拷贝注册，按需切片读取
+                VLFS.registerBlobFile('/data.xp3', file);
+                setPickerProgress(100, 'Starting...');
                 startGame();
             } catch (err) {
                 pickerStatus.textContent = 'Error: ' + err.message;
@@ -1634,18 +1676,12 @@
 
         async function handleZipFile(file) {
             try {
-                setPickerProgress(0, 'Reading ' + file.name + '...');
-                var zipData = await readFileWithProgress(file);
-                setPickerProgress(50, 'Extracting archive...');
-                var zip = await JSZip.loadAsync(zipData);
-                zipData = null;
-
-                var xp3Paths = await extractZipEntriesToFS(collectZipEntries(zip), function(pct, text) {
-                    setPickerProgress(50 + Math.round(pct * 0.5), text);
-                });
-
+                setPickerProgress(50, 'Indexing ' + file.name + '...');
+                await vlfsReady;
+                var reg = await VLFS.registerZipBlob(file);
+                console.log('[vlfs] local zip registered: ' + reg.paths.length + ' entries');
                 setPickerProgress(100, 'Starting...');
-                checkAndStartGame(xp3Paths, '');
+                checkAndStartGame(reg.xp3Paths, '');
             } catch (err) {
                 pickerStatus.textContent = 'Error: ' + err.message;
                 pickerProgress.classList.remove('visible');
@@ -1656,7 +1692,7 @@
         async function handleFolder(files) {
             var total = files.length;
             try {
-                await waitForFS();
+                await vlfsReady;
                 var xp3Paths = [];
                 var folderPrefix = '/' + files[0].webkitRelativePath.split('/')[0];
 
@@ -1665,16 +1701,13 @@
                     var fullPath = '/' + file.webkitRelativePath;
                     var innerPath = fullPath.substring(folderPrefix.length);
                     var lowerName = file.name.toLowerCase();
-                    var isXp3 = lowerName.endsWith('.xp3');
 
                     setPickerProgress(Math.round(i / total * 100),
-                        'Loading (' + (i + 1) + '/' + total + ') ' + file.name);
+                        'Indexing (' + (i + 1) + '/' + total + ') ' + file.name);
 
-                    var data = new Uint8Array(await file.arrayBuffer());
-                    writeFileToFS(innerPath, data);
-                    data = null;
-
-                    if (isXp3) xp3Paths.push(innerPath);
+                    // File 即 Blob：零拷贝注册
+                    VLFS.registerBlobFile(innerPath, file);
+                    if (lowerName.endsWith('.xp3')) xp3Paths.push(innerPath);
                 }
 
                 checkAndStartGame(xp3Paths, '');

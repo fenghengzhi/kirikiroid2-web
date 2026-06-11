@@ -765,21 +765,29 @@ extern "C" int TVPShowSimpleMessageBox(const char *text, const char *title,
     return 0;
 }
 
-extern "C" void fsafs_ensure_loaded(const char *) {}
+// VirtualLazyFS 桩：wasmtime 差分 harness 无浏览器 JS 环境，VLFS 永远
+// 禁用（Enabled()=false 时 StorageImpl 走原 MEMFS/POSIX 路径）。
+// 签名必须与 cpp/core/environ/web/VirtualLazyFS.h 一致（C++ 链接）。
+#include "environ/web/VirtualLazyFS.h"
 
-extern "C" int fsafs_is_host_stream(const char *) { return 0; }
-
-extern "C" int fsafs_open_stream(const char *) { return -1; }
-
-extern "C" double fsafs_get_stream_size(int) { return 0.0; }
-
-extern "C" int fsafs_read_stream(int, void *, double, int) { return -1; }
-
-extern "C" void fsafs_close_stream(int) {}
-
-extern "C" void fsafs_mark_written(const char *) {}
-
-extern "C" void fsafs_flush_file(const char *) {}
+namespace VLFS {
+bool Enabled() { return false; }
+int Has(const char *) { return 0; }
+bool Stat(const char *, uint64_t *, int *) { return false; }
+bool ResolveCase(const char *, std::string &) { return false; }
+bool ListDir(const char *,
+             const std::function<void(const char *, bool, uint64_t)> &) {
+    return false;
+}
+int Open(const char *, int) { return -1; }
+int Close(int) { return -1; }
+int64_t Seek(int, int64_t, int) { return -1; }
+int64_t Size(int) { return -1; }
+int Read(int, void *, int) { return -1; }
+int Write(int, const void *, int) { return -1; }
+int Unlink(const char *) { return -1; }
+int MkDir(const char *) { return -1; }
+} // namespace VLFS
 
 int TVPShowSimpleInputBox(ttstr &, const ttstr &, const ttstr &,
                           const std::vector<ttstr> &) {
