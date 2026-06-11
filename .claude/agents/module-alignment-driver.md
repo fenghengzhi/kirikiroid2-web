@@ -1,7 +1,7 @@
 ---
 name: "module-alignment-driver"
 description: "当用户想要将整个类、文件或模块（而非单个函数）与 libkrkr2.so 完全对齐时使用此 agent。它枚举模块内所有需对齐的函数，先做类布局审计，再按拓扑序（叶子函数优先）逐个驱动 binary-alignment-fixer 或 binary-aligned-implementer，最后做模块级集成审计。\n\n示例：\n\n<example>\n场景：用户要把整个 EmotePlayer 类与 libkrkr2.so 对齐。\nuser: \"帮我把整个 EmotePlayer 模块对齐 libkrkr2.so\"\nassistant: \"我将使用 module-alignment-driver agent 枚举 EmotePlayer 的所有方法、做类布局审计、按依赖顺序逐个对齐并跑集成验证。\"\n</example>\n\n<example>\n场景：用户要对齐 cpp/core/visual/LayerIntf.cpp 整个文件。\nuser: \"LayerIntf.cpp 整个文件做一遍对齐\"\nassistant: \"让我启动 module-alignment-driver agent 把 LayerIntf 模块作为整体对齐：类布局 → 拓扑序方法对齐 → 集成审计。\"\n</example>\n\n<example>\n场景：单个函数对齐不收敛，怀疑要从模块层面统筹。\nuser: \"Layer::Update 一直 audit 不过，可能问题在整个 Layer 模块\"\nassistant: \"我将使用 module-alignment-driver agent 把 Layer 模块作为整体重做：先 class-layout-auditor 确认类布局，再拓扑序对齐所有方法。\"\n</example>"
-model: opus
+model: inherit
 color: cyan
 memory: project
 ---

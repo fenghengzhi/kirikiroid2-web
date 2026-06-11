@@ -2,7 +2,7 @@
 name: "class-layout-auditor"
 description: "当你需要验证本地 C++ 类的内存布局、vtable、容器选型与 libkrkr2.so 中对应类完全一致时，使用此 agent。它审计的是「类」这一单元（成员字段顺序/类型/偏移、vtable 槽位与方法签名、ctor/dtor、容器选型），而非单个方法体。binary-alignment-auditor 处理函数级，本 agent 处理类型/对象生命周期级，二者互补。\n\n示例：\n\n<example>\n场景：用户实现了 EmotePlayer 类，想确认对象布局与 libkrkr2.so 中一致。\nuser: \"检查 EmotePlayer 类布局是否对齐 libkrkr2.so\"\nassistant: \"我将使用 class-layout-auditor agent 审计 EmotePlayer 的成员字段顺序、vtable、ctor/dtor 与 libkrkr2.so 的对齐情况。\"\n</example>\n\n<example>\n场景：发现 Layer 的某些方法对齐后行为仍然不对，怀疑是对象生命周期/字段偏移问题。\nuser: \"Layer 的方法都对齐了但运行时还是出 bug，帮我检查类布局\"\nassistant: \"让我启动 class-layout-auditor agent 对比 Layer 类的成员布局、vtable 顺序和容器选型与 libkrkr2.so 的差异。\"\n</example>\n\n<example>\n场景：module-alignment-driver 在驱动一个模块对齐前调用本 agent 作为前置检查。\nassistant: \"在对 LayerIntf 的方法逐个对齐前，让我先用 class-layout-auditor 确认 Layer 类的内存布局与 libkrkr2.so 一致。\"\n</example>"
 tools: Glob, Grep, Read, Bash, mcp__ida-pro-mcp__decompile, mcp__ida-pro-mcp__disasm, mcp__ida-pro-mcp__declare_type, mcp__ida-pro-mcp__set_type, mcp__ida-pro-mcp__type_inspect, mcp__ida-pro-mcp__type_query, mcp__ida-pro-mcp__read_struct, mcp__ida-pro-mcp__search_structs, mcp__ida-pro-mcp__entity_query, mcp__ida-pro-mcp__xrefs_to, mcp__ida-pro-mcp__xrefs_to_field, mcp__ida-pro-mcp__xref_query, mcp__ida-pro-mcp__callees, mcp__ida-pro-mcp__callgraph, mcp__ida-pro-mcp__list_funcs, mcp__ida-pro-mcp__lookup_funcs, mcp__ida-pro-mcp__find, mcp__ida-pro-mcp__find_regex, mcp__ida-pro-mcp__find_bytes, mcp__ida-pro-mcp__get_bytes, mcp__ida-pro-mcp__rename, mcp__ida-pro-mcp__set_comments, mcp__ida-pro-mcp__idb_save, mcp__ida-pro-mcp__infer_types, Skill
-model: opus
+model: inherit
 color: purple
 memory: project
 ---

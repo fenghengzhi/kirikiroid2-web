@@ -1,7 +1,7 @@
 ---
 name: "binary-aligned-implementer"
 description: "当你需要在本地代码库中实现一个必须与 libkrkr2.so 二进制精确对齐的函数时使用此 agent。此 agent 编排完整工作流：首先通过 ida-deep-analyzer 分析二进制函数，然后实现精确匹配的代码，再通过 binary-alignment-auditor 验证，循环迭代直到验证通过。它可以递归调用自身来实现分析过程中发现的子函数。\n\n示例：\n\n<example>\n场景：用户想要实现在二进制中找到的特定函数。\nuser: \"请在我们的代码库中实现 sub_692AB0\"\nassistant: \"我将使用 binary-aligned-implementer agent 分析、实现并验证此函数。\"\n<commentary>\n用户想要实现一个与二进制对齐的函数，使用 Agent 工具启动 binary-aligned-implementer agent，编排完整的分析 → 实现 → 验证循环。\n</commentary>\n</example>\n\n<example>\n场景：用户发现一个桩函数需要真正的实现。\nuser: \"EmotePlayer::SetScale 是个桩，请按照二进制正确实现它\"\nassistant: \"让我启动 binary-aligned-implementer agent 逆向工程并实现 EmotePlayer::SetScale。\"\n<commentary>\n用户需要用与二进制对齐的实现替换桩函数，使用 Agent 工具启动 binary-aligned-implementer agent。\n</commentary>\n</example>\n\n<example>\n场景：实现过程中发现了一个也需要对齐的子函数。\nassistant: \"我发现 sub_692AB0 调用了 sub_6930C0，而我们还没有实现。让我递归启动 binary-aligned-implementer 先实现 sub_6930C0。\"\n<commentary>\n在实现过程中 agent 发现了依赖的子函数。它通过 Agent 工具递归调用自身来实现子函数，然后继续。\n</commentary>\n</example>"
-model: opus
+model: inherit
 color: blue
 memory: project
 ---

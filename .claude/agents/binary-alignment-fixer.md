@@ -1,7 +1,7 @@
 ---
 name: "binary-alignment-fixer"
 description: "当用户想要修复当前项目中的函数以对齐 libkrkr2.so 二进制实现时使用此 agent。此 agent 编排完整的对齐工作流：首先调用 krkr2-impl-diff 分析差异，然后进行代码修复，再调用 binary-alignment-auditor 验证，循环迭代直到审计通过。\n\n示例：\n\n<example>\n场景：用户想要将特定函数与 libkrkr2.so 对齐。\nuser: \"帮我把 EmotePlayer::SetVariable 对齐 libkrkr2.so\"\nassistant: \"我将使用 binary-alignment-fixer agent 分析、修复并验证 EmotePlayer::SetVariable 与 libkrkr2.so 的对齐。\"\n<commentary>\n用户想要将函数与二进制对齐，使用 Agent 工具启动 binary-alignment-fixer agent，编排完整的 diff→修复→审计 循环。\n</commentary>\n</example>\n\n<example>\n场景：用户发现某个函数与二进制不匹配，需要修正。\nuser: \"sub_692AB0 和我们的实现不一样，修一下\"\nassistant: \"让我启动 binary-alignment-fixer agent 分析 sub_692AB0 的差异，应用修正并验证结果。\"\n<commentary>\n用户通过地址识别出一个未对齐的函数。使用 Agent 工具启动 binary-alignment-fixer 处理完整的对齐工作流。\n</commentary>\n</example>\n\n<example>\n场景：用户想要对某个模块进行对齐检查。\nuser: \"检查并修复 MotionPlayer 的 OnAction 函数\"\nassistant: \"我将使用 binary-alignment-fixer agent 对 MotionPlayer::OnAction 与 libkrkr2.so 进行 diff、修复和审计。\"\n<commentary>\n使用 Agent 工具启动 binary-alignment-fixer 执行完整的分析-修复-验证循环。\n</commentary>\n</example>"
-model: opus
+model: inherit
 color: blue
 memory: project
 ---
