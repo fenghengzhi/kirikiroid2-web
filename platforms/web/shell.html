@@ -54,6 +54,11 @@
         (function() {
             try {
                 var params = new URLSearchParams(window.location.search);
+                // Auto-load mode (?xp3= / ?game=): hide the static landing content
+                // before first paint; the loading overlay takes over instead.
+                if (params.get('xp3') || params.get('game')) {
+                    document.documentElement.classList.add('krkr2-autoload');
+                }
                 if (params.get('debugEarlyLogs') === '1') {
                     var logs = [];
                     function capture(level, args) {
@@ -241,6 +246,10 @@
 
         #file-picker.visible { display: flex; }
 
+        /* Auto-load mode hides the landing page until showFilePicker() clears it
+           (e.g. when the URL-driven download fails and we fall back to the picker). */
+        html.krkr2-autoload #file-picker { display: none; }
+
         #picker-box {
             text-align: center;
             max-width: 640px;
@@ -335,6 +344,13 @@
             font-size: 14px;
             color: #888;
             min-height: 20px;
+        }
+
+        #engine-status {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #555;
+            min-height: 16px;
         }
 
         .feedback-link {
@@ -643,6 +659,11 @@
 </head>
 <body>
     <noscript>
+        <style>
+            /* Without JS the picker buttons are dead — show the noscript notice instead. */
+            #file-picker { display: none !important; }
+            html, body { overflow: auto !important; }
+        </style>
         <div style="padding:40px 20px;text-align:center;color:#e0e0e0;background:#1a1a2e;min-height:100vh;max-width:720px;margin:0 auto;line-height:1.7;">
             <h1 style="color:#e94560;margin-bottom:16px;">Kirikiroid2 Web</h1>
             <p style="margin-bottom:12px;">Kirikiroid2 Web is a browser port of <strong>Kirikiroid2</strong> — the Android port of the Kirikiri2 (吉里吉里2) visual novel engine that powers hundreds of Japanese ADV / galgame titles — compiled to WebAssembly via Emscripten.</p>
@@ -652,7 +673,7 @@
         </div>
     </noscript>
 
-    <div id="loading" data-nosnippet>
+    <div id="loading" class="hidden" data-nosnippet>
         <h1>Kirikiroid2 Web</h1>
         <div id="progress-bar">
             <div id="progress-fill"></div>
@@ -689,7 +710,7 @@
     </div>
     <input type="file" id="space-import-input" accept=".zip" style="display:none;">
 
-    <div id="file-picker">
+    <div id="file-picker" class="visible">
         <div id="picker-box">
             <h1>Kirikiroid2 Web</h1>
             <p class="subtitle">Run Kirikiri2 visual novels in your browser — no installation required</p>
@@ -707,6 +728,7 @@
             </div>
             <div id="picker-status"></div>
             <div id="picker-progress"><div id="picker-progress-fill"></div></div>
+            <div id="engine-status" data-nosnippet aria-live="polite"></div>
             <div class="feedback-link"><a href="https://github.com/fenghengzhi/krkr2/issues" target="_blank" rel="noopener">Feedback & Issues</a></div>
             <section class="about-content">
                 <h2>About Kirikiroid2 Web</h2>
@@ -780,6 +802,10 @@
         var pickerStatus = document.getElementById('picker-status');
         var pickerProgress = document.getElementById('picker-progress');
         var pickerProgressFill = document.getElementById('picker-progress-fill');
+        var engineStatusElement = document.getElementById('engine-status');
+        function setEngineStatus(text) {
+            engineStatusElement.textContent = text;
+        }
         var gameFileReady = false;
         var userFileDepAdded = false;
         var hasFileSystemAPI = typeof window.showDirectoryPicker === 'function';
@@ -840,8 +866,10 @@
                     var pct = (parseInt(m[2]) / parseInt(m[4])) * 100;
                     progressFill.style.width = pct + '%';
                     statusElement.textContent = m[1].trim();
+                    if (!gameFileReady) setEngineStatus(m[1].trim() + ' ' + Math.round(pct) + '%');
                 } else {
                     statusElement.textContent = text;
+                    if (!gameFileReady) setEngineStatus(text);
                 }
             },
             onAbort: function(what) {
@@ -853,7 +881,13 @@
                 if (left === 0) {
                     Module.setStatus('');
                 } else if (!gameFileReady) {
-                    Module.setStatus('Preparing engine... (' + left + ' remaining)');
+                    if (userFileDepAdded && left === 1) {
+                        // Only the 'user-file' dependency remains: the engine itself
+                        // is ready and waiting for the user to pick a game.
+                        setEngineStatus('Engine ready');
+                    } else {
+                        Module.setStatus('Preparing engine... (' + left + ' remaining)');
+                    }
                 } else {
                     Module.setStatus('Starting... (' + left + ' remaining)');
                 }
@@ -1196,6 +1230,9 @@
         }
 
         function showFilePicker() {
+            // Auto-load failed or finished without a game: re-enable the
+            // statically rendered landing page hidden by the early head script.
+            document.documentElement.classList.remove('krkr2-autoload');
             filePicker.classList.add('visible');
         }
 
@@ -1385,7 +1422,7 @@
                 statusElement.textContent = 'Download failed: ' + err.message;
                 progressFill.style.width = '0%';
                 console.error('fetchXp3FromUrl error:', err);
-                filePicker.classList.add('visible');
+                showFilePicker();
                 loadingOverlay.classList.add('hidden');
             }
         }
@@ -1490,7 +1527,7 @@
                 statusElement.textContent = 'Failed: ' + err.message;
                 progressFill.style.width = '0%';
                 console.error('fetchAndExtractZip error:', err);
-                filePicker.classList.add('visible');
+                showFilePicker();
                 loadingOverlay.classList.add('hidden');
             }
         }
