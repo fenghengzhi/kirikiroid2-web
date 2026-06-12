@@ -602,5 +602,30 @@ sub_5A2160(byte字段)/sub_5A614C(float字段)/sub_5A6020(int字段) 保留 sub_
 - **实施**：`objthis` 成为首个数据成员（裸指针，ctor @0x5A111C 首句 `+0=objthis`、dtor @0x5A6B88 不 Release——均本对话 decompile 确认）；`Factory(&TextRenderBase::factory)` 注入（= 构造器成员 @0x59D160 经 ctor invoker 0x5A70C4，本地 ncbNativeClassFactory::FuncCall 同构，含 `numparams==1&&void→S_OK` quirk）；内部回调链（onGetTextWidth/evalDollarTag/onEval/onStyleChanged）全部改读 `objthis` 成员，删除形参线程化；成员声明序按 §3b 偏移序重排（默认析构逆序 ≡ dtor 逆偏移释放序）。
 - **typed/raw 划分（最终）**：15 method typed（dict×4 收 tTJSVariant by-value=invoker 拷贝+尾 Release；setRenderSize float×2；void×5；onEval `ttstr`（O1 修复：封送在 invoker 层 = 0x5A7904→0x5A7B28 sub_A0BAF4）；getKeyWait ()→variant；calcLineOffset/calcShowCount int；getCharacters int×2）。**render 保留 raw** 但第 4 参改 `TextRenderBase*`：二进制 render 槽 off_1A0BE48 slot2 = 共享 raw 包装模板 **sub_5A77F4**（membername→-1001、!objthis→-1008、Clear、GETINSTANCE 失败→-1008、再调 Process），Process @0x59FC28 才是 bespoke 封送体；本地 ncbRawCallbackMethod<T*>（ncbind.hpp:1504-1543）与 0x5A77F4 逐句同构（含 TJS_STATICMEMBER 分支），实例取得(-1008)先于 numparams(-1004)。七审 R1/R2/R3 三联即此，已随签名修复。
 - **消除的偏差**：D1（numparams<1 → -1004，ncbind doInvoke:1178）、D2（instance 缺失 → -1008，instanceGetter:1041）、D3（dict AsObject() AddRef + 尾 Release ≡ @0x59d2f8/@0x59ddb4；throw 路径不 Release 同二进制）、native≠objthis"平台边界"（整体消除——它从来不是平台边界，是绑定方式选择）、六审两条低危观察（声明序/析构序）。
-- **旧断言证伪存档**：§0"另一套 NCB 实现（NativeClassBinder proxy-object 风格）"——注册宏路径不同导致的内联形态差异，机制仍是 ncbind 模板（§10.1/10.2）；六审 D5"本地 typed 路径缺 result->Clear()"——错，Clear 在 doInvokeBase ctor（ncbind.hpp:1097）。D5 仍成立的一半：membername 非空二进制直返 -1001 vs 本地转发 BaseT::FuncCall（库级版本漂移，全 NCB 类共有，另案）。
+- **旧断言证伪存档**：§0"另一套 NCB 实现（NativeClassBinder proxy-object 风格）"——注册宏路径不同导致的内联形态差异，机制仍是 ncbind 模板（§10.1/10.2）；六审 D5"本地 typed 路径缺 result->Clear()"——错，Clear 在 doInvokeBase ctor（ncbind.hpp:1097）。~~D5 仍成立的一半：membername 非空 = 库级版本漂移~~——**已于 2026-06-12 库级审计证伪，见 §10.6：不是漂移，是编译器内联**。
 - **验证**：web/debug 构建通过；运行时验证见主会话记录。
+
+### 10.6 ncbind 库级对齐审计（2026-06-12，另案完结）—— D5 半项闭案：零偏差
+
+抽样范围（textrender 之外）：motionplayer Player（92 成员）/EmotePlayer（70 成员）、PackinOne 子插件 fstat（NCB_ATTACH Storages）、csvParser，外加 tjs2 引擎共享入口与 tTJSDispatch 默认槽。**"首句 membername!=null → -1001" 全部成立，零例外，库级统一。**
+
+**D5 半项判定：非偏差（既非源码版本漂移、亦非本地改动）。** 本地 `if (membername) return BaseT::FuncCall(...)` 中 `BaseT = tTJSDispatch`（ncbind.hpp:849-850，**不是**带成员哈希的 tTJSCustomObject），而 `tTJSDispatch::FuncCall/PropGet/PropSet` 默认体 = `membername ? TJS_E_MEMBERNOTFOUND(-1001) : TJS_E_NOTIMPL(-1002)`（tjsObject.h:114/125/135）；membername 非空分支该转发恒返 -1001，二进制"首句直返 -1001"正是这一行转发被编译器内联展开的产物。二进制实体证据：tTJSDispatch 默认槽 0x534D94/0x534C8C/0x534C9C 三个均为 `return membername ? -1001 : -1002`（占属性 vtable 的 FuncCall 槽、方法 vtable 的 PropGet/PropSet 槽——"方法当属性读/属性当函数调"→ -1002，本地行为一致）。
+
+逐句对齐表（二进制证据 → 本地行号，全部一致）：
+
+| 形态 | 二进制实例 | 检查顺序（两侧一致） | 本地 |
+|---|---|---|---|
+| 普通方法 FuncCall | Player.setFlip 0x6F91B0→0x6F925C；fstat 0x5B6A94/0x5B6B1C | membername(-1001)→objthis(-1008)→Clear→numparams(-1004)→GETINSTANCE(-1008)→调用(bool false→-1) | ncbind.hpp:1341/1344/1097/1178/1041-1043/1107 |
+| RawCallback | Player.setVariable 0x6F9620；EmotePlayer.setVariable 0x68E668 | membername→objthis→Clear→`_flag&TJS_STATICMEMBER`?跳过:GETINSTANCE→callback（**无 numparams 检查**） | ncbind.hpp:1527/1530/1533/1536-1539/1542 |
+| PropGet | Player double 属性 0x6F8714；fstat 0x5B94BC | membername→**getter缺(-1007) 先于 objthis(-1008)**→Clear→GETINSTANCE→写 result | ncbind.hpp:1458/1461/1462/1097 |
+| PropSet | 0x6F8844；fstat 0x5B955C | membername→setter缺(-1007)→objthis(-1008)→param==null(-1)→GETINSTANCE→coerce→setter（param 不 Clear） | ncbind.hpp:1474/1477/1478/1479 |
+| 构造器 dispatch | Player ctor 0x6F6BD0 | membername→`numparams==1&&param[0]==void→S_OK` quirk→Clear→numparams(-1004)→createInstance；**无 objthis 检查（两侧一致）** | ncbind.hpp:1379/1382-1385/1097/1178 |
+| 引擎共享 method | tTJSNativeClassMethod_FuncCall 0x9F52F8（csvParser 全员、fstat TJS_STATICMEMBER 成员经 TJSCreateNativeClassMethod 0x9F538C） | membername→objthis→Clear→callback | tjsNative.cpp:91-98；本地包装 = ncbRawCallbackMethod<tTJSNativeClassMethodCallback> 特化（ncbind.hpp:1557-1583，{_dispatch,_flags} 同二进制 0x18 item） |
+| 引擎共享 PropGet/PropSet | 0x9F56EC / 0x9F5754 | membername→objthis→result/param==null(-1)→调用（**PropGet 无 Clear，两侧一致**） | tjsNative.cpp:182-188/206-212 |
+| 引擎共享 ctor | 0x9F541C | membername→Clear→调用（无 objthis 检查） | tjsNative.cpp:122-126 |
+
+补充确证：
+- **-1006 (INVALIDOBJECT) 不出现在任何分发路径**（两侧一致）；GETINSTANCE 失败统一 -1008。`"Invalid instance type."` 串属 err=true 的 GetAdaptor 帮助器（ncbind.hpp:163-164），invoker 路径走 err=false 静默返 -1008，两侧一致。
+- `flag` 实参在所有 invoker 中均不被读取（TJS_STATICMEMBER 是构造期 `_flag` 存储，非调用期 flag）；两侧一致。
+- **membername 非空路径的脚本触达方式**：成员函数/属性 dispatch 对象被取出后再对它做成员访问（如 `var f = obj.method; f.foo()` 或属性对象上 PropGet 子成员）——两侧同返 -1001，无可观察行为差。
+- **偏差清单：空。** ncbind.hpp 分发路径（invoker/doInvoke/ctor/factory/property/rawcallback/引擎侧）与 libkrkr2.so 六维全对齐，无需任何代码修改。
