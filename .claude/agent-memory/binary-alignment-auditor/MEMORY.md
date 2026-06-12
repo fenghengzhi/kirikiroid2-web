@@ -1,5 +1,5 @@
-- [textrender dict解析层+NCB包装层审计](textrender_dict_layer_audit.md) — 2026-06-12 七审(方案A重接后): D1/D2/D3 消除✓; D5"typed缺Clear"证伪(doInvokeBase:1097); 唯一残留=render raw 三联(0x5A77F4=共享T*包装,实例先于numparams,-1008非throw); 含 invoker slot2 全地址表
-- [textrender render 状态机+查询层 @0x5A228C](textrender_render_statemachine.md) — 2026-06-12 六审(独立重反编译11函数)零开放✅; ruby 调用 X1=charItem+56 disasm 实证(decompile 参数误排勿信); getCharacters(obj,obj)/getKeyWait(obj,null)是二进制自身行为勿互改; align cascade/helpers 全✓
+- [textrender dict解析层+NCB包装层审计](textrender_dict_layer_audit.md) — 2026-06-13 八审(dict层6函数专项独立重反编译)零偏差✅; resetFont路径3自赋值=编译器保值非偏差; 七审残留=render raw 三联(0x5A77F4); 含 invoker slot2 全地址表
+- [textrender render 状态机+生命周期层 @0x5A228C](textrender_render_statemachine.md) — 2026-06-13 九审: 八审2 OPEN(color三键零扩展+GETINSTANCE token)已修复验证✅查询层零开放; shadowDiff=符号扩展勿混改; getCharacters(obj,obj)/getKeyWait(obj,null)勿互改
 - [type-4 粒子 prt 同址 alias](project_type4_particle_prt_alias.md) — 2026-06-06 ❌REGRESSION: eval COPY@0x699c2c 读 node+536*v5+744 ≡ merge 写的 slot+424 prt 块(同一字节, 因 merge slot=node+320+536*idx; 320+424=744); slot+744 写者={merge每帧主写, restore仅HM3}非唯一restore; 正常播放发射器读非零→不惰性; 本地拆 prtResult[9]+prtFmin/... 两独立字段→COPY 读恒零 prtResult→粒子惰性回归; 修: COPY 与 INTERP 同源读 prt 块, 删 prtResult
 - [frameProgress 入口 @0x6C106C](project_frameprogress_entry_0x6C106C.md) — 2026-06-06 ⚠️部分: 入口段整体ALIGNED; _queuing单字段承载+480gate+481firstFrame双角色(已证等价,前提frameProgress→updateLayers每帧清); firstFrame块二进制fall-through本地return但+480gate=1主导第一帧→inert; LOW缺口:入口+1152=0(DWORD@0x6C1088)本地未复刻待grep; renderList→_nodes.empty()=平台边界
 - [+1128/+1136 唯一writer](project_initNonEmote_totalframes_writers.md) — 2026-06-06 ✅: cachedTotalFrames(+1128)/loopTime(+1136)唯一成对writer=initNonEmoteMotion@0x6B372C/0x6B370C(motion lastTime/loopTime); playImpl@0x6B2284全程无写; PlayerCore.cpp:750-751唯一权威设值点; onFindMotion删maxTF覆盖正确(否则破坏loopTime<lastTime不变量→loop-wrap空转)
@@ -25,7 +25,7 @@
 - [M15/M16 accessor audit](project_player_m15m16_accessor_audit.md) — 2026-05-31: setTickCount/setCoord/setAngleDeg M16 fixes OK; getLoopTime scalar vs binary TJS-Array (SEVERE); setChara ttstr vs tTJSVariant*@+776+replay; angleDeg/angleRad unit naming swap; clear/contains/bounds/meshDiv binary getters NOT located.
 - [主路径根架构结论(STALL)](project_mainpath_root_arch_stall.md) — 2026-05-31: progress 帧推进根架构错(STL timeline vs node-deque frame-stepping)，连续多轮未解决=停滞；draw 是正确架构仅分支/相位差。
 
-- [textrender 落字层 appendChar/kinsoku/finishLine](textrender_kinsoku_placeline.md) — 2026-06-12 六审独立重反编译11函数确认零开放偏差✅; 残留仅7项自承inert微差; 排序键+24/0x3000常量已get_bytes确证
+- [textrender 落字层 appendChar/kinsoku/finishLine](textrender_kinsoku_placeline.md) — 2026-06-13 七审再复核零开放✅; 四禁则集68/19/10/10cp已get_bytes逐字确证(ctor@0x5A111C灌+8..+32); 行号=2140行版
 
 <!-- 以下来自 2026-06-07 motionplayer 全量审计（cwd-drift 误放已修正回此处） -->
 - [Player cluster E accessor map](player_cluster_e_accessors.md) — 簇E Player accessor 二进制地址↔语义权威映射(chara/stealthChara/tickCount/angle/loopTime/variableKeys);多处旧 IDB 符号 off-by-one 已纠正
@@ -40,4 +40,4 @@
 - [簇M 粒子系统/childMotion 审计](project_clusterM_particles_childmotion_audit.md) — ✅05-30的L1(P0)/L8/L9/L10/L11全resolved;L9证伪(node+1504=accumulated.dirty);死缓冲splice=std::vector insert@begin 1:1;残留4×P2(M1 prevM/childCount,M2 emission trigger用node镜像非slot+736,M3 Pass2用_frameLastTime非_deltaTime,M4 cull rect未标平台边界)
 - [簇J render execute/internal/dispatch 审计](clusterJ_render_execute.md) — 双函数双层管线(0x6C4E28 leaf emit→0x6C7440 submit);blend/direct门/mesh-TJS-array/alphaMask对齐;❌J4额外Update/J6 absolute=x+y/⚠J9 preview opa减半缺失;🔧J1/J7/J8 leaf-composed双Rb_tree+accurate-SLA缺失;0x6CBCE4→acquireComposedLayerById(精化簇K命名),0x6C6B48→acquireLeafLayerById
 - [簇N resource/SourceCache/ObjSource 审计](clusterN_resource_sourcecache.md) — RM:public SourceCache(0x6A88CC调0x6A78F4确证);RM/SC registrar共享3回调=继承签名;ObjSource@0x69CCB8=dict facade(w/h默认32);🔧Player_findSource@0x6948E8双hashmap+裸GPU upload vs list+shared_ptr(phase-D边界);unloadAll真址=0x6A8CF8(非0x6A8BBC,注释待修);clip STUB
-- [textrender 注册/生命周期/accessor 审计](textrender_registration_lifecycle_audit.md) — 2026-06-12 七审✅: 六审2低危观察均已解决(声明序=偏移序;objthis=首成员裸指针,Factory(&factory)≡0x59D160数据流); 50成员/ctor默认值群/dtor全1:1
+- [textrender 注册/生命周期/accessor 审计](textrender_registration_lifecycle_audit.md) — 2026-06-13 八审独立全量重取证✅零偏差: 33 accessor 全反编译+50成员表全提取+ctor常量/禁则集逐字节再核; dtor逆序/objthis裸指针 1:1

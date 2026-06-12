@@ -861,6 +861,12 @@ public:
     //   pos/time 均为低 int(index)（renderPos bits 高 int 不被 getKeyWait 读取）。
     tTJSVariant getKeyWait() { // 0x5A02DC
         iTJSDispatch2 *arr = TJSCreateArrayObject(); // sub_9876D4(0)
+        // 0x5a0338 vtbl+200 NativeInstanceSupport(GETINSTANCE, ArrayClassID, &ni)
+        //   ——取出的 ni 后续不消费（append 全走 dispatch），dead-but-faithful
+        //   源码 token（同款 idiom 见 tjsArray.cpp:1338-1341）。
+        tTJSArrayNI *ni = nullptr;
+        arr->NativeInstanceSupport(TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
+                                   (iTJSNativeInstance **)&ni);
         for(size_t i = 0; i < _keyWaitList.size(); ++i) {
             int v13 = _keyWaitList[i].index; // LDRSW 低 int（pos 与 time 同值）
             iTJSDispatch2 *dict = TJSCreateDictionaryObject(); // sub_9C8440(0)
@@ -888,6 +894,12 @@ public:
     //   ncbind typed 2-arg invoker（numparams<2→-1004，count 缺省=void→0=binary `!a3` 路径）。
     tTJSVariant getCharacters(tjs_int start, tjs_int count) { // 0x5A0694
         iTJSDispatch2 *arr = TJSCreateArrayObject(); // sub_9876D4(0)
+        // 0x5a0708 vtbl+200 NativeInstanceSupport(GETINSTANCE, ArrayClassID, &ni)
+        //   ——二进制 0x5a0714 还取 v34=&ni->Items，二者均不被后续消费（append 全走
+        //   dispatch），dead-but-faithful 源码 token（idiom 同 tjsArray.cpp:1338-1341）。
+        tTJSArrayNI *ni = nullptr;
+        arr->NativeInstanceSupport(TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
+                                   (iTJSNativeInstance **)&ni);
         // count==0 → renderCount - start（+84）
         if(!count)
             count = _renderCount - start; // a3 = *(a1+84) - a2
@@ -923,17 +935,21 @@ public:
                 trDictSetReal(dict, TJS_W("cw"), ci->cw);            // +16
                 trDictSetReal(dict, TJS_W("size"), ci->size);        // +20
                 trDictSetStr(dict, TJS_W("face"), faceName);         // 缓存名
-                trDictSetInt(dict, TJS_W("color"), (int)ci->chColor); // +28
+                // color/shadowColor/edgeColor：二进制 0x5a092c/0x5a0a04/0x5a0a7c
+                //   `LDR W8`（*(unsigned int*)）= u32 **零扩展**进 tvtInteger，
+                //   0xFF000000 以正值 4278190080 暴露给脚本——勿加 (int) 符号扩展。
+                trDictSetInt(dict, TJS_W("color"), ci->chColor); // +28 零扩展 @0x5a092c
                 trDictSetInt(dict, TJS_W("bold"), ci->bold ? 1 : 0);   // +41
                 trDictSetInt(dict, TJS_W("italic"), ci->italic ? 1 : 0); // +42
                 trDictSetInt(dict, TJS_W("shadow"), ci->shadow ? 1 : 0); // +43
                 trDictSetInt(dict, TJS_W("edge"), ci->edge ? 1 : 0);     // +44
                 trDictSetInt(dict, TJS_W("shadowColor"),
-                             (int)ci->shadowColor); // +32
+                             ci->shadowColor); // +32 零扩展 @0x5a0a04
                 trDictSetInt(dict, TJS_W("shadowDiff"),
-                             (int)ci->shadowDiff); // +48
+                             (int)ci->shadowDiff); // +48 走 sub_5A6020(int*) @0x5a0a74
+                                                   //   = **符号扩展**，(int) 必须保留
                 trDictSetInt(dict, TJS_W("edgeColor"),
-                             (int)ci->edgeColor); // +36
+                             ci->edgeColor); // +36 零扩展 @0x5a0a7c
                 // ruby（仅 +56 != +64，即 ruby vector 非空）→ 子 Array
                 if(!ci->ruby.empty()) // *(v17+56) != *(v17+64)
                     trDictSetRubyArray(dict, ci->ruby);
@@ -962,14 +978,23 @@ public:
         dict->PropSet(TJS_MEMBERENSURE, key, nullptr, &v, dict);
     }
     static void trDictSetInt(iTJSDispatch2 *dict, const tjs_char *key,
-                             int val) { // sub_5A2160/5A6020/A0FB64 (type 4 Integer)
-        tTJSVariant v((tjs_int)val);
+                             tjs_int64 val) { // sub_5A2160/5A6020/A0FB64 (type 4 Integer)
+        // 参数取 tjs_int64：variant Integer 槽本就 64 位，符号/零扩展由调用点的
+        //   成员读取转换决定，对应二进制在 load 指令处定扩展方式
+        //   （LDRB/LDRSW 符号路径 vs LDR W8 零扩展路径，见 color 三键注释）。
+        tTJSVariant v(val);
         dict->PropSet(TJS_MEMBERENSURE, key, nullptr, &v, dict);
     }
     // ruby 子 Array（sub_5A6240@0x5A6240）：每 RubyItem → dict{text,x,y,size}。
     static void trDictSetRubyArray(iTJSDispatch2 *dict,
                                    const std::vector<RubyItem> &ruby) { // sub_5A6240
         iTJSDispatch2 *arr = TJSCreateArrayObject(); // sub_9876D4(0)
+        // 0x5a62b0 vtbl+200 NativeInstanceSupport(GETINSTANCE, ArrayClassID, &ni)
+        //   ——二进制 0x5a62bc 取 v18=&ni->Items，均不被后续消费，dead-but-faithful
+        //   源码 token（idiom 同 tjsArray.cpp:1338-1341）。
+        tTJSArrayNI *ni = nullptr;
+        arr->NativeInstanceSupport(TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
+                                   (iTJSNativeInstance **)&ni);
         for(size_t i = 0; i < ruby.size(); ++i) {
             const RubyItem &r = ruby[i];
             iTJSDispatch2 *rd = TJSCreateDictionaryObject(); // sub_9C8440(0)

@@ -70,3 +70,6 @@ metadata:
 - charItem copy(text incref+OWORD+ruby 深拷)/destroy(ruby release→delete→text release) 生命周期 ✅
 - inert 微差: text 空判定(二进制裸 Ptr null vs 本地 c_str() 恒非null, concat""=no-op)/appendChar 双 ttstr 构造 vs 复用/
   measureTextWidth 多 TJS_FAILED 早退/_hasCurRubyText 平行哨兵(恒 false, +528 无 producer 死支)
+
+# (2026-06-13 七审独立复核：落字/禁则链零开放偏差✅ 再确认)
+独立重反编译 appendChar@0x5A3880/kinsoku@0x5A4A7C/finishLine@0x5A34B8/measure@0x5A426C/ctor@0x5A111C，全链 1:1 复核成立（over 门控/三分支禁则/used<1 边界 --renderCount/LABEL_107 drain 自递归/placeChar pen 推进/word_break 状态/finishLine align+缩进+metric 写序）。新增证据：四禁则集 get_bytes 逐字✓——following 68cp@0x14C9DF8 / leading 19cp@0x14C9E82（首码点 U+005C）/ begin 10cp@0x14C9EAA / end 10cp@0x14C9EC0，与本地 ctor 字面量（hexdump 验证 U+3000=e3 80 80）逐码点一致；ctor@0x5A111C 确证 +8/+16/+24/+32 灌入这 4 地址。本地文件已变 2140 行（d83b1191 重构），六审行号作废：ctor 281-311/clear 429-484/newline 528/done 535-591/calc* 594-616/getKeyWait 862-884/getCharacters 889-952/helpers 953-987/onGetTextWidth 1042/appendChar 1059-1130/kinsoku 1133-1232/placeChar 1235-1286/finishLine 1316-1396。finishLine LABEL_56 内 +108=0 与 +528 release 顺序本地互换=inert（独立字段）。查询层 2 项新偏差归属 render_statemachine 记忆，非本层。

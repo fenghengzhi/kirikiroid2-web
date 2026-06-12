@@ -1,4 +1,4 @@
-- [textrender 批1-4 全清](textrender_line_struct_d2d3.md) — D1-D4/Q1-Q3/R1-R3/N1/抛错组全PASS;sub_A0E48C(v,N)=ConvertError(type N);_ZdlPvm_22=ttstr长度getter;残留仅ctor默认值群(疑stale)
+- [textrender 批1-5 全清](textrender_line_struct_d2d3.md) — 批5=查询层颜色键零扩展(shadowDiff符扩勿统一)+3处GETINSTANCE token;批1-4 D1-D4/Q1-Q3/R1-R3/N1/抛错组全PASS;sub_A0E48C(v,N)=ConvertError;_ZdlPvm_22=ttstr长度getter;残留仅ctor默认值群(疑stale)
 - [sub_6C7440 setClip dispatch](sub6C7440_setclip_dispatch.md) — setClip 经 FuncCall(vtbl+16) L"setClip" 派发到 work-layer v370(NOT native SetClip); 3点: 0x6c78dc argc=4[L,T,W,H] / 0x6c7620 argc=0 / 0x6c8fcc argc=0 post-walk reset; aligned 2026-06-06; structural diff inert(m2/yuzu PASS=非回归守护)
 - [SourceCache loadSource 0x6A7BA8](sourcecache_loadsource_0x6A7BA8.md) — match=(key,src,blendMode); color NOT key=mutable; 1 node/(key,blend); color change→update+re-bake+splice head. C-2 aligned 2026-06-06 (was 3-tuple N-entry). NOT platform-boundary
 - [progress_inner firstFrame block](progress_inner_firstframe_block.md) — 0x6C1108 块: (b)reverse-from-end种子 +(a)+609方向性seek; 块尾必须 return(非fall-through,否则错位preProgress多跑一拍 243→242); 前置=PlayerCore补 _firstFrame=true(STRH 0x0101)

@@ -5,6 +5,9 @@ metadata:
   type: project
 ---
 
+## 2026-06-13 八审（dict 解析层专项，6 函数独立重反编译）：零偏差 ✅
+setOption@0x59D2AC 18 键 / setDefault@0x59DEA8 17 键（fontsize 回填三联 + 显式 big/small/ruby 在 fontsize 存在时被忽略 + linesize fallback）/ setFont@0x59EFD8 11 键（changed 仅 face/bold/fontsize；face PropGet FAIL→LABEL_15 即 changed=0 初始化）/ setStyle@0x59F7AC 5 键 / resetFont@0x59EEE0 三路门控 / resetStyle@0x59EFBC 纯 5 字段——键名、顺序、类型分发（string 键 {2→store,0→空串,1/3/4/5→throw(,2)}）、写入字段、回调时机全部 1:1。新确证两点：① resetFont 路径3（italic/fontsize 触发）二进制 *v3=v4 写 +62=旧+62 是编译器保值（该路径前提 +62==+66，自赋值≡赋默认值），本地 `_curBold=_defaultBold` 即源码原 token，非偏差；② (bool)tTJSVariant operator bool（tjsVariant.h:911-925）逐 case ≡ 二进制 boolCoerce switch。group 复位内部 store 顺序（本地 fontSize 先于 faceIndex vs 二进制相反）= 指令调度，inert。
+
 ## 2026-06-12 七审（方案 A 重接后，工作树未提交 diff vs 2780bf18）
 绑定层重接：13 raw callback → 15 typed NCB_METHOD + Factory(&factory)，仅 render 保留 raw。
 **D1/D2/D3 全部消除**（本会话独立重反编译验证）：

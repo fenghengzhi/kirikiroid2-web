@@ -1,6 +1,6 @@
 ---
 name: textrender-line-struct-d2d3
-description: textrender 批1-4 偏差全清 (2026-06-11)——D2 嵌套 Line 112B/D3 clear 双零/D1/Q1-Q3/R1-R3/N1/D4/抛错组均 PASS；Line 同型证据三件套 + sub_A0E48C 抛错模式
+description: textrender 批1-5 偏差全清 (2026-06-13)——D2 嵌套 Line 112B/D3 clear 双零/D1/Q1-Q3/R1-R3/N1/D4/抛错组/查询层颜色键零扩展+GETINSTANCE token 均 PASS；Line 同型证据三件套 + sub_A0E48C 抛错模式 + 整型扩展方式由 load 指令定
 metadata:
   type: project
 ---
@@ -28,5 +28,10 @@ textrender D2+D3 已修复（2026-06-11，一轮审计 ✅ PASS，构建通过�
 - 抛错组：paramAsDict type!=object → throw(Object)；setOptionStr 四串键 + setDefault/setFont face 键 object/octet/int/real → throw(String)（string 取值/void 空串）。
 **模式**：textrender dict/参数层的 sub_A0E48C(v, N) = TJSThrowVariantConvertError(v, (tTJSVariantType)N)（1=Object,2=String,4=Integer,5=Real）；real/int 强制组直接等价 AsReal/AsInteger，但 string 强制组**不是** ttstr(v)——非 string/void 必须显式 throw。
 textrender 三簇（dict 解析层/render 状态机+查询层/落字层）已知偏差全部清零；仍 open 仅注册/生命周期审计簇（auditor 称 ctor@0x5A111C 默认值群，需与 C1 批已修内容核对是否 stale）。
+
+**第五批（2026-06-13，八审 2 项查询层 OPEN → 当日修复，一轮九审 ✅ PASS，构建通过，仍无运行时验证手段）**：
+- D1 getCharacters color/shadowColor/edgeColor 零扩展（0x5a092c/0x5a0a04/0x5a0a7c `LDR W8` u32→tvtInteger 正值）：trDictSetInt 形参 int→tjs_int64 + 三调用点传裸 tjs_uint32 成员。**shadowDiff 走 sub_5A6020(int*)=符号扩展，(int) cast 必须保留**。
+- D2 三处 TJSCreateArrayObject 后补 NativeInstanceSupport(GETINSTANCE, TJSGetArrayClassID(), &ni) dead-token（getKeyWait 0x5a0338/getCharacters 0x5a0708/ruby 0x5a62b0；ni 不消费 ≡ 二进制 &ni->Items 死值；idiom 同 tjsArray.cpp:1338-1341）。
+**模式**：同一函数内同语义字段（四个 u32 颜色/diff）扩展方式可不同——由二进制成员 load 指令（LDR W=零扩 / LDRSW 或 int* 解引=符扩）逐键定，勿统一；helper 形参用 tjs_int64 让扩展决策留在调用点，与二进制 load-site 结构对应。grep 陷阱：tjs2 头文件构造函数藏在 TJS_METHOD_DEF 宏里，`grep "tTJSVariant("` 全空 ≠ 无 ctor。
 
 **模式沉淀**：摊平字段 vs 嵌套结构体的判别证据 = ①专用 clear/dtor helper 接收子对象指针并按相对偏移零化、②push/拷贝按整段 OWORD 范围搬运（含"看似无关"的尾字段）、③同一 dtor 被两个容器位置共用。命中任一即应怀疑源码是嵌套 struct 而非对象级摊平字段。
