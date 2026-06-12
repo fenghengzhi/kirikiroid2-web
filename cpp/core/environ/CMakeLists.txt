@@ -82,6 +82,14 @@ if(EMSCRIPTEN)
     list(REMOVE_ITEM ENVIRON_SOURCE_FILES ${ENVIRON_PATH}/ui/SimpleMediaFilePlayer.cpp)
 endif()
 
+if(KRKR2_ENABLE_WASMTIME_HEADLESS)
+    # Wasmtime headless 差分 guest 无浏览器宿主（无 window.VLFS），且其
+    # pthread 主线程代理队列无人消费，VLFS::Enabled() 的 RunOnMainSync
+    # 探测会直接 futex abort——编译期禁用 VLFS，引擎走原 MEMFS 路径。
+    set_source_files_properties(${ENVIRON_PATH}/web/VirtualLazyFS.cpp
+        PROPERTIES COMPILE_DEFINITIONS KRKR2_WASMTIME_HEADLESS)
+endif()
+
 add_library(${PROJECT_NAME} STATIC ${ENVIRON_SOURCE_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${ENVIRON_HEADERS_DIR})
 target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_visual_module core_sound_module core_plugin_module core_movie_module core_utils_module)

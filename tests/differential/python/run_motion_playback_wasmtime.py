@@ -346,6 +346,9 @@ class WasmtimeEnvProvider:
             return lambda _caller, *args: self._syscall(name, _caller, *args)
         if name.startswith("fsafs_"):
             return lambda _caller, *args: self._fsafs(name, _caller, *args)
+        if (name.startswith("vlfs_js_")
+                or name.startswith("__asyncjs__vlfs_js_")):
+            return lambda _caller, *args: self._vlfs(name, _caller, *args)
         if name.startswith("egl"):
             return lambda caller, *args: self._egl(name, caller, *args)
         if name.startswith("al") or name.startswith("alc"):
@@ -717,6 +720,17 @@ class WasmtimeEnvProvider:
         if name == "fsafs_read_stream":
             return -1
         return None
+
+    def _vlfs(self, name: str, _caller: Any, *args: Any) -> Any:
+        # The headless guest has no window.VLFS provider. Answering 0 to
+        # vlfs_js_enabled makes VLFS::Enabled() cache false, so the engine
+        # keeps the MEMFS path; every other bridge is gated on Enabled()
+        # and must never fire — fail loud if one does.
+        if name == "vlfs_js_enabled":
+            return 0
+        raise RuntimeError(
+            f"VLFS bridge called while disabled: {name}{args}"
+        )
 
     def _emscripten_set(self, name: str, func_type: Any, caller: Any,
                         *args: Any) -> Any:

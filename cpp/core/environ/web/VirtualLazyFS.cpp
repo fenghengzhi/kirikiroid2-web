@@ -225,6 +225,11 @@ void ProxiedSizeTask(em_proxying_ctx *ctx, void *arg) {
 namespace VLFS {
 
 bool Enabled() {
+#ifdef KRKR2_WASMTIME_HEADLESS
+    // Wasmtime 差分 guest 无浏览器宿主，主线程代理队列也无人消费，
+    // RunOnMainSync 探测会 futex abort——编译期恒禁用，走 MEMFS 路径。
+    return false;
+#else
     static int cached = -1;
     if (cached < 0) {
         int v = 0;
@@ -236,6 +241,7 @@ bool Enabled() {
         cached = v;
     }
     return cached != 0;
+#endif
 }
 
 int Has(const char *path) {
@@ -384,12 +390,17 @@ int MkDir(const char *path) {
 // UI 资源/字体经 VLFS 按需读取，不再驻留 MEMFS）
 // ===========================================================================
 
+// Enabled() 门控：CCFileUtils 注释中"wasmtime 工具链不链接 VLFS、弱符号
+// 为 0"的假设不成立（核心库统一编译，headless guest 同样含本文件），
+// 必须在桥入口处按运行时开关短路。
 extern "C" int krkr2_vlfs_exists(const char *path) {
+    if (!VLFS::Enabled()) return 0;
     return VLFS::Has(path) == 1 ? 1 : 0;
 }
 
 extern "C" unsigned char *krkr2_vlfs_read_all(const char *path,
                                               unsigned int *outLen) {
+    if (!VLFS::Enabled()) return nullptr;
     int fd = VLFS::Open(path, 0);
     if (fd < 0) return nullptr;
     int64_t size = VLFS::Size(fd);
