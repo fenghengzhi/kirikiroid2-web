@@ -231,6 +231,25 @@
             line-height: 1.6;
         }
 
+        #error-update-btn {
+            margin-top: 18px;
+            padding: 10px 24px;
+            background: #e94560;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        #error-update-btn:hover {
+            background: #c73652;
+        }
+
+        #build-version {
+            color: #555;
+        }
+
         #file-picker {
             position: fixed;
             top: 0; left: 0;
@@ -685,6 +704,7 @@
         <div id="error-box">
             <h2>Error</h2>
             <p id="error-message"></p>
+            <button id="error-update-btn">Force Update &amp; Reload</button>
         </div>
     </div>
 
@@ -729,7 +749,7 @@
             <div id="picker-status"></div>
             <div id="picker-progress"><div id="picker-progress-fill"></div></div>
             <div id="engine-status" data-nosnippet aria-live="polite"></div>
-            <div class="feedback-link"><a href="https://github.com/fenghengzhi/krkr2/issues" target="_blank" rel="noopener">Feedback & Issues</a></div>
+            <div class="feedback-link"><a href="https://github.com/fenghengzhi/krkr2/issues" target="_blank" rel="noopener">Feedback & Issues</a> &middot; <a href="#" id="force-update-btn" title="Clear cached app files and reload the latest version (save data is kept)">Force Update</a> &middot; <span id="build-version"></span></div>
             <section class="about-content">
                 <h2>About Kirikiroid2 Web</h2>
                 <p>Kirikiroid2 Web is a browser port of <strong>Kirikiroid2</strong> — the Android port of the Kirikiri2 (吉里吉里2) visual novel engine, which powers hundreds of Japanese ADV / galgame titles. The Kirikiroid2 codebase is compiled to WebAssembly via Emscripten, so games run entirely client-side — your save data and game files never leave your device.</p>
@@ -811,6 +831,45 @@
         var gameFileReady = false;
         var userFileDepAdded = false;
         var hasFileSystemAPI = typeof window.showDirectoryPicker === 'function';
+
+        // --- 强制更新：注销全部 service worker + 清空 CacheStorage 后重载 ---
+        // 兜底 SW 更新流程失效的场景（如旧版本 confirm 被关掉后卡住、缓存损坏）。
+        // 只清应用缓存；存档在 IndexedDB / 存档空间里，不受影响。
+        // 顺序：先 unregister（重载导航即不被旧 SW 接管），后删 cache，再 reload；
+        // 重载后 pwa-sw.html 会重新注册 sw.js（浏览器对 sw.js 默认绕过 HTTP 缓存），
+        // 新 SW 重新预缓存全部资源。
+        var BUILD_VERSION = '@KRKR2_BUILD_VERSION@';
+        if (!BUILD_VERSION || BUILD_VERSION.charAt(0) === '@') BUILD_VERSION = 'dev';
+        document.getElementById('build-version').textContent = 'Build ' + BUILD_VERSION;
+        function forceUpdate() {
+            var steps = Promise.resolve();
+            if ('serviceWorker' in navigator) {
+                steps = steps.then(function () {
+                    return navigator.serviceWorker.getRegistrations().then(function (regs) {
+                        return Promise.all(regs.map(function (reg) { return reg.unregister(); }));
+                    });
+                });
+            }
+            if ('caches' in window) {
+                steps = steps.then(function () {
+                    return caches.keys().then(function (names) {
+                        return Promise.all(names.map(function (name) { return caches.delete(name); }));
+                    });
+                });
+            }
+            steps.catch(function (e) {
+                console.warn('[PWA] force update cleanup failed:', e);
+            }).then(function () {
+                window.location.reload();
+            });
+        }
+        document.getElementById('force-update-btn').addEventListener('click', function (e) {
+            e.preventDefault();
+            if (confirm('Clear cached app files and reload the latest version?\nSave data will be kept.')) forceUpdate();
+        });
+        document.getElementById('error-update-btn').addEventListener('click', function () {
+            forceUpdate();
+        });
 
         // --- File System Access API state ---
         var hostDirHandle = null;
