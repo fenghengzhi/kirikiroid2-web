@@ -1,11 +1,17 @@
 ---
 name: textrender-kinsoku-placeline
-description: textrender 落字层 appendChar/kinsoku/finishLine/done 二进制地址↔本地映射; D1/D2/D3/D4 全已修复✅(2026-06-11 第五批审计后零开放偏差)
+description: textrender 落字层 appendChar/kinsoku/finishLine/done 二进制地址↔本地映射; 2026-06-12 六审(独立全量重反编译11函数)确认零开放偏差✅
 metadata:
   type: project
 ---
 
-# textrender 落字层对齐 (2026-06-11 全量复审, 覆盖 2026-06-09 旧记录)
+# textrender 落字层对齐 (2026-06-12 六审独立复核, 全部 11 函数重新 decompile, 结论=完全对齐)
+
+六审独立验证补充证据: word_14CA1EE get_bytes=0x3000 UTF-16LE 确证; introsort@0x5A59E8+insertion@0x5A5C34 比较键均为 *(elem+24) float 升序(=std::sort by renderPos, 非稳定)双双 decompile 确证; charItem_copy@0x5A4838(text incref+3 OWORD+ruby 20B 深拷逐项 incref)/destroy@0x5A5760(ruby release→delete buf→text release)=本地隐式 copy/dtor 1:1; Line::clear@0x5A1E68 保留首 node+删多余 node=std::deque::clear 语义; Line dtor@0x5A1B24=deque dtor。
+六审本地行号(TextRender.cpp 2439 行版): clearImpl 465-521 / onGetTextWidth 603-623 / appendChar 629-701 / kinsoku 708-814 / placeChar 818-871 / updateWordBreakState 875-888 / advanceLineVertical 891-897 / finishLine 903-989 / newlineImpl 996-999 / doneImpl 1022-1080 / Line::clear 153-163。
+残留 7 项全为已自承注释的 inert 微差(非偏差): measure objthis null guard+TJS_FAILED 早退(结果等价 void→0)/FuncCall hint nullptr vs byte_1AB51A0 缓存/appendChar 单 ttstr 复用 vs 二进制双构造(v65+v48)/done keyWait 本地 bounds guard(二进制无检查=UB)/_hasCurRubyText 平行哨兵/!word_break 循环 run 缓存 vs 每轮重读+424(循环无写)/drain 下标 vs 迭代器。
+
+# (五审历史记录 2026-06-11)
 
 地址映射 (libkrkr2.so ↔ cpp/plugins/textrender/TextRender.cpp):
 - appendChar @0x5A3880 ↔ appendChar(560-626)

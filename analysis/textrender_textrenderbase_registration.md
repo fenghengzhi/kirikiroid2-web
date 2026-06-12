@@ -13,14 +13,13 @@ qword_1AB5180 = <prev head>          // next
 qword_1AB5188 = L"TextRenderBase"    // 类名 (UTF-16LE @ 0x14c992e)
 ```
 
-NCB 类描述 vtable `off_1A0B970`（字节已核实）：
+NCB 类描述 vtable `off_1A0B970`（2026-06-12 get_bytes(0x1A0B970,32) 重新核实，**修正本节旧记录**——旧版 "[+0]=0x5242A8" 是错的）：
 ```
-[+0]  0x5242A8   (NCB 通用槽)
-[+8]  TextRenderBase_ncb_enumMembers_create   @ 0x5A6650
+[+0]  TextRenderBase_ncb_enumMembers_create    @ 0x5A6650   // Regist 入口，LoadModule 消费循环调 vtbl[0]
+[+8]  TextRenderBase_ncb_enumMembers_noCreate  @ 0x5A67B4   // Unregist 入口
 [+16] 0  [+24] 0
-[+32] 0x5242A8
-[+40] TextRenderBase_ncb_enumMembers_create   @ 0x5A6650  (重复，create 路径)
 ```
+> 消费端证据：sub_704A08 @0x704A08（LoadModule 实体）对注册表里每个 descriptor 调 `(*desc->vtbl[0])(desc)`（0x704ac8/0x704af4/0x704b1c 三个 phase 循环同构）。0x5A6650/0x5A67B4 全二进制唯一引用就是 0x1A0B970/+8（xrefs_to 核实）。
 > 注：原 prompt 给的 `[sub_5A6650, sub_5A67B4, 0, 0, sub_5242A8, sub_5A6A94]` 是 NCB enumerator 表的逻辑视图。实测 0x5A6650/0x5A67B4 是同一注册逻辑的两个变体：
 > - `TextRenderBase_ncb_enumMembers_create` @ **0x5A6650**：`v7=1` → 仅构建类对象 (sub_5A6CFC)，注册期枚举。
 > - `TextRenderBase_ncb_enumMembers_noCreate` @ **0x5A67B4**：`v7=0` → 真正向 TJS 引擎安装类 (调 vtable+96 即 RegisterMember)。
@@ -558,3 +557,50 @@ pre-existing 游戏启动 quirk，非本批回归。**textrender 模块完成度
 （getCharacters/getKeyWait/onEval 此前已命名）；helper sub_5A6240(ruby 子数组)/sub_5A6550(数组 append)/
 sub_5A2160(byte字段)/sub_5A614C(float字段)/sub_5A6020(int字段) 保留 sub_ 名（NCB dict-setter 内联 helper，
 无二进制字符串证据可命名，留待后续）。
+
+## 10. 绑定器机制全图 + 集成点结论（2026-06-12，本对话 decompile 取证）
+
+权威：本对话 ida-deep-analyzer 反编译 0x42D01C / 0x1AB8920 xref / 0x704A08 / 0x548924 /
+0x59BCCC 骨架 / 0x5A6E64 / 0x59D1B8 / 0x59EB78 / 0x5A690C / 0x5A6A60 / 0x5A6A94 /
+0x5A76EC / 0x5A71E0 / 0x5A741C→0x5A74C8 / 0x5A8638 / 0x5A875C / 0x9F4F18 / 0x9F6D2C。
+**本节证伪了 §0 的旧前提"textrender 静态链接了自己独立的绑定器框架"。**
+
+### 10.1 模块注册链归属 —— **与 ncbind 共用同一条链（关键）**
+`xmmword_1AB8920` 不是单链表头，而是 **3 个 phase 链表头的数组**（PreRegist[0]/Regist[1]/Post[2]）。
+- TextRenderBase_moduleRegister@0x42D01C 头插到 `head[1]`（Regist 链），节点 {vtbl@0=off_1A0B970, dllName@8=L"TextRender.dll", next@16, className@24=L"TextRenderBase"}。
+- motionplayer_static_init@0x42EE18 **用完全相同的头插模式**写同一个 `head[1]`（L"motionplayer.dll"/L"Layer"）；emoteplayer/D3DEmotePlayer 走 `head[0]`。
+- 消费方：sub_548924@0x548924（启动）跑 sub_548ACC(0/1/2) 把三条静态链灌进全局 map `qword_1AB8968`（小写 dllName → 3 phase 的 list）；实际 LoadModule = sub_704A08@0x704A08：按名查 map，对每个 descriptor 调 `vtbl[0]`（TextRender 即 0x5A6650 注册路径）。
+- **结论：所有 NCB 模块（ncb_addMember 的 ncbind 路线 + textrender 的 proxy-object 路线）链入同一个 1AB8920 三相数组，由同一个 sub_704A08 消费。textrender 不需要独立注册基础设施。**
+- 本地映射：该全局链 = 本地 `ncbAutoRegister`（`cpp/core/plugin/ncbind.hpp:2096`，3 个 LineT=PreRegist/ClassRegist/PostRegist，`_internal_plugins[小写dllName].lists[line]`），`LoadModule` = `ncbAutoRegister::LoadModule`。**textrender 经 NCB_REGISTER_CLASS 注册即已是这条链的节点**（= Phase A item1 的"同一条链"分支），`Plugins.link("textrender.dll")` 已能找到。无需 shim。
+
+### 10.2 invoker 是 ncbind 模板的多实例，**不是手写独立绑定器**
+~30 个 invoker（sub_5A76EC..5A9B78）共享：相同错误码序列、相同 `NativeInstanceSupport(GETINSTANCE=2, dword_1AB5158)` 取 native、相同 Itanium PMF 解封（ptr@+48/adj@+56，self=native+(adj>>1)，adj&1→virtual）。差异仅在参数个数阈值与封送类型。**= 同一 C++ 模板（ncbind Functor/Property invoker）按签名实例化**，proxy vtbl off_1A0Bxxx/Cxxx 仅 FuncCall/PropGet/PropSet 三槽指向不同实例。本地 `cpp/core/plugin/ncbind.hpp` 即此模板。
+- 守护串归属：`"No method pointer."` 在 ncbind 模板内（本地 ncbind.hpp:1332 已有同串）；`"Multiple constructors."` 在 sub_5A6E64@0x5A6EB4（同一类第二次注册 ctor 成员触发，name==className 判定）；`"Already registerd class."` 在 buildClassObject@0x5A69C0 的 byte_1AB5148 guard。
+
+### 10.3 错误码精确表（D1/D2/D3 重判）
+| 场景 | 二进制返回 | 证据 |
+|---|---|---|
+| membername!=null | -1001 (0xFFFFFC17 MEMBERNOTFOUND，丸投げ) | 所有 invoker 首句 |
+| objthis==null | **-1008** (0xFFFFFC10 NATIVECLASSCRASH) | void 0x5A76EC / dict 0x5A71E0 |
+| dict 方法 numparams<1 | **-1004** (0xFFFFFC14 BADPARAMCOUNT，=4294966292) | dict 0x5A71E0 ★**核实是 -1004，不是 -1006；任务 D1 描述的 -1006 不成立** |
+| void 方法 numparams<N | -1004 | 0x5A76EC |
+| GETINSTANCE 失败/inst.native==0 | -1008 | 全 invoker |
+| property 缺 getter/setter | -1007 (0xFFFFFC11 ACCESSDENYED) | PropGet 0x5A8638 / PropSet 0x5A875C |
+| PropSet value==null | -1 (0xFFFFFFFF) | 0x5A875C |
+| dict 取参 | sub_A0F5E0 复制 tTJSVariant（AsObject 值拷贝）+ 调后 sub_A0F778 Release（= AddRef 拷贝 + 尾 Release，**非** AsObjectNoAddRef 借用） | 0x5A733C / 0x5A71E0 末 |
+
+### 10.4 本地根因诊断 + 集成方案（证据驱动，区别于任务原前提）
+- **D1/D2/D3 + native≠objthis 边界同根**：本地把需 objthis 的方法绑成 `NCB_METHOD_RAW_CALLBACK`（TextRender.cpp:181-196），手写 numparam/错误码/self() 取实例，**绕过了 ncbind invoker 模板**（=二进制同一套模板，本会自然产出 -1004/-1008）。raw-callback 的唯一理由是当时无 objthis 注入手段。
+- **ncbind 已具备 objthis 注入**：构造经 `Factory(&factory)`（本地 DrawDeviceD3D/motionplayer/psbfile 已用），工厂函数签名 `tjs_error factory(Class** result, tjs_int n, tTJSVariant** p, iTJSDispatch2* objthis)` **直接收 objthis** → 可 `*result = new TextRenderBase(objthis)` 复刻二进制 ctor(native,objthis) 的 +0=objthis（createNativeInstance@0x5A6A60 + ctor invoker sub_5A70C4 填 wrapper+8 = 本地 ncbInstanceAdaptor SetNativeInstance）。
+- **忠实集成方案（用同一套模板复刻同拓扑，= Phase A item5e "模板实例" 分支）**：
+  1. TextRenderBase 加 `_objthis` 成员（复刻 +0），由接收 objthis 的 ctor 设置；注册改 `Factory(&factory)` 替代 `NCB_CONSTRUCTOR(())`。
+  2. 现 raw-callback 方法 → 普通 typed 成员（内部从 `_objthis` 取 dispatch 回调），改回 `NCB_METHOD` → 经 ncbind invoker 模板 → D1(-1004)/D2(-1008)/marshal 自然对齐，native≠objthis 边界消除（onGetTextWidth/onEval/onFontChange 读 `_objthis`）。
+  3. D3（AsObject vs AsObjectNoAddRef）= ncbDispatchConvertor（ncbind.hpp:577）的版本差，**在共享 ncbind 内、非 textrender 特有**，net-refcount 恒等（借用=不变；AddRef+Release=不变）→ 不可观察；任务约定不动 ncbind.hpp，故 D3 归为共享 ncbind 版本细节，标注即可。
+- **结论：不需新建独立 TextRenderBinder.h/.cpp**（那会造一份 ncbind 的平行复制，反而偏离"复刻 libkrkr2.so 共享同一模板"的架构事实）。忠实做法 = 用 ncbind 既有 Factory(objthis 注入) + 普通成员，零改 ncbind.hpp。
+
+### 10.5 方案 A 落地记录（2026-06-12 实施 + 七审复核）
+- **实施**：`objthis` 成为首个数据成员（裸指针，ctor @0x5A111C 首句 `+0=objthis`、dtor @0x5A6B88 不 Release——均本对话 decompile 确认）；`Factory(&TextRenderBase::factory)` 注入（= 构造器成员 @0x59D160 经 ctor invoker 0x5A70C4，本地 ncbNativeClassFactory::FuncCall 同构，含 `numparams==1&&void→S_OK` quirk）；内部回调链（onGetTextWidth/evalDollarTag/onEval/onStyleChanged）全部改读 `objthis` 成员，删除形参线程化；成员声明序按 §3b 偏移序重排（默认析构逆序 ≡ dtor 逆偏移释放序）。
+- **typed/raw 划分（最终）**：15 method typed（dict×4 收 tTJSVariant by-value=invoker 拷贝+尾 Release；setRenderSize float×2；void×5；onEval `ttstr`（O1 修复：封送在 invoker 层 = 0x5A7904→0x5A7B28 sub_A0BAF4）；getKeyWait ()→variant；calcLineOffset/calcShowCount int；getCharacters int×2）。**render 保留 raw** 但第 4 参改 `TextRenderBase*`：二进制 render 槽 off_1A0BE48 slot2 = 共享 raw 包装模板 **sub_5A77F4**（membername→-1001、!objthis→-1008、Clear、GETINSTANCE 失败→-1008、再调 Process），Process @0x59FC28 才是 bespoke 封送体；本地 ncbRawCallbackMethod<T*>（ncbind.hpp:1504-1543）与 0x5A77F4 逐句同构（含 TJS_STATICMEMBER 分支），实例取得(-1008)先于 numparams(-1004)。七审 R1/R2/R3 三联即此，已随签名修复。
+- **消除的偏差**：D1（numparams<1 → -1004，ncbind doInvoke:1178）、D2（instance 缺失 → -1008，instanceGetter:1041）、D3（dict AsObject() AddRef + 尾 Release ≡ @0x59d2f8/@0x59ddb4；throw 路径不 Release 同二进制）、native≠objthis"平台边界"（整体消除——它从来不是平台边界，是绑定方式选择）、六审两条低危观察（声明序/析构序）。
+- **旧断言证伪存档**：§0"另一套 NCB 实现（NativeClassBinder proxy-object 风格）"——注册宏路径不同导致的内联形态差异，机制仍是 ncbind 模板（§10.1/10.2）；六审 D5"本地 typed 路径缺 result->Clear()"——错，Clear 在 doInvokeBase ctor（ncbind.hpp:1097）。D5 仍成立的一半：membername 非空二进制直返 -1001 vs 本地转发 BaseT::FuncCall（库级版本漂移，全 NCB 类共有，另案）。
+- **验证**：web/debug 构建通过；运行时验证见主会话记录。

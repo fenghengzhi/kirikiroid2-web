@@ -1,6 +1,6 @@
 ---
 name: textrender-render-statemachine
-description: TextRenderBase::render 状态机 @0x5A228C + 查询输出层(getCharacters/getKeyWait/calcLineOffset/calcShowCount) 对齐结论；2026-06-11 第四批修复后五审：全部 6 偏差(graph/$ v17/length 门/evalDollarTag throw/ncb param[3]/getKeyWait objthis)已修✅零开放
+description: TextRenderBase::render 状态机 @0x5A228C + 查询输出层(getCharacters/getKeyWait/calcLineOffset/calcShowCount) 对齐结论；2026-06-12 六审(全独立重反编译 11 函数)：零开放偏差✅；ruby 调用 X1=charItem+56 disasm 实证、align cascade disasm 复证
 metadata:
   type: project
 ---
@@ -15,6 +15,13 @@ TextRenderBase render 状态机 @0x5A228C (NCB wrapper @0x59FC28) + 查询输出
 4. ✅(已修, 2026-06-11 五审验证) **evalDollarTag@0x5A4148**：本地(TextRender.cpp 1603-1620) 按二进制分发序复刻：(u)(type-3)<3(octet/int/real)@0x5a41d8→throw(String)；==2 取值@0x5a422c；==1(object)@0x5a41e8→同抛；void→空串@0x5a41f8；FuncCall 返回码不检查。
 5. ✅(已修, 五审验证) **ncb_render param[3](size)**：本地 1982 `(void)param[3]->AsReal()`(a2>=4 时)；AsReal(tjsVariant.h 937-955) 逐 case 与 switch@0x59fcb0 同构(object/octet→throw(,5u)、string→sub_A133A8 解析、int/real/void 不抛、入口 TJSSetFPUE=nullsub_22@0x59fc88)；强制顺序 param[3]→param[4]→text→param[1]→param[2] 与二进制一致(throw 顺序保真)。
 6. ✅(已修, 五审验证) **getKeyWait 两处 variant objthis**：本地 2220 vDict(dict,nullptr)=0x5a0430 v15[1]=0；2229 result=tTJSVariant(arr,nullptr)=0x5a04cc *(a2+8)=0。getCharacters 的 (obj,obj) 是二进制自身行为(result objthis=arr/dict 经 sub_5A6550 objthis=dict)，两函数各自照抄，勿互改。
+
+**2026-06-12 六审（全独立重反编译 0x59FC28/0x5A228C/0x5A3CE4/0x5A3F18/0x5A4148/0x5A5874/0x5A0294/0x5A02DC/0x5A05FC/0x5A0644/0x5A0694 + 新鲜 decompile sub_5A6240/5A6550/5A2160/5A614C/5A6020 + disasm 三处）：零开放偏差，五审结论全部复核成立。新增证据：**
+- getCharacters ruby 调用反编译显示 `sub_5A6240(v35, a1)` 是**decompiler 参数误排**——disasm 0x5a0ad0-0x5a0aec 实证 `MOV X1,X28; LDR X8,[X1,#0x38]!` 即 X1=charItem+56(ruby vector)，X8=out。sub_5A6240 签名 (a1@X1=vector, a2@X8=out)，20B stride text/x/y/size，结果 variant (arr,arr)。本地 trDictSetRubyArray(ci->ruby) 正确。**勿被该反编译行误导判偏差**。
+- sub_5A6550 确证 dict variant {v12[0]=dict, v12[1]=dict}=(obj,obj) + PropSetByNum(vtbl+56, flag, idx, objthis=arr)。sub_5A2160=byte→Int4、sub_5A6020=int→Int4、sub_5A614C=float→Real5（入口 nullsub_22=TJSSetFPUE），全部 PropSet(vtbl+48, 512, key, hint, objthis=dict)。
+- align cascade disasm 复证：case'C'@0x5a2c50 LDRB +59→CBNZ 5A2DA0；STR WZR +76；B 5A2D90(=1)；直落 5A2D98(=-1)；'L'@0x5a2d7c B 5A2D98；'R'@0x5a2d88 落 5A2D90。
+- TJS_E_BADPARAMCOUNT=-1004=0xFFFFFC14（tjsErrorDefs.h:26）。shadowDiff 本地 tjs_uint32（(int) cast bit 等价二进制 *(int*)(+48)）。
+- 唯一未覆盖：onEval/getCharacters 缺参时本地 raw-callback 守护（返回 S_OK/默认0）vs 二进制 NCB 自动封送 wrapper 的缺参行为（binder 模板未反编译，预计 BADPARAMCOUNT）——边缘错误路径，待后续专项。
 
 **06-09 两项强断言仍成立**（本次独立复核）：'[' ruby 仅 refcount no-op 无 +528 写；%C/%R/%L cascade 真 fall-through 终值 +76=-1。x(a3)=平衡集启用标志/y(a4)=charDelayStep(+192) 初值非坐标，亦复核成立。
 

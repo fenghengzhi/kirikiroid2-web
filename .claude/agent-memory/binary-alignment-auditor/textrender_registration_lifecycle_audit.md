@@ -22,3 +22,7 @@ metadata:
 - ctor 不初始化 +60/+62..65/+72..92/+108/+132..147/+188/+196..212/+232..292（原版依赖 clear()；本地零init=良性加固）
 
 **待纠正文档/注释**: analysis §3"真对象由 method 首次调用惰性 new"错；TextRender.cpp resolveFaceIndex 注释首段"push 在 setFont/setDefault 调用方"残留自相矛盾（次段已正确）。
+
+**2026-06-12 七审（方案 A 重接后）**：六审两条低危观察均已解决——①成员声明序已重排为二进制偏移序(+0 objthis→…→+536 faceHash)，默认析构逆序=dtor@0x5A6B88 逆偏移序 ✓；②objthis 字段已复刻为首成员（ctor@0x5A111C 首句 `*(this+0)=objthis` 本会话重证；dtor 不 Release +0；Factory(&factory)→0x59D160 `new(0x250)+ctor(obj,objthis)` 数据流 1:1，ncbind 工厂签名第4参=objthis 与 0x59D160 a4 一致），旧"objthis 平台边界"注释已撤、无残留矛盾。方法体经归一化 diff 验证零漂移。残留见 [[textrender-dict-layer-audit]] render raw 三联。
+
+**2026-06-12 独立复审（六审）再次 PASS，零开放偏差**。独立重取证：50 成员顺序/指针全提取（首成员名=类名 v2=**a1, Process=0x59D160；RW 属性 +48=getter OWORD/+64=setter OWORD，RO +64=0）；ctor 三 xmm 常量 + 4 禁则集 get_bytes 逐码点再核全一致；12 accessor + 4 setter 反编译 1:1（maxScrollLine 0x6DB6...*>>4=size() 即 112B 元素 magic-div，非源码 token）。两条低危观察（均判可接受，非偏差）：① 本地字段声明序按语义分组≠二进制偏移序 → 析构顺序与 dtor@0x5A6B88 逆序不同（字段间无依赖，inert）；② 二进制 ctor 首句 +0=objthis 字段本地未复刻（line 52-53 已标注平台边界，objthis 经 raw-callback 线程化传递），连带 clear/resetFont/newline/done 在二进制与 resetStyle 同走 sub_59EB78 模板而本地拆 raw/typed——是该边界的派生差异。

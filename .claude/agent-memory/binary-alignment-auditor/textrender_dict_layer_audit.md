@@ -1,9 +1,41 @@
 ---
 name: textrender-dict-layer-audit
-description: TextRenderBase dict 解析层+状态复位层(setOption/setDefault/setFont/setStyle/setRenderSize/clear/resetFont/resetStyle/onEval/coerce/onStyleChanged)审计结论; 2026-06-11 五审后零开放偏差
+description: TextRenderBase dict 解析层+NCB 包装层审计; 2026-06-12 七审(方案A重接后): D1/D2/D3 已消除, D5 半证伪(typed Clear 其实存在@doInvokeBase:1097), 唯一残留=render raw 三联偏差(R1/R2/R3)
 metadata:
   type: project
 ---
+
+## 2026-06-12 七审（方案 A 重接后，工作树未提交 diff vs 2780bf18）
+绑定层重接：13 raw callback → 15 typed NCB_METHOD + Factory(&factory)，仅 render 保留 raw。
+**D1/D2/D3 全部消除**（本会话独立重反编译验证）：
+- D1 ✓：dict 方法经 ncbind doInvoke:1178 numparams<1→-1004 ≡ 二进制 0x5A71E0 @0x5a7238。
+- D2 ✓：instance-missing 经 instanceGetter ncbind.hpp:1041-1043 SetError(-1008) ≡ 0x5A71E0 三连 GETINSTANCE 检查。
+- D3 ✓：方法体 dictVar.AsObject()（AddRef，tjsVariant.h:682 = 二进制 0x59d2f8 vtbl[0] AddRef 内联）+ 尾 dict->Release()（=0x59ddb4 vtbl[1]）；throw 路径不 Release（同二进制）。
+- **D5 半证伪**：旧记录"本地 typed 路径缺 result->Clear()"是错的——Clear 在 doInvokeBase 构造器 ncbind.hpp:1097 `if(r) r->Clear()`，顺序 objthis→Clear→numparams→instance 与二进制 dict/void/setRenderSize invoker 完全一致。仍真的一半：membername 二进制直返 -1001 vs 本地转发 BaseT::FuncCall（库级版本漂移，P3，全 NCB 类共有）。
+**唯一开放偏差 = render raw 三联（同根，一个签名改动全修）**：
+- 二进制 render 槽 off_1A0BE48 slot2 = **共享 raw 包装 invoker 0x5A77F4**（= ncbind ncbRawCallbackMethod<T*> 模板实例，含 flags&TJS_STATICMEMBER 分支=a1+58&1）：objthis→-1008、Clear、**GETINSTANCE→-1008（先于 numparams）**、调 Process(result,numparams,params,**native**)=0x59FC28（其内 numparams<3→-1004）。
+- R1(P1)：本地 self(objthis,err=true) 缺实例时抛 "Invalid instance type."（fallback -1006）≠ -1008。
+- R2(P1)：本地 numparams 检查先于实例取得，二进制相反。
+- R3(P2)：本地签名第4参=iTJSDispatch2* → 选中 tTJSNativeClassMethodCallback/TJSCreateNativeClassMethod 包装；二进制= ncbind T* facade。
+- 修法：render 签名改 `(tTJSVariant*,tjs_int,tTJSVariant**,TextRenderBase*)`，删 self()/throw/-1006，NCB_METHOD_RAW_CALLBACK 自动选 ncbRawCallbackMethod<T*>（ncbind.hpp:1504-1543 与 0x5A77F4 逐句同构）。
+**invoker slot2 地址全表**（proxy vtbl+16）：dict=0x5A71E0/void=0x5A76EC/setRenderSize=0x5A741C→0x5A74C8(numparams 在内层先于 objthis,版本细节 inert)/render=0x5A77F4/onEval=0x5A7904(marshal 0x5A7B28=variant→ttstr)/getKeyWait=0x5A7C40(0-arg)/calcLineOffset=0x5A7E18(≥1)/calcShowCount=0x5A8098(≥1)/getCharacters=0x5A830C(≥2,marshal 0x5A8428=双 intCoerce)/ctor=0x5A70C4(含 numparams==1&&void→S_OK quirk ≡ ncbind.hpp:1416)。
+P3 残留：onEval 本地收 tTJSVariant 体内转 ttstr，二进制 invoker 层转（0x5A7B28 sub_A0BAF4）——改 `onEval(ttstr)` 即同构。P4：AsObject 前置 type 检查与 AsObject 内部 throw 冗余（异常相同）；onGetTextWidth/evalDollarTag/onStyleChanged 的 if(!objthis) 守护为二进制不存在分支（factory 后不可能 null，inert）。
+
+## 2026-06-12 六审：函数体维持零偏差 ✓；首次深挖 NCB 包装层，新开 5 项（D1/D2/D3 已被七审标记消除，D5 半证伪，仅供历史参照）
+二进制 textrender 方法 = **typed 成员函数经 ncbind 模板封送**（非 raw callback）。invoker 解剖：
+注册 helper sub_59D1B8(dict签名)/sub_59EB78(void签名)/setRenderSize 0x40B adaptor；
+facade(ncbIMethodObject) vtable=0x19FE1F8；签名 invoker=外层 vtable slot2：dict=sub_5A71E0、
+setRenderSize=sub_5A741C→sub_5A74C8、void=sub_5A76EC。统一顺序：membername→-1001 直返；
+!objthis→-1008；result Clear(sub_A0F790)；numparams<N→**-1004**；NativeInstanceSupport(2,
+classID@dword_1AB5158) 失败→**-1008**。本地 ncbind typed 路径(doInvoke ncbind.hpp:1178→1183)
+numparams→instance 顺序与二进制一致；本地 raw 路径框架(tjsNative.cpp:87) membername/objthis/
+result-Clear 也对。开放偏差（全在本地 raw callback 体内/库层）：
+- **D1(P2)**: dict 方法 numparams<1 → 本地经 paramAsDict 返 null → **-1006 INVALIDOBJECT**；二进制 **-1004 BADPARAMCOUNT**。TextRender.cpp 1231/1305/1386/1459。
+- **D2(P2)**: instance-missing → 二进制返 -1008；本地 self()=GetNativeInstance(objthis,**err=true**) adaptor 缺失时直接 TVPThrowExceptionMessage("Invalid instance type.")，fallback -1006 也不等 -1008。1175-1177。
+- **D3(P3)**: dict 生命周期 — 二进制 AsObject()(AddRef)+尾部 Release；本地 AsObjectNoAddRef 无配对（运行期安全，源码 token 不同）。
+- **D4(信息)**: tvtObject 但指针 null → 二进制 PropGet null-deref 崩溃；本地 nullptr 守护（注释标注，可接受）。
+- **D5(P3,库级)**: 二进制 ncbind membername→直返 -1001（旧版 ncbind），本地转发 BaseT::FuncCall 哈希查找；本地 typed 路径(ncbNativeClassMethod::FuncCall:1336)缺 result->Clear()。版本漂移，影响所有 NCB 类，非 textrender 局部。
+修复建议：setOption/setDefault/setStyle 不需要 objthis → 改 typed `void f(tTJSVariant)` 经 ncbind 自动封送即全对齐；需 objthis 的(setFont/clear/resetFont/setRenderSize)保持 raw 但 numparams 改 -1004、self 改 err=false+返 -1008。
 
 2026-06-11 第二轮独立复核（全函数重新 decompile）。旧 3 偏差**全部已修复并验证**：
 - resolveFaceIndex 不再 push _faceTable（恒空退化语义已复刻）✓
