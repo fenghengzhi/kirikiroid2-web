@@ -112,10 +112,18 @@ bool GLViewImpl::initWithRect(const std::string& viewName, Rect rect, float fram
     int width = static_cast<int>(rect.size.width * _frameZoomFactor);
     int height = static_cast<int>(rect.size.height * _frameZoomFactor);
 
+    // SDL_WINDOW_ALLOW_HIGHDPI 必需：没有它 SDL 的 pixel_ratio 固定为 1.0，
+    // Emscripten_HandleResize 在每次窗口 resize 事件（含 iOS 旋转后的同尺寸
+    // visualViewport 噪声事件）把 canvas 备份缓冲改写成 CSS×1.0，覆盖
+    // shell.html 维持的 CSS×devicePixelRatio，且 ResizeObserver 因 CSS 尺寸
+    // 未变保持沉默无人纠正 → 高 DPR 设备旋转一次后画面永久模糊。
+    // 带上此 flag 后 SDL 自己写入的就是 CSS×devicePixelRatio，与 shell.html
+    // 一致；external_size（canvas CSS 由样式表控制）下 SDL 不会改 CSS 尺寸，
+    // window->w 仍跟踪 CSS，鼠标坐标换算（getCSSToCanvasScale）不受影响。
     _sdlWindow = SDL_CreateWindow(viewName.c_str(),
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         width, height,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
 
     if (!_sdlWindow) {
         return false;
