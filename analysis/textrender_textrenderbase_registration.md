@@ -311,7 +311,7 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 `TextRenderBase_measureTextWidth` @0x5A426C：`(*(*a1+16))(*a1, 0, L"onGetTextWidth", hintCache, &result, 2, [text(str), size(real)], *a1, ...)` = iTJSDispatch2::FuncCall。
 - 参数：arg0 = 单字符文本（string），arg1 = size = fontScale×curFontSize（real，a3）。
 - 返回按 result.type：case2(string)→sub_A133A8(AsReal)、case4(int)→(double)、case5(real)→raw、case1/3(object/octet)→sub_A0E48C 抛错、default(void/FuncCall 失败)→**0.0**。
-- **关键：`*a1` = native this[0]**。二进制 NativeClassBinder 风格里 native this 本身就是 iTJSDispatch2（native+0 = vtable），FuncCall 回调脚本子类覆盖的 onGetTextWidth。本地走 ncbInstanceAdaptor，native(C++) 与 objthis(dispatch) 是两个对象 → 内部落字函数须显式接收 objthis（平台边界：技术原因是本地 NCB 不把脚本对象等同于 native 对象）。
+- **关键：`*a1` = native this[0] = 对象 +0 的 objthis 数据成员**（ctor @0x5A111C 首句注入，§10.5），FuncCall 回调脚本子类覆盖的 onGetTextWidth。~~本地内部落字函数须显式接收 objthis（平台边界）~~ **已废弃（2026-06-12 方案 A）**：本地同样以 `objthis` 首数据成员复刻，内部函数直接读成员，无形参线程化、无平台边界。十审补充：本函数**无 objthis null 守护、FuncCall 返回码不检查**（@0x5a430c 直接 vtbl+16；失败时 result 保持预置 void @0x5a4298 → 0.0），hint 实参 = byte_1AB51A0（s_hintOnGetTextWidth 槽），本地已 1:1（旧"本地加守护/早退"已删）。
 
 ### 7.2 appendChar @0x5A3880
 1. push 字符(UTF-16)到内部累积 buffer（+504/+512，2B 元素 vector）。
@@ -331,7 +331,7 @@ NCB 实例 vtable `off_1A0B990`（已核实）= `[0x5242A8, TextRenderBase_ncb_n
 
 ### 7.4 finishLine @0x5A34B8（去 _guess）
 横排(!vertical)：① 行高 v11=max(行内 max char.size, curLineSize+144) ② over 检测(renderSizeH < v11+penY → renderOver=1，!ignore_over→Line::clear(0x5A1E68，deque+metric 全清) return 0) ③ align 偏移 v14(curAlign+76：1→right=W-penX，0→center=(W-penX)/2，其它→0) ④ align 缩进：pending 非空时按全角空格(0x3000)宽填充行首到 renderText ⑤ 落字到行：每 char.x+=v14、char.y=v11+char.y、拼接 char.text 到 renderText ⑥ 写 pending Line metric(+400/+404/+408/+416/+420，即 Line 相对 +80..+100)、penY+=v11 ⑦ push = 整个 pending Line 拷入 lineList（sub_5A4588 拷 deque + 0x5a3758/0x5a3768 两 OWORD 拷 +80..+108 **全范围含 +424 wordBreakRun/+428 prevWasSpace**；扩容 sub_5A43E8 同。源码层 = lineList.push_back(pendingLine)） ⑧ Line::clear(0x5a378c)——metric 全零化，随后 0x5a37c8 读 +408 做 `if(bboxLeft>penX)` 时左操作数恒 0 ⑨ renderText+=L"\n" ⑩ penX=lineStartX(+196)、penY+=linespacing(+136)。
-竖排：直接到 LABEL_56。LABEL_56：释放 +528 ruby、_kinsokuUsed=0、清 buffer、return 1。
+竖排：直接到 LABEL_56。LABEL_56 **写序（十审定序）**：_kinsokuUsed(+108)=0（store @0x5a37f4）→ 释放 +528 ruby（Release call @0x5a37fc..0x5a3800；+528 的 LDR @0x5a37f0 仅是编译器调度提前，opaque call 不可越过前置 store）→ 清 buffer（+512=+504 @0x5a380c）→ return 1。本地 `_kinsokuUsed=0; releaseCurRubyText(); _accumBuf.clear();` 1:1（旧"释放 ruby 先于 +108=0"描述作废）。
 内联常量：L"　"(0x3000 全角空格，word_14CA1EE)、L"\n"(0x000A)。
 
 ### 7.5 newline @0x59FECC / done @0x59FEE4
@@ -367,7 +367,7 @@ render(objthis=a1, str, x, y, flag) 是 KAG 转义状态机，逐 UTF-16 遍历�
 |---|---|---|---|
 | `#` | hex 颜色（scanTagUntil 到 ';'） | !ignore_color(+50)；空内容→+200=+216；`0x`前缀跳过；hex decode→+200=acc\|0xFF000000；无效 digit 即终止 | 0x5a25ac..0x5a256c；hex 表 qword_14CA200 |
 | `$` | eval/face-run（scanTagUntil 到 ';' → onEval → 返回串逐字 appendChar） | 逐字 sub_5A3880；失败→render 中断 | 0x5a27c0；evalDollarTag sub_5A4148 |
-| `%数字` | size 百分比（scanDigits） | !ignore_size(+51)；val>0→+116=(val/100)*+148 else +116=+148；变→+116+onStyleChanged | 0x5a2688..0x5a2b10 |
+| `%数字` | size 百分比（scanDigits） | !ignore_size(+51)；**短路 &&：空标签不调 parseInt10** @0x5a26f4；val>0→+116=(val/100)*+148 else +116=+148；变→+116+onStyleChanged | 0x5a2688..0x5a2b10 |
 | `%;` | 恢复默认字号 | !ignore_size；+116=+148 + onStyleChanged | 0x5a2ef4 |
 | `%B` | bigfontsize | !ignore_size；+116=+152 + onStyleChanged | LABEL_228 0x5a2da0 |
 | `%S` | smallfontsize | !ignore_size(+51)；+116=+156 + onStyleChanged | case 'S' 0x5a2f10 |
@@ -380,9 +380,10 @@ render(objthis=a1, str, x, y, flag) 是 KAG 转义状态机，逐 UTF-16 遍历�
 | `%d` | delay 百分比（scanTagUntil ';'） | !ignore_delay(+52)；+192=(val/100)*a4(=y) | 0x5a2d14 |
 | `%a` | absolute delay | !ignore_delay；+192=(float)val（空→a4） | 0x5a2e40 |
 | `%p` | pitch | !ignore_style(+59)；+140=val（空→+172） | 0x5a2dd0 |
-| `%l/%t/%w` | parseInt10 仅校验（无字段写） | !ignore_delay(+52) | 0x5a2bf4/0x5a3060/0x5a2c74 |
+| `%l/%t` | parseInt10 仅校验（无字段写；**门内无条件——空标签亦调**，空→off_1AA7EF8 空串经 LABEL_42 @0x5a250c） | !ignore_delay(+52) @0x5a2c2c/0x5a3098 | 0x5a2bf4/0x5a3060 |
+| `%w` | parseInt10 仅校验（**与 %l/%t 不同：有非空门控**，空标签不调） | `!+52 && 标签非空` @0x5a2cb8 | 0x5a2c74 |
 | `%r` | resetFont | sub_59EEE0 | 0x5a2c48 |
-| `%D` | 码后`$`→嵌套 eval-delay(!ignore_delay 校验)；否则当 delay 标签(parseInt10 校验无写) | +52 | 0x5a2f34 |
+| `%D` | 码后`$`（v136=v29+3 @0x5a2f3c）→ `!+52` 门内**无条件** parseInt10（空亦调 @0x5a2f9c/0x5a2508）；非`$`→**无 +52 门控**且无条件 parseInt10（@0x5a3168→LABEL_271/@0x5a23e0→LABEL_42） | $路径 +52；非$路径无门 | 0x5a2f34 |
 | `%其它` | 消费标签到 ';'（无字段写） | — | default 0x5a2eb8 |
 | `\i` | lineStartX=pen | +196 = (vertical?+236:+232) | 0x5a2748 |
 | `\k` | keyWait push renderCount | +480.push_back(+84)；sub_5A5874 | 0x5a2a94 |
@@ -406,14 +407,14 @@ render(objthis=a1, str, x, y, flag) 是 KAG 转义状态机，逐 UTF-16 遍历�
 ### 8.5 helper 子函数
 - `TextRenderBase_render_scanTagUntil` @0x5A3CE4：读到 delim（';'/']'）的子串 ttstr，cursor 推进到 delim 后。
 - `TextRenderBase_render_scanDigits` @0x5A3F18：读连续数字 0-9 的子串，cursor 停在非数字。
-- `TextRenderBase_render_evalDollarTag` @0x5A4148：native+0 上 FuncCall(L"onEval", content)（返回码不检查）→ 按返回 variant type 分发：octet/int/real（(unsigned)(type-3)<3 @0x5a41d8）与 object（type==1 @0x5a41e8）→ sub_A0E48C(,2u)=TJSThrowVariantConvertError(String)；string(2)→取值；void(0)→空串（平台边界：本地传 objthis）。
+- `TextRenderBase_render_evalDollarTag` @0x5A4148：native+0 上 FuncCall(L"onEval", content)（返回码不检查）→ 按返回 variant type 分发：octet/int/real（(unsigned)(type-3)<3 @0x5a41d8）与 object（type==1 @0x5a41e8）→ sub_A0E48C(,2u)=TJSThrowVariantConvertError(String)；string(2)→取值；void(0)→空串。本地读 `objthis` 成员（= 二进制 native+0，§10.5）；hint = dword_1AB51A4（s_hintOnEval 槽）；无 objthis null 守护（十审确认本地已删）。
 - `ttstr_parseInt10` @0x9B111C：UTF-16 串 → 十进制 int（跳 <=0x20 空白、可选 '-'、*10+digit）。≠ AsInteger（无 0x 前缀处理）。
 - `TextRenderBase_keyWaitList_pushBack` @0x5A5874：std::vector<int>::push_back（keyWait 满时重分配）。
 - `TextRenderBase_pendingLine_dtor` @0x5A1B24：Line 析构（pending 行与 lineList 元素**同型共用**——render/clear 清行列表逐项调用；2026-06-11 与 lineItem_destroy 确认为同一函数。函数体只触及 +0..+79 deque 控制块：Line 尾部 metric 全是 POD，~Line ≡ ~deque 成员析构，故 kinsoku 的 80B 裸临时 deque LABEL_113/0x5a5338 也复用同一 helper——不与同型结论冲突）。
 
 ### 8.6 平台边界 / 实现细节
-- **native≠objthis**（NativeClassBinder native≡dispatch vs 本地 ncbInstanceAdaptor 双对象）：appendChar/finishLine/evalDollarTag/onStyleChanged 显式接收 objthis 以回调脚本 onGetTextWidth/onEval/onFontChange。技术原因见 §7.1。
-- **_percentCursor**：非二进制字段。二进制 render 是单函数、cursor v136 是栈局部；本地把 % 分发拆成成员函数 renderPercentTag，需把推进后的 cursor 传回主循环。实现细节，不进数据契约。
+- ~~**native≠objthis** 平台边界、内部函数显式接收 objthis~~ **已废弃（§10.5 方案 A，2026-06-12）**：本地以 `objthis` 首数据成员复刻二进制 +0，内部回调链直接读成员，该"边界"整体消除。
+- ~~**_percentCursor**：本地把 % 分发拆成成员函数 renderPercentTag，cursor 经成员字段传回~~ **已删除（2026-06-13 十审）**：% 分发已内联回 renderImpl 主函数体（≡ 二进制 0x5A228C 单函数），cursor = 栈局部 `i`（≡ v136），对象数据成员集不再含二进制不存在的字段（grep `_percentCursor` = 0）。scanTagUntil(0x5A3CE4)/scanDigits(0x5A3F18)/parseInt10(0x9B111C)/evalDollarTag(0x5A4148) 等真实二进制子函数保留为独立函数；applyFontSize/applyBigFontSizeTag/applySmallFontSizeTag/parseHexColor/renderBalancedChar 为二进制共享标号（LABEL_298/LABEL_228）/内联区段的本地等价提取，逐条件与二进制一致（十审逐 case 核对）。
 - **%C/L/R align cascade=-1**：忠实复刻 fall-through，三者最终 curAlign=-1（编译器消去死写）。看似原版 quirk，但反编译/disasm 确证（5a2d90→5a2d98 直线无分支），照搬。**禁从 KAG 居中/左右直觉改写**。
 
 ### 8.7 验证缺口（honest gap）
@@ -483,8 +484,8 @@ render 状态机已忠实移植 + 构建/链接通过。无 textrender 单元测
 `*(result+16)=0`（result.type=Void）；`return sub_8E3FA4(a2=expr, *a1=this dispatch, a3=result)`。
 - sub_8E3FA4 = `sub_97FE40(engine, expr, result, context, 0,0)`，字符串 ref "../../src/core/base/ScriptMgnIntf.cpp"
   确证 = **TVPExecuteExpression(expr, context, result)**（ScriptMgnIntf eval 路径）。
-- 本地：result.Clear() + TVPExecuteExpression(param[0], objthis, result)。**纠正旧桩（仅 result.Clear()）**。
-- 平台边界：context 二进制用 native+0(=dispatch)，本地用 objthis（脚本子类对象，native≠objthis）。
+- 本地：result.Clear() + TVPExecuteExpression(expr, objthis, result)。**纠正旧桩（仅 result.Clear()）**。
+- ~~平台边界：native≠objthis~~ **已废弃（§10.5）**：context = 本地 `objthis` 成员 ≡ 二进制 native+0，无边界。
 
 ### 9.4 属性公式核对结果（4 个 flagged + defaultFace 修正）
 | 属性 | 地址 | 二进制公式 | 本地 | 结论 |
@@ -538,9 +539,8 @@ done/onEval/getKeyWait/calcLineOffset/calcShowCount/getCharacters —— **全�
 maxScrollLine 批5 实装）。
 
 **平台边界（明确技术原因）**：
-- native≠objthis（NativeClassBinder native≡dispatch vs 本地 ncbInstanceAdaptor 双对象）→ appendChar/finishLine/
-  evalDollarTag/onEval/onStyleChanged/onGetTextWidth 显式传 objthis 回调脚本。
-- 容器实现选型：_charList=vector<CharItem*>、_pendingChars=deque<CharItem>、_keyWaitList=vector<KeyWaitItem>、
+- ~~native≠objthis → 显式传 objthis~~ **已废弃（§10.5 方案 A）**：objthis 复刻为首数据成员，内部回调链读成员，零边界。
+- 容器实现选型：_charList=vector<CharItem*>、_pendingLine.chars=deque<CharItem>（Line 嵌套）、_keyWaitList=vector<KeyWaitItem>、
   _faceHash=unordered_map（intern 表语义等价 + 忠实复刻内联 hash）—— 选型对齐，ABI 偏移不对齐（字节布局工作法）。
 
 **dead-but-faithful 缺口**：
@@ -629,3 +629,53 @@ sub_5A2160(byte字段)/sub_5A614C(float字段)/sub_5A6020(int字段) 保留 sub_
 - `flag` 实参在所有 invoker 中均不被读取（TJS_STATICMEMBER 是构造期 `_flag` 存储，非调用期 flag）；两侧一致。
 - **membername 非空路径的脚本触达方式**：成员函数/属性 dispatch 对象被取出后再对它做成员访问（如 `var f = obj.method; f.foo()` 或属性对象上 PropGet 子成员）——两侧同返 -1001，无可观察行为差。
 - **偏差清单：空。** ncbind.hpp 分发路径（invoker/doInvoke/ctor/factory/property/rawcallback/引擎侧）与 libkrkr2.so 六维全对齐，无需任何代码修改。
+
+## 11. 十审：自承 inert 微差全量消除批次（2026-06-13，独立复核审计）
+
+背景：用户裁定此前所有自标 inert 的微差均算偏差，由 fixer 修复并构建通过；本节为独立审计逐项重反编译验证记录（本对话内 decompile：0x5A34B8/0x5A4A7C/0x5A05FC/0x5A3880/0x5A228C/0x59FEE4/0x5A426C/0x5A02DC/0x5A0694/0x5A6240/0x5A1F28/0x5A4148/0x59D2AC/0x5A14DC/0x5A181C/0x5A59E8/0x5A5C34，共 17 函数）。**结论：11/11 PASS，零新偏差。**
+
+| # | 项目 | 二进制证据 | 结论 |
+|---|---|---|---|
+| 1 | finishLine 尾序 | LABEL_56：+108=0 store @0x5a37f4 → Release(+528) call @0x5a37fc..0x5a3800 → +512=+504 @0x5a380c → return 1（+528 的 LDR @0x5a37f0 仅调度提前） | ✅ 本地 `_kinsokuUsed=0; releaseCurRubyText(); _accumBuf.clear()` 1:1 |
+| 2 | kinsoku 追い出し循环 | !word_break 路：v33=+424 读一次 @0x5a4dec 做 `>=1` 门控 @0x5a4df4（**二进制真实控制流，非 fixer 多余门**——门控条件 v33>=1 与循环条件 size<=v33 是两个不同谓词，非 loop-rotation 产物）；循环条件每迭代重读 +424 @0x5a4e14（destroy=opaque call 强制）；循环体 --(+84) @0x5a4e1c | ✅ 本地 `if(run>=1){ while((int)chars.size()>_pendingLine.wordBreakRun){...--_renderCount;} }`，局部 run 缓存已删 |
+| 3 | calcLineOffset 符号扩展 | @0x5a0634 `0x6DB6...*((+440-+432)>>4) <= (unsigned __int64)a2`，a2=int → SXTW 进无符号比较 | ✅ 本地 `_lineList.size() <= (size_t)lineIdx`（源码 token；wasm32 size_t=u32 宽度差属 ABI 必然，负 idx 两侧同判越界→+260） |
+| 4 | appendChar 双 ttstr | v65=createFromWide @0x5a39a8（度量输入，sub_5A426C @0x5a39c4 消费）；v48=createFromWide @0x5a39d8（charItem.text 本体）；`fontScale*curFontSize` 两处独立计算（@0x5a39c4 / +184 reload @0x5a39e8→@0x5a39f0）；两者存活跨 kinsoku 调用 @0x5a3bbc，尾部释放序 = ruby vec 清理 → v48 @0x5a3bfc → v65 @0x5a3c08 | ✅ 本地 measureText/text 两独立构造、消费点、跨 kinsoku 生命周期、逆序析构全部对位。**残留观察（P3）**：二进制 v48 即 charItem+0 字段本体（直接构造，无中间具名局部）；本地 `ttstr text(ch); v.text=text;` 多一个具名局部 + 赋值 = 多一对 AddRef/Release（不改变任何可观察状态/释放序，记录备考） |
+| 5 | % 子码 parseInt10 门控 | %0-9：`v137[0] && parseInt10>0` 短路 @0x5a26f4（空标签不调）；%l @0x5a2c34 / %t @0x5a30a0：+52 门内**无条件**（空→off_1AA7EF8 经 LABEL_42 @0x5a250c）；%w：`!+52 && v137[0]` @0x5a2cb8（**有非空门，与 %l/%t 不同**——审计指令中"%w 无条件"前提不准确，以二进制为准）；%D 非$：无 +52 门、无条件 @0x5a3168；%D$：+52 门内无条件 @0x5a2f9c；%d/%a/%p：消费值，空标签走 default 分支 | ✅ 本地逐 case 与二进制一致（含 %w 的非空门） |
+| 6 | _percentCursor 删除 + % 内联 | 二进制 0x5A228C 单函数体内嵌 switch @0x5a2680，cursor=栈局部 v136；推进：%0-9 v136=v29+1 @0x5a2688、%b/i/e/s v136=v29+3（gate 读在 val 前、cursor 写在 arg 读前）、%D$ v136=v29+3 @0x5a2f3c、默认 v29+2 @0x5a265c；%C cascade +76=0→1→-1 fall-through；case 'D' break→LABEL_320 | ✅ grep `_percentCursor`=0；本地 cursor=栈局部 `i`，逐 case 推进/fall-through/break 路径零漂移；scanDigits(0x5A3F18)/scanTagUntil(0x5A3CE4)/parseInt10(0x9B111C)/evalDollarTag(0x5A4148) 仍为独立函数（与真实二进制函数一一对应）；applyFontSize 等 = LABEL_298/LABEL_228 共享标号的本地提取，条件逐项一致 |
+| 7 | _hasCurRubyText 删除 | +528 判定点：appendChar @0x5a3a4c `*(+528)!=0`（消费后 release+置 0 @0x5a3b40-0x5a3b4c）；clear/finishLine LABEL_56 release；'[' @0x5a28b0 仅 refcount no-op **无 +528 写**（无 producer，死支保真） | ✅ grep `_hasCurRubyText`=0；本地判据 `!_curRubyText.IsEmpty()`，tjsString.h:390 `IsEmpty()==(Ptr==nullptr)` ≡ +528!=0；releaseCurRubyText=`_curRubyText=ttstr()`（Release+置 null）≡ 二进制 release+store0；本地同样无非空 producer（grep 全读写点核实），所有路径等价 |
+| 8 | done keyWait 回填 | @0x5a0180..0x5a020c：`v39[1] = *(int*)(charList[*v39]+24)` **无界**（编译器 2 路展开 + 余数循环 = 源码朴素循环）；charList base=v1[37](+296) | ✅ 本地越界守护已删，无条件 `_keyWaitList[i].time = bits(_charList[idx]->renderPos)` |
+| 9 | onGetTextWidth 守护删除 | @0x5A426C：无 objthis null 检查（@0x5a430c 直接 *a1 vtbl+16）、返回码不检查；result 预置 void @0x5a4298（失败→0.0）；switch：object(1)/octet(3)→sub_A0E48C(,5) fall-through string 解析/int 转 double、real raw、void→0.0；hint=byte_1AB51A0 | ✅ 本地直接 FuncCall→`Type()==tvtVoid?0:AsReal()`（AsReal 逐 case 同构）；hint=&s_hintOnGetTextWidth |
+| 10 | hint 静态槽组（24 槽） | 槽↔成员名地址级核对（全部来自本对话 decompile 实参）：face 0x1AB5190 / bold 0x1AB5194 / italic 0x1AB5198 / onFontChange 0x1AB519C（以上 onStyleChanged@0x5A1F28）；onGetTextWidth 0x1AB51A0（0x5A426C）；onEval 0x1AB51A4（0x5A4148）；pos 0x1AB51A8 / time 0x1AB51AC / add 0x1AB51B0（getKeyWait@0x5A02DC）；graph 0x1AB51B4 / text 0x1AB51B8 / x 0x1AB51BC / y 0x1AB51C0 / cw 0x1AB51C4 / size 0x1AB51C8 / color 0x1AB51CC / shadow 0x1AB51D0 / edge 0x1AB51D4 / shadowColor 0x1AB51D8 / shadowDiff 0x1AB51DC / edgeColor 0x1AB51E0 / ruby 0x1AB51E4 / vertical 0x1AB51E8 / delay 0x1AB51EC（getCharacters@0x5A0694）。**跨函数共享确证**：face/bold/italic 槽 onStyleChanged↔getCharacters 同地址；text/x/y/size 槽 getCharacters↔sub_5A6240（ruby 子数组 @0x5a634c/0x5a6370/0x5a6390/0x5a63b4）同地址。dict 解析层 setOption@0x59D2AC 全部 18 个 PropGet（vtbl+32, flag 1024）hint 实参=字面 0（首例 @0x59d348 L"following"） | ✅ 本地 24 个 s_hint* 文件级静态，声明序=地址序；调用点逐槽对位；dictGet 传 nullptr |
+| 11 | _faceHash/std::sort 注释证据链 | faceHash：resolveFaceIndex@0x5A14DC 内联 hash（null Ptr→0 不雪崩 @0x5a1534；空内容 h=0 仍雪崩→0xFFFFFFFF @0x5a1550；one-at-a-time 1025/9/32769）→ `hash % a1[68]`（bucket_count=对象+544=_Hashtable+8）→ sub_5A172C find→命中 *(node+16)；miss：idx=faceTable.size() 先算 @0x5a1590 → intern@0x5A181C（重新 hash+find=operator[] 双查找拓扑，miss→operator new(0x20) 节点{next=0,key=AddRef ptr,val@+16=0}→sub_5A1910=_M_insert_unique_node→返回 node+16）→ store idx @0x5a1598。≡ libstdc++ unordered_map operator[]。sort：done 调用点 @0x5a0240 `sub_5A59E8(first,last,2*(63-clz(n)),0)` + `sub_5A5C34(first,last)`；0x5A59E8=__introsort_loop（129B 阈值、median-of-3 三 float 比较 @0x5a5a40-0x5a5a48、partition、递归 + depth==0→sub_5A5E14 heap 回退）；0x5A5C34=__final_insertion_sort（<129B 全段插入 / 前 16 元素插入 + __unguarded 余段 @0x5a5cf0/0x5a5cfc）；比较键全部 `*(float*)(elem+24)` 升序 | ✅ 本地 unordered_map<ttstr,int,FaceNameHash,FaceNameEq> + find→operator[]（双查找拓扑同构）；std::sort + renderPos float comparator；两处注释证据链成立 |
+
+### 11.1 十一审：四项「残留 inert」消除后逐项独立重反编译验证（2026-06-13）
+
+背景：§11 表末"残留已知差异"列出的 4 项已由 fixer 消除并构建通过。本节为独立审计逐项重反编译验证记录（本对话内 decompile/disasm：appendChar@0x5A3880 全体、getCharacters@0x5A0694、sub_5A6240、render@0x5A228C 入口 disasm @0x5a228c-0x5a234c、kinsoku@0x5A4A7C drain disasm @0x5a52c0-0x5a5348）。**结论：4/4 PASS，零新偏差。这 4 项从"残留 inert / 下轮可选"升级为「已对齐」。**
+
+| # | 项目 | 二进制证据（本对话取证） | 本地实现 | 结论 |
+|---|---|---|---|
+| 11.1-1 | appendChar 双 ttstr（原 P3） | v65=ttstr_createFromWide(&v66) @0x5a39a8（度量输入，sub_5A426C @0x5a39c4 消费，尾释放 @0x5a3c08）；v48=ttstr_createFromWide(&v66) @0x5a39d8（BYREF 栈槽 [xbp-E8h]=charItem 蓝图 +0 字段本体，kinsoku 实参 `&v48` @0x5a3bbc，尾释放 @0x5a3bfc）。无中间具名临时、v48 无额外 AddRef/Release 对（createFromWide 结果直存字段）；fontScale*curFontSize 两处独立计算 @0x5a39c4 / @0x5a39f0（v24 reload @0x5a39e8） | `ttstr measureText((tjs_char)ch);` + 独立 `CharItem v{ ttstr((tjs_char)ch) };`（prvalue 原位构造 +0，C++17 guaranteed elision = 直存字段，零引用计数差）。两 ttstr 构造/消费/跨 kinsoku 生命周期/逆序析构全部对位 | ✅ |
+| 11.1-2 | ruby PropSet 折叠拆分 | sub_5A6240@0x5A6240：TJSCreateArrayObject(sub_9876D4) → NIS GETINSTANCE @0x5a62b0（vtbl+200、TJSGetArrayClassID=sub_9876C8）→ per-RubyItem dict{text @0x5a634c / x @0x5a6370 / y @0x5a6390 / size @0x5a63b4} → PropSetByNum(sub_5A6550) @0x5a63d0 → 返回 array variant(arr,arr) 写 a2 @0x5a6440。**helper 内无 PropSet "ruby"**。getCharacters 本体 @0x5a0aec 调 `sub_5A6240(v35, a1)` 建数组，随后 @0x5a0b28 在本体 PropSet "ruby"（hint &dword_1AB51E4） | `buildRubyArray()` 返回 tTJSVariant（仅建数组、NIS GETINSTANCE、dict{text/x/y/size}、PropSetByNum）；调用点 @1015-1019 `if(!ci->ruby.empty()){ vRuby=buildRubyArray(ci->ruby); dict->PropSet("ruby",...) }`——PropSet 在调用点而非 helper 内 | ✅ |
+| 11.1-3 | renderImpl 入口取值次序 | disasm 入口序：+280=0 @0x5a2308 → tagAccum=null @0x5a230c → curFontSizeSnap(v13=+116) @0x5a2314 → +192=(float)y @0x5a2318 → **cursor=0(v136) @0x5a231c → length(v14, call @0x5a2320 BL _ZdlPvm_22=GetLen) @0x5a2328 → c_str(v15, BL ttstr_c_str) @0x5a2338** | @1787-1794 声明序：`_renderPos=0` → `ttstr tagAccum` → `curFontSizeSnap=_curFontSize` → `_charDelayStep=(float)y` → `int i=0` → `int len=text.length()` → `const tjs_char *p=text.c_str()`。三项 cursor→length→c_str 与 token 序 1:1（旧 c_str/length 互换已纠正） | ✅ |
+| 11.1-4 | kinsoku LABEL_107 drain 迭代器化 | disasm @0x5a52e8：LDR X22=tmp.begin / LDP X26,X24=node-end+node-map / LDR X25=tmp.end；循环 @0x5a5300 `CMP X25,X22; B.EQ →break`（迭代器 end 比较）→ `BL kinsoku(a1,X22)` @0x5a5310（`kinsoku(*cursor)` 自递归）→ fail `TBZ →dtor+return false` @0x5a5314 → `ADD X22,#0x50`（80B 元素步进）@0x5a5318 → 块内 `CMP X22,X26; B.NE` @0x5a531c → 跨块 `LDR X22,[X24,#8]!; ADD X26,X22,#0x1E0`（480B=6×80B，deque::iterator::operator++ 节点 hop）@0x5a52f8。finishLine 先于 drain @0x5a52e0/0x5a52e4；完成 @0x5a5338→`!vertical` | `for(CharItem &item : tmp)`（tmp=std::deque<CharItem> @1251）`{ if(!kinsoku(item)) return false; }`，先 `if(!finishLine()) return false` @1329，drain 后 `placeChar(c, !_vertical)` @1339。range-for=deque 迭代器遍历（元素步进+节点 hop）、自递归、fail→return false 全对位 | ✅ |
+
+**新增确证**：sub_5A6240 字段集经本对话 decompile 实证为 text/x/y/size 四键（v9 步进 +8→+12→+16 = x/y/span，本地 r.span→"size"）；getCharacters @0x5a0aec/@0x5a0b28 两步分离再确证。drain 迭代器 hop 常量 0x1E0（480B = 6 elem × 80B/elem）与 §3b-2 pending deque node 布局自洽。
+
+**残留已知差异（已全部消除——见 §11.2）**：
+- ~~NIS 后死值 `&ni->Items`~~ **已对齐（11.2-1）**。
+- ~~'[' 标签 !ignore_ruby 的 addref+release no-op~~ **已对齐（11.2-2）**。
+- ~~v132 二进制栈垃圾初值 vs 本地 0~~ **已对齐（11.2-3）**。
+- ~~appendChar 具名局部 `text`~~ 已对齐（11.1-1）。~~"ruby" PropSet 折叠~~ 已对齐（11.1-2）。~~kinsoku drain 下标~~ 已对齐（11.1-4）。~~renderImpl 入口次序~~ 已对齐（11.1-3）。
+- 注：九审残留候选"getKeyWait 循环 count 提升"已于十审修复（本地 ~915 提升局部 count ≡ 二进制 v11 @0x5a0344-0x5a0354）。
+
+## 11.2 十二审：地板级死值/未初始化局部忠实复刻（2026-06-13）
+
+用户裁定纠正：「忠实复刻二进制逻辑，不擅自写更安全的代码」。十一审末列为「纯死值/平台无关、非偏差」的 3 项——本质都是**源码 token**（作者写的死值绑定/未初始化声明），非编译器产物，按裁定补回。本对话 decompile/disasm 逐处取证；getKeyWait 经反编译**证伪**其有 `&ni->Items`（避免盲加）。构建 `cmake --build out/web/debug` 绿。
+
+| # | 项目 | 二进制证据 | 本地修复 | 结论 |
+|---|---|---|---|
+| 11.2-1 | NIS 后死值 `&ni->Items` | getCharacters `v34=v37[0]+2`(=+16B) @0x5a0714；sub_5A6240 `v18=v19[0]+16` @0x5a62bc。两处算 `&ni->Items` 后从不消费（append 全走 dispatch）。**getKeyWait 反编译确认无此值**（NIS 后直接 `v8=+488-+480` @0x5a0340），故不加 | getCharacters/buildRubyArray 各补 `std::vector<tTJSVariant> *items = &ni->Items; (void)items;`（死值忠实复刻，`(void)` 仅压制跨编译器 unused 警告，不改语义）；getKeyWait 不加 | ✅ |
+| 11.2-2 | '[' 标签 !ignore_ruby refcount no-op | case '[' @0x5a28b0 `if(!+56)`：对 tagAccum(v137[0]) AddRef（do-stlxr @0x5a28c0）+ 即刻 Release（LABEL_114 @0x5a28d0）= 净 no-op，源码 = 一个即刻析构的 ttstr 拷贝 | `if(!_ignoreRuby){ ttstr rubyText = tagAccum; }`（拷贝=AddRef，出作用域=Release）替代旧 `(void)_ignoreRuby` | ✅ |
+| 11.2-3 | v132 未初始化 | disasm 入口：v133 @0x5a238c `STR WZR`（显式 0）**但** v132 @0x5a2390 `STR W8`（存上文遗留寄存器值，非 0）→ 证源码 v132 **无初始化器**（否则编译器同发 STR WZR）。值在 v133 触发的 begin 路径先写后读 | `tjs_char v132;`（去掉旧 `= 0`），注明源码无初始化器 | ✅ |
+
+**方法论记录**：本轮关键是 getKeyWait 的 negative 取证——若按"三处 NIS 都有死值"的推断盲加，会引入二进制不存在的 `&ni->Items`。`grep`/类比不能代替对每个调用点的独立反编译（CLAUDE.md「强断言下结论前独立交叉核实」）。

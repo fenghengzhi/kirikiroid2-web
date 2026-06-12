@@ -1,6 +1,6 @@
 ---
 name: textrender-kinsoku-placeline
-description: textrender 落字层 appendChar/kinsoku/finishLine/done 二进制地址↔本地映射; 2026-06-12 六审(独立全量重反编译11函数)确认零开放偏差✅
+description: textrender 落字层 appendChar/kinsoku/finishLine/done 二进制地址↔本地映射; 2026-06-13 十审(11项inert微差修复逐项独立重反编译验证)全✅零新偏差
 metadata:
   type: project
 ---
@@ -73,3 +73,9 @@ metadata:
 
 # (2026-06-13 七审独立复核：落字/禁则链零开放偏差✅ 再确认)
 独立重反编译 appendChar@0x5A3880/kinsoku@0x5A4A7C/finishLine@0x5A34B8/measure@0x5A426C/ctor@0x5A111C，全链 1:1 复核成立（over 门控/三分支禁则/used<1 边界 --renderCount/LABEL_107 drain 自递归/placeChar pen 推进/word_break 状态/finishLine align+缩进+metric 写序）。新增证据：四禁则集 get_bytes 逐字✓——following 68cp@0x14C9DF8 / leading 19cp@0x14C9E82（首码点 U+005C）/ begin 10cp@0x14C9EAA / end 10cp@0x14C9EC0，与本地 ctor 字面量（hexdump 验证 U+3000=e3 80 80）逐码点一致；ctor@0x5A111C 确证 +8/+16/+24/+32 灌入这 4 地址。本地文件已变 2140 行（d83b1191 重构），六审行号作废：ctor 281-311/clear 429-484/newline 528/done 535-591/calc* 594-616/getKeyWait 862-884/getCharacters 889-952/helpers 953-987/onGetTextWidth 1042/appendChar 1059-1130/kinsoku 1133-1232/placeChar 1235-1286/finishLine 1316-1396。finishLine LABEL_56 内 +108=0 与 +528 release 顺序本地互换=inert（独立字段）。查询层 2 项新偏差归属 render_statemachine 记忆，非本层。
+
+# (2026-06-13 十审：用户裁定 11 项 inert 微差全部按偏差修正，逐项独立重反编译验证全✅)
+本层相关修复点验证：①finishLine LABEL_56 尾序已修为二进制序（+108=0 store @0x5a37f4 在 Release call @0x5a37fc 之前，+528 的 LDR @0x5a37f0 仅是调度提前，opaque call 不可越过前置 store）→ 本地 `_kinsokuUsed=0; releaseCurRubyText(); _accumBuf.clear()` 1:1。②kinsoku !wordBreak 追い出し循环已删局部 run 缓存：入口 v33 读一次 @0x5a4dec 做 >=1 门控，循环条件每迭代重读 +424 @0x5a4e14（destroy 为 opaque call 强制重读 → 源码 token = 循环条件直读成员）→ 本地 `while((int)chars.size() > _pendingLine.wordBreakRun)` 1:1。③appendChar 双 ttstr（v65 @0x5a39a8 度量 / v48 @0x5a39d8 charItem）+ `_fontScale*_curFontSize` 两处重算（@0x5a39c4 / +184 reload @0x5a39e8 → @0x5a39f0）已复刻。④_hasCurRubyText 哨兵已删，ruby 门 = `!_curRubyText.IsEmpty()` ≡ `*(+528)!=0`（ttstr 空串 Ptr==null）；ctor @0x5A111C 字段集复核无多余成员（对象 0x250=592B）。⑤done keyWait 回填守护已删（@0x5a01d4/@0x5a0200 无界，二进制循环为编译器 2 路展开，本地朴素循环=源码形）；std::sort 注释成立（callsite depth=2*(63-clz) @0x5a0240；sub_5A5C34 129B/16 元素阈值+unguarded；sub_5A59E8 median-of-3 introsort；比较键 *(elem+24) float 升序，本会话双双重反编译确证）。⑥calcLineOffset 越界判定 `(unsigned __int64)a2`（int 符扩）= 源码 `size() <= (size_t)lineIdx` ✅。
+~~残留已知 inert（下轮可选）：ruby PropSet 折叠 / kinsoku drain 下标 / renderImpl c_str-length 次序 / appendChar text P3~~ **十一审(2026-06-13)全部消除已对齐**：①appendChar P3 已改 `CharItem v{ ttstr((tjs_char)ch) };` prvalue 原位构造 +0（无具名局部，零额外 AddRef/Release，disasm v48=createFromWide @0x5a39d8 直存字段、kinsoku 实参 &v48 @0x5a3bbc、尾释 @0x5a3bfc 全对位）；②kinsoku drain 已改 `for(CharItem &item:tmp)`(tmp=std::deque<CharItem>) = 二进制 @0x5a52e8 deque 迭代器遍历(元素步进 80B @0x5a5318 + 节点 hop `LDR X22,[X24,#8]!;ADD X26,X22,#0x1E0` @0x5a52f8 = operator++)，自递归 kinsoku @0x5a5310 / fail return false @0x5a5314 对位；③ruby PropSet 拆分 + ④renderImpl 次序见 [[textrender-render-statemachine]] §十一审。全 4 项 analysis §11.1 记录。~~getKeyWait count 提升~~ 已于十审修复。
+
+# (2026-06-13 十审独立复核：第二独立审计会话全量重反编译 finishLine/kinsoku/appendChar/calcLineOffset/done/measure 等 17 函数，11/11 PASS 确认零新偏差；kinsoku `>=1` 门=二进制真实控制流 @0x5a4df4 非多余门；详录 analysis §11)

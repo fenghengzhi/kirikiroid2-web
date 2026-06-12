@@ -1,5 +1,5 @@
 - [textrender dict解析层+NCB包装层审计](textrender_dict_layer_audit.md) — 2026-06-13 八审(dict层6函数专项独立重反编译)零偏差✅; resetFont路径3自赋值=编译器保值非偏差; 七审残留=render raw 三联(0x5A77F4); 含 invoker slot2 全地址表
-- [textrender render 状态机+生命周期层 @0x5A228C](textrender_render_statemachine.md) — 2026-06-13 九审: 八审2 OPEN(color三键零扩展+GETINSTANCE token)已修复验证✅查询层零开放; shadowDiff=符号扩展勿混改; getCharacters(obj,obj)/getKeyWait(obj,null)勿互改
+- [textrender render 状态机+生命周期层 @0x5A228C](textrender_render_statemachine.md) — 2026-06-13 十一审(4项残留inert消除验证)全已对齐: ruby PropSet 拆buildRubyArray+调用点@0x5a0b28 / renderImpl入口cursor→length→c_str@0x5a231c-2338 / appendChar双ttstr / kinsoku drain迭代器; %w有非空门@0x5a2cb8(≠%l/%t); shadowDiff=符号扩展勿与color三键混改; 详录analysis §11.1
 - [type-4 粒子 prt 同址 alias](project_type4_particle_prt_alias.md) — 2026-06-06 ❌REGRESSION: eval COPY@0x699c2c 读 node+536*v5+744 ≡ merge 写的 slot+424 prt 块(同一字节, 因 merge slot=node+320+536*idx; 320+424=744); slot+744 写者={merge每帧主写, restore仅HM3}非唯一restore; 正常播放发射器读非零→不惰性; 本地拆 prtResult[9]+prtFmin/... 两独立字段→COPY 读恒零 prtResult→粒子惰性回归; 修: COPY 与 INTERP 同源读 prt 块, 删 prtResult
 - [frameProgress 入口 @0x6C106C](project_frameprogress_entry_0x6C106C.md) — 2026-06-06 ⚠️部分: 入口段整体ALIGNED; _queuing单字段承载+480gate+481firstFrame双角色(已证等价,前提frameProgress→updateLayers每帧清); firstFrame块二进制fall-through本地return但+480gate=1主导第一帧→inert; LOW缺口:入口+1152=0(DWORD@0x6C1088)本地未复刻待grep; renderList→_nodes.empty()=平台边界
 - [+1128/+1136 唯一writer](project_initNonEmote_totalframes_writers.md) — 2026-06-06 ✅: cachedTotalFrames(+1128)/loopTime(+1136)唯一成对writer=initNonEmoteMotion@0x6B372C/0x6B370C(motion lastTime/loopTime); playImpl@0x6B2284全程无写; PlayerCore.cpp:750-751唯一权威设值点; onFindMotion删maxTF覆盖正确(否则破坏loopTime<lastTime不变量→loop-wrap空转)
@@ -25,7 +25,7 @@
 - [M15/M16 accessor audit](project_player_m15m16_accessor_audit.md) — 2026-05-31: setTickCount/setCoord/setAngleDeg M16 fixes OK; getLoopTime scalar vs binary TJS-Array (SEVERE); setChara ttstr vs tTJSVariant*@+776+replay; angleDeg/angleRad unit naming swap; clear/contains/bounds/meshDiv binary getters NOT located.
 - [主路径根架构结论(STALL)](project_mainpath_root_arch_stall.md) — 2026-05-31: progress 帧推进根架构错(STL timeline vs node-deque frame-stepping)，连续多轮未解决=停滞；draw 是正确架构仅分支/相位差。
 
-- [textrender 落字层 appendChar/kinsoku/finishLine](textrender_kinsoku_placeline.md) — 2026-06-13 七审再复核零开放✅; 四禁则集68/19/10/10cp已get_bytes逐字确证(ctor@0x5A111C灌+8..+32); 行号=2140行版
+- [textrender 落字层 appendChar/kinsoku/finishLine](textrender_kinsoku_placeline.md) — 2026-06-13 十一审: 4项残留inert全消除已对齐(appendChar prvalue原位构造无具名局部/kinsoku drain range-for=deque迭代器@0x5a52e8 80B+节点hop0x1e0/ruby PropSet+renderImpl次序见render状态机); 十审尾序/重读/哨兵/keyWait无界仍✅
 
 <!-- 以下来自 2026-06-07 motionplayer 全量审计（cwd-drift 误放已修正回此处） -->
 - [Player cluster E accessor map](player_cluster_e_accessors.md) — 簇E Player accessor 二进制地址↔语义权威映射(chara/stealthChara/tickCount/angle/loopTime/variableKeys);多处旧 IDB 符号 off-by-one 已纠正

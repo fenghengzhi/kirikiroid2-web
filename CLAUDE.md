@@ -145,6 +145,7 @@
 - **IDB 里发现的误命名 = 被证伪的产物，必须就地修复**（与 memory / 注释 / analysis 的「证伪即纠正」同规则，见工作流 BLOCKING 节）：`rename` 到正确名 + 函数头 `set_comments` 记录纠正依据（注册站点 / 字符串地址）+ `idb_save`；并同步更新代码里按旧符号写的注释。
 
 ## 字节布局复刻工作法（重要方法论）
+- **忠实复刻 ≠ 写"更安全"的代码。** 二进制里的死值运算（算了不消费的指针/偏移）、未初始化局部、refcount no-op（AddRef+即刻 Release）都是**源码 token**，必须复刻，不得因"更安全 / oracle 不可观察"省略或补 0 初始化。死值→`T* x=&...; (void)x;`（`(void)` 仅压跨编译器 unused 警告）；no-op→即刻析构的拷贝（如 `ttstr x=src;`）。
 - 目标是复刻**源代码**（Android kirikiroid2 的 .cpp/.h），不是复刻 libkrkr2.so 这个**编译产物**。so 的 packed 偏移布局是 NDK clang(ARM64) 算出来的；我们的 wasm 是同一份源码经 emscripten clang(wasm32) 算出来的，**两者字节偏移不一致是 ABI 必然，可接受**
 - 复刻“源代码结构”= 写普通 C++ 类（带继承/字段名/方法语义）让编译器自由算偏移。**禁止**用 `#pragma pack` / `_padN` 填充 / `static_assert(offsetof/sizeof==N)` 去硬凑 ARM64 字节布局——作者源码写的是字段名（`double time;`），从不写 `_pad4`；硬凑既非源码、在 wasm32 下又因指针 4B/ttstr 尺寸不同而凑不准
 - 要对齐的六维全是语义层：源码结构 / 数据流 / 调用链 / 对象生命周期 / 内部容器选型（用 deque/hashmap 而非 std 替代，指**实现选型**对齐，非字节布局）/ 边界行为。**没有一维要求字节偏移一致**
