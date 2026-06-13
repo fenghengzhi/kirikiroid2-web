@@ -216,6 +216,11 @@ public:
     bool _ignoreFace = false;        // +58  L"ignore_face"
     bool _ignoreStyle = false;       // +59  L"ignore_style"
     bool _renderOver = false;        // +60
+    // dead bool field（+61）：ctor @0x5A111C `STRB WZR,[X19,#0x3D]` @0x5a11f0 唯一 writer，
+    //   全二进制零 reader（ida-deep-analyzer 三层交叉扫描确认：83 个 TextRenderBase 函数
+    //   指令级 + spanning 宽访问裁决 + 全 .text 兜底，仅 ctor 一处触碰 +61）。忠实复刻为
+    //   ctor 置 false、其后从不被读的 bool token，不可省略（字节布局复刻工作法：死字段也是源码 token）。
+    bool _unused61 = false;          // +61  dead field（ctor=0 @0x5a11f0；无 reader）
 
     // 当前样式（setFont/setStyle 改写）
     bool _curBold = false;           // +62
@@ -370,8 +375,11 @@ public:
 
     // RW (22) — getter/setter 见 §2 表，setter != 0
     TR_RW(bool, vertical, _vertical)                  // 0x5A0D74 / 0x5A0D7C
-    TR_RW(double, timeScale, _timeScale)              // 0x5A0D88 / 0x5A0D90
-    TR_RW(double, fontScale, _fontScale)              // 0x5A0D98 / 0x5A0DA0
+    // 浮点属性 NCB 边界签名 = float（源码 float，非 double）：getter `LDR S0,[X,#off]`
+    //   直接以 S0（单精度）返回、setter 收 S0，全程无 FCVT 升 double（ida-deep-analyzer
+    //   逐 getter disasm 确认）。后备字段本就是 float，仅 NCB 边界签名 double→float 对齐。
+    TR_RW(float, timeScale, _timeScale)               // 0x5A0D88 LDR S0 / 0x5A0D90
+    TR_RW(float, fontScale, _fontScale)               // 0x5A0D98 LDR S0 / 0x5A0DA0
     // defaultFace @0x5A0DA8(get) / 0x5A0E0C(set)：**INDEX-based**（后备字段是
     //   _defaultFaceIndex/+96）。getter 查 _faceTable[+96]（越界→空串 byte_1506A57）；
     //   setter 经 resolveFaceIndex 写 +96。1:1 复刻反编译。
@@ -384,22 +392,29 @@ public:
     void set_defaultFace(ttstr v) { // 0x5A0E0C
         _defaultFaceIndex = resolveFaceIndex(v); // +96 = sub_5A14DC(name)
     }
-    TR_RW(double, defaultFontSize, _defaultFontSize)  // 0x5A0EAC / 0x5A0EB4
-    TR_RW(double, defaultBigFontSize, _defaultBigFontSize)     // 0x5A0EBC
-    TR_RW(double, defaultSmallFontSize, _defaultSmallFontSize) // 0x5A0ECC
-    TR_RW(double, defaultLineSize, _defaultLineSize)  // 0x5A0EDC
-    TR_RW(double, defaultLineSpacing, _defaultLineSpacing) // 0x5A0EEC
-    TR_RW(double, defaultPitch, _defaultPitch)        // 0x5A0EFC
-    TR_RW(tjs_int, defaultAlign, _defaultAlign)       // 0x5A0F0C
-    TR_RW(tjs_int, defaultValign, _defaultValign)     // 0x5A0F1C
-    TR_RW(double, defaultRubySize, _defaultRubySize)  // 0x5A0F2C
-    TR_RW(double, defaultRubyOffset, _defaultRubyOffset) // 0x5A0F3C
-    TR_RW(tjs_uint32, defaultChColor, _defaultChColor)     // 0x5A0F4C
+    TR_RW(float, defaultFontSize, _defaultFontSize)   // 0x5A0EAC LDR S0 / 0x5A0EB4
+    TR_RW(float, defaultBigFontSize, _defaultBigFontSize)      // 0x5A0EBC LDR S0
+    TR_RW(float, defaultSmallFontSize, _defaultSmallFontSize)  // 0x5A0ECC LDR S0
+    TR_RW(float, defaultLineSize, _defaultLineSize)   // 0x5A0EDC LDR S0
+    TR_RW(float, defaultLineSpacing, _defaultLineSpacing) // 0x5A0EEC LDR S0
+    TR_RW(float, defaultPitch, _defaultPitch)         // 0x5A0EFC LDR S0
+    TR_RW(tjs_int, defaultAlign, _defaultAlign)       // 0x5A0F0C LDR W0（int，勿改 float）
+    TR_RW(tjs_int, defaultValign, _defaultValign)     // 0x5A0F1C LDR W0（int，勿改 float）
+    TR_RW(float, defaultRubySize, _defaultRubySize)   // 0x5A0F2C LDR S0
+    TR_RW(float, defaultRubyOffset, _defaultRubyOffset) // 0x5A0F3C LDR S0
+    // 颜色 4 属性 NCB 边界签名 = tjs_int（带符号），非 tjs_uint32：
+    // getter 经 i32 PropGet invoker @0x5A913C（proxy vtbl 0x1A0C858，与
+    // defaultAlign/defaultValign 共享，X25 @0x59c684 全程未重载）装箱时
+    // 走 SXTW X8,W0 @0x5a91ec（带符号扩展）+ variant type=4。故 0xFFFFFFFF
+    // 脚本面 = -1（非 4294967295）。后备字段保持 tjs_uint32（颜色按位语义）。
+    // 对比：getCharacters dict 的 color/shadowColor/edgeColor 三键是 LDR W
+    // 零扩展（正值），二者并存——勿统一。
+    TR_RW(tjs_int, defaultChColor, _defaultChColor)     // 0x5A0F4C (get SXTW @0x5a91ec)
     TR_RW(bool, defaultShadow, _defaultShadow)        // 0x5A0F5C
-    TR_RW(tjs_uint32, defaultShadowColor, _defaultShadowColor) // 0x5A0F70
-    TR_RW(tjs_uint32, defaultShadowDiff, _defaultShadowDiff)   // 0x5A0F80
+    TR_RW(tjs_int, defaultShadowColor, _defaultShadowColor) // 0x5A0F70 (get SXTW)
+    TR_RW(tjs_int, defaultShadowDiff, _defaultShadowDiff)   // 0x5A0F80 (get SXTW)
     TR_RW(bool, defaultEdge, _defaultEdge)            // 0x5A0F90
-    TR_RW(tjs_uint32, defaultEdgeColor, _defaultEdgeColor)     // 0x5A0FA4
+    TR_RW(tjs_int, defaultEdgeColor, _defaultEdgeColor)     // 0x5A0FA4 (get SXTW)
     TR_RW(bool, defaultBold, _defaultBold)            // 0x5A0FB4
     TR_RW(bool, defaultItalic, _defaultItalic)        // 0x5A0FC8
 
@@ -409,22 +424,27 @@ public:
         return (tjs_int)_lineList.size();
     }
     TR_RO(tjs_int, renderCount, _renderCount)         // 0x5A1000
-    double get_renderDelay() const {                  // 0x5A1008 (delay*timeScale)
+    float get_renderDelay() const {                   // 0x5A1008 (delay*timeScale)
+        // 二进制 LDR S0,[#0xBC];LDR S1,[#0xB4];FMUL S0,S0,S1 → 全程单精度，S0 返回。
         return _renderDelayAccum * _timeScale;
     }
-    TR_RO(double, renderLeft, _renderLeft)            // 0x5A1018
-    TR_RO(double, renderTop, _renderTop)              // 0x5A1020
-    TR_RO(double, renderRight, _renderRight)          // 0x5A1028
-    TR_RO(double, renderBottom, _renderBottom)        // 0x5A1030
+    // §2 十五审：四 getter disasm 全为 LDR S0（单精度 float 返回，无 FCVT 升 double）：
+    // renderLeft@0x5A1018 LDR S0,[X0,#0xF8](+248) / renderTop@0x5A1020 LDR S0,[X0,#0xFC](+252)
+    // renderRight@0x5A1028 LDR S0,[X0,#0x100](+256) / renderBottom@0x5A1030 LDR S0,[X0,#0x104](+260)
+    // NCB 边界签名 double→float（后备字段 _render* 仍 float，仅边界类型改）。
+    TR_RO(float, renderLeft, _renderLeft)             // 0x5A1018 LDR S0
+    TR_RO(float, renderTop, _renderTop)               // 0x5A1020 LDR S0
+    TR_RO(float, renderRight, _renderRight)           // 0x5A1028 LDR S0
+    TR_RO(float, renderBottom, _renderBottom)         // 0x5A1030 LDR S0
     TR_RO(ttstr, renderText, _renderText)             // 0x5A1038
-    double get_maxScrollOffset() const {              // 0x5A1058
+    float get_maxScrollOffset() const {               // 0x5A1058 (全程 S 寄存器 FSUB→S0)
         // §2: vertical ? (+240 - +248) : (+244 - +260)
         return _vertical ? (_renderSizeW - _renderLeft)
                          : (_renderSizeH - _renderBottom);
     }
     // maxScrollLine @0x5A1080：从视口尺寸(竖排 +240/横排 +244)起，自最后一行向前逐行
     //   减去 lineHeight(lineItem +84)，统计能从底部完整容纳的行号。1:1 复刻反编译。
-    double get_maxScrollLine() const { // 0x5A1080
+    float get_maxScrollLine() const { // 0x5A1080（全程 S 寄存器，S0 返回 = float）
         int count = (int)_lineList.size(); // v2 = (+440-+432)/112
         float result = 0.0f;
         if(count >= 1) {
@@ -438,7 +458,7 @@ public:
                     break;
                 --v4;
                 if(count + v4 <= 0)
-                    return 1.0; // 全部容纳 → 1.0
+                    return 1.0f; // 全部容纳 → 1.0（二进制 FMOV S2,#1.0 单精度）
                 --idx;          // i -= 28 floats (-112B) → 前一行
             }
             if(v4 != 0)
@@ -902,53 +922,59 @@ public:
     // getKeyWait @0x5A02DC：() → TJS Array of dict{pos, time}，源自 _keyWaitList(+480)。
     //   pos/time 均为低 int(index)（renderPos bits 高 int 不被 getKeyWait 读取）。
     tTJSVariant getKeyWait() { // 0x5A02DC
-        iTJSDispatch2 *arr = TJSCreateArrayObject(); // sub_9876D4(0)
+        // arr = ncbArrayAccessor 栈 holder（{vptr=&off_1A0B950, _obj=TJSCreateArrayObject()}
+        //   @0x5a06e8 同型——getKeyWait 因全内联+SROA holder vptr 被消除，但源码层与
+        //   getCharacters 同为 ncbArrayAccessor）。析构在作用域尾 Release（复刻 0x5a04b4）。
+        ncbArrayAccessor arr; // TJSCreateArrayObject(), addref=false
         // 0x5a0338 vtbl+200 NativeInstanceSupport(GETINSTANCE, ArrayClassID, &ni)
         //   ——取出的 ni 后续不消费（append 全走 dispatch），dead-but-faithful
         //   源码 token（同款 idiom 见 tjsArray.cpp:1338-1341）。
         tTJSArrayNI *ni = nullptr;
-        arr->NativeInstanceSupport(TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
-                                   (iTJSNativeInstance **)&ni);
+        arr.GetDispatch()->NativeInstanceSupport(
+                TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
+                (iTJSNativeInstance **)&ni);
         // 循环上界 = 一次性提升的局部 count（@0x5a0344-0x5a0354
         //   v11=(u32)((+488-+480)>>3)，迭代**不重读**；begin 指针每迭代重读
         //   @0x5a036c → 源码 = 提升 count + 下标访问）。
         unsigned int count = (unsigned int)_keyWaitList.size(); // v11
         for(unsigned int i = 0; i < count; ++i) {
             int v13 = _keyWaitList[i].index; // LDRSW 低 int（pos 与 time 同值）
-            iTJSDispatch2 *dict = TJSCreateDictionaryObject(); // sub_9C8440(0)
-            tTJSVariant vPos((tjs_int)v13);  // v16=4 Integer
-            dict->PropSet(TJS_MEMBERENSURE, TJS_W("pos"), &s_hintPos, &vPos,
-                          dict); // hint 槽 @0x1AB51A8（@0x5a03b8）
-            tTJSVariant vTime((tjs_int)v13); // v16=4 Integer（同 v13）
-            dict->PropSet(TJS_MEMBERENSURE, TJS_W("time"), &s_hintTime, &vTime,
-                          dict); // hint 槽 @0x1AB51AC（@0x5a040c）
-            // add dict 到数组（二进制 FuncCall L"add"）。
-            //   arg variant {Object=dict, ObjThis=null}（0x5a042c v16=1 /
-            //   0x5a0430 v15[0]=v12, v15[1]=0）——objthis 槽为 null。
-            tTJSVariant vDict(dict, (iTJSDispatch2 *)nullptr);
-            dict->Release();
-            tTJSVariant *args[1] = { &vDict };
-            arr->FuncCall(0, TJS_W("add"), &s_hintAdd, nullptr, 1, args,
-                          arr); // hint 槽 @0x1AB51B0（@0x5a0478）
+            // dict = ncbDictionaryAccessor 栈 holder（迭代尾析构 Release，复刻 0x5a0498）。
+            ncbDictionaryAccessor dict; // TJSCreateDictionaryObject(), addref=false
+            // pos/time：variant Integer 槽（v16=4），val=index（v13）。
+            //   ncbPropAccessor::SetValue<tjs_int>(key,val,512,&hint) = per-key 内联
+            //   单步构造（tTJSVariant var; var=(tjs_int); PropSet(512,key,hint,&var,_obj)）。
+            dict.SetValue(TJS_W("pos"), (tjs_int)v13, 512u,
+                          &s_hintPos);  // hint 槽 @0x1AB51A8（@0x5a03b8）
+            dict.SetValue(TJS_W("time"), (tjs_int)v13, 512u,
+                          &s_hintTime); // hint 槽 @0x1AB51AC（@0x5a040c）
+            // add dict 到数组：ncbPropAccessor::FuncCall(flag,name,hint,result,param1)
+            //   包装——param1 **按值**接收 variant {Object=dict, ObjThis=null}
+            //   （命名 variant + by-value 拷贝 @0x5a043c），objthis 用 _obj=arr（@0x5a0478 末参 v4）。
+            tTJSVariant vDict(dict.GetDispatch(), (iTJSDispatch2 *)nullptr);
+            arr.FuncCall(0u, TJS_W("add"), &s_hintAdd, nullptr,
+                         vDict); // hint 槽 @0x1AB51B0（@0x5a0478）
         }
         // result variant {Object=arr, ObjThis=null}（0x5a04c8 *(a2+16)=1 /
         //   0x5a04cc *a2=v4, *(a2+8)=0）——objthis 槽为 null。
-        tTJSVariant result(arr, (iTJSDispatch2 *)nullptr);
-        arr->Release();
-        return result;
+        tTJSVariant result(arr.GetDispatch(), (iTJSDispatch2 *)nullptr);
+        return result; // ~ncbArrayAccessor 在 return 后 Release arr（0x5a04b4）
     }
 
     // getCharacters @0x5A0694：(int start, int count) → TJS Array of per-char dict。
     //   count==0(!a3) → count = renderCount(+84) - start。clamp → 越界守护 → 逐 char 建 dict。
     //   ncbind typed 2-arg invoker（numparams<2→-1004，count 缺省=void→0=binary `!a3` 路径）。
     tTJSVariant getCharacters(tjs_int start, tjs_int count) { // 0x5A0694
-        iTJSDispatch2 *arr = TJSCreateArrayObject(); // sub_9876D4(0)
+        // arr = ncbArrayAccessor 栈 holder（{vptr=&off_1A0B950, _obj} @0x5a06e8）。
+        //   析构在作用域尾把 vptr 复位基类 + Release（0x5a0b9c base reset / 0x5a0c0c+0c1c）。
+        ncbArrayAccessor arr; // TJSCreateArrayObject(), addref=false
         // 0x5a0708 vtbl+200 NativeInstanceSupport(GETINSTANCE, ArrayClassID, &ni)
         //   ——二进制 0x5a0714 还取 v34=&ni->Items（append 全走 dispatch，从不消费），
         //   dead-but-faithful 源码 token（idiom 同 tjsArray.cpp:1338-1341）。
         tTJSArrayNI *ni = nullptr;
-        arr->NativeInstanceSupport(TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
-                                   (iTJSNativeInstance **)&ni);
+        arr.GetDispatch()->NativeInstanceSupport(
+                TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
+                (iTJSNativeInstance **)&ni);
         std::vector<tTJSVariant> *items = &ni->Items; // v34 @0x5a0714（死值，忠实复刻）
         (void)items;
         // count==0 → renderCount - start（+84）
@@ -962,7 +988,12 @@ public:
             v13 = charListCount - start; // v12 - a2
         if(v13 >= 1) {
             int v15 = -1;     // 上一 faceIndex（-1 = 强制首次查）
-            ttstr faceName;   // v30：缓存的 face 名
+            // v30：缓存的 face 名 = 函数级单个 tTJSVariant（非每字符块级 ttstr）。
+            //   二进制 v30 是 tTJSVariant（v30[2]+v31 = 16B union+4B vtype），faceIdx 变化时
+            //   sub_A0FE2C(v30,v37)=operator=(String) 刷新（0x5a07ec，vtype 置 2），逐字符经
+            //   sub_A0FB64(v37,v30)=tTJSVariant CopyRef 拷贝下发（0x5a08f0）+ SetValue<tTJSVariant>。
+            //   作用域尾 sub_A0F778(v30) 单次析构（0x5a0bf8）。本地用 tTJSVariant 复刻该 token。
+            tTJSVariant faceName; // v30：tTJSVariant 缓存（assign via operator=(ttstr)→String）
             for(int v14 = 0; v14 < v13; ++v14) {
                 // charList[v14+a2] @0x5a0790：无边界检查（负 start 依赖脚本不变量），
                 //   1:1 照搬（clamp 已由上方 v13 计算承担）。
@@ -970,125 +1001,125 @@ public:
                 // face 缓存刷新（faceIndex 变化时重查 _faceTable）
                 int fi = ci->faceIndex; // v17+52
                 if(v15 != fi) {
+                    // 两路都经 sub_A0FE2C(v30,v37)=operator=(String) 写入 String 变体
+                    //   （vtype=2）；OOB 路 v37=sub_A13878(&byte_1506A57) 空串、in-bounds 路
+                    //   v37=_faceTable[fi]。本地 tTJSVariant::operator=(const ttstr&) 同型。
                     if(fi < 0 || fi >= (int)_faceTable.size())
-                        faceName = ttstr(); // sub_A13878(&byte_1506A57) 空串
+                        faceName = ttstr(); // sub_A13878(&byte_1506A57) 空串 → String 变体
                     else
-                        faceName = _faceTable[fi]; // _faceTable[faceIndex]
+                        faceName = _faceTable[fi]; // _faceTable[faceIndex] → String 变体
                     v15 = fi;
                 }
-                iTJSDispatch2 *dict = TJSCreateDictionaryObject(); // sub_9C8440(0)
+                // dict = ncbDictionaryAccessor 栈 holder（{vptr=&off_1A0B930, _obj} @0x5a0784）。
+                //   迭代尾析构：vptr 复位基类（0x5a0b9c）+ Release（0x5a0bac）。
+                ncbDictionaryAccessor dict; // TJSCreateDictionaryObject(), addref=false
+                // 全部走 ncbPropAccessor::SetValue(key,val,512,&hint)——二进制对各调用点的
+                //   内联与否（text/face/color/shadowColor/edgeColor/ruby 内联 vtbl+48 vs
+                //   graph/x/.../shadowDiff/vertical/delay 出线 sub_5A2160/5A614C/5A6020）是
+                //   编译器决策，源码层统一 holder.SetValue。各键 hint 槽逐一对应二进制第 5 实参。
+                //
                 // 首字段 graph（+40 byte→Integer，sub_5A2160 @0x5a081c，先于 text）。
-                //   各键 hint 槽地址逐一对应二进制第 5 实参（@0x1AB51B4..51EC）。
-                trDictSetInt(dict, TJS_W("graph"), ci->graph ? 1 : 0,
-                             &s_hintGraph); // +40 hint @0x1AB51B4
-                trDictSetStr(dict, TJS_W("text"), ci->text,
-                             &s_hintText); // +0 hint @0x1AB51B8（@0x5a0858）
-                trDictSetReal(dict, TJS_W("x"), ci->x, &s_hintX);   // +8 @0x1AB51BC
-                trDictSetReal(dict, TJS_W("y"), ci->y, &s_hintY);   // +12 @0x1AB51C0
-                trDictSetReal(dict, TJS_W("cw"), ci->cw, &s_hintCw); // +16 @0x1AB51C4
-                trDictSetReal(dict, TJS_W("size"), ci->size,
+                dict.SetValue(TJS_W("graph"), (tjs_int)(ci->graph ? 1 : 0), 512u,
+                              &s_hintGraph); // +40 hint @0x1AB51B4
+                dict.SetValue(TJS_W("text"), ci->text, 512u,
+                              &s_hintText); // +0 hint @0x1AB51B8（@0x5a0858）
+                dict.SetValue(TJS_W("x"), (tjs_real)ci->x, 512u,
+                              &s_hintX);   // +8 @0x1AB51BC
+                dict.SetValue(TJS_W("y"), (tjs_real)ci->y, 512u,
+                              &s_hintY);   // +12 @0x1AB51C0
+                dict.SetValue(TJS_W("cw"), (tjs_real)ci->cw, 512u,
+                              &s_hintCw); // +16 @0x1AB51C4
+                dict.SetValue(TJS_W("size"), (tjs_real)ci->size, 512u,
                               &s_hintSize); // +20 @0x1AB51C8
-                trDictSetStr(dict, TJS_W("face"), faceName,
-                             &s_hintFace); // 缓存名 hint @0x1AB5190（@0x5a091c）
+                dict.SetValue(TJS_W("face"), faceName, 512u,
+                              &s_hintFace); // 缓存名 hint @0x1AB5190（@0x5a091c）
                 // color/shadowColor/edgeColor：二进制 0x5a092c/0x5a0a04/0x5a0a7c
                 //   `LDR W8`（*(unsigned int*)）= u32 **零扩展**进 tvtInteger，
-                //   0xFF000000 以正值 4278190080 暴露给脚本——勿加 (int) 符号扩展。
-                trDictSetInt(dict, TJS_W("color"), ci->chColor,
-                             &s_hintColor); // +28 零扩展 @0x5a092c hint @0x1AB51CC
-                trDictSetInt(dict, TJS_W("bold"), ci->bold ? 1 : 0,
-                             &s_hintBold); // +41 hint @0x1AB5194
-                trDictSetInt(dict, TJS_W("italic"), ci->italic ? 1 : 0,
-                             &s_hintItalic); // +42 hint @0x1AB5198
-                trDictSetInt(dict, TJS_W("shadow"), ci->shadow ? 1 : 0,
-                             &s_hintShadow); // +43 hint @0x1AB51D0
-                trDictSetInt(dict, TJS_W("edge"), ci->edge ? 1 : 0,
-                             &s_hintEdge); // +44 hint @0x1AB51D4
-                trDictSetInt(dict, TJS_W("shadowColor"), ci->shadowColor,
-                             &s_hintShadowColor); // +32 零扩展 @0x5a0a04 hint @0x1AB51D8
-                trDictSetInt(dict, TJS_W("shadowDiff"), (int)ci->shadowDiff,
-                             &s_hintShadowDiff); // +48 走 sub_5A6020(int*) @0x5a0a74
-                                                 //   = **符号扩展**，(int) 必须保留；
-                                                 //   hint @0x1AB51DC
-                trDictSetInt(dict, TJS_W("edgeColor"), ci->edgeColor,
-                             &s_hintEdgeColor); // +36 零扩展 @0x5a0a7c hint @0x1AB51E0
+                //   0xFF000000 以正值 4278190080 暴露给脚本——(tTVInteger)(tjs_uint32)
+                //   零扩展，勿用 (tjs_int) 符号扩展。
+                dict.SetValue(TJS_W("color"), (tTVInteger)(tjs_uint32)ci->chColor,
+                              512u, &s_hintColor); // +28 零扩展 @0x5a092c hint @0x1AB51CC
+                dict.SetValue(TJS_W("bold"), (tjs_int)(ci->bold ? 1 : 0), 512u,
+                              &s_hintBold); // +41 hint @0x1AB5194
+                dict.SetValue(TJS_W("italic"), (tjs_int)(ci->italic ? 1 : 0), 512u,
+                              &s_hintItalic); // +42 hint @0x1AB5198
+                dict.SetValue(TJS_W("shadow"), (tjs_int)(ci->shadow ? 1 : 0), 512u,
+                              &s_hintShadow); // +43 hint @0x1AB51D0
+                dict.SetValue(TJS_W("edge"), (tjs_int)(ci->edge ? 1 : 0), 512u,
+                              &s_hintEdge); // +44 hint @0x1AB51D4
+                dict.SetValue(TJS_W("shadowColor"),
+                              (tTVInteger)(tjs_uint32)ci->shadowColor, 512u,
+                              &s_hintShadowColor); // +32 零扩展 @0x5a0a04 hint @0x1AB51D8
+                dict.SetValue(TJS_W("shadowDiff"), (tjs_int)(int)ci->shadowDiff,
+                              512u, &s_hintShadowDiff); // +48 sub_5A6020(int*) @0x5a0a74
+                                                        //   = **符号扩展**，(tjs_int) 必保留；
+                                                        //   hint @0x1AB51DC
+                dict.SetValue(TJS_W("edgeColor"),
+                              (tTVInteger)(tjs_uint32)ci->edgeColor, 512u,
+                              &s_hintEdgeColor); // +36 零扩展 @0x5a0a7c hint @0x1AB51E0
                 // ruby（仅 +56 != +64，即 ruby vector 非空）→ 子 Array。
                 //   二进制 @0x5a0aec 调独立函数 sub_5A6240 建数组返回 variant（v35），
-                //   随后 @0x5a0b28 在本体 PropSet "ruby"（两步分离，非折叠）。
+                //   随后 @0x5a0b28 在本体 SetValue "ruby"（两步分离，非折叠）。
                 if(!ci->ruby.empty()) { // *(v17+56) != *(v17+64)
                     tTJSVariant vRuby = buildRubyArray(ci->ruby); // sub_5A6240 → v35
-                    dict->PropSet(TJS_MEMBERENSURE, TJS_W("ruby"), &s_hintRuby,
-                                  &vRuby, dict); // hint @0x1AB51E4 @0x5a0b28
+                    dict.SetValue(TJS_W("ruby"), vRuby, 512u,
+                                  &s_hintRuby); // hint @0x1AB51E4 @0x5a0b28
                 }
-                trDictSetInt(dict, TJS_W("vertical"), ci->vertical ? 1 : 0,
-                             &s_hintVertical); // +45 hint @0x1AB51E8
-                trDictSetReal(dict, TJS_W("delay"), ci->renderPos,
+                dict.SetValue(TJS_W("vertical"),
+                              (tjs_int)(ci->vertical ? 1 : 0), 512u,
+                              &s_hintVertical); // +45 hint @0x1AB51E8
+                dict.SetValue(TJS_W("delay"), (tjs_real)ci->renderPos, 512u,
                               &s_hintDelay); // +24 hint @0x1AB51EC
-                // 落入数组：PropSetByNum(index=v14)（sub_5A6550）
-                tTJSVariant vDict(dict, dict);
-                dict->Release();
-                arr->PropSetByNum(TJS_MEMBERENSURE, v14, &vDict, arr);
+                // 落入数组：ncbPropAccessor::SetValue(index=v14, dispatch, 512)
+                //   = sub_5A6550（variant {dict,dict} 经 vtbl+56 PropSetByNum）。
+                arr.SetValue((tjs_int32)v14, dict.GetDispatch(),
+                             512u); // @0x5a0b94
+                // dict 栈 holder 在迭代尾自然析构 Release（复刻 0x5a0bac）。
             }
         }
-        tTJSVariant result(arr, arr);
-        arr->Release();
-        return result;
-    }
-    // getCharacters/getKeyWait dict 字段写 helper。二进制 helper（sub_5A2160 byte /
-    //   sub_5A614C float / sub_5A6020 int*）第 5 形参即 hint 指针（如
-    //   sub_5A2160(&dict, L"graph", v17+40, 512, &dword_1AB51B4) @0x5a081c），
-    //   本地同样把 hint 线程化为形参、调用点传文件级静态槽。
-    static void trDictSetStr(iTJSDispatch2 *dict, const tjs_char *key,
-                             const ttstr &val,
-                             tjs_uint32 *hint) { // sub_A0FE2C + vtable+48
-        tTJSVariant v(val);
-        dict->PropSet(TJS_MEMBERENSURE, key, hint, &v, dict);
-    }
-    static void trDictSetReal(iTJSDispatch2 *dict, const tjs_char *key,
-                              float val,
-                              tjs_uint32 *hint) { // sub_5A614C (type 5 Real)
-        tTJSVariant v((tjs_real)val);
-        dict->PropSet(TJS_MEMBERENSURE, key, hint, &v, dict);
-    }
-    static void trDictSetInt(iTJSDispatch2 *dict, const tjs_char *key,
-                             tjs_int64 val,
-                             tjs_uint32 *hint) { // sub_5A2160/5A6020/A0FB64 (type 4 Integer)
-        // 参数取 tjs_int64：variant Integer 槽本就 64 位，符号/零扩展由调用点的
-        //   成员读取转换决定，对应二进制在 load 指令处定扩展方式
-        //   （LDRB/LDRSW 符号路径 vs LDR W8 零扩展路径，见 color 三键注释）。
-        tTJSVariant v(val);
-        dict->PropSet(TJS_MEMBERENSURE, key, hint, &v, dict);
+        // result variant {Object=arr, ObjThis=arr}（0x5a0bf0 *(a4+16)=1 /
+        //   0x5a0bf4 *a4=v25, *(a4+8)=v25）——objthis 槽 = arr（≠ getKeyWait 的 null）。
+        tTJSVariant result(arr.GetDispatch(), arr.GetDispatch());
+        return result; // ~ncbArrayAccessor 在 return 后 Release arr（0x5a0c1c）
     }
     // ruby 子 Array（sub_5A6240@0x5A6240）：每 RubyItem → dict{text,x,y,size}，
     //   返回 array variant（结果写 a2: type=object、a2[0]=a2[8]=arr @0x5a6440）。
-    //   PropSet "ruby" 由调用方（getCharacters @0x5a0b28）负责——本函数仅建数组。
+    //   SetValue "ruby" 由调用方（getCharacters @0x5a0b28）负责——本函数仅建数组。
+    //   x/y/size 走 ncbPropAccessor::SetValue_float（出线 0x5A614C），text 内联 vtbl+48，
+    //   落数组走 SetValue(idx,dispatch)（出线 0x5A6550）——源码层统一 holder.SetValue。
     static tTJSVariant buildRubyArray(
             const std::vector<RubyItem> &ruby) { // sub_5A6240
-        iTJSDispatch2 *arr = TJSCreateArrayObject(); // sub_9876D4(0)
+        // arr = ncbArrayAccessor 栈 holder（{vptr=&off_1A0B950, _obj} @0x5a6290）。
+        ncbArrayAccessor arr; // TJSCreateArrayObject(), addref=false
         // 0x5a62b0 vtbl+200 NativeInstanceSupport(GETINSTANCE, ArrayClassID, &ni)
         //   ——二进制 0x5a62bc 取 v18=&ni->Items（从不消费），dead-but-faithful
         //   源码 token（idiom 同 tjsArray.cpp:1338-1341）。
         tTJSArrayNI *ni = nullptr;
-        arr->NativeInstanceSupport(TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
-                                   (iTJSNativeInstance **)&ni);
+        arr.GetDispatch()->NativeInstanceSupport(
+                TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
+                (iTJSNativeInstance **)&ni);
         std::vector<tTJSVariant> *items = &ni->Items; // v18 @0x5a62bc（死值，忠实复刻）
         (void)items;
         for(size_t i = 0; i < ruby.size(); ++i) {
             const RubyItem &r = ruby[i];
-            iTJSDispatch2 *rd = TJSCreateDictionaryObject(); // sub_9C8440(0)
+            // rd = ncbDictionaryAccessor 栈 holder（迭代尾析构：vptr 复位 @0x5a63d8 + Release @0x5a63e8）。
+            ncbDictionaryAccessor rd; // TJSCreateDictionaryObject(), addref=false
             // hint 槽与 getCharacters 同名同槽（text/x/y/size 跨函数共享）。
-            trDictSetStr(rd, TJS_W("text"), r.text,
-                         &s_hintText); // +0 hint @0x1AB51B8（@0x5a634c）
-            trDictSetReal(rd, TJS_W("x"), r.x, &s_hintX);   // +8 @0x1AB51BC
-            trDictSetReal(rd, TJS_W("y"), r.y, &s_hintY);   // +12 @0x1AB51C0
-            trDictSetReal(rd, TJS_W("size"), r.span,
-                          &s_hintSize); // +16 @0x1AB51C8（@0x5a63b4）
-            tTJSVariant vd(rd, rd);
-            rd->Release();
-            arr->PropSetByNum(TJS_MEMBERENSURE, (tjs_int)i, &vd, arr);
+            rd.SetValue(TJS_W("text"), r.text, 512u,
+                        &s_hintText); // +0 hint @0x1AB51B8（@0x5a634c）
+            rd.SetValue(TJS_W("x"), (tjs_real)r.x, 512u,
+                        &s_hintX);   // +8 @0x1AB51BC
+            rd.SetValue(TJS_W("y"), (tjs_real)r.y, 512u,
+                        &s_hintY);   // +12 @0x1AB51C0
+            rd.SetValue(TJS_W("size"), (tjs_real)r.span, 512u,
+                        &s_hintSize); // +16 @0x1AB51C8（@0x5a63b4）
+            arr.SetValue((tjs_int32)i, rd.GetDispatch(),
+                         512u); // @0x5a63d0 sub_5A6550
+            // rd 栈 holder 迭代尾自然析构 Release（复刻 0x5a63e8）。
         }
-        tTJSVariant vArr(arr, arr); // a2 结果（type=object/a2[0]=a2[8]=arr）
-        arr->Release();
-        return vArr;
+        // a2 结果（type=object/a2[0]=a2[8]=arr @0x5a6440）。
+        tTJSVariant vArr(arr.GetDispatch(), arr.GetDispatch());
+        return vArr; // ~ncbArrayAccessor 在 return 后 Release arr（0x5a645c）
     }
 
     // ============================================================
@@ -1207,13 +1238,18 @@ public:
             float rubyX = (float)(cw * 0.5f) - (float)(rubyCw * 0.5f); // v41
             float rubyY = (float)-(float)(_curRubySize * _fontScale)
                           - _curRubyOffset; // v40 = -(v31*v29)-v30
-            RubyItem r;
-            r.text = _curRubyText; // ruby 文本（incref → charItem 持有）
-            r.x = rubyX;           // ruby +8 (-3 float)
-            r.y = rubyY;           // ruby +12 (-2 float)
-            r.span = _curRubySize * _fontScale; // ruby +16 (-1 float = v34*v36)
-            v.ruby.push_back(r);
-            releaseCurRubyText(); // 消费后释放 +528
+            // 项4：二进制 @0x5a3a84 经 rubyVec_defaultAppend(=_M_default_append/
+            //   resize+1，新元素 memset 0 @0x5a54bc/0x5a5448) 增长 ruby vector，再对
+            //   新 back 元素(v28)**就地**写各字段 @0x5a3b34..0x5a3b3c：
+            //   x(-3)→y(-2)→text(-20,已 AddRef 的 ptr 直存)→span(-1)。
+            //   源码 token = resize(size()+1) + back() 就地赋值，**非 push_back(临时拷贝)**。
+            v.ruby.resize(v.ruby.size() + 1); // _M_default_append(1)：新元素值初始化(=memset 0)
+            RubyItem &slot = v.ruby.back();   // v28（新 back 元素，写 v28-3/-2/-20/-1）
+            slot.x = rubyX;           // v28[-3] = v41（ruby +8）@0x5a3b34
+            slot.y = rubyY;           // v28[-2] = v40（ruby +12）@0x5a3b34
+            slot.text = _curRubyText; // v28[-20] = 已 incref 的 +528 ptr（ruby +0）@0x5a3b38
+            slot.span = _curRubySize * _fontScale; // v28[-1] = v34*v36（ruby +16）@0x5a3b3c
+            releaseCurRubyText(); // 消费后释放 +528 @0x5a3b48
             // ruby bbox 累加（+264 left / +268 top / +272 right）
             float penX = _penX;       // +232 (v?)
             float penYpos = _penY;    // +236 (v32)
@@ -1250,9 +1286,16 @@ public:
             if(w <= 0.0f || w > (float)(_penX + c.cw) || _ignoreOverX)
                 return placeChar(c, /*placeHoriz=v6=*/true);
         }
-        // 2. 需要换行：执行 kinsoku 重排（临时 deque 暂存回退字符）
+        // 2. 需要换行：执行 kinsoku 重排（临时 deque 暂存回退字符）。
+        //   二进制作用域序（项2）：tmp deque v81 在 LABEL_10 落字**之前**析构——
+        //   LABEL_113 失败路径 @0x5a5328 与正常路径 @0x5a5338 都先
+        //   pendingLine_dtor_guess(v81) 再进 LABEL_10/return。故 tmp 块必须先闭合，
+        //   再 placeChar；不能让 tmp 活到 `return placeChar(...)` 表达式求值之后
+        //   （RAII 块尾析构 = return 之后，与二进制相反）。following&&used<max&&
+        //   back-not-in-following 分支 @0x5A5338 同样先析构 tmp 再落字。
         {
             std::deque<CharItem> tmp; // v81：pendingDeque_init(v81,0)
+            bool placeWithoutFinish = false; // 1313 分支：跳过 finishLine 直接落字
             if(!_wordBreak) { // !a1+49：非 word_break
                 // 把超过 wordBreakRun(+424) 个的尾部字符（trailing run）移到 tmp。
                 // 入口读一次 +424 做 >=1 门控（v33 @0x5a4dec）；循环条件**每轮重读
@@ -1299,10 +1342,12 @@ public:
                               != -1) {
                         // back 在 following 集(a1+8) → LABEL_107（finishLine）
                     } else {
-                        // back 不在 following 集 → @0x5A5338 直接落字，不换行
-                        return placeChar(c, /*placeHoriz=*/!_vertical);
+                        // back 不在 following 集 → @0x5A5338 直接落字，不换行。
+                        //   二进制此处先 pendingLine_dtor_guess(v81) 析构 tmp 再
+                        //   LABEL_10 落字，故标记后跳出 tmp 块（块尾析构 tmp）。
+                        placeWithoutFinish = true;
                     }
-                    // → LABEL_107
+                    // → LABEL_107（除非 placeWithoutFinish）
                 }
             } else {
                 // 当前字不在 following 集：行尾禁则（leading）处理
@@ -1329,19 +1374,23 @@ public:
                 }
                 // → LABEL_107
             }
-            // LABEL_107：行结束
-            if(!finishLine()) // sub_5A34B8
-                return false;        // → LABEL_113
-            // drain tmp：把回退字符重排到下一行（自递归 kinsoku）。二进制 @0x5a52e8
-            //   是 deque 迭代器前向遍历（v76 元素步进 80B + 节点边界 hop @0x5a52f8 =
-            //   deque::iterator::operator++）→ 源码 token = 迭代器/range-for，非 operator[]。
-            for(CharItem &item : tmp) { // while(end != cursor){ kinsoku(*cursor); ++cursor; }
-                if(!kinsoku(item))
-                    return false; // → LABEL_113
+            // LABEL_107：行结束（placeWithoutFinish 时跳过，直奔落字 @0x5A5338）
+            if(!placeWithoutFinish) {
+                if(!finishLine()) // sub_5A34B8
+                    return false;        // → LABEL_113（return 触发 tmp 块尾析构）
+                // drain tmp：把回退字符重排到下一行（自递归 kinsoku）。二进制 @0x5a52e8
+                //   是 deque 迭代器前向遍历（v76 元素步进 80B + 节点边界 hop @0x5a52f8 =
+                //   deque::iterator::operator++）→ 源码 token = 迭代器/range-for，非 operator[]。
+                for(CharItem &item : tmp) { // while(end != cursor){ kinsoku(*cursor); ++cursor; }
+                    if(!kinsoku(item))
+                        return false; // → LABEL_113（return 触发 tmp 块尾析构）
+                }
             }
-            // 换行后落字（v6 = !vertical）
-            return placeChar(c, /*placeHoriz=*/!_vertical); // 0x5a5348
+            // tmp 块在此闭合（析构 v81）= 二进制 @0x5a5338 pendingLine_dtor_guess(v81)，
+            //   在 LABEL_10 落字之前。
         }
+        // 换行后落字（v6 = !vertical）@0x5a5348 / LABEL_10——tmp 已析构。
+        return placeChar(c, /*placeHoriz=*/!_vertical);
     }
 
     // placeChar — kinsoku LABEL_10：把 char 落到 pending deque + 推进 pen + renderPos。
@@ -1401,9 +1450,11 @@ public:
     // word_break 落字后状态更新（kinsoku LABEL_16 / 0x5a4b8c）。
     void updateWordBreakState(const CharItem &c) { // 0x5a4b8c
         bool isSpace = false; // v15
-        if(c.text.c_str()) {
-            // sub_9B1ED0(text, L" ") == 0 → 是空格（wcscmp）
-            isSpace = (c.text == ttstr(TJS_W(" ")));
+        if(c.text.c_str()) { // *(_QWORD*)a2 != 0（char.text Ptr 非空）
+            // 二进制 @0x5a4ba8：v15 = wcscmp_utf16(ttstr_c_str(char.text), L" ")==0。
+            //   裸 c_str 指针比较（TJS_strcmp = wcscmp_utf16@0x9B1ED0），**不构造临时
+            //   ttstr 再 operator==**。源码 token = 直接 c_str 比较。
+            isSpace = (TJS_strcmp(c.text.c_str(), TJS_W(" ")) == 0);
         }
         if(isSpace) {
             _pendingLine.prevWasSpace = true; // a1+428 = 1（LABEL_20）
@@ -1465,7 +1516,10 @@ public:
                 // v16 = (int)((v14 + 首字符.x(+8)) / v15)
                 int v16 = (int)((float)(v14 + _pendingLine.chars.front().x) / v15);
                 for(; v16 >= 1; --v16)
-                    _renderText = _renderText + ttstr((tjs_char)0x3000); // word_14CA1EE 全角空格
+                    // 二进制 @0x5a365c：sub_A13ABC(*v18, &word_14CA1EE) = in-place
+                    //   Independ(atomic_load→sub_A0BC58)+append。源码 token = operator+=
+                    //   单字符 0x3000，非 a=a+b 构造临时再赋值。
+                    _renderText += (tjs_char)0x3000; // word_14CA1EE 全角空格
             }
             // LABEL_32：落字到行（写坐标 + 拼接 renderText）
             float v24 = 0.0f; // 行底累加 (a1+400)
@@ -1476,7 +1530,10 @@ public:
                 ci.x += v14;  // char.x(+8) += align 偏移
                 ci.y = v27;   // char.y(+12) = v27
                 if(ci.text.c_str()) // 拼接非空文本到 renderText(+40)
-                    _renderText = _renderText + ci.text; // sub_A13ABC
+                    // 二进制 @0x5a36f0：sub_A13ABC(v29, v30=ttstr_c_str(char.text))
+                    //   = in-place Independ+append。源码 token = operator+=（就地），
+                    //   非构造临时 a=a+b。
+                    _renderText += ci.text; // sub_A13ABC
             }
             // 写行 metric（pending Line 内嵌字段 +400..+420）
             _pendingLine.lineHeight = v11;             // a1+404
@@ -1493,7 +1550,9 @@ public:
             _lineList.push_back(_pendingLine);
             _pendingLine.clear(); // sub_5A1E68(a1+320) @0x5a378c：metric 全零化
             // renderText += L"\n"（行尾换行）
-            _renderText = _renderText + ttstr(TJS_W("\n")); // sub_A13ABC(.., L"\n")
+            // 二进制 @0x5a37c0：sub_A13ABC(*(a1+40), L"\n") = in-place Independ+append。
+            //   源码 token = operator+=(L"\n")（就地），非 a=a+b。
+            _renderText += TJS_W("\n"); // sub_A13ABC(.., L"\n")
             // pen X 复位到行首 + 行间距推进
             _penX = _lineStartX;        // a1+232 = a1+196
             // 二进制 0x5a37c8 读的是 Line::clear 后的 +408（左操作数恒 0）
@@ -1518,7 +1577,12 @@ public:
     }
 
     // resolveFaceIndex @0x5A14DC：face 名 → 稳定 index（intern）。
-    int resolveFaceIndex(const ttstr &name) { // 0x5A14DC
+    // 形参按值 ttstr（NOT const ttstr&）：二进制每个调用点（ctor/setDefault/
+    //   setFont/set_defaultFace/clear/render）caller 端均「拷贝/构造 ttstr →
+    //   传地址 → 调用后 Release」= Itanium by-value ABI（callee 体内无 AddRef/
+    //   Release）。各调用点已是单对象传入（临时 prvalue 或命名局部 lvalue），
+    //   caller 拷贝构造形参 = 二进制的拷贝/构造+调用后析构 token。
+    int resolveFaceIndex(ttstr name) { // 0x5A14DC
         int idx; // v15
         auto it = _faceHash.find(name); // sub_5A172C bucket find @0x5a1568
         if(it != _faceHash.end()) {
@@ -1740,11 +1804,30 @@ public:
         applyFontSize(_defaultSmallFontSize); // +156
     }
 
+    // 项5：begin/end 平衡集字符查找 = 裸 c_str 指针线性扫描求索引差（未命中 = -1）。
+    //   二进制 @0x5a2640/0x5a29d8/0x5a30d8 三处均内联同款逐字符指针走查（p=c_str-1；
+    //   do{ ch=p[1]; ++p; } while(ch!=target && ch); ），命中时索引 = (p - c_str)
+    //   （end 处右移 1 = char 数），未命中靠终止符 0 区分（哨兵 -1）。**不构造临时
+    //   ttstr(c) 再调 ttstr::IndexOf 子串查找**——源码 token 是裸指针扫描。
+    //   返回：命中→字符索引(>=0)；未命中→-1。空串(Ptr==null)走 off_1AA7EF8 空串
+    //   sentinel（首字符即 0），立即未命中。
+    static int scanCharIndex(const ttstr &set, tjs_char target) { // @0x5a2904/0x5a2a04/0x5a30e4
+        const tjs_char *cstr = set.c_str(); // v35/v67/v76 = ttstr_c_str（空→off_1AA7EF8）
+        const tjs_char *p = cstr - 1;       // v58/v68/v123 = c_str - 1
+        tjs_char ch;
+        do {
+            ch = p[1]; // *(p+1)：begin[0],begin[1],...
+            ++p;
+        } while(ch != target && ch); // 直到匹配 target 或遇 0
+        if(!ch)
+            return -1; // v59/v69/v124 == 0：未命中（-1 哨兵）
+        return (int)(p - cstr); // (v58-v62)/(v68-v72>>1)/(v123-v127>>1) = char 索引
+    }
     // begin/end 平衡集普通字符落字 @0x5A228C（default 分支 a3!=0 路径）。
     bool renderBalancedChar(tjs_char c, bool &v17,
                             int &v133, tjs_char &v132) { // 0x5a263c..LABEL_319
-        // 是否在 begin 集（+24）
-        int beginIdx = (int)_begin.IndexOf(ttstr(c)); // v63 = found?
+        // 是否在 begin 集（+24）：裸 c_str 扫描求索引（-1 哨兵），非 IndexOf(ttstr(c))
+        int beginIdx = scanCharIndex(_begin, c); // v63 = (index!=-1) @0x5a2640..0x5a297c
         bool v63 = (beginIdx != -1);
         char ok = appendChar(c); // sub_5A3880
         if((ok & 1) == 0)
@@ -1759,15 +1842,16 @@ public:
             ++v133; // ++depth
             return true; // LABEL_320
         }
-        // 非 begin → 检查 end 集（+32）
-        int endIdx = (int)_end.IndexOf(ttstr(c)); // v69 found?
+        // 非 begin → 检查 end 集（+32）：同款裸 c_str 扫描
+        int endIdx = scanCharIndex(_end, c); // v69 found? / v73=index @0x5a29d8..0x5a2a54
         if(endIdx != -1) {
             // v73 = end 集中索引；有效且 --depth==0
             if(endIdx >= 0 && --v133 == 0) {
                 // 前置门 @0x5a2a5c/0x5a2a68：begin(+24) 与 end(+32) 串长度相等
                 if((int)_begin.GetLen() == (int)_end.GetLen()) {
-                    // 校验起始 begin 字符 v132 在 begin 集的索引 == endIdx → 配对
-                    int bIdx = (int)_begin.IndexOf(ttstr(v132));
+                    // 校验起始 begin 字符 v132 在 begin 集的索引 == endIdx → 配对。
+                    //   裸 c_str 扫描 begin 找 v132（@0x5a30d8..0x5a318c），索引比对。
+                    int bIdx = scanCharIndex(_begin, v132);
                     if(bIdx == endIdx)
                         _lineStartX = 0; // +196 = 0（LABEL_318）
                 }

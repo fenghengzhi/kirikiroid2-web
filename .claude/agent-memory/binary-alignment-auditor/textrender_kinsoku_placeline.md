@@ -79,3 +79,20 @@ metadata:
 ~~残留已知 inert（下轮可选）：ruby PropSet 折叠 / kinsoku drain 下标 / renderImpl c_str-length 次序 / appendChar text P3~~ **十一审(2026-06-13)全部消除已对齐**：①appendChar P3 已改 `CharItem v{ ttstr((tjs_char)ch) };` prvalue 原位构造 +0（无具名局部，零额外 AddRef/Release，disasm v48=createFromWide @0x5a39d8 直存字段、kinsoku 实参 &v48 @0x5a3bbc、尾释 @0x5a3bfc 全对位）；②kinsoku drain 已改 `for(CharItem &item:tmp)`(tmp=std::deque<CharItem>) = 二进制 @0x5a52e8 deque 迭代器遍历(元素步进 80B @0x5a5318 + 节点 hop `LDR X22,[X24,#8]!;ADD X26,X22,#0x1E0` @0x5a52f8 = operator++)，自递归 kinsoku @0x5a5310 / fail return false @0x5a5314 对位；③ruby PropSet 拆分 + ④renderImpl 次序见 [[textrender-render-statemachine]] §十一审。全 4 项 analysis §11.1 记录。~~getKeyWait count 提升~~ 已于十审修复。
 
 # (2026-06-13 十审独立复核：第二独立审计会话全量重反编译 finishLine/kinsoku/appendChar/calcLineOffset/done/measure 等 17 函数，11/11 PASS 确认零新偏差；kinsoku `>=1` 门=二进制真实控制流 @0x5a4df4 非多余门；详录 analysis §11)
+
+# (2026-06-13 十二审后独立评估审：render+落字+容器全量重反编译。逻辑/分支/容器拓扑零偏差，但新发现 6 项此前各轮未曾登记的 token 级微差，全部 OPEN)
+1. **finishLine renderText 拼接 token**：二进制三处 concat 全是 `operator+=`（Independ 双分支 @0x5a36b4/0x5a3638/0x5a3798 + sub_A13ABC=TJSAppendVariantString(旧Ptr, wchar*) 返回新指针回存）；本地三处全写 `_renderText = _renderText + ttstr(...)`（operator+ 新建串+临时 ttstr）。缩进空格 @0x5a365c / 逐字 @0x5a36f0（实参=c_str(text) 裸 wchar*）/ "\n" @0x5a37c0。
+2. **kinsoku tmp 作用域序**：二进制 tmp deque dtor @0x5a5338 在 LABEL_10 placeChar **之前**（fast-path 直接跳 LABEL_10 不经 dtor → 源码内层作用域先闭合再 placeChar，C++ 语义证明非编译器重排）；本地 `return placeChar(...)` 在 tmp 作用域内 → 析构在 placeChar 之后。
+3. **updateWordBreakState 空格判定**：二进制 wcscmp_utf16(c_str(text), L" ")==0 @0x5a4ba8 零分配；本地 `c.text == ttstr(TJS_W(" "))` 每次堆分配临时。
+4. **appendChar ruby 槽形态**：二进制 = vector resize（sub_5A5374 错误串 "vector::_M_default_append" 实证）+ back() 就地赋值（x@v28-3/y@-2/text=操作符赋值/span@-1）；本地 = 具名 RubyItem 局部 + push_back 拷贝（多一对 AddRef/Release，生长走 _M_realloc_insert 非 default_append）。
+5/6 见 [[textrender-render-statemachine]]（renderBalancedChar 裸扫描、resolveFaceIndex by-value）。
+判定：全部 inert（无可观察行为差），但按本仓「inert 微差也按偏差消除」先例（十~十二审）应列 OPEN 修复清单。
+
+# (2026-06-13 十三审：上条 6 项 token 级微差中的 5 项 render 链修复已落地并逐项独立重反编译核实 = 全 PASS，CLOSED)
+本轮独立反编译 finishLine@0x5A34B8 / appendChar_kinsoku@0x5A4A7C / appendChar@0x5A3880 / rubyVec_defaultAppend@0x5A5374 / render@0x5A228C + disasm @0x5a3a78/@0x5a4da0 交叉确认，5 项修复全部与二进制一致：
+1. **finishLine renderText 三处拼接已改 `operator+=`（in-place）** ✅：全角空格 @0x5a365c(word_14CA1EE)/char.text @0x5a36f0(c_str)/换行 @0x5a37c0(L"\n") 每处前置 atomic_load→sub_A0BC58(Independ)/ttstr_c_str + sub_A13ABC 写回 *(a1+40)。本地 `_renderText += (tjs_char)0x3000 / += ci.text / += TJS_W("\n")`。
+2. **kinsoku tmp deque 作用域已闭合于 placeChar 之前** ✅：二进制 dtor 双出口 LABEL_113 @0x5a5328(fail return 0)/正常 @0x5a5338 均在 LABEL_10(place)前。本地 `{...}` 块包重排，块尾 dtor 后 `return placeChar(c,!_vertical)`；fail/drain return false 在块内=RAII LABEL_113。placeWithoutFinish 分支三向已 disasm 核实(@0x5a4db4 pending空→LABEL_107 / @0x5a4de4 back∈following→LABEL_107 / @0x5a4de8 back∉following→`B loc_5A5338` 跳 finishLine 直接落字)。
+3. **updateWordBreakState 空格判定已改裸 wcscmp** ✅：@0x5a4ba8 wcscmp_utf16(ttstr_c_str,L" ")==0；本地 TJS_strcmp(c.text.c_str(),TJS_W(" "))==0（tjsConfig.cpp:551 逐 tjs_char 比较）。无临时 ttstr。
+4. **appendChar ruby 槽已改 resize+back 就地赋值** ✅：rubyVec_defaultAppend@0x5A5374=std::vector<RubyItem(20B)>::_M_default_append；写序 x@v28-3→y@-2→text@-20→span@-1 @0x5a3b34..0x5a3b3c；本地 resize(size+1)→back()→x/y/text/span。`==-20` 快路径=STL resize 内联展开非源码 token，resize() 覆盖。
+5. **renderBalancedChar 三处已改裸 c_str 指针扫描+-1 哨兵**（scanCharIndex helper）✅：begin@0x5a2640/end@0x5a29d8/begin 二扫@0x5a30d8 全 `p=c_str-1;do{ch=p[1];++p;}while(ch!=target&&ch)`；长度门 _begin.GetLen()==_end.GetLen()@0x5a2a5c(IDA 误标 operator delete=GetLen)；--v133 仅 end 命中时。详见 [[textrender-render-statemachine]]。
+回归核实：P1 颜色 4 属性 TR_RW(tjs_int)+SXTW@0x5a91ec / P2 objthis 裸指针回指+dict 解析层 / P3 resolveFaceIndex@0x5A14DC 按值 ttstr 全未碰坏。整体=完全对齐。

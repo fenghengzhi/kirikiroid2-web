@@ -60,3 +60,8 @@ TextRenderBase render 状态机 @0x5A228C (NCB wrapper @0x59FC28) + 查询输出
 - **ruby PropSet 折叠拆分**（已对齐）：sub_5A6240 本对话 decompile 确证仅建数组（NIS GETINSTANCE @0x5a62b0 + dict{text@0x5a634c/x@0x5a6370/y@0x5a6390/size@0x5a63b4} + PropSetByNum @0x5a63d0 + 返 variant(arr,arr) @0x5a6440），**helper 内无 PropSet "ruby"**；getCharacters 本体 @0x5a0aec 调 helper、@0x5a0b28 本体 PropSet "ruby"(hint &dword_1AB51E4)。本地拆 `buildRubyArray()` 返 tTJSVariant + 调用点 @1015-1019 `dict->PropSet("ruby",...)` 1:1。
 - **renderImpl 入口 c_str/length 次序**（已对齐）：render@0x5A228C disasm 入口序 +280=0@0x5a2308→tagAccum=null@0x5a230c→curFontSizeSnap(+116)@0x5a2314→+192=(float)y@0x5a2318→**cursor=0(v136)@0x5a231c→length(call _ZdlPvm_22=GetLen)@0x5a2328→c_str@0x5a2338**；本地 @1787-1794 声明序 cursor→length→c_str 与 token 序 1:1（旧 c_str/length 互换已纠正）。
 - appendChar P3 双 ttstr + kinsoku drain 迭代器（@0x5a52e8 deque 迭代器遍历，元素 80B + 节点 hop 0x1E0）见 [[textrender-kinsoku-placeline]]。全 4 项 analysis §11.1 记录。
+
+**2026-06-13 十二审后独立评估审新发现（render 侧 2 项 token 微差，OPEN）：**
+1. **renderBalancedChar 字符查找形态**：二进制 begin/end/begin-v132 三处全是**裸指针扫描**（`do{v60=v58[1];++v58;}while(v60!=ch && v59)` @0x5a2904/0x5a2a04/0x5a30e4 + 二次 c_str 取基址算 byte-diff、bit32/0x80000000 当 int 符号检查、未命中= -1 哨兵分支 @0x5a3110），**无任何 createFromWide 调用**=源码无 ttstr 临时；本地 `_begin.IndexOf(ttstr(c))` 三处构造临时 ttstr（堆分配）+ 子串 IndexOf。结果等价，token/分配不同。
+2. **%f resolveFaceIndex 按值**：@0x5a2b94 caller AddRef 拷贝 v134 → sub_5A14DC → @0x5a2bc0 caller Release = by-value 形参。**非新发现**——与 [[textrender-dict-layer-audit]] 九审 N2 同一偏差（该处已录修复联动注意事项），本轮在 %f 调用点独立复证。
+另 4 项落字侧微差见 [[textrender-kinsoku-placeline]] 十二审后段。逻辑/分支/默认值/容器拓扑本轮零偏差。

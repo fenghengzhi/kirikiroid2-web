@@ -659,6 +659,21 @@ sub_5A2160(byte字段)/sub_5A614C(float字段)/sub_5A6020(int字段) 保留 sub_
 | 11.1-3 | renderImpl 入口取值次序 | disasm 入口序：+280=0 @0x5a2308 → tagAccum=null @0x5a230c → curFontSizeSnap(v13=+116) @0x5a2314 → +192=(float)y @0x5a2318 → **cursor=0(v136) @0x5a231c → length(v14, call @0x5a2320 BL _ZdlPvm_22=GetLen) @0x5a2328 → c_str(v15, BL ttstr_c_str) @0x5a2338** | @1787-1794 声明序：`_renderPos=0` → `ttstr tagAccum` → `curFontSizeSnap=_curFontSize` → `_charDelayStep=(float)y` → `int i=0` → `int len=text.length()` → `const tjs_char *p=text.c_str()`。三项 cursor→length→c_str 与 token 序 1:1（旧 c_str/length 互换已纠正） | ✅ |
 | 11.1-4 | kinsoku LABEL_107 drain 迭代器化 | disasm @0x5a52e8：LDR X22=tmp.begin / LDP X26,X24=node-end+node-map / LDR X25=tmp.end；循环 @0x5a5300 `CMP X25,X22; B.EQ →break`（迭代器 end 比较）→ `BL kinsoku(a1,X22)` @0x5a5310（`kinsoku(*cursor)` 自递归）→ fail `TBZ →dtor+return false` @0x5a5314 → `ADD X22,#0x50`（80B 元素步进）@0x5a5318 → 块内 `CMP X22,X26; B.NE` @0x5a531c → 跨块 `LDR X22,[X24,#8]!; ADD X26,X22,#0x1E0`（480B=6×80B，deque::iterator::operator++ 节点 hop）@0x5a52f8。finishLine 先于 drain @0x5a52e0/0x5a52e4；完成 @0x5a5338→`!vertical` | `for(CharItem &item : tmp)`（tmp=std::deque<CharItem> @1251）`{ if(!kinsoku(item)) return false; }`，先 `if(!finishLine()) return false` @1329，drain 后 `placeChar(c, !_vertical)` @1339。range-for=deque 迭代器遍历（元素步进+节点 hop）、自递归、fail→return false 全对位 | ✅ |
 
+### 11.2 resolveFaceIndex 形参 by-value 修正（P3 = 三路审计 N2/D6/D4 同一项，2026-06-13）
+
+resolveFaceIndex@0x5A14DC 形参由 `const ttstr&` 改为按值 `ttstr`。callee 体内仅读 `*a2`（取内部串指针算 hash、透传 a2 给 faceHash_find/intern），**全程对 a2/*a2 零 AddRef/Release**；6 个调用点 caller 端均「构造/拷贝(AddRef)→传槽地址(`MOV X1,SP`/`ADD X1,SP,#slot`)→调用后 `LDR;CBZ;Release`」= AArch64 间址 by-value(caller-copy/caller-destroy)。旧 `const ttstr&`（传被调方现有对象地址、调用点不拷贝不 Release）与观察相反，确为真微差。
+
+| 调用点 | 二进制 caller token | 本地实参 |
+|---|---|---|
+| ctor @0x5a1298 | `createFromWide("normal")` prvalue→槽→Release@0x5a12c0 | `resolveFaceIndex(ttstr(TJS_W("normal")))` @348 |
+| set_defaultFace @0x5a0e2c | `*X1` AddRef 拷贝→Release@0x5a0e60 | `resolveFaceIndex(v)` @385 |
+| clear @0x59ee18 | X20 AddRef 拷贝→Release@0x59ee48 | `resolveFaceIndex(defFaceName)` @528 |
+| setDefault @0x59df74 | dict"face"读出归一化槽→Release@0x59df90 | `resolveFaceIndex(faceName)` @756 |
+| setFont @0x59f0a4 | 同款→Release@0x59f0c0 | `resolveFaceIndex(faceName)` @827 |
+| render %f @0x5a2b8c | var_80 AddRef 拷贝→Release@0x5a2bc0 | `resolveFaceIndex(tagAccum)` @1998 |
+
+每处恰好 1 个 ttstr（prvalue 或单一命名 lvalue），by-value 形参编译器生成的拷贝构造恰复刻各站点 caller-copy token，无多余具名局部+额外拷贝偏向另一边。函数体仅以 `name` 作 `_faceHash.find(name)`/`_faceHash[name]=idx` 只读使用，无 `&name`、无引用身份依赖；P1/P2 已修偏差（颜色键 SXTW/零扩展、NativeInstanceSupport token、ncbind 绑定层）在独立函数/声明，零重叠。审计 ✅ 完全对齐，1 轮收敛。
+
 **新增确证**：sub_5A6240 字段集经本对话 decompile 实证为 text/x/y/size 四键（v9 步进 +8→+12→+16 = x/y/span，本地 r.span→"size"）；getCharacters @0x5a0aec/@0x5a0b28 两步分离再确证。drain 迭代器 hop 常量 0x1E0（480B = 6 elem × 80B/elem）与 §3b-2 pending deque node 布局自洽。
 
 **残留已知差异（已全部消除——见 §11.2）**：

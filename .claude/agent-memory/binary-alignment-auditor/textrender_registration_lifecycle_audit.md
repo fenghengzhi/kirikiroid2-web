@@ -1,9 +1,11 @@
 ---
 name: textrender-registration-lifecycle-audit
-description: TextRenderBase 注册/生命周期/accessor 层审计：50成员全对齐；2026-06-13 八审独立重取证再 PASS 零偏差(33 accessor 全反编译+ctor常量/4禁则集逐字节复核)
+description: TextRenderBase 注册/生命周期/accessor 层审计：50成员对齐；⚠2026-06-13 九审勘误——"33 accessor 零偏差"被部分证伪：颜色4属性 getter invoker SXTW=源码 tjs_int（本地 tjs_uint32 零扩展，脚本可见 -1 vs 4294967295）
 metadata:
   type: project
 ---
+
+**⚠ 2026-06-13 九审勘误（证伪即纠正）**：八审"33 accessor 零偏差"不成立。invoker 级独立取证（此前各审只看 accessor 原始函数体未看装箱）：注册段 X25=proxy vtbl 0x1A0C858 全程未重载，defaultAlign/Valign/ChColor/ShadowColor/ShadowDiff/EdgeColor 六属性共享，其 PropGet invoker 0x5A913C @0x5a91ec `SXTW` 符号扩展 → 颜色 4 属性源码 getter 返回 tjs_int，本地 tjs_uint32 为偏差（脚本可见）。另：浮点属性 get/set 原型 float（getter 返回 S0），本地 double=微差；resolveFaceIndex 形参按值 ttstr（set_defaultFace@0x5A0E0C 拷贝编排证明），本地 const&=微差。详见 [[textrender-query-ncb-accessor-audit]]。
 
 2026-06-11 审计 TextRender.cpp 注册/生命周期/容器/33 accessor 层 vs libkrkr2.so。
 
@@ -26,5 +28,7 @@ metadata:
 **2026-06-12 七审（方案 A 重接后）**：六审两条低危观察均已解决——①成员声明序已重排为二进制偏移序(+0 objthis→…→+536 faceHash)，默认析构逆序=dtor@0x5A6B88 逆偏移序 ✓；②objthis 字段已复刻为首成员（ctor@0x5A111C 首句 `*(this+0)=objthis` 本会话重证；dtor 不 Release +0；Factory(&factory)→0x59D160 `new(0x250)+ctor(obj,objthis)` 数据流 1:1，ncbind 工厂签名第4参=objthis 与 0x59D160 a4 一致），旧"objthis 平台边界"注释已撤、无残留矛盾。方法体经归一化 diff 验证零漂移。残留见 [[textrender-dict-layer-audit]] render raw 三联。
 
 **2026-06-13 八审（独立全量重取证）再次 PASS，零开放偏差**。本会话证据：50 成员表经 py_eval 全提取（名/序/tag/RO-RW/getter-setter 指针全核，11 RO 的 +64/+72/+56 全=0）；33 属性 accessor **全部**反编译（非抽样），后备字段/类型/`a2&1` bool 规范化逐一对上；ctor@0x5A111C 三 xmm 常量 + 4 禁则集 get_bytes 逐码点再核；0x59D160/0x5A6A60/0x5A6A94/0x5A6B88 生命周期链重证（dtor 逆偏移序释放=本地逆声明序析构；+0 不 Release；charList 仅释 buffer）；off_1A0B970 vtable 字节再证=[0x5A6650,0x5A67B4,0,0]。invoker 级类型转换（bool/float/int coerce）由"共用 ncbind"结论（§10 已证）保证与本地同模板，无需逐 invoker 比对。无任何 memory/analysis 记录被证伪。
+
+**2026-06-13 九审（注册/生命周期/类布局独立重取证，commit 51e970bd 后）整体 PASS，新增 1 条微差**：ctor@0x5A111C 有 `BYTE+61=0`（独立 STRB，跳过 +60，非 store 合并），220 函数全簇反编译扫描证实 +61 全簇唯一 writer=ctor、零 reader（done@0x59FEE4 的 `(float*)v1+61` 是 float 索引=+244 误报）→ 二进制源码在 +60(renderOver) 与 +62(curBold) 间有一个被 ctor 置 0 的未识别 bool 字段，本地无对应字段/初始化 token（行为 inert，微差）。analysis §3b-0 表有记录（"+61 未识别 byte"）但历届审计未对照本地标记。同会话再证：+120/+124/+276 全簇零访问→本地省略正确；50 成员表/4 禁则集逐码点/3 xmm 常量/dtor 逆序/sub_59EB78=ncbind PMF 模板(off_1A0BD28, "No method pointer.")/sub_59D1B8 四参 flags=0 全部再 PASS。
 
 **2026-06-12 独立复审（六审）再次 PASS，零开放偏差**。独立重取证：50 成员顺序/指针全提取（首成员名=类名 v2=**a1, Process=0x59D160；RW 属性 +48=getter OWORD/+64=setter OWORD，RO +64=0）；ctor 三 xmm 常量 + 4 禁则集 get_bytes 逐码点再核全一致；12 accessor + 4 setter 反编译 1:1（maxScrollLine 0x6DB6...*>>4=size() 即 112B 元素 magic-div，非源码 token）。两条低危观察（均判可接受，非偏差）：① 本地字段声明序按语义分组≠二进制偏移序 → 析构顺序与 dtor@0x5A6B88 逆序不同（字段间无依赖，inert）；② 二进制 ctor 首句 +0=objthis 字段本地未复刻（line 52-53 已标注平台边界，objthis 经 raw-callback 线程化传递），连带 clear/resetFont/newline/done 在二进制与 resetStyle 同走 sub_59EB78 模板而本地拆 raw/typed——是该边界的派生差异。

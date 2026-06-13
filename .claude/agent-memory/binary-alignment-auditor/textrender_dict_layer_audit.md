@@ -1,9 +1,20 @@
 ---
 name: textrender-dict-layer-audit
-description: TextRenderBase dict 解析层+NCB 包装层审计; 2026-06-12 七审(方案A重接后): D1/D2/D3 已消除, D5 半证伪(typed Clear 其实存在@doInvokeBase:1097), 唯一残留=render raw 三联偏差(R1/R2/R3)
+description: TextRenderBase dict 解析层+NCB 包装层审计; 2026-06-13 九审推翻八审"零偏差": 新发现 3 微差(onStyleChanged 应为 ncbDictionaryAccessor+SetValue / resolveFaceIndex 按值 / dict 方法 v-dtor 先于 Release)
 metadata:
   type: project
 ---
+
+## 2026-06-13 N2 已修复并复证（resolveFaceIndex 形参按值 + 6 站点全证）
+TextRender.cpp:1536 已改 `int resolveFaceIndex(ttstr name)`（原 const ttstr&）。本轮独立反编译复核 callee 0x5A14DC 体内对 a2/*a2 **零 AddRef/Release**（仅读 *a2 取 c_str + 透传 a2 给 find/intern），= caller-copy/caller-destroy by-value ABI。**全部 6 调用点逐一证毕**（非仅九审的 2 个）：ctor@0x5a1298 ttstr_createFromWide("normal") prvalue→槽→Release(0x5a12c0)；setDefault@0x59df74 STR XZR 槽→Release(0x59df90)；setFont@0x59f0a4 同款；clear@0x59ee18 X20→AddRef 拷贝→Release(0x59ee48)；set_defaultFace@0x5a0e2c *X1→AddRef 拷贝→Release(0x5a0e60)；render %f@0x5a2b8c var_80→AddRef 拷贝→Release(0x5a2bc0)。本地 6 站点全单对象传入（ctor prvalue / 其余命名 lvalue），by-value 形参编译器自动生成的拷贝构造恰复刻各站点 caller-copy token，无多余命名局部+额外拷贝。九审 N2 顾虑"留具名局部会变两对象"已排除：单一具名 lvalue 经 by-value 形参 = 一次拷贝构造 = 二进制 caller-copy，不是两对象。函数体 intern/faceTable 恒空退化此前已对齐。**resolveFaceIndex 全链完全对齐，N2 闭。** P3 单行签名改动与颜色键符号扩展/NativeInstanceSupport token/ncbind 绑定层零重叠，无副作用。
+
+## 2026-06-13 九审（dict 解析层+状态复位 9 函数评估性复审，独立全量重反编译）：八审"零偏差"被部分推翻，新增 3 微差（评估任务，未改代码）
+键表/顺序/coerce/写入字段/回调时机/changed 门控/回填三联/linesize fallback 等八审结论全部复核维持 ✅。新发现：
+- **N1(P2, onStyleChanged@0x5A1F28)**: 二进制 = 栈上 **ncbDictionaryAccessor**（holder {vtbl,_obj}; vtbl off_1A0B930={0x529634,0x5A2244 派生dtor(textrender TU)} → dtor 切 off_19FD968={0x529634,0x530E4C 基类dtor(ncbind 代码区)}）+ **ncbPropAccessor::SetValue**（bold/italic = outlined 共享实例 sub_5A2160 ≡ ncbind.hpp:753 `PropSet(f,key,hint,&var,_obj)`；face = ttstr 实例内联 sub_A0FE2C+vtbl48）；dict 由 accessor dtor 在 FuncCall **之后**（函数末 0x5a20b4-20c4）释放。本地 TextRender.cpp:1541-1565 = 裸 TJSCreateDictionaryObject + 手写 PropSet×3 + FuncCall **前**显式 dict->Release()(1561)。运行时等价（vDict 持引用）但源码结构/调用链/释放时机三 token 偏差。修法：改 ncbDictionaryAccessor dict; dict.SetValue(...,&s_hintX); tTJSVariant vDict(dict.GetDispatch(),nullptr); 删提前 Release。
+- **N2(P3, resolveFaceIndex@0x5A14DC)**: 参数**按值 ttstr**（双独立调用点证据：clear@0x59ee18-38 v17→v27 二次 AddRef 拷贝传参 + set_defaultFace@0x5a0e30-54 同款 caller-copy；const& 不会产生该拷贝；callee 不销毁=caller-destroy by-value ABI ✓）。本地 TextRender.cpp:1521 `const ttstr&` → clear/set_defaultFace 调用点各少一对拷贝 AddRef/Release token。⚠修复联动：setDefault@0x59df84/setFont@0x59f0b4/ctor 调用点二进制为**单对象**（prvalue/RVO 直接构造进实参槽），本地具名 faceName+const& 现恰好同为单对象；若只改签名按值而留具名局部会变两对象≠二进制——需调用点同步改 prvalue 形态（如返回 ttstr 的内联 helper）。
+- **N3(P4, 4 dict 方法共有)**: 二进制 reused 局部 variant 的 dtor（sub_A0F778）**先于**尾部 dict Release（setOption 0x59dd7c→0x59ddb4 / setDefault 0x59eacc→0x59eb04 / setFont 0x59f708→0x59f740 / setStyle 0x59fba4→0x59fbdc；两 opaque call 不可重排=源码序，源码 v 在内层块作用域）。本地 `tTJSVariant v` 函数级作用域 → Release 语句先执行、v 后析构，次序相反。修法：dict 方法体内 key 读取段包一层 `{ tTJSVariant v; ... }` 再 Release。
+- 维持已知：方法入口冗余前置 type check（671-672 与 AsObject 内部 throw 重复，七审 P4）；入参封送边界 v59 copy 早析构归 invoker 层裁定（七审 D1/D2/D3），本审未重开。
+- setOption/setDefault/setFont/setStyle/setRenderSize/clear/resetFont/resetStyle 函数体其余检查点全部 PASS（含 clear 完整 22 步顺序、face 再 intern 越界→byte_1506A57 空串、vertical 分支 5 写序 +232/+248/+256/+416/+408、resetFont 路径3 自赋值=编译器保值维持）。
 
 ## 2026-06-13 八审（dict 解析层专项，6 函数独立重反编译）：零偏差 ✅
 setOption@0x59D2AC 18 键 / setDefault@0x59DEA8 17 键（fontsize 回填三联 + 显式 big/small/ruby 在 fontsize 存在时被忽略 + linesize fallback）/ setFont@0x59EFD8 11 键（changed 仅 face/bold/fontsize；face PropGet FAIL→LABEL_15 即 changed=0 初始化）/ setStyle@0x59F7AC 5 键 / resetFont@0x59EEE0 三路门控 / resetStyle@0x59EFBC 纯 5 字段——键名、顺序、类型分发（string 键 {2→store,0→空串,1/3/4/5→throw(,2)}）、写入字段、回调时机全部 1:1。新确证两点：① resetFont 路径3（italic/fontsize 触发）二进制 *v3=v4 写 +62=旧+62 是编译器保值（该路径前提 +62==+66，自赋值≡赋默认值），本地 `_curBold=_defaultBold` 即源码原 token，非偏差；② (bool)tTJSVariant operator bool（tjsVariant.h:911-925）逐 case ≡ 二进制 boolCoerce switch。group 复位内部 store 顺序（本地 fontSize 先于 faceIndex vs 二进制相反）= 指令调度，inert。
