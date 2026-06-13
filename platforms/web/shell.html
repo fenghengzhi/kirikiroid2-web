@@ -998,7 +998,11 @@
         // iOS 自动落到能分配的档位。提供的 maximum ≤ 模块声明的 2GB 可通过导入校验。
         var preallocWasmMemory = null;
         (function () {
-            var INITIAL_PAGES = 67108864 / 65536;  // 与链接参数 -s INITIAL_MEMORY 一致
+            // 由 CMake 经 configure_file @ONLY 注入，与链接参数 -s INITIAL_MEMORY
+            // 同源（KRKR2_WEB_INITIAL_MEMORY）。ASan 构建需 1GB（影子内存把 wasm
+            // 声明的 min 顶高），非 ASan 64MB。预分配的 initial 必须 >= wasm 声明
+            // 的 min，否则 glue 采用本 Memory 时导入校验失败 → LinkError。
+            var INITIAL_PAGES = @KRKR2_WEB_INITIAL_MEMORY@ / 65536;
             var ladder = [2048, 1536, 1024, 768];  // MB
             for (var i = 0; i < ladder.length; i++) {
                 try {

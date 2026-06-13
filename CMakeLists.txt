@@ -88,13 +88,28 @@ elseif(WEB)
     set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "index" SUFFIX ".html")
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/jspi_jsc_mainloop_fix.js)
+    # WebAssembly.Memory 初始大小。ASan 的影子内存（覆盖整个地址空间的 1/8）+
+    # redzone 把静态数据段顶得很高，wasm 模块声明的最小内存随之暴涨（非 ASan ~64MB，
+    # ASan 实测需 ~843MB）。该值必须 >= wasm 声明的 min，否则 JS 创建的 Memory 页数
+    # 小于导入声明 → LinkError（memory import has N pages < declared initial of M）。
+    # 此变量同时驱动 ① 链接参数 -s INITIAL_MEMORY ② shell.html 预分配的
+    # WebAssembly.Memory（iOS Safari 兼容路径，见 platforms/web/shell.html 经
+    # configure_file @ONLY 注入 @KRKR2_WEB_INITIAL_MEMORY@），两者必须一致。
+    # ASan 取 1GB：> emscripten 在 512MB 下二次上调出的 843MB，使链接器不再上调，
+    # 从而 link flag == wasm min == shell 预分配三者相等。
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND KRKR2_WEB_DEBUG_ENABLE_ASAN)
+        set(KRKR2_WEB_INITIAL_MEMORY 1073741824)  # 1 GiB
+    else()
+        set(KRKR2_WEB_INITIAL_MEMORY 67108864)    # 64 MiB
+    endif()
     target_link_options(${PROJECT_NAME} PRIVATE
         "SHELL:-s USE_SDL=2"
         "SHELL:-s USE_SDL_TTF=2"
         "SHELL:-s MAX_WEBGL_VERSION=2"
         "SHELL:-s FULL_ES2=1"
         "SHELL:-s ALLOW_MEMORY_GROWTH=1"
-        "SHELL:-s INITIAL_MEMORY=67108864"
+        # 见上方 KRKR2_WEB_INITIAL_MEMORY 注释（ASan 1GB / 非 ASan 64MB）。
+        "SHELL:-s INITIAL_MEMORY=${KRKR2_WEB_INITIAL_MEMORY}"
         "SHELL:-s STACK_SIZE=2097152"
         "$<$<CONFIG:Debug>:SHELL:-s STACK_OVERFLOW_CHECK=2>"
         "$<$<NOT:$<CONFIG:Debug>>:SHELL:-s STACK_OVERFLOW_CHECK=0>"
@@ -200,6 +215,19 @@ elseif(WEB)
             ${CMAKE_CURRENT_BINARY_DIR}/assets.zip
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
         COMMENT "Copy site verification, robots.txt, sitemap.xml, vlfs.js, assets.zip"
+    )
+    # 链接后把 shell.html 预分配的 WebAssembly.Memory initial 同步到 emscripten
+    # 实际烘焙进 index.js 的 INITIAL_MEMORY 默认值。ASan 影子内存把 wasm 声明的 min
+    # 顶到高于链接参数 -s INITIAL_MEMORY（且随代码增长），配置期无法预测；不同步则
+    # shell 提供的 Memory 页数 < 声明 min → LinkError，引擎启动前即 Aborted。
+    add_custom_command(
+        TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DJS=$<TARGET_FILE_DIR:${PROJECT_NAME}>/index.js
+            -DHTML=$<TARGET_FILE_DIR:${PROJECT_NAME}>/index.html
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/sync_prealloc_memory.cmake
+        COMMENT "Sync shell prealloc memory to emscripten-baked wasm min"
+        VERBATIM
     )
 elseif(LINUX)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/linux/main.cpp)
