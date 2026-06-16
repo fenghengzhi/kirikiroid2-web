@@ -107,7 +107,7 @@ bool GLViewImpl::initWithRect(const std::string& viewName, Rect rect, float fram
     // Android 的 surface 是 opaque、显示忽略 framebuffer alpha,故同样的 alpha=0 仍按 RGB 上屏。
     // 设 ALPHA_SIZE=0 → alpha:false → canvas 不透明,与 Android 行为对齐。全屏游戏不存在
     // 任何依赖 canvas 透明的界面,此改动只会让 alpha=0 区域按 RGB 上屏(原本应有的样子)。
-    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
+    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
 
     int width = static_cast<int>(rect.size.width * _frameZoomFactor);
     int height = static_cast<int>(rect.size.height * _frameZoomFactor);
