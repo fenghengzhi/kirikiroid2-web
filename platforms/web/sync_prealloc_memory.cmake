@@ -14,7 +14,11 @@
 #
 # 入参（-D 传入）：JS=index.js 路径，HTML=index.html 路径
 file(READ "${JS}" _js)
-string(REGEX MATCH "Module\\[\"INITIAL_MEMORY\"\\] \\|\\| ([0-9]+)" _m "${_js}")
+# 注意：-O3 release 的 index.js 经 JS minify，`||` 两侧空格会被去掉
+# （debug 为 `Module["INITIAL_MEMORY"] || N`，release 为 `Module["INITIAL_MEMORY"]||N`）；
+# 引号风格也可能因压缩在单/双引号间变化。故对 `[` 后引号、`]` 与 `||`、`||` 与数字
+# 之间的空白都放宽匹配，避免 release 构建在此 FATAL_ERROR。
+string(REGEX MATCH "Module\\[.INITIAL_MEMORY.\\][ \t]*\\|\\|[ \t]*([0-9]+)" _m "${_js}")
 if(NOT CMAKE_MATCH_1)
     message(FATAL_ERROR "sync_prealloc_memory: 在 ${JS} 中未找到烘焙的 INITIAL_MEMORY 默认值")
 endif()
