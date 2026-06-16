@@ -167,6 +167,14 @@ private:
     iTJSDispatch2 *DicAssign; // Dictionary
     iTJSDispatch2 *DicObj; // DictionaryObject
 
+    iTJSDispatch2 *TagListClear; // Array.clear method pointer (for TagList)
+    iTJSDispatch2 *TagListAdd; // Array.add method pointer (for TagList)
+    iTJSDispatch2 *TagList; // ordered list of the current tag's attribute
+                            // names (Array); attached as the "taglist" member
+                            // of DicObj. libkrkr2.so sub_561F3C @0x561F3C keeps
+                            // this array at parser+24, clears it together with
+                            // DicObj and Array.add's each stored member name
+
     iTJSDispatch2 *Macros; // Macro Dictionary Object
 
     std::vector<iTJSDispatch2 *> MacroArgs; // Macro arguments
@@ -306,6 +314,10 @@ public:
 
 private:
     iTJSDispatch2 *_GetNextTag();
+    // taglist accumulator helpers (libkrkr2.so sub_561F3C @0x561F3C)
+    void TagListClearItems(); // clear TagList (qword_1AB3C08 clear)
+    void TagListAddName(const ttstr &name); // Array.add (qword_1AB3C18)
+    void AttachTagList(); // DicObj.taglist = TagList (sub_568F88 @0x568F88)
 
 public:
     iTJSDispatch2 *GetNextTag();

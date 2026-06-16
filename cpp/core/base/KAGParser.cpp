@@ -317,6 +317,9 @@ tTJSNI_KAGParser::tTJSNI_KAGParser() {
     DicClear = nullptr;
     DicAssign = nullptr;
     DicObj = nullptr;
+    TagListClear = nullptr;
+    TagListAdd = nullptr;
+    TagList = nullptr;
     Macros = nullptr;
     RecordingMacro = false;
     DebugLevel = tkdlSimple;
@@ -328,6 +331,9 @@ tTJSNI_KAGParser::tTJSNI_KAGParser() {
     iTJSDispatch2 *dictclass;
     DicObj = TJSCreateDictionaryObject(&dictclass);
     Macros = TJSCreateDictionaryObject();
+    // taglist accumulator array (libkrkr2.so sub_561F3C keeps it at parser+24)
+    iTJSDispatch2 *arrayclass;
+    TagList = TJSCreateArrayObject(&arrayclass);
     try {
         // retrieve clear method from dictclass
         tTJSVariant val;
@@ -343,18 +349,36 @@ tTJSNI_KAGParser::tTJSNI_KAGParser() {
             TVPThrowInternalError;
         DicAssign = val.AsObject();
 
+        // retrieve clear/add methods from the Array class for TagList
+        er = arrayclass->PropGet(0, TJS_W("clear"), nullptr, &val, arrayclass);
+        if(TJS_FAILED(er))
+            TVPThrowInternalError;
+        TagListClear = val.AsObject();
+
+        er = arrayclass->PropGet(0, TJS_W("add"), nullptr, &val, arrayclass);
+        if(TJS_FAILED(er))
+            TVPThrowInternalError;
+        TagListAdd = val.AsObject();
+
     } catch(...) {
         dictclass->Release();
+        arrayclass->Release();
         DicObj->Release();
+        TagList->Release();
         Macros->Release();
         if(DicClear)
             DicClear->Release();
         if(DicAssign)
             DicAssign->Release();
+        if(TagListClear)
+            TagListClear->Release();
+        if(TagListAdd)
+            TagListAdd->Release();
         throw;
     }
 
     dictclass->Release();
+    arrayclass->Release();
 }
 
 //---------------------------------------------------------------------------
@@ -380,6 +404,12 @@ void tTJSNI_KAGParser::Invalidate() {
         DicClear->Release();
     if(DicObj)
         DicObj->Release();
+    if(TagListAdd)
+        TagListAdd->Release();
+    if(TagListClear)
+        TagListClear->Release();
+    if(TagList)
+        TagList->Release();
     if(Macros)
         Macros->Release();
 
@@ -1364,6 +1394,33 @@ void tTJSNI_KAGParser::ClearCallStack() {
 }
 
 //---------------------------------------------------------------------------
+//---------------------------------------------------------------------------
+// taglist accumulator helpers (libkrkr2.so sub_561F3C @0x561F3C)
+//   libkrkr2.so keeps an Array at parser+24 that is cleared together with
+//   DicObj at the top of each parse loop (clear @qword_1AB3C08), Array.add's
+//   (@qword_1AB3C18) every member name stored into DicObj, and is finally
+//   written as DicObj.taglist via sub_568F88 @0x568F88 right before the tag
+//   dictionary is returned. KAGEnvironment.getCommandTarget gates its
+//   env-object path on elm.taglist.count > 1.
+void tTJSNI_KAGParser::TagListClearItems() {
+    TagListClear->FuncCall(0, nullptr, nullptr, nullptr, 0, nullptr, TagList);
+}
+
+void tTJSNI_KAGParser::TagListAddName(const ttstr &name) {
+    tTJSVariant nameval(name);
+    tTJSVariant *args[1] = { &nameval };
+    TagListAdd->FuncCall(0, nullptr, nullptr, nullptr, 1, args, TagList);
+}
+
+void tTJSNI_KAGParser::AttachTagList() {
+    static ttstr __taglist_name(TJSMapGlobalStringMap(TJS_W("taglist")));
+    tTJSVariant tlval(TagList, TagList);
+    DicObj->PropSetByVS(TJS_MEMBERENSURE,
+                        __taglist_name.AsVariantStringNoAddRef(), &tlval,
+                        DicObj);
+}
+
+//---------------------------------------------------------------------------
 iTJSDispatch2 *tTJSNI_KAGParser::_GetNextTag() {
 // get next tag and return information dictionary object.
 // return nullptr if the tag not found.
@@ -1390,6 +1447,7 @@ parse_start:
     while(true) {
         DicClear->FuncCall(0, nullptr, nullptr, nullptr, 0, nullptr, DicObj);
         // clear dictionary object
+        TagListClearItems(); // libkrkr2.so clears parser+24 alongside DicObj
 
         if(Interrupted) {
             // interrupt current parsing
@@ -1398,7 +1456,9 @@ parse_start:
             DicObj->PropSetByVS(TJS_MEMBERENSURE,
                                 __tag_name.AsVariantStringNoAddRef(), &r_val,
                                 DicObj);
+            TagListAddName(__tag_name);
             Interrupted = false;
+            AttachTagList();
             DicObj->AddRef();
             return DicObj;
         }
@@ -1438,12 +1498,15 @@ parse_start:
                 DicObj->PropSetByVS(TJS_MEMBERENSURE,
                                     __eol_name.AsVariantStringNoAddRef(),
                                     &true_val, DicObj);
+                TagListAddName(__tag_name);
+                TagListAddName(__eol_name);
                 if(RecordingMacro)
                     RecordingMacroStr += TJS_W("[r eol=true]");
                 CurLine++;
                 CurPos = 0;
                 LineBufferUsing = false;
                 if(!RecordingMacro && ExcludeLevel == -1) {
+                    AttachTagList();
                     DicObj->AddRef();
                     return DicObj;
                 }
@@ -1484,6 +1547,8 @@ parse_start:
                     DicObj->PropSetByVS(TJS_MEMBERENSURE,
                                         text_name.AsVariantStringNoAddRef(),
                                         &ch_val, DicObj);
+                    TagListAddName(__tag_name);
+                    TagListAddName(text_name);
 
                     if(RecordingMacro) {
                         if(ch == TJS_W('['))
@@ -1497,6 +1562,7 @@ parse_start:
                     DicObj->PropSetByVS(TJS_MEMBERENSURE,
                                         __tag_name.AsVariantStringNoAddRef(),
                                         &r_val, DicObj);
+                    TagListAddName(__tag_name);
                     if(RecordingMacro)
                         RecordingMacroStr += TJS_W("[r]");
                 }
@@ -1506,6 +1572,7 @@ parse_start:
                 CurPos++;
 
                 if(!RecordingMacro && ExcludeLevel == -1) {
+                    AttachTagList();
                     DicObj->AddRef();
                     return DicObj;
                 }
@@ -1545,6 +1612,7 @@ parse_start:
             DicObj->PropSetByVS(TJS_MEMBERENSURE,
                                 __tag_name.AsVariantStringNoAddRef(), &tag_val,
                                 DicObj);
+            TagListAddName(__tag_name);
         }
 
         // check special control tags
@@ -1678,6 +1746,7 @@ parse_start:
                     TVP_KAG_STEP_NEXT;
 
                     if(condition && ExcludeLevel == -1) {
+                        AttachTagList(); // sub_568F88: DicObj.taglist = TagList
                         DicObj->AddRef();
                         return DicObj;
                     }
@@ -2174,10 +2243,12 @@ parse_start:
             }
 
             // store value into the dictionary object
-            if(store)
+            if(store) {
                 DicObj->PropSetByVS(TJS_MEMBERENSURE,
                                     attribname.AsVariantStringNoAddRef(),
                                     &ValueVariant, DicObj);
+                TagListAddName(attribname); // libkrkr2.so sub_561F3C @0x564280
+            }
         }
     }
 
