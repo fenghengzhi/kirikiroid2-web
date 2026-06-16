@@ -33,16 +33,36 @@ add_library(krkr2plugins_ncbind STATIC
     PackinOne.cpp
     DrawDeviceD3D.cpp
     textrender/TextRender.cpp
+    extrans/Main.cpp
+    extrans/wave.cpp
+    extrans/mosaic.cpp
+    extrans/turn.cpp
+    extrans/turntrans_table.cpp
+    extrans/rotatebase.cpp
+    extrans/rotatetrans.cpp
+    extrans/ripple.cpp
 )
 set_source_files_properties(
     layerExImage/Main.cpp
     layerExImage/LayerExImage.cpp
     PROPERTIES COMPILE_DEFINITIONS "NCB_MODULE_NAME=TJS_W(\"layerExImage.dll\")"
 )
+set_source_files_properties(
+    extrans/Main.cpp
+    extrans/wave.cpp
+    extrans/mosaic.cpp
+    extrans/turn.cpp
+    extrans/turntrans_table.cpp
+    extrans/rotatebase.cpp
+    extrans/rotatetrans.cpp
+    extrans/ripple.cpp
+    PROPERTIES COMPILE_DEFINITIONS "NCB_MODULE_NAME=TJS_W(\"extrans.dll\")"
+)
 target_include_directories(krkr2plugins_ncbind PRIVATE
     ${KRKR2PLUGIN_PATH}
     ${KRKR2PLUGIN_PATH}/simplebinder}
     ${KRKR2PLUGIN_PATH}/layerExImage
+    ${KRKR2PLUGIN_PATH}/extrans
 )
 target_link_libraries(krkr2plugins_ncbind PRIVATE krkr2core)
 
