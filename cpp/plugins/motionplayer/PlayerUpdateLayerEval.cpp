@@ -605,7 +605,7 @@ namespace motion::internal {
     // src=non-empty} (seek landed activeSlotIndex=0/frame0 vs 1/frame1). That
     // {done=true,src=empty} flipped the child-motion play gates in sub_6BE0C0
     // (0x6BE31C done / 0x6BE364 src), leaving a child Player playing-but-motionless
-    // (_speed=1 / null motion / totalFrames=0) which spun the progress_inner
+    // (_syncActive=1 / null motion / totalFrames=0) which spun the progress_inner
     // loop-wrap (PlayerFrameProgress.cpp:2100) forever → m2logo CI hang. The
     // shared helper carries the data-invariant guards (active.fi > 0 backward,
     // other.fi >= 0 forward) that faithfully encode the binary invariant the live
@@ -931,24 +931,30 @@ namespace motion {
 
         // Camera velocity → root delta block (0x6BB360..0x6BB3DC).
         // Writes node+1584 (delta.dirty) and node+1592/+1600/+1608 (delta pos).
+        // Reads player+592 = _deltaTime (speedMul·dt): 0x6BB37C/3A4/3CC each
+        // `LDR D1,[X19,#0x250]; FMUL D0,D1,velXYZ`. (Was _frameLastTime, a
+        // port-invented raw-dt field with no binary backing — see Player.h.)
         {
             auto &rootNode = nodes[0];
             if (_cameraVelocityX != 0.0) {
                 rootNode.delta.dirty = true;
-                rootNode.delta.posX += _frameLastTime * _cameraVelocityX;
+                rootNode.delta.posX += _deltaTime * _cameraVelocityX;
             }
             if (_cameraVelocityY != 0.0) {
                 rootNode.delta.dirty = true;
-                rootNode.delta.posY += _frameLastTime * _cameraVelocityY;
+                rootNode.delta.posY += _deltaTime * _cameraVelocityY;
             }
             if (_cameraVelocityZ != 0.0) {
                 rootNode.delta.dirty = true;
-                rootNode.delta.posZ += _frameLastTime * _cameraVelocityZ;
+                rootNode.delta.posZ += _deltaTime * _cameraVelocityZ;
             }
-            // Camera friction (0x6BB3E0..0x6BB428)
-            if (_cameraDamping != 1.0 && _frameLastTime > 0.0) {
+            // Camera friction (0x6BB3E0..0x6BB428): pow(damp, player+592/60.0).
+            // Gate is ONLY `damp != 1.0` (0x6BB3EC FCMP D0,#1.0) — the binary has
+            // no `>0` subgate; the former `&& _frameLastTime > 0.0` was a port
+            // invention. Reads +592=_deltaTime (0x6BB3F4 LDR D1,[X19,#0x250]).
+            if (_cameraDamping != 1.0) {
                 const double dampFactor = std::pow(_cameraDamping,
-                                                    _frameLastTime / 60.0);
+                                                    _deltaTime / 60.0);
                 _cameraVelocityX *= dampFactor;
                 _cameraVelocityY *= dampFactor;
                 _cameraVelocityZ *= dampFactor;

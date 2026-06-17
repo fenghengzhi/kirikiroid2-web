@@ -21,9 +21,59 @@
 #include "Application.h"
 #include "TickCount.h"
 #include "Random.h"
+#include <spdlog/spdlog.h>
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 
 tTVPSystemControl *TVPSystemControl;
 bool TVPSystemControlAlive = false;
+
+static bool TVPSystemControlLogoTraceEnabled() {
+#ifdef EMSCRIPTEN
+    return EM_ASM_INT({
+        try {
+            if(typeof window !== 'undefined' &&
+               window.__KRKR_TRACE_LOGO_CHAIN__) {
+                return 1;
+            }
+            const params = new URLSearchParams(window.location.search);
+            const traceParam = params.get('trace') || "";
+            return params.has('traceLogoChain') ||
+                traceParam === 'logo' ||
+                traceParam === 'logo-chain' ||
+                traceParam === '1';
+        } catch(e) {
+            return 0;
+        }
+    }) != 0;
+#else
+    return false;
+#endif
+}
+
+static bool TVPSystemControlTraceSeqAllowed(uint32_t seq) {
+    return seq <= 180 || (seq % 60) == 0;
+}
+
+static void TVPTraceSystemControlContinuous(const char *stage,
+                                            bool continuousEventCalling,
+                                            bool eventEnable) {
+    if(!TVPSystemControlLogoTraceEnabled())
+        return;
+
+    static uint32_t seq = 0;
+    ++seq;
+    if(!TVPSystemControlTraceSeqAllowed(seq))
+        return;
+
+    if(auto logger = spdlog::get("core")) {
+        logger->warn(
+            "WCHAIN stage={} seq={} continuousEventCalling={} eventEnable={} flag={}",
+            stage ? stage : "", seq, continuousEventCalling ? 1 : 0,
+            eventEnable ? 1 : 0, TVPProcessContinuousHandlerEventFlag ? 1 : 0);
+    }
+}
 
 //---------------------------------------------------------------------------
 // Get whether to control main thread priority or to insert wait
@@ -71,6 +121,8 @@ void tTVPSystemControl::CallDeliverAllEventsOnIdle() {
 void tTVPSystemControl::BeginContinuousEvent() {
     if(!ContinuousEventCalling) {
         ContinuousEventCalling = true;
+        TVPTraceSystemControlContinuous("system.beginContinuousEvent",
+                                        ContinuousEventCalling, EventEnable);
         InvokeEvents();
         if(TVPGetMainThreadPriorityControl()) {
             // make main thread priority lower
@@ -82,6 +134,8 @@ void tTVPSystemControl::BeginContinuousEvent() {
 void tTVPSystemControl::EndContinuousEvent() {
     if(ContinuousEventCalling) {
         ContinuousEventCalling = false;
+        TVPTraceSystemControlContinuous("system.endContinuousEvent",
+                                        ContinuousEventCalling, EventEnable);
         if(TVPGetMainThreadPriorityControl()) {
             // make main thread priority normal
             //			SetThreadPriority(GetCurrentThread(),
@@ -110,8 +164,11 @@ bool tTVPSystemControl::ApplicationIdle() {
 }
 
 void tTVPSystemControl::DeliverEvents() {
-    if(ContinuousEventCalling)
+    if(ContinuousEventCalling) {
         TVPProcessContinuousHandlerEventFlag = true; // set flag
+    }
+    TVPTraceSystemControlContinuous("system.deliverEvents",
+                                    ContinuousEventCalling, EventEnable);
 
     if(EventEnable) {
         TVPDeliverAllEvents();

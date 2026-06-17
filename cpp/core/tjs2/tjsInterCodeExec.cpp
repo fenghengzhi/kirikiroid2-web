@@ -23,13 +23,20 @@
 #include "tjsDebug.h"
 #include "tjsOctPack.h"
 #include "tjsGlobalStringMap.h"
+#include <algorithm>
+#include <cctype>
 #include <csignal>
 #include <set>
 #include <mutex>
+#include <string>
+#include <utility>
 
 #include <thread>
 #include <fmt/format.h>
 #include <spdlog/spdlog.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 namespace TJS {
     //---------------------------------------------------------------------------
@@ -56,6 +63,181 @@ namespace TJS {
 #else
         return TJSStackTracerEnabled();
 #endif
+    }
+
+    static bool TJSLogoChainTraceEnabledForVM() {
+#ifdef __EMSCRIPTEN__
+        return EM_ASM_INT({
+            try {
+                if(typeof window !== 'undefined' &&
+                   window.__KRKR_TRACE_LOGO_CHAIN__) {
+                    return 1;
+                }
+                const params = new URLSearchParams(window.location.search);
+                const traceParam = params.get('trace') || "";
+                return params.has('traceLogoChain') ||
+                    traceParam === 'logo' ||
+                    traceParam === 'logo-chain' ||
+                    traceParam === '1';
+            } catch(e) {
+                return 0;
+            }
+        }) != 0;
+#else
+        return false;
+#endif
+    }
+
+    static std::string TJSTraceSanitize(std::string value, size_t limit = 220) {
+        for(char &ch : value) {
+            if(ch == '\n' || ch == '\r' || ch == '\t')
+                ch = ' ';
+        }
+        if(value.size() > limit) {
+            value.resize(limit);
+            value += "...";
+        }
+        return value;
+    }
+
+    static std::string TJSTraceNarrow(const tjs_char *value) {
+        return value ? TJSTraceSanitize(ttstr(value).AsStdString()) : "";
+    }
+
+    static std::string TJSTraceLower(std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        return value;
+    }
+
+    static bool TJSTraceContains(std::string haystack, const char *needle) {
+        return TJSTraceLower(std::move(haystack)).find(needle) !=
+            std::string::npos;
+    }
+
+    static std::string TJSTraceVariantBrief(const tTJSVariant *value) {
+        if(!value)
+            return "<null>";
+        try {
+            switch(value->Type()) {
+                case tvtVoid:
+                    return "<void>";
+                case tvtString:
+                    return std::string("\"") +
+                        TJSTraceNarrow(value->GetString()) + "\"";
+                case tvtInteger:
+                    return std::to_string(
+                        static_cast<long long>(value->AsInteger()));
+                case tvtReal:
+                    return std::to_string(static_cast<double>(value->AsReal()));
+                case tvtOctet:
+                    return "<octet>";
+                case tvtObject:
+                    return fmt::format("<object:{}>",
+                                       static_cast<const void *>(
+                                           value->AsObjectNoAddRef()));
+            }
+        } catch(...) {
+            return "<exception>";
+        }
+        return "<unknown>";
+    }
+
+    static std::string TJSTraceArgsBrief(tTJSVariant **args, tjs_int numargs) {
+        std::string joined;
+        for(tjs_int i = 0; i < numargs; ++i) {
+            if(i != 0)
+                joined += ",";
+            joined += TJSTraceVariantBrief(args ? args[i] : nullptr);
+        }
+        return joined;
+    }
+
+    static bool TJSTraceInterestingCall(const std::string &name,
+                                        const std::string &args,
+                                        const std::string &result) {
+        const std::string joined = name + " " + args + " " + result;
+        return TJSTraceContains(name, "gettype") ||
+            TJSTraceContains(name, "getclass") ||
+            TJSTraceContains(name, "creategenericflip") ||
+            TJSTraceContains(name, "findaffinesource") ||
+            TJSTraceContains(name, "loadimages") ||
+            TJSTraceContains(name, "setoptions") ||
+            TJSTraceContains(name, "flipstart") ||
+            TJSTraceContains(name, "startflip") ||
+            TJSTraceContains(name, "updateimagesource") ||
+            TJSTraceContains(name, "setimagefile") ||
+            TJSTraceContains(name, "docommand") ||
+            TJSTraceContains(name, "execcommand") ||
+            TJSTraceContains(name, "objwait") ||
+            TJSTraceContains(name, "addfasttag") ||
+            TJSTraceContains(name, "sync") ||
+            TJSTraceContains(name, "waitlayermotion") ||
+            TJSTraceContains(name, "waitlayermovie") ||
+            TJSTraceContains(name, "onmotionstart") ||
+            TJSTraceContains(name, "onmotionupdate") ||
+            TJSTraceContains(name, "calcaffine") ||
+            TJSTraceContains(name, "drawaffine") ||
+            TJSTraceContains(name, "getimagedata") ||
+            TJSTraceContains(name, "extractstorageext") ||
+            TJSTraceContains(name, "getcommandtarget") ||
+            TJSTraceContains(name, "getenvobject") ||
+            TJSTraceContains(joined, "yuzulogo") ||
+            TJSTraceContains(joined, "m2logo") ||
+            TJSTraceContains(joined, "gfx_motion") ||
+            TJSTraceContains(joined, "affinesourcemotion") ||
+            TJSTraceContains(joined, "genericflip");
+    }
+
+    static void TJSTraceCallResult(const char *stage, const tjs_char *membername,
+                                   tjs_error hr, tTJSVariant **args,
+                                   tjs_int numargs,
+                                   const tTJSVariant *result) {
+        if(!TJSLogoChainTraceEnabledForVM())
+            return;
+        const std::string name = TJSTraceNarrow(membername);
+        const std::string argText = TJSTraceArgsBrief(args, numargs);
+        const std::string resultText = TJSTraceVariantBrief(result);
+        if(!TJSTraceInterestingCall(name, argText, resultText))
+            return;
+        if(auto logger = spdlog::get("core")) {
+            logger->warn(
+                "TCHAIN stage={} member='{}' hr={} argc={} args=[{}] result={}",
+                stage ? stage : "", name, static_cast<int>(hr),
+                static_cast<int>(numargs), argText, resultText);
+        }
+    }
+
+    static bool TJSTraceInterestingProperty(const std::string &name) {
+        return TJSTraceContains(name, "playing") ||
+            TJSTraceContains(name, "allplaying") ||
+            TJSTraceContains(name, "motionplaying") ||
+            TJSTraceContains(name, "movieplaying") ||
+            TJSTraceContains(name, "_playing") ||
+            TJSTraceContains(name, "_player") ||
+            TJSTraceContains(name, "_image") ||
+            TJSTraceContains(name, "visible") ||
+            TJSTraceContains(name, "waitmovie");
+    }
+
+    static void TJSTracePropertyResult(const char *stage,
+                                       const tjs_char *membername,
+                                       tjs_uint32 flags, tjs_error hr,
+                                       const tTJSVariant *result) {
+        if(!TJSLogoChainTraceEnabledForVM())
+            return;
+        const std::string name = TJSTraceNarrow(membername);
+        if(!TJSTraceInterestingProperty(name))
+            return;
+        if(auto logger = spdlog::get("core")) {
+            logger->warn("TCHAIN stage={} prop='{}' flags={} hr={} result={}",
+                         stage ? stage : "", name,
+                         static_cast<unsigned int>(flags),
+                         static_cast<int>(hr),
+                         TJSTraceVariantBrief(result));
+        }
     }
 
     //---------------------------------------------------------------------------
@@ -1435,10 +1617,13 @@ namespace TJS {
 
         tTJSVariantClosure clo = ra_code2->AsObjectClosureNoAddRef();
         tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[3]);
+        tTJSVariant *result = TJS_GET_VM_REG_ADDR(ra, code[1]);
         tjs_error hr =
             clo.PropGet(flags, name->GetString(), name->GetHint(),
-                        TJS_GET_VM_REG_ADDR(ra, code[1]),
+                        result,
                         clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+        TJSTracePropertyResult("tjs.prop.direct", name->GetString(), flags, hr,
+                               result);
         if(TJS_FAILED(hr))
             TJSThrowFrom_tjs_error(
                 hr, TJS_GET_VM_REG(DataArea, code[3]).GetString());
@@ -1532,10 +1717,13 @@ namespace TJS {
 
             try {
                 // TODO: verify here needs hint holding
+                tTJSVariant *result = TJS_GET_VM_REG_ADDR(ra, code[1]);
                 hr = clo.PropGet(
                     flags, member_name, nullptr,
-                    TJS_GET_VM_REG_ADDR(ra, code[1]),
+                    result,
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
+                TJSTracePropertyResult("tjs.prop.indirect", member_name, flags,
+                                       hr, result);
                 if(TJS_FAILED(hr))
                     TJSThrowFrom_tjs_error(hr, member_name);
             } catch(...) {
@@ -2186,26 +2374,24 @@ namespace TJS {
 
         tTJSVariantType type = TJS_GET_VM_REG(ra, code[2]).Type();
         tTJSVariant *name = TJS_GET_VM_REG_ADDR(DataArea, code[3]);
+        tTJSVariant *callResult =
+            code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr;
         if(type == tvtString) {
             ProcessStringFunction(
                 name->GetString(), TJS_GET_VM_REG(ra, code[2]), pass_args,
-                pass_args_count,
-                code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr);
+                pass_args_count, callResult);
             hr = TJS_S_OK;
         } else if(type == tvtOctet) {
             ProcessOctetFunction(name->GetString(),
                                  TJS_GET_VM_REG(ra, code[2]).AsOctetNoAddRef(),
-                                 pass_args, pass_args_count,
-                                 code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1])
-                                         : nullptr);
+                                 pass_args, pass_args_count, callResult);
             hr = TJS_S_OK;
         } else {
             tTJSVariantClosure clo =
                 TJS_GET_VM_REG(ra, code[2]).AsObjectClosure();
             try {
                 hr = clo.FuncCall(
-                    0, name->GetString(), name->GetHint(),
-                    code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
+                    0, name->GetString(), name->GetHint(), callResult,
                     pass_args_count, pass_args,
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
             } catch(...) {
@@ -2214,6 +2400,8 @@ namespace TJS {
             }
             clo.Release();
         }
+        TJSTraceCallResult("tjs.call.direct", name->GetString(), hr,
+                           pass_args, pass_args_count, callResult);
 
         TJS_END_FUNC_CALL_ARGS
 
@@ -2236,25 +2424,23 @@ namespace TJS {
         TJS_BEGIN_FUNC_CALL_ARGS(code + 4)
 
         tTJSVariantType type = TJS_GET_VM_REG(ra, code[2]).Type();
+        tTJSVariant *callResult =
+            code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr;
         if(type == tvtString) {
             ProcessStringFunction(name.c_str(), TJS_GET_VM_REG(ra, code[2]),
-                                  pass_args, pass_args_count,
-                                  code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1])
-                                          : nullptr);
+                                  pass_args, pass_args_count, callResult);
             hr = TJS_S_OK;
         } else if(type == tvtOctet) {
             ProcessOctetFunction(
                 name.c_str(), TJS_GET_VM_REG(ra, code[2]).AsOctetNoAddRef(),
-                pass_args, pass_args_count,
-                code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr);
+                pass_args, pass_args_count, callResult);
             hr = TJS_S_OK;
         } else {
             tTJSVariantClosure clo =
                 TJS_GET_VM_REG(ra, code[2]).AsObjectClosure();
             try {
                 hr = clo.FuncCall(
-                    0, name.c_str(), name.GetHint(),
-                    code[1] ? TJS_GET_VM_REG_ADDR(ra, code[1]) : nullptr,
+                    0, name.c_str(), name.GetHint(), callResult,
                     pass_args_count, pass_args,
                     clo.ObjThis ? clo.ObjThis : ra[-1].AsObjectNoAddRef());
             } catch(...) {
@@ -2263,6 +2449,8 @@ namespace TJS {
             }
             clo.Release();
         }
+        TJSTraceCallResult("tjs.call.indirect", name.c_str(), hr, pass_args,
+                           pass_args_count, callResult);
 
         TJS_END_FUNC_CALL_ARGS
 

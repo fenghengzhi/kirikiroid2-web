@@ -11,9 +11,14 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 #include <memory>
+#include <string>
 #include <spdlog/spdlog.h>
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 #include "StorageIntf.h"
 #include "tjsUtils.h"
 #include "MsgIntf.h"
@@ -42,6 +47,64 @@ tjs_char TVPArchiveDelimiter = '>';
 // statics
 //---------------------------------------------------------------------------
 static tTJSStaticCriticalSection TVPCreateStreamCS;
+//---------------------------------------------------------------------------
+
+namespace {
+    bool TVPStorageLogoTraceEnabled() {
+#ifdef EMSCRIPTEN
+        return EM_ASM_INT({
+            try {
+                if(typeof window !== 'undefined' &&
+                   window.__KRKR_TRACE_LOGO_CHAIN__) {
+                    return 1;
+                }
+                const params = new URLSearchParams(window.location.search);
+                const traceParam = params.get('trace') || "";
+                return params.has('traceLogoChain') ||
+                    traceParam === 'logo' ||
+                    traceParam === 'logo-chain' ||
+                    traceParam === '1';
+            } catch(e) {
+                return 0;
+            }
+        }) != 0;
+#else
+        return false;
+#endif
+    }
+
+    std::string TVPStorageTraceLower(std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        return value;
+    }
+
+    bool TVPStorageTraceInteresting(const ttstr &name) {
+        const auto lower = TVPStorageTraceLower(name.AsStdString());
+        return lower.find("yuzulogo") != std::string::npos ||
+            lower.find("m2logo") != std::string::npos ||
+            lower.find("motion_") != std::string::npos ||
+            lower.find("affinesourcemotion") != std::string::npos ||
+            lower.find("gfx_motion") != std::string::npos ||
+            lower.find("genericflip") != std::string::npos;
+    }
+
+    void TVPStorageTrace(const char *stage, const ttstr &name,
+                         const ttstr &detail = ttstr(), bool result = false,
+                         bool hasResult = false) {
+        if(!TVPStorageLogoTraceEnabled() || !TVPStorageTraceInteresting(name))
+            return;
+        if(auto logger = spdlog::get("core")) {
+            logger->warn("SCHAIN stage={} name='{}' detail='{}' result={}",
+                         stage ? stage : "", name.AsStdString(),
+                         detail.AsStdString(), hasResult ? (result ? 1 : 0)
+                                                         : -1);
+        }
+    }
+}
+
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
@@ -1083,6 +1146,7 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
     // search path and return the path which the "name" is placed.
     // returned name is normalized. returns empty string if the
     // storage is not found.
+    TVPStorageTrace("storage.getPlaced.request", name);
     {
         // One-time dump of auto paths after game has initialized
         static bool dumped = false;
@@ -1113,13 +1177,18 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         ttstr storage = TVPExtractStorageName(name).AsLowerCase();
         if(!storage.IsEmpty() &&
            (TVPRegisteredPlugins.find(storage) != TVPRegisteredPlugins.end() ||
-            ncbAutoRegister::HasModule(storage)))
+            ncbAutoRegister::HasModule(storage))) {
+            TVPStorageTrace("storage.getPlaced.internalPlugin", name,
+                            TVPNormalizeStorageName(name), true, true);
             return TVPNormalizeStorageName(name);
+        }
     }
 
     ttstr *incache = TVPAutoPathCache.FindAndTouch(name);
-    if(incache)
+    if(incache) {
+        TVPStorageTrace("storage.getPlaced.cache", name, *incache, true, true);
         return *incache; // found in cache
+    }
 
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
 
@@ -1129,6 +1198,8 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
     if(found) {
         // found in current folder
         TVPAutoPathCache.Add(name, normalized);
+        TVPStorageTrace("storage.getPlaced.current", name, normalized, true,
+                        true);
         return normalized;
     }
 
@@ -1143,10 +1214,12 @@ ttstr TVPGetPlacedPath(const ttstr &name) {
         // found in table
         ttstr found = *result + storagename;
         TVPAutoPathCache.Add(name, found);
+        TVPStorageTrace("storage.getPlaced.autopath", name, found, true, true);
         return found;
     }
 
     // not found
+    TVPStorageTrace("storage.getPlaced.miss", name, {}, false, true);
     return {};
 }
 //---------------------------------------------------------------------------
@@ -1181,59 +1254,15 @@ static bool TVPIsInternalPlugin(const ttstr &name) {
     return false;
 }
 
-// Check if name matches a "motion_XXX.mtn.tjs" pattern and the actual
-// motion file (XXX.mtn) exists.  This bridges the gap between the game's
-// isExistParameter() TJS function (which checks for "motion_<name>.tjs")
-// and motion files that only exist as raw .mtn/.psb storage entries.
-static bool TVPIsMotionParameterFallback(const ttstr &name) {
-    const auto s = name.AsStdString();
-    // Pattern: ...motion_<basename>.tjs
-    const auto prefix = std::string("motion_");
-    const auto suffix = std::string(".tjs");
-    // Extract storage name only (drop path)
-    auto storageName = TVPExtractStorageName(name).AsStdString();
-    if(storageName.size() <= prefix.size() + suffix.size()) return false;
-    // Check prefix
-    std::string lower = storageName;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-    if(lower.substr(0, prefix.size()) != prefix) return false;
-    if(lower.substr(lower.size() - suffix.size()) != suffix) return false;
-    // Extract the inner name: motion_yuzulogo.mtn.tjs → yuzulogo.mtn
-    auto inner = storageName.substr(prefix.size(),
-                                    storageName.size() - prefix.size() - suffix.size());
-    // Check if the inner name has a motion-like extension
-    auto dot = inner.rfind('.');
-    if(dot == std::string::npos) return false;
-    auto ext = inner.substr(dot);
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-    if(ext != ".mtn" && ext != ".psb") return false;
-    // Check if the actual motion file exists in storage
-    ttstr motionPath = ttstr(inner.c_str());
-    bool exists = !TVPGetPlacedPath(motionPath).IsEmpty();
-    if(exists) {
-        spdlog::warn("[MOTION-FALLBACK] '{}' → motion file '{}' found",
-                     storageName, inner);
-    }
-    return exists;
-}
-
 bool TVPIsExistentStorage(const ttstr &name) {
-    if(TVPIsInternalPlugin(name)) {
-        auto s = name.AsStdString();
-        if(s.find(".dll") != std::string::npos) {
-            TVPAddLog(ttstr(TJS_W("(info) isExistentStorage: internal plugin '")) +
-                name + TJS_W("' → true"));
-        }
-        return true;
-    }
+    // Storages.isExistentStorage native @0x8EE294 returns whether
+    // TVPGetPlacedPath(name) resolves; it does not synthesize motion_*.tjs.
     ttstr placed = TVPGetPlacedPath(name);
     if(!placed.IsEmpty()) {
+        TVPStorageTrace("storage.exists.placed", name, placed, true, true);
         return true;
     }
-    if(TVPIsMotionParameterFallback(name))
-        return true;
+    TVPStorageTrace("storage.exists.miss", name, {}, false, true);
     return false;
 }
 //---------------------------------------------------------------------------
@@ -1244,6 +1273,8 @@ bool TVPIsExistentStorage(const ttstr &name) {
 static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
                                           tjs_uint32 flags) {
     tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
+    TVPStorageTrace("storage.createStream.request", _name,
+                    ttstr(static_cast<tjs_int>(flags)));
 
     ttstr name;
 
@@ -1255,6 +1286,7 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
     }
 
     if(name.IsEmpty()) {
+        TVPStorageTrace("storage.createStream.miss", _name, {}, false, true);
         if(access >= 1)
             TVPRemoveFromStorageCache(_name);
         TVPThrowExceptionMessage(TVPCannotOpenStorage, _name);
@@ -1285,6 +1317,8 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
         if(access >= 1)
             TVPRemoveFromStorageCache(_name);
         arc->Release();
+        TVPStorageTrace("storage.createStream.archive", _name, name, true,
+                        true);
         return stream;
     }
 
@@ -1298,6 +1332,7 @@ static tTJSBinaryStream *_TVPCreateStream(const ttstr &_name,
     }
     if(access >= 1)
         TVPRemoveFromStorageCache(_name);
+    TVPStorageTrace("storage.createStream.open", _name, name, true, true);
     return stream;
 }
 

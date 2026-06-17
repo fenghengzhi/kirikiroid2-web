@@ -595,7 +595,14 @@ TEST_CASE("motionplayer draw cache and playback state") {
     REQUIRE(getProp(canvas, TJS_W("opacity")).AsReal() == 0.5);
 
     player.frameProgress(16.0);
-    REQUIRE(player.getFrameLastTime() == 16.0);
+    // (A2) `frameLastTime` is the RO script property = player+1128 =
+    // motion["lastTime"] (= _cachedTotalFrames), NOT the per-frame dt. It is set
+    // only by initNonEmoteMotion (play path); this case never plays a motion, so
+    // it stays at its default 0.0. (The old `== 16.0` assertion encoded the
+    // since-fixed bug where getFrameLastTime returned the raw dt; the
+    // frameProgress-advanced check is covered by getTickCount/getFrameTickCount
+    // below.)
+    REQUIRE(player.getFrameLastTime() == 0.0);
     REQUIRE(player.getTickCount() == 16.0);
     REQUIRE(player.getFrameTickCount() == 1.0);
     player.draw();

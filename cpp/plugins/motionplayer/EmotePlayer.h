@@ -316,7 +316,8 @@ namespace motion {
         void setPriorDraw(double v) { player().setPriorDraw(v); }
         [[nodiscard]] double getPriorDraw() const { return player().getPriorDraw(); }
 
-        void setFrameLastTime(double v) { player().setFrameLastTime(v); }
+        // (A2) setFrameLastTime delegate removed: `frameLastTime` is RO in the
+        // binary (= +1128 motion["lastTime"], no setter).
         [[nodiscard]] double getFrameLastTime() const { return player().getFrameLastTime(); }
 
         // R1.H2: setFrameLoopTime/getFrameLoopTime delegates removed —

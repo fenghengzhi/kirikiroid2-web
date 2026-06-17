@@ -7,14 +7,45 @@
 using namespace motion::internal;
 
 namespace motion {
+    namespace {
+        bool shouldEmitMotionLoadDiag(std::uint32_t seq) {
+            return seq <= 200 || (seq % 100) == 0;
+        }
+
+        const char *diagBool(bool v) {
+            return v ? "true" : "false";
+        }
+    }
+
     // Aligned to libkrkr2.so Player_playImpl (0x6B21E8):
     // Called from sub_6BE0C0 at 0x6BE46C with flags = motionFlags | v12.
     // flags: PlayFlagForce(1)=force reload, PlayFlagStealth(16)=set stealth fields only.
     void Player::onFindMotion(ttstr name, int flags) {
+        static std::uint32_t s_diagSeq = 0;
+        const auto diagSeq = ++s_diagSeq;
+        const bool emitDiag = shouldEmitMotionLoadDiag(diagSeq);
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::onFindMotion enter seq={} this={} name='{}' flags=0x{:x} chara='{}' motionKey='{}' stealth='{}' active={} activePath='{}' timelines={} playingLabels={} allplaying={}",
+                diagSeq, static_cast<const void *>(this),
+                detail::narrow(name), static_cast<unsigned int>(flags),
+                detail::narrow(_chara), detail::narrow(_motionKey),
+                detail::narrow(_stealthMotion), _activeMotion != nullptr,
+                _activeMotion ? _activeMotion->path : std::string("<none>"),
+                _timelines.size(), _playingTimelineLabels.size(),
+                diagBool(_allplaying));
+        }
+
         // PlayFlagStealth (0x10): store as stealth motion, don't load
         // Binary: if ((flags & 0x10) && !player->project) { player->motionKey = name; return; }
         if ((flags & PlayFlagStealth) && _project.Type() == tvtVoid) {
             _stealthMotion = name;
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::onFindMotion stealth-store-return seq={} this={} name='{}'",
+                    diagSeq, static_cast<const void *>(this),
+                    detail::narrow(name));
+            }
             return;
         }
 
@@ -23,11 +54,25 @@ namespace motion {
         // motion key differs from the stored key.
         if(_activeMotion && _motionKey == name &&
            (flags & (PlayFlagForce | PlayFlagAsCan)) == 0) {
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::onFindMotion same-motion-return seq={} this={} name='{}' flags=0x{:x} activePath='{}'",
+                    diagSeq, static_cast<const void *>(this),
+                    detail::narrow(name), static_cast<unsigned int>(flags),
+                    _activeMotion ? _activeMotion->path
+                                  : std::string("<none>"));
+            }
             return;
         }
 
         // PlayFlagForce (0x01): force reload even if same motion is loaded.
         if ((flags & PlayFlagForce) && _motionKey == name) {
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::onFindMotion force-clear-motionKey seq={} this={} name='{}'",
+                    diagSeq, static_cast<const void *>(this),
+                    detail::narrow(name));
+            }
             _motionKey = ttstr();  // clear to bypass same-motion guard in findMotion
         }
 
@@ -52,6 +97,12 @@ namespace motion {
                     if(projectSnapshot->clipIndexByLabel.find(motionRaw) !=
                        projectSnapshot->clipIndexByLabel.end()) {
                         snapshot = projectSnapshot;
+                        if(emitDiag && LOGGER) {
+                            LOGGER->info(
+                                "PRTDIAG Player::onFindMotion resolved-project seq={} this={} name='{}' path='{}'",
+                                diagSeq, static_cast<const void *>(this),
+                                motionRaw, snapshot->path);
+                        }
                     }
                 }
             }
@@ -66,10 +117,23 @@ namespace motion {
                 if(snapshot) {
                     cacheMotion(*this, motionRaw,
                                 detail::narrow(fullPath), snapshot);
+                    if(emitDiag && LOGGER) {
+                        LOGGER->info(
+                            "PRTDIAG Player::onFindMotion resolved-chara-path seq={} this={} name='{}' fullPath='{}' path='{}'",
+                            diagSeq, static_cast<const void *>(this),
+                            motionRaw, detail::narrow(fullPath),
+                            snapshot->path);
+                    }
                 }
             }
             if(!snapshot) {
                 snapshot = resolveMotion(*this, name, nativeRM());
+                if(snapshot && emitDiag && LOGGER) {
+                    LOGGER->info(
+                        "PRTDIAG Player::onFindMotion resolved-raw seq={} this={} name='{}' path='{}'",
+                        diagSeq, static_cast<const void *>(this),
+                        motionRaw, snapshot->path);
+                }
             }
         }
         if(snapshot) {
@@ -77,8 +141,21 @@ namespace motion {
             _motionKey = name;
             _project = snapshot->moduleValue;
             syncVariableKeysFromActiveMotion();
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::onFindMotion call-init seq={} this={} name='{}' flags=0x{:x} activePath='{}'",
+                    diagSeq, static_cast<const void *>(this),
+                    detail::narrow(name), static_cast<unsigned int>(flags),
+                    _activeMotion ? _activeMotion->path
+                                  : std::string("<none>"));
+            }
             initNonEmoteMotionLike_0x6B365C(
                 static_cast<std::uint32_t>(flags));
+        } else if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::onFindMotion unresolved seq={} this={} name='{}' flags=0x{:x}",
+                diagSeq, static_cast<const void *>(this),
+                detail::narrow(name), static_cast<unsigned int>(flags));
         }
 
         // After loading, prime timelines and start playback.
@@ -138,9 +215,24 @@ namespace motion {
 
         // Handle pending stealth motion (0x6B226C..0x6B2280)
         if (!_stealthMotion.IsEmpty()) {
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::onFindMotion consume-stealth seq={} this={} stealth='{}'",
+                    diagSeq, static_cast<const void *>(this),
+                    detail::narrow(_stealthMotion));
+            }
             _stealthChara = _chara;
             // stealthMotion is consumed — binary nulls it after use
             _stealthMotion = ttstr();
+        }
+
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::onFindMotion exit seq={} this={} name='{}' activePath='{}' motionKey='{}' timelines={} playingLabels={} allplaying={}",
+                diagSeq, static_cast<const void *>(this), detail::narrow(name),
+                _activeMotion ? _activeMotion->path : std::string("<none>"),
+                detail::narrow(_motionKey), _timelines.size(),
+                _playingTimelineLabels.size(), diagBool(_allplaying));
         }
     }
 
@@ -265,10 +357,20 @@ namespace motion {
     // check so calls on a Player without a loaded motion become a no-op
     // instead of crashing, but we do NOT call ensureMotionLoaded here.
     void Player::buildNodeTree() {
+        static std::uint32_t s_buildDiagSeq = 0;
+        const auto diagSeq = ++s_buildDiagSeq;
+        const bool emitDiag = shouldEmitMotionLoadDiag(diagSeq);
         if(!_activeMotion) {
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::buildNodeTree no-active-return seq={} this={} motionKey='{}' chara='{}'",
+                    diagSeq, static_cast<const void *>(this),
+                    detail::narrow(_motionKey), detail::narrow(_chara));
+            }
             return;
         }
 
+        const auto nodesBefore = _nodes.size();
         resetNodeTreeForBuildLike_0x6B56F8();
 
         std::string clipLabel;
@@ -277,6 +379,18 @@ namespace motion {
                                             : selectActiveClip();
         if(clip != nullptr) {
             clipLabel = clip->label;
+        }
+
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::buildNodeTree enter seq={} this={} motionKey='{}' chara='{}' activePath='{}' clipLabel='{}' nodesBefore={} nodesAfterReset={} rootLayers={} timelines={} playingLabels={} allplaying={}",
+                diagSeq, static_cast<const void *>(this),
+                detail::narrow(_motionKey), detail::narrow(_chara),
+                _activeMotion ? _activeMotion->path : std::string("<none>"),
+                clipLabel.empty() ? std::string("<none>") : clipLabel,
+                nodesBefore, _nodes.size(), _activeMotion->layerList.size(),
+                _timelines.size(), _playingTimelineLabels.size(),
+                diagBool(_allplaying));
         }
 
         if(_activeMotion &&
@@ -297,6 +411,15 @@ namespace motion {
         detail::buildNodeTree(
             *this, *_activeMotion, clipLabel,
             _preview);  // binary buildNodeTree (0x6B43A4) gates on +1092 (preview)
+
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::buildNodeTree after-detail seq={} this={} activePath='{}' clipLabel='{}' nodeCount={} labelMap={} preview={}",
+                diagSeq, static_cast<const void *>(this),
+                _activeMotion ? _activeMotion->path : std::string("<none>"),
+                clipLabel.empty() ? std::string("<none>") : clipLabel,
+                _nodes.size(), _nodeLabelMap.size(), diagBool(_preview));
+        }
 
         if(!_nodes.empty()) {
             auto &root = _nodes[0];

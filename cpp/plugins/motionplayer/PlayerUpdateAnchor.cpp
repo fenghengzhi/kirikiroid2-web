@@ -14,7 +14,8 @@ namespace motion {
             if (an.nodeType != 10 || !an.accumulated.active) continue;
             _needsInternalAssignImages = true;
             // 0x6C06E8 gate: binary tests `Player+592 == 0.0 || !*(Player+612)`.
-            // Player+592 = _deltaTime (NOT _frameLastTime/Player+904). Player+612
+            // Player+592 = _deltaTime (NOT _frameLastTime; Player+904 is a dead
+            // field — ctor-zeroed only, no binary backing, see Player.h). Player+612
             // = the post-draw snapshot of +613 (_internalRenderLayerReady, written
             // by updateLayerAfterDrawLike_0x6CE7D8) — "the internal render Layer
             // was materialized last frame", which the w/h read below depends on.

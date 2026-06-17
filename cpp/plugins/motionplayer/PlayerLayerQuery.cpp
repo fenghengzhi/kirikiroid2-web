@@ -217,7 +217,9 @@ namespace motion {
 
     void Player::releaseSyncWait() {
         _syncWaiting = false;
-        _syncActive = false;
+        // (B) Removed `_syncActive = false`: syncActive(+1093) is written only by
+        // ctor(0x6CF11C) and setSyncActive(0x6D9698) in libkrkr2.so — this
+        // function does not clear it.
     }
 
     void Player::calcViewParam() {

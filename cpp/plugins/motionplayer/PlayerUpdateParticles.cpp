@@ -52,8 +52,10 @@ namespace motion {
             }
 
             if (doAccumulate) {
-                // LABEL_27 (0x6BEF88): emitterTimer = _frameLastTime + emitterTimer
-                en.emitterTimer += _frameLastTime;
+                // LABEL_27 (0x6BEF88): emitterTimer += player+592 (_deltaTime).
+                // Binary `v21 = *((double*)player + 74)` = player+592 = speedMul·dt.
+                // (Was _frameLastTime — port-invented raw-dt field, see Player.h.)
+                en.emitterTimer += _deltaTime;
             } else {
                 // LABEL_21 (0x6BEF48): re-resolve dtgt, compute time offset.
                 // Binary does NOT flip activeSlotIndex here (v10 is read once at
@@ -193,7 +195,9 @@ namespace motion {
         // frameProgress + updateLayersPhase1_PreLoop auto-applies velocity+damping.
         if (_isEmoteMode) return;
         auto &nodes = _nodes;
-        const double dt = _frameLastTime;
+        // Per-frame dt = player+592 = _deltaTime (speedMul·dt). libkrkr2.so stores
+        // no raw-dt field; +592 is the sole per-frame dt (was _frameLastTime).
+        const double dt = _deltaTime;
         constexpr double PI = 3.14159265358979323846;
 
         for (size_t pi = 1; pi < nodes.size(); ++pi) {
@@ -805,7 +809,10 @@ namespace motion {
                     // Aligned to libkrkr2.so particle-child step at 0x6BEF58+:
                     // binary does not lazy-build the child tree here; the tree
                     // was already built when the child's play/onFindMotion ran.
-                    child->frameProgress(_frameLastTime);
+                    // Binary passes player+592 (_deltaTime) as the child dt, same
+                    // as the child-motion pass (0x6BE2A4 progress_inner(child,
+                    // result[74])); was _frameLastTime.
+                    child->frameProgress(_deltaTime);
                     if (!child->_nodes.empty()) {
                         child->updateLayers();
                     }

@@ -27,6 +27,26 @@ namespace {
             ((packedColor >> 16) & 0xFFu) |
             ((packedColor & 0xFFu) << 16);
     }
+
+    bool shouldEmitCoreDiag(std::uint32_t seq) {
+        return seq <= 200 || (seq % 100) == 0;
+    }
+
+    const char *coreDiagBool(bool v) {
+        return v ? "true" : "false";
+    }
+
+    std::string joinCorePlayingLabels(
+        const std::vector<std::string> &labels) {
+        std::string joined;
+        for(const auto &label : labels) {
+            if(!joined.empty()) {
+                joined += ",";
+            }
+            joined += label;
+        }
+        return joined.empty() ? std::string("<none>") : joined;
+    }
 }
 
 namespace motion {
@@ -100,6 +120,9 @@ namespace motion {
     Player::Player(const tTJSVariant &rmDispatch) :
         _resourceManager(rmDispatch) {
         LOGGER->info("Motion.Player constructor called");
+        LOGGER->info("PRTDIAG Player::ctor this={} rmType={}",
+                     static_cast<const void *>(this),
+                     static_cast<int>(_resourceManager.Type()));
         // A10: makePlayerRuntime / ensureRootNodeLike previously ran inside
         // makePlayerRuntime; the call now lives here so the synthetic root
         // node lands on _nodes at index 0.
@@ -161,15 +184,15 @@ namespace motion {
 
     bool Player::getPlaying() const {
         // Player_getPlaying @ 0x6D9794: return byte player+1099.
-        static int traceCount = 0;
-        if(detail::logoChainTraceEnabled(_activeMotion) &&
-           traceCount < 80) {
-            ++traceCount;
-            detail::logoChainTraceLogf(
-                _activeMotion->path, "getPlaying", "0x6D9794",
-                _clampedEvalTime, "value={} timelineCount={} playingLabels={}",
+        if((detail::logoChainTraceEnabled() ||
+            detail::logoChainTraceEnabled(_activeMotion)) && LOGGER) {
+            const auto path =
+                _activeMotion ? _activeMotion->path : std::string("<none>");
+            LOGGER->info(
+                "PRTDIAG Player::getPlaying this={} path='{}' value={} timelineCount={} playingLabels='{}'",
+                static_cast<const void *>(this), path,
                 _allplaying ? 1 : 0, _timelines.size(),
-                _playingTimelineLabels.size());
+                joinCorePlayingLabels(_playingTimelineLabels));
         }
         return _allplaying;
     }
@@ -177,34 +200,37 @@ namespace motion {
     bool Player::getAllplaying() const {
         // Player_getAllplaying @ 0x6CCE34: child Motion players can keep the
         // aggregate playing state true after the owner-level flag is clear.
-        static int traceCount = 0;
         if(true) {
             for(const auto &node : _nodes) {
                 if(auto *child = node.getChildPlayer()) {
                     if(child->getAllplaying()) {
-                        if(detail::logoChainTraceEnabled(_activeMotion) &&
-                           traceCount < 80) {
-                            ++traceCount;
-                            detail::logoChainTraceLogf(
-                                _activeMotion->path, "getAllplaying",
-                                "0x6CCE34", _clampedEvalTime,
-                                "value=1 reason=child nodeIndex={} localPlaying={} labels={}",
-                                node.index, _allplaying ? 1 : 0,
-                                _playingTimelineLabels.size());
+                        if((detail::logoChainTraceEnabled() ||
+                            detail::logoChainTraceEnabled(_activeMotion)) &&
+                           LOGGER) {
+                            const auto path =
+                                _activeMotion ? _activeMotion->path
+                                              : std::string("<none>");
+                            LOGGER->info(
+                                "PRTDIAG Player::getAllplaying this={} path='{}' value=1 reason=child nodeIndex={} localPlaying={} playingLabels='{}'",
+                                static_cast<const void *>(this),
+                                path, node.index,
+                                _allplaying ? 1 : 0,
+                                joinCorePlayingLabels(_playingTimelineLabels));
                         }
                         return true;
                     }
                 }
             }
         }
-        if(detail::logoChainTraceEnabled(_activeMotion) &&
-           traceCount < 80) {
-            ++traceCount;
-            detail::logoChainTraceLogf(
-                _activeMotion->path, "getAllplaying", "0x6CCE34",
-                _clampedEvalTime, "value={} reason=local labels={}",
+        if((detail::logoChainTraceEnabled() ||
+            detail::logoChainTraceEnabled(_activeMotion)) && LOGGER) {
+            const auto path =
+                _activeMotion ? _activeMotion->path : std::string("<none>");
+            LOGGER->info(
+                "PRTDIAG Player::getAllplaying this={} path='{}' value={} reason=local playingLabels='{}'",
+                static_cast<const void *>(this), path,
                 _allplaying ? 1 : 0,
-                _playingTimelineLabels.size());
+                joinCorePlayingLabels(_playingTimelineLabels));
         }
         return _allplaying;
     }
@@ -730,12 +756,41 @@ namespace motion {
     }
 
     void Player::initNonEmoteMotionLike_0x6B365C(std::uint32_t playFlags) {
+        static std::uint32_t s_initDiagSeq = 0;
+        const auto diagSeq = ++s_initDiagSeq;
+        const bool emitDiag = shouldEmitCoreDiag(diagSeq);
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::initNonEmoteMotion enter seq={} this={} flags=0x{:x} active={} isEmote={} motionKey='{}' chara='{}' activePath='{}' nodes={} timelines={} playingLabels={} allplaying={} queuing={} firstFrame={}",
+                diagSeq, static_cast<const void *>(this), playFlags,
+                _activeMotion != nullptr, coreDiagBool(_isEmoteMode),
+                detail::narrow(_motionKey), detail::narrow(_chara),
+                _activeMotion ? _activeMotion->path : std::string("<none>"),
+                _nodes.size(), _timelines.size(), _playingTimelineLabels.size(),
+                coreDiagBool(_allplaying), coreDiagBool(_queuing),
+                coreDiagBool(_firstFrame));
+        }
         if(!_activeMotion || _isEmoteMode) {
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::initNonEmoteMotion skip seq={} this={} reason='{}'",
+                    diagSeq, static_cast<const void *>(this),
+                    !_activeMotion ? "no-active-motion" : "emote-mode");
+            }
             return;
         }
 
         const auto *clip = selectActiveClip();
         _activeClip = clip;
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::initNonEmoteMotion selected-clip seq={} this={} clip='{}' loopTime={} totalFrames={} motionObject={}",
+                diagSeq, static_cast<const void *>(this),
+                clip ? clip->label : std::string("<none>"),
+                clip ? clip->loopTime : 0.0,
+                clip ? clip->totalFrames : 0.0,
+                clip && clip->motionObject ? "true" : "false");
+        }
 
         resetNodeTreeForBuildLike_0x6B56F8();
         _parameterEntries.clear();
@@ -800,7 +855,20 @@ namespace motion {
             }
         }
 
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::initNonEmoteMotion before-build seq={} this={} defaultParamIndex={} paramEntries={} loopTime={} totalFrames={}",
+                diagSeq, static_cast<const void *>(this),
+                _defaultParameterEntryIndex, _parameterEntries.size(),
+                _loopTime, _cachedTotalFrames);
+        }
         buildNodeTree();
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::initNonEmoteMotion after-build seq={} this={} nodeCount={} labelMap={}",
+                diagSeq, static_cast<const void *>(this), _nodes.size(),
+                _nodeLabelMap.size());
+        }
         initVariables();
 
         // Player_initNonEmoteMotion @0x6B3A8C: TBNZ playFlags&2(Chain) branch.
@@ -824,6 +892,14 @@ namespace motion {
         // twice (inside chain-skip branch + unconditional below); R2 spike
         // confirmed only one write is needed. Single unconditional write.
         _allplaying = true;
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::initNonEmoteMotion exit seq={} this={} nodeCount={} variables={} loopTime={} totalFrames={} clampedEvalTime={} allplaying={} queuing={} firstFrame={}",
+                diagSeq, static_cast<const void *>(this), _nodes.size(),
+                _variableLabelScopes.size(), _loopTime, _cachedTotalFrames,
+                _clampedEvalTime, coreDiagBool(_allplaying),
+                coreDiagBool(_queuing), coreDiagBool(_firstFrame));
+        }
     }
 
     void Player::syncVariableKeysFromActiveMotion() {

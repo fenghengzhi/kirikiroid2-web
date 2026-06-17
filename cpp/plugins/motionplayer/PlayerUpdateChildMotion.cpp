@@ -569,7 +569,10 @@ namespace motion {
                 // tree was eagerly built when its play/onFindMotion fired
                 // earlier in this loop (see 0x6BE41C eager chain) — the
                 // binary assumes nodes are already ready here.
-                child.frameProgress(_frameLastTime);
+                // 0x6BE2A4 passes result[74] = player+592 = _deltaTime
+                // (speedMul·dt), NOT _frameLastTime (the port-invented raw-dt
+                // field, +904 dead — see Player.h).
+                child.frameProgress(_deltaTime);
                 child.updateLayers();
                 // Aggregate the child's DEAD render-item buffer (player+936/944)
                 // into this parent's, then clear the child's. Aligned with

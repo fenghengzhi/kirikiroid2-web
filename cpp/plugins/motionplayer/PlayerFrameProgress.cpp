@@ -8,6 +8,7 @@
 #include "MotionTraceWeb.h"
 #include "ncbind.hpp"
 #include "psbfile/PSBValue.h" // 砖5/洞3: read motion["tag"] frame dicts
+#include "tjsDebug.h"
 
 using namespace motion::internal;
 
@@ -77,6 +78,22 @@ namespace {
             return ease + 1.0;
         }
         return 1.0 / (1.0 - ease);
+    }
+
+    std::string joinPlayingLabels(const std::vector<std::string> &labels) {
+        std::string joined;
+        for(const auto &timelineLabel : labels) {
+            if(!joined.empty()) {
+                joined += ",";
+            }
+            joined += timelineLabel;
+        }
+        return joined.empty() ? std::string("<none>") : joined;
+    }
+
+    std::string shortTJSStackTrace(tjs_int limit = 8) {
+        ttstr stack = TJSGetStackTraceString(limit, TJS_W(" <- "));
+        return stack.AsStdString();
     }
 
 } // anonymous namespace
@@ -796,7 +813,7 @@ namespace internal {
     // porting the layer-stream loops of Player_advanceRootAndNodes (0x6B6ADC,
     // forward) + Player_rewindRootAndNodes (0x6B9A3C, backward). On each crossed
     // type==1 frame applies the advance/rewind gate (0x6B6DD8 / 0x6B9D0C):
-    //   if (+1093 _speed): align -> _motionCompleted=1, snap _clampedEvalTime &
+    //   if (+1093 _syncActive): align -> _motionCompleted=1, snap _clampedEvalTime &
     //     _frameTickCount = curTime; sync -> _syncWaiting=1, same snap, onSync().
     //   (ungated) content["action"] -> onAction(void, actionName)  [§8.7].
     // NOTE vs binary: the binary runs this INSIDE advanceRootAndNodes, before the
@@ -882,13 +899,13 @@ namespace internal {
             if (!content) {
                 return;
             }
-            if (_speed) {                                   // +1093 stop gate
+            if (_syncActive) {                              // +1093 syncActive gate
                 if (contentBoolOf(content, "align")) {      // 0x6B6DD8
                     _motionCompleted = true;
                     _clampedEvalTime = curTime;
                     _frameTickCount = curTime;
                 }
-                if (_speed && contentBoolOf(content, "sync")) { // 0x6B6E14
+                if (_syncActive && contentBoolOf(content, "sync")) { // 0x6B6E14
                     _syncWaiting = true;
                     _clampedEvalTime = curTime;
                     _frameTickCount = curTime;
@@ -1510,7 +1527,7 @@ namespace internal {
                             std::dynamic_pointer_cast<PSB::PSBDictionary>(
                                 (*curF)["content"]);
                         if (content) {
-                            if (_speed) {                   // 0x6B8A8C: +1093 gate
+                            if (_syncActive) {              // 0x6B8A8C: +1093 gate
                                 // 0x6B8AC0: align gate (re-tests +920==+456).
                                 if (_layerCurTime == targetTime &&
                                     contentBoolOf(content, "align")) {
@@ -1519,7 +1536,7 @@ namespace internal {
                                     _frameTickCount = _layerCurTime;  // +1120
                                 }
                                 // 0x6B8AFC: sync gate (re-tests +1093).
-                                if (_speed && contentBoolOf(content, "sync")) {
+                                if (_syncActive && contentBoolOf(content, "sync")) {
                                     _syncWaiting = true;           // +1098 = 1
                                     _clampedEvalTime = _layerCurTime; // +456
                                     _frameTickCount = _layerCurTime;  // +1120
@@ -2135,13 +2152,14 @@ namespace internal {
 
     void Player::frameProgress(double dt) {
         // === Player_progress_inner @0x6C106C 入口 ===
-        // 移除 port-invented `if(!_speed) return;`：二进制 progress_inner 入口
+        // 移除 port-invented `if(!_syncActive) return;`：二进制 progress_inner 入口
         // (0x6C1080..0x6C10AC) 全是无条件副作用，**无** play/pause/null 守卫。
-        // +1093(_speed) 只是 advance/rewindRootAndNodes 内部的 align/sync/action
+        // +1093(_syncActive) 只是 advance/rewindRootAndNodes 内部的 align/sync/action
         // 事件 gate，不门控整个 progress（progress_core_M1 note 勘误，本轮 IDA
         // 复核 0x6C106C 入口拓扑确认）。
         const double actualDelta = dt;
-        _frameLastTime = actualDelta;
+        // (A2) No `_frameLastTime = dt` here: +904 was a dead port-invented field.
+        // The binary stores no raw dt at entry — only +592=_deltaTime below.
 
         // §1 入口无条件副作用 (0x6C108C): +483 motionCompleted 每帧清零。二进制在
         // 任何分支/return 之前 STRB WZR,[X19,#0x1E3]；Player.h:1148 已注明
@@ -2155,6 +2173,14 @@ namespace internal {
         // _windFreqY=engine+1152 风缓存，不同对象），故该 DWORD 清零无可建模目标，属
         // "未建模字段"缺口而非遗漏 —— 不臆造字段。
         _motionCompleted = false;
+
+        // player+592(_deltaTime) = speedMul*dt @0x6C1094。二进制入口写入顺序为
+        // 0x6C1088(+1152=0) → 0x6C108C(+483=0) → 0x6C1094(+592=write)，故 _deltaTime
+        // 写入必须排在 _motionCompleted=false 之后以与二进制计算顺序一致。该写入须在
+        // firstFrame 块(0x6C1108 读 v8=+592)与 LABEL_48(0x6C1334 读 +592)之前完成，
+        // 否则两处读到上一帧的陈旧 _deltaTime（IDA 0x6C1108 注释标注的 PORT BUG），
+        // PlayerUpdateAnchor 的 _deltaTime==0 gate 与阻尼计算同样依赖本帧值。
+        _deltaTime = _speedMul * actualDelta;       // player+592 @0x6C1094
 
         // HM2 (_evalResultValues @+320) is NOT cleared per-frame. Byte-verified
         //   against Player_progress_inner @0x6C106C (2026-06-03): its entry clears
@@ -2235,9 +2261,10 @@ namespace internal {
         // +592=_deltaTime(0x250)、+609=_reverseSeekFlag(0x261，writer 0x6BE4F8 同字段)、
         // +1120=_frameTickCount(0x460)、+1128=_cachedTotalFrames(0x468)。
         if(_firstFrame) {                              // 0x6C1104: firstFrame!=0
-            _allplaying = !_playingTimelineLabels.empty();
-            _syncActive = _syncWaiting && _allplaying;
-
+            // (B) progress_inner 不写 syncActive(+1093)。该字段全二进制仅两个
+            // writer：Player_ctor@0x6CF11C 与 Player_setSyncActive@0x6D9698(脚本
+            // setter)，由 advance/rewind/reseek 游标推进函数只读作 gate。原先此处
+            // `_syncActive = _syncWaiting && _allplaying` 是杜撰，已删。
             const double deltaTime = _deltaTime;       // v8 = *(double*)(+592)  (0x6C1108)
             _firstFrame = false;                       // *(BYTE*)(+481) = 0     (0x6C110C)
 
@@ -2306,10 +2333,9 @@ namespace internal {
         // M1 P5/G3: Player_progress_inner @0x6C106C LABEL_48 advances the frame
         //   cursor by deltaTime(+592 = speedMul(+1168)*dt), gated by _queuing
         //   (+480) — when the gate's LSB is set the cursor is frozen. Mirror that:
-        //     if (!_queuing) _frameTickCount += _speedMul * actualDelta;
+        //     if (!_queuing) _frameTickCount += _deltaTime;
         //   At P1 defaults (_speedMul=1.0, _queuing=false) this is exactly the
         //   previous `_frameTickCount += actualDelta`, so behaviour is preserved.
-        _deltaTime = _speedMul * actualDelta;       // player+592
         if(!_queuing) {                              // player+480 LSB gate (LABEL_48)
             _frameTickCount += _deltaTime;           // player+1120 += player+592
         }
@@ -2589,8 +2615,14 @@ namespace internal {
         // (Per-node frame actions — node mask 0x40000 from the node seek — remain
         // 洞2, already handled inside progressSeekNodeSlotsLike's _pendingEvents.)
 
-        _allplaying = !_playingTimelineLabels.empty();
-        _syncActive = _syncWaiting && _allplaying;
+        // Player_progress_inner @0x6C106C does not derive +1099(loopArmed) from
+        // the playing-list each frame; it only clears +1099 in terminal non-loop
+        // branches above (0x6C13F4 / 0x6C1384). Keeping _allplaying independent is
+        // required for image-side players whose script-visible motionPlaying is
+        // +1099-backed even when no local timeline label was started.
+        // (B) Removed fabricated `_syncActive = _syncWaiting && _allplaying`:
+        // progress_inner never writes syncActive(+1093); it is a script-set gate
+        // (writers = ctor 0x6CF11C + setSyncActive 0x6D9698 only).
     }
 
 
@@ -2664,20 +2696,37 @@ namespace internal {
             delta = 0;
         }
 
-        self->_pendingEvents.clear();
-        self->frameProgress(delta * kMotionFramesPerMillisecond);
         const auto motionPath =
             self->_activeMotion
                 ? self->_activeMotion->path
                 : std::string{};
+        // 二进制 progressCompat(0x6D2A98) 入口无任何栈遍历/字符串构建。shortTJSStackTrace()
+        // 会走一遍 TJS 调用栈，joinPlayingLabels() 会建临时字符串——必须先过路径门控
+        // (logoChainTraceLogf 内部的同一判定) 再求值，否则每帧每个 player 在所有构建上都
+        // 付出二进制不存在的开销，违背运行时行为复刻。
+        if(detail::logoChainTraceEnabledForPath(motionPath)) {
+            detail::logoChainTraceLogf(
+                motionPath, "progressCompat.enter", "0x6D2A98",
+                self->_clampedEvalTime,
+                "deltaMs={:.3f} frameDt={:.6f} allplayingBefore={} playingLabelsBefore={} nodesBefore={} stack={}",
+                delta, delta * kMotionFramesPerMillisecond,
+                self->_allplaying ? 1 : 0,
+                joinPlayingLabels(self->_playingTimelineLabels),
+                self->_nodes.size(), shortTJSStackTrace());
+        }
+
+        self->_pendingEvents.clear();
+        self->frameProgress(delta * kMotionFramesPerMillisecond);
         detail::logoChainTraceCheck(
             motionPath, "progressCompat.dt", "0x6D2A98",
             self->_clampedEvalTime,
-            fmt::format("dt_ms*60/1000={:.6f}", delta * kMotionFramesPerMillisecond),
-            fmt::format("dt_frames={:.6f}", self->_frameLastTime),
-            std::fabs(self->_frameLastTime - delta * kMotionFramesPerMillisecond) <
+            fmt::format("speedMul*dt_ms*60/1000={:.6f}",
+                        self->_speedMul * delta * kMotionFramesPerMillisecond),
+            fmt::format("deltaTime={:.6f}", self->_deltaTime),
+            std::fabs(self->_deltaTime -
+                      self->_speedMul * delta * kMotionFramesPerMillisecond) <
                 0.000001,
-            "progressCompat dt(ms)->frame conversion diverged from 0x6D2A98");
+            "progressCompat dt->_deltaTime(+592=speedMul*dt) diverged from 0x6C1094");
 
         // Aligned to libkrkr2.so Player_progressCompat (0x6D2A98):
         // progress_inner -> updateLayers -> calcBounds -> dispatchEvents.
@@ -2693,6 +2742,17 @@ namespace internal {
             self->updateLayers();
         }
         self->calcBounds();
+        // joinPlayingLabels() 的临时字符串构建同样先过路径门控再求值（见 enter 处说明）。
+        if(detail::logoChainTraceEnabledForPath(motionPath)) {
+            detail::logoChainTraceLogf(
+                motionPath, "progressCompat.exit", "0x6D2A98",
+                self->_clampedEvalTime,
+                "allplayingAfter={} playingLabelsAfter={} nodesAfter={} bounds=({:.3f},{:.3f},{:.3f},{:.3f})",
+                self->_allplaying ? 1 : 0,
+                joinPlayingLabels(self->_playingTimelineLabels),
+                self->_nodes.size(), self->_boundsMinX, self->_boundsMinY,
+                self->_boundsMaxX, self->_boundsMaxY);
+        }
 
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&

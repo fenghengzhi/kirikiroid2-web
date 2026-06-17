@@ -12,6 +12,11 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <string>
+#include <spdlog/spdlog.h>
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 #include "SysInitIntf.h"
 #include "EventIntf.h"
 #include "WindowIntf.h"
@@ -20,6 +25,7 @@
 #include "ScriptMgnIntf.h"
 #include "TickCount.h"
 #include "SystemImpl.h"
+#include "tjsDebug.h"
 
 //---------------------------------------------------------------------------
 // tTVPEvent  : script event class
@@ -195,6 +201,8 @@ static tTVPAtExit TVPDestroyEventQueueAtExit(TVP_ATEXIT_PRI_PREPARE,
 
 bool TVPEventDisabled = false;
 bool TVPEventInterrupting = false;
+
+static void TVPTraceContinuousPumpPoint(const char *stage);
 
 // #define TVP_EVENT_TASK_RETURN_TICK 100000
 /* TVP event system once returns to Operation system when
@@ -524,6 +532,7 @@ void TVPDeliverAllEvents() {
 
         // process continuous events
         if(TVPProcessContinuousHandlerEventFlag) {
+            TVPTraceContinuousPumpPoint("event.deliverAll.continuous-flag");
             TVPProcessContinuousHandlerEventFlag = false; // processed
             // XXX: strictly saying, we need something like
             // InterlockedExchange to look/set this flag, because
@@ -532,6 +541,8 @@ void TVPDeliverAllEvents() {
             // does care of missing one event in rare race condition.
 
             TVPDeliverContinuousEvent();
+        } else {
+            TVPTraceContinuousPumpPoint("event.deliverAll.no-continuous-flag");
         }
         try {
             try {
@@ -748,6 +759,83 @@ static std::vector<tTVPContinuousEventCallbackIntf *> TVPContinuousEventVector;
 static std::vector<tTJSVariantClosure> TVPContinuousHandlerVector;
 static bool TVPContinuousEventProcessing = false;
 
+static bool TVPLogoChainTraceEnabledForEvents() {
+#ifdef EMSCRIPTEN
+    return EM_ASM_INT({
+        try {
+            if(typeof window !== 'undefined' &&
+               window.__KRKR_TRACE_LOGO_CHAIN__) {
+                return 1;
+            }
+            const params = new URLSearchParams(window.location.search);
+            const traceParam = params.get('trace') || "";
+            return params.has('traceLogoChain') ||
+                traceParam === 'logo' ||
+                traceParam === 'logo-chain' ||
+                traceParam === '1';
+        } catch(e) {
+            return 0;
+        }
+    }) != 0;
+#else
+    return false;
+#endif
+}
+
+static bool TVPTraceContinuousSeqAllowed(tjs_uint64 seq) {
+    return seq <= 180 || (seq % 60) == 0;
+}
+
+static std::string TVPShortTJSStackTrace(tjs_int limit = 6) {
+    ttstr stack = TJSGetStackTraceString(limit, TJS_W(" <- "));
+    return stack.AsStdString();
+}
+
+static void TVPTraceContinuousPumpPoint(const char *stage) {
+    if(!TVPLogoChainTraceEnabledForEvents())
+        return;
+
+    static tjs_uint64 seq = 0;
+    ++seq;
+
+    const bool hasContinuousWork =
+        !TVPContinuousEventVector.empty() || !TVPContinuousHandlerVector.empty();
+    if(!hasContinuousWork && stage &&
+       std::string(stage).find("no-continuous-flag") != std::string::npos) {
+        return;
+    }
+    if(!TVPTraceContinuousSeqAllowed(seq))
+        return;
+
+    if(auto logger = spdlog::get("core")) {
+        logger->warn(
+            "WCHAIN stage={} seq={} flag={} eventHooks={} handlers={} eventDisabled={} eventQueue={} inputQueue={} winUpdateQueue={}",
+            stage ? stage : "", seq,
+            TVPProcessContinuousHandlerEventFlag ? 1 : 0,
+            TVPContinuousEventVector.size(),
+            TVPContinuousHandlerVector.size(), TVPEventDisabled ? 1 : 0,
+            TVPEventQueue.size(), TVPInputEventQueue.size(),
+            TVPWinUpdateEventQueue.size());
+    }
+}
+
+static void TVPTraceContinuousRegistration(const char *stage,
+                                           const tTJSVariantClosure *clo,
+                                           const void *hook) {
+    if(!TVPLogoChainTraceEnabledForEvents())
+        return;
+
+    if(auto logger = spdlog::get("core")) {
+        logger->warn(
+            "WCHAIN stage={} eventHooks={} handlers={} closureObject={} closureThis={} hook={} stack={}",
+            stage ? stage : "", TVPContinuousEventVector.size(),
+            TVPContinuousHandlerVector.size(),
+            clo ? static_cast<void *>(clo->Object) : nullptr,
+            clo ? static_cast<void *>(clo->ObjThis) : nullptr, hook,
+            TVPShortTJSStackTrace());
+    }
+}
+
 static void TVPDestroyContinuousHandlerVector() {
     std::vector<tTJSVariantClosure>::iterator i;
     for(i = TVPContinuousHandlerVector.begin();
@@ -765,6 +853,7 @@ static tTVPAtExit
 void TVPAddContinuousEventHook(tTVPContinuousEventCallbackIntf *cb) {
     TVPBeginContinuousEvent();
     TVPContinuousEventVector.push_back(cb);
+    TVPTraceContinuousRegistration("event.addContinuousEventHook", nullptr, cb);
 }
 
 //---------------------------------------------------------------------------
@@ -776,6 +865,8 @@ void TVPRemoveContinuousEventHook(tTVPContinuousEventCallbackIntf *cb) {
             *i = nullptr; // simply assign a nullptr
         i++;
     }
+    TVPTraceContinuousRegistration("event.removeContinuousEventHook", nullptr,
+                                   cb);
 }
 
 //---------------------------------------------------------------------------
@@ -784,17 +875,44 @@ static void _TVPDeliverContinuousEvent() // internal
     TVPStartTickCount();
     tjs_uint64 tick = TVPGetTickCount();
 
+    static tjs_uint64 deliverSeq = 0;
+    const tjs_uint64 seq = ++deliverSeq;
+    const bool trace =
+        TVPLogoChainTraceEnabledForEvents() &&
+        TVPTraceContinuousSeqAllowed(seq);
+    tjs_uint32 hookCalls = 0;
+    tjs_uint32 handlerCalls = 0;
+    tjs_uint32 handlerFailures = 0;
+    if(trace) {
+        if(auto logger = spdlog::get("core")) {
+            logger->warn(
+                "WCHAIN stage=event.deliverContinuous.enter seq={} tick={} eventHooks={} handlers={} eventDisabled={}",
+                seq, tick, TVPContinuousEventVector.size(),
+                TVPContinuousHandlerVector.size(), TVPEventDisabled ? 1 : 0);
+        }
+    }
+
     if(TVPContinuousEventVector.size()) {
         bool emptyflag = false;
         for(tjs_uint32 i = 0; i < TVPContinuousEventVector.size(); i++) {
             // note that the handler can remove itself while the event
-            if(TVPContinuousEventVector[i])
+            if(TVPContinuousEventVector[i]) {
+                ++hookCalls;
                 TVPContinuousEventVector[i]->OnContinuousCallback(tick);
-            else
+            } else {
                 emptyflag = true;
+            }
 
-            if(TVPExclusiveEventPosted)
+            if(TVPExclusiveEventPosted) {
+                if(trace) {
+                    if(auto logger = spdlog::get("core")) {
+                        logger->warn(
+                            "WCHAIN stage=event.deliverContinuous.abort seq={} reason=exclusive-after-hook hookCalls={} handlerCalls={}",
+                            seq, hookCalls, handlerCalls);
+                    }
+                }
                 return; // check exclusive events
+            }
         }
 
         if(emptyflag) {
@@ -820,6 +938,7 @@ static void _TVPDeliverContinuousEvent() // internal
             if(TVPContinuousHandlerVector[i].Object) {
                 tjs_error er;
                 try {
+                    ++handlerCalls;
                     er = TVPContinuousHandlerVector[i].FuncCall(
                         0, nullptr, nullptr, nullptr, 1, &pvtick, nullptr);
                 } catch(...) {
@@ -831,13 +950,23 @@ static void _TVPDeliverContinuousEvent() // internal
                 }
                 if(TJS_FAILED(er)) {
                     // failed
+                    ++handlerFailures;
                     TVPContinuousHandlerVector[i].Release();
                     TVPContinuousHandlerVector[i].Object =
                         TVPContinuousHandlerVector[i].ObjThis = nullptr;
                     emptyflag = true;
                 }
-                if(TVPExclusiveEventPosted)
+                if(TVPExclusiveEventPosted) {
+                    if(trace) {
+                        if(auto logger = spdlog::get("core")) {
+                            logger->warn(
+                                "WCHAIN stage=event.deliverContinuous.abort seq={} reason=exclusive-after-handler hookCalls={} handlerCalls={} handlerFailures={}",
+                                seq, hookCalls, handlerCalls,
+                                handlerFailures);
+                        }
+                    }
                     return; // check exclusive events
+                }
             } else {
                 emptyflag = true;
             }
@@ -862,6 +991,16 @@ static void _TVPDeliverContinuousEvent() // internal
 
     if(!TVPContinuousEventVector.size() && !TVPContinuousHandlerVector.size())
         TVPEndContinuousEvent();
+
+    if(trace) {
+        if(auto logger = spdlog::get("core")) {
+            logger->warn(
+                "WCHAIN stage=event.deliverContinuous.exit seq={} hookCalls={} handlerCalls={} handlerFailures={} remainingEventHooks={} remainingHandlers={}",
+                seq, hookCalls, handlerCalls, handlerFailures,
+                TVPContinuousEventVector.size(),
+                TVPContinuousHandlerVector.size());
+        }
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -895,6 +1034,8 @@ void TVPAddContinuousHandler(tTJSVariantClosure clo) {
         TVPBeginContinuousEvent();
         clo.AddRef();
         TVPContinuousHandlerVector.emplace_back(clo);
+        TVPTraceContinuousRegistration("event.addContinuousHandler", &clo,
+                                       nullptr);
     }
 }
 
@@ -904,6 +1045,8 @@ void TVPRemoveContinuousHandler(tTJSVariantClosure clo) {
     i = std::find(TVPContinuousHandlerVector.begin(),
                   TVPContinuousHandlerVector.end(), clo);
     if(i != TVPContinuousHandlerVector.end()) {
+        TVPTraceContinuousRegistration("event.removeContinuousHandler",
+                                       &(*i), nullptr);
         i->Release();
         i->Object = i->ObjThis = nullptr;
     }

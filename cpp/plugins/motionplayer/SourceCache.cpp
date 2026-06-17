@@ -15,6 +15,7 @@
 #include "ResourceManager.h"
 #include "ScriptMgnIntf.h"
 #include "StorageIntf.h"
+#include "ncbind.hpp"
 
 namespace {
 
@@ -264,6 +265,24 @@ namespace {
         const auto *resource = motion::internal::findPSBResourceBySourceName(
             snapshot, sourceKey, width, height, decodedPixels, originX, originY,
             &decodedPixelsAreBgra);
+        const bool sourceDiag =
+            sourceKey.find("yuzu") != std::string::npos ||
+            sourceKey.find("logo") != std::string::npos;
+        if(sourceDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG SourceCache::loadPsbBitmap path='{}' source='{}' found={} width={} height={} resourceBytes={} decodedBytes={} decodedBgra={} root={} resourceCount={}",
+                snapshot.path, sourceKey, resource ? 1 : 0, width, height,
+                resource ? resource->data.size() : 0u, decodedPixels.size(),
+                decodedPixelsAreBgra ? 1 : 0, snapshot.root ? 1 : 0,
+                snapshot.resourcesByPath.size());
+        }
+        motion::detail::logoChainTraceLogf(
+            snapshot.path, "sourceCache.loadPsbBitmap", "0x6948E8", 0.0,
+            "source='{}' found={} width={} height={} resourceBytes={} decodedBytes={} decodedBgra={} root={} resourceCount={}",
+            sourceKey, resource ? 1 : 0, width, height,
+            resource ? resource->data.size() : 0u, decodedPixels.size(),
+            decodedPixelsAreBgra ? 1 : 0, snapshot.root ? 1 : 0,
+            snapshot.resourcesByPath.size());
         if(!resource || width <= 0 || height <= 0 || resource->data.empty()) {
             return nullptr;
         }
@@ -298,6 +317,79 @@ namespace {
             }
         }
         return bmp;
+    }
+
+    tTJSVariant loadPsbSourceFacadeLike_0x6948E8(
+        const motion::detail::MotionSnapshot &snapshot,
+        const std::string &sourceKey) {
+        if(sourceKey.rfind("src/", 0) != 0 || snapshot.moduleValue.Type() != tvtObject) {
+            return {};
+        }
+
+        const auto afterSrc = sourceKey.substr(4);
+        const auto slash = afterSrc.find('/');
+        if(slash == std::string::npos) {
+            return {};
+        }
+        const auto group = afterSrc.substr(0, slash);
+        const auto name = afterSrc.substr(slash + 1);
+        if(group.empty() || name.empty()) {
+            return {};
+        }
+
+        tTJSVariant sourceDict;
+        tTJSVariant groupDict;
+        tTJSVariant iconHolder;
+        tTJSVariant iconEntry;
+        const ttstr groupKey = motion::detail::widen(group);
+        const ttstr nameKey = motion::detail::widen(name);
+        const bool found =
+            getObjectProperty(snapshot.moduleValue, TJS_W("source"), sourceDict) &&
+            getObjectProperty(sourceDict, groupKey.c_str(), groupDict) &&
+            getObjectProperty(groupDict, TJS_W("icon"), iconHolder) &&
+            getObjectProperty(iconHolder, nameKey.c_str(), iconEntry) &&
+            iconEntry.Type() == tvtObject;
+
+        const bool sourceDiag =
+            sourceKey.find("yuzu") != std::string::npos ||
+            sourceKey.find("logo") != std::string::npos;
+        if(sourceDiag && LOGGER) {
+            int width = 0;
+            int height = 0;
+            if(found) {
+                tTJSVariant value;
+                if(getObjectProperty(iconEntry, TJS_W("width"), value) &&
+                   value.Type() != tvtVoid) {
+                    width = static_cast<int>(value);
+                }
+                if(getObjectProperty(iconEntry, TJS_W("height"), value) &&
+                   value.Type() != tvtVoid) {
+                    height = static_cast<int>(value);
+                }
+            }
+            LOGGER->info(
+                "PRTDIAG SourceCache::loadPsbSourceFacade path='{}' source='{}' group='{}' icon='{}' found={} size={}x{}",
+                snapshot.path, sourceKey, group, name, found ? 1 : 0,
+                width, height);
+        }
+        motion::detail::logoChainTraceLogf(
+            snapshot.path, "sourceCache.loadPsbSourceFacade", "0x6948E8", 0.0,
+            "source='{}' group='{}' icon='{}' found={}", sourceKey, group,
+            name, found ? 1 : 0);
+
+        if(!found) {
+            return {};
+        }
+
+        using ObjSourceAdaptor = ncbInstanceAdaptor<motion::ObjSource>;
+        auto *src = new motion::ObjSource(iconEntry);
+        if(iTJSDispatch2 *dispatch = ObjSourceAdaptor::CreateAdaptor(src)) {
+            tTJSVariant result(dispatch, dispatch);
+            dispatch->Release();
+            return result;
+        }
+        delete src;
+        return {};
     }
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject) {
@@ -475,13 +567,34 @@ namespace motion {
         }
 
         std::string resolvedKey;
-        auto rawSource =
-            currentSource.Type() != tvtVoid ? currentSource
-                                            : loadRawSourceVariant(name, resolvedKey);
+        tTJSVariant rawSource;
+        if(_player && _player->_activeMotion) {
+            // Player_findSource @0x6948E8 resolves PSB-backed "src/..."
+            // entries through the active module's source/icon dictionary before
+            // falling back to ResourceManager.findSource/storage paths.
+            rawSource =
+                loadPsbSourceFacadeLike_0x6948E8(*_player->_activeMotion, key);
+        }
+        if(rawSource.Type() == tvtVoid) {
+            rawSource =
+                currentSource.Type() != tvtVoid
+                    ? currentSource
+                    : loadRawSourceVariant(name, resolvedKey);
+        }
         Entry entry;
         entry.key = key;
         entry.resolvedKey = resolvedKey.empty() ? key : resolvedKey;
         entry.rawSource = rawSource;
+        // 不要把 raw findSource 结果(ObjSource，非 Layer)塞进 entry.sourceObject。
+        // sourceObject 是烘焙后的 Layer 槽位(对齐 libkrkr2.so loadSource@0x6A7BA8：
+        // 缓存节点 +36 永远是 baked Layer，命中即返回可渲染 Layer）。脚本 loadSource
+        // 这条 facade 路径不烘焙，若在此把 ObjSource 写入 sourceObject，会污染共享
+        // _entries：render 路径 loadRenderSourceByName 的缓存命中(findEntry 按
+        // key+blendMode 匹配，blendMode 默认 0)会早返回该 ObjSource，而
+        // PlayerRenderExecute 对它做 resolveNativeLayer 失败 → 源贴图为空 → logo
+        // 渲染全白。留 sourceObject 为空，使 render 命中时落到烘焙路径
+        // (ensureEntryBackingBitmap + ensureLayerObject 新建真 Layer +
+        // assignBitmapToLayer)。脚本 loadSource 仍由 rawSource 返回 ObjSource。
         _entries.push_front(std::move(entry));
         return rawSource;
     }
@@ -744,11 +857,69 @@ namespace motion {
 
         std::shared_ptr<tTVPBaseBitmap> baseBitmap;
         if(_player && _player->_activeMotion) {
-            const auto path = resolveMotionSourcePathLike_0x6948E8(
-                *_player->_activeMotion, key);
-            baseBitmap = loadGraphicBitmap(path);
+            if(key.rfind("src/", 0) == 0) {
+                // Player_findSource @0x6948E8 resolves "src/..." entries from
+                // the loaded PSB source/texture/icon dictionaries before any
+                // ResourceManager.findSource storage fallback.
+                baseBitmap = loadPsbBitmap(*_player->_activeMotion, key);
+                if(LOGGER) {
+                    LOGGER->info(
+                        "PRTDIAG SourceCache::ensure psbFirst path='{}' key='{}' hit={} size={}x{}",
+                        _player->_activeMotion->path, key,
+                        baseBitmap ? 1 : 0,
+                        baseBitmap ? baseBitmap->GetWidth() : 0,
+                        baseBitmap ? baseBitmap->GetHeight() : 0);
+                }
+                detail::logoChainTraceLogf(
+                    _player->_activeMotion->path,
+                    "sourceCache.ensure.psbFirst", "0x6948E8",
+                    _player->_clampedEvalTime,
+                    "key='{}' hit={} size={}x{}", key, baseBitmap ? 1 : 0,
+                    baseBitmap ? baseBitmap->GetWidth() : 0,
+                    baseBitmap ? baseBitmap->GetHeight() : 0);
+            }
+            if(!baseBitmap) {
+                const auto path = resolveMotionSourcePathLike_0x6948E8(
+                    *_player->_activeMotion, key);
+                baseBitmap = loadGraphicBitmap(path);
+                if((key.find("yuzu") != std::string::npos ||
+                    key.find("logo") != std::string::npos) &&
+                   LOGGER) {
+                    LOGGER->info(
+                        "PRTDIAG SourceCache::ensure storageFallback path='{}' key='{}' storage='{}' hit={} size={}x{}",
+                        _player->_activeMotion->path, key,
+                        detail::narrow(path), baseBitmap ? 1 : 0,
+                        baseBitmap ? baseBitmap->GetWidth() : 0,
+                        baseBitmap ? baseBitmap->GetHeight() : 0);
+                }
+                detail::logoChainTraceLogf(
+                    _player->_activeMotion->path,
+                    "sourceCache.ensure.storageFallback", "0x6948E8",
+                    _player->_clampedEvalTime,
+                    "key='{}' path='{}' hit={} size={}x{}", key,
+                    detail::narrow(path), baseBitmap ? 1 : 0,
+                    baseBitmap ? baseBitmap->GetWidth() : 0,
+                    baseBitmap ? baseBitmap->GetHeight() : 0);
+            }
             if(!baseBitmap) {
                 baseBitmap = loadPsbBitmap(*_player->_activeMotion, key);
+                if((key.find("yuzu") != std::string::npos ||
+                    key.find("logo") != std::string::npos) &&
+                   LOGGER) {
+                    LOGGER->info(
+                        "PRTDIAG SourceCache::ensure psbFallback path='{}' key='{}' hit={} size={}x{}",
+                        _player->_activeMotion->path, key,
+                        baseBitmap ? 1 : 0,
+                        baseBitmap ? baseBitmap->GetWidth() : 0,
+                        baseBitmap ? baseBitmap->GetHeight() : 0);
+                }
+                detail::logoChainTraceLogf(
+                    _player->_activeMotion->path,
+                    "sourceCache.ensure.psbFallback", "0x6948E8",
+                    _player->_clampedEvalTime,
+                    "key='{}' hit={} size={}x{}", key, baseBitmap ? 1 : 0,
+                    baseBitmap ? baseBitmap->GetWidth() : 0,
+                    baseBitmap ? baseBitmap->GetHeight() : 0);
             }
         }
         if(!baseBitmap || baseBitmap->GetWidth() <= 0 ||

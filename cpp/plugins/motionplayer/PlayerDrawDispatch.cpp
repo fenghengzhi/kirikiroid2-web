@@ -4,8 +4,27 @@
 #include "PlayerRenderInternal.h"
 #include "MotionTraceWeb.h"
 #include "ncbind.hpp"
+#include "tjsDebug.h"
 
 using namespace motion::internal;
+
+namespace {
+    std::string joinPlayingLabels(const std::vector<std::string> &labels) {
+        std::string joined;
+        for(const auto &timelineLabel : labels) {
+            if(!joined.empty()) {
+                joined += ",";
+            }
+            joined += timelineLabel;
+        }
+        return joined.empty() ? std::string("<none>") : joined;
+    }
+
+    std::string shortTJSStackTrace(tjs_int limit = 8) {
+        ttstr stack = TJSGetStackTraceString(limit, TJS_W(" <- "));
+        return stack.AsStdString();
+    }
+}
 
 namespace motion {
     tjs_error Player::setDrawAffineTranslateMatrixCompat(
@@ -121,6 +140,13 @@ namespace motion {
                 : std::string{};
         iTJSDispatch2 *paramObj =
             (arg && arg->Type() == tvtObject) ? arg->AsObjectNoAddRef() : nullptr;
+        detail::logoChainTraceLogf(
+            motionPath, "drawCompat.enter", "0x6D5FB8", _clampedEvalTime,
+            "argType={} targetObj={} d3dMode={} allplaying={} playingLabels={} nodes={} stack={}",
+            arg ? static_cast<int>(arg->Type()) : -1,
+            static_cast<const void *>(paramObj), _d3dDrawMode ? 1 : 0,
+            _allplaying ? 1 : 0, joinPlayingLabels(_playingTimelineLabels),
+            _nodes.size(), shortTJSStackTrace());
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::MotionTraceRenderDrawScope renderTrace(this, arg, paramObj);
 #endif

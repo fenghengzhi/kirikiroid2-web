@@ -3,10 +3,37 @@
 //
 #include "PlayerInternal.h"
 #include "ncbind.hpp"
+#include "tjsDebug.h"
 
 using namespace motion::internal;
 
 namespace motion {
+    namespace {
+        bool shouldEmitPlaybackDiag(std::uint32_t seq) {
+            return seq <= 200 || (seq % 100) == 0;
+        }
+
+        const char *boolText(bool v) {
+            return v ? "true" : "false";
+        }
+
+        std::string joinPlayingLabels(const std::vector<std::string> &labels) {
+            std::string joined;
+            for(const auto &timelineLabel : labels) {
+                if(!joined.empty()) {
+                    joined += ",";
+                }
+                joined += timelineLabel;
+            }
+            return joined.empty() ? std::string("<none>") : joined;
+        }
+
+        std::string shortTJSStackTrace(tjs_int limit = 8) {
+            ttstr stack = TJSGetStackTraceString(limit, TJS_W(" <- "));
+            return stack.AsStdString();
+        }
+    }
+
     void Player::skipToSync() {
         for(auto &[_, state] : _timelines) {
             if(state.totalFrames > 0.0) {
@@ -30,7 +57,8 @@ namespace motion {
                 it, _playingTimelineLabels.end());
         }
         _syncWaiting = false;
-        _syncActive = false;
+        // (B) Removed `_syncActive = false`: syncActive(+1093) is script-set only
+        // (writers = ctor 0x6CF11C + setSyncActive 0x6D9698); not cleared here.
         _allplaying = !_playingTimelineLabels.empty();
     }
 
@@ -286,10 +314,32 @@ namespace motion {
     }
 
     bool Player::playMotionLike_0x6B2284(ttstr label, tjs_int flags) {
+        static std::uint32_t s_diagSeq = 0;
+        const auto diagSeq = ++s_diagSeq;
+        const bool emitDiag = shouldEmitPlaybackDiag(diagSeq);
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::playMotionLike enter seq={} this={} label='{}' flags=0x{:x} chara='{}' motionKey='{}' stealth='{}' active={} activePath='{}' timelines={} playingLabels={} allplaying={}",
+                diagSeq, static_cast<const void *>(this),
+                detail::narrow(label), static_cast<unsigned int>(flags),
+                detail::narrow(_chara), detail::narrow(_motionKey),
+                detail::narrow(_stealthMotion), _activeMotion != nullptr,
+                _activeMotion ? _activeMotion->path : std::string("<none>"),
+                _timelines.size(), _playingTimelineLabels.size(),
+                boolText(_allplaying));
+        }
+
         if(!_activeMotion && _project.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
                 activateMotion(*this, snapshot);
                 syncVariableKeysFromActiveMotion();
+                if(emitDiag && LOGGER) {
+                    LOGGER->info(
+                        "PRTDIAG Player::playMotionLike project-activate seq={} this={} activePath='{}'",
+                        diagSeq, static_cast<const void *>(this),
+                        _activeMotion ? _activeMotion->path
+                                      : std::string("<none>"));
+                }
             }
         }
 
@@ -314,8 +364,25 @@ namespace motion {
             resetMotionStateLike_0x6B2D3C();
         }
 
-        ensureMotionLoaded();
+        const auto activeBeforeEnsure = _activeMotion;
+        const bool ensureOk = ensureMotionLoaded();
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::playMotionLike after-ensure seq={} this={} ok={} activeChanged={} activePath='{}' motionKey='{}'",
+                diagSeq, static_cast<const void *>(this), boolText(ensureOk),
+                boolText(activeBeforeEnsure != _activeMotion),
+                _activeMotion ? _activeMotion->path : std::string("<none>"),
+                detail::narrow(_motionKey));
+        }
         commitRequestedMotionLike_0x6B2380();
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::playMotionLike call-init seq={} this={} label='{}' flags=0x{:x} motionKey='{}' active={} sameLabelAfterCommit={}",
+                diagSeq, static_cast<const void *>(this),
+                detail::narrow(label), static_cast<unsigned int>(flags),
+                detail::narrow(_motionKey), _activeMotion != nullptr,
+                boolText(_motionKey == label));
+        }
         initNonEmoteMotionLike_0x6B365C(
             static_cast<std::uint32_t>(flags));
         if(_activeMotion && _timelines.empty()) {
@@ -324,9 +391,30 @@ namespace motion {
         }
 
         if(!label.IsEmpty() && !_activeMotion) {
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::playMotionLike fallback-setMotion seq={} this={} label='{}'",
+                    diagSeq, static_cast<const void *>(this),
+                    detail::narrow(label));
+            }
             setMotion(label);
-            ensureMotionLoaded();
+            const bool fallbackEnsureOk = ensureMotionLoaded();
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::playMotionLike fallback-after-ensure seq={} this={} ok={} activePath='{}' motionKey='{}'",
+                    diagSeq, static_cast<const void *>(this),
+                    boolText(fallbackEnsureOk),
+                    _activeMotion ? _activeMotion->path
+                                  : std::string("<none>"),
+                    detail::narrow(_motionKey));
+            }
             commitRequestedMotionLike_0x6B2380();
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::playMotionLike fallback-call-init seq={} this={} label='{}' flags=0x{:x}",
+                    diagSeq, static_cast<const void *>(this),
+                    detail::narrow(label), static_cast<unsigned int>(flags));
+            }
             initNonEmoteMotionLike_0x6B365C(
                 static_cast<std::uint32_t>(flags));
             if(_activeMotion && _timelines.empty()) {
@@ -393,6 +481,14 @@ namespace motion {
         }
 
         _allplaying = !_playingTimelineLabels.empty();
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::playMotionLike exit seq={} this={} started={} activePath='{}' motionKey='{}' timelines={} playingLabels={} allplaying={}",
+                diagSeq, static_cast<const void *>(this), boolText(started),
+                _activeMotion ? _activeMotion->path : std::string("<none>"),
+                detail::narrow(_motionKey), _timelines.size(),
+                _playingTimelineLabels.size(), boolText(_allplaying));
+        }
         return started;
     }
 
@@ -420,10 +516,34 @@ namespace motion {
             flags = param[1]->AsInteger();
         }
 
+        static std::uint32_t s_playCompatDiagSeq = 0;
+        const auto diagSeq = ++s_playCompatDiagSeq;
+        const bool emitDiag = shouldEmitPlaybackDiag(diagSeq);
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::playCompat enter seq={} this={} label='{}' flags=0x{:x} chara='{}' motionKey='{}' active={} activePath='{}' timelines={} playingLabels={} allplaying={}",
+                diagSeq, static_cast<const void *>(self),
+                detail::narrow(label), static_cast<unsigned int>(flags),
+                detail::narrow(self->_chara),
+                detail::narrow(self->_motionKey),
+                self->_activeMotion != nullptr,
+                self->_activeMotion ? self->_activeMotion->path
+                                    : std::string("<none>"),
+                self->_timelines.size(), self->_playingTimelineLabels.size(),
+                boolText(self->_allplaying));
+        }
+
         if(!self->_activeMotion && self->_project.Type() == tvtObject) {
             if(const auto snapshot = detail::lookupModuleSnapshot(self->_project)) {
                 activateMotion(*self, snapshot);
                 self->syncVariableKeysFromActiveMotion();
+                if(emitDiag && LOGGER) {
+                    LOGGER->info(
+                        "PRTDIAG Player::playCompat project-activate seq={} this={} activePath='{}'",
+                        diagSeq, static_cast<const void *>(self),
+                        self->_activeMotion ? self->_activeMotion->path
+                                            : std::string("<none>"));
+                }
             }
         }
 
@@ -446,8 +566,27 @@ namespace motion {
         // synchronously calls Player_buildNodeTree (0x6B51F0) and
         // Player_initVariables (0x6CD750) before setting any playing state.
         // No lazy gate exists in the binary.
-        self->ensureMotionLoaded();
+        const auto activeBeforeEnsure = self->_activeMotion;
+        const bool ensureOk = self->ensureMotionLoaded();
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::playCompat after-ensure seq={} this={} ok={} activeChanged={} activePath='{}' motionKey='{}'",
+                diagSeq, static_cast<const void *>(self), boolText(ensureOk),
+                boolText(activeBeforeEnsure != self->_activeMotion),
+                self->_activeMotion ? self->_activeMotion->path
+                                    : std::string("<none>"),
+                detail::narrow(self->_motionKey));
+        }
         commitRequestedMotionLike_0x6B2380();
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::playCompat call-init seq={} this={} label='{}' flags=0x{:x} motionKey='{}' active={} sameLabelAfterCommit={}",
+                diagSeq, static_cast<const void *>(self),
+                detail::narrow(label), static_cast<unsigned int>(flags),
+                detail::narrow(self->_motionKey),
+                self->_activeMotion != nullptr,
+                boolText(self->_motionKey == label));
+        }
         self->initNonEmoteMotionLike_0x6B365C(
             static_cast<std::uint32_t>(flags));
         if(self->_activeMotion && self->_timelines.empty()) {
@@ -456,9 +595,30 @@ namespace motion {
         }
 
         if(!label.IsEmpty() && !self->_activeMotion) {
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::playCompat fallback-setMotion seq={} this={} label='{}'",
+                    diagSeq, static_cast<const void *>(self),
+                    detail::narrow(label));
+            }
             self->setMotion(label);
-            self->ensureMotionLoaded();
+            const bool fallbackEnsureOk = self->ensureMotionLoaded();
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::playCompat fallback-after-ensure seq={} this={} ok={} activePath='{}' motionKey='{}'",
+                    diagSeq, static_cast<const void *>(self),
+                    boolText(fallbackEnsureOk),
+                    self->_activeMotion ? self->_activeMotion->path
+                                        : std::string("<none>"),
+                    detail::narrow(self->_motionKey));
+            }
             commitRequestedMotionLike_0x6B2380();
+            if(emitDiag && LOGGER) {
+                LOGGER->info(
+                    "PRTDIAG Player::playCompat fallback-call-init seq={} this={} label='{}' flags=0x{:x}",
+                    diagSeq, static_cast<const void *>(self),
+                    detail::narrow(label), static_cast<unsigned int>(flags));
+            }
             self->initNonEmoteMotionLike_0x6B365C(
                 static_cast<std::uint32_t>(flags));
             if(self->_activeMotion && self->_timelines.empty()) {
@@ -539,24 +699,27 @@ namespace motion {
         }
 
         self->_allplaying = !self->_playingTimelineLabels.empty();
+        if(emitDiag && LOGGER) {
+            LOGGER->info(
+                "PRTDIAG Player::playCompat exit seq={} this={} started={} activePath='{}' motionKey='{}' timelines={} playingLabels={} allplaying={}",
+                diagSeq, static_cast<const void *>(self), boolText(started),
+                self->_activeMotion ? self->_activeMotion->path
+                                    : std::string("<none>"),
+                detail::narrow(self->_motionKey), self->_timelines.size(),
+                self->_playingTimelineLabels.size(),
+                boolText(self->_allplaying));
+        }
 
         if(self->_activeMotion &&
            detail::logoChainTraceEnabled(self->_activeMotion)) {
-            std::string playingLabels;
-            for(const auto &timelineLabel : self->_playingTimelineLabels) {
-                if(!playingLabels.empty()) {
-                    playingLabels += ",";
-                }
-                playingLabels += timelineLabel;
-            }
             detail::logoChainTraceLogf(
                 self->_activeMotion->path, "playCompat", "0x6B2284",
                 self->_clampedEvalTime,
-                "label={} flags={} started={} timelineCount={} playingLabels={} allplaying={}",
+                "label={} flags={} started={} timelineCount={} playingLabels={} allplaying={} stack={}",
                 detail::narrow(label), flags, started ? 1 : 0,
                 self->_timelines.size(),
-                playingLabels.empty() ? std::string("<none>") : playingLabels,
-                self->_allplaying ? 1 : 0);
+                joinPlayingLabels(self->_playingTimelineLabels),
+                self->_allplaying ? 1 : 0, shortTJSStackTrace());
         }
 
         if(result) {
@@ -591,6 +754,16 @@ namespace motion {
         // Binary simply clears the Player-level playing flag (player+1099).
         // Timeline state is left intact; TJS polls `playing` for edge-triggered
         // stop detection and may still inspect the final motion pose afterward.
+        if(self->_activeMotion &&
+           detail::logoChainTraceEnabled(self->_activeMotion)) {
+            detail::logoChainTraceLogf(
+                self->_activeMotion->path, "stopCompat", "0x6D9A30",
+                self->_clampedEvalTime,
+                "numparams={} playingLabelsBefore={} allplayingBefore={} timelineCount={} stack={}",
+                numparams, joinPlayingLabels(self->_playingTimelineLabels),
+                self->_allplaying ? 1 : 0, self->_timelines.size(),
+                shortTJSStackTrace());
+        }
         self->_allplaying = false;
 
         if(result) {

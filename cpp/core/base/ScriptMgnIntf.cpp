@@ -54,6 +54,67 @@
 #include "Platform.h"
 #include "ConfigManager/LocaleConfigManager.h"
 
+#include <algorithm>
+#include <cctype>
+#include <string>
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
+
+namespace {
+    bool TVPScriptLogoTraceEnabled() {
+#ifdef EMSCRIPTEN
+        return EM_ASM_INT({
+            try {
+                if(typeof window !== 'undefined' &&
+                   window.__KRKR_TRACE_LOGO_CHAIN__) {
+                    return 1;
+                }
+                const params = new URLSearchParams(window.location.search);
+                const traceParam = params.get('trace') || "";
+                return params.has('traceLogoChain') ||
+                    traceParam === 'logo' ||
+                    traceParam === 'logo-chain' ||
+                    traceParam === '1';
+            } catch(e) {
+                return 0;
+            }
+        }) != 0;
+#else
+        return false;
+#endif
+    }
+
+    std::string TVPScriptTraceLower(std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                       });
+        return value;
+    }
+
+    bool TVPScriptTraceInteresting(const ttstr &name) {
+        const auto lower = TVPScriptTraceLower(name.AsStdString());
+        return lower.find("yuzulogo") != std::string::npos ||
+            lower.find("m2logo") != std::string::npos ||
+            lower.find("motion_") != std::string::npos ||
+            lower.find("affinesourcemotion") != std::string::npos ||
+            lower.find("gfx_motion") != std::string::npos ||
+            lower.find("genericflip") != std::string::npos;
+    }
+
+    void TVPScriptTrace(const char *stage, const ttstr &name,
+                        const ttstr &detail = ttstr()) {
+        if(!TVPScriptLogoTraceEnabled() || !TVPScriptTraceInteresting(name))
+            return;
+        if(auto logger = spdlog::get("core")) {
+            logger->warn("SCHAIN stage={} name='{}' detail='{}'",
+                         stage ? stage : "", name.AsStdString(),
+                         detail.AsStdString());
+        }
+    }
+}
+
 //---------------------------------------------------------------------------
 // Script system initialization script
 //---------------------------------------------------------------------------
@@ -715,6 +776,9 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
     // execute storage which contains script
     if(!TVPScriptEngine)
         TVPThrowInternalError;
+    TVPScriptTrace("script.executeStorage.request", name,
+                   isexpression ? ttstr(TJS_W("expression"))
+                                : ttstr(TJS_W("script")));
 
     // Diagnostic: track key script loading
     {
@@ -758,6 +822,7 @@ void TVPExecuteStorage(const ttstr &name, iTJSDispatch2 *context,
 
     { // for bytecode
         ttstr place(TVPSearchPlacedPath(name));
+        TVPScriptTrace("script.executeStorage.placed", name, place);
         ttstr shortname(TVPExtractStorageName(place));
         std::unique_ptr<tTJSBinaryStream> stream{ TVPCreateBinaryStreamForRead(
             place, modestr) };

@@ -158,8 +158,12 @@ namespace motion {
         void setPriorDraw(double v) { _priorDraw = v; }
         double getPriorDraw() const { return _priorDraw; }
 
-        void setFrameLastTime(double v) { _frameLastTime = v; }
-        double getFrameLastTime() const { return _frameLastTime; }
+        // (A2) Script property `frameLastTime` (RO) = player+1128 = motion
+        // ["lastTime"]. Binary getter Player_getFrameLastTime@0x6D97A4 is
+        // `LDR D0,[X0,#0x468]` (=+1128); +1128 is set once from motion["lastTime"]
+        // by initNonEmoteMotion@0x6B372C (paired with +1136=motion["loopTime"]),
+        // i.e. the port's _cachedTotalFrames. No setter (binary is RO).
+        double getFrameLastTime() const { return _cachedTotalFrames; }
 
         void setProgressCompat(double v);
         double getProgressCompat() const;
@@ -256,9 +260,9 @@ namespace motion {
         // NCB "speed" property = binary +1168 double speed multiplier (getter
         // sub_6D967C `return *(double*)(this+1168)`, bound to L"speed" @0x6d7308)
         // = local _speedMul, which already drives _deltaTime = _speedMul*dt. It
-        // is NOT the +1093 bool gate _speed (separate play/pause flag). Was
-        // mis-wired to the bool _speed; the IDB getter symbol is off-by-one
-        // mislabeled (Player_getMeshDivisionRatio).
+        // is NOT the +1093 bool gate (that is _syncActive — the align/sync gate;
+        // there is no separate "speed flag" field). A prior IDB getter symbol
+        // was off-by-one mislabeled (Player_getMeshDivisionRatio).
         void setSpeed(double v) { _speedMul = v; }
         double getSpeed() const { return _speedMul; }
 
@@ -960,7 +964,7 @@ namespace motion {
         // 砖5/洞3: faithful layer (motion["tag"]) event stream — bidirectional
         // incremental cursor seek toward targetTime (= _clampedEvalTime), porting
         // the layer-stream loops of Player_advanceRootAndNodes (0x6B6ADC) +
-        // Player_rewindRootAndNodes (0x6B9A3C): fires +1093(_speed)-gated
+        // Player_rewindRootAndNodes (0x6B9A3C): fires +1093(_syncActive)-gated
         // align/sync (with frameTickCount/clampedEvalTime snapping) and ungated
         // action -> onAction(void, actionName)/onSync(). Replaces the
         // port-invented per-timeline scanLayerActions.
@@ -1159,7 +1163,15 @@ namespace motion {
         // libkrkr2.so +1160: double. ctor (0x6CED30) a1[145]=0x3FF8000000000000=1.5;
         // getter sub_6D965C reads *(player+1160).
         double _priorDraw = 1.5;
-        double _frameLastTime = 0.0;
+        // (A1+A2, DONE) REMOVED `double _frameLastTime` (had been mapped to the
+        // dead player+904(0x388) — only Player_ctor zeroes it, no other access in
+        // the whole Player domain). It had conflated two unrelated concepts, both
+        // now fixed: (A1) the internal per-frame dt is +592=_deltaTime=speedMul·dt
+        // (the sole dt field; consumers repointed); (A2) the script property
+        // `frameLastTime` (RO) is +1128=motion["lastTime"] = _cachedTotalFrames
+        // (getter Player_getFrameLastTime@0x6D97A4 reads +0x468; set once by
+        // initNonEmoteMotion@0x6B372C) — getFrameLastTime() now returns that, the
+        // setter is gone (binary RO), and the progress-entry write is deleted.
         double _clampedEvalTime = 0.0; // player+456: min(_frameTickCount, totalFrames)
         double _loopTime = 0.0;    // player+1136
         double _cachedTotalFrames = 0.0; // player+1128: cached max totalFrames across timelines
@@ -1170,7 +1182,15 @@ namespace motion {
         tTJSVariant _variableKeys;
         bool _allplaying = false;
         bool _syncWaiting = false;
-        bool _syncActive = false;
+        // syncActive = player+1093 (script property `syncActive`, RO/RW getter
+        // 0x6D968C / setter 0x6D9694). Binary ctor 0x6CF11C inits it from the
+        // static default — `LDRB W9,[byte_1AB84A8]; STRB W9,[X19,#0x445]` =
+        // s_defaultSyncActive (true). Script-set only; the progress path only
+        // READS it as a gate in the advance/rewind/reseek cursor steppers
+        // (DECLARED-ONLY in the port → those gate-reads are deferred with those
+        // functions). progress_inner never writes it (verified: +0x445 has
+        // exactly two writers binary-wide — ctor + setSyncActive).
+        bool _syncActive = s_defaultSyncActive;
         bool _hasCamera = false;
         bool _cameraActive = false;
         bool _stereovisionActive = false;
@@ -1187,11 +1207,12 @@ namespace motion {
         double _cameraAngle = 0.0;
         double _cameraPosX = 0, _cameraPosY = 0, _cameraPosZ = 0;
         double _cameraTargetX = 0, _cameraTargetY = 0, _cameraTargetZ = 0;
-        bool _speed = true;           // Aligned to libkrkr2.so +1093: bool flag
-                                      //   (NOTE: +1093 is NOT the speed
-                                      //   multiplier — that is _speedMul@+1168
-                                      //   below. progress_inner @0x6C106C reads
-                                      //   the multiplier from +1168, not +1093.)
+        // (C) REMOVED `bool _speed` (was mismapped to +1093). +1093 is
+        // syncActive's backing field (see _syncActive above); a prior IDB
+        // session had misnamed its accessors getSpeedFlag/setSpeedFlag
+        // (Player-table off-by-one), which had leaked into this field. The real
+        // script `speed` property (main.cpp:281) backs onto _speedMul@+1168 via
+        // getSpeed/setSpeed — there is no separate "speed flag" field.
         double _frameTickCount = 0.0;
         // Binary Player+912: pixelateDivision, default 100 (cluster E §1 ctor).
         // Port previously misplaced as D3DEmoteModule static with default 1.

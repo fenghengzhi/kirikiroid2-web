@@ -943,7 +943,11 @@ class NativeMotionStageTracer:
             "playing": sb_bool(sb_child_optional(player, "_allplaying"), None),
             "currentTime": sb_float(sb_child_optional(player, "_clampedEvalTime")),
             "frameTickCount": sb_float(sb_child_optional(player, "_frameTickCount")),
-            "frameLastTime": sb_float(sb_child_optional(player, "_frameLastTime")),
+            # (A2) frameLastTime = player+1128 = motion["lastTime"]. The .so oracle
+            # reads readDouble(player, 1128) (frida_motion_stage_agent.js); the port
+            # field for +1128 is _cachedTotalFrames. (Was _frameLastTime — the dead
+            # +904 raw-dt field, a port/oracle semantic mismatch now fixed.)
+            "frameLastTime": sb_float(sb_child_optional(player, "_cachedTotalFrames")),
         }
         return overview
 
