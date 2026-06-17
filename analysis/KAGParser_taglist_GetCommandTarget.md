@@ -89,7 +89,45 @@ if (elm["class"]!==void || elm.init!==void || isExistEnvObject("ev")) {   // "ev
 - 每轮 parse loop 顶部 clear DicObj 的同时 clear TagList（0x562308 一带，与 DicClear 成对）。
 - **每次往 DicObj 写一个成员 → 同步 `TagList.add(键名字符串)`**（add 站点 0x567e08/0x562eac/0x562f40/0x563384/0x562c64/0x562cf4/0x564280/0x563c70，objthis 全为 `*(parser+24)`，add 的值是 `v948` = 键名 ttstr）。
 - 返回前 `sub_568F88(parser+16)` 设 `DicObj.taglist = TagList`（0x567e14/0x567e20/0x564c10）。
-- 例外（未复刻、已标注缺口）：宏全量展开 `[tag *]`（本地 KAGParser.cpp 的 `DicAssign` 路径）下，.so 改用 `TJSCreateArrayObject @0x5672dc` 枚举 DicObj 成员重建 taglist；本次只复刻主增量机制，宏-* 路径 taglist 暂留旧值（罕见路径，注释/此处标注）。
+- 宏全量展开 `[tag *]` 路径（**已复刻，见 §3.6**）：sub_561F3C @0x564080 枚举宏参数字典、跳过 `"tagname"`、逐个 `PropSet(DicObj)+Array.add(TagList)`。
+
+### MacroArgs 容器结构（2026-06-17 复刻，KAGParserExb.cpp）
+- MacroArgs = `std::vector<std::pair<values-dict, names-array>>`（`.so` 16B 元素：+0=first=values-dict、+8=second=names-array；base=parser+56/+48，depth=parser+80/+72，两组函数 dispatch 偏移差 8B 为同一 depth 字段）。first 是宏实参字典，second 是按源码顺序记录的属性名 Array（与 DicObj/TagList 同构）。
+- Push（sub_561F3C @0x5666c0 → sub_569A18 新建 / sub_5698BC 复用）：push 源 {DicObj@+16, TagList@+24}。Dictionary.assign(qword_1AB3C00=本地 DicAssign) 深拷 DicObj→first；Array.assign(qword_1AB3C10=本地新增 ArrayAssign，末参 clear=1) 深拷 TagList→second。size>depth 复用残留对象，否则新建 dict/array + push_back，depth++。
+- Clear（clear sub_55C414 @0x55C4AC）：每元素 first+second 双 Release（vtable+8），end=begin，depth=0。
+- Pop（sub_55EFD8 @0x55EFD8）：depth==0 抛异常，否则 depth--。
+- GetMacroTopNoAddRef（getter @0x55FAEC/@0x55FBF4）：depth==0→null，否则返回 element[depth-1].**first**（+0=values-dict，不是 second）。
+- Store（@0x54A688 段 @0x54A918 → serializeMacroArg @0x54B09C）：每槽序列化成扁平数组 [k0,v0,k1,v1,...]，key 取自 second(names-array) PropGetByNum 有序遍历，value=first.PropGet(key)，Array.push(qword_1AB27E0=本地新增 ArrayPush)(key,value) 一次追加两元素。上界=MacroArgStackDepth。**save 格式包含 names-array**（second 顺序决定 save 内容/顺序）。
+- Restore（@0x54BB80 段 @0x54BCA0 → construct_from_saved @0x54EFDC + addPair @0x54F120）：每个保存扁平数组→new {Dict,Array}，对每对 (i,i+1)：first.PropSet(key,value)(flag 512)+second.push(key)。second 由保存 key 序列重填，**非空**（旧实现"只存单 dict、load 从 dict 重新枚举"已纠正）。
+- Copy（operator= → MacroArg_copy @0x54ED08）：每元素 first=new Dict+Dict.assign(ref.first)，second=new Array+Array.assign(ref.second, clear=1)，两字段都拷贝。
+
+## 3.6 宏 `*`（转发全部参数）路径的 taglist（已修，原 [P1]）
+
+### 反编译（sub_561F3C @0x564080–0x5642c0，`*` 分支 v256==42）
+```
+count = sub_98B034(macroTopDict)              // 宏参数字典成员数
+for idx in [0, count):
+    key = macroTopDict.PropGetByNum(idx)       // vtable+40 取键名(@0x5640b0)
+    value = macroTopDict.PropGet(key)          // vtable+32(@0x5640cc)
+    if (key != "tagname"):                     // @0x5641a8 wcscmp L"tagname"
+        DicObj.PropSetByVS(MEMBERENSURE,key,value)  // *(a1+16)=DicObj(@0x564208)
+        TagList.add(key)                            // qword_1AB3C18→*(a1+24)(@0x564280)
+```
+- 关键：`.so` **不用 bulk assign**；它显式枚举、跳过 tagname、逐成员 PropSet+add。跳过 tagname 使当前标签自身的 tagname（属性循环前已存）不被宏的 tagname 覆盖，故 `.so` 此路径**无** re-set tagname。
+- vtable 偏移核对：+32=PropGet、+40=PropGetByNum、+80=PropSetByVS（与 iTJSDispatch2 方法序一致，FuncCall 前有 2 个基类虚槽）。
+
+### 旧本地实现的两个缺陷（均已修）
+1. 用 `DicAssign->FuncCall`（bulk copy）+ 随后 re-set tagname —— 架构偏离 `.so`；
+2. bulk copy 把 class/file/zorder 等灌入 DicObj 但**不进 TagList** → `elm.taglist.count` 仍为 1 → KAGEnvironment.tjs:2571 `count>1` 门失败。实测脚本：`macro.ks:47` 的 `[mono_base *]`（宏体 `[mono_base class=event file=sea_bg zorder=40]`），转发后 `elm["class"]="event"` 为真但 count==1 → getCommandTarget 返回 null → 事件对象不注册。
+
+### 本地实现（cpp/core/base/KAGParser.cpp `*` 分支）—— 已忠实复刻为 names-array PropGetByNum 枚举（2026-06-17）
+- 【纠正】早期版本用匿名 `tKAGMacroAllCallback : public tTJSDispatch` + `EnumMembers(values-dict)` 作平台边界替代，并标注"本地 MacroArgs 是单 dict 未复刻 16B 结构、枚举顺序 hash 序"。**该平台边界已被 MacroArgs 容器复刻消除**：现在 MacroArgs 是 `std::vector<std::pair<values-dict, names-array>>`（16B 配对），`*` 分支按 `.so` @0x564080 复刻——`names=element[depth-1].second; cnt=names.count; for idx: key=names.PropGetByNum(idx); if key!="tagname": value=first.PropGet(key); DicObj.PropSetByVS(MEMBERENSURE,key,value); TagList.add(key)`。枚举顺序现为 names-array 的源码插入序（与 `.so` 一致），不再是 dict hash 序。`tKAGMacroAllCallback` 回调已删除。
+- DicObj.PropSetByVS 的 flag 是单 `TJS_MEMBERENSURE`（512，`.so` @0x564208），**不带** IGNOREPROP（早期 EnumMembers 版误加，已纠正）。
+
+### 验证
+- `cmake --build out/web/debug` 通过。
+- 无回归：dracu_boot trace 重跑，yuzulogo 仍 `autopath ...result=1` 加载、`getCommandTarget("ev")` 仍返回非 null。
+- 缺口：`[mono_base *]` 等 mono 宏属 scenario 级，dracu_boot 精简启动包不经过 → 该 `*` 路径**无现成 fixture 触发**（按 CLAUDE.md 不从零造 fixture，依赖 .so 证据 + 构建 + 无回归 + 此标注）。
 
 ### 本地实装（cpp/core/base/KAGParser.{h,cpp}）
 - 新增成员 `TagList`/`TagListClear`/`TagListAdd`；ctor 中 `TJSCreateArrayObject(&arrayclass)` 并取 "clear"/"add"，Invalidate 释放。
