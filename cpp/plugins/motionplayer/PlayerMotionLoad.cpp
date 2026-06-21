@@ -94,8 +94,13 @@ namespace motion {
         } else {
             if(_project.Type() == tvtObject) {
                 if(const auto projectSnapshot = detail::lookupModuleSnapshot(_project)) {
-                    if(projectSnapshot->clipIndexByLabel.find(motionRaw) !=
-                       projectSnapshot->clipIndexByLabel.end()) {
+                    // Presence check scoped to (chara, motion). Aligned to
+                    // libkrkr2.so Player_loadMotion (0x6B0F10): a motion is
+                    // resolved by "motion/<chara>/<motion>", so the project
+                    // snapshot must contain THIS chara's same-named motion, not
+                    // merely any object's. findClipIndex falls back to
+                    // label-only for single-owner snapshots / empty chara.
+                    if(projectSnapshot->findClipIndex(charaRaw, motionRaw) >= 0) {
                         snapshot = projectSnapshot;
                         if(emitDiag && LOGGER) {
                             LOGGER->info(
@@ -374,11 +379,22 @@ namespace motion {
         resetNodeTreeForBuildLike_0x6B56F8();
 
         std::string clipLabel;
+        std::string clipOwner;
         const auto *clip =
             _activeClip != nullptr ? _activeClip
                                             : selectActiveClip();
         if(clip != nullptr) {
             clipLabel = clip->label;
+            // owner = the chara/object that owns this clip. The clip was
+            // already selected owner-scoped (selectActiveClip via _chara), so
+            // pass its owner through to keep the free buildNodeTree resolving
+            // the SAME (owner, label) clip — never a same-named clip from a
+            // different object. Aligned to libkrkr2.so Player_loadMotion
+            // (0x6B0F10) "motion/<chara>/<motion>" navigation.
+            clipOwner = clip->owner;
+        }
+        if(clipOwner.empty()) {
+            clipOwner = detail::narrow(_chara);
         }
 
         if(emitDiag && LOGGER) {
@@ -409,7 +425,7 @@ namespace motion {
         }
 
         detail::buildNodeTree(
-            *this, *_activeMotion, clipLabel,
+            *this, *_activeMotion, clipOwner, clipLabel,
             _preview);  // binary buildNodeTree (0x6B43A4) gates on +1092 (preview)
 
         if(emitDiag && LOGGER) {

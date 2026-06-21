@@ -47,6 +47,7 @@ namespace motion {
 
         void buildNodeTree(motion::Player &player,
                            const MotionSnapshot &snapshot,
+                           const std::string &clipOwner,
                            const std::string &clipLabel,
                            int parentPreview);
     }
@@ -580,6 +581,7 @@ namespace motion {
         void setParentPlayerLike_0x6B1ABC(Player *parentPlayer) {
             _parentPlayer = parentPlayer;
         }
+        Player *parentPlayerForDiag() const { return _parentPlayer; }  // CREATESITE (temp)
         // Aligned to libkrkr2.so 0x681CAC: motion property as raw callback
         // so we have objthis to call onFindMotion TJS callback.
         static tjs_error setMotionCompat(tTJSVariant *result, tjs_int numparams,
@@ -784,6 +786,7 @@ namespace motion {
         void initVariables();
         friend void detail::buildNodeTree(motion::Player &player,
                                           const detail::MotionSnapshot &snapshot,
+                                          const std::string &clipOwner,
                                           const std::string &clipLabel,
                                           int parentPreview);
         friend void detail::ensureRootNodeLike_0x6CED30(motion::Player &);

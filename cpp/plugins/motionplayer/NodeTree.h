@@ -30,6 +30,7 @@ namespace motion::detail {
     void buildNodeTree(
         motion::Player &player,
         const MotionSnapshot &snapshot,
+        const std::string &clipOwner,
         const std::string &clipLabel,
         int parentPreview = 0);
 

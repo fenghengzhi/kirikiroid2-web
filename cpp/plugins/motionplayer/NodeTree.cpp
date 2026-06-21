@@ -5,6 +5,8 @@
 
 #include "NodeTree.h"
 #include "MotionNode.h"
+#include <atomic>  // CREATESITE (temp)
+#include <cstdio>  // CREATESITE (temp)
 #include "RuntimeSupport.h"
 #include "Player.h"
 #include "PlayerInternal.h"
@@ -260,6 +262,43 @@ namespace motion::detail {
                 //   child+8=parent link is set right after by
                 //   inheritChildPlayerStateLike_0x6B3C78 (binary 0x6b43dc).
                 using PlayerAdaptor = ncbInstanceAdaptor<Player>;
+                // CREATESITE (temp): log nodeType=3 child creation structure —
+                // parent motion path + this node's label — to expose recursion/
+                // cycle explosion (repeated path/label = re-expansion).
+                {
+                    static std::atomic<long> s_nt3Create{0};
+                    long n = ++s_nt3Create;
+                    if(n <= 80 || (n >= 10000 && n <= 10060) || n % 2000 == 0) {
+                        // CREATESITE (temp): walk FULL parent chain to the cascade
+                        // ROOT (until parentPlayerForDiag()==null), capturing the
+                        // root chara + total depth + root pointer. Pins whether the
+                        // leak is one ever-deepening chain (root frozen, +1/frame)
+                        // or many shallow cascades off a repeatedly-rebuilt root.
+                        std::string chain;
+                        motion::Player *root = &player;
+                        int depth = 0;
+                        {
+                            motion::Player *p = &player;
+                            for(; p && depth < 4000; ++depth) {
+                                if(depth < 10) {
+                                    if(depth) chain += " <- ";
+                                    chain += motion::detail::narrow(p->getChara());
+                                }
+                                root = p;
+                                p = p->parentPlayerForDiag();
+                            }
+                        }
+                        std::fprintf(stderr,
+                            "CREATESITE n=%ld childLabel='%s' nodeIdx=%d depth=%d "
+                            "rootChara='%s' rootPtr=%p chain='%s'\n",
+                            n,
+                            node.layerName.empty() ? "<none>"
+                                                   : node.layerName.c_str(),
+                            node.index, depth,
+                            motion::detail::narrow(root->getChara()).c_str(),
+                            (void *)root, chain.c_str());
+                    }
+                }
                 auto *childNative = new Player(player.getResourceManager());
                 if (auto *dispatch = PlayerAdaptor::CreateAdaptor(childNative)) {
                     node.childPlayerVar = tTJSVariant(dispatch, dispatch);
@@ -297,6 +336,7 @@ namespace motion::detail {
     void buildNodeTree(
         motion::Player &player,
         const MotionSnapshot &snapshot,
+        const std::string &clipOwner,
         const std::string &clipLabel,
         int parentPreview) {
 
@@ -312,12 +352,14 @@ namespace motion::detail {
             = nullptr;
 
         if (!clipLabel.empty()) {
-            auto it = snapshot.clipIndexByLabel.find(clipLabel);
-            if (it != snapshot.clipIndexByLabel.end()) {
-                const int idx = it->second;
-                if (idx >= 0 && idx < static_cast<int>(snapshot.clipList.size())) {
-                    layerList = &snapshot.clipList[idx].layerList;
-                }
+            // Resolve by (owner, label). Aligned to libkrkr2.so Player_loadMotion
+            // (0x6B0F10) navigating "motion/<chara>/<motion>": the chara (owner)
+            // scopes which object's same-named clip supplies the layer[] array,
+            // so two objects sharing a motion name (title.psb char/show vs
+            // TITLE/show) build disjoint node trees instead of a merged one.
+            const int idx = snapshot.findClipIndex(clipOwner, clipLabel);
+            if (idx >= 0 && idx < static_cast<int>(snapshot.clipList.size())) {
+                layerList = &snapshot.clipList[idx].layerList;
             }
         }
 

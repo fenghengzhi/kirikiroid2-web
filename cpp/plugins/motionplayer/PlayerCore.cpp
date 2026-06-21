@@ -1021,14 +1021,17 @@ namespace motion {
         }
 
         const auto &motion = *_activeMotion;
+        // Resolve clips by (owner, label) where owner = this player's chara.
+        // Aligned to libkrkr2.so Player_loadMotion (0x6B0F10): the binary
+        // navigates "motion/<chara>/<motion>", so the current chara (Player+968,
+        // local _chara) scopes which object's same-named motion is selected.
+        // Falls back to label-only inside findClipIndex for single-owner
+        // snapshots / empty chara.
+        const auto owner = detail::narrow(_chara);
         const auto selectByLabel =
-            [&motion](const std::string &label) -> const detail::MotionClip * {
-                if(label.empty()) {
-                    return nullptr;
-                }
-                const auto it = motion.clipIndexByLabel.find(label);
-                if(it == motion.clipIndexByLabel.end()) return nullptr;
-                const int idx = it->second;
+            [&motion, &owner](const std::string &label)
+                -> const detail::MotionClip * {
+                const int idx = motion.findClipIndex(owner, label);
                 if(idx < 0 || idx >= static_cast<int>(motion.clipList.size()))
                     return nullptr;
                 return &motion.clipList[idx];

@@ -202,7 +202,47 @@ namespace motion::detail {
         // auxiliary label→index map below resolves name-based lookups using
         // last-wins semantics to mirror Player+24 labelMap behaviour.
         std::vector<MotionClip> clipList;
+        // Clip lookup keyed by (owner, label).
+        //
+        // Aligned to libkrkr2.so Player_loadMotion (0x6B0F10): the binary
+        // navigates the PSB tree by the path segment "motion/<chara>/<motion>",
+        // where the first segment after "motion/" is the owner (chara) name
+        // (sub_A0CC68 "motion/"+chara @0x6B1308, then +"*/"+motion @0x6B1380).
+        // Two objects in one PSB file that share a motion name (e.g. title.psb
+        // char/show vs TITLE/show) resolve to DIFFERENT subtrees and therefore
+        // DIFFERENT layer[] arrays — they are never merged. The port snapshot is
+        // a flattened file-level cache, so the owner (chara) segment is folded
+        // into the clip key to reproduce that per-chara isolation. Keying by
+        // bare label would collide same-name motions across objects and merge
+        // their layerLists (the DRACU title self-reference recursion bug).
+        std::map<std::pair<std::string, std::string>, int> clipIndexByOwnerLabel;
+        // Auxiliary label-only fallback index (last-wins), used ONLY after the
+        // owner-scoped lookup fails — mirrors the binary's per-tree label->index
+        // map (Player+24, built in Player_buildNodeTree_recursive @0x6B4CE4 with
+        // last-wins lowerBoundInsert). Lets single-owner snapshots and consumers
+        // that cannot determine the owner still resolve by motion name.
         std::unordered_map<std::string, int> clipIndexByLabel;
+
+        // Resolve a clip index for (owner, label): owner-scoped first, then
+        // label-only fallback. Returns -1 when no clip matches.
+        int findClipIndex(const std::string &owner,
+                          const std::string &label) const {
+            if(label.empty()) {
+                return -1;
+            }
+            if(!owner.empty()) {
+                const auto it =
+                    clipIndexByOwnerLabel.find(std::make_pair(owner, label));
+                if(it != clipIndexByOwnerLabel.end()) {
+                    return it->second;
+                }
+            }
+            const auto fb = clipIndexByLabel.find(label);
+            if(fb != clipIndexByLabel.end()) {
+                return fb->second;
+            }
+            return -1;
+        }
         // Layer event stream (global onAction/onSync source).
         // Aligned to libkrkr2.so Player+1072 = motion["tag"] (written by
         // Player_initNonEmoteMotion @0x6B3778). The binary's

@@ -963,22 +963,37 @@ namespace motion::detail {
                 return;
             }
 
-            // Aligned to libkrkr2.so Player+548 priority[] ordering:
-            // store each motion/priority entry by PSB array index (duplicate
-            // labels preserved) with auxiliary label→index map resolving via
-            // last-wins to mirror the binary's labelMap semantics.
-            auto existingIt = snapshot.clipIndexByLabel.find(label);
+            // owner = the "object/<owner>/motion/<label>" segment, i.e. the
+            // chara name. Aligned to libkrkr2.so Player_loadMotion (0x6B0F10):
+            // motion content is navigated by "motion/<chara>/<motion>", so a
+            // clip is uniquely identified by (owner, label), NOT label alone.
+            const auto owner = path[path.size() - 3];
+
+            // Dedup/reuse the clip slot by (owner, label) — NOT by bare label.
+            // This is the fix for the DRACU title-screen recursion: two objects
+            // in title.psb (char + TITLE) each define a motion named "show";
+            // keying by label alone reused one clip slot and merged both
+            // objects' layer[] arrays (38 nodes incl. a TITLE type-3 bg that
+            // self-references motion/char/show → infinite childMotion
+            // recursion). With (owner, label) keys, char/show and TITLE/show
+            // stay separate clips with disjoint layerLists, mirroring the
+            // binary's per-chara PSB subtree navigation.
+            const auto ownerLabelKey = std::make_pair(owner, label);
+            auto existingIt = snapshot.clipIndexByOwnerLabel.find(ownerLabelKey);
             int clipIndex;
-            if(existingIt != snapshot.clipIndexByLabel.end()) {
+            if(existingIt != snapshot.clipIndexByOwnerLabel.end()) {
                 clipIndex = existingIt->second;
             } else {
                 clipIndex = static_cast<int>(snapshot.clipList.size());
                 snapshot.clipList.emplace_back();
             }
+            snapshot.clipIndexByOwnerLabel[ownerLabelKey] = clipIndex;
+            // Auxiliary label-only fallback (last-wins) — mirrors the binary's
+            // per-tree Player+24 label->index map (last-wins lowerBoundInsert).
             snapshot.clipIndexByLabel[label] = clipIndex;
             auto &clip = snapshot.clipList[clipIndex];
             clip.label = label;
-            clip.owner = path[path.size() - 3];
+            clip.owner = owner;
             clip.motionObject = dic;
             clip.contentObject = dic;
             clip.totalFrames =
