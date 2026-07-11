@@ -1,1 +1,0 @@
-- [clampControl binder 0x67C8A8](clampcontrol_67C8A8.md) — MIGRATED 2026-06-03: clamp moved frameProgress->EmoteEngine::progress (@~1963 after bind-loop, before step-7); 2 gaps FIXED (sub_67C560 cascade + read ENGINE HM7 not player HM2, invented guards removed). logo yuzulogo/m2logo PASS. supersedes old double-clamp-conflict note
