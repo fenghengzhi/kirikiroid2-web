@@ -60,12 +60,11 @@ namespace {
 //   SourceCache base ctor sub_6A78F4 FIRST (0x6a88f8), then initialises the
 //   RM-own fields. GAP (oracle-inert, honest): the binary base ctor takes
 //   (this, rmDispatch, layerType=0) and seeds the base _owner / +40 bufLayer
-//   Layer from the RM dispatch; the local default base ctor leaves _owner /
-//   _bufLayer empty. Wiring the RM dispatch into the base owner is the larger
-//   P3-B RM-ownership refactor (out of C-1 scope) — and the RM NCB instance's
-//   inherited loadSource/clearCache/bufLayer members are not exercised by any
-//   fixture (Player's standalone _sourceCacheNative is the live render path), so
-//   the empty base is a non-regression guard, not a behavioural deviation.
+//   Layer from the RM dispatch; the local default base ctor still leaves _owner /
+//   _bufLayer empty until the first native render call supplies its layer owner.
+//   Player now aliases this inherited SourceCache directly (Player_ctor
+//   @0x6CED30); the remaining difference is construction-time owner/bufLayer
+//   materialisation, not SourceCache object identity or cache-container lifetime.
 motion::ResourceManager::ResourceManager() : _state(std::make_shared<State>()) {}
 
 motion::ResourceManager::ResourceManager(iTJSDispatch2 *kag,
@@ -127,6 +126,13 @@ tjs_error motion::ResourceManager::setEmotePSBDecryptFunc(tTJSVariant *r,
 }
 
 tTJSVariant motion::ResourceManager::load(ttstr path) const {
+    // ResourceManager_loadResource @0x6A8D8C first replaces its input with
+    // TVPGetPlacedPath(path), then uses that exact normalized ttstr for both
+    // HashMap-A lookup and insertion.
+    const ttstr placedPath = TVPGetPlacedPath(path);
+    if(!placedPath.IsEmpty()) {
+        path = placedPath;
+    }
     const auto rawPath = path.AsStdString();
     const auto loweredPath = lowercase(rawPath);
     if(loweredPath.find(".mtn") != std::string::npos) {
@@ -221,21 +227,24 @@ namespace {
 
 // Aligned with libkrkr2.so ResourceManager::findSource (sub_6AAB3C) at 0x6AAB3C.
 // The binary:
-//   1. split name by "/" (sub_697D34); empty -> result void (LABEL_11).
+//   1. split path by "/" (sub_697D34); empty -> result void (LABEL_11).
 //   2. if pieces[0] != "src" (sub_9B1ED0): if "blank" build a blank-Layer dict
 //      (width/height/originX/originY from pieces[1] split by ":" + blank=1),
 //      else result void.
-//   3. for "src": HashMap A (this+88 buckets / this+96 count) lookup keyed by the
-//      ORIGINAL name (FNV hash cached in ttstr+68 via sub_6EB8F4). The port's
-//      _state->loadedModules is the same module-dict registry, keyed by load
-//      path; findLoaded(name) is the container-divergent equivalent lookup.
+//   3. for "src": HashMap A (this+88 buckets / this+96 count) lookup keyed by
+//      moduleKey (a2, FNV hash cached in ttstr+68 via sub_6EB8F4). The requested
+//      source path is the separate a3 argument. Player_findSource @0x6948E8
+//      supplies Player+1012 as moduleKey and the resolved src path as a3.
+//      Player_playImpl @0x6B2284 fills +1012 from findMotion result[1], which
+//      ResourceManager_findMotion @0x6A9ED4 copies from the matched map key.
 //   4. navigate module["source"][group]["icon"][icon] with per-level hasKey
 //      gates (sub_598C58 / sub_5995D8); miss at any level -> result void.
 //   5. on hit: operator new(0x18) ObjSource facade holding the icon sub-dict
 //      (qword[0]=dict variant, [1]=?, [2]=0), wrapped as a TJS object via the
 //      NCB class object (sub_6EC124). Port: new ObjSource(iconEntry) +
 //      ncbInstanceAdaptor<ObjSource>::CreateAdaptor.
-tTJSVariant motion::ResourceManager::findSource(ttstr path) const {
+tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
+                                                ttstr path) const {
     // 1. split name by "/" (sub_697D34 @0x697D34).
     const std::vector<ttstr> pieces = splitTtstr(path, TJS_W('/'));
     if(pieces.empty() || pieces[0].IsEmpty()) {
@@ -266,9 +275,10 @@ tTJSVariant motion::ResourceManager::findSource(ttstr path) const {
         });
     }
 
-    // 3. HashMap A lookup keyed by the original name (sub_6EB8F4 @0x6EB8F4).
-    // Port equivalent: the loaded-module registry by path.
-    const tTJSVariant module = findLoaded(path);
+    // 3. HashMap A lookup keyed by moduleKey (a2), while path (a3) remains the
+    // source descriptor key. Port equivalent: loaded-module registry lookup by
+    // the same motion/project key used by ResourceManager::load.
+    const tTJSVariant module = findLoaded(moduleKey);
     if(module.Type() != tvtObject) {
         return {}; // !v27 || !*v27 -> LABEL_71 result void
     }

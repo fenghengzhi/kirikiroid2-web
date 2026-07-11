@@ -31,6 +31,49 @@
 
 namespace motion::detail {
 
+    PackedSourceAtlasEntry::~PackedSourceAtlasEntry() {
+        if(texture) {
+            texture->Release();
+        }
+    }
+
+    PackedSourceAtlasEntry::PackedSourceAtlasEntry(
+        PackedSourceAtlasEntry &&other) noexcept :
+        texture(other.texture), originX(other.originX), originY(other.originY),
+        textureRect(other.textureRect), clip(other.clip) {
+        other.texture = nullptr;
+    }
+
+    PackedSourceAtlasEntry &PackedSourceAtlasEntry::operator=(
+        PackedSourceAtlasEntry &&other) noexcept {
+        if(this == &other) {
+            return *this;
+        }
+        if(texture) {
+            texture->Release();
+        }
+        texture = other.texture;
+        originX = other.originX;
+        originY = other.originY;
+        textureRect = other.textureRect;
+        clip = other.clip;
+        other.texture = nullptr;
+        return *this;
+    }
+
+    void PackedSourceAtlasEntry::setTexture(iTVPTexture2D *value) {
+        if(value == texture) {
+            return;
+        }
+        if(value) {
+            value->AddRef();
+        }
+        if(texture) {
+            texture->Release();
+        }
+        texture = value;
+    }
+
     MotionSnapshot::~MotionSnapshot() {
         for(auto &[key, texture] : sourceAtlasTextures) {
             (void)key;

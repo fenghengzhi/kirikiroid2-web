@@ -673,13 +673,10 @@ namespace motion {
         double getActiveMotionWidth() const;
         double getActiveMotionHeight() const;
         bool hitTestLayer(ttstr name, double x, double y);
-        // M15 missing `contains` (cluster E §3.1 24 missing): binary
-        // Motion.Player exposes contains(label, x, y) — alias of binary's
-        // sub_6B5AD8 layer-resolve + Player_hitTest. Port delegates to
-        // hitTestLayer (same path).
-        bool contains(ttstr label, double x, double y) {
-            return hitTestLayer(label, x, y);
-        }
+        // Player_contains @0x6D333C takes only (x, y), scans every shape node
+        // in this Player, then recursively visits child/particle Players through
+        // Player_visitChildPlayerDispatches @0x6B601C.
+        bool contains(double x, double y);
 
         // M15 missing event callbacks (cluster E §3.1 24 missing):
         // binary Motion.Player exposes onAction/onSync/onGroundCorrection
@@ -1668,21 +1665,18 @@ namespace motion {
         OuterForceState _hairOuterForce;
         OuterForceState _partsOuterForce;
 
-        // Aligned to libkrkr2.so player+992: TJS Math.RandomGenerator object.
-        // sub_6BA7B8 calls its "random" method to get [0.0, 1.0) doubles.
-        // Created via TJS eval "new Math.RandomGenerator()" during init.
-        tTJSVariant _tjsRandomGenerator;  // player+992
+        // TJS Math.RandomGenerator object. In libkrkr2.so Player_ctor
+        // @0x6CED30 stores it at player+676 (0x6CF014..0x6CF024); player+992 is
+        // instead the third AddRef'd ResourceManager dispatch slot. The port
+        // keeps the generator as a named source-level member and does not force
+        // the ARM64 ABI offset.
+        tTJSVariant _tjsRandomGenerator;  // binary semantic field: player+676
 
-        // Aligned to libkrkr2.so player+1012:
-        // - written from Player_playImpl / load-motion result path
-        // - propagated to child particle players (sub_6BF0DC at 0x6BF9C0)
-        // - copied into render item +248 by sub_6C2334
-        // Its exact semantic name is still under investigation, so keep the
-        // local field neutral instead of claiming it is emoteEdit-specific.
-        // libkrkr2.so player+1012:
-        // second result returned by Player_loadMotion / Player_playImpl and
-        // then fed back into Player_loadMotion as the first argument to
-        // "findMotion" (0x6B0F10 / 0x6B2284), including child-player copies.
+        // Aligned to libkrkr2.so player+1012. ResourceManager_findMotion
+        // @0x6A9ED4 returns [motion, matchedModuleKey]; Player_playImpl
+        // @0x6B2284 stores element 1 here. It is then fed back as findMotion /
+        // findSource argument 0, propagated to child particle players
+        // (0x6BF9C0), and copied into render item +248 by sub_6C2334.
         tTJSVariant _findMotionContextVariant;    // player+1012
 
         // Web-port back-pointer: in libkrkr2.so, Player_setVariable (0x671228)

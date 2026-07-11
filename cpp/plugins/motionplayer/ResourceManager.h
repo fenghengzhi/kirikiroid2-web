@@ -83,11 +83,11 @@ namespace motion {
     //      run on the inherited SourceCache base state (+72 layer-list etc).
     //      Player+656 is NOT a separate SourceCache: Player ctor @0x6CED30 copies
     //      the SAME RM dispatch into +636/+656/+992 (sub_A0F5E0 each) — three
-    //      refs to one ResourceManager-which-IS-A-SourceCache. The local Player
-    //      standalone `_sourceCacheNative` (the live render-source workhorse)
-    //      remains as-is here: collapsing it into RM-as-SourceCache is the larger
-    //      P3-B ownership refactor, out of C-1 scope; C-1 only fixes the class
-    //      relationship. (Corrected per CLAUDE.md 证伪即就地纠正.)
+    //      refs to one ResourceManager-which-IS-A-SourceCache. Restored in the
+    //      port: Player::_sourceCacheNative aliases nativeRM(), while the Web-only
+    //      native render helpers receive the current Player as a call argument
+    //      instead of storing a persistent Player back-pointer in the shared RM.
+    //      (Corrected per CLAUDE.md 证伪即就地纠正.)
     //  (2) ObjSource (SourceCache.h:116) is NOT a fields struct in the binary —
     //      ncb_registerMembers @0x69CCB8 builds a `operator new(0x18)` dict
     //      facade (qword[0] = tTJSVariant holding the PSB "source" dict) whose
@@ -124,7 +124,7 @@ namespace motion {
         void unload(ttstr path) const;
         tTJSVariant getLastLoadedModule() const;
         tTJSVariant findLoaded(ttstr path) const;
-        tTJSVariant findSource(ttstr path) const;
+        tTJSVariant findSource(ttstr moduleKey, ttstr path) const;
         // P3-B (2026-06-05): binary RM exposes ONLY requireLayerId (no-arg) and
         //   releaseLayerId(id) — NCB registrar @0x6AB8BC, bodies sub_6AB694 /
         //   sub_6AB750. The string "requireLayerIdForName" has ZERO hits in the

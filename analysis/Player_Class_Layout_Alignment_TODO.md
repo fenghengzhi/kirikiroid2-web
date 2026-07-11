@@ -141,8 +141,8 @@
 | +968 | tTJSVariant* | charaVariant | `Player::_chara` (ttstr) | ❌ | **类型错**: 二进制 tTJSVariant*,本地 ttstr。NCB chara getter 返回 +968 variant。需确认是否本地 _chara 对应,还是另有字段 🔬 |
 | +976 | tTJSVariant* | motionVariant | `Player::_motionKey` (ttstr) | ❌🔬 | 同上类型层级问题 |
 | +984 | tTJSVariant* | stealthMotionVariant | 🔬 | 🔬 | ctor a1[123]=0 |
-| +992..1012 | ttstr | transformOrderStr | `Player::_tjsRandomGenerator` 误标 player+992 (Player.h:761) | ❌ | **偏移冲突**: 二进制 +992 是 ttstr transformOrder(NCB defaultTransformOrder getter 0x6D9414 拷 +992)。本地把 RandomGen 标在 +992 是错的(RandomGen 实在 +676)。**TODO: 加 `ttstr _transformOrder;` 对齐 +992,修正 RandomGen 注释** |
-| +1012..1032 | ttstr | (Player.h:773 标 _findMotionContextVariant=player+1012, 类型 tTJSVariant) | `Player::_findMotionContextVariant` (Player.h:773) | ⚠️🔬 | 二进制 dtor sub_A0F778(+1012)=释放 ttstr,但本地标 tTJSVariant。ttstr 与 tTJSVariant 释放路径不同。**TODO: 核对 +1012 是 ttstr 还是 variant** |
+| +992..1012 | tTJSVariant | ResourceManager dispatch（ctor 第三次 AddRef 拷贝） | 本地统一由 `Player::_resourceManager` 表示 +636/+656/+992 三个同指针槽 | ✅语义 | `Player_ctor@0x6CED30` 的 0x6CEF28 直接 `tTJSVariant_copy_ctor(this+992, resourceManager_dispatch)`；旧“transformOrder/RandomGenerator@992”结论已证伪。RandomGenerator 实在 +676。 |
+| +1012..1032 | tTJSVariant | `findMotion` 命中 module key 上下文 | `Player::_findMotionContextVariant` | ✅ | `Player_playImpl@0x6B2284` 取 `findMotion` 返回数组元素1写 +1012；`ResourceManager_findMotion@0x6A9ED4` 的元素1来自命中 HashMap 节点 key@+8；随后 `Player_findSource@0x6948E8` 作为参数0传回 RM。 |
 | +1032..1052 | ttstr | outline | `Player::_outline` (ttstr, Player.h:569) | ✅ | 已对齐(类型已从 bool 改 ttstr) |
 | +1052..1072 | ttstr | meshline | `Player::_meshline` (ttstr, Player.h:613) | ✅ | 已对齐 |
 | +1072..1092 | ttstr | stealthMotionStr | `Player::_stealthMotion` (ttstr, Player.h:610) | ⚠️ | 语义对齐,本地在 Player 直接成员 |
@@ -283,14 +283,14 @@
 **❌ 审计判断被推翻,移出 P0(需重新分析):**
 - **+912 pixelateDivision 并非"缺失"** — 它是 `static int _pixelateDivision=1` 在 `D3DEmoteModule`(D3DEmoteModule.h:48),NCB 在 main.cpp:573。但二进制 +912 是 **Player 实例字段,默认 100**(ctor `*((_DWORD*)a1+228)=100`)。问题是"在错误的类上、static 而非实例、默认 1 vs 100"。**TODO(P1):** 决定是否把它迁成 Player 实例字段并补实例 NCB getter/setter(0x6D992C/0x6D9934),评估对 D3D 渲染路径的影响。
 - **+1144 project 类型冲突,非机械改** — sub_6D962C 证实 +1144 是 int32。但本地 `_project` 是 tTJSVariant,被 `lookupModuleSnapshot(_project)`/`_project.Type()==tvtObject`(PlayerCore.cpp:444、PlayerTimeline.cpp:289/416)和 modifyRoot 当模块对象用。改 tjs_int 会断裂多处。**本地 `_project` 与二进制 +1144 不是同一语义**。**TODO(P1):** 反编译 +1144 int 的实际用途 + 本地模块快照机制,厘清二者关系再决定。
-- **+992 RandomGen 偏移** — ctor 证实 +992 = `sub_A0F5E0(a1+124, a2)`(拷贝构造参数 a2,疑似 ttstr/variant),RandomGen 风格的 `sub_9C8440` 对象在 **+676**(`sub_A0FCC0(a1+676,...)`)。本地 `_tjsRandomGenerator@992` 注释存疑。**TODO(P1):** 确认 +992 是 transformOrder ttstr 还是 a2 拷贝;确认本地 _tjsRandomGenerator 实际对应 +676 还是 +992(本地多处读 a1+992 取 dispatch,与 ctor 写入语义需对账)。
+- **+992 / +676 已闭合** — `Player_ctor@0x6CED30`：0x6CEF28 把构造参数 `resourceManager_dispatch` 以 `tTJSVariant` 拷到 +992；0x6CF014..0x6CF024 创建 `Math.RandomGenerator` 并存 +676。旧“+992=transformOrder/RandomGenerator”结论已证伪并修正。
 
 **⚠️ 结构确证为同一字段,但合并有跨文件行为变更,移出 P0:**
 - **+1156 双字段** — ctor 证实 +1156 是**单个 uint32**(=0xFF808080)。本地 `_colorWeightPacked`(PlayerCore.cpp:146/150 经 sub_6CD710 R-B swap)与 `_parentColorPacked`(父→子传播)都映射 +1156,**应合并为一**。但二进制单字段意味着 colorWeight 设值与父色传播**互相覆盖**,合并会改变本地现行为(目前两字段独立不互扰)。注:NCB "colorWeight" 属性实为 +1097 byte bool(getter sub_6D9768/setter sub_6CC9D4),与 +1156 packed color 是两回事——命名待厘清。**TODO(P1):** 选定权威字段名,统一 3 文件引用,确认互覆盖行为对齐二进制。
 
 ### P1 — 偏移/语义复核(需少量反编译,中等影响)
 8. **🔬 +968/+976 chara/motion variant vs 本地 ttstr** — 确认二进制 chara/motion 存的是 tTJSVariant* 还是字符串,核对本地 _chara/_motionKey 层级。
-9. **🔬 +1012 类型** — ttstr(dtor sub_A0F778)vs 本地 tTJSVariant _findMotionContextVariant,核对。
+9. ~~**🔬 +1012 类型**~~ — **已闭合**：tTJSVariant module-key 上下文；证据链见 §1.6 表。
 10. **🔬 +1104/+1112 相机/坐标** — 单 double vs 本地多字段。
 11. **🔬 +1128/+1136 frame 时间字段** — 本地 _frameLastTime/_cachedTotalFrames/_loopTime/_frameLoopTime 四个,二进制只 +1128/+1136 两个,核对去重。
 12. **🔬 +1099 playing** — 本地无 _playing 成员,核对 getPlaying() 实现。

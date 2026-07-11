@@ -186,7 +186,7 @@ namespace PSB {
 
     tTJSVariant PSBDictionary::toTJSVal() const {
         iTJSDispatch2 *dsp = TJSCreateDictionaryObject();
-        for(const auto &[k, v] : this->_map) {
+        for(const auto &[k, v] : *this) {
             tTJSVariant tmp = v->toTJSVal();
             dsp->PropSet(TJS_MEMBERENSURE, ttstr{ k }.c_str(), nullptr, &tmp,
                          dsp);

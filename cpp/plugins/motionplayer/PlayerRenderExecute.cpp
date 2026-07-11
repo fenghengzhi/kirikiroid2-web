@@ -71,7 +71,7 @@ namespace motion {
         tjs_int srcH = 0;
         if(!item.sourceKey.empty() && _sourceCacheNative) {
             sourceObject = _sourceCacheNative->loadRenderSourceByName(
-                detail::widen(item.sourceKey), item.srcRef, item.blendMode,
+                *this, detail::widen(item.sourceKey), item.srcRef, item.blendMode,
                 item.packedColors, scratchOwner, scratchParent);
             if(sourceObject.Type() == tvtObject &&
                sourceObject.AsObjectNoAddRef()) {
@@ -693,7 +693,7 @@ namespace motion {
             }
 
             resolved.object = _sourceCacheNative->loadRenderSourceByName(
-                detail::widen(item.sourceKey), item.srcRef, item.blendMode,
+                *this, detail::widen(item.sourceKey), item.srcRef, item.blendMode,
                 item.packedColors, scratchOwner, scratchParent);
             if(resolved.object.Type() != tvtObject ||
                !resolved.object.AsObjectNoAddRef()) {

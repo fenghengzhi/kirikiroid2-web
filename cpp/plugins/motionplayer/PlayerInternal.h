@@ -208,6 +208,14 @@ namespace internal {
         activateMotion(Player &player,
                        const std::shared_ptr<detail::MotionSnapshot> &snapshot) {
             player._activeMotion = snapshot;
+            // Player_playImpl @0x6B2284 stores element 1 of the
+            // ResourceManager.findMotion result into Player+1012.  In
+            // ResourceManager_findMotion @0x6A9ED4 that element is copied from
+            // the matched HashMap-A node's key at node+8: the normalized PSB
+            // resource path inserted by loadResource @0x6A8D8C.
+            player._findMotionContextVariant = snapshot
+                ? tTJSVariant(detail::widen(snapshot->path))
+                : tTJSVariant{};
             player._timelines.clear();
             // Reset persistent node tree so it gets rebuilt for new motion
             // by the subsequent eager Player_buildNodeTree call (no gate).
@@ -266,8 +274,16 @@ namespace internal {
                     return it->second;
                 }
 
-                const auto snapshot = detail::loadMotionSnapshot(
-                    resolved, ResourceManager::getEmotePSBDecryptSeed());
+                // ResourceManager_loadResource @0x6A8D8C is the owner of both
+                // PSB loading and HashMap-A insertion.  Do not bypass it for an
+                // already resolved storage path: findMotion/findSource later
+                // return and consume that exact map key through Player+1012.
+                const auto loaded = resourceManager != nullptr
+                    ? resourceManager->load(resolved)
+                    : detail::loadPSBVariant(
+                          resolved,
+                          ResourceManager::getEmotePSBDecryptSeed());
+                const auto snapshot = detail::lookupModuleSnapshot(loaded);
                 if(snapshot) {
                     return cacheMotion(player, requestKey, resolvedKey, snapshot);
                 }

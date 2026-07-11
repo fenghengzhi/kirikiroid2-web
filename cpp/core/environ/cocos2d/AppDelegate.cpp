@@ -12,6 +12,7 @@
 
 #ifdef EMSCRIPTEN
 #include <emscripten.h>
+extern unsigned int TVPMaxTextureSize;
 #endif
 
 static cocos2d::Size designSize(960, 640);
@@ -53,6 +54,16 @@ bool TVPAppDelegate::applicationDidFinishLaunching() {
         }
 #endif
     }
+
+#ifdef EMSCRIPTEN
+    // Android sub_A587D4 @ 0xA587D4 initializes this shared renderer limit
+    // from GL_MAX_TEXTURE_SIZE before motionplayer's sub_695DE8 consumes it.
+    // Web uses the software TVP render manager, so its OpenGL InitGL path is
+    // not constructed; bridge the same GL-context value at context creation.
+    GLint maxTextureSize = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+    TVPMaxTextureSize = static_cast<unsigned int>(maxTextureSize);
+#endif
 
 #if (CC_TARGET_PLATFORM == CC_PLATFORM_ANDROID ||                              \
      CC_TARGET_PLATFORM == CC_PLATFORM_IOS)

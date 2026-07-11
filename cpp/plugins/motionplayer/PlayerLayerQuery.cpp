@@ -378,6 +378,39 @@ namespace motion {
         return false;
     }
 
+    bool Player::contains(double x, double y) {
+        // Player_contains @0x6D333C first scans the local node deque from index
+        // 1 (the constructor-created root at index 0 is excluded). Only shape
+        // nodes (nodeType == 1) participate in the direct hit test.
+        for(size_t i = 1; i < _nodes.size(); ++i) {
+            const auto &node = _nodes[i];
+            if(node.nodeType == 1 && hitTestMotionNodeShape(node, x, y)) {
+                return true;
+            }
+        }
+
+        // The binary then calls Player_visitChildPlayerDispatches @0x6B601C.
+        // Its callback recursively invokes Player_contains and stops at the
+        // first hit. Preserve the visitor's node order and type-3/type-4 split.
+        for(const auto &node : _nodes) {
+            if(node.nodeType == 3) {
+                if(Player *child = node.getChildPlayer();
+                   child && child->contains(x, y)) {
+                    return true;
+                }
+            } else if(node.nodeType == 4) {
+                const int particleCount = node.getParticleCount();
+                for(int i = 0; i < particleCount; ++i) {
+                    if(Player *child = node.getParticleChild(i);
+                       child && child->contains(x, y)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
 
     // --- Selector ---
     bool Player::isSelectorTarget(ttstr name) {
@@ -443,15 +476,13 @@ namespace motion {
 
         const auto buildCommand = [&](const detail::PreparedRenderItem &item) {
             const auto coord = makeNumberArray({
-                item.corners[0], item.corners[1], item.sortKey,
+                item.commandCoord[0], item.commandCoord[1],
+                item.commandCoord[2],
             });
             const auto mtx = makeNumberArray({
-                item.corners[2] - item.corners[0],
-                item.corners[3] - item.corners[1],
-                item.corners[6] - item.corners[0],
-                item.corners[7] - item.corners[1],
+                item.commandMatrix[0], item.commandMatrix[1],
+                item.commandMatrix[2], item.commandMatrix[3],
             });
-            const auto patch = makeRealArray(item.corners);
             const auto color = makeIntegerArray(item.packedColors);
 
             tTJSVariant clipRect;
@@ -487,18 +518,23 @@ namespace motion {
             };
             if(item.meshType == 2) {
                 fields.emplace_back("compositeMesh", detail::makeDictionary({
-                    {"vtx", makeRealArray(item.meshPoints)},
+                    {"vtx", makeRealArray(
+                        item.commandCompositeMeshPoints)},
                     {"divx", tTJSVariant(item.meshDivX)},
                     {"divy", tTJSVariant(item.meshDivY)},
                 }));
-            } else if(item.meshType == 1) {
-                fields.emplace_back("bezierPatch", detail::makeDictionary({
-                    {"patch", patch},
-                    {"division", tTJSVariant(std::min(50, std::max(0,
-                        item.meshDivX)))},
-                }));
             } else {
-                fields.emplace_back("patch", patch);
+                int division = static_cast<int>(
+                    getMeshDivisionRatio() *
+                    static_cast<double>(item.commandPatchDivision));
+                if(division >= 50) {
+                    division = 50;
+                }
+                fields.emplace_back("bezierPatch", detail::makeDictionary({
+                    {"patch", makeRealArray(
+                        item.commandBezierPatchPoints)},
+                    {"division", tTJSVariant(division)},
+                }));
             }
 
             return detail::makeDictionary(fields);

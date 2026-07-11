@@ -505,16 +505,6 @@ namespace motion {
         clearCache();
     }
 
-    void SourceCache::bindPlayer(Player *player,
-                                 ResourceManager *resourceManager) {
-        _player = player;
-        _resourceManager = resourceManager;
-    }
-
-    void SourceCache::setSelfObject(tTJSVariant selfObject) {
-        _selfObject = std::move(selfObject);
-    }
-
     void SourceCache::setLayerOwner(tTJSVariant owner, tjs_int layerType) {
         _owner = std::move(owner);
         _layerType = layerType;
@@ -548,10 +538,11 @@ namespace motion {
         if(!name || name->IsEmpty()) {
             return {};
         }
-        return loadSourceByName(*name, currentSource);
+        return loadSourceByName(nullptr, *name, currentSource);
     }
 
     tTJSVariant SourceCache::loadSourceByName(
+        const Player *player,
         const ttstr &name,
         const tTJSVariant &currentSource) {
         const auto key = detail::narrow(name);
@@ -568,18 +559,18 @@ namespace motion {
 
         std::string resolvedKey;
         tTJSVariant rawSource;
-        if(_player && _player->_activeMotion) {
+        if(player && player->_activeMotion) {
             // Player_findSource @0x6948E8 resolves PSB-backed "src/..."
             // entries through the active module's source/icon dictionary before
             // falling back to ResourceManager.findSource/storage paths.
             rawSource =
-                loadPsbSourceFacadeLike_0x6948E8(*_player->_activeMotion, key);
+                loadPsbSourceFacadeLike_0x6948E8(*player->_activeMotion, key);
         }
         if(rawSource.Type() == tvtVoid) {
             rawSource =
                 currentSource.Type() != tvtVoid
                     ? currentSource
-                    : loadRawSourceVariant(name, resolvedKey);
+                    : loadRawSourceVariant(player, name, resolvedKey);
         }
         Entry entry;
         entry.key = key;
@@ -600,6 +591,7 @@ namespace motion {
     }
 
     tTJSVariant SourceCache::loadRenderSourceByName(
+        const Player &player,
         const ttstr &name,
         const tTJSVariant &currentSource,
         int blendMode,
@@ -636,12 +628,13 @@ namespace motion {
         std::string resolvedKey;
         auto rawSource =
             currentSource.Type() != tvtVoid ? currentSource
-                                            : loadRawSourceVariant(name, resolvedKey);
+                                            : loadRawSourceVariant(&player, name, resolvedKey);
         auto &entry = ensureEntry(
             key, resolvedKey.empty() ? key : resolvedKey, blendMode, packedColors);
         entry.rawSource = rawSource;
 
-        if(!ensureEntryBackingBitmap(entry, key, blendMode, packedColors)) {
+        if(!ensureEntryBackingBitmap(entry, &player, key, blendMode,
+                                     packedColors)) {
             return entry.rawSource;
         }
 
@@ -669,6 +662,7 @@ namespace motion {
     }
 
     iTVPTexture2D *SourceCache::loadRenderSourceTextureByName(
+        const Player &player,
         const ttstr &name,
         const tTJSVariant &currentSource,
         int blendMode,
@@ -689,12 +683,13 @@ namespace motion {
         std::string resolvedKey;
         auto rawSource =
             currentSource.Type() != tvtVoid ? currentSource
-                                            : loadRawSourceVariant(name, resolvedKey);
+                                            : loadRawSourceVariant(&player, name, resolvedKey);
         auto &entry = ensureEntry(
             key, resolvedKey.empty() ? key : resolvedKey, blendMode, packedColors);
         entry.rawSource = rawSource;
 
-        if(!ensureEntryBackingBitmap(entry, key, blendMode, packedColors)) {
+        if(!ensureEntryBackingBitmap(entry, &player, key, blendMode,
+                                     packedColors)) {
             return nullptr;
         }
         if(entry.sourceTexture) {
@@ -718,10 +713,6 @@ namespace motion {
                                           : TVPTextureFormat::RGBA,
             RENDER_CREATE_TEXTURE_FLAG_ANY);
         return entry.sourceTexture;
-    }
-
-    tTJSVariant SourceCache::findSource(ttstr name) {
-        return loadSourceByName(name, {});
     }
 
     void SourceCache::clearCache() {
@@ -847,6 +838,7 @@ namespace motion {
 
     bool SourceCache::ensureEntryBackingBitmap(
         Entry &entry,
+        const Player *player,
         const std::string &key,
         int blendMode,
         const std::array<std::uint32_t, 4> &packedColors) {
@@ -856,67 +848,67 @@ namespace motion {
         }
 
         std::shared_ptr<tTVPBaseBitmap> baseBitmap;
-        if(_player && _player->_activeMotion) {
+        if(player && player->_activeMotion) {
             if(key.rfind("src/", 0) == 0) {
                 // Player_findSource @0x6948E8 resolves "src/..." entries from
                 // the loaded PSB source/texture/icon dictionaries before any
                 // ResourceManager.findSource storage fallback.
-                baseBitmap = loadPsbBitmap(*_player->_activeMotion, key);
+                baseBitmap = loadPsbBitmap(*player->_activeMotion, key);
                 if(LOGGER) {
                     LOGGER->info(
                         "PRTDIAG SourceCache::ensure psbFirst path='{}' key='{}' hit={} size={}x{}",
-                        _player->_activeMotion->path, key,
+                        player->_activeMotion->path, key,
                         baseBitmap ? 1 : 0,
                         baseBitmap ? baseBitmap->GetWidth() : 0,
                         baseBitmap ? baseBitmap->GetHeight() : 0);
                 }
                 detail::logoChainTraceLogf(
-                    _player->_activeMotion->path,
+                    player->_activeMotion->path,
                     "sourceCache.ensure.psbFirst", "0x6948E8",
-                    _player->_clampedEvalTime,
+                    player->_clampedEvalTime,
                     "key='{}' hit={} size={}x{}", key, baseBitmap ? 1 : 0,
                     baseBitmap ? baseBitmap->GetWidth() : 0,
                     baseBitmap ? baseBitmap->GetHeight() : 0);
             }
             if(!baseBitmap) {
                 const auto path = resolveMotionSourcePathLike_0x6948E8(
-                    *_player->_activeMotion, key);
+                    *player->_activeMotion, key);
                 baseBitmap = loadGraphicBitmap(path);
                 if((key.find("yuzu") != std::string::npos ||
                     key.find("logo") != std::string::npos) &&
                    LOGGER) {
                     LOGGER->info(
                         "PRTDIAG SourceCache::ensure storageFallback path='{}' key='{}' storage='{}' hit={} size={}x{}",
-                        _player->_activeMotion->path, key,
+                        player->_activeMotion->path, key,
                         detail::narrow(path), baseBitmap ? 1 : 0,
                         baseBitmap ? baseBitmap->GetWidth() : 0,
                         baseBitmap ? baseBitmap->GetHeight() : 0);
                 }
                 detail::logoChainTraceLogf(
-                    _player->_activeMotion->path,
+                    player->_activeMotion->path,
                     "sourceCache.ensure.storageFallback", "0x6948E8",
-                    _player->_clampedEvalTime,
+                    player->_clampedEvalTime,
                     "key='{}' path='{}' hit={} size={}x{}", key,
                     detail::narrow(path), baseBitmap ? 1 : 0,
                     baseBitmap ? baseBitmap->GetWidth() : 0,
                     baseBitmap ? baseBitmap->GetHeight() : 0);
             }
             if(!baseBitmap) {
-                baseBitmap = loadPsbBitmap(*_player->_activeMotion, key);
+                baseBitmap = loadPsbBitmap(*player->_activeMotion, key);
                 if((key.find("yuzu") != std::string::npos ||
                     key.find("logo") != std::string::npos) &&
                    LOGGER) {
                     LOGGER->info(
                         "PRTDIAG SourceCache::ensure psbFallback path='{}' key='{}' hit={} size={}x{}",
-                        _player->_activeMotion->path, key,
+                        player->_activeMotion->path, key,
                         baseBitmap ? 1 : 0,
                         baseBitmap ? baseBitmap->GetWidth() : 0,
                         baseBitmap ? baseBitmap->GetHeight() : 0);
                 }
                 detail::logoChainTraceLogf(
-                    _player->_activeMotion->path,
+                    player->_activeMotion->path,
                     "sourceCache.ensure.psbFallback", "0x6948E8",
-                    _player->_clampedEvalTime,
+                    player->_clampedEvalTime,
                     "key='{}' hit={} size={}x{}", key, baseBitmap ? 1 : 0,
                     baseBitmap ? baseBitmap->GetWidth() : 0,
                     baseBitmap ? baseBitmap->GetHeight() : 0);
@@ -952,21 +944,22 @@ namespace motion {
     }
 
     tTJSVariant SourceCache::loadRawSourceVariant(
+        const Player *player,
         const ttstr &name,
         std::string &resolvedKey) const {
         resolvedKey.clear();
-        if(!_player || !_resourceManager) {
+        if(!player || !player->nativeRM()) {
             return {};
         }
 
         ttstr resolved;
         if(!detail::resolveExistingPath(
-               internal::buildSourceCandidates(*_player, name), resolved)) {
+               internal::buildSourceCandidates(*player, name), resolved)) {
             return {};
         }
 
         resolvedKey = detail::narrow(resolved);
-        return _resourceManager->load(resolved);
+        return player->nativeRM()->load(resolved);
     }
 
 } // namespace motion

@@ -54,17 +54,14 @@ namespace motion {
         SourceCache(tTJSVariant owner, tjs_int layerType);
         ~SourceCache();
 
-        // A3: bound to the Player so we can reach the migrated
-        // _activeMotion / _motionsByKey / _runtime via a single back-pointer.
-        void bindPlayer(Player *player,
-                        ResourceManager *resourceManager);
-        void setSelfObject(tTJSVariant selfObject);
         void setLayerOwner(tTJSVariant owner, tjs_int layerType);
 
         tTJSVariant loadSource(tTJSVariant keyOrSource, tTJSVariant currentSource);
-        tTJSVariant loadSourceByName(const ttstr &name,
+        tTJSVariant loadSourceByName(const Player *player,
+                                     const ttstr &name,
                                      const tTJSVariant &currentSource);
         tTJSVariant loadRenderSourceByName(
+            const Player &player,
             const ttstr &name,
             const tTJSVariant &currentSource,
             int blendMode,
@@ -72,11 +69,11 @@ namespace motion {
             iTJSDispatch2 *layerTreeOwnerObject,
             iTJSDispatch2 *parentLayerObject);
         iTVPTexture2D *loadRenderSourceTextureByName(
+            const Player &player,
             const ttstr &name,
             const tTJSVariant &currentSource,
             int blendMode,
             const std::array<std::uint32_t, 4> &packedColors);
-        tTJSVariant findSource(ttstr name);
         void clearCache();
         void eraseSource(ttstr name);
         tTJSVariant getBufLayer() const;
@@ -96,20 +93,19 @@ namespace motion {
                            int blendMode,
                            const std::array<std::uint32_t, 4> &packedColors);
         bool ensureEntryBackingBitmap(Entry &entry,
+                                      const Player *player,
                                       const std::string &key,
                                       int blendMode,
                                       const std::array<std::uint32_t, 4> &packedColors);
         void releaseEntryTexture(Entry &entry);
-        tTJSVariant loadRawSourceVariant(const ttstr &name,
+        tTJSVariant loadRawSourceVariant(const Player *player,
+                                         const ttstr &name,
                                          std::string &resolvedKey) const;
 
-        tTJSVariant _selfObject;
         tTJSVariant _owner;
         tTJSVariant _primaryLayer;
         tTJSVariant _bufLayer;
         tjs_int _layerType = 0;
-        Player *_player = nullptr;
-        ResourceManager *_resourceManager = nullptr;
         std::list<Entry> _entries;
     };
 

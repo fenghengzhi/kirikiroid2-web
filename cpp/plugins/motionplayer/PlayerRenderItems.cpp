@@ -511,18 +511,38 @@ namespace motion {
                 // while coordinateMode and objTriPriority are copied into
                 // separate integer fields (+0xEC/+0xF0).
                 entry.sortKey = node.accumulated.posZ;
+                entry.commandCoord = {
+                    node.accumulated.posX,
+                    _zFactor * node.accumulated.posZ +
+                        node.accumulated.posY,
+                    node.accumulated.posZ,
+                };
+                entry.commandMatrix = {
+                    node.accumulated.m11,
+                    node.accumulated.m12,
+                    node.accumulated.m21,
+                    node.accumulated.m22,
+                };
                 entry.blendMode = node.accumulated.blendMode;
                 entry.packedColors = copyPackedColorsFromBytes(node.colorBytes);
                 entry.opacity = node.accumulated.opacity;
                 entry.stencilComposite = node.stencilType;
                 entry.coordinateMode = node.coordinateMode;
                 entry.objTriPriority = node.objTriPriority;
-                entry.originX = node.source.originX;
-                entry.originY = node.source.originY;
+                entry.originX = node.source.originX + node.activeSlot().ox;
+                entry.originY = node.source.originY + node.activeSlot().oy;
                 entry.visibleAncestorIndex = node.visibleAncestorIndex;
                 entry.meshType = node.meshType;
                 entry.meshDivX = node.meshDivX;
                 entry.meshDivY = node.meshDivY;
+                if(node.meshType == 1 && !node.meshControlPoints.empty()) {
+                    entry.commandPatchDivision = static_cast<int>(
+                        getMeshDivisionRatio() *
+                        static_cast<double>(node.meshDivision));
+                    if(entry.commandPatchDivision >= 50) {
+                        entry.commandPatchDivision = 50;
+                    }
+                }
             }
 
             bool havePaintBox = false;
@@ -540,14 +560,35 @@ namespace motion {
 
             if(hasOwnSource && !node.meshControlPoints.empty()) {
                 entry.meshPoints.resize(node.meshControlPoints.size());
+                entry.commandBezierPatchPoints.resize(
+                    node.meshControlPoints.size());
                 for(size_t pi = 0; pi + 1 < node.meshControlPoints.size();
                     pi += 2) {
                     const auto pt = transformPoint(node.meshControlPoints[pi],
                                                    node.meshControlPoints[pi + 1]);
                     entry.meshPoints[pi] = static_cast<float>(pt.x);
                     entry.meshPoints[pi + 1] = static_cast<float>(pt.y);
+                    entry.commandBezierPatchPoints[pi] =
+                        static_cast<float>(pt.x);
+                    entry.commandBezierPatchPoints[pi + 1] =
+                        static_cast<float>(pt.y);
                     updatePaintBox(entry, pt.x, pt.y, !havePaintBox);
                     havePaintBox = true;
+                }
+            }
+
+            if(hasOwnSource && !node.meshControlPointsPrev.empty()) {
+                entry.commandCompositeMeshPoints.resize(
+                    node.meshControlPointsPrev.size());
+                for(size_t pi = 0; pi + 1 < node.meshControlPointsPrev.size();
+                    pi += 2) {
+                    const auto pt = transformPoint(
+                        node.meshControlPointsPrev[pi],
+                        node.meshControlPointsPrev[pi + 1]);
+                    entry.commandCompositeMeshPoints[pi] =
+                        static_cast<float>(pt.x);
+                    entry.commandCompositeMeshPoints[pi + 1] =
+                        static_cast<float>(pt.y);
                 }
             }
 

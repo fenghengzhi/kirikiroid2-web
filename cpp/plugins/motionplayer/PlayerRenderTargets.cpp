@@ -723,7 +723,7 @@ namespace motion {
                 auto *sourceTexture = item.sourceTexture
                     ? item.sourceTexture
                     : _sourceCacheNative->loadRenderSourceTextureByName(
-                          detail::widen(item.sourceKey), item.srcRef,
+                          *this, detail::widen(item.sourceKey), item.srcRef,
                           item.blendMode, item.packedColors);
                 PrivateMotionGLLRenderItemInputLike_0x6DE738 queueItem;
                 queueItem.opacity =
@@ -873,7 +873,7 @@ namespace motion {
             if(itemLayerResult.createdOrChanged) {
                 tTJSVariant sourceObject =
                     _sourceCacheNative->loadRenderSourceByName(
-                        detail::widen(item.sourceKey), item.srcRef,
+                        *this, detail::widen(item.sourceKey), item.srcRef,
                         item.blendMode, item.packedColors,
                         layerTreeOwner, targetLayerObject);
                 if(sourceObject.Type() != tvtObject ||
@@ -1055,7 +1055,7 @@ namespace motion {
             auto *sourceTexture = item.sourceTexture
                 ? item.sourceTexture
                 : _sourceCacheNative->loadRenderSourceTextureByName(
-                      detail::widen(item.sourceKey), item.srcRef,
+                      *this, detail::widen(item.sourceKey), item.srcRef,
                       item.blendMode, item.packedColors);
             if(!sourceTexture || sourceTexture->GetWidth() <= 0 ||
                sourceTexture->GetHeight() <= 0) {

@@ -118,7 +118,7 @@ sub_6D69C8 (NCB registration)
 | `setCameraOffset` | sub_6D9A38 | 0x6D9A38 | Sets +144 (float), +148 (float) |
 | `releaseSyncWait` | sub_6D9A48 | 0x6D9A48 | Sets byte at +1098 = 0 |
 | `setDrawAffineTranslateMatrix` | -- | -- | -- |
-| `contains` | sub_6D1528 | 0x6D1528 | Complex |
+| `contains` | Player_contains | 0x6D333C | scans local shape nodes, then recursively visits child/particle Players |
 | `calcViewParam` | -- | -- | -- |
 | `getCommandList` | sub_6D3998 | 0x6D3998 | Complex |
 | `getLayerMotion` | sub_6D38F4 | 0x6D38F4 | Uses sub_6B5AD8 lookup |
@@ -582,7 +582,7 @@ Player TJS API
 ├── getLayerMotion (sub_6D38F4, 0x6D38F4)
 ├── getLayerGetter (sub_6D4F88, 0x6D4F88)
 ├── skipToSync (loc_6D3504, 0x6D3504)
-├── contains (sub_6D1528, 0x6D1528) -- hit test
+├── contains (Player_contains, 0x6D333C) -- two-argument recursive hit test
 ├── isExistMotion (sub_6D0040, 0x6D0040)
 └── onFindMotion (sub_6D07F4, 0x6D07F4)
 ```

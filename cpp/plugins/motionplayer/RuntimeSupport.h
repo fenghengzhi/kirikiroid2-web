@@ -172,6 +172,32 @@ namespace motion::detail {
         bool voidParam1 = false;
     };
 
+    // Source descriptor stored in sub_695DE8's per-group icon hashmap.  Each
+    // entry owns one intrusive texture reference; multiple icons on the same
+    // atlas page therefore retain the same texture independently, exactly as
+    // the binary's assignment at 0x69699C..0x6969C0.
+    struct PackedSourceAtlasEntry {
+        PackedSourceAtlasEntry() = default;
+        ~PackedSourceAtlasEntry();
+        PackedSourceAtlasEntry(const PackedSourceAtlasEntry &) = delete;
+        PackedSourceAtlasEntry &operator=(const PackedSourceAtlasEntry &) = delete;
+        PackedSourceAtlasEntry(PackedSourceAtlasEntry &&other) noexcept;
+        PackedSourceAtlasEntry &operator=(PackedSourceAtlasEntry &&other) noexcept;
+
+        void setTexture(iTVPTexture2D *value);
+
+        iTVPTexture2D *texture = nullptr;
+        int originX = 0;
+        int originY = 0;
+        std::array<int, 4> textureRect{0, 0, 0, 0};
+        std::array<double, 4> clip{0.0, 0.0, 1.0, 1.0};
+    };
+
+    struct PackedSourceAtlasGroup {
+        std::unordered_map<ttstr, PackedSourceAtlasEntry,
+                           ttstr_hash, ttstr_equal> icons;
+    };
+
     struct MotionSnapshot {
         ~MotionSnapshot();
 
@@ -189,6 +215,12 @@ namespace motion::detail {
         // key/equality implementation already recovered for ResourceManager.
         std::unordered_map<ttstr, iTVPTexture2D *, ttstr_hash, ttstr_equal>
             sourceAtlasTextures;
+        // sub_695DE8 @0x695DE8: non-Win source modules lazily materialize a
+        // group -> icon -> descriptor cache.  The outer and inner containers
+        // are the same ttstr-keyed libstdc++ unordered_map topology as the
+        // binary; PackedSourceAtlasEntry owns the shared page texture refs.
+        std::unordered_map<ttstr, PackedSourceAtlasGroup,
+                           ttstr_hash, ttstr_equal> packedSourceAtlasGroups;
         std::vector<std::string> mainTimelineLabels;
         std::vector<std::string> diffTimelineLabels;
         std::vector<std::string> variableLabels;
@@ -371,6 +403,12 @@ namespace motion::detail {
         motion::Player *nativeLifetimeOwner = nullptr;
         int nativeLifetimeKey = 0;
         double sortKey = 0.0;
+        // sub_6C2334 @0x6C2334 stores the script command transform separately
+        // from item+136 render corners.  getCommandList @0x6D3A4C serializes
+        // these exact item+64/+72..112 fields; they must not be reconstructed
+        // from already transformed geometry.
+        std::array<double, 3> commandCoord{0.0, 0.0, 0.0};
+        std::array<double, 4> commandMatrix{1.0, 0.0, 0.0, 1.0};
         int blendMode = 16;
         tTJSVariant contextVariant; // original item +248 (player+1012 copy)
         std::array<float, 8> corners{};
@@ -387,6 +425,9 @@ namespace motion::detail {
         int meshDivX = 0;
         int meshDivY = 0;
         int meshType = 0;
+        int commandPatchDivision = 0; // item+368
+        std::vector<float> commandCompositeMeshPoints; // item+344
+        std::vector<float> commandBezierPatchPoints;   // item+376
         std::vector<float> meshPoints;
         std::vector<float> localMeshPoints;
         int layerId = 0;

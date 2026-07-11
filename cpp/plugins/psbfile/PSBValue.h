@@ -346,17 +346,22 @@ namespace PSB {
     };
 
     class PSBDictionary : public IPSBCollection {
-        using Map = std::unordered_map<K, V>;
+        using Entry = std::pair<K, V>;
+        using Entries = std::vector<Entry>;
+        using Index = std::unordered_map<K, size_t>;
 
     public:
         explicit PSBDictionary() = default;
-        explicit PSBDictionary(int capacity) : _map(capacity) {}
+        explicit PSBDictionary(int capacity) {
+            _entries.reserve(static_cast<size_t>(capacity));
+            _index.reserve(static_cast<size_t>(capacity));
+        }
 
         template <typename T>
         bool tryGetPsbValue(const K &key, T *&val) {
-            auto it = _map.find(key);
-            if(it != _map.end()) {
-                val = dynamic_cast<T *>(it->second);
+            auto it = _index.find(key);
+            if(it != _index.end()) {
+                val = dynamic_cast<T *>(_entries[it->second].second.get());
                 return val != nullptr;
             }
             val = nullptr;
@@ -364,14 +369,27 @@ namespace PSB {
         }
 
         std::string toString() override {
-            return fmt::format("Dictionary[{}]", _map.size());
+            return fmt::format("Dictionary[{}]", _entries.size());
         }
 
-        void emplace(const K &key, const V &val) { _map.emplace(key, val); }
+        void emplace(const K &key, const V &val) {
+            if(_index.find(key) != _index.end()) {
+                return;
+            }
+            const size_t index = _entries.size();
+            _entries.emplace_back(key, val);
+            _index.emplace(key, index);
+        }
 
-        [[nodiscard]] auto begin() const { return _map.begin(); }
-        [[nodiscard]] auto end() const { return _map.end(); }
-        [[nodiscard]] auto find(const K &key) const { return _map.find(key); }
+        [[nodiscard]] auto begin() const { return _entries.begin(); }
+        [[nodiscard]] auto end() const { return _entries.end(); }
+        [[nodiscard]] auto find(const K &key) const {
+            const auto it = _index.find(key);
+            return it == _index.end()
+                ? _entries.end()
+                : _entries.begin() + static_cast<Entries::difference_type>(
+                    it->second);
+        }
 
         [[nodiscard]] V operator[](int index) override { return get(index); }
         [[nodiscard]] V operator[](const K &key) override { return get(key); }
@@ -388,15 +406,17 @@ namespace PSB {
 
         void unionWith(const PSBDictionary &dic) {
             for(const auto &[key, val] : dic) {
-                if(_map.find(key) != _map.end()) {
+                const auto indexIt = _index.find(key);
+                if(indexIt != _index.end()) {
                     auto *childDic =
-                        dynamic_cast<PSBDictionary *>(_map[key].get());
+                        dynamic_cast<PSBDictionary *>(
+                            _entries[indexIt->second].second.get());
                     auto *otherDic = dynamic_cast<PSBDictionary *>(val.get());
                     if(childDic && otherDic) {
                         childDic->unionWith(*otherDic);
                     }
                 } else {
-                    _map.emplace(key, val);
+                    emplace(key, val);
                 }
             }
         }
@@ -405,8 +425,8 @@ namespace PSB {
 
     private:
         [[nodiscard]] V get(const K &key) const {
-            auto it = _map.find(key);
-            return it != _map.end() ? it->second : nullptr;
+            const auto it = _index.find(key);
+            return it != _index.end() ? _entries[it->second].second : nullptr;
         }
 
         [[nodiscard]] V get(int index) const {
@@ -414,7 +434,11 @@ namespace PSB {
         }
 
     private:
-        Map _map{};
+        // sub_598E64 @0x598E64 enumerates PSB Objects in their encoded
+        // name-index array order. Keep that order in the primary container;
+        // the auxiliary index serves sub_598C58-style keyed lookup only.
+        Entries _entries{};
+        Index _index{};
         // IPSBCollection *parent = nullptr;
     };
 

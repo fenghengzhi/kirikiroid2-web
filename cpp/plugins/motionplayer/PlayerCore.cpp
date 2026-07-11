@@ -129,25 +129,14 @@ namespace motion {
         _defaultParameterEntry.rangeScale = 1.0;
         _defaultParameterEntry.mode = 0;
         detail::ensureRootNodeLike_0x6CED30(*this);
-        // Aligned to libkrkr2.so SourceCache constructor/owner lifetime
-        // (0x6A78F4): Player stores a TJS SourceCache object and calls through
-        // that dispatch for source resolution rather than owning a map directly.
-        // SourceCache reaches the native RM through nativeRM() (dispatch unpack,
-        // == binary findSource +636->+8), valid for the Player's lifetime since
-        // `_resourceManager` holds the dispatch ref.
-        using SourceCacheAdaptor = ncbInstanceAdaptor<SourceCache>;
-        auto *sourceCache = new SourceCache();
-        sourceCache->bindPlayer(this, nativeRM());
-        if(auto *dispatch = SourceCacheAdaptor::CreateAdaptor(sourceCache)) {
-            _sourceCacheNative = sourceCache;
-            _sourceCacheObject = tTJSVariant(dispatch, dispatch);
-            sourceCache->setSelfObject(_sourceCacheObject);
-            dispatch->Release();
-        } else {
-            delete sourceCache;
-        }
-        // Aligned to sub_6A88CC (0x6A8988): create TJS Math.RandomGenerator
-        // and store at player+992. Child Players inherit via sub_6CED30.
+        // Player_ctor @0x6CED30 copies the SAME ResourceManager dispatch into
+        // +636/+656/+992. ResourceManager_ctor @0x6A88CC constructs its
+        // SourceCache base at offset zero; no standalone SourceCache exists.
+        _sourceCacheNative = nativeRM();
+        _sourceCacheObject = _resourceManager;
+        // Player_ctor @0x6CED30 creates a TJS Math.RandomGenerator at +676
+        // (0x6CF014..0x6CF024). The +992 slot is the third ResourceManager
+        // dispatch copy initialized earlier in this constructor's local model.
         try {
             TVPExecuteExpression(
                 TJS_W("new Math.RandomGenerator()"),
