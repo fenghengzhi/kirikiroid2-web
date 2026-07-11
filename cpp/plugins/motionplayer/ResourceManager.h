@@ -2,7 +2,6 @@
 // Created by LiDon on 2025/9/15.
 //
 #pragma once
-#include <list>
 #include <memory>
 #include <set>
 #include <unordered_map>
@@ -66,7 +65,7 @@ namespace motion {
     //          subobject), which initialises +20 primaryLayer / +40 bufLayer
     //          (Layer variant) / +64 layerType / +72/+80 intrusive list head-tail
     //          sentinel; RM ctor THEN initialises its own fields from +88 onward
-    //          (HashMap A, motion-list, RandomGenerator@+144, layerId set@+168,
+    //          (HashMap A, RandomGenerator@+144, layerId set@+168,
     //          counter@+216, spec@+224).
     //        * sub_6A78F4 (SourceCache ctor) is called from EXACTLY ONE site —
     //          0x6a88f8 inside the RM ctor (xrefs_to confirmed). There is NO
@@ -139,14 +138,16 @@ namespace motion {
         // M9 brick B: binary ResourceManager NCB members (ncb_registerMembers
         // @0x6AB8BC, 12 members total) missing from the port surface. Faithful
         // where _state maps cleanly (unloadAll); STUB (cite addr) where the real
-        // body needs the HashMap A (+88) / motion-list (+104) walks that are
-        // parked behind the phase-D texture-topology platform boundary.
+        // bodies walk HashMap A both through bucket lookup and through its
+        // libstdc++ global node chain at +104.
         // C-1: bufLayer (prop-ro @0x6A84FC = base +40 Layer variant) is now the
         // INHERITED SourceCache::getBufLayer() — the RM-own ttstr getBufLayer()
         // was the pre-inheritance two-class artifact and is removed.
-        void unloadAll() const;                         // @0x6A8BBC
-        [[nodiscard]] bool isExistMotion(ttstr name) const;     // @0x6A96F8 (STUB)
-        [[nodiscard]] tTJSVariant findMotion(ttstr name) const; // @0x6A9ED4 (STUB)
+        void unloadAll() const;                         // @0x6A8CF8
+        [[nodiscard]] bool isExistMotion(ttstr projectKey,
+                                         ttstr path) const;     // @0x6A96F8
+        [[nodiscard]] tTJSVariant findMotion(ttstr projectKey,
+                                              ttstr path) const; // @0x6A9ED4
         static tjs_error random(tTJSVariant *r, tjs_int n, tTJSVariant **p,
                                 iTJSDispatch2 *obj);            // @0x6AB56C (STUB)
 
@@ -220,12 +221,12 @@ namespace motion {
         // "phase-D inline bucket map") was based on the FALSIFIED "not std container"
         // premise and is removed; no consumer ever read it.
 
-        // +104 second container — singly-linked node list, confirmed layout
-        // node[0]=next, node[1]=key ttstr, node[2]=PSB dict (`for (i =
-        // *(a1+104); i; i = *i)`). RM findMotion @0x6A9ED4 / isExistMotion
-        // @0x6A96F8 walk it as the motion-cache fallback after HashMap A misses.
-        // Phase 1 placeholder: std::list. Empty.
-        std::list<iTJSDispatch2 *> _motionCacheList;
+        // CORRECTION (2026-07-12): +104 is NOT a second container. It is
+        // HashMap A's libstdc++ `_M_before_begin._M_nxt` field: the global
+        // singly-linked node chain inside the same std::unordered_map that
+        // starts at +88 (buckets@+88, bucketCount@+96, head@+104,
+        // elementCount@+112). isExistMotion/findMotion first do a bucket lookup
+        // and then walk this same map's node chain as their fallback.
 
         // +224 int32 spec flag — binary checks 1 (krkr) vs 2 (win) in
         // loadResource path. Web port runs the krkr branch.

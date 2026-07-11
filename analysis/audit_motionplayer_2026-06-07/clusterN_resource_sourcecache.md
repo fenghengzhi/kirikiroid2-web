@@ -47,17 +47,17 @@ unload(=sub_6A959C), unloadAll(=**loc_6A8CF8**), isExistMotion(=sub_6A96F8),
 findMotion(=sub_6A9ED4), findSource(=sub_6AAB3C), random(=sub_6AB56C),
 requireLayerId(=sub_6AB694), releaseLayerId(=sub_6AB750).
 
-  *** CORRECTION: unloadAll body is at `0x6A8CF8` (Motion_ResourceManager_unloadAll),
-  NOT 0x6A8BBC as the RM.h:147 / RM.cpp:372 comments claim. 0x6A8BBC is merely the
-  stack-canary load addr inside that body. unloadAll @0x6A8CF8 walks +104
-  motion-list (sub_6DB3E8 + delete each node) TWICE, memsets HashMap A buckets,
-  resets +104 list, _M_erases the +168 layerId Rb_tree, releases +144 RandomGen,
-  walks/frees the +72 SourceCache base layer-list, releases +40/+20/+0. So the
-  comment's address is off; the described behavior (clears HashMap A + motion-list +
-  layerId set, frees the base layer-list) is correct.
+  *** CORRECTION (2026-07-12): IDA merged two adjacent functions. The body at
+  0x6A8BBC is the ResourceManager destructor; that is where the +168 layerId
+  RB-tree, +144 RandomGen and SourceCache base are destroyed. The actual
+  unloadAll starts at the independent prologue `0x6A8CF8` and only walks +104,
+  memsets buckets@+88, and zeros +104/+112. Moreover +104 is not a separate
+  motion-list: it is HashMap A's libstdc++ `_M_before_begin._M_nxt`, the global
+  node chain belonging to the same unordered_map rooted at +88.
 
-Local: load/unload/findLoaded/findSource/requireLayerId/releaseLayerId/unloadAll
-faithful where _state maps; isExistMotion/findMotion/random are STUBs (cite addr).
+Local: load/unload/findLoaded/findSource/isExistMotion/findMotion/
+requireLayerId/releaseLayerId/unloadAll are backed by the aligned containers;
+random remains a STUB.
 
 ## 3. RM findSource @0x6AAB3C — CONFIRMED (TJS facade path, item ②/③)
 

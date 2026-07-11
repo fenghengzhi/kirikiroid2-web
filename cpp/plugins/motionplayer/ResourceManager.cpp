@@ -223,6 +223,24 @@ namespace {
         out = v;
         return true;
     }
+
+    // ResourceManager_isExistMotion @0x6A96F8 and findMotion @0x6A9ED4 both
+    // test module["object"][chara]["motion"][motion].
+    bool findMotionValueLike_0x6A96F8(const tTJSVariant &module,
+                                     const ttstr &chara,
+                                     const ttstr &motionName,
+                                     tTJSVariant *motionValue) {
+        tTJSVariant objects;
+        if(!psbGet(module, TJS_W("object"), objects)) return false;
+        tTJSVariant character;
+        if(!psbGet(objects, chara.c_str(), character)) return false;
+        tTJSVariant motions;
+        if(!psbGet(character, TJS_W("motion"), motions)) return false;
+        tTJSVariant value;
+        if(!psbGet(motions, motionName.c_str(), value)) return false;
+        if(motionValue) *motionValue = value;
+        return true;
+    }
 }
 
 // Aligned with libkrkr2.so ResourceManager::findSource (sub_6AAB3C) at 0x6AAB3C.
@@ -368,7 +386,7 @@ void motion::ResourceManager::releaseLayerId(tjs_int id) {
 // --- M9 brick B: binary ResourceManager members missing from the port surface
 // (ncb_registerMembers @0x6AB8BC). See ResourceManager.h for the per-member
 // fidelity notes; faithful where _state maps cleanly, STUB (with addr) where the
-// real body needs the HashMap A / motion-list topology parked behind phase D. ---
+// HashMap-A topology is represented by State::loadedModules. ---
 
 // C-1 (2026-06-07): RM-own getBufLayer()->ttstr REMOVED. The binary RM
 //   `bufLayer` prop-ro (sub_6A84FC) reads `a1+40` = the SourceCache base
@@ -380,10 +398,8 @@ void motion::ResourceManager::releaseLayerId(tjs_int id) {
 //   former RM ttstr getBufLayer() was a misattributed two-class artifact.
 
 void motion::ResourceManager::unloadAll() const {
-    // unloadAll @0x6A8BBC clears every RM container (layer-list +72, HashMap A
-    // +88, motion-list +104, layerId Rb_tree +168, bufLayer +144). Port: clear
-    // the _state caches (the live PSB/module + layerId backing). Distinct from
-    // clearCache @0x6A8438, which in the binary clears only the +72 layer-list.
+    // unloadAll @0x6A8CF8 clears ONLY HashMap A. The preceding merged body at
+    // 0x6A8BBC is the ResourceManager destructor, not unloadAll.
     LOGGER->debug("ResourceManager::unloadAll()");
     if(!_state) {
         return;
@@ -391,33 +407,48 @@ void motion::ResourceManager::unloadAll() const {
     _state->loadedModules.clear();
     _state->lastLoadedPath.Clear();
     _state->lastLoadedModule.Clear();
-    // P3-B (2026-06-05): unloadAll@0x6A8BBC DOES clear the layer-id set
-    //   (`std::_Rb_tree<unsigned int>::_M_erase(a1+168, ...)` @0x6a8c04) — keep
-    //   usedLayerIds.clear(). But it does NOT reset the next-id counter (+216 is
-    //   never written in the function) — removed the non-faithful nextLayerId
-    //   reset so the counter stays monotonic across unloadAll, matching binary.
-    _state->usedLayerIds.clear();
 }
 
-bool motion::ResourceManager::isExistMotion(ttstr name) const {
-    // isExistMotion @0x6A96F8 walks HashMap A (+88) by motion name then the +104
-    // motion-list, returning whether dict["object"][name]["motion"] exists. The
-    // port's _state->loadedModules is keyed by load PATH, not motion name, so it
-    // is NOT a faithful substitute (CLAUDE.md: do not infer semantics from a
-    // similar name) — STUB returns false. Real body deferred with the HashMap A /
-    // motion-list topology.
-    LOGGER->warn("ResourceManager::isExistMotion() stub called: {}",
-                 name.AsStdString());
+bool motion::ResourceManager::isExistMotion(ttstr projectKey,
+                                             ttstr path) const {
+    if(!_state) return false;
+    const std::vector<ttstr> pieces = splitTtstr(path, TJS_W('/'));
+    const ttstr chara = pieces[1];
+    const ttstr motionName = pieces[2];
+    const auto direct = _state->loadedModules.find(projectKey);
+    if(direct != _state->loadedModules.end() &&
+       findMotionValueLike_0x6A96F8(direct->second, chara, motionName, nullptr)) {
+        return true;
+    }
+    for(const auto &entry : _state->loadedModules) {
+        if(findMotionValueLike_0x6A96F8(entry.second, chara, motionName, nullptr)) {
+            return true;
+        }
+    }
     return false;
 }
 
-tTJSVariant motion::ResourceManager::findMotion(ttstr name) const {
-    // findMotion @0x6A9ED4 returns the motion-label array from
-    // dict["object"][name]["motion"] via HashMap A (+88) / +104 list. No port
-    // _state equivalent — STUB returns void. Real body deferred (HashMap A
-    // topology).
-    LOGGER->warn("ResourceManager::findMotion() stub called: {}",
-                 name.AsStdString());
+tTJSVariant motion::ResourceManager::findMotion(ttstr projectKey,
+                                                 ttstr path) const {
+    if(!_state) return {};
+    const std::vector<ttstr> pieces = splitTtstr(path, TJS_W('/'));
+    const ttstr chara = pieces[1];
+    const ttstr motionName = pieces[2];
+    const auto makeResult = [&](const auto &entry) -> tTJSVariant {
+        tTJSVariant motionValue;
+        if(!findMotionValueLike_0x6A96F8(entry.second, chara, motionName,
+                                        &motionValue)) return {};
+        return detail::makeArray({ motionValue, tTJSVariant(entry.first) });
+    };
+    const auto direct = _state->loadedModules.find(projectKey);
+    if(direct != _state->loadedModules.end()) {
+        tTJSVariant result = makeResult(*direct);
+        if(result.Type() != tvtVoid) return result;
+    }
+    for(const auto &entry : _state->loadedModules) {
+        tTJSVariant result = makeResult(entry);
+        if(result.Type() != tvtVoid) return result;
+    }
     return {};
 }
 
