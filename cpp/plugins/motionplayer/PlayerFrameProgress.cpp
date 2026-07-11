@@ -1746,19 +1746,13 @@ namespace internal {
         // terminal Player_clearHM3_HM4 @0x6B80E4 wipes whatever entries remain.
         //
         // PORTED: the per-node restore (joinTarget+nodeType gate → restore common
-        // scalar block) + the matched-entry erase. node+46 = joinTarget is now
+        // scalar block) + gated findSource + matched-entry erase. node+46 = joinTarget is now
         // modeled (the prior "visible byte / DEFERRED" was falsified by the
         // 0x6b3ef0/0x6b2dcc/0x6b855c decompiles this pass). The restore itself is
         // PARTIAL (hm3RestoreValueToNodeLike_0x6997F0 ports the common scalar
         // block; contentMask/srcDispatch/type-3-4 child + particle restores stay
         // DEFERRED on the same snapshot-source gaps).
         //
-        // DEFERRED within the matched branch:
-        //   - Motion_Player_findSource (0x6b85a0, gate nodeType==0 && slot+344==0):
-        //     resolves the clip src dispatch (node+356/+348 = slot+36 icon + the
-        //     src dispatch pair). The port models src as std::string in ClipSlot,
-        //     not the iTJSDispatch2*/icon pair, so there is no faithful target —
-        //     this is the same src-dispatch boundary as V+44 srcDispatch.
         if(!_perNodeLayerStateMap.empty()) {
             for(size_t k = 1; k < _nodes.size(); ++k) {
                 detail::MotionNode &node = _nodes[k];
@@ -1776,8 +1770,10 @@ namespace internal {
                 }
                 // 0x6b857c restore V -> active ClipSlot (partial).
                 hm3RestoreValueToNodeLike_0x6997F0(node, v);
-                // 0x6b8588 findSource gate (nodeType==0 && active slot.done==0):
-                // DEFERRED — see header comment (no faithful src-dispatch target).
+                // 0x6b8588 findSource gate (nodeType==0 && active slot.done==0).
+                if(node.nodeType == 0 && !node.activeSlot().done) {
+                    findSourceForNodeLike_0x6948E8(node);
+                }
                 // 0x6b8644 erase the matched HM3 entry (--HM3.count).
                 _perNodeLayerStateMap.erase(it);
             }

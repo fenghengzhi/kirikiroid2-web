@@ -121,11 +121,6 @@ namespace motion {
             auto &parentNode = nodes[parentIdx];
             const int slotIdx = 0;  // current slot index
 
-            if (vn.hasSource) {
-                refreshSourceGeometryFromSourceName(
-                    vn, _activeMotion, vn.activeSlot().src);
-            }
-
             // aligned with sub_6BC4F0 @0x6BC648..0x6BC6C4 (node+48 write):
             //   if (*(node+1996) /* forceVisible */) {
             //       materialize emoteEdit dispatch from node+1980;
@@ -218,7 +213,7 @@ namespace motion {
                 const bool vertexEligible = vn.forceVisible
                     || ((vbm & (1 << vn.nodeType)) != 0);
 
-                if (vertexEligible && vn.hasSource) {
+                if (vertexEligible && vn.source.valid) {
                     const double m11 = vn.accumulated.m11, m12 = vn.accumulated.m12;
                     const double m21 = vn.accumulated.m21, m22 = vn.accumulated.m22;
                     const double posX = vn.accumulated.posX;
@@ -226,8 +221,8 @@ namespace motion {
                         + vn.accumulated.posZ * _zFactor;
 
                     // Origin offset (0x6BCB58..0x6BCBA4)
-                    const double totalOX = vn.originX + vn.clipOriginX;
-                    const double totalOY = vn.originY + vn.clipOriginY;
+                    const double totalOX = vn.source.originX + vn.clipOriginX;
+                    const double totalOY = vn.source.originY + vn.clipOriginY;
                     const double orgX = posX - (m12 * totalOY + totalOX * m11);
                     const double orgY = posY - (totalOY * m22 + totalOX * m21);
                     vn.vertexPosX = orgX;
@@ -237,8 +232,8 @@ namespace motion {
                     // Save prev mesh (0x6BCB94..0x6BCBAC)
                     vn.meshControlPointsPrev = vn.meshControlPoints;
 
-                    const double cw = vn.clipW;
-                    const double ch = vn.clipH;
+                    const double cw = vn.source.width;
+                    const double ch = vn.source.height;
 
                     // Mesh vertex construction (0x6BCBBC..0x6BD060)
                     if (vn.meshType == 1
@@ -589,7 +584,8 @@ namespace motion {
         // Visibility flags — aligned to sub_6BD8DC at 0x6BD8DC.
         // Root node (index 0) is always visible.
         if (!nodes.empty()) {
-            nodes[0].drawFlag = nodes[0].accumulated.visible && nodes[0].hasSource;
+            nodes[0].drawFlag =
+                nodes[0].accumulated.visible && nodes[0].source.valid;
         }
         // Visibility bitmask: which nodeTypes can render
         // Non-emote: 6145 = 0x1801 → nodeTypes 0, 11, 12
@@ -623,7 +619,7 @@ namespace motion {
                 node.drawFlag = false;
             } else if (node.forceVisible
                        || (visBitmask & (1 << node.nodeType)) != 0) {
-                node.drawFlag = node.hasSource;
+                node.drawFlag = node.source.valid;
             } else {
                 // Active node, not in renderable bitmask, not forceVisible:
                 // v9 stays as active (non-zero) → drawFlag = true

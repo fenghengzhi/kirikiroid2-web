@@ -163,13 +163,12 @@ namespace motion {
             const std::uint32_t mask = slot.mask;  // v3[5]
 
             // ---- src/icon: gated by ((1<<nodeType) & 0x1849) (0x692C94) ----
-            // 0x1849 = nodeTypes {0,3,6,11,12}. The binary reads "src" variant
-            // into v3+9, then "icon" into v3+7 (icon index lookup). We keep the
-            // "src" string (logical) only; icon-handle resolution is a live
-            // dispatch concern (DEFERRED below).
+            // 0x1849 = nodeTypes {0,3,6,11,12}. The binary reads "src" into
+            // slot+36 and the independent "icon" key into slot+28.
             if(nodeType >= 0 && nodeType < 32 &&
                ((1u << static_cast<unsigned>(nodeType)) & 0x1849u) != 0) {
                 slot.src.clear();
+                slot.icon.clear();
                 slot.srcList.clear();
                 if(auto s = psbString(content, "src"); !s.empty()) {
                     slot.src = s;
@@ -182,10 +181,7 @@ namespace motion {
                     }
                     if(!slot.srcList.empty()) slot.src = slot.srcList[0];
                 }
-                // DEFERRED: "icon" (v3+7) PropGet [1024]"icon" + sub_A13878
-                //           icon-index handle (0x692CFC..0x692DBC). Requires the
-                //           live iTJSDispatch2 icon table; not reproducible from
-                //           the PSB dict alone.
+                slot.icon = psbString(content, "icon");
             }
 
             // ---- mask 0x1: ox/oy (0x692DC4) ----

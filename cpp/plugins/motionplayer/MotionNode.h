@@ -25,6 +25,8 @@
 
 #include "tjs.h"  // tTJSVariant, iTJSDispatch2 for TJS↔Native bridge (node+1912, node+2296)
 
+class iTVPTexture2D;
+
 namespace PSB {
     class PSBDictionary;
 }
@@ -65,7 +67,6 @@ namespace motion::detail {
         // cast to iTJSDispatch2* in Player.cpp where tjs.h is included.
         void *tjsLayerObject = nullptr;  // non-owning reference
         int transformOrder[4] = {0, 1, 2, 3}; // node+84..96
-        bool hasSource = false;        // has any frame with non-empty src
         std::string layerName;         // "label" from PSB
         int meshType = 0;             // "meshTransform" from PSB (node+2000)
         int meshFlags = 0;            // "meshSyncChildMask" from PSB (node+2004)
@@ -92,11 +93,10 @@ namespace motion::detail {
         int stencilTypeBase = 0;      // raw PSB "stencilType"
         int stencilType = 0;          // runtime node+52, init-time owned
         int currentFrameType = 0;     // current frameList type (0/2/3), for trace
-        bool hasLastActivePayload = false;
-        int lastActiveFrameIndex = -1;
-        std::string lastActiveSrc;
-        int lastActiveMotionFlags = 0;
-        std::string lastActiveMotionDtgt;
+        // REMOVED 2026-06-21: hasLastActivePayload / lastActiveFrameIndex /
+        // lastActiveSrc / lastActiveMotionFlags / lastActiveMotionDtgt — these
+        // backed the invented markNodePayloadDirtyFromState node+44 dirtying
+        // channel (no libkrkr2.so counterpart; see PlayerUpdateLayerEval.cpp).
 
         // Mesh control points (node+2024..2032 in libkrkr2.so).
         // For meshType=1: 16 × 2 floats (Bezier patch 4×4 control grid) = 32 floats.
@@ -140,7 +140,10 @@ namespace motion::detail {
             int frameIndex = -1;            // cached frameList index for this slot
             int frameType = 0;              // frame["type"]: 0 invisible, 2 static, 3 interpolate
 
-            // Source (slot+36)
+            // Source. Player_mergeFrameContent @0x692AB0 stores two distinct
+            // strings: icon at slot+28 and src at slot+36. They must remain
+            // distinct until Motion_Player_findSource @0x6948E8.
+            std::string icon;
             std::string src;
             std::vector<std::string> srcList;
 
@@ -329,7 +332,7 @@ namespace motion::detail {
         // PreparedRenderItem::drawFlag (item+19) in sub_6C2334's item
         // build, and exposed to TJS via the layerVisible getter
         // (PlayerLayerQuery.cpp). NOT read by Player_calcBounds — that
-        // function gates on nodeType mask + renderTreeFlag200 instead
+        // function gates on nodeType mask + source.valid instead
         // (see PlayerRenderItems.cpp comment). NOT the Path A main
         // render gate either.
         bool drawFlag = false;
@@ -379,11 +382,38 @@ namespace motion::detail {
         // Bounding box output (Player_calcBounds, 0x6C3D04)
         float bounds[4] = { 1.0f, 1.0f, -1.0f, -1.0f }; // node+1888..1900
 
-        // Origin offsets (from PSB source icon, sub_6BC4F0)
-        double originX = 0.0;          // node+248
-        double originY = 0.0;          // node+256
-        double clipW = 0.0;            // node+232
-        double clipH = 0.0;            // node+240
+        // Motion_Player_findSource @0x6948E8 writes this persistent node-level
+        // descriptor. The texture pointer is non-owning: the loaded module's
+        // group-atlas cache owns it, so MotionNode destruction/copy never
+        // Release/AddRef it (MotionNode_destroy @0x6F4C8C, copy @0x6F468C).
+        struct SourceState {
+            bool valid = false;             // node+200
+            bool blank = false;             // node+201
+            tTJSVariant object;              // node+204
+            iTVPTexture2D *texture = nullptr; // node+224, non-owning
+            double width = 0.0;              // node+232
+            double height = 0.0;             // node+240
+            double originX = 0.0;            // node+248
+            double originY = 0.0;             // node+256
+            double clipLeft = 0.0;           // node+264
+            double clipTop = 0.0;            // node+272
+            double clipRight = 1.0;          // node+280
+            double clipBottom = 1.0;         // node+288
+            std::array<int, 4> textureRect{0, 0, 0, 0}; // node+296..308
+            std::string path;                // node+312 (ttstr in Android)
+
+            void clear() {
+                valid = false;
+                blank = false;
+                object.Clear();
+                texture = nullptr;
+                width = height = originX = originY = 0.0;
+                clipLeft = clipTop = 0.0;
+                clipRight = clipBottom = 1.0;
+                textureRect = {0, 0, 0, 0};
+                path.clear();
+            }
+        } source;
 
         // Anchor node data for nodeType=10 (sub_6C0528 at 0x6C0528)
         int anchorType = 0;            // node+2376: "anchor" from PSB
@@ -454,20 +484,6 @@ namespace motion::detail {
         // Parent clip region index (replaces node+1936 pointer)
         int parentClipIndex = -1;
 
-        // node+200 / node+201 are consumed by sub_6BC4F0 and sub_6C2334.
-        // Current-turn evidence:
-        // - node+200 is zero-initialized by sub_699390 via STRB [node,#0xC8]
-        // - node+200 is later written by sub_6C0528 (anchor path) via STRB [node,#0xC8]
-        // - node+201 is read by sub_6C2334 via LDRB [node,#0xC9]
-        // - current ctor/deque/build-node review found no standalone init writer
-        //   for node+201 inside the motionplayer node lifecycle
-        bool renderTreeFlag200 = false; // node+200 / 0xC8
-        // node+201 / 0xC9. Read by 0x6BC4F0 and copied into item+16 by
-        // 0x6C2334. There is no standalone init writer on the current reachable
-        // motionplayer node ctor/build paths; the byte behaves as a default-zero
-        // state that propagates through the native copy chain via 0x6F468C
-        // (`*(_WORD *)(dst + 200) = *(_WORD *)(src + 200)`).
-        bool renderTreeFlag201 = false;
         bool anchorEnabled = false;
 
         // Color bytes for anchor damping (node+100..115: 4 sets of RGBA)

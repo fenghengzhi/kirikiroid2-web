@@ -2,6 +2,8 @@
 // Split from PlayerUpdateLayers.cpp for maintainability.
 //
 #include "PlayerUpdateLayersInternal.h"
+#include <atomic>  // PARTICLESTATE (temp)
+#include <cstdio>  // PARTICLESTATE (temp)
 
 namespace motion {
     void Player::updateLayersPhase3_ParticleEmitter() {
@@ -209,6 +211,24 @@ namespace motion {
             // Existing particles ALWAYS get position updates even when inactive/done.
 
             const int childCount = pn.getParticleCount();
+
+            // PARTICLESTATE (temp): confirm whether particle children accumulate
+            // and why they never die. Logs count vs maxNum and child[0] play state.
+            {
+                static std::atomic<long> s_pstateSeq{0};
+                long seq = ++s_pstateSeq;
+                if(childCount > 0 && (seq % 400 == 0)) {
+                    auto *c0 = pn.getParticleChild(0);
+                    std::fprintf(stderr,
+                        "PARTICLESTATE seq=%ld count=%d maxNum=%d delOut=%d "
+                        "c0_allplaying=%d c0_nodes=%d trig=%d\n",
+                        seq, childCount, pn.particleMaxNum,
+                        pn.particleDeleteOutside ? 1 : 0,
+                        c0 ? (c0->_allplaying ? 1 : 0) : -1,
+                        c0 ? static_cast<int>(c0->_nodes.size()) : -1,
+                        pn.prtTrigger);
+                }
+            }
 
             // ====== BLOCK 1: Existing particle update (0x6BF310..0x6BF668) ======
             // Binary guard: particleInheritVelocity==2 gates ALL child position updates (0x6BF304).
@@ -739,6 +759,25 @@ namespace motion {
                 // are removed (size > 0 is always true). Only removes ONE per emission.
                 if (pn.getParticleCount() > pn.particleMaxNum) {
                     pn.eraseParticleChild(0);
+                }
+
+                // PARTICLECREATE (temp): inspect a freshly-emitted particle child.
+                // Pins down WHY particles never die: loopTime>=0 (loop, never clears
+                // _allplaying) vs deltaTime==0 (frameTick frozen) vs clip==nullptr
+                // (_loopTime left at default 0.0). count vs maxNum shows cap state.
+                {
+                    static std::atomic<long> s_pcSeq{0};
+                    long seq = ++s_pcSeq;
+                    if(seq % 500 == 0) {
+                        std::fprintf(stderr,
+                            "PARTICLECREATE seq=%ld count=%d maxNum=%d "
+                            "child_loopTime=%.3f child_totalFrames=%.3f "
+                            "child_allplaying=%d child_dt=%.4f hasClip=%d\n",
+                            seq, pn.getParticleCount(), pn.particleMaxNum,
+                            child->getLoopTime(), child->_cachedTotalFrames,
+                            child->_allplaying ? 1 : 0, child->_deltaTime,
+                            child->_activeClip != nullptr ? 1 : 0);
+                    }
                 }
 
                 // Physics only when emitCount <= 1 (0x6C026C: CMP W20, #1; B.GT)

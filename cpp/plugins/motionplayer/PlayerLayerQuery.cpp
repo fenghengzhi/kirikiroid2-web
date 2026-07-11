@@ -42,8 +42,8 @@ namespace {
             node.accumulated.angle * 180.0 / 3.14159265358979323846);
         getter->setSlantX(node.accumulated.slantX);
         getter->setSlantY(node.accumulated.slantY);
-        getter->setOriginX(node.originX);
-        getter->setOriginY(node.originY);
+        getter->setOriginX(node.source.originX);
+        getter->setOriginY(node.source.originY);
         getter->setOpacity(node.accumulated.opacity);
         getter->setMtx(motion::detail::makeArray({
             tTJSVariant(node.accumulated.m11),
@@ -407,8 +407,168 @@ namespace motion {
         if(!_activeMotion) {
             return detail::makeArray({});
         }
-        return detail::makeArray(
-            detail::stringsToVariants(activeSourceCandidates()));
+
+        // libkrkr2.so loc_6D3A4C (chunk owner sub_682520): build the same
+        // per-call render-item vector as draw (sub_6C2334), stable-sort it, then
+        // materialize a fresh TJS Array of command dictionaries.  The caller
+        // compares this structure frame-to-frame to decide whether Layer.update
+        // is necessary, so returning a static source-name list breaks the native
+        // invalidation data flow.
+        prepareRenderItems();
+
+        const auto makeNumberArray = [](std::initializer_list<double> values) {
+            std::vector<tTJSVariant> variants;
+            variants.reserve(values.size());
+            for(const double value : values) {
+                variants.emplace_back(value);
+            }
+            return detail::makeArray(variants);
+        };
+        const auto makeIntegerArray = [](const auto &values) {
+            std::vector<tTJSVariant> variants;
+            variants.reserve(values.size());
+            for(const auto value : values) {
+                variants.emplace_back(static_cast<tjs_int64>(value));
+            }
+            return detail::makeArray(variants);
+        };
+        const auto makeRealArray = [](const auto &values) {
+            std::vector<tTJSVariant> variants;
+            variants.reserve(values.size());
+            for(const auto value : values) {
+                variants.emplace_back(static_cast<double>(value));
+            }
+            return detail::makeArray(variants);
+        };
+
+        const auto buildCommand = [&](const detail::PreparedRenderItem &item) {
+            const auto coord = makeNumberArray({
+                item.corners[0], item.corners[1], item.sortKey,
+            });
+            const auto mtx = makeNumberArray({
+                item.corners[2] - item.corners[0],
+                item.corners[3] - item.corners[1],
+                item.corners[6] - item.corners[0],
+                item.corners[7] - item.corners[1],
+            });
+            const auto patch = makeRealArray(item.corners);
+            const auto color = makeIntegerArray(item.packedColors);
+
+            tTJSVariant clipRect;
+            if(item.hasViewport && item.viewport[2] >= item.viewport[0] &&
+               item.viewport[3] >= item.viewport[1]) {
+                clipRect = detail::makeDictionary({
+                    {"left", tTJSVariant(static_cast<double>(item.viewport[0]))},
+                    {"top", tTJSVariant(static_cast<double>(item.viewport[1]))},
+                    {"right", tTJSVariant(static_cast<double>(item.viewport[2]))},
+                    {"bottom", tTJSVariant(static_cast<double>(item.viewport[3]))},
+                    {"width", tTJSVariant(static_cast<double>(
+                        item.viewport[2] - item.viewport[0]))},
+                    {"height", tTJSVariant(static_cast<double>(
+                        item.viewport[3] - item.viewport[1]))},
+                });
+            }
+
+            std::vector<std::pair<std::string, tTJSVariant>> fields{
+                {"key", item.contextVariant},
+                {"id", tTJSVariant(item.layerId)},
+                {"src", item.srcRef},
+                {"coordinate", tTJSVariant(item.coordinateMode)},
+                {"opacity", tTJSVariant(item.opacity)},
+                {"blendMode", tTJSVariant(item.blendMode)},
+                {"coord", coord},
+                {"mtx", mtx},
+                {"color", color},
+                {"originX", tTJSVariant(item.originX)},
+                {"originY", tTJSVariant(item.originY)},
+                {"triPriority", tTJSVariant(item.objTriPriority)},
+                {"clipRect", clipRect},
+                {"meshTransform", tTJSVariant(item.meshType)},
+            };
+            if(item.meshType == 2) {
+                fields.emplace_back("compositeMesh", detail::makeDictionary({
+                    {"vtx", makeRealArray(item.meshPoints)},
+                    {"divx", tTJSVariant(item.meshDivX)},
+                    {"divy", tTJSVariant(item.meshDivY)},
+                }));
+            } else if(item.meshType == 1) {
+                fields.emplace_back("bezierPatch", detail::makeDictionary({
+                    {"patch", patch},
+                    {"division", tTJSVariant(std::min(50, std::max(0,
+                        item.meshDivX)))},
+                }));
+            } else {
+                fields.emplace_back("patch", patch);
+            }
+
+            return detail::makeDictionary(fields);
+        };
+
+        // 0x6D3B84..0x6D45B0 constructs and stores item+284 for every item
+        // before the visibility filter and stencil-chain pass.  Parent/child
+        // stencil links therefore reference these exact dictionary objects,
+        // including dictionaries belonging to items omitted from the result.
+        std::vector<tTJSVariant> itemCommands;
+        itemCommands.reserve(_preparedRenderItems.size());
+        std::unordered_map<const detail::PreparedRenderItem *, size_t>
+            commandIndex;
+        commandIndex.reserve(_preparedRenderItems.size());
+        for(size_t i = 0; i < _preparedRenderItems.size(); ++i) {
+            const auto &item = _preparedRenderItems[i];
+            commandIndex.emplace(&item, i);
+            itemCommands.emplace_back(buildCommand(item));
+        }
+
+        std::vector<tTJSVariant> commands;
+        commands.reserve(_preparedRenderItems.size());
+        for(size_t i = 0; i < _preparedRenderItems.size(); ++i) {
+            const auto &item = _preparedRenderItems[i];
+            // 0x6D4810..0x6D4820: rawFlag17 || rawFlag16 || opacity==0
+            // commands are retained as item+284 dictionaries but omitted from
+            // the returned Array.
+            if(item.skipFlag0 || item.rawFlag16 || item.opacity == 0) {
+                continue;
+            }
+
+            tTJSVariant stencilChain;
+            if(item.parentItem) {
+                std::vector<tTJSVariant> links;
+                for(const auto *parent = item.parentItem; parent;
+                    parent = parent->parentItem) {
+                    tTJSVariant mesh;
+                    if((parent->stencilComposite & 4) != 0) {
+                        std::vector<tTJSVariant> childMeshes;
+                        childMeshes.reserve(parent->childItems.size());
+                        for(const auto *child : parent->childItems) {
+                            const auto childIt = commandIndex.find(child);
+                            if(childIt != commandIndex.end()) {
+                                childMeshes.push_back(
+                                    itemCommands[childIt->second]);
+                            }
+                        }
+                        mesh = detail::makeArray(childMeshes);
+                    } else {
+                        const auto parentIt = commandIndex.find(parent);
+                        if(parentIt != commandIndex.end()) {
+                            mesh = itemCommands[parentIt->second];
+                        }
+                    }
+                    links.emplace_back(detail::makeDictionary({
+                        {"type", tTJSVariant(parent->stencilComposite)},
+                        {"mesh", mesh},
+                    }));
+                }
+                stencilChain = detail::makeArray(links);
+            }
+
+            auto command = itemCommands[i];
+            if(auto *dictionary = command.AsObjectNoAddRef()) {
+                dictionary->PropSet(TJS_MEMBERENSURE, TJS_W("stencilChain"),
+                                    nullptr, &stencilChain, dictionary);
+            }
+            commands.emplace_back(command);
+        }
+        return detail::makeArray(commands);
     }
 
     // getD3DAvailable / doAlphaMaskOperation relocated to Motion namespace-level

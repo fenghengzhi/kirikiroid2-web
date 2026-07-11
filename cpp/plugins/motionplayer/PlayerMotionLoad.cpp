@@ -467,7 +467,8 @@ namespace motion {
                     node.index,
                     node.layerName.empty() ? std::string("<root>")
                                            : node.layerName,
-                    node.nodeType, node.parentIndex, node.hasSource ? 1 : 0,
+                    node.nodeType, node.parentIndex,
+                    node.source.valid ? 1 : 0,
                     node.meshType, node.inheritFlags, node.parameterizeIndex,
                     node.objTriPriority,
                     node.parentClipIndex,

@@ -517,6 +517,7 @@ namespace internal {
         struct FrameContentState {
             bool visible = false;
             int frameType = 0;        // frame["type"] from sub_6926B4: 0/2/3
+            std::string icon;         // slot+28, separate from src
             std::string src;
             std::vector<std::string> srcList;  // For particle nodes: array of "chara/motion" paths
             double x = 0.0;
@@ -841,6 +842,7 @@ namespace internal {
                 ((((std::uint64_t)1) << static_cast<unsigned>(nodeType)) &
                  0x1849u) != 0;
             if(sourceGateEnabled) {
+                state.icon = psbDictionaryString(content, "icon");
                 if(const auto src = psbDictionaryString(content, "src"); !src.empty()) {
                     state.src = src;
                 } else if(auto srcList = psbDictionaryList(content, "src")) {
@@ -1301,6 +1303,7 @@ namespace internal {
             // Use src from slot A (or B if A is empty)
             if(state.src.empty() && !slotB.src.empty()) {
                 state.src = slotB.src;
+                state.icon = slotB.icon;
             }
 
             return state;

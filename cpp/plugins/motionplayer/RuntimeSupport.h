@@ -19,6 +19,9 @@
 #include "tjs.h"
 #include "psbfile/PSBFile.h"
 #include "MotionNode.h"
+#include "internal/ttstr_hash.h"
+
+class iTVPTexture2D;
 
 namespace motion {
     class Player;
@@ -170,12 +173,22 @@ namespace motion::detail {
     };
 
     struct MotionSnapshot {
+        ~MotionSnapshot();
+
         std::string path;
         std::shared_ptr<PSB::PSBFile> file;
         std::shared_ptr<const PSB::PSBDictionary> root;
         std::unordered_map<std::string, std::shared_ptr<const PSB::PSBResource>>
             resourcesByPath;
         tTJSVariant moduleValue;
+        // ResourceManager_loadResource @0x6A8D98: 1="krkr", 2="win".
+        int sourceSpec = 0;
+        // Motion_Player_findSource @0x6948E8 caches one owning texture per
+        // source-group on the loaded module. MotionNode::source.texture merely
+        // borrows these pointers. The ttstr/FNV map matches the binary HashMap
+        // key/equality implementation already recovered for ResourceManager.
+        std::unordered_map<ttstr, iTVPTexture2D *, ttstr_hash, ttstr_equal>
+            sourceAtlasTextures;
         std::vector<std::string> mainTimelineLabels;
         std::vector<std::string> diffTimelineLabels;
         std::vector<std::string> variableLabels;
@@ -345,6 +358,9 @@ namespace motion::detail {
         int nodeIndex = 0;
         tTJSVariant srcRef;
         std::string sourceKey;
+        // Borrowed from MotionNode::source / MotionSnapshot atlas cache.
+        iTVPTexture2D *sourceTexture = nullptr;
+        std::array<int, 4> sourceRect{0, 0, 0, 0};
         bool hasOwnSource = false;
         bool groupOnly = false;
         bool topLevelList = true;
@@ -365,6 +381,8 @@ namespace motion::detail {
         bool hasViewport = false;
         int coordinateMode = 0;
         int objTriPriority = 0;
+        double originX = 0.0;
+        double originY = 0.0;
         int visibleAncestorIndex = -1;
         int meshDivX = 0;
         int meshDivY = 0;

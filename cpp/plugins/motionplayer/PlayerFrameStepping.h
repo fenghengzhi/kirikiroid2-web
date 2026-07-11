@@ -131,6 +131,12 @@ namespace motion {
             ParsedFrameSlotLike_0x6926B4 slots[2];
             // node+1392: active-slot index. Toggled by (x & 1) == 0 each step.
             int activeSlotIndex = 0;
+            // Logical projection of node+200 source descriptor for this pure
+            // stepping model. The live Player owns the full variant/texture/
+            // geometry descriptor in MotionNode::source.
+            bool sourceResolved = false;
+            std::string sourceSrc;
+            std::string sourceIcon;
 
             ParsedFrameSlotLike_0x6926B4 &active_slot() {
                 return slots[activeSlotIndex];

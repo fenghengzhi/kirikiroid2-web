@@ -1015,7 +1015,7 @@ namespace motion {
         //   loop2 (HM3 elem!=0): prune+restore HM3 by node identity — per-node
         //     restore PORTED (joinTarget+nodeType gate → common scalar restore
         //     via hm3RestoreValueToNodeLike_0x6997F0 + matched-entry erase);
-        //     findSource + contentMask/srcDispatch/type-3-4 restores stay DEFERRED
+        //     findSource is restored; contentMask/type-3-4 restores stay DEFERRED
         //     on snapshot-source gaps; terminal clearHM3_HM4 still applied.
         void pruneHM3ByNodeIdentityLike_0x6B826C();
         // libkrkr2.so Player_reseekTimelineCursors @0x6B86C8 — the NON-incremental
@@ -1077,6 +1077,10 @@ namespace motion {
         // DEFERRED on the same snapshot-source gaps as hm3InitValueFromNodeLike.
         void hm3RestoreValueToNodeLike_0x6997F0(
             detail::MotionNode &node, const detail::PerNodeLayerState &v) const;
+        // Motion_Player_findSource @0x6948E8. Reads the active clip slot's
+        // separate src/icon values and rewrites node.source. The module owns
+        // group-atlas textures; nodes borrow them.
+        void findSourceForNodeLike_0x6948E8(detail::MotionNode &node);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);

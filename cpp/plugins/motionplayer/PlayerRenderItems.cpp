@@ -4,6 +4,8 @@
 #include "PlayerInternal.h"
 #include "MotionTraceWeb.h"
 
+#include <spdlog/spdlog.h>
+
 using namespace motion::internal;
 
 namespace {
@@ -79,7 +81,7 @@ namespace motion {
             //   v31 = completionType ? 0x1449 : 0x1441
             //   if ((v31 & v30) == 0 || !*(BYTE*)(node+200)) skip
             // The actual native gate is the Path A nodeType mask PLUS
-            // renderTreeFlag200 (node+0xC8) — NOT drawFlag (Path B) and
+            // node.source.valid (node+0xC8) — NOT drawFlag (Path B) and
             // NOT drawnThisFrame (node+1944, set by sub_6C2334 but not
             // read here). Port's previous drawFlag/drawnThisFrame reads
             // were both proxies; this is the authoritative gate.
@@ -88,15 +90,11 @@ namespace motion {
             // gate at node+536*slot+344 and (b) recursive handling for
             // nodeType=3 sub-players (0x6C4048) and nodeType=4 particles
             // (0x6C3F08). Port's simplified structure doesn't model those
-            // yet; hasSource is the current placeholder for "this node
-            // has its own geometry to contribute to the bbox".
+            // yet.
             const int visBitmaskCalc =
                 _preview ? 0x1449 : 0x1441;  // binary calcBounds gates on +1092 (preview)
             if(((1 << node.nodeType) & visBitmaskCalc) == 0 ||
-               !node.renderTreeFlag200) {
-                continue;
-            }
-            if(!node.hasSource) {
+               !node.source.valid) {
                 continue;
             }
 
@@ -124,7 +122,7 @@ namespace motion {
                     extendPoint(node.meshControlPoints[pi],
                                 node.meshControlPoints[pi + 1]);
                 }
-            } else if(node.clipW > 0.0 || node.clipH > 0.0) {
+            } else if(node.source.width > 0.0 || node.source.height > 0.0) {
                 for(int ci = 0; ci < 4; ++ci) {
                     extendPoint(node.vertices[ci * 2],
                                 node.vertices[ci * 2 + 1]);
@@ -363,7 +361,7 @@ namespace motion {
                         node.layerName.empty() ? "<none>"
                                                : node.layerName.c_str(),
                         node.forceVisible, node.nodeType, bitmask,
-                        node.hasSource ? 1 : 0,
+                        node.source.valid ? 1 : 0,
                         node.interpolatedCache.src.empty()
                             ? "<none>"
                             : node.interpolatedCache.src.c_str(),
@@ -371,7 +369,7 @@ namespace motion {
                 }
                 continue;
             }
-            if(!node.hasSource || node.interpolatedCache.src.empty()) continue;
+            if(!node.source.valid) continue;
 
             if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                motionPath.find("m2logo.mtn") != std::string::npos &&
@@ -384,7 +382,7 @@ namespace motion {
                     node.layerName.empty() ? "<none>"
                                            : node.layerName.c_str(),
                     node.forceVisible, node.nodeType, bitmask,
-                    node.hasSource ? 1 : 0,
+                    node.source.valid ? 1 : 0,
                     node.interpolatedCache.src.empty()
                         ? "<none>"
                         : node.interpolatedCache.src.c_str(),
@@ -437,8 +435,7 @@ namespace motion {
                     }
                 }
             }
-            const bool hasOwnSource =
-                node.hasSource && !node.interpolatedCache.src.empty();
+            const bool hasOwnSource = node.source.valid;
             const bool needsGroupEntry =
                 requiredGroupNodeIndices.find(static_cast<int>(i)) !=
                 requiredGroupNodeIndices.end();
@@ -461,8 +458,10 @@ namespace motion {
             entry.groupList = false;
             entry.selfSeedChildList = false;
             if(hasOwnSource) {
-                entry.sourceKey = node.interpolatedCache.src;
-                entry.srcRef = findSource(detail::widen(entry.sourceKey));
+                entry.sourceKey = node.source.path;
+                entry.srcRef = node.source.object;
+                entry.sourceTexture = node.source.texture;
+                entry.sourceRect = node.source.textureRect;
             }
             // Aligned to sub_6D5164 -> sub_6C2334:
             // top-level build uses arg4=0, so render-item draw flag becomes
@@ -471,7 +470,7 @@ namespace motion {
             entry.drawFlag =
                 node.drawFlag || node.stencilCompositeMaskReferenced ||
                 needsGroupEntry;
-            entry.rawFlag16 = node.renderTreeFlag201;
+            entry.rawFlag16 = node.source.blank;
             entry.skipFlag0 =
                 (((_preview ? 1097 : 1089) & (1 << node.nodeType)) == 0);
             entry.skipFlag1 = !(inheritedFlag18 || (node.priorDraw != 0));
@@ -518,6 +517,8 @@ namespace motion {
                 entry.stencilComposite = node.stencilType;
                 entry.coordinateMode = node.coordinateMode;
                 entry.objTriPriority = node.objTriPriority;
+                entry.originX = node.source.originX;
+                entry.originY = node.source.originY;
                 entry.visibleAncestorIndex = node.visibleAncestorIndex;
                 entry.meshType = node.meshType;
                 entry.meshDivX = node.meshDivX;
@@ -525,7 +526,8 @@ namespace motion {
             }
 
             bool havePaintBox = false;
-            if(hasOwnSource && node.clipW > 0.0 && node.clipH > 0.0) {
+            if(hasOwnSource && node.source.width > 0.0 &&
+               node.source.height > 0.0) {
                 for(int ci = 0; ci < 4; ++ci) {
                     const auto pt = transformPoint(node.vertices[ci * 2],
                                                    node.vertices[ci * 2 + 1]);
@@ -689,7 +691,8 @@ namespace motion {
                     entry.drawFlag ? 1 : 0, entry.visibleAncestorIndex,
                     node.activeSlot().done ? 1 : 0, node.currentFrameType,
                     node.stencilTypeBase, node.stencilType);
-                bool cornersOk = node.clipW <= 0.0 && node.clipH <= 0.0;
+                bool cornersOk = node.source.width <= 0.0 &&
+                    node.source.height <= 0.0;
                 if(!cornersOk) {
                     cornersOk = true;
                     for(size_t ci = 0; ci < expectedCorners.size(); ++ci) {

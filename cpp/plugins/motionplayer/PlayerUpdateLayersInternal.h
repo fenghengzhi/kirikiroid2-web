@@ -121,26 +121,6 @@ namespace {
         accum.opacity = delta.opacity;
     }
 
-    inline void refreshSourceGeometryFromSourceName(
-        motion::detail::MotionNode &node,
-        const std::shared_ptr<motion::detail::MotionSnapshot> &snapshot,
-        const std::string &sourceName) {
-        if (!snapshot || sourceName.empty()) {
-            return;
-        }
-        int srcW = 0;
-        int srcH = 0;
-        double srcOX = 0.0;
-        double srcOY = 0.0;
-        std::vector<std::uint8_t> decomp;
-        findPSBResourceBySourceName(*snapshot, sourceName, srcW, srcH, decomp,
-                                    srcOX, srcOY);
-        node.clipW = srcW;
-        node.clipH = srcH;
-        node.originX = srcOX;
-        node.originY = srcOY;
-    }
-
     // Populate a ClipSlot from a FrameContentState.
     // Cannot be a ClipSlot method because FrameContentState is defined in
     // PlayerInternal.h (motion::internal namespace) which MotionNode.h cannot include.
@@ -150,6 +130,7 @@ namespace {
         slot.done = !s.visible;
         slot.frameIndex = s.debugActiveIndex;
         slot.frameType = s.frameType;
+        slot.icon = s.icon;
         slot.src = s.src;
         slot.srcList = s.srcList;
         slot.x = s.x; slot.y = s.y; slot.z = s.z;
@@ -329,15 +310,15 @@ namespace {
         const motion::detail::MotionNode &parent,
         motion::detail::MotionNode &node) {
         if (parent.meshType != 1 || (parent.meshFlags & 1) == 0
-            || !parent.accumulated.active || !parent.hasSource
+            || !parent.accumulated.active || !parent.source.valid
             || parent.meshControlPoints.empty())
             return;
         const double slotOX = parent.activeSlot().ox;
         const double slotOY = parent.activeSlot().oy;
-        const double totalOX = slotOX + parent.originX;
-        const double totalOY = slotOY + parent.originY;
-        const double pw = parent.clipW > 0.0 ? parent.clipW : 1.0;
-        const double ph = parent.clipH > 0.0 ? parent.clipH : 1.0;
+        const double totalOX = slotOX + parent.source.originX;
+        const double totalOY = slotOY + parent.source.originY;
+        const double pw = parent.source.width > 0.0 ? parent.source.width : 1.0;
+        const double ph = parent.source.height > 0.0 ? parent.source.height : 1.0;
         const double childSecondary =
             parent.coordinateMode != 0
                 ? node.accumulated.posZ

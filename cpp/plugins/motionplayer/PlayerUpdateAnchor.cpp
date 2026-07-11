@@ -23,11 +23,11 @@ namespace motion {
             // inert there.
             if (_deltaTime == 0.0 || !_internalRenderLayerReady) {
                 an.anchorEnabled = false;
-                an.renderTreeFlag200 = false;
+                an.source.valid = false;
                 continue;
             }
             an.anchorEnabled = true;
-            an.renderTreeFlag200 = true;
+            an.source.valid = true;
             // Read width/height (0x6C0790..0x6C0848): the binary reads them from
             // the per-PLAYER internal render Layer — sub_A0F5E0(player+696) then
             // PropGet(L"width"/L"height") — so all anchor nodes share ONE w/h =
@@ -51,10 +51,10 @@ namespace motion {
                     ch = static_cast<double>(static_cast<tjs_int>(hv));
                 }
             }
-            an.clipW = cw;
-            an.clipH = ch;
-            an.originX = cw * 0.5;
-            an.originY = ch * 0.5;
+            an.source.width = cw;
+            an.source.height = ch;
+            an.source.originX = cw * 0.5;
+            an.source.originY = ch * 0.5;
 
             // Damping exponent — byte-verified disasm @0x6C0884-0x6C08B8:
             //   v27     = (*a1+592)/(*a1+1168) = _deltaTime / _speedMul

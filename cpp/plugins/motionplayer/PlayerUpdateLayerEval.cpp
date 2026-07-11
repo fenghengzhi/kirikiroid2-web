@@ -13,6 +13,7 @@ namespace motion::internal {
             FrameContentState state;
             state.visible = visible && !slot.done;
             state.frameType = slot.frameIndex >= 0 ? slot.frameType : frameType;
+            state.icon = slot.icon;
             state.src = slot.src;
             state.srcList = slot.srcList;
             state.x = slot.x; state.y = slot.y; state.z = slot.z;
@@ -165,35 +166,16 @@ namespace motion::internal {
             }
         }
 
-        void markNodePayloadDirtyFromState(
-            detail::MotionNode &node,
-            const FrameContentState &state) {
-            if (!state.debugEvaluated) {
-                return;
-            }
-            const bool payloadChanged =
-                !node.hasLastActivePayload ||
-                node.lastActiveFrameIndex != state.debugActiveIndex ||
-                node.lastActiveSrc != state.src ||
-                node.lastActiveMotionFlags != state.motionFlags ||
-                node.lastActiveMotionDtgt != state.motionDtgt;
-            if (payloadChanged) {
-                node.flags |= 0x01;
-            }
-            node.hasLastActivePayload = true;
-            node.lastActiveFrameIndex = state.debugActiveIndex;
-            node.lastActiveSrc = state.src;
-            node.lastActiveMotionFlags = state.motionFlags;
-            node.lastActiveMotionDtgt = state.motionDtgt;
-        }
-
-        void markNodeNoActiveFrame(detail::MotionNode &node) {
-            node.hasLastActivePayload = true;
-            node.lastActiveFrameIndex = -1;
-            node.lastActiveSrc.clear();
-            node.lastActiveMotionFlags = 0;
-            node.lastActiveMotionDtgt.clear();
-        }
+        // REMOVED 2026-06-21: markNodePayloadDirtyFromState / markNodeNoActiveFrame.
+        // These were an invented per-node payload-change detector that set node+44
+        // (node.flags bit0x01) unconditionally at the seek-primitive tail, with no
+        // counterpart in libkrkr2.so (node+44 is set 1 only inside the actual
+        // cross-frame seek iteration bodies — 0x6B7FBC / 0x6B72C0 / 0x6BA28C — and
+        // cleared unconditionally each frame by the post-loop at 0x6BBD2C). See the
+        // detailed comment at the former call site in
+        // advanceNodeFrameSelectionLike_0x6926B4. The port-local lastActive* cache
+        // fields they maintained had no other consumer and were removed from
+        // MotionNode.h.
 
         struct NodeTransformOrder {
             int order[4] = {0, 1, 2, 3};
@@ -340,7 +322,6 @@ namespace motion::internal {
                 resetClipSlot(node.slots[0]);
                 resetClipSlot(node.slots[1]);
                 node.activeSlotIndex = 0;
-                markNodeNoActiveFrame(node);
                 return false;
             }
 
@@ -485,7 +466,6 @@ namespace motion::internal {
             node.activeSlot().done = true;
             node.activeSlot().crossfading = false;
             node.otherSlot().done = true;
-            markNodeNoActiveFrame(node);
             return {};
         }
 
@@ -536,11 +516,31 @@ namespace motion::internal {
 
         FrameContentState state = frameStateFromNodeSlots(node, selectionTime);
         if(!state.debugEvaluated) {
-            markNodeNoActiveFrame(node);
             return state;
         }
         node.currentFrameType = state.frameType;
-        markNodePayloadDirtyFromState(node, state);
+        // NOTE (2026-06-21): the port previously called
+        // markNodePayloadDirtyFromState(node, state) here — an INVENTED node+44
+        // (node.flags bit0x01) dirtying channel that ran UNCONDITIONALLY at the
+        // tail of the seek primitive (outside the forward/backward seek loops),
+        // setting node.flags=1 whenever the active payload differed from a
+        // port-local lastActive* cache. libkrkr2.so has NO such channel: node+44
+        // is set 1 ONLY inside the actual cross-frame seek iteration bodies, each
+        // guarded by an "did this frame actually step a frame" flag
+        // (Player_advanceNodeFrames 0x6B7FBC via `else if((v9&1)==0) goto LABEL_25`;
+        // Player_advanceRootAndNodes inline seek 0x6B72C0 via `if((v47&1)==0) goto
+        // LABEL_98`; Player_rewindRootAndNodes 0x6BA28C same pattern). A node that
+        // does NOT cross a frame this tick leaves node+44 at the 0 written by
+        // Player_updateLayers' unconditional post-loop clear (0x6BBD2C). The
+        // invented unconditional channel kept static type-3 child-Player nodes'
+        // node+44 (and hence Player_evaluateTimeline's `internalDirty = a2 ||
+        // node+44` at 0x699B1C → accumulated.dirty at node+1504) pinned at 1 every
+        // frame, so they never settled → childMotionPass (0x6BE0C0) never took the
+        // skip gate → the child motion was re-played every frame with _deltaTime=0
+        // → the child Player's time never advanced → the type-3 subtree never
+        // reached 'done'/destroy → unbounded recursion (DRACU title: 28000 nodes /
+        // 1.9GB / blank). Removed to match the binary: node+44 settles via the
+        // post-loop clear when no seek iteration runs this tick.
         return state;
     }
 
@@ -779,6 +779,14 @@ namespace motion {
         // corrected here.
         for (size_t i = 1; i < nodes.size(); ++i) {
             detail::MotionNode &node = nodes[i];
+            const auto sourceGate = [&]() {
+                const int mask = _preview ? 6153 : 6145;
+                return node.forceVisible != 0 ||
+                    (node.nodeType >= 0 && node.nodeType < 31 &&
+                     ((1 << node.nodeType) & mask) != 0);
+            };
+            const int priorActiveFrame = node.activeSlot().frameIndex;
+            const int priorOtherFrame = node.otherSlot().frameIndex;
             // Player_advanceNodeFrames (0x6B7E44) seeks this node's two slots to
             // the node's selection time. The live seek writes node.slots[0/1],
             // node.activeSlotIndex, node.flags |= 1 and clears
@@ -817,6 +825,11 @@ namespace motion {
                 // node+8 != 0 -> Player_advanceNodeFrames (0x6B7E44). NO events.
                 // Same forward+corrective-backward seek in both play directions.
                 advanceNodeFramesLike_0x6B7E44(node, clampedEvalTime);
+                if(sourceGate() &&
+                   (node.activeSlot().frameIndex != priorActiveFrame ||
+                    node.otherSlot().frameIndex != priorOtherFrame)) {
+                    findSourceForNodeLike_0x6948E8(node);
+                }
                 continue;
             }
             // node+8 == 0 -> single-direction inline seek WITH events: forward
@@ -831,6 +844,11 @@ namespace motion {
             } else {
                 advanceNodeFrameBackwardInlineSeekLike_0x6BA1CC(
                     node, clampedEvalTime, &_pendingEvents);
+            }
+            if(sourceGate() &&
+               (node.activeSlot().frameIndex != priorActiveFrame ||
+                node.otherSlot().frameIndex != priorOtherFrame)) {
+                findSourceForNodeLike_0x6948E8(node);
             }
         }
     }
@@ -870,8 +888,15 @@ namespace motion {
             // in its tail @0x6B674C when the re-seed lands exactly on an action
             // frame; pass _pendingEvents so reseekTimelineCursors' node re-seed
             // (the binary's @0x6B91B0 loop) reproduces those onAction pushes.
-            initializeNodeTimelineSlotsLike_0x6B64AC(
-                node, frames, targetTime, transformOrder, &_pendingEvents);
+            if(initializeNodeTimelineSlotsLike_0x6B64AC(
+                   node, frames, targetTime, transformOrder, &_pendingEvents)) {
+                const int mask = _preview ? 6153 : 6145;
+                if(node.forceVisible != 0 ||
+                   (node.nodeType >= 0 && node.nodeType < 31 &&
+                    ((1 << node.nodeType) & mask) != 0)) {
+                    findSourceForNodeLike_0x6948E8(node);
+                }
+            }
         }
     }
 
@@ -919,8 +944,16 @@ namespace motion {
             // 砖5/洞2: the dirty-node rebuild is a direct Player_initNodeTimeline
             // (0x6B64AC) call, so its tail @0x6B674C onAction push fires here too;
             // pass _pendingEvents to reproduce it.
-            initializeNodeTimelineSlotsLike_0x6B64AC(
-                node, frames, _clampedEvalTime, transformOrder, &_pendingEvents);
+            if(initializeNodeTimelineSlotsLike_0x6B64AC(
+                   node, frames, _clampedEvalTime, transformOrder,
+                   &_pendingEvents)) {
+                const int mask = _preview ? 6153 : 6145;
+                if(node.forceVisible != 0 ||
+                   (node.nodeType >= 0 && node.nodeType < 31 &&
+                    ((1 << node.nodeType) & mask) != 0)) {
+                    findSourceForNodeLike_0x6948E8(node);
+                }
+            }
         }
     }
 
@@ -997,8 +1030,16 @@ namespace motion {
                 rootState.flipY = root.delta.flipY;
                 rootState.blendMode = 16;
             }
+            const std::string priorRootSrc = root.activeSlot().src;
+            const std::string priorRootIcon = root.activeSlot().icon;
             // Populate root active clip slot
             populateSlotFromState(root.activeSlot(), rootState);
+            if((root.activeSlot().src != priorRootSrc ||
+                root.activeSlot().icon != priorRootIcon) &&
+               (root.forceVisible != 0 ||
+                ((1 << root.nodeType) & (_preview ? 6153 : 6145)) != 0)) {
+                findSourceForNodeLike_0x6948E8(root);
+            }
             root.currentFrameType = rootState.frameType;
             populateTransformStateFromFrameState(root.localState, rootState);
             root.localState.dirty = root.delta.dirty;
@@ -1055,9 +1096,6 @@ namespace motion {
             root.interpolatedCache.prtA = rootState.prtA;
             root.interpolatedCache.prtZ = rootState.prtZ;
             root.interpolatedCache.prtRange = rootState.prtRange;
-
-            refreshSourceGeometryFromSourceName(root, _activeMotion,
-                                                rootState.src);
 
             // Step 3: Build root local 2x2 matrix via sub_699940
             // Reuse applyLocalTransform logic but on raw 2x2
@@ -1213,13 +1251,11 @@ namespace motion {
                 }
             }
 
-            if (!evaluateTimelineLike_0x699AE4(
-                    node, timelineDirtyArg, currentTime)) {
+            const bool evalRet = evaluateTimelineLike_0x699AE4(
+                    node, timelineDirtyArg, currentTime);
+            if (!evalRet) {
                 continue;
             }
-
-            refreshSourceGeometryFromSourceName(
-                node, _activeMotion, node.interpolatedCache.src);
 
             // Player_updateLayers clears node+1584 after evaluateTimeline but
             // keeps the active/visible override bytes intact.

@@ -28,15 +28,24 @@ namespace motion {
     namespace {
         using PreparedRenderItem = detail::PreparedRenderItem;
 
-        std::array<tTVPPointD, 6> makeTextureQuad(double w, double h) {
+        std::array<tTVPPointD, 6> makeTextureQuad(
+            const std::array<int, 4> &rect) {
+            const double l = rect[0], t = rect[1];
+            const double r = rect[2], b = rect[3];
             return {{
-                {0.0, 0.0},
-                {w, 0.0},
-                {0.0, h},
-                {w, 0.0},
-                {0.0, h},
-                {w, h},
+                {l, t}, {r, t}, {l, b}, {r, t}, {l, b}, {r, b},
             }};
+        }
+
+        std::array<int, 4> sourceRectForItem(
+            const PreparedRenderItem &item,
+            const iTVPTexture2D *texture) {
+            if(item.sourceTexture && item.sourceRect[2] > item.sourceRect[0] &&
+               item.sourceRect[3] > item.sourceRect[1]) {
+                return item.sourceRect;
+            }
+            return {0, 0, static_cast<int>(texture->GetWidth()),
+                    static_cast<int>(texture->GetHeight())};
         }
 
         std::array<tTVPPointD, 6> makeAffineTargetQuad(
@@ -485,8 +494,7 @@ namespace motion {
                               const PreparedRenderItem &item,
                               iTVPTexture2D *sourceTexture) {
             auto dst = makeAffineTargetQuad(item, 0.5, 0.5);
-            auto src = makeTextureQuad(sourceTexture->GetWidth(),
-                                       sourceTexture->GetHeight());
+            auto src = makeTextureQuad(sourceRectForItem(item, sourceTexture));
             tRenderTexQuadArray::Element srcTex[] = {
                 tRenderTexQuadArray::Element(sourceTexture, src.data())
             };
@@ -509,8 +517,11 @@ namespace motion {
                 return false;
             }
 
-            const double srcW = sourceTexture->GetWidth();
-            const double srcH = sourceTexture->GetHeight();
+            const auto sourceRect = sourceRectForItem(item, sourceTexture);
+            const double srcL = sourceRect[0];
+            const double srcT = sourceRect[1];
+            const double srcW = sourceRect[2] - sourceRect[0];
+            const double srcH = sourceRect[3] - sourceRect[1];
             for(int y = 0; y < item.meshDivY - 1; ++y) {
                 const double v0 = static_cast<double>(y) /
                     static_cast<double>(item.meshDivY - 1);
@@ -530,12 +541,12 @@ namespace motion {
                         p0, p1, p2, p1, p2, p3,
                     }};
                     std::array<tTVPPointD, 6> src{{
-                        {std::floor(srcW * u0), std::floor(srcH * v0)},
-                        {std::ceil(srcW * u1), std::floor(srcH * v0)},
-                        {std::floor(srcW * u0), std::ceil(srcH * v1)},
-                        {std::ceil(srcW * u1), std::floor(srcH * v0)},
-                        {std::floor(srcW * u0), std::ceil(srcH * v1)},
-                        {std::ceil(srcW * u1), std::ceil(srcH * v1)},
+                        {srcL + std::floor(srcW * u0), srcT + std::floor(srcH * v0)},
+                        {srcL + std::ceil(srcW * u1), srcT + std::floor(srcH * v0)},
+                        {srcL + std::floor(srcW * u0), srcT + std::ceil(srcH * v1)},
+                        {srcL + std::ceil(srcW * u1), srcT + std::floor(srcH * v0)},
+                        {srcL + std::floor(srcW * u0), srcT + std::ceil(srcH * v1)},
+                        {srcL + std::ceil(srcW * u1), srcT + std::ceil(srcH * v1)},
                     }};
                     tRenderTexQuadArray::Element srcTex[] = {
                         tRenderTexQuadArray::Element(sourceTexture, src.data())
@@ -709,10 +720,11 @@ namespace motion {
                        item, _preview)) {
                     continue;
                 }
-                auto *sourceTexture =
-                    _sourceCacheNative->loadRenderSourceTextureByName(
-                        detail::widen(item.sourceKey), item.srcRef,
-                        item.blendMode, item.packedColors);
+                auto *sourceTexture = item.sourceTexture
+                    ? item.sourceTexture
+                    : _sourceCacheNative->loadRenderSourceTextureByName(
+                          detail::widen(item.sourceKey), item.srcRef,
+                          item.blendMode, item.packedColors);
                 PrivateMotionGLLRenderItemInputLike_0x6DE738 queueItem;
                 queueItem.opacity =
                     privateMotionGLLOpacityLike_0x6DE738(item, _preview);
@@ -724,12 +736,8 @@ namespace motion {
                 queueItem.meshDivY = item.meshDivY;
                 queueItem.packedColors = item.packedColors;
                 if(sourceTexture) {
-                    queueItem.sourceRect = {
-                        0,
-                        0,
-                        static_cast<std::int32_t>(sourceTexture->GetWidth()),
-                        static_cast<std::int32_t>(sourceTexture->GetHeight()),
-                    };
+                    const auto rect = sourceRectForItem(item, sourceTexture);
+                    queueItem.sourceRect = {rect[0], rect[1], rect[2], rect[3]};
                     queueItem.sourceTexture = sourceTexture;
                 }
                 populatePrivateMotionGLLPointsLike_0x6DE738(item, queueItem);
@@ -1044,10 +1052,11 @@ namespace motion {
                 continue;
             }
 
-            auto *sourceTexture =
-                _sourceCacheNative->loadRenderSourceTextureByName(
-                    detail::widen(item.sourceKey), item.srcRef,
-                    item.blendMode, item.packedColors);
+            auto *sourceTexture = item.sourceTexture
+                ? item.sourceTexture
+                : _sourceCacheNative->loadRenderSourceTextureByName(
+                      detail::widen(item.sourceKey), item.srcRef,
+                      item.blendMode, item.packedColors);
             if(!sourceTexture || sourceTexture->GetWidth() <= 0 ||
                sourceTexture->GetHeight() <= 0) {
                 continue;

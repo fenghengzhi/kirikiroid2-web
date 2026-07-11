@@ -120,13 +120,15 @@ namespace motion {
                 return (mask & (1 << node.nodeType)) != 0;
             }
 
-            // Motion_Player_findSource(node+200, player, slot+356, slot+348).
-            // DEFERRED: deep layer-source resolution. We mark that it was reached.
-            void findSourceLike(NodeFrameStreamsLike & /*node*/) {
-                // PLATFORM_BOUNDARY / DEFERRED: resolves the active slot's layer
-                // source handle from node+200 (label) into slot+348/+356. The PSB
-                // stand-in has no live layer registry to resolve against. Gate is
-                // reproduced (findSourceGate); body is a no-op.
+            // Motion_Player_findSource(node+200, player, slot+356, slot+348)
+            // READS the active slot src/icon and WRITES node+200. This pure
+            // stepping model records that write; the live Player resolves the
+            // variant, atlas pointer and geometry in findSourceForNodeLike_0x6948E8.
+            void findSourceLike(NodeFrameStreamsLike &node) {
+                const auto &slot = node.active_slot();
+                node.sourceSrc = slot.src;
+                node.sourceIcon = slot.icon;
+                node.sourceResolved = !slot.src.empty();
             }
 
             // Apply the action/sync/align gate that advance/rewind/reseek run when

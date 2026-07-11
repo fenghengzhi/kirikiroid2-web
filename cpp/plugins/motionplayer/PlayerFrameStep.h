@@ -70,15 +70,15 @@ namespace motion {
             std::uint8_t interpFlag = 0;
             // +26  mergedFlag      merge: *(result+26) = 1 (content merged).
             std::uint8_t mergedFlag = 0;
+            // +28  icon            merge: independent icon key variant.
+            std::string icon;
             // +36  src             merge: tTJSVariant at *(v3+9). Decoded as the
             //                      "src" string (mask via (1<<nodeType)&0x1849).
             std::string src;        // logical view of the +36 tTJSVariant
             std::vector<std::string> srcList;  // particle-node "src" array form
             // +44  blendMode       merge: v3[11], default 16, mask 0x20000 "bm".
             std::uint32_t blendMode = 16;
-            // +56  icon/ox         merge: (double*)v3+7. In the src/icon block it
-            //                      holds the "icon" variant; in the ox/oy block
-            //                      mask&1 writes ox here.  We keep ox.
+            // +56  ox              semantic field written by mask&1.
             double ox = 0.0;
             // +64  oy              merge: (double*)v3+8 (mask 0x1 "oy").
             double oy = 0.0;

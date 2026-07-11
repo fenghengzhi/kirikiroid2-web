@@ -22,6 +22,7 @@
 #endif
 
 #include "StorageIntf.h"
+#include "RenderManager.h"
 #include "psbfile/PSBMediaRegistry.h"
 #include "tjsArray.h"
 #include "tjsDictionary.h"
@@ -29,6 +30,15 @@
 #define LOGGER spdlog::get("plugin")
 
 namespace motion::detail {
+
+    MotionSnapshot::~MotionSnapshot() {
+        for(auto &[key, texture] : sourceAtlasTextures) {
+            (void)key;
+            if(texture) {
+                texture->Release();
+            }
+        }
+    }
 
     namespace {
 
@@ -1367,6 +1377,10 @@ namespace motion::detail {
         // snapshot priority[cursor]["content"] into Player+616 — NO event gate.
         snapshot->priorityFrames = dictionaryList(root, {"priority"});
         snapshot->moduleValue = root->toTJSVal();
+        const auto sourceSpec =
+            dictionaryString(root, {"spec"}).value_or(std::string{});
+        snapshot->sourceSpec = sourceSpec == "krkr" ? 1
+                             : sourceSpec == "win" ? 2 : 0;
         if(logoChainTraceEnabled(snapshot)) {
             resetLogoChainTraceSession(snapshot->path);
             logoChainTraceLogf(snapshot->path, "snapshot.load", "PSB parse",
