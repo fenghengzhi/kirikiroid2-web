@@ -190,7 +190,7 @@ Step function `EmoteAngleController_step(this, float* outRad, float dt)`:
 ```c
 EmoteEngine_progress(this, dt):
     v13 = this;  // EmoteEngine*
-    Player_preProgress();
+    EmoteEngine_preProgress_guess(this, false, originalDt); // 0x671764
     while (dt > 0 || dirty_flag@1162):
         step = fmin(dt, 1.1);  // physics step cap
         dirty_flag@1162 = 0;

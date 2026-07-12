@@ -16,7 +16,7 @@ progress_inner @0x6C106C 调用链:
 - Player_reseekTimelineCursors @0x6B86C8 (旧 sub_6B86C8, **本轮重命名**, 此前完全未文档化) — 全量游标 re-seek 到 +456: layer 流(+1072→cursor +916/+920/+928 + action/sync/align gate @+1093)、root 流(+548→+568/+576/+584, content→+616)、variable-track deque(+1312..1368, 160B stride, 2-slot seed via sub_6B786C/sub_6B7A70)、per-node initNodeTimeline、Player_pruneHM3_byNodeIdentity、+280 list sub_6B9650. 在 firstFrame 种子和 loop wraparound 时调用.
 - advance/rewindRootAndNodes, advanceNodeFrames (per-node 帧步进, 见 framesel memory)
 
-注意: Player_preProgress @0x671764 是 **playing-list controller stepper** (a1[130..131] playing-list 上 EmoteVarController_step), 与 progress_inner 解耦. 本端 preProgressPlayingTimelinesLike_0x671764 接错了调用点.
+CORRECTION 2026-07-12: 0x671764 的 this 是 **EmoteEngine**，不是 Player。0x67D050..60 证明 X0=engine、W1=0、V0=original dt；它遍历 engine+1040/+1048 playing vector，并查 engine HM3@+936。错位的 Player::frameProgress 调用已移除，调用恢复到 EmoteEngine::progress。
 
 ## Byte-verified 字段类型 (a1=Player*)
 - +480 progressFlags = **1-byte** (LDRB @0x6C1330, NOT 16-bit; clusterG "init 257" 存疑). LSB=1 时冻结 +1120 游标推进但仍跑 advanceRoot.

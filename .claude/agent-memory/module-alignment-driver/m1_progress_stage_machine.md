@@ -34,9 +34,9 @@ stand-in + 注释忠实化；P5/P6 核心游标机 (Player_progress_inner @0x6C1
   0x6C1408 rewind=loopTime; 0x6C1428 **reseekTimelineCursors**=totalFrames; 0x6C11C0 rewind=wrapped。
   ⚠ 0x6C1488/0x6C1428 是 reseekTimelineCursors (全量+精确门控), **不是** advanceRoot — port
   这两点只加 node seek, **不加** advance-form layer seek (gate 形式会错)。
-- **0x671764 Player_preProgress** = playing-list controller stepper, xref 仅 EmoteEngine_progress
+- **0x671764 EmoteEngine_preProgress_guess** = engine playing-list controller stepper；0x67D060 参数为 X0=engine/W1=0/V0=original dt
   (0x67D01C) + sub_675E40, **不在** progress_inner 链。progress_inner 的 preProgress 是
-  Player_preProgressDirtyNodes @0x6B6878。frameProgress:998 调它是错位, 应迁 EmoteEngine.cpp (DEFER)。
+  Player_preProgressDirtyNodes @0x6B6878。frameProgress 中的错位调用已移除，并迁入 EmoteEngine::progress（2026-07-12）。
 - **_evalResultValues = HM2 @+320 的 port mirror, 非凭空多出** (0x6C4668 LABEL_132
   HM2_upsert(+320,label)=value, logo-diff gated)。但每帧 `.clear()` 是 port-invented
   (二进制 HM2 持久, progress_inner 入口只清 +1152/+483)。移除 clear = 高风险行为变更, DEFER。

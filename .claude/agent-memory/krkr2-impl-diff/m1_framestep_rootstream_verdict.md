@@ -38,6 +38,6 @@ metadata:
 - O-2(低,未建模字段):entry 0x6C1088 `*(DWORD)(+1152)=0` 本地 Player 无 +1152 字段(grep 确认 +1152 全是 EmoteEngine._windFreqY,异对象)。不臆造,标注。
 - O-3(低,平台边界):pruneHM3 loop2 matched 分支内 Motion_Player_findSource(0x6b85a0,gate nodeType==0 && slot+344==0)src-dispatch DEFERRED——本地 src 建模为 std::string 非 iTJSDispatch2*/icon pair,与 V+44 srcDispatch 同边界。
 - O-4(低,DEFERRED 但已记):sub_697D34 chainDispatches build(0x6c48bc,bindParameterValue HM1 首插)纯 TJS-dispatch scope 解析,无 port consumer(getVariable 读 HM2 非 HM1 链)。本地 chainSegments 用 splitScopeSegmentsLike 建(:513),仅 dispatch 句柄那半 DEFERRED。
-- O-5(低,已知架构 blend):frameProgress 是 emote/non-emote 混合体(preProgressPlayingTimelinesLike_0x671764 误植调用点,xrefs 证实属 EmoteEngine_progress 链,迁移 DEFERRED 保 logo green)。属 source-structure split 而非 value 偏离。
+- O-5 CORRECTED/DONE 2026-07-12: 0x671764 的 this 是 EmoteEngine（0x67D060: X0=engine/W1=0/V0=original dt），不是 Player。frameProgress 错位调用已删除，EmoteEngine::progress 调用已恢复；DRACU START 仍卡死，故另有第二触发点。
 
 **六维评分(2026-06-07)**:源码结构✅9(per-stream split 是已知有意架构 + DEAD FrameStepping 重复,但活路径忠实)/数据流✅9/调用链✅9(O-1/O-5 两处错位/缺调用)/生命周期✅9/容器✅9(multimap/deque/unordered_map 选型全对齐,off-by-one 证伪)/边界✅9(firstFrame +609 已修,layer int-trunc gate 对齐)。**结论:帧步进/timeline/progress 子系统高度 1:1,无 REAL open 缺口;仅 5 条 inert/平台边界/已知 blend。最近 5 commit 移植质量优秀。**

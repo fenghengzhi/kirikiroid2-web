@@ -20,6 +20,6 @@ DRACU child-motion 时间推进的完整二进制机制（反编译 0x6BE0C0/0x6
 - same-motion dedup (Player_playImpl 0x6B22C4 gate `(a3&5)|| motion differs`): 同 motion 无 Force/AsCan → return 不调 initNonEmoteMotion，不动 queuing/firstFrame。端口 onFindMotion@PlayerMotionLoad.cpp:55 已忠实复刻。
 - cycle terminator: childMotionPass 0x6BE31C `if(!slot+24 slotDone)` → play; else 0x6BE328 DESTROY child(resetAndReleaseNodes+release +976/+984)，递归收敛。
 
-**候选端口偏差 (firstFrame fall-through, 未经 runtime 确认)**: 二进制 firstFrame 块(0x6C1108..0x6C1328) **fall-through 到 LABEL_48**(0x6C1330)；端口 PlayerFrameProgress.cpp:2323 **return**。端口注释证明"LABEL_48 gated no-op return"**仅对 queuing=1 成立**；chain 分支(0x6B3AC0/PlayerCore.cpp:911 只置 firstFrame、不置 queuing) 下 firstFrame=1&queuing=0 时二进制 LABEL_48 会 `+1120+=+592` 自增，端口早退不增。若 chain 路径活跃即为 bug。端口 frameProgress fall-through 还会触发误植的 preProgressPlayingTimelinesLike_0x671764(2370)，破坏 yuzulogo(243→242)，故不能裸删 return，需复刻 LABEL_48 跳过 preProgress。
+**候选端口偏差 (firstFrame fall-through, 未经 runtime 确认)**: 二进制 firstFrame 块(0x6C1108..0x6C1328) **fall-through 到 LABEL_48**(0x6C1330)；端口 PlayerFrameProgress.cpp 仍以 queuing=1 的净效果 `return`。CORRECTION 2026-07-12: 原先误植的 0x671764 调用已迁出，且其 this 已证实为 EmoteEngine；因此未来修 firstFrame chain 分支不再需要为跳过该错位调用设计额外绕行。
 
 **端口诊断探针**: PlayerUpdateChildMotion.cpp FRAMEDIAG 已扩展，dump parent/child tick/dt/queuing/firstFrame/allplaying/syncGate/clipStart/tOffset (chara=='char'&&src含char/show，前12次)。用于 runtime 定位 c.q/c.ff/c.dt 哪个卡住。logo yuzulogo(243)/m2logo(93) 差分 0-mismatch。

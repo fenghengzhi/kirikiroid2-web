@@ -19,7 +19,7 @@ firstFrame 块(0x6C1108..0x6C132C)精确拓扑：
 4. 0x6C1328 `if(+483)return`，**fall-through 到 LABEL_48(0x6C1330)**。
 
 **关键陷阱：fall-through 的净效果 = "仅 reseek 后 return"。** 此帧 gate(+480=_queuing)仍=1，LABEL_48：gated clamp(0x6C1338)跳过；forward not-at-end 落 `else if(!gate)` gate=1 → `return result`(0x6C13A4)。LABEL_48 无任何可观察副作用。
-→ **本端 port firstFrame 块尾必须 `return`，不能真 fall-through**：因为本端 LABEL_48 之前插了二进制 progress_inner 没有的 `preProgressPlayingTimelinesLike_0x671764`(错位调用,0x671764 本不在 progress_inner 链)，fall-through 会在 firstFrame 帧多执行它，使标题脚本帧循环提前一拍(yuzulogo 243→242)。return 复刻"reseek 后返回"净效果，零丢副作用。
+CORRECTION 2026-07-12: 错位的 0x671764 调用已从 frameProgress 删除并恢复到 EmoteEngine::progress；0x671764 的 this 是 EmoteEngine。firstFrame 块尾 `return` 现在只对应 queuing=1 时 LABEL_48 落到 0x6C13A4 的净返回，不再承担绕开错位调用的职责。
 
 **字段(全 disasm 直读)**：+456=_clampedEvalTime(0x1C8)、+592=_deltaTime(0x250)、+609=_reverseSeekFlag(0x261,writer 0x6BE4F8 STRB 当 !self+480)、+1120=_frameTickCount(0x460)、+1128=_cachedTotalFrames(0x468)、+481=_firstFrame(0x1E1)、+480=_queuing(0x1E0)。
 
