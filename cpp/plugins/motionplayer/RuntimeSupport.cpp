@@ -1049,18 +1049,16 @@ namespace motion::detail {
             clip.owner = owner;
             clip.motionObject = dic;
             clip.contentObject = dic;
+            // Player_initNonEmoteMotion @0x6B365C reads exactly these two
+            // properties through Motion_propGetDouble @0x662668. That accessor
+            // returns 0.0 for missing/non-numeric values. No frameCount/length/
+            // end aliases and no loop/repeat/is_loop bool fallback exist in the
+            // binary data flow.
             clip.totalFrames =
-                dictionaryNumber(dic, { "lastTime", "frameCount", "frame_count",
-                                        "totalFrameCount", "total_frame_count",
-                                        "frames", "length", "end" })
-                    .value_or(0.0);
-            if(const auto loopTime = dictionaryNumber(dic, { "loopTime" })) {
-                clip.loopTime = *loopTime;
-                clip.loop = *loopTime >= 0.0;
-            } else if(const auto loop = dictionaryBool(dic, { "loop", "repeat", "is_loop" })) {
-                clip.loop = *loop;
-                clip.loopTime = *loop ? 0.0 : -1.0;
-            }
+                dictionaryNumber(dic, { "lastTime" }).value_or(0.0);
+            clip.loopTime =
+                dictionaryNumber(dic, { "loopTime" }).value_or(0.0);
+            clip.loop = clip.loopTime >= 0.0;
 
             if(const auto layers = dictionaryList(dic, { "layer" })) {
                 for(const auto &item : *layers) {

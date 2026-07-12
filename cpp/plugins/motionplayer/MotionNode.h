@@ -481,8 +481,15 @@ namespace motion::detail {
         double clipOriginX = 0.0;      // node+248 local
         double clipOriginY = 0.0;      // node+256 local
 
-        // Parent clip region index (replaces node+1936 pointer)
-        int parentClipIndex = -1;
+        // sub_6BDCC0 @0x6BDCC0: node+1936 points directly to the inherited
+        // type-7 clip AABB (node+2144).  This pointer may cross Player node
+        // containers through child-motion propagation at 0x6BE278.
+        const float *clipAABB = nullptr;
+
+        // sub_6BC4F0 @0x6BC4F0: node+1968 is the independent mesh-transform
+        // ancestor chain.  Keep it separate from node+1936 exactly as the
+        // child-motion propagation at 0x6BE278/0x6BE290 does.
+        MotionNode *meshAncestor = nullptr;
 
         bool anchorEnabled = false;
 

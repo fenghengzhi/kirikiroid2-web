@@ -629,19 +629,18 @@ namespace motion {
                 };
             }
 
-            if(!syntheticParentOnly && node.parentClipIndex >= 0 &&
-               node.parentClipIndex < static_cast<int>(nodes.size())) {
-                const auto &clipNode = nodes[node.parentClipIndex];
-                if(clipNode.shapeAABB[2] >= clipNode.shapeAABB[0] &&
-                   clipNode.shapeAABB[3] >= clipNode.shapeAABB[1]) {
+            if(!syntheticParentOnly && node.clipAABB) {
+                const float *clipAABB = node.clipAABB;
+                if(clipAABB[2] >= clipAABB[0] &&
+                   clipAABB[3] >= clipAABB[1]) {
                     const auto p0 =
-                        transformPoint(clipNode.shapeAABB[0], clipNode.shapeAABB[1]);
+                        transformPoint(clipAABB[0], clipAABB[1]);
                     const auto p1 =
-                        transformPoint(clipNode.shapeAABB[2], clipNode.shapeAABB[1]);
+                        transformPoint(clipAABB[2], clipAABB[1]);
                     const auto p2 =
-                        transformPoint(clipNode.shapeAABB[2], clipNode.shapeAABB[3]);
+                        transformPoint(clipAABB[2], clipAABB[3]);
                     const auto p3 =
-                        transformPoint(clipNode.shapeAABB[0], clipNode.shapeAABB[3]);
+                        transformPoint(clipAABB[0], clipAABB[3]);
                     // aligned with sub_6C2334 @0x6c2800-0x6c2954: the
                     // transformed clip bbox is rounded floor(left)/floor(top)/
                     // ceil(right)/ceil(bottom) before being stored into the

@@ -1765,7 +1765,7 @@ namespace motion {
     //
     // Binary main loop (from EmoteEngine_controllers.md):
     //
-    //   Player_preProgress();
+    //   EmoteEngine_preProgress_guess(this, false, dt); // 0x671764
     //   while (dt > 0 || _dirty@1162):
     //       step = fmin(dt, 1.1)           // physics step cap
     //       _dirty@1162 = false
@@ -1792,6 +1792,23 @@ namespace motion {
     // TARGETS (_ctlHairPartsTarget/_ctlBust1/2Target @+1104/+1112/+1120) and the
     // spring CONSTANTS (_bustSpring1/2Const @+1184/+1192), set by the variableList/
     // setVariable resolution path (still open) — until then cur[]/springConst = 0.
+    void EmoteEngine::preProgressLike_0x671764(bool force, double dt) {
+        // EmoteEngine_preProgress_guess @0x671764 entry gate:
+        //   if (dt != 0.0 || (force & 1) != 0) { ... }
+        if(dt == 0.0 && !force) {
+            return;
+        }
+
+        // The binary stores the timeline hashmap at EmoteEngine+936 and the
+        // playing tTJSVariant* vector at +1040. Those typed containers exist on
+        // EmoteEngine locally but their population path is not yet connected;
+        // the live port timeline state is still hosted by the embedded Player.
+        // Keep that pre-existing storage model behind the correctly-owned
+        // EmoteEngine call boundary. This is an explicit remaining architecture
+        // gap, not a platform boundary and not a behavioral guard.
+        player().preProgressTimelineStateModelForEmoteEngine(dt, nullptr);
+    }
+
     void EmoteEngine::progress(float dt) {
         // P0-B2 FIX: top-level gate. The binary (EmoteEngine_progress @0x67D01C,
         // thunk 0x530a5c) opens with `if (*(double*)&a2 != 0.0)` at 0x530a60 and
@@ -1810,11 +1827,10 @@ namespace motion {
         // `dt` is the drained working copy; `originalDt` is v12.
         const float originalDt = dt; // v12 @0x67d054
 
-        // Player_preProgress() stub — Player already has its own progress
-        // pipeline (PlayerFrameProgress.cpp) that the EmotePlayer calls
-        // directly. Keeping the call point as a documented anchor:
-        // PLATFORM_BOUNDARY: Player_preProgress not isolated as a separate
-        //   call yet.
+        // 0x67D050 W1=WZR; 0x67D054 preserves the original V0 dt; X0 remains
+        // this EmoteEngine through BL @0x67D060. Must run exactly once before
+        // the dt-slice loop, never from Player_progress_inner @0x6C106C.
+        preProgressLike_0x671764(false, originalDt); // BL 0x67D060
 
         // dt-slice main loop with physics step cap = 1.1f.
         // Binary: `if (dt>0) goto LABEL_6` enters the do-while body; the inner

@@ -98,7 +98,8 @@ namespace motion {
     //   0x685BC0 先调 EmotePlayer_NCB_classInit@0x686148(注册 `finalize`),
     //   再调 EmotePlayer_ncb_registerMembers@0x67FAC8,注册完整 70 成员 + 2 常量
     //   (TimelinePlayFlagParallel/Difference)。成员回调多为 Player_*/sub_*,操作
-    //   底层 EmoteEngine/Player(progress=sub_6818B4 直接调 Player_preProgress、
+    //   底层 EmoteEngine/Player(progress=sub_6818B4 经 0x67D060 直接调
+    //   EmoteEngine_preProgress_guess、
     //   Player_HM2_upsert、bindParameterValue)。即 Motion.EmotePlayer 是套在同一
     //   Player/EmoteEngine 机器上的第二个 NCB facade(与 Motion.Player @0x6D69C8
     //   是两套独立注册面,但语义重叠)。
@@ -120,7 +121,7 @@ namespace motion {
         //   EmotePlayer_ncb_registerMembers @0x67FAC8(70 成员 + 2 常量)。
         // 注册顺序见 main.cpp NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer)。
         // 二进制成员回调多为 Player_*/sub_*,操作底层同一 Player/EmoteEngine
-        //   机器(progress=sub_6818B4 直接 Player_preProgress)。故本地各成员
+        //   机器(progress=sub_6818B4 直接 EmoteEngine_preProgress_guess)。故本地各成员
         //   委托给内部 player()/engine(),与 D3DEmotePlayer wrapper 共用同一
         //   Player 机器(两套独立 NCB facade,语义重叠 = 二进制设计)。
         // ============================================================

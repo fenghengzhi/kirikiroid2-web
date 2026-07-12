@@ -700,7 +700,8 @@ namespace motion {
     //   Binary EmotePlayer is a parallel NCB facade over the SAME Player/
     //   EmoteEngine machine as Motion.Player @0x6D69C8 and D3DEmotePlayer
     //   @0x52E504 (member callbacks are the same Player_*/sub_* fns operating
-    //   on the underlying object — progress=sub_6818B4 -> Player_preProgress).
+    //   on the underlying object — progress=sub_6818B4 ->
+    //   EmoteEngine_preProgress_guess @0x671764).
     //   Local EmotePlayer reaches that machine via the same EmoteObject chain
     //   D3DEmotePlayer uses (EmoteObject -> EmoteEngine -> Player). Each member
     //   delegates to player()/engine(), matching the binary's per-member fn.

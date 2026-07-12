@@ -18,6 +18,17 @@ namespace motion {
             _activeMotion ? _activeMotion->path
                                                : std::string{};
         const double currentTime = _clampedEvalTime;
+        const bool hangPhaseEnabled =
+            motionPath.find("motion/main.psb") != std::string::npos ||
+            motionPath.find("motion/mono_loop.psb") != std::string::npos;
+        const auto hangPhase = [&](const char *stage) {
+            if(hangPhaseEnabled) {
+                LOGGER->error(
+                    "HANGPHASE updateLayers.{} this={} time={} nodes={} path='{}'",
+                    stage, static_cast<const void *>(this), currentTime,
+                    nodes.size(), motionPath);
+            }
+        };
 
         // Keep legacy diagnostic scratch in sync with node count. The native
         // node+8 path is parameterEntries; do not use this as player+384.
@@ -28,7 +39,11 @@ namespace motion {
             _perNodeEvalData[ni].evalTime = _clampedEvalTime;
         }
 
+        // Temporary call-boundary probes around the exact Player_updateLayers
+        // @0x6BB33C phase order. Each next marker proves the prior call returned.
+        hangPhase("phase1");
         updateLayersPhase1_PreLoop(currentTime);
+        hangPhase("phase2");
         updateLayersPhase2_MainLoop(currentTime);
         if(detail::logoChainTraceEnabled(_activeMotion)) {
             const auto &root = nodes[0];
@@ -84,16 +99,27 @@ namespace motion {
         // sub_6BC000 → sub_6BC4F0 → sub_6BD8DC → sub_6BDA28 →
         // sub_6BDCC0 → sub_6BDE94 → sub_6BE0C0 → sub_6BEDD0 →
         // sub_6BF0DC → sub_6C0528
+        hangPhase("cameraConstraint");
         updateLayersPhase3_CameraConstraint();
+        hangPhase("vertexComputation");
         updateLayersPhase3_VertexComputation();
+        hangPhase("visibility");
         updateLayersPhase3_Visibility();
+        hangPhase("cameraNode");
         updateLayersPhase3_CameraNode();
+        hangPhase("shapeAABB");
         updateLayersPhase3_ShapeAABB();
+        hangPhase("shapeGeometry");
         updateLayersPhase3_ShapeGeometry();
+        hangPhase("childMotion");
         updateLayersPhase3_MotionSubNode(currentTime);
+        hangPhase("particleEmitter");
         updateLayersPhase3_ParticleEmitter();
+        hangPhase("particleSystem");
         updateLayersPhase3_ParticleSystem(currentTime);
+        hangPhase("anchorNode");
         updateLayersPhase3_AnchorNode();
+        hangPhase("cleanup");
 
         // === Post-loop cleanup ===
         // Aligned to 0x6BBCB4..0x6BBE1C: clear per-node flags and timeline state.
@@ -115,6 +141,8 @@ namespace motion {
         for (auto &evalData : _perNodeEvalData) {
             evalData.dirtyFlag = 0;
         }
+
+        hangPhase("exit");
 
     }
 

@@ -463,7 +463,7 @@ namespace motion {
                 detail::logoChainTraceLogf(
                     motionPath, "buildNodeTree.node", "0x6B51F0",
                     _clampedEvalTime,
-                    "nodeIndex={} label={} type={} parent={} hasSource={} meshType={} inheritFlags=0x{:x} parameterizeIndex={} objTriPriority={} parentClipIndex={} stencilType={} hasStencilTypeKey={}",
+                    "nodeIndex={} label={} type={} parent={} hasSource={} meshType={} inheritFlags=0x{:x} parameterizeIndex={} objTriPriority={} clipAABB={} meshAncestor={} stencilType={} hasStencilTypeKey={}",
                     node.index,
                     node.layerName.empty() ? std::string("<root>")
                                            : node.layerName,
@@ -471,7 +471,8 @@ namespace motion {
                     node.source.valid ? 1 : 0,
                     node.meshType, node.inheritFlags, node.parameterizeIndex,
                     node.objTriPriority,
-                    node.parentClipIndex,
+                    static_cast<const void *>(node.clipAABB),
+                    static_cast<const void *>(node.meshAncestor),
                     node.stencilType, hasStencilTypeKey ? 1 : 0);
             }
         }

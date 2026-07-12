@@ -791,7 +791,11 @@ namespace motion {
         void syncVariableKeysFromActiveMotion();
         void syncSelectorControlsLike_0x670D1C();
         const detail::TimelineState *primaryTimelineStateLike_0x66F80C() const;
-        void preProgressPlayingTimelinesLike_0x671764(
+        // Local backing model for EmoteEngine_preProgress_guess @0x671764.
+        // The binary owner/call boundary is EmoteEngine; only EmoteEngine's
+        // 0x671764 wrapper may invoke this while the timeline containers remain
+        // hosted on the embedded Player in the current port.
+        void preProgressTimelineStateModelForEmoteEngine(
             double dt, std::unordered_map<std::string, double> *prevTimes);
         void resetTimelineControlStateLike_0x671A50(
             detail::TimelineState &state,

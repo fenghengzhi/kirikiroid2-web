@@ -407,6 +407,18 @@ namespace motion {
                         double freq1 = 60.0 / prtF;
                         if (freq0 != freq1)
                             freq0 = freq0 + (freq1 - freq0) * random();
+                        // Temporary convergence probe only. 0x6BF6E8 adds this
+                        // exact interval and 0x6BF6F8 branches while timer<=0.
+                        // A non-positive interval cannot converge; preserve the
+                        // binary loop and diagnose its upstream eval-mirror input.
+                        if(freq0 <= 0.0) {
+                            LOGGER->error(
+                                "HANGDIAG particle-timer this={} node={} timer={} interval={} prtFmin={} prtF={} dt={} path='{}' motion='{}'",
+                                static_cast<const void *>(this), pn.index,
+                                pn.emitterTimerAccum, freq0, prtFmin, prtF, dt,
+                                _activeMotion ? _activeMotion->path : std::string(),
+                                detail::narrow(getMotion()));
+                        }
                         pn.emitterTimerAccum += freq0;
                         ++emitCount;
                     }
@@ -832,8 +844,8 @@ namespace motion {
             // Pass 2: Step each remaining child (0x6C1984..0x6C1A3C)
             // Binary at 0x6C1960: mesh combine parent propagation.
             {
-                const int meshParentIdx = pn.meshCombineEnabled
-                    ? static_cast<int>(pi) : pn.visibleAncestorIndex;
+                detail::MotionNode *meshParent = pn.meshCombineEnabled
+                    ? &pn : pn.meshAncestor;
                 const int pCount2 = pn.getParticleCount();
                 for (int ci = 0; ci < pCount2; ++ci) {
                     auto *child = pn.getParticleChild(ci);
@@ -841,8 +853,9 @@ namespace motion {
                     child->_zFactor = _zFactor;
                     if (!child->_nodes.empty()) {
                         auto &cr = child->_nodes[0];
-                        cr.parentClipIndex = pn.parentClipIndex;
-                        cr.visibleAncestorIndex = meshParentIdx;
+                        cr.clipAABB = pn.clipAABB;
+                        cr.meshAncestor = meshParent;
+                        cr.visibleAncestorIndex = pn.visibleAncestorIndex;
                         cr.forceVisible = pn.forceVisible;
                     }
                     // Aligned to libkrkr2.so particle-child step at 0x6BEF58+:

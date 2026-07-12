@@ -79,10 +79,12 @@ namespace motion {
     //     SEPARATE node chain at +1288 releasing key ttstr. The +1272/+1288
     //     pairing means HM#4's footprint owns the +1288 chain; HM#5's own
     //     value width is likewise un-reversed. TODO(P-B): placeholder = double.
-    //   HM#3 @936 — dtor walks nodes calling sub_683E40(node+1): a compound
-    //     ~104B value object (ttstr@0 + dispatch@8 + sub-object@16 + heap@96).
+    //   HM#3 @936 — sub_687C80 allocates a 0x88-byte hash node: 16-byte
+    //     {next,key} header + a 120-byte compound value. The dtor walks nodes
+    //     calling sub_683E40(node+1): ttstr@0 + owned objects@8/@16 +
+    //     tTJSVariant@28 + heap@96.
     //     Distinct, owned value type. TODO(P-B): reverse the value struct;
-    //     placeholder = an opaque 104B POD until then.
+    //     placeholder = an opaque 120B POD until then.
     //
     // PLATFORM_BOUNDARY: libc++ unordered_map header (~32-40B) != libstdc++ 56B
     // and libc++ vector (24B, matches). sizeof(EmoteEngine) on the Web build can
@@ -117,13 +119,15 @@ namespace motion {
         // Opaque until reversed. TODO(P-B): unpack into a typed struct mirroring
         // sub_683E40's ascending-offset field destruction.
         struct EmoteHM3Value {
-            // PLATFORM_BOUNDARY: 104B opaque. sub_683E40 frees in order:
+            // REVERSE GAP: 120B opaque. sub_683E40 frees in order:
             //   +96 heap (operator delete), +28 sub-object (sub_A0F778),
             //   +16 owned ptr (sub_683AA8 + delete), +8 owned ptr (sub_683EB8
             //   + delete), +0 ttstr (tTJSVariant_Release). Reverse-declaration
             //   destruction would be needed once typed. Held opaque for now so
             //   no partial/incorrect lifetime is introduced.
-            unsigned char opaque[104] = {};
+            // sub_687C80 initializes bytes +0..+79, seeds double +72=1.0, then
+            // zeroes +80..+111; the final 8 bytes are not explicitly written.
+            unsigned char opaque[120] = {};
         };
         using EmoteHM3Map =
             std::unordered_map<ttstr, EmoteHM3Value, ttstr_hash, ttstr_equal>;
@@ -348,6 +352,11 @@ namespace motion {
         // dt-sliced physics + animation main loop. Physics step functions are
         // STUB_WARN at present; control-flow skeleton matches the binary.
         void progress(float dt);
+
+        // Aligned with libkrkr2.so EmoteEngine_preProgress_guess @0x671764.
+        // EmoteEngine_progress calls this once with (force=false, original dt)
+        // before entering its fmin(dt, 1.1) controller-slice loop.
+        void preProgressLike_0x671764(bool force, double dt);
 
         // Aligned with libkrkr2.so sub_6766E0
         //   EmoteEngine_applyVarControllers_pos_scale_color_angle @ 0x6766E0.

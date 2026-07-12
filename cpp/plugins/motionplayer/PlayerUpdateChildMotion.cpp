@@ -189,6 +189,19 @@ namespace motion {
                                 double loopEnd = child._loopTime;
                                 if (loopEnd >= 0.0) {
                                     double totalFrames = child._cachedTotalFrames;
+                                    // Temporary convergence probe only. The binary
+                                    // loop at 0x6BE4BC subtracts totalFrames and
+                                    // adds loopEnd. Preserve it verbatim and report
+                                    // a non-negative update before it can spin.
+                                    if(childTime >= totalFrames && loopEnd >= totalFrames) {
+                                        LOGGER->error(
+                                            "HANGDIAG child-wrap parent={} child={} node={} childTime={} loopTime={} lastTime={} parentDelta={} parentPath='{}' childPath='{}'",
+                                            static_cast<const void *>(this),
+                                            static_cast<const void *>(&child), mn.index,
+                                            childTime, loopEnd, totalFrames, _deltaTime,
+                                            _activeMotion ? _activeMotion->path : std::string(),
+                                            child._activeMotion ? child._activeMotion->path : std::string());
+                                    }
                                     while (childTime >= totalFrames)
                                         childTime = childTime - totalFrames + loopEnd;
                                 }
@@ -548,20 +561,23 @@ namespace motion {
                 }
                 if (!child._nodes.empty()) {
                     auto &cr = child._nodes[0];
-                    // Clip chain propagation (0x6BE278..0x6BE29C)
-                    // Binary: v17+1936 = v10+1936 (parentClipIndex)
+                    // Independent clip-AABB and mesh-ancestor propagation
+                    // (0x6BE278..0x6BE29C).
+                    // Binary: childRoot+1936 = motionNode+1936
                     //         v18 = v10; if (!node+1963) v18 = *(v10+1968)
-                    //         v17+1968 = v18 (visibleAncestor with conditional)
-                    //         v17+1952 = v10+1952 (third field — not mapped in our arch)
-                    cr.parentClipIndex = mn.parentClipIndex;
+                    //         v17+1968 = v18 (mesh ancestor with conditional)
+                    //         v17+1952 = v10+1952 (visible render ancestor)
+                    cr.clipAABB = mn.clipAABB;
                     // Binary 0x6BE280: if meshCombineEnabled, current node is ancestor;
                     // otherwise, propagate stored ancestor.
                     if (mn.meshCombineEnabled) {
-                        cr.visibleAncestorIndex = static_cast<int>(i);
+                        cr.meshAncestor = &mn;
                     } else {
-                        cr.visibleAncestorIndex = mn.visibleAncestorIndex;
+                        cr.meshAncestor = mn.meshAncestor;
                     }
-                    // Binary 0x6BE29C: propagates node+1952 (forceVisible) to child root
+                    // Binary 0x6BE29C independently propagates node+1952.
+                    cr.visibleAncestorIndex = mn.visibleAncestorIndex;
+                    // node+1996 is a separate per-node forceVisible field.
                     cr.forceVisible = mn.forceVisible;
                 }
                 // Step child: frameProgress + updateLayers (0x6BE2A4..0x6BE2AC)

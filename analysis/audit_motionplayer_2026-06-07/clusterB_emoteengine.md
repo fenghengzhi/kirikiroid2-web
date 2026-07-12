@@ -163,14 +163,15 @@ residual-vs-original dt, B4 bind-loop) are ALL RESOLVED in current code:
   Recommend a controller-step sub-audit.
 - EmotePhysics_springStep / EmoteBustChainSpring_step — ❓ called by step fns; in
   EmoteSpring.cpp (out of scope). Disasm confirms call sites + arg order match.
-- Player_preProgress @0x67d060 — see C&CB-1 below (call omitted locally).
+- EmoteEngine_preProgress_guess @0x67d060 — see C&CB-1 below.
 
 ================================================================================
 ## Platform-boundary annotations in EmoteEngine.cpp (listed, not counted)
 ================================================================================
 - cpp:118-119 dtor "not yet reverse-engineered" — STALE (now @0x67F4B8). See P1-B4.
-- cpp:1816-1817 PLATFORM_BOUNDARY: Player_preProgress not isolated. Binary @0x67d060
-  calls `Player_preProgress()` (no args) at the TOP of every non-zero-dt progress,
+- CORRECTION 2026-07-12: the old "Player_preProgress / no args" reading was false.
+  Disasm at 0x67d050..0x67d060 proves X0 remains EmoteEngine*, W1=0 and V0 is the
+  original dt. The local call is now restored at the top of every non-zero-dt progress,
   BEFORE the drain loop. LOCAL omits it entirely (comment says "Player has its own
   progress pipeline ... calls directly"). This is a real CALL-CHAIN omission (CB-1
   below) dressed as a boundary; the reason given ("not isolated yet") is a porting
@@ -180,19 +181,13 @@ residual-vs-original dt, B4 bind-loop) are ALL RESOLVED in current code:
   argued. Accept.
 
 ================================================================================
-## CB-1 (call-chain): Player_preProgress @0x67d060 omitted
+## CB-1 (call-chain): EmoteEngine_preProgress_guess @0x67d060 restored
 ================================================================================
-- BINARY: `if (dt != 0.0) { ...; Player_preProgress(); v14 = dt; if (dt>0) ... }`.
-  preProgress runs once per non-zero-dt frame, before the slice loop. It takes no
-  args (the decomp shows `Player_preProgress();`).
-- LOCAL: no call; replaced by a comment claiming the EmotePlayer drives Player's
-  pipeline directly. This is a call-chain divergence (one binary call missing). It is
-  NOT a P0 dataflow bug IF Player_preProgress's effect is reproduced elsewhere in the
-  Player progress path, but that equivalence is UNVERIFIED here. Recommend: decompile
-  Player_preProgress, confirm whether its per-frame side effect is already covered by
-  the EmotePlayer entry; if not, restore the call at progress() top (after the dt!=0
-  gate, before the drain loop). Marked P1 pending that check. (Out-of-this-file: the
-  callee likely belongs to cluster A/Player.)
+- BINARY: `if (dt != 0.0) EmoteEngine_preProgress_guess(this, false, dt)` once
+  before the slice loop. LOCAL: restored in `EmoteEngine::progress`; the prior call
+  from plain `Player::frameProgress` was removed because Player_progress_inner
+  @0x6C106C has no such edge. Remaining gap: the engine HM3@+936 / playing vector
+  @+1040 population is still represented by the embedded Player timeline model.
 
 ================================================================================
 ## IDB corrections applied / proposed
@@ -211,7 +206,7 @@ residual-vs-original dt, B4 bind-loop) are ALL RESOLVED in current code:
 Massive improvement vs 2026-05-30: progress dataflow, 6 deque steps, stepHairParts,
 stepBust, setVariable, ctor, dtor, and all 9 builders are now ported and LINE-ALIGNED
 with the binary. No P0 remains. Residual: P2-B1 (COLOR seed value now confirmable =
-128/128/128/255, should be applied), CB-1 (Player_preProgress call omitted — verify
+128/128/128/255, should be applied), CB-1 (EmoteEngine preProgress call restored;
 equivalence or restore), P1-B4 (stale dtor comment now decompiled), plus accepted
 boundaries P1-B1 (HM7 bucket-order bind) / P1-B2 (libc++ vs libstdc++ map ABI) /
 P1-B3 (variant-vector Release, inert). Recursive ❓: bind-loop callees (sub_67C560/

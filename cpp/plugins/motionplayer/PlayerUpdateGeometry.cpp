@@ -121,6 +121,14 @@ namespace motion {
             auto &parentNode = nodes[parentIdx];
             const int slotIdx = 0;  // current slot index
 
+            // sub_6BC4F0 @0x6BC6E4..0x6BC704: node+1968 is derived from
+            // the already-processed parent.  A mesh/combine parent becomes
+            // the next ancestor; otherwise its existing +1968 is forwarded.
+            vn.meshAncestor =
+                (parentNode.hasMeshData || parentNode.meshCombineEnabled)
+                    ? &parentNode
+                    : parentNode.meshAncestor;
+
             // aligned with sub_6BC4F0 @0x6BC648..0x6BC6C4 (node+48 write):
             //   if (*(node+1996) /* forceVisible */) {
             //       materialize emoteEdit dispatch from node+1980;
@@ -150,7 +158,8 @@ namespace motion {
 
             // Parent clip chain: node+1962/1963 flags (0x6BC6E4..0x6BC818)
             // node+1962 = has mesh data, node+1963 = mesh combine enabled
-            // parentClipIndex propagated by sub_6BDCC0 carries the ancestor chain
+            // node+1968 carries the mesh-transform ancestor chain.  It is
+            // independent from node+1936, which points to a clip AABB.
             // Set mesh flags: hasMeshData when meshType!=0 and control points exist;
             // meshCombineEnabled when mesh is active for child deformation.
             // These flags gate the visibleAncestor conditional in sub_6BE0C0 (label_18).
@@ -173,9 +182,9 @@ namespace motion {
                 double px = vn.accumulated.posX;
                 double py = vn.accumulated.posY;
                 // Walk parent clip chain, evaluate through each mesh (0x6BC838..0x6BC8B0)
-                int clipWalk = vn.parentClipIndex;
-                while (clipWalk >= 0 && clipWalk < static_cast<int>(nodes.size())) {
-                    auto &cn = nodes[clipWalk];
+                detail::MotionNode *clipWalk = vn.meshAncestor;
+                while (clipWalk) {
+                    auto &cn = *clipWalk;
                     if (cn.meshControlPointsPrev.size() >= 32) {
                         // Apply inverse matrix to get normalized coords (0x6BC858..0x6BC87C)
                         float tx = static_cast<float>(px) + cn.meshInvOffX;
@@ -198,7 +207,7 @@ namespace motion {
                         px = ox;
                         py = oy;
                     }
-                    clipWalk = cn.parentClipIndex;
+                    clipWalk = cn.meshAncestor;
                 }
                 vn.vertexPosX = px;
                 vn.vertexPosY = py;
@@ -360,7 +369,7 @@ namespace motion {
                         }
 
                         // Parent clip chain mesh cascade (0x6BD118..0x6BD380)
-                        // Walk node+1968 (parentClipIndex), for each mesh-enabled
+                        // Walk node+1968 (meshAncestor), for each mesh-enabled
                         // ancestor: evaluate all mesh points + origin through its mesh
                         // Parent clip chain mesh cascade (0x6BD118..0x6BD380)
                         auto evalBPCascade = [](const float *mesh, float u, float v,
@@ -374,10 +383,10 @@ namespace motion {
                                 outX+=mesh[i*2]*w; outY+=mesh[i*2+1]*w;
                             }
                         };
-                        int clipWalk = vn.parentClipIndex;
+                        detail::MotionNode *clipWalk = vn.meshAncestor;
                         double cascadeOrgX = orgX, cascadeOrgY = orgY;
-                        while (clipWalk >= 0 && clipWalk < static_cast<int>(nodes.size())) {
-                            auto &cn = nodes[clipWalk];
+                        while (clipWalk) {
+                            auto &cn = *clipWalk;
                             if (cn.meshControlPoints.size() >= 32) {
                                 const float *cmesh = cn.meshControlPoints.data();
                                 // Evaluate each mesh point through parent mesh (0x6BD148..0x6BD1E8)
@@ -408,7 +417,7 @@ namespace motion {
                                 _processedMeshVerticesNum += static_cast<int>(
                                     vn.meshControlPoints.size() / 2) + 1;
                             }
-                            clipWalk = cn.parentClipIndex;
+                            clipWalk = cn.meshAncestor;
                         }
                         // Update origin if cascade changed it (0x6BD330..0x6BD380)
                         if (cascadeOrgX != orgX || cascadeOrgY != orgY) {
@@ -686,9 +695,10 @@ namespace motion {
         // from 2x2 matrix × 16-unit extent, origin offset, parent clip clamping.
         for (size_t si = 1; si < nodes.size(); ++si) {
             auto &sn = nodes[si];
-            // Propagate parent clip region (node+1936)
+            // Propagate the parent's clip-AABB pointer (node+1936).  This is a
+            // direct pointer to float[4], not the node+1968 mesh chain.
             if (sn.parentIndex >= 0 && sn.parentIndex < static_cast<int>(nodes.size())) {
-                sn.parentClipIndex = nodes[sn.parentIndex].parentClipIndex;
+                sn.clipAABB = nodes[sn.parentIndex].clipAABB;
             }
             if (sn.nodeType != 7 || !sn.accumulated.active) continue;
 
@@ -713,15 +723,14 @@ namespace motion {
             sn.shapeAABB[2] = static_cast<float>(xMax);
             sn.shapeAABB[3] = static_cast<float>(yMax);
             // Clamp to parent clip (0x6BDE40..0x6BDE80)
-            if (sn.parentClipIndex >= 0 &&
-                sn.parentClipIndex < static_cast<int>(nodes.size())) {
-                const auto &pc = nodes[sn.parentClipIndex];
-                if (pc.shapeAABB[0] > sn.shapeAABB[0]) sn.shapeAABB[0] = pc.shapeAABB[0];
-                if (pc.shapeAABB[1] > sn.shapeAABB[1]) sn.shapeAABB[1] = pc.shapeAABB[1];
-                if (pc.shapeAABB[2] < sn.shapeAABB[2]) sn.shapeAABB[2] = pc.shapeAABB[2];
-                if (pc.shapeAABB[3] < sn.shapeAABB[3]) sn.shapeAABB[3] = pc.shapeAABB[3];
+            if (sn.clipAABB) {
+                const float *pc = sn.clipAABB;
+                if (pc[0] > sn.shapeAABB[0]) sn.shapeAABB[0] = pc[0];
+                if (pc[1] > sn.shapeAABB[1]) sn.shapeAABB[1] = pc[1];
+                if (pc[2] < sn.shapeAABB[2]) sn.shapeAABB[2] = pc[2];
+                if (pc[3] < sn.shapeAABB[3]) sn.shapeAABB[3] = pc[3];
             }
-            sn.parentClipIndex = static_cast<int>(si);
+            sn.clipAABB = sn.shapeAABB;
 
             if(detail::logoSnapshotMarkEnabledForPath(_activeMotion->path) &&
                _activeMotion->path.find("m2logo.mtn") != std::string::npos &&
@@ -729,7 +738,7 @@ namespace motion {
                sn.index == 18) {
                 std::fprintf(
                     stderr,
-                    "SNAPSHAPE frame=%.3f nodeIndex=%d label=%s slotOxOy=(%.3f,%.3f) interpOxOy=(%.3f,%.3f) clipOrigin=(%.3f,%.3f) accumPos=(%.3f,%.3f,%.3f) m=(%.6f,%.6f,%.6f,%.6f) shapeAABB=[%.3f,%.3f,%.3f,%.3f] parentClipIndex=%d\n",
+                    "SNAPSHAPE frame=%.3f nodeIndex=%d label=%s slotOxOy=(%.3f,%.3f) interpOxOy=(%.3f,%.3f) clipOrigin=(%.3f,%.3f) accumPos=(%.3f,%.3f,%.3f) m=(%.6f,%.6f,%.6f,%.6f) shapeAABB=[%.3f,%.3f,%.3f,%.3f] clipAABB=%p\n",
                     _clampedEvalTime,
                     sn.index,
                     sn.layerName.empty() ? "<none>" : sn.layerName.c_str(),
@@ -741,7 +750,7 @@ namespace motion {
                     sn.accumulated.m21, sn.accumulated.m22,
                     sn.shapeAABB[0], sn.shapeAABB[1],
                     sn.shapeAABB[2], sn.shapeAABB[3],
-                    sn.parentClipIndex);
+                    static_cast<const void *>(sn.clipAABB));
             }
         }
 

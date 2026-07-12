@@ -24,20 +24,124 @@ void initPsbFile() { initPSBMedia(); }
 
 void deInitPsbFile() { deInitPSBMedia(); }
 
+namespace {
+
+// libkrkr2.so sub_5981F8 @ 0x5981F8 creates this dispatch object for
+// PSBFile.root.  sub_59673C @ 0x59673C creates another object of the same
+// class for every nested list/dictionary instead of materializing a TJS
+// Array/Dictionary tree.
+class PSBValueDispatch final : public TJS::tTJSDispatch {
+public:
+    explicit PSBValueDispatch(std::shared_ptr<const IPSBValue> value) :
+        value_(std::move(value)) {}
+
+    tjs_error PropGet(tjs_uint32 flag, const tjs_char *membername,
+                      tjs_uint32 *, tTJSVariant *result,
+                      iTJSDispatch2 *) override {
+        // libkrkr2.so sub_597854 @ 0x597854.
+        if(membername == nullptr) {
+            return TJS_E_NOTIMPL;
+        }
+
+        if(const auto list = std::dynamic_pointer_cast<const PSBList>(value_)) {
+            if(ttstr(membername) == TJS_W("count")) {
+                if(result != nullptr) {
+                    *result = static_cast<tjs_int64>(list->size());
+                }
+                return TJS_S_OK;
+            }
+        } else if(const auto dictionary =
+                      std::dynamic_pointer_cast<const PSBDictionary>(value_)) {
+            const auto key = ttstr(membername).AsStdString();
+            const auto child = (*dictionary)[key];
+            if(child != nullptr) {
+                assign(result, child);
+                return TJS_S_OK;
+            }
+        }
+
+        if(flag & TJS_MEMBERMUSTEXIST) {
+            return TJS_E_MEMBERNOTFOUND;
+        }
+        if(result != nullptr) {
+            result->Clear();
+        }
+        return TJS_S_OK;
+    }
+
+    tjs_error PropGetByNum(tjs_uint32 flag, tjs_int num,
+                           tTJSVariant *result,
+                           iTJSDispatch2 *) override {
+        // libkrkr2.so sub_5976C4 @ 0x5976C4.
+        const auto list = std::dynamic_pointer_cast<const PSBList>(value_);
+        if(list == nullptr) {
+            return TJS_E_NOTIMPL;
+        }
+
+        const auto count = static_cast<tjs_int>(list->size());
+        const auto index = num < 0 ? num + count : num;
+        if(index < 0 || index >= count) {
+            if(flag & TJS_MEMBERMUSTEXIST) {
+                return TJS_E_MEMBERNOTFOUND;
+            }
+            if(result != nullptr) {
+                result->Clear();
+            }
+            return TJS_S_OK;
+        }
+
+        assign(result, (*list)[index]);
+        return TJS_S_OK;
+    }
+
+    tjs_error GetCount(tjs_int *result, const tjs_char *membername,
+                       tjs_uint32 *, iTJSDispatch2 *) override {
+        // libkrkr2.so sub_5975E0 @ 0x5975E0.
+        if(membername != nullptr) {
+            return TJS_E_NOTIMPL;
+        }
+        const auto list = std::dynamic_pointer_cast<const PSBList>(value_);
+        if(list == nullptr) {
+            return TJS_E_NOTIMPL;
+        }
+        *result = static_cast<tjs_int>(list->size());
+        return TJS_S_OK;
+    }
+
+private:
+    static void assign(tTJSVariant *result,
+                       const std::shared_ptr<const IPSBValue> &value) {
+        if(result == nullptr) {
+            return;
+        }
+
+        // libkrkr2.so sub_59673C @ 0x59673C converts scalar nodes directly,
+        // but wraps type 0x20/0x21 collection nodes in another dispatch.
+        if(std::dynamic_pointer_cast<const PSBList>(value) != nullptr ||
+           std::dynamic_pointer_cast<const PSBDictionary>(value) != nullptr) {
+            auto *dispatch = new PSBValueDispatch(value);
+            *result = tTJSVariant(dispatch, dispatch);
+            dispatch->Release();
+        } else {
+            *result = value != nullptr ? value->toTJSVal() : tTJSVariant{};
+        }
+    }
+
+    // The current parser owns decoded nodes with shared_ptr.  This member is
+    // the wasm-side owner reference corresponding to the PSB owner AddRef in
+    // sub_5981F8/sub_59673C; it keeps the addressed node alive for the full
+    // lifetime of the TJS dispatch object.
+    std::shared_ptr<const IPSBValue> value_;
+};
+
+} // namespace
+
 static tjs_error getRoot(tTJSVariant *r, tjs_int n, tTJSVariant **p,
                          iTJSDispatch2 *obj) {
     auto *self = ncbInstanceAdaptor<PSB::PSBFile>::GetNativeInstance(obj);
-    iTJSDispatch2 *dic = TJSCreateCustomObject();
-    auto objs = self->getObjects();
-    if(objs != nullptr) {
-        for(const auto &[k, v] : *objs) {
-            tTJSVariant tmp = v->toTJSVal();
-            dic->PropSet(TJS_MEMBERENSURE, ttstr{ k }.c_str(), nullptr, &tmp,
-                         dic);
-        }
-    }
-    *r = tTJSVariant{ dic, dic };
-    dic->Release();
+    auto *root = new PSBValueDispatch(self->getObjects());
+    *r = tTJSVariant(root, root);
+    root->Release();
     return TJS_S_OK;
 }
 

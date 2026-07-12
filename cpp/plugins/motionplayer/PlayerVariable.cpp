@@ -343,10 +343,13 @@ namespace motion {
             bool matched = false;
             for(;;) {
                 const std::size_t chainNodeIndex = idx;
-                // sub_6BA5B4: insert nodes[idx].label at chain end (0x6b985c).
-                chain.push_back(detail::widen(_nodes[idx].layerName));
+                // sub_6BA5B4 @0x6BA5B4 receives a2=vector.begin() at
+                // 0x6B985C: insert at BEGIN. With pop_back below this retains
+                // the newest node/ancestor window while scanning each child.
+                chain.insert(chain.begin(),
+                             detail::widen(_nodes[idx].layerName));
                 // Truncate so chain never exceeds ref length (0x6b9874): drop the
-                // most-recently-added element when over and chain non-empty.
+                // oldest tail element when over and chain non-empty.
                 if(chain.size() > ref.size() && !chain.empty()) {
                     chain.pop_back();
                 }
@@ -483,7 +486,10 @@ namespace motion {
                       slashPos != std::string::npos) {
                 scope = label.substr(0, slashPos);
             }
-            const std::string scopeJoin = scope.empty() ? "::" : scope;
+            // 0x6C46C4..0x6C4708 builds `scope + "::"` when scope exists,
+            // otherwise the literal "::".
+            const std::string scopeJoin =
+                scope.empty() ? "::" : (scope + "::");
             // joinedKey = label ? scopeJoin + label : scopeJoin. The binary's
             // "label" (v101) is parts.suffix; sub_A1359C concatenates without a
             // separator (0x6c4734: join(scopeJoin, label)).

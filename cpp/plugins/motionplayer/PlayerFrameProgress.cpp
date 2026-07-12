@@ -14,6 +14,33 @@ using namespace motion::internal;
 
 namespace {
 
+    class HangPhaseProgressScope {
+        const motion::Player *_player;
+        std::string _path;
+        bool _enabled;
+
+    public:
+        HangPhaseProgressScope(const motion::Player *player,
+                               const std::string &path, double dt,
+                               double tick, double evalTime)
+            : _player(player), _path(path),
+              _enabled(path.find("motion/main.psb") != std::string::npos ||
+                       path.find("motion/mono_loop.psb") != std::string::npos) {
+            if(_enabled) {
+                LOGGER->error(
+                    "HANGPHASE progress.enter this={} dt={} tick={} eval={} path='{}'",
+                    static_cast<const void *>(_player), dt, tick, evalTime, _path);
+            }
+        }
+
+        ~HangPhaseProgressScope() {
+            if(_enabled) {
+                LOGGER->error("HANGPHASE progress.exit this={} path='{}'",
+                              static_cast<const void *>(_player), _path);
+            }
+        }
+    };
+
     template <typename AnimatorState>
     bool stepQueuedAnimatorLike_0x67D01C(AnimatorState &state, double dt,
                                          double &outValue) {
@@ -392,7 +419,7 @@ namespace internal {
         applyClampControlsLike_0x67C8A8();
     }
 
-    void Player::preProgressPlayingTimelinesLike_0x671764(
+    void Player::preProgressTimelineStateModelForEmoteEngine(
         double dt, std::unordered_map<std::string, double> *prevTimes) {
         if(dt <= 0.0) {
             return;
@@ -2147,6 +2174,14 @@ namespace internal {
     }
 
     void Player::frameProgress(double dt) {
+        const std::string hangPhasePath =
+            _activeMotion ? _activeMotion->path : std::string{};
+        // Temporary non-mutating call-boundary probe for Player_progress_inner
+        // @0x6C106C. RAII records every normal/early return; a missing exit pins
+        // a non-returning frameProgress invocation without altering its branches.
+        HangPhaseProgressScope hangPhaseScope(
+            this, hangPhasePath, dt, _frameTickCount, _clampedEvalTime);
+
         // === Player_progress_inner @0x6C106C 入口 ===
         // 移除 port-invented `if(!_syncActive) return;`：二进制 progress_inner 入口
         // (0x6C1080..0x6C10AC) 全是无条件副作用，**无** play/pause/null 守卫。
@@ -2307,15 +2342,12 @@ namespace internal {
             // **return result(0x6C13A4)**。即二进制 firstFrame 路径的净效果 = 仅 reseek 后
             // 返回，LABEL_48 不产生任何可观察副作用。
             //
-            // 本端 LABEL_48 之前还插了两处二进制 progress_inner 没有、或位置不同的步骤：
-            //   - line ~2090 `_deltaTime=...; if(!_queuing)+1120+=...`(= LABEL_48 gated
-            //     advance 本身，gate=1 时 no-op)；
-            //   - line ~2094 preProgressPlayingTimelinesLike_0x671764（错位调用点：二进制
-            //     此函数@0x671764 根本不在 progress_inner 调用链内，见下方 2095 起注释）。
-            // 若 fall-through，这个错位的 preProgress 会在 firstFrame 帧被执行（二进制不会），
-            // 使标题脚本的帧循环提前一拍结束（yuzulogo 243→242，2026-06-06 实测）。故在此
-            // **return**，精确复刻二进制 firstFrame 路径"仅 reseek 后返回"的净效果（LABEL_48
-            // gated 分支可证为返回式 no-op，不丢任何二进制副作用）。
+            // 本端 `_deltaTime=...; if(!_queuing)+1120+=...` 已经是 LABEL_48
+            // gated advance 本身，gate=1 时为 no-op。此前位于此后的
+            // preProgressPlayingTimelinesLike_0x671764 错位调用已经迁出：0x671764
+            // 的真实 this 是 EmoteEngine，且只由 EmoteEngine_progress @0x67D060
+            // 调用。故此处 `return` 现在只表达二进制 firstFrame 路径经 gate=1
+            // 落到 0x6C13A4 返回的净效果，不再用于绕开任何 port-invented 调用。
             return;                                    // = 0x6C13A4 LABEL_48 gated forward return
         }
 
@@ -2336,23 +2368,15 @@ namespace internal {
             _frameTickCount += _deltaTime;           // player+1120 += player+592
         }
 
-        // 砖6/Stage C (P7 teardown — 错位调用点 RE-confirmed, MIGRATION DEFERRED):
-        // CORRECTION of the prior attribution. Player_preProgress @0x671764 is NOT
-        // on the Player_progress_inner (0x6C106C) call chain — byte-verified via
-        // xrefs_to(0x671764): its only callers are EmoteEngine_progress (0x530A5C
-        //   -> 0x67D01C) and sub_675E40. progress_inner's own pre-progress step is
-        // Player_preProgressDirtyNodes (0x6B6878), already invoked above (line ~952).
-        // 0x671764 is a PLAYING-LIST controller stepper: it walks the playing-list
-        // variant array (player[130..131] = _playingTimelineLabels), steps each
-        // entry's EmoteVarController_step, and pops completed entries off the list
-        // — i.e. it belongs to the EmoteEngine progress chain, not the non-emote
-        // progress_inner port that frameProgress mirrors. The faithful fix is to
-        // migrate this call out of frameProgress into the EmoteEngine_progress port
-        // (cpp/plugins/motionplayer/EmoteEngine.cpp). That migration is a progress-
-        // topology refactor (frameProgress is currently an emote/non-emote blend)
-        // and is DEFERRED — see analysis/Player_progress_frame_stepping_M1_plan.md
-        // §7 + module-alignment-driver memory. Left in place to preserve the green
-        // logo differential; only the attribution comment is corrected this round.
+        // 砖6/Stage C — 0x671764 call removed from this function.
+        // Fresh disassembly of EmoteEngine_progress @0x67D01C proves the call at
+        // 0x67D060 keeps X0=EmoteEngine*, sets W1=0 and passes the original dt in
+        // V0. Player_progress_inner @0x6C106C never calls it; its own pre-progress
+        // step is Player_preProgressDirtyNodes @0x6B6878, already invoked above.
+        // The former call here advanced EmoteEngine timeline state on every plain
+        // MotionPlayer frame and could enter its loop-window while loop for DRACU's
+        // main/mono_loop motions. The binary call now lives solely in
+        // EmoteEngine::progress before the controller-slice loop.
         //
         // NOTE on _evalResultValues (= PORT MIRROR OF HM2 @+320, a real binary
         // container — written by Player_bindParameterValue_writesHM1_HM2 @0x6C4668
@@ -2363,8 +2387,6 @@ namespace internal {
         // The fixed-controller eval refresh below overwrites its own labels in a
         // persistent HM2 rather than repopulating a cleared one — matching the
         // by-overwrite semantics of the binary bind-loop.
-        preProgressPlayingTimelinesLike_0x671764(actualDelta, nullptr);
-
         // 子步进 controller 循环 REMOVED (2026-06-05 — 误植拓扑修正)。
         //
         // 此处曾有一个 `while(dt>0){ slice=fmin(dt,1.1); refreshFixed(); dt-=slice }`
@@ -2496,6 +2518,19 @@ namespace internal {
                             if(_cachedTotalFrames > v7) {           // 0x6C14B8 -> LABEL_23
                                 _clampedEvalTime = v7;              // LABEL_23 (0x6C119C)
                             } else {
+                                // Temporary convergence probe only. The binary loop at
+                                // 0x6C14C4 adds (loopTime-lastTime); when that value is
+                                // non-negative, the loop cannot make v7 cross below
+                                // lastTime. Do not guard or alter the loop here: identify
+                                // the upstream writer that violated the binary invariant.
+                                if(_loopTime >= _cachedTotalFrames) {
+                                    LOGGER->error(
+                                        "HANGDIAG progress-wrap this={} tick={} loopTime={} lastTime={} path='{}' motion='{}'",
+                                        static_cast<const void *>(this), v7, _loopTime,
+                                        _cachedTotalFrames,
+                                        _activeMotion ? _activeMotion->path : std::string(),
+                                        detail::narrow(getMotion()));
+                                }
                                 do {
                                     v7 = v7 + _loopTime - _cachedTotalFrames; // 0x6C14C4
                                 } while(_cachedTotalFrames <= v7);  // 0x6C14CC
