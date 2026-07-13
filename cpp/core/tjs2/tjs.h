@@ -12,6 +12,8 @@
 #ifndef tjsH
 #define tjsH
 
+#include <exception>
+#include <functional>
 #include <vector>
 #include "tjsConfig.h"
 #include "tjsVariant.h"
@@ -262,6 +264,10 @@ namespace TJS {
     //---------------------------------------------------------------------------
     class tTJSBinaryStream {
     public:
+        template<typename T>
+        using tAsyncCallback = std::function<void(T, std::exception_ptr)>;
+        using tAsyncActionCallback = std::function<void(std::exception_ptr)>;
+
         //-- must implement
         virtual tjs_uint64 Seek(tjs_int64 offset, tjs_int whence) = 0;
         /* if error, position is not changed */
@@ -284,6 +290,34 @@ namespace TJS {
 
         virtual ~tTJSBinaryStream() = default;
 
+        // Non-blocking counterparts of the primitive stream operations.
+        //
+        // Contract:
+        //  * these functions return before invoking completion;
+        //  * completion is invoked exactly once on the stream I/O executor;
+        //  * a null exception_ptr means success;
+        //  * submissions are executed in FIFO order;
+        //  * the stream, a ReadAsync destination buffer, and a WriteAsync
+        //    source buffer must remain alive until completion. Do not mix
+        //    pending cursor-based async operations with synchronous
+        //    Seek/Read/Write calls on the same stream.
+        //
+        // Derived streams may override these to use a native asynchronous
+        // backend. The defaults dispatch the existing synchronous primitive to
+        // the non-caller stream I/O executor; they never complete inline.
+        virtual void SeekAsync(tjs_int64 offset, tjs_int whence,
+                               tAsyncCallback<tjs_uint64> completion);
+
+        virtual void ReadAsync(void *buffer, tjs_uint read_size,
+                               tAsyncCallback<tjs_uint> completion);
+
+        virtual void WriteAsync(const void *buffer, tjs_uint write_size,
+                                tAsyncCallback<tjs_uint> completion);
+
+        virtual void SetEndOfStorageAsync(tAsyncActionCallback completion);
+
+        virtual void GetSizeAsync(tAsyncCallback<tjs_uint64> completion);
+
         tjs_uint64 GetPosition();
 
         void SetPosition(tjs_uint64 pos);
@@ -296,6 +330,31 @@ namespace TJS {
         tjs_uint32 ReadI32LE();
         tjs_uint16 ReadI16LE();
         tjs_uint8 ReadI8LE();
+
+        // Asynchronous counterparts of the convenience stream operations.
+        // These compose the five virtual async primitives above, preserving a
+        // derived stream's native async implementation.
+        void GetPositionAsync(tAsyncCallback<tjs_uint64> completion);
+
+        void SetPositionAsync(tjs_uint64 pos,
+                              tAsyncActionCallback completion);
+
+        void ReadBufferAsync(void *buffer, tjs_uint read_size,
+                             tAsyncActionCallback completion);
+
+        void WriteBufferAsync(const void *buffer, tjs_uint write_size,
+                              tAsyncActionCallback completion);
+
+        void ReadI64LEAsync(tAsyncCallback<tjs_uint64> completion);
+        void ReadI32LEAsync(tAsyncCallback<tjs_uint32> completion);
+        void ReadI16LEAsync(tAsyncCallback<tjs_uint16> completion);
+        void ReadI8LEAsync(tAsyncCallback<tjs_uint8> completion);
+
+    protected:
+        // Shared FIFO executor used by the default primitive implementations
+        // and by derived streams which only need to defer their synchronous
+        // state machine. The task is never executed on the submitting stack.
+        static void DispatchAsync(std::function<void()> task);
     };
     //---------------------------------------------------------------------------
 

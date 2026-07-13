@@ -11,8 +11,14 @@
 
 #include "tjsCommHead.h"
 
+#include <array>
 #include <map>
 #include <cassert>
+#include <condition_variable>
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <fmt/printf.h>
 #include "tjs.h"
 #include "tjsScriptBlock.h"
@@ -642,6 +648,144 @@ namespace TJS {
     // tTJSBinaryStream
     //---------------------------------------------------------------------------
 
+    namespace {
+        // A single FIFO strand intentionally serializes cursor-mutating stream
+        // operations. It also guarantees that an Async method can never invoke
+        // its completion on the submitting stack. Native async stream backends
+        // may override the five primitive methods and bypass this executor.
+        class tTJSBinaryStreamAsyncExecutor final {
+            std::mutex Mutex;
+            std::condition_variable Condition;
+            std::deque<std::function<void()>> Tasks;
+            bool Stopping = false;
+            std::thread Worker;
+
+            void Execute() {
+                while(true) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock<std::mutex> lock(Mutex);
+                        Condition.wait(lock, [this] {
+                            return Stopping || !Tasks.empty();
+                        });
+                        if(Stopping && Tasks.empty())
+                            return;
+                        task = std::move(Tasks.front());
+                        Tasks.pop_front();
+                    }
+                    try {
+                        task();
+                    } catch(...) {
+                        // Primitive wrappers translate operation failures to
+                        // exception_ptr. A throwing user completion must not
+                        // terminate the executor or prevent later completions.
+                    }
+                }
+            }
+
+        public:
+            tTJSBinaryStreamAsyncExecutor() :
+                Worker([this] { Execute(); }) {}
+
+            ~tTJSBinaryStreamAsyncExecutor() {
+                {
+                    std::lock_guard<std::mutex> lock(Mutex);
+                    Stopping = true;
+                }
+                Condition.notify_one();
+                if(Worker.joinable())
+                    Worker.join();
+            }
+
+            void Submit(std::function<void()> task) {
+                {
+                    std::lock_guard<std::mutex> lock(Mutex);
+                    Tasks.emplace_back(std::move(task));
+                }
+                Condition.notify_one();
+            }
+        };
+
+        tTJSBinaryStreamAsyncExecutor &GetBinaryStreamAsyncExecutor() {
+            static tTJSBinaryStreamAsyncExecutor executor;
+            return executor;
+        }
+
+        template<typename T, typename Callback, typename Operation>
+        void DispatchBinaryStreamValue(Callback completion,
+                                       Operation operation) {
+            GetBinaryStreamAsyncExecutor().Submit(
+                [completion = std::move(completion),
+                 operation = std::move(operation)]() mutable {
+                    try {
+                        T value = operation();
+                        if(completion)
+                            completion(value, nullptr);
+                    } catch(...) {
+                        if(completion)
+                            completion(T{}, std::current_exception());
+                    }
+                });
+        }
+
+        template<typename Callback, typename Operation>
+        void DispatchBinaryStreamAction(Callback completion,
+                                        Operation operation) {
+            GetBinaryStreamAsyncExecutor().Submit(
+                [completion = std::move(completion),
+                 operation = std::move(operation)]() mutable {
+                    try {
+                        operation();
+                        if(completion)
+                            completion(nullptr);
+                    } catch(...) {
+                        if(completion)
+                            completion(std::current_exception());
+                    }
+                });
+        }
+    }
+
+    void tTJSBinaryStream::DispatchAsync(std::function<void()> task) {
+        GetBinaryStreamAsyncExecutor().Submit(std::move(task));
+    }
+
+    void tTJSBinaryStream::SeekAsync(
+        tjs_int64 offset, tjs_int whence,
+        tAsyncCallback<tjs_uint64> completion) {
+        DispatchBinaryStreamValue<tjs_uint64>(
+            std::move(completion),
+            [this, offset, whence] { return Seek(offset, whence); });
+    }
+
+    void tTJSBinaryStream::ReadAsync(
+        void *buffer, tjs_uint read_size,
+        tAsyncCallback<tjs_uint> completion) {
+        DispatchBinaryStreamValue<tjs_uint>(
+            std::move(completion),
+            [this, buffer, read_size] { return Read(buffer, read_size); });
+    }
+
+    void tTJSBinaryStream::WriteAsync(
+        const void *buffer, tjs_uint write_size,
+        tAsyncCallback<tjs_uint> completion) {
+        DispatchBinaryStreamValue<tjs_uint>(
+            std::move(completion),
+            [this, buffer, write_size] { return Write(buffer, write_size); });
+    }
+
+    void tTJSBinaryStream::SetEndOfStorageAsync(
+        tAsyncActionCallback completion) {
+        DispatchBinaryStreamAction(
+            std::move(completion), [this] { SetEndOfStorage(); });
+    }
+
+    void tTJSBinaryStream::GetSizeAsync(
+        tAsyncCallback<tjs_uint64> completion) {
+        DispatchBinaryStreamValue<tjs_uint64>(
+            std::move(completion), [this] { return GetSize(); });
+    }
+
     void tTJSBinaryStream::SetEndOfStorage() { TJS_eTJSError(TJSWriteError); }
 
     //---------------------------------------------------------------------------
@@ -727,5 +871,150 @@ namespace TJS {
         tjs_uint8 temp;
         ReadBuffer(&temp, 1);
         return temp;
+    }
+
+    void tTJSBinaryStream::GetPositionAsync(
+        tAsyncCallback<tjs_uint64> completion) {
+        SeekAsync(0, TJS_BS_SEEK_CUR, std::move(completion));
+    }
+
+    void tTJSBinaryStream::SetPositionAsync(
+        tjs_uint64 pos, tAsyncActionCallback completion) {
+        SeekAsync(static_cast<tjs_int64>(pos), TJS_BS_SEEK_SET,
+                  [pos, completion = std::move(completion)](
+                      tjs_uint64 actual, std::exception_ptr error) mutable {
+                      if(error) {
+                          if(completion)
+                              completion(error);
+                          return;
+                      }
+                      try {
+                          if(actual != pos)
+                              TJS_eTJSError(TJSSeekError);
+                          if(completion)
+                              completion(nullptr);
+                      } catch(...) {
+                          if(completion)
+                              completion(std::current_exception());
+                      }
+                  });
+    }
+
+    void tTJSBinaryStream::ReadBufferAsync(
+        void *buffer, tjs_uint read_size, tAsyncActionCallback completion) {
+        ReadAsync(buffer, read_size,
+                  [read_size, completion = std::move(completion)](
+                      tjs_uint actual, std::exception_ptr error) mutable {
+                      if(error) {
+                          if(completion)
+                              completion(error);
+                          return;
+                      }
+                      try {
+                          if(actual != read_size)
+                              TJS_eTJSError(
+                                  TVPGetMessageByLocale("err_read_error"));
+                          if(completion)
+                              completion(nullptr);
+                      } catch(...) {
+                          if(completion)
+                              completion(std::current_exception());
+                      }
+                  });
+    }
+
+    void tTJSBinaryStream::WriteBufferAsync(
+        const void *buffer, tjs_uint write_size,
+        tAsyncActionCallback completion) {
+        WriteAsync(buffer, write_size,
+                   [write_size, completion = std::move(completion)](
+                       tjs_uint actual, std::exception_ptr error) mutable {
+                       if(error) {
+                           if(completion)
+                               completion(error);
+                           return;
+                       }
+                       try {
+                           if(actual != write_size)
+                               TJS_eTJSError(TJSWriteError);
+                           if(completion)
+                               completion(nullptr);
+                       } catch(...) {
+                           if(completion)
+                               completion(std::current_exception());
+                       }
+                   });
+    }
+
+    void tTJSBinaryStream::ReadI64LEAsync(
+        tAsyncCallback<tjs_uint64> completion) {
+        auto buffer = std::make_shared<std::array<tjs_uint8, 8>>();
+        ReadBufferAsync(
+            buffer->data(), static_cast<tjs_uint>(buffer->size()),
+            [buffer, completion = std::move(completion)](
+                std::exception_ptr error) mutable {
+                if(error) {
+                    if(completion)
+                        completion(0, error);
+                    return;
+                }
+                tjs_uint64 value = 0;
+                for(tjs_uint i = 0; i < buffer->size(); ++i)
+                    value |= static_cast<tjs_uint64>((*buffer)[i]) << (i * 8);
+                if(completion)
+                    completion(value, nullptr);
+            });
+    }
+
+    void tTJSBinaryStream::ReadI32LEAsync(
+        tAsyncCallback<tjs_uint32> completion) {
+        auto buffer = std::make_shared<std::array<tjs_uint8, 4>>();
+        ReadBufferAsync(
+            buffer->data(), static_cast<tjs_uint>(buffer->size()),
+            [buffer, completion = std::move(completion)](
+                std::exception_ptr error) mutable {
+                if(error) {
+                    if(completion)
+                        completion(0, error);
+                    return;
+                }
+                tjs_uint32 value = 0;
+                for(tjs_uint i = 0; i < buffer->size(); ++i)
+                    value |= static_cast<tjs_uint32>((*buffer)[i]) << (i * 8);
+                if(completion)
+                    completion(value, nullptr);
+            });
+    }
+
+    void tTJSBinaryStream::ReadI16LEAsync(
+        tAsyncCallback<tjs_uint16> completion) {
+        auto buffer = std::make_shared<std::array<tjs_uint8, 2>>();
+        ReadBufferAsync(
+            buffer->data(), static_cast<tjs_uint>(buffer->size()),
+            [buffer, completion = std::move(completion)](
+                std::exception_ptr error) mutable {
+                if(error) {
+                    if(completion)
+                        completion(0, error);
+                    return;
+                }
+                tjs_uint16 value = 0;
+                for(tjs_uint i = 0; i < buffer->size(); ++i)
+                    value |= static_cast<tjs_uint16>((*buffer)[i]) << (i * 8);
+                if(completion)
+                    completion(value, nullptr);
+            });
+    }
+
+    void tTJSBinaryStream::ReadI8LEAsync(
+        tAsyncCallback<tjs_uint8> completion) {
+        auto buffer = std::make_shared<std::array<tjs_uint8, 1>>();
+        ReadBufferAsync(
+            buffer->data(), static_cast<tjs_uint>(buffer->size()),
+            [buffer, completion = std::move(completion)](
+                std::exception_ptr error) mutable {
+                if(completion)
+                    completion(error ? 0 : (*buffer)[0], error);
+            });
     }
 } // namespace TJS

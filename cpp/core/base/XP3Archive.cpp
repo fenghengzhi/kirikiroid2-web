@@ -970,6 +970,15 @@ tjs_uint64 tTVPXP3ArchiveStream::Seek(tjs_int64 offset, tjs_int whence) {
 }
 
 //---------------------------------------------------------------------------
+void tTVPXP3ArchiveStream::SeekAsync(
+    tjs_int64 offset, tjs_int whence,
+    tAsyncCallback<tjs_uint64> completion) {
+    // Keep the XP3 cursor state machine on the shared stream FIFO strand.
+    // This is a real non-caller completion even though Seek itself is local.
+    tTJSBinaryStream::SeekAsync(offset, whence, std::move(completion));
+}
+
+//---------------------------------------------------------------------------
 tjs_uint tTVPXP3ArchiveStream::Read(void *buffer, tjs_uint read_size) {
     EnsureSegment();
 
@@ -1019,10 +1028,33 @@ tjs_uint tTVPXP3ArchiveStream::Read(void *buffer, tjs_uint read_size) {
 }
 
 //---------------------------------------------------------------------------
+void tTVPXP3ArchiveStream::ReadAsync(
+    void *buffer, tjs_uint read_size,
+    tAsyncCallback<tjs_uint> completion) {
+    // The existing XP3 segment/cache/filter flow executes away from the
+    // submitting stack. In particular, a Web VLFS miss can no longer make the
+    // caller retain its current lock merely because ReadAsync was submitted.
+    tTJSBinaryStream::ReadAsync(buffer, read_size, std::move(completion));
+}
+
+//---------------------------------------------------------------------------
 tjs_uint tTVPXP3ArchiveStream::Write(const void *buffer, tjs_uint write_size) {
     return 0;
 }
 
 //---------------------------------------------------------------------------
+void tTVPXP3ArchiveStream::WriteAsync(
+    const void *buffer, tjs_uint write_size,
+    tAsyncCallback<tjs_uint> completion) {
+    tTJSBinaryStream::WriteAsync(buffer, write_size, std::move(completion));
+}
+
+//---------------------------------------------------------------------------
 tjs_uint64 tTVPXP3ArchiveStream::GetSize() { return OrgSize; }
+
+//---------------------------------------------------------------------------
+void tTVPXP3ArchiveStream::GetSizeAsync(
+    tAsyncCallback<tjs_uint64> completion) {
+    tTJSBinaryStream::GetSizeAsync(std::move(completion));
+}
 //---------------------------------------------------------------------------

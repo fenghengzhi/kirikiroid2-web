@@ -201,11 +201,22 @@ private:
 public:
     tjs_uint64 Seek(tjs_int64 offset, tjs_int whence) override;
 
+    void SeekAsync(tjs_int64 offset, tjs_int whence,
+                   tAsyncCallback<tjs_uint64> completion) override;
+
     tjs_uint Read(void *buffer, tjs_uint read_size) override;
+
+    void ReadAsync(void *buffer, tjs_uint read_size,
+                   tAsyncCallback<tjs_uint> completion) override;
 
     tjs_uint Write(const void *buffer, tjs_uint write_size) override;
 
+    void WriteAsync(const void *buffer, tjs_uint write_size,
+                    tAsyncCallback<tjs_uint> completion) override;
+
     tjs_uint64 GetSize() override;
+
+    void GetSizeAsync(tAsyncCallback<tjs_uint64> completion) override;
 };
 //---------------------------------------------------------------------------
 
