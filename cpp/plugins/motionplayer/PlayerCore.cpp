@@ -379,6 +379,7 @@ namespace motion {
         _timelines.clear();
         _playingTimelineLabels.clear();
         _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        _drawAffineMatrixNonIdentity = false;
         _variableKeys.Clear();
         _evalResultValues.clear();
         _evalResultList.clear();
@@ -612,6 +613,7 @@ namespace motion {
         _timelines.clear();
         _playingTimelineLabels.clear();
         _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        _drawAffineMatrixNonIdentity = false;
         _variableKeys.Clear();
         _evalResultValues.clear();
         _evalResultList.clear();
@@ -674,6 +676,7 @@ namespace motion {
         self->_timelines.clear();
         self->_playingTimelineLabels.clear();
         self->_drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        self->_drawAffineMatrixNonIdentity = false;
         self->_variableKeys.Clear();
         self->_evalResultValues.clear();
         if(self->ensureMotionLoaded()) {

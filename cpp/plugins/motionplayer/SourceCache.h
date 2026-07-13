@@ -213,7 +213,7 @@ namespace motion {
         double verts[8] = {};
 
         int getType() const { return type; }
-        tTJSVariant getP() const { return tTJSVariant(); } // stub
+        tTJSVariant getP() const;
         bool contains(double, double) { return false; } // stub
     };
 

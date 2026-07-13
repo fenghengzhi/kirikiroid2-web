@@ -9,6 +9,55 @@
 using namespace motion::internal;
 
 namespace {
+    template<typename Shape>
+    tTJSVariant makeShapeVariant(Shape *shape) {
+        using ShapeAdaptor = ncbInstanceAdaptor<Shape>;
+        if(auto *dispatch = ShapeAdaptor::CreateAdaptor(shape)) {
+            tTJSVariant result(dispatch, dispatch);
+            dispatch->Release();
+            return result;
+        }
+        delete shape;
+        return {};
+    }
+
+    tTJSVariant buildShapeVariantLike_0x691EE0(
+        const motion::detail::MotionNode &node) {
+        const double *v = node.shapeVertices;
+        switch(node.shapeGeomType) {
+            case 0: {
+                auto *shape = new motion::Point();
+                shape->x = v[0];
+                shape->y = v[1];
+                return makeShapeVariant(shape);
+            }
+            case 1: {
+                auto *shape = new motion::Circle();
+                shape->x = v[0];
+                shape->y = v[1];
+                shape->r = v[2];
+                return makeShapeVariant(shape);
+            }
+            case 2: {
+                auto *shape = new motion::Rect();
+                shape->l = v[3];
+                shape->t = v[4];
+                shape->w = v[5] - v[3];
+                shape->h = v[6] - v[4];
+                return makeShapeVariant(shape);
+            }
+            case 3: {
+                auto *shape = new motion::Quad();
+                for(size_t i = 0; i < std::size(shape->verts); ++i) {
+                    shape->verts[i] = v[7 + i];
+                }
+                return makeShapeVariant(shape);
+            }
+            default:
+                return {};
+        }
+    }
+
     bool hitTestMotionNodeShape(const motion::detail::MotionNode &node,
                                 double x, double y) {
         motion::detail::HitData hit{};
@@ -65,6 +114,9 @@ namespace {
             tTJSVariant(static_cast<tjs_int>(node.colorBytes[2])),
             tTJSVariant(static_cast<tjs_int>(node.colorBytes[3])),
         }));
+        // LayerGetter_shape @ 0x69CB48 passes node+1664 to the four-way
+        // shape factory sub_691EE0. Unknown types intentionally stay void.
+        getter->setShape(buildShapeVariantLike_0x691EE0(node));
         if(node.nodeType == 3) {
             getter->setMotion(node.childPlayerVar);
         } else if(node.nodeType == 4) {
@@ -83,6 +135,18 @@ namespace {
 } // anonymous namespace
 
 namespace motion {
+    tTJSVariant Quad::getP() const {
+        std::vector<tTJSVariant> points;
+        points.reserve(4);
+        for(size_t i = 0; i < 4; ++i) {
+            points.push_back(detail::makeDictionary({
+                {"x", tTJSVariant(verts[i * 2])},
+                {"y", tTJSVariant(verts[i * 2 + 1])},
+            }));
+        }
+        return detail::makeArray(points);
+    }
+
     // --- Viewport/display ---
     // M20 P1 (cluster H): binary root setters write root node delta + dirty,
     // not Player-level viewport scalars. Port now writes BOTH root delta

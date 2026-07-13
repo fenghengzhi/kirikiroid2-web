@@ -85,6 +85,9 @@ namespace motion {
         const bool isIdentity =
             matrix[0] == 1.0 && matrix[1] == 0.0 && matrix[2] == 0.0 &&
             matrix[3] == 1.0 && matrix[4] == 0.0 && matrix[5] == 0.0;
+        // Player_setDrawAffineTranslateMatrix @ 0x6D4F50 writes Player+611
+        // from the same exact six-component identity comparison.
+        nativeInstance->_drawAffineMatrixNonIdentity = !isIdentity;
         detail::logoChainTraceLogf(
             motionPath, "setDrawAffine", "0x6D4F14",
             nativeInstance->_clampedEvalTime,

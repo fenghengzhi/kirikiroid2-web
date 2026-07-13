@@ -1384,6 +1384,11 @@ namespace motion {
         tTJSVariant _scratchWorkLayer;
         std::array<double, 6> _drawAffineMatrix{1.0, 0.0, 0.0,
                                                 1.0, 0.0, 0.0};
+        // libkrkr2.so Player+611. Player_ctor@0x6CED30 initializes it to
+        // false; Player_setDrawAffineTranslateMatrix@0x6D4F50 updates it by
+        // exact comparison with the identity matrix. sub_6C2334 consumes it
+        // to gate viewport/corner transforms.
+        bool _drawAffineMatrixNonIdentity = false;
 
         // === Extension fields (Phase A7) ===
         // disabledSelectorTargets / pendingEvents are Web port extensions

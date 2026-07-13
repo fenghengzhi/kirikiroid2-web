@@ -741,10 +741,9 @@ namespace motion {
                 state.absolute = _nextLayerAbsolute++;
                 state.hitThreshold = 256;
                 state.initialized = true;
-                if(item.nodeIndex >= 0 &&
-                   item.nodeIndex < static_cast<int>(_nodes.size())) {
-                    const auto &node = _nodes[item.nodeIndex];
-                    state.layerGetter = getLayerGetter(detail::widen(node.layerName));
+                if(item.nativeNode) {
+                    state.layerGetter = getLayerGetter(
+                        detail::widen(item.nativeNode->layerName));
                 }
             }
 

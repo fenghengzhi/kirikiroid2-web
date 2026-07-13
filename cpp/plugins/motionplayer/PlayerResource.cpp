@@ -548,6 +548,7 @@ namespace motion {
         _lastCanvas.Clear();
         _lastViewParam.Clear();
         _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+        _drawAffineMatrixNonIdentity = false;
         _variableKeys.Clear();
         _evalResultValues.clear();
         _evalResultList.clear();

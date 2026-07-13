@@ -833,6 +833,53 @@
         var userFileDepAdded = false;
         var hasFileSystemAPI = typeof window.showDirectoryPicker === 'function';
 
+        // --- Web 平台边界：同一 origin 只允许一个活跃引擎实例 ---
+        // VLFS.init() 会清空并重新创建共享的 OPFS 临时目录；两个标签页并发
+        // 初始化/写入会触发 NoModificationAllowedError，甚至让其中一个实例读到
+        // 生命周期已经失效的缓存文件。Web Locks 的持有期与 Document 生命周期
+        // 绑定，标签页关闭/崩溃后浏览器会自动释放，不需要心跳或超时猜测。
+        var resolveEngineSingleton;
+        var engineSingletonReady = new Promise(function(resolve) {
+            resolveEngineSingleton = resolve;
+        });
+
+        function showEngineSingletonConflict() {
+            document.querySelector('#error-box h2').textContent =
+                'Engine Already Running';
+            document.getElementById('error-message').textContent =
+                '同一站点已有另一个 KrKr2 引擎窗口正在运行。请关闭另一个窗口后刷新本页。\n' +
+                'Another KrKr2 engine tab is already running for this site. Close it, then reload this page.';
+            document.getElementById('error-update-btn').style.display = 'none';
+            document.getElementById('error-overlay').classList.add('visible');
+            setEngineStatus('Another engine tab is already running');
+        }
+
+        if (navigator.locks && typeof navigator.locks.request === 'function') {
+            navigator.locks.request(
+                'krkr2-web-engine-instance',
+                { mode: 'exclusive', ifAvailable: true },
+                function(lock) {
+                    if (!lock) {
+                        showEngineSingletonConflict();
+                        resolveEngineSingleton(false);
+                        return;
+                    }
+                    resolveEngineSingleton(true);
+                    // 保持 callback pending 即持有锁；Document 销毁时自动释放。
+                    return new Promise(function() {});
+                }
+            ).catch(function(error) {
+                console.error('[singleton] Web Lock request failed:', error);
+                showEngineSingletonConflict();
+                resolveEngineSingleton(false);
+            });
+        } else {
+            // 目标 Chromium 137+ 均支持 Web Locks；仅在其他实现缺少该 API 时
+            // 保持原有单窗口行为，避免把平台能力缺失误报成已有实例。
+            console.warn('[singleton] Web Locks unavailable; cross-tab guard disabled');
+            resolveEngineSingleton(true);
+        }
+
         // --- 强制更新：注销全部 service worker + 清空 CacheStorage 后重载 ---
         // 兜底 SW 更新流程失效的场景（如旧版本 confirm 被关掉后卡住、缓存损坏）。
         // 只清应用缓存；存档在 IndexedDB / 存档空间里，不受影响。
@@ -913,7 +960,12 @@
         var hostDirHandle = null;
 
         // --- VirtualLazyFS 初始化（清空 OPFS 临时缓存）---
-        var vlfsReady = VLFS.init().catch(function(e) {
+        // 必须在取得跨标签页单例锁后才接触 OPFS。冲突页让此 Promise 保持
+        // pending，因此不会继续注册 ZIP、清空临时目录或启动 wasm main。
+        var vlfsReady = engineSingletonReady.then(function(acquired) {
+            if (!acquired) return new Promise(function() {});
+            return VLFS.init();
+        }).catch(function(e) {
             console.error('[vlfs] init failed:', e);
         });
 
@@ -1029,6 +1081,10 @@
             preRun: [function() {
                 FS.mkdir('/savedata');
                 applyRendererPreferenceFromUrl();
+                Module.addRunDependency('engine-singleton');
+                engineSingletonReady.then(function(acquired) {
+                    if (acquired) Module.removeRunDependency('engine-singleton');
+                });
                 Module.addRunDependency('user-file');
                 userFileDepAdded = true;
                 if (gameFileReady) {

@@ -388,6 +388,11 @@ namespace motion::detail {
 
     struct PreparedRenderItem : NativeRenderItemFields {
         int nodeIndex = 0;
+        // sub_6C2334 @ 0x6C2334 keeps render items attached to their actual
+        // MotionNode (binary node+1904) across recursive child-Player builds.
+        // nodeIndex is owner-local and must never be reinterpreted through the
+        // parent Player after child items are merged into its render list.
+        const MotionNode *nativeNode = nullptr;
         tTJSVariant srcRef;
         std::string sourceKey;
         // Borrowed from MotionNode::source / MotionSnapshot atlas cache.

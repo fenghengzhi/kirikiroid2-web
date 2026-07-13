@@ -236,6 +236,8 @@ namespace motion {
         const auto motionPath = _activeMotion->path;
         const int bitmask = _isEmoteMode ? 5193 : 5185;
         const auto &dam = _drawAffineMatrix;
+        const bool drawAffineMatrixNonIdentity =
+            _drawAffineMatrixNonIdentity;
         std::unordered_set<int> requiredGroupNodeIndices;
 
         auto appendChildEntriesAtCurrentNode = [&](Player *child,
@@ -245,7 +247,11 @@ namespace motion {
             }
             const auto savedChildDrawAffine =
                 child->_drawAffineMatrix;
+            const bool savedChildDrawAffineNonIdentity =
+                child->_drawAffineMatrixNonIdentity;
             child->_drawAffineMatrix = dam;
+            child->_drawAffineMatrixNonIdentity =
+                drawAffineMatrixNonIdentity;
             // aligned with sub_6C2334 @0x6C2334 (recursion @0x6c2b5c/0x6c3124/
             // 0x6c36ac): child a6 = (a6 & 1) || (node+48 != 0), i.e. the
             // parent's inherited flag OR'd with THIS node's priorDraw bool
@@ -256,6 +262,8 @@ namespace motion {
             // into _renderItemInheritedFlag18 (the build loop's a6).
             child->prepareRenderItems(_renderItemInheritedFlag18 || nodePriorDraw);
             child->_drawAffineMatrix = savedChildDrawAffine;
+            child->_drawAffineMatrixNonIdentity =
+                savedChildDrawAffineNonIdentity;
             auto &childEntries = child->_preparedRenderItems;
             if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                motionPath.find("m2logo.mtn") != std::string::npos &&
@@ -451,6 +459,7 @@ namespace motion {
 
             detail::PreparedRenderItem entry;
             entry.nodeIndex = static_cast<int>(i);
+            entry.nativeNode = &node;
             restoreNativeFieldLifetime(entry);
             entry.hasOwnSource = hasOwnSource;
             entry.groupOnly = !hasOwnSource && needsGroupEntry;
@@ -549,8 +558,11 @@ namespace motion {
             if(hasOwnSource && node.source.width > 0.0 &&
                node.source.height > 0.0) {
                 for(int ci = 0; ci < 4; ++ci) {
-                    const auto pt = transformPoint(node.vertices[ci * 2],
-                                                   node.vertices[ci * 2 + 1]);
+                    const auto pt = drawAffineMatrixNonIdentity
+                        ? transformPoint(node.vertices[ci * 2],
+                                         node.vertices[ci * 2 + 1])
+                        : tTVPPointD{node.vertices[ci * 2],
+                                     node.vertices[ci * 2 + 1]};
                     entry.corners[ci * 2] = static_cast<float>(pt.x);
                     entry.corners[ci * 2 + 1] = static_cast<float>(pt.y);
                     updatePaintBox(entry, pt.x, pt.y, !havePaintBox);
@@ -633,14 +645,22 @@ namespace motion {
                 const float *clipAABB = node.clipAABB;
                 if(clipAABB[2] >= clipAABB[0] &&
                    clipAABB[3] >= clipAABB[1]) {
-                    const auto p0 =
-                        transformPoint(clipAABB[0], clipAABB[1]);
-                    const auto p1 =
-                        transformPoint(clipAABB[2], clipAABB[1]);
-                    const auto p2 =
-                        transformPoint(clipAABB[2], clipAABB[3]);
-                    const auto p3 =
-                        transformPoint(clipAABB[0], clipAABB[3]);
+                    if(!drawAffineMatrixNonIdentity) {
+                        // sub_6C2334 @ 0x6C27E8 copies node+1936 to item+200
+                        // verbatim when Player+611 is zero. In particular, it
+                        // does not round a unit-matrix viewport.
+                        entry.viewport = {clipAABB[0], clipAABB[1],
+                                          clipAABB[2], clipAABB[3]};
+                        entry.hasViewport = true;
+                    } else {
+                        const auto p0 =
+                            transformPoint(clipAABB[0], clipAABB[1]);
+                        const auto p1 =
+                            transformPoint(clipAABB[2], clipAABB[1]);
+                        const auto p2 =
+                            transformPoint(clipAABB[2], clipAABB[3]);
+                        const auto p3 =
+                            transformPoint(clipAABB[0], clipAABB[3]);
                     // aligned with sub_6C2334 @0x6c2800-0x6c2954: the
                     // transformed clip bbox is rounded floor(left)/floor(top)/
                     // ceil(right)/ceil(bottom) before being stored into the
@@ -655,17 +675,18 @@ namespace motion {
                     // floor/ceil, leaving fractional viewport values that
                     // diverged from the oracle (e.g. m2logo items[9]:
                     // [612.568,557.332,1293.251,632.964] vs [612,557,1294,633]).
-                    entry.viewport = {
-                        static_cast<float>(std::floor(std::min(
-                            std::min(p0.x, p1.x), std::min(p2.x, p3.x)))),
-                        static_cast<float>(std::floor(std::min(
-                            std::min(p0.y, p1.y), std::min(p2.y, p3.y)))),
-                        static_cast<float>(std::ceil(std::max(
-                            std::max(p0.x, p1.x), std::max(p2.x, p3.x)))),
-                        static_cast<float>(std::ceil(std::max(
-                            std::max(p0.y, p1.y), std::max(p2.y, p3.y))))
-                    };
-                    entry.hasViewport = true;
+                        entry.viewport = {
+                            static_cast<float>(std::floor(std::min(
+                                std::min(p0.x, p1.x), std::min(p2.x, p3.x)))),
+                            static_cast<float>(std::floor(std::min(
+                                std::min(p0.y, p1.y), std::min(p2.y, p3.y)))),
+                            static_cast<float>(std::ceil(std::max(
+                                std::max(p0.x, p1.x), std::max(p2.x, p3.x)))),
+                            static_cast<float>(std::ceil(std::max(
+                                std::max(p0.y, p1.y), std::max(p2.y, p3.y))))
+                        };
+                        entry.hasViewport = true;
+                    }
                 }
             }
 
@@ -834,11 +855,23 @@ namespace motion {
             return;
         }
 
-        std::unordered_map<int, size_t> entryIndexByNode;
+        std::unordered_map<const detail::MotionNode *, size_t>
+            entryIndexByNode;
         entryIndexByNode.reserve(entries.size());
         for(size_t i = 0; i < entries.size(); ++i) {
-            entryIndexByNode.emplace(entries[i].nodeIndex, i);
+            if(entries[i].nativeNode) {
+                entryIndexByNode.emplace(entries[i].nativeNode, i);
+            }
         }
+
+        auto ownerNodeAt = [](Player *owner,
+                              int index) -> detail::MotionNode * {
+            if(!owner || index < 0 ||
+               index >= static_cast<int>(owner->_nodes.size())) {
+                return nullptr;
+            }
+            return &owner->_nodes[static_cast<size_t>(index)];
+        };
 
         auto unionPaintBox =
             [](detail::PreparedRenderItem &parent,
@@ -865,14 +898,19 @@ namespace motion {
         for(const auto &childEntry : entries) {
             for(int ancestorIndex = childEntry.visibleAncestorIndex;
                 ancestorIndex >= 0;) {
-                const auto parentIt = entryIndexByNode.find(ancestorIndex);
+                auto *ancestorNode = ownerNodeAt(
+                    childEntry.nativeLifetimeOwner, ancestorIndex);
+                if(!ancestorNode) {
+                    break;
+                }
+                const auto parentIt = entryIndexByNode.find(ancestorNode);
                 if(parentIt == entryIndexByNode.end()) {
                     break;
                 }
                 auto &parentEntry = entries[parentIt->second];
-                const auto &ancestorNode = nodes[parentEntry.nodeIndex];
                 unionPaintBox(parentEntry, childEntry);
-                const int nextAncestorIndex = ancestorNode.visibleAncestorIndex;
+                const int nextAncestorIndex =
+                    ancestorNode->visibleAncestorIndex;
                 if(nextAncestorIndex == ancestorIndex) {
                     break;
                 }
@@ -935,13 +973,25 @@ namespace motion {
                 afterSort.str());
         }
 
-        std::unordered_map<int, detail::PreparedRenderItem *>
+        auto ownerNodeAt = [](Player *owner,
+                              int index) -> detail::MotionNode * {
+            if(!owner || index < 0 ||
+               index >= static_cast<int>(owner->_nodes.size())) {
+                return nullptr;
+            }
+            return &owner->_nodes[static_cast<size_t>(index)];
+        };
+
+        std::unordered_map<const detail::MotionNode *,
+                           detail::PreparedRenderItem *>
             entryPtrByNode;
         entryPtrByNode.reserve(_preparedRenderItems.size());
         for(auto &item : _preparedRenderItems) {
             item.parentItem = nullptr;
             item.childItems.clear();
-            entryPtrByNode.emplace(item.nodeIndex, &item);
+            if(item.nativeNode) {
+                entryPtrByNode.emplace(item.nativeNode, &item);
+            }
         }
         for(auto &item : _preparedRenderItems) {
             if(item.selfSeedChildList) {
@@ -973,16 +1023,24 @@ namespace motion {
             if(!parentItem.selfSeedChildList) {
                 continue;
             }
-            const auto parentNodeIndex = parentItem.nodeIndex;
+            auto *parentNode = parentItem.nativeNode;
+            if(!parentNode) {
+                continue;
+            }
             for(auto &candidate : _preparedRenderItems) {
-                if(candidate.nodeIndex == parentNodeIndex) {
+                if(candidate.nativeNode == parentNode) {
                     continue;
                 }
-                if(candidate.visibleAncestorIndex != parentNodeIndex) {
+                auto *candidateAncestorNode = ownerNodeAt(
+                    candidate.nativeLifetimeOwner,
+                    candidate.visibleAncestorIndex);
+                if(candidateAncestorNode != parentNode) {
                     continue;
                 }
-                const auto &candidateNode =
-                    _nodes[static_cast<size_t>(candidate.nodeIndex)];
+                if(!candidate.nativeNode) {
+                    continue;
+                }
+                const auto &candidateNode = *candidate.nativeNode;
                 if(candidateNode.nodeType == 0) {
                     candidate.parentItem = &parentItem;
                     parentItem.childItems.push_back(&candidate);
@@ -1019,8 +1077,10 @@ namespace motion {
             if(entry.parentItem != nullptr) {
                 continue;
             }
-            const auto &entryNode =
-                _nodes[static_cast<size_t>(entry.nodeIndex)];
+            if(!entry.nativeNode) {
+                continue;
+            }
+            const auto &entryNode = *entry.nativeNode;
             if(entryNode.nodeType != 3) {
                 continue;
             }
@@ -1028,7 +1088,11 @@ namespace motion {
             if(va < 0) {
                 continue;
             }
-            auto it = entryPtrByNode.find(va);
+            auto *ancestorNode = ownerNodeAt(entry.nativeLifetimeOwner, va);
+            if(!ancestorNode) {
+                continue;
+            }
+            auto it = entryPtrByNode.find(ancestorNode);
             if(it == entryPtrByNode.end()) {
                 continue;
             }
