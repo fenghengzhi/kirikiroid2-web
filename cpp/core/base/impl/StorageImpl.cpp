@@ -926,6 +926,47 @@ tjs_uint tTVPLocalFileStream::Read(void *buffer, tjs_uint read_size) {
 }
 
 //---------------------------------------------------------------------------
+void tTVPLocalFileStream::ReadAsync(void *buffer, tjs_uint read_size,
+                                    tAsyncCallback<tjs_uint> completion) {
+#ifdef __EMSCRIPTEN__
+    if(VlfsFd >= 0) {
+        // Web platform boundary: unlike Android's synchronous local file
+        // stream, a VLFS cache miss is backed by a JavaScript Promise. Keep the
+        // Android return/error mapping (negative VLFS result becomes a 0-byte
+        // read), but never block a pthread waiting for that Promise.
+        EnqueueAsyncOperation([this, buffer, read_size,
+                               completion = std::move(completion)](
+                                  std::function<void()> finished) mutable {
+            try {
+                VLFS::ReadAsync(
+                    VlfsFd, buffer, static_cast<int>(read_size),
+                    [completion, finished](int result) mutable {
+                        try {
+                            if(completion)
+                                completion(result < 0
+                                               ? 0
+                                               : static_cast<tjs_uint>(result),
+                                           nullptr);
+                        } catch(...) {
+                        }
+                        finished();
+                    });
+            } catch(...) {
+                try {
+                    if(completion)
+                        completion(0, std::current_exception());
+                } catch(...) {
+                }
+                finished();
+            }
+        });
+        return;
+    }
+#endif
+    tTJSBinaryStream::ReadAsync(buffer, read_size, std::move(completion));
+}
+
+//---------------------------------------------------------------------------
 tjs_uint tTVPLocalFileStream::Write(const void *buffer, tjs_uint write_size) {
     if(MemBuffer) {
         return MemBuffer->Write(buffer, write_size);

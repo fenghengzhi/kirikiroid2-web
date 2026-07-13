@@ -48,6 +48,36 @@ const int TVPWaveLoopLinkGiveUpCount = 10;
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
+
+#ifdef __EMSCRIPTEN__
+void tTVPSampleAndLabelSource::DecodeAsync(
+    void *dest, tjs_uint samples, tTVPWaveSegmentQueue &segments,
+    tDecodeAsyncCallback completion) {
+    // Preserve the complete Android LoopManager::Decode@0x967D74 call graph
+    // (including synchronous codec Render/SetPosition ordering) while removing
+    // it from the caller stack. The Web opener guarantees that those codec
+    // callbacks now read a memory stream rather than Promise-backed VLFS.
+    TVPDispatchWaveContinuation(
+        [this, dest, samples, &segments,
+         completion = std::move(completion)]() mutable {
+            tjs_uint written = 0;
+            std::exception_ptr error;
+            try {
+                Decode(dest, samples, written, segments);
+            } catch(...) {
+                written = 0;
+                error = std::current_exception();
+            }
+            try {
+                if(completion)
+                    completion(written, error);
+            } catch(...) {
+            }
+        });
+}
+#endif
+
+//---------------------------------------------------------------------------
 // Wave Sample Types
 //---------------------------------------------------------------------------
 #ifndef TJS_HOST_IS_BIG_ENDIAN

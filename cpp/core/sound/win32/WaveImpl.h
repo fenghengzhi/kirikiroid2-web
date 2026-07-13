@@ -21,6 +21,10 @@
 
 #include "WaveIntf.h"
 #include "WaveLoopManager.h"
+#ifdef __EMSCRIPTEN__
+#include <atomic>
+#include <memory>
+#endif
 
 /*[*/
 //---------------------------------------------------------------------------
@@ -137,6 +141,9 @@ private:
     tTJSCriticalSection BufferCS;
     tTJSCriticalSection L2BufferCS;
     tTJSCriticalSection L2BufferRemainCS;
+#ifdef __EMSCRIPTEN__
+    tTJSCriticalSection AsyncDecodeCS;
+#endif
 
 public:
     tTJSCriticalSection &GetBufferCS() { return BufferCS; }
@@ -164,6 +171,18 @@ private:
     tjs_int L2BufferWritePos;
     tjs_int L2BufferRemain;
     bool L2BufferEnded;
+#ifdef __EMSCRIPTEN__
+    // Browser continuation state. These fields exist only at the unavoidable
+    // asynchronous file-system boundary; Android's object layout and the
+    // synchronous implementation above remain unchanged.
+    std::atomic<tjs_uint64> AsyncOpenGeneration;
+    std::atomic<tjs_uint64> AsyncPlaybackGeneration;
+    std::atomic<tjs_uint64> AsyncFillGeneration;
+    std::atomic<bool> AsyncOpenPending;
+    std::atomic<bool> AsyncPlayPending;
+    std::atomic<bool> AsyncStartPending;
+    std::atomic<bool> AsyncFillPending;
+#endif
     tjs_uint8 *VisBuffer; // buffer for visualization
     tjs_int *L2BufferDecodedSamplesInUnit;
     tTVPWaveSegmentQueue *L1BufferSegmentQueues;
@@ -185,6 +204,11 @@ private:
 
 public:
     bool FillL2Buffer(bool firstwrite, bool fromdecodethread);
+#ifdef __EMSCRIPTEN__
+    using tFillL2BufferAsyncCallback = std::function<void(bool)>;
+    void FillL2BufferAsync(bool firstwrite, bool fromdecodethread,
+                           tFillL2BufferAsyncCallback completion);
+#endif
 
 private:
     void PrepareToReadL2Buffer(bool firstread);
@@ -208,6 +232,12 @@ public:
 
 private:
     void StartPlay();
+#ifdef __EMSCRIPTEN__
+    void StartPlayAsync();
+    void ContinueStartPlayAsync(tjs_uint64 generation, int remaining,
+                                bool firstwrite);
+    void FinishStartPlayAsync(tjs_uint64 generation);
+#endif
 
     void StopPlay();
 
@@ -239,6 +269,18 @@ protected:
 
 public:
     void Open(const ttstr &storagename);
+#ifdef __EMSCRIPTEN__
+private:
+    struct tAsyncOpenContext;
+    void CompleteOpenAsync(const std::shared_ptr<tAsyncOpenContext> &context,
+                           tTVPWaveDecoder *decoder,
+                           std::exception_ptr error);
+    void ContinueOpenSliAsync(
+        const std::shared_ptr<tAsyncOpenContext> &context);
+    void FinishOpenAsync(const std::shared_ptr<tAsyncOpenContext> &context,
+                         std::exception_ptr error);
+public:
+#endif
 
 public:
     void SetLooping(bool b);

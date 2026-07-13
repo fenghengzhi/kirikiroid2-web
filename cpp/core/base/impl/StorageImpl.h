@@ -58,6 +58,9 @@ public:
 
     tjs_uint Read(void *buffer, tjs_uint read_size) override;
 
+    void ReadAsync(void *buffer, tjs_uint read_size,
+                   tAsyncCallback<tjs_uint> completion) override;
+
     tjs_uint Write(const void *buffer, tjs_uint write_size) override;
 
     void SetEndOfStorage() override;

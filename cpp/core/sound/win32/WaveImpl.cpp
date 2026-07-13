@@ -17,6 +17,16 @@
 
 #include <math.h>
 #include <algorithm>
+#ifdef __EMSCRIPTEN__
+#include <condition_variable>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
+#include <emscripten/proxying.h>
+#include <emscripten/threading.h>
+#endif
 #include "SystemControl.h"
 #include "DebugIntf.h"
 #include "MsgIntf.h"
@@ -48,6 +58,45 @@
 #include "NativeEventQueue.h"
 #include "Platform.h"
 #include <fmt/printf.h>
+
+#ifdef __EMSCRIPTEN__
+namespace {
+void TVPRunWaveSoundMainContinuation(void *opaque) {
+    std::unique_ptr<std::function<void()>> continuation(
+        static_cast<std::function<void()> *>(opaque));
+    (*continuation)();
+}
+
+void TVPDispatchWaveSoundMain(std::function<void()> continuation) {
+    if(emscripten_is_main_runtime_thread()) {
+        continuation();
+        return;
+    }
+    auto *task = new std::function<void()>(std::move(continuation));
+    if(!emscripten_proxy_async(emscripten_proxy_get_system_queue(),
+                              emscripten_main_runtime_thread_id(),
+                              TVPRunWaveSoundMainContinuation, task))
+        TVPRunWaveSoundMainContinuation(task);
+}
+
+void TVPReleaseWaveSoundOwnerOnMain(iTJSDispatch2 *owner) {
+    if(!owner)
+        return;
+    TVPDispatchWaveSoundMain([owner] { owner->Release(); });
+}
+} // namespace
+
+struct tTJSNI_WaveSoundBuffer::tAsyncOpenContext {
+    tTJSNI_WaveSoundBuffer *Buffer = nullptr;
+    iTJSDispatch2 *KeepAlive = nullptr;
+    tjs_uint64 Generation = 0;
+    ttstr StorageName;
+    std::unique_ptr<tTVPWaveDecoder> Decoder;
+    std::unique_ptr<tTJSBinaryStream> SliStream;
+    std::vector<char> SliData;
+    bool Finished = false;
+};
+#endif
 
 //---------------------------------------------------------------------------
 // Options management
@@ -1835,7 +1884,33 @@ void tTVPWaveSoundBufferDecodeThread::Execute() {
 
             if(Running) {
                 volatile tTJSCriticalSectionHolder cs_holder(OneLoopCS);
+#ifdef __EMSCRIPTEN__
+                // Android Execute@0x970154 invokes FillL2Buffer synchronously.
+                // Web keeps the same one-loop exclusion/lifetime but waits for
+                // the native audio continuation, never for a JavaScript/VLFS
+                // Promise on this decoder pthread.
+                std::mutex completionMutex;
+                std::condition_variable completionCondition;
+                bool completed = false;
+                bool filled = false;
+                Owner->FillL2BufferAsync(
+                    false, true, [&](bool value) {
+                        {
+                            std::lock_guard<std::mutex> lock(completionMutex);
+                            filled = value;
+                            completed = true;
+                        }
+                        completionCondition.notify_one();
+                    });
+                {
+                    std::unique_lock<std::mutex> lock(completionMutex);
+                    completionCondition.wait(lock,
+                                             [&] { return completed; });
+                }
+                wait = !filled;
+#else
                 wait = !Owner->FillL2Buffer(false, true); // fill
+#endif
             }
 
             if(GetTerminated())
@@ -1946,6 +2021,15 @@ tTJSNI_WaveSoundBuffer::tTJSNI_WaveSoundBuffer() {
     L2BufferWritePos = 0;
     L2BufferRemain = 0;
     L2BufferEnded = false;
+#ifdef __EMSCRIPTEN__
+    AsyncOpenGeneration = 0;
+    AsyncPlaybackGeneration = 0;
+    AsyncFillGeneration = 0;
+    AsyncOpenPending = false;
+    AsyncPlayPending = false;
+    AsyncStartPending = false;
+    AsyncFillPending = false;
+#endif
     LastCheckedDecodePos = -1;
     LastCheckedTick = 0;
 }
@@ -2356,15 +2440,31 @@ void tTJSNI_WaveSoundBuffer::ResetSamplePositions() {
 //---------------------------------------------------------------------------
 void tTJSNI_WaveSoundBuffer::Clear() {
     // clear all status and unload current decoder
+#ifdef __EMSCRIPTEN__
+    ++AsyncOpenGeneration;
+    AsyncOpenPending = false;
+    AsyncPlayPending = false;
+#endif
     Stop();
     ThreadCallbackEnabled = false;
     TVPCheckSoundBufferAllSleep();
     Thread->Interrupt();
+#ifdef __EMSCRIPTEN__
+    {
+        // A queued continuation owns a dispatch reference to this object. The
+        // generation check prevents it from starting after this point; this CS
+        // closes the race where it already passed that check and is executing
+        // Android Decode@0x967D74 against FilterOutput.
+        tTJSCriticalSectionHolder asyncDecodeHolder(AsyncDecodeCS);
+#endif
     if(LoopManager)
         delete LoopManager, LoopManager = nullptr;
     ClearFilterChain();
     if(Decoder)
         delete Decoder, Decoder = nullptr;
+#ifdef __EMSCRIPTEN__
+    }
+#endif
     BufferPlaying = false;
     DSBufferPlaying = false;
     Paused = false;
@@ -2465,6 +2565,157 @@ bool tTJSNI_WaveSoundBuffer::FillL2Buffer(bool firstwrite,
 
     return true;
 }
+
+#ifdef __EMSCRIPTEN__
+void tTJSNI_WaveSoundBuffer::FillL2BufferAsync(
+    bool firstwrite, bool fromdecodethread,
+    tFillL2BufferAsyncCallback completion) {
+    if(!fromdecodethread && Thread->GetRunning())
+        Thread->SetPriority(ttpHighest);
+
+    iTJSDispatch2 *keepAlive = Owner;
+    if(keepAlive)
+        keepAlive->AddRef();
+
+    auto completeDeferred =
+        [completion = std::move(completion), keepAlive](bool value) mutable {
+            TVPDispatchWaveContinuation(
+                [completion = std::move(completion), keepAlive,
+                 value]() mutable {
+                    try {
+                        if(completion)
+                            completion(value);
+                    } catch(...) {
+                    }
+                    TVPReleaseWaveSoundOwnerOnMain(keepAlive);
+                });
+        };
+
+    tjs_uint64 generation;
+    int slot;
+    bool alreadyEnded;
+    {
+        tTJSCriticalSectionHolder holder(L2BufferCS);
+
+        if(firstwrite) {
+            L2BufferReadPos = L2BufferWritePos = L2BufferRemain = 0;
+            L2BufferEnded = false;
+            for(tjs_int i = 0; i < L2BufferUnits; i++)
+                L2BufferDecodedSamplesInUnit[i] = 0;
+        }
+
+        if(AsyncFillPending) {
+            completeDeferred(false);
+            return;
+        }
+
+        tTVPThreadPriority ttpbefore = TVPDecodeThreadHighPriority;
+        bool full = false;
+        if(Thread->GetRunning()) {
+            ttpbefore = Thread->GetPriority();
+            Thread->SetPriority(TVPDecodeThreadHighPriority);
+        }
+        {
+            tTJSCriticalSectionHolder remainHolder(L2BufferRemainCS);
+            full = L2BufferRemain == L2BufferUnits;
+        }
+        if(!full)
+            UpdateFilterChain();
+        if(Thread->GetRunning())
+            Thread->SetPriority(ttpbefore);
+        if(full) {
+            completeDeferred(false);
+            return;
+        }
+
+        generation = AsyncPlaybackGeneration;
+        slot = L2BufferWritePos;
+        alreadyEnded = L2BufferEnded;
+        AsyncFillGeneration = generation;
+        AsyncFillPending = true;
+    }
+
+    struct tFillContext {
+        tjs_uint64 Generation = 0;
+        int Slot = 0;
+        bool AlreadyEnded = false;
+        tjs_uint Samples = 0;
+        tjs_uint BytesPerGranule = 0;
+        std::unique_ptr<tjs_uint8[]> Data;
+        tTVPWaveSegmentQueue Segments;
+        tFillL2BufferAsyncCallback Completion;
+        iTJSDispatch2 *KeepAlive = nullptr;
+    };
+
+    auto context = std::make_shared<tFillContext>();
+    context->Generation = generation;
+    context->Slot = slot;
+    context->AlreadyEnded = alreadyEnded;
+    context->Samples = static_cast<tjs_uint>(AccessUnitSamples);
+    context->BytesPerGranule =
+        static_cast<tjs_uint>(InputFormat.BytesPerSample * InputFormat.Channels);
+    context->Data.reset(new tjs_uint8[L2AccessUnitBytes]);
+    context->Segments.Clear();
+    context->Completion = std::move(completeDeferred);
+    context->KeepAlive = keepAlive;
+
+    TVPDispatchWaveContinuation([this, context]() mutable {
+        bool committed = false;
+        tjs_uint decoded = 0;
+        {
+            tTJSCriticalSectionHolder decodeHolder(AsyncDecodeCS);
+            if(context->Generation == AsyncPlaybackGeneration && Decoder &&
+               FilterOutput) {
+                if(!context->AlreadyEnded) {
+                    decoded = Decode(context->Data.get(), context->Samples,
+                                     context->Segments);
+                }
+
+                tTJSCriticalSectionHolder l2Holder(L2BufferCS);
+                if(context->Generation == AsyncPlaybackGeneration &&
+                   context->Slot == L2BufferWritePos && Level2Buffer &&
+                   L2BufferDecodedSamplesInUnit && L2BufferSegmentQueues) {
+                    L2BufferSegmentQueues[context->Slot].Clear();
+                    if(context->AlreadyEnded) {
+                        L2BufferDecodedSamplesInUnit[context->Slot] = 0;
+                    } else {
+                        const size_t decodedBytes =
+                            static_cast<size_t>(decoded) *
+                            context->BytesPerGranule;
+                        if(decodedBytes)
+                            memcpy(Level2Buffer +
+                                       context->Slot * L2AccessUnitBytes,
+                                   context->Data.get(), decodedBytes);
+                        L2BufferSegmentQueues[context->Slot] =
+                            context->Segments;
+                        if(decoded < context->Samples)
+                            L2BufferEnded = true;
+                        L2BufferDecodedSamplesInUnit[context->Slot] = decoded;
+                    }
+
+                    ++L2BufferWritePos;
+                    if(L2BufferWritePos >= L2BufferUnits)
+                        L2BufferWritePos = 0;
+                    {
+                        tTJSCriticalSectionHolder remainHolder(
+                            L2BufferRemainCS);
+                        ++L2BufferRemain;
+                    }
+                    committed = true;
+                }
+            }
+            if(context->Generation == AsyncFillGeneration) {
+                tTJSCriticalSectionHolder l2Holder(L2BufferCS);
+                AsyncFillPending = false;
+            }
+        }
+
+        // completeDeferred already owns the dispatch reference and releases it
+        // on the Cocos thread after the caller's continuation has run.
+        context->Completion(committed);
+    });
+}
+#endif
 
 //---------------------------------------------------------------------------
 void tTJSNI_WaveSoundBuffer::PrepareToReadL2Buffer(bool firstread) {
@@ -2939,6 +3190,92 @@ void tTJSNI_WaveSoundBuffer::StartPlay() {
     Thread->Continue();
 }
 
+#ifdef __EMSCRIPTEN__
+void tTJSNI_WaveSoundBuffer::StartPlayAsync() {
+    if(!Decoder)
+        return;
+
+    TVPEnsurePrimaryBufferPlay();
+    TVPEnsureWaveSoundBufferWorking();
+
+    const tjs_uint64 generation = ++AsyncPlaybackGeneration;
+    AsyncStartPending = true;
+    if(Thread->GetRunning())
+        Thread->SetPriority(TVPDecodeThreadHighPriority);
+
+    {
+        tTJSCriticalSectionHolder holder(BufferCS);
+        tTJSCriticalSectionHolder l2holder(L2BufferCS);
+        CreateSoundBuffer();
+        ResetFilterChain();
+        BufferPlaying = true;
+    }
+
+    // Android StartPlay@0x972128 performs one FillL2 followed immediately by
+    // one FillBuffer, then repeats the refill-on-empty path for the remaining
+    // three buffers. Keep that UpdateFilterChain -> Decode -> FillBuffer order;
+    // only the edge between the operations becomes a Web continuation.
+    ContinueStartPlayAsync(generation, 4, true);
+}
+
+void tTJSNI_WaveSoundBuffer::ContinueStartPlayAsync(
+    tjs_uint64 generation, int remaining, bool firstwrite) {
+    if(generation != AsyncPlaybackGeneration || !AsyncStartPending)
+        return;
+
+    FillL2BufferAsync(
+        firstwrite, false,
+        [this, generation, remaining, firstwrite](bool filled) {
+            if(generation != AsyncPlaybackGeneration || !AsyncStartPending)
+                return;
+            if(!filled) {
+                TVPDispatchWaveSoundMain([this, generation] {
+                    if(generation == AsyncPlaybackGeneration) {
+                        AsyncStartPending = false;
+                        BufferPlaying = false;
+                    }
+                });
+                return;
+            }
+            TVPDispatchWaveSoundMain(
+                [this, generation, remaining, firstwrite] {
+                    if(generation != AsyncPlaybackGeneration ||
+                       !AsyncStartPending)
+                        return;
+                    FillBuffer(firstwrite, false);
+                    if(remaining > 1)
+                        ContinueStartPlayAsync(generation, remaining - 1,
+                                               false);
+                    else
+                        FinishStartPlayAsync(generation);
+                });
+        });
+}
+
+void tTJSNI_WaveSoundBuffer::FinishStartPlayAsync(tjs_uint64 generation) {
+    if(generation != AsyncPlaybackGeneration || !AsyncStartPending ||
+       !Decoder)
+        return;
+
+    {
+        tTJSCriticalSectionHolder holder(BufferCS);
+        if(!Paused) {
+            SoundBuffer->Play();
+            DSBufferPlaying = true;
+        }
+
+        ResetLastCheckedDecodePos();
+        TVPReschedulePendingLabelEvent(GetNearestEventStep());
+    }
+
+    TVPEnsureWaveSoundBufferWorking();
+    ThreadCallbackEnabled = true;
+    Thread->Continue();
+    AsyncStartPending = false;
+    SetStatus(ssPlay);
+}
+#endif
+
 //---------------------------------------------------------------------------
 void tTJSNI_WaveSoundBuffer::StopPlay() {
     if(!Decoder)
@@ -2960,10 +3297,24 @@ void tTJSNI_WaveSoundBuffer::StopPlay() {
 //---------------------------------------------------------------------------
 void tTJSNI_WaveSoundBuffer::Play() {
     // play from first or current position
+#ifdef __EMSCRIPTEN__
+    if(AsyncOpenPending) {
+        AsyncPlayPending = true;
+        return;
+    }
+#endif
     if(!Decoder)
         return;
     if(BufferPlaying)
         return;
+#ifdef __EMSCRIPTEN__
+    if(AsyncStartPending)
+        return;
+
+    StopPlay();
+    TVPEnsurePrimaryBufferPlay();
+    StartPlayAsync();
+#else
 
     StopPlay();
 
@@ -2978,11 +3329,18 @@ void tTJSNI_WaveSoundBuffer::Play() {
 
     StartPlay();
     SetStatus(ssPlay);
+#endif
 }
 
 //---------------------------------------------------------------------------
 void tTJSNI_WaveSoundBuffer::Stop() {
     // stop playing
+#ifdef __EMSCRIPTEN__
+    ++AsyncPlaybackGeneration;
+    AsyncPlayPending = false;
+    AsyncStartPending = false;
+    AsyncFillPending = false;
+#endif
     StopPlay();
 
     // delete thread
@@ -3038,12 +3396,192 @@ void tTJSNI_WaveSoundBuffer::TimerBeatHandler() {
 }
 
 //---------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+void tTJSNI_WaveSoundBuffer::CompleteOpenAsync(
+    const std::shared_ptr<tAsyncOpenContext> &context,
+    tTVPWaveDecoder *decoder, std::exception_ptr error) {
+    context->Decoder.reset(decoder);
+    if(context->Generation != AsyncOpenGeneration || !AsyncOpenPending) {
+        FinishOpenAsync(context, nullptr);
+        return;
+    }
+    if(error || !decoder) {
+        FinishOpenAsync(context, error);
+        return;
+    }
+
+    try {
+        Decoder = context->Decoder.release();
+        LoopManager = new tTVPWaveLoopManager();
+        LoopManager->SetDecoder(Decoder);
+        LoopManager->SetLooping(Looping);
+        RebuildFilterChain();
+        InputFormat = FilterOutput->GetFormat();
+        Frequency = InputFormat.SamplesPerSec;
+    } catch(...) {
+        error = std::current_exception();
+        Clear();
+        FinishOpenAsync(context, error);
+        return;
+    }
+
+    ContinueOpenSliAsync(context);
+}
+
+void tTJSNI_WaveSoundBuffer::ContinueOpenSliAsync(
+    const std::shared_ptr<tAsyncOpenContext> &context) {
+    if(context->Generation != AsyncOpenGeneration || !AsyncOpenPending) {
+        FinishOpenAsync(context, nullptr);
+        return;
+    }
+
+    const ttstr sliname = context->StorageName + TJS_W(".sli");
+    if(!TVPIsExistentStorage(sliname)) {
+        FinishOpenAsync(context, nullptr);
+        return;
+    }
+
+    try {
+        context->SliStream.reset(TVPCreateStream(sliname, TJS_BS_READ));
+        context->SliStream->GetSizeAsync(
+            [this, context, sliname](tjs_uint64 size,
+                                     std::exception_ptr error) {
+                if(error) {
+                    TVPDispatchWaveSoundMain([this, context, error] {
+                        Clear();
+                        FinishOpenAsync(context, error);
+                    });
+                    return;
+                }
+                try {
+                    if(size > std::numeric_limits<tjs_uint>::max() - 1)
+                        TVPThrowExceptionMessage(TVPInsufficientMemory);
+                    context->SliData.resize(static_cast<size_t>(size) + 1);
+                    if(size == 0) {
+                        context->SliData[0] = 0;
+                        TVPDispatchWaveSoundMain([this, context, sliname] {
+                            try {
+                                if(!LoopManager->ReadInformation(
+                                       context->SliData.data()))
+                                    TVPThrowExceptionMessage(
+                                        TVPInvalidLoopInformation, sliname);
+                                RecreateWaveLabelsObject();
+                                FinishOpenAsync(context, nullptr);
+                            } catch(...) {
+                                auto parseError = std::current_exception();
+                                Clear();
+                                FinishOpenAsync(context, parseError);
+                            }
+                        });
+                        return;
+                    }
+                    context->SliStream->ReadBufferAsync(
+                        context->SliData.data(), static_cast<tjs_uint>(size),
+                        [this, context, sliname,
+                         size](std::exception_ptr readError) {
+                            TVPDispatchWaveSoundMain(
+                                [this, context, sliname, size, readError] {
+                                    if(readError) {
+                                        Clear();
+                                        FinishOpenAsync(context, readError);
+                                        return;
+                                    }
+                                    try {
+                                        context->SliData[size] = 0;
+                                        if(!LoopManager->ReadInformation(
+                                               context->SliData.data()))
+                                            TVPThrowExceptionMessage(
+                                                TVPInvalidLoopInformation,
+                                                sliname);
+                                        RecreateWaveLabelsObject();
+                                        context->SliStream.reset();
+                                        FinishOpenAsync(context, nullptr);
+                                    } catch(...) {
+                                        auto parseError =
+                                            std::current_exception();
+                                        Clear();
+                                        FinishOpenAsync(context, parseError);
+                                    }
+                                });
+                        });
+                } catch(...) {
+                    auto allocationError = std::current_exception();
+                    TVPDispatchWaveSoundMain(
+                        [this, context, allocationError] {
+                            Clear();
+                            FinishOpenAsync(context, allocationError);
+                        });
+                }
+            });
+    } catch(...) {
+        auto error = std::current_exception();
+        Clear();
+        FinishOpenAsync(context, error);
+    }
+}
+
+void tTJSNI_WaveSoundBuffer::FinishOpenAsync(
+    const std::shared_ptr<tAsyncOpenContext> &context,
+    std::exception_ptr error) {
+    if(context->Finished)
+        return;
+    context->Finished = true;
+
+    const bool active = context->Generation == AsyncOpenGeneration &&
+        AsyncOpenPending;
+    if(active && error) {
+        Clear();
+        TVPAddImportantLog(
+            ttstr(TJS_W("(error) asynchronous wave open failed: ")) +
+            context->StorageName);
+    } else if(active) {
+        const bool play = AsyncPlayPending;
+        AsyncOpenPending = false;
+        AsyncPlayPending = false;
+        SetStatus(ssStop);
+        if(play)
+            Play();
+    }
+
+    context->Decoder.reset();
+    context->SliStream.reset();
+    if(context->KeepAlive) {
+        iTJSDispatch2 *keepAlive = context->KeepAlive;
+        context->KeepAlive = nullptr;
+        keepAlive->Release();
+    }
+}
+#endif
+
+//---------------------------------------------------------------------------
 void tTJSNI_WaveSoundBuffer::Open(const ttstr &storagename) {
     // open a storage and prepare to play
     TVPEnsurePrimaryBufferPlay(); // let primary buffer to start
                                   // running
 
     Clear();
+
+#ifdef __EMSCRIPTEN__
+    auto context = std::make_shared<tAsyncOpenContext>();
+    context->Buffer = this;
+    context->Generation = ++AsyncOpenGeneration;
+    context->StorageName = storagename;
+    context->KeepAlive = Owner;
+    if(context->KeepAlive)
+        context->KeepAlive->AddRef();
+    AsyncOpenPending = true;
+    AsyncPlayPending = false;
+
+    TVPCreateWaveDecoderAsync(
+        storagename,
+        [this, context](tTVPWaveDecoder *decoder,
+                        std::exception_ptr error) {
+            TVPDispatchWaveSoundMain([this, context, decoder, error] {
+                CompleteOpenAsync(context, decoder, error);
+            });
+        });
+    return;
+#else
 
     Decoder = TVPCreateWaveDecoder(storagename);
 
@@ -3089,6 +3627,7 @@ void tTJSNI_WaveSoundBuffer::Open(const ttstr &storagename) {
 
     // set status to stop
     SetStatus(ssStop);
+#endif
 }
 
 //---------------------------------------------------------------------------

@@ -15,6 +15,8 @@
 #include "tjsNative.h"
 #include "SoundBufferBaseIntf.h"
 #include "tjsUtils.h"
+#include <exception>
+#include <functional>
 
 typedef tTVReal D3DVALUE;
 
@@ -120,6 +122,19 @@ public:
     /*
         Create tTVPWaveDecoder instance. returns nullptr if failed.
     */
+#ifdef __EMSCRIPTEN__
+    // Web platform boundary: Android's creators synchronously reopen the
+    // native file in SetStream (TVPCreateWaveDecoder@0x95FB7C).  A browser
+    // VLFS cache miss is Promise-backed, so the Web continuation first builds
+    // a synchronously readable memory stream and transfers one fresh cursor to
+    // each creator.  The creator always owns stream, including on rejection.
+    virtual tTVPWaveDecoder *CreateFromStream(const ttstr &storagename,
+                                              const ttstr &extension,
+                                              tTJSBinaryStream *stream) {
+        delete stream;
+        return nullptr;
+    }
+#endif
 };
 //---------------------------------------------------------------------------
 
@@ -131,6 +146,20 @@ extern void TVPRegisterWaveDecoderCreator(tTVPWaveDecoderCreator *d);
 extern void TVPUnregisterWaveDecoderCreator(tTVPWaveDecoderCreator *d);
 
 extern tTVPWaveDecoder *TVPCreateWaveDecoder(const ttstr &storagename);
+
+#ifdef __EMSCRIPTEN__
+using tTVPWaveDecoderAsyncCallback =
+    std::function<void(tTVPWaveDecoder *, std::exception_ptr)>;
+
+// Asynchronous Web boundary for Open/probe.  Completion is never inline.
+extern void TVPCreateWaveDecoderAsync(const ttstr &storagename,
+                                      tTVPWaveDecoderAsyncCallback completion);
+
+// Dedicated FIFO for compressed-audio probe/decode continuations.  It is kept
+// separate from tTJSBinaryStream's I/O FIFO so a long codec probe cannot starve
+// the VLFS completion which supplies its source bytes.
+extern void TVPDispatchWaveContinuation(std::function<void()> continuation);
+#endif
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------

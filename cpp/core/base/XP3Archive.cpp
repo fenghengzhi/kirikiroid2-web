@@ -702,6 +702,40 @@ public:
         delete[] indata;
     }
 
+    void SetDataAsync(unsigned long outsize, tTJSBinaryStream *instream,
+                      unsigned long insize,
+                      tTJSBinaryStream::tAsyncActionCallback completion) {
+        // Continuation form of the same SetData sequence above: allocate the
+        // compressed input, issue one stream read (whose short count is
+        // intentionally ignored just like Android), then allocate/uncompress.
+        auto indata = std::shared_ptr<tjs_uint8[]>(new tjs_uint8[insize]);
+        instream->ReadAsync(
+            indata.get(), static_cast<tjs_uint>(insize),
+            [this, outsize, insize, indata, completion = std::move(completion)](
+                tjs_uint, std::exception_ptr error) mutable {
+                if(error) {
+                    completion(error);
+                    return;
+                }
+                try {
+                    Data = new tjs_uint8[outsize];
+                    unsigned long destlen = outsize;
+                    unsigned long actual_outsize = outsize;
+                    int result = uncompress(
+                        reinterpret_cast<unsigned char *>(Data),
+                        &actual_outsize,
+                        reinterpret_cast<unsigned char *>(indata.get()),
+                        insize);
+                    if(result != Z_OK || destlen != actual_outsize)
+                        TVPThrowExceptionMessage(TVPUncompressionFailed);
+                    Size = actual_outsize;
+                    completion(nullptr);
+                } catch(...) {
+                    completion(std::current_exception());
+                }
+            });
+    }
+
     const tjs_uint8 *GetData() const { return Data; }
 
     tjs_uint GetSize() const { return Size; }
@@ -894,6 +928,104 @@ void tTVPXP3ArchiveStream::EnsureSegment() {
 }
 
 //---------------------------------------------------------------------------
+void tTVPXP3ArchiveStream::EnsureSegmentAsync(tAsyncActionCallback completion) {
+    // Continuation counterpart of Android EnsureSegment@0x8FD204. All cache,
+    // refcount and state transitions remain in their synchronous order; only
+    // SetPosition/segment input reads can yield.
+    try {
+        if(SegmentOpened) {
+            completion(nullptr);
+            return;
+        }
+
+        if(LastOpenedSegmentNum == CurSegmentNum) {
+            if(!CurSegment->IsCompressed) {
+                Stream->SetPositionAsync(
+                    CurSegment->Start + SegmentPos,
+                    [completion](std::exception_ptr error) mutable {
+                        completion(error);
+                    });
+            } else {
+                completion(nullptr);
+            }
+            return;
+        }
+
+        if(SegmentData)
+            SegmentData->Release(), SegmentData = nullptr;
+
+        if(!CurSegment->IsCompressed) {
+            Stream->SetPositionAsync(
+                CurSegment->Start + SegmentPos,
+                [this, completion](std::exception_ptr error) mutable {
+                    if(!error) {
+                        SegmentOpened = true;
+                        LastOpenedSegmentNum = CurSegmentNum;
+                    }
+                    completion(error);
+                });
+            return;
+        }
+
+        bool push_to_cache = false;
+        tTVPSegmentCacheSearchData search_data;
+        tjs_uint32 hash = 0;
+        if(CurSegment->OrgSize < TVP_SEGCACHE_ONE_LIMIT) {
+            search_data.Name = Owner->GetName();
+            search_data.StorageIndex = StorageIndex;
+            search_data.SegmentIndex = CurSegmentNum;
+            hash = tTVPSegmentCacheSearchHashFunc::Make(search_data);
+            SegmentData = TVPSearchFromSegmentCache(search_data, hash);
+            if(SegmentData) {
+                SegmentOpened = true;
+                LastOpenedSegmentNum = CurSegmentNum;
+                completion(nullptr);
+                return;
+            }
+            push_to_cache = true;
+        }
+
+        const tjs_uint out_size = static_cast<tjs_uint>(CurSegment->OrgSize);
+        const tjs_uint in_size = static_cast<tjs_uint>(CurSegment->ArcSize);
+        Stream->SetPositionAsync(
+            CurSegment->Start,
+            [this, out_size, in_size, push_to_cache, search_data, hash,
+             completion](std::exception_ptr error) mutable {
+                if(error) {
+                    completion(error);
+                    return;
+                }
+                try {
+                    SegmentData = new tTVPSegmentData;
+                    SegmentData->SetDataAsync(
+                        out_size, Stream, in_size,
+                        [this, push_to_cache, search_data, hash, completion](
+                            std::exception_ptr decompress_error) mutable {
+                            if(decompress_error) {
+                                completion(decompress_error);
+                                return;
+                            }
+                            try {
+                                if(push_to_cache)
+                                    TVPPushToSegmentCache(search_data, hash,
+                                                          SegmentData);
+                                SegmentOpened = true;
+                                LastOpenedSegmentNum = CurSegmentNum;
+                                completion(nullptr);
+                            } catch(...) {
+                                completion(std::current_exception());
+                            }
+                        });
+                } catch(...) {
+                    completion(std::current_exception());
+                }
+            });
+    } catch(...) {
+        completion(std::current_exception());
+    }
+}
+
+//---------------------------------------------------------------------------
 void tTVPXP3ArchiveStream::SeekToPosition(tjs_uint64 pos) {
     // open segment at 'pos' and seek
     // pos must between zero thru OrgSize
@@ -939,6 +1071,29 @@ bool tTVPXP3ArchiveStream::OpenNextSegment() {
     CurPos = CurSegment->Offset;
     EnsureSegment();
     return true;
+}
+
+//---------------------------------------------------------------------------
+void tTVPXP3ArchiveStream::OpenNextSegmentAsync(
+    tAsyncCallback<bool> completion) {
+    // OpenNextSegment is inlined into Android Read@0x8FDB04-0x8FDB54.
+    if(CurSegmentNum == static_cast<tjs_int>(Segments->size() - 1)) {
+        completion(false, nullptr);
+        return;
+    }
+    CurSegmentNum++;
+    CurSegment = &(Segments->operator[](CurSegmentNum));
+    SegmentOpened = false;
+    SegmentPos = 0;
+    SegmentRemain = CurSegment->OrgSize;
+    CurPos = CurSegment->Offset;
+    try {
+        EnsureSegmentAsync([completion](std::exception_ptr error) mutable {
+            completion(!error, error);
+        });
+    } catch(...) {
+        completion(false, std::current_exception());
+    }
 }
 
 //---------------------------------------------------------------------------
@@ -1028,13 +1183,153 @@ tjs_uint tTVPXP3ArchiveStream::Read(void *buffer, tjs_uint read_size) {
 }
 
 //---------------------------------------------------------------------------
+struct tTVPXP3ArchiveStream::tAsyncReadContext {
+    tjs_uint8 *Buffer = nullptr;
+    tjs_uint Remaining = 0;
+    tjs_uint Written = 0;
+    tAsyncCallback<tjs_uint> Completion;
+    std::function<void()> Finished;
+    bool Completed = false;
+};
+
+//---------------------------------------------------------------------------
 void tTVPXP3ArchiveStream::ReadAsync(
     void *buffer, tjs_uint read_size,
     tAsyncCallback<tjs_uint> completion) {
-    // The existing XP3 segment/cache/filter flow executes away from the
-    // submitting stack. In particular, a Web VLFS miss can no longer make the
-    // caller retain its current lock merely because ReadAsync was submitted.
-    tTJSBinaryStream::ReadAsync(buffer, read_size, std::move(completion));
+    EnqueueAsyncOperation(
+        [this, buffer, read_size, completion = std::move(completion)](
+            std::function<void()> finished) mutable {
+            auto context = std::make_shared<tAsyncReadContext>();
+            context->Buffer = static_cast<tjs_uint8 *>(buffer);
+            context->Remaining = read_size;
+            context->Completion = std::move(completion);
+            context->Finished = std::move(finished);
+
+            try {
+                EnsureSegmentAsync([this, context](std::exception_ptr error) {
+                    if(error) {
+                        CompleteReadAsync(context, 0, error);
+                        return;
+                    }
+                    ContinueReadAsync(context);
+                });
+            } catch(...) {
+                CompleteReadAsync(context, 0, std::current_exception());
+            }
+        });
+}
+
+//---------------------------------------------------------------------------
+void tTVPXP3ArchiveStream::CompleteReadAsync(
+    const std::shared_ptr<tAsyncReadContext> &context, tjs_uint value,
+    std::exception_ptr error) {
+    if(context->Completed)
+        return;
+    context->Completed = true;
+
+    auto finished = std::move(context->Finished);
+    auto completion = std::move(context->Completion);
+    // Release the per-stream queue before entering user code. The next queued
+    // operation is scheduled on the same executor and cannot run until this
+    // callback returns, while deleting the stream from the callback remains
+    // safe when no other operations are pending.
+    finished();
+    try {
+        if(completion)
+            completion(value, error);
+    } catch(...) {
+    }
+}
+
+//---------------------------------------------------------------------------
+void tTVPXP3ArchiveStream::ContinueReadAsync(
+    const std::shared_ptr<tAsyncReadContext> &context) {
+    // Continuation form of Android Read@0x8FDA9C. CPU-only compressed segments
+    // stay in this loop; an uncompressed segment yields at ReadBufferAsync and
+    // resumes with the exact same filter/cursor update sequence.
+    try {
+        while(context->Remaining) {
+            if(SegmentRemain == 0) {
+                OpenNextSegmentAsync([this, context](bool opened,
+                                                     std::exception_ptr error) {
+                    if(error) {
+                        CompleteReadAsync(context, 0, error);
+                    } else if(!opened) {
+                        CompleteReadAsync(context, context->Written, nullptr);
+                    } else {
+                        ContinueReadAsync(context);
+                    }
+                });
+                return;
+            }
+
+            tjs_uint one_size = context->Remaining > SegmentRemain
+                ? static_cast<tjs_uint>(SegmentRemain)
+                : context->Remaining;
+            tjs_uint8 *destination = context->Buffer + context->Written;
+
+            if(CurSegment->IsCompressed) {
+                memcpy(destination,
+                       SegmentData->GetData() +
+                           static_cast<tjs_uint>(SegmentPos),
+                       one_size);
+            } else {
+                Stream->ReadBufferAsync(
+                    destination, one_size,
+                    [this, context, destination,
+                     one_size](std::exception_ptr error) {
+                        if(error) {
+                            CompleteReadAsync(context, 0, error);
+                            return;
+                        }
+                        try {
+                            if(TVPXP3ArchiveExtractionFilter) {
+                                const ttstr &file_name =
+                                    static_cast<const tTVPXP3Archive *>(Owner)
+                                        ->GetName(StorageIndex);
+                                tTVPXP3ExtractionFilterInfo info(
+                                    CurPos, destination, one_size,
+                                    Owner->GetFileHash(StorageIndex),
+                                    file_name);
+                                TVPXP3ArchiveExtractionFilter(&info,
+                                                              &FilterContext);
+                            }
+
+                            SegmentPos += one_size;
+                            CurPos += one_size;
+                            SegmentRemain -= one_size;
+                            context->Remaining -= one_size;
+                            context->Written += one_size;
+                            ContinueReadAsync(context);
+                        } catch(...) {
+                            CompleteReadAsync(context, 0,
+                                              std::current_exception());
+                        }
+                    });
+                return;
+            }
+
+            if(TVPXP3ArchiveExtractionFilter) {
+                const ttstr &file_name =
+                    static_cast<const tTVPXP3Archive *>(Owner)->GetName(
+                        StorageIndex);
+                tTVPXP3ExtractionFilterInfo info(
+                    CurPos, destination, one_size,
+                    Owner->GetFileHash(StorageIndex), file_name);
+                TVPXP3ArchiveExtractionFilter(&info, &FilterContext);
+            }
+
+            SegmentPos += one_size;
+            CurPos += one_size;
+            SegmentRemain -= one_size;
+            context->Remaining -= one_size;
+            context->Written += one_size;
+        }
+
+        CompleteReadAsync(context, context->Written, nullptr);
+    } catch(...) {
+        CompleteReadAsync(context, 0, std::current_exception());
+    }
 }
 
 //---------------------------------------------------------------------------

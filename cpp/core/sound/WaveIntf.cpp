@@ -11,9 +11,18 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include <memory>
+#ifdef __EMSCRIPTEN__
+#include <condition_variable>
+#include <deque>
+#include <limits>
+#include <mutex>
+#include <thread>
+#endif
 #include "WaveIntf.h"
 #include "EventIntf.h"
 #include "StorageIntf.h"
+#include "BinaryStream.h"
 #include "MsgIntf.h"
 #include "UtilStreams.h"
 #include "WaveLoopManager.h"
@@ -515,10 +524,16 @@ class tTVPWDC_RIFFWave : public tTVPWaveDecoderCreator {
 public:
     tTVPWaveDecoder *Create(const ttstr &storagename,
                             const ttstr &extension) override;
+#ifdef __EMSCRIPTEN__
+    tTVPWaveDecoder *CreateFromStream(const ttstr &storagename,
+                                      const ttstr &extension,
+                                      tTJSBinaryStream *stream) override;
+#endif
 };
 
 //---------------------------------------------------------------------------
-static bool TVPFindRIFFChunk(tTVPStreamHolder &stream, const tjs_uint8 *chunk) {
+static bool TVPFindRIFFChunk(tTJSBinaryStream *stream,
+                             const tjs_uint8 *chunk) {
     tjs_uint8 buf[4];
     while(true) {
         if(4 != stream->Read(buf, 4))
@@ -536,12 +551,15 @@ static bool TVPFindRIFFChunk(tTVPStreamHolder &stream, const tjs_uint8 *chunk) {
 }
 
 //---------------------------------------------------------------------------
-tTVPWaveDecoder *tTVPWDC_RIFFWave::Create(const ttstr &storagename,
-                                          const ttstr &extension) {
+static tTVPWaveDecoder *TVPCreateRIFFWaveDecoder(tTJSBinaryStream *input,
+                                                 const ttstr &extension) {
     if(extension != TJS_W(".wav"))
+    {
+        delete input;
         return nullptr;
+    }
 
-    tTVPStreamHolder stream(storagename);
+    std::unique_ptr<tTJSBinaryStream> stream(input);
 
     static const tjs_uint8 riff_mark[] = { /*R*/ 0x52, /*I*/ 0x49,
                                            /*F*/ 0x46,
@@ -577,7 +595,7 @@ tTVPWaveDecoder *tTVPWDC_RIFFWave::Create(const ttstr &storagename,
             return nullptr;
 
         // find fmt chunk
-        if(!TVPFindRIFFChunk(stream, fmt_mark))
+        if(!TVPFindRIFFChunk(stream.get(), fmt_mark))
             return nullptr;
 
         size = stream->ReadI32LE();
@@ -673,7 +691,7 @@ tTVPWaveDecoder *tTVPWDC_RIFFWave::Create(const ttstr &storagename,
             return nullptr;
 
         // find data chunk
-        if(!TVPFindRIFFChunk(stream, data_mark))
+        if(!TVPFindRIFFChunk(stream.get(), data_mark))
             return nullptr;
 
         size = stream->ReadI32LE();
@@ -694,8 +712,8 @@ tTVPWaveDecoder *tTVPWDC_RIFFWave::Create(const ttstr &storagename,
         // create tTVPWD_RIFFWave instance
         format.Seekable = true;
         tTVPWD_RIFFWave *decoder =
-            new tTVPWD_RIFFWave(stream.Get(), datastart, format);
-        stream.Disown();
+            new tTVPWD_RIFFWave(stream.get(), datastart, format);
+        stream.release();
 
         return decoder;
     } catch(...) {
@@ -704,6 +722,19 @@ tTVPWaveDecoder *tTVPWDC_RIFFWave::Create(const ttstr &storagename,
         return nullptr;
     }
 }
+
+tTVPWaveDecoder *tTVPWDC_RIFFWave::Create(const ttstr &storagename,
+                                          const ttstr &extension) {
+    return TVPCreateRIFFWaveDecoder(TVPCreateStream(storagename, TJS_BS_READ),
+                                    extension);
+}
+
+#ifdef __EMSCRIPTEN__
+tTVPWaveDecoder *tTVPWDC_RIFFWave::CreateFromStream(
+    const ttstr &, const ttstr &extension, tTJSBinaryStream *stream) {
+    return TVPCreateRIFFWaveDecoder(stream, extension);
+}
+#endif
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
@@ -733,6 +764,192 @@ struct tTVPWaveDecoderManager {
     ~tTVPWaveDecoderManager() { TVPWaveDecoderManagerAvail = false; }
 
 } static TVPWaveDecoderManager;
+
+#ifdef __EMSCRIPTEN__
+namespace {
+// Browser-only continuation executor. Android performs the same creator and
+// decoder work synchronously on its native-file stack
+// (TVPCreateWaveDecoder@0x95FB7C); Web moves that unchanged work off the caller
+// because a VLFS cache miss is completed by JavaScript on another turn.
+class tTVPWaveContinuationExecutor final {
+    std::mutex Mutex;
+    std::condition_variable Condition;
+    std::deque<std::function<void()>> Continuations;
+    bool Stopping = false;
+    std::thread Worker;
+
+    void Execute() {
+        while(true) {
+            std::function<void()> continuation;
+            {
+                std::unique_lock<std::mutex> lock(Mutex);
+                Condition.wait(lock, [this] {
+                    return Stopping || !Continuations.empty();
+                });
+                if(Stopping && Continuations.empty())
+                    return;
+                continuation = std::move(Continuations.front());
+                Continuations.pop_front();
+            }
+            try {
+                continuation();
+            } catch(...) {
+                // Each public continuation translates failures to its
+                // exception_ptr completion. Never terminate this FIFO.
+            }
+        }
+    }
+
+public:
+    tTVPWaveContinuationExecutor() : Worker([this] { Execute(); }) {}
+
+    ~tTVPWaveContinuationExecutor() {
+        {
+            std::lock_guard<std::mutex> lock(Mutex);
+            Stopping = true;
+        }
+        Condition.notify_one();
+        if(Worker.joinable())
+            Worker.join();
+    }
+
+    void Submit(std::function<void()> continuation) {
+        {
+            std::lock_guard<std::mutex> lock(Mutex);
+            Continuations.emplace_back(std::move(continuation));
+        }
+        Condition.notify_one();
+    }
+};
+
+tTVPWaveContinuationExecutor &TVPGetWaveContinuationExecutor() {
+    static tTVPWaveContinuationExecutor executor;
+    return executor;
+}
+
+class tTVPSharedAudioMemoryStream final : public tTVPMemoryStream {
+    std::shared_ptr<std::vector<tjs_uint8>> Owner;
+
+public:
+    explicit tTVPSharedAudioMemoryStream(
+        std::shared_ptr<std::vector<tjs_uint8>> owner) :
+        tTVPMemoryStream(owner->data(), static_cast<tjs_uint>(owner->size())),
+        Owner(std::move(owner)) {}
+};
+
+struct tTVPCreateWaveDecoderAsyncContext {
+    ttstr StorageName;
+    ttstr Extension;
+    std::unique_ptr<tTJSBinaryStream> Source;
+    std::shared_ptr<std::vector<tjs_uint8>> Bytes;
+    std::vector<tTVPWaveDecoderCreator *> Creators;
+    tTVPWaveDecoderAsyncCallback Completion;
+};
+
+void TVPCompleteWaveDecoderAsync(
+    const std::shared_ptr<tTVPCreateWaveDecoderAsyncContext> &context,
+    tTVPWaveDecoder *decoder, std::exception_ptr error) noexcept {
+    try {
+        if(context->Completion)
+            context->Completion(decoder, error);
+    } catch(...) {
+        delete decoder;
+    }
+}
+
+void TVPProbeWaveDecoderAsync(
+    const std::shared_ptr<tTVPCreateWaveDecoderAsyncContext> &context) {
+    TVPDispatchWaveContinuation([context] {
+        tTVPWaveDecoder *decoder = nullptr;
+        std::exception_ptr error;
+        try {
+            for(tjs_int i = static_cast<tjs_int>(context->Creators.size()) - 1;
+                i >= 0; --i) {
+                decoder = context->Creators[i]->CreateFromStream(
+                    context->StorageName, context->Extension,
+                    new tTVPSharedAudioMemoryStream(context->Bytes));
+                if(decoder)
+                    break;
+            }
+            if(!decoder)
+                TVPThrowExceptionMessage(TVPUnknownWaveFormat,
+                                         context->StorageName);
+        } catch(...) {
+            error = std::current_exception();
+            delete decoder;
+            decoder = nullptr;
+        }
+        context->Source.reset();
+        TVPCompleteWaveDecoderAsync(context, decoder, error);
+    });
+}
+} // namespace
+
+void TVPDispatchWaveContinuation(std::function<void()> continuation) {
+    TVPGetWaveContinuationExecutor().Submit(std::move(continuation));
+}
+
+void TVPCreateWaveDecoderAsync(const ttstr &storagename,
+                               tTVPWaveDecoderAsyncCallback completion) {
+    auto context = std::make_shared<tTVPCreateWaveDecoderAsyncContext>();
+    context->StorageName = storagename;
+    context->Completion = std::move(completion);
+
+    try {
+        if(!TVPWaveDecoderManagerAvail) {
+            TVPDispatchWaveContinuation([context] {
+                TVPCompleteWaveDecoderAsync(context, nullptr, nullptr);
+            });
+            return;
+        }
+
+        context->Extension = TVPExtractStorageExt(storagename);
+        context->Extension.ToLowerCase();
+        // Snapshot registration order before leaving the caller thread. The
+        // probe still applies Android's exact reverse traversal.
+        context->Creators = TVPWaveDecoderManager.Creators;
+        context->Source.reset(
+            TVPCreateBinaryStreamForRead(storagename, TJS_W("")));
+
+        context->Source->GetSizeAsync(
+            [context](tjs_uint64 size, std::exception_ptr error) {
+                if(error) {
+                    TVPCompleteWaveDecoderAsync(context, nullptr, error);
+                    return;
+                }
+                try {
+                    if(size > std::numeric_limits<tjs_uint>::max())
+                        TVPThrowExceptionMessage(TVPInsufficientMemory);
+                    context->Bytes =
+                        std::make_shared<std::vector<tjs_uint8>>(
+                            static_cast<size_t>(size));
+                    if(size == 0) {
+                        TVPProbeWaveDecoderAsync(context);
+                        return;
+                    }
+                    context->Source->ReadBufferAsync(
+                        context->Bytes->data(), static_cast<tjs_uint>(size),
+                        [context](std::exception_ptr read_error) {
+                            if(read_error) {
+                                TVPCompleteWaveDecoderAsync(
+                                    context, nullptr, read_error);
+                                return;
+                            }
+                            TVPProbeWaveDecoderAsync(context);
+                        });
+                } catch(...) {
+                    TVPCompleteWaveDecoderAsync(context, nullptr,
+                                                std::current_exception());
+                }
+            });
+    } catch(...) {
+        auto error = std::current_exception();
+        TVPDispatchWaveContinuation([context, error] {
+            TVPCompleteWaveDecoderAsync(context, nullptr, error);
+        });
+    }
+}
+#endif
 
 //---------------------------------------------------------------------------
 void TVPRegisterWaveDecoderCreator(tTVPWaveDecoderCreator *d) {

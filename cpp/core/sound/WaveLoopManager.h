@@ -14,6 +14,8 @@
 //---------------------------------------------------------------------------
 
 #include "tjsTypes.h"
+#include <exception>
+#include <functional>
 #include <vector>
 #include <string>
 #include "WaveSegmentQueue.h"
@@ -166,6 +168,18 @@ class tTVPSampleAndLabelSource {
 public:
     virtual void Decode(void *dest, tjs_uint samples, tjs_uint &written,
                         tTVPWaveSegmentQueue &segments) = 0;
+
+#ifdef __EMSCRIPTEN__
+    using tDecodeAsyncCallback =
+        std::function<void(tjs_uint, std::exception_ptr)>;
+
+    // Web platform boundary around Android LoopManager::Decode@0x967D74.
+    // The synchronous body (links, crossfade, labels and Render order) remains
+    // the single implementation; only its caller stack is continuation based.
+    virtual void DecodeAsync(void *dest, tjs_uint samples,
+                             tTVPWaveSegmentQueue &segments,
+                             tDecodeAsyncCallback completion);
+#endif
 
     [[nodiscard]] virtual const tTVPWaveFormat &GetFormat() const = 0;
 

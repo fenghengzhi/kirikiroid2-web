@@ -15,6 +15,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <zlib.h>
 
 namespace {
 
@@ -123,9 +124,57 @@ namespace {
 
         bool ThrowOnRead = false;
 
-    private:
+    protected:
         std::string Data;
         std::size_t Position = 0;
+    };
+
+    class NativeAsyncMemoryStream final : public MemoryBinaryStream {
+    public:
+        explicit NativeAsyncMemoryStream(
+            std::string data, std::atomic<bool> *destroyed = nullptr) :
+            MemoryBinaryStream(std::move(data)), Destroyed(destroyed) {}
+
+        ~NativeAsyncMemoryStream() override {
+            if(Destroyed)
+                *Destroyed = true;
+        }
+
+        tjs_uint Read(void *buffer, tjs_uint read_size) override {
+            ++SynchronousReads;
+            return MemoryBinaryStream::Read(buffer, read_size);
+        }
+
+        void ReadAsync(void *buffer, tjs_uint read_size,
+                       tAsyncCallback<tjs_uint> completion) override {
+            EnqueueAsyncOperation(
+                [this, buffer, read_size, completion = std::move(completion)](
+                    std::function<void()> finished) mutable {
+                    ++AsynchronousReads;
+                    try {
+                        const auto available = Data.size() - Position;
+                        const auto count =
+                            std::min<std::size_t>(read_size, available);
+                        std::memcpy(buffer, Data.data() + Position, count);
+                        Position += count;
+                        if(completion)
+                            completion(static_cast<tjs_uint>(count), nullptr);
+                    } catch(...) {
+                        try {
+                            if(completion)
+                                completion(0, std::current_exception());
+                        } catch(...) {
+                        }
+                    }
+                    finished();
+                });
+        }
+
+        std::atomic<int> SynchronousReads = 0;
+        std::atomic<int> AsynchronousReads = 0;
+
+    private:
+        std::atomic<bool> *Destroyed;
     };
 
     class DestructionObservedStream final : public MemoryBinaryStream {
@@ -455,4 +504,48 @@ TEST_CASE("XP3 ReadAsync reports EOF short reads and underlying errors") {
             delete storage;
         owner->Release();
     }
+}
+
+TEST_CASE("XP3 continuation uses the underlying native async read path") {
+    const std::string plain = "compressed continuation payload";
+    std::vector<unsigned char> compressed(compressBound(plain.size()));
+    uLongf compressed_size = compressed.size();
+    REQUIRE(compress2(compressed.data(), &compressed_size,
+                      reinterpret_cast<const Bytef *>(plain.data()),
+                      plain.size(), Z_BEST_SPEED) == Z_OK);
+    compressed.resize(compressed_size);
+
+    auto *owner = new tTVPXP3Archive(TJS_W("async-compressed.xp3"), 0);
+    owner->ItemVector.resize(1);
+    auto &item = owner->ItemVector[0];
+    item.Name = TJS_W("continuation.bin");
+    item.OrgSize = plain.size();
+    item.Segments = { { 0, 0, plain.size(), compressed.size(), true } };
+
+    std::atomic<bool> storage_destroyed = false;
+    auto *storage = new NativeAsyncMemoryStream(
+        std::string(reinterpret_cast<const char *>(compressed.data()),
+                    compressed.size()),
+        &storage_destroyed);
+    auto *stream = new tTVPXP3ArchiveStream(owner, 0, &item.Segments, storage,
+                                            item.OrgSize);
+    std::vector<char> output(plain.size());
+    AsyncResult<tjs_uint> result;
+
+    stream->ReadAsync(output.data(), output.size(),
+                      [&](tjs_uint value, std::exception_ptr error) {
+                          result.Complete(value, error);
+                      });
+
+    REQUIRE(result.Wait());
+    CHECK(result.Error == nullptr);
+    CHECK(result.Value == plain.size());
+    CHECK(std::string(output.begin(), output.end()) == plain);
+    CHECK(storage->SynchronousReads.load() == 0);
+    CHECK(storage->AsynchronousReads.load() == 1);
+
+    delete stream;
+    if(!storage_destroyed.load())
+        delete storage;
+    owner->Release();
 }

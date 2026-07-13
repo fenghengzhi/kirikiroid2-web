@@ -81,6 +81,7 @@ public:
 
     // others
     bool SetStream(const ttstr &storagename);
+    bool SetStream(tTJSBinaryStream *stream, const ttstr &storagename);
 };
 
 static int AVReadFunc(void *opaque, uint8_t *buf, int buf_size) {
@@ -109,6 +110,20 @@ tTVPWaveDecoder *FFWaveDecoderCreator::Create(const ttstr &storagename,
     }
     return decoder;
 }
+
+#ifdef __EMSCRIPTEN__
+tTVPWaveDecoder *FFWaveDecoderCreator::CreateFromStream(
+    const ttstr &storagename, const ttstr &, tTJSBinaryStream *stream) {
+    TVPInitLibAVCodec();
+
+    auto *decoder = new FFWaveDecoder();
+    if(!decoder->SetStream(stream, storagename)) {
+        delete decoder;
+        return nullptr;
+    }
+    return decoder;
+}
+#endif
 
 template <typename T>
 static unsigned char *_CopySmaples(unsigned char *dst, AVFrame *frame,
@@ -255,8 +270,12 @@ bool FFWaveDecoder::SetPosition(tjs_uint64 samplepos) {
 }
 
 bool FFWaveDecoder::SetStream(const ttstr &url) {
+    return SetStream(TVPCreateBinaryStreamForRead(url, TJS_W("")), url);
+}
+
+bool FFWaveDecoder::SetStream(tTJSBinaryStream *stream, const ttstr &url) {
     Clear();
-    InputStream = TVPCreateBinaryStreamForRead(url, TJS_W(""));
+    InputStream = stream;
     if(!InputStream)
         return false;
     int bufSize = 32 * 1024;

@@ -53,6 +53,11 @@ int64_t Size(int fd);
 // 返回实际读取字节数；0=EOF；<0=错误
 int Read(int fd, void *buf, int len);
 
+// 原生 callback 异步读。始终在提交调用返回后完成；pthread 提交时，JS
+// Promise 在主线程运行，completion 代理回提交线程。buffer 必须保持有效。
+using AsyncReadCallback = std::function<void(int)>;
+void ReadAsync(int fd, void *buf, int len, AsyncReadCallback completion);
+
 // overlay 写入；返回写入字节数或 <0
 int Write(int fd, const void *buf, int len);
 

@@ -15,6 +15,7 @@
 #include <emscripten/proxying.h>
 #include <cstring>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 // ===========================================================================
@@ -130,6 +131,29 @@ EM_ASYNC_JS(int, vlfs_js_read_await, (int fd, void *buf, int len), {
     }
 });
 
+// 真正的 callback 异步读：即使块缓存命中也经 Promise microtask 完成，
+// 从而保证 C++ completion 永不内联。ctx 非零时由 C++ finish 函数结束
+// proxy_callback_with_ctx 任务，再把 completion 代理回提交线程。
+EM_JS(void, vlfs_js_read_async_start,
+      (void *req, void *ctx, int fd, void *buf, int len), {
+          Promise.resolve()
+              .then(function() {
+                  if(len <= 0)
+                      return new Uint8Array(0);
+                  var cached = VLFS.readCached(fd, len);
+                  return cached != null ? cached : VLFS.read(fd, len);
+              })
+              .then(
+                  function(data) {
+                      HEAPU8.set(data, buf);
+                      _vlfs_async_read_main_finish(req, ctx, data.length);
+                  },
+                  function(err) {
+                      console.error('[vlfs] async read failed:', err);
+                      _vlfs_async_read_main_finish(req, ctx, -1);
+                  });
+      });
+
 EM_JS(int, vlfs_js_unlink, (const char *path), {
     return VLFS.unlink(UTF8ToString(path));
 });
@@ -205,6 +229,39 @@ struct ProxiedReadReq {
     int result;
 };
 
+struct AsyncReadReq {
+    int fd;
+    void *buf;
+    int len;
+    int result;
+    VLFS::AsyncReadCallback completion;
+};
+
+void CompleteAsyncRead(void *arg) {
+    auto *req = static_cast<AsyncReadReq *>(arg);
+    int result = req->result;
+    auto completion = std::move(req->completion);
+    delete req;
+    try {
+        if(completion)
+            completion(result);
+    } catch(...) {
+        // Completion exceptions must not escape through Emscripten's proxy
+        // queue and prevent later callbacks from being serviced.
+    }
+}
+
+void CancelAsyncRead(void *arg) {
+    auto *req = static_cast<AsyncReadReq *>(arg);
+    req->result = -1;
+    CompleteAsyncRead(req);
+}
+
+void ProxiedAsyncReadTask(em_proxying_ctx *ctx, void *arg) {
+    auto *req = static_cast<AsyncReadReq *>(arg);
+    vlfs_js_read_async_start(req, ctx, req->fd, req->buf, req->len);
+}
+
 void ProxiedReadTask(em_proxying_ctx *ctx, void *arg) {
     auto *r = static_cast<ProxiedReadReq *>(arg);
     vlfs_js_read_proxied(ctx, r->fd, r->buf, r->len, &r->result);
@@ -221,6 +278,17 @@ void ProxiedSizeTask(em_proxying_ctx *ctx, void *arg) {
 }
 
 } // namespace
+
+extern "C" EMSCRIPTEN_KEEPALIVE void
+vlfs_async_read_main_finish(void *arg, em_proxying_ctx *ctx, int result) {
+    auto *req = static_cast<AsyncReadReq *>(arg);
+    req->result = result;
+    if(ctx) {
+        emscripten_proxy_finish(ctx);
+    } else {
+        CompleteAsyncRead(req);
+    }
+}
 
 namespace VLFS {
 
@@ -359,6 +427,23 @@ int Read(int fd, void *buf, int len) {
                                         &req))
         return -1;
     return req.result;
+}
+
+void ReadAsync(int fd, void *buf, int len, AsyncReadCallback completion) {
+    auto *req = new AsyncReadReq{ fd, buf, len, -1, std::move(completion) };
+    if(OnMain()) {
+        vlfs_js_read_async_start(req, nullptr, fd, buf, len);
+        return;
+    }
+
+    if(!emscripten_proxy_callback_with_ctx(
+           Queue(), MainThread(), ProxiedAsyncReadTask, CompleteAsyncRead,
+           CancelAsyncRead, req)) {
+        req->result = -1;
+        // Preserve the non-inline contract even if the target thread has
+        // already exited and the proxy task cannot be enqueued.
+        emscripten_async_call(CompleteAsyncRead, req, 0);
+    }
 }
 
 int Write(int fd, const void *buf, int len) {

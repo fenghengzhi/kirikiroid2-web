@@ -198,6 +198,16 @@ private:
     void SeekToPosition(tjs_uint64 pos); // open segment at 'pos' and seek
     bool OpenNextSegment();
 
+    // Web/non-blocking counterpart state machine. Its branch and mutation
+    // order mirrors Android tTVPXP3ArchiveStream::EnsureSegment@0x8FD204 and
+    // Read@0x8FDA9C; only the underlying I/O suspension points differ.
+    struct tAsyncReadContext;
+    void EnsureSegmentAsync(tAsyncActionCallback completion);
+    void OpenNextSegmentAsync(tAsyncCallback<bool> completion);
+    void ContinueReadAsync(const std::shared_ptr<tAsyncReadContext> &context);
+    void CompleteReadAsync(const std::shared_ptr<tAsyncReadContext> &context,
+                           tjs_uint value, std::exception_ptr error);
+
 public:
     tjs_uint64 Seek(tjs_int64 offset, tjs_int whence) override;
 

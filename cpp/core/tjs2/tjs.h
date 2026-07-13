@@ -14,6 +14,7 @@
 
 #include <exception>
 #include <functional>
+#include <memory>
 #include <vector>
 #include "tjsConfig.h"
 #include "tjsVariant.h"
@@ -263,6 +264,9 @@ namespace TJS {
     // tTJSBinaryStream base stream class
     //---------------------------------------------------------------------------
     class tTJSBinaryStream {
+        class tAsyncQueueState;
+        std::shared_ptr<tAsyncQueueState> AsyncQueueState;
+
     public:
         template<typename T>
         using tAsyncCallback = std::function<void(T, std::exception_ptr)>;
@@ -288,7 +292,8 @@ namespace TJS {
         //-- should re-implement for higher performance
         virtual tjs_uint64 GetSize() = 0;
 
-        virtual ~tTJSBinaryStream() = default;
+        tTJSBinaryStream();
+        virtual ~tTJSBinaryStream();
 
         // Non-blocking counterparts of the primitive stream operations.
         //
@@ -351,6 +356,14 @@ namespace TJS {
         void ReadI8LEAsync(tAsyncCallback<tjs_uint8> completion);
 
     protected:
+        using tAsyncOperation =
+            std::function<void(std::function<void()> completion)>;
+
+        // Serializes cursor-mutating asynchronous operations per stream. The
+        // operation itself is started off the submitting stack and must invoke
+        // its completion exactly once after all state mutation is finished.
+        void EnqueueAsyncOperation(tAsyncOperation operation);
+
         // Shared FIFO executor used by the default primitive implementations
         // and by derived streams which only need to defer their synchronous
         // state machine. The task is never executed on the submitting stack.
