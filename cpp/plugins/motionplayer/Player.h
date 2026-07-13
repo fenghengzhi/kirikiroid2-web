@@ -839,6 +839,7 @@ namespace motion {
         bool parseParameterListLike_0x6B202C(
             const std::shared_ptr<PSB::IPSBValue> &value);
         void finalizeParameterTableLike_0x6B1ECC();
+        void purgeParameterRampMapLike_0x6CDE18();
         double initialParameterRawValueLike_0x6B1ABC(
             const std::string &id) const;
         void bindParameterValueLike_0x6C4668(const std::string &label,
@@ -1408,9 +1409,10 @@ namespace motion {
         // bindParameterValueLike_0x6C4668's equal_range ramp loop. Values point
         // into _parameterEntries (the +384 vector); both hold the SAME entries,
         // so the ramp writes (value/mode) land on the entries the node eval
-        // reads. NOTE: pointers stay valid because parseParameterListLike_0x6B202C
-        // reserve()s _parameterEntries before any append and the map is rebuilt
-        // (cleared+refilled) by finalize after the vector is final.
+        // reads. finalizeParameterTableLike_0x6B1ECC registers each pointer in
+        // this Player and every Player on its _parentPlayer chain. Therefore the
+        // destructor must call purgeParameterRampMapLike_0x6CDE18 before the
+        // vector storage is released, matching Player_dtor@0x6CFADC.
         detail::ParameterRampMap _parameterRampMap;
         detail::MotionParameterEntry _defaultParameterEntry;
         detail::MotionParameterEntry *_defaultParameterEntryPtr = nullptr;

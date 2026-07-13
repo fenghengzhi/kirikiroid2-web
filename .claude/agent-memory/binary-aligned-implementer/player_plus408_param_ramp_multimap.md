@@ -27,8 +27,9 @@ per-node field. Fresh-decompiled the whole chain 2026-06-06.
   calls sub_6B1718 per entry, THEN calls sub_6B1ECC.
 - map BUILDER = **sub_6B1ECC@0x6B1ECC** (= finalizeParameterTableLike): iterates +384
   vector (v1[48]..v1[49] step 56B), inserts each into +408 keyed by entry.id via
-  sub_6F16AC@0x6F16AC (_Rb_tree insert). Outer v3=v3[1] loop populates each Player in
-  a sibling chain (empty for standalone — Player+8=0 in ctor).
+  sub_6F16AC@0x6F16AC (_Rb_tree insert). **纠正 2026-07-13**：outer
+  `v3=v3[1]` 是从当前 Player 沿 Player+8 parent 链上行，不是 sibling chain；
+  因而祖先 map 会持有子 Player 参数项指针。
 - CONSUMER = Player_bindParameterValue@0x6C4668 (func start; 0x6C4978 is a mid-line).
   THREE equal_range ramp loops via sub_6F2F98@0x6F2F98 (lower_bound walk; sub_1485230
   = _Rb_tree_increment): (a) HM1-block type4 0x6C4B30 child's+408 by SUFFIX; (b) HM1
@@ -38,8 +39,17 @@ per-node field. Fresh-decompiled the whole chain 2026-06-06.
 - key split sub_6D0BF4@0x6D0BF4: FIRST "::" (else FIRST "/") → scope + suffix.
   WARNING: local splitParameterLabelLike uses rfind (LAST) — pre-existing divergence
   for nested scopes, tangential.
-- erase Player_purgeNodeLabelMap_byParent_guess@0x6CDE18: removes +408 entries whose
-  value==&param_entry (per-entry teardown), header@+416 count@+448.
+- erase **Player_purgeParameterRampMapByParent_guess@0x6CDE18**: 对当前 Player
+  每个参数项，沿当前对象到 parent 的整条链，在相同 key 的 equal_range 中删除
+  value==&param_entry 的 +408 节点（header@+416/count@+448）。唯一 xref 是
+  Player_dtor@0x6CFADC 的首个业务调用，且发生在 +384 vector 释放之前。本地
+  `purgeParameterRampMapLike_0x6CDE18` 已按相同调用时序复刻。
+
+**CONFIG UAF 运行时证据（Web Debug ASan，2026-07-13）：** 点击标题页 CONFIG
+后，ASan 报 `heap-use-after-free`，写地址位于已释放的 56B
+`MotionParameterEntry` vector allocation 内；Wasm PC `0xB8A5EA` 符号化为
+`applyParameterRampsLike_0x6C4C0C`，具体写入 entry+48 `mode`。根因正是此前
+漏掉 0x6CDE18，使祖先 +408 map 在子 Player 析构后仍保留 entry 指针。
 
 FALSIFIES prior memory "+408 controller RB-trees unpopulated / no consumer
 (getVariable reads HM2 not HM1)": +408 IS populated by sub_6B1ECC and IS read by

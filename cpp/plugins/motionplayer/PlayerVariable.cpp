@@ -265,7 +265,8 @@ namespace motion {
     // immediate child's +408 map: Player_bindParameterValue @0x6C4668 finds the
     // immediate type-3 child by the scope path, then looks up the suffix in that
     // child's +408 map. The map is cleared by the motion-rebuild caller before
-    // parameters/children are rebuilt; 0x6B1ECC itself performs no clear.
+    // that Player's own parameters/children are rebuilt; cross-Player nodes are
+    // removed by 0x6CDE18 during child destruction. 0x6B1ECC performs no clear.
     void Player::finalizeParameterTableLike_0x6B1ECC() {
         for(Player *destination = this; destination != nullptr;
             destination = destination->_parentPlayer) {
@@ -273,6 +274,29 @@ namespace motion {
                 if(!entry.id.empty()) {
                     destination->_parameterRampMap.emplace(
                         detail::widen(entry.id), &entry);
+                }
+            }
+        }
+    }
+
+    // libkrkr2.so Player_purgeParameterRampMapByParent_guess @0x6CDE18.
+    // Player+408 is a multimap whose mapped values point into the calling
+    // Player's +384 parameter vector. Walk this Player and its +8 parent chain;
+    // for every parameter entry, erase only equal-key nodes whose mapped pointer
+    // is that exact entry. Player_dtor@0x6CFADC calls this before destroying the
+    // parameter vector, so no ancestor map can retain a dangling entry pointer.
+    void Player::purgeParameterRampMapLike_0x6CDE18() {
+        for(Player *destination = this; destination != nullptr;
+            destination = destination->_parentPlayer) {
+            for(auto &entry : _parameterEntries) {
+                const auto range = destination->_parameterRampMap.equal_range(
+                    detail::widen(entry.id));
+                for(auto it = range.first; it != range.second;) {
+                    if(it->second == &entry) {
+                        it = destination->_parameterRampMap.erase(it);
+                    } else {
+                        ++it;
+                    }
                 }
             }
         }

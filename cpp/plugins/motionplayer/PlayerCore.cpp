@@ -164,6 +164,11 @@ namespace motion {
     }
 
     Player::~Player() {
+        // Player_dtor@0x6CFADC calls 0x6CDE18 before releasing the +384
+        // parameter vector. Values in every ancestor's +408 multimap can point
+        // into this vector, so they must be removed while the entries are alive.
+        purgeParameterRampMapLike_0x6CDE18();
+
         // libkrkr2.so player+760 SeparateLayerAdaptor is owned by Player and
         // released on teardown (raw pointer + manual new/delete, matching the
         // binary object lifetime). Aligned with sub_6C4E28 @0x6C5DBC.
