@@ -87,7 +87,8 @@ elseif(WEB)
     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/main.cpp)
     set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "index" SUFFIX ".html")
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/jspi_jsc_mainloop_fix.js)
+        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/jspi_jsc_mainloop_fix.js
+        ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/vlfs.js)
     # WebAssembly.Memory 初始大小。ASan 的影子内存（覆盖整个地址空间的 1/8）+
     # redzone 把静态数据段顶得很高，wasm 模块声明的最小内存随之暴涨（非 ASan ~64MB，
     # ASan 实测需 ~843MB）。该值必须 >= wasm 声明的 min，否则 JS 创建的 Memory 页数
@@ -102,6 +103,14 @@ elseif(WEB)
     else()
         set(KRKR2_WEB_INITIAL_MEMORY 67108864)    # 64 MiB
     endif()
+    # 浏览器主线程不能同步等待一个新 Worker 完成启动。线程池耗尽后，Emscripten
+    # 只能让 pthread 延迟进入入口；这与 Android pthread_create 返回时线程上下文
+    # 已建立的边界不同。DRACU-RIOT! 在标题切剧情时实测会越过 24 个 Worker，
+    # 延迟入口随后在 std::thread 入口 thunk 的状态虚调用（call_indirect）崩溃。
+    # 64 同时作为 Debug/Release 默认值，确保应用线程仍走预创建 Worker；保留 cache
+    # 变量便于诊断更大游戏的并发上限，而不是让 Release 使用不同的生命周期语义。
+    set(KRKR2_WEB_PTHREAD_POOL_SIZE "64" CACHE STRING
+        "Pre-created Emscripten pthread workers (must cover peak live threads)")
     target_link_options(${PROJECT_NAME} PRIVATE
         "SHELL:-s USE_SDL=2"
         "SHELL:-s USE_SDL_TTF=2"
@@ -116,15 +125,7 @@ elseif(WEB)
         "$<$<CONFIG:Debug>:SHELL:-s ASSERTIONS=2>"
         "SHELL:-s FORCE_FILESYSTEM=1"
         "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
-        # Thread pool size calculation for Web platform:
-        # - 3 application threads (main player, video player, audio player)
-        # - 4 FFmpeg video decoder threads (limited on Web)
-        # - 4 OpenMP threads (for image processing, limited to 4 on Web)
-        # - 2 AudioEngine threads (limited on Web)
-        # - Some buffer for other tasks
-        # Total: ~13-15 threads, so 24 provides good margin
-        "$<$<CONFIG:Debug>:SHELL:-s PTHREAD_POOL_SIZE=64>"
-        "$<$<NOT:$<CONFIG:Debug>>:SHELL:-s PTHREAD_POOL_SIZE=24>"
+        "SHELL:-s PTHREAD_POOL_SIZE=${KRKR2_WEB_PTHREAD_POOL_SIZE}"
         "SHELL:-s DEFAULT_PTHREAD_STACK_SIZE=1048576"
         # VirtualLazyFS: 主线程文件读经 JSPI 挂起等待 JS 异步供数
         # （Chromium 137+ / WebKit 26.4+，即 Safari 27 beta；EM_ASYNC_JS 导入

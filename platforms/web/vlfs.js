@@ -178,16 +178,28 @@
 
         /*
          * 解析 ZIP 中央目录（EOCD/ZIP64），把每个条目注册为 VLFS 文件。
-         * stored 条目 = Blob 切片，永不解压；deflate 条目在注册阶段**立即
+         * ZIP 源可以是本地 Blob，也可以是支持 HTTP Range 的远程 URL；后者
+         * 只读取中央目录和实际访问的 stored 区间，不把整包常驻浏览器内存。
+         * stored 条目 = 源区间切片，永不解压；deflate 条目在注册阶段**立即
          * 全部**流式解压落 OPFS（不懒解压，避免游戏中途首读卡顿），解压
          * 走 DecompressionStream→OPFS 管道，内存恒定不驻留全量数据。
          * opts.onProgress(done, total, path) 报告解压进度。
          * 返回 { paths, xp3Paths }。
          */
         async registerZipBlob(blob, opts) {
+            return this._registerZipSource(
+                { kind: 'blob', size: blob.size, blob: blob }, opts);
+        },
+
+        async registerZipRemote(url, size, opts) {
+            return this._registerZipSource(
+                { kind: 'remote', size: size, url: url }, opts);
+        },
+
+        async _registerZipSource(source, opts) {
             opts = opts || {};
             var mountPrefix = opts.mountPrefix || '/';
-            var records = await this._parseZipCentralDirectory(blob);
+            var records = await this._parseZipCentralDirectory(source);
             // 与旧 findCommonZipPrefix 语义一致：剥离唯一公共顶层目录
             var stripPrefix = opts.stripPrefix;
             if (stripPrefix === undefined) stripPrefix = findCommonZipPrefix(records);
@@ -201,7 +213,7 @@
                     console.warn('[vlfs] unsupported zip method', r.method, 'for', r.name);
                 }
                 var entry = this._register(fsPath, {
-                    kind: 'zip', size: r.uncompSize, srcBlob: blob,
+                    kind: 'zip', size: r.uncompSize, zipSource: source,
                     method: r.method, compSize: r.compSize,
                     localHeaderOffset: r.localHeaderOffset,
                     dataOffset: -1,      // 懒解析 local header
@@ -496,9 +508,8 @@
                 case 'zip': {
                     if (e.method === 0) {
                         if (e.dataOffset < 0) await this._resolveZipDataOffset(e);
-                        var zbuf = await e.srcBlob
-                            .slice(e.dataOffset + pos, e.dataOffset + pos + len).arrayBuffer();
-                        return new Uint8Array(zbuf);
+                        return await this._readZipSourceBytes(
+                            e.zipSource, e.dataOffset + pos, len);
                     }
                     await this._ensureOpfsSpill(e);
                     var obuf = await e.opfsFile.slice(pos, pos + len).arrayBuffer();
@@ -511,8 +522,8 @@
 
         // local file header 的 name/extra 长度可能与中央目录不同，须读 local header 定位数据区
         async _resolveZipDataOffset(e) {
-            var hdr = new DataView(await e.srcBlob
-                .slice(e.localHeaderOffset, e.localHeaderOffset + 30).arrayBuffer());
+            var hdr = new DataView((await this._readZipSourceBytes(
+                e.zipSource, e.localHeaderOffset, 30)).buffer);
             if (hdr.getUint32(0, true) !== 0x04034b50)
                 throw new Error('vlfs: bad zip local header @' + e.localHeaderOffset);
             var nameLen = hdr.getUint16(26, true);
@@ -536,7 +547,8 @@
                 var name = 'e' + e.id;
                 var fh = await self._opfsDir.getFileHandle(name, { create: true });
                 var w = await fh.createWritable();
-                var src = e.srcBlob.slice(e.dataOffset, e.dataOffset + e.compSize).stream();
+                var src = await self._readZipSourceStream(
+                    e.zipSource, e.dataOffset, e.compSize);
                 await src.pipeThrough(new DecompressionStream('deflate-raw')).pipeTo(w);
                 var f = await fh.getFile();
                 if (f.size !== e.size) {
@@ -550,11 +562,43 @@
 
         // ---------- ZIP 中央目录解析 ----------
 
-        async _parseZipCentralDirectory(blob) {
+        async _readZipSourceBytes(source, pos, len) {
+            if (source.kind === 'blob') {
+                var bbuf = await source.blob.slice(pos, pos + len).arrayBuffer();
+                return new Uint8Array(bbuf);
+            }
+            var resp = await fetch(source.url, {
+                headers: { 'Range': 'bytes=' + pos + '-' + (pos + len - 1) }
+            });
+            if (resp.status !== 206 && resp.status !== 200)
+                throw new Error('zip range fetch ' + source.url + ': ' + resp.status);
+            var rbuf = await resp.arrayBuffer();
+            if (resp.status === 200 && rbuf.byteLength > len)
+                return new Uint8Array(rbuf, pos, len).slice();
+            if (rbuf.byteLength < len)
+                throw new Error('short zip range: ' + rbuf.byteLength + ' < ' + len);
+            return new Uint8Array(rbuf, 0, len).slice();
+        },
+
+        async _readZipSourceStream(source, pos, len) {
+            if (source.kind === 'blob')
+                return source.blob.slice(pos, pos + len).stream();
+            var resp = await fetch(source.url, {
+                headers: { 'Range': 'bytes=' + pos + '-' + (pos + len - 1) }
+            });
+            if (resp.status !== 206 && resp.status !== 200)
+                throw new Error('zip range fetch ' + source.url + ': ' + resp.status);
+            if (resp.status === 206 && resp.body) return resp.body;
+            var whole = await resp.blob();
+            return whole.slice(pos, pos + len).stream();
+        },
+
+        async _parseZipCentralDirectory(source) {
             // EOCD: 22 字节定长 + ≤65535 注释，从尾部扫描签名
-            var tailLen = Math.min(blob.size, 65557 + 20);
-            var tailOff = blob.size - tailLen;
-            var tail = new DataView(await blob.slice(tailOff).arrayBuffer());
+            var tailLen = Math.min(source.size, 65557 + 20);
+            var tailOff = source.size - tailLen;
+            var tail = new DataView((await this._readZipSourceBytes(
+                source, tailOff, tailLen)).buffer);
             var eocd = -1;
             for (var i = tail.byteLength - 22; i >= 0; i--) {
                 if (tail.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
@@ -569,14 +613,16 @@
                 if (locOff < 0 || tail.getUint32(locOff, true) !== 0x07064b50)
                     throw new Error('vlfs: zip64 locator not found');
                 var z64Off = Number(tail.getBigUint64(locOff + 8, true));
-                var z64 = new DataView(await blob.slice(z64Off, z64Off + 56).arrayBuffer());
+                var z64 = new DataView((await this._readZipSourceBytes(
+                    source, z64Off, 56)).buffer);
                 if (z64.getUint32(0, true) !== 0x06064b50)
                     throw new Error('vlfs: bad zip64 EOCD');
                 count = Number(z64.getBigUint64(32, true));
                 cdSize = Number(z64.getBigUint64(40, true));
                 cdOffset = Number(z64.getBigUint64(48, true));
             }
-            var cd = new DataView(await blob.slice(cdOffset, cdOffset + cdSize).arrayBuffer());
+            var cd = new DataView((await this._readZipSourceBytes(
+                source, cdOffset, cdSize)).buffer);
             var cdBytes = new Uint8Array(cd.buffer);
             var records = [];
             var p = 0;
