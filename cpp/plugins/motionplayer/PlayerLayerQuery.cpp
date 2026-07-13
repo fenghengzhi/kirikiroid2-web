@@ -298,29 +298,55 @@ namespace motion {
         });
     }
 
-    tTJSVariant Player::getLayerMotion(ttstr name) {
-        // Aligned to libkrkr2.so sub_6D38F4 → sub_6B5AD8 (getLayerMotion):
-        // calls Player_nodePathMap_find @0x6F2228 on the Player+24 node-index map
-        // (0x6B5B14) with the raw TJS `name` and returns the PSB dict of the
-        // resolved node. The map is keyed by the raw PSB "label", so `name` is a
-        // raw label matched verbatim (no path transform).
-        ensureMotionLoaded();
-        if(false) {
-            return {};
+    detail::MotionNode *Player::findNodeByRawLabelLike_0x6B5AD8(
+        const ttstr &name, const bool recursive) {
+        // 0x6B5B14..0x6B5B50: search this Player's raw-label map first.
+        const auto it = _nodeLabelMap.find(name);
+        if(it != _nodeLabelMap.end()) {
+            return &_nodes[static_cast<size_t>(it->second)];
         }
 
-        // Player+24 map is ttstr-keyed (UTF-16 comparator sub_9B1ED0); look up
-        // by the raw ttstr name verbatim (matches binary sub_6F2228 feed).
-        const auto it = _nodeLabelMap.find(name);
-        if(it == _nodeLabelMap.end()) {
-            return {};
+        // 0x6B5B58 gate: callers choose whether descendants participate.
+        if(!recursive) {
+            return nullptr;
         }
-        const auto nodeIndex = it->second;
-        if(nodeIndex < 0 || nodeIndex >= static_cast<int>(_nodes.size())) {
-            return {};
+
+        // Player_visitChildPlayerDispatches @0x6B601C walks the node deque in
+        // order. Type 4 enumerates its TJS Array from index 0; type 3 visits
+        // its single child dispatch. The callback @0x6F230C recursively calls
+        // 0x6B5AD8 with the same key/flag and stops traversal on first hit.
+        for(auto &node : _nodes) {
+            if(node.nodeType == 4) {
+                const int count = node.getParticleCount();
+                for(int i = 0; i < count; ++i) {
+                    if(auto *child = node.getParticleChild(i)) {
+                        if(auto *found =
+                               child->findNodeByRawLabelLike_0x6B5AD8(
+                                   name, recursive)) {
+                            return found;
+                        }
+                    }
+                }
+            } else if(node.nodeType == 3) {
+                if(auto *child = node.getChildPlayer()) {
+                    if(auto *found = child->findNodeByRawLabelLike_0x6B5AD8(
+                           name, recursive)) {
+                        return found;
+                    }
+                }
+            }
         }
-        const auto &psb = _nodes[nodeIndex].psbNode;
-        return psb ? psb->toTJSVal() : tTJSVariant{};
+        return nullptr;
+    }
+
+    tTJSVariant Player::getLayerMotion(ttstr name) {
+        // getLayerMotion @0x6D3998: copy node+1912 from the recursively resolved
+        // node. For non-motion nodes that field is the default void variant.
+        ensureMotionLoaded();
+        if(auto *node = findNodeByRawLabelLike_0x6B5AD8(name, true)) {
+            return node->childPlayerVar;
+        }
+        return {};
     }
 
     tTJSVariant Player::getLayerGetter(ttstr name) {
@@ -328,16 +354,11 @@ namespace motion {
         if(false) {
             return {};
         }
-        // Player+24 map is ttstr-keyed; look up by the raw ttstr name verbatim.
-        const auto it = _nodeLabelMap.find(name);
-        if(it == _nodeLabelMap.end()) {
+        auto *resolvedNode = findNodeByRawLabelLike_0x6B5AD8(name, true);
+        if(!resolvedNode) {
             return {};
         }
-        const auto nodeIndex = it->second;
-        if(nodeIndex < 0 || nodeIndex >= static_cast<int>(_nodes.size())) {
-            return {};
-        }
-        return buildLayerGetterVariant(*this, _nodes[nodeIndex]);
+        return buildLayerGetterVariant(*this, *resolvedNode);
     }
 
     tTJSVariant Player::getLayerGetterList() {
@@ -399,44 +420,7 @@ namespace motion {
         // raw ttstr name for the lookup.
         const ttstr ttKey = name;
 
-        auto findNodeRecursive =
-            [&](auto &&self, Player *player) -> const detail::MotionNode * {
-            if(!player || !true) {
-                return nullptr;
-            }
-
-            if(const auto it = player->_nodeLabelMap.find(ttKey);
-               it != player->_nodeLabelMap.end()) {
-                const auto index = it->second;
-                if(index >= 0 &&
-                   index < static_cast<int>(player->_nodes.size())) {
-                    return &player->_nodes[static_cast<size_t>(index)];
-                }
-            }
-
-            for(auto &node : player->_nodes) {
-                if(node.nodeType == 3) {
-                    if(auto *child = node.getChildPlayer()) {
-                        if(const auto *found = self(self, child)) {
-                            return found;
-                        }
-                    }
-                } else if(node.nodeType == 4) {
-                    const int particleCount = node.getParticleCount();
-                    for(int i = 0; i < particleCount; ++i) {
-                        if(auto *child = node.getParticleChild(i)) {
-                            if(const auto *found = self(self, child)) {
-                                return found;
-                            }
-                        }
-                    }
-                }
-            }
-
-            return nullptr;
-        };
-
-        if(const auto *node = findNodeRecursive(findNodeRecursive, this)) {
+        if(const auto *node = findNodeByRawLabelLike_0x6B5AD8(ttKey, true)) {
             return hitTestMotionNodeShape(*node, x, y);
         }
         return false;

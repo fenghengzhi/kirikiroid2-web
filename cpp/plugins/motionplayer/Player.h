@@ -769,6 +769,11 @@ namespace motion {
 
     private:
         bool ensureMotionLoaded();
+        // Player_findNodeByRawLabel @0x6B5AD8. Direct Player+24 map lookup,
+        // optionally followed by Player_visitChildPlayerDispatches @0x6B601C
+        // in node order (type-4 particle children, then type-3 child Player).
+        detail::MotionNode *findNodeByRawLabelLike_0x6B5AD8(
+            const ttstr &name, bool recursive);
         // Aligned to libkrkr2.so Player_initNonEmoteMotion (0x6B365C).
         // This is the native/LLDB init_motion stage boundary.
         void initNonEmoteMotionLike_0x6B365C(std::uint32_t playFlags);

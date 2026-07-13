@@ -20,7 +20,20 @@
     var BLOCK_SIZE = 256 * 1024;          // 块级缓存粒度
     var BLOCK_CACHE_BUDGET = 16 * 1024 * 1024; // 块缓存内存预算
     var DIRECT_READ_THRESHOLD = 512 * 1024;    // ≥ 此长度的读绕过块缓存直读源
-    var OPFS_DIR = 'vlfs-tmp';            // OPFS 临时目录（init 时清空）
+    // 每个页面实例在这个根目录下使用独立的会话目录。Document 销毁与
+    // FileSystemWritableFileStream 的底层关闭不是原子操作；若固定复用
+    // vlfs-tmp/eN，新页面可能在旧写流收尾期间撞上
+    // NoModificationAllowedError。会话隔离保证旧句柄只能锁住旧路径。
+    var OPFS_ROOT_DIR = 'vlfs-tmp';
+
+    function makeOpfsSessionName() {
+        if (typeof crypto !== 'undefined' &&
+            typeof crypto.randomUUID === 'function') {
+            return 'session-' + crypto.randomUUID();
+        }
+        return 'session-' + Date.now().toString(36) + '-' +
+            Math.random().toString(36).slice(2);
+    }
 
     function normPath(p) {
         if (!p) return '/';
@@ -56,6 +69,7 @@
         _blockCache: new Map(),  // `${entry.id}@${blockIdx}` → Uint8Array；Map 迭代序当 LRU 用
         _blockCacheBytes: 0,
         _opfsDir: null,
+        _opfsSessionName: null,
         _statsHit: 0,
         _statsMiss: 0,
         // 写关闭钩子：shell.html 赋值，做 IDB write-through + MEMFS 小文件镜像
@@ -71,14 +85,34 @@
             this._blockCache.clear();
             this._blockCacheBytes = 0;
             this._ensureDirNode('/');
-            // OPFS 是临时缓存：初始化时整体清空
+            // OPFS 是临时缓存，但不能复用上一 Document 的文件路径：浏览器
+            // 可能已经释放 Web Lock，却仍在异步关闭旧 writable stream。
+            // 先创建当前会话的唯一目录，使当前启动不依赖旧目录能否删除；
+            // 再尽力回收其它会话和旧版直接写在 vlfs-tmp 下的 eN 文件。
             try {
                 var root = await navigator.storage.getDirectory();
-                try { await root.removeEntry(OPFS_DIR, { recursive: true }); } catch (e) {}
-                this._opfsDir = await root.getDirectoryHandle(OPFS_DIR, { create: true });
+                var opfsRoot = await root.getDirectoryHandle(
+                    OPFS_ROOT_DIR, { create: true });
+                var sessionName = makeOpfsSessionName();
+                this._opfsDir = await opfsRoot.getDirectoryHandle(
+                    sessionName, { create: true });
+                this._opfsSessionName = sessionName;
+
+                for await (var pair of opfsRoot.entries()) {
+                    var name = pair[0];
+                    if (name === sessionName) continue;
+                    try {
+                        await opfsRoot.removeEntry(name, { recursive: true });
+                    } catch (e) {
+                        // 旧 Document 的写流可能仍在关闭；保留本次删不掉的
+                        // 目录，后续启动继续回收。当前会话使用不同路径，
+                        // 因而不会受这个残留句柄影响。
+                    }
+                }
             } catch (e) {
                 console.warn('[vlfs] OPFS unavailable:', e);
                 this._opfsDir = null;
+                this._opfsSessionName = null;
             }
         },
 
@@ -490,7 +524,7 @@
          * deflate 条目流式解压落 OPFS（恒定内存），之后随机读 OPFS。
          * registerZipBlob 在注册阶段对全部 deflate 条目立即调用本函数
          * （读路径保留调用仅作幂等兜底）。DEFLATE 不可随机访问是格式
-         * 约束；OPFS 由 init() 整体清空。
+         * 约束；OPFS 由 init() 按页面会话隔离并回收旧会话。
          */
         async _ensureOpfsSpill(e) {
             if (e.opfsFile) return;

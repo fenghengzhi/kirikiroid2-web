@@ -834,9 +834,8 @@
         var hasFileSystemAPI = typeof window.showDirectoryPicker === 'function';
 
         // --- Web 平台边界：同一 origin 只允许一个活跃引擎实例 ---
-        // VLFS.init() 会清空并重新创建共享的 OPFS 临时目录；两个标签页并发
-        // 初始化/写入会触发 NoModificationAllowedError，甚至让其中一个实例读到
-        // 生命周期已经失效的缓存文件。Web Locks 的持有期与 Document 生命周期
+        // VLFS 的 OPFS 临时缓存按页面会话隔离，但两个引擎实例仍会争用全局
+        // 运行资源和持久化存档空间。Web Locks 的持有期与 Document 生命周期
         // 绑定，标签页关闭/崩溃后浏览器会自动释放，不需要心跳或超时猜测。
         var resolveEngineSingleton;
         var engineSingletonReady = new Promise(function(resolve) {
@@ -959,9 +958,9 @@
         // --- File System Access API state ---
         var hostDirHandle = null;
 
-        // --- VirtualLazyFS 初始化（清空 OPFS 临时缓存）---
+        // --- VirtualLazyFS 初始化（创建独立 OPFS 会话并回收旧缓存）---
         // 必须在取得跨标签页单例锁后才接触 OPFS。冲突页让此 Promise 保持
-        // pending，因此不会继续注册 ZIP、清空临时目录或启动 wasm main。
+        // pending，因此不会继续创建 OPFS 会话、注册 ZIP 或启动 wasm main。
         var vlfsReady = engineSingletonReady.then(function(acquired) {
             if (!acquired) return new Promise(function() {});
             return VLFS.init();
