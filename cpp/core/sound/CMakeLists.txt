@@ -28,6 +28,10 @@ set(SOUND_SOURCE_FILES
     ${SOUND_PATH}/win32/WaveMixer.cpp
 )
 
+if(EMSCRIPTEN)
+    list(APPEND SOUND_SOURCE_FILES ${SOUND_PATH}/WebAudioWaveDecoder.cpp)
+endif()
+
 set(SOUND_HEADERS_DIR
     ${SOUND_PATH}/
     ${SOUND_PATH}/win32

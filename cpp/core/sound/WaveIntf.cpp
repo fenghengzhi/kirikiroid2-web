@@ -28,6 +28,9 @@
 #include "WaveLoopManager.h"
 #include "tjsDictionary.h"
 #include "VorbisWaveDecoder.h"
+#ifdef __EMSCRIPTEN__
+#include "WebAudioWaveDecoder.h"
+#endif
 #ifndef KRKR2_NO_FFMPEG
 #include "FFWaveDecoder.h"
 #endif
@@ -883,6 +886,21 @@ void TVPProbeWaveDecoderAsync(
         TVPCompleteWaveDecoderAsync(context, decoder, error);
     });
 }
+
+void TVPProbeWebAudioDecoderAsync(
+    const std::shared_ptr<tTVPCreateWaveDecoderAsyncContext> &context) {
+    TVPTryCreateWebAudioWaveDecoderAsync(
+        context->StorageName, context->Bytes,
+        [context](tTVPWaveDecoder *decoder) {
+            if(!decoder) {
+                TVPProbeWaveDecoderAsync(context);
+                return;
+            }
+            context->Source.reset();
+            context->Bytes.reset();
+            TVPCompleteWaveDecoderAsync(context, decoder, nullptr);
+        });
+}
 } // namespace
 
 void TVPDispatchWaveContinuation(std::function<void()> continuation) {
@@ -924,7 +942,7 @@ void TVPCreateWaveDecoderAsync(const ttstr &storagename,
                         std::make_shared<std::vector<tjs_uint8>>(
                             static_cast<size_t>(size));
                     if(size == 0) {
-                        TVPProbeWaveDecoderAsync(context);
+                        TVPProbeWebAudioDecoderAsync(context);
                         return;
                     }
                     context->Source->ReadBufferAsync(
@@ -935,7 +953,7 @@ void TVPCreateWaveDecoderAsync(const ttstr &storagename,
                                     context, nullptr, read_error);
                                 return;
                             }
-                            TVPProbeWaveDecoderAsync(context);
+                            TVPProbeWebAudioDecoderAsync(context);
                         });
                 } catch(...) {
                     TVPCompleteWaveDecoderAsync(context, nullptr,
