@@ -536,7 +536,29 @@ jobs:
           # without root the attach fails with PermissionDeniedError. Redroid
           # images are userdebug so `adb root` flips adbd into the root shell.
           adb -s "${ANDROID_SERIAL}" root || true
-          adb -s "${ANDROID_SERIAL}" wait-for-device
+          ready=0
+          for i in $(seq 1 30); do
+            adb connect "${ANDROID_SERIAL}" >/dev/null 2>&1 || true
+            state=$(adb -s "${ANDROID_SERIAL}" get-state 2>/dev/null || true)
+            uid=""
+            if [ "${state}" = "device" ]; then
+              uid=$(adb -s "${ANDROID_SERIAL}" shell id -u 2>/dev/null |
+                    tr -d '\r' || true)
+            fi
+            echo "adb_state=${state:-unavailable} uid=${uid:-unknown} (attempt ${i}/30)"
+            if [ "${state}" = "device" ] && [ "${uid}" = "0" ]; then
+              ready=1
+              break
+            fi
+            adb disconnect "${ANDROID_SERIAL}" >/dev/null 2>&1 || true
+            sleep 2
+          done
+          if [ "${ready}" != "1" ]; then
+            echo "::error::Redroid did not reconnect as root" >&2
+            adb devices -l >&2 || true
+            docker logs redroid >&2 || true
+            exit 1
+          fi
 
           # Install the repacked krkr2-harness.apk; adb_engine.py drives
           # HarnessActivity over a TCP socket (adb forward). This path

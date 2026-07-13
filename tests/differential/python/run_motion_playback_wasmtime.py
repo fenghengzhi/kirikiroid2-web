@@ -360,6 +360,7 @@ class WasmtimeEnvProvider:
             return lambda caller, *args: self._emscripten_get(
                 name, func_type, caller, *args)
         exact = {
+            "TVPWebAudioDecodeStartJS": self._web_audio_decode_start,
             "emscripten_asm_const_int": self._asm_const_int,
             "emscripten_asm_const_int_sync_on_main_thread":
                 self._asm_const_int,
@@ -452,6 +453,28 @@ class WasmtimeEnvProvider:
     def _pthread_create(self, _func_type: Any, _caller: Any,
                         *args: Any) -> int:
         return 0
+
+    def _web_audio_decode_start(self, _func_type: Any, caller: Any,
+                                *args: Any) -> None:
+        if len(args) < 4:
+            raise RuntimeError(
+                "TVPWebAudioDecodeStartJS received an invalid argument list"
+            )
+        opaque = int(args[2])
+        callback_index = int(args[3])
+        table = caller.get("__indirect_function_table")
+        if table is None:
+            raise RuntimeError("guest function table is unavailable")
+        callback = table.get(caller, callback_index)
+        if callback is None:
+            raise RuntimeError(
+                "TVPWebAudioDecodeStartJS completion is unavailable"
+            )
+
+        # The headless host has no OfflineAudioContext. Match the browser
+        # bridge's unsupported-format path so the guest continues through its
+        # existing WASM decoder creator chain.
+        callback(caller, opaque, 0, 0, 0, 0, 0)
 
     def _startup_xp3_path(self, _func_type: Any, caller: Any,
                           *args: Any) -> int:
