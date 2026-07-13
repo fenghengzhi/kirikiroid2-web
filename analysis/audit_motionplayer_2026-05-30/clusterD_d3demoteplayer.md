@@ -178,8 +178,10 @@ DEVIATIONS:
 ### load @ 0x52fdd4 / create @ 0x52fd84
 Binary create (registered as "clear"): destroys EmoteObject at +32 and +24 (EmoteObject_destroy
 + operator delete each), zeroes +24/+32. So binary "clear"/create = tear down the object chain.
-Binary load: same teardown, then builds a tTJSVariant[] vector from a2/a3 params (AddRef each,
-sub_533AB4 push), `operator new(0x28)` EmoteObject_init(obj,&vec), store @+24, release vec.
+Binary load: same teardown, then converts every a2/a3 TJS param to ttstr and builds a
+`vector<ttstr>` (string-handle AddRef, sub_533AB4 push), `operator new(0x28)`
+EmoteObject_init(obj,&vec), store @+24, release vec. Corrected 2026-07-13 from the old
+tTJSVariant-vector guess by following the producer into EmoteObject's loadResource consumer.
 P0/ARCH: binary lazily (re)creates the EmoteObject chain in load via operator new(0x28) +
 EmoteObject_init; local builds the chain eagerly in the ctor (unique_ptr<EmoteObject>) and load
 does not new() it. Confirmed lazy-vs-eager deviation already noted in EmotePlayer.h comment.

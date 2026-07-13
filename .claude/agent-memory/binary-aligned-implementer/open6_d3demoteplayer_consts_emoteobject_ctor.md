@@ -19,8 +19,8 @@ web+wasmtime guest clean,m2logo 93f + yuzulogo 243f PASS bit-identical。oracle-
  +0 = RM (operator new(0xE8)=232B, ctor sub_6A88CC — 含 "new Math.RandomGenerator()" + RB-tree@+176 + SourceCache list;
        它就是传给 ResourceManager_loadResource(_, *a1, _) @0x67dce4 的 RM this;dtor sub_6A8B94+delete)
  +8 = EmoteEngine (new(0x5D8)=1496B, EmoteEngine_ctor;dtor sub_67F4B8+delete)
- +16 = vector<tTJSVariant*> (VariantPtrVector_assign_67F0CC;dtor Release each + delete)
-NO scriptObject slot。+0 就是 RM。本地 EmoteObject{_rm(+0值持shared_ptr<State>), _engine(+8), _modules(+16)} 已忠实。
+ +16 = vector<ttstr> (ttstrVector_assign_67F0CC;字符串 handle 逐元素 Release + delete buffer)
+NO scriptObject slot。+0 就是 RM。**2026-07-13 纠正**：旧 variant-pointer 类型被 `0x52FDD4` producer + `0x67DBAC` consumer 证伪；本地现为 `_modulePaths`，并恢复多参数加载链。
 "scriptObject" 是 brief 对 +0 的误读。无改动,交回。EmotePlayer/D3DEmotePlayer 均直接持 EmoteObject* _primaryObj(peer facade,无 D3DEmotePlayer 中间层)。
 
 子项C (架构级 禁盲改,reframe P3 交回): brief 说本地 ctor 多 parentPlayer + RM native 非 dispatch,是字段顺序漂移根因。

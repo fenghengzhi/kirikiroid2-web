@@ -47,7 +47,7 @@ namespace motion {
     // EmoteObject — 二进制 40B EmoteObject(EmoteObject_init @0x67DBAC)。字段:
     //   +0  ResourceManager*  (operator new(0xE8)=232B, ctor sub_6A88CC)
     //   +8  EmoteEngine*       (operator new(0x5D8)=1496B, EmoteEngine_ctor)
-    //   +16 vector<tTJSVariant*> 已加载 PSB 引用数组(VariantPtrVector_assign_67F0CC)
+    //   +16 vector<ttstr> 资源路径数组(ttstrVector_assign_67F0CC)
     //
     // G2-A: EmoteObject 自持 ResourceManager(二进制 +0 是 EmoteObject 拥有的独立
     //   232B 堆对象;dtor @0x67F420 显式 `sub_6A8B94 + operator delete`)。本地把
@@ -61,7 +61,7 @@ namespace motion {
     // explicit operator new / operator delete pattern.
     class EmoteObject {
     public:
-        explicit EmoteObject(ResourceManager rm);
+        EmoteObject(ResourceManager rm, const std::vector<ttstr> &modulePaths);
         ~EmoteObject();
 
         EmoteObject(const EmoteObject&) = delete;
@@ -70,13 +70,13 @@ namespace motion {
         EmoteEngine &engine() { return *_engine; }
         [[nodiscard]] const EmoteEngine &engine() const { return *_engine; }
 
-        // G2-B: 二进制 EmoteObject+16 是 vector<tTJSVariant*>(支持多 PSB 合成,
-        //   D3DEmotePlayer_load @0x52FDD4 逐 PSB push;EmoteObject_init @0x67DBAC
-        //   step4 VariantPtrVector_assign_67F0CC 拷贝整个引用数组)。本地建模为
-        //   std::vector<tTJSVariant>(值持有,等价于二进制按指针持有 + 手动
-        //   AddRef/Release 的引用计数语义 —— ttstr/tTJSVariant 内含 refcount)。
-        //   单 PSB 时 size()==1,getModule 返回首元素,行为与旧单值等价。
-        std::vector<tTJSVariant> _modules; // +16 — loaded PSB references
+        // 0x67F0CC 对每个 8B 元素直接原子 AddRef/Release，0x67DBAC 随后把
+        // 元素传给 ResourceManager_loadResource；0x52FDD4 的 producer 对每个
+        // TJS 参数先做 variant→ttstr。因此 +16 的源码容器是 vector<ttstr>，
+        // 不是 vector<tTJSVariant> / vector<tTJSVariant*>。
+        [[nodiscard]] const std::vector<ttstr> &modulePaths() const {
+            return _modulePaths;
+        }
 
     private:
         ResourceManager _rm;            // +0 — EmoteObject 自持(G2-A)
@@ -88,6 +88,7 @@ namespace motion {
         //   explicitly first).
         tTJSVariant _rmDispatch;
         EmoteEngine *_engine = nullptr; // +8 — raw pointer, manual new/delete
+        std::vector<ttstr> _modulePaths; // +16 — resource paths, refcounted handles
     };
 
     // EmotePlayer — 二进制 EmotePlayer NCB 类(24B native instance,
@@ -187,10 +188,14 @@ namespace motion {
         [[nodiscard]] ttstr getOutline() const { return player().getOutline(); }
         void setPriorDraw(double v) { player().setPriorDraw(v); }           // #28
         [[nodiscard]] double getPriorDraw() const { return player().getPriorDraw(); }
+        // EmotePlayer's time getters are a distinct raw-frame API from
+        // Motion.Player's millisecond-converting getters: 0x681E94 backs both
+        // frameLastTime/lastTime with Player+1128; 0x681EA0 backs both
+        // frameLoopTime/loopTime with Player+1136.
         [[nodiscard]] double getFrameLastTime() const { return player().getFrameLastTime(); } // #29 RO
         [[nodiscard]] double getFrameLoopTime() const { return player().getLoopTime(); }      // #30 RO
-        [[nodiscard]] double getLastTime() const { return player().getLastTime(); }           // #31 RO
-        [[nodiscard]] double getLoopTime() const { return player().getLoopTime(); } // #32 RO scalar (+1136 _loopTime); reverts 1053775 array mis-binding -- binary loopTime is scalar (Player loopTime -> getLastTime), array getter 0x6D139C is the variableKeys member
+        [[nodiscard]] double getLastTime() const { return player().getFrameLastTime(); }      // #31 RO
+        [[nodiscard]] double getLoopTime() const { return player().getLoopTime(); }            // #32 RO
         [[nodiscard]] tTJSVariant getBounds() const { return player().getBounds(); }          // #33 RO
         [[nodiscard]] int getProcessedMeshVerticesNum() const { return player().getProcessedMeshVerticesNum(); } // #34 RO (sub_681EB4)
 
@@ -394,7 +399,10 @@ namespace motion {
 
         // --- Methods ---
         void create();
-        void load(tTJSVariant data);
+        void load(const std::vector<ttstr> &modulePaths);
+        static tjs_error loadCompat(tTJSVariant *result, tjs_int numparams,
+                                    tTJSVariant **param,
+                                    iTJSDispatch2 *objthis);
         tTJSVariant clone();
         void show();
         void hide();

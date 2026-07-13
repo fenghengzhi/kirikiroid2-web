@@ -938,7 +938,7 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     // callback (which tears down the EmoteObject chain — naming is binary's
     // apparent bug; CLAUDE.md mandates 1:1 reproduction).
     NCB_METHOD_DETAIL(clear, Class, void, Class::create, ());
-    NCB_METHOD(load);
+    NCB_METHOD_RAW_CALLBACK(load, &D3DEmotePlayer::loadCompat, 0);
     NCB_METHOD(clone);
     NCB_METHOD(show);
     NCB_METHOD(hide);

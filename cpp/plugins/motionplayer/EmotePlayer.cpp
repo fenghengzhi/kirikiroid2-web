@@ -24,13 +24,14 @@ namespace motion {
     //   2. sub_67E20C(rm,...) wraps RM in a TJS dispatch (2x AddRef)
     //   3. operator new(0x5D8) EmoteEngine -> EmoteEngine_ctor(engine, &wrapper)
     //      -> store EmoteObject+8 (Player+1064 gets the RM dispatch wrapper)
-    //   4. VariantPtrVector_assign_67F0CC(EmoteObject+16, psbArgs)
+    //   4. ttstrVector_assign_67F0CC(EmoteObject+16, modulePaths)
     // G2-A: EmoteObject now self-owns the RM (member _rm, initialized first),
     //   then constructs the EmoteEngine from a copy of it — the binary owns RM
     //   at +0 and passes a wrapper down; the local ResourceManager value type
     //   models that ownership (shared_ptr<State>, cheap copy).
-    EmoteObject::EmoteObject(ResourceManager rm) :
-        _rm(std::move(rm)) {
+    EmoteObject::EmoteObject(ResourceManager rm,
+                             const std::vector<ttstr> &modulePaths) :
+        _rm(std::move(rm)), _modulePaths(modulePaths) {
         // P3-B (2026-06-05): step 2 of EmoteObject_init @0x67DBAC —
         //   `sub_67E20C(rm,...)` wraps the native RM in a TJS dispatch facade
         //   (binary 2x AddRef) which is then passed to EmoteEngine_ctor (step 3,
@@ -46,22 +47,31 @@ namespace motion {
             dispatch->Release();
         }
         _engine = new EmoteEngine(_rmDispatch);
+
+        // EmoteObject_init @0x67DCB0..0x67DD10 loads every retained path in
+        // order; the last loaded PSB is the metadata/base source used to build
+        // the Player/controller graph.
+        tTJSVariant loaded;
+        for(const auto &path : _modulePaths) {
+            loaded = _rm.load(path);
+        }
+        if(auto snapshot = detail::lookupModuleSnapshot(loaded)) {
+            _engine->player().loadFromSnapshot(snapshot);
+        }
     }
 
     // Dtor — aligned with libkrkr2.so EmoteObject_destroy @0x67F420. Order:
     //   1. EmoteObject+8 EmoteEngine: sub_67F4B8 + operator delete
     //   2. EmoteObject+0 ResourceManager: sub_6A8B94 + operator delete
     //   3. EmoteObject+16 vector: per-element Release + delete buffer
-    // Local: delete _engine FIRST, then RM (member, destroyed after body) and
-    //   _modules (vector member) tear down in reverse-declaration order
-    //   (_engine declared after _rm; vector member cleanup is implicit). The
-    //   explicit `delete _engine` enforces the engine-before-RM order that the
-    //   binary's dtor body performs (engine teardown reads RM-derived state).
+    // Local: delete _engine first. Automatic member destruction then releases
+    // _modulePaths -> _rmDispatch -> _rm. The ttstr element ownership is exact,
+    // but RM-before-vector remains a source-lifetime gap caused by the local
+    // value/shared-state ResourceManager adaptation.
     EmoteObject::~EmoteObject() {
         delete _engine;
         _engine = nullptr;
-        // _modules (vector<tTJSVariant>) and _rm release after this body via
-        //   member destruction — matches binary steps 2/3 (RM then vector).
+        // _modulePaths and _rm release automatically after this body.
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer 对象链:壳持有【两个】EmoteObject 槽
@@ -102,26 +112,17 @@ namespace motion {
     }
 
     void D3DEmotePlayer::setModule(tTJSVariant v) {
-        // G2-B: EmoteObject+16 is a vector<tTJSVariant*> (PSB reference array,
-        //   D3DEmotePlayer_load @0x52FDD4 pushes each PSB; EmoteObject_init
-        //   @0x67DBAC step4 assigns the whole array). setModule installs a
-        //   single PSB reference -> size()==1 (equivalent to the old single
-        //   variant). The vector teardown/Release happens in EmoteObject dtor.
-        obj()._modules.assign(1, v);
-        // Bridge loaded PSB snapshot into Player's animation pipeline.
-        // Aligned to libkrkr2.so EmoteObject_init (sub_67DBAC):
-        // After loading PSBs, the EmoteObject initializes its internal Player
-        // with the loaded motion data.
-        auto snapshot = detail::lookupModuleSnapshot(obj()._modules.front());
-        if(snapshot) {
-            player().loadFromSnapshot(snapshot);
-        }
+        std::vector<ttstr> paths{ttstr(v)};
+        load(paths);
     }
 
-    // getModule returns the representative (first) loaded PSB reference, or
-    //   void when none loaded — single-PSB case mirrors the old single variant.
+    // PORT GAP: getModule@0x52FB98 is backed by a separate global-id-keyed
+    // ordered map. Returning the first retained path here preserves the former
+    // local API shape; it is not claimed as the binary getModule implementation.
     tTJSVariant D3DEmotePlayer::getModule() const {
-        return obj()._modules.empty() ? tTJSVariant() : obj()._modules.front();
+        return obj().modulePaths().empty()
+                   ? tTJSVariant()
+                   : tTJSVariant(obj().modulePaths().front());
     }
 
     // --- Methods ---
@@ -144,21 +145,37 @@ namespace motion {
     //   拆除前半 == create(destroy +32/+24, 置 null), 再重建主槽:
     //   v16 = operator new(0x28); EmoteObject_init(v16, &args); +24 = v16;
     // 只重建主槽(+24), 次槽(+32)保持 null。
-    void D3DEmotePlayer::load(tTJSVariant data) {
+    void D3DEmotePlayer::load(const std::vector<ttstr> &modulePaths) {
         // teardown 双槽(== create)
         delete _secondaryObj;
         _secondaryObj = nullptr;
         delete _primaryObj;
         _primaryObj = nullptr;
         // 重建主槽(二进制 operator new(0x28) + EmoteObject_init(args))
-        _primaryObj = new EmoteObject(_rm);
-        // G2-B: assign the loaded PSB into the +16 vector (single PSB here).
-        obj()._modules.assign(1, data);
-        auto snapshot = detail::lookupModuleSnapshot(obj()._modules.front());
-        if(snapshot) {
-            player().loadFromSnapshot(snapshot);
-        }
+        _primaryObj = new EmoteObject(_rm, modulePaths);
         engine()._modified = true;
+    }
+
+    tjs_error D3DEmotePlayer::loadCompat(tTJSVariant *result,
+                                         tjs_int numparams,
+                                         tTJSVariant **param,
+                                         iTJSDispatch2 *objthis) {
+        auto *self =
+            ncbInstanceAdaptor<D3DEmotePlayer>::GetNativeInstance(objthis, true);
+        if(!self) {
+            return TJS_E_INVALIDOBJECT;
+        }
+
+        std::vector<ttstr> modulePaths;
+        modulePaths.reserve(static_cast<size_t>(numparams));
+        for(tjs_int i = 0; i < numparams; ++i) {
+            modulePaths.emplace_back(*param[i]);
+        }
+        self->load(modulePaths);
+        if(result) {
+            result->Clear();
+        }
+        return TJS_S_OK;
     }
 
     tTJSVariant D3DEmotePlayer::clone() {
@@ -167,7 +184,8 @@ namespace motion {
         auto *copy = new D3DEmotePlayer(ResourceManager{});
         // 懒建后 copy 主槽为 null;clone 需显式建主槽 —— 对齐二进制 sub_52FFBC
         // clone 回调内 `+24 = sub_67F978(...)`(operator new(0x28)+EmoteObject_init)。
-        copy->_primaryObj = new EmoteObject(copy->_rm);
+        copy->_primaryObj =
+            new EmoteObject(copy->_rm, obj().modulePaths());
         // 壳层字段(EmotePlayer 自身)
         copy->_useD3D = _useD3D;
         copy->_smoothing = _smoothing;
@@ -177,8 +195,6 @@ namespace motion {
         copy->_visible = _visible;
         copy->_baseScale = _baseScale;
         copy->_userScale = _userScale;
-        // EmoteObject 层 — G2-B: copy the whole +16 PSB reference vector.
-        copy->obj()._modules = obj()._modules;
         // EmoteEngine 层(引擎字段 + getScale/Rot/Color 缓存)
         copy->engine()._meshDivisionRatio = engine()._meshDivisionRatio;
         // R3 phantom: _queuing is Player+480 (Player class), not EmoteEngine.
@@ -199,14 +215,6 @@ namespace motion {
         copy->engine()._mirrorRequested = engine()._mirrorRequested;
         copy->engine()._mirrorChanged = engine()._mirrorChanged;
         copy->engine()._color = engine()._color;
-
-        // Load the same snapshot into the cloned Player (G2-B: first PSB).
-        auto snapshot = obj()._modules.empty()
-                            ? nullptr
-                            : detail::lookupModuleSnapshot(obj()._modules.front());
-        if(snapshot) {
-            copy->player().loadFromSnapshot(snapshot);
-        }
 
         tTJSVariant result;
         if(iTJSDispatch2 *adaptor = AdaptorT::CreateAdaptor(copy)) {

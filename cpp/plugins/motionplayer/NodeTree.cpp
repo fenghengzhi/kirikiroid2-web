@@ -184,12 +184,20 @@ namespace motion::detail {
             // "meshTransform" → meshType (node+2000, sub_6B3C78 at 0x6B4190)
             if (auto v = nodeTreePsbNumber(psbNode, "meshTransform"))
                 node.meshType = static_cast<int>(*v);
-            // "meshSyncChildMask" → meshFlags (node+2004, sub_6B3C78 at 0x6B41B8)
-            if (auto v = nodeTreePsbNumber(psbNode, "meshSyncChildMask"))
-                node.meshFlags = static_cast<int>(*v);
-            // "meshDivision" → meshDivision (node+2008, sub_6B3C78 at 0x6B41D8)
-            if (auto v = nodeTreePsbNumber(psbNode, "meshDivision"))
-                node.meshDivision = static_cast<int>(*v);
+            // Player_initNodeFields @0x6B4198 gates all remaining mesh fields
+            // on meshTransform!=0. Inside that branch it reads the two ints,
+            // then reads meshCombine only when the property exists.
+            if (node.meshType != 0) {
+                // "meshSyncChildMask" → meshFlags (node+2004, 0x6B41B8)
+                if (auto v = nodeTreePsbNumber(psbNode, "meshSyncChildMask"))
+                    node.meshFlags = static_cast<int>(*v);
+                // "meshDivision" → meshDivision (node+2008, 0x6B41D8)
+                if (auto v = nodeTreePsbNumber(psbNode, "meshDivision"))
+                    node.meshDivision = static_cast<int>(*v);
+                // "meshCombine" → node+1964 (0x6B4208..0x6B4238).
+                if (auto v = nodeTreePsbNumber(psbNode, "meshCombine"))
+                    node.meshCombineEnabled = (*v != 0.0);
+            }
 
             // "stencilType" → stencilType (node+52)
             if (auto v = nodeTreePsbNumber(psbNode, "stencilType")) {

@@ -3,6 +3,7 @@
 //
 
 #include "ResourceManager.h"
+#include "ScriptMgnIntf.h"
 #include "tjsDictionary.h"
 
 #include <algorithm>
@@ -52,6 +53,10 @@ namespace {
         }
         return pieces;
     }
+
+    void initializeRandomGenerator(tTJSVariant &generator) {
+        TVPExecuteExpression(TJS_W("new Math.RandomGenerator()"), &generator);
+    }
 }
 
 // C-1 (2026-06-07): RM : public SourceCache. The implicit SourceCache base
@@ -65,11 +70,16 @@ namespace {
 //   Player now aliases this inherited SourceCache directly (Player_ctor
 //   @0x6CED30); the remaining difference is construction-time owner/bufLayer
 //   materialisation, not SourceCache object identity or cache-container lifetime.
-motion::ResourceManager::ResourceManager() : _state(std::make_shared<State>()) {}
+motion::ResourceManager::ResourceManager() : _state(std::make_shared<State>()) {
+    // ResourceManager_ctor @0x6A8988..0x6A8994.
+    initializeRandomGenerator(_randomGenerator);
+}
 
 motion::ResourceManager::ResourceManager(iTJSDispatch2 *kag,
                                          tjs_int cacheSize) :
     _state(std::make_shared<State>()) {
+    // ResourceManager_ctor @0x6A8988..0x6A8994.
+    initializeRandomGenerator(_randomGenerator);
     LOGGER->info("kag: {}, cacheSize: {}", static_cast<void *>(kag), cacheSize);
 
     // Pre-define ShortCutInitialPadKeyMap on the KAG window if not already set.
@@ -453,12 +463,33 @@ tTJSVariant motion::ResourceManager::findMotion(ttstr projectKey,
 }
 
 tjs_error motion::ResourceManager::random(tTJSVariant *r, tjs_int,
-                                          tTJSVariant **, iTJSDispatch2 *) {
-    // random @0x6AB56C forwards a "random" PropGet to the KAG window object — a
-    // host concern unrelated to source caching. STUB: no-op void.
-    LOGGER->warn("ResourceManager::random() stub called");
+                                          tTJSVariant **,
+                                          iTJSDispatch2 *objthis) {
+    // ResourceManager_random @0x6AB56C copies the ctor-created generator
+    // variant at +144, calls random() with no arguments, converts every
+    // non-void result through TJS numeric conversion, and otherwise keeps 0.
+    auto *self =
+        ncbInstanceAdaptor<ResourceManager>::GetNativeInstance(objthis, true);
+    if(!self) {
+        return TJS_E_INVALIDOBJECT;
+    }
+
+    double value = 0.0;
+    if(self->_randomGenerator.Type() == tvtObject) {
+        if(auto *generator = self->_randomGenerator.AsObjectNoAddRef()) {
+            tTJSVariant result;
+            static tjs_uint32 hint = 0;
+            if(TJS_SUCCEEDED(generator->FuncCall(
+                   0, TJS_W("random"), &hint, &result, 0, nullptr,
+                   generator))) {
+                if(result.Type() != tvtVoid) {
+                    value = static_cast<double>(result);
+                }
+            }
+        }
+    }
     if(r) {
-        r->Clear();
+        *r = value;
     }
     return TJS_S_OK;
 }

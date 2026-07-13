@@ -104,19 +104,24 @@ namespace motion {
         //   because the angle controller's 0x70 block has no currentValue
         //   array seeded here). Clear its queue to match.
         if (_ctlAngle) _ctlAngle->queue.clear();
-        // 136: COLOR, seed = xmmword_14D68D0 (a 4-float constant). The exact
-        //   bytes are NOT yet read out of libkrkr2.so (rodata @0x14D68D0,
-        //   referenced ONLY here). Per CLAUDE.md we do not guess the value;
-        //   the color controller's currentValue stays zero-initialized from
-        //   EmoteVarController_ctor until the constant is confirmed.
-        //   TODO(P-C): read xmmword_14D68D0 (4 floats) and seed _ctlColor here;
-        //   most likely identity white (1,1,1,1) but UNCONFIRMED.
-        //   resetVarController(_ctlColor, <xmmword_14D68D0 channels>);
+        // 136: COLOR. EmoteEngine_ctor @0x67E9D8 copies xmmword_14D68D0
+        // byte-for-byte into the four currentValue channels. The rodata bytes
+        // decode to {128.0f, 128.0f, 128.0f, 255.0f}; this is a per-channel
+        // seed, not a scalar broadcast.
+        if (_ctlColor && _ctlColor->currentValue && _ctlColor->count >= 4) {
+            static constexpr float colorSeed[4] = {
+                128.0f, 128.0f, 128.0f, 255.0f
+            };
+            _ctlColor->queue.clear();
+            _ctlColor->state = 0;
+            std::memcpy(_ctlColor->currentValue, colorSeed,
+                        sizeof(colorSeed));
+        }
     }
 
-    // EmoteEngine dtor — manual cleanup of 7 controllers + Player + bind list.
-    // PLATFORM_BOUNDARY: libkrkr2.so dtor not yet separately reverse-engineered;
-    //   this follows the standard "reverse of ctor" pattern.
+    // EmoteEngine dtor — manual cleanup of owned payload pointers. Aligned with
+    // libkrkr2.so EmoteEngine_dtor @0x67F4B8; the typed STL members themselves
+    // are destroyed automatically after this body.
     EmoteEngine::~EmoteEngine() {
         // libkrkr2.so dtor EmoteEngine_dtor @0x67F4B8 walks HM#7's
         // _M_before_begin._M_nxt node chain releasing each key ttstr, then
@@ -127,15 +132,6 @@ namespace motion {
         // `_bindListHead` manual loop was an alias of the map internals and
         // has been removed.
         //
-        // NOTE: the binary's dtor ALSO calls sub_67C8A8-adjacent cleanup and,
-        // for the 4 variant vectors, tTJSVariant_Release on each element before
-        // delete. The typed std::vector<tTJSVariant*> does NOT release the
-        // referenced variants (it only frees the pointer buffer). TODO(P-B):
-        // if/when those vectors are populated, add an explicit per-element
-        // tTJSVariant_Release pass mirroring EmoteEngine_dtor @0x67F8C0/+992/
-        // +1016/+1040 before the vector clears. Currently the vectors are
-        // never populated (setVariable write path un-ported), so this is inert.
-
         // Delete deque#4 (eye) controllers. The binary's dtor frees each
         //   controller-deque's heap controllers (operator delete) before tearing
         //   down the deque header; the entry's ttstr label is released by the
@@ -243,6 +239,12 @@ namespace motion {
         // Delete the Player heap object last (so _engineBack-using fields die first).
         delete _player;
         _player = nullptr;
+
+        // The binary's four pointer vectors perform an element-level refcount
+        // release before freeing their buffers. The current local
+        // vector<tTJSVariant*> model has no matching element Release API, so
+        // reproducing that step is blocked on reversing the actual pointer
+        // element type/assign helper (0x67F0CC); do not guess with delete/Clear.
     }
 
     // Aligned with libkrkr2.so

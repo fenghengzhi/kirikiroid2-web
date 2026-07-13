@@ -15,7 +15,7 @@ BYTE-VERIFIED CORRECT (recent commits, do not re-question):
 
 Lifecycle (all ✅ aligned, byte-verified):
 - D3DEmotePlayer_create@0x52FD84: destroy +32(secondary), destroy +24(primary), null both. == local create() EmotePlayer.cpp:122.
-- D3DEmotePlayer_load@0x52FDD4: same teardown + operator new(0x28)+EmoteObject_init on +24 ONLY (secondary stays null); binary loops a2 PSBs into vector. == local load() EmotePlayer.cpp:133 (modeled single-PSB _modules.assign(1,data)).
+- D3DEmotePlayer_load@0x52FDD4: same teardown + operator new(0x28)+EmoteObject_init on +24 ONLY (secondary stays null); binary loops all args through variant→ttstr into a path vector. **CORRECTED 2026-07-13**: local raw callback now preserves all paths and EmoteObject loads them in order; old single-PSB `_modules.assign(1,data)` note is obsolete.
 - setScale@0x530260: finalScale = baseScale(+40)*userScale(+44), sets +1162=1 (modified). Also threads byte@+1161(queing) as 3rd arg to Animator_setKeyframes. == local setScale EmotePlayer.cpp:281 (but queing-flag pass NOT threaded — see GAP D-2).
 - contains@0x530b5c: AddRef label -> sub_6B5AD8(player+1064,label,1) -> Player_hitTest(node+1664,x,y) -> Release. No AABB/visible/empty guard. == local player().hitTestLayer (D-09 removal verified correct).
 - startWind@0x6709AC: this=ENGINE, gate absAmp==0||normMin==normMax||(fx==0&&fy==0); facade thin-forwards. ✅

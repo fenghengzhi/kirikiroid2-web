@@ -21,4 +21,4 @@ EmoteEngine cluster B audit 2026-05-30. Full ledger: analysis/audit_motionplayer
 
 **MISSING entirely:** stepHairParts, stepBust (full physics integrators, only STUB_WARN in progress), 6 deque step fns, the bind callbacks.
 
-**IDB renames done this session:** EmoteObject_init@0x67DBAC, VariantPtrVector_assign_67F0CC, EmoteObject_applyChara_67F370.
+**IDB renames:** EmoteObject_init@0x67DBAC, EmoteObject_applyChara_67F370；`0x67F0CC` 于 2026-07-13 从错误的 VariantPtrVector 名纠正为 `ttstrVector_assign_67F0CC` 并保存 IDB。

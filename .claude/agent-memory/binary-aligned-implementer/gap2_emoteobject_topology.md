@@ -1,6 +1,6 @@
 ---
 name: gap2-emoteobject-topology
-description: Gap2 EmoteObject 拓扑重构落地 (G2-A/B/C done, G2-D deferred). EmoteObject 自持 RM + _modules vector + EmoteEngine::progress bind-loop LIVE (HM7->Player HM1/HM2). 三个 bind callee 已有 Player-side 端口
+description: Gap2 EmoteObject 拓扑重构落地。2026-07-13 纠正 +16 容器为 vector<ttstr> 资源路径，并恢复多参数 load→构造期逐路径加载链。
 metadata:
   type: project
 ---
@@ -12,7 +12,7 @@ metadata:
 EmoteObject 40B 字段:
 - +0 ResourceManager* (operator new(0xE8)=232B, ctor sub_6A88CC)
 - +8 EmoteEngine* (operator new(0x5D8)=1496B, EmoteEngine_ctor)
-- +16 vector<tTJSVariant*> (PSB 引用数组, VariantPtrVector_assign_67F0CC)
+- +16 vector<ttstr> (资源路径数组, ttstrVector_assign_67F0CC)
 
 init 流程: 建 RM(+0) -> sub_67E20C 包 TJS dispatch(2x AddRef) -> EmoteEngine_ctor(收 dispatch 包装非 RM 本体) -> assign +16 vector -> 逐 PSB loadResource。
 **Player 的 resourceManager = dispatch 包装(iTJSDispatch2*), 非 RM C++ 对象本体**。RM 本体只 EmoteObject 持有。
@@ -21,8 +21,8 @@ dtor@0x67F420 序: ① +8 EmoteEngine(sub_67F4B8+delete) ② +0 RM(sub_6A8B94+de
 
 ## 本地落地状态
 
-- **G2-A DONE**: EmoteObject 增 `ResourceManager _rm` 成员(by-value, shared_ptr<State> 值类型=拥有), ctor `_rm(move(rm))` 先于 `_engine=new EmoteEngine(_rm)`。dtor delete _engine 显式(engine-before-RM), RM/_modules 随成员析构。EmotePlayer.h:73-104 / EmotePlayer.cpp:24-50。
-- **G2-B DONE**: `tTJSVariant _module` -> `std::vector<tTJSVariant> _modules`。4 站点全改: setModule(assign(1,v))/getModule(empty?void:front())/load(assign(1,data))/clone(copy vector + front snapshot)。单 PSB size()==1 行为等价。
+- **G2-A DONE**: EmoteObject 增 `ResourceManager _rm` 成员(by-value, shared_ptr<State> 值类型=拥有), ctor `_rm(move(rm))` 先于 `_engine=new EmoteEngine(_rm)`。dtor 显式 delete _engine；RM 仍是平台适配 value 模型。
+- **G2-B CORRECTED + DONE (2026-07-13)**: 旧 `vector<tTJSVariant>` 结论被 producer/consumer 交叉证伪。现为 `std::vector<ttstr> _modulePaths`；D3DEmotePlayer `load` raw callback 收集全部参数，EmoteObject 构造期逐 path 调 RM.load，最后 loaded variant 进入 snapshot/Player；clone 复用整条 path vector。
 - **G2-C DONE (keystone, LIVE)**: EmoteEngine.cpp:1939-1961 bind-loop 实装。遍历 _labelToValueHM7, 每 label: accumulateTimelineContributionLike_0x67C560(mutate value) -> shouldMirrorEvalLabelLike_0x67C6B0(negate) -> bindParameterValueLike_0x6C4668(label, negate?-v:v)。
 - **G2-D DEFERRED (risk-can-stop, 非 evidence)**: setVariable 双写 shim 保留。原因: round-trip test(motionplayer-dll.cpp:638-639) setVariable->getVariable 无 progress() 间隔, bind-loop 只在 progress 跑, 删 shim 会让 getVariable 返 0.0 破坏 round-trip 且无 oracle 验 bind-loop 正确性。EmotePlayer.cpp setVariable 注释已标 G2-D DEFERRED。
 

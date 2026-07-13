@@ -76,20 +76,22 @@ sub_67d4d0 are container/dispatch plumbing, classified non-logic (see neighbors 
   deviation CLAUDE.md forbids. EmoteObject's OWN internal _engine is correctly a raw pointer
   (EmotePlayer.h:83, EmotePlayer.cpp:24-31) — only the parent's hold of EmoteObject is wrong.
 
-### P1-B2: EmoteObject_init body (PSB load + play pipeline) entirely unported
-- EmoteObject_init @0x67DBAC | local EmoteObject ctor EmotePlayer.cpp:24-26 only does `new EmoteEngine`.
+### P1-B2: EmoteObject_init body (PSB load + play pipeline) — partially restored 2026-07-13
+- EmoteObject_init @0x67DBAC | local EmoteObject ctor now retains `vector<ttstr>`, loads every
+  path through ResourceManager in order, and feeds the final loaded snapshot into Player.
 - BINARY EmoteObject_init does MUCH more than allocate the engine. Verified call chain:
   1. ttstr "global.kag" -> sub_8E3F94 (resolve), operator new(0xE8) ResourceManager-like (sub_6A88CC)
   2. operator new(0x5D8)=EmoteEngine, EmoteEngine_ctor(engine, {accessor,accessor})
-  3. VariantPtrVector_assign_67F0CC(this+2, psbList) — fills the +16 PSB vector
-  4. loop: ResourceManager_loadResource per PSB
+  3. ttstrVector_assign_67F0CC(this+2, modulePaths) — fills the +16 path vector
+  4. loop: ResourceManager_loadResource per path
   5. dispatch PropGet "metadata"->"base", build sub_A0F5E0 wrapper (off_19FD968)
   6. PropGet "chara" (sub_6866F0->v33) and "motion" (->v32)
   7. AddRef + sub_A0FB64(player+1012, chara), EmoteObject_applyChara_67F370(engine, motion-ish)
   8. Player_play(player, 1, &charaVar); sub_67D4D0(engine, baseWrapper)
-- LOCAL: none of this; the load/play bridge lives elsewhere (D3DEmotePlayer::setModule path,
-  EmotePlayer.cpp:57+). Architecturally the binary front-loads load+play INTO the EmoteObject
-  constructor (eager, at object init); local splits it across setModule/setChara/setMotion.
+- LOCAL (corrected): the load loop and final snapshot→Player bridge now live in the
+  EmoteObject constructor, and D3DEmotePlayer `load` is a raw vararg callback matching the
+  binary producer. Remaining divergence is that local `loadFromSnapshot` still condenses the
+  binary's explicit metadata/base/chara/motion dispatch sequence.
   Different call-chain topology. Marked P1 (structure), not P0, because behavior may converge,
   but it violates "复刻调用链/对象生命周期".
 
@@ -163,8 +165,10 @@ sub_67d4d0 are container/dispatch plumbing, classified non-logic (see neighbors 
   ResourceManager built in init). Dispatch plumbing, not standalone logic. NOT deep-audited.
 - sub_67D4D0 — apply-base wrapper invoked at end of EmoteObject_init (sub_67D4D0(engine, base)).
   Thin dispatch into Player. Plumbing. NOT deep-audited (no isolated local counterpart).
-- sub_67F0CC = VariantPtrVector_assign_67F0CC — std::vector<tTJSVariant*>::assign with per-elem
-  AddRef/Release. Pure container plumbing. (renamed in IDB)
+- sub_67F0CC = ttstrVector_assign_67F0CC — std::vector<ttstr>::assign with per-element
+  string-handle AddRef/Release. Corrected 2026-07-13 from the old variant-pointer guess using
+  D3DEmotePlayer_load@0x52FDD4 (variant→ttstr producer) and EmoteObject_init@0x67DBAC
+  (ResourceManager_loadResource consumer); IDB rename updated and saved.
 - sub_67F370 = EmoteObject_applyChara_67F370 — `sub_6B2AE8(player,0,&var)` thin wrapper
   (chara/motion apply). Plumbing. (renamed in IDB)
 - ttstr_doubleMap_upsert @0x686944 — VERIFIED shared HM upsert (hash mix 1025/6/9/32769/11 over

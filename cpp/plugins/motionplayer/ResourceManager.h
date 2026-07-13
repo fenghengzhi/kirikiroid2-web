@@ -230,6 +230,10 @@ namespace motion {
 
         // +224 int32 spec flag — binary checks 1 (krkr) vs 2 (win) in
         // loadResource path. Web port runs the krkr branch.
+        // ResourceManager_ctor @0x6A8988 evaluates
+        // `new Math.RandomGenerator()` into the source-level member consumed by
+        // ResourceManager_random @0x6AB56C.
+        tTJSVariant _randomGenerator;
         tjs_int _spec = 1;
     };
 } // namespace motion
