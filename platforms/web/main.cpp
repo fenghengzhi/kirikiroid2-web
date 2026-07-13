@@ -10,8 +10,15 @@
 #include "environ/cocos2d/AppDelegate.h"
 #include "environ/ui/MainFileSelectorForm.h"
 
+extern "C" void krkr2_install_web_audio_resume();
+
 int main(int argc, char **argv) {
     spdlog::set_level(spdlog::level::debug);
+
+    // Browser autoplay policy has no Android equivalent. Install the Web-only
+    // gesture bridge before OpenAL creates its first AudioContext so the bridge
+    // also covers games which start BGM before showing an input gate.
+    krkr2_install_web_audio_resume();
 
     // 禁用 SDL 触摸→鼠标合成。合成的 MOUSEBUTTONDOWN 在 FINGERUP 之后才入队，
     // 绕过 GLViewImpl 的 _touchActive 防线触发 EventMouse 路径，置位

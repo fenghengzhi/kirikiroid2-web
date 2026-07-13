@@ -941,15 +941,25 @@ void tTVPLocalFileStream::ReadAsync(void *buffer, tjs_uint read_size,
                 VLFS::ReadAsync(
                     VlfsFd, buffer, static_cast<int>(read_size),
                     [completion, finished](int result) mutable {
-                        try {
-                            if(completion)
-                                completion(result < 0
-                                               ? 0
-                                               : static_cast<tjs_uint>(result),
-                                           nullptr);
-                        } catch(...) {
-                        }
-                        finished();
+                        // VLFS resolves its Promise on the browser main
+                        // thread. Resume on the native stream executor so the
+                        // XP3 continuation keeps Android's Read -> cursor
+                        // mutation -> decoder ordering without running
+                        // decompression or decoder work on the UI thread.
+                        DispatchAsync([completion = std::move(completion),
+                                       finished = std::move(finished),
+                                       result]() mutable {
+                            try {
+                                if(completion)
+                                    completion(
+                                        result < 0
+                                            ? 0
+                                            : static_cast<tjs_uint>(result),
+                                        nullptr);
+                            } catch(...) {
+                            }
+                            finished();
+                        });
                     });
             } catch(...) {
                 try {
