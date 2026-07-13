@@ -258,17 +258,22 @@ namespace motion {
     // duplicate ids are kept (multimap). The binary also AddRef's the id ttstr
     // into the node key (sub_6F16AC 0x6f173c); ttstr's copy ctor does that here.
     //
-    // The binary's outer v3=v3[1] loop populates each Player in the v3[1] chain
-    // from v1's (the calling Player's) +384 vector. For a standalone Player the
-    // chain is empty (Player_ctor sets this+8 = 0), so only the own map is built
-    // — modelled here as the single self-populate (the chain has no port model:
-    // motion::Player has no native +8 sibling pointer, the binary's +8 carries
-    // the EmoteEngine/parent dispatch which is not a Player-list head).
+    // The binary's outer v3=v3[1] loop populates EVERY Player in the parent
+    // chain from v1's (the calling Player's) +384 vector. child+8 is the parent
+    // Player pointer written at 0x6B43DC; locally it is `_parentPlayer`. This is
+    // what makes a grandchild parameter (for example `select`) visible in the
+    // immediate child's +408 map: Player_bindParameterValue @0x6C4668 finds the
+    // immediate type-3 child by the scope path, then looks up the suffix in that
+    // child's +408 map. The map is cleared by the motion-rebuild caller before
+    // parameters/children are rebuilt; 0x6B1ECC itself performs no clear.
     void Player::finalizeParameterTableLike_0x6B1ECC() {
-        _parameterRampMap.clear();
-        for(auto &entry : _parameterEntries) {
-            if(!entry.id.empty()) {
-                _parameterRampMap.emplace(detail::widen(entry.id), &entry);
+        for(Player *destination = this; destination != nullptr;
+            destination = destination->_parentPlayer) {
+            for(auto &entry : _parameterEntries) {
+                if(!entry.id.empty()) {
+                    destination->_parameterRampMap.emplace(
+                        detail::widen(entry.id), &entry);
+                }
             }
         }
     }

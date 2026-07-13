@@ -41,7 +41,7 @@ if !+480: +1120 += +592; +456 = min(+1120, +1128)   ← G3/G4 真正逻辑
 反向(d<0) 对称 rewind + wrap to head
 
 ## 本端 frameProgress 入口勘误 (PlayerFrameProgress.cpp:1928) — 2026-06-06
-本端开头 `if(!_speed) return;` 是 port-invented 错位守卫. 二进制 progress_inner 入口**无**此判断; _speed(+1093) 只是 advance/rewindRootAndNodes 内部 align/sync/action 事件 gate, 不门控整个 progress. 正确替换: 入口无条件副作用在前, 然后 `if(!_firstFrame && !_allplaying && renderListEmpty()) return;` (复刻 0x6C10E4/F0 + 0x6C1278). 本端 +1099=_allplaying(Player.h:1104), 无 +376 字段(恒走 +376==0 路径). renderList=二进制+384/+392 指针对, 本端对应容器待 grep 确认.
+本端开头 `if(!_speed) return;` 是 port-invented 错位守卫. 二进制 progress_inner 入口**无**此判断; _speed(+1093) 只是 advance/rewindRootAndNodes 内部 align/sync/action 事件 gate, 不门控整个 progress. 正确替换: 入口无条件副作用在前, 然后 `if(!_firstFrame && !_allplaying && renderListEmpty()) return;` (复刻 0x6C10E4/F0 + 0x6C1278). 本端 +1099=_allplaying(Player.h:1104)。CORRECTION 2026-07-13：旧记载“无 +376 字段、恒走 +376==0 路径”已被 0x6B365C 与本地赋值链交叉证伪；`_defaultParameterEntryPtr` 是 Player+376 的语义等价字段，其 0x6C106C 专用进度分支现已恢复。renderList=二进制+384/+392 指针对, 本端对应容器待 grep 确认.
 
 ### 已实施 (2026-06-06, commit 待提交; binary-alignment-auditor 复核通过)
 入口已重构为 progress_inner 真实拓扑(替换 commit 8883587 的临时门控 `if(!_firstFrame && !_allplaying)return`):

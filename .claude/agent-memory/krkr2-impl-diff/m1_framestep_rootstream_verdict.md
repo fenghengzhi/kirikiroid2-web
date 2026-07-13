@@ -15,7 +15,7 @@ metadata:
 
 **frameProgress 入口拓扑 = ✅ 1:1(本轮重新逐行核对 0x6C106C):**
 - 入口副作用 0x6C1080-0x6C10AC:speedMul读 / +1152=0(本地无字段,标注缺口非遗漏)/ +483=0 / +592=speedMul*dt / if(+482)initEmoteMotion(2)(本地缺,+482==0 时 inert)/ preProgressDirtyNodes。✅(2 inert 缺口,见下)
-- +376 activeTimeline 分支:本地无 +376 字段(恒 ==0 路径),忠实。✅
+- +376 activeTimeline 分支（CORRECTION 2026-07-13）：旧结论“本地无 +376 字段、恒走 0 路径”错误。`_defaultParameterEntryPtr` 正是 Player+376 的语义等价字段，且由 0x6B365C 对应的 parameterize dictionary/index 路径赋值。`PlayerFrameProgress.cpp` 现按 0x6C106C 复刻 entry.value 的 first-frame seed、前进、后退及等值 parameterized-node refresh；遗漏该分支曾使标题按钮在 select=0 时仍随 dt 进入 over 帧。
 - loc_6C10E4 门控 `if(!+481 && !+1099)` → renderList 空检查(本地 _nodes.empty)→ 非空 node-walk → return。✅ 含 firstFrame(+481)块完整复刻:(b)0x6C1120 reverse-from-end 种子 + (a)0x6C1130 +609 reverseSeekFlag 方向 seek(forward seek-to-0 / reverse seek-to-+1128)+ else plain reseek,块末 fall-through(本地 return,论证为 LABEL_48 gated no-op 等价)。✅ 此前坍缩(旧 G-FF609)已修复。
 - LABEL_48 字节级✅:gated clamp(0x6C1340)/forward at-end loop-wrap do-while(0x6C14C4 `v7+=+1136-+1128`)/reverse 3-branch(LABEL_57/reset-0/loop-wrap 0x6C1454)/两 reseek 点 0x6C1488(fwd)+0x6C1428(rev)全 1:1。
 

@@ -7,7 +7,7 @@ metadata:
 
 progress_inner@0x6C106C 有 **两个**独立的 firstFrame 子块，按 +376(activeTimeline) 分流：
 - **+376!=0**（0x6C10B8）：简单 seed `+1120=+456=*(activeTimeline+40)`; 清 +481; `return reseekTimelineCursors`(0x6C10E0)。
-- **+376==0 且 +481!=0**（真实入口 0x6C1108，分支顶在 0x6C10E4）：这才是审计 #4 的块。本端无 +376 字段，恒走此路径。
+- **+376==0 且 +481!=0**（真实入口 0x6C1108，分支顶在 0x6C10E4）：这是普通时间轴的审计 #4 块。CORRECTION 2026-07-13：本端并非恒走此路径；`_defaultParameterEntryPtr` 是 +376 的语义等价字段，非空时必须先走 0x6C10B8 专路并 return。
 
 firstFrame 块(0x6C1108..0x6C132C)精确拓扑：
 1. `v8=+592(deltaTime)`; 清 +481。

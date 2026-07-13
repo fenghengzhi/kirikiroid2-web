@@ -2231,8 +2231,51 @@ namespace internal {
         // (no "modified"-setter) but ported for call-chain restoration.
         preProgressDirtyNodesLike_0x6B6878();
 
+        // Player_progress_inner @0x6C10B0: Player+376 is the active/default
+        // MotionParameterEntry selected while loading the motion.  Its value
+        // drives the player's cursor directly; ordinary dt progression is not
+        // entered while this pointer is present.  The local semantic match for
+        // Player+376 is _defaultParameterEntryPtr (assigned by the same
+        // parameterize dictionary/index load paths as 0x6B365C).
+        if(_defaultParameterEntryPtr != nullptr) {
+            const double parameterTime = _defaultParameterEntryPtr->value;
+            if(_firstFrame) {                         // 0x6C10C0..0x6C10DC
+                _frameTickCount = parameterTime;
+                _firstFrame = false;
+                _clampedEvalTime = parameterTime;
+                reseekTimelineCursors(_clampedEvalTime);
+                return;
+            }
+            if(parameterTime > _clampedEvalTime) {   // 0x6C11F4..0x6C1220
+                _frameTickCount = parameterTime;
+                _clampedEvalTime = parameterTime;
+                advanceRootAndNodes_0x6B6ADC(_clampedEvalTime);
+                return;
+            }
+            if(parameterTime < _clampedEvalTime) {   // 0x6C1224..0x6C1250
+                _frameTickCount = parameterTime;
+                _clampedEvalTime = parameterTime;
+                rewindRootAndNodes_0x6B9A3C(_clampedEvalTime);
+                return;
+            }
+            // 0x6C1254..0x6C126C: equal cursor — refresh only nodes whose
+            // binary node+8 parameter pointer is present.  parameterEntry can
+            // also contain the local fallback entry, so retain the integer
+            // parameterize gate that models node+8 itself.
+            for(size_t i = 1; i < _nodes.size(); ++i) {
+                auto &node = _nodes[i];
+                if(node.parameterizeIndex >= 0 &&
+                   node.parameterEntry != nullptr) {
+                    advanceNodeFramesLike_0x6B7E44(
+                        node, _clampedEvalTime);
+                }
+            }
+            return;
+        }
+
         // === loc_6C10E4 入口门控 (二进制真实拓扑, 本轮 IDA 复核 0x6C10E4..0x6C1278) ===
-        // 本端无 +376 activeTimeline 字段（恒等价于二进制 +376==0 路径 -> loc_6C10E4）。
+        // +376==0 的普通时间轴路径从 loc_6C10E4 开始；非空分支已在上方
+        // 由 _defaultParameterEntryPtr 一比一承接。
         // 0x6C10F0: if(+481 firstFrame==0 && +1099 loopArmed==0) goto loc_6C1270。
         // 字段映射（IDA 确认）：+481=_firstFrame、+1099=_allplaying(loopArmed)。
         if(!_firstFrame && !_allplaying) {

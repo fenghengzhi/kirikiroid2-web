@@ -65,7 +65,7 @@ LABEL_48:
 | 入口 `+592=speedMul*dt` | 0x6C1094 **在 firstFrame 块前** | line 2312 **推迟到 firstFrame 块后** | ❌ 见偏差#2 |
 | 入口 `if(+482)initEmoteMotion(2)` | 0x6C10A4 emoteMode 门控调用 | **完全缺失** | ❌ 见偏差#1 |
 | preProgressDirtyNodes | 0x6C10AC | line 2175 `preProgressDirtyNodesLike_0x6B6878()` | ✅ |
-| +376 activeTimeline 分支 | 0x6C10B4 非零走专路 | 本地无 +376 字段, 注 恒等价 +376==0 | 🔶 容器近似(见下) |
+| +376 activeTimeline 分支 | 0x6C10B4 非零走专路 | `_defaultParameterEntryPtr` 承接 +376，按 entry.value seed/advance/rewind/equal-refresh 后 return | ✅（2026-07-13 纠正旧误判） |
 | renderList 空检查 +384==+392 | 0x6C1278 | line 2196 `_nodes.empty()` 近似 | 🔶 平台边界(无 1:1 容器) |
 | 短路 +1098/+483 | 0x6C10FC/0x6C1100 | line 2208/2211 | ✅ |
 | firstFrame (b) reverse-end seed | 0x6C1120 `v8<0 && +1120==0` | line 2245 | ✅ 结构对齐(读值见#2) |
