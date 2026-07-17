@@ -8,6 +8,7 @@
 #include <cassert>
 
 #include "tjs.h"
+#include "MsgIntf.h"
 #include "ncbind.hpp"
 #include "PSBFile.h"
 #include "PSBHeader.h"
@@ -106,6 +107,83 @@ public:
         }
         *result = static_cast<tjs_int>(list->size());
         return TJS_S_OK;
+    }
+
+    tjs_error IsInstanceOf(tjs_uint32, const tjs_char *membername,
+                           tjs_uint32 *, const tjs_char *classname,
+                           iTJSDispatch2 *) override {
+        // libkrkr2.so sub_596E24 @ 0x596E24.
+        if(membername != nullptr) {
+            return TJS_E_NOTIMPL;
+        }
+
+        const tjs_char *valueClass = nullptr;
+        switch(static_cast<unsigned char>(value_->getType())) {
+            case 0x01:
+            case 0x02:
+            case 0x03:
+            case 0x04:
+            case 0x05:
+            case 0x06:
+            case 0x07:
+            case 0x08:
+            case 0x09:
+            case 0x0a:
+            case 0x0b:
+            case 0x0c:
+            case 0x1d:
+            case 0x1e:
+            case 0x1f:
+            case 0x23:
+            case 0x24:
+            case 0x25:
+            case 0x26:
+            case 0x27:
+            case 0x28:
+            case 0x29:
+            case 0x2e:
+            case 0x2f:
+            case 0x30:
+            case 0x31:
+            case 0x33:
+            case 0x34:
+            case 0x35:
+            case 0x37:
+            case 0x38:
+            case 0x39:
+            case 0x3b:
+            case 0x3c:
+            case 0x3d:
+            case 0x3f:
+            case 0x41:
+                return TJS_S_FALSE;
+            case 0x15:
+            case 0x16:
+            case 0x17:
+            case 0x18:
+            case 0x2c:
+                valueClass = TJS_W("String");
+                break;
+            case 0x19:
+            case 0x1a:
+            case 0x1b:
+            case 0x1c:
+            case 0x2d:
+                valueClass = TJS_W("Octet");
+                break;
+            case 0x20:
+                valueClass = TJS_W("Array");
+                break;
+            case 0x21:
+                valueClass = TJS_W("Dictionary");
+                break;
+            default:
+                TVPThrowExceptionMessage(TJS_W(
+                    "psb: internal error: unknown internal type detected.\n"));
+        }
+
+        return TJS_strcmp(classname, valueClass) == 0 ? TJS_S_TRUE
+                                                     : TJS_S_FALSE;
     }
 
 private:
