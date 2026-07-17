@@ -31,9 +31,12 @@ jobs:
     env:
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
       EMSDK: ${{ github.workspace }}/.emsdk
+      BUILD_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+      KRKR2_WEB_SOURCE_MAP: ${{ (github.event_name == 'workflow_run' && startsWith(github.event.workflow_run.head_branch, 'dev/')) || (github.event_name != 'workflow_run' && startsWith(github.ref_name, 'dev/')) }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           lfs: true
           submodules: recursive
 
@@ -106,7 +109,10 @@ jobs:
       - name: Configure CMake
         run: |
           set -o pipefail
-          cmake --preset "Web Release Config" 2>&1 | tee /tmp/cmake-configure.log
+          echo "Build branch: $BUILD_BRANCH; source map: $KRKR2_WEB_SOURCE_MAP"
+          cmake --preset "Web Release Config" \
+            -DKRKR2_WEB_ENABLE_SOURCE_MAP="$KRKR2_WEB_SOURCE_MAP" \
+            2>&1 | tee /tmp/cmake-configure.log
 
       - name: Pre-build Emscripten ports
         run: |
@@ -138,6 +144,7 @@ jobs:
             out/web/release/index.html
             out/web/release/index.js
             out/web/release/index.wasm
+            ${{ env.KRKR2_WEB_SOURCE_MAP == 'true' && 'out/web/release/index.wasm.map' || '' }}
             out/web/release/index.worker.js
             out/web/release/vlfs.js
             out/web/release/assets.zip
@@ -180,6 +187,10 @@ jobs:
           cp out/web/release/index.html /tmp/cloudflare-pages/
           cp out/web/release/index.js /tmp/cloudflare-pages/
           cp out/web/release/index.wasm /tmp/cloudflare-pages/
+          if [ "$KRKR2_WEB_SOURCE_MAP" = "true" ]; then
+            test -f out/web/release/index.wasm.map
+            cp out/web/release/index.wasm.map /tmp/cloudflare-pages/
+          fi
           # VirtualLazyFS: index.data(--preload-file) 已移除，
           # UI 资源改为 assets.zip + vlfs.js 懒加载
           cp out/web/release/vlfs.js /tmp/cloudflare-pages/
@@ -217,7 +228,7 @@ jobs:
             echo "::error::CLOUDFLARE_PAGES_PROJECT_NAME variable or secret is required to upload to Cloudflare Pages"
             exit 1
           fi
-          deploy_branch="$GITHUB_REF_NAME"
+          deploy_branch="$BUILD_BRANCH"
           if [ "$CLOUDFLARE_PAGES_ENVIRONMENT" = "production" ]; then
             deploy_branch="$CLOUDFLARE_PAGES_PRODUCTION_BRANCH"
           fi

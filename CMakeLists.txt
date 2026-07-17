@@ -40,6 +40,7 @@ project(${APP_NAME})
 option(ENABLE_TESTS "enable tests execute build(exclude android)" ON)
 option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
 option(KRKR2_WEB_DEBUG_ENABLE_ASAN "enable AddressSanitizer in Web Debug builds" ON)
+option(KRKR2_WEB_ENABLE_SOURCE_MAP "emit a WebAssembly source map for Web builds" OFF)
 option(KRKR2_ENABLE_WASMTIME_HEADLESS "build the generic Wasmtime headless debug runner" OFF)
 if(NOT DEFINED KRKR2_USE_STUB_SPDLOG)
     set(_KRKR2_USE_STUB_SPDLOG_DEFAULT OFF)
@@ -75,6 +76,7 @@ elseif(WEB)
         -fwasm-exceptions
         -msimd128
         $<$<AND:$<CONFIG:Debug>,$<BOOL:${KRKR2_WEB_DEBUG_ENABLE_ASAN}>>:-fsanitize=address>
+        $<$<BOOL:${KRKR2_WEB_ENABLE_SOURCE_MAP}>:-gline-tables-only>
     )
     add_link_options($<$<AND:$<CONFIG:Debug>,$<BOOL:${KRKR2_WEB_DEBUG_ENABLE_ASAN}>>:-fsanitize=address>)
 endif()
@@ -140,6 +142,7 @@ elseif(WEB)
         "SHELL:-s JSPI_EXPORTS=['krkr2_main_loop_tick']"
         "SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/platforms/web/jspi_jsc_mainloop_fix.js"
         -fwasm-exceptions
+        $<$<BOOL:${KRKR2_WEB_ENABLE_SOURCE_MAP}>:-gsource-map>
         $<$<CONFIG:Debug>:--emit-symbol-map>
         $<$<CONFIG:Debug>:-g2>
         $<$<CONFIG:Debug>:-O1>
