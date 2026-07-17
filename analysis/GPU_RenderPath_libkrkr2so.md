@@ -2,6 +2,13 @@
 
 通过反编译libkrkr2.so分析KAG的GPU渲染路径。
 
+> 2026-07-18 纠正：旧版文档把 `0x850528` 误命名为
+> `DrawDevice_UploadLayerToTexture_guess`，并据此推断 DrawDeviceD3D 的
+> `Show()` 没有调用 `UpdateDrawBuffer`。新反编译证明 `0x850528` 是软件纹理
+> 的 `GetAdapterTexture` 虚函数；DrawDeviceD3D 的 `sub_5314B0@0x5314B0`
+> 在普通与转场分支末尾都会把 back target 交给 window form 的
+> `UpdateDrawBuffer`。下文已按新证据纠正。
+
 ## GPU vs CPU路径选择
 
 libkrkr2.so中通过`ogl_accurate_render`配置项（字符串`preference_ogl_accurate_render`在0x155B714）决定是否使用GPU路径。
@@ -89,15 +96,12 @@ libkrkr2.so在`sub_84C724`中注册了大量GPU渲染方法（通过`sub_84AE48`
 
 这些方法由GPU RenderManager管理，通过OpenGL ES 2.0 shader执行。
 
-### 3. DrawDevice vtable分析
+### 3. 软件纹理 adapter vtable 分析
 
-#### vtable1 (0x1A27308) — 可能是tTVPBasicDrawDevice的第一接口
-| Index | Offset | Function | 推测名称 |
-|-------|--------|----------|----------|
-| 0 | 0x00 | sub_84C314 | destructor? |
-| 1 | 0x08 | sub_850304 | Present (calls vtable[7]) |
-| 8 | 0x40 | 0x850528 | DrawDevice_UploadLayerToTexture_guess |
-| 15 | 0x78 | 0x849868 | DrawDevice_RequestRedraw_guess |
+`off_1A272C8/off_1A27370` 的 adapter-texture 槽 `+0x80` 指向
+`SoftwareTexture2D_GetAdapterTexture_guess@0x850528`。它属于软件纹理对象，
+不是 DrawDevice：同尺寸调用 `Texture2D::updateWithData`，尺寸变化则
+`new Texture2D → autorelease → initWithData`。
 
 #### vtable1[1] (Present) 行为
 ```c
@@ -193,13 +197,48 @@ if (!byte_1AB84F4) {
 在CPU路径中，Layer像素通过标准的KAG图层合成（InternalComplete2 → Draw → DrawCompleted）
 进入DrawBuffer，然后通过Show() → UpdateDrawBuffer上传到Cocos2D纹理。
 
-这意味着web端的问题**不在GPU/CPU路径选择上**，而在于：
-- DrawDeviceD3D的Show()没有调用UpdateDrawBuffer
-- 或者DrawDevice的Update链路在DrawDeviceD3D代理模式下断裂
+DrawDeviceD3D 的软件链已由 `sub_5314B0@0x5314B0` 确认：manager 的 CPU
+draw buffer 经 `sub_532B1C` 全量上传到每-manager软件纹理，再经
+`sub_5328F4` 合成到 back target，最后调用 window form 的
+`UpdateDrawBuffer`。因此“Show 没有调用 UpdateDrawBuffer”的旧结论已被证伪。
+
+## DrawDeviceD3D 第二批源码结构复原（2026-07-18）
+
+本轮在 `cpp/plugins/DrawDeviceD3D.cpp` 继续恢复了 Show 外围的对象图，证据与
+本地结构对应如下：
+
+| libkrkr2.so | 原版行为 | 本地复原 |
+|---|---|---|
+| `0x530E94`, `0x531ECC` | root 注册独立 `D3DLayerBase` native adaptor | `D3DLayerBaseNativeInstance`，与 NCB class adaptor 分离 |
+| `0x533010`, `0x532D64` | child 注册 `D3DLayerObjectNativeInstance`；公共基类持有 owner/parent/双索引/listener | `D3DLayerObject` + 独立 owning adaptor |
+| `0x52991C`, `0x529B98`, `0x529DAC` | front/back 两棵允许重复键的 RB tree；删除按键范围内精确指针匹配 | 两个 `std::multimap<int,D3DLayerObject*>`，保留重复项与单项删除边界 |
+| `0x529038` | `children` 仅枚举 front tree，过滤失效 owner | TJS Array getter，同序同过滤 |
+| `0x5297BC`, `0x530DA4`, `0x530DE8` | `onUpdate(state)` + listener 链表传播 | `std::list` 追加/全匹配删除；Show/capture 复用传播链 |
+| `0x529248`, `0x529670` | transition 读取 method/rule/vague 并维护纹理引用 | `startTransition/stopTransition`，默认 vague=64、state 1→0 |
+| `0x52CF28`–`0x533310` | D3DImage 构造、矩阵、clip、transform、listener draw | 完整 NCB surface 与 child 生命周期 |
+| `0x52D5AC`–`0x533420` | D3DPicture 跟踪于 root pointer-set；Software load 复制纹理 | `D3DPicture` + texture reference holder；保留重复 load 覆盖旧 holder 的边界 |
+| `0x52B5F8 → 0x531088` | capture 合成 front plane 并回写目标 Layer | Software scanline copy，支持 frontIndex limit |
+
+### ncbind 对象所有权
+
+二进制给 D3DImage 同时安装 class adaptor 与公共 child adaptor；公共 adaptor 的
+`Destruct` 调用 native deleting destructor，而 `Invalidate` 是 no-op。Web 本地
+`ncbInstanceAdaptor` 默认会拥有 factory 返回值，因此 factory 将 class adaptor
+设为 sticky，由公共 adaptor 保持唯一所有权，避免双重析构。这不是渲染行为
+workaround，而是对二进制 adaptor 生命周期在本仓库 ncbind 实现中的同构表达。
+
+### 平台边界
+
+直到 `CurrentTarget` 为止，容器、更新传播、Software texture copy 和合成顺序均按
+反编译复原。最终 `UpdateDrawBuffer` 仍进入 Emscripten/Cocos2D 的 WebGL texture
+adapter；这是 Android GL 与浏览器 WebGL 的不可避免平台边界，没有在 child/transition
+链中加入额外缓存失效或强制刷新步骤。
 
 ## IDA已重命名函数
 
 | 地址 | 名称 | 确认程度 |
 |------|------|----------|
-| 0x84C724 | GPU_RenderMethod_Init_guess | guess |
+| 0x84C724 | SoftwareRenderMethod_Init_guess | guess（由 CPU render-method 对象/vtable 交叉确认） |
 | 0x84AE48 | RenderManager_RegisterMethod_guess | guess |
+| 0x850528 | SoftwareTexture2D_GetAdapterTexture_guess | guess（vtable 槽与上传行为确认） |
+| 0x5314B0 | DrawDeviceD3D_Show_guess | guess（NCB/embedded draw-device 调用链确认） |

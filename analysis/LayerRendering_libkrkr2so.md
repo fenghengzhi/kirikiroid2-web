@@ -2,7 +2,7 @@
 
 反编译libkrkr2.so分析KAG Layer如何通过Cocos2D显示到屏幕上。
 
-## 完整渲染管线（无gap）
+## 默认 Software renderer 的完整渲染管线
 
 ```
 1. Player写像素到Layer缓冲区 (sub_6DE738)
@@ -32,30 +32,31 @@
        递归调用 Layer_NotifyUpdate_guess
     │
     ▼
-4. DrawDevice->NotifyLayerImageChange (vtable[11], offset 88)
-   标记DrawDevice需要重绘
-   调用 DrawDevice_RequestRedraw_guess (0x849868)
-   将DrawDevice添加到全局 g_pendingDrawDevices 列表
+4. LayerManager::NotifyWindowInvalidation
+   → LayerTreeOwner::NotifyLayerImageChange
+   → DrawDevice::NotifyLayerImageChange (vtable+88)
+   → Window::RequestUpdate → TVPPostWindowUpdate
     │
     ▼
-5. DrawDevice_FlushAllPending (0x849808)
-   由 ContinuousHandler 定期调用（注册于 DrawDevice_InitRenderLoop_guess 0x42F644）
-   遍历 g_pendingDrawDevices，对每个调用 vtable[1] (Present)
+5. TVPDeliverWindowUpdateEvents → Window::UpdateContent
+   → DrawDevice::Update → LayerManager::UpdateToDrawDevice
+   → PrimaryLayer::CompleteForWindow
     │
     ▼
-6. DrawDevice->Present (vtable+8)
-   调用 vtable[7] (GetSrcSize/ShouldRedraw?)
-   最终调用 DrawDevice_UploadLayerToTexture_guess (0x850528)
-   从Layer像素缓冲区创建/更新 Cocos2D Texture2D
+6. Software CompleteForWindow → InternalComplete2 → Draw
+   → LayerManager::DrawCompleted
+   → CPU bitmap draw buffer
     │
     ▼
-7. Texture2D::updateWithData → glTexSubImage2D
-   像素数据上传到GPU
+7. DrawDeviceD3D::Show (0x5314B0)
+   → manager item GetTexture (0x532B1C，全量上传 CPU draw buffer)
+   → item Draw (0x5328F4)
+   → front/back target 软件合成
     │
     ▼
-8. TVPWindowLayer::UpdateDrawBuffer (0xAA6268)
-   更新Cocos2D Sprite的纹理引用
-   调用 ResetDrawSprite (0xAA7D70)
+8. Window form::UpdateDrawBuffer(backTarget)
+   → SoftwareTexture2D::GetAdapterTexture (0x850528)
+   → Texture2D::updateWithData / WebGL 上传
     │
     ▼
 9. Cocos2D场景图渲染 → OpenGL ES → 屏幕
@@ -63,16 +64,17 @@
 
 ## 关键发现
 
-### NotifyLayerImageChange 是核心
+### NotifyLayerImageChange 是更新调度入口
 DrawDevice vtable+88 对应的是 `iTVPDrawDevice::NotifyLayerImageChange`
 （ARM64 vtable layout包含2个destructor slot，所以offset 88 = slot 11 = NotifyLayerImageChange）
 
-### 异步渲染模型
-libkrkr2.so采用**异步渲染**：
-- Layer::Update() 不直接上传纹理
-- 它只是将DrawDevice标记为"需要重绘"（添加到 g_pendingDrawDevices）
-- `DrawDevice_FlushAllPending` 由 ContinuousHandler（定时器）周期性调用
-- 在FlushAllPending中才真正执行纹理上传（Present → UploadTexture → glTexSubImage2D）
+### 事件调度模型
+libkrkr2.so 中 `Layer::Update()` 不直接上传纹理；它通过 Window update
+事件调度 `UpdateContent`。默认 Software renderer 在
+`CompleteForWindow → DrawCompleted` 生成 CPU draw buffer；若窗口安装的是
+DrawDeviceD3D，则由 `Show@0x5314B0` 将 manager draw buffer 合成并交给
+`UpdateDrawBuffer`。旧文档把 `0x849808` 的 pending 清理链误当成这里的主上传链，
+该结论已删除。
 
 ### Player SLA draw路径的完整链
 ```
@@ -82,11 +84,11 @@ Player_DrawSLA_guess (0x6D5658)
   ├─ ResolveSLATarget (0x6D5948) → 获取SLA底层native Layer
   ├─ RenderMotionFrame (0x6DE738) → 往Layer像素缓冲区写motion帧
   └─ Layer_UpdateRect_guess (0x800F4C) → 触发dirty通知
-      └─ ... → NotifyLayerImageChange → RequestRedraw → 添加到pending list
+      └─ ... → NotifyLayerImageChange → Window::RequestUpdate
 ```
-渲染在下一次 FlushAllPending 时上屏。
+渲染在后续 Window update 事件的 `UpdateContent` 中完成。
 
-## 架构概览（旧版，保留参考）
+## 架构概览（已按 2026-07-18 证据纠正）
 
 ```
 TJS2 Game Scripts (KAG)
@@ -97,14 +99,15 @@ tTJSNI_BaseLayer (KAG Layer tree)
     │
     ▼ Layer::Update() → dirty rect notification
     │
-iTVPDrawDevice (PassThroughDrawDevice)
-    │ vtable+0x58: NotifyBitmapCompleted_guess
-    │ vtable+0x40: DrawDevice_UploadLayerToTexture_guess (0x850528)
+iTVPDrawDevice / DrawDeviceD3D embedded adapter
+    │ Update → CompleteForWindow → CPU draw buffer
+    │ DrawDeviceD3D::Show → manager software texture → back target
     │
-    ▼ uploads pixel data to Cocos2D Texture2D
+    ▼ Window form::UpdateDrawBuffer(backTarget)
     │
 TVPWindowLayer (extends cocos2d::ScrollView → cocos2d::Node)
     │ UpdateDrawBuffer(iTVPTexture2D*) at 0xAA6268
+    │ SoftwareTexture2D::GetAdapterTexture at 0x850528
     │ ResetDrawSprite() at 0xAA7D70
     │
     ▼ sets texture on internal Cocos2D Sprite
@@ -187,7 +190,7 @@ void Layer_NotifyDrawDevice_guess(WindowObject *window, rect *dirtyRect) {
     // 存储脏区域到window对象
     storeDirtyRect(window + 176, dirtyRect);
 
-    // 调用DrawDevice的虚方法通知更新
+    // 调用DrawDevice的虚方法通知更新，随后由 Window update 事件调度
     DrawDevice *dd = window->drawDevice;   // offset +24
     if (dd) {
         dd->vtable[11](dd, window);  // vtable+0x58: OnLayerDirty
@@ -195,12 +198,15 @@ void Layer_NotifyDrawDevice_guess(WindowObject *window, rect *dirtyRect) {
 }
 ```
 
-### 5. 纹理上传 — DrawDevice_UploadLayerToTexture_guess (0x850528)
+### 5. 纹理上传 — SoftwareTexture2D_GetAdapterTexture_guess (0x850528)
 
-DrawDevice的vtable+0x40方法，将Layer像素上传到Cocos2D Texture2D：
+> 2026-07-18 纠正：以下上传函数不是 DrawDevice 方法，而是软件纹理
+> `GetAdapterTexture` 的 vtable `+0x80` 槽，函数地址为 `0x850528`。
+
+软件纹理的 adapter 方法将 CPU 像素上传到 Cocos2D Texture2D：
 
 ```c
-Texture2D* DrawDevice_UploadLayerToTexture(LayerBitmap *bitmap, Texture2D *existing) {
+Texture2D* SoftwareTexture2D_GetAdapterTexture(SoftwareTexture *bitmap, Texture2D *existing) {
     if (existing && existing.width == bitmap.width && existing.height == bitmap.height) {
         // 更新现有纹理（快速路径）
         existing.updateWithData(bitmap.pixelData, 0, 0, bitmap.pitch/4, bitmap.height);
@@ -276,26 +282,17 @@ void Player_DrawSLA(Player *self, SLA *sla) {
 
 ## 关键结论
 
-### 为什么Motion Logo在web端不显示
+### Motion Logo 的当前结论（纠正旧诊断）
 
-1. **libkrkr2.so的SLA draw路径**直接通过C++操作底层渲染：
-   - `sub_6D5948` 获取SLA底层的GL渲染目标（不是TJS Layer对象）
-   - `sub_6DE738` 直接往渲染目标写像素
-   - `Layer_UpdateRect_guess` 通知DrawDevice脏区域
-   - DrawDevice通过 `glTexSubImage2D` 更新GPU纹理
-   - Cocos2D在下一帧自动重绘
+旧文档把“owner Layer 不在显示树”和“DrawDevice 未收到脏通知”写成既定根因，
+该结论已被后续运行时与反编译证据推翻。当前 Web Debug 的
+`logo_test.xp3` 可以完整显示 motion logo；默认 Software renderer 的实际链是：
 
-2. **web端的问题**：
-   - 我们用renderToLayer写像素到SLA的owner Layer
-   - 但这个Layer不在KAG的主显示图层树中
-   - 即使写了正确的像素，DrawDevice没有收到脏区域通知
-   - TVPWindowLayer的Sprite没有更新纹理
+`Player/SLA CPU 写入 → Layer update → CompleteForWindow CPU draw buffer →
+DrawDeviceD3D::Show（若安装）→ UpdateDrawBuffer → WebGL adapter`。
 
-3. **正确的修复方向**：
-   - 不应该写到SLA的owner Layer
-   - 应该找到KAG窗口的primary Layer（主显示图层）
-   - 渲染motion到primary Layer的子图层上
-   - 调用该子图层的Update()触发DrawDevice → Texture2D → glTexSubImage2D链
+因此后续问题必须沿实际 owner/primary/paintBox/screen 坐标链和当前 draw device
+逐层取证，不能继续引用旧的“写错 owner Layer”结论。
 
 ### IDA中已重命名的函数
 
@@ -304,9 +301,7 @@ void Player_DrawSLA(Player *self, SLA *sla) {
 | 0x800F4C | Layer_UpdateRect_guess | guess |
 | 0x8144E8 | Layer_NotifyUpdate_guess | guess |
 | 0x8388EC | Layer_NotifyDrawDevice_guess | guess |
-| 0x850528 | DrawDevice_UploadLayerToTexture_guess | guess |
-| 0x8513F0 | DrawDevice_UploadLayerToTexture2_guess | guess |
-| 0x8517D4 | DrawDevice_UploadLayerToTexture3_guess | guess |
+| 0x850528 | SoftwareTexture2D_GetAdapterTexture_guess | guess（vtable 与上传行为确认） |
 | 0xAA0AD8 | TVPMainScene::addLayer | 100% (symbol) |
 | 0xAA0718 | TVPMainScene::update | 100% (symbol) |
 | 0xAA6268 | TVPWindowLayer::UpdateDrawBuffer | 100% (symbol) |
