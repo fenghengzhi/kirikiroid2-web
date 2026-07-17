@@ -17,6 +17,7 @@
 #include "base/CCEventDispatcher.h"
 #include "base/CCEventType.h"
 #include "Platform.h"
+#include "../../environ/web/WebPerformanceStats.h"
 #include "ConfigManager/IndividualConfigManager.h"
 #ifndef KRKR2_NO_OPENCV
 #include "opencv2/opencv.hpp"
@@ -108,6 +109,19 @@ static std::unordered_set<std::string> sTVPGLExtensions;
 // some quick check flags
 static bool GL_CHECK_unpack_subimage;
 static bool GL_CHECK_shader_framebuffer_fetch;
+
+static std::uint64_t TVPTextureUploadByteCount(unsigned int width,
+                                               unsigned int height,
+                                               GLenum format) {
+    std::uint64_t bytesPerPixel = 0;
+    switch(format) {
+        case GL_LUMINANCE: bytesPerPixel = 1; break;
+        case GL_RGB: bytesPerPixel = 3; break;
+        case GL_RGBA: bytesPerPixel = 4; break;
+        default: return 0;
+    }
+    return static_cast<std::uint64_t>(width) * height * bytesPerPixel;
+}
 
 bool TVPCheckGLExtension(const std::string &extname) {
     return sTVPGLExtensions.find(extname) != sTVPGLExtensions.end();
@@ -979,6 +993,10 @@ protected:
 
         TVPCheckMemory();
         _glBindTexture2D(texture);
+        if(pixel) {
+            TVPWebPerfRecordTextureUpload(
+                TVPTextureUploadByteCount(intw, inth, pixfmt));
+        }
         glTexImage2D(GL_TEXTURE_2D, 0, internalfmt, intw, inth, 0, pixfmt,
                      GL_UNSIGNED_BYTE, pixel);
 
@@ -1025,8 +1043,10 @@ protected:
                 memcpy(p, src, arrpitch);
             src = arr;
         }
-        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, pixfmt, GL_UNSIGNED_BYTE,
-                        src);
+        TVPWebPerfRecordTextureUpload(
+            TVPTextureUploadByteCount(w, h, pixfmt));
+        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, pixfmt,
+                        GL_UNSIGNED_BYTE, src);
         if(GL_CHECK_unpack_subimage)
             glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         if(rearranged)
@@ -1353,6 +1373,8 @@ public:
                 }
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
             }
+            TVPWebPerfRecordTextureUpload(TVPTextureUploadByteCount(
+                texinfo.Width, texinfo.Height, pixfmt));
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, texinfo.Width,
                             texinfo.Height, pixfmt, GL_UNSIGNED_BYTE, pix);
             if(GL_CHECK_unpack_subimage) {
@@ -1361,6 +1383,8 @@ public:
                 delete[] pix;
             }
         } else {
+            TVPWebPerfRecordTextureUpload(TVPTextureUploadByteCount(
+                texinfo.Width, texinfo.Height, pixfmt));
             glTexImage2D(GL_TEXTURE_2D, 0, internalfmt, texinfo.Width,
                          texinfo.Height, 0, pixfmt, GL_UNSIGNED_BYTE,
                          Bitmap->GetScanLine(rc.top));
@@ -1443,6 +1467,8 @@ public:
 
         TVPCheckMemory();
         texture = FetchGLTexture();
+        TVPWebPerfRecordTextureUpload(
+            TVPTextureUploadByteCount(internalW, internalH, pixfmt));
         glTexImage2D(GL_TEXTURE_2D, 0, internalfmt, internalW, internalH, 0,
                      pixfmt, GL_UNSIGNED_BYTE, tmp);
 
@@ -1655,6 +1681,7 @@ public:
                              unsigned int width, unsigned int height) {
         TVPCheckMemory();
         _glBindTexture2D(texture);
+        TVPWebPerfRecordTextureUpload(len);
         glCompressedTexImage2D(GL_TEXTURE_2D, 0, format /*GL_ETC1_RGB8_OES*/,
                                width, height, 0, len, data);
         IsCompressed = true;
@@ -1668,6 +1695,10 @@ public:
                    GLenum pixfmt, unsigned int intw, unsigned int inth) {
         TVPCheckMemory();
         _glBindTexture2D(texture);
+        if(pixel) {
+            TVPWebPerfRecordTextureUpload(
+                TVPTextureUploadByteCount(intw, inth, pixfmt));
+        }
         glTexImage2D(GL_TEXTURE_2D, 0, format, intw, inth, 0, pixfmt,
                      GL_UNSIGNED_BYTE, pixel);
 
@@ -1715,6 +1746,7 @@ public:
             _glBindTexture2D(texture);
             // glBindTexture(GL_TEXTURE_2D, texture);
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            TVPWebPerfRecordTextureUpload(4);
             glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, 1, 1, GL_RGBA,
                             GL_UNSIGNED_BYTE, &clr);
         }
@@ -1840,6 +1872,7 @@ public:
             _glBindTexture2D(texture);
             // glBindTexture(GL_TEXTURE_2D, texture);
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            TVPWebPerfRecordTextureUpload(4);
             glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, 1, 1, GL_RGBA,
                             GL_UNSIGNED_BYTE, &clr);
         }

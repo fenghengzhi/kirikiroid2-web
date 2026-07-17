@@ -14,6 +14,7 @@
 #include <dirent.h>
 #include <filesystem>
 #include <algorithm>
+#include <atomic>
 
 #include <spdlog/spdlog.h>
 #include <emscripten.h>
@@ -29,6 +30,144 @@
 #include "cocos2d/MainScene.h"
 #include "LayerFrameDumper.h"
 #include "VirtualLazyFS.h"
+#include "WebPerformanceStats.h"
+
+bool TVPWebPerformanceStatsEnabled = false;
+
+namespace {
+struct tTVPWebPerformanceCounters {
+    std::atomic<std::uint64_t> TickCount{0};
+    std::atomic<std::uint64_t> TickDurationMicros{0};
+    std::atomic<std::uint64_t> BlendCallCount{0};
+    std::atomic<std::uint64_t> BlendPixelCount{0};
+    std::atomic<std::uint64_t> DirtyRectCount{0};
+    std::atomic<std::uint64_t> DirtyRectArea{0};
+    std::atomic<std::uint64_t> TextureUploadCallCount{0};
+    std::atomic<std::uint64_t> TextureUploadBytes{0};
+    std::atomic<std::uint64_t> OutsideTickBlendCallCount{0};
+    std::atomic<std::uint64_t> OutsideTickBlendPixelCount{0};
+    std::atomic<std::uint64_t> OutsideTickDirtyRectCount{0};
+    std::atomic<std::uint64_t> OutsideTickDirtyRectArea{0};
+    std::atomic<std::uint64_t> OutsideTickTextureUploadCallCount{0};
+    std::atomic<std::uint64_t> OutsideTickTextureUploadBytes{0};
+    std::atomic<std::uint64_t> RejectedTickCount{0};
+    std::atomic<std::uint32_t> TickActive{0};
+};
+
+tTVPWebPerformanceCounters TVPWebPerformanceCounters;
+thread_local double TVPWebPerformanceTickStart = 0;
+
+template<typename T>
+double TVPWebPerformanceCounterValue(const std::atomic<T> &counter) {
+    return static_cast<double>(counter.load(std::memory_order_relaxed));
+}
+} // namespace
+
+extern "C" void TVPWebPerfTickBegin() {
+    if(!TVPWebPerformanceStatsEnabled)
+        return;
+    TVPWebPerformanceCounters.TickActive.fetch_add(1,
+                                                   std::memory_order_relaxed);
+    TVPWebPerformanceCounters.TickCount.fetch_add(1,
+                                                  std::memory_order_relaxed);
+    TVPWebPerformanceTickStart = emscripten_get_now();
+}
+
+extern "C" void TVPWebPerfTickEnd() {
+    if(!TVPWebPerformanceStatsEnabled)
+        return;
+    const double elapsed = emscripten_get_now() - TVPWebPerformanceTickStart;
+    if(elapsed > 0) {
+        TVPWebPerformanceCounters.TickDurationMicros.fetch_add(
+            static_cast<std::uint64_t>(elapsed * 1000.0),
+            std::memory_order_relaxed);
+    }
+    TVPWebPerformanceCounters.TickActive.fetch_sub(1,
+                                                   std::memory_order_relaxed);
+}
+
+extern "C" void TVPWebPerfTickRejected() {
+    if(TVPWebPerformanceStatsEnabled) {
+        TVPWebPerformanceCounters.RejectedTickCount.fetch_add(
+            1, std::memory_order_relaxed);
+    }
+}
+
+void TVPWebPerfRecordBlendEnabled(std::uint64_t pixels) {
+    TVPWebPerformanceCounters.BlendCallCount.fetch_add(
+        1, std::memory_order_relaxed);
+    TVPWebPerformanceCounters.BlendPixelCount.fetch_add(
+        pixels, std::memory_order_relaxed);
+    if(!TVPWebPerformanceCounters.TickActive.load(std::memory_order_relaxed)) {
+        TVPWebPerformanceCounters.OutsideTickBlendCallCount.fetch_add(
+            1, std::memory_order_relaxed);
+        TVPWebPerformanceCounters.OutsideTickBlendPixelCount.fetch_add(
+            pixels, std::memory_order_relaxed);
+    }
+}
+
+void TVPWebPerfRecordDirtyRectEnabled(std::uint64_t area) {
+    TVPWebPerformanceCounters.DirtyRectCount.fetch_add(
+        1, std::memory_order_relaxed);
+    TVPWebPerformanceCounters.DirtyRectArea.fetch_add(
+        area, std::memory_order_relaxed);
+    if(!TVPWebPerformanceCounters.TickActive.load(std::memory_order_relaxed)) {
+        TVPWebPerformanceCounters.OutsideTickDirtyRectCount.fetch_add(
+            1, std::memory_order_relaxed);
+        TVPWebPerformanceCounters.OutsideTickDirtyRectArea.fetch_add(
+            area, std::memory_order_relaxed);
+    }
+}
+
+void TVPWebPerfRecordTextureUploadEnabled(std::uint64_t bytes) {
+    TVPWebPerformanceCounters.TextureUploadCallCount.fetch_add(
+        1, std::memory_order_relaxed);
+    TVPWebPerformanceCounters.TextureUploadBytes.fetch_add(
+        bytes, std::memory_order_relaxed);
+    if(!TVPWebPerformanceCounters.TickActive.load(std::memory_order_relaxed)) {
+        TVPWebPerformanceCounters.OutsideTickTextureUploadCallCount.fetch_add(
+            1, std::memory_order_relaxed);
+        TVPWebPerformanceCounters.OutsideTickTextureUploadBytes.fetch_add(
+            bytes, std::memory_order_relaxed);
+    }
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void krkr2_web_perf_set_enabled(int enabled) {
+    TVPWebPerformanceStatsEnabled = enabled != 0;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE double krkr2_web_perf_get(int index) {
+    const auto &c = TVPWebPerformanceCounters;
+    switch(index) {
+        case 0: return TVPWebPerformanceStatsEnabled ? 1.0 : 0.0;
+        case 1: return TVPWebPerformanceCounterValue(c.TickCount);
+        case 2:
+            return TVPWebPerformanceCounterValue(c.TickDurationMicros) / 1000.0;
+        case 3: return TVPWebPerformanceCounterValue(c.BlendCallCount);
+        case 4: return TVPWebPerformanceCounterValue(c.BlendPixelCount);
+        case 5: return TVPWebPerformanceCounterValue(c.DirtyRectCount);
+        case 6: return TVPWebPerformanceCounterValue(c.DirtyRectArea);
+        case 7: return TVPWebPerformanceCounterValue(c.TextureUploadCallCount);
+        case 8: return TVPWebPerformanceCounterValue(c.TextureUploadBytes);
+        case 9:
+            return TVPWebPerformanceCounterValue(c.OutsideTickBlendCallCount);
+        case 10:
+            return TVPWebPerformanceCounterValue(c.OutsideTickBlendPixelCount);
+        case 11:
+            return TVPWebPerformanceCounterValue(c.OutsideTickDirtyRectCount);
+        case 12:
+            return TVPWebPerformanceCounterValue(c.OutsideTickDirtyRectArea);
+        case 13:
+            return TVPWebPerformanceCounterValue(
+                c.OutsideTickTextureUploadCallCount);
+        case 14:
+            return TVPWebPerformanceCounterValue(
+                c.OutsideTickTextureUploadBytes);
+        case 15: return TVPWebPerformanceCounterValue(c.RejectedTickCount);
+        case 16: return TVPWebPerformanceCounterValue(c.TickActive);
+        default: return 0;
+    }
+}
 
 void TVPGetMemoryInfo(TVPMemoryInfo &m) {
     size_t heapSize = (size_t)sbrk(0);

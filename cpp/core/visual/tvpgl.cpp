@@ -17,6 +17,7 @@
 #include <math.h>
 #include "tjsTypes.h"
 #include "tvpgl.h"
+#include "../environ/web/WebPerformanceStats.h"
 #include <float.h>
 
 #define __cdecl
@@ -456,6 +457,8 @@ static inline tjs_uint32 TVPAlphaBlendHDAMixedBlockFormulaLike_0xA85BB8(
 
 TVP_GL_FUNC_DECL(void, TVPAlphaBlend_0xA85BB8_c,
                  (tjs_uint32 * dest, const tjs_uint32 *src, tjs_int len)) {
+    if(len > 0)
+        TVPWebPerfRecordBlend(static_cast<std::uint64_t>(len));
     if(len <= 0) {
         return;
     }
@@ -575,6 +578,8 @@ TVP_GL_FUNC_DECL(void, TVPAlphaBlend_o_c,
 TVP_GL_FUNC_DECL(void, TVPAlphaBlend_HDA_o_c,
                  (tjs_uint32 * dest, const tjs_uint32 *src, tjs_int len,
                   tjs_int opa)) {
+    if(len > 0)
+        TVPWebPerfRecordBlend(static_cast<std::uint64_t>(len));
     tjs_uint32 d1, s, d, sopa;
     if(len > 0) {
         int lu_n = (len + (4 - 1)) / 4;
@@ -782,6 +787,8 @@ static inline tjs_uint32 TVPAlphaBlendDFormulaLike_0xA862C8(tjs_uint32 d,
 
 TVP_GL_FUNC_DECL(void, TVPAlphaBlend_d_0xA862C8_c,
                  (tjs_uint32 * dest, const tjs_uint32 *src, tjs_int len)) {
+    if(len > 0)
+        TVPWebPerfRecordBlend(static_cast<std::uint64_t>(len));
     if(len <= 0) {
         return;
     }

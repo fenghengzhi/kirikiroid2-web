@@ -46,6 +46,7 @@
 #include "ConfigManager/IndividualConfigManager.h"
 #include "vkdefine.h"
 #include "RenderManager.h"
+#include "../environ/web/WebPerformanceStats.h"
 #include <cstdlib>
 #include "FontImpl.h"
 
@@ -6380,6 +6381,9 @@ void tTJSNI_BaseLayer::InternalUpdate(const tTVPRect &rect, bool tempupdate) {
     cr.bottom = Rect.get_height();
     if(!TVPIntersectRect(&cr, cr, rect))
         return;
+    TVPWebPerfRecordDirtyRect(
+        static_cast<std::uint64_t>(cr.get_width()) *
+        static_cast<std::uint64_t>(cr.get_height()));
     if(lowLevelLogoTraceEnabled()) {
         spdlog::get("core")->info(
             "WCHAIN stage=layer.internalUpdate layer={} parent={} "

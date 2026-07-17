@@ -21,12 +21,24 @@ static bool s_mainLoopRunning = false;
 // （实测 100ms 挂起期间 12 次），引擎不可重入 —— 用守卫跳过这些帧。
 static bool s_inTick = false;
 
+extern "C" void TVPWebPerfTickBegin();
+extern "C" void TVPWebPerfTickEnd();
+extern "C" void TVPWebPerfTickRejected();
+
 extern "C" EMSCRIPTEN_KEEPALIVE void krkr2_main_loop_tick(void *arg) {
-    if (s_inTick)
+    if (s_inTick) {
+        TVPWebPerfTickRejected();
         return;
+    }
     struct TickGuard {
-        TickGuard() { s_inTick = true; }
-        ~TickGuard() { s_inTick = false; }
+        TickGuard() {
+            s_inTick = true;
+            TVPWebPerfTickBegin();
+        }
+        ~TickGuard() {
+            TVPWebPerfTickEnd();
+            s_inTick = false;
+        }
     } guard;
     auto app = static_cast<Application*>(arg);
     app->mainLoop();
