@@ -127,7 +127,7 @@
 | +808 | double | boundsCalc_field1 (1.0) | 🔬 | 🔬 | ctor a1[101]=1.0 |
 | +832 | double | boundsCalc_field4 (1.0) | 🔬 | 🔬 | ctor a1[104]=1.0 |
 | +840 | ptr | field_105 (0) | 🔬 | 🔬 | |
-| +864..908 | struct 44B | container (sub_7E2344/sub_7E24AC) | 🔬 | 🔬 | 需反编译 sub_7E2344 确认类型 |
+| +864..908 | tTVPComplexRect | previous-frame draw region (sub_7E2344/sub_7E24AC, Clear@0x7E2544, Or@0x7E2B38, GetBound@0x7E3ECC) | `Player::_drawRegion` | ✅ | `Player_renderToCanvas@0x6C7440` 每帧 Clear+Or paintBox；`Player_drawToLayerCompat@0x6D2D80` 下一帧 clear 时读 bound |
 | +908 | bool | skipRootMatrix (0) | 🔬 | 🔬 | ctor 关联 player+528 |
 | +909 | bool | useD3DFlag | `Player::_d3dDrawMode` (Player.h:603) | ✅ | 已标注 player+909 |
 | +912 | int | pixelateDivision (默认100) | (无) | ❌ | **本地缺失字段**。ctor `*((_DWORD*)a1+228)=100`。**TODO: 加 `int _pixelateDivision=100;` (player+912),NCB useD3D/pixelateDivision getter/setter** |

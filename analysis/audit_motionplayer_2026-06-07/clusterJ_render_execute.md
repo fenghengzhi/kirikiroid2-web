@@ -38,7 +38,7 @@ Player_renderToCanvas(player, a2, a3=mainList, a4=cameraOffset[4]):   // 0x6C744
           v370.setClip()                    // argc=0 reset FuncCall
       if (player+1096 /*preview*/ && !item+18) continue            // preview gate
       opa = item+232; if (preview) opa >>= 1                       // preview halves opacity
-      DirtyRectList_AddRect(player+864, floor(paintBox))
+      DirtyRectList_AddRect(player+864, truncTowardZero(paintBox))
       ... PropSet key/src/blendMode on cache objects, sub_6C1B70 loadSource ...
       v48 = blendMode map: switch(item+48 & 0xF){1->14,2/5->15,3->16,4->17,
             0/default-> if(player+1144 clearEnabled) buffered(v48=2)

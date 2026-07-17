@@ -15,6 +15,7 @@
 #include <unordered_set>
 #include <vector>
 #include <spdlog/spdlog.h>
+#include "ComplexRect.h"
 #include "tjs.h"
 #include "ResourceManager.h"
 #include "RuntimeSupport.h"
@@ -620,14 +621,14 @@ namespace motion {
                                          iTJSDispatch2 *objthis);
         static tjs_error stopCompat(tTJSVariant *result, tjs_int numparams,
                                     tTJSVariant **param, iTJSDispatch2 *objthis);
-        // clear #72 — binary callback Player_drawToLayerCompat @0x6D2DA0
+        // clear #72 — binary callback Player_drawToLayerCompat @0x6D2D80
         // (member named "clear"; impl is a gated recursive draw-to-layer that
         // fills the root layer rect and recurses nodeType==3 children).
         static tjs_error clearCompat(tTJSVariant *result, tjs_int numparams,
                                      tTJSVariant **param, iTJSDispatch2 *objthis);
         // Instance worker for the clear callback: the binary recurses on child
         // players, so the body is a member taking the resolved target layer +
-        // fill value. Mirrors Player_drawToLayerCompat @0x6D2DA0 structure.
+        // fill value. Mirrors Player_drawToLayerCompat @0x6D2D80 structure.
         void drawToLayerCompat(const tTJSVariant &targetLayer,
                                const tTJSVariant &fillValue);
         tTJSVariant motionList();
@@ -1340,6 +1341,11 @@ namespace motion {
         double _boundsMinY = std::numeric_limits<double>::max();
         double _boundsMaxX = -std::numeric_limits<double>::max();
         double _boundsMaxY = -std::numeric_limits<double>::max();
+        // libkrkr2.so player+864: tTVPComplexRect containing the rectangles
+        // submitted by the latest non-preview Player_renderToCanvas
+        // (0x6C7440). Player.clear (0x6D2D80) consumes its bound before the
+        // next draw resets and repopulates it.
+        tTVPComplexRect _drawRegion;
         bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
         // +612: post-draw snapshot of +613. The binary updateLayerAfterDraw
         // @0x6CE7F4 unconditionally copies +613 -> +612 each frame; anchor

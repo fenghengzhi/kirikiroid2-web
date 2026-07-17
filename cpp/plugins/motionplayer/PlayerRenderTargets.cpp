@@ -1119,6 +1119,14 @@ namespace motion {
             return false;
         }
 
+        // Player_renderToCanvas @0x6C74E8: non-preview rendering clears the
+        // tTVPComplexRect at player+864 before collecting this frame's
+        // submitted paint boxes. Player.clear has already consumed the
+        // previous frame's bound before this draw begins.
+        if(!_preview) {
+            _drawRegion.Clear();
+        }
+
         int canvasWidth = 0;
         int canvasHeight = 0;
         if(!queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight) &&

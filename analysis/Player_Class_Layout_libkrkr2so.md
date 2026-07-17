@@ -196,7 +196,7 @@ Based on constructor (sub_6CED30) initialization and property getter/setter deco
 | +808 | 8 | double | boundsCalc_field1 | 1.0 | `a1[101] = 0x3FF0000000000000` |
 | +832 | 8 | double | boundsCalc_field4 | 1.0 | `a1[104] = 0x3FF0000000000000` |
 | +840 | 8 | ptr | field_105 | 0 | `a1[105] = 0` |
-| +864..908 | 44 | struct | someContainer | -- | sub_7E2344 init, sub_7E24AC destroy |
+| +864..908 | 44 | tTVPComplexRect | previous-frame draw region | empty | sub_7E2344 init; Clear@0x7E2544; Or@0x7E2B38; GetBound@0x7E3ECC; sub_7E24AC destroy |
 | +908 | 1 | bool | skipRootMatrix | 0 | `if (!player+908): sub_699940(rootNode, player+528)` |
 | +909 | 1 | bool | useD3DFlag | v19 (from defaultSyncActive) | |
 | +912 | 4 | int | pixelateDivision | -- | sub_6D992C getter, sub_6D9934 setter |

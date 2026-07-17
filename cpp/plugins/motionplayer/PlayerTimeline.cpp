@@ -773,21 +773,22 @@ namespace motion {
     }
 
     // clear #72 — raw-callback entry, aligned with libkrkr2.so
-    // Player_drawToLayerCompat @0x6D2DA0. Despite the member name "clear", the
+    // Player_drawToLayerCompat @0x6D2D80. Despite the member name "clear", the
     // binary callback is a gated draw-to-layer routine: param[0] is the target
     // Layer object, param[1] is the fill value (a3 in the binary, switched on
     // its variant type at *(a3+16)). The whole body is gated on the player+544
-    // flag — the port's nearest analog is _clearEnabled (the only player-level
-    // clear-gate bool; getClearEnabled/setClearEnabled accessors). If the gate
-    // is clear, the binary returns immediately doing nothing.
+    // dword, which is the type tag of the motion tTJSVariant at player+528, not the
+    // independent clearEnabled property at player+1144. If no motion is
+    // loaded, the binary returns immediately doing nothing.
     tjs_error Player::clearCompat(tTJSVariant *result, tjs_int numparams,
                                   tTJSVariant **param, iTJSDispatch2 *objthis) {
         auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
         if(!self) {
             return TJS_E_INVALIDOBJECT;
         }
-        // Binary: `if (*(player+544))` — gate on the clear-enabled flag.
-        if(self->_clearEnabled && numparams >= 1 && param[0]) {
+        // Binary: `if (*(player+544))` — gate on player+528 motion variant's
+        // non-void type tag. _activeMotion is the port counterpart.
+        if(self->_activeMotion && numparams >= 1 && param[0]) {
             tTJSVariant fill =
                 (numparams >= 2 && param[1]) ? *param[1] : tTJSVariant();
             self->drawToLayerCompat(*param[0], fill);
@@ -799,7 +800,7 @@ namespace motion {
     }
 
     // Instance worker for clear — aligned with libkrkr2.so
-    // Player_drawToLayerCompat @0x6D2DA0 (recursive body).
+    // Player_drawToLayerCompat @0x6D2D80 (recursive body).
     //
     // Binary structure (post-gate):
     //   1. FAST PATH: PropGetByNum(targetLayer, flags=2, num=dword_1AB8820) — a
@@ -811,15 +812,9 @@ namespace motion {
     //      always takes the general fillRect path below (observably equivalent
     //      for a plain Layer target, which is the common case).
     //   2. GENERAL PATH: builds a "Layer" class wrapper, lazily recomputes the
-    //      player draw-area rect via sub_7E3ECC(player+864) gated on
-    //      !*(player+900), reads the rect as {left=+884, top=+888, w=+892-+884,
-    //      h=+896-+888}, then FuncCall(L"fillRect", left, top, w, h, fillValue)
-    //      on the target layer instance.
-    //      DOCUMENTED GAP: the +864/+884 cached pixel draw-rect (and its lazy
-    //      recompute sub_7E3ECC) is a distinct field cluster from the port's
-    //      _boundsMin/_boundsMax AABB (binary +152..+176) and has no mapped
-    //      local field; the port fills over the player bounds AABB as the
-    //      nearest available rect and flags this as a port gap.
+    //      tTVPComplexRect bound via sub_7E3ECC(player+864), reads it as
+    //      {left=+884, top=+888, w=+892-+884, h=+896-+888}, then calls
+    //      fillRect(left, top, w, h, fillValue) on the target layer instance.
     //   3. RECURSION: iterates _nodes[1..]; for each node with nodeType==3,
     //      resolves the child Player and recurses drawToLayerCompat with the
     //      same target layer + fill value.
@@ -830,11 +825,11 @@ namespace motion {
                                    : nullptr;
         if(layer) {
             // General path: FuncCall(L"fillRect", left, top, w, h, fillValue).
-            // Port gap: see note above re: +864/+884 draw rect vs bounds AABB.
-            tTJSVariant left(_boundsMinX);
-            tTJSVariant top(_boundsMinY);
-            tTJSVariant w(_boundsMaxX - _boundsMinX);
-            tTJSVariant h(_boundsMaxY - _boundsMinY);
+            const tTVPRect &bound = _drawRegion.GetBound();
+            tTJSVariant left(bound.left);
+            tTJSVariant top(bound.top);
+            tTJSVariant w(bound.get_width());
+            tTJSVariant h(bound.get_height());
             tTJSVariant fill(fillValue);
             tTJSVariant *args[] = {&left, &top, &w, &h, &fill};
             tjs_uint32 hint = 0;

@@ -1138,6 +1138,17 @@ namespace motion {
             if(item.parentItem) {
                 continue;
             }
+
+            // Player_renderToCanvas @0x6C7634..0x6C767C converts the four
+            // paintBox floats to int with FCVTZS and ORs that rectangle into
+            // player+864 before submitting the item. This region survives
+            // until the next Player.clear call, so pixels occupied only by
+            // the previous frame are still erased.
+            _drawRegion.Or(tTVPRect(
+                static_cast<tjs_int>(item.paintBox[0]),
+                static_cast<tjs_int>(item.paintBox[1]),
+                static_cast<tjs_int>(item.paintBox[2]),
+                static_cast<tjs_int>(item.paintBox[3])));
             if(!buildItemOutput(buildItemOutput, &item)) {
                 continue;
             }

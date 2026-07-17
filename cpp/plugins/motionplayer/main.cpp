@@ -433,7 +433,7 @@ NCB_REGISTER_CLASS(Player) {
     // NCB_REGISTER_CLASS(Motion) block. (was: wrong owner on Player)
     // play #70 / progress #71 / clear #72 / stop #73 — binary registration
     // order (Player_ncb_registerMembers @0x6D69C8). clear's callback is the
-    // gated recursive draw-to-layer routine Player_drawToLayerCompat @0x6D2DA0
+    // gated recursive draw-to-layer routine Player_drawToLayerCompat @0x6D2D80
     // (binary name/impl quirk: the member is named "clear" but the callback
     // fills the root layer rect + recurses nodeType==3 children).
     // isPlaying removed from NCB (port surplus, not in binary 92-set);
