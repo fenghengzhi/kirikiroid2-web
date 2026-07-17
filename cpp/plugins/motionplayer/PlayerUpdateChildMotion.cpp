@@ -189,19 +189,6 @@ namespace motion {
                                 double loopEnd = child._loopTime;
                                 if (loopEnd >= 0.0) {
                                     double totalFrames = child._cachedTotalFrames;
-                                    // Temporary convergence probe only. The binary
-                                    // loop at 0x6BE4BC subtracts totalFrames and
-                                    // adds loopEnd. Preserve it verbatim and report
-                                    // a non-negative update before it can spin.
-                                    if(childTime >= totalFrames && loopEnd >= totalFrames) {
-                                        LOGGER->error(
-                                            "HANGDIAG child-wrap parent={} child={} node={} childTime={} loopTime={} lastTime={} parentDelta={} parentPath='{}' childPath='{}'",
-                                            static_cast<const void *>(this),
-                                            static_cast<const void *>(&child), mn.index,
-                                            childTime, loopEnd, totalFrames, _deltaTime,
-                                            _activeMotion ? _activeMotion->path : std::string(),
-                                            child._activeMotion ? child._activeMotion->path : std::string());
-                                    }
                                     while (childTime >= totalFrames)
                                         childTime = childTime - totalFrames + loopEnd;
                                 }

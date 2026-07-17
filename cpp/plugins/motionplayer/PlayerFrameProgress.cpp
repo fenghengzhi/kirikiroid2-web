@@ -13,34 +13,6 @@
 using namespace motion::internal;
 
 namespace {
-
-    class HangPhaseProgressScope {
-        const motion::Player *_player;
-        std::string _path;
-        bool _enabled;
-
-    public:
-        HangPhaseProgressScope(const motion::Player *player,
-                               const std::string &path, double dt,
-                               double tick, double evalTime)
-            : _player(player), _path(path),
-              _enabled(path.find("motion/main.psb") != std::string::npos ||
-                       path.find("motion/mono_loop.psb") != std::string::npos) {
-            if(_enabled) {
-                LOGGER->error(
-                    "HANGPHASE progress.enter this={} dt={} tick={} eval={} path='{}'",
-                    static_cast<const void *>(_player), dt, tick, evalTime, _path);
-            }
-        }
-
-        ~HangPhaseProgressScope() {
-            if(_enabled) {
-                LOGGER->error("HANGPHASE progress.exit this={} path='{}'",
-                              static_cast<const void *>(_player), _path);
-            }
-        }
-    };
-
     template <typename AnimatorState>
     bool stepQueuedAnimatorLike_0x67D01C(AnimatorState &state, double dt,
                                          double &outValue) {
@@ -2174,14 +2146,6 @@ namespace internal {
     }
 
     void Player::frameProgress(double dt) {
-        const std::string hangPhasePath =
-            _activeMotion ? _activeMotion->path : std::string{};
-        // Temporary non-mutating call-boundary probe for Player_progress_inner
-        // @0x6C106C. RAII records every normal/early return; a missing exit pins
-        // a non-returning frameProgress invocation without altering its branches.
-        HangPhaseProgressScope hangPhaseScope(
-            this, hangPhasePath, dt, _frameTickCount, _clampedEvalTime);
-
         // === Player_progress_inner @0x6C106C 入口 ===
         // 移除 port-invented `if(!_syncActive) return;`：二进制 progress_inner 入口
         // (0x6C1080..0x6C10AC) 全是无条件副作用，**无** play/pause/null 守卫。
@@ -2561,19 +2525,6 @@ namespace internal {
                             if(_cachedTotalFrames > v7) {           // 0x6C14B8 -> LABEL_23
                                 _clampedEvalTime = v7;              // LABEL_23 (0x6C119C)
                             } else {
-                                // Temporary convergence probe only. The binary loop at
-                                // 0x6C14C4 adds (loopTime-lastTime); when that value is
-                                // non-negative, the loop cannot make v7 cross below
-                                // lastTime. Do not guard or alter the loop here: identify
-                                // the upstream writer that violated the binary invariant.
-                                if(_loopTime >= _cachedTotalFrames) {
-                                    LOGGER->error(
-                                        "HANGDIAG progress-wrap this={} tick={} loopTime={} lastTime={} path='{}' motion='{}'",
-                                        static_cast<const void *>(this), v7, _loopTime,
-                                        _cachedTotalFrames,
-                                        _activeMotion ? _activeMotion->path : std::string(),
-                                        detail::narrow(getMotion()));
-                                }
                                 do {
                                     v7 = v7 + _loopTime - _cachedTotalFrames; // 0x6C14C4
                                 } while(_cachedTotalFrames <= v7);  // 0x6C14CC

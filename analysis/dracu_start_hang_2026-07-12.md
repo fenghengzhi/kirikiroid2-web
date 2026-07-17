@@ -82,6 +82,11 @@
   `Player_progress_inner @0x6C106C` 与 `Player_updateLayers @0x6BB33C` 增加
   `HANGPHASE` entry/exit 边界探针，覆盖 progress 与 updateLayers 的 Phase1/2、
   十个 Phase3 调用。未移动调用、未改变参数或控制流；Web Debug 构建通过。
+- 2026-07-17 清理：上述 `HANGPHASE` 探针的 enter/exit 已证明这些调用均正常
+  返回，且后续性能轨迹已把现象收敛为长任务而非永久挂死；因此从运行时代码删除，
+  不保留默认关闭的移植层开关。同期删除每帧命中的 `Player::onFindMotion PRTDIAG`
+  日志，以及 progress-wrap、particle-timer、child-wrap 三个未触发的 `HANGDIAG`
+  收敛探针；原有分支、调用顺序、循环表达式和字段写入不变。
 
 ## 标题菜单颜色旁路发现
 
