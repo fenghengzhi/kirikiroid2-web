@@ -46,14 +46,12 @@ if(EMSCRIPTEN)
     target_compile_definitions(${PROJECT_NAME} PRIVATE KRKR2_NO_7ZIP)
 endif()
 
-find_package(uchardet CONFIG REQUIRED)
 find_package(unrar CONFIG REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(cocos2dx CONFIG REQUIRED)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    uchardet::libuchardet
     unrar::unrar
     LibArchive::LibArchive
     zstd::libzstd

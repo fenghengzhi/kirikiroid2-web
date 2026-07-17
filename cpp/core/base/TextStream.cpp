@@ -1,5 +1,4 @@
 #include <cstdint>
-#include <uchardet.h>
 #include <zlib.h>
 #include <optional>
 
@@ -8,78 +7,93 @@
 #ifndef KRKR2_NO_OPENCV
 #include <opencv2/core/hal/interface.h>
 #endif
-#include <spdlog/spdlog.h>
-
 #include "MsgIntf.h"
 #include "UtilStreams.h"
 #include "tjsError.h"
 #include "CharacterSet.h"
 #include "BinaryStream.h"
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
+extern "C" int gbk_mbtowc(unsigned short *wc, const unsigned char *s);
+extern "C" int sjis_mbtowc(unsigned short *wc, const unsigned char *s);
 
-EM_JS(int, js_decode_text, (const char *encoding, const uint8_t *data, int dataLen, uint16_t *out, int outCap), {
-    try {
-        var encStr = UTF8ToString(encoding);
-        var bytes = HEAPU8.slice(data, data + dataLen);
-        var decoder = new TextDecoder(encStr);
-        var str = decoder.decode(bytes);
-        var len = str.length;
-        if (len > outCap) len = outCap;
-        for (var i = 0; i < len; i++) {
-            HEAPU16[(out >> 1) + i] = str.charCodeAt(i);
-        }
-        return len;
-    } catch(e) {
+using tTVPMbToWc = int (*)(unsigned short *, const unsigned char *);
+
+static ttstr G_DefaultReadEncoding(TJS_W("UTF-8"));
+static tTVPMbToWc G_DefaultReadConverter = nullptr;
+
+// libkrkr2.so sub_8F516C @ 0x8F516C.
+static int TVPUtf8MbToWc(unsigned short *wc, const unsigned char *s) {
+    const unsigned int first = s[0];
+    if(first < 0x80) {
+        *wc = static_cast<unsigned short>(first);
+        return 1;
+    }
+    if(first < 0xC2)
         return -1;
+    if(first <= 0xDF) {
+        const unsigned int second = s[1] ^ 0x80;
+        if(second > 0x3F)
+            return -1;
+        *wc = static_cast<unsigned short>(((first & 0x1F) << 6) | second);
+        return 2;
     }
-});
-#endif
+    if(first > 0xEF || static_cast<signed char>(s[1]) > -65 ||
+       static_cast<signed char>(s[2]) > -65)
+        return -1;
 
-static std::string G_DefaultReadEncoding = "UTF-8";
+    const unsigned int second = s[1];
+    if(first == 0xE0 && second < 0xA0)
+        return -1;
 
-static bool looksLikeShiftJIS(const unsigned char *raw, size_t size) {
-    size_t validPairs = 0;
-    size_t invalidBytes = 0;
-    size_t halfWidthKana = 0;
-    size_t highBytes = 0;
+    *wc = static_cast<unsigned short>(((second ^ 0x80) << 6) |
+                                     (first << 12) | (s[2] ^ 0x80));
+    return 3;
+}
 
-    for(size_t i = 0; i < size; i++) {
-        unsigned char ch = raw[i];
-        if(ch < 0x80) {
-            continue;
+static bool TVPDecodeNarrowText(const std::vector<std::uint8_t> &raw,
+                                tTVPMbToWc converter,
+                                std::u16string &decoded) {
+    std::vector<std::uint8_t> terminated(raw);
+    terminated.push_back(0);
+
+    decoded.clear();
+    decoded.reserve(raw.size());
+    const unsigned char *current = terminated.data();
+    const unsigned char *end = current + raw.size();
+    while(current < end && *current) {
+        unsigned short wc;
+        const int consumed = converter(&wc, current);
+        if(consumed < 1 || current + consumed > end) {
+            decoded.clear();
+            return false;
         }
+        decoded.push_back(static_cast<char16_t>(wc));
+        current += consumed;
+    }
+    return true;
+}
 
-        highBytes++;
-        if(ch >= 0xA1 && ch <= 0xDF) {
-            halfWidthKana++;
-            continue;
-        }
-
-        if((ch >= 0x81 && ch <= 0x9F) || (ch >= 0xE0 && ch <= 0xFC)) {
-            if(i + 1 < size) {
-                unsigned char trail = raw[i + 1];
-                if((trail >= 0x40 && trail <= 0x7E) ||
-                   (trail >= 0x80 && trail <= 0xFC)) {
-                    validPairs++;
-                    i++;
-                    continue;
-                }
-            }
-        }
-
-        invalidBytes++;
+// libkrkr2.so sub_8F5244 @ 0x8F5244. An explicitly selected converter is
+// authoritative. Without one, the original fallback order is SJIS, UTF-8, GBK.
+static void TVPDecodeNarrowText(const std::vector<std::uint8_t> &raw,
+                                std::u16string &decoded) {
+    if(G_DefaultReadConverter) {
+        if(TVPDecodeNarrowText(raw, G_DefaultReadConverter, decoded))
+            return;
+        TVPThrowExceptionMessage(TJSNarrowToWideConversionError);
     }
 
-    if(highBytes == 0) {
-        return false;
+    if(TVPDecodeNarrowText(raw, sjis_mbtowc, decoded))
+        return;
+    if(TVPDecodeNarrowText(raw, TVPUtf8MbToWc, decoded)) {
+        G_DefaultReadConverter = TVPUtf8MbToWc;
+        return;
     }
-    if(validPairs == 0 && halfWidthKana == 0) {
-        return false;
+    if(TVPDecodeNarrowText(raw, gbk_mbtowc, decoded)) {
+        G_DefaultReadConverter = gbk_mbtowc;
+        return;
     }
-
-    return invalidBytes == 0 || (validPairs * 2 + halfWidthKana) > invalidBytes;
+    TVPThrowExceptionMessage(TJSNarrowToWideConversionError);
 }
 
 std::string checkTextEncoding(const void *buf, size_t size,
@@ -109,25 +123,6 @@ std::string checkTextEncoding(const void *buf, size_t size,
         // UTF-32BE BOM
         bomSize = 4;
         encoding = "UTF-32BE";
-    } else {
-        // ---------- 普通文本：用 uchardet 检测编码 ----------
-        uchardet_t ud = uchardet_new();
-        uchardet_handle_data(ud, reinterpret_cast<const char *>(raw), size);
-        uchardet_data_end(ud);
-        encoding = uchardet_get_charset(ud);
-        uchardet_delete(ud);
-        if(encoding == "SHIFT_JIS") {
-            encoding = "cp932";
-        } else if((encoding == "ASCII" || encoding == "ISO-8859-1" ||
-                   encoding == "WINDOWS-1252") &&
-                  looksLikeShiftJIS(raw, size)) {
-            spdlog::warn(
-                "uchardet guessed '{}', but bytes look like Shift_JIS; using cp932",
-                encoding);
-            encoding = "cp932";
-        } else if(encoding == "WINDOWS-1252") {
-            encoding = "ASCII";
-        }
     }
 
     return encoding;
@@ -212,18 +207,22 @@ public:
         std::string encoding = checkTextEncoding(raw.data(), size, bomSize);
         raw.erase(raw.begin(), raw.begin() + bomSize);
 
-        if(encoding.empty())
-            encoding = G_DefaultReadEncoding;
+        // libkrkr2.so sub_8F60B0 @ 0x8F60B0: after encrypted/BOM formats,
+        // ordinary text is decoded only through sub_8F5244's converter chain.
+        if(encoding.empty()) {
+            TVPDecodeNarrowText(raw, _buffer);
+            return;
+        }
 
         if(encoding == "ASCII") {
-            _buffer.assign(raw.data(), raw.data() + size);
+            _buffer.assign(raw.data(), raw.data() + raw.size());
             return;
         }
 
         if(encoding == "UTF-8") {
             _buffer = boost::locale::conv::utf_to_utf<char16_t>(
                 reinterpret_cast<const char *>(raw.data()),
-                reinterpret_cast<const char *>(raw.data() + size));
+                reinterpret_cast<const char *>(raw.data() + raw.size()));
             return;
         }
 
@@ -250,41 +249,8 @@ public:
            encoding == "UTF-32BE") {
             _buffer = boost::locale::conv::utf_to_utf<char16_t>(
                 reinterpret_cast<const char32_t *>(raw.data()),
-                reinterpret_cast<const char32_t *>(raw.data() + size));
+                reinterpret_cast<const char32_t *>(raw.data() + raw.size()));
             return;
-        }
-
-        // 其他编码 → UTF-16
-#ifdef __EMSCRIPTEN__
-        {
-            std::string jsEnc = encoding;
-            if(jsEnc == "cp932") jsEnc = "shift_jis";
-
-            size_t maxChars = raw.size();
-            _buffer.resize(maxChars);
-            int result = js_decode_text(
-                jsEnc.c_str(), raw.data(), (int)raw.size(),
-                reinterpret_cast<uint16_t*>(_buffer.data()), (int)maxChars);
-            if(result >= 0) {
-                _buffer.resize(result);
-            } else {
-                spdlog::warn("TextDecoder failed for encoding '{}', falling back to boost::locale", encoding);
-                _buffer.clear();
-            }
-        }
-        if(_buffer.empty())
-#endif
-        {
-            try {
-                std::wstring wide = boost::locale::conv::to_utf<wchar_t>(
-                    reinterpret_cast<const char *>(raw.data()),
-                    reinterpret_cast<const char *>(raw.data() + raw.size()),
-                    encoding);
-                _buffer = boost::locale::conv::utf_to_utf<char16_t>(wide);
-            } catch(const std::exception &e) {
-                spdlog::error(e.what());
-                TVPThrowExceptionMessage(TJSNarrowToWideConversionError);
-            }
         }
     }
 
@@ -529,19 +495,23 @@ iTJSTextWriteStream *TVPCreateTextStreamForWrite(const ttstr &name,
 
 //---------------------------------------------------------------------------
 void TVPSetDefaultReadEncoding(const ttstr &encoding) {
+    // libkrkr2.so sub_8F6AFC @ 0x8F6AFC.
+    G_DefaultReadEncoding = encoding;
     ttstr codestr = encoding;
     codestr.ToLowerCase();
-    if(codestr == TJS_W("sjis") || codestr == TJS_W("shiftjis") ||
-       codestr == TJS_W("shift_jis") || codestr == TJS_W("shift-jis")) {
-        G_DefaultReadEncoding = "cp932";
+    if(codestr == TJS_W("gbk")) {
+        G_DefaultReadConverter = gbk_mbtowc;
     } else if(codestr == TJS_W("utf8") || codestr == TJS_W("utf-8")) {
-        G_DefaultReadEncoding = "UTF-8";
+        G_DefaultReadConverter = TVPUtf8MbToWc;
+    } else if(codestr == TJS_W("sjis") || codestr == TJS_W("shiftjis") ||
+       codestr == TJS_W("shift_jis") || codestr == TJS_W("shift-jis")) {
+        G_DefaultReadConverter = sjis_mbtowc;
     } else {
-        G_DefaultReadEncoding = encoding.AsStdString();
+        TVPThrowExceptionMessage(TVPUnsupportedEncoding, encoding);
     }
 }
 
 //---------------------------------------------------------------------------
 const tjs_char *TVPGetDefaultReadEncoding() {
-    return ttstr{ G_DefaultReadEncoding }.c_str();
+    return G_DefaultReadEncoding.c_str();
 }
