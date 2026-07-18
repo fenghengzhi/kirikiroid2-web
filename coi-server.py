@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import http.server
 import mimetypes
 import ssl
@@ -28,11 +29,37 @@ if zip_real_path and not os.path.isfile(zip_real_path):
     print(f"Error: zip file not found: {zip_real_path}", file=sys.stderr)
     sys.exit(1)
 
+_content_sha256_cache = {}
+_content_sha256_lock = threading.Lock()
+
+def content_sha256(real_path):
+    """Return a SHA-256 cached by the file's path, size, and mtime."""
+    stat = os.stat(real_path)
+    cache_key = (real_path, stat.st_size, stat.st_mtime_ns)
+    with _content_sha256_lock:
+        digest = _content_sha256_cache.get(cache_key)
+        if digest is not None:
+            return digest
+        hasher = hashlib.sha256()
+        with open(real_path, 'rb') as source:
+            while True:
+                chunk = source.read(8 * 1024 * 1024)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+        digest = hasher.hexdigest()
+        _content_sha256_cache.clear()
+        _content_sha256_cache[cache_key] = digest
+        return digest
+
 class COIHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
         self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
         self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Expose-Headers',
+                         'Accept-Ranges, Content-Length, Content-Range, '
+                         'ETag, X-Content-SHA256')
         super().end_headers()
 
     def do_GET(self):
@@ -55,6 +82,7 @@ class COIHandler(http.server.SimpleHTTPRequestHandler):
         # 支持 HTTP Range：VLFS 的 ?xp3= 远程懒加载按 1MiB 分块拉取
         try:
             size = os.path.getsize(real_path)
+            sha256 = content_sha256(real_path)
             start, end = 0, size - 1
             range_header = self.headers.get('Range')
             is_partial = False
@@ -78,6 +106,8 @@ class COIHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-Type', 'application/octet-stream')
             self.send_header('Accept-Ranges', 'bytes')
             self.send_header('Content-Length', str(end - start + 1))
+            self.send_header('ETag', f'"sha256-{sha256}"')
+            self.send_header('X-Content-SHA256', sha256)
             if is_partial:
                 self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
             self.end_headers()

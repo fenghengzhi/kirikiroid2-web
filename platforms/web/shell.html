@@ -797,7 +797,7 @@
 
     <!-- JSZip 仅用于存档空间导入/导出；游戏加载已改为 VLFS 懒加载（vlfs.js） -->
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin="anonymous"></script>
-    <script src="vlfs.js"></script>
+    <script src="vlfs.js?v=opfs-zip-cache-v2"></script>
     <script>
         // Fix WebGL shader precision mismatch on mobile:
         // cocos2d-x injects uniforms (mat4/mat3) without explicit precision into both
@@ -958,7 +958,7 @@
         // --- File System Access API state ---
         var hostDirHandle = null;
 
-        // --- VirtualLazyFS 初始化（创建独立 OPFS 会话并回收旧缓存）---
+        // --- VirtualLazyFS 初始化（创建独立 OPFS 会话、保留完整 ZIP 缓存）---
         // 必须在取得跨标签页单例锁后才接触 OPFS。冲突页让此 Promise 保持
         // pending，因此不会继续创建 OPFS 会话、注册 ZIP 或启动 wasm main。
         var vlfsReady = engineSingletonReady.then(function(acquired) {
@@ -1732,13 +1732,18 @@
             progressFill.style.width = '0%';
             try {
                 await vlfsReady;
-                var ranges = false, size = -1;
+                var ranges = false, size = -1, archiveFingerprint = '';
                 try {
                     var head = await fetch(url, { method: 'HEAD' });
                     if (head.ok) {
                         ranges = (head.headers.get('Accept-Ranges') || '')
                             .toLowerCase() === 'bytes';
                         size = parseInt(head.headers.get('Content-Length') || '-1', 10);
+                        var contentSha256 =
+                            (head.headers.get('X-Content-SHA256') || '')
+                                .trim().toLowerCase();
+                        if (/^[0-9a-f]{64}$/.test(contentSha256))
+                            archiveFingerprint = 'sha256-' + contentSha256;
                     }
                 } catch (e) {}
 
@@ -1746,6 +1751,7 @@
                 if (ranges && size > 0) {
                     statusElement.textContent = 'Reading archive index...';
                     reg = await VLFS.registerZipRemote(url, size, {
+                        fingerprint: archiveFingerprint || undefined,
                         onProgress: function(done, total, path) {
                             progressFill.style.width = Math.round(done / total * 100) + '%';
                             statusElement.textContent =

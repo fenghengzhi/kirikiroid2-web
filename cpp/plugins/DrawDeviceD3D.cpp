@@ -43,6 +43,16 @@ class D3DPicture;
 
 namespace {
 
+iTVPRenderManager *GetD3DRenderManager() {
+    // sub_5323C0 @ 0x5323C0 caches the render manager named "opengl".
+    // The process-wide renderer may still be "software": that setting selects
+    // the CPU layer path, while DrawDeviceD3D uses this private manager for
+    // target textures and composition.
+    static iTVPRenderManager *manager =
+        TVPGetRenderManager(TJS_W("opengl"));
+    return manager;
+}
+
 tjs_int32 GetD3DLayerBaseClassID() {
     static const tjs_int32 id = [] {
         const tjs_int32 existing = TJSFindNativeClassID(TJS_W("D3DLayerBase"));
@@ -332,7 +342,7 @@ class DrawDeviceObjectBase {
             return;
 
         ReleaseTargets();
-        auto *manager = TVPGetRenderManager();
+        auto *manager = GetD3DRenderManager();
         FrontTarget = manager->CreateTexture2D(
             nullptr, 0, static_cast<tjs_uint>(PrimaryWidth),
             static_cast<tjs_uint>(PrimaryHeight), TVPTextureFormat::RGBA, 0);
@@ -347,7 +357,7 @@ class DrawDeviceObjectBase {
     }
 
     void FillTarget(iTVPTexture2D *target) {
-        auto *manager = TVPGetRenderManager();
+        auto *manager = GetD3DRenderManager();
         iTVPRenderMethod *method = manager->GetRenderMethod("FillARGB");
         const int colorId = method->EnumParameterID("color");
         method->SetParameterColor4B(colorId, ClearColor);
@@ -592,7 +602,7 @@ public:
                 object->OnUpdate(state);
         }
 
-        auto *manager = TVPGetRenderManager();
+        auto *manager = GetD3DRenderManager();
         iTVPTexture2D *target = manager->CreateTexture2D(
             nullptr, 0, static_cast<tjs_uint>(PrimaryWidth),
             static_cast<tjs_uint>(PrimaryHeight), TVPTextureFormat::RGBA, 0);
@@ -741,14 +751,14 @@ class DrawDeviceManagerItem final : public D3DLayerObject {
            SoftwareTexture->GetHeight() == height) {
             SoftwareTexture->Update(
                 pixels, TVPTextureFormat::RGBA, pitch,
-                tTVPRect(0, 0, static_cast<tjs_int>(width),
+                tTVPRect(0, 0, pitch / 4,
                          static_cast<tjs_int>(height)));
             return SoftwareTexture;
         }
 
         if(SoftwareTexture)
             SoftwareTexture->Release();
-        SoftwareTexture = TVPGetRenderManager()->CreateTexture2D(
+        SoftwareTexture = GetD3DRenderManager()->CreateTexture2D(
             pixels, pitch, width, height, TVPTextureFormat::RGBA, 0);
         return SoftwareTexture;
     }
@@ -812,7 +822,7 @@ public:
         const tjs_int x = GetIntProperty(PrimaryOwner, TJS_W("offsetX"), 0);
         const tjs_int y = GetIntProperty(PrimaryOwner, TJS_W("offsetY"), 0);
 
-        auto *renderManager = TVPGetRenderManager();
+        auto *renderManager = GetD3DRenderManager();
         iTVPRenderMethod *method =
             renderManager->GetRenderMethod(opacity, true, type);
         if(!method)
@@ -895,11 +905,10 @@ void DrawDeviceObjectBase::Show() {
                 item->Draw();
         }
 
-        // sub_5314B0 calls the float parameter slot, even though the software
-        // AlphaBlend_SD implementation leaves that slot as a no-op.  Preserve
-        // that boundary behavior rather than converting the state to 0..255.
+        // sub_5314B0 obtains AlphaBlend_SD from the private "opengl" manager
+        // and passes TransitionState through its float parameter slot.
         if(TransitionActive) {
-            auto *manager = TVPGetRenderManager();
+            auto *manager = GetD3DRenderManager();
             iTVPRenderMethod *method =
                 manager->GetRenderMethod("AlphaBlend_SD");
             const int opacityId = method->EnumParameterID("opacity");
@@ -1145,7 +1154,7 @@ public:
         if(TVPGetRenderManager()->IsSoftware()) {
             const void *pixels = source->GetScanLineForRead(0);
             const tjs_int pitch = source->GetPitch();
-            loaded = TVPGetRenderManager()->CreateTexture2D(
+            loaded = GetD3DRenderManager()->CreateTexture2D(
                 pixels, pitch, source->GetWidth(), source->GetHeight(),
                 TVPTextureFormat::RGBA, 0);
         }

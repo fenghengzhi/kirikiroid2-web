@@ -8,6 +8,12 @@
 > 的 `GetAdapterTexture` 虚函数；DrawDeviceD3D 的 `sub_5314B0@0x5314B0`
 > 在普通与转场分支末尾都会把 back target 交给 window form 的
 > `UpdateDrawBuffer`。下文已按新证据纠正。
+>
+> 2026-07-18 再纠正：默认 renderer 为 `"software"` 只说明 Layer tree 走
+> CPU 合成。`DrawDeviceD3D` 自己通过 `sub_5323C0@0x5323C0` 固定缓存
+> `TVPGetRenderManager("opengl")`；`sub_532B1C` 把 CPU draw buffer 上传到该
+> manager 的纹理，`sub_5328F4` 与 `sub_5314B0` 也用同一个 manager 合成到
+> front/back target。旧文档把 back target 当成 software texture 的表述已纠正。
 
 ## GPU vs CPU路径选择
 
@@ -73,8 +79,10 @@ libkrkr2.so中通过`ogl_accurate_render`配置项（字符串`preference_ogl_ac
 ## 关键发现
 
 ### 1. GPU路径不需要显式纹理上传
-在CPU路径中，需要Show() → UpdateDrawBuffer → Texture2D::updateWithData → glTexSubImage2D
-来把CPU内存中的像素上传到GPU。
+在普通 CPU Layer 路径中，software texture 的 adapter 会通过
+`Texture2D::updateWithData` 上传。安装 DrawDeviceD3D 时则多一层：
+`sub_532B1C` 先把 CPU draw buffer 上传成其私有 `"opengl"` manager 的纹理，
+再合成到同一 manager 的 target，最后由 `Show() → UpdateDrawBuffer` 显示。
 
 在GPU路径中，DrawBuffer本身就是GPU纹理（iTVPTexture2D/Cocos2D Texture2D），
 Blt操作通过OpenGL shader直接在GPU上执行。Cocos2D Sprite已经引用了这个纹理，
@@ -198,8 +206,9 @@ if (!byte_1AB84F4) {
 进入DrawBuffer，然后通过Show() → UpdateDrawBuffer上传到Cocos2D纹理。
 
 DrawDeviceD3D 的软件链已由 `sub_5314B0@0x5314B0` 确认：manager 的 CPU
-draw buffer 经 `sub_532B1C` 全量上传到每-manager软件纹理，再经
-`sub_5328F4` 合成到 back target，最后调用 window form 的
+draw buffer 经 `sub_532B1C` 全量上传到每-manager的 OpenGL 纹理，再经
+`sub_5328F4` 使用 `sub_5323C0` 返回的私有 `"opengl"` manager 合成到
+back target，最后调用 window form 的
 `UpdateDrawBuffer`。因此“Show 没有调用 UpdateDrawBuffer”的旧结论已被证伪。
 
 ## DrawDeviceD3D 第二批源码结构复原（2026-07-18）
@@ -229,7 +238,8 @@ workaround，而是对二进制 adaptor 生命周期在本仓库 ncbind 实现�
 
 ### 平台边界
 
-直到 `CurrentTarget` 为止，容器、更新传播、Software texture copy 和合成顺序均按
+直到 `CurrentTarget` 为止，容器、更新传播、CPU bitmap 上传和 OpenGL target 合成
+顺序均按
 反编译复原。最终 `UpdateDrawBuffer` 仍进入 Emscripten/Cocos2D 的 WebGL texture
 adapter；这是 Android GL 与浏览器 WebGL 的不可避免平台边界，没有在 child/transition
 链中加入额外缓存失效或强制刷新步骤。

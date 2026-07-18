@@ -51,12 +51,12 @@
 7. DrawDeviceD3D::Show (0x5314B0)
    → manager item GetTexture (0x532B1C，全量上传 CPU draw buffer)
    → item Draw (0x5328F4)
-   → front/back target 软件合成
+   → 由 GetD3DRenderManager (0x5323C0) 固定取得 "opengl" manager
+   → 在该 manager 创建的 front/back target 上合成
     │
     ▼
 8. Window form::UpdateDrawBuffer(backTarget)
-   → SoftwareTexture2D::GetAdapterTexture (0x850528)
-   → Texture2D::updateWithData / WebGL 上传
+   → backTarget 的 adapter texture
     │
     ▼
 9. Cocos2D场景图渲染 → OpenGL ES → 屏幕
@@ -75,6 +75,12 @@ libkrkr2.so 中 `Layer::Update()` 不直接上传纹理；它通过 Window updat
 DrawDeviceD3D，则由 `Show@0x5314B0` 将 manager draw buffer 合成并交给
 `UpdateDrawBuffer`。旧文档把 `0x849808` 的 pending 清理链误当成这里的主上传链，
 该结论已删除。
+
+这里存在两个不同层级的 renderer：进程级 renderer 默认仍是 `"software"`，负责
+Layer tree 到 CPU draw buffer；`DrawDeviceD3D` 的私有合成器则由
+`sub_5323C0@0x5323C0` 缓存 `TVPGetRenderManager("opengl")`。全局 software
+判断只选择 CPU 上传/回读分支，不能据此把 DrawDeviceD3D 的 target 与
+`OperateRect` 改为 software manager。
 
 ### Player SLA draw路径的完整链
 ```
@@ -101,7 +107,8 @@ tTJSNI_BaseLayer (KAG Layer tree)
     │
 iTVPDrawDevice / DrawDeviceD3D embedded adapter
     │ Update → CompleteForWindow → CPU draw buffer
-    │ DrawDeviceD3D::Show → manager software texture → back target
+    │ DrawDeviceD3D::Show → CPU bitmap upload texture
+    │ → private "opengl" manager composition → back target
     │
     ▼ Window form::UpdateDrawBuffer(backTarget)
     │

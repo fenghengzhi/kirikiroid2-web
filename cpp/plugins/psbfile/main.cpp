@@ -186,6 +186,51 @@ public:
                                                      : TJS_S_FALSE;
     }
 
+    tjs_error EnumMembers(tjs_uint32 flag, tTJSVariantClosure *callback,
+                          iTJSDispatch2 *) override {
+        // libkrkr2.so PSBValueDispatch_EnumMembers_guess @ 0x596F50.
+        if(value_ == nullptr) {
+            return TJS_E_INVALIDOBJECT;
+        }
+
+        const auto list = std::dynamic_pointer_cast<const PSBList>(value_);
+        const auto dictionary =
+            std::dynamic_pointer_cast<const PSBDictionary>(value_);
+        if(list == nullptr && dictionary == nullptr) {
+            return TJS_E_NOTIMPL;
+        }
+
+        tTJSVariant name;
+        tTJSVariant memberFlags(static_cast<tjs_int>(0));
+        tTJSVariant value;
+        tTJSVariant callbackResult;
+        tTJSVariant *params[3] = { &name, &memberFlags, &value };
+        const tjs_int numParams =
+            (flag & TJS_ENUM_NO_VALUE) != 0 ? 2 : 3;
+
+        if(list != nullptr) {
+            const auto count = static_cast<tjs_int>(list->size());
+            for(tjs_int index = 0; index < count; ++index) {
+                name = ttstr(index);
+                if((flag & TJS_ENUM_NO_VALUE) == 0) {
+                    assign(&value, (*list)[index]);
+                }
+                callback->FuncCall(0, nullptr, nullptr, &callbackResult,
+                                   numParams, params, this);
+            }
+        } else {
+            for(const auto &[key, child] : *dictionary) {
+                name = ttstr(key);
+                if((flag & TJS_ENUM_NO_VALUE) == 0) {
+                    assign(&value, child);
+                }
+                callback->FuncCall(0, nullptr, nullptr, &callbackResult,
+                                   numParams, params, this);
+            }
+        }
+        return TJS_S_OK;
+    }
+
 private:
     static void assign(tTJSVariant *result,
                        const std::shared_ptr<const IPSBValue> &value) {
