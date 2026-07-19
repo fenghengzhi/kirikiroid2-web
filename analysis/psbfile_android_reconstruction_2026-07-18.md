@@ -1474,6 +1474,18 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   `motionplayer-dll` **398/398** 与 Web Debug 最终链接均通过；`ezsave.pimg` 的 Android
   octet/storage oracle 两条继续为 `status=ok`，作为成功路径非回归守护。
 
+- 2026-07-19 继续 fresh decompile/disasm `PSBMedia::GetListAt@0x5999F4`，确认
+  `0x599A4C..0x599A70` 在 media 方法内部直接读取 raw `node[0]` 并执行完整 tag switch；
+  它没有调用独立的 type-category helper `sub_599554@0x599554`。本地此前先调用
+  `GetTypeCategory()` 再按 category 6/7 分流，正常 array/dictionary 输出虽等价，却增加了
+  Android 调用链中不存在的一层分类调用。现已恢复本函数自有的 raw tag switch：`0x20`
+  保留 signed 32-bit array 循环，`0x21` 保留 unsigned dictionary 循环及跨迭代复用的
+  `std::string`，全部已知非容器 tag 原样 no-op，未知 tag 继续抛精确 internal-error 文本。
+  Mac 目标对象的 undefined-symbol 表已确认 `PSBMedia.cpp.o` 不再引用
+  `PSBRawNode::GetTypeCategory`；四目标构建成功，`psbfile-dll` **484/484**、
+  `motionplayer-dll` **398/398**，Web Debug 最终链接成功。在线 AVD 的
+  `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
+
 ## 后续闭合条件
 
 要对“当前 Web 项目”给出 100% 结论，至少还需要：

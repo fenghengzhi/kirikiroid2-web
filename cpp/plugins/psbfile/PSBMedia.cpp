@@ -126,22 +126,80 @@ namespace PSB {
             return;
         }
 
-        const int category = value.GetTypeCategory();
-        if(category == 6) {
-            std::uint32_t rawCount{};
-            (void)value.GetArrayCount(rawCount);
-            const tjs_int count = static_cast<tjs_int>(rawCount);
-            for(tjs_int index = 0; index < count; ++index) {
-                lister->Add(ttstr(index));
+        // sub_5999F4 @ 0x599A4C reads the raw tag here and owns this switch;
+        // it does not route through the separate category helper at 0x599554.
+        switch(value.GetNode()[0]) {
+            case 0x20: {
+                std::uint32_t rawCount{};
+                (void)value.GetArrayCount(rawCount);
+                const tjs_int count = static_cast<tjs_int>(rawCount);
+                for(tjs_int index = 0; index < count; ++index) {
+                    lister->Add(ttstr(index));
+                }
+                break;
             }
-        } else if(category == 7) {
-            std::uint32_t count{};
-            (void)value.GetDictionaryCount(count);
-            std::string key;
-            for(std::uint32_t index = 0; index < count; ++index) {
-                (void)value.GetDictionaryKey(index, key);
-                lister->Add(ttstr(key));
+            case 0x21: {
+                std::uint32_t count{};
+                (void)value.GetDictionaryCount(count);
+                std::string key;
+                for(std::uint32_t index = 0; index < count; ++index) {
+                    (void)value.GetDictionaryKey(index, key);
+                    lister->Add(ttstr(key));
+                }
+                break;
             }
+            case 0x01:
+            case 0x02:
+            case 0x03:
+            case 0x04:
+            case 0x05:
+            case 0x06:
+            case 0x07:
+            case 0x08:
+            case 0x09:
+            case 0x0a:
+            case 0x0b:
+            case 0x0c:
+            case 0x15:
+            case 0x16:
+            case 0x17:
+            case 0x18:
+            case 0x19:
+            case 0x1a:
+            case 0x1b:
+            case 0x1c:
+            case 0x1d:
+            case 0x1e:
+            case 0x1f:
+            case 0x23:
+            case 0x24:
+            case 0x25:
+            case 0x26:
+            case 0x27:
+            case 0x28:
+            case 0x29:
+            case 0x2c:
+            case 0x2d:
+            case 0x2e:
+            case 0x2f:
+            case 0x30:
+            case 0x31:
+            case 0x33:
+            case 0x34:
+            case 0x35:
+            case 0x37:
+            case 0x38:
+            case 0x39:
+            case 0x3b:
+            case 0x3c:
+            case 0x3d:
+            case 0x3f:
+            case 0x41:
+                break;
+            default:
+                TVPThrowExceptionMessage(TJS_W(
+                    "psb: internal error: unknown internal type detected.\n"));
+                break;
         }
     }
 
