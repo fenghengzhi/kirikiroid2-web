@@ -1524,12 +1524,33 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   **398/398** 与 Web Debug 最终链接全部通过。motionplayer fixture 实际进入 `tTVPBitmap`
   分配路径；在线 AVD 的 `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
 
+- 2026-07-19 对 PSBFile.dll 主体 `0x59641C..0x59AA84` 重新做区间全枚举，共 90 个
+  IDA function。逐一将入口地址与生产源码/本文地址证据反查后，未单列的入口均属于
+  iTJSDispatch2 一指令 `TJS_E_NOTIMPL` 槽、析构/Release 包装、NCB typed-class state
+  helper 或 `std::vector<std::string>::reserve` 实例化；没有发现遗漏的业务方法。随后 fresh
+  decompile raw loader/owner `0x598268/0x598538/0x598708/0x598960/0x598AAC`、raw node
+  `0x598B58/0x598C58/0x598D58/0x598E44/0x598E64/0x5992E8/0x599438/0x599554/
+  0x5995D8/0x5996E4`、dispatch `0x59673C/0x596E24/0x596F50/0x5975E0/
+  0x5976C4/0x597854`、media `0x5998C4..0x59A4B0` 及 typed registration
+  `0x597E98..0x5980F4/0x59AA84`，当前实现的分支、输出覆盖时机、AddRef/Release 顺序、
+  invalid-object/member-miss 错误码与 callback 参数数均未发现新偏差。此次复核同时纠正了
+  `.claude/agent-memory/ida-deep-analyzer/project_m9_source_subsystem.md` 中仍把 ObjSource
+  写成 `tTJSVariant` facade、把 KRKR/raw pixel 标为 open 的过期结论。
+- 同日对当前 `reference/` 与 `tests/` 中的天然二进制资产做只读盘点：共识别 142 个
+  lower-case `mdf\0` wrapper，全部 zlib 解压成功且实际长度等于 wrapper 声明长度；连同
+  raw PSB 共识别 222 个解包后 `PSB\0` 文件，全部满足 `sub_598960` 的八项 header-offset
+  比较。因此当前工作区确实没有 MDF zlib-failure 或 filter 后 offset-failure 的天然样本；
+  这不是从一次扩展名负搜索得出的结论，而是逐文件 signature、zlib 与 header 数值检查。
+  按“不从零制造 fixture”约束，两项损坏输入 Android runtime 边界继续如实保留为验证缺口。
+
 ## 后续闭合条件
 
 要对“当前 Web 项目”给出 100% 结论，至少还需要：
 
 1. 使用现有天然损坏资产覆盖 MDF zlib 失败及 filter 后 offset 校验失败；MDF 成功路径已
    用本机现有 `.ks.scn` 在 Android oracle 验证，但仓库没有已提交 MDF fixture；media/TJS
-   注册路径已由现有 PIMG 闭合。没有现成物料时记录验证缺口，不从零伪造 fixture。
+   注册路径已由现有 PIMG 闭合。2026-07-19 已逐文件检查当前 `reference/`/`tests/` 的
+   142 个 MDF 与 222 个解包后 PSB，未发现天然失败样本；没有现成物料时记录验证缺口，
+   不从零伪造 fixture。
 2. packed-table 的 tag/width/stride 分支已逐项反编译；剩余工作是用现有损坏资产或
    Android oracle 核对真实越界/崩溃表现，不能为了测试主动构造新 fixture。

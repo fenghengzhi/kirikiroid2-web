@@ -1,6 +1,6 @@
 ---
 name: m9-source-subsystem
-description: motion source/resource subsystem (cluster K/M9) — ResourceManager public-inherits SourceCache; outer unordered_map mapped record = PSBFile + Win texture map + KRKR descriptor map; raw pixel navigation remains open
+description: motion source/resource subsystem (cluster K/M9) — ResourceManager public-inherits SourceCache; outer unordered_map mapped record = PSBFile + Win texture map + KRKR descriptor map; Win/KRKR raw pixel and ObjSource chains closed 2026-07-19
 metadata:
   type: project
 ---
@@ -36,7 +36,7 @@ bucket = h % bucketCount
 - bufLayer getter `@0x6A84FC` — return ttstr@+40
 - unload      `@0x6A959C` — HashMap A erase(sub_6EBF2C)
 - unloadAll   `@0x6A8B94`(IDA误并入 loc_6A8CF8) — 清 +104 list、memset HashMap A buckets、Rb_tree erase、+144 ttstr、+72 layer-list 全清
-- findSource  `@0x6AAB3C` — split name by "/",前缀须=="src";dict["source"][layerName]["icon"][colorName] 链;blank→构造空白 Layer dict;命中→构造 ObjSource(operator new 0x18,3字段:[0]dict variant,[1]?,[2]=0)
+- findSource  `@0x6AAB3C` — split name by "/",前缀须=="src"；从 mapped record 的 raw root 导航 `source/group/icon/name`，fixed key strict、dynamic key has+strict；命中后构造 ObjSource(operator new 0x18，字段为 raw owner/node pair + lazy texture)，再以 sticky=false/err=false 创建 adaptor；adaptor 失败只返回 void，不回收新 ObjSource
 - findMotion  `@0x6A9ED4` — HashMap A by motion-name → dict["object"][name]["motion"][label],拷进 caller 的 vector(20B元素)。也 fallback 走 +104 list
 - isExistMotion `@0x6A96F8` — 同 findMotion 的存在性版本,先 HashMap A 后 +104 list
 - random      `@0x6AB56C` — 无关(KAG.random PropGet)
@@ -46,7 +46,7 @@ bucket = h % bucketCount
 - 签名:`(out* a1, Player* a2, ttstr** a3=name, ttstr** a4=icon/2nd-name)`
 - a1 输出结构:+0 found bool,+1 blank bool,+4 source variant,+20 ?,+24 **texture handle**,+32 width,+40 height,+48 originX,+56 originY,+64..88 clip(left/top/right/bottom doubles),+96..108 截断rect int,+112 source variant cache
 - 流程:PropGet(player+636 RM-self, idx dword_1AB8098) → v10=RM native。spec(+224): ==2 走 PSB texture 上传路径;==1 走 KAG.findSource 回调路径;其它/blank → 走 player-self dispatch "findSource" 脚本回调(LABEL_142)
-- spec==2 路径:outer map 按模块 context 取 mapped record，再读 raw dict["source"][name]。Win 内表按 name 缓存 texture。miss 严格读 texture{truncated_width/height(丢弃),width,height,type,pixel}；RGBA8 做 TVPReverseRGB(count=pixelBytes/4)，A8L8 按 `[alpha,luminance]→[luminance,luminance,luminance,alpha]` 展开，其他格式抛异常。本地该 Win raw 链已对齐；KRKR/spec=1 atlas 仍 open。
+- spec==2 路径:outer map 按模块 context 取 mapped record，再读 raw dict["source"][name]。Win 内表按 name 缓存 texture。miss 严格读 texture{truncated_width/height(丢弃),width,height,type,pixel}；RGBA8 做 TVPReverseRGB(count=pixelBytes/4)，A8L8 按 `[alpha,luminance]→[luminance,luminance,luminance,alpha]` 展开，其他格式抛异常。本地 Win raw 链已对齐；KRKR/spec=1 也已恢复 all-group 枚举、RL8/RL32、palette expand、透明 2x2 与 record 内 descriptor table 生命周期。
 
 ### nested texture-cache(D1 关键)
 - **缓存键=纯 name ttstr**(a3),不含 blendMode/color。findNode/findOrInsert 第三参都只传 a3,node[1] 只存这一个 ttstr。证据确凿
@@ -56,12 +56,12 @@ bucket = h % bucketCount
 - **缓存键分离**:blendMode/color 缓存属于 Player+72 layer-list(loadSource 路径),与本 by-name texture nested-map(entry+24)物理分离,findSource 全程不碰 +72。D1 改 hashmap 时:键=纯 name,value=裸 GPU handle,CPU bitmap 不缓存
 - by-name HashMap A(sub_6EB8F4) 的 node key-hash 在 node+136;nested map(sub_6E2060) 的 node key-hash 在 node+24。同算法不同 node 布局,两份 findNode
 
-## ObjSource(0x69CCB8 register)= TJS dict facade,非 struct
-ObjSource 实例 = operator new(0x18) 3 qword:[0]=tTJSVariant 持 PSB source dict,[1]=?,[2]=0。所有 NCB getter(originX/originY/width/height/clip + drawLayer method)都是 `dict[key]` 读取(sub_598C58 取字典项),**没有 _key/_src/_blendMode/_color 结构字段**。本地 SourceCache.h:116 ObjSource 的 4 个私有字段是 port 发明;它"缺的6个成员"实际上不存在——真实 ObjSource 只有 1 个 dict variant backing。getters: originX@0x69D014 originY@0x69D0D8 width@0x69D19C(需变体type==7 dict,否则返回32) height@0x69D27C clip@0x69D35C(构造Rect对象) drawLayer@0x69D6D8(type==7时 SetSize+绘制)
+## ObjSource(0x69CCB8 register)= raw node facade（2026-07-19 纠错）
+旧“单 tTJSVariant dict facade”结论被构造/析构与 consumer fresh decompile 证伪。ObjSource 实例 = operator new(0x18) 3 qword：`[0..1]=PSBRawOwner*/node*`（构造时 owner AddRef），`[2]=lazy texture*`。析构 `0x6E407C` 先 Release texture，再递减 raw owner。originX/originY `0x69D014/0x69D0D8` 直接 strict raw read；width/height `0x69D19C/0x69D27C` 仅在非-dictionary 时返回 32；clip `0x69D35C` try-gate `clip` 后 strict 读四边并顺序写新 Dictionary；ensureTexture `0x6DA454` 直接读取 raw pixel/compress/pal，恢复重复 pal gate、RL8/RL32、palette、aligned buffer、pitch-copy 和 `tTVPBitmap→texture`；drawLayer `0x69D6D8` 严格取 Layer native instance，以 texture 自身宽高 SetSize。
 
 ## 本地 vs 二进制差异（2026-07-18 纠正）
 1. RM public-inherits SourceCache 已恢复；旧“两个无关类”结论已过期。
 2. Player_findSource 的 Win/KRKR 纹理表已移入 outer map 的 `LoadedResourceRecord`，并恢复 AddRef/Release 与 unload 生命期。它与 SourceCache layer-list 是两条不同缓存链，不得再用 `std::list/shared_ptr` 概括 Player_findSource 的当前差异。
-3. ObjSource 已恢复为单 `tTJSVariant` dict facade 并注册 6 个成员；`clip/drawLayer` 方法体仍是独立 open 项。
+3. 2026-07-19 纠正：ObjSource 已恢复为 `PSBRawNode + texture*`，六个注册成员、clip、ensureTexture、drawLayer、adaptor 失败泄漏与析构顺序均已按上述地址闭合；旧 dict-facade/open 结论不得继续使用。
 4. RM 继承面、unloadAll/isExistMotion/findMotion/findSource/random NCB 表面已恢复；各方法体继续按独立证据审计。
-5. 2026-07-18 后续纠正：Win/spec=2 与 KRKR/spec=1 都已直接消费 `LoadedResourceRecord::file` raw nodes；KRKR 恢复 all-group 枚举、两种 RL、palette expand 与透明 2x2。source 像素导航已关闭，整页上传是单独的 Web API 边界。
+5. 2026-07-19 后续纠正：Win/spec=2、KRKR/spec=1 以及非 atlas ObjSource 均已直接消费 `LoadedResourceRecord::file` raw nodes；source 像素导航与 ObjSource 生命周期已关闭，整页上传是单独的 Web API 边界。

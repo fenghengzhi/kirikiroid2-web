@@ -49,5 +49,5 @@
 - [textrender proxy-binder 框架](project_textrender_proxy_binder.md) — 3-phase 模块链 xmmword_1AB8920[0..2] 与 ncbind 共用; LoadModule=sub_704A08; classID 写点 0x5A69C0; invoker 错误码/PMF 布局全图; off_1A0B970 旧记录已修正
 - [ncbind invoker 错误码库级裁决](project_ncbind_invoker_error_codes.md) — membername→-1001 库级成立(引擎0x9F52F8+override内联两形态); fstat/csvParser 全 invoker 检查序表; GETINSTANCE失败=-1008非-1006; PropGet getter-null(-1007)先于objthis
 - [Player 4 内联 HM](player_4_hashmaps.md) — motion::Player(1384B,0x6CED30) HM1/2/3/4 @+264/+320/+1184/+1240 的 key/value/node 布局、insert/lookup 站点、本地镜像认定
-- [M9 source 子系统](project_m9_source_subsystem.md) — RM public-inherits SourceCache；outer unordered_map mapped record = PSBFile + Win texture map + KRKR descriptor map，构造/析构/unload 生命期已恢复；raw PSBRawNode 像素导航仍 open
+- [M9 source 子系统](project_m9_source_subsystem.md) — RM public-inherits SourceCache；outer unordered_map mapped record = PSBFile + Win texture map + KRKR descriptor map；Win/KRKR/ObjSource raw 像素导航、纹理物化与生命周期已于 2026-07-19 闭合
 - [node+44 dirty settle](project_node44_dirty_settle.md) — node+44=1 仅 2 处(0x6B7FBC/0x6B72C0)均门控在 seek 跨帧迭代;静态 type-3 走 LABEL_25/98 早退保持 0;纠正 0x6B7E44 IDA 注释误导;settle 链闭合
