@@ -77,15 +77,15 @@ namespace {
                 if(TJS_strcmp(membername, TJS_W("count")) == 0) {
                     std::uint32_t count{};
                     (void)value_.GetArrayCount(count);
-                    if(result != nullptr) {
-                        *result = static_cast<tjs_int64>(count);
-                    }
+                    // sub_597854 @ 0x5979F8 writes through result without a
+                    // null guard, preserving the dispatch ABI crash boundary.
+                    *result = static_cast<tjs_int64>(count);
                     return TJS_S_OK;
                 }
             } else if(category == 7) {
                 if(const auto *child = value_.FindDictionaryValue(
                        ttstr(membername).AsStdString())) {
-                    assign(result, value_.GetOwner(), child);
+                    assign(result, child);
                     return TJS_S_OK;
                 }
             }
@@ -93,9 +93,8 @@ namespace {
             if((flag & TJS_MEMBERMUSTEXIST) != 0) {
                 return TJS_E_MEMBERNOTFOUND;
             }
-            if(result != nullptr) {
-                result->Clear();
-            }
+            // sub_597854 @ 0x5978C0 clears the output unconditionally.
+            result->Clear();
             return TJS_S_OK;
         }
 
@@ -120,13 +119,13 @@ namespace {
                 if((flag & TJS_MEMBERMUSTEXIST) != 0) {
                     return TJS_E_MEMBERNOTFOUND;
                 }
-                if(result != nullptr) {
-                    result->Clear();
-                }
+                // sub_5976C4 @ 0x5977C0 has the same unguarded output
+                // boundary for a non-throwing out-of-range lookup.
+                result->Clear();
                 return TJS_S_OK;
             }
 
-            assign(result, value_.GetOwner(),
+            assign(result,
                    value_.FindArrayElement(static_cast<std::uint32_t>(index)));
             return TJS_S_OK;
         }
@@ -268,8 +267,7 @@ namespace {
                 for(tjs_int index = 0; index < count; ++index) {
                     name = ttstr(index);
                     if(!noValue) {
-                        assign(&memberValue, value_.GetOwner(),
-                               value_.FindArrayElement(
+                        assign(&memberValue, value_.FindArrayElement(
                                    static_cast<std::uint32_t>(index)));
                     }
                     callback->FuncCall(0, nullptr, nullptr, &callbackResult,
@@ -284,7 +282,7 @@ namespace {
                     (void)value_.GetDictionaryEntry(index, key, child);
                     name = ttstr(key);
                     if(!noValue) {
-                        assign(&memberValue, value_.GetOwner(), child);
+                        assign(&memberValue, child);
                     }
                     callback->FuncCall(0, nullptr, nullptr, &callbackResult,
                                        noValue ? 2 : 3, params, this);
@@ -400,13 +398,12 @@ namespace {
     private:
         ~PSBValueDispatch() = default;
 
-        static void assign(tTJSVariant *result, PSB::PSBRawOwner *owner,
-                           const std::uint8_t *node) {
+        void assign(tTJSVariant *result, const std::uint8_t *node) {
             // sub_59673C @ 0x59673C decodes scalars on demand and creates a
             // fresh owner-sharing dispatch only for list/dictionary nodes.
-            if(result == nullptr) {
-                return;
-            }
+            // It is a dispatch member: owner reads come from this->value_
+            // rather than an owner argument.  It also assumes a non-null
+            // output and dereferences it on every tag.
             switch(node[0]) {
                 case 0x01:
                 case 0x23:
@@ -438,7 +435,7 @@ namespace {
                 case 0x17:
                 case 0x18:
                 case 0x2c:
-                    *result = ttstr(owner->GetString(node));
+                    *result = ttstr(value_.GetOwner()->GetString(node));
                     return;
                 case 0x19:
                 case 0x1a:
@@ -447,7 +444,7 @@ namespace {
                 case 0x2d: {
                     const std::uint8_t *data{};
                     std::uint32_t size{};
-                    data = owner->GetResource(node, size);
+                    data = value_.GetOwner()->GetResource(node, size);
                     *result = tTJSVariant(data, size);
                     return;
                 }
@@ -458,7 +455,8 @@ namespace {
                     return;
                 case 0x20:
                 case 0x21: {
-                    auto *dispatch = new PSBValueDispatch(owner, node);
+                    auto *dispatch =
+                        new PSBValueDispatch(value_.GetOwner(), node);
                     *result = tTJSVariant(dispatch, dispatch);
                     dispatch->Release();
                     return;

@@ -466,6 +466,9 @@ namespace PSB {
             TVPThrowExceptionMessage(
                 TJS_W("psb: undefined object key '%1' is referenced."),
                 ttstr(key));
+            // sub_598C58 @ 0x598D08 zeroes the returned owner/node pair if
+            // the exception helper ever returns instead of unwinding.
+            return {};
         }
         return PSBRawNode(owner_, node);
     }

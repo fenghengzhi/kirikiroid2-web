@@ -167,14 +167,14 @@ NCB 通用模板函数，不能全部按业务方法计数。
 | 字典查找 | `0x59659C` | packed name-index 数组上的 lower-bound 二分查找 |
 | 惰性值转换 | `0x59673C` | null/bool/int/real/string/octet 惰性转换；array/dictionary 创建共享 owner 的新 dispatch |
 | 字符串/资源 | `0x596BC4`, `0x596C70` | 返回 raw buffer 内借用字符串指针；按 chunk offset/length 返回资源视图 |
-| dispatch ABI | `0x596D78..0x597AD4` | 直接双继承 `iTJSDispatch2`/`iTJSNativeInstance`，独立 intrusive refcount、owner、node、valid byte；完整 vtable 默认值 |
+| dispatch ABI | `0x596D78..0x597AD4` | 直接双继承 `iTJSDispatch2`/`iTJSNativeInstance`，独立 intrusive refcount、owner、node、valid byte；完整 vtable 默认值；PropGet/PropGetByNum 的成功与非 throwing miss 均无条件解引用 result |
 | 成员枚举 | `0x596F50` | array 使用十进制下标名，dictionary 使用 packed 顺序；`TJS_ENUM_NO_VALUE` 控制回调参数个数 |
 | count/index/property | `0x5975E0`, `0x5976C4`, `0x597854` | array count、负下标、dictionary 属性、`TJS_MEMBERMUSTEXIST` 边界 |
 | name decode | `0x5975C0`, `0x597B1C` | 先经 `namesData[nameIndexes[index]]` 找 terminal，再沿 parent 回溯并 reverse |
 | NCB 注册 | `0x597E98..0x5980F4`, `0x59AA84` | typed class state、factory、`root` property、`load` method；本地由 ncbind 模板承接通用注册机制；factory 在 load 抛异常时析构已写入 result 的 native holder、保留悬挂 result slot 后原样重抛 |
 | root/load | `0x5981F8`, `0x598268`, `0x598538` | root 每次返回新 dispatch；string/octet 分流；小写 `mdf` 解压及失败 fallback；原始错误文本 |
 | owner | `0x598708`, `0x598960`, `0x598A64`, `0x598AAC`, `0x598B3C` | 一个 owner 独占一个 raw allocation；intrusive ref；替换时释放旧 owner；Adopt 赋值后与 move 均保留零引用删除分支；filter 后刷新 header view |
-| node helper | `0x598A3C..0x5996E4` | move、字符串、strict/try lookup、bool、keys、int/double、category、contains、resource |
+| node helper | `0x598A3C..0x5996E4` | move、字符串、strict/try lookup、bool、keys、int/double、category、contains、resource；strict miss 的异常 helper 若返回则输出空 owner/node |
 | media 生命周期 | `0x59849C`, `0x5997F0..0x5998A8` | function-local static 指针由 `__cxa_guard` 构造一次；process-lifetime singleton、初始 ref=1、名字 `psb`、不注销 |
 | media 访问 | `0x5998BC..0x59A4B0` | normalize no-op、exists/open/list/local-name、按首段缓存一个 PSBFile TJS object、contains→strict 逐段遍历 |
 | motionplayer 原始加载链 | `0x6A8D8C`, `0x6A87D0`, `0x685D30`, `0x6863CC` | 规范化路径→缓存 raw owner→全局 `std::function` filter→严格读取 id/spec/version→每次新建 root dispatch；seed setter 接受至少一个可转整数的 TJS 参数 |
@@ -1426,6 +1426,18 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   `psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 与 Web Debug 最终链接全部
   通过。`adb devices -l` 当前为空，本轮 Android oracle 未执行；这是外部验证缺口，不是
   实现失败，也不替代此前在线 AVD 的 `status=ok` 历史证据。
+
+- 2026-07-19 fresh decompile `sub_59673C@0x59673C`、
+  `PropGetByNum@0x5976C4`、`PropGet@0x597854`、`EnumMembers@0x596F50` 与 raw node
+  `0x598B3C/0x598C58/0x598D58/0x598E44`，补回三类被正常调用掩盖的源码结构/边界：
+  惰性 Variant 转换恢复为以 `PSBValueDispatch *this` 读取 `this->value.owner` 的成员方法，
+  不再由 caller 抽取并显式传 owner；PropGet/PropGetByNum 的 count、成功转换和非 throwing
+  miss 全部恢复对 result 的无条件写入/清空，删除本地额外的 null-output 安全 no-op；strict
+  dictionary miss 在异常 helper 意外返回时恢复 `{null,null}` 输出，不再构造
+  `{owner,null-node}` 并额外 AddRef。Enum callback result 忽略、closure ObjThis 选择、
+  `TJS_ENUM_NO_VALUE` argc 与四只 Variant 析构顺序经逐指令复核无需修改。Mac 四目标构建、
+  `psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 与 Web Debug 最终链接全部
+  通过。ADB 列表仍为空，边界 oracle 本轮未执行且未伪造崩溃 fixture。
 
 ## 后续闭合条件
 
