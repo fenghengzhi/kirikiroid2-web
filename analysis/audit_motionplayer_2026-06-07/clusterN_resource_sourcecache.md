@@ -1,5 +1,12 @@
 # CLUSTER N — ResourceManager / SourceCache / ObjSource / SLA / GLL / RuntimeSupport
 
+> **2026-07-19 correction:** Sections 3/4 and the original deviation table were
+> based on a false `tTJSVariant` dict-facade interpretation. Fresh construction,
+> destruction and consumer decompilation proves ObjSource is
+> `{retained PSBRawOwner*, node*, lazy texture*}`. The local raw navigation,
+> clip/ensureTexture/drawLayer, adaptor-failure leak and destruction order are now
+> restored. The corrected text below supersedes the earlier verdict.
+
 > Date: 2026-06-07. Authoritative source: libkrkr2.so (IDB libkrkr2.so.i64).
 > Scope: ResourceManager.cpp/.h, SourceCache.cpp/.h, PrivateMotionGLL.cpp/.h,
 > SeparateLayerAdaptor.cpp/.h, RuntimeSupport.cpp/.h, MotionTraceWeb.cpp/.h.
@@ -59,7 +66,7 @@ Local: load/unload/findLoaded/findSource/isExistMotion/findMotion/
 requireLayerId/releaseLayerId/unloadAll are backed by the aligned containers;
 random remains a STUB.
 
-## 3. RM findSource @0x6AAB3C — CONFIRMED (TJS facade path, item ②/③)
+## 3. RM findSource @0x6AAB3C — CONFIRMED raw-node path (item ②/③)
 
 ```
 split name by "/" (sub_697D34); !pieces[0] -> void
@@ -67,33 +74,31 @@ if pieces[0] != "src":
   if pieces[0] != "blank" -> void
   blank: split pieces[1] by ":" -> width/height/originX/originY ints;
          build dict{width,height,originX,originY, blank=1(int)}; return it
-src: FNV-hash(name) -> sub_6EB8F4(this+88 HashMap A, hash%this+96, name) -> module
+src: FNV-hash(name) -> sub_6EB8F4(this+88 HashMap A, hash%this+96, name) -> record
   miss -> void
-  module["source"].hasKey(group)? else void; module["source"][group]["icon"][icon]
-  hasKey(icon)? else void
-  hit: operator new(0x18) {qword[0]=iconEntry dict variant (AddRef), [1]=?, [2]=0}
-       wrap as TJS obj via NCB class sub_6EC124; return it
+  root=record.file.GetRoot(); strict "source"; dynamic group has+strict;
+  strict "icon"; dynamic icon has+strict
+  hit: operator new(0x18) {qword[0..1]=raw owner/node, [2]=0 texture}; owner AddRef
+       CreateAdaptor(sticky=false,err=false); null -> void and leak new object
 ```
-Local RM::findSource (RM.cpp:238) mirrors this 1:1 in C++ structure: splitTtstr,
-src/blank gate, findLoaded(path) (container-divergent HashMap-A substitute),
-module["source"][group]["icon"][icon] via psbGet hasKey gates, `new ObjSource(iconEntry)`
-+ ncbInstanceAdaptor::CreateAdaptor. Container deviation = HashMap A vs
-unordered_map<ttstr,V>; documented. Status: ARCH OK (container choice tolerated).
+Local RM::findSource mirrors this structure using `LoadedResourceRecord::file`,
+`PSBRawNode` fixed strict / dynamic has+strict reads, `new ObjSource(rawNode)` and
+the same adaptor-null leak. No intermediate TJS dictionary graph remains.
 
-## 4. ObjSource @0x69CCB8 — CONFIRMED dict facade (item ③)
+## 4. ObjSource @0x69CCB8 — CONFIRMED raw-node facade (item ③)
 
-8 NCB members: ctor, originX(sub_69D014), originY(sub_69D0D8), width(sub_69D19C),
+Constructor plus 6 exposed NCB members: originX(sub_69D014), originY(sub_69D0D8), width(sub_69D19C),
 height(sub_69D27C), clip(sub_69D35C prop-ro), drawLayer(sub_69D6D8 method).
-- width getter: `if AsType(a1)==7(tvtObject) return dict["width"]; else return 32`.
-  Confirms default 32 for width/height. originX/Y default 0.
-- ObjSource operates DIRECTLY on the source variant (a1=qword[0]) — it IS a thin
-  dict facade, NO struct fields. MASTER's "ObjSource missing 6 members" is
-  INVERTED (header SourceCache.h:116 already records this correctly).
-Local ObjSource (SourceCache.h:131): readInt(key,dflt) with tvtObject gate +
-default 32/0. MATCHES. clip getter: binary builds a Motion.Rect dispatch from
-left/top/right/bottom when type==7 & hasKey("clip"); local `getClip()` returns {}
-unconditionally — REAL STUB DEVIATION (oracle-inert: findSource ObjSource path
-has no internal C++ caller; unit tests exercise Player::findSource). P2.
+- qword[0..1] are a retained raw owner/node pair; qword[2] is lazy texture.
+- originX/Y are strict raw reads. Width/height return 32 only when the raw node is
+  not a dictionary; a missing dictionary member throws.
+- clip is try-gated and strictly reads left/top/right/bottom into a new property
+  object. ensureTexture handles raw/RL8/RL32/palette/aligned-buffer/pitch copy;
+  drawLayer assigns the texture and its own dimensions.
+- Destructor releases texture before decrementing/deleting the raw owner.
+
+Local ObjSource now mirrors all of these steps. The older dict-facade and clip-STUB
+conclusions are disproven.
 
 ## 5. Player_findSource @0x6948E8 — the real render-source resolver (item ②/③, CRITICAL)
 
@@ -187,8 +192,8 @@ chain (analysis/SLA_Rendering_Chain_libkrkr2so.md) — not re-decompiled this pa
 |---|------|--------|-------|--------|
 | 1 | RM:SourceCache | public inherit, base ctor seeds owner/bufLayer | inherit OK, base fields empty | P3 ARCH OK / field gap |
 | 2 | unloadAll addr | body @0x6A8CF8 | comment says 0x6A8BBC | DOC ERR (fix comment) |
-| 3 | RM findSource | HashMap A + ObjSource facade | unordered_map + facade | container dev (OK) |
-| 4 | ObjSource | dict facade, w/h dflt 32 | readInt dflt 32 | OK; clip STUB (P2) |
+| 3 | RM findSource | mapped record raw root + ObjSource | mapped record raw root + ObjSource | CLOSED |
+| 4 | ObjSource | raw owner/node/texture; strict/try getters | same, including texture→owner dtor | CLOSED |
 | 5 | Player_findSource | outer record + Win/KRKR nested maps + raw decode/upload | both spec paths raw-aligned; KRKR full-page upload is Web API boundary | CLOSED + BOUNDARY |
 | 6 | SourceCache loadSource | +72 intrusive list, Layer dispatch | std::list, bitmap bake | container dev (OK) |
 | 7 | SLA surface | 5 members @0x6ABFAC | 4+factory | OK |
@@ -201,9 +206,7 @@ chain (analysis/SLA_Rendering_Chain_libkrkr2so.md) — not re-decompiled this pa
 
 ## Follow-ups for reviewer
 - FIX the unloadAll address in RM.h:147 + RM.cpp:372 comments: 0x6A8BBC -> 0x6A8CF8.
-- ObjSource::getClip is a STUB returning {} vs binary Motion.Rect dispatch (P2,
-  oracle-inert).
-- Player_findSource container ownership/lifetime and Win raw chain are restored.
-  Continue by replacing the KRKR atlas snapshot navigation with
-  `LoadedResourceRecord::file` raw nodes; do not relabel that gap as a platform
-  boundary.
+- ObjSource raw navigation and lifecycle are closed; do not reintroduce the old
+  dict-facade/PropGet side graph.
+- Player_findSource Win/KRKR raw chains are restored. KRKR full-page upload is a
+  concrete Web rendering API boundary, not a raw-navigation gap.

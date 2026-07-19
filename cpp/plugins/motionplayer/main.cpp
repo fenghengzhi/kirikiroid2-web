@@ -32,8 +32,8 @@ NCB_REGISTER_SUBCLASS_DELAY(SourceCache) {
 }
 NCB_REGISTER_SUBCLASS_DELAY(ObjSource) {
     NCB_CONSTRUCTOR(());
-    // M9 brick C: binary ObjSource dict-facade members (ncb_registerMembers
-    // @0x69CCB8): 4 numeric prop-ro + clip prop-ro + drawLayer method.
+    // ObjSource_ncb_registerMembers @0x69CCB8 registers the raw-node facade's
+    // four numeric prop-ro members, clip prop-ro and drawLayer method.
     NCB_PROPERTY_RO(originX, getOriginX);
     NCB_PROPERTY_RO(originY, getOriginY);
     NCB_PROPERTY_RO(width, getWidth);

@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-2026-05-30 Cluster K audit, corrected 2026-07-18. Ledger: analysis/audit_motionplayer_2026-05-30/clusterK_motion_namespace.md. Source path verdict is now PARTIAL.
+2026-05-30 Cluster K audit, corrected 2026-07-19. Ledger: analysis/audit_motionplayer_2026-05-30/clusterK_motion_namespace.md. The source path is CLOSED except for the documented KRKR full-page Web upload boundary.
 
 Confirmed addr↔fn (renamed in IDB):
 - Motion_Player_findSource @0x6948e8 — this is **Player::findSource**, NOT SourceCache. Core = ResourceManager outer unordered_map whose mapped record owns the raw PSB plus a Win `ttstr->texture` map and KRKR flat descriptor map; then raw texture upload or TJS-dispatch fallback. name=="blank" gate; rmState+224==type (2=embedded PSB, 1=KAG layer). Hash = `(1025*h)^(>>6)` then `9*` then `32769*(x^(x>>11))`, 0→-1.
@@ -19,7 +19,7 @@ NCB registrar @0x6d9b08 (motionplayer_ncb_register) registers on the **Motion na
 - Player is a subclass listed between LayerGetter and SourceCache (local aliases it via PostRegistCallback instead).
 
 Member-set diffs (member registrars):
-- ObjSource @0x69ccb8: binary=ctor+originX/originY/width/height/clip (RO) + drawLayer. Local main.cpp:33 = ctor only. ❌ 6 missing.
+- ObjSource @0x69ccb8: binary=ctor+originX/originY/width/height/clip (RO) + drawLayer. Local registers the same surface and implements a retained raw owner/node pair plus lazy texture; strict/try reads, clip, ensureTexture, drawLayer and texture→owner destruction are aligned. ✅
 - ResourceManager @0x6ab8bc: binary 13 = ctor+loadSource+clearCache+bufLayer(RO)+load+unload+unloadAll+isExistMotion+findMotion+findSource+random+requireLayerId+releaseLayerId. RM public-inherits SourceCache and re-lists the base callbacks (sub_6A7BA8/6A8438/6A84FC). Local now restores that inheritance and the NCB surface; decrypt-seed helpers remain additional plugin API.
 - SourceCache @0x6a85a8: ctor+loadSource(sub_6A7BA8)+clearCache+bufLayer(RO). ✅ matches local main.cpp:27.
 - Point @0x690fbc: ctor+type+contains(=Player_hitTest!)+x+y RO. ✅ set matches; local `contains` is false-stub.
@@ -27,8 +27,9 @@ Member-set diffs (member registrars):
 
 PrivateMotionGLL @0x6dd284: real NCB class (ctor delegating @0x6de24c + setSize/visible/absolute). Local PrivateMotionGLL.h = free helper fns + std::vector, no class. 🔧
 
-2026-07-18 correction: this cross-cutting diagnosis is superseded. RM public
+2026-07-19 correction: this cross-cutting diagnosis is superseded. RM public
 inheritance, outer mapped record, Win/KRKR nested maps, and texture ownership are
 restored. `SourceCache` layer LRU and `Player_findSource` resource maps are distinct
-chains. The remaining K-1 gap is decoded `MotionSnapshot` pixel navigation versus
-the binary's raw `PSBRawNode` navigation; it is not a platform boundary.
+chains. Win/KRKR and ObjSource now navigate raw `PSBRawNode`; the former decoded
+`MotionSnapshot` side graph no longer participates. Only KRKR's one-shot full-page
+upload is retained as a concrete Web rendering API boundary.

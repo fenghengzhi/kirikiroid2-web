@@ -96,7 +96,7 @@
 | N18 | B | ctor COLOR seed：二进制 xmmword_14D68D0={128,128,128,255}f（get_bytes 确认），本地留零+TODO，现可确认应 seed |
 | N19 | C/D | D3DEmotePlayer NCB property/method 注册顺序：二进制交错，本地 property 提前（ininert，应按 0x52E504 重排）；'progress' #50 cb 二进制是 EmoteEngine_progress 0x52f76c，需确认 wrapper tail-call；MaskModeStencil/Alpha 二进制在 Motion namespace 也注册（0x6d9d24/0x6d9d3c），本地漏 |
 | N20 | A | EmoteBlinkRng.cpp:62-71 next() 用两次独立 nextWord，二进制预减批量取双词（word2 在 v1==2 regen）；624 词边界 regen 时机差一次抽样（墙钟种子无 oracle）|
-| N21 | N | RM unloadAll 真址 = 0x6A8CF8（RM.h:147/RM.cpp:372 注释误写 0x6A8BBC，是栈金丝雀地址）；ObjSource clip getter 本地 STUB 返回 {}，二进制建 Motion.Rect |
+| N21 | N | RM unloadAll 真址 = 0x6A8CF8。2026-07-19 后续纠正：ObjSource clip/ensureTexture/drawLayer 与 raw owner/node/texture 生命周期已闭合，旧 clip-STUB 结论已证伪。 |
 
 ---
 

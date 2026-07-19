@@ -1,5 +1,11 @@
 # MotionPlayer 源代码还原 Review（2026-06-03）
 
+> **2026-07-19 M9 纠正：** 本文将 ObjSource 判为 0x18-byte
+> `tTJSVariant` dict facade 的结论已被构造/析构及全部 consumer 反编译证伪。
+> 权威当前结论是 `{retained PSBRawOwner*, node*, lazy texture*}`；RM 从 mapped
+> `PSBFile` raw root 导航，clip/ensureTexture/drawLayer、adaptor 失败泄漏及
+> texture→owner 析构顺序均已在本地闭合。正文旧 M9 行仅保留历史语境。
+
 > **2026-07-18 再纠正：** 下文 R0-2 当时把 +960 误称 variableKeys、
 > +968 误称 primary chara。NCB 注册的权威映射是 +960 chara、+968
 > stealthChara、+976 motion、+984 stealthMotion，源码层均为 `ttstr`
@@ -122,7 +128,7 @@ const double base = isDefaultBlend ? 255.0 : 128.0;   // ← 颠倒
 | 点 | 主张/提交 | 裁决 |
 |---|---|---|
 | ResourceManager NCB = 12 成员 | a074060 | ✅ `0x6AB8BC` 恰注册 12 成员，名/序与 main.cpp:412-428 镜像一致。RM 与 SourceCache **确为同一类**，无独立 SourceCache 注册函数 |
-| ObjSource = 0x18 dict facade, 6 成员 | 6259f76 | ✅ `0x69CCB8` 注册 6 个 dict 读取成员；findSource 经 `operator new(0x18)` 构造，obj[0]=dict variant。06-02「缺 6 成员」**方向反了**，已确认。width getter@0x69D19C 在 type!=7 时返回 32，本地 `readInt(...,32)` 一致 |
+| ObjSource = 0x18 raw-node facade, 6 exposed members | 2026-07-19 corrected | ✅ `0x69CCB8` 注册 6 个 raw-node consumer；findSource 分配 `{retained owner,node,null texture}`。width/height 仅在非-dict raw node 时返回 32；strict/try getters、clip/ensureTexture/drawLayer 与析构顺序均已闭合。旧 dict-variant 结论已证伪。 |
 | findSource = outer map + mapped-record inner maps + raw upload | 3761a0b | ✅ 2026-07-18 后续纠正：本地已恢复 outer map 每项的 Win `name→texture` 表和 KRKR 平表 `src/group/icon→descriptor`、AddRef/Release 及 unload 生命期；Win/spec=2 与 KRKR/spec=1 均直接导航 raw `PSBRawNode`。KRKR 整页 CPU 合成后一次 Update 是已标注的 Web 上传 API 边界 |
 
 **claim 4（07c4f05 phase-D per-vertex color 平台边界）：❌ 论据被证伪（2026-06-03 draw-path 已反编译）。**

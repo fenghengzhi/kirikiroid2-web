@@ -1,5 +1,10 @@
 # MotionPlayer 源代码还原 Review（2026-06-05）
 
+> **2026-07-19 M9 纠正：** 本文 `findSource → ObjSource dict facade` 的描述
+> 已被后续 fresh decompile 证伪。当前实现与二进制均为 mapped `PSBFile` raw
+> root → retained raw owner/node + lazy texture；strict/try 读取、clip、纹理物化、
+> drawLayer、adaptor 失败泄漏与析构顺序均已闭合。正文相关旧表项只表示当时状态。
+
 > 方法：以 [MotionPlayer_Restoration_Review_2026-06-03.md](MotionPlayer_Restoration_Review_2026-06-03.md) 为基线，
 >   对自 06-03 以来 dev/motion 的 **35 个提交** delta（M1 帧步进 4 函数边界收敛 / NCB 注册表 1:1 收敛 /
 >   M2 EmoteEngine 6-controller + 弹簧实装 / draw 原语→TJS dispatch 迁移 / anchor color 方向修复）做

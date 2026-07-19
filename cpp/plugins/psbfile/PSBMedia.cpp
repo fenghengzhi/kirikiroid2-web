@@ -113,6 +113,9 @@ namespace PSB {
         if(data == nullptr) {
             TVPThrowExceptionMessage(TJS_W("%1: cannot open psbfile"), name);
         }
+        // tTVPMemoryStream ctor @0x8F7C74 borrows every non-null block
+        // (Reference=true); dtor @0x8F7D04 does not free it or retain the PSB
+        // owner. A live stream therefore shares the container's raw lifetime.
         return new tTVPMemoryStream(data, size);
     }
 

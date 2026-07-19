@@ -114,8 +114,9 @@ namespace motion {
     // binary ObjSource is a thin raw-node facade: operator new(0x18) holds a
     // PSBRawNode owner/node pair in qword[0..1] and a lazy texture in qword[2].
     // Every member navigates the raw node directly. The former
-    // _key/_src/_blendMode/_color fields were a port invention (MASTER's
-    // "ObjSource missing 6 members" was inverted — it has no struct fields).
+    // _key/_src/_blendMode/_color fields were a port invention. Its actual
+    // fields are precisely the retained raw owner/node pair plus lazy texture;
+    // MASTER's older "ObjSource missing 6 members" verdict was also inverted.
     //
     // Now constructed by ResourceManager::findSource (ResourceManager.cpp,
     // aligned with the binary RM findSource @0x6AAB3C): the "src" branch

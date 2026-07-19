@@ -1536,6 +1536,18 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   invalid-object/member-miss 错误码与 callback 参数数均未发现新偏差。此次复核同时纠正了
   `.claude/agent-memory/ida-deep-analyzer/project_m9_source_subsystem.md` 中仍把 ObjSource
   写成 `tTJSVariant` facade、把 KRKR/raw pixel 标为 open 的过期结论。
+
+- 2026-07-19 fresh decompile `PSBMedia::Open@0x59993C`、
+  `tTVPMemoryStream` block ctor `0x8F7C74` 与析构 `0x8F7D04`，闭合了 `psb:`
+  resource stream 的跨对象生命周期：Open 从当前 cached PSBFile 取 raw resource pointer
+  与 size 后直接交给 0x20-byte memory stream；非空 block 不复制，ctor 置
+  `Reference=true`，也不对 raw owner/PSBFile 做 AddRef。析构仅在 `block != null &&
+  Reference == false` 时释放，因此借用流不会释放 resource。若调用方仍持有旧 stream，
+  而同一全局 PSBMedia 因另一个 container 名替换 `_file`，旧 block 可以悬空；这是 Android
+  原版的可观察边界，不应通过 stream 持有 owner 或复制 buffer “安全化”。本地
+  `PSBMedia::Open → new tTVPMemoryStream(data,size)`、通用 memory-stream ctor/dtor 与上述
+  存储、标志和释放条件逐项一致。
+
 - 同日对当前 `reference/` 与 `tests/` 中的天然二进制资产做只读盘点：共识别 142 个
   lower-case `mdf\0` wrapper，全部 zlib 解压成功且实际长度等于 wrapper 声明长度；连同
   raw PSB 共识别 222 个解包后 `PSB\0` 文件，全部满足 `sub_598960` 的八项 header-offset

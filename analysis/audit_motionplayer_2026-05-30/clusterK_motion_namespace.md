@@ -187,6 +187,8 @@ Verdict: 🔧 architectural divergence. Binary PrivateMotionGLL is a real regist
 - None explicitly annotated in the audited K files. D3DAdaptor's nullsub-backed methods (setPos/removeAllBg/registerBg/...) are binary-side stubs already, so local stubs are faithful, not platform deviations.
 
 ## VERDICT
-**2026-07-18 superseded verdict:** K-1 的容器归属与生命周期、K-5 ObjSource
-成员、RM/SourceCache 继承均已恢复。findSource 只剩 decoded→raw pixel 导航；旧的
+**2026-07-19 superseded verdict:** K-1 的容器归属与生命周期、K-5 ObjSource
+成员、RM/SourceCache 继承均已恢复。Win/KRKR 与非-atlas ObjSource 都已改为 raw
+`PSBRawNode` 导航；ObjSource 的 clip/ensureTexture/drawLayer、adaptor 失败泄漏及
+texture→owner 析构顺序已闭合。旧 dict-facade、decoded→raw open 与
 “list+shared_ptr 是根因”结论不得继续作为当前状态引用。其余 K 项按各自后续审计处理。
