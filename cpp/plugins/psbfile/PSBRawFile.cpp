@@ -375,8 +375,7 @@ namespace PSB {
         // sub_598D58 @ 0x598D58 exposes the raw-node copy order used by the
         // Android holder: release the destination first, copy the owner,
         // retain that owner, then copy the node pointer.  A retain-first
-        // copy-and-move implementation changes the aliasing boundary and also
-        // removes the AddRef/Release no-op visible in sub_59A4B0.
+        // copy-and-move implementation changes the aliasing boundary.
         if(owner_ != nullptr) {
             owner_->Release();
         }
@@ -397,6 +396,13 @@ namespace PSB {
         }
         owner_ = other.owner_;
         node_ = other.node_;
+        // PSBMedia::Resolve @ 0x59A698..0x59A6EC releases the destination,
+        // installs the strict getter's returned owner/node without AddRef,
+        // then preserves the moved holder's zero-reference deletion branch.
+        // The destination deliberately remains dangling if that branch fires.
+        if(owner_ != nullptr && owner_->refCount_ == 0) {
+            delete owner_;
+        }
         other.owner_ = nullptr;
         other.node_ = nullptr;
         return *this;

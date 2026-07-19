@@ -49,6 +49,7 @@ namespace PSB {
 
     private:
         friend class PSBFile;
+        friend class PSBRawNode;
 
         PSBRawOwner(std::uint8_t *data, std::size_t size);
         ~PSBRawOwner();

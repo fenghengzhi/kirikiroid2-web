@@ -176,7 +176,7 @@ NCB 通用模板函数，不能全部按业务方法计数。
 | owner | `0x598708`, `0x598960`, `0x598A64`, `0x598AAC`, `0x598B3C` | 一个 owner 独占一个 raw allocation；intrusive ref；替换时释放旧 owner；Adopt 赋值后与 move 均保留零引用删除分支；filter 后刷新 header view |
 | node helper | `0x598A3C..0x5996E4` | move、字符串、strict/try lookup、bool、keys、int/double、category、contains、resource；strict miss 的异常 helper 若返回则输出空 owner/node |
 | media 生命周期 | `0x59849C`, `0x5997F0..0x5998A8` | function-local static 指针由 `__cxa_guard` 构造一次；process-lifetime singleton、初始 ref=1、名字 `psb`、不注销 |
-| media 访问 | `0x5998BC..0x59A4B0` | normalize no-op、exists/open/list/local-name、按首段缓存一个 PSBFile TJS object、contains→strict 逐段遍历 |
+| media 访问 | `0x5998BC..0x59A4B0` | normalize no-op、exists/open/list/local-name、按首段缓存一个 PSBFile TJS object、contains→strict 逐段遍历；strict 返回值以 move assignment 接管，最终 out 才走 copy/AddRef |
 | motionplayer 原始加载链 | `0x6A8D8C`, `0x6A87D0`, `0x685D30`, `0x6863CC` | 规范化路径→缓存 raw owner→全局 `std::function` filter→严格读取 id/spec/version→每次新建 root dispatch；seed setter 接受至少一个可转整数的 TJS 参数 |
 | callable 解密/注册 | `0x682528`, `0x685E60`, `0x6864C0`, `0x6864C8`, `0x6865B4`, `0x62C808` | emoteplayer entry 动态注入两个 static method；callable 由 `tRefHolder` 形状的 pointer+refcount 控制块共享；每次以同一个 `CBinaryAccessor` 类型传 `(whole-file view,size)`，返回值忽略；替换 filter 释放旧 Object/ObjThis |
 | motionplayer 缓存生命周期 | `0x6A8438`, `0x6A8B94`, `0x6A8CF8`, `0x6A959C` | `clearCache` 只清 SourceCache 图层链；析构依次销毁 raw owner map、layer-id set、random variant 和基类状态；`unloadAll` 只清 raw owner map；`unload` 规范化路径后按 key 擦除 |
@@ -282,6 +282,9 @@ owner，element 1 原样回写 motionKey/project 单槽；不再经过全局 sna
   该调用点不存在的 self-assignment 安全分支。
 - holder 替换文件只释放自己的 owner 引用，旧 node/dispatch 仍保持 allocation 存活。
 - holder move 与 `0x598A64` 一致地保留“非空且 refcount==0 时直接删除 owner”的边界分支。
+- raw node 的 move assignment 在 `PSBMedia::Resolve@0x59A698..0x59A6EC`
+  同样保留该 zero-ref 删除分支；strict getter 的 prvalue 直接转移 owner/node，不产生
+  copy assignment 的额外 AddRef/Release。
 - 每个 collection dispatch 有独立 `valid` byte；invalidate 父 dispatch 不会使子 dispatch 失效。
 - TJS object closure 的 Object/ObjThis 各持一份 dispatch 引用，测试中的稳定 refcount 为 2。
 - media 通过带 `__cxa_guard` 的 function-local static 指针只分配一次，保留
@@ -1403,16 +1406,10 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   Android oracle 证明正常资产的原版构造边界未变，但不替代无天然资产的损坏输入验证。
 
 - 2026-07-19 fresh decompile `sub_598D58@0x598D58`、
-  `PSBMedia::Resolve@0x59A4B0`，并以 `sub_598A64@0x598A64` 的独立 move ctor
-  交叉区分两类生命周期：try-get 命中及 Resolve 逐段替换实际走
-  Release-old→copy owner→AddRef→write node；strict getter 的返回临时量随后在末段状态
-  检查前析构，形成原版 copy assignment AddRef + temporary destructor Release 的 no-op，
-  不是 raw-node move 的清零分支。审计中最初的 move 假设已在修改前按指令流纠正；本地
-  copy assignment 与 Resolve 临时量作用域现已恢复上述顺序和 zero-ref 删除边界。Mac
-  四目标构建成功，`psbfile-dll` **484/484**、`motionplayer-dll` **398/398**，Web Debug
-  最终链接通过。本轮 Android oracle 未复跑：`.claude.local.md` 指定的
-  `emulator-5554` 已从 ADB 列表消失，runner 停在 `wait-for-device`，未产生可归因于实现
-  的失败结果；此前同资产的在线 AVD oracle 结果仍为 `status=ok`。
+  `PSBMedia::Resolve@0x59A4B0` 时曾把两条生命周期错误合并：try-get 命中及 Resolve
+  最终 out 写回确实走 Release-old→copy owner→AddRef→write node；但 Resolve 循环内的
+  `0x59A694..0x59A704` 并非 copy assignment。后续逐指令复核在下方纠正该结论；本段旧有
+  “strict 临时量形成 AddRef/Release no-op”的说法作废，不能继续作为实现依据。
 
 - 2026-07-19 重新从 IDA 枚举 `0x59641C..0x59AA84` 的全部 **90** 个函数，并 fresh
   decompile/disasm typed state/registrar `0x597E98..0x5980F4`、完整 dispatch 微型 vtable
@@ -1438,6 +1435,19 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   `TJS_ENUM_NO_VALUE` argc 与四只 Variant 析构顺序经逐指令复核无需修改。Mac 四目标构建、
   `psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 与 Web Debug 最终链接全部
   通过。ADB 列表仍为空，边界 oracle 本轮未执行且未伪造崩溃 fixture。
+
+- 2026-07-19 再次 fresh decompile `PSBMedia::Resolve@0x59A4B0`、strict getter
+  `sub_598C58@0x598C58` 并逐指令复核 `0x59A694..0x59A704`，纠正上一阶段写反的生命周期
+  结论：循环内先释放 current owner，再直接接管 strict getter 的 sret owner/node；没有
+  AddRef，也没有随后析构临时量的 Release。新 owner 非空时仍读取原 refcount，零值直接
+  析构并保留 destination 悬挂边界。只有循环结束写回调用者 out 的
+  `0x59A730..0x59A774` 才是 Release-old→copy→AddRef→write node。本地已删除人为制造的
+  `const child` copy 作用域，恢复 prvalue move assignment 及 zero-ref 删除分支；错误历史
+  已就地标记作废，避免继续传播。Mac 四目标构建、`psbfile-dll` **484/484**、
+  `motionplayer-dll` **398/398** 与 Web Debug 最终链接均通过；冷启动
+  `oracle-arm64-31` 并恢复 frida-server 后，已提交 `ezsave.pimg` 的 Android octet/storage
+  两条 oracle 均为 `status=ok`，owner size/refcount、inline header、magic 与 strict refresh
+  全部吻合。该正常资产 oracle 是非回归守护，不替代 zero-ref 边界的逐指令证据。
 
 ## 后续闭合条件
 

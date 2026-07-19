@@ -70,16 +70,11 @@ namespace PSB {
             if(!value.ContainsDictionaryKey(key)) {
                 return false;
             }
-            {
-                // sub_59A4B0 @ 0x59A694..0x59A704 assigns the strict result
-                // through the raw-node copy path, then destroys that result
-                // before evaluating the last-segment state.  Keep this local
-                // scope so the original AddRef/Release no-op and its zero-ref
-                // deletion boundary are not collapsed into move assignment.
-                const PSBRawNode child =
-                    value.GetDictionaryValueStrict(key);
-                value = child;
-            }
+            // sub_59A4B0 @ 0x59A694..0x59A704 moves the strict getter's
+            // returned owner/node directly into the current value: release
+            // old, install both fields, preserve the zero-ref deletion branch.
+            // There is no intermediate AddRef/Release copy no-op here.
+            value = value.GetDictionaryValueStrict(key);
             if(last) {
                 return true;
             }
