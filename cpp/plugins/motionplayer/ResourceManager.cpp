@@ -325,7 +325,8 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
     // then falls through to the common fresh-dispatch return block.
     if(const auto cached = _loadedModules.find(path);
        cached != _loadedModules.end()) {
-        return makeRawRootVariant(cached->second.file);
+        const PSB::PSBFile file = cached->second.file;
+        return makeRawRootVariant(file);
     }
 
     if(!TVPIsExistentStorage(path)) {
@@ -370,12 +371,14 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
     }
 
     // sub_6EBB0C/sub_6EBCFC default-construct the complete mapped record
-    // (empty PSBFile + two nested source maps), then 0x6A9298 moves the local
-    // PSBFile holder into record.file.
+    // (empty PSBFile + two nested source maps), then 0x6A926C..0x6A92A8 copy
+    // the local holder into record.file (Release old, assign, AddRef).  The
+    // common return block still consumes the local holder and destroys it
+    // after constructing the fresh dispatch.
     auto [inserted, wasInserted] = _loadedModules.try_emplace(path);
     (void)wasInserted;
-    inserted->second.file = std::move(file);
-    return makeRawRootVariant(inserted->second.file);
+    inserted->second.file = file;
+    return makeRawRootVariant(file);
 }
 
 // C-1 (2026-06-07): RM-own loadSource(ttstr)->load(path) forward REMOVED. The

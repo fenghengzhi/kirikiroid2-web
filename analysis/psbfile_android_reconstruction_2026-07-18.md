@@ -252,12 +252,18 @@ path→snapshot 或 dispatch-pointer→snapshot 映射。Player 也不再维护 
 
 模块名、typed NCB factory/property/method、pre-register media singleton、
 `psb:` resolve/open/list 链已按二进制复原。NCB 通用模板由仓库现有 ncbind
-实现承接；针对 `const tTJSVariant&` 补了 borrow-only converter，以保持参数不复制。
+实现承接。旧分析曾把 `PSBFile.load` 误判为 `const tTJSVariant&` 且补了
+borrow-only converter；后续 fresh decompile `0x59B570/0x59B708/0x5980F4` 已证伪：
+原版按值构造参数并经历明确的 Variant AddRef/Release 临时生命周期，本地已同步纠正。
 motionplayer 侧新增共享的 `Motion_propGet*` 层，`ResourceManager` 与变量轨道均复用
 同一调用形状；变量轨道不再为前进、后退、重定位各复制一套 eager 读取器，而是调用
 Android 中独立存在的 step `0x6B786C` 与 merge `0x6B7A70` 对应 helper。
 `ResourceManager::load` 则按 `0x6A8D8C` 执行路径规范化、raw cache lookup/load、
-`id/spec/version` strict lookup、move-insert 与 fresh root dispatch common tail。
+`id/spec/version` strict lookup、copy-insert 与 fresh root dispatch common tail。cache hit
+在 `0x6A8E94..0x6A8EB8` 复制一指针 holder 并 AddRef；miss 在
+`0x6A926C..0x6A92A8` 对 map record 执行 Release-old/copy/AddRef，随后仍由 local holder
+进入公共 dispatch 构造链。本地先前使用 move-insert、直接借用 record 的结论已由这些
+指令证伪并纠正。
 `setEmotePSBDecryptSeed/Func` 不再作为 ResourceManager registrar 的本地附加项；
 `emoteplayer.dll` 后置入口按 `0x682528` 查找 `Motion.ResourceManager`，创建 native class
 method，并以 `TJS_MEMBERENSURE | TJS_STATICMEMBER` 动态注入。
@@ -270,6 +276,10 @@ owner，element 1 原样回写 motionKey/project 单槽；不再经过全局 sna
 ### 4. 对象生命周期
 
 - owner intrusive refcount 管理 raw allocation；holder、node view 和 dispatch 共享它。
+- `PSBFile` holder 可复制：copy construction 对 owner AddRef；copy assignment 先释放旧
+  owner，再保存并 AddRef 新 owner。ResourceManager 命中与插入均保留原版临时 holder
+  的 AddRef/Release 生命周期，不用 move 消去中间步骤；assignment 不额外加入二进制
+  该调用点不存在的 self-assignment 安全分支。
 - holder 替换文件只释放自己的 owner 引用，旧 node/dispatch 仍保持 allocation 存活。
 - holder move 与 `0x598A64` 一致地保留“非空且 refcount==0 时直接删除 owner”的边界分支。
 - 每个 collection dispatch 有独立 `valid` byte；invalidate 父 dispatch 不会使子 dispatch 失效。
@@ -1332,6 +1342,21 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   归档依赖图确认没有对象串库，最终链接命令确认六只归档均被强制加载；Mac
   `motionplayer-dll` **398/398**、`psbfile-dll` **437/437**，`mtndump`/`motionsim`
   与 Web Debug 最终链接全部通过。该项不再是 100% 结论的阻塞项。
+
+- 2026-07-19 fresh decompile typed NCB 链 `0x597E98..0x5980F4`、参数构造
+  `0x59B570/0x59B708` 与 module/media callback `0x42CF28/0x59849C`：`PSBFile.load`
+  的 Variant 参数是按值复制并经历 AddRef/Release，不是 borrow-only `const&`；pre-register
+  descriptor 也直接指向包含 function-local media singleton 的 callback，中间不存在额外
+  `initPSBMedia` 转发层。本地已删除错误 converter/转发函数并恢复直接调用形状。
+
+- 同轮 fresh decompile/disasm `ResourceManager_loadResource@0x6A8D8C` 进一步确认 holder
+  生命周期：cache hit 在 `0x6A8E94..0x6A8EB8` copy/AddRef 临时 holder；miss 在
+  `0x6A926C..0x6A92A8` 对 map record 执行 Release-old/copy/AddRef；公共返回块从 local
+  holder 创建 dispatch 后再 Release 临时引用。本地原先的 deleted-copy、move-insert 和
+  record 直借用均已纠正。Mac 四目标构建、`psbfile-dll` **484/484**、
+  `motionplayer-dll` **398/398**、Web Debug 最终链接全部通过；在线 Android AVD 的既有
+  `ezsave.pimg` octet/storage oracle 及 5,366,313 字节 motion PSB octet/seed-filter oracle
+  也全部 `status=ok`，filter 的 203,302 字节逐字节一致。
 
 ## 后续闭合条件
 

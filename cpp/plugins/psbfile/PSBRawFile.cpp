@@ -639,6 +639,27 @@ namespace PSB {
         }
     }
 
+    PSBFile::PSBFile(const PSBFile &other) noexcept : owner_(other.owner_) {
+        // ResourceManager_loadResource @ 0x6A8E94..0x6A8EB8 copies the
+        // cached one-pointer holder and increments the intrusive owner count.
+        if(owner_ != nullptr) {
+            owner_->AddRef();
+        }
+    }
+
+    PSBFile &PSBFile::operator=(const PSBFile &other) noexcept {
+        // ResourceManager_loadResource @ 0x6A926C..0x6A92A8 releases the
+        // mapped holder, copies the incoming pointer, then increments it.
+        if(owner_ != nullptr) {
+            owner_->Release();
+        }
+        owner_ = other.owner_;
+        if(owner_ != nullptr) {
+            owner_->AddRef();
+        }
+        return *this;
+    }
+
     PSBFile::PSBFile(PSBFile &&other) noexcept : owner_(other.owner_) {
         // sub_598A64 @ 0x598A64 copies the pointer to the destination, destroys
         // an owner whose intrusive count is already zero, and only then clears
@@ -669,7 +690,7 @@ namespace PSB {
         }
     }
 
-    bool PSBFile::Load(const tTJSVariant &value) {
+    bool PSBFile::Load(tTJSVariant value) {
         // sub_598268 @ 0x598268 is the typed NCB method registered as "load".
         if(value.Type() == tvtString) {
             const ttstr path(value);

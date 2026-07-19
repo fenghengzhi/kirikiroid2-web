@@ -120,13 +120,13 @@ namespace PSB {
         using OwnerFilter = std::function<void(PSBRawOwner &)>;
 
         PSBFile() = default;
-        PSBFile(const PSBFile &) = delete;
-        PSBFile &operator=(const PSBFile &) = delete;
+        PSBFile(const PSBFile &other) noexcept;
+        PSBFile &operator=(const PSBFile &other) noexcept;
         PSBFile(PSBFile &&other) noexcept;
         PSBFile &operator=(PSBFile &&other) noexcept;
         ~PSBFile();
 
-        [[nodiscard]] bool Load(const tTJSVariant &value);
+        [[nodiscard]] bool Load(tTJSVariant value);
         [[nodiscard]] iTJSDispatch2 *GetRootDispatch() const;
         [[nodiscard]] bool LoadStorage(const ttstr &name,
                                        const OwnerFilter &filter = {});

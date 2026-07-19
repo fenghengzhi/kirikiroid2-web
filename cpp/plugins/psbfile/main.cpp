@@ -15,8 +15,6 @@
 using PSB::PSBFile;
 using PSB::PSBRawNode;
 
-void initPsbFile() { PSB::initPSBMedia(); }
-
 namespace {
     void throwUnknownType() {
         TVPThrowExceptionMessage(
@@ -497,17 +495,6 @@ namespace {
     };
 
 } // namespace
-
-// Android's typed NCB binding passes PSBFile::Load its variant argument by
-// const reference.  This ncbind port lacks the corresponding borrow-only
-// converter, so restore that converter without copying/refcounting the variant.
-struct PSBVariantReferenceConvertor {
-    void operator()(const tTJSVariant *&destination,
-                    const tTJSVariant &source) const {
-        destination = &source;
-    }
-};
-NCB_SET_TOVALUE_CONVERTOR(const tTJSVariant *, PSBVariantReferenceConvertor);
 
 namespace PSB {
     tjs_int32 GetPSBValueClassID() {
