@@ -176,7 +176,7 @@ NCB 通用模板函数，不能全部按业务方法计数。
 | owner | `0x598708`, `0x598960`, `0x598A64`, `0x598AAC`, `0x598B3C` | 一个 owner 独占一个 raw allocation；intrusive ref；替换时释放旧 owner；Adopt 赋值后与 move 均保留零引用删除分支；filter 后刷新 header view |
 | node helper | `0x598A3C..0x5996E4` | move、字符串、strict/try lookup、bool、keys、int/double、category、contains、resource；strict miss 的异常 helper 若返回则输出空 owner/node |
 | media 生命周期 | `0x59849C`, `0x5997F0..0x5998A8` | function-local static 指针由 `__cxa_guard` 构造一次；process-lifetime singleton、初始 ref=1、名字 `psb`、不注销 |
-| media 访问 | `0x5998BC..0x59A4B0` | normalize no-op、exists/open/list/local-name、按首段缓存一个 PSBFile TJS object、contains→strict 逐段遍历；strict 返回值以 move assignment 接管，最终 out 才走 copy/AddRef |
+| media 访问 | `0x5998BC..0x59A4B0` | normalize no-op、exists/open/list/local-name、按首段缓存一个 PSBFile TJS object、contains→strict 逐段遍历；strict 返回值只 move 到局部 current，失败保持 caller out 不变，成功尾块才 copy/AddRef 写回 out |
 | motionplayer 原始加载链 | `0x6A8D8C`, `0x6A87D0`, `0x685D30`, `0x6863CC` | 规范化路径→缓存 raw owner→全局 `std::function` filter→严格读取 id/spec/version→每次新建 root dispatch；seed setter 接受至少一个可转整数的 TJS 参数 |
 | callable 解密/注册 | `0x682528`, `0x685E60`, `0x6864C0`, `0x6864C8`, `0x6865B4`, `0x62C808` | emoteplayer entry 动态注入两个 static method；callable 由 `tRefHolder` 形状的 pointer+refcount 控制块共享；每次以同一个 `CBinaryAccessor` 类型传 `(whole-file view,size)`，返回值忽略；替换 filter 释放旧 Object/ObjThis |
 | motionplayer 缓存生命周期 | `0x6A8438`, `0x6A8B94`, `0x6A8CF8`, `0x6A959C` | `clearCache` 只清 SourceCache 图层链；析构依次销毁 raw owner map、layer-id set、random variant 和基类状态；`unloadAll` 只清 raw owner map；`unload` 规范化路径后按 key 擦除 |
@@ -1442,8 +1442,9 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   AddRef，也没有随后析构临时量的 Release。新 owner 非空时仍读取原 refcount，零值直接
   析构并保留 destination 悬挂边界。只有循环结束写回调用者 out 的
   `0x59A730..0x59A774` 才是 Release-old→copy→AddRef→write node。本地已删除人为制造的
-  `const child` copy 作用域，恢复 prvalue move assignment 及 zero-ref 删除分支；错误历史
-  已就地标记作废，避免继续传播。Mac 四目标构建、`psbfile-dll` **484/484**、
+  `const child` copy 作用域，恢复 prvalue move assignment 及 zero-ref 删除分支；但该阶段
+  仍错误地把 caller out 本身当作循环 current，未真正复原“仅成功尾块写回 out”。这一遗漏
+  已由后续 fresh audit 纠正。Mac 四目标构建、`psbfile-dll` **484/484**、
   `motionplayer-dll` **398/398** 与 Web Debug 最终链接均通过；冷启动
   `oracle-arm64-31` 并恢复 frida-server 后，已提交 `ezsave.pimg` 的 Android octet/storage
   两条 oracle 均为 `status=ok`，owner size/refcount、inline header、magic 与 strict refresh
@@ -1460,6 +1461,18 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   `psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 与 Web Debug 最终链接均通过；
   `ezsave.pimg` 的 Android octet/storage oracle 两条均为 `status=ok`，继续作为正常路径
   非回归守护。
+
+- 2026-07-19 fresh decompile/disasm `PSBMedia::Resolve@0x59A4B0` 的完整 owner/out 链，
+  纠正上述遗漏：`0x59A548..0x59A55C` 把 root 只写入局部 current，循环
+  `0x59A698..0x59A704` 也只 move 更新该局部；无首个 slash、任一 contains miss 或其他
+  非成功退出都不写 caller out。只有最后 segment 成功后的 `0x59A730..0x59A774` 才对
+  caller out 执行 Release-old→copy current owner→AddRef→write node。本地此前在函数入口
+  `value = root` 并直接沿 value 遍历，会让失败调用泄漏部分解析状态到 out；现已恢复独立
+  `current` owner，并把 `value = current` 收束到成功尾块。现有 142 个 MDF 资产也完成
+  只读普查：zlib 失败 **0**、解压后 header offset 失败 **0**，因此仍无可合法复用的天然
+  失败 fixture，未构造或篡改物料。Mac 四目标构建、`psbfile-dll` **484/484**、
+  `motionplayer-dll` **398/398** 与 Web Debug 最终链接均通过；`ezsave.pimg` 的 Android
+  octet/storage oracle 两条继续为 `status=ok`，作为成功路径非回归守护。
 
 ## 后续闭合条件
 

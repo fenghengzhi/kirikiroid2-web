@@ -51,7 +51,10 @@ namespace PSB {
         iTJSDispatch2 *dispatch = _file.AsObjectNoAddRef();
         PSBFile *file =
             ncbInstanceAdaptor<PSBFile>::GetNativeInstance(dispatch);
-        value = file->GetRoot();
+        // sub_59A4B0 @ 0x59A548..0x59A55C keeps the root in a local node.
+        // The caller's output is not touched until the successful tail at
+        // 0x59A730..0x59A774, so every miss preserves its previous value.
+        PSBRawNode current = file->GetRoot();
 
         const tjs_int firstSlash = name.IndexOf(TJS_W('/'));
         if(firstSlash < 0) {
@@ -67,15 +70,18 @@ namespace PSB {
             }
 
             const std::string key = segment.AsStdString();
-            if(!value.ContainsDictionaryKey(key)) {
+            if(!current.ContainsDictionaryKey(key)) {
                 return false;
             }
             // sub_59A4B0 @ 0x59A694..0x59A704 moves the strict getter's
             // returned owner/node directly into the current value: release
             // old, install both fields, preserve the zero-ref deletion branch.
             // There is no intermediate AddRef/Release copy no-op here.
-            value = value.GetDictionaryValueStrict(key);
+            current = current.GetDictionaryValueStrict(key);
             if(last) {
+                // 0x59A730..0x59A774 alone performs Release-old -> copy ->
+                // AddRef -> write-node on the caller-provided output.
+                value = current;
                 return true;
             }
         }
