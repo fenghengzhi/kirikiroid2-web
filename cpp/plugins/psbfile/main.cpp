@@ -72,22 +72,77 @@ namespace {
                 return TJS_E_INVALIDOBJECT;
             }
 
-            const int category = value_.GetTypeCategory();
-            if(category == 6) {
-                if(TJS_strcmp(membername, TJS_W("count")) == 0) {
-                    std::uint32_t count{};
-                    (void)value_.GetArrayCount(count);
-                    // sub_597854 @ 0x5979F8 writes through result without a
-                    // null guard, preserving the dispatch ABI crash boundary.
-                    *result = static_cast<tjs_int64>(count);
-                    return TJS_S_OK;
-                }
-            } else if(category == 7) {
-                if(const auto *child = value_.FindDictionaryValue(
-                       ttstr(membername).AsStdString())) {
-                    assign(result, child);
-                    return TJS_S_OK;
-                }
+            // sub_597854 @ 0x597894 reads the raw node tag and owns this
+            // switch; GetTypeCategory @ 0x599554 is not in its call chain.
+            switch(value_.GetNode()[0]) {
+                case 0x20:
+                    if(TJS_strcmp(membername, TJS_W("count")) == 0) {
+                        std::uint32_t count{};
+                        (void)value_.GetArrayCount(count);
+                        // sub_597854 @ 0x5979F8 writes through result without
+                        // a null guard, preserving the dispatch ABI boundary.
+                        *result = static_cast<tjs_int64>(count);
+                        return TJS_S_OK;
+                    }
+                    break;
+                case 0x21:
+                    if(const auto *child = value_.FindDictionaryValue(
+                           ttstr(membername).AsStdString())) {
+                        assign(result, child);
+                        return TJS_S_OK;
+                    }
+                    break;
+                case 0x01:
+                case 0x02:
+                case 0x03:
+                case 0x04:
+                case 0x05:
+                case 0x06:
+                case 0x07:
+                case 0x08:
+                case 0x09:
+                case 0x0a:
+                case 0x0b:
+                case 0x0c:
+                case 0x15:
+                case 0x16:
+                case 0x17:
+                case 0x18:
+                case 0x19:
+                case 0x1a:
+                case 0x1b:
+                case 0x1c:
+                case 0x1d:
+                case 0x1e:
+                case 0x1f:
+                case 0x23:
+                case 0x24:
+                case 0x25:
+                case 0x26:
+                case 0x27:
+                case 0x28:
+                case 0x29:
+                case 0x2c:
+                case 0x2d:
+                case 0x2e:
+                case 0x2f:
+                case 0x30:
+                case 0x31:
+                case 0x33:
+                case 0x34:
+                case 0x35:
+                case 0x37:
+                case 0x38:
+                case 0x39:
+                case 0x3b:
+                case 0x3c:
+                case 0x3d:
+                case 0x3f:
+                case 0x41:
+                    break;
+                default:
+                    throwUnknownType();
+                    break;
             }
 
             if((flag & TJS_MEMBERMUSTEXIST) != 0) {
@@ -104,8 +159,62 @@ namespace {
             if(!valid_ || value_.GetOwner() == nullptr) {
                 return TJS_E_INVALIDOBJECT;
             }
-            if(value_.GetTypeCategory() != 6) {
-                return TJS_E_MEMBERNOTFOUND;
+            // sub_5976C4 @ 0x5976DC performs its own raw-tag switch.
+            switch(value_.GetNode()[0]) {
+                case 0x20:
+                    break;
+                case 0x01:
+                case 0x02:
+                case 0x03:
+                case 0x04:
+                case 0x05:
+                case 0x06:
+                case 0x07:
+                case 0x08:
+                case 0x09:
+                case 0x0a:
+                case 0x0b:
+                case 0x0c:
+                case 0x15:
+                case 0x16:
+                case 0x17:
+                case 0x18:
+                case 0x19:
+                case 0x1a:
+                case 0x1b:
+                case 0x1c:
+                case 0x1d:
+                case 0x1e:
+                case 0x1f:
+                case 0x21:
+                case 0x23:
+                case 0x24:
+                case 0x25:
+                case 0x26:
+                case 0x27:
+                case 0x28:
+                case 0x29:
+                case 0x2c:
+                case 0x2d:
+                case 0x2e:
+                case 0x2f:
+                case 0x30:
+                case 0x31:
+                case 0x33:
+                case 0x34:
+                case 0x35:
+                case 0x37:
+                case 0x38:
+                case 0x39:
+                case 0x3b:
+                case 0x3c:
+                case 0x3d:
+                case 0x3f:
+                case 0x41:
+                    return TJS_E_MEMBERNOTFOUND;
+                default:
+                    throwUnknownType();
+                    return TJS_E_MEMBERNOTFOUND;
             }
             std::uint32_t count{};
             (void)value_.GetArrayCount(count);
@@ -149,8 +258,62 @@ namespace {
             if(membername != nullptr) {
                 return TJS_E_NOTIMPL;
             }
-            if(value_.GetTypeCategory() != 6) {
-                return TJS_E_NOTIMPL;
+            // sub_5975E0 @ 0x59760C likewise switches on the raw tag here.
+            switch(value_.GetNode()[0]) {
+                case 0x20:
+                    break;
+                case 0x01:
+                case 0x02:
+                case 0x03:
+                case 0x04:
+                case 0x05:
+                case 0x06:
+                case 0x07:
+                case 0x08:
+                case 0x09:
+                case 0x0a:
+                case 0x0b:
+                case 0x0c:
+                case 0x15:
+                case 0x16:
+                case 0x17:
+                case 0x18:
+                case 0x19:
+                case 0x1a:
+                case 0x1b:
+                case 0x1c:
+                case 0x1d:
+                case 0x1e:
+                case 0x1f:
+                case 0x21:
+                case 0x23:
+                case 0x24:
+                case 0x25:
+                case 0x26:
+                case 0x27:
+                case 0x28:
+                case 0x29:
+                case 0x2c:
+                case 0x2d:
+                case 0x2e:
+                case 0x2f:
+                case 0x30:
+                case 0x31:
+                case 0x33:
+                case 0x34:
+                case 0x35:
+                case 0x37:
+                case 0x38:
+                case 0x39:
+                case 0x3b:
+                case 0x3c:
+                case 0x3d:
+                case 0x3f:
+                case 0x41:
+                    return TJS_E_NOTIMPL;
+                default:
+                    throwUnknownType();
+                    return TJS_E_NOTIMPL;
             }
             std::uint32_t count{};
             (void)value_.GetArrayCount(count);
@@ -248,9 +411,78 @@ namespace {
             if(!valid_ || value_.GetOwner() == nullptr) {
                 return TJS_E_INVALIDOBJECT;
             }
-            const int category = value_.GetTypeCategory();
-            if(category != 6 && category != 7) {
-                return TJS_E_NOTIMPL;
+            // PSBValueDispatch_EnumMembers_guess @ 0x596F98 classifies the
+            // raw tag in this function.  category is initialized to null's
+            // category so the throw-helper-return boundary keeps value zero.
+            int category = 0;
+            switch(value_.GetNode()[0]) {
+                case 0x01:
+                case 0x23:
+                case 0x24:
+                case 0x25:
+                case 0x26:
+                case 0x3f:
+                    break;
+                case 0x02:
+                case 0x03:
+                case 0x27:
+                case 0x2f:
+                case 0x33:
+                case 0x37:
+                case 0x3b:
+                    category = 1;
+                    break;
+                case 0x04:
+                case 0x05:
+                case 0x06:
+                case 0x07:
+                case 0x08:
+                case 0x09:
+                case 0x0a:
+                case 0x0b:
+                case 0x0c:
+                case 0x28:
+                case 0x29:
+                case 0x30:
+                case 0x31:
+                case 0x34:
+                case 0x35:
+                case 0x38:
+                case 0x39:
+                case 0x3c:
+                case 0x3d:
+                    category = 2;
+                    break;
+                case 0x1d:
+                case 0x1e:
+                case 0x1f:
+                case 0x2e:
+                case 0x41:
+                    category = 3;
+                    break;
+                case 0x15:
+                case 0x16:
+                case 0x17:
+                case 0x18:
+                case 0x2c:
+                    category = 4;
+                    break;
+                case 0x19:
+                case 0x1a:
+                case 0x1b:
+                case 0x1c:
+                case 0x2d:
+                    category = 5;
+                    break;
+                case 0x20:
+                    category = 6;
+                    break;
+                case 0x21:
+                    category = 7;
+                    break;
+                default:
+                    throwUnknownType();
+                    break;
             }
 
             tTJSVariant name;
@@ -259,6 +491,13 @@ namespace {
             tTJSVariant callbackResult;
             tTJSVariant *params[3] = { &name, &memberFlags, &memberValue };
             const bool noValue = (flag & TJS_ENUM_NO_VALUE) != 0;
+
+            // 0x596FF0..0x59701C constructs all four variants before the
+            // non-container return; their reverse destruction is observable
+            // in the original object-lifetime chain.
+            if(category != 6 && category != 7) {
+                return TJS_E_NOTIMPL;
+            }
 
             if(category == 6) {
                 std::uint32_t rawCount{};

@@ -1486,6 +1486,23 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   `motionplayer-dll` **398/398**，Web Debug 最终链接成功。在线 AVD 的
   `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
 
+- 2026-07-19 fresh decompile/disasm dispatch 四入口
+  `EnumMembers@0x596F50`、`GetCount@0x5975E0`、`PropGetByNum@0x5976C4`、
+  `PropGet@0x597854`，确认它们同样各自在函数体读取 raw `node[0]` 并展开完整 tag
+  switch，而不是调用 `GetTypeCategory@0x599554`。对 `0x599554` 的全 code-xref 复核得到
+  唯一四个真实调用点：`Motion_ObjSource_width_getter@0x69D19C`、height getter
+  `0x69D27C`、clip getter `0x69D35C`、drawLayer `0x69D6D8`；dispatch/media 均不在其中。
+  本地四个 dispatch 入口现已恢复自己的 raw-tag 分派，array/dictionary 逻辑及已知 tag
+  返回码保持不变。另一个正常标量路径上的生命周期偏差也已纠正：Android Enum 在完成
+  tag 分类后先构造 name/memberFlags/memberValue/callbackResult 四只 Variant，随后才判断
+  category 6/7；non-container 因而仍经历四只 Variant 的逆序析构。本地旧 early-return
+  位于构造之前，现已移到四只 owner 建立之后。上述 xref 同时保留了 `0x599554` helper，
+  不能因插件内调用清零而删除；四个 ObjSource consumer 的 raw-node owner 形状继续作为
+  下一阶段独立审计项，不以一次负搜索判断其实现状态。Mac 目标对象的 undefined-symbol
+  表已确认 `main.cpp.o` 不再引用 `PSBRawNode::GetTypeCategory`；四目标构建成功，
+  `psbfile-dll` **484/484**、`motionplayer-dll` **398/398**，Web Debug 最终链接成功。
+  在线 AVD 的 `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
+
 ## 后续闭合条件
 
 要对“当前 Web 项目”给出 100% 结论，至少还需要：
