@@ -372,8 +372,20 @@ namespace PSB {
         if(this == &other) {
             return *this;
         }
-        PSBRawNode copy(other);
-        return *this = std::move(copy);
+        // sub_598D58 @ 0x598D58 exposes the raw-node copy order used by the
+        // Android holder: release the destination first, copy the owner,
+        // retain that owner, then copy the node pointer.  A retain-first
+        // copy-and-move implementation changes the aliasing boundary and also
+        // removes the AddRef/Release no-op visible in sub_59A4B0.
+        if(owner_ != nullptr) {
+            owner_->Release();
+        }
+        owner_ = other.owner_;
+        if(owner_ != nullptr) {
+            owner_->AddRef();
+        }
+        node_ = other.node_;
+        return *this;
     }
 
     PSBRawNode &PSBRawNode::operator=(PSBRawNode &&other) noexcept {

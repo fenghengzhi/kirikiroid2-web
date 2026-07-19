@@ -1402,6 +1402,18 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   octet/seed-filter oracle 全部 `status=ok`，filter 仍为 203,302 字节逐字节一致。上述
   Android oracle 证明正常资产的原版构造边界未变，但不替代无天然资产的损坏输入验证。
 
+- 2026-07-19 fresh decompile `sub_598D58@0x598D58`、
+  `PSBMedia::Resolve@0x59A4B0`，并以 `sub_598A64@0x598A64` 的独立 move ctor
+  交叉区分两类生命周期：try-get 命中及 Resolve 逐段替换实际走
+  Release-old→copy owner→AddRef→write node；strict getter 的返回临时量随后在末段状态
+  检查前析构，形成原版 copy assignment AddRef + temporary destructor Release 的 no-op，
+  不是 raw-node move 的清零分支。审计中最初的 move 假设已在修改前按指令流纠正；本地
+  copy assignment 与 Resolve 临时量作用域现已恢复上述顺序和 zero-ref 删除边界。Mac
+  四目标构建成功，`psbfile-dll` **484/484**、`motionplayer-dll` **398/398**，Web Debug
+  最终链接通过。本轮 Android oracle 未复跑：`.claude.local.md` 指定的
+  `emulator-5554` 已从 ADB 列表消失，runner 停在 `wait-for-device`，未产生可归因于实现
+  的失败结果；此前同资产的在线 AVD oracle 结果仍为 `status=ok`。
+
 ## 后续闭合条件
 
 要对“当前 Web 项目”给出 100% 结论，至少还需要：
