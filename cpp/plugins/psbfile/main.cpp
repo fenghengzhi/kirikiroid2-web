@@ -407,11 +407,11 @@ namespace {
 
         tjs_error EnumMembers(tjs_uint32 flag, tTJSVariantClosure *callback,
                               iTJSDispatch2 *) override {
-            // PSBValueDispatch_EnumMembers_guess @ 0x596F50.
+            // PSBValueDispatch_EnumMembers @ 0x596F50.
             if(!valid_ || value_.GetOwner() == nullptr) {
                 return TJS_E_INVALIDOBJECT;
             }
-            // PSBValueDispatch_EnumMembers_guess @ 0x596F98 classifies the
+            // PSBValueDispatch_EnumMembers @ 0x596F98 classifies the
             // raw tag in this function.  category is initialized to null's
             // category so the throw-helper-return boundary keeps value zero.
             int category = 0;

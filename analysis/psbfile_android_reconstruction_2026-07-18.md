@@ -148,9 +148,13 @@ oracle；测试通过只能证明现有覆盖未回归，不能把未覆盖边�
 
 ## 审计范围与权威来源
 
-权威来源是 Android `libkrkr2.so` 的 IDA 反编译。PSB 插件主体连续函数区间为
-`0x59641C..0x59AA84`，共枚举到 90 个函数；其中包含 `std::vector` 实例化和
-NCB 通用模板函数，不能全部按业务方法计数。
+权威来源是 Android `libkrkr2.so` 的 IDA 反编译。2026-07-19 后续边界复核将 PSB
+插件相关连续实现从原先截断的 `0x59641C..0x59AA84` 扩展到
+`0x59641C..0x59B708`，共枚举到 **108** 个函数。`0x59AA84` 是 typed NCB 注册尾链的
+起点而非终点；其后 19 个入口覆盖 native-instance holder、成员注册、root 属性 wrapper、
+load 方法 wrapper 和首参 Variant 转换。下一函数 `0x59B7E8` 是只有 PLT/data xref 的通用
+`std::vector<std::string>::_M_emplace_back_aux` 实例化，不属于该 NCB 调用链。完整分组
+manifest 见 [psbfile_function_coverage_2026-07-19.md](psbfile_function_coverage_2026-07-19.md)。
 
 模块注册点 `0x42CF28` 给出二进制字面名字：
 
@@ -1337,7 +1341,7 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   时会走指针宽度有符号算术；现已恢复原始通常算术转换。正常 `0x0D..0x10` table 不变。
 
 - `PropGetByNum@0x5976C4`（指令 `0x59777C..0x59778C`）、
-  `PSBValueDispatch_EnumMembers_guess@0x596F50` 与 media `GetListAt@0x5999F4`
+  `PSBValueDispatch_EnumMembers@0x596F50` 与 media `GetListAt@0x5999F4`
   交叉确认：数组 count 在 TJS numeric 访问和枚举调用面均折叠成 signed 32-bit，负索引
   加 count 也执行 32-bit ADD；dictionary count 的循环仍保持 unsigned。本地此前统一使用
   `uint32_t`/`int64_t`，规避了原版高位 count 和负索引溢出边界；现已按三个调用面分别
@@ -1385,7 +1389,7 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   `ezsave.pimg` octet/storage oracle 及 5,366,313 字节 motion PSB octet/seed-filter oracle
   也全部 `status=ok`，filter 的 203,302 字节逐字节一致。
 
-- 2026-07-19 对 PSB 主区 90 个函数重新枚举后，fresh decompile
+- 2026-07-19 对当时截断于 `0x59AA84` 的 PSB 主区 90 个函数重新枚举后，fresh decompile
   `0x59641C/0x59659C/0x597B1C/0x597AD4/0x5981F8/0x598A3C/0x598D58/
   0x598E44/0x598E64/0x599554/0x5995D8`，闭合 packed-name/dictionary 的函数边界、
   输出参数、复用 string/vector copy 生命周期，恢复 try-get 的 Release-old→copy→AddRef
@@ -1412,7 +1416,7 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   `0x59A694..0x59A704` 并非 copy assignment。后续逐指令复核在下方纠正该结论；本段旧有
   “strict 临时量形成 AddRef/Release no-op”的说法作废，不能继续作为实现依据。
 
-- 2026-07-19 重新从 IDA 枚举 `0x59641C..0x59AA84` 的全部 **90** 个函数，并 fresh
+- 2026-07-19 重新从 IDA 枚举当时定义为 `0x59641C..0x59AA84` 的 **90** 个函数，并 fresh
   decompile/disasm typed state/registrar `0x597E98..0x5980F4`、完整 dispatch 微型 vtable
   槽 `0x596D78..0x597AD4`、media ctor/dtor/ref/name `0x59849C/0x5997F0..0x5998A8`、
   char-index helper `0x59A284` 与 owner 主链 `0x598708/0x598960/0x598AAC`。逐槽确认
@@ -1422,7 +1426,8 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   zero-ref 并析构，`sub_5980F4@0x5981A0..0x5981EC` 在构造参数 load 抛异常时析构已经
   发布到 result 的 native holder、保持 result slot 不清零并原样重抛。Mac 四目标构建、
   `psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 与 Web Debug 最终链接全部
-  通过。`adb devices -l` 当前为空，本轮 Android oracle 未执行；这是外部验证缺口，不是
+  通过。该轮覆盖后来发现漏计 `0x59AA84..0x59B708` 的 NCB tail；后续 108-function
+  manifest 已补齐。`adb devices -l` 当前为空，本轮 Android oracle 未执行；这是外部验证缺口，不是
   实现失败，也不替代此前在线 AVD 的 `status=ok` 历史证据。
 
 - 2026-07-19 fresh decompile `sub_59673C@0x59673C`、
@@ -1524,18 +1529,30 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   **398/398** 与 Web Debug 最终链接全部通过。motionplayer fixture 实际进入 `tTVPBitmap`
   分配路径；在线 AVD 的 `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
 
-- 2026-07-19 对 PSBFile.dll 主体 `0x59641C..0x59AA84` 重新做区间全枚举，共 90 个
-  IDA function。逐一将入口地址与生产源码/本文地址证据反查后，未单列的入口均属于
+- 2026-07-19 对 PSBFile.dll 相关实现 `0x59641C..0x59B708` 重新做区间全枚举，共
+  **108** 个 IDA function。早先把 `0x59AA84` 当终点只覆盖 90 个入口的边界已纠正；新增
+  19 个 tail 入口全部属于 typed NCB 的 holder/析构/注册/属性/方法/参数转换包装，并由
+  本地 `NCB_REGISTER_CLASS(PSBFile) + Factory/Property/Method` 同一模板生成。逐一将入口地址与生产源码/本文地址证据反查后，未单列的入口均属于
   iTJSDispatch2 一指令 `TJS_E_NOTIMPL` 槽、析构/Release 包装、NCB typed-class state
   helper 或 `std::vector<std::string>::reserve` 实例化；没有发现遗漏的业务方法。随后 fresh
   decompile raw loader/owner `0x598268/0x598538/0x598708/0x598960/0x598AAC`、raw node
   `0x598B58/0x598C58/0x598D58/0x598E44/0x598E64/0x5992E8/0x599438/0x599554/
   0x5995D8/0x5996E4`、dispatch `0x59673C/0x596E24/0x596F50/0x5975E0/
   0x5976C4/0x597854`、media `0x5998C4..0x59A4B0` 及 typed registration
-  `0x597E98..0x5980F4/0x59AA84`，当前实现的分支、输出覆盖时机、AddRef/Release 顺序、
+  `0x597E98..0x5980F4/0x59AA84..0x59B708`，当前实现的分支、输出覆盖时机、AddRef/Release 顺序、
   invalid-object/member-miss 错误码与 callback 参数数均未发现新偏差。此次复核同时纠正了
   `.claude/agent-memory/ida-deep-analyzer/project_m9_source_subsystem.md` 中仍把 ObjSource
   写成 `tTJSVariant` facade、把 KRKR/raw pixel 标为 open 的过期结论。
+
+- 同轮 fresh decompile typed NCB tail `0x59AA84/0x59ABD8/0x59AC04/0x59AC0C/
+  0x59AC7C/0x59AD08/0x59AD84/0x59AEE4/0x59AEEC/0x59B268/0x59B28C/
+  0x59B378/0x59B460/0x59B484/0x59B48C/0x59B570/0x59B6DC/0x59B700/
+  0x59B708`，确认 native holder 的 0x18-byte `{vptr,PSBFile*,constructed}` 状态、
+  owner teardown、三种析构、Already registered/No Global Dispatch/Multiple constructors
+  异常边界、root getter/RO setter、load argc>=1 门控及首参 Variant 多次按值复制均由
+  ncbind 模板生成；本地注册声明产生同一层次，没有手写简化。另 fresh decompile
+  `EnumMembers@0x596F50` 完成接口名确认，IDB 已从
+  `PSBValueDispatch_EnumMembers_guess` 改为 `PSBValueDispatch_EnumMembers` 并保存。
 
 - 2026-07-19 fresh decompile `PSBMedia::Open@0x59993C`、
   `tTVPMemoryStream` block ctor `0x8F7C74` 与析构 `0x8F7D04`，闭合了 `psb:`
