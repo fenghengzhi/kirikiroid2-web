@@ -84,7 +84,7 @@ namespace PSB {
         if(!Resolve(name, value)) {
             return false;
         }
-        value.GetResource(data, size);
+        data = value.GetResource(size);
         return data != nullptr;
     }
 

@@ -59,7 +59,10 @@ namespace PSB {
             }
             std::uint64_t value{};
             std::memcpy(&value, data, width);
-            if(width < 8 && (data[width - 1] & 0x80u) != 0) {
+            // sub_59673C @ 0x59673C and sub_5992E8 @ 0x5992E8 leave
+            // the seven-byte tag 0x0b zero-extended; widths 1..6 retain
+            // their ordinary sign extension and width 8 is read verbatim.
+            if(width < 7 && (data[width - 1] & 0x80u) != 0) {
                 value |= ~std::uint64_t{} << (width * 8);
             }
             return static_cast<tjs_int64>(value);
@@ -233,14 +236,17 @@ namespace PSB {
                                               offsets[readNodeIndex(node)]);
     }
 
-    void PSBRawOwner::GetResource(const std::uint8_t *node,
-                                  const std::uint8_t *&data,
-                                  std::uint32_t &size) const {
+    const std::uint8_t *
+    PSBRawOwner::GetResource(const std::uint8_t *node,
+                             std::uint32_t &size) const {
+        if(header_->chunkData == nullptr) {
+            return nullptr;
+        }
         const PackedArray offsets(header_->chunkOffsets);
         const PackedArray lengths(header_->chunkLengths);
         const std::uint32_t index = readNodeIndex(node);
-        data = header_->chunkData + offsets[index];
         size = lengths[index];
+        return header_->chunkData + offsets[index];
     }
 
     bool PSBRawOwner::Refresh(bool validateOffsets) {
@@ -601,9 +607,10 @@ namespace PSB {
         return GetTypeCategory() == 4 ? owner_->GetString(node_) : nullptr;
     }
 
-    void PSBRawNode::GetResource(const std::uint8_t *&data,
-                                 std::uint32_t &size) const {
-        owner_->GetResource(node_, data, size);
+    const std::uint8_t *PSBRawNode::GetResource(std::uint32_t &size) const {
+        // PSB_getResourceData @ 0x5996E4 returns the borrowed pointer and uses
+        // size as its only output parameter.
+        return owner_->GetResource(node_, size);
     }
 
     tjs_int64 PSBRawNode::DecodeInteger(const std::uint8_t *node) {
@@ -686,7 +693,7 @@ namespace PSB {
             return false;
         }
 
-        const auto size = static_cast<std::size_t>(stream->GetSize());
+        const auto size = static_cast<std::uint32_t>(stream->GetSize());
         auto source = std::make_unique<std::uint8_t[]>(size);
         stream->ReadBuffer(source.get(), size);
 

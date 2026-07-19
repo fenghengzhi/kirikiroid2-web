@@ -442,7 +442,7 @@ namespace {
                 case 0x2d: {
                     const std::uint8_t *data{};
                     std::uint32_t size{};
-                    owner->GetResource(node, data, size);
+                    data = owner->GetResource(node, size);
                     *result = tTJSVariant(data, size);
                     return;
                 }

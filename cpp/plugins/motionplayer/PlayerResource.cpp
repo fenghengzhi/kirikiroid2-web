@@ -83,9 +83,9 @@ namespace motion {
                 textureNode.GetDictionaryValueStrict("type").GetString();
             const PSB::PSBRawNode pixelNode =
                 textureNode.GetDictionaryValueStrict("pixel");
-            const std::uint8_t *sourcePixels = nullptr;
             std::uint32_t sourceSize = 0;
-            pixelNode.GetResource(sourcePixels, sourceSize);
+            const std::uint8_t *sourcePixels =
+                pixelNode.GetResource(sourceSize);
 
             const size_t destinationSize =
                 static_cast<size_t>(4) * static_cast<size_t>(width) *
@@ -219,9 +219,8 @@ namespace motion {
                 std::strcmp(compressNode.GetString(), "RL") == 0;
             const PSB::PSBRawNode pixelNode =
                 iconNode.GetDictionaryValueStrict("pixel");
-            const std::uint8_t *pixelData = nullptr;
             std::uint32_t pixelSize = 0;
-            pixelNode.GetResource(pixelData, pixelSize);
+            const std::uint8_t *pixelData = pixelNode.GetResource(pixelSize);
 
             if(iconNode.ContainsDictionaryKey("pal")) {
                 auto *indexes = new std::uint8_t[pixelCount];
@@ -235,9 +234,9 @@ namespace motion {
 
                 const PSB::PSBRawNode paletteNode =
                     iconNode.GetDictionaryValueStrict("pal");
-                const std::uint8_t *paletteData = nullptr;
                 std::uint32_t paletteSize = 0;
-                paletteNode.GetResource(paletteData, paletteSize);
+                const std::uint8_t *paletteData =
+                    paletteNode.GetResource(paletteSize);
                 std::vector<tjs_uint32> palette(paletteSize / 4u);
                 TVPReverseRGB(
                     palette.data(),

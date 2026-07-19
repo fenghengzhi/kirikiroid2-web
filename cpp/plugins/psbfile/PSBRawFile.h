@@ -44,8 +44,8 @@ namespace PSB {
         [[nodiscard]] const std::uint8_t *GetData() const { return data_; }
         [[nodiscard]] std::size_t GetSize() const { return size_; }
         [[nodiscard]] const char *GetString(const std::uint8_t *node) const;
-        void GetResource(const std::uint8_t *node, const std::uint8_t *&data,
-                         std::uint32_t &size) const;
+        [[nodiscard]] const std::uint8_t *
+        GetResource(const std::uint8_t *node, std::uint32_t &size) const;
 
     private:
         friend class PSBFile;
@@ -103,7 +103,8 @@ namespace PSB {
         [[nodiscard]] tjs_int GetInt() const;
         [[nodiscard]] tjs_real GetDouble() const;
         [[nodiscard]] const char *GetString() const;
-        void GetResource(const std::uint8_t *&data, std::uint32_t &size) const;
+        [[nodiscard]] const std::uint8_t *
+        GetResource(std::uint32_t &size) const;
         [[nodiscard]] static tjs_int64 DecodeInteger(const std::uint8_t *node);
         [[nodiscard]] static tjs_real DecodeReal(const std::uint8_t *node);
 

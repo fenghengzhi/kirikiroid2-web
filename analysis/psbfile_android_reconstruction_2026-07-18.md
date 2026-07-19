@@ -1260,6 +1260,33 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   （6 cases），Web Debug 完整链接成功。上述结果证明本轮 oracle/协议分块和证据修正未引入
   已知回归，但不替代下述损坏输入边界缺口。
 
+- 2026-07-19 再次 fresh decompile `PSBFile::LoadStorage@0x598538` 发现第二次
+  `stream->GetSize()` 明确写入 32-bit `w22/v6`，随后该截断值贯穿 allocation、ReadBuffer、
+  MDF 输入长度和 `PSBFile::Adopt@0x598708`；第一次 `<9` 检查仍直接使用 64-bit 返回值。
+  本地此前把第二次结果保存为 `size_t`，会让超过 4 GiB 的 storage 边界偏离 Android。
+  现已恢复为 `std::uint32_t` 局部量，同时保留先做 64-bit 最小尺寸检查的调用顺序。
+
+- 2026-07-19 fresh decompile 并核对 ARM64 指令
+  `PSBValueDispatch` 惰性转换 `0x59673C`、node `GetDouble@0x5992E8` 与
+  `GetInt@0x599438`：整数 tag `0x05..0x0A` 分别执行 signed 8/16/24/32/40/48-bit
+  扩展，tag `0x0C` 原样读取 64-bit；但 tag `0x0B` 的 7 字节路径只拼接低 56 位，
+  **不**把 bit55 扩展到最高字节。`GetInt` 最终只消费低 32 位，因此同一 quirk 对其
+  结果无影响；惰性 TJS Integer 与 double 转换则会观察到差异。本地通用 reader 此前把
+  7 字节也按有符号数扩展，现已恢复 Android 的 7-byte zero-extension 边界。仓库没有
+  天然 tag `0x0B` 物料，按规则未构造 fixture。
+
+- 2026-07-19 fresh decompile `resource` helpers `0x596C70/0x5996E4`、惰性 octet
+  转换 `0x59673C`、media resource `0x59A0B4`，并复核 motion callers
+  `0x694E10/0x696CC8`。二进制接口返回 borrowed chunk pointer，只有 length 是 out 参数；
+  `chunkData == nullptr` 时立即返回 null 且不写 length。本地此前把 pointer 也改成引用输出，
+  并无条件做 pointer arithmetic。现已恢复 `const uint8_t *GetResource(uint32_t &size)`
+  接口、null early-return 与所有生产 caller 的直接返回值数据流。
+
+- 上述三项修正完成后，Mac Release 的 `psbfile-dll` **484/484**（6 cases）、
+  `motionplayer-dll` **398/398**（14 cases）全部通过；`motionplayer-dll`、`psbfile-dll`、
+  `mtndump`、`motionsim` 均构建成功，Web Debug 也完成最终 `index.html` 链接。现有验证
+  未发现回归；tag `0x0B` 和 >4 GiB storage 仍属于无天然物料的边界证据缺口。
+
 - 2026-07-19 修正静态插件 target 边界：将根插件、motionplayer、psdfile、layerExDraw、
   fstat 的 `PUBLIC target_sources` 收束为 `PRIVATE`。第一次只改可见性后，
   `motionplayer-dll` 的三个 `LoadModule("motionplayer.dll")` 检查失败，证明 registrar-only
