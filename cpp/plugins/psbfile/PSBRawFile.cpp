@@ -107,10 +107,10 @@ namespace PSB {
 
             // sub_59641C @ 0x59641C: walk the double-array trie and return the
             // encoded terminal name index.
-            [[nodiscard]] bool Find(const std::string &name,
+            [[nodiscard]] bool Find(const char *name,
                                     std::uint32_t &nameIndex) const {
                 const auto *cursor =
-                    reinterpret_cast<const std::uint8_t *>(name.c_str());
+                    reinterpret_cast<const std::uint8_t *>(name);
                 std::uint32_t parent = 0;
                 std::uint32_t state = charset[0] + *cursor;
                 if(state >= charset.count) {
@@ -136,7 +136,7 @@ namespace PSB {
 
             // sub_597B1C @ 0x597B1C: follow parent links, emit each byte, then
             // reverse the temporary byte vector.
-            [[nodiscard]] std::string Decode(std::uint32_t nameIndex) const {
+            void Decode(std::uint32_t nameIndex, std::string &name) const {
                 std::vector<char> bytes;
                 std::uint32_t node = namesData[nameIndexes[nameIndex]];
                 while(node != 0) {
@@ -145,9 +145,45 @@ namespace PSB {
                     node = parent;
                 }
                 std::reverse(bytes.begin(), bytes.end());
-                return { bytes.begin(), bytes.end() };
+                name.assign(bytes.begin(), bytes.end());
             }
         };
+
+        // sub_59659C @ 0x59659C is a separate packed-dictionary search
+        // helper.  Its output is a 32-bit byte offset relative to dictionary,
+        // not a ready-made pointer.
+        bool findDictionaryValueOffset(const std::uint8_t *dictionary,
+                                       std::uint32_t nameIndex,
+                                       std::uint32_t &valueOffset) {
+            const PackedArray keys(dictionary);
+            std::uint32_t lower = 0;
+            std::uint32_t upper = keys.count;
+            if(upper == 0) {
+                return false;
+            }
+            std::uint32_t middle{};
+            for(;;) {
+                middle = (upper + lower) / 2;
+                const std::uint32_t candidate = keys[middle];
+                if(candidate == nameIndex) {
+                    break;
+                }
+                if(candidate >= nameIndex) {
+                    upper = middle;
+                } else {
+                    lower = middle + 1;
+                }
+                if(lower >= upper) {
+                    return false;
+                }
+            }
+
+            const PackedArray offsets(keys.end);
+            valueOffset =
+                static_cast<std::uint32_t>(offsets.end - dictionary) +
+                offsets[middle];
+            return true;
+        }
 
         std::uint32_t readNodeIndex(const std::uint8_t *node) {
             switch(node[0]) {
@@ -329,7 +365,10 @@ namespace PSB {
     }
 
     std::uint8_t PSBRawNode::GetType() const {
-        return node_ != nullptr ? node_[0] : 0;
+        // sub_599554 @ 0x599554 and sub_5995D8 @ 0x5995D8 dereference the
+        // node directly.  sub_598E44 is the separate explicit validity check;
+        // type access itself does not normalize a null node to tag zero.
+        return node_[0];
     }
 
     bool PSBRawNode::GetArrayCount(std::uint32_t &count) const {
@@ -365,7 +404,18 @@ namespace PSB {
         if(node == nullptr) {
             return false;
         }
-        value = PSBRawNode(owner_, node);
+        // sub_598D58 @ 0x598D58 releases the destination before retaining the
+        // source owner.  Do not normalize this into a retain-first temporary:
+        // the ordering (including an aliasing destination boundary) is part
+        // of the original intrusive lifecycle.
+        if(value.owner_ != nullptr) {
+            value.owner_->Release();
+        }
+        value.owner_ = owner_;
+        if(value.owner_ != nullptr) {
+            value.owner_->AddRef();
+        }
+        value.node_ = node;
         return true;
     }
 
@@ -384,47 +434,85 @@ namespace PSB {
 
     bool PSBRawNode::ContainsDictionaryKey(const std::string &key) const {
         // sub_5995D8 @ 0x5995D8 returns false for every known non-dictionary
-        // type, delegates dictionaries to sub_598D58 and throws on an unknown
-        // raw tag.
-        return GetTypeCategory() == 7 && FindDictionaryValue(key) != nullptr;
+        // type, delegates dictionaries to sub_598D58 through a temporary raw
+        // node, then destroys that temporary.  The AddRef/Release no-op is an
+        // original lifecycle step rather than an optimization opportunity.
+        switch(GetType()) {
+            case 0x01:
+            case 0x02:
+            case 0x03:
+            case 0x04:
+            case 0x05:
+            case 0x06:
+            case 0x07:
+            case 0x08:
+            case 0x09:
+            case 0x0a:
+            case 0x0b:
+            case 0x0c:
+            case 0x15:
+            case 0x16:
+            case 0x17:
+            case 0x18:
+            case 0x19:
+            case 0x1a:
+            case 0x1b:
+            case 0x1c:
+            case 0x1d:
+            case 0x1e:
+            case 0x1f:
+            case 0x20:
+            case 0x23:
+            case 0x24:
+            case 0x25:
+            case 0x26:
+            case 0x27:
+            case 0x28:
+            case 0x29:
+            case 0x2c:
+            case 0x2d:
+            case 0x2e:
+            case 0x2f:
+            case 0x30:
+            case 0x31:
+            case 0x33:
+            case 0x34:
+            case 0x35:
+            case 0x37:
+            case 0x38:
+            case 0x39:
+            case 0x3b:
+            case 0x3c:
+            case 0x3d:
+            case 0x3f:
+            case 0x41:
+                return false;
+            case 0x21: {
+                PSBRawNode value;
+                return GetDictionaryValue(key, value);
+            }
+            default:
+                throwUnknownType();
+        }
+        return false;
     }
 
     const std::uint8_t *
     PSBRawNode::FindDictionaryValue(const std::string &key) const {
         std::uint32_t nameIndex{};
         const NameTables names(owner_->GetHeader()->names);
-        if(!names.Find(key, nameIndex)) {
+        if(!names.Find(key.c_str(), nameIndex)) {
             return nullptr;
         }
 
         // sub_59659C @ 0x59659C stops at the first midpoint that equals the
         // requested name index.  It does not continue toward the first equal
         // entry as std::lower_bound would do.
-        const PackedArray keys(node_ + 1);
-        std::uint32_t lower = 0;
-        std::uint32_t upper = keys.count;
-        if(upper == 0) {
+        std::uint32_t valueOffset{};
+        if(!findDictionaryValueOffset(node_ + 1, nameIndex, valueOffset)) {
             return nullptr;
         }
-        std::uint32_t middle{};
-        for(;;) {
-            middle = (upper + lower) / 2;
-            const std::uint32_t candidate = keys[middle];
-            if(candidate == nameIndex) {
-                break;
-            }
-            if(candidate >= nameIndex) {
-                upper = middle;
-            } else {
-                lower = middle + 1;
-            }
-            if(lower >= upper) {
-                return nullptr;
-            }
-        }
-
-        const PackedArray offsets(keys.end);
-        return offsets.end + offsets[middle];
+        return node_ + 1 + valueOffset;
     }
 
     bool PSBRawNode::GetDictionaryCount(std::uint32_t &count) const {
@@ -446,7 +534,7 @@ namespace PSB {
             return false;
         }
         const NameTables names(owner_->GetHeader()->names);
-        key = names.Decode(keys[index]);
+        names.Decode(keys[index], key);
         return true;
     }
 
@@ -461,7 +549,7 @@ namespace PSB {
         }
         const NameTables names(owner_->GetHeader()->names);
         const PackedArray offsets(keys.end);
-        key = names.Decode(keys[index]);
+        names.Decode(keys[index], key);
         value = offsets.end + offsets[index];
         return true;
     }
@@ -469,17 +557,68 @@ namespace PSB {
     std::vector<std::string> PSBRawNode::GetDictionaryKeys() const {
         // sub_598E64 @ 0x598E64.
         std::vector<std::string> result;
-        const int category = GetTypeCategory();
-        if(category != 7) {
-            return result;
+        std::string key;
+        switch(GetType()) {
+            case 0x01:
+            case 0x02:
+            case 0x03:
+            case 0x04:
+            case 0x05:
+            case 0x06:
+            case 0x07:
+            case 0x08:
+            case 0x09:
+            case 0x0a:
+            case 0x0b:
+            case 0x0c:
+            case 0x15:
+            case 0x16:
+            case 0x17:
+            case 0x18:
+            case 0x19:
+            case 0x1a:
+            case 0x1b:
+            case 0x1c:
+            case 0x1d:
+            case 0x1e:
+            case 0x1f:
+            case 0x20:
+            case 0x23:
+            case 0x24:
+            case 0x25:
+            case 0x26:
+            case 0x27:
+            case 0x28:
+            case 0x29:
+            case 0x2c:
+            case 0x2d:
+            case 0x2e:
+            case 0x2f:
+            case 0x30:
+            case 0x31:
+            case 0x33:
+            case 0x34:
+            case 0x35:
+            case 0x37:
+            case 0x38:
+            case 0x39:
+            case 0x3b:
+            case 0x3c:
+            case 0x3d:
+            case 0x3f:
+            case 0x41:
+                return result;
+            case 0x21:
+                break;
+            default:
+                throwUnknownType();
         }
-        std::uint32_t count{};
-        (void)GetDictionaryCount(count);
-        result.reserve(count);
-        for(std::uint32_t index = 0; index < count; ++index) {
-            std::string key;
-            (void)GetDictionaryKey(index, key);
-            result.emplace_back(std::move(key));
+        const PackedArray keys(node_ + 1);
+        const NameTables names(owner_->GetHeader()->names);
+        result.reserve(keys.count);
+        for(std::size_t index = 0; index < keys.count; ++index) {
+            names.Decode(keys[static_cast<std::uint32_t>(index)], key);
+            result.emplace_back(key);
         }
         return result;
     }
@@ -781,9 +920,8 @@ namespace PSB {
     }
 
     PSBRawNode PSBFile::GetRoot() const {
-        if(owner_ == nullptr) {
-            return {};
-        }
+        // sub_598A3C @ 0x598A3C dereferences owner/header without a null
+        // guard.  Only the typed root getter sub_5981F8 guards an empty file.
         return { owner_, owner_->GetHeader()->entries };
     }
 } // namespace PSB

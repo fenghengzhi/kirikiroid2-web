@@ -313,6 +313,29 @@ value stride 保留 `tag - 0x0C` 的有符号结果，不能被通用安全读�
 ResourceManager HashMap A 使用 `std::unordered_map<ttstr, PSBFile,
 ttstr_hash, ttstr_equal>`，对应 ctor `0x6A88CC` 的 libstdc++ bucket/node-chain 拓扑；
 layer id 使用 `std::set<tjs_int>`，没有用 Web 自造容器替代。
+`sub_597B1C@0x597B1C` 的 name decode 直接写调用者提供的 `std::string&`；
+`sub_598E64@0x598E64` 在整个 dictionary 枚举期间只复用一只 string，并把它逐次复制进
+预留容量的 vector。本地旧实现的按值返回、逐轮新建 string 和 move-emplace 已纠正，
+保留原版 COW string copy/refcount 与临时对象生命周期。
+trie 查找 `sub_59641C@0x59641C` 只接收裸 UTF-8 指针；packed dictionary 二分
+`sub_59659C@0x59659C` 是独立 helper，并通过 out 参数返回相对 `node+1` 的 32-bit
+value offset。本地旧实现曾让前者持有 `std::string&`、把后者内联成直接指针结果；现已
+恢复 `trie → packed offset → node+1+offset` 的函数边界和数据流。
+`sub_598D58@0x598D58` 的 try-get 在 hit 时按 Release-old→copy owner→AddRef→write node
+顺序更新 out 参数，miss 保持 out 不变；`sub_5995D8@0x5995D8` 的 contains 对 dictionary
+创建临时 raw node 并调用 try-get，返回前保留一对 AddRef/Release no-op。本地旧实现曾以
+retain-first 临时 move 改变 alias 边界，并把 contains 简化成裸指针查找；现已纠正。
+typed root getter `sub_5981F8@0x5981F8` 在 holder 为空时返回 null；raw root helper
+`sub_598A3C@0x598A3C` 则无 guard，直接解引用 owner/header 后复制两指针 node；typed
+getter 也不调用该 helper，而是在 guard 后直接构造 dispatch 内的 owner/node。本地旧实现
+曾把 guard 下沉到 raw helper并让 typed getter绕经它，掩盖直接调用空 holder 的崩溃边界、
+增加额外调用层；现已恢复两层职责。
+dispatch ctor `sub_597AD4@0x597AD4` 直接接收 source owner/node，复制字段并在 ctor 内
+AddRef owner；不是先构造 retained `PSBRawNode` 值再 move 进成员。本地 constructor 已改为
+两裸字段输入，typed root getter 与通用 factory 均由该 ctor 自身建立 dispatch owner 引用。
+raw node validity `sub_598E44@0x598E44` 独立检查 `owner && node`；类型消费者
+`sub_599554@0x599554`、`sub_5995D8@0x5995D8` 直接读取 `node[0]`。本地 `GetType()` 旧有的
+null→tag0 安全归一化已删除，未先做显式 validity 检查的调用保留原始空指针边界。
 
 ### 6. 边界行为
 
@@ -1357,6 +1380,15 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   `motionplayer-dll` **398/398**、Web Debug 最终链接全部通过；在线 Android AVD 的既有
   `ezsave.pimg` octet/storage oracle 及 5,366,313 字节 motion PSB octet/seed-filter oracle
   也全部 `status=ok`，filter 的 203,302 字节逐字节一致。
+
+- 2026-07-19 对 PSB 主区 90 个函数重新枚举后，fresh decompile
+  `0x59641C/0x59659C/0x597B1C/0x597AD4/0x5981F8/0x598A3C/0x598D58/
+  0x598E44/0x598E64/0x599554/0x5995D8`，闭合 packed-name/dictionary 的函数边界、
+  输出参数、复用 string/vector copy 生命周期，恢复 try-get 的 Release-old→copy→AddRef
+  顺序与 contains 临时 node 的引用计数 no-op，并纠正 typed/raw root guard、dispatch ctor
+  自持有 AddRef 及空 raw node 直接解引用边界。Mac 四目标构建成功，`psbfile-dll`
+  **484/484**、`motionplayer-dll` **398/398**，Web Debug 最终链接通过；在线 Android AVD
+  的既有 PIMG octet/storage 与 motion octet/seed-filter oracle 全部 `status=ok`。
 
 ## 后续闭合条件
 

@@ -27,8 +27,11 @@ namespace {
     class PSBValueDispatch final : public iTJSDispatch2,
                                    public iTJSNativeInstance {
     public:
-        explicit PSBValueDispatch(PSBRawNode value) :
-            value_(std::move(value)) {}
+        PSBValueDispatch(PSB::PSBRawOwner *owner,
+                         const std::uint8_t *node) :
+            // sub_597AD4 @ 0x597AD4 copies the two source fields and performs
+            // the owner's AddRef inside the dispatch constructor.
+            value_(owner, node) {}
 
         tjs_uint AddRef() override {
             // sub_597AC0 @ 0x597AC0.
@@ -455,8 +458,7 @@ namespace {
                     return;
                 case 0x20:
                 case 0x21: {
-                    auto *dispatch =
-                        new PSBValueDispatch(PSBRawNode(owner, node));
+                    auto *dispatch = new PSBValueDispatch(owner, node);
                     *result = tTJSVariant(dispatch, dispatch);
                     dispatch->Release();
                     return;
@@ -509,7 +511,7 @@ namespace PSB {
 
     iTJSDispatch2 *CreatePSBValueDispatch(PSBRawNode value) {
         return value.GetOwner() != nullptr
-            ? new PSBValueDispatch(std::move(value))
+            ? new PSBValueDispatch(value.GetOwner(), value.GetNode())
             : nullptr;
     }
 
@@ -524,10 +526,16 @@ namespace PSB {
     }
 
     iTJSDispatch2 *PSBFile::GetRootDispatch() const {
-        // sub_5981F8 @ 0x5981F8 is the typed root getter.  Returning the fresh
-        // reference lets ncbind's dispatch convertor create the variant and
-        // release that initial reference.
-        return CreatePSBValueDispatch(GetRoot());
+        // sub_5981F8 @ 0x5981F8 checks the one-pointer holder before reading
+        // the raw root, then constructs the dispatch directly.  It does not
+        // call the lower-level unguarded sub_598A3C helper.
+        PSBRawOwner *owner = GetOwner();
+        if(owner == nullptr) {
+            return nullptr;
+        }
+        // Returning the fresh reference lets ncbind's dispatch convertor
+        // create the variant and release that initial reference.
+        return new PSBValueDispatch(owner, owner->GetHeader()->entries);
     }
 } // namespace PSB
 
