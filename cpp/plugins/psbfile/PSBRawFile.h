@@ -15,17 +15,17 @@ namespace PSB {
     // Pointer-sized fields intentionally use the host ABI; ARM64 byte offsets
     // belong to the binary, not to the original portable C++ source.
     struct PSBRawHeader {
-        std::uint32_t signature{};
-        std::uint16_t version{};
-        std::uint16_t encrypt{};
-        std::uint8_t *encryptData{};
-        std::uint8_t *names{};
-        std::uint8_t *strings{};
-        std::uint8_t *stringsData{};
-        std::uint8_t *chunkOffsets{};
-        std::uint8_t *chunkLengths{};
-        std::uint8_t *chunkData{};
-        std::uint8_t *entries{};
+        std::uint32_t signature;
+        std::uint16_t version;
+        std::uint16_t encrypt;
+        std::uint8_t *encryptData;
+        std::uint8_t *names;
+        std::uint8_t *strings;
+        std::uint8_t *stringsData;
+        std::uint8_t *chunkOffsets;
+        std::uint8_t *chunkLengths;
+        std::uint8_t *chunkData;
+        std::uint8_t *entries;
     };
 
     // Intrusively referenced owner reconstructed from sub_598708 @ 0x598708.
@@ -54,8 +54,8 @@ namespace PSB {
         ~PSBRawOwner();
 
         std::uint32_t refCount_{};
-        PSBRawHeader *header_{};
-        PSBRawHeader headerStorage_{};
+        PSBRawHeader *header_;
+        PSBRawHeader headerStorage_;
         std::uint8_t *data_{};
         std::size_t size_{};
     };

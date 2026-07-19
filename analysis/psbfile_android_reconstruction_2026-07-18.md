@@ -1390,6 +1390,18 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   **484/484**、`motionplayer-dll` **398/398**，Web Debug 最终链接通过；在线 Android AVD
   的既有 PIMG octet/storage 与 motion octet/seed-filter oracle 全部 `status=ok`。
 
+- 2026-07-19 继续逐函数覆盖审计，fresh decompile/disasm
+  `sub_598AAC@0x598AAC`、`sub_598960@0x598960`、`sub_598B58@0x598B58`、
+  `sub_599554@0x599554`，纠正两处仍属“行为近似但源码调用链不一致”的实现：raw owner
+  ctor 现在自行按原顺序建立 inline header view，不再伪调用后续 refresh helper；当输入
+  指针为空时，header view 与二进制一样保持未初始化。raw string getter 也恢复自己的完整
+  tag switch，不再绕经独立的 type-category helper；五个 string tag 返回 owner 内借用
+  指针、全部已知非 string tag 返回空、未知 tag 抛精确异常。Mac 四目标构建成功，
+  `psbfile-dll` **484/484**、`motionplayer-dll` **398/398**，Web Debug 最终
+  `index.html` 链接通过；在线 Android AVD 的 `ezsave.pimg` octet/storage 与 motion
+  octet/seed-filter oracle 全部 `status=ok`，filter 仍为 203,302 字节逐字节一致。上述
+  Android oracle 证明正常资产的原版构造边界未变，但不替代无天然资产的损坏输入验证。
+
 ## 后续闭合条件
 
 要对“当前 Web 项目”给出 100% 结论，至少还需要：

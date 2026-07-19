@@ -240,9 +240,35 @@ namespace PSB {
 
     PSBRawOwner::PSBRawOwner(std::uint8_t *data, std::size_t size) :
         data_(data), size_(size) {
-        // sub_598AAC leaves the reference count at zero.  Create() performs the
-        // explicit first retain observed in sub_598708.
-        (void)Refresh(false);
+        // sub_598AAC @ 0x598AAC leaves the reference count at zero and builds
+        // the inline header view in the constructor itself.  In particular,
+        // it does not call the later refresh helper and leaves the header
+        // fields untouched when data is null.
+        if(data_ != nullptr) {
+            header_ = &headerStorage_;
+            headerStorage_.signature =
+                readUnaligned<std::uint32_t>(data_);
+            headerStorage_.version =
+                readUnaligned<std::uint16_t>(data_ + 4);
+            headerStorage_.encrypt =
+                readUnaligned<std::uint16_t>(data_ + 6);
+            headerStorage_.encryptData =
+                data_ + readUnaligned<std::uint32_t>(data_ + 8);
+            headerStorage_.names =
+                data_ + readUnaligned<std::uint32_t>(data_ + 12);
+            headerStorage_.strings =
+                data_ + readUnaligned<std::uint32_t>(data_ + 16);
+            headerStorage_.stringsData =
+                data_ + readUnaligned<std::uint32_t>(data_ + 20);
+            headerStorage_.chunkOffsets =
+                data_ + readUnaligned<std::uint32_t>(data_ + 24);
+            headerStorage_.chunkLengths =
+                data_ + readUnaligned<std::uint32_t>(data_ + 28);
+            headerStorage_.chunkData =
+                data_ + readUnaligned<std::uint32_t>(data_ + 32);
+            headerStorage_.entries =
+                data_ + readUnaligned<std::uint32_t>(data_ + 36);
+        }
     }
 
     PSBRawOwner::~PSBRawOwner() { delete[] data_; }
@@ -748,10 +774,65 @@ namespace PSB {
     }
 
     const char *PSBRawNode::GetString() const {
-        // sub_598B58 @ 0x598B58 returns a borrowed pointer only for the five
-        // string tags, nullptr for every other known type and throws for an
-        // unknown raw tag.
-        return GetTypeCategory() == 4 ? owner_->GetString(node_) : nullptr;
+        // sub_598B58 @ 0x598B58 owns this tag switch; it does not route through
+        // the separate category helper sub_599554.  The returned pointer is a
+        // borrowed view into the owner's string-data section.
+        switch(GetType()) {
+            case 0x15:
+            case 0x16:
+            case 0x17:
+            case 0x18:
+            case 0x2c:
+                return owner_->GetString(node_);
+            case 0x01:
+            case 0x02:
+            case 0x03:
+            case 0x04:
+            case 0x05:
+            case 0x06:
+            case 0x07:
+            case 0x08:
+            case 0x09:
+            case 0x0a:
+            case 0x0b:
+            case 0x0c:
+            case 0x19:
+            case 0x1a:
+            case 0x1b:
+            case 0x1c:
+            case 0x1d:
+            case 0x1e:
+            case 0x1f:
+            case 0x20:
+            case 0x21:
+            case 0x23:
+            case 0x24:
+            case 0x25:
+            case 0x26:
+            case 0x27:
+            case 0x28:
+            case 0x29:
+            case 0x2d:
+            case 0x2e:
+            case 0x2f:
+            case 0x30:
+            case 0x31:
+            case 0x33:
+            case 0x34:
+            case 0x35:
+            case 0x37:
+            case 0x38:
+            case 0x39:
+            case 0x3b:
+            case 0x3c:
+            case 0x3d:
+            case 0x3f:
+            case 0x41:
+                return nullptr;
+            default:
+                throwUnknownType();
+        }
+        return nullptr;
     }
 
     const std::uint8_t *PSBRawNode::GetResource(std::uint32_t &size) const {
