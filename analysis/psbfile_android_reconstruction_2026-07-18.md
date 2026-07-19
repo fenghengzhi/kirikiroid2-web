@@ -171,9 +171,9 @@ NCB 通用模板函数，不能全部按业务方法计数。
 | 成员枚举 | `0x596F50` | array 使用十进制下标名，dictionary 使用 packed 顺序；`TJS_ENUM_NO_VALUE` 控制回调参数个数 |
 | count/index/property | `0x5975E0`, `0x5976C4`, `0x597854` | array count、负下标、dictionary 属性、`TJS_MEMBERMUSTEXIST` 边界 |
 | name decode | `0x5975C0`, `0x597B1C` | 先经 `namesData[nameIndexes[index]]` 找 terminal，再沿 parent 回溯并 reverse |
-| NCB 注册 | `0x597E98..0x5980F4`, `0x59AA84` | typed class state、factory、`root` property、`load` method；本地由 ncbind 模板承接通用注册机制 |
+| NCB 注册 | `0x597E98..0x5980F4`, `0x59AA84` | typed class state、factory、`root` property、`load` method；本地由 ncbind 模板承接通用注册机制；factory 在 load 抛异常时析构已写入 result 的 native holder、保留悬挂 result slot 后原样重抛 |
 | root/load | `0x5981F8`, `0x598268`, `0x598538` | root 每次返回新 dispatch；string/octet 分流；小写 `mdf` 解压及失败 fallback；原始错误文本 |
-| owner | `0x598708`, `0x598960`, `0x598A64`, `0x598AAC`, `0x598B3C` | 一个 owner 独占一个 raw allocation；intrusive ref；替换时释放旧 owner；move 保留零引用删除分支；filter 后刷新 header view |
+| owner | `0x598708`, `0x598960`, `0x598A64`, `0x598AAC`, `0x598B3C` | 一个 owner 独占一个 raw allocation；intrusive ref；替换时释放旧 owner；Adopt 赋值后与 move 均保留零引用删除分支；filter 后刷新 header view |
 | node helper | `0x598A3C..0x5996E4` | move、字符串、strict/try lookup、bool、keys、int/double、category、contains、resource |
 | media 生命周期 | `0x59849C`, `0x5997F0..0x5998A8` | function-local static 指针由 `__cxa_guard` 构造一次；process-lifetime singleton、初始 ref=1、名字 `psb`、不注销 |
 | media 访问 | `0x5998BC..0x59A4B0` | normalize no-op、exists/open/list/local-name、按首段缓存一个 PSBFile TJS object、contains→strict 逐段遍历 |
@@ -1413,6 +1413,19 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   最终链接通过。本轮 Android oracle 未复跑：`.claude.local.md` 指定的
   `emulator-5554` 已从 ADB 列表消失，runner 停在 `wait-for-device`，未产生可归因于实现
   的失败结果；此前同资产的在线 AVD oracle 结果仍为 `status=ok`。
+
+- 2026-07-19 重新从 IDA 枚举 `0x59641C..0x59AA84` 的全部 **90** 个函数，并 fresh
+  decompile/disasm typed state/registrar `0x597E98..0x5980F4`、完整 dispatch 微型 vtable
+  槽 `0x596D78..0x597AD4`、media ctor/dtor/ref/name `0x59849C/0x5997F0..0x5998A8`、
+  char-index helper `0x59A284` 与 owner 主链 `0x598708/0x598960/0x598AAC`。逐槽确认
+  `TJS_E_NOTIMPL`、valid/invalidate、native Construct、media 非原子引用计数、字段逆序
+  析构及 Factory→root→load 注册顺序均与本地一致；同时补回两处此前被正常路径掩盖的
+  生命周期边界：`sub_598708@0x598828..0x598840` 在 Adopt 替换后仍检查新 owner 的
+  zero-ref 并析构，`sub_5980F4@0x5981A0..0x5981EC` 在构造参数 load 抛异常时析构已经
+  发布到 result 的 native holder、保持 result slot 不清零并原样重抛。Mac 四目标构建、
+  `psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 与 Web Debug 最终链接全部
+  通过。`adb devices -l` 当前为空，本轮 Android oracle 未执行；这是外部验证缺口，不是
+  实现失败，也不替代此前在线 AVD 的 `status=ok` 历史证据。
 
 ## 后续闭合条件
 

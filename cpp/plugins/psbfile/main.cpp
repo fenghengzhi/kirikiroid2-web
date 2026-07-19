@@ -573,8 +573,15 @@ static tjs_error PSBFileFactory(PSBFile **result, tjs_int count,
     // when present, forward only the first constructor argument to load().
     auto *file = new PSBFile();
     *result = file;
-    if(count >= 1) {
-        (void)file->Load(*params[0]);
+    try {
+        if(count >= 1) {
+            (void)file->Load(*params[0]);
+        }
+    } catch(...) {
+        // sub_5980F4 @ 0x5981A0..0x5981EC destroys the already-published
+        // native holder and rethrows without clearing the result slot.
+        delete file;
+        throw;
     }
     return TJS_S_OK;
 }

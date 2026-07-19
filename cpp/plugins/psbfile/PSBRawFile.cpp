@@ -1004,6 +1004,13 @@ namespace PSB {
             owner_->Release();
         }
         owner_ = next;
+        // sub_598708 @ 0x598828..0x598840 preserves the moved holder's
+        // zero-reference deletion branch immediately after replacing the
+        // destination.  Create() normally sets this count to one, but the
+        // branch is still part of the Android object-lifetime boundary.
+        if(next->refCount_ == 0) {
+            delete next;
+        }
 
         if(filter) {
             filter(*owner_);
