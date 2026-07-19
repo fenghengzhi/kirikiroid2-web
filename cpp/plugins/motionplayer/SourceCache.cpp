@@ -15,6 +15,7 @@
 #include "ScriptMgnIntf.h"
 #include "StorageIntf.h"
 #include "ncbind.hpp"
+#include "tjsUtils.h"
 
 namespace {
 
@@ -327,142 +328,155 @@ namespace motion {
     ObjSource::~ObjSource() {
         if(_texture) {
             _texture->Release();
-            _texture = nullptr;
         }
     }
 
     tTJSVariant ObjSource::getClip() const {
-        // ObjSource_getClip @0x69D35C: read the backing dict's `clip` object,
-        // then construct a fresh object containing exactly these four fields.
-        tTJSVariant clip;
-        if(!getObjectProperty(_sourceDict, TJS_W("clip"), clip) ||
-           clip.Type() != tvtObject || !clip.AsObjectNoAddRef()) {
+        // ObjSource_getClip @0x69D35C: category-gate and try-get only `clip`;
+        // once present, all four child reads are strict raw-node operations.
+        PSB::PSBRawNode clip;
+        if(_source.GetTypeCategory() != 7 ||
+           !_source.GetDictionaryValue("clip", clip)) {
             return {};
         }
+        iTJSDispatch2 *dictionary = TJSCreateDictionaryObject();
+        tTJSVariant result(dictionary, dictionary);
+        dictionary->Release();
 
-        const auto readClipNumber = [&clip](const tjs_char *name) -> double {
-            tTJSVariant value;
-            if(!getObjectProperty(clip, name, value) ||
-               value.Type() == tvtVoid) {
-                return 0.0;
-            }
-            return static_cast<double>(value);
-        };
-        return detail::makeDictionary({
-            { "left", tTJSVariant(readClipNumber(TJS_W("left"))) },
-            { "top", tTJSVariant(readClipNumber(TJS_W("top"))) },
-            { "right", tTJSVariant(readClipNumber(TJS_W("right"))) },
-            { "bottom", tTJSVariant(readClipNumber(TJS_W("bottom"))) },
-        });
+        tTJSVariant value(
+            clip.GetDictionaryValueStrict("left").GetDouble());
+        dictionary->PropSet(TJS_MEMBERENSURE, TJS_W("left"), nullptr, &value,
+                            dictionary);
+        value = clip.GetDictionaryValueStrict("top").GetDouble();
+        dictionary->PropSet(TJS_MEMBERENSURE, TJS_W("top"), nullptr, &value,
+                            dictionary);
+        value = clip.GetDictionaryValueStrict("right").GetDouble();
+        dictionary->PropSet(TJS_MEMBERENSURE, TJS_W("right"), nullptr, &value,
+                            dictionary);
+        value = clip.GetDictionaryValueStrict("bottom").GetDouble();
+        dictionary->PropSet(TJS_MEMBERENSURE, TJS_W("bottom"), nullptr,
+                            &value, dictionary);
+        return result;
     }
 
     void ObjSource::ensureTextureLike_0x6DA454() {
         // ObjSource_ensureTexture @0x6DA454 returns immediately once qword[2]
-        // owns a texture. The backing source must be the raw icon dictionary.
-        if(_texture || _sourceDict.Type() != tvtObject ||
-           !_sourceDict.AsObjectNoAddRef()) {
+        // owns a texture. Every following read is a strict raw-node read.
+        if(_texture) {
             return;
         }
 
-        tTJSVariant widthValue;
-        tTJSVariant heightValue;
-        tTJSVariant pixelValue;
-        if(!getObjectProperty(_sourceDict, TJS_W("width"), widthValue) ||
-           !getObjectProperty(_sourceDict, TJS_W("height"), heightValue) ||
-           !getObjectProperty(_sourceDict, TJS_W("pixel"), pixelValue) ||
-           pixelValue.Type() != tvtOctet ||
-           !pixelValue.AsOctetNoAddRef()) {
-            return;
-        }
+        const tjs_uint width = static_cast<tjs_uint>(
+            _source.GetDictionaryValueStrict("width").GetInt());
+        const tjs_int height =
+            _source.GetDictionaryValueStrict("height").GetInt();
+        const tjs_uint pixelCount = width * static_cast<tjs_uint>(height);
 
-        const auto width = static_cast<tjs_int>(widthValue);
-        const auto height = static_cast<tjs_int>(heightValue);
-        if(width <= 0 || height <= 0) {
-            return;
+        bool compressed = false;
+        if(_source.ContainsDictionaryKey("compress")) {
+            compressed = std::strcmp(
+                _source.GetDictionaryValueStrict("compress").GetString(),
+                "RL") == 0;
         }
-        const size_t pixelCount = static_cast<size_t>(width) *
-            static_cast<size_t>(height);
-        auto *pixelOctet = pixelValue.AsOctetNoAddRef();
-        const auto *pixelData = pixelOctet->GetData();
-        const auto pixelSize = pixelOctet->GetLength();
-        if(!pixelData) {
-            return;
-        }
-
-        tTJSVariant compressValue;
-        const bool compressed =
-            getObjectProperty(_sourceDict, TJS_W("compress"), compressValue) &&
-            compressValue.Type() != tvtVoid &&
-            ttstr(compressValue) == ttstr(TJS_W("RL"));
-        tTJSVariant paletteValue;
-        const bool hasPalette =
-            getObjectProperty(_sourceDict, TJS_W("pal"), paletteValue) &&
-            paletteValue.Type() == tvtOctet &&
-            paletteValue.AsOctetNoAddRef();
-
-        // sub_A0DE48 in the binary returns an uninitialised allocation; each
-        // branch below writes the same span as ObjSource_ensureTexture.
-        std::unique_ptr<std::uint8_t[]> bgra(
-            new std::uint8_t[pixelCount * sizeof(tjs_uint32)]);
-        if(hasPalette) {
-            std::unique_ptr<std::uint8_t[]> indexes(
-                new std::uint8_t[pixelCount]);
-            if(compressed) {
-                decodeObjSourceRL8Like_0x6DA454(
-                    indexes.get(), pixelData,
-                    static_cast<std::uint32_t>(pixelSize));
+        std::uint32_t pixelSize{};
+        const std::uint8_t *pixelData = nullptr;
+        std::uint8_t *decoded = nullptr;
+        const std::uint8_t *sourcePixels = nullptr;
+        if(compressed) {
+            // 0x6DA708 checks `pal` here to select the RL element width. The
+            // common palette branch checks it again at 0x6DA5E8.
+            const bool compressedHasPalette =
+                _source.ContainsDictionaryKey("pal");
+            pixelData = _source.GetDictionaryValueStrict("pixel")
+                            .GetResource(pixelSize);
+            const tjs_uint decodedBytes =
+                (compressedHasPalette ? 1u : 4u) * pixelCount;
+            decoded = static_cast<std::uint8_t *>(
+                TJSAlignedAlloc(decodedBytes, 4));
+            if(compressedHasPalette) {
+                decodeObjSourceRL8Like_0x6DA454(decoded, pixelData, pixelSize);
             } else {
-                // 0x6DA6D4 copies the resource byte count, not pixelCount.
-                std::memcpy(indexes.get(), pixelData, pixelSize);
+                decodeObjSourceRL32Like_0x6DA454(decoded, pixelData, pixelSize);
+                TVPReverseRGB(
+                    reinterpret_cast<tjs_uint32 *>(decoded),
+                    reinterpret_cast<const tjs_uint32 *>(decoded),
+                    static_cast<tjs_int>(pixelCount));
             }
+            sourcePixels = decoded;
+        } else {
+            pixelData = _source.GetDictionaryValueStrict("pixel")
+                            .GetResource(pixelSize);
+            sourcePixels = pixelData;
+        }
 
-            auto *paletteOctet = paletteValue.AsOctetNoAddRef();
-            const size_t paletteCount =
-                paletteOctet->GetLength() / sizeof(tjs_uint32);
+        const bool hasPalette = _source.ContainsDictionaryKey("pal");
+        std::uint8_t *bgra = nullptr;
+        if(hasPalette) {
+            std::uint32_t paletteSize{};
+            const auto *paletteData =
+                _source.GetDictionaryValueStrict("pal").GetResource(paletteSize);
+            const std::size_t paletteCount =
+                paletteSize / sizeof(tjs_uint32);
             std::vector<tjs_uint32> palette(paletteCount);
             TVPReverseRGB(
                 palette.data(),
-                reinterpret_cast<const tjs_uint32 *>(paletteOctet->GetData()),
+                reinterpret_cast<const tjs_uint32 *>(paletteData),
                 static_cast<tjs_int>(paletteCount));
+            bgra = static_cast<std::uint8_t *>(
+                TJSAlignedAlloc(4u * pixelCount, 4));
             TVPBLExpand8BitTo32BitPal(
-                reinterpret_cast<tjs_uint32 *>(bgra.get()), indexes.get(),
+                reinterpret_cast<tjs_uint32 *>(bgra), sourcePixels,
                 static_cast<tjs_int>(pixelCount), palette.data());
-        } else if(compressed) {
-            decodeObjSourceRL32Like_0x6DA454(
-                bgra.get(), pixelData,
-                static_cast<std::uint32_t>(pixelSize));
-            TVPReverseRGB(
-                reinterpret_cast<tjs_uint32 *>(bgra.get()),
-                reinterpret_cast<const tjs_uint32 *>(bgra.get()),
-                static_cast<tjs_int>(pixelCount));
+            if(decoded) {
+                TJSAlignedDealloc(decoded);
+            }
+        } else if(decoded) {
+            bgra = decoded;
         } else {
+            bgra = static_cast<std::uint8_t *>(
+                TJSAlignedAlloc(4u * pixelCount, 4));
             TVPReverseRGB(
-                reinterpret_cast<tjs_uint32 *>(bgra.get()),
+                reinterpret_cast<tjs_uint32 *>(bgra),
                 reinterpret_cast<const tjs_uint32 *>(pixelData),
                 static_cast<tjs_int>(pixelCount));
         }
 
-        _texture = TVPGetRenderManager()->CreateTexture2D(
-            bgra.get(), width * static_cast<tjs_int>(sizeof(tjs_uint32)),
-            width, height, TVPTextureFormat::RGBA,
-            RENDER_CREATE_TEXTURE_FLAG_ANY);
+        auto *bitmap = new tTVPBitmap(width, static_cast<tjs_uint>(height), 32);
+        const tjs_int pitch = bitmap->GetPitch();
+        auto *destination = static_cast<std::uint8_t *>(bitmap->GetScanLine(0));
+        const tjs_int rowBytes = static_cast<tjs_int>(4u * width);
+        if(rowBytes == pitch) {
+            std::memcpy(destination, bgra,
+                        static_cast<std::size_t>(height * pitch));
+        } else if(height >= 1) {
+            const std::uint8_t *source = bgra;
+            for(tjs_int row = 0; row < height; ++row) {
+                std::memcpy(destination, source,
+                            static_cast<std::size_t>(rowBytes));
+                destination += pitch;
+                source += rowBytes;
+            }
+        }
+        _texture = TVPGetRenderManager()->CreateTexture2D(bitmap);
+        bitmap->Release();
+        TJSAlignedDealloc(bgra);
     }
 
     void ObjSource::drawLayer(tTJSVariant target) {
-        // ObjSource_drawLayer @0x69D6D8: only a raw dict-backed ObjSource enters
-        // the lazy materialisation path, then assigns the retained texture and
-        // applies the source dimensions to the target Layer.
-        if(_sourceDict.Type() != tvtObject || target.Type() != tvtObject ||
-           !target.AsObjectNoAddRef()) {
+        // ObjSource_drawLayer @0x69D6D8 gates only on the raw source category.
+        if(_source.GetTypeCategory() != 7) {
             return;
         }
         ensureTextureLike_0x6DA454();
-        auto *layer = resolveNativeLayer(target.AsObjectNoAddRef());
-        if(!_texture || !layer) {
-            return;
+        iTJSDispatch2 *targetObject = target.AsObjectNoAddRef();
+        tTJSNI_BaseLayer *layer = nullptr;
+        if(targetObject && TJS_FAILED(targetObject->NativeInstanceSupport(
+               TJS_NIS_GETINSTANCE, tTJSNC_Layer::ClassID,
+               reinterpret_cast<iTJSNativeInstance **>(&layer)))) {
+            TVPThrowExceptionMessage(TVPSpecifyLayer);
         }
         layer->AssignTexture(_texture);
-        layer->SetSize(getWidth(), getHeight());
+        layer->SetSize(_texture->GetWidth(), _texture->GetHeight());
     }
 
     SourceCache::SourceCache() = default;

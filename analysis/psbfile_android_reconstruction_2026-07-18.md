@@ -553,7 +553,7 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
 | layer/node tree | `buildNodeTree` 从 +528 dispatch 取 `layer` TJS Array，递归 helper 直接消费各 raw layer dispatch；节点独立 CopyRef `frameList/emoteEdit/particleMotionList/stencilCompositeMaskLayerList` | 树形、节点数、label map、标量字段、type 分支及 stencil 指针 vector 均由 raw dispatch 驱动；`snapshotCompatibility` 递归参数、decoded `psbNode/emoteEditDict` owner 已删除 | CLOSED |
 | node label/path | node+0 持有 raw `label` ttstr；Player+24 raw-label map 与 HM3 slash-path map 是两个独立 `ttstr` 键空间；action event 从 node+0 构造 String variant | `MotionNode::layerName`、Player+24 map、HM3 path builder、layer getter、事件和 child/render consumers 均直接传递 `ttstr`；只在日志/JSON 边界 narrow | CLOSED |
 | frame slot/evaluator | `parseFrame@0x6926B4` 接收 raw `frameList+index` 且只 parse；`mergeFrameContent@0x692AB0` 再按 slot index 取 content，保留 raw 字符串/variant、32 数值 mesh 与两槽 merged 状态 | live 节点已按 raw `frameListVariant` 实现 selective reset、parse/merge 分离、raw owner、mesh 32 数值、init/reseek/forward/back/modified 重建；node 0 按 `0x6BB4D4` 始终是 synthetic root 并直接复制 delta。decoded helpers 仅为无调用者的 legacy/test model | CLOSED |
-| source texture | `0x6948E8/0x695DE8` 从 RM HashMap A 的 record.root 导航；record 内含 Win `group->texture` 与 KRKR `src/group/icon->descriptor` 两张 map；非 atlas 路径经 `RM_findSource@0x6AAB3C → ObjSource_drawLayer@0x69D6D8 → ensureTexture@0x6DA454 → SourceCache_loadSource@0x6A7BA8`；删除外层节点时按 KRKR→Win→PSBFile 析构 | mapped record、两表拓扑、AddRef/Release 与 unload 生命周期已复原；Win/KRKR 均从 raw `PSBRawNode` 导航，KRKR 恢复 all-group 枚举、raw/RL/palette/透明 2x2 分支；`ObjSource` 现独占一只惰性 texture 并在析构 Release，`SourceCache` 不再遍历 `_activeMotion`/`MotionSnapshot::sourceCandidates`。整页 CPU 合成后一次 Update 是 Web API 边界 | CLOSED + PLATFORM BOUNDARY |
+| source texture | `0x6948E8/0x695DE8` 从 RM HashMap A 的 record.root 导航；record 内含 Win `group->texture` 与 KRKR `src/group/icon->descriptor` 两张 map；非 atlas 路径经 `RM_findSource@0x6AAB3C → ObjSource_drawLayer@0x69D6D8 → ensureTexture@0x6DA454 → SourceCache_loadSource@0x6A7BA8`；ObjSource 本体是 `{PSBRawOwner*, node*, texture*}`，析构按 texture→raw owner 顺序释放；删除外层节点时按 KRKR→Win→PSBFile 析构 | mapped record、两表拓扑、AddRef/Release 与 unload 生命周期已复原；`findSource` 与 ObjSource 全链均直接导航 raw `PSBRawNode`，不再插入 TJS dispatch；RL8/RL32、palette、pitch-copy、`tTVPBitmap→texture` 和 texture 尺寸回写已恢复；`SourceCache` 不再遍历 `_activeMotion`/`MotionSnapshot::sourceCandidates`。整页 CPU 合成后一次 Update 是 Web API 边界 | CLOSED + PLATFORM BOUNDARY |
 | variable query/interpolation | D3D 五个枚举方法是无条件 TODO throw；Emote range/frameList 读取 Engine HM5/+1248，HM5 miss 才递归 Player+384 参数表和所有子 Player；updateLayers 无条件调用 `0x6BBE20` 遍历 +1296 var-track deque | 五个 D3D wrapper、range/frameList 与 updateLayers live 插值均已切到 raw Engine/Player owner；旧 snapshot frame/range 查询及首帧旁路已删除 | CLOSED |
 | Player variableKeys | getter 直接遍历 Player+1296 `std::deque<VariableLabelScope>`，每次分配并返回一个新 Array；没有 setter、Player 缓存或 motion-load 副作用 | getter 已直接读取 `_variableLabelScopes[].cascadeKey`；旧 `_variableKeys`、RW setter、`ensureMotionLoaded()` 与 snapshot-label 同步写入均已删除 | CLOSED |
 | Player parameter table | `initNonEmoteMotion` 从 +528 读 `parameterize/parameter`；+384 是 56B vector，+408 是 `multimap<ttstr,entry*>`，并注册到当前 Player 及父链 | helper 已改为 raw `tTJSVariant` 输入，`MotionParameterEntry::id` 已改为 `ttstr`，decoded `motionObject/contentObject` 与其额外 owner 已删除 | CLOSED |
@@ -640,13 +640,14 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
     `ResourceManager_findSource@0x6AAB3C`、`SourceCache_loadSource@0x6A7BA8`、
     `ObjSource_getClip@0x69D35C`、`ObjSource_drawLayer@0x69D6D8` 与
     `ObjSource_ensureTexture@0x6DA454`，确认非 atlas source 不从 decoded motion
-    side graph 取像素：RM 直接包装 raw icon dict，ObjSource 惰性读取 width/height/
+    side graph 取像素：RM 直接包装 raw icon node，ObjSource 惰性读取 width/height/
     pixel/compress/pal，执行 RL8/RL32、palette expand 或 ReverseRGB，仅持有一只 texture；
-    SourceCache 只调用 `drawLayer(bufLayer)` 后进入颜色 bake。本地已按同一链补齐
-    `getClip/drawLayer/ensureTexture`、texture 析构 Release，删除 SourceCache 中的
-    `loadPsbBitmap/loadPsbSourceFacade/resolveMotionSourcePath/buildSourceCandidates` 旁路。
-    `SourceCache.cpp` 现无 `_activeMotion` 或 `MotionSnapshot` 类型消费；source 数据流与
-    ObjSource 生命周期项由 PARTIAL 改为 CLOSED。
+    SourceCache 只调用 `drawLayer(bufLayer)` 后进入颜色 bake。**2026-07-19 纠错：**此前虽删除
+    decoded 旁路，却把 ObjSource 内部误写成 `tTJSVariant` dict facade，并据此过早标为
+    CLOSED；fresh xref/构造/析构审计证实其真实字段是 raw owner/node pair + texture。现已把
+    `findSource/getClip/drawLayer/ensureTexture` 全链改为直接 `PSBRawNode`，同时恢复两次 `pal`
+    gate、逐字段 clip 写入、aligned buffer、pitch-copy、`tTVPBitmap→texture` 与析构顺序；
+    `SourceCache.cpp` 仍无 `_activeMotion` 或 `MotionSnapshot` 类型消费。
 45. D3DEmotePlayer 的 `countVariables`、`getVariableLabelAt`、
     `countVariableFrameAt`、`getVariableFrameLabelAt`、
     `getVariableFrameValueAt` 曾错误转发到 Player snapshot 查询。
@@ -1497,11 +1498,31 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   tag 分类后先构造 name/memberFlags/memberValue/callbackResult 四只 Variant，随后才判断
   category 6/7；non-container 因而仍经历四只 Variant 的逆序析构。本地旧 early-return
   位于构造之前，现已移到四只 owner 建立之后。上述 xref 同时保留了 `0x599554` helper，
-  不能因插件内调用清零而删除；四个 ObjSource consumer 的 raw-node owner 形状继续作为
-  下一阶段独立审计项，不以一次负搜索判断其实现状态。Mac 目标对象的 undefined-symbol
+  不能因插件内调用清零而删除；四个 ObjSource consumer 的 raw-node owner 形状已由下一条
+  独立审计闭合，不以一次负搜索判断其实现状态。Mac 目标对象的 undefined-symbol
   表已确认 `main.cpp.o` 不再引用 `PSBRawNode::GetTypeCategory`；四目标构建成功，
   `psbfile-dll` **484/484**、`motionplayer-dll` **398/398**，Web Debug 最终链接成功。
   在线 AVD 的 `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
+
+- 2026-07-19 fresh decompile/disasm `ResourceManager_findSource@0x6AAB3C`、
+  ObjSource 默认构造失败清理 `0x6E3EFC`、析构 `0x6E407C`、origin/size/clip 访问器
+  `0x69D014/0x69D0D8/0x69D19C/0x69D27C/0x69D35C`、纹理物化 `0x6DA454`、
+  `drawLayer@0x69D6D8` 与 Layer 严格转换 `0xA7A050`，证伪了本地/本文此前的
+  “ObjSource 内含一只 tTJSVariant dict facade”结论。`0x6AAFC0..0x6AAFDC` 分配 0x18
+  字节，复制 icon raw owner/node pair、对 owner `++refcount`，并把第三只 qword 置零；
+  `0x6E407C` 先调用 texture vtable+16 Release，再递减 raw owner，zero-ref 时执行
+  `sub_598B3C+operator delete`。本地 ObjSource 现恢复 `PSBRawNode + texture*` 字段及相同
+  析构顺序，且不再添加 Android 中不存在的 texture 槽清零。`0x6AAFE0..0x6AB044` 以
+  `sticky=false/err=false` 创建 adaptor，null 返回分支只写 void、不 delete 新 ObjSource；
+  本地也保留该失败泄漏边界。RM 从 mapped `PSBFile::GetRoot()` 直接执行 fixed-key strict / dynamic-key
+  has+strict 导航，不再制造四层 TJS dispatch。访问器恢复 strict miss/非-dict 32/clip
+  try-gate 边界；`0x6DA454` 的重复 pal gate、RL 元素宽度、aligned allocation、palette
+  expand、pitch-aware `tTVPBitmap` copy 与 CreateTexture2D 链也已逐步复刻；drawLayer 改用
+  texture 自身 `GetWidth/GetHeight`，不再重新读取 PSB 尺寸。Mac 对象符号表确认
+  `SourceCache.cpp.o` 的 ObjSource 实现只引用 `PSBRawNode` 导航/转换/析构符号，不再引用
+  PSB TJS dispatch；Mac 四目标构建、`psbfile-dll` **484/484**、`motionplayer-dll`
+  **398/398** 与 Web Debug 最终链接全部通过。motionplayer fixture 实际进入 `tTVPBitmap`
+  分配路径；在线 AVD 的 `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
 
 ## 后续闭合条件
 

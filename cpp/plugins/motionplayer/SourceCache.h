@@ -15,6 +15,7 @@
 #include <string>
 #include <utility>
 
+#include "psbfile/PSBRawFile.h"
 #include "tjs.h"
 
 class iTVPBaseBitmap;
@@ -110,9 +111,9 @@ namespace motion {
     };
 
     // Aligned to libkrkr2.so ObjSource (ncb_registerMembers @0x69CCB8). The
-    // binary ObjSource is NOT a fields struct — it is a thin dict FACADE:
-    // operator new(0x18) holds a single tTJSVariant (qword[0]) referencing the
-    // PSB "source" dict, and every member reads dict[key]. The former
+    // binary ObjSource is a thin raw-node facade: operator new(0x18) holds a
+    // PSBRawNode owner/node pair in qword[0..1] and a lazy texture in qword[2].
+    // Every member navigates the raw node directly. The former
     // _key/_src/_blendMode/_color fields were a port invention (MASTER's
     // "ObjSource missing 6 members" was inverted — it has no struct fields).
     //
@@ -126,21 +127,32 @@ namespace motion {
     class ObjSource {
     public:
         ObjSource() = default;
-        explicit ObjSource(tTJSVariant sourceDict) :
-            _sourceDict(std::move(sourceDict)) {}
+        explicit ObjSource(const PSB::PSBRawNode &source) : _source(source) {}
         ~ObjSource();
 
         ObjSource(const ObjSource &) = delete;
         ObjSource &operator=(const ObjSource &) = delete;
 
-        // originX/originY @0x69D014/0x69D0D8 = dict["originX"/"originY"] (int).
-        tjs_int getOriginX() const { return readInt(TJS_W("originX"), 0); }
-        tjs_int getOriginY() const { return readInt(TJS_W("originY"), 0); }
-        // width/height @0x69D19C/0x69D27C = dict["width"/"height"]; the binary
-        // returns 32 when the backing source variant is not a dict object (its
-        // `type != 7` gate), which readInt's default branch reproduces.
-        tjs_int getWidth() const { return readInt(TJS_W("width"), 32); }
-        tjs_int getHeight() const { return readInt(TJS_W("height"), 32); }
+        // originX/originY @0x69D014/0x69D0D8 have no category gate: both use
+        // the strict raw dictionary getter followed by GetInt.
+        tjs_int getOriginX() const {
+            return _source.GetDictionaryValueStrict("originX").GetInt();
+        }
+        tjs_int getOriginY() const {
+            return _source.GetDictionaryValueStrict("originY").GetInt();
+        }
+        // width/height @0x69D19C/0x69D27C return 32 only when the raw node's
+        // category is not dictionary; a missing member on a dictionary throws.
+        tjs_int getWidth() const {
+            return _source.GetTypeCategory() == 7
+                ? _source.GetDictionaryValueStrict("width").GetInt()
+                : 32;
+        }
+        tjs_int getHeight() const {
+            return _source.GetTypeCategory() == 7
+                ? _source.GetDictionaryValueStrict("height").GetInt()
+                : 32;
+        }
         // clip @0x69D35C builds a fresh property object from
         // dict["clip"].{left,top,right,bottom}. drawLayer @0x69D6D8 lazily
         // materialises the dict's pixel/palette/RL data through
@@ -150,25 +162,9 @@ namespace motion {
         void drawLayer(tTJSVariant target);
 
     private:
-        // Reads an int member from the backing source dict; returns `dflt` unless
-        // the backing is a dict object (binary `type == 7` gate) holding `key`.
-        tjs_int readInt(const tjs_char *key, tjs_int dflt) const {
-            if(_sourceDict.Type() != tvtObject) {
-                return dflt;
-            }
-            iTJSDispatch2 *obj = _sourceDict.AsObjectNoAddRef();
-            tTJSVariant v;
-            if(obj &&
-               TJS_SUCCEEDED(obj->PropGet(0, key, nullptr, &v, obj)) &&
-               v.Type() != tvtVoid) {
-                return static_cast<tjs_int>(v);
-            }
-            return dflt;
-        }
-
         void ensureTextureLike_0x6DA454();
 
-        tTJSVariant _sourceDict;  // qword[0]: the PSB "source" dict facade
+        PSB::PSBRawNode _source; // qword[0..1]: retained owner + raw node
         iTVPTexture2D *_texture = nullptr; // qword[2]: retained lazy texture
     };
 

@@ -147,12 +147,10 @@ namespace motion {
     //      native render helpers receive the current Player as a call argument
     //      instead of storing a persistent Player back-pointer in the shared RM.
     //      (Corrected per CLAUDE.md 证伪即就地纠正.)
-    //  (2) ObjSource (SourceCache.h:116) is NOT a fields struct in the binary —
-    //      ncb_registerMembers @0x69CCB8 builds a `operator new(0x18)` dict
-    //      facade (qword[0] = tTJSVariant holding the PSB "source" dict) whose
-    //      originX/originY/width/height/clip/drawLayer getters all read
-    //      dict[key]. The port's _key/_src/_blendMode/_color fields are an
-    //      invention. (MASTER's "ObjSource missing 6 members" is inverted.)
+    //  (2) ObjSource is a 0x18-byte raw-node facade in the Android ABI:
+    //      qword[0..1] are the retained PSBRawOwner/node pair and qword[2] is
+    //      the lazy texture. Its members call sub_598C58/sub_599554 directly;
+    //      no tTJSVariant dispatch owner exists inside ObjSource.
     // ------------------------------------------------------------------
 
     // C-1 (2026-06-07): the binary's RM +72/+80 intrusive layer-list is the

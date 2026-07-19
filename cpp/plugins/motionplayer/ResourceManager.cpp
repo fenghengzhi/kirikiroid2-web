@@ -483,11 +483,11 @@ namespace {
 //      a3. Player_playImpl @0x6B2284 fills +1012 from findMotion result[1],
 //      which ResourceManager_findMotion @0x6A9ED4 copies from the matched map
 //      key.
-//   4. navigate module["source"][group]["icon"][icon] with per-level hasKey
-//      gates (sub_598C58 / sub_5995D8); miss at any level -> result void.
-//   5. on hit: operator new(0x18) ObjSource facade holding the icon sub-dict
-//      (qword[0]=dict variant, [1]=?, [2]=0), wrapped as a TJS object via the
-//      NCB class object (sub_6EC124). Port: new ObjSource(iconEntry) +
+//   4. navigate the mapped record's raw root["source"][group]["icon"][icon];
+//      only the dynamic group/icon keys have hasKey gates.
+//   5. on hit: operator new(0x18) ObjSource facade holding the icon raw node
+//      (qword[0..1]=owner/node, qword[2]=0), wrapped as a TJS object via the
+//      NCB class object (sub_6EC124). Port: new ObjSource(iconNode) +
 //      ncbInstanceAdaptor<ObjSource>::CreateAdaptor.
 tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
                                                 ttstr path) const {
@@ -525,36 +525,36 @@ tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
         });
     }
 
-    // 3. HashMap A lookup keyed by moduleKey (a2), while path (a3) remains the
-    // source descriptor key. Port equivalent: loaded-module registry lookup by
-    // the same motion/project key used by ResourceManager::load.
-    const tTJSVariant module = findLoaded(moduleKey);
-    if(module.Type() != tvtObject) {
+    // 3. HashMap A lookup keyed directly by moduleKey (a2).
+    detail::LoadedResourceRecord *record = findLoadedResourceRecord(moduleKey);
+    if(!record || record->file.GetOwner() == nullptr) {
         return {}; // !v27 || !*v27 -> LABEL_71 result void
     }
 
-    // 4. module["source"][group]["icon"][icon] with per-level hasKey gates.
+    // 4. Raw root navigation. sub_598C58 is strict for the fixed keys;
+    // sub_5995D8 gates only the two dynamic keys before their strict reads.
     const ttstr group = pieces.size() > 1 ? pieces[1] : ttstr();
     const ttstr icon = pieces.size() > 2 ? pieces[2] : ttstr();
-
-    tTJSVariant sourceDict;
-    if(!psbGet(module, TJS_W("source"), sourceDict)) {
-        return {};
-    }
-    tTJSVariant groupDict;
-    if(!psbGet(sourceDict, group.c_str(), groupDict)) { // sub_5995D8 gate
+    const std::string groupKey = detail::narrow(group);
+    const std::string iconKey = detail::narrow(icon);
+    const PSB::PSBRawNode root = record->file.GetRoot();
+    const PSB::PSBRawNode source =
+        root.GetDictionaryValueStrict("source");
+    if(!source.ContainsDictionaryKey(groupKey)) { // sub_5995D8 gate
         return {}; // LABEL_64 -> result void
     }
-    tTJSVariant iconHolder;
-    if(!psbGet(groupDict, TJS_W("icon"), iconHolder)) {
+    const PSB::PSBRawNode groupNode =
+        source.GetDictionaryValueStrict(groupKey);
+    const PSB::PSBRawNode iconHolder =
+        groupNode.GetDictionaryValueStrict("icon");
+    if(!iconHolder.ContainsDictionaryKey(iconKey)) { // sub_5995D8 gate
         return {};
     }
-    tTJSVariant iconEntry;
-    if(!psbGet(iconHolder, icon.c_str(), iconEntry)) { // sub_5995D8 gate
-        return {};
-    }
+    const PSB::PSBRawNode iconEntry =
+        iconHolder.GetDictionaryValueStrict(iconKey);
 
-    // 5. construct the ObjSource dict facade (operator new(0x18) + sub_6EC124).
+    // 5. copy the raw pair into ObjSource (owner AddRef), zero its texture,
+    // then attach it to the NCB native instance (0x6AAFC0..0x6AB02C).
     using ObjSourceAdaptor = ncbInstanceAdaptor<motion::ObjSource>;
     motion::ObjSource *src = new motion::ObjSource(iconEntry);
     if(iTJSDispatch2 *dispatch = ObjSourceAdaptor::CreateAdaptor(src)) {
@@ -562,7 +562,8 @@ tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
         dispatch->Release();
         return result;
     }
-    delete src;
+    // 0x6AAFE0 passes sticky=false/err=false; the null-adaptor branch at
+    // 0x6AB044 returns void without reclaiming the just-allocated ObjSource.
     return {};
 }
 
