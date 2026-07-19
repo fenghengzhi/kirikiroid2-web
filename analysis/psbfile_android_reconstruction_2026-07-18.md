@@ -172,7 +172,7 @@ NCB 通用模板函数，不能全部按业务方法计数。
 | count/index/property | `0x5975E0`, `0x5976C4`, `0x597854` | array count、负下标、dictionary 属性、`TJS_MEMBERMUSTEXIST` 边界 |
 | name decode | `0x5975C0`, `0x597B1C` | 先经 `namesData[nameIndexes[index]]` 找 terminal，再沿 parent 回溯并 reverse |
 | NCB 注册 | `0x597E98..0x5980F4`, `0x59AA84` | typed class state、factory、`root` property、`load` method；本地由 ncbind 模板承接通用注册机制；factory 在 load 抛异常时析构已写入 result 的 native holder、保留悬挂 result slot 后原样重抛 |
-| root/load | `0x5981F8`, `0x598268`, `0x598538` | root 每次返回新 dispatch；string/octet 分流；小写 `mdf` 解压及失败 fallback；原始错误文本 |
+| root/load | `0x5981F8`, `0x598268`, `0x598538` | root 每次返回新 dispatch；string/octet 分流；小写 `mdf` 解压及失败 fallback；storage 数据 buffer 使用裸指针，异常清理只析构 stream |
 | owner | `0x598708`, `0x598960`, `0x598A64`, `0x598AAC`, `0x598B3C` | 一个 owner 独占一个 raw allocation；intrusive ref；替换时释放旧 owner；Adopt 赋值后与 move 均保留零引用删除分支；filter 后刷新 header view |
 | node helper | `0x598A3C..0x5996E4` | move、字符串、strict/try lookup、bool、keys、int/double、category、contains、resource；strict miss 的异常 helper 若返回则输出空 owner/node |
 | media 生命周期 | `0x59849C`, `0x5997F0..0x5998A8` | function-local static 指针由 `__cxa_guard` 构造一次；process-lifetime singleton、初始 ref=1、名字 `psb`、不注销 |
@@ -1448,6 +1448,18 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   `oracle-arm64-31` 并恢复 frida-server 后，已提交 `ezsave.pimg` 的 Android octet/storage
   两条 oracle 均为 `status=ok`，owner size/refcount、inline header、magic 与 strict refresh
   全部吻合。该正常资产 oracle 是非回归守护，不替代 zero-ref 边界的逐指令证据。
+
+- 2026-07-19 fresh decompile/disasm `PSBFile::LoadStorage@0x598538` 并检查异常落点
+  `0x5986D0..0x5986E8`，确认 stream 建立后的所有异常清理都只调用 stream 虚析构；
+  `0x5985CC` 分配的输入 buffer 及 MDF 分支 `0x598674` 分配的 decoded buffer 均没有
+  RAII cleanup。本地此前用两只 `unique_ptr<uint8_t[]>`，会在 `ReadBuffer` 抛出、decoded
+  allocation 抛出或 Adopt/filter 抛出时额外释放 Android 泄漏的 buffer。现已恢复裸指针
+  数据流：MDF 失败只删除 decoded，成功先删除 source 再接管 decoded，正常 Adopt 失败及
+  异常继续保留原始泄漏边界；stream 的 RAII 保持不变，因为它精确对应 landing pad。
+  仓库没有会抛异常的现成 stream/fixture，按规则未人为构造物料。Mac 四目标构建、
+  `psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 与 Web Debug 最终链接均通过；
+  `ezsave.pimg` 的 Android octet/storage oracle 两条均为 `status=ok`，继续作为正常路径
+  非回归守护。
 
 ## 后续闭合条件
 

@@ -964,26 +964,26 @@ namespace PSB {
         }
 
         const auto size = static_cast<std::uint32_t>(stream->GetSize());
-        auto source = std::make_unique<std::uint8_t[]>(size);
-        stream->ReadBuffer(source.get(), size);
+        auto *data = new std::uint8_t[size];
+        // sub_598538 @ 0x5985CC..0x5985DC and its exception landing pad
+        // 0x5986D0..0x5986E8 keep this allocation as a raw pointer.  If the
+        // read throws, only the stream is destroyed and data is leaked.
+        stream->ReadBuffer(data, size);
 
-        std::uint8_t *data = source.get();
         std::uint32_t dataSize = size;
         if(size >= 0x0bu &&
-           readUnaligned<std::uint32_t>(source.get()) == MDF_SIGNATURE) {
-            const auto expected =
-                readUnaligned<std::uint32_t>(source.get() + 4);
-            auto uncompressed = std::make_unique<std::uint8_t[]>(expected);
+           readUnaligned<std::uint32_t>(data) == MDF_SIGNATURE) {
+            const auto expected = readUnaligned<std::uint32_t>(data + 4);
+            auto *uncompressed = new std::uint8_t[expected];
             auto actual = static_cast<unsigned long>(expected);
-            if(uncompress(uncompressed.get(), &actual, source.get() + 8,
+            if(uncompress(uncompressed, &actual, data + 8,
                           static_cast<unsigned long>(size - 8)) == Z_OK) {
-                source.reset();
-                data = uncompressed.release();
+                delete[] data;
+                data = uncompressed;
                 dataSize = static_cast<std::uint32_t>(actual);
+            } else {
+                delete[] uncompressed;
             }
-        }
-        if(data == source.get()) {
-            (void)source.release();
         }
 
         // The original storage path does not reclaim data when sub_598708
