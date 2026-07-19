@@ -1,4 +1,9 @@
 ---
+
+> **历史记录（2026-07-19 已被取代）：** 此 `(owner,label)` clip-key 修补曾解决旧
+> flattened snapshot 架构的问题；当前实现已直接消费 `Player+528` raw TJS dispatch，
+> `MotionClip/clipList/clipIndex/layerList/sourceCandidates` 均已删除。下文不得再作为
+> 当前架构说明。
 name: dracu-clip-owner-keyed-isolation-done
 description: DRACU title childMotion 无限递归根因=motion clip 按 label key 跨 object 合并 layerList；修复=clip 改 (owner,label) key 复刻二进制 motion/<chara>/<motion> 路径段隔离
 metadata:

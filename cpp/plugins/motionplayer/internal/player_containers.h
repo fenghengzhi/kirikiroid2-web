@@ -29,9 +29,10 @@
 namespace motion::detail {
 
     // HM1 — libkrkr2.so Player+264. ttstr → EvalCascadeState (cascade
-    // PropGet result cache). Owns refcounts on the embedded main dispatch
-    // and every dispatch in chainDispatches; releases them in destructor
-    // order matching Player_HM1_value_destroy @0x6DD1A0.
+    // evaluation state). The mapped value carries the copied key, the
+    // tTJSVariant<string>-backed chain segments, writeVal/weight, and a
+    // non-owning MotionNode* result vector. Declaration order in
+    // EvalCascadeState reproduces Player_HM1_value_destroy @0x6DD1A0.
     using EvalCascadeMap =
         std::unordered_map<ttstr, EvalCascadeState, ttstr_hash, ttstr_equal>;
 

@@ -14,7 +14,9 @@ SEVERE/G1-G18 表已过时(针对已替换的旧 STL 时间线状态机)。
 **3 处局部偏差(均 logo-inert, 非架构重构)**:
 1. 入口缺 `if(+482 _directEdit)initEmoteMotion(2)`(0x6C10A4) — directEdit 路径, logo inert; initEmoteMotion(2) 本身 port TODO。
 2. **firstFrame 块读陈旧 _deltaTime**: 二进制 0x6C1108 v8=+592(入口 0x6C1094 设 speedMul*dt, 在 firstFrame 块**前**); 本地 line 2241 读 _deltaTime 但本帧赋值在 line 2312(块**后**)→ 用上帧残留值。影响 reverse-from-end seed + reverseSeekFlag 方向选择。修复: _deltaTime=_speedMul*actualDelta 上移到入口。logo 单向正向 inert。
-3. **尾部 port-invented _allplaying/_syncActive 覆写**(line 2592-2593 + firstFrame 块内 2238-2239): 二进制 progress_inner 无此写; +1099(loopArmed) 二进制只在 STOP 分支写 0(0x6C13F4/0x6C1384); _syncActive 二进制 progress_inner 无此字段。会覆盖 STOP 分支刚设的 +1099=0。logo _playingTimelineLabels 恒空→inert。
+3. **已关闭（2026-07-19）**：尾部基于 `_playingTimelineLabels` 的
+   `_allplaying/_syncActive` 伪覆写及整个 Player timeline vector/map 已删除；
+   +1099 只由 Android 对应的 play/init/stop 路径维护。
 
 **字段映射(disasm 直读确认)**: +482=_directEdit、+592=_deltaTime(speedMul*dt)、+1093=_speed(gate bool 非速度)、+1168=_speedMul(乘子)、+609=_reverseSeekFlag、+480=_queuing(progressFlags gate)、+481=_firstFrame、+483=_motionCompleted、+1098=_syncWaiting、+1099=_allplaying(loopArmed)、+456=_clampedEvalTime、+1120=_frameTickCount、+1128=_cachedTotalFrames、+1136=_loopTime、+376=active/default parameter entry。CORRECTION 2026-07-13：旧记载“本地无字段、恒 0”错误；本地语义等价字段为 `_defaultParameterEntryPtr`，0x6C106C 专路已恢复。
 

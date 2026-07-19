@@ -21,7 +21,17 @@ set(_PLUGIN_SOURCES
     layerExMovie.cpp
     kirikiroid2.cpp
 )
-target_sources(${PROJECT_NAME} PUBLIC ${_PLUGIN_SOURCES})
+target_sources(${PROJECT_NAME} PRIVATE ${_PLUGIN_SOURCES})
+
+# CBinaryAccessor is one native dispatch type shared by xp3filter.dll and the
+# emoteplayer.dll PSB decrypt callback (libkrkr2.so ctor sub_62C808).
+add_library(krkr2_binary_accessor STATIC
+    BinaryAccessor.cpp
+)
+target_include_directories(krkr2_binary_accessor PUBLIC
+    ${KRKR2PLUGIN_PATH}
+)
+target_link_libraries(krkr2_binary_accessor PUBLIC krkr2core)
 
 add_library(krkr2plugins_ncbind STATIC
     xp3filter.cpp
@@ -64,7 +74,10 @@ target_include_directories(krkr2plugins_ncbind PRIVATE
     ${KRKR2PLUGIN_PATH}/layerExImage
     ${KRKR2PLUGIN_PATH}/extrans
 )
-target_link_libraries(krkr2plugins_ncbind PRIVATE krkr2core)
+target_link_libraries(krkr2plugins_ncbind PRIVATE
+    krkr2core
+    krkr2_binary_accessor
+)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
     ${KRKR2CORE_PATH}/
@@ -110,6 +123,36 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         fstat
 #        json steam DrawDeviceForSteam
 )
+
+# Android links these plugin translation units directly into libkrkr2.so, so
+# every NCB static registrar is present before ncbAutoRegister::AllRegist().
+# The Web/macOS ports package each module as a static archive instead; ordinary
+# archive extraction drops registrar-only objects such as motionplayer/main.cpp.
+# Force-load the already-separated archives at final executable links without
+# propagating their sources into one another.
+set(_KRKR2_PLUGIN_ARCHIVES
+    ${PROJECT_NAME}
+    psdfile
+    psbfile
+    layerExDraw
+    motionplayer
+    fstat
+)
+foreach(_plugin_archive IN LISTS _KRKR2_PLUGIN_ARCHIVES)
+    if(APPLE AND NOT EMSCRIPTEN)
+        target_link_options(${PROJECT_NAME} INTERFACE
+            "-Wl,-force_load,$<TARGET_FILE:${_plugin_archive}>"
+        )
+    elseif(MSVC)
+        target_link_options(${PROJECT_NAME} INTERFACE
+            "/WHOLEARCHIVE:$<TARGET_FILE:${_plugin_archive}>"
+        )
+    else()
+        target_link_options(${PROJECT_NAME} INTERFACE
+            "SHELL:-Wl,--whole-archive $<TARGET_FILE:${_plugin_archive}> -Wl,--no-whole-archive"
+        )
+    endif()
+endforeach()
 
 find_package(fmt CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE fmt::fmt)

@@ -10,6 +10,7 @@
 #include <algorithm>
 
 #include "EmotePlayer.h"
+#include "MotionDispatch.h"
 #include "RuntimeSupport.h"
 #include "ncbind.hpp"
 
@@ -25,53 +26,62 @@ namespace motion {
     //   3. operator new(0x5D8) EmoteEngine -> EmoteEngine_ctor(engine, &wrapper)
     //      -> store EmoteObject+8 (Player+1064 gets the RM dispatch wrapper)
     //   4. ttstrVector_assign_67F0CC(EmoteObject+16, modulePaths)
-    // G2-A: EmoteObject now self-owns the RM (member _rm, initialized first),
-    //   then constructs the EmoteEngine from a copy of it — the binary owns RM
-    //   at +0 and passes a wrapper down; the local ResourceManager value type
-    //   models that ownership (shared_ptr<State>, cheap copy).
-    EmoteObject::EmoteObject(ResourceManager rm,
-                             const std::vector<ttstr> &modulePaths) :
-        _rm(std::move(rm)), _modulePaths(modulePaths) {
+    EmoteObject::EmoteObject(const std::vector<ttstr> &modulePaths) {
+        // EmoteObject_init @0x67DBAC: operator new(0xE8), construct the sole
+        // ResourceManager from global.kag/default spec, and store its pointer at
+        // EmoteObject+0. It is not copied from the D3DEmotePlayer shell.
+        _rm = new ResourceManager();
         // P3-B (2026-06-05): step 2 of EmoteObject_init @0x67DBAC —
-        //   `sub_67E20C(rm,...)` wraps the native RM in a TJS dispatch facade
-        //   (binary 2x AddRef) which is then passed to EmoteEngine_ctor (step 3,
-        //   Player+? gets the RM dispatch). EmoteObject remains the RM owner
-        //   (binary EmoteObject+0); locally `_rm` (shared_ptr<State>) is the
-        //   owner and the dispatch wraps a state-sharing handle. The single
-        //   dispatch flows down EmoteEngine -> Player -> child Players (each
-        //   holds an AddRef'd copy), so the native RM outlives all of them.
+        //   `sub_67E20C(rm, 1, 0)` wraps that exact native RM and sets the adaptor
+        //   sticky flag. The dispatch therefore never deletes RM; EmoteObject
+        //   remains its sole owner while the same pointer flows through
+        //   EmoteEngine -> Player -> child Players.
         using RMAdaptor = ncbInstanceAdaptor<ResourceManager>;
-        if(auto *dispatch =
-               RMAdaptor::CreateAdaptor(new ResourceManager(_rm))) {
+        if(auto *dispatch = RMAdaptor::CreateAdaptor(_rm, true)) {
             _rmDispatch = tTJSVariant(dispatch, dispatch);
             dispatch->Release();
         }
         _engine = new EmoteEngine(_rmDispatch);
+        // ttstrVector_assign_67F0CC is called only after both heap objects and
+        // the RM dispatch are established; preserve that refcount/throw order.
+        _modulePaths = modulePaths;
 
-        // EmoteObject_init @0x67DCB0..0x67DD10 loads every retained path in
-        // order; the last loaded PSB is the metadata/base source used to build
-        // the Player/controller graph.
+        // EmoteObject_init @0x67DCB0..0x67DFA0: load all paths, use the last raw
+        // module as metadata source, seed Player+1012 from the last INPUT path,
+        // apply chara, force-play motion, then apply the full metadata dict.
         tTJSVariant loaded;
         for(const auto &path : _modulePaths) {
-            loaded = _rm.load(path);
+            loaded = _rm->load(path);
         }
-        if(auto snapshot = detail::lookupModuleSnapshot(loaded)) {
-            _engine->player().loadFromSnapshot(snapshot);
-        }
+        const auto metadata =
+            detail::motionPropGet(loaded, TJS_W("metadata"));
+        const auto base =
+            detail::motionPropGet(metadata, TJS_W("base"));
+        const ttstr chara(
+            detail::motionPropGet(base, TJS_W("chara")));
+        const ttstr motionName(
+            detail::motionPropGet(base, TJS_W("motion")));
+
+        auto &player = _engine->player();
+        player.setProject(tTJSVariant(_modulePaths.back()));
+        player.setChara(chara);
+        player.playMotionLike_0x6B2284(motionName, PlayFlagForce);
+        _engine->applyMetadataLike_0x67D4D0(metadata);
     }
 
     // Dtor — aligned with libkrkr2.so EmoteObject_destroy @0x67F420. Order:
     //   1. EmoteObject+8 EmoteEngine: sub_67F4B8 + operator delete
     //   2. EmoteObject+0 ResourceManager: sub_6A8B94 + operator delete
     //   3. EmoteObject+16 vector: per-element Release + delete buffer
-    // Local: delete _engine first. Automatic member destruction then releases
-    // _modulePaths -> _rmDispatch -> _rm. The ttstr element ownership is exact,
-    // but RM-before-vector remains a source-lifetime gap caused by the local
-    // value/shared-state ResourceManager adaptation.
+    // Local follows the same manual order. Clearing the sticky facade does not
+    // delete RM; it only invalidates the remaining TJS wrapper before the sole
+    // native owner is destroyed. _modulePaths is destroyed after this body.
     EmoteObject::~EmoteObject() {
         delete _engine;
         _engine = nullptr;
-        // _modulePaths and _rm release automatically after this body.
+        _rmDispatch.Clear();
+        delete _rm;
+        _rm = nullptr;
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer 对象链:壳持有【两个】EmoteObject 槽
@@ -80,11 +90,44 @@ namespace motion {
     // COMMIT-2:懒建。二进制 plain 构造(TJS `new Motion.D3DEmotePlayer`)留主槽
     // null,只在 load(0x52FDD4)/clone(sub_52FFBC via sub_67F978)时才
     // operator new(0x28) 建主槽。证据:全部已反编译路径中,仅 load 与 clone 建
-    // 主槽 EmoteObject;plain ctor 不建。_rm 保存供 load/clone 重建。
+    // 主槽 EmoteObject;plain ctor 不建。load/clone 让 EmoteObject_init 自建其
+    // 唯一 ResourceManager。D3DEmotePlayer native-create sub_542764 / unwrap
+    // sub_5428D8 instead require a D3DImage owner; the shell has no RM field.
     // 访问器无 null 守卫(与二进制 EmoteEngine_progress 一致),靠调用时序保证
     // construct 后必先 load 再访问主槽。
-    D3DEmotePlayer::D3DEmotePlayer(ResourceManager rm) :
-        _rm(rm) {}
+    D3DEmotePlayer::D3DEmotePlayer(D3DLayerObject *d3dImageOwner) :
+        _d3dImageOwner(d3dImageOwner) {
+        // D3DEmotePlayer native-create @0x542764: store the raw D3DImage
+        // pointer, then register this listener through owner vtable +48 before
+        // either EmoteObject slot is initialized.
+        if(_d3dImageOwner)
+            _d3dImageOwner->AddListener(this);
+    }
+
+    // sub_5428D8: arg0 must expose the NCB class ID whose descriptor is mapped
+    // to binary literal L"D3DImage" by sub_42C7F8. Missing/null objects and a
+    // different native class follow the binary's two exception boundaries.
+    tjs_error D3DEmotePlayer::factory(D3DEmotePlayer **result,
+                                      tjs_int numparams,
+                                      tTJSVariant **param,
+                                      iTJSDispatch2 *) {
+        if(numparams < 1)
+            return TJS_E_BADPARAMCOUNT;
+
+        if(param[0]->Type() != tvtObject)
+            TVPThrowExceptionMessage(TJS_W("No instance."));
+        iTJSDispatch2 *owner = param[0]->AsObjectNoAddRef();
+        if(!owner)
+            TVPThrowExceptionMessage(TJS_W("No instance."));
+
+        D3DLayerObject *nativeOwner = TVPGetD3DImageNative(owner);
+        if(!nativeOwner) {
+            TVPThrowExceptionMessage(TJS_W("Invalid instance type."));
+        }
+
+        *result = new D3DEmotePlayer(nativeOwner);
+        return TJS_S_OK;
+    }
 
     // 析构 = 二进制 sub_533C00:依次拆次槽 +32、主槽 +24(各 EmoteObject_destroy
     // + operator delete)。EmoteObject* 裸指针手动 delete,无智能指针。
@@ -93,6 +136,34 @@ namespace motion {
         _secondaryObj = nullptr;
         delete _primaryObj;
         _primaryObj = nullptr;
+        // Binary sub_533C00 invokes owner vtable +56 only after both slots are
+        // gone. The owner is non-owning; there is no script-object Release.
+        if(_d3dImageOwner)
+            _d3dImageOwner->RemoveListener(this);
+        _d3dImageOwner = nullptr;
+    }
+
+    // D3DEmotePlayer listener slot +16 @0x533CBC. D3DImage invokes this from
+    // matrix-change and OnUpdate fan-out. The binary compares exact floats and
+    // only dereferences the primary EmoteObject when the owner scale changed.
+    bool D3DEmotePlayer::IsVisible() {
+        const float ownerScale = TVPGetD3DImageScaleX(_d3dImageOwner);
+        if(_baseScale != ownerScale) {
+            _baseScale = ownerScale;
+            const float finalScale = _baseScale * _userScale;
+            player().setEmoteScale(static_cast<double>(finalScale), 0.0, 1.0);
+        }
+        return true;
+    }
+
+    // D3DEmotePlayer listener slot +24 @0x533D4C: transform the zero origin
+    // through D3DImage, then enter Player_drawToTexture @0x6D5C68 with the
+    // compositor's native target texture.
+    void D3DEmotePlayer::Draw(iTVPTexture2D *target) {
+        float x = 0.0f;
+        float y = 0.0f;
+        _d3dImageOwner->TransformPoint(x, y);
+        player().drawToD3DImageLike_0x6D5C68(target, x, y);
     }
 
     // --- Properties ---
@@ -152,7 +223,7 @@ namespace motion {
         delete _primaryObj;
         _primaryObj = nullptr;
         // 重建主槽(二进制 operator new(0x28) + EmoteObject_init(args))
-        _primaryObj = new EmoteObject(_rm, modulePaths);
+        _primaryObj = new EmoteObject(modulePaths);
         engine()._modified = true;
     }
 
@@ -181,11 +252,10 @@ namespace motion {
     tTJSVariant D3DEmotePlayer::clone() {
         typedef ncbInstanceAdaptor<D3DEmotePlayer> AdaptorT;
 
-        auto *copy = new D3DEmotePlayer(ResourceManager{});
+        auto *copy = new D3DEmotePlayer(_d3dImageOwner);
         // 懒建后 copy 主槽为 null;clone 需显式建主槽 —— 对齐二进制 sub_52FFBC
         // clone 回调内 `+24 = sub_67F978(...)`(operator new(0x28)+EmoteObject_init)。
-        copy->_primaryObj =
-            new EmoteObject(copy->_rm, obj().modulePaths());
+        copy->_primaryObj = new EmoteObject(obj().modulePaths());
         // 壳层字段(EmotePlayer 自身)
         copy->_useD3D = _useD3D;
         copy->_smoothing = _smoothing;
@@ -236,8 +306,19 @@ namespace motion {
         player().setVisible(false);
     }
 
-    void D3DEmotePlayer::assignState() { STUB_WARN(assignState); }
-    void D3DEmotePlayer::initPhysics() { STUB_WARN(initPhysics); }
+    // D3DEmotePlayer::assignState @0x530150 is an intentionally unimplemented
+    // Android boundary: validate the argument as Object, probe its native
+    // D3DEmotePlayer instance without raising a type error, then always throw
+    // the exact TODO eTJSError emitted through sub_95440C @0x95440C.
+    void D3DEmotePlayer::assignState(tTJSVariant state) {
+        iTJSDispatch2 *object = state.AsObjectNoAddRef();
+        if(object) {
+            (void)ncbInstanceAdaptor<D3DEmotePlayer>::GetNativeInstance(
+                object, false);
+        }
+        TVPThrowExceptionMessage(
+            TJS_W("TODO: implement D3DEmotePlayer::assignState()"));
+    }
 
     // Aligned to libkrkr2.so sub_5302E4: delegates to Player's rotAnimator
     void D3DEmotePlayer::setRot(double rot, double transition, double ease) {
@@ -332,13 +413,7 @@ namespace motion {
     double D3DEmotePlayer::getScale() { return 1.0; }
 
     void D3DEmotePlayer::setMirror(bool mirror) {
-        // Aligned to libkrkr2.so sub_671DB0:
-        // wrapper stores requested mirror, derives a root-flip delta against a
-        // baseline bit, forwards that effective flip to Player_setRootFlipX,
-        // then triggers the large controller reset path.
-        engine()._mirrorRequested = mirror;
-        engine()._mirrorChanged = (engine()._mirrorRequested != engine()._mirrorBase);
-        player().setMirror(engine()._mirrorChanged);
+        engine().setMirrorLike_0x671DB0(mirror);
         engine()._modified = true;
     }
 
@@ -427,23 +502,38 @@ namespace motion {
     }
 
     tjs_int D3DEmotePlayer::countVariables() {
-        return player().countVariables();
+        // D3DEmotePlayer::countVariables @0x53041C is deliberately unimplemented.
+        TVPThrowExceptionMessage(
+            TJS_W("TODO: implement D3DEmotePlayer::countVariables()"));
+        return 0;
     }
 
-    ttstr D3DEmotePlayer::getVariableLabelAt(tjs_int idx) {
-        return player().getVariableLabelAt(idx);
+    ttstr D3DEmotePlayer::getVariableLabelAt(tjs_int) {
+        // D3DEmotePlayer::getVariableLabelAt @0x530530.
+        TVPThrowExceptionMessage(
+            TJS_W("TODO: implement D3DEmotePlayer::getVariableLabelAt()"));
+        return {};
     }
 
-    tjs_int D3DEmotePlayer::countVariableFrameAt(tjs_int idx) {
-        return player().countVariableFrameAt(idx);
+    tjs_int D3DEmotePlayer::countVariableFrameAt(tjs_int) {
+        // D3DEmotePlayer::countVariableFrameAt @0x530568.
+        TVPThrowExceptionMessage(
+            TJS_W("TODO: implement D3DEmotePlayer::countVariableFrameAt()"));
+        return 0;
     }
 
-    ttstr D3DEmotePlayer::getVariableFrameLabelAt(tjs_int idx, tjs_int frameIdx) {
-        return player().getVariableFrameLabelAt(idx, frameIdx);
+    ttstr D3DEmotePlayer::getVariableFrameLabelAt(tjs_int, tjs_int) {
+        // D3DEmotePlayer::getVariableFrameLabelAt @0x530588.
+        TVPThrowExceptionMessage(
+            TJS_W("TODO: implement D3DEmotePlayer::getVariableFrameLabelAt()"));
+        return {};
     }
 
-    double D3DEmotePlayer::getVariableFrameValueAt(tjs_int idx, tjs_int frameIdx) {
-        return player().getVariableFrameValueAt(idx, frameIdx);
+    double D3DEmotePlayer::getVariableFrameValueAt(tjs_int, tjs_int) {
+        // D3DEmotePlayer::getVariableFrameValueAt @0x5305A8.
+        TVPThrowExceptionMessage(
+            TJS_W("TODO: implement D3DEmotePlayer::getVariableFrameValueAt()"));
+        return 0.0;
     }
 
     // --- Wind/Force ---
@@ -490,78 +580,91 @@ namespace motion {
         return TJS_S_OK;
     }
 
-    // --- Timeline methods: delegate to Player ---
+    // --- Timeline methods ---
 
     tjs_int D3DEmotePlayer::countMainTimelines() {
-        return player().countMainTimelines();
+        return engine().countMainTimelinesLike_0x5306AC();
     }
 
     ttstr D3DEmotePlayer::getMainTimelineLabelAt(tjs_int idx) {
-        return player().getMainTimelineLabelAt(idx);
+        return engine().getMainTimelineLabelAtLike_0x674C84(
+            static_cast<tjs_uint32>(idx));
     }
 
     tjs_int D3DEmotePlayer::countDiffTimelines() {
-        return player().countDiffTimelines();
+        return engine().countDiffTimelinesLike_0x5306D4();
     }
 
     ttstr D3DEmotePlayer::getDiffTimelineLabelAt(tjs_int idx) {
-        return player().getDiffTimelineLabelAt(idx);
+        return engine().getDiffTimelineLabelAtLike_0x674CEC(
+            static_cast<tjs_uint32>(idx));
     }
 
     tjs_int D3DEmotePlayer::countPlayingTimelines() {
-        return player().countPlayingTimelines();
+        return engine().countPlayingTimelinesLike_0x5306FC();
     }
 
     ttstr D3DEmotePlayer::getPlayingTimelineLabelAt(tjs_int idx) {
-        return player().getPlayingTimelineLabelAt(idx);
+        return engine().getPlayingTimelineLabelAtLike_0x674D54(
+            static_cast<tjs_uint32>(idx));
     }
 
     tjs_int D3DEmotePlayer::getPlayingTimelineFlagsAt(tjs_int idx) {
-        return player().getPlayingTimelineFlagsAt(idx);
+        return engine().getPlayingTimelineFlagsAtLike_0x674DC8(
+            static_cast<tjs_uint32>(idx));
     }
 
     bool D3DEmotePlayer::isLoopTimeline(ttstr label) {
-        return player().getLoopTimeline(label);
+        return engine().getLoopTimelineLike_0x67522C(label);
     }
 
     tjs_int D3DEmotePlayer::getTimelineTotalFrameCount(ttstr label) {
-        return player().getTimelineTotalFrameCount(label);
+        return static_cast<tjs_int>(
+            engine().getTimelineTotalFrameCountLike_0x6753F0(label));
     }
 
     void D3DEmotePlayer::playTimeline(ttstr label, tjs_int flags) {
-        player().playTimeline(label, flags);
+        engine().playTimelineLike_0x672F70(
+            label, static_cast<tjs_uint32>(flags));
         engine()._modified = true;
     }
 
     bool D3DEmotePlayer::isTimelinePlaying(ttstr label) {
-        return player().getTimelinePlaying(label);
+        return engine().isTimelinePlayingLike_0x673558(label);
     }
 
     void D3DEmotePlayer::stopTimeline(ttstr label) {
-        player().stopTimeline(label);
+        engine().stopTimelineLike_0x67C2A0(label);
     }
 
     void D3DEmotePlayer::setTimelineBlendRatio(ttstr label, double ratio) {
-        player().setTimelineBlendRatio(label, ratio);
+        engine().setTimelineBlendLike_0x6735AC(
+            label, false, static_cast<float>(ratio), 0.0f, 1.0f);
     }
 
     double D3DEmotePlayer::getTimelineBlendRatio(ttstr label) {
-        return player().getTimelineBlendRatio(label);
+        return engine().getTimelineBlendLike_0x6821C8(label);
     }
 
     void D3DEmotePlayer::fadeInTimeline(ttstr label, double duration,
                                      tjs_int flags) {
-        player().fadeInTimeline(label, duration, flags);
+        engine().fadeInTimelineLike_0x6736EC(
+            label, duration, static_cast<double>(flags));
     }
 
     void D3DEmotePlayer::fadeOutTimeline(ttstr label, double duration,
                                       tjs_int flags) {
-        player().fadeOutTimeline(label, duration, flags);
+        engine().fadeOutTimelineLike_0x6739F4(
+            label, duration, static_cast<double>(flags));
     }
 
-    void D3DEmotePlayer::setTimeline(ttstr label, bool loop) {
-        // Player doesn't have an exact equivalent; use playTimeline + loop flag
-        player().playTimeline(label, 0);
+    // D3DEmotePlayer_setTimeline @0x5308A4. The binary thunk only rewrites the
+    // receiver and masks autoStop before tail-calling sub_6735AC; all three
+    // floating arguments remain in their incoming FP registers.
+    void D3DEmotePlayer::setTimeline(ttstr label, bool autoStop, float value,
+                                    float transition, float easingWeight) {
+        engine().setTimelineBlendLike_0x6735AC(
+            label, autoStop, value, transition, easingWeight);
     }
 
     bool D3DEmotePlayer::play(ttstr label, tjs_int flags) {
@@ -592,9 +695,7 @@ namespace motion {
     }
 
     void D3DEmotePlayer::skip() {
-        // Aligned to libkrkr2.so sub_66EB8C: skip to end of all timelines
-        // Player doesn't expose skip() directly, stop all timelines
-        player().stopTimeline(TJS_W(""));
+        engine().resetControllersLike_0x66EB8C();
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer NCB "progress" member
@@ -658,9 +759,11 @@ namespace motion {
         return TJS_S_OK;
     }
 
-    tTJSVariant D3DEmotePlayer::getOuterForce() {
-        STUB_WARN(getOuterForce);
-        return tTJSVariant();
+    [[noreturn]] tTJSVariant D3DEmotePlayer::getOuterForce() {
+        // D3DEmotePlayer::getOuterForce @0x530B28 is an intentional Android
+        // TODO boundary and unconditionally throws through sub_95440C.
+        throw eTJSError(
+            ttstr(TJS_W("TODO: implement D3DEmotePlayer::getOuterForce()")));
     }
 
     // M11 D-09 P0: removed `contains(double x, double y)` AABB overload — this
@@ -753,8 +856,13 @@ namespace motion {
         engine()._modified = true;
     }
 
-    // --- #4 initPhysics (sub_67D4D0) — open: physics builder not yet ported ---
-    void EmotePlayer::initPhysics() { STUB_WARN(initPhysics); }
+    // --- #4 initPhysics — the shipped NCB name maps directly to
+    // EmoteEngine_applyMetadata_buildControllers @0x67D4D0. Despite its public
+    // name, this consumes the raw metadata dictionary and rebuilds the complete
+    // Engine controller/container graph; it is not a five-scalar wind helper.
+    void EmotePlayer::initPhysics(tTJSVariant metadata) {
+        engine().applyMetadataLike_0x67D4D0(metadata);
+    }
 
     // --- #5 startWind (Player_startWind) ---
     void EmotePlayer::startWind(double minAngle, double maxAngle, double amplitude,
@@ -807,11 +915,15 @@ namespace motion {
         return TJS_E_INVALIDPARAM;
     }
 
-    // --- #11 serialize (sub_675E40 -> Player_serialize) ---
-    tTJSVariant EmotePlayer::serialize() { return player().serialize(); }
+    // --- #11 serialize (EmoteEngine state save @0x675E40) ---
+    tTJSVariant EmotePlayer::serialize() {
+        return engine().serializeLike_0x675E40();
+    }
 
-    // --- #12 unserialize (sub_678044 -> Player_unserialize) ---
-    void EmotePlayer::unserialize(tTJSVariant data) { player().unserialize(data); }
+    // --- #12 unserialize (EmoteEngine state restore @0x678044) ---
+    void EmotePlayer::unserialize(tTJSVariant data) {
+        engine().unserializeLike_0x678044(data);
+    }
 
     // --- #13 pass (sub_681C48) — same progress driver as progress (binary
     //   shares the sub_6818B4 advance body) ---
@@ -998,89 +1110,97 @@ namespace motion {
         player().setCameraOffsetXY_0x681EF8(x, y);
     }
 
-    // --- #38 modifyRoot (sub_681F0C): NO args — sets flag byte
-    //   *(Player+1064 -> +200 -> +1584) = 1. Distinct from Motion.Player's
-    //   modifyRoot(tTJSVariant). open: the +200/+1584 root-modify flag is a
-    //   Player-internal field not yet surfaced as a named setter; faithful
-    //   thin set deferred until that field is modelled. ---
-    void EmotePlayer::modifyRoot() { STUB_WARN(modifyRoot); }
+    // EmotePlayer_modifyRoot @0x681F0C follows engine+1064 -> player+200 and
+    // sets the same root-node delta dirty byte (+1584) as
+    // Player_modifyRoot @0x6CD0B0.
+    void EmotePlayer::modifyRoot() { player().modifyRoot(); }
 
     // setHairScale/setPartsScale/setBustScale (#39-41, sub_681F20/28/30) are
     //   inline in the header (engine +1184/+1192/+1200 raw writes).
 
     // --- #49 setMirror (sub_671DB0) ---
     void EmotePlayer::setMirror(bool mirror) {
-        engine()._mirrorRequested = mirror;
-        engine()._mirrorChanged =
-            (engine()._mirrorRequested != engine()._mirrorBase);
-        player().setMirror(engine()._mirrorChanged);
-        engine()._modified = true;
+        engine().setMirrorLike_0x671DB0(mirror);
     }
 
     // --- #50 skip (sub_66EB8C) ---
-    void EmotePlayer::skip() { player().stopTimeline(TJS_W("")); }
+    void EmotePlayer::skip() { engine().resetControllersLike_0x66EB8C(); }
 
     // --- #51-57 timeline methods ---
     void EmotePlayer::playTimeline(ttstr label, tjs_int flags) {
-        player().playTimeline(label, flags);
+        engine().playTimelineLike_0x672F70(
+            label, static_cast<tjs_uint32>(flags));
         engine()._modified = true;
     }
-    void EmotePlayer::stopTimeline(ttstr label) { player().stopTimeline(label); }
+    void EmotePlayer::stopTimeline(ttstr label) {
+        engine().stopTimelineLike_0x67C2A0(label);
+    }
     bool EmotePlayer::getTimelinePlaying(ttstr label) {
-        return player().getTimelinePlaying(label);
+        return engine().isTimelinePlayingLike_0x673558(label);
     }
     void EmotePlayer::setTimelineBlendRatio(ttstr label, double ratio) {
-        player().setTimelineBlendRatio(label, ratio);
+        engine().setTimelineBlendLike_0x6735AC(
+            label, false, static_cast<float>(ratio), 0.0f, 1.0f);
     }
     void EmotePlayer::fadeInTimeline(ttstr label, double duration, tjs_int flags) {
-        player().fadeInTimeline(label, duration, flags);
+        engine().fadeInTimelineLike_0x6736EC(
+            label, duration, static_cast<double>(flags));
     }
     void EmotePlayer::fadeOutTimeline(ttstr label, double duration, tjs_int flags) {
-        player().fadeOutTimeline(label, duration, flags);
+        engine().fadeOutTimelineLike_0x6739F4(
+            label, duration, static_cast<double>(flags));
     }
     double EmotePlayer::getTimelineBlendRatio(ttstr label) {
-        return player().getTimelineBlendRatio(label);
+        return engine().getTimelineBlendLike_0x6821C8(label);
     }
 
     // --- #58-64 variable/timeline query lists ---
     tTJSVariant EmotePlayer::getVariableRange(ttstr label) {
-        return player().getVariableRange(label);
+        // EmotePlayer::getVariableRange @0x673BEC: HM5 hit returns a fresh
+        // Dictionary from value+40/+48; miss delegates to Player @0x6D6590.
+        if(const auto it = engine()._variableRangesHM5_1328.find(label);
+           it != engine()._variableRangesHM5_1328.end()) {
+            return detail::makeDictionary({
+                { "min", it->second.frameMin },
+                { "max", it->second.frameMax },
+            });
+        }
+        return player().getParameterRangeLike_0x6D6590(label);
     }
     tTJSVariant EmotePlayer::getVariableFrameList(ttstr label) {
-        return player().getVariableFrameList(label);
+        // EmotePlayer::getVariableFrameList @0x68229C: CopyRef engine+1248,
+        // PropGet(label), CopyRef the result, then release the local dispatch.
+        tTJSVariant result;
+        tTJSVariant frameLists = engine()._variableFrameLists;
+        iTJSDispatch2 *frames = frameLists.AsObjectNoAddRef();
+        frames->PropGet(0, label.c_str(), nullptr, &result, frames);
+        return result;
     }
     tTJSVariant EmotePlayer::getMainTimelineLabelList() {
-        return player().getMainTimelineLabelList();
+        return engine().getMainTimelineLabelListLike_0x674F54();
     }
     tTJSVariant EmotePlayer::getDiffTimelineLabelList() {
-        return player().getDiffTimelineLabelList();
+        return engine().getDiffTimelineLabelListLike_0x6750C0();
     }
-    // #62 getLoopTimeline (sub_67522C). binary returns the loop-timeline label
-    //   query result; local Player exposes a bool getLoopTimeline(label).
     tTJSVariant EmotePlayer::getLoopTimeline(ttstr label) {
-        return tTJSVariant(player().getLoopTimeline(label));
+        return tTJSVariant(engine().getLoopTimelineLike_0x67522C(label));
     }
-    tjs_int EmotePlayer::getTimelineTotalFrameCount(ttstr label) {
-        return player().getTimelineTotalFrameCount(label);
+    double EmotePlayer::getTimelineTotalFrameCount(ttstr label) {
+        return engine().getTimelineTotalFrameCountLike_0x6753F0(label);
     }
     tTJSVariant EmotePlayer::getPlayingTimelineInfoList() {
-        return player().getPlayingTimelineInfoList();
+        return engine().getPlayingTimelineInfoListLike_0x6754C4();
     }
 
     // --- #65-67 selector methods ---
     bool EmotePlayer::isSelectorTarget(ttstr label) {
-        return player().isSelectorTarget(label);
+        return engine().isSelectorTarget(label);
     }
-    // #66 activateSelectorTarget (sub_67581C): scans the selector deque, finds
-    //   the option matching `label`, snapshots its keyframe set into the active
-    //   selector, then re-steps the selector + transition deques. Player has no
-    //   activate entry yet (only deactivate @0x675BF4) — open: faithful selector
-    //   activation needs the deque option-scan + applySelection re-step ported.
     void EmotePlayer::activateSelectorTarget(ttstr label) {
-        STUB_WARN(activateSelectorTarget);
+        engine().activateSelectorTarget(label);
     }
     void EmotePlayer::deactivateSelectorTarget(ttstr label) {
-        player().deactivateSelectorTarget(label);
+        engine().deactivateSelectorTarget(label);
     }
 
     // --- #68 getCommandList (sub_682520 -> Player_getCommandList) ---

@@ -1,4 +1,4 @@
-// PlayerFrameStep.h — M1/P2 binary-aligned parsed-frame slot + parse/merge.
+// PlayerFrameStep.h — legacy decoded parsed-frame test model.
 //
 // SCOPE (M1 staged re-architecture, phase P2 — see
 //   analysis/Player_progress_frame_stepping_M1_plan.md):
@@ -8,11 +8,10 @@
 //   - Player_mergeFrameContent @ 0x692AB0 -> mergeFrameContentLike_0x692AB0
 //
 // These are INDEPENDENT, UNIT-TESTABLE free functions. They are NOT wired into
-// the live frame-progress path (PlayerFrameProgress.cpp / PlayerTimeline.cpp /
-// PlayerUpdateLayerEval.cpp remain untouched). The goal here is a structurally
-// faithful copy of the binary's raw 536-byte node slot buffer (node+320 /
-// node+856 in libkrkr2.so, 536-byte stride) plus byte-exact mask gating and
-// field placement, so that later phases (P4/P6) can wire it in.
+// the live frame-progress path. They preserve a useful logical projection for
+// unit tests, but are not a structurally faithful copy of the Android slot:
+// they use decoded PSB dictionaries/vectors instead of the raw TJS dispatch and
+// variant owners, and the mesh branch is incomplete.
 //
 // Field offsets in the comments below are taken verbatim from the decompiled
 // field accesses in 0x6926B4 / 0x692AB0 (slot base = a1 in parseFrame, = v3 in
@@ -24,12 +23,11 @@
 // DATA SOURCE NOTE: the binary reads motion data through iTJSDispatch2 PropGet
 // dispatch wrappers (sub_662668=double, sub_6635DC=int, sub_6636D4=bool,
 // sub_6695BC=array-index, sub_529524=variant-ref, sub_56C694=array count). The
-// local port has no live iTJSDispatch2 motion tree; the equivalent decoded data
-// lives in PSB::PSBDictionary. These Like_ functions therefore source values
-// from a PSB::PSBDictionary frame/content, while preserving the binary's mask
-// gates, default values, and slot offsets exactly. Variant blobs the binary
-// keeps as raw tTJSVariant (act/src/dtgt/target/curve blocks) are decoded into
-// their logical local form at the matching offset; see per-field comments.
+// live Player now owns the raw motion content and per-node frameListVariant.
+// These older Like_ functions nevertheless still source values from
+// PSB::PSBDictionary and flatten raw variant/string ownership into STL logical
+// views. They are compatibility test scaffolding, not a platform boundary and
+// not evidence that the live frame chain is reconstructed.
 
 #pragma once
 

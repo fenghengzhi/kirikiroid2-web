@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "DrawDevice.h"
+#include "DrawDeviceD3DIntf.h"
 #include "LayerBitmapIntf.h"
 #include "LayerManager.h"
 #include "RenderManager.h"
@@ -37,7 +38,6 @@
 #include "visual/impl/LayerImpl.h"
 
 class DrawDeviceObjectBase;
-class D3DLayerObject;
 class DrawDeviceManagerItem;
 class D3DPicture;
 
@@ -212,51 +212,6 @@ public:
                                tTVPLayerType, tjs_int) override {}
     void EndBitmapCompletion(iTVPLayerManager *) override {}
     void Clear() override {}
-};
-
-class D3DLayerObject {
-    friend class DrawDeviceObjectBase;
-
-    iTJSDispatch2 *ScriptOwner;
-    DrawDeviceObjectBase *Parent = nullptr;
-    tjs_int FrontIndex = 0;
-    tjs_int BackIndex = 0;
-    tjs_int DrawPlane = 1;
-
-protected:
-    std::list<D3DLayerObject *> Listeners;
-
-    D3DLayerObject(iTJSDispatch2 *owner, DrawDeviceObjectBase *parent)
-        : ScriptOwner(owner), Parent(parent) {}
-
-    iTJSDispatch2 *GetScriptOwner() const { return ScriptOwner; }
-    DrawDeviceObjectBase *GetParent() const { return Parent; }
-
-public:
-    virtual ~D3DLayerObject();
-
-    virtual bool IsVisible() const = 0;
-    virtual void Draw() = 0;
-    virtual void OnParentHasParent() {}
-    virtual void OnDetached() {}
-
-    void AddListener(D3DLayerObject *listener) {
-        if(listener)
-            Listeners.push_back(listener);
-    }
-    void RemoveListener(D3DLayerObject *listener) {
-        if(listener)
-            Listeners.remove(listener);
-    }
-    bool OnUpdate(const tTJSVariant &state);
-    virtual bool TransformPoint(float &, float &) const { return false; }
-
-    tjs_int getFrontIndex() const { return FrontIndex; }
-    void setFrontIndex(tjs_int value);
-    tjs_int getBackIndex() const { return BackIndex; }
-    void setBackIndex(tjs_int value);
-    tjs_int getDrawPlane() const { return DrawPlane; }
-    void setDrawPlane(tjs_int value) { DrawPlane = value & 3; }
 };
 
 class DrawDeviceObjectBase {
@@ -612,7 +567,7 @@ public:
             if(object->IsVisible() &&
                (!frontIndexLimit || object->getFrontIndex() < frontIndexLimit) &&
                (object->getDrawPlane() & 1) != 0)
-                object->Draw();
+                object->Draw(CurrentTarget);
         }
 
         tTJSNI_Layer *layer = tTJSNI_Layer::FromVariant(targetLayer);
@@ -689,6 +644,23 @@ D3DLayerObject::~D3DLayerObject() {
     }
 }
 
+iTVPTexture2D *D3DLayerObject::GetParentDrawTarget() const {
+    return Parent ? Parent->CurrentTarget : nullptr;
+}
+
+// D3DLayerObject::AddListener @0x530DA4 appends a list node and deliberately
+// permits duplicate listener pointers.
+void D3DLayerObject::AddListener(D3DLayerListener *listener) {
+    if(listener)
+        Listeners.push_back(listener);
+}
+
+// D3DLayerObject::RemoveListener @0x530DE8 removes every matching node.
+void D3DLayerObject::RemoveListener(D3DLayerListener *listener) {
+    if(listener)
+        Listeners.remove(listener);
+}
+
 void D3DLayerObject::setFrontIndex(tjs_int value) {
     if(FrontIndex == value)
         return;
@@ -722,7 +694,7 @@ bool D3DLayerObject::OnUpdate(const tTJSVariant &state) {
     }
 
     bool result = false;
-    for(D3DLayerObject *listener : Listeners) {
+    for(D3DLayerListener *listener : Listeners) {
         const bool listenerResult = listener->IsVisible();
         result = result || listenerResult;
     }
@@ -804,9 +776,9 @@ public:
         setBackIndex(backIndex);
     }
 
-    bool IsVisible() const override { return GetVisibleProperty(PrimaryOwner); }
+    bool IsVisible() override { return GetVisibleProperty(PrimaryOwner); }
 
-    void Draw() override {
+    void Draw(iTVPTexture2D *) override {
         DrawDeviceObjectBase *owner = GetParent();
         if(!owner || !owner->CurrentTarget || !Manager)
             return;
@@ -895,14 +867,14 @@ void DrawDeviceObjectBase::Show() {
         for(const auto &entry : FrontItems) {
             D3DLayerObject *item = entry.second;
             if(item->IsVisible() && (item->getDrawPlane() & 1) != 0)
-                item->Draw();
+                item->Draw(CurrentTarget);
         }
 
         CurrentTarget = BackTarget;
         for(const auto &entry : BackItems) {
             D3DLayerObject *item = entry.second;
             if(item->IsVisible() && (item->getDrawPlane() & 2) != 0)
-                item->Draw();
+                item->Draw(CurrentTarget);
         }
 
         // sub_5314B0 obtains AlphaBlend_SD from the private "opengl" manager
@@ -926,7 +898,7 @@ void DrawDeviceObjectBase::Show() {
         for(const auto &entry : FrontItems) {
             D3DLayerObject *item = entry.second;
             if(item->IsVisible() && (item->getDrawPlane() & 1) != 0)
-                item->Draw();
+                item->Draw(CurrentTarget);
         }
     }
 
@@ -1018,7 +990,7 @@ class D3DImage final : public D3DLayerObject {
 
     void NotifyMatrixChanged() {
         // sub_52D198/sub_52D248 notify each listener through vtable +16.
-        for(D3DLayerObject *listener : Listeners)
+        for(D3DLayerListener *listener : Listeners)
             (void)listener->IsVisible();
     }
 
@@ -1047,14 +1019,16 @@ public:
         return TJS_S_OK;
     }
 
-    bool IsVisible() const override { return Visible; }
+    bool IsVisible() override { return Visible; }
     void setVisible(bool value) { Visible = value; }
+    float GetScaleXForListener() const { return Matrix[0]; }
 
-    void Draw() override {
+    void Draw(iTVPTexture2D *) override {
         if(!GetParent() || !Visible)
             return;
-        for(D3DLayerObject *listener : Listeners)
-            listener->Draw();
+        iTVPTexture2D *target = GetParentDrawTarget();
+        for(D3DLayerListener *listener : Listeners)
+            listener->Draw(target);
     }
 
     bool TransformPoint(float &x, float &y) const override {
@@ -1092,6 +1066,17 @@ public:
         Clip[3] = bottom;
     }
 };
+
+D3DLayerObject *TVPGetD3DImageNative(iTJSDispatch2 *object) {
+    if(!object)
+        return nullptr;
+    return ncbInstanceAdaptor<D3DImage>::GetNativeInstance(object, false);
+}
+
+float TVPGetD3DImageScaleX(const D3DLayerObject *object) {
+    const auto *image = static_cast<const D3DImage *>(object);
+    return image ? image->GetScaleXForListener() : 0.0f;
+}
 
 class D3DPicture final {
     struct TextureReference {

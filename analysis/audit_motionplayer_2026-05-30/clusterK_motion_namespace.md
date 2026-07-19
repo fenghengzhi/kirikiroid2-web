@@ -57,7 +57,12 @@ Key binary facts: name=="blank" gate (sub_9B1ED0); hash = FNV-ish `(1025*h)^(>>6
 
 Local counterpart: **NO 1:1 function.** `SourceCache::findSource` (SourceCache.cpp:602) = thin `loadSourceByName(name,{})`. Player-side findSource: grep `Player_findSource`/`findSource` in Player*.cpp.
 
-Architecture verdict: 🔧 SEVERE re-arch. Local SourceCache pipeline (loadRenderSourceByName/loadRenderSourceTextureByName, SourceCache.cpp:489-600) uses `std::list<Entry>` cache keyed by narrow-string+blendMode+packedColors, `std::shared_ptr<tTVPBaseBitmap>`, RenderManager->CreateTexture2D, and a bespoke `resolveMotionSourcePathLike_0x6948E8` candidate-list resolver. The binary uses the **ResourceManager native instance's two intrusive hashmaps** + raw `Motion_createTextureFromPixels()` update path + `TVPReverseRGB`/A8L8 expand + TJS-dispatch `findSource`. None of the container choices, the hash function, the "blank"/type==2/type==1 branch structure, the truncated_width/height/pixel node reads, or the format-string branch exist locally.
+Architecture verdict (2026-07-18 corrected): 🔧 PARTIAL. ResourceManager public
+inheritance and each outer-map mapped record's Win/KRKR maps, AddRef/Release ownership,
+reverse destruction and unload lifetime are restored. SourceCache's layer LRU is a
+different cache chain and must not be used to characterize Player_findSource's current
+topology. The remaining gap is that pixel metadata/resources are still reached through
+the decoded `MotionSnapshot` side graph instead of raw `PSBRawNode` navigation.
 
 ================================================================
 ## 2. Motion_createTextureFromPixels @0x695d04
@@ -117,7 +122,9 @@ Local (main.cpp NCB_REGISTER_CLASS(Motion), lines 331-378):
 
 ### SourceCache (binary @0x6a85a8) — members: constructor, loadSource(sub_6A7BA8), clearCache(sub_6A8438), property bufLayer RO(getter sub_6A84FC).  [4 members]
 Local (main.cpp:27): constructor, loadSource, clearCache, bufLayer RO. ✅ member set MATCHES.
-Caveat: binary loadSource = sub_6A7BA8 (a distinct function, not findSource/0x6948e8). Local `loadSource` impl uses std::list/shared_ptr (architecture diff, separate from member-set). Local public header has many extra non-registered helpers (loadRenderSource*, findSource, eraseSource…) — not NCB-exposed, internal.
+Caveat: binary loadSource = sub_6A7BA8 (a distinct function, not
+findSource/0x6948e8). Its layer-list implementation is a separate audit item; it
+does not describe the now-restored per-resource Win/KRKR maps.
 
 ### ObjSource (binary @0x69ccb8) — members: constructor(sub_6E3BC8 base), prop originX RO(sub_69D014), originY RO(sub_69D0D8), width RO(sub_69D19C), height RO(sub_69D27C), clip RO(sub_69D35C), method drawLayer(sub_69D6D8).  [7 members]
 Local (main.cpp:33): `NCB_REGISTER_SUBCLASS_DELAY(ObjSource){ NCB_CONSTRUCTOR(()); }` — **only constructor.**
@@ -153,7 +160,7 @@ Verdict: 🔧 architectural divergence. Binary PrivateMotionGLL is a real regist
 
 | id | func@addr | local file:line | sev | one-line |
 |----|-----------|-----------------|-----|----------|
-| K-1 | Motion_Player_findSource @0x6948e8 | SourceCache.cpp:489-600 / Player*.cpp | P0 🔧 | Whole resolve/cache/upload pipeline re-arch: binary = RM native dual-hashmap + raw texture-update + TJS-dispatch findSource; local = std::list+shared_ptr+RenderManager+candidate-list |
+| K-1 | Motion_Player_findSource @0x6948e8 | ResourceManager/PlayerResource | CLOSED + BOUNDARY | **2026-07-18 superseded**：mapped record、Win/KRKR 两内表、AddRef/Release 与 unload 生命周期已复原；Win/spec=2、KRKR/spec=1 均走 raw PSB。KRKR 整页上传是 Web API 边界 |
 | K-2 | Motion_createTextureFromPixels @0x695d04 | SourceCache.cpp:594 | P1 🔧 | Binary = guarded "opengl" backend singleton + vtbl+24 upload into cache slot; local = TVPGetRenderManager()->CreateTexture2D per-call |
 | K-3 | Motion_doAlphaMaskOperation @0x6af104 | (none) / main.cpp:286 | P0 ❌ | Alpha-mask op MISSING: no shader cache, fillRect borders, or CPU dst.a=src.a*dst.a/255 loops; also wrong registration owner |
 | K-4 | Motion_getD3DAvailable @0x6b0960 | main.cpp:285 + Player impl | P1 ⚠️ | Must be `!hasGPUAccel`; registered on Player not namespace |
@@ -162,13 +169,13 @@ Verdict: 🔧 architectural divergence. Binary PrivateMotionGLL is a real regist
 | K-7 | motionplayer_ncb_register @0x6d9b08 | main.cpp:285-286,331-378,420 | P1 ⚠️ | doAlphaMaskOperation/getD3DAvailable & MaskModeStencil/Alpha belong on Motion namespace not Player/D3DEmoteModule; Player subclass order/registration diverges |
 | K-8 | Point_ncb_registerMembers @0x690fbc | SourceCache.h:145 | P2 ⚠️ | `contains` = Player_hitTest in binary; local returns false stub (member set otherwise matches) |
 | K-9 | PrivateMotionGLL_CreateClass @0x6dd284 | PrivateMotionGLL.h | P2 🔧 | Binary is a registered TJS class (setSize/visible/absolute + delegating ctor); local has no class, uses free fns + std::vector |
-| K-10 | SourceCache loadSource impl | SourceCache.cpp:450-600 | P1 🔧 | std::list<Entry>/shared_ptr<tTVPBaseBitmap>/packedColors-keyed cache replaces binary's TJS/native-instance cache (functional-equiv rejected) |
+| K-10 | SourceCache loadSource impl | SourceCache.cpp | P1 🔧 | Separate layer-LRU chain; continue auditing against sub_6A7BA8, independently of Player_findSource's restored mapped-record texture maps |
 
 ## MISSING (no local counterpart)
 - Motion_doAlphaMaskOperation full body (shader cache + CPU pixel loops + fillRect-border passes).
 - ObjSource: originX/originY/width/height/clip RO props + drawLayer.
 - ResourceManager: bufLayer / unloadAll / isExistMotion / findMotion / random.
-- Player::findSource native dual-hashmap + texture-update path (binary's 0x6948e8 core).
+- Player::findSource 的 raw PSBRawNode 像素导航（容器/生命周期已在 2026-07-18 复原）。
 - Motion namespace MaskModeStencil/MaskModeAlpha constants.
 - PrivateMotionGLL as a registered NCB class (setSize/visible/absolute).
 
@@ -180,4 +187,6 @@ Verdict: 🔧 architectural divergence. Binary PrivateMotionGLL is a real regist
 - None explicitly annotated in the audited K files. D3DAdaptor's nullsub-backed methods (setPos/removeAllBg/registerBg/...) are binary-side stubs already, so local stubs are faithful, not platform deviations.
 
 ## VERDICT
-🔧 Cluster K requires architecture rework, not patches. Three P0s: K-1 (findSource pipeline), K-3 (alpha-mask op entirely missing), K-5 (ObjSource member set). The SourceCache/ResourceManager container model (std::list+shared_ptr+std::vector) is the cross-cutting root cause and contradicts the binary's native-instance intrusive hashmaps + TJS-dispatch + raw texture-update surface. Recommend module-alignment-driver sequencing: (1) reconcile ResourceManager vs SourceCache surface split (binary shares it), (2) restore ObjSource members, (3) re-arch findSource around the RM native instance, (4) implement doAlphaMaskOperation, (5) move namespace-level fns/constants off Player/D3DEmoteModule.
+**2026-07-18 superseded verdict:** K-1 的容器归属与生命周期、K-5 ObjSource
+成员、RM/SourceCache 继承均已恢复。findSource 只剩 decoded→raw pixel 导航；旧的
+“list+shared_ptr 是根因”结论不得继续作为当前状态引用。其余 K 项按各自后续审计处理。

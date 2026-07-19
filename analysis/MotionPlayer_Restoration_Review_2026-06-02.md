@@ -1,5 +1,9 @@
 # MotionPlayer 源代码还原 Review（2026-06-02）
 
+> **2026-07-18 字段纠正：** 本文沿用的 setChara `tTJSVariant*@+776`
+> 结论已被 NCB 注册与 getter/play 调用链证伪；正确六槽映射见
+> `analysis/psbfile_android_reconstruction_2026-07-18.md` §MotionSnapshot。
+
 > 方法：复用 2026-05-30 全量 12 簇审计 + 05-31 M15 复核 + M1 帧步进机计划为基线，
 >   对自 05-31 以来的 delta（砖4-live / 砖5 / 砖6 Stage A 共 13 提交，全部 M1/cluster-G）
 >   做 fresh decompile 独立复核。
@@ -91,7 +95,7 @@
 | M3 | J | getVariable 实为 2-branch scope-router + HM1 join("scope::label") + HM4-first 级联；本端扁平 4 级 fallback，HM4 恒空、HM1 从不读、PSB ranges 是发明 fallback | 05-31 R0-1 |
 | M5 | F | ~~buildNodePathKey 完全缺失；节点按扁平 PSB label 索引→重名碰撞~~ **【06-03 证伪】** buildNodePathKey 存在(@0x6B5C1C, HM3-only)，Player+24 node-index 用 raw PSB label 是二进制**正确行为**非缺陷，无重名碰撞 bug。详见 06-03 review §四 | MASTER P0 |
 | M6 | K | doAlphaMaskOperation 整体缺失，且误挂 Player 而非 namespace | MASTER P0 |
-| M9 | K | ObjSource 缺 6 成员；RM↔SourceCache 共享实现被拆开；findSource 走 list+shared_ptr 而非双 hashmap+raw upload | MASTER P0 |
+| M9 | K | **【2026-07-18 后续纠正】** ObjSource/RM 继承与成员、findSource mapped record+Win/KRKR 内表及纹理生命周期均已复原；两个 spec 均走 raw PSB，KRKR 整页上传为 Web API 边界 | 当前审计 §source |
 | R0-2 | E | setChara 二进制为 tTJSVariant*@+776 + 引用计数 + replay dispatch；本端 ttstr 平凡赋值 | 05-31 R0-2 |
 | R0-3 | E | getLoopTime 二进制返回 **TJS Array**（node deque 160B 遍历）；本端返回裸 double | 05-31 R0-3 |
 | 容器层 | A/B/E/F/G/J/K/L | 4 内联 HM(+264/+320/+1184/+1240) + 节点/控制器 deque → STL；4↔6 映射仍未建立（P2 地基未做）| MASTER 系统性根因 #1 |

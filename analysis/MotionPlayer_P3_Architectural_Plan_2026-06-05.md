@@ -29,11 +29,14 @@
 > 正确目标形态 = `unordered_map<ttstr,V,ttstr_hash,ttstr_equal>`，已达成。**#4 残留容器偏差完全 CLOSED（非部分）。**
 >
 > 落地：`_state->loadedModules` 从 `unordered_map<std::string(raw path),V>` 迁到
-> `unordered_map<ttstr,tTJSVariant,ttstr_hash,ttstr_equal>`（+ `lastLoadedPath` std::string→ttstr）；所有 key 构造点
+> `unordered_map<ttstr,tTJSVariant,ttstr_hash,ttstr_equal>`；所有 key 构造点
 > （load/unload/findLoaded/clearCache/unloadAll）同步；大小写归一化交叉核实：binary FNV/equal 均**大小写敏感**
 > （无 tolower），本地原本就 raw-path-keyed（lowercase 仅用于日志），迁移**无归一化语义丢失**。就地纠正 ResourceManager.h
 > 一条被证伪注释（「binary is NOT libstdc++ unordered_map」）+ 删死字段 `_psbDictCache`。构建 web+wasmtime PASS，
 > logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS（oracle-guarded，非 inert）。
+> **后续纠正 2026-07-18**：这里曾保留的 `lastLoadedPath/Module` 已被
+> `0x6A8D8C/0x6A959C/0x6A8CF8` 与 `EmoteObject_init@0x67DBAC` 证伪并删除；
+> 二进制用调用者栈上的 load 返回值，不在 RM 中缓存“最后模块”。
 >
 > 原计划内容存档（已不适用，留作证据轨迹）：
 

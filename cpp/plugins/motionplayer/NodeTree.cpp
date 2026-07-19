@@ -1,426 +1,315 @@
 //
-// Build persistent node tree from PSB layer hierarchy.
-// Aligned to libkrkr2.so sub_6B4A6C (0x6B4A6C).
+// Build the persistent node tree from the raw TJS layer hierarchy.
+// Aligned to Player_buildNodeTree_recursive @0x6B4A6C,
+// Player_initNodeFields @0x6B3C78 and Player_buildNodeTree @0x6B51F0.
 //
 
 #include "NodeTree.h"
+
+#include "MotionDispatch.h"
 #include "MotionNode.h"
-#include <atomic>  // CREATESITE (temp)
-#include <cstdio>  // CREATESITE (temp)
-#include "RuntimeSupport.h"
 #include "Player.h"
 #include "PlayerInternal.h"
 #include "ncbind.hpp"
 #include "tjsArray.h"
-#include "psbfile/PSBFile.h"
 
+#include <atomic>
+#include <cstdio>
 #include <spdlog/spdlog.h>
-#include <stdexcept>
 
 namespace motion::detail {
 
     namespace {
 
-        // PSB helper: extract a number from a dictionary key.
-        std::optional<double>
-        nodeTreePsbNumber(const std::shared_ptr<const PSB::PSBDictionary> &dic,
-                          const char *key) {
-            if (!dic) return std::nullopt;
-            auto val = (*dic)[key];
-            if (auto number = std::dynamic_pointer_cast<PSB::PSBNumber>(val)) {
-                switch (number->numberType) {
-                    case PSB::PSBNumberType::Float:
-                        return number->getValue<float>();
-                    case PSB::PSBNumberType::Double:
-                        return number->getValue<double>();
-                    case PSB::PSBNumberType::Int:
-                        return static_cast<double>(number->getValue<int>());
-                    case PSB::PSBNumberType::Long:
-                    default:
-                        return static_cast<double>(number->getValue<tjs_int64>());
-                }
-            }
-            if (auto boolean = std::dynamic_pointer_cast<PSB::PSBBool>(val)) {
-                return boolean->value ? 1.0 : 0.0;
-            }
-            return std::nullopt;
+        bool rawTryGet(const tTJSVariant &holder, const tjs_char *member,
+                       tTJSVariant &value) {
+            return holder.Type() == tvtObject &&
+                   motionTryPropGet(holder, member, value);
         }
 
-        // PSB helper: extract a string from a dictionary key.
-        std::string
-        nodeTreePsbString(const std::shared_ptr<const PSB::PSBDictionary> &dic,
-                          const char *key) {
-            if (!dic) return {};
-            if (auto text = std::dynamic_pointer_cast<PSB::PSBString>((*dic)[key])) {
-                return text->value;
+        bool rawTryGetByNum(const tTJSVariant &holder, tjs_int index,
+                            tTJSVariant &value) {
+            if(holder.Type() != tvtObject) {
+                return false;
             }
-            return {};
+            iTJSDispatch2 *dispatch = holder.AsObjectNoAddRef();
+            return TJS_SUCCEEDED(dispatch->PropGetByNum(
+                TJS_MEMBERMUSTEXIST, index, &value, dispatch));
         }
 
-        // PSB helper: extract a list from a dictionary key.
-        std::shared_ptr<PSB::PSBList>
-        nodeTreePsbList(const std::shared_ptr<const PSB::PSBDictionary> &dic,
-                        const char *key) {
-            if (!dic) return nullptr;
-            return std::dynamic_pointer_cast<PSB::PSBList>((*dic)[key]);
+        tTJSVariant rawGet(const tTJSVariant &holder,
+                           const tjs_char *member) {
+            return holder.Type() == tvtObject
+                       ? motionPropGet(holder, member)
+                       : tTJSVariant{};
         }
 
-        // Check if any frame in frameList has a non-empty "src" in its "content".
-        bool checkHasSource(const std::shared_ptr<const PSB::PSBDictionary> &node) {
-            auto frameList = nodeTreePsbList(node, "frameList");
-            if (!frameList) return false;
-            for (int i = 0; i < static_cast<int>(frameList->size()); ++i) {
-                auto frame = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                    (*frameList)[i]);
-                if (!frame) continue;
-                auto content = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                    (*frame)["content"]);
-                if (!content) continue;
-                auto srcVal = std::dynamic_pointer_cast<PSB::PSBString>(
-                    (*content)["src"]);
-                if (srcVal && !srcVal->value.empty()) return true;
-            }
-            return false;
+        int rawInt(const tTJSVariant &holder, const tjs_char *member,
+                   int fallback = 0) {
+            return holder.Type() == tvtObject
+                       ? static_cast<int>(
+                             motionPropGet(holder, member).AsInteger())
+                       : fallback;
         }
 
-        // A7: replaced by motion::internal::resolveNodeParameterEntry which
-        // now reads from Player. Kept the call site below using the shared
-        // helper to avoid duplicating the parameter lookup logic.
+        double rawReal(const tTJSVariant &holder, const tjs_char *member,
+                       double fallback = 0.0) {
+            return holder.Type() == tvtObject
+                       ? motionPropGet(holder, member).AsReal()
+                       : fallback;
+        }
 
-        // Recursively walk PSB layer tree, appending nodes to the Player deque.
-        void walkTree(const std::shared_ptr<const PSB::PSBDictionary> &psbNode,
-                      int parentIdx,
-                      motion::Player &player,
-                      int parentPreview) {
-            if (!psbNode) return;
+        bool rawBool(const tTJSVariant &holder, const tjs_char *member,
+                     bool fallback = false) {
+            return holder.Type() == tvtObject
+                       ? motionPropGetBool(holder, member)
+                       : fallback;
+        }
 
-            auto &nodes = player.nodesForBuild();
-            nodes.emplace_back();
-            MotionNode &node = nodes.back();
-            node.index = static_cast<int>(nodes.size() - 1);
-            node.parentIndex = parentIdx;
-            node.psbNode = psbNode;
-            // P3-B (d): binary buildNodeTree_recursive@0x6B4A6C allocates the
-            //   two layer ids via the Player+992 RM dispatch FuncCall
-            //   (L"requireLayerId", numparams=0, 0x6b4d24/0x6b4dbc), not a native
-            //   call. Route through the player's dispatch helper.
-            node.layerId1 = player.dispatchRequireLayerId();
-            node.layerId2 = player.dispatchRequireLayerId();
+        int rawCount(const tTJSVariant &holder) {
+            return holder.Type() == tvtObject
+                       ? motionPropGetCount(holder)
+                       : 0;
+        }
 
-            // "label" → layerName (node+0)
-            node.layerName = nodeTreePsbString(psbNode, "label");
-            // Aligned with libkrkr2.so Player_buildNodeTree_recursive @0x6B4A6C,
-            // Player+24 insert (disasm 0x6B4CA8..0x6B4CE4, byte-verified):
-            //   6b4ca8  BL Motion_propGetByName        ; v30 = PropGet("label")
-            //   6b4cac  LDR X0, [SP,#var_140]          ; X0 = a1+0x18 = Player+24
-            //   6b4cb0  ADD X1, SP, #var_F8            ; X1 = &v30  ← key = RAW label
-            //   6b4cb4  BL Player_nodePathMap_lowerBoundInsert
-            //   6b4ce4  STR W26, [X0]                  ; *slot = node deque-index
-            // The Player+24 map is keyed by the RAW PSB "label" ttstr — there is
-            // NO `BL Player_buildNodePathKey` before the insert, and
-            // xrefs_to(0x6B5C1C) shows the path builder's only two callers both
-            // feed HM3 (Player+1184), never Player+24. The hierarchical path is
-            // an HM3-only key space; the node-index map uses the flat label.
-            // (Reverts the wrong-direction re-key in commit 98ac6e0, which is
-            // contradicted by the insert-point disasm above.) All reads of this
-            // map feed the raw query string verbatim, so write must match: raw.
-            // The insert is unconditional — there is no non-empty-label branch
-            // between PropGet and the insert, so empty/missing "label" still
-            // inserts key "" (last-write-wins).
-            // Player+24 map is ttstr-keyed (UTF-16 comparator sub_9B1ED0);
-            // widen the raw std::string label.
-            player.nodeLabelMapForBuild()[widen(node.layerName)] = node.index;
-
-            // "type" → nodeType (node+28)
-            // 0=obj, 1=shape, 3=motion, 4=particle, 5=camera, 6=emitter,
-            // 7=shapeAABB, 9=camConstraint, 10=anchor, 12=stencilComposite
-            if (auto v = nodeTreePsbNumber(psbNode, "type"))
-                node.nodeType = static_cast<int>(*v);
-
-            // "coordinate" → coordinateMode (node+24)
-            if (auto v = nodeTreePsbNumber(psbNode, "coordinate"))
-                node.coordinateMode = static_cast<int>(*v);
-
-            // "parameterize" → parameter table index (node+8 in libkrkr2.so)
-            if (auto v = nodeTreePsbNumber(psbNode, "parameterize"))
-                node.parameterizeIndex = static_cast<int>(*v);
-            node.parameterEntry =
-                motion::internal::resolveNodeParameterEntry(player, node);
-            if (node.nodeType == 0) {
-                if (auto v = nodeTreePsbNumber(psbNode, "objTriPriority"))
-                    node.objTriPriority = static_cast<int>(*v);
-            }
-
-            // "inheritMask" → inheritFlags (node+40, default 0x1FC)
-            if (auto v = nodeTreePsbNumber(psbNode, "inheritMask"))
-                node.inheritFlags = static_cast<int>(*v);
-
-            // "joinTarget" → bool (node+46). Aligned with libkrkr2.so
-            // Player_initNodeFields @0x6b3ef0 (`*(BYTE)(node+46) =
-            // Motion_propGetBool("joinTarget", default 0) & 1`). Written
-            // immediately before groundCorrection (node+47), matching the
-            // binary's prop-read order. Gates HM3 populate/restore.
-            if (auto v = nodeTreePsbNumber(psbNode, "joinTarget"))
-                node.joinTarget = (*v != 0.0);
-
-            // "groundCorrection" → bool (node+47)
-            if (auto v = nodeTreePsbNumber(psbNode, "groundCorrection"))
-                node.groundCorrection = (*v != 0.0);
-
-            // "transformOrder" → 4 ints (node+84..96, default [0,1,2,3])
-            if (auto toList = nodeTreePsbList(psbNode, "transformOrder")) {
-                for (int i = 0; i < 4 && i < static_cast<int>(toList->size()); ++i) {
-                    if (auto v = std::dynamic_pointer_cast<PSB::PSBNumber>((*toList)[i])) {
-                        switch (v->numberType) {
-                            case PSB::PSBNumberType::Int:
-                                node.transformOrder[i] = v->getValue<int>(); break;
-                            default:
-                                node.transformOrder[i] = static_cast<int>(v->getValue<tjs_int64>()); break;
+        void createChildPlayerLike_0x6B3C78(Player &player, MotionNode &node,
+                                             const tTJSVariant &rawLayer) {
+            using PlayerAdaptor = ncbInstanceAdaptor<Player>;
+            {
+                static std::atomic<long> createCount{0};
+                const long count = ++createCount;
+                if(count <= 80 || (count >= 10000 && count <= 10060) ||
+                   count % 2000 == 0) {
+                    std::string chain;
+                    Player *root = &player;
+                    int depth = 0;
+                    for(Player *p = &player; p && depth < 4000; ++depth) {
+                        if(depth < 10) {
+                            if(depth) chain += " <- ";
+                            chain += narrow(p->getChara());
                         }
+                        root = p;
+                        p = p->parentPlayerForDiag();
                     }
+                    const std::string childLabel = narrow(node.layerName);
+                    std::fprintf(
+                        stderr,
+                        "CREATESITE n=%ld childLabel='%s' nodeIdx=%d depth=%d "
+                        "rootChara='%s' rootPtr=%p chain='%s'\n",
+                        count,
+                        node.layerName.IsEmpty() ? "<none>" : childLabel.c_str(),
+                        node.index, depth, narrow(root->getChara()).c_str(),
+                        static_cast<void *>(root), chain.c_str());
                 }
             }
 
-            // "meshTransform" → meshType (node+2000, sub_6B3C78 at 0x6B4190)
-            if (auto v = nodeTreePsbNumber(psbNode, "meshTransform"))
-                node.meshType = static_cast<int>(*v);
-            // Player_initNodeFields @0x6B4198 gates all remaining mesh fields
-            // on meshTransform!=0. Inside that branch it reads the two ints,
-            // then reads meshCombine only when the property exists.
-            if (node.meshType != 0) {
-                // "meshSyncChildMask" → meshFlags (node+2004, 0x6B41B8)
-                if (auto v = nodeTreePsbNumber(psbNode, "meshSyncChildMask"))
-                    node.meshFlags = static_cast<int>(*v);
-                // "meshDivision" → meshDivision (node+2008, 0x6B41D8)
-                if (auto v = nodeTreePsbNumber(psbNode, "meshDivision"))
-                    node.meshDivision = static_cast<int>(*v);
-                // "meshCombine" → node+1964 (0x6B4208..0x6B4238).
-                if (auto v = nodeTreePsbNumber(psbNode, "meshCombine"))
-                    node.meshCombineEnabled = (*v != 0.0);
+            auto *childNative = new Player(player.getResourceManager());
+            if(auto *dispatch = PlayerAdaptor::CreateAdaptor(childNative)) {
+                node.childPlayerVar = tTJSVariant(dispatch, dispatch);
+                dispatch->Release();
+            } else {
+                delete childNative;
+                return;
             }
 
-            // "stencilType" → stencilType (node+52)
-            if (auto v = nodeTreePsbNumber(psbNode, "stencilType")) {
-                node.stencilTypeBase = static_cast<int>(*v);
-                node.stencilType = node.stencilTypeBase;
-            }
-
-            // "shape" → shapeType (node+32, sub_6B3C78 case 1)
-            if (auto v = nodeTreePsbNumber(psbNode, "shape"))
-                node.shapeType = static_cast<int>(*v);
-
-            // "anchor" → anchorType/cameraConstraintType (node+2376, sub_6B3C78 case 9)
-            if (auto v = nodeTreePsbNumber(psbNode, "anchor"))
-                node.anchorType = node.cameraConstraintType = static_cast<int>(*v);
-
-            // Particle properties (sub_6B3C78 case 4, 0x6B4438..0x6B45E4)
-            if (auto v = nodeTreePsbNumber(psbNode, "particle"))
-                node.particleType = static_cast<int>(*v);
-            if (auto v = nodeTreePsbNumber(psbNode, "particleMaxNum"))
-                node.particleMaxNum = static_cast<int>(*v);
-            if (auto v = nodeTreePsbNumber(psbNode, "particleAccelRatio"))
-                node.particleAccelRatio = *v;
-            if (auto v = nodeTreePsbNumber(psbNode, "particleInheritAngle"))
-                node.particleInheritAngle = (*v != 0.0);
-            if (auto v = nodeTreePsbNumber(psbNode, "particleInheritVelocity"))
-                node.particleInheritVelocity = static_cast<int>(*v);
-            if (auto v = nodeTreePsbNumber(psbNode, "particleFlyDirection"))
-                node.particleFlyDirection = static_cast<int>(*v);
-            if (auto v = nodeTreePsbNumber(psbNode, "particleApplyZoomToVelocity"))
-                node.particleApplyZoomToVelocity = static_cast<int>(*v);
-            if (auto v = nodeTreePsbNumber(psbNode, "particleDeleteOutsideScreen"))
-                node.particleDeleteOutside = (*v != 0.0);
-            if (auto v = nodeTreePsbNumber(psbNode, "particleTriVolume"))
-                node.particleTriVolume = (*v != 0.0);
-            // Binary: node+2192 is ONE field, used as both accel decay ratio
-            // and camera damping. "particleCameraDamping" PSB key overwrites
-            // "particleAccelRatio" if both present (same binary offset).
-            if (auto v = nodeTreePsbNumber(psbNode, "particleCameraDamping"))
-                node.particleAccelRatio = *v;
-
-            // "emoteEdit" → emoteEditDict (node+1980, sub_6B3C78 at 0x6B3D48)
-            if (auto ee = std::dynamic_pointer_cast<PSB::PSBDictionary>((*psbNode)["emoteEdit"]))
-                node.emoteEditDict = ee;
-
-            // === TJS↔Native bridge: create child objects (sub_6B3C78 case 3/4) ===
-            if (node.nodeType == 3) {
-                // Aligned to sub_6B3C78 case 3 (0x6B43A4..0x6B43B0):
-                // when the owning Player has preview != 0, bit-2 of the
-                // node's stencilType is cleared so the nested MotionPlayer
-                // sub-node renders as an independent item rather than being
-                // composited through the parent alpha-mask.
-                //   6B43A4 LDRB W8, [X20,#0x444]   ; player.preview (+1092)
-                //   6B43A8 CBZ  W8, 6B43B4         ; skip when zero
-                //   6B43AC AND  W8, W0, #~4        ; stencilType & ~4
-                //   6B43B0 STR  W8, [X19,#0x34]    ; write back
-                // (+0x444=+1092 is `preview`, NOT completionType; off-by-one fix)
-                if (parentPreview != 0) {
-                    node.stencilType &= ~4;
-                }
-
-                // Aligned to sub_6B3C78 case 3 (0x6B43C0..0x6B46E0):
-                // operator new(0x568) → Player constructor → sub_6F1794 (NCB CreateAdaptor)
-                // → store as tTJSVariant at node+1912.
-                // P3-B: child RM = parent+992 dispatch (binary 0x6b43cc
-                //   `Player_ctor(child, parent+992)`). Pass the parent Player's
-                //   RM dispatch variant directly (single-param dispatch-in). The
-                //   child+8=parent link is set right after by
-                //   inheritChildPlayerStateLike_0x6B3C78 (binary 0x6b43dc).
-                using PlayerAdaptor = ncbInstanceAdaptor<Player>;
-                // CREATESITE (temp): log nodeType=3 child creation structure —
-                // parent motion path + this node's label — to expose recursion/
-                // cycle explosion (repeated path/label = re-expansion).
-                {
-                    static std::atomic<long> s_nt3Create{0};
-                    long n = ++s_nt3Create;
-                    if(n <= 80 || (n >= 10000 && n <= 10060) || n % 2000 == 0) {
-                        // CREATESITE (temp): walk FULL parent chain to the cascade
-                        // ROOT (until parentPlayerForDiag()==null), capturing the
-                        // root chara + total depth + root pointer. Pins whether the
-                        // leak is one ever-deepening chain (root frozen, +1/frame)
-                        // or many shallow cascades off a repeatedly-rebuilt root.
-                        std::string chain;
-                        motion::Player *root = &player;
-                        int depth = 0;
-                        {
-                            motion::Player *p = &player;
-                            for(; p && depth < 4000; ++depth) {
-                                if(depth < 10) {
-                                    if(depth) chain += " <- ";
-                                    chain += motion::detail::narrow(p->getChara());
-                                }
-                                root = p;
-                                p = p->parentPlayerForDiag();
-                            }
-                        }
-                        std::fprintf(stderr,
-                            "CREATESITE n=%ld childLabel='%s' nodeIdx=%d depth=%d "
-                            "rootChara='%s' rootPtr=%p chain='%s'\n",
-                            n,
-                            node.layerName.empty() ? "<none>"
-                                                   : node.layerName.c_str(),
-                            node.index, depth,
-                            motion::detail::narrow(root->getChara()).c_str(),
-                            (void *)root, chain.c_str());
-                    }
-                }
-                auto *childNative = new Player(player.getResourceManager());
-                if (auto *dispatch = PlayerAdaptor::CreateAdaptor(childNative)) {
-                    node.childPlayerVar = tTJSVariant(dispatch, dispatch);
-                    dispatch->Release();
-                } else {
-                    delete childNative;
-                }
-                if((&player)) {
-                    player.inheritChildPlayerStateLike_0x6B3C78(node);
-                }
-            } else if (node.nodeType == 4) {
-                // Aligned to sub_6B3C78 case 4 (0x6B45D8..0x6B45E4):
-                // sub_704CB8 (TJSCreateArrayObject) → store at node+2296.
-                if (auto *array = TJSCreateArrayObject()) {
-                    node.particleArrayVar = tTJSVariant(array, array);
-                    array->Release();
-                }
-            }
-
-            const int thisIdx = node.index;
-
-            // Recurse into "children"
-            auto children = nodeTreePsbList(psbNode, "children");
-            if (children) {
-                for (int i = 0; i < static_cast<int>(children->size()); ++i) {
-                    auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                        (*children)[i]);
-                    walkTree(child, thisIdx, player, parentPreview);
-                }
+            player.inheritChildPlayerStateLike_0x6B3C78(node);
+            if(auto *child = node.getChildPlayer()) {
+                // 0x6B4404..0x6B4654: optional bool defaults to false, then
+                // inherit project context/coordinate/order and parent zFactor.
+                child->setIndependentLayerInherit(rawBool(
+                    rawLayer, TJS_W("motionIndependentLayerInherit"), false));
+                child->setZFactor(player.getZFactor());
             }
         }
 
-    } // anonymous namespace
+        void initNodeFieldsLike_0x6B3C78(Player &player, MotionNode &node,
+                                         const tTJSVariant &rawLayer,
+                                         int parentPreview) {
+            // Four independent CopyRef owners in the Android node.
+            node.emoteEditVariant = rawGet(rawLayer, TJS_W("emoteEdit"));
+            node.frameListVariant = rawGet(rawLayer, TJS_W("frameList"));
 
-    void buildNodeTree(
-        motion::Player &player,
-        const MotionSnapshot &snapshot,
-        const std::string &clipOwner,
-        const std::string &clipLabel,
-        int parentPreview) {
+            node.layerName =
+                motionPropGetString(rawLayer, TJS_W("label"));
+            const tTJSVariant parameterize =
+                rawGet(rawLayer, TJS_W("parameterize"));
+            if(parameterize.Type() == tvtInteger) {
+                node.parameterizeIndex =
+                    static_cast<int>(parameterize.AsInteger());
+                node.parameterEntry =
+                    internal::resolveNodeParameterEntry(player, node);
+            } else {
+                // Player_initNodeFields @0x6B3EA0 writes node+8=null for every
+                // non-integer `parameterize` variant. The default parameter
+                // entry is used by other binary consumers, not stored here.
+                node.parameterizeIndex = -1;
+                node.parameterEntry = nullptr;
+            }
 
+            node.coordinateMode = rawInt(rawLayer, TJS_W("coordinate"));
+            node.joinTarget = rawBool(rawLayer, TJS_W("joinTarget"));
+            node.groundCorrection =
+                rawBool(rawLayer, TJS_W("groundCorrection"));
+            node.inheritFlags =
+                rawInt(rawLayer, TJS_W("inheritMask"), node.inheritFlags);
+
+            const tTJSVariant transformOrder =
+                rawGet(rawLayer, TJS_W("transformOrder"));
+            for(int index = 0; index < 4; ++index) {
+                tTJSVariant value;
+                if(rawTryGetByNum(transformOrder, index, value)) {
+                    node.transformOrder[index] =
+                        static_cast<int>(value.AsInteger());
+                }
+            }
+
+            node.meshType = rawInt(rawLayer, TJS_W("meshTransform"));
+            if(node.meshType != 0) {
+                node.meshFlags =
+                    rawInt(rawLayer, TJS_W("meshSyncChildMask"));
+                node.meshDivision = rawInt(rawLayer, TJS_W("meshDivision"));
+                tTJSVariant meshCombine;
+                if(rawTryGet(rawLayer, TJS_W("meshCombine"), meshCombine)) {
+                    node.meshCombineEnabled = motionPropGetBool(
+                        rawLayer, TJS_W("meshCombine"));
+                }
+            }
+
+            node.nodeType = rawInt(rawLayer, TJS_W("type"));
+            node.stencilTypeBase =
+                rawInt(rawLayer, TJS_W("stencilType"));
+            node.stencilType = node.stencilTypeBase;
+
+            switch(node.nodeType) {
+                case 0:
+                    node.objTriPriority =
+                        rawInt(rawLayer, TJS_W("objTriPriority"));
+                    break;
+                case 1:
+                    node.shapeType = rawInt(rawLayer, TJS_W("shape"));
+                    break;
+                case 3:
+                    if(parentPreview != 0) {
+                        node.stencilType &= ~4;
+                    }
+                    node.meshType = 0;
+                    createChildPlayerLike_0x6B3C78(player, node, rawLayer);
+                    break;
+                case 4:
+                    node.particleType = rawInt(rawLayer, TJS_W("particle"));
+                    node.particleMaxNum =
+                        rawInt(rawLayer, TJS_W("particleMaxNum"));
+                    node.particleAccelRatio =
+                        rawReal(rawLayer, TJS_W("particleAccelRatio"));
+                    node.particleInheritAngle =
+                        rawBool(rawLayer, TJS_W("particleInheritAngle"));
+                    node.particleInheritVelocity =
+                        rawInt(rawLayer, TJS_W("particleInheritVelocity"));
+                    node.particleFlyDirection =
+                        rawInt(rawLayer, TJS_W("particleFlyDirection"));
+                    node.particleApplyZoomToVelocity = rawInt(
+                        rawLayer, TJS_W("particleApplyZoomToVelocity"));
+                    node.particleDeleteOutside = rawBool(
+                        rawLayer, TJS_W("particleDeleteOutsideScreen"));
+                    node.particleTriVolume =
+                        rawBool(rawLayer, TJS_W("particleTriVolume"));
+                    node.particleMotionListVariant =
+                        rawGet(rawLayer, TJS_W("particleMotionList"));
+                    if(auto *array = TJSCreateArrayObject()) {
+                        node.particleArrayVar = tTJSVariant(array, array);
+                        array->Release();
+                    }
+                    break;
+                case 6:
+                    // node+2380 is already zero from MotionNode construction.
+                    break;
+                case 9:
+                    node.anchorType = node.cameraConstraintType =
+                        rawInt(rawLayer, TJS_W("anchor"));
+                    break;
+                case 12:
+                    node.stencilCompositeMaskLayerListVariant = rawGet(
+                        rawLayer, TJS_W("stencilCompositeMaskLayerList"));
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        void walkRawTree(const tTJSVariant &rawLayers,
+                         int parentIndex, Player &player, int parentPreview) {
+            const int count = rawCount(rawLayers);
+            for(int arrayIndex = 0; arrayIndex < count; ++arrayIndex) {
+                tTJSVariant rawLayer;
+                if(!rawTryGetByNum(rawLayers, arrayIndex, rawLayer) ||
+                   rawLayer.Type() != tvtObject) {
+                    continue;
+                }
+
+                auto &nodes = player.nodesForBuild();
+                nodes.emplace_back();
+                MotionNode &node = nodes.back();
+                node.index = static_cast<int>(nodes.size() - 1);
+                node.parentIndex = parentIndex;
+                node.layerId1 = player.dispatchRequireLayerId();
+                node.layerId2 = player.dispatchRequireLayerId();
+
+                initNodeFieldsLike_0x6B3C78(
+                    player, node, rawLayer, parentPreview);
+                player.nodeLabelMapForBuild()[node.layerName] = node.index;
+
+                const int thisIndex = node.index;
+                const tTJSVariant rawChildren =
+                    rawGet(rawLayer, TJS_W("children"));
+                walkRawTree(rawChildren, thisIndex, player, parentPreview);
+            }
+        }
+
+    } // namespace
+
+    void buildNodeTree(Player &player, const tTJSVariant &motionContent,
+                       int parentPreview) {
         ensureRootNodeLike_0x6CED30(player);
         player._nodes.front().index = 0;
         player._nodes.front().parentIndex = -1;
 
-        // Determine which layer set to use: current clip content first, then
-        // fall back to snapshot root-level layers. This matches libkrkr2.so
-        // using player+528 as the active motion/clip content object before
-        // reading its "layer" property in Player_buildNodeTree (0x6B51F0).
-        const std::vector<std::shared_ptr<const PSB::PSBDictionary>> *layerList
-            = nullptr;
+        const tTJSVariant rawLayers =
+            rawGet(motionContent, TJS_W("layer"));
+        walkRawTree(rawLayers, 0, player, parentPreview);
 
-        if (!clipLabel.empty()) {
-            // Resolve by (owner, label). Aligned to libkrkr2.so Player_loadMotion
-            // (0x6B0F10) navigating "motion/<chara>/<motion>": the chara (owner)
-            // scopes which object's same-named clip supplies the layer[] array,
-            // so two objects sharing a motion name (title.psb char/show vs
-            // TITLE/show) build disjoint node trees instead of a merged one.
-            const int idx = snapshot.findClipIndex(clipOwner, clipLabel);
-            if (idx >= 0 && idx < static_cast<int>(snapshot.clipList.size())) {
-                layerList = &snapshot.clipList[idx].layerList;
-            }
-        }
-
-        if (!layerList) {
-            layerList = &snapshot.layerList;
-        }
-
-        if (!layerList || layerList->empty()) {
-            return;
-        }
-
-        // Aligned to Player_buildNodeTree_recursive(player, 0, layerArray) at
-        // 0x6B4A6C: iterate the PSB "layer" array by index; every element
-        // becomes an independent node (no name-based dedup). Parent for all
-        // top-level layers is the synthetic root at index 0.
-        for (const auto &layerDict : *layerList) {
-            if (!layerDict) continue;
-            walkTree(layerDict, 0, player, parentPreview);
-        }
-
-        // Aligned to Player_buildNodeTree post-pass (0x6B51F0..0x6B55AC):
-        // type==12 nodes with stencilType bit 2 set walk
-        // "stencilCompositeMaskLayerList", resolve each entry against the
-        // Player+24 node-index map (Player_nodePathMap_find @0x6F2228, called at
-        // 0x6B5454 with the *raw* mask-list element as the key), and set
-        // node+1961 on the referenced mask layers. The map is keyed by the raw
-        // PSB "label" (see write site above), and the mask-list strings are raw
-        // labels matched verbatim — so we pass label->value unchanged.
-        for(auto &node : player._nodes) {
-            if(node.nodeType != 12 || (node.stencilType & 4) == 0 || !node.psbNode) {
+        // 0x6B531C..0x6B55A8: raw type-12 mask list -> Player+24 map;
+        // append the referenced type-0/type-3 node pointer and mark the target.
+        for(size_t index = 1; index < player._nodes.size(); ++index) {
+            auto &node = player._nodes[index];
+            if(node.nodeType != 12 || (node.stencilType & 4) == 0) {
                 continue;
             }
-            auto maskLayers = nodeTreePsbList(
-                node.psbNode, "stencilCompositeMaskLayerList");
-            if(!maskLayers) {
-                continue;
-            }
-            for(int i = 0; i < static_cast<int>(maskLayers->size()); ++i) {
-                auto label = std::dynamic_pointer_cast<PSB::PSBString>((*maskLayers)[i]);
-                if(!label || label->value.empty()) {
+            const int maskCount =
+                rawCount(node.stencilCompositeMaskLayerListVariant);
+            for(int maskIndex = 0; maskIndex < maskCount; ++maskIndex) {
+                tTJSVariant rawLabel;
+                if(!rawTryGetByNum(node.stencilCompositeMaskLayerListVariant,
+                                   maskIndex, rawLabel)) {
                     continue;
                 }
-                auto it = player._nodeLabelMap.find(widen(label->value));
-                if(it == player._nodeLabelMap.end()) {
+                const ttstr label(rawLabel);
+                const auto found = player._nodeLabelMap.find(label);
+                if(found == player._nodeLabelMap.end()) {
                     continue;
                 }
-                auto &target = player._nodes[static_cast<size_t>(it->second)];
+                auto &target = player._nodes[
+                    static_cast<size_t>(found->second)];
                 if(target.nodeType == 0 || target.nodeType == 3) {
+                    node.stencilCompositeMaskNodes.push_back(&target);
                     target.stencilCompositeMaskReferenced = true;
                 }
             }
         }
 
-        if (auto logger = spdlog::get("plugin")) {
-            logger->debug("buildNodeTree: clipLabel='{}', rootLayers={}, {} nodes built",
-                          clipLabel, layerList->size(), player._nodes.size());
+        if(auto logger = spdlog::get("plugin")) {
+            logger->debug(
+                "buildNodeTree(raw): rawLayers={}, {} nodes built",
+                rawCount(rawLayers), player._nodes.size());
         }
     }
 

@@ -88,15 +88,16 @@
 | 本地 map | Player.h | 裁决 | 二进制等价承载 / 证据 |
 |---|---|---|---|
 | `_motionsByKey`<string,shared_ptr<MotionSnapshot>> | 995 | **port 凭空发明** | 二进制无；motion 数据走 node deque(+184) + dispatch(+528) |
-| `_timelines`<string,TimelineState> | 1005 | **port 凭空发明** | 二进制无 timeline map；时间线状态在 node deque 2632B 节点内 + +456/+1120 游标 |
+| ~~`_timelines`<string,TimelineState>~~ | 原 1005 | **已删除（2026-07-19）** | `Player_ncb_registerMembers@0x6D69C8` 无 timeline API；timelineControl/play/stop 属于 EmoteEngine HM3/+1040，Player 帧状态在 node deque 与 +456/+1120 游标 |
 | `_disabledSelectorTargets`<string,bool> | 1036 | **port 凭空发明** | 二进制无对应 |
 | `_parameterEntryById`<string,size_t> | 1039 | **port 凭空发明** | 二进制无；参数走 HM1/var-track deque |
 | `_layerIdsByName`<string,int> | 1012 | **EmoteEngine(1496B) 字段误植** | 语义 = EmoteEngine+1440 ttstr→double HM；Player* 存于 engine+1064（0x67D3E8）|
 | `_layerNamesById`<int,string> | 1013 | **EmoteEngine 字段误植** | 同上 |
 | `_renderLayerStates`<int,LayerRenderState> | 1014 | **EmoteEngine 字段误植** | EmoteEngine_setVariable 0x671228 操作 engine+1384/+1440 + per-type animator deque engine+256/+336/+416/+576/+656 |
 
-> 注：上表「误植/发明」是**容器归属**裁决（架构级）。本地这些 map 当前在 render/timeline live path 被使用、
-> 差分依赖它们、本地无 Android oracle → **移除/迁移属 P3 终极重构（pimpl 内联回 1384B），禁止盲改**。
+> 注：上表「误植/发明」是**容器归属**裁决（架构级）。其中 `_timelines` 及
+> `_playingTimelineLabels` 已在逐函数反编译 Player/EmoteEngine 注册与调用链后删除；
+> 其余条目仍须按各自证据迁移，不能把这段历史性的统一“live path”描述继续套用到 timeline。
 > 此表的价值是：明确它们**不是** 4 个 HM 的镜像，后续重构时按此归属处理，不再误当 Player HM。
 
 ---
@@ -135,21 +136,21 @@
 | +0 | cascadeKey ttstr | = `scope+"::"+label`（scope 存在时，sub_A1359C concat ×2）否则 label | **HM4 key**（loop2 读 item+0）|
 | +8 | cursor (int) | 0 | active-slot 奇偶游标 |
 | +16 | **value (double)** | 0 | **HM4 value**（loop2 读 item+16）；仅由 stream③ 写 |
-| +24 | labelName ttstr | = PropGet("label")（sub_A0FB64）| label 内容快照 |
+| +24 | frameSource tTJSVariant | = 第二次 PropGet("label") 后独立 CopyRef | variable-track 帧源；后续以 dispatch 执行 PropGetByNum |
 | +48 | slot0 (56B) | memset 0；slot0+20(=item+68)=1 | per-track 帧 slot；gate flag@+20 |
 | +104 | slot1 (56B) | memset 0；slot1+20(=item+124)=1 | 同上 |
 
 ### READ 侧 key 形态（本轮反编译，brick 1 锚点）
 - `Player_evalKey_cascade` @0x6CD23C：HM4 按**原始 lookup key**（`ttstr_c_str(key)` 的 hash，**不 join**）查找，命中取 `*(node+16)` 为 double。
 - `Player_getVariable_wrapper` @0x533E1C：cascade 作用于 `*(a1+1064)`（= 内嵌 Player），scope-gate 在 HM1-join 路径与 HM4-first 路径之间分派。
-- ⇒ HM4 命中要求 lookup key == 存储的 item+0 cascadeKey。结合 initVariables 写 item+0 = `scope+"::"+label`（concat），**权威 cascadeKey 形态 = scope 存在 ? scope+"::"+label : label**，labelName(item+24)=label。active `initVariables` 旧写的 scope-**后缀**确证为分歧。
+- ⇒ HM4 命中要求 lookup key == 存储的 item+0 cascadeKey。结合 initVariables 写 item+0 = `scope+"::"+label`（concat），**权威 cascadeKey 形态 = scope 存在 ? scope+"::"+label : label**。item+24 是对同一 `entry["label"]` 的第二次 PropGet/Variant CopyRef，不是 ttstr 字段。active `initVariables` 旧写的 scope-**后缀**确证为分歧。
 
 ### Player+1296 基地原问题（已在 brick 1 修复）
 1. ~~两个竞争模型~~：active `std::vector<VariableLabelEntry>`（错形态 vector）vs `std::deque<VariableLabelScope>`（**形态正确**=deque，但从未实例化的死 alias）。**勘误**：deque alias 形态本就对，问题是活的是 vector、死的是 deque。
 2. **缺 value 字段**：binary item+16（HM4 读的 double）在两 struct 都缺。
 3. **key 分歧（确证）**：binary item+0 = `scope+"::"+label`（concat）vs active `initVariables` 写 scope-后缀。
 4. **slot 误映**：`VariableLabelScope` 的 scope@+64 / flagValidated@+108 实落在 +48/+104 两个 56B slot **内部**（gate flag = slot+20 = +68/+124），非顶层字段。
-5. **value-writer 延迟**：item+16 仅由 var-track advance **stream③**（sub_6B786C/sub_6B7A70）写；DEFERRED。⇒ loop2 即使移植也 **inert-by-data**（gate `!flag` 永不通过）——与二进制"无轨道前进"行为一致，非 bug。
+5. **value-writer 勘误（2026-07-18）**：item+16 不是 step/merge 直接写入，而是 Player_interpolateVarTrackValues@0x6BBE20 根据双 slot 写入；该路径现已接入，不再是 DEFERRED。
 
 ### brick 2 实现状态（2026-06-02，按 CLAUDE.md「证据是阻塞项，验证是尽力项」）
 - ✅ **brick 2a DONE**：VarTrackSlot 补全为 byte+disasm-verified 完整 56B
@@ -223,13 +224,13 @@ ida-deep-analyzer 逆向 HM3_initValueFromNode 每个源字段语义 + 调用链
 
 ### 忠实 brick 路线
 1. ✅ **基地重构（brick 1）DONE（2026-06-02）**：`VariableLabelScope` 补全为 {cascadeKey, activeSlotCursor, value, labelName, VarTrackSlot slot[2]}（slot 含 +20 gateFlag）；删死 struct `VariableLabelEntry`；Player 字段 `vector<VariableLabelEntry> _variableLabelEntries` → `deque<VariableLabelScope> _variableLabelScopes`（容器形态对齐 deque）；`initVariables` 改产出 binary 一致 cascadeKey=`scope+"::"+label`。**provably inert**（_variableLabelScopes 零 reader）→ web debug build 通过、logo diff 不受影响（构造上）。改动文件：value_structs.h / player_containers.h / RuntimeSupport.h / Player.h / PlayerMotionLoad.cpp。
-2. **stream③（brick 2）⚠️ 阻塞于数据模型矛盾**：var-track advance（sub_6B786C step / sub_6B7A70 merge）。
-   - **56B slot 布局（byte-verified 本轮）**：`{frameIdx@+0, time@+8, interval@+16, flag20(type==0?1:0), flag21(type2→0/type3→1), merged@+22, value@+24(frame["value"] double), easing@+32(ttstr)}`。
+2. **stream③（brick 2）✅ 已按 dispatch/Variant 架构复原**：var-track advance（0x6B786C step / 0x6B7A70 merge）。
+   - **56B slot 布局（byte-verified 本轮）**：`{frameIdx@+0, time@+8, interval@+16, flag20(type==0?1:0), flag21(type2→0/type3→1), merged@+22, value@+24(frame["content"]["value"] double), easing@+32(tTJSVariant)}`。
      - sub_6B786C(slot, frameSrc, idx)：slot+0=idx; slot+8=frame["time"]; slot+22=0。
-     - sub_6B7A70(slot, frameSrc)：slot+22=1; type=frame["type"]; type==0→slot+20=1(→LABEL_25 早退); 否则 slot+20=0 + slot+16=frame["interval"] + slot+24=frame["value"] + slot+32=frame["content"]["easing"]。
+     - 0x6B7A70(slot, frameSrc)：slot+22=1; type=frame["type"]; type==0→slot+20=1(→LABEL_25 早退); 否则 slot+20=0 + slot+16=frame["content"]["interval"] + slot+24=frame["content"]["value"] + slot+32=frame["easing"] Variant CopyRef。
    - **勘误 brick 1 的 VarTrackSlot**：loop2 HM4 gate 实为 slot+20（type==0 时=1→不写 HM4；type!=0 时=0→写）；keyframe value 在 slot+24，**非 item+16**。item+16（HM4 value）来源是**插值**（slot bracket → item+16），由另一步写（待定位 brick 2.5）。
-   - **item+0/item+24 同源疑点 + 经验裁决（2026-06-02）**：initVariables 中 item+0（cascadeKey）与 item+24（stream③ frame source）**都从 `entry["label"]` 写入**（两处同用 v8=L"label"，已三复核）。曾疑为矛盾（key-string vs keyframe-array）。**裁决**：若 `entry["label"]` 是变量**名字串**，则 stream③ 的 `PropGetCount(item+24)` 对字符串返回 ~0 → advance 循环 no-op，无矛盾，且与 **brick 1 一致**（labelName=entry["label"]、cascadeKey=scope+"::"+label）。真正未决的仅是"变量 keyframe 从何而来"（brick 2 范畴）。
-   - **🚫 brick 2 DEFERRED（unverifiable）**：`motionsim --dump-variable` 扫描全部 **36 个可用 .mtn fixture（logo + SD sprite），0 个含 "variable" 列表**——参数化变量只存在于完整 E-mote `.psb` 模型（该 .psb 现无法经 motionsim 解析：`PSBArray bad length type size`）。⇒ stream③ / HM4 / getVariable 变量路径**对所有现有内容 inert 且无 fixture 可验证**。强行实现 = 在矛盾未决 + 无 oracle 上写不可验证代码（CLAUDE.md 硬禁）。**解阻塞前置**：(a) 取得含 "variable" 的 E-mote 模型 motion fixture（或修 .psb parser），(b) runtime hook 真机确认 item+24 是否真作 frame source（device frida）。新增 `motionsim --dump-variable` 探针为永久诊断工具。
+   - **item+0/item+24 同源结论（2026-07-18）**：0x6CD9F0 把 `entry["label"]` 普通转换为 ttstr 存 item+0，0x6CDA58..0x6CDA98 再次 PropGet 同一属性并将原始 tTJSVariant CopyRef 到 item+24；两者同源但类型/所有权不同。旧“字符串 PropGetCount ~0”是无独立证据的经验推断，现已删除。
+   - **验证缺口而非实现阻塞**：现有资产仍没有 populated variable 轨道，所以无法做 Android runtime 差分；按仓库规则不从零构造 fixture，但 dispatch/Variant 的忠实复刻、构建与既有非回归照常保留。
 3. **loop2（brick 3）**：HM4 populate（gate + upsert），可先做 inert free 函数 + 单测。
 4. **getVariable READ（brick 4）**：cascade 接 HM4（HM4-first by raw key → HM1 join → HM2）。
 

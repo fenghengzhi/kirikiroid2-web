@@ -349,8 +349,7 @@ namespace motion {
 
         _preparedRenderItemsTopLevel.clear();
         _preparedRenderItemsGroup.clear();
-        const auto motionPath =
-            _activeMotion ? _activeMotion->path : std::string{};
+        const auto motionPath = matchedMotionPath();
         // Scratch owner/parent for the SLA leaf/composed Layer ctor — resolved
         // once for the whole build pass (mirrors 0x6C4E28's
         // Window.mainWindow.primaryLayer lookups). Only consumed by the
@@ -447,13 +446,11 @@ namespace motion {
 
                 entry.localMeshPoints.clear();
                 entry.localMeshPoints.reserve(entry.meshPoints.size());
-                for(size_t pi = 0; pi + 1 < entry.meshPoints.size(); pi += 2) {
-                    entry.localMeshPoints.push_back(
-                        entry.meshPoints[pi] - 0.5f -
-                        static_cast<float>(clipRect.left));
-                    entry.localMeshPoints.push_back(
-                        entry.meshPoints[pi + 1] - 0.5f -
-                        static_cast<float>(clipRect.top));
+                for(const auto &point : entry.meshPoints) {
+                    entry.localMeshPoints.push_back({
+                        point.x - 0.5f - static_cast<float>(clipRect.left),
+                        point.y - 0.5f - static_cast<float>(clipRect.top)
+                    });
                 }
 
                 std::array<float, 8> expectedLocalCorners{};
@@ -583,14 +580,14 @@ namespace motion {
 
     bool Player::executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
                                             bool skipUpdate) {
-        if(!renderLayerObject || !_activeMotion) {
+        if(!renderLayerObject || !hasMotionContent()) {
             return false;
         }
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::MotionTraceRenderExecuteScope renderTrace(
             this, renderLayerObject, skipUpdate);
 #endif
-        const auto motionPath = _activeMotion->path;
+        const auto motionPath = matchedMotionPath();
 
         auto *renderLayer = resolveNativeLayer(renderLayerObject);
         if(!renderLayer) {
@@ -743,7 +740,7 @@ namespace motion {
                 state.initialized = true;
                 if(item.nativeNode) {
                     state.layerGetter = getLayerGetter(
-                        detail::widen(item.nativeNode->layerName));
+                        item.nativeNode->layerName);
                 }
             }
 

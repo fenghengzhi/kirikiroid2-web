@@ -1,9 +1,12 @@
 ---
 name: emoteengine-controllers-spring-verdict
-description: EmoteEngine subsystem (setVariable 0x671228 / progress 0x67D01C / builder 0x67D4D0 / spring 0x662768+0x6689A4 / chain-bind 0x67C560 / clamp 0x67C8A8 / 6 controllers) vs libkrkr2.so. 2026-06-06 fresh full re-decompile. Mostly faithful; ONE real P1 data-flow gap (4 direct controller sinks unwired).
+description: EmoteEngine subsystem vs libkrkr2.so. 2026-07-18 update: controller/spring/direct sinks/raw mirror/HM3 timeline chain-bind/clamp are live and source-structure aligned; supersedes the former P1 sink and decoded-timeline gaps.
 metadata:
   type: project
 ---
+
+> **2026-07-19 纠正：** 本文内所有 `_activeMotion` 数据源描述仅记录旧实现，已被
+> +528/+1012 raw Variant 与 Engine raw controller/HM 链取代；不得再作为当前架构结论。
 
 2026-06-06 FRESH full re-decompile (read-only) of: 0x671228 setVariable, 0x67D01C progress, 0x67D4D0 builder, 0x662768 springStep, 0x6689A4 bustChainStep, 0x67C560 chain-bind cascade, 0x67C8A8 clamp, 0x663BDC eye step, 0x666068 mouth step, 0x67D380 applyVarControllers(direct 4). SUPERSEDES 06-04/06-05 on two points (legacy dead-path now removed; new P1 gap found).
 
@@ -13,8 +16,8 @@ metadata:
 - builder 0x67D4D0 ✅ — full key dispatch present (eye/eyebrow/mouth/transition/selector/loop/clamp/mirror/bust/hair/parts/timeline/variableList/instantVariableList). mirror byte +1157/+1158(v7!=v6) ✅, scale +1168 + 1176 denom ✅.
 - spring 0x662768 ✅ EmoteSpring.cpp:31 byte-verified 1:1. firstFlag init/accum, k_a/k_b/drag*a8, rest-vec qword_1AB7E74{0,1}, atanf(.)/0.0392699082, all float literals(0.0451603944) exact. RAW float-bits field reads (no SCVTF). REAL sinf/cosf/atanf.
 - chain-spring 0x6689A4 ✅ EmoteSpring.cpp:120 byte-verified 1:1. 2-seg loop(v28 0..1), per-seg constraint, +168 collision curve(128 entries stride12, scale+1556), velocity damp, dual atan outputs(a2/a3 seg-X, a4 last-Y). sqrtf/sinf/cosf/atanf REAL.
-- chain-bind cascade 0x67C560 ✅ (re-modeled): binary reads engine deque#10@+1040 timeline labels -> sub_68C134 node flag&2 -> 56B-stride var-track deque(elem+48 weight * node+72) wcscmp label-match accumulate. Local accumulateTimelineContributionLike_0x67C560(PlayerFrameProgress.cpp:280) models on Player _timelines/timelineControlByLabel/controlTrackValues, flags&2 gate, value += controlTrackValues[ti]*blendRatio. Data-flow preserved; Player-side table re-model (documented).
-- clamp 0x67C8A8 ✅ (PlayerFrameProgress.cpp:316). Reads ENGINE HM7(_engineBack->_labelToValueHM7) NOT player HM2; runs sub_67C560 cascade per axis; norm=2*(v-min)/range-1 (no zero/empty guard); type!=0->clamp-circle(type==1&&r>1 atan2/cos/sin), type==0->squircle(fabs ratio/invLen/projLen/sin-cos, exact binary order); final=min+range*(n+1)*0.5; X negated iff sub_67C6B0. (binary does 2*(v-min)/range via double-add of (v-min)/range twice; local *2.0 — math-identical.)
+- chain-bind cascade 0x67C560 ✅ (2026-07-18 later correction): live receiver is `EmoteEngine`; it iterates active-label vector@+1040, HM3@+936, and `EmoteTimelineData80B::variableList`'s 56B track deque. HM3 owns the raw element plus timeline data; builder/play/stop/seek/query/fade/blend populate and consume the same raw state machine. The former Player decoded `_timelines/timelineControlByLabel/controlTrackValues` delegation is no longer on this Engine path.
+- clamp 0x67C8A8 ✅ (2026-07-18 later correction): live body belongs to `EmoteEngine`, iterates raw `_clampControlDeque7`, reads Engine `_labelToValueHM7`, uses Engine raw mirror lookup, invokes the Engine HM3/+1040 `0x67C560` cascade, and binds through the embedded Player. Normalize/squircle/circle math and branch boundaries match.
 - container ✅ — typed std::deque<EntryN> per controller(EmoteEngine.h:517-561) + HM6=_scalarHM6_1384(unordered_map<ttstr,EmoteVarRef>) + HM7=_labelToValueHM7(LabelValueMap). libstdc++ deque/unordered_map selection-aligned (no #pragma pack, per byte-layout methodology). Deque element layouts documented to match binary strides.
 
 ## 06-05 LEGACY DEAD-PATH: NOW REMOVED (correction to that memory)
@@ -23,9 +26,11 @@ The 06-05 "PlayerFrameProgress.cpp:2001-2014 stepControllerBucket over _type4..8
 ## 2026-06-06 RE-VERIFY of the 3 caller-less helpers (read-only, fresh 0x67D01C decompile) — VERDICT: DELETE all 3
 - Caller-count CONFIRMED ZERO: grep over cpp/ (multiple terms: full names, partial stems stepTimelineControl/stepTimelineBlend/refreshFixedControllerEval, and TimelineControl/TimelineBlend/FixedControllerEval) -> each helper has exactly 2 hits = decl(Player.h:809/810/817) + def(PlayerFrameProgress.cpp:194/222/245). No 3rd reference anywhere. True caller-less.
 - BINARY OWNERSHIP of controller stepping (fresh decompile 0x67D01C): v13=engine(*(*(a1+24)+8)). ALL stepping done by 6 EmoteEngine typed-deque loops (+256 deque4/+336/+416/+576/+656/+736), each -> Player_HM2_upsert_labelToValue(engine+1440,...) i.e. HM7. NO Player-side per-timeline animator step exists in binary. The 3 helpers operate on Player _timelines/_playingTimelineLabels/controlTrackAnimators/blendAnimator/fixedControllerOutputs — NONE of these has any counterpart in 0x67D01C. -> these 3 helpers have NO binary correspondent = pure 06-03 parallel-model residue. Same disposition as #5 type4-8 dead-container removal: DELETE (decl + def, all 3).
-- COLLATERAL IMPACT = NONE (safe local-only removal):
-  * The Player timeline CONTAINERS are NOT dead — _timelines/_playingTimelineLabels/controlTrackAnimators/blendAnimator/fixedControllerOutputs are read/written by the LIVE TJS2 timeline API in PlayerTimeline.cpp (playTimeline/timelineCount/timelineName/reset etc.) and RuntimeSupport.cpp. Deleting the 3 helpers does NOT touch the containers (unlike #5 which removed truly-dead type4-8 deques). DO NOT delete the containers.
-  * Helper-called sub-helpers stay live: stepQueuedAnimatorLike_0x67D01C still called at PlayerFrameProgress.cpp:512/541; writeEvalResultValueLike_0x6C4668 called at PlayerCore:1286 / PlayerUpdateLayerEval:1025 / PlayerVariable:625 / PlayerFrameProgress:423/424/444. Neither becomes orphan.
+- **2026-07-19 纠正（取代上述旧 collateral 判断）**：Player timeline containers 并非
+  live Android API。`Player_ncb_registerMembers@0x6D69C8` 无 timeline 成员；
+  `0x672F70/0x67C2A0/0x673F98/0x66F80C` 的 receiver 均是 EmoteEngine。
+  `_timelines/_playingTimelineLabels`、control/blend animator、decoded timeline 派生表及
+  PlayerTimeline 公开面现已全部删除。旧“DO NOT delete”结论方向相反，禁止继续引用。
 - VERIFICATION GAP: removal is oracle-inert (helpers never executed) -> logo 0-mismatch unaffected = non-regression guard only, cannot positively confirm. Confidence rests on (a) byte/term-exhaustive zero-caller grep, (b) fresh 0x67D01C showing engine-side ownership with no Player-timeline-step counterpart.
 - IDB: 0x67D01C head comment added recording this verdict (idb_save'd 2026-06-06).
 PRIOR (now superseded "保留以备厘清"): STUB_WARN macro defined EmoteEngine.cpp:20 but NEVER invoked. No TODO/FIXME in EmoteSpring/Emote*Controller/VarController/BlinkRng/WindEmitter/MeshResolver.

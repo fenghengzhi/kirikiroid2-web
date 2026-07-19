@@ -1,5 +1,10 @@
 # MotionPlayer 源代码还原 Review（2026-06-03）
 
+> **2026-07-18 再纠正：** 下文 R0-2 当时把 +960 误称 variableKeys、
+> +968 误称 primary chara。NCB 注册的权威映射是 +960 chara、+968
+> stealthChara、+976 motion、+984 stealthMotion，源码层均为 `ttstr`
+> 值 owner；+768/+776 是两个 pending 值，+1099 是 playing。
+
 > **同日后续修订（2026-06-03，6 子系统并行 fresh-decompile 复核后回填）**：本轮 review 的两条结论已被随后的独立反编译证伪/超越，按 CLAUDE.md「证伪即就地纠正」回填：
 > - **§一 anchor color base「255:128 方向颠倒（回归 OPEN 高）」→ 已 CLOSED。** 当前 [PlayerUpdateAnchor.cpp:144-146](../cpp/plugins/motionplayer/PlayerUpdateAnchor.cpp#L144) 已是 `isDefaultBlend ? 128.0 : 255.0`（正确方向），注释 L135-143 亦已更正并自述「commit 5018087 wired to wrong side; corrected here」。本 review 的 §1.1 描述的是修复前代码，建议本项的高优先级 OPEN 状态视为 closed（仅余 §1.3 的 blend per-slot 源 / color 通道序等次要偏差 open）。
 > - **§三 M9 phase-D per-vertex-color 平台边界 → 论据被证伪。** 随后反编译 draw 路径 0x6C7440 + 顶点 builder sub_6C715C：builder 只 append (x,y) 位置对（variant type 5，20B），operate*/copy 原语只传单 blend mode，anchor 的 4-corner colorBytes(node+100) 在 0x6C7440 未被引用。故「binary recombines 4-corner gradient as per-vertex vertex colors」不成立；color 消费点未定位。[ResourceManager.h](../cpp/plugins/motionplayer/ResourceManager.h) 注释已据此更正（边界须由 draw-path color 消费点论证，非 findSource、非 per-vertex-color 论据）。
@@ -79,7 +84,7 @@ const double base = isDefaultBlend ? 255.0 : 128.0;   // ← 颠倒
 
 | 主张 | 提交 | 裁决 | 二进制证据 |
 |---|---|---|---|
-| dampPow 公式 + dt 来源 | 7caf558 | ✅ | `v28 = a1[74]*(v27*a1[74]/v27)/v27/60.0/node+2432`，a1[74]=player+592=dt，v27=+592/+1168，node+2432=anchorDamping。本地逐项一致（含冗余乘除）|
+| dampPow 公式 + dt 来源 | 7caf558 | ✅ | `v28 = a1[74]*(v27*a1[74]/v27)/v27/60.0/node+2432`，a1[74]=player+592=dt，v27=+592/+1168；`node+2432` 是 `feedback.timespan` 经 type-10 timeline evaluator 写入的通道（旧名 `anchorDamping` 已证伪）。本地逐项一致（含冗余乘除）|
 | anchor w/h from internal render Layer | eb347f5 | ✅ | `sub_A0F5E0(player+696)→PropGet("width"/"height")`，**无 `<=0?32` 钳制**；本地从 `_internalRenderLayer`(player+696) 读，架构一致 |
 | +612 gate | eb347f5 | ✅ | `if (a1[74]==0.0 \|\| !*(player+612)) { node+200=0; skip }`；player+612=上一帧 needsAssignImages 快照（updateLayerAfterDraw 写 +612<-+613）。本地 gate `_deltaTime==0 \|\| !_internalRenderLayerReady` 一致 |
 | CLAUDE.md 教训（5018087 曾误判 internalRenderLayer「架构前置缺失」，eb347f5 纠正）| — | ✅ 纠正到位 | eb347f5 后本地确实经 player+696 读 w/h，数据流恢复 |
@@ -118,7 +123,7 @@ const double base = isDefaultBlend ? 255.0 : 128.0;   // ← 颠倒
 |---|---|---|
 | ResourceManager NCB = 12 成员 | a074060 | ✅ `0x6AB8BC` 恰注册 12 成员，名/序与 main.cpp:412-428 镜像一致。RM 与 SourceCache **确为同一类**，无独立 SourceCache 注册函数 |
 | ObjSource = 0x18 dict facade, 6 成员 | 6259f76 | ✅ `0x69CCB8` 注册 6 个 dict 读取成员；findSource 经 `operator new(0x18)` 构造，obj[0]=dict variant。06-02「缺 6 成员」**方向反了**，已确认。width getter@0x69D19C 在 type!=7 时返回 32，本地 `readInt(...,32)` 一致 |
-| findSource = 双 hashmap + raw upload | 3761a0b | ✅ 二进制 HashMap A(+88/+96 FNV) + 嵌套 per-group ttstrHashMap(纯 name→`iTVPTexture2D*`)，CPU buffer 上传后立即释放。本地仍 `std::list<Entry>` + `shared_ptr<bitmap>` keyed by (name,blendMode,packedColors)；RM.findSource 是 path-keyed 占位。两半皆如实记录差异 |
+| findSource = outer map + mapped-record inner maps + raw upload | 3761a0b | ✅ 2026-07-18 后续纠正：本地已恢复 outer map 每项的 Win `name→texture` 表和 KRKR 平表 `src/group/icon→descriptor`、AddRef/Release 及 unload 生命期；Win/spec=2 与 KRKR/spec=1 均直接导航 raw `PSBRawNode`。KRKR 整页 CPU 合成后一次 Update 是已标注的 Web 上传 API 边界 |
 
 **claim 4（07c4f05 phase-D per-vertex color 平台边界）：❌ 论据被证伪（2026-06-03 draw-path 已反编译）。**
 > **更新**：随后反编译 draw 路径 sub_6C7440 + 顶点 builder sub_6C715C(@0x6C715C)——builder 只 append (x,y)

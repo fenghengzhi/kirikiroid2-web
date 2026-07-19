@@ -5,6 +5,9 @@ metadata:
   type: project
 ---
 
+> **2026-07-19 纠正：** 本文 `_activeMotion` dedup/null 叙述只适用于旧兼容实现；当前
+> play/load/dedup 由 +528/+1012 raw Variant 与 +976/+984 motion owner 驱动。
+
 DRACU-RIOT 标题 `progress(0)` 单帧栈内同步无限递归(Application::Run 永不返回,RUNDIAG 实证)。自引用节点 bg@nodeIdx12(type-3, src='motion/char/show', frameList=[0:type2@time0, 1:type0@time71])。
 
 ## 【2026-06-21 第五轮:修复方向根本性纠正——推翻"fresh节点延迟seek"】

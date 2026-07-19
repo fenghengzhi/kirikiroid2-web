@@ -45,11 +45,10 @@ sub_6D69C8 (NCB registration)
 | `resourceManager` | sub_6D9420 | -- (RO) | double | +1128 | Returns value * 1000/60 if > 0 |
 | `lastTime` | sub_6D9448 | -- (RO) | double | +1136 | Returns value * 1000/60 if > 0 |
 | `loopTime` | sub_6D139C | -- | TJS Array | deque iter | Iterates deque at +1312..1368 |
-| `variableKeys` | sub_6D9470 | sub_6C0E9C | tTJSVariant* | +960 | AddRef pattern |
-| `chara` | sub_6D9490 | sub_6D94B0 | tTJSVariant* | +968 | Setter calls sub_6B29C0 if motion loaded |
-| `stealthChara` | Player_getMotion_ncb | Player_setMotion | tTJSVariant* | +976/768 | Uses Player_playImpl |
-| `motion` | Player_getStealthMotion | sub_6D9584 | tTJSVariant* | +984/768 | Setter calls Player_playImpl(0x10) |
-| `stealthMotion` | -- | sub_6D9618 | ttstr | +1072 | Copy via sub_A0F5E0 |
+| `chara` | sub_6D9470 | sub_6C0E9C | refcounted string value | +960 | primary setter also writes +968, then flushes +776 |
+| `stealthChara` | sub_6D9490 | sub_6D94B0 | refcounted string value | +968/+776 | live-or-pending setter flow |
+| `motion` | Player_getMotion_ncb | Player_setMotion | refcounted string value | +976/+768 | Uses Player_play/Player_playImpl |
+| `stealthMotion` | Player_getStealthMotion | sub_6D9584 | refcounted string value | +984/+768 | Setter calls Player_play with flags 0x10 |
 | `tags` | sub_695BE0 | sub_6B4978 | tTJSVariant | via TJS dispatch | Complex getter |
 | `motionKey` | sub_695BE0 | sub_6B4978 | tTJSVariant | via TJS dispatch | Same as tags pattern |
 | `project` | sub_6D9624 | sub_6D962C | int | +1144 | Raw int32 |
@@ -188,8 +187,8 @@ Based on constructor (sub_6CED30) initialization and property getter/setter deco
 | +716..736 | 20 | struct | ttstr/variant | -- | sub_A0FCC0 init, "color" param set |
 | +736..756 | 20 | struct | ttstr field | -- | sub_A0F778 release in dtor |
 | +760 | 8 | ptr | d3dAdaptorPtr | 0 (or null) | Deleted in destructor; sub_6CFFB8 cleanup |
-| +768 | 8 | ptr | stealthMotionVar | 0 | tTJSVariant*, released in dtor |
-| +776 | 8 | ptr | charaMotionVar | 0 | tTJSVariant*, released in dtor |
+| +768 | 8 | ptr | pending stealthMotion string value | 0 | flushed by Player_play, then released/null |
+| +776 | 8 | ptr | pending stealthChara string value | 0 | flushed by chara paths, then released/null |
 | +784 | 8 | double | cameraVelocityX | 0 | updateLayers phase 1 |
 | +792 | 8 | double | cameraVelocityY | 0 | updateLayers phase 1 |
 | +800 | 8 | double | cameraVelocityZ | 0 | updateLayers phase 1 |
@@ -202,15 +201,15 @@ Based on constructor (sub_6CED30) initialization and property getter/setter deco
 | +912 | 4 | int | pixelateDivision | -- | sub_6D992C getter, sub_6D9934 setter |
 | +936 | 8 | ptr | variableList.begin | -- | 44-byte stride entries, dtor iterates |
 | +944 | 8 | ptr | variableList.end | -- | |
-| +960 | 8 | ptr* | variableKeys | -- | tTJSVariant*, AddRef pattern |
-| +968 | 8 | ptr* | charaVariant | -- | tTJSVariant*, AddRef pattern |
-| +976 | 8 | ptr* | motionVariant | -- | Player_getMotion_ncb reads this |
-| +984 | 8 | ptr* | stealthMotionVariant | -- | Player_getStealthMotion reads this |
+| +960 | 8 | ptr* | primary chara string value | -- | NCB chara getter reads this |
+| +968 | 8 | ptr* | stealthChara string value | -- | NCB stealthChara getter reads this |
+| +976 | 8 | ptr* | primary motion string value | -- | Player_getMotion_ncb reads this |
+| +984 | 8 | ptr* | stealthMotion string value | -- | Player_getStealthMotion reads this |
 | +992 | 20 | ttstr | transformOrderStr | -- | sub_6D9414 getter |
 | +1012 | 20 | ttstr | emoteEditVariant | -- | |
 | +1032 | 20 | ttstr | outline | -- | sub_6D9730/sub_6D973C |
 | +1052 | 20 | ttstr | meshline | -- | sub_6D9744/sub_6D9750 |
-| +1072 | 20 | ttstr | stealthMotionStr | -- | sub_6D9618 getter |
+| +1072 | 20 | tTJSVariant | motion `tag` frame-array dispatch | -- | `Player_initNonEmoteMotion@0x6B365C` writes `motion["tag"]`; `Player_skipToSync@0x6D3504` CopyRefs and enumerates it |
 | +1092 | 1 | bool | completionType | 0 | sub_6D9634/sub_6D963C |
 | +1093 | 1 | bool | speed (bool flag) | defaultSyncActive | sub_6D968C/sub_6D9694 |
 | +1094 | 1 | bool | cameraActive | 0 | sub_6D9708/sub_6D9710 |
@@ -402,17 +401,18 @@ Player_dtor(player):
     // 7. Free hashMap at +1184
     
     // 8. Release ttstr fields (reverse order)
-    sub_A0F778(+1072)  // stealthMotionStr
+    sub_A0F778(+1072)  // motion["tag"] frame-array variant
     sub_A0F778(+1052)  // meshline
     sub_A0F778(+1032)  // outline
     sub_A0F778(+1012)  // emoteEditVariant
     sub_A0F778(+992)   // transformOrderStr
     
-    // 9. Release TJS variants
-    tTJSVariant_Release(player[+984])  // stealthMotionVariant
-    tTJSVariant_Release(player[+976])  // motionVariant
-    tTJSVariant_Release(player[+968])  // charaVariant
-    tTJSVariant_Release(player[+960])  // variableKeys
+    // 9. Release four independent ttstr value owners. 2026-07-18 NCB/dtor
+    // correction: +960 was previously misidentified as variableKeys.
+    sub_A0F778(player[+984])  // stealthMotion
+    sub_A0F778(player[+976])  // motion
+    sub_A0F778(player[+968])  // stealthChara
+    sub_A0F778(player[+960])  // chara
     
     // 10. Clean variable list (44-byte stride)
     for each in [+936..+944]:

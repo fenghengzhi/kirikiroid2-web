@@ -2,6 +2,7 @@
 // Split from PlayerUpdateLayers.cpp for maintainability.
 //
 #include "PlayerUpdateLayersInternal.h"
+#include "MotionDispatch.h"
 #include <atomic>  // PARTICLESTATE (temp)
 #include <cstdio>  // PARTICLESTATE (temp)
 
@@ -9,8 +10,9 @@ namespace motion {
     void Player::updateLayersPhase3_ParticleEmitter() {
         auto &nodes = _nodes;
         // --- sub_6BEDD0: Particle emitter state (nodeType=6) ---
-        // Aligned to 0x6BEDD0. Only when !isEmoteMode.
-        if (_isEmoteMode) return;
+        // Aligned to 0x6BEDD0. The whole pass is disabled by Player+1092
+        // (the preview property), not by raw motion["type"].
+        if (_preview) return;
 
         for (size_t ei = 1; ei < nodes.size(); ++ei) {
             auto &en = nodes[ei];
@@ -19,16 +21,17 @@ namespace motion {
             // Active/slotDone guard (0x6BEE90..0x6BEEC4)
             if (!en.accumulated.active || en.activeSlot().done) {
                 en.emitterActive = false;
-                en.emitterDtgt.clear();
+                en.emitterDtgt.Clear();
                 en.emitterTimer = 0.0;
                 continue;
             }
 
-            // dtgt from clip slot (node+536*slot+356, our activeSlot().src)
-            const std::string &dtgt = en.activeSlot().src;
-            if (dtgt.empty()) {
+            // Player_updateLayers_particleEmitterPass @0x6BEED4 reads the
+            // active slot+36 ttstr and CopyRefs it into node+2384.
+            const ttstr &dtgt = en.activeSlot().srcValue;
+            if (dtgt.IsEmpty()) {
                 en.emitterActive = false;
-                en.emitterDtgt.clear();
+                en.emitterDtgt.Clear();
                 en.emitterTimer = 0.0;
                 continue;
             }
@@ -89,7 +92,8 @@ namespace motion {
                 // Target position offset (0x6BF048..0x6BF0B8)
                 // sub_6F2228 resolves target node by name from slot+712 (motionDtgt).
                 // Compute position difference: target.pos - emitter.pos
-                int targetIdx = findNodeByLabel(_nodeLabelMap, en.activeSlot().motionDtgt);
+                int targetIdx = findNodeByLabel(
+                    _nodeLabelMap, en.activeSlot().motionDtgtValue);
                 if (targetIdx >= 0 && targetIdx < static_cast<int>(nodes.size())) {
                     auto &target = nodes[targetIdx];
                     en.emitterOffsetActive = true;
@@ -115,22 +119,17 @@ namespace motion {
                     double t2 = ratio + epsilon;
                     if (t2 >= 1.0) ratio = 0.9999;
                     t2 = std::min(t2, 1.0);
-                    BezierCurve cccCurve;
-                    cccCurve.x = slot.ccc.x; cccCurve.y = slot.ccc.y;
-                    ControlPointCurve cpCurve;
-                    if (slot.hasCpRotation) {
-                        cpCurve.x = slot.cp.x; cpCurve.y = slot.cp.y;
-                        cpCurve.t = slot.cp.t;
-                    }
                     // src = current slot position, dst = other slot position (saved at flip)
                     // Binary reads full {x,y,z} from active slot (a3+96..112).
                     double src[3] = {slot.x, slot.y, en.activeSlot().z};
                     double dst[3] = {en.otherSlot().x, en.otherSlot().y, en.otherSlot().z};
                     double out1[3] = {}, out2[3] = {};
-                    interpolatePosition69A4D4(cccCurve, dst, src, out1,
-                        en.coordinateMode, cpCurve, ratio);
-                    interpolatePosition69A4D4(cccCurve, dst, src, out2,
-                        en.coordinateMode, cpCurve, t2);
+                    interpolatePositionVariantLike_0x69A4D4(
+                        slot.cccVariant, dst, src, out1,
+                        en.coordinateMode, slot.cpVariant, ratio);
+                    interpolatePositionVariantLike_0x69A4D4(
+                        slot.cccVariant, dst, src, out2,
+                        en.coordinateMode, slot.cpVariant, t2);
                     en.emitterOffsetActive = true;
                     en.emitterOffsetX = out2[0] - out1[0];
                     en.emitterOffsetY = out2[1] - out1[1];
@@ -155,20 +154,15 @@ namespace motion {
                         double t2 = ratio + epsilon;
                         if (t2 >= 1.0) ratio = 0.9999;
                         t2 = std::min(t2, 1.0);
-                        BezierCurve cccCurve;
-                        cccCurve.x = slot.ccc.x; cccCurve.y = slot.ccc.y;
-                        ControlPointCurve cpCurve;
-                        if (slot.hasCpRotation) {
-                            cpCurve.x = slot.cp.x; cpCurve.y = slot.cp.y;
-                            cpCurve.t = slot.cp.t;
-                        }
                         double src[3] = {slot.x, slot.y, en.activeSlot().z};
                         double dst[3] = {en.otherSlot().x, en.otherSlot().y, en.otherSlot().z};
                         double out1[3] = {}, out2[3] = {};
-                        interpolatePosition69A4D4(cccCurve, dst, src, out1,
-                            en.coordinateMode, cpCurve, ratio);
-                        interpolatePosition69A4D4(cccCurve, dst, src, out2,
-                            en.coordinateMode, cpCurve, t2);
+                        interpolatePositionVariantLike_0x69A4D4(
+                            slot.cccVariant, dst, src, out1,
+                            en.coordinateMode, slot.cpVariant, ratio);
+                        interpolatePositionVariantLike_0x69A4D4(
+                            slot.cccVariant, dst, src, out2,
+                            en.coordinateMode, slot.cpVariant, t2);
                         en.emitterOffsetActive = true;
                         en.emitterOffsetX = out2[0] - out1[0];
                         en.emitterOffsetY = out2[1] - out1[1];
@@ -195,7 +189,7 @@ namespace motion {
         // Fully aligned to libkrkr2.so 0x6BF0DC (~800 lines decompiled).
         // Velocity stored on child Player _cameraVelocityX/Y/Z (player+784/792/800).
         // frameProgress + updateLayersPhase1_PreLoop auto-applies velocity+damping.
-        if (_isEmoteMode) return;
+        if (_preview) return;
         auto &nodes = _nodes;
         // Per-frame dt = player+592 = _deltaTime (speedMul·dt). libkrkr2.so stores
         // no raw-dt field; +592 is the sole per-frame dt (was _frameLastTime).
@@ -287,34 +281,51 @@ namespace motion {
                             // If _directEdit: writes to player+464 and calls initEmoteMotion.
                             // If not: writes to root node accumulated.angle.
                             if (child->_directEdit) {
-                                // Emote angle path — not applicable in web port
-                                // player+464 = emote angle, Player_initEmoteMotion(child, 2)
+                                double cAngle = child->_emoteAngle + angleDelta;
+                                while (cAngle < 0.0) cAngle += 360.0;
+                                while (cAngle >= 360.0) cAngle -= 360.0;
+                                child->_emoteAngle = cAngle;
+                                child->initEmoteMotionLike_0x6B2E90(2u);
                             } else {
                                 double cAngle = cr.accumulated.angle + angleDelta;
                                 while (cAngle < 0.0) cAngle += 360.0;
                                 while (cAngle >= 360.0) cAngle -= 360.0;
                                 cr.accumulated.angle = cAngle;
                             }
+                            auto *transformedRoot = &child->_nodes[0];
 
                             // Transform position (0x6BF54C..0x6BF620)
                             const int coordMode = pn.coordinateMode;
                             if (coordMode == 1) {
                                 // 3D: X/Z through matrix, Y pass-through
-                                double px = cr.accumulated.posX - posXref + dPosX;
-                                double pz = cr.accumulated.posZ - posZref + dPosZ;
-                                cr.accumulated.posX = posXref + t11 * px + t12 * pz;
-                                cr.accumulated.posZ = posZref + t21 * px + t22 * pz;
-                                cr.accumulated.posY += dPosY;
+                                double px =
+                                    transformedRoot->accumulated.posX -
+                                    posXref + dPosX;
+                                double pz =
+                                    transformedRoot->accumulated.posZ -
+                                    posZref + dPosZ;
+                                transformedRoot->accumulated.posX =
+                                    posXref + t11 * px + t12 * pz;
+                                transformedRoot->accumulated.posZ =
+                                    posZref + t21 * px + t22 * pz;
+                                transformedRoot->accumulated.posY += dPosY;
                             } else {
                                 // 2D: Binary swaps X↔Z (0x6BF5D0..0x6BF620):
                                 //   newPosX = oldPosZ + deltaPosZ
                                 //   newPosY = posYref + t21*px + t22*py
                                 //   newPosZ = posXref + t11*px + t12*py
-                                double px = cr.accumulated.posX - posXref + dPosX;
-                                double py = cr.accumulated.posY - posYref + dPosY;
-                                cr.accumulated.posX = cr.accumulated.posZ + dPosZ;
-                                cr.accumulated.posY = posYref + t21 * px + t22 * py;
-                                cr.accumulated.posZ = posXref + t11 * px + t12 * py;
+                                double px =
+                                    transformedRoot->accumulated.posX -
+                                    posXref + dPosX;
+                                double py =
+                                    transformedRoot->accumulated.posY -
+                                    posYref + dPosY;
+                                transformedRoot->accumulated.posX =
+                                    transformedRoot->accumulated.posZ + dPosZ;
+                                transformedRoot->accumulated.posY =
+                                    posYref + t21 * px + t22 * py;
+                                transformedRoot->accumulated.posZ =
+                                    posXref + t11 * px + t12 * py;
                             }
 
                             // Transform velocity (0x6BF628..0x6BF64C)
@@ -435,17 +446,21 @@ namespace motion {
 
             // ====== BLOCK 3: Particle creation (0x6BF810..0x6C02DC) ======
             // Binary creates exactly 1 particle per frame per node.
-            // When srcList is empty (v85==0), skip creation and run ONE physics step (0x6C02D0).
+            // When particleMotionList is empty (v88==0), skip creation and run
+            // ONE physics step (0x6C02D0).
             // When emitCount > 1, physics is skipped; next frame creates another particle.
             if (emitCount > 0) {
-                // 3a. Resolve srcList count (0x6BF810..0x6BF87C)
-                const auto &srcList = pn.activeSlot().srcList;
-                const int srcListCount = static_cast<int>(srcList.size());
+                // 3a. Player_particleEmitterPass @0x6BF810..0x6BF87C
+                // CopyRefs node+2200 and reads its TJS `count`; it does not
+                // consume a decoded list stored in either clip slot.
+                const int sourceCount = static_cast<int>(
+                    detail::motionPropGetCount(pn.particleMotionListVariant));
 
-                // Binary: if srcList count==0, skip creation entirely (0x6C02D0).
+                // Binary: if the raw source-list count is zero, skip creation
+                // entirely (0x6C02D0).
                 // The binary decrements emitCount to 0 (a no-op loop), then runs
                 // ONE physics step. No particles are created.
-                if (srcListCount == 0) {
+                if (sourceCount == 0) {
                     goto physics_step;
                 }
 
@@ -453,10 +468,12 @@ namespace motion {
                 // emitCount > 1 just means "skip physics this frame" (0x6C0270).
                 {
 
-                // Random selection from srcList (0x6BF87C: v86 = random() * v85)
-                int idx = static_cast<int>(random() * srcListCount);
-                if (idx >= srcListCount) idx = srcListCount - 1;
-                const std::string &selectedSrc = srcList[idx];
+                // Random selection uses PropGetByNum on the same raw dispatch.
+                int idx = static_cast<int>(random() * sourceCount);
+                if (idx >= sourceCount) idx = sourceCount - 1;
+                const std::string selectedSrc = detail::narrow(ttstr(
+                    detail::motionPropGetByNum(
+                        pn.particleMotionListVariant, idx)));
                 if (selectedSrc.empty()) goto physics_step;
 
                 // Handle "chara/motion" format (binary: sub_697D34 splits by "/")
@@ -487,14 +504,11 @@ namespace motion {
                 // Binary: chara comes from the split path, not parent chara
                 child->setChara(particleChara.empty() ? _chara : detail::widen(particleChara));
                 child->onFindMotion(detail::widen(motionPath));
-                // Stealth motion (0x6BFA08..0x6BFA40): binary checks child+776
-                // (stealth motion path) and plays it with flag 0x10. In our arch,
-                // propagate parent stealth fields so child resolves stealth if set.
-                child->_stealthChara = _stealthChara;
-                child->_stealthMotion = _stealthMotion;
-                if (!_stealthMotion.IsEmpty()) {
-                    child->onFindMotion(_stealthMotion, PlayFlagStealth);
-                }
+                // 0x6BFA08..0x6BFA40 only flushes the new child's own +776
+                // pending stealthChara after the primary chara write. It does
+                // not copy either live stealth slot from the parent. The later
+                // 0x6BFA68..0x6BFA94 similarly flushes child+768; onFindMotion
+                // routes through Player_play and owns that pending motion step.
                 // _colorWeightPacked propagation (0x6BF9B4)
                 // (R1.H5: parent/child share +1156; was duplicated as
                 // `_parentColorPacked` in the port — same binary offset.)
@@ -518,12 +532,6 @@ namespace motion {
                         cr.accumulated.blendMode = blendVal;
                     }
                 }
-
-                // Stealth motion play (0x6BFA08..0x6BFA40)
-                // Binary: if child+776 (stealth path) exists, play it with flags=16
-                // In our architecture, stealth is stored at player level.
-                // The binary copies the stealth path from the resource manager state.
-                // For web port, stealth motion is rarely used; skip for now.
 
                 // 3c. Position based on flyDirection (0x6BFAC8..0x6BFC88)
                 double offX = 0, offY = 0, offZ = 0;
@@ -701,8 +709,8 @@ namespace motion {
                         double k = childAngle;
                         while (k < 0.0) k += 360.0;
                         while (k >= 360.0) k -= 360.0;
-                        // player+464 = emote angle — not mapped in web port
-                        // Player_initEmoteMotion(child, 2) — N/A for web
+                        child->_emoteAngle = k;
+                        child->initEmoteMotionLike_0x6B2E90(2u);
                     } else {
                         // Normal angle path (0x6C0060..0x6C0078)
                         if (cr.accumulated.angle != childAngle) {
@@ -710,6 +718,7 @@ namespace motion {
                             cr.accumulated.angle = childAngle;
                         }
                     }
+                    auto *postAngleRoot = &child->_nodes[0];
 
                     // 3j. Zoom lerp — AFTER angle (0x6C00B0..0x6C00D8)
                     // Binary reads node+2272/2280 (node4[142].f64[0..1]) =
@@ -717,10 +726,11 @@ namespace motion {
                     double zoom = pn.particleInterp[6];        // node+2272 (zmin)
                     if (zoom != pn.particleInterp[7])         // node+2280 (zmax)
                         zoom = zoom + (pn.particleInterp[7] - zoom) * random();
-                    if (cr.accumulated.scaleX != zoom || cr.accumulated.scaleY != zoom) {
-                        cr.accumulated.dirty = true;
-                        cr.accumulated.scaleX = zoom;
-                        cr.accumulated.scaleY = zoom;
+                    if(postAngleRoot->accumulated.scaleX != zoom ||
+                       postAngleRoot->accumulated.scaleY != zoom) {
+                        postAngleRoot->accumulated.dirty = true;
+                        postAngleRoot->accumulated.scaleX = zoom;
+                        postAngleRoot->accumulated.scaleY = zoom;
                     }
 
                     // 3j. particleApplyZoomToVelocity on child velocity (0x6C0110..0x6C0168)
@@ -763,8 +773,8 @@ namespace motion {
 
                 // PARTICLECREATE (temp): inspect a freshly-emitted particle child.
                 // Pins down WHY particles never die: loopTime>=0 (loop, never clears
-                // _allplaying) vs deltaTime==0 (frameTick frozen) vs clip==nullptr
-                // (_loopTime left at default 0.0). count vs maxNum shows cap state.
+                // _allplaying) vs deltaTime==0 (frameTick frozen).
+                // count vs maxNum shows cap state.
                 {
                     static std::atomic<long> s_pcSeq{0};
                     long seq = ++s_pcSeq;
@@ -772,11 +782,10 @@ namespace motion {
                         std::fprintf(stderr,
                             "PARTICLECREATE seq=%ld count=%d maxNum=%d "
                             "child_loopTime=%.3f child_totalFrames=%.3f "
-                            "child_allplaying=%d child_dt=%.4f hasClip=%d\n",
+                            "child_allplaying=%d child_dt=%.4f\n",
                             seq, pn.getParticleCount(), pn.particleMaxNum,
                             child->getLoopTime(), child->_cachedTotalFrames,
-                            child->_allplaying ? 1 : 0, child->_deltaTime,
-                            child->_activeClip != nullptr ? 1 : 0);
+                            child->_allplaying ? 1 : 0, child->_deltaTime);
                     }
                 }
 
@@ -838,7 +847,13 @@ namespace motion {
                 for (int ci = 0; ci < pCount2; ++ci) {
                     auto *child = pn.getParticleChild(ci);
                     if (!child || !true) continue;
-                    child->_zFactor = _zFactor;
+                    // Player_particleStepChildren @0x6C19A4..0x6C19C0:
+                    // copy parent cameraAngle(+472), then reselect a direct-edit
+                    // child's secondary motion before root propagation.
+                    child->_cameraAngle = _cameraAngle;
+                    if(child->_directEdit) {
+                        child->initEmoteMotionLike_0x6B2E90(2u);
+                    }
                     if (!child->_nodes.empty()) {
                         auto &cr = child->_nodes[0];
                         cr.clipAABB = pn.clipAABB;

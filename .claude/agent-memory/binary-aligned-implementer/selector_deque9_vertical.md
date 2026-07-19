@@ -57,14 +57,14 @@ dur>0: if(!clearFirst){queue.clear();state=0;} push 20B kf {values, dur, pow-bit
 pow stored via memcpy(&kf.powCount,&pow) = RAW float bits (downstream
 EmoteVarController_step reads +112 with LDR S, raw).
 
-## INERT boundary (documented, NOT a defer)
-option.refCtl is resolved by the BUILDER searching the TRANSITION deque (engine+576,
-local _auxVarDeque8) for an element whose label matches the option's "label". That
-category is still open (builder 0x66D4C4 not ported) => deque empty => every refCtl
-resolves null (binary's own v26=0) => applySelection skips all options (its
-`if(option.refCtl)` guard). Selector's OWN state machine + HM7 index output are
-fully LIVE. Only the cross-controller keyframe push is inert pending transition.
-Same null-guard, same skip = 1:1 with binary. Build-order dep, not missing compute.
+## 2026-07-18 correction — transition prerequisite and target API are restored
+The earlier “transition builder still open, therefore refCtl always null” statement
+is no longer true. Raw builder 0x66D4C4 now populates engine+576 before selector
+builder 0x66D8FC, so option.refCtl resolution is live. The selector entry also owns
+an independent non-owning `vector<transition-entry*>` at +24/+32/+40; a full binary
+writer scan found the raw metadata builder constructs it empty and no direct writer,
+so it must not be fabricated from option labels. sync 0x670D1C and target APIs
+0x6823FC/0x67581C/0x675BF4 now preserve that exact empty-on-this-path topology.
 
 ## PRE-EXISTING latent bug found (OUT OF SCOPE, flagged): EmoteVarController.cpp
 sub_666BF8 reads powCount as RAW float bits (binary: STR raw + LDR S no SCVTF), but
@@ -73,9 +73,6 @@ as eye/eyebrow (mouth memory). Transition is open; my Animator_setKeyframes feed
 raw bits correctly, but the downstream reader would misconvert. Left for the
 transition vertical to fix (path is inert: refCtl always null here).
 
-## REMAINING OPEN (list-only, unchanged): transition(deque#7/+576,type7,0x66D4C4,
-sub_666BF8 + EmoteVarController powCount raw-bits fix), deque#10 inline curve(+736,
-16B), bust/hair/parts(deque#1/2/3 sub_66B9D0), timelineControl(HM3), variableList,
-clamp/mirror/loop/instantVariable, setVariable READER dispatch (0x671228 case8
-sub_6681E4 = selector value-write path), and the shared sub_661F7C/660028 mesh
-resolver (eye+eyebrow).
+## Historical remaining-open list
+The list below was accurate on 2026-06-03 but has since largely been closed; do not
+use it as current status. Consult `analysis/psbfile_android_reconstruction_2026-07-18.md`.

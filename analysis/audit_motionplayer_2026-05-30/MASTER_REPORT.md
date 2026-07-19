@@ -39,7 +39,7 @@
 
 | # | 簇 | 二进制 @addr | 本地 | 摘要 | 风险 |
 |---|----|-------------|------|------|------|
-| M1 | G | progress_inner 0x6C106C + advance/rewind 0x6B6ADC/0x6B9A3C + parseFrame/merge 0x6926B4/0x692AB0 | PlayerFrameProgress.cpp / PlayerTimeline.cpp | 二进制是**节点 deque 帧步进机**（+1120/+1128 游标、+480 门控、+592 速度）；本地换成 STL timeline 状态机，无帧索引算术。整个前进/后退/parse/merge 子系统拓扑不同 | 极高 |
+| M1 | G | progress_inner 0x6C106C + advance/rewind 0x6B6ADC/0x6B9A3C + parseFrame/merge 0x6926B4/0x692AB0 | PlayerFrameProgress.cpp / PlayerUpdateLayerEval.cpp | **2026-07-19 更新：**旧 STL Player timeline map/control animator 已删除，raw node-deque/frameList 两槽 parse/merge、前进/后退/reseek 与 +480/+592/+1120/+456 主游标链已接回；仍需闭合原版 per-frame renderList owner 与本地 `_nodes` 门控的容器差异 | 中 |
 | M2 | B | EmoteEngine progress 0x67D01C（6 deque step→HM7 + bind-loop）+ stepHairParts 0x67B748 + stepBust 0x67BCE8 | EmoteEngine.cpp:243-314 | 6 个 deque step 全 STUB_WARN；缺 `if(dt!=0)` 门控；post-loop 用原始 dt 非残余 dt；bind-loop 遍历 HM7 插入序链（本地空体）；hair/bust 物理未实现 | 高 |
 | M3 | J | getVariable 0x533E1C + HM1 cascade 0x6CD39C + evalKey_cascade 0x6CD23C | PlayerVariable.cpp | getVariable 实为 scope-gate→HM1 join("scope::label")→HM2 fallback / HM4-first→HM1 fallback 的级联；本地只读 `_evalResultValues`+frame ranges，无 HM1/HM4/scope-join | 高 |
 | M4 | J | clearHM3_HM4 0x6B80E4 + evalKey_cascade | Player.h `_dispatchAliasMap` | HM4(+1240) 是 **owning ttstr→tTJSVariant\***（dtor 逐个 Release，eval 读 node+16 为 double）；本地建模成 non-owning `iTJSDispatch2*` 别名图且未用 → 数据流错 | 中 |
@@ -47,7 +47,7 @@
 | M6 | K | doAlphaMaskOperation 0x6AF104 | 缺 / main.cpp:286 | 整个 alpha-mask op 缺失（shader cache + CPU `dst.a=src.a*dst.a/255` + 边界 fillRect）；且本地把它误挂在 Player 而非 namespace | 中 |
 | M7 | H | anchor 0x6C0528（type10） | PlayerUpdateAnchor.cpp:36 | dampPow 公式错：二进制 `dt*(..)/v27/60/node+2432`，v27=player592/player1168；本地用 `abs(frameLastTime)/60/anchorDamping`。且 w/h 走 PSB dispatch，本地走 cache | 中 |
 | M8 | H | calcBounds 0x6C3D04 | PlayerRenderItems.cpp:32 | 二进制**递归** type3 子动作 + type4 粒子子节点；本地是扁平 | 中 |
-| M9 | K | ObjSource 0x69CCB8 / RM 0x6AB8BC / findSource 0x6948E8 | main.cpp:33/307, SourceCache.cpp | ObjSource 缺 6 成员；RM 缺 bufLayer/unloadAll/isExistMotion/findMotion/random 且 RM↔SourceCache 共享实现被拆开；findSource 走 RM 双 hashmap+raw upload，本地 list+shared_ptr | 高 |
+| M9 | K | ObjSource 0x69CCB8 / RM 0x6AB8BC / findSource 0x6948E8 | ResourceManager/PlayerResource | **【2026-07-18 后续纠正】** 成员/继承及 mapped record+Win/KRKR 两内表生命周期已复原；两个 spec 均走 raw PSB，KRKR 整页上传为 Web API 边界；ObjSource clip/drawLayer 另行审计 | 中 |
 | M10 | L | particleSystem splice 0x6C1A00 + childMotion 0x6BE2C0（`sub_6F363C` 父←子 drawlist 拼接）| PlayerUpdateParticles.cpp:791 | 二进制把子 drawlist 拼进父 +936；本地无此 splice → 粒子/子精灵可能丢失（除非经 cluster I 渲染路径已覆盖，需核） | 中 |
 | M11 | D | D3DEmotePlayer 成员集 0x52E504 + contains 0x530B5C | main.cpp:496-583 | 54 成员表对不上（TimelinePlayFlagDifference 名错、"clear"绑 create cb、5 处故意 name/cb 别名未复刻、~28 EmotePlayer 风格属性多注册）；contains 本地自造 AABB 重载 | 中 |
 

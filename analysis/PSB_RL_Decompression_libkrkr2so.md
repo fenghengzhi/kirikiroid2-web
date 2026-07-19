@@ -244,20 +244,22 @@ texture->init(
 );
 ```
 
-## Comparison with Our Implementation
+## Comparison with Our Implementation（2026-07-18 更新）
 
-Our `decompressPsbRL()` in `Player.cpp` implements Path D (align=4, no palette):
+`PlayerResource.cpp` 现已在 raw `PSBRawNode` KRKR atlas 路径中实现 Path A-D：
 
 | Aspect | libkrkr2.so | Our implementation |
 |--------|-------------|-------------------|
 | RLE count | `(marker & 0x7F) + 3` | `(marker & 0x7F) + 3` |
-| Literal count | `(marker + 1) * 4` bytes | `(marker + 1) * align` bytes |
-| Value size | 4 bytes (hardcoded) | `align` bytes (parameterized) |
-| NEON optimization | Yes (vdupq_n_s32) | No (memcpy loop) |
-| R↔B swap | TVPReverseRGB after decompress | Manual swap during pixel copy in renderToLayer |
-| Palette path | TVPBLExpand8BitTo32BitPal | Not implemented (align=1 parameter available) |
+| Literal count | `(marker + 1) * 4` bytes | 同式（palette 分支为 `marker + 1` 字节） |
+| Value size | 4 bytes (hardcoded) | no-pal=4，palette=1 |
+| NEON optimization | Yes (vdupq_n_s32) | `std::fill_n` 标量等价实现 |
+| R↔B swap | TVPReverseRGB after decompress | 同阶段 TVPReverseRGB |
+| Palette path | TVPBLExpand8BitTo32BitPal | 已实现 align=1 RL/raw + palette ReverseRGB/expand |
 
-**Our implementation matches libkrkr2.so's logic for the align=4 path.** The NEON optimization is a performance detail that doesn't affect correctness. The R↔B swap is done at a different stage (during copy to Layer bitmap rather than in-place after decompress) but produces the same result.
+当前实现直接消费 `LoadedResourceRecord::file`，不再通过
+`MotionSnapshot::resourcesByPath` 或延迟到 `renderToLayer` 换通道。NEON 与
+`std::fill_n` 的差别是平台代码生成差异，不改变源码级分支和数据流。
 
 ## Historical Bug
 

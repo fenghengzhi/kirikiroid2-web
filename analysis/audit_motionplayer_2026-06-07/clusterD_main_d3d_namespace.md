@@ -30,7 +30,7 @@ Binary registration order (ncb_addMember / sub_52FC90 / sub_530328 / sub_53043C 
 
 | # | binary NAME | binary callback | kind | local main.cpp | status |
 |---|---|---|---|---|---|
-| C0 | <classname> | 0 (default ctor) | ctor | NCB_CONSTRUCTOR((ResourceManager)) :871 | ⚠️ see §1a |
+| C0 | <classname> | native create | ctor | Factory(D3DEmotePlayer::factory) | ✅ D3DImage type; see §1a |
 | K0 | MaskModeStencil=0 | const | const | Variant :883 | ✅ |
 | K1 | MaskModeAlpha=1 | const | const | Variant :884 | ✅ |
 | K2 | TimelinePlayFlagParallel=1 | const | const | Variant :885 | ✅ |
@@ -94,14 +94,20 @@ All 54 member NAMES + the 6 deliberate name/callback aliases (clear, queing, bus
 setTimelineBlendRatio, pass, modified) + 4 constants are present and 1:1. This is a complete
 reversal of the 2026-05-30 P0 (D-01/02/03..08) — those are RESOLVED.
 
-### 1a. ⚠️ D-B: constructor signature (object-lifecycle, needs verify, NOT asserted)
-Binary first ncb_addMember (@0x52e588) uses the class-name string as key with callback=0
-(NCB default-ctor placeholder; v3+48=0). The class registrar D3DEmotePlayer_ncb_register
-@0x541D98 builds the instance via sub_542054(v8) where v8[0] = *(a1+24) — it threads ONE
-value into the native create. Local binds NCB_CONSTRUCTOR((ResourceManager)) (single-arg).
-The binary native-create arg identity (a ResourceManager dispatch vs native) was not traced
-this session; flagged for verify, not asserted as a deviation. (Mirrors the resolved
-Player ctor P3-B: NCB binds the dispatch tTJSVariant, not a native value.)
+### 1a. ✅ D-B corrected: constructor requires D3DImage, not ResourceManager
+Fresh tracing on 2026-07-18 reached native create `sub_542764` and unwrap
+`sub_5428D8`. The first TJS argument is queried with class ID `dword_1AB2630`;
+static initializer `sub_42C7F8` maps the owning registrar vtable `off_1A012E0`
+to the binary literal `L"D3DImage"`. The native pointer is stored at shell base+8,
+registered through owner vtable+48, and removed by destructor `sub_533C00` through
+owner vtable+56. There is no ResourceManager field in the 56-byte shell.
+
+Local now uses `D3DEmotePlayer::factory`, checks the exact `D3DImage` native class,
+retains the corresponding TJS owner, and clone carries that owner instead of creating
+an empty ResourceManager. Remaining gap: DrawDeviceD3D keeps its native D3DImage type
+translation-unit-private, so the Web shell cannot yet call the native +48/+56 child
+registration bridge; dispatch retention preserves owner availability and teardown order
+but is not claimed as exact native-list ownership.
 
 ### 1b. Member ORDER note (NOT a deviation)
 The binary order is module, clear, load, clone, show, hide, visible, smoothing,
@@ -238,7 +244,7 @@ NCB-registration scope but verified architecturally consistent; no deviation.
 | id | func@addr | local | sev | one-line |
 |----|-----------|-------|-----|----------|
 | D-A | progress cb @0x52f76c | main.cpp:1001 | P2 ⚠️ | binary 'progress' cb=EmoteEngine_progress, not D3DEmotePlayer_progress; verify wrapper tail-calls engine progress |
-| D-B | ctor @0x541D98/0x52e588 | main.cpp:871 | P3 ❓ | binary ctor=default no-arg placeholder + native create threads *(a1+24); local binds (ResourceManager) — native-create arg identity not traced, verify |
+| D-B | ctor @0x542764/0x5428D8 | D3DEmotePlayer::factory | P2 ⚠️ | D3DImage type and shell owner data flow corrected; native owner child add/remove bridge still missing |
 | D-C | MaskMode* @0x6d9d24/0x6d9d3c | main.cpp:623-653 | P3 ⚠️ | binary registers MaskModeStencil/Alpha on Motion namespace too; local Motion block omits them (only on D3DEmotePlayer) |
 | D-D | removeAllTextures @0x6AD8B8 | D3DAdaptor.h:43 | P3 ⚠️ | binary has real body (sub_6AD8B8); local empties it w/o explicit PLATFORM_BOUNDARY note |
 
@@ -263,7 +269,7 @@ NCB-registration scope but verified architecturally consistent; no deviation.
 
 ## SUBFUNCTION alignment status
 - ✅ sub_6D9B08, sub_52E504, sub_541D98, sub_6ACE94, sub_52DFA8 fully enumerated this session.
-- ❓ D3DEmotePlayer_create / native create (sub_542054 thread) — not traced (D-B).
+- ✅ D3DEmotePlayer native create `sub_542764`, D3DImage unwrap `sub_5428D8`, clone `sub_52FFBC`, destructor `sub_533C00` traced.
 - ❓ EmoteEngine_progress vs D3DEmotePlayer::progress body equivalence — not traced (D-A).
 
 ## IDB improvements (saved)

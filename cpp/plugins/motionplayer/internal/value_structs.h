@@ -23,17 +23,10 @@
 #include <utility>
 #include <vector>
 
+#include "../MeshPoint.h"
 #include "tjs.h"
 #include "tjsInterface.h"
 #include "tjsString.h"
-
-// Forward declaration — VariableLabelScope::frameSource holds a PSB keyframe
-// list (item+24) without this header pulling in the full psbfile dependency.
-// shared_ptr<incomplete> as a member is fine; it is constructed/destroyed where
-// the complete type is visible (PlayerMotionLoad.cpp / PlayerFrameProgress.cpp).
-namespace PSB {
-    class IPSBValue;
-}
 
 namespace motion::detail {
 
@@ -180,13 +173,14 @@ namespace motion::detail {
     // inside each VariableLabelScope (binary item+48 / item+104, stride 56B) and
     // are the var-track analog of the node's ParsedFrameSlotLike_0x6926B4 (536B).
     // Filled by the var-track advance stream ③ inside Player_advanceRootAndNodes
-    // @0x6B6ADC: sub_6B786C (step — frame index + time) then sub_6B7A70 (merge —
+    // @0x6B6ADC: Motion_VarTrackSlot_step_guess@0x6B786C then
+    // Motion_VarTrackSlot_merge_guess@0x6B7A70 (merge —
     // type→flags + interval/value/easing). Field offsets byte-verified from those
     // two functions (slot base = a1):
-    //   sub_6B786C: a1[0]=frameIdx; a1+8=frame["time"]; a1+22=0.
-    //   sub_6B7A70: a1+22=1; type=frame["type"]; type==0→a1+20=1 (early return,
-    //     loop2 HM4 gate); else a1+20=0, a1+21=(type==3), a1[4]=frame["interval"],
-    //     *((double*)a1+3)=frame["value"], a1+32=frame["content"]["easing"].
+    //   0x6B786C: a1[0]=frameIdx; a1+8=frame["time"]; a1+22=0.
+    //   0x6B7A70: a1+22=1; type=frame["type"]; type==0→a1+20=1 (early return,
+    //     loop2 HM4 gate); else a1+20=0, a1+21=(type==3), a1[4]=content["interval"],
+    //     *((double*)a1+3)=content["value"], a1+32=frame["easing"].
     struct VarTrackSlot {
         std::uint32_t frameIndex = 0;  // +0  step: *(_DWORD*)a1 = frameIdx
         double time = 0.0;             // +8  step: frame["time"]
@@ -198,11 +192,11 @@ namespace motion::detail {
         std::uint8_t interpFlag = 0;   // +21 merge: type==2→0, type==3→1
         bool merged = false;           // +22 step→0, merge→1 (advance merge-gate)
         double value = 0.0;            // +24 merge: *((double*)a1+3) = frame["value"]
-        // +32 easing — merge: frame["content"]["easing"]. A bezier control-point
-        // dict {x:[...], y:[...]} (NOT a string), consumed by
-        // Player_applyBezierEasing @0x69A754. slot+48 easingPresent is modelled as
-        // (easing != null).
-        std::shared_ptr<PSB::IPSBValue> easing;
+        // +32 easing — merge: frame["easing"] copied as a tTJSVariant. A bezier
+        // control-point dispatch {x:[...], y:[...]} consumed by
+        // Player_applyBezierEasing @0x69A754. Its embedded variant type tag is
+        // the binary's slot+48 presence gate.
+        tTJSVariant easing;
     };
 
     // VariableLabelScope — libkrkr2.so Player+1296 std::deque element (160B).
@@ -226,7 +220,7 @@ namespace motion::detail {
     //                    SAME entry["label"] at item+0 (key) and item+24 (frames).
     //   +48 slot[0]      56B    (VarTrackSlot)
     //   +104 slot[1]     56B    (VarTrackSlot)
-    // (Local sizeof differs by ttstr/shared_ptr sizeof — PLATFORM_BOUNDARY — but
+    // (Local sizeof differs by ttstr/tTJSVariant sizeof — PLATFORM_BOUNDARY — but
     // field order / container selection match the binary.)
     //
     // NOT a controller animator — those are EmotePlayer's 5 deques at +256
@@ -236,10 +230,9 @@ namespace motion::detail {
         ttstr cascadeKey;            // item+0  — HM4/HM1 key
         int activeSlotCursor = 0;    // item+8  — parity cursor
         double value = 0.0;          // item+16 — HM4 value (interpolated)
-        // item+24 — entry["label"] raw value, iterated as a keyframe list by the
-        // var-track advance (stream③); no-op when it is not a list (mirrors the
-        // binary's PropGetCount ~0 on a non-array variant).
-        std::shared_ptr<PSB::IPSBValue> frameSource;
+        // item+24 — entry["label"] raw tTJSVariant, iterated through
+        // PropGetByNum by the var-track advance (stream③).
+        tTJSVariant frameSource;
         VarTrackSlot slot[2];        // item+48 / item+104
     };
 
@@ -271,13 +264,17 @@ namespace motion::detail {
         // Semantic field set (HM3_initValueFromNode @0x699510 byte-verified):
         // the snapshot copies the node's already-interpolated state (written by
         // evaluateTimeline in resetMotionState loop1) + active ClipSlot fields.
-        // (Port models these by value — node.interpolatedCache + node.activeSlot()
-        // — so no node+1512 byte-mirror is needed; offsets are documentation.)
+        // (Port models these by value — node.accumulated/node.colorBytes plus
+        // node.activeSlot(); offsets remain reverse-engineering documentation.)
         int nodeType = 0;                  // V+0   ← node+28
         DispatchRef dispatch_8;            // V+8   (dtor-released; not init-written)
         int contentMask = 0;              // V+28  ← active ClipSlot "mask" (slot+340)
         uint8_t doneFlag = 0;             // V+32  ← active ClipSlot done (slot+344)
-        DispatchRef srcDispatch_44;       // V+44  ← active ClipSlot "src" dispatch (slot+356)
+        // Player_HM3_initValueFromNode @0x699610..0x69964C CopyRefs the
+        // active slot's ttstr at node+356 into V+44. Restore @0x6997F0 does
+        // not write it back; this owner only extends source lifetime until
+        // the HM3 value is destroyed.
+        ttstr srcValue_44;                 // V+44  ← active ClipSlot src ttstr
         int blendMode = 16;               // V+52  ← active ClipSlot "bm" (slot+364)
         double ox = 0.0;                  // V+64  ← active ClipSlot ox (slot+376)
         double oy = 0.0;                  // V+72  ← active ClipSlot oy
@@ -294,7 +291,7 @@ namespace motion::detail {
         double scaleY = 1.0;              // V+152 ← interp scaleY (node+1552)
         double slantX = 0.0;              // V+160 ← interp slantX (node+1560)
         double slantY = 0.0;              // V+168 ← interp slantY (node+1568)
-        std::vector<float> meshControlPoints; // V+568 ← node+2024 (meshType==1)
+        std::vector<MeshPoint> meshControlPoints; // V+568 ← node+2024 (meshType==1)
         // V+544 — tTJSVariant snapshot of node+1912 (child Player dispatch),
         // taken when nodeType==3. init @0x699598 does sub_A0FB64(V+544, node+1912)
         // (variant copy-assign) then sub_A0F790(node+1912) (variant clear); the

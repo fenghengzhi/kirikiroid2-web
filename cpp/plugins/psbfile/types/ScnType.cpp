@@ -9,7 +9,7 @@ namespace PSB {
 
 #define LOGGER spdlog::get("plugin")
 
-    bool ScnType::isThisType(const PSBFile &psb) {
+    bool ScnType::isThisType(const DecodedPSBFile &psb) {
         const auto objects = psb.getObjects();
         if(psb.getObjects() == nullptr) {
             return false;
@@ -29,7 +29,7 @@ namespace PSB {
     }
 
     std::vector<std::unique_ptr<IResourceMetadata>>
-    ScnType::collectResources(const PSBFile &psb, bool deDuplication) {
+    ScnType::collectResources(const DecodedPSBFile &psb, bool deDuplication) {
         std::vector<std::unique_ptr<IResourceMetadata>> resourceList;
         // TODO:
         LOGGER->critical("TODO: ScnType::collectResources(...)");

@@ -1,4 +1,4 @@
-// PlayerFrameStep.cpp — M1/P2 binary-aligned parseFrame / mergeFrameContent.
+// PlayerFrameStep.cpp — legacy decoded test model for parseFrame / mergeFrameContent.
 //
 // Independent port of:
 //   Player_parseFrame        @ libkrkr2.so 0x6926B4
@@ -8,8 +8,9 @@
 // motionplayer-dll unit test. See PlayerFrameStep.h header for the full scope
 // rationale and the slot offset map.
 //
-// Binary helper -> local mapping (all are iTJSDispatch2 PropGet wrappers in the
-// binary; here they read decoded values from PSB::PSBDictionary):
+// Binary helper -> legacy test-model mapping (all are iTJSDispatch2 PropGet
+// wrappers in the binary; this isolated model still reads decoded
+// PSB::PSBDictionary values and therefore is not the live reconstruction):
 //   sub_662668  double  PropGet(key)          -> psbNumber()
 //   sub_6635DC  int     PropGet(key)          -> (int)psbNumber()
 //   sub_6636D4  bool    PropGet(key)          -> psbBool()

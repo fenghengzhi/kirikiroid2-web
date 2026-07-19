@@ -13,28 +13,14 @@ User asked (2026-05-31) for a single-sentence verdict on the motionplayer MAIN P
 - **progress (帧推进) = ROOT ARCHITECTURE IS WRONG. Needs whole rewrite.**
 - **draw (渲染提交) = right architecture, missing/mis-phased branches only.**
 
-## THE recurring, never-resolved finding (the stall)
-**progress 的根架构是 node-deque frame-stepping cursor machine，本地是 STL timeline machine。**
-- Binary authority: Player_progress_inner @0x6C106C drives a scalar frame cursor
-  (+1120 frameTickCount, gated by +480 progressFlags init=257) -> per-step
-  advance/rewind over the node deque (+184, stride 2632; per-node frame slot +1392
-  stride 536) -> Player_parseFrame@0x6926B4 -> Player_mergeFrameContent@0x692AB0
-  (mask-gated PropGet field merge). +456 clampedEvalTime = min(+1120,+1128).
-- Port: PlayerFrameProgress.cpp = _timelines std::map + per-track control-animator
-  queues + blend animators. advance/rewind/parseFrame/mergeFrameContent have NO
-  live port path (MISSING, not just diverging).
-- This was filed 2026-04-17 (phase2 delta/override block missing) AND 2026-05-30
-  (cluster G ❌ SEVERE) AND is still true 2026-05-31. The 4 setTickCount/getLoopTime/
-  initVariables/delta-block sub-findings are all DOWNSTREAM SYMPTOMS of this one root:
-  every "scalar accessor that's actually non-scalar in binary" reads/writes the
-  cursor-machine fields (+480/+456/+1120/+1136/+1312 deque) the port doesn't have.
+## 2026-07-19 纠正：旧 root-architecture stall 已推进
 
-## Why patching keeps failing (stall mechanism)
-The M15 branch (player-class-alignment-p0) added property/method SCAFFOLDING
-(onAction/clear/angleDeg/bounds/meshDivisionRatio storage) on top of the wrong
-substrate. None of it consumes the cursor machine; clear() resets _timelines (STL),
-setTickCount writes _frameTickCount but not +480/+456. So the surface grows while
-the root divergence is untouched -> same ❌ reappears every round.
+本文件原先断言本地仍以 STL `_timelines` 替代整个 node-deque cursor machine；该断言已被
+后续 raw frameList 两槽 parse/merge、advance/rewind/reseek 与主标量游标链实现证伪。
+`Player_ncb_registerMembers@0x6D69C8` 也确认 Motion.Player 没有 timeline API；错误的
+`_timelines/_playingTimelineLabels`、control animator 与 decoded timeline 表已经删除。
+当前仍需审计的是原版 per-frame renderList owner 与本地 `_nodes` 门控的容器归属差异，
+不得再把已完成的 cursor machine 标为 MISSING。
 
 ## draw side (NOT the stall)
 Render pipeline call-graph is correctly shaped (cluster I): drawCompat 3-way,

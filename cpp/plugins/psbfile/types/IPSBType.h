@@ -7,15 +7,15 @@
 
 namespace PSB {
 
-    class PSBFile;
+    class DecodedPSBFile;
     class IPSBType {
     public:
         virtual ~IPSBType() = default;
         virtual PSBType getPSBType() = 0;
 
-        virtual bool isThisType(const PSBFile &psb) = 0;
+        virtual bool isThisType(const DecodedPSBFile &psb) = 0;
 
         virtual std::vector<std::unique_ptr<IResourceMetadata>>
-        collectResources(const PSBFile &psb, bool deDuplication) = 0;
+        collectResources(const DecodedPSBFile &psb, bool deDuplication) = 0;
     };
 }; // namespace PSB

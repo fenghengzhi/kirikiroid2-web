@@ -1,11 +1,16 @@
 ---
 name: rewind-root-reverse-loop-0x6B9E84
-description: rewindRootAndNodes reverse root decrement loop @0x6B9E84 — closed R-B1 gap, seekRootContentStreamLike now bidirectional
+description: rewindRootAndNodes reverse root decrement loop @0x6B9E84 — closed R-B1; 2026-07-19 now a separate rewindRootContentStreamLike helper
 metadata:
   type: project
 ---
 
-R-B1 CLOSED (2026-06-05): Player::seekRootContentStreamLike_0x6B6ADC (PlayerFrameProgress.cpp) is now BIDIRECTIONAL — forward loop (Player_advanceRootAndNodes @0x6B6F48) + NEW reverse loop (Player_rewindRootAndNodes @0x6B9E84). Previously rewindRootAndNodes_0x6B9A3C reused the forward-only seekRoot → reverse root scan was missing.
+R-B1 CLOSED (2026-06-05; implementation boundary corrected 2026-07-19): reverse root
+loop remains implemented, but the former bidirectional
+`Player::seekRootContentStreamLike_0x6B6ADC` has been split into
+`advanceRootContentStreamLike_0x6B6ADC` and
+`rewindRootContentStreamLike_0x6B9A3C`, matching the two Android functions.
+Previously rewindRootAndNodes_0x6B9A3C reused the forward-only seekRoot → reverse root scan was missing.
 
 **Reverse loop @0x6B9E84 (verified via fresh decompile + disasm):**
 - Gate (B.GT): `*(double*)(a1+576 curTime) > *(double*)(a1+456 target)`.

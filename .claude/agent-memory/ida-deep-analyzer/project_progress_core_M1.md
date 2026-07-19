@@ -56,8 +56,11 @@ if !+480: +1120 += +592; +456 = min(+1120, +1128)   ← G3/G4 真正逻辑
 ## 关键勘误 (本端 Player.h)
 - Player.h:665 `_speed` 注释 "Aligned to +1093: bool flag" 是**错的**. +1093 是 motionStopGate (action/sync/align 开关), 不是 speed. speed 倍率在 **+1168 (double)**, 本端无对应字段.
 
-## 本端缺失 (整个 node-deque 帧步进核心)
-reseekTimelineCursors / advanceNode/Root / rewindRoot / parseFrame(0x6926B4) / mergeFrameContent(0x692AB0) 在 frameProgress live path 中全部缺失, 被 STL _timelines + control-animator 状态机替代 (architecture-level divergence, 需分阶段 re-arch, 见 plan P1-P7).
+## 2026-07-19 状态纠正
+旧“整个 node-deque 帧步进核心缺失”已被后续实现证伪：reseek/advance/rewind、
+raw frameList 两槽 parse@0x6926B4/merge@0x692AB0 与主游标链均已接入 live path；
+STL `_timelines`/control animator 已删除。当前仍 open 的是原版 per-frame renderList
+owner 与本地 `_nodes` 门控之间的容器归属差异，不得再用旧 P1-P7 起点描述当前代码。
 
 ## differential 回归网
 - logo diff (motion_playback/{yuzulogo,m2logo}) = 全帧逐层 Motion 状态, 守护 live-path 改动 (plan P5/P6/P7)

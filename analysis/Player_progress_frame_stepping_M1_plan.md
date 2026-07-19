@@ -110,7 +110,13 @@ Player_progress_inner(player, dt):
 
 ---
 
-## 3. 本端 STL timeline 状态机 ↔ 二进制 node-deque 操作 (many-to-many)
+## 3. 历史基线：已删除的 STL timeline 状态机 ↔ 二进制 node-deque 操作
+
+> 2026-07-19 勘误：本节表格记录迁移前基线，不再描述当前代码。
+> `Player_ncb_registerMembers@0x6D69C8` 没有 timeline API；`0x672F70/0x67C2A0/
+> 0x66F80C` 均属于 EmoteEngine。Player 的 `_timelines/_playingTimelineLabels`、
+> control animator graph、decoded timeline 派生表和 `selectActiveClip/activeClipTime`
+> 已删除；当前 Player 直接走 raw node-deque/frame-slot 游标链。
 
 | 本端构造 (PlayerFrameProgress/PlayerTimeline) | 二进制对应 | 关系 | 备注 |
 |------|------|------|------|
@@ -141,7 +147,7 @@ Player_progress_inner(player, dt):
 | **P4** | **实现 reseekTimelineCursors @0x6B86C8 为独立函数** + advanceNodeFrames/advanceRoot/rewindRoot, 接 P2 的 parseFrame. 仍不接 frameProgress. 用 init_motion + frame_selection 双 oracle 离线驱动单测. | 新增 .cpp + 单测 | 否 | 是 — 离线喂 oracle 输入, 断言游标 (+916/+568/+1120) 与 oracle 一致 | 中 (复杂逻辑, 但隔离) |
 | **P5** | **接线 firstFrame 种子路径**: frameProgress 中, 仅当 `_firstFrame` 时走新 reseek 路径, 其余仍旧路径 (feature-flag 或 motion-type gate). | PlayerFrameProgress.cpp | **是** (改 live path, 但限 firstFrame) | 是 — logo diff frame 0 必须保持 0 mismatch; 任何首帧偏移立刻暴露 | 中-高 (首帧是渲染基线) |
 | **P6** | **接线主推进 LABEL_48** (游标 +=deltaTime, min-clamp, loop wrap, advance/rewind), 替换 `_frameTickCount += dt` + `activeClipTime`. | PlayerFrameProgress.cpp 核心 | **是** (核心 live path) | 是 — logo diff **全帧** 逐层 Motion 状态; frame_selection oracle 每节点 activeSlot/visible/opacity | **高** (这是 G1/G3/G4 主体替换) |
-| **P7** | **拆除旧 STL timeline 状态机** (selectActiveClip/activeClipTime/_evalResultValues/control-animator), 把 isAnimating/playTimeline 迁到 binary topology (G10-G16). | 多文件清理 | 是 | 是 — 全 motion_playback diff + isAnimating 单测 | 中 (主体已在 P6 替换, 此为收尾) |
+| **P7** | **已完成：拆除旧 STL timeline 状态机**；Player timeline API 删除，EmoteEngine HM3/+1040 保持真实 owner | 多文件清理 | 是 | macOS/Web 构建通过；无有效 Player timeline oracle | CLOSED |
 
 CI 覆盖说明:
 - **logo differential** (`tests/differential/specs/motion_playback/{yuzulogo,m2logo}.json`) = 非-emote logo 逐帧逐层 Motion 状态, oracle 来自 android-frida-libkrkr2. 覆盖 P5/P6/P7 的 live-path 改动. P1-P4 不触 live path → 自动保持 0 mismatch (回归即编译/单测层面).
@@ -254,8 +260,10 @@ byte-verified (Player_initNonEmoteMotion, v24 = AsObject(player+528) = motion di
 - **`+616` = `priority[0].content`** @0x6B38FC (PropGetByNum 0 → AsObject → PropGet "content").
 - `+1098/+1099 = 0/1` (STRH 256 @0x6B3A74); 若 `(a2&2)==0`: `+1120=0; +456=fmin(+1128,0); +480=257; +481=1`.
 - ⇒ Player_Class_Layout_libkrkr2so.md 的 **"+1072 = stealthMotionStr (ttstr)" 标注错误**:
-  +1072 实为 `motion["tag"]` 帧数组 dispatch; `stealthMotion` property (sub_6D9618) 只是复用该字段读出.
-  (待修正该 layout note + 把 +936 "variableList" 修正为 44B 事件 deque.)
+  +1072 实为 `motion["tag"]` 帧数组 dispatch; `sub_6D9618@0x6D9618`
+  是 NCB 只读 `tags` getter，只对该 variant 执行 CopyRef。旧
+  `Player_getStealthMotionStr` 命名已被注册字面量与函数体共同证伪。
+  (layout note 已修正；+936 仍需按独立证据复核。)
 
 数据结构 (byte-verified from advance/rewind loops):
 - **layer stream `motion["tag"]`** = array of `{ time:double, type:int, content:{align,sync,action,...} }`.

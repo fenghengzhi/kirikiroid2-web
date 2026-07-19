@@ -22,9 +22,9 @@ EmoteEngine.cpp/.h 的 libkrkr2.so 地址映射（2026-06-07 反编译确认）�
   确认), 反编译体里 "Player_getAngleDeg" 是 IDA 残留误标. 本地 emoteGetAngleRadLike_0x6CD0C0 正确.
 - ctor COLOR seed: xmmword_14D68D0 = {128,128,128,255}f (get_bytes 确认 00 00 00 43 ×3 + 00 00 7F 43).
   NOT 白色(1,1,1,1). 本地 _ctlColor 留零+猜白色 TODO = P2 偏差(现可确认值).
-- 容器: 7 HM = libstdc++ unordered_map(32B node {next,ttstr,value,hash}; dtor walk
-  +1456/1400/1288/952(sub_683E40)/896/840). 4 vector<tTJSVariant*> @+800/992/1016/1040(dtor
-  per-elem Release). 10 deque @+0..720. 本地用 std::deque/unordered_map(源码选型对齐, ABI 偏移边界可接受).
+- 容器: 7 只 libstdc++ unordered container（HM1/HM2/HM4=set，其余=map）；
+  4 vector<ttstr> @+800/992/1016/1040（mirror patterns + timeline normal/diff/active labels）；
+  10 deque @+0..720。本地用同类 std::deque/unordered_map/unordered_set，ABI 偏移按平台边界处理。
 
 2026-06-07 审计结论 = ⚠️ PARTIAL(near-complete). 2026-05-30 旧报告全部 P0(B1-B4)已解决,
 代码从"多为 STUB"演进为逐行对齐. 残留: P2 COLOR seed; CB-1 Player_preProgress@0x67d060

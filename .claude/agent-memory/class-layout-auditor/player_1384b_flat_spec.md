@@ -44,23 +44,23 @@ NCB 暴露 78 个成员名 (Player_ncb_registerMembers @ 0x6D69C8)。
 | 716 | 20 | ttstr | _resourceManagerKey | from a2 dispatch via sub_A0FCC0 then PropGet "color" | ctor uses v18 dispatch |
 | 736 | 20 | ttstr | _? | empty | dtor +736 |
 | 760 | 8 | (something)* (delete-able) | _? | 0 | dtor sub_6CFFB8 + operator delete + clear |
-| 768 | 8 | iTJSDispatch2* | _? | 0 | dtor tTJSVariant_Release |
-| 776 | 8 | iTJSDispatch2* | _chara? slot pair | 0 (sub_6C0E9C clears 768/776) | sub_6C0E9C setChara |
+| 768 | 8 | refcounted string value* | pending stealthMotion | 0 | Player_play flush + Release/null |
+| 776 | 8 | refcounted string value* | pending stealthChara | 0 | chara-path flush + Release/null |
 | 864..908 | 44 | sub_7E2344 inline container | _? | sub_7E2344 init | dtor sub_7E24AC |
 | 908 | 1 | bool | _preview | 0 | ctor a1[908]=0; initNodeFields writes 1; getPreview reads +1096!? — actually +1096 is the NCB getter |
 | 909 | 1 | bool | _useD3DFlag | 0 | setUseD3DFlag writes +909 |
 | 910/911 | padding | | 0 | |
 | 912 | 4 | int | _pixelateDivision | **100** | ctor +912=100; setPixelateDivision/getPixelateDivision |
 | 916..960 | reserved/params | | 0 | ctor zero blocks |
-| 960 | 8 | iTJSDispatch2* (refcounted) | variableKeys (dispatch) | 0 | getVariableKeys; dtor Release(+960) |
-| 968 | 8 | iTJSDispatch2* | chara (dispatch) | 0 | getChara; dtor Release(+968) |
-| 976 | 8 | iTJSDispatch2* | motion (dispatch) | 0 | getMotion; dtor Release(+976) |
-| 984 | 8 | iTJSDispatch2* | stealthMotion (dispatch) | 0 | getStealthMotion; dtor Release(+984) |
+| 960 | 8 | refcounted string value* | chara | 0 | NCB chara getter; dtor Release(+960) |
+| 968 | 8 | refcounted string value* | stealthChara | 0 | NCB stealthChara getter; dtor Release(+968) |
+| 976 | 8 | refcounted string value* | motion | 0 | NCB motion getter; dtor Release(+976) |
+| 984 | 8 | refcounted string value* | stealthMotion | 0 | NCB stealthMotion getter; dtor Release(+984) |
 | 992 | 20 | ttstr | _transformOrder | empty | dtor +992; initNodeFields copies +1012 oddly |
 | 1012 | 20 | ttstr | outline | empty | get/setOutline |
 | 1032 | 20 | ttstr | outline (2nd?) | empty | confirmed at +1032 in get/setOutline |
 | 1052 | 20 | ttstr | meshline | empty | get/setMeshline |
-| 1072 | 20 | ttstr | maskColor / stealthMotionStr | empty | getStealthMotionStr→+1072 |
+| 1072 | 20 | tTJSVariant | motion `tag` frame-array dispatch | empty | written by initNonEmoteMotion; enumerated by skipToSync/progress |
 | 1092 | 1 | bool | completionType | 0 | ctor +1092=0; get/setCompletionType |
 | 1093 | 1 | u8 | _? (=byte_1AB84A8) | byte_1AB84A8 | ctor *((BYTE*)a1+1093)=v19 |
 | 1094 | 1 | bool | cameraActive | 0 | get/setCameraActive |

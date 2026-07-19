@@ -60,10 +60,6 @@
 #include "tjs.h"
 #include "EmoteAngleController.h"
 
-namespace PSB {
-    class PSBDictionary;
-} // namespace PSB
-
 namespace motion {
 
     // 0x70=112B mouth controller. Plain C++ object (no vtable: ctor +0 writes a
@@ -91,7 +87,7 @@ namespace motion {
     //   beginFrame(+108) = propGetInt(dict, "beginFrame", default 0).
     //   NO blink fields, NO RNG, NO edge/node arrays (unlike eye/eyebrow ctors).
     void EmoteMouthController_ctor(EmoteMouthController* self,
-                                   const PSB::PSBDictionary* dict);
+                                   const tTJSVariant& dict);
 
     // Aligned with libkrkr2.so sub_666068 EmoteMouthController_step @ 0x666068.
     //   Advances the value-track ramp through states 1 (animating) and 0 (setup),

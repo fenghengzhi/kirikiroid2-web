@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstring>
 #include <optional>
-#include <unordered_set>
 #include <vector>
 
 #include "BitmapIntf.h"
@@ -155,80 +154,6 @@ namespace {
         }
     }
 
-    void pushGraphicCandidates(std::vector<ttstr> &candidates,
-                               const ttstr &base) {
-        if(base.IsEmpty()) {
-            return;
-        }
-
-        candidates.push_back(base);
-        const auto raw = motion::detail::narrow(base);
-        if(raw.find('.') != std::string::npos) {
-            return;
-        }
-
-        static const char *exts[] = {
-            ".png", ".webp", ".jpg", ".jpeg", ".bmp", ".tlg", ".pimg", ".psb"
-        };
-        for(const auto *ext : exts) {
-            candidates.emplace_back(base + ttstr{ ext });
-        }
-    }
-
-    ttstr resolveMotionSourcePathLike_0x6948E8(
-        const motion::detail::MotionSnapshot &snapshot,
-        const std::string &source) {
-        if(source.empty() || motion::internal::isMotionCrossReference(source)) {
-            return {};
-        }
-
-        std::vector<ttstr> candidates;
-        const auto sourcePath = motion::detail::widen(source);
-        pushGraphicCandidates(candidates, sourcePath);
-        motion::detail::appendEmbeddedSourceCandidates(snapshot, source, candidates);
-        for(const auto &alias : snapshot.resourceAliases) {
-            const auto embeddedBase = ttstr{ TJS_W("psb://") } +
-                motion::detail::widen(alias) + TJS_W("/") + sourcePath;
-            pushGraphicCandidates(candidates, embeddedBase);
-        }
-
-        const auto lastSlash = source.rfind('/');
-        const auto baseName =
-            lastSlash == std::string::npos ? source : source.substr(lastSlash + 1);
-        for(const auto &[resPath, ignored] : snapshot.resourcesByPath) {
-            (void)ignored;
-            const auto targetSuffix = "/" + baseName + "/pixel";
-            if(resPath.size() >= targetSuffix.size() &&
-               resPath.compare(resPath.size() - targetSuffix.size(),
-                               targetSuffix.size(), targetSuffix) == 0) {
-                for(const auto &alias : snapshot.resourceAliases) {
-                    const auto psbPath = ttstr{ TJS_W("psb://") } +
-                        motion::detail::widen(alias) + TJS_W("/") +
-                        motion::detail::widen(resPath);
-                    pushGraphicCandidates(candidates, psbPath);
-                }
-            }
-        }
-
-        std::unordered_set<std::string> seen;
-        for(const auto &candidate : candidates) {
-            const auto candidateKey = motion::detail::narrow(candidate);
-            if(!seen.insert(candidateKey).second || candidate.IsEmpty()) {
-                continue;
-            }
-            if(candidateKey.rfind("psb://", 0) == 0) {
-                if(TVPIsExistentStorage(candidate)) {
-                    return candidate;
-                }
-                continue;
-            }
-            if(const auto placed = TVPGetPlacedPath(candidate); !placed.IsEmpty()) {
-                return placed;
-            }
-        }
-        return {};
-    }
-
     std::shared_ptr<tTVPBaseBitmap> loadGraphicBitmap(const ttstr &path) {
         if(path.IsEmpty()) {
             return nullptr;
@@ -253,143 +178,47 @@ namespace {
         return nullptr;
     }
 
-    std::shared_ptr<tTVPBaseBitmap> loadPsbBitmap(
-        const motion::detail::MotionSnapshot &snapshot,
-        const std::string &sourceKey) {
-        int width = 0;
-        int height = 0;
-        double originX = 0.0;
-        double originY = 0.0;
-        std::vector<std::uint8_t> decodedPixels;
-        bool decodedPixelsAreBgra = false;
-        const auto *resource = motion::internal::findPSBResourceBySourceName(
-            snapshot, sourceKey, width, height, decodedPixels, originX, originY,
-            &decodedPixelsAreBgra);
-        const bool sourceDiag =
-            sourceKey.find("yuzu") != std::string::npos ||
-            sourceKey.find("logo") != std::string::npos;
-        if(sourceDiag && LOGGER) {
-            LOGGER->info(
-                "PRTDIAG SourceCache::loadPsbBitmap path='{}' source='{}' found={} width={} height={} resourceBytes={} decodedBytes={} decodedBgra={} root={} resourceCount={}",
-                snapshot.path, sourceKey, resource ? 1 : 0, width, height,
-                resource ? resource->data.size() : 0u, decodedPixels.size(),
-                decodedPixelsAreBgra ? 1 : 0, snapshot.root ? 1 : 0,
-                snapshot.resourcesByPath.size());
-        }
-        motion::detail::logoChainTraceLogf(
-            snapshot.path, "sourceCache.loadPsbBitmap", "0x6948E8", 0.0,
-            "source='{}' found={} width={} height={} resourceBytes={} decodedBytes={} decodedBgra={} root={} resourceCount={}",
-            sourceKey, resource ? 1 : 0, width, height,
-            resource ? resource->data.size() : 0u, decodedPixels.size(),
-            decodedPixelsAreBgra ? 1 : 0, snapshot.root ? 1 : 0,
-            snapshot.resourcesByPath.size());
-        if(!resource || width <= 0 || height <= 0 || resource->data.empty()) {
-            return nullptr;
-        }
-
-        const auto &pixelData =
-            decodedPixels.empty() ? resource->data : decodedPixels;
-        auto bmp = std::make_shared<tTVPBaseBitmap>(
-            static_cast<tjs_uint>(width), static_cast<tjs_uint>(height), 32);
-        tTVPRect fillRect(0, 0, width, height);
-        bmp->Fill(fillRect, 0x00000000);
-        const auto *src = pixelData.data();
-        for(int y = 0; y < height; ++y) {
-            auto *row = static_cast<std::uint8_t *>(
-                bmp->GetScanLineForWrite(static_cast<tjs_uint>(y)));
-            for(int x = 0; x < width; ++x) {
-                const size_t sourceIndex =
-                    (static_cast<size_t>(y) * width + x) * 4u;
-                if(sourceIndex + 3 >= pixelData.size()) {
-                    break;
-                }
-                auto *dst = row + static_cast<size_t>(x) * 4u;
-                if(decodedPixelsAreBgra) {
-                    dst[0] = src[sourceIndex + 0];
-                    dst[1] = src[sourceIndex + 1];
-                    dst[2] = src[sourceIndex + 2];
-                } else {
-                    dst[0] = src[sourceIndex + 2];
-                    dst[1] = src[sourceIndex + 1];
-                    dst[2] = src[sourceIndex + 0];
-                }
-                dst[3] = src[sourceIndex + 3];
+    void decodeObjSourceRL8Like_0x6DA454(
+        std::uint8_t *destination, const std::uint8_t *source,
+        std::uint32_t sourceSize) {
+        const std::uint8_t *const sourceEnd = source + sourceSize;
+        while(source < sourceEnd) {
+            const std::uint8_t marker = *source++;
+            if((marker & 0x80u) != 0) {
+                const size_t count = (marker & 0x7fu) + 3u;
+                std::memset(destination, *source++, count);
+                destination += count;
+            } else {
+                const size_t count = static_cast<size_t>(marker) + 1u;
+                std::memcpy(destination, source, count);
+                destination += count;
+                source += count;
             }
         }
-        return bmp;
     }
 
-    tTJSVariant loadPsbSourceFacadeLike_0x6948E8(
-        const motion::detail::MotionSnapshot &snapshot,
-        const std::string &sourceKey) {
-        if(sourceKey.rfind("src/", 0) != 0 || snapshot.moduleValue.Type() != tvtObject) {
-            return {};
-        }
-
-        const auto afterSrc = sourceKey.substr(4);
-        const auto slash = afterSrc.find('/');
-        if(slash == std::string::npos) {
-            return {};
-        }
-        const auto group = afterSrc.substr(0, slash);
-        const auto name = afterSrc.substr(slash + 1);
-        if(group.empty() || name.empty()) {
-            return {};
-        }
-
-        tTJSVariant sourceDict;
-        tTJSVariant groupDict;
-        tTJSVariant iconHolder;
-        tTJSVariant iconEntry;
-        const ttstr groupKey = motion::detail::widen(group);
-        const ttstr nameKey = motion::detail::widen(name);
-        const bool found =
-            getObjectProperty(snapshot.moduleValue, TJS_W("source"), sourceDict) &&
-            getObjectProperty(sourceDict, groupKey.c_str(), groupDict) &&
-            getObjectProperty(groupDict, TJS_W("icon"), iconHolder) &&
-            getObjectProperty(iconHolder, nameKey.c_str(), iconEntry) &&
-            iconEntry.Type() == tvtObject;
-
-        const bool sourceDiag =
-            sourceKey.find("yuzu") != std::string::npos ||
-            sourceKey.find("logo") != std::string::npos;
-        if(sourceDiag && LOGGER) {
-            int width = 0;
-            int height = 0;
-            if(found) {
-                tTJSVariant value;
-                if(getObjectProperty(iconEntry, TJS_W("width"), value) &&
-                   value.Type() != tvtVoid) {
-                    width = static_cast<int>(value);
-                }
-                if(getObjectProperty(iconEntry, TJS_W("height"), value) &&
-                   value.Type() != tvtVoid) {
-                    height = static_cast<int>(value);
-                }
+    void decodeObjSourceRL32Like_0x6DA454(
+        std::uint8_t *destination, const std::uint8_t *source,
+        std::uint32_t sourceSize) {
+        const std::uint8_t *const sourceEnd = source + sourceSize;
+        auto *output = reinterpret_cast<tjs_uint32 *>(destination);
+        while(source < sourceEnd) {
+            const std::uint8_t marker = *source++;
+            if((marker & 0x80u) != 0) {
+                tjs_uint32 pixel;
+                std::memcpy(&pixel, source, sizeof(pixel));
+                source += sizeof(pixel);
+                const size_t count = (marker & 0x7fu) + 3u;
+                std::fill_n(output, count, pixel);
+                output += count;
+            } else {
+                const size_t count = static_cast<size_t>(marker) + 1u;
+                const size_t byteCount = count * sizeof(tjs_uint32);
+                std::memcpy(output, source, byteCount);
+                output += count;
+                source += byteCount;
             }
-            LOGGER->info(
-                "PRTDIAG SourceCache::loadPsbSourceFacade path='{}' source='{}' group='{}' icon='{}' found={} size={}x{}",
-                snapshot.path, sourceKey, group, name, found ? 1 : 0,
-                width, height);
         }
-        motion::detail::logoChainTraceLogf(
-            snapshot.path, "sourceCache.loadPsbSourceFacade", "0x6948E8", 0.0,
-            "source='{}' group='{}' icon='{}' found={}", sourceKey, group,
-            name, found ? 1 : 0);
-
-        if(!found) {
-            return {};
-        }
-
-        using ObjSourceAdaptor = ncbInstanceAdaptor<motion::ObjSource>;
-        auto *src = new motion::ObjSource(iconEntry);
-        if(iTJSDispatch2 *dispatch = ObjSourceAdaptor::CreateAdaptor(src)) {
-            tTJSVariant result(dispatch, dispatch);
-            dispatch->Release();
-            return result;
-        }
-        delete src;
-        return {};
     }
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject) {
@@ -495,6 +324,147 @@ namespace {
 
 namespace motion {
 
+    ObjSource::~ObjSource() {
+        if(_texture) {
+            _texture->Release();
+            _texture = nullptr;
+        }
+    }
+
+    tTJSVariant ObjSource::getClip() const {
+        // ObjSource_getClip @0x69D35C: read the backing dict's `clip` object,
+        // then construct a fresh object containing exactly these four fields.
+        tTJSVariant clip;
+        if(!getObjectProperty(_sourceDict, TJS_W("clip"), clip) ||
+           clip.Type() != tvtObject || !clip.AsObjectNoAddRef()) {
+            return {};
+        }
+
+        const auto readClipNumber = [&clip](const tjs_char *name) -> double {
+            tTJSVariant value;
+            if(!getObjectProperty(clip, name, value) ||
+               value.Type() == tvtVoid) {
+                return 0.0;
+            }
+            return static_cast<double>(value);
+        };
+        return detail::makeDictionary({
+            { "left", tTJSVariant(readClipNumber(TJS_W("left"))) },
+            { "top", tTJSVariant(readClipNumber(TJS_W("top"))) },
+            { "right", tTJSVariant(readClipNumber(TJS_W("right"))) },
+            { "bottom", tTJSVariant(readClipNumber(TJS_W("bottom"))) },
+        });
+    }
+
+    void ObjSource::ensureTextureLike_0x6DA454() {
+        // ObjSource_ensureTexture @0x6DA454 returns immediately once qword[2]
+        // owns a texture. The backing source must be the raw icon dictionary.
+        if(_texture || _sourceDict.Type() != tvtObject ||
+           !_sourceDict.AsObjectNoAddRef()) {
+            return;
+        }
+
+        tTJSVariant widthValue;
+        tTJSVariant heightValue;
+        tTJSVariant pixelValue;
+        if(!getObjectProperty(_sourceDict, TJS_W("width"), widthValue) ||
+           !getObjectProperty(_sourceDict, TJS_W("height"), heightValue) ||
+           !getObjectProperty(_sourceDict, TJS_W("pixel"), pixelValue) ||
+           pixelValue.Type() != tvtOctet ||
+           !pixelValue.AsOctetNoAddRef()) {
+            return;
+        }
+
+        const auto width = static_cast<tjs_int>(widthValue);
+        const auto height = static_cast<tjs_int>(heightValue);
+        if(width <= 0 || height <= 0) {
+            return;
+        }
+        const size_t pixelCount = static_cast<size_t>(width) *
+            static_cast<size_t>(height);
+        auto *pixelOctet = pixelValue.AsOctetNoAddRef();
+        const auto *pixelData = pixelOctet->GetData();
+        const auto pixelSize = pixelOctet->GetLength();
+        if(!pixelData) {
+            return;
+        }
+
+        tTJSVariant compressValue;
+        const bool compressed =
+            getObjectProperty(_sourceDict, TJS_W("compress"), compressValue) &&
+            compressValue.Type() != tvtVoid &&
+            ttstr(compressValue) == ttstr(TJS_W("RL"));
+        tTJSVariant paletteValue;
+        const bool hasPalette =
+            getObjectProperty(_sourceDict, TJS_W("pal"), paletteValue) &&
+            paletteValue.Type() == tvtOctet &&
+            paletteValue.AsOctetNoAddRef();
+
+        // sub_A0DE48 in the binary returns an uninitialised allocation; each
+        // branch below writes the same span as ObjSource_ensureTexture.
+        std::unique_ptr<std::uint8_t[]> bgra(
+            new std::uint8_t[pixelCount * sizeof(tjs_uint32)]);
+        if(hasPalette) {
+            std::unique_ptr<std::uint8_t[]> indexes(
+                new std::uint8_t[pixelCount]);
+            if(compressed) {
+                decodeObjSourceRL8Like_0x6DA454(
+                    indexes.get(), pixelData,
+                    static_cast<std::uint32_t>(pixelSize));
+            } else {
+                // 0x6DA6D4 copies the resource byte count, not pixelCount.
+                std::memcpy(indexes.get(), pixelData, pixelSize);
+            }
+
+            auto *paletteOctet = paletteValue.AsOctetNoAddRef();
+            const size_t paletteCount =
+                paletteOctet->GetLength() / sizeof(tjs_uint32);
+            std::vector<tjs_uint32> palette(paletteCount);
+            TVPReverseRGB(
+                palette.data(),
+                reinterpret_cast<const tjs_uint32 *>(paletteOctet->GetData()),
+                static_cast<tjs_int>(paletteCount));
+            TVPBLExpand8BitTo32BitPal(
+                reinterpret_cast<tjs_uint32 *>(bgra.get()), indexes.get(),
+                static_cast<tjs_int>(pixelCount), palette.data());
+        } else if(compressed) {
+            decodeObjSourceRL32Like_0x6DA454(
+                bgra.get(), pixelData,
+                static_cast<std::uint32_t>(pixelSize));
+            TVPReverseRGB(
+                reinterpret_cast<tjs_uint32 *>(bgra.get()),
+                reinterpret_cast<const tjs_uint32 *>(bgra.get()),
+                static_cast<tjs_int>(pixelCount));
+        } else {
+            TVPReverseRGB(
+                reinterpret_cast<tjs_uint32 *>(bgra.get()),
+                reinterpret_cast<const tjs_uint32 *>(pixelData),
+                static_cast<tjs_int>(pixelCount));
+        }
+
+        _texture = TVPGetRenderManager()->CreateTexture2D(
+            bgra.get(), width * static_cast<tjs_int>(sizeof(tjs_uint32)),
+            width, height, TVPTextureFormat::RGBA,
+            RENDER_CREATE_TEXTURE_FLAG_ANY);
+    }
+
+    void ObjSource::drawLayer(tTJSVariant target) {
+        // ObjSource_drawLayer @0x69D6D8: only a raw dict-backed ObjSource enters
+        // the lazy materialisation path, then assigns the retained texture and
+        // applies the source dimensions to the target Layer.
+        if(_sourceDict.Type() != tvtObject || target.Type() != tvtObject ||
+           !target.AsObjectNoAddRef()) {
+            return;
+        }
+        ensureTextureLike_0x6DA454();
+        auto *layer = resolveNativeLayer(target.AsObjectNoAddRef());
+        if(!_texture || !layer) {
+            return;
+        }
+        layer->AssignTexture(_texture);
+        layer->SetSize(getWidth(), getHeight());
+    }
+
     SourceCache::SourceCache() = default;
 
     SourceCache::SourceCache(tTJSVariant owner, tjs_int layerType) {
@@ -558,20 +528,10 @@ namespace motion {
         }
 
         std::string resolvedKey;
-        tTJSVariant rawSource;
-        if(player && player->_activeMotion) {
-            // Player_findSource @0x6948E8 resolves PSB-backed "src/..."
-            // entries through the active module's source/icon dictionary before
-            // falling back to ResourceManager.findSource/storage paths.
-            rawSource =
-                loadPsbSourceFacadeLike_0x6948E8(*player->_activeMotion, key);
-        }
-        if(rawSource.Type() == tvtVoid) {
-            rawSource =
-                currentSource.Type() != tvtVoid
-                    ? currentSource
-                    : loadRawSourceVariant(player, name, resolvedKey);
-        }
+        tTJSVariant rawSource =
+            currentSource.Type() != tvtVoid
+                ? currentSource
+                : loadRawSourceVariant(player, name, resolvedKey);
         Entry entry;
         entry.key = key;
         entry.resolvedKey = resolvedKey.empty() ? key : resolvedKey;
@@ -848,71 +808,57 @@ namespace motion {
         }
 
         std::shared_ptr<tTVPBaseBitmap> baseBitmap;
-        if(player && player->_activeMotion) {
-            if(key.rfind("src/", 0) == 0) {
-                // Player_findSource @0x6948E8 resolves "src/..." entries from
-                // the loaded PSB source/texture/icon dictionaries before any
-                // ResourceManager.findSource storage fallback.
-                baseBitmap = loadPsbBitmap(*player->_activeMotion, key);
-                if(LOGGER) {
-                    LOGGER->info(
-                        "PRTDIAG SourceCache::ensure psbFirst path='{}' key='{}' hit={} size={}x{}",
-                        player->_activeMotion->path, key,
-                        baseBitmap ? 1 : 0,
-                        baseBitmap ? baseBitmap->GetWidth() : 0,
-                        baseBitmap ? baseBitmap->GetHeight() : 0);
+        // SourceCache_loadSource @0x6A7BA8 calls the raw source facade's
+        // drawLayer(bufLayer). ObjSource_drawLayer @0x69D6D8 owns PSB pixel
+        // decoding; SourceCache only snapshots that temporary Layer before the
+        // 0x6A6BE0 color bake.
+        if(entry.rawSource.Type() == tvtObject &&
+           entry.rawSource.AsObjectNoAddRef() &&
+           _bufLayer.Type() == tvtObject && _bufLayer.AsObjectNoAddRef()) {
+            tTJSVariant bufferArg(_bufLayer);
+            tTJSVariant *args[] = { &bufferArg };
+            if(TJS_SUCCEEDED(entry.rawSource.AsObjectNoAddRef()->FuncCall(
+                   0, TJS_W("drawLayer"), nullptr, nullptr, 1, args,
+                   entry.rawSource.AsObjectNoAddRef()))) {
+                if(auto *bufferLayer =
+                       resolveNativeLayer(_bufLayer.AsObjectNoAddRef())) {
+                    if(auto *image = bufferLayer->GetMainImage();
+                       image && image->GetWidth() > 0 &&
+                       image->GetHeight() > 0) {
+                        baseBitmap = cloneBitmap32(*image);
+                    }
                 }
-                detail::logoChainTraceLogf(
-                    player->_activeMotion->path,
-                    "sourceCache.ensure.psbFirst", "0x6948E8",
-                    player->_clampedEvalTime,
-                    "key='{}' hit={} size={}x{}", key, baseBitmap ? 1 : 0,
-                    baseBitmap ? baseBitmap->GetWidth() : 0,
-                    baseBitmap ? baseBitmap->GetHeight() : 0);
             }
-            if(!baseBitmap) {
-                const auto path = resolveMotionSourcePathLike_0x6948E8(
-                    *player->_activeMotion, key);
-                baseBitmap = loadGraphicBitmap(path);
-                if((key.find("yuzu") != std::string::npos ||
-                    key.find("logo") != std::string::npos) &&
-                   LOGGER) {
-                    LOGGER->info(
-                        "PRTDIAG SourceCache::ensure storageFallback path='{}' key='{}' storage='{}' hit={} size={}x{}",
-                        player->_activeMotion->path, key,
-                        detail::narrow(path), baseBitmap ? 1 : 0,
-                        baseBitmap ? baseBitmap->GetWidth() : 0,
-                        baseBitmap ? baseBitmap->GetHeight() : 0);
+        }
+
+        // ResourceManager_findSource @0x6AAB3C returns a plain dictionary for
+        // blank/W:H:X:Y. It intentionally has no ObjSource.drawLayer method.
+        if(!baseBitmap && entry.rawSource.Type() == tvtObject) {
+            tTJSVariant blankValue;
+            tTJSVariant widthValue;
+            tTJSVariant heightValue;
+            if(getObjectProperty(entry.rawSource, TJS_W("blank"), blankValue) &&
+               static_cast<tjs_int>(blankValue) != 0 &&
+               getObjectProperty(entry.rawSource, TJS_W("width"), widthValue) &&
+               getObjectProperty(entry.rawSource, TJS_W("height"), heightValue)) {
+                const auto width = static_cast<tjs_int>(widthValue);
+                const auto height = static_cast<tjs_int>(heightValue);
+                if(width > 0 && height > 0) {
+                    baseBitmap = std::make_shared<tTVPBaseBitmap>(
+                        static_cast<tjs_uint>(width),
+                        static_cast<tjs_uint>(height), 32);
+                    baseBitmap->Fill(tTVPRect(0, 0, width, height), 0);
                 }
-                detail::logoChainTraceLogf(
-                    player->_activeMotion->path,
-                    "sourceCache.ensure.storageFallback", "0x6948E8",
-                    player->_clampedEvalTime,
-                    "key='{}' path='{}' hit={} size={}x{}", key,
-                    detail::narrow(path), baseBitmap ? 1 : 0,
-                    baseBitmap ? baseBitmap->GetWidth() : 0,
-                    baseBitmap ? baseBitmap->GetHeight() : 0);
             }
-            if(!baseBitmap) {
-                baseBitmap = loadPsbBitmap(*player->_activeMotion, key);
-                if((key.find("yuzu") != std::string::npos ||
-                    key.find("logo") != std::string::npos) &&
-                   LOGGER) {
-                    LOGGER->info(
-                        "PRTDIAG SourceCache::ensure psbFallback path='{}' key='{}' hit={} size={}x{}",
-                        player->_activeMotion->path, key,
-                        baseBitmap ? 1 : 0,
-                        baseBitmap ? baseBitmap->GetWidth() : 0,
-                        baseBitmap ? baseBitmap->GetHeight() : 0);
-                }
-                detail::logoChainTraceLogf(
-                    player->_activeMotion->path,
-                    "sourceCache.ensure.psbFallback", "0x6948E8",
-                    player->_clampedEvalTime,
-                    "key='{}' hit={} size={}x{}", key, baseBitmap ? 1 : 0,
-                    baseBitmap ? baseBitmap->GetWidth() : 0,
-                    baseBitmap ? baseBitmap->GetHeight() : 0);
-            }
+        }
+
+        // Non-PSB source names remain ordinary storage graphics. This is the
+        // platform storage boundary after the raw ResourceManager lookup, not
+        // a decoded MotionSnapshot alias graph.
+        if(!baseBitmap) {
+            const ttstr path = detail::widen(
+                entry.resolvedKey.empty() ? key : entry.resolvedKey);
+            baseBitmap = loadGraphicBitmap(path);
         }
         if(!baseBitmap || baseBitmap->GetWidth() <= 0 ||
            baseBitmap->GetHeight() <= 0) {
@@ -952,14 +898,23 @@ namespace motion {
             return {};
         }
 
-        ttstr resolved;
-        if(!detail::resolveExistingPath(
-               internal::buildSourceCandidates(*player, name), resolved)) {
-            return {};
+        // Player_findSource @0x6948E8 passes Player+1012 and the requested
+        // source path directly to ResourceManager_findSource @0x6AAB3C.
+        tTJSVariant raw = player->nativeRM()->findSource(
+            static_cast<ttstr>(player->_findMotionContextVariant), name);
+        if(raw.Type() != tvtVoid) {
+            resolvedKey = detail::narrow(name);
+            return raw;
         }
 
-        resolvedKey = detail::narrow(resolved);
-        return player->nativeRM()->load(resolved);
+        // External graphic fallback uses the storage normalizer only. The
+        // former decoded-tree source-candidate cache was removed because the
+        // Android chain resolves through Player+1012/RM directly.
+        const ttstr placed = TVPGetPlacedPath(name);
+        if(!placed.IsEmpty() && TVPIsExistentStorage(placed)) {
+            resolvedKey = detail::narrow(placed);
+        }
+        return {};
     }
 
 } // namespace motion

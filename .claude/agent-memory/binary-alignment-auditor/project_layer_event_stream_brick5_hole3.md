@@ -1,11 +1,16 @@
 ---
 name: layer-event-stream-brick5-hole3
-description: 砖5/洞3 layer(tag) event stream audit — call-site arch deviation (events run once at end-of-frameProgress vs binary INSIDE advance/rewindRootAndNodes per node-seek). Reseek (0x6B86C8) layer scan MISSING from port entirely.
+description: layer(tag) stream historical audit；2026-07-19 current code has direction-split advance/rewind helpers and live 0x6B86C8 reseek scan
 metadata:
   type: project
 ---
 
 砖5/洞3 `Player::seekLayerEventStreamLike_0x6B6ADC` (PlayerFrameProgress.cpp ~803-936) audit @2026-06-01.
+
+**CORRECTED 2026-07-19:** 该旧合并 helper 与 `_layerStreamSource` 已删除；当前按二进制
+分为 `advanceLayerEventStreamLike_0x6B6ADC` 与
+`rewindLayerEventStreamLike_0x6B9A3C`，cursor 仅由 init/reseek 和方向增量流管理。
+下文关于 pointer-identity self-reset 的描述只记录旧实现，不是当前结论。
 
 **Decompiled & confirmed:**
 - 0x6B6ADC advanceRootAndNodes: layer loop @0x6B6B80 `for(i=count-2; cursor<i;){ if(+456 < +928[nextTime]) break; ++cursor; ...; if type==1 gate }`. cursor=+916, curTime=+920, nextTime=+928. Gate writes +483(motionCompleted)/+456/+1120 on align; +1098(syncWaiting)/+456/+1120 + pushSync on sync. Action ungated.

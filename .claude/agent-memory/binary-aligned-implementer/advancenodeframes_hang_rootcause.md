@@ -5,6 +5,16 @@ metadata:
   type: project
 ---
 
+> **2026-07-19 纠正：** 本文出现的 `_activeMotion=null` 是旧诊断字段，不是当前 Player
+> 生命周期；loaded/content gate 现只读 +528 raw Variant，matched key 只读 +1012。
+>
+> **2026-07-19 再纠正：** 下文第 5 点“`parameterEntry!=null` 但
+> `parameterizeIndex<0`”是旧本地实现制造出的不可能状态，不能再作为二进制结论引用。
+> fresh decompile `Player_initNodeFields@0x6B3C78` 显示：仅当 `parameterize` variant
+> 类型为 Integer 时才把 56B 参数项地址写入 node+8，否则在 `0x6B3EA0` 明确写 null。
+> 本地已恢复该条件写入。透传 `clampedEvalTime` 仍是共享 helper 对非参数 inline
+> 路径的正确参数，但不再用这个伪状态解释。
+
 # advanceNodeFrames (0x6B7E44) 收敛 → m2logo CI 挂起:已诊断 + 已修复（2026-06-05）
 
 ## 状态
@@ -43,10 +53,10 @@ LLDB tracer，无挂起）。见 [[advancenodeframes-0x6B7E44-convergence]] 的�
    activeSlot().done、:66 读 activeSlot().src）：literal 路径让某帧 child 被 play 但
    motion 加载失败 → child `_speed=1` / `_activeMotion=null` / `totalFrames=0`；后续帧
    不再停它 → 持续被 frameProgress → 2100 空转。
-5. **第二个坑（修复时踩到）**：delegation 若把 `currentTime` 硬编成 `0.0`，对
-   `parameterEntry!=null 但 parameterizeIndex<0` 的节点（路由 gate 只看 parameterEntry）
-   会让 frameSelectionTimeLike 回退到 currentTime=0 → seek 到 t=0 → 复挂。必须透传
-   真实 `clampedEvalTime`（= green 基线行为）。
+5. **历史第二个坑（结论已纠正）**：delegation 把 `currentTime` 硬编成 `0.0` 会改变
+   非参数 inline 路径的 seek target，因此共享 helper 必须接收真实
+   `clampedEvalTime`。旧文把现象归因于 `parameterEntry!=null && parameterizeIndex<0`；
+   `Player_initNodeFields@0x6B3C78` 已证明二进制不会产生该状态。
 
 ## 反编译证据（0x6B7E44 尾部 = inline 尾部，逐字段一致）
 0x6B7E44 与 Player_advanceRootAndNodes 的非参数化 inline 兄弟路径（0x6B72BC..0x6B7338）

@@ -17,11 +17,9 @@ namespace PSB {
 
     namespace {
         constexpr std::array<char, 4> kMdfSignature{ 'M', 'D', 'F', '\0' };
-        constexpr std::array<char, 4> kMdfLowerSignature{ 'm', 'd', 'f',
-                                                          '\0' };
+        constexpr std::array<char, 4> kMdfLowerSignature{ 'm', 'd', 'f', '\0' };
         constexpr std::array<char, 4> kMflSignature{ 'M', 'F', 'L', '\0' };
-        constexpr std::array<char, 4> kMflLowerSignature{ 'm', 'f', 'l',
-                                                          '\0' };
+        constexpr std::array<char, 4> kMflLowerSignature{ 'm', 'f', 'l', '\0' };
 
         bool hasSignature(const std::array<char, 4> &actual,
                           const std::array<char, 4> &expected) {
@@ -36,7 +34,7 @@ namespace PSB {
         }
     } // namespace
 
-    void PSBFile::loadKeys(TJS::tTJSBinaryStream *stream) {
+    void DecodedPSBFile::loadKeys(TJS::tTJSBinaryStream *stream) {
         const size_t len = nameIndexes.value.size();
         names.reserve(len);
         for(int i = 0; i < len; i++) {
@@ -45,7 +43,7 @@ namespace PSB {
         }
     }
 
-    void PSBFile::loadNames() {
+    void DecodedPSBFile::loadNames() {
         const size_t len = nameIndexes.value.size();
         names.reserve(len);
         for(int i = 0; i < len; i++) {
@@ -66,8 +64,8 @@ namespace PSB {
         }
     }
 
-    void PSBFile::loadString(std::unique_ptr<PSB::PSBString> &str,
-                             TJS::tTJSBinaryStream *stream) {
+    void DecodedPSBFile::loadString(std::unique_ptr<PSB::PSBString> &str,
+                                    TJS::tTJSBinaryStream *stream) {
         assert(str->index.has_value() && "Index can not be null");
         auto idx = str->index;
         const auto refStr = std::find_if(
@@ -93,7 +91,7 @@ namespace PSB {
     }
 
     std::shared_ptr<PSB::PSBList>
-    PSBFile::loadList(TJS::tTJSBinaryStream *stream, bool lazyLoad) {
+    DecodedPSBFile::loadList(TJS::tTJSBinaryStream *stream, bool lazyLoad) {
         auto offsets = PSB::PSBList::loadIntoList(
             stream->ReadI8LE() -
                 static_cast<std::uint8_t>(PSB::PSBObjType::ArrayN1) + 1,
@@ -132,7 +130,7 @@ namespace PSB {
     }
 
     std::shared_ptr<PSB::PSBDictionary>
-    PSBFile::loadObjects(TJS::tTJSBinaryStream *stream, bool lazyLoad) {
+    DecodedPSBFile::loadObjects(TJS::tTJSBinaryStream *stream, bool lazyLoad) {
         const auto names = PSB::PSBList::loadIntoList(
             stream->ReadI8LE() -
                 static_cast<std::uint8_t>(PSB::PSBObjType::ArrayN1) + 1,
@@ -151,13 +149,13 @@ namespace PSB {
 
         for(size_t i = 0; i < names.size(); i++) {
             const auto nameIdx = names[i];
-            if(nameIdx >= PSBFile::names.size()) {
+            if(nameIdx >= DecodedPSBFile::names.size()) {
                 LOGGER->warn("Bad PSB format: at position:{}, name index {} >= "
                              "Names count ({}), skipping.",
-                             pos, nameIdx, PSBFile::names.size());
+                             pos, nameIdx, DecodedPSBFile::names.size());
                 continue;
             }
-            auto name = PSBFile::names[nameIdx];
+            auto name = DecodedPSBFile::names[nameIdx];
             std::shared_ptr<PSB::IPSBValue> obj = nullptr;
             std::uint32_t offset = 0;
             if(i < offsets.size()) {
@@ -194,7 +192,8 @@ namespace PSB {
     }
 
     std::shared_ptr<PSBDictionary>
-    PSBFile::loadObjectsV1(TJS::tTJSBinaryStream *stream, bool lazyLoad) {
+    DecodedPSBFile::loadObjectsV1(TJS::tTJSBinaryStream *stream,
+                                  bool lazyLoad) {
         auto offsets = PSB::PSBList::loadIntoList(
             stream->ReadI8LE() -
                 static_cast<std::uint8_t>(PSBObjType::ArrayN1) + 1,
@@ -210,7 +209,7 @@ namespace PSB {
             stream->SetPosition(pos + offset);
             PSBNumber nameIdx(static_cast<PSBObjType>(stream->ReadI8LE()),
                               stream);
-            auto name = PSBFile::names[static_cast<int>(nameIdx)];
+            auto name = DecodedPSBFile::names[static_cast<int>(nameIdx)];
             auto obj = unpack(stream, lazyLoad);
             if(obj != nullptr) {
 
@@ -238,7 +237,7 @@ namespace PSB {
     }
 
     std::shared_ptr<PSB::IPSBValue>
-    PSBFile::unpack(TJS::tTJSBinaryStream *stream, bool lazyLoad) {
+    DecodedPSBFile::unpack(TJS::tTJSBinaryStream *stream, bool lazyLoad) {
 
         auto typeByte = stream->ReadI8LE();
 
@@ -344,7 +343,7 @@ namespace PSB {
         }
     }
 
-    bool PSBFile::loadPSBFile(const ttstr &filePath) {
+    bool DecodedPSBFile::loadPSBFile(const ttstr &filePath) {
         LOGGER->debug("load psb file: {}", filePath.AsStdString());
         auto *s = TVPCreateStream(filePath);
         if(!s)
@@ -570,8 +569,8 @@ namespace PSB {
         return true;
     }
 
-    void PSBFile::loadResource(PSBResource &res,
-                               TJS::tTJSBinaryStream *stream) const {
+    void DecodedPSBFile::loadResource(PSBResource &res,
+                                      TJS::tTJSBinaryStream *stream) const {
         if(!res.index.has_value()) {
             throw std::runtime_error("Resource Index invalid");
         }
@@ -585,8 +584,9 @@ namespace PSB {
         res.data = std::move(tmp);
     }
 
-    void PSBFile::loadExtraResource(PSBResource &res,
-                                    TJS::tTJSBinaryStream *stream) const {
+    void
+    DecodedPSBFile::loadExtraResource(PSBResource &res,
+                                      TJS::tTJSBinaryStream *stream) const {
         if(!res.index.has_value()) {
             throw std::runtime_error("Extra Resource Index invalid");
         }
@@ -600,7 +600,7 @@ namespace PSB {
         res.data = std::move(tmp);
     }
 
-    void PSBFile::afterLoad() {
+    void DecodedPSBFile::afterLoad() {
         constexpr auto intMax = static_cast<std::uint32_t>(INT_MAX);
         std::sort(strings.begin(), strings.end(),
                   [intMax](const PSB::PSBString &r1, const PSB::PSBString &r2) {

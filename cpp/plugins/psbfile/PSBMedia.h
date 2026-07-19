@@ -3,7 +3,7 @@
 //
 #pragma once
 
-#include "PSBValue.h"
+#include "PSBRawFile.h"
 #include "StorageIntf.h"
 
 namespace PSB {
@@ -36,11 +36,15 @@ namespace PSB {
 
         void GetLocallyAccessibleName(ttstr &name) override;
 
-        void add(const std::string &name,
-                 const std::shared_ptr<PSBResource> &resource);
-
     private:
+        [[nodiscard]] bool EnsureContainer(const ttstr &name);
+        [[nodiscard]] bool Resolve(const ttstr &name, PSBRawNode &value);
+        [[nodiscard]] bool GetResourceData(const ttstr &name,
+                                           const std::uint8_t *&data,
+                                           std::uint32_t &size);
+
         int _ref = 0;
-        std::unordered_map<std::string, PSBResource> _resources;
+        tTJSVariant _file;
+        ttstr _container;
     };
 } // namespace PSB

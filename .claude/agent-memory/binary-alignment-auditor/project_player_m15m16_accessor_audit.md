@@ -7,14 +7,18 @@ metadata:
 
 Audit 2026-05-31 of M15/M16 Player accessors vs libkrkr2.so. Confirmed via decompile.
 
+> **2026-07-18 correction:** 本文的 setChara 条目受 NCB 表 off-by-one
+> 误读影响，已证伪。权威映射是 chara 0x6D9470/0x6C0E9C (+960)、
+> stealthChara 0x6D9490/0x6D94B0 (+968)、pending stealthChara +776；
+> 这些是 refcounted string-value owner，源码层 `ttstr`，不是本地类型偏差。
+
 **Confirmed binary behaviors (addr -> field offsets):**
 - setAngleDeg 0x6CD0EC: deg=rad*57.2957795; if +482(directEdit) normalize[0,360),
   +464=deg, Player_initEmoteMotion(2); else root+1616=deg + root+1584=dirty (guarded != ).
 - getAngleDeg 0x6CD0C0: returns RAD (*0.0174532925) reading +464 or root+1616. NOTE binary
   symbol "getAngleDeg" RETURNS RADIANS.
-- setChara 0x6D94B0: chara stored as tTJSVariant* at +776 (NOT +968; +968 is a gate flag).
-  if +968 set: re-dispatch sub_6B29C0(this,16,arg) twice + Release +776. else AddRef arg,
-  Release old +776, store arg@+776. Manual refcount via ldaxr/stlxr.
+- setStealthChara 0x6D94B0: +968 live 时 writer(flags=16)+flush +776；
+  否则把请求保存在 pending +776。primary chara setter 是 0x6C0E9C。
 - setTickCount_ms 0x6D96C0: +1120=fmax(v*60/1000,0); *(WORD*)+480=257; +456=min(+1120,+1128).
 - getTickCount_ms 0x6D96A0: +1120*1000/60 UNCONDITIONAL (no >0 guard).
 - getLoopTime ARRAY 0x6D139C: builds TJS Array (sub_704CB8), iterates node deque a1[164..168]
@@ -34,8 +38,8 @@ Audit 2026-05-31 of M15/M16 Player accessors vs libkrkr2.so. Confirmed via decom
   Array. main.cpp:165/166 bind loopTime/frameLoopTime to scalar getLoopTime. SEVERE shape mismatch
   (carried from clusterE). NOTE: 0x6D139C may be a DIFFERENT property than scalar loopTime getter
   0x6D97AC (frameLoopTime, reads +1136) — two distinct binary getters; needs NCB-reg disambiguation.
-- setChara TYPE+SIDEEFFECT: Player.h:130 `_chara=v` plain ttstr assign. Binary uses tTJSVariant*
-  @+776 + re-play dispatch sub_6B29C0(16). Wrong type, missing replay. (carried from clusterE).
+- setChara 的旧 TYPE+SIDEEFFECT 结论已证伪；2026-07-18 本地已复原四个 live
+  `ttstr` 值槽、两个 pending owner、dedup/invalidation 与 flush 调用链。
 - setTickCount Player.h:220-229 NOW MATCHES binary (fmax clamp, _queuing+_firstFrame=true=+480word257,
   _clampedEvalTime=min). getTickCount Player.h:232 unconditional — MATCHES. (M16 fix landed correctly).
 - setAngleDeg PlayerCore.cpp:397 MATCHES binary deg conversion + normalize + storage, but OMITS

@@ -1,4 +1,4 @@
-// PlayerCore.cpp — Constructor, setMotion, serialize, core properties
+// PlayerCore.cpp — Constructor, setMotion, core properties
 // Split from Player.cpp for maintainability.
 //
 #include <algorithm>
@@ -7,8 +7,8 @@
 
 #include "PlayerInternal.h"
 #include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
+#include "MotionDispatch.h"
 #include "SourceCache.h"
-#include "psbfile/PSBValue.h" // PSBDictionary / PSBList (metadata.eyeControl walk)
 #include "ncbind.hpp"
 
 using namespace motion::internal;
@@ -36,17 +36,6 @@ namespace {
         return v ? "true" : "false";
     }
 
-    std::string joinCorePlayingLabels(
-        const std::vector<std::string> &labels) {
-        std::string joined;
-        for(const auto &label : labels) {
-            if(!joined.empty()) {
-                joined += ",";
-            }
-            joined += label;
-        }
-        return joined.empty() ? std::string("<none>") : joined;
-    }
 }
 
 namespace motion {
@@ -68,14 +57,6 @@ namespace motion {
     //   the EmoteEngine HM6->deque dispatch that the binary does only inside
     //   EmoteEngine_setVariable @0x671228). With that shim removed, this helper
     //   is dead.
-
-    void Player::setSelectorEnabled(bool v) {
-        if(_selectorEnabled == v) {
-            return;
-        }
-        _selectorEnabled = v;
-        syncSelectorControlsLike_0x670D1C();
-    }
 
     tjs_int Player::getColorWeight() const {
         return static_cast<tjs_int>(
@@ -176,17 +157,24 @@ namespace motion {
         _renderSeparateLayerAdaptor = nullptr;
     }
 
+    std::string Player::matchedMotionPath() const {
+        if(_findMotionContextVariant.Type() == tvtVoid) {
+            return {};
+        }
+        return detail::narrow(ttstr(_findMotionContextVariant));
+    }
+
     bool Player::getPlaying() const {
         // Player_getPlaying @ 0x6D9794: return byte player+1099.
+        const auto motionPath = matchedMotionPath();
         if((detail::logoChainTraceEnabled() ||
-            detail::logoChainTraceEnabled(_activeMotion)) && LOGGER) {
-            const auto path =
-                _activeMotion ? _activeMotion->path : std::string("<none>");
+            detail::logoChainTraceEnabledForPath(motionPath)) && LOGGER) {
+            const auto path = motionPath.empty()
+                ? std::string("<none>") : motionPath;
             LOGGER->info(
-                "PRTDIAG Player::getPlaying this={} path='{}' value={} timelineCount={} playingLabels='{}'",
+                "PRTDIAG Player::getPlaying this={} path='{}' value={}",
                 static_cast<const void *>(this), path,
-                _allplaying ? 1 : 0, _timelines.size(),
-                joinCorePlayingLabels(_playingTimelineLabels));
+                _allplaying ? 1 : 0);
         }
         return _allplaying;
     }
@@ -198,33 +186,32 @@ namespace motion {
             for(const auto &node : _nodes) {
                 if(auto *child = node.getChildPlayer()) {
                     if(child->getAllplaying()) {
+                        const auto motionPath = matchedMotionPath();
                         if((detail::logoChainTraceEnabled() ||
-                            detail::logoChainTraceEnabled(_activeMotion)) &&
+                            detail::logoChainTraceEnabledForPath(motionPath)) &&
                            LOGGER) {
-                            const auto path =
-                                _activeMotion ? _activeMotion->path
-                                              : std::string("<none>");
+                            const auto path = motionPath.empty()
+                                ? std::string("<none>") : motionPath;
                             LOGGER->info(
-                                "PRTDIAG Player::getAllplaying this={} path='{}' value=1 reason=child nodeIndex={} localPlaying={} playingLabels='{}'",
+                                "PRTDIAG Player::getAllplaying this={} path='{}' value=1 reason=child nodeIndex={} localPlaying={}",
                                 static_cast<const void *>(this),
                                 path, node.index,
-                                _allplaying ? 1 : 0,
-                                joinCorePlayingLabels(_playingTimelineLabels));
+                                _allplaying ? 1 : 0);
                         }
                         return true;
                     }
                 }
             }
         }
+        const auto motionPath = matchedMotionPath();
         if((detail::logoChainTraceEnabled() ||
-            detail::logoChainTraceEnabled(_activeMotion)) && LOGGER) {
-            const auto path =
-                _activeMotion ? _activeMotion->path : std::string("<none>");
+            detail::logoChainTraceEnabledForPath(motionPath)) && LOGGER) {
+            const auto path = motionPath.empty()
+                ? std::string("<none>") : motionPath;
             LOGGER->info(
-                "PRTDIAG Player::getAllplaying this={} path='{}' value={} reason=local playingLabels='{}'",
+                "PRTDIAG Player::getAllplaying this={} path='{}' value={} reason=local",
                 static_cast<const void *>(this), path,
-                _allplaying ? 1 : 0,
-                joinCorePlayingLabels(_playingTimelineLabels));
+                _allplaying ? 1 : 0);
         }
         return _allplaying;
     }
@@ -292,14 +279,14 @@ namespace motion {
     //   if (*(BYTE*)(this+482)) { while(a2<0)a2+=360; while(a2>=360)a2-=360;
     //                             *(this+464)=a2; initEmoteMotion(this,2); }
     //   else { v=*(this+200); if(*(v+1616)!=a2){ *(v+1584)=1; *(v+1616)=a2; } }
-    // Port stores deg in root.delta.angle (matching binary). initEmoteMotion(2)
-    // omitted — port has no equivalent emote-mode re-init entry (pending spike).
+    // Port stores deg in root.delta.angle and routes the direct-edit branch
+    // through the same Player_initEmoteMotion boundary as the binary.
     void Player::setAngleDeg(double deg) {
         if(_directEdit) {
             while(deg < 0.0) deg += 360.0;
             while(deg >= 360.0) deg -= 360.0;
             _emoteAngle = deg;
-            // TODO M15: Player_initEmoteMotion(2) — port omits for now.
+            initEmoteMotionLike_0x6B2E90(2u);
         } else if(!_nodes.empty()) {
             if(_nodes[0].delta.angle != deg) {
                 _nodes[0].delta.angle = deg;
@@ -311,9 +298,21 @@ namespace motion {
     // angleRad member setter = libkrkr2.so Player_setAngleRad @0x6CD0EC (IDB
     // symbol corrected 2026-06-03; was formerly mislabeled "Player_setAngleDeg").
     // Input is RADIANS: deg = rad * 57.2957795, then the SAME store path as
-    // setAngleDeg above (binary inlines an identical body).
+    // setAngleDeg above. Keep the body explicit because the binary has this
+    // complete branch structure at 0x6CD0EC rather than a setter tail-call.
     void Player::setAngleRad(double rad) {
-        setAngleDeg(rad * 57.2957795);
+        double deg = rad * 57.2957795;
+        if(_directEdit) {
+            while(deg < 0.0) deg += 360.0;
+            while(deg >= 360.0) deg -= 360.0;
+            _emoteAngle = deg;
+            initEmoteMotionLike_0x6B2E90(2u);
+        } else if(!_nodes.empty()) {
+            if(_nodes[0].delta.angle != deg) {
+                _nodes[0].delta.angle = deg;
+                _nodes[0].delta.dirty = true;
+            }
+        }
     }
 
     // M15 missing `meshDivisionRatio` (cluster E §3.1): binary Motion.Player
@@ -375,188 +374,10 @@ namespace motion {
         }
     }
 
-    // Aligned to libkrkr2.so EmoteObject_init (sub_67DBAC):
-    // Sets activeMotion directly from a pre-loaded snapshot, bypassing file I/O.
-    // Used by EmotePlayer.setModule() to bridge loaded PSB data into the Player pipeline.
-    void Player::loadFromSnapshot(
-        std::shared_ptr<detail::MotionSnapshot> snapshot) {
-        _activeMotion.reset();
-        _timelines.clear();
-        _playingTimelineLabels.clear();
-        _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
-        _drawAffineMatrixNonIdentity = false;
-        _variableKeys.Clear();
-        _evalResultValues.clear();
-        _evalResultList.clear();
-        _evalResultListIndex.clear();
-
-        if(snapshot) {
-            activateMotion(*this, snapshot);
-            syncVariableKeysFromActiveMotion();
-
-            // Aligned with libkrkr2.so EmoteObject_init @0x67DBAC: AFTER
-            //   Player_play it calls EmoteEngine_applyMetadata_buildControllers
-            //   (0x67D4D0) with the motion "metadata" dict (the FULL metadata,
-            //   NOT metadata["base"] — corrects the earlier "base metadata"
-            //   note: base @0x67dd6c is read only for chara/motion; the builder
-            //   reads eyeControl/variableList/... straight off the metadata dict
-            //   passed at 0x67dfa0). Here we wire the EYE category only (M2 eye
-            //   vertical): metadata["eyeControl"] -> EmoteEngine::buildEyeControl.
-            //   Remaining categories (eyebrow/mouth/transition/selector/timeline/
-            //   bust/hair/parts/...) stay open.
-            if(_engineBack && _activeMotion && _activeMotion->root) {
-                const auto metadata = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                    (*_activeMotion->root)["metadata"]);
-                if(metadata) {
-                    // M2 spring-physics population: applyMetadata @0x67D4D0
-                    //   dispatches bustControl/hairControl/partsControl BEFORE
-                    //   eyeControl. DESPITE the key names, "bustControl" feeds the
-                    //   SIMPLE spring (deque#1, stepHairParts) via sub_66B018, and
-                    //   "hairControl"/"partsControl" feed the CHAIN spring
-                    //   (deque#2/#3, stepBust) via sub_66B9D0(.,1)/(.,2). Same
-                    //   fresh-build/re-load semantics (drop prior nodes + free
-                    //   their springs first so we never double-populate / leak).
-                    const auto bustControl = std::dynamic_pointer_cast<PSB::PSBList>(
-                        (*metadata)["bustControl"]);
-                    for(auto& node : _engineBack->_hairPartsNodes) {
-                        delete node.spring;
-                        node.spring = nullptr;
-                    }
-                    _engineBack->_hairPartsNodes.clear();
-                    _engineBack->buildBustControl(bustControl.get());
-
-                    const auto hairControl = std::dynamic_pointer_cast<PSB::PSBList>(
-                        (*metadata)["hairControl"]);
-                    for(auto& node : _engineBack->_bustChain1Nodes) {
-                        delete node.spring;
-                        node.spring = nullptr;
-                    }
-                    _engineBack->_bustChain1Nodes.clear();
-                    _engineBack->buildChainControl(
-                        _engineBack->_bustChain1Nodes, 1, hairControl.get());
-
-                    const auto partsControl = std::dynamic_pointer_cast<PSB::PSBList>(
-                        (*metadata)["partsControl"]);
-                    for(auto& node : _engineBack->_bustChain2Nodes) {
-                        delete node.spring;
-                        node.spring = nullptr;
-                    }
-                    _engineBack->_bustChain2Nodes.clear();
-                    _engineBack->buildChainControl(
-                        _engineBack->_bustChain2Nodes, 2, partsControl.get());
-
-                    const auto eyeControl = std::dynamic_pointer_cast<PSB::PSBList>(
-                        (*metadata)["eyeControl"]);
-                    // Fresh-build semantics: EmoteObject_init runs on a newly
-                    //   ctor'd engine (deque#4 empty). On a re-load into an
-                    //   existing engine, drop the prior eye controllers first so
-                    //   we never double-populate.
-                    for(auto& entry : _engineBack->_stateMachineDeque4) {
-                        delete entry.ctl;
-                        entry.ctl = nullptr;
-                    }
-                    _engineBack->_stateMachineDeque4.clear();
-                    _engineBack->buildEyeControl(eyeControl.get());
-
-                    // M2 eyebrow vertical: metadata["eyebrowControl"] ->
-                    //   EmoteEngine::buildEyebrowControl (libkrkr2.so 0x66CB9C).
-                    //   Same fresh-build/re-load semantics as the eye category
-                    //   (drop prior controllers first so we never double-populate).
-                    const auto eyebrowControl = std::dynamic_pointer_cast<PSB::PSBList>(
-                        (*metadata)["eyebrowControl"]);
-                    for(auto& entry : _engineBack->_stateMachineDeque5) {
-                        delete entry.ctl;
-                        entry.ctl = nullptr;
-                    }
-                    _engineBack->_stateMachineDeque5.clear();
-                    _engineBack->buildEyebrowControl(eyebrowControl.get());
-
-                    // M2 mouth vertical: metadata["mouthControl"] ->
-                    //   EmoteEngine::buildMouthControl (libkrkr2.so 0x66CFBC).
-                    //   Same fresh-build/re-load semantics (drop prior controllers
-                    //   first so we never double-populate). The mouth builder
-                    //   registers TWO HM#6 keys per controller (label+talkLabel).
-                    const auto mouthControl = std::dynamic_pointer_cast<PSB::PSBList>(
-                        (*metadata)["mouthControl"]);
-                    for(auto& entry : _engineBack->_compositeVarDeque6) {
-                        motion::EmoteMouthController_dtor(entry.ctl);
-                        delete entry.ctl;
-                        entry.ctl = nullptr;
-                    }
-                    _engineBack->_compositeVarDeque6.clear();
-                    _engineBack->buildMouthControl(mouthControl.get());
-
-                    // M2 transition vertical: metadata["transitionControl"] ->
-                    //   EmoteEngine::buildTransitionControl (libkrkr2.so 0x66D4C4).
-                    //   Same fresh-build/re-load semantics (drop prior controllers
-                    //   first so we never double-populate). Each controller is
-                    //   operator new(0x80); the deque entry owns it. MUST run
-                    //   BEFORE buildSelectorControl below: the selector resolves
-                    //   each option's borrowed refCtl by scanning THIS deque
-                    //   (engine+576), so transition must be populated first
-                    //   (mirrors applyMetadata's per-key order @0x67D4D0:
-                    //   transitionControl is dispatched before selectorControl).
-                    const auto transitionControl = std::dynamic_pointer_cast<PSB::PSBList>(
-                        (*metadata)["transitionControl"]);
-                    for(auto& entry : _engineBack->_auxVarDeque8) {
-                        motion::EmoteVarController_dtor(entry.ctl);
-                        delete entry.ctl;
-                        entry.ctl = nullptr;
-                    }
-                    _engineBack->_auxVarDeque8.clear();
-                    _engineBack->buildTransitionControl(transitionControl.get());
-
-                    // M2 selector vertical: metadata["selectorControl"] ->
-                    //   EmoteEngine::buildSelectorControl (libkrkr2.so 0x66D8FC).
-                    //   Same fresh-build/re-load semantics (drop prior controllers
-                    //   first so we never double-populate). Each controller is
-                    //   operator new(0x80); the deque entry owns it.
-                    const auto selectorControl = std::dynamic_pointer_cast<PSB::PSBList>(
-                        (*metadata)["selectorControl"]);
-                    for(auto& entry : _engineBack->_vectorVarDeque9) {
-                        motion::EmoteSelectorController_dtor(entry.ctl);
-                        delete entry.ctl;
-                        entry.ctl = nullptr;
-                    }
-                    _engineBack->_vectorVarDeque9.clear();
-                    _engineBack->buildSelectorControl(selectorControl.get());
-
-                    // M2 loopControl vertical: metadata["loopControl"] ->
-                    //   EmoteEngine::buildLoopControl (libkrkr2.so 0x66E480). This
-                    //   is the LAST progress-stepped controller-deque (engine+736);
-                    //   its step is inlined into progress @0x67d2a0. Same fresh-
-                    //   build/re-load semantics (drop prior controllers first so we
-                    //   never double-populate). Each controller is operator
-                    //   new(0x20); the deque entry owns it. applyMetadata dispatches
-                    //   loopControl AFTER selectorControl (@0x67d93c, well after
-                    //   selector @0x67d8ec); the relative order is immaterial here
-                    //   (loopControl has no cross-controller dependency), but we
-                    //   keep the binary's per-key order for traceability.
-                    const auto loopControl = std::dynamic_pointer_cast<PSB::PSBList>(
-                        (*metadata)["loopControl"]);
-                    for(auto& entry : _engineBack->_lookupCurvesDeque10) {
-                        delete entry.ctl;
-                        entry.ctl = nullptr;
-                    }
-                    _engineBack->_lookupCurvesDeque10.clear();
-                    _engineBack->buildLoopControl(loopControl.get());
-                }
-            }
-        }
-    }
-
-    double Player::getActiveMotionWidth() const {
-        return _activeMotion ? _activeMotion->width : 0.0;
-    }
-
-    double Player::getActiveMotionHeight() const {
-        return _activeMotion ? _activeMotion->height : 0.0;
-    }
-
-    // Aligned with libkrkr2.so Player_setChara @0x6D94B0 (NCB "chara" setter).
+    // Aligned with libkrkr2.so Player_setChara @0x6C0E9C (NCB "chara" setter).
     //
     // Binary structure:
-    //   if (*(this+968) /* current chara variant slot */) {
+    //   if (*(this+968) /* live stealthChara string-value slot */) {
     //       sub_6B29C0(this, 16, &v);              // write chara -> +968 (dedup)
     //       if (*(this+776)) {                     // pending chara override slot
     //           sub_6B29C0(this, 16, this+776);    // re-apply pending into +968
@@ -571,15 +392,14 @@ namespace motion {
     //   1. dedup via wcscmp (sub_9B1ED0): if the new chara equals the stored
     //      chara it returns WITHOUT side effects.
     //   2. on an actual change it clears the loaded-motion slots
-    //      (+976 motion, +984 motion2) and the motion-loaded byte (+1099),
+    //      (+976 motion, +984 stealthMotion) and the playing byte (+1099),
     //      i.e. a chara change invalidates the currently loaded motion so the
     //      next play()/update reloads the PSB against the new chara.
     //
-    // chara value storage: the binary keeps a tTJSVariant* at +968 with manual
-    // ldaxr/stlxr AddRef + Release of the old value. The local ttstr _chara is
-    // the platform-independent value-semantics equivalent of that refcounted
-    // slot (per the byte-layout methodology in CLAUDE.md) - covering +968's
-    // AddRef/Release is NOT a deviation, it is the same object lifetime.
+    // chara value storage: the binary keeps refcounted TJS string-value object
+    // pointers at +960/+968 and compares them through ttstr_c_str. Source-level
+    // ttstr values are the platform-independent representation of those same
+    // owners; the manual ARM64 AddRef/Release is an inlined ABI detail.
     //
     // The architecturally load-bearing piece that the previous plain
     // `_chara = v;` was missing is the chara-change -> motion-invalidation
@@ -588,44 +408,73 @@ namespace motion {
     // findMotion (PlayerMotionLoad.cpp:24,30) key only on the motion name,
     // never on chara.
     //
-    // The +776 "pending chara override" slot has no setChara-path producer in
-    // the local data flow (it is written only by the child-motion / stealth
-    // passes, e.g. Player_updateLayers_childMotionPass @0x6BE0C0), so there is
-    // no pending value to flush here; the first-set vs subsequent-set branch
-    // collapses to "dedup, then on change store + invalidate motion".
-    void Player::setChara(ttstr v) {
-        // sub_6B29C0 dedup (sub_9B1ED0 wcscmp): unchanged chara is a no-op.
-        if(_chara == v) {
-            return;
+    // +776 is an independent pending stealthChara string owner. The public
+    // setters and child creation paths flush it through the slot-16 writer and
+    // immediately release/clear it, matching 0x6C0EBC..0x6C0EE4 and
+    // 0x6D94DC..0x6D9504.
+    bool Player::setCharaSlotLike_0x6B29C0(const ttstr &value,
+                                           bool stealthOnly) {
+        // Player_setCharaOrKeySlot_dedup @0x6B29C0 chooses +968 for the
+        // stealth-only path and +960 for the primary path. Pointer identity is
+        // merely its first fast path; the following type/string comparison
+        // makes a value-equality test the source-level operation.
+        const ttstr &comparisonSlot = stealthOnly ? _stealthChara : _chara;
+        if(comparisonSlot == value) {
+            return false;
         }
-        // *(this+968) = v  (refcount-equivalent value store).
-        _chara = v;
-        // sub_6B29C0 motion-slot invalidation: clear +976/+984 motion slots and
-        // the +1099 motion-loaded flag so the next play()/ensureMotionLoaded()
-        // reloads the motion against the new chara. _activeMotion is the local
-        // analog of the loaded-motion slots; clearing _motionKey forces
-        // ensureMotionLoaded/findMotion past their same-motion guards.
-        _activeMotion.reset();
-        _motionKey = ttstr();
+
+        // Both branches write +968. The primary branch additionally writes
+        // +960, preserving the two independent ttstr owners.
+        _stealthChara = value;
+        if(!stealthOnly) {
+            _chara = value;
+        }
+
+        // 0x6B2AB0..0x6B2AD0: a real chara change releases both motion-name
+        // slots and clears Player+1099. It does not clear +528/+1012; the next
+        // play reload is forced because +976/+984 are now empty.
+        _stealthMotion.Clear();
+        _motionKey.Clear();
+        _allplaying = false;
+        return true;
+    }
+
+    void Player::setChara(ttstr v) {
+        // Player_setChara @0x6C0E9C: primary slot write first, then flush the
+        // independently owned pending stealth-chara slot at +776 through the
+        // same helper's stealth-only branch.
+        setCharaSlotLike_0x6B29C0(v, false);
+        if(!_pendingStealthChara.IsEmpty()) {
+            const ttstr pending = _pendingStealthChara;
+            setCharaSlotLike_0x6B29C0(pending, true);
+            _pendingStealthChara.Clear();
+        }
     }
 
     void Player::setMotion(ttstr v) {
-        if(_motionKey == v) {
+        // Player_setMotion @0x6C1B20 is a thin Player_play wrapper; it does
+        // not maintain a second setter-specific load state machine.
+        playMotionLike_0x6B2284(std::move(v), 0);
+    }
+
+    void Player::setStealthChara(ttstr v) {
+        // Player_setStealthChara @0x6D94B0.
+        if(!_stealthChara.IsEmpty()) {
+            setCharaSlotLike_0x6B29C0(v, true);
+            if(!_pendingStealthChara.IsEmpty()) {
+                const ttstr pending = _pendingStealthChara;
+                setCharaSlotLike_0x6B29C0(pending, true);
+                _pendingStealthChara.Clear();
+            }
             return;
         }
-        _motionKey = v;
-        _activeMotion.reset();
-        _timelines.clear();
-        _playingTimelineLabels.clear();
-        _drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
-        _drawAffineMatrixNonIdentity = false;
-        _variableKeys.Clear();
-        _evalResultValues.clear();
-        _evalResultList.clear();
-        _evalResultListIndex.clear();
-        if(ensureMotionLoaded()) {
-            initNonEmoteMotionLike_0x6B365C(0);
-        }
+        _pendingStealthChara = std::move(v);
+    }
+
+    void Player::setStealthMotion(ttstr v) {
+        // Player_setMotion_stealth @0x6D9584 is the PlayFlagStealth form of
+        // Player_play @0x6B21E8, including the +768 pending owner.
+        playMotionLike_0x6B2284(std::move(v), PlayFlagStealth);
     }
 
     // Aligned to libkrkr2.so 0x681CAC → 0x6B0F10:
@@ -637,6 +486,7 @@ namespace motion {
         auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
         if(!self) return TJS_E_INVALIDOBJECT;
 
+        ttstr charaValue = self->_chara;
         ttstr motionValue;
         if(numparams > 0 && param[0] && param[0]->Type() != tvtVoid) {
             motionValue = *param[0];
@@ -665,7 +515,7 @@ namespace motion {
                 if(TJS_SUCCEEDED(resObj->PropGet(TJS_MEMBERMUSTEXIST,
                     TJS_W("chara"), nullptr, &charaVal, resObj))
                     && charaVal.Type() != tvtVoid) {
-                    self->_chara = ttstr(charaVal);
+                    charaValue = ttstr(charaVal);
                 }
                 if(TJS_SUCCEEDED(resObj->PropGet(TJS_MEMBERMUSTEXIST,
                     TJS_W("motion"), nullptr, &motionVal, resObj))
@@ -675,18 +525,11 @@ namespace motion {
             }
         }
 
-        // Reset state and load
-        self->_motionKey = motionValue;
-        self->_activeMotion.reset();
-        self->_timelines.clear();
-        self->_playingTimelineLabels.clear();
-        self->_drawAffineMatrix = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
-        self->_drawAffineMatrixNonIdentity = false;
-        self->_variableKeys.Clear();
-        self->_evalResultValues.clear();
-        if(self->ensureMotionLoaded()) {
-            self->initNonEmoteMotionLike_0x6B365C(0);
-        }
+        // Player_loadMotion @0x6B0F10 feeds the callback-adjusted pair back
+        // into Player_playImpl. Route through the single play state machine so
+        // +976/+984, pending flush and the AsCan gate cannot diverge.
+        self->setChara(charaValue);
+        self->playMotionLike_0x6B2284(motionValue, 0);
 
         return TJS_S_OK;
     }
@@ -702,54 +545,106 @@ namespace motion {
     }
 
     bool Player::ensureMotionLoaded() {
-        if(_activeMotion) {
+        if(hasMotionContent()) {
             return true;
         }
+        return ensureMotionLoaded(_stealthChara, _motionKey);
+    }
 
-        const auto motionKey = detail::narrow(_motionKey);
-        const bool motionKeyLooksLikeStorage =
-            motionKey.find('/') != std::string::npos ||
-            motionKey.find('\\') != std::string::npos ||
-            motionKey.find('.') != std::string::npos;
-
-        if(_project.Type() == tvtObject) {
-            if(const auto snapshot = detail::lookupModuleSnapshot(_project)) {
-                activateMotion(*this, snapshot);
-                syncVariableKeysFromActiveMotion();
+    bool Player::ensureMotionLoaded(const ttstr &chara,
+                                    const ttstr &motion) {
+        // Player_loadMotion @0x6B0F10 calls ResourceManager.findMotion with
+        // Player+1012 and "motion/<chara>/<motion>". ResourceManager_findMotion
+        // @0x6A9ED4 returns [raw motion dispatch, matched HashMap-A key]. Keep
+        // the raw result as the authoritative lookup. Android has no parallel
+        // loaded-state object: result[0]/result[1] are the two sole owners.
+        iTJSDispatch2 *rm = _resourceManager.Type() == tvtObject
+            ? _resourceManager.AsObjectNoAddRef()
+            : nullptr;
+        if(rm != nullptr && _findMotionContextVariant.Type() != tvtVoid &&
+           !motion.IsEmpty()) {
+            tTJSVariant project = _findMotionContextVariant;
+            tTJSVariant path(detail::widen(
+                "motion/" + detail::narrow(chara) + "/" +
+                detail::narrow(motion)));
+            tTJSVariant *args[] = { &project, &path };
+            tTJSVariant result;
+            static tjs_uint32 hint = 0;
+            const tjs_error hr = rm->FuncCall(
+                0, TJS_W("findMotion"), &hint, &result, 2, args, rm);
+            if(TJS_FAILED(hr)) {
+                return false;
+            }
+            if(result.Type() == tvtObject) {
+                const auto motionValue =
+                    detail::motionPropGetByNum(result, 0);
+                const auto matchedKey =
+                    detail::motionPropGetByNum(result, 1);
+                // Player_playImpl @0x6B24F4: CopyRef result[0] -> Player+528,
+                // then CopyRef result[1] -> Player+1012.
+                _motionContentVariant = motionValue;
+                _findMotionContextVariant = matchedKey;
                 return true;
             }
-        }
-
-        if(motionKeyLooksLikeStorage) {
-            if(const auto snapshot =
-                   resolveMotion(*this, _motionKey, nativeRM())) {
-                activateMotion(*this, snapshot);
-                syncVariableKeysFromActiveMotion();
-                return true;
-            }
-        }
-
-        if(const auto loaded = nativeRM()->getLastLoadedModule();
-           loaded.Type() == tvtObject) {
-            if(const auto snapshot = detail::lookupModuleSnapshot(loaded)) {
-                activateMotion(*this, snapshot);
-                syncVariableKeysFromActiveMotion();
-                return true;
-            }
-        }
-
-        if(_motionKey.IsEmpty()) {
-            return false;
-        }
-
-        if(const auto snapshot =
-               resolveMotion(*this, _motionKey, nativeRM())) {
-            activateMotion(*this, snapshot);
-            syncVariableKeysFromActiveMotion();
-            return true;
         }
 
         return false;
+    }
+
+    void Player::initEmoteMotionLike_0x6B2E90(
+        std::uint32_t playFlags) {
+        // 0x6B2ED0..0x6B2F00: normalize cameraAngle(+472) plus the retained
+        // direct-edit angle(+464) with the binary's two explicit loops.
+        double angle = _cameraAngle + _emoteAngle;
+        while(angle < 0.0) {
+            angle += 360.0;
+        }
+        while(angle >= 360.0) {
+            angle -= 360.0;
+        }
+
+        // 0x6B2F14..0x6B2FD0: locate the first adjacent division pair whose
+        // interval is (previous,current], then wrap the terminal index by the
+        // raw count. The binary has no count==0 guard.
+        const tjs_int divisionCount =
+            detail::motionPropGetCount(_emoteDivisionVariant);
+        tjs_int divisionIndex = 1;
+        if(divisionCount >= 2) {
+            do {
+                if(detail::motionPropGetDoubleByNum(
+                       _emoteDivisionVariant, divisionIndex - 1) < angle &&
+                   detail::motionPropGetDoubleByNum(
+                       _emoteDivisionVariant, divisionIndex) >= angle) {
+                    break;
+                }
+                ++divisionIndex;
+            } while(divisionIndex < divisionCount);
+        }
+        const tjs_int selected = divisionIndex % divisionCount;
+        if(selected == _emoteMotionIndex) {
+            return;
+        }
+        _emoteMotionIndex = selected;
+
+        // 0x6B2FE8..0x6B30A8: motionList[selected] is converted to ttstr,
+        // split by the common sub_697D34 helper, and element 2 is consumed
+        // without a size check.
+        const ttstr path(detail::motionPropGetByNum(
+            _emoteMotionListVariant, selected));
+        const std::vector<ttstr> parts =
+            detail::splitTtstrLike_0x697D34(path, TJS_W('/'));
+        const ttstr secondaryMotion = parts[2];
+
+        // 0x6B30C0..0x6B3264: loadMotion receives the live stealthChara
+        // (+968) and the selected third path component. A successful result
+        // overwrites +528/+1012 and enters the ordinary non-emote initializer.
+        if(ensureMotionLoaded(_stealthChara, secondaryMotion)) {
+            initNonEmoteMotionLike_0x6B365C(playFlags);
+        } else {
+            // 0x6B333C/0x6B3344: failed secondary load clears both owners.
+            _motionContentVariant.Clear();
+            _findMotionContextVariant.Clear();
+        }
     }
 
     void Player::initNonEmoteMotionLike_0x6B365C(std::uint32_t playFlags) {
@@ -758,97 +653,65 @@ namespace motion {
         const bool emitDiag = shouldEmitCoreDiag(diagSeq);
         if(emitDiag && LOGGER) {
             LOGGER->info(
-                "PRTDIAG Player::initNonEmoteMotion enter seq={} this={} flags=0x{:x} active={} isEmote={} motionKey='{}' chara='{}' activePath='{}' nodes={} timelines={} playingLabels={} allplaying={} queuing={} firstFrame={}",
+                "PRTDIAG Player::initNonEmoteMotion enter seq={} this={} flags=0x{:x} active={} isEmote={} motionKey='{}' chara='{}' activePath='{}' nodes={} allplaying={} queuing={} firstFrame={}",
                 diagSeq, static_cast<const void *>(this), playFlags,
-                _activeMotion != nullptr, coreDiagBool(_isEmoteMode),
+                hasMotionContent(), coreDiagBool(_preview),
                 detail::narrow(_motionKey), detail::narrow(_chara),
-                _activeMotion ? _activeMotion->path : std::string("<none>"),
-                _nodes.size(), _timelines.size(), _playingTimelineLabels.size(),
+                matchedMotionPath().empty()
+                    ? std::string("<none>") : matchedMotionPath(),
+                _nodes.size(),
                 coreDiagBool(_allplaying), coreDiagBool(_queuing),
                 coreDiagBool(_firstFrame));
         }
-        if(!_activeMotion || _isEmoteMode) {
-            if(emitDiag && LOGGER) {
-                LOGGER->info(
-                    "PRTDIAG Player::initNonEmoteMotion skip seq={} this={} reason='{}'",
-                    diagSeq, static_cast<const void *>(this),
-                    !_activeMotion ? "no-active-motion" : "emote-mode");
-            }
-            return;
-        }
-
-        const auto *clip = selectActiveClip();
-        _activeClip = clip;
-        if(emitDiag && LOGGER) {
-            LOGGER->info(
-                "PRTDIAG Player::initNonEmoteMotion selected-clip seq={} this={} clip='{}' loopTime={} totalFrames={} motionObject={}",
-                diagSeq, static_cast<const void *>(this),
-                clip ? clip->label : std::string("<none>"),
-                clip ? clip->loopTime : 0.0,
-                clip ? clip->totalFrames : 0.0,
-                clip && clip->motionObject ? "true" : "false");
-        }
-
         resetNodeTreeForBuildLike_0x6B56F8();
         _parameterEntries.clear();
-        _parameterRampMap.clear();
         _defaultParameterEntry = {};
         _defaultParameterEntry.rangeScale = 1.0;
         _defaultParameterEntry.mode = 0;
-        _defaultParameterEntryPtr = nullptr;
-        _defaultParameterEntryIndex = -1;
 
-        if(clip != nullptr) {
-            _loopTime = clip->loopTime;
-            _cachedTotalFrames = clip->totalFrames;
-        }
+        // Player_initNonEmoteMotion @0x6B3698..0x6B398C keeps one dispatch
+        // holder rooted in Player+528 and performs every PSB read through it.
+        // There is no decoded snapshot/PSBDictionary fallback.
+        _loopTime = detail::motionPropGetDouble(
+            _motionContentVariant, TJS_W("loopTime"));
+        _cachedTotalFrames = detail::motionPropGetDouble(
+            _motionContentVariant, TJS_W("lastTime"));
+        _tagFrameSourceVariant = detail::motionPropGet(
+            _motionContentVariant, TJS_W("tag"));
+        _priorityFrameSourceVariant = detail::motionPropGet(
+            _motionContentVariant, TJS_W("priority"));
+        const tTJSVariant firstPriority = detail::motionPropGetByNum(
+            _priorityFrameSourceVariant, 0);
+        _rootContentVariant = detail::motionPropGet(
+            firstPriority, TJS_W("content"));
 
-        const auto motionObject = clip ? clip->motionObject : nullptr;
-        if(motionObject) {
-            const auto parameterizeValue = (*motionObject)["parameterize"];
-            if(auto parameterizeObject =
-                   std::dynamic_pointer_cast<const PSB::PSBDictionary>(
-                       parameterizeValue)) {
-                appendParameterEntryLike_0x6B1718(parameterizeObject);
-                finalizeParameterTableLike_0x6B1ECC();
-                if(!_parameterEntries.empty()) {
-                    _defaultParameterEntryIndex = 0;
-                    _defaultParameterEntryPtr =
-                        &_parameterEntries.front();
+        const tTJSVariant parameterize = detail::motionPropGet(
+            _motionContentVariant, TJS_W("parameterize"));
+        if(parameterize.Type() == tvtObject) {
+            appendParameterEntryLike_0x6B1718(parameterize);
+            finalizeParameterTableLike_0x6B1ECC();
+            // 0x6B39B0..0x6B3A70 writes +376 only when begin != end. Preserve
+            // the prior pointer on the empty-object boundary.
+            if(!_parameterEntries.empty()) {
+                _defaultParameterEntryIndex = 0;
+                _defaultParameterEntryPtr = &_parameterEntries.front();
+            }
+        } else {
+            const tTJSVariant parameters = detail::motionPropGet(
+                _motionContentVariant, TJS_W("parameter"));
+            (void)parseParameterListLike_0x6B202C(parameters);
+            if(parameterize.Type() == tvtInteger) {
+                const tjs_int index = parameterize.AsInteger();
+                if(index < 0 || static_cast<size_t>(index) >=
+                                    _parameterEntries.size()) {
+                    throw std::out_of_range("parameter id out of range.");
                 }
+                _defaultParameterEntryIndex = index;
+                _defaultParameterEntryPtr =
+                    &_parameterEntries[static_cast<size_t>(index)];
             } else {
-                parseParameterListLike_0x6B202C((*motionObject)["parameter"]);
-                if(auto numeric =
-                       std::dynamic_pointer_cast<PSB::PSBNumber>(
-                           parameterizeValue)) {
-                    int index = 0;
-                    switch(numeric->numberType) {
-                        case PSB::PSBNumberType::Float:
-                            index = static_cast<int>(
-                                numeric->getValue<float>());
-                            break;
-                        case PSB::PSBNumberType::Double:
-                            index = static_cast<int>(
-                                numeric->getValue<double>());
-                            break;
-                        case PSB::PSBNumberType::Int:
-                            index = numeric->getValue<int>();
-                            break;
-                        case PSB::PSBNumberType::Long:
-                        default:
-                            index = static_cast<int>(
-                                numeric->getValue<tjs_int64>());
-                            break;
-                    }
-                    if(index < 0 ||
-                       static_cast<size_t>(index) >=
-                           _parameterEntries.size()) {
-                        throw std::out_of_range("parameter id out of range.");
-                    }
-                    _defaultParameterEntryIndex = index;
-                    _defaultParameterEntryPtr =
-                        &_parameterEntries[static_cast<size_t>(index)];
-                }
+                _defaultParameterEntryIndex = -1;
+                _defaultParameterEntryPtr = nullptr;
             }
         }
 
@@ -899,201 +762,13 @@ namespace motion {
         }
     }
 
-    void Player::syncVariableKeysFromActiveMotion() {
-        if(!_activeMotion) {
-            _variableKeys = detail::makeArray({});
-            return;
-        }
-
-        _variableKeys = detail::makeArray(
-            detail::stringsToVariants(_activeMotion->variableLabels));
-        syncSelectorControlsLike_0x670D1C();
-    }
-
-    void Player::syncSelectorControlsLike_0x670D1C() {
-        const auto *activeMotion = _activeMotion.get();
-        if(!activeMotion) {
-            return;
-        }
-
-        const auto removeRuntimeState =
-            [this](const std::string &label) {
-                if(label.empty()) {
-                    return;
-                }
-                // HM2 (Player+320) is ttstr-keyed; widen the std::string label.
-                _evalResultValues.erase(detail::widen(label));
-                removeEvalResultSlotLike_Reset(label);
-            };
-
-        for(const auto &[selectorLabel, binding] : activeMotion->selectorControls) {
-            removeRuntimeState(selectorLabel);
-            for(const auto &option : binding.options) {
-                removeRuntimeState(option.label);
-            }
-        }
-
-        if(!_selectorEnabled) {
-            if(_engineBack) _engineBack->_dirty = true;
-            return;
-        }
-
-        // Aligned to libkrkr2.so sub_670D1C @0x670d98..0x670e1c: the
-        //   selector-enabled path iterates the EmoteEngine selector deque #9
-        //   (engine+656 = _vectorVarDeque9) and, for each entry whose gate byte
-        //   (+1160) is set, resets the controller's selection state
-        //   (*(ctl+84)=0) and calls EmoteSelectorController_applySelection(ctl,
-        //   0, 0.0, 0.0) DIRECTLY @0x670e1c. It does NOT route through
-        //   setVariable/0x671228 — the prior local setVariable(...) call was a
-        //   non-faithful approximation that depended on the removed Player-side
-        //   shim. Drive the selector controllers in-place to match the binary.
-        if(_engineBack) {
-            for(auto &entry : _engineBack->_vectorVarDeque9) {
-                if(!entry.ctl) {
-                    continue;
-                }
-                entry.ctl->selectedIndex = 0; // *(ctl+84)=0 @0x670e0c
-                EmoteSelectorController_applySelection(entry.ctl, 0, 0.0f,
-                                                       0.0f); // @0x670e1c
-            }
-            _engineBack->_dirty = true;
-        }
-    }
-
-    const detail::TimelineState *Player::primaryTimelineStateLike_0x66F80C() const {
-        if(!_activeMotion) {
-            return nullptr;
-        }
-
-        const auto &primaryLabels =
-            !_activeMotion->mainTimelineLabels.empty()
-                ? _activeMotion->mainTimelineLabels
-                : _activeMotion->diffTimelineLabels;
-        for(const auto &label : primaryLabels) {
-            if(const auto it = _timelines.find(label);
-               it != _timelines.end()) {
-                return &it->second;
-            }
-        }
-
-        if(!_motionKey.IsEmpty()) {
-            if(const auto it = _timelines.find(detail::narrow(_motionKey));
-               it != _timelines.end()) {
-                return &it->second;
-            }
-        }
-
-        return !_timelines.empty()
-            ? &(_timelines.begin()->second)
-            : nullptr;
-    }
-
-    void Player::resetControllerStateLike_0x66EB8C() {
-        // Aligned to libkrkr2.so sub_66EB8C:
-        // the binary performs a broad controller/reset sweep after wrapper-side
-        // setMirror(). Keep the local reset focused on runtime controller state,
-        // eval sinks, and root-node dirty propagation.
-        _evalResultValues.clear();
-        _evalResultList.clear();
-        _evalResultListIndex.clear();
-
-        if(!_nodes.empty()) {
-            auto &root = _nodes.front();
-            // Aligned to libkrkr2.so Player_setRootFlipX (0x6CD068):
-            // writes node+1587 (delta.flipX), sets node+1584 (delta.dirty).
-            root.delta.flipX = _rootFlipX;
-            root.delta.dirty = true;
-            root.interpolatedCache.flipX = _rootFlipX;
-        }
-
-        if(_selectorEnabled) {
-            syncSelectorControlsLike_0x670D1C();
-        }
-        if (_engineBack) _engineBack->_dirty = true;
-    }
-
-    const detail::MotionClip *Player::selectActiveClip() const {
-        if(!_activeMotion) {
-            return nullptr;
-        }
-
-        const auto &motion = *_activeMotion;
-        // Resolve clips by (owner, label) where owner = this player's chara.
-        // Aligned to libkrkr2.so Player_loadMotion (0x6B0F10): the binary
-        // navigates "motion/<chara>/<motion>", so the current chara (Player+968,
-        // local _chara) scopes which object's same-named motion is selected.
-        // Falls back to label-only inside findClipIndex for single-owner
-        // snapshots / empty chara.
-        const auto owner = detail::narrow(_chara);
-        const auto selectByLabel =
-            [&motion, &owner](const std::string &label)
-                -> const detail::MotionClip * {
-                const int idx = motion.findClipIndex(owner, label);
-                if(idx < 0 || idx >= static_cast<int>(motion.clipList.size()))
-                    return nullptr;
-                return &motion.clipList[idx];
-            };
-
-        // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
-        // the requested motion/timeline label is stored on the player before
-        // the non-emote init path rebuilds content/node state. In the local
-        // architecture, this is the closest equivalent to the binary's
-        // selected content object, so prefer _motionKey before falling back to
-        // the playing-timeline list or primary label ordering.
-        if(!_motionKey.IsEmpty()) {
-            if(const auto *clip = selectByLabel(detail::narrow(_motionKey))) {
-                return clip;
-            }
-        }
-
-        for(const auto &label : _playingTimelineLabels) {
-            if(const auto *clip = selectByLabel(label)) {
-                return clip;
-            }
-        }
-
-        const auto &primaryLabels =
-            !motion.mainTimelineLabels.empty()
-                ? motion.mainTimelineLabels
-                : motion.diffTimelineLabels;
-        for(const auto &label : primaryLabels) {
-            if(const auto *clip = selectByLabel(label)) {
-                return clip;
-            }
-        }
-
-        // Fallback — aligned to libkrkr2.so Player_initNonEmoteMotion reading
-        // priority[0].content at 0x6B38FC when no explicit selection exists.
-        if(motion.clipList.size() == 1) {
-            return &motion.clipList.front();
-        }
-        if(!motion.clipList.empty()) {
-            return &motion.clipList.front();
-        }
-
-        return nullptr;
-    }
-
-    const std::vector<std::string> &Player::activeSourceCandidates() const {
-        static const std::vector<std::string> empty;
-        if(!_activeMotion) {
-            return empty;
-        }
-
-        if(const auto *clip = selectActiveClip();
-           clip && !clip->sourceCandidates.empty()) {
-            return clip->sourceCandidates;
-        }
-
-        return _activeMotion->sourceCandidates;
-    }
-
     tTJSVariant Player::getVariableKeys() {
-        ensureMotionLoaded();
-        if(_variableKeys.Type() == tvtVoid) {
-            return detail::makeArray({});
+        std::vector<tTJSVariant> keys;
+        keys.reserve(_variableLabelScopes.size());
+        for(const auto &scope : _variableLabelScopes) {
+            keys.emplace_back(scope.cascadeKey);
         }
-        return _variableKeys;
+        return detail::makeArray(keys);
     }
 
     // transformOrder getter: libkrkr2.so sub_6CC188 (bound to L"transformOrder")
@@ -1194,57 +869,6 @@ namespace motion {
         }
     }
 
-    void Player::setProgressCompat(double v) {
-        ensureMotionLoaded();
-        const auto progress = std::clamp(v, 0.0, 1.0);
-        _playingTimelineLabels.clear();
-        for(auto &[_, state] : _timelines) {
-            if(state.totalFrames > 0.0) {
-                state.currentTime = state.totalFrames * progress;
-            } else {
-                state.currentTime = progress;
-            }
-            if(progress >= 1.0 && !state.loop) {
-                state.playing = false;
-            }
-            state.controlInitialized = false;
-            state.controlLastAppliedTime = state.currentTime;
-            state.controlFrameCursor.clear();
-            state.controlTrackValues.clear();
-            state.controlTrackAnimators.clear();
-            if(state.playing) {
-                _playingTimelineLabels.push_back(state.label);
-            }
-        }
-        _allplaying = !_playingTimelineLabels.empty();
-    }
-
-    double Player::getProgressCompat() const {
-        bool sawTimeline = false;
-        bool anyPlaying = false;
-        double progress = 0.0;
-
-        for(const auto &[_, state] : _timelines) {
-            sawTimeline = true;
-            anyPlaying = anyPlaying || state.playing;
-            if(state.totalFrames > 0.0) {
-                progress = std::max(
-                    progress,
-                    std::clamp(state.currentTime / state.totalFrames, 0.0, 1.0));
-            } else if(!state.playing) {
-                progress = std::max(progress, 1.0);
-            }
-        }
-
-        if(!sawTimeline) {
-            return _allplaying ? 0.0 : 1.0;
-        }
-        if(!anyPlaying) {
-            return 1.0;
-        }
-        return progress;
-    }
-
     // --- Core methods ---
     // Aligned to libkrkr2.so sub_6BA7B8 at 0x6BA7B8:
     // 1. sub_A0F5E0(v9, a1+992) — read TJS dispatch from player+992
@@ -1266,178 +890,6 @@ namespace motion {
             }
         }
         return 0.0;
-    }
-
-    // Aligned to libkrkr2.so sub_6709AC at 0x6709AC:
-    // initPhysics(min, max, amp, freq1, freq2) creates a Spring physics object
-    // at player+1128 (1564 bytes, sub_670AFC). Stores params at player+1136..1152.
-    // The Spring physics system drives emote hair/bust/parts oscillation.
-    // Full spring simulation not yet implemented for web port — store params only.
-    void Player::initPhysics() {
-        // Parameters come from NCB: initPhysics(min, max, amp, freq1, freq2)
-        // In the NCB binding this is a raw callback. The actual parameters
-        // are parsed by the NCB wrapper. Since we store the scale values
-        // (hairScale/partsScale/bustScale) and these physics params would
-        // drive them, we log but accept the call.
-        // player+1128 = physics object (not created)
-        // player+1136..1152 = min, max, amplitude, freq1, freq2
-    }
-    tTJSVariant Player::serialize() {
-        ensureMotionLoaded();
-
-        std::vector<std::pair<std::string, tTJSVariant>> variables;
-        std::unordered_set<std::string> seenVariables;
-        if(_activeMotion) {
-            for(const auto &label : _activeMotion->variableLabels) {
-                seenVariables.insert(label);
-                variables.emplace_back(label, getVariable(detail::widen(label)));
-            }
-        }
-        for(const auto &[label, value] : _evalResultValues) {
-            // HM2 keys are ttstr (Player+320); narrow for the std::string-keyed
-            // seen-set / output dictionary.
-            const auto narrowLabel = detail::narrow(label);
-            if(seenVariables.insert(narrowLabel).second) {
-                variables.emplace_back(narrowLabel, value);
-            }
-        }
-
-        return detail::makeDictionary({
-            { "chara", _chara },
-            { "motion", _motionKey },
-            { "tickcount", getTickCount() },
-            { "speed", _speedMul },  // +1168 double rate, not the +1093 bool gate
-            { "outline", tTJSVariant(_outline) },
-            { "variables", detail::makeDictionary(variables) },
-            { "timelines", getPlayingTimelineInfoList() },
-        });
-    }
-
-    void Player::unserialize(tTJSVariant data) {
-        if(data.Type() != tvtObject || data.AsObjectNoAddRef() == nullptr) {
-            return;
-        }
-
-        tTJSVariant value;
-        if(getObjectProperty(data, TJS_W("chara"), value) &&
-           value.Type() != tvtVoid) {
-            _chara = value;
-        }
-
-        if(getObjectProperty(data, TJS_W("motion"), value) &&
-           value.Type() != tvtVoid) {
-            _motionKey = value;
-            ensureMotionLoaded();
-        }
-
-        if(getObjectProperty(data, TJS_W("tickcount"), value) &&
-           value.Type() != tvtVoid) {
-            setTickCount(value.AsReal());
-        }
-
-        if(getObjectProperty(data, TJS_W("speed"), value) &&
-           value.Type() != tvtVoid) {
-            _speedMul = value.AsReal();  // "speed" save key = +1168 double rate
-        }
-
-        if(getObjectProperty(data, TJS_W("outline"), value) &&
-           value.Type() != tvtVoid) {
-            _outline = ttstr(value);
-        }
-
-        if(getObjectProperty(data, TJS_W("variables"), value) &&
-           value.Type() == tvtObject && value.AsObjectNoAddRef() != nullptr) {
-            DictionaryEnumerator callback;
-            tTJSVariantClosure closure(&callback, nullptr);
-            value.AsObjectNoAddRef()->EnumMembers(TJS_IGNOREPROP, &closure,
-                                                  value.AsObjectNoAddRef());
-            for(const auto &[label, stored] : callback.entries) {
-                if(stored.Type() != tvtVoid) {
-                    // Restore each saved variable straight into Player HM1/HM2
-                    //   (the map Player::serialize read via getVariable). This is
-                    //   the faithful Player-side write = Player_bindParameterValue
-                    //   @0x6C4668 (= the Motion.Player.setVariable NCB member,
-                    //   callback @0x6D0E70 -> 0x6C4668). The removed 4-arg
-                    //   Player::setVariable shim used to wrap this same write.
-                    writeEvalResultValueLike_0x6C4668(detail::narrow(label),
-                                                      stored.AsReal());
-                }
-            }
-        }
-
-        bool restoredTimelines = false;
-        if(getObjectProperty(data, TJS_W("timelines"), value) &&
-           value.Type() == tvtObject && value.AsObjectNoAddRef() != nullptr) {
-            ensureMotionLoaded();
-            if(_activeMotion && _timelines.empty()) {
-                detail::primeTimelineStates(_timelines,
-                                            *_activeMotion);
-            }
-            _playingTimelineLabels.clear();
-
-            const auto count = getObjectCount(value);
-            for(tjs_int index = 0; index < count; ++index) {
-                tTJSVariant item;
-                if(!getArrayItem(value, index, item) || item.Type() != tvtObject ||
-                   item.AsObjectNoAddRef() == nullptr) {
-                    continue;
-                }
-
-                tTJSVariant labelValue;
-                if(!getObjectProperty(item, TJS_W("label"), labelValue) ||
-                   labelValue.Type() == tvtVoid) {
-                    continue;
-                }
-
-                const auto key = detail::narrow(labelValue);
-                auto it = _timelines.find(key);
-                if(it == _timelines.end()) {
-                    continue;
-                }
-
-                restoredTimelines = true;
-                it->second.playing = true;
-                _playingTimelineLabels.push_back(key);
-                it->second.controlInitialized = false;
-                it->second.controlLastAppliedTime = it->second.currentTime;
-                it->second.controlFrameCursor.clear();
-                it->second.controlTrackValues.clear();
-                it->second.controlTrackAnimators.clear();
-
-                tTJSVariant flagsValue;
-                if(getObjectProperty(item, TJS_W("flags"), flagsValue) &&
-                   flagsValue.Type() != tvtVoid) {
-                    it->second.flags = flagsValue.AsInteger();
-                }
-
-                tTJSVariant currentTimeValue;
-                if(getObjectProperty(item, TJS_W("currentTime"), currentTimeValue) &&
-                   currentTimeValue.Type() != tvtVoid) {
-                    it->second.currentTime = currentTimeValue.AsReal();
-                }
-
-                tTJSVariant blendRatioValue;
-                if(getObjectProperty(item, TJS_W("blendRatio"), blendRatioValue) &&
-                   blendRatioValue.Type() != tvtVoid) {
-                    it->second.blendRatio = blendRatioValue.AsReal();
-                }
-            }
-        }
-
-        if(!restoredTimelines && ensureMotionLoaded()) {
-            if(_timelines.empty()) {
-                detail::primeTimelineStates(_timelines,
-                                            *_activeMotion);
-            }
-            const auto &primary = !_activeMotion->mainTimelineLabels.empty()
-                ? _activeMotion->mainTimelineLabels
-                : _activeMotion->diffTimelineLabels;
-            for(const auto &label : primary) {
-                playTimeline(detail::widen(label), PlayFlagForce);
-            }
-        }
-
-        _allplaying = !_playingTimelineLabels.empty();
     }
 
     // Aligned to libkrkr2.so D3DEmotePlayer_setCoord (0x5301EC):
@@ -1495,14 +947,16 @@ namespace motion {
 
     void Player::setMirror(bool mirror) {
         // Aligned to libkrkr2.so Player_setRootFlipX (0x6CD068):
-        // update the synthetic root node's flipX flag and mark it dirty.
-        if(_rootFlipX == mirror && _mirrorEvalEnabled == mirror) {
+        // compare/write only root delta.flipX and mark that delta dirty.
+        if(_rootFlipX == mirror) {
             return;
         }
 
         _rootFlipX = mirror;
-        _mirrorEvalEnabled = mirror;
-        resetControllerStateLike_0x66EB8C();
+        if(!_nodes.empty()) {
+            _nodes.front().delta.flipX = mirror;
+            _nodes.front().delta.dirty = true;
+        }
     }
 
     void Player::setEmoteMeshDivisionRatio(double v) {
@@ -1665,15 +1119,12 @@ namespace motion {
         }
     }
 
-    void Player::modifyRoot(tTJSVariant data) { _project = data; }
-
-    void Player::debugPrint() {
-        LOGGER->info("motionKey={}, motions={}, sources={}, timelines={}",
-                     _motionKey.AsStdString(), _motionsByKey.size(),
-                     _sourceCacheNative ? _sourceCacheNative->size()
-                                                 : 0,
-                     _timelines.size());
+    void Player::modifyRoot() {
+        // Player_modifyRoot @0x6CD0B0:
+        //   *(_BYTE *)(*(_QWORD *)(player + 200) + 1584) = 1;
+        if(!_nodes.empty()) {
+            _nodes[0].delta.dirty = true;
+        }
     }
-
 
 } // namespace motion

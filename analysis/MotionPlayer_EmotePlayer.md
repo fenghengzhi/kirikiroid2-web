@@ -116,7 +116,7 @@ sub_530C3C():
 | `load` | `sub_52FDD4` | 加载 E-mote 数据 |
 | `show` | `sub_530068` | 显示角色 |
 | `hide` | `sub_530074` | 隐藏角色 |
-| `assignState` | `sub_530150` | 分配状态 (**TODO: 未实现**) |
+| `assignState` | `sub_530150` | Object/原生实例探测后始终抛 TODO `eTJSError` |
 | `setCoord` | `sub_5301EC` | 设置坐标 |
 | `setScale` | `sub_530260` | 设置缩放 |
 | `getScale` | `sub_5302DC` | 获取缩放 |
@@ -160,7 +160,8 @@ sub_530C3C():
 
 以下方法包含 `TODO: implement D3DEmotePlayer::xxx()` 字符串，说明是占位实现：
 
-- `assignState` (0x530150) - 调用 `sub_95440C` 输出 TODO 日志
+- `assignState` (0x530150) - Object 类型转换、可选 NativeInstanceSupport 后，调用
+  `sub_95440C` 抛出 TODO `eTJSError`（不是日志）
 - `countVariables` (0x53041C) - 类似
 - `getVariableLabelAt` (0x530530) - 类似
 - `countVariableFrameAt` (0x530568) - 类似
@@ -298,14 +299,14 @@ sub_6948E8():
 #### 纹理格式处理
 
 1. **RGBA8**: 调用 `TVPReverseRGB()` 反转 RGB 通道顺序 (BGR→RGB 或反之)
-2. **A8L8** (Alpha + Luminance): 手动将 2-byte 像素转为 4-byte RGBA
+2. **A8L8** (Alpha + Luminance): 手动将 2-byte 像素转为 4-byte BGRA
    ```
    for each pixel:
-     byte0 = luminance, byte1 = alpha
-     output[0] = alpha    // R
-     output[1] = alpha    // G
-     output[2] = alpha    // B (= luminance 复制)
-     output[3] = luminance // A
+     byte0 = alpha, byte1 = luminance
+     output[0] = luminance
+     output[1] = luminance
+     output[2] = luminance
+     output[3] = alpha
    ```
 3. **其他格式**: 释放内存并输出错误 `"MotionPlayer.findSource: Unsupported texture format '%1'"`
 
@@ -451,7 +452,8 @@ sub_6B3C78(a1, a2=context, a3=data):
 ### EmotePlayer
 - 完整的 E-mote SDK 封装，提供了 40+ 个 TJS2 脚本接口
 - 支持时间线动画、物理模拟 (风力/外力)、变量系统
-- 部分高级功能标记为 TODO 未实现 (assignState, 变量帧查询, getOuterForce 等)
+- Android 二进制自身对部分高级入口保留 TODO 异常边界（assignState、变量帧查询、
+  getOuterForce 等）；Web 复原目标是保留这些异常，而不是补造功能
 - 包含 PSB 数据解密支持 (种子+自定义函数)
 
 ### MotionPlayer

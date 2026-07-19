@@ -17,7 +17,7 @@
 #include <cmath>
 #include <cstring>
 
-#include "psbfile/PSBValue.h" // PSBDictionary / PSBList / PSBNumber
+#include "MotionDispatch.h"
 
 namespace motion {
 
@@ -285,7 +285,7 @@ namespace motion {
 
     // ========================================================================
     // Spring-state constructors (population path). These read per-node physics
-    // params from the PSB dict exactly as the binary's Motion_propGetDouble path
+    // params from raw TJS dispatches exactly as the binary's Motion_propGetDouble path
     // does: the value is fetched as a true double (type-correct conversion) and
     // narrowed to float (`*(float*)&v = *(double*)&v` in the binary = an FCVT
     // narrowing store, NOT a bit-reinterpret), then the raw float bits are stored.
@@ -293,81 +293,31 @@ namespace motion {
     // all zero; only E68/E70/E74/E7C/E80/E88 are init'd by emoteplayer_static_init
     // @0x42eb28, and those feed the rest-pos init below, not the prop defaults).
     // ========================================================================
-    namespace {
-
-        // Motion_propGetDouble(dict, key) -> double (type-correct), then -> float.
-        // Mirrors EmoteBlinkController.cpp psbDouble (numberType switch).
-        float propFloat(const PSB::PSBDictionary* d, const char* key) {
-            if (!d) return 0.0f;
-            const auto v = (*d)[std::string(key)];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                switch (n->numberType) {
-                    case PSB::PSBNumberType::Float:
-                        return static_cast<float>(n->getFloatValue());
-                    case PSB::PSBNumberType::Double:
-                        return static_cast<float>(n->getValue<double>());
-                    default:
-                        return static_cast<float>(n->getLongValue());
-                }
-            }
-            return 0.0f; // absent -> .bss default 0.0
-        }
-
-        // Motion_propGetInt(dict, key) -> int (default 0).
-        int32_t propInt(const PSB::PSBDictionary* d, const char* key) {
-            if (!d) return 0;
-            const auto v = (*d)[std::string(key)];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                return static_cast<int32_t>(n->getLongValue());
-            }
-            return 0;
-        }
-
-        // Read element `idx` of a PSB list as a narrowed float (default 0.0).
-        //   Mirrors Motion_propGetIndexDouble -> (float).
-        float listFloat(const PSB::PSBList* lst, int idx) {
-            if (!lst || idx < 0 || idx >= static_cast<int>(lst->size())) {
-                return 0.0f;
-            }
-            const auto v = (*lst)[idx];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                switch (n->numberType) {
-                    case PSB::PSBNumberType::Float:
-                        return static_cast<float>(n->getFloatValue());
-                    case PSB::PSBNumberType::Double:
-                        return static_cast<float>(n->getValue<double>());
-                    default:
-                        return static_cast<float>(n->getLongValue());
-                }
-            }
-            return 0.0f;
-        }
-
-    } // namespace
-
     // Aligned with libkrkr2.so sub_662448 @ 0x662448 (EmoteSpringState ctor).
     void EmoteSpringState_ctor(EmoteSpringState* self,
-                               const PSB::PSBDictionary* dict) {
+                               const tTJSVariant& dict) {
         // firstFlag = 1; stored/pos/vel seeded from .bss zeros (E68/E70 = 0). /*0x662478*/
         self->firstFlag  = 1;
-        self->prevDeltaX = 0.0f;
-        self->prevDeltaY = 0.0f;
         self->storedX = 0.0f; self->storedY = 0.0f; self->storedZ = 0.0f; // +36/+40/+44 = E68/E70
         self->posX    = 0.0f; self->posY    = 0.0f; self->posZ    = 0.0f; // +48/+52/+56
         self->velX    = 0.0f; self->velY    = 0.0f; self->accZ    = 0.0f; // +60/+64/+68
-        self->biasY   = 0.0f; // +16 (set later by builder from "ofs"; 0 until then)
 
         // Per-node spring params (narrow double->float, raw bits).             /*0x662524..*/
-        self->k_a    = propFloat(dict, "gravity");  // +4   /*0x66252c*/
-        self->k_b    = propFloat(dict, "spring");   // +8   /*0x662554*/
-        self->drag   = propFloat(dict, "friction"); // +12  /*0x66257c*/
-        self->leverX = propFloat(dict, "scale_x");  // +20  /*0x6625a4*/
-        self->leverY = propFloat(dict, "scale_y");  // +24  /*0x6625cc*/
+        self->k_a = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("gravity")));                                  // +4  0x66252c
+        self->k_b = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("spring")));                                   // +8  0x662554
+        self->drag = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("friction")));                                // +12 0x66257c
+        self->leverX = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("scale_x")));                                 // +20 0x6625a4
+        self->leverY = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("scale_y")));                                 // +24 0x6625cc
     }
 
     // Aligned with libkrkr2.so sub_668EF8 @ 0x668EF8 (EmoteBustChainSpring ctor).
     void EmoteBustChainSpring_ctor(EmoteBustChainSpring* self,
-                                   const PSB::PSBDictionary* dict) {
+                                   const tTJSVariant& dict) {
         uint8_t* const a1 = reinterpret_cast<uint8_t*>(self);
         auto F = [a1](int off) -> float&   { return *reinterpret_cast<float*>(a1 + off); };
         auto I = [a1](int off) -> int32_t& { return *reinterpret_cast<int32_t*>(a1 + off); };
@@ -380,28 +330,42 @@ namespace motion {
         std::memset(a1 + 92, 0, 0x48u);            // +92..+163 zeroed
 
         // Scalar params (narrow double->float, raw bits).                       /*0x668fdc..*/
-        F(4)  = propFloat(dict, "gravity");        // +4   gravity
-        F(8)  = propFloat(dict, "friction_x");     // +8
-        F(12) = propFloat(dict, "friction_y");     // +12
-        F(16) = propFloat(dict, "b_rate");         // +16
-        F(20) = propFloat(dict, "v_bound");        // +20
-        I(24) = propInt(dict, "ud_eft");           // +24  (INT, propGetInt)
-        F(28) = propFloat(dict, "bend_spd");       // +28
-        F(32) = propFloat(dict, "bend_vol");       // +32
+        F(4) = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("gravity")));              // +4   0x668fdc
+        F(8) = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("friction_x")));           // +8   0x669004
+        F(12) = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("friction_y")));           // +12  0x66902c
+        F(16) = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("b_rate")));               // +16  0x669054
+        F(20) = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("v_bound")));              // +20  0x66907c
+        I(24) = detail::motionPropGetInt(
+            dict, TJS_W("ud_eft"));                // +24  0x6690a8
+        F(28) = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("bend_spd")));             // +28  0x6690c8
+        F(32) = static_cast<float>(detail::motionPropGetDouble(
+            dict, TJS_W("bend_vol")));             // +32  0x6690f0
 
         // 2-element lists: length / scale_x / scale_y via index 0/1.            /*0x669128..*/
-        const auto length = dict ? std::dynamic_pointer_cast<PSB::PSBList>(
-                                       (*dict)[std::string("length")]) : nullptr;
-        F(36) = listFloat(length.get(), 0);        // +36 restLen0
-        F(40) = listFloat(length.get(), 1);        // +40 restLen1
-        const auto scaleX = dict ? std::dynamic_pointer_cast<PSB::PSBList>(
-                                       (*dict)[std::string("scale_x")]) : nullptr;
-        F(56) = listFloat(scaleX.get(), 0);        // +56
-        F(64) = listFloat(scaleX.get(), 1);        // +64
-        const auto scaleY = dict ? std::dynamic_pointer_cast<PSB::PSBList>(
-                                       (*dict)[std::string("scale_y")]) : nullptr;
-        F(60) = listFloat(scaleY.get(), 0);        // +60
-        F(68) = listFloat(scaleY.get(), 1);        // +68
+        const tTJSVariant length = detail::motionPropGet(
+            dict, TJS_W("length"));                // 0x669128
+        F(36) = static_cast<float>(
+            detail::motionPropGetDoubleByNum(length, 0)); // +36 0x66919c
+        F(40) = static_cast<float>(
+            detail::motionPropGetDoubleByNum(length, 1)); // +40 0x6691b8
+        const tTJSVariant scaleX = detail::motionPropGet(
+            dict, TJS_W("scale_x"));               // 0x66920c
+        F(56) = static_cast<float>(
+            detail::motionPropGetDoubleByNum(scaleX, 0)); // +56 0x669280
+        F(64) = static_cast<float>(
+            detail::motionPropGetDoubleByNum(scaleX, 1)); // +64 0x66929c
+        const tTJSVariant scaleY = detail::motionPropGet(
+            dict, TJS_W("scale_y"));               // 0x6692f0
+        F(60) = static_cast<float>(
+            detail::motionPropGetDoubleByNum(scaleY, 0)); // +60 0x669364
+        F(68) = static_cast<float>(
+            detail::motionPropGetDoubleByNum(scaleY, 1)); // +68 0x669380
 
         // Rest positions from the rest unit vector (0,1,0)
         //   (= floats of qword_1AB7E74 {0.0f,1.0f} and dword_1AB7E7C {0.0f}).   /*0x6693b0..*/

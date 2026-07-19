@@ -9,7 +9,10 @@
 
 namespace PSB {
 
-    class PSBFile {
+    // Compatibility decoder retained for motionplayer and the FreeMote-derived
+    // resource handlers while the psbfile.dll native class is restored around
+    // the raw-buffer owner used by libkrkr2.so.
+    class DecodedPSBFile {
     public:
         PSBArray charset{};
         PSBArray namesData{};
@@ -27,7 +30,7 @@ namespace PSB {
         PSBArray extraChunkLengths{};
         std::vector<std::shared_ptr<PSBResource>> extraResources;
 
-        explicit PSBFile() = default;
+        explicit DecodedPSBFile() = default;
 
         void loadKeys(TJS::tTJSBinaryStream *stream);
         void loadNames();

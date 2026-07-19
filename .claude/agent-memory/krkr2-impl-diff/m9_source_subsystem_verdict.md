@@ -1,6 +1,6 @@
 ---
 name: m9-source-subsystem-verdict
-description: M9 source subsystem fresh-decompile verdict (2026-06-07 latest pass). RM ctor sub_6A88CC CALLS SourceCache ctor sub_6A78F4 on the SAME object → RM IS-A/HAS-A SourceCache prefix subobject (binary inheritance/embed); local two FULLY-INDEPENDENT classes is the one real architecture deviation (C-1). HashMap A=libstdc++ unordered_map ✅, layerId std::set RB-tree ✅, loadSource intrusive list (key,blendMode)-match + color in-place ✅ (local std::list faithful), findSource ObjSource facade ✅, NCB counts 12/6/3/4const all ✅, angleDeg/Rad direction ✅.
+description: M9 source subsystem corrected verdict (2026-07-18). ResourceManager inheritance, mapped-record topology/lifetime, and both Win/spec=2 plus KRKR/spec=1 raw PSBRawNode source paths are restored; KRKR full-page upload remains a documented Web API boundary.
 metadata:
   type: project
 ---
@@ -18,14 +18,14 @@ Re-decompiled this session: findSource 0x6AAB3C, RM ctor 0x6A88CC, SourceCache c
 - **clearCache 0x6A8438**: resets ONLY +72 list (releases Layer via vtbl+112), not hashmaps. Local note ResourceManager.cpp:164 correct.
 - **angleDeg 0x6C1780 = raw deg; angleRad 0x6CD0C0 = deg*0.0174532925**: direction CORRECT.
 
-## OPEN DEVIATION C-1 (MEDIUM, architecture) — RM/SourceCache class relationship
+## RESOLVED C-1 — RM/SourceCache class relationship
 **RM ctor sub_6A88CC FIRST instruction (0x6a88f8) calls SourceCache ctor sub_6A78F4() on the SAME a1 object**, initializing SourceCache fields +20 (primaryLayer)/+36/+40 (bufLayer Layer)/+56/+64 (layerType)/+72/+80 (intrusive list head). RM ctor then initializes its OWN fields from +88 (HashMap A) up. Signature of **RM being a DERIVED class of SourceCache (or embedding it as the [0,88) prefix subobject)** — binary `class ResourceManager : public SourceCache`. The 3 shared loadSource/clearCache/bufLayer members are BASE-class members re-listed on derived RM's NCB table (normal C++ NCB inheritance), NOT mere address-sharing between unrelated classes.
-- **Local reality**: motion::ResourceManager (ResourceManager.h:103) and motion::SourceCache (SourceCache.h:38) are TWO FULLY INDEPENDENT classes, ZERO is-a/has-a. RM uses shared_ptr<State>; SourceCache has its own _owner/_primaryLayer/_bufLayer/_entries. Binary RM ITSELF owns a +72 layer-list + bufLayer Layer (inherited); local RM has NONE (RM._bufLayer is an unused ttstr scaffold). So binary Motion.ResourceManager.loadSource(...) materializes a Layer into RM's own +72 list; local RM.loadSource just forwards to RM.load (no layer-list). Genuine structural gap.
+- **Current local reality (2026-07-18)**: `ResourceManager : public SourceCache`; the inherited `_bufLayer`/`_entries` state serves the re-listed NCB base members. The former `shared_ptr<State>`, RM-local `_bufLayer`, and unrelated-class forwarding path have been removed.
 - 2026-06-04 verdict "two-class split is CORRECT, method-sharing not class-identity" is HALF RIGHT (yes 2 NCB classes) but MISSES that binary RM derives-from/embeds SourceCache.
-- Severity MEDIUM not HIGH: oracle-inert under current fixtures (no test calls Motion.ResourceManager.loadSource expecting a Layer; Player uses its own SourceCache). Align by `class ResourceManager : public SourceCache` (or embed as first member), wiring RM.loadSource/clearCache/bufLayer through inherited SourceCache state.
+- This is no longer an open deviation.
 
-## OPEN DEVIATION C-2 (LOW) — RM container keys
-HashMap A keyed by source NAME (FNV of name); local loadedModules keyed by load PATH. Same container family (unordered_map) now, but key identity differs. findMotion/isExistMotion honest STUBs (return false/void) — no name-keyed registry locally. Parked, oracle-inert.
+## RESOLVED C-2 / source record and pixel paths
+Fresh decompile of `ResourceManager_loadResource @0x6A8D8C`, outer insertion `sub_6EB9E4 @0x6EB9E4`, mapped-record ctor `sub_6EBCFC @0x6EBCFC`, destruction `sub_6DB3E8 @0x6DB3E8`, `Player_findSource @0x6948E8`, and KRKR atlas `sub_695DE8 @0x695DE8` proves the outer key is the module context/path, not a source group. Its mapped value declares, in order: raw PSBFile, Win `ttstr -> texture` map, KRKR flat `src/group/icon -> descriptor` map. Local `LoadedResourceRecord` mirrors that order, `rehash(10)`, ownership and erase/clear lifetime. Both spec paths now navigate `record.file` raw nodes; KRKR also restores all-group enumeration, raw/RL/palette decoding, transparent 2x2 handling and descriptor insertion. Only the full-page Web upload primitive is a documented platform adaptation.
 
 ## NOT a deviation (cleared)
 - per-vertex color: settled 2026-06-05, genuine CPU per-pixel bake boundary (sub_6A7518), local applyPackedCornerTintLike faithful. Do not re-open.

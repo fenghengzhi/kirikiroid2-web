@@ -89,10 +89,6 @@
 #include "EmoteAngleController.h"
 #include "EmoteMeshResolver.h"
 
-namespace PSB {
-    class PSBDictionary;
-} // namespace PSB
-
 namespace motion {
 
     // 0x150=336B slim eyebrow controller. Plain C++ object (no vtable: ctor +0
@@ -140,12 +136,17 @@ namespace motion {
     //   then populates the "edge" table and "node" value-rows. NO blink-field
     //   reads and NO RNG call (unlike the eye controller ctor).
     void EmoteEyebrowController_ctor(EmoteEyebrowController* self,
-                                     const PSB::PSBDictionary* dict);
+                                     const tTJSVariant& dict);
 
     // Aligned with libkrkr2.so sub_665600 EmoteVarController5_step @ 0x665600.
     //   Advances the value track (when non-empty) through states 0/1/2, then
     //   writes the track value to *out DIRECTLY (no blink machine, no remap).
     void EmoteEyebrowController_step(EmoteEyebrowController* self, float* out,
                                      float dt);
+
+    // sub_6654C4 @0x6654C4. Same two-track commit/reset topology as the eye
+    // controller, applied to the slim eyebrow object.
+    void EmoteEyebrowController_resetLike_0x6654C4(
+        EmoteEyebrowController* self);
 
 } // namespace motion

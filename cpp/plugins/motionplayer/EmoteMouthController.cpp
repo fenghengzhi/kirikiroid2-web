@@ -6,29 +6,12 @@
 // despite the "mouth" name).
 
 #include "EmoteMouthController.h"
+#include "MotionDispatch.h"
 
 #include <cmath>
 #include <cstring> // std::memcpy for the raw-bits powField reinterpret
 
-#include "psbfile/PSBValue.h"
-
 namespace motion {
-
-    namespace {
-
-        // Mirrors the binary's Motion_propGetInt on a PSB dict, with the same
-        // default (0) when the key is absent. (Identical to the eye/eyebrow
-        // slice's helper.)
-        int psbInt(const PSB::PSBDictionary* d, const char* key, int dflt = 0) {
-            if (!d) return dflt;
-            const auto v = (*d)[std::string(key)];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                return static_cast<int>(n->getLongValue());
-            }
-            return dflt;
-        }
-
-    } // namespace
 
     // Aligned with libkrkr2.so EmoteMouthController_ctor_guess @ 0x665C98.
     // Decompiled pseudocode (this conversation):
@@ -42,7 +25,7 @@ namespace motion {
     //   state and no mesh tables at all (the object is 0x70, smaller than the
     //   eye's 0x170 and the eyebrow's 0x150).
     void EmoteMouthController_ctor(EmoteMouthController* self,
-                                   const PSB::PSBDictionary* dict) {
+                                   const tTJSVariant& dict) {
         // The 12B value track default-constructs empty (the binary's memset +
         //   EmoteAngleController_ctor_12Bdeque leaves it empty; std::deque's
         //   default ctor replicates this under the PLATFORM_BOUNDARY ABI note).
@@ -54,7 +37,8 @@ namespace motion {
         //   zero these same fields.
 
         // beginFrame (the ONLY scalar field read; +108).               /*0x665d60*/
-        self->beginFrame = psbInt(dict, "beginFrame");
+        self->beginFrame = detail::motionPropGetInt(
+            dict, TJS_W("beginFrame"));                           // 0x665d60
     }
 
     // Aligned with libkrkr2.so sub_666068 EmoteMouthController_step @ 0x666068.

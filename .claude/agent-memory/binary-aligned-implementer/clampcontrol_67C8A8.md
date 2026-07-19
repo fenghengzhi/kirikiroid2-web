@@ -9,16 +9,17 @@ metadata:
 
 ## Function map (libkrkr2.so -> local)
 - `sub_67C8A8` @0x67C8A8 = per-entry clampControl binder. Reads engine HM(+1440=HM7),
-  writes player HM1/HM2 via Player_bindParameterValue(engine+1064). Local per-entry
-  BODY = `Player::applyClampControlsLike_0x67C8A8` (PlayerFrameProgress.cpp).
+  writes player HM1/HM2 via Player_bindParameterValue(engine+1064). Local live body is
+  `EmoteEngine::applyClampControlsLike_0x67C8A8` (EmoteEngine.cpp).
 - Builder/populator = `EmoteEngine_buildClampControl` @0x66EE5C ("clampControl" key,
   dispatched from EmoteEngine_applyMetadata_buildControllers @0x67D4D0). Local populator
-  = `RuntimeSupport::collectClampControlMetadata` -> `MotionSnapshot::clampControls`.
-- Callees: sub_67C560 (var-track cascade) = Player::accumulateTimelineContributionLike_0x67C560;
-  sub_67C6B0 (mirror flag) = Player::shouldMirrorEvalLabelLike_0x67C6B0;
+  = `EmoteEngine::buildClampControlLike_0x66EE5C` -> `_clampControlDeque7`.
+- Callees: sub_67C560 (var-track cascade) = EmoteEngine::accumulateTimelineContributionLike_0x67C560;
+  sub_67C6B0 (mirror flag) = EmoteEngine::shouldMirrorEvalLabelLike_0x67C6B0;
   Player_bindParameterValue @0x6C4668 = Player::bindParameterValueLike/writeEvalResultValueLike_0x6C4668.
 - `sub_67CC9C` @0x67CC9C = bind-loop + sub_67C8A8 bundled; has NO callers in binary
-  (dead). Local model = `Player::applyEvalResultPostProcessLike_0x67CC9C`.
+  (dead). The former local Player model has been deleted rather than retained as
+  live object state.
 
 ## deque#7 (clampControl) 40B element layout (evidence: builder 0x66EE5C writes v9-40..v9)
 - +0  int32  type  (Motion_propGetInt "type")  -> disk-remap mode (0 squircle / 1 clamp-circle)
@@ -29,7 +30,7 @@ metadata:
 - +32 ttstr  var_ud (Y-axis HM key)
 Builder gate: only "enabled"==true entries pushed. Deque header base engine+496;
 finish._M_cur engine+528; block=480B=12 elems. Local struct: EmoteClampControlEntry_Deque7
-(EmoteEngine.h ~237), member EmoteEngine::_clampControlDeque7 (documentation/unused).
+(EmoteEngine.h), member EmoteEngine::_clampControlDeque7 (live builder and live binder).
 
 ## Binder math (verified 1:1)
 range=max-min; norm=2*(val-min)/range-1 (both axes, min as subtrahend). if(x!=0&&y!=0):
@@ -42,19 +43,35 @@ final=min+range*(norm+1)*0.5. X negated iff sub_67C6B0 mirror set; Y never.
 Binary places bind-loop + sub_67C8A8 ONLY in EmoteEngine_progress (@0x67d3a4 / @0x67d3f8).
 Player_progress_inner @0x6C106C and the child-motion pass @0x6BE2A4 run progress_inner with
 NO bind-loop and NO clamp (re-confirmed by fresh decompile 2026-06-03). The clamp + a
-redundant bind-loop formerly ALSO ran on the Player progress path via
-Player::frameProgress -> applyEvalResultPostProcessLike_0x67CC9C (WRONG location). That
-call is now REMOVED from frameProgress. The clamp runs solely from EmoteEngine::progress as
-`player().applyClampControlsLike_0x67C8A8()` (EmoteEngine.cpp ~line 1963), right after the
+redundant bind-loop formerly ALSO ran on the Player progress path through a local model of
+sub_67CC9C (WRONG location). That call was first removed from frameProgress; the now
+unreferenced local wrapper and its eager clamp side table were subsequently deleted. The
+clamp runs solely from EmoteEngine::progress as
+`applyClampControlsLike_0x67C8A8()`, right after the
 HM7 bind-loop (~line 1939) and before step-7 player().progressFramesLike_0x6D2A54. The
 bind-loop was ALREADY live in EmoteEngine::progress over _labelToValueHM7, so removal of the
-frameProgress _evalResultList bind-loop is pure de-duplication. No double-clamp now.
-applyEvalResultPostProcessLike_0x67CC9C is now caller-less (mirrors the caller-less binary
-sub_67CC9C); kept as the model of the dead fn — do NOT call from any progress path.
+frameProgress _evalResultList bind-loop is pure de-duplication. No double-clamp and no dead
+Player-side owner remain.
 
-### 2 fidelity gaps FIXED in applyClampControlsLike_0x67C8A8 (PlayerFrameProgress.cpp ~321)
+### 2026-07-18 receiver/input correction
+(1) The live body now belongs to EmoteEngine, matching binary ownership; it iterates
+    `_clampControlDeque7` built directly from raw PSB metadata. The former Player body over
+    `MotionSnapshot::clampControls` is no longer in the live call chain.
+(2) It reads `_labelToValueHM7` directly and uses the Engine raw mirror helper before binding
+    through the embedded Player.
+(3) 2026-07-18 later correction: `sub_67C560` now belongs to EmoteEngine and iterates
+    HM3@+936, active-label vector@+1040, and `EmoteTimelineData80B::variableList`'s 56B
+    track deque directly. The former delegation to Player decoded timeline tables has been
+    removed from the live clamp path.
+(4) 2026-07-19 closure: fresh xrefs confirmed `sub_67C8A8` is called by live
+    `EmoteEngine_progress@0x67D01C` and caller-less `sub_67CC9C` only. The dead local
+    `Player::applyEvalResultPostProcessLike_0x67CC9C`, its Player mirror helper, and
+    `MotionSnapshot::clampControls` were therefore deleted; this corrects the earlier
+    note that recommended retaining the local dead-function model.
+
+### Earlier math/data-flow corrections retained
 (1) sub_67C560 var-track cascade now runs on each axis value before normalize
-    (accumulateTimelineContributionLike_0x67C560 on varLr & varUd) — was omitted.
+    (Engine HM3/+1040 implementation on varLr & varUd) — was omitted.
 (2) reads ENGINE HM7 = _engineBack->_labelToValueHM7 (engine+1440 = sub_67C8A8 v6=result+180),
     NOT player HM2 (_evalResultValues). Removed port-invented getVariable fallback +
     varLr/varUd empty-key guard + zero-range guard + squircle projLen>0 guard (binary has
@@ -69,3 +86,8 @@ logo. motion_playback differential: yuzulogo PASS (243 frames) + m2logo PASS (93
 oracle bit-identical. web/debug + wasmtime_guest build clean. No oracle exercises a populated
 clampControl deque, so the gap fixes are reconstruction-only (no runtime witness) but inert for
 all current fixtures.
+
+### VERIFICATION 2026-07-18
+macOS Release motionplayer-dll 57/57 and Web Debug 54/54 linked. Full motionplayer-dll stayed
+at the same four known failure categories (8/12 cases; this random order 173/177 assertions),
+with no new failure or crash. Current fixtures still contain no populated clampControl witness.

@@ -1,5 +1,11 @@
 # MotionPlayer 源代码还原 Review 报告（M15 增量复核）
 
+> **2026-07-18 字段纠正：** 本文关于 setChara `tTJSVariant*@+776`
+> 的结论受 NCB 表 off-by-one 误读影响，已证伪。权威映射为 chara
+> +960、stealthChara +968、motion +976、stealthMotion +984，均为
+> refcounted string-value owner（源码层 `ttstr`）；+768/+776 分别是
+> pending stealthMotion/stealthChara；+1099 是 playing。
+
 > 日期：2026-05-31
 > 方法：5 个 `binary-alignment-auditor` 子 agent，针对 2026-05-30 全量审计之后的 ~40 个 M15/M11/M20/M3 提交（全部标 `[需 CI 验证]`，即尚未验证）逐项反编译复核
 > 范围：自上次审计以来**实际变化的表面**——Player NCB 暴露面、transform root-delta setter、M15/M16 accessor 副作用、getVariable HM 级联、D3DEmotePlayer NCB 表

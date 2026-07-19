@@ -40,53 +40,6 @@ namespace {
         };
     }
 
-    template <typename StateT>
-    inline void populateTimelinePayloadFromFrameState(
-        StateT &localState,
-        const motion::internal::FrameContentState &state) {
-        localState.flipX = state.flipX;
-        localState.flipY = state.flipY;
-        localState.posX = state.x;
-        localState.posY = state.y;
-        localState.posZ = state.z;
-        localState.angle = state.angle;
-        localState.scaleX = state.scaleX;
-        localState.scaleY = state.scaleY;
-        localState.slantX = state.slantX;
-        localState.slantY = state.slantY;
-        localState.opacity = static_cast<int>(
-            std::clamp(state.opacity * 255.0, 0.0, 255.0));
-        localState.blendMode = state.blendMode;
-    }
-
-    template <typename StateT>
-    inline void populateTransformStateFromFrameState(
-        StateT &localState,
-        const motion::internal::FrameContentState &state) {
-        localState.visible = state.visible;
-        localState.active = state.visible;
-        populateTimelinePayloadFromFrameState(localState, state);
-    }
-
-    inline void populateDeltaStateFromFrameState(
-        motion::detail::MotionNode::DeltaState &delta,
-        const motion::internal::FrameContentState &state) {
-        delta.activeOverride = state.visible;
-        delta.visibleOverride = state.visible;
-        delta.flipX = state.flipX;
-        delta.flipY = state.flipY;
-        delta.posX = state.x;
-        delta.posY = state.y;
-        delta.posZ = state.z;
-        delta.angle = state.angle;
-        delta.scaleX = state.scaleX;
-        delta.scaleY = state.scaleY;
-        delta.slantX = state.slantX;
-        delta.slantY = state.slantY;
-        delta.opacity = static_cast<int>(
-            std::clamp(state.opacity * 255.0, 0.0, 255.0));
-    }
-
     inline void neutralizeDeltaTransformOverrides(
         motion::detail::MotionNode::DeltaState &delta) {
         delta.flipX = false;
@@ -119,52 +72,6 @@ namespace {
         accum.slantX = delta.slantX;
         accum.slantY = delta.slantY;
         accum.opacity = delta.opacity;
-    }
-
-    // Populate a ClipSlot from a FrameContentState.
-    // Cannot be a ClipSlot method because FrameContentState is defined in
-    // PlayerInternal.h (motion::internal namespace) which MotionNode.h cannot include.
-    inline void populateSlotFromState(
-        motion::detail::MotionNode::ClipSlot &slot,
-        const motion::internal::FrameContentState &s) {
-        slot.done = !s.visible;
-        slot.frameIndex = s.debugActiveIndex;
-        slot.frameType = s.frameType;
-        slot.icon = s.icon;
-        slot.src = s.src;
-        slot.srcList = s.srcList;
-        slot.x = s.x; slot.y = s.y; slot.z = s.z;
-        slot.ox = s.ox; slot.oy = s.oy;
-        slot.width = s.width; slot.height = s.height;
-        slot.opacity = s.opacity; slot.angle = s.angle;
-        slot.scaleX = s.scaleX; slot.scaleY = s.scaleY;
-        slot.slantX = s.slantX; slot.slantY = s.slantY;
-        slot.flipX = s.flipX; slot.flipY = s.flipY;
-        slot.blendMode = s.blendMode;
-        slot.packedColors = s.packedColors;
-        slot.ccc.x = s.ccc.x; slot.ccc.y = s.ccc.y;
-        slot.acc.x = s.acc.x; slot.acc.y = s.acc.y;
-        slot.zcc.x = s.zcc.x; slot.zcc.y = s.zcc.y;
-        slot.scc.x = s.scc.x; slot.scc.y = s.scc.y;
-        slot.occ.x = s.occ.x; slot.occ.y = s.occ.y;
-        slot.cc.x = s.cc.x; slot.cc.y = s.cc.y;
-        slot.cp.x = s.cp.x; slot.cp.y = s.cp.y; slot.cp.t = s.cp.t;
-        slot.hasCpRotation = !s.cp.empty();
-        slot.clipStartTime = s.clipStartTime;
-        slot.motionDt = s.motionDt; slot.motionFlags = s.motionFlags;
-        slot.motionDofst = s.motionDofst; slot.motionDocmpl = s.motionDocmpl;
-        slot.motionTimeOffset = s.motionTimeOffset; slot.motionDtgt = s.motionDtgt;
-        slot.prtTrigger = s.prtTrigger;
-        slot.prtFmin = s.prtFmin; slot.prtF = s.prtF;
-        slot.prtVmin = s.prtVmin; slot.prtV = s.prtV;
-        slot.prtAmin = s.prtAmin; slot.prtA = s.prtA;
-        slot.prtZmin = s.prtZmin; slot.prtZ = s.prtZ;
-        slot.prtRange = s.prtRange;
-        slot.hasTransformOrder = s.hasTransformOrder;
-        std::copy(s.transformOrder, s.transformOrder + 4, slot.transformOrder);
-        slot.action = s.action; slot.hasSync = s.hasSync;
-        // hasEasing derived from acc curve presence
-        slot.hasEasing = !s.acc.empty();
     }
 
     // Flatten a PSB layer node tree into a list of render nodes.
@@ -275,16 +182,6 @@ namespace {
         a[0] = m11; a[1] = m21; a[2] = m12; a[3] = m22;
     }
 
-    inline void applyLocalTransform(Affine2x3 &a,
-                                    const FrameContentState &state) {
-        applyLocalTransform(a,
-                            state.flipX, state.flipY,
-                            state.angle,
-                            state.scaleX, state.scaleY,
-                            state.slantX, state.slantY,
-                            state.transformOrder);
-    }
-
     // sub_699940 (0x699940) rebuilds the local 2x2 from node fields
     // after Player_updateLayers has already applied inheritFlags.
     inline void applyLocalTransform(Affine2x3 &a,
@@ -304,7 +201,7 @@ namespace {
     // and optional angle/scale from the gradient/jacobian of the parent's
     // Bezier patch. Called from Player_updateLayers at 0x6BB714 when
     // parent.meshType != 0. The patch is a 4×4 grid of control points stored
-    // at parent+2024 (32 floats). Operates in parent's normalized (u,v)
+    // at parent+2024 (16 × 8B MeshPoint). Operates in parent's normalized (u,v)
     // coordinates then maps back to world pixel space.
     inline void sub_69AE74_meshDeform(
         const motion::detail::MotionNode &parent,
@@ -326,7 +223,8 @@ namespace {
         const double normX = (node.accumulated.posX + totalOX) / pw;
         const double normY = (childSecondary + totalOY) / ph;
 
-        auto evalBezierPatch = [](const float *mesh, float u, float v,
+        auto evalBezierPatch = [](const motion::detail::MeshPoint *mesh,
+                                  float u, float v,
                                   float &outX, float &outY) {
             const float su = 1.0f - u, sv = 1.0f - v;
             const float bu[4] = {
@@ -339,14 +237,14 @@ namespace {
             outY = 0;
             for (int i = 0; i < 16; ++i) {
                 float w = bv[i >> 2] * bu[i & 3];
-                outX += mesh[i * 2] * w;
-                outY += mesh[i * 2 + 1] * w;
+                outX += mesh[i].x * w;
+                outY += mesh[i].y * w;
             }
         };
 
         float defX = static_cast<float>(normX);
         float defY = static_cast<float>(normY);
-        if (parent.meshControlPoints.size() >= 32) {
+        if (parent.meshControlPoints.size() >= 16) {
             evalBezierPatch(parent.meshControlPoints.data(), defX, defY,
                             defX, defY);
         }
@@ -359,9 +257,9 @@ namespace {
 
         if ((parent.meshFlags & 2) != 0
             && (node.inheritFlags & 0x10) != 0
-            && parent.meshControlPoints.size() >= 32) {
+            && parent.meshControlPoints.size() >= 16) {
             const float eps = 0.0001f;
-            const float *mp = parent.meshControlPoints.data();
+            const auto *mp = parent.meshControlPoints.data();
             float x1, y1, x2, y2, x3, y3, x4, y4;
             evalBezierPatch(mp, defX - eps, defY, x1, y1);
             evalBezierPatch(mp, defX + eps, defY, x2, y2);
@@ -377,9 +275,9 @@ namespace {
 
         if ((parent.meshFlags & 4) != 0
             && (node.inheritFlags & 0x60) != 0
-            && parent.meshControlPoints.size() >= 32) {
+            && parent.meshControlPoints.size() >= 16) {
             const float eps = 0.0001f;
-            const float *mp = parent.meshControlPoints.data();
+            const auto *mp = parent.meshControlPoints.data();
             float x1, y1, x2, y2, x3, y3, x4, y4;
             evalBezierPatch(mp, defX - eps, defY, x1, y1);
             evalBezierPatch(mp, defX + eps, defY, x2, y2);
@@ -469,12 +367,10 @@ namespace {
     // the raw PSB "label" (the insert at 0x6B4CB0 uses PropGet("label")'s raw
     // return, NOT a hierarchical path — see NodeTree.cpp write site). The binary
     // walks a red-black tree comparing wide strings (sub_9B1ED0); we use
-    // std::map::find. Callers pass the raw lookup string (motionDtgt etc.)
+    // std::map::find. Callers pass the raw lookup ttstr (motionDtgt etc.)
     // verbatim, exactly as the binary feeds sub_6F2228.
     static int findNodeByLabel(const motion::detail::NodeLabelMap &labelMap,
-                               const std::string &label) {
-        // Player+24 map is ttstr-keyed (UTF-16 comparator sub_9B1ED0); widen
-        // the raw std::string lookup label to match the binary's key type.
-        auto it = labelMap.find(motion::detail::widen(label));
+                               const ttstr &label) {
+        auto it = labelMap.find(label);
         return (it != labelMap.end()) ? it->second : -1;
     }

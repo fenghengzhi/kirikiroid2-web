@@ -6,14 +6,14 @@ target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin)
 
 if(WINDOWS)
     target_compile_definitions(${PROJECT_NAME} PRIVATE -DUNICODE -D_UNICODE)
-    target_sources(${PROJECT_NAME} PUBLIC
+    target_sources(${PROJECT_NAME} PRIVATE
             windows/main.cpp
             windows/LayerExDraw.cpp
     )
 # EMSCRIPTEN 走与 Linux/macOS 相同的 general 实现(libgdiplus+cairo+glib+freetype),
 # 这正是 libkrkr2.so layerExDraw 的后端选型(IDA 确认 NCB 0x42CD30 tag "GdiPlus")。
 else()
-    target_sources(${PROJECT_NAME} PUBLIC
+    target_sources(${PROJECT_NAME} PRIVATE
             general/main.cpp
             general/LayerExDraw.cpp
             general/DrawPath.cpp

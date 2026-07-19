@@ -16,8 +16,9 @@ Player_play (0x6B21E8)
         └── [type==0] Player_initNonEmoteMotion (0x6B365C) — 非 emote motion
               ├── 读取 PSB: loopTime, lastTime, tag, priority
               ├── 读取 PSB: content → priority[0] → "content" (frameList 数据)
-              ├── sub_6B1718 — 参数化初始化 (parameterize 模式)
-              ├── sub_6B1ECC — 参数表后处理
+              ├── Player_appendParameterEntryLike_0x6B1718 — 从 raw dispatch 构造参数项
+              ├── Player_parseParameterListLike_0x6B202C — 遍历 raw parameter Array
+              ├── Player_finalizeParameterTableLike_0x6B1ECC — 参数表父链 multimap 注册
               ├── Player_buildNodeTree (0x6B51F0) ★★★ 核心入口
               ├── Player_initVariables (0x6CD750) — 读取 PSB "variable" 键
               └── 设置初始时间/播放状态

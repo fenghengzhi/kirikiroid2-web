@@ -114,7 +114,7 @@
 
 ## 四、平台边界（已确认合法，注明技术原因，非偏差）
 
-- **Player_findSource@0x6948E8 纹理拓扑**（簇 N，唯一真架构分歧停泊于平台边界）：二进制双 hashmap + 裸 aligned-alloc + device vtbl+24 CreateTexture 直传 GPU + AddRef/Release；本地单 `std::list<Entry>` + `shared_ptr<bitmap>` + 惰性 RenderManager CreateTexture2D。GPU upload 路径平台相关。
+- **Player_findSource@0x6948E8 上传原语**（簇 N，2026-07-18 纠正）：外层资源记录与 Win/KRKR 两张内表、AddRef/Release、unload 生命周期均已复原。Win/spec=2 与 KRKR/spec=1 都直接消费 mapped record 内的 raw `PSBFile` 节点；KRKR 复原 all-group 枚举、两种 RL、palette 与透明 2x2。Web 纹理不能对非零 offset 逐子矩形更新，因此 KRKR atlas 先在 CPU 组整页再一次 Update；只有这一上传原语是具体平台边界。
 - **PSB C++ helper vs TJS dispatch**（簇 F C2）：部分 ctor/字段读走 PSBDictionary helper 而非 `iTJSDispatch2::PropGet`；偏移对、dispatch 链不同。属 load 层政策，需全模块统筹（非局部）。
 - **RuntimeSupport.cpp / MotionTraceWeb.cpp**（簇 N）：Web-port MotionSnapshot 资源模型 + logo-trace 诊断 shim，无 1:1 二进制函数（二进制直接 load→TJS dict）。端口宿主层。
 - **D3D 桩**（簇 D）：D3DAdaptor 多数成员 = 二进制 nullsub_81..86，本地空 stub 忠实；removeAllTextures（二进制有真体 sub_6AD8B8）缺 PLATFORM_BOUNDARY 注释（N21 类）。
@@ -130,7 +130,9 @@
 - **bind-loop callees sub_67C560/67C6B0/67C8A8**（簇 B）。
 - **var-track writer sub_6B786C/6B7A70、pushSync/Action body 6B6294/6B638C、initNodeTimeline 非 child 路径**（簇 H，N13）。
 - **childRoot Player +1064 建模**（簇 L L-1，getVariable cascade 在 childRoot 上，本地在 this；独立 Player 时值同源故 inert）。
-- **variableKeys(engine+1208)/modifyRoot(+1584)/initPhysics**（簇 C，已标 open STUB）。
+- **variableKeys(engine+1208)/modifyRoot(+1584)**（簇 C 的历史 open；后续状态见主审计）。
+  `initPhysics` 已于 2026-07-19 由 `0x67FAC8 → 0x67D4D0` 注册证据关闭：它就是
+  metadata/controller builder，不是独立 physics STUB。
 - **EmotePhysics_springStep / hair/bust 引擎进一步 callee**（簇 A/B，step 数学已交叉核对）。
 
 ---

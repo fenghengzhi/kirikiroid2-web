@@ -13,7 +13,7 @@ ResourceManager::requireLayerId (ResourceManager.cpp) 已与二进制 sub_6AB694
 
 **counter +216 初值 = 1**：RM ctor sub_6A88CC @0x6a8a3c 写 `*(a1+216)=0x100000001`（低32=1，高32=1 但 require 用 `LDR W0` 32位读，高位 dead）。本地 nextLayerId=1 对齐。
 **set +168 = std::set<unsigned int>**（_Rb_tree: header+176/root+184/leftmost+192/size+208），确认非 unordered_set。本地 std::set<tjs_int> 对齐。
-**ctor 预置 {0}**：sub_6A88CC @0x6a8a08-38 用 operator new(0x28) + _Rb_tree_insert_and_rebalance 插 key=0。但 counter 从1起，0 永不返回；unloadAll @0x6A8BBC 的 _M_erase 清整棵树(连{0})且不重置 counter。该 {0} 节点功能-inert + oracle-inert，且属 ctor 行为非 requireLayerId 行为；本地 State 默认构造空 set 是忠实的，强插 {0} sentinel 反而是 port-invent。
+**ctor 预置 {0}**：sub_6A88CC @0x6a8a08-38 用 operator new(0x28) + _Rb_tree_insert_and_rebalance 插 key=0。但 counter 从1起，0 永不返回。2026-07-18 纠正：清整棵 set 的 `_M_erase@0x6A8C04` 位于析构函数 `0x6A8B94`；独立 `unloadAll@0x6A8CF8` 只清 HashMap A。该 {0} 节点功能-inert + oracle-inert，且属 ctor 行为非 requireLayerId 行为；本地 State 默认构造空 set 是忠实的，强插 {0} sentinel 反而是 port-invent。
 
 **releaseLayerId** sub_6AB750 @0x6AB750: lower_bound(id) 命中则 _M_erase_aux，不动 counter+216，返回 walk count(v8 本地未用)。本地 erase(id)+id==0守卫 对齐。
 

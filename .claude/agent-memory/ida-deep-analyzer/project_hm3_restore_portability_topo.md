@@ -13,7 +13,7 @@ metadata:
 可移植性裁决 (叶子优先拓扑序):
 1. contentMask (slot+340=parseSlot+20 raw frame mask; init 0x699654 / restore 0x6998b8) — 证据齐, 本地 ClipSlot 缺 int contentMask, 加 1 字段+2 行即可. oracle-inert 纯架构, 无回归. **立即可做.**
 2. type-3 child (node+1912; init 0x699598 / restore 0x699844) — 证据齐, 本地 childPlayerVar 已建模; 仅需把 V+544(ttstr_544) 改为持 childPlayerVar tTJSVariant 副本双向. 浅缺口. **可做.**
-3. mesh restore (init 已实装 v.meshControlPoints=node.meshControlPoints; restore 0x699828 sub_6996E8=std::vector<float> deep-copy 已反编译) — init 侧 done; restore 缺本地 ClipSlot slot+640 mesh-eval vector. 加字段后可做. **半可移植.**
+3. mesh restore — **已完成并纠正旧结论（2026-07-19）**。`0x6996E8` 的 `>>3`/8B stride 证明元素是 `{float x,float y}`，不是 `std::vector<float>`；node/slot/HM3 已统一为 `std::vector<MeshPoint>`，init/restore 双向复制均已实装。
 4. type-4 particle (node+2224..2288 → V+600..664 → memcpy slot+744 0x48; init 0x6995dc / restore 0x699890) — **DEFERRED, 缺最深前置**. 非对称: eval 读 slot+424..488 写 node+2224(crossfade lerp+easing v103); init 读 node+2224 写 V+600; restore 写 slot+744(非 node+2224). 本地 evaluateTimeline(PlayerUpdateLayerEval.cpp)用结构化 interpolatedCache(prtTrigger/prtF/V/A/Z/Range), 无 node+2224..2288 9-channel byte 镜像, 无 slot+744(72B=9 double)区, 无 slot+424..488.
 
 type-4 仍缺的两个反编译证据点 (做之前必须先取):

@@ -42,9 +42,12 @@ members forward to the same logic D3DEmotePlayer/Player already implement.
   completeness) now holds an EmoteObject chain (`_primaryObj`) reaching player()/
   engine() — same pattern as D3DEmotePlayer. 70 members + 2 consts registered in
   main.cpp NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) in EXACT binary order.
-- Two OPEN thin impls (registered, faithful stub, marked): #4 initPhysics
-  (sub_67D4D0 physics builder not ported), #68 activateSelectorTarget (sub_67581C
-  selector option-scan+applySelection re-step; Player has only deactivate@0x675BF4).
+- #4 `initPhysics` 已于 2026-07-19 CLOSED：注册点 `0x67FCA4` 将字面名称直接绑定
+  `EmoteEngine_applyMetadata_buildControllers@0x67D4D0`，本地现接收 metadata variant
+  并进入同一 raw builder；它不是独立 physics helper。Historical #68
+  `activateSelectorTarget@0x67581C` was completed on 2026-07-18 through the Engine
+  selector/transition deques, selector option-scan + applySelection + zero-dt
+  re-step, and its previously missed NCB registration was restored.
 
 ## Self-audit field corrections (caught after first build — fixed)
 Decompiled the inferred members; several field mappings were WRONG and fixed:

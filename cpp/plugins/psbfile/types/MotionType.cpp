@@ -9,7 +9,7 @@ namespace PSB {
 
 #define LOGGER spdlog::get("plugin")
 
-    bool MotionType::isThisType(const PSBFile &psb) {
+    bool MotionType::isThisType(const DecodedPSBFile &psb) {
         const auto objects = psb.getObjects();
         if(psb.getObjects() == nullptr) {
             return false;
@@ -22,7 +22,7 @@ namespace PSB {
     }
 
     std::vector<std::unique_ptr<IResourceMetadata>>
-    MotionType::collectResources(const PSBFile &psb, bool deDuplication) {
+    MotionType::collectResources(const DecodedPSBFile &psb, bool deDuplication) {
         std::vector<std::unique_ptr<IResourceMetadata>> resourceList;
         // TODO:
         LOGGER->critical("TODO: MotionType::collectResources(...)");

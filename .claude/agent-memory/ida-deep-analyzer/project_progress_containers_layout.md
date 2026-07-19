@@ -22,9 +22,9 @@ metadata:
 
 ## variable-track 元素 160B 字段
 - +0 int frameIndex；+8 int activeSlotIndex（0/1，seek 翻转，reseek 末置 0）；+24 iTJSDispatch2 holder（frameList，~20B）；+48 / +104 两个 56B slot。
-- slot 56B（sub_6B786C 写 +0/+8/+22；sub_6B7A70 写 +16/+20/+21/+22/+24/easing）：+0 int frameIndex、+8 double time（**也可能是 16~20B time+easing 子结构，未最终确认**）、+16 int interval、+20 byte holdFlag(type0)、+21 byte easingKind(type2→0/type3→1)、+22 byte mergedFlag（786C清0/7A70置1）、+24 double value。
+- slot 56B（0x6B786C 写 +0/+8/+22；0x6B7A70 写 +16/+20/+21/+22/+24/+32）：+0 frameIndex、+8 double time、+16 interval、+20 typeZeroFlag、+21 interpFlag、+22 mergedFlag、+24 double value、+32 tTJSVariant easing。2026-07-18 勘误：旧“+8 time/easing 可能重叠”已被 0x6B7CD4 证伪；easing 明确 CopyRef 到 +32。
 - **+70/+126 = slot0/slot1 的 +22 mergedFlag**（不是独立元素字段）：advance `if(!*(v19+70)) sub_6B7A70` / `if(!*(v19+126)) sub_6B7A70`。
-- sub_6B786C = "帧N的time装进slot"；sub_6B7A70 = "帧的type/interval/value/easing解析进slot"。
+- Motion_VarTrackSlot_step_guess@0x6B786C 装入 index/time；Motion_VarTrackSlot_merge_guess@0x6B7A70 从 content 读 interval/value、从 frame 读 easing。
 
 ## event-stream cursor（非 deque：dispatch holder + int + 2 double）
 - layer：+1072 source / +916 cursor / +920 curTime / +928 nextTime（无 content buf；type1 触发 stop/sync/align，受 +1093 门控）。

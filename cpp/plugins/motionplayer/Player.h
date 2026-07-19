@@ -21,6 +21,8 @@
 #include "RuntimeSupport.h"
 #include "internal/player_containers.h"
 
+class iTVPTexture2D;
+
 namespace PSB {
     class PSBDictionary;
     class PSBList;
@@ -37,19 +39,13 @@ namespace motion {
 namespace motion {
     namespace detail {
         struct LayerRenderState;
-        struct MotionClip;
         struct MotionEvent;
         struct MotionNode;
         struct MotionParameterEntry;
-        struct MotionSnapshot;
         struct PlayerRuntime;
-        struct TimelineControlBinding;
-        struct TimelineState;
 
         void buildNodeTree(motion::Player &player,
-                           const MotionSnapshot &snapshot,
-                           const std::string &clipOwner,
-                           const std::string &clipLabel,
+                           const tTJSVariant &motionContent,
                            int parentPreview);
     }
 
@@ -91,23 +87,9 @@ namespace motion {
         CoordinateRecutangularXZ = 1
     };
 
-    // A3 / A4: forward-declare motion / source / timeline helpers so Player
-    // can grant them friend access to migrated members. Definitions live
-    // inline in PlayerInternal.h.
+    // Forward-declare helpers that require access to Player-owned runtime
+    // containers. Definitions live inline in PlayerInternal.h.
     namespace internal {
-        std::shared_ptr<detail::MotionSnapshot>
-        cacheMotion(Player &, const std::string &, const std::string &,
-                    const std::shared_ptr<detail::MotionSnapshot> &);
-        std::shared_ptr<detail::MotionSnapshot>
-        activateMotion(Player &,
-                       const std::shared_ptr<detail::MotionSnapshot> &);
-        std::shared_ptr<detail::MotionSnapshot>
-        resolveMotion(Player &, const ttstr &, const ResourceManager *);
-        std::vector<ttstr> buildSourceCandidates(const Player &, const ttstr &);
-        std::vector<tTJSVariant> timelineInfoVariants(const Player &);
-        const detail::TimelineState *
-        nthPlayingTimeline(const Player &, tjs_int);
-        double activeClipTime(const Player &, const detail::MotionClip *);
         detail::MotionParameterEntry *
         resolveNodeParameterEntry(Player &, const detail::MotionNode &);
     }
@@ -140,7 +122,8 @@ namespace motion {
         void setMetadata(tTJSVariant v) { _metadata = v; }
         tTJSVariant getMetadata() const { return _metadata; }
 
-        // Aligned to libkrkr2.so Player_setChara @0x6D94B0 (NCB "chara" setter).
+        // Aligned to libkrkr2.so Player_setChara @0x6C0E9C (NCB "chara"
+        // setter) and its shared slot writer @0x6B29C0.
         // Not a plain assignment: a chara change must invalidate the loaded
         // motion so the next play/update reloads against the new chara.
         void setChara(ttstr v);
@@ -149,8 +132,13 @@ namespace motion {
         void setMotion(ttstr v);
         ttstr getMotion() const { return _motionKey; }
 
-        void setMotionKey(ttstr v) { setMotion(v); }
-        ttstr getMotionKey() const { return _motionKey; }
+        // Player_getMotionKey/project @0x695BE0 and
+        // Player_setMotionKey/project @0x6B4978 are literal aliases over the
+        // single tTJSVariant slot player+1012.
+        void setMotionKey(tTJSVariant v) {
+            _findMotionContextVariant = std::move(v);
+        }
+        tTJSVariant getMotionKey() const { return _findMotionContextVariant; }
 
         // Aligned to libkrkr2.so +1032: ttstr, not bool
         void setOutline(ttstr v) { _outline = v; }
@@ -167,19 +155,13 @@ namespace motion {
         // i.e. the port's _cachedTotalFrames. No setter (binary is RO).
         double getFrameLastTime() const { return _cachedTotalFrames; }
 
-        void setProgressCompat(double v);
-        double getProgressCompat() const;
 
         void setLoopTime(double v) { _loopTime = v; }
         double getLoopTime() const { return _loopTime; }
 
-        // NOTE: a343ce9 added a getLoopTimeArrayLike_0x6D139C() here on the
-        // misread that member "loopTime" binds to 0x6D139C. Verified false:
-        // binary Player_ncb_registerMembers binds "loopTime" -> Player_getLastTime
-        // (scalar) and 0x6D139C -> member "variableKeys". Function removed; the
-        // var-track cascadeKey array for "variableKeys" is a separate alignment
-        // item (local "variableKeys" currently reads _activeMotion->variableLabels
-        // via getVariableKeys, NOT the Player+1296 cascadeKey deque 0x6D139C walks).
+        // Player_getVariableKeys @0x6D139C (bound to RO "variableKeys" by
+        // Player_ncb_registerMembers @0x6D69C8) constructs a fresh TJS Array
+        // from Player+1296 VariableLabelScope::cascadeKey values on every call.
 
         void setProcessedMeshVerticesNum(int v) { _processedMeshVerticesNum = v; }
         int getProcessedMeshVerticesNum() const { return _processedMeshVerticesNum; }
@@ -190,10 +172,6 @@ namespace motion {
         void setDirectEdit(bool v) { _directEdit = v; }
         bool getDirectEdit() const { return _directEdit; }
 
-        void setSelectorEnabled(bool v);
-        bool getSelectorEnabled() const { return _selectorEnabled; }
-
-        void setVariableKeys(tTJSVariant v) { _variableKeys = v; }
         tTJSVariant getVariableKeys();
 
         void setAllplaying(bool v) { _allplaying = v; }
@@ -398,17 +376,25 @@ namespace motion {
         void setResourceManager(tTJSVariant v) { _resourceManager = v; }
         tTJSVariant getResourceManager() const { return _resourceManager; }
 
-        void setStealthChara(ttstr v) { _stealthChara = v; }
+        // Player_setStealthChara @0x6D94B0: when the live +968 slot exists,
+        // update it through Player_setCharaOrKeySlot_dedup @0x6B29C0 and
+        // flush pending +776; otherwise retain the value in +776 until the
+        // primary chara slot is materialised.
+        void setStealthChara(ttstr v);
         ttstr getStealthChara() const { return _stealthChara; }
 
-        void setStealthMotion(ttstr v) { _stealthMotion = v; }
+        // Player_setMotion_stealth @0x6D9584 routes through the same play
+        // wrapper as `motion`, with PlayFlagStealth, or queues +768 while the
+        // +968 stealth-chara slot is null.
+        void setStealthMotion(ttstr v);
         ttstr getStealthMotion() const { return _stealthMotion; }
 
-        void setTags(tTJSVariant v) { _tags = v; }
-        tTJSVariant getTags() const { return _tags; }
+        // sub_6D9618 @0x6D9618, registered under the literal member name
+        // "tags": one tTJSVariant CopyRef from Player+1072.
+        tTJSVariant getTags() const { return _tagFrameSourceVariant; }
 
-        void setProject(tTJSVariant v) { _project = v; }
-        tTJSVariant getProject() const { return _project; }
+        void setProject(tTJSVariant v) { setMotionKey(std::move(v)); }
+        tTJSVariant getProject() const { return getMotionKey(); }
 
         // libkrkr2.so Player_setUseD3DFlag @ 0x6D9920 and getter
         // sub_695DE0 read/write player+909, the same byte draw(D3DAdaptor)
@@ -423,9 +409,6 @@ namespace motion {
         bool getBusy() const { return _busy; }
 
         // --- Methods ---
-        void initPhysics();
-        tTJSVariant serialize();
-        void unserialize(tTJSVariant data);
         void setEmoteCoord(double x, double y, double transition = 0.0,
                            double ease = 0.0);
         void setEmoteScale(double scale, double transition = 0.0,
@@ -453,21 +436,13 @@ namespace motion {
             _cameraOffsetX = static_cast<float>(x);
             _cameraOffsetY = static_cast<float>(y);
         }
-        void modifyRoot(tTJSVariant data);
-        void debugPrint();
-
+        // Player_modifyRoot @0x6CD0B0: no arguments; mark the root node's
+        // delta block dirty at node+1584.
+        void modifyRoot();
         double random();
 
-        // Load from a pre-loaded snapshot (used by EmotePlayer.setModule)
-        // Aligned to libkrkr2.so: EmoteObject_init (sub_67DBAC) sets Player's
-        // activeMotion directly from loaded PSB data without file I/O.
-        void loadFromSnapshot(std::shared_ptr<detail::MotionSnapshot> snapshot);
-
         // Resource management
-        void unload(ttstr name);
-        void unloadAll();
         bool isExistMotion(ttstr name);
-        tTJSVariant findMotion(ttstr name);
         // P3-B (c): by-name `requireLayerId(ttstr)` removed (binary has no by-name
         //   layer-id path). Allocation goes through dispatchRequireLayerId().
         void releaseLayerId(tjs_int id);
@@ -491,6 +466,10 @@ namespace motion {
         void adjustGamma(tTJSVariant args);
         void draw(tTJSVariant target);
         void draw();
+        // Direct D3DImage listener route: Player_drawToTexture @0x6D5C68.
+        bool drawToD3DImageLike_0x6D5C68(iTVPTexture2D *target,
+                                         float x,
+                                         float y);
         void frameProgress(double dt);
 
         // Viewport/display
@@ -530,37 +509,9 @@ namespace motion {
         // equals the lookup key. The scope gate of getVariable's 2-branch router.
         [[nodiscard]] bool isLabelInBindScopeListLike_0x6CD16C(
             const ttstr &key) const;
-        tjs_int countVariables();
-        ttstr getVariableLabelAt(tjs_int idx);
-        tjs_int countVariableFrameAt(tjs_int idx);
-        ttstr getVariableFrameLabelAt(tjs_int idx, tjs_int frameIdx);
-        double getVariableFrameValueAt(tjs_int idx, tjs_int frameIdx);
-        bool getTimelinePlaying(ttstr label);
-        tTJSVariant getVariableRange(ttstr label);
-        tTJSVariant getVariableFrameList(ttstr label);
-        tjs_int countMainTimelines();
-        ttstr getMainTimelineLabelAt(tjs_int idx);
-        tTJSVariant getMainTimelineLabelList();
-        tjs_int countDiffTimelines();
-        ttstr getDiffTimelineLabelAt(tjs_int idx);
-        tTJSVariant getDiffTimelineLabelList();
-        bool getLoopTimeline(ttstr label);
-        tjs_int countPlayingTimelines();
-        ttstr getPlayingTimelineLabelAt(tjs_int idx);
-        tjs_int getPlayingTimelineFlagsAt(tjs_int idx);
-        tjs_int getTimelineTotalFrameCount(ttstr label);
-        void playTimeline(ttstr label, tjs_int flags);
-        void stopTimeline(ttstr label);
-        void setTimelineBlendRatio(ttstr label, double ratio);
-        double getTimelineBlendRatio(ttstr label);
-        void fadeInTimeline(ttstr label, double duration, tjs_int flags);
-        void fadeOutTimeline(ttstr label, double duration, tjs_int flags);
-        tTJSVariant getPlayingTimelineInfoList();
-
-        // Selector
-        bool isSelectorTarget(ttstr name);
-        void deactivateSelectorTarget(ttstr name);
-
+        // Player_getVariableRange_fallback @0x6D6590. Scans this Player's
+        // +384 parameter entries and all child Players via sub_6D676C.
+        tTJSVariant getParameterRangeLike_0x6D6590(const ttstr &label);
         // Misc
         tTJSVariant getCommandList();
         // getD3DAvailable / doAlphaMaskOperation moved off Player: in
@@ -616,9 +567,6 @@ namespace motion {
                                                  tjs_int numparams,
                                                  tTJSVariant **param,
                                                  iTJSDispatch2 *objthis);
-        static tjs_error isPlayingCompat(tTJSVariant *result, tjs_int numparams,
-                                         tTJSVariant **param,
-                                         iTJSDispatch2 *objthis);
         static tjs_error stopCompat(tTJSVariant *result, tjs_int numparams,
                                     tTJSVariant **param, iTJSDispatch2 *objthis);
         // clear #72 — binary callback Player_drawToLayerCompat @0x6D2D80
@@ -631,7 +579,6 @@ namespace motion {
         // fill value. Mirrors Player_drawToLayerCompat @0x6D2D80 structure.
         void drawToLayerCompat(const tTJSVariant &targetLayer,
                                const tTJSVariant &fillValue);
-        tTJSVariant motionList();
         void emoteEdit(tTJSVariant args);
 
         // libkrkr2.so Player_getAngleRad @0x6CD0C0 (IDB symbol corrected
@@ -671,8 +618,6 @@ namespace motion {
         void setAngleRad(double rad); // Player_setAngleDeg@0x6CD0EC; impl in PlayerCore.cpp
 
         // Public accessor for EmotePlayer delegation
-        double getActiveMotionWidth() const;
-        double getActiveMotionHeight() const;
         bool hitTestLayer(ttstr name, double x, double y);
         // Player_contains @0x6D333C takes only (x, y), scans every shape node
         // in this Player, then recursively visits child/particle Players through
@@ -770,6 +715,10 @@ namespace motion {
 
     private:
         bool ensureMotionLoaded();
+        bool ensureMotionLoaded(const ttstr &chara, const ttstr &motion);
+        bool playMotionImplLike_0x6B2284(ttstr label, tjs_int flags);
+        bool setCharaSlotLike_0x6B29C0(const ttstr &value,
+                                      bool stealthOnly);
         // Player_findNodeByRawLabel @0x6B5AD8. Direct Player+24 map lookup,
         // optionally followed by Player_visitChildPlayerDispatches @0x6B601C
         // in node order (type-4 particle children, then type-3 child Player).
@@ -778,6 +727,10 @@ namespace motion {
         // Aligned to libkrkr2.so Player_initNonEmoteMotion (0x6B365C).
         // This is the native/LLDB init_motion stage boundary.
         void initNonEmoteMotionLike_0x6B365C(std::uint32_t playFlags);
+        // Player_initEmoteMotion @0x6B2E90 selects a secondary non-emote
+        // motion from +484 division / +508 motionList using the normalized
+        // (+472 + +464) angle, then invokes initNonEmoteMotion on that result.
+        void initEmoteMotionLike_0x6B2E90(std::uint32_t playFlags);
         // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0). Called
         // eagerly from play/onFindMotion paths; the binary has no lazy gate.
         void buildNodeTree();
@@ -788,61 +741,20 @@ namespace motion {
         // scope+"::"+label. Snapshotted into HM4 by resetMotionState loop2.
         void initVariables();
         friend void detail::buildNodeTree(motion::Player &player,
-                                          const detail::MotionSnapshot &snapshot,
-                                          const std::string &clipOwner,
-                                          const std::string &clipLabel,
+                                          const tTJSVariant &motionContent,
                                           int parentPreview);
         friend void detail::ensureRootNodeLike_0x6CED30(motion::Player &);
         friend void detail::resetNodeTreeKeepRootLike_0x6B56F8(motion::Player &);
-        void syncVariableKeysFromActiveMotion();
-        void syncSelectorControlsLike_0x670D1C();
-        const detail::TimelineState *primaryTimelineStateLike_0x66F80C() const;
-        // Local backing model for EmoteEngine_preProgress_guess @0x671764.
-        // The binary owner/call boundary is EmoteEngine; only EmoteEngine's
-        // 0x671764 wrapper may invoke this while the timeline containers remain
-        // hosted on the embedded Player in the current port.
-        void preProgressTimelineStateModelForEmoteEngine(
-            double dt, std::unordered_map<std::string, double> *prevTimes);
-        void resetTimelineControlStateLike_0x671A50(
-            detail::TimelineState &state,
-            const detail::TimelineControlBinding &binding,
-            double time);
-        void scheduleTimelineControlAnimatorLike_0x671A50(
-            detail::TimelineState &state,
-            size_t trackIndex,
-            float value,
-            double transition,
-            double easeWeight);
-        void applyTimelineControlWindowLike_0x669E1C(
-            detail::TimelineState &state,
-            const detail::TimelineControlBinding &binding,
-            double targetTime,
-            bool inclusiveEnd);
-        void applyTimelineControlFrameCrossingLike_0x67CD20(
-            const std::unordered_map<std::string, double> &prevTimes);
-        void setTimelineBlendLike_0x6735AC(
-            const std::string &label,
-            bool autoStop,
-            double value,
-            double transition,
-            double ease);
-        void accumulateTimelineContributionLike_0x67C560(
-            const std::string &label,
-            double &value);
-        void resetControllerStateLike_0x66EB8C();
-        void applyEvalResultPostProcessLike_0x67CC9C();
-        void applyClampControlsLike_0x67C8A8();
-        bool shouldMirrorEvalLabelLike_0x67C6B0(const std::string &label);
         double &ensureEvalResultSlotLike_0x686944(const std::string &label);
         void removeEvalResultSlotLike_Reset(const std::string &label);
         detail::MotionParameterEntry *appendParameterEntryLike_0x6B1718(
-            const std::shared_ptr<const PSB::PSBDictionary> &dic);
+            const tTJSVariant &parameter);
         bool parseParameterListLike_0x6B202C(
-            const std::shared_ptr<PSB::IPSBValue> &value);
+            const tTJSVariant &parameters);
         void finalizeParameterTableLike_0x6B1ECC();
         void purgeParameterRampMapLike_0x6CDE18();
         double initialParameterRawValueLike_0x6B1ABC(
-            const std::string &id) const;
+            const ttstr &id) const;
         void bindParameterValueLike_0x6C4668(const std::string &label,
                                              int mode,
                                              double value);
@@ -877,8 +789,6 @@ namespace motion {
                                             iTJSDispatch2 *targetLayerObject,
                                             tjs_int canvasWidth,
                                             tjs_int canvasHeight);
-        const detail::MotionClip *selectActiveClip() const;
-        const std::vector<std::string> &activeSourceCandidates() const;
         void calcBounds();
         void updateLayers();
         bool prepareRenderItems(bool inheritedFlag18 = false);
@@ -922,6 +832,13 @@ namespace motion {
         bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
         bool renderFromPlayerLike_0x6ADE24(D3DAdaptor *adaptor);
         bool renderItemsToD3DTextureLike_0x6ADFBC(D3DAdaptor *adaptor);
+        bool renderItemsToD3DTextureLike_0x6ADFBC(
+            iTVPTexture2D *targetTexture,
+            tjs_int width,
+            tjs_int height,
+            bool alphaOpAdd,
+            float xOffset,
+            float yOffset);
         // M1/P7 step-1: progress-pass cursor-stepping driver.
         // Aligned to libkrkr2.so Player_progress_inner (0x6C106C), the ONLY
         // caller of the advance/rewind/reseek cursor machine. In the binary the
@@ -933,7 +850,7 @@ namespace motion {
         // (advanceNodeFrameSelectionLike_0x6926B4, which already operates on the
         // live MotionNode::ClipSlot = the binary's node+320/+856 slots) out of
         // updateLayers and into the progress pass, restoring the binary's
-        // two-pass split. Forward-only for step-1; reverse rewind is a TODO.
+        // two-pass split. Both forward and reverse node walks are connected.
         // `forward` selects the non-parameterized node's single-direction inline
         // seek: true → forward inline (0x6B73DC, advanceRootAndNodes), false →
         // backward inline (0x6BA1CC, rewindRootAndNodes). Parameterized nodes
@@ -951,8 +868,8 @@ namespace motion {
         // Player_advanceRootAndNodes @0x6B6ADC — the FORWARD 4-stream walk
         // (layer → root → var-track → node-deque) the binary runs at each forward
         // advance point inside Player_progress_inner (0x6C106C @0x6C13D4 /
-        // 0x6C13F8 / 0x6C1468). Drives, in order: seekLayerEventStreamLike (①
-        // layer 0x6B6B8C), seekRootContentStreamLike (② root 0x6B6F48),
+        // 0x6C13F8 / 0x6C1468). Drives, in order: the forward layer stream (①
+        // 0x6B6B8C), forward root stream (② 0x6B6F48),
         // advanceVariableTracksLike (③ forward var-track 0x6B7124),
         // progressSeekNodeSlotsLike (④ node deque 0x6B7358, node+8 split →
         // advanceNodeFrames / inline forward seek). Each stream is keyed on the
@@ -961,9 +878,8 @@ namespace motion {
         // Player_rewindRootAndNodes @0x6B9A3C — the REVERSE counterpart the binary
         // runs at each reverse advance point inside Player_progress_inner
         // (0x6C117C / 0x6C138C / 0x6C1408). Same 4 streams reversed: layer
-        // (bidirectional seekLayerEventStreamLike self-selects backward 0x6B9AE8),
-        // root (seekRootContentStreamLike — ALSO bidirectional, self-selects backward
-        // via the reverse decrement loop 0x6B9E84; R-B1 closed),
+        // (dedicated decrement loop 0x6B9AE8), root (dedicated decrement loop
+        // 0x6B9E84),
         // rewindVariableTracksLike (③ reverse var-track 0x6B9FCC),
         // progressSeekNodeSlotsLike (④ node deque 0x6BA158). See PlayerFrameProgress.cpp.
         void rewindRootAndNodes_0x6B9A3C(double clampedEvalTime);
@@ -972,29 +888,28 @@ namespace motion {
         // rebuild. Inert in the web port (no modified-setter); ported for
         // call-chain restoration. See PlayerUpdateLayerEval.cpp.
         void preProgressDirtyNodesLike_0x6B6878();
-        // 砖5/洞3: faithful layer (motion["tag"]) event stream — bidirectional
-        // incremental cursor seek toward targetTime (= _clampedEvalTime), porting
-        // the layer-stream loops of Player_advanceRootAndNodes (0x6B6ADC) +
-        // Player_rewindRootAndNodes (0x6B9A3C): fires +1093(_syncActive)-gated
-        // align/sync (with frameTickCount/clampedEvalTime snapping) and ungated
-        // action -> onAction(void, actionName)/onSync(). Replaces the
-        // port-invented per-timeline scanLayerActions.
-        void seekLayerEventStreamLike_0x6B6ADC(double targetTime);
+        // Distinct Android forward/reverse layer-stream loops. They share the
+        // persistent +916/+920/+928 state but never select direction or reset
+        // from dispatch identity inside either function.
+        void advanceLayerEventStreamLike_0x6B6ADC(double targetTime);
+        void rewindLayerEventStreamLike_0x6B9A3C(double targetTime);
         // libkrkr2.so root content-snapshot stream ② (the 2nd of [layer → root →
         // var-track → node] inside Player_advanceRootAndNodes 0x6B6ADC, root loop
         // 0x6B6EE4..0x6B7124) PLUS its reverse counterpart in Player_rewindRootAndNodes
         // (0x6B9A3C, reverse loop 0x6B9E84). Bidirectional cursor seek over
         // motion["priority"] (Player+548): self-selects forward/backward from the
         // persistent cursor's curTime(+576) vs target(+456). On each crossed frame
-        // snapshots priority[cursor]["content"] into _rootContent (Player+616,
+        // snapshots priority[cursor]["content"] into _rootContentVariant (Player+616,
         // sub_A0FB64 variant copy). NO event gate / NO "type" read.
-        // curTime=_rootCurTime(+576), nextTime=_rootNextTime(+584).
-        // Inert for logo (priority is single-clip → count<2 → loop never runs).
-        void seekRootContentStreamLike_0x6B6ADC(double targetTime);
+        // curTime=_rootCurTime(+576), nextTime=_rootNextTime(+584). Forward and
+        // reverse remain distinct Android function bodies and do not self-reset.
+        void advanceRootContentStreamLike_0x6B6ADC(double targetTime);
+        void rewindRootContentStreamLike_0x6B9A3C(double targetTime);
         // libkrkr2.so var-track stream ③ (the 3rd of [layer → root → var-track →
         // node] inside Player_advanceRootAndNodes 0x6B6ADC). Advances each
         // VariableLabelScope's two 56B slots so they bracket clampedEvalTime, via
-        // the inlined step (sub_6B786C) + merge (sub_6B7A70). Inert for every
+        // Motion_VarTrackSlot_step_guess@0x6B786C +
+        // Motion_VarTrackSlot_merge_guess@0x6B7A70. Inert for every
         // currently-available motion (none expose a populated "variable" list).
         void advanceVariableTracksLike_0x6B6ADC(double clampedEvalTime);
         // libkrkr2.so var-track stream ③ REVERSE form — the backward-play
@@ -1050,8 +965,8 @@ namespace motion {
         // Player_resetMotionState_clearAndRebuild before its loop2 snapshots
         // item+16 → HM4. Per VariableLabelScope: HOLD or LERP between the
         // active(prev)/other(next) slot brackets, t interval-quantized + cubic-
-        // bezier eased (Player_applyBezierEasing @0x69A754). Currently unwired
-        // (the port has no resetMotionState yet); lands the value computation.
+        // bezier eased (Player_applyBezierEasing @0x69A754). Called from the
+        // reconstructed resetMotionState path below.
         void interpolateVarTrackValuesLike_0x6BBE20(double clampedEvalTime);
         // libkrkr2.so Player_resetMotionState_clearAndRebuild @0x6B2D3C, called
         // by playImpl when (flags & 8 == PlayFlagJoin). Body-gated on !_queuing
@@ -1062,27 +977,23 @@ namespace motion {
         // own update path, not in this reset.
         void resetMotionStateLike_0x6B2D3C();
         // libkrkr2.so Player_HM3_initValueFromNode @0x699510 — snapshots node /
-        // active-slot fields into a PerNodeLayerState (HM3 value). PARTIAL: only
-        // nodeType maps to an existing MotionNode member; the other ~24 fields
-        // read raw node byte offsets the port does not expose and are DEFERRED.
+        // active-slot fields into a PerNodeLayerState (HM3 value), including the
+        // active slot's src ttstr lifetime owner at value+44.
         // HM3 (_perNodeLayerStateMap) is consumed on the maintenance side by
         // pruneHM3ByNodeIdentityLike_0x6B826C, whose loop2 now restores the
         // snapshotted common scalar block back into matched-identity nodes' active
-        // ClipSlot (hm3RestoreValueToNodeLike_0x6997F0). The DEFERRED snapshot
-        // fields (contentMask/srcDispatch/type-3-4 child + particle interp) are
-        // correspondingly DEFERRED on the restore side, so the round-trip is
-        // partial-but-symmetric (snapshot reads X → restore writes X for the
-        // ported subset; the unported fields are neither read nor written).
+        // ClipSlot (hm3RestoreValueToNodeLike_0x6997F0). The native restore does
+        // not write value+44 src back: that copy is retained and released with
+        // the HM3 value, while scalar/type-3/type-4 payloads form the restore.
         void hm3InitValueFromNodeLike_0x699510(
             const detail::MotionNode &node, detail::PerNodeLayerState &v) const;
         // libkrkr2.so Player_HM3_restoreValueToNode @0x6997F0 — the reverse of
         // HM3_initValueFromNode: writes a PerNodeLayerState (HM3 value) back into
         // a node's active ClipSlot. Called by pruneHM3 loop2 (@0x6b857c) for each
         // node whose path-key HM3 entry survives AND whose joinTarget+nodeType
-        // match. PARTIAL: the common scalar block (slot+20..160 merged fields,
-        // gated `!slot.done && !V.doneFlag`) is ported; the type-3/4 child
-        // dispatch + type-4 particle interp + meshControlPoints restores are
-        // DEFERRED on the same snapshot-source gaps as hm3InitValueFromNodeLike.
+        // match. The common scalar block (slot+20..160 merged fields, gated
+        // `!slot.done && !V.doneFlag`) plus type-3/type-4 payloads is ported;
+        // value+44 src is deliberately lifetime-only, matching the native body.
         void hm3RestoreValueToNodeLike_0x6997F0(
             detail::MotionNode &node, const detail::PerNodeLayerState &v) const;
         // Motion_Player_findSource @0x6948E8. Reads the active clip slot's
@@ -1108,8 +1019,12 @@ namespace motion {
         // harness (tests/differential/wasmtime/motion_playback_wasmtime.cpp).
         // Previously the harness reached these via the dropped runtime()
         // accessor and `_runtime->X` chains; now it goes through Player.
-        [[nodiscard]] const std::shared_ptr<detail::MotionSnapshot> &
-        activeMotion() const { return _activeMotion; }
+        // Player+528/+544 and Player+1012 are the binary's sole loaded-content
+        // and matched-resource-key owners (0x6B2284, 0x6D5164, 0x6D5C68).
+        [[nodiscard]] bool hasMotionContent() const {
+            return _motionContentVariant.Type() != tvtVoid;
+        }
+        [[nodiscard]] std::string matchedMotionPath() const;
         [[nodiscard]] const std::deque<detail::MotionNode> &nodes() const {
             return _nodes;
         }
@@ -1193,8 +1108,6 @@ namespace motion {
         int _processedMeshVerticesNum = 0;
         bool _queuing = false;
         bool _directEdit = false;
-        bool _selectorEnabled = false;
-        tTJSVariant _variableKeys;
         bool _allplaying = false;
         bool _syncWaiting = false;
         // syncActive = player+1093 (script property `syncActive`, RO/RW getter
@@ -1209,14 +1122,18 @@ namespace motion {
         bool _hasCamera = false;
         bool _cameraActive = false;
         bool _stereovisionActive = false;
+        // Player_ctor @0x6CF118 initializes player+1104 from the first double
+        // of xmmword_14D7C80 (=0.2); Player_processCameraNode @0x6BDC08 copies
+        // camera node+2368 here while stereovision is active.
+        double _cameraFov = 0.2;
         // Emote direct-edit angle (player+464). Aligned with libkrkr2.so
         // Player_getAngleRad @0x6CD0C0: when _directEdit (player+482) is set the
         // angle source is *(double*)(player+464); otherwise it is the root node
         // angle (_nodes[0].delta.angle = node+1616). Written by the emote
         // direct-edit init path (PlayerUpdateChildMotion / PlayerUpdateParticles
-        // case at 0x6C0058 — "player+464 = emote angle", not yet wired in the
-        // web port, so this stays 0.0 until that path is ported). Read by the
-        // hair/parts + bust spring step (EmoteEngine_stepHairParts/stepBust).
+        // case at 0x6C0058), the angle setters, and type-1 play. Each writer
+        // routes through Player_initEmoteMotion@0x6B2E90. Read by the hair/parts
+        // + bust spring step (EmoteEngine_stepHairParts/stepBust).
         double _emoteAngle = 0.0;  // player+464
         // Camera angle for stereovision (a1+472, sub_6BDA28 at 0x6BDC50)
         double _cameraAngle = 0.0;
@@ -1256,17 +1173,23 @@ namespace motion {
         // WZR clear; no bit-level RMW). progress_inner @0x6C13F4/0x6C1384 STRB
         // WZR is "stop playing" semantics, not "disarm loop". Field merged.
         bool   _reverseSeekFlag = false; // player+609: one-shot reverse-seek request
+        // Player_initNonEmoteMotion @0x6B365C CopyRefs the raw frame-stream
+        // owners from Player+528 before any cursor is initialized: tag at
+        // +1072, priority at +548, then priority[0].content at +616.
+        tTJSVariant _tagFrameSourceVariant;       // player+1072
+        tTJSVariant _priorityFrameSourceVariant;  // player+548
+        tTJSVariant _rootContentVariant;          // player+616
         // --- 砖5/洞3: layer + root frame stream cursors (DECLARED ONLY) ---
         // The two player-level frame streams Player_advanceRootAndNodes
         // (0x6B6ADC) / Player_rewindRootAndNodes (0x6B9A3C) /
         // Player_reseekTimelineCursors (0x6B86C8) walk. Stream sources are
-        // _activeMotion->tagFrames (layer = motion["tag"], Player+1072) and the
-        // priority clip array (root = motion["priority"], Player+548); both
+        // _tagFrameSourceVariant (layer = motion["tag"], Player+1072) and
+        // _priorityFrameSourceVariant (root = motion["priority"], Player+548); both
         // assigned by Player_initNonEmoteMotion @0x6B3778/0x6B37D0. The layer
         // stream is the global onAction/onSync source (type==1 frames, gated by
         // the +1093 stop-gate); the root stream only snapshots content into
-        // _rootContent. NOT yet read by the live frameProgress path — that is
-        // the next (behavioral) commit, which replaces scanLayerActions.
+        // _rootContentVariant. All live forward/reverse/reseek cursor paths now
+        // consume these raw TJS owners directly.
         // See analysis/Player_progress_frame_stepping_M1_plan.md §8.
         int    _layerFrameCursor = 0;  // player+916
         double _layerCurTime = 0.0;    // player+920: tag[cursor].time
@@ -1274,19 +1197,6 @@ namespace motion {
         int    _rootFrameCursor = 0;   // player+568
         double _rootCurTime = 0.0;     // player+576: priority[cursor].time
         double _rootNextTime = 0.0;    // player+584: priority[cursor+1].time
-        std::shared_ptr<const PSB::PSBDictionary> _rootContent; // player+616
-        // 砖5/洞3: which tagFrames the layer cursor is currently valid for.
-        // When _activeMotion->tagFrames changes (motion (re)loaded), the cursor
-        // self-resets to 0 inside seekLayerEventStreamLike_0x6B6ADC. (The binary
-        // resets via Player_reseekTimelineCursors on the firstFrame seed; this
-        // pointer-identity guard reproduces that reset without coupling to the
-        // motion-load site.)
-        const void *_layerStreamSource = nullptr;
-        // 砖G2: which priorityFrames the root cursor is currently valid for.
-        // Same pointer-identity self-reset as _layerStreamSource (mirrors the
-        // binary's Player_reseekTimelineCursors firstFrame seed resetting +568,
-        // and the +616 = priority[0].content seed at 0x6B38FC).
-        const void *_rootStreamSource = nullptr;
         // === end M1 P1 ===
         tjs_int _maskMode = 0;                         // libkrkr2.so +1148
         std::uint32_t _colorWeightPacked = 0xFF808080u; // libkrkr2.so +1156
@@ -1309,10 +1219,16 @@ namespace motion {
         // getter sub_6D966C reads *(player+1176).
         double _outsideFactor = 1.0;
         tTJSVariant _resourceManager;
+        // Player pending slots +768/+776.  They are independent owners from
+        // the live +984/+968 stealth slots and are released immediately after
+        // Player_play/Player_setChara flush them.
+        ttstr _pendingStealthMotion;
+        ttstr _pendingStealthChara;
+        // Player live string slots: +968 and +984.  The public primary slots
+        // +960/+976 are `_chara`/`_motionKey` above.
         ttstr _stealthChara;
         ttstr _stealthMotion;
         tTJSVariant _tags;
-        tTJSVariant _project;
         ttstr _meshline;  // Aligned to libkrkr2.so +1052: ttstr
         bool _busy = false;
 
@@ -1353,23 +1269,28 @@ namespace motion {
         // last frame") and reads its width/height as the per-player source size.
         bool _internalRenderLayerReady = false;
 
-        // === Motion / source caching state (Phase A3) ===
-        // motionsByKey caches MotionSnapshot loads by motion key; activeMotion
-        // points at the currently-loaded snapshot. sourceCacheNative +
-        // sourceCacheObject form the libkrkr2.so Player+656 SourceCache pair
-        // (raw pointer for fast C++ access, TJS variant for script reach).
-        std::unordered_map<std::string, std::shared_ptr<detail::MotionSnapshot>>
-            _motionsByKey;
+        // === Motion / source state ===
+        // sourceCacheNative + sourceCacheObject form the libkrkr2.so
+        // Player+656 SourceCache pair (raw pointer for fast C++ access, TJS
+        // variant for script reach).
         // libkrkr2.so player+656: SourceCache object variant.
         SourceCache *_sourceCacheNative = nullptr;
         tTJSVariant _sourceCacheObject;
-        std::shared_ptr<detail::MotionSnapshot> _activeMotion;
-
-        // === Timeline state (Phase A4) ===
-        // Per-label timeline runtime + the list of labels currently playing
-        // (driven by Player_playTimeline / Player_stopTimeline @ 0x66E000 ish).
-        std::unordered_map<std::string, detail::TimelineState> _timelines;
-        std::vector<std::string> _playingTimelineLabels;
+        // libkrkr2.so player+528: the raw motion-content dispatch returned as
+        // ResourceManager_findMotion result[0]. Player_playImpl @0x6B2284
+        // CopyRefs that result into the Player before the emote/non-emote init
+        // branch; Player_initNonEmoteMotion @0x6B365C and its callees then read
+        // properties directly through this dispatch. There is deliberately no
+        // parallel decoded/snapshot loaded-state owner: Android gates on the
+        // +544 type tag and carries the matched resource key only in +1012.
+        // Player+484/+508 are independent tTJSVariant owners retained from a
+        // type==1 wrapper motion. +504 is deliberately not constructor-
+        // initialized in the binary; playImpl writes -1 before the first
+        // initEmoteMotion call.
+        tTJSVariant _emoteDivisionVariant;
+        int _emoteMotionIndex;
+        tTJSVariant _emoteMotionListVariant;
+        tTJSVariant _motionContentVariant;
 
         // === Render-layer state (Phase A5) ===
         // Web-only host adaptation: per-layer render snapshot used by the draw
@@ -1403,11 +1324,8 @@ namespace motion {
         bool _drawAffineMatrixNonIdentity = false;
 
         // === Extension fields (Phase A7) ===
-        // disabledSelectorTargets / pendingEvents are Web port extensions
-        // without libkrkr2.so equivalents (binary handles selector and
-        // event flow differently). The parameter system + activeClip +
-        // isEmoteMode map directly to binary state used by the eval loop.
-        std::unordered_map<std::string, bool> _disabledSelectorTargets;
+        // pendingEvents is a Web port extension without a libkrkr2.so
+        // equivalent (the binary handles selector and event flow differently).
         std::vector<detail::MotionEvent> _pendingEvents;
         std::vector<detail::MotionParameterEntry> _parameterEntries;
         // libkrkr2.so Player+408 std::multimap<ttstr id, MotionParameterEntry*>.
@@ -1423,10 +1341,6 @@ namespace motion {
         detail::MotionParameterEntry _defaultParameterEntry;
         detail::MotionParameterEntry *_defaultParameterEntryPtr = nullptr;
         int _defaultParameterEntryIndex = -1;
-        const detail::MotionClip *_activeClip = nullptr;
-        // Aligned to libkrkr2.so Player_playImpl (0x6B2284):
-        // PSB root "type" field: 0=non-emote (motion), 1=emote.
-        bool _isEmoteMode = false;
 
         // === Node tree + variable label storage (Phase A8) ===
         // _nodes: libkrkr2.so Player+184 (std::deque of MotionNode). Index 0
@@ -1562,9 +1476,9 @@ namespace motion {
         // functor is custom (ttstr UTF-16 hash). The local std::unordered_map
         // selection is ALREADY the aligned container — there is NO inline /
         // open-addressing "KiriKiri HM" to migrate to. Do not rewrite these as
-        // open-addressing maps. The only remaining container deviation is
-        // key-type (std::string vs ttstr) on the two maps still keyed by
-        // std::string; see _evalResultValues (HM2) and _nodeLabelMap.
+        // open-addressing maps. HM1..HM4 and the Player+24 raw-label index map
+        // now all use their binary-confirmed ttstr key type; the former
+        // std::string key mirrors have been removed.
         // HM1 (Player+264): cascaded PropGet result cache. Owns refcounts on
         // its embedded dispatch + chain via EvalCascadeState's destructor;
         // matches the binary's Player_HM1_value_destroy @0x6DD1A0 release
@@ -1584,16 +1498,11 @@ namespace motion {
         // PerNodeLayerState owns 8 ttstr + 5 dispatch + 2 heap slots released in
         // binary dtor order (Player_HM3_value_destroy @0x6DD06C).
         //
-        // DEFERRED (populate only — keying is already correct): the port has no
-        // resetMotionState equivalent and no caller for it, and the value-fill
-        // path Player_HM3_initValueFromNode @0x699510 is a 688-byte node→V
-        // snapshot that is itself unported. Wiring HM3 populate here would mean
-        // porting both functions wholesale, which is out of the node-tree
-        // keying scope and has no consumer yet, so this map stays empty. When
-        // resetMotionState is ported, build the key via
-        // detail::buildNodePathKeyLike_0x6B5C1C(_nodes, nodeIndex) — that path
-        // builder is HM3's own key generator (the Player+24 node-index map uses
-        // the raw label, a different key space).
+        // PORTED: resetMotionStateLike_0x6B2D3C rebuilds this map through
+        // hm3InitValueFromNodeLike_0x699510, and reseek pruning consumes it via
+        // pruneHM3ByNodeIdentityLike_0x6B826C. Keys come directly from
+        // detail::buildNodePathKeyLike_0x6B5C1C(_nodes, nodeIndex); the
+        // Player+24 node-index map remains a separate raw-label key space.
         detail::PerNodeLayerStateMap _perNodeLayerStateMap;
 
         // HM4 (Player+1240): ttstr -> double variable-snapshot cache.
@@ -1625,7 +1534,6 @@ namespace motion {
         std::unordered_map<std::string, std::list<EvalResultEntry>::iterator>
             _evalResultListIndex;
         bool _rootFlipX = false;
-        bool _mirrorEvalEnabled = false;
 
         // Parent color propagated from parent motion node (sub_6BE0C0 at 0x6BEB7C).
         // Binary: *(_DWORD *)(childPlayer + 1156) = *(_DWORD *)(node + 100)
@@ -1709,35 +1617,9 @@ namespace motion {
         // lifetime of the owning EmoteEngine.
         class EmoteEngine *_engineBack = nullptr;
         friend class EmoteEngine;
-        // A3: SourceCache holds a back-pointer to Player so it can reach the
-        // migrated _activeMotion (and PlayerRuntime via _runtime until later
-        // sub-steps migrate the rest).
+        // A3: SourceCache holds a back-pointer to Player so Web texture upload
+        // can reach the raw +528/+1012 Player owners.
         friend class SourceCache;
-
-        // A3: motion / source helpers in motion::internal:: access
-        // _motionsByKey / _activeMotion / _sourceCacheNative /
-        // _sourceCacheObject directly. Declared here so PlayerInternal.h's
-        // inline helpers can keep their non-member shape during the
-        // PlayerRuntime tear-down.
-        friend std::shared_ptr<detail::MotionSnapshot> internal::cacheMotion(
-            Player &, const std::string &, const std::string &,
-            const std::shared_ptr<detail::MotionSnapshot> &);
-        friend std::shared_ptr<detail::MotionSnapshot> internal::activateMotion(
-            Player &, const std::shared_ptr<detail::MotionSnapshot> &);
-        friend std::shared_ptr<detail::MotionSnapshot> internal::resolveMotion(
-            Player &, const ttstr &, const ResourceManager *);
-        friend std::vector<ttstr> internal::buildSourceCandidates(
-            const Player &, const ttstr &);
-        // A4: timeline helpers — read _timelines / _playingTimelineLabels.
-        friend std::vector<tTJSVariant> internal::timelineInfoVariants(
-            const Player &);
-        friend const detail::TimelineState *
-        internal::nthPlayingTimeline(const Player &, tjs_int);
-        // Defined in PlayerFrameProgress.cpp under motion::internal:: to
-        // keep its single-caller scope; granting friend access here lets
-        // it reach _timelines / _playingTimelineLabels.
-        friend double internal::activeClipTime(
-            const Player &, const detail::MotionClip *);
         // A7: parameter resolver needs _parameterEntries /
         // _defaultParameterEntry{,Ptr,Index}.
         friend detail::MotionParameterEntry *internal::resolveNodeParameterEntry(

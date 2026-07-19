@@ -18,7 +18,16 @@ metadata:
 
 **reseek merge 序列陷阱:** advance@0x6B7178/0x6B71A0 = merge(+48) 两次(gate +70/+126 均 slot[0]); reseek@0x6B8F30.. = step+merge 各作用 +48 与 +104 两 slot。勿把 reseek 按 advance 双-slot[0] 形态实现。advanceVariableTracks(PlayerFrameProgress.cpp:1127-1128)正确=两次merge slot[0]。
 
-**Open gaps:** G1 advance 路径漏接 var-track(与 Player 路径重复不一致); G2 rewind 反向 var-track 缺; G3 reseek var-track 双-slot 重播缺; G4 reseek 收尾 initNodeTimeline_guess(0x6B9228)/pruneHM3(0x6B9234)/+280 aux sub_6B9650(0x6B9248) 缺; G5 per-node mask&0x40000 action push sub_6B638C 缺(Stage A 盲区); G6 EmoteEngine bind 后处理 sub_67C560/67C6B0/bindParameterValue+sub_6687E8 stub; G7 Player+1296 var-track std::vector vs libstdc++ deque 选型偏离。
+**2026-07-18 收敛更正：** 下方 2026-06-03 `Open gaps` 是历史快照，不是当前状态。
+G1/G2/G3/G6/G7 均已关闭；特别是 EmoteEngine bind 后处理已实装
+`0x67C560` Engine HM3/+1040 timeline cascade、`0x67C6B0` raw mirror caches 和
+`Player_bindParameterValue@0x6C4668`，不得再称为 stub。G4/G5 的最新裁决见后续
+M1/HM3 memory，不从本条历史段落推导。
+
+**2026-07-19 再纠正：** 下文 2026-06-04 的 “Stage B 活路径仍用 advance-form
+代替 reseek-form” 已被后续实现证伪；live `reseekTimelineCursors@0x6B86C8` 已含
+layer/root/var-track/node/tail。增量层/root helper 也已按前进与后退函数边界拆成四个，
+不再是两个合并双向 helper。历史段落仅用于解释当时状态。
 
 边界行为均 ✅: fmin(dt,1.1) 物理cap 三处全保留; LABEL_48 gated clamp; loop-wrap do-while; depth-ramp 常量 0.03125/28.0/6.28318531 + chain 0.015625/4.0/0.0451603944/0.0392699082 逐一核对。
 

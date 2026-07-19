@@ -4,7 +4,7 @@ Authoritative source = libkrkr2.so (IDB libkrkr2.so.i64). Decompiled this sessio
 EmoteEngine_progress @0x530a5c(=0x67D01C body), EmoteEngine_applyVarControllers @0x6766E0,
 EmoteEngine_ctor @0x67E38C, EmoteEngine_dtor @0x67F4B8, EmoteEngine_stepHairParts @0x67B748,
 EmoteEngine_stepBust @0x67BCE8, EmoteObject_init @0x67DBAC, EmoteObject_destroy @0x67F420,
-ttstr_doubleMap_upsert @0x686944, VariantPtrVector_assign @0x67F0CC, EmoteObject_applyChara @0x67F370.
+ttstr_doubleMap_upsert @0x686944, ttstrVector_assign @0x67F0CC, EmoteObject_applyChara @0x67F370.
 
 NOTE on owner-list addresses: progress real address is 0x67D01C (0x530a5c is a thunk/alt-entry
 that tail-jumps into 0x67D01C; decompile of 0x530a5c yields the 0x67D01C body). EmoteObject_init
@@ -149,8 +149,11 @@ sub_67d4d0 are container/dispatch plumbing, classified non-logic (see neighbors 
 ================================================================================
 ## Prior P0-2 / P2-4 status (review 2026-05-30)
 ================================================================================
-- P0-2 (6 inline maps mis-modeled as raw byte blocks + _bindListHead pseudo-field): FIXED.
-  EmoteEngine.h now has 7 typed unordered_map + 4 typed VariantPtrVector; _bindListHead removed.
+- P0-2 (inline containers mis-modeled as raw byte blocks + _bindListHead pseudo-field): FIXED，
+  并于 2026-07-18 由 0x66F364/0x66F64C/0x66F80C/0x67C560 再纠正为
+  4 typed unordered_map + HM#1/HM#2/HM#4 三只 unordered_set<ttstr> +
+  4 vector<ttstr>；旧
+  “7 map + VariantPtrVector”判断已证伪。_bindListHead 仍正确删除。
   Carried forward only as P1-B4 (libc++/libstdc++ ABI boundary, accepted) + open value types.
 - P2-4 applyVarControllers order pos->color->scale->angle: FIXED (EmoteEngine.cpp:172-206).
 - P2-4 ctor reset order 134/135/137/136: FIXED (EmoteEngine.cpp:95-109).

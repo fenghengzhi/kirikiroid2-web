@@ -10,7 +10,7 @@ namespace PSB {
 
     class BaseImageType {
     public:
-        // virtual void link(PSBFile psb, FreeMountContext context,
+        // virtual void link(DecodedPSBFile psb, FreeMountContext context,
         // std::vector<std::string> resPaths, std::string baseDir = null,
         // PsbLinkOrderBy order = PsbLinkOrderBy.Convention)
         // {

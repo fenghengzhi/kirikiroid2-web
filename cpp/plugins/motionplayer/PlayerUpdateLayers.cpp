@@ -14,9 +14,7 @@ namespace motion {
         detail::motionTraceRecordUpdatePlayer(this);
         auto &nodes = _nodes;
         if (nodes.empty()) return;
-        const auto motionPath =
-            _activeMotion ? _activeMotion->path
-                                               : std::string{};
+        const auto motionPath = matchedMotionPath();
         const double currentTime = _clampedEvalTime;
 
         // Keep legacy diagnostic scratch in sync with node count. The native
@@ -30,7 +28,7 @@ namespace motion {
 
         updateLayersPhase1_PreLoop(currentTime);
         updateLayersPhase2_MainLoop(currentTime);
-        if(detail::logoChainTraceEnabled(_activeMotion)) {
+        if(detail::logoChainTraceEnabledForPath(motionPath)) {
             const auto &root = nodes[0];
             detail::logoChainTraceLogf(
                 motionPath, "updateLayers.phase1", "0x6BB33C", currentTime,
@@ -45,9 +43,9 @@ namespace motion {
                     detail::narrow(label), value);
             }
             for(const auto &node : nodes) {
-                const auto &ic = node.interpolatedCache;
                 const auto &ac = node.accumulated;
-                const auto &ls = node.localState;
+                const auto &ls = node.accumulated;
+                const auto &slot = node.activeSlot();
                 const bool hasParent = node.parentIndex >= 0
                     && node.parentIndex < static_cast<int>(nodes.size());
                 const auto &pc = hasParent ? nodes[node.parentIndex].accumulated
@@ -57,15 +55,19 @@ namespace motion {
                     currentTime,
                     "nodeIndex={} label={} type={} parent={} src={} inherit=0x{:x} indep={} interp[x={:.3f},y={:.3f},ox={:.3f},oy={:.3f},w={:.3f},h={:.3f},opacity={:.6f},angle={:.3f},scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),flip=({},{}) blend={}] local[pos=({:.3f},{:.3f},{:.3f}),angle={:.3f},scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),flip=({},{}) opacity={},blend={}] parentAccum[pos=({:.3f},{:.3f},{:.3f}),scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={},blend={}] accum[pos=({:.3f},{:.3f},{:.3f}),scale=({:.6f},{:.6f}),slant=({:.6f},{:.6f}),matrix=({:.6f},{:.6f},{:.6f},{:.6f}),opacity={},blend={},active={},visible={}]",
                     node.index,
-                    node.layerName.empty() ? std::string("<root>")
-                                           : node.layerName,
+                    node.layerName.IsEmpty() ? std::string("<root>")
+                                             : detail::narrow(node.layerName),
                     node.nodeType, node.parentIndex,
-                    ic.src.empty() ? std::string("<none>") : ic.src,
+                    node.activeSlot().srcValue.IsEmpty()
+                        ? std::string("<none>")
+                        : detail::narrow(node.activeSlot().srcValue),
                     node.inheritFlags,
                     _independentLayerInherit ? 1 : 0,
-                    ic.x, ic.y, ic.ox, ic.oy, ic.width, ic.height, ic.opacity,
-                    ic.angle, ic.scaleX, ic.scaleY, ic.slantX, ic.slantY,
-                    ic.flipX ? 1 : 0, ic.flipY ? 1 : 0, ic.blendMode,
+                    ls.posX, ls.posY, slot.ox, slot.oy,
+                    slot.width, slot.height,
+                    static_cast<double>(ls.opacity) / 255.0,
+                    ls.angle, ls.scaleX, ls.scaleY, ls.slantX, ls.slantY,
+                    ls.flipX ? 1 : 0, ls.flipY ? 1 : 0, slot.blendMode,
                     ls.posX, ls.posY, ls.posZ, ls.angle, ls.scaleX, ls.scaleY,
                     ls.slantX, ls.slantY, ls.flipX ? 1 : 0, ls.flipY ? 1 : 0,
                     ls.opacity, ls.blendMode,

@@ -2,75 +2,12 @@
 
 #include "EmoteBlinkController.h"
 #include "EmoteBlinkRng.h"
+#include "MotionDispatch.h"
 
 #include <cmath>
 #include <cstring> // std::memcpy for the raw-bits trackPow reinterpret
 
-#include "psbfile/PSBValue.h"
-
 namespace motion {
-
-    namespace {
-
-        // Helpers mirroring the binary's Motion_propGet* on a PSB dict/list.
-        // The binary calls iTJSDispatch2::PropGet/GetCount on the live TJS
-        // dispatch; locally the same data is a parsed PSB object. These extract
-        // the same scalar with the same default (0) when the key is absent.
-
-        int psbInt(const PSB::PSBDictionary* d, const char* key, int dflt = 0) {
-            if (!d) return dflt;
-            const auto v = (*d)[std::string(key)];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                return static_cast<int>(n->getLongValue());
-            }
-            return dflt;
-        }
-
-        double psbDouble(const PSB::PSBDictionary* d, const char* key,
-                         double dflt = 0.0) {
-            if (!d) return dflt;
-            const auto v = (*d)[std::string(key)];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                switch (n->numberType) {
-                    case PSB::PSBNumberType::Float:
-                        return n->getFloatValue();
-                    case PSB::PSBNumberType::Double:
-                        return n->getValue<double>();
-                    default:
-                        return static_cast<double>(n->getLongValue());
-                }
-            }
-            return dflt;
-        }
-
-        bool psbBool(const PSB::PSBDictionary* d, const char* key,
-                     bool dflt = false) {
-            if (!d) return dflt;
-            const auto v = (*d)[std::string(key)];
-            if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(v)) {
-                return b->value;
-            }
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                return n->getLongValue() != 0;
-            }
-            return dflt;
-        }
-
-        // sub_6637BC(arr, idx): reads element `idx` of a PSB array as an int.
-        // (The binary's sub_6637BC dispatches on the variant type and coerces to
-        //  i32; for PSB the element is a PSBNumber.)
-        int psbArrayInt(const PSB::PSBList* arr, int idx) {
-            if (!arr || idx < 0 || idx >= static_cast<int>(arr->size())) {
-                return 0;
-            }
-            const auto v = (*arr)[idx];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                return static_cast<int>(n->getLongValue());
-            }
-            return 0;
-        }
-
-    } // namespace
 
     // Aligned with libkrkr2.so EmoteBlinkController_ctor @ 0x662968.
     // Decompiled pseudocode (this conversation):
@@ -88,7 +25,7 @@ namespace motion {
     //   for each "edge" elem: edgeTable.push({(float)elem[0], (float)elem[1]});
     //   for each "node" elem: nodeRows.push(vector<float>{ (float)elem[i] ... });
     void EmoteBlinkController_ctor(EmoteBlinkController* self,
-                                   const PSB::PSBDictionary* dict) {
+                                   const tTJSVariant& dict) {
         // Embedded value-track deques default-construct empty (the binary's
         //   memset + EmoteAngleController_ctor_12Bdeque / sub_6827A8 / sub_6828FC
         //   leave them empty; std::deque/std::vector default ctors replicate this
@@ -97,16 +34,22 @@ namespace motion {
         EmoteAngleController_ctor(&self->valueTrack12B, 0); // 0x6629b8
 
         // Blink scalar fields.
-        self->beginFrame = psbInt(dict, "beginFrame");          // +328
-        self->endFrame   = psbInt(dict, "endFrame");            // +332
+        self->beginFrame = detail::motionPropGetInt(
+            dict, TJS_W("beginFrame"));                          // +328
+        self->endFrame = detail::motionPropGetInt(
+            dict, TJS_W("endFrame"));                            // +332
         self->blinkIntervalMin =
-            static_cast<float>(psbDouble(dict, "blinkIntervalMin")); // +340
+            static_cast<float>(detail::motionPropGetDouble(
+                dict, TJS_W("blinkIntervalMin")));               // +340
         self->blinkIntervalMax =
-            static_cast<float>(psbDouble(dict, "blinkIntervalMax")); // +344
+            static_cast<float>(detail::motionPropGetDouble(
+                dict, TJS_W("blinkIntervalMax")));               // +344
         self->blinkFrameCount =
-            static_cast<float>(psbDouble(dict, "blinkFrameCount"));  // +348
+            static_cast<float>(detail::motionPropGetDouble(
+                dict, TJS_W("blinkFrameCount")));                // +348
         self->blinkEnabled =
-            psbBool(dict, "blinkEnabled") ? 1u : 0u;            // +360 (v9 & 1)
+            detail::motionPropGetBool(dict, TJS_W("blinkEnabled"))
+                ? 1u : 0u;                                      // +360 (v9 & 1)
 
         const float v10 = self->blinkIntervalMin; // *((float*)v3+85)
         const float v11 = self->blinkIntervalMax; // *((float*)v3+86)
@@ -120,45 +63,35 @@ namespace motion {
         self->blinkTimer = v10 + (v11 - v10) * rnd;   // *((float*)v3+88)  (+352)
 
         // "edge" array -> edgeTable of {x,y} pairs (each elem a 2-int sub-array).
-        const PSB::PSBList* edge = nullptr;
-        if (dict) {
-            edge = dynamic_cast<const PSB::PSBList*>(
-                (*dict)[std::string("edge")].get());
-        }
-        if (edge) {
-            const int count = static_cast<int>(edge->size()); // Motion_propGetCount
-            self->mesh.edgeTable.reserve(static_cast<size_t>(count));
-            for (int i = 0; i < count; ++i) {
-                const auto sub = dynamic_cast<const PSB::PSBList*>(
-                    (*edge)[i].get());
-                const int x = psbArrayInt(sub, 0); // sub_6637BC(elem,0)
-                const int y = psbArrayInt(sub, 1); // sub_6637BC(elem,1)
-                self->mesh.edgeTable.emplace_back(static_cast<float>(x),
-                                                  static_cast<float>(y));
-            }
+        const tTJSVariant edge = detail::motionPropGet(
+            dict, TJS_W("edge"));                               // 0x662bc4
+        const int edgeCount = detail::motionPropGetCount(edge); // 0x662c30
+        self->mesh.edgeTable.reserve(static_cast<size_t>(edgeCount));
+        for (int i = 0; i < edgeCount; ++i) {
+            const tTJSVariant pair = detail::motionPropGetByNum(edge, i);
+            const int x = detail::motionPropGetIntByNum(pair, 0); // 0x662d5c
+            const int y = detail::motionPropGetIntByNum(pair, 1); // 0x662d70
+            self->mesh.edgeTable.emplace_back(static_cast<float>(x),
+                                              static_cast<float>(y));
         }
 
         // "node" array -> nodeRows: each elem is a sub-array; push a row of its
         //   int->float values (the binary builds a vector<float> per node into
         //   the 504-block deque @+184).
-        const PSB::PSBList* node = nullptr;
-        if (dict) {
-            node = dynamic_cast<const PSB::PSBList*>(
-                (*dict)[std::string("node")].get());
-        }
-        if (node) {
-            const int nodeCount = static_cast<int>(node->size());
-            for (int i = 0; i < nodeCount; ++i) {
-                const auto sub = dynamic_cast<const PSB::PSBList*>(
-                    (*node)[i].get());
-                std::vector<float> row;
-                const int rowCount = sub ? static_cast<int>(sub->size()) : 0;
-                row.reserve(static_cast<size_t>(rowCount));
-                for (int j = 0; j < rowCount; ++j) {
-                    row.push_back(static_cast<float>(psbArrayInt(sub, j)));
-                }
-                self->mesh.nodeRows.push_back(std::move(row));
+        const tTJSVariant node = detail::motionPropGet(
+            dict, TJS_W("node"));                               // 0x662eb4
+        const int nodeCount = detail::motionPropGetCount(node); // 0x662f20
+        for (int i = 0; i < nodeCount; ++i) {
+            const tTJSVariant sourceRow =
+                detail::motionPropGetByNum(node, i);             // 0x662f60
+            std::vector<float> row;
+            const int rowCount = detail::motionPropGetCount(sourceRow);
+            row.reserve(static_cast<size_t>(rowCount));
+            for (int j = 0; j < rowCount; ++j) {
+                row.push_back(static_cast<float>(
+                    detail::motionPropGetIntByNum(sourceRow, j)));// 0x66310c
             }
+            self->mesh.nodeRows.push_back(std::move(row));
         }
     }
 
@@ -388,6 +321,25 @@ namespace motion {
             }
         }
         *out = v43; // *a2 = v43
+    }
+
+    // sub_663AA0 @0x663AA0.
+    void EmoteBlinkController_resetLike_0x663AA0(
+        EmoteBlinkController* self) {
+        if(!self->valueTrack12B.queue.empty()) {
+            self->trackState = 0;
+            self->trackValue = self->valueTrack12B.queue.back().endRad;
+            self->valueTrack12B.queue.clear();
+            self->valueTrack8B.clear();
+            return;
+        }
+        if(self->trackState != 0) {
+            self->trackState = 0;
+            self->trackValue = self->valueTrack8B.empty()
+                ? self->trackTarget
+                : self->valueTrack8B.back().first;
+            self->valueTrack8B.clear();
+        }
     }
 
 } // namespace motion

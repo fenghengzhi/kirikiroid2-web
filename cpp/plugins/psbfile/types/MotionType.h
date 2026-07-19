@@ -14,9 +14,9 @@ namespace PSB {
 
         PSBType getPSBType() override { return PSBType::Motion; }
 
-        bool isThisType(const PSBFile &psb) override;
+        bool isThisType(const DecodedPSBFile &psb) override;
 
         std::vector<std::unique_ptr<IResourceMetadata>>
-        collectResources(const PSBFile &psb, bool deDuplication) override;
+        collectResources(const DecodedPSBFile &psb, bool deDuplication) override;
     };
 }; // namespace PSB

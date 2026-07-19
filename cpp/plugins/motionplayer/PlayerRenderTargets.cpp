@@ -63,13 +63,13 @@ namespace motion {
         }
 
         std::vector<tTVPPointD> tessellateBezierPatch(
-            const std::vector<float> &controlPoints,
+            const std::vector<detail::MeshPoint> &controlPoints,
             int divx,
             int divy,
             double xOffset,
             double yOffset) {
             std::vector<tTVPPointD> out;
-            if(controlPoints.size() < 32u || divx < 2 || divy < 2) {
+            if(controlPoints.size() < 16u || divx < 2 || divy < 2) {
                 return out;
             }
             const auto cubicBlend = [](double p0, double p1, double p2,
@@ -81,13 +81,13 @@ namespace motion {
             const auto samplePatch = [&](double u, double v) {
                 tTVPPointD curve[4];
                 for(int row = 0; row < 4; ++row) {
-                    const size_t base = static_cast<size_t>(row) * 8u;
+                    const size_t base = static_cast<size_t>(row) * 4u;
                     curve[row].x = cubicBlend(
-                        controlPoints[base + 0], controlPoints[base + 2],
-                        controlPoints[base + 4], controlPoints[base + 6], u);
+                        controlPoints[base + 0].x, controlPoints[base + 1].x,
+                        controlPoints[base + 2].x, controlPoints[base + 3].x, u);
                     curve[row].y = cubicBlend(
-                        controlPoints[base + 1], controlPoints[base + 3],
-                        controlPoints[base + 5], controlPoints[base + 7], u);
+                        controlPoints[base + 0].y, controlPoints[base + 1].y,
+                        controlPoints[base + 2].y, controlPoints[base + 3].y, u);
                 }
                 return tTVPPointD{
                     cubicBlend(curve[0].x, curve[1].x, curve[2].x,
@@ -110,13 +110,13 @@ namespace motion {
         }
 
         std::vector<tTVPPointD> buildOffsetMeshPoints(
-            const std::vector<float> &points,
+            const std::vector<detail::MeshPoint> &points,
             double xOffset,
             double yOffset) {
             std::vector<tTVPPointD> out;
-            out.reserve(points.size() / 2u);
-            for(size_t i = 0; i + 1 < points.size(); i += 2) {
-                out.push_back({points[i] + xOffset, points[i + 1] + yOffset});
+            out.reserve(points.size());
+            for(const auto &point : points) {
+                out.push_back({point.x + xOffset, point.y + yOffset});
             }
             return out;
         }
@@ -156,10 +156,9 @@ namespace motion {
                 return;
             }
 
-            queueItem.points.reserve(item.meshPoints.size() / 2u);
-            for(size_t i = 0; i + 1 < item.meshPoints.size(); i += 2) {
-                queueItem.points.push_back(
-                    { item.meshPoints[i], item.meshPoints[i + 1] });
+            queueItem.points.reserve(item.meshPoints.size());
+            for(const auto &point : item.meshPoints) {
+                queueItem.points.push_back({point.x, point.y});
             }
         }
 
@@ -492,8 +491,11 @@ namespace motion {
                               iTVPTexture2D *target,
                               const tTVPRect &targetRect,
                               const PreparedRenderItem &item,
-                              iTVPTexture2D *sourceTexture) {
-            auto dst = makeAffineTargetQuad(item, 0.5, 0.5);
+                              iTVPTexture2D *sourceTexture,
+                              double xOffset,
+                              double yOffset) {
+            auto dst = makeAffineTargetQuad(
+                item, xOffset + 0.5, yOffset + 0.5);
             auto src = makeTextureQuad(sourceRectForItem(item, sourceTexture));
             tRenderTexQuadArray::Element srcTex[] = {
                 tRenderTexQuadArray::Element(sourceTexture, src.data())
@@ -621,9 +623,7 @@ namespace motion {
         int &canvasHeight) {
         canvasWidth = 0;
         canvasHeight = 0;
-        const auto motionPath =
-            _activeMotion ? _activeMotion->path
-                                               : std::string{};
+        const auto motionPath = matchedMotionPath();
         auto traceResolveFailure = [&](const char *reason,
                                        const tTJSVariant &target,
                                        iTJSDispatch2 *targetLayerObject) {
@@ -700,9 +700,7 @@ namespace motion {
         }
 
         clearPrivateMotionGLLRenderQueueLike_0x6DE738(renderTargetObject);
-        const auto motionPath =
-            _activeMotion ? _activeMotion->path
-                                               : std::string{};
+        const auto motionPath = matchedMotionPath();
         detail::logoChainTraceLogf(
             motionPath, "sla.renderMotionFrame", "0x6DE738",
             _clampedEvalTime,
@@ -765,11 +763,11 @@ namespace motion {
         tjs_int canvasHeight) {
         if(!sla || !slaObject || !targetLayerObject ||
            canvasWidth <= 0 || canvasHeight <= 0 ||
-           !_activeMotion || !_sourceCacheNative) {
+           !hasMotionContent() || !_sourceCacheNative) {
             return false;
         }
 
-        const auto motionPath = _activeMotion->path;
+        const auto motionPath = matchedMotionPath();
 
         buildRenderCommands(canvasWidth, canvasHeight);
 
@@ -967,8 +965,8 @@ namespace motion {
         struct Guard { ~Guard() { s_inRenderToD3D = false; } } guard;
 
         ensureMotionLoaded();
-        if(!_activeMotion) return false;
-        const auto motionPath = _activeMotion->path;
+        if(!hasMotionContent()) return false;
+        const auto motionPath = matchedMotionPath();
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d", "0x6D5B90", _clampedEvalTime,
             "adaptorSize={}x{} route=D3DAdaptor_renderFromPlayer",
@@ -977,6 +975,28 @@ namespace motion {
         prepareRenderItems();
         applyPreparedRenderItemTranslateOffsets();
         return renderFromPlayerLike_0x6ADE24(adaptor);
+    }
+
+    // Player_drawToTexture @0x6D5C68. Unlike the script-facing drawCompat
+    // route, D3DImage supplies the compositor's current native texture and the
+    // transformed origin directly; no TJS Layer or D3DAdaptor is constructed.
+    bool Player::drawToD3DImageLike_0x6D5C68(iTVPTexture2D *target,
+                                              float x,
+                                              float y) {
+        if(!target) {
+            return false;
+        }
+        ensureMotionLoaded();
+        if(!hasMotionContent()) {
+            return false;
+        }
+        if(!prepareRenderItems()) {
+            return false;
+        }
+        applyPreparedRenderItemTranslateOffsets();
+        return renderItemsToD3DTextureLike_0x6ADFBC(
+            target, static_cast<tjs_int>(target->GetWidth()),
+            static_cast<tjs_int>(target->GetHeight()), false, x, y);
     }
 
     bool Player::renderFromPlayerLike_0x6ADE24(D3DAdaptor *adaptor) {
@@ -998,7 +1018,7 @@ namespace motion {
     }
 
     bool Player::renderItemsToD3DTextureLike_0x6ADFBC(D3DAdaptor *adaptor) {
-        if(!adaptor || !_activeMotion ||
+        if(!adaptor || !hasMotionContent() ||
            !_sourceCacheNative) {
             return false;
         }
@@ -1007,8 +1027,23 @@ namespace motion {
             return false;
         }
 
-        const int width = adaptor->getWidth();
-        const int height = adaptor->getHeight();
+        return renderItemsToD3DTextureLike_0x6ADFBC(
+            targetTexture, adaptor->getWidth(), adaptor->getHeight(),
+            adaptor->getAlphaOpAdd(), 0.0f, 0.0f);
+    }
+
+    bool Player::renderItemsToD3DTextureLike_0x6ADFBC(
+        iTVPTexture2D *targetTexture,
+        tjs_int width,
+        tjs_int height,
+        bool alphaOpAdd,
+        float xOffset,
+        float yOffset) {
+        if(!targetTexture || !hasMotionContent() || !_sourceCacheNative ||
+           width <= 0 || height <= 0) {
+            return false;
+        }
+
         const tTVPRect targetRect(0, 0, width, height);
         buildRenderCommands(width, height);
 
@@ -1026,7 +1061,7 @@ namespace motion {
             ~StencilGuard() { endD3DStencilIfNeeded(enabled); }
         } stencilGuard{ stencilEnabled };
 
-        const auto motionPath = _activeMotion->path;
+        const auto motionPath = matchedMotionPath();
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d.renderItemsToTexture", "0x6ADFBC",
             _clampedEvalTime,
@@ -1066,7 +1101,7 @@ namespace motion {
             auto *method = selectD3DRenderMethod(
                 item.blendMode & 0xF,
                 d3dPackedColorWithOpacity(item, opacity),
-                adaptor->getAlphaOpAdd(),
+                alphaOpAdd,
                 item.stencilMaskRef != 0,
                 opacity);
             if(!method) {
@@ -1075,16 +1110,18 @@ namespace motion {
 
             if(item.meshType == 0) {
                 operateD3DAffine(method, targetTexture, targetRect, item,
-                                 sourceTexture);
+                                 sourceTexture, xOffset, yOffset);
             } else if(item.meshType == 1) {
                 const auto meshPoints =
                     tessellateBezierPatch(item.meshPoints, item.meshDivX,
-                                          item.meshDivY, 0.5, 0.5);
+                                          item.meshDivY, xOffset + 0.5,
+                                          yOffset + 0.5);
                 operateD3DMesh(method, targetTexture, targetRect, item,
                                sourceTexture, meshPoints);
             } else if(item.meshType == 2) {
                 const auto meshPoints =
-                    buildOffsetMeshPoints(item.meshPoints, 0.5, 0.5);
+                    buildOffsetMeshPoints(item.meshPoints, xOffset + 0.5,
+                                          yOffset + 0.5);
                 operateD3DMesh(method, targetTexture, targetRect, item,
                                sourceTexture, meshPoints);
             }
@@ -1100,10 +1137,10 @@ namespace motion {
         }
 
         ensureMotionLoaded();
-        if(!_activeMotion) {
+        if(!hasMotionContent()) {
             return false;
         }
-        const auto motionPath = _activeMotion->path;
+        const auto motionPath = matchedMotionPath();
 
         iTJSDispatch2 *resolvedLayerObject = tryResolveLayerDispatch(*target);
         if(!resolvedLayerObject && target->Type() == tvtObject) {
@@ -1129,11 +1166,7 @@ namespace motion {
 
         int canvasWidth = 0;
         int canvasHeight = 0;
-        if(!queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight) &&
-           _activeMotion) {
-            canvasWidth = static_cast<int>(_activeMotion->width);
-            canvasHeight = static_cast<int>(_activeMotion->height);
-        }
+        queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight);
         if(canvasWidth <= 0 || canvasHeight <= 0) {
             return false;
         }
@@ -1191,10 +1224,10 @@ namespace motion {
         }
 
         ensureMotionLoaded();
-        if(!_activeMotion) {
+        if(!hasMotionContent()) {
             return false;
         }
-        const auto motionPath = _activeMotion->path;
+        const auto motionPath = matchedMotionPath();
 
         tTJSVariant target(layerObject, layerObject);
         iTJSDispatch2 *resolvedLayerObject = layerObject;
@@ -1204,11 +1237,7 @@ namespace motion {
 
         int canvasWidth = 0;
         int canvasHeight = 0;
-        if(!queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight) &&
-            _activeMotion) {
-            canvasWidth = static_cast<int>(_activeMotion->width);
-            canvasHeight = static_cast<int>(_activeMotion->height);
-        }
+        queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight);
         if(canvasWidth <= 0 || canvasHeight <= 0) {
             return false;
         }
@@ -1276,10 +1305,10 @@ namespace motion {
             tryResolveLayerDispatch(sla->getOwnerVariant());
 
         ensureMotionLoaded();
-        if(!_activeMotion) {
+        if(!hasMotionContent()) {
             return false;
         }
-        const auto motionPath = _activeMotion->path;
+        const auto motionPath = matchedMotionPath();
 
         int canvasWidth = 0;
         int canvasHeight = 0;
@@ -1480,9 +1509,7 @@ namespace motion {
         if(!_needsInternalAssignImages) {
             return true;
         }
-        const auto motionPath =
-            _activeMotion ? _activeMotion->path
-                                               : std::string{};
+        const auto motionPath = matchedMotionPath();
 
         _needsInternalAssignImages = false;
         if(!target) {
@@ -1542,9 +1569,7 @@ namespace motion {
         if(!targetLayerObject) {
             return false;
         }
-        const auto motionPath =
-            _activeMotion ? _activeMotion->path
-                                               : std::string{};
+        const auto motionPath = matchedMotionPath();
 
         if(!_needsInternalAssignImages) {
             detail::logoChainTraceLogf(

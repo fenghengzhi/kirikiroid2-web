@@ -48,7 +48,7 @@ D3DEmotePlayer { _rm; _primaryObj; _secondaryObj; 壳字段 }  ✅ 双槽对齐
 
 ### Gap2 EmoteObject 层偏差
 
-1. ~~**EmoteObject 缺 ResourceManager* 字段(+0)**~~ **已修复(P3-B 2026-06-05)**。EmotePlayer.cpp:32-33 `EmoteObject::EmoteObject(ResourceManager rm) : _rm(std::move(rm))` 成员持有 RM(_rm, shared_ptr<State>); EmotePlayer.h:89 新增 `tTJSVariant _rmDispatch` 持 RM dispatch facade。EmoteObject 现在是 RM owner(对齐 binary +0)。
+1. ~~**EmoteObject 缺 ResourceManager* 字段(+0)**~~ **已修复并于 2026-07-18 纠正所有权机制**。此前的 by-value `ResourceManager` + `shared_ptr<State>` 与另建 adaptor RM 是两个 C++ 对象，不符合 `0x67DBAC/0x67F420`。本地现由 EmoteObject 构造体内 `new ResourceManager`，sticky dispatch 指向该同一对象，析构显式 delete。
 
 2. ~~EmoteObject 单 module / 错误 variant-vector~~ **已修复(2026-07-13)**。`0x52FDD4` 对全部参数先 variant→ttstr，`0x67DBAC` 把每项交给 `ResourceManager_loadResource`，`0x67F0CC` 只操作字符串 handle refcount。本地现为 `vector<ttstr> _modulePaths`，raw callback 保留全部参数，EmoteObject 构造期顺序加载并用最后结果初始化 Player。
 
@@ -56,7 +56,7 @@ D3DEmotePlayer { _rm; _primaryObj; _secondaryObj; 壳字段 }  ✅ 双槽对齐
 
 - D3DEmotePlayer 双 EmoteObject 槽(_primaryObj@+24 / _secondaryObj@+32) ✅, 次槽恒 null ✅
 - EmoteObject._engine 裸指针 + 手动 new/delete ✅ (CLAUDE.md 规则)
-- 析构序 EmoteObject::~ = delete _engine (本地无 RM/vector 故只一步; 二进制三步)
+- 析构序 EmoteObject::~ = delete engine -> clear sticky facade -> delete RM；随后 vector 析构 ✅
 
 ## getVariable ↔ setVariable 桥(Gap1, 与 Gap2 解耦)
 
@@ -66,7 +66,10 @@ D3DEmotePlayer { _rm; _primaryObj; _secondaryObj; 壳字段 }  ✅ 双槽对齐
   - `sub_67C560(engine, &i.key, &i.value)` = var-track 加权级联(读 deque#10@+1040 的 sub_68C134 节点, 累加 `value += elem[48]*node[72]`)
   - `v68 = sub_67C6B0(engine, &i.key)` = negate-flag resolver(查 HM@+824, 未命中查 HM@+880, 再 indexOf 扫 vector@+800; 命中插入对应表返回 1=negate)
   - `Player_bindParameterValue_writesHM1_HM2(*(engine+1064), &i.key, 0, negate?-value:value)` ← 把 EmoteEngine HM7 的物理输出写回 **Player** HM1/HM2, 使 getVariable 能读到
-- **本地状态**: bind-loop 是 stub(EmoteEngine.cpp:1927 空遍历 `_labelToValueHM7`)。getVariable↔setVariable 当前靠 D3DEmotePlayer::setVariable **双写**(同时调 engine().setVariable + player().setVariable, EmotePlayer.cpp:342-343)保持 round-trip。这是 PORT FORK shim, 移除前提 = 实装 sub_67C560/67C6B0/Player_bindParameterValue 三函数 + bind-loop。
+- **2026-07-18 本地状态更正**: bind-loop 已实装；`sub_67C560` 使用 Engine
+  HM3/+1040/56B track deque，`sub_67C6B0` 使用 Engine mirror vector/set caches，并调
+  `Player_bindParameterValue@0x6C4668`。旧 D3DEmotePlayer 双写 shim 已移除，本段的
+  “stub/移除阻塞”结论已被证伪。
 
 ## 1456 字段真相(纠正既有误判)
 
@@ -79,8 +82,8 @@ RM 全程是 **dispatch 持有 + nativeRM() 经 +8 解出唯一 native** 模型(
 - **ctor 单参对齐**: Player_ctor@0x6CED30 头 `(this, resourceManager_dispatch)` 单参; 同 dispatch 经 sub_A0F5E0 写 +636/+656/+992 三槽(0x6cee9c/0x6ceeb0/0x6cef28)。本地 `Player(const tTJSVariant&)`(PlayerCore.cpp:100) + NCB_CONSTRUCTOR((tTJSVariant))(main.cpp:144) 单 variant 代三槽(同指针)。+992 ctor 里既存 RM dispatch 又随后被 Math.RandomGenerator 覆写→本地拆 _resourceManager + _tjsRandomGenerator 双字段(生命周期独立, 可接受)。
 - **nativeRM() = binary findSource +8 unpack**: findSource@0x694928 = +636 dispatch PropGet→NCB instance→`*(+8)`=native。本地 nativeRM()(PlayerCore.cpp:144) = AsObjectNoAddRef → ncbInstanceAdaptor<RM>::GetNativeInstance(ncbind.hpp:171 返回 adaptor->_instance = +8 native)。忠实等价。
 - **child 继承**: Player_initNodeFields case3 @0x6b43cc `Player_ctor(child, parent+992)` + @0x6b43dc `*(child+8)=parent`(两步: ctor 单参 + 构造后设 parent)。本地 NodeTree.cpp:254/PlayerUpdateParticles.cpp:450 `new Player(getResourceManager())` + setParentPlayerLike_0x6B1ABC。3 条 child 路径全设 parent, 无漏。
-- **EmoteObject ctor refcount**: CreateAdaptor(new RM(_rm)) → dispatch 持 state-shared copy; _rm + dispatch 共享 State(shared_ptr), 无双释放/泄漏。
-- **EmoteObject dtor 序**: binary EmoteObject_destroy@0x67F420 实测 = engine(a1[1], sub_67F4B8+delete) → RM(a1[0], sub_6A8B94+delete) → vector(a1[2..3])。本地 EmotePlayer.cpp 显式 delete _engine；`_modulePaths` 的 ttstr 元素由容器析构释放。RM 仍为本地 value/shared-state 适配，精确的 RM-before-vector 析构顺序仍是结构差距。
+- **EmoteObject ctor refcount（2026-07-18 纠正）**: `CreateAdaptor(_rm, true)` 与 `sub_67E20C(rm,1,0)` 一样令 sticky adaptor 指向 EmoteObject 唯一拥有的 RM，不再创建 state-shared 副本。
+- **EmoteObject dtor 序**: binary `0x67F420` = engine → RM → vector；本地先 delete engine、清 sticky facade、delete RM，函数体结束后 vector 析构，顺序已闭合。
 - **EmoteEngine dtor**: delete _player **最后**(EmoteEngine.cpp:243, _engineBack 反指针要求 engine 其他字段先死)。
 
 **残留**(非本轮): +656 渲染槽 bufLayer 本地未实装(defer); findMotion/loadMotion 未迁 +992 FuncCall(defer); EmoteEngine 4 variant-vector dtor 缺 per-element Release(当前 inert, vector 恒空, TODO@EmoteEngine.cpp:129)。

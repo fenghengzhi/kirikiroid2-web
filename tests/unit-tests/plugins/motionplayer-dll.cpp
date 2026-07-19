@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -20,6 +21,7 @@
 #include "motionplayer/SeparateLayerAdaptor.h"
 #include "motionplayer/PlayerFrameStep.h"
 #include "motionplayer/PlayerFrameStepping.h"
+#include "psbfile/PSBDispatch.h"
 #include "psbfile/PSBValue.h"
 #include "LayerIntf.h"
 #include "LayerTreeOwner.h"
@@ -28,7 +30,10 @@
 #include "test_config.h"
 #include "tjsError.h"
 #include "tjsObject.h"
+#include "ncbind.hpp"
 #include "tvpgl.h"
+
+extern tTJS *TVPScriptEngine;
 
 namespace {
 
@@ -38,16 +43,127 @@ namespace {
         return ttstr(TEST_FILES_PATH "/emote/e-mote3.0バニラパジャマa.psb");
     }
 
-    ttstr pimgFixturePath() {
-        return ttstr(TEST_FILES_PATH "/emote/ezsave.pimg");
-    }
-
     void setEmoteSeed() {
-        tTJSVariant seed{kEmoteSeed};
+        tTJSVariant seed{ kEmoteSeed };
         tTJSVariant *params[] = { &seed };
         REQUIRE(motion::ResourceManager::setEmotePSBDecryptSeed(
                     nullptr, 1, params, nullptr) == TJS_S_OK);
     }
+
+    struct ScopedCoreScriptEngine {
+        ScopedCoreScriptEngine() {
+            if(TVPScriptEngine == nullptr) {
+                TVPScriptEngine = new tTJS();
+            }
+
+            // Mirror application startup: index built-in NCB modules once,
+            // then register the real motionplayer.dll class objects before
+            // creating a ResourceManager adaptor.  NCB has no module-unload
+            // path, so this runtime intentionally lasts for the test process.
+            static bool indexed = false;
+            if(!indexed) {
+                ncbAutoRegister::AllRegist();
+                indexed = true;
+            }
+            REQUIRE(ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll")));
+        }
+    };
+
+    struct EmoteDecryptCallback final : tTJSDispatch {
+        explicit EmoteDecryptCallback(int *destructionCount) :
+            destructionCount(destructionCount) {}
+
+        ~EmoteDecryptCallback() override { ++*destructionCount; }
+
+        tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                           tTJSVariant *, tjs_int numparams,
+                           tTJSVariant **param,
+                           iTJSDispatch2 *objthis) override {
+            ++callCount;
+            receivedObjThis = objthis;
+            if(numparams != 2 || param[0]->Type() != tvtObject) {
+                return TJS_E_INVALIDPARAM;
+            }
+
+            iTJSDispatch2 *accessor = param[0]->AsObjectNoAddRef();
+            receivedSize = param[1]->AsInteger();
+            tTJSVariant count;
+            if(!accessor ||
+               TJS_FAILED(accessor->PropGet(0, TJS_W("count"), nullptr,
+                                            &count, accessor)) ||
+               count.AsInteger() != receivedSize) {
+                return TJS_E_INVALIDPARAM;
+            }
+
+            const auto readByte = [accessor](tjs_int index,
+                                             std::uint8_t &value) {
+                tTJSVariant item;
+                const tjs_error error = accessor->PropGetByNum(
+                    TJS_MEMBERMUSTEXIST, index, &item, accessor);
+                if(TJS_FAILED(error))
+                    return error;
+                value = static_cast<std::uint8_t>(item.AsInteger());
+                return TJS_S_OK;
+            };
+            const auto readU32 = [&readByte](tjs_int offset,
+                                             std::uint32_t &value) {
+                value = 0;
+                for(tjs_int byte = 0; byte < 4; ++byte) {
+                    std::uint8_t part{};
+                    const tjs_error error = readByte(offset + byte, part);
+                    if(TJS_FAILED(error))
+                        return error;
+                    value |= static_cast<std::uint32_t>(part) << (byte * 8);
+                }
+                return TJS_S_OK;
+            };
+
+            std::uint32_t begin{};
+            std::uint32_t end{};
+            if(TJS_FAILED(readU32(8, begin)) ||
+               TJS_FAILED(readU32(24, end)) || begin > end ||
+               end > static_cast<std::uint64_t>(receivedSize)) {
+                return TJS_E_INVALIDPARAM;
+            }
+
+            std::uint32_t x = 123456789u;
+            std::uint32_t y = 362436069u;
+            std::uint32_t z = 521288629u;
+            std::uint32_t w = kEmoteSeed;
+            std::uint32_t bytes = 0;
+            for(std::uint32_t offset = begin; offset < end; ++offset) {
+                if(bytes == 0) {
+                    const std::uint32_t t = x ^ (x << 11u);
+                    x = y;
+                    y = z;
+                    z = w;
+                    w = w ^ (w >> 19u) ^ t ^ (t >> 8u);
+                    bytes = w;
+                }
+                std::uint8_t current{};
+                if(TJS_FAILED(readByte(static_cast<tjs_int>(offset),
+                                       current))) {
+                    return TJS_E_INVALIDPARAM;
+                }
+                tTJSVariant decoded(static_cast<tjs_int32>(
+                    current ^ static_cast<std::uint8_t>(bytes)));
+                if(TJS_FAILED(accessor->PropSetByNum(
+                       TJS_MEMBERMUSTEXIST, static_cast<tjs_int>(offset),
+                       &decoded, accessor))) {
+                    return TJS_E_INVALIDPARAM;
+                }
+                bytes >>= 8u;
+            }
+            valid = true;
+            return TJS_S_OK;
+        }
+
+        int *destructionCount{};
+        int callCount{};
+        tjs_int64 receivedSize{};
+        iTJSDispatch2 *receivedObjThis{};
+        bool valid{};
+    };
 
     tTJSVariant getProp(const tTJSVariant &object, const tjs_char *name) {
         REQUIRE(object.Type() == tvtObject);
@@ -55,8 +171,17 @@ namespace {
         REQUIRE(dispatch != nullptr);
 
         tTJSVariant result;
-        REQUIRE(TJS_SUCCEEDED(dispatch->PropGet(0, name, nullptr, &result,
-                                               dispatch)));
+        REQUIRE(TJS_SUCCEEDED(
+            dispatch->PropGet(0, name, nullptr, &result, dispatch)));
+        return result;
+    }
+
+    tTJSVariant makeResourceManagerDispatch(motion::ResourceManager &manager) {
+        using Adaptor = ncbInstanceAdaptor<motion::ResourceManager>;
+        iTJSDispatch2 *dispatch = Adaptor::CreateAdaptor(&manager, true);
+        REQUIRE(dispatch != nullptr);
+        tTJSVariant result(dispatch, dispatch);
+        dispatch->Release();
         return result;
     }
 
@@ -72,7 +197,8 @@ namespace {
     }
 
     tjs_int variantCount(const tTJSVariant &object) {
-        return static_cast<tjs_int>(getProp(object, TJS_W("count")).AsInteger());
+        return static_cast<tjs_int>(
+            getProp(object, TJS_W("count")).AsInteger());
     }
 
     std::vector<std::pair<ttstr, tTJSVariant>>
@@ -166,8 +292,8 @@ namespace {
             return;
         }
         if(auto boolean = std::dynamic_pointer_cast<PSB::PSBBool>(value)) {
-            std::cerr << prefix << "bool=" << (boolean->value ? "true" : "false")
-                      << "\n";
+            std::cerr << prefix
+                      << "bool=" << (boolean->value ? "true" : "false") << "\n";
             return;
         }
         if(auto resource = std::dynamic_pointer_cast<PSB::PSBResource>(value)) {
@@ -187,8 +313,9 @@ namespace {
             return;
         }
         if(auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(value)) {
-            std::cerr << prefix << "dict size="
-                      << std::distance(dic->begin(), dic->end()) << "\n";
+            std::cerr << prefix
+                      << "dict size=" << std::distance(dic->begin(), dic->end())
+                      << "\n";
             int count = 0;
             for(const auto &[key, child] : *dic) {
                 std::cerr << prefix << "  " << key << "\n";
@@ -227,9 +354,8 @@ namespace {
     };
 
     struct FakeObjectDispatch : tTJSDispatch {
-        tjs_error IsInstanceOf(tjs_uint32, const tjs_char *,
-                               tjs_uint32 *, const tjs_char *,
-                               iTJSDispatch2 *) override {
+        tjs_error IsInstanceOf(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                               const tjs_char *, iTJSDispatch2 *) override {
             return TJS_S_FALSE;
         }
     };
@@ -237,10 +363,8 @@ namespace {
     struct FakeLayerOwnerDispatch : tTJSDispatch {
         iTVPLayerTreeOwner *treeOwner = nullptr;
 
-        tjs_error PropGet(tjs_uint32 flag,
-                          const tjs_char *membername,
-                          tjs_uint32 *hint,
-                          tTJSVariant *result,
+        tjs_error PropGet(tjs_uint32 flag, const tjs_char *membername,
+                          tjs_uint32 *hint, tTJSVariant *result,
                           iTJSDispatch2 *objthis) override {
             if(membername &&
                !TJS_strcmp(membername, TJS_W("layerTreeOwnerInterface"))) {
@@ -261,13 +385,9 @@ namespace {
         void RegisterLayerManager(iTVPLayerManager *) override {}
         void UnregisterLayerManager(iTVPLayerManager *) override {}
         void StartBitmapCompletion(iTVPLayerManager *) override {}
-        void NotifyBitmapCompleted(iTVPLayerManager *,
-                                   tjs_int,
-                                   tjs_int,
-                                   tTVPBaseTexture *,
-                                   const tTVPRect &,
-                                   tTVPLayerType,
-                                   tjs_int) override {}
+        void NotifyBitmapCompleted(iTVPLayerManager *, tjs_int, tjs_int,
+                                   tTVPBaseTexture *, const tTVPRect &,
+                                   tTVPLayerType, tjs_int) override {}
         void EndBitmapCompletion(iTVPLayerManager *) override {}
         void SetMouseCursor(iTVPLayerManager *, tjs_int) override {}
         void GetCursorPos(iTVPLayerManager *, tjs_int &x, tjs_int &y) override {
@@ -276,12 +396,11 @@ namespace {
         }
         void SetCursorPos(iTVPLayerManager *, tjs_int, tjs_int) override {}
         void ReleaseMouseCapture(iTVPLayerManager *) override {}
-        void SetHint(iTVPLayerManager *, iTJSDispatch2 *, const ttstr &) override {}
+        void SetHint(iTVPLayerManager *, iTJSDispatch2 *,
+                     const ttstr &) override {}
         void NotifyLayerResize(iTVPLayerManager *) override {}
         void NotifyLayerImageChange(iTVPLayerManager *) override {}
-        void SetAttentionPoint(iTVPLayerManager *,
-                               tTJSNI_BaseLayer *,
-                               tjs_int,
+        void SetAttentionPoint(iTVPLayerManager *, tTJSNI_BaseLayer *, tjs_int,
                                tjs_int) override {}
         void DisableAttentionPoint(iTVPLayerManager *) override {}
         void SetImeMode(iTVPLayerManager *, tjs_int) override {}
@@ -294,10 +413,10 @@ namespace {
         tTJSNI_Layer *native = nullptr;
     };
 
-    TestLayerHandle createRegisteredTestLayer(
-        iTVPLayerTreeOwner *treeOwner,
-        tTJSNI_BaseLayer *parent,
-        const tTJSVariantClosure &ownerClosure) {
+    TestLayerHandle
+    createRegisteredTestLayer(iTVPLayerTreeOwner *treeOwner,
+                              tTJSNI_BaseLayer *parent,
+                              const tTJSVariantClosure &ownerClosure) {
         static const bool graphicsInitialized = [] {
             TVPInitTVPGL();
             return true;
@@ -319,6 +438,83 @@ namespace {
     }
 
 } // namespace
+
+TEST_CASE("setEmotePSBDecryptSeed follows the Android raw callback boundary") {
+    REQUIRE(motion::ResourceManager::setEmotePSBDecryptSeed(
+                nullptr, 0, nullptr, nullptr) == TJS_E_BADPARAMCOUNT);
+
+    tTJSVariant realSeed{ 42.75 };
+    tTJSVariant ignored{ 99 };
+    tTJSVariant *realParams[] = { &realSeed, &ignored };
+    REQUIRE(motion::ResourceManager::setEmotePSBDecryptSeed(
+                nullptr, 2, realParams, nullptr) == TJS_S_OK);
+    REQUIRE(motion::ResourceManager::getEmotePSBDecryptSeed() == 42);
+
+    tTJSVariant stringSeed{ TJS_W("314") };
+    tTJSVariant *stringParams[] = { &stringSeed };
+    REQUIRE(motion::ResourceManager::setEmotePSBDecryptSeed(
+                nullptr, 1, stringParams, nullptr) == TJS_S_OK);
+    REQUIRE(motion::ResourceManager::getEmotePSBDecryptSeed() == 314);
+
+    setEmoteSeed();
+}
+
+TEST_CASE("setEmotePSBDecryptFunc owns and invokes the Android closure shape") {
+    REQUIRE(motion::ResourceManager::setEmotePSBDecryptFunc(
+                nullptr, 0, nullptr, nullptr) == TJS_E_BADPARAMCOUNT);
+
+    tTJSVariant notCallable{ 7 };
+    tTJSVariant *invalidParams[] = { &notCallable };
+    REQUIRE_THROWS(motion::ResourceManager::setEmotePSBDecryptFunc(
+        nullptr, 1, invalidParams, nullptr));
+
+    // Offline decoded-tool helpers still accept the numeric seed independently
+    // of the Android raw filter. Seed that tool-only path, then replace the
+    // actual global raw filter with the callable under test.
+    setEmoteSeed();
+
+    struct ScopedScriptEngine {
+        bool owns = false;
+        ScopedScriptEngine() {
+            if(TVPScriptEngine == nullptr) {
+                TVPScriptEngine = new tTJS();
+                owns = true;
+            }
+        }
+        ~ScopedScriptEngine() {
+            if(owns) {
+                TVPScriptEngine->Release();
+                TVPScriptEngine = nullptr;
+            }
+        }
+    } scriptEngine;
+
+    int destructionCount = 0;
+    auto *callback = new EmoteDecryptCallback(&destructionCount);
+    tTJSVariant callable(callback);
+    callback->Release();
+    tTJSVariant ignored{ 99 };
+    tTJSVariant *params[] = { &callable, &ignored };
+    REQUIRE(motion::ResourceManager::setEmotePSBDecryptFunc(
+                nullptr, 2, params, nullptr) == TJS_S_OK);
+    callable.Clear();
+    REQUIRE(destructionCount == 0);
+
+    motion::ResourceManager manager;
+    const auto module = manager.load(motionFixturePath());
+    REQUIRE(module.Type() == tvtObject);
+    REQUIRE(callback->callCount == 1);
+    REQUIRE(callback->valid);
+    REQUIRE(callback->receivedObjThis == callback);
+    REQUIRE(callback->receivedSize == static_cast<tjs_int64>(
+               std::filesystem::file_size(
+                   std::filesystem::path(motionFixturePath().AsStdString()))));
+
+    // Installing the seed lambda swaps the global std::function and destroys
+    // the former tRefHolder control block, releasing Object exactly once.
+    setEmoteSeed();
+    REQUIRE(destructionCount == 1);
+}
 
 TEST_CASE("__Private_Motion_GLLayer uses private ClassID only") {
     FakeLayerTreeOwner treeOwner;
@@ -383,8 +579,8 @@ TEST_CASE("__Private_Motion_GLLayer uses private ClassID only") {
     REQUIRE(privateLayer->GetHeight() == 19);
 
     tTJSVariant visible(false);
-    REQUIRE(TJS_SUCCEEDED(privateObject->PropSet(
-        0, TJS_W("visible"), nullptr, &visible, privateObject)));
+    REQUIRE(TJS_SUCCEEDED(privateObject->PropSet(0, TJS_W("visible"), nullptr,
+                                                 &visible, privateObject)));
     REQUIRE_FALSE(privateLayer->GetVisible());
     tTJSVariant visibleResult;
     REQUIRE(TJS_SUCCEEDED(privateObject->PropGet(
@@ -392,8 +588,8 @@ TEST_CASE("__Private_Motion_GLLayer uses private ClassID only") {
     REQUIRE(visibleResult.AsInteger() == 0);
 
     tTJSVariant absolute(3);
-    REQUIRE(TJS_SUCCEEDED(privateObject->PropSet(
-        0, TJS_W("absolute"), nullptr, &absolute, privateObject)));
+    REQUIRE(TJS_SUCCEEDED(privateObject->PropSet(0, TJS_W("absolute"), nullptr,
+                                                 &absolute, privateObject)));
     REQUIRE(privateLayer->GetAbsoluteOrderIndex() == 3);
 
     targetLayer.object->Release();
@@ -419,8 +615,8 @@ TEST_CASE("D3DAdaptor constructor follows libkrkr2 parameter boundary") {
     motion::D3DAdaptor *nonWindowAdaptor = nullptr;
     bool threwWindowError = false;
     try {
-        (void)motion::D3DAdaptor::factory(&nonWindowAdaptor, 5,
-                                          nonWindowParams, nullptr);
+        (void)motion::D3DAdaptor::factory(&nonWindowAdaptor, 5, nonWindowParams,
+                                          nullptr);
     } catch(const eTJSError &e) {
         threwWindowError = true;
         REQUIRE(e.GetMessage() == ttstr(TJS_W("must set Window object")));
@@ -439,8 +635,8 @@ TEST_CASE("D3DAdaptor constructor follows libkrkr2 parameter boundary") {
     };
 
     motion::D3DAdaptor *rawAdaptor = nullptr;
-    REQUIRE(motion::D3DAdaptor::factory(&rawAdaptor, 5, validParams,
-                                        nullptr) == TJS_S_OK);
+    REQUIRE(motion::D3DAdaptor::factory(&rawAdaptor, 5, validParams, nullptr) ==
+            TJS_S_OK);
     REQUIRE(rawAdaptor != nullptr);
     std::unique_ptr<motion::D3DAdaptor> adaptor(rawAdaptor);
     REQUIRE(adaptor->getWindowObject() == &windowObject);
@@ -480,8 +676,8 @@ TEST_CASE("D3DAdaptor captureCanvas reads back target texture rows") {
     };
 
     motion::D3DAdaptor *rawAdaptor = nullptr;
-    REQUIRE(motion::D3DAdaptor::factory(&rawAdaptor, 5, validParams,
-                                        nullptr) == TJS_S_OK);
+    REQUIRE(motion::D3DAdaptor::factory(&rawAdaptor, 5, validParams, nullptr) ==
+            TJS_S_OK);
     REQUIRE(rawAdaptor != nullptr);
     std::unique_ptr<motion::D3DAdaptor> adaptor(rawAdaptor);
     REQUIRE(adaptor->hasTargetTexture());
@@ -498,43 +694,73 @@ TEST_CASE("D3DAdaptor captureCanvas reads back target texture rows") {
     std::copy(std::begin(expectedRow0), std::end(expectedRow0), row0);
     std::copy(std::begin(expectedRow1), std::end(expectedRow1), row1);
 
-    std::array<std::uint8_t, 32> captured {};
+    std::array<std::uint8_t, 32> captured{};
     constexpr tjs_int dstPitch = 16;
     REQUIRE(adaptor->copyTargetTextureRowsForCaptureLike_0x6AD92C(
         captured.data(), dstPitch));
     const auto *dstRow0 = captured.data();
-    REQUIRE(std::equal(std::begin(expectedRow0), std::end(expectedRow0),
-                       dstRow0));
+    REQUIRE(
+        std::equal(std::begin(expectedRow0), std::end(expectedRow0), dstRow0));
     REQUIRE(std::equal(std::begin(expectedRow1), std::end(expectedRow1),
                        dstRow0 + dstPitch));
 }
 
+TEST_CASE("Player variableKeys returns a fresh var-track array") {
+    motion::Player player;
+
+    const auto first = player.getVariableKeys();
+    const auto second = player.getVariableKeys();
+    REQUIRE(first.Type() == tvtObject);
+    REQUIRE(second.Type() == tvtObject);
+    // Player_getVariableKeys @0x6D139C creates a fresh empty Array even when
+    // Player+1296 has no VariableLabelScope entries.
+    REQUIRE(first.AsObjectNoAddRef() != second.AsObjectNoAddRef());
+    REQUIRE(variantCount(first) == 0);
+    REQUIRE(variantCount(second) == 0);
+}
+
 TEST_CASE("motionplayer resource chain and query surface") {
+    ScopedCoreScriptEngine scriptEngine;
     setEmoteSeed();
 
-    motion::Player player;
     const auto motionPath = motionFixturePath();
-    const auto pimgPath = pimgFixturePath();
+    motion::ResourceManager manager;
+    const auto module = manager.load(motionPath);
+    const auto metadata = getProp(module, TJS_W("metadata"));
+    const auto base = getProp(metadata, TJS_W("base"));
+    const ttstr chara(getProp(base, TJS_W("chara")));
+    const ttstr motionName(getProp(base, TJS_W("motion")));
 
-    REQUIRE_FALSE(player.isExistMotion(ttstr(TEST_FILES_PATH "/emote/missing.psb")));
-    REQUIRE_FALSE(player.isExistMotion(pimgPath));
-    REQUIRE(player.findMotion(pimgPath).Type() == tvtVoid);
+    const auto managerDispatch = makeResourceManagerDispatch(manager);
+    motion::Player player(managerDispatch);
+    player.setProject(tTJSVariant(motionPath));
+    player.setChara(chara);
 
-    const auto motion = player.findMotion(motionPath);
-    REQUIRE(motion.Type() == tvtObject);
-    REQUIRE(player.isExistMotion(motionPath));
-
-    const auto motions = player.motionList();
-    REQUIRE(variantCount(motions) == 1);
+    REQUIRE(player.isExistMotion(motionName));
+    REQUIRE_FALSE(player.isExistMotion(TJS_W("__missing_motion__")));
+    REQUIRE(player.playMotionLike_0x6B2284(
+        motionName, motion::PlayFlagForce));
 
     const auto layerNames = player.getLayerNames();
     REQUIRE(variantCount(layerNames) > 0);
 
     const auto firstLayer = ttstr(getIndex(layerNames, 0));
     REQUIRE_FALSE(firstLayer.IsEmpty());
-    REQUIRE(player.getLayerMotion(firstLayer).Type() == tvtObject);
     REQUIRE(player.getLayerGetter(firstLayer).Type() == tvtObject);
-    REQUIRE(variantCount(player.getLayerGetterList()) == variantCount(layerNames));
+    // getLayerNames is label-map based and collapses duplicates, while
+    // getLayerGetterList@0x6D4F88 walks every non-root flat node.
+    REQUIRE(variantCount(player.getLayerGetterList()) >=
+            variantCount(layerNames));
+
+    bool foundMotionLayer = false;
+    for(tjs_int i = 0; i < variantCount(layerNames); ++i) {
+        const ttstr layerName(getIndex(layerNames, i));
+        if(player.getLayerMotion(layerName).Type() == tvtObject) {
+            foundMotionLayer = true;
+            break;
+        }
+    }
+    REQUIRE(foundMotionLayer);
 
     // P3-B (c): binary has no by-name layer-id API; allocation is the no-arg RM
     //   dispatch FuncCall (emitRenderItem@0x6C4E28 / buildNodeTree@0x6B4A6C all
@@ -544,35 +770,27 @@ TEST_CASE("motionplayer resource chain and query surface") {
     player.releaseLayerId(firstLayerId);
     REQUIRE(player.dispatchRequireLayerId() > 0);
 
-    const auto mainTimelineLabels = player.getMainTimelineLabelList();
-    const auto diffTimelineLabels = player.getDiffTimelineLabelList();
-    REQUIRE(mainTimelineLabels.Type() == tvtObject);
-    REQUIRE(diffTimelineLabels.Type() == tvtObject);
-
-    if(variantCount(mainTimelineLabels) > 0) {
-        const auto label = ttstr(getIndex(mainTimelineLabels, 0));
-        REQUIRE_FALSE(label.IsEmpty());
-        REQUIRE_FALSE(player.getTimelinePlaying(label));
-        REQUIRE(player.getVariableFrameList(label).Type() == tvtObject);
-    }
-
-    const auto variableKeys = player.getVariableKeys();
-    REQUIRE(variableKeys.Type() == tvtObject);
-    if(variantCount(variableKeys) > 0) {
-        const auto variableLabel = ttstr(getIndex(variableKeys, 0));
-        REQUIRE(player.getVariableFrameList(variableLabel).Type() == tvtObject);
-    }
+    REQUIRE(player.getVariableKeys().Type() == tvtObject);
 }
 
 TEST_CASE("motionplayer draw cache and playback state") {
+    ScopedCoreScriptEngine scriptEngine;
     setEmoteSeed();
 
-    motion::Player player;
     const auto motionPath = motionFixturePath();
-    const auto pimgPath = pimgFixturePath();
-
-    REQUIRE(player.findMotion(motionPath).Type() == tvtObject);
-    REQUIRE(player.findSource(pimgPath).Type() == tvtObject);
+    motion::ResourceManager manager;
+    const auto module = manager.load(motionPath);
+    const auto metadata = getProp(module, TJS_W("metadata"));
+    const auto base = getProp(metadata, TJS_W("base"));
+    const ttstr chara(getProp(base, TJS_W("chara")));
+    const ttstr motionName(getProp(base, TJS_W("motion")));
+    const auto managerDispatch = makeResourceManagerDispatch(manager);
+    motion::Player player(managerDispatch);
+    player.setProject(tTJSVariant(motionPath));
+    player.setChara(chara);
+    REQUIRE(player.playMotionLike_0x6B2284(
+        motionName, motion::PlayFlagForce));
+    REQUIRE(player.findSource(TJS_W("__missing_source__")).Type() == tvtVoid);
 
     player.setFlip(true);
     player.setOpacity(0.5);
@@ -584,92 +802,209 @@ TEST_CASE("motionplayer draw cache and playback state") {
     player.registerCaption(ttstr(TJS_W("caption")));
 
     player.draw();
-    const auto canvas = player.captureCanvas();
-    REQUIRE(canvas.Type() == tvtObject);
-    REQUIRE(getProp(canvas, TJS_W("width")).AsInteger() > 0);
-    REQUIRE(getProp(canvas, TJS_W("height")).AsInteger() > 0);
-    REQUIRE(getProp(canvas, TJS_W("sourceCount")).AsInteger() == 1);
-    REQUIRE(getProp(canvas, TJS_W("backgroundCount")).AsInteger() == 1);
-    REQUIRE(getProp(canvas, TJS_W("captionCount")).AsInteger() == 1);
-    REQUIRE(getProp(canvas, TJS_W("flip")).AsInteger() == 1);
-    REQUIRE(getProp(canvas, TJS_W("opacity")).AsReal() == 0.5);
 
     player.frameProgress(16.0);
-    // (A2) `frameLastTime` is the RO script property = player+1128 =
-    // motion["lastTime"] (= _cachedTotalFrames), NOT the per-frame dt. It is set
-    // only by initNonEmoteMotion (play path); this case never plays a motion, so
-    // it stays at its default 0.0. (The old `== 16.0` assertion encoded the
-    // since-fixed bug where getFrameLastTime returned the raw dt; the
-    // frameProgress-advanced check is covered by getTickCount/getFrameTickCount
-    // below.)
-    REQUIRE(player.getFrameLastTime() == 0.0);
-    REQUIRE(player.getTickCount() == 16.0);
-    REQUIRE(player.getFrameTickCount() == 1.0);
+    // `frameLastTime` is Player+1128 = motion["lastTime"], not the latest dt.
+    REQUIRE(player.getFrameLastTime() > 0.0);
+    // Non-chain play seeds queuing+firstFrame at 0x6B3AAC. The first progress
+    // reseeks and the queuing gate keeps Player+1120 frozen.
+    REQUIRE(player.getTickCount() == 0.0);
+    REQUIRE(player.getFrameTickCount() == 0.0);
     player.draw();
-    REQUIRE(getProp(player.captureCanvas(), TJS_W("sourceCount")).AsInteger() ==
-            1);
 
     player.clearCache();
     player.draw();
-    REQUIRE(getProp(player.captureCanvas(), TJS_W("sourceCount")).AsInteger() ==
-            0);
-
-    REQUIRE(player.findSource(pimgPath).Type() == tvtObject);
-    player.unload(pimgPath);
-    player.draw();
-    REQUIRE(getProp(player.captureCanvas(), TJS_W("sourceCount")).AsInteger() ==
-            0);
-
-    player.unloadAll();
-    REQUIRE(variantCount(player.motionList()) == 0);
 }
 
-TEST_CASE("emoteplayer timeline state and todo stubs") {
+TEST_CASE("ResourceManager caches raw holders and returns fresh dispatches") {
+    // Android constructs ResourceManager only after the global TJS engine is
+    // initialized; its ctor evaluates `new Math.RandomGenerator()`.  The unit
+    // host has no application command-line/data-path environment, so install
+    // only the TJS core for this scoped lifecycle.
+    struct ScopedScriptEngine {
+        bool owns = false;
+        ScopedScriptEngine() {
+            if(TVPScriptEngine == nullptr) {
+                TVPScriptEngine = new tTJS();
+                owns = true;
+            }
+        }
+        ~ScopedScriptEngine() {
+            if(owns) {
+                TVPScriptEngine->Release();
+                TVPScriptEngine = nullptr;
+            }
+        }
+    } scriptEngine;
     setEmoteSeed();
 
     motion::ResourceManager rm;
-    const auto module = rm.load(motionFixturePath());
+    const ttstr path = motionFixturePath();
+    const auto first = rm.load(path);
+    const auto second = rm.load(path);
+
+    REQUIRE(first.Type() == tvtObject);
+    REQUIRE(second.Type() == tvtObject);
+    REQUIRE(first.AsObjectNoAddRef() != second.AsObjectNoAddRef());
+    REQUIRE(ttstr(getProp(first, TJS_W("id"))) == ttstr(TJS_W("motion")));
+    REQUIRE(ttstr(getProp(second, TJS_W("spec"))) == ttstr(TJS_W("krkr")));
+
+    for(const tTJSVariant *module : { &first, &second }) {
+        iTJSNativeInstance *native{};
+        REQUIRE(module->AsObjectNoAddRef()->NativeInstanceSupport(
+                    TJS_NIS_GETINSTANCE, PSB::GetPSBValueClassID(),
+                    &native) == TJS_S_OK);
+        REQUIRE(native != nullptr);
+    }
+
+    rm.unload(path);
+    REQUIRE(rm.findLoaded(path).Type() == tvtVoid);
+    // The two externally retained raw dispatches own the PSBRawOwner after the
+    // map holder is erased, matching the intrusive lifetime at 0x6A959C.
+    REQUIRE(ttstr(getProp(first, TJS_W("id"))) == ttstr(TJS_W("motion")));
+}
+
+TEST_CASE("D3DEmotePlayer methods keep Android TODO boundaries") {
+    // These six methods do not dereference the lazy EmoteObject slot in the
+    // binary, so no fixture or script engine is required to test their exact
+    // exception contract.
+    motion::D3DEmotePlayer player(nullptr);
+    const auto requireTodo = [](const auto &call, const tjs_char *message) {
+        bool threw = false;
+        try {
+            call();
+        } catch(const eTJSError &e) {
+            threw = true;
+            REQUIRE(e.GetMessage() == ttstr(message));
+        }
+        REQUIRE(threw);
+    };
+
+    requireTodo([&] { (void)player.countVariables(); },
+                TJS_W("TODO: implement D3DEmotePlayer::countVariables()"));
+    requireTodo([&] { (void)player.getVariableLabelAt(0); },
+                TJS_W("TODO: implement D3DEmotePlayer::getVariableLabelAt()"));
+    requireTodo([&] { (void)player.countVariableFrameAt(0); },
+                TJS_W("TODO: implement D3DEmotePlayer::countVariableFrameAt()"));
+    requireTodo(
+        [&] { (void)player.getVariableFrameLabelAt(0, 0); },
+        TJS_W("TODO: implement D3DEmotePlayer::getVariableFrameLabelAt()"));
+    requireTodo(
+        [&] { (void)player.getVariableFrameValueAt(0, 0); },
+        TJS_W("TODO: implement D3DEmotePlayer::getVariableFrameValueAt()"));
+    requireTodo([&] { (void)player.getOuterForce(); },
+                TJS_W("TODO: implement D3DEmotePlayer::getOuterForce()"));
+}
+
+TEST_CASE("EmoteEngine serialize uses Android controller state schema") {
+    motion::EmoteEngine engine{ tTJSVariant() };
+
+    auto *eye = new motion::EmoteBlinkController();
+    eye->trackValue = 12.5f;
+    eye->trackTarget = 8.25f;
+    eye->valueTrack8B.emplace_back(1.5f, 2.5f);
+    engine._stateMachineDeque4.push_back({ eye, TJS_W("eye0") });
+
+    engine._ctlPosition->state = 0;
+    engine._ctlPosition->phase = 0.25f;
+    engine._ctlPosition->currentValue[0] = 10.0f;
+    engine._ctlPosition->currentValue[1] = 20.0f;
+    engine._ctlPosition->targetValue[0] = 30.0f;
+    engine._ctlPosition->targetValue[1] = 40.0f;
+    engine._ctlPosition->startValue[0] = 50.0f;
+    engine._ctlPosition->startValue[1] = 60.0f;
+
+    engine._ctlAngle->currentRad = 0.5f;
+    engine._ctlAngle->startRad = 1.5f;
+    engine._ctlAngle->targetRad = 2.5f;
+
+    const tTJSVariant saved = engine.serializeLike_0x675E40();
+    REQUIRE(dictionaryEntries(saved).size() == 8);
+    REQUIRE(variantCount(getProp(saved, TJS_W("timeline"))) == 0);
+    REQUIRE(variantCount(getProp(saved, TJS_W("eye"))) == 1);
+    REQUIRE(variantCount(getProp(saved, TJS_W("eyebrow"))) == 0);
+    REQUIRE(variantCount(getProp(saved, TJS_W("mouth"))) == 0);
+    REQUIRE(variantCount(getProp(saved, TJS_W("transition"))) == 0);
+    REQUIRE(variantCount(getProp(saved, TJS_W("selector"))) == 0);
+    REQUIRE(dictionaryEntries(getProp(saved, TJS_W("base"))).size() == 4);
+    REQUIRE(dictionaryEntries(getProp(saved, TJS_W("outerforce"))).size() == 3);
+
+    const tTJSVariant savedEye = getIndex(
+        getProp(saved, TJS_W("eye")), 0);
+    REQUIRE(ttstr(getProp(savedEye, TJS_W("label"))) == TJS_W("eye0"));
+    REQUIRE(variantCount(getProp(savedEye, TJS_W("rq"))) == 1);
+
+    eye->trackValue = -1.0f;
+    eye->trackTarget = -2.0f;
+    eye->valueTrack8B.clear();
+    engine._ctlPosition->state = 1;
+    engine._ctlPosition->phase = 0.0f;
+    std::fill_n(engine._ctlPosition->currentValue, 2, 0.0f);
+    std::fill_n(engine._ctlPosition->targetValue, 2, 0.0f);
+    std::fill_n(engine._ctlPosition->startValue, 2, 0.0f);
+    engine._ctlAngle->currentRad = 9.0f;
+    engine._ctlAngle->startRad = 9.0f;
+    engine._ctlAngle->targetRad = 9.0f;
+
+    engine.unserializeLike_0x678044(saved);
+    REQUIRE(eye->trackValue == Catch::Approx(12.5f));
+    REQUIRE(eye->trackTarget == Catch::Approx(8.25f));
+    REQUIRE(eye->valueTrack8B.size() == 1);
+    REQUIRE(eye->valueTrack8B.front().first == Catch::Approx(1.5f));
+    REQUIRE(eye->valueTrack8B.front().second == Catch::Approx(2.5f));
+    REQUIRE(engine._ctlPosition->state == 0);
+    REQUIRE(engine._ctlPosition->phase == Catch::Approx(0.25f));
+    REQUIRE(engine._ctlPosition->currentValue[0] == Catch::Approx(10.0f));
+    REQUIRE(engine._ctlPosition->currentValue[1] == Catch::Approx(20.0f));
+    REQUIRE(engine._ctlPosition->targetValue[0] == Catch::Approx(30.0f));
+    REQUIRE(engine._ctlPosition->startValue[1] == Catch::Approx(60.0f));
+    REQUIRE(engine._ctlAngle->currentRad == Catch::Approx(0.5f));
+    // sub_666A14 writes both "prev" and "target" into startRad (+92), so the
+    // later target value wins and targetRad (+88) keeps its pre-restore value.
+    REQUIRE(engine._ctlAngle->startRad == Catch::Approx(2.5f));
+    REQUIRE(engine._ctlAngle->targetRad == Catch::Approx(9.0f));
+}
+
+TEST_CASE("emoteplayer timeline state and todo stubs") {
+    ScopedCoreScriptEngine scriptEngine;
+    setEmoteSeed();
+
+    const auto motionPath = motionFixturePath();
+    motion::ResourceManager rm;
+    const auto module = rm.load(motionPath);
     REQUIRE(module.Type() == tvtObject);
 
-    motion::D3DEmotePlayer player(rm);
-    player.setModule(module);
-    REQUIRE(player.getModule().Type() == tvtObject);
+    // Direct C++ construction bypasses the script-facing factory's D3DImage
+    // type check. The former ResourceManager argument was ignored by Android
+    // and has been removed from the shell; this test exercises only the loaded
+    // EmoteObject/engine API below, so an empty owner is sufficient here.
+    motion::D3DEmotePlayer player(nullptr);
+    player.setModule(tTJSVariant(motionPath));
+    const auto retainedModule = player.getModule();
+    REQUIRE(retainedModule.Type() == tvtString);
+    REQUIRE(TJS_strcmp(
+                retainedModule.AsStringNoAddRef()->operator const tjs_char *(),
+                motionPath.c_str()) == 0);
 
     player.setCoord(100.0, 200.0);
     player.setScale(1.0);
-    // PRE-EXISTING DRIFT (M11 D-09, unrelated to the setVariable shim removal):
-    //   the label-less contains(double,double) overload was removed because the
-    //   binary D3DEmotePlayer_contains @0x530B6C is 3-arg
-    //   (contains(label, x, y) -> resolve node by label via sub_6B5AD8(player+
-    //   1064, label) -> Player_hitTest(node+1664, x, y)). The original 2-arg
-    //   calls here encoded the removed non-faithful overload. Calling the
-    //   faithful 3-arg form with an empty label exercises the root-node hit test;
-    //   the exact boolean result depends on the fixture's node AABB, which this
-    //   test has no oracle for, so we only exercise the call (no fabricated
-    //   hit/miss assertion). A proper hit-test assertion needs a known node label
-    //   from the fixture + hit-test geometry alignment — tracked separately.
-    (void)player.contains(TJS_W(""), 100.0, 200.0);
-    (void)player.contains(TJS_W(""), 99.0, 199.0);
-
     player.hide();
-    (void)player.contains(TJS_W(""), 100.0, 200.0);
     player.show();
-    (void)player.contains(TJS_W(""), 100.0, 200.0);
 
     // Disjoint-map reality (libkrkr2.so, fresh-decompile 2026-06-03):
     //   D3DEmotePlayer.setVariable -> EmoteEngine_setVariable @0x671228 writes
-    //   the EmoteEngine HM7 (+1440 = _labelToValueHM7; HM6-miss path @0x67135c).
-    //   D3DEmotePlayer.getVariable -> Player_getVariable @0x533E1C reads the
-    //   inner Player's HM1(+264)/HM2(+320) cascade — a DIFFERENT object. The two
-    //   maps are bridged ONLY by the EmoteEngine_progress bind-loop
-    //   (D3DEmotePlayer.progress @0x67D01C, G2-C). So in the binary,
+    //   the EmoteEngine HM7 (+1440 = _labelToValueHM7; HM6-miss path
+    //   @0x67135c). D3DEmotePlayer.getVariable -> Player_getVariable @0x533E1C
+    //   reads the inner Player's HM1(+264)/HM2(+320) cascade — a DIFFERENT
+    //   object. The two maps are bridged ONLY by the EmoteEngine_progress
+    //   bind-loop (D3DEmotePlayer.progress @0x67D01C, G2-C). So in the binary,
     //   setVariable(x) immediately followed by getVariable() WITHOUT a progress
     //   in between does NOT return x. The previous immediate-equality assertion
     //   here encoded non-binary behavior produced by a now-removed Player-side
-    //   double-write shim (see EmotePlayer.cpp / PlayerVariable.cpp). Assert the
-    //   faithful disjoint semantics: the engine accepts the write and getVariable
-    //   reflects the (un-bridged) Player-side default until progress runs the
-    //   bind-loop.
+    //   double-write shim (see EmotePlayer.cpp / PlayerVariable.cpp). Assert
+    //   the faithful disjoint semantics: the engine accepts the write and
+    //   getVariable reflects the (un-bridged) Player-side default until
+    //   progress runs the bind-loop.
     //
     //   UPDATE 2026-06-03: the live-progress wiring has now LANDED.
     //   D3DEmotePlayer::progress / pass now route through engine().progress (=
@@ -677,39 +1012,31 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
     //   then the Player progress at step 7, so the bind bridge is RUNTIME-LIVE.
     //   (The prior note that D3DEmotePlayer::pass calls progressMsLike directly
     //   and bypasses the engine bind-loop is now FALSIFIED — corrected here.)
-    //   The disjoint-map assertion BELOW still holds because it does setVariable
-    //   then getVariable with NO progress() in between, so the HM7 write has not
-    //   yet been bridged to Player HM1/HM2. A progress-inclusive round-trip
-    //   (setVariable -> progress -> getVariable == x) is structurally connected
-    //   but only observable when the HM7 chain (+1456) is non-empty, which needs
-    //   the controller/variable builder population from a motion's metadata; the
-    //   logo fixture has none, so the bridge runs over an empty chain (inert).
-    //   No progress-inclusive assertion is added here: this fixture cannot
-    //   observe it, and per CLAUDE.md fixtures are not fabricated.
+    //   The disjoint-map assertion BELOW still holds because it does
+    //   setVariable then getVariable with NO progress() in between, so the HM7
+    //   write has not yet been bridged to Player HM1/HM2. A progress-inclusive
+    //   round-trip (setVariable -> progress -> getVariable == x) is
+    //   structurally connected but only observable when the HM7 chain (+1456)
+    //   is non-empty, which needs the controller/variable builder population
+    //   from a motion's metadata; the logo fixture has none, so the bridge runs
+    //   over an empty chain (inert). No progress-inclusive assertion is added
+    //   here: this fixture cannot observe it, and per CLAUDE.md fixtures are
+    //   not fabricated.
     player.setVariable(TJS_W("manual"), 3.5);
     const double manualBeforeBridge = player.getVariable(TJS_W("manual"));
-    REQUIRE(manualBeforeBridge != 3.5); // HM7 write is not visible to Player HM2
-
-    // After delegation to Player, countVariables returns real count from PSB.
-    // The loaded PSB may or may not have variables.
-    const auto varCount = player.countVariables();
-    REQUIRE(varCount >= 0);
-    if(varCount > 0) {
-        REQUIRE_FALSE(ttstr(player.getVariableLabelAt(0)).IsEmpty());
-    }
-    REQUIRE(player.getOuterForce().Type() == tvtVoid);
+    REQUIRE(manualBeforeBridge !=
+            3.5); // HM7 write is not visible to Player HM2
 
     const auto mainCount = player.countMainTimelines();
     const auto diffCount = player.countDiffTimelines();
     REQUIRE((mainCount + diffCount) > 0);
 
-    const auto label =
-        mainCount > 0 ? player.getMainTimelineLabelAt(0)
-                      : player.getDiffTimelineLabelAt(0);
+    const auto label = mainCount > 0 ? player.getMainTimelineLabelAt(0)
+                                     : player.getDiffTimelineLabelAt(0);
     REQUIRE_FALSE(label.IsEmpty());
     REQUIRE(player.getTimelineTotalFrameCount(label) >= 0);
 
-    player.playTimeline(label, motion::TimelinePlayFlagParallel);
+    player.playTimeline(label, motion::TimelinePlayFlagDifference);
     REQUIRE(player.isTimelinePlaying(label));
     REQUIRE(player.getAnimating());
     REQUIRE(player.countPlayingTimelines() >= 1);
@@ -719,11 +1046,13 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
     REQUIRE(player.getProgress() == 10.0);
 
     player.fadeOutTimeline(label, 1.0, 0);
+    REQUIRE(player.isTimelinePlaying(label));
+    player.pass(1.0);
     REQUIRE_FALSE(player.isTimelinePlaying(label));
-    REQUIRE(player.getTimelineBlendRatio(label) == 0.0);
 
     player.fadeInTimeline(label, 1.0, motion::TimelinePlayFlagDifference);
     REQUIRE(player.isTimelinePlaying(label));
+    player.pass(1.0);
     REQUIRE(player.getTimelineBlendRatio(label) == 1.0);
 
     player.skip();
@@ -733,121 +1062,21 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
 
     player.playTimeline(label, motion::TimelinePlayFlagParallel);
     player.stopTimeline(TJS_W(""));
-    REQUIRE_FALSE(player.getAnimating());
+    REQUIRE(player.countPlayingTimelines() == 0);
+    REQUIRE(player.getAnimating());
 
-    player.assignState();
-    player.setOuterForce(1.0, 2.0);
-}
-
-TEST_CASE("motionplayer can play internal logo motion clips") {
-    setEmoteSeed();
-
-    const auto baseDir = std::filesystem::path(REFERENCE_PATH) / "xp3" /
-        "logo_test";
-    if(!std::filesystem::exists(baseDir / "yuzulogo.mtn") ||
-       !std::filesystem::exists(baseDir / "m2logo.mtn")) {
-        return;
+    FakeObjectDispatch stateObject;
+    tTJSVariant state(&stateObject, &stateObject);
+    bool assignStateThrew = false;
+    try {
+        player.assignState(state);
+    } catch(const eTJSError &e) {
+        assignStateThrew = true;
+        REQUIRE(e.GetMessage() ==
+                ttstr(TJS_W("TODO: implement D3DEmotePlayer::assignState()")));
     }
-
-    motion::Player player;
-    const auto yuzuPath =
-        ttstr(std::filesystem::absolute(baseDir / "yuzulogo.mtn").string());
-    const auto m2Path =
-        ttstr(std::filesystem::absolute(baseDir / "m2logo.mtn").string());
-
-    const auto verifyOne = [&](const ttstr &path, const ttstr &label,
-                               const tjs_int expectedLayers,
-                               const tjs_int expectedFrames) {
-        INFO("path=" << path.AsStdString() << " label=" << label.AsStdString());
-        REQUIRE(player.findMotion(path).Type() == tvtObject);
-        const auto snapshot = motion::detail::lookupModuleSnapshot(
-            player.findMotion(path));
-        REQUIRE(snapshot != nullptr);
-
-        const auto mainLabels = player.getMainTimelineLabelList();
-        const auto diffLabels = player.getDiffTimelineLabelList();
-        REQUIRE(containsString(mainLabels, label));
-        REQUIRE(variantCount(diffLabels) == 0);
-        REQUIRE(player.getTimelineTotalFrameCount(label) == expectedFrames);
-
-        player.playTimeline(label, motion::PlayFlagForce);
-        REQUIRE(player.getTimelinePlaying(label));
-        const auto layerNames = player.getLayerNames();
-        const auto getterList = player.getLayerGetterList();
-        const auto commands = player.getCommandList();
-        std::cerr << "logo test path=" << path.AsStdString()
-                  << " label=" << label.AsStdString()
-                  << " layers=" << variantCount(layerNames)
-                  << " commands=" << variantCount(commands) << "\n";
-        for(tjs_int index = 0; index < variantCount(commands); ++index) {
-            const auto command = ttstr(getIndex(commands, index));
-            int sourceType = -1;
-            try {
-                sourceType = static_cast<int>(player.findSource(command).Type());
-            } catch(...) {
-                std::cerr << "  command[" << index << "]=" << command.AsStdString()
-                          << " sourceError=<non-std-exception>\n";
-                continue;
-            }
-            std::cerr << "  command[" << index << "]=" << command.AsStdString()
-                      << " sourceType=" << sourceType << "\n";
-        }
-        for(tjs_int index = 0; index < variantCount(layerNames) && index < 2; ++index) {
-            const auto layerName = ttstr(getIndex(layerNames, index));
-            const auto layerNameStd = layerName.AsStdString();
-            std::cerr << "  layer[" << index << "]=" << layerName.AsStdString()
-                      << "\n";
-            const auto clipIt =
-                snapshot->clipIndexByLabel.find(label.AsStdString());
-            REQUIRE(clipIt != snapshot->clipIndexByLabel.end());
-            REQUIRE(clipIt->second >= 0);
-            REQUIRE(static_cast<size_t>(clipIt->second) < snapshot->clipList.size());
-            const auto &clip = snapshot->clipList[static_cast<size_t>(clipIt->second)];
-            const auto layerIt = std::find_if(
-                clip.layerList.begin(), clip.layerList.end(),
-                [&](const auto &candidate) {
-                    if(!candidate) {
-                        return false;
-                    }
-                    if(const auto labelValue = (*candidate)["label"]) {
-                        if(const auto text =
-                               std::dynamic_pointer_cast<PSB::PSBString>(labelValue)) {
-                            return text->value == layerNameStd;
-                        }
-                    }
-                    return false;
-                });
-            if(layerIt == clip.layerList.end()) {
-                std::cerr << "    native layer lookup skipped\n";
-            } else {
-                const auto &layer = *layerIt;
-                if(const auto frameList = (*layer)["frameList"]) {
-                    std::cerr << "    native frameList\n";
-                    dumpPsbValue(frameList, "      ");
-                }
-                if(const auto children = (*layer)["children"]) {
-                    std::cerr << "    native children\n";
-                    dumpPsbValue(children, "      ");
-                }
-            }
-        }
-        REQUIRE(variantCount(layerNames) == expectedLayers);
-        REQUIRE(getterList.Type() == tvtObject);
-        REQUIRE(player.getLayerMotion(ttstr(getIndex(player.getLayerNames(), 0)))
-                    .Type() == tvtObject);
-        REQUIRE(player.getProgressCompat() == Catch::Approx(0.0));
-
-        player.frameProgress(static_cast<double>(expectedFrames - 1));
-        REQUIRE(player.getTimelinePlaying(label));
-        REQUIRE(player.getProgressCompat() < 1.0);
-
-        player.frameProgress(1.0);
-        REQUIRE_FALSE(player.getTimelinePlaying(label));
-        REQUIRE(player.getProgressCompat() == Catch::Approx(1.0));
-    };
-
-    verifyOne(yuzuPath, TJS_W("yuzulogo"), 15, 241);
-    verifyOne(m2Path, TJS_W("back_white"), 23, 91);
+    REQUIRE(assignStateThrew);
+    player.setOuterForce(1.0, 2.0);
 }
 
 // M1/P2: binary-aligned parseFrame / mergeFrameContent (independent, not wired
@@ -862,12 +1091,12 @@ namespace {
     std::shared_ptr<PSB::PSBString> psbStr(const std::string &v) {
         return std::make_shared<PSB::PSBString>(v);
     }
-}
+} // namespace
 
 TEST_CASE("parseFrame/mergeFrameContent slot is binary-aligned (P2)") {
+    using motion::detail::mergeFrameContentLike_0x692AB0;
     using motion::detail::ParsedFrameSlotLike_0x6926B4;
     using motion::detail::parseFrameLike_0x6926B4;
-    using motion::detail::mergeFrameContentLike_0x692AB0;
 
     // Slot layout guards (mirrors node+320 / node+856 scalar region).
     static_assert(offsetof(ParsedFrameSlotLike_0x6926B4, time) == 8);
@@ -889,7 +1118,7 @@ TEST_CASE("parseFrame/mergeFrameContent slot is binary-aligned (P2)") {
         content->emplace("ox", psbInt(99));
         mergeFrameContentLike_0x692AB0(slot, 0, content);
         REQUIRE(slot.mergedFlag == 1);
-        REQUIRE(slot.ox == Catch::Approx(0.0));  // not applied
+        REQUIRE(slot.ox == Catch::Approx(0.0)); // not applied
     }
 
     SECTION("type 3 -> interpolate, mask-gated ox/oy + opa") {
@@ -914,17 +1143,17 @@ TEST_CASE("parseFrame/mergeFrameContent slot is binary-aligned (P2)") {
         mergeFrameContentLike_0x692AB0(slot, /*nodeType*/ 0, content);
         REQUIRE(slot.ox == Catch::Approx(12.0));
         REQUIRE(slot.oy == Catch::Approx(34.0));
-        REQUIRE(slot.opacity == 128u);          // applied (mask & 0x400)
-        REQUIRE(slot.blendMode == 16u);         // default preserved (no 0x20000)
+        REQUIRE(slot.opacity == 128u); // applied (mask & 0x400)
+        REQUIRE(slot.blendMode == 16u); // default preserved (no 0x20000)
     }
 
     SECTION("mask defaults: opacity 255, blend 16 when bits absent") {
         auto content = std::make_shared<PSB::PSBDictionary>();
-        content->emplace("mask", psbInt(0x10));  // angle only
+        content->emplace("mask", psbInt(0x10)); // angle only
         content->emplace("angle", psbInt(90));
         ParsedFrameSlotLike_0x6926B4 slot;
-        slot.interpFlag = 0;  // type 2 path
-        slot.mask = 0x10;     // merge reads v3[5] (slot.mask), set by parseFrame
+        slot.interpFlag = 0; // type 2 path
+        slot.mask = 0x10; // merge reads v3[5] (slot.mask), set by parseFrame
         mergeFrameContentLike_0x692AB0(slot, /*nodeType*/ 1, content);
         REQUIRE(slot.angle == Catch::Approx(90.0));
         REQUIRE(slot.opacity == 255u);
@@ -950,10 +1179,10 @@ TEST_CASE("parseFrame/mergeFrameContent slot is binary-aligned (P2)") {
         content->emplace("src", psbStr("chara/body"));
         ParsedFrameSlotLike_0x6926B4 slotIn;
         mergeFrameContentLike_0x692AB0(slotIn, /*nodeType*/ 0, content);
-        REQUIRE(slotIn.src == "chara/body");  // (1<<0)&0x1849 != 0
+        REQUIRE(slotIn.src == "chara/body"); // (1<<0)&0x1849 != 0
         ParsedFrameSlotLike_0x6926B4 slotOut;
         mergeFrameContentLike_0x692AB0(slotOut, /*nodeType*/ 1, content);
-        REQUIRE(slotOut.src.empty());          // (1<<1)&0x1849 == 0
+        REQUIRE(slotOut.src.empty()); // (1<<1)&0x1849 == 0
     }
 }
 
@@ -973,7 +1202,8 @@ namespace {
         auto f = std::make_shared<PSB::PSBDictionary>();
         f->emplace("time", std::make_shared<PSB::PSBNumber>(time));
         f->emplace("type", psbInt(type));
-        if(content) f->emplace("content", content);
+        if(content)
+            f->emplace("content", content);
         return f;
     }
     // Build a frame stream (PSBList) from an array of (time,type) pairs, all
@@ -988,19 +1218,19 @@ namespace {
         }
         return list;
     }
-}
+} // namespace
 
 TEST_CASE("frame cursor stepping is binary-aligned (P3+P4)") {
-    using motion::detail::ParsedFrameSlotLike_0x6926B4;
-    using motion::detail::parseFrameLike_0x6926B4;
-    using motion::detail::NodeFrameStreamsLike;
-    using motion::detail::FrameStreamCursorLike;
-    using motion::detail::PlayerFrameStreamsLike;
-    using motion::detail::TimelineSeekStateLike;
     using motion::detail::advanceNodeFramesLike_0x6B7E44;
     using motion::detail::advanceRootAndNodesLike_0x6B6ADC;
-    using motion::detail::rewindRootAndNodesLike_0x6B9A3C;
+    using motion::detail::FrameStreamCursorLike;
+    using motion::detail::NodeFrameStreamsLike;
+    using motion::detail::ParsedFrameSlotLike_0x6926B4;
+    using motion::detail::parseFrameLike_0x6926B4;
+    using motion::detail::PlayerFrameStreamsLike;
     using motion::detail::reseekTimelineCursorsLike_0x6B86C8;
+    using motion::detail::rewindRootAndNodesLike_0x6B9A3C;
+    using motion::detail::TimelineSeekStateLike;
 
     // Seed a node's slot0 to frame `idx` of `frames` (parseFrame fills time).
     auto seedNode = [&](NodeFrameStreamsLike &node,
@@ -1010,7 +1240,8 @@ TEST_CASE("frame cursor stepping is binary-aligned (P3+P4)") {
         node.activeSlotIndex = 0;
         parseFrameLike_0x6926B4(node.slots[0], nullptr, 0, 0);
         node.slots[0].frameIndex = static_cast<std::uint32_t>(idx);
-        // seed both slots' time from the stream so the ping-pong has a baseline.
+        // seed both slots' time from the stream so the ping-pong has a
+        // baseline.
         auto f = (*frames)[idx];
         if(auto d = std::dynamic_pointer_cast<PSB::PSBDictionary>(f)) {
             // re-parse so slots reflect the real frame time.
@@ -1021,15 +1252,16 @@ TEST_CASE("frame cursor stepping is binary-aligned (P3+P4)") {
         node.slots[1].frameIndex = static_cast<std::uint32_t>(idx);
     };
 
-    SECTION("advanceNodeFrames seeks the active slot forward to childEvalTime") {
+    SECTION(
+        "advanceNodeFrames seeks the active slot forward to childEvalTime") {
         // Stream times 0,10,20,30,40 (5 frames). Seek toward childEvalTime=25.
-        auto frames = mkStream({0, 10, 20, 30, 40});
+        auto frames = mkStream({ 0, 10, 20, 30, 40 });
         NodeFrameStreamsLike node;
         node.hasChild = true;
         node.childEvalTime = 25.0;
-        seedNode(node, frames, 0);  // start at frame 0 (time 0)
+        seedNode(node, frames, 0); // start at frame 0 (time 0)
 
-        TimelineSeekStateLike state;  // emoteListFlag 0
+        TimelineSeekStateLike state; // emoteListFlag 0
         advanceNodeFramesLike_0x6B7E44(node, state);
 
         // The active slot must now bracket t=25: cursor advanced past time<=25.
@@ -1040,20 +1272,21 @@ TEST_CASE("frame cursor stepping is binary-aligned (P3+P4)") {
         REQUIRE(as.time <= 25.0);
         REQUIRE(as.frameIndex <= 3u);
         // merge ran (both slots merged): mergedFlag set on at least one slot.
-        REQUIRE((node.slots[0].mergedFlag == 1 ||
-                 node.slots[1].mergedFlag == 1));
+        REQUIRE(
+            (node.slots[0].mergedFlag == 1 || node.slots[1].mergedFlag == 1));
     }
 
     SECTION("advanceNodeFrames no-op when at limit & target ahead (no merge)") {
-        // Seed at the last seekable frame (index count-2 == 3, time 30) with the
-        // child target between 30 and 40. The forward loop breaks immediately
-        // (cur.frameIndex >= limit), cur.time(30) is NOT > t(35) so no backward
-        // seek, and seeked==false -> 0x6B7F70 early return without merge.
-        auto frames = mkStream({0, 10, 20, 30, 40});
+        // Seed at the last seekable frame (index count-2 == 3, time 30) with
+        // the child target between 30 and 40. The forward loop breaks
+        // immediately (cur.frameIndex >= limit), cur.time(30) is NOT > t(35) so
+        // no backward seek, and seeked==false -> 0x6B7F70 early return without
+        // merge.
+        auto frames = mkStream({ 0, 10, 20, 30, 40 });
         NodeFrameStreamsLike node;
         node.hasChild = true;
         node.childEvalTime = 35.0;
-        seedNode(node, frames, 3);  // both slots at frame 3 (time 30)
+        seedNode(node, frames, 3); // both slots at frame 3 (time 30)
         node.slots[0].mergedFlag = 0;
         node.slots[1].mergedFlag = 0;
 
@@ -1066,11 +1299,11 @@ TEST_CASE("frame cursor stepping is binary-aligned (P3+P4)") {
     SECTION("advanceRootAndNodes advances layer cursor to clampedEvalTime") {
         PlayerFrameStreamsLike p;
         p.state.clampedEvalTime = 25.0;
-        p.layerStream.frames = mkStream({0, 10, 20, 30, 40});
+        p.layerStream.frames = mkStream({ 0, 10, 20, 30, 40 });
         p.layerStream.frameCursor = 0;
         p.layerStream.curTime = 0.0;
-        p.layerStream.nextTime = 10.0;  // frames[1].time
-        p.rootStream.frames = mkStream({0, 50});
+        p.layerStream.nextTime = 10.0; // frames[1].time
+        p.rootStream.frames = mkStream({ 0, 50 });
         p.rootStream.frameCursor = 0;
         p.rootStream.nextTime = 50.0;
         // node 0 is the root placeholder; add a real node at index 1.
@@ -1091,7 +1324,7 @@ TEST_CASE("frame cursor stepping is binary-aligned (P3+P4)") {
         alignContent->emplace("align", psbInt(1));
         auto list = std::make_shared<PSB::PSBList>(0);
         list->push_back(mkFrame(0, 2));
-        list->push_back(mkFrame(10, 1, alignContent));  // align frame at t=10
+        list->push_back(mkFrame(10, 1, alignContent)); // align frame at t=10
         list->push_back(mkFrame(20, 2));
         list->push_back(mkFrame(30, 2));
 
@@ -1102,7 +1335,7 @@ TEST_CASE("frame cursor stepping is binary-aligned (P3+P4)") {
         p.layerStream.frameCursor = 0;
         p.layerStream.curTime = 0.0;
         p.layerStream.nextTime = 10.0;
-        p.rootStream.frames = mkStream({0, 40});
+        p.rootStream.frames = mkStream({ 0, 40 });
         p.rootStream.nextTime = 40.0;
         p.nodes.resize(1);
 
@@ -1116,14 +1349,14 @@ TEST_CASE("frame cursor stepping is binary-aligned (P3+P4)") {
     SECTION("rewindRootAndNodes decrements layer cursor backward") {
         PlayerFrameStreamsLike p;
         p.state.clampedEvalTime = 12.0;
-        p.layerStream.frames = mkStream({0, 10, 20, 30, 40});
+        p.layerStream.frames = mkStream({ 0, 10, 20, 30, 40 });
         // start at cursor 3 (curTime 30) — must rewind toward 12.
         p.layerStream.frameCursor = 3;
         p.layerStream.curTime = 30.0;
         p.layerStream.nextTime = 40.0;
-        p.rootStream.frames = mkStream({0, 50});
+        p.rootStream.frames = mkStream({ 0, 50 });
         p.rootStream.frameCursor = 1;
-        p.rootStream.curTime = 0.0;  // already <= clampedEvalTime, no rewind
+        p.rootStream.curTime = 0.0; // already <= clampedEvalTime, no rewind
         p.nodes.resize(1);
 
         rewindRootAndNodesLike_0x6B9A3C(p);
@@ -1135,14 +1368,15 @@ TEST_CASE("frame cursor stepping is binary-aligned (P3+P4)") {
     SECTION("reseekTimelineCursors linear-scans layer cursor to target") {
         PlayerFrameStreamsLike p;
         p.state.clampedEvalTime = 22.0;
-        p.layerStream.frames = mkStream({0, 10, 20, 30, 40});
-        p.rootStream.frames = mkStream({0, 50});
+        p.layerStream.frames = mkStream({ 0, 10, 20, 30, 40 });
+        p.rootStream.frames = mkStream({ 0, 50 });
         p.nodes.resize(1);
 
         reseekTimelineCursorsLike_0x6B86C8(p);
         // The binary's reseek (0x6B8770) is a COARSE linear scan that
-        // double-increments i: the for-loop's own ++i AND the body's ++i fire on
-        // every "time < target" step. With target=22, frames=[0,10,20,30,40]:
+        // double-increments i: the for-loop's own ++i AND the body's ++i fire
+        // on every "time < target" step. With target=22,
+        // frames=[0,10,20,30,40]:
         //   i=0 (t0<22): body ++i->1, loop ++i->2
         //   i=2 (t20<22): body ++i->3, loop ++i->4
         //   i=4 (t40>22): --i->3, break

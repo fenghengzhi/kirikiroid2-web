@@ -1,5 +1,5 @@
-// PlayerFrameStepping.cpp — M1/P3+P4 binary-aligned node-deque frame cursor
-// stepping. Independent of the live frame-progress path (unit-test only).
+// PlayerFrameStepping.cpp — legacy decoded node-deque frame cursor test model.
+// Independent of the live frame-progress path (unit-test only).
 //
 // 1:1 ports of:
 //   Player_advanceNodeFrames     @ libkrkr2.so 0x6B7E44
@@ -7,7 +7,7 @@
 //   Player_rewindRootAndNodes    @ libkrkr2.so 0x6B9A3C
 //   Player_reseekTimelineCursors @ libkrkr2.so 0x6B86C8
 //
-// See PlayerFrameStepping.h for the scope rationale and PLATFORM_BOUNDARY notes.
+// See PlayerFrameStepping.h for the scope and reconstruction-gap notes.
 //
 // Binary frame-stream read helpers (each is an iTJSDispatch2 PropGet wrapper in
 // the binary; here they read PSB::PSBList / PSB::PSBDictionary as the P2
@@ -19,11 +19,11 @@
 //   sub_6636D4  content.<k> -> frameContentBool()
 //   sub_A0FB64  copy content-> root content snapshot
 //
-// DEFERRED (PLATFORM_BOUNDARY / deep dispatch, see inline notes):
+// OPEN RECONSTRUCTION WORK (not a platform boundary; see inline notes):
 //   * the variable-track deque (player+1312..1368) two-slot seed
 //     (sub_6B786C / sub_6B7A70) — libstdc++ deque of opaque 160-byte track
-//     records with their own dispatch frame streams; not reproducible from the
-//     PSB stand-in. reseek skips it.
+//     records with their own dispatch frame streams; this decoded stand-in does
+//     not reproduce them. reseek skips it.
 //   * the +280 aux singly-linked list pass (sub_6B9650) — opaque.
 //   * Motion_Player_findSource (slot+348/+356) — deep layer-source resolution;
 //     gated identically to the binary but the resolution body is deferred.
@@ -318,7 +318,7 @@ namespace motion {
             }
 
             // ---- Variable-track deque (player+1312..1368) ----
-            // DEFERRED (PLATFORM_BOUNDARY): opaque 160-byte track records seeded
+            // OPEN: opaque 160-byte track records seeded
             // via sub_6B786C/sub_6B7A70. Skipped.
 
             // ---- Node-deque walk @ 0x6B7364 (LABEL_86) ----
@@ -580,7 +580,7 @@ namespace motion {
             }
 
             // ---- Variable-track deque re-seed (player+1312..1368) ----
-            // DEFERRED (PLATFORM_BOUNDARY): per-track 2-slot seed via
+            // OPEN: per-track 2-slot seed via
             // sub_6B786C/sub_6B7A70 over opaque 160-byte track records.
 
             // ---- Per-node advance @ 0x6B91B0 ----

@@ -29,7 +29,8 @@ tjs_error callLayerOperateAffineLike_0x6C7440(
 // doubles (x,y,x,y,...) translated by (xOffset,yOffset), exactly as
 // sub_6C715C @ 0x6C715C does for the mesh/bezier point arrays.
 iTJSDispatch2 *buildMeshPointTJSArrayLike_0x6C715C(
-    const std::vector<float> &points, float xOffset, float yOffset);
+    const std::vector<detail::MeshPoint> &points,
+    float xOffset, float yOffset);
 
 // affineCopy (argc=14): [src, sx, sy, sw, sh, useMatrix=false,
 //   x0, y0, x1, y1, x2, y2, type, clear]. Dispatched on the render-layer
@@ -104,9 +105,6 @@ std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor);
 iTJSDispatch2 *resolvePrimaryLayerObject(iTJSDispatch2 *layerTreeOwnerObject);
 iTJSDispatch2 *resolveMainWindowOwnerObject();
 iTJSDispatch2 *resolveMainWindowPrimaryLayerObject();
-void pushGraphicCandidates(std::vector<ttstr> &candidates, const ttstr &base);
-ttstr resolveMotionSourcePath(const motion::detail::MotionSnapshot &snapshot,
-                              const std::string &source);
 iTJSDispatch2 *createLayerObject(iTJSDispatch2 *layerTreeOwnerObject,
                                  iTJSDispatch2 *parentLayerObject);
 bool configureReusableLayerObject(iTJSDispatch2 *layerObject,
@@ -140,7 +138,7 @@ std::array<tTVPPointD, 3> buildAffineTrianglePoints(
     float xOffset,
     float yOffset);
 std::vector<tTVPPointD> buildMeshPoints(
-    const std::vector<float> &points,
+    const std::vector<detail::MeshPoint> &points,
     float xOffset,
     float yOffset);
 

@@ -5,7 +5,7 @@ namespace PSB {
 
 #define LOGGER spdlog::get("plugin")
 
-    bool PimgType::isThisType(const PSBFile &psb) {
+    bool PimgType::isThisType(const DecodedPSBFile &psb) {
         const auto objects = psb.getObjects();
         if(psb.getObjects() == nullptr) {
             return false;
@@ -171,7 +171,7 @@ namespace PSB {
     }
 
     std::vector<std::unique_ptr<IResourceMetadata>>
-    PimgType::collectResources(const PSBFile &psb, bool deDuplication) {
+    PimgType::collectResources(const DecodedPSBFile &psb, bool deDuplication) {
         std::vector<std::unique_ptr<IResourceMetadata>> resourceList;
         if(psb.resources.empty())
             resourceList.resize(psb.resources.size());

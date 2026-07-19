@@ -11,7 +11,7 @@ M1 progress var-track stream③ (Player+1296 deque, 160B VariableLabelScope, two
 - **reverse** `rewindVariableTracksLike_0x6B9A3C` (binary 0x6B9FCC, inside rewindRootAndNodes): inner loop while active.time>target → step OTHER to (active.frameIndex-1) UNSIGNED, toggle, swap. Post-merge: slot[0] then **slot[1]** (both gated). KEY DIFF vs forward = merge slot[1] not slot[0]×2, and step OTHER not ACTIVE, and idx-1 not +1, and condition active.time>target not other.time<=target.
 - **reseed** `reseedVariableTracksLike_0x6B86C8` (binary 0x6B8F30, inside reseekTimelineCursors): NON-incremental. fwd scan to k (==target stop / <target ++k / >target --k stop), v41=min(k,count-2). step+merge slot[0]=v41, slot[1]=v41+1 (UNCONDITIONAL merges, NO !merged gate), activeSlotCursor=0.
 
-step=sub_6B786C (slot.frameIndex=idx; slot.time=frames[idx]["time"]; merged=0). merge=sub_6B7A70 (merged=1; type0→typeZeroFlag=1 early-ret; else interpFlag type2→0/type3→1; interval/value/easing from content). frames = item.frameSource (item+24, == item+0 cascadeKey source).
+step=Motion_VarTrackSlot_step_guess@0x6B786C (slot.frameIndex=idx; slot.time=frames[idx]["time"]; merged=0). merge=Motion_VarTrackSlot_merge_guess@0x6B7A70 (merged=1; type0→typeZeroFlag=1 early-ret; else interpFlag type2→0/type3→1; interval/value from content, easing from frame). 2026-07-18 已纠正原“easing from content”误记。frames = item.frameSource (item+24, 与 item+0 的 label 属性同源但独立 Variant CopyRef)。
 
 WIRING (authoritative branch map from progress_inner 0x6C106C):
 - 0x6C1468/0x6C11B0 advanceRoot → forward

@@ -1,4 +1,9 @@
 ---
+
+> **已于 2026-07-19 被 raw 架构迁移取代。** 下文记录的是历史临时修补，不能再用于
+> 推断当前代码。当前直接持有并消费 `Player+528` raw TJS dispatch；`MotionClip`、
+> clip 索引表、decoded `layerList/sourceCandidates` 与选择器均已删除。二进制路径证据
+> 仍有效，但“端口需要 `(owner,label)` 复合 key”的结论已失效。
 name: motionclip-chara-segment-isolation
 description: motion-clip 隔离的二进制权威机制(chara 段路径导航,非复合 key 表) + 端口 (owner,label) keying 修复对齐结论
 metadata:

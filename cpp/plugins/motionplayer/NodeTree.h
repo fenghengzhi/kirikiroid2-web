@@ -6,6 +6,7 @@
 #pragma once
 
 #include <string>
+#include "tjs.h"
 
 namespace motion {
     class Player;
@@ -14,24 +15,19 @@ namespace motion {
 
 namespace motion::detail {
 
-    struct MotionSnapshot;
     struct MotionNode;
     struct PlayerRuntime;
 
-    // Walk the PSB layer tree for the given clip (or root layers if clipLabel
-    // is empty/not found) and append nodes after the persistent root node.
+    // Walk motionContent.layer through raw TJS Array dispatches and append
+    // nodes after the persistent root node.
     // Index 0 is the constructor-created root; each real PSB layer points to
     // its parent node index, with top-level layers using parentIndex=0.
-    // A8: nodes / nodeLabelMap on Player; ownerPlayer parameter dropped (it
-    // IS the player).
     // P3-B (d): no longer takes a native ResourceManager* — layer-id allocation
     //   now routes through the Player+992 RM dispatch FuncCall (see Player.h
     //   dispatchRequireLayerId), matching binary buildNodeTree_recursive@0x6B4A6C.
     void buildNodeTree(
         motion::Player &player,
-        const MotionSnapshot &snapshot,
-        const std::string &clipOwner,
-        const std::string &clipLabel,
+        const tTJSVariant &motionContent,
         int parentPreview = 0);
 
 } // namespace motion::detail

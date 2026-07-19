@@ -28,3 +28,16 @@ foreach(name ${ALL_TARGETS})
     target_include_directories(${name} PRIVATE "${TEST_CONFIG_DIR}")
     catch_discover_tests(${name})
 endforeach()
+
+# D3DEmotePlayer's binary-faithful D3DImage listener owner is implemented by
+# DrawDeviceD3D.cpp in krkr2plugins_ncbind. The application whole-archives that
+# library; isolated tests that compile EmotePlayer must link it explicitly as
+# well.
+foreach(name motionplayer-dll psbfile-dll)
+    target_link_libraries(${name} PRIVATE krkr2plugins_ncbind)
+endforeach()
+
+# These tests exercise decoded compatibility helpers explicitly. Production
+# motionplayer and psbfile intentionally do not link either offline target.
+target_link_libraries(motionplayer-dll PRIVATE motionplayer_offline)
+target_link_libraries(psbfile-dll PRIVATE psbfile_decoded_compat)

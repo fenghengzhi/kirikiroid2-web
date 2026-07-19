@@ -137,6 +137,29 @@ namespace motion {
         }
     }
 
+    // sub_66713C @0x66713C.
+    void EmoteVarController_resetLike_0x66713C(EmoteVarController* self) {
+        if(!self) {
+            return;
+        }
+        if(!self->queue.empty()) {
+            self->state = 0;
+            const EmoteVarKeyValue20B &last = self->queue.back();
+            const float *channels = reinterpret_cast<const float *>(&last);
+            for(int i = 0; i < self->count; ++i) {
+                self->currentValue[i] = channels[i];
+            }
+            self->queue.clear();
+            return;
+        }
+        if(self->state != 0) {
+            self->state = 0;
+            for(int i = 0; i < self->count; ++i) {
+                self->currentValue[i] = self->startValue[i];
+            }
+        }
+    }
+
     void EmoteVarController_dtor(EmoteVarController* self) {
         delete[] self->currentValue;  self->currentValue = nullptr;
         delete[] self->targetValue;   self->targetValue  = nullptr;

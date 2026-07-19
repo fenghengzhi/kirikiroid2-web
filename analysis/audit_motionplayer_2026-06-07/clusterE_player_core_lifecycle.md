@@ -1,5 +1,11 @@
 # CLUSTER E — Player core / lifecycle 对齐审计 (2026-06-07)
 
+> **2026-07-18 correction:** 初版曾把 +960 写作 variableKeys、+968 写作
+> primary chara。NCB 表复核后的正确映射是 +960 chara、+968
+> stealthChara，+976/+984 为 motion/stealthMotion；四者是源码层 `ttstr`
+> 值 owner，+1099 是 playing。当前实现已补齐两个 pending owner 与 flush；
+> `variableKeys@0x6D139C` 也已迁回 +1296 var-track deque，以下表格同步采用新结论。
+
 > 权威: libkrkr2.so IDB。本轮全部结论基于本对话 fresh decompile(非 2026-05-30 旧符号)。
 > 范围: PlayerCore.cpp / Player.h / PlayerInternal.h / PlayerResource.cpp。
 > 协议: decompile → 伪代码 → 本地对照 → 六维裁决。只读审计;IDB 已 idb_save。
@@ -39,34 +45,29 @@ dtor: 本地 RAII 逆序析构 vs 二进制手写释放链。功能等价(tTJSVa
 
 | accessor | 二进制地址 | 二进制行为 | 本地 | 状态 |
 |---|---|---|---|---|
-| chara setter | **0x6C0E9C** | dedup(mode0)写 +968 **AND +960**(variableKeys cache),清 +976/+984/+1099,flush +776 | setChara: dedup + _chara=v + _activeMotion.reset() + _motionKey="" | ⚠️ 缺 +960 写 + 多清 _motionKey |
-| stealthChara setter | **0x6D94B0** | `if(+968)`:dedup(mode16,只 +968)+ flush +776;else AddRef+存 +776 | setStealthChara: 纯 `_stealthChara=v` | ❌ 缺 dedup/+968/+776 流程 |
-| dedup helper | 0x6B29C0 | a2&0x10→+968 else +960;wcscmp dedup;清 +976/+984/+1099 | (内联于 setChara) | ⚠️ |
+| chara setter | **0x6C0E9C** | dedup(mode0)写 +960 chara 并同步写 +968 stealthChara，清 +976/+984/+1099，flush +776 | `setCharaSlotLike_0x6B29C0(v,false)` + pending flush | ✅ |
+| stealthChara setter | **0x6D94B0** | `if(+968)`: dedup(mode16，只写 +968)+flush +776；else AddRef+存 +776 | 同一 mode16 helper 与 pending owner/flush | ✅ |
+| dedup helper | 0x6B29C0 | a2&0x10→仅 +968，否则 +960/+968；wcscmp dedup；清 +976/+984/+1099 | `setCharaSlotLike_0x6B29C0` | ✅ |
 | tickCount set | 0x6D96C0 | +1120=fmax(v*60/1000,0);+480 WORD=257;+456=min(+1120,+1128) | setTickCount 完全复刻(_queuing+_firstFrame=true) | ✅ |
 | tickCount get | 0x6D96A0 | +1120*1000/60 无 guard | getTickCount ✅ | ✅ |
 | loopTime/lastTime get | 0x6D9448 | +1136>0?*1000/60:+1136 | getLastTime ✅ | ✅ |
-| variableKeys get | 0x6D139C | walk var-track deque@+1296 → TJS Array(每元素 new(500)+tag2+AddRef) | getVariableKeys 读 _activeMotion->variableLabels(不同 source) | ⚠️ source 偏差,inert |
+| variableKeys get | 0x6D139C | walk var-track deque@+1296 → 每次新建 TJS Array 并追加 item+0 cascadeKey | 直接遍历 `_variableLabelScopes`，每次 `makeArray` | ✅ |
 | angleDeg set/get | 0x6C0F84 / 0x6C1780 | deg-direct / raw→deg | setAngleDeg/getAngleDeg ✅ | ✅(directEdit 路径缺 initEmoteMotion(2),平台 gap) |
 | angleRad set/get | 0x6CD0EC / 0x6CD0C0 | rad*57.29→deg / deg*0.0174→rad | setAngleRad/getAngleRad ✅ | ✅ |
 
 ### 偏差详情
-- **stealthChara setter(❌ 局部)**: 本地纯字段赋值,缺二进制的 +968-guard / mode16 dedup / +776 pending
-  flush。但 +776 在本地无 producer(只 child-motion/stealth pass 写),故 flush 分支 inert;主缺口是 dedup
-  与 +968 同步。修复: setStealthChara 走与 setChara 同构的 dedup(对 +968 等价的 chara 槽)。
-- **chara setter(⚠️ 局部)**: (a) 二进制 mode0 同时写 +960(variableKeys cache)—本地未同步 _variableKeys;
-  (b) 本地额外清 _motionKey(二进制只清 +976/+984 motion VALUE 槽 + +1099,保留 motion 名串)。建议:
-  setChara 同步刷新 _variableKeys 缓存,且不清 _motionKey(改为只 reset _activeMotion + 清 loaded 标志)。
-- **variableKeys getter(⚠️ inert)**: source 应为 +1296 var-track cascadeKey deque,本地读
-  _activeMotion->variableLabels。现有 motion 无 variable 列表 → 两 source 都空,observably inert。架构对齐
-  需把 getVariableKeys 改走 _variableLabelScopes(cascadeKey),与 0x6D139C 一致。
+- **2026-07-18 已闭合**：chara/stealthChara 两个 setter 已经共享 dedup helper 并恢复
+  +960/+968 双槽、+776 pending 与 +976/+984/+1099 清理；`variableKeys` 已删除不存在的
+  Player 缓存，直接从 +1296 deque 的 cascadeKey 每次构造新 Array。
 
 ## 4. PlayerResource.cpp
 ✅ 基本对齐。unload/unloadAll/isExistMotion/findMotion/releaseLayerId + dispatchRequireLayerId/
 dispatchReleaseLayerId 走 RM dispatch FuncCall(L"requireLayerId"/L"releaseLayerId"),复刻二进制
 0x6B4A6C/0x6C4E28/0x6DE738/0x6B56F8 的 dispatch 路径(非 native shortcut)✅。unloadAll 经 C-1 改走
-RM::unloadAll(0x6A8BBC,清 HashMap A)而非 inherited clearCache,注释证据充分。
-⚠️ _motionsByKey/_timelines 是 port-invented 容器(Player_4_HashMaps doc §三裁决),unload 操作它们属
-P3 容器归属重构,非本轮 actionable。
+RM::unloadAll(0x6A8CF8,清 HashMap A)而非 inherited clearCache,注释证据充分。
+⚠️ `_timelines/_playingTimelineLabels` 已于 2026-07-19 按 Player/EmoteEngine NCB
+owner 证据删除；`_motionsByKey` 仍是 port-invented decoded snapshot 容器，unload
+对它的操作仍属待迁移的生命周期偏差。
 
 ## 5. 子函数对齐状态
 - ✅ Player_setCharaOrKeySlot_dedup 0x6B29C0(已命名+注释)
@@ -83,9 +84,9 @@ P3 容器归属重构,非本轮 actionable。
 1. **P2 注释**: Player.h:1622 `_tjsRandomGenerator // player+992` → `// player+676`(RandomGen 实在 +676;
    +992 是第3份 RM dispatch 拷贝)。PlayerCore.cpp setChara 注释块(L535-574)仍引"0x6D94B0=chara setter
    /sub_6B29C0(16)"应改为"chara setter=0x6C0E9C(mode0);0x6D94B0 是 stealthChara setter"。
-2. **P1 局部**: setStealthChara 复刻 dedup + +968 同步(当前纯赋值);setChara 同步 _variableKeys 缓存
-   (+960)且不清 _motionKey。
-3. **P3 inert**: getVariableKeys 改走 _variableLabelScopes cascadeKey(对齐 0x6D139C source)。
+2. ~~setStealthChara/chara 双槽与 pending owner~~：2026-07-18 已闭合。
+3. ~~getVariableKeys 改走 `_variableLabelScopes` cascadeKey~~：2026-07-18 已闭合；
+   每次返回独立 Array，且 NCB 保持只读。
 
 ## 8. IDB 改善(已 idb_save)
 本轮无新增重命名(0x6C0E9C/0x6D94B0/0x6B29C0/0x6D9448/0x6D139C/0x6C0F84/0x6CD0EC/0x6C1780/0x6CD0C0

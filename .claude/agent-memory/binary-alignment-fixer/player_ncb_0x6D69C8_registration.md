@@ -26,7 +26,7 @@ type: project
 - onGroundCorrection @0x6d8f6c cb=Player_onAction_ncb @0x6D9A58 → sub_A0F5E0 (tTJSVariant copy/AddRef helper, NO Player state change) ⇒ faithful port = no-op method.
 - Port: added no-op `void onAction()/onSync()/onGroundCorrection() {}` in Player.h; the old getOn*/setOn* property storage is port-invented and no longer NCB-exposed.
 
-**Recovered members (binary-confirmed, were wrongly deleted):** stealthChara (RW, reuses getChara/setChara), stealthMotion (RW, getStealthMotion/setMotion_stealth), tags (**RO**, getter=Player_getStealthMotionStr→local getTags), project (RW), meshline (RW), independentLayerInherit (RW), useD3D (RW, set=Player_setUseD3DFlag), setVariable (method, cb=loc_6D0E70→setVariableCompatMethod), getVariable (method), getCommandList (method, cb=loc_6D3A4C), onFindMotion (method).
+**Recovered members (binary-confirmed, were wrongly deleted):** stealthChara (RW, reuses getChara/setChara), stealthMotion (RW, getStealthMotion/setMotion_stealth), tags (**RO**, getter=`sub_6D9618@0x6D9618`→local `getTags`; it CopyRefs Player+1072 `motion["tag"]`, and the old `Player_getStealthMotionStr` name was false), project (RW), meshline (RW), independentLayerInherit (RW), useD3D (RW, set=Player_setUseD3DFlag), setVariable (method, cb=loc_6D0E70→setVariableCompatMethod), getVariable (method), getCommandList (method, cb=loc_6D3A4C), onFindMotion (method).
 
 **The 24 timeline methods (countVariables, getVariableLabelAt, playTimeline, ...) are correctly D3DEmotePlayer-only — verified ABSENT from 0x6D69C8.** Do NOT recover onto Motion.Player.
 

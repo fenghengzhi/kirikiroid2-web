@@ -5,6 +5,11 @@ metadata:
   type: project
 ---
 
+**CORRECTED 2026-07-19:** 本文记录 2026-06-04 的旧实现。当前
+`seekRootContentStreamLike_0x6B6ADC` 与 `_rootStreamSource` 已删除，改为
+`advanceRootContentStreamLike_0x6B6ADC` / `rewindRootContentStreamLike_0x6B9A3C`；
+layer 亦按方向拆分，且不存在 pointer-identity reseed owner。
+
 M1 advance-unit completion (2026-06-03, fresh decompile 0x6B6ADC). The binary
 Player_advanceRootAndNodes runs 4 streams in fixed order at each advanceRoot
 terminal point: [① layer → ② root → ③ var-track → ④ node]. The live port

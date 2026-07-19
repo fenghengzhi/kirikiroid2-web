@@ -36,9 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace PSB {
-    class PSBDictionary;
-} // namespace PSB
+#include "tjs.h"
 
 namespace motion {
 
@@ -86,12 +84,12 @@ namespace motion {
     // Aligned with libkrkr2.so sub_662448 @ 0x662448 — EmoteSpringState ctor.
     //   self = operator new(0x48). Seeds firstFlag=1, all stored/pos/vel = 0
     //   (from .bss constants qword_1AB7E68/dword_1AB7E70 = 0), then reads the
-    //   per-node spring params from the PSB dict (narrow double->float, store
+    //   per-node spring params from the raw TJS dispatch (narrow double->float, store
     //   raw bits = getFloatValue): gravity->k_a, spring->k_b, friction->drag,
     //   scale_x->leverX, scale_y->leverY. The vec3 fields (storedXYZ/posXYZ/
     //   velXYZ) and biasY are overwritten by the builder (op/p/pv/ofs) afterward.
     void EmoteSpringState_ctor(EmoteSpringState* self,
-                               const PSB::PSBDictionary* dict);
+                               const tTJSVariant& dict);
 
     // ========================================================================
     // EmoteBustChainSpring — 2-segment chain spring, aligned with libkrkr2.so
@@ -229,7 +227,7 @@ namespace motion {
     //   rootX/Y(+80)=0, memset(+92,0,0x48). Reads (narrow double->float raw bits):
     //   gravity->+4, friction_x->+8, friction_y->+12, b_rate->+16, v_bound->+20,
     //   ud_eft->+24 (INT, propGetInt), bend_spd->+28, bend_vol->+32. The "length",
-    //   "scale_x", "scale_y" props are 2-element lists -> [0]/[1] each via index.
+    //   "scale_x", "scale_y" props are 2-element dispatch arrays -> [0]/[1] each.
     //   length[0]->+36(restLen0), length[1]->+40(restLen1); scale_x[0]->+56,[1]->
     //   +64; scale_y[0]->+60,[1]->+68. Then the rest positions are derived from the
     //   rest unit vector (0,1,0) (= floats of qword_1AB7E74/dword_1AB7E7C):
@@ -237,6 +235,6 @@ namespace motion {
     //     seg1 rest @+104/+108/+112 = restLen1 * (0,1,0); copy -> +128/+136(.., low
     //     half of QWORD copy); +140/+148 = 0; +152/+160 = 0.
     void EmoteBustChainSpring_ctor(EmoteBustChainSpring* self,
-                                   const PSB::PSBDictionary* dict);
+                                   const tTJSVariant& dict);
 
 } // namespace motion

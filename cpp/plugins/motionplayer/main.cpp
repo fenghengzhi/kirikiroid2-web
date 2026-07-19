@@ -5,7 +5,6 @@
 #include <spdlog/spdlog.h>
 #include "tjs.h"
 #include "ncbind.hpp"
-#include "psbfile/PSBFile.h"
 
 #include "ResourceManager.h"
 #include "EmotePlayer.h"
@@ -200,13 +199,13 @@ NCB_REGISTER_CLASS(Player) {
     // stealthMotion: binary RW property; get=Player_getStealthMotion,
     // set=Player_setMotion_stealth (name xref @0x6D69C8).
     NCB_PROPERTY(stealthMotion, getStealthMotion, setStealthMotion);
-    // tags: binary RO property; getter=Player_getStealthMotionStr @0x6D9768-
-    // adjacent (name xref @0x6d... aTags), setter slot is null (RO). Local
-    // getTags() returns _tags; do NOT expose a setter.
+    // tags: binary RO property; sub_6D9618 @0x6D9618 CopyRefs the raw
+    // Player+1072 motion["tag"] frame-array variant. Setter slot is null.
     NCB_PROPERTY_RO(tags, getTags);
+    // motionKey/project: binary RW aliases. Registration @0x6D6F58..0x6D7020
+    // installs the same getter 0x695BE0 and setter 0x6B4978 for both names;
+    // both copy the single tTJSVariant at player+1012.
     NCB_PROPERTY(motionKey, getMotionKey, setMotionKey);
-    // project: binary RW property (name xref @0x6D69C8 aProject); shares the
-    // generic accessor family with motionKey.
     NCB_PROPERTY(project, getProject, setProject);
     NCB_PROPERTY(outline, getOutline, setOutline);
     NCB_PROPERTY(priorDraw, getPriorDraw, setPriorDraw);
@@ -234,8 +233,10 @@ NCB_REGISTER_CLASS(Player) {
     NCB_PROPERTY_RO(playing, getPlaying);
     // M15 D-01 (cluster E §3.1): removed queuing/directEdit/selectorEnabled
     // Motion.Player NCB — port-invented properties not in 92-entry binary
-    // table. _queuing/_directEdit/_selectorEnabled fields preserved for
-    // internal use.
+    // table. _queuing/_directEdit remain for their proven internal paths;
+    // the dead Player-side _selectorEnabled mirror was removed after xrefs to
+    // Engine selector sync @0x670D1C proved only the metadata tail and Engine
+    // setter call it.
     // variableKeys: binary RO property (descriptor setter slot null @0x6D69C8).
     NCB_PROPERTY_RO(variableKeys, getVariableKeys);
     NCB_PROPERTY_RO(allplaying, getAllplaying);
@@ -275,7 +276,8 @@ NCB_REGISTER_CLASS(Player) {
     // FIXED 2026-06-03: the port binding was itself swapped (getAngleDeg returned
     // rad, getAngleRad returned raw deg). The getter/setter bodies (Player.h /
     // PlayerCore.cpp) were corrected so angleDeg->deg, angleRad->rad now match
-    // the binary. (Residual platform gap: directEdit path omits initEmoteMotion(2).)
+    // the binary. The directEdit setter branch now routes through
+    // Player_initEmoteMotionLike_0x6B2E90(2), matching both binary setters.
     NCB_PROPERTY(angleDeg, getAngleDeg, setAngleDeg);
     NCB_PROPERTY(angleRad, getAngleRad, setAngleRad);
     NCB_PROPERTY(speed, getSpeed, setSpeed);
@@ -411,7 +413,9 @@ NCB_REGISTER_CLASS(Player) {
     //   getPlayingTimelineFlagsAt, getTimelineTotalFrameCount, playTimeline,
     //   stopTimeline, setTimelineBlendRatio, getTimelineBlendRatio,
     //   fadeInTimeline, fadeOutTimeline, getPlayingTimelineInfoList
-    // C++ Player methods preserved (D3DEmotePlayer wrapper forwards to Player).
+    // There is no corresponding Player C++ surface in the binary. The local
+    // EmotePlayer and D3DEmotePlayer wrappers forward directly to EmoteEngine,
+    // matching 0x67FAC8 / 0x52E504; do not duplicate those methods on Player.
 
     // Selector — also D3DEmotePlayer-only per cluster E §3.1
     // Removed: isSelectorTarget, deactivateSelectorTarget
@@ -436,8 +440,7 @@ NCB_REGISTER_CLASS(Player) {
     // gated recursive draw-to-layer routine Player_drawToLayerCompat @0x6D2D80
     // (binary name/impl quirk: the member is named "clear" but the callback
     // fills the root layer rect + recurses nodeType==3 children).
-    // isPlaying removed from NCB (port surplus, not in binary 92-set);
-    // C++ Player::isPlayingCompat preserved for internal use.
+    // isPlaying and its callback are absent from the binary 92-set.
     NCB_METHOD_RAW_CALLBACK(play, &Player::playCompat, 0);
     NCB_METHOD_RAW_CALLBACK(progress, &Player::progressCompatMethod, 0);
     NCB_METHOD_RAW_CALLBACK(clear, &Player::clearCompat, 0);
@@ -459,7 +462,7 @@ NCB_REGISTER_CLASS(Player) {
 // the D3DEmotePlayer<->EmotePlayer binary relationship (sub_52E504) is not yet
 // decompiled, so "API fully missing" is not yet a settled verdict — verify
 // sub_52E504 before relocating the member table here.
-// Motion.EmotePlayer — full NCB surface (69 members + 2 constants), aligned
+// Motion.EmotePlayer — full NCB surface (70 members + 2 constants), aligned
 //   with libkrkr2.so EmotePlayer_ncb_registerMembers @0x67FAC8. Registration
 //   ORDER matches the binary 1:1 (#1..#69). The binary native instance create
 //   @0x68629C is arg-less; constants (TimelinePlayFlag*) registered on the same
@@ -468,7 +471,6 @@ NCB_REGISTER_CLASS(Player) {
 //   namespace free-functions) — they do NOT touch the M6 namespace-attach path.
 NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_CONSTRUCTOR(());
-    NCB_CONSTRUCTOR((ResourceManager));
 
     // 2 constants (binary registers these before the member loop body)
     Variant(TJS_W("TimelinePlayFlagParallel"),
@@ -554,17 +556,13 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
     NCB_METHOD(getLoopTimeline);                 // #64
     NCB_METHOD(getTimelineTotalFrameCount);      // #65
     NCB_METHOD(getPlayingTimelineInfoList);      // #66
-    // CORRECTION (2026-06-05, full member-string enumeration of
-    // EmotePlayer_ncb_registerMembers @0x67FAC8): the binary registers ONLY
-    // isSelectorTarget (#67) + deactivateSelectorTarget (#68); there is NO
-    // `activateSelectorTarget` member. The prior local extra has been removed so
-    // the table is now 69 members + 2 constants, 1:1 with the binary order
-    // (verified tail = isSelectorTarget, deactivateSelectorTarget, getCommandList).
-    // EmotePlayer::activateSelectorTarget (a STUB_WARN with no caller) is left as
-    // dead C++ but is no longer exposed to TJS.
+    // EmotePlayer_ncb_registerMembers @0x67FAC8 registers all three in this
+    // exact order. The activate name is the UTF-16 literal at 0x14D7796 and its
+    // descriptor stores EmoteEngine_activateSelectorTarget@0x67581C at 0x6814AC.
     NCB_METHOD(isSelectorTarget);                // #67
-    NCB_METHOD(deactivateSelectorTarget);        // #68
-    NCB_METHOD(getCommandList);                  // #69
+    NCB_METHOD(activateSelectorTarget);          // #68
+    NCB_METHOD(deactivateSelectorTarget);        // #69
+    NCB_METHOD(getCommandList);                  // #70
 }
 
 // ============================================================
@@ -574,8 +572,9 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
 NCB_REGISTER_SUBCLASS(ResourceManager) {
     NCB_CONSTRUCTOR((iTJSDispatch2 *, tjs_int));
     // M9 brick B: expose the binary ResourceManager's 12 members in the
-    // ncb_registerMembers @0x6AB8BC registration order. (setEmotePSBDecrypt*
-    // below are port extras, not part of the binary's 12.)
+    // ncb_registerMembers @0x6AB8BC registration order. The two
+    // setEmotePSBDecrypt* methods are injected later by emoteplayer_entry
+    // @0x682528, rather than belonging to this 12-member table.
     NCB_METHOD(loadSource);
     NCB_METHOD(clearCache);
     NCB_PROPERTY_RO(bufLayer, getBufLayer);
@@ -588,13 +587,6 @@ NCB_REGISTER_SUBCLASS(ResourceManager) {
     NCB_METHOD_RAW_CALLBACK(random, &ResourceManager::random, 0);
     NCB_METHOD(requireLayerId);
     NCB_METHOD(releaseLayerId);
-    // port extras (not in the binary RM 12-member table):
-    NCB_METHOD_RAW_CALLBACK(setEmotePSBDecryptSeed,
-                            &ResourceManager::setEmotePSBDecryptSeed,
-                            TJS_STATICMEMBER);
-    NCB_METHOD_RAW_CALLBACK(setEmotePSBDecryptFunc,
-                            &ResourceManager::setEmotePSBDecryptFunc,
-                            TJS_STATICMEMBER);
 }
 
 // ============================================================
@@ -836,6 +828,45 @@ static void EmotePlayerPreRegist() {
 }
 NCB_PRE_REGIST_CALLBACK(EmotePlayerPreRegist);
 
+static void EmotePlayerPostRegist() {
+    // emoteplayer_entry @0x682528 performs these steps after attaching the
+    // EmotePlayer class: Motion.ResourceManager PropGet, two
+    // TJSCreateNativeClassMethod calls, then PropSet flags 0x10200 with each
+    // method used as both Object and ObjThis in the temporary variant.
+    iTJSDispatch2 *global = TVPGetScriptDispatch();
+    if(!global)
+        return;
+
+    tTJSVariant motionValue;
+    if(TJS_SUCCEEDED(global->PropGet(0, TJS_W("Motion"), nullptr,
+                                     &motionValue, global)) &&
+       motionValue.Type() == tvtObject) {
+        iTJSDispatch2 *motion = motionValue.AsObjectNoAddRef();
+        tTJSVariant managerValue;
+        if(motion &&
+           TJS_SUCCEEDED(motion->PropGet(0, TJS_W("ResourceManager"),
+                                         nullptr, &managerValue, motion)) &&
+           managerValue.Type() == tvtObject) {
+            iTJSDispatch2 *manager = managerValue.AsObjectNoAddRef();
+            const auto inject = [manager](
+                                    const tjs_char *name,
+                                    tTJSNativeClassMethodCallback callback) {
+                iTJSDispatch2 *method = TJSCreateNativeClassMethod(callback);
+                tTJSVariant methodValue(method, method);
+                method->Release();
+                manager->PropSet(TJS_MEMBERENSURE | TJS_STATICMEMBER, name,
+                                 nullptr, &methodValue, manager);
+            };
+            inject(TJS_W("setEmotePSBDecryptSeed"),
+                   &ResourceManager::setEmotePSBDecryptSeed);
+            inject(TJS_W("setEmotePSBDecryptFunc"),
+                   &ResourceManager::setEmotePSBDecryptFunc);
+        }
+    }
+    global->Release();
+}
+NCB_POST_REGIST_CALLBACK(EmotePlayerPostRegist);
+
 NCB_REGISTER_CLASS(D3DEmoteModule) {
     NCB_CONSTRUCTOR(());
 
@@ -868,7 +899,9 @@ NCB_REGISTER_CLASS(D3DEmoteModule) {
 }
 
 NCB_REGISTER_CLASS(D3DEmotePlayer) {
-    NCB_CONSTRUCTOR((ResourceManager));
+    // Native-create sub_542764 -> unwrap sub_5428D8 requires one D3DImage
+    // instance (binary class descriptor mapping in sub_42C7F8), not an RM.
+    Factory(&D3DEmotePlayer::factory);
 
     // 4 constants — registered on the D3DEmotePlayer class itself per binary.
     // Aligned with libkrkr2.so D3DEmotePlayer_ncb_registerMembers @0x52E504:
@@ -986,10 +1019,12 @@ NCB_REGISTER_CLASS(D3DEmotePlayer) {
     // @0x52E504 confirms the setTimeline callback is registered ONLY under the
     // mismatched name `setTimelineBlendRatio` (@0x52f53c); the real name
     // `setTimeline` is absent from the table.
-    // M11 D-06: binary `setTimelineBlendRatio` member is bound to setTimeline
-    // cb (signature (ttstr label, bool loop)), not a real blend-ratio method.
+    // M11 D-06: binary `setTimelineBlendRatio` member is bound to
+    // D3DEmotePlayer_setTimeline @0x5308A4. Fresh disassembly shows this is a
+    // receiver-adjusting tail thunk into sub_6735AC: it masks the bool and
+    // passes the three incoming float arguments through unchanged.
     NCB_METHOD_DETAIL(setTimelineBlendRatio, Class, void, Class::setTimeline,
-                      (ttstr, bool));
+                      (ttstr, bool, float, float, float));
     NCB_METHOD(getTimelineBlendRatio);
     NCB_METHOD(fadeInTimeline);
     NCB_METHOD(fadeOutTimeline);

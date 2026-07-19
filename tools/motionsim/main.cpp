@@ -52,8 +52,7 @@
 #include "psbfile/PSBFile.h"
 #include "psbfile/PSBValue.h"
 
-#include "motionplayer/PlayerInternal.h"
-#include "motionplayer/RuntimeSupport.h"
+#include "motionplayer/OfflineMotionSnapshot.h"
 #include "motionplayer/MotionNode.h"
 
 namespace fs = std::filesystem;
@@ -107,6 +106,39 @@ namespace {
         return std::dynamic_pointer_cast<PSB::PSBList>((*dic)[key]);
     }
 
+    using MotionDictionary = std::shared_ptr<const PSB::PSBDictionary>;
+
+    void findMotionDictionary(const MotionDictionary &dic,
+                              const std::string &parentKey,
+                              const std::string &wantedLabel,
+                              MotionDictionary &result) {
+        if(!dic) return;
+        for(const auto &[key, child] : *dic) {
+            auto childDictionary =
+                std::dynamic_pointer_cast<const PSB::PSBDictionary>(child);
+            if(!childDictionary) continue;
+            if(parentKey == "motion" &&
+               (wantedLabel.empty() || key == wantedLabel)) {
+                // Last match wins, matching the old auxiliary label map while
+                // avoiding a persistent decoded clip/list side graph.
+                result = childDictionary;
+            }
+            findMotionDictionary(childDictionary, key, wantedLabel, result);
+        }
+    }
+
+    MotionDictionary selectMotionDictionary(
+        const motion::detail::MotionSnapshot &snapshot,
+        const std::string &clipLabel) {
+        if(!snapshot.root) return nullptr;
+        if(clipLabel.empty() && dictList(snapshot.root, "layer")) {
+            return snapshot.root;
+        }
+        MotionDictionary result;
+        findMotionDictionary(snapshot.root, {}, clipLabel, result);
+        return result ? result : snapshot.root;
+    }
+
     // ---------------------------------------------------------------------
     // SimNode — independent node struct for the simulator.
     // Mirrors fields read by libkrkr2.so Player_updateLayers phase2.
@@ -146,7 +178,7 @@ namespace {
         std::shared_ptr<const PSB::PSBDictionary> psbNode;
 
         // Populated during simulation:
-        motion::internal::FrameContentState state;
+        motion::internal::OfflineFrameContentState state;
         Accum accum;
         std::string coverageWarn;  // non-empty → row annotation of unsupported path
 
@@ -159,7 +191,7 @@ namespace {
     // Flat node tree construction — independent DFS of PSB children arrays.
     // Mirrors Player_buildNodeTree @0x6B51F0 / walkTree @0x6B4A6C semantics:
     //   - node 0 = synthetic root (no PSB dict)
-    //   - top-level layers from clip.layerList (or snapshot.layerList fallback)
+    //   - top-level layers read directly from the selected motion dictionary
     //     attach under synthetic root as parent
     //   - children arrays recurse DFS, parentIdx = thisIdx
     //   - every PSB dict becomes its own node (no label dedup)
@@ -224,21 +256,12 @@ namespace {
         root.parentIndex = -1;
         nodes.push_back(std::move(root));
 
-        const std::vector<std::shared_ptr<const PSB::PSBDictionary>> *src =
-            nullptr;
-        if(!clipLabel.empty()) {
-            auto it = snapshot.clipIndexByLabel.find(clipLabel);
-            if(it != snapshot.clipIndexByLabel.end()) {
-                const int idx = it->second;
-                if(idx >= 0 &&
-                   idx < static_cast<int>(snapshot.clipList.size())) {
-                    src = &snapshot.clipList[idx].layerList;
-                }
-            }
-        }
-        if(!src) src = &snapshot.layerList;
-
-        for(const auto &dic : *src) {
+        const auto motion = selectMotionDictionary(snapshot, clipLabel);
+        const auto layers = dictList(motion, "layer");
+        if(!layers) return nodes;
+        for(int index = 0; index < static_cast<int>(layers->size()); ++index) {
+            auto dic = std::dynamic_pointer_cast<const PSB::PSBDictionary>(
+                (*layers)[index]);
             if(!dic) continue;
             buildNodeDFS(dic, 0, nodes);
         }
@@ -343,7 +366,7 @@ namespace {
 
         for(size_t i = 1; i < nodes.size(); ++i) {
             SimNode &node = nodes[i];
-            const motion::internal::FrameContentState &state = node.state;
+            const motion::internal::OfflineFrameContentState &state = node.state;
 
             // 2.1 Parent lookup with joinTarget (0x00400000) walk — per
             //     pseudocode 0x6BB598..0x6BB5BC. Skip-parent if its
@@ -567,13 +590,8 @@ namespace {
                      const motion::detail::MotionSnapshot &snapshot,
                      const std::string &clipLabel) {
         double total = 600.0;
-        if(!clipLabel.empty()) {
-            auto it = snapshot.clipIndexByLabel.find(clipLabel);
-            if(it != snapshot.clipIndexByLabel.end() &&
-               it->second >= 0 &&
-               it->second < static_cast<int>(snapshot.clipList.size())) {
-                total = snapshot.clipList[it->second].totalFrames;
-            }
+        if(const auto motion = selectMotionDictionary(snapshot, clipLabel)) {
+            total = dictNum(motion, "lastTime").value_or(total);
         }
         if(total <= 0.0) total = 600.0;
         std::vector<double> grid;
@@ -652,28 +670,29 @@ int main(int argc, char *argv[]) {
                       inputPath.string());
         return 2;
     }
+    const std::string clipLabel = program.get<std::string>("--clip");
 
     // Stage 0 fixture probe: dump motion["tag"] event stream and exit.
-    // tagFrames = snapshot->tagFrames (= Player+1072, motion["tag"]); each
+    // Player+1072 is the selected raw motion dictionary's "tag" list; each
     // element is a frame dict {time, type, content{align,sync,action,...}}.
     // We report which frames are type==1 and whether content carries
     // align/sync/action — i.e. whether this fixture exercises the
     // onAction/onSync layer-event path (Stage A, commit 7edbd8f).
     if(program.get<bool>("--dump-tags")) {
-        // Diagnostic: dump root-level keys so we can tell whether a top-level
-        // "tag" key exists at all (vs. tag living nested under a clip/layer).
+        const auto motion = selectMotionDictionary(*snapshot, clipLabel);
+        // Diagnostic: dump the selected motion's keys so we can tell whether a
+        // "tag" key exists at all.
         {
             std::string rootKeys;
-            for(const auto &kv : *snapshot->root) {
+            for(const auto &kv : *motion) {
                 if(!rootKeys.empty()) rootKeys += ",";
                 rootKeys += kv.first;
             }
-            spdlog::info("root keys: {{{}}}", rootKeys);
+            spdlog::info("motion keys: {{{}}}", rootKeys);
         }
-        const auto &frames = snapshot->tagFrames;
+        const auto frames = dictList(motion, "tag");
         if(!frames) {
-            spdlog::warn("motion has NO top-level \"tag\" stream "
-                         "(snapshot->tagFrames == null)");
+            spdlog::warn("selected motion has NO \"tag\" stream");
             return 0;
         }
         const auto numOf =
@@ -784,8 +803,9 @@ int main(int argc, char *argv[]) {
             }
             return "<other>";
         };
+        const auto motion = selectMotionDictionary(*snapshot, clipLabel);
         const auto variable =
-            std::dynamic_pointer_cast<PSB::PSBList>((*snapshot->root)["variable"]);
+            std::dynamic_pointer_cast<PSB::PSBList>((*motion)["variable"]);
         if(!variable) {
             spdlog::warn("motion has NO top-level \"variable\" list");
             return 0;
@@ -810,7 +830,6 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    const std::string clipLabel = program.get<std::string>("--clip");
     {
         const auto rp = parseTimeList(program.get<std::string>("--root-pos"));
         if(rp.size() >= 2) {

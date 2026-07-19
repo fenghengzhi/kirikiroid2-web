@@ -2,15 +2,69 @@
 // Created by LiDon on 2025/9/15.
 //
 #pragma once
-#include <memory>
+#include <array>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include "tjs.h"
 #include "internal/ttstr_hash.h"
+#include "psbfile/PSBRawFile.h"
 #include "SourceCache.h"
 
+class iTVPTexture2D;
+
 namespace motion {
+
+    namespace detail {
+        // Win source-cache mapped value in Player_findSource @0x6948E8.
+        // Assignment retains the texture and destruction releases it, matching
+        // 0x694F7C..0x694FBC and the nested-map destructor @0x6DB4FC.
+        struct WinSourceTextureEntry {
+            WinSourceTextureEntry() = default;
+            ~WinSourceTextureEntry();
+            WinSourceTextureEntry(const WinSourceTextureEntry &) = delete;
+            WinSourceTextureEntry &operator=(const WinSourceTextureEntry &) = delete;
+            WinSourceTextureEntry(WinSourceTextureEntry &&other) noexcept;
+            WinSourceTextureEntry &operator=(WinSourceTextureEntry &&other) noexcept;
+
+            void setTexture(iTVPTexture2D *value);
+
+            iTVPTexture2D *texture = nullptr;
+        };
+
+        // KRKR source descriptor stored in the second nested map constructed
+        // by sub_6EBCFC @0x6EBCFC and populated by sub_695DE8 @0x695DE8.
+        struct PackedSourceAtlasEntry {
+            PackedSourceAtlasEntry() = default;
+            ~PackedSourceAtlasEntry();
+            PackedSourceAtlasEntry(const PackedSourceAtlasEntry &) = delete;
+            PackedSourceAtlasEntry &operator=(const PackedSourceAtlasEntry &) = delete;
+            PackedSourceAtlasEntry(PackedSourceAtlasEntry &&other) noexcept;
+            PackedSourceAtlasEntry &operator=(PackedSourceAtlasEntry &&other) noexcept;
+
+            void setTexture(iTVPTexture2D *value);
+
+            iTVPTexture2D *texture = nullptr;
+            int originX = 0;
+            int originY = 0;
+            std::array<int, 4> textureRect{0, 0, 0, 0};
+            std::array<double, 4> clip{0.0, 0.0, 1.0, 1.0};
+        };
+
+        // Mapped value of ResourceManager's outer ttstr unordered_map.
+        // sub_6EBCFC @0x6EBCFC constructs exactly PSB root + Win map + KRKR
+        // map. Declaration order deliberately makes ordinary C++ destruction
+        // run KRKR map -> Win map -> PSBFile, as sub_6DB3E8 @0x6DB3E8 does.
+        struct LoadedResourceRecord {
+            LoadedResourceRecord();
+
+            PSB::PSBFile file;
+            std::unordered_map<ttstr, WinSourceTextureEntry,
+                               ttstr_hash, ttstr_equal> winSourceTextures;
+            std::unordered_map<ttstr, PackedSourceAtlasEntry,
+                               ttstr_hash, ttstr_equal> krkrSourceEntries;
+        };
+    } // namespace detail
 
     // ------------------------------------------------------------------
     // R-M9 Phase 1 scaffolding (M9 spike 2026-05-31; architecture confirmed
@@ -44,16 +98,22 @@ namespace motion {
     // the earlier "per-vertex vertex colors" justification was WRONG in
     // mechanism (corrected), but the single-scalar-RGBA platform boundary itself
     // is genuine and is justified by this located consumer (sub_6A7518 per-pixel
-    // bake), not by findSource. What remains parked under phase D is only the
-    // texture-topology + RM/SourceCache class merge, not the color path.
-    // Binary libkrkr2.so ResourceManager (~256B, NCB registered at 0x6AB8BC)
-    // exposes 14 TJS members and holds 3 internal containers + bufLayer +
-    // spec int. Phase 1 declares the binary-aligned C++ fields so phase 2
-    // (atomic findSource topology refactor) is a pure data migration rather
-    // than type discovery. None of the new fields are wired into the
-    // load/findSource paths yet — port's existing State<shared_ptr> backing
-    // store stays authoritative for behavior. Logo differential green is
-    // preserved by construction (new fields default-initialized empty).
+    // bake), not by findSource. The texture-cache topology and lifetime are now
+    // restored on each LoadedResourceRecord; both Win/spec=2 and KRKR/spec=1
+    // now read the record's raw PSBRawNode graph. Offline dump/simulation tools
+    // still have a decoded MotionSnapshot helper, but it is not registered in
+    // ResourceManager and is not part of the Player runtime object graph.
+    // Binary libkrkr2.so ResourceManager (0xE8 bytes, NCB registered at 0x6AB8BC)
+    // exposes 12 TJS members and holds 3 internal containers + bufLayer +
+    // spec int. CORRECTION 2026-07-18: the earlier phase-1 note that these
+    // fields were not wired is now false. The inline _loadedModules member is
+    // HashMap A whose mapped record owns the raw PSBFile plus the two nested
+    // source maps constructed by sub_6EBCFC; load/unload/unloadAll/findLoaded
+    // and the isExistMotion/findMotion walks use it. The former eager
+    // MotionSnapshot registries and local _lastLoadedPath/_lastLoadedModule
+    // fields were disproved and removed; Player now owns only the raw +528
+    // content and +1012 matched-key variants. The map's key/value, owner
+    // operations, and inline lifetime are no longer the gap.
     //
     // TWO ARCHITECTURE FACTS the binary makes the eventual target (phase D):
     //  (1) C-1 RE-CORRECTED 2026-06-07: ResourceManager : public SourceCache.
@@ -110,18 +170,21 @@ namespace motion {
     // sub_6A8438 / sub_6A84FC that SourceCache registrar @0x6A85A8 binds).
     // The inherited loadSource(tTJSVariant,tTJSVariant) / clearCache() /
     // getBufLayer() now serve the RM NCB bindings, so the former RM-own
-    // overrides (loadSource(ttstr)->load forward, clearCache()->_state clear,
+    // overrides (loadSource(ttstr)->load forward, clearCache()->module-map clear,
     // getBufLayer()->ttstr) are removed — they were the pre-inheritance
     // two-class artifacts.
     class ResourceManager : public SourceCache {
     public:
         ResourceManager();
+        ~ResourceManager();
+
+        ResourceManager(const ResourceManager &) = delete;
+        ResourceManager &operator=(const ResourceManager &) = delete;
 
         explicit ResourceManager(iTJSDispatch2 *kag, tjs_int cacheSize);
 
-        tTJSVariant load(ttstr path) const;
+        tTJSVariant load(ttstr path);
         void unload(ttstr path) const;
-        tTJSVariant getLastLoadedModule() const;
         tTJSVariant findLoaded(ttstr path) const;
         tTJSVariant findSource(ttstr moduleKey, ttstr path) const;
         // P3-B (2026-06-05): binary RM exposes ONLY requireLayerId (no-arg) and
@@ -135,11 +198,10 @@ namespace motion {
         tjs_int requireLayerId();
         void releaseLayerId(tjs_int id);
 
-        // M9 brick B: binary ResourceManager NCB members (ncb_registerMembers
-        // @0x6AB8BC, 12 members total) missing from the port surface. Faithful
-        // where _state maps cleanly (unloadAll); STUB (cite addr) where the real
-        // bodies walk HashMap A both through bucket lookup and through its
-        // libstdc++ global node chain at +104.
+        // Binary ResourceManager NCB members (ncb_registerMembers @0x6AB8BC,
+        // 12 members total). The former STUB annotations are obsolete: the
+        // mapped-record implementation now carries the corresponding raw
+        // HashMap-A behavior without reproducing ARM64 ABI byte offsets.
         // C-1: bufLayer (prop-ro @0x6A84FC = base +40 Layer variant) is now the
         // INHERITED SourceCache::getBufLayer() — the RM-own ttstr getBufLayer()
         // was the pre-inheritance two-class artifact and is removed.
@@ -149,7 +211,7 @@ namespace motion {
         [[nodiscard]] tTJSVariant findMotion(ttstr projectKey,
                                               ttstr path) const; // @0x6A9ED4
         static tjs_error random(tTJSVariant *r, tjs_int n, tTJSVariant **p,
-                                iTJSDispatch2 *obj);            // @0x6AB56C (STUB)
+                                iTJSDispatch2 *obj);            // @0x6AB56C
 
         [[nodiscard]] static tjs_int getEmotePSBDecryptSeed();
 
@@ -162,35 +224,26 @@ namespace motion {
                                                 iTJSDispatch2 *obj);
 
     private:
-        struct State {
-            // P3-A: HashMap A container-selection alignment with libkrkr2.so
-            // ResourceManager (RM ctor sub_6A88CC @0x6A88CC: this+88 =
-            // operator new(8 * _M_next_bkt(10)), this+96 = bucketCount — a
-            // libstdc++ std::unordered_map<ttstr, V> with the KiriKiri FNV
-            // hash functor). findOrInsert sub_6EB9E4 @0x6EB9E4 keys by the
-            // RAW PATH ttstr (no case-fold: the FNV at 0x6eba2c-0x6eba78 hashes
-            // raw UTF-16 code units; the node compare sub_9B1ED0 @0x9B1ED0 is a
-            // case-SENSITIVE ordinal wcscmp). So the key is ttstr + the
-            // ttstr_hash/ttstr_equal functors already used by the four Player
-            // HashMaps (internal/ttstr_hash.h), NOT std::string/lowercase.
-            std::unordered_map<ttstr, tTJSVariant, detail::ttstr_hash,
-                               detail::ttstr_equal>
-                loadedModules;
-            ttstr lastLoadedPath;
-            tTJSVariant lastLoadedModule;
-            // P3-B (2026-06-05): binary RM layer-id allocator (ctor sub_6A88CC)
-            //   = std::set<unsigned int> @+168 (std::_Rb_tree<unsigned int,
-            //   _Identity, std::less> — type signature literal in
-            //   _M_insert_unique/_M_erase_aux callers 0x6AB694/0x6AB750) + a
-            //   next-id counter @+216. NO name<->id maps exist in the binary
-            //   (the by-name machinery was a local invention; see header note).
-            //   Container selection aligned: std::set (ordered RB-tree), not
-            //   std::unordered_set.
-            std::set<tjs_int> usedLayerIds;
-            tjs_int nextLayerId = 1;
-        };
+        friend class Player;
 
-        std::shared_ptr<State> _state;
+        detail::LoadedResourceRecord *findLoadedResourceRecord(
+            const ttstr &path) const;
+
+        // HashMap A is an inline ResourceManager member in ctor sub_6A88CC,
+        // keyed by the raw, case-sensitive ttstr path with the recovered FNV
+        // hash/equality functors. It is not shared through a State object.
+        using LoadedModuleMap =
+            std::unordered_map<ttstr, detail::LoadedResourceRecord,
+                               detail::ttstr_hash,
+                               detail::ttstr_equal>;
+        mutable LoadedModuleMap _loadedModules;
+
+        // ResourceManager ctor sub_6A88CC constructs the random variant before
+        // the std::set and explicitly inserts the sentinel id 0. requireLayerId
+        // @0x6AB694 starts from 1, so 0 is never returned; release(0) is a no-op.
+        tTJSVariant _randomGenerator;
+        std::set<tjs_int> _usedLayerIds{0};
+        tjs_int _nextLayerId = 1;
         inline static int _decryptSeed;
 
         // --- R-M9 Phase 1 binary-aligned scaffolding (empty in phase 1) ---
@@ -215,8 +268,8 @@ namespace motion {
         //     the case-SENSITIVE ordinal wcscmp sub_9B1ED0 @0x9B1ED0.
         // The container-selection-aligned form is therefore exactly
         //   std::unordered_map<ttstr, V, ttstr_hash, ttstr_equal>
-        // which is precisely `State::loadedModules` above (migrated to ttstr key in
-        // P3-A). So HashMap A is NOT a separate parked field — loadedModules IS it.
+        // which is precisely `_loadedModules` above (migrated to ttstr key in
+        // P3-A). So HashMap A is NOT a separate parked field — _loadedModules IS it.
         // The earlier `_psbDictCache` scaffolding (an empty stand-in awaiting a
         // "phase-D inline bucket map") was based on the FALSIFIED "not std container"
         // premise and is removed; no consumer ever read it.
@@ -230,10 +283,9 @@ namespace motion {
 
         // +224 int32 spec flag — binary checks 1 (krkr) vs 2 (win) in
         // loadResource path. Web port runs the krkr branch.
-        // ResourceManager_ctor @0x6A8988 evaluates
-        // `new Math.RandomGenerator()` into the source-level member consumed by
-        // ResourceManager_random @0x6AB56C.
-        tTJSVariant _randomGenerator;
-        tjs_int _spec = 1;
+        // ResourceManager_ctor @0x6A8988 evaluates `new Math.RandomGenerator()`
+        // into _randomGenerator above; field order follows map -> random -> set
+        // -> counter -> spec, with the two marked Web-only fields interposed.
+        tjs_int _spec = 0;
     };
 } // namespace motion

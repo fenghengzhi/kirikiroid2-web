@@ -5,91 +5,14 @@
 
 #include "PlayerInternal.h"
 #include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
+#include "MotionDispatch.h"
 #include "MotionTraceWeb.h"
 #include "ncbind.hpp"
-#include "psbfile/PSBValue.h" // 砖5/洞3: read motion["tag"] frame dicts
 #include "tjsDebug.h"
 
 using namespace motion::internal;
 
 namespace {
-    template <typename AnimatorState>
-    bool stepQueuedAnimatorLike_0x67D01C(AnimatorState &state, double dt,
-                                         double &outValue) {
-        double remaining = std::max(dt, 0.0);
-
-        while(remaining > 0.0) {
-            if(!state.active) {
-                if(state.queue.empty()) {
-                    outValue = state.currentValue;
-                    return false;
-                }
-                const auto frame = state.queue.front();
-                state.queue.pop_front();
-                state.startValue = state.currentValue;
-                state.targetValue = frame.value;
-                state.duration = std::max(frame.duration, 0.000001f);
-                state.weight = frame.weight;
-                state.progress = 0.0f;
-                state.active = true;
-            }
-
-            const double remainingDuration =
-                static_cast<double>(state.duration) *
-                std::max(0.0f, 1.0f - state.progress);
-            const double consume = std::min(remaining, remainingDuration);
-            if(state.duration > 0.0f) {
-                state.progress = static_cast<float>(std::min(
-                    1.0, static_cast<double>(state.progress) +
-                             consume / static_cast<double>(state.duration)));
-            } else {
-                state.progress = 1.0f;
-            }
-
-            const double ratio =
-                std::pow(std::clamp(static_cast<double>(state.progress), 0.0,
-                                    1.0),
-                         static_cast<double>(state.weight));
-            state.currentValue = static_cast<float>(
-                state.startValue +
-                (state.targetValue - state.startValue) * ratio);
-            remaining -= consume;
-
-            if(state.progress >= 1.0f) {
-                state.currentValue = state.targetValue;
-                state.active = false;
-            }
-
-            if(consume <= 0.0) {
-                break;
-            }
-        }
-
-        outValue = state.currentValue;
-        return state.active || !state.queue.empty();
-    }
-
-    double timelineBlendEaseWeightLike_0x6735AC(double ease) {
-        if(ease == 0.0) {
-            return 1.0;
-        }
-        if(ease > 0.0) {
-            return ease + 1.0;
-        }
-        return 1.0 / (1.0 - ease);
-    }
-
-    std::string joinPlayingLabels(const std::vector<std::string> &labels) {
-        std::string joined;
-        for(const auto &timelineLabel : labels) {
-            if(!joined.empty()) {
-                joined += ",";
-            }
-            joined += timelineLabel;
-        }
-        return joined.empty() ? std::string("<none>") : joined;
-    }
-
     std::string shortTJSStackTrace(tjs_int limit = 8) {
         ttstr stack = TJSGetStackTraceString(limit, TJS_W(" <- "));
         return stack.AsStdString();
@@ -98,989 +21,170 @@ namespace {
 } // anonymous namespace
 
 namespace motion {
-namespace internal {
-
-    // A4: friend of Player so it can read _timelines / _playingTimelineLabels
-    // for the active-clip evaluation path. Defined here because it has a
-    // single caller in this translation unit.
-    double activeClipTime(const Player &player, const detail::MotionClip *clip) {
-        if(clip) {
-            if(const auto it = player._timelines.find(clip->label);
-               it != player._timelines.end()) {
-                return it->second.currentTime;
-            }
-        }
-
-        for(const auto &label : player._playingTimelineLabels) {
-            if(const auto it = player._timelines.find(label);
-               it != player._timelines.end()) {
-                return it->second.currentTime;
-            }
-        }
-        return 0.0;
+namespace {
+    // Exact source-level helpers recovered at the two out-of-line Android
+    // functions called by all three variable-track cursor paths.
+    void stepVariableTrackSlotLike_0x6B786C(
+        detail::VarTrackSlot &slot, const tTJSVariant &frameSource,
+        std::uint32_t index) {
+        slot.frameIndex = index;
+        const tTJSVariant frame = detail::motionPropGetByNum(
+            frameSource, static_cast<tjs_int>(index));
+        slot.time = detail::motionPropGetDouble(frame, TJS_W("time"));
+        slot.merged = false;
     }
 
-} // namespace internal
-
-
-    void Player::scheduleTimelineControlAnimatorLike_0x671A50(
-        detail::TimelineState &state, size_t trackIndex, float value,
-        double transition, double easeWeight) {
-        if(trackIndex >= state.controlTrackAnimators.size()) {
-            state.controlTrackAnimators.resize(trackIndex + 1);
-        }
-        if(trackIndex >= state.controlTrackValues.size()) {
-            state.controlTrackValues.resize(trackIndex + 1, 0.0f);
-        }
-
-        auto &animator = state.controlTrackAnimators[trackIndex];
-        const float targetValue = value;
-        if(transition <= 0.0) {
-            animator.queue.clear();
-            animator.active = false;
-            animator.currentValue = targetValue;
-            animator.startValue = targetValue;
-            animator.targetValue = targetValue;
-            animator.progress = 1.0f;
-            animator.duration = 0.0f;
-            animator.weight = static_cast<float>(easeWeight);
-            state.controlTrackValues[trackIndex] = targetValue;
+    void mergeVariableTrackSlotLike_0x6B7A70(
+        detail::VarTrackSlot &slot, const tTJSVariant &frameSource) {
+        slot.merged = true;
+        const tTJSVariant frame = detail::motionPropGetByNum(
+            frameSource, static_cast<tjs_int>(slot.frameIndex));
+        const tjs_int type = detail::motionPropGetInt(frame, TJS_W("type"));
+        if(type == 0) {
+            slot.typeZeroFlag = true;
             return;
         }
-
-        animator.queue.push_back(detail::TimelineControlKeyframe{
-            targetValue,
-            static_cast<float>(transition),
-            static_cast<float>(easeWeight),
-        });
-        if(!animator.active && animator.queue.size() == 1 &&
-           animator.progress >= 1.0f) {
-            animator.startValue = animator.currentValue;
-            animator.targetValue = animator.currentValue;
+        slot.typeZeroFlag = false;
+        if(type == 2) {
+            slot.interpFlag = 0;
+        } else if(type == 3) {
+            slot.interpFlag = 1;
         }
+        const tTJSVariant content = detail::motionPropGet(
+            frame, TJS_W("content"));
+        slot.interval = static_cast<std::uint32_t>(
+            detail::motionPropGetInt(content, TJS_W("interval")));
+        slot.value = detail::motionPropGetDouble(content, TJS_W("value"));
+        // 0x6B7C90..0x6B7CD4 dispatches on the frame holder (v19), not
+        // content (v15), then CopyRef's the resulting Variant into slot+32.
+        slot.easing = detail::motionPropGet(frame, TJS_W("easing"));
     }
 
-    void Player::setTimelineBlendLike_0x6735AC(const std::string &label,
-                                               bool autoStop, double value,
-                                               double transition,
-                                               double ease) {
-        if(label.empty()) {
-            return;
-        }
-
-        auto timelineIt = _timelines.find(label);
-        if(timelineIt == _timelines.end()) {
-            return;
-        }
-
-        auto &state = timelineIt->second;
-        state.label = label;
-        state.blendAutoStop = autoStop;
-        const float targetValue = static_cast<float>(value);
-        const float easeWeight =
-            static_cast<float>(timelineBlendEaseWeightLike_0x6735AC(ease));
-
-        if(transition <= 0.0) {
-            state.blendAnimator.queue.clear();
-            state.blendAnimator.active = false;
-            state.blendAnimator.currentValue = targetValue;
-            state.blendAnimator.startValue = targetValue;
-            state.blendAnimator.targetValue = targetValue;
-            state.blendAnimator.progress = 1.0f;
-            state.blendAnimator.duration = 0.0f;
-            state.blendAnimator.weight = easeWeight;
-            state.blendRatio = value;
-            return;
-        }
-
-        state.blendAnimator.queue.push_back(detail::TimelineControlKeyframe{
-            targetValue,
-            static_cast<float>(transition),
-            easeWeight,
-        });
-        if(!state.blendAnimator.active &&
-           state.blendAnimator.queue.size() == 1 &&
-           state.blendAnimator.progress >= 1.0f) {
-            state.blendAnimator.startValue = state.blendAnimator.currentValue;
-            state.blendAnimator.targetValue = state.blendAnimator.currentValue;
-        }
-        if (_engineBack) _engineBack->_dirty = true;
+    int rawFrameCount(const tTJSVariant &frames) {
+        return detail::motionPropGetCount(frames);
     }
 
-    // Removed 2026-06-06: stepTimelineControlAnimatorsLike_0x67D01C /
-    // stepTimelineBlendAnimatorsLike_0x67D01C / refreshFixedControllerEvalOutputs
-    // Like_0x67D01C were caller-less residue of the 06-03 parallel model. Fresh
-    // decompile of EmoteEngine_progress @0x67D01C confirms controller stepping is
-    // owned entirely by the 6 EmoteEngine typed-deque step loops (+256/+336/+416/
-    // +576/+656/+736 -> Player_HM2_upsert -> HM7), consumed by the HM7 bind-loop
-    // @0x67d3a4. The binary has NO per-Player timeline-animator stepping that
-    // these 3 helpers correspond to (they mis-claimed alignment to 0x67D01C). The
-    // Player timeline containers themselves (_timelines/_playingTimelineLabels/
-    // controlTrackAnimators/blendAnimator/fixedControllerOutputs) stay — they back
-    // the live TJS timeline API (PlayerTimeline.cpp) and are unaffected. The
-    // helpers stepQueuedAnimatorLike_0x67D01C / writeEvalResultValueLike_0x6C4668
-    // still have live callers and stay.
-
-    void Player::accumulateTimelineContributionLike_0x67C560(
-        const std::string &label, double &value) {
-        const auto *activeMotion = _activeMotion.get();
-        if(!activeMotion || label.empty()) {
-            return;
-        }
-
-        for(const auto &timelineLabel : _playingTimelineLabels) {
-            const auto timelineIt = _timelines.find(timelineLabel);
-            const auto controlIt =
-                activeMotion->timelineControlByLabel.find(timelineLabel);
-            if(timelineIt == _timelines.end() ||
-               controlIt == activeMotion->timelineControlByLabel.end()) {
-                continue;
-            }
-
-            const auto &state = timelineIt->second;
-            if((state.flags & 2) == 0) {
-                continue;
-            }
-
-            const auto &binding = controlIt->second;
-            for(size_t trackIndex = 0; trackIndex < binding.tracks.size();
-                ++trackIndex) {
-                const auto &track = binding.tracks[trackIndex];
-                if(track.instantVariable || track.frames.empty() ||
-                   track.label != label ||
-                   trackIndex >= state.controlTrackValues.size()) {
-                    continue;
-                }
-                value += static_cast<double>(state.controlTrackValues[trackIndex]) *
-                    state.blendRatio;
-            }
-        }
+    tTJSVariant rawFrameAt(const tTJSVariant &frames, int index) {
+        return detail::motionPropGetByNum(frames, index);
     }
 
-    void Player::applyClampControlsLike_0x67C8A8() {
-        // Aligned with libkrkr2.so sub_67C8A8 @0x67C8A8 (clampControl binder),
-        // called from EmoteEngine_progress @0x67d3f8 — AFTER the HM7 bind-loop
-        // @0x67d3a4, BEFORE the step-7 Player progress sub_6D2A54 @0x67d408.
-        // 2026-06-03: migrated out of the Player progress path (frameProgress);
-        // now invoked from EmoteEngine::progress, the binary's true location.
-        //
-        // Binary strides the engine's 40B clampControl deque (deque#7, engine+496,
-        // populated by EmoteEngine_buildClampControl @0x66EE5C). Per entry:
-        //   v52[0]=HM7.find(var_lr)?node.value(+16):0.0   (@0x67c9b4..0x67c9cc)
-        //   v51   =HM7.find(var_ud)?node.value(+16):0.0   (@0x67ca68..0x67ca7c)
-        //   sub_67C560(this, var_lr, &v52[0]);            (@0x67ca8c — cascade)
-        //   sub_67C560(this, var_ud, &v51);               (@0x67ca9c — cascade)
-        //   range=max-min; norm=2*(val-min)/range-1 both axes (NO zero/empty guard)
-        //   if(lrNorm!=0 && udNorm!=0): disk-remap by mode
-        //   final=min+range*(norm+1)*0.5; X negated iff sub_67C6B0 mirror set.
-        // GAP-FIX 2026-06-03: reads ENGINE HM7 (_engineBack->_labelToValueHM7 =
-        //   engine+1440 = sub_67C8A8 v6=result+180), NOT player HM2; removed the
-        //   port-invented getVariable fallback + varLr/varUd empty-key guard +
-        //   zero-range guard (the binary has none of these). GAP-FIX: now runs the
-        //   sub_67C560 var-track cascade on each axis value (was omitted).
-        const auto *activeMotion = _activeMotion.get();
-        if(!activeMotion) {
-            return;
-        }
+    double rawFrameTime(const tTJSVariant &frame) {
+        return detail::motionPropGetDouble(frame, TJS_W("time"));
+    }
 
-        // HM7 source = engine+1440 (sub_67C8A8 v6 = engine+180 qwords). The engine
-        // is the owner of HM7; the clamp reads the RAW stepped values (pre-mirror).
-        const detail::LabelValueMap *hm7 =
-            _engineBack ? &_engineBack->_labelToValueHM7 : nullptr;
+    int rawFrameType(const tTJSVariant &frame) {
+        return detail::motionPropGetInt(frame, TJS_W("type"));
+    }
 
-        for(const auto &binding : activeMotion->clampControls) {
-            // v52[0] / v51 default 0.0; HM7.find returns node value+16 when present.
-            double lrValue = 0.0;
-            double udValue = 0.0;
-            if(hm7 != nullptr) {
-                if(const auto it = hm7->find(detail::widen(binding.varLr));
-                   it != hm7->end()) {
-                    lrValue = it->second;            // @0x67c9cc node value+16
-                }
-                if(const auto it = hm7->find(detail::widen(binding.varUd));
-                   it != hm7->end()) {
-                    udValue = it->second;            // @0x67ca7c node value+16
-                }
-            }
+    tTJSVariant rawFrameContent(const tTJSVariant &frame) {
+        return detail::motionPropGet(frame, TJS_W("content"));
+    }
+} // anonymous namespace
 
-            // sub_67C560(this, var_lr, &v52[0]) / (this, var_ud, &v51) — var-track
-            // weighted cascade mutates each axis value in place (@0x67ca8c/0x67ca9c).
-            accumulateTimelineContributionLike_0x67C560(binding.varLr, lrValue);
-            accumulateTimelineContributionLike_0x67C560(binding.varUd, udValue);
 
-            // range = max - min (@0x67caa8 v33). Binary applies NO zero-range guard.
-            const double range = binding.maxValue - binding.minValue;
+    void Player::advanceLayerEventStreamLike_0x6B6ADC(double targetTime) {
+        const auto &frames = _tagFrameSourceVariant;
+        const int count = rawFrameCount(frames);
+        if(count >= 1) {
+            while(_layerFrameCursor < count - 2) {
+                if(targetTime < _layerNextTime) break;
+                ++_layerFrameCursor;
+                const auto frame = rawFrameAt(frames, _layerFrameCursor);
+                _layerCurTime = rawFrameTime(frame);
+                _layerNextTime = rawFrameTime(
+                    rawFrameAt(frames, _layerFrameCursor + 1));
+                if(rawFrameType(frame) != 1) continue;
 
-            // norm = 2*(val-min)/range - 1 for both axes (@0x67cac8/0x67cad0).
-            double lrNorm =
-                ((lrValue - binding.minValue) / range) * 2.0 - 1.0;
-            double udNorm =
-                ((udValue - binding.minValue) / range) * 2.0 - 1.0;
-
-            // if(v52[0]!=0 && v35!=0) — i.e. lrNorm!=0 && udNorm!=0 (@0x67cadc).
-            if(udNorm != 0.0 && lrNorm != 0.0) {
-                // Binary: if(*(DWORD)v2)/type!=0 -> circle branch (acts when
-                // type==1 && radius>1); else (type==0) -> squircle (@0x67cae0).
-                if(binding.type != 0) {
-                    if(binding.type == 1 &&
-                       std::sqrt(lrNorm * lrNorm + udNorm * udNorm) > 1.0) {
-                        const double angle = std::atan2(udNorm, lrNorm);
-                        lrNorm = std::cos(angle);
-                        udNorm = std::sin(angle);
+                const auto content = rawFrameContent(frame);
+                if(_syncActive) {
+                    if(detail::motionPropGetBool(content, TJS_W("align"))) {
+                        _motionCompleted = true;
+                        _clampedEvalTime = _layerCurTime;
+                        _frameTickCount = _layerCurTime;
                     }
-                } else {
-                    // type==0 squircle remap (@0x67cb18..0x67cb9c). Binary order:
-                    //   v36 = fabs(lrNorm/udNorm);
-                    //   v37 = (v36<=1.0) ? v36 : 1.0/v36;        // clamped ratio
-                    //   v38 = 1.0/sqrt(v37*v37+1.0);             // invLen
-                    //   v39 = lrNorm*v38; v40 = v38*udNorm;      // proj X / Y
-                    //   v41 = sqrt(v39*v39+v40*v40);             // projLen
-                    //   v42 = sin(v41*PI/2)/v41;
-                    //   v43 = (1-cos(v37*PI/2))*(v42-1)+1;       // scale (uses v37)
-                    //   lrNorm = v39*v43; udNorm = v43*v40;
-                    // No projLen>0 guard in the binary (port-invented guard removed).
-                    const double rawRatio = std::abs(lrNorm / udNorm);   // v36
-                    const double ratio =
-                        (rawRatio <= 1.0) ? rawRatio : (1.0 / rawRatio); // v37
-                    const double invLen =
-                        1.0 / std::sqrt(ratio * ratio + 1.0);            // v38
-                    const double projX = lrNorm * invLen;                // v39
-                    const double projY = invLen * udNorm;                // v40
-                    const double projLen =
-                        std::sqrt(projX * projX + projY * projY);        // v41
-                    const double scale =
-                        (1.0 - std::cos(ratio * 1.57079633)) *
-                            ((std::sin(projLen * 1.57079633) / projLen) -
-                             1.0) +
-                        1.0;                                             // v43
-                    lrNorm = projX * scale;
-                    udNorm = scale * projY;
-                }
-            }
-
-            double lrFinal = binding.minValue + range * (lrNorm + 1.0) * 0.5;
-            const double udFinal =
-                binding.minValue + range * (udNorm + 1.0) * 0.5;
-            if(shouldMirrorEvalLabelLike_0x67C6B0(binding.varLr)) {
-                lrFinal = -lrFinal;
-            }
-            writeEvalResultValueLike_0x6C4668(binding.varLr, lrFinal);
-            writeEvalResultValueLike_0x6C4668(binding.varUd, udFinal);
-        }
-    }
-
-    // Aligned with libkrkr2.so sub_67CC9C @0x67CC9C — the bundled {HM7 bind-loop +
-    // sub_67C8A8 clamp}. sub_67CC9C is CALLER-LESS in the binary (dead code); the
-    // live emote post-process is open-coded inside EmoteEngine_progress @0x6818B4
-    // (bind-loop @0x67d3a4, clamp @0x67d3f8). 2026-06-03: this local model is now
-    // ALSO caller-less (the frameProgress invocation was removed during the
-    // progress-topology migration) — the live bind-loop is EmoteEngine::progress
-    // @ ~line 1939 and the live clamp is player().applyClampControlsLike_0x67C8A8()
-    // @ ~EmoteEngine.cpp:1963. Kept as the faithful model of the dead binary fn; do
-    // NOT call it from any progress path (that would double-bind / double-clamp).
-    void Player::applyEvalResultPostProcessLike_0x67CC9C() {
-        for(auto &entry : _evalResultList) {
-            accumulateTimelineContributionLike_0x67C560(entry.label, entry.value);
-            double outputValue = entry.value;
-            if(shouldMirrorEvalLabelLike_0x67C6B0(entry.label)) {
-                outputValue = -outputValue;
-            }
-            writeEvalResultValueLike_0x6C4668(entry.label, outputValue);
-        }
-
-        applyClampControlsLike_0x67C8A8();
-    }
-
-    void Player::preProgressTimelineStateModelForEmoteEngine(
-        double dt, std::unordered_map<std::string, double> *prevTimes) {
-        if(dt <= 0.0) {
-            return;
-        }
-
-        const auto *activeMotion = _activeMotion.get();
-        size_t writeIndex = 0;
-        for(size_t readIndex = 0;
-            readIndex < _playingTimelineLabels.size(); ++readIndex) {
-            const std::string label = _playingTimelineLabels[readIndex];
-            const auto it = _timelines.find(label);
-            if(it == _timelines.end()) {
-                continue;
-            }
-
-            auto &state = it->second;
-            if(prevTimes != nullptr) {
-                (*prevTimes)[label] = state.currentTime;
-            }
-
-            if(!state.playing) {
-                continue;
-            }
-
-            state.wasPlaying = true;
-            bool keepPlaying = true;
-
-            const detail::TimelineControlBinding *binding = nullptr;
-            if(activeMotion) {
-                if(const auto controlIt =
-                       activeMotion->timelineControlByLabel.find(label);
-                   controlIt != activeMotion->timelineControlByLabel.end()) {
-                    binding = &controlIt->second;
-                }
-            }
-
-            if(!binding) {
-                state.currentTime += dt;
-                if(state.totalFrames > 0.0 &&
-                   state.currentTime >= state.totalFrames) {
-                    if(state.loopTime >= 0.0) {
-                        while(state.currentTime >= state.totalFrames) {
-                            state.currentTime =
-                                state.currentTime + state.loopTime -
-                                state.totalFrames;
-                        }
-                    } else {
-                        state.currentTime = state.totalFrames;
-                        state.playing = false;
-                        keepPlaying = false;
+                    if(_syncActive && detail::motionPropGetBool(
+                           content, TJS_W("sync"))) {
+                        _syncWaiting = true;
+                        _clampedEvalTime = _layerCurTime;
+                        _frameTickCount = _layerCurTime;
+                        _pendingEvents.push_back({1, {}, {}});
                     }
                 }
-            } else {
-                const auto stepInternalRoute =
-                    [this, &state, binding](double routeDt) {
-                        if((state.flags & 2) == 0 || routeDt <= 0.0) {
-                            return;
-                        }
-
-                        double steppedBlend = state.blendRatio;
-                        const bool blendAnimating =
-                            stepQueuedAnimatorLike_0x67D01C(
-                                state.blendAnimator, routeDt, steppedBlend);
-                        state.blendRatio = steppedBlend;
-                        if(blendAnimating) {
-                            if (_engineBack) _engineBack->_dirty = true;
-                        }
-
-                        if(state.controlTrackValues.size() <
-                           binding->tracks.size()) {
-                            state.controlTrackValues.resize(
-                                binding->tracks.size(), 0.0f);
-                        }
-                        if(state.controlTrackAnimators.size() <
-                           binding->tracks.size()) {
-                            state.controlTrackAnimators.resize(
-                                binding->tracks.size());
-                        }
-
-                        for(size_t trackIndex = 0;
-                            trackIndex < binding->tracks.size(); ++trackIndex) {
-                            const auto &track = binding->tracks[trackIndex];
-                            if(track.instantVariable || track.frames.empty()) {
-                                continue;
-                            }
-
-                            double steppedValue =
-                                static_cast<double>(
-                                    state.controlTrackValues[trackIndex]);
-                            const bool trackAnimating =
-                                stepQueuedAnimatorLike_0x67D01C(
-                                    state.controlTrackAnimators[trackIndex],
-                                    routeDt, steppedValue);
-                            state.controlTrackValues[trackIndex] =
-                                static_cast<float>(steppedValue);
-                            if(trackAnimating) {
-                                if (_engineBack) _engineBack->_dirty = true;
-                            }
-                        }
-                    };
-
-                const double loopBegin = binding->loopBegin;
-                const double loopEnd = binding->loopEnd;
-                const double lastTime =
-                    binding->lastTime >= 0.0 ? binding->lastTime
-                                             : state.totalFrames;
-
-                if(!state.controlInitialized ||
-                   state.controlFrameCursor.size() != binding->tracks.size()) {
-                    resetTimelineControlStateLike_0x671A50(
-                        state, *binding, std::max(state.currentTime, 0.0));
+                const auto action = detail::motionPropGetString(
+                    content, TJS_W("action"));
+                if(!action.IsEmpty()) {
+                    detail::MotionEvent event;
+                    event.type = 0;
+                    event.param2 = tTJSVariant(action);
+                    _pendingEvents.push_back(event);
                 }
-
-                if(loopBegin < 0.0) {
-                    applyTimelineControlWindowLike_0x669E1C(
-                        state, *binding, state.currentTime + dt, true);
-                    stepInternalRoute(dt);
-
-                    const bool blendAnimatorPending =
-                        state.blendAnimator.active ||
-                        !state.blendAnimator.queue.empty();
-                    if(lastTime <= state.currentTime ||
-                       (state.blendAutoStop && !blendAnimatorPending)) {
-                        state.currentTime = lastTime;
-                        state.playing = false;
-                        keepPlaying = false;
-                    }
-                } else if(loopEnd > loopBegin) {
-                    double remaining = dt;
-                    while(remaining > 0.0 &&
-                          state.currentTime + remaining >= loopEnd) {
-                        const double currentTime = state.currentTime;
-                        applyTimelineControlWindowLike_0x669E1C(
-                            state, *binding, loopEnd, false);
-                        remaining -= std::max(loopEnd - currentTime, 0.0);
-                        resetTimelineControlStateLike_0x671A50(
-                            state, *binding, loopBegin);
-                    }
-                    applyTimelineControlWindowLike_0x669E1C(
-                        state, *binding, state.currentTime + remaining, true);
-                    stepInternalRoute(remaining);
-
-                    const bool blendAnimatorPending =
-                        state.blendAnimator.active ||
-                        !state.blendAnimator.queue.empty();
-                    if(state.blendAutoStop && !blendAnimatorPending) {
-                        state.playing = false;
-                        keepPlaying = false;
-                    }
-                } else {
-                    applyTimelineControlWindowLike_0x669E1C(
-                        state, *binding, state.currentTime + dt, true);
-                    stepInternalRoute(dt);
-
-                    const bool blendAnimatorPending =
-                        state.blendAnimator.active ||
-                        !state.blendAnimator.queue.empty();
-                    if(lastTime <= state.currentTime ||
-                       (state.blendAutoStop && !blendAnimatorPending)) {
-                        state.currentTime = lastTime;
-                        state.playing = false;
-                        keepPlaying = false;
-                    }
-                }
-            }
-
-            if(!keepPlaying && state.wasPlaying) {
-                _pendingEvents.push_back({1, label, {}});
-                state.wasPlaying = false;
-            }
-
-            if(state.playing && keepPlaying) {
-                _playingTimelineLabels[writeIndex++] = label;
-            }
-        }
-        _playingTimelineLabels.resize(writeIndex);
-    }
-
-    void Player::resetTimelineControlStateLike_0x671A50(
-        detail::TimelineState &state,
-        const detail::TimelineControlBinding &binding,
-        double time) {
-        state.controlFrameCursor.assign(binding.tracks.size(), -1);
-        state.controlTrackValues.assign(binding.tracks.size(), 0.0f);
-        state.controlTrackAnimators.assign(binding.tracks.size(), {});
-        for(size_t trackIndex = 0; trackIndex < binding.tracks.size();
-            ++trackIndex) {
-            const auto &track = binding.tracks[trackIndex];
-            int cursor = -1;
-            int lastNonTypeZero = -1;
-            for(size_t frameIndex = 0; frameIndex < track.frames.size();
-                ++frameIndex) {
-                const auto &frame = track.frames[frameIndex];
-                if(!frame.isTypeZero) {
-                    lastNonTypeZero = static_cast<int>(frameIndex);
-                }
-                if(frame.time <= time) {
-                    cursor = static_cast<int>(frameIndex);
-                    continue;
-                }
-                break;
-            }
-            state.controlFrameCursor[trackIndex] = cursor;
-
-            if(lastNonTypeZero < 0) {
-                continue;
-            }
-
-            const auto &frame =
-                track.frames[static_cast<size_t>(lastNonTypeZero)];
-            const size_t nextIndex = static_cast<size_t>(lastNonTypeZero + 1);
-            const double transition =
-                nextIndex < track.frames.size()
-                ? std::max(track.frames[nextIndex].time - time - 1.0, 0.0)
-                : 0.0;
-            if((state.flags & 2) != 0 && !track.instantVariable) {
-                scheduleTimelineControlAnimatorLike_0x671A50(
-                    state, trackIndex, frame.value, transition,
-                    frame.easingWeight);
-            } else {
-                // Aligned with libkrkr2.so sub_669E1C @0x669ebc: the binary
-                //   external route is a SINGLE EmoteEngine_setVariable(this,
-                //   key=track, value, easing=transition,
-                //   durationFrames=easingWeight_raw) call into 0x671228 — the
-                //   faithful EmoteEngine HM6->deque-index dispatch. That writes
-                //   EmoteEngine HM7; getVariable reads Player HM1/HM2, the two are
-                //   bridged only by the progress() bind-loop (G2-C). The binary
-                //   has NO Player-side write here, so the prior
-                //   setVariableResolvedWeightLike_0x671228 double-write (a local
-                //   invention defeating the disjoint-map architecture) is removed.
-                //   EmoteEngine::setVariable computes the v22 factor from the RAW
-                //   easingWeight internally, so pass frame.easingWeight unscaled.
-                if(_engineBack) {
-                    _engineBack->setVariable(
-                        detail::widen(track.label),
-                        static_cast<double>(frame.value), transition,
-                        frame.easingWeight);
-                }
-            }
-        }
-        state.controlInitialized = true;
-        state.controlLastAppliedTime = time;
-    }
-
-    void Player::applyTimelineControlWindowLike_0x669E1C(
-        detail::TimelineState &state,
-        const detail::TimelineControlBinding &binding,
-        double targetTime,
-        bool inclusiveEnd) {
-        if(state.controlFrameCursor.size() != binding.tracks.size()) {
-            state.controlFrameCursor.assign(binding.tracks.size(), -1);
-        }
-        if(state.controlTrackValues.size() < binding.tracks.size()) {
-            state.controlTrackValues.resize(binding.tracks.size(), 0.0f);
-        }
-        if(state.controlTrackAnimators.size() < binding.tracks.size()) {
-            state.controlTrackAnimators.resize(binding.tracks.size());
-        }
-
-        for(size_t trackIndex = 0; trackIndex < binding.tracks.size();
-            ++trackIndex) {
-            const auto &track = binding.tracks[trackIndex];
-            if(track.label.empty() || track.frames.empty()) {
-                continue;
-            }
-            if((state.flags & 4) != 0 && track.instantVariable) {
-                continue;
-            }
-
-            const bool internalRoute =
-                (state.flags & 2) != 0 && !track.instantVariable;
-            int cursor = state.controlFrameCursor[trackIndex];
-            const int lastCursor =
-                static_cast<int>(track.frames.size()) - 1;
-            if(cursor >= lastCursor) {
-                continue;
-            }
-
-            while(cursor + 1 < static_cast<int>(track.frames.size())) {
-                const auto nextIndex = static_cast<size_t>(cursor + 1);
-                const auto &nextFrame = track.frames[nextIndex];
-                const bool crossed = inclusiveEnd
-                    ? nextFrame.time <= targetTime
-                    : nextFrame.time < targetTime;
-                if(!crossed) {
-                    break;
-                }
-
-                if(!nextFrame.isTypeZero &&
-                   nextIndex + 1 < track.frames.size()) {
-                    const auto &followingFrame = track.frames[nextIndex + 1];
-                    const double transition = std::max(
-                        followingFrame.time - targetTime - 1.0, 0.0);
-                    if(internalRoute) {
-                        scheduleTimelineControlAnimatorLike_0x671A50(
-                            state, trackIndex, nextFrame.value, transition,
-                            nextFrame.easingWeight);
-                    } else {
-                        // Aligned with libkrkr2.so sub_669E1C @0x669ebc external
-                        //   route — single 0x671228 (EmoteEngine HM6->deque-index)
-                        //   dispatch; raw easingWeight as durationFrames (factor
-                        //   computed inside the engine). The binary writes only
-                        //   EmoteEngine HM7 here; the prior Player-side
-                        //   setVariableResolvedWeightLike_0x671228 double-write was
-                        //   a non-faithful local invention and is removed (HM7 →
-                        //   Player HM1/HM2 crosses only via progress() bind-loop).
-                        if(_engineBack) {
-                            _engineBack->setVariable(
-                                detail::widen(track.label),
-                                static_cast<double>(nextFrame.value), transition,
-                                nextFrame.easingWeight);
-                        }
-                    }
-                }
-
-                cursor = static_cast<int>(nextIndex);
-            }
-
-            state.controlFrameCursor[trackIndex] = cursor;
-        }
-
-        state.currentTime = targetTime;
-        state.controlLastAppliedTime = targetTime;
-    }
-
-    void Player::applyTimelineControlFrameCrossingLike_0x67CD20(
-        const std::unordered_map<std::string, double> &prevTimes) {
-        const auto *activeMotion = _activeMotion.get();
-        if(!activeMotion) {
-            return;
-        }
-
-        for(const auto &label : _playingTimelineLabels) {
-            const auto timelineIt = _timelines.find(label);
-            const auto controlIt =
-                activeMotion->timelineControlByLabel.find(label);
-            if(timelineIt == _timelines.end() ||
-               controlIt == activeMotion->timelineControlByLabel.end()) {
-                continue;
-            }
-
-            auto &state = timelineIt->second;
-            const auto &binding = controlIt->second;
-            const auto prevIt = prevTimes.find(label);
-            const double prevTime =
-                prevIt != prevTimes.end() ? prevIt->second : state.currentTime;
-            const bool rewound = !state.controlInitialized ||
-                state.currentTime < prevTime ||
-                state.controlFrameCursor.size() != binding.tracks.size();
-            if(rewound) {
-                // Aligned to sub_671A50: re-seek per-track cursors using the
-                // timeline time before the current crossing scan.
-                resetTimelineControlStateLike_0x671A50(
-                    state, binding, std::max(prevTime, 0.0));
-            }
-
-            if((state.flags & 2) != 0 && (state.flags & 4) == 0) {
-                // Aligned to sub_67CD20 + sub_6735AC:
-                // crossed-frame entry into the internal route triggers a
-                // timeline-level fade to 0 over 20 frames before the runtime
-                // is marked as initialized.
-                setTimelineBlendLike_0x6735AC(label, true, 0.0, 20.0, 0.0);
-                state.flags |= 4;
-            }
-
-            for(size_t trackIndex = 0; trackIndex < binding.tracks.size();
-                ++trackIndex) {
-                const auto &track = binding.tracks[trackIndex];
-                if(track.label.empty() || track.frames.empty()) {
-                    continue;
-                }
-                if((state.flags & 2) != 0 && !track.instantVariable) {
-                    continue;
-                }
-
-                int cursor = trackIndex < state.controlFrameCursor.size()
-                    ? state.controlFrameCursor[trackIndex]
-                    : -1;
-                size_t nextIndex = cursor >= 0
-                    ? static_cast<size_t>(cursor + 1)
-                    : 0;
-                while(nextIndex < track.frames.size() &&
-                      track.frames[nextIndex].time <= state.currentTime) {
-                    const auto &frame = track.frames[nextIndex];
-                    if(!frame.isTypeZero) {
-                        // Aligned with libkrkr2.so sub_67CD20 @0x67cf0c: single
-                        //   EmoteEngine_setVariable(this, key=track, value=frame+12,
-                        //   easing=frame+0(time), durationFrames=frame+16) into
-                        //   0x671228 (EmoteEngine HM6->deque-index dispatch). Raw
-                        //   easingWeight as durationFrames (engine computes factor).
-                        //   The binary writes only EmoteEngine HM7; the prior
-                        //   Player-side setVariableResolvedWeightLike_0x671228
-                        //   double-write was a non-faithful local invention and is
-                        //   removed (HM7 → Player HM1/HM2 only via progress()).
-                        if(_engineBack) {
-                            _engineBack->setVariable(
-                                detail::widen(track.label),
-                                static_cast<double>(frame.value), frame.time,
-                                frame.easingWeight);
-                        }
-                    }
-                    cursor = static_cast<int>(nextIndex);
-                    ++nextIndex;
-                }
-
-                if(trackIndex >= state.controlFrameCursor.size()) {
-                    state.controlFrameCursor.resize(trackIndex + 1, -1);
-                }
-                state.controlFrameCursor[trackIndex] = cursor;
-            }
-
-            state.controlLastAppliedTime = state.currentTime;
-        }
-    }
-
-    // 砖5/洞3: faithful layer (motion["tag"]) event stream.
-    // Bidirectional incremental cursor seek toward targetTime (= _clampedEvalTime),
-    // porting the layer-stream loops of Player_advanceRootAndNodes (0x6B6ADC,
-    // forward) + Player_rewindRootAndNodes (0x6B9A3C, backward). On each crossed
-    // type==1 frame applies the advance/rewind gate (0x6B6DD8 / 0x6B9D0C):
-    //   if (+1093 _syncActive): align -> _motionCompleted=1, snap _clampedEvalTime &
-    //     _frameTickCount = curTime; sync -> _syncWaiting=1, same snap, onSync().
-    //   (ungated) content["action"] -> onAction(void, actionName)  [§8.7].
-    // NOTE vs binary: the binary runs this INSIDE advanceRootAndNodes, before the
-    // node walk, so an align/sync snap propagates to the same-frame node seek. The
-    // live port runs it once at end-of-frameProgress (see caller), so a snap takes
-    // effect on the NEXT frame's node seek — documented 1-frame lag; the
-    // cursor/event/gate semantics are otherwise 1:1.
-    void Player::seekLayerEventStreamLike_0x6B6ADC(double targetTime) {
-        if (!_activeMotion) {
-            return;
-        }
-        const auto &frames = _activeMotion->tagFrames;
-        if (!frames) {
-            _layerStreamSource = nullptr;
-            return;
-        }
-        const int count = static_cast<int>(frames->size());
-
-        // Self-reset the cursor when the tag stream changes (motion (re)loaded).
-        // Mirrors Player_reseekTimelineCursors resetting cursors on the firstFrame
-        // seed, without coupling to the motion-load site.
-        if (_layerStreamSource != static_cast<const void *>(frames.get())) {
-            _layerStreamSource = static_cast<const void *>(frames.get());
-            _layerFrameCursor = 0;
-        }
-
-        const auto frameAt =
-            [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
-            if (i < 0 || i >= count) {
-                return nullptr;
-            }
-            return std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
-        };
-        const auto numValue =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            if (!n) {
-                return 0.0;
-            }
-            switch (n->numberType) {
-                case PSB::PSBNumberType::Float:  return n->getValue<float>();
-                case PSB::PSBNumberType::Double: return n->getValue<double>();
-                case PSB::PSBNumberType::Int:
-                    return static_cast<double>(n->getValue<int>());
-                default:
-                    return static_cast<double>(n->getValue<tjs_int64>());
-            }
-        };
-        const auto frameTimeOf =
-            [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> double {
-            return f ? numValue((*f)["time"]) : 0.0;
-        };
-        const auto frameTypeOf =
-            [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> int {
-            if (!f) {
-                return 0;
-            }
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>((*f)["type"]);
-            return n ? n->getValue<int>() : 0;
-        };
-        const auto contentBoolOf =
-            [](const std::shared_ptr<PSB::PSBDictionary> &content,
-               const char *key) -> bool {
-            if (!content) {
-                return false;
-            }
-            auto v = (*content)[key];
-            if (auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                return n->getValue<int>() != 0;
-            }
-            if (auto b = std::dynamic_pointer_cast<PSB::PSBBool>(v)) {
-                return b->value;
-            }
-            return false;
-        };
-
-        // type==1 frame gate (advance/rewind form: +1093-only, NOT time-gated;
-        // action ungated). Aligned to 0x6B6DD8 (advance) / 0x6B9D0C (rewind).
-        const auto gate =
-            [&](const std::shared_ptr<PSB::PSBDictionary> &cf, double curTime) {
-            auto content = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*cf)["content"]);
-            if (!content) {
-                return;
-            }
-            if (_syncActive) {                              // +1093 syncActive gate
-                if (contentBoolOf(content, "align")) {      // 0x6B6DD8
-                    _motionCompleted = true;
-                    _clampedEvalTime = curTime;
-                    _frameTickCount = curTime;
-                }
-                if (_syncActive && contentBoolOf(content, "sync")) { // 0x6B6E14
-                    _syncWaiting = true;
-                    _clampedEvalTime = curTime;
-                    _frameTickCount = curTime;
-                    _pendingEvents.push_back({1, {}, {}, false}); // onSync()
-                }
-            }
-            // 0x6B6E4C: content["action"] (ungated) -> onAction(void, actionName).
-            if (auto actionStr = std::dynamic_pointer_cast<PSB::PSBString>(
-                    (*content)["action"])) {
-                if (!actionStr->value.empty()) {
-                    detail::MotionEvent ev;
-                    ev.type = 0;
-                    ev.param2 = actionStr->value;  // record.b = action name
-                    ev.voidParam1 = true;          // record.a = void [§8.7]
-                    _pendingEvents.push_back(ev);
-                }
-            }
-        };
-
-        // Derive curTime/nextTime from the (persistent) cursor.
-        _layerCurTime = frameTimeOf(frameAt(_layerFrameCursor));
-        _layerNextTime = frameTimeOf(frameAt(_layerFrameCursor + 1));
-
-        // Forward advance (0x6B6B80): while cursor<count-2 && target>=nextTime.
-        while (_layerFrameCursor < count - 2) {
-            if (targetTime < _layerNextTime) {
-                break;
-            }
-            ++_layerFrameCursor;
-            auto cf = frameAt(_layerFrameCursor);
-            _layerCurTime = frameTimeOf(cf);
-            _layerNextTime = frameTimeOf(frameAt(_layerFrameCursor + 1));
-            if (frameTypeOf(cf) == 1) {
-                gate(cf, _layerCurTime);
-            }
-        }
-        // Backward rewind (0x6B9AE8): while count!=0 && curTime>target.
-        // (cursor>0 guard: the binary relies on tag[0].time<=target; the guard
-        // prevents underflow on data where that does not hold.)
-        while (count != 0 && _layerCurTime > targetTime && _layerFrameCursor > 0) {
-            --_layerFrameCursor;
-            auto cf = frameAt(_layerFrameCursor);
-            _layerCurTime = frameTimeOf(cf);
-            _layerNextTime = frameTimeOf(frameAt(_layerFrameCursor + 1));
-            if (frameTypeOf(cf) == 1) {
-                gate(cf, _layerCurTime);
             }
         }
     }
 
-    // 砖G2 / R-B1: faithful root (motion["priority"]) content-snapshot stream —
-    // stream ② shared by BOTH directions. Forward run = Player_advanceRootAndNodes
-    // (0x6B6ADC) root loop 0x6B6EE4..0x6B7124; reverse run = Player_rewindRootAndNodes
-    // (0x6B9A3C) reverse root loop @0x6B9E84. (CORRECTION: an earlier comment here
-    // claimed "the binary's root loop has no backward branch … no reverse root scan"
-    // — that was FALSIFIED by the @0x6B9E84 decrement loop; rewindRootAndNodes DOES
-    // reverse-scan +568. Both loops run AFTER the layer stream and BEFORE the
-    // var-track/node walk.) On each crossed frame it snapshots
-    // priority[cursor]["content"] into _rootContent (Player+616) via sub_A0FB64 (a
-    // tTJSVariant copy-assign — the port copies the shared_ptr, semantically
-    // equivalent). NO event gate and NO "type" read, unlike the layer stream. Like
-    // the layer seek (seekLayerEventStreamLike), this is bidirectional and
-    // self-selects direction from the persistent cursor's curTime(+576) vs
-    // target(+456). Inert for every currently-available motion whose priority array
-    // has <2 frames (forward: count-2<cursor; reverse: tag[0].time<=target →
-    // curTime>target false → loop body never runs).
-    void Player::seekRootContentStreamLike_0x6B6ADC(double targetTime) {
-        if (!_activeMotion) {
-            return;
+    void Player::rewindLayerEventStreamLike_0x6B9A3C(double targetTime) {
+        const auto &frames = _tagFrameSourceVariant;
+        const int count = rawFrameCount(frames);
+        if(count != 0 && _layerCurTime > targetTime) {
+            do {
+                --_layerFrameCursor;
+                const auto frame = rawFrameAt(frames, _layerFrameCursor);
+                _layerCurTime = rawFrameTime(frame);
+                _layerNextTime = rawFrameTime(
+                    rawFrameAt(frames, _layerFrameCursor + 1));
+                if(rawFrameType(frame) == 1) {
+                    const auto content = rawFrameContent(frame);
+                    if(_syncActive) {
+                        if(detail::motionPropGetBool(content, TJS_W("align"))) {
+                            _motionCompleted = true;
+                            _clampedEvalTime = _layerCurTime;
+                            _frameTickCount = _layerCurTime;
+                        }
+                        if(_syncActive && detail::motionPropGetBool(
+                               content, TJS_W("sync"))) {
+                            _syncWaiting = true;
+                            _clampedEvalTime = _layerCurTime;
+                            _frameTickCount = _layerCurTime;
+                            _pendingEvents.push_back({1, {}, {}});
+                        }
+                    }
+                    const auto action = detail::motionPropGetString(
+                        content, TJS_W("action"));
+                    if(!action.IsEmpty()) {
+                        detail::MotionEvent event;
+                        event.type = 0;
+                        event.param2 = tTJSVariant(action);
+                        _pendingEvents.push_back(event);
+                    }
+                }
+            } while(_layerCurTime > targetTime);
         }
-        const auto &frames = _activeMotion->priorityFrames;
-        if (!frames) {
-            _rootStreamSource = nullptr;
-            return;
+    }
+
+    void Player::advanceRootContentStreamLike_0x6B6ADC(double targetTime) {
+        const auto &frames = _priorityFrameSourceVariant;
+        const int count = rawFrameCount(frames);
+        while(_rootFrameCursor < count - 2) {
+            if(targetTime < _rootNextTime) break;
+            ++_rootFrameCursor;
+            _rootContentVariant = rawFrameContent(
+                rawFrameAt(frames, _rootFrameCursor));
+            _rootCurTime = _rootNextTime;
+            _rootNextTime = rawFrameTime(
+                rawFrameAt(frames, _rootFrameCursor + 1));
         }
-        const int count = static_cast<int>(frames->size());
+    }
 
-        // Self-reset cursor + seed snapshot when the priority stream changes
-        // (motion (re)loaded). Mirrors the binary's firstFrame reseed of +568 and
-        // the +616 = priority[0].content seed at 0x6B38FC.
-        if (_rootStreamSource != static_cast<const void *>(frames.get())) {
-            _rootStreamSource = static_cast<const void *>(frames.get());
-            _rootFrameCursor = 0;
-            _rootContent = nullptr;
-        }
-
-        const auto frameAt =
-            [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
-            if (i < 0 || i >= count) {
-                return nullptr;
-            }
-            return std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
-        };
-        const auto numValue =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            if (!n) {
-                return 0.0;
-            }
-            switch (n->numberType) {
-                case PSB::PSBNumberType::Float:  return n->getValue<float>();
-                case PSB::PSBNumberType::Double: return n->getValue<double>();
-                case PSB::PSBNumberType::Int:
-                    return static_cast<double>(n->getValue<int>());
-                default:
-                    return static_cast<double>(n->getValue<tjs_int64>());
-            }
-        };
-        const auto frameTimeOf =
-            [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> double {
-            return f ? numValue((*f)["time"]) : 0.0;
-        };
-        const auto contentOf =
-            [](const std::shared_ptr<PSB::PSBDictionary> &f)
-            -> std::shared_ptr<const PSB::PSBDictionary> {
-            if (!f) {
-                return nullptr;
-            }
-            return std::dynamic_pointer_cast<PSB::PSBDictionary>((*f)["content"]);
-        };
-
-        // +616 content snapshot seed. The binary's init path Player_initNonEmoteMotion
-        // @0x6B38FC seeds +616 = priority[0].content (sub_A0FB64 from priority[0]
-        // ["content"]); +568/+576/+584 are NOT touched by init and begin at the
-        // Player object's construction zero-init. This reseed-time branch reproduces
-        // the 0x6B38FC content seed (priority[cursor].content with cursor==0 after a
-        // reseed) so the node walk reads a valid +616 before the first advance step.
-        if (!_rootContent && count > 0) {
-            _rootContent = contentOf(frameAt(_rootFrameCursor));
-        }
-        // NO entry recompute of +576/+584 from the cursor. CORRECTION (2026-06-05,
-        // confirmed by fresh decompile of 0x6B3778 / 0x6B6ADC / 0x6B9A3C): the binary
-        // NEVER recomputes _rootCurTime(+576)/_rootNextTime(+584) at function entry.
-        // They are persistent state — zero-initialized at object construction (init
-        // @0x6B3778 does not seed them), then evolved purely incrementally: the
-        // forward root loop @0x6B6F48 carries +576=+584 then refetches
-        // +584=priority[cursor+1].time; the reverse root loop @0x6B9E84 carries
-        // +584=+576 then refetches +576=priority[cursor].time. Recomputing from the
-        // cursor each tick discarded and rebuilt this persistent state, breaking the
-        // incremental-evolution contract and contradicting the adjacent +616 persist
-        // (which is faithfully held across calls). The fields persist via Player.h
-        // members (_rootCurTime/_rootNextTime default 0.0, reset only at reseed).
-
-        // Forward advance (0x6B6F48): while cursor < count-2 && target >= nextTime.
-        // Per step (0x6B6F78..0x6B70E4): ++cursor; +616 = priority[cursor].content;
-        // +576 = old +584; +584 = priority[cursor+1].time.
-        while (_rootFrameCursor < count - 2) {
-            if (targetTime < _rootNextTime) {           // 0x6B6F70
-                break;
-            }
-            ++_rootFrameCursor;                          // 0x6B6F78: +568 = v14+1
-            // +616 = priority[cursor].content (sub_A0FB64 snapshot @0x6B7034)
-            _rootContent = contentOf(frameAt(_rootFrameCursor));
-            _rootCurTime = _rootNextTime;                // 0x6B7044: +576 = +584
-            // +584 = priority[cursor+1].time (0x6B70E4)
-            _rootNextTime = frameTimeOf(frameAt(_rootFrameCursor + 1));
-        }
-
-        // Reverse rewind (Player_rewindRootAndNodes @0x6B9E84): while curTime(+576)
-        // > target(+456). Per step (0x6B9EA8..0x6B9F98), the structural mirror of
-        // the forward loop with a SINGLE byNum fetch (the decremented cursor):
-        //   --cursor (0x6B9EA8; the decremented value is also the byNum index);
-        //   +616 = priority[cursor].content (sub_A0FB64 snapshot @0x6B9F6C);
-        //   +584 = old +576 (0x6B9F7C: nextTime = curTime);
-        //   +576 = priority[cursor].time (0x6B9F94/98: curTime = item["time"]).
-        // The binary's outer/while gate is curTime > target only (NO count/cursor
-        // lower bound) — it relies on priority[0].time <= target. The cursor>0 guard
-        // mirrors the layer-stream port (0x6B9AE8) and prevents underflow on data
-        // where that does not hold; for in-bounds data it is transparent.
-        while (_rootCurTime > targetTime && _rootFrameCursor > 0) { // 0x6B9E84 / 0x6B9FC4
-            --_rootFrameCursor;                          // 0x6B9EA8: --(+568)
-            // +616 = priority[cursor].content (sub_A0FB64 snapshot @0x6B9F6C)
-            _rootContent = contentOf(frameAt(_rootFrameCursor));
-            _rootNextTime = _rootCurTime;                // 0x6B9F7C: +584 = +576
-            // +576 = priority[cursor].time (0x6B9F94/98)
-            _rootCurTime = frameTimeOf(frameAt(_rootFrameCursor));
+    void Player::rewindRootContentStreamLike_0x6B9A3C(double targetTime) {
+        const auto &frames = _priorityFrameSourceVariant;
+        if(_rootCurTime > targetTime) {
+            do {
+                --_rootFrameCursor;
+                const auto frame = rawFrameAt(frames, _rootFrameCursor);
+                _rootContentVariant = rawFrameContent(frame);
+                _rootNextTime = _rootCurTime;
+                _rootCurTime = rawFrameTime(frame);
+            } while(_rootCurTime > targetTime);
         }
     }
 
@@ -1088,79 +192,13 @@ namespace internal {
         // libkrkr2.so Player_advanceRootAndNodes (0x6B6ADC) var-track loop
         // (0x6B7124..0x6B71C8) — stream ③. For each VariableLabelScope
         // (Player+1296 deque), advance its two 56B slots so they bracket
-        // clampedEvalTime (+456) via the inlined step (sub_6B786C) + merge
-        // (sub_6B7A70). Inert when frameSource is not a keyframe list (binary
-        // PropGetCount ~0 → loop never runs); true for every currently-available
-        // motion (no fixture exposes a populated "variable" list — see
-        // analysis/Player_4_HashMaps_Container_Mapping.md §四之二).
-        const auto numValue =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            if (!n) return 0.0;
-            switch (n->numberType) {
-                case PSB::PSBNumberType::Float:  return n->getValue<float>();
-                case PSB::PSBNumberType::Double: return n->getValue<double>();
-                case PSB::PSBNumberType::Int:
-                    return static_cast<double>(n->getValue<int>());
-                default:
-                    return static_cast<double>(n->getValue<tjs_int64>());
-            }
-        };
-        const auto intValue =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> int {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            return n ? n->getValue<int>() : 0;
-        };
+        // clampedEvalTime (+456) via step@0x6B786C + merge@0x6B7A70.
+        // frameSource remains the owned tTJSVariant copied by
+        // Player_initVariables; every read goes through the Android dispatch
+        // helpers rather than the decoded compatibility tree.
 
         for (auto &item : _variableLabelScopes) {
-            const auto frames =
-                std::dynamic_pointer_cast<PSB::PSBList>(item.frameSource);
-            if (!frames) {
-                continue;     // non-list → binary PropGetCount ~0 → no-op
-            }
-            const int count = static_cast<int>(frames->size());
-            const auto frameAt =
-                [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
-                if (i < 0 || i >= count) return nullptr;
-                return std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
-            };
-            // step (sub_6B786C): slot.frameIndex=idx; slot.time=frame["time"];
-            //   slot.merged=0.
-            const auto step = [&](detail::VarTrackSlot &slot, std::uint32_t idx) {
-                slot.frameIndex = idx;
-                auto f = frameAt(static_cast<int>(idx));
-                slot.time = f ? numValue((*f)["time"]) : 0.0;
-                slot.merged = false;
-            };
-            // merge (sub_6B7A70): slot.merged=1; type=frame["type"]; type==0 ->
-            //   typeZeroFlag=1 (0x6B7BB0 early return); else typeZeroFlag=0,
-            //   interpFlag=(type==3), interval/value=content["interval"/"value"],
-            //   easing=content["easing"].
-            const auto merge = [&](detail::VarTrackSlot &slot) {
-                slot.merged = true;
-                auto f = frameAt(static_cast<int>(slot.frameIndex));
-                const int type = f ? intValue((*f)["type"]) : 0;
-                if (type == 0) {
-                    slot.typeZeroFlag = true;
-                    return;
-                }
-                slot.typeZeroFlag = false;
-                if (type == 2)      slot.interpFlag = 0;
-                else if (type == 3) slot.interpFlag = 1;
-                auto content = f ? std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                                       (*f)["content"])
-                                 : nullptr;
-                if (content) {
-                    slot.interval = static_cast<std::uint32_t>(
-                        intValue((*content)["interval"]));
-                    slot.value = numValue((*content)["value"]);
-                    // easing (slot+32) = content["easing"] raw value — a bezier
-                    // {x,y} dict consumed by applyBezierEasing (NOT a string).
-                    slot.easing = (*content)["easing"];
-                } else {
-                    slot.easing = nullptr;
-                }
-            };
+            const int count = detail::motionPropGetCount(item.frameSource);
 
             // active=slot[cursor], other=slot[!cursor] (0x6B7264).
             int cursor = item.activeSlotCursor & 1;
@@ -1174,15 +212,22 @@ namespace internal {
                 const std::uint32_t nextIdx = other->frameIndex + 1;
                 item.activeSlotCursor =
                     (item.activeSlotCursor & 1) == 0;   // toggle (0x6B7150)
-                step(*active, nextIdx);
+                stepVariableTrackSlotLike_0x6B786C(
+                    *active, item.frameSource, nextIdx);
                 detail::VarTrackSlot *tmp = active;     // swap roles (0x6B7160)
                 active = other;
                 other = tmp;
             }
             // merge (0x6B7178, disasm-confirmed): merge slot[0] if !slot0.merged,
-            // then slot[0] AGAIN if !slot1.merged — both BL sub_6B7A70(item+48,..).
-            if (!item.slot[0].merged) merge(item.slot[0]);
-            if (!item.slot[1].merged) merge(item.slot[0]);
+            // then slot[0] AGAIN if !slot1.merged — both BL 0x6B7A70(item+48,..).
+            if (!item.slot[0].merged) {
+                mergeVariableTrackSlotLike_0x6B7A70(
+                    item.slot[0], item.frameSource);
+            }
+            if (!item.slot[1].merged) {
+                mergeVariableTrackSlotLike_0x6B7A70(
+                    item.slot[0], item.frameSource);
+            }
         }
     }
 
@@ -1193,75 +238,10 @@ namespace internal {
         // advanceVariableTracksLike_0x6B6ADC (0x6B7124). For each
         // VariableLabelScope walk its two 56B slots backward so they re-bracket
         // clampedEvalTime (+456), then merge slot[0] and slot[1]. step =
-        // sub_6B786C (inlined), merge = sub_6B7A70 (inlined), both identical to
-        // the forward port's helpers. Inert when frameSource is not a keyframe
-        // list (binary PropGetCount ~0 → loop never runs); true for every
-        // currently-available motion (no fixture exposes a populated "variable"
-        // list — see analysis/Player_4_HashMaps_Container_Mapping.md §四之二).
-        const auto numValue =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            if (!n) return 0.0;
-            switch (n->numberType) {
-                case PSB::PSBNumberType::Float:  return n->getValue<float>();
-                case PSB::PSBNumberType::Double: return n->getValue<double>();
-                case PSB::PSBNumberType::Int:
-                    return static_cast<double>(n->getValue<int>());
-                default:
-                    return static_cast<double>(n->getValue<tjs_int64>());
-            }
-        };
-        const auto intValue =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> int {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            return n ? n->getValue<int>() : 0;
-        };
+        // step@0x6B786C, merge@0x6B7A70; both are the same out-of-line
+        // helpers as the forward path.
 
         for (auto &item : _variableLabelScopes) {
-            const auto frames =
-                std::dynamic_pointer_cast<PSB::PSBList>(item.frameSource);
-            if (!frames) {
-                continue;     // non-list → binary PropGetCount ~0 → no-op
-            }
-            const int count = static_cast<int>(frames->size());
-            const auto frameAt =
-                [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
-                if (i < 0 || i >= count) return nullptr;
-                return std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
-            };
-            // step (sub_6B786C): slot.frameIndex=idx; slot.time=frame["time"];
-            //   slot.merged=0.
-            const auto step = [&](detail::VarTrackSlot &slot, std::uint32_t idx) {
-                slot.frameIndex = idx;
-                auto f = frameAt(static_cast<int>(idx));
-                slot.time = f ? numValue((*f)["time"]) : 0.0;
-                slot.merged = false;
-            };
-            // merge (sub_6B7A70): same as forward port (see above).
-            const auto merge = [&](detail::VarTrackSlot &slot) {
-                slot.merged = true;
-                auto f = frameAt(static_cast<int>(slot.frameIndex));
-                const int type = f ? intValue((*f)["type"]) : 0;
-                if (type == 0) {
-                    slot.typeZeroFlag = true;
-                    return;
-                }
-                slot.typeZeroFlag = false;
-                if (type == 2)      slot.interpFlag = 0;
-                else if (type == 3) slot.interpFlag = 1;
-                auto content = f ? std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                                       (*f)["content"])
-                                 : nullptr;
-                if (content) {
-                    slot.interval = static_cast<std::uint32_t>(
-                        intValue((*content)["interval"]));
-                    slot.value = numValue((*content)["value"]);
-                    slot.easing = (*content)["easing"];
-                } else {
-                    slot.easing = nullptr;
-                }
-            };
-
             // active=slot[cursor]=v14, other=slot[!cursor]=v13 (0x6BA0E8/0x6BA100).
             int cursor = item.activeSlotCursor & 1;
             detail::VarTrackSlot *active = &item.slot[cursor];
@@ -1273,17 +253,24 @@ namespace internal {
                 const std::uint32_t prevIdx = active->frameIndex - 1u; // 0x6BA000
                 item.activeSlotCursor =
                     (item.activeSlotCursor & 1) == 0;   // toggle (0x6B9FEC)
-                step(*other, prevIdx);                  // sub_6B786C(v13,...,*v14-1)
+                stepVariableTrackSlotLike_0x6B786C(
+                    *other, item.frameSource, prevIdx); // 0x6B786C(v13,...,*v14-1)
                 detail::VarTrackSlot *tmp = active;     // swap (0x6BA004/0x6BA008)
                 active = other;
                 other = tmp;
             }
             // merge (0x6BA010/0x6BA024): merge slot[0] if !slot0.merged, then
-            //   slot[1] if !slot1.merged — sub_6B7A70(item+48,..) then
-            //   sub_6B7A70(item+104,..). NOTE slot[1] target differs from the
+            //   slot[1] if !slot1.merged — 0x6B7A70(item+48,..) then
+            //   0x6B7A70(item+104,..). NOTE slot[1] target differs from the
             //   forward stepper (which merges slot[0] both times).
-            if (!item.slot[0].merged) merge(item.slot[0]);
-            if (!item.slot[1].merged) merge(item.slot[1]);
+            if (!item.slot[0].merged) {
+                mergeVariableTrackSlotLike_0x6B7A70(
+                    item.slot[0], item.frameSource);
+            }
+            if (!item.slot[1].merged) {
+                mergeVariableTrackSlotLike_0x6B7A70(
+                    item.slot[1], item.frameSource);
+            }
         }
     }
 
@@ -1296,70 +283,10 @@ namespace internal {
         // step+merge slot[0] to v41 and slot[1] to v41+1, and reset
         // activeSlotCursor (item+8) to 0. Both slots are seeded fresh — there is
         // no active/other toggle here (that is the advance/rewind incremental
-        // form). Inert for every currently-available motion (no fixture exposes a
-        // populated "variable" list).
-        const auto numValue =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            if (!n) return 0.0;
-            switch (n->numberType) {
-                case PSB::PSBNumberType::Float:  return n->getValue<float>();
-                case PSB::PSBNumberType::Double: return n->getValue<double>();
-                case PSB::PSBNumberType::Int:
-                    return static_cast<double>(n->getValue<int>());
-                default:
-                    return static_cast<double>(n->getValue<tjs_int64>());
-            }
-        };
-        const auto intValue =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> int {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            return n ? n->getValue<int>() : 0;
-        };
+        // form). The same tTJSVariant source and step/merge helpers are reused.
 
         for (auto &item : _variableLabelScopes) {
-            const auto frames =
-                std::dynamic_pointer_cast<PSB::PSBList>(item.frameSource);
-            if (!frames) {
-                continue;     // non-list → binary PropGetCount ~0 → no-op
-            }
-            const int count = static_cast<int>(frames->size());
-            const auto frameAt =
-                [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
-                if (i < 0 || i >= count) return nullptr;
-                return std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
-            };
-            // step (sub_6B786C) — identical to the advance/rewind ports.
-            const auto step = [&](detail::VarTrackSlot &slot, std::uint32_t idx) {
-                slot.frameIndex = idx;
-                auto f = frameAt(static_cast<int>(idx));
-                slot.time = f ? numValue((*f)["time"]) : 0.0;
-                slot.merged = false;
-            };
-            // merge (sub_6B7A70) — identical to the advance/rewind ports.
-            const auto merge = [&](detail::VarTrackSlot &slot) {
-                slot.merged = true;
-                auto f = frameAt(static_cast<int>(slot.frameIndex));
-                const int type = f ? intValue((*f)["type"]) : 0;
-                if (type == 0) {
-                    slot.typeZeroFlag = true;
-                    return;
-                }
-                slot.typeZeroFlag = false;
-                if (type == 2)      slot.interpFlag = 0;
-                else if (type == 3) slot.interpFlag = 1;
-                auto content = f ? std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                                       (*f)["content"])
-                                 : nullptr;
-                if (content) {
-                    slot.interval = static_cast<std::uint32_t>(
-                        intValue((*content)["interval"]));
-                    slot.value = numValue((*content)["value"]);
-                    slot.easing = (*content)["easing"];
-                } else {
-                    slot.easing = nullptr;
-                }
-            };
+            const int count = detail::motionPropGetCount(item.frameSource);
 
             // forward keyframe scan (0x6B90A0): k advances while frame[k].time
             //   compares against target. Mirror the reseek's per-element
@@ -1369,8 +296,10 @@ namespace internal {
             int k = 0;
             if (v49 >= 1) {
                 for (k = 0; k < v49; ++k) {
-                    auto f = frameAt(k);
-                    const double t = f ? numValue((*f)["time"]) : 0.0;
+                    const tTJSVariant frame = detail::motionPropGetByNum(
+                        item.frameSource, k);
+                    const double t = detail::motionPropGetDouble(
+                        frame, TJS_W("time"));
                     if (t == clampedEvalTime) {
                         break;                  // v53=0 (0x6B9150) → stop
                     } else if (t <= clampedEvalTime) {
@@ -1384,10 +313,16 @@ namespace internal {
             // v41 = min(k, count-2) (0x6B8F1C).
             const int v41 = (k >= v49 - 2) ? (v49 - 2) : k;
             // reseed both slots fresh (0x6B8F30..0x6B8F60).
-            step(item.slot[0], static_cast<std::uint32_t>(v41));      // 0x6B8F30
-            merge(item.slot[0]);                                       // 0x6B8F3C
-            step(item.slot[1], static_cast<std::uint32_t>(v41 + 1));  // 0x6B8F50
-            merge(item.slot[1]);                                       // 0x6B8F5C
+            stepVariableTrackSlotLike_0x6B786C(
+                item.slot[0], item.frameSource,
+                static_cast<std::uint32_t>(v41));                     // 0x6B8F30
+            mergeVariableTrackSlotLike_0x6B7A70(
+                item.slot[0], item.frameSource);                      // 0x6B8F3C
+            stepVariableTrackSlotLike_0x6B786C(
+                item.slot[1], item.frameSource,
+                static_cast<std::uint32_t>(v41 + 1));                 // 0x6B8F50
+            mergeVariableTrackSlotLike_0x6B7A70(
+                item.slot[1], item.frameSource);                      // 0x6B8F5C
             item.activeSlotCursor = 0;                                 // 0x6B8F60
         }
     }
@@ -1419,77 +354,18 @@ namespace internal {
     //      player+280 HM1-entry walk (B) calling sub_6B9650 per entry (now
     //      ported — see STEP 5 below).
     void Player::reseekTimelineCursors(double targetTime) {
-        if (!_activeMotion) {
-            return;
-        }
-
-        const auto numValue =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            if (!n) {
-                return 0.0;
-            }
-            switch (n->numberType) {
-                case PSB::PSBNumberType::Float:  return n->getValue<float>();
-                case PSB::PSBNumberType::Double: return n->getValue<double>();
-                case PSB::PSBNumberType::Int:
-                    return static_cast<double>(n->getValue<int>());
-                default:
-                    return static_cast<double>(n->getValue<tjs_int64>());
-            }
-        };
-
         // ---- STEP 1: LAYER coarse scan @0x6B8770 (motion["tag"], player+1072) ----
         {
-            const auto &frames = _activeMotion->tagFrames;
-            if (frames) {
-                _layerStreamSource = static_cast<const void *>(frames.get());
-                const int count = static_cast<int>(frames->size());
-
-                const auto frameAt =
-                    [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
-                    if (i < 0 || i >= count) {
-                        return nullptr;
-                    }
-                    return std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                        (*frames)[i]);
-                };
-                const auto frameTimeOf =
-                    [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> double {
-                    return f ? numValue((*f)["time"]) : 0.0;
-                };
-                const auto frameTypeOf =
-                    [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> int {
-                    if (!f) {
-                        return 0;
-                    }
-                    auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                        (*f)["type"]);
-                    return n ? n->getValue<int>() : 0;
-                };
-                const auto contentBoolOf =
-                    [](const std::shared_ptr<PSB::PSBDictionary> &content,
-                       const char *key) -> bool {
-                    if (!content) {
-                        return false;
-                    }
-                    auto v = (*content)[key];
-                    if (auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                        return n->getValue<int>() != 0;
-                    }
-                    if (auto b = std::dynamic_pointer_cast<PSB::PSBBool>(v)) {
-                        return b->value;
-                    }
-                    return false;
-                };
+            const auto &frames = _tagFrameSourceVariant;
+            const int count = rawFrameCount(frames);
 
                 if (count >= 1) {                       // 0x6B8768
                     // 0x6B8770: from-scratch linear scan i:0..count-1 with the
                     // DOUBLE-INCREMENT. v8 = continue flag.
                     int i = 0;
                     for (; i < count; ++i) {
-                        auto cf = frameAt(i);
-                        const double v6 = frameTimeOf(cf);  // 0x6B8810
+                        const auto cf = rawFrameAt(frames, i);
+                        const double v6 = rawFrameTime(cf); // 0x6B8810
                         const double v7 = targetTime;       // 0x6B8814: +456
                         int v8;
                         if (v6 <= v7) {                     // 0x6B881C
@@ -1511,96 +387,63 @@ namespace internal {
                     _layerFrameCursor = (count - 2 >= i) ? i : (count - 2);
                     // 0x6B891C: curTime = (double)(int)tag[cursor].time
                     //   (INT-TRUNCATED).
-                    auto curF = frameAt(_layerFrameCursor);
+                    const auto curF = rawFrameAt(frames, _layerFrameCursor);
                     _layerCurTime = static_cast<double>(
-                        static_cast<int>(frameTimeOf(curF)));
+                        detail::motionPropGetInt(curF, TJS_W("time")));
                     // 0x6B89D0: nextTime = (double)(int)tag[cursor+1].time
                     //   (INT-TRUNCATED).
-                    auto nextF = frameAt(_layerFrameCursor + 1);
+                    const auto nextF = rawFrameAt(
+                        frames, _layerFrameCursor + 1);
                     _layerNextTime = static_cast<double>(
-                        static_cast<int>(frameTimeOf(nextF)));
+                        detail::motionPropGetInt(nextF, TJS_W("time")));
                     // 0x6B89D4..0x6B8B84: gate keyed on the CURSOR frame, fired
                     // only when curTime(+920) == target(+456) && type==1.
-                    if (_layerCurTime == targetTime && frameTypeOf(curF) == 1) {
-                        auto content =
-                            std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                                (*curF)["content"]);
-                        if (content) {
-                            if (_syncActive) {              // 0x6B8A8C: +1093 gate
-                                // 0x6B8AC0: align gate (re-tests +920==+456).
-                                if (_layerCurTime == targetTime &&
-                                    contentBoolOf(content, "align")) {
-                                    _motionCompleted = true;       // +483 = 1
-                                    _clampedEvalTime = _layerCurTime; // +456
-                                    _frameTickCount = _layerCurTime;  // +1120
-                                }
-                                // 0x6B8AFC: sync gate (re-tests +1093).
-                                if (_syncActive && contentBoolOf(content, "sync")) {
-                                    _syncWaiting = true;           // +1098 = 1
-                                    _clampedEvalTime = _layerCurTime; // +456
-                                    _frameTickCount = _layerCurTime;  // +1120
-                                    // Player_pushSyncEvent_guess (0x6B8B18) ->
-                                    // onSync().
-                                    _pendingEvents.push_back({1, {}, {}, false});
-                                }
+                    if(_layerCurTime == targetTime && rawFrameType(curF) == 1) {
+                        const auto content = rawFrameContent(curF);
+                        if(_syncActive) {              // 0x6B8A8C: +1093 gate
+                            // 0x6B8AC0: align gate (re-tests +920==+456).
+                            if(_layerCurTime == targetTime &&
+                               detail::motionPropGetBool(
+                                   content, TJS_W("align"))) {
+                                _motionCompleted = true;       // +483 = 1
+                                _clampedEvalTime = _layerCurTime; // +456
+                                _frameTickCount = _layerCurTime;  // +1120
                             }
-                            // 0x6B8B38: content["action"] (ungated) ->
-                            // Player_pushActionEvent_guess -> onAction(void, name).
-                            if (auto actionStr =
-                                    std::dynamic_pointer_cast<PSB::PSBString>(
-                                        (*content)["action"])) {
-                                if (!actionStr->value.empty()) {
-                                    detail::MotionEvent ev;
-                                    ev.type = 0;
-                                    ev.param2 = actionStr->value;
-                                    ev.voidParam1 = true;
-                                    _pendingEvents.push_back(ev);
-                                }
+                            // 0x6B8AFC: sync gate (re-tests +1093).
+                            if(_syncActive && detail::motionPropGetBool(
+                                   content, TJS_W("sync"))) {
+                                _syncWaiting = true;           // +1098 = 1
+                                _clampedEvalTime = _layerCurTime; // +456
+                                _frameTickCount = _layerCurTime;  // +1120
+                                _pendingEvents.push_back({1, {}, {}});
                             }
                         }
+                        // 0x6B8B38: content["action"] (ungated) ->
+                        // Player_pushActionEvent_guess -> onAction(void, name).
+                        const auto action = detail::motionPropGetString(
+                            content, TJS_W("action"));
+                        if(!action.IsEmpty()) {
+                            detail::MotionEvent ev;
+                            ev.type = 0;
+                            ev.param2 = tTJSVariant(action);
+                            _pendingEvents.push_back(ev);
+                        }
                     }
-                }
-            } else {
-                _layerStreamSource = nullptr;
             }
         }
 
         // ---- STEP 2: ROOT scan @0x6B8C1C (motion["priority"], player+548) ----
         {
-            const auto &frames = _activeMotion->priorityFrames;
-            if (frames) {
-                _rootStreamSource = static_cast<const void *>(frames.get());
-                const int count = static_cast<int>(frames->size());
-
-                const auto frameAt =
-                    [&](int i) -> std::shared_ptr<PSB::PSBDictionary> {
-                    if (i < 0 || i >= count) {
-                        return nullptr;
-                    }
-                    return std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                        (*frames)[i]);
-                };
-                const auto frameTimeOf =
-                    [&](const std::shared_ptr<PSB::PSBDictionary> &f) -> double {
-                    return f ? numValue((*f)["time"]) : 0.0;
-                };
-                const auto contentOf =
-                    [](const std::shared_ptr<PSB::PSBDictionary> &f)
-                    -> std::shared_ptr<const PSB::PSBDictionary> {
-                    if (!f) {
-                        return nullptr;
-                    }
-                    return std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                        (*f)["content"]);
-                };
+            const auto &frames = _priorityFrameSourceVariant;
+            const int count = rawFrameCount(frames);
 
                 int j = 0;
                 if (count) {                                // 0x6B8C20
                     if (count >= 1) {                       // 0x6B8C28
                         // 0x6B8C30: single-step scan (NO double-increment).
                         for (j = 0; j < count; ++j) {
-                            auto cf = frameAt(j);
-                            const double v23 = frameTimeOf(cf);  // 0x6B8CD0
+                            const auto cf = rawFrameAt(frames, j);
+                            const double v23 = rawFrameTime(cf); // 0x6B8CD0
                             const double v24 = targetTime;       // 0x6B8CD4: +456
                             int v25;
                             if (v24 == v23) {                    // 0x6B8CDC
@@ -1629,17 +472,15 @@ namespace internal {
                 // 0x6B8E20: content snapshot = priority[cursor].content (+616,
                 // sub_A0FB64 variant copy — the port copies the shared_ptr).
                 {
-                    auto cf = frameAt(_rootFrameCursor);
-                    _rootContent = contentOf(cf);
+                    const auto cf = rawFrameAt(frames, _rootFrameCursor);
+                    _rootContentVariant = rawFrameContent(cf);
                     // 0x6B8E48: curTime(+576) = priority[cursor].time
                     //   (NOT int-truncated, unlike the layer stream).
-                    _rootCurTime = frameTimeOf(cf);
+                    _rootCurTime = rawFrameTime(cf);
                     // 0x6B8F08: nextTime(+584) = priority[cursor+1].time.
-                    auto nf = frameAt(_rootFrameCursor + 1);
-                    _rootNextTime = frameTimeOf(nf);
-                }
-            } else {
-                _rootStreamSource = nullptr;
+                    const auto nf = rawFrameAt(
+                        frames, _rootFrameCursor + 1);
+                    _rootNextTime = rawFrameTime(nf);
             }
         }
 
@@ -1748,16 +589,17 @@ namespace internal {
         // scalar block) + gated findSource + matched-entry erase. node+46 = joinTarget is now
         // modeled (the prior "visible byte / DEFERRED" was falsified by the
         // 0x6b3ef0/0x6b2dcc/0x6b855c decompiles this pass). The restore itself is
-        // PARTIAL (hm3RestoreValueToNodeLike_0x6997F0 ports the common scalar
-        // block; contentMask/srcDispatch/type-3-4 child + particle restores stay
-        // DEFERRED on the same snapshot-source gaps).
+        // ported for the common scalar block plus the type-3/type-4 child and
+        // particle variants. Player_HM3_initValueFromNode @0x699510 also owns a
+        // ttstr copy of activeSlot.src at value+44; Player_HM3_restoreValueToNode
+        // @0x6997F0 deliberately does not write that owner back to the slot, so
+        // its role is snapshot lifetime retention rather than restore payload.
         //
         if(!_perNodeLayerStateMap.empty()) {
             for(size_t k = 1; k < _nodes.size(); ++k) {
                 detail::MotionNode &node = _nodes[k];
-                const ttstr key = detail::widen(
-                    detail::buildNodePathKeyLike_0x6B5C1C(
-                        _nodes, static_cast<int>(k)));
+                const ttstr key = detail::buildNodePathKeyLike_0x6B5C1C(
+                    _nodes, static_cast<int>(k));
                 const auto it = _perNodeLayerStateMap.find(key);
                 if(it == _perNodeLayerStateMap.end()) {
                     continue;                       // 0x6b8550 HM3 miss
@@ -1786,19 +628,6 @@ namespace internal {
         // (the value HM4 caches) for each VariableLabelScope. active=slot[cursor]
         // is prev (lower frame), other=slot[!cursor] is next. Gate (0x6BBF14):
         // skip if active.typeZeroFlag (type==0 → no value). Then HOLD vs LERP.
-        const auto numValue =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            if (!n) return 0.0;
-            switch (n->numberType) {
-                case PSB::PSBNumberType::Float:  return n->getValue<float>();
-                case PSB::PSBNumberType::Double: return n->getValue<double>();
-                case PSB::PSBNumberType::Int:
-                    return static_cast<double>(n->getValue<int>());
-                default:
-                    return static_cast<double>(n->getValue<tjs_int64>());
-            }
-        };
         // Player_applyBezierEasing @0x69A754: easing = {x:[...], y:[...]} control
         // points (count multiple of 3). Clamp t to [x[0], x[n-1]] → y end; else
         // stride-3 scan locates the segment and the curve uses t DIRECTLY:
@@ -1806,17 +635,18 @@ namespace internal {
         // (the x values only locate the segment; they do not re-parameterise t —
         // faithful to the binary's discard of the xs reads).
         const auto applyBezierEasing =
-            [&](const std::shared_ptr<PSB::IPSBValue> &easing,
-                double t) -> double {
-            auto dict = std::dynamic_pointer_cast<PSB::PSBDictionary>(easing);
-            if (!dict) return t;
-            auto xs = std::dynamic_pointer_cast<PSB::PSBList>((*dict)["x"]);
-            auto ys = std::dynamic_pointer_cast<PSB::PSBList>((*dict)["y"]);
-            if (!xs || !ys) return t;
-            const int count = static_cast<int>(xs->size());
-            if (count == 0 || static_cast<int>(ys->size()) < count) return t;
-            const auto xAt = [&](int i) { return numValue((*xs)[i]); };
-            const auto yAt = [&](int i) { return numValue((*ys)[i]); };
+            [](const tTJSVariant &easing, double t) -> double {
+            const tTJSVariant xs = detail::motionPropGet(
+                easing, TJS_W("x"));
+            const tTJSVariant ys = detail::motionPropGet(
+                easing, TJS_W("y"));
+            const int count = detail::motionPropGetCount(xs);
+            const auto xAt = [&](int i) {
+                return detail::motionPropGetDoubleByNum(xs, i);
+            };
+            const auto yAt = [&](int i) {
+                return detail::motionPropGetDoubleByNum(ys, i);
+            };
             if (xAt(0) >= t) return yAt(0);            // 0x69A938
             if (xAt(count - 1) <= t) return yAt(count - 1);  // 0x69A958
             int s = 0;
@@ -1848,7 +678,7 @@ namespace internal {
                     v = Vp;                     // degenerate → hold
                 } else {
                     double t = d / (other.time - active.time);  // 0x6BBFBC
-                    if (active.easing) {        // slot+48 easingPresent ~ easing!=null
+                    if (active.easing.Type() != tvtVoid) { // slot+48 variant tag
                         t = applyBezierEasing(active.easing, t); // 0x6BBFC8
                     }
                     v = Vo * t + Vp * (1.0 - t); // LERP (0x6BBFD8)
@@ -1884,9 +714,11 @@ namespace internal {
                 _variableSnapshotMap[item.cascadeKey] = item.value;
             }
         }
-        // loop3 (0x6B2D68): HM3 per-node-path layer state. STRUCTURE ported;
-        // snapshot PARTIAL (see hm3InitValueFromNodeLike). Gate order matches the
-        // binary @0x6b2dcc/0x6b2df8 EXACTLY:
+        // loop3 (0x6B2D68): HM3 per-node-path layer state. Structure and HM3
+        // payload ownership are ported (see hm3InitValueFromNodeLike); the
+        // preceding loop1 evaluateTimeline call remains deferred, so the values
+        // presented to this snapshot can still differ in this reset path. Gate
+        // order matches the binary @0x6b2dcc/0x6b2df8 EXACTLY:
         //   (1) if (!node+46) continue;            // joinTarget gate FIRST
         //   (2) v30 = node+28;
         //       if (v30 <= 8 && ((1<<v30) & 0x19D)) // nodeType mask SECOND
@@ -1895,9 +727,10 @@ namespace internal {
         // Player_initNodeFields @0x6b3ef0; the prior "visible byte / DEFERRED"
         // annotation was falsified by fresh decompile this pass). Now restored:
         // only joinTarget nodes are snapshotted into HM3. key = buildNodePathKey
-        // (Player+24 path-key space); HM3.upsert → _perNodeLayerStateMap. The map
+        // (HM3 path-key space, distinct from raw-label Player+24);
+        // HM3.upsert → _perNodeLayerStateMap. The map
         // is read on the maintenance side by pruneHM3ByNodeIdentityLike_0x6B826C
-        // (reseek STEP5), whose per-node restore is now PARTIALLY ported.
+        // (reseek STEP5), whose per-node restore payload is ported.
         for(size_t k = 1; k < _nodes.size(); ++k) {
             const auto &node = _nodes[k];
             if(!node.joinTarget) {
@@ -1905,9 +738,8 @@ namespace internal {
             }
             const int t = node.nodeType;
             if(t >= 0 && t <= 8 && ((1 << t) & 0x19D) != 0) {  // 0x6b2df8 mask
-                const ttstr key = detail::widen(
-                    detail::buildNodePathKeyLike_0x6B5C1C(
-                        _nodes, static_cast<int>(k)));
+                const ttstr key = detail::buildNodePathKeyLike_0x6B5C1C(
+                    _nodes, static_cast<int>(k));
                 hm3InitValueFromNodeLike_0x699510(
                     node, _perNodeLayerStateMap[key]);
             }
@@ -1920,11 +752,11 @@ namespace internal {
         // The binary snapshots the node's ALREADY-INTERPOLATED state — written by
         // Player_evaluateTimeline @0x699AE4 in resetMotionState loop1, into the
         // node+1512.. byte-mirror — plus the active ClipSlot's raw fields. The
-        // port holds the interpolated values in node.interpolatedCache and the
+        // port holds the same node runtime block in node.accumulated and the
         // slot fields in node.activeSlot(), so we copy them semantically (the
-        // node+1512 byte mirror is an ABI detail the port does not need).
+        // ARM64 byte offsets are an ABI detail the port does not need).
         v.nodeType = node.nodeType;              // V+0   ← node+28
-        const auto &c = node.interpolatedCache;
+        const auto &c = node.accumulated;
         // The init side reads the ACTIVE slot and may CLEAR node fields (type-3),
         // so it needs a mutable node ref; the caller passes a const node, so cast
         // here matching the binary which takes a1=node and writes node+1912.
@@ -1974,16 +806,21 @@ namespace internal {
             }
         }
         // active ClipSlot fields (slot = node+320+536*activeSlotIndex):
+        // 0x699610..0x69964C CopyRefs slot+36 into V+44. This is a lifetime
+        // owner only: Player_HM3_restoreValueToNode @0x6997F0 never writes it
+        // back to the slot, and the HM3 value destructor releases it.
+        v.srcValue_44 = slot.srcValue;              // V+44 ← slot+36
         v.contentMask = slot.contentMask;        // V+28  ← slot+340 (frame "mask")
         v.blendMode = slot.blendMode;            // V+52  ← slot+364
         v.ox = slot.ox;                          // V+64  ← slot+376
         v.oy = slot.oy;                          // V+72
         // interpolated transform state (evaluateTimeline outputs):
-        v.packedColors = c.packedColors;         // V+80  ← node+100..112
-        v.opacity = static_cast<int>(std::lround(c.opacity * 255.0)); // V+96 ← node+1576 (0-255 round)
-        v.coordX = c.x;                          // V+104 ← node+1512
-        v.coordY = c.y;                          // V+112 ← node+1520
-        v.coordZ = c.z;                          // V+120 ← node+1528
+        std::memcpy(v.packedColors.data(), node.colorBytes,
+                    sizeof(node.colorBytes));    // V+80  ← node+100..112
+        v.opacity = c.opacity;                   // V+96  ← node+1576
+        v.coordX = c.posX;                       // V+104 ← node+1512
+        v.coordY = c.posY;                       // V+112 ← node+1520
+        v.coordZ = c.posZ;                       // V+120 ← node+1528
         v.flipX = c.flipX ? 1 : 0;               // V+128 ← node+1507
         v.flipY = c.flipY ? 1 : 0;               // V+129 ← node+1508
         v.angle = c.angle;                       // V+136 ← node+1536
@@ -1992,10 +829,8 @@ namespace internal {
         v.slantX = c.slantX;                     // V+160 ← node+1560
         v.slantY = c.slantY;                     // V+168 ← node+1568
         // type-4 (V+672 particle-array snapshot ← node+2296, V+600..664 ←
-        // node+2224..2288) is now ported above — the evaluateTimeline type-4
-        // mirror (MotionNode::particleInterp) is the source. STILL DEFERRED
-        // (no clean port source): V+44 srcDispatch — the port models src as a
-        // std::string, not an iTJSDispatch2 handle (PLATFORM_BOUNDARY).
+        // node+2224..2288) is ported above. V+44 source ownership is also
+        // complete: it is the ttstr CopyRef taken before this scalar block.
     }
 
     void Player::hm3RestoreValueToNodeLike_0x6997F0(
@@ -2015,6 +850,7 @@ namespace internal {
         //   if (V.nodeType == 3) restore node+1912 <- V+136(dispatch); reset V
         //   if (V.nodeType == 4) restore node+2296 <- V+168(dispatch); reset V;
         //                        if (!V+32) memcpy(slot+744 <- V+150, 0x48)
+        //   V+44 source is intentionally not restored; it is a lifetime owner.
         //   COMMON BLOCK gate (0x6998a4): if (!slot+344 && !V+32):
         //     slot+20  = V+28  contentMask
         //     slot+44  = V+52  blendMode
@@ -2096,7 +932,7 @@ namespace internal {
         slot.ox = v.ox;                            // slot+56  <- V+64
         slot.oy = v.oy;                            // slot+64  <- V+72
         slot.packedColors = v.packedColors;        // slot+72.. <- V+80..92
-        slot.opacity = static_cast<double>(v.opacity) / 255.0;  // slot+88 <- V+96 (0-255 → 0-1)
+        slot.opacity = v.opacity;  // slot+88 <- V+96, both are integer 0..255
         slot.x = v.coordX;                         // slot+96  <- V+104
         slot.y = v.coordY;                         // slot+104 <- V+112
         slot.z = v.coordZ;                         // slot+112 <- V+120
@@ -2120,27 +956,21 @@ namespace internal {
     // the node+8 split (parameterized → advanceNodeFrames 0x6B7E44 / non-param →
     // inline forward seek) and self-guards on an empty node deque.
     void Player::advanceRootAndNodes_0x6B6ADC(double clampedEvalTime) {
-        seekLayerEventStreamLike_0x6B6ADC(clampedEvalTime);  // ① layer 0x6B6B8C
-        seekRootContentStreamLike_0x6B6ADC(clampedEvalTime); // ② root 0x6B6F48
+        advanceLayerEventStreamLike_0x6B6ADC(clampedEvalTime);  // ① layer 0x6B6B8C
+        advanceRootContentStreamLike_0x6B6ADC(clampedEvalTime); // ② root 0x6B6F48
         advanceVariableTracksLike_0x6B6ADC(clampedEvalTime); // ③ var-track 0x6B7124 (forward)
         progressSeekNodeSlotsLike_0x6C106C(clampedEvalTime); // ④ node deque 0x6B7358
     }
 
     // Player_rewindRootAndNodes @0x6B9A3C — reverse 4-stream walk. Same boundary
-    // as advanceRootAndNodes but with the REVERSE var-track stepper
-    // (rewindVariableTracksLike 0x6B9FCC). The layer seek is bidirectional and
-    // self-selects backward (0x6B9AE8); the root seek is ALSO bidirectional now and
-    // self-selects backward via the reverse decrement loop @0x6B9E84 (R-B1 closed —
-    // the prior "forward-only approximation" missed the binary's reverse root scan).
-    // The node
-    // deque walk (④) is shared with the forward path: progressSeekNodeSlotsLike's
-    // advanceNodeFrameSelectionLike_0x6926B4 runs forward + corrective-backward,
-    // so in reverse the forward sub-loop is a no-op and the backward sub-loop does
-    // the rewind — the conflated live seek models both the binary's forward inline
-    // (0x6B73DC, forward-only) and reverse inline (0x6BA1CC, backward-only) seeks.
+    // as advanceRootAndNodes but with dedicated layer/root decrement loops and
+    // the REVERSE var-track stepper (rewindVariableTracksLike 0x6B9FCC).
+    // The node deque driver is shared, but dispatches to distinct single-direction
+    // inline boundaries: forward @0x6B73DC and reverse @0x6BA1CC. Parameterized
+    // nodes take Player_advanceNodeFrames @0x6B7E44 in either direction.
     void Player::rewindRootAndNodes_0x6B9A3C(double clampedEvalTime) {
-        seekLayerEventStreamLike_0x6B6ADC(clampedEvalTime);  // ① layer (bidirectional → backward 0x6B9AE8)
-        seekRootContentStreamLike_0x6B6ADC(clampedEvalTime); // ② root (bidirectional → reverse 0x6B9E84)
+        rewindLayerEventStreamLike_0x6B9A3C(clampedEvalTime);  // ① layer 0x6B9AE8
+        rewindRootContentStreamLike_0x6B9A3C(clampedEvalTime); // ② root 0x6B9E84
         rewindVariableTracksLike_0x6B9A3C(clampedEvalTime);  // ③ var-track 0x6B9FCC (reverse)
         progressSeekNodeSlotsLike_0x6C106C(clampedEvalTime, /*forward=*/false); // ④ node deque 0x6BA158 (backward inline seek)
     }
@@ -2176,6 +1006,9 @@ namespace internal {
         // 否则两处读到上一帧的陈旧 _deltaTime（IDA 0x6C1108 注释标注的 PORT BUG），
         // PlayerUpdateAnchor 的 _deltaTime==0 gate 与阻尼计算同样依赖本帧值。
         _deltaTime = _speedMul * actualDelta;       // player+592 @0x6C1094
+        if(_directEdit) {                           // player+482 @0x6C1098
+            initEmoteMotionLike_0x6B2E90(2u);       // 0x6C10A4
+        }
 
         // HM2 (_evalResultValues @+320) is NOT cleared per-frame. Byte-verified
         //   against Player_progress_inner @0x6C106C (2026-06-03): its entry clears
@@ -2247,11 +1080,8 @@ namespace internal {
             // renderList = 二进制每帧 framesel(parse 0x6926B4 / merge 0x692AB0 /
             // lerp 0x699AE4) 产出、updateLayers(0x6BBD44) 消费、initNonEmoteMotion
             // (0x6B3914) Release+清空的 56B 内容条目 vector(begin/end/cap, 首字段
-            // tTJSVariant*)。本端把含 renderList 的整个 node-deque 帧步进核心替换为
-            // STL _timelines + control-animator 状态机（architecture-level divergence，
-            // 见 progress_core_M1 note "本端缺失整个 node-deque 帧步进核心"），无 1:1
-            // renderList 容器；二进制此处「有无可步进的节点内容」语义由本端 node-deque
-            // (_nodes) 承载（非空分支正是遍历 node-deque 调 advanceNodeFrames）。
+            // tTJSVariant*)。本端当前在这个门控点检查承载节点帧步进的 _nodes；
+            // 原版门控对象仍是上述 renderList，二者的剩余容器归属差异需单独迁移。
             // 一个从未 play 过的 child（无 motion：firstFrame=0 / loopArmed=0 /
             // _cachedTotalFrames=_loopTime=0 / _nodes 空）在此 0x6C1278 return，
             // **永不到达 LABEL_48 forward loop-wrap do-while**（v7 += loopTime-totalFrames
@@ -2430,17 +1260,11 @@ namespace internal {
         // @0x67d3f8), BEFORE the step-7 Player progress sub_6D2A54 @0x67d408. The
         // child-motion pass @0x6BE2A4 also calls progress_inner directly, with no
         // post-process. Re-confirmed by fresh decompile of 0x6C106C / 0x6BE2A4 /
-        // 0x6818B4 / 0x67C8A8 this round. The post-process (bind-loop + cascade +
-        // clamp) was previously run here via applyEvalResultPostProcessLike_0x67CC9C
-        // — that was the WRONG topological location (it placed the emote-only clamp
-        // on the generic Player progress path, where the binary has none, and
-        // double-ran the bind-loop already present in EmoteEngine::progress). It now
-        // runs solely in EmoteEngine::progress (HM7 bind-loop @ ~line 1939 +
-        // applyClampControlsLike_0x67C8A8 @ ~line 1963). The logo path
-        // (Motion.Player.progress -> progressMsLike -> frameProgress) has no emote
-        // controllers and no clampControls, so removing the call here is byte-
-        // identical for logo (the post-process body was a no-op on empty
-        // _evalResultList / empty clampControls).
+        // 0x6818B4 / 0x67C8A8 this round. The former Player-side duplicate put
+        // the emote-only clamp on this generic path and double-ran the Engine
+        // bind loop. It and its eager snapshot clamp table have been deleted;
+        // the sole live owner is now EmoteEngine::progress (HM7 bind loop at
+        // 0x67D3A4, raw Engine clamp deque at 0x67D3F8).
 
         // Camera velocity/friction moved to updateLayers pre-loop (0x6BB360..0x6BB42C)
 
@@ -2450,13 +1274,14 @@ namespace internal {
         // the SIGN of deltaTime(+592) and on whether the cursor reached the end
         // / start, into forward-normal / forward-to-end(loop|stop) /
         // reverse-rewind / loop-wrap. Each terminal branch then re-seeks the
-        // node slots (binary: Player_advanceRootAndNodes 0x6B6ADC /
-        // Player_rewindRootAndNodes 0x6B9A3C, both via the per-node
-        // advanceNodeFrames seek). In the port that re-seek is
-        // progressSeekNodeSlotsLike_0x6C106C(+456): the live per-node seek
-        // (advanceNodeFrameSelectionLike_0x6926B4) is direction-agnostic — it has
-        // BOTH a forward AND a corrective-backward slot loop — so a single
-        // seek-to-(+456) reproduces advanceRootAndNodes AND rewindRootAndNodes.
+        // node slots through direction-specific binary boundaries:
+        // Player_advanceRootAndNodes 0x6B6ADC selects the non-parameterized
+        // forward inline @0x6B73DC, while Player_rewindRootAndNodes 0x6B9A3C
+        // selects the backward inline @0x6BA1CC. Parameterized nodes alone call
+        // Player_advanceNodeFrames @0x6B7E44, whose implementation contains a
+        // forward pass plus corrective backward pass in either play direction.
+        // The local progressSeekNodeSlotsLike_0x6C106C(+456, forward) preserves
+        // that node+8 split and dispatches the matching direction helper.
         //
         // The clamp `+456 = min(+1120,+1128)` was already applied above (the
         // gated-advance block). LABEL_48 below re-derives the SAME value for the
@@ -2609,9 +1434,8 @@ namespace internal {
             // rewind (0x6C138C) — the normal-playback (logo) path. Dispatch on the
             // SAME deltaTime sign LABEL_48 used to pick the branch: forward reaches
             // here via Player_advanceRootAndNodes (0x6B6ADC), reverse via
-            // Player_rewindRootAndNodes (0x6B9A3C). The two streams' direction is
-            // encoded inside those functions (seekLayerEventStreamLike is
-            // bidirectional; the var-track stepper is forward/reverse-distinct).
+            // Player_rewindRootAndNodes (0x6B9A3C). Each function owns its exact
+            // single-direction layer/root/var-track loops.
             // The empty-node-deque guard now lives inside progressSeekNodeSlotsLike.
             if(deltaTime >= 0.0) {
                 advanceRootAndNodes_0x6B6ADC(_clampedEvalTime); // 0x6C13A4 / 0x6C13F8
@@ -2623,7 +1447,7 @@ namespace internal {
         // 砖6/Stage A (洞3 调用点重定位 — DONE): the faithful layer
         // (motion["tag"]) event stream is now driven INSIDE each advanceRoot /
         // rewind equivalent point above (each progressSeekNodeSlotsLike is now
-        // preceded by seekLayerEventStreamLike on the SAME +456), matching the
+        // preceded by the matching directional layer loop on the SAME +456), matching the
         // binary where Player_advanceRootAndNodes (0x6B6ADC) / rewindRootAndNodes
         // (0x6B9A3C) run [layer stream -> root -> var-track -> node walk] as one
         // unit. This fixes the three defects of the old single end-of-frame call:
@@ -2721,22 +1545,18 @@ namespace internal {
             delta = 0;
         }
 
-        const auto motionPath =
-            self->_activeMotion
-                ? self->_activeMotion->path
-                : std::string{};
+        const auto motionPath = self->matchedMotionPath();
         // 二进制 progressCompat(0x6D2A98) 入口无任何栈遍历/字符串构建。shortTJSStackTrace()
-        // 会走一遍 TJS 调用栈，joinPlayingLabels() 会建临时字符串——必须先过路径门控
+        // 会走一遍 TJS 调用栈——必须先过路径门控
         // (logoChainTraceLogf 内部的同一判定) 再求值，否则每帧每个 player 在所有构建上都
         // 付出二进制不存在的开销，违背运行时行为复刻。
         if(detail::logoChainTraceEnabledForPath(motionPath)) {
             detail::logoChainTraceLogf(
                 motionPath, "progressCompat.enter", "0x6D2A98",
                 self->_clampedEvalTime,
-                "deltaMs={:.3f} frameDt={:.6f} allplayingBefore={} playingLabelsBefore={} nodesBefore={} stack={}",
+                "deltaMs={:.3f} frameDt={:.6f} allplayingBefore={} nodesBefore={} stack={}",
                 delta, delta * kMotionFramesPerMillisecond,
                 self->_allplaying ? 1 : 0,
-                joinPlayingLabels(self->_playingTimelineLabels),
                 self->_nodes.size(), shortTJSStackTrace());
         }
 
@@ -2767,14 +1587,12 @@ namespace internal {
             self->updateLayers();
         }
         self->calcBounds();
-        // joinPlayingLabels() 的临时字符串构建同样先过路径门控再求值（见 enter 处说明）。
         if(detail::logoChainTraceEnabledForPath(motionPath)) {
             detail::logoChainTraceLogf(
                 motionPath, "progressCompat.exit", "0x6D2A98",
                 self->_clampedEvalTime,
-                "allplayingAfter={} playingLabelsAfter={} nodesAfter={} bounds=({:.3f},{:.3f},{:.3f},{:.3f})",
+                "allplayingAfter={} nodesAfter={} bounds=({:.3f},{:.3f},{:.3f},{:.3f})",
                 self->_allplaying ? 1 : 0,
-                joinPlayingLabels(self->_playingTimelineLabels),
                 self->_nodes.size(), self->_boundsMinX, self->_boundsMinY,
                 self->_boundsMaxX, self->_boundsMaxY);
         }
@@ -2802,14 +1620,10 @@ namespace internal {
             for(const auto &ev : self->_pendingEvents) {
                 try {
                     if(ev.type == 0) {
-                        // onAction(param1, param2). 砖5/洞3: the layer (tag)
-                        // stream passes a void param1 (record.a, §8.7); the
-                        // legacy per-node path uses a string param1.
-                        tTJSVariant p1;
-                        if(!ev.voidParam1) {
-                            p1 = tTJSVariant(detail::widen(ev.param1));
-                        }
-                        tTJSVariant p2(detail::widen(ev.param2));
+                        // Player_dispatchEvents @0x6C4490 copy-constructs both
+                        // queued variants before invoking onAction.
+                        tTJSVariant p1(ev.param1);
+                        tTJSVariant p2(ev.param2);
                         tTJSVariant *args[] = { &p1, &p2 };
                         objthis->FuncCall(0, TJS_W("onAction"),
                             nullptr, nullptr, 2, args, objthis);
@@ -2823,9 +1637,6 @@ namespace internal {
             self->_pendingEvents.clear();
         }
 
-        if(result) {
-            *result = tTJSVariant(self->getProgressCompat());
-        }
         return TJS_S_OK;
     }
 

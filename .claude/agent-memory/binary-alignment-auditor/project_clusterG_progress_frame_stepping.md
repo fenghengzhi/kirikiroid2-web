@@ -24,13 +24,10 @@ Cluster G (Player frame progress + timeline) audited 2026-05-30. Verdict: ❌ SE
   emote vs non-emote; stores +976/+984; throws 'motion not found'.
 - Player_play_NCBWrapper @0x67f40c: trampoline Player_play(*(objthis+1064),flags,&var).
 
-**Port architecture:** STL timeline machine. PlayerFrameProgress.cpp frameProgress uses
-_timelines map + per-track control-animator queues + blend animators +
-preProgressPlayingTimelinesLike_0x671764 + stepQueuedAnimatorLike_0x67D01C. No node-deque,
-no frame index arithmetic, no parseFrame/mergeFrameContent. _clampedEvalTime set from
-activeClipTime(clip) lookup (wrong source vs binary min-clamp).
-
-**Key takeaway:** advance/rewind/parseFrame/mergeFrameContent are MISSING (no live port
-path). Not patchable — needs Phase-B/C re-architecture from Player_progress_inner down.
+**2026-07-19 纠正：**上述 STL timeline 架构已删除。当前 live path 已接入 raw
+node-deque/frameList 两槽 parse/merge、advance/rewind/reseek 与标量游标链；
+`_timelines/_playingTimelineLabels`、control/blend animator、activeClip lookup 均不存在。
+剩余差异是原版 per-frame renderList owner 与本地 `_nodes` 门控的容器归属，不得再把
+整个帧步进链标为 MISSING。
 Ledger: analysis/audit_motionplayer_2026-05-30/clusterG_progress_timeline.md.
 IDB: renamed 0x6b6adc/0x6b7e44/0x6b9a3c/0x699ae4/0x6926b4/0x692ab0; 15 funcs commented.

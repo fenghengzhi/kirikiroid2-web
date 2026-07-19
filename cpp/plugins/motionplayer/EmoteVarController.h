@@ -98,6 +98,11 @@ namespace motion {
     //   Writes count floats into out[0..count-1] (current value).
     void EmoteVarController_step(EmoteVarController* self, float* out, float dt);
 
+    // sub_66713C @0x66713C. If queued keyframes exist, commits the last queued
+    // destination into currentValue and clears the queue; otherwise an active
+    // interpolation commits startValue. In both cases state becomes idle.
+    void EmoteVarController_resetLike_0x66713C(EmoteVarController* self);
+
     // dtor helper — release the 3 heap arrays. (libkrkr2.so dtor not separately
     // reverse-engineered; this is the local conservative cleanup matching
     // ctor's heap acquisitions.)

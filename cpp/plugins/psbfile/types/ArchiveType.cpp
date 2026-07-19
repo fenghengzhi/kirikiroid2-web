@@ -7,7 +7,7 @@
 
 namespace PSB {
 
-    bool ArchiveType::isThisType(const PSBFile &psb) {
+    bool ArchiveType::isThisType(const DecodedPSBFile &psb) {
         const auto objects = psb.getObjects();
         if(psb.getObjects() == nullptr) {
             return false;
@@ -24,7 +24,7 @@ namespace PSB {
     }
 
     std::vector<std::unique_ptr<IResourceMetadata>>
-    ArchiveType::collectResources(const PSBFile &psb, bool deDuplication) {
+    ArchiveType::collectResources(const DecodedPSBFile &psb, bool deDuplication) {
         return {};
     }
 } // namespace PSB

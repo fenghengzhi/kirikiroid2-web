@@ -5,6 +5,9 @@ metadata:
   type: project
 ---
 
+> **2026-07-19 纠正：** 本文旧实现中从 `_activeMotion->variableLabels` 读取 variableKeys
+> 的描述已失效；当前 getter 直接遍历 Player+1296 var-track deque，Player 已无 `_activeMotion`。
+
 **R0-3 (a343ce9, 2026-06-03) WAS WRONG — corrected 2026-06-04.**
 
 The claim "binary `loopTime` getter == Player_getLoopTime_array @0x6D139C (TJS Array)"

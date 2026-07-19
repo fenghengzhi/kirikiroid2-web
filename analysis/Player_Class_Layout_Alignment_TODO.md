@@ -69,7 +69,7 @@
 | +1240 HM4 | 32B (共享 HM2 node) | label ttstr | **node+16 double** | `_variableSnapshotMap` (L1190) | ✅ RESOLVED |
 
 > **裁决（替代旧"最大未知缺口"）**: 二进制 1384B Player 仅 4 HM + +24 std::map = 5 关联容器。本地多出 ~7 个：
-> - **port 凭空发明**（binary 无）: `_motionsByKey`(995) / `_timelines`(1005) / `_disabledSelectorTargets`(1036) / `_parameterEntryById`(1039)
+> - **port 凭空发明**（binary 无）: `_motionsByKey` / `_disabledSelectorTargets` / `_parameterEntryById`；`_timelines/_playingTimelineLabels` 已于 2026-07-19 删除
 > - **EmoteEngine(1496B) 字段误植**: `_layerIdsByName`(1012) / `_layerNamesById`(1013) / `_renderLayerStates`(1014)（语义 = engine+1440/+1384，Player* 存 engine+1064）
 > - 移除/迁移属 **P3 终极重构**（pimpl 内联回 1384B），差分依赖、本地无 oracle → 禁止盲改。
 > - **真正 open 的 P0**: 4 个 mirror 已就位但**多为空**，缺 WRITE 侧填充（bindParameterValue 0x6C4668 / resetMotionState 0x6B2D3C / initVariables 0x6CD750）。这是 M3 getVariable 级联的前置实施项。
@@ -119,8 +119,8 @@
 | 偏移 | 二进制类型 | 二进制语义 | 本地对应 | 状态 | TODO |
 |---|---|---|---|---|---|
 | +760 | ptr | d3dAdaptorPtr (0) | 🔬 (本地 D3DAdaptor 经 runtime?) | 🔬 | dtor delete + sub_6CFFB8 |
-| +768 | tTJSVariant* | stealthMotionVar | 🔬 | ⚠️🔬 | `_stealthMotion`(ttstr) 是字符串值非 variant 指针,语义不同层 |
-| +776 | tTJSVariant* | charaMotionVar | 🔬 | 🔬 | |
+| +768 | refcounted string value* | pending stealthMotion | `Player::_pendingStealthMotion` (ttstr) | ✅ | `Player_play@0x6B21E8` flush 后 Release/null |
+| +776 | refcounted string value* | pending stealthChara | `Player::_pendingStealthChara` (ttstr) | ✅ | chara setter/child path flush 后 Release/null |
 | +784 | double | cameraVelocityX (0) | `Player::_cameraVelocityX` (Player.h:618) | ✅ | 已标注 player+784 |
 | +792 | double | cameraVelocityY (0) | `Player::_cameraVelocityY` (Player.h:619) | ✅ | 已标注 player+792 |
 | +800 | double | cameraVelocityZ (0) | `Player::_cameraVelocityZ` (Player.h:620) | ✅ | 已标注 player+800 |
@@ -137,15 +137,15 @@
 | 偏移 | 二进制类型 | 二进制语义 | 本地对应 | 状态 | TODO |
 |---|---|---|---|---|---|
 | +936/+944 | 动态数组 stride=44 | variableList,每项 ttstr@+4,ttstr@+24 | `PlayerRuntime::variableLabelEntries` (std::vector<VariableLabelEntry>) | ⚠️ | 语义对齐;二进制 44B/项含 2 个 ttstr。须核对 VariableLabelEntry 字段(§2.4) |
-| +960 | tTJSVariant* | variableKeys (AddRef) | `Player::_variableKeys` (tTJSVariant 值) | ⚠️ | 二进制是指针+AddRef;本地是值。容器/生命周期不同 |
-| +968 | tTJSVariant* | charaVariant | `Player::_chara` (ttstr) | ❌ | **类型错**: 二进制 tTJSVariant*,本地 ttstr。NCB chara getter 返回 +968 variant。需确认是否本地 _chara 对应,还是另有字段 🔬 |
-| +976 | tTJSVariant* | motionVariant | `Player::_motionKey` (ttstr) | ❌🔬 | 同上类型层级问题 |
-| +984 | tTJSVariant* | stealthMotionVariant | 🔬 | 🔬 | ctor a1[123]=0 |
+| +960 | refcounted string value* | primary chara | `Player::_chara` (ttstr) | ✅ | NCB chara getter 0x6D9470 |
+| +968 | refcounted string value* | stealthChara | `Player::_stealthChara` (ttstr) | ✅ | NCB stealthChara getter 0x6D9490 |
+| +976 | refcounted string value* | primary motion | `Player::_motionKey` (ttstr) | ✅ | NCB motion getter 0x6D9544 |
+| +984 | refcounted string value* | stealthMotion | `Player::_stealthMotion` (ttstr) | ✅ | NCB stealthMotion getter 0x6D9564 |
 | +992..1012 | tTJSVariant | ResourceManager dispatch（ctor 第三次 AddRef 拷贝） | 本地统一由 `Player::_resourceManager` 表示 +636/+656/+992 三个同指针槽 | ✅语义 | `Player_ctor@0x6CED30` 的 0x6CEF28 直接 `tTJSVariant_copy_ctor(this+992, resourceManager_dispatch)`；旧“transformOrder/RandomGenerator@992”结论已证伪。RandomGenerator 实在 +676。 |
 | +1012..1032 | tTJSVariant | `findMotion` 命中 module key 上下文 | `Player::_findMotionContextVariant` | ✅ | `Player_playImpl@0x6B2284` 取 `findMotion` 返回数组元素1写 +1012；`ResourceManager_findMotion@0x6A9ED4` 的元素1来自命中 HashMap 节点 key@+8；随后 `Player_findSource@0x6948E8` 作为参数0传回 RM。 |
 | +1032..1052 | ttstr | outline | `Player::_outline` (ttstr, Player.h:569) | ✅ | 已对齐(类型已从 bool 改 ttstr) |
 | +1052..1072 | ttstr | meshline | `Player::_meshline` (ttstr, Player.h:613) | ✅ | 已对齐 |
-| +1072..1092 | ttstr | stealthMotionStr | `Player::_stealthMotion` (ttstr, Player.h:610) | ⚠️ | 语义对齐,本地在 Player 直接成员 |
+| +1072..1092 | tTJSVariant | motion `tag` frame-array dispatch | `Player::_tagFrameSourceVariant` | ✅ | `Player_initNonEmoteMotion@0x6B365C` CopyRef；`Player_skipToSync@0x6D3504` 与 progress 直接枚举 raw dispatch |
 
 ### 1.7 9 个独立 bool 字节 (+1092..+1100) — 已验证
 
@@ -289,11 +289,14 @@
 - **+1156 双字段** — ctor 证实 +1156 是**单个 uint32**(=0xFF808080)。本地 `_colorWeightPacked`(PlayerCore.cpp:146/150 经 sub_6CD710 R-B swap)与 `_parentColorPacked`(父→子传播)都映射 +1156,**应合并为一**。但二进制单字段意味着 colorWeight 设值与父色传播**互相覆盖**,合并会改变本地现行为(目前两字段独立不互扰)。注:NCB "colorWeight" 属性实为 +1097 byte bool(getter sub_6D9768/setter sub_6CC9D4),与 +1156 packed color 是两回事——命名待厘清。**TODO(P1):** 选定权威字段名,统一 3 文件引用,确认互覆盖行为对齐二进制。
 
 ### P1 — 偏移/语义复核(需少量反编译,中等影响)
-8. **🔬 +968/+976 chara/motion variant vs 本地 ttstr** — 确认二进制 chara/motion 存的是 tTJSVariant* 还是字符串,核对本地 _chara/_motionKey 层级。
+8. ~~**🔬 +960/+968/+976/+984 类型**~~ — **已闭合**：getter、
+   `ttstr_c_str` 比较和手工 AddRef/Release 共同证明为 refcounted string-value
+   owner，源码层以四个独立 `ttstr` 复刻。
 9. ~~**🔬 +1012 类型**~~ — **已闭合**：tTJSVariant module-key 上下文；证据链见 §1.6 表。
 10. **🔬 +1104/+1112 相机/坐标** — 单 double vs 本地多字段。
 11. **🔬 +1128/+1136 frame 时间字段** — 本地 _frameLastTime/_cachedTotalFrames/_loopTime/_frameLoopTime 四个,二进制只 +1128/+1136 两个,核对去重。
-12. **🔬 +1099 playing** — 本地无 _playing 成员,核对 getPlaying() 实现。
+12. ~~**🔬 +1099 playing**~~ — **已闭合**：`Player_getPlaying@0x6D9794`
+    直接读该字节；本地 `_allplaying` 对应。
 13. **🔬 +480 progressFlags** — 位标志 vs 单值,反编译 progress_inner。
 
 ### P2 — 容器映射(大型,有前置依赖)

@@ -12,6 +12,11 @@ TIER 2 — advance(0x6B6ADC root loop @0x6B6F48) / rewind(0x6B9A3C root loop @0x
 
 INIT (Player_initNonEmoteMotion @0x6B3778): seeds ONLY +548=motion["priority"] (@0x6B37D0) and +616=priority[0].content (@0x6B38FC). Does NOT touch +568/+576/+584 — they begin at Player object construction zero-init and stay 0 until tier-1 reseek or tier-2 first advance. Same for +916 layer cursor.
 
-PORT NOTE: PlayerFrameProgress.cpp models advance+rewind as ONE merged bidirectional function seekRootContentStreamLike_0x6B6ADC; the binary's separate-function split is preserved at the caller boundary (advanceRootAndNodes_0x6B6ADC vs rewindRootAndNodes_0x6B9A3C, both call the merged seek). reseek = Player::reseekTimelineCursors @PlayerFrameProgress.cpp:1471 (seeds _root* from cursor, lines 1683/1686/1689). Layer stream (seekLayerEventStreamLike_0x6B6ADC) is the analogous twin (+916/+920/+928).
+PORT NOTE (corrected 2026-07-19): PlayerFrameProgress.cpp now mirrors the binary
+direction split with `advanceRootContentStreamLike_0x6B6ADC` and
+`rewindRootContentStreamLike_0x6B9A3C`; layer 同样拆为
+`advanceLayerEventStreamLike_0x6B6ADC` / `rewindLayerEventStreamLike_0x6B9A3C`。
+旧的两个合并双向 helper 与 `_layerStreamSource/_rootStreamSource` 身份重置字段已删除。
+reseek 仍由 `Player::reseekTimelineCursors@0x6B86C8` 独立完成全量 seed。
 
 BUG FIXED 2026-06-05 (this file): seekRootContentStreamLike was unconditionally recomputing _rootCurTime/_rootNextTime from cursor on EVERY entry (old lines ~1090-1091) — a tier-1 operation wrongly living in the tier-2 function. Discarded persistent state each tick, contradicting the adjacent faithful +616 persist. Removed; fields now persist via Player.h members (default 0.0), seeded only at reseed. logo diff (m2logo 93 / yuzulogo 243) stayed PASS — inert because logo priority arrays have <2 frames (loop body never runs), so this was a data-flow/architecture fix not observable by current oracles.

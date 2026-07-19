@@ -13,14 +13,375 @@
 #include <spdlog/spdlog.h>
 
 #include "EmotePlayer.h"  // Player + EmotePlayer + ResourceManager
+#include "MsgIntf.h"
+#include "MotionDispatch.h"
 #include "Player.h"
 #include "RuntimeSupport.h" // detail::narrow (G2-C bind-loop label conversion)
-#include "psbfile/PSBValue.h" // PSBList / PSBDictionary / PSBBool / PSBString
+#include "tjsArray.h"
+#include "tjsDictionary.h"
 
 #define LOGGER spdlog::get("plugin")
 #define STUB_WARN(name) LOGGER->warn("EmoteEngine::" #name "() stub called")
 
 namespace motion {
+
+    namespace {
+
+        struct TJSArrayOwner {
+            tTJSVariant value;
+            tTJSArrayNI *native = nullptr;
+        };
+
+        TJSArrayOwner createTJSArrayLike_0x704CB8() {
+            iTJSDispatch2 *dispatch = TJSCreateArrayObject();
+            TJSArrayOwner result;
+            result.value = tTJSVariant(dispatch, dispatch);
+            dispatch->NativeInstanceSupport(
+                TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
+                reinterpret_cast<iTJSNativeInstance **>(&result.native));
+            dispatch->Release();
+            return result;
+        }
+
+        tTJSVariant createTJSDictionaryLike_0x9C8440() {
+            iTJSDispatch2 *dispatch = TJSCreateDictionaryObject();
+            tTJSVariant result(dispatch, dispatch);
+            dispatch->Release();
+            return result;
+        }
+
+        tTJSArrayNI *getTJSArrayNative(const tTJSVariant &value) {
+            iTJSDispatch2 *dispatch = value.AsObjectNoAddRef();
+            tTJSArrayNI *native = nullptr;
+            dispatch->NativeInstanceSupport(
+                TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
+                reinterpret_cast<iTJSNativeInstance **>(&native));
+            return native;
+        }
+
+        tTJSArrayNI *tryGetTJSArrayNative(const tTJSVariant &value) {
+            if(value.Type() != tvtObject) {
+                return nullptr;
+            }
+            iTJSDispatch2 *dispatch = value.AsObjectNoAddRef();
+            if(!dispatch) {
+                return nullptr;
+            }
+            tTJSArrayNI *native = nullptr;
+            if(TJS_FAILED(dispatch->NativeInstanceSupport(
+                    TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
+                    reinterpret_cast<iTJSNativeInstance **>(&native)))) {
+                return nullptr;
+            }
+            return native;
+        }
+
+        void setTJSProperty(tTJSVariant &dictionary, const tjs_char *name,
+                            tTJSVariant value) {
+            iTJSDispatch2 *dispatch = dictionary.AsObjectNoAddRef();
+            dispatch->PropSet(TJS_MEMBERENSURE, name, nullptr, &value, dispatch);
+        }
+
+        bool tryGetTJSProperty(const tTJSVariant &dictionary,
+                               const tjs_char *name, tTJSVariant &value) {
+            if(dictionary.Type() != tvtObject) {
+                return false;
+            }
+            iTJSDispatch2 *dispatch = dictionary.AsObjectNoAddRef();
+            return dispatch && TJS_SUCCEEDED(dispatch->PropGet(
+                TJS_MEMBERMUSTEXIST, name, nullptr, &value, dispatch));
+        }
+
+        void restoreIntIfPresent(const tTJSVariant &dictionary,
+                                 const tjs_char *name, int32_t &field) {
+            tTJSVariant value;
+            if(tryGetTJSProperty(dictionary, name, value)) {
+                field = static_cast<int32_t>(value.AsInteger());
+            }
+        }
+
+        void restoreFloatIfPresent(const tTJSVariant &dictionary,
+                                   const tjs_char *name, float &field) {
+            tTJSVariant value;
+            if(tryGetTJSProperty(dictionary, name, value)) {
+                field = static_cast<float>(value.AsReal());
+            }
+        }
+
+        void restoreDoubleIfPresent(const tTJSVariant &dictionary,
+                                    const tjs_char *name, double &field) {
+            tTJSVariant value;
+            if(tryGetTJSProperty(dictionary, name, value)) {
+                field = value.AsReal();
+            }
+        }
+
+        // sub_67C094 @0x67C094: serialize the eye/eyebrow 8-byte request queue.
+        tTJSVariant serializeRequestQueueLike_0x67C094(
+            const std::deque<std::pair<float, float>> &queue) {
+            TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+            for(const auto &[p0, p1] : queue) {
+                tTJSVariant item = createTJSDictionaryLike_0x9C8440();
+                setTJSProperty(item, TJS_W("p0"), tTJSVariant(p0));
+                setTJSProperty(item, TJS_W("p1"), tTJSVariant(p1));
+                result.native->Items.push_back(item);
+            }
+            return result.value;
+        }
+
+        void restoreRequestQueueLike_0x663FC8(
+            std::deque<std::pair<float, float>> &queue,
+            const tTJSVariant &dictionary) {
+            tTJSVariant requestQueue;
+            if(!tryGetTJSProperty(dictionary, TJS_W("rq"), requestQueue)) {
+                return;
+            }
+            tTJSArrayNI *native = tryGetTJSArrayNative(requestQueue);
+            if(!native) {
+                return;
+            }
+            queue.clear();
+            for(const tTJSVariant &rawItem : native->Items) {
+                tTJSVariant item(rawItem);
+                item.ToObject();
+                queue.emplace_back(
+                    static_cast<float>(detail::motionPropGetDouble(
+                        item, TJS_W("p0"))),
+                    static_cast<float>(detail::motionPropGetDouble(
+                        item, TJS_W("p1"))));
+            }
+        }
+
+        // sub_66767C @0x66767C.
+        tTJSVariant serializeVarControllerLike_0x66767C(
+            const EmoteVarController *controller) {
+            tTJSVariant result = createTJSDictionaryLike_0x9C8440();
+            setTJSProperty(result, TJS_W("phase"),
+                           tTJSVariant(controller->state));
+            setTJSProperty(result, TJS_W("tick"),
+                           tTJSVariant(controller->phase));
+            setTJSProperty(result, TJS_W("speed"),
+                           tTJSVariant(controller->invDuration));
+            setTJSProperty(result, TJS_W("exponent"),
+                           tTJSVariant(controller->powCount));
+
+            const auto makeChannels = [controller](const float *values) {
+                TJSArrayOwner array = createTJSArrayLike_0x704CB8();
+                for(int index = 0; index < controller->count; ++index) {
+                    array.native->Items.emplace_back(values[index]);
+                }
+                return array.value;
+            };
+            setTJSProperty(result, TJS_W("frame"),
+                           makeChannels(controller->currentValue));
+            setTJSProperty(result, TJS_W("prev"),
+                           makeChannels(controller->targetValue));
+            setTJSProperty(result, TJS_W("target"),
+                           makeChannels(controller->startValue));
+            return result;
+        }
+
+        // sub_667ADC @0x667ADC.
+        void restoreVarControllerLike_0x667ADC(
+            EmoteVarController *controller, const tTJSVariant &dictionary) {
+            if(dictionary.Type() != tvtObject) {
+                return;
+            }
+            restoreIntIfPresent(dictionary, TJS_W("phase"), controller->state);
+            restoreFloatIfPresent(dictionary, TJS_W("tick"), controller->phase);
+            restoreFloatIfPresent(dictionary, TJS_W("speed"),
+                                  controller->invDuration);
+            restoreFloatIfPresent(dictionary, TJS_W("exponent"),
+                                  controller->powCount);
+
+            const auto restoreChannels = [controller, &dictionary](
+                const tjs_char *name, float *values) {
+                tTJSVariant array;
+                if(!tryGetTJSProperty(dictionary, name, array)) {
+                    return;
+                }
+                tTJSVariant object(array);
+                object.ToObject();
+                iTJSDispatch2 *dispatch = object.AsObjectNoAddRef();
+                for(int index = 0; index < controller->count; ++index) {
+                    tTJSVariant value;
+                    (void)dispatch->PropGetByNum(
+                        0, index, &value, dispatch);
+                    values[index] = static_cast<float>(value.AsReal());
+                }
+            };
+            restoreChannels(TJS_W("frame"), controller->currentValue);
+            restoreChannels(TJS_W("prev"), controller->targetValue);
+            restoreChannels(TJS_W("target"), controller->startValue);
+        }
+
+        // EmoteVarController_registerMembers2_guess @0x666830.
+        tTJSVariant serializeAngleControllerLike_0x666830(
+            const EmoteAngleController *controller) {
+            tTJSVariant result = createTJSDictionaryLike_0x9C8440();
+            setTJSProperty(result, TJS_W("phase"),
+                           tTJSVariant(controller->state));
+            setTJSProperty(result, TJS_W("tick"),
+                           tTJSVariant(controller->phase));
+            setTJSProperty(result, TJS_W("speed"),
+                           tTJSVariant(controller->invDuration));
+            setTJSProperty(result, TJS_W("exponent"),
+                           tTJSVariant(controller->powCount));
+            setTJSProperty(result, TJS_W("frame"),
+                           tTJSVariant(controller->currentRad));
+            setTJSProperty(result, TJS_W("prev"),
+                           tTJSVariant(controller->startRad));
+            setTJSProperty(result, TJS_W("target"),
+                           tTJSVariant(controller->targetRad));
+            return result;
+        }
+
+        // EmoteVarController_registerMembers3_guess @0x666A14. The original
+        // writes both "prev" and "target" to +92 (startRad); targetRad is not
+        // restored. Preserve that shipped boundary quirk.
+        void restoreAngleControllerLike_0x666A14(
+            EmoteAngleController *controller,
+            const tTJSVariant &dictionary) {
+            if(dictionary.Type() != tvtObject) {
+                return;
+            }
+            restoreIntIfPresent(dictionary, TJS_W("phase"), controller->state);
+            restoreFloatIfPresent(dictionary, TJS_W("tick"), controller->phase);
+            restoreFloatIfPresent(dictionary, TJS_W("speed"),
+                                  controller->invDuration);
+            restoreFloatIfPresent(dictionary, TJS_W("exponent"),
+                                  controller->powCount);
+            restoreFloatIfPresent(dictionary, TJS_W("frame"),
+                                  controller->currentRad);
+            restoreFloatIfPresent(dictionary, TJS_W("prev"),
+                                  controller->startRad);
+            restoreFloatIfPresent(dictionary, TJS_W("target"),
+                                  controller->startRad);
+        }
+
+        tTJSVariant serializeEyeControllerState(
+            const ttstr &label, const EmoteBlinkController *controller) {
+            tTJSVariant result = createTJSDictionaryLike_0x9C8440();
+            setTJSProperty(result, TJS_W("label"), tTJSVariant(label));
+            setTJSProperty(result, TJS_W("phase"), tTJSVariant(controller->trackState));
+            setTJSProperty(result, TJS_W("frame"), tTJSVariant(controller->trackValue));
+            setTJSProperty(result, TJS_W("v"), tTJSVariant(controller->trackDir));
+            setTJSProperty(result, TJS_W("target"), tTJSVariant(controller->trackTarget));
+            setTJSProperty(result, TJS_W("length"), tTJSVariant(controller->trackSpan));
+            setTJSProperty(result, TJS_W("lengthDone"), tTJSVariant(controller->trackAccum));
+            setTJSProperty(result, TJS_W("exponent"), tTJSVariant(controller->trackPow));
+            setTJSProperty(result, TJS_W("speed"), tTJSVariant(controller->trackInvDur));
+            setTJSProperty(result, TJS_W("rq"),
+                           serializeRequestQueueLike_0x67C094(controller->valueTrack8B));
+            return result;
+        }
+
+        void restoreEyeControllerLike_0x663FC8(
+            EmoteBlinkController *controller,
+            const tTJSVariant &dictionary) {
+            if(dictionary.Type() != tvtObject) {
+                return;
+            }
+            restoreIntIfPresent(dictionary, TJS_W("phase"), controller->trackState);
+            restoreFloatIfPresent(dictionary, TJS_W("frame"), controller->trackValue);
+            restoreFloatIfPresent(dictionary, TJS_W("v"), controller->trackDir);
+            restoreFloatIfPresent(dictionary, TJS_W("target"), controller->trackTarget);
+            restoreFloatIfPresent(dictionary, TJS_W("length"), controller->trackSpan);
+            restoreFloatIfPresent(dictionary, TJS_W("lengthDone"), controller->trackAccum);
+            restoreFloatIfPresent(dictionary, TJS_W("exponent"), controller->trackPow);
+            restoreFloatIfPresent(dictionary, TJS_W("speed"), controller->trackInvDur);
+            restoreRequestQueueLike_0x663FC8(controller->valueTrack8B, dictionary);
+        }
+
+        tTJSVariant serializeEyebrowControllerState(
+            const ttstr &label, const EmoteEyebrowController *controller) {
+            tTJSVariant result = createTJSDictionaryLike_0x9C8440();
+            setTJSProperty(result, TJS_W("label"), tTJSVariant(label));
+            setTJSProperty(result, TJS_W("phase"), tTJSVariant(controller->trackState));
+            setTJSProperty(result, TJS_W("frame"), tTJSVariant(controller->trackValue));
+            setTJSProperty(result, TJS_W("v"), tTJSVariant(controller->trackDir));
+            setTJSProperty(result, TJS_W("target"), tTJSVariant(controller->trackTarget));
+            setTJSProperty(result, TJS_W("length"), tTJSVariant(controller->trackSpan));
+            setTJSProperty(result, TJS_W("lengthDone"), tTJSVariant(controller->trackAccum));
+            setTJSProperty(result, TJS_W("exponent"), tTJSVariant(controller->trackPow));
+            setTJSProperty(result, TJS_W("speed"), tTJSVariant(controller->trackInvDur));
+            setTJSProperty(result, TJS_W("rq"),
+                           serializeRequestQueueLike_0x67C094(controller->valueTrack8B));
+            return result;
+        }
+
+        void restoreEyebrowControllerLike_0x665844(
+            EmoteEyebrowController *controller,
+            const tTJSVariant &dictionary) {
+            if(dictionary.Type() != tvtObject) {
+                return;
+            }
+            restoreIntIfPresent(dictionary, TJS_W("phase"), controller->trackState);
+            restoreFloatIfPresent(dictionary, TJS_W("frame"), controller->trackValue);
+            restoreFloatIfPresent(dictionary, TJS_W("v"), controller->trackDir);
+            restoreFloatIfPresent(dictionary, TJS_W("target"), controller->trackTarget);
+            restoreFloatIfPresent(dictionary, TJS_W("length"), controller->trackSpan);
+            restoreFloatIfPresent(dictionary, TJS_W("lengthDone"), controller->trackAccum);
+            restoreFloatIfPresent(dictionary, TJS_W("exponent"), controller->trackPow);
+            restoreFloatIfPresent(dictionary, TJS_W("speed"), controller->trackInvDur);
+            restoreRequestQueueLike_0x663FC8(controller->valueTrack8B, dictionary);
+        }
+
+        tTJSVariant serializeMouthControllerState(
+            const ttstr &label, const EmoteMouthController *controller) {
+            tTJSVariant result = createTJSDictionaryLike_0x9C8440();
+            setTJSProperty(result, TJS_W("label"), tTJSVariant(label));
+            setTJSProperty(result, TJS_W("phase"), tTJSVariant(controller->state));
+            setTJSProperty(result, TJS_W("mouth"), tTJSVariant(controller->beginFrame));
+            setTJSProperty(result, TJS_W("frame"), tTJSVariant(controller->currentValue));
+            setTJSProperty(result, TJS_W("prev"), tTJSVariant(controller->startVal));
+            setTJSProperty(result, TJS_W("target"), tTJSVariant(controller->endVal));
+            setTJSProperty(result, TJS_W("tick"), tTJSVariant(controller->accum));
+            setTJSProperty(result, TJS_W("exponent"), tTJSVariant(controller->powField));
+            setTJSProperty(result, TJS_W("speed"), tTJSVariant(controller->invDur));
+            return result;
+        }
+
+        void restoreMouthControllerLike_0x6661A8(
+            EmoteMouthController *controller,
+            const tTJSVariant &dictionary) {
+            if(dictionary.Type() != tvtObject) {
+                return;
+            }
+            restoreIntIfPresent(dictionary, TJS_W("phase"), controller->state);
+            restoreIntIfPresent(dictionary, TJS_W("mouth"), controller->beginFrame);
+            restoreFloatIfPresent(dictionary, TJS_W("frame"), controller->currentValue);
+            restoreFloatIfPresent(dictionary, TJS_W("prev"), controller->startVal);
+            restoreFloatIfPresent(dictionary, TJS_W("target"), controller->endVal);
+            restoreFloatIfPresent(dictionary, TJS_W("tick"), controller->accum);
+            restoreFloatIfPresent(dictionary, TJS_W("exponent"), controller->powField);
+            restoreFloatIfPresent(dictionary, TJS_W("speed"), controller->invDur);
+        }
+
+        tTJSVariant serializeSelectorControllerState(
+            const ttstr &label, const EmoteSelectorController *controller) {
+            tTJSVariant result = createTJSDictionaryLike_0x9C8440();
+            setTJSProperty(result, TJS_W("label"), tTJSVariant(label));
+            setTJSProperty(result, TJS_W("value"), tTJSVariant(controller->selectedIndex));
+            setTJSProperty(result, TJS_W("phase"), tTJSVariant(controller->selState));
+            setTJSProperty(result, TJS_W("speed"), tTJSVariant(controller->invDuration));
+            setTJSProperty(result, TJS_W("tick"), tTJSVariant(controller->accum));
+            return result;
+        }
+
+        void restoreSelectorControllerLike_0x668570(
+            EmoteSelectorController *controller,
+            const tTJSVariant &dictionary) {
+            if(dictionary.Type() != tvtObject) {
+                return;
+            }
+            restoreIntIfPresent(dictionary, TJS_W("value"), controller->selectedIndex);
+            restoreIntIfPresent(dictionary, TJS_W("phase"), controller->selState);
+            restoreFloatIfPresent(dictionary, TJS_W("speed"), controller->invDuration);
+            restoreFloatIfPresent(dictionary, TJS_W("tick"), controller->accum);
+        }
+
+    } // namespace
 
     // Aligned with libkrkr2.so sub_67E38C EmoteEngine_ctor @ 0x67E38C.
     //
@@ -240,11 +601,450 @@ namespace motion {
         delete _player;
         _player = nullptr;
 
-        // The binary's four pointer vectors perform an element-level refcount
-        // release before freeing their buffers. The current local
-        // vector<tTJSVariant*> model has no matching element Release API, so
-        // reproducing that step is blocked on reversing the actual pointer
-        // element type/assign helper (0x67F0CC); do not guess with delete/Clear.
+        // EmoteEngine_dtor @0x67F4B8 destroys the four vector<ttstr> members in
+        // reverse declaration order (+1040/+1016/+992/+800), releasing every
+        // non-null string handle before freeing each buffer. The ordinary C++
+        // member destructors below this body reproduce that exact lifetime; no
+        // manual delete/Clear belongs here. sub_67F0CC is likewise the verified
+        // vector<ttstr> copy-assignment helper, not an unknown pointer owner.
+    }
+
+    // sub_669928 @0x669928 + tail sub_669798 @0x669798.
+    void EmoteEngine::resetMetadataState() {
+        _scalarHM6_1384.clear();
+
+        for(auto &node : _hairPartsNodes) {
+            delete node.spring;
+            node.spring = nullptr;
+        }
+        _hairPartsNodes.clear();
+        for(auto &node : _bustChain1Nodes) {
+            delete node.spring;
+            node.spring = nullptr;
+        }
+        _bustChain1Nodes.clear();
+        for(auto &node : _bustChain2Nodes) {
+            delete node.spring;
+            node.spring = nullptr;
+        }
+        _bustChain2Nodes.clear();
+
+        for(auto &entry : _stateMachineDeque4) {
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _stateMachineDeque4.clear();
+        for(auto &entry : _stateMachineDeque5) {
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _stateMachineDeque5.clear();
+        for(auto &entry : _compositeVarDeque6) {
+            EmoteMouthController_dtor(entry.ctl);
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _compositeVarDeque6.clear();
+        _clampControlDeque7.clear();
+        for(auto &entry : _auxVarDeque8) {
+            EmoteVarController_dtor(entry.ctl);
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _auxVarDeque8.clear();
+        for(auto &entry : _vectorVarDeque9) {
+            EmoteSelectorController_dtor(entry.ctl);
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _vectorVarDeque9.clear();
+        for(auto &entry : _lookupCurvesDeque10) {
+            delete entry.ctl;
+            entry.ctl = nullptr;
+        }
+        _lookupCurvesDeque10.clear();
+
+        // sub_6696B8 clears vector<ttstr>@+800 first, releasing each element and
+        // retaining capacity, then clears HM1/HM2. std::vector<ttstr>::clear()
+        // reproduces the element Release/end=begin lifetime directly.
+        _variableMatchList800.clear();
+        _mirrorMatchSetHM1_824.clear();
+        _mirrorMissSetHM2_880.clear();
+        _compoundHM3_936.clear();
+
+        TJSArrayOwner baseLabels = createTJSArrayLike_0x704CB8();
+        _variableLabelsBase = baseLabels.value;
+        _variableLabels = _variableLabelsBase;
+        _variableFrameLists = createTJSDictionaryLike_0x9C8440();
+        _instantVariableSetHM4_1272.clear();
+        _variableRangesHM5_1328.clear();
+    }
+
+    // EmoteEngine_buildVariableList @0x66A530.
+    void EmoteEngine::buildVariableList(const tTJSVariant &variableList) {
+        TJSArrayOwner labels = createTJSArrayLike_0x704CB8();
+        _variableLabels = labels.value;
+
+        iTJSDispatch2 *frameDictionary =
+            _variableFrameLists.AsObjectNoAddRef();
+        const int count = detail::motionPropGetCount(variableList);
+        for(int v11 = 0; v11 < count; ++v11) {
+            const tTJSVariant item = detail::motionPropGetByNum(
+                variableList, v11);
+            const ttstr label = detail::motionPropGetString(
+                item, TJS_W("label"));
+
+            auto [rangeIt, inserted] =
+                _variableRangesHM5_1328.try_emplace(label);
+            (void)inserted;
+            detail::EmoteVariableRange &range = rangeIt->second;
+
+            tTJSVariant frameArrayValue;
+            tTJSArrayNI *frameArray = nullptr;
+            if(TJS_SUCCEEDED(frameDictionary->PropGet(
+                    TJS_MEMBERMUSTEXIST, label.c_str(), nullptr,
+                    &frameArrayValue, frameDictionary))) {
+                frameArray = getTJSArrayNative(frameArrayValue);
+            } else {
+                TJSArrayOwner created = createTJSArrayLike_0x704CB8();
+                frameArrayValue = created.value;
+                frameArray = created.native;
+
+                labels.native->Items.emplace_back(label);
+                frameDictionary->PropSet(
+                    TJS_MEMBERENSURE, label.c_str(), nullptr,
+                    &frameArrayValue, frameDictionary);
+            }
+
+            const tTJSVariant frameList = detail::motionPropGet(
+                item, TJS_W("frameList"));
+            const int frameCount = detail::motionPropGetCount(frameList);
+            for(int v55 = 0; v55 < frameCount; ++v55) {
+                const tTJSVariant frame = detail::motionPropGetByNum(
+                    frameList, v55);
+                const double frameValue = detail::motionPropGetDouble(
+                    frame, TJS_W("frame"));
+
+                range.frameMin = std::min(range.frameMin, frameValue);
+                range.frameMax = std::max(range.frameMax, frameValue);
+                frameArray->Items.push_back(frame);
+            }
+        }
+    }
+
+    // sub_66E248 @0x66E248.
+    void EmoteEngine::removeVariableLabel(const ttstr &label) {
+        iTJSDispatch2 *labels = _variableLabels.AsObjectNoAddRef();
+        tTJSVariant argument(label);
+        tTJSVariant *arguments[] = { &argument };
+        labels->FuncCall(0, TJS_W("remove"), nullptr, nullptr, 1, arguments,
+                         labels);
+    }
+
+    // Aligned with libkrkr2.so sub_670D1C @0x670D1C.
+    //
+    // Binary pseudocode (fresh decompile in this conversation):
+    //   base=new Array; +1208=base; base.Items=(+1228 Array).Items; dirty=1;
+    //   for (entry : selectorDeque) { entry.flag=selectorEnabled;
+    //     if (enabled) { entry.ctl.queue.clear(); selState=0; applySelection(0); }
+    //     else std::remove(base.Items.begin(), base.Items.end(), entry.label);
+    //     for (target : entry.targets) if (enabled) removeVariableLabel(target.label);
+    //       else { target.ctl.queue.clear(); state=0; currentValue[0..count)=0; }
+    //   }
+    void EmoteEngine::syncSelectorControlsLike_0x670D1C() {
+        TJSArrayOwner baseLabels = createTJSArrayLike_0x704CB8(); // 0x670d54
+        _variableLabelsBase = baseLabels.value;                   // 0x670d60
+
+        tTJSArrayNI *currentLabels = getTJSArrayNative(_variableLabels);
+        baseLabels.native->Items = currentLabels->Items;          // sub_670F6C
+
+        _dirty = true;                                             // 0x670d98
+        for (EmoteSelectorControlEntry_Deque9& entry : _vectorVarDeque9) {
+            entry.flag = _selectorEnabled;                         // 0x670dc0..c4
+            if (_selectorEnabled) {
+                entry.ctl->commandTrack12B.queue.clear();          // 0x670dcc..e00
+                entry.ctl->selState = 0;                           // 0x670e0c
+                EmoteSelectorController_applySelection(
+                    entry.ctl, 0, 0.0f, 0.0f);                     // 0x670e1c
+            } else {
+                const tTJSVariant label(entry.label);
+                // sub_68B898 is std::remove over the Array Items deque. The
+                // returned new-end iterator is deliberately ignored: the binary
+                // does not erase/shrink the tail, so preserve that boundary quirk.
+                (void)std::remove(baseLabels.native->Items.begin(),
+                                  baseLabels.native->Items.end(), label); // 0x670e58
+            }
+
+            for (EmoteTransitionControlEntry_Deque8 *target : entry.targets) {
+                if (_selectorEnabled) {
+                    removeVariableLabel(target->label);            // 0x670e94
+                } else {
+                    EmoteVarController *ctl = target->ctl;
+                    ctl->queue.clear();                             // 0x670ea0..ed4
+                    ctl->state = 0;                                // 0x670ed8
+                    std::fill_n(ctl->currentValue, ctl->count, 0.0f); // 0x670ee0..ef0
+                }
+            }
+        }
+    }
+
+    // EmoteEngine_isSelectorTarget @0x6823FC.
+    bool EmoteEngine::isSelectorTarget(const ttstr &label) {
+        for (EmoteSelectorControlEntry_Deque9 &entry : _vectorVarDeque9) {
+            entry.flag = _selectorEnabled;                       // 0x682478
+            for (EmoteTransitionControlEntry_Deque8 *target : entry.targets) {
+                if (target->label == label) {                     // 0x682484..e0
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // EmoteEngine_activateSelectorTarget @0x67581C.
+    void EmoteEngine::activateSelectorTarget(const ttstr &label) {
+        for (EmoteSelectorControlEntry_Deque9 &entry : _vectorVarDeque9) {
+            for (std::size_t index = 0; index < entry.targets.size(); ++index) {
+                if (entry.targets[index]->label != label) {
+                    continue;
+                }
+
+                entry.ctl->commandTrack12B.queue.clear();         // 0x675914..48
+                entry.ctl->selState = 0;                          // 0x675924
+                EmoteSelectorController_applySelection(
+                    entry.ctl, static_cast<int>(index), 0.0f, 0.0f); // 0x67595c
+                entry.flag = 0;                                  // 0x675960
+
+                for (EmoteSelectorControlEntry_Deque9 &selector :
+                     _vectorVarDeque9) {
+                    float value;
+                    EmoteSelectorController_step(
+                        selector.ctl, &value, 0.0f);               // 0x67599c
+                    _labelToValueHM7[selector.label] = value;      // 0x6759b0..bc
+                }
+                for (EmoteTransitionControlEntry_Deque8 &transition :
+                     _auxVarDeque8) {
+                    float value;
+                    EmoteVarController_step(
+                        transition.ctl, &value, 0.0f);             // 0x6759fc
+                    _labelToValueHM7[transition.label] = value;    // 0x675a10..1c
+                }
+                return;
+            }
+        }
+    }
+
+    // EmoteEngine_deactivateSelectorTarget @0x675BF4.
+    void EmoteEngine::deactivateSelectorTarget(const ttstr &label) {
+        for (EmoteSelectorControlEntry_Deque9 &entry : _vectorVarDeque9) {
+            for (std::size_t index = 0; index < entry.targets.size(); ++index) {
+                if (entry.targets[index]->label != label) {
+                    continue;
+                }
+
+                entry.ctl->commandTrack12B.queue.clear();         // 0x675CEC..0x675D20
+                entry.ctl->selState = 0;                          // 0x675CFC
+                EmoteSelectorController_applySelection(
+                    entry.ctl, static_cast<int>(index), 0.0f, 0.0f); // 0x675D34
+                entry.flag = 1;                                  // 0x675D3C
+
+                for (EmoteSelectorControlEntry_Deque9 &selector :
+                     _vectorVarDeque9) {
+                    float value;
+                    EmoteSelectorController_step(
+                        selector.ctl, &value, 0.0f);               // 0x675D78
+                    _labelToValueHM7[selector.label] = value;      // 0x675D8C..98
+                }
+                for (EmoteTransitionControlEntry_Deque8 &transition :
+                     _auxVarDeque8) {
+                    float value;
+                    EmoteVarController_step(
+                        transition.ctl, &value, 0.0f);             // 0x675DD8
+                    _labelToValueHM7[transition.label] = value;    // 0x675DEC..F8
+                }
+                return;
+            }
+        }
+    }
+
+    // sub_66EB8C @0x66EB8C, including timeline helper sub_669D10 and direct
+    // controller tail sub_66A42C. The order is observable because selector
+    // applySelection may enqueue into transition controllers that are reset
+    // immediately afterward.
+    void EmoteEngine::resetControllersLike_0x66EB8C() {
+        std::size_t activeIndex = 0;
+        while(activeIndex < _activeTimelineLabels1040.size()) {
+            detail::EmoteHM3Value &state =
+                _compoundHM3_936.at(_activeTimelineLabels1040[activeIndex]);
+            if(state.loopBegin >= 0.0) {
+                EmoteVarController_resetLike_0x66713C(
+                    state.blendController);
+                ++activeIndex;
+            } else {
+                applyTimelineWindowLike_0x669E1C(
+                    state, true, state.lastTime);
+                _activeTimelineLabels1040.erase(
+                    _activeTimelineLabels1040.begin() +
+                    static_cast<std::ptrdiff_t>(activeIndex));
+            }
+        }
+
+        EmoteVarController_resetLike_0x66713C(_ctlHairPartsTarget);
+        EmoteVarController_resetLike_0x66713C(_ctlBust1Target);
+        EmoteVarController_resetLike_0x66713C(_ctlBust2Target);
+
+        for(EmoteHairPartsNode48B &node : _hairPartsNodes) {
+            node.spring->firstFlag = 1;
+            node.initFlag = 1;
+        }
+        for(EmoteBustChain1Node56B &node : _bustChain1Nodes) {
+            node.spring->firstFlag = 1;
+            node.initFlag = 1;
+        }
+        for(EmoteBustChain2Node56B &node : _bustChain2Nodes) {
+            node.spring->firstFlag = 1;
+            node.initFlag = 1;
+        }
+
+        for(EmoteEyeControlEntry_Deque4 &entry : _stateMachineDeque4) {
+            EmoteBlinkController_resetLike_0x663AA0(entry.ctl);
+        }
+        for(EmoteEyebrowControlEntry_Deque5 &entry : _stateMachineDeque5) {
+            EmoteEyebrowController_resetLike_0x6654C4(entry.ctl);
+        }
+        for(EmoteMouthControlEntry_Deque6 &entry : _compositeVarDeque6) {
+            EmoteMouthController *ctl = entry.ctl;
+            if(!ctl->valueTrack12B.queue.empty()) {
+                ctl->state = 0;
+                ctl->currentValue = ctl->valueTrack12B.queue.back().endRad;
+                ctl->valueTrack12B.queue.clear();
+            } else if(ctl->state != 0) {
+                ctl->state = 0;
+                ctl->currentValue = ctl->endVal;
+            }
+        }
+        for(EmoteSelectorControlEntry_Deque9 &entry : _vectorVarDeque9) {
+            EmoteSelectorController_resetLike_0x668394(entry.ctl);
+        }
+        for(EmoteTransitionControlEntry_Deque8 &entry : _auxVarDeque8) {
+            EmoteVarController_resetLike_0x66713C(entry.ctl);
+        }
+
+        EmoteVarController_resetLike_0x66713C(_ctlPosition);
+        EmoteVarController_resetLike_0x66713C(_ctlScale);
+        if(!_ctlAngle->queue.empty()) {
+            _ctlAngle->state = 0;
+            _ctlAngle->currentRad = _ctlAngle->queue.back().endRad;
+            _ctlAngle->queue.clear();
+        } else if(_ctlAngle->state != 0) {
+            float value = _ctlAngle->targetRad;
+            _ctlAngle->state = 0;
+            while(value < 0.0f) {
+                value += 6.2832f;
+            }
+            while(value >= 6.2832f) {
+                value -= 6.2832f;
+            }
+            _ctlAngle->currentRad = value;
+        }
+        EmoteVarController_resetLike_0x66713C(_ctlColor);
+    }
+
+    // sub_671DB0 @0x671DB0.
+    void EmoteEngine::setMirrorLike_0x671DB0(bool mirror) {
+        _mirrorRequested = mirror;
+        _mirrorChanged = (_mirrorRequested != _mirrorBase);
+        _player->setMirror(_mirrorChanged);
+        resetControllersLike_0x66EB8C();
+    }
+
+    void EmoteEngine::applyMetadataLike_0x67D4D0(
+        const tTJSVariant &metadata) {
+        // EmoteEngine_applyMetadata_buildControllers @0x67D4D0 starts by
+        // CopyRef'ing the raw metadata variant and unwrapping its dispatch.
+        // Retain that source-level lifetime while all builders consume the raw
+        // TJS dispatch in the same order as Android.
+        const tTJSVariant metadataCopy = metadata;
+
+        resetMetadataState();
+
+        _mirrorBase = detail::motionPropGetBool(
+            metadataCopy, TJS_W("mirror"));
+        _mirrorChanged = (_mirrorRequested != _mirrorBase);
+        _player->setMirror(_mirrorChanged);
+        _player->progressFramesLike_0x6D2A54(0.0);
+
+        _meshDivisionRatio = detail::motionPropGetDouble(
+            metadataCopy, TJS_W("scale"));
+        float controllerScale = 0.0f;
+        EmoteVarController_step(_ctlScale, &controllerScale, 0.0f);
+        _meshDivisionRatioDup =
+            1.0 / (_meshDivisionRatio * controllerScale);
+
+        tTJSVariant variableList;
+        if(detail::motionTryPropGet(
+                metadataCopy, TJS_W("variableList"), variableList)) {
+            buildVariableList(variableList);
+        }
+
+        const tTJSVariant bustControl = detail::motionPropGet(
+            metadataCopy, TJS_W("bustControl"));                  // 0x67d66c
+        buildBustControl(bustControl);                              // 0x67d68c
+
+        const tTJSVariant hairControl = detail::motionPropGet(
+            metadataCopy, TJS_W("hairControl"));                  // 0x67d6c4
+        buildChainControl(_bustChain1Nodes, 1, hairControl);        // 0x67d6e8
+
+        const tTJSVariant partsControl = detail::motionPropGet(
+            metadataCopy, TJS_W("partsControl"));                 // 0x67d720
+        buildChainControl(_bustChain2Nodes, 2, partsControl);       // 0x67d744
+
+        const tTJSVariant eyeControl = detail::motionPropGet(
+            metadataCopy, TJS_W("eyeControl"));                  // 0x67d784
+        buildEyeControl(eyeControl);                              // 0x67d7a4
+
+        const tTJSVariant eyebrowControl = detail::motionPropGet(
+            metadataCopy, TJS_W("eyebrowControl"));               // 0x67d7dc
+        buildEyebrowControl(eyebrowControl);                       // 0x67d7fc
+
+        const tTJSVariant mouthControl = detail::motionPropGet(
+            metadataCopy, TJS_W("mouthControl"));                 // 0x67d834
+        buildMouthControl(mouthControl);                           // 0x67d854
+
+        const auto transitionControl = detail::motionPropGet(
+            metadataCopy, TJS_W("transitionControl"));
+        buildTransitionControl(transitionControl);
+
+        tTJSVariant selectorControl;
+        if(detail::motionTryPropGet(
+                metadataCopy, TJS_W("selectorControl"), selectorControl)) {
+            buildSelectorControl(selectorControl);
+        }
+
+        const auto loopControl = detail::motionPropGet(
+            metadataCopy, TJS_W("loopControl"));
+        buildLoopControl(loopControl);
+
+        const auto clampControl = detail::motionPropGet(
+            metadataCopy, TJS_W("clampControl"));                 // 0x67d93c
+        buildClampControl(clampControl);                           // 0x67d95c
+
+        const auto mirrorControl = detail::motionPropGet(
+            metadataCopy, TJS_W("mirrorControl"));
+        buildMirrorControl(mirrorControl);
+
+        tTJSVariant instantVariableList;
+        if(detail::motionTryPropGet(
+                metadataCopy, TJS_W("instantVariableList"),
+                instantVariableList)) {
+            buildInstantVariableList(instantVariableList);
+        }
+
+        const auto timelineControl = detail::motionPropGet(
+            metadataCopy, TJS_W("timelineControl"));
+        buildTimelineControl(timelineControl);
+
+        syncSelectorControlsLike_0x670D1C();                       // 0x67da8c
     }
 
     // Aligned with libkrkr2.so
@@ -684,56 +1484,32 @@ namespace motion {
     //     ref = HM6_findOrInsert(this+1384, label);         // 0x66ca28
     //     ref->type = 4; ref->index = v5;                   // 0x66ca30
     //   }
-    // The binary pushes {ctl, 0} first then writes the label into the slot
-    //   (with ttstr AddRef); here the entry is constructed with the label
-    //   directly — same end state {ctl, label}. The HM#6 index is the LOOP
-    //   index v5 (NOT the deque size), matching the binary (an element skipped
-    //   by the enabled gate still advances v5 but pushes nothing, so deque index
-    //   and v5 can diverge — preserved verbatim).
-    void EmoteEngine::buildEyeControl(const PSB::PSBList* eyeControl) {
-        if (!eyeControl) {
-            return;
-        }
-        const int count = static_cast<int>(eyeControl->size()); // Motion_propGetCount
+    // The HM#6 index is the LOOP index v5 (NOT the deque size), matching the
+    // binary: an element skipped by the enabled gate still advances v5.
+    void EmoteEngine::buildEyeControl(const tTJSVariant& eyeControl) {
+        const int count = detail::motionPropGetCount(eyeControl);
         for (int v5 = 0; v5 < count; ++v5) {                     // 0x66c844
-            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*eyeControl)[v5]);                             // PropGet(0, v5)
-            // enabled gate (0x66c8e4): skip when "enabled" is not truthy.
-            bool enabled = false;
-            if (elem) {
-                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
-                        (*elem)[std::string("enabled")])) {
-                    enabled = b->value;
-                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                               (*elem)[std::string("enabled")])) {
-                    enabled = n->getLongValue() != 0;
-                }
-            }
-            if (!enabled) {
+            const tTJSVariant elem =
+                detail::motionPropGetByNum(eyeControl, v5);     // 0x66c860
+            if (!detail::motionPropGetBool(elem, TJS_W("enabled"))) {
                 continue;                                       // goto LABEL_28
             }
 
             // operator new(0x170) + ctor (raw pointer, manual lifetime — the
             //   deque entry owns the controller; dtor is responsible for delete).
             EmoteBlinkController* ctl = new EmoteBlinkController(); // 0x66c8f0
-            EmoteBlinkController_ctor(ctl, elem.get());            // 0x66c8fc
+            EmoteBlinkController_ctor(ctl, elem);                  // 0x66c8fc
 
-            // label = elem["label"] as ttstr (the HM7 output key).
-            ttstr label;
-            if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
-                    (*elem)[std::string("label")])) {
-                label = ttstr(s->value.c_str());
-            }
-
-            // push {ctl, label} onto deque#4 (binary pushes {ctl,0} then writes
-            //   label into the slot at 0x66ca10; same end state).
+            // Push {ctl, empty label}, then CopyRef the property into back().label.
             EmoteEyeControlEntry_Deque4 entry;
-            entry.ctl   = ctl;
-            entry.label = label;
+            entry.ctl = ctl;
             _stateMachineDeque4.push_back(std::move(entry));
+            _stateMachineDeque4.back().label = detail::motionPropGetString(
+                elem, TJS_W("label"));                            // 0x66c9c4..0x66ca10
 
             // HM#6 VarRef {type=4, index=v5} keyed by label (0x66ca28..0x66ca30).
-            detail::EmoteVarRef& ref = _scalarHM6_1384[label];
+            detail::EmoteVarRef& ref =
+                _scalarHM6_1384[_stateMachineDeque4.back().label];
             ref.type  = 4;   // *v17 = 4
             ref.index = v5;  // v17[1] = v5
         }
@@ -757,26 +1533,12 @@ namespace motion {
     //   controller (not 0x170), pushes onto deque#5 (engine+320, a1[46..49]),
     //   and writes HM#6 type=5. The HM#6 index is the LOOP index v5 (NOT the
     //   deque size), matching the binary (a skipped element still advances v5).
-    void EmoteEngine::buildEyebrowControl(const PSB::PSBList* eyebrowControl) {
-        if (!eyebrowControl) {
-            return;
-        }
-        const int count = static_cast<int>(eyebrowControl->size()); // Motion_propGetCount
+    void EmoteEngine::buildEyebrowControl(const tTJSVariant& eyebrowControl) {
+        const int count = detail::motionPropGetCount(eyebrowControl);
         for (int v5 = 0; v5 < count; ++v5) {                        // 0x66cc64
-            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*eyebrowControl)[v5]);                             // PropGet(0, v5)
-            // enabled gate (0x66cd04): skip when "enabled" is not truthy.
-            bool enabled = false;
-            if (elem) {
-                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
-                        (*elem)[std::string("enabled")])) {
-                    enabled = b->value;
-                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                               (*elem)[std::string("enabled")])) {
-                    enabled = n->getLongValue() != 0;
-                }
-            }
-            if (!enabled) {
+            const tTJSVariant elem =
+                detail::motionPropGetByNum(eyebrowControl, v5);     // 0x66cc80
+            if (!detail::motionPropGetBool(elem, TJS_W("enabled"))) {
                 continue;                                           // goto LABEL_28
             }
 
@@ -784,24 +1546,18 @@ namespace motion {
             //   the deque entry owns the controller; dtor is responsible for
             //   delete).
             EmoteEyebrowController* ctl = new EmoteEyebrowController(); // 0x66cd10
-            EmoteEyebrowController_ctor(ctl, elem.get());              // 0x66cd1c
+            EmoteEyebrowController_ctor(ctl, elem);                    // 0x66cd1c
 
-            // label = elem["label"] as ttstr (the HM7 output key).
-            ttstr label;
-            if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
-                    (*elem)[std::string("label")])) {
-                label = ttstr(s->value.c_str());
-            }
-
-            // push {ctl, label} onto deque#5 (binary pushes {ctl,0} then writes
-            //   label into the slot at 0x66ce30; same end state).
+            // Push {ctl, empty label}, then CopyRef the property into back().label.
             EmoteEyebrowControlEntry_Deque5 entry;
-            entry.ctl   = ctl;
-            entry.label = label;
+            entry.ctl = ctl;
             _stateMachineDeque5.push_back(std::move(entry));
+            _stateMachineDeque5.back().label = detail::motionPropGetString(
+                elem, TJS_W("label"));                              // 0x66cde4..0x66ce30
 
             // HM#6 VarRef {type=5, index=v5} keyed by label (0x66ce48..0x66ce50).
-            detail::EmoteVarRef& ref = _scalarHM6_1384[label];
+            detail::EmoteVarRef& ref =
+                _scalarHM6_1384[_stateMachineDeque5.back().label];
             ref.type  = 5;   // *v17 = 5
             ref.index = v5;  // v17[1] = v5
         }
@@ -831,61 +1587,40 @@ namespace motion {
     //     *outCurrentValue into HM7[talkLabel].
     //   The HM#6 index is the LOOP index v5 (NOT the deque size), matching the
     //   binary (a skipped element still advances v5).
-    void EmoteEngine::buildMouthControl(const PSB::PSBList* mouthControl) {
-        if (!mouthControl) {
-            return;
-        }
-        const int count = static_cast<int>(mouthControl->size()); // Motion_propGetCount
+    void EmoteEngine::buildMouthControl(const tTJSVariant& mouthControl) {
+        const int count = detail::motionPropGetCount(mouthControl);
         for (int v5 = 0; v5 < count; ++v5) {                       // 0x66d088
-            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*mouthControl)[v5]);                              // PropGet(0, v5)
-            // enabled gate (0x66d128): skip when "enabled" is not truthy.
-            bool enabled = false;
-            if (elem) {
-                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
-                        (*elem)[std::string("enabled")])) {
-                    enabled = b->value;
-                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                               (*elem)[std::string("enabled")])) {
-                    enabled = n->getLongValue() != 0;
-                }
-            }
-            if (!enabled) {
+            const tTJSVariant elem =
+                detail::motionPropGetByNum(mouthControl, v5);      // 0x66d0a4
+            if (!detail::motionPropGetBool(elem, TJS_W("enabled"))) {
                 continue;                                          // goto LABEL_34
             }
 
             // operator new(0x70) + ctor (raw pointer, manual lifetime — the deque
             //   entry owns the controller; dtor is responsible for delete).
             EmoteMouthController* ctl = new EmoteMouthController(); // 0x66d134
-            EmoteMouthController_ctor(ctl, elem.get());            // 0x66d140
+            EmoteMouthController_ctor(ctl, elem);                  // 0x66d140
 
-            // label = elem["label"] (HM7 key for *outBeginFrame).          /*0x66d220*/
-            ttstr label;
-            if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
-                    (*elem)[std::string("label")])) {
-                label = ttstr(s->value.c_str());
-            }
-            // talkLabel = elem["talkLabel"] (HM7 key for *outCurrentValue). /*0x66d2a8*/
-            ttstr talkLabel;
-            if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
-                    (*elem)[std::string("talkLabel")])) {
-                talkLabel = ttstr(s->value.c_str());
-            }
-
-            // push {ctl, label, talkLabel} onto deque#6 (binary pushes {ctl,0,0}
-            //   then writes label@+8 / talkLabel@+16 into the slot; same end state).
+            // The binary first pushes {ctl,0,0}, then CopyRefs both strings into
+            // the newly appended slot. Preserve that construction/data-flow order.
             EmoteMouthControlEntry_Deque6 entry;
             entry.ctl       = ctl;
-            entry.label     = label;
-            entry.talkLabel = talkLabel;
             _compositeVarDeque6.push_back(std::move(entry));
+            EmoteMouthControlEntry_Deque6& back = _compositeVarDeque6.back();
+
+            // label = elem["label"] (HM7 key for *outBeginFrame).          /*0x66d220*/
+            back.label = detail::motionPropGetString(
+                elem, TJS_W("label"));                            // 0x66d220
+            // talkLabel = elem["talkLabel"] (HM7 key for *outCurrentValue). /*0x66d2a8*/
+            back.talkLabel = detail::motionPropGetString(
+                elem, TJS_W("talkLabel"));                        // 0x66d2a8
 
             // TWO HM#6 VarRef inserts {type=6, index=v5} — label AND talkLabel.
             //   (0x66d30c..0x66d314 and 0x66d320..0x66d32c.)
-            detail::EmoteVarRef& ref1 = _scalarHM6_1384[label];     // 0x66d30c
+            detail::EmoteVarRef& ref1 = _scalarHM6_1384[back.label]; // 0x66d30c
             ref1.type  = 6;   // *v24 = 6
             ref1.index = v5;  // v24[1] = v5
-            detail::EmoteVarRef& ref2 = _scalarHM6_1384[talkLabel]; // 0x66d320
+            detail::EmoteVarRef& ref2 = _scalarHM6_1384[back.talkLabel]; // 0x66d320
             ref2.type  = 6;   // *v25 = 6
             ref2.index = v5;  // v25[1] = v5
         }
@@ -923,71 +1658,40 @@ namespace motion {
     //     ref = {type=8, index=v6};   // payload (v6<<32)|8           // 0x66de20
     //   }
     //
-    // INERT boundary (documented, not a defer): the option refCtl is resolved by
-    //   searching the TRANSITION controller-deque (engine+576, local
-    //   `_auxVarDeque8`), a SEPARATE category whose builder (0x66D4C4) is not yet
-    //   ported. That deque is therefore empty here, so the search faithfully
-    //   resolves every refCtl to nullptr (the binary's own search yields v26=0
-    //   when the deque is empty). The selector's own state machine + HM7 index
-    //   output are fully live; only the per-option cross-controller keyframe push
-    //   (guarded by `if (option.refCtl)` in applySelection) is inert until the
-    //   transition category lands. Same null-guard, same skip — 1:1 with binary.
-    //   The HM#6 index is the LOOP index v6 (NOT the deque size); a skipped
-    //   (disabled) element still advances v6.
-    void EmoteEngine::buildSelectorControl(const PSB::PSBList* selectorControl) {
-        if (!selectorControl) {
-            return;
-        }
-        const int count = static_cast<int>(selectorControl->size()); // 0x66d990
+    // buildTransitionControl @0x66D4C4 populates `_auxVarDeque8` first;
+    // buildVariableList @0x66A530 owns the +1228 label Array, and both binary
+    // sub_66E248 remove calls below dispatch to that exact Array. The HM#6 index
+    // is the LOOP index v6 (NOT deque size); a disabled item still advances v6.
+    void EmoteEngine::buildSelectorControl(const tTJSVariant &selectorControl) {
+        const int count = detail::motionPropGetCount(selectorControl); // 0x66d990
         for (int v6 = 0; v6 < count; ++v6) {                          // 0x66de6c
-            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*selectorControl)[v6]);                              // PropGet(0,v6)
+            const tTJSVariant elem = detail::motionPropGetByNum(
+                selectorControl, v6);                                // PropGet(0,v6)
 
             // label = elem["label"] (HM7 key for the step output + HM6 key).
             //   /*0x66df1c..0x66df30*/
-            ttstr label;
-            if (elem) {
-                if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
-                        (*elem)[std::string("label")])) {
-                    label = ttstr(s->value.c_str());
-                }
-            }
+            const ttstr label = detail::motionPropGetString(
+                elem, TJS_W("label"));
 
-            // enabled gate (0x66df5c). Non-enabled -> remove var binding
-            //   (sub_66E248) and skip. We mirror the skip (the remove dispatch is
-            //   on the variable-list TJS object, not part of this vertical).
-            bool enabled = false;
-            if (elem) {
-                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
-                        (*elem)[std::string("enabled")])) {
-                    enabled = b->value;
-                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                               (*elem)[std::string("enabled")])) {
-                    enabled = n->getLongValue() != 0;
-                }
-            }
-            if (!enabled) {
+            // enabled gate (0x66df5c). Non-enabled -> remove through the
+            // +1228 TJS Array (sub_66E248) and skip.
+            if (!detail::motionPropGetBool(elem, TJS_W("enabled"))) {
+                removeVariableLabel(label);                           // sub_66E248
                 continue;                                             // goto LABEL_82
             }
 
             // Assemble optionList[] from elem["optionList"].          /*0x66df94*/
             std::vector<SelectorOption16B> optionList;
-            const auto options = std::dynamic_pointer_cast<PSB::PSBList>(
-                (*elem)[std::string("optionList")]);
-            const int ocount =
-                options ? static_cast<int>(options->size()) : 0;      // 0x66d9f0
+            const tTJSVariant options = detail::motionPropGet(
+                elem, TJS_W("optionList"));
+            const int ocount = detail::motionPropGetCount(options);   // 0x66d9f0
             for (int v13 = 0; v13 < ocount; ++v13) {                  // 0x66da20
-                const auto opt = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                    (*options)[v13]);                                 // 0x66da3c
+                const tTJSVariant opt = detail::motionPropGetByNum(
+                    options, v13);                                   // 0x66da3c
 
                 // optLabel = opt["label"].                            /*0x66dacc*/
-                ttstr optLabel;
-                if (opt) {
-                    if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
-                            (*opt)[std::string("label")])) {
-                        optLabel = ttstr(s->value.c_str());
-                    }
-                }
+                const ttstr optLabel = detail::motionPropGetString(
+                    opt, TJS_W("label"));
 
                 // Resolve optLabel against the TRANSITION deque (engine+576 =
                 //   local _auxVarDeque8). Linear scan, compare elem.label ==
@@ -995,7 +1699,8 @@ namespace motion {
                 //   flag byte@+16 to 0, remove the var binding (sub_66E248), and
                 //   break. The match is the FIRST hit. /*0x66db0c..0x66db98*/
                 //   This requires buildTransitionControl to have run already (it
-                //   does — PlayerCore dispatches transition before selector,
+                //   does — EmoteEngine dispatches the raw transition list after
+                //   the decoded middle builders and before this raw selector,
                 //   mirroring applyMetadata's per-key order @0x67D4D0). When the
                 //   motion declares no transitionControl the deque is empty and
                 //   refCtl stays null (faithful to the binary's v26=0 no-match).
@@ -1004,27 +1709,16 @@ namespace motion {
                     if (tentry.label == optLabel) {                  // 0x66db0c compare
                         refCtl       = tentry.ctl;                   // v26 = e.ctl
                         tentry.flag  = 0;                            // e.flag@+16 = 0
-                        // sub_66E248(this, &optLabel) removes the var binding; that
-                        //   dispatch is on the variable-list TJS object (not part
-                        //   of this vertical) — skipped, same as the disabled-elem
-                        //   path elsewhere in this builder.
+                        removeVariableLabel(optLabel);               // sub_66E248
                         break;
                     }
                 }
 
                 // offValue / onValue (default 0.0).  /*0x66dbbc / 0x66dbdc*/
-                float offValue = 0.0f;
-                float onValue  = 0.0f;
-                if (opt) {
-                    if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                            (*opt)[std::string("offValue")])) {
-                        offValue = n->getFloatValue();
-                    }
-                    if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                            (*opt)[std::string("onValue")])) {
-                        onValue = n->getFloatValue();
-                    }
-                }
+                const float offValue = static_cast<float>(
+                    detail::motionPropGetDouble(opt, TJS_W("offValue")));
+                const float onValue = static_cast<float>(
+                    detail::motionPropGetDouble(opt, TJS_W("onValue")));
 
                 // push_back {refCtl, offValue, onValue} (16B option).  /*0x66dbf0*/
                 SelectorOption16B option;
@@ -1040,16 +1734,17 @@ namespace motion {
             EmoteSelectorController* ctl = new EmoteSelectorController();
             EmoteSelectorController_ctor(ctl, std::move(optionList));
 
-            // push {ctl, label} onto deque#9 (binary pushes {ctl,0,...} then writes
-            //   label@+8; same end state).  /*0x66dd10..0x66ddec*/
+            // Push {ctl, empty label, trailing zeros/indeterminate flag} first,
+            // then CopyRef the label into back().label. /*0x66dd10..0x66ddec*/
             EmoteSelectorControlEntry_Deque9 entry;
-            entry.ctl   = ctl;
-            entry.label = label;
+            entry.ctl = ctl;
             _vectorVarDeque9.push_back(std::move(entry));
+            _vectorVarDeque9.back().label = label;
 
             // HM#6 VarRef insert {type=8, index=v6} keyed by label.   /*0x66de20/0x66de30*/
             //   (binary payload = (v6 << 32) | 8 -> type=8, index=v6.)
-            detail::EmoteVarRef& ref = _scalarHM6_1384[label];
+            detail::EmoteVarRef& ref =
+                _scalarHM6_1384[_vectorVarDeque9.back().label];
             ref.type  = 8;   // payload low 32 bits
             ref.index = v6;  // payload high 32 bits
         }
@@ -1077,27 +1772,14 @@ namespace motion {
     //   HM#6 index is the LOOP index v5 (a skipped/disabled element still
     //   advances v5). MUST run before buildSelectorControl (the selector resolves
     //   each option's refCtl by scanning THIS deque @0x66db0c).
-    void EmoteEngine::buildTransitionControl(const PSB::PSBList* transitionControl) {
-        if (!transitionControl) {
-            return;
-        }
-        const int count = static_cast<int>(transitionControl->size()); // Motion_propGetCount
+    void EmoteEngine::buildTransitionControl(const tTJSVariant &transitionControl) {
+        const int count = detail::motionPropGetCount(transitionControl);
         for (int v5 = 0; v5 < count; ++v5) {                            // 0x66d58c
-            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*transitionControl)[v5]);                              // PropGet(0,v5)
+            const auto elem = detail::motionPropGetByNum(
+                transitionControl, v5);                                // PropGet(0,v5)
 
             // enabled gate (0x66d62c): skip when "enabled" is not truthy.
-            bool enabled = false;
-            if (elem) {
-                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
-                        (*elem)[std::string("enabled")])) {
-                    enabled = b->value;
-                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                               (*elem)[std::string("enabled")])) {
-                    enabled = n->getLongValue() != 0;
-                }
-            }
-            if (!enabled) {
+            if (!detail::motionPropGetBool(elem, TJS_W("enabled"))) {
                 continue;                                               // goto LABEL_28
             }
 
@@ -1106,25 +1788,18 @@ namespace motion {
             EmoteVarController* ctl = new EmoteVarController();
             EmoteVarController_ctor(ctl, 1);                            // count=1
 
-            // label = elem["label"] as ttstr (the HM7 output key). /*0x66d724*/
-            ttstr label;
-            if (elem) {
-                if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
-                        (*elem)[std::string("label")])) {
-                    label = ttstr(s->value.c_str());
-                }
-            }
-
-            // push {ctl, label, flag=1} onto deque#8 (binary pushes {ctl, 0,
-            //   flag@+16=1} then writes label@+8; same end state). /*0x66d660..0x66d770*/
+            // Push {ctl, null-label, flag=1} first, then assign label to the
+            // pushed entry, preserving the binary's source order. /*0x66d660..0x66d770*/
             EmoteTransitionControlEntry_Deque8 entry;
             entry.ctl   = ctl;
-            entry.label = label;
             entry.flag  = 1;   // *(_BYTE*)(v8+16) = 1
             _auxVarDeque8.push_back(std::move(entry));
+            _auxVarDeque8.back().label = detail::motionPropGetString(
+                elem, TJS_W("label"));
 
             // HM#6 VarRef {type=7, index=v5} keyed by label. /*0x66d788/0x66d790*/
-            detail::EmoteVarRef& ref = _scalarHM6_1384[label];
+            detail::EmoteVarRef& ref =
+                _scalarHM6_1384[_auxVarDeque8.back().label];
             ref.type  = 7;   // *v18 = 7
             ref.index = v5;  // v18[1] = v5
         }
@@ -1163,176 +1838,282 @@ namespace motion {
     //
     // FLOAT-BITS: each keyframe field is stored via `STR S` (single-precision)
     //   after propGetDouble narrows double->single — i.e. raw float bits, no
-    //   integer remap. getFloatValue() is the local equivalent (NOT a (float)(int)
-    //   cast). The 12B keyframe POD {v0,v1,span} is a platform-independent data
-    //   contract per the byte-layout methodology.
-    void EmoteEngine::buildLoopControl(const PSB::PSBList* loopControl) {
-        if (!loopControl) {
-            return;
-        }
-        const int count = static_cast<int>(loopControl->size());     // Motion_propGetCount
-        for (int v6 = 0; v6 < count; ++v6) {                         // 0x66e550
-            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*loopControl)[v6]);                                 // PropGet(0,v6)
-
-            // enabled gate (0x66e5f0): skip when "enabled" is not truthy. The
-            //   skipped element still advances v6 (used as the HM#6 index).
-            bool enabled = false;
-            if (elem) {
-                if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(
-                        (*elem)[std::string("enabled")])) {
-                    enabled = b->value;
-                } else if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                               (*elem)[std::string("enabled")])) {
-                    enabled = n->getLongValue() != 0;
-                }
-            }
-            if (!enabled) {
-                continue;                                            // goto LABEL_49
+    //   integer remap. motionPropGetDoubleByNum followed by the explicit float
+    //   narrowing is the local equivalent. The 12B keyframe POD
+    //   {v0,v1,span} is a platform-independent data contract per the byte-layout
+    //   methodology.
+    void EmoteEngine::buildLoopControl(const tTJSVariant &loopControl) {
+        const int count = detail::motionPropGetCount(loopControl);
+        for (int v6 = 0; v6 < count; ++v6) {
+            const auto elem = detail::motionPropGetByNum(loopControl, v6);
+            if(!detail::motionPropGetBool(elem, TJS_W("enabled"))) {
+                continue;
             }
 
-            // transitionList = elem["transitionList"] (the keyframe triples). /*0x66e61c*/
-            const auto transitionList = elem
-                ? std::dynamic_pointer_cast<PSB::PSBList>(
-                      (*elem)[std::string("transitionList")])
-                : nullptr;
-            const int kfCount = transitionList
-                ? static_cast<int>(transitionList->size())           // Motion_propGetCount /*0x66e6a0*/
-                : 0;
+            const auto transitionList = detail::motionPropGet(
+                elem, TJS_W("transitionList"));
+            const int kfCount = detail::motionPropGetCount(transitionList);
 
-            // operator new(0x20) + zero-init (raw pointer, manual lifetime — the
-            //   deque entry owns the controller; dtor delete). /*0x66e688*/
-            EmoteLoopController* ctl = new EmoteLoopController();
-            ctl->keys.resize(static_cast<size_t>(kfCount));          // /*0x66e6c4..0x66e6f4*/
+            auto *ctl = new EmoteLoopController();
+            ctl->keys.resize(static_cast<size_t>(kfCount));
 
-            // Fill each 12B keyframe {v0, v1, span} from the triple. Each field is
-            //   propGetIndexDouble -> stored as float (STR S = raw float bits). /*0x66e810*/
-            for (int v20 = 0; v20 < kfCount; ++v20) {
-                const auto kf = std::dynamic_pointer_cast<PSB::PSBList>(
-                    (*transitionList)[v20]);                         // PropGet(0,v20) /*0x66e728*/
-                EmoteLoopKeyframe12B& dst = ctl->keys[static_cast<size_t>(v20)];
-                if (kf && kf->size() >= 3) {
-                    if (const auto n0 = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                            (*kf)[0])) {
-                        dst.v0 = n0->getFloatValue();                // /*0x66e7a8 STR S*/
-                    }
-                    if (const auto n1 = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                            (*kf)[1])) {
-                        dst.v1 = n1->getFloatValue();                // /*0x66e7c8 STR S*/
-                    }
-                    if (const auto n2 = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                            (*kf)[2])) {
-                        dst.span = n2->getFloatValue();              // /*0x66e7e4 STR S*/
-                    }
-                }
+            for(int v20 = 0; v20 < kfCount; ++v20) {
+                const auto frame = detail::motionPropGetByNum(
+                    transitionList, v20);
+                auto &dst = ctl->keys[static_cast<size_t>(v20)];
+                dst.v0 = static_cast<float>(
+                    detail::motionPropGetDoubleByNum(frame, 0));
+                dst.v1 = static_cast<float>(
+                    detail::motionPropGetDoubleByNum(frame, 1));
+                dst.span = static_cast<float>(
+                    detail::motionPropGetDoubleByNum(frame, 2));
             }
 
-            // label = elem["var_loop"] as ttstr — the deque element label AND the
-            //   HM#7 output key AND the HM#6 key. /*0x66e8b4 -> 0x66e90c*/
-            ttstr label;
-            if (elem) {
-                if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
-                        (*elem)[std::string("var_loop")])) {
-                    label = ttstr(s->value.c_str());
-                }
-            }
-
-            // push {ctl, label} onto deque#10 (binary pushes {ctl, 0} then writes
-            //   label@+8; same end state). /*0x66e828 -> 0x66e944*/
+            // Push {ctl, empty label}, then CopyRef var_loop into back().label.
+            // /*0x66e828 -> 0x66e944*/
             EmoteLoopControlEntry_Deque10 entry;
-            entry.ctl   = ctl;
-            entry.label = label;
+            entry.ctl = ctl;
             _lookupCurvesDeque10.push_back(std::move(entry));
+            _lookupCurvesDeque10.back().label = detail::motionPropGetString(
+                elem, TJS_W("var_loop"));
 
             // HM#6 VarRef {type=3, index=v6} keyed by the var_loop label. /*0x66e964/0x66e96c*/
-            detail::EmoteVarRef& ref = _scalarHM6_1384[label];
+            detail::EmoteVarRef& ref =
+                _scalarHM6_1384[_lookupCurvesDeque10.back().label];
             ref.type  = 3;   // *v37 = 3
             ref.index = v6;  // v37[1] = v6
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Spring-physics deque builders (population path). File-local readers mirror
-    // the Motion property accessors: propGetDouble -> double -> (float) raw bits,
-    // propGetIndexDouble for list elements, sub_66B83C reads a dict's x/y/z.
-    // ------------------------------------------------------------------------
-    namespace {
-
-        // narrow double->float (FCVT), like the binary's `*(float*)&v=*(double*)&v`.
-        float springPropFloat(const PSB::PSBDictionary* d, const char* key) {
-            if (!d) return 0.0f;
-            const auto v = (*d)[std::string(key)];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                switch (n->numberType) {
-                    case PSB::PSBNumberType::Float:  return static_cast<float>(n->getFloatValue());
-                    case PSB::PSBNumberType::Double: return static_cast<float>(n->getValue<double>());
-                    default: return static_cast<float>(n->getLongValue());
-                }
+    // Aligned with libkrkr2.so EmoteEngine_buildClampControl @0x66EE5C.
+    // Decompiled pseudocode (this conversation):
+    //   count = Motion_propGetCount(clampControl);
+    //   for (v5 = 0; v5 < count; ++v5) {
+    //     elem = clampControl[v5];
+    //     if (!propGetBool(elem, "enabled", false)) continue;
+    //     deque#7.push_back({0,0.0,0.0,empty,empty});
+    //     back.type = propGetInt(elem,"type",0);
+    //     back.varLr = propGetString(elem,"var_lr",empty);
+    //     back.varUd = propGetString(elem,"var_ud",empty);
+    //     back.minValue = propGetDouble(elem,"min",0.0);
+    //     back.maxValue = propGetDouble(elem,"max",0.0);
+    //   }
+    void EmoteEngine::buildClampControl(const tTJSVariant &clampControl) {
+        const int count = detail::motionPropGetCount(clampControl);     // 0x66eef0
+        for(int v5 = 0; v5 < count; ++v5) {                            // 0x66f210
+            const tTJSVariant elem =
+                detail::motionPropGetByNum(clampControl, v5);          // 0x66ef38
+            if(!detail::motionPropGetBool(elem, TJS_W("enabled"))) {  // 0x66efbc
+                continue;
             }
-            return 0.0f;
-        }
 
-        int springPropInt(const PSB::PSBDictionary* d, const char* key) {
-            if (!d) return 0;
-            const auto v = (*d)[std::string(key)];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                return static_cast<int>(n->getLongValue());
-            }
-            return 0;
-        }
+            // Binary zeroes all 40 bytes before advancing finish._M_cur.
+            _clampControlDeque7.emplace_back();                        // 0x66efd8..0x66eff0
+            EmoteClampControlEntry_Deque7 &back =
+                _clampControlDeque7.back();
 
-        // These return shared_ptr by value; callers keep them alive for the scope
-        //   in which they read fields (the PSB child is owned by its parent too,
-        //   but returning the handle keeps lifetime obvious and leak-free).
-        std::shared_ptr<PSB::PSBDictionary> springDict(
-            const PSB::PSBDictionary* d, const char* key) {
-            if (!d) return nullptr;
-            return std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*d)[std::string(key)]);
+            back.type = detail::motionPropGetInt(
+                elem, TJS_W("type"));                                // 0x66f070
+            back.varLr = detail::motionPropGetString(
+                elem, TJS_W("var_lr"));                              // 0x66f0c0..0x66f108
+            back.varUd = detail::motionPropGetString(
+                elem, TJS_W("var_ud"));                              // 0x66f144..0x66f18c
+            back.minValue = detail::motionPropGetDouble(
+                elem, TJS_W("min"));                                 // 0x66f1b8
+            back.maxValue = detail::motionPropGetDouble(
+                elem, TJS_W("max"));                                 // 0x66f1dc
         }
+    }
 
-        std::shared_ptr<PSB::PSBList> springList(
-            const PSB::PSBDictionary* d, const char* key) {
-            if (!d) return nullptr;
-            return std::dynamic_pointer_cast<PSB::PSBList>((*d)[std::string(key)]);
+    // Aligned with libkrkr2.so EmoteEngine_buildMirrorControl @0x66F364.
+    // Decompiled pseudocode (this conversation):
+    //   list = propGet(mirrorControl, "variableMatchList");
+    //   count = Motion_propGetCount(list);
+    //   for (v6 = 0; v6 < count; ++v6) {
+    //     value = list[v6];
+    //     text = Motion_propGetString(value); // missing/void -> empty ttstr
+    //     variableMatchList800.push_back(text);
+    //   }
+    // No enabled gate, empty-string filter, deduplication, or builder-local clear.
+    void EmoteEngine::buildMirrorControl(const tTJSVariant &mirrorControl) {
+        const tTJSVariant variableMatchList = detail::motionPropGet(
+            mirrorControl, TJS_W("variableMatchList"));             // 0x66f404
+        const int count = detail::motionPropGetCount(variableMatchList); // 0x66f478
+        for(int v6 = 0; v6 < count; ++v6) {                          // 0x66f530
+            const tTJSVariant value = detail::motionPropGetByNum(
+                variableMatchList, v6);                              // 0x66f4ac
+            _variableMatchList800.push_back(
+                ttstr(value));                                       // 0x66f4c0..0x66f500
         }
+    }
 
-        std::shared_ptr<PSB::PSBDictionary> springListDict(
-            const PSB::PSBList* l, int idx) {
-            if (!l || idx < 0 || idx >= static_cast<int>(l->size())) return nullptr;
-            return std::dynamic_pointer_cast<PSB::PSBDictionary>((*l)[idx]);
+    // Aligned with libkrkr2.so sub_67C6B0 @0x67C6B0.
+    bool EmoteEngine::shouldMirrorEvalLabelLike_0x67C6B0(
+        const ttstr &label) {
+        if(!_mirrorChanged) {                                       // 0x67c6e0
+            return false;
         }
-
-        // sub_66B83C(dict): reads x/y/z doubles, narrows each to float. The
-        //   decompiler "returns x" but the caller stores all three components
-        //   (the leftover y/z FP regs); we write all three into out[0..2].
-        void springVec3(const PSB::PSBDictionary* d, float out[3]) {
-            out[0] = springPropFloat(d, "x");
-            out[1] = springPropFloat(d, "y");
-            out[2] = springPropFloat(d, "z");
+        if(_mirrorMatchSetHM1_824.find(label) !=
+           _mirrorMatchSetHM1_824.end()) {                          // 0x67c76c
+            return true;
         }
-
-        // enabled gate shared by both builders (PSBBool or PSBNumber truthiness).
-        bool springEnabled(const PSB::PSBDictionary* elem) {
-            if (!elem) return false;
-            const auto v = (*elem)[std::string("enabled")];
-            if (const auto b = std::dynamic_pointer_cast<PSB::PSBBool>(v)) {
-                return b->value;
-            }
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                return n->getLongValue() != 0;
-            }
+        if(_mirrorMissSetHM2_880.find(label) !=
+           _mirrorMissSetHM2_880.end()) {                           // 0x67c804
             return false;
         }
 
-        ttstr springLabel(const PSB::PSBDictionary* d, const char* key) {
-            ttstr label;
-            if (!d) return label;
-            if (const auto s = std::dynamic_pointer_cast<PSB::PSBString>(
-                    (*d)[std::string(key)])) {
-                label = ttstr(s->value.c_str());
+        for(const ttstr &pattern : _variableMatchList800) {         // 0x67c814
+            if(label.IndexOf(pattern, 0) >= 1) {                    // 0x67c838
+                _mirrorMatchSetHM1_824.insert(label);               // 0x67c874
+                return true;
             }
-            return label;
+        }
+        _mirrorMissSetHM2_880.insert(label);                        // 0x67c858
+        return false;
+    }
+
+    // sub_67C8A8 @0x67C8A8.
+    void EmoteEngine::applyClampControlsLike_0x67C8A8() {
+        Player &embeddedPlayer = player();
+        for(const EmoteClampControlEntry_Deque7 &entry : _clampControlDeque7) {
+            double lrValue = 0.0;
+            double udValue = 0.0;
+            if(const auto it = _labelToValueHM7.find(entry.varLr);
+               it != _labelToValueHM7.end()) {
+                lrValue = it->second;                               // 0x67c9b4..cc
+            }
+            if(const auto it = _labelToValueHM7.find(entry.varUd);
+               it != _labelToValueHM7.end()) {
+                udValue = it->second;                               // 0x67ca68..7c
+            }
+
+            accumulateTimelineContributionLike_0x67C560(
+                entry.varLr, lrValue);                              // 0x67ca8c
+            accumulateTimelineContributionLike_0x67C560(
+                entry.varUd, udValue);                              // 0x67ca9c
+
+            const double range = entry.maxValue - entry.minValue;
+            double lrNorm = ((lrValue - entry.minValue) / range) * 2.0 - 1.0;
+            double udNorm = ((udValue - entry.minValue) / range) * 2.0 - 1.0;
+            if(lrNorm != 0.0 && udNorm != 0.0) {                    // 0x67cadc
+                if(entry.type != 0) {
+                    if(entry.type == 1 &&
+                       std::sqrt(lrNorm * lrNorm + udNorm * udNorm) > 1.0) {
+                        const double angle = std::atan2(udNorm, lrNorm);
+                        lrNorm = std::cos(angle);
+                        udNorm = std::sin(angle);                    // 0x67cbc4..e0
+                    }
+                } else {
+                    const double rawRatio = std::abs(lrNorm / udNorm);
+                    const double ratio = rawRatio <= 1.0
+                        ? rawRatio : 1.0 / rawRatio;
+                    const double invLen = 1.0 / std::sqrt(ratio * ratio + 1.0);
+                    const double projectedX = lrNorm * invLen;
+                    const double projectedY = invLen * udNorm;
+                    const double projectedLength = std::sqrt(
+                        projectedX * projectedX + projectedY * projectedY);
+                    const double scale =
+                        (1.0 - std::cos(ratio * 1.57079633)) *
+                            (std::sin(projectedLength * 1.57079633) /
+                                 projectedLength - 1.0) +
+                        1.0;
+                    lrNorm = projectedX * scale;
+                    udNorm = scale * projectedY;                     // 0x67cb18..a0
+                }
+            }
+
+            const double lrFinal = entry.minValue +
+                range * (lrNorm + 1.0) * 0.5;
+            const double udFinal = entry.minValue +
+                range * (udNorm + 1.0) * 0.5;
+            embeddedPlayer.bindParameterValueLike_0x6C4668(
+                entry.varLr,
+                shouldMirrorEvalLabelLike_0x67C6B0(entry.varLr)
+                    ? -lrFinal : lrFinal);                           // 0x67cc10..30
+            embeddedPlayer.bindParameterValueLike_0x6C4668(
+                entry.varUd, udFinal);                               // 0x67cc44
+        }
+    }
+
+    // Aligned with libkrkr2.so EmoteEngine_buildInstantVariableList @0x66F64C.
+    // Decompiled pseudocode (this conversation):
+    //   count = Motion_propGetCount(instantVariableList);
+    //   for (v5 = 0; v5 < count; ++v5) {
+    //     value = instantVariableList[v5];
+    //     key = Motion_propGetString(value); // void -> empty ttstr
+    //     instantVariableSetHM4_1272.insert(key);
+    //   }
+    // The optional property gate is in applyMetadata@0x67D4D0, not this helper.
+    void EmoteEngine::buildInstantVariableList(
+        const tTJSVariant &instantVariableList) {
+        const int count = detail::motionPropGetCount(instantVariableList); // 0x66f6d8
+        for(int v5 = 0; v5 < count; ++v5) {                              // 0x66f74c
+            const tTJSVariant value = detail::motionPropGetByNum(
+                instantVariableList, v5);                                // 0x66f70c
+            _instantVariableSetHM4_1272.insert(ttstr(value));             // 0x66f720..0x66f734
+        }
+    }
+
+    // Aligned with libkrkr2.so EmoteEngine_buildTimelineControl @0x66F80C.
+    // Decompiled pseudocode (this conversation):
+    //   clear normalLabels; clear diffLabels;
+    //   for (v12 = 0; v12 < count; ++v12) {
+    //     elem = timelineControl[v12];
+    //     hasDiff = PropGet(TJS_MEMBERMUSTEXIST,"diff",probe); destroy probe;
+    //     target = hasDiff && propGetBool(elem,"diff") ? diff : normal;
+    //     label = propGetString(elem,"label"); target.push_back(label);
+    //     HM3.findOrInsert(label).rawElement = elem;
+    //   }
+    void EmoteEngine::buildTimelineControl(const tTJSVariant &timelineControl) {
+        // Binary releases all existing strings and resets end=begin for only
+        // these two vectors before unwrapping the raw argument. +1040 is untouched.
+        _timelineLabels992.clear();                                  // 0x66f840..0x66f874
+        _timelineDiffLabels1016.clear();                              // 0x66f86c..0x66f8a4
+
+        const int count = detail::motionPropGetCount(timelineControl); // 0x66f908
+        for(int v12 = 0; v12 < count; ++v12) {                       // 0x66fb10
+            const tTJSVariant elem = detail::motionPropGetByNum(
+                timelineControl, v12);                               // 0x66f95c
+
+            bool hasDiff = false;
+            {
+                // Keep the MEMBERMUSTEXIST probe result's lifetime separate:
+                // the binary destroys it before optionally reading "diff" again.
+                tTJSVariant probe;
+                hasDiff = detail::motionTryPropGet(
+                    elem, TJS_W("diff"), probe);                     // 0x66f9f0
+            }
+
+            std::vector<ttstr> &target =
+                hasDiff && detail::motionPropGetBool(elem, TJS_W("diff"))
+                    ? _timelineDiffLabels1016                        // 0x66fa24
+                    : _timelineLabels992;
+
+            const ttstr label = detail::motionPropGetString(
+                elem, TJS_W("label"));                              // 0x66fa54..0x66fa68
+            target.push_back(label);                                 // 0x66fa74..0x66fab4
+
+            // Duplicate labels remain duplicated in the vector; findOrInsert
+            // returns the existing HM3 value and CopyRef replaces its raw element.
+            _compoundHM3_936[label].rawElement = elem;               // 0x66fac0..0x66fad4
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Spring-physics deque builders (population path). sub_66B83C reads a raw
+    // dictionary dispatch's x/y/z values and narrows them to floats.
+    // ------------------------------------------------------------------------
+    namespace {
+
+        // sub_66B83C @0x66B83C: retain the raw dictionary variant for the full
+        // x -> y -> z property-read sequence and narrow each result to float.
+        void springVec3Raw(const tTJSVariant& dict, float out[3]) {
+            out[0] = static_cast<float>(detail::motionPropGetDouble(
+                dict, TJS_W("x")));
+            out[1] = static_cast<float>(detail::motionPropGetDouble(
+                dict, TJS_W("y")));
+            out[2] = static_cast<float>(detail::motionPropGetDouble(
+                dict, TJS_W("z")));
         }
 
     } // namespace
@@ -1359,48 +2140,53 @@ namespace motion {
     //   }
     // The ctor's vec3 fields (storedXYZ/posXYZ/velXYZ) are seeded to 0 then
     //   OVERWRITTEN here by op/p/pv (the binary writes after the ctor returns).
-    void EmoteEngine::buildBustControl(const PSB::PSBList* bustControl) {
-        if (!bustControl) {
-            return;
-        }
-        const int count = static_cast<int>(bustControl->size()); // Motion_propGetCount
+    void EmoteEngine::buildBustControl(const tTJSVariant& bustControl) {
+        const int count = detail::motionPropGetCount(bustControl); // 0x66b0ac
         for (int v5 = 0; v5 < count; ++v5) {                     // 0x66b0e0
-            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*bustControl)[v5]);                             // PropGet(0,v5)
-            if (!springEnabled(elem.get())) {
+            const tTJSVariant elem =
+                detail::motionPropGetByNum(bustControl, v5);     // 0x66b0fc
+            if (!detail::motionPropGetBool(elem, TJS_W("enabled"))) {
                 continue;                                        // 0x66b180 gate
             }
 
-            const std::shared_ptr<PSB::PSBDictionary> param =
-                springDict(elem.get(), "param"); // 0x66b1ac
+            const tTJSVariant param = detail::motionPropGet(
+                elem, TJS_W("param"));                           // 0x66b1ac
 
-            // operator new(0x48) + ctor over the ELEMENT dict (raw ptr, deque owns).
-            EmoteSpringState* spring = new EmoteSpringState();   // 0x66b220
-            EmoteSpringState_ctor(spring, elem.get());           // 0x66b22c
+            // `new T(elem)` does not zero the fields the ctor leaves untouched.
+            EmoteSpringState* spring = new EmoteSpringState;     // 0x66b220
+            EmoteSpringState_ctor(spring, elem);                  // 0x66b22c
 
             // op/p/pv vec3 (dict x/y/z) overwrite stored/pos/vel.  /*0x66b280..0x66b338*/
             float v3[3];
-            springVec3(springDict(param.get(), "op").get(), v3);
+            springVec3Raw(detail::motionPropGet(param, TJS_W("op")), v3);
             spring->storedX = v3[0]; spring->storedY = v3[1]; spring->storedZ = v3[2]; // +36/+40/+44
-            springVec3(springDict(param.get(), "p").get(), v3);
+            springVec3Raw(detail::motionPropGet(param, TJS_W("p")), v3);
             spring->posX = v3[0]; spring->posY = v3[1]; spring->posZ = v3[2];          // +48/+52/+56
-            springVec3(springDict(param.get(), "pv").get(), v3);
+            springVec3Raw(detail::motionPropGet(param, TJS_W("pv")), v3);
             spring->velX = v3[0]; spring->velY = v3[1]; spring->accZ = v3[2];          // +60/+64/+68
-            spring->biasY = springPropFloat(param.get(), "ofs");                      // +16  0x66b368
+            spring->biasY = static_cast<float>(detail::motionPropGetDouble(
+                param, TJS_W("ofs")));                                                // +16 0x66b368
 
-            // push node onto deque#1; initFlag = 1 (binary 0x66b38c).
+            // Push pointer/init with the remaining node storage zeroed, then
+            // assign the three ttstr slots in source order.
             EmoteHairPartsNode48B node;
             node.spring     = spring;
             node.initFlag   = 1;                                  // *(v19+8)=1
-            node.shapeLabel = springLabel(elem.get(), "baseLayer"); // +12  0x66b498
-            node.keyX       = springLabel(elem.get(), "var_lr");    // +20  0x66b530
-            node.keyY       = springLabel(elem.get(), "var_ud");    // +28  0x66b5b8
+            node.anchorX    = 0.0f;
+            node.anchorY    = 0.0f;
             _hairPartsNodes.push_back(std::move(node));
+            EmoteHairPartsNode48B& back = _hairPartsNodes.back();
+            back.shapeLabel = detail::motionPropGetString(
+                elem, TJS_W("baseLayer"));                         // +12 0x66b498
+            back.keyX = detail::motionPropGetString(
+                elem, TJS_W("var_lr"));                            // +20 0x66b530
+            back.keyY = detail::motionPropGetString(
+                elem, TJS_W("var_ud"));                            // +28 0x66b5b8
 
             // HM#6 VarRef {type=0, index=v5} keyed by var_lr AND var_ud.
-            detail::EmoteVarRef& refLr = _scalarHM6_1384[springLabel(elem.get(), "var_lr")];
+            detail::EmoteVarRef& refLr = _scalarHM6_1384[back.keyX];
             refLr.type = 0; refLr.index = v5;                     // 0x66b5d4
-            detail::EmoteVarRef& refUd = _scalarHM6_1384[springLabel(elem.get(), "var_ud")];
+            detail::EmoteVarRef& refUd = _scalarHM6_1384[back.keyY];
             refUd.type = 0; refUd.index = v5;                     // 0x66b5e8
         }
     }
@@ -1419,7 +2205,7 @@ namespace motion {
     //     spring[+44]=(float)propGetDouble(param,"ofs");           // 0x66bc6c
     //     spring[+48]=(float)propGetDouble(param,"bendR");         // 0x66bc94
     //     spring[+52]=(float)propGetDouble(param,"bendS");         // 0x66bcc0
-    //     bp = elem["bp"]; (list[2])                               // 0x66bcec ("bp")
+    //     bp = param["bp"]; (list[2])                              // 0x66bcec ("bp")
     //     p  = param["p"]; (list[2])                               // 0x66bd70
     //     pv = param["pv"];(list[2])                               // 0x66bdf4
     //     spring[+92..] = vec3(p[0]); spring[+104..] = vec3(p[1]); // 0x66be94/0x66bee4
@@ -1432,68 +2218,73 @@ namespace motion {
     //   }
     void EmoteEngine::buildChainControl(
         std::deque<EmoteBustChain1Node56B>& chainNodes, int typeTag,
-        const PSB::PSBList* chainControl) {
-        if (!chainControl) {
-            return;
-        }
-        const int count = static_cast<int>(chainControl->size()); // Motion_propGetCount
+        const tTJSVariant& chainControl) {
+        const int count = detail::motionPropGetCount(chainControl); // 0x66ba70
         for (int v10 = 0; v10 < count; ++v10) {                   // 0x66ba9c
-            const auto elem = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                (*chainControl)[v10]);                            // PropGet(0,v10)
-            if (!springEnabled(elem.get())) {
+            const tTJSVariant elem =
+                detail::motionPropGetByNum(chainControl, v10);    // 0x66bab8
+            if (!detail::motionPropGetBool(elem, TJS_W("enabled"))) {
                 continue;                                         // 0x66bb3c gate
             }
 
-            const std::shared_ptr<PSB::PSBDictionary> param =
-                springDict(elem.get(), "param"); // 0x66bb6c
+            const tTJSVariant param = detail::motionPropGet(
+                elem, TJS_W("param"));                            // 0x66bb6c
 
             // operator new(0xB0) + chain ctor over the ELEMENT dict.
-            EmoteBustChainSpring* spring = new EmoteBustChainSpring(); // 0x66bbdc
-            EmoteBustChainSpring_ctor(spring, elem.get());            // 0x66bbe8
+            EmoteBustChainSpring* spring = new EmoteBustChainSpring; // 0x66bbdc
+            EmoteBustChainSpring_ctor(spring, elem);                 // 0x66bbe8
 
             uint8_t* const sp = reinterpret_cast<uint8_t*>(spring);
             auto SF = [sp](int off) -> float& { return *reinterpret_cast<float*>(sp + off); };
 
             // op = param["op"] (dict) -> root @+80/+84/+88.        /*0x66bc3c*/
             float v3[3];
-            springVec3(springDict(param.get(), "op").get(), v3);
+            springVec3Raw(detail::motionPropGet(param, TJS_W("op")), v3);
             SF(80) = v3[0]; SF(84) = v3[1]; SF(88) = v3[2];
             // ofs/bendR/bendS (param doubles) -> +44/+48/+52.       /*0x66bc6c..*/
-            SF(44) = springPropFloat(param.get(), "ofs");
-            SF(48) = springPropFloat(param.get(), "bendR");
-            SF(52) = springPropFloat(param.get(), "bendS");
+            SF(44) = static_cast<float>(detail::motionPropGetDouble(
+                param, TJS_W("ofs")));
+            SF(48) = static_cast<float>(detail::motionPropGetDouble(
+                param, TJS_W("bendR")));
+            SF(52) = static_cast<float>(detail::motionPropGetDouble(
+                param, TJS_W("bendS")));
 
-            // p / pv are 2-element lists under "param"; bp is a 2-element list
-            //   directly under the element. Each entry is a dict x/y/z.
-            const std::shared_ptr<PSB::PSBList> p  = springList(param.get(), "p");  // 0x66bd70
-            const std::shared_ptr<PSB::PSBList> pv = springList(param.get(), "pv"); // 0x66bdf4
-            const std::shared_ptr<PSB::PSBList> bp = springList(elem.get(), "bp");  // 0x66bcec
-            springVec3(springListDict(p.get(),  0).get(), v3); SF(92)  = v3[0]; SF(96)  = v3[1]; SF(100) = v3[2];
-            springVec3(springListDict(p.get(),  1).get(), v3); SF(104) = v3[0]; SF(108) = v3[1]; SF(112) = v3[2];
-            springVec3(springListDict(pv.get(), 0).get(), v3); SF(116) = v3[0]; SF(120) = v3[1]; SF(124) = v3[2];
-            springVec3(springListDict(pv.get(), 1).get(), v3); SF(128) = v3[0]; SF(132) = v3[1]; SF(136) = v3[2];
-            springVec3(springListDict(bp.get(), 0).get(), v3); SF(140) = v3[0]; SF(144) = v3[1]; SF(148) = v3[2];
-            springVec3(springListDict(bp.get(), 1).get(), v3); SF(152) = v3[0]; SF(156) = v3[1]; SF(160) = v3[2];
+            // p / pv / bp are all 2-element lists under `param`.
+            const tTJSVariant bp = detail::motionPropGet(
+                param, TJS_W("bp"));                              // 0x66bcec
+            const tTJSVariant p = detail::motionPropGet(
+                param, TJS_W("p"));                               // 0x66bd70
+            const tTJSVariant pv = detail::motionPropGet(
+                param, TJS_W("pv"));                              // 0x66bdf4
+            springVec3Raw(detail::motionPropGetByNum(p, 0), v3);  SF(92)  = v3[0]; SF(96)  = v3[1]; SF(100) = v3[2];
+            springVec3Raw(detail::motionPropGetByNum(p, 1), v3);  SF(104) = v3[0]; SF(108) = v3[1]; SF(112) = v3[2];
+            springVec3Raw(detail::motionPropGetByNum(pv, 0), v3); SF(116) = v3[0]; SF(120) = v3[1]; SF(124) = v3[2];
+            springVec3Raw(detail::motionPropGetByNum(pv, 1), v3); SF(128) = v3[0]; SF(132) = v3[1]; SF(136) = v3[2];
+            springVec3Raw(detail::motionPropGetByNum(bp, 0), v3); SF(140) = v3[0]; SF(144) = v3[1]; SF(148) = v3[2];
+            springVec3Raw(detail::motionPropGetByNum(bp, 1), v3); SF(152) = v3[0]; SF(156) = v3[1]; SF(160) = v3[2];
 
-            // push node onto the chain deque. The binary does NOT write node+8
-            //   (init byte): the deque block is raw operator-new, so it is
-            //   indeterminate in libkrkr2.so. The local POD node value-inits it to
-            //   0 (initFlag=0) deterministically — a documented divergence on an
-            //   otherwise-untouched byte.
-            EmoteBustChain1Node56B node;
-            node.spring     = spring;
-            node.shapeLabel = springLabel(elem.get(), "baseLayer"); // +12  0x66c150
-            node.keyA       = springLabel(elem.get(), "var_lr");    // +20  0x66c1e8
-            node.keyB       = springLabel(elem.get(), "var_lrm");   // +28  0x66c270
-            node.keyC       = springLabel(elem.get(), "var_ud");    // +36  0x66c2f8
-            chainNodes.push_back(std::move(node));
+            // emplace leaves node+8 untouched; the binary explicitly zeroes
+            // labels/anchors before assigning the four ttstr fields.
+            chainNodes.emplace_back();                              // 0x66c04c
+            EmoteBustChain1Node56B& back = chainNodes.back();
+            back.spring = spring;
+            back.anchorX = 0.0f;
+            back.anchorY = 0.0f;
+            back.shapeLabel = detail::motionPropGetString(
+                elem, TJS_W("baseLayer"));                         // 0x66c150
+            back.keyA = detail::motionPropGetString(
+                elem, TJS_W("var_lr"));                            // 0x66c1e8
+            back.keyB = detail::motionPropGetString(
+                elem, TJS_W("var_lrm"));                           // 0x66c270
+            back.keyC = detail::motionPropGetString(
+                elem, TJS_W("var_ud"));                            // 0x66c2f8
 
             // HM#6 VarRef {type=typeTag, index=v10} keyed by all three vars.
-            detail::EmoteVarRef& refLr = _scalarHM6_1384[springLabel(elem.get(), "var_lr")];
+            detail::EmoteVarRef& refLr = _scalarHM6_1384[back.keyA];
             refLr.type = typeTag; refLr.index = v10;                // 0x66c318
-            detail::EmoteVarRef& refLrm = _scalarHM6_1384[springLabel(elem.get(), "var_lrm")];
+            detail::EmoteVarRef& refLrm = _scalarHM6_1384[back.keyB];
             refLrm.type = typeTag; refLrm.index = v10;              // 0x66c338
-            detail::EmoteVarRef& refUd = _scalarHM6_1384[springLabel(elem.get(), "var_ud")];
+            detail::EmoteVarRef& refUd = _scalarHM6_1384[back.keyC];
             refUd.type = typeTag; refUd.index = v10;                // 0x66c354
         }
     }
@@ -1763,6 +2554,446 @@ namespace motion {
         _labelToValueHM7[key] = value;                             // 0x671368
     }
 
+    // sub_66FC5C @0x66FC5C — lazily materialize the timeline state stored in
+    // HM3. The raw element remains owned by the HM3 mapped value; this function
+    // creates the two nested heap objects and their internal containers.
+    void EmoteEngine::initializeTimelineStateLike_0x66FC5C(
+        detail::EmoteHM3Value &state) {
+        detail::EmoteTimelineData80B *timelineData =
+            new detail::EmoteTimelineData80B();                    // 0x66fca4..b4
+        delete state.timelineData;
+        state.timelineData = timelineData;                         // 0x66fcb8..d0
+
+        state.loopBegin = detail::motionPropGetDouble(
+            state.rawElement, TJS_W("loopBegin"));                 // 0x66fd50
+        state.loopEnd = detail::motionPropGetDouble(
+            state.rawElement, TJS_W("loopEnd"));                   // 0x66fd74
+        state.lastTime = detail::motionPropGetDouble(
+            state.rawElement, TJS_W("lastTime"));                  // 0x66fd98
+        state.blendWeight = 1.0f;                                  // 0x66fda4
+        state.autoStop = 0.0;                                      // 0x66fda8
+
+        EmoteVarController *blendController = new EmoteVarController();
+        EmoteVarController_ctor(blendController, 1);               // 0x66fdb4..c0
+        if(state.blendController) {
+            EmoteVarController_dtor(state.blendController);
+            delete state.blendController;
+        }
+        state.blendController = blendController;                   // 0x66fdc4..dc
+        emoteAnimatorSetKeyframes_0x667300(
+            blendController, false, state.blendWeight, 0.0f, 0.0f); // 0x66fde4..0x66fe80
+
+        const tTJSVariant variableList = detail::motionPropGet(
+            state.rawElement, TJS_W("variableList"));              // 0x66feb0
+        const int variableCount = detail::motionPropGetCount(variableList);
+        double maxFrameTime = 0.0;
+        for(int variableIndex = 0; variableIndex < variableCount;
+            ++variableIndex) {
+            const tTJSVariant variable = detail::motionPropGetByNum(
+                variableList, variableIndex);                      // 0x66ff70
+            const tTJSVariant frameList = detail::motionPropGet(
+                variable, TJS_W("frameList"));                     // 0x670000
+
+            timelineData->variableList.emplace_back();             // 0x670070..0x67010c
+            detail::EmoteTimelineTrack56B &track =
+                timelineData->variableList.back();
+            track.label = detail::motionPropGetString(
+                variable, TJS_W("label"));                         // 0x670130..0x6701a4
+            track.instantVariable =
+                _instantVariableSetHM4_1272.find(track.label) !=
+                _instantVariableSetHM4_1272.end();                 // 0x6701b8..0x670268
+
+            const int frameCount = detail::motionPropGetCount(frameList);
+            for(int frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
+                const tTJSVariant rawFrame = detail::motionPropGetByNum(
+                    frameList, frameIndex);                         // 0x670298
+                track.frameList.emplace_back();                    // 0x6702b0..0x6702dc
+                detail::EmoteTimelineFrame24B &frame =
+                    track.frameList.back();
+                frame.time = detail::motionPropGetDouble(
+                    rawFrame, TJS_W("time"));                      // 0x670354
+                const int type = detail::motionPropGetInt(
+                    rawFrame, TJS_W("type"));                      // 0x670378
+                if(frame.time > maxFrameTime) {
+                    maxFrameTime = frame.time;                     // 0x670384
+                }
+                frame.typeZero = type == 0;                        // 0x670390
+                if(type != 0) {
+                    const tTJSVariant content = detail::motionPropGet(
+                        rawFrame, TJS_W("content"));               // 0x67039c..0x670424
+                    frame.value = static_cast<float>(
+                        detail::motionPropGetDouble(
+                            content, TJS_W("value")));             // 0x670444..0x67044c
+                    const double easing = detail::motionPropGetDouble(
+                        content, TJS_W("easing"));                 // 0x67046c
+                    frame.easingWeight = easing == 0.0
+                        ? 1.0
+                        : easing > 0.0 ? easing + 1.0
+                                       : 1.0 / (1.0 - easing);     // 0x670474..0x670490
+                }
+            }
+        }
+        if(state.lastTime < 0.0) {
+            state.lastTime = maxFrameTime;                         // 0x670550..0x670554
+        }
+    }
+
+    // sub_670840 @0x670840.
+    void EmoteEngine::initializeTimelineControllersLike_0x670840(
+        detail::EmoteHM3Value &state, tjs_uint32 flags) {
+        state.flags = flags;                                       // 0x670870
+        if((flags & 2u) == 0) {
+            return;
+        }
+        for(detail::EmoteTimelineTrack56B &track :
+            state.timelineData->variableList) {
+            if(track.frameList.empty() || track.instantVariable) { // 0x6708b8
+                continue;
+            }
+            if(!track.controller) {
+                track.controller = new EmoteVarController();
+                EmoteVarController_ctor(track.controller, 1);      // 0x670934..0x670944
+            } else {
+                emoteAnimatorSetKeyframes_0x667300(
+                    track.controller, false, 0.0f, 0.0f, 0.0f);    // 0x6708cc..0x670924
+            }
+        }
+    }
+
+    // sub_671A50 @0x671A50.
+    void EmoteEngine::seekTimelineLike_0x671A50(
+        detail::EmoteHM3Value &state, double time) {
+        state.frameCursors.clear();                                // 0x671a90
+        for(detail::EmoteTimelineTrack56B &track :
+            state.timelineData->variableList) {
+            if((state.flags & 4u) != 0 && track.instantVariable) { // 0x671c60
+                continue;
+            }
+            const bool internalRoute =
+                (state.flags & 2u) != 0 && !track.instantVariable; // 0x671c7c
+            std::size_t cursor = 0;
+            int lastActionFrame = -1;
+            if(track.frameList.size() >= 2) {
+                const std::size_t scanCount = track.frameList.size() - 1;
+                for(cursor = 0; cursor < scanCount; ++cursor) {
+                    const detail::EmoteTimelineFrame24B &frame =
+                        track.frameList[cursor];
+                    if(!frame.typeZero) {
+                        lastActionFrame = static_cast<int>(cursor); // 0x671ca8..b4
+                    }
+                    if(frame.time <= time &&
+                       track.frameList[cursor + 1].time > time) {
+                        break;                                     // 0x671cc8
+                    }
+                }
+            }
+            state.frameCursors.push_back(static_cast<int32_t>(cursor)); // 0x671ae0..0x671bb0
+            if(lastActionFrame < 0) {
+                continue;
+            }
+
+            const detail::EmoteTimelineFrame24B &frame =
+                track.frameList[static_cast<std::size_t>(lastActionFrame)];
+            const double transition = std::max(
+                track.frameList[static_cast<std::size_t>(lastActionFrame) + 1].time -
+                    time - 1.0,
+                0.0);                                              // 0x671bb8..0x671bd0
+            if(internalRoute) {
+                emoteAnimatorSetKeyframes_0x667300(
+                    track.controller, _emoteAnimatorFlag, frame.value,
+                    static_cast<float>(transition),
+                    static_cast<float>(frame.easingWeight));       // 0x671bd4..0x671c00
+            } else {
+                setVariable(track.label, frame.value, transition,
+                            frame.easingWeight);                    // 0x671c08..0x671c28
+            }
+        }
+        state.currentTime = time;                                  // 0x671ce0
+    }
+
+    // sub_669E1C @0x669E1C.
+    void EmoteEngine::applyTimelineWindowLike_0x669E1C(
+        detail::EmoteHM3Value &state, bool inclusive,
+        double targetTime) {
+        std::size_t trackIndex = 0;
+        for(detail::EmoteTimelineTrack56B &track :
+            state.timelineData->variableList) {
+            if((state.flags & 4u) != 0 && track.instantVariable) { // 0x669f78..0x669f80
+                ++trackIndex;
+                continue;
+            }
+            const bool internalRoute =
+                (state.flags & 2u) != 0 && !track.instantVariable; // 0x669fcc
+            int32_t cursor = state.frameCursors[trackIndex];
+            const std::size_t frameCount = track.frameList.size();
+            if(cursor < static_cast<int32_t>(frameCount) - 1) {
+                auto crossed = [inclusive, targetTime](double frameTime) {
+                    return inclusive ? frameTime <= targetTime
+                                     : frameTime < targetTime;
+                };
+                while(crossed(track.frameList[
+                                  static_cast<std::size_t>(cursor) + 1].time)) {
+                    const std::size_t nextIndex =
+                        static_cast<std::size_t>(cursor) + 1;
+                    const detail::EmoteTimelineFrame24B &next =
+                        track.frameList[nextIndex];
+                    if(!next.typeZero && nextIndex + 1 < frameCount) {
+                        const double transition = std::max(
+                            track.frameList[nextIndex + 1].time - targetTime - 1.0,
+                            0.0);                                  // 0x66a048..0x66a058
+                        if(internalRoute) {
+                            emoteAnimatorSetKeyframes_0x667300(
+                                track.controller, _emoteAnimatorFlag, next.value,
+                                static_cast<float>(transition),
+                                static_cast<float>(next.easingWeight)); // 0x66a078..0x66a080
+                        } else {
+                            setVariable(track.label, next.value, transition,
+                                        next.easingWeight);        // 0x669ebc
+                        }
+                    }
+                    cursor = static_cast<int32_t>(nextIndex);
+                    if(nextIndex >= frameCount - 1) {
+                        break;
+                    }
+                }
+            }
+            state.frameCursors[trackIndex] = cursor;               // 0x669f0c..0x669f14
+            ++trackIndex;
+        }
+        state.currentTime = targetTime;                             // 0x66a0b8
+    }
+
+    // EmoteEngine_playTimeline @0x672F70 (the old IDB Player_ owner was wrong;
+    // all +936/+1040 accesses and NCB native a4 prove the receiver is Engine).
+    void EmoteEngine::playTimelineLike_0x672F70(
+        const ttstr &label, tjs_uint32 flags) {
+        if((flags & 1u) != 0) {
+            stopTimelineLike_0x67C2A0(ttstr());                     // 0x672fa8..0x672fd0
+        }
+        const auto found = _compoundHM3_936.find(label);           // 0x672fd4..0x67305c
+        if(found == _compoundHM3_936.end()) {
+            TVPThrowExceptionMessage(
+                TJS_W("timeline label not found '%1'."), label);   // 0x673168..0x6731c8
+        }
+        if(std::find(_activeTimelineLabels1040.begin(),
+                     _activeTimelineLabels1040.end(), label) ==
+           _activeTimelineLabels1040.end()) {
+            _activeTimelineLabels1040.push_back(label);            // 0x67306c..0x673130
+        }
+        detail::EmoteHM3Value &state = found->second;
+        if(!state.timelineData) {
+            initializeTimelineStateLike_0x66FC5C(state);           // 0x673134..0x673144
+        }
+        initializeTimelineControllersLike_0x670840(state, flags);  // 0x673148
+        seekTimelineLike_0x671A50(state, 0.0);                     // 0x673154..0x673160
+    }
+
+    // EmoteEngine_stopTimeline @0x67C2A0.
+    void EmoteEngine::stopTimelineLike_0x67C2A0(const ttstr &label) {
+        if(label.IsEmpty()) {
+            _activeTimelineLabels1040.clear();                     // 0x67c2f4..0x67c320
+            return;
+        }
+        const auto found = std::find(_activeTimelineLabels1040.begin(),
+                                     _activeTimelineLabels1040.end(), label);
+        if(found != _activeTimelineLabels1040.end()) {
+            _activeTimelineLabels1040.erase(found);                // tail @0x68C200
+        }
+    }
+
+    bool EmoteEngine::isTimelinePlayingLike_0x673558(
+        const ttstr &label) const {
+        return std::find(_activeTimelineLabels1040.begin(),
+                         _activeTimelineLabels1040.end(), label) !=
+               _activeTimelineLabels1040.end();                    // 0x673568..0x6735a8
+    }
+
+    // sub_6735AC @0x6735AC.
+    void EmoteEngine::setTimelineBlendLike_0x6735AC(
+        const ttstr &label, bool autoStop, float value,
+        float transition, float easingWeight) {
+        const auto found = _compoundHM3_936.find(label);
+        if(found == _compoundHM3_936.end()) {
+            return;                                                 // 0x673674..0x673678
+        }
+        detail::EmoteHM3Value &state = found->second;
+        if(!state.timelineData) {
+            initializeTimelineStateLike_0x66FC5C(state);            // 0x673688..0x673694
+        }
+        emoteAnimatorSetKeyframes_0x667300(
+            state.blendController, _emoteAnimatorFlag, value,
+            transition, easingWeight);                             // 0x6736ac
+        state.autoStop = autoStop ? 1.0 : 0.0;                     // 0x6736b8
+    }
+
+    // sub_6736EC @0x6736EC.
+    void EmoteEngine::fadeInTimelineLike_0x6736EC(
+        const ttstr &label, double duration, double easing) {
+        const float transition = static_cast<float>(duration);
+        const float easingWeight = static_cast<float>(
+            easing == 0.0 ? 1.0
+                          : easing > 0.0 ? easing + 1.0
+                                         : 1.0 / (1.0 - easing));  // 0x6737c0..0x673860
+        if(!isTimelinePlayingLike_0x673558(label)) {
+            playTimelineLike_0x672F70(label, 3u);                  // 0x673878..0x6738a4
+            setTimelineBlendLike_0x6735AC(
+                label, false, 0.0f, 0.0f, 1.0f);                  // 0x6738c0
+        }
+        setTimelineBlendLike_0x6735AC(
+            label, false, 1.0f, transition, easingWeight);         // 0x6738dc
+    }
+
+    // sub_6739F4 @0x6739F4.
+    void EmoteEngine::fadeOutTimelineLike_0x6739F4(
+        const ttstr &label, double duration, double easing) {
+        const float transition = static_cast<float>(duration);
+        const float easingWeight = static_cast<float>(
+            easing == 0.0 ? 1.0
+                          : easing > 0.0 ? easing + 1.0
+                                         : 1.0 / (1.0 - easing));  // 0x673ac8..0x673b68
+        setTimelineBlendLike_0x6735AC(
+            label, true, 0.0f, transition, easingWeight);          // 0x673b84
+    }
+
+    // sub_6821C8 @0x6821C8.
+    double EmoteEngine::getTimelineBlendLike_0x6821C8(
+        const ttstr &label) const {
+        const auto found = _compoundHM3_936.find(label);
+        if(found != _compoundHM3_936.end() && found->second.timelineData) {
+            return found->second.blendWeight;                      // 0x682268..0x682288
+        }
+        return 0.0;                                                // 0x68226c
+    }
+
+    tjs_int EmoteEngine::countMainTimelinesLike_0x5306AC() const {
+        return static_cast<tjs_int>(_timelineLabels992.size());
+    }
+
+    ttstr EmoteEngine::getMainTimelineLabelAtLike_0x674C84(
+        tjs_uint32 index) const {
+        if(index >= _timelineLabels992.size()) {
+            return ttstr();                                       // 0x674cd0
+        }
+        return _timelineLabels992[index];                          // 0x674cb0
+    }
+
+    tjs_int EmoteEngine::countDiffTimelinesLike_0x5306D4() const {
+        return static_cast<tjs_int>(_timelineDiffLabels1016.size());
+    }
+
+    ttstr EmoteEngine::getDiffTimelineLabelAtLike_0x674CEC(
+        tjs_uint32 index) const {
+        if(index >= _timelineDiffLabels1016.size()) {
+            return ttstr();                                       // 0x674d40
+        }
+        return _timelineDiffLabels1016[index];                     // 0x674d18
+    }
+
+    tjs_int EmoteEngine::countPlayingTimelinesLike_0x5306FC() const {
+        return static_cast<tjs_int>(_activeTimelineLabels1040.size());
+    }
+
+    ttstr EmoteEngine::getPlayingTimelineLabelAtLike_0x674D54(
+        tjs_uint32 index) const {
+        if(index >= _activeTimelineLabels1040.size()) {
+            return ttstr();                                       // 0x674da8
+        }
+        return _activeTimelineLabels1040[index];                   // 0x674d80
+    }
+
+    tjs_int EmoteEngine::getPlayingTimelineFlagsAtLike_0x674DC8(
+        tjs_uint32 index) const {
+        const ttstr label = getPlayingTimelineLabelAtLike_0x674D54(index);
+        const auto found = _compoundHM3_936.find(label);
+        if(found == _compoundHM3_936.end()) {
+            return 0;                                             // 0x674ef4
+        }
+        return static_cast<tjs_int>(found->second.flags);          // 0x674ef8
+    }
+
+    bool EmoteEngine::getLoopTimelineLike_0x67522C(
+        const ttstr &label) const {
+        const auto found = _compoundHM3_936.find(label);
+        if(found != _compoundHM3_936.end()) {
+            return found->second.loopBegin >= 0.0;                 // 0x6752e8
+        }
+        TVPThrowExceptionMessage(
+            TJS_W("timeline label not found '%1'."), label);       // 0x675310..0x675360
+        return false;
+    }
+
+    double EmoteEngine::getTimelineTotalFrameCountLike_0x6753F0(
+        const ttstr &label) const {
+        const auto found = _compoundHM3_936.find(label);
+        if(found != _compoundHM3_936.end() &&
+           found->second.loopBegin >= 0.0) {
+            return found->second.lastTime;                         // 0x6754ac..0x6754b0
+        }
+        return 0.0;                                                // 0x675494
+    }
+
+    tTJSVariant EmoteEngine::getMainTimelineLabelListLike_0x674F54() const {
+        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        for(const ttstr &label : _timelineLabels992) {
+            result.native->Items.emplace_back(label);              // 0x674f94..0x675058
+        }
+        return result.value;
+    }
+
+    tTJSVariant EmoteEngine::getDiffTimelineLabelListLike_0x6750C0() const {
+        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        for(const ttstr &label : _timelineDiffLabels1016) {
+            result.native->Items.emplace_back(label);              // 0x675100..0x6751c4
+        }
+        return result.value;
+    }
+
+    tTJSVariant EmoteEngine::getPlayingTimelineInfoListLike_0x6754C4() const {
+        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        for(const ttstr &label : _activeTimelineLabels1040) {
+            const auto found = _compoundHM3_936.find(label);
+            if(found == _compoundHM3_936.end()) {
+                continue;                                         // 0x6755ac
+            }
+
+            const detail::EmoteHM3Value &state = found->second;
+            tTJSVariant dictionary = createTJSDictionaryLike_0x9C8440();
+            iTJSDispatch2 *dispatch = dictionary.AsObjectNoAddRef();
+            tTJSVariant labelValue(label);
+            tTJSVariant flagsValue(static_cast<tjs_int>(state.flags));
+            tTJSVariant blendValue(static_cast<double>(state.blendWeight));
+            dispatch->PropSet(TJS_MEMBERENSURE, TJS_W("label"), nullptr,
+                              &labelValue, dispatch);               // 0x675664..0x675690
+            dispatch->PropSet(TJS_MEMBERENSURE, TJS_W("flags"), nullptr,
+                              &flagsValue, dispatch);               // 0x6756b8
+            dispatch->PropSet(TJS_MEMBERENSURE, TJS_W("blendRatio"), nullptr,
+                              &blendValue, dispatch);               // 0x6756d8
+            result.native->Items.push_back(dictionary);            // 0x6756e0..0x675710
+        }
+        return result.value;
+    }
+
+    // sub_67C560 @0x67C560.
+    void EmoteEngine::accumulateTimelineContributionLike_0x67C560(
+        const ttstr &label, double &value) {
+        for(const ttstr &timelineLabel : _activeTimelineLabels1040) {
+            detail::EmoteHM3Value &state = _compoundHM3_936[timelineLabel];
+            if((state.flags & 2u) == 0) {                           // 0x67c5b4
+                continue;
+            }
+            for(const detail::EmoteTimelineTrack56B &track :
+                state.timelineData->variableList) {
+                if(track.instantVariable || track.frameList.empty()) {
+                    continue;                                      // 0x67c5fc
+                }
+                if(track.label == label) {
+                    value += static_cast<float>(
+                        track.output * state.blendWeight);          // 0x67c67c
+                }
+            }
+        }
+    }
+
     // Aligned with libkrkr2.so sub_67D01C EmoteEngine_progress @ 0x67D01C.
     //
     // Binary main loop (from EmoteEngine_controllers.md):
@@ -1801,14 +3032,446 @@ namespace motion {
             return;
         }
 
-        // The binary stores the timeline hashmap at EmoteEngine+936 and the
-        // playing tTJSVariant* vector at +1040. Those typed containers exist on
-        // EmoteEngine locally but their population path is not yet connected;
-        // the live port timeline state is still hosted by the embedded Player.
-        // Keep that pre-existing storage model behind the correctly-owned
-        // EmoteEngine call boundary. This is an explicit remaining architecture
-        // gap, not a platform boundary and not a behavioral guard.
-        player().preProgressTimelineStateModelForEmoteEngine(dt, nullptr);
+        std::size_t activeIndex = 0;
+        while(activeIndex < _activeTimelineLabels1040.size()) {
+            detail::EmoteHM3Value &state =
+                _compoundHM3_936[_activeTimelineLabels1040[activeIndex]]; // 0x6717b4..bc
+            double remaining = dt;
+            if(state.loopBegin < 0.0) {                            // 0x6717c4..d4
+                applyTimelineWindowLike_0x669E1C(
+                    state, true, state.currentTime + remaining);   // 0x6717d8..e8
+            } else {
+                while(state.currentTime + remaining >= state.loopEnd) {
+                    remaining -= state.loopEnd - state.currentTime;
+                    applyTimelineWindowLike_0x669E1C(
+                        state, false, state.loopEnd);               // 0x6718b0..c4
+                    seekTimelineLike_0x671A50(
+                        state, state.loopBegin);                    // 0x6718c8..d4
+                }
+                applyTimelineWindowLike_0x669E1C(
+                    state, true,
+                    state.currentTime + std::max(remaining, 0.0)); // 0x6718ec..0x671900
+            }
+
+            if((state.flags & 2u) != 0) {
+                const float step = static_cast<float>(remaining);
+                EmoteVarController_step(
+                    state.blendController, &state.blendWeight, step); // 0x6717f4..0x671800 / 0x67190c..1c
+                for(detail::EmoteTimelineTrack56B &track :
+                    state.timelineData->variableList) {
+                    if(!track.frameList.empty() && !track.instantVariable) {
+                        EmoteVarController_step(
+                            track.controller, &track.output, step); // 0x671828..0x671848
+                    }
+                }
+            }
+
+            const bool blendFinished = state.autoStop != 0.0 &&
+                state.blendController->state == 0 &&
+                state.blendController->queue.empty();              // 0x671868..0x67188c
+            if(state.lastTime <= state.currentTime || blendFinished) {
+                _activeTimelineLabels1040.erase(
+                    _activeTimelineLabels1040.begin() +
+                    static_cast<std::ptrdiff_t>(activeIndex));      // 0x6719a8..0x671a1c
+            } else {
+                ++activeIndex;
+            }
+        }
+    }
+
+    // sub_6767E4 @0x6767E4.
+    tTJSVariant EmoteEngine::serializeTimelineLike_0x6767E4() const {
+        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        for(const ttstr &label : _activeTimelineLabels1040) {
+            const auto found = _compoundHM3_936.find(label);
+            if(found == _compoundHM3_936.end()) {
+                continue;
+            }
+            const detail::EmoteHM3Value &state = found->second;
+            tTJSVariant item = createTJSDictionaryLike_0x9C8440();
+            setTJSProperty(item, TJS_W("label"), tTJSVariant(label));
+            setTJSProperty(item, TJS_W("flags"),
+                           tTJSVariant(static_cast<tjs_int>(state.flags)));
+            setTJSProperty(item, TJS_W("curTime"),
+                           tTJSVariant(state.currentTime));
+            setTJSProperty(item, TJS_W("blendRatioCtrl"),
+                           serializeVarControllerLike_0x66767C(
+                               state.blendController));
+            setTJSProperty(item, TJS_W("stopWhenBlendDone"),
+                           tTJSVariant(state.autoStop));
+            result.native->Items.push_back(item);
+        }
+        return result.value;
+    }
+
+    // sub_676B0C @0x676B0C.
+    tTJSVariant EmoteEngine::serializeEyeLike_0x676B0C() const {
+        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        for(const EmoteEyeControlEntry_Deque4 &entry :
+            _stateMachineDeque4) {
+            result.native->Items.push_back(
+                serializeEyeControllerState(entry.label, entry.ctl));
+        }
+        return result.value;
+    }
+
+    // sub_676F48 @0x676F48.
+    tTJSVariant EmoteEngine::serializeEyebrowLike_0x676F48() const {
+        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        for(const EmoteEyebrowControlEntry_Deque5 &entry :
+            _stateMachineDeque5) {
+            result.native->Items.push_back(
+                serializeEyebrowControllerState(entry.label, entry.ctl));
+        }
+        return result.value;
+    }
+
+    // sub_677384 @0x677384.
+    tTJSVariant EmoteEngine::serializeMouthLike_0x677384() const {
+        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        for(const EmoteMouthControlEntry_Deque6 &entry :
+            _compositeVarDeque6) {
+            result.native->Items.push_back(
+                serializeMouthControllerState(entry.label, entry.ctl));
+        }
+        return result.value;
+    }
+
+    // sub_6776BC @0x6776BC.
+    tTJSVariant EmoteEngine::serializeTransitionLike_0x6776BC() const {
+        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        for(const EmoteTransitionControlEntry_Deque8 &entry : _auxVarDeque8) {
+            tTJSVariant item =
+                serializeVarControllerLike_0x66767C(entry.ctl);
+            setTJSProperty(item, TJS_W("label"), tTJSVariant(entry.label));
+            result.native->Items.push_back(item);
+        }
+        return result.value;
+    }
+
+    // sub_6778F0 @0x6778F0.
+    tTJSVariant EmoteEngine::serializeSelectorLike_0x6778F0() const {
+        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        for(const EmoteSelectorControlEntry_Deque9 &entry :
+            _vectorVarDeque9) {
+            result.native->Items.push_back(
+                serializeSelectorControllerState(entry.label, entry.ctl));
+        }
+        return result.value;
+    }
+
+    // sub_677BA8 @0x677BA8.
+    tTJSVariant EmoteEngine::serializeBaseLike_0x677BA8() const {
+        tTJSVariant result = createTJSDictionaryLike_0x9C8440();
+        setTJSProperty(result, TJS_W("coord"),
+                       serializeVarControllerLike_0x66767C(_ctlPosition));
+        setTJSProperty(result, TJS_W("scale"),
+                       serializeVarControllerLike_0x66767C(_ctlScale));
+        setTJSProperty(result, TJS_W("color"),
+                       serializeVarControllerLike_0x66767C(_ctlColor));
+        setTJSProperty(result, TJS_W("rotate"),
+                       serializeAngleControllerLike_0x666830(_ctlAngle));
+        return result;
+    }
+
+    // sub_677E28 @0x677E28. Literal key order and controller slots are exact:
+    // bust=Engine[138](+1104), hair=[139](+1112), parts=[140](+1120).
+    tTJSVariant EmoteEngine::serializeOuterForceLike_0x677E28() const {
+        tTJSVariant result = createTJSDictionaryLike_0x9C8440();
+        setTJSProperty(result, TJS_W("bust"),
+                       serializeVarControllerLike_0x66767C(
+                           _ctlHairPartsTarget));
+        setTJSProperty(result, TJS_W("hair"),
+                       serializeVarControllerLike_0x66767C(_ctlBust1Target));
+        setTJSProperty(result, TJS_W("parts"),
+                       serializeVarControllerLike_0x66767C(_ctlBust2Target));
+        return result;
+    }
+
+    // sub_675E40 @0x675E40.
+    tTJSVariant EmoteEngine::serializeLike_0x675E40() {
+        preProgressLike_0x671764(true, 0.0);
+
+        for(EmoteEyeControlEntry_Deque4 &entry : _stateMachineDeque4) {
+            float value;
+            EmoteBlinkController_step(entry.ctl, &value, 0.0f);
+            _labelToValueHM7[entry.label] = value;
+        }
+        for(EmoteEyebrowControlEntry_Deque5 &entry : _stateMachineDeque5) {
+            float value;
+            EmoteEyebrowController_step(entry.ctl, &value, 0.0f);
+            _labelToValueHM7[entry.label] = value;
+        }
+        for(EmoteMouthControlEntry_Deque6 &entry : _compositeVarDeque6) {
+            float mouth;
+            float talk;
+            EmoteMouthController_step(entry.ctl, &mouth, &talk, 0.0f);
+            _labelToValueHM7[entry.label] = mouth;
+            _labelToValueHM7[entry.talkLabel] = talk;
+        }
+        for(EmoteSelectorControlEntry_Deque9 &entry : _vectorVarDeque9) {
+            float value;
+            EmoteSelectorController_step(entry.ctl, &value, 0.0f);
+            _labelToValueHM7[entry.label] = value;
+        }
+        for(EmoteTransitionControlEntry_Deque8 &entry : _auxVarDeque8) {
+            float value;
+            EmoteVarController_step(entry.ctl, &value, 0.0f);
+            _labelToValueHM7[entry.label] = value;
+        }
+        applyVarControllers_pos_scale_color_angle(0.0f);
+
+        tTJSVariant result = createTJSDictionaryLike_0x9C8440();
+        setTJSProperty(result, TJS_W("timeline"),
+                       serializeTimelineLike_0x6767E4());
+        setTJSProperty(result, TJS_W("eye"), serializeEyeLike_0x676B0C());
+        setTJSProperty(result, TJS_W("eyebrow"),
+                       serializeEyebrowLike_0x676F48());
+        setTJSProperty(result, TJS_W("mouth"),
+                       serializeMouthLike_0x677384());
+        setTJSProperty(result, TJS_W("transition"),
+                       serializeTransitionLike_0x6776BC());
+        setTJSProperty(result, TJS_W("selector"),
+                       serializeSelectorLike_0x6778F0());
+        setTJSProperty(result, TJS_W("base"), serializeBaseLike_0x677BA8());
+        setTJSProperty(result, TJS_W("outerforce"),
+                       serializeOuterForceLike_0x677E28());
+        return result;
+    }
+
+    // sub_678454 @0x678454.
+    void EmoteEngine::restoreTimelineLike_0x678454(
+        const tTJSVariant &value) {
+        stopTimelineLike_0x67C2A0(ttstr());
+        tTJSArrayNI *array = tryGetTJSArrayNative(value);
+        if(!array) {
+            return;
+        }
+        for(const tTJSVariant &item : array->Items) {
+            if(item.Type() != tvtObject) {
+                continue;
+            }
+            tTJSVariant labelValue;
+            if(!tryGetTJSProperty(item, TJS_W("label"), labelValue)) {
+                continue;
+            }
+            const ttstr label(labelValue);
+            auto found = _compoundHM3_936.find(label);
+            if(found == _compoundHM3_936.end()) {
+                continue;
+            }
+
+            tjs_uint32 flags = 0;
+            double curTime = 0.0;
+            tTJSVariant field;
+            if(tryGetTJSProperty(item, TJS_W("flags"), field)) {
+                flags = static_cast<tjs_uint32>(field.AsInteger());
+            }
+            if(tryGetTJSProperty(item, TJS_W("curTime"), field)) {
+                curTime = field.AsReal();
+            }
+            playTimelineLike_0x672F70(label, flags);
+            detail::EmoteHM3Value &state = found->second;
+            applyTimelineWindowLike_0x669E1C(state, true, curTime);
+            restoreDoubleIfPresent(item, TJS_W("stopWhenBlendDone"),
+                                   state.autoStop);
+            if(tryGetTJSProperty(item, TJS_W("blendRatioCtrl"), field)) {
+                restoreVarControllerLike_0x667ADC(
+                    state.blendController, field);
+            }
+        }
+    }
+
+    // sub_678804 @0x678804.
+    void EmoteEngine::restoreEyeLike_0x678804(const tTJSVariant &value) {
+        tTJSArrayNI *array = tryGetTJSArrayNative(value);
+        if(!array) {
+            return;
+        }
+        for(const tTJSVariant &item : array->Items) {
+            if(item.Type() != tvtObject) {
+                continue;
+            }
+            tTJSVariant labelValue;
+            if(!tryGetTJSProperty(item, TJS_W("label"), labelValue)) {
+                continue;
+            }
+            const ttstr label(labelValue);
+            const auto found = std::find_if(
+                _stateMachineDeque4.begin(), _stateMachineDeque4.end(),
+                [&label](const EmoteEyeControlEntry_Deque4 &entry) {
+                    return entry.label == label;
+                });
+            if(found != _stateMachineDeque4.end()) {
+                restoreEyeControllerLike_0x663FC8(found->ctl, item);
+            }
+        }
+    }
+
+    // sub_678FF0 @0x678FF0.
+    void EmoteEngine::restoreEyebrowLike_0x678FF0(
+        const tTJSVariant &value) {
+        tTJSArrayNI *array = tryGetTJSArrayNative(value);
+        if(!array) {
+            return;
+        }
+        for(const tTJSVariant &item : array->Items) {
+            if(item.Type() != tvtObject) {
+                continue;
+            }
+            tTJSVariant labelValue;
+            if(!tryGetTJSProperty(item, TJS_W("label"), labelValue)) {
+                continue;
+            }
+            const ttstr label(labelValue);
+            const auto found = std::find_if(
+                _stateMachineDeque5.begin(), _stateMachineDeque5.end(),
+                [&label](const EmoteEyebrowControlEntry_Deque5 &entry) {
+                    return entry.label == label;
+                });
+            if(found != _stateMachineDeque5.end()) {
+                restoreEyebrowControllerLike_0x665844(found->ctl, item);
+            }
+        }
+    }
+
+    // sub_679804 @0x679804.
+    void EmoteEngine::restoreMouthLike_0x679804(const tTJSVariant &value) {
+        tTJSArrayNI *array = tryGetTJSArrayNative(value);
+        if(!array) {
+            return;
+        }
+        for(const tTJSVariant &item : array->Items) {
+            if(item.Type() != tvtObject) {
+                continue;
+            }
+            tTJSVariant labelValue;
+            if(!tryGetTJSProperty(item, TJS_W("label"), labelValue)) {
+                continue;
+            }
+            const ttstr label(labelValue);
+            const auto found = std::find_if(
+                _compositeVarDeque6.begin(), _compositeVarDeque6.end(),
+                [&label](const EmoteMouthControlEntry_Deque6 &entry) {
+                    return entry.label == label;
+                });
+            if(found != _compositeVarDeque6.end()) {
+                restoreMouthControllerLike_0x6661A8(found->ctl, item);
+            }
+        }
+    }
+
+    // sub_67A020 @0x67A020.
+    void EmoteEngine::restoreTransitionLike_0x67A020(
+        const tTJSVariant &value) {
+        tTJSArrayNI *array = tryGetTJSArrayNative(value);
+        if(!array) {
+            return;
+        }
+        for(const tTJSVariant &item : array->Items) {
+            if(item.Type() != tvtObject) {
+                continue;
+            }
+            tTJSVariant labelValue;
+            if(!tryGetTJSProperty(item, TJS_W("label"), labelValue)) {
+                continue;
+            }
+            const ttstr label(labelValue);
+            const auto found = std::find_if(
+                _auxVarDeque8.begin(), _auxVarDeque8.end(),
+                [&label](const EmoteTransitionControlEntry_Deque8 &entry) {
+                    return entry.label == label;
+                });
+            if(found != _auxVarDeque8.end()) {
+                restoreVarControllerLike_0x667ADC(found->ctl, item);
+            }
+        }
+    }
+
+    // sub_67A868 @0x67A868.
+    void EmoteEngine::restoreSelectorLike_0x67A868(
+        const tTJSVariant &value) {
+        tTJSArrayNI *array = tryGetTJSArrayNative(value);
+        if(!array) {
+            return;
+        }
+        for(const tTJSVariant &item : array->Items) {
+            if(item.Type() != tvtObject) {
+                continue;
+            }
+            tTJSVariant labelValue;
+            if(!tryGetTJSProperty(item, TJS_W("label"), labelValue)) {
+                continue;
+            }
+            const ttstr label(labelValue);
+            const auto found = std::find_if(
+                _vectorVarDeque9.begin(), _vectorVarDeque9.end(),
+                [&label](const EmoteSelectorControlEntry_Deque9 &entry) {
+                    return entry.label == label;
+                });
+            if(found != _vectorVarDeque9.end()) {
+                restoreSelectorControllerLike_0x668570(found->ctl, item);
+            }
+        }
+    }
+
+    // sub_67B08C @0x67B08C.
+    void EmoteEngine::restoreBaseLike_0x67B08C(const tTJSVariant &value) {
+        if(value.Type() != tvtObject) {
+            return;
+        }
+        restoreVarControllerLike_0x667ADC(
+            _ctlPosition, detail::motionPropGet(value, TJS_W("coord")));
+        restoreVarControllerLike_0x667ADC(
+            _ctlScale, detail::motionPropGet(value, TJS_W("scale")));
+        restoreVarControllerLike_0x667ADC(
+            _ctlColor, detail::motionPropGet(value, TJS_W("color")));
+        restoreAngleControllerLike_0x666A14(
+            _ctlAngle, detail::motionPropGet(value, TJS_W("rotate")));
+    }
+
+    // sub_67B34C @0x67B34C.
+    void EmoteEngine::restoreOuterForceLike_0x67B34C(
+        const tTJSVariant &value) {
+        if(value.Type() != tvtObject) {
+            return;
+        }
+        restoreVarControllerLike_0x667ADC(
+            _ctlHairPartsTarget,
+            detail::motionPropGet(value, TJS_W("bust")));
+        restoreVarControllerLike_0x667ADC(
+            _ctlBust1Target,
+            detail::motionPropGet(value, TJS_W("hair")));
+        restoreVarControllerLike_0x667ADC(
+            _ctlBust2Target,
+            detail::motionPropGet(value, TJS_W("parts")));
+    }
+
+    // EmoteEngine unserialize entry @0x678044.
+    void EmoteEngine::unserializeLike_0x678044(tTJSVariant data) {
+        data.ToObject();
+        iTJSDispatch2 *dispatch = data.AsObject();
+        data.Clear();
+
+        const auto getChild = [dispatch](const tjs_char *name) {
+            tTJSVariant value;
+            (void)dispatch->PropGet(0, name, nullptr, &value, dispatch);
+            return value;
+        };
+        try {
+            restoreTimelineLike_0x678454(getChild(TJS_W("timeline")));
+            restoreEyeLike_0x678804(getChild(TJS_W("eye")));
+            restoreEyebrowLike_0x678FF0(getChild(TJS_W("eyebrow")));
+            restoreMouthLike_0x679804(getChild(TJS_W("mouth")));
+            restoreTransitionLike_0x67A020(getChild(TJS_W("transition")));
+            restoreSelectorLike_0x67A868(getChild(TJS_W("selector")));
+            restoreBaseLike_0x67B08C(getChild(TJS_W("base")));
+            restoreOuterForceLike_0x67B34C(getChild(TJS_W("outerforce")));
+        } catch(...) {
+            dispatch->Release();
+            throw;
+        }
+        dispatch->Release();
     }
 
     void EmoteEngine::progress(float dt) {
@@ -1977,13 +3640,10 @@ namespace motion {
         // i.key = node+8 (ttstr label), i.value = node+16 (double) — i.e. each
         // _labelToValueHM7 entry.
         //
-        // The three callees are ported on the Player class (the port models the
-        // engine's timeline/mirror/eval tables on Player; binary sub_67C560 reads
-        // deque#10@+1040 + HM@+824/+880 + vector@+800, the port reads the
-        // equivalent _playingTimelineLabels / mirrorVariableMatchList / HM1/HM2):
-        //   sub_67C560            -> Player::accumulateTimelineContributionLike_0x67C560
-        //   sub_67C6B0            -> Player::shouldMirrorEvalLabelLike_0x67C6B0
-        //   Player_bindParameter  -> Player::bindParameterValueLike_0x6C4668 (ttstr,double)
+        // The three callees now use the binary owners directly:
+        //   sub_67C560            -> this Engine's HM3/+1040/nested track deque
+        //   sub_67C6B0            -> this Engine's +800/+824/+880 mirror state
+        //   Player_bindParameter  -> embedded Player::bindParameterValueLike_0x6C4668
         //                            which writes HM1 (_evalCascadeMap[joined].writeVal)
         //                            and HM2 (_evalResultValues[rawKey]) = the two maps
         //                            getVariable reads (R0-1).
@@ -1997,20 +3657,17 @@ namespace motion {
         Player& p = player();                                       // *(this+1064)
         for (auto& kv : _labelToValueHM7) {
             const ttstr& label = kv.first;
-            const std::string narrowLabel = detail::narrow(label);
-
             // sub_67C560(this, &label, &value): accumulate var-track timeline
             //   contribution into the HM7 node value in place (binary mutates
             //   i.value at node+16; we mutate the map value).
             double& value = kv.second;
-            p.accumulateTimelineContributionLike_0x67C560(narrowLabel, value);
+            accumulateTimelineContributionLike_0x67C560(label, value);
 
             // v67 = i[2] (read back the accumulated value).
             const double accumulated = value;
 
             // v68 = sub_67C6B0(this, &label); negate = v68 & 1.
-            const bool negate =
-                p.shouldMirrorEvalLabelLike_0x67C6B0(narrowLabel);
+            const bool negate = shouldMirrorEvalLabelLike_0x67C6B0(label);
 
             // Player_bindParameterValue(player, &label, 0, negate ? -v67 : v67):
             //   write Player HM1/HM2 (the getVariable read surface).
@@ -2029,21 +3686,20 @@ namespace motion {
         //   to [-1,1] over [min,max], 2D disk-remaps by mode (0=squircle,
         //   1=clamp-circle), then writes both back via Player_bindParameterValue
         //   (engine+1064), the X result negated when sub_67C6B0 (mirror) is set.
-        //   The faithful per-entry BODY is ported as
-        //   Player::applyClampControlsLike_0x67C8A8 (reads engine HM7 via _engineBack
-        //   + the clampControl snapshot MotionSnapshot::clampControls, writes player
-        //   HM1/HM2).
+        //   The per-entry body and sub_67C560 both consume this Engine's raw
+        //   deque/HM7/HM3/+1040 containers directly.
         //
         //   TOPOLOGY (2026-06-03 approved migration): this clamp now runs HERE, in
         //   EmoteEngine::progress, exactly where the binary places it — @0x67d3f8,
         //   after the bind-loop @0x67d3a4 and before sub_6D2A54 @0x67d408. It was
-        //   formerly run on the Player progress path (Player::frameProgress ->
-        //   applyEvalResultPostProcessLike_0x67CC9C); that call has been REMOVED from
-        //   frameProgress. Player_progress_inner @0x6C106C and the child-motion pass
+        //   formerly duplicated on the Player progress path through a local model
+        //   of caller-less binary sub_67CC9C; that entire dead local model and its
+        //   snapshot clamp table have now been removed. Player_progress_inner
+        //   @0x6C106C and the child-motion pass
         //   @0x6BE2A4 both run progress_inner WITHOUT any bind-loop or clamp (fresh-
         //   decompile confirmed this round), so the Player progress path must not
         //   carry it. Single invocation per frame here — no double-clamp.
-        player().applyClampControlsLike_0x67C8A8();                 // @0x67d3f8
+        applyClampControlsLike_0x67C8A8();                          // @0x67d3f8
 
         // Step 7 — Player-level progress @0x67d408:
         //     sub_6D2A54(*(this+1064)=Player, 0, v12=originalDt);

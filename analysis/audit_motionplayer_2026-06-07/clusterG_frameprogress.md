@@ -105,24 +105,13 @@ LABEL_48:
   然后 firstFrame 块 line 2241 与 LABEL_48 line 2312/2417 都读这个已设好的本帧值。需删除 line 2312
   的重复赋值(改为只在 `!_queuing` 时 advance +1120, 不再重设 _deltaTime)。
 
-### ❌ 偏差#3: 尾部 port-invented `_allplaying`/`_syncActive` 覆写
-本地 line 2592-2593 在 frameProgress 末尾无条件:
-```
-_allplaying = !_playingTimelineLabels.empty();   // +1099
-_syncActive = _syncWaiting && _allplaying;
-```
-二进制 progress_inner 中 +1099(loopArmed)**只在 STOP 分支被写 `+1099=0`**(0x6C13F4/0x6C1384,
-已对应 line 2488/2506); 全函数**没有** `+1099 = !playingList.empty()` 这种尾部覆写。
-`_syncActive` 在二进制 progress_inner 中**根本不存在**(它是 TJS query 层状态, 别处设置)。
-- 影响: STOP 分支(非 loop 到达末尾)二进制设 `+1099=0` 表示循环结束; 本地 line 2592 随即用
-  `!_playingTimelineLabels.empty()` 覆盖它。若该路径下 `_playingTimelineLabels` 非空, +1099 被
-  错误重置为 1 → 下一帧入口门控 `if(!_firstFrame && !_allplaying)` 走错分支。
-- 性质: 非 emote logo 路径 `_playingTimelineLabels` 恒空 → `!empty()`=false=0, 与 STOP 分支
-  `+1099=0` 同值 → inert。有 timeline 播放时偏离。
-- 注意: firstFrame 块内 line 2238-2239 也有同样一对 port-invented 写, 二进制 firstFrame 块内无。
-- 修复(局部): 删除 line 2592-2593 和 line 2238-2239 这四行。+1099 由二进制实际写点(STOP 分支)
-  独占; _syncActive 不应在此函数设。**需先确认无其他代码依赖 frameProgress 尾部刷新 _allplaying**
-  (PlayerCore/PlayerTimeline 各处独立设 _allplaying, 故删除应安全, 但建议 grep 确认调用方)。
+### ✅ 偏差#3 已关闭（2026-07-19）
+
+`Player_ncb_registerMembers@0x6D69C8` 证明 Motion.Player 无 timeline API；
+`0x672F70/0x67C2A0/0x673F98` 属于 EmoteEngine。frameProgress 尾部和 firstFrame
+块内基于 `_playingTimelineLabels` 的 `_allplaying/_syncActive` 伪覆写已删除，连同
+Player `_timelines/_playingTimelineLabels` 及 decoded timeline 状态机一并移除。
++1099 现只由 Android 对应的 play/init/stop 路径维护。
 
 ### 🔶 偏差#4 (非偏差, 已论证): firstFrame 块末 `return` vs 二进制 fall-through
 二进制 firstFrame 块结束 fall-through 到 LABEL_48(0x6C132C→0x6C1330); 本地 line 2296 `return`。

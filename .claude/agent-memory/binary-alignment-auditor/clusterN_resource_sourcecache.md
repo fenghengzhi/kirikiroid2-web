@@ -20,9 +20,10 @@ Authoritative addr↔semantics (decompiled 2026-06-07):
 - **RM registrar @0x6AB8BC** (14 members) & **SourceCache registrar @0x6A85A8** (4)
   share SAME callbacks: loadSource=sub_6A7BA8, clearCache=sub_6A8438,
   bufLayer(prop-ro)=sub_6A84FC (reads a1+40). = C++ inheritance signature.
-- **unloadAll body = loc_6A8CF8 / Motion_ResourceManager_unloadAll** — NOT 0x6A8BBC
-  (that's just the canary load addr). RM.h:147 + RM.cpp:372 comments have this WRONG;
-  flagged for fix.
+- **unloadAll body = 0x6A8CF8 / Motion_ResourceManager_unloadAll** — NOT
+  0x6A8B94. IDA had merged it into the destructor; the boundary, names and local
+  comments were corrected 2026-07-18. unloadAll clears only HashMap A; the
+  destructor clears the layer-id set.
 - **RM findSource sub_6AAB3C @0x6AAB3C**: TJS facade. split "/", src/blank gate, HashMap A
   lookup, module["source"][group]["icon"][icon], operator new(0x18) ObjSource facade.
 - **ObjSource registrar @0x69CCB8**: 8 members (ctor/originX/originY/width/height/clip/
@@ -30,9 +31,9 @@ Authoritative addr↔semantics (decompiled 2026-06-07):
   already correct). width/height getter: type==7?dict[k]:32 (default 32). clip builds
   Motion.Rect; local getClip() STUBs {} (P2 oracle-inert).
 - **Player_findSource @0x6948E8** (renamed Motion_Player_findSource): the REAL render-
-  source->texture resolver (NOT RM.findSource). DUAL hashmap: RM HashMap A (FNV(group))
-  -> PSB group dict; + NESTED ttstr->texture map inside dict value (v24+1 base,
-  v24[2] count, Motion_ttstrHashMap_findNode/findOrInsert keyed by name). Miss -> raw
+  source->texture resolver (NOT RM.findSource). Outer RM HashMap A is keyed by module;
+  mapped record ctor sub_6EBCFC builds PSBFile + Win group->texture map + KRKR
+  full-source-path->descriptor map. Miss -> raw
   sub_A0DE48(4wh,4) alloc + TVPReverseRGB(RGBA8)/A8L8-expand + Motion_createTextureFromPixels
   -> device vtbl+24 CreateTexture(fmt=4,mip=1) DIRECT GPU UPLOAD + AddRef. spec==1 krkr
   branch: a1+112=arg, if Player+909 -> sub_695DE8 decode-all.
@@ -40,15 +41,18 @@ Authoritative addr↔semantics (decompiled 2026-06-07):
 - **PSB RL decode = sub_695DE8** (analysis/PSB_RL_Decompression_libkrkr2so.md), lives in
   PSB::/PlayerResource.cpp — OUTSIDE the 6 cluster-N files.
 
-## Verdict: PARTIAL DEVIATION
-Topology (RM:SourceCache inherit, findSource chain, ObjSource facade) all re-verified
-CORRECT in headers. Genuine deviations: (5) Player_findSource dual-hashmap + raw GPU
-upload -> port std::list<Entry>+shared_ptr<bitmap>+lazy CreateTexture2D (🔧, parked
-phase-D texture-topology boundary); (2) unloadAll addr comment wrong; ObjSource clip STUB.
-RuntimeSupport.cpp = port MotionSnapshot aux-model host layer (no 1:1 binary fn).
+## Verdict: PARTIAL DEVIATION (updated 2026-07-18)
+RM mapped-record topology and lifetime are now restored: both nested maps live with
+the raw PSBFile, use ttstr unordered_map keys, and die on unload. Win/spec=2 source
+navigation now reads raw PSBRawNode and mirrors RGBA8/A8L8 conversion exactly.
+KRKR/spec=1 likewise reads raw nodes and mirrors all-group enumeration, both RL
+formats, palette expansion and transparent-image handling. Its Web full-page atlas
+upload primitive is a platform adaptation. The cluster remains PARTIAL because
+ObjSource clip is a STUB and RuntimeSupport.cpp still hosts the broader MotionSnapshot
+side graph, not because Player_findSource still consumes decoded pixels.
 
 ## Common port pattern in this cluster
-Binary uses KiriKiri intrusive hashmaps/lists + raw new/AddRef/Release + direct device
-GPU upload; port substitutes std::list/unordered_map + shared_ptr + RenderManager
-texture abstraction. Tolerated as documented container-choice / platform boundary, but
-the DUAL-hashmap topology (group-map + per-dict nested map) is NOT platform-forced.
+Binary mapped record declaration order is PSBFile, Win texture map, KRKR descriptor
+map; reverse destruction is KRKR -> Win -> PSBFile. Local `LoadedResourceRecord`
+matches this and performs owning AddRef/Release. Do not describe raw-node migration as
+a platform boundary.

@@ -120,15 +120,18 @@ namespace motion {
     // aligned with the binary RM findSource @0x6AAB3C): the "src" branch
     // navigates module["source"][group]["icon"][icon] and wraps the resulting
     // sub-dict in this facade via ncbInstanceAdaptor<ObjSource>::CreateAdaptor
-    // (mirrors operator new(0x18) + sub_6EC124). Reachable only through the TJS
-    // NCB binding Motion.ResourceManager.findSource — there is no internal C++
-    // caller, and the port unit tests exercise Player::findSource (a separate
-    // function), so this path is oracle-inert under the current fixtures.
+    // (mirrors operator new(0x18) + sub_6EC124). Player_findSource @0x6948E8
+    // and SourceCache_loadSource @0x6A7BA8 now consume this same facade; there
+    // is no decoded MotionSnapshot image side path in SourceCache.
     class ObjSource {
     public:
         ObjSource() = default;
         explicit ObjSource(tTJSVariant sourceDict) :
             _sourceDict(std::move(sourceDict)) {}
+        ~ObjSource();
+
+        ObjSource(const ObjSource &) = delete;
+        ObjSource &operator=(const ObjSource &) = delete;
 
         // originX/originY @0x69D014/0x69D0D8 = dict["originX"/"originY"] (int).
         tjs_int getOriginX() const { return readInt(TJS_W("originX"), 0); }
@@ -138,12 +141,13 @@ namespace motion {
         // `type != 7` gate), which readInt's default branch reproduces.
         tjs_int getWidth() const { return readInt(TJS_W("width"), 32); }
         tjs_int getHeight() const { return readInt(TJS_W("height"), 32); }
-        // clip @0x69D35C (prop-ro) builds a Motion.Rect from
-        // dict["clip"].{left,top,right,bottom}; drawLayer @0x69D6D8 (method) does
-        // a SetSize + Layer draw (a draw-time op, platform-boundary-adjacent).
-        // Both bodies deferred — registered for surface fidelity, void / no-op.
-        tTJSVariant getClip() const { return {}; }
-        void drawLayer(tTJSVariant /*target*/) {}
+        // clip @0x69D35C builds a fresh property object from
+        // dict["clip"].{left,top,right,bottom}. drawLayer @0x69D6D8 lazily
+        // materialises the dict's pixel/palette/RL data through
+        // ObjSource_ensureTexture @0x6DA454, assigns that retained texture to
+        // the target Layer and resizes it.
+        tTJSVariant getClip() const;
+        void drawLayer(tTJSVariant target);
 
     private:
         // Reads an int member from the backing source dict; returns `dflt` unless
@@ -162,7 +166,10 @@ namespace motion {
             return dflt;
         }
 
+        void ensureTextureLike_0x6DA454();
+
         tTJSVariant _sourceDict;  // qword[0]: the PSB "source" dict facade
+        iTVPTexture2D *_texture = nullptr; // qword[2]: retained lazy texture
     };
 
     // Aligned to libkrkr2.so Motion.Point (0x690FBC)

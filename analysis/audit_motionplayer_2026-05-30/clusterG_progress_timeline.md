@@ -5,7 +5,14 @@
 > Authority: libkrkr2.so. Local code may be wrong. Reject functional equivalence.
 > IDB: renamed 6 sub_* -> Player_*; 15 functions commented; idb_save done.
 
-## VERDICT: ❌ SEVERE DIVERGENCE (architecture-level)
+## 当前状态（2026-07-19，取代旧 verdict）
+
+raw node-deque/frameList 两槽 parse/merge、advance/rewind/reseek 与主标量游标链已接入；
+错误的 Player `_timelines/_playingTimelineLabels`、control/blend animator 和 decoded
+timeline 表已删除。公开 timeline API 归属 EmoteEngine HM3/+1040。当前仍 open 的是
+原版 per-frame renderList owner 与本地 `_nodes` 门控的容器差异。
+
+## 历史基线：❌ SEVERE DIVERGENCE（不再描述当前代码）
 
 The binary's progress pipeline operates on a **node-deque frame-stepping machine**:
 `Player_progress_inner` drives forward/back through PSB frame entries via
@@ -27,6 +34,12 @@ re-architecture of the whole progress core onto node-deque frame stepping.
 
 ## Findings table
 
+> 2026-07-19 owner 勘误：下表 G11/G12/G13 的 `Player_*Timeline` 命名与本地对照已被
+> NCB 注册证据证伪。`0x672F70/0x67C2A0/0x673F98` 属于 EmoteEngine；Motion.Player
+> 注册表无 timeline API。本地 Player timeline map/vector/API 已删除，真实 Engine
+> HM3/+1040 与 typed controller deques 已接线。下列旧行保留为历史审计输入，不能再
+> 作为当前实现结论。
+
 | id | func @ addr | local file:line | sev | one-line |
 |----|-------------|-----------------|-----|----------|
 | G1 | Player_progress_inner @ 0x6c106c | PlayerFrameProgress.cpp:789 frameProgress | P0 | Binary steps node-deque frames via advance/rewind+parseFrame; port runs STL timeline/control-animator machine — different topology, no frame-index stepping. |
@@ -39,12 +52,12 @@ re-architecture of the whole progress core onto node-deque frame stepping.
 | G8 | Player_rewindRootAndNodes_guess @ 0x6b9a3c | PlayerFrameProgress.cpp (MISSING) | P0 | Backward frame stepping (decrement cursors, parseFrame idx-1) absent locally. |
 | G9 | Player_evaluateTimeline @ 0x699ae4 | PlayerUpdateChildMotion.cpp interpolatePosition69A4D4 (partial) | P1 | Two-slot transform interpolation (ratio mod +336, 180° shortest-path, type 4/5/10 channel copy, sub_69A754 easing) is the real per-node eval; port's frameProgress has no equivalent; only the child-motion crossfade path partially mirrors sub_69A4D4. |
 | G10 | Player_evaluateTimelines_guess @ 0x6c72e4 | PlayerTimeline.cpp:204 stopTimeline (closest) | P1 | This is a teardown sweep (FuncCall vtbl+112 + delete + Release over playing-list, reset head a1[16..19]), NOT per-frame timeline eval. Port has no direct counterpart; name is misleading. Treat as list-clear/finalize. |
-| G11 | Player_playTimeline @ 0x672f70 | PlayerTimeline.cpp:155 playTimeline | P1 | Binary keys playing list by ttstr-hash into inline hashtable (a1+117, mod a1[118]); dedupe by hashed compare; sub_670840+sub_671A50 reset; throws on miss. Port uses std::vector linear find + unordered_map; no throw, no hashtable. |
-| G12 | Player_stopTimeline @ 0x67c2a0 | PlayerTimeline.cpp:204 stopTimeline | P1 | Binary: empty-label releases all playing-list TJS variant refs (a1[130..131]); non-empty sub_68C304 erase. Port mutates `_timelines` state (blend/control reset) AND clears std::vector — extra state mutation not in binary, and missing variant Release. |
-| G13 | Player_isAnimating @ 0x673f98 | PlayerTimeline.cpp:561 isPlayingCompat | P0 | Binary scans 3 controller buckets + 5 inline hashtables for any animating controller matching a playing label. Port returns `!_playingTimelineLabels.empty()` — drastically simplified; ignores controller animation state. |
+| G11 | EmoteEngine_playTimeline @ 0x672f70 | EmoteEngine.cpp | CLOSED | HM3 lookup、+1040 active-label vector、controller reset/seek 与 miss throw 已归回 Engine；错误 Player API 已删除。 |
+| G12 | EmoteEngine_stopTimeline @ 0x67c2a0 | EmoteEngine.cpp | CLOSED | named erase 与 empty-label 全量 ttstr Release/clear 已由 Engine owner 承担；错误 Player map mutation 已删除。 |
+| G13 | EmoteEngine_isAnimating @ 0x673f98 | EmoteEngine.cpp | CLOSED | controller buckets/HM 与 active labels 的查询属于 Engine；错误 Player `isPlayingCompat` 已删除。 |
 | G14 | Player_parseFrame @ 0x6926b4 | PlayerFrameProgress.cpp (MISSING) | P0 | Binary parses one PSB frame via TJS dispatch (FuncCall idx -> obj; PropGet time/type/content/mask; mask&0x40000 -> act var slot+288 AddRef). Port has no live frame-parse path in progress. |
 | G15 | Player_mergeFrameContent @ 0x692ab0 | PlayerFrameProgress.cpp (MISSING) | P0 | Binary merges ~30 frame fields into node via TJS PropGet dispatch gated by slot+5 mask bits (exact bitmasks recorded in IDB comment). Port performs frame field application elsewhere via PSB structs, not via this mask-gated dispatch path. |
-| G16 | Player_getLoopTime_array @ 0x6d139c | PlayerTimeline.cpp:99 getLoopTimeline / Player.h:156 | P0 | Binary builds a **TJS Array** (sub_704CB8) by iterating the inline node deque (a1[164..168], 160B stride), `new(0x1F4)` per entry, AddRef dispatch. Port exposes `getLoopTimeline(ttstr)->bool` reading `_activeMotion->loopTimelines` map + scalar `_loopTime`. Wrong return type (bool/scalar vs TJS Array), wrong container. |
+| G16 | **已纠正：0x6D139C 是 `Player_getVariableKeys`，不是 loop timeline** | `PlayerVariable.cpp` / `Player.h` | CLOSED | `Player_ncb_registerMembers@0x6D69C8` 在 `0x6D6CEC` 将该函数只读绑定到二进制字面量 `variableKeys`；函数遍历 Player+1296 的 var-track deque 并新建 TJS Array。旧记录把它错接到 `getLoopTimeline`，现删除该错误地址与错误返回类型推论。Motion.Player timeline API 必须重新从注册函数逐项取证。 |
 | G17 | Player_play @ 0x6b21e8 | PlayerCore.cpp:522 initNonEmoteMotionLike / PlayerTimeline.cpp:288 | P1 | Binary play(): flags&0x10 && !+968 -> store stealth var +768; else playImpl + replay +768 with flag 16. Port `playMotionLike_0x6B2284`/`playCompat` collapse this into timeline-list playOne loops; stealth replay (+768 flag-16 second pass) and chara-gate not faithfully reproduced. |
 | G18 | Player_playImpl @ 0x6b2284 | PlayerCore.cpp:522 initNonEmoteMotionLike_0x6B365C | P0 | Binary gate `(flags&5)||motionDiffers`; flags&4&&playing skip; Player_loadMotion(+968 chara,var)->content; content type==1 emote vs non-emote split; stores +976/+984; throws 'motion not found' on fail. Port has no loadMotion+content-type dispatch; emote/non-emote split and +976/+984 dual-store missing; replaced by snapshot/clip activation. |
 | G19 | Player_play_NCBWrapper @ 0x67f40c | (MISSING) | P2 | Trampoline `Player_play(*(objthis+1064), flags, &var)`; objthis+1064 = native Player back-ptr via EmoteObject. Port routes play through ncbInstanceAdaptor directly; the +1064 indirection (EmotePlayer->Player) is a separate registration path. |

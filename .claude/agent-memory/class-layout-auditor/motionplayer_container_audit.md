@@ -32,8 +32,9 @@ _M_max_load_factor@32 _M_next_resize@40 _M_single_bucket@48})。**不是** KiriK
 | +408 list | _Rb_tree dispatch-value (stdmap_recursive_destroy_dispatchValue) | — | port 无直接镜像 | n/a |
 
 **EmoteEngine 1496B 容器: 全对齐 ✅** — 10 deque (ctor 10 distinct helper, 80B header memset 0x50;
-末两个 @+80/+160 共享 sub_6848C8 dtor) + 7 unordered_map (@824/880/936/1272/1328/1384/1440,
-全 _M_next_bkt+1.0f) + 4 vector<tTJSVariant*> (@800/992/1016/1040, [begin,end) release+delete buffer).
+末两个 @+80/+160 共享 sub_6848C8 dtor) + 7 unordered containers
+(@824/880/936/1272/1328/1384/1440；其中 HM1/HM2/HM4 是 set，其余是 map)
++ 4 vector<ttstr> (@800/992/1016/1040, [begin,end) release string elements + delete buffer).
 Player* @+1064 raw new(0x568)+manual delete ✅; 7 controllers @1072-1120 raw new+sub_683AA8+delete ✅.
 HM7 @+1440 = unordered_map<ttstr,double> 已 VERIFIED (旧结论正确).
 
@@ -47,7 +48,8 @@ HM7 @+1440 = unordered_map<ttstr,double> 已 VERIFIED (旧结论正确).
 (旧 doc Player_4_HashMaps_Container_Mapping.md §澄清块仍写 "2 处 retype 待办" 已 stale。)
 
 容器**选型** (unordered_map/deque/map/vector 的实现类) **全部对齐**;偏差仅在 2 个 std::string-keyed map
-应改 ttstr-keyed。无任何 std::vector 误代 TJS-Array/dispatch 的情况 (4 vector 本就是 vector<tTJSVariant*>)。
+应改 ttstr-keyed。无任何 std::vector 误代 TJS-Array/dispatch 的情况；4 只 Engine vector
+已由宽字符生产/消费链确认为 vector<ttstr>，旧 vector<tTJSVariant*> 结论已纠正。
 
 被证伪/需澄清的既有结论:
 - ❌ "4 内联 HM" / "KiriKiri 自研内联 hashmap" 措辞 — 实为标准 libstdc++ unordered_map (仅 hash 自研)。

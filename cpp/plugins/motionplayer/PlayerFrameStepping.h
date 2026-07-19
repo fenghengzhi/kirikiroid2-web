@@ -35,15 +35,14 @@
 // INDEPENDENCE: these are free functions, exercised only by the motionplayer-dll
 // unit test. They are NOT wired into the live frame-progress path
 // (PlayerFrameProgress.cpp / PlayerTimeline.cpp / PlayerUpdateLayerEval.cpp are
-// untouched), so the logo differential stays 0-mismatch.
+// untouched). They are a legacy cursor test model, not the live implementation.
 //
-// PLATFORM_BOUNDARY: in libkrkr2.so each frame stream is a TJS Array dispatch
-// (iTJSDispatch2) of per-frame dicts, walked through PropGet wrappers. The local
-// port has no live iTJSDispatch2 motion tree, so — exactly like P2 — a frame
-// stream is sourced from a PSB::PSBList of PSB::PSBDictionary frames. The cursor
-// indexing, two-slot ping-pong seek, completion/sync/align gating and merge
-// dispatch are reproduced verbatim; only the leaf "read frame[i]['time']" goes
-// through PSB instead of dispatch.
+// RECONSTRUCTION GAP: in libkrkr2.so each frame stream is a TJS Array dispatch
+// of per-frame dicts. The live port now owns that dispatch as
+// MotionNode::frameListVariant, so the decoded PSBList used by this isolated
+// model is no longer a platform boundary. The cursor topology remains useful
+// for tests, but raw reads, ownership and all deferred passes must move into the
+// live chain before this area can be called reconstructed.
 
 #pragma once
 
@@ -182,8 +181,8 @@ namespace motion {
         // Full (non-incremental) re-seek of the layer + root streams to
         // clampedEvalTime via a fresh linear scan, with action/sync/align gating,
         // then a per-node advance. Called on firstFrame seed and loop wraparound.
-        // (The variable-track deque and the +280 aux list are PLATFORM_BOUNDARY
-        // deferred — see .cpp.)
+        // (The variable-track deque and the +280 aux list remain open
+        // reconstruction work — see .cpp.)
         void reseekTimelineCursorsLike_0x6B86C8(PlayerFrameStreamsLike &p);
 
     } // namespace detail

@@ -14,9 +14,11 @@
 //   - 10 binary-typed deques have 10 distinct POD element types
 //   - _dirty is at EmoteEngine+1162 (NOT on Player)
 //   - _meshDivisionRatio* is at EmoteEngine+1168/+1176 (NOT on Player)
-//   - the 7 inline unordered_map<ttstr,V> (@824/880/936/1272/1328/1384/1440)
-//     and 4 std::vector<tTJSVariant*> (@800/992/1016/1040) are typed fields,
-//     NOT raw byte blocks (P0-2, 2026-05-30). HM#7 (label→double) is @+1440.
+//   - the 7 inline unordered containers (@824/880/936/1272/1328/1384/1440)
+//     are typed fields: +824/+880/+1272 are unordered_set<ttstr>; the other four
+//     are maps.
+//     +800/+992/+1016/+1040 are all vector<ttstr>.
+//     HM#7 (label→double) is @+1440.
 //
 // PLATFORM_BOUNDARY: sizeof(EmoteEngine) on Web build will not equal 1496B
 // due to libc++ deque (~64B header) vs libstdc++ (80B header) and unordered_map
@@ -27,8 +29,11 @@
 
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "tjs.h"
@@ -58,9 +63,9 @@ namespace motion {
     // EmoteEngine inline-container value typedefs (libkrkr2.so EmoteEngine_ctor
     // @0x67E38C / EmoteEngine_dtor @0x67F4B8).
     //
-    // The 1496B engine embeds 7 libstdc++ unordered_map<ttstr,V> (offsets
-    // 824/880/936/1272/1328/1384/1440) and 4 std::vector<tTJSVariant*>
-    // (offsets 800/992/1016/1040). All 7 maps share the KiriKiri ttstr hash
+    // The 1496B engine embeds 4 libstdc++ unordered_map<ttstr,V> plus three
+    // unordered_set<ttstr> fields at +824/+880/+1272, and 4 vector<ttstr> at
+    // +800/+992/+1016/+1040. All 7 unordered containers share the KiriKiri ttstr hash
     // (verified: ttstr_doubleMap_upsert @0x686944 uses the exact 1025/6/9/
     // 32769/11 mix in detail::ttstr_hash_utf16). Each map node is
     // operator new(0x20)=32B {next@0, ttstr key@8 (atomic-refcounted),
@@ -70,21 +75,20 @@ namespace motion {
     //   HM#7 @1440 = <ttstr,double> — FULLY VERIFIED. ttstr_doubleMap_upsert
     //     returns node+16 and progress() writes a double there; bind-loop
     //     reads i[2] as double. dtor releases only the key ttstr.
-    //   HM#1 @824, HM#2 @880, HM#4 @1272, HM#6 @1384 — dtor does
-    //     tTJSVariant_Release(node[1]) i.e. releases ONLY the key ttstr; it
-    //     never touches node+16. So the value is NOT an owned dispatch/variant.
-    //     The exact value width is set by the (un-reversed) setVariable write
-    //     path. TODO(P-B): reverse setVariable to confirm; placeholder = double.
-    //   HM#5 @1328 — dtor runs sub_68577C(this+1328) first, then walks a
-    //     SEPARATE node chain at +1288 releasing key ttstr. The +1272/+1288
-    //     pairing means HM#4's footprint owns the +1288 chain; HM#5's own
-    //     value width is likewise un-reversed. TODO(P-B): placeholder = double.
-    //   HM#3 @936 — sub_687C80 allocates a 0x88-byte hash node: 16-byte
-    //     {next,key} header + a 120-byte compound value. The dtor walks nodes
-    //     calling sub_683E40(node+1): ttstr@0 + owned objects@8/@16 +
-    //     tTJSVariant@28 + heap@96.
-    //     Distinct, owned value type. TODO(P-B): reverse the value struct;
-    //     placeholder = an opaque 120B POD until then.
+    //   HM#6 @1384 = <ttstr,EmoteVarRef>. Builders 0x66C77C et al. write
+    //     {type,index}; setVariable @0x671228 reads that pair and selects the
+    //     corresponding controller deque. The value is an unowned 8B POD.
+    //   HM#5 @1328 — FULLY TYPED. sub_6880A8 allocates a unique 64B node:
+    //     {next, key ttstr, value ttstr, four doubles, cached hash};
+    //     sub_68577C releases both ttstr fields. buildVariableList @0x66A530
+    //     updates the last double pair with raw frame values. The first pair is
+    //     constructed as DBL_MAX/-DBL_MAX; the last pair is source-level
+    //     indeterminate until the first frame update.
+    //   HM#3 @936 — sub_687C80 allocates a 0x88-byte hash node:
+    //     next(8)+key(8)+mapped value(112)+cached hash(8). The mapped value owns
+    //     EmoteTimelineData80B*, EmoteVarController* blend animator, the raw
+    //     timeline element tTJSVariant and scalar/vector runtime state;
+    //     sub_683E40 destroys the owned objects in the recorded order.
     //
     // PLATFORM_BOUNDARY: libc++ unordered_map header (~32-40B) != libstdc++ 56B
     // and libc++ vector (24B, matches). sizeof(EmoteEngine) on the Web build can
@@ -94,11 +98,13 @@ namespace motion {
     // ========================================================================
     namespace detail {
 
-        // HM#1/2/4/5/6 value placeholder. dtor releases only the ttstr key, so
-        // the value is a non-owned scalar. Width un-confirmed (setVariable write
-        // path not yet reversed). TODO(P-B): replace `double` once confirmed.
-        using EmoteScalarMap =
-            std::unordered_map<ttstr, double, ttstr_hash, ttstr_equal>;
+        // HM#1/HM#2 are mirror-match positive/negative caches. sub_68BF40
+        // allocates the same 24B set node {next,key,cached hash} as HM#4; there
+        // is no mapped-value slot. Keep distinct aliases for source roles.
+        using EmoteMirrorMatchSet =
+            std::unordered_set<ttstr, ttstr_hash, ttstr_equal>;
+        using EmoteMirrorMissSet =
+            std::unordered_set<ttstr, ttstr_hash, ttstr_equal>;
 
         // HM#6 @1384 value: VarRef {int32 type; int32 index} — VERIFIED by
         // EmoteEngine_buildEyeControl @0x66C77C (writes *ret=4 (type),
@@ -114,29 +120,156 @@ namespace motion {
         using EmoteVarRefMap =
             std::unordered_map<ttstr, EmoteVarRef, ttstr_hash, ttstr_equal>;
 
-        // HM#3 value: compound object destroyed by sub_683E40 (releases an
-        // owned ttstr@0, dispatch@8, sub-object@16 via sub_683EB8, heap@96).
-        // Opaque until reversed. TODO(P-B): unpack into a typed struct mirroring
-        // sub_683E40's ascending-offset field destruction.
+        // HM#5 @1328 value, verified from its unique 64B node allocator
+        // sub_6880A8 @0x6880A8 and clearer sub_68577C @0x68577C. The node is:
+        //   next@0, key ttstr@8, value.unknownString@16,
+        //   value.rangeMinA@24, rangeMaxA@32, frameMin@40, frameMax@48,
+        //   cachedHash@56.
+        // The constructor writes only the first double pair. frameMin/frameMax
+        // are deliberately not initialized: buildVariableList @0x66A530 reads
+        // and updates those indeterminate source fields directly. Do not add a
+        // defensive zero/limit seed; the binary does not contain one.
+        struct EmoteVariableRange {
+            ttstr  unknownString;
+            double rangeMinA;
+            double rangeMaxA;
+            double frameMin;
+            double frameMax;
+
+            EmoteVariableRange()
+                : rangeMinA(std::numeric_limits<double>::max()),
+                  rangeMaxA(-std::numeric_limits<double>::max()) {}
+        };
+        using EmoteVariableRangeMap =
+            std::unordered_map<ttstr, EmoteVariableRange,
+                               ttstr_hash, ttstr_equal>;
+
+        // sub_66FC5C @0x66FC5C builds each 24B frame as
+        // {double time, bool typeZero, float value, double easingWeight}. The
+        // last frame is a sentinel: sub_669E1C and sub_671A50 only scan through
+        // size()-1 and never dispatch that tail element.
+        struct EmoteTimelineFrame24B {
+            double time = 0.0;
+            bool typeZero = false;
+            float value = 0.0f;
+            double easingWeight = 0.0;
+        };
+
+        // 56B deque element owned by the 0x50-byte object created in sub_66FC5C.
+        // Ordinary C++ members reproduce the source-level ownership; ARM64 byte
+        // offsets remain provenance only (ttstr/pointers differ on wasm32).
+        struct EmoteTimelineTrack56B {
+            ttstr label;
+            bool instantVariable = false;
+            std::vector<EmoteTimelineFrame24B> frameList;
+            EmoteVarController *controller = nullptr;
+            float output = 0.0f;
+
+            EmoteTimelineTrack56B() = default;
+            ~EmoteTimelineTrack56B() {
+                if(controller) {
+                    EmoteVarController_dtor(controller);
+                    delete controller;
+                }
+            }
+            EmoteTimelineTrack56B(const EmoteTimelineTrack56B &) = delete;
+            EmoteTimelineTrack56B &operator=(const EmoteTimelineTrack56B &) = delete;
+            EmoteTimelineTrack56B(EmoteTimelineTrack56B &&other) noexcept
+                : label(std::move(other.label)),
+                  instantVariable(other.instantVariable),
+                  frameList(std::move(other.frameList)),
+                  controller(other.controller), output(other.output) {
+                other.controller = nullptr;
+            }
+            EmoteTimelineTrack56B &operator=(EmoteTimelineTrack56B &&other) noexcept {
+                if(this == &other) return *this;
+                if(controller) {
+                    EmoteVarController_dtor(controller);
+                    delete controller;
+                }
+                label = std::move(other.label);
+                instantVariable = other.instantVariable;
+                frameList = std::move(other.frameList);
+                controller = other.controller;
+                output = other.output;
+                other.controller = nullptr;
+                return *this;
+            }
+        };
+
+        struct EmoteTimelineData80B {
+            std::deque<EmoteTimelineTrack56B> variableList;
+        };
+
+        // HM#3 mapped value, fully recovered from find/insert sub_687C80,
+        // builder sub_66FC5C, consumers 0x669E1C/0x671764/0x67C560 and dtor
+        // sub_683E40. The binary node stores this 112B mapped value after its
+        // ttstr key; the source-level fields below intentionally do not hard-code
+        // the Android ABI offsets.
         struct EmoteHM3Value {
-            // REVERSE GAP: 120B opaque. sub_683E40 frees in order:
-            //   +96 heap (operator delete), +28 sub-object (sub_A0F778),
-            //   +16 owned ptr (sub_683AA8 + delete), +8 owned ptr (sub_683EB8
-            //   + delete), +0 ttstr (tTJSVariant_Release). Reverse-declaration
-            //   destruction would be needed once typed. Held opaque for now so
-            //   no partial/incorrect lifetime is introduced.
-            // sub_687C80 initializes bytes +0..+79, seeds double +72=1.0, then
-            // zeroes +80..+111; the final 8 bytes are not explicitly written.
-            unsigned char opaque[120] = {};
+            EmoteTimelineData80B *timelineData = nullptr;
+            EmoteVarController *blendController = nullptr;
+            tjs_uint32 flags = 0;
+            tTJSVariant rawElement;
+            double loopBegin = 0.0;
+            double loopEnd = 0.0;
+            double lastTime = 0.0;
+            double currentTime = 0.0;
+            float blendWeight = 1.0f;
+            double autoStop = 0.0;
+            std::vector<int32_t> frameCursors;
+
+            EmoteHM3Value() = default;
+            ~EmoteHM3Value() {
+                if(blendController) {
+                    EmoteVarController_dtor(blendController);
+                    delete blendController;
+                }
+                delete timelineData;
+            }
+            EmoteHM3Value(const EmoteHM3Value &) = delete;
+            EmoteHM3Value &operator=(const EmoteHM3Value &) = delete;
+            EmoteHM3Value(EmoteHM3Value &&other) noexcept
+                : timelineData(other.timelineData),
+                  blendController(other.blendController), flags(other.flags),
+                  rawElement(std::move(other.rawElement)),
+                  loopBegin(other.loopBegin), loopEnd(other.loopEnd),
+                  lastTime(other.lastTime), currentTime(other.currentTime),
+                  blendWeight(other.blendWeight), autoStop(other.autoStop),
+                  frameCursors(std::move(other.frameCursors)) {
+                other.timelineData = nullptr;
+                other.blendController = nullptr;
+            }
+            EmoteHM3Value &operator=(EmoteHM3Value &&other) noexcept {
+                if(this == &other) return *this;
+                if(blendController) {
+                    EmoteVarController_dtor(blendController);
+                    delete blendController;
+                }
+                delete timelineData;
+                timelineData = other.timelineData;
+                blendController = other.blendController;
+                flags = other.flags;
+                rawElement = std::move(other.rawElement);
+                loopBegin = other.loopBegin;
+                loopEnd = other.loopEnd;
+                lastTime = other.lastTime;
+                currentTime = other.currentTime;
+                blendWeight = other.blendWeight;
+                autoStop = other.autoStop;
+                frameCursors = std::move(other.frameCursors);
+                other.timelineData = nullptr;
+                other.blendController = nullptr;
+                return *this;
+            }
         };
         using EmoteHM3Map =
             std::unordered_map<ttstr, EmoteHM3Value, ttstr_hash, ttstr_equal>;
 
-        // 4 std::vector<tTJSVariant*> (offsets 800/992/1016/1040). dtor walks
-        // [begin,end) releasing each non-null element via tTJSVariant_Release,
-        // then operator delete on the buffer. Non-owning of the variants beyond
-        // the release (raw pointers, owner is the variant refcount).
-        using VariantPtrVector = std::vector<tTJSVariant *>;
+        // HM#4 @1272 is an unordered_set, not a map. sub_689760 allocates a
+        // 24B node {next, ttstr key, cached hash}; no mapped-value slot exists.
+        using EmoteInstantVariableSet =
+            std::unordered_set<ttstr, ttstr_hash, ttstr_equal>;
 
     } // namespace detail
 
@@ -255,11 +388,10 @@ namespace motion {
     //   normalizes to [-1,1], 2D disk-remaps by mode, then writes both back via
     //   Player_bindParameterValue (engine+1064), the X-axis result negated when
     //   sub_67C6B0 sets the mirror flag.
-    //   NOTE: the LIVE local model of this deque is the populated
-    //   MotionSnapshot::clampControls (RuntimeSupport::collectClampControlMetadata
-    //   mirrors the builder's reads at sub_66EE5C); this struct documents the
-    //   binary's on-deque element layout. Corrects the prior `char raw[40]`
-    //   placeholder (was mislabelled "no step fn / _guess").
+    //   The raw builder and live binder now populate/consume this owning deque
+    //   directly. Its sub_67C560 callee likewise consumes Engine HM3/+1040 and
+    //   the nested 56B timeline-track deque. Corrects the prior `char raw[40]`
+    //   placeholder and the former Player decoded-timeline delegation.
     struct EmoteClampControlEntry_Deque7 {
         int    type     = 0;   // +0  — disk-remap mode (0 = squircle, 1 = clamp-circle)
         double minValue = 0.0; // +8  — lo bound
@@ -289,7 +421,9 @@ namespace motion {
     //   (+8/+24/+32/+40), then *v57=label at elem+8 (LABEL_63 @0x66ddec). The
     //   progress step loop @0x67d1e0 reads *v38 as ctl, v38+1 (elem+8) as the
     //   HM7 "label" key, advances v38+=6 (48B), block boundary v39=node+60
-    //   (60 qwords = 480B). So the element is {ctl, ttstr label, 32B unused}.
+    //   (60 qwords = 480B). sub_670D1C and sub_6823FC prove +24/+32/+40 are a
+    //   std::vector<EmoteTransitionControlEntry_Deque8*>; the metadata builder
+    //   zero-constructs it and does not populate it in this path.
     //   This is the SELECTOR controller-deque (engine+656), stepped by
     //   sub_668470 — NOT the transition deque (engine+576, sub_666BF8). The
     //   member name "Deque9" is the engine-member ordinal; the brief calls the
@@ -303,16 +437,14 @@ namespace motion {
         //   (buildSelectorControl @0x66ddac..0x66de1c) zeroes elem+8/+24/+32/+40
         //   and writes ctl@+0 / label@+8 but does NOT initialise elem+16 — it is
         //   left as raw operator-new(0x1E0) memory, so the binary's gate value is
-        //   INDETERMINATE here. Modelled as an explicit flag defaulted to 1 to
-        //   match the sibling transition deque (whose +16 flag is explicitly 1)
-        //   and the typical non-zero new-memory case; this keeps case8 live when
-        //   a selector var is actually driven. (logo motion has no selector vars,
-        //   so this path is inert for the differential regardless.)
-        uint8_t                  flag = 1;        // +16 — case8 enqueue gate
-        // +24/+32/+40 zeroed by the binary; no further fields are read by the
-        //   progress step. (The 48B stride is preserved as the element size; the
-        //   trailing slots are unused dead space — kept implicit, not padded, per
-        //   the byte-layout methodology.)
+        //   INDETERMINATE here. Preserve that source-level uninitialized field;
+        //   do not seed it from the sibling transition deque.
+        uint8_t                  flag;            // +16 — case8 enqueue gate
+        // +24/+32/+40 — non-owning pointers into deque#8. The vector is read by
+        //   selector sync @0x670D1C and the selector-target API @0x6823FC. The
+        //   raw builder @0x66D8FC constructs it empty; do not infer/populate it
+        //   from option labels without a separate binary write-site.
+        std::vector<EmoteTransitionControlEntry_Deque8*> targets;
     };
     // Deque #10 (loopControl, TYPE 3) element — 16B. Verified by
     //   EmoteEngine_buildLoopControl @0x66E480 (push to finish._M_cur a1[96]=
@@ -348,6 +480,47 @@ namespace motion {
         Player& player();
         const Player& player() const;
 
+        // EmoteEngine_applyMetadata_buildControllers @0x67D4D0. Consumes the
+        // raw metadata dispatch and rebuilds every metadata-owned controller,
+        // deque, hashmap and TJS container in the Android call order.
+        void applyMetadataLike_0x67D4D0(const tTJSVariant &metadata);
+
+        // sub_669928 @0x669928, whose tail is sub_669798 @0x669798.
+        // Clears all metadata-owned controller/container state, recreates the
+        // three TJS variable containers, and clears HM4/HM5/HM6.
+        void resetMetadataState();
+
+        // EmoteEngine_buildVariableList @0x66A530. Builds the label Array,
+        // per-label frame Arrays/Dictionary and HM5 range records directly from
+        // raw TJS dispatch values.
+        void buildVariableList(const tTJSVariant &variableList);
+
+        // sub_66E248 @0x66E248: _variableLabels.remove(label).
+        void removeVariableLabel(const ttstr &label);
+
+        // sub_670D1C @0x670D1C. Rebuilds +1208 as a content copy of the current
+        // +1228 label Array, synchronizes every selector gate/controller and its
+        // non-owning transition-target vector, then marks the engine dirty.
+        void syncSelectorControlsLike_0x670D1C();
+
+        // Registered EmotePlayer selector-target surface. These functions scan
+        // selector-entry.targets (the non-owning vector at element +24), not a
+        // decoded motion registry. activate/deactivate are deliberately kept as
+        // two source functions because libkrkr2.so contains two duplicated
+        // implementations which differ at the selector-entry gate write.
+        [[nodiscard]] bool isSelectorTarget(const ttstr &label); // 0x6823FC
+        void activateSelectorTarget(const ttstr &label);         // 0x67581C
+        void deactivateSelectorTarget(const ttstr &label);       // 0x675BF4
+
+        // sub_66EB8C @0x66EB8C. Commits pending timeline/controller values,
+        // clears their queues and re-arms every spring node in binary order.
+        void resetControllersLike_0x66EB8C();
+
+        // sub_671DB0 @0x671DB0. Writes the requested mirror byte, compares it
+        // with the metadata base, forwards the xor to Player root flip, then
+        // performs the complete controller reset above.
+        void setMirrorLike_0x671DB0(bool mirror);
+
         // Aligned with libkrkr2.so sub_67D01C EmoteEngine_progress @ 0x67D01C.
         // dt-sliced physics + animation main loop. Physics step functions are
         // STUB_WARN at present; control-flow skeleton matches the binary.
@@ -357,6 +530,66 @@ namespace motion {
         // EmoteEngine_progress calls this once with (force=false, original dt)
         // before entering its fmin(dt, 1.1) controller-slice loop.
         void preProgressLike_0x671764(bool force, double dt);
+
+        // Motion.EmotePlayer state persistence. The NCB members "serialize"
+        // and "unserialize" bind directly to these EmoteEngine receivers in
+        // libkrkr2.so (0x675E40 / 0x678044); Player has no parallel save model.
+        [[nodiscard]] tTJSVariant serializeLike_0x675E40();
+        void unserializeLike_0x678044(tTJSVariant data);
+        [[nodiscard]] tTJSVariant serializeTimelineLike_0x6767E4() const;
+        [[nodiscard]] tTJSVariant serializeEyeLike_0x676B0C() const;
+        [[nodiscard]] tTJSVariant serializeEyebrowLike_0x676F48() const;
+        [[nodiscard]] tTJSVariant serializeMouthLike_0x677384() const;
+        [[nodiscard]] tTJSVariant serializeTransitionLike_0x6776BC() const;
+        [[nodiscard]] tTJSVariant serializeSelectorLike_0x6778F0() const;
+        [[nodiscard]] tTJSVariant serializeBaseLike_0x677BA8() const;
+        [[nodiscard]] tTJSVariant serializeOuterForceLike_0x677E28() const;
+        void restoreTimelineLike_0x678454(const tTJSVariant &value);
+        void restoreEyeLike_0x678804(const tTJSVariant &value);
+        void restoreEyebrowLike_0x678FF0(const tTJSVariant &value);
+        void restoreMouthLike_0x679804(const tTJSVariant &value);
+        void restoreTransitionLike_0x67A020(const tTJSVariant &value);
+        void restoreSelectorLike_0x67A868(const tTJSVariant &value);
+        void restoreBaseLike_0x67B08C(const tTJSVariant &value);
+        void restoreOuterForceLike_0x67B34C(const tTJSVariant &value);
+
+        // Engine-owned timeline machine. All five functions operate on HM3@936
+        // and active-label vector@1040, matching the binary receiver and
+        // eliminating the former Player/MotionSnapshot parallel model from this
+        // live path.
+        void playTimelineLike_0x672F70(const ttstr &label, tjs_uint32 flags);
+        void stopTimelineLike_0x67C2A0(const ttstr &label);
+        [[nodiscard]] bool isTimelinePlayingLike_0x673558(
+            const ttstr &label) const;
+        void setTimelineBlendLike_0x6735AC(
+            const ttstr &label, bool autoStop, float value,
+            float transition, float easingWeight);
+        void fadeInTimelineLike_0x6736EC(
+            const ttstr &label, double duration, double easing);
+        void fadeOutTimelineLike_0x6739F4(
+            const ttstr &label, double duration, double easing);
+        [[nodiscard]] double getTimelineBlendLike_0x6821C8(
+            const ttstr &label) const;
+        [[nodiscard]] tjs_int countMainTimelinesLike_0x5306AC() const;
+        [[nodiscard]] ttstr getMainTimelineLabelAtLike_0x674C84(
+            tjs_uint32 index) const;
+        [[nodiscard]] tjs_int countDiffTimelinesLike_0x5306D4() const;
+        [[nodiscard]] ttstr getDiffTimelineLabelAtLike_0x674CEC(
+            tjs_uint32 index) const;
+        [[nodiscard]] tjs_int countPlayingTimelinesLike_0x5306FC() const;
+        [[nodiscard]] ttstr getPlayingTimelineLabelAtLike_0x674D54(
+            tjs_uint32 index) const;
+        [[nodiscard]] tjs_int getPlayingTimelineFlagsAtLike_0x674DC8(
+            tjs_uint32 index) const;
+        [[nodiscard]] bool getLoopTimelineLike_0x67522C(
+            const ttstr &label) const;
+        [[nodiscard]] double getTimelineTotalFrameCountLike_0x6753F0(
+            const ttstr &label) const;
+        [[nodiscard]] tTJSVariant getMainTimelineLabelListLike_0x674F54() const;
+        [[nodiscard]] tTJSVariant getDiffTimelineLabelListLike_0x6750C0() const;
+        [[nodiscard]] tTJSVariant getPlayingTimelineInfoListLike_0x6754C4() const;
+        void accumulateTimelineContributionLike_0x67C560(
+            const ttstr &label, double &value);
 
         // Aligned with libkrkr2.so sub_6766E0
         //   EmoteEngine_applyVarControllers_pos_scale_color_angle @ 0x6766E0.
@@ -388,14 +621,14 @@ namespace motion {
         //   `eyeControl` is the PSB list (= the binary's L"eyeControl" value
         //   passed by applyMetadata @0x67d7a4; iterated by index, count via
         //   Motion_propGetCount).
-        void buildEyeControl(const PSB::PSBList* eyeControl);
+        void buildEyeControl(const tTJSVariant& eyeControl);
 
         // Aligned with libkrkr2.so EmoteBlinkController_ctor_slim builder
         //   @ 0x66CB9C (EmoteEngine_buildEyebrowControl). Same shape as
         //   buildEyeControl but: operator new(0x150) the SLIM EmoteEyebrow
         //   controller, push {ctl, label} onto deque#5, and register a HM#6
         //   VarRef {type=5, index=loopIndex} keyed by the element's "label".
-        void buildEyebrowControl(const PSB::PSBList* eyebrowControl);
+        void buildEyebrowControl(const tTJSVariant& eyebrowControl);
 
         // Aligned with libkrkr2.so EmoteEngine_buildMouthControl @ 0x66CFBC.
         //   For each enabled element in the metadata "mouthControl" PSB array:
@@ -404,7 +637,7 @@ namespace motion {
         //   register TWO HM#6 VarRefs {type=6, index=loopIndex} — one keyed by the
         //   element's "label", one keyed by the element's "talkLabel" (the unique
         //   double-HM-insert that distinguishes the mouth category).
-        void buildMouthControl(const PSB::PSBList* mouthControl);
+        void buildMouthControl(const tTJSVariant& mouthControl);
 
         // Aligned with libkrkr2.so EmoteEngine_buildSelectorControl @ 0x66D8FC.
         //   For each enabled element in the metadata "selectorControl" PSB array:
@@ -414,9 +647,11 @@ namespace motion {
         //   EmoteSelectorController (ctor swaps in the optionList + applies index
         //   0); push {ctl, label} (48B) onto deque#9 (engine+640); and register a
         //   HM#6 VarRef {type=8, index=loopIndex} keyed by the element's "label".
-        //   A non-enabled element instead removes its var binding (sub_66E248) —
-        //   here mirrored by skipping the element (no controller built).
-        void buildSelectorControl(const PSB::PSBList* selectorControl);
+        //   A non-enabled element removes its variable label through
+        //   sub_66E248; a matched transition option does the same before being
+        //   borrowed by the selector. Both paths call the raw TJS Array
+        //   `remove` helper here, exactly as in the binary.
+        void buildSelectorControl(const tTJSVariant &selectorControl);
 
         // Aligned with libkrkr2.so EmoteEngine_buildTransitionControl @ 0x66D4C4.
         //   For each enabled element in the metadata "transitionControl" PSB array:
@@ -430,7 +665,7 @@ namespace motion {
         //   MUST run before buildSelectorControl: the selector's per-option
         //   refCtl is resolved by scanning THIS deque (engine+576) for a matching
         //   option label (buildSelectorControl @0x66db0c).
-        void buildTransitionControl(const PSB::PSBList* transitionControl);
+        void buildTransitionControl(const tTJSVariant &transitionControl);
 
         // Aligned with libkrkr2.so EmoteEngine_buildLoopControl (sub_66E480)
         //   @ 0x66E480. For each enabled element in the metadata "loopControl" PSB
@@ -444,7 +679,48 @@ namespace motion {
         //   @0x66e5f0 -> LABEL_49) but still advances the loop index v6. This is the
         //   LAST progress-stepped controller-deque; its step is INLINED into
         //   EmoteEngine::progress (no separate step fn).
-        void buildLoopControl(const PSB::PSBList* loopControl);
+        void buildLoopControl(const tTJSVariant &loopControl);
+
+        // Aligned with libkrkr2.so EmoteEngine_buildClampControl @0x66EE5C.
+        // For each enabled raw element, first append a zero-valued 40B entry,
+        // then fill type, var_lr, var_ud, min and max in binary source order.
+        // This builder owns the two ttstr slots through deque#7; it does not
+        // allocate a controller and does not register an HM#6 VarRef.
+        void buildClampControl(const tTJSVariant &clampControl);
+
+        // Aligned with libkrkr2.so EmoteEngine_buildMirrorControl @0x66F364.
+        // Reads mirrorControl.variableMatchList and appends every element as a
+        // ttstr to the Engine+800 vector, preserving order, duplicates and empty
+        // strings. Reset owns clearing/releasing the vector; this builder does
+        // not clear it itself.
+        void buildMirrorControl(const tTJSVariant &mirrorControl);
+
+        // Aligned with libkrkr2.so EmoteEngine_buildInstantVariableList
+        // @0x66F64C. Inserts each raw array element, converted directly to ttstr,
+        // into the Engine+1272 unordered_set. The outer metadata function owns
+        // the optional-property gate; this builder performs no filtering/clear.
+        void buildInstantVariableList(const tTJSVariant &instantVariableList);
+
+        // Aligned with libkrkr2.so EmoteEngine_buildTimelineControl @0x66F80C.
+        // Clears/fills normal and diff label vectors with the original two-step
+        // diff property access, then CopyRefs each complete raw element into
+        // HM3[label].rawElement. The active +1040 vector is not touched.
+        void buildTimelineControl(const tTJSVariant &timelineControl);
+
+        void initializeTimelineStateLike_0x66FC5C(
+            detail::EmoteHM3Value &state);
+        void initializeTimelineControllersLike_0x670840(
+            detail::EmoteHM3Value &state, tjs_uint32 flags);
+        void seekTimelineLike_0x671A50(
+            detail::EmoteHM3Value &state, double time);
+        void applyTimelineWindowLike_0x669E1C(
+            detail::EmoteHM3Value &state, bool inclusive, double targetTime);
+
+        // Aligned with libkrkr2.so sub_67C6B0. Uses mirrorChanged, the raw
+        // variableMatchList and two Engine-owned ttstr sets as positive/negative
+        // caches. Match requires IndexOf(pattern,0) >= 1, not exact equality.
+        bool shouldMirrorEvalLabelLike_0x67C6B0(const ttstr &label);
+        void applyClampControlsLike_0x67C8A8();
 
         // Aligned with libkrkr2.so sub_66B018 @ 0x66B018 (the "bustControl"
         //   builder). DESPITE the PSB key name "bustControl", this populates
@@ -456,7 +732,7 @@ namespace motion {
         //   "ofs" -> biasY; node.initFlag = 1; node labels = baseLayer(shape),
         //   var_lr (X key), var_ud (Y key); register TWO HM#6 VarRefs {type=0,
         //   index=loopIndex} keyed by var_lr and var_ud.
-        void buildBustControl(const PSB::PSBList* bustControl);
+        void buildBustControl(const tTJSVariant& bustControl);
 
         // Aligned with libkrkr2.so sub_66B9D0 @ 0x66B9D0 (the "hairControl" /
         //   "partsControl" builder; tag=1 -> deque#2 _bustChain1Nodes, tag=2 ->
@@ -468,10 +744,11 @@ namespace motion {
         //   (each a list of 2 dicts -> seg0/seg1 pos & vel); node labels =
         //   baseLayer(shape), var_lr (keyA), var_lrm (keyB), var_ud (keyC);
         //   register THREE HM#6 VarRefs {type=tag, index=loopIndex}. The 56B
-        //   node's +8 init byte is NOT written by the binary (left indeterminate
-        //   from raw operator-new); the local POD node zero-inits it (initFlag=0).
+        //   node's +8 init byte is NOT written by the binary; +12..+51 are
+        //   zeroed before the four ttstr assignments, so both anchors are zero.
         void buildChainControl(std::deque<EmoteBustChain1Node56B>& chainNodes,
-                               int typeTag, const PSB::PSBList* chainControl);
+                               int typeTag,
+                               const tTJSVariant& chainControl);
 
         // Aligned with libkrkr2.so Player_setVariable @ 0x671228.
         //   THIS is the EmoteEngine (the ~1576B object holding HM6@+1384,
@@ -542,9 +819,10 @@ namespace motion {
         //   between the HM7 bind-loop and the Player-level progress sub_6D2A54).
         //   Populated by the clampControl builder EmoteEngine_buildClampControl
         //   @0x66EE5C (header base engine+496, finish._M_cur engine+528, 480B
-        //   block). The LIVE local model of this deque is the populated
-        //   MotionSnapshot::clampControls; this typed deque documents the binary's
-        //   element layout and is reserved for a future on-deque port.
+        //   block). The raw builder populates this owning deque and binder
+        //   sub_67C8A8 consumes it directly together with Engine HM7/mirror and
+        //   the raw HM3/+1040 timeline state; no MotionSnapshot clamp side path
+        //   remains.
         std::deque<EmoteClampControlEntry_Deque7> _clampControlDeque7;
         // +560..+639:deque #8 — Transition controllers (TYPE 7). Element =
         //   {EmoteVarController* ctl; ttstr label; uint8_t flag=1} (24B).
@@ -569,26 +847,27 @@ namespace motion {
         //   elem.label. The label/HM6 key are both the PSB "var_loop" value.
         std::deque<EmoteLoopControlEntry_Deque10> _lookupCurvesDeque10;
 
-        // +800..+823: std::vector<tTJSVariant*> (a1[100..102]).
-        //   ctor zeroes begin/end/cap; dtor releases each elem + delete buffer.
-        detail::VariantPtrVector _variantVector800; // +800
+        // +800..+823: std::vector<ttstr> (a1[100..102]). Populated by
+        //   buildMirrorControl@0x66F364 from variableMatchList. Each push copies
+        //   the ttstr ref; clear/dtor releases every element and the vector buffer.
+        std::vector<ttstr> _variableMatchList800; // +800
 
-        // +824..+879: HM#1 unordered_map<ttstr,V> (libkrkr2.so +824).
-        //   ctor: M_next_bkt(this+107,10); dtor releases key ttstr only.
-        detail::EmoteScalarMap _scalarHM1_824; // +824
+        // +824..+879: HM#1 unordered_set<ttstr>, mirror positive cache.
+        detail::EmoteMirrorMatchSet _mirrorMatchSetHM1_824; // +824
 
-        // +880..+935: HM#2 unordered_map<ttstr,V> (libkrkr2.so +880).
-        detail::EmoteScalarMap _scalarHM2_880; // +880
+        // +880..+935: HM#2 unordered_set<ttstr>, mirror negative cache.
+        detail::EmoteMirrorMissSet _mirrorMissSetHM2_880; // +880
 
         // +936..+991: HM#3 unordered_map<ttstr,EmoteHM3Value> (libkrkr2.so +936).
         //   dtor walks nodes via sub_683E40(node+1): distinct compound value.
         detail::EmoteHM3Map _compoundHM3_936; // +936
 
-        // +992..+1015 / +1016..+1039 / +1040..+1063: 3 std::vector<tTJSVariant*>
-        //   (a1[124..]). ctor memset(this+124,0,0x48); dtor releases+deletes.
-        detail::VariantPtrVector _variantVector992;  // +992
-        detail::VariantPtrVector _variantVector1016; // +1016
-        detail::VariantPtrVector _variantVector1040; // +1040
+        // +992/+1016/+1040: vector<ttstr>. buildTimelineControl clears/fills
+        //   normal(+992) and diff(+1016). +1040 holds active timeline labels and
+        //   is consumed by sub_67C560; the builder deliberately leaves it intact.
+        std::vector<ttstr> _timelineLabels992;        // +992
+        std::vector<ttstr> _timelineDiffLabels1016;   // +1016
+        std::vector<ttstr> _activeTimelineLabels1040; // +1040
 
         // +1064: Player* (a1[133]) — independent 1384B heap object.
         //   `v13 = operator new(0x568); Player_ctor(v13)`.
@@ -630,16 +909,20 @@ namespace motion {
         float _windAmp   = 0.f; // +1144
         float _windFreqX = 0.f; // +1148
         float _windFreqY = 0.f; // +1152
-        // +1156..+1158: remaining bytes of the original a1[143] OWORD region;
-        //   zeroed in ctor, no reads observed. Kept as filler for documentation.
-        uint8_t _stateRegion_1156_1158[1159 - 1156] = {}; // 3B
+        // sub_671DB0 writes the external requested mirror at +1156 and compares
+        // it with the metadata base at +1157. applyMetadata@0x67D4D0 writes the
+        // latter before deriving +1158 and forwarding it to Player root flip.
+        bool _mirrorRequested = false;
+        bool _mirrorBase = false;
+        bool _mirrorChanged = false;
 
         // +1159: byte syncWaiting — read by progress physics-only pass
         //   (dt!=0 && !syncWaiting@1159).
         bool _syncWaiting = false; // +1159
 
-        // +1160: int32_t = 1 (a1[290]). _guess: state seed.
-        int32_t _scalarField_1160_1 = 1; // +1160
+        // +1160: selectorEnabled byte. ctor seeds 1; getter @0x681F8C reads one
+        // byte; setter @0x681F94 writes one byte to 1 then calls sub_670D1C.
+        bool _selectorEnabled = true; // +1160
 
         // +1161: byte — the setVariable (0x671228) enqueue accumulate flag,
         //   passed as a2 to every case 4/5/6/7/8 enqueue function (sub_6638B0
@@ -678,20 +961,23 @@ namespace motion {
         // +1200: double = 1.0 (a1[150]).
         double _scalarField_1200_1d = 1.0; // +1200
 
-        // +1208 / +1228 / +1248: 3 small objects, each freed by sub_A0F778
-        //   (20B stride). PLATFORM_BOUNDARY: payload semantics not reversed;
-        //   kept as raw filler. TODO(P-B): identify the 20B object type.
-        uint8_t _smallObj1208[20] = {}; // +1208
-        uint8_t _smallObj1228[20] = {}; // +1228
-        uint8_t _smallObj1248[24] = {}; // +1248 (pad to +1272 map boundary)
+        // +1208/+1228/+1248 are three owning tTJSVariant fields. resetMetadata
+        // @0x669798 creates an Array in +1208, CopyRefs the same Array into
+        // +1228, then creates a Dictionary in +1248. buildVariableList @0x66A530
+        // replaces +1228 with a fresh label Array and fills +1248 with per-label
+        // frame Arrays. removeVariableLabel @0x66E248 calls +1228.remove(label).
+        // Use ordinary C++ fields; ARM64 offsets are provenance only.
+        tTJSVariant _variableLabelsBase;   // +1208 — owning Array dispatch
+        tTJSVariant _variableLabels;       // +1228 — owning Array dispatch
+        tTJSVariant _variableFrameLists;   // +1248 — owning Dictionary dispatch
 
-        // +1272..+1327: HM#4 unordered_map<ttstr,V> (libkrkr2.so +1272).
-        //   dtor walks the +1288 node chain releasing key ttstr.
-        detail::EmoteScalarMap _scalarHM4_1272; // +1272
+        // +1272..+1327: HM#4 unordered_set<ttstr> (libkrkr2.so +1272).
+        //   Nodes are 24B {next,key,cached hash}; clear/dtor releases key ttstr.
+        detail::EmoteInstantVariableSet _instantVariableSetHM4_1272; // +1272
 
-        // +1328..+1383: HM#5 unordered_map<ttstr,V> (libkrkr2.so +1328).
-        //   dtor runs sub_68577C(this+1328) before walking its node chain.
-        detail::EmoteScalarMap _scalarHM5_1328; // +1328
+        // +1328..+1383: HM#5 unordered_map<ttstr,EmoteVariableRange>.
+        //   Its dedicated 64B node allocator/clearer are 0x6880A8/0x68577C.
+        detail::EmoteVariableRangeMap _variableRangesHM5_1328; // +1328
 
         // +1384..+1439: HM#6 unordered_map<ttstr,V> (libkrkr2.so +1384).
         detail::EmoteVarRefMap _scalarHM6_1384; // +1384 — {type,index} VarRef map
@@ -743,9 +1029,6 @@ namespace motion {
         double _rot = 0.0;
         double _coordX = 0.0;
         double _coordY = 0.0;
-        bool _mirrorBase = false;
-        bool _mirrorRequested = false;
-        bool _mirrorChanged = false;
         tjs_int _color = 0xFFFFFF;
     };
 

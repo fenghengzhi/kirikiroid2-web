@@ -1,11 +1,23 @@
 ---
 name: m1-framestep-rootstream-verdict
-description: M1 帧步进/frameProgress/timeline/progress fresh-decompile 裁决(2026-06-07 全面复核 14 函数,SUPERSEDES 06-05/06-06)。node-walk off-by-one(旧R-2/G-OByOne)与 rewind-root反向段(旧R-1)两条 open gap 已 FALSIFIED=本地正确。param-ramp(be77533 multimap)+pruneHM3+sub_6B9650 heapResult+initNodeTimeline tail 全 byte-verified ✅。仅余 3 inert tail/边界。
+description: M1 帧步进历史裁决；R-1/R-2 已关闭，2026-07-19 helper 边界已方向拆分；不得外推为整个 psbfile/motionplayer 无缺口
 metadata:
   type: project
 ---
 
 2026-06-07 READ-ONLY 全面复核(fresh decompile 14 函数: 0x6C106C/0x6B6ADC/0x6B9A3C/0x6B86C8/0x6B7E44/0x6B64AC/0x6B9650/0x6B531C/0x6B1ECC/0x6C4668)。**SUPERSEDES 06-05 与 06-06 verdict 的 R-1/R-2/G-OByOne 三条 open gap —— 全部 FALSIFIED。**
+
+**CURRENT CORRECTION 2026-07-19:** R-1 的“反向 root 已存在”结论仍成立，但本地
+实现名已从合并的 `seekRootContentStreamLike_0x6B6ADC` 改为独立的
+`rewindRootContentStreamLike_0x6B9A3C`，以复原二进制函数边界。旧符号引用仅是历史。
+本文件末尾“无 REAL open 缺口”也只覆盖当时帧步进审计范围，不能用于宣称整个
+psbfile/motionplayer 已 100% 复原；当前仍有 snapshot 兼容状态与
+2026-07-19 fresh decompile 0x6B9A3C/0x6B7E44/0x6B64AC/0x6B86C8 后确认
+`progressSeekNodeSlotsLike_0x6C106C` 的反向 node-layer 帧槽路径已闭合；旧“未闭合”结论
+是实现更新后未同步的陈旧记录。反向四流、node+8 分流、0x6BA1CC 单向后退与 reseek
+全节点双槽播种均已接线；同时删除共享 seek 中二进制不存在的 lazy seed 兜底。
+`initPhysics` 已于 2026-07-19 由 `0x67FAC8` 注册证据纠正：它直接绑定已完成的
+`EmoteEngine_applyMetadata_buildControllers@0x67D4D0`，不再是 open physics 项。
 
 **★ 两条旧 open gap 经独立交叉核实证伪(强断言纠正):**
 
@@ -33,10 +45,12 @@ metadata:
 
 **advanceNodeFrames(0x6B7E44)✅**:seek target=*(node+8)+40=parameterEntry->value(CONFIRMED 经 initNodeTimeline 0x6B6500 交叉核实)。本地 advanceNodeFramesLike→advanceNodeFrameSelectionLike(node+8 split:param→无事件,非param→inline seek 带事件)。forward break `cur.fi>=count-2 || target<other.time`、corrective-backward、tail(node+44=1 / 2×mergeFrameContent gate node+346/+882 / findSource gate node+1996|mask)全对齐。
 
-**OPEN(全部 inert / 平台边界,无 REAL 缺口,按严重度):**
+**OPEN（旧清单已被后续 raw-frame/source 复原部分取代）:**
 - O-1(低,inert):entry 0x6C10A4 `if(+482)initEmoteMotion(2)` 本地 frameProgress 无。+482==0(非 emote-edit)恒 inert。
 - O-2(低,未建模字段):entry 0x6C1088 `*(DWORD)(+1152)=0` 本地 Player 无 +1152 字段(grep 确认 +1152 全是 EmoteEngine._windFreqY,异对象)。不臆造,标注。
-- O-3(低,平台边界):pruneHM3 loop2 matched 分支内 Motion_Player_findSource(0x6b85a0,gate nodeType==0 && slot+344==0)src-dispatch DEFERRED——本地 src 建模为 std::string 非 iTJSDispatch2*/icon pair,与 V+44 srcDispatch 同边界。
+- O-3 CORRECTED/DONE 2026-07-18: live ClipSlot 已保存 raw src/icon ttstr/variant，
+  pruneHM3 的 findSource 调用链可进入真实 resolver；RM mapped record 的 Win/KRKR
+  纹理表也已复原。Win/spec=2 与 KRKR/spec=1 均已走 raw PSB；source 像素导航不再是帧步进的 open gap。
 - O-4(低,DEFERRED 但已记):sub_697D34 chainDispatches build(0x6c48bc,bindParameterValue HM1 首插)纯 TJS-dispatch scope 解析,无 port consumer(getVariable 读 HM2 非 HM1 链)。本地 chainSegments 用 splitScopeSegmentsLike 建(:513),仅 dispatch 句柄那半 DEFERRED。
 - O-5 CORRECTED/DONE 2026-07-12: 0x671764 的 this 是 EmoteEngine（0x67D060: X0=engine/W1=0/V0=original dt），不是 Player。frameProgress 错位调用已删除，EmoteEngine::progress 调用已恢复；DRACU START 仍卡死，故另有第二触发点。
 

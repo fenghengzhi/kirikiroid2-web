@@ -8,7 +8,7 @@
 - [Player field collisions](player_field_collisions.md) — 5 处 binary 偏移有 ≥2 port 字段(H1+480/H2+1120/H3+481/H4+1099/H5+1156); H4 是本审计新发现
 - [Player ctor/dtor lifecycle](player_ctor_dtor_lifecycle.md) — 本地 ctor=成员初始化器+dtor=default(RAII) vs 二进制 0x6CED30 手写扁平init/0x6CFADC 有序teardown; ctor 多 parentPlayer 参+ResourceManager*非dispatch
 - [EmotePlayer file topology](emoteplayer_file_topology.md) — 类族文件拓扑; 无 EmotePlayerImpl/PrimaryEmotePlayer/MotionLayerMgr; 4类3文件; 二进制无 PrimaryEmotePlayer
-- [EmoteObject 40B topology](emoteobject_40b_topology.md) — Gap2权威: EmoteObject(+0 RM232B/+8 Engine/+16 vector<variant*>); 本地缺RM字段+_module应是vector; getVariable↔setVariable桥=bind-loop stub(sub_67C560/67C6B0)
+- [EmoteObject 40B topology](emoteobject_40b_topology.md) — 2026-07-13 纠正: EmoteObject(+0 ResourceManager*/+8 EmoteEngine*/+16 vector<ttstr> paths)；单一堆 RM 由 sticky adaptor 引用；sub_67C560/67C6B0 已是 Engine raw live 链，非 stub
 - [Player local vs binary audit](player_local_vs_binary_audit.md) — 本地 Player.h:116 全面审计结论: 字段源码序/全std容器/无vtable✅/RAII ctor; ~35%对齐 + Top5未对齐项
 - [RM layer-id container](rm_layerid_container.md) — RM layer-id=std::set<uint>@+168+counter@+216(ctor 0x6A88CC);无 name maps;requireLayerIdForName 本地发明(ForName 0命中);3站点 dispatch FuncCall numparams=0
 - [P3-B ownership/dispatch-in audit](p3b_ownership_dispatchin_audit.md) — P3-B后裁决:4HM=libstdc++✅/2处string→ttstr已retype✅/ctor单参dispatch收敛✅/RM set+RBtree✅/无硬凑pad;残留std::string maps是no-offset port-extra非HM误用

@@ -118,7 +118,7 @@ namespace {
         out << "{";
         out << "\"index\":" << flatIndex;
         out << ",\"label\":";
-        writeJsonString(out, node.layerName);
+        writeJsonString(out, narrow(node.layerName));
         out << ",\"nodeType\":" << node.nodeType;
         out << ",\"visible\":" << (accum.visible ? "true" : "false");
         out << ",\"active\":" << (accum.active ? "true" : "false");
@@ -148,7 +148,7 @@ namespace {
         out << ",\"drawnThisFrame\":"
             << (node.drawnThisFrame ? "true" : "false");
         out << ",\"currentImage\":";
-        writeJsonString(out, node.interpolatedCache.src);
+        writeJsonString(out, narrow(node.activeSlot().srcValue));
         out << "}";
     }
 

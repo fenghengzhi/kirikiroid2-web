@@ -34,7 +34,7 @@ ctor=0x67E38C, progress=0x67D01C, size=0x5D8=1496B, **无 vtable** (POD)
 | 1112 | EmoteVarController* 0x80 count=2 | Bust #1 target |
 | 1120 | EmoteVarController* 0x80 count=2 | Bust #2 target |
 | 1128-1167 | OWORD ×2 zeroed | 矩阵字段 |
-| 1160 | int32_t=1 | (未知) |
+| 1160 | byte bool=1 | selectorEnabled；getter 0x681F8C，setter 0x681F94 后调用 0x670D1C |
 | 1162 | **byte _dirty** | progress 主循环 dirty check（本地误放 Player::_emoteDirty）|
 | 1168 | double | scale 分母 (_guess) |
 | 1184 | double | bust chain #1 spring const |

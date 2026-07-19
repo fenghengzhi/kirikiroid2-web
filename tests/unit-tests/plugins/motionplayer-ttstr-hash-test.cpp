@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <unordered_map>
+#include <vector>
 
 #include "tjs.h"
 #include "tjsString.h"
@@ -14,7 +15,6 @@
 #include "motionplayer/internal/player_containers.h"
 #include "motionplayer/internal/ttstr_hash.h"
 
-using motion::detail::DispatchAliasMap;
 using motion::detail::LabelValueMap;
 using motion::detail::ttstr_equal;
 using motion::detail::ttstr_hash;
@@ -107,65 +107,51 @@ TEST_CASE("LabelValueMap: stores and retrieves double values",
     REQUIRE(m.find(ttstr(u"missing")) == m.end());
 }
 
-TEST_CASE("DispatchAliasMap: stores and retrieves non-owning pointers",
-          "[motionplayer][ttstr_hash][container]") {
-    DispatchAliasMap m;
-    int placeholder_a = 0;
-    int placeholder_b = 0;
-    auto *fake_a = reinterpret_cast<iTJSDispatch2 *>(&placeholder_a);
-    auto *fake_b = reinterpret_cast<iTJSDispatch2 *>(&placeholder_b);
-
-    m[ttstr(u"slot.a")] = fake_a;
-    m[ttstr(u"slot.b")] = fake_b;
-
-    REQUIRE(m.size() == 2);
-    REQUIRE(m.find(ttstr(u"slot.a"))->second == fake_a);
-    REQUIRE(m.find(ttstr(u"slot.b"))->second == fake_b);
-
-    m.erase(ttstr(u"slot.a"));
-    REQUIRE(m.find(ttstr(u"slot.a")) == m.end());
-    REQUIRE(m.size() == 1);
-}
-
 TEST_CASE("EvalCascadeState: default-constructed destructor is safe",
           "[motionplayer][value_struct]") {
     using motion::detail::EvalCascadeState;
     EvalCascadeState s;
-    REQUIRE(s.mainDispatch == nullptr);
-    REQUIRE(s.chainDispatches.empty());
-    REQUIRE(s.heapResult == nullptr);
-    // Destructor runs on scope exit; nullptr fast-paths must not crash.
+    REQUIRE(s.keyCopy == ttstr());
+    REQUIRE(s.chainSegments.empty());
+    REQUIRE(s.writeVal == 0.0);
+    REQUIRE(s.weight == 0.0);
+    REQUIRE(s.heapResult.empty());
 }
 
-TEST_CASE("EvalCascadeState: move construction transfers ownership",
+TEST_CASE("EvalCascadeState: move construction transfers vectors",
           "[motionplayer][value_struct]") {
     using motion::detail::EvalCascadeState;
+    int placeholder = 0;
+    auto *fakeNode = reinterpret_cast<motion::detail::MotionNode *>(&placeholder);
     EvalCascadeState src;
-    src.heapResult = ::operator new(16);
     src.keyCopy = ttstr(u"cascade.key");
-    void *owned = src.heapResult;
+    src.chainSegments.push_back(ttstr(u"scope"));
+    src.heapResult.push_back(fakeNode);
 
     EvalCascadeState dst(std::move(src));
-    REQUIRE(dst.heapResult == owned);
-    REQUIRE(src.heapResult == nullptr);
     REQUIRE(dst.keyCopy == ttstr(u"cascade.key"));
-    // dst destructor will free owned; src destructor is now a no-op for heap.
+    REQUIRE(dst.chainSegments == std::vector<ttstr>{ttstr(u"scope")});
+    REQUIRE(dst.heapResult ==
+            std::vector<motion::detail::MotionNode *>{fakeNode});
 }
 
-TEST_CASE("EvalCascadeState: move assignment transfers ownership",
+TEST_CASE("EvalCascadeState: move assignment transfers vectors",
           "[motionplayer][value_struct]") {
     using motion::detail::EvalCascadeState;
+    int placeholder = 0;
+    auto *fakeNode = reinterpret_cast<motion::detail::MotionNode *>(&placeholder);
     EvalCascadeState src;
-    src.heapResult = ::operator new(8);
     src.keyCopy = ttstr(u"alpha");
-    void *owned = src.heapResult;
+    src.chainSegments.push_back(ttstr(u"alpha"));
+    src.heapResult.push_back(fakeNode);
 
     EvalCascadeState dst;
     dst = std::move(src);
 
-    REQUIRE(dst.heapResult == owned);
-    REQUIRE(src.heapResult == nullptr);
     REQUIRE(dst.keyCopy == ttstr(u"alpha"));
+    REQUIRE(dst.chainSegments == std::vector<ttstr>{ttstr(u"alpha")});
+    REQUIRE(dst.heapResult ==
+            std::vector<motion::detail::MotionNode *>{fakeNode});
 }
 
 TEST_CASE("EvalCascadeMap: stores EvalCascadeState by ttstr key",
@@ -175,26 +161,30 @@ TEST_CASE("EvalCascadeMap: stores EvalCascadeState by ttstr key",
     EvalCascadeMap m;
     {
         EvalCascadeState s;
-        s.heapResult = ::operator new(8);
+        int placeholder = 0;
+        s.heapResult.push_back(
+            reinterpret_cast<motion::detail::MotionNode *>(&placeholder));
         m.emplace(ttstr(u"first"), std::move(s));
     }
     REQUIRE(m.size() == 1);
     REQUIRE(m.find(ttstr(u"first")) != m.end());
-    REQUIRE(m.find(ttstr(u"first"))->second.heapResult != nullptr);
+    REQUIRE(m.find(ttstr(u"first"))->second.heapResult.size() == 1);
     REQUIRE(m.find(ttstr(u"missing")) == m.end());
-    // Map destructor releases the EvalCascadeState heap on scope exit.
+    // MotionNode pointers are non-owning; destruction only frees vector backing.
 }
 
-TEST_CASE("VariableLabelScope: default flags are all true",
+TEST_CASE("VariableLabelScope: default track state matches binary seeds",
           "[motionplayer][value_struct]") {
     using motion::detail::VariableLabelScope;
     VariableLabelScope s;
-    REQUIRE(s.flagActive);
-    REQUIRE(s.flagValidated);
-    REQUIRE(s.flagField124);
     REQUIRE(s.cascadeKey == ttstr());
-    REQUIRE(s.labelName == ttstr());
-    REQUIRE(s.scope == ttstr());
+    REQUIRE(s.activeSlotCursor == 0);
+    REQUIRE(s.value == 0.0);
+    REQUIRE(s.frameSource.Type() == tvtVoid);
+    REQUIRE(s.slot[0].typeZeroFlag);
+    REQUIRE(s.slot[1].typeZeroFlag);
+    REQUIRE_FALSE(s.slot[0].merged);
+    REQUIRE_FALSE(s.slot[1].merged);
 }
 
 TEST_CASE("VariableLabelScopeDeque: append-and-iterate preserves order",
@@ -205,13 +195,13 @@ TEST_CASE("VariableLabelScopeDeque: append-and-iterate preserves order",
     for (int i = 0; i < 5; ++i) {
         VariableLabelScope s;
         s.cascadeKey = ttstr(u"k") + ttstr(i);
-        s.labelName = ttstr(u"label_") + ttstr(i);
+        s.value = static_cast<double>(i);
         d.push_back(std::move(s));
     }
     REQUIRE(d.size() == 5);
     REQUIRE(d.front().cascadeKey == ttstr(u"k0"));
     REQUIRE(d.back().cascadeKey == ttstr(u"k4"));
-    REQUIRE(d[2].labelName == ttstr(u"label_2"));
+    REQUIRE(d[2].value == 2.0);
 }
 
 TEST_CASE("HeapRef: default empty, frees on destruction, transfers on move",
@@ -279,19 +269,22 @@ TEST_CASE("PerNodeLayerState: default-construct fields are zero / empty",
     using motion::detail::PerNodeLayerState;
     PerNodeLayerState s;
     REQUIRE(s.nodeType == 0);
-    REQUIRE(s.field_28 == 0);
-    REQUIRE(s.field_52 == 0);
-    REQUIRE(s.sourceRect_x == 0);
-    REQUIRE(s.sourceRect_y == 0);
-    REQUIRE(s.sourceRect_w == 0);
-    REQUIRE(s.sourceRect_h == 0);
-    REQUIRE(s.field_96 == 0);
-    REQUIRE(s.qword_120 == 0);
-    REQUIRE(s.skipFlag_128 == 0);
-    REQUIRE(s.flag_129 == 0);
-    REQUIRE(s.qword_168 == 0);
+    REQUIRE(s.contentMask == 0);
+    REQUIRE(s.doneFlag == 0);
+    REQUIRE(s.blendMode == 16);
+    REQUIRE(s.ox == 0.0);
+    REQUIRE(s.oy == 0.0);
+    REQUIRE(s.opacity == 255);
+    REQUIRE(s.coordX == 0.0);
+    REQUIRE(s.coordY == 0.0);
+    REQUIRE(s.coordZ == 0.0);
+    REQUIRE(s.flipX == 0);
+    REQUIRE(s.flipY == 0);
+    REQUIRE(s.angle == 0.0);
+    REQUIRE(s.scaleX == 1.0);
+    REQUIRE(s.scaleY == 1.0);
     REQUIRE_FALSE(static_cast<bool>(s.dispatch_8));
-    REQUIRE_FALSE(static_cast<bool>(s.dispatch_44));
+    REQUIRE_FALSE(static_cast<bool>(s.srcDispatch_44));
     REQUIRE_FALSE(static_cast<bool>(s.dispatch_288));
     REQUIRE_FALSE(static_cast<bool>(s.dispatch_392));
     REQUIRE_FALSE(static_cast<bool>(s.dispatch_504));
@@ -325,8 +318,8 @@ TEST_CASE("PerNodeLayerState: move construction transfers heap ownership",
     src.heap_320.reset(::operator new(64));
     src.heap_584.reset(::operator new(128));
     src.nodeType = 3;
-    src.sourceRect_w = 1920;
-    src.ttstr_544 = ttstr(u"node.path.snap");
+    src.coordX = 1920.0;
+    src.ttstr_560 = ttstr(u"node.path.snap");
 
     void *h320 = src.heap_320.get();
     void *h584 = src.heap_584.get();
@@ -337,8 +330,8 @@ TEST_CASE("PerNodeLayerState: move construction transfers heap ownership",
     REQUIRE(src.heap_320.get() == nullptr);
     REQUIRE(src.heap_584.get() == nullptr);
     REQUIRE(dst.nodeType == 3);
-    REQUIRE(dst.sourceRect_w == 1920);
-    REQUIRE(dst.ttstr_544 == ttstr(u"node.path.snap"));
+    REQUIRE(dst.coordX == 1920.0);
+    REQUIRE(dst.ttstr_560 == ttstr(u"node.path.snap"));
 }
 
 TEST_CASE("PerNodeLayerStateMap: emplace and lookup by node-path key",
@@ -349,8 +342,8 @@ TEST_CASE("PerNodeLayerStateMap: emplace and lookup by node-path key",
     {
         PerNodeLayerState s;
         s.nodeType = 4;
-        s.skipFlag_128 = 1;
-        s.ttstr_672 = ttstr(u"variable.snap.head");
+        s.flipX = 1;
+        s.ttstr_560 = ttstr(u"variable.snap.head");
         s.heap_320.reset(::operator new(48));
         m.emplace(ttstr(u"root/group/leaf"), std::move(s));
     }
@@ -358,8 +351,8 @@ TEST_CASE("PerNodeLayerStateMap: emplace and lookup by node-path key",
     auto it = m.find(ttstr(u"root/group/leaf"));
     REQUIRE(it != m.end());
     REQUIRE(it->second.nodeType == 4);
-    REQUIRE(it->second.skipFlag_128 == 1);
-    REQUIRE(it->second.ttstr_672 == ttstr(u"variable.snap.head"));
+    REQUIRE(it->second.flipX == 1);
+    REQUIRE(it->second.ttstr_560 == ttstr(u"variable.snap.head"));
     REQUIRE(static_cast<bool>(it->second.heap_320));
     REQUIRE(m.find(ttstr(u"root/missing")) == m.end());
     // Map dtor releases all PerNodeLayerState entries on scope exit.

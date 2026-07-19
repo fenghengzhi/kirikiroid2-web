@@ -9,17 +9,6 @@
 using namespace motion::internal;
 
 namespace {
-    std::string joinPlayingLabels(const std::vector<std::string> &labels) {
-        std::string joined;
-        for(const auto &timelineLabel : labels) {
-            if(!joined.empty()) {
-                joined += ",";
-            }
-            joined += timelineLabel;
-        }
-        return joined.empty() ? std::string("<none>") : joined;
-    }
-
     std::string shortTJSStackTrace(tjs_int limit = 8) {
         ttstr stack = TJSGetStackTraceString(limit, TJS_W(" <- "));
         return stack.AsStdString();
@@ -78,10 +67,7 @@ namespace motion {
         }
 
         nativeInstance->_drawAffineMatrix = matrix;
-        const auto motionPath =
-            nativeInstance->_activeMotion
-                ? nativeInstance->_activeMotion->path
-                : std::string{};
+        const auto motionPath = nativeInstance->matchedMotionPath();
         const bool isIdentity =
             matrix[0] == 1.0 && matrix[1] == 0.0 && matrix[2] == 0.0 &&
             matrix[3] == 1.0 && matrix[4] == 0.0 && matrix[5] == 0.0;
@@ -137,19 +123,15 @@ namespace motion {
     // wrapper; TJS result/numparams/objthis are intentionally not part of this
     // boundary.
     void Player::drawCompat(tTJSVariant *arg) {
-        const auto motionPath =
-            _activeMotion
-                ? _activeMotion->path
-                : std::string{};
+        const auto motionPath = matchedMotionPath();
         iTJSDispatch2 *paramObj =
             (arg && arg->Type() == tvtObject) ? arg->AsObjectNoAddRef() : nullptr;
         detail::logoChainTraceLogf(
             motionPath, "drawCompat.enter", "0x6D5FB8", _clampedEvalTime,
-            "argType={} targetObj={} d3dMode={} allplaying={} playingLabels={} nodes={} stack={}",
+            "argType={} targetObj={} d3dMode={} allplaying={} nodes={} stack={}",
             arg ? static_cast<int>(arg->Type()) : -1,
             static_cast<const void *>(paramObj), _d3dDrawMode ? 1 : 0,
-            _allplaying ? 1 : 0, joinPlayingLabels(_playingTimelineLabels),
-            _nodes.size(), shortTJSStackTrace());
+            _allplaying ? 1 : 0, _nodes.size(), shortTJSStackTrace());
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::MotionTraceRenderDrawScope renderTrace(this, arg, paramObj);
 #endif
@@ -242,7 +224,7 @@ namespace motion {
         // render items first, then branches on d3dDrawMode and only then hands
         // a copied target variant to Player_renderToCanvas_guess @ 0x6C7440.
         ensureMotionLoaded();
-        if(!_activeMotion) {
+        if(!hasMotionContent()) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
             renderTrace.setRoute("no_motion");
 #endif

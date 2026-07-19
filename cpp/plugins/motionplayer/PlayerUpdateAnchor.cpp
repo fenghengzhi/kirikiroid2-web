@@ -58,16 +58,17 @@ namespace motion {
 
             // Damping exponent — byte-verified disasm @0x6C0884-0x6C08B8:
             //   v27     = (*a1+592)/(*a1+1168) = _deltaTime / _speedMul
-            //   dampPow = dt*(v27*dt/v27)/v27/60.0/anchorDamping,  dt = _deltaTime
+            //   dampPow = dt*(v27*dt/v27)/v27/60.0/feedbackTimespan,
+            //   dt = _deltaTime
             // The redundant (v27*dt/v27) mul/div is preserved verbatim — FP is
             // not associative, so it is kept to reproduce the exact value the
             // binary computes (it does NOT collapse to dt). The binary divides by
-            // anchorDamping directly: the former max(.,0.001) guard and the
+            // feedback.timespan directly: the former max(.,0.001) guard and the
             // _frameLastTime numerator were both port inventions.
             const double dt = _deltaTime;
             const double v27 = _deltaTime / _speedMul;
             const double dampPow =
-                dt * (v27 * dt / v27) / v27 / 60.0 / an.anchorDamping;
+                dt * (v27 * dt / v27) / v27 / 60.0 / an.feedbackTimespan;
 
             // Angle damping (0x6C08C0..0x6C08E0)
             double angle = an.accumulated.angle;
@@ -146,7 +147,7 @@ namespace motion {
                 // The blend byte the binary reads is *(node + 536*activeSlotIndex + 44)
                 // (0x6c0a80/0x6c0aac with slot index *(node+1392) @0x6c06d4) — i.e. the
                 // ACTIVE clip slot's per-slot blendMode (slot0@node+320, slot1@node+856,
-                // +44 = ClipSlot::blendMode), NOT the node-level interpolatedCache mirror.
+                // +44 = ClipSlot::blendMode). There is no node-level blend mirror.
                 // Read the active slot directly to match the binary's data source.
                 const bool isDefaultBlend =
                     (an.activeSlot().blendMode & 0xF0) == 0x10;

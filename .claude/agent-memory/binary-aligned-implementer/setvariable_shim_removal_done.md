@@ -5,6 +5,9 @@ metadata:
   type: project
 ---
 
+> **2026-07-19 纠正：** 文中的 `_activeMotion->controllerBindings` 只描述已删除的历史
+> shim；当前 Player 已无 `_activeMotion`，live controller owner 在 EmoteEngine raw 容器。
+
 # setVariable Player-side double-write shim REMOVED (2026-06-03)
 
 ## What was removed (5 call-sites + 4 functions)
@@ -24,7 +27,7 @@ metadata:
 - **getVariable@0x533E1C** reads inner Player(*(a1+1064)) HM1/HM4/HM2 — DIFFERENT object from EmoteEngine HM7(+1440) that 0x671228 writes. Disjoint maps; bridge = progress bind-loop ONLY (G2-C).
 
 ## 2 extra in-Player callers reconciled (were calling the dead 4-arg setVariable)
-- **PlayerCore.cpp syncSelectorControlsLike_0x670D1C** (l~955): binary sub_670D1C iterates selector deque#9 (engine+656) and for each enabled entry calls `EmoteSelectorController_applySelection(ctl,0,0.0,0.0)` DIRECTLY @0x670e1c (NOT setVariable). Local now iterates `_engineBack->_vectorVarDeque9`, sets `ctl->selectedIndex=0`, calls applySelection direct.
+- **2026-07-18 follow-up:** Player still retains a decoded-only helper named `syncSelectorControlsCompatibilityPartial`, but EmoteEngine now separately contains the complete raw `syncSelectorControlsLike_0x670D1C`, including +1208/+1228 Array state, gates, both reset branches and target traversal, and it is wired at metadata tail + selectorEnabled setter. Do not confuse the two receivers.
 - **PlayerCore.cpp Player::unserialize** (l~1252): variable restore → `writeEvalResultValueLike_0x6C4668(narrow(label), value)` (Player HM1/HM2 = the map serialize reads via getVariable). Faithful = 0x6C4668.
 
 ## NEW GAP — RESOLVED 2026-06-03 (see progress_routing_engine_g2c_live.md)

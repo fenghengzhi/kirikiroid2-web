@@ -77,7 +77,9 @@ variableKeys(#49): 二进制 = EmotePlayer_getVariableKeys_e1208（读 EmoteEngi
 本地 `player().getVariableKeys()`（读 _activeMotion->variableLabels）。头注释已标 open，数据源不同。⚠️ 已知开口。
 
 modifyRoot(#38): 二进制 sub_681F0C 置 Player+1064→+200→+1584=1；本地 STUB_WARN。⚠️ 已标 open。
-initPhysics(#4): 二进制 sub_67D4D0 物理构建；本地 STUB_WARN。⚠️ 已标 open。
+initPhysics(#4): **2026-07-19 纠正并关闭。** 注册点 `0x67FCA4` 的字面名称直接绑定
+`EmoteEngine_applyMetadata_buildControllers@0x67D4D0`；它接收 metadata variant，
+不是独立物理初始化。Web 已调用同一 raw metadata builder。
 activateSelectorTarget: 不在二进制（正确未暴露）；本地残留死 C++ STUB，无 NCB 绑定 — 无害。
 
 ---
@@ -164,7 +166,8 @@ EmoteEngine 持 `Player* _player` 手动 delete 一致。生命周期六维无�
 - sub_681E94 / sub_681EA0（time getter）: ✅ 已确认读 Player+1128/+1136 RAW。
 - EmotePlayer_getVariableKeys_e1208（variableKeys getter，读 engine+1208）: ❓ 未深入，本地
   已标 open（数据源不同）。
-- sub_681F0C (modifyRoot) / sub_67D4D0 (initPhysics): ❓ 本地 STUB，已标 open。
+- `sub_681F0C`（modifyRoot）是本轮历史 open；`sub_67D4D0` 已于 2026-07-19
+  纠正为 `initPhysics` 字面入口所绑定的 metadata/controller builder，并已接入本地。
 
 ---
 
@@ -182,7 +185,8 @@ EmoteEngine 持 `Player* _player` 手动 delete 一致。生命周期六维无�
    （property/method 交错），与 EmotePlayer 块的严格顺序看齐。
 4. **(P3 ⚠️) finalize 平台边界注释**：在 EmotePlayer NCB 块补 `// PLATFORM_BOUNDARY: finalize
    由 ncbind 框架提供，对应 binary classInit 0x6862C8 noop`。
-5. 既有 open（variableKeys 数据源 / modifyRoot +1584 flag / initPhysics 物理构建）保留待移植，
+5. 历史 open（variableKeys 数据源 / modifyRoot +1584 flag）需结合后续主审计；
+   `initPhysics` 已证实不是独立物理构建缺口，
    头注释已标。
 
 ## 9. IDB 改动（本 session）

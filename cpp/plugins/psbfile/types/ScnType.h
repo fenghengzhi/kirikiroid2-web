@@ -10,9 +10,9 @@ namespace PSB {
     public:
         PSBType getPSBType() override { return PSBType::Scn; }
 
-        bool isThisType(const PSBFile &psb) override;
+        bool isThisType(const DecodedPSBFile &psb) override;
 
         std::vector<std::unique_ptr<IResourceMetadata>>
-        collectResources(const PSBFile &psb, bool deDuplication) override;
+        collectResources(const DecodedPSBFile &psb, bool deDuplication) override;
     };
 }; // namespace PSB

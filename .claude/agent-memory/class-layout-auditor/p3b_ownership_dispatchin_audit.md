@@ -28,10 +28,11 @@ EmoteObject@0x67DBAC / RM@0x6A88CC / HM1destroy@0x6DD1A0 / HM3destroy@0x6DD06C).
   (EmoteWindParticle._pad[3]/EmoteWindEmitter._pad1544[3] 都是平台无关 POD 内部对齐,合法)。✅
 
 **残留偏差 (🟡 方法论框架内可接受 / port-extra,非架构错):**
-- Player 仍有多个 std::unordered_map<std::string,...>:_motionsByKey/_timelines/_disabledSelectorTargets/
+- Player 仍有多个 std::unordered_map<std::string,...>:_motionsByKey/_disabledSelectorTargets/
   _parameterEntryById/_evalResultListIndex/RuntimeSupport snapshot maps。这些是 MotionSnapshot 解析层
   + Web render-host 扩展,**二进制无对应偏移**(注释明确标注 no-offset/port extension),非 4 权威 HM 的误用。
-  属源码结构层 port-invention,不是容器选型错。
+  属源码结构层 port-invention,不是容器选型错。`_timelines/_playingTimelineLabels` 已在
+  2026-07-19 按 Player/EmoteEngine NCB owner 证据删除。
 - HM3(_perNodeLayerStateMap)/HM4(_variableSnapshotMap)/HM1(_evalCascadeMap) 容器选型对,但 DEFERRED 空
   (无 resetMotionState 消费者)。键已正确,populate 待 0x699510/0x6B2D40 移植。
 

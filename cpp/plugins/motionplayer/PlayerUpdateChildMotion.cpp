@@ -2,6 +2,7 @@
 // Split from PlayerUpdateLayers.cpp for maintainability.
 //
 #include "PlayerUpdateLayersInternal.h"
+#include "MotionDispatch.h"
 
 namespace motion {
     // Faithful 1:1 of libkrkr2.so sub_6F363C (vector<DeadChildMotionRenderItem>
@@ -40,12 +41,11 @@ namespace motion {
 
     void Player::updateLayersPhase3_MotionSubNode(double currentTime) {
         auto &nodes = _nodes;
-        const auto motionPath =
-            _activeMotion ? _activeMotion->path : std::string{};
+        const auto motionPath = matchedMotionPath();
         // Motion sub-node processing — aligned to sub_6BE0C0 (0x6BE0C0).
         // For each nodeType=3 (Motion) node, create/manage child Player instance.
-        // Only runs when !isEmoteMode (0x6BE104).
-        if (_isEmoteMode) return;
+        // 0x6BE104 reads Player+1092, the preview property.
+        if (_preview) return;
 
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &mn = nodes[i];
@@ -79,14 +79,14 @@ namespace motion {
             if (mn.activeSlot().done) {
                 // Binary cleanup at 0x6BE328..0x6BE354:
                 // 1. child._allplaying = false (player+1099)
-                // 2. sub_6C0DE8(child+1296) — resets timeline keyframe cache
+                // 2. sub_6C0DE8(child+1296) — clears the var-track deque
                 // 3. sub_6B56F8(child) — releases layer IDs for all non-root nodes,
                 //    clears nodes (except root), resets label map
                 // 4. Release TJS variants at child+984 and child+976
                 child._allplaying = false;
                 if (true) {
-                    // sub_6C0DE8: reset timeline keyframe cache
-                    child._timelines.clear();
+                    // sub_6C0DE8: rewind the var-track deque to empty.
+                    child._variableLabelScopes.clear();
                     // sub_6B56F8: release layer IDs for non-root nodes, keep
                     // the constructor-created root, and clear the label map.
                     child.resetNodeTreeForBuildLike_0x6B56F8();
@@ -95,9 +95,10 @@ namespace motion {
             }
 
             {
-                // Get motion source from clip slot (0x6BE364)
-                const auto &src = mn.activeSlot().src;
-                if (!src.empty()) {
+                // Player_updateLayers_childMotionPass @0x6BE364 reads the
+                // active slot+36 ttstr owner directly.
+                const ttstr &src = mn.activeSlot().srcValue;
+                if (!src.IsEmpty()) {
                     // Re-init gate: (v12 & 5) != 0 || mn.flags (0x6BE37C)
                     if ((v12 & 5) != 0 || (mn.flags & 0x01)) {
                         mn.flags |= 0x01; // mark as initialized (0x6BE388)
@@ -109,7 +110,7 @@ namespace motion {
                         // Resolve motion and play (0x6BE3B4..0x6BE46C)
                         // Aligned to libkrkr2.so sub_6BE0C0 + sub_697D34:
                         // split src by "/" into segments.
-                        // - 1 segment: setChara(segment[0]), then Player_play(raw src)
+                        // - 1 segment: setChara(segment[0]), then Player_play(slot+28 icon)
                         // - otherwise: setChara(segment[1]), then Player_play(segment[2])
                         //
                         // This is important for paths like
@@ -117,41 +118,28 @@ namespace motion {
                         // ignores the first "motion" prefix and uses
                         // chara="m2cheeseware_logo", motion="icon25".
                         {
-                            std::vector<std::string> segments;
-                            size_t start = 0;
-                            while (start <= src.size()) {
-                                const size_t slashPos = src.find('/', start);
-                                if (slashPos == std::string::npos) {
-                                    segments.push_back(src.substr(start));
-                                    break;
-                                }
-                                segments.push_back(src.substr(start, slashPos - start));
-                                start = slashPos + 1;
-                            }
+                            const std::vector<ttstr> segments =
+                                detail::splitTtstrLike_0x697D34(
+                                    src, static_cast<tjs_char>('/'));
 
-                            if (segments.size() <= 1) {
-                                // Single segment: binary sets chara to src itself
-                                // then Player_play with raw src (no "/" prefix)
-                                child.setChara(detail::widen(src));
-                                child.onFindMotion(detail::widen(src),
-                                                   mn.activeSlot().motionFlags | v12);
-                            } else if (segments.size() >= 3) {
-                                child.setChara(detail::widen(segments[1]));
-                                child.onFindMotion(detail::widen(segments[2]),
+                            if (segments.size() == 1) {
+                                // 0x6BE3EC..0x6BE46C: the one-element branch
+                                // writes chara from src but plays slot+28 icon.
+                                child.setChara(src);
+                                child.onFindMotion(mn.activeSlot().iconValue,
                                                    mn.activeSlot().motionFlags | v12);
                             } else {
-                                // Defensive fallback for unexpected 2-segment paths.
-                                child.setChara(detail::widen(segments[0]));
-                                child.onFindMotion(detail::widen(segments[1]),
+                                // 0x6BE4F0..0x6BE65C indexes [1] and [2]
+                                // directly; there is no two-element fallback.
+                                child.setChara(segments[1]);
+                                child.onFindMotion(segments[2],
                                                    mn.activeSlot().motionFlags | v12);
                             }
                         }
-                        // Stealth motion (0x6BE41C..0x6BE44C): binary reads from
-                        // CHILD player+776, plays with flag 16, then clears child+776.
-                        if (!child._stealthMotion.IsEmpty()) {
-                            child.onFindMotion(child._stealthMotion, PlayFlagStealth);
-                            child._stealthMotion.Clear();
-                        }
+                        // 0x6BE41C..0x6BE444 flushes child+776 through
+                        // Player_setCharaOrKeySlot_dedup(..., slot16): +776 is
+                        // pending stealthChara, not a motion request. The
+                        // preceding setChara() now performs that exact flush.
 
                         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                            motionPath.find("m2logo.mtn") != std::string::npos &&
@@ -161,11 +149,11 @@ namespace motion {
                                 "SNAPPLAY frame=%.3f nodeIndex=%d src=%s childMotionKey=%s childActiveMotion=%s childNodesBuilt=%d childPlaying=%d\n",
                                 currentTime,
                                 mn.index,
-                                src.c_str(),
+                                detail::narrow(src).c_str(),
                                 detail::narrow(child.getMotion()).c_str(),
-                                child._activeMotion
-                                    ? child._activeMotion->path.c_str()
-                                    : "<none>",
+                                child.matchedMotionPath().empty()
+                                    ? "<none>"
+                                    : child.matchedMotionPath().c_str(),
                                 child._nodes.size() > 1 ? 1 : 0,
                                 child._allplaying ? 1 : 0);
                         }
@@ -246,9 +234,11 @@ namespace motion {
                     double denom = otherStart - currentStart;
                     // Binary divides directly without denom guard (0x6BEC6C)
                     double ratio = (parentTime - currentStart) / denom;
-                    // Binary at 0x6BEC74: only checks hasEasing (slot+544).
-                    if (mn.activeSlot().hasEasing) {
-                        ratio = evaluateBezierCurve(mn.activeSlot().acc, ratio);
+                    // 0x6BEC74 reads the type tag at slot+544, which is the
+                    // accVariant member's native tTJSVariant tag.
+                    if (mn.activeSlot().accVariant.Type() != tvtVoid) {
+                        ratio = evaluateBezierVariantLike_0x69A754(
+                            mn.activeSlot().accVariant, ratio);
                     }
                     // Binary does NOT clamp ratio to [0,1] (0x6BEC9C).
                     double otherDofst = mn.otherSlot().motionDofst;
@@ -324,20 +314,17 @@ namespace motion {
                         // src = currentSlot+96 = current evaluated position
                         // dst = otherSlot+96 = position from before crossfade
                         const auto &slot = mn.activeSlot();
-                        BezierCurve cccCurve;
-                        cccCurve.x = slot.ccc.x; cccCurve.y = slot.ccc.y;
-                        ControlPointCurve cpCurve;
-                        if (slot.hasCpRotation) {
-                            cpCurve.x = slot.cp.x; cpCurve.y = slot.cp.y;
-                            cpCurve.t = slot.cp.t;
-                        }
                         // Use crossfade slot positions: src=current, dst=other (saved at flip)
                         // Binary reads full {x,y,z} from active slot (a3+96..112).
                         double src[3] = {slot.x, slot.y, mn.activeSlot().z};
                         double dst[3] = {mn.otherSlot().x, mn.otherSlot().y, mn.otherSlot().z};
                         double out1[3] = {}, out2[3] = {};
-                        interpolatePosition69A4D4(cccCurve, dst, src, out1, mn.coordinateMode, cpCurve, ratio);
-                        interpolatePosition69A4D4(cccCurve, dst, src, out2, mn.coordinateMode, cpCurve, t2);
+                        interpolatePositionVariantLike_0x69A4D4(
+                            slot.cccVariant, dst, src, out1,
+                            mn.coordinateMode, slot.cpVariant, ratio);
+                        interpolatePositionVariantLike_0x69A4D4(
+                            slot.cccVariant, dst, src, out2,
+                            mn.coordinateMode, slot.cpVariant, t2);
                         // Pick dx/dy based on coordinateMode (0x6BE72C..0x6BE740)
                         double dx_comp, dy_comp;
                         if (mn.coordinateMode == 1) {
@@ -355,8 +342,8 @@ namespace motion {
                     case 4: { // Target node lookup (0x6BE7B4)
                         // Binary: hasAngle is only set to true when target found
                         // and angle computed. LABEL_119 sets hasAngle=false.
-                        const auto &dtgt = mn.activeSlot().motionDtgt;
-                        if (dtgt.empty()) break; // LABEL_119: hasAngle=false
+                        const ttstr &dtgt = mn.activeSlot().motionDtgtValue;
+                        if (dtgt.IsEmpty()) break; // LABEL_119: hasAngle=false
                         int targetIdx = findNodeByLabel(_nodeLabelMap, dtgt);
                         if (targetIdx < 0) break; // LABEL_119: hasAngle=false
                         const auto &target = nodes[targetIdx];
@@ -461,24 +448,30 @@ namespace motion {
                         child._colorWeightPacked = packed;
                     }
 
-                    // isEmoteMode check + zFactor (0x6BEA90..0x6BEA94)
-                    child._zFactor = _zFactor;
-                    // Binary at 0x6BEA98: if isEmoteMode, call Player_initEmoteMotion(child, 2)
-                    // This syncs emote bone state. Emote mode is not used in web port.
+                    // 0x6BEA8C..0x6BEAA4: propagate parent cameraAngle(+472),
+                    // then reselect the secondary motion for a direct-edit
+                    // child. This was previously misidentified as zFactor.
+                    child._cameraAngle = _cameraAngle;
+                    if(child._directEdit) {
+                        child.initEmoteMotionLike_0x6B2E90(2u);
+                    }
+                    auto *angleRoot = &child._nodes[0];
 
                     // === Angle → child (0x6BEAA8..0x6BEB08) ===
                     if (hasAngle) {
-                        if (child._isEmoteMode) {
-                            // Emote mode: normalize angle [0,360), set player+464, reinit
+                        if (child._directEdit) {
+                            // Direct-edit: normalize angle [0,360), set
+                            // player+464, then reinitialize.
                             double k = computedAngle;
                             while (k < 0.0) k += 360.0;
                             while (k >= 360.0) k -= 360.0;
-                            // player+464 = emote angle (not mapped in web port)
-                            // Player_initEmoteMotion(child, 2) — N/A for web
+                            child._emoteAngle = k;
+                            child.initEmoteMotionLike_0x6B2E90(2u);
+                            angleRoot = &child._nodes[0];
                         } else {
-                            if (cr.delta.angle != computedAngle) {
-                                cr.delta.angle = computedAngle;
-                                cr.delta.dirty = true;
+                            if (angleRoot->delta.angle != computedAngle) {
+                                angleRoot->delta.angle = computedAngle;
+                                angleRoot->delta.dirty = true;
                             }
                         }
                     }
@@ -489,10 +482,10 @@ namespace motion {
                     if (hasAngle || computedAngle == mn.accumulated.angle ||
                         child._directEdit) {
                         // Direct copy (0x6BEB9C)
-                        cr.accumulated.m11 = mn.accumulated.m11;
-                        cr.accumulated.m12 = mn.accumulated.m12;
-                        cr.accumulated.m21 = mn.accumulated.m21;
-                        cr.accumulated.m22 = mn.accumulated.m22;
+                        angleRoot->accumulated.m11 = mn.accumulated.m11;
+                        angleRoot->accumulated.m12 = mn.accumulated.m12;
+                        angleRoot->accumulated.m21 = mn.accumulated.m21;
+                        angleRoot->accumulated.m22 = mn.accumulated.m22;
                     } else {
                         // Rotate by (computedAngle - accumulated.angle) (0x6BEBC8..0x6BEC4C)
                         double delta = (computedAngle - mn.accumulated.angle)
@@ -501,14 +494,18 @@ namespace motion {
                             delta = -delta;
                         const double c = std::cos(delta);
                         const double s = std::sin(delta);
-                        cr.accumulated.m11 = c * mn.accumulated.m11 + s * mn.accumulated.m12;
-                        cr.accumulated.m12 = c * mn.accumulated.m12 - mn.accumulated.m11 * s;
-                        cr.accumulated.m21 = c * mn.accumulated.m21 + s * mn.accumulated.m22;
-                        cr.accumulated.m22 = c * mn.accumulated.m22 - mn.accumulated.m21 * s;
+                        angleRoot->accumulated.m11 =
+                            c * mn.accumulated.m11 + s * mn.accumulated.m12;
+                        angleRoot->accumulated.m12 =
+                            c * mn.accumulated.m12 - mn.accumulated.m11 * s;
+                        angleRoot->accumulated.m21 =
+                            c * mn.accumulated.m21 + s * mn.accumulated.m22;
+                        angleRoot->accumulated.m22 =
+                            c * mn.accumulated.m22 - mn.accumulated.m21 * s;
                     }
                     // Unconditional child-root delta dirty after matrix
                     // propagation (0x6BEBAC writes childRoot+1584).
-                    cr.delta.dirty = true;
+                    angleRoot->delta.dirty = true;
                     // Note: clip chain propagation is done in label_18 below,
                     // which ALL paths (active + inactive) fall through to.
                 }
@@ -526,20 +523,19 @@ namespace motion {
                 if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                    motionPath.find("m2logo.mtn") != std::string::npos &&
                    currentTime >= 30.0 && currentTime <= 50.0) {
-                    const auto *activeClip = child.selectActiveClip();
                     std::fprintf(
                         stderr,
-                        "SNAPCHILD phase=runtime frame=%.3f nodeIndex=%d src=%s parameterizeIndex=%d childActiveMotion=%s childMotionKey=%s childClip=%s childAllPlaying=%d childQueuing=%d childNodesBuilt=%d childNodeCount=%zu childNeedsAssignImages=%d\n",
+                        "SNAPCHILD phase=runtime frame=%.3f nodeIndex=%d src=%s parameterizeIndex=%d childActiveMotion=%s childMotionKey=%s childAllPlaying=%d childQueuing=%d childNodesBuilt=%d childNodeCount=%zu childNeedsAssignImages=%d\n",
                         currentTime,
                         mn.index,
-                        mn.activeSlot().src.empty() ? "<none>"
-                                                    : mn.activeSlot().src.c_str(),
+                        mn.activeSlot().srcValue.IsEmpty()
+                            ? "<none>"
+                            : detail::narrow(mn.activeSlot().srcValue).c_str(),
                         mn.parameterizeIndex,
-                        child._activeMotion
-                            ? child._activeMotion->path.c_str()
-                            : "<none>",
+                        child.matchedMotionPath().empty()
+                            ? "<none>"
+                            : child.matchedMotionPath().c_str(),
                         detail::narrow(child.getMotion()).c_str(),
-                        activeClip ? activeClip->label.c_str() : "<none>",
                         child._allplaying ? 1 : 0,
                         child._queuing ? 1 : 0,
                         child._nodes.size() > 1 ? 1 : 0,

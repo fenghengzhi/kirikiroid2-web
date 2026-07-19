@@ -6,18 +6,13 @@
 #include <array>
 #include <cstdint>
 #include <deque>
-#include <map>
-#include <memory>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <spdlog/fmt/fmt.h>
 
 #include "tjs.h"
-#include "psbfile/PSBFile.h"
 #include "MotionNode.h"
 #include "internal/ttstr_hash.h"
 
@@ -30,89 +25,11 @@ namespace motion {
 
 namespace motion::detail {
 
-    struct VariableFrameInfo {
-        std::string label;
-        double value = 0.0;
-    };
-
-    struct VariableControllerBinding {
-        int type = -1;
-        int index = -1;
-        std::string source;
-        std::string role;
-    };
-
-    struct SelectorControlOption {
-        std::string label;
-        double offValue = 0.0;
-        double onValue = 0.0;
-    };
-
-    struct SelectorControlBinding {
-        std::string label;
-        std::vector<SelectorControlOption> options;
-    };
-
-    struct FixedControllerOutputBinding {
-        std::string label;
-        int type = -1;
-        int index = -1;
-        std::string role;
-    };
-
-    struct ClampControlBinding {
-        int type = 0;
-        std::string varLr;
-        std::string varUd;
-        double minValue = 0.0;
-        double maxValue = 0.0;
-    };
-
-    struct TimelineControlFrame {
-        double time = 0.0;
-        bool isTypeZero = true;
-        float value = 0.0f;
-        double easingWeight = 1.0;
-    };
-
-    struct TimelineControlTrack {
-        std::string label;
-        // Aligned to libkrkr2.so sub_66FC5C byte at track+8:
-        // set when label is present in instantVariableList (player+0x4F8).
-        bool instantVariable = false;
-        std::vector<TimelineControlFrame> frames;
-    };
-
-    struct TimelineControlBinding {
-        std::string label;
-        double loopBegin = -1.0;
-        double loopEnd = -1.0;
-        double lastTime = -1.0;
-        std::vector<TimelineControlTrack> tracks;
-    };
-
-    struct TimelineControlKeyframe {
-        float value = 0.0f;
-        float duration = 0.0f;
-        float weight = 1.0f;
-    };
-
-    struct TimelineControlAnimatorState {
-        std::deque<TimelineControlKeyframe> queue;
-        bool active = false;
-        float currentValue = 0.0f;
-        float startValue = 0.0f;
-        float targetValue = 0.0f;
-        float progress = 1.0f;
-        float duration = 0.0f;
-        float weight = 1.0f;
-    };
-
     // Runtime-owned parameter entry. Aligned to libkrkr2.so's 56-byte
     // Player+384 parameter table populated inside Player_initNonEmoteMotion
     // (0x6B365C) via sub_6B1718 / sub_6B202C.
     struct MotionParameterEntry {
-        std::string id;
+        ttstr id;
         bool discretization = false;
         double rangeBegin = 0.0;
         double rangeEnd = 0.0;
@@ -121,205 +38,12 @@ namespace motion::detail {
         int mode = 0;
     };
 
-    struct MotionClip {
-        std::string label;
-        std::string owner;
-        bool loop = false;
-        double loopTime = -1.0;   // from PSB; >=0 means loop restart point
-        double totalFrames = 0.0;
-        // Primary layer storage — PSB array order, duplicates preserved.
-        // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0) reading
-        // "layer" from Player+528 as a TJS Array iterated by index.
-        std::vector<std::shared_ptr<const PSB::PSBDictionary>> layerList;
-        std::vector<std::string> sourceCandidates;
-        // Raw PSB objects retained for Player_initNonEmoteMotion (0x6B365C).
-        // The parameter table is intentionally not cached here; it is rebuilt
-        // on each player init to mirror libkrkr2.so ownership/lifetime.
-        std::shared_ptr<const PSB::PSBDictionary> motionObject;
-        std::shared_ptr<const PSB::PSBDictionary> contentObject;
-    };
-
-    struct TimelineState {
-        std::string label;
-        int flags = 0;
-        bool playing = false;
-        bool loop = false;
-        double loopTime = -1.0;   // from PSB; >=0 means loop, <0 means stop at end
-        double totalFrames = 0.0;
-        double currentTime = 0.0;
-        double blendRatio = 1.0;
-        bool wasPlaying = false;  // for edge detection in dispatchEvents
-        bool controlInitialized = false;
-        double controlLastAppliedTime = 0.0;
-        std::vector<int> controlFrameCursor;
-        std::vector<float> controlTrackValues;
-        std::vector<TimelineControlAnimatorState> controlTrackAnimators;
-        TimelineControlAnimatorState blendAnimator;
-        bool blendAutoStop = false;
-    };
-
     // Aligned to libkrkr2.so Player_dispatchEvents (0x6C4490):
     // type=0: onAction(param1, param2), type=1: onSync()
     struct MotionEvent {
         int type = 0;
-        std::string param1;
-        std::string param2;
-        // 砖5/洞3: the layer (motion["tag"]) stream fires onAction(void, action)
-        // — Player_advanceRootAndNodes 0x6B6E68 passes a released/void variant as
-        // param1 (record.a) and content["action"] as param2 (record.b). When set,
-        // dispatch passes a void tTJSVariant for param1 instead of widen(param1).
-        // See analysis/Player_progress_frame_stepping_M1_plan.md §8.7.
-        bool voidParam1 = false;
-    };
-
-    // Source descriptor stored in sub_695DE8's per-group icon hashmap.  Each
-    // entry owns one intrusive texture reference; multiple icons on the same
-    // atlas page therefore retain the same texture independently, exactly as
-    // the binary's assignment at 0x69699C..0x6969C0.
-    struct PackedSourceAtlasEntry {
-        PackedSourceAtlasEntry() = default;
-        ~PackedSourceAtlasEntry();
-        PackedSourceAtlasEntry(const PackedSourceAtlasEntry &) = delete;
-        PackedSourceAtlasEntry &operator=(const PackedSourceAtlasEntry &) = delete;
-        PackedSourceAtlasEntry(PackedSourceAtlasEntry &&other) noexcept;
-        PackedSourceAtlasEntry &operator=(PackedSourceAtlasEntry &&other) noexcept;
-
-        void setTexture(iTVPTexture2D *value);
-
-        iTVPTexture2D *texture = nullptr;
-        int originX = 0;
-        int originY = 0;
-        std::array<int, 4> textureRect{0, 0, 0, 0};
-        std::array<double, 4> clip{0.0, 0.0, 1.0, 1.0};
-    };
-
-    struct PackedSourceAtlasGroup {
-        std::unordered_map<ttstr, PackedSourceAtlasEntry,
-                           ttstr_hash, ttstr_equal> icons;
-    };
-
-    struct MotionSnapshot {
-        ~MotionSnapshot();
-
-        std::string path;
-        std::shared_ptr<PSB::PSBFile> file;
-        std::shared_ptr<const PSB::PSBDictionary> root;
-        std::unordered_map<std::string, std::shared_ptr<const PSB::PSBResource>>
-            resourcesByPath;
-        tTJSVariant moduleValue;
-        // ResourceManager_loadResource @0x6A8D98: 1="krkr", 2="win".
-        int sourceSpec = 0;
-        // Motion_Player_findSource @0x6948E8 caches one owning texture per
-        // source-group on the loaded module. MotionNode::source.texture merely
-        // borrows these pointers. The ttstr/FNV map matches the binary HashMap
-        // key/equality implementation already recovered for ResourceManager.
-        std::unordered_map<ttstr, iTVPTexture2D *, ttstr_hash, ttstr_equal>
-            sourceAtlasTextures;
-        // sub_695DE8 @0x695DE8: non-Win source modules lazily materialize a
-        // group -> icon -> descriptor cache.  The outer and inner containers
-        // are the same ttstr-keyed libstdc++ unordered_map topology as the
-        // binary; PackedSourceAtlasEntry owns the shared page texture refs.
-        std::unordered_map<ttstr, PackedSourceAtlasGroup,
-                           ttstr_hash, ttstr_equal> packedSourceAtlasGroups;
-        std::vector<std::string> mainTimelineLabels;
-        std::vector<std::string> diffTimelineLabels;
-        std::vector<std::string> variableLabels;
-        std::unordered_map<std::string, bool> loopTimelines;
-        std::unordered_map<std::string, double> timelineLoopTimes;
-        std::unordered_map<std::string, double> timelineTotalFrames;
-        std::unordered_map<std::string, std::pair<double, double>> variableRanges;
-        std::unordered_map<std::string, std::vector<VariableFrameInfo>> variableFrames;
-        std::unordered_map<std::string, VariableControllerBinding> controllerBindings;
-        std::unordered_set<std::string> instantVariableLabels;
-        std::unordered_map<std::string, SelectorControlBinding> selectorControls;
-        std::vector<FixedControllerOutputBinding> fixedControllerOutputs;
-        std::vector<ClampControlBinding> clampControls;
-        std::vector<std::string> mirrorVariableMatchList;
-        // Primary layer storage — PSB array order, duplicates preserved.
-        // Aligned to libkrkr2.so Player_buildNodeTree (0x6B51F0) which reads
-        // the "layer" TJS Array from Player+528 and iterates by index.
-        std::vector<std::shared_ptr<const PSB::PSBDictionary>> layerList;
-        std::vector<std::string> sourceCandidates;
-        // Primary clip storage — PSB priority[] order preserved.
-        // Aligned to libkrkr2.so Player+548 (motion.priority TJSArray stored at
-        // 0x6B37D0) + Player+616 (priority[currentIndex].content at 0x6B38FC).
-        // Duplicate clip labels are allowed (index-addressable) but the
-        // auxiliary label→index map below resolves name-based lookups using
-        // last-wins semantics to mirror Player+24 labelMap behaviour.
-        std::vector<MotionClip> clipList;
-        // Clip lookup keyed by (owner, label).
-        //
-        // Aligned to libkrkr2.so Player_loadMotion (0x6B0F10): the binary
-        // navigates the PSB tree by the path segment "motion/<chara>/<motion>",
-        // where the first segment after "motion/" is the owner (chara) name
-        // (sub_A0CC68 "motion/"+chara @0x6B1308, then +"*/"+motion @0x6B1380).
-        // Two objects in one PSB file that share a motion name (e.g. title.psb
-        // char/show vs TITLE/show) resolve to DIFFERENT subtrees and therefore
-        // DIFFERENT layer[] arrays — they are never merged. The port snapshot is
-        // a flattened file-level cache, so the owner (chara) segment is folded
-        // into the clip key to reproduce that per-chara isolation. Keying by
-        // bare label would collide same-name motions across objects and merge
-        // their layerLists (the DRACU title self-reference recursion bug).
-        std::map<std::pair<std::string, std::string>, int> clipIndexByOwnerLabel;
-        // Auxiliary label-only fallback index (last-wins), used ONLY after the
-        // owner-scoped lookup fails — mirrors the binary's per-tree label->index
-        // map (Player+24, built in Player_buildNodeTree_recursive @0x6B4CE4 with
-        // last-wins lowerBoundInsert). Lets single-owner snapshots and consumers
-        // that cannot determine the owner still resolve by motion name.
-        std::unordered_map<std::string, int> clipIndexByLabel;
-
-        // Resolve a clip index for (owner, label): owner-scoped first, then
-        // label-only fallback. Returns -1 when no clip matches.
-        int findClipIndex(const std::string &owner,
-                          const std::string &label) const {
-            if(label.empty()) {
-                return -1;
-            }
-            if(!owner.empty()) {
-                const auto it =
-                    clipIndexByOwnerLabel.find(std::make_pair(owner, label));
-                if(it != clipIndexByOwnerLabel.end()) {
-                    return it->second;
-                }
-            }
-            const auto fb = clipIndexByLabel.find(label);
-            if(fb != clipIndexByLabel.end()) {
-                return fb->second;
-            }
-            return -1;
-        }
-        // Layer event stream (global onAction/onSync source).
-        // Aligned to libkrkr2.so Player+1072 = motion["tag"] (written by
-        // Player_initNonEmoteMotion @0x6B3778). The binary's
-        // Player_advanceRootAndNodes (0x6B6ADC) walks this array with the
-        // cursor at Player+916, firing align/sync/action on type==1 frames
-        // gated by the +1093 stop-gate. Each element is a frame dict
-        // {time:double, type:int, content:{align,sync,action,...}}.
-        // NOTE: the layout note's "+1072 = stealthMotionStr" is wrong — +1072
-        // holds this tag array; the `stealthMotion` getter (sub_6D9618) merely
-        // re-reads the same field. See analysis/Player_progress_frame_stepping_M1_plan.md §8.5.
-        // (Brick-5 commit 1: additive storage only — no reader yet.)
-        std::shared_ptr<PSB::PSBList> tagFrames;
-        // Root content-snapshot stream (NO event gate; content snapshot only).
-        // Aligned to libkrkr2.so Player+548 = motion["priority"] (written by
-        // Player_initNonEmoteMotion @0x6B37D0). The binary's
-        // Player_advanceRootAndNodes (0x6B6ADC) walks this array (root loop
-        // 0x6B6EE4..0x6B7124) with the cursor at Player+568, snapshotting
-        // priority[cursor]["content"] into Player+616 (sub_A0FB64 variant copy)
-        // on each crossed frame. curTime=Player+576, nextTime=Player+584. The
-        // initial snapshot is priority[0]["content"] (0x6B38FC). Each element is
-        // a frame dict {time:double, content:{...}} — NO "type"/event read,
-        // unlike the layer (tag) stream. This is the RAW priority frame array,
-        // distinct from clipList (which decodes priority entries as clips for
-        // the node-tree build path); the binary's +548 stream is the flat
-        // frame array indexed priority[cursor]. (Stream ② of the 4-stream
-        // advance unit — see analysis/Player_progress_frame_stepping_M1_plan.md §8.)
-        std::shared_ptr<PSB::PSBList> priorityFrames;
-        std::unordered_map<std::string, TimelineControlBinding>
-            timelineControlByLabel;
-        std::vector<std::string> resourceAliases;
-        double width = 0.0;
-        double height = 0.0;
+        tTJSVariant param1;
+        tTJSVariant param2;
     };
 
     // (The former VariableLabelEntry port model of Player+1296 has been
@@ -383,7 +107,7 @@ namespace motion::detail {
         std::array<int, 4> clipRect{0, 0, 0, 0};
         std::array<int, 4> dirtyRect{0, 0, 0, 0};
         std::array<float, 8> localCorners{};
-        std::vector<float> localMeshPoints;
+        std::vector<MeshPoint> localMeshPoints;
     };
 
     struct PreparedRenderItem : NativeRenderItemFields {
@@ -395,7 +119,7 @@ namespace motion::detail {
         const MotionNode *nativeNode = nullptr;
         tTJSVariant srcRef;
         std::string sourceKey;
-        // Borrowed from MotionNode::source / MotionSnapshot atlas cache.
+        // Borrowed from the node/source-cache raw resource path.
         iTVPTexture2D *sourceTexture = nullptr;
         std::array<int, 4> sourceRect{0, 0, 0, 0};
         bool hasOwnSource = false;
@@ -431,10 +155,10 @@ namespace motion::detail {
         int meshDivY = 0;
         int meshType = 0;
         int commandPatchDivision = 0; // item+368
-        std::vector<float> commandCompositeMeshPoints; // item+344
-        std::vector<float> commandBezierPatchPoints;   // item+376
-        std::vector<float> meshPoints;
-        std::vector<float> localMeshPoints;
+        std::vector<MeshPoint> commandCompositeMeshPoints; // item+344
+        std::vector<MeshPoint> commandBezierPatchPoints;   // item+376
+        std::vector<MeshPoint> meshPoints;                  // item+400
+        std::vector<MeshPoint> localMeshPoints;
         int layerId = 0;
         int layerId2 = 0;
         PreparedRenderItem *parentItem = nullptr; // semantic mapping of item +264
@@ -503,25 +227,11 @@ namespace motion::detail {
     // it is the path builder's sole consumer (xrefs_to(0x6B5C1C) = 2 callers,
     // both HM3). The Player+24 node-index map (_nodeLabelMap) is keyed by the
     // RAW label, a separate key space — do NOT use this for that map.
-    std::string buildNodePathKeyLike_0x6B5C1C(
+    ttstr buildNodePathKeyLike_0x6B5C1C(
         const std::deque<motion::detail::MotionNode> &nodes, int nodeIndex);
 
     std::string narrow(const ttstr &value);
     ttstr widen(const std::string &value);
-
-    std::vector<ttstr> buildMotionLookupCandidates(const ttstr &name);
-    bool resolveExistingPath(const std::vector<ttstr> &candidates, ttstr &resolved);
-    void appendEmbeddedSourceCandidates(const MotionSnapshot &snapshot,
-                                        const std::string &source,
-                                        std::vector<ttstr> &candidates);
-
-    std::shared_ptr<MotionSnapshot> loadMotionSnapshot(const ttstr &path,
-                                                       tjs_int decryptSeed);
-    tTJSVariant loadPSBVariant(const ttstr &path, tjs_int decryptSeed);
-
-    void registerModuleSnapshot(const tTJSVariant &module,
-                                const std::shared_ptr<MotionSnapshot> &snapshot);
-    std::shared_ptr<MotionSnapshot> lookupModuleSnapshot(const tTJSVariant &module);
 
     tTJSVariant makeArray(const std::vector<tTJSVariant> &items);
     tTJSVariant makeDictionary(
@@ -529,15 +239,8 @@ namespace motion::detail {
     std::vector<tTJSVariant> stringsToVariants(
         const std::vector<std::string> &values);
 
-    void primeTimelineStates(std::unordered_map<std::string, TimelineState> &states,
-                             const MotionSnapshot &snapshot);
-    void stepTimelines(std::unordered_map<std::string, TimelineState> &states,
-                       double dt,
-                       std::vector<MotionEvent> *events = nullptr);
-
     bool logoChainTraceEnabled();
     bool logoChainTraceEnabledForPath(const std::string &motionPath);
-    bool logoChainTraceEnabled(const std::shared_ptr<MotionSnapshot> &snapshot);
     bool logoSnapshotMarkEnabled();
     bool logoSnapshotMarkEnabledForPath(const std::string &motionPath);
     void resetLogoChainTraceSession(const std::string &motionPath);

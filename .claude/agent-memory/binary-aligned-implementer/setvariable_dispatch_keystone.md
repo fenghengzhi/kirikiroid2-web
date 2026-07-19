@@ -5,6 +5,9 @@ metadata:
   type: project
 ---
 
+> **2026-07-19 纠正：** 文中的 `_activeMotion->controllerBindings` 是已删除的旧兼容
+> 实现；当前 live dispatch 只走 EmoteEngine raw HM/deque，Player 已无 `_activeMotion`。
+
 setVariable value-dispatch keystone DONE 2026-06-03 (cpp/plugins/motionplayer/EmoteEngine.{h,cpp} + EmotePlayer.cpp).
 
 **Object identity CORRECTION**: 0x671228 (IDA auto-name "Player_setVariable") `this` is the **EmoteEngine** (~1576B), NOT motion::Player. Proven by offsets: HM6@+1384 (=_scalarHM6_1384), HM2@+1440 (=_labelToValueHM7), controller deques @+256(eye)/+336(brow)/+416(mouth)/+576(transition=_auxVarDeque8)/+656(selector=_vectorVarDeque9), flag bytes +1159(_syncWaiting)/+1161(_emoteAnimatorFlag, MOVED from Player)/+1162(_dirty). Local pre-existing Player::setVariableResolvedWeightLike_0x671228 is a NON-faithful reimpl on wrong object (uses _activeMotion->controllerBindings, not engine HM6) — left in place for getVariable-cascade compat (see fork below).
@@ -19,7 +22,12 @@ setVariable value-dispatch keystone DONE 2026-06-03 (cpp/plugins/motionplayer/Em
 
 **case7/case8 gate**: both read LDRB[elem+16];CBNZ. transition elem.flag explicitly =1 (builder). SELECTOR elem+16 INDETERMINATE — buildSelectorControl (0x66ddac-0x66de1c) writes only +0(ctl)/+8(label)/+24/+32/+40, leaves +16 from raw operator new(0x1E0). Modelled selector elem.flag default=1 (matches transition sibling + non-zero new-mem). logo has no selector vars => inert.
 
-**HM2-MAP FORK (open) — CORRECTED 2026-06-03**: getVariable is **0x533E1C** (Player_getVariable_wrapper), NOT 0x6D69C8 (=Player_ncb_registerMembers, the NCB bind site — old memory WRONG). 0x533E1C `this=a1`, reads INNER motion::Player at *(a1+1064): scope-list@Player+1312 (sub_6CD16C) → HM1@+264 (0x6CD39C) / HM4@+1240 / HM2 cascade. So getVariable reads the INNER Player's HM1/HM2/HM4 — a DIFFERENT object from the EmotePlayer/EmoteEngine that 0x671228 writes (engine HM7 +1440). BRIDGE: binary EmoteEngine::progress post-loop (0x67D01C) walks HM7(+1456 node chain) → sub_67C560 (var-track additive cascade: out+=valueTrack.weight*ctlOut, engine+936/+1040/+1048) + sub_67C6B0 (negate-flag resolver: hashes key into HM@+824/+880 + scope deque@+800, gated by +1158) → Player_bindParameterValue(=0x6C4668, ported) into inner Player HM1/HM2. **This bridge loop body is STUBBED locally** (EmoteEngine.cpp:1929 loop inert; sub_67C560/sub_67C6B0 + engine containers +800/+824/+880/+936 un-ported). The local Player::setVariableResolvedWeightLike_0x671228 SHIM exists ONLY to substitute this missing bridge (it writeEvalResultValue's directly). D3DEmotePlayer::setVariable + the 3 timeline-control sites (sub_669E1C@2x, sub_67CD20) now dual-call engine().setVariable (faithful HM6→deque dispatch, activates real controllers) + the shim (bridge stand-in for getVariable). NOT faithful single-dispatch; shim removal BLOCKED on porting the HM7→Player bind-loop bridge (Gap 2). Unit test l.638 setVariable("manual",3.5)→getVariable==3.5 relies on shim/player path.
+**HM2-MAP BRIDGE — CLOSED 2026-07-18**: getVariable is **0x533E1C**
+(Player_getVariable_wrapper), NOT 0x6D69C8. EmoteEngine::progress now walks HM7 and executes
+the Engine-owned `sub_67C560` timeline cascade plus `sub_67C6B0` mirror resolver, then calls
+`Player_bindParameterValue@0x6C4668` into inner Player HM1/HM2. The local dual-write
+`setVariableResolvedWeightLike_0x671228` shim has been removed; the former "bridge STUBBED /
+shim removal BLOCKED" statement is superseded.
 
 **bust/hair target/const feed NOT in 0x671228**: cases 0/1/2 only write HM2 (+1159 gated). _ctlBust1/2Target/_bustSpring1/2Const fed by a SEPARATE un-ported pass (bind-loop sub_67C560 etc.), NOT setVariable. Brief premise "setVariable sets bust/hair targets" is WRONG for 0x671228. REMAINING.
 

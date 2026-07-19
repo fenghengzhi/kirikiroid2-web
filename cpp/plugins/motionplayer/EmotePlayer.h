@@ -13,6 +13,7 @@
 #include <memory>
 #include <string>
 #include <spdlog/spdlog.h>
+#include "../DrawDeviceD3DIntf.h"
 #include "tjs.h"
 #include "Player.h"
 #include "EmoteEngine.h" // EmoteEngine declared in dedicated header (P0 step 1)
@@ -49,19 +50,17 @@ namespace motion {
     //   +8  EmoteEngine*       (operator new(0x5D8)=1496B, EmoteEngine_ctor)
     //   +16 vector<ttstr> 资源路径数组(ttstrVector_assign_67F0CC)
     //
-    // G2-A: EmoteObject 自持 ResourceManager(二进制 +0 是 EmoteObject 拥有的独立
-    //   232B 堆对象;dtor @0x67F420 显式 `sub_6A8B94 + operator delete`)。本地把
-    //   RM 上提到 EmoteObject 成员(ResourceManager 是 shared_ptr<State> 值类型,
-    //   拷贝廉价 = "拥有它")。EmoteEngine/Player 收到的是 RM 的副本/引用,不再由
-    //   外部 ctor 形参直接下沉到 EmoteEngine。声明顺序:_rm 先于 _engine 初始化,
-    //   保证 ctor body 能把 RM 传给 new EmoteEngine。
+    // EmoteObject 自持 ResourceManager：与 0x67DBAC 一样在构造体内 new 唯一
+    // ResourceManager，并让 sticky NCB adaptor 指向同一对象。析构 @0x67F420
+    // 显式执行 Engine -> ResourceManager -> paths，不能用 ResourceManager 值拷贝
+    // 或 shared-state 副本代替这条所有权链。
     //
     // CLAUDE.md rule: EmoteEngine* is a raw pointer (NOT unique_ptr) with
     // manual new/delete in EmoteObject ctor/dtor — aligned with binary's
     // explicit operator new / operator delete pattern.
     class EmoteObject {
     public:
-        EmoteObject(ResourceManager rm, const std::vector<ttstr> &modulePaths);
+        explicit EmoteObject(const std::vector<ttstr> &modulePaths);
         ~EmoteObject();
 
         EmoteObject(const EmoteObject&) = delete;
@@ -79,13 +78,11 @@ namespace motion {
         }
 
     private:
-        ResourceManager _rm;            // +0 — EmoteObject 自持(G2-A)
+        ResourceManager *_rm = nullptr; // +0 — raw owning pointer, manual delete
         // P3-B (2026-06-05): the RM dispatch facade (binary sub_67E20C wrapper).
-        //   EmoteObject creates it once from _rm and flows it down to EmoteEngine
+        //   EmoteObject creates it once from *_rm and flows it down to EmoteEngine
         //   -> Player -> child Players (RM dispatch-in, @0x6CED30). Declared after
-        //   _rm so it is released before _rm on teardown (facade before owner;
-        //   matches binary dtor engine->RM ordering once _engine is deleted
-        //   explicitly first).
+        //   _rm; the dtor clears this sticky facade before manually deleting _rm.
         tTJSVariant _rmDispatch;
         EmoteEngine *_engine = nullptr; // +8 — raw pointer, manual new/delete
         std::vector<ttstr> _modulePaths; // +16 — resource paths, refcounted handles
@@ -114,7 +111,6 @@ namespace motion {
     class EmotePlayer {
     public:
         EmotePlayer() = default;
-        explicit EmotePlayer(ResourceManager rm) : _rm(rm) {}
         virtual ~EmotePlayer();
 
         // ============================================================
@@ -131,7 +127,7 @@ namespace motion {
         void progress(double dt);                         // #1  sub_6818B4
         void frameProgress(double dt);                    // #2  sub_6817C0
         void draw(tTJSVariant target);                    // #3  Player_draw
-        void initPhysics();                               // #4  sub_67D4D0
+        void initPhysics(tTJSVariant metadata);           // #4  sub_67D4D0
         void startWind(double minAngle, double maxAngle, double amplitude,
                        double freqX = 0.0, double freqY = 0.0); // #5 Player_startWind
         void stopWind();                                  // #6  sub_681A38
@@ -176,8 +172,8 @@ namespace motion {
         [[nodiscard]] ttstr getChara() const { return player().getChara(); }
         void setMotion(ttstr v) { player().playMotionLike_0x6B2284(v, 0); } // #22
         [[nodiscard]] ttstr getMotion() const { return player().getMotion(); }
-        void setMotionKey(ttstr v) { player().setMotionKey(v); }            // #23
-        [[nodiscard]] ttstr getMotionKey() const { return player().getMotionKey(); }
+        void setMotionKey(tTJSVariant v) { player().setMotionKey(std::move(v)); } // #23
+        [[nodiscard]] tTJSVariant getMotionKey() const { return player().getMotionKey(); }
         void setProject(tTJSVariant v) { player().setProject(v); }          // #24
         [[nodiscard]] tTJSVariant getProject() const { return player().getProject(); }
         void setMaskMode(tjs_int v) { player().setMaskMode(v); }            // #25
@@ -207,8 +203,7 @@ namespace motion {
         // --- #36-41 Functions (camera / scale-with-args) ---
         tTJSVariant getCameraOffset();                    // #36 sub_681EF0
         void setCameraOffset(double x, double y);         // #37 sub_681EF8
-        // #38 modifyRoot (sub_681F0C): NO args — sets a flag byte at
-        //   Player+1064 -> +200 -> +1584 = 1. NOT the Player_modifyRoot(data).
+        // #38 modifyRoot @0x681F0C: engine+1064 -> player+200 -> root+1584 = 1.
         void modifyRoot();                                // #38 sub_681F0C
         // #39-41 setHairScale/setPartsScale/setBustScale write engine spring
         //   target fields +1184/+1192/+1200 (sub_681F20/28/30), NOT the
@@ -237,15 +232,18 @@ namespace motion {
         [[nodiscard]] bool getQueuing() const { return engine()._emoteAnimatorFlag; }
         void setDirectEdit(bool) { engine()._syncWaiting = true; }          // #47 -> +1159
         [[nodiscard]] bool getDirectEdit() const { return engine()._syncWaiting; }
-        // #48 selectorEnabled setter: binary sets +1160=1 then calls sub_670D1C
-        //   (open: that follow-up reset not yet ported — set-flag only here).
-        void setSelectorEnabled(bool) { engine()._scalarField_1160_1 = 1; } // #48 -> +1160
-        [[nodiscard]] bool getSelectorEnabled() const { return engine()._scalarField_1160_1 != 0; }
-        // #49 variableKeys (sub_681FA0): binary copies EmoteEngine+1208 (a
-        //   20-byte local container, _smallObj1208) via sub_A0F5E0. That blob
-        //   is not modelled; local approximates via Player::getVariableKeys
-        //   (DEVIATION: different data source — open until +1208 is modelled).
-        [[nodiscard]] tTJSVariant getVariableKeys() { return player().getVariableKeys(); } // #49 RO
+        // #48 selectorEnabled setter @0x681F94 ignores the input, writes the
+        //   +1160 byte to 1, then synchronizes through sub_670D1C.
+        void setSelectorEnabled(bool) {
+            engine()._selectorEnabled = true;
+            engine().syncSelectorControlsLike_0x670D1C();
+        }
+        [[nodiscard]] bool getSelectorEnabled() const { return engine()._selectorEnabled; }
+        // #49 variableKeys @0x681FA0: a single tTJSVariant CopyRef from
+        //   EmoteEngine+1208. resetMetadataState creates this owning Array.
+        [[nodiscard]] tTJSVariant getVariableKeys() {
+            return engine()._variableLabelsBase;
+        } // #49 RO
         [[nodiscard]] bool getAnimating() const { return player().getAllplaying(); }             // #50 RO
 
         // --- #49-68 Functions ---
@@ -263,7 +261,7 @@ namespace motion {
         tTJSVariant getMainTimelineLabelList();           // #60 sub_674F54
         tTJSVariant getDiffTimelineLabelList();           // #61 sub_6750C0
         tTJSVariant getLoopTimeline(ttstr label);         // #62 sub_67522C
-        tjs_int getTimelineTotalFrameCount(ttstr label);  // #63 sub_6753F0
+        double getTimelineTotalFrameCount(ttstr label);   // #63 sub_6753F0
         tTJSVariant getPlayingTimelineInfoList();         // #64 sub_6754C4
         bool isSelectorTarget(ttstr label);               // #65 sub_6823FC
         void activateSelectorTarget(ttstr label);         // #66 sub_67581C
@@ -280,7 +278,6 @@ namespace motion {
         Player &player() { return engine().player(); }
         [[nodiscard]] const Player &player() const { return engine().player(); }
 
-        ResourceManager _rm;
         EmoteObject *_primaryObj = nullptr; // 二进制 +8 EmoteEngine 链(本地经 EmoteObject)
         // debugPrint/directEdit/selectorEnabled/queuing are EmoteEngine byte
         //   flags (+1163/+1159/+1160/+1161), NOT shell bools — see accessors.
@@ -292,10 +289,15 @@ namespace motion {
     // 持有 +24 EmoteObject 主链 + 壳层字段(+40 baseScale, +44 userScale,
     // +48 visible, +49 smoothing) + 全部 NCB 暴露的 API 方法。
     // 与 EmotePlayer 是两个完全独立的 NCB 类,无继承关系。
-    class D3DEmotePlayer {
+    class D3DEmotePlayer : public D3DLayerListener {
     public:
-        explicit D3DEmotePlayer(ResourceManager rm);
-        ~D3DEmotePlayer();
+        explicit D3DEmotePlayer(D3DLayerObject *d3dImageOwner);
+        ~D3DEmotePlayer() override;
+
+        static tjs_error factory(D3DEmotePlayer **result,
+                                 tjs_int numparams,
+                                 tTJSVariant **param,
+                                 iTJSDispatch2 *objthis);
 
         // --- Properties ---
         void setUseD3D(bool v) { _useD3D = v; }
@@ -310,8 +312,8 @@ namespace motion {
         void setMotion(ttstr v) { player().playMotionLike_0x6B2284(v, 0); }
         [[nodiscard]] ttstr getMotion() const { return player().getMotion(); }
 
-        void setMotionKey(ttstr v) { player().setMotionKey(v); }
-        [[nodiscard]] ttstr getMotionKey() const { return player().getMotionKey(); }
+        void setMotionKey(tTJSVariant v) { player().setMotionKey(std::move(v)); }
+        [[nodiscard]] tTJSVariant getMotionKey() const { return player().getMotionKey(); }
 
         void setMaskMode(tjs_int v) { player().setMaskMode(v); }
         [[nodiscard]] tjs_int getMaskMode() const { return player().getMaskMode(); }
@@ -406,8 +408,7 @@ namespace motion {
         tTJSVariant clone();
         void show();
         void hide();
-        void assignState();
-        void initPhysics();
+        void assignState(tTJSVariant state);
 
         void setRot(double rot, double transition = 0.0,
                     double ease = 0.0);
@@ -478,7 +479,11 @@ namespace motion {
         void fadeInTimeline(ttstr label, double duration, tjs_int flags);
         void fadeOutTimeline(ttstr label, double duration, tjs_int flags);
 
-        void setTimeline(ttstr label, bool loop);
+        // D3DEmotePlayer_setTimeline @0x5308A4: four-instruction receiver thunk
+        // into EmoteEngine::setTimelineBlendLike_0x6735AC. The three floating
+        // arguments pass through unchanged.
+        void setTimeline(ttstr label, bool autoStop, float value,
+                         float transition, float easingWeight);
 
         bool play(ttstr label, tjs_int flags = 0);
         void draw(tTJSVariant target);
@@ -498,7 +503,7 @@ namespace motion {
                                              tjs_int numparams,
                                              tTJSVariant **param,
                                              iTJSDispatch2 *objthis);
-        tTJSVariant getOuterForce();
+        [[noreturn]] tTJSVariant getOuterForce();
         // M11 D-09 P0: removed AABB `contains(double x, double y)` overload
         // — port invention. binary D3DEmotePlayer::contains @0x530b5c has
         // a single (label, x, y) signature.
@@ -512,6 +517,10 @@ namespace motion {
         const Player &getPlayer() const { return player(); }
 
     private:
+        // off_19FE020 listener slots used by D3DImage::OnUpdate/Draw.
+        bool IsVisible() override;                       // 0x533CBC
+        void Draw(iTVPTexture2D *target) override;       // 0x533D4C
+
         // 对象链访问器:读主槽 _primaryObj(二进制 instance+24)。
         // 二进制 EmoteEngine_progress(0x67D01C 起)无条件解引用主槽 EmoteObject*,
         // 不做 null 检查 —— 靠调用时序保证(clear 后必先 load 再 progress)。
@@ -526,8 +535,8 @@ namespace motion {
         // 壳层字段(对应 libkrkr2.so D3DEmotePlayer wrapper §2.2)
         float _baseScale = 1.0f;   // +40, finalScale = baseScale * userScale (sub_530260)
         float _userScale = 1.0f;   // +44
-        bool _visible = true;      // +48
-        bool _smoothing = true;    // +49
+        bool _visible = false;     // +48, ctor sub_542764 writes zero
+        bool _smoothing = false;   // +49, ctor sub_542764 writes zero
         bool _useD3D = false;
         bool _opengl = false;
         bool _drawVisible = true;
@@ -545,10 +554,14 @@ namespace motion {
         //   load 0x52FDD4:         destroy(次); destroy(主); 主=次=null; 主=new
         //   dtor sub_533C00:       destroy(次); destroy(主)
         // CLAUDE.md 硬规则:EmoteObject* 裸指针 + 手动 new/delete,不用智能指针。
-        // _rm 在构造时保存(ResourceManager 持 shared_ptr<State>, 拷贝廉价),
-        // 供 load() 重建主槽时构造新 EmoteObject 用。声明在槽指针之前以保证
-        // 初始化顺序(_rm 先于 _primaryObj 初始化)。
-        ResourceManager _rm;
+        // sub_42C7F8 maps the class descriptor using off_1A012E0 to the binary
+        // literal L"D3DImage". D3DEmotePlayer native-create sub_542764 unwraps
+        // precisely that NCB class (dword_1AB2630) and stores the native owner at
+        // base+8; no ResourceManager exists on this shell. The owner is a raw
+        // non-owning pointer: ctor/clone register this listener through the
+        // D3DLayerObject +48 slot, and dtor unregisters through +56 only after
+        // both EmoteObject slots have been destroyed (0x542764/0x52FFBC/0x533C00).
+        D3DLayerObject *_d3dImageOwner = nullptr;
         EmoteObject* _primaryObj = nullptr;    // instance+24
         EmoteObject* _secondaryObj = nullptr;  // instance+32(保留, 生命周期主链恒 null)
     };

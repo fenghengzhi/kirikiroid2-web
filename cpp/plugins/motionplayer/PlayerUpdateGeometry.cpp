@@ -2,14 +2,15 @@
 // Split from PlayerUpdateLayers.cpp for maintainability.
 //
 #include "PlayerUpdateLayersInternal.h"
+#include "MotionDispatch.h"
 
 namespace motion {
     void Player::updateLayersPhase3_CameraConstraint() {
         auto &nodes = _nodes;
         // --- sub_6BC000: Camera constraint (nodeType=9) ---
-        // Aligned to 0x6BC000..0x6BC4EC. Only when !isEmoteMode.
+        // Aligned to 0x6BC000..0x6BC4EC. Player+1092 is the preview property.
         // 9 cases at 0x6BC1B0..0x6BC358 based on flipX/flipY + constraintType (node+2376).
-        if (!_isEmoteMode && nodes.size() >= 2) {
+        if (!_preview && nodes.size() >= 2) {
             double offsetX = 0, offsetY = 0, offsetZ = 0;
             // Track which axes have constraints and their types
             bool hasMinX = false, hasMaxX = false, hasTrackX = false;
@@ -137,21 +138,13 @@ namespace motion {
             //       node+48 = 0;                              // 0x6bc67c
             //   }
             // sub_6636D4 @0x6636D4 is a BOOL property getter: for every TJS
-            // variant type it returns (value != 0) collapsed to 0/1 (v7 = !v6),
-            // and the call site masks & 1. So node+48 is a pure bool, NOT a raw
-            // int — store priorDraw as 0/1. (Earlier "& 5 bit flags" note was a
-            // speculation contradicted by the decompilation; no & 5 consumer
-            // exists in the binary.) emoteEditDict mirrors node+1980; a null
-            // dispatch yields a failed PropGet -> getter returns 0, matching
-            // the && emoteEditDict short-circuit here.
-            if (vn.forceVisible && vn.emoteEditDict) {
-                auto pdVal = (*vn.emoteEditDict)["priorDraw"];
-                if (auto num = std::dynamic_pointer_cast<PSB::PSBNumber>(pdVal))
-                    vn.priorDraw = (num->getValue<int>() != 0) ? 1 : 0;
-                else if (auto bl = std::dynamic_pointer_cast<PSB::PSBBool>(pdVal))
-                    vn.priorDraw = bl->value ? 1 : 0;
-                else
-                    vn.priorDraw = 0;
+            // variant type it returns (value != 0) collapsed to 0/1, and the
+            // 0x6BC6C4 call site masks & 1. Android copies node+1980 to a
+            // temporary tTJSVariant before materializing the dispatch accessor.
+            if (vn.forceVisible) {
+                const tTJSVariant emoteEdit = vn.emoteEditVariant;
+                vn.priorDraw = detail::motionPropGetBool(
+                    emoteEdit, TJS_W("priorDraw")) & 1;
             } else {
                 vn.priorDraw = 0;  // 0x6BC67C
             }
@@ -173,8 +166,8 @@ namespace motion {
             }
 
             // Propagate clip origin
-            vn.clipOriginX = vn.interpolatedCache.ox;
-            vn.clipOriginY = vn.interpolatedCache.oy;
+            vn.clipOriginX = vn.activeSlot().ox;
+            vn.clipOriginY = vn.activeSlot().oy;
 
             // nodeType 1/5 special position via parent mesh chain (0x6BC828..0x6BC8D4)
             // if ((1 << nodeType) & 0x22) != 0 → nodeType 1 (shape) or 5 (camera)
@@ -185,7 +178,7 @@ namespace motion {
                 detail::MotionNode *clipWalk = vn.meshAncestor;
                 while (clipWalk) {
                     auto &cn = *clipWalk;
-                    if (cn.meshControlPointsPrev.size() >= 32) {
+                    if (cn.meshControlPointsPrev.size() >= 16) {
                         // Apply inverse matrix to get normalized coords (0x6BC858..0x6BC87C)
                         float tx = static_cast<float>(px) + cn.meshInvOffX;
                         float ty = static_cast<float>(py) + cn.meshInvOffY;
@@ -194,15 +187,15 @@ namespace motion {
                         float iy = static_cast<float>(
                             cn.meshInvM21 * tx + cn.meshInvM22 * ty);
                         // Evaluate bezier patch at normalized coords (sub_69B1E8)
-                        const float *mesh = cn.meshControlPointsPrev.data();
+                        const auto *mesh = cn.meshControlPointsPrev.data();
                         const float su = 1.f - ix, sv = 1.f - iy;
                         const float bu[4] = {su*su*su, 3.f*su*su*ix, 3.f*su*ix*ix, ix*ix*ix};
                         const float bv[4] = {sv*sv*sv, 3.f*sv*sv*iy, 3.f*sv*iy*iy, iy*iy*iy};
                         float ox = 0, oy = 0;
                         for (int bi = 0; bi < 16; ++bi) {
                             float w = bv[bi >> 2] * bu[bi & 3];
-                            ox += mesh[bi * 2] * w;
-                            oy += mesh[bi * 2 + 1] * w;
+                            ox += mesh[bi].x * w;
+                            oy += mesh[bi].y * w;
                         }
                         px = ox;
                         py = oy;
@@ -217,8 +210,8 @@ namespace motion {
             // Non slot-done path: vertex computation (0x6BC8DC..0x6BD730)
             if (!vn.activeSlot().done) {
                 // Second visibility bitmask check (0x6BCE2C..0x6BCE40)
-                // Non-emote: 7233 = 0x1C41, Emote: 7241 = 0x1C49
-                const int vbm = _isEmoteMode ? 7241 : 7233;
+                // Normal: 7233 = 0x1C41, preview: 7241 = 0x1C49
+                const int vbm = _preview ? 7241 : 7233;
                 const bool vertexEligible = vn.forceVisible
                     || ((vbm & (1 << vn.nodeType)) != 0);
 
@@ -284,7 +277,7 @@ namespace motion {
                         // Each row interpolates linearly between two edge points:
                         //   p0 = orgXY + m_col2*ch*tv, p1 = orgXY + m_col1*cw + m_col2*ch*tv
                         //   grid[gx] = lerp(p0, p1, gx/divX)
-                        vn.meshControlPoints.resize(numPts * 2);
+                        vn.meshControlPoints.resize(numPts);
                         for (int gy = 0; gy < divY; ++gy) {
                             const double tv = (divY > 1) ? static_cast<double>(gy) / (divY - 1) : 0;
                             // Row edge points (0x6BB068..0x6BB09C)
@@ -292,7 +285,7 @@ namespace motion {
                             const double rowBaseY = orgY + (m22 * ch) * tv;
                             const double rowEndX = rowBaseX + m11 * cw;
                             const double rowEndY = rowBaseY + m21 * cw;
-                            float *rowPtr = &vn.meshControlPoints[gy * divX * 2];
+                            auto *rowPtr = &vn.meshControlPoints[gy * divX];
 #ifdef __EMSCRIPTEN__
                             // WASM SIMD: process 4 grid points per iteration
                             // Aligned to NEON at 0x6BB0CC..0x6BB138
@@ -324,22 +317,24 @@ namespace motion {
                                 float fy0 = static_cast<float>(wasm_f64x2_extract_lane(vy, 0));
                                 float fx1 = static_cast<float>(wasm_f64x2_extract_lane(vx, 1));
                                 float fy1 = static_cast<float>(wasm_f64x2_extract_lane(vy, 1));
-                                rowPtr[gx*2]   = fx0;
-                                rowPtr[gx*2+1] = fy0;
-                                rowPtr[gx*2+2] = fx1;
-                                rowPtr[gx*2+3] = fy1;
+                                rowPtr[gx] = {fx0, fy0};
+                                rowPtr[gx + 1] = {fx1, fy1};
                             }
                             // Scalar remainder
                             for (; gx < divX; ++gx) {
                                 const double tu = (divX > 1) ? static_cast<double>(gx) / (divX-1) : 0;
-                                rowPtr[gx*2]   = static_cast<float>(rowBaseX*(1-tu) + rowEndX*tu);
-                                rowPtr[gx*2+1] = static_cast<float>(rowBaseY*(1-tu) + rowEndY*tu);
+                                rowPtr[gx].x = static_cast<float>(
+                                    rowBaseX*(1-tu) + rowEndX*tu);
+                                rowPtr[gx].y = static_cast<float>(
+                                    rowBaseY*(1-tu) + rowEndY*tu);
                             }
 #else
                             for (int gx = 0; gx < divX; ++gx) {
                                 const double tu = (divX > 1) ? static_cast<double>(gx) / (divX-1) : 0;
-                                rowPtr[gx*2]   = static_cast<float>(rowBaseX*(1-tu) + rowEndX*tu);
-                                rowPtr[gx*2+1] = static_cast<float>(rowBaseY*(1-tu) + rowEndY*tu);
+                                rowPtr[gx].x = static_cast<float>(
+                                    rowBaseX*(1-tu) + rowEndX*tu);
+                                rowPtr[gx].y = static_cast<float>(
+                                    rowBaseY*(1-tu) + rowEndY*tu);
                             }
 #endif
                         }
@@ -347,8 +342,9 @@ namespace motion {
                         // Evaluate each grid point through Bezier patch (0x6BCF80..0x6BCFBC)
                         // sub_69B1E8 evaluates bezier patch at each mesh point
                         // This transforms the bilinear grid into a deformed mesh
-                        if (vn.meshControlPointsPrev.size() >= 32) {
-                            auto evalBP = [](const float *mesh, float u, float v,
+                        if (vn.meshControlPointsPrev.size() >= 16) {
+                            auto evalBP = [](const detail::MeshPoint *mesh,
+                                             float u, float v,
                                              float &outX, float &outY) {
                                 const float su=1.f-u, sv=1.f-v;
                                 const float bu[4]={su*su*su,3.f*su*su*u,3.f*su*u*u,u*u*u};
@@ -356,15 +352,14 @@ namespace motion {
                                 outX=0; outY=0;
                                 for(int i=0;i<16;++i){
                                     float w=bv[i>>2]*bu[i&3];
-                                    outX+=mesh[i*2]*w; outY+=mesh[i*2+1]*w;
+                                    outX+=mesh[i].x*w; outY+=mesh[i].y*w;
                                 }
                             };
                             for (int pi = 0; pi < numPts; ++pi) {
-                                float px = vn.meshControlPoints[pi*2];
-                                float py = vn.meshControlPoints[pi*2+1];
+                                float px = vn.meshControlPoints[pi].x;
+                                float py = vn.meshControlPoints[pi].y;
                                 evalBP(vn.meshControlPointsPrev.data(), px, py, px, py);
-                                vn.meshControlPoints[pi*2] = px;
-                                vn.meshControlPoints[pi*2+1] = py;
+                                vn.meshControlPoints[pi] = {px, py};
                             }
                         }
 
@@ -372,7 +367,8 @@ namespace motion {
                         // Walk node+1968 (meshAncestor), for each mesh-enabled
                         // ancestor: evaluate all mesh points + origin through its mesh
                         // Parent clip chain mesh cascade (0x6BD118..0x6BD380)
-                        auto evalBPCascade = [](const float *mesh, float u, float v,
+                        auto evalBPCascade = [](const detail::MeshPoint *mesh,
+                                                float u, float v,
                                                 float &outX, float &outY) {
                             const float su=1.f-u, sv=1.f-v;
                             const float bu[4]={su*su*su,3.f*su*su*u,3.f*su*u*u,u*u*u};
@@ -380,19 +376,19 @@ namespace motion {
                             outX=0; outY=0;
                             for(int i=0;i<16;++i){
                                 float w=bv[i>>2]*bu[i&3];
-                                outX+=mesh[i*2]*w; outY+=mesh[i*2+1]*w;
+                                outX+=mesh[i].x*w; outY+=mesh[i].y*w;
                             }
                         };
                         detail::MotionNode *clipWalk = vn.meshAncestor;
                         double cascadeOrgX = orgX, cascadeOrgY = orgY;
                         while (clipWalk) {
                             auto &cn = *clipWalk;
-                            if (cn.meshControlPoints.size() >= 32) {
-                                const float *cmesh = cn.meshControlPoints.data();
+                            if (cn.meshControlPoints.size() >= 16) {
+                                const auto *cmesh = cn.meshControlPoints.data();
                                 // Evaluate each mesh point through parent mesh (0x6BD148..0x6BD1E8)
-                                for (size_t mi = 0; mi < vn.meshControlPoints.size() / 2; ++mi) {
-                                    float mpx = vn.meshControlPoints[mi*2];
-                                    float mpy = vn.meshControlPoints[mi*2+1];
+                                for (size_t mi = 0; mi < vn.meshControlPoints.size(); ++mi) {
+                                    float mpx = vn.meshControlPoints[mi].x;
+                                    float mpy = vn.meshControlPoints[mi].y;
                                     // Transform by parent inverse matrix + offset (0x6BD188)
                                     // Transform by parent inverse matrix + offset (0x6BD188)
                                     float tx = mpx + cn.meshInvOffX;  // node+2128
@@ -404,8 +400,7 @@ namespace motion {
                                     // Evaluate through parent bezier (sub_69B1E8)
                                     float rx, ry;
                                     evalBPCascade(cmesh, tx, ty, rx, ry);
-                                    vn.meshControlPoints[mi*2] = rx;
-                                    vn.meshControlPoints[mi*2+1] = ry;
+                                    vn.meshControlPoints[mi] = {rx, ry};
                                 }
                                 // Evaluate origin through parent mesh (0x6BD218..0x6BD258)
                                 float cox = static_cast<float>(cascadeOrgY) + cn.meshInvOffY;
@@ -415,7 +410,7 @@ namespace motion {
                                 cascadeOrgX = rox;
                                 cascadeOrgY = roy;
                                 _processedMeshVerticesNum += static_cast<int>(
-                                    vn.meshControlPoints.size() / 2) + 1;
+                                    vn.meshControlPoints.size()) + 1;
                             }
                             clipWalk = cn.meshAncestor;
                         }
@@ -426,27 +421,29 @@ namespace motion {
                             // Offset all mesh points by delta (0x6BD360..0x6BD380)
                             const float fdx = static_cast<float>(cascadeOrgX - orgX);
                             const float fdy = static_cast<float>(cascadeOrgY - orgY);
-                            const size_t totalFloats = vn.meshControlPoints.size();
-                            float *mp = vn.meshControlPoints.data();
+                            const size_t totalPoints = vn.meshControlPoints.size();
+                            auto *mp = vn.meshControlPoints.data();
 #ifdef __EMSCRIPTEN__
                             // WASM SIMD: process 4 floats at a time (2 XY pairs)
                             // Aligned to NEON at 0x6BD360: vadd with delta vector
                             const v128_t vdelta = wasm_f32x4_make(fdx, fdy, fdx, fdy);
+                            float *flatPoints = reinterpret_cast<float *>(mp);
+                            const size_t totalFloats = totalPoints * 2;
                             size_t fi = 0;
                             for (; fi + 4 <= totalFloats; fi += 4) {
-                                v128_t pts = wasm_v128_load(&mp[fi]);
+                                v128_t pts = wasm_v128_load(&flatPoints[fi]);
                                 pts = wasm_f32x4_add(pts, vdelta);
-                                wasm_v128_store(&mp[fi], pts);
+                                wasm_v128_store(&flatPoints[fi], pts);
                             }
                             // Scalar remainder
                             for (; fi < totalFloats; fi += 2) {
-                                mp[fi] += fdx;
-                                if (fi + 1 < totalFloats) mp[fi+1] += fdy;
+                                flatPoints[fi] += fdx;
+                                if (fi + 1 < totalFloats) flatPoints[fi+1] += fdy;
                             }
 #else
-                            for (size_t mi = 0; mi < totalFloats / 2; ++mi) {
-                                mp[mi*2] += fdx;
-                                mp[mi*2+1] += fdy;
+                            for (size_t mi = 0; mi < totalPoints; ++mi) {
+                                mp[mi].x += fdx;
+                                mp[mi].y += fdy;
                             }
 #endif
                         }
@@ -464,8 +461,8 @@ namespace motion {
                         vn.vertices[5] = static_cast<float>(fy + m21*cw + m22*ch);
                         vn.vertices[6] = static_cast<float>(fx + m12*ch);
                         vn.vertices[7] = static_cast<float>(fy + m22*ch);
-                        if(detail::logoChainTraceEnabled(_activeMotion)) {
-                            const auto motionPath = _activeMotion->path;
+                        const auto motionPath = matchedMotionPath();
+                        if(detail::logoChainTraceEnabledForPath(motionPath)) {
                             const std::array<float, 8> expectedVertices = {
                                 static_cast<float>(fx),
                                 static_cast<float>(fy),
@@ -496,9 +493,10 @@ namespace motion {
                                     expectedVertices[6], expectedVertices[7]),
                                 fmt::format(
                                     "src={} act=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}]",
-                                    vn.interpolatedCache.src.empty()
+                                    vn.activeSlot().srcValue.IsEmpty()
                                         ? std::string("<none>")
-                                        : vn.interpolatedCache.src,
+                                        : detail::narrow(
+                                              vn.activeSlot().srcValue),
                                     vn.vertices[0], vn.vertices[1],
                                     vn.vertices[2], vn.vertices[3],
                                     vn.vertices[4], vn.vertices[5],
@@ -569,14 +567,11 @@ namespace motion {
         }
 
         // Delta position computation (0x6BBB74..0x6BBC54)
-        // if playing (player+480): delta = 0; else: delta = currentPos - prevPos
+        // if player+480 is set: delta = 0; else: delta = currentPos - prevPos
         {
-            bool anyPlaying = std::any_of(
-                _timelines.begin(), _timelines.end(),
-                [](const auto &e) { return e.second.playing; });
             for (size_t di = 1; di < nodes.size(); ++di) {
                 auto &dn = nodes[di];
-                if (anyPlaying) {
+                if (_queuing) {
                     dn.deltaPosX = 0; dn.deltaPosY = 0; dn.deltaPosZ = 0;
                 } else {
                     dn.deltaPosX = dn.accumulated.posX - dn.prevPosX;
@@ -597,10 +592,11 @@ namespace motion {
                 nodes[0].accumulated.visible && nodes[0].source.valid;
         }
         // Visibility bitmask: which nodeTypes can render
-        // Non-emote: 6145 = 0x1801 → nodeTypes 0, 11, 12
-        // Emote:     6153 = 0x1809 → nodeTypes 0, 3, 11, 12
-        // Aligned to sub_6BD8DC (0x6BD8DC): visibility bitmask depends on emote mode.
-        const int visBitmask = _isEmoteMode ? 6153 : 6145;
+        // Normal:  6145 = 0x1801 → nodeTypes 0, 11, 12
+        // Preview: 6153 = 0x1809 → nodeTypes 0, 3, 11, 12
+        // Aligned to sub_6BD8DC (0x6BD8DC): the visibility mask reads the
+        // Player+1092 preview property.
+        const int visBitmask = _preview ? 6153 : 6145;
         for (size_t i = 1; i < nodes.size(); ++i) {
             auto &node = nodes[i];
 
@@ -665,6 +661,8 @@ namespace motion {
             // Camera-to-target angle (0x6BDC04..0x6BDCB0)
             // When stereovisionActive (a1+1094): compute camera angle for 3D effect.
             if (_stereovisionActive) {
+                // 0x6BDC08..0x6BDC0C: player+1104 <- camera node+2368.
+                _cameraFov = camNode.cameraFov;
                 // Store camera/target positions (a1+72..112)
                 _cameraPosX = camNode.accumulated.posX;
                 _cameraPosY = camNode.accumulated.posY;
@@ -732,18 +730,20 @@ namespace motion {
             }
             sn.clipAABB = sn.shapeAABB;
 
-            if(detail::logoSnapshotMarkEnabledForPath(_activeMotion->path) &&
-               _activeMotion->path.find("m2logo.mtn") != std::string::npos &&
+            const auto motionPath = matchedMotionPath();
+            if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
+               motionPath.find("m2logo.mtn") != std::string::npos &&
                _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0 &&
                sn.index == 18) {
+                const std::string label = detail::narrow(sn.layerName);
                 std::fprintf(
                     stderr,
                     "SNAPSHAPE frame=%.3f nodeIndex=%d label=%s slotOxOy=(%.3f,%.3f) interpOxOy=(%.3f,%.3f) clipOrigin=(%.3f,%.3f) accumPos=(%.3f,%.3f,%.3f) m=(%.6f,%.6f,%.6f,%.6f) shapeAABB=[%.3f,%.3f,%.3f,%.3f] clipAABB=%p\n",
                     _clampedEvalTime,
                     sn.index,
-                    sn.layerName.empty() ? "<none>" : sn.layerName.c_str(),
+                    sn.layerName.IsEmpty() ? "<none>" : label.c_str(),
                     sn.activeSlot().ox, sn.activeSlot().oy,
-                    sn.interpolatedCache.ox, sn.interpolatedCache.oy,
+                    sn.activeSlot().ox, sn.activeSlot().oy,
                     sn.clipOriginX, sn.clipOriginY,
                     sn.accumulated.posX, sn.accumulated.posY, sn.accumulated.posZ,
                     sn.accumulated.m11, sn.accumulated.m12,

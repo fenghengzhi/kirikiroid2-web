@@ -8,7 +8,7 @@
 namespace PSB {
 #define LOGGER spdlog::get("plugin")
 
-    bool MmoType::isThisType(const PSBFile &psb) {
+    bool MmoType::isThisType(const DecodedPSBFile &psb) {
         const auto objects = psb.getObjects();
         if(psb.getObjects() == nullptr) {
             return false;
@@ -19,7 +19,7 @@ namespace PSB {
     }
 
     std::vector<std::unique_ptr<IResourceMetadata>>
-    MmoType::collectResources(const PSBFile &psb, bool deDuplication) {
+    MmoType::collectResources(const DecodedPSBFile &psb, bool deDuplication) {
         std::vector<std::unique_ptr<IResourceMetadata>> resourceList;
         // TODO:
         LOGGER->critical("TODO: MmoType::collectResources(...)");

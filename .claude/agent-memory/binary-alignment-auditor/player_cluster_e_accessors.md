@@ -5,15 +5,19 @@ metadata:
   type: project
 ---
 
+> **2026-07-19 纠正：** 文内 `_activeMotion->variableLabels` 是已删除的旧偏差；
+> `variableKeys@0x6D139C` 当前直接读 Player+1296 deque，Player 已无 `_activeMotion`。
+
 # Player (motion::Player, 1384B, ctor 0x6CED30) 簇E accessor 权威映射
 
 **Why:** 2026-05-30 cluster E 审计的多条 accessor 偏差结论建立在 IDB off-by-one 误命名上;2026-06-07 fresh decompile 全部纠正。
 **How to apply:** 再审 Player accessor 时以下面地址为准,勿用 2026-05-30 doc 的旧符号名。
 
 ## chara / stealthChara 体系(关键纠正)
-- `chara` setter = **0x6C0E9C** (Player_setChara, mode 0)。调 setCharaOrKeySlot_dedup(a1,0,a2): 写 +968(chara) AND +960(variableKeys cache),清 motion 槽 +976/+984 + motion-loaded byte +1099;然后 flush pending +776。
-- `stealthChara` setter = **0x6D94B0** (Player_setStealthChara, mode 16, 有 `if(+968)` 前置 guard)。dedup(a1,16,..) 只写 +968,不写 +960。
-- 共享 dedup helper = **0x6B29C0** (Player_setCharaOrKeySlot_dedup): `a2&0x10`→target +968 else +960;wcscmp(sub_9B1ED0) dedup;变更时 AddRef/Release;末尾清 +976/+984/+1099。
+- **2026-07-18 correction:** 四槽均为 refcounted TJS string-value owner，源码层对应 `ttstr`；+1099 是 `playing`，不是 motion-loaded。
+- `chara` getter/setter = **0x6D9470/0x6C0E9C**。writer mode 0 写 +960(primary chara) 与 +968(stealthChara)，清 +976/+984/+1099，然后 flush pending +776。
+- `stealthChara` getter/setter = **0x6D9490/0x6D94B0**。mode 16 只写 +968；live slot 不存在时 queue +776。
+- 共享 dedup helper = **0x6B29C0** (Player_setCharaOrKeySlot_dedup): `a2&0x10`→target +968 else +960;wcscmp(sub_9B1ED0) dedup;变更时 AddRef/Release;末尾清 +976/+984/playing(+1099)。
 - 2026-05-30 doc 误把 0x6D94B0 当 `chara` setter 并称其 re-dispatch sub_6B29C0(16) — 实为 stealthChara setter。
 
 ## scalar accessor(已 fresh-verify)

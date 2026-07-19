@@ -71,10 +71,6 @@
 #include "EmoteAngleController.h"
 #include "EmoteMeshResolver.h"
 
-namespace PSB {
-    class PSBDictionary;
-} // namespace PSB
-
 namespace motion {
 
     // 0x170=368B blink controller. Plain C++ object (no vtable: ctor +0 writes a
@@ -125,7 +121,7 @@ namespace motion {
     //   trackValue=blinkPos=(float)beginFrame and nextBlink=min+(max-min)*rand,
     //   then populates the "edge" table and "node" value-rows.
     void EmoteBlinkController_ctor(EmoteBlinkController* self,
-                                   const PSB::PSBDictionary* dict);
+                                   const tTJSVariant& dict);
 
     // Aligned with libkrkr2.so sub_663BDC EmoteVarController4_step @ 0x663BDC.
     //   Advances the value track (when non-empty), runs the blink state machine
@@ -133,5 +129,10 @@ namespace motion {
     //   writes the scalar result to *out.
     void EmoteBlinkController_step(EmoteBlinkController* self, float* out,
                                    float dt);
+
+    // sub_663AA0 @0x663AA0. Commits the final pending track value and clears
+    // the primary/secondary tracks while returning the controller to idle.
+    void EmoteBlinkController_resetLike_0x663AA0(
+        EmoteBlinkController* self);
 
 } // namespace motion

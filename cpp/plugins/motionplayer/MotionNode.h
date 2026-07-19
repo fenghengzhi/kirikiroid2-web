@@ -19,17 +19,13 @@
 
 #include <array>
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <vector>
 
+#include "MeshPoint.h"
 #include "tjs.h"  // tTJSVariant, iTJSDispatch2 for TJS↔Native bridge (node+1912, node+2296)
 
 class iTVPTexture2D;
-
-namespace PSB {
-    class PSBDictionary;
-}
 
 namespace motion {
     class Player;
@@ -67,7 +63,10 @@ namespace motion::detail {
         // cast to iTJSDispatch2* in Player.cpp where tjs.h is included.
         void *tjsLayerObject = nullptr;  // non-owning reference
         int transformOrder[4] = {0, 1, 2, 3}; // node+84..96
-        std::string layerName;         // "label" from PSB
+        // Player_initNodeFields @0x6B3C78 stores Motion_propGetString("label")
+        // directly at node+0. Player_buildNodeTree_recursive @0x6B4A6C reuses
+        // this same ttstr as the Player+24 map key and event payload source.
+        ttstr layerName;
         int meshType = 0;             // "meshTransform" from PSB (node+2000)
         int meshFlags = 0;            // "meshSyncChildMask" from PSB (node+2004)
         int meshDivision = 0;         // "meshDivision" from PSB (node+2008)
@@ -99,17 +98,23 @@ namespace motion::detail {
         // channel (no libkrkr2.so counterpart; see PlayerUpdateLayerEval.cpp).
 
         // Mesh control points (node+2024..2032 in libkrkr2.so).
-        // For meshType=1: 16 × 2 floats (Bezier patch 4×4 control grid) = 32 floats.
-        // For meshType=2: (divX+1)*(divY+1)*2 floats (grid mesh).
+        // For meshType=1: 16 × 8B points (Bezier patch 4×4 control grid).
+        // For meshType=2: (divX+1)*(divY+1) points (grid mesh).
         // Built by sub_6BC4F0 vertex computation.
-        std::vector<float> meshControlPoints;      // node+2024
-        std::vector<float> meshControlPointsPrev;  // node+2048 (previous frame)
+        std::vector<MeshPoint> meshControlPoints;      // node+2024
+        std::vector<MeshPoint> meshControlPointsPrev;  // node+2048 (previous frame)
 
-        // emoteEdit PSB dict reference (node+1980, sub_6B3C78 at 0x6B3D48)
-        std::shared_ptr<const PSB::PSBDictionary> emoteEditDict;
+        // Raw TJS owners copied directly from the layer dispatch by
+        // Player_initNodeFields @0x6B3C78. These mirror the source-level
+        // tTJSVariant members at node+64/+1980/+2200/+2576; their independent
+        // CopyRef lifetimes must not be replaced by a decoded PSB tree owner.
+        tTJSVariant frameListVariant;                     // node+64
+        tTJSVariant emoteEditVariant;                     // node+1980
+        tTJSVariant particleMotionListVariant;            // node+2200
+        tTJSVariant stencilCompositeMaskLayerListVariant; // node+2576
 
         // Prior draw flag (node+48, from PSB emoteEdit "priorDraw")
-        // Raw int, not bool — binary checks bit flags (v12 & 5) in sub_6BE0C0.
+        // sub_6636D4 collapses the property to bool and 0x6BC6C4 masks & 1.
         int priorDraw = 0;
 
         // ========== Dual Clip Slot Architecture ==========
@@ -119,33 +124,23 @@ namespace motion::detail {
         // then activeSlotIndex ^= 1 flips. The old slot is preserved for
         // crossfade blending.
         //
-        // CurveData is a lightweight bezier curve container compatible with
-        // the evaluateBezierCurve() template (requires .x, .y, .empty()).
-        // BezierCurve/ControlPointCurve types are defined in PlayerInternal.h
-        // which MotionNode.h cannot include, so we use this standalone type.
-        struct CurveData {
-            std::vector<double> x, y;
-            bool empty() const { return x.empty(); }
-        };
-        struct ControlPointData {
-            std::vector<double> x, y, t;
-            bool empty() const { return t.empty(); }
-        };
-
         struct ClipSlot {
-            // Visibility (slot+24, slot+25)
+            // Player_parseFrame @0x6926B4 / Player_mergeFrameContent
+            // @0x692AB0 state. `merged` is the byte at slot+26; parse clears it
+            // and merge sets it before the invisible early-return.
             bool done = true;
             bool crossfading = false;      // slot+25: currently blending with other slot
-            bool hasEasing = false;         // slot+544: has easing curve for crossfade
+            bool merged = false;           // slot+26
             int frameIndex = -1;            // cached frameList index for this slot
             int frameType = 0;              // frame["type"]: 0 invisible, 2 static, 3 interpolate
+            std::uint32_t ti = 0;            // slot+16, mask 0x04000000
 
             // Source. Player_mergeFrameContent @0x692AB0 stores two distinct
-            // strings: icon at slot+28 and src at slot+36. They must remain
-            // distinct until Motion_Player_findSource @0x6948E8.
-            std::string icon;
-            std::string src;
-            std::vector<std::string> srcList;
+            // ttstr owners: icon at slot+28 and src at slot+36. All native
+            // consumers read these owners directly; narrow strings are created
+            // only at Web/PSB raw-node API boundaries.
+            ttstr iconValue;
+            ttstr srcValue;
 
             // Position (slot+96..112)
             double x = 0, y = 0, z = 0;
@@ -153,7 +148,7 @@ namespace motion::detail {
 
             // Transform
             double width = 0, height = 0;
-            double opacity = 1.0;
+            int opacity = 255;
             double angle = 0.0;
             double scaleX = 1.0, scaleY = 1.0;
             double slantX = 0.0, slantY = 0.0;
@@ -163,10 +158,15 @@ namespace motion::detail {
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
             };
 
-            // Easing curves (slot+168, +208, +228, +248, +268, +296)
-            CurveData ccc, acc, zcc, scc, occ, cc;
-            ControlPointData cp;
-            bool hasCpRotation = false;
+            // Raw curve owners consumed through TJS dispatch at evaluation
+            // time, matching 0x69A754/0x698454/0x69A4D4.
+            tTJSVariant cccVariant;          // slot+168
+            tTJSVariant occVariant;          // slot+188
+            tTJSVariant accVariant;          // slot+208
+            tTJSVariant zccVariant;          // slot+228
+            tTJSVariant sccVariant;          // slot+248
+            tTJSVariant cpVariant;           // slot+268
+            tTJSVariant meshCurveVariant;    // slot+296, cc/mcc
 
             // Time (slot+328)
             double clipStartTime = 0.0;
@@ -183,17 +183,27 @@ namespace motion::detail {
             // Player_evaluateTimeline @0x699c08 (copyVector node+2024 <- slot+640
             // when node+2000==meshType==1), snapshotted node+2024 -> V+568 by
             // Player_HM3_initValueFromNode @0x699588, and restored slot+640 <-
-            // V+568 by Player_HM3_restoreValueToNode @0x699828. Binary element is
-            // 8B {float x, float y}; the port keeps the same flat float view used
-            // by node.meshControlPoints (node+2024) for the data contract.
-            std::vector<float> meshControlPoints; // slot+640
+            // V+568 by Player_HM3_restoreValueToNode @0x699828. The element is
+            // the binary's exact 8B {float x, float y} source-level point.
+            std::vector<MeshPoint> meshControlPoints; // slot+640
 
             // Motion sub-object (mask 0x80000)
             int motionDt = 0, motionFlags = 0;
             double motionDofst = 0.0;
             bool motionDocmpl = false;
             double motionTimeOffset = 0.0;
-            std::string motionDtgt;
+            ttstr motionDtgtValue;
+
+            // Model/camera/anchor/feedback blocks occupy the tail of the same
+            // parsed-frame slot and are written by 0x693AE8..0x6941E4.
+            double modelTimeOffset = 0.0;
+            bool modelLoop = false;
+            int modelDt = 0;
+            ttstr modelDtgt;
+            double cameraFov = 0.0;
+            ttstr cameraTarget;
+            ttstr anchorTarget;
+            double feedbackTimespan = 0.0;
 
             // Particle sub-object (mask 0x100000). slot+416..488 PSB prt block,
             // written by Player_mergeFrameContent @0x693c64 (gate frame mask
@@ -230,7 +240,7 @@ namespace motion::detail {
             // TransformOrder
             bool hasTransformOrder = false;
             int transformOrder[4] = {0,1,2,3};
-            std::string action;
+            ttstr actionValue;               // slot+288, content.act
             bool hasSync = false;
         };
 
@@ -240,37 +250,10 @@ namespace motion::detail {
         const ClipSlot& activeSlot() const { return slots[activeSlotIndex]; }
         ClipSlot& otherSlot() { return slots[activeSlotIndex ^ 1]; }
         const ClipSlot& otherSlot() const { return slots[activeSlotIndex ^ 1]; }
-        // Player_evaluateTimeline (0x699AE4) caches the last slot blend ratio
-        // and can replace currentTime with a node parameter entry value.
+        // Player_evaluateTimeline (0x699AE4) stores exactly one previous blend
+        // ratio at node+56. A parameterized node reads parameterEntry->value
+        // directly; there is no secondary override/cache-validity state.
         double timelineEvalRatio = 0.0;
-        bool hasTimelineEvalRatio = false;
-        bool timelineParameterOverride = false;
-        double timelineParameterValue = 0.0;
-
-        // PSB reference (for evaluateLayerContent calls)
-        std::shared_ptr<const PSB::PSBDictionary> psbNode;
-
-        // Per-node post-interpolation mirror for render/debug consumers.
-        // The binary phase2 logic consumes node+1584..+1660 instead; this
-        // local copy mirrors the current evaluated frame state without owning
-        // the persistent setter/camera override semantics.
-        struct LocalState {
-            bool visible = true;
-            bool active = true;
-            bool dirty = false;
-            bool flipX = false;
-            bool flipY = false;
-            double posX = 0.0;
-            double posY = 0.0;
-            double posZ = 0.0;
-            double angle = 0.0;
-            double scaleX = 1.0;
-            double scaleY = 1.0;
-            double slantX = 0.0;
-            double slantY = 0.0;
-            int opacity = 255;
-            int blendMode = 16;
-        } localState;
 
         // TJS setter / camera velocity override block.
         // Aligned to libkrkr2.so node+1584..+1660: delta block consumed by
@@ -347,6 +330,10 @@ namespace motion::detail {
         int forceVisible = 0;              // node+1996
         int visibleAncestorIndex = -1;     // replaces pointer at node+1952
 
+        // node+2600 std::vector<MotionNode *> populated by the type-12
+        // post-pass in Player_buildNodeTree @0x6B51F0.
+        std::vector<MotionNode *> stencilCompositeMaskNodes;
+
         // Child Player for nodeType=3 (Motion).
         // Aligned to libkrkr2.so node+1912: tTJSVariant holding iTJSDispatch2-wrapped
         // Player object, created by sub_6B3C78 case 3 via sub_6F1794 (NCB CreateAdaptor).
@@ -415,9 +402,16 @@ namespace motion::detail {
             }
         } source;
 
+        // Per-frame type-specific eval outputs written by
+        // Player_evaluateTimeline @0x699AE4.
+        // MotionNode_initFields @0x6F19B4 deliberately leaves both evaluator
+        // output channels uninitialized; Player_evaluateTimeline writes them
+        // before their type-specific consumers run.
+        double cameraFov;             // node+2368: camera.fov (nodeType=5)
+
         // Anchor node data for nodeType=10 (sub_6C0528 at 0x6C0528)
         int anchorType = 0;            // node+2376: "anchor" from PSB
-        double anchorDamping = 1.0;    // node+2432: damping factor
+        double feedbackTimespan;      // node+2432: feedback.timespan
         double anchorOpaScale = 1.0;   // node+2440: opacity damping scale
         // Anchor color channel scales (4 channels × gamma factor, node+2448..2504)
         double anchorColorScale[16] = {1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1};
@@ -466,7 +460,7 @@ namespace motion::detail {
         // Particle emitter state for nodeType=6 (sub_6BEDD0 at 0x6BEDD0)
         bool emitterActive = false;    // node+2380
         double emitterTimer = 0.0;     // node+2392
-        std::string emitterDtgt;       // resolved dtgt path (node+2384 stores ttstr)
+        ttstr emitterDtgt;             // node+2384, CopyRef of active slot src
         bool emitterOffsetActive = false; // node+2400
         double emitterOffsetX = 0.0;   // node+2408
         double emitterOffsetY = 0.0;   // node+2416
@@ -501,66 +495,8 @@ namespace motion::detail {
             0x80, 0x80, 0x80, 0xFF
         };
 
-        // Particle trigger type (from interpolatedCache, used by sub_6BEDD0)
+        // Particle trigger type used by sub_6BEDD0; refreshed with timeline eval.
         int prtTrigger = 0;
-
-        // Per-frame interpolated data cached from evaluateLayerContent.
-        // These are the fields needed by buildRenderListFromNodes that
-        // come from FrameContentState (which lives in Player.cpp's
-        // anonymous namespace and can't be referenced here).
-        struct InterpolatedCache {
-            std::string src;
-            std::vector<std::string> srcList;  // node+2200: particle motion path array
-            double width = 0.0;
-            double height = 0.0;
-            double opacity = 1.0;  // 0.0-1.0 as from PSB
-            double angle = 0.0;
-            double scaleX = 1.0;
-            double scaleY = 1.0;
-            double slantX = 0.0;
-            double slantY = 0.0;
-            bool flipX = false;
-            bool flipY = false;
-            double x = 0.0;
-            double y = 0.0;
-            double z = 0.0;
-            double ox = 0.0;
-            double oy = 0.0;
-            int blendMode = 16;
-            std::array<std::uint32_t, 4> packedColors{
-                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
-            };
-            bool hasTransformOrder = false;
-            int transformOrder[4] = {0, 1, 2, 3};
-            std::string action;
-            bool hasSync = false;
-            // Motion sub-object data from FrameContentState (mask 0x80000)
-            int motionDt = 0;          // angleMode: 0=none,1=direct,2=atan2-delta,3=interpolated,4=target
-            int motionFlags = 0;       // play flags from PSB "flags"
-            double motionDofst = 0.0;  // angle value for case 1
-            bool motionDocmpl = false;
-            double motionTimeOffset = 0.0;
-            double clipStartTime = 0.0;  // slot+328: frame start time in clip
-            std::string motionDtgt;    // target node name for angleMode=4
-            // Particle data from FrameContentState (mask 0x100000)
-            int prtTrigger = 0;
-            double prtFmin = 10.0;
-            double prtF = 10.0;
-            double prtVmin = 0.0;
-            double prtV = 0.0;
-            double prtAmin = 0.0;
-            double prtA = 0.0;
-            double prtZmin = 1.0;
-            double prtZ = 1.0;
-            double prtRange = 0.0;
-            // Position easing curve (slot+168=ccc in sub_69A4D4 context)
-            // and rotation control points (slot+268="cp").
-            // Used by sub_6C1540 / sub_6BE0C0 case 3 for position derivative.
-            std::vector<double> ccc_x, ccc_y;  // ccc curve for t easing in sub_69A4D4
-            std::vector<double> cp_x, cp_y;    // cp main bezier points
-            std::vector<double> cp_t;           // cp time knots
-            bool hasCpRotation = false;         // slot+284 type != 0
-        } interpolatedCache;
 
         // === TJS↔Native bridge helpers ===
         // These are implemented in MotionNodeBridge.cpp to avoid circular

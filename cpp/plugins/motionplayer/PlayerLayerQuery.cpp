@@ -76,7 +76,7 @@ namespace {
 
         auto *getter = new motion::LayerGetter();
         getter->setType(node.nodeType);
-        getter->setLabel(motion::detail::widen(node.layerName));
+        getter->setLabel(node.layerName);
         getter->setVisible(node.accumulated.visible);
         getter->setBranchVisible(node.accumulated.active);
         getter->setLayerVisible(node.drawFlag);
@@ -214,9 +214,6 @@ namespace motion {
         // as a string variant — never the value (node index), no nodeType /
         // visible gating, no type3/type4 descent.
         ensureMotionLoaded();
-        if(!_activeMotion) {
-            return detail::makeArray({});
-        }
         // 0x6D1134: `if (*a2 == 0)` — void/absent args[0] emits every key;
         // otherwise apply the substring filter below.
         std::string needle;
@@ -367,9 +364,6 @@ namespace motion {
         // a getter per non-root node. Duplicates are NOT collapsed — every
         // node maps to its own getter, unlike getLayerNames.
         ensureMotionLoaded();
-        if(!_activeMotion) {
-            return detail::makeArray({});
-        }
 
         std::vector<tTJSVariant> items;
         items.reserve(_nodes.size());
@@ -403,9 +397,6 @@ namespace motion {
 
     bool Player::hitTestLayer(ttstr name, double x, double y) {
         ensureMotionLoaded();
-        if(!_activeMotion) {
-            return false;
-        }
 
         if(!_nodes.empty()) {
             updateLayers();
@@ -458,37 +449,8 @@ namespace motion {
         }
         return false;
     }
-
-
-    // --- Selector ---
-    bool Player::isSelectorTarget(ttstr name) {
-        // Aligned to libkrkr2.so sub_6823FC (EmotePlayer-level selector
-        // target): checks membership in the "selectorControl" registry
-        // parsed at PSB load time, NOT the layer list. Our snapshot already
-        // populates selectorControls (RuntimeSupport.cpp:681) from the same
-        // PSB "selectorControl" array. The previous implementation incorrectly
-        // checked layer existence via layersByName, which conflated layer
-        // tree membership with selector-target registration.
-        if(!_activeMotion) {
-            return false;
-        }
-        const auto key = detail::narrow(name);
-        const auto &selectors = _activeMotion->selectorControls;
-        return selectors.find(key) != selectors.end() &&
-            _disabledSelectorTargets.find(key) ==
-                _disabledSelectorTargets.end();
-    }
-
-    void Player::deactivateSelectorTarget(ttstr name) {
-        _disabledSelectorTargets[detail::narrow(name)] = true;
-    }
-
     // --- Misc ---
     tTJSVariant Player::getCommandList() {
-        if(!_activeMotion) {
-            return detail::makeArray({});
-        }
-
         // libkrkr2.so loc_6D3A4C (chunk owner sub_682520): build the same
         // per-call render-item vector as draw (sub_6C2334), stable-sort it, then
         // materialize a fresh TJS Array of command dictionaries.  The caller
@@ -513,11 +475,12 @@ namespace motion {
             }
             return detail::makeArray(variants);
         };
-        const auto makeRealArray = [](const auto &values) {
+        const auto makeMeshPointArray = [](const auto &values) {
             std::vector<tTJSVariant> variants;
-            variants.reserve(values.size());
-            for(const auto value : values) {
-                variants.emplace_back(static_cast<double>(value));
+            variants.reserve(values.size() * 2);
+            for(const auto &point : values) {
+                variants.emplace_back(static_cast<double>(point.x));
+                variants.emplace_back(static_cast<double>(point.y));
             }
             return detail::makeArray(variants);
         };
@@ -566,7 +529,7 @@ namespace motion {
             };
             if(item.meshType == 2) {
                 fields.emplace_back("compositeMesh", detail::makeDictionary({
-                    {"vtx", makeRealArray(
+                    {"vtx", makeMeshPointArray(
                         item.commandCompositeMeshPoints)},
                     {"divx", tTJSVariant(item.meshDivX)},
                     {"divy", tTJSVariant(item.meshDivY)},
@@ -579,7 +542,7 @@ namespace motion {
                     division = 50;
                 }
                 fields.emplace_back("bezierPatch", detail::makeDictionary({
-                    {"patch", makeRealArray(
+                    {"patch", makeMeshPointArray(
                         item.commandBezierPatchPoints)},
                     {"division", tTJSVariant(division)},
                 }));
@@ -659,17 +622,6 @@ namespace motion {
     // free functions (motion_getD3DAvailable / motion_doAlphaMaskOperation in
     // main.cpp). libkrkr2.so registers them on the Motion namespace object, not
     // on Motion.Player (motionplayer_ncb_register @0x6D9B08, 0x6da1f0/0x6da260).
-
-    tTJSVariant Player::motionList() {
-        std::vector<std::string> paths;
-        std::unordered_set<std::string> seen;
-        for(const auto &[_, snapshot] : _motionsByKey) {
-            if(snapshot && seen.insert(snapshot->path).second) {
-                paths.push_back(snapshot->path);
-            }
-        }
-        return detail::makeArray(detail::stringsToVariants(paths));
-    }
 
     void Player::emoteEdit(tTJSVariant args) {
         _directEdit = true;

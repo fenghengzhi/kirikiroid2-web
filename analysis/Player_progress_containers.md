@@ -159,15 +159,16 @@ have:
 
 `0x3333333333333333 * (x>>5)` = `(x/32)/?`... 实测语义：先 `>>5`（÷32，因为 32 是块内某对齐？），但 element=160B、block=480B；`(beginLast - beginCur)>>5` 给出的是 `(480-offset)/32`，再 `×0x3333..`(÷5 的 magic? 实为 ÷3 的另一种写法因 160/32=5, 480/32=15=3×5)。**关键结论：每 block 3 元素、stride 160B 被这套 ÷3 + >>5 公式精确编码，inline 容器必须复刻 `512/160=3` 的块元素数。**
 
-### 2.4 variable-track 元素 160B 字段表（advance 0x6B71F4..；reseek 0x6B8F30..0x6B8F60；sub_6B786C/sub_6B7A70 写入证据）
+### 2.4 variable-track 元素 160B 字段表（advance 0x6B71F4..；reseek 0x6B8F30..0x6B8F60；0x6B786C/0x6B7A70 写入证据）
 
 元素基址 = `v46`（reseek）/ `v19`（advance）。
 
 | 元素内偏移 | 类型 | 含义 | 证据 |
 |-----------|------|------|------|
-| **+0** | int | frameIndex（当前帧索引；sub_6B786C 入口 `*(_DWORD*)a1 = a3` 写入；slot+0 即此对齐到子结构起点）| sub_6B786C 0x6B7898 |
+| **+0** | ttstr | cascadeKey（`scope` 存在时为 `scope+"::"+label`，否则为 label） | Player_initVariables 0x6CD9F0..0x6CDBB4 |
 | **+8** | int | activeSlotIndex（活动 slot 0/1） | advance `v27=*(int*)(v19+8)`；翻转 `*(v19+8)=(*(v19+8)&1)==0`；reseek 末 `*(v46+8)=0` 重置 |
-| **+24** | iTJSDispatch2 holder（≈20B ttstr/variant 持有） | frameList dispatch source（propGetCount；传 sub_6B786C/sub_6B7A70 第二参） | advance `sub_A0F5E0(v58, v19+24)`；reseek `sub_A0F5E0(v66, v46+24)` |
+| **+16** | double | 当前插值变量值（HM4 快照读取） | Player_interpolateVarTrackValues 0x6BBF54 |
+| **+24** | tTJSVariant | frameList dispatch source（传 0x6B786C/0x6B7A70 第二参） | Player_initVariables 0x6CDA58..0x6CDA98 CopyRef |
 | **+48 + 56*slot** | 56B | slot[0]/slot[1]（双缓冲，每 slot 56B） | advance `v24=v19+48+56*active`；reseek `sub_6B786C(v46+48,..)` 与 `sub_6B786C(v46+104,..)`（104=48+56） |
 
 **slot 内 56B 子结构（来自 sub_6B786C 0x6B7898/0x6B7988/0x6B798C + sub_6B7A70 0x6B7a9c..0x6B7c88）**，slot 基址 = `v46+48`（slot0）/ `v46+104`（slot1）：
@@ -181,9 +182,9 @@ have:
 | +22 | byte | **mergedFlag**（sub_6B786C 置 0 = 未 merge；sub_6B7A70 置 1 = 已 merge） | 两函数共写 +22 |
 | +16(=a1[4]) | int | interval（`propGetInt("interval")`） | sub_6B7A70 0x6B7c68 |
 | +24(=a1[3]) | double | value（`propGetDouble("value")`） | sub_6B7A70 0x6B7c88 |
-| +8..(easing) | (覆盖 time 槽? a1+8 复用) | easing 内容 `sub_A0FB64(a1+8, easing)` | sub_6B7A70 0x6B7cd4 |
+| +32 | tTJSVariant | `frame["easing"]` 的独立 CopyRef | 0x6B7C90..0x6B7CD4 |
 
-> 注：sub_6B786C 写 slot+0=frameIndex、slot+8=time、slot+22=0（mergedFlag 清）；sub_6B7A70 写 slot+20/+21、slot+16=interval、slot+24=value、slot+8 区域=easing、slot+22=1（mergedFlag 置）。两个 slot 各 56B，两 slot 占 +48..+104..+160，恰好填满 160B 元素。
+> 勘误（2026-07-18）：旧记录把 easing 误写成 slot+8、与 time 重叠。完整反编译证明 0x6B7CD4 的 CopyRef 目标是 slot+32；time 始终在 +8。interval/value 的 holder 是 `frame["content"]`，easing 的 holder 则是 frame 本身。
 
 **元素级 mergedFlag（+70/+126）的来历**：advance 中 `if(!*(v19+70)) sub_6B7A70(v19+48,..)` 与 `if(!*(v19+126)) sub_6B7A70(...)`。+70 = (+48)+22 = slot0 的 +22；+126 = (+104)+22 = slot1 的 +22。即 **+70/+126 就是两个 slot 各自的 mergedFlag**（不是独立元素字段）。
 
@@ -206,8 +207,8 @@ reseek（0x6B8F30）对每个 track 元素：`sub_6B786C(v46+48, v46+24, idx)` +
 
 ### 2.6 子函数语义（已反编译，不再"未确认"）
 
-- **sub_6B786C(slot, frameListHolder, frameIndex)** @0x6B786C：`slot[0]=frameIndex`；从 frameList dispatch 取第 frameIndex 项；`slot+8 = propGetDouble("time")`；`slot+22 = 0`（清 mergedFlag）。= "把帧 N 的 time 装进 slot"。
-- **sub_6B7A70(slot, frameListHolder)** @0x6B7A70：`slot+22 = 1`（置 mergedFlag）；取 slot[0] 项的 `type`：type==0→`slot+20=1`；type∈{2,3}→`slot+21 = (type==3)`；再读 `interval`(`slot+16`)、`value`(`slot+24`)、`easing`(`sub_A0FB64(slot+8,..)`)。= "把帧的 type/interval/value/easing 解析进 slot"。
+- **Motion_VarTrackSlot_step_guess(slot, frameListHolder, frameIndex)** @0x6B786C：`slot[0]=frameIndex`；从 frameList dispatch 取第 frameIndex 项；`slot+8 = propGetDouble("time")`；`slot+22 = 0`（清 mergedFlag）。
+- **Motion_VarTrackSlot_merge_guess(slot, frameListHolder)** @0x6B7A70：`slot+22 = 1`；取帧 `type`，type==0 时写 `slot+20=1` 并早退；否则从 `frame["content"]` 读 interval/value 到 +16/+24，再把 `frame["easing"]` CopyRef 到 slot+32。
 
 ---
 
@@ -286,7 +287,7 @@ loop-wrap（progress_inner）：forward `frameTick += loopTime - totalFrames` wh
 | libkrkr2.so | 替换目标 |
 |---|---|
 | node deque @+200（80B 控制结构，element 2632B，1 元素/block，block=2632B） | inline libstdc++-ABI deque<MotionNode>，1 元素/block；index→addr 用 §1.3 公式 |
-| variable-track deque @+1312（80B 控制结构，element 160B，3 元素/block，block=480B） | inline deque<VarTrackEntry160B>，3 元素/block；index→addr 用 §2.3 ÷3 公式；element 含 +0 frameIndex、+8 activeSlot、+24 frameList holder、+48/+104 两 56B slot（slot: +0 frameIndex/+8 time/+16 interval/+20 hold/+21 easingKind/+22 mergedFlag/+24 value） |
+| variable-track deque @+1312（80B 控制结构，element 160B，3 元素/block，block=480B） | inline deque<VarTrackEntry160B>，3 元素/block；index→addr 用 §2.3 ÷3 公式；element 含 +0 cascadeKey、+8 activeSlot、+16 当前值、+24 frameSource Variant、+48/+104 两 56B slot（slot: +0 frameIndex/+8 time/+16 interval/+20 hold/+21 easingKind/+22 mergedFlag/+24 value/+32 easing Variant） |
 | layer stream @+1072/+916/+920/+928 | dispatch holder + int cursor + 2 double（无 content buf） |
 | root stream @+548/+568/+576/+584/+616 | dispatch holder + int cursor + 2 double + content buf @+616 |
 
@@ -299,7 +300,7 @@ loop-wrap（progress_inner）：forward `frameTick += loopTime - totalFrames` wh
 1. **node deque 控制结构精确边界**：三函数只用 +200/+208/+216/+224/+232/+240/+256；标准 80B 应到 +280，但 reseek 把 +280 当 aux list 头。需另找 node-deque ctor（`Player_nodesDeque_init @0x6F4E90`）/push（`0x6F1914`）确认 +248/+264/+272 是否属控制结构，以及 finish iterator 4 字段精确排布。
 2. **variable-track deque +1360**：reseek size 公式未直接读 +1360（标准应为 finish._M_last）；需 ctor `Player_controllerDeque_init @0x6F4FD8` 确认。
 3. **dispatch holder（+1072 / +548 / element+24）精确字节布局**：~20B ttstr/variant + 解析出的 iTJSDispatch2*；off_19FD968 vtable 成员。sub_A0F5E0/sub_A0E48C/sub_A0F778 是其 ctor/detach/dtor。
-4. **slot 内 +8 的 double(time) 与 easing 写入是否冲突**：sub_6B7A70 用 `sub_A0FB64(slot+8, easing)` 写 easing 到 slot+8，而 sub_6B786C 写 time 到 slot+8——需确认是否 time 在 +8、easing 在另一子偏移（IDA `(a1+8)` 可能是 easing 子结构基址而非覆盖 time）。当前证据下 slot+8 可能是一个 16~20B 子结构（time + easing variant），不是单 double。**这是 slot 56B 内最不确定的点。**
+4. ~~slot+8 time/easing 冲突~~：已由 0x6B7CD4 完整反编译证伪；easing Variant 位于 slot+32，不与 +8 time 重叠。
 5. **player+1152 用途**（每帧清 0 的 int）。
 6. **+456 在 reseek 里被 int 截断**（`(double)(int)propGetInt("time")` 写 +920/+928 是整数化）：layer stream 在 reseek 路径 curTime/nextTime 被 int 截断，advance 路径用 propGetDouble 不截断——两路径精度不同，inline 移植须保留此差异。
 

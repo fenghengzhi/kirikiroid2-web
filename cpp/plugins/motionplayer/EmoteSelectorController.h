@@ -141,6 +141,11 @@ namespace motion {
     float EmoteSelectorController_step(EmoteSelectorController* self,
                                        float* out, float dt);
 
+    // sub_668394 @0x668394. Commits the last queued selection (or the current
+    // selected index when mid-transition), clears the command track and idles.
+    void EmoteSelectorController_resetLike_0x668394(
+        EmoteSelectorController* self);
+
     // Aligned with libkrkr2.so sub_6680B0
     //   EmoteSelectorController_applySelection @ 0x6680B0.
     //   selectedIndex(+88) = index; for each option i in optionList:

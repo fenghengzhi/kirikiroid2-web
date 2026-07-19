@@ -27,7 +27,7 @@ metadata:
 - **D1 中**: Player.h:1518-1524 `_evalResultList`+`_evalResultListIndex` 是 HM2 的 std::string 影子(注释 line1399 自承 merged 但仍在), 二进制无对应 → 建议删。
 - **D2 中**: EmotePlayer.h:116 `virtual ~EmotePlayer()` 多 vptr; 二进制 vtable@0x1A18BB0 属 ncbind 框架壳非 payload; Player/EmoteObject/D3DEmotePlayer 均非多态 → 建议去 virtual。
 - **D3 低**: EmotePlayer 经 EmoteObject 中间层 reach Engine; 二进制 24B shell(0x68629C) +8=EmoteEngine* 直连(无中间层)。平台边界已标注。
-- **D4 低**: _motionsByKey/_timelines std::string key (二进制 ttstr); 缓存类。
+- **D4 低（2026-07-19 更新）**: `_timelines` 已删除；`_motionsByKey` 的 std::string key/decoded snapshot 缓存仍是二进制外旁路。
 - **D5 低**: EmoteObject dtor modules 释放时机异于二进制(Engine→RM→modules); 无依赖行为等价。
 
 ## EmotePlayer 链拓扑(确认)

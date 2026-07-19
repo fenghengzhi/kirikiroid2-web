@@ -230,6 +230,24 @@ namespace motion {
         }
     }
 
+    // sub_668394 @0x668394.
+    void EmoteSelectorController_resetLike_0x668394(
+        EmoteSelectorController* self) {
+        if(!self->commandTrack12B.queue.empty()) {
+            self->selState = 0;
+            const int index = static_cast<int>(
+                self->commandTrack12B.queue.back().endRad);
+            EmoteSelectorController_applySelection(self, index, 0.0f, 0.0f);
+            self->commandTrack12B.queue.clear();
+            return;
+        }
+        if(self->selState != 0) {
+            self->selState = 0;
+            EmoteSelectorController_applySelection(
+                self, self->selectedIndex, 0.0f, 0.0f);
+        }
+    }
+
     void EmoteSelectorController_dtor(EmoteSelectorController* self) {
         // The 12B command track owns no heap beyond its deque buffer (freed by
         //   std::deque). The optionList holds NON-owning refCtl pointers (those

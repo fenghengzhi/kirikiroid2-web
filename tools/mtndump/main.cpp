@@ -12,8 +12,7 @@
 #include "SysInitImpl.h"
 #include "SysInitIntf.h"
 #include "GraphicsLoaderIntf.h"
-#include "motionplayer/PlayerInternal.h"
-#include "motionplayer/RuntimeSupport.h"
+#include "motionplayer/OfflineMotionSnapshot.h"
 
 namespace fs = std::filesystem;
 
@@ -45,6 +44,41 @@ namespace {
 
     bool startsWith(const std::string &value, const char *prefix) {
         return value.rfind(prefix, 0) == 0;
+    }
+
+    std::set<std::string> collectSourceNames(
+        const motion::detail::MotionSnapshot &snapshot) {
+        std::set<std::string> sources;
+        constexpr const char *sourcePrefix = "source/";
+        constexpr const char *iconMarker = "/icon/";
+        constexpr const char *pixelSuffix = "/pixel";
+
+        for(const auto &[resourcePath, resource] : snapshot.resourcesByPath) {
+            if(!resource || !startsWith(resourcePath, sourcePrefix) ||
+               resourcePath.size() <= std::strlen(pixelSuffix) ||
+               resourcePath.compare(resourcePath.size() -
+                                        std::strlen(pixelSuffix),
+                                    std::strlen(pixelSuffix), pixelSuffix) != 0) {
+                continue;
+            }
+
+            const auto iconPos = resourcePath.find(iconMarker,
+                                                    std::strlen(sourcePrefix));
+            if(iconPos == std::string::npos) {
+                continue;
+            }
+            const auto group = resourcePath.substr(
+                std::strlen(sourcePrefix),
+                iconPos - std::strlen(sourcePrefix));
+            const auto nameBegin = iconPos + std::strlen(iconMarker);
+            const auto name = resourcePath.substr(
+                nameBegin,
+                resourcePath.size() - std::strlen(pixelSuffix) - nameBegin);
+            if(!group.empty() && !name.empty()) {
+                sources.emplace("src/" + group + "/" + name);
+            }
+        }
+        return sources;
     }
 
     std::shared_ptr<tTVPBaseBitmap> makeBitmapFromDecodedRgba(
@@ -181,9 +215,7 @@ int main(int argc, char *argv[]) {
             manifest << "source\tpng\twidth\theight\torigin_x\torigin_y\t"
                         "decoded_bgra\n";
 
-            std::set<std::string> uniqueSources(
-                snapshot->sourceCandidates.begin(),
-                snapshot->sourceCandidates.end());
+            const auto uniqueSources = collectSourceNames(*snapshot);
             std::size_t exported = 0;
             std::size_t skipped = 0;
             for(const auto &source : uniqueSources) {

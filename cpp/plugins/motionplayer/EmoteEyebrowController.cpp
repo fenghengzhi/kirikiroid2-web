@@ -6,42 +6,12 @@
 // identical).
 
 #include "EmoteEyebrowController.h"
+#include "MotionDispatch.h"
 
 #include <cmath>
 #include <cstring> // std::memcpy for the raw-bits trackPow reinterpret
 
-#include "psbfile/PSBValue.h"
-
 namespace motion {
-
-    namespace {
-
-        // Helpers mirroring the binary's Motion_propGet* on a PSB dict/list, with
-        // the same default (0) when the key is absent. (Identical to the eye
-        // slice's helpers.)
-
-        int psbInt(const PSB::PSBDictionary* d, const char* key, int dflt = 0) {
-            if (!d) return dflt;
-            const auto v = (*d)[std::string(key)];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                return static_cast<int>(n->getLongValue());
-            }
-            return dflt;
-        }
-
-        // sub_6637BC(arr, idx): reads element `idx` of a PSB array as an int.
-        int psbArrayInt(const PSB::PSBList* arr, int idx) {
-            if (!arr || idx < 0 || idx >= static_cast<int>(arr->size())) {
-                return 0;
-            }
-            const auto v = (*arr)[idx];
-            if (const auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v)) {
-                return static_cast<int>(n->getLongValue());
-            }
-            return 0;
-        }
-
-    } // namespace
 
     // Aligned with libkrkr2.so EmoteBlinkController_ctor_slim_guess @ 0x66480C.
     // Decompiled pseudocode (this conversation):
@@ -56,7 +26,7 @@ namespace motion {
     // NOTE: NO endFrame / blinkInterval* / blinkFrameCount / blinkEnabled reads,
     //   and NO RNG call. The slim controller has no blink state at all.
     void EmoteEyebrowController_ctor(EmoteEyebrowController* self,
-                                     const PSB::PSBDictionary* dict) {
+                                     const tTJSVariant& dict) {
         // Embedded value-track deques default-construct empty (the binary's
         //   memset + EmoteAngleController_ctor_12Bdeque / sub_6827A8 / sub_6828FC
         //   leave them empty; std::deque/std::vector default ctors replicate this
@@ -64,49 +34,40 @@ namespace motion {
         EmoteAngleController_ctor(&self->valueTrack12B, 0); // 0x664858
 
         // beginFrame (the ONLY scalar field read; +328, idx 82).        /*0x664938*/
-        self->beginFrame = psbInt(dict, "beginFrame");
+        self->beginFrame = detail::motionPropGetInt(
+            dict, TJS_W("beginFrame"));                            // 0x664938
 
         // "edge" array -> edgeTable of {x,y} pairs (each elem a 2-int sub-array).
         //   sub_56C694(edge) = count; loop sub_6637BC(elem,0)/(elem,1).  /*0x6649d4*/
-        const PSB::PSBList* edge = nullptr;
-        if (dict) {
-            edge = dynamic_cast<const PSB::PSBList*>(
-                (*dict)[std::string("edge")].get());
-        }
-        if (edge) {
-            const int count = static_cast<int>(edge->size()); // sub_56C694
-            self->mesh.edgeTable.reserve(static_cast<size_t>(count));
-            for (int i = 0; i < count; ++i) {
-                const auto sub = dynamic_cast<const PSB::PSBList*>(
-                    (*edge)[i].get());
-                const int x = psbArrayInt(sub, 0); // sub_6637BC(elem,0)
-                const int y = psbArrayInt(sub, 1); // sub_6637BC(elem,1)
-                self->mesh.edgeTable.emplace_back(static_cast<float>(x),
-                                                  static_cast<float>(y));
-            }
+        const tTJSVariant edge = detail::motionPropGet(
+            dict, TJS_W("edge"));                                 // 0x664968
+        const int edgeCount = detail::motionPropGetCount(edge);   // 0x6649d4
+        self->mesh.edgeTable.reserve(static_cast<size_t>(edgeCount));
+        for (int i = 0; i < edgeCount; ++i) {
+            const tTJSVariant pair = detail::motionPropGetByNum(edge, i);
+            const int x = detail::motionPropGetIntByNum(pair, 0); // 0x664a90
+            const int y = detail::motionPropGetIntByNum(pair, 1); // 0x664aa4
+            self->mesh.edgeTable.emplace_back(static_cast<float>(x),
+                                              static_cast<float>(y));
         }
 
         // "node" array -> nodeRows: each elem is a sub-array; push a row of its
         //   int->float values (the binary builds a vector<float> per node into
         //   the 504-block deque @+184).                                  /*0x664c5c*/
-        const PSB::PSBList* node = nullptr;
-        if (dict) {
-            node = dynamic_cast<const PSB::PSBList*>(
-                (*dict)[std::string("node")].get());
-        }
-        if (node) {
-            const int nodeCount = static_cast<int>(node->size()); // sub_56C694
-            for (int i = 0; i < nodeCount; ++i) {
-                const auto sub = dynamic_cast<const PSB::PSBList*>(
-                    (*node)[i].get());
-                std::vector<float> row;
-                const int rowCount = sub ? static_cast<int>(sub->size()) : 0;
-                row.reserve(static_cast<size_t>(rowCount));
-                for (int j = 0; j < rowCount; ++j) {
-                    row.push_back(static_cast<float>(psbArrayInt(sub, j)));
-                }
-                self->mesh.nodeRows.push_back(std::move(row));
+        const tTJSVariant node = detail::motionPropGet(
+            dict, TJS_W("node"));                                 // 0x664bf0
+        const int nodeCount = detail::motionPropGetCount(node);   // 0x664c5c
+        for (int i = 0; i < nodeCount; ++i) {
+            const tTJSVariant sourceRow =
+                detail::motionPropGetByNum(node, i);               // 0x664c9c
+            std::vector<float> row;
+            const int rowCount = detail::motionPropGetCount(sourceRow);
+            row.reserve(static_cast<size_t>(rowCount));
+            for (int j = 0; j < rowCount; ++j) {
+                row.push_back(static_cast<float>(
+                    detail::motionPropGetIntByNum(sourceRow, j)));  // 0x664e48
             }
+            self->mesh.nodeRows.push_back(std::move(row));
         }
 
         // trackValue = (float)beginFrame.   *((float*)v3+75) = (float)*((int*)v3+82)
@@ -233,6 +194,25 @@ namespace motion {
 
         // *out = trackValue. No blink machine, no remap (unlike the eye step).
         *out = self->trackValue;                            // *(a1+300) /*0x66582c*/
+    }
+
+    // sub_6654C4 @0x6654C4.
+    void EmoteEyebrowController_resetLike_0x6654C4(
+        EmoteEyebrowController* self) {
+        if(!self->valueTrack12B.queue.empty()) {
+            self->trackState = 0;
+            self->trackValue = self->valueTrack12B.queue.back().endRad;
+            self->valueTrack12B.queue.clear();
+            self->valueTrack8B.clear();
+            return;
+        }
+        if(self->trackState != 0) {
+            self->trackState = 0;
+            self->trackValue = self->valueTrack8B.empty()
+                ? self->trackTarget
+                : self->valueTrack8B.back().first;
+            self->valueTrack8B.clear();
+        }
     }
 
 } // namespace motion

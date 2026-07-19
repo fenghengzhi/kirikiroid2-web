@@ -30,5 +30,7 @@ M2 EmoteEngine deque#4（"eye" 类目状态机）垂直切片调查（2026-06-03
 ## 拓扑结论 / remaining
 - 叶子前置 = **初始 builder**（未定位）→ 然后才是 sub_663FC8 反序列化 → 然后 setVariable 驱动 / progress step。**没有 builder，deque#4 永远空，step 永不执行**。
 - 本切片**未改任何代码**：类布局更正需要先定位 builder 才能给出 controller 的完整字段表与 HM@+1384 项布局（type@+16/index@+20/value@+0/key+ptr）；在 builder 缺位下改 EmoteStateMachine16B_Deque4 成 {ptr,ttstr} 是半成品（controller 类型尚未建模）。
-- remaining 全部 open：deque#5(sub_665600)/#6(sub_666068)/#8(EmoteVarController_step@?)/#9(sub_668470)/#10(inline curve lookup) + hair(stepHairParts@0x67B748)/bust(stepBust@0x67BCE8)/post-loop bind-loop(sub_67C560/67C6B0/Player_bindParameterValue)。
+- 2026-07-18 更正：上述 sibling deque/controller、hair/bust 物理与 post-loop bind 链均已实装；
+  `sub_67C560` 也已迁到 Engine HM3/+1040/56B track deque。本条保留的价值是
+  deque#4 的元素和 population 证据，“remaining 全部 open”不再是当前裁决。
 - 验证缺口：emote 角色物理子系统无 oracle/fixture（logo 不覆盖）。

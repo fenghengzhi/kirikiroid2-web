@@ -47,8 +47,8 @@ unload(=sub_6A959C), unloadAll(=**loc_6A8CF8**), isExistMotion(=sub_6A96F8),
 findMotion(=sub_6A9ED4), findSource(=sub_6AAB3C), random(=sub_6AB56C),
 requireLayerId(=sub_6AB694), releaseLayerId(=sub_6AB750).
 
-  *** CORRECTION (2026-07-12): IDA merged two adjacent functions. The body at
-  0x6A8BBC is the ResourceManager destructor; that is where the +168 layerId
+  *** CORRECTION (function boundary finalized 2026-07-18): IDA merged two adjacent functions. The body at
+  0x6A8B94 is the ResourceManager destructor; that is where the +168 layerId
   RB-tree, +144 RandomGen and SourceCache base are destroyed. The actual
   unloadAll starts at the independent prologue `0x6A8CF8` and only walks +104,
   memsets buckets@+88, and zeros +104/+112. Moreover +104 is not a separate
@@ -99,12 +99,12 @@ has no internal C++ caller; unit tests exercise Player::findSource). P2.
 
 This is NOT RM.findSource. It is the Player-internal source->texture resolver
 (renamed Motion_Player_findSource). It is the function the prompt meant by
-"findSource 0x6948E8 (RM 双 hashmap + raw upload vs list+shared_ptr)":
+"findSource 0x6948E8 (RM mapped record + two nested maps)":
 
 ```
 RM = Player+636 dispatch -> native @ *(prop+8)=v10; spec = v10+224 (1=krkr 2=win)
 arg !"blank" prefix:
- spec==2 (win): HashMap A lookup sub_6EB8F4(v10+88, FNV(group)%v10+96) -> group dict
+ spec==2 (win): HashMap A lookup sub_6EB8F4(v10+88, FNV(moduleKey)%v10+96) -> record
    nested map: v24+1 base, v24[2] bucketcount, ttstrHashMap_findNode(name)
      hit: a1+24 = cachedTexture
      miss: read pixel/w/h/type from PSB dict; raw aligned alloc sub_A0DE48(4*w*h,4);
@@ -116,24 +116,25 @@ arg !"blank" prefix:
  spec==1 (krkr): a1+112 = arg; if Player+909: sub_695DE8 (decode-all PSB path)
 ```
 
-ARCHITECTURE: **DUAL hashmap** (RM HashMap A keyed by FNV(group-name) -> PSB
-group dict; + a NESTED intrusive ttstr->texture map living INSIDE each dict
-value, keyed by source name) + **raw new/aligned-alloc + direct device
-CreateTexture GPU upload at resolve time** + AddRef/Release lifetime.
+ARCHITECTURE CORRECTION (2026-07-18): outer HashMap A is keyed by the loaded
+module key. Its mapped record is constructed by sub_6EBCFC and contains, in
+declaration order, PSBFile root + Win `group->texture` map + KRKR
+`src/group/icon->descriptor` map. The record destructor sub_6DB3E8 destroys
+KRKR map, Win map, then PSBFile; unload/unloadAll therefore release textures
+with the outer module node. This is three maps total, not a SourceCache-list
+substitute and not a platform boundary.
 
-Local equivalent = SourceCache + `resolveMotionSourcePathLike_0x6948E8`
-(SourceCache.cpp:177) + loadRenderSourceTextureByName: uses a SINGLE
-`std::list<Entry>` keyed (key,blendMode) + `std::shared_ptr<tTVPBaseBitmap>`
-backing + LAZY `TVPGetRenderManager()->CreateTexture2D`. This is the named
-divergence:
- - container: dual-hashmap (group-map + per-dict nested ttstr-map) -> one std::list.
- - lifetime: raw AddRef/Release + intrusive nodes -> shared_ptr RAII.
- - upload: direct device CreateTexture at parse -> deferred RenderManager texture.
-Status: ARCH DEVIATION (🔧). PLATFORM_BOUNDARY-adjacent (web render stack has no
-per-dict intrusive map and uses RenderManager texture abstraction, not a raw
-GL device vtbl+24 upload), but the dual-hashmap topology itself is NOT a platform
-necessity — a faithful port would keep two maps. Documented; deferred under
-phase-D texture-topology boundary (SourceCache.cpp / RM.h:50-97 notes).
+Local now uses `LoadedResourceRecord` as `_loadedModules` mapped value with the
+same two nested ttstr unordered_maps, `rehash(10)` construction, owning
+AddRef/Release entries, flat KRKR full-path key and matching member destruction
+order. `MotionSnapshot` no longer owns either texture table. Win/spec=2 now reads
+the record's raw `PSBRawNode` graph directly and mirrors discarded
+`truncated_*`, exact width/height, raw RGBA8/A8L8 conversion and icon geometry.
+KRKR/spec=1 atlas decode now also reads the record's raw `PSBRawNode` graph and
+mirrors all-group enumeration, raw/RL/palette branches and transparent 2x2
+handling. The Web texture API still requires a full-page KRKR upload instead of
+per-subrect non-zero-offset updates; that upload primitive is the concrete
+platform adaptation. Player_findSource's source pixel chain is otherwise closed.
 
 ## 6. SourceCache loadSource/clearCache — CONFIRMED base behavior
 
@@ -188,7 +189,7 @@ chain (analysis/SLA_Rendering_Chain_libkrkr2so.md) — not re-decompiled this pa
 | 2 | unloadAll addr | body @0x6A8CF8 | comment says 0x6A8BBC | DOC ERR (fix comment) |
 | 3 | RM findSource | HashMap A + ObjSource facade | unordered_map + facade | container dev (OK) |
 | 4 | ObjSource | dict facade, w/h dflt 32 | readInt dflt 32 | OK; clip STUB (P2) |
-| 5 | Player_findSource | DUAL hashmap + raw GPU upload | list+shared_ptr+lazy tex | 🔧 ARCH (phase-D) |
+| 5 | Player_findSource | outer record + Win/KRKR nested maps + raw decode/upload | both spec paths raw-aligned; KRKR full-page upload is Web API boundary | CLOSED + BOUNDARY |
 | 6 | SourceCache loadSource | +72 intrusive list, Layer dispatch | std::list, bitmap bake | container dev (OK) |
 | 7 | SLA surface | 5 members @0x6ABFAC | 4+factory | OK |
 | 8 | RuntimeSupport/GLL | direct TJS dict / internal Layer | aux MotionSnapshot / adapter | port host layer |
@@ -202,6 +203,7 @@ chain (analysis/SLA_Rendering_Chain_libkrkr2so.md) — not re-decompiled this pa
 - FIX the unloadAll address in RM.h:147 + RM.cpp:372 comments: 0x6A8BBC -> 0x6A8CF8.
 - ObjSource::getClip is a STUB returning {} vs binary Motion.Rect dispatch (P2,
   oracle-inert).
-- Player_findSource dual-hashmap + raw-GPU-upload topology (item 5) is the one
-  genuine 🔧 architectural divergence; it is parked under the documented phase-D
-  texture-topology platform boundary, not a local-patchable defect.
+- Player_findSource container ownership/lifetime and Win raw chain are restored.
+  Continue by replacing the KRKR atlas snapshot navigation with
+  `LoadedResourceRecord::file` raw nodes; do not relabel that gap as a platform
+  boundary.

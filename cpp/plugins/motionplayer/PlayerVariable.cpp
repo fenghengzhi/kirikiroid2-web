@@ -3,6 +3,7 @@
 //
 #include "PlayerInternal.h"
 #include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
+#include "MotionDispatch.h"
 #include "ncbind.hpp"
 
 using namespace motion::internal;
@@ -99,75 +100,9 @@ namespace {
         }
     }
 
-    std::optional<double> parameterPsbNumberLike_0x6B1718(
-        const std::shared_ptr<PSB::IPSBValue> &value) {
-        if(auto number = std::dynamic_pointer_cast<PSB::PSBNumber>(value)) {
-            switch(number->numberType) {
-                case PSB::PSBNumberType::Float:
-                    return number->getValue<float>();
-                case PSB::PSBNumberType::Double:
-                    return number->getValue<double>();
-                case PSB::PSBNumberType::Int:
-                    return static_cast<double>(number->getValue<int>());
-                case PSB::PSBNumberType::Long:
-                default:
-                    return static_cast<double>(number->getValue<tjs_int64>());
-            }
-        }
-        if(auto boolean = std::dynamic_pointer_cast<PSB::PSBBool>(value)) {
-            return boolean->value ? 1.0 : 0.0;
-        }
-        return std::nullopt;
-    }
-
-    std::optional<double> parameterDictionaryNumberLike_0x6B1718(
-        const std::shared_ptr<const PSB::PSBDictionary> &dic,
-        const char *key) {
-        if(!dic) {
-            return std::nullopt;
-        }
-        return parameterPsbNumberLike_0x6B1718((*dic)[key]);
-    }
-
-    std::string parameterDictionaryStringLike_0x6B1718(
-        const std::shared_ptr<const PSB::PSBDictionary> &dic,
-        const char *key) {
-        if(!dic) {
-            return {};
-        }
-        if(auto str = std::dynamic_pointer_cast<PSB::PSBString>((*dic)[key])) {
-            return str->value;
-        }
-        return {};
-    }
-
-    bool parameterDictionaryBoolLike_0x6B1718(
-        const std::shared_ptr<const PSB::PSBDictionary> &dic,
-        const char *key) {
-        if(!dic) {
-            return false;
-        }
-        if(auto boolean = std::dynamic_pointer_cast<PSB::PSBBool>((*dic)[key])) {
-            return boolean->value;
-        }
-        if(auto number = parameterPsbNumberLike_0x6B1718((*dic)[key])) {
-            return *number != 0.0;
-        }
-        return false;
-    }
-
 } // anonymous namespace
 
 namespace motion {
-    bool Player::shouldMirrorEvalLabelLike_0x67C6B0(const std::string &label) {
-        if(!_mirrorEvalEnabled || label.empty() || !_activeMotion) {
-            return false;
-        }
-        const auto &matchList = _activeMotion->mirrorVariableMatchList;
-        return std::find(matchList.begin(), matchList.end(), label) !=
-               matchList.end();
-    }
-
     double &Player::ensureEvalResultSlotLike_0x686944(const std::string &label) {
         if(const auto it = _evalResultListIndex.find(label);
            it != _evalResultListIndex.end()) {
@@ -190,27 +125,28 @@ namespace motion {
     }
 
     detail::MotionParameterEntry *Player::appendParameterEntryLike_0x6B1718(
-        const std::shared_ptr<const PSB::PSBDictionary> &dic) {
-        if(!dic) {
+        const tTJSVariant &parameter) {
+        // sub_6B1718 @0x6B1718 rejects every non-object variant before it
+        // creates the ncbPropAccessor/dispatch holder or grows Player+384.
+        if(parameter.Type() != tvtObject) {
             return nullptr;
         }
 
         detail::MotionParameterEntry entry;
-        entry.id = parameterDictionaryStringLike_0x6B1718(dic, "id");
-        entry.discretization =
-            parameterDictionaryBoolLike_0x6B1718(dic, "discretization");
-        entry.rangeBegin =
-            parameterDictionaryNumberLike_0x6B1718(dic, "rangeBegin")
-                .value_or(0.0);
-        entry.rangeEnd =
-            parameterDictionaryNumberLike_0x6B1718(dic, "rangeEnd")
-                .value_or(0.0);
+        entry.id = detail::motionPropGetString(parameter, TJS_W("id"));
+        entry.discretization = detail::motionPropGetBool(
+            parameter, TJS_W("discretization"));
+        entry.rangeBegin = detail::motionPropGetDouble(
+            parameter, TJS_W("rangeBegin"));
+        entry.rangeEnd = detail::motionPropGetDouble(
+            parameter, TJS_W("rangeEnd"));
 
         const double range = entry.rangeEnd - entry.rangeBegin;
         double division = 0.0;
-        if(const auto explicitDivision =
-               parameterDictionaryNumberLike_0x6B1718(dic, "division")) {
-            division = *explicitDivision;
+        tTJSVariant divisionValue;
+        if(detail::motionTryPropGet(parameter, TJS_W("division"),
+                                    divisionValue)) {
+            division = divisionValue.AsReal();
         } else {
             division = range;
             if(division <= 0.0) {
@@ -229,21 +165,19 @@ namespace motion {
     }
 
     bool Player::parseParameterListLike_0x6B202C(
-        const std::shared_ptr<PSB::IPSBValue> &value) {
-        if(!value) {
+        const tTJSVariant &parameters) {
+        // sub_6B202C @0x6B202C rejects only a void variant. Every non-void
+        // value is converted to the ordinary dispatch holder, counted through
+        // Motion_propGetCount and indexed with PropGetByNum.
+        if(parameters.Type() == tvtVoid) {
             return false;
         }
 
-        const auto list = std::dynamic_pointer_cast<PSB::PSBList>(value);
-        if(!list) {
-            return false;
-        }
-
-        _parameterEntries.reserve(
-            _parameterEntries.size() + list->size());
-        for(const auto &item : *list) {
-            auto dic = std::dynamic_pointer_cast<PSB::PSBDictionary>(item);
-            appendParameterEntryLike_0x6B1718(dic);
+        const tjs_int count = detail::motionPropGetCount(parameters);
+        for(tjs_int index = 0; index < count; ++index) {
+            const tTJSVariant parameter =
+                detail::motionPropGetByNum(parameters, index);
+            appendParameterEntryLike_0x6B1718(parameter);
         }
         finalizeParameterTableLike_0x6B1ECC();
         return true;
@@ -264,16 +198,17 @@ namespace motion {
     // what makes a grandchild parameter (for example `select`) visible in the
     // immediate child's +408 map: Player_bindParameterValue @0x6C4668 finds the
     // immediate type-3 child by the scope path, then looks up the suffix in that
-    // child's +408 map. The map is cleared by the motion-rebuild caller before
-    // that Player's own parameters/children are rebuilt; cross-Player nodes are
-    // removed by 0x6CDE18 during child destruction. 0x6B1ECC performs no clear.
+    // child's +408 map. Fresh Player_playImpl@0x6B2284 and
+    // Player_initNonEmoteMotion@0x6B365C decompilation proves neither caller
+    // clears +408 before registration: +384 merely rewinds its vector end and
+    // repeated +408 nodes therefore persist. Cross-Player nodes are removed by
+    // 0x6CDE18 during child destruction. 0x6B1ECC itself also performs no clear.
     void Player::finalizeParameterTableLike_0x6B1ECC() {
         for(Player *destination = this; destination != nullptr;
             destination = destination->_parentPlayer) {
             for(auto &entry : _parameterEntries) {
-                if(!entry.id.empty()) {
-                    destination->_parameterRampMap.emplace(
-                        detail::widen(entry.id), &entry);
+                if(!entry.id.IsEmpty()) {
+                    destination->_parameterRampMap.emplace(entry.id, &entry);
                 }
             }
         }
@@ -289,8 +224,8 @@ namespace motion {
         for(Player *destination = this; destination != nullptr;
             destination = destination->_parentPlayer) {
             for(auto &entry : _parameterEntries) {
-                const auto range = destination->_parameterRampMap.equal_range(
-                    detail::widen(entry.id));
+                const auto range =
+                    destination->_parameterRampMap.equal_range(entry.id);
                 for(auto it = range.first; it != range.second;) {
                     if(it->second == &entry) {
                         it = destination->_parameterRampMap.erase(it);
@@ -340,7 +275,7 @@ namespace motion {
     // binary artifact (truncation keeps dropping each newly-added deeper
     // ancestor); it is reproduced faithfully — the climb only terminates at the
     // root (parentIndex<=0). The comparison element type is the node's label
-    // (node+0 -> tTJSVariant<string>); the port uses MotionNode::layerName.
+    // (node+0 -> ttstr); the port uses MotionNode::layerName directly.
     void Player::rebuildEvalCascadeHeapResultLike_0x6B9650(
         detail::EvalCascadeState &entry) {
         if(entry.weight == 0.0) {
@@ -375,8 +310,7 @@ namespace motion {
                 // sub_6BA5B4 @0x6BA5B4 receives a2=vector.begin() at
                 // 0x6B985C: insert at BEGIN. With pop_back below this retains
                 // the newest node/ancestor window while scanning each child.
-                chain.insert(chain.begin(),
-                             detail::widen(_nodes[idx].layerName));
+                chain.insert(chain.begin(), _nodes[idx].layerName);
                 // Truncate so chain never exceeds ref length (0x6b9874): drop the
                 // oldest tail element when over and chain non-empty.
                 if(chain.size() > ref.size() && !chain.empty()) {
@@ -419,12 +353,13 @@ namespace motion {
     }
 
     double Player::initialParameterRawValueLike_0x6B1ABC(
-        const std::string &id) const {
-        if(id.empty()) {
+        const ttstr &id) const {
+        if(id.IsEmpty()) {
             return 0.0;
         }
 
-        const auto parts = splitParameterLabelLike_0x6D0BF4(id);
+        const auto parts =
+            splitParameterLabelLike_0x6D0BF4(detail::narrow(id));
         const auto findValue =
             [&parts](const detail::LabelValueMap &values,
                      double &out) -> bool {
@@ -724,103 +659,52 @@ namespace motion {
         // HM4 / bindParameterValue → HM1/HM2. R0-1 RESOLVED for the read path.)
     }
 
-    tjs_int Player::countVariables() {
-        ensureMotionLoaded();
-        return _activeMotion
-            ? static_cast<tjs_int>(_activeMotion->variableLabels.size())
-            : 0;
-    }
+    tTJSVariant Player::getParameterRangeLike_0x6D6590(
+        const ttstr &label) {
+        // sub_6D6590 seeds the extrema, delegates the recursive walk to
+        // sub_6D676C, then returns void unless the interval is non-empty.
+        double minValue = std::numeric_limits<double>::max();
+        double maxValue = -std::numeric_limits<double>::max();
 
-    ttstr Player::getVariableLabelAt(tjs_int idx) {
-        ensureMotionLoaded();
-        if(!_activeMotion || idx < 0 ||
-           static_cast<size_t>(idx) >= _activeMotion->variableLabels.size()) {
+        const auto foldRangeLike_0x6D676C =
+            [&](const auto &self, const Player &current) -> void {
+                // sub_6D676C @0x6D67A0 walks Player+384..+392 in 56B steps.
+                for(const auto &entry : current._parameterEntries) {
+                    if(entry.id != label) {
+                        continue;
+                    }
+                    minValue = std::min(
+                        minValue, std::min(entry.rangeBegin, entry.rangeEnd));
+                    maxValue = std::max(
+                        maxValue, std::max(entry.rangeBegin, entry.rangeEnd));
+                }
+
+                // 0x6D6884..0x6D68B0 allocates a callback closure and passes
+                // it to Player_visitChildPlayerDispatches @0x6B601C.
+                for(const auto &node : current._nodes) {
+                    if(node.nodeType == 4) {
+                        const int count = node.getParticleCount();
+                        for(int i = 0; i < count; ++i) {
+                            if(const Player *child = node.getParticleChild(i)) {
+                                self(self, *child);
+                            }
+                        }
+                    } else if(node.nodeType == 3) {
+                        if(const Player *child = node.getChildPlayer()) {
+                            self(self, *child);
+                        }
+                    }
+                }
+            };
+        foldRangeLike_0x6D676C(foldRangeLike_0x6D676C, *this);
+
+        if(minValue >= maxValue) {
             return {};
         }
-        return detail::widen(_activeMotion->variableLabels[idx]);
-    }
-
-    tjs_int Player::countVariableFrameAt(tjs_int idx) {
-        const auto label = getVariableLabelAt(idx);
-        if(label.IsEmpty()) {
-            return 0;
-        }
-        const auto frames = getVariableFrameList(label);
-        return getObjectCount(frames);
-    }
-
-    ttstr Player::getVariableFrameLabelAt(tjs_int idx, tjs_int frameIdx) {
-        const auto label = getVariableLabelAt(idx);
-        if(label.IsEmpty()) {
-            return {};
-        }
-
-        const auto key = detail::narrow(label);
-        if(!_activeMotion) {
-            return {};
-        }
-        const auto it = _activeMotion->variableFrames.find(key);
-        if(it == _activeMotion->variableFrames.end() || frameIdx < 0 ||
-           static_cast<size_t>(frameIdx) >= it->second.size()) {
-            return {};
-        }
-        return detail::widen(it->second[frameIdx].label);
-    }
-
-    double Player::getVariableFrameValueAt(tjs_int idx, tjs_int frameIdx) {
-        const auto label = getVariableLabelAt(idx);
-        if(label.IsEmpty()) {
-            return 0.0;
-        }
-
-        const auto key = detail::narrow(label);
-        if(!_activeMotion) {
-            return 0.0;
-        }
-        const auto it = _activeMotion->variableFrames.find(key);
-        if(it == _activeMotion->variableFrames.end() || frameIdx < 0 ||
-           static_cast<size_t>(frameIdx) >= it->second.size()) {
-            return 0.0;
-        }
-        return it->second[frameIdx].value;
-    }
-
-    tTJSVariant Player::getVariableRange(ttstr label) {
-        ensureMotionLoaded();
-        if(!_activeMotion) {
-            return {};
-        }
-
-        const auto key = detail::narrow(label);
-        if(const auto it = _activeMotion->variableRanges.find(key);
-           it != _activeMotion->variableRanges.end()) {
-            return detail::makeArray(
-                { tTJSVariant(it->second.first), tTJSVariant(it->second.second) });
-        }
-        return {};
-    }
-
-    tTJSVariant Player::getVariableFrameList(ttstr label) {
-        ensureMotionLoaded();
-        if(!_activeMotion) {
-            return detail::makeArray({});
-        }
-
-        const auto key = detail::narrow(label);
-        if(const auto it = _activeMotion->variableFrames.find(key);
-           it == _activeMotion->variableFrames.end()) {
-            return detail::makeArray({});
-        } else {
-            std::vector<tTJSVariant> frames;
-            for(const auto &frame : it->second) {
-                frames.push_back(detail::makeDictionary({
-                    { "label", detail::widen(frame.label) },
-                    { "frame", frame.value },
-                    { "value", frame.value },
-                }));
-            }
-            return detail::makeArray(frames);
-        }
+        return detail::makeDictionary({
+            { "min", minValue },
+            { "max", maxValue },
+        });
     }
 
 
