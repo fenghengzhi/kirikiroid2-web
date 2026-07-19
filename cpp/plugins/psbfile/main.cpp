@@ -110,10 +110,12 @@ namespace {
             std::uint32_t count{};
             (void)value_.GetArrayCount(count);
 
-            const tjs_int64 index = num < 0
-                ? static_cast<tjs_int64>(num) + count
-                : static_cast<tjs_int64>(num);
-            if(index < 0 || index >= count) {
+            const tjs_int signedCount = static_cast<tjs_int>(count);
+            tjs_int index = num;
+            if(index < 0) {
+                index += signedCount;
+            }
+            if(index < 0 || index >= signedCount) {
                 if((flag & TJS_MEMBERMUSTEXIST) != 0) {
                     return TJS_E_MEMBERNOTFOUND;
                 }
@@ -259,13 +261,15 @@ namespace {
             const bool noValue = (flag & TJS_ENUM_NO_VALUE) != 0;
 
             if(category == 6) {
-                std::uint32_t count{};
-                (void)value_.GetArrayCount(count);
-                for(std::uint32_t index = 0; index < count; ++index) {
-                    name = ttstr(static_cast<tjs_int>(index));
+                std::uint32_t rawCount{};
+                (void)value_.GetArrayCount(rawCount);
+                const tjs_int count = static_cast<tjs_int>(rawCount);
+                for(tjs_int index = 0; index < count; ++index) {
+                    name = ttstr(index);
                     if(!noValue) {
                         assign(&memberValue, value_.GetOwner(),
-                               value_.FindArrayElement(index));
+                               value_.FindArrayElement(
+                                   static_cast<std::uint32_t>(index)));
                     }
                     callback->FuncCall(0, nullptr, nullptr, &callbackResult,
                                        noValue ? 2 : 3, params, this);

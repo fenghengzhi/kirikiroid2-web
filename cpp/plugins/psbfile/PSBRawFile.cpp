@@ -74,7 +74,7 @@ namespace PSB {
         struct PackedArray {
             const std::uint8_t *begin{};
             std::uint32_t count{};
-            std::ptrdiff_t width{};
+            int width{};
             std::uint8_t valueTag{};
             const std::uint8_t *values{};
             const std::uint8_t *end{};
@@ -85,15 +85,14 @@ namespace PSB {
                 const auto *entryTag =
                     data + static_cast<std::ptrdiff_t>(countTag) - 0x0b;
                 valueTag = entryTag[0];
-                width = static_cast<std::ptrdiff_t>(valueTag) - 0x0c;
+                width = static_cast<int>(valueTag) - 0x0c;
                 values = entryTag + 1;
-                end = values + static_cast<std::ptrdiff_t>(count) * width;
+                end = values + count * width;
             }
 
             [[nodiscard]] std::uint32_t operator[](std::uint32_t index) const {
                 return readPackedValue(
-                    values + static_cast<std::ptrdiff_t>(index) * width,
-                    valueTag);
+                    values + index * width, valueTag);
             }
         };
 
@@ -138,15 +137,15 @@ namespace PSB {
             // sub_597B1C @ 0x597B1C: follow parent links, emit each byte, then
             // reverse the temporary byte vector.
             [[nodiscard]] std::string Decode(std::uint32_t nameIndex) const {
-                std::string value;
+                std::vector<char> bytes;
                 std::uint32_t node = namesData[nameIndexes[nameIndex]];
                 while(node != 0) {
                     const std::uint32_t parent = namesData[node];
-                    value.push_back(static_cast<char>(node - charset[parent]));
+                    bytes.push_back(static_cast<char>(node - charset[parent]));
                     node = parent;
                 }
-                std::reverse(value.begin(), value.end());
-                return value;
+                std::reverse(bytes.begin(), bytes.end());
+                return { bytes.begin(), bytes.end() };
             }
         };
 
@@ -181,8 +180,8 @@ namespace PSB {
         // sub_598268 @ 0x598268 and sub_598538 @ 0x598538 attempt the
         // lower-case mdf wrapper and fall back to an unchanged copy when zlib
         // rejects it.
-        std::pair<std::uint8_t *, std::size_t>
-        copyOrUncompress(const std::uint8_t *data, std::size_t size) {
+        std::pair<std::uint8_t *, std::uint32_t>
+        copyOrUncompress(const std::uint8_t *data, std::uint32_t size) {
             if(size >= 0x0bu &&
                readUnaligned<std::uint32_t>(data) == MDF_SIGNATURE) {
                 const auto expected = readUnaligned<std::uint32_t>(data + 4);
@@ -190,7 +189,8 @@ namespace PSB {
                 auto actual = static_cast<unsigned long>(expected);
                 if(uncompress(uncompressed.get(), &actual, data + 8,
                               static_cast<unsigned long>(size - 8)) == Z_OK) {
-                    return { uncompressed.release(), actual };
+                    return { uncompressed.release(),
+                             static_cast<std::uint32_t>(actual) };
                 }
             }
             return { copyBuffer(data, size), size };
@@ -397,26 +397,34 @@ namespace PSB {
             return nullptr;
         }
 
-        // sub_59659C @ 0x59659C performs a lower_bound-style binary search in
-        // the sorted dictionary name-index array.
+        // sub_59659C @ 0x59659C stops at the first midpoint that equals the
+        // requested name index.  It does not continue toward the first equal
+        // entry as std::lower_bound would do.
         const PackedArray keys(node_ + 1);
-        std::uint32_t first = 0;
-        std::uint32_t last = keys.count;
-        while(first < last) {
-            const std::uint32_t middle = (first + last) / 2;
-            const std::uint32_t candidate = keys[middle];
-            if(candidate < nameIndex) {
-                first = middle + 1;
-            } else {
-                last = middle;
-            }
-        }
-        if(first >= keys.count || keys[first] != nameIndex) {
+        std::uint32_t lower = 0;
+        std::uint32_t upper = keys.count;
+        if(upper == 0) {
             return nullptr;
+        }
+        std::uint32_t middle{};
+        for(;;) {
+            middle = (upper + lower) / 2;
+            const std::uint32_t candidate = keys[middle];
+            if(candidate == nameIndex) {
+                break;
+            }
+            if(candidate >= nameIndex) {
+                upper = middle;
+            } else {
+                lower = middle + 1;
+            }
+            if(lower >= upper) {
+                return nullptr;
+            }
         }
 
         const PackedArray offsets(keys.end);
-        return offsets.end + offsets[first];
+        return offsets.end + offsets[middle];
     }
 
     bool PSBRawNode::GetDictionaryCount(std::uint32_t &count) const {
@@ -698,7 +706,7 @@ namespace PSB {
         stream->ReadBuffer(source.get(), size);
 
         std::uint8_t *data = source.get();
-        std::size_t dataSize = size;
+        std::uint32_t dataSize = size;
         if(size >= 0x0bu &&
            readUnaligned<std::uint32_t>(source.get()) == MDF_SIGNATURE) {
             const auto expected =
@@ -709,7 +717,7 @@ namespace PSB {
                           static_cast<unsigned long>(size - 8)) == Z_OK) {
                 source.reset();
                 data = uncompressed.release();
-                dataSize = actual;
+                dataSize = static_cast<std::uint32_t>(actual);
             }
         }
         if(data == source.get()) {
@@ -722,7 +730,7 @@ namespace PSB {
         return Adopt(data, dataSize, filter);
     }
 
-    bool PSBFile::LoadOctet(const std::uint8_t *data, std::size_t size,
+    bool PSBFile::LoadOctet(const std::uint8_t *data, std::uint32_t size,
                             const OwnerFilter &filter) {
         auto [copy, copySize] = copyOrUncompress(data, size);
         if(Adopt(copy, copySize, filter)) {

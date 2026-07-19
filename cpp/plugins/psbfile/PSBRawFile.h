@@ -130,8 +130,9 @@ namespace PSB {
         [[nodiscard]] iTJSDispatch2 *GetRootDispatch() const;
         [[nodiscard]] bool LoadStorage(const ttstr &name,
                                        const OwnerFilter &filter = {});
-        [[nodiscard]] bool LoadOctet(const std::uint8_t *data, std::size_t size,
-                                     const OwnerFilter &filter = {});
+        [[nodiscard]] bool
+        LoadOctet(const std::uint8_t *data, std::uint32_t size,
+                  const OwnerFilter &filter = {});
         [[nodiscard]] bool Adopt(std::uint8_t *data, std::size_t size,
                                  const OwnerFilter &filter = {});
 

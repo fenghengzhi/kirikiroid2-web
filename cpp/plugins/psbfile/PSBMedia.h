@@ -39,9 +39,8 @@ namespace PSB {
     private:
         [[nodiscard]] bool EnsureContainer(const ttstr &name);
         [[nodiscard]] bool Resolve(const ttstr &name, PSBRawNode &value);
-        [[nodiscard]] bool GetResourceData(const ttstr &name,
-                                           const std::uint8_t *&data,
-                                           std::uint32_t &size);
+        [[nodiscard]] const std::uint8_t *
+        GetResourceData(const ttstr &name, std::uint32_t &size);
 
         int _ref = 0;
         tTJSVariant _file;

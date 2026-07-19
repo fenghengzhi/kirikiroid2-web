@@ -1287,6 +1287,43 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   `mtndump`、`motionsim` 均构建成功，Web Debug 也完成最终 `index.html` 链接。现有验证
   未发现回归；tag `0x0B` 和 >4 GiB storage 仍属于无天然物料的边界证据缺口。
 
+- 2026-07-19 继续 fresh decompile `sub_597B1C@0x597B1C` 与
+  `sub_59659C@0x59659C`，纠正两处内部结构：名称 trie 反向解码的临时容器是
+  `std::vector<char>`，完成后 reverse 并构造 `std::string`；字典索引搜索在当前
+  midpoint 等于目标时立即停止，不是继续收缩到第一个相等项的 `lower_bound`。本地此前
+  分别用 `std::string` 直接 push 和 lower-bound 循环简化；现已恢复临时容器的分配/
+  扩容/析构生命周期及重复损坏键时的 midpoint 命中边界。
+
+- `sub_59641C@0x59641C`、`sub_59659C@0x59659C` 的 ARM64 `MADD W`/`MUL W`
+  证明 packed value stride 是 `int`，与 `uint32_t count/index` 运算后在 32-bit 中间值
+  上 wrap，再用于指针偏移。本地此前把 stride 提升为 `ptrdiff_t`，损坏 tag 或乘积溢出
+  时会走指针宽度有符号算术；现已恢复原始通常算术转换。正常 `0x0D..0x10` table 不变。
+
+- `PropGetByNum@0x5976C4`（指令 `0x59777C..0x59778C`）、
+  `PSBValueDispatch_EnumMembers_guess@0x596F50` 与 media `GetListAt@0x5999F4`
+  交叉确认：数组 count 在 TJS numeric 访问和枚举调用面均折叠成 signed 32-bit，负索引
+  加 count 也执行 32-bit ADD；dictionary count 的循环仍保持 unsigned。本地此前统一使用
+  `uint32_t`/`int64_t`，规避了原版高位 count 和负索引溢出边界；现已按三个调用面分别
+  恢复 signed/unsigned 数据流。
+
+- media 链 fresh decompile `GetResourceData@0x59A0B4`、
+  `CheckExistentStorage@0x5998C4`、`Open@0x59993C`：中间 helper 直接返回 borrowed
+  chunk pointer，只有 size 是未预初始化的 out 参数；不是 `bool` 加 pointer/size 双 out。
+  本地接口和两个 caller 已恢复直接返回值数据流。owner 仍由 `_file` adaptor 缓存持有，
+  `tTVPMemoryStream` 继续借用 chunk 地址，因此跨 container replacement 的原始悬挂边界未被
+  shared ownership 隐藏。
+
+- `Load(octet)@0x598268` 与 `LoadStorage@0x598538` 再次核对显示：输入长度、MDF
+  expected length 以及成功后从 `uLongf actual` 写回的长度都经过 `uint32_t`，只在传入
+  owner 的 64-bit size 字段时零扩展。本地已把 octet helper、pair 返回长度及 storage
+  `dataSize` 从 `size_t` 收束为同一 32-bit 链；zlib 失败回退、storage Adopt 失败泄漏和
+  octet Adopt 失败释放顺序保持不变。
+
+- 本轮修正后重新构建 Mac Release 的 `motionplayer-dll`、`psbfile-dll`、`mtndump`、
+  `motionsim`，`psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 全绿；Web
+  Debug 完成最终 `index.html` 链接。上述损坏 table/high-bit count 边界没有天然物料，
+  因此这些结果是正常资产非回归守护，不替代反编译边界证据，也未新增人工 fixture。
+
 - 2026-07-19 修正静态插件 target 边界：将根插件、motionplayer、psdfile、layerExDraw、
   fstat 的 `PUBLIC target_sources` 收束为 `PRIVATE`。第一次只改可见性后，
   `motionplayer-dll` 的三个 `LoadModule("motionplayer.dll")` 检查失败，证明 registrar-only

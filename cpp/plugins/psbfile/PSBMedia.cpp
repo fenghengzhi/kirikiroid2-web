@@ -77,22 +77,20 @@ namespace PSB {
         }
     }
 
-    bool PSBMedia::GetResourceData(const ttstr &name, const std::uint8_t *&data,
-                                   std::uint32_t &size) {
+    const std::uint8_t *PSBMedia::GetResourceData(const ttstr &name,
+                                                  std::uint32_t &size) {
         // sub_59A0B4 @ 0x59A0B4.
         PSBRawNode value;
         if(!Resolve(name, value)) {
-            return false;
+            return nullptr;
         }
-        data = value.GetResource(size);
-        return data != nullptr;
+        return value.GetResource(size);
     }
 
     bool PSBMedia::CheckExistentStorage(const ttstr &name) {
         // sub_5998C4 @ 0x5998C4.
-        const std::uint8_t *data{};
-        std::uint32_t size{};
-        return EnsureContainer(name) && GetResourceData(name, data, size);
+        std::uint32_t size;
+        return EnsureContainer(name) && GetResourceData(name, size) != nullptr;
     }
 
     tTJSBinaryStream *PSBMedia::Open(const ttstr &name, tjs_uint32) {
@@ -100,9 +98,9 @@ namespace PSB {
         if(!EnsureContainer(name)) {
             return nullptr;
         }
-        const std::uint8_t *data{};
-        std::uint32_t size{};
-        if(!GetResourceData(name, data, size)) {
+        std::uint32_t size;
+        const std::uint8_t *data = GetResourceData(name, size);
+        if(data == nullptr) {
             TVPThrowExceptionMessage(TJS_W("%1: cannot open psbfile"), name);
         }
         return new tTVPMemoryStream(data, size);
@@ -120,10 +118,11 @@ namespace PSB {
 
         const int category = value.GetTypeCategory();
         if(category == 6) {
-            std::uint32_t count{};
-            (void)value.GetArrayCount(count);
-            for(std::uint32_t index = 0; index < count; ++index) {
-                lister->Add(ttstr(static_cast<tjs_int>(index)));
+            std::uint32_t rawCount{};
+            (void)value.GetArrayCount(rawCount);
+            const tjs_int count = static_cast<tjs_int>(rawCount);
+            for(tjs_int index = 0; index < count; ++index) {
+                lister->Add(ttstr(index));
             }
         } else if(category == 7) {
             std::uint32_t count{};
