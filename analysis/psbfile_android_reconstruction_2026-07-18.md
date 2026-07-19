@@ -139,10 +139,12 @@ oracle；测试通过只能证明现有覆盖未回归，不能把未覆盖边�
 - TJS typed class 注册、`PSBFile` 脚本构造和 `psb:` media 缓存路径已用现有真实
   `ezsave.pimg` 覆盖：测试走 `AllRegist → LoadModule("PSBFile.dll") → initPsbFile →
   singleton register → psb:// storage gateway`，验证真实 resource exists/open、32 项 array
-  listing、miss、异常、缓存复用和空 local-name。仓库内实际存在 142 个 `mdf\0` 资产；
-  其中最小的真实场景文件已同时覆盖 storage/octet 两条 MDF 成功解压链。MDF zlib 失败
-  分支仍只有 fresh 反编译与构建证据；带 filter 的 header 刷新已用现有加密 motion PSB
-  与真实 seed 覆盖，但仍不得把缺少 Android 差分 oracle 写成行为已经完全相等。
+  listing、miss、异常、缓存复用和空 local-name。本机 `reference` 工作树另有 142 个
+  `mdf\0` 资产，但它们不在子模块 HEAD，不能作为仓库 fixture；其中最小场景文件已手动
+  覆盖 Web storage/octet，并通过 Android oracle 直调 `0x598268/0x598960` 确认 MDF
+  成功解压、owner 布局和 strict refresh。MDF zlib 失败分支仍只有 fresh 反编译与构建
+  证据；带 filter 的 header 刷新已用现有加密 motion PSB 与真实 seed 覆盖，但仍不得把
+  未覆盖的损坏输入边界写成行为已经完全相等。
 
 ## 审计范围与权威来源
 
@@ -1211,14 +1213,52 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
   及 owner 替换顺序均已静态复原。当时按扩展名搜索误判为无现成 MDF fixture；下一阶段
   已按魔数扫描纠正该结论。
 
-- 2026-07-19 按文件头而非扩展名扫描 `reference/` 与 `tests/`，发现 142 个现有
+- 2026-07-19 按文件头而非扩展名扫描本机 `reference/` 与 `tests/` 工作树，发现 142 个
   `mdf\0` 包装资产（均藏在 `.ks.scn` 路径）；批量 zlib 校验结果为 142/142 解压成功、
-  142/142 声明尺寸相等、142/142 内层为 `PSB\0`，没有天然失败样本。新增测试选用最小
-  的 12,729 字节真实场景文件，分别走 `PSBFile::LoadStorage@0x598538` 与
-  `PSBFile::LoadOctet` 对应的 `0x598268`，两条路径都得到有效 dictionary root；
-  `psbfile-dll` 现为 **490/490 assertions（7 cases）**。这闭合了 MDF 成功路径的运行时
-  覆盖，并纠正“仓库没有 MDF 物料”的错误记录；zlib 失败与 filter 后 offset 校验失败
-  仍无现有损坏资产/Android runtime oracle，未人为构造 fixture。
+  142/142 声明尺寸相等、142/142 内层为 `PSB\0`，没有天然失败样本。随后用
+  `git ls-tree HEAD` 复核发现这些 DRACU 资产只存在于 `reference` 子模块的本地
+  staged/untracked 状态，子模块 HEAD 和主仓库已跟踪测试物料中的 MDF 数量都是 0；因此
+  删除了依赖固定本地路径、不可在干净 checkout 复现的单元测试，`psbfile-dll` 保持
+  **484/484 assertions（6 cases）**，并纠正“仓库已有 MDF fixture”的错误记录。
+
+- 2026-07-19 启动本机 `oracle-arm64-31` AVD，部署仓库 harness 后，既有 Android
+  `geometry_hit_test` oracle 10/10 通过，证明真实 `libkrkr2.so` 调用链可用。新增
+  `run_psbfile_load_adb.py --input <existing-mdf>`，由操作者提供现有 MDF，不把资产或损坏
+  fixture 写入仓库。以本机最小 12,729 字节 MDF 直调 `PSBFile.load(octet)@0x598268`：
+  Android 返回 true，生成 refcount=1、inline header 的 0x68 owner，raw buffer 为
+  163,214 字节 `PSB\0`，再调 `PSBRawOwner::Refresh(strict)@0x598960` 返回 true。
+  Frida 实测序列为 `0x598268 enter → 0x598708 enter/true → 0x598268 true →
+  0x598960 enter/true`。同一 runner 又覆盖 25,160→48,011 字节和最大
+  300,816→5,806,932 字节样本；为容纳后者，修复了 oracle `_rpc_write` 超过 harness
+  128 KiB line buffer 时的截断，改为 60 KiB 分块。三只样本的 owner size、magic、refcount、
+  inline header 和 strict refresh 全部一致。这提供了 MDF 成功链的 Android runtime
+  oracle。runner 的 `--storage` 又把同一文件临时推至 `/data/local/tmp`，直调
+  `PSBFile.loadStorage@0x598538`；Frida 得到 `0x598538 → 0x598708(true) →
+  0x598538(true)`，随后显式 `0x598960(strict=true)` 亦返回 true，故 Android 的 octet 与
+  storage 两条 MDF 成功入口均已有运行时证据。已提交的 64,585 字节 `ezsave.pimg` 也在
+  同一 runner 的 raw-PSB octet/storage 模式全部通过，因此干净 checkout 至少有一条完全
+  可复现的 Android PSB owner/call-chain oracle。
+
+- 2026-07-19 fresh decompile `EmotePlayer_setEmotePSBDecryptSeed_callback@0x685D30`
+  与 filter call operator `0x6863CC`，确认闭包只持有 32-bit seed，call operator 从
+  `owner.header.encryptData` 到 `chunkOffsets` 原地执行四状态 xorshift，每个 word 按低字节
+  起依次 XOR。oracle 的 READ/WRITE 均补齐 64/60 KiB 分块后，用已提交的 5,366,313 字节
+  加密 motion PSB 和 seed `742877301` 直调 Android：encrypt 区间精确为 203,302 字节，
+  Android 输出与独立 host xorshift 逐字节相等，`0x598960(strict=true)` 返回 true，root
+  tag 为 `0x21`；Frida 序列包含 `0x598268 → 0x598708 → 0x6863CC → 0x598960`。这闭合了
+  合法 seed-filter 成功路径的 Android runtime 对照。zlib 失败、filter 后 offset 校验失败
+  与损坏 packed table 仍无天然输入，按规则未人为构造 fixture。
+
+- 2026-07-19 对 `reference` 子模块 HEAD 的 8 个已提交 XP3 全量解包到临时目录，共扫描
+  4,407 个内部文件：发现 12 个 `PSB\0`、0 个 `mdf\0`。因此“已提交归档内可能藏有 MDF”
+  已被独立排除；现有 MDF runtime 证据依赖操作者本地资产，raw PSB/filter 证据则使用主仓库
+  已提交的 `ezsave.pimg` 与加密 motion PSB，可在干净 checkout 重现。
+
+- 2026-07-19 最终回归：Android raw PSB 的 octet/storage、真实 MDF 的 octet/storage、
+  203,302 字节 seed-filter 全字节对照及 `geometry_hit_test` 10/10 均通过；Mac
+  `motionplayer-dll` 为 398/398 assertions（14 cases），`psbfile-dll` 为 484/484 assertions
+  （6 cases），Web Debug 完整链接成功。上述结果证明本轮 oracle/协议分块和证据修正未引入
+  已知回归，但不替代下述损坏输入边界缺口。
 
 - 2026-07-19 修正静态插件 target 边界：将根插件、motionplayer、psdfile、layerExDraw、
   fstat 的 `PUBLIC target_sources` 收束为 `PRIVATE`。第一次只改可见性后，
@@ -1233,8 +1273,8 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。NCB ty
 
 要对“当前 Web 项目”给出 100% 结论，至少还需要：
 
-1. 使用现有天然损坏资产或 Android oracle 覆盖 MDF zlib 失败及 filter 后 offset 校验失败；
-   MDF 成功路径已由现有 `.ks.scn` 覆盖，media/TJS 注册路径已由现有 PIMG 闭合。没有现成
-   物料时记录验证缺口，不从零伪造 fixture。
+1. 使用现有天然损坏资产覆盖 MDF zlib 失败及 filter 后 offset 校验失败；MDF 成功路径已
+   用本机现有 `.ks.scn` 在 Android oracle 验证，但仓库没有已提交 MDF fixture；media/TJS
+   注册路径已由现有 PIMG 闭合。没有现成物料时记录验证缺口，不从零伪造 fixture。
 2. packed-table 的 tag/width/stride 分支已逐项反编译；剩余工作是用现有损坏资产或
    Android oracle 核对真实越界/崩溃表现，不能为了测试主动构造新 fixture。

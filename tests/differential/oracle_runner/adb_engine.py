@@ -639,21 +639,36 @@ class AdbHarnessEngine:
             self._socket_buf = b""
 
     def _rpc_read(self, addr: int, n: int) -> bytes:
-        self._writeline(f"READ {addr:x} {n}")
-        reply = self._readline()
-        if reply.startswith("ERR "):
-            raise RuntimeError(f"READ: {reply[4:]}")
-        if not reply.startswith("OK_DATA "):
-            raise RuntimeError(f"unexpected READ reply: {reply!r}")
-        hex_payload = reply[8:]
-        if len(hex_payload) != 2 * n:
-            raise RuntimeError(
-                f"READ size mismatch: want {n} bytes, got {len(hex_payload)//2}"
-            )
-        return bytes.fromhex(hex_payload)
+        # harness.cpp caps one READ at 64 KiB. Preserve a single logical read
+        # for callers while chunking the wire protocol below that limit.
+        result = bytearray()
+        max_chunk = 64 * 1024
+        for offset in range(0, n, max_chunk):
+            size = min(max_chunk, n - offset)
+            self._writeline(f"READ {addr + offset:x} {size}")
+            reply = self._readline()
+            if reply.startswith("ERR "):
+                raise RuntimeError(f"READ at +0x{offset:x}: {reply[4:]}")
+            if not reply.startswith("OK_DATA "):
+                raise RuntimeError(f"unexpected READ reply: {reply!r}")
+            hex_payload = reply[8:]
+            if len(hex_payload) != 2 * size:
+                raise RuntimeError(
+                    f"READ at +0x{offset:x} size mismatch: "
+                    f"want {size} bytes, got {len(hex_payload)//2}"
+                )
+            result.extend(bytes.fromhex(hex_payload))
+        return bytes(result)
 
     def _rpc_write(self, addr: int, data: bytes) -> None:
-        self._writeline(f"WRITE {addr:x} {len(data)} {data.hex()}")
-        reply = self._readline()
-        if reply != "OK_VOID":
-            raise RuntimeError(f"WRITE: {reply!r}")
+        # harness.cpp receives commands in a 128 KiB line buffer. Hex doubles
+        # the payload size, so split large guest writes below that boundary.
+        max_chunk = 60 * 1024
+        for offset in range(0, len(data), max_chunk):
+            chunk = data[offset:offset + max_chunk]
+            self._writeline(
+                f"WRITE {addr + offset:x} {len(chunk)} {chunk.hex()}")
+            reply = self._readline()
+            if reply != "OK_VOID":
+                raise RuntimeError(
+                    f"WRITE at +0x{offset:x}: {reply!r}")

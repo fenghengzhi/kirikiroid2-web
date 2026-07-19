@@ -49,6 +49,18 @@ LOCAL_TRANSFORM_TARGETS = [
     0x699940,   # sub_699940
 ]
 
+# --- psbfile_load: PSBFile raw/MDF load and seed filter paths -------------
+# The adapter supplies an existing PSB\0 or mdf\0 input. sub_598268 optionally
+# unwraps MDF and hands the raw allocation to sub_598708; the adapter then
+# invokes sub_598960(strict=true) to verify the reconstructed header pointers.
+PSBFILE_LOAD_TARGETS = [
+    0x598268,   # PSBFile.load(tTJSVariant const&)
+    0x598538,   # load storage, read stream, and unwrap MDF
+    0x598708,   # adopt raw PSB allocation into intrusive owner
+    0x598960,   # refresh header pointers and optionally validate offsets
+    0x6863CC,   # Emote PSB seed-filter call operator
+]
+
 
 ADDR_NAMES = {
     0x69A754: "sub_69A754",
@@ -58,6 +70,11 @@ ADDR_NAMES = {
     0x6695BC: "sub_6695BC",
     0x690DF0: "Player_hitTest",
     0x699940: "sub_699940",
+    0x598268: "PSBFile_loadVariant",
+    0x598538: "PSBFile_loadStorage",
+    0x598708: "PSBFile_adoptRaw",
+    0x598960: "PSBRawOwner_refresh",
+    0x6863CC: "EmotePSBDecrypt_call",
 }
 
 # (n_int_args, n_double_args) per target — AAPCS64 arg count cap of 8
@@ -82,6 +99,16 @@ ARG_COUNTS: dict[int, tuple[int, int]] = {
     0x690DF0: (1, 2),
     # sub_699940(Layer *node, Affine *ctx) → void
     0x699940: (2, 0),
+    # PSBFile_loadVariant(PSBFile *this, tTJSVariant const *value) → int
+    0x598268: (2, 0),
+    # PSBFile_loadStorage(PSBFile *, ttstr const&, function const&) → bool
+    0x598538: (3, 0),
+    # PSBFile_adoptRaw(PSBFile *this, uint8_t *data, size_t, function *)
+    0x598708: (4, 0),
+    # PSBRawOwner_refresh(PSBRawOwner *this, bool strict) → bool
+    0x598960: (2, 0),
+    # EmotePSBDecrypt_call(seed closure slot, PSBRawOwner *)
+    0x6863CC: (2, 0),
 }
 
 # Return kind per target: "int", "double", "void". Drives exit-event
@@ -95,6 +122,11 @@ RETURN_KINDS: dict[int, str] = {
     0x6695BC: "double",
     0x690DF0: "int",
     0x699940: "void",
+    0x598268: "int",
+    0x598538: "int",
+    0x598708: "int",
+    0x598960: "int",
+    0x6863CC: "int",
 }
 
 

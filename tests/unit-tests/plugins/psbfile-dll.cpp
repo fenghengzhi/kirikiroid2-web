@@ -309,30 +309,6 @@ TEST_CASE("raw psb storage load applies the Android motion decrypt filter") {
     REQUIRE(root.GetDictionaryValueStrict("spec").GetString() != nullptr);
 }
 
-TEST_CASE("raw psb storage load unwraps an existing MDF scenario") {
-    const ttstr path =
-        REFERENCE_PATH
-        "/xp3/dracu_boot/DRACU-RIOT/scn/★本編－その１５_２.ks.scn";
-
-    PSB::PSBFile file;
-    REQUIRE(file.LoadStorage(path));
-
-    const PSB::PSBRawNode root = file.GetRoot();
-    REQUIRE(root.GetTypeCategory() == 7);
-    REQUIRE_FALSE(root.GetDictionaryKeys().empty());
-
-    std::unique_ptr<tTJSBinaryStream> stream(
-        TVPCreateStream(path, TJS_BS_READ));
-    REQUIRE(stream != nullptr);
-    std::vector<std::uint8_t> mdf(
-        static_cast<std::size_t>(stream->GetSize()));
-    stream->ReadBuffer(mdf.data(), mdf.size());
-
-    PSB::PSBFile octetFile;
-    REQUIRE(octetFile.LoadOctet(mdf.data(), mdf.size()));
-    REQUIRE(octetFile.GetRoot().GetTypeCategory() == 7);
-}
-
 TEST_CASE("raw psb owner and node views retain ezsave.pimg") {
     PSB::PSBRawNode retainedRoot;
     PSB::PSBRawNode retainedLayers;
