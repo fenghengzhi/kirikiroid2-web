@@ -170,9 +170,9 @@ namespace {
 
         PSB::PSBRawNode sourceNode, groupNode, iconsNode, iconNode;
         if(!root.GetDictionaryValue("source", sourceNode) ||
-           !sourceNode.GetDictionaryValue(groupName, groupNode) ||
+           !sourceNode.GetDictionaryValue(groupName.c_str(), groupNode) ||
            !groupNode.GetDictionaryValue("icon", iconsNode) ||
-           !iconsNode.GetDictionaryValue(iconName, iconNode)) {
+           !iconsNode.GetDictionaryValue(iconName.c_str(), iconNode)) {
             return false;
         }
 
@@ -234,7 +234,7 @@ namespace {
         if(!root.GetDictionaryValue("source", sourceNode)) return result;
         for(const auto &groupName : sourceNode.GetDictionaryKeys()) {
             PSB::PSBRawNode groupNode, iconsNode;
-            if(!sourceNode.GetDictionaryValue(groupName, groupNode) ||
+            if(!sourceNode.GetDictionaryValue(groupName.c_str(), groupNode) ||
                !groupNode.GetDictionaryValue("icon", iconsNode)) continue;
             for(const auto &iconName : iconsNode.GetDictionaryKeys()) {
                 result.emplace("src/" + groupName + "/" + iconName);

@@ -8,6 +8,10 @@
 
 ## Overview
 
+下文的 `+40/+44` 是 Android ARM64 对象字段的反编译定位坐标，只用于确认字段语义；
+本地 C++ 不应硬凑这些数值偏移。PSB 文件内部 serialized offset 属于另一类数据格式契约，
+仍需精确复刻。
+
 The function processes each image resource entry in a PSB file. For each entry, it:
 
 1. Reads `width` and `height` from the entry struct (offsets +40, +44)

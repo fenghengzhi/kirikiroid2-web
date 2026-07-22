@@ -10,6 +10,7 @@
 #include "motionplayer/MotionDispatch.h"
 #include "ncbind.hpp"
 #include "psbfile/PSBDispatch.h"
+#include "psbfile/PSBPackedInternal.h"
 #include "psbfile/PSBRawFile.h"
 #include "test_config.h"
 
@@ -46,6 +47,47 @@ namespace {
         }
     };
 
+    struct EnumRecord {
+        tjs_int numparams = 0;
+        ttstr name;
+        tjs_int flags = 0;
+        tTJSVariant value;
+        iTJSDispatch2 *objthis = nullptr;
+    };
+
+    class EnumCapture final : public tTJSDispatch {
+    public:
+        tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
+                           tTJSVariant *result, tjs_int numparams,
+                           tTJSVariant **param,
+                           iTJSDispatch2 *objthis) override {
+            EnumRecord record;
+            record.numparams = numparams;
+            record.objthis = objthis;
+            if(numparams >= 1) record.name = ttstr(*param[0]);
+            if(numparams >= 2) record.flags = param[1]->AsInteger();
+            if(numparams >= 3) record.value = *param[2];
+            records.push_back(record);
+            if(result != nullptr) *result = static_cast<tjs_int>(1);
+            return TJS_S_OK;
+        }
+
+        std::vector<EnumRecord> records;
+    };
+
+    tjs_error enumerate(iTJSDispatch2 *dispatch, tjs_uint32 flags,
+                        EnumCapture &capture) {
+        tTJSVariantClosure callback(&capture, nullptr);
+        return dispatch->EnumMembers(flags, &callback, dispatch);
+    }
+
+    tTJSVariant getProperty(iTJSDispatch2 *dispatch, const tjs_char *name) {
+        tTJSVariant value;
+        REQUIRE(dispatch->PropGet(0, name, nullptr, &value, dispatch) ==
+                TJS_S_OK);
+        return value;
+    }
+
     PSB::PSBFile::OwnerFilter motionDecryptFilter(std::uint32_t seed) {
         return [seed](PSB::PSBRawOwner &owner) {
             auto *header = owner.GetHeader();
@@ -74,6 +116,22 @@ namespace {
         };
     }
 
+    bool getArrayCount(const PSB::PSBRawNode &node, std::uint32_t &count) {
+        if(node.GetType() != 0x20u) return false;
+        count = PSB::detail::ReadPackedCount_guess(node.GetNode() + 1);
+        return true;
+    }
+
+    bool getArrayElement(const PSB::PSBRawNode &node, std::uint32_t index,
+                         PSB::PSBRawNode &value) {
+        if(node.GetType() != 0x20u) return false;
+        const PSB::detail::PackedArrayView_guess offsets(node.GetNode() + 1);
+        if(index >= offsets.count) return false;
+        value = PSB::PSBRawNode(node.GetOwner(),
+                                offsets.end + offsets[index]);
+        return true;
+    }
+
     bool findFirstResource(const PSB::PSBRawNode &node,
                            const std::string &path,
                            std::string &resourcePath) {
@@ -87,7 +145,7 @@ namespace {
         if(node.GetTypeCategory() == 7) {
             for(const auto &key : node.GetDictionaryKeys()) {
                 PSB::PSBRawNode child;
-                if(node.GetDictionaryValue(key, child) &&
+                if(node.GetDictionaryValue(key.c_str(), child) &&
                    findFirstResource(child,
                        path.empty() ? key : path + "/" + key,
                        resourcePath)) return true;
@@ -96,10 +154,10 @@ namespace {
             return false;
         } else {
             std::uint32_t count = 0;
-            if(node.GetArrayCount(count)) {
+            if(getArrayCount(node, count)) {
                 for(std::uint32_t index = 0; index < count; ++index) {
                     PSB::PSBRawNode child;
-                    if(node.GetArrayElement(index, child) &&
+                    if(getArrayElement(node, index, child) &&
                        findFirstResource(child,
                            path.empty() ? std::to_string(index)
                                         : path + "/" + std::to_string(index),
@@ -135,13 +193,13 @@ TEST_CASE("raw psb owner and node views retain ezsave.pimg") {
         REQUIRE(retainedRoot.GetDictionaryValueStrict("height").GetInt() == 720);
         REQUIRE(retainedRoot.GetDictionaryValue("layers", retainedLayers));
         std::uint32_t count = 0;
-        REQUIRE(retainedLayers.GetArrayCount(count));
+        REQUIRE(getArrayCount(retainedLayers, count));
         REQUIRE(count == 32);
         REQUIRE(file.LoadStorage(TEST_FILES_PATH "/emote/ezsave.pimg"));
     }
     REQUIRE(retainedRoot.GetDictionaryValueStrict("width").GetInt() == 1280);
     PSB::PSBRawNode firstLayer;
-    REQUIRE(retainedLayers.GetArrayElement(0, firstLayer));
+    REQUIRE(getArrayElement(retainedLayers, 0, firstLayer));
     REQUIRE(std::string(firstLayer.GetDictionaryValueStrict("name").GetString()) ==
             "@pageup:over");
 }
@@ -183,6 +241,16 @@ TEST_CASE("psb media caches and exposes real ezsave.pimg nodes") {
     REQUIRE_FALSE(TVPIsExistentStorageNoSearchNoNormalize(missingPath));
     REQUIRE_THROWS(TVPCreateStream(missingPath, TJS_BS_READ));
     REQUIRE(TVPIsExistentStorageNoSearchNoNormalize(resourcePath));
+
+    const ttstr emptySegmentPath =
+        TVPNormalizeStorageName(TJS_W("psb://ezsave.pimg/layers//0"));
+    REQUIRE_FALSE(TVPIsExistentStorageNoSearchNoNormalize(emptySegmentPath));
+
+    const ttstr missingContainer =
+        TVPNormalizeStorageName(TJS_W("psb://missing.pimg/resource"));
+    REQUIRE_THROWS(
+        TVPIsExistentStorageNoSearchNoNormalize(missingContainer));
+    REQUIRE(TVPIsExistentStorageNoSearchNoNormalize(resourcePath));
     REQUIRE(TVPGetLocallyAccessibleName(resourcePath).IsEmpty());
 }
 
@@ -191,7 +259,10 @@ TEST_CASE("raw psb dispatch reads packed values and retains its owner") {
     {
         PSB::PSBFile file;
         REQUIRE(file.LoadStorage(TEST_FILES_PATH "/emote/ezsave.pimg"));
-        rootValue = PSB::CreatePSBValueVariant(file.GetRoot());
+        iTJSDispatch2 *rootDispatch = file.GetRootDispatch();
+        REQUIRE(rootDispatch != nullptr);
+        rootValue = tTJSVariant(rootDispatch, rootDispatch);
+        rootDispatch->Release();
     }
     auto *root = rootValue.AsObjectNoAddRef();
     REQUIRE(root != nullptr);
@@ -216,4 +287,197 @@ TEST_CASE("raw psb dispatch reads packed values and retains its owner") {
     REQUIRE(lastLayer->PropGet(0, TJS_W("name"), nullptr, &lastName,
                                lastLayer) == TJS_S_OK);
     REQUIRE(ttstr(lastName).AsStdString() == "範囲情報");
+}
+
+TEST_CASE("typed PSBFile NCB wrappers load and expose the root property") {
+    const ScopedCoreScriptEngine scriptEngine;
+    const AutoPathScope autoPath(TEST_FILES_PATH "/emote/");
+
+    tTJSVariant instance;
+    TVPScriptEngine->EvalExpression(TJS_W("new PSBFile()"), &instance);
+    REQUIRE(instance.Type() == tvtObject);
+    auto *dispatch = instance.AsObjectNoAddRef();
+    REQUIRE(dispatch != nullptr);
+
+    tTJSVariant loadResult;
+    REQUIRE(dispatch->FuncCall(0, TJS_W("load"), nullptr, &loadResult, 0,
+                               nullptr, dispatch) == TJS_E_BADPARAMCOUNT);
+
+    tTJSVariant path(TJS_W("ezsave.pimg"));
+    tTJSVariant *params[] = { &path };
+    REQUIRE(dispatch->FuncCall(0, TJS_W("load"), nullptr, &loadResult, 1,
+                               params, dispatch) == TJS_S_OK);
+    REQUIRE(loadResult.Type() == tvtInteger);
+    REQUIRE(loadResult.AsInteger() == 1);
+
+    tTJSVariant rootValue;
+    REQUIRE(dispatch->PropGet(0, TJS_W("root"), nullptr, &rootValue,
+                              dispatch) == TJS_S_OK);
+    REQUIRE(rootValue.Type() == tvtObject);
+    auto *root = rootValue.AsObjectNoAddRef();
+    REQUIRE(root != nullptr);
+    REQUIRE(root->IsInstanceOf(0, nullptr, nullptr, TJS_W("Dictionary"),
+                               root) == TJS_S_TRUE);
+    REQUIRE(dispatch->PropSet(0, TJS_W("root"), nullptr, &rootValue,
+                              dispatch) == TJS_E_ACCESSDENYED);
+}
+
+TEST_CASE("PSB dispatch enumerates packed dictionary and array members") {
+    PSB::PSBFile file;
+    REQUIRE(file.LoadStorage(TEST_FILES_PATH "/emote/ezsave.pimg"));
+    iTJSDispatch2 *rootDispatch = file.GetRootDispatch();
+    REQUIRE(rootDispatch != nullptr);
+    tTJSVariant rootValue(rootDispatch, rootDispatch);
+    rootDispatch->Release();
+    auto *root = rootValue.AsObjectNoAddRef();
+
+    const std::vector<std::string> expectedNames = {
+        "2036.tlg", "2138.tlg", "2139.tlg", "2157.tlg",
+        "2164.tlg", "2168.tlg", "3087.tlg", "3092.tlg",
+        "height", "layers", "width"
+    };
+
+    EnumCapture dictionary;
+    REQUIRE(enumerate(root, 0, dictionary) == TJS_S_OK);
+    REQUIRE(dictionary.records.size() == expectedNames.size());
+    for(std::size_t index = 0; index < expectedNames.size(); ++index) {
+        const auto &record = dictionary.records[index];
+        REQUIRE(record.numparams == 3);
+        REQUIRE(record.name.AsStdString() == expectedNames[index]);
+        REQUIRE(record.flags == 0);
+        REQUIRE(record.objthis == root);
+        if(index < 8) REQUIRE(record.value.Type() == tvtOctet);
+    }
+    REQUIRE(dictionary.records[0].value.AsOctetNoAddRef()->GetLength() ==
+            48265);
+    REQUIRE(dictionary.records[8].value.Type() == tvtInteger);
+    REQUIRE(dictionary.records[8].value.AsInteger() == 720);
+    REQUIRE(dictionary.records[9].value.Type() == tvtObject);
+    REQUIRE(dictionary.records[10].value.Type() == tvtInteger);
+    REQUIRE(dictionary.records[10].value.AsInteger() == 1280);
+
+    EnumCapture dictionaryNames;
+    REQUIRE(enumerate(root, TJS_ENUM_NO_VALUE, dictionaryNames) == TJS_S_OK);
+    REQUIRE(dictionaryNames.records.size() == expectedNames.size());
+    for(std::size_t index = 0; index < expectedNames.size(); ++index) {
+        REQUIRE(dictionaryNames.records[index].numparams == 2);
+        REQUIRE(dictionaryNames.records[index].name.AsStdString() ==
+                expectedNames[index]);
+        REQUIRE(dictionaryNames.records[index].flags == 0);
+        REQUIRE(dictionaryNames.records[index].objthis == root);
+    }
+
+    auto *layers = dictionary.records[9].value.AsObjectNoAddRef();
+    REQUIRE(layers != nullptr);
+    EnumCapture array;
+    REQUIRE(enumerate(layers, 0, array) == TJS_S_OK);
+    REQUIRE(array.records.size() == 32);
+    for(std::size_t index = 0; index < array.records.size(); ++index) {
+        const auto &record = array.records[index];
+        REQUIRE(record.numparams == 3);
+        REQUIRE(record.name.AsStdString() == std::to_string(index));
+        REQUIRE(record.flags == 0);
+        REQUIRE(record.value.Type() == tvtObject);
+        REQUIRE(record.objthis == layers);
+        auto *element = record.value.AsObjectNoAddRef();
+        REQUIRE(element->IsInstanceOf(0, nullptr, nullptr,
+                                      TJS_W("Dictionary"), element) ==
+                TJS_S_TRUE);
+    }
+
+    EnumCapture arrayNames;
+    REQUIRE(enumerate(layers, TJS_ENUM_NO_VALUE, arrayNames) == TJS_S_OK);
+    REQUIRE(arrayNames.records.size() == 32);
+    for(std::size_t index = 0; index < arrayNames.records.size(); ++index) {
+        REQUIRE(arrayNames.records[index].numparams == 2);
+        REQUIRE(arrayNames.records[index].name.AsStdString() ==
+                std::to_string(index));
+        REQUIRE(arrayNames.records[index].flags == 0);
+        REQUIRE(arrayNames.records[index].objthis == layers);
+    }
+}
+
+TEST_CASE("PSB dispatch preserves native instance and invalidation boundaries") {
+    PSB::PSBFile file;
+    REQUIRE(file.LoadStorage(TEST_FILES_PATH "/emote/ezsave.pimg"));
+    iTJSDispatch2 *rootDispatch = file.GetRootDispatch();
+    REQUIRE(rootDispatch != nullptr);
+    tTJSVariant rootValue(rootDispatch, rootDispatch);
+    rootDispatch->Release();
+    auto *root = rootValue.AsObjectNoAddRef();
+    const tjs_int32 valueClassId =
+        TJS::TJSRegisterNativeClass(TJS_W("PSBValueClass"));
+
+    iTJSNativeInstance *native = nullptr;
+    REQUIRE(root->NativeInstanceSupport(TJS_NIS_GETINSTANCE,
+                                        valueClassId,
+                                        &native) == TJS_S_OK);
+    REQUIRE(native != nullptr);
+
+    auto *const sentinel = reinterpret_cast<iTJSNativeInstance *>(
+        static_cast<std::uintptr_t>(1));
+    native = sentinel;
+    REQUIRE(root->NativeInstanceSupport(TJS_NIS_GETINSTANCE,
+                                        valueClassId + 1,
+                                        &native) == TJS_E_FAIL);
+    REQUIRE(native == sentinel);
+    REQUIRE(root->NativeInstanceSupport(TJS_NIS_REGISTER,
+                                        valueClassId,
+                                        &native) == TJS_E_NOTIMPL);
+    REQUIRE(native == sentinel);
+
+    static_cast<PSB::PSBValueDispatch *>(root)->Invalidate();
+    REQUIRE(root->IsValid(0, nullptr, nullptr, root) == TJS_S_TRUE);
+    REQUIRE(root->Invalidate(0, TJS_W("member"), nullptr, root) ==
+            TJS_E_NOTIMPL);
+    REQUIRE(root->IsValid(0, nullptr, nullptr, root) == TJS_S_TRUE);
+    REQUIRE(root->Invalidate(0, nullptr, nullptr, root) == TJS_S_OK);
+    REQUIRE(root->IsValid(0, nullptr, nullptr, root) == TJS_S_FALSE);
+    REQUIRE(root->Invalidate(0, nullptr, nullptr, root) ==
+            TJS_E_INVALIDOBJECT);
+
+    tTJSVariant value;
+    REQUIRE(root->PropGet(0, TJS_W("width"), nullptr, &value, root) ==
+            TJS_E_INVALIDOBJECT);
+    tjs_int count = -1;
+    REQUIRE(root->GetCount(&count, nullptr, nullptr, root) ==
+            TJS_E_INVALIDOBJECT);
+    EnumCapture capture;
+    REQUIRE(enumerate(root, 0, capture) == TJS_E_INVALIDOBJECT);
+    REQUIRE(capture.records.empty());
+    REQUIRE(root->IsInstanceOf(0, nullptr, nullptr, TJS_W("Dictionary"),
+                               root) == TJS_S_TRUE);
+    native = nullptr;
+    REQUIRE(root->NativeInstanceSupport(TJS_NIS_GETINSTANCE,
+                                        valueClassId,
+                                        &native) == TJS_S_OK);
+    REQUIRE(native != nullptr);
+}
+
+TEST_CASE("PSB dispatch converts an encrypted motion float to Real") {
+    PSB::PSBFile file;
+    REQUIRE(file.LoadStorage(TEST_FILES_PATH
+                             "/emote/e-mote3.0バニラパジャマa.psb",
+                             motionDecryptFilter(742877301u)));
+    iTJSDispatch2 *rootDispatch = file.GetRootDispatch();
+    REQUIRE(rootDispatch != nullptr);
+    tTJSVariant rootValue(rootDispatch, rootDispatch);
+    rootDispatch->Release();
+    auto *root = rootValue.AsObjectNoAddRef();
+
+    tTJSVariant metadataValue = getProperty(root, TJS_W("metadata"));
+    auto *metadata = metadataValue.AsObjectNoAddRef();
+    REQUIRE(metadata != nullptr);
+    tTJSVariant bustControlValue =
+        getProperty(metadata, TJS_W("bustControl"));
+    auto *bustControl = bustControlValue.AsObjectNoAddRef();
+    REQUIRE(bustControl != nullptr);
+    tTJSVariant firstValue;
+    REQUIRE(bustControl->PropGetByNum(0, 0, &firstValue, bustControl) ==
+            TJS_S_OK);
+    auto *first = firstValue.AsObjectNoAddRef();
+    REQUIRE(first != nullptr);
+    tTJSVariant friction = getProperty(first, TJS_W("friction"));
+    REQUIRE(friction.Type() == tvtReal);
+    REQUIRE(friction.AsReal() == 0.125);
 }

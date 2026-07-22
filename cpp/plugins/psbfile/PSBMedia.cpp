@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "MsgIntf.h"
+#include "PSBPackedInternal.h"
 #include "UtilStreams.h"
 #include "ncbind.hpp"
 
@@ -34,13 +35,15 @@ namespace PSB {
 
         iTJSDispatch2 *object =
             ncbInstanceAdaptor<PSBFile>::CreateAdaptor(file);
-        if(object != nullptr) {
-            _file = tTJSVariant(object, object);
-            object->Release();
-        } else {
+        {
+            tTJSVariant nextFile;
+            if(object != nullptr) {
+                nextFile.SetObject(object, object);
+                object->Release();
+            }
             // sub_59A330 @ 0x59A330 leaves the native holder unclaimed when
-            // the class object cannot create an adaptor.
-            _file.Clear();
+            // the class object cannot create an adaptor; nextFile stays void.
+            _file = nextFile;
         }
         _container = container;
         return true;
@@ -54,33 +57,53 @@ namespace PSB {
         // sub_59A4B0 @ 0x59A548..0x59A55C keeps the root in a local node.
         // The caller's output is not touched until the successful tail at
         // 0x59A730..0x59A774, so every miss preserves its previous value.
-        PSBRawNode current = file->GetRoot();
+        PSBRawOwner *owner = file->GetOwner();
+        PSBRawNode current(owner, owner->GetHeader()->entries);
 
         const tjs_int firstSlash = name.IndexOf(TJS_W('/'));
-        if(firstSlash < 0) {
+        if(firstSlash == -1) {
             return false;
         }
         ttstr rest = name.SubString(firstSlash + 1, -1);
         for(;;) {
             const tjs_int slash = rest.IndexOf(TJS_W('/'));
-            const bool last = slash < 0;
-            const ttstr segment = last ? rest : rest.SubString(0, slash);
-            if(!last) {
-                rest = rest.SubString(slash + 1, -1);
-            }
+            const bool last = slash == -1;
+            {
+                ttstr segment;
+                if(last) {
+                    segment = rest;
+                } else {
+                    // 0x59A5C0..0x59A5E8 copies the substring owner into the
+                    // segment, then immediately releases the returned
+                    // temporary. Keep this AddRef/Release no-op as a
+                    // source-lifetime token.
+                    {
+                        const ttstr segmentTemporary =
+                            rest.SubString(0, slash);
+                        segment = segmentTemporary;
+                    }
+                    rest = rest.SubString(slash + 1, -1);
+                }
 
-            const std::string key = segment.AsStdString();
-            if(!current.ContainsDictionaryKey(key)) {
-                return false;
+                // sub_59A4B0 @ 0x59A654..0x59A710 constructs exactly one
+                // narrow holder and passes the same buffer through contains
+                // and strict lookup before destroying it.
+                tTJSNarrowStringHolder key(segment.c_str());
+                if(!current.ContainsDictionaryKey(key.Buf)) {
+                    return false;
+                }
+                // sub_59A4B0 @ 0x59A694..0x59A704 has the net sequence release
+                // old -> install the strict getter's returned owner/node ->
+                // keep the incoming zero-ref deletion boundary. Optimized
+                // code cannot distinguish a source move from copy plus
+                // temporary destruction, so this assignment spelling is not
+                // claimed as uniquely proven.
+                current = current.GetDictionaryValueStrict(key.Buf);
             }
-            // sub_59A4B0 @ 0x59A694..0x59A704 moves the strict getter's
-            // returned owner/node directly into the current value: release
-            // old, install both fields, preserve the zero-ref deletion branch.
-            // There is no intermediate AddRef/Release copy no-op here.
-            current = current.GetDictionaryValueStrict(key);
             if(last) {
-                // 0x59A730..0x59A774 alone performs Release-old -> copy ->
-                // AddRef -> write-node on the caller-provided output.
+                // 0x59A710 destroys key and 0x59A714..0x59A71C releases
+                // segment before 0x59A730..0x59A774 alone performs
+                // Release-old -> copy -> AddRef -> write-node on caller out.
                 value = current;
                 return true;
             }
@@ -94,7 +117,37 @@ namespace PSB {
         if(!Resolve(name, value)) {
             return nullptr;
         }
-        return value.GetResource(size);
+        // The optimized Android body @0x59A0F4..0x59A204 expands the
+        // resource-index and chunk-table decoders here;
+        // PSBRawNode::GetResource @ 0x5996E4 is not part of its call chain.
+        const PSBRawHeader *header = value.GetOwner()->GetHeader();
+        if(header->chunkData == nullptr) {
+            return nullptr;
+        }
+        const detail::PackedArrayView_guess offsets(header->chunkOffsets);
+        const detail::PackedArrayView_guess lengths(header->chunkLengths);
+        const std::uint8_t *node = value.GetNode();
+        std::uint32_t index;
+        switch(node[0]) {
+            case 0x19:
+                index = node[1];
+                break;
+            case 0x1a:
+                index = detail::ReadUnaligned_guess<std::uint16_t>(node + 1);
+                break;
+            case 0x1b:
+                index = detail::ReadUnaligned_guess<std::uint32_t>(node + 1) &
+                    0xffffffu;
+                break;
+            case 0x1c:
+                index = detail::ReadUnaligned_guess<std::uint32_t>(node + 1);
+                break;
+            default:
+                index = 0;
+                break;
+        }
+        size = lengths[index];
+        return header->chunkData + offsets[index];
     }
 
     bool PSBMedia::CheckExistentStorage(const ttstr &name) {
@@ -133,20 +186,69 @@ namespace PSB {
         // it does not route through the separate category helper at 0x599554.
         switch(value.GetNode()[0]) {
             case 0x20: {
-                std::uint32_t rawCount{};
-                (void)value.GetArrayCount(rawCount);
-                const tjs_int count = static_cast<tjs_int>(rawCount);
+                const std::uint8_t *packed = value.GetNode() + 1;
+                tjs_int count;
+                switch(packed[0]) {
+                    case 0x0d:
+                        count = packed[1];
+                        break;
+                    case 0x0e:
+                        count = detail::ReadUnaligned_guess<std::uint16_t>(
+                            packed + 1);
+                        break;
+                    case 0x0f:
+                        count = static_cast<tjs_int>(
+                            detail::ReadUnaligned_guess<std::uint32_t>(
+                                packed + 1) &
+                            0xffffffu);
+                        break;
+                    case 0x10:
+                        count = static_cast<tjs_int>(
+                            detail::ReadUnaligned_guess<std::uint32_t>(
+                                packed + 1));
+                        break;
+                    default:
+                        return;
+                }
                 for(tjs_int index = 0; index < count; ++index) {
                     lister->Add(ttstr(index));
                 }
                 break;
             }
             case 0x21: {
-                std::uint32_t count{};
-                (void)value.GetDictionaryCount(count);
                 std::string key;
+                const std::uint8_t *packed = value.GetNode() + 1;
+                std::uint32_t count;
+                switch(packed[0]) {
+                    case 0x0d:
+                        count = packed[1];
+                        break;
+                    case 0x0e:
+                        count = detail::ReadUnaligned_guess<std::uint16_t>(
+                            packed + 1);
+                        break;
+                    case 0x0f:
+                        count = detail::ReadUnaligned_guess<std::uint32_t>(
+                                    packed + 1) &
+                            0xffffffu;
+                        break;
+                    case 0x10:
+                        count = detail::ReadUnaligned_guess<std::uint32_t>(
+                            packed + 1);
+                        break;
+                    default:
+                        return;
+                }
+                const std::uint8_t valueTag =
+                    packed[static_cast<std::ptrdiff_t>(packed[0]) - 0x0b];
+                const int width = static_cast<int>(valueTag) - 0x0c;
+                const std::uint8_t *values =
+                    packed + static_cast<std::ptrdiff_t>(packed[0]) - 0x0a;
                 for(std::uint32_t index = 0; index < count; ++index) {
-                    (void)value.GetDictionaryKey(index, key);
+                    const std::uint32_t nameIndex =
+                        detail::ReadPackedValue_guess(values + index * width,
+                                                      valueTag);
+                    detail::DecodeName_guess(key, value.GetOwner(), nameIndex);
                     lister->Add(ttstr(key));
                 }
                 break;
@@ -208,6 +310,6 @@ namespace PSB {
 
     void PSBMedia::GetLocallyAccessibleName(ttstr &name) {
         // sub_599DD8 @ 0x599DD8.
-        name = ttstr();
+        name.Clear();
     }
 } // namespace PSB

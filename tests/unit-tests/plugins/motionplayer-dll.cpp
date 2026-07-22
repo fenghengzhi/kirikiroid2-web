@@ -791,10 +791,12 @@ TEST_CASE("ResourceManager caches raw holders and returns fresh dispatches") {
     REQUIRE(ttstr(getProp(first, TJS_W("id"))) == ttstr(TJS_W("motion")));
     REQUIRE(ttstr(getProp(second, TJS_W("spec"))) == ttstr(TJS_W("krkr")));
 
+    const tjs_int32 valueClassId =
+        TJS::TJSRegisterNativeClass(TJS_W("PSBValueClass"));
     for(const tTJSVariant *module : { &first, &second }) {
         iTJSNativeInstance *native{};
         REQUIRE(module->AsObjectNoAddRef()->NativeInstanceSupport(
-                    TJS_NIS_GETINSTANCE, PSB::GetPSBValueClassID(),
+                    TJS_NIS_GETINSTANCE, valueClassId,
                     &native) == TJS_S_OK);
         REQUIRE(native != nullptr);
     }

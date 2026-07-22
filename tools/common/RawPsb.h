@@ -165,7 +165,10 @@ namespace tools::rawpsb {
                 ? file.LoadStorage(path)
                 : file.LoadStorage(path, decryptFilter(seed));
             if(!loaded) return false;
-            root = Value(PSB::CreatePSBValueVariant(file.GetRoot()));
+            iTJSDispatch2 *dispatch = file.GetRootDispatch();
+            if(dispatch == nullptr) return false;
+            root = Value(tTJSVariant(dispatch, dispatch));
+            dispatch->Release();
             return root.valid();
         }
     };

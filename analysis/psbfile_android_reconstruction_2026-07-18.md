@@ -1,5 +1,22 @@
 # Android `PSBFile.dll` 复原审计（2026-07-18）
 
+## 2026-07-23：local→Android 调用边界复核
+
+- 已消除三类 macOS Release 本地产物中的额外调用边界：
+  1. `GetCount@0x5975E0`、`PropGetByNum@0x5976C4` 的两个站点及
+     `PropGet@0x597854` 共四个 count 解码站点，均在调用者函数体内展开 tag switch，
+     不再直接调用 `ReadPackedCount_guess`。
+  2. `PSBMedia::Resolve@0x59A4B0` 直接从 native `PSBFile` 的 owner/header 建立 root
+     raw node，不再绕经 `PSBFile::GetRoot@0x598A3C`。
+  3. `PSBMedia::GetResourceData@0x59A0B4` 直接展开 resource-index 与 chunk-table
+     解码，不再绕经 `PSBRawNode::GetResource@0x5996E4`。
+- macOS Release 的 `main.cpp.o` / `PSBMedia.cpp.o` 符号和 relocation 扫描已确认不再
+  引用上述三个本地边界。该证据只说明本地产物不再多出 Android 二进制中未观察到的
+  调用；优化后的 Android 二进制仍不能唯一排除原始源码曾使用等价 inline helper，
+  因而不得把当前展开写法声明为唯一源码拼写。
+- 修改后 `psbfile-dll` 为 **554/554**（8 cases），`motionplayer-dll` 为
+  **1197/1197**（15 cases），Web Debug 最终链接通过，`git diff --check` 通过。
+
 ## 2026-07-22：eager compatibility 子系统已删除
 
 此前隔离的 `DecodedPSBFile` / `PSBValue` / type handlers / image metadata、
@@ -15,7 +32,7 @@
 当前不能宣称整个 Web 项目已经“尽可能 100% 一比一复原” Android
 kirikiroid2 的 PSB 数据链。
 
-截至 2026-07-19 当前工作树，结论仍为 **NO**：Web Debug 最终链接及完整
+截至 2026-07-23 当前工作树，结论仍为 **NO**：Web Debug 最终链接及完整
 `motionplayer-dll`、独立 `psbfile-dll` 运行测试均已通过。Player 运行时的
 `_activeMotion/shared_ptr<MotionSnapshot>` 双轨 owner 已在本轮删除，live motion 的加载、
 门控、路径上下文、绘制与更新现在只由 Android 对应的 +528/+1012 raw Variant 驱动；

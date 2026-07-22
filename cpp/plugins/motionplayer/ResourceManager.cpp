@@ -215,7 +215,10 @@ namespace {
     }
 
     tTJSVariant makeRawRootVariant(const PSB::PSBFile &file) {
-        return PSB::CreatePSBValueVariant(file.GetRoot());
+        iTJSDispatch2 *dispatch = file.GetRootDispatch();
+        tTJSVariant result(dispatch, dispatch);
+        dispatch->Release();
+        return result;
     }
 
 } // namespace
@@ -540,18 +543,18 @@ tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
     const PSB::PSBRawNode root = record->file.GetRoot();
     const PSB::PSBRawNode source =
         root.GetDictionaryValueStrict("source");
-    if(!source.ContainsDictionaryKey(groupKey)) { // sub_5995D8 gate
+    if(!source.ContainsDictionaryKey(groupKey.c_str())) { // sub_5995D8 gate
         return {}; // LABEL_64 -> result void
     }
     const PSB::PSBRawNode groupNode =
-        source.GetDictionaryValueStrict(groupKey);
+        source.GetDictionaryValueStrict(groupKey.c_str());
     const PSB::PSBRawNode iconHolder =
         groupNode.GetDictionaryValueStrict("icon");
-    if(!iconHolder.ContainsDictionaryKey(iconKey)) { // sub_5995D8 gate
+    if(!iconHolder.ContainsDictionaryKey(iconKey.c_str())) { // sub_5995D8 gate
         return {};
     }
     const PSB::PSBRawNode iconEntry =
-        iconHolder.GetDictionaryValueStrict(iconKey);
+        iconHolder.GetDictionaryValueStrict(iconKey.c_str());
 
     // 5. copy the raw pair into ObjSource (owner AddRef), zero its texture,
     // then attach it to the NCB native instance (0x6AAFC0..0x6AB02C).

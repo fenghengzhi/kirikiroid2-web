@@ -54,7 +54,7 @@ namespace motion {
                     .GetDictionaryValueStrict("source");
             // 0x694AEC..0x694B44 uses the non-throwing group lookup and
             // transfers control to the spec-1/fallback route on a miss.
-            return sourceRoot.GetDictionaryValue(group, groupNode);
+            return sourceRoot.GetDictionaryValue(group.c_str(), groupNode);
         }
 
         iTVPTexture2D *loadWinAtlasTextureLike_0x6948E8(
@@ -286,14 +286,14 @@ namespace motion {
                 loadedResource.file.GetRoot()
                     .GetDictionaryValueStrict("source");
             PSB::PSBRawNode requestedGroupNode;
-            if(!sourceRoot.GetDictionaryValue(requestedGroup,
+            if(!sourceRoot.GetDictionaryValue(requestedGroup.c_str(),
                                               requestedGroupNode)) {
                 return false;
             }
             const PSB::PSBRawNode requestedIconRoot =
                 requestedGroupNode.GetDictionaryValueStrict("icon");
             PSB::PSBRawNode requestedIconNode;
-            if(!requestedIconRoot.GetDictionaryValue(requestedIcon,
+            if(!requestedIconRoot.GetDictionaryValue(requestedIcon.c_str(),
                                                      requestedIconNode)) {
                 return false;
             }
@@ -301,12 +301,12 @@ namespace motion {
             std::vector<std::unique_ptr<KrkrAtlasRecordLike_0x695DE8>> records;
             for(const auto &group : sourceRoot.GetDictionaryKeys()) {
                 const PSB::PSBRawNode groupNode =
-                    sourceRoot.GetDictionaryValueStrict(group);
+                    sourceRoot.GetDictionaryValueStrict(group.c_str());
                 const PSB::PSBRawNode iconRoot =
                     groupNode.GetDictionaryValueStrict("icon");
                 for(const auto &iconName : iconRoot.GetDictionaryKeys()) {
                     const PSB::PSBRawNode iconNode =
-                        iconRoot.GetDictionaryValueStrict(iconName);
+                        iconRoot.GetDictionaryValueStrict(iconName.c_str());
                     auto record =
                         std::make_unique<KrkrAtlasRecordLike_0x695DE8>();
                     decodeKrkrAtlasRecordLike_0x695DE8(
@@ -461,7 +461,7 @@ namespace motion {
                    *loadedResource, key.group, groupNode)) {
                 const PSB::PSBRawNode iconNode =
                     groupNode.GetDictionaryValueStrict("icon")
-                        .GetDictionaryValueStrict(key.icon);
+                        .GetDictionaryValueStrict(key.icon.c_str());
                 dst.texture = loadWinAtlasTextureLike_0x6948E8(
                     groupNode, *loadedResource, key.group);
                 dst.width = static_cast<double>(

@@ -32,10 +32,14 @@ namespace PSB {
     // It owns exactly one raw PSB allocation and all node views point into it.
     class PSBRawOwner final {
     public:
-        static PSBRawOwner *Create(std::uint8_t *data, std::size_t size);
-
-        void AddRef();
-        void Release();
+        // The owner retain/release operations are expanded at every Android
+        // call site; the PSBFile.dll function range has no standalone entry.
+        void AddRef() { ++refCount_; }
+        void Release() {
+            if(--refCount_ == 0) {
+                delete this;
+            }
+        }
 
         [[nodiscard]] bool Refresh(bool validateOffsets);
         [[nodiscard]] PSBRawHeader *GetHeader() { return header_; }
@@ -43,9 +47,6 @@ namespace PSB {
         [[nodiscard]] std::uint8_t *GetData() { return data_; }
         [[nodiscard]] const std::uint8_t *GetData() const { return data_; }
         [[nodiscard]] std::size_t GetSize() const { return size_; }
-        [[nodiscard]] const char *GetString(const std::uint8_t *node) const;
-        [[nodiscard]] const std::uint8_t *
-        GetResource(const std::uint8_t *node, std::uint32_t &size) const;
 
     private:
         friend class PSBFile;
@@ -62,43 +63,88 @@ namespace PSB {
     };
 
     // Two-pointer raw node handle used throughout the Android implementation.
-    // Copying it retains the owner; moving it transfers the two fields.
+    // Call sites prove retained-copy and consuming-transfer net semantics, but
+    // not whether the original source declared these exact special members.
     class PSBRawNode final {
     public:
         PSBRawNode() = default;
-        PSBRawNode(PSBRawOwner *owner, const std::uint8_t *node);
-        PSBRawNode(const PSBRawNode &other);
-        PSBRawNode(PSBRawNode &&other) noexcept;
-        ~PSBRawNode();
-
-        PSBRawNode &operator=(const PSBRawNode &other);
-        PSBRawNode &operator=(PSBRawNode &&other) noexcept;
-
-        [[nodiscard]] PSBRawOwner *GetOwner() const { return owner_; }
-        [[nodiscard]] const std::uint8_t *GetNode() const { return node_; }
-        [[nodiscard]] explicit operator bool() const {
-            return owner_ != nullptr && node_ != nullptr;
+        PSBRawNode(PSBRawOwner *owner, const std::uint8_t *node) :
+            owner_(owner), node_(node) {
+            if(owner_ != nullptr) {
+                owner_->AddRef();
+            }
+        }
+        PSBRawNode(const PSBRawNode &other) :
+            PSBRawNode(other.owner_, other.node_) {}
+        PSBRawNode(PSBRawNode &&other) noexcept :
+            owner_(other.owner_), node_(other.node_) {
+            other.owner_ = nullptr;
+            other.node_ = nullptr;
+        }
+        ~PSBRawNode() {
+            if(owner_ != nullptr) {
+                owner_->Release();
+            }
         }
 
-        [[nodiscard]] std::uint8_t GetType() const;
-        [[nodiscard]] bool GetArrayCount(std::uint32_t &count) const;
-        [[nodiscard]] bool GetArrayElement(std::uint32_t index,
-                                           PSBRawNode &value) const;
-        [[nodiscard]] const std::uint8_t *
-        FindArrayElement(std::uint32_t index) const;
-        [[nodiscard]] bool GetDictionaryValue(const std::string &key,
+        PSBRawNode &operator=(const PSBRawNode &other) {
+            if(this == &other) {
+                return *this;
+            }
+            // The hit out-parameter path in sub_598D58 @ 0x598D58 exposes
+            // this raw-pair sequence: release destination, copy owner, retain
+            // owner, copy node.  It does not prove that the original source
+            // factored that one site into a class-wide operator=.
+            if(owner_ != nullptr) {
+                owner_->Release();
+            }
+            owner_ = other.owner_;
+            if(owner_ != nullptr) {
+                owner_->AddRef();
+            }
+            node_ = other.node_;
+            return *this;
+        }
+        PSBRawNode &operator=(PSBRawNode &&other) noexcept {
+            if(this == &other) {
+                return *this;
+            }
+            if(owner_ != nullptr) {
+                owner_->Release();
+            }
+            owner_ = other.owner_;
+            node_ = other.node_;
+            // PSBMedia::Resolve @ 0x59A698..0x59A6EC proves the same net
+            // installation and incoming zero-reference deletion boundary.
+            // Its optimized instructions cannot distinguish move assignment
+            // from copy assignment plus temporary destruction; this source
+            // special-member shape therefore remains an explicit uncertainty.
+            if(owner_ != nullptr && owner_->refCount_ == 0) {
+                delete owner_;
+            }
+            other.owner_ = nullptr;
+            other.node_ = nullptr;
+            return *this;
+        }
+
+        [[nodiscard]] PSBRawOwner *GetOwner() const { return owner_; }
+        // sub_597AD4 @ 0x597AD4 receives the address of this first slot at
+        // all PSBValueDispatch construction sites.  The binary cannot prove
+        // a shared source-level holder type, so this ABI-only accessor keeps
+        // the uncertainty explicit instead of inventing one.
+        [[nodiscard]] PSBRawOwner *const *
+        GetOwnerSlotAddress_guess() const {
+            return &owner_;
+        }
+        [[nodiscard]] const std::uint8_t *GetNode() const { return node_; }
+        [[nodiscard]] bool IsValid_guess() const; // 0x598E44
+
+        [[nodiscard]] std::uint8_t GetType() const { return node_[0]; }
+        [[nodiscard]] bool GetDictionaryValue(const char *key,
                                               PSBRawNode &value) const;
         [[nodiscard]] PSBRawNode
-        GetDictionaryValueStrict(const std::string &key) const;
-        [[nodiscard]] bool ContainsDictionaryKey(const std::string &key) const;
-        [[nodiscard]] const std::uint8_t *
-        FindDictionaryValue(const std::string &key) const;
-        [[nodiscard]] bool GetDictionaryCount(std::uint32_t &count) const;
-        [[nodiscard]] bool GetDictionaryKey(std::uint32_t index,
-                                            std::string &key) const;
-        [[nodiscard]] bool GetDictionaryEntry(std::uint32_t index,
-                                              std::string &key,
-                                              const std::uint8_t *&value) const;
+        GetDictionaryValueStrict(const char *key) const;
+        [[nodiscard]] bool ContainsDictionaryKey(const char *key) const;
         [[nodiscard]] std::vector<std::string> GetDictionaryKeys() const;
         [[nodiscard]] int GetTypeCategory() const;
         [[nodiscard]] tjs_int GetInt() const;
@@ -106,8 +152,6 @@ namespace PSB {
         [[nodiscard]] const char *GetString() const;
         [[nodiscard]] const std::uint8_t *
         GetResource(std::uint32_t &size) const;
-        [[nodiscard]] static tjs_int64 DecodeInteger(const std::uint8_t *node);
-        [[nodiscard]] static tjs_real DecodeReal(const std::uint8_t *node);
 
     private:
         PSBRawOwner *owner_{};
@@ -121,24 +165,68 @@ namespace PSB {
         using OwnerFilter = std::function<void(PSBRawOwner &)>;
 
         PSBFile() = default;
-        PSBFile(const PSBFile &other) noexcept;
-        PSBFile &operator=(const PSBFile &other) noexcept;
-        PSBFile(PSBFile &&other) noexcept;
-        PSBFile &operator=(PSBFile &&other) noexcept;
-        ~PSBFile();
+        PSBFile(const PSBFile &other) noexcept : owner_(other.owner_) {
+            // ResourceManager::load @ 0x6A8E94..0x6A8EB8.
+            if(owner_ != nullptr) {
+                owner_->AddRef();
+            }
+        }
+        PSBFile &operator=(const PSBFile &other) noexcept {
+            // ResourceManager::load @ 0x6A926C..0x6A92A8.
+            if(owner_ != nullptr) {
+                owner_->Release();
+            }
+            owner_ = other.owner_;
+            if(owner_ != nullptr) {
+                owner_->AddRef();
+            }
+            return *this;
+        }
+        PSBFile(PSBFile &&other) noexcept : owner_(other.owner_) {
+            // Chosen local representation of the consuming net behavior in
+            // sub_598A64 @ 0x598A64; that hidden-sret helper is not itself a
+            // move-constructor body and cannot prove this source declaration.
+            if(owner_ != nullptr && owner_->refCount_ == 0) {
+                delete owner_;
+            }
+            other.owner_ = nullptr;
+        }
+        PSBFile &operator=(PSBFile &&other) noexcept {
+            if(this == &other) {
+                return *this;
+            }
+            if(owner_ != nullptr) {
+                owner_->Release();
+            }
+            owner_ = other.owner_;
+            // ResourceManager::load @ 0x6A9240..0x6A9258 proves this net
+            // install/zero-ref/consume sequence, not the special-member name.
+            if(owner_ != nullptr && owner_->refCount_ == 0) {
+                delete owner_;
+            }
+            other.owner_ = nullptr;
+            return *this;
+        }
+        [[nodiscard]] PSBFile Transfer_guess() noexcept;
+        ~PSBFile() {
+            if(owner_ != nullptr) {
+                owner_->Release();
+            }
+        }
 
         [[nodiscard]] bool Load(tTJSVariant value);
         [[nodiscard]] iTJSDispatch2 *GetRootDispatch() const;
         [[nodiscard]] bool LoadStorage(const ttstr &name,
                                        const OwnerFilter &filter = {});
-        [[nodiscard]] bool
-        LoadOctet(const std::uint8_t *data, std::uint32_t size,
-                  const OwnerFilter &filter = {});
         [[nodiscard]] bool Adopt(std::uint8_t *data, std::size_t size,
                                  const OwnerFilter &filter = {});
 
         [[nodiscard]] PSBRawNode GetRoot() const;
         [[nodiscard]] PSBRawOwner *GetOwner() const { return owner_; }
+        [[nodiscard]] PSBRawOwner *const *
+        GetOwnerSlotAddress_guess() const {
+            return &owner_;
+        }
 
     private:
         PSBRawOwner *owner_{};
