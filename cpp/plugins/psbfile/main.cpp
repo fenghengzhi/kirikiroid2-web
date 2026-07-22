@@ -845,12 +845,17 @@ namespace PSB {
 
     tjs_error PSBValueDispatch::Reserved3() { return TJS_E_NOTIMPL; }
 
-    void PSBValueDispatch::assign(tTJSVariant *result, const std::uint8_t *node) {
+    tTJSVariant *PSBValueDispatch::assign(tTJSVariant *result,
+                                          const std::uint8_t *node) {
         // sub_59673C @ 0x59673C decodes scalars on demand and creates a
         // fresh owner-sharing dispatch only for list/dictionary nodes.
         // It is a dispatch member: owner reads come from this->value_
         // rather than an owner argument.  It also assumes a non-null
         // output and dereferences it on every tag.
+        // Every normal branch returns that same output address through
+        // X0 at 0x596B88.  Pointer versus reference source spelling is ABI-
+        // indistinguishable; retaining the existing pointer parameter avoids
+        // inventing a different caller shape.
         switch(node[0]) {
             case 0x01:
             case 0x23:
@@ -859,13 +864,13 @@ namespace PSB {
             case 0x26:
             case 0x3f:
                 result->Clear();
-                return;
+                break;
             case 0x02:
                 *result = true;
-                return;
+                break;
             case 0x03:
                 *result = false;
-                return;
+                break;
             case 0x04:
             case 0x05:
             case 0x06:
@@ -945,7 +950,7 @@ namespace PSB {
                         break;
                 }
                 *result = integer;
-                return;
+                break;
             }
             case 0x15:
             case 0x16:
@@ -981,7 +986,7 @@ namespace PSB {
                 // exceptional lifetime and adds an AddRef/Release pair.
                 *result = reinterpret_cast<const char *>(
                     header->stringsData + offsets[index]);
-                return;
+                break;
             }
             case 0x19:
             case 0x1a:
@@ -1029,25 +1034,25 @@ namespace PSB {
                     data = nullptr;
                 }
                 *result = tTJSVariant(data, size);
-                return;
+                break;
             }
             case 0x1d:
                 *result = static_cast<tjs_real>(0.0);
-                return;
+                break;
             case 0x1e:
                 *result = static_cast<tjs_real>(
                     detail::ReadUnaligned_guess<float>(node + 1));
-                return;
+                break;
             case 0x1f:
                 *result = detail::ReadUnaligned_guess<double>(node + 1);
-                return;
+                break;
             case 0x20:
             case 0x21: {
                 auto *dispatch = new PSBValueDispatch(
                     value_.GetOwnerSlotAddress_guess(), node);
                 *result = tTJSVariant(dispatch, dispatch);
                 dispatch->Release();
-                return;
+                break;
             }
             case 0x27:
             case 0x2f:
@@ -1059,7 +1064,7 @@ namespace PSB {
                 // sub_59673C @ 0x5968C8..0x5968D4 preserves the
                 // helper-return continuation as Boolean false.
                 *result = false;
-                return;
+                break;
             case 0x28:
             case 0x29:
             case 0x30:
@@ -1075,7 +1080,7 @@ namespace PSB {
                 // sub_59673C @ 0x59698C..0x596A18 preserves the
                 // helper-return continuation as Integer zero.
                 *result = static_cast<tjs_int64>(0);
-                return;
+                break;
             case 0x2e:
             case 0x41:
                 TVPThrowExceptionMessage(
@@ -1083,11 +1088,12 @@ namespace PSB {
                 // sub_59673C @ 0x59696C..0x596A38 preserves the
                 // helper-return continuation as Real zero.
                 *result = static_cast<tjs_real>(0.0);
-                return;
+                break;
             default:
                 detail::throwUnknownType();
-                return;
+                break;
         }
+        return result;
     }
 
     iTJSDispatch2 *PSBFile::GetRootDispatch() const {

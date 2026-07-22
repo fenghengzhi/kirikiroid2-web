@@ -2,14 +2,25 @@
 
 ## 边界纠正
 
-IDA 枚举证明 PSBFile 相关实现覆盖 `0x59641C..0x59B708`，共 111 个
+IDA 枚举证明 PSBFile 的业务/NCB 入口覆盖 `0x59641C..0x59B708`，共 111 个
 function。旧审计不仅把 `0x59AA84` 错当成终点，还被 IDA 的函数合并漏掉
 `0x59A8D8`、`0x59A968` 与 `0x59B14C` 三个独立序言；三者拆分后均有唯一 vtable
-data xref。下一函数 `0x59B7E8` 是通用
-`std::vector<std::string>::_M_emplace_back_aux` 实例化；它没有来自本区间的 code xref，
-只有 PLT/data xref，不属于 PSBFile typed NCB 调用链。
+data xref。
 
-下列分组穷举 111 个入口；每组地址数之和为 `42 + 1 + 10 + 19 + 17 + 22 = 111`。
+2026-07-23 又证伪了“下一函数与 PSBFile 无调用关系”的结论：
+`GetDictionaryKeys@0x598E64` 在 vector 容量耗尽时由 `0x598FFC` 调 PLT
+`0x423250/0x42325C`，最终进入
+`std::vector<std::string>::_M_emplace_back_aux<std::string &>@0x59B7E8`。
+因此完整相关集合是 111 个业务/NCB 入口加 1 个本源码触发的 STL 扩容慢路径，
+共 **112** 个；最后一只函数的 exclusive end 是 `0x59B9C8`。该地址有独立
+`SUB SP,#0x30` 序言，`sub_42CFA0@0x42CFB0..0x42CFC8` 又把它作为字面
+`PackinOne.dll` 的 callback 注册；函数体从 `fstat.dll` 起加载一组子插件。因此
+`sub_59B9C8@0x59B9C8` 属下一模块，而不是 vector helper 的尾部。IDB 已把此前错并的
+`0x59B7E8..0x59BC2C` 拆成 `0x59B7E8..0x59B9C8` 与
+`0x59B9C8..0x59BC2C` 两只函数并保存。
+
+下列分组穷举 112 个相关函数；每组地址数之和为
+`42 + 1 + 10 + 19 + 17 + 22 + 1 = 112`。
 
 ## A. PSBValueDispatch 与 packed dispatch ABI（42）
 
@@ -46,6 +57,12 @@ iTJSDispatch2/iTJSNativeInstance 槽和析构包装。
 `operator=(const char *)@0xA0FEB4`，不先构造 `ttstr`；Enum 的 flags 先 default-construct，
 再以 `tjs_int32(0)` 赋值，随后才构造 callback result。本地现已按这些 helper call、
 临时 owner 数量和异常析构顺序复刻。
+
+2026-07-23 的 fresh decompile 与尾部反汇编还确认，`assign@0x59673C` 在入口
+`0x596764` 保存 destination 到 `X19`，所有正常/throw-helper-return 分支汇入共同尾部，
+并在 `0x596B88` 以 `MOV X0,X19` 返回同一 destination 地址。四个直接 caller
+`0x5971B4/0x5973A4/0x597848/0x5979B4` 均忽略返回值。本地已从 `void` 恢复为返回
+现有 destination pointer；原源码是 pointer 还是 reference 在 ARM64 ABI 上不可区分。
 
 ## B. packed name 反向解码 helper（1）
 
@@ -193,15 +210,28 @@ ctor/dtor 反编译证据，测试不读取悬挂 block。此前“缺少第二�
 尾链逐函数 fresh decompile 未发现本地手写简化：`Factory/Property/Method` 声明通过
 仓库同一 ncbind 模板生成 holder、注册状态、属性/方法 wrapper 和参数生命周期。
 
+## G. GetDictionaryKeys 的 vector 扩容慢路径（1）
+
+```text
+0x59B7E8
+```
+
+该函数是
+`std::vector<std::string>::_M_emplace_back_aux<std::string &>`。直接 xref 只落在
+PLT thunk，但 `GetDictionaryKeys@0x598E64` 的 `0x598FF4..0x598FFC` 明确在
+`finish == end_of_storage` 时调用该 thunk；非满容量分支则在 `0x598FD0..0x598FF0`
+内联构造元素。本地 `result.emplace_back(key)` 保留同一 reusable lvalue string、
+vector 容器和快/慢路径语义；Android libstdc++ 与本地 libc++ 的模板实体机器边界不要求同址。
+
 ## 覆盖结论
 
-111 个 Android 入口均已归属于生产源码、明确的 NCB/iTJS ABI wrapper 或本源码触发的
+112 个 Android 相关函数均已归属于生产源码、明确的 NCB/iTJS ABI wrapper 或本源码触发的
 STL 实例化；没有未归属业务入口。该 manifest 只证明 **Android→local** 的入口归属完整，
 不能反向证明 **local→Android** 没有额外抽取边界。另行完成的 local→Android Release
 对象审计已消除三类已确认额外边界：dispatch 三函数四站点的 count-helper 调用、
 `PSBMedia::Resolve→PSBFile::GetRoot`，以及
 `PSBMedia::GetResourceData→PSBRawNode::GetResource`。这不能反向证明原始源码没有
-等价 inline helper，也不改变 111-entry Android manifest。当前 raw owner/node 的若干小方法只有
+等价 inline helper。当前 raw owner/node 的若干小方法只有
 上层调用点内联行为证据、没有独立 Android 入口；其名字与是否为原始 inline helper 仍不能
 仅由本地源码宣称。manifest 也不替代损坏输入的 Android runtime oracle；MDF zlib failure、
 filter 后 offset failure、损坏 packed table、tag `0x0B`、>4 GiB storage、dictionary

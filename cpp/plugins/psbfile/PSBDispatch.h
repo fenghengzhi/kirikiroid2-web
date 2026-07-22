@@ -114,7 +114,7 @@ namespace PSB {
     private:
         ~PSBValueDispatch() = default;
 
-        void assign(tTJSVariant *result, const std::uint8_t *node);
+        tTJSVariant *assign(tTJSVariant *result, const std::uint8_t *node);
         void decodeName_guess(std::string &name,
                               std::uint32_t nameIndex) const; // 0x5975C0
         [[nodiscard]] const char *

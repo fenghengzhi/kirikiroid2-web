@@ -48,6 +48,11 @@
   都直接调用 narrow `tTJSVariant::operator=(const char *)@0xA0FEB4`。此前本地先构造
   `ttstr`，多出宽字符串 owner、AddRef/Release 和“先分配临时量、后释放旧 result”的
   异常生命周期；现已恢复直接 narrow 赋值。
+- 同一 `assign@0x59673C` 的入口 `0x596764` 把 destination 保存到 `X19`；各 tag
+  正常/throw-helper-return 分支最终汇入 `0x596B88 MOV X0,X19`，返回同一 destination
+  地址。四个直接 caller `0x5971B4/0x5973A4/0x597848/0x5979B4` 都忽略该返回值。
+  本地此前误写为 `void`，现恢复返回现有 destination pointer；pointer/reference 的原始
+  源码拼写在 ARM64 ABI 上不可区分，未强行宣称其中一种为唯一事实。
 - `EnumMembers@0x596F50` 按顺序 default-construct name、flags、value，随后执行
   `flags = tjs_int32(0)`，再 default-construct callback result。此前 flags 直接由零构造，
   少了一次与 Android 相同的赋值调用和旧内容释放边界；现已恢复四只 Variant 的精确时序。
@@ -59,6 +64,14 @@
 - `PSBFile::Load@0x598268` 对既非 String 也非 Octet 的参数调用异常 helper 后，
   `0x5983B0` 仍显式返回 true；此前本地在 helper 意外返回时继续执行 `AsOctet()`，现已恢复
   throw-helper continuation 的精确返回值。
+- `GetDictionaryKeys@0x598E64` 的 full-vector 分支在 `0x598FFC` 经 PLT
+  `0x423250/0x42325C` 调到
+  `std::vector<std::string>::_M_emplace_back_aux<std::string &>@0x59B7E8`；此前仅看
+  真实函数的 direct xref 而把它排除在 PSBFile coverage 外，是错误的 negative 结论。
+  manifest 已从 111 个业务/NCB入口纠正为 **112 个相关函数**（额外 1 个本源码触发的
+  vector 扩容慢路径），最后一只函数的 exclusive end 为 `0x59B9C8`。该地址的独立
+  `SUB SP,#0x30` 序言及 `PackinOne.dll` 注册 callback xref 又证明，后续代码不属于
+  vector helper；IDB 已同步拆分并保存。
 - 既有加密 motion PSB 可作为第二只有效 raw container。新增测试按
   `ezsave.pimg → encrypted motion PSB → ezsave.pimg` 驱动 `EnsureContainer@0x599E04`，
   验证跨-container 替换确实发生、旧 `tTVPMemoryStream` 的自身 metadata/析构在替换后仍可用，
@@ -102,7 +115,7 @@
 
 ## 2026-07-22：当前复核增量
 
-- 对 `0x59641C..0x59B708` 的 111 个 PSBFile.dll 函数重新枚举异常 helper
+- 对 `0x59641C..0x59B708` 的 111 个 PSBFile.dll 业务/NCB入口重新枚举异常 helper
   continuation，补齐 `assign@0x59673C`、`IsInstanceOf@0x596E24` 与
   `GetDictionaryKeys@0x598E64` 的精确默认值。该轮曾误记 `PSBFile::Load@0x598268`
   已闭合；后续逐指令复核 `0x5983AC..0x5983B0` 发现 throw helper 返回后必须显式 true，
@@ -304,11 +317,15 @@ oracle；测试通过只能证明现有覆盖未回归，不能把未覆盖边�
 权威来源是 Android `libkrkr2.so` 的 IDA 反编译。2026-07-19 后续边界复核将 PSB
 插件相关实现从原先截断的 `0x59641C..0x59AA84` 扩展到
 `0x59641C..0x59B708`；2026-07-22 又拆开 IDA 错并的 `0x59A8D8`、`0x59A968`、
-`0x59B14C` 三个独立序言，最终枚举到 **111** 个函数。`0x59A8D8/0x59A968`
+`0x59B14C` 三个独立序言，得到 **111** 个业务/NCB函数。`0x59A8D8/0x59A968`
 分别是 typed NCB 自动注册/反注册入口；`0x59AA84` 是注册尾链的起点而非终点，
 其后实际有 20 个入口覆盖 native-instance holder、成员注册、raw factory、root 属性 wrapper、
-load 方法 wrapper 和首参 Variant 转换。下一函数 `0x59B7E8` 是只有 PLT/data xref 的通用
-`std::vector<std::string>::_M_emplace_back_aux` 实例化，不属于该 NCB 调用链。完整分组
+load 方法 wrapper 和首参 Variant 转换。2026-07-23 继续沿
+`GetDictionaryKeys@0x598E64 → PLT 0x423250/0x42325C` 追踪，确认下一函数
+`0x59B7E8` 正是该源码触发的 `std::vector<std::string>::_M_emplace_back_aux`
+扩容慢路径；完整集合因此为 **112** 个相关函数，覆盖到该函数的 exclusive end
+`0x59B9C8`。紧随的 `sub_59B9C8` 被 `sub_42CFA0` 作为字面 `PackinOne.dll`
+callback 注册，且从 `fstat.dll` 起加载子插件，属于下一模块。完整分组
 manifest 见 [psbfile_function_coverage_2026-07-19.md](psbfile_function_coverage_2026-07-19.md)。
 
 模块注册点 `0x42CF28` 给出二进制字面名字：
@@ -1612,7 +1629,9 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
   发布到 result 的 native holder、保持 result slot 不清零并原样重抛。Mac 四目标构建、
   `psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 与 Web Debug 最终链接全部
   通过。该轮覆盖后来发现漏计 `0x59AA84..0x59B708` 的 NCB tail；后续 manifest
-  先补到 108，2026-07-22 再拆出三个被 IDA 合并的入口并纠正为 111。`adb devices -l`
+  先补到 108，2026-07-22 再拆出三个被 IDA 合并的入口并纠正为 111 个业务/NCB函数；
+  2026-07-23 又沿 PLT 调用链补回 `0x59B7E8` 的 vector 扩容慢路径，当前为 112。
+  `adb devices -l`
   当前为空，本轮 Android oracle 未执行；这是外部验证缺口，不是
   实现失败，也不替代此前在线 AVD 的 `status=ok` 历史证据。
 
@@ -1716,9 +1735,11 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
   **398/398** 与 Web Debug 最终链接全部通过。motionplayer fixture 实际进入 `tTVPBitmap`
   分配路径；在线 AVD 的 `ezsave.pimg` Android octet/storage oracle 两条均为 `status=ok`。
 
-- 2026-07-19 对 PSBFile.dll 相关实现 `0x59641C..0x59B708` 重新做区间全枚举；当时
+- 2026-07-19 对 PSBFile.dll 业务/NCB实现 `0x59641C..0x59B708` 重新做区间全枚举；当时
   先得到 108 个 IDA function，2026-07-22 进一步拆出被错误并入 `0x59A4B0/0x59AEEC`
-  的 `0x59A8D8/0x59A968/0x59B14C`，最终总数为 **111**。早先把 `0x59AA84` 当终点
+  的 `0x59A8D8/0x59A968/0x59B14C`，得到 **111** 个业务/NCB函数。2026-07-23
+  再确认 `0x598FFC` 经 PLT 调到 `0x59B7E8`，加入 1 个本源码触发的 vector 扩容慢路径，
+  当前相关函数总数为 **112**。早先把 `0x59AA84` 当终点
   只覆盖 90 个入口的边界已纠正；最终 F 组共有 22 个 typed NCB 入口，相较旧 90-entry
   边界净新增 21 个；这些入口全部属于自动注册/反注册、
   holder/析构/成员/属性/方法/参数转换包装，并由
@@ -1792,7 +1813,7 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
 - 上述三项修改及后续生命周期收口后，Mac `psbfile-dll` **554/554**、
   `motionplayer-dll` **1197/1197** 通过，Mac 目标、Wasmtime 默认 Debug build、显式
   `krkr2_wasmtime_guest` 目标与 Web Debug 最终链接成功，`git diff --check` 通过。当前
-  111-entry manifest 仍未发现漏写的 Android 业务入口；尚不能唯一证明的是
+  112-entry manifest 仍未发现漏写的 Android 业务入口或源码触发的容器慢路径；尚不能唯一证明的是
   `Transfer_guess@0x598A64`、若干 zero-xref helper、`PackedArrayView_guess` 及
   `ReadPackedCount_guess` 等 inline helper 的原始名字、成员身份和源码拼写；但上述三个
   已审计调用面中的本地产物额外调用边界已经消除。ARM64 对象字段偏移在这些判断中只作为反编译定位坐标；本地
@@ -1840,7 +1861,9 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
   `GetPSBValueClassID()` 外部边界；是否曾有 inline helper 仍属不可辨识源码拼写。
 
 - 同轮函数序言复扫拆开 `0x59A8D8`（auto-register Regist）、`0x59A968`
-  （Unregist）和 `0x59B14C`（raw factory FuncCall），111-entry manifest 已闭合，且所有
+  （Unregist）和 `0x59B14C`（raw factory FuncCall），随后又沿 PLT 补回
+  `0x59B7E8` 的 vector 扩容慢路径，并把错并在其后的 `0x59B9C8`
+  （`PackinOne.dll` callback）拆成独立函数；112-entry manifest 已闭合，且所有
   `SUB SP` / pre-index `STP/STR` 序言均成为 function start。IDB 已追加 vtable xref/边界
   注释并保存；adaptor 第三字段的旧文档语义也由错误的 `constructed` 纠正为
   `_sticky/no-delete`。Mac `psbfile-dll` **554/554**、`motionplayer-dll` **1197/1197**、

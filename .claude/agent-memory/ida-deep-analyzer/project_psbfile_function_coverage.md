@@ -1,6 +1,6 @@
 ---
 name: psbfile-function-coverage
-description: PSBFile.dll corrected 111-function boundary and exhaustive grouped manifest through the typed NCB tail
+description: PSBFile.dll corrected 112-function coverage including the GetDictionaryKeys vector-growth slow path
 metadata:
   type: project
 ---
@@ -11,9 +11,17 @@ The old `0x59641C..0x59AA84 = 90 functions` boundary was truncated:
 `0x59AA84` starts, rather than ends, the PSBFile typed NCB registration tail.
 Read-only IDAPython enumeration plus fresh decompile extends the plugin-related
 range through `0x59B708`. Splitting the independent prologues at `0x59A8D8`,
-`0x59A968`, and `0x59B14C` yields 111 functions total. The next function at
-`0x59B7E8` is a generic `std::vector<std::string>` instantiation with only
-PLT/data xrefs and no call from the PSBFile tail.
+`0x59A968`, and `0x59B14C` yields 111 business/NCB functions. A later
+2026-07-23 instruction-level audit disproved the old terminal-boundary claim:
+`GetDictionaryKeys@0x598E64` calls PLT `0x423250/0x42325C` at `0x598FFC`
+when its vector is full, and that thunk reaches
+`std::vector<std::string>::_M_emplace_back_aux<std::string &>@0x59B7E8`.
+The related manifest therefore contains 112 functions and ends at the slow
+path's exclusive end `0x59B9C8`. That address has an independent
+`SUB SP,#0x30` prologue and is registered by `sub_42CFA0` as the literal
+`PackinOne.dll` callback; its body loads `fstat.dll` and the remaining bundled
+plugins. The IDB was corrected and saved with separate `0x59B7E8..0x59B9C8`
+and `0x59B9C8..0x59BC2C` functions.
 
 The 22-function typed NCB tail contains auto-register/unregister,
 native-holder construction/three destructors,
@@ -39,6 +47,10 @@ saved.
   narrow-string Variant assignment helper `0xA0FEB4` directly; Enum flags are
   default-constructed, assigned int32 zero, and only then is callbackResult
   default-constructed.
+- `assign@0x59673C` saves the incoming destination in X19 and returns that same
+  address through `MOV X0,X19@0x596B88`; all four direct callers ignore it.
+  Local code now returns its existing destination pointer instead of `void`.
+  Pointer versus reference source spelling remains ABI-indistinguishable.
 - Resource access in `0x59673C`, `0x596C70`, `0x5996E4`, and `0x59A0B4`
   constructs/loads offset-view metadata before length-view metadata, then reads
   the indexed length entry before the indexed offset entry. Only `0x59673C`
