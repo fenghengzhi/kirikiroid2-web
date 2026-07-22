@@ -5,6 +5,9 @@ metadata:
   type: project
 ---
 
+**CURRENT CORRECTION 2026-07-22:** 本文后段“KEEP PlayerFrameStepping.cpp mock”的决定已被
+当前架构取代；该 decoded mock 及其测试已经删除。生产 raw live 实现仍保留。
+
 ✅ STATUS 2026-06-05: RE-LANDED GREEN via fix A. advanceNodeFramesLike_0x6B7E44(node,
 currentTime) now DELEGATES to advanceNodeFrameSelectionLike_0x6926B4(node, currentTime,
 nullptr) — the proven shared seek+state-establish tail with per-node onAction suppressed

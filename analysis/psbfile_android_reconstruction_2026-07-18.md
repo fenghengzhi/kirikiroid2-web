@@ -1,5 +1,15 @@
 # Android `PSBFile.dll` 复原审计（2026-07-18）
 
+## 2026-07-22：eager compatibility 子系统已删除
+
+此前隔离的 `DecodedPSBFile` / `PSBValue` / type handlers / image metadata、
+`OfflineMotionSnapshot`、`PlayerFrameStep`、`PlayerFrameStepping` 以及
+`psbfile_decoded_compat` / `motionplayer_offline` targets 已全部删除。
+`mtndump` 现直接读取 `PSBRawNode`；`motionsim` 的字典、数组、枚举及帧内容读取全部通过
+生产 `PSBValueDispatch`。wasmtime 与 native differential 的显式 source list 也已改用
+`psbfile/main.cpp + PSBRawFile.cpp`。下文早期章节对这些 compatibility 文件的描述只记录
+历史审计过程，不再代表当前工作树状态。
+
 ## 结论
 
 当前不能宣称整个 Web 项目已经“尽可能 100% 一比一复原” Android

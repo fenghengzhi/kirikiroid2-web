@@ -15,7 +15,7 @@ tools/bin/mac/rel/mtndump
 
 加载一个 `.mtn`（KiriKiri2 motion 文件）或 `.psb`（motion 类型的 PhyreEngine Script Binary），把 PSB 树里 `source/<group>/icon/<name>/pixel` 节点存放的每一张贴图解码后导出为 RGBA PNG。同时生成 `manifest.tsv`，记录每张贴图的元信息。
 
-PSB 解析走的是项目里本地实现的 `motion::detail::loadMotionSnapshot`（`cpp/plugins/motionplayer/RuntimeSupport.cpp`）和 `motion::internal::findPSBResourceBySourceName`（`cpp/plugins/motionplayer/PlayerInternal.h`）。后者架构对齐 libkrkr2.so `sub_6948E8`，所以工具输出的贴图、宽高、`origin_x`/`origin_y` 都应该和 Android 原版一致——这是它适合做 differential testing 的原因。
+PSB 加载直接走生产 `PSB::PSBFile::LoadStorage`，资源枚举和 octet 读取直接走 `PSBRawNode`。工具只保留一个 intrusive `PSBRawOwner`，不再创建 `DecodedPSBFile`、`MotionSnapshot`、`PSBDictionary` 或资源 side map。`source/<group>/icon/<name>` 导航及 atlas 裁剪对应 libkrkr2.so `sub_6948E8`。
 
 ## 前置条件
 
@@ -131,12 +131,9 @@ src/face_nose/icon1	src/face_nose/icon1.png	44	50	22	25	0
 2. 如果不是，尝试已知 seed（emote 测试：`742877301`）
 3. 都不对的话，用 `tjs2-disasm` 反汇编游戏 `Config.tjs` 或 `Initialize.tjs` 找 `setEmotePSBDecryptSeed(N)`
 
-### `Failed to load motion snapshot: foo.psb (wrong seed for encrypted file?)`
+### `Failed to load raw PSB: foo.psb`
 
-PSB 格式能解析但不是 motion 类型。motionplayer 只接受 `type == Motion` 的 PSB。`emote` / `scn` / `image` / `mmo` 等其他 PSB 类型会在这里被拒绝。检查文件是不是真的是 motion：
-- `.mtn` 后缀几乎总是 motion
-- `.psb` 可能是任意 PSB 类型
-- `.pimg` 通常是 emote，不是 motion（不能用 mtndump）
+通常表示输入不是有效 PSB，或者加密 seed 不正确。raw reader 不再根据 eager type handler 拒绝文件；只要根下存在 `source/<group>/icon/<name>`，`.mtn`、`.psb` 或 `.pimg` 都可以导出。
 
 ### `Skipping invalid file: foo.psb`
 
@@ -214,14 +211,13 @@ grep "src/face_nose/icon1" /tmp/dump/emote/manifest.tsv
 
 ## 技术细节
 
-- PSB 加载：`motion::detail::loadMotionSnapshot(path, seed)` → `PSBFile::loadPSBFile`
-- 贴图查找：`motion::internal::findPSBResourceBySourceName`（navigate `source/<group>/icon/<name>`），对齐 libkrkr2.so `sub_6948E8 at 0x6948E8`
+- PSB 加载：`PSB::PSBFile::LoadStorage(path, rawOwnerFilter)`；seed filter 对齐 `sub_6863CC @ 0x6863CC`
+- 贴图查找：直接用 `PSBRawNode` 导航 `source/<group>/icon/<name>`，对齐 `sub_6948E8 @ 0x6948E8`
 - 像素布局：BGRA 路径（palette）用 `memcpy` 整行拷贝；RGBA 路径（其它）逐像素 swap R/B
 - PNG 写出：走 `tTVPBaseBitmap` + `TVPSaveAsPNG`（与游戏运行时同一条 PNG encoder）
 - manifest 的 `decoded_bgra` 只是 debug flag，PNG 写出时已经统一成 RGBA
 
 ## 不适用场景
 
-- **Emote pimg 文件**：pimg 是 `PSB::PSBType::Emote`，不是 Motion。mtndump 会直接拒绝。要从 pimg 提贴图请另写工具（或用 `tools/xp3` 解包然后靠 `psb_decode` 类工具处理）。
 - **渲染过的合成画面**：mtndump 只导 **源** 贴图。如果你想看一个角色在某个动作某一帧的合成效果，需要跑完整 EmotePlayer 渲染路径（浏览器里或者写一个基于 motionplayer 的离线渲染工具）。
 - **TJS2 脚本**：不处理 `.tjs` / `.ks`，那是 `tjs2-disasm` / `ksdec` 的工作。

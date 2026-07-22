@@ -49,11 +49,6 @@
 #include "internal/player_containers.h"
 #include "internal/ttstr_hash.h"
 
-namespace PSB {
-    class PSBDictionary;
-    class PSBList;
-} // namespace PSB
-
 namespace motion {
 
     class Player;

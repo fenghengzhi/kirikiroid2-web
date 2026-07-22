@@ -79,10 +79,6 @@
 
 #include "EmoteAngleController.h"
 
-namespace PSB {
-    class PSBDictionary;
-} // namespace PSB
-
 namespace motion {
 
     struct EmoteVarController; // option.refCtl target (transition-pool controller)

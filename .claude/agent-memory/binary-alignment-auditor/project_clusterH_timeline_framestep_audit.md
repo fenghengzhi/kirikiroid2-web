@@ -1,9 +1,12 @@
 ---
 name: clusterH-timeline-framestep-audit
-description: 簇H timeline/frame-stepping审计(2026-06-07) — P2/P3/P4独立端口 vs advance/rewind/advanceNode/reseek/parseFrame/merge 6函数;6维总评+H-P1偏差+地址映射
+description: 簇H timeline/frame-stepping历史审计；2026-07-22 decoded P2/P3/P4 独立端口已删除
 metadata:
   type: project
 ---
+
+**CURRENT CORRECTION 2026-07-22:** test-only decoded `PlayerFrameStep*` 子系统已删除；
+下文仅作历史证据，不能再作为当前文件/调用图说明。
 
 簇H (PlayerFrameStep/PlayerFrameStepping/PlayerTimeline) 审计结论 (2026-06-07)。
 报告: analysis/audit_motionplayer_2026-06-07/clusterH_timeline_framestep.md

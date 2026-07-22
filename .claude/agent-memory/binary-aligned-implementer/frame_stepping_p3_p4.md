@@ -1,9 +1,12 @@
 ---
 name: frame-stepping-p3-p4
-description: M1/P3+P4 node-deque frame cursor stepping (advance/rewind/reseek @0x6B6ADC/0x6B9A3C/0x6B86C8 + advanceNode @0x6B7E44) -> PlayerFrameStepping.{h,cpp}; 3 frame-stream cursors, 2-slot ping-pong seek, signed-compare trap, reseek double-increment
+description: M1/P3+P4 historical decoded test model; deleted 2026-07-22, production raw cursor path remains
 metadata:
   type: project
 ---
+
+**CURRENT CORRECTION 2026-07-22:** `PlayerFrameStepping.{h,cpp}` 与 synthetic decoded
+tests 已删除；下文仅作历史分析。
 
 M1/P3+P4 (2026-05-30): ported the binary node-deque frame-stream cursor model +
 forward/back/reseek cursor stepping as INDEPENDENT free functions, NOT wired to

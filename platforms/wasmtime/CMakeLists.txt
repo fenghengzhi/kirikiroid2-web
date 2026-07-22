@@ -20,8 +20,6 @@ add_library(krkr2_wasmtime_guest_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/EmoteWindEmitter.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerCore.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerFrameProgress.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerFrameStep.cpp
-    ${KRKR2PLUGIN_PATH}/motionplayer/PlayerFrameStepping.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerResource.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerMotionLoad.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/PlayerVariable.cpp
@@ -47,18 +45,10 @@ add_library(krkr2_wasmtime_guest_objects OBJECT
     ${KRKR2PLUGIN_PATH}/motionplayer/PrivateMotionGLL.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/SeparateLayerAdaptor.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/D3DAdaptor.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/PSBValue.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/PSBFile.cpp
+    ${KRKR2PLUGIN_PATH}/psbfile/main.cpp
+    ${KRKR2PLUGIN_PATH}/psbfile/PSBRawFile.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBMedia.cpp
     ${KRKR2PLUGIN_PATH}/psbfile/PSBMediaRegistry.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/types/PimgType.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/types/MotionType.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/types/ScnType.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/types/ImageType.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/types/MmoType.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/types/ArchiveType.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/types/SoundArchiveType.cpp
-    ${KRKR2PLUGIN_PATH}/psbfile/resources/ImageMetadata.cpp
     ${KRKR2PLUGIN_PATH}/xp3filter.cpp
 )
 

@@ -30,12 +30,9 @@
     "ida-pro-mcp"
   ],
   "enabledPlugins": {
-    "ralph-wiggum@claude-code-plugins": true,
     "claude-md-management@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": true,
-    "pua@pua-skills": false,
     "clangd-lsp@claude-plugins-official": true,
-    "superpowers@claude-plugins-official": true,
     "github@claude-plugins-official": false
   },
   "effortLevel": "high",

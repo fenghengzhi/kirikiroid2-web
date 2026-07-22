@@ -23,12 +23,6 @@
 
 class iTVPTexture2D;
 
-namespace PSB {
-    class PSBDictionary;
-    class PSBList;
-    class IPSBValue;
-}
-
 namespace motion {
     class D3DAdaptor;
     class Player;

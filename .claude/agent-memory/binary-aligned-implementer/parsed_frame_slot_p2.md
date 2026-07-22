@@ -1,9 +1,12 @@
 ---
 name: parsed-frame-slot-p2
-description: M1/P2 parseFrame(0x6926B4)+mergeFrameContent(0x692AB0) -> PlayerFrameStep.{h,cpp}; 536B node slot offset map, mask gates, TJS propGet helper map
+description: M1/P2 historical decoded test model; deleted 2026-07-22, production raw parse/merge remains
 metadata:
   type: project
 ---
+
+**CURRENT CORRECTION 2026-07-22:** `PlayerFrameStep.{h,cpp}` 与 synthetic decoded tests
+已删除；下文只记录历史分析，当前实现是生产 raw dispatch 路径。
 
 M1/P2 (2026-05-30): ported the binary parsed-frame slot + parse/merge as
 INDEPENDENT free functions, NOT wired to live frame-progress path (logo

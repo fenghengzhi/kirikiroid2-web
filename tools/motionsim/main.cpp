@@ -8,12 +8,11 @@
 //
 // Design (per /Users/bytedance/.claude/plans/reference-xp3-logo-test-xp3-mtn-linked-chipmunk.md):
 //
-//   REUSED from motionplayer (PSB format parsing is shared truth, not under test):
-//     - motion::detail::loadMotionSnapshot      → parse .mtn → PSBDictionary tree
-//     - motion::internal::evaluateLayerContent  → framesel selection + interpolation
-//                                                 (already traced/validated, not the current
-//                                                 suspected bug surface)
-//     - motion::internal::findPSBResourceBySourceName → clipW/clipH/origin lookup
+//   RAW PSB boundary:
+//     - PSBFile::LoadStorage retains one PSBRawOwner
+//     - every property/list/enumeration read goes through PSBValueDispatch
+//     - framesel parsing follows Player_parseFrame @0x6926B4 and
+//       Player_mergeFrameContent @0x692AB0 without an eager decoded tree
 //
 //   INDEPENDENTLY RE-IMPLEMENTED from analysis/player_updateLayers_accum.md
 //   (the authoritative reversed pseudocode):
@@ -44,16 +43,13 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include "BinaryStream.h"
+#include "ScriptMgnIntf.h"
 #include "StorageIntf.h"
 #include "SysInitImpl.h"
 #include "SysInitIntf.h"
 #include "GraphicsLoaderIntf.h"
 
-#include "psbfile/PSBFile.h"
-#include "psbfile/PSBValue.h"
-
-#include "motionplayer/OfflineMotionSnapshot.h"
-#include "motionplayer/MotionNode.h"
+#include "../common/RawMotion.h"
 
 namespace fs = std::filesystem;
 
@@ -65,58 +61,30 @@ namespace {
     // construction an independent re-implementation).
     // ---------------------------------------------------------------------
 
-    std::optional<double>
-    dictNum(const std::shared_ptr<const PSB::PSBDictionary> &dic,
-            const char *key) {
-        if(!dic) return std::nullopt;
-        auto val = (*dic)[key];
-        if(auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(val)) {
-            switch(n->numberType) {
-                case PSB::PSBNumberType::Float:
-                    return n->getValue<float>();
-                case PSB::PSBNumberType::Double:
-                    return n->getValue<double>();
-                case PSB::PSBNumberType::Int:
-                    return static_cast<double>(n->getValue<int>());
-                case PSB::PSBNumberType::Long:
-                default:
-                    return static_cast<double>(n->getValue<tjs_int64>());
-            }
-        }
-        if(auto b = std::dynamic_pointer_cast<PSB::PSBBool>(val)) {
-            return b->value ? 1.0 : 0.0;
-        }
-        return std::nullopt;
+    using MotionDictionary = tools::rawpsb::Value;
+
+    std::optional<double> dictNum(const MotionDictionary &dic,
+                                  const char *key) {
+        return dic.property(key).number();
     }
 
-    std::string
-    dictStr(const std::shared_ptr<const PSB::PSBDictionary> &dic,
-            const char *key) {
-        if(!dic) return {};
-        if(auto s = std::dynamic_pointer_cast<PSB::PSBString>((*dic)[key])) {
-            return s->value;
-        }
-        return {};
+    std::string dictStr(const MotionDictionary &dic, const char *key) {
+        return dic.property(key).stringOr();
     }
 
-    std::shared_ptr<PSB::PSBList>
-    dictList(const std::shared_ptr<const PSB::PSBDictionary> &dic,
-             const char *key) {
-        if(!dic) return nullptr;
-        return std::dynamic_pointer_cast<PSB::PSBList>((*dic)[key]);
+    MotionDictionary dictList(const MotionDictionary &dic, const char *key) {
+        const auto value = dic.property(key);
+        return value.isArray() ? value : MotionDictionary{};
     }
-
-    using MotionDictionary = std::shared_ptr<const PSB::PSBDictionary>;
 
     void findMotionDictionary(const MotionDictionary &dic,
                               const std::string &parentKey,
                               const std::string &wantedLabel,
                               MotionDictionary &result) {
-        if(!dic) return;
-        for(const auto &[key, child] : *dic) {
-            auto childDictionary =
-                std::dynamic_pointer_cast<const PSB::PSBDictionary>(child);
-            if(!childDictionary) continue;
+        if(!dic.isDictionary()) return;
+        for(const auto &key : dic.keys()) {
+            const auto childDictionary = dic.property(key);
+            if(!childDictionary.isDictionary()) continue;
             if(parentKey == "motion" &&
                (wantedLabel.empty() || key == wantedLabel)) {
                 // Last match wins, matching the old auxiliary label map while
@@ -128,15 +96,15 @@ namespace {
     }
 
     MotionDictionary selectMotionDictionary(
-        const motion::detail::MotionSnapshot &snapshot,
+        const tools::rawpsb::Document &document,
         const std::string &clipLabel) {
-        if(!snapshot.root) return nullptr;
-        if(clipLabel.empty() && dictList(snapshot.root, "layer")) {
-            return snapshot.root;
+        if(!document.root.isDictionary()) return {};
+        if(clipLabel.empty() && dictList(document.root, "layer").valid()) {
+            return document.root;
         }
         MotionDictionary result;
-        findMotionDictionary(snapshot.root, {}, clipLabel, result);
-        return result ? result : snapshot.root;
+        findMotionDictionary(document.root, {}, clipLabel, result);
+        return result.valid() ? result : document.root;
     }
 
     // ---------------------------------------------------------------------
@@ -175,10 +143,10 @@ namespace {
         int meshFlags = 0;
         int meshDivision = 0;
 
-        std::shared_ptr<const PSB::PSBDictionary> psbNode;
+        MotionDictionary psbNode;
 
         // Populated during simulation:
-        motion::internal::OfflineFrameContentState state;
+        tools::rawmotion::FrameState state;
         Accum accum;
         std::string coverageWarn;  // non-empty → row annotation of unsupported path
 
@@ -197,9 +165,9 @@ namespace {
     //   - every PSB dict becomes its own node (no label dedup)
     // ---------------------------------------------------------------------
 
-    void buildNodeDFS(const std::shared_ptr<const PSB::PSBDictionary> &dic,
+    void buildNodeDFS(const MotionDictionary &dic,
                       int parentIdx, std::vector<SimNode> &out) {
-        if(!dic) return;
+        if(!dic.isDictionary()) return;
         SimNode node;
         node.index = static_cast<int>(out.size());
         node.parentIndex = parentIdx;
@@ -217,20 +185,11 @@ namespace {
             node.meshFlags = static_cast<int>(*v);
         if(auto v = dictNum(dic, "meshDivision"))
             node.meshDivision = static_cast<int>(*v);
-        if(auto toList = dictList(dic, "transformOrder")) {
-            for(int i = 0; i < 4 && i < static_cast<int>(toList->size()); ++i) {
-                if(auto num = std::dynamic_pointer_cast<PSB::PSBNumber>(
-                       (*toList)[i])) {
-                    switch(num->numberType) {
-                        case PSB::PSBNumberType::Int:
-                            node.transformOrder[i] = num->getValue<int>();
-                            break;
-                        default:
-                            node.transformOrder[i] = static_cast<int>(
-                                num->getValue<tjs_int64>());
-                            break;
-                    }
-                }
+        const auto toList = dictList(dic, "transformOrder");
+        if(toList.valid()) {
+            for(int i = 0; i < 4 && i < toList.count(); ++i) {
+                node.transformOrder[i] = static_cast<int>(
+                    toList.at(i).numberOr(node.transformOrder[i]));
             }
             node.hasTransformOrder = true;
         }
@@ -238,17 +197,16 @@ namespace {
         const int thisIdx = node.index;
         out.push_back(std::move(node));
 
-        if(auto children = dictList(dic, "children")) {
-            for(int i = 0; i < static_cast<int>(children->size()); ++i) {
-                auto child = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                    (*children)[i]);
-                buildNodeDFS(child, thisIdx, out);
+        const auto children = dictList(dic, "children");
+        if(children.valid()) {
+            for(int i = 0; i < children.count(); ++i) {
+                buildNodeDFS(children.at(i), thisIdx, out);
             }
         }
     }
 
     std::vector<SimNode>
-    buildFlatNodeTree(const motion::detail::MotionSnapshot &snapshot,
+    buildFlatNodeTree(const tools::rawpsb::Document &document,
                       const std::string &clipLabel) {
         std::vector<SimNode> nodes;
         SimNode root;  // synthetic root at index 0
@@ -256,14 +214,11 @@ namespace {
         root.parentIndex = -1;
         nodes.push_back(std::move(root));
 
-        const auto motion = selectMotionDictionary(snapshot, clipLabel);
+        const auto motion = selectMotionDictionary(document, clipLabel);
         const auto layers = dictList(motion, "layer");
-        if(!layers) return nodes;
-        for(int index = 0; index < static_cast<int>(layers->size()); ++index) {
-            auto dic = std::dynamic_pointer_cast<const PSB::PSBDictionary>(
-                (*layers)[index]);
-            if(!dic) continue;
-            buildNodeDFS(dic, 0, nodes);
+        if(!layers.valid()) return nodes;
+        for(int index = 0; index < layers.count(); ++index) {
+            buildNodeDFS(layers.at(index), 0, nodes);
         }
         return nodes;
     }
@@ -366,7 +321,7 @@ namespace {
 
         for(size_t i = 1; i < nodes.size(); ++i) {
             SimNode &node = nodes[i];
-            const motion::internal::OfflineFrameContentState &state = node.state;
+            const tools::rawmotion::FrameState &state = node.state;
 
             // 2.1 Parent lookup with joinTarget (0x00400000) walk — per
             //     pseudocode 0x6BB598..0x6BB5BC. Skip-parent if its
@@ -531,23 +486,33 @@ namespace {
     }
 
     // ---------------------------------------------------------------------
-    // Per-node source lookup (clipW/clipH/origin) via findPSBResourceBySourceName.
+    // Per-node source metadata through the same raw dispatch retained by the
+    // document. No PSBResource or decoded dictionary mirror is constructed.
     // ---------------------------------------------------------------------
 
     void populateSourceMetadata(SimNode &node,
-                                const motion::detail::MotionSnapshot &snapshot) {
+                                const tools::rawpsb::Document &document) {
         if(node.state.src.empty()) return;
-        int w = 0, h = 0;
-        double ox = 0.0, oy = 0.0;
-        std::vector<std::uint8_t> decomp;
-        const auto *res = motion::internal::findPSBResourceBySourceName(
-            snapshot, node.state.src, w, h, decomp, ox, oy);
-        if(res) {
-            node.clipW = w;
-            node.clipH = h;
-            node.originX = ox;
-            node.originY = oy;
+        if(node.state.src.rfind("src/", 0) != 0) return;
+        const auto tail = node.state.src.substr(4);
+        const auto slash = tail.find('/');
+        if(slash == std::string::npos) return;
+        const auto icon = tools::rawpsb::navigate(
+            document.root,
+            {"source", tail.substr(0, slash), "icon", tail.substr(slash + 1)});
+        if(!icon.isDictionary()) return;
+        node.clipW = static_cast<int>(icon.property("width").numberOr(0.0));
+        node.clipH = static_cast<int>(icon.property("height").numberOr(0.0));
+        if(node.clipW <= 0) {
+            node.clipW = static_cast<int>(
+                icon.property("truncated_width").numberOr(0.0));
         }
+        if(node.clipH <= 0) {
+            node.clipH = static_cast<int>(
+                icon.property("truncated_height").numberOr(0.0));
+        }
+        node.originX = icon.property("originX").numberOr(0.0);
+        node.originY = icon.property("originY").numberOr(0.0);
     }
 
     // ---------------------------------------------------------------------
@@ -587,10 +552,11 @@ namespace {
 
     std::vector<double>
     generateTimeGrid(double dt,
-                     const motion::detail::MotionSnapshot &snapshot,
+                     const tools::rawpsb::Document &document,
                      const std::string &clipLabel) {
         double total = 600.0;
-        if(const auto motion = selectMotionDictionary(snapshot, clipLabel)) {
+        const auto motion = selectMotionDictionary(document, clipLabel);
+        if(motion.valid()) {
             total = dictNum(motion, "lastTime").value_or(total);
         }
         if(total <= 0.0) total = 600.0;
@@ -661,12 +627,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    const tjs_int seed =
-        static_cast<tjs_int>(program.get<int>("--seed"));
-    auto snapshot = motion::detail::loadMotionSnapshot(
-        ttstr(inputPath.string()), seed);
-    if(!snapshot) {
-        spdlog::error("failed to load motion snapshot (wrong seed?): {}",
+    const auto seed =
+        static_cast<std::uint32_t>(program.get<int>("--seed"));
+    tools::rawpsb::Document document;
+    if(!document.load(ttstr(inputPath.string()), seed)) {
+        spdlog::error("failed to load raw motion PSB (wrong seed?): {}",
                       inputPath.string());
         return 2;
     }
@@ -679,62 +644,47 @@ int main(int argc, char *argv[]) {
     // align/sync/action — i.e. whether this fixture exercises the
     // onAction/onSync layer-event path (Stage A, commit 7edbd8f).
     if(program.get<bool>("--dump-tags")) {
-        const auto motion = selectMotionDictionary(*snapshot, clipLabel);
+        const auto motion = selectMotionDictionary(document, clipLabel);
         // Diagnostic: dump the selected motion's keys so we can tell whether a
         // "tag" key exists at all.
         {
             std::string rootKeys;
-            for(const auto &kv : *motion) {
+            for(const auto &key : motion.keys()) {
                 if(!rootKeys.empty()) rootKeys += ",";
-                rootKeys += kv.first;
+                rootKeys += key;
             }
             spdlog::info("motion keys: {{{}}}", rootKeys);
         }
         const auto frames = dictList(motion, "tag");
-        if(!frames) {
+        if(!frames.valid()) {
             spdlog::warn("selected motion has NO \"tag\" stream");
             return 0;
         }
-        const auto numOf =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> double {
-            auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v);
-            if(!n) return 0.0;
-            switch(n->numberType) {
-                case PSB::PSBNumberType::Float:  return n->getValue<float>();
-                case PSB::PSBNumberType::Double: return n->getValue<double>();
-                case PSB::PSBNumberType::Int:
-                    return static_cast<double>(n->getValue<int>());
-                default:
-                    return static_cast<double>(n->getValue<tjs_int64>());
-            }
-        };
-        const int count = static_cast<int>(frames->size());
+        const int count = frames.count();
         spdlog::info("tag stream: {} frame(s)", count);
         int type1 = 0, withAlign = 0, withSync = 0, withAction = 0;
         for(int i = 0; i < count; ++i) {
-            auto f = std::dynamic_pointer_cast<PSB::PSBDictionary>((*frames)[i]);
-            if(!f) {
+            const auto frame = frames.at(i);
+            if(!frame.isDictionary()) {
                 spdlog::info("  [{}] <non-dict frame>", i);
                 continue;
             }
-            const double time = numOf((*f)["time"]);
-            const int type = static_cast<int>(numOf((*f)["type"]));
-            auto content =
-                std::dynamic_pointer_cast<PSB::PSBDictionary>((*f)["content"]);
+            const double time = frame.property("time").numberOr(0.0);
+            const int type = static_cast<int>(
+                frame.property("type").numberOr(0.0));
+            const auto content = frame.property("content");
             std::string keys;
             bool hasAlign = false, hasSync = false, hasAction = false;
             std::string actionVal;
-            if(content) {
-                for(const auto &kv : *content) {
+            if(content.isDictionary()) {
+                for(const auto &key : content.keys()) {
                     if(!keys.empty()) keys += ",";
-                    keys += kv.first;
-                    if(kv.first == "align") hasAlign = true;
-                    if(kv.first == "sync") hasSync = true;
-                    if(kv.first == "action") {
+                    keys += key;
+                    if(key == "align") hasAlign = true;
+                    if(key == "sync") hasSync = true;
+                    if(key == "action") {
                         hasAction = true;
-                        if(auto s = std::dynamic_pointer_cast<PSB::PSBString>(
-                               kv.second))
-                            actionVal = s->value;
+                        actionVal = content.property(key).stringOr();
                     }
                 }
             }
@@ -772,60 +722,57 @@ int main(int argc, char *argv[]) {
     // analysis/Player_4_HashMaps_Container_Mapping.md §四之二.
     if(program.get<bool>("--dump-variable")) {
         // Describe a PSB value's type + short content preview.
-        const auto describe =
-            [](const std::shared_ptr<PSB::IPSBValue> &v) -> std::string {
-            if(!v) return "null";
-            if(auto s = std::dynamic_pointer_cast<PSB::PSBString>(v))
-                return "string=\"" + s->value + "\"";
-            if(auto n = std::dynamic_pointer_cast<PSB::PSBNumber>(v))
-                return "number";
-            if(auto l = std::dynamic_pointer_cast<PSB::PSBList>(v)) {
+        const auto describe = [](const tools::rawpsb::Value &value) {
+            if(!value.valid()) return std::string("null");
+            if(value.isString())
+                return "string=\"" + value.stringOr() + "\"";
+            if(value.isNumber()) return std::string("number");
+            if(value.isArray()) {
                 std::string firstKeys;
-                if(l->size() > 0) {
-                    if(auto d0 = std::dynamic_pointer_cast<PSB::PSBDictionary>(
-                           (*l)[0])) {
-                        for(const auto &kv : *d0) {
+                if(value.count() > 0) {
+                    const auto first = value.at(0);
+                    if(first.isDictionary()) {
+                        for(const auto &key : first.keys()) {
                             if(!firstKeys.empty()) firstKeys += ",";
-                            firstKeys += kv.first;
+                            firstKeys += key;
                         }
                     }
                 }
-                return "list[" + std::to_string(l->size()) + "]" +
+                return "list[" + std::to_string(value.count()) + "]" +
                        (firstKeys.empty() ? "" : " elem0.keys={" + firstKeys + "}");
             }
-            if(auto d = std::dynamic_pointer_cast<PSB::PSBDictionary>(v)) {
+            if(value.isDictionary()) {
                 std::string keys;
-                for(const auto &kv : *d) {
+                for(const auto &key : value.keys()) {
                     if(!keys.empty()) keys += ",";
-                    keys += kv.first;
+                    keys += key;
                 }
                 return "dict{" + keys + "}";
             }
-            return "<other>";
+            return std::string("<other>");
         };
-        const auto motion = selectMotionDictionary(*snapshot, clipLabel);
-        const auto variable =
-            std::dynamic_pointer_cast<PSB::PSBList>((*motion)["variable"]);
-        if(!variable) {
+        const auto motion = selectMotionDictionary(document, clipLabel);
+        const auto variable = motion.property("variable");
+        if(!variable.isArray()) {
             spdlog::warn("motion has NO top-level \"variable\" list");
             return 0;
         }
-        spdlog::info("variable list: {} entry(ies)", variable->size());
-        const int n = std::min<int>(static_cast<int>(variable->size()), 4);
+        spdlog::info("variable list: {} entry(ies)", variable.count());
+        const int n = std::min<int>(variable.count(), 4);
         for(int i = 0; i < n; ++i) {
-            auto e = std::dynamic_pointer_cast<PSB::PSBDictionary>((*variable)[i]);
-            if(!e) {
+            const auto entry = variable.at(i);
+            if(!entry.isDictionary()) {
                 spdlog::info("  [{}] <non-dict entry>", i);
                 continue;
             }
             std::string keys;
-            for(const auto &kv : *e) {
+            for(const auto &key : entry.keys()) {
                 if(!keys.empty()) keys += ",";
-                keys += kv.first;
+                keys += key;
             }
             spdlog::info("  [{}] keys={{{}}}", i, keys);
-            spdlog::info("       label = {}", describe((*e)["label"]));
-            spdlog::info("       scope = {}", describe((*e)["scope"]));
+            spdlog::info("       label = {}", describe(entry.property("label")));
+            spdlog::info("       scope = {}", describe(entry.property("scope")));
         }
         return 0;
     }
@@ -837,7 +784,7 @@ int main(int argc, char *argv[]) {
             g_rootPosY = rp[1];
         }
     }
-    auto nodes = buildFlatNodeTree(*snapshot, clipLabel);
+    auto nodes = buildFlatNodeTree(document, clipLabel);
     spdlog::info("built flat node tree: {} nodes (including synthetic root)",
                  nodes.size());
 
@@ -864,7 +811,7 @@ int main(int argc, char *argv[]) {
         timeGrid = parseTimeList(timesCsv);
     } else {
         timeGrid = generateTimeGrid(
-            program.get<double>("--time-grid"), *snapshot, clipLabel);
+            program.get<double>("--time-grid"), document, clipLabel);
     }
     spdlog::info("simulating {} time points (clip={})", timeGrid.size(),
                  clipLabel.empty() ? std::string("<root>") : clipLabel);
@@ -891,16 +838,14 @@ int main(int argc, char *argv[]) {
            "\tcoverageWarn\n";
 
     for(double t : timeGrid) {
-        // First pass: evaluate framesel per node (REUSED — via
-        // motion::internal::evaluateLayerContent). This is the framesel
-        // interpolation that is already exhaustively traced on the Web side
-        // and is not the current suspected bug surface.
+        // First pass: raw-dispatch framesel evaluation. No eager PSB model is
+        // retained beside the production PSBValueDispatch graph.
         for(size_t i = 1; i < nodes.size(); ++i) {
             SimNode &node = nodes[i];
-            node.state = motion::internal::evaluateLayerContent(
+            node.state = tools::rawmotion::evaluateLayer(
                 node.psbNode, t, node.nodeType);
             if(!node.state.src.empty()) {
-                populateSourceMetadata(node, *snapshot);
+                populateSourceMetadata(node, document);
             }
         }
 

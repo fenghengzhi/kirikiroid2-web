@@ -36,8 +36,3 @@ endforeach()
 foreach(name motionplayer-dll psbfile-dll)
     target_link_libraries(${name} PRIVATE krkr2plugins_ncbind)
 endforeach()
-
-# These tests exercise decoded compatibility helpers explicitly. Production
-# motionplayer and psbfile intentionally do not link either offline target.
-target_link_libraries(motionplayer-dll PRIVATE motionplayer_offline)
-target_link_libraries(psbfile-dll PRIVATE psbfile_decoded_compat)

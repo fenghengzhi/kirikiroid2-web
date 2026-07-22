@@ -1,9 +1,13 @@
 ---
 name: progress-framestep-source-structure
-description: SOURCE-STRUCTURE audit；2026-07-19 current correction: live layer/root helpers are direction-split and reseek scan is wired; older split/missing notes below are historical
+description: SOURCE-STRUCTURE audit；2026-07-22 correction: decoded PlayerFrameStep/Stepping reference model was deleted; live raw path remains authoritative
 metadata:
   type: project
 ---
+
+**CURRENT CORRECTION 2026-07-22:** `PlayerFrameStep.*` 与
+`PlayerFrameStepping.*` 的 decoded、test-only 重复端口及相应单测已删除。下文提到这些文件
+时只表示历史状态；当前只有生产 raw `tTJSVariant`/`MotionNode` 路径。
 
 2026-06-04 fresh-decompile audit (boundary/decomposition only, NOT value correctness). Binary addrs all verified this session.
 

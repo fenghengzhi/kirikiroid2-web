@@ -13,7 +13,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     krkr2plugin
     krkr2plugins_ncbind
     motionplayer
-    motionplayer_offline
+    psbfile
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
