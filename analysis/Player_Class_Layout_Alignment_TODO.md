@@ -26,7 +26,7 @@
 | **EmoteObject vs Player conflation**(EmotePlayer_Internal_Implementation.md 把 0x5D8=1496B 对象整体称为 "Player") | sub_67E38C(1496B 对象的构造)内部 `v13=operator new(0x568); Player_ctor(v13,a2); a1[133]=v13` | **只有一个 Player 类,永远 1384B(0x568),ctor sub_6CED30**;0x5D8=1496B 的是 **EmoteObject 引擎**,它在 +1064 持有真正的 Player 指针。hairScale(+1184)/partsScale(+1192)/bodyScale(+1200)/variableHashMap(+1384) 等都是**引擎**字段,不是 Player。EmotePlayer NCB 访问器 sub_681F20/28/30 写的是引擎 +1184/+1192/+1200。已修正 EmotePlayer_Internal_Implementation.md §2.4 |
 | sub_149EDF8 用途未知 | 二分查找 prime 桶数表 `qword_16496D0`,写桶数到 `a1+8`,读负载因子 `*(float*)a1` | 哈希表桶数选择器,确证哈希表 |
 | +384 render list "56-byte stride" | dtor `v4 += 7` (7 qword=56B),entry+0 = tTJSVariant* | 确认 stride=56 |
-| +936 variable list "44-byte stride" | dtor `v17 += 44`,释放 ttstr@+4 与 ttstr@+24 | 确认 stride=44,每项 2 个 ttstr |
+| +936 旧称 variable list "44-byte stride" | fresh producer/consumer 审计确认元素为 `{int32 kind; tTJSVariant a; tTJSVariant b;}`；两个 20B Variant 的 copy/dtor 分别调用 `sub_A0FB64/sub_A0F778` | 这是 child→parent 聚合后清空的 DEAD residual render buffer，不是 live draw list，也不是 ttstr variable list |
 
 ---
 
@@ -79,7 +79,7 @@
 | 偏移 | 二进制类型 | 二进制语义 | 本地对应 | 状态 | TODO |
 |---|---|---|---|---|---|
 | +376 | ptr | activeTimeline | 🔬 (`_runtime->activeClip`?) | 🔬 | 需确认 |
-| +384/+392 | 动态数组 stride=56 | renderList,entry+0=tTJSVariant* | `PlayerRuntime::preparedRenderItems` (std::vector<PreparedRenderItem>) | ⚠️ | 二进制 56B/项裸数组;本地巨型 PreparedRenderItem 结构。**严重布局偏差**,但语义对应。见 §2.3 |
+| +384/+392 | 动态数组 stride=56 | **旧 renderList 映射已证伪**；容器身份须由其构造/消费者独立确认 | 与 caller-stack `PreparedRenderItemList` 无关 | 🔬 | 56B 是 Android STL/元素 ABI 证据，不是 wasm32 本地对象尺寸要求。见 §2.3 |
 | +400..408 | 容量字段 | renderList capacity | (vector 内部) | ⚠️ | std::vector 内含 |
 | +408..432 | struct/list | someList (sub_6DD144 清理) | 🔬 | 🔬 | 需反编译 sub_6DD144 确认 |
 | +424 | ptr | someList arg | 🔬 | 🔬 | dtor 传给 sub_6DD144 |
@@ -136,7 +136,7 @@
 
 | 偏移 | 二进制类型 | 二进制语义 | 本地对应 | 状态 | TODO |
 |---|---|---|---|---|---|
-| +936/+944 | 动态数组 stride=44 | variableList,每项 ttstr@+4,ttstr@+24 | `PlayerRuntime::variableLabelEntries` (std::vector<VariableLabelEntry>) | ⚠️ | 语义对齐;二进制 44B/项含 2 个 ttstr。须核对 VariableLabelEntry 字段(§2.4) |
+| +936/+944 | `std::vector`，Android 元素 stride=44 | DEAD child-motion render aggregate；元素 `{int32 kind; tTJSVariant a; tTJSVariant b;}` | `Player::_childMotionRenderAggregate` | ✅ | 两个 writer 都 insert-at-begin 后 clear child；无 producer/consumer，和 live caller-stack render lists 完全分离。见 §2.4 |
 | +960 | refcounted string value* | primary chara | `Player::_chara` (ttstr) | ✅ | NCB chara getter 0x6D9470 |
 | +968 | refcounted string value* | stealthChara | `Player::_stealthChara` (ttstr) | ✅ | NCB stealthChara getter 0x6D9490 |
 | +976 | refcounted string value* | primary motion | `Player::_motionKey` (ttstr) | ✅ | NCB motion getter 0x6D9544 |
@@ -151,32 +151,32 @@
 
 | 偏移 | 二进制 | 本地 | 状态 |
 |---|---|---|---|
-| +1092 | completionType (bool) | `Player::_completionType` (int, Player.h:565) | ⚠️ | 类型: 二进制 1 字节 bool(setter `&1`),本地 int。**TODO: 改 bool**。语义已验证(见 project_player_completionType.md) |
-| +1093 | speed (bool, init defaultSyncActive) | `Player::_speed` (bool=true, Player.h:591) | ✅ | 已对齐 |
-| +1094 | cameraActive (bool) | `Player::_cameraActive` (bool, Player.h:585) | ✅ | |
-| +1095 | stereovisionActive (bool) | `Player::_stereovisionActive` (Player.h:586) | ✅ | |
-| +1096 | preview (bool) | `Player::_preview` (Player.h:605) | ✅ | |
-| +1097 | colorWeight/independentLayerInherit (bool) | `Player::_independentLayerInherit` (Player.h:595) | ✅ | NCB colorWeight getter 0x6D9768 读此字节 |
-| +1098 | syncWaiting (bool) | `Player::_syncWaiting` (Player.h:582) | ✅ | |
-| +1099 | playing (bool) | (本地 getPlaying() 计算) | ⚠️ | 二进制独立字节;本地无 `_playing` 成员,getPlaying() 实现需核对 🔬 |
-| +1100 | cameraAlive/FOV (bool) | `Player::_cameraAlive` (Player.h:600) | ✅ | |
+| +1092 | preview | `Player::_preview` | ✅ | sub_6D9634/sub_6D963C，setter `&1`；completionType 真身是 +1144 int |
+| +1093 | syncActive | `Player::_syncActive` | ✅ | sub_6D968C/sub_6D9694；ctor 从 `defaultSyncActive` 初始化 |
+| +1094 | cameraActive | `Player::_cameraActive` | ✅ | sub_6D9708/sub_6D9710 |
+| +1095 | stereovisionActive | `Player::_stereovisionActive` | ✅ | sub_6D971C/sub_6D9724 |
+| +1096 | priorDraw | `Player::_priorDraw` | ✅ | sub_6D9648/sub_6D9650；与 node+48 priorDraw 分离 |
+| +1097 | independentLayerInherit | `Player::_independentLayerInherit` | ✅ | sub_6D9768/sub_6CC9D4；`colorWeight` 是独立的 +1156 packed color |
+| +1098 | syncWaiting | `Player::_syncWaiting` | ✅ | sub_6D979C；releaseSyncWait@0x6D9A48 清零 |
+| +1099 | playing | `Player::_allplaying` | ✅ | Player_getPlaying@0x6D9794 直读；play/init/stop/progress 生命周期维护该 byte |
+| +1100 | cameraAlive | `Player::_cameraAlive` | ✅ | sub_6D978C RO getter |
 
 ### 1.8 数值字段 (+1104..+1296)
 
 | 偏移 | 二进制类型 | 二进制语义 | 本地对应 | 状态 | TODO |
 |---|---|---|---|---|---|
-| +1104 | double | cameraPosition | `Player::_cameraPosX` (Player.h:589)? | ⚠️🔬 | 本地 _cameraPosition 是 tTJSVariant(Player.h:598)+ _cameraPosX/Y/Z 三个 double。二进制 +1104 单 double。需确认 |
+| +1104 | double | cameraFOV | `Player::_cameraFov` 与另一个 `_cameraFOV` owner 并存 | ⚠️🔬 | sub_6D9784 直读 +1104；本地两个 FOV owner 的属性/相机更新数据流仍须收束 |
 | +1112 | double | zFactor/coordinate | `Player::_zFactor=1.0` (Player.h:596) | ⚠️🔬 | NCB coordinate getter 0x6D977C 读 +1112 |
 | +1120 | double | frameTickCount (0) | `Player::_frameTickCount` (Player.h:592) | ✅ | |
 | +1128 | double | frameLastTime/cachedTotalFrames (0) | `Player::_cachedTotalFrames` (Player.h:575,标 +1128) | ✅ | 注意: 旧文档把 frameLastTime 标 +1128,本地 _frameLastTime 默认 +? 需核对 _frameLastTime vs _cachedTotalFrames 偏移 🔬 |
 | +1136 | double | frameLoopTime/loopTime (0) | `Player::_loopTime` (Player.h:574,标 player+1136) | ✅ | _frameLoopTime(Player.h:572) 也声明,偏移可能重复 🔬 |
-| +1144 | int | project (0) | `Player::_project` (tTJSVariant, Player.h:612) | ❌ | **类型错**: 二进制 int32,本地 tTJSVariant。**TODO: 改 `tjs_int _project=0;`** |
+| +1144 | int | completionType (0) | `Player::_completionType` (tjs_int) | ✅ | sub_6D9624/sub_6D962C；NCB `project` 实际别名到 +1012 motion-key 上下文，不是此槽 |
 | +1148 | int | maskMode (0) | `Player::_maskMode` (tjs_int, Player.h:593) | ✅ | 已对齐 |
 | +1152 | int | progressCounter (0) | 🔬 | 🔬 | progress_inner 清零 |
-| +1156 | uint32 | parentColorPacked (0xFF808080) | `Player::_parentColorPacked` / `_colorWeightPacked` (Player.h:594,694) | ⚠️ | **本地有两个字段都标 +1156** (_colorWeightPacked L594 注释 +1156, _parentColorPacked L694 注释 +1156)。**TODO: 二者实为同一字段,合并** 🔬 |
-| +1160 | double | priorDraw (init 1.5? ctor a1[145]=0x3FF8000000000000=1.5) | `Player::_priorDraw=0.0` (Player.h:570) | ⚠️ | **默认值错**: 二进制 ctor 设 1.5,本地 0.0。**TODO: 核对 +1160 默认值,改 1.5** 🔬 |
-| +1168 | double | meshDivisionRatio (1.0) | `Player::_emoteMeshDivisionRatio=1.0` (Player.h:706) | ✅ | ctor a1[146]=1.0 |
-| +1176 | double | outsideFactor (ctor a1[147]=1.0!) | `Player::_outsideFactor=0.0` (Player.h:607) | ⚠️ | **默认值错**: ctor a1[147]=0x3FF0000000000000=1.0,本地 0.0。**TODO: 核对,改 1.0** 🔬 |
+| +1156 | uint32 | colorWeightPacked / inherited parent color (0xFF808080) | `Player::_colorWeightPacked` | ✅ | sub_6CD710/sub_6CD724 做 R/B swap；父→子传播写同一字段 |
+| +1160 | double | outsideFactor (1.5) | `Player::_outsideFactor=1.5` | ✅ | sub_6D965C/sub_6D9664；ctor a1[145]=0x3FF8000000000000 |
+| +1168 | double | speed multiplier (1.0) | `Player::_speedMul=1.0` | ✅ | sub_6D967C/sub_6D9684；progress 入口写 +592 = speed*dt |
+| +1176 | double | meshDivisionRatio (1.0) | `Player::_meshDivisionRatio=1.0` | ✅ | sub_6D966C/sub_6D9674；与 EmoteEngine 的 ratio pair 分离 |
 | +1184..1232 | hashMap HM3 | (见 §1.2) | ✅ 已清理 — `_hairScale` 等曾误标 player+1184 | ✅ | **已解决**: +1184 是哈希表 HM3;_hairScale/_partsScale/_bustScale 是 **EmoteObject 引擎(1496B)** +1184/+1192/+1200 的字段(sub_681F20/28/30,仅 EmotePlayer NCB 引用),不属于 1384B Player。已从 Player 删除字段+setter+NCB 注册,保留在 EmotePlayer。详见 §0 conflation 行 |
 | +1296..1368 | deque item=160B | variableDeque (sub_6F4FD8/sub_6CF678) | 🔬 | 🔬 | 需反编译确认存什么(160B/项) |
 
@@ -187,21 +187,21 @@
 ### 2.1 节点 deque (+184, std::deque<Node 2632B>)
 - 二进制: KiriKiri 风格 deque,固定块,node=2632 字节,`*(player+200)` 为当前块指针。
 - 本地: `std::deque<MotionNode> nodes` (RuntimeSupport.h:285)。
-- **TODO**: 确认 `sizeof(MotionNode)` 与字段偏移是否与 2632B Node 对齐(见 §2.2)。完全复刻需自定义 deque 块布局,但优先级低于字段语义对齐。
+- **对齐目标**：确认源码容器选型、元素语义、构造/移动/析构和边界行为；不得用自定义块、padding 或 `sizeof==2632` 去复刻 Android libstdc++/ARM64 ABI。
 
 ### 2.2 root Node 字段偏移 (经 *(player+200))
 旧文档已列 root node 偏移表(+1586 visible / +1587 flipX / +1592 x / +1600 y / +1616 angle(deg) / +1656 opacity 等)。
-- **TODO 🔬**: 用 `clang++ -Xclang -fdump-record-layouts` 导出本地 `MotionNode` 布局,逐字段对比 Node +24/+1584..+1656,确认 setX/setY/getOpacity 等写对偏移。这是渲染/定位问题的根因检查项(CLAUDE.md 渲染专项要求)。
+- **TODO 🔬**：把这些偏移只当作定位原生读写点的坐标，逐项确认命名字段、类型、默认值和数据流；wasm32 由编译器自行布局，不比较 `offsetof/sizeof`，更不补 padding。
 
-### 2.3 renderList (+384, stride 56B 裸数组)
-- 二进制: 56 字节/项裸数组,entry+0 = tTJSVariant*(dtor AddRef/Release 模式)。
-- 本地: `std::vector<PreparedRenderItem>` — PreparedRenderItem 是 ~400B 巨型结构(RuntimeSupport.h:328)。
-- **判定**: ⚠️ 语义对齐但结构严重膨胀。**TODO**: 长期需拆出 56B 对齐的 render entry;短期保留,但记录这是已知偏差。
+### 2.3 `Player+384` 旧 renderList 映射（已证伪）
+- caller 反编译已经证明真正的 render main/aux 是 draw 栈上的两只 `std::vector<PreparedRenderItem *>`，不是 `Player+384` 成员。
+- 因此不得把 `Player+384` 的 56B 元素或 Android `PreparedRenderItem` 的 0x1B0 对象尺寸变成本地布局目标。
+- **TODO 🔬**：从 `Player+384` 自身的构造、push/erase、读取和析构链独立确认它的源码语义；在确认前不再把它命名为 renderList。
 
-### 2.4 variableList (+936, stride 44B,每项 2 ttstr)
-- 二进制: 44 字节/项,ttstr@+4 + ttstr@+24(剩余 ~16B 是数值)。
-- 本地: `std::vector<VariableLabelEntry>`。
-- **TODO 🔬**: 核对 VariableLabelEntry 是否 = {ttstr, ttstr, +数值},stride 44B。
+### 2.4 DEAD child-motion render aggregate (+936/+944)
+- 二进制源码容器为 `std::vector<RenderItem44>`；Android 元素为 `{int32 kind; tTJSVariant a; tTJSVariant b;}`，两个 Variant 分别 copy/destroy。
+- 两个 writer（child-motion 与 particle child pass）都把 child range insert 到 parent begin，再 clear child；没有 producer 或 consumer，因此运行时恒为空，但源码 token 仍须保留。
+- 本地 `std::vector<detail::DeadChildMotionRenderItem> _childMotionRenderAggregate` 复刻该独立成员。live 渲染由 node-owned persistent item 加 caller-stack main/aux pointer lists 承载，不映射到 +936。
 
 ### 2.5 4 个哈希表 vs 本地 ~10 个 unordered_map (§1.2) — ✅ 已解决 (2026-06-02)
 - ✅ **映射已建立**。二进制 4 HM ↔ 本地 `_evalCascadeMap`/`_evalResultValues`/`_perNodeLayerStateMap`/`_variableSnapshotMap`（1:1，命名正确）+ `_nodeLabelMap`=+24 std::map。
@@ -210,8 +210,8 @@
 
 ### 2.6 pimpl 拆分 (PlayerRuntime)
 - 二进制无 pimpl,全部内联在 1384B。本地拆 `Player` 直接成员 + `shared_ptr<PlayerRuntime>`。
-- `_runtime` 持有: 节点 deque(+184)、4 哈希表的部分(+264/+320/+1184/+1240)、renderList(+384)、variableList(+936)、variableDeque(+1296)、nodeLabelMap(+24)、以及大量二进制中**不在 1384B Player 上**的辅助容器(_variableAnimators、_type4..8ControllerAnimators、_evalResultList 等——这些很可能对应 **EmoteObject 引擎(1496B,sub_67E38C)**的 7 个 sub_667030 控制器 / 变量哈希表,或是本地新增的功能等价物;需逐个核对归属)。
-- **判定**: ⚠️ 整体 pimpl 是架构偏差。**TODO**: 长期目标是把 PlayerRuntime 内联回 Player 并按偏移排布;但这是终极重构,依赖 §2.5 哈希表映射先完成。
+- `_runtime` 持有: 节点 deque(+184)、4 哈希表的部分(+264/+320/+1184/+1240)、尚待确认的 +384 容器、variableDeque(+1296)、nodeLabelMap(+24)、以及大量二进制中**不在 1384B Player 上**的辅助容器(_variableAnimators、_type4..8ControllerAnimators、_evalResultList 等——这些很可能对应 **EmoteObject 引擎(1496B,sub_67E38C)**的 7 个 sub_667030 控制器 / 变量哈希表,或是本地新增的功能等价物;需逐个核对归属)。+936 dead aggregate 已是 `Player` 直接成员，不在 `_runtime`。
+- **判定**: ⚠️ 整体 pimpl 是源码所有权拓扑偏差。**TODO**: 长期按已证实的直接成员、构造/析构顺序与容器语义收束；不得以 1384B 总尺寸或 ARM64 偏移排布为实现目标。
 
 ---
 
@@ -230,19 +230,21 @@
 |---|---|---|---|
 | +912 pixelateDivision | 100 | 缺失 | ❌ 加字段 |
 | +1156 parentColor | 0xFF808080 (`-8355712`) | 0xFF808080u | ✅ |
-| +1160 (a1[145]) | 1.5 (0x3FF8000000000000) | _priorDraw=0.0 | ⚠️ 核对 |
-| +1168 (a1[146]) meshDivRatio | 1.0 | 1.0 | ✅ |
-| +1176 (a1[147]) | 1.0 (0x3FF0000000000000) | _outsideFactor=0.0 | ⚠️ 核对 |
+| +1160 (a1[145]) outsideFactor | 1.5 (0x3FF8000000000000) | 1.5 | ✅ |
+| +1168 (a1[146]) speed | 1.0 | 1.0 | ✅ |
+| +1176 (a1[147]) meshDivisionRatio | 1.0 (0x3FF0000000000000) | 1.0 | ✅ |
 | +600 (a1[75]) damping | 1.0 | 1.0 | ✅ |
 | +152/+168 bounds | DBL_MAX/-DBL_MAX | 1e308/-1e308 | ⚠️ 用 numeric_limits |
-| +1092 completionType | 0 | 0 | ✅ |
+| +1092 preview | 0 | false | ✅ |
+| +1096 priorDraw | 0 | false | ✅ |
+| +1144 completionType | 0 | 0 | ✅ |
 | +482 emoteMode | 0 | false | ✅ |
 | RandomGen | sub_A0FCC0(+676) | 误标 +992 | ❌ 修注释 |
 | 第二 TJS 对象 + "color" | sub_A0FCC0(+716) | 🔬 | 需复刻 |
 
 ### dtor (0x6CFADC) 资源释放顺序(权威)
 1. sub_6CDE18 预清理
-2. renderList(+384) 释放 tTJSVariant*(stride 56)
+2. +384 未命名 56B-element 容器释放（旧 renderList 命名已证伪）
 3. sub_6C0DE8(+1296) 变量 deque
 4. Player_resetAndReleaseNodes(节点系统)
 5. delete d3dAdaptor(+760)
@@ -251,12 +253,12 @@
 8. **HM3(+1184)** 链表清理(sub_6DD018)+ memset + 条件 delete
 9. ttstr 释放: +1072,+1052,+1032,+1012,+992
 10. variant 释放: +984,+976,+968,+960
-11. variableList(+936) 释放每项 2 个 ttstr(stride 44)+ delete
+11. DEAD render aggregate(+936) 释放每项 2 个 tTJSVariant(stride 44)+ delete
 12. sub_7E24AC(+864)
 13. variant 释放: +776,+768
 14. ttstr 释放: +736,+716,+696,+676,+656,+636,+616,+548,+528,+508,+484
 15. sub_6DD144(+408)
-16. renderList(+384) 二次释放 + delete
+16. +384 未命名容器二次释放 + delete
 17. **HM2(+320)** 链表 + memset + delete
 18. **HM1(+264)** 链表(sub_6DD1A0)+ memset + delete
 19. sub_6CF9B4(+184); sub_6DD228(+24)
@@ -269,20 +271,22 @@
 ## §5 修复 TODO 分组(按优先级与依赖)
 
 ### P0 — 实施进度(2026-05-29,反编译复核后)
-> 本轮在主对话反编译了 Player_ctor(0x6CED30)、sub_6D962C/sub_6D9634/sub_6D963C(project/completionType)、
-> sub_6D965C/sub_6D966C(priorDraw/outsideFactor getter)、sub_6D9768/sub_6CD710/sub_6CC9D4(colorWeight/packed)、
+> 本轮在主对话反编译了 Player_ctor(0x6CED30)、sub_6D9624/sub_6D962C(completionType)、
+> sub_6D9634/sub_6D963C(preview)、sub_6D9648/sub_6D9650(priorDraw)、
+> sub_6D965C/sub_6D9664(outsideFactor)、sub_6D966C/sub_6D9674(meshDivisionRatio)、
+> sub_6D967C/sub_6D9684(speed)、sub_6D9768/sub_6CD710/sub_6CC9D4(independentLayerInherit/packed color)、
 > sub_681F20(hairScale)。复核推翻了审计对若干 P0 项的"安全机械修改"判断。
 
 **✅ 已实施(铁证,已改 Player.h):**
-- **+1092 completionType: int → bool** — sub_6D963C 证实 `*(player+1092)=v&1`(BYTE+掩码),getter sub_6D9634 读 byte,ctor 置 0。本地 setter 改为 `(v&1)!=0`(掩码语义 ≠ bool 截断)。
-- **+1160 priorDraw 默认 0.0 → 1.5** — ctor a1[145]=0x3FF8000000000000,getter sub_6D965C 读 +1160。
-- **+1176 outsideFactor 默认 0.0 → 1.0** — ctor a1[147]=0x3FF0000000000000,getter sub_6D966C 读 +1176。
+- **+1092 preview 与 +1144 completionType 解耦** — sub_6D963C 证实 `*(player+1092)=v&1`，getter sub_6D9634 读 preview byte；completionType 由 sub_6D9624/sub_6D962C 直读写 +1144 int。本地分别使用 `_preview` 与 `_completionType`。
+- **+1096 priorDraw 恢复为 bool** — sub_6D9648/sub_6D9650 直读写该 byte；本地 `_priorDraw=false`，不再误映射到 +1160 double。
+- **+1160/+1168/+1176 三 scalar 恢复注册顺序** — outsideFactor=1.5、speed=1.0、meshDivisionRatio=1.0；分别由 0x6D965C/0x6D9664、0x6D967C/0x6D9684、0x6D966C/0x6D9674 访问。
 - **+152/+176 bounds: 1e308 → numeric_limits<double>::max()** — ctor a1[19]=0x7FEFFFFFFFFFFFFF(真 DBL_MAX),a1[22]=0xFFEFFFFFFFFFFFFF(-DBL_MAX)。加 `#include <limits>`。
 - **_hairScale/_partsScale/_bustScale 从 Player 彻底删除(连同 NCB 注册)** — 追查 sub_681F20/28/30 的 xref 证实它们**只被 `EmotePlayer_ncb_registerMembers`(0x67FAC8)引用**,Player 注册(0x6D69C8)从不引用;且 ctor 证实 1384B Player 的 +1184 是哈希表 HM3。这些字段是 **EmoteObject 引擎(1496B,sub_67E38C)**的 +1184/+1192/+1200,不是 Player 的(详见下方"EmoteObject vs Player"修正)。已删除:Player.h 字段+3 个 setter 声明、PlayerCore.cpp 三个 setter 定义、main.cpp:197-199 的 Motion.Player `NCB_METHOD`。保留 EmotePlayer 侧(EmotePlayer::_hairScale + main.cpp:317-319/599-601 NCB_PROPERTY)。构建通过(BUILD_EXIT=0)。
 
 **❌ 审计判断被推翻,移出 P0(需重新分析):**
 - **+912 pixelateDivision 并非"缺失"** — 它是 `static int _pixelateDivision=1` 在 `D3DEmoteModule`(D3DEmoteModule.h:48),NCB 在 main.cpp:573。但二进制 +912 是 **Player 实例字段,默认 100**(ctor `*((_DWORD*)a1+228)=100`)。问题是"在错误的类上、static 而非实例、默认 1 vs 100"。**TODO(P1):** 决定是否把它迁成 Player 实例字段并补实例 NCB getter/setter(0x6D992C/0x6D9934),评估对 D3D 渲染路径的影响。
-- **+1144 project 类型冲突,非机械改** — sub_6D962C 证实 +1144 是 int32。但本地 `_project` 是 tTJSVariant,被 `lookupModuleSnapshot(_project)`/`_project.Type()==tvtObject`(PlayerCore.cpp:444、PlayerTimeline.cpp:289/416)和 modifyRoot 当模块对象用。改 tjs_int 会断裂多处。**本地 `_project` 与二进制 +1144 不是同一语义**。**TODO(P1):** 反编译 +1144 int 的实际用途 + 本地模块快照机制,厘清二者关系再决定。
+- **2026-07-23 关闭：+1144 不是 project 类型冲突** — NCB 字面绑定已证实 +1144 int32 是 `completionType`，本地已由 `_completionType` 承载。TJS `project` 与 `motionKey` 共用 +1012 的 variant/module-key 路径，本地 `_project`/module snapshot 不应再被拿来解释 +1144。旧 TODO 来自 Player NCB 表 off-by-one 命名，已证伪。
 - **+992 / +676 已闭合** — `Player_ctor@0x6CED30`：0x6CEF28 把构造参数 `resourceManager_dispatch` 以 `tTJSVariant` 拷到 +992；0x6CF014..0x6CF024 创建 `Math.RandomGenerator` 并存 +676。旧“+992=transformOrder/RandomGenerator”结论已证伪并修正。
 
 **⚠️ 结构确证为同一字段,但合并有跨文件行为变更,移出 P0:**
@@ -302,12 +306,12 @@
 ### P2 — 容器映射(大型,有前置依赖)
 14. **🔬🔒 4 哈希表 ↔ 6 unordered_map 映射** (前置: 反编译 +264/+320/+1184/+1240 的 insert/lookup) — 这是后续所有容器对齐的**地基**。先做映射表,再判多余/缺失。
 15. **🔬 +864 / +408 / +1296 容器** — 反编译 sub_7E2344 / sub_6DD144 / sub_6F4FD8 确认类型与 stride。
-16. **MotionNode 布局 vs 2632B Node** (前置: clang record-layout dump) — root 属性偏移正确性,渲染/定位根因。
-17. **variableList VariableLabelEntry stride 44B 核对**。
+16. **MotionNode 语义字段完整性** — 用原生偏移定位读写点，但只核对字段类型、数据流和生命周期，不比较 wasm32 record layout。
+17. **+936 DEAD aggregate 已闭合**：保留独立 `vector<DeadChildMotionRenderItem>` 与两个聚合/clear 调用点，不映射到 live render lists。
 
 ### P3 — 终极架构重构(长期)
-18. **renderList 56B 裸数组复刻**(替换巨型 PreparedRenderItem)。
-19. **pimpl 内联回 1384B 扁平布局**(依赖 P2 全部完成)。
+18. **独立确认 `Player+384` 容器语义**；已禁止按 56B Android ABI 元素去替换 `PreparedRenderItem`。
+19. **pimpl 所有权拓扑收束**(依赖 P2 全部完成)，目标是直接成员与生命周期，不是 1384B 字节布局。
 20. **dtor 手写释放顺序**对齐 §4。
 21. **1384B Player 上不存在的本地容器**(_variableAnimators / _type4..8ControllerAnimators / _evalResultList / _mirror*Cache)审计——重点核对它们是否属于 **EmoteObject 引擎(1496B,sub_67E38C)**:引擎在 +256/+336/+416/+576/+656/+736 有 6~7 个控制器 deque、+1384 变量哈希表、+1440 evalResultMap、+1456 evalResultList。这些 emote 专属容器若被误植到 Player,应像 hairScale 一样移到 EmotePlayer 或独立的引擎对象。**先建立"引擎字段 ↔ 本地容器"映射,再决定该删该移。**（hairScale/partsScale/bustScale 已按此方式清理,见 §0 + P0 进度）
 
@@ -324,7 +328,7 @@
 | +484..548 ttstr 块 | 写入点 + sub_699940(+528) | rootMatrix 字符串语义 |
 | +636/+656 | ctor a2 来源 + 读取点 | resourceManager / sourceCache 确认 |
 | +676/+716 TJS 对象 | sub_9C8440 + "color" 设置 | RandomGen + color 对象语义 |
-| +1160/+1176 默认值语义 | NCB getter 0x6D965C/0x6D966C + 用到处 | 改默认前确认 priorDraw/outsideFactor 含义 |
+| +1104 cameraFOV owner | sub_6D9784 + camera-node writer | 收束本地 `_cameraFov` / `_cameraFOV` 双 owner |
 | MotionNode 布局 | clang -fdump-record-layouts | root 属性偏移正确性 |
 | Node +160/+168 init | xmmword_14D68E0 常量 | bounds 初始化常量 |
 
@@ -333,5 +337,5 @@
 ## §7 已确认对齐项(✅,无需动作)
 
 - vtable: 无(非多态类),完全对齐。
-- +120/+128 rootOffset, +144/+148 cameraOffset(float), +456 clampedEvalTime, +472 cameraAngle, +600 damping, +608 noUpdateYet, +613 needsInternalAssignImages, +784/792/800 cameraVelocity, +909 d3dDrawMode, +1093..1098/+1100 bool 字节组, +1120 frameTickCount, +1148 maskMode, +1156 parentColor(0xFF808080), +1168 meshDivRatio(1.0), +1032 outline(ttstr), +1052 meshline(ttstr)。
-- ctor: +1156/+1168/+600/+1092/+482 默认值。
+- +120/+128 rootOffset, +144/+148 cameraOffset(float), +456 clampedEvalTime, +472 cameraAngle, +600 damping, +608 noUpdateYet, +613 needsInternalAssignImages, +784/792/800 cameraVelocity, +909 d3dDrawMode, +1092..+1100 bool 字节组, +1120 frameTickCount, +1144 completionType, +1148 maskMode, +1156 packed color(0xFF808080), +1160 outsideFactor(1.5), +1168 speed(1.0), +1176 meshDivisionRatio(1.0), +1032 outline(ttstr), +1052 meshline(ttstr)。
+- ctor: +1156/+1160/+1168/+1176/+600/+1092/+1096/+1144/+482 默认值。

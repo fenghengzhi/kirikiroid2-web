@@ -6,8 +6,6 @@
 #include "ScriptMgnIntf.h"
 #include "tjsDictionary.h"
 
-#include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <utility>
@@ -116,14 +114,6 @@ namespace motion::detail {
 } // namespace motion::detail
 
 namespace {
-    std::string lowercase(std::string value) {
-        std::transform(value.begin(), value.end(), value.begin(),
-                       [](unsigned char ch) {
-                           return static_cast<char>(std::tolower(ch));
-                       });
-        return value;
-    }
-
     void initializeRandomGenerator(tTJSVariant &generator) {
         TVPExecuteExpression(TJS_W("new Math.RandomGenerator()"), &generator);
     }
@@ -212,13 +202,6 @@ namespace {
             tTJSVariant *params[] = { &accessorValue, &sizeValue };
             closure->invoke(params);
         };
-    }
-
-    tTJSVariant makeRawRootVariant(const PSB::PSBFile &file) {
-        iTJSDispatch2 *dispatch = file.GetRootDispatch();
-        tTJSVariant result(dispatch, dispatch);
-        dispatch->Release();
-        return result;
     }
 
 } // namespace
@@ -319,69 +302,77 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
     // TVPGetPlacedPath(path), then uses that exact normalized ttstr for both
     // HashMap-A lookup and insertion.
     path = TVPGetPlacedPath(path);
-    const auto rawPath = path.AsStdString();
-    const auto loweredPath = lowercase(rawPath);
-    if(loweredPath.find(".mtn") != std::string::npos) {
-        LOGGER->warn("Motion resource manager load: {}", rawPath);
-    }
+    PSB::PSBFile selected;
     // 0x6A8E8C..0x6A8EBC: a cache hit copies the one-pointer PSBFile holder,
     // then falls through to the common fresh-dispatch return block.
     if(const auto cached = _loadedModules.find(path);
        cached != _loadedModules.end()) {
-        const PSB::PSBFile file = cached->second.file;
-        return makeRawRootVariant(file);
+        selected = cached->second.file;
+    } else {
+        if(!TVPIsExistentStorage(path)) {
+            TVPThrowExceptionMessage(
+                TJS_W("Motion::ResourceManager: file not found '%1'."), path);
+        }
+
+        PSB::PSBFile loaded;
+        if(!loaded.LoadStorage(path, emotePSBDecryptFilter())) {
+            TVPThrowExceptionMessage(TJS_W("cannot open psb file : %1"), path);
+        }
+
+        // 0x6A8F20..0x6A9204 performs strict raw-node validation before
+        // consuming the loaded holder through sub_598A64.
+        const PSB::PSBRawNode root = loaded.GetRoot();
+        const char *id = root.GetDictionaryValueStrict("id").GetString();
+        if(id == nullptr || std::strcmp(id, "motion") != 0) {
+            TVPThrowExceptionMessage(
+                TJS_W("this psb file is not motion file: %1"), path);
+        }
+
+        const char *spec = root.GetDictionaryValueStrict("spec").GetString();
+        if(spec != nullptr && std::strcmp(spec, "krkr") == 0) {
+            _spec = 1;
+        }
+        if(spec != nullptr && std::strcmp(spec, "win") == 0) {
+            _spec = 2;
+        }
+        if(_spec == 0) {
+            const char *label =
+                root.GetDictionaryValueStrict("label").GetString();
+            TVPThrowExceptionMessage(
+                TJS_W(
+                    "motion file '%1' has not adaptive spec. export psb again."),
+                ttstr(label != nullptr ? label : ""));
+        }
+
+        if(root.GetDictionaryValueStrict("version").GetDouble() > 3.0300001) {
+            // ResourceManager_loadResource @0x6A905C..0x6A91F4 constructs
+            // the complete ttstr before throwing.  Keeping the label lookup in
+            // this expression also preserves the temporary ttstr/raw-node
+            // destruction order visible at 0x6A9180..0x6A91C4.
+            ttstr message(TJS_W("motion file '"));
+            message += ttstr(
+                root.GetDictionaryValueStrict("label").GetString());
+            message += TJS_W("' is too new.");
+            TVPThrowExceptionMessage(message.c_str());
+        }
+
+        // sub_598A64 @ 0x598A64 moves loaded into the common selected holder.
+        // sub_6EBB0C/sub_6EBCFC then default-construct the mapped record and
+        // 0x6A926C..0x6A92A8 copy selected into record.file.
+        selected = loaded.Transfer_guess();
+        _loadedModules[path].file = selected;
     }
 
-    if(!TVPIsExistentStorage(path)) {
-        TVPThrowExceptionMessage(
-            TJS_W("Motion::ResourceManager: file not found '%1'."), path);
-    }
-
-    PSB::PSBFile file;
-    if(!file.LoadStorage(path, emotePSBDecryptFilter())) {
-        TVPThrowExceptionMessage(TJS_W("cannot open psb file : %1"), path);
-    }
-
-    // 0x6A8F20..0x6A9204 performs strict raw-node validation before moving
-    // the holder into HashMap A.
-    const PSB::PSBRawNode root = file.GetRoot();
-    const char *id = root.GetDictionaryValueStrict("id").GetString();
-    if(id == nullptr || std::strcmp(id, "motion") != 0) {
-        TVPThrowExceptionMessage(
-            TJS_W("this psb file is not motion file: %1"), path);
-    }
-
-    const char *spec = root.GetDictionaryValueStrict("spec").GetString();
-    if(spec != nullptr && std::strcmp(spec, "krkr") == 0) {
-        _spec = 1;
-    }
-    if(spec != nullptr && std::strcmp(spec, "win") == 0) {
-        _spec = 2;
-    }
-    if(_spec == 0) {
-        const char *label =
-            root.GetDictionaryValueStrict("label").GetString();
-        TVPThrowExceptionMessage(
-            TJS_W("motion file '%1' has not adaptive spec. export psb again."),
-            ttstr(label != nullptr ? label : ""));
-    }
-
-    if(root.GetDictionaryValueStrict("version").GetDouble() > 3.0300001) {
-        const char *label =
-            root.GetDictionaryValueStrict("label").GetString();
-        TVPThrowExceptionMessage(TJS_W("motion file '%1' is too new."),
-                                 ttstr(label != nullptr ? label : ""));
-    }
-
-    // sub_6EBB0C/sub_6EBCFC default-construct the complete mapped record
-    // (empty PSBFile + two nested source maps), then 0x6A926C..0x6A92A8 copy
-    // the local holder into record.file (Release old, assign, AddRef).  The
-    // common return block still consumes the local holder and destroys it
-    // after constructing the fresh dispatch.
-    auto [inserted, wasInserted] = _loadedModules.try_emplace(path);
-    (void)wasInserted;
-    inserted->second.file = file;
-    return makeRawRootVariant(file);
+    // 0x6A92AC..0x6A92F8 destroys root and the moved-from loaded holder before
+    // both hit/miss paths construct the fresh dispatch directly from selected
+    // @0x6A92FC..0x6A9358.  There is no PSBFile::GetRoot call and thus no
+    // retained PSBRawNode temporary on this boundary.
+    PSB::PSBRawOwner *owner = selected.GetOwner();
+    auto *dispatch = new PSB::PSBValueDispatch(
+        selected.GetOwnerSlotAddress_guess(), owner->GetHeader()->entries);
+    tTJSVariant result(dispatch, dispatch);
+    dispatch->Release();
+    return result;
 }
 
 // C-1 (2026-06-07): RM-own loadSource(ttstr)->load(path) forward REMOVED. The
@@ -413,72 +404,14 @@ void motion::ResourceManager::unload(ttstr path) const {
 //   RM NCB binding faithfully. The module cache lifetime is governed by
 //   load/unload/unloadAll, not clearCache.
 
-tTJSVariant motion::ResourceManager::findLoaded(ttstr path) const {
-    // P3-A: lookup by the RAW PATH ttstr key via the binary HashMap A functor
-    // (ttstr_hash == FNV @0x6eba2c, ttstr_equal == wcscmp @0x9B1ED0).
-    const ttstr placed = TVPGetPlacedPath(path);
-    if(!placed.IsEmpty()) {
-        path = placed;
-    }
-    const auto it = _loadedModules.find(path);
-    return it != _loadedModules.end()
-        ? makeRawRootVariant(it->second.file)
-        : tTJSVariant{};
-}
-
-motion::detail::LoadedResourceRecord *
-motion::ResourceManager::findLoadedResourceRecord(const ttstr &path) const {
-    const auto it = _loadedModules.find(path);
-    return it != _loadedModules.end() ? &it->second : nullptr;
-}
-
-namespace {
-    // The raw ResourceManager helpers sub_598C58/sub_5995D8 eventually surface
-    // through the PSBValue dispatch.  Keep the navigation on that dispatch
-    // boundary so replacing the temporary eager module with the raw root does
-    // not change this call chain.
-    bool psbGet(const tTJSVariant &holder, const tjs_char *key,
-                tTJSVariant &out) {
-        if(holder.Type() != tvtObject || holder.AsObjectNoAddRef() == nullptr) {
-            return false;
-        }
-        out = motion::detail::motionPropGet(holder, key);
-        if(out.Type() == tvtVoid) {
-            return false;
-        }
-        return true;
-    }
-
-    // ResourceManager_isExistMotion @0x6A96F8 and findMotion @0x6A9ED4 both
-    // test module["object"][chara]["motion"][motion].
-    bool findMotionValueLike_0x6A96F8(const tTJSVariant &module,
-                                      const ttstr &chara,
-                                      const ttstr &motionName,
-                                      tTJSVariant *motionValue) {
-        tTJSVariant objects;
-        if(!psbGet(module, TJS_W("object"), objects))
-            return false;
-        tTJSVariant character;
-        if(!psbGet(objects, chara.c_str(), character))
-            return false;
-        tTJSVariant motions;
-        if(!psbGet(character, TJS_W("motion"), motions))
-            return false;
-        tTJSVariant value;
-        if(!psbGet(motions, motionName.c_str(), value))
-            return false;
-        if(motionValue)
-            *motionValue = value;
-        return true;
-    }
-} // namespace
-
 // Aligned with libkrkr2.so ResourceManager::findSource (sub_6AAB3C) at
 // 0x6AAB3C. The binary:
-//   1. split path by "/" (sub_697D34); empty -> result void (LABEL_11).
-//   2. if pieces[0] != "src" (sub_9B1ED0): if "blank" build a blank-Layer dict
-//      (width/height/originX/originY from pieces[1] split by ":" + blank=1),
-//      else result void.
+//   1. split path by "/" (sub_697D34); an empty first element -> result void.
+//      The helper always appends its final remainder, so no vector-size gate
+//      exists here or at the direct pieces[1]/pieces[2] consumers.
+//   2. if pieces[0] != "src" (sub_9B1ED0): if "blank", split pieces[1] by
+//      ":" and write width/height/originX/originY as String Variants plus
+//      Integer blank=1 through ncbDictionaryAccessor::SetValue; otherwise void.
 //   3. for "src": HashMap A (this+88 buckets / this+96 count) lookup keyed by
 //      moduleKey (a2, FNV hash cached in ttstr+68 via sub_6EB8F4). The
 //      requested source path is the separate a3 argument. Player_findSource
@@ -497,59 +430,63 @@ tTJSVariant motion::ResourceManager::findSource(ttstr moduleKey,
     // 1. split name by "/" (sub_697D34 @0x697D34).
     const std::vector<ttstr> pieces =
         detail::splitTtstrLike_0x697D34(path, TJS_W('/'));
-    if(pieces.empty() || pieces[0].IsEmpty()) {
+    if(pieces[0].IsEmpty()) {
         return {}; // LABEL_11: *(a4+16)=0 -> void
     }
 
     // 2. prefix gate: "src" (sub_9B1ED0 @0x9B1ED0 == 0 means equal).
-    if(pieces[0] != ttstr(TJS_W("src"))) {
-        if(pieces[0] != ttstr(TJS_W("blank"))) {
+    if(pieces[0] != TJS_W("src")) {
+        if(pieces[0] != TJS_W("blank")) {
             return {}; // LABEL_11
         }
-        // blank branch (@0x6aac74): split pieces[1] by ":" into
-        // width/height/originX/originY ints, build a blank-Layer dict +
-        // blank=1.
-        const ttstr blankSpec = pieces.size() > 1 ? pieces[1] : ttstr();
+
+        // 0x6AAC74..0x6AAE84 is the inlined ncbDictionaryAccessor path:
+        // each SetValue owns a fresh temporary Variant, calls PropSet with a
+        // distinct hint slot, then destroys that Variant immediately.
         const std::vector<ttstr> dims =
-            detail::splitTtstrLike_0x697D34(blankSpec, TJS_W(':'));
-        const auto dimInt = [&dims](std::size_t i) -> tjs_int {
-            if(i >= dims.size() || dims[i].IsEmpty()) {
-                return 0;
-            }
-            return static_cast<tjs_int>(tTJSVariant(dims[i]));
-        };
-        return detail::makeDictionary({
-            { "width", tTJSVariant(dimInt(0)) }, // L"width"  @0x6aad0c
-            { "height", tTJSVariant(dimInt(1)) }, // L"height" @0x6aad54
-            { "originX", tTJSVariant(dimInt(2)) }, // L"originX"@0x6aad9c
-            { "originY", tTJSVariant(dimInt(3)) }, // L"originY"@0x6aade4
-            { "blank",
-              tTJSVariant(static_cast<tjs_int>(1)) }, // L"blank" @0x6aae40
-        });
+            detail::splitTtstrLike_0x697D34(pieces[1], TJS_W(':'));
+        ncbDictionaryAccessor dictionary;
+        dictionary.SetValue(TJS_W("width"), dims[0], TJS_MEMBERENSURE,
+                            &detail::widthMemberHint_guess);
+        dictionary.SetValue(TJS_W("height"), dims[1], TJS_MEMBERENSURE,
+                            &detail::heightMemberHint_guess);
+        dictionary.SetValue(TJS_W("originX"), dims[2], TJS_MEMBERENSURE,
+                            &detail::originXMemberHint_guess);
+        dictionary.SetValue(TJS_W("originY"), dims[3], TJS_MEMBERENSURE,
+                            &detail::originYMemberHint_guess);
+        dictionary.SetValue(TJS_W("blank"), static_cast<tjs_int>(1),
+                            TJS_MEMBERENSURE, &detail::blankMemberHint_guess);
+        return tTJSVariant(dictionary.GetDispatch(), dictionary.GetDispatch());
     }
 
-    // 3. HashMap A lookup keyed directly by moduleKey (a2).
-    detail::LoadedResourceRecord *record = findLoadedResourceRecord(moduleKey);
-    if(!record || record->file.GetOwner() == nullptr) {
+    // 0x6AAC10/0x6AAC20 converts both direct vector elements before touching
+    // HashMap A.  Malformed paths therefore retain the binary's unchecked
+    // indexing boundary even when moduleKey is absent.
+    const std::string groupKey = detail::narrow(pieces[1]);
+    const std::string iconKey = detail::narrow(pieces[2]);
+
+    // 3. HashMap A lookup keyed directly by moduleKey (a2).  sub_6EB8F4's
+    // null bucket/node return is represented completely by find()==end(); the
+    // value's PSB owner is not checked a second time in 0x6AAF00.
+    const auto recordIt = _loadedModules.find(moduleKey);
+    if(recordIt == _loadedModules.end()) {
         return {}; // !v27 || !*v27 -> LABEL_71 result void
     }
+    detail::LoadedResourceRecord *record = &recordIt->second;
 
     // 4. Raw root navigation. sub_598C58 is strict for the fixed keys;
     // sub_5995D8 gates only the two dynamic keys before their strict reads.
-    const ttstr group = pieces.size() > 1 ? pieces[1] : ttstr();
-    const ttstr icon = pieces.size() > 2 ? pieces[2] : ttstr();
-    const std::string groupKey = detail::narrow(group);
-    const std::string iconKey = detail::narrow(icon);
-    const PSB::PSBRawNode root = record->file.GetRoot();
-    const PSB::PSBRawNode source =
-        root.GetDictionaryValueStrict("source");
+    PSB::PSBRawOwner *owner = record->file.GetOwner();
+    const PSB::PSBRawNode root(owner, owner->GetHeader()->entries);
+    const PSB::PSBRawNode source = root.GetDictionaryValueStrict("source");
     if(!source.ContainsDictionaryKey(groupKey.c_str())) { // sub_5995D8 gate
         return {}; // LABEL_64 -> result void
     }
-    const PSB::PSBRawNode groupNode =
-        source.GetDictionaryValueStrict(groupKey.c_str());
+    // The group node is a full-expression temporary: Android destroys it at
+    // 0x6AAF74 immediately after constructing iconHolder, before the icon gate.
     const PSB::PSBRawNode iconHolder =
-        groupNode.GetDictionaryValueStrict("icon");
+        source.GetDictionaryValueStrict(groupKey.c_str())
+            .GetDictionaryValueStrict("icon");
     if(!iconHolder.ContainsDictionaryKey(iconKey.c_str())) { // sub_5995D8 gate
         return {};
     }
@@ -630,54 +567,114 @@ void motion::ResourceManager::unloadAll() const {
     _loadedModules.clear();
 }
 
-bool motion::ResourceManager::isExistMotion(ttstr projectKey,
+bool motion::ResourceManager::isExistMotion(tTJSVariant projectKey,
                                             ttstr path) const {
     const std::vector<ttstr> pieces =
         detail::splitTtstrLike_0x697D34(path, TJS_W('/'));
-    const ttstr chara = pieces[1];
-    const ttstr motionName = pieces[2];
-    const auto direct = _loadedModules.find(projectKey);
-    if(direct != _loadedModules.end() &&
-       findMotionValueLike_0x6A96F8(makeRawRootVariant(direct->second.file),
-                                    chara, motionName,
-                                    nullptr)) {
-        return true;
+    const std::string chara = detail::narrow(pieces[1]);
+    const std::string motionName = detail::narrow(pieces[2]);
+    // ResourceManager_isExistMotion keeps the direct map hit
+    // @0x6A9870..0x6A9910 and fallback node-chain walk
+    // @0x6A99A4..0x6A9A3C as two separately expanded raw-node paths.
+    // 0x6A9798..0x6A9844: void skips the direct lookup.  Every other type
+    // must already be String; GetString preserves the binary's strict type
+    // error before the independent ttstr key copy is constructed.
+    if(projectKey.Type() != tvtVoid) {
+        const auto direct =
+            _loadedModules.find(ttstr(projectKey.GetString()));
+        if(direct != _loadedModules.end()) {
+            PSB::PSBRawOwner *owner = direct->second.file.GetOwner();
+            const PSB::PSBRawNode root(owner, owner->GetHeader()->entries);
+            const PSB::PSBRawNode objects =
+                root.GetDictionaryValueStrict("object");
+            if(objects.ContainsDictionaryKey(chara.c_str())) {
+                const PSB::PSBRawNode motions =
+                    objects.GetDictionaryValueStrict(chara.c_str())
+                        .GetDictionaryValueStrict("motion");
+                if(motions.ContainsDictionaryKey(motionName.c_str())) {
+                    return true;
+                }
+            }
+        }
     }
     for(const auto &entry : _loadedModules) {
-        if(findMotionValueLike_0x6A96F8(makeRawRootVariant(entry.second.file),
-                                        chara, motionName,
-                                        nullptr)) {
+        PSB::PSBRawOwner *owner = entry.second.file.GetOwner();
+        const PSB::PSBRawNode root(owner, owner->GetHeader()->entries);
+        const PSB::PSBRawNode objects =
+            root.GetDictionaryValueStrict("object");
+        if(!objects.ContainsDictionaryKey(chara.c_str())) {
+            continue;
+        }
+        const PSB::PSBRawNode motions =
+            objects.GetDictionaryValueStrict(chara.c_str())
+                .GetDictionaryValueStrict("motion");
+        if(motions.ContainsDictionaryKey(motionName.c_str())) {
             return true;
         }
     }
     return false;
 }
 
-tTJSVariant motion::ResourceManager::findMotion(ttstr projectKey,
+tTJSVariant motion::ResourceManager::findMotion(tTJSVariant projectKey,
                                                 ttstr path) const {
     const std::vector<ttstr> pieces =
         detail::splitTtstrLike_0x697D34(path, TJS_W('/'));
-    const ttstr chara = pieces[1];
-    const ttstr motionName = pieces[2];
-    const auto makeResult = [&](const auto &entry) -> tTJSVariant {
-        tTJSVariant motionValue;
-        if(!findMotionValueLike_0x6A96F8(
-               makeRawRootVariant(entry.second.file),
-                                         chara, motionName,
-                                         &motionValue))
-            return {};
-        return detail::makeArray({ motionValue, tTJSVariant(entry.first) });
-    };
-    const auto direct = _loadedModules.find(projectKey);
-    if(direct != _loadedModules.end()) {
-        tTJSVariant result = makeResult(*direct);
-        if(result.Type() != tvtVoid)
-            return result;
+    const std::string chara = detail::narrow(pieces[1]);
+    const std::string motionName = detail::narrow(pieces[2]);
+    // Motion_ResourceManager_findMotion keeps the direct hit
+    // @0x6AA058..0x6AA124 and fallback walk @0x6AA360..0x6AA424 separately
+    // expanded.  Only each path's final motion node is wrapped in a dispatch.
+    // 0x6A9F80..0x6AA02C mirrors isExistMotion's Variant gate and strict
+    // String extraction before the direct HashMap lookup.
+    if(projectKey.Type() != tvtVoid) {
+        const auto direct =
+            _loadedModules.find(ttstr(projectKey.GetString()));
+        if(direct != _loadedModules.end()) {
+            PSB::PSBRawOwner *owner = direct->second.file.GetOwner();
+            const PSB::PSBRawNode root(owner, owner->GetHeader()->entries);
+            const PSB::PSBRawNode objects =
+                root.GetDictionaryValueStrict("object");
+            if(objects.ContainsDictionaryKey(chara.c_str())) {
+                const PSB::PSBRawNode motions =
+                    objects.GetDictionaryValueStrict(chara.c_str())
+                        .GetDictionaryValueStrict("motion");
+                if(motions.ContainsDictionaryKey(motionName.c_str())) {
+                    const PSB::PSBRawNode motion =
+                        motions.GetDictionaryValueStrict(motionName.c_str());
+                    auto *dispatch = new PSB::PSBValueDispatch(
+                        motion.GetOwnerSlotAddress_guess(), motion.GetNode());
+                    auto result = detail::createTJSArrayWithItems_guess();
+                    result.items->emplace_back(dispatch, dispatch);
+                    dispatch->Release();
+                    result.items->emplace_back(direct->first);
+                    return result.value;
+                }
+            }
+        }
     }
     for(const auto &entry : _loadedModules) {
-        tTJSVariant result = makeResult(entry);
-        if(result.Type() != tvtVoid)
-            return result;
+        PSB::PSBRawOwner *owner = entry.second.file.GetOwner();
+        const PSB::PSBRawNode root(owner, owner->GetHeader()->entries);
+        const PSB::PSBRawNode objects =
+            root.GetDictionaryValueStrict("object");
+        if(!objects.ContainsDictionaryKey(chara.c_str())) {
+            continue;
+        }
+        const PSB::PSBRawNode motions =
+            objects.GetDictionaryValueStrict(chara.c_str())
+                .GetDictionaryValueStrict("motion");
+        if(!motions.ContainsDictionaryKey(motionName.c_str())) {
+            continue;
+        }
+        const PSB::PSBRawNode motion =
+            motions.GetDictionaryValueStrict(motionName.c_str());
+        auto *dispatch = new PSB::PSBValueDispatch(
+            motion.GetOwnerSlotAddress_guess(), motion.GetNode());
+        auto result = detail::createTJSArrayWithItems_guess();
+        result.items->emplace_back(dispatch, dispatch);
+        dispatch->Release();
+        result.items->emplace_back(entry.first);
+        return result.value;
     }
     return {};
 }

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "MeshPoint.h"
 #include "tjs.h"
 
 class tTJSNI_BaseLayer;
@@ -13,11 +14,6 @@ class iTVPTexture2D;
 namespace motion {
 
     class SeparateLayerAdaptor;
-
-    struct PrivateMotionGLLPackedPointLike_0x6DF33C {
-        float x = 0.0f;
-        float y = 0.0f;
-    };
 
     struct PrivateMotionGLLRenderItemInputLike_0x6DE738 {
         std::int32_t opacity = 0;
@@ -30,7 +26,7 @@ namespace motion {
         std::array<std::uint32_t, 4> packedColors{};
         std::array<std::int32_t, 4> sourceRect{};
         iTVPTexture2D *sourceTexture = nullptr;
-        std::vector<PrivateMotionGLLPackedPointLike_0x6DF33C> points;
+        std::array<detail::MeshPoint, 3> affinePoints{};
     };
 
     iTJSDispatch2 *ensurePrivateMotionGLLLike_0x6D5948(
@@ -48,7 +44,8 @@ namespace motion {
         iTJSDispatch2 *object);
     void appendPrivateMotionGLLRenderItemLike_0x6DE738(
         iTJSDispatch2 *object,
-        const PrivateMotionGLLRenderItemInputLike_0x6DE738 &item);
+        const PrivateMotionGLLRenderItemInputLike_0x6DE738 &item,
+        std::vector<detail::MeshPoint> *pointsToSwap);
     std::size_t privateMotionGLLRenderQueueSizeLike_0x6DE738(
         iTJSDispatch2 *object);
 

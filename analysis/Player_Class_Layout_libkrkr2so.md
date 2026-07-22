@@ -38,6 +38,14 @@ sub_6D69C8 (NCB registration)
 
 ### 2.2 Registered Properties
 
+> 2026-07-22 correction: accessor names in the old IDB were shifted to a
+> neighboring NCB member. The expressly corrected property cluster below uses
+> the literal `ncb_addMember` key and that same property's getter/setter slots as
+> authority. In particular,
+> `preview/priorDraw/completionType/outsideFactor/meshDivisionRatio/speed` must
+> not be reconstructed from the formerly shifted function names. Entries outside
+> the corrected cluster remain legacy inventory until independently rechecked.
+
 | TJS Property | Getter Function | Setter Function | Type | Player Offset | Notes |
 |---|---|---|---|---|---|
 | `defaultSyncActive` | sub_6D93F8 | sub_6D9404 | bool | static byte_1AB84A8 | Class-level static |
@@ -49,53 +57,53 @@ sub_6D69C8 (NCB registration)
 | `stealthChara` | sub_6D9490 | sub_6D94B0 | refcounted string value | +968/+776 | live-or-pending setter flow |
 | `motion` | Player_getMotion_ncb | Player_setMotion | refcounted string value | +976/+768 | Uses Player_play/Player_playImpl |
 | `stealthMotion` | Player_getStealthMotion | sub_6D9584 | refcounted string value | +984/+768 | Setter calls Player_play with flags 0x10 |
-| `tags` | sub_695BE0 | sub_6B4978 | tTJSVariant | via TJS dispatch | Complex getter |
-| `motionKey` | sub_695BE0 | sub_6B4978 | tTJSVariant | via TJS dispatch | Same as tags pattern |
-| `project` | sub_6D9624 | sub_6D962C | int | +1144 | Raw int32 |
-| `completionType` | sub_6D9634 | sub_6D963C | bool | +1092 | byte, masked & 1 |
-| `preview` | sub_6D9648 | sub_6D9650 | bool | +1096 | byte, masked & 1 |
-| `priorDraw` | sub_6D965C | sub_6D9664 | double | +1160 | Raw double |
-| `outsideFactor` | sub_6D966C | sub_6D9674 | double | +1176 | Raw double |
-| `meshDivisionRatio` | sub_6D967C | sub_6D9684 | double | +1168 | Raw double |
-| `speed` | sub_6D968C | sub_6D9694 | bool | +1093 | byte, masked & 1 |
-| `syncActive` | -- | -- | -- | -- | Complex registration |
+| `tags` | sub_6D9618 | -- (RO) | tTJSVariant | +1072 | motion `tag` frame-array dispatch |
+| `motionKey` | sub_695BE0 | sub_6B4978 | tTJSVariant | +1012 | Aliases `project`; same getter/setter pair and storage |
+| `project` | sub_695BE0 | sub_6B4978 | tTJSVariant | +1012 | Literal NCB binding aliases `motionKey`; not Player+1144 |
+| `completionType` | sub_6D9624 | sub_6D962C | int | +1144 | Raw int32; independent from preview |
+| `preview` | sub_6D9634 | sub_6D963C | bool | +1092 | byte, masked & 1; render/timeline gate |
+| `priorDraw` | sub_6D9648 | sub_6D9650 | bool | +1096 | byte, masked & 1; distinct from node+48 |
+| `outsideFactor` | sub_6D965C | sub_6D9664 | double | +1160 | Raw double; constructor default 1.5 |
+| `meshDivisionRatio` | sub_6D966C | sub_6D9674 | double | +1176 | Raw double; constructor default 1.0 |
+| `speed` | sub_6D967C | sub_6D9684 | double | +1168 | Raw double speed multiplier |
+| `syncActive` | sub_6D968C | sub_6D9694 | bool | +1093 | byte, masked & 1 |
 | `tickCount` | sub_6D96A0 | sub_6D96C0 | double | +1120 | Getter: val*1000/60; Setter: val*60/1000, clamps |
 | `frameTickCount` | sub_6D9700 | -- (RO) | double | +1120 | Raw double (internal frames) |
 | `cameraActive` | sub_6D9708 | sub_6D9710 | bool | +1094 | byte, masked & 1 |
 | `stereovisionActive` | sub_6D971C | sub_6D9724 | bool | +1095 | byte, masked & 1 |
 | `outline` | sub_6D9730 | sub_6D973C | ttstr | +1032 | Copy/assign via sub_A0F5E0/sub_A0FB64 |
 | `meshline` | sub_6D9744 | sub_6D9750 | ttstr | +1052 | Copy/assign via sub_A0F5E0/sub_A0FB64 |
-| `maskMode` | sub_6CD710 | sub_6CD724 | -- | -- | Complex |
-| `colorWeight` | sub_6D9768 | sub_6CC9D4 | bool | +1097 | byte getter |
-| `independentLayerInherit` | sub_6CC188 | sub_6CC2C4 | -- | -- | Complex |
-| `transformOrder` | sub_6D9770 | sub_6B4980 | int | root+24 | Reads *(*(player+200)+24) |
-| `coordinate` | sub_6D977C | sub_6B498C | double | +1112 | Raw double |
-| `zFactor` | sub_6CC714 | -- | -- | -- | Complex |
+| `maskMode` | sub_6D9758 | sub_6D9760 | int | +1148 | Raw int32 |
+| `colorWeight` | sub_6CD710 | sub_6CD724 | packed color | +1156 | R/B-swizzled packed value |
+| `independentLayerInherit` | sub_6D9768 | sub_6CC9D4 | bool | +1097 | setter propagates dirty state to nodes |
+| `transformOrder` | sub_6CC188 | sub_6CC2C4 | int array | root+84..96 | Four-int transform order array |
+| `coordinate` | sub_6D9770 | sub_6B4980 | int | root+24 | Reads/writes root coordinate mode |
+| `zFactor` | sub_6D977C | sub_6B498C | double | +1112 | setter propagates to children |
 | `cameraTarget` | sub_6CC874 | -- | -- | -- | Complex |
-| `cameraPosition` | sub_6D9784 | -- (RO) | double | +1104 | Raw double |
-| `cameraFOV` | sub_6D978C | -- (RO) | bool | +1100 | byte |
-| `cameraAlive` | sub_6CCA84 | -- | -- | -- | Complex |
+| `cameraPosition` | -- | -- | -- | -- | Complex registration; not accessor 0x6D9784 |
+| `cameraFOV` | sub_6D9784 | -- (RO) | double | +1104 | Raw double |
+| `cameraAlive` | sub_6D978C | -- (RO) | bool | +1100 | byte |
 | `bounds` | -- | -- | -- | -- | Complex, iterates AABB |
 | `playing` | Player_getPlaying (0x6D9794) | -- (RO) | bool | +1099 | byte |
 | `allplaying` | Player_getAllplaying (0x6CCE34) | -- (RO) | bool | recursive | Walks node deque |
 | `syncWaiting` | sub_6D979C | -- (RO) | bool | +1098 | byte |
 | `frameLastTime` | sub_6D97A4 | -- (RO) | double | +1128 | Raw double (internal frames) |
 | `frameLoopTime` | sub_6D97AC | -- (RO) | double | +1136 | Raw double (internal frames) |
-| `hasCamera` | sub_6CCF98 | sub_6C1780 | bool | -- | Iterates deque for LayerType==5 |
-| `angleDeg` | sub_6CD0C0 | sub_6CD0EC | double | root+1616 | Getter: val*0.0174532925 (deg->rad); Setter: val*57.2957795 (rad->deg) |
-| `angleRad` | sub_6C0F84 | -- | double | root+1616 | Direct radians |
+| `hasCamera` | sub_6CCF98 | -- (RO) | bool | -- | Iterates deque for LayerType==5; 0x6C1780 belongs to angleDeg |
+| `angleDeg` | sub_6C1780 | sub_6C0F84 | double | root+1616 | NCB literal binding is authoritative |
+| `angleRad` | sub_6CD0C0 | sub_6CD0EC | double | root+1616 | NCB literal binding is authoritative |
 | `x` / `left` | sub_6D98A8 | sub_6CD028 | double | root+1592 | Root node X |
 | `y` / `top` | sub_6D98B4 | sub_6CD048 | double | root+1600 | Root node Y |
 | `flipX` | sub_6D98C0 | sub_6CD068 | bool | root+1587 | Root node flipX |
 | `flipY` | sub_6D98CC | sub_6CD08C | bool | root+1588 | Root node flipY |
 | `opacity` | sub_6D98D8 | sub_6C1028 | int | root+1656 | Root node opacity (int32) |
 | `visible` | sub_6D98E4 | sub_6C1048 | bool | root+1586 | Root node visible |
-| `slantX` | sub_6D98FC | sub_6D137C | double | root+1648 | Root node slantX |
-| `slantY` | sub_6D9908 | sub_6D131C | double | root+1624 | Root node slantY |
-| `zoomX` | sub_6D9914 | sub_6D133C | double | root+1632 | Root node zoomX |
-| `zoomY` | sub_6D98F0 | sub_6D135C | double | root+1640 | Root node zoomY |
-| `useD3D` | sub_6D992C | sub_6D9934 | int | +912 | int32 |
-| `pixelateDivision` | sub_6D992C | sub_6D9934 | int | +912 | Same as useD3D? Needs verification |
+| `slantX` | sub_6D98F0 | sub_6D135C | double | root+1640 | Root node slantX |
+| `slantY` | sub_6D98FC | sub_6D137C | double | root+1648 | Root node slantY |
+| `zoomX` | sub_6D9908 | sub_6D131C | double | root+1624 | Root node zoomX |
+| `zoomY` | sub_6D9914 | sub_6D133C | double | root+1632 | Root node zoomY |
+| `useD3D` | sub_695DE0 | sub_6D9920 | bool | +909 | byte flag |
+| `pixelateDivision` | sub_6D992C | sub_6D9934 | int | +912 | Independent from useD3D |
 | `processedMeshVerticesNum` | -- | -- | -- | -- | Complex registration |
 
 ### 2.3 Registered Methods
@@ -206,16 +214,16 @@ Based on constructor (sub_6CED30) initialization and property getter/setter deco
 | +976 | 8 | ptr* | primary motion string value | -- | Player_getMotion_ncb reads this |
 | +984 | 8 | ptr* | stealthMotion string value | -- | Player_getStealthMotion reads this |
 | +992 | 20 | ttstr | transformOrderStr | -- | sub_6D9414 getter |
-| +1012 | 20 | ttstr | emoteEditVariant | -- | |
+| +1012 | 20 | tTJSVariant | motionKey/project findMotion context | -- | sub_695BE0/sub_6B4978 alias |
 | +1032 | 20 | ttstr | outline | -- | sub_6D9730/sub_6D973C |
 | +1052 | 20 | ttstr | meshline | -- | sub_6D9744/sub_6D9750 |
 | +1072 | 20 | tTJSVariant | motion `tag` frame-array dispatch | -- | `Player_initNonEmoteMotion@0x6B365C` writes `motion["tag"]`; `Player_skipToSync@0x6D3504` CopyRefs and enumerates it |
-| +1092 | 1 | bool | completionType | 0 | sub_6D9634/sub_6D963C |
-| +1093 | 1 | bool | speed (bool flag) | defaultSyncActive | sub_6D968C/sub_6D9694 |
+| +1092 | 1 | bool | preview | 0 | sub_6D9634/sub_6D963C |
+| +1093 | 1 | bool | syncActive | defaultSyncActive | sub_6D968C/sub_6D9694 |
 | +1094 | 1 | bool | cameraActive | 0 | sub_6D9708/sub_6D9710 |
 | +1095 | 1 | bool | stereovisionActive | 0 | sub_6D971C/sub_6D9724 |
-| +1096 | 1 | bool | preview | 0 | sub_6D9648/sub_6D9650 |
-| +1097 | 1 | bool | colorWeight (bool) | -- | sub_6D9768 getter |
+| +1096 | 1 | bool | priorDraw | 0 | sub_6D9648/sub_6D9650 |
+| +1097 | 1 | bool | independentLayerInherit | 0 | sub_6D9768/sub_6CC9D4 |
 | +1098 | 1 | bool | syncWaiting | 0 | sub_6D979C getter, sub_6D9A48 clears |
 | +1099 | 1 | bool | playing | 0 | Player_getPlaying, Player_stop sets to 0 |
 | +1100 | 1 | bool | cameraAlive/FOV | 0 | sub_6D978C getter |
@@ -224,13 +232,13 @@ Based on constructor (sub_6CED30) initialization and property getter/setter deco
 | +1120 | 8 | double | frameTickCount | 0 | Current position in internal frames |
 | +1128 | 8 | double | frameLastTime | 0 | Total frames of current motion |
 | +1136 | 8 | double | frameLoopTime | 0 | Loop start point in internal frames |
-| +1144 | 4 | int | project | 0 | sub_6D9624/sub_6D962C |
+| +1144 | 4 | int | completionType | 0 | sub_6D9624/sub_6D962C |
 | +1148 | 4 | int | maskMode | 0 | sub_6D9758/sub_6D9760 |
 | +1152 | 4 | int | progressCounter | 0 | Cleared at start of progress_inner |
-| +1156 | 4 | uint32 | parentColorPacked | 0xFF808080 | Set from parent motion node color |
-| +1160 | 8 | double | priorDraw | 0 | sub_6D965C/sub_6D9664 |
-| +1168 | 8 | double | meshDivisionRatio | 1.0 | sub_6D967C/sub_6D9684 |
-| +1176 | 8 | double | outsideFactor | 0 | sub_6D966C/sub_6D9674 |
+| +1156 | 4 | uint32 | colorWeightPacked / inherited parent color | 0xFF808080 | sub_6CD710/sub_6CD724; child propagation reuses the same storage |
+| +1160 | 8 | double | outsideFactor | 1.5 | sub_6D965C/sub_6D9664 |
+| +1168 | 8 | double | speed | 1.0 | sub_6D967C/sub_6D9684; progress delta multiplier |
+| +1176 | 8 | double | meshDivisionRatio | 1.0 | sub_6D966C/sub_6D9674 |
 | +1184..1232 | 48 | struct | hashMap3 | -- | Cleaned in destructor |
 | +1240..1288 | 48 | struct | hashMap4 | -- | Cleaned in destructor |
 | +1296..1368 | 72 | struct | variableDeque | -- | sub_6CF678 cleanup, 160-byte items |
@@ -319,24 +327,24 @@ Player_ctor(player, rmArg):
     byte(+610) = 0;                  // forceUpdate
     byte(+482) = 0;                  // emoteMode
     player[140] = 0;                 // +1120: frameTickCount
-    byte(+1092) = 0;                 // completionType
+    byte(+1092) = 0;                 // preview
     word(+549*2=1098) = 0;           // syncWaiting|playing packed
     player[59] = 0;                  // +472
     
     // Double precision constants
-    player[146] = 1.0;              // +1168: meshDivisionRatio = 1.0
+    player[146] = 1.0;              // +1168: speed = 1.0
     byte(+483) = 0;                 // motionCompleted
     
-    // Sync/speed flags
-    byte(+1093) = byte_1AB84A8;    // speed flag = defaultSyncActive
+    // Sync flag
+    byte(+1093) = byte_1AB84A8;    // syncActive = defaultSyncActive
     word(+480) = 1;                 // progressFlags: LSB=1
     word(+608) = 1;                 // updateMarker
     
     // Color defaults
-    dword(+1156) = 0xFF808080;     // parentColorPacked = gray
-    word(+1096) = 0;               // preview|cameraActive packed
+    dword(+1156) = 0xFF808080;     // colorWeightPacked / inherited parent color
+    word(+1096) = 0;               // priorDraw|independentLayerInherit packed
     byte(+1100) = 0;               // cameraAlive
-    dword(+1144) = 0;              // project
+    dword(+1144) = 0;              // completionType
     player[18] = 0;                // +144: cameraOffset = 0
     player[100] = 0;               // +800
     
@@ -351,10 +359,10 @@ Player_ctor(player, rmArg):
     player[104] = 1.0;            // +832
     player[105] = 0;              // +840
     byte(+611) = 0;
-    player[147] = 1.0;            // +1176: outsideFactor? or another scale
+    player[147] = 1.0;            // +1176: meshDivisionRatio
     player[47] = 0;               // +376: activeTimeline
     word(+612) = 0;
-    player[145] = 1.5;            // +1160: (0x3FF8000000000000 = 1.5)
+    player[145] = 1.5;            // +1160: outsideFactor
     
     // Init SIMD constants for transforms
     oword(+160) = xmmword_14D68E0; // Bounds init data
@@ -404,7 +412,7 @@ Player_dtor(player):
     sub_A0F778(+1072)  // motion["tag"] frame-array variant
     sub_A0F778(+1052)  // meshline
     sub_A0F778(+1032)  // outline
-    sub_A0F778(+1012)  // emoteEditVariant
+    sub_A0F778(+1012)  // motionKey/project findMotion context variant
     sub_A0F778(+992)   // transformOrderStr
     
     // 9. Release four independent ttstr value owners. 2026-07-18 NCB/dtor
@@ -599,9 +607,10 @@ Player TJS API
 | 44 (0x2C) | Variable list entry size | Destructor stride in variable list |
 | 160 (0xA0) | Variable deque item size | Referenced in analysis of variableDeque |
 | 500 (0x1F4) | Something per-node | operator new(0x1F4) in loopTime getter |
-| 0xFF808080 | Default parent color | Constructor: dword(+1156) |
+| 0xFF808080 | Default packed colorWeight / inherited parent color | Constructor: dword(+1156) |
 | 100 | Default pixelateDivision | Constructor: dword(+912) = 100 |
 | 257 (0x101) | Default progress flags | Constructor: word(+480) = 257 |
-| 1.0 | Default meshDivisionRatio | Constructor: player[146] |
-| 1.5 | Default priorDraw(?) | Constructor: player[145] = 0x3FF8000000000000 |
+| 1.0 | Default speed | Constructor: player[146] (`+1168`) |
+| 1.0 | Default meshDivisionRatio | Constructor: player[147] (`+1176`) |
+| 1.5 | Default outsideFactor | Constructor: player[145] (`+1160`) |
 | DBL_MAX / -DBL_MAX | Bounds init | Constructor: player[19], player[22] |

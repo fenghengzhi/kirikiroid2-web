@@ -18,6 +18,12 @@ logic the local plain-field setters drop.
 
 ## 1. ctor — Player_ctor @ 0x6CED30  [renamed in IDB]
 
+> **2026-07-23 superseded correction：**本节后面的 2026-05-30 字段名保留为
+> 历史审计快照，其 +1092 completionType、+1093 speed、+1160 priorDraw、
+> +1176 outsideFactor 均已被 NCB 字面绑定证伪。当前映射是 +1092 preview、
+> +1093 syncActive、+1096 priorDraw、+1144 completionType、+1160 outsideFactor=1.5、
+> +1168 speed=1.0、+1176 meshDivisionRatio=1.0。
+
 Pseudocode (key inits, all confirmed):
 ```
 this[0]=this; this[1]=0; memset(+184,0,0x50); memset(+72,0,0x48)

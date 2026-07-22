@@ -18,7 +18,7 @@ Render-item viewport field (item+200..212) is written and rounded by the ITEM BU
 **sub_6C4E28 @0x6C5DBC does NOT write item+200..212.** It only READS viewport as input and folds floor/ceil into the **clipRect** (item+216..228):
 - Loop1 @0x6c5e24: `floorf(vp.left)/floorf(vp.top)/ceilf(vp.right)/ceilf(vp.bottom)` used as max/min bounds against paintBox∩a4(canvasClip), result stored to item+216..228 (clipRect) @0x6c4f8c. NO final extra rounding — v80..v85 written directly.
 - Loop2 @0x6c5f54 (group/aux list, v93): same floor/ceil of viewport into clipRect, stored item+216..228 @0x6c6388.
-- **clipRect item+216..228 is FLOAT in oracle** (`*(float*)`), harness reads it via readRectF. Port declares clipRect as `array<int,4>` (RuntimeSupport.h:263) — a separate latent divergence (int vs float store), not yet fixed.
+- **clipRect item+216..228 is FLOAT in oracle** (`*(float*)`), harness reads it via readRectF. **2026-07-23 correction:** port field and harness now both use `std::array<float,4>`; the former int-vs-float divergence is closed.
 
 **Harness:** `viewportRect = readRectF(item,200)` (frida_motion_stage_agent.js:2618) → reads item+200..212 directly. So m2logo viewport divergence traces to sub_6C2334's write, not sub_6C4E28.
 

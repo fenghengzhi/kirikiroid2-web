@@ -11,6 +11,16 @@ using namespace motion::internal::render_detail;
 
 namespace motion {
 
+    namespace {
+        std::array<int, 4> integralClipRect(
+            const std::array<float, 4> &rect) {
+            return {
+                static_cast<int>(rect[0]), static_cast<int>(rect[1]),
+                static_cast<int>(rect[2]), static_cast<int>(rect[3])
+            };
+        }
+    }
+
     // libkrkr2.so sub_6C4E28 @0x6C5264..0x6C5D98 Loop A drawable body (J1/J7):
     // materialize the per-item LEAF layer (item+304) on the persistent
     // SeparateLayerAdaptor Rb_tree (player+760), keyed by the layerId latched at
@@ -48,11 +58,13 @@ namespace motion {
             scratchParent ? scratchParent : scratchOwner;
         NativeSLAPayloadLike_0x6DCD0C payload =
             NativeSLAPayloadLike_0x6DCD0C::fromLayerVariant(
-                item.leafLayer, static_cast<tjs_uint32>(item.layerId));
+                item.leafLayer,
+                static_cast<tjs_uint32>(item.renderLayerId));
         bool createdOrChanged = false;
         tTJSVariant leafVariant =
             _renderSeparateLayerAdaptor->resolveRenderLayerNodeLike_0x6C6B48(
-                static_cast<tjs_uint32>(item.layerId), payload, ownerObject,
+                static_cast<tjs_uint32>(item.renderLayerId), payload,
+                ownerObject,
                 createdOrChanged);
         item.leafLayer = leafVariant;
         iTJSDispatch2 *leafLayerObject =
@@ -71,7 +83,8 @@ namespace motion {
         tjs_int srcH = 0;
         if(!item.sourceKey.empty() && _sourceCacheNative) {
             sourceObject = _sourceCacheNative->loadRenderSourceByName(
-                *this, detail::widen(item.sourceKey), item.srcRef, item.blendMode,
+                *this, detail::widen(item.sourceKey), item.sourceObject,
+                item.blendMode,
                 item.packedColors, scratchOwner, scratchParent);
             if(sourceObject.Type() == tvtObject &&
                sourceObject.AsObjectNoAddRef()) {
@@ -111,8 +124,21 @@ namespace motion {
                 return false;
             }
         } else {
-            if(item.localMeshPoints.empty() || item.meshDivX < 2 ||
-               item.meshDivY < 2) {
+            if(item.localMeshPoints.empty()) {
+                return false;
+            }
+            std::array<tjs_int, 2> cellDivisions{
+                item.meshDivX, item.meshDivY
+            };
+            if(item.meshType == 1) {
+                cellDivisions = bezierPatchCellDivisionsLike_0x6C5C00(
+                    item.commandPatchDivision, item.nativeNode->source.width,
+                    item.nativeNode->source.height);
+            } else if(item.meshType == 2) {
+                if(item.meshDivX < 1 || item.meshDivY < 1) {
+                    return false;
+                }
+            } else {
                 return false;
             }
             iTJSDispatch2 *meshArray =
@@ -126,15 +152,14 @@ namespace motion {
                 // sub_6C4E28 @0x6c5ba0 bezierPatchCopy block.
                 meshResult = callLayerBezierPatchCopyLike_0x6C7440(
                     leafLayerObject, sourceObject, sourceRect, meshArray,
-                    item.meshDivX, item.meshDivY, stNearest, _clearEnabled);
+                    cellDivisions[0], cellDivisions[1], stNearest,
+                    _clearEnabled);
             } else if(item.meshType == 2) {
                 // sub_6C4E28 @0x6c5810 meshCopy block.
                 meshResult = callLayerMeshCopyLike_0x6C7440(
                     leafLayerObject, sourceObject, sourceRect, meshArray,
-                    item.meshDivX, item.meshDivY, stNearest, _clearEnabled);
-            } else {
-                meshArray->Release();
-                return false;
+                    cellDivisions[0], cellDivisions[1], stNearest,
+                    _clearEnabled);
             }
             meshArray->Release();
             if(TJS_FAILED(meshResult)) {
@@ -142,11 +167,12 @@ namespace motion {
             }
         }
 
-        item.builtRect = item.clipRect;
+        item.builtRect = integralClipRect(item.clipRect);
         detail::logoChainTraceLogf(
             motionPath, "buildCommands.leafCopy", "0x6C4E28", _clampedEvalTime,
             "nodeIndex={} layerId={} clipRect=[{},{},{},{}] meshType={}",
-            item.nodeIndex, item.layerId, item.clipRect[0], item.clipRect[1],
+            item.nodeIndex, item.renderLayerId, item.clipRect[0],
+            item.clipRect[1],
             item.clipRect[2], item.clipRect[3], item.meshType);
         return true;
     }
@@ -161,12 +187,13 @@ namespace motion {
     // grp+216..228=composed clip. Inert for the logo fixtures (no group item
     // reaches a non-empty child-clip union).
     void Player::composeGroupLayersLike_0x6C4E28(
+        detail::PreparedRenderItemList &auxList,
         tjs_int canvasWidth,
         tjs_int canvasHeight,
         iTJSDispatch2 *scratchOwner,
         iTJSDispatch2 *scratchParent,
         const std::string &motionPath) {
-        if(_preparedRenderItemsGroup.empty()) {
+        if(auxList.empty()) {
             return;
         }
         const float cameraLeft = 0.0f;
@@ -174,7 +201,7 @@ namespace motion {
         const float cameraRight = static_cast<float>(canvasWidth);
         const float cameraBottom = static_cast<float>(canvasHeight);
 
-        for(auto *grpPtr : _preparedRenderItemsGroup) {
+        for(auto *grpPtr : auxList) {
             if(!grpPtr) {
                 continue;
             }
@@ -322,33 +349,23 @@ namespace motion {
             grp.rawFlag21 = true;
             grp.rawFlag16 = false;
             grp.clipRect = {
-                static_cast<int>(unionLeftF), static_cast<int>(unionTopF),
-                static_cast<int>(unionRightF), static_cast<int>(unionBottomF)
+                unionLeftF, unionTopF, unionRightF, unionBottomF
             };
             grp.composedBuilt = true;
-            grp.builtRect = grp.clipRect;
+            grp.builtRect = integralClipRect(grp.clipRect);
         }
     }
 
-    bool Player::buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight) {
+    bool Player::buildRenderCommands(
+        tjs_int canvasWidth,
+        tjs_int canvasHeight,
+        detail::PreparedRenderItemList &mainList,
+        detail::PreparedRenderItemList &auxList) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderBuildCommandsEnter(
-            this, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight));
+            this, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight),
+            mainList, auxList);
 #endif
-        // Equivalent to sub_6D5164 @ 0x6D5178's `player+544` null gate —
-        // the port has no explicit +544 mirror, so an absent runtime is
-        // the canonical "no render list yet" signal.
-        if(false) {
-#if defined(KRKR2_WASMTIME_HEADLESS)
-            detail::motionTraceRenderBuildCommandsLeave(
-                this, static_cast<int>(canvasWidth),
-                static_cast<int>(canvasHeight));
-#endif
-            return false;
-        }
-
-        _preparedRenderItemsTopLevel.clear();
-        _preparedRenderItemsGroup.clear();
         const auto motionPath = matchedMotionPath();
         // Scratch owner/parent for the SLA leaf/composed Layer ctor — resolved
         // once for the whole build pass (mirrors 0x6C4E28's
@@ -357,7 +374,11 @@ namespace motion {
         // fixtures (all mainList items have drawFlag19=0).
         iTJSDispatch2 *scratchOwner = resolveMainWindowOwnerObject();
         iTJSDispatch2 *scratchParent = resolveMainWindowPrimaryLayerObject();
-        for(auto &entry : _preparedRenderItems) {
+        for(auto *entryPtr : mainList) {
+            if(!entryPtr) {
+                continue;
+            }
+            auto &entry = *entryPtr;
             // libkrkr2.so sub_6C4E28 works in-place on the render item list
             // built by sub_6C2334. It does not blanket-clear +20/+21 or
             // +216..228: item+19==0 leaves those fields untouched, and failed
@@ -400,9 +421,12 @@ namespace motion {
             } else {
                 entry.rawFlag21 = true;
                 entry.clipRect = {
-                    clipRect.left, clipRect.top, clipRect.right, clipRect.bottom
+                    static_cast<float>(clipRect.left),
+                    static_cast<float>(clipRect.top),
+                    static_cast<float>(clipRect.right),
+                    static_cast<float>(clipRect.bottom)
                 };
-                entry.dirtyRect = entry.clipRect;
+                entry.dirtyRect = integralClipRect(entry.clipRect);
 
                 // libkrkr2.so sub_6C4E28 @0x6C5DBC: the drawable branch
                 // (drawFlag19 && clip valid && !item+16) performs the
@@ -433,7 +457,7 @@ namespace motion {
                     //   a port invention; "requireLayerId" is only ever called
                     //   numparams=0). Every drawable item that reaches this latch
                     //   gets its own fresh id, unconditionally.
-                    entry.layerId = dispatchRequireLayerId();
+                    entry.renderLayerId = dispatchRequireLayerId();
                     entry.rawFlag20 = true;
                 }
 
@@ -444,9 +468,12 @@ namespace motion {
                         entry.corners[ci + 1] - 0.5f - static_cast<float>(clipRect.top);
                 }
 
+                const auto &renderMeshPoints = entry.meshType == 2
+                    ? entry.commandCompositeMeshPoints
+                    : entry.meshPoints;
                 entry.localMeshPoints.clear();
-                entry.localMeshPoints.reserve(entry.meshPoints.size());
-                for(const auto &point : entry.meshPoints) {
+                entry.localMeshPoints.reserve(renderMeshPoints.size());
+                for(const auto &point : renderMeshPoints) {
                     entry.localMeshPoints.push_back({
                         point.x - 0.5f - static_cast<float>(clipRect.left),
                         point.y - 0.5f - static_cast<float>(clipRect.top)
@@ -509,25 +536,23 @@ namespace motion {
                     entry, scratchOwner, scratchParent, motionPath);
             }
 
-            persistNativeRenderItemFieldLifetimeLike_0x6C4E28(entry);
-            if(entry.groupList) {
-                _preparedRenderItemsGroup.push_back(&entry);
-            }
-            if(entry.topLevelList) {
-                _preparedRenderItemsTopLevel.push_back(&entry);
-            }
         }
 
         // libkrkr2.so sub_6C4E28 Loop B (after Loop A): compose group items into
         // their composed layers (item+324). Inert for the logo fixtures (no
         // group item reaches a non-empty child-clip union).
-        composeGroupLayersLike_0x6C4E28(canvasWidth, canvasHeight, scratchOwner,
-                                        scratchParent, motionPath);
+        composeGroupLayersLike_0x6C4E28(
+            auxList, canvasWidth, canvasHeight, scratchOwner, scratchParent,
+            motionPath);
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&
-           _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
-            for(size_t i = 0; i < _preparedRenderItems.size(); ++i) {
-                const auto &item = _preparedRenderItems[i];
+            _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
+            for(size_t i = 0; i < mainList.size(); ++i) {
+                const auto *itemPtr = mainList[i];
+                if(!itemPtr) {
+                    continue;
+                }
+                const auto &item = *itemPtr;
                 if(!(item.nodeIndex == 14 || item.nodeIndex == 15 ||
                      item.nodeIndex == 19 ||
                      (item.nodeIndex >= 20 && item.nodeIndex <= 29))) {
@@ -535,17 +560,14 @@ namespace motion {
                 }
                 std::fprintf(
                     stderr,
-                    "SNAPCMD frame=%.3f order=%zu nodeIndex=%d source=%s groupOnly=%d topLevel=%d groupList=%d rawFlags=[%d,%d,%d,%d,%d,%d] parentNodeIndex=%d hasRenderParent=%d childCount=%zu layerId=(%d,%d) clipRect=[%d,%d,%d,%d] opacity=%d blend=%d\n",
+                    "SNAPCMD frame=%.3f order=%zu nodeIndex=%d source=%s rawFlags=[%d,%d,%d,%d,%d,%d] parentNodeIndex=%d hasRenderParent=%d childCount=%zu layerId=(%d,%d) clipRect=[%.3f,%.3f,%.3f,%.3f] opacity=%d blend=%d\n",
                     _clampedEvalTime,
                     i,
                     item.nodeIndex,
                     item.sourceKey.empty() ? "<none>" : item.sourceKey.c_str(),
-                    item.groupOnly ? 1 : 0,
-                    item.topLevelList ? 1 : 0,
-                    item.groupList ? 1 : 0,
                     item.rawFlag16 ? 1 : 0,
                     item.skipFlag0 ? 1 : 0,
-                    item.skipFlag1 ? 0 : 1,
+                    item.skipFlag1 ? 1 : 0,
                     item.drawFlag ? 1 : 0,
                     item.rawFlag20 ? 1 : 0,
                     item.rawFlag21 ? 1 : 0,
@@ -553,7 +575,7 @@ namespace motion {
                                     : item.visibleAncestorIndex,
                     item.parentItem ? 1 : 0,
                     item.childItems.size(),
-                    item.layerId,
+                    item.layerId1,
                     item.layerId2,
                     item.clipRect[0], item.clipRect[1],
                     item.clipRect[2], item.clipRect[3],
@@ -565,27 +587,28 @@ namespace motion {
         detail::logoChainTraceLogf(
             motionPath, "renderItem.count", "0x6C4E28",
             _clampedEvalTime,
-            "canvas={}x{} preparedItems={} topLevelList={} groupList={}",
-            canvasWidth, canvasHeight, _preparedRenderItems.size(),
-            _preparedRenderItemsTopLevel.size(),
-            _preparedRenderItemsGroup.size());
-        const bool ok = !_preparedRenderItems.empty();
+            "canvas={}x{} mainList={} auxList={}",
+            canvasWidth, canvasHeight, mainList.size(), auxList.size());
+        const bool ok = !mainList.empty();
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderBuildCommandsLeave(
-            this, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight));
+            this, static_cast<int>(canvasWidth), static_cast<int>(canvasHeight),
+            mainList, auxList);
 #endif
         return ok;
     }
 
 
-    bool Player::executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
-                                            bool skipUpdate) {
+    bool Player::executeLayerRenderCommands(
+        iTJSDispatch2 *renderLayerObject,
+        bool skipUpdate,
+        detail::PreparedRenderItemList &mainList) {
         if(!renderLayerObject || !hasMotionContent()) {
             return false;
         }
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::MotionTraceRenderExecuteScope renderTrace(
-            this, renderLayerObject, skipUpdate);
+            this, renderLayerObject, skipUpdate, mainList);
 #endif
         const auto motionPath = matchedMotionPath();
 
@@ -618,10 +641,8 @@ namespace motion {
             static_cast<const void *>(resolveNativeLayer(scratchParent)));
         detail::logoChainTraceLogf(
             motionPath, "execute.begin", "0x6C7440", _clampedEvalTime,
-            "renderItems={} topLevelItems={} groupItems={} renderLayer={} scratchOwner={} scratchParent={} skipUpdate={}",
-            _preparedRenderItems.size(),
-            _preparedRenderItemsTopLevel.size(),
-            _preparedRenderItemsGroup.size(),
+            "mainItems={} renderLayer={} scratchOwner={} scratchParent={} skipUpdate={}",
+            mainList.size(),
             static_cast<const void *>(renderLayer),
             static_cast<const void *>(scratchOwner),
             static_cast<const void *>(scratchParent), skipUpdate ? 1 : 0);
@@ -690,7 +711,8 @@ namespace motion {
             }
 
             resolved.object = _sourceCacheNative->loadRenderSourceByName(
-                *this, detail::widen(item.sourceKey), item.srcRef, item.blendMode,
+                *this, detail::widen(item.sourceKey), item.sourceObject,
+                item.blendMode,
                 item.packedColors, scratchOwner, scratchParent);
             if(resolved.object.Type() != tvtObject ||
                !resolved.object.AsObjectNoAddRef()) {
@@ -722,7 +744,7 @@ namespace motion {
         // submit-only, matching the binary's 0x6C7440 boundary.)
         auto ensureLeafItemLayer =
             [&](PreparedRenderItem &item) -> iTJSDispatch2 * {
-            const tjs_int stateLayerId = item.layerId;
+            const tjs_int stateLayerId = item.renderLayerId;
             if(stateLayerId == 0) {
                 return ensureReusableLayerObject(
                     item.leafLayer,
@@ -867,12 +889,27 @@ namespace motion {
                     "Player::executeLayerRenderCommands.accurateSla.item.afterAffineCopy");
                 return true;
             }
-            if(item.meshPoints.empty() || item.meshDivX < 2 ||
-               item.meshDivY < 2) {
+            const auto &renderMeshPoints = item.meshType == 2
+                ? item.commandCompositeMeshPoints
+                : item.meshPoints;
+            if(renderMeshPoints.empty()) {
+                return false;
+            }
+            std::array<tjs_int, 2> cellDivisions{
+                item.meshDivX, item.meshDivY
+            };
+            if(item.meshType == 1) {
+                cellDivisions = bezierPatchCellDivisionsU32Like_0x6C8E5C(
+                    item.commandPatchDivision, source.width, source.height);
+            } else if(item.meshType == 2) {
+                if(item.meshDivX < 1 || item.meshDivY < 1) {
+                    return false;
+                }
+            } else {
                 return false;
             }
             iTJSDispatch2 *meshArray =
-                buildMeshPointTJSArrayLike_0x6C715C(item.meshPoints, offsetX,
+                buildMeshPointTJSArrayLike_0x6C715C(renderMeshPoints, offsetX,
                                                     offsetY);
             if(!meshArray) {
                 return false;
@@ -881,7 +918,7 @@ namespace motion {
             if(item.meshType == 1) {
                 ok = TJS_SUCCEEDED(callLayerBezierPatchCopyLike_0x6C7440(
                     candidateLayerObject, source.object, sourceRect, meshArray,
-                    item.meshDivX, item.meshDivY, stNearest, true));
+                    cellDivisions[0], cellDivisions[1], stNearest, true));
                 if(ok) {
                     recordPostDrawCandidate(
                         candidateLayerObject,
@@ -890,7 +927,7 @@ namespace motion {
             } else if(item.meshType == 2) {
                 ok = TJS_SUCCEEDED(callLayerMeshCopyLike_0x6C7440(
                     candidateLayerObject, source.object, sourceRect, meshArray,
-                    item.meshDivX, item.meshDivY, stNearest, true));
+                    cellDivisions[0], cellDivisions[1], stNearest, true));
                 if(ok) {
                     recordPostDrawCandidate(
                         candidateLayerObject,
@@ -1001,7 +1038,7 @@ namespace motion {
                 shouldUseDirectRenderPathLike_0x6C7440(item, _clearEnabled) &&
                 !hasChildren && item.parentItem == nullptr &&
                 !item.skipFlag0 && !item.rawFlag16 &&
-                !(_preview && item.skipFlag1) && item.opacity > 0;
+                !(_priorDraw && !item.skipFlag1) && item.opacity > 0;
 
             const int clipWidth = item.clipRect[2] - item.clipRect[0];
             const int clipHeight = item.clipRect[3] - item.clipRect[1];
@@ -1081,11 +1118,11 @@ namespace motion {
             (void)sourceRect;
             (void)clipWidth;
             (void)clipHeight;
-            item.builtRect = item.clipRect;
+            item.builtRect = integralClipRect(item.clipRect);
             return item.leafBuilt || item.composedBuilt;
         };
 
-        for(auto *itemPtr : _preparedRenderItemsTopLevel) {
+        for(auto *itemPtr : mainList) {
             if(!itemPtr) {
                 continue;
             }
@@ -1095,25 +1132,26 @@ namespace motion {
                 resolveBlendOperationModeLike_0x6C7440(item.blendMode);
             const auto effectiveColor = unpackPackedRgba(item.packedColors[0]);
             // libkrkr2.so sub_6C7440 @0x6c764c-0x6c7668 (J9): the submitted
-            // opacity is item+232 (signed int). Under preview (player+1096)
+            // opacity is item+232 (signed int). Under priorDraw (player+1096)
             // it is arithmetic-shifted right by 1, with a `+1` sign
             // adjustment so the shift rounds toward zero for negatives
-            // (v23 = v20>=0 ? v20 : v20+1; v24 = preview ? v23>>1 : item+232).
-            // Non-preview keeps the raw opacity. _preview is false for the
-            // logo fixtures, so this halving is inert there.
+            // (v23 = v20>=0 ? v20 : v20+1;
+            //  v24 = priorDraw ? v23>>1 : item+232).
+            // Non-priorDraw keeps the raw opacity.
             const int rawOpacity = item.opacity;
             const int signAdjustedOpacity =
                 rawOpacity >= 0 ? rawOpacity : rawOpacity + 1;
-            const int previewOpacity =
-                _preview ? (signAdjustedOpacity >> 1) : rawOpacity;
+            const int submittedOpacity =
+                _priorDraw ? (signAdjustedOpacity >> 1) : rawOpacity;
             const auto opa = static_cast<tjs_int>(
-                std::clamp(previewOpacity, 0, 255));
+                std::clamp(submittedOpacity, 0, 255));
             if(opa <= 0) {
                 continue;
             }
 
             // libkrkr2.so 0x6C7440 reads item+17/item+16 first, then updates
-            // target Layer clip, and only then applies the preview item+18 gate.
+            // target Layer clip, and only then applies the priorDraw item+18
+            // gate.
             if(item.skipFlag0) {
                 continue;
             }
@@ -1129,7 +1167,7 @@ namespace motion {
                 "nodeIndex={} targetClip=[{},{},{},{}]",
                 item.nodeIndex, targetLayerClip.left, targetLayerClip.top,
                 targetLayerClip.right, targetLayerClip.bottom);
-            if(_preview && item.skipFlag1) {
+            if(_priorDraw && !item.skipFlag1) {
                 continue;
             }
             if(item.parentItem) {
@@ -1234,8 +1272,26 @@ namespace motion {
                             source.layerObject, source.layer, "Layer");
 #endif
                     } else {
-                        if(item.meshPoints.empty() ||
-                           item.meshDivX < 2 || item.meshDivY < 2) {
+                        const auto &renderMeshPoints = item.meshType == 2
+                            ? item.commandCompositeMeshPoints
+                            : item.meshPoints;
+                        if(renderMeshPoints.empty()) {
+                            continue;
+                        }
+                        std::array<tjs_int, 2> cellDivisions{
+                            item.meshDivX, item.meshDivY
+                        };
+                        if(item.meshType == 1) {
+                            cellDivisions =
+                                bezierPatchCellDivisionsU32Like_0x6C8E5C(
+                                    item.commandPatchDivision,
+                                    item.nativeNode->source.width,
+                                    item.nativeNode->source.height);
+                        } else if(item.meshType == 2) {
+                            if(item.meshDivX < 1 || item.meshDivY < 1) {
+                                continue;
+                            }
+                        } else {
                             continue;
                         }
                         // libkrkr2.so sub_6C7440 operateMesh/operateBezierPatch
@@ -1248,7 +1304,7 @@ namespace motion {
                         // !clearEnabled), so it is preserved here verbatim.
                         iTJSDispatch2 *meshArray =
                             buildMeshPointTJSArrayLike_0x6C715C(
-                                item.meshPoints, -0.5f, -0.5f);
+                                renderMeshPoints, -0.5f, -0.5f);
                         if(!meshArray) {
                             continue;
                         }
@@ -1263,8 +1319,8 @@ namespace motion {
                             meshResult =
                                 callLayerOperateBezierPatchLike_0x6C7440(
                                     renderLayerObject, source.object,
-                                    sourceRect, meshArray, item.meshDivX,
-                                    item.meshDivY, blendMode, opa,
+                                    sourceRect, meshArray, cellDivisions[0],
+                                    cellDivisions[1], blendMode, opa,
                                     _clearEnabled);
 #if defined(KRKR2_WASMTIME_HEADLESS)
                             emitDirectProbe(
@@ -1280,7 +1336,7 @@ namespace motion {
 #endif
                             meshResult = callLayerOperateMeshLike_0x6C7440(
                                 renderLayerObject, source.object, sourceRect,
-                                meshArray, item.meshDivX, item.meshDivY,
+                                meshArray, cellDivisions[0], cellDivisions[1],
                                 blendMode, opa, _clearEnabled);
 #if defined(KRKR2_WASMTIME_HEADLESS)
                             emitDirectProbe(
@@ -1317,7 +1373,7 @@ namespace motion {
                        motionPath.find("m2logo.mtn") != std::string::npos &&
                        _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0) {
                         std::fprintf(stderr,
-                                     "SNAPCOPY order=%d frame=%.3f nodeIndex=%d source=%s branch=%s clipRect=[%d,%d,%d,%d] opacity=%d blend=%d\n",
+                                     "SNAPCOPY order=%d frame=%.3f nodeIndex=%d source=%s branch=%s clipRect=[%.3f,%.3f,%.3f,%.3f] opacity=%d blend=%d\n",
                                      snapshotCopyOrder++, _clampedEvalTime,
                                      item.nodeIndex,
                                      item.sourceKey.empty()
@@ -1376,7 +1432,7 @@ namespace motion {
                         ? "buffered.operateRect.composed"
                         : "buffered.operateRect.leaf";
                     std::fprintf(stderr,
-                                 "SNAPCOPY order=%d frame=%.3f nodeIndex=%d source=%s branch=%s clipRect=[%d,%d,%d,%d] opacity=%d blend=%d childCount=%zu phase=%d\n",
+                                 "SNAPCOPY order=%d frame=%.3f nodeIndex=%d source=%s branch=%s clipRect=[%.3f,%.3f,%.3f,%.3f] opacity=%d blend=%d childCount=%zu phase=%d\n",
                                  snapshotCopyOrder++, _clampedEvalTime,
                                  item.nodeIndex,
                                  item.sourceKey.empty()

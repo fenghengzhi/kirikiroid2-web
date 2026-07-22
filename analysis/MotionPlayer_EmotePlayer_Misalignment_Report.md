@@ -287,6 +287,12 @@ double getTickCount() const { return _tickCount; }
 
 ### 2.5 [P1-HIGH] Player 属性类型不匹配
 
+> **2026-07-23 superseded correction：**下表是 2026-04-05 基于当时错位 IDB
+> 命名的历史快照。当前字节验证映射为 +1092 preview bool、+1093
+> syncActive bool、+1096 priorDraw bool、+1144 completionType int、+1160
+> outsideFactor double、+1168 speed double、+1176 meshDivisionRatio double。
+> 下表的 speed/project/priorDraw 行已被此纠正取代。
+
 | 属性 | 二进制类型 | 本地类型 | 问题 |
 |------|-----------|---------|------|
 | `outline` | ttstr (+1032, 20 bytes) | bool | 二进制是字符串，本地是布尔 |

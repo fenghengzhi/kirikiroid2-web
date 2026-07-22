@@ -29,6 +29,6 @@ metadata:
   尚未整体同构；但参数跨 Player 索引的关键析构前置步骤 0x6CDE18 已按原调用
   顺序显式复刻，不能再概括为本地 `=default`。
 - 这是 CLAUDE.md "对象生命周期一比一" 的直接违反，但属于**容器选型偏差的下游后果**：只要本地继续用 std::deque/unordered_map/ttstr 成员，ctor/dtor 就必然是 RAII 而非手写序列。修 ctor/dtor 必须先修容器选型。
-- 默认值已对齐 ✅：_priorDraw=1.5 / _meshDivisionRatio=1.0 / _outsideFactor=1.0 / _pixelateDivision=100 / _colorWeightPacked=0xFF808080 / _cameraFOV=60.0(但 +1100 二进制是 byte 不是 double，见 [[player-field-collisions]])。
+- 已确认的默认值已对齐 ✅：_priorDraw=false（Player+1096 bool） / _outsideFactor=1.5（+1160） / _speedMul=1.0（+1168） / _meshDivisionRatio=1.0（+1176） / _pixelateDivision=100 / _colorWeightPacked=0xFF808080。旧记录把 +1096 priorDraw 与 +1160 outsideFactor 串位，并把 +1100 cameraAlive 误当 cameraFOV，均已纠正。
 
 参见 [[player-1384b-flat-spec]] [[player-container-layout]] [[player-field-collisions]]

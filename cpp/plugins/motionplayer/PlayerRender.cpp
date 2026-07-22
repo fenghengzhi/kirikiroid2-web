@@ -84,7 +84,9 @@ namespace motion {
 
         ensureMotionLoaded();
         calcViewParam();
-        prepareRenderItems();
+        detail::PreparedRenderItemList mainList;
+        detail::PreparedRenderItemList auxList;
+        prepareRenderItems(mainList, auxList);
     }
 
 } // namespace motion

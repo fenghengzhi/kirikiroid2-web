@@ -33,6 +33,6 @@ endforeach()
 # DrawDeviceD3D.cpp in krkr2plugins_ncbind. The application whole-archives that
 # library; isolated tests that compile EmotePlayer must link it explicitly as
 # well.
-foreach(name motionplayer-dll psbfile-dll)
+foreach(name motionplayer-dll psbfile-dll motionplayer-ttstr-hash-test)
     target_link_libraries(${name} PRIVATE krkr2plugins_ncbind)
 endforeach()

@@ -11,9 +11,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <deque>
-#include <memory>
 #include <vector>
 
 #if defined(__EMSCRIPTEN__)
@@ -40,85 +38,54 @@ namespace {
     };
 
     struct PrivateMotionGLLRenderItemLike_0x6DE738 {
-        std::uint64_t pointsBegin = 0; // item+0; heap-owned in native
-        std::uint64_t pointsEnd = 0; // item+8
-        std::uint64_t pointsCapacity = 0; // item+16
-        std::uint32_t opacity = 0; // item+24
-        std::uint8_t stencilRefFromItem22 = 0; // item+28
-        std::uint8_t stencilRefFromItem23 = 0; // item+29
-        std::int32_t blendMode = 0; // item+32
-        std::int32_t geometryType = 0; // item+36
-        std::int32_t meshDivX = 0; // item+40
-        std::int32_t meshDivY = 0; // item+44
-        std::uint32_t color0 = 0; // item+48
-        std::uint32_t color1 = 0; // item+52
-        std::uint64_t color2And3 = 0; // item+56
-        std::uint64_t sourceRect0 = 0; // item+64
-        std::uint64_t sourceRect1 = 0; // item+72
-        std::uint64_t sourceTexture = 0; // item+80; AddRef/Release in native
+        std::vector<motion::detail::MeshPoint> points;
+        std::uint32_t opacity = 0;
+        std::uint8_t stencilRefFromItem22 = 0;
+        std::uint8_t stencilRefFromItem23 = 0;
+        std::int32_t blendMode = 0;
+        std::int32_t geometryType = 0;
+        std::int32_t meshDivX = 0;
+        std::int32_t meshDivY = 0;
+        std::array<std::uint32_t, 4> packedColors{};
+        std::array<std::int32_t, 4> sourceRect{};
+        iTVPTexture2D *sourceTexture = nullptr;
+
+        PrivateMotionGLLRenderItemLike_0x6DE738() = default;
+        PrivateMotionGLLRenderItemLike_0x6DE738(
+            const PrivateMotionGLLRenderItemLike_0x6DE738 &) = delete;
+        PrivateMotionGLLRenderItemLike_0x6DE738 &operator=(
+            const PrivateMotionGLLRenderItemLike_0x6DE738 &) = delete;
+
+        ~PrivateMotionGLLRenderItemLike_0x6DE738() {
+            if(sourceTexture) {
+                sourceTexture->Release();
+            }
+        }
     };
-
-    // Accessed by field name (item.sourceTexture / pointsBegin / color0 …); the
-    // item+N offsets are provenance comments only. No size assert — wasm layout
-    // need not mirror the native 88-byte stride (uint64-for-pointer keeps field
-    // width stable on wasm32; that is a width choice, not a byte-ABI pin).
-    std::uint64_t storeNativePointerLike_0x6DE738(const void *ptr) {
-        return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(ptr));
-    }
-
-    template <typename T>
-    T *loadNativePointerLike_0x6DE738(std::uint64_t ptr) {
-        return reinterpret_cast<T *>(static_cast<std::uintptr_t>(ptr));
-    }
-
-    void cleanupRenderItemLike_0x6DDE80(
-        PrivateMotionGLLRenderItemLike_0x6DE738 &item) {
-        if(auto *texture =
-               loadNativePointerLike_0x6DE738<iTVPTexture2D>(item.sourceTexture)) {
-            texture->Release();
-            item.sourceTexture = 0;
-        }
-        if(auto *points =
-               loadNativePointerLike_0x6DE738<void>(item.pointsBegin)) {
-            operator delete(points);
-            item.pointsBegin = 0;
-            item.pointsEnd = 0;
-            item.pointsCapacity = 0;
-        }
-    }
 
     tTVPRect sourceRectLike_0x6DD56C(
         const PrivateMotionGLLRenderItemLike_0x6DE738 &item) {
         return tTVPRect(
-            static_cast<std::int32_t>(item.sourceRect0 & 0xffffffffu),
-            static_cast<std::int32_t>((item.sourceRect0 >> 32) & 0xffffffffu),
-            static_cast<std::int32_t>(item.sourceRect1 & 0xffffffffu),
-            static_cast<std::int32_t>((item.sourceRect1 >> 32) & 0xffffffffu));
+            item.sourceRect[0], item.sourceRect[1],
+            item.sourceRect[2], item.sourceRect[3]);
     }
 
-    const motion::PrivateMotionGLLPackedPointLike_0x6DF33C *
+    const motion::detail::MeshPoint *
     pointsBeginLike_0x6DD56C(
         const PrivateMotionGLLRenderItemLike_0x6DE738 &item) {
-        return loadNativePointerLike_0x6DE738<
-            motion::PrivateMotionGLLPackedPointLike_0x6DF33C>(
-            item.pointsBegin);
+        return item.points.data();
     }
 
     std::size_t pointCountLike_0x6DD56C(
         const PrivateMotionGLLRenderItemLike_0x6DE738 &item) {
-        if(item.pointsEnd < item.pointsBegin) {
-            return 0;
-        }
-        return static_cast<std::size_t>(
-            (item.pointsEnd - item.pointsBegin) /
-            sizeof(motion::PrivateMotionGLLPackedPointLike_0x6DF33C));
+        return item.points.size();
     }
 
     unsigned int packedColorWithOpacityLike_0x6DD56C(
         const PrivateMotionGLLRenderItemLike_0x6DE738 &item) {
-        const auto rgb = item.color0 == 0xff808080u
+        const auto rgb = item.packedColors[0] == 0xff808080u
             ? 0x00ffffffu
-            : (item.color0 & 0x00ffffffu);
+            : (item.packedColors[0] & 0x00ffffffu);
         return rgb | ((item.opacity & 0xffu) << 24u);
     }
 
@@ -317,7 +284,7 @@ namespace {
         std::vector<tTVPPointD> out;
         const auto *points = pointsBeginLike_0x6DD56C(item);
         const auto count = pointCountLike_0x6DD56C(item);
-        if(!points || count < 16 || item.meshDivX < 2 || item.meshDivY < 2) {
+        if(!points || count < 16 || item.meshDivX < 1 || item.meshDivY < 1) {
             return out;
         }
         const auto cubicBlend = [](double p0, double p1, double p2,
@@ -343,14 +310,14 @@ namespace {
             };
         };
 
-        out.reserve(static_cast<std::size_t>(item.meshDivX) *
-                    static_cast<std::size_t>(item.meshDivY));
-        for(int y = 0; y < item.meshDivY; ++y) {
-            const double v =
-                static_cast<double>(y) / static_cast<double>(item.meshDivY - 1);
-            for(int x = 0; x < item.meshDivX; ++x) {
+        out.reserve(static_cast<std::size_t>(item.meshDivX + 1) *
+                    static_cast<std::size_t>(item.meshDivY + 1));
+        for(int y = 0; y <= item.meshDivY; ++y) {
+            const double v = static_cast<double>(y) /
+                static_cast<double>(item.meshDivY);
+            for(int x = 0; x <= item.meshDivX; ++x) {
                 const double u = static_cast<double>(x) /
-                    static_cast<double>(item.meshDivX - 1);
+                    static_cast<double>(item.meshDivX);
                 out.push_back(samplePatch(u, v));
             }
         }
@@ -386,30 +353,36 @@ namespace {
         const PrivateMotionGLLRenderItemLike_0x6DE738 &item,
         iTVPTexture2D *sourceTexture,
         const std::vector<tTVPPointD> &meshPoints) {
-        if(item.meshDivX < 2 || item.meshDivY < 2 ||
-           meshPoints.size() < static_cast<std::size_t>(item.meshDivX) *
-                   static_cast<std::size_t>(item.meshDivY)) {
+        if(item.meshDivX < 1 || item.meshDivY < 1) {
+            return false;
+        }
+        const auto pointColumns =
+            static_cast<std::size_t>(item.meshDivX + 1);
+        const auto pointRows = static_cast<std::size_t>(item.meshDivY + 1);
+        if(meshPoints.size() < pointColumns * pointRows) {
             return false;
         }
 
         const auto sourceRect = sourceRectLike_0x6DD56C(item);
         const double srcW = sourceRect.get_width();
         const double srcH = sourceRect.get_height();
-        for(int y = 0; y < item.meshDivY - 1; ++y) {
-            const double v0 =
-                static_cast<double>(y) / static_cast<double>(item.meshDivY - 1);
+        for(int y = 0; y < item.meshDivY; ++y) {
+            const double v0 = static_cast<double>(y) /
+                static_cast<double>(item.meshDivY);
             const double v1 = static_cast<double>(y + 1) /
-                static_cast<double>(item.meshDivY - 1);
-            for(int x = 0; x < item.meshDivX - 1; ++x) {
+                static_cast<double>(item.meshDivY);
+            for(int x = 0; x < item.meshDivX; ++x) {
                 const double u0 = static_cast<double>(x) /
-                    static_cast<double>(item.meshDivX - 1);
+                    static_cast<double>(item.meshDivX);
                 const double u1 = static_cast<double>(x + 1) /
-                    static_cast<double>(item.meshDivX - 1);
-                const auto &p0 = meshPoints[y * item.meshDivX + x];
-                const auto &p1 = meshPoints[y * item.meshDivX + x + 1];
-                const auto &p2 = meshPoints[(y + 1) * item.meshDivX + x];
-                const auto &p3 =
-                    meshPoints[(y + 1) * item.meshDivX + x + 1];
+                    static_cast<double>(item.meshDivX);
+                const auto row = static_cast<std::size_t>(y) * pointColumns;
+                const auto nextRow = row + pointColumns;
+                const auto column = static_cast<std::size_t>(x);
+                const auto &p0 = meshPoints[row + column];
+                const auto &p1 = meshPoints[row + column + 1];
+                const auto &p2 = meshPoints[nextRow + column];
+                const auto &p3 = meshPoints[nextRow + column + 1];
                 std::array<tTVPPointD, 6> dst{{p0, p1, p2, p1, p2, p3}};
                 std::array<tTVPPointD, 6> src{{
                     {sourceRect.left + std::floor(srcW * u0),
@@ -596,9 +569,7 @@ namespace {
             const double yOffset = static_cast<double>(y) - 0.5;
 
             for(const auto &item : _renderQueueLike_0x6DDBD8) {
-                auto *sourceTexture =
-                    loadNativePointerLike_0x6DE738<iTVPTexture2D>(
-                        item.sourceTexture);
+                auto *sourceTexture = item.sourceTexture;
                 if(!sourceTexture) {
                     break;
                 }
@@ -647,36 +618,16 @@ namespace {
         }
 
         void ClearRenderQueueLike_0x6DE738() {
-            // Player_RenderMotionFrame @ 0x6DE738 clears the deque rooted at
-            // native this+824 before appending the current frame's 88-byte
-            // render commands.
-            for(auto &item : _renderQueueLike_0x6DDBD8) {
-                cleanupRenderItemLike_0x6DDE80(item);
-            }
+            // Player_RenderMotionFrame @0x6DE738 clears the command deque;
+            // ordinary member destructors release textures and point vectors.
             _renderQueueLike_0x6DDBD8.clear();
         }
 
         void AppendRenderItemLike_0x6DE738(
-            const motion::PrivateMotionGLLRenderItemInputLike_0x6DE738 &input) {
-            PrivateMotionGLLRenderItemLike_0x6DE738 item;
-            struct OperatorDelete {
-                void operator()(void *ptr) const { operator delete(ptr); }
-            };
-            std::unique_ptr<void, OperatorDelete> pointsOwner;
-            if(!input.points.empty()) {
-                const auto bytes =
-                    input.points.size() *
-                    sizeof(motion::PrivateMotionGLLPackedPointLike_0x6DF33C);
-                auto *points = static_cast<
-                    motion::PrivateMotionGLLPackedPointLike_0x6DF33C *>(
-                    operator new(bytes));
-                std::memcpy(points, input.points.data(), bytes);
-                pointsOwner.reset(points);
-                item.pointsBegin = storeNativePointerLike_0x6DE738(points);
-                item.pointsEnd = storeNativePointerLike_0x6DE738(
-                    points + input.points.size());
-                item.pointsCapacity = item.pointsEnd;
-            }
+            const motion::PrivateMotionGLLRenderItemInputLike_0x6DE738 &input,
+            std::vector<motion::detail::MeshPoint> *pointsToSwap) {
+            _renderQueueLike_0x6DDBD8.emplace_back();
+            auto &item = _renderQueueLike_0x6DDBD8.back();
             item.opacity = static_cast<std::uint32_t>(input.opacity);
             item.stencilRefFromItem22 = input.stencilMaskRef;
             item.stencilRefFromItem23 = input.stencilWriteRef;
@@ -684,31 +635,22 @@ namespace {
             item.geometryType = input.geometryType;
             item.meshDivX = input.meshDivX;
             item.meshDivY = input.meshDivY;
-            item.color0 = input.packedColors[0];
-            item.color1 = input.packedColors[1];
-            item.color2And3 =
-                static_cast<std::uint64_t>(input.packedColors[2]) |
-                (static_cast<std::uint64_t>(input.packedColors[3]) << 32);
-            item.sourceRect0 =
-                static_cast<std::uint32_t>(input.sourceRect[0]) |
-                (static_cast<std::uint64_t>(
-                     static_cast<std::uint32_t>(input.sourceRect[1])) << 32);
-            item.sourceRect1 =
-                static_cast<std::uint32_t>(input.sourceRect[2]) |
-                (static_cast<std::uint64_t>(
-                     static_cast<std::uint32_t>(input.sourceRect[3])) << 32);
+            item.packedColors = input.packedColors;
+            item.sourceRect = input.sourceRect;
             if(input.sourceTexture) {
                 input.sourceTexture->AddRef();
-                item.sourceTexture =
-                    storeNativePointerLike_0x6DE738(input.sourceTexture);
+                item.sourceTexture = input.sourceTexture;
             }
             try {
-                _renderQueueLike_0x6DDBD8.push_back(item);
-                pointsOwner.release();
-            } catch(...) {
-                if(input.sourceTexture) {
-                    input.sourceTexture->Release();
+                if(input.geometryType == 0) {
+                    item.points.push_back(input.affinePoints[0]);
+                    item.points.push_back(input.affinePoints[1]);
+                    item.points.push_back(input.affinePoints[2]);
+                } else if(pointsToSwap) {
+                    item.points.swap(*pointsToSwap);
                 }
+            } catch(...) {
+                _renderQueueLike_0x6DDBD8.pop_back();
                 throw;
             }
         }
@@ -970,10 +912,11 @@ namespace motion {
 
     void appendPrivateMotionGLLRenderItemLike_0x6DE738(
         iTJSDispatch2 *object,
-        const PrivateMotionGLLRenderItemInputLike_0x6DE738 &item) {
+        const PrivateMotionGLLRenderItemInputLike_0x6DE738 &item,
+        std::vector<detail::MeshPoint> *pointsToSwap) {
         if(auto *layer = resolvePrivateMotionGLLNativeInternalLike_0x6DE24C(
                object)) {
-            layer->AppendRenderItemLike_0x6DE738(item);
+            layer->AppendRenderItemLike_0x6DE738(item, pointsToSwap);
         }
     }
 

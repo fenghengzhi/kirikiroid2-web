@@ -170,10 +170,13 @@ namespace PSB {
                 }
                 break;
             case 0x21: {
-                const std::string key = ttstr(membername).AsStdString();
+                // sub_597854 @ 0x59795C constructs exactly one narrow holder;
+                // the same Buf feeds both packed dictionary lookups and the
+                // holder is destroyed on both the hit and miss paths.
+                tTJSNarrowStringHolder key(membername);
                 std::uint32_t nameIndex;
                 if(detail::FindNameIndex_guess(
-                       value_.GetOwner()->GetHeader()->names, key.c_str(),
+                       value_.GetOwner()->GetHeader()->names, key.Buf,
                        nameIndex)) {
                     std::uint32_t valueOffset;
                     if(detail::FindDictionaryValueOffset_guess(

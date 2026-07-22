@@ -6,6 +6,11 @@
 >
 > **方法论**：以 `disasm` 为准，**不要信 hex-rays `decompile` 推断的偏移**（buildNodeTree 的 decompile 把
 > node 与 slot base 混淆，导致首版文档出错）。
+>
+> **2026-07-22 lifecycle correction**：`node+2024/+2048/+2072` 是三个相互
+> 独立的 `std::vector<MeshPoint>` owner。`MotionNode_copy @ 0x6F468C` 逐个
+> CopyAssign，`MotionNode_destroy_guess @ 0x6F4C8C` 逆序析构。旧的“两条
+> vector / previous-frame alias”模型已被这组 copy+dtor 证据否定。
 
 ---
 
@@ -85,10 +90,18 @@
 | 1560 | 0x618 | double | **slantX** | `STR D9,[X19,#0x618]` @0x699f54; `STR D0,[X23,#0x618]` @0x6c0934 |
 | 1568 | 0x620 | double | **slantY** | `STR D9,[X19,#0x620]` @0x699fd0; `STR D1,[X23,#0x620]` @0x6c0938 |
 | 1576 | 0x628 | dword | **opacity**（0..255 整数） | `STR W9,[X19,#0x628]` @0x69a054; `STR W8,[X23,#0x628]` @0x6c09f4 |
+| 1904 | 0x770 | qword-ptr | **持久 PreparedRenderItem 指针**；`sub_6C2334` 按需分配并跨帧复用 | `sub_6C2334 @0x6C2334` ordinary/wrapper allocation + population；`MotionNode_destroy_guess @0x6F4C8C` 删除 |
+| 1944 | 0x798 | byte | **drawnThisFrame**；每轮 build 前清 0，成功进入 Path A mainList 后置 1；type12 post-pass 读取 | `sub_6C2334 @0x6C2334` main selection / type12 secondary loop |
+| 1952 | 0x7A0 | qword-ptr | **visibleAncestor node 指针**；item population 取其 `+1904` 写 item ancestor chain | `sub_6BD8DC @0x6BD8DC` 写；`sub_6C2334 @0x6C2334` 读 |
+| 1960 | 0x7A8 | byte | **drawFlag**（Path B 产物；不是普通 Path A nodeType-mask 入列门） | `sub_6BD8DC @0x6BD8DC` 写；`sub_6C2334` 写 item+19/处理 type3 wrapper 时读 |
 | 1961 | 0x7A9 | byte | **isLinkedChild 标志**（buildNodeTree 把子节点接入父 list 后置 1） | `*(v19+1961)=1` @0x6b55a8 (buildNodeTree) |
 | **1996** | **0x7CC** | int | **findSource gate**（advanceNodeFrames 读后分支决定是否调 findSource） | `LDR W8,[X20,#0x7CC]; CBNZ loc_…findSource` @0x6b7fec (advNodeFrames)。字节确认 0x6b7fec=`08 CE 40 B9`(LDR W,#0x7CC) |
-| 2000 | 0x7D0 | dword | **type1-pos-mode gate**（==1 → sub_6996E8 / sub_69AC4C pos 路径） | `LDR W9,[X19,#0x7D0]; CMP#1` @0x699be4/0x69a030 (evalTL) |
-| 2024 | 0x7E8 | (struct) | pos-interp 目标块（sub_6996E8/sub_69AC4C dst） | `ADD X0,X19,#0x7E8` @0x699c04; `ADD X1,X19,#0x7E8` @0x69a088 (evalTL) |
+| 2000 | 0x7D0 | dword | **meshType / meshTransform mode**；`==1` 选择 patch 插值/变换路径 | `LDR W9,[X19,#0x7D0]; CMP#1` @0x699be4/0x69a030 (evalTL)；`sub_6C2334` 复制到 item+280 |
+| 2012 | 0x7DC | dword | **composite mesh 横向 cell count**；对应点列数为 `count+1` | `sub_6BC4F0 @0x6BCF54..0x6BCF6C` 写并原样传 `sub_6BAF68`；`sub_6C2334 @0x6C2688` 复制到 item+272 |
+| 2016 | 0x7E0 | dword | **composite mesh 纵向 cell count**；对应点行数为 `count+1` | `sub_6BC4F0 @0x6BCF58..0x6BCF6C` 写并原样传 `sub_6BAF68`；`sub_6C2334 @0x6C2690` 复制到 item+276 |
+| 2024 | 0x7E8 | 24B `std::vector<MeshPoint>` | **raw 4x4 Bezier control patch owner** | `MotionNode_copy @0x6F468C` 第一条 vector copy；`Player_updateLayers @0x6BC4F0` 维护；`sub_6C2334` 复制到 item+376 |
+| 2048 | 0x800 | 24B `std::vector<MeshPoint>` | **composite/deformed mesh grid owner**；点数 `(node+2012+1)*(node+2016+1)`、row stride `node+2012+1` | `MotionNode_copy @0x6F468C` 第二条 vector copy；`sub_6BAF68 @0x6BAF68` 构建；`sub_6C2334` 每次复制到 item+344 |
+| 2072 | 0x818 | 24B `std::vector<MeshPoint>` | **own-affine-transformed patch owner** | `MotionNode_copy @0x6F468C` 第三条 vector copy；`Player_updateLayers @0x6BC4F0` 写入；`sub_6C2334` type1 分支复制到 item+400 |
 | 2224..2280 | 0x8B0..0x8E8 | double×8 | type4 通道结果 | `STR X9,[X19,#0x8B0..0x8E8]` @0x699c34; `STR D9,[X19,#0x8B0..]` @0x69a144 (evalTL) |
 | 2288 | 0x8F0 | double | type4 通道结果末项 | `ADD X9,X19,#0x8F0` @0x699c74; `STR D9,[X19,#0x8F0]` @0x69a3d0 |
 | 2368 | 0x940 | double | type5 通道结果 | `ADD X9,X19,#0x940` @0x699d34; `STR D9,[X19,#0x940]` @0x69a478 |
@@ -98,6 +111,20 @@
 
 > anchor per-channel 循环（@0x6c0ad0..0x6c0c58）：颜色字节游标基址=node+0x67(=103)，缩放系数基址=node+0x9A8，
 > byte 步长 4 / double 步长 0x20，循环 1 或 4 次。颜色字节回写到 node+0x64..0x70 区。
+
+### 2.1 三个 mesh vector 的源码级结论
+
+1. `MotionNode_copy @ 0x6F468C` 在 `0x6F47F4..0x6F480C` 连续复制
+   `+2024`、`+2048`、`+2072` 三个 vector；这证明它们是三个独立 owner，
+   不是 begin/end/cap 三指针，也不是 current/previous 两帧别名。
+2. `MotionNode_destroy_guess @ 0x6F4C8C` 在
+   `0x6F4CFC..0x6F4D1C` 以 `+2072 → +2048 → +2024` 的逆声明顺序析构。
+3. `Player_updateLayers @ 0x6BC4F0` 保留 `+2024` raw patch，构建
+   `+2048` composite grid，并写 `+2072` own-affine-transformed patch。
+4. `sub_6C2334 @ 0x6C2334` 分别把它们送到 item
+   `+376/+344/+400`；因此本地应声明三个普通
+   `std::vector<MeshPoint>` 成员并复刻其复制/清空/析构顺序。这里的 ARM64
+   偏移只是分析坐标，不要求 wasm32 对象具有同一字节布局。
 
 ---
 

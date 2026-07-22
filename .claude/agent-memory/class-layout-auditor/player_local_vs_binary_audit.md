@@ -18,7 +18,7 @@ metadata:
 ## ✅ 对齐项
 - 无 vtable / 无 virtual / 无基类(本地 `class Player {` 无继承; 二进制 ctor `*a1=a1` 占位,NCB 走 callback)。本地 ~Player 非 virtual ✅。
 - 生命周期 raw ptr: EmoteEngine `_player = new Player` (EmoteEngine.cpp:40) + `delete _player`(:144); 子 Player `new Player`(NodeTree.cpp:238, PlayerUpdateParticles.cpp:447) — 对齐二进制 new(0x568)+手动 delete,无 unique_ptr ✅。
-- 标量默认值对齐: _priorDraw=1.5 / _meshDiv*=1.0 / _outsideFactor=1.0 / _pixelateDivision=100 / _colorWeightPacked=0xFF808080 / bounds ±DBL_MAX。
+- 标量默认值对齐: _priorDraw=false（Player+1096 bool） / _outsideFactor=1.5（+1160） / _speedMul=1.0（+1168） / _meshDivisionRatio=1.0（+1176） / _pixelateDivision=100 / _colorWeightPacked=0xFF808080 / bounds ±DBL_MAX。
 - ctor 末尾 push root MotionNode 进 deque ✅(本地 _nodes.emplace_back())。
 
 ## Top5 未对齐
@@ -29,7 +29,7 @@ metadata:
 5. ctor 签名 `(ResourceManager rm, Player* parent)` vs 二进制 `(iTJSDispatch2* resourceManager)` 单参 — 第一参 native 对象非 dispatch, 多 parent 参
 
 ## 已知字段碰撞/phantom
-见 [[player-field-collisions]]: +480/+1120/+481/+1099/+1156 五处碰撞; _cameraFOV double vs 二进制 +1100 byte 不匹配。
+见 [[player-field-collisions]]: +480/+1120/+481/+1099/+1156 五处碰撞；相机字段的当前问题是本地 `_cameraFov=0.2` 与 NCB 使用的 `_cameraFOV=60.0` 双轨，而不是把 +1100 字节解释为 cameraFOV。
 本地额外 port-invented 字段(无二进制偏移): _disabledSelectorTargets/_pendingEvents/_perNodeEvalData/_layerIdsByName 等渲染宿主状态。
 
 参见 [[player-1384b-flat-spec]] [[player-container-layout]] [[player-ctor-dtor-lifecycle]] [[player-field-collisions]]

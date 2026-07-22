@@ -73,79 +73,46 @@ namespace motion::detail {
         };
     };
 
-    // A9: render-item structs lifted from PlayerRuntime's inner scope to
-    // namespace detail:: so Player can hold the corresponding vectors / map
-    // without leaking PlayerRuntime's nested type surface.
+    struct PreparedRenderItem;
 
-    // Native render-item fields from the anonymous 0x1B0 item built by
-    // libkrkr2.so 0x6C2334 and consumed in-place by 0x6C4E28 / 0x6C7440.
-    // These fields intentionally keep the native write lifecycle: +21 and
-    // +216..228 are not blanket-cleared every frame.
-    struct NativeRenderItemFields {
-        bool rawFlag16 = false; // original item +16 = node+201
-        bool skipFlag0 = false; // original render item +17 (0x6C2334 / 0x6C7440)
-        bool skipFlag1 = false; // original render item +18 (0x6C2334 / 0x6C7440)
-        bool drawFlag = false;  // original render item +19
-        bool rawFlag20 = false; // original item +20, set by sub_6C4E28 requireLayerId path
-        bool rawFlag21 = false; // original item +21, drawable clip valid after sub_6C4E28
-        std::uint8_t stencilMaskRef = 0; // original item +22
-        std::uint8_t stencilWriteRef = 0; // original item +23
-        std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f}; // item+184..196
-        std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f}; // item+200..212
-        std::array<int, 4> clipRect{0, 0, 0, 0}; // item+216..228
-        std::array<int, 4> dirtyRect{0, 0, 0, 0};
-        int opacity = 255; // item+232
-        // item+244 in libkrkr2.so sub_6C2334 @ 0x6C2A90 — stencil/composite
-        // flags copied from node.stencilType; consumed by sub_6C7440 alpha
-        // mask path `(item+244 & 4)` / `(item+244 & 3)==1`.
-        int stencilComposite = 0;
-    };
+    // Source-level owning core reconstructed from sub_6C2334@0x6C2334 and
+    // sub_6F4DFC@0x6F4DFC. Declaration order is intentional: ordinary C++
+    // reverse destruction yields mesh vectors -> variants -> command key ->
+    // child vector -> command source -> owner label. Numeric ARM64 offsets are
+    // evidence coordinates only and live in analysis/, not in this type.
+    struct NativePreparedRenderItemState {
+        ttstr ownerLabel;
+        ttstr commandSrc;
+        std::vector<PreparedRenderItem *> childItems;
 
-    struct RenderItemNativeFieldLifetime {
+        bool rawFlag16 = false;
+        bool skipFlag0 = false;
+        bool skipFlag1 = false;
+        bool drawFlag = false;
         bool rawFlag20 = false;
         bool rawFlag21 = false;
-        std::array<int, 4> clipRect{0, 0, 0, 0};
-        std::array<int, 4> dirtyRect{0, 0, 0, 0};
-        std::array<float, 8> localCorners{};
-        std::vector<MeshPoint> localMeshPoints;
-    };
-
-    struct PreparedRenderItem : NativeRenderItemFields {
-        int nodeIndex = 0;
-        // sub_6C2334 @ 0x6C2334 keeps render items attached to their actual
-        // MotionNode (binary node+1904) across recursive child-Player builds.
-        // nodeIndex is owner-local and must never be reinterpreted through the
-        // parent Player after child items are merged into its render list.
-        const MotionNode *nativeNode = nullptr;
-        tTJSVariant srcRef;
-        std::string sourceKey;
-        // Borrowed from the node/source-cache raw resource path.
-        iTVPTexture2D *sourceTexture = nullptr;
-        std::array<int, 4> sourceRect{0, 0, 0, 0};
-        bool hasOwnSource = false;
-        bool groupOnly = false;
-        bool topLevelList = true;
-        bool groupList = false;
-        bool selfSeedChildList = false;
-        // A9: nativeLifetimeOwner moves from PlayerRuntime* to Player* so the
-        // lifetime owner survives the eventual A10 PlayerRuntime removal.
-        motion::Player *nativeLifetimeOwner = nullptr;
-        int nativeLifetimeKey = 0;
+        std::uint8_t stencilMaskRef = 0;
+        std::uint8_t stencilWriteRef = 0;
+        int layerId1 = 0;
+        int layerId2 = 0;
         double sortKey = 0.0;
-        // sub_6C2334 @0x6C2334 stores the script command transform separately
-        // from item+136 render corners.  getCommandList @0x6D3A4C serializes
-        // these exact item+64/+72..112 fields; they must not be reconstructed
-        // from already transformed geometry.
         std::array<double, 3> commandCoord{0.0, 0.0, 0.0};
         std::array<double, 4> commandMatrix{1.0, 0.0, 0.0, 1.0};
         int blendMode = 16;
-        tTJSVariant contextVariant; // original item +248 (player+1012 copy)
         std::array<float, 8> corners{};
-        std::array<float, 8> localCorners{};
         std::array<std::uint32_t, 4> packedColors{
             0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
         };
-        bool hasViewport = false;
+        std::array<float, 4> paintBox{0.f, 0.f, 0.f, 0.f};
+        std::array<float, 4> viewport{1.f, 1.f, -1.f, -1.f};
+        std::array<float, 4> clipRect{0.f, 0.f, 0.f, 0.f};
+        std::array<int, 4> dirtyRect{0, 0, 0, 0};
+        int opacity = 255;
+        int stencilComposite = 0;
+
+        ttstr commandKey;
+        const MotionNode *nativeNode = nullptr;
+        PreparedRenderItem *parentItem = nullptr;
         int coordinateMode = 0;
         int objTriPriority = 0;
         double originX = 0.0;
@@ -154,22 +121,45 @@ namespace motion::detail {
         int meshDivX = 0;
         int meshDivY = 0;
         int meshType = 0;
-        int commandPatchDivision = 0; // item+368
-        std::vector<MeshPoint> commandCompositeMeshPoints; // item+344
-        std::vector<MeshPoint> commandBezierPatchPoints;   // item+376
-        std::vector<MeshPoint> meshPoints;                  // item+400
+        tTJSVariant commandVariant;
+        tTJSVariant leafLayer;
+        tTJSVariant composedLayer;
+        std::vector<MeshPoint> commandCompositeMeshPoints;
+        int commandPatchDivision = 0;
+        std::vector<MeshPoint> commandBezierPatchPoints;
+        std::vector<MeshPoint> meshPoints;
+        int renderLayerId = 0;
+    };
+
+    // Web rendering needs extra cache and diagnostic state not present in the
+    // Android object. Keeping it in the derived layer makes all platform
+    // owners die before the uninterrupted native RAII chain above.
+    struct PreparedRenderItem final : NativePreparedRenderItemState {
+        int nodeIndex = 0;
+        tTJSVariant sourceObject;
+        std::string sourceKey;
+        iTVPTexture2D *sourceTexture = nullptr; // borrowed
+        std::array<int, 4> sourceRect{0, 0, 0, 0};
+        bool hasOwnSource = false;
+        std::array<float, 8> localCorners{};
         std::vector<MeshPoint> localMeshPoints;
-        int layerId = 0;
-        int layerId2 = 0;
-        PreparedRenderItem *parentItem = nullptr; // semantic mapping of item +264
-        std::vector<PreparedRenderItem *> childItems; // semantic mapping of item +24
-        tTJSVariant leafLayer;      // item+304 variant
-        tTJSVariant composedLayer;  // item+324 variant
+        bool hasViewport = false;
         std::array<int, 4> builtRect{0, 0, 0, 0};
         bool leafBuilt = false;
         bool composedBuilt = false;
         bool executedDirect = false;
+
+        PreparedRenderItem() = default;
+        PreparedRenderItem(const PreparedRenderItem &) = delete;
+        PreparedRenderItem &operator=(const PreparedRenderItem &) = delete;
+        PreparedRenderItem(PreparedRenderItem &&) = delete;
+        PreparedRenderItem &operator=(PreparedRenderItem &&) = delete;
     };
+
+    // sub_6D5164@0x6D5164 callers construct two independent vectors on their
+    // own stack and thread them through the build/render chain.  They borrow
+    // the persistent items owned by MotionNode; Player does not retain them.
+    using PreparedRenderItemList = std::vector<PreparedRenderItem *>;
 
     // Faithful 1:1 element of libkrkr2.so player+936/944's
     // std::vector<DeadChildMotionRenderItem> (44-byte stride element).
@@ -190,8 +180,7 @@ namespace motion::detail {
     // Player_particleStepChildren @0x6C1A00), so it stays empty -> empty and
     // is observably inert. It is reproduced here purely for 1:1 structural
     // fidelity (the live draw-time render list is the SEPARATE
-    // _preparedRenderItems, which corresponds to the binary's per-draw temp
-    // vector built by sub_6C2334, NOT this buffer).
+    // caller-stack main/aux vectors built by sub_6C2334, NOT this buffer).
     //
     // Plain C++ POD with two tTJSVariant fields: a default std::vector of this
     // type gives the binary's ctor (player+936 zero-init at 0x6CEF1C, OWORD
@@ -233,11 +222,17 @@ namespace motion::detail {
     std::string narrow(const ttstr &value);
     ttstr widen(const std::string &value);
 
+    struct TJSArrayWithItems_guess {
+        tTJSVariant value;
+        std::deque<tTJSVariant> *items;
+    };
+
+    [[nodiscard]] TJSArrayWithItems_guess
+    createTJSArrayWithItems_guess(); // sub_704CB8 @ 0x704CB8
+
     tTJSVariant makeArray(const std::vector<tTJSVariant> &items);
     tTJSVariant makeDictionary(
         const std::vector<std::pair<std::string, tTJSVariant>> &entries);
-    std::vector<tTJSVariant> stringsToVariants(
-        const std::vector<std::string> &values);
 
     bool logoChainTraceEnabled();
     bool logoChainTraceEnabledForPath(const std::string &motionPath);

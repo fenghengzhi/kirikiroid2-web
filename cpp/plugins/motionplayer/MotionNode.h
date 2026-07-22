@@ -34,8 +34,16 @@ namespace motion {
 namespace motion::detail {
 
     struct MotionParameterEntry;
+    struct PreparedRenderItem;
 
     struct MotionNode {
+        MotionNode() = default;
+        ~MotionNode();
+        // MotionNode_copy@0x6F468C deliberately preserves the destination's
+        // persistent render-item owner while assigning every other member.
+        MotionNode(const MotionNode &) = delete;
+        MotionNode &operator=(const MotionNode &);
+
         // Identity (from PSB, set once during tree build)
         int index = 0;
         int parentIndex = -1;          // node+36
@@ -70,8 +78,8 @@ namespace motion::detail {
         int meshType = 0;             // "meshTransform" from PSB (node+2000)
         int meshFlags = 0;            // "meshSyncChildMask" from PSB (node+2004)
         int meshDivision = 0;         // "meshDivision" from PSB (node+2008)
-        int meshDivX = 0;             // node+2012: computed grid width
-        int meshDivY = 0;             // node+2016: computed grid height
+        int meshDivX = 0;             // node+2012: horizontal cell count
+        int meshDivY = 0;             // node+2016: vertical cell count
         int objTriPriority = 0;       // node+2136: "objTriPriority" for type==0
         // Aligned to libkrkr2.so Player_initNodeFields (0x6B3C78):
         // node+8 points to an entry selected from the player's 56-byte
@@ -97,12 +105,16 @@ namespace motion::detail {
         // backed the invented markNodePayloadDirtyFromState node+44 dirtying
         // channel (no libkrkr2.so counterpart; see PlayerUpdateLayerEval.cpp).
 
-        // Mesh control points (node+2024..2032 in libkrkr2.so).
-        // For meshType=1: 16 × 8B points (Bezier patch 4×4 control grid).
-        // For meshType=2: (divX+1)*(divY+1) points (grid mesh).
-        // Built by sub_6BC4F0 vertex computation.
-        std::vector<MeshPoint> meshControlPoints;      // node+2024
-        std::vector<MeshPoint> meshControlPointsPrev;  // node+2048 (previous frame)
+        // Three independent std::vector<MeshPoint> owners copied by
+        // MotionNode_copy@0x6F468C (0x6F47F4..0x6F480C) and destroyed in
+        // reverse order by MotionNode_destroy_guess@0x6F4C8C
+        // (0x6F4CFC..0x6F4D1C).  Player_updateLayers@0x6BC4F0 keeps the raw
+        // 4x4 patch at +2024, builds a composite grid at +2048, and writes the
+        // own-affine-transformed 4x4 patch at +2072; none is a "previous
+        // frame" alias of another.
+        std::vector<MeshPoint> meshControlPoints;             // node+2024
+        std::vector<MeshPoint> compositeMeshPoints;           // node+2048
+        std::vector<MeshPoint> transformedMeshControlPoints;  // node+2072
 
         // Raw TJS owners copied directly from the layer dispatch by
         // Player_initNodeFields @0x6B3C78. These mirror the source-level
@@ -308,6 +320,12 @@ namespace motion::detail {
         double prevPosX = 0.0;
         double prevPosY = 0.0;
         double prevPosZ = 0.0;
+
+        // MotionNode_destroy_guess @0x6F4C8C owns and deletes node+1904.
+        // sub_6C2334 @0x6C32D0 reuses this raw render item across calls and
+        // allocates it only when the pointer is null.  The caller's main/aux
+        // vectors contain borrowed pointers to this object; they never own it.
+        PreparedRenderItem *preparedRenderItem = nullptr;
 
         // Path B visibility flag (node+1960), written by sub_6BD8DC @
         // 0x6BD958. Consumed by: the visibleAncestor chain walk in the

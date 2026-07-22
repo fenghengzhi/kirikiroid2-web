@@ -14,7 +14,7 @@ sub_6C2334 @ 0x6C2334 (6KB, recursive, 3 self-calls). Called from sub_6D5164 (so
 - +52 stencilType: read only (0x6C2A88, 0x6C3618), propagated into RenderNode+244
 - +1960 drawFlag: read only (0x6C328C, 0x6C272C, 0x6C2AAC, 0x6C361C, 0x6C25D0)
 - +28 nodeType: gate-key
-- +1092 completionType (on v6=Player): switches mask 0x1441↔0x1449, 0x1089↔0x1091
+- +1092 preview (on v6=Player): switches mask 0x1441↔0x1449, 0x1089↔0x1091; completionType is the separate +1144 int
 
 **What it does NOT write**:
 - +52 stencilType: NEVER written. IDA insn_query for STR #52 within 0x6C2334..0x6C3B04 → 0 matches
@@ -22,7 +22,7 @@ sub_6C2334 @ 0x6C2334 (6KB, recursive, 3 self-calls). Called from sub_6D5164 (so
 
 **Its own visibility gate (line 759, 0x6C32C0)**:
 ```
-mask = completionType ? 0x1449 : 0x1441    // bits: {0,6,10,12} or {0,3,6,10,12}
+mask = preview ? 0x1449 : 0x1441           // bits: {0,6,10,12} or {0,3,6,10,12}
 if ((1 << nodeType) & mask) == 0: continue
 ```
 Contrast with sub_6BD8DC drawFlag gate: 0x1801/0x1809 = bits {0,11,12} or {0,3,11,12}.

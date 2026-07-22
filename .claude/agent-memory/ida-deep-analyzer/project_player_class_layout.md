@@ -26,10 +26,10 @@ Key offset groups:
   context variant; +1032/+1052: outline/meshline ttstr; +1072: motion `tag`
   frame-array variant (the earlier stealthMotion/ttstr label was disproven by
   initNonEmoteMotion and skipToSync raw-dispatch accesses)
-- +1092..1100: 9 independent 1-byte bool fields, NOT a C bitfield. Each has its own TJS getter/setter. Order: completionType(+1092), speed(+1093), cameraActive(+1094), stereovisionActive(+1095), preview(+1096), colorWeight(+1097), syncWaiting(+1098), playing(+1099), cameraAlive(+1100). See project_player_completionType.md for full byte-verified layout.
+- +1092..1100: 9 independent 1-byte bool fields, NOT a C bitfield. Order: preview(+1092), syncActive(+1093), cameraActive(+1094), stereovisionActive(+1095), priorDraw(+1096), independentLayerInherit(+1097), syncWaiting(+1098), playing(+1099), cameraAlive(+1100). See project_player_completionType.md and the byte-verified NCB bindings.
 - +1120: frameTickCount, +1128: frameLastTime, +1136: frameLoopTime
-- +1144: project(int), +1148: maskMode(int), +1156: parentColorPacked(0xFF808080)
-- +1160: priorDraw, +1168: meshDivisionRatio(1.0), +1176: outsideFactor
+- +1144: completionType(int), +1148: maskMode(int), +1156: colorWeightPacked / inherited parent color (0xFF808080)
+- +1160: outsideFactor(1.5), +1168: speed(1.0), +1176: meshDivisionRatio(1.0)
 
 Time conversion: internal=frames@60fps, TJS=milliseconds. factor=60/1000.
 

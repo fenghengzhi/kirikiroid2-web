@@ -13,7 +13,7 @@ metadata:
 ## 二进制地址 ↔ 本地映射(本轮反编译确认)
 - 0x6C2334 build(item alloc 0x1B0=432B) — grep 负证: 内部 `+424`/`requireLayer`/`sub_6C4E28` 全 0 hits → item+424/item+20 **不在 build 写**(证实 P1-I3)
 - 0x6C4E28 emitRenderItem_requireLayer — EXECUTE 阶段; LABEL_28 @0x6c5234 写 item+424=layerId, @0x6c5240 闩 item+20=1。Loop A(mainList)+Loop B(composed)
-- 0x6C7440 renderToCanvas — top-level skip gate @0x6c75c8 `item+17||item+16||!item+232`; preview gate @0x6c7630 `player+1096 && !item+18`
+- 0x6C7440 renderToCanvas — top-level skip gate @0x6c75c8 `item+17||item+16||!item+232`; priorDraw gate @0x6c7630 `player+1096 && !item+18` (`Player+1096` 的 NCB 名为 `priorDraw`，不是 preview)
 - 0x6C9CA8 accurate SLA — leaf 用 item+52(sub_6C6B48); composite 用 item+56 调 acquireLayerById @0x6cab64; 三 layer-id 独立(item+52/+56/+424)
 - 0x6CBCE4 = **Player_acquireLayerById**(已 rename, was buildRenderTree_guess) — std::map<int,Layer> Rb_tree on a1+120 key node+32; L"Layer"(2 args=a1,a1+20), absolute=node160+node164, hitThreshold=256, cache node+40。从 sub_6C9CA8 用 item+56 调用证实身份(起点文档 I8 落实)
 - 0x6DCD0C = **SLA_orderedMap_insert_0x6DCD0C**(已 rename) — operator new(0xD0=208B), node+32=key, _Rb_tree_insert_and_rebalance = std::map<int,node>

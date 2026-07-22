@@ -27,6 +27,30 @@ namespace {
         };
     }
 
+    // sub_6C2334 @0x6C2384..0x6C245C and 0x6C34A4..0x6C3588:
+    // 0xFF808080 is the identity weight. RGB channels use the native /128
+    // weight domain and saturate to 255, while alpha uses ordinary /255
+    // multiplication (the compiler emits the 0x80808081 high-word sequence).
+    inline std::uint32_t multiplyPackedColorWeightsLike_0x6C2334(
+        std::uint32_t lhs, std::uint32_t rhs) {
+        constexpr std::uint32_t identity = 0xFF808080u;
+        if(lhs == identity) return rhs;
+        if(rhs == identity) return lhs;
+
+        std::uint32_t result = 0;
+        for(unsigned shift = 0; shift != 24; shift += 8) {
+            const auto lhsChannel = (lhs >> shift) & 0xFFu;
+            const auto rhsChannel = (rhs >> shift) & 0xFFu;
+            const auto product = std::min<std::uint32_t>(
+                255u, (lhsChannel * rhsChannel) >> 7);
+            result |= product << shift;
+        }
+        const auto alpha =
+            (((lhs >> 24) & 0xFFu) * ((rhs >> 24) & 0xFFu)) / 255u;
+        result |= alpha << 24;
+        return result;
+    }
+
 } // anonymous namespace
 
 namespace motion {
@@ -68,11 +92,41 @@ namespace motion {
             if(maxY > _boundsMaxY) _boundsMaxY = maxY;
         };
 
-        for(auto &node : _nodes) {
-            node.bounds[0] = 1.0f;
-            node.bounds[1] = 1.0f;
-            node.bounds[2] = -1.0f;
-            node.bounds[3] = -1.0f;
+        for(size_t nodeIndex = 1; nodeIndex < _nodes.size(); ++nodeIndex) {
+            auto &node = _nodes[nodeIndex];
+
+            // 0x6C3F08..0x6C4018: particle children contribute before the
+            // active-slot gate and the ordinary source path.
+            if(!_preview && node.nodeType == 4) {
+                const int particleCount = node.getParticleCount();
+                for(int particleIndex = 0; particleIndex < particleCount;
+                    ++particleIndex) {
+                    auto *child = node.getParticleChild(particleIndex);
+                    child->calcBounds();
+                    mergeBounds(child->_boundsMinX, child->_boundsMinY,
+                                child->_boundsMaxX, child->_boundsMaxY);
+                }
+            }
+
+            // 0x6C4028: the type-3 and ordinary paths run only while the
+            // active clip slot's +344 byte is zero.
+            if(node.activeSlot().done) {
+                continue;
+            }
+
+            // 0x6C4040..0x6C4278: a non-preview motion node copies its child
+            // Player bounds into node+1888 and merges them directly.
+            if(!_preview && node.nodeType == 3) {
+                auto *child = node.getChildPlayer();
+                child->calcBounds();
+                node.bounds[0] = static_cast<float>(child->_boundsMinX);
+                node.bounds[1] = static_cast<float>(child->_boundsMinY);
+                node.bounds[2] = static_cast<float>(child->_boundsMaxX);
+                node.bounds[3] = static_cast<float>(child->_boundsMaxY);
+                mergeBounds(node.bounds[0], node.bounds[1], node.bounds[2],
+                            node.bounds[3]);
+                continue;
+            }
 
             // Aligned to Player_calcBounds @ 0x6C40B0 (libkrkr2.so):
             //   v30 = 1 << nodeType
@@ -83,12 +137,6 @@ namespace motion {
             // NOT drawnThisFrame (node+1944, set by sub_6C2334 but not
             // read here). Port's previous drawFlag/drawnThisFrame reads
             // were both proxies; this is the authoritative gate.
-            //
-            // NOTE: libkrkr2's calcBounds also has (a) a slot-done byte
-            // gate at node+536*slot+344 and (b) recursive handling for
-            // nodeType=3 sub-players (0x6C4048) and nodeType=4 particles
-            // (0x6C3F08). Port's simplified structure doesn't model those
-            // yet.
             const int visBitmaskCalc =
                 _preview ? 0x1449 : 0x1441;  // binary calcBounds gates on +1092 (preview)
             if(((1 << node.nodeType) & visBitmaskCalc) == 0 ||
@@ -114,17 +162,29 @@ namespace motion {
                 if(y > maxY) maxY = y;
             };
 
-            if(!node.meshControlPoints.empty()) {
-                for(const auto &point : node.meshControlPoints) {
+            node.bounds[0] = std::numeric_limits<float>::max();
+            node.bounds[1] = std::numeric_limits<float>::max();
+            node.bounds[2] = -std::numeric_limits<float>::max();
+            node.bounds[3] = -std::numeric_limits<float>::max();
+
+            // 0x6C40BC..0x6C43A4: +2048 has priority; otherwise scan the
+            // exactly-16-point +2072 patch; only two empty derived vectors
+            // fall back to the four node+1856 corners.
+            if(!node.compositeMeshPoints.empty()) {
+                for(const auto &point : node.compositeMeshPoints) {
                     extendPoint(point.x, point.y);
                 }
-            } else if(node.source.width > 0.0 || node.source.height > 0.0) {
+            } else if(!node.transformedMeshControlPoints.empty()) {
+                for(size_t pointIndex = 0; pointIndex < 16; ++pointIndex) {
+                    const auto &point =
+                        node.transformedMeshControlPoints[pointIndex];
+                    extendPoint(point.x, point.y);
+                }
+            } else {
                 for(int ci = 0; ci < 4; ++ci) {
                     extendPoint(node.vertices[ci * 2],
                                 node.vertices[ci * 2 + 1]);
                 }
-            } else {
-                extendPoint(node.vertexPosX, node.vertexPosY);
             }
 
             if(!haveNodeBounds) {
@@ -176,32 +236,6 @@ namespace motion {
             }
         }
 
-        for(size_t ni = 1; ni < _nodes.size(); ++ni) {
-            auto &node = _nodes[ni];
-            if(node.nodeType == 3) {
-                if(auto *child = node.getChildPlayer()) {
-                    child->calcBounds();
-                    mergeBounds(child->_boundsMinX, child->_boundsMinY,
-                                child->_boundsMaxX, child->_boundsMaxY);
-                }
-            } else if(node.nodeType == 4) {
-                const int particleCount = node.getParticleCount();
-                for(int pi = 0; pi < particleCount; ++pi) {
-                    if(auto *child = node.getParticleChild(pi)) {
-                        child->calcBounds();
-                        mergeBounds(child->_boundsMinX, child->_boundsMinY,
-                                    child->_boundsMaxX, child->_boundsMaxY);
-                    }
-                }
-            }
-        }
-
-        if(!haveBounds) {
-            _boundsMinX = 0.0;
-            _boundsMinY = 0.0;
-            _boundsMaxX = 0.0;
-            _boundsMaxY = 0.0;
-        }
         detail::logoChainTraceLogf(
             motionPath, "calcBounds.player", "0x6C3D04", _clampedEvalTime,
             "playerBounds=({:.3f},{:.3f},{:.3f},{:.3f}) haveBounds={}",
@@ -209,7 +243,12 @@ namespace motion {
             haveBounds ? 1 : 0);
     }
 
-    void Player::appendPreparedRenderItems() {
+    void Player::appendPreparedRenderItems(
+        std::vector<detail::PreparedRenderItem *> &mainList,
+        std::vector<detail::PreparedRenderItem *> &auxList,
+        std::uint32_t inheritedColor,
+        bool inheritedDrawFlag19,
+        bool inheritedFlag18) {
         // sub_6D5164 @ 0x6D5178: the first instruction of the libkrkr2.so
         // build+sort wrapper is `if (!*(DWORD*)(player+544)) return 0;`.
         // _motionContentVariant.Type() is the source-level +544 type-tag gate.
@@ -217,15 +256,7 @@ namespace motion {
             return;
         }
 
-        // Aligned to sub_6C2334 top: clear every node's drawnThisFrame
-        // (node+1944) before rebuilding mainList, so downstream consumers
-        // like calcBounds see only nodes that entered this frame's list.
-        for(auto &node : _nodes) {
-            node.drawnThisFrame = false;
-        }
-
-        const bool inheritedFlag18 = _renderItemInheritedFlag18;
-        auto &entries = _preparedRenderItems;
+        auto &entries = mainList;
         const auto &nodes = _nodes;
         const auto motionPath = matchedMotionPath();
         // sub_6C2334@0x6C31C8/0x6C337C/0x6C38A0 reads Player+1092,
@@ -234,33 +265,33 @@ namespace motion {
         const auto &dam = _drawAffineMatrix;
         const bool drawAffineMatrixNonIdentity =
             _drawAffineMatrixNonIdentity;
-        std::unordered_set<int> requiredGroupNodeIndices;
+        const std::uint32_t effectiveColor =
+            multiplyPackedColorWeightsLike_0x6C2334(
+                inheritedColor, _colorWeightPacked);
 
-        auto appendChildEntriesAtCurrentNode = [&](Player *child,
-                                                   bool nodePriorDraw) {
-            if(!child || !true) {
+        auto appendChildEntriesAtCurrentNode =
+            [&](const detail::MotionNode &ownerNode, Player *child,
+                std::vector<detail::PreparedRenderItem *> &childMainList,
+                bool childDrawFlag19) {
+            if(!child) {
                 return;
             }
-            const auto savedChildDrawAffine =
-                child->_drawAffineMatrix;
-            const bool savedChildDrawAffineNonIdentity =
-                child->_drawAffineMatrixNonIdentity;
-            child->_drawAffineMatrix = dam;
-            child->_drawAffineMatrixNonIdentity =
-                drawAffineMatrixNonIdentity;
+            const size_t mainCountBefore = childMainList.size();
+            const size_t auxCountBefore = auxList.size();
             // aligned with sub_6C2334 @0x6C2334 (recursion @0x6c2b5c/0x6c3124/
             // 0x6c36ac): child a6 = (a6 & 1) || (node+48 != 0), i.e. the
             // parent's inherited flag OR'd with THIS node's priorDraw bool
             // (node+48 = sub_6636D4("priorDraw") != 0, written at 0x6bc6c4).
-            // Must use the node-level priorDraw (nodePriorDraw), NOT the
-            // Player-level scalar _priorDraw (which defaults to 1.5 and would
-            // force the term true). prepareRenderItems() latches its argument
-            // into _renderItemInheritedFlag18 (the build loop's a6).
-            child->prepareRenderItems(_renderItemInheritedFlag18 || nodePriorDraw);
-            child->_drawAffineMatrix = savedChildDrawAffine;
-            child->_drawAffineMatrixNonIdentity =
-                savedChildDrawAffineNonIdentity;
-            auto &childEntries = child->_preparedRenderItems;
+            // Must use the node-level priorDraw, not Player::_priorDraw.
+            // The recursive call receives the caller's SAME main/aux vectors;
+            // there is no child-local prepare/sort stage in sub_6C2334.
+            child->appendPreparedRenderItems(
+                childMainList, auxList,
+                (ownerNode.inheritFlags & 0x200) != 0
+                    ? effectiveColor
+                    : 0xFF808080u,
+                childDrawFlag19,
+                inheritedFlag18 || ownerNode.priorDraw != 0);
             const auto childMotionPath = child->matchedMotionPath();
             if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                motionPath.find("m2logo.mtn") != std::string::npos &&
@@ -273,29 +304,22 @@ namespace motion {
                         ? "<none>" : childMotionPath.c_str(),
                     detail::narrow(child->getMotion()).c_str(),
                     child->_nodes.size() > 1 ? 1 : 0,
-                    child->_nodes.size(), childEntries.size(),
-                    childEntries.empty() || childEntries.front().sourceKey.empty()
+                    child->_nodes.size(),
+                    childMainList.size() - mainCountBefore,
+                    childMainList.size() == mainCountBefore ||
+                            !childMainList[mainCountBefore] ||
+                            childMainList[mainCountBefore]->sourceKey.empty()
                         ? "<none>"
-                        : childEntries.front().sourceKey.c_str());
+                        : childMainList[mainCountBefore]->sourceKey.c_str());
             }
-            if(childEntries.empty()) {
-                return;
-            }
-            // Android sub_6D4F00 only stable-sorts by item+64. For equal
-            // sort keys, the pre-sort generation order is observable. Keep
-            // child-player output at the current node position instead of
-            // batching every child list at the front of the parent list.
-            entries.insert(entries.end(),
-                           std::make_move_iterator(childEntries.begin()),
-                           std::make_move_iterator(childEntries.end()));
             detail::logoChainTraceLogf(
                 motionPath, "prepare.childMerge", "0x6C2334/0x6D4F00",
                 _clampedEvalTime,
-                "childMotionPath={} appendedAtNode={} parentTotalAfterInsert={}",
+                "childMotionPath={} mainAdded={} auxAdded={} parentMainTotal={}",
                 childMotionPath.empty()
                     ? std::string("<none>") : childMotionPath,
-                childEntries.size(), entries.size());
-            childEntries.clear();
+                childMainList.size() - mainCountBefore,
+                auxList.size() - auxCountBefore, childMainList.size());
         };
 
         auto transformPoint = [&](float x, float y) -> tTVPPointD {
@@ -305,303 +329,16 @@ namespace motion {
                          dam[3] * static_cast<double>(y) + dam[5] };
         };
 
-        constexpr std::array<float, 4> kInvalidPreparedPaintBox = {
-            1.0f, 1.0f, -1.0f, -1.0f
-        };
-
-        auto restoreNativeFieldLifetime =
-            [&](detail::PreparedRenderItem &entry) {
-                entry.nativeLifetimeOwner = this;
-                entry.nativeLifetimeKey = entry.nodeIndex;
-                const auto it =
-                    _renderItemNativeFieldLifetimeByNode.find(
-                        entry.nativeLifetimeKey);
-                if(it == _renderItemNativeFieldLifetimeByNode.end()) {
-                    return;
+        auto transformRectLike_0x6C2334 =
+            [&](const std::array<float, 4> &rect) {
+                if(!drawAffineMatrixNonIdentity) {
+                    return rect;
                 }
-                // libkrkr2.so 0x6C2334 does not blanket-initialize item+20,
-                // item+21, or item+216..228 on every population path. The
-                // local item object is reconstructed each frame, so restore
-                // the native field lifetime explicitly before 0x6C4E28 writes
-                // the subset reached by this frame's branches.
-                entry.rawFlag20 = it->second.rawFlag20;
-                entry.rawFlag21 = it->second.rawFlag21;
-                entry.clipRect = it->second.clipRect;
-                entry.dirtyRect = it->second.dirtyRect;
-                entry.localCorners = it->second.localCorners;
-                entry.localMeshPoints = it->second.localMeshPoints;
-            };
-
-        auto updatePaintBox =
-            [](detail::PreparedRenderItem &entry, double x,
-               double y, bool firstPoint) {
-                const float fx = static_cast<float>(x);
-                const float fy = static_cast<float>(y);
-                if(firstPoint) {
-                    entry.paintBox = { fx, fy, fx, fy };
-                    return;
-                }
-                if(fx < entry.paintBox[0]) entry.paintBox[0] = fx;
-                if(fy < entry.paintBox[1]) entry.paintBox[1] = fy;
-                if(fx > entry.paintBox[2]) entry.paintBox[2] = fx;
-                if(fy > entry.paintBox[3]) entry.paintBox[3] = fy;
-            };
-
-        for(size_t i = 0; i < nodes.size(); ++i) {
-            auto &node = _nodes[i];
-            if(!node.accumulated.active) continue;
-            if(!node.forceVisible && (((1 << node.nodeType) & bitmask) == 0)) {
-                if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
-                   motionPath.find("m2logo.mtn") != std::string::npos &&
-                   _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0 &&
-                   (node.index == 18 || node.index == 19)) {
-                    const std::string label = detail::narrow(node.layerName);
-                    const std::string currentSrc =
-                        detail::narrow(node.activeSlot().srcValue);
-                    std::fprintf(
-                        stderr,
-                        "SNAPPREPCAND frame=%.3f nodeIndex=%d label=%s phase=maskReject forceVisible=%d nodeType=%d bitmask=0x%x hasSource=%d currentSrc=%s drawFlag=%d visibleAncestorIndex=%d\n",
-                        _clampedEvalTime, node.index,
-                        node.layerName.IsEmpty() ? "<none>" : label.c_str(),
-                        node.forceVisible, node.nodeType, bitmask,
-                        node.source.valid ? 1 : 0,
-                        currentSrc.empty()
-                            ? "<none>"
-                            : currentSrc.c_str(),
-                        node.drawFlag ? 1 : 0, node.visibleAncestorIndex);
-                }
-                continue;
-            }
-            if(!node.source.valid) continue;
-
-            if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
-               motionPath.find("m2logo.mtn") != std::string::npos &&
-               _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0 &&
-               (node.index == 18 || node.index == 19)) {
-                const std::string label = detail::narrow(node.layerName);
-                const std::string currentSrc =
-                    detail::narrow(node.activeSlot().srcValue);
-                std::fprintf(
-                    stderr,
-                    "SNAPPREPCAND frame=%.3f nodeIndex=%d label=%s phase=accept forceVisible=%d nodeType=%d bitmask=0x%x hasSource=%d currentSrc=%s drawFlag=%d visibleAncestorIndex=%d\n",
-                    _clampedEvalTime, node.index,
-                    node.layerName.IsEmpty() ? "<none>" : label.c_str(),
-                    node.forceVisible, node.nodeType, bitmask,
-                    node.source.valid ? 1 : 0,
-                    currentSrc.empty()
-                        ? "<none>"
-                        : currentSrc.c_str(),
-                    node.drawFlag ? 1 : 0, node.visibleAncestorIndex);
-            }
-
-            // libkrkr2.so sub_6C2334 (0x6C2334):
-            // leaf items always take node+1952->1904 as their parent item
-            // pointer, allocating that synthetic ancestor item on demand even
-            // when the ancestor itself has no source-backed render item.
-            if(node.visibleAncestorIndex >= 0 &&
-               node.visibleAncestorIndex < static_cast<int>(nodes.size()) &&
-               node.visibleAncestorIndex != node.index) {
-                requiredGroupNodeIndices.insert(node.visibleAncestorIndex);
-            }
-
-            for(int ancestorIndex =
-                    (node.visibleAncestorIndex >= 0 &&
-                     node.visibleAncestorIndex < static_cast<int>(nodes.size()))
-                        ? nodes[node.visibleAncestorIndex].visibleAncestorIndex
-                        : -1;
-                ancestorIndex >= 0 &&
-                ancestorIndex < static_cast<int>(nodes.size());) {
-                const auto &ancestor = nodes[ancestorIndex];
-                const bool isSpecialCompositeParent =
-                    ancestor.nodeType == 12 && (ancestor.stencilType & 4) != 0;
-                if(isSpecialCompositeParent) {
-                    requiredGroupNodeIndices.insert(ancestorIndex);
-                }
-                const int nextAncestorIndex = ancestor.visibleAncestorIndex;
-                if(nextAncestorIndex == ancestorIndex) {
-                    break;
-                }
-                ancestorIndex = nextAncestorIndex;
-            }
-        }
-
-        for(size_t i = 0; i < nodes.size(); ++i) {
-            const auto &node = nodes[i];
-            if(!node.accumulated.active) continue;
-            if(!_preview) {
-                if(node.nodeType == 3) {
-                    appendChildEntriesAtCurrentNode(
-                        node.getChildPlayer(), node.priorDraw != 0);
-                } else if(node.nodeType == 4) {
-                    const int particleCount = node.getParticleCount();
-                    for(int pi = 0; pi < particleCount; ++pi) {
-                        appendChildEntriesAtCurrentNode(
-                            node.getParticleChild(pi), node.priorDraw != 0);
-                    }
-                }
-            }
-            const bool hasOwnSource = node.source.valid;
-            const bool needsGroupEntry =
-                requiredGroupNodeIndices.find(static_cast<int>(i)) !=
-                requiredGroupNodeIndices.end();
-            const bool syntheticParentOnly =
-                needsGroupEntry && !hasOwnSource && !node.forceVisible &&
-                (((1 << node.nodeType) & bitmask) == 0);
-            if(!needsGroupEntry &&
-               !node.forceVisible &&
-               (((1 << node.nodeType) & bitmask) == 0)) {
-                continue;
-            }
-            if(!hasOwnSource && !needsGroupEntry) continue;
-
-            detail::PreparedRenderItem entry;
-            entry.nodeIndex = static_cast<int>(i);
-            entry.nativeNode = &node;
-            restoreNativeFieldLifetime(entry);
-            entry.hasOwnSource = hasOwnSource;
-            entry.groupOnly = !hasOwnSource && needsGroupEntry;
-            entry.topLevelList = true;
-            entry.groupList = false;
-            entry.selfSeedChildList = false;
-            if(hasOwnSource) {
-                entry.sourceKey = node.source.path;
-                entry.srcRef = node.source.object;
-                entry.sourceTexture = node.source.texture;
-                entry.sourceRect = node.source.textureRect;
-            }
-            // Aligned to sub_6D5164 -> sub_6C2334:
-            // top-level build uses arg4=0, so render-item draw flag becomes
-            // node+1960 ? 1 : node+1961. node+1961 is the post-build
-            // stencilComposite mask-layer reference flag.
-            entry.drawFlag =
-                node.drawFlag || node.stencilCompositeMaskReferenced ||
-                needsGroupEntry;
-            entry.rawFlag16 = node.source.blank;
-            entry.skipFlag0 =
-                (((_preview ? 1097 : 1089) & (1 << node.nodeType)) == 0);
-            entry.skipFlag1 = !(inheritedFlag18 || (node.priorDraw != 0));
-            // libkrkr2.so sub_6C2334 copies player+1012 straight into item+248.
-            // Keep that variant explicit in the local render item instead of
-            // folding it away completely.
-            entry.contextVariant = _findMotionContextVariant;
-            entry.layerId = node.layerId1;
-            entry.layerId2 = node.layerId2;
-
-            if(syntheticParentOnly) {
-                // libkrkr2.so sub_6C2334 (0x6C2334):
-                // when a leaf item references node+1952->1904, the ancestor
-                // item is allocated as a zero-initialized 0x1B0 container.
-                // It is not populated from the ancestor node's viewport/parent
-                // chain at allocation time. Keep the local synthetic parent as
-                // a neutral container and let child union/build steps fill it.
-                entry.blendMode = 0;
-                entry.paintBox = { 1.0f, 1.0f, -1.0f, -1.0f };
-                entry.viewport = { 1.0f, 1.0f, -1.0f, -1.0f };
-                entry.hasViewport = false;
-                entry.visibleAncestorIndex = -1;
-                const bool specialCompositeParent =
-                    node.nodeType == 12 && (node.stencilType & 4) != 0;
-                if(specialCompositeParent) {
-                    // libkrkr2.so 0x6C3740..0x6C37E4:
-                    // special type12 parents are inserted into the auxiliary
-                    // render list (a3) and seeded into their own item+24 child
-                    // vector. They are not inserted into the main top-level
-                    // list at this point.
-                    entry.topLevelList = false;
-                    entry.groupList = true;
-                    entry.selfSeedChildList = true;
-                }
-            } else {
-                // Aligned to libkrkr2.so sub_6C2334 (0x6C2334):
-                // render item +0x40 stores node accumulated posZ (node+0x5F8),
-                // while coordinateMode and objTriPriority are copied into
-                // separate integer fields (+0xEC/+0xF0).
-                entry.sortKey = node.accumulated.posZ;
-                entry.commandCoord = {
-                    node.accumulated.posX,
-                    _zFactor * node.accumulated.posZ +
-                        node.accumulated.posY,
-                    node.accumulated.posZ,
-                };
-                entry.commandMatrix = {
-                    node.accumulated.m11,
-                    node.accumulated.m12,
-                    node.accumulated.m21,
-                    node.accumulated.m22,
-                };
-                entry.blendMode = node.accumulated.blendMode;
-                entry.packedColors = copyPackedColorsFromBytes(node.colorBytes);
-                entry.opacity = node.accumulated.opacity;
-                entry.stencilComposite = node.stencilType;
-                entry.coordinateMode = node.coordinateMode;
-                entry.objTriPriority = node.objTriPriority;
-                entry.originX = node.source.originX + node.activeSlot().ox;
-                entry.originY = node.source.originY + node.activeSlot().oy;
-                entry.visibleAncestorIndex = node.visibleAncestorIndex;
-                entry.meshType = node.meshType;
-                entry.meshDivX = node.meshDivX;
-                entry.meshDivY = node.meshDivY;
-                if(node.meshType == 1 && !node.meshControlPoints.empty()) {
-                    entry.commandPatchDivision = static_cast<int>(
-                        getMeshDivisionRatio() *
-                        static_cast<double>(node.meshDivision));
-                    if(entry.commandPatchDivision >= 50) {
-                        entry.commandPatchDivision = 50;
-                    }
-                }
-            }
-
-            bool havePaintBox = false;
-            if(hasOwnSource && node.source.width > 0.0 &&
-               node.source.height > 0.0) {
-                for(int ci = 0; ci < 4; ++ci) {
-                    const auto pt = drawAffineMatrixNonIdentity
-                        ? transformPoint(node.vertices[ci * 2],
-                                         node.vertices[ci * 2 + 1])
-                        : tTVPPointD{node.vertices[ci * 2],
-                                     node.vertices[ci * 2 + 1]};
-                    entry.corners[ci * 2] = static_cast<float>(pt.x);
-                    entry.corners[ci * 2 + 1] = static_cast<float>(pt.y);
-                    updatePaintBox(entry, pt.x, pt.y, !havePaintBox);
-                    havePaintBox = true;
-                }
-            }
-
-            if(hasOwnSource && !node.meshControlPoints.empty()) {
-                entry.meshPoints.resize(node.meshControlPoints.size());
-                entry.commandBezierPatchPoints.resize(
-                    node.meshControlPoints.size());
-                for(size_t pi = 0; pi < node.meshControlPoints.size(); ++pi) {
-                    const auto &point = node.meshControlPoints[pi];
-                    const auto pt = transformPoint(point.x, point.y);
-                    const detail::MeshPoint transformed{
-                        static_cast<float>(pt.x), static_cast<float>(pt.y)};
-                    entry.meshPoints[pi] = transformed;
-                    entry.commandBezierPatchPoints[pi] = transformed;
-                    updatePaintBox(entry, pt.x, pt.y, !havePaintBox);
-                    havePaintBox = true;
-                }
-            }
-
-            if(hasOwnSource && !node.meshControlPointsPrev.empty()) {
-                entry.commandCompositeMeshPoints.resize(
-                    node.meshControlPointsPrev.size());
-                for(size_t pi = 0;
-                    pi < node.meshControlPointsPrev.size(); ++pi) {
-                    const auto &point = node.meshControlPointsPrev[pi];
-                    const auto pt = transformPoint(point.x, point.y);
-                    entry.commandCompositeMeshPoints[pi] = {
-                        static_cast<float>(pt.x), static_cast<float>(pt.y)};
-                }
-            }
-
-            if(!havePaintBox && hasOwnSource && node.bounds[2] >= node.bounds[0] &&
-               node.bounds[3] >= node.bounds[1]) {
-                const auto p0 = transformPoint(node.bounds[0], node.bounds[1]);
-                const auto p1 = transformPoint(node.bounds[2], node.bounds[1]);
-                const auto p2 = transformPoint(node.bounds[2], node.bounds[3]);
-                const auto p3 = transformPoint(node.bounds[0], node.bounds[3]);
-                entry.paintBox = {
+                const auto p0 = transformPoint(rect[0], rect[1]);
+                const auto p1 = transformPoint(rect[2], rect[1]);
+                const auto p2 = transformPoint(rect[2], rect[3]);
+                const auto p3 = transformPoint(rect[0], rect[3]);
+                return std::array<float, 4>{
                     static_cast<float>(std::floor(std::min(
                         std::min(p0.x, p1.x), std::min(p2.x, p3.x)))),
                     static_cast<float>(std::floor(std::min(
@@ -611,28 +348,268 @@ namespace motion {
                     static_cast<float>(std::ceil(std::max(
                         std::max(p0.y, p1.y), std::max(p2.y, p3.y))))
                 };
-                havePaintBox = true;
-            }
+            };
 
-            if(!havePaintBox) {
-                // libkrkr2.so sub_6C2334 initializes item+200..212 from
-                // node+1936 when present, otherwise from xmmword_14D7C60.
-                // That default is {1,1,-1,-1}, i.e. an invalid rect sentinel,
-                // not a point box at vertexPos. Group-only items rely on this
-                // invalid sentinel so the later child-union pass can replace
-                // the parent paintBox with the first real child bounds instead
-                // of being permanently anchored at (0,0).
-                entry.paintBox = kInvalidPreparedPaintBox;
+        constexpr std::array<float, 4> kInvalidPreparedPaintBox = {
+            1.0f, 1.0f, -1.0f, -1.0f
+        };
+
+        // sub_6C2334 @0x6C313C..0x6C31C4 does not walk deque order. For each
+        // logical non-root slot it reads Player+616 content in REVERSE order,
+        // adds one to the stored zero-based layer index, and selects that node.
+        // drawnThisFrame is cleared only after selection, preserving the
+        // binary's duplicate/omitted-index boundary behavior.
+        for(size_t logicalIndex = 1;
+            logicalIndex < nodes.size(); ++logicalIndex) {
+            const auto priorityPosition = static_cast<tjs_int>(
+                nodes.size() - logicalIndex - 1);
+            const auto i = static_cast<size_t>(
+                detail::motionPropGetIntByNum(
+                    _rootContentVariant, priorityPosition) + 1);
+            auto &node = _nodes[i];
+            node.drawnThisFrame = false;
+            if(!_preview) {
+                // 0x6C31DC: particle recursion precedes the node+1505 active
+                // gate and writes directly into the caller's lists.
+                if(node.nodeType == 4) {
+                    const int particleCount = node.getParticleCount();
+                    for(int pi = 0; pi < particleCount; ++pi) {
+                        appendChildEntriesAtCurrentNode(
+                            node, node.getParticleChild(pi),
+                            mainList,
+                            inheritedDrawFlag19);
+                    }
+                    continue;
+                }
+            }
+            if(!node.accumulated.active) continue;
+            if(!_preview && node.nodeType == 3) {
+                auto *const child = node.getChildPlayer();
+                if(!node.drawFlag &&
+                   !node.stencilCompositeMaskReferenced) {
+                    // sub_6C2334 @0x6C272C..0x6C3124: a plain type-3 node
+                    // contributes its child's items directly to the caller's
+                    // main/aux lists and never creates a wrapper item.
+                    appendChildEntriesAtCurrentNode(
+                        node, child, mainList, inheritedDrawFlag19);
+                    continue;
+                }
+
+                // sub_6C2334 @0x6C273C..0x6C2B74: drawFlag/maskRef selects
+                // the persistent node-owned type-3 wrapper path. The wrapper
+                // itself is never inserted into mainList; its child vector is
+                // populated first and then range-inserted into caller main.
+                node.drawnThisFrame = true;
+                if(!node.preparedRenderItem) {
+                    node.preparedRenderItem =
+                        new detail::PreparedRenderItem();
+                }
+                auto &wrapper = *node.preparedRenderItem;
+                // sub_6C2334@0x6C27B4 copies the node label on every wrapper
+                // population, not only when the persistent item is allocated.
+                wrapper.ownerLabel = node.layerName;
+                wrapper.nodeIndex = static_cast<int>(i);
+                wrapper.nativeNode = &node;
+                wrapper.hasOwnSource = false;
+                wrapper.drawFlag = false;
+                wrapper.stencilComposite = node.stencilType;
+                wrapper.paintBox = transformRectLike_0x6C2334({
+                    node.bounds[0], node.bounds[1],
+                    node.bounds[2], node.bounds[3]
+                });
+                wrapper.viewport = kInvalidPreparedPaintBox;
+                wrapper.hasViewport = false;
+                if(node.clipAABB &&
+                   node.clipAABB[2] >= node.clipAABB[0] &&
+                   node.clipAABB[3] >= node.clipAABB[1]) {
+                    wrapper.viewport = transformRectLike_0x6C2334({
+                        node.clipAABB[0], node.clipAABB[1],
+                        node.clipAABB[2], node.clipAABB[3]
+                    });
+                    wrapper.hasViewport = true;
+                }
+
+                wrapper.parentItem = nullptr;
+                if(node.drawFlag) {
+                    auxList.push_back(&wrapper);
+                    if(node.visibleAncestorIndex >= 0 &&
+                       node.visibleAncestorIndex <
+                           static_cast<int>(_nodes.size()) &&
+                       node.visibleAncestorIndex != node.index) {
+                        auto &ancestor = _nodes[static_cast<size_t>(
+                            node.visibleAncestorIndex)];
+                        if(!ancestor.preparedRenderItem) {
+                            ancestor.preparedRenderItem =
+                                new detail::PreparedRenderItem();
+                        }
+                        wrapper.parentItem =
+                            ancestor.preparedRenderItem;
+                    }
+                }
+
+                wrapper.childItems.clear();
+                appendChildEntriesAtCurrentNode(
+                    node, child, wrapper.childItems, true);
+                mainList.insert(mainList.end(),
+                                wrapper.childItems.begin(),
+                                wrapper.childItems.end());
+                continue;
+            }
+            const bool hasOwnSource = node.source.valid;
+            if(!node.forceVisible &&
+               (((1 << node.nodeType) & bitmask) == 0)) {
+                continue;
+            }
+            if(!hasOwnSource) continue;
+
+            // sub_6C2334 @0x6C32D0: node+1904 owns one persistent raw item;
+            // allocate only once, then overwrite the fields reached by this
+            // population path without reconstructing the object.
+            if(!node.preparedRenderItem) {
+                node.preparedRenderItem = new detail::PreparedRenderItem();
+            }
+            auto &entry = *node.preparedRenderItem;
+            // sub_6C2334@0x6C3348 refreshes the independent owner string on
+            // every ordinary-item population.
+            entry.ownerLabel = node.layerName;
+            entry.nodeIndex = static_cast<int>(i);
+            entry.nativeNode = &node;
+            // 0x6C25DC..0x6C2654: item+264 points directly at the visible
+            // ancestor's node-owned item. The ancestor item is allocated on
+            // demand but is not thereby inserted into either output list.
+            if(node.visibleAncestorIndex >= 0 &&
+               node.visibleAncestorIndex < static_cast<int>(_nodes.size()) &&
+               node.visibleAncestorIndex != node.index) {
+                auto &ancestor = _nodes[
+                    static_cast<size_t>(node.visibleAncestorIndex)];
+                if(!ancestor.preparedRenderItem) {
+                    ancestor.preparedRenderItem =
+                        new detail::PreparedRenderItem();
+                }
+                entry.parentItem = ancestor.preparedRenderItem;
             } else {
-                entry.paintBox = {
-                    static_cast<float>(std::floor(entry.paintBox[0])),
-                    static_cast<float>(std::floor(entry.paintBox[1])),
-                    static_cast<float>(std::ceil(entry.paintBox[2])),
-                    static_cast<float>(std::ceil(entry.paintBox[3]))
-                };
+                entry.parentItem = nullptr;
+            }
+            entry.hasOwnSource = hasOwnSource;
+            if(hasOwnSource) {
+                entry.sourceKey = node.source.path;
+                entry.sourceObject = node.source.object;
+                entry.sourceTexture = node.source.texture;
+                entry.sourceRect = node.source.textureRect;
+                // 0x6C35A8..0x6C35F8 copies the active clip-slot ttstr into
+                // item+8 independently of the Web source object.
+                entry.commandSrc = node.activeSlot().srcValue;
+            }
+            // Aligned to sub_6D5164 -> sub_6C2334:
+            // item+19 = node+1960 ? 1 : (arg5 | node+1961).
+            entry.drawFlag =
+                node.drawFlag || node.stencilCompositeMaskReferenced ||
+                inheritedDrawFlag19;
+            entry.rawFlag16 = node.source.blank;
+            entry.skipFlag0 =
+                (((_preview ? 1097 : 1089) & (1 << node.nodeType)) == 0);
+            entry.skipFlag1 = inheritedFlag18 || (node.priorDraw != 0);
+            // 0x6C33CC first coerces player+1012 Variant to ttstr, then copies
+            // that independently owning string into item+248.
+            entry.commandKey = ttstr(_findMotionContextVariant);
+            entry.layerId1 = node.layerId1;
+            entry.layerId2 = node.layerId2;
+            entry.viewport = kInvalidPreparedPaintBox;
+            entry.hasViewport = false;
+
+            // Aligned to libkrkr2.so sub_6C2334 (0x6C2334): render item +0x40
+            // stores node accumulated posZ, while coordinateMode and
+            // objTriPriority occupy independent integer fields.
+            entry.sortKey = node.accumulated.posZ;
+            entry.commandCoord = {
+                node.accumulated.posX,
+                _zFactor * node.accumulated.posZ + node.accumulated.posY,
+                node.accumulated.posZ,
+            };
+            entry.commandMatrix = {
+                node.accumulated.m11,
+                node.accumulated.m12,
+                node.accumulated.m21,
+                node.accumulated.m22,
+            };
+            entry.blendMode = node.accumulated.blendMode;
+            entry.packedColors = copyPackedColorsFromBytes(node.colorBytes);
+            for(auto &packedColor : entry.packedColors) {
+                packedColor = multiplyPackedColorWeightsLike_0x6C2334(
+                    packedColor, effectiveColor);
+            }
+            entry.opacity = node.accumulated.opacity;
+            entry.stencilComposite = node.stencilType;
+            entry.coordinateMode = node.coordinateMode;
+            entry.objTriPriority = node.objTriPriority;
+            entry.originX = node.source.originX + node.activeSlot().ox;
+            entry.originY = node.source.originY + node.activeSlot().oy;
+            entry.visibleAncestorIndex = node.visibleAncestorIndex;
+            entry.meshType = node.meshType;
+            entry.meshDivX = node.meshDivX;
+            entry.meshDivY = node.meshDivY;
+            // sub_6C2334 @0x6C35AC..0x6C35C4 copies all four node+1856
+            // corners unconditionally.  The caller-supplied affine, when
+            // active, is applied afterwards at 0x6C2BB0..0x6C2CD0.
+            for(int ci = 0; ci < 4; ++ci) {
+                const auto pt = drawAffineMatrixNonIdentity
+                    ? transformPoint(node.vertices[ci * 2],
+                                     node.vertices[ci * 2 + 1])
+                    : tTVPPointD{node.vertices[ci * 2],
+                                 node.vertices[ci * 2 + 1]};
+                entry.corners[ci * 2] = static_cast<float>(pt.x);
+                entry.corners[ci * 2 + 1] = static_cast<float>(pt.y);
             }
 
-            if(!syntheticParentOnly && node.clipAABB) {
+            // item+184..196 is copied from node+1888, not recomputed from the
+            // item vectors.  With an outer affine, 0x6C2960..0x6C2A84 turns
+            // the four transformed rect corners into a floor/ceil AABB.
+            entry.paintBox = transformRectLike_0x6C2334({
+                node.bounds[0], node.bounds[1],
+                node.bounds[2], node.bounds[3]
+            });
+
+            // Three independent vector owners, exactly as selected at
+            // 0x6C2684..0x6C2714:
+            //   item+344 <- node+2048 (always assigned, hence also cleared)
+            //   item+400 <- node+2072 (type-1/raw-present branch only)
+            //   item+376 <- node+2024 (same branch, deliberately NOT affine)
+            entry.commandCompositeMeshPoints = node.compositeMeshPoints;
+            if(drawAffineMatrixNonIdentity) {
+                for(auto &point : entry.commandCompositeMeshPoints) {
+                    const auto transformed = transformPoint(point.x, point.y);
+                    point.x = static_cast<float>(transformed.x);
+                    point.y = static_cast<float>(transformed.y);
+                }
+            }
+            if(!entry.commandCompositeMeshPoints.empty()) {
+                entry.meshType = 2;
+            } else if(node.meshType == 1) {
+                if(node.meshControlPoints.empty()) {
+                    entry.meshType = 0;
+                } else {
+                    entry.commandPatchDivision = static_cast<int>(
+                        getMeshDivisionRatio() *
+                        static_cast<double>(node.meshDivision));
+                    if(entry.commandPatchDivision >= 50) {
+                        entry.commandPatchDivision = 50;
+                    }
+                    entry.meshPoints =
+                        node.transformedMeshControlPoints;
+                    if(drawAffineMatrixNonIdentity) {
+                        for(auto &point : entry.meshPoints) {
+                            const auto transformed =
+                                transformPoint(point.x, point.y);
+                            point.x = static_cast<float>(transformed.x);
+                            point.y = static_cast<float>(transformed.y);
+                        }
+                    }
+                    entry.commandBezierPatchPoints =
+                        node.meshControlPoints;
+                }
+            }
+
+            if(node.clipAABB) {
                 const float *clipAABB = node.clipAABB;
                 if(clipAABB[2] >= clipAABB[0] &&
                    clipAABB[3] >= clipAABB[1]) {
@@ -737,7 +714,7 @@ namespace motion {
                     effectiveColor[1], effectiveColor[2], effectiveColor[3],
                     entry.meshType, entry.meshDivX, entry.meshDivY,
                     entry.sortKey, entry.coordinateMode, entry.objTriPriority,
-                    entry.layerId, entry.layerId2, node.drawFlag ? 1 : 0,
+                    entry.layerId1, entry.layerId2, node.drawFlag ? 1 : 0,
                     node.stencilCompositeMaskReferenced ? 1 : 0,
                     entry.drawFlag ? 1 : 0, entry.visibleAncestorIndex,
                     node.activeSlot().done ? 1 : 0, node.currentFrameType,
@@ -813,12 +790,12 @@ namespace motion {
                 (entry.nodeIndex >= 20 && entry.nodeIndex <= 29))) {
                 std::fprintf(
                     stderr,
-                    "SNAPPREP frame=%.3f nodeIndex=%d source=%s hasOwnSource=%d groupOnly=%d rawFlags=[%d,%d,%d,%d] priorDraw=%d inherited18=%d sortKey=%.3f coordinateMode=%d objTriPriority=%d visibleAncestorIndex=%d drawFlag=%d opacity=%d paintBox=[%.1f,%.1f,%.1f,%.1f] viewport=%s\n",
+                    "SNAPPREP frame=%.3f nodeIndex=%d source=%s hasOwnSource=%d rawFlags=[%d,%d,%d,%d] priorDraw=%d inherited18=%d sortKey=%.3f coordinateMode=%d objTriPriority=%d visibleAncestorIndex=%d drawFlag=%d opacity=%d paintBox=[%.1f,%.1f,%.1f,%.1f] viewport=%s\n",
                     _clampedEvalTime, entry.nodeIndex,
                     entry.sourceKey.empty() ? "<none>" : entry.sourceKey.c_str(),
-                    entry.hasOwnSource ? 1 : 0, entry.groupOnly ? 1 : 0,
+                    entry.hasOwnSource ? 1 : 0,
                     entry.rawFlag16 ? 1 : 0, entry.skipFlag0 ? 1 : 0,
-                    entry.skipFlag1 ? 0 : 1, entry.drawFlag ? 1 : 0,
+                    entry.skipFlag1 ? 1 : 0, entry.drawFlag ? 1 : 0,
                     node.priorDraw, inheritedFlag18 ? 1 : 0, entry.sortKey,
                     entry.coordinateMode, entry.objTriPriority,
                     entry.visibleAncestorIndex, entry.drawFlag ? 1 : 0,
@@ -838,109 +815,81 @@ namespace motion {
             // Path B drawFlag.
             _nodes[i].drawnThisFrame = true;
 
-            entries.push_back(std::move(entry));
+            entries.push_back(&entry);
         }
 
-        if(entries.empty()) {
-            return;
-        }
-
-        std::unordered_map<const detail::MotionNode *, size_t>
-            entryIndexByNode;
-        entryIndexByNode.reserve(entries.size());
-        for(size_t i = 0; i < entries.size(); ++i) {
-            if(entries[i].nativeNode) {
-                entryIndexByNode.emplace(entries[i].nativeNode, i);
+        // 0x6C36CC..0x6C39B0 is a distinct node-order post-pass. A qualifying
+        // type-12 item has already entered mainList; the SAME borrowed pointer
+        // is additionally appended to auxList. Its child vector is rebuilt
+        // solely from node+2600 stencilCompositeMaskNodes in raw stored order.
+        for(size_t i = 1; i < _nodes.size(); ++i) {
+            auto &node = _nodes[i];
+            if(node.nodeType != 12 || (node.stencilType & 4) == 0 ||
+               !node.drawnThisFrame) {
+                continue;
             }
-        }
-
-        auto ownerNodeAt = [](Player *owner,
-                              int index) -> detail::MotionNode * {
-            if(!owner || index < 0 ||
-               index >= static_cast<int>(owner->_nodes.size())) {
-                return nullptr;
+            if(!node.preparedRenderItem) {
+                node.preparedRenderItem = new detail::PreparedRenderItem();
             }
-            return &owner->_nodes[static_cast<size_t>(index)];
-        };
+            auto *const parentItem = node.preparedRenderItem;
+            auxList.push_back(parentItem);
 
-        auto unionPaintBox =
-            [](detail::PreparedRenderItem &parent,
-               const detail::PreparedRenderItem &child) {
-                if(child.paintBox[2] < child.paintBox[0] ||
-                   child.paintBox[3] < child.paintBox[1]) {
-                    return;
+            parentItem->childItems.clear();
+            parentItem->childItems.push_back(parentItem);
+            for(auto *maskNode : node.stencilCompositeMaskNodes) {
+                if(!maskNode || !maskNode->drawnThisFrame) {
+                    continue;
                 }
-                if(parent.paintBox[2] < parent.paintBox[0] ||
-                   parent.paintBox[3] < parent.paintBox[1]) {
-                    parent.paintBox = child.paintBox;
-                    return;
+                if(maskNode->nodeType != 0 && maskNode->nodeType != 3) {
+                    continue;
                 }
-                parent.paintBox[0] =
-                    std::min(parent.paintBox[0], child.paintBox[0]);
-                parent.paintBox[1] =
-                    std::min(parent.paintBox[1], child.paintBox[1]);
-                parent.paintBox[2] =
-                    std::max(parent.paintBox[2], child.paintBox[2]);
-                parent.paintBox[3] =
-                    std::max(parent.paintBox[3], child.paintBox[3]);
-            };
-
-        for(const auto &childEntry : entries) {
-            for(int ancestorIndex = childEntry.visibleAncestorIndex;
-                ancestorIndex >= 0;) {
-                auto *ancestorNode = ownerNodeAt(
-                    childEntry.nativeLifetimeOwner, ancestorIndex);
-                if(!ancestorNode) {
-                    break;
+                if(!maskNode->preparedRenderItem) {
+                    maskNode->preparedRenderItem =
+                        new detail::PreparedRenderItem();
                 }
-                const auto parentIt = entryIndexByNode.find(ancestorNode);
-                if(parentIt == entryIndexByNode.end()) {
-                    break;
+                auto *const maskItem = maskNode->preparedRenderItem;
+                if(maskNode->nodeType == 0 || _preview) {
+                    parentItem->childItems.push_back(maskItem);
+                } else {
+                    parentItem->childItems.insert(
+                        parentItem->childItems.end(),
+                        maskItem->childItems.begin(),
+                        maskItem->childItems.end());
                 }
-                auto &parentEntry = entries[parentIt->second];
-                unionPaintBox(parentEntry, childEntry);
-                const int nextAncestorIndex =
-                    ancestorNode->visibleAncestorIndex;
-                if(nextAncestorIndex == ancestorIndex) {
-                    break;
-                }
-                ancestorIndex = nextAncestorIndex;
             }
         }
     }
 
-    bool Player::prepareRenderItems(bool inheritedFlag18) {
+    bool Player::prepareRenderItems(
+        detail::PreparedRenderItemList &mainList,
+        detail::PreparedRenderItemList &auxList) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderPrepareEnter(this);
 #endif
-        if(false) {
-#if defined(KRKR2_WASMTIME_HEADLESS)
-            detail::motionTraceRenderPrepareLeave(this, false);
-#endif
-            return false;
-        }
-
-        const bool savedInheritedFlag18 = _renderItemInheritedFlag18;
-        _renderItemInheritedFlag18 = inheritedFlag18;
-        _preparedRenderItems.clear();
         const auto motionPath = matchedMotionPath();
 
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderBuildItemsEnter(this);
 #endif
-        appendPreparedRenderItems();
+        // sub_6D5164 @0x6D5184..0x6D5198 passes neutral color and two false
+        // lineage flags into sub_6C2334. Callers construct both vectors empty.
+        appendPreparedRenderItems(
+            mainList,
+            auxList,
+            0xFF808080u, false, false);
         std::vector<double> beforeSortKeys;
-        beforeSortKeys.reserve(_preparedRenderItems.size());
-        for(const auto &item : _preparedRenderItems) {
-            beforeSortKeys.push_back(item.sortKey);
+        beforeSortKeys.reserve(mainList.size());
+        for(const auto *item : mainList) {
+            beforeSortKeys.push_back(item ? item->sortKey : 0.0);
         }
         // Aligned to sub_6D4F00 (0x6D4F00): compare render-item sort key.
         std::stable_sort(
-            _preparedRenderItems.begin(),
-            _preparedRenderItems.end(),
-            [](const detail::PreparedRenderItem &lhs,
-               const detail::PreparedRenderItem &rhs) {
-                return lhs.sortKey < rhs.sortKey;
+            mainList.begin(),
+            mainList.end(),
+            [](const detail::PreparedRenderItem *lhs,
+               const detail::PreparedRenderItem *rhs) {
+                return lhs && rhs ? lhs->sortKey < rhs->sortKey
+                                  : rhs != nullptr;
             });
         if(detail::logoChainTraceEnabledForPath(motionPath)) {
             std::ostringstream beforeSort;
@@ -949,152 +898,31 @@ namespace motion {
                 if(i) beforeSort << ",";
                 beforeSort << beforeSortKeys[i];
             }
-            for(size_t i = 0; i < _preparedRenderItems.size(); ++i) {
+            for(size_t i = 0; i < mainList.size(); ++i) {
                 if(i) afterSort << ",";
-                afterSort << _preparedRenderItems[i].sortKey;
+                afterSort << (mainList[i] ? mainList[i]->sortKey : 0.0);
             }
             detail::logoChainTraceLogf(
                 motionPath, "prepare.sort", "0x6D5164/0x6D4F00",
                 _clampedEvalTime,
                 "itemCount={} sortKeysBefore=[{}] sortKeysAfter=[{}]",
-                _preparedRenderItems.size(), beforeSort.str(),
+                mainList.size(), beforeSort.str(),
                 afterSort.str());
         }
 
-        auto ownerNodeAt = [](Player *owner,
-                              int index) -> detail::MotionNode * {
-            if(!owner || index < 0 ||
-               index >= static_cast<int>(owner->_nodes.size())) {
-                return nullptr;
-            }
-            return &owner->_nodes[static_cast<size_t>(index)];
-        };
-
-        std::unordered_map<const detail::MotionNode *,
-                           detail::PreparedRenderItem *>
-            entryPtrByNode;
-        entryPtrByNode.reserve(_preparedRenderItems.size());
-        for(auto &item : _preparedRenderItems) {
-            item.parentItem = nullptr;
-            item.childItems.clear();
-            if(item.nativeNode) {
-                entryPtrByNode.emplace(item.nativeNode, &item);
-            }
-        }
-        for(auto &item : _preparedRenderItems) {
-            if(item.selfSeedChildList) {
-                item.childItems.push_back(&item);
-            }
-        }
-        // Aligned to libkrkr2.so sub_6C2334: item+264 (parentItem) is written
-        // in exactly two places — Branch A for nodeType=3 sub-player wrappers
-        // (0x6c2b28) and the type12 composite aggregation branch (0x6c2654).
-        // Normal type0 / type1 / type2 layers — including transform-only
-        // parents like yuzulogo's `slide` nodes — **never** see their item+264
-        // populated by the binary, so their visibleAncestor chain stays at the
-        // render command level only (item+24 children vector is untouched).
-        //
-        // The previous generic "assign parentItem for any visibleAncestor" loop
-        // caused moji_y/u/z/... to inherit `hasRenderParent=true` from their
-        // slide parents, which the top-level execute filter at
-        // PlayerRender.cpp:1851 then skipped — leaving the letters unrendered
-        // despite correct updateLayers data. The type12 composite case is
-        // handled further below at the selfSeedChildList loop, which matches
-        // Branch 0x6C3740..0x6C3924 / sub_6F3424.
-
-        // Align to 0x6C3800..0x6C3924 and sub_6F3424:
-        // under a special type12 composite parent, nodeType 0 children are
-        // appended directly; nodeType 3 children append directly only in
-        // preview mode, otherwise their child vector is spliced into the
-        // parent's child vector.
-        for(auto &parentItem : _preparedRenderItems) {
-            if(!parentItem.selfSeedChildList) {
-                continue;
-            }
-            auto *parentNode = parentItem.nativeNode;
-            if(!parentNode) {
-                continue;
-            }
-            for(auto &candidate : _preparedRenderItems) {
-                if(candidate.nativeNode == parentNode) {
-                    continue;
-                }
-                auto *candidateAncestorNode = ownerNodeAt(
-                    candidate.nativeLifetimeOwner,
-                    candidate.visibleAncestorIndex);
-                if(candidateAncestorNode != parentNode) {
-                    continue;
-                }
-                if(!candidate.nativeNode) {
-                    continue;
-                }
-                const auto &candidateNode = *candidate.nativeNode;
-                if(candidateNode.nodeType == 0) {
-                    candidate.parentItem = &parentItem;
-                    parentItem.childItems.push_back(&candidate);
-                    continue;
-                }
-                if(candidateNode.nodeType != 3) {
-                    continue;
-                }
-                if(_preview) {
-                    candidate.parentItem = &parentItem;
-                    parentItem.childItems.push_back(&candidate);
-                } else {
-                    for(auto *grandChild : candidate.childItems) {
-                        if(!grandChild) {
-                            continue;
-                        }
-                        grandChild->parentItem = &parentItem;
-                        parentItem.childItems.push_back(grandChild);
-                    }
-                }
-            }
-        }
-
-        // Branch A — aligned to sub_6C2334 @ 0x6C2B28 (libkrkr2.so).
-        // nodeType=3 sub-player wrappers get their item+264 (parentItem)
-        // populated with the visibleAncestor's PreparedRenderItem pointer,
-        // forming the sub-player ancestor chain that sub_6C7440 reads to
-        // decide direct vs composed render path. This is distinct from the
-        // type12 composite aggregation above (item+24 children collection).
-        // Only fill when parentItem is still nullptr so the type12 composite
-        // writes above remain authoritative for their covered cases. See
-        // analysis/RenderPipeline_Path_A_ImplRef.md §7.3.
-        for(auto &entry : _preparedRenderItems) {
-            if(entry.parentItem != nullptr) {
-                continue;
-            }
-            if(!entry.nativeNode) {
-                continue;
-            }
-            const auto &entryNode = *entry.nativeNode;
-            if(entryNode.nodeType != 3) {
-                continue;
-            }
-            const int va = entry.visibleAncestorIndex;
-            if(va < 0) {
-                continue;
-            }
-            auto *ancestorNode = ownerNodeAt(entry.nativeLifetimeOwner, va);
-            if(!ancestorNode) {
-                continue;
-            }
-            auto it = entryPtrByNode.find(ancestorNode);
-            if(it == entryPtrByNode.end()) {
-                continue;
-            }
-            entry.parentItem = it->second;
-        }
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderBuildItemsLeave(this);
+        detail::motionTraceRenderBuildItemsLeave(this, mainList, auxList);
 #endif
 
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&
-           _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
-            for(size_t i = 0; i < _preparedRenderItems.size(); ++i) {
-                const auto &item = _preparedRenderItems[i];
+            _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
+            for(size_t i = 0; i < mainList.size(); ++i) {
+                const auto *itemPtr = mainList[i];
+                if(!itemPtr) {
+                    continue;
+                }
+                const auto &item = *itemPtr;
                 if(!(item.nodeIndex == 14 || item.nodeIndex == 15 ||
                      item.nodeIndex == 19 ||
                      (item.nodeIndex >= 20 && item.nodeIndex <= 29))) {
@@ -1102,46 +930,47 @@ namespace motion {
                 }
                 std::fprintf(
                     stderr,
-                    "SNAPPREPORDER frame=%.3f order=%zu nodeIndex=%d source=%s groupOnly=%d topLevel=%d groupList=%d selfSeed=%d sortKey=%.3f visibleAncestorIndex=%d parentNodeIndex=%d childCount=%zu coordinateMode=%d objTriPriority=%d\n",
+                    "SNAPPREPORDER frame=%.3f order=%zu nodeIndex=%d source=%s sortKey=%.3f visibleAncestorIndex=%d parentNodeIndex=%d childCount=%zu coordinateMode=%d objTriPriority=%d\n",
                     _clampedEvalTime, i, item.nodeIndex,
                     item.sourceKey.empty() ? "<none>" : item.sourceKey.c_str(),
-                    item.groupOnly ? 1 : 0, item.topLevelList ? 1 : 0,
-                    item.groupList ? 1 : 0, item.selfSeedChildList ? 1 : 0,
                     item.sortKey, item.visibleAncestorIndex,
                     item.parentItem ? item.parentItem->nodeIndex : -1,
                     item.childItems.size(), item.coordinateMode,
                     item.objTriPriority);
             }
         }
-        _renderItemInheritedFlag18 = savedInheritedFlag18;
-        const bool ok = !_preparedRenderItems.empty();
+        // sub_6D5164 returns 1 whenever the motion-content type tag is nonzero,
+        // even when mainList is empty.
+        const bool ok = hasMotionContent();
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderPrepareLeave(this, ok);
+        detail::motionTraceRenderPrepareLeave(this, ok, mainList, auxList);
 #endif
         return ok;
     }
 
-    void Player::applyPreparedRenderItemTranslateOffsets() {
+    void Player::applyPreparedRenderItemTranslateOffsets(
+        detail::PreparedRenderItemList &mainList) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderApplyTranslateEnter(this);
 #endif
-        if(false) {
-#if defined(KRKR2_WASMTIME_HEADLESS)
-            detail::motionTraceRenderApplyTranslateLeave(this);
-#endif
-            return;
-        }
-
         // Aligned to libkrkr2.so Player_applyTranslateOffset (0x6D5264):
         // normal path adds cameraOffset to prepared render items here.
         // Root position is already baked into node state during updateLayers.
         const double ofsX = static_cast<double>(_cameraOffsetX);
         const double ofsY = static_cast<double>(_cameraOffsetY);
         const auto motionPath = matchedMotionPath();
-        for(auto &entry : _preparedRenderItems) {
+        // Player_applyTranslateOffset @0x6D5264 receives the main pointer
+        // vector only; auxiliary composite items are not walked here.
+        for(auto *entryPtr : mainList) {
+            if(!entryPtr) {
+                continue;
+            }
+            auto &entry = *entryPtr;
             const auto beforeCorners = entry.corners;
             const auto beforePaintBox = entry.paintBox;
             const auto beforeViewport = entry.viewport;
+            const auto beforeCompositeMeshPoints =
+                entry.commandCompositeMeshPoints;
             const auto beforeMeshPoints = entry.meshPoints;
             for(size_t ci = 0; ci < entry.corners.size(); ci += 2) {
                 entry.corners[ci] = static_cast<float>(
@@ -1167,11 +996,22 @@ namespace motion {
                 entry.viewport[3] = static_cast<float>(
                     static_cast<double>(entry.viewport[3]) + ofsY);
             }
-            for(auto &point : entry.meshPoints) {
+            // Player_applyTranslateOffset@0x6D52B8..0x6D533C walks item+344
+            // for every item.  The item+400 vector is walked separately only
+            // for meshType 1 at 0x6D5348..0x6D5388; raw item+376 is untouched.
+            for(auto &point : entry.commandCompositeMeshPoints) {
                 point.x = static_cast<float>(
                     static_cast<double>(point.x) + ofsX);
                 point.y = static_cast<float>(
                     static_cast<double>(point.y) + ofsY);
+            }
+            if(entry.meshType == 1) {
+                for(auto &point : entry.meshPoints) {
+                    point.x = static_cast<float>(
+                        static_cast<double>(point.x) + ofsX);
+                    point.y = static_cast<float>(
+                        static_cast<double>(point.y) + ofsY);
+                }
             }
             if(detail::logoChainTraceEnabledForPath(motionPath)) {
                 bool ok = true;
@@ -1198,6 +1038,22 @@ namespace motion {
                     }
                 }
                 if(ok) {
+                    for(size_t pi = 0;
+                        pi < entry.commandCompositeMeshPoints.size(); ++pi) {
+                        if(std::fabs(
+                               (entry.commandCompositeMeshPoints[pi].x -
+                                beforeCompositeMeshPoints[pi].x) -
+                               static_cast<float>(ofsX)) > 0.01f ||
+                           std::fabs(
+                               (entry.commandCompositeMeshPoints[pi].y -
+                                beforeCompositeMeshPoints[pi].y) -
+                               static_cast<float>(ofsY)) > 0.01f) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if(ok && entry.meshType == 1) {
                     for(size_t pi = 0; pi < entry.meshPoints.size(); ++pi) {
                         if(std::fabs(
                                (entry.meshPoints[pi].x - beforeMeshPoints[pi].x) -
@@ -1214,7 +1070,7 @@ namespace motion {
                     motionPath, "prepare.translate", "0x6D5264",
                     _clampedEvalTime,
                     fmt::format(
-                        "cameraOffset=({:.3f},{:.3f}) applied to corners/paintBox/viewport/mesh",
+                        "cameraOffset=({:.3f},{:.3f}) applied to corners/paintBox/viewport/+344/type1+400",
                         ofsX, ofsY),
                     fmt::format(
                         "nodeIndex={} beforeCorner0=({:.3f},{:.3f}) afterCorner0=({:.3f},{:.3f}) beforePaintBox=[{:.3f},{:.3f},{:.3f},{:.3f}] afterPaintBox=[{:.3f},{:.3f},{:.3f},{:.3f}]",
@@ -1228,7 +1084,7 @@ namespace motion {
             }
         }
 #if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderApplyTranslateLeave(this);
+        detail::motionTraceRenderApplyTranslateLeave(this, mainList);
 #endif
     }
 

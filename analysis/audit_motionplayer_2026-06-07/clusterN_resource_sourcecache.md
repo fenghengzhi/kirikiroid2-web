@@ -7,6 +7,14 @@
 > clip/ensureTexture/drawLayer, adaptor-failure leak and destruction order are now
 > restored. The corrected text below supersedes the earlier verdict.
 
+> **2026-07-22 correction:** the later `0x6A8D8C/0x6AAB3C/0x6AB56C`
+> reconstruction also disproved this note's remaining `findLoaded`, random
+> STUB, blank-integer and RuntimeSupport snapshot claims. Current code has no
+> `findLoaded`; `random` calls the ctor-created generator Variant; blank's four
+> dimensions remain String Variants while only `blank` is Integer 1; the eager
+> MotionSnapshot subsystem was deleted. The corrected passages below are the
+> current verdict.
+
 > Date: 2026-06-07. Authoritative source: libkrkr2.so (IDB libkrkr2.so.i64).
 > Scope: ResourceManager.cpp/.h, SourceCache.cpp/.h, PrivateMotionGLL.cpp/.h,
 > SeparateLayerAdaptor.cpp/.h, RuntimeSupport.cpp/.h, MotionTraceWeb.cpp/.h.
@@ -62,9 +70,11 @@ requireLayerId(=sub_6AB694), releaseLayerId(=sub_6AB750).
   motion-list: it is HashMap A's libstdc++ `_M_before_begin._M_nxt`, the global
   node chain belonging to the same unordered_map rooted at +88.
 
-Local: load/unload/findLoaded/findSource/isExistMotion/findMotion/
-requireLayerId/releaseLayerId/unloadAll are backed by the aligned containers;
-random remains a STUB.
+Local: load/unload/findSource/isExistMotion/findMotion/
+requireLayerId/releaseLayerId/unloadAll are backed by the aligned containers.
+`random` mirrors `0x6AB56C`: it copies/uses the ctor-created generator Variant,
+calls `random()` without arguments, converts a non-void result to Real, and
+otherwise returns 0. There is no local `findLoaded` member.
 
 ## 3. RM findSource @0x6AAB3C — CONFIRMED raw-node path (item ②/③)
 
@@ -72,8 +82,9 @@ random remains a STUB.
 split name by "/" (sub_697D34); !pieces[0] -> void
 if pieces[0] != "src":
   if pieces[0] != "blank" -> void
-  blank: split pieces[1] by ":" -> width/height/originX/originY ints;
-         build dict{width,height,originX,originY, blank=1(int)}; return it
+  blank: split pieces[1] by ":" -> width/height/originX/originY strings;
+         build dict{width,height,originX,originY as String, blank=1(Integer)};
+         return it
 src: FNV-hash(name) -> sub_6EB8F4(this+88 HashMap A, hash%this+96, name) -> record
   miss -> void
   root=record.file.GetRoot(); strict "source"; dynamic group has+strict;
@@ -174,16 +185,12 @@ chain (analysis/SLA_Rendering_Chain_libkrkr2so.md) — not re-decompiled this pa
   internal Layer subclass behavior; render-item input struct mirrors the
   0x6DE738 vertex/color/sourceRect packing. Not a single binary function — a
   composed port adapter. Out of priority scope; not re-decompiled.
-- RuntimeSupport.cpp (motion::detail, 1723 lines): Web-port PSB-snapshot model
-  (loadMotionSnapshot @1320 builds a `MotionSnapshot` shared_ptr aux model;
-  tag/priority frame caches; timeline stepping; logo-chain trace diagnostics).
-  This is the LARGEST architectural divergence in cluster N: the binary loads
-  PSB directly into TJS dicts (load -> sub_695DE8 decode), while the port builds
-  an auxiliary snapshot struct for the web render path. It is the port's
-  resource-model platform layer (no 1:1 binary fn). PSB RL decompression itself
-  (sub_695DE8, analysis/PSB_RL_Decompression_libkrkr2so.md) lives in PSB::
-  parsing / PlayerResource.cpp — OUTSIDE these 6 files (cross-cluster). Item ④
-  decode algorithm reference verified against the doc; consumer is here only.
+- RuntimeSupport.cpp now contains shared TJS/Layer helpers only. The former
+  `loadMotionSnapshot`, tag/priority cache and eager `MotionSnapshot` graph were
+  deleted; live resource navigation stays on raw PSB/TJS owners. One confirmed
+  remaining caller-family gap is Array construction: several Player accessors
+  still pre-materialize a `vector` and call TJS `add`, whereas Android calls
+  `sub_704CB8` and writes `tTJSArrayNI::Items` directly.
 - MotionTraceWeb.cpp: web console trace shim. Pure platform.
 
 ## Deviation summary
@@ -197,7 +204,7 @@ chain (analysis/SLA_Rendering_Chain_libkrkr2so.md) — not re-decompiled this pa
 | 5 | Player_findSource | outer record + Win/KRKR nested maps + raw decode/upload | both spec paths raw-aligned; KRKR full-page upload is Web API boundary | CLOSED + BOUNDARY |
 | 6 | SourceCache loadSource | +72 intrusive list, Layer dispatch | std::list, bitmap bake | container dev (OK) |
 | 7 | SLA surface | 5 members @0x6ABFAC | 4+factory | OK |
-| 8 | RuntimeSupport/GLL | direct TJS dict / internal Layer | aux MotionSnapshot / adapter | port host layer |
+| 8 | RuntimeSupport/GLL | direct TJS/Array NI / internal Layer | eager snapshot removed; GLL adapter remains; some Array callers still use vector+`add` | PARTIAL |
 
 ## IDB changes (saved)
 - rename: Motion_Player_findSource @0x6948E8 (was already set; idempotent).

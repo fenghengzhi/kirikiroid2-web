@@ -32,6 +32,18 @@ iTJSDispatch2 *buildMeshPointTJSArrayLike_0x6C715C(
     const std::vector<detail::MeshPoint> &points,
     float xOffset, float yOffset);
 
+// sub_6C4E28 @0x6C5C00..0x6C5C34 derives Bezier cell counts from the
+// command division and source dimensions. The returned values are cell
+// counts; a mesh carrying them therefore owns (divx+1)*(divy+1) points.
+std::array<tjs_int, 2> bezierPatchCellDivisionsLike_0x6C5C00(
+    tjs_int division, double sourceWidth, double sourceHeight);
+
+// Player_renderToCanvas @0x6C8E5C..0x6C8EEC, Player_renderAccurateSLA
+// @0x6CA904..0x6CA97C, and the PrivateMotionGLL path @0x6DED54 use a
+// distinct uint32 pipeline. Keep it separate from the 0x6C4E28 FP helper.
+std::array<tjs_int, 2> bezierPatchCellDivisionsU32Like_0x6C8E5C(
+    tjs_int division, double sourceWidth, double sourceHeight);
+
 // affineCopy (argc=14): [src, sx, sy, sw, sh, useMatrix=false,
 //   x0, y0, x1, y1, x2, y2, type, clear]. Dispatched on the render-layer
 //   instance, matching sub_6C7440's L"affineCopy" block.
@@ -162,8 +174,6 @@ bool isAccurateSlaRenderEnabled();
 tTVPRect localRectFromItem(
     const motion::detail::PreparedRenderItem &item);
 
-void persistNativeRenderItemFieldLifetimeLike_0x6C4E28(
-    motion::detail::PreparedRenderItem &item);
 bool clearLayerAlphaOutsideRect(tTJSNI_BaseLayer *layer,
                                 const tTVPRect &outerRect,
                                 const tTVPRect &innerRect);

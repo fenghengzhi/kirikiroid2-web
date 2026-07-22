@@ -7,6 +7,46 @@
 
 namespace motion::detail {
 
+    // Process-wide mutable TJS member-hint slots.  These are individual
+    // plugin globals in libkrkr2.so, shared by every dispatch call site that
+    // references the same address; they are not per-function caches.
+    extern tjs_uint32 widthMemberHint_guess;   // 0x1AB820C, "width"
+    extern tjs_uint32 heightMemberHint_guess;  // 0x1AB8210, "height"
+    extern tjs_uint32 originXMemberHint_guess; // 0x1AB8214, "originX"
+    extern tjs_uint32 originYMemberHint_guess; // 0x1AB8218, "originY"
+    extern tjs_uint32 blankMemberHint_guess;   // 0x1AB821C, "blank"
+    extern tjs_uint32 clipMemberHint_guess;    // 0x1AB8220, "clip"
+    extern tjs_uint32 leftMemberHint_guess;    // 0x1AB8224, "left"
+    extern tjs_uint32 topMemberHint_guess;     // 0x1AB8228, "top"
+    extern tjs_uint32 rightMemberHint_guess;   // 0x1AB822C, "right"
+    extern tjs_uint32 bottomMemberHint_guess;  // 0x1AB8230, "bottom"
+    extern tjs_uint32 xMemberHint_guess;       // 0x1AB8234, "x"
+    extern tjs_uint32 yMemberHint_guess;       // 0x1AB8238, "y"
+
+    // getCommandList @0x6D3A4C command/dictionary member-hint slots.
+    extern tjs_uint32 commandKeyMemberHint_guess;          // 0x1AB82D8, "key"
+    extern tjs_uint32 commandIdMemberHint_guess;           // 0x1AB83DC, "id"
+    extern tjs_uint32 commandSrcMemberHint_guess;          // 0x1AB8134, "src"
+    extern tjs_uint32 coordinateMemberHint_guess;          // 0x1AB8400, "coordinate"
+    extern tjs_uint32 opacityMemberHint_guess;             // 0x1AB8490, "opacity"
+    extern tjs_uint32 blendModeMemberHint_guess;           // 0x1AB8448, "blendMode"
+    extern tjs_uint32 coordMemberHint_guess;               // 0x1AB8140, "coord"
+    extern tjs_uint32 mtxMemberHint_guess;                 // 0x1AB84D0, "mtx"
+    extern tjs_uint32 colorMemberHint_guess;               // 0x1AB8148, "color"
+    extern tjs_uint32 triPriorityMemberHint_guess;         // 0x1AB84D4, "triPriority"
+    extern tjs_uint32 clipRectMemberHint_guess;            // 0x1AB84D8, "clipRect"
+    extern tjs_uint32 meshTransformMemberHint_guess;       // 0x1AB84DC, "meshTransform"
+    extern tjs_uint32 bezierPatchMemberHint_guess;         // 0x1AB819C, "bezierPatch"
+    extern tjs_uint32 compositeMeshMemberHint_guess;       // 0x1AB84EC, "compositeMesh"
+    extern tjs_uint32 stencilChainMemberHint_guess;        // 0x1AB84F0, "stencilChain"
+    extern tjs_uint32 patchMemberHint_guess;               // 0x1AB84C0, "patch"
+    extern tjs_uint32 divisionMemberHint_guess;            // 0x1AB83EC, "division"
+    extern tjs_uint32 vtxMemberHint_guess;                 // 0x1AB84E0, "vtx"
+    extern tjs_uint32 divxMemberHint_guess;                // 0x1AB84E4, "divx"
+    extern tjs_uint32 divyMemberHint_guess;                // 0x1AB84E8, "divy"
+    extern tjs_uint32 typeMemberHint_guess;                // 0x1AB8124, "type"
+    extern tjs_uint32 meshMemberHint_guess;                // 0x1AB8188, "mesh"
+
     // sub_697D34 @0x697D34. The input is a source-level ttstr value copied
     // into a mutable remainder; each separator-delimited prefix is pushed as
     // an independently owning ttstr and the final remainder is always pushed

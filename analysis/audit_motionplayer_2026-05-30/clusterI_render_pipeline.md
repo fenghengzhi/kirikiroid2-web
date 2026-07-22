@@ -55,6 +55,14 @@ hitThreshold=256, and caches at map node+40. Suggest rename
 
 ## skipFlag1 (item+18) VERDICT — ALIGNED
 
+> **2026-07-23 superseded correction：**下文关于“本地反相存储 `skipFlag1`”、
+> `_renderItemInheritedFlag18` 侧挂以及 harness 再反相的描述只是 2026-05-30 历史状态，
+> 已被当前实现取代。现在 `appendPreparedRenderItems(..., inheritedFlag18)` 直接携带
+> a6，子 Player 递归传 `inheritedFlag18 || ownerNode.priorDraw != 0`；item+18 按原极性
+> 写入历史遗留名称 `skipFlag1`，harness 直接输出该 bool，无侧挂、无反相层。
+> 同时，raw consumer 仍是 `player+1096 && !item+18`，但 +1096 的 NCB
+> 字面名是 `priorDraw`；`preview` 是 +1092。下文的“+1096 preview”也是旧命名。
+
 Binary primary item-write @0x6c3380-0x6c33c0 (leaf render item v352 in sub_6C2334):
 ```
 v298 = 1;                                   // default
@@ -110,7 +118,7 @@ trade, see P1-I3.
 | +168..180 | int[4] | RGBA packed colors | packedColors | ✅ |
 | +184..196 | float[4] | paintBox = node+1888..1900 (v248 0x6c52bc) | paintBox | ✅ |
 | +200..212 | float[4] | viewport = node+1936 chain (v249 0x6c52c8) default (1,1,-1,-1) | viewport | ✅ |
-| +216..228 | float[4] | clipRect (drawable: v80/v83/v84/v85 0x6c4f8c) | clipRect (int!) | ⚠ type float vs int |
+| +216..228 | float[4] | clipRect (drawable: v80/v83/v84/v85 0x6c4f8c) | `std::array<float,4>` | ✅ 2026-07-23 已纠正原 int 类型 |
 | +232 | int | opacity = node+1576 (read @0x6c7634) | opacity | ✅ |
 | +244 | int | stencilComposite = node+52/stencilType (0x6c2a90); consumed (item+244&4),(item+244&3)==1 | stencilComposite | ✅ |
 | +248 | tTJSVariant | context = player+1012 (0x6c33fc) | contextVariant | ✅ |
@@ -140,7 +148,7 @@ trade, see P1-I3.
 | I2 | sub_6C2334@0x6c33c0 | PlayerRenderItems.cpp:477 | OK | skipFlag1 = !(inherited18||priorDraw) EXACT; node+48=priorDraw PROVEN @0x6bc6c4 |
 | I3 | sub_6C2334@0x6c5240/0x6c5e6c | RuntimeSupport.h:257 | OK | rawFlag20 latch gate matches; value-aligned (trace 0-diff) |
 | I4 | sub_6C2334 item alloc 0x1B0 | RuntimeSupport.h:252-321 | P2 | item is raw 432B new; local NativeRenderItemFields+PreparedRenderItem = STL structs (vector/variant/string) — PLATFORM-class container divergence, always ⚠ per CLAUDE.md |
-| I5 | item+216..228 clipRect | RuntimeSupport.h:263 | P2 | binary stores float[4]; local std::array<int,4> clipRect — TYPE mismatch (truncation risk in dirty/setClip math) |
+| I5 | item+216..228 clipRect | RuntimeSupport.h | CLOSED 2026-07-23 | binary 与 local 均为 float[4]；harness 同步使用 `std::array<float,4>` |
 | I6 | Player_drawCompat@0x6D5FB8 D3D path | PlayerDrawDispatch.cpp | P1? | player+909(wasD3DMode) re-render-to-D3DAdaptor + captureCanvas path — verify local has this branch (Web D3D stub) |
 | I7 | Player_DrawSLA@0x6D5658 | SeparateLayerAdaptor/PlayerRenderTargets | P1 | two SLA sub-paths gated by ogl_accurate_render (byte_1AB84F4): RenderMotionFrame vs sub_6C9CA8+sub_6CE938 — verify local distinguishes accurate vs non-accurate |
 | I8 | Player_buildRenderTree_guess@0x6CBCE4 | (n/a IDB) | P3 | mis-named: actually acquireLayerById (Rb_tree<int,LayerVariant>, absolute=x+y, hitThreshold=256) — rename pending local symbol |

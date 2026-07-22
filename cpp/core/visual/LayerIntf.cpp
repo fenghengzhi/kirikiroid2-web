@@ -4867,7 +4867,7 @@ void tTJSNI_BaseLayer::BezierPatchCopy(const tTVPPointD *points, tjs_int divx,
                                        tjs_int divy, iTVPBaseBitmap *src,
                                        const tTVPRect &srcrect,
                                        tTVPBBStretchType type, bool clear) {
-    if(!points || !src || divx < 2 || divy < 2) {
+    if(!points || !src || divx < 1 || divy < 1) {
         return;
     }
 
@@ -4890,16 +4890,17 @@ void tTJSNI_BaseLayer::BezierPatchCopy(const tTVPPointD *points, tjs_int divx,
         };
     };
 
+    // libkrkr2.so sub_69DC04 @0x69DD38..0x69DF3C treats divx/divy as
+    // cell counts and constructs one more boundary/point on each axis.
     std::vector<tTVPPointD> tessellated;
-    tessellated.reserve(static_cast<size_t>(divx) * static_cast<size_t>(divy));
-    for(tjs_int y = 0; y < divy; ++y) {
-        const double v = divy > 1
-            ? static_cast<double>(y) / static_cast<double>(divy - 1)
-            : 0.0;
-        for(tjs_int x = 0; x < divx; ++x) {
-            const double u = divx > 1
-                ? static_cast<double>(x) / static_cast<double>(divx - 1)
-                : 0.0;
+    tessellated.reserve(static_cast<size_t>(divx + 1) *
+                        static_cast<size_t>(divy + 1));
+    for(tjs_int y = 0; y <= divy; ++y) {
+        const double v =
+            static_cast<double>(y) / static_cast<double>(divy);
+        for(tjs_int x = 0; x <= divx; ++x) {
+            const double u =
+                static_cast<double>(x) / static_cast<double>(divx);
             tessellated.push_back(samplePatch(u, v));
         }
     }
@@ -4912,7 +4913,7 @@ void tTJSNI_BaseLayer::MeshCopy(const tTVPPointD *points, tjs_int divx,
                                 tjs_int divy, iTVPBaseBitmap *src,
                                 const tTVPRect &srcrect,
                                 tTVPBBStretchType type, bool clear) {
-    if(!points || !src || divx < 2 || divy < 2) {
+    if(!points || !src || divx < 1 || divy < 1) {
         return;
     }
 
@@ -4968,12 +4969,18 @@ void tTJSNI_BaseLayer::MeshCopy(const tTVPPointD *points, tjs_int divx,
         }
     };
 
-    for(tjs_int y = 0; y < divy - 1; ++y) {
-        const double v0 = static_cast<double>(y) / static_cast<double>(divy - 1);
-        const double v1 = static_cast<double>(y + 1) / static_cast<double>(divy - 1);
-        for(tjs_int x = 0; x < divx - 1; ++x) {
-            const double u0 = static_cast<double>(x) / static_cast<double>(divx - 1);
-            const double u1 = static_cast<double>(x + 1) / static_cast<double>(divx - 1);
+    // sub_69DC04 consumes divx*divy cells from a
+    // (divx+1)*(divy+1) point grid.
+    const auto pointColumns = static_cast<size_t>(divx + 1);
+    for(tjs_int y = 0; y < divy; ++y) {
+        const double v0 = static_cast<double>(y) / static_cast<double>(divy);
+        const double v1 =
+            static_cast<double>(y + 1) / static_cast<double>(divy);
+        for(tjs_int x = 0; x < divx; ++x) {
+            const double u0 =
+                static_cast<double>(x) / static_cast<double>(divx);
+            const double u1 =
+                static_cast<double>(x + 1) / static_cast<double>(divx);
 
             tTVPRect cellRect(
                 static_cast<tjs_int>(std::floor(srcLeft + srcWidth * u0)),
@@ -4984,10 +4991,13 @@ void tTJSNI_BaseLayer::MeshCopy(const tTVPPointD *points, tjs_int divx,
                 continue;
             }
 
-            const auto &p0 = points[y * divx + x];
-            const auto &p1 = points[y * divx + x + 1];
-            const auto &p2 = points[(y + 1) * divx + x];
-            const auto &p3 = points[(y + 1) * divx + x + 1];
+            const auto row = static_cast<size_t>(y) * pointColumns;
+            const auto nextRow = row + pointColumns;
+            const auto column = static_cast<size_t>(x);
+            const auto &p0 = points[row + column];
+            const auto &p1 = points[row + column + 1];
+            const auto &p2 = points[nextRow + column];
+            const auto &p3 = points[nextRow + column + 1];
             tTVPPointD upperTriangle[3] = { p0, p1, p2 };
             tTVPPointD lowerTriangle[3] = { p3, p2, p1 };
             blitCell(upperTriangle, cellRect);
@@ -5009,7 +5019,7 @@ void tTJSNI_BaseLayer::OperateBezierPatch(const tTVPPointD *points,
                                           tTVPBlendOperationMode mode,
                                           tjs_int opacity,
                                           tTVPBBStretchType type, bool clear) {
-    if(!points || !src || divx < 2 || divy < 2) {
+    if(!points || !src || divx < 1 || divy < 1) {
         return;
     }
 
@@ -5032,16 +5042,16 @@ void tTJSNI_BaseLayer::OperateBezierPatch(const tTVPPointD *points,
         };
     };
 
+    // Same sub_69DC04 cell-count contract as BezierPatchCopy/MeshCopy.
     std::vector<tTVPPointD> tessellated;
-    tessellated.reserve(static_cast<size_t>(divx) * static_cast<size_t>(divy));
-    for(tjs_int y = 0; y < divy; ++y) {
-        const double v = divy > 1
-            ? static_cast<double>(y) / static_cast<double>(divy - 1)
-            : 0.0;
-        for(tjs_int x = 0; x < divx; ++x) {
-            const double u = divx > 1
-                ? static_cast<double>(x) / static_cast<double>(divx - 1)
-                : 0.0;
+    tessellated.reserve(static_cast<size_t>(divx + 1) *
+                        static_cast<size_t>(divy + 1));
+    for(tjs_int y = 0; y <= divy; ++y) {
+        const double v =
+            static_cast<double>(y) / static_cast<double>(divy);
+        for(tjs_int x = 0; x <= divx; ++x) {
+            const double u =
+                static_cast<double>(x) / static_cast<double>(divx);
             tessellated.push_back(samplePatch(u, v));
         }
     }
@@ -5057,7 +5067,7 @@ void tTJSNI_BaseLayer::OperateMesh(const tTVPPointD *points, tjs_int divx,
                                    tTVPBlendOperationMode mode,
                                    tjs_int opacity,
                                    tTVPBBStretchType type, bool clear) {
-    if(!points || !src || divx < 2 || divy < 2) {
+    if(!points || !src || divx < 1 || divy < 1) {
         return;
     }
 
@@ -5124,15 +5134,18 @@ void tTJSNI_BaseLayer::OperateMesh(const tTVPPointD *points, tjs_int divx,
         }
     };
 
-    for(tjs_int y = 0; y < divy - 1; ++y) {
-        const double v0 = static_cast<double>(y) / static_cast<double>(divy - 1);
-        const double v1 = static_cast<double>(y + 1) /
-            static_cast<double>(divy - 1);
-        for(tjs_int x = 0; x < divx - 1; ++x) {
-            const double u0 = static_cast<double>(x) /
-                static_cast<double>(divx - 1);
-            const double u1 = static_cast<double>(x + 1) /
-                static_cast<double>(divx - 1);
+    // sub_69DC04 consumes divx*divy cells from a
+    // (divx+1)*(divy+1) point grid.
+    const auto pointColumns = static_cast<size_t>(divx + 1);
+    for(tjs_int y = 0; y < divy; ++y) {
+        const double v0 = static_cast<double>(y) / static_cast<double>(divy);
+        const double v1 =
+            static_cast<double>(y + 1) / static_cast<double>(divy);
+        for(tjs_int x = 0; x < divx; ++x) {
+            const double u0 =
+                static_cast<double>(x) / static_cast<double>(divx);
+            const double u1 =
+                static_cast<double>(x + 1) / static_cast<double>(divx);
 
             tTVPRect cellRect(
                 static_cast<tjs_int>(std::floor(srcLeft + srcWidth * u0)),
@@ -5143,10 +5156,13 @@ void tTJSNI_BaseLayer::OperateMesh(const tTVPPointD *points, tjs_int divx,
                 continue;
             }
 
-            const auto &p0 = points[y * divx + x];
-            const auto &p1 = points[y * divx + x + 1];
-            const auto &p2 = points[(y + 1) * divx + x];
-            const auto &p3 = points[(y + 1) * divx + x + 1];
+            const auto row = static_cast<size_t>(y) * pointColumns;
+            const auto nextRow = row + pointColumns;
+            const auto column = static_cast<size_t>(x);
+            const auto &p0 = points[row + column];
+            const auto &p1 = points[row + column + 1];
+            const auto &p2 = points[nextRow + column];
+            const auto &p3 = points[nextRow + column + 1];
             tTVPPointD upperTriangle[3] = { p0, p1, p2 };
             tTVPPointD lowerTriangle[3] = { p3, p2, p1 };
             blitCell(upperTriangle, cellRect);

@@ -27,22 +27,6 @@ namespace motion {
 
     namespace {
 
-        struct TJSArrayOwner {
-            tTJSVariant value;
-            tTJSArrayNI *native = nullptr;
-        };
-
-        TJSArrayOwner createTJSArrayLike_0x704CB8() {
-            iTJSDispatch2 *dispatch = TJSCreateArrayObject();
-            TJSArrayOwner result;
-            result.value = tTJSVariant(dispatch, dispatch);
-            dispatch->NativeInstanceSupport(
-                TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
-                reinterpret_cast<iTJSNativeInstance **>(&result.native));
-            dispatch->Release();
-            return result;
-        }
-
         tTJSVariant createTJSDictionaryLike_0x9C8440() {
             iTJSDispatch2 *dispatch = TJSCreateDictionaryObject();
             tTJSVariant result(dispatch, dispatch);
@@ -119,12 +103,13 @@ namespace motion {
         // sub_67C094 @0x67C094: serialize the eye/eyebrow 8-byte request queue.
         tTJSVariant serializeRequestQueueLike_0x67C094(
             const std::deque<std::pair<float, float>> &queue) {
-            TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+            detail::TJSArrayWithItems_guess result =
+                detail::createTJSArrayWithItems_guess();
             for(const auto &[p0, p1] : queue) {
                 tTJSVariant item = createTJSDictionaryLike_0x9C8440();
                 setTJSProperty(item, TJS_W("p0"), tTJSVariant(p0));
                 setTJSProperty(item, TJS_W("p1"), tTJSVariant(p1));
-                result.native->Items.push_back(item);
+                result.items->push_back(item);
             }
             return result.value;
         }
@@ -166,9 +151,10 @@ namespace motion {
                            tTJSVariant(controller->powCount));
 
             const auto makeChannels = [controller](const float *values) {
-                TJSArrayOwner array = createTJSArrayLike_0x704CB8();
+                detail::TJSArrayWithItems_guess array =
+                    detail::createTJSArrayWithItems_guess();
                 for(int index = 0; index < controller->count; ++index) {
-                    array.native->Items.emplace_back(values[index]);
+                    array.items->emplace_back(values[index]);
                 }
                 return array.value;
             };
@@ -672,7 +658,8 @@ namespace motion {
         _mirrorMissSetHM2_880.clear();
         _compoundHM3_936.clear();
 
-        TJSArrayOwner baseLabels = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess baseLabels =
+            detail::createTJSArrayWithItems_guess();
         _variableLabelsBase = baseLabels.value;
         _variableLabels = _variableLabelsBase;
         _variableFrameLists = createTJSDictionaryLike_0x9C8440();
@@ -682,7 +669,8 @@ namespace motion {
 
     // EmoteEngine_buildVariableList @0x66A530.
     void EmoteEngine::buildVariableList(const tTJSVariant &variableList) {
-        TJSArrayOwner labels = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess labels =
+            detail::createTJSArrayWithItems_guess();
         _variableLabels = labels.value;
 
         iTJSDispatch2 *frameDictionary =
@@ -700,17 +688,18 @@ namespace motion {
             detail::EmoteVariableRange &range = rangeIt->second;
 
             tTJSVariant frameArrayValue;
-            tTJSArrayNI *frameArray = nullptr;
+            std::deque<tTJSVariant> *frameArray = nullptr;
             if(TJS_SUCCEEDED(frameDictionary->PropGet(
                     TJS_MEMBERMUSTEXIST, label.c_str(), nullptr,
                     &frameArrayValue, frameDictionary))) {
-                frameArray = getTJSArrayNative(frameArrayValue);
+                frameArray = &getTJSArrayNative(frameArrayValue)->Items;
             } else {
-                TJSArrayOwner created = createTJSArrayLike_0x704CB8();
+                detail::TJSArrayWithItems_guess created =
+                    detail::createTJSArrayWithItems_guess();
                 frameArrayValue = created.value;
-                frameArray = created.native;
+                frameArray = created.items;
 
-                labels.native->Items.emplace_back(label);
+                labels.items->emplace_back(label);
                 frameDictionary->PropSet(
                     TJS_MEMBERENSURE, label.c_str(), nullptr,
                     &frameArrayValue, frameDictionary);
@@ -727,7 +716,7 @@ namespace motion {
 
                 range.frameMin = std::min(range.frameMin, frameValue);
                 range.frameMax = std::max(range.frameMax, frameValue);
-                frameArray->Items.push_back(frame);
+                frameArray->push_back(frame);
             }
         }
     }
@@ -752,11 +741,12 @@ namespace motion {
     //       else { target.ctl.queue.clear(); state=0; currentValue[0..count)=0; }
     //   }
     void EmoteEngine::syncSelectorControlsLike_0x670D1C() {
-        TJSArrayOwner baseLabels = createTJSArrayLike_0x704CB8(); // 0x670d54
+        detail::TJSArrayWithItems_guess baseLabels =
+            detail::createTJSArrayWithItems_guess();               // 0x670d54
         _variableLabelsBase = baseLabels.value;                   // 0x670d60
 
         tTJSArrayNI *currentLabels = getTJSArrayNative(_variableLabels);
-        baseLabels.native->Items = currentLabels->Items;          // sub_670F6C
+        *baseLabels.items = currentLabels->Items;                  // sub_670F6C
 
         _dirty = true;                                             // 0x670d98
         for (EmoteSelectorControlEntry_Deque9& entry : _vectorVarDeque9) {
@@ -771,8 +761,8 @@ namespace motion {
                 // sub_68B898 is std::remove over the Array Items deque. The
                 // returned new-end iterator is deliberately ignored: the binary
                 // does not erase/shrink the tail, so preserve that boundary quirk.
-                (void)std::remove(baseLabels.native->Items.begin(),
-                                  baseLabels.native->Items.end(), label); // 0x670e58
+                (void)std::remove(baseLabels.items->begin(),
+                                  baseLabels.items->end(), label); // 0x670e58
             }
 
             for (EmoteTransitionControlEntry_Deque8 *target : entry.targets) {
@@ -2933,23 +2923,26 @@ namespace motion {
     }
 
     tTJSVariant EmoteEngine::getMainTimelineLabelListLike_0x674F54() const {
-        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess result =
+            detail::createTJSArrayWithItems_guess();
         for(const ttstr &label : _timelineLabels992) {
-            result.native->Items.emplace_back(label);              // 0x674f94..0x675058
+            result.items->emplace_back(label);                     // 0x674f94..0x675058
         }
         return result.value;
     }
 
     tTJSVariant EmoteEngine::getDiffTimelineLabelListLike_0x6750C0() const {
-        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess result =
+            detail::createTJSArrayWithItems_guess();
         for(const ttstr &label : _timelineDiffLabels1016) {
-            result.native->Items.emplace_back(label);              // 0x675100..0x6751c4
+            result.items->emplace_back(label);                     // 0x675100..0x6751c4
         }
         return result.value;
     }
 
     tTJSVariant EmoteEngine::getPlayingTimelineInfoListLike_0x6754C4() const {
-        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess result =
+            detail::createTJSArrayWithItems_guess();
         for(const ttstr &label : _activeTimelineLabels1040) {
             const auto found = _compoundHM3_936.find(label);
             if(found == _compoundHM3_936.end()) {
@@ -2968,7 +2961,7 @@ namespace motion {
                               &flagsValue, dispatch);               // 0x6756b8
             dispatch->PropSet(TJS_MEMBERENSURE, TJS_W("blendRatio"), nullptr,
                               &blendValue, dispatch);               // 0x6756d8
-            result.native->Items.push_back(dictionary);            // 0x6756e0..0x675710
+            result.items->push_back(dictionary);                   // 0x6756e0..0x675710
         }
         return result.value;
     }
@@ -3081,7 +3074,8 @@ namespace motion {
 
     // sub_6767E4 @0x6767E4.
     tTJSVariant EmoteEngine::serializeTimelineLike_0x6767E4() const {
-        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess result =
+            detail::createTJSArrayWithItems_guess();
         for(const ttstr &label : _activeTimelineLabels1040) {
             const auto found = _compoundHM3_936.find(label);
             if(found == _compoundHM3_936.end()) {
@@ -3099,17 +3093,18 @@ namespace motion {
                                state.blendController));
             setTJSProperty(item, TJS_W("stopWhenBlendDone"),
                            tTJSVariant(state.autoStop));
-            result.native->Items.push_back(item);
+            result.items->push_back(item);
         }
         return result.value;
     }
 
     // sub_676B0C @0x676B0C.
     tTJSVariant EmoteEngine::serializeEyeLike_0x676B0C() const {
-        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess result =
+            detail::createTJSArrayWithItems_guess();
         for(const EmoteEyeControlEntry_Deque4 &entry :
             _stateMachineDeque4) {
-            result.native->Items.push_back(
+            result.items->push_back(
                 serializeEyeControllerState(entry.label, entry.ctl));
         }
         return result.value;
@@ -3117,10 +3112,11 @@ namespace motion {
 
     // sub_676F48 @0x676F48.
     tTJSVariant EmoteEngine::serializeEyebrowLike_0x676F48() const {
-        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess result =
+            detail::createTJSArrayWithItems_guess();
         for(const EmoteEyebrowControlEntry_Deque5 &entry :
             _stateMachineDeque5) {
-            result.native->Items.push_back(
+            result.items->push_back(
                 serializeEyebrowControllerState(entry.label, entry.ctl));
         }
         return result.value;
@@ -3128,10 +3124,11 @@ namespace motion {
 
     // sub_677384 @0x677384.
     tTJSVariant EmoteEngine::serializeMouthLike_0x677384() const {
-        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess result =
+            detail::createTJSArrayWithItems_guess();
         for(const EmoteMouthControlEntry_Deque6 &entry :
             _compositeVarDeque6) {
-            result.native->Items.push_back(
+            result.items->push_back(
                 serializeMouthControllerState(entry.label, entry.ctl));
         }
         return result.value;
@@ -3139,22 +3136,24 @@ namespace motion {
 
     // sub_6776BC @0x6776BC.
     tTJSVariant EmoteEngine::serializeTransitionLike_0x6776BC() const {
-        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess result =
+            detail::createTJSArrayWithItems_guess();
         for(const EmoteTransitionControlEntry_Deque8 &entry : _auxVarDeque8) {
             tTJSVariant item =
                 serializeVarControllerLike_0x66767C(entry.ctl);
             setTJSProperty(item, TJS_W("label"), tTJSVariant(entry.label));
-            result.native->Items.push_back(item);
+            result.items->push_back(item);
         }
         return result.value;
     }
 
     // sub_6778F0 @0x6778F0.
     tTJSVariant EmoteEngine::serializeSelectorLike_0x6778F0() const {
-        TJSArrayOwner result = createTJSArrayLike_0x704CB8();
+        detail::TJSArrayWithItems_guess result =
+            detail::createTJSArrayWithItems_guess();
         for(const EmoteSelectorControlEntry_Deque9 &entry :
             _vectorVarDeque9) {
-            result.native->Items.push_back(
+            result.items->push_back(
                 serializeSelectorControllerState(entry.label, entry.ctl));
         }
         return result.value;

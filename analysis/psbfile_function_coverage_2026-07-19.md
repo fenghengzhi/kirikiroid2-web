@@ -33,6 +33,12 @@ iTJSDispatch2/iTJSNativeInstance 槽和析构包装。
 `PropGetByNum@0x5976C4` 与 `PropGet@0x597854` 的四个直接 count 解码站点已不再产生
 `ReadPackedCount_guess` 调用边界；`main.cpp.o` 的 symbol/relocation 表已复核。
 
+2026-07-23 fresh decompile/disasm `PropGet@0x597854` 进一步确认 dictionary
+分支 `0x59795C..0x5979C8` 只构造一只 `tTJSNarrowStringHolder`，并把同一
+`Buf` 依次交给 name-trie 与 dictionary-offset 查找；成功、失败及异常路径均在离开
+该分支时析构 holder。本地已删除此前额外的 `ttstr` → `std::string` 转换链，恢复同一
+临时对象数量、数据流和析构边界。
+
 ## B. packed name 反向解码 helper（1）
 
 ```text

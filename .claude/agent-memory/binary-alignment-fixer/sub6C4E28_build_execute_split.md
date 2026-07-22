@@ -15,7 +15,7 @@ motion::Player render-item pipeline is architecturally mis-split vs sub_6C4E28 @
 - `Player::buildRenderCommands` (PlayerRenderExecute.cpp:13) = oracle build loop, BUT only materializes rawFlag21(+21) + clipRect. Does NOT do requireLayerId/+20/+424.
 - rawFlag20(+20) is instead set in EXECUTE-stage helpers: `ensureLeafItemLayer` (PlayerRenderExecute.cpp:384) + `ensureAccurateSlaItemLayer` (PlayerRenderTargets.cpp:831), meaning "leaf layer object created", NOT oracle's "requireLayerId materialized".
 - layerId (item+424 equiv) sourced eagerly from `node.layerId1`, assigned at tree-build in NodeTree.cpp:103 via `requireLayerId()` (no-arg), NOT lazily off the resolved layer object's `requireLayerId` property as oracle does.
-- rawFlag20 persists frame-to-frame via `_renderItemNativeFieldLifetimeByNode` (persist PlayerRenderInternal.cpp:587, restore PlayerRenderItems.cpp:322).
+- **Historical snapshot:** rawFlag20 then persisted via `_renderItemNativeFieldLifetimeByNode`. **2026-07-23 correction:** that side map has been deleted; each `MotionNode` now owns the persistent `PreparedRenderItem`, so item field lifetime follows the Android node-owned object directly while draw lists borrow pointers on the caller stack.
 
 **Symptom:** render-step compare `build_flow_mismatch` (92/242 per frame). Trace samples `layerResolved20`=item.rawFlag20 at `build_commands_leave` (wasmtime harness motion_playback_wasmtime.cpp:1964/433). items[0]: oracle=0 (LABEL_28 not reached this build), port=1 (leftover from prior frame's execute leaking via lifetime map).
 

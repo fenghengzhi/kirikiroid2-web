@@ -867,10 +867,19 @@ def _build_flow_summary(event: dict[str, Any]) -> dict[str, Any]:
         render_lists.get("mainList")
         if isinstance(render_lists, dict) else None
     )
+    aux_list = (
+        render_lists.get("auxList")
+        if isinstance(render_lists, dict) else None
+    )
     items = main_list.get("items") if isinstance(main_list, dict) else []
+    aux_items = aux_list.get("items") if isinstance(aux_list, dict) else []
     semantic_items = [
         _semantic_render_item(item)
         for item in items if isinstance(item, dict)
+    ]
+    aux_semantic_items = [
+        _semantic_render_item(item)
+        for item in aux_items if isinstance(item, dict)
     ]
     return {
         "inputItemCount": main_list.get("count")
@@ -881,7 +890,7 @@ def _build_flow_summary(event: dict[str, Any]) -> dict[str, Any]:
         "leafBuiltCount": None,
         "composedBuiltCount": None,
         "mainListSemanticItems": semantic_items,
-        "auxListSemanticItems": [],
+        "auxListSemanticItems": aux_semantic_items,
         "items": semantic_items,
     }
 

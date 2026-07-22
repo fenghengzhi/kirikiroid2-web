@@ -18,7 +18,7 @@ SEVERE/G1-G18 表已过时(针对已替换的旧 STL 时间线状态机)。
    `_allplaying/_syncActive` 伪覆写及整个 Player timeline vector/map 已删除；
    +1099 只由 Android 对应的 play/init/stop 路径维护。
 
-**字段映射(disasm 直读确认)**: +482=_directEdit、+592=_deltaTime(speedMul*dt)、+1093=_speed(gate bool 非速度)、+1168=_speedMul(乘子)、+609=_reverseSeekFlag、+480=_queuing(progressFlags gate)、+481=_firstFrame、+483=_motionCompleted、+1098=_syncWaiting、+1099=_allplaying(loopArmed)、+456=_clampedEvalTime、+1120=_frameTickCount、+1128=_cachedTotalFrames、+1136=_loopTime、+376=active/default parameter entry。CORRECTION 2026-07-13：旧记载“本地无字段、恒 0”错误；本地语义等价字段为 `_defaultParameterEntryPtr`，0x6C106C 专路已恢复。
+**字段映射(disasm 直读确认)**: +482=_directEdit、+592=_deltaTime(speedMul*dt)、+1093=_syncActive(事件 gate bool，非 speed 乘子)、+1168=_speedMul(乘子)、+609=_reverseSeekFlag、+480=_queuing(progressFlags gate)、+481=_firstFrame、+483=_motionCompleted、+1098=_syncWaiting、+1099=_allplaying/playing、+456=_clampedEvalTime、+1120=_frameTickCount、+1128=_cachedTotalFrames、+1136=_loopTime、+376=active/default parameter entry。CORRECTION 2026-07-13：旧记载“本地无字段、恒 0”错误；本地语义等价字段为 `_defaultParameterEntryPtr`，0x6C106C 专路已恢复。
 
 **子函数对齐(本文件内全 ✅)**: advanceRootAndNodes_0x6B6ADC(4-stream layer①→root②→var-track③→node④, 反编译 0x6B6ADC 确认)、rewind 同边界、seekLayer/seekRoot/var-track 三步进、reseekTimelineCursors_0x6B86C8、HM3/HM4 init-restore 链(memory hm3-loop2-restore)、interpolateVarTrack_0x6BBE20、resetMotionState_0x6B2D3C。
 **❓ 跨文件递归待审**: progressSeekNodeSlotsLike(node walk④ inline seek: parseFrame 0x6926B4 + mergeFrameContent 0x692AB0 + mask&4 per-node action slot+288 + node+346/+882 merge gate + findSource, 在 PlayerUpdateChildMotion/Render)、preProgressDirtyNodes_0x6B6878、updateLayers/calcBounds/dispatchEvents。

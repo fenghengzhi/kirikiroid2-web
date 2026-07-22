@@ -6,7 +6,7 @@
 // Output is a TSV intended for diffing against the Web port's runtime trace
 // (see PlayerUpdateLayers.cpp `phase2.accum_final` logging).
 //
-// Design (per /Users/bytedance/.claude/plans/reference-xp3-logo-test-xp3-mtn-linked-chipmunk.md):
+// Design (see analysis/psbfile_android_reconstruction_2026-07-18.md):
 //
 //   RAW PSB boundary:
 //     - PSBFile::LoadStorage retains one PSBRawOwner
@@ -516,8 +516,9 @@ namespace {
     }
 
     // ---------------------------------------------------------------------
-    // Tool runtime scope — mirrors mtndump. Required for PSB load because
-    // loadMotionSnapshot eventually calls TVPCreateBinaryStreamForRead etc.
+    // Tool runtime scope — mirrors mtndump. Required because raw PSB
+    // Document::load reaches PSBFile::LoadStorage and
+    // TVPCreateBinaryStreamForRead.
     // ---------------------------------------------------------------------
 
     class ToolRuntimeScope {

@@ -26,18 +26,19 @@ comment claiming "bit flags checked via (v12 & 5)" was speculation — no &5 con
 
 **Port mapping (verified):**
 - node+48 = `MotionNode.priorDraw` (MotionNode.h); node+1996 = `MotionNode.forceVisible`.
-- a6 = `Player::_renderItemInheritedFlag18` (latched by prepareRenderItems(arg) @line833).
-- item+18 stored INVERTED as `skipFlag1 = !(...)`; harness re-inverts on emit
-  (motion_playback_wasmtime.cpp:430 `flag18 = skipFlag1 ? 0 : 1`). Net emit == oracle
-  polarity. So skipFlag1 inversion is correct, NOT a polarity bug.
+- a6 = `appendPreparedRenderItems(..., bool inheritedFlag18)` 的递归参数；子 Player
+  调用直接传 `inheritedFlag18 || ownerNode.priorDraw != 0`，不再经过
+  Player 成员侧挂 latch。
+- item+18 直接存为 `PreparedRenderItem::skipFlag1 = inheritedFlag18 ||
+  (node.priorDraw != 0)`。`skipFlag1` 是历史遗留的误导性名称，存储极性就是
+  二进制 item+18；wasmtime harness 也直接输出 `skipFlag1 ? 1 : 0`，
+  没有反相层。
 
-**Bug fixed (2026-05-30):** appendChildEntriesAtCurrentNode passed
-`prepareRenderItems(inheritedFlag18 || (_priorDraw != 0.0))` using the Player-level scalar
-`_priorDraw` (default **1.5** → always true), forcing every child Player's nodes to
-inheritedFlag18=true → item+18 wrongly 1. Binary uses the NODE's priorDraw. Fixed to
-`prepareRenderItems(_renderItemInheritedFlag18 || nodePriorDraw)` (PlayerRenderItems.cpp).
-Also stored node priorDraw as bool (0/1) to match node+48&1 (PlayerUpdateGeometry.cpp).
-This was the m2logo items[1] frame12+ build_flow_mismatch (oracle=0/port=1).
+**2026-05-30 历史 bug（当前实现已取代该路径）：**
+`appendChildEntriesAtCurrentNode` 曾把 Player 层 `_priorDraw`（当时还被错误建模为
+double 1.5）混入子 Player 的 a6，使 item+18 错误恒为 1。修复的二进制
+依据仍是“a6 只吸收 owner node+48”。**2026-07-23 当前状态**是上述
+无侧挂 latch 的参数递归，并把 item+18 按原极性直接写入。
 
-`_priorDraw` (Player scalar, NCB property `priorDraw`) is a SEPARATE field from node-level
-priorDraw — do not conflate. It remains for its TJS getter/setter; just not in a6 path.
+`_priorDraw` (Player+1096 bool, NCB property `priorDraw`) is a SEPARATE field from node-level
+priorDraw — do not conflate. It remains for its TJS getter/setter; it is not in the a6 path.

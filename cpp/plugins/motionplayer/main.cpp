@@ -77,6 +77,7 @@ NCB_REGISTER_SUBCLASS_DELAY(LayerGetter) {
     NCB_CONSTRUCTOR(());
     NCB_PROPERTY_RO(type, getType);
     NCB_PROPERTY_RO(label, getLabel);
+    NCB_PROPERTY_RO(src, getSrc);
     NCB_PROPERTY_RO(visible, getVisible);
     NCB_PROPERTY_RO(branchVisible, getBranchVisible);
     NCB_PROPERTY_RO(layerVisible, getLayerVisible);
@@ -84,6 +85,7 @@ NCB_REGISTER_SUBCLASS_DELAY(LayerGetter) {
     NCB_PROPERTY_RO(y, getY);
     NCB_PROPERTY_RO(left, getLeft);
     NCB_PROPERTY_RO(top, getTop);
+    NCB_PROPERTY_RO(coord, getCoord);
     NCB_PROPERTY_RO(flipX, getFlipX);
     NCB_PROPERTY_RO(flipY, getFlipY);
     NCB_PROPERTY_RO(zoomX, getZoomX);

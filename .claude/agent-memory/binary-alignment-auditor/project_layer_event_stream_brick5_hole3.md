@@ -12,11 +12,16 @@ metadata:
 `rewindLayerEventStreamLike_0x6B9A3C`，cursor 仅由 init/reseek 和方向增量流管理。
 下文关于 pointer-identity self-reset 的描述只记录旧实现，不是当前结论。
 
+**CORRECTED 2026-07-23:** live port 已接入 `reseekTimelineCursors@0x6B86C8`
+的 layer/root 扫描；下文“reseek-layer-gate 整体缺失”及其后果是修复前的
+历史审计。+1093 的 NCB 字面绑定名是 `syncActive`，不再记为 `_speed`
+或独立 `motionStopGate`。
+
 **Decompiled & confirmed:**
 - 0x6B6ADC advanceRootAndNodes: layer loop @0x6B6B80 `for(i=count-2; cursor<i;){ if(+456 < +928[nextTime]) break; ++cursor; ...; if type==1 gate }`. cursor=+916, curTime=+920, nextTime=+928. Gate writes +483(motionCompleted)/+456/+1120 on align; +1098(syncWaiting)/+456/+1120 + pushSync on sync. Action ungated.
 - 0x6B9A3C rewindRootAndNodes: layer loop @0x6B9AE8 `if(count && +920>+456){ do{ --cursor; recompute +920/+928; if type==1 gate } while(+920>+456) }`. NO cursor>0 guard in binary.
 - 0x6B86C8 reseekTimelineCursors: FULL non-incremental re-seek of BOTH layer+root cursors from scratch; has its OWN +1093-gated align/sync/action gate @0x6B8A8C (only fires when +920==+456, i.e. exact landing). Layer scan double-increments i. **This whole reseek-layer-gate is MISSING from the port** — port only ports advance/rewind, not reseek.
-- Gate key `&MEMORY[0x14C9B9C][7]` = UTF-16LE "align" (confirmed via get_bytes). Both gates use +1093 (=_speed, defaultSyncActive bool, NOT speed multiplier which is +1168).
+- Gate key `&MEMORY[0x14C9B9C][7]` = UTF-16LE "align" (confirmed via get_bytes). Both gates use +1093 (`syncActive`, defaultSyncActive bool, NOT speed multiplier which is +1168).
 - 0x6B6294 pushSyncEvent: 44B {type=1} into +936 deque. 0x6B638C pushActionEvent: 44B {type=0; frameVar@+4=VOID copy of v87; actionVar@+24=content["action"]}. 0x6C4490 dispatchEvents: type0→onAction(+4,+24), type1→onSync(). => onAction(VOID, actionName). ALIGNED to port.
 
 **ARCHITECTURAL DEVIATION (🔧, author-acknowledged "1-frame lag" understates it):**

@@ -7,6 +7,12 @@
 >   player_updateLayers_accum.md, agent-memory/project_framesel_analysis.md,
 >   agent-memory/project_sub692AB0_key_mapping.md
 
+> **2026-07-23 superseded correction：**本文是 2026-05-30 的历史重构计划，
+> 其“本端字段缺失”和 P1–P7 阶段状态已被后续实现取代。字段命名也已由
+> NCB 字面绑定纠正：+1092=`preview`、+1093=`syncActive`、+1099=`playing`、
+> +1144=`completionType` int、+1168=`speed` double。下文的 `motionStopGate`/`_speed`
+> /`_loopArmed` 仅是历史名称，不得再作当前字段规格。
+
 本轮新反编译确认 (fresh decompile, byte-verified field types):
 - Player_progress_inner @0x6C106C (主入口, 完整伪代码)
 - Player_preProgressDirtyNodes @0x6B6878 (旧名 sub_6B6878, **本轮重命名**; 这是 progress_inner 真正调用的 preProgress, 不是 0x671764)

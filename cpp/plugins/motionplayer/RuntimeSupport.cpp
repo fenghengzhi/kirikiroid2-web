@@ -3,6 +3,7 @@
 //
 
 #include "RuntimeSupport.h"
+#include "MotionDispatch.h"
 #include "Player.h"
 
 #include <algorithm>
@@ -23,6 +24,180 @@
 #define LOGGER spdlog::get("plugin")
 
 namespace motion::detail {
+
+    // MotionNode_destroy_guess @0x6F4C8C: the persistent render item is owned
+    // by the node and is destroyed before the node's remaining C++ members.
+    MotionNode::~MotionNode() {
+        delete preparedRenderItem;
+        preparedRenderItem = nullptr;
+    }
+
+    MotionNode &MotionNode::operator=(const MotionNode &sourceNode) {
+        if(this == &sourceNode) {
+            return *this;
+        }
+
+#define COPY_NODE_MEMBER(name) name = sourceNode.name
+        COPY_NODE_MEMBER(index);
+        COPY_NODE_MEMBER(parentIndex);
+        COPY_NODE_MEMBER(layerId1);
+        COPY_NODE_MEMBER(layerId2);
+        COPY_NODE_MEMBER(nodeType);
+        COPY_NODE_MEMBER(coordinateMode);
+        COPY_NODE_MEMBER(inheritFlags);
+        COPY_NODE_MEMBER(flags);
+        COPY_NODE_MEMBER(joinTarget);
+        COPY_NODE_MEMBER(groundCorrection);
+        COPY_NODE_MEMBER(tjsLayerObject);
+        std::copy(std::begin(sourceNode.transformOrder),
+                  std::end(sourceNode.transformOrder),
+                  std::begin(transformOrder));
+        COPY_NODE_MEMBER(layerName);
+        COPY_NODE_MEMBER(meshType);
+        COPY_NODE_MEMBER(meshFlags);
+        COPY_NODE_MEMBER(meshDivision);
+        COPY_NODE_MEMBER(meshDivX);
+        COPY_NODE_MEMBER(meshDivY);
+        COPY_NODE_MEMBER(objTriPriority);
+        COPY_NODE_MEMBER(parameterizeIndex);
+        COPY_NODE_MEMBER(parameterEntry);
+        COPY_NODE_MEMBER(meshInvM11);
+        COPY_NODE_MEMBER(meshInvM12);
+        COPY_NODE_MEMBER(meshInvM21);
+        COPY_NODE_MEMBER(meshInvM22);
+        COPY_NODE_MEMBER(meshInvOffX);
+        COPY_NODE_MEMBER(meshInvOffY);
+        COPY_NODE_MEMBER(hasMeshData);
+        COPY_NODE_MEMBER(stencilCompositeMaskReferenced);
+        COPY_NODE_MEMBER(meshCombineEnabled);
+        COPY_NODE_MEMBER(stencilTypeBase);
+        COPY_NODE_MEMBER(stencilType);
+        COPY_NODE_MEMBER(currentFrameType);
+        COPY_NODE_MEMBER(meshControlPoints);
+        COPY_NODE_MEMBER(compositeMeshPoints);
+        COPY_NODE_MEMBER(transformedMeshControlPoints);
+        COPY_NODE_MEMBER(frameListVariant);
+        COPY_NODE_MEMBER(emoteEditVariant);
+        COPY_NODE_MEMBER(particleMotionListVariant);
+        COPY_NODE_MEMBER(stencilCompositeMaskLayerListVariant);
+        COPY_NODE_MEMBER(priorDraw);
+        slots[0] = sourceNode.slots[0];
+        slots[1] = sourceNode.slots[1];
+        COPY_NODE_MEMBER(activeSlotIndex);
+        COPY_NODE_MEMBER(timelineEvalRatio);
+        COPY_NODE_MEMBER(delta);
+        COPY_NODE_MEMBER(accumulated);
+        COPY_NODE_MEMBER(prevPosX);
+        COPY_NODE_MEMBER(prevPosY);
+        COPY_NODE_MEMBER(prevPosZ);
+
+        // MotionNode_copy@0x6F468C intentionally omits preparedRenderItem.
+        COPY_NODE_MEMBER(drawFlag);
+        COPY_NODE_MEMBER(drawnThisFrame);
+        COPY_NODE_MEMBER(forceVisible);
+        COPY_NODE_MEMBER(visibleAncestorIndex);
+        COPY_NODE_MEMBER(stencilCompositeMaskNodes);
+        COPY_NODE_MEMBER(childPlayerVar);
+        COPY_NODE_MEMBER(particleArrayVar);
+        COPY_NODE_MEMBER(shapeType);
+        std::copy(std::begin(sourceNode.shapeAABB),
+                  std::end(sourceNode.shapeAABB), std::begin(shapeAABB));
+        COPY_NODE_MEMBER(shapeGeomType);
+        std::copy(std::begin(sourceNode.shapeVertices),
+                  std::end(sourceNode.shapeVertices),
+                  std::begin(shapeVertices));
+        COPY_NODE_MEMBER(vertexPosX);
+        COPY_NODE_MEMBER(vertexPosY);
+        COPY_NODE_MEMBER(vertexPosZ);
+        std::copy(std::begin(sourceNode.vertices),
+                  std::end(sourceNode.vertices), std::begin(vertices));
+        std::copy(std::begin(sourceNode.bounds),
+                  std::end(sourceNode.bounds), std::begin(bounds));
+        COPY_NODE_MEMBER(source);
+        COPY_NODE_MEMBER(cameraFov);
+        COPY_NODE_MEMBER(anchorType);
+        COPY_NODE_MEMBER(feedbackTimespan);
+        COPY_NODE_MEMBER(anchorOpaScale);
+        std::copy(std::begin(sourceNode.anchorColorScale),
+                  std::end(sourceNode.anchorColorScale),
+                  std::begin(anchorColorScale));
+        COPY_NODE_MEMBER(cameraConstraintType);
+        std::copy(std::begin(sourceNode.particleInterp),
+                  std::end(sourceNode.particleInterp),
+                  std::begin(particleInterp));
+        COPY_NODE_MEMBER(particleType);
+        COPY_NODE_MEMBER(particleMaxNum);
+        COPY_NODE_MEMBER(particleAccelRatio);
+        COPY_NODE_MEMBER(particleInheritAngle);
+        COPY_NODE_MEMBER(particleInheritVelocity);
+        COPY_NODE_MEMBER(particleFlyDirection);
+        COPY_NODE_MEMBER(particleApplyZoomToVelocity);
+        COPY_NODE_MEMBER(particleDeleteOutside);
+        COPY_NODE_MEMBER(particleTriVolume);
+        COPY_NODE_MEMBER(prevM11);
+        COPY_NODE_MEMBER(prevM21);
+        COPY_NODE_MEMBER(prevM12);
+        COPY_NODE_MEMBER(prevM22);
+        COPY_NODE_MEMBER(prevParticleAngle);
+        COPY_NODE_MEMBER(emitterTimerAccum);
+        COPY_NODE_MEMBER(particleEmitterFlagActive);
+        COPY_NODE_MEMBER(emitterActive);
+        COPY_NODE_MEMBER(emitterTimer);
+        COPY_NODE_MEMBER(emitterDtgt);
+        COPY_NODE_MEMBER(emitterOffsetActive);
+        COPY_NODE_MEMBER(emitterOffsetX);
+        COPY_NODE_MEMBER(emitterOffsetY);
+        COPY_NODE_MEMBER(emitterOffsetZ);
+        COPY_NODE_MEMBER(deltaPosX);
+        COPY_NODE_MEMBER(deltaPosY);
+        COPY_NODE_MEMBER(deltaPosZ);
+        COPY_NODE_MEMBER(clipOriginX);
+        COPY_NODE_MEMBER(clipOriginY);
+        COPY_NODE_MEMBER(clipAABB);
+        COPY_NODE_MEMBER(meshAncestor);
+        COPY_NODE_MEMBER(anchorEnabled);
+        std::copy(std::begin(sourceNode.colorBytes),
+                  std::end(sourceNode.colorBytes), std::begin(colorBytes));
+        COPY_NODE_MEMBER(prtTrigger);
+#undef COPY_NODE_MEMBER
+
+        return *this;
+    }
+    tjs_uint32 widthMemberHint_guess = 0;
+    tjs_uint32 heightMemberHint_guess = 0;
+    tjs_uint32 originXMemberHint_guess = 0;
+    tjs_uint32 originYMemberHint_guess = 0;
+    tjs_uint32 blankMemberHint_guess = 0;
+    tjs_uint32 clipMemberHint_guess = 0;
+    tjs_uint32 leftMemberHint_guess = 0;
+    tjs_uint32 topMemberHint_guess = 0;
+    tjs_uint32 rightMemberHint_guess = 0;
+    tjs_uint32 bottomMemberHint_guess = 0;
+    tjs_uint32 xMemberHint_guess = 0;
+    tjs_uint32 yMemberHint_guess = 0;
+    tjs_uint32 commandKeyMemberHint_guess = 0;
+    tjs_uint32 commandIdMemberHint_guess = 0;
+    tjs_uint32 commandSrcMemberHint_guess = 0;
+    tjs_uint32 coordinateMemberHint_guess = 0;
+    tjs_uint32 opacityMemberHint_guess = 0;
+    tjs_uint32 blendModeMemberHint_guess = 0;
+    tjs_uint32 coordMemberHint_guess = 0;
+    tjs_uint32 mtxMemberHint_guess = 0;
+    tjs_uint32 colorMemberHint_guess = 0;
+    tjs_uint32 triPriorityMemberHint_guess = 0;
+    tjs_uint32 clipRectMemberHint_guess = 0;
+    tjs_uint32 meshTransformMemberHint_guess = 0;
+    tjs_uint32 bezierPatchMemberHint_guess = 0;
+    tjs_uint32 compositeMeshMemberHint_guess = 0;
+    tjs_uint32 stencilChainMemberHint_guess = 0;
+    tjs_uint32 patchMemberHint_guess = 0;
+    tjs_uint32 divisionMemberHint_guess = 0;
+    tjs_uint32 vtxMemberHint_guess = 0;
+    tjs_uint32 divxMemberHint_guess = 0;
+    tjs_uint32 divyMemberHint_guess = 0;
+    tjs_uint32 typeMemberHint_guess = 0;
+    tjs_uint32 meshMemberHint_guess = 0;
+
     namespace {
 
         struct LogoChainTraceSession {
@@ -167,10 +342,9 @@ namespace motion::detail {
             player._nodes.front().parentIndex = -1;
             return;
         }
-        MotionNode root;
-        root.index = 0;
-        root.parentIndex = -1;
-        player._nodes.emplace_back(std::move(root));
+        player._nodes.emplace_back();
+        player._nodes.back().index = 0;
+        player._nodes.back().parentIndex = -1;
     }
 
     void resetNodeTreeKeepRootLike_0x6B56F8(Player &player) {
@@ -179,11 +353,21 @@ namespace motion::detail {
         root.index = 0;
         root.parentIndex = -1;
         if(player._nodes.size() > 1) {
+            for(auto it = std::next(player._nodes.begin());
+                it != player._nodes.end(); ++it) {
+                auto &node = *it;
+                if(node.preparedRenderItem &&
+                   node.preparedRenderItem->rawFlag20) {
+                    player.dispatchReleaseLayerId(
+                        node.preparedRenderItem->renderLayerId);
+                }
+            }
+            // sub_6B56F8 delegates the non-root suffix to the deque range-erase
+            // helper; MotionNode::~MotionNode owns render-item destruction.
             player._nodes.erase(std::next(player._nodes.begin()),
                                 player._nodes.end());
         }
         player._nodeLabelMap.clear();
-        player._renderItemNativeFieldLifetimeByNode.clear();
     }
 
     // Aligned with libkrkr2.so Player_buildNodePathKey @0x6B5C1C.
@@ -237,6 +421,22 @@ namespace motion::detail {
 
     ttstr widen(const std::string &value) { return ttstr{ value }; }
 
+    TJSArrayWithItems_guess createTJSArrayWithItems_guess() {
+        // sub_704CB8 @ 0x704CB8 returns an owning Array Variant together with
+        // a non-owning pointer to tTJSArrayNI::Items.  The Variant keeps that
+        // deque alive; the native instance itself is not retained separately.
+        iTJSDispatch2 *dispatch = TJSCreateArrayObject();
+        const tTJSVariant value(dispatch, dispatch);
+        dispatch->Release();
+
+        tTJSArrayNI *native;
+        const tjs_error status = dispatch->NativeInstanceSupport(
+            TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
+            reinterpret_cast<iTJSNativeInstance **>(&native));
+        return { value,
+                 status == TJS_S_OK ? &native->Items : nullptr };
+    }
+
     tTJSVariant makeArray(const std::vector<tTJSVariant> &items) {
         iTJSDispatch2 *array = TJSCreateArrayObject();
         static tjs_uint addHint = 0;
@@ -260,16 +460,6 @@ namespace motion::detail {
         }
         tTJSVariant result(dic, dic);
         dic->Release();
-        return result;
-    }
-
-    std::vector<tTJSVariant>
-    stringsToVariants(const std::vector<std::string> &values) {
-        std::vector<tTJSVariant> result;
-        result.reserve(values.size());
-        for(const auto &value : values) {
-            result.emplace_back(widen(value));
-        }
         return result;
     }
 

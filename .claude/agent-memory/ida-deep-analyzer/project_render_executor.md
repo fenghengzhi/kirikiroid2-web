@@ -51,7 +51,7 @@ Signature: `(resultObj, a2=&mainList, a3=&auxList, color, preview_flag, a6)`.
 For each non-root node in the deque:
 
 ### Branch A: nodeType==3 Motion sub-node
-Entry condition at sub_6C2334: `node.type == 3` (node+28 == 3) AND `node.drawFlag` (node+1960) is set. The branch then splits at 0x6C38A0 via `CBZ player.completionType` (player+1092, byte): `completionType != 0` → alloc/push independent item (node+1904 auxList path); `completionType == 0` → normal nested-render path. Player+1092 is `completionType` (1-byte bool, TJS-settable) — NOT `isEmoteMode` or `indepLayerInherit`. See project_player_completionType.md for byte-verified semantics.
+Entry condition at sub_6C2334: `node.type == 3` (node+28 == 3) AND `node.drawFlag` (node+1960) is set. The branch then splits at 0x6C38A0 via `CBZ player.preview` (player+1092, byte): `preview != 0` → alloc/push independent item (node+1904 auxList path); `preview == 0` → normal nested-render path. Player+1092 is `preview`; TJS `completionType` is the independent int at Player+1144. See project_player_completionType.md for byte-verified semantics.
 - Fetch child Player TJS obj from `node+1912`
 - Get child's renderList pointer via PropGet
 - If drawFlag (node+1960) set:
@@ -145,7 +145,7 @@ For each item:
    - Compute `v31,v32,v36,v37 = effective bbox`
    - If empty: skip
 3. **setClip** on `v370` (target renderLayer = layerArg)
-4. **Preview gate** (0x6c7628): `if (player+1096 && !item+18) skip`
+4. **PriorDraw gate** (0x6c7628): `if (player+1096 && !item+18) skip` (+1096 is the Player NCB `priorDraw` bool; preview is +1092)
 5. **Color setup**: item+168..180 copied as 4 color channels on `v27 = player+676`'s "stencil" object
 6. **Source load** (0x6c7a90): `sub_6C1B70(v349, player, item+256+4)` → v349 = source texture Layer
 7. **Select render path** (0x6c7b70, switch on `item+48 & 0xF`):

@@ -138,9 +138,10 @@ namespace motion {
         void setOutline(ttstr v) { _outline = v; }
         ttstr getOutline() const { return _outline; }
 
-        // Aligned to libkrkr2.so +1160: double, not int
-        void setPriorDraw(double v) { _priorDraw = v; }
-        double getPriorDraw() const { return _priorDraw; }
+        // Player_get/setPriorDraw @0x6D964C/0x6D9650: the NCB property is the
+        // one-byte bool at Player+1096, independent from node+48 priorDraw.
+        void setPriorDraw(bool v) { _priorDraw = v; }
+        bool getPriorDraw() const { return _priorDraw; }
 
         // (A2) Script property `frameLastTime` (RO) = player+1128 = motion
         // ["lastTime"]. Binary getter Player_getFrameLastTime@0x6D97A4 is
@@ -194,10 +195,12 @@ namespace motion {
         // _boundsMinX/MinY/MaxX/MaxY (binary +152/+160/+168/+176 floats).
         tTJSVariant getBounds() const;
 
-        // M15 missing `meshDivisionRatio` (cluster E §3.1): binary Motion.Player
-        // exposes as property delegating to EmoteEngine +1168. Defined in
-        // PlayerCore.cpp where EmoteEngine.h is fully visible.
+        // Player NCB `meshDivisionRatio`: direct Player+1176 scalar
+        // (registration 0x6D7250..0x6D7290; accessors 0x6D9670/0x6D9674).
         double getMeshDivisionRatio() const;
+        // Player_updateLayers@0x6BCF3C separately reads the independently
+        // evolving EmoteEngine+1176 value while constructing node+2048.
+        double meshDivisionRatioDupLike_0x6BCF3C() const;
         void setMeshDivisionRatio(double v);
 
         // M15 missing #3 (cluster E §3.1): binary `lastTime` NCB getter
@@ -767,34 +770,54 @@ namespace motion {
                            bool skipUpdate = false);
         bool renderToCanvasLike_0x6C7440(
             tTJSVariant *target,
-            bool willCallUpdateLayerAfterDraw);
+            bool willCallUpdateLayerAfterDraw,
+            detail::PreparedRenderItemList &mainList,
+            detail::PreparedRenderItemList &auxList);
         bool renderToSeparateLayerAdaptor(iTJSDispatch2 *slaObject);
         bool renderToD3DAdaptor(D3DAdaptor *adaptor);
-        bool renderViaSharedD3DAdaptor(iTJSDispatch2 *targetLayerObject);
+        bool renderViaSharedD3DAdaptor(
+            iTJSDispatch2 *targetLayerObject,
+            detail::PreparedRenderItemList &mainList);
         iTJSDispatch2 *resolveSeparateLayerRenderTarget(SeparateLayerAdaptor *sla,
                                                         int &canvasWidth,
                                                         int &canvasHeight);
         bool renderMotionFrameToTarget(iTJSDispatch2 *renderTargetObject,
                                        tjs_int canvasWidth,
                                        tjs_int canvasHeight,
-                                       const char *traceFunc);
+                                       const char *traceFunc,
+                                       detail::PreparedRenderItemList &mainList,
+                                       detail::PreparedRenderItemList &auxList);
         bool renderAccurateSlaLike_0x6C9CA8(SeparateLayerAdaptor *sla,
                                             iTJSDispatch2 *slaObject,
                                             iTJSDispatch2 *targetLayerObject,
                                             tjs_int canvasWidth,
-                                            tjs_int canvasHeight);
+                                            tjs_int canvasHeight,
+                                            detail::PreparedRenderItemList &mainList,
+                                            detail::PreparedRenderItemList &auxList);
         void calcBounds();
         void updateLayers();
-        bool prepareRenderItems(bool inheritedFlag18 = false);
-        void appendPreparedRenderItems();
-        void applyPreparedRenderItemTranslateOffsets();
+        bool prepareRenderItems(
+            detail::PreparedRenderItemList &mainList,
+            detail::PreparedRenderItemList &auxList);
+        void appendPreparedRenderItems(
+            std::vector<detail::PreparedRenderItem *> &mainList,
+            std::vector<detail::PreparedRenderItem *> &auxList,
+            std::uint32_t inheritedColor,
+            bool inheritedDrawFlag19,
+            bool inheritedFlag18);
+        void applyPreparedRenderItemTranslateOffsets(
+            detail::PreparedRenderItemList &mainList);
         // Faithful 1:1 of libkrkr2.so sub_6F363C-based child→parent aggregation
         // of the DEAD player+936/944 render-item buffer, followed by clearing
         // the child buffer (destroy each element's two variants, end=begin).
         // Used by updateLayersPhase3_MotionSubNode (sub_6BE0C0 @0x6BE2C0) and
         // the particle pass (sub_6C17A4 @0x6C1A00). Inert in this build.
         void aggregateChildMotionRenderItemsLike_0x6F363C(Player &child);
-        bool buildRenderCommands(tjs_int canvasWidth, tjs_int canvasHeight);
+        bool buildRenderCommands(
+            tjs_int canvasWidth,
+            tjs_int canvasHeight,
+            detail::PreparedRenderItemList &mainList,
+            detail::PreparedRenderItemList &auxList);
         // libkrkr2.so sub_6C4E28 @0x6C4F88..0x6C5D98 Loop A drawable body:
         // materialize the per-item LEAF layer (item+304) on the persistent
         // SeparateLayerAdaptor Rb_tree (player+760 _managedTargets, keyed by
@@ -814,25 +837,32 @@ namespace motion {
         // visible child's leaf as an alpha mask. Inert for the logo fixtures
         // (no group items reach a non-empty union).
         void composeGroupLayersLike_0x6C4E28(
+            detail::PreparedRenderItemList &auxList,
             tjs_int canvasWidth,
             tjs_int canvasHeight,
             iTJSDispatch2 *scratchOwner,
             iTJSDispatch2 *scratchParent,
             const std::string &motionPath);
         bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
-                                        bool skipUpdate);
+                                        bool skipUpdate,
+                                        detail::PreparedRenderItemList &mainList);
         bool updateLayerAfterDrawLike_0x6CE7D8(tTJSVariant *target);
         bool updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject);
         bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
-        bool renderFromPlayerLike_0x6ADE24(D3DAdaptor *adaptor);
-        bool renderItemsToD3DTextureLike_0x6ADFBC(D3DAdaptor *adaptor);
+        bool renderFromPlayerLike_0x6ADE24(
+            D3DAdaptor *adaptor,
+            detail::PreparedRenderItemList &mainList);
+        bool renderItemsToD3DTextureLike_0x6ADFBC(
+            D3DAdaptor *adaptor,
+            detail::PreparedRenderItemList &mainList);
         bool renderItemsToD3DTextureLike_0x6ADFBC(
             iTVPTexture2D *targetTexture,
             tjs_int width,
             tjs_int height,
             bool alphaOpAdd,
             float xOffset,
-            float yOffset);
+            float yOffset,
+            detail::PreparedRenderItemList &mainList);
         // M1/P7 step-1: progress-pass cursor-stepping driver.
         // Aligned to libkrkr2.so Player_progress_inner (0x6C106C), the ONLY
         // caller of the advance/rewind/reseek cursor machine. In the binary the
@@ -1022,17 +1052,6 @@ namespace motion {
         [[nodiscard]] const std::deque<detail::MotionNode> &nodes() const {
             return _nodes;
         }
-        [[nodiscard]] const std::vector<detail::PreparedRenderItem> &
-        preparedRenderItems() const { return _preparedRenderItems; }
-        [[nodiscard]] const std::vector<detail::PreparedRenderItem *> &
-        preparedRenderItemsTopLevel() const {
-            return _preparedRenderItemsTopLevel;
-        }
-        [[nodiscard]] const std::vector<detail::PreparedRenderItem *> &
-        preparedRenderItemsGroup() const {
-            return _preparedRenderItemsGroup;
-        }
-
         // A8 / A9: temporary mutable accessors for hoisted storage used by
         // anonymous-namespace helpers or by free functions in
         // motion::internal::render_detail:: which we can't friend across TU
@@ -1041,11 +1060,6 @@ namespace motion {
         detail::NodeLabelMap &nodeLabelMapForBuild() {
             return _nodeLabelMap;
         }
-        std::unordered_map<int, detail::RenderItemNativeFieldLifetime> &
-        renderItemNativeFieldLifetimeByNode() {
-            return _renderItemNativeFieldLifetimeByNode;
-        }
-
     public:
         // P3-B: reach the native ResourceManager through the RM dispatch held in
         //   `_resourceManager`. This mirrors the binary findSource path
@@ -1080,13 +1094,14 @@ namespace motion {
         // (0x6B43A4) node-type visibility. The real completionType is the +1144
         // int (_completionType field below).
         bool _preview = false;
+        // Player_ctor@0x6CF0F4 clears Player+1096/+1097 together.  The NCB
+        // literal "priorDraw" is bound to the +1096 bool accessors at
+        // Player_ncb_registerMembers@0x6D7154..0x6D7198.
+        bool _priorDraw = false;
         tTJSVariant _metadata;
         ttstr _chara;
         ttstr _motionKey;
         ttstr _outline;  // Aligned to libkrkr2.so +1032: ttstr
-        // libkrkr2.so +1160: double. ctor (0x6CED30) a1[145]=0x3FF8000000000000=1.5;
-        // getter sub_6D965C reads *(player+1160).
-        double _priorDraw = 1.5;
         // (A1+A2, DONE) REMOVED `double _frameLastTime` (had been mapped to the
         // dead player+904(0x388) — only Player_ctor zeroes it, no other access in
         // the whole Player domain). It had conflated two unrelated concepts, both
@@ -1156,7 +1171,13 @@ namespace motion {
         //   LABEL_48: if (!*(BYTE*)(a1+480)) { a1+1120 += a1+592;     // gated advance
         //                                      a1+456 = min(a1+1120,a1+1128); }
         //   ... +1099 loopArmed / +609 reverseSeekFlag gate loop-wrap ...
+        // The three adjacent scalar properties are independently registered
+        // at 0x6D71C0..0x6D7308 and initialized by Player_ctor@0x6CED30:
+        // +1160 outsideFactor=1.5, +1168 speed=1.0,
+        // +1176 meshDivisionRatio=1.0.
+        double _outsideFactor = 1.5;
         double _speedMul = 1.0;        // player+1168: speed multiplier (dt scale)
+        double _meshDivisionRatio = 1.0;
         double _deltaTime = 0.0;       // player+592 : _speedMul * dt (per-frame)
         bool   _firstFrame = false;    // player+481 : one-shot seed of +1120/+456
         bool   _motionCompleted = false; // player+483: cleared each progress entry;
@@ -1208,10 +1229,6 @@ namespace motion {
                                      // completionType value). Off-by-one had
                                      // mislabeled the +1092 bool (now _preview)
                                      // as completionType; +1144 is the int.
-        bool _renderItemInheritedFlag18 = false; // sub_6C2334 arg6 low-bit lineage
-        // libkrkr2.so +1176: double. ctor (0x6CED30) a1[147]=0x3FF0000000000000=1.0;
-        // getter sub_6D966C reads *(player+1176).
-        double _outsideFactor = 1.0;
         tTJSVariant _resourceManager;
         // Player pending slots +768/+776.  They are independent owners from
         // the live +984/+968 stealth slots and are released immediately after
@@ -1360,30 +1377,6 @@ namespace motion {
         // Player+24 std::map<ttstr,int>; UTF-16 code-unit comparator sub_9B1ED0.
         detail::NodeLabelMap _nodeLabelMap;
 
-        // === Render-item scratch state (Phase A9) ===
-        // preparedRenderItems is the per-frame scratch array of native-shape
-        // render items. It corresponds to libkrkr2.so's per-DRAW temporary
-        // vector (built by sub_6C2334, consumed at draw time via
-        // sub_6D5164 → sub_6C7440), NOT player+936/944.
-        // CORRECTION (2026-06-07, fresh decompile of 0x6BE0C0/sub_6F363C):
-        // player+936/944 is a DEAD residual buffer in this build — it has no
-        // producer (no leaf render-item is ever pushed into it; sub_6C2334
-        // writes into caller-stack temporaries) and no consumer (nothing reads
-        // it back). It is now reproduced 1:1 as the SEPARATE member
-        // _childMotionRenderAggregate below (NOT this _preparedRenderItems
-        // list). It is only fed by child players' equally-empty +936 via the
-        // sub_6BE0C0 @0x6BE2C0 / particleStepChildren sub_6C17A4 @0x6C1A00
-        // aggregation, so it stays empty→empty and is observably inert. The
-        // live child render aggregation lives at draw/build time in
-        // appendChildEntriesAtCurrentNode (PlayerRenderItems.cpp). prepared
-        // RenderItemsTopLevel and preparedRenderItemsGroup are the a2/a3 lists
-        // threaded through sub_6C2334 → sub_6C4E28 → sub_6C7440; both alias into
-        // preparedRenderItems. renderItemNativeFieldLifetimeByNode preserves
-        // the +21 / +216..228 cross-frame fields. perNodeEvalData is local
-        // diagnostic scratch (no binary equivalent).
-        std::vector<detail::PreparedRenderItem> _preparedRenderItems;
-        std::vector<detail::PreparedRenderItem *> _preparedRenderItemsTopLevel;
-        std::vector<detail::PreparedRenderItem *> _preparedRenderItemsGroup;
         // libkrkr2.so player+936/944 (qword index 117/118): the DEAD residual
         // child-motion render-item aggregate vector. Faithful 1:1 of the binary
         // buffer (see detail::DeadChildMotionRenderItem). It is observably inert
@@ -1392,12 +1385,10 @@ namespace motion {
         // updateLayersPhase3_MotionSubNode (sub_6BE0C0 @0x6BE2C0) and the
         // particle pass (Player_particleStepChildren sub_6C17A4 @0x6C1A00), both
         // of which aggregate equally-empty child buffers. This is NOT the live
-        // draw render list (_preparedRenderItems above is); they are distinct
-        // buffers in the binary. ctor: player+936 zero-init @0x6CEF1C (empty
+        // draw render lists (which are caller-stack temporaries); they are
+        // distinct buffers in the binary. ctor: player+936 zero-init @0x6CEF1C (empty
         // vector). dtor: per-element variant destroy + free (the vector dtor).
         std::vector<detail::DeadChildMotionRenderItem> _childMotionRenderAggregate;
-        std::unordered_map<int, detail::RenderItemNativeFieldLifetime>
-            _renderItemNativeFieldLifetimeByNode;
         // libkrkr2.so player+760: persistent SeparateLayerAdaptor used by the
         // build-side requireLayerId materialization in sub_6C4E28 @ 0x6C5DBC.
         // Lazily created (Window.mainWindow.primaryLayer) the first time a
@@ -1538,10 +1529,9 @@ namespace motion {
         // to interpolated derivative path instead of using deltaPos.
         bool _noUpdateYet = true;  // player+608
 
-        // NOTE: _emoteMeshDivisionRatio / _emoteMeshDivisionRatioDup MIGRATED
-        // to EmoteEngine+1168/+1176 (per binary spec — these doubles live on
-        // EmoteEngine, not Player). Callers now read/write via
-        // _engineBack->_meshDivisionRatio[Dup].
+        // EmoteEngine also owns a distinct ratio pair at +1168/+1176.  Those
+        // fields drive Emote scaling/mesh-grid construction through
+        // _engineBack and must not be conflated with Player::_meshDivisionRatio.
         //
         // NOTE: hairScale/partsScale/bustScale are EmotePlayer/EmoteObject
         // properties (sub_681F20/28/30 write EmoteObject+1184/+1192/+1200),

@@ -975,7 +975,7 @@ public:
         arr.GetDispatch()->NativeInstanceSupport(
                 TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
                 (iTJSNativeInstance **)&ni);
-        std::vector<tTJSVariant> *items = &ni->Items; // v34 @0x5a0714（死值，忠实复刻）
+        std::deque<tTJSVariant> *items = &ni->Items; // v34 @0x5a0714（死值，忠实复刻）
         (void)items;
         // count==0 → renderCount - start（+84）
         if(!count)
@@ -1098,7 +1098,7 @@ public:
         arr.GetDispatch()->NativeInstanceSupport(
                 TJS_NIS_GETINSTANCE, TJSGetArrayClassID(),
                 (iTJSNativeInstance **)&ni);
-        std::vector<tTJSVariant> *items = &ni->Items; // v18 @0x5a62bc（死值，忠实复刻）
+        std::deque<tTJSVariant> *items = &ni->Items; // v18 @0x5a62bc（死值，忠实复刻）
         (void)items;
         for(size_t i = 0; i < ruby.size(); ++i) {
             const RubyItem &r = ruby[i];

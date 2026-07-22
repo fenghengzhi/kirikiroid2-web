@@ -551,7 +551,7 @@ TJS2 Global
        ├─ Circle         — 圆形状 (x, y, r, contains)
        ├─ Rect           — 矩形状 (l, t, w, h, contains)
        ├─ Quad           — 四边形  (p, contains)
-       ├─ LayerGetter    — 层属性读取器 (28 个只读属性)
+       ├─ LayerGetter    — 层属性读取器 (29 个只读属性)
        │
        ├─ Player         — 动画播放器 (最大，~80 个成员)
        │                   47 属性 + 30 方法

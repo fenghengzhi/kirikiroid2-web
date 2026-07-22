@@ -235,7 +235,9 @@ namespace motion {
             return;
         }
 
-        const bool prepareOk = prepareRenderItems();
+        detail::PreparedRenderItemList mainList;
+        detail::PreparedRenderItemList auxList;
+        const bool prepareOk = prepareRenderItems(mainList, auxList);
 #if defined(KRKR2_WASMTIME_HEADLESS)
         renderTrace.recordPrepareResult(prepareOk);
 #endif
@@ -256,7 +258,8 @@ namespace motion {
         renderTrace.recordBranchAfterPrepare(_d3dDrawMode);
 #endif
         if(_d3dDrawMode) {
-            const bool ok = renderViaSharedD3DAdaptor(paramObj);
+            const bool ok = renderViaSharedD3DAdaptor(
+                paramObj, mainList);
 #if defined(KRKR2_WASMTIME_HEADLESS)
             renderTrace.setRoute(ok ? "shared_d3d_after_prepare" : "failed");
 #endif
@@ -270,14 +273,15 @@ namespace motion {
             return;
         }
 
-        applyPreparedRenderItemTranslateOffsets();
+        applyPreparedRenderItemTranslateOffsets(mainList);
 #if defined(KRKR2_WASMTIME_HEADLESS)
         renderTrace.recordApplyTranslateOffset();
 #endif
         tTJSVariant targetCopy;
         targetCopy = *arg;
         const bool rendered =
-            renderToCanvasLike_0x6C7440(&targetCopy, true);
+            renderToCanvasLike_0x6C7440(
+                &targetCopy, true, mainList, auxList);
 #if defined(KRKR2_WASMTIME_HEADLESS)
         renderTrace.recordRenderToCanvas(rendered);
 #endif

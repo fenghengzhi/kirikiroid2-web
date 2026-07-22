@@ -1,5 +1,14 @@
 # MotionPlayer P3 架构级 reframe 计划（2026-06-05）
 
+> **2026-07-22 superseding correction:** this is a historical plan, not a
+> description of the current tree. HashMap A's mapped value is now
+> `LoadedResourceRecord{PSBFile, Win source map, KRKR source map}`, not
+> `tTJSVariant`; the shared `State`, `findLoaded`, `getLastLoadedModule` and
+> `lastLoadedPath` model was disproved and deleted. Subsequent reconstruction
+> also removed the native-value/adaptor duplication described as P3-B. Keep the
+> archived body below only as an evidence trail; use
+> `psbfile_android_reconstruction_2026-07-18.md` for current status.
+
 > 来源：2026-06-05 推进 5 个登记 open 项后净剩的 2 个**架构级**偏差（commit 596b3c5）。
 > 二者均非 additive，需回**阶段-2 重做数据流**（同输入→同中间变量→同计算顺序→同输出），
 > 不可在现结构上打补丁（CLAUDE.md「禁止在架构不一致的基础上打补丁」）。

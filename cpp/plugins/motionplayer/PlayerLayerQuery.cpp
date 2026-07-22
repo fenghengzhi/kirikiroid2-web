@@ -6,6 +6,9 @@
 #include "SourceCache.h"
 #include "ncbind.hpp"
 
+#include <cstdint>
+#include <cstring>
+
 using namespace motion::internal;
 
 namespace {
@@ -17,7 +20,6 @@ namespace {
             dispatch->Release();
             return result;
         }
-        delete shape;
         return {};
     }
 
@@ -70,81 +72,137 @@ namespace {
         return motion::detail::hitTestHitData(hit, x, y);
     }
 
-    tTJSVariant buildLayerGetterVariant(motion::Player &player,
-                                        const motion::detail::MotionNode &node) {
+    tTJSVariant buildLayerGetterVariant(motion::detail::MotionNode &node) {
         using LayerGetterAdaptor = ncbInstanceAdaptor<motion::LayerGetter>;
 
-        auto *getter = new motion::LayerGetter();
-        getter->setType(node.nodeType);
-        getter->setLabel(node.layerName);
-        getter->setVisible(node.accumulated.visible);
-        getter->setBranchVisible(node.accumulated.active);
-        getter->setLayerVisible(node.drawFlag);
-        getter->setX(node.accumulated.posX);
-        getter->setY(node.accumulated.posY);
-        getter->setFlipX(node.accumulated.flipX);
-        getter->setFlipY(node.accumulated.flipY);
-        getter->setZoomX(node.accumulated.scaleX);
-        getter->setZoomY(node.accumulated.scaleY);
-        getter->setAngleRad(node.accumulated.angle);
-        getter->setAngleDeg(
-            node.accumulated.angle * 180.0 / 3.14159265358979323846);
-        getter->setSlantX(node.accumulated.slantX);
-        getter->setSlantY(node.accumulated.slantY);
-        getter->setOriginX(node.source.originX);
-        getter->setOriginY(node.source.originY);
-        getter->setOpacity(node.accumulated.opacity);
-        getter->setMtx(motion::detail::makeArray({
-            tTJSVariant(node.accumulated.m11),
-            tTJSVariant(node.accumulated.m12),
-            tTJSVariant(node.accumulated.m21),
-            tTJSVariant(node.accumulated.m22),
-            tTJSVariant(node.accumulated.posX),
-            tTJSVariant(node.accumulated.posY),
-        }));
-        getter->setVtx(motion::detail::makeArray({
-            tTJSVariant(node.vertices[0]), tTJSVariant(node.vertices[1]),
-            tTJSVariant(node.vertices[2]), tTJSVariant(node.vertices[3]),
-            tTJSVariant(node.vertices[4]), tTJSVariant(node.vertices[5]),
-            tTJSVariant(node.vertices[6]), tTJSVariant(node.vertices[7]),
-        }));
-        getter->setColor(motion::detail::makeArray({
-            tTJSVariant(static_cast<tjs_int>(node.colorBytes[0])),
-            tTJSVariant(static_cast<tjs_int>(node.colorBytes[1])),
-            tTJSVariant(static_cast<tjs_int>(node.colorBytes[2])),
-            tTJSVariant(static_cast<tjs_int>(node.colorBytes[3])),
-        }));
-        // LayerGetter_shape @ 0x69CB48 passes node+1664 to the four-way
-        // shape factory sub_691EE0. Unknown types intentionally stay void.
-        getter->setShape(buildShapeVariantLike_0x691EE0(node));
-        if(node.nodeType == 3) {
-            getter->setMotion(node.childPlayerVar);
-        } else if(node.nodeType == 4) {
-            getter->setParticle(node.particleArrayVar);
-        }
+        // Player_getLayerGetter @0x6D38F4 and getLayerGetterList @0x6D4F88
+        // allocate only a raw node-pointer wrapper.  The adaptor owns this
+        // wrapper, but neither wrapper nor adaptor owns the MotionNode.
+        auto *getter = new motion::LayerGetter(&node);
 
         if(auto *dispatch = LayerGetterAdaptor::CreateAdaptor(getter)) {
             tTJSVariant result(dispatch, dispatch);
             dispatch->Release();
             return result;
         }
-        delete getter;
+        // The Android failure path returns Void without deleting the freshly
+        // allocated wrapper; preserve that observable allocation boundary.
         return {};
     }
 
 } // anonymous namespace
 
 namespace motion {
-    tTJSVariant Quad::getP() const {
-        std::vector<tTJSVariant> points;
-        points.reserve(4);
+    int LayerGetter::getType() const { return _node->nodeType; }
+    ttstr LayerGetter::getLabel() const { return _node->layerName; }
+    ttstr LayerGetter::getSrc() const { return _node->activeSlot().srcValue; }
+    bool LayerGetter::getVisible() const { return _node->accumulated.visible; }
+    bool LayerGetter::getBranchVisible() const {
+        return _node->accumulated.active;
+    }
+    bool LayerGetter::getLayerVisible() const {
+        return _node->accumulated.visible && _node->accumulated.active;
+    }
+    double LayerGetter::getX() const { return _node->accumulated.posX; }
+    double LayerGetter::getY() const { return _node->accumulated.posY; }
+    double LayerGetter::getLeft() const { return _node->accumulated.posX; }
+    double LayerGetter::getTop() const { return _node->accumulated.posY; }
+
+    tTJSVariant LayerGetter::getCoord() const {
+        auto result = detail::createTJSArrayWithItems_guess();
+        result.items->emplace_back(_node->accumulated.posX);
+        result.items->emplace_back(_node->accumulated.posY);
+        result.items->emplace_back(_node->accumulated.posZ);
+        return result.value;
+    }
+
+    bool LayerGetter::getFlipX() const { return _node->accumulated.flipX; }
+    bool LayerGetter::getFlipY() const { return _node->accumulated.flipY; }
+    double LayerGetter::getZoomX() const { return _node->accumulated.scaleX; }
+    double LayerGetter::getZoomY() const { return _node->accumulated.scaleY; }
+    double LayerGetter::getAngleDeg() const { return _node->accumulated.angle; }
+    double LayerGetter::getAngleRad() const {
+        return _node->accumulated.angle * 3.14159265358979323846 / 180.0;
+    }
+    double LayerGetter::getSlantX() const { return _node->accumulated.slantX; }
+    double LayerGetter::getSlantY() const { return _node->accumulated.slantY; }
+    double LayerGetter::getOriginX() const { return _node->activeSlot().ox; }
+    double LayerGetter::getOriginY() const { return _node->activeSlot().oy; }
+    int LayerGetter::getOpacity() const { return _node->accumulated.opacity; }
+
+    tTJSVariant LayerGetter::getMtx() const {
+        auto result = detail::createTJSArrayWithItems_guess();
+        result.items->emplace_back(_node->accumulated.m11);
+        result.items->emplace_back(_node->accumulated.m12);
+        result.items->emplace_back(_node->accumulated.m21);
+        result.items->emplace_back(_node->accumulated.m22);
+        return result.value;
+    }
+
+    tTJSVariant LayerGetter::getVtx() const {
+        auto result = detail::createTJSArrayWithItems_guess();
         for(size_t i = 0; i < 4; ++i) {
-            points.push_back(detail::makeDictionary({
-                {"x", tTJSVariant(verts[i * 2])},
-                {"y", tTJSVariant(verts[i * 2 + 1])},
-            }));
+            ncbDictionaryAccessor point;
+            point.SetValue(TJS_W("x"), _node->vertices[i * 2],
+                           TJS_MEMBERENSURE, &detail::xMemberHint_guess);
+            point.SetValue(TJS_W("y"), _node->vertices[i * 2 + 1],
+                           TJS_MEMBERENSURE, &detail::yMemberHint_guess);
+            result.items->emplace_back(point.GetDispatch(),
+                                       point.GetDispatch());
         }
-        return detail::makeArray(points);
+        return result.value;
+    }
+
+    tTJSVariant LayerGetter::getColor() const {
+        auto result = detail::createTJSArrayWithItems_guess();
+        for(size_t i = 0; i < 4; ++i) {
+            std::uint32_t packed;
+            std::memcpy(&packed, _node->colorBytes + i * sizeof(packed),
+                        sizeof(packed));
+            result.items->emplace_back(static_cast<tjs_int64>(packed));
+        }
+        return result.value;
+    }
+
+    tTJSVariant LayerGetter::getBezierPatch() const {
+        if(_node->meshType != 1) {
+            return {};
+        }
+        auto result = detail::createTJSArrayWithItems_guess();
+        for(const auto &point : _node->meshControlPoints) {
+            result.items->emplace_back(static_cast<double>(point.x));
+            result.items->emplace_back(static_cast<double>(point.y));
+        }
+        return result.value;
+    }
+
+    tTJSVariant LayerGetter::getShape() const {
+        return buildShapeVariantLike_0x691EE0(*_node);
+    }
+
+    tTJSVariant LayerGetter::getMotion() const {
+        return _node->nodeType == 3 ? _node->childPlayerVar : tTJSVariant{};
+    }
+
+    tTJSVariant LayerGetter::getParticle() const {
+        return _node->nodeType == 4 ? _node->particleArrayVar : tTJSVariant{};
+    }
+
+    tTJSVariant Quad::getP() const {
+        // Quad_p @0x691CF4: each point dictionary and the outer Array are
+        // materialised in one pass, using the same process-wide x/y hint
+        // slots as LayerGetter_vtx @0x69C4B4.
+        auto result = detail::createTJSArrayWithItems_guess();
+        for(size_t i = 0; i < 4; ++i) {
+            ncbDictionaryAccessor point;
+            point.SetValue(TJS_W("x"), verts[i * 2], TJS_MEMBERENSURE,
+                           &detail::xMemberHint_guess);
+            point.SetValue(TJS_W("y"), verts[i * 2 + 1], TJS_MEMBERENSURE,
+                           &detail::yMemberHint_guess);
+            result.items->emplace_back(point.GetDispatch(),
+                                       point.GetDispatch());
+        }
+        return result.value;
     }
 
     // --- Viewport/display ---
@@ -213,40 +271,25 @@ namespace motion {
         // _Rb_tree_increment @sub_1485230), emitting each KEY (raw PSB "label")
         // as a string variant — never the value (node index), no nodeType /
         // visible gating, no type3/type4 descent.
-        ensureMotionLoaded();
-        // 0x6D1134: `if (*a2 == 0)` — void/absent args[0] emits every key;
-        // otherwise apply the substring filter below.
-        std::string needle;
-        const bool hasFilter = filter != nullptr;
-        if(hasFilter) {
-            needle = detail::narrow(*filter);
-        }
-        std::vector<std::string> labels;
-        labels.reserve(_nodeLabelMap.size());
+        auto result = detail::createTJSArrayWithItems_guess();
+        // 0x6D1134 tests the ttstr handle itself. A null/empty handle emits
+        // every key; otherwise the raw UTF-16 key is filtered in place.
+        const bool hasFilter = filter != nullptr && !filter->IsEmpty();
         // std::map iteration is key-ascending = the binary's in-order RB-tree
         // walk; _nodeLabelMap keys are raw labels (M5-1).
         for(const auto &[ttLabel, _] : _nodeLabelMap) {
-            // Player+24 map is ttstr-keyed (UTF-16 comparator sub_9B1ED0);
-            // narrow back to std::string for the substring filter / output list.
-            const std::string label = detail::narrow(ttLabel);
             if(hasFilter) {
                 // 0x6D114C: push only when ttstr_indexOf(key, args[0]) >= 0,
-                // i.e. the key CONTAINS the filter (case-sensitive). CORRECTED
-                // 2026-06-03 (fresh decompile of 0x6D10E0 + ttstr_indexOf
-                // 0x9B1FF8): an empty (but present) filter string makes
-                // ttstr_indexOf return 0 (empty needle matches at index 0 of
-                // every key, wcsstr-like), so a present empty-string arg emits
-                // ALL keys — same as the void/absent arg branch. (The prior
-                // comment claiming it emits NOTHING was contradicted by the
-                // decompile.) std::string::find("") also returns 0 (!= npos),
-                // so dropping the needle.empty() guard reproduces this.
-                if(label.find(needle) == std::string::npos) {
+                // i.e. the raw ttstr key contains the raw ttstr filter.
+                if(ttLabel.IndexOf(*filter, 0) < 0) {
                     continue;
                 }
             }
-            labels.push_back(label);
+            // 0x6D1150..0x6D12A8 writes a type-2 Variant holding this exact
+            // map-key string handle into tTJSArrayNI::Items.
+            result.items->emplace_back(ttLabel);
         }
-        return detail::makeArray(detail::stringsToVariants(labels));
+        return result.value;
     }
 
     tTJSVariant Player::getLayerNames() {
@@ -337,9 +380,9 @@ namespace motion {
     }
 
     tTJSVariant Player::getLayerMotion(ttstr name) {
-        // getLayerMotion @0x6D3998: copy node+1912 from the recursively resolved
-        // node. For non-motion nodes that field is the default void variant.
-        ensureMotionLoaded();
+        // Player_getLayerMotion @0x6D3998: copy node+1912 from the recursively
+        // resolved node. For non-motion nodes that field is the default void
+        // variant; this entry performs no implicit load/update call.
         if(auto *node = findNodeByRawLabelLike_0x6B5AD8(name, true)) {
             return node->childPlayerVar;
         }
@@ -347,15 +390,14 @@ namespace motion {
     }
 
     tTJSVariant Player::getLayerGetter(ttstr name) {
-        ensureMotionLoaded();
-        if(false) {
-            return {};
-        }
+        // Player_getLayerGetter @0x6D38F4.  The old IDB names for 0x6D38F4
+        // and 0x6D3998 were swapped; the 0x6D69C8 literal registrations are
+        // authoritative and the IDB has been corrected.
         auto *resolvedNode = findNodeByRawLabelLike_0x6B5AD8(name, true);
         if(!resolvedNode) {
             return {};
         }
-        return buildLayerGetterVariant(*this, *resolvedNode);
+        return buildLayerGetterVariant(*resolvedNode);
     }
 
     tTJSVariant Player::getLayerGetterList() {
@@ -363,18 +405,13 @@ namespace motion {
         // flat node container (Player+200 deque) in nodeIndex order and emits
         // a getter per non-root node. Duplicates are NOT collapsed — every
         // node maps to its own getter, unlike getLayerNames.
-        ensureMotionLoaded();
-
-        std::vector<tTJSVariant> items;
-        items.reserve(_nodes.size());
+        auto result = detail::createTJSArrayWithItems_guess();
         for(size_t i = 1; i < _nodes.size(); ++i) {
-            const auto &node = _nodes[i];
-            auto getter = buildLayerGetterVariant(*this, node);
-            if(getter.Type() != tvtVoid) {
-                items.push_back(std::move(getter));
-            }
+            // 0x6D505C..0x6D5104 appends even a Void result when the adaptor
+            // could not be created; do not filter the element.
+            result.items->emplace_back(buildLayerGetterVariant(_nodes[i]));
         }
-        return detail::makeArray(items);
+        return result.value;
     }
 
 
@@ -451,41 +488,37 @@ namespace motion {
     }
     // --- Misc ---
     tTJSVariant Player::getCommandList() {
-        // libkrkr2.so loc_6D3A4C (chunk owner sub_682520): build the same
-        // per-call render-item vector as draw (sub_6C2334), stable-sort it, then
-        // materialize a fresh TJS Array of command dictionaries.  The caller
-        // compares this structure frame-to-frame to decide whether Layer.update
-        // is necessary, so returning a static source-name list breaks the native
-        // invalidation data flow.
-        prepareRenderItems();
+        // getCommandList @0x6D3A4C: sub_6C2334 builds persistent node-owned
+        // items plus borrowed main/aux pointer lists. Only main is serialized.
+        detail::PreparedRenderItemList mainList;
+        detail::PreparedRenderItemList auxList;
+        prepareRenderItems(mainList, auxList);
 
         const auto makeNumberArray = [](std::initializer_list<double> values) {
-            std::vector<tTJSVariant> variants;
-            variants.reserve(values.size());
+            auto array = detail::createTJSArrayWithItems_guess();
             for(const double value : values) {
-                variants.emplace_back(value);
+                array.items->emplace_back(value);
             }
-            return detail::makeArray(variants);
+            return array.value;
         };
         const auto makeIntegerArray = [](const auto &values) {
-            std::vector<tTJSVariant> variants;
-            variants.reserve(values.size());
+            auto array = detail::createTJSArrayWithItems_guess();
             for(const auto value : values) {
-                variants.emplace_back(static_cast<tjs_int64>(value));
+                array.items->emplace_back(static_cast<tjs_int64>(value));
             }
-            return detail::makeArray(variants);
+            return array.value;
         };
         const auto makeMeshPointArray = [](const auto &values) {
-            std::vector<tTJSVariant> variants;
-            variants.reserve(values.size() * 2);
+            // sub_6C715C @0x6C715C, with the caller's offset={0,0}.
+            auto array = detail::createTJSArrayWithItems_guess();
             for(const auto &point : values) {
-                variants.emplace_back(static_cast<double>(point.x));
-                variants.emplace_back(static_cast<double>(point.y));
+                array.items->emplace_back(static_cast<double>(point.x));
+                array.items->emplace_back(static_cast<double>(point.y));
             }
-            return detail::makeArray(variants);
+            return array.value;
         };
 
-        const auto buildCommand = [&](const detail::PreparedRenderItem &item) {
+        const auto buildCommand = [&](detail::PreparedRenderItem &item) {
             const auto coord = makeNumberArray({
                 item.commandCoord[0], item.commandCoord[1],
                 item.commandCoord[2],
@@ -497,81 +530,130 @@ namespace motion {
             const auto color = makeIntegerArray(item.packedColors);
 
             tTJSVariant clipRect;
-            if(item.hasViewport && item.viewport[2] >= item.viewport[0] &&
+            if(item.viewport[2] >= item.viewport[0] &&
                item.viewport[3] >= item.viewport[1]) {
-                clipRect = detail::makeDictionary({
-                    {"left", tTJSVariant(static_cast<double>(item.viewport[0]))},
-                    {"top", tTJSVariant(static_cast<double>(item.viewport[1]))},
-                    {"right", tTJSVariant(static_cast<double>(item.viewport[2]))},
-                    {"bottom", tTJSVariant(static_cast<double>(item.viewport[3]))},
-                    {"width", tTJSVariant(static_cast<double>(
-                        item.viewport[2] - item.viewport[0]))},
-                    {"height", tTJSVariant(static_cast<double>(
-                        item.viewport[3] - item.viewport[1]))},
-                });
+                ncbDictionaryAccessor clip;
+                clip.SetValue(TJS_W("left"),
+                              static_cast<tjs_real>(item.viewport[0]),
+                              TJS_MEMBERENSURE, &detail::leftMemberHint_guess);
+                clip.SetValue(TJS_W("top"),
+                              static_cast<tjs_real>(item.viewport[1]),
+                              TJS_MEMBERENSURE, &detail::topMemberHint_guess);
+                clip.SetValue(TJS_W("right"),
+                              static_cast<tjs_real>(item.viewport[2]),
+                              TJS_MEMBERENSURE, &detail::rightMemberHint_guess);
+                clip.SetValue(TJS_W("bottom"),
+                              static_cast<tjs_real>(item.viewport[3]),
+                              TJS_MEMBERENSURE, &detail::bottomMemberHint_guess);
+                clip.SetValue(
+                    TJS_W("width"),
+                    static_cast<tjs_real>(item.viewport[2] - item.viewport[0]),
+                    TJS_MEMBERENSURE, &detail::widthMemberHint_guess);
+                clip.SetValue(
+                    TJS_W("height"),
+                    static_cast<tjs_real>(item.viewport[3] - item.viewport[1]),
+                    TJS_MEMBERENSURE, &detail::heightMemberHint_guess);
+                clipRect = tTJSVariant(clip.GetDispatch(), clip.GetDispatch());
             }
 
-            std::vector<std::pair<std::string, tTJSVariant>> fields{
-                {"key", item.contextVariant},
-                {"id", tTJSVariant(item.layerId)},
-                {"src", item.srcRef},
-                {"coordinate", tTJSVariant(item.coordinateMode)},
-                {"opacity", tTJSVariant(item.opacity)},
-                {"blendMode", tTJSVariant(item.blendMode)},
-                {"coord", coord},
-                {"mtx", mtx},
-                {"color", color},
-                {"originX", tTJSVariant(item.originX)},
-                {"originY", tTJSVariant(item.originY)},
-                {"triPriority", tTJSVariant(item.objTriPriority)},
-                {"clipRect", clipRect},
-                {"meshTransform", tTJSVariant(item.meshType)},
-            };
-            if(item.meshType == 2) {
-                fields.emplace_back("compositeMesh", detail::makeDictionary({
-                    {"vtx", makeMeshPointArray(
-                        item.commandCompositeMeshPoints)},
-                    {"divx", tTJSVariant(item.meshDivX)},
-                    {"divy", tTJSVariant(item.meshDivY)},
-                }));
-            } else {
-                int division = static_cast<int>(
+            ncbDictionaryAccessor command;
+            command.SetValue(TJS_W("key"), item.commandKey,
+                             TJS_MEMBERENSURE,
+                             &detail::commandKeyMemberHint_guess);
+            command.SetValue(TJS_W("id"), item.layerId1,
+                             TJS_MEMBERENSURE,
+                             &detail::commandIdMemberHint_guess);
+            command.SetValue(TJS_W("src"), item.commandSrc,
+                             TJS_MEMBERENSURE,
+                             &detail::commandSrcMemberHint_guess);
+            command.SetValue(TJS_W("coordinate"), item.coordinateMode,
+                             TJS_MEMBERENSURE,
+                             &detail::coordinateMemberHint_guess);
+            command.SetValue(TJS_W("opacity"), item.opacity,
+                             TJS_MEMBERENSURE,
+                             &detail::opacityMemberHint_guess);
+            command.SetValue(TJS_W("blendMode"), item.blendMode,
+                             TJS_MEMBERENSURE,
+                             &detail::blendModeMemberHint_guess);
+            command.SetValue(TJS_W("coord"), coord, TJS_MEMBERENSURE,
+                             &detail::coordMemberHint_guess);
+            command.SetValue(TJS_W("mtx"), mtx, TJS_MEMBERENSURE,
+                             &detail::mtxMemberHint_guess);
+            command.SetValue(TJS_W("color"), color, TJS_MEMBERENSURE,
+                             &detail::colorMemberHint_guess);
+            command.SetValue(TJS_W("originX"), item.originX,
+                             TJS_MEMBERENSURE,
+                             &detail::originXMemberHint_guess);
+            command.SetValue(TJS_W("originY"), item.originY,
+                             TJS_MEMBERENSURE,
+                             &detail::originYMemberHint_guess);
+            command.SetValue(TJS_W("triPriority"), item.objTriPriority,
+                             TJS_MEMBERENSURE,
+                             &detail::triPriorityMemberHint_guess);
+            // 0x6D40C8 writes clipRect even when its value is Void.
+            command.SetValue(TJS_W("clipRect"), clipRect,
+                             TJS_MEMBERENSURE,
+                             &detail::clipRectMemberHint_guess);
+            command.SetValue(TJS_W("meshTransform"), item.meshType,
+                             TJS_MEMBERENSURE,
+                             &detail::meshTransformMemberHint_guess);
+
+            if(item.meshType <= 1) {
+                ncbDictionaryAccessor bezier;
+                const auto patch = makeMeshPointArray(
+                    item.commandBezierPatchPoints);
+                bezier.SetValue(TJS_W("patch"), patch, TJS_MEMBERENSURE,
+                                &detail::patchMemberHint_guess);
+                const double scaledDivision =
                     getMeshDivisionRatio() *
-                    static_cast<double>(item.commandPatchDivision));
-                if(division >= 50) {
-                    division = 50;
-                }
-                fields.emplace_back("bezierPatch", detail::makeDictionary({
-                    {"patch", makeMeshPointArray(
-                        item.commandBezierPatchPoints)},
-                    {"division", tTJSVariant(division)},
-                }));
+                    static_cast<double>(item.commandPatchDivision);
+                const tjs_int64 division = scaledDivision >= 50.0
+                    ? 50
+                    : static_cast<tjs_int64>(scaledDivision);
+                bezier.SetValue(TJS_W("division"), division,
+                                TJS_MEMBERENSURE,
+                                &detail::divisionMemberHint_guess);
+                command.SetValue(TJS_W("bezierPatch"), bezier.GetDispatch(),
+                                 TJS_MEMBERENSURE,
+                                 &detail::bezierPatchMemberHint_guess);
+            } else if(item.meshType == 2) {
+                ncbDictionaryAccessor composite;
+                const auto vtx = makeMeshPointArray(
+                    item.commandCompositeMeshPoints);
+                composite.SetValue(TJS_W("vtx"), vtx, TJS_MEMBERENSURE,
+                                   &detail::vtxMemberHint_guess);
+                composite.SetValue(TJS_W("divx"), item.meshDivX,
+                                   TJS_MEMBERENSURE,
+                                   &detail::divxMemberHint_guess);
+                composite.SetValue(TJS_W("divy"), item.meshDivY,
+                                   TJS_MEMBERENSURE,
+                                   &detail::divyMemberHint_guess);
+                command.SetValue(TJS_W("compositeMesh"),
+                                 composite.GetDispatch(), TJS_MEMBERENSURE,
+                                 &detail::compositeMeshMemberHint_guess);
             }
 
-            return detail::makeDictionary(fields);
+            // sub_A0FCC0 @0xA0FCC0 replaces item+284 in place, retaining the
+            // same dispatch as both Object and objthis.
+            item.commandVariant =
+                tTJSVariant(command.GetDispatch(), command.GetDispatch());
         };
 
-        // 0x6D3B84..0x6D45B0 constructs and stores item+284 for every item
-        // before the visibility filter and stencil-chain pass.  Parent/child
-        // stencil links therefore reference these exact dictionary objects,
-        // including dictionaries belonging to items omitted from the result.
-        std::vector<tTJSVariant> itemCommands;
-        itemCommands.reserve(_preparedRenderItems.size());
-        std::unordered_map<const detail::PreparedRenderItem *, size_t>
-            commandIndex;
-        commandIndex.reserve(_preparedRenderItems.size());
-        for(size_t i = 0; i < _preparedRenderItems.size(); ++i) {
-            const auto &item = _preparedRenderItems[i];
-            commandIndex.emplace(&item, i);
-            itemCommands.emplace_back(buildCommand(item));
+        // First pass: every main item gets item+284 before any output filter.
+        for(auto *item : mainList) {
+            if(item) {
+                buildCommand(*item);
+            }
         }
 
-        std::vector<tTJSVariant> commands;
-        commands.reserve(_preparedRenderItems.size());
-        for(size_t i = 0; i < _preparedRenderItems.size(); ++i) {
-            const auto &item = _preparedRenderItems[i];
+        auto result = detail::createTJSArrayWithItems_guess();
+        for(auto *itemPtr : mainList) {
+            if(!itemPtr) {
+                continue;
+            }
+            auto &item = *itemPtr;
             // 0x6D4810..0x6D4820: rawFlag17 || rawFlag16 || opacity==0
-            // commands are retained as item+284 dictionaries but omitted from
+            // command stays in item+284 but is omitted from
             // the returned Array.
             if(item.skipFlag0 || item.rawFlag16 || item.opacity == 0) {
                 continue;
@@ -579,43 +661,41 @@ namespace motion {
 
             tTJSVariant stencilChain;
             if(item.parentItem) {
-                std::vector<tTJSVariant> links;
+                auto chain = detail::createTJSArrayWithItems_guess();
                 for(const auto *parent = item.parentItem; parent;
                     parent = parent->parentItem) {
-                    tTJSVariant mesh;
+                    ncbDictionaryAccessor link;
+                    link.SetValue(TJS_W("type"), parent->stencilComposite,
+                                  TJS_MEMBERENSURE,
+                                  &detail::typeMemberHint_guess);
                     if((parent->stencilComposite & 4) != 0) {
-                        std::vector<tTJSVariant> childMeshes;
-                        childMeshes.reserve(parent->childItems.size());
+                        auto childMeshes =
+                            detail::createTJSArrayWithItems_guess();
                         for(const auto *child : parent->childItems) {
-                            const auto childIt = commandIndex.find(child);
-                            if(childIt != commandIndex.end()) {
-                                childMeshes.push_back(
-                                    itemCommands[childIt->second]);
-                            }
+                            childMeshes.items->emplace_back(
+                                child->commandVariant);
                         }
-                        mesh = detail::makeArray(childMeshes);
+                        link.SetValue(TJS_W("mesh"), childMeshes.value,
+                                      TJS_MEMBERENSURE,
+                                      &detail::meshMemberHint_guess);
                     } else {
-                        const auto parentIt = commandIndex.find(parent);
-                        if(parentIt != commandIndex.end()) {
-                            mesh = itemCommands[parentIt->second];
-                        }
+                        link.SetValue(TJS_W("mesh"), parent->commandVariant,
+                                      TJS_MEMBERENSURE,
+                                      &detail::meshMemberHint_guess);
                     }
-                    links.emplace_back(detail::makeDictionary({
-                        {"type", tTJSVariant(parent->stencilComposite)},
-                        {"mesh", mesh},
-                    }));
+                    chain.items->emplace_back(link.GetDispatch(),
+                                              link.GetDispatch());
                 }
-                stencilChain = detail::makeArray(links);
+                stencilChain = chain.value;
             }
 
-            auto command = itemCommands[i];
-            if(auto *dictionary = command.AsObjectNoAddRef()) {
-                dictionary->PropSet(TJS_MEMBERENSURE, TJS_W("stencilChain"),
-                                    nullptr, &stencilChain, dictionary);
-            }
-            commands.emplace_back(command);
+            ncbPropAccessor command(item.commandVariant);
+            command.SetValue(TJS_W("stencilChain"), stencilChain,
+                             TJS_MEMBERENSURE,
+                             &detail::stencilChainMemberHint_guess);
+            result.items->emplace_back(item.commandVariant);
         }
-        return detail::makeArray(commands);
+        return result.value;
     }
 
     // getD3DAvailable / doAlphaMaskOperation relocated to Motion namespace-level

@@ -7,6 +7,12 @@ metadata:
 
 # Player 字段碰撞表（截至 2026-05-31）
 
+> **2026-07-23 superseded correction：**下表保留为 2026-05-31 历史审计。
+> 当前 `_progressFlags`、`_frameLoopTime`、`_loopArmed`、`_parentColorPacked`
+> 及 EmoteEngine 影子 `_queuing` 已删除，分别收敛到 Player `_queuing`、
+> `_frameTickCount`、`_allplaying`、`_colorWeightPacked`。下表的“建议”已实施，
+> 不得再当作当前 open 碰撞清单。
+
 5 处确认的 binary 偏移 → port 双字段冲突。每条都是 P0 重构候选。
 
 | binary 偏移 | binary 类型 | port 字段 A | port 字段 B | 真相 / 建议 |
@@ -32,7 +38,7 @@ metadata:
 
 ## 未验证但怀疑的 phantom
 
-- `_cameraFOV = 60.0` (double, Player.h:713)：binary `Player_getCameraFOV @ 0x6D96EC` (未亲自反编译) 读 +1100 byte。double vs byte 严重不匹配
+- **2026-07-23 纠正：**+1100 是 `cameraAlive` bool，不是 cameraFOV。cameraFOV 的 NCB getter 读 +1104 double，ctor 默认 0.2。本地同时存在 `_cameraFov=0.2` 与 NCB getter/setter 使用的 `_cameraFOV=60.0`，双轨路由仍需单独对齐；旧的“double vs +1100 byte”结论已证伪。
 - `_findMotionContextVariant` (Player.h:1044)：注释自己承认"exact semantic name is still under investigation"
 - `_needsInternalAssignImages` 标 +613：未亲自反编译验证
 - `_evalResultList`/`_evalResultListIndex` (Player.h:955-957)：list+index 模拟 LRU，binary HM2@+320 是单纯 hashmap，无 LRU；属于 port 发明
@@ -41,4 +47,4 @@ metadata:
 
 - 完整字段表见 [[player-1384b-flat-spec]]
 - HM 容器选型见 [[player-container-layout]]
-- 反编译证据：`Player_progress_inner @ 0x6C106C`, `Player_updateLayers @ 0x6BBDF8`, `Player_updateLayers_childMotionPass @ 0x6BE0C0..0x6BE4FC`, `Player_getPlaying @ 0x6D9794`, `Player_getCompletionType @ 0x6D9634`, `Player_getPriorDraw @ 0x6D965C`, `Player_ctor @ 0x6CED30`, `sub_6D9920 @ 0x6D9920` (setUseD3DFlag +909)
+- 反编译证据：`Player_progress_inner @ 0x6C106C`, `Player_updateLayers @ 0x6BBDF8`, `Player_updateLayers_childMotionPass @ 0x6BE0C0..0x6BE4FC`, `Player_getPlaying @ 0x6D9794`, `Player_getCompletionType @ 0x6D9624`, `Player_getPriorDraw @ 0x6D9648`, `Player_ctor @ 0x6CED30`, `sub_6D9920 @ 0x6D9920` (setUseD3DFlag +909)

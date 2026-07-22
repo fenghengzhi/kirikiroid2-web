@@ -339,24 +339,21 @@ namespace motion {
            !_source.GetDictionaryValue("clip", clip)) {
             return {};
         }
-        iTJSDispatch2 *dictionary = TJSCreateDictionaryObject();
-        tTJSVariant result(dictionary, dictionary);
-        dictionary->Release();
-
-        tTJSVariant value(
-            clip.GetDictionaryValueStrict("left").GetDouble());
-        dictionary->PropSet(TJS_MEMBERENSURE, TJS_W("left"), nullptr, &value,
-                            dictionary);
-        value = clip.GetDictionaryValueStrict("top").GetDouble();
-        dictionary->PropSet(TJS_MEMBERENSURE, TJS_W("top"), nullptr, &value,
-                            dictionary);
-        value = clip.GetDictionaryValueStrict("right").GetDouble();
-        dictionary->PropSet(TJS_MEMBERENSURE, TJS_W("right"), nullptr, &value,
-                            dictionary);
-        value = clip.GetDictionaryValueStrict("bottom").GetDouble();
-        dictionary->PropSet(TJS_MEMBERENSURE, TJS_W("bottom"), nullptr,
-                            &value, dictionary);
-        return result;
+        ncbDictionaryAccessor dictionary;
+        dictionary.SetValue(TJS_W("left"),
+                            clip.GetDictionaryValueStrict("left").GetDouble(),
+                            TJS_MEMBERENSURE, &detail::leftMemberHint_guess);
+        dictionary.SetValue(TJS_W("top"),
+                            clip.GetDictionaryValueStrict("top").GetDouble(),
+                            TJS_MEMBERENSURE, &detail::topMemberHint_guess);
+        dictionary.SetValue(TJS_W("right"),
+                            clip.GetDictionaryValueStrict("right").GetDouble(),
+                            TJS_MEMBERENSURE, &detail::rightMemberHint_guess);
+        dictionary.SetValue(
+            TJS_W("bottom"),
+            clip.GetDictionaryValueStrict("bottom").GetDouble(),
+            TJS_MEMBERENSURE, &detail::bottomMemberHint_guess);
+        return tTJSVariant(dictionary.GetDispatch(), dictionary.GetDispatch());
     }
 
     void ObjSource::ensureTextureLike_0x6DA454() {

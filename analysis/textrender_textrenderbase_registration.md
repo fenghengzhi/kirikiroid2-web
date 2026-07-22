@@ -689,7 +689,7 @@ resolveFaceIndex@0x5A14DC 形参由 `const ttstr&` 改为按值 `ttstr`。callee
 
 | # | 项目 | 二进制证据 | 本地修复 | 结论 |
 |---|---|---|---|
-| 11.2-1 | NIS 后死值 `&ni->Items` | getCharacters `v34=v37[0]+2`(=+16B) @0x5a0714；sub_5A6240 `v18=v19[0]+16` @0x5a62bc。两处算 `&ni->Items` 后从不消费（append 全走 dispatch）。**getKeyWait 反编译确认无此值**（NIS 后直接 `v8=+488-+480` @0x5a0340），故不加 | getCharacters/buildRubyArray 各补 `std::vector<tTJSVariant> *items = &ni->Items; (void)items;`（死值忠实复刻，`(void)` 仅压制跨编译器 unused 警告，不改语义）；getKeyWait 不加 | ✅ |
+| 11.2-1 | NIS 后死值 `&ni->Items` | getCharacters `v34=v37[0]+2`(=+16B) @0x5a0714；sub_5A6240 `v18=v19[0]+16` @0x5a62bc。两处算 `&ni->Items` 后从不消费（append 全走 dispatch）。**getKeyWait 反编译确认无此值**（NIS 后直接 `v8=+488-+480` @0x5a0340），故不加 | getCharacters/buildRubyArray 各补 `std::deque<tTJSVariant> *items = &ni->Items; (void)items;`（`Items` 已按当前反编译证据改为 deque；死值忠实复刻，`(void)` 仅压制跨编译器 unused 警告，不改语义）；getKeyWait 不加 | ✅ |
 | 11.2-2 | '[' 标签 !ignore_ruby refcount no-op | case '[' @0x5a28b0 `if(!+56)`：对 tagAccum(v137[0]) AddRef（do-stlxr @0x5a28c0）+ 即刻 Release（LABEL_114 @0x5a28d0）= 净 no-op，源码 = 一个即刻析构的 ttstr 拷贝 | `if(!_ignoreRuby){ ttstr rubyText = tagAccum; }`（拷贝=AddRef，出作用域=Release）替代旧 `(void)_ignoreRuby` | ✅ |
 | 11.2-3 | v132 未初始化 | disasm 入口：v133 @0x5a238c `STR WZR`（显式 0）**但** v132 @0x5a2390 `STR W8`（存上文遗留寄存器值，非 0）→ 证源码 v132 **无初始化器**（否则编译器同发 STR WZR）。值在 v133 触发的 begin 路径先写后读 | `tjs_char v132;`（去掉旧 `= 0`），注明源码无初始化器 | ✅ |
 

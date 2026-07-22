@@ -150,9 +150,17 @@ namespace motion {
         // into this vector, so they must be removed while the entries are alive.
         purgeParameterRampMapLike_0x6CDE18();
 
-        // libkrkr2.so player+760 SeparateLayerAdaptor is owned by Player and
-        // released on teardown (raw pointer + manual new/delete, matching the
-        // binary object lifetime). Aligned with sub_6C4E28 @0x6C5DBC.
+        // Player_dtor@0x6CFADC releases and destroys every non-root node before
+        // destroying the SeparateLayerAdaptor. The remaining root is destroyed
+        // later by the deque member destructor.
+        if(_nodes.size() > 1) {
+            for(size_t i = 1; i < _nodes.size(); ++i) {
+                dispatchReleaseLayerId(_nodes[i].layerId1);
+                dispatchReleaseLayerId(_nodes[i].layerId2);
+            }
+        }
+        detail::resetNodeTreeKeepRootLike_0x6B56F8(*this);
+
         delete _renderSeparateLayerAdaptor;
         _renderSeparateLayerAdaptor = nullptr;
     }
@@ -315,19 +323,21 @@ namespace motion {
         }
     }
 
-    // M15 missing `meshDivisionRatio` (cluster E §3.1): binary Motion.Player
-    // exposes as property delegating to EmoteEngine +1168 (cluster E §1 ctor
-    // confirmed +1168 lives on EmoteEngine, not Player; the NCB property on
-    // Motion.Player is a delegate). Defaults to 1.0 if no engine attached.
+    // Player_ncb_registerMembers@0x6D7250..0x6D7290 binds the literal
+    // "meshDivisionRatio" to accessors that directly read/write Player+1176
+    // (0x6D9670/0x6D9674).  This is independent from the EmoteEngine ratios.
     double Player::getMeshDivisionRatio() const {
-        return _engineBack ? _engineBack->_meshDivisionRatio : 1.0;
+        return _meshDivisionRatio;
+    }
+
+    // Player_updateLayers@0x6BCF28..0x6BCF3C reaches the owning EmoteEngine
+    // and reads its separate +1176 ratio while constructing node+2048.
+    double Player::meshDivisionRatioDupLike_0x6BCF3C() const {
+        return _engineBack ? _engineBack->_meshDivisionRatioDup : 1.0;
     }
 
     void Player::setMeshDivisionRatio(double v) {
-        if(_engineBack) {
-            _engineBack->_meshDivisionRatio = v;
-            _engineBack->_meshDivisionRatioDup = v;
-        }
+        _meshDivisionRatio = v;
     }
 
     // M15 missing `bounds` property (cluster E §3.1): binary returns a TJS
@@ -561,8 +571,10 @@ namespace motion {
         iTJSDispatch2 *rm = _resourceManager.Type() == tvtObject
             ? _resourceManager.AsObjectNoAddRef()
             : nullptr;
-        if(rm != nullptr && _findMotionContextVariant.Type() != tvtVoid &&
-           !motion.IsEmpty()) {
+        // Player_loadMotion @ 0x6B142C..0x6B1478 copies Player+1012 as a
+        // complete Variant and calls findMotion even when it is void; the
+        // ResourceManager body owns the direct-vs-fallback gate.
+        if(rm != nullptr) {
             tTJSVariant project = _findMotionContextVariant;
             tTJSVariant path(detail::widen(
                 "motion/" + detail::narrow(chara) + "/" +
@@ -763,24 +775,26 @@ namespace motion {
     }
 
     tTJSVariant Player::getVariableKeys() {
-        std::vector<tTJSVariant> keys;
-        keys.reserve(_variableLabelScopes.size());
+        // Player_getVariableKeys @0x6D139C creates the Array first through
+        // sub_704CB8, then writes String Variants straight into the native
+        // tTJSArrayNI::Items deque. There is no intermediate vector or TJS
+        // `add` dispatch.
+        auto result = detail::createTJSArrayWithItems_guess();
         for(const auto &scope : _variableLabelScopes) {
-            keys.emplace_back(scope.cascadeKey);
+            result.items->emplace_back(scope.cascadeKey);
         }
-        return detail::makeArray(keys);
+        return result.value;
     }
 
     // transformOrder getter: libkrkr2.so sub_6CC188 (bound to L"transformOrder")
     // builds a TJS Array of the 4 ints at node+84..96 (type-4 int variants), in
-    // order. detail::makeArray replicates TJSCreateArrayObject + per-item append.
+    // order, by writing tTJSArrayNI::Items directly after sub_704CB8.
     tTJSVariant Player::getTransformOrder() const {
-        return detail::makeArray({
-            tTJSVariant((tjs_int)_transformOrder[0]),
-            tTJSVariant((tjs_int)_transformOrder[1]),
-            tTJSVariant((tjs_int)_transformOrder[2]),
-            tTJSVariant((tjs_int)_transformOrder[3]),
-        });
+        auto result = detail::createTJSArrayWithItems_guess();
+        for(const int value : _transformOrder) {
+            result.items->emplace_back(static_cast<tjs_int>(value));
+        }
+        return result.value;
     }
 
     // transformOrder setter: libkrkr2.so sub_6CC2C4 reads 4 elements [0..3] of
@@ -819,15 +833,14 @@ namespace motion {
 
     // defaultTransformOrder getter — aligned with libkrkr2.so sub_6B097C
     // @0x6B097C. The binary builds a 4-element TJS Array, pushing each
-    // dword_1AA40D8[i] (i=0..3) as an int variant (type=4). detail::makeArray
-    // replicates TJSCreateArrayObject + per-item append in the same order.
+    // dword_1AA40D8[i] (i=0..3) as an int variant (type=4) directly into the
+    // native Items deque returned alongside the Array by sub_704CB8.
     tTJSVariant Player::getDefaultTransformOrder() const {
-        return detail::makeArray({
-            tTJSVariant((tjs_int)s_defaultTransformOrder[0]),
-            tTJSVariant((tjs_int)s_defaultTransformOrder[1]),
-            tTJSVariant((tjs_int)s_defaultTransformOrder[2]),
-            tTJSVariant((tjs_int)s_defaultTransformOrder[3]),
-        });
+        auto result = detail::createTJSArrayWithItems_guess();
+        for(const int value : s_defaultTransformOrder) {
+            result.items->emplace_back(static_cast<tjs_int>(value));
+        }
+        return result.value;
     }
 
     // defaultTransformOrder setter — aligned with libkrkr2.so sub_6B0AB4

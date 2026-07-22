@@ -65,7 +65,7 @@
 | M19 | F | initNodeFields 0x6B3C78 / MotionNode_initFields 0x6F19B4 | NodeTree.cpp/MotionNode.h | TJS dispatch vs PSBDictionary helper（偏移对，dispatch 链不同）|
 | M20 | H | setFlip/Slant/AngleRad/RootOpacity/RootVisible 0x6C0F1C.. + applyTranslateOffset 0x6D5264 + purgeNodeLabelMap 0x6CDE18 | PlayerUpdateGeometry / 缺 | root 节点 setter 二进制写 root(+200) accum 槽 + dirty；本地写 viewport 标量（API 面不同）；后两者本地缺 |
 | M21 | L | childMotion 门控 0x6BE270 / particle BLOCK1 0x6BF314 | PlayerUpdateChildMotion:38 / Particles:213 | skip-gate 测 node+1504 vs 本地 `accumulated.dirty`；粒子双层门控被压平 |
-| M22 | I | render item 内部容器 + clipRect | RuntimeSupport.h | item 二进制 raw `new(0x1B0)`=432B；本地 STL 结构；clipRect 二进制 float[4] vs 本地 int[4] |
+| M22 | I | render item owner + clipRect | RuntimeSupport.h / MotionNode.h | 2026-07-23：clipRect 已统一为 float[4]；item 改为 MotionNode 持久 owner + caller-stack pointer lists。`new(0x1B0)` 仅为 Android ABI 尺寸，不是 wasm32 padding 目标 |
 
 ### P2 — 注释/语义/方法体顺序（不影响布局）
 
@@ -79,6 +79,11 @@
 ---
 
 ## 三、重要纠正（推翻先前结论）
+
+> **2026-07-23 superseded correction：**下面第 1 项对“本地 `skipFlag1` 反相存储 +
+> `_renderItemInheritedFlag18` 侧挂”的描述仅反映 2026-05-30 历史实现。当前由
+> `appendPreparedRenderItems(..., inheritedFlag18)` 直接传递 a6，item+18 按原极性存入
+> 历史遗留名称 `skipFlag1`，harness 直接输出；无侧挂、无反相层。
 
 1. **build_flow / skipFlag1 / item+18 实际已对齐**（簇 I 反编译证明）。`sub_6C2334 @0x6c33c0`：`item+18 = inheritedFlag18 || (node+48!=0)`；`node+48 = priorDraw`（`sub_6BC4F0 @0x6bc6c4` 证明：仅 forceVisible 时 = `priorDraw&1`）。本地 `PlayerRenderItems.cpp:477` `skipFlag1 = !(inheritedFlag18||(node.priorDraw!=0))` **逐位精确**。m2logo items[1] frame12+ 残余 mismatch 不是公式 bug，而是 build/execute **阶段放置**差（rawFlag20 闩锁位置），低优先。
 2. **requireLayerId(node+16/+20) 提前物化不是偏差**（簇 F）：二进制 `buildNodeTree_recursive` 0x6B4D24/0x6B4DBC 本就每节点 2× requireLayerId，与本地 NodeTree.cpp:102-105 一致。render-build 的 `requireLayerId`(item+424) 是**第三个**独立 layer-id。先前 review 的 build_flow 担忧对 node+16/+20 而言是误判。

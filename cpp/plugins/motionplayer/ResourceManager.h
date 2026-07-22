@@ -100,15 +100,14 @@ namespace motion {
     // is genuine and is justified by this located consumer (sub_6A7518 per-pixel
     // bake), not by findSource. The texture-cache topology and lifetime are now
     // restored on each LoadedResourceRecord; both Win/spec=2 and KRKR/spec=1
-    // now read the record's raw PSBRawNode graph. Offline dump/simulation tools
-    // still have a decoded MotionSnapshot helper, but it is not registered in
-    // ResourceManager and is not part of the Player runtime object graph.
+    // now read the record's raw PSBRawNode graph. The former decoded
+    // MotionSnapshot helper was removed with the compatibility subsystem.
     // Binary libkrkr2.so ResourceManager (0xE8 bytes, NCB registered at 0x6AB8BC)
     // exposes 12 TJS members and holds 3 internal containers + bufLayer +
     // spec int. CORRECTION 2026-07-18: the earlier phase-1 note that these
     // fields were not wired is now false. The inline _loadedModules member is
     // HashMap A whose mapped record owns the raw PSBFile plus the two nested
-    // source maps constructed by sub_6EBCFC; load/unload/unloadAll/findLoaded
+    // source maps constructed by sub_6EBCFC; load/unload/unloadAll
     // and the isExistMotion/findMotion walks use it. The former eager
     // MotionSnapshot registries and local _lastLoadedPath/_lastLoadedModule
     // fields were disproved and removed; Player now owns only the raw +528
@@ -183,7 +182,6 @@ namespace motion {
 
         tTJSVariant load(ttstr path);
         void unload(ttstr path) const;
-        tTJSVariant findLoaded(ttstr path) const;
         tTJSVariant findSource(ttstr moduleKey, ttstr path) const;
         // P3-B (2026-06-05): binary RM exposes ONLY requireLayerId (no-arg) and
         //   releaseLayerId(id) — NCB registrar @0x6AB8BC, bodies sub_6AB694 /
@@ -204,9 +202,9 @@ namespace motion {
         // INHERITED SourceCache::getBufLayer() — the RM-own ttstr getBufLayer()
         // was the pre-inheritance two-class artifact and is removed.
         void unloadAll() const;                         // @0x6A8CF8
-        [[nodiscard]] bool isExistMotion(ttstr projectKey,
+        [[nodiscard]] bool isExistMotion(tTJSVariant projectKey,
                                          ttstr path) const;     // @0x6A96F8
-        [[nodiscard]] tTJSVariant findMotion(ttstr projectKey,
+        [[nodiscard]] tTJSVariant findMotion(tTJSVariant projectKey,
                                               ttstr path) const; // @0x6A9ED4
         static tjs_error random(tTJSVariant *r, tjs_int n, tTJSVariant **p,
                                 iTJSDispatch2 *obj);            // @0x6AB56C
@@ -223,9 +221,6 @@ namespace motion {
 
     private:
         friend class Player;
-
-        detail::LoadedResourceRecord *findLoadedResourceRecord(
-            const ttstr &path) const;
 
         // HashMap A is an inline ResourceManager member in ctor sub_6A88CC,
         // keyed by the raw, case-sensitive ttstr path with the recovered FNV

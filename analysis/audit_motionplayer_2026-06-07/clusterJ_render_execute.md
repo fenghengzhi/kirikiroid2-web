@@ -1,5 +1,9 @@
 # CLUSTER J — render pipeline part 1 (execute + internal + dispatch) alignment audit (2026-06-07)
 
+> **2026-07-23 superseded correction：**本历史审计中出现的
+> `player+1096 /*preview*/` 字段名已被 NCB 字面绑定证伪；raw offset
+> +1096 是 Player `priorDraw` bool，`preview` 是 +1092。地址和分支本身保留。
+
 > Authoritative source: libkrkr2.so (IDB libkrkr2.so.i64). Read-only audit of
 > cpp/; IDB renames/comments applied + idb_save. No cpp/ edits.
 > Method: per-function decompile -> pseudocode -> local counterpart -> compare.
@@ -97,7 +101,7 @@ Player_emitRenderItem_requireLayer(player, a2=mainList, a3=groupList, a4=clip[4]
 - **item+280** meshType 0/1/2 -> affineCopy/bezierPatchCopy/meshCopy. Confirmed in
   BOTH 0x6C4E28 (leaf) and 0x6C7440 (buffered bufLayer + direct operate*).
 - **clipRect item+216..228 is float[4]** (binary writes `*(float*)(item+216)=v80`).
-  Local stores `std::array<int,4> clipRect`. TYPE divergence (see J5).
+  **2026-07-23 correction:** local 与 harness 均已改为 `std::array<float,4>`；原 J5 类型偏差关闭。
 
 ## Findings
 
@@ -107,7 +111,7 @@ Player_emitRenderItem_requireLayer(player, a2=mainList, a3=groupList, a4=clip[4]
 | J2 | 0x6C7440 buffered/direct routing | PlayerRenderInternal.cpp:673-681 shouldUseDirectRenderPathLike | ✅ | Direct gate = (nibble==0 \|\| nibble>5) && !clearEnabled(player+1144) && !item+264. Local: `!clearEnabled && visibleAncestorIndex<0 && (lowNibble==0\|\|>5)` + caller also requires parentItem==null. ALIGNED (item+264==null ≡ parentItem==null ≡ visibleAncestorIndex<0). |
 | J3 | 0x6C7440 blend map | PlayerRenderInternal.cpp:651-671 resolveBlendOperationModeLike | ✅ | switch 1->0xE,2/5->0xF,3->0x10,4->0x11,0/default->0x2. EXACT match. |
 | J4 | 0x6C7440 tail | PlayerRenderExecute.cpp:1291-1298 | ❌ | Binary tail is ONLY setClip(argc0) reset on v370 + release; there is NO renderLayer.Update() in 0x6C7440. Local calls `renderLayer->Update(false)` when !skipUpdate (line 1293). Update has no binary counterpart in this fn (Update lives in updateLayerAfterDraw 0x6CE7D8 / SLA paths). Extra side-effect. |
-| J5 | item+216..228 clipRect | PrepRenderItem clipRect std::array<int,4> | ⚠ | Binary stores float[4]; local int[4]. Same as cluster-I I5. Truncation in clip-local corner math (corners-0.5-clipLeft uses int clipLeft, binary uses float v80). Functionally close because binary then int-truncates in setClip, but the leaf-copy offset uses the FLOAT clip origin (0x6c5968: v61+v58-v66 where v66=float v80), local uses int. TYPE divergence. |
+| J5 | item+216..228 clipRect | PreparedRenderItem clipRect `std::array<float,4>` | ✅ 2026-07-23 | Binary/local/harness 均为 float[4]；原 int 截断偏差已关闭。 |
 | J6 | 0x6C6B48/0x6CBCE4 absolute | PlayerRenderExecute.cpp:395-406 ensureLeafItemLayer | ❌ | Binary leaf/composed Layer.absolute = node.x(node+160)+node.y(node+164); leaf path then does ++node+164 (monotonic per-acquire bump). Local sets `state.absolute = _nextLayerAbsolute++` (pure global counter, ignores node x+y). Different absolute-order seed. |
 | J7 | 0x6C4E28 leaf via acquireLeafLayerById Rb_tree (player+760 SLA) | PlayerRenderExecute.cpp:395 _renderLayerStates[id] | 🔧 | Binary leaf layers live in a std::map<int,LayerSlot> (Rb_tree) ON THE SLA object (player+760), keyed by item+424, cached at map-node+40. Local uses Player::_renderLayerStates (a map keyed by layerId) but NOT hung off a SeparateLayerAdaptor's internal tree; container topology approximated. |
 | J8 | 0x6C9CA8 accurate-SLA | PlayerRenderExecute.cpp:587-703 (HEADLESS-only checkpoint) | 🔧 | Binary accurate path builds a persistent per-item SLA Layer tree (assignImages + drawMeshFrame/drawBezierPatchMeshFrame/drawLine/setPos/type/visible/opacity). Local only has a diagnostics-only `renderAccurateSlaPostDrawCandidateLike_0x6C9CA8` under KRKR2_WASMTIME_HEADLESS that re-runs affineCopy onto a candidate layer — NOT the persistent SLA-tree architecture. isAccurateSlaRenderEnabled() exists but the real accurate branch is unimplemented. |

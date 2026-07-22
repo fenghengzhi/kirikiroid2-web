@@ -1,6 +1,6 @@
 ---
 name: Player progress core (M1 / Cluster G) field map + reseek discovery
-description: progress_inner @0x6C106C byte-verified field types, the previously-undocumented reseekTimelineCursors @0x6B86C8, and the +1093 _speed mislabel correction
+description: progress_inner @0x6C106C byte-verified field types, the previously-undocumented reseekTimelineCursors @0x6B86C8, and the +1093 syncActive off-by-one correction
 metadata:
   type: project
 ---
@@ -21,7 +21,7 @@ CORRECTION 2026-07-12: 0x671764 的 this 是 **EmoteEngine**，不是 Player。0
 ## Byte-verified 字段类型 (a1=Player*)
 - +480 progressFlags = **1-byte** (LDRB @0x6C1330, NOT 16-bit; clusterG "init 257" 存疑). LSB=1 时冻结 +1120 游标推进但仍跑 advanceRoot.
 - +481 firstFrame 1-byte one-shot; +483 motionCompleted 1-byte (STRB WZR @entry 每帧清零, byte-verified @0x6C108C)
-- +482 emoteMode 1-byte; +609 reverseSeekFlag 1-byte; +1093 motionStopGate 1-byte; +1098 syncWaiting; +1099 loopArmed
+- +482 emoteMode 1-byte; +609 reverseSeekFlag 1-byte; +1093 syncActive 1-byte; +1098 syncWaiting; +1099 playing
 - +456 clampedEvalTime double = **min(+1120,+1128)** 标量 (NOT timeline-map lookup — 本端 G4 activeClipTime() 错误根因)
 - +592 deltaTime double = +1168 speedMul * dt; +1120 frameTickCount, +1128 totalFrames, +1136 loopTime 全 double
 - +1152 dword @entry 清零 (用途待定)
@@ -41,7 +41,7 @@ if !+480: +1120 += +592; +456 = min(+1120, +1128)   ← G3/G4 真正逻辑
 反向(d<0) 对称 rewind + wrap to head
 
 ## 本端 frameProgress 入口勘误 (PlayerFrameProgress.cpp:1928) — 2026-06-06
-本端开头 `if(!_speed) return;` 是 port-invented 错位守卫. 二进制 progress_inner 入口**无**此判断; _speed(+1093) 只是 advance/rewindRootAndNodes 内部 align/sync/action 事件 gate, 不门控整个 progress. 正确替换: 入口无条件副作用在前, 然后 `if(!_firstFrame && !_allplaying && renderListEmpty()) return;` (复刻 0x6C10E4/F0 + 0x6C1278). 本端 +1099=_allplaying(Player.h:1104)。CORRECTION 2026-07-13：旧记载“无 +376 字段、恒走 +376==0 路径”已被 0x6B365C 与本地赋值链交叉证伪；`_defaultParameterEntryPtr` 是 Player+376 的语义等价字段，其 0x6C106C 专用进度分支现已恢复。renderList=二进制+384/+392 指针对, 本端对应容器待 grep 确认.
+2026-06-06 的本端开头 `if(!_speed) return;` 是 port-invented 错位守卫，已删除。二进制 progress_inner 入口**无**此判断；+1093 是 `syncActive`，只在 advance/rewind/reseek 内部门控 align/sync 事件，不门控整个 progress。正确入口是无条件副作用在前，然后 `if(!_firstFrame && !_allplaying && renderListEmpty()) return;` (复刻 0x6C10E4/F0 + 0x6C1278)。本端 +1099=_allplaying(Player.h:1104)。CORRECTION 2026-07-13：旧记载“无 +376 字段、恒走 +376==0 路径”已被 0x6B365C 与本地赋值链交叉证伪；`_defaultParameterEntryPtr` 是 Player+376 的语义等价字段，其 0x6C106C 专用进度分支现已恢复。renderList=二进制+384/+392 指针对, 本端对应容器待 grep 确认.
 
 ### 已实施 (2026-06-06, commit 待提交; binary-alignment-auditor 复核通过)
 入口已重构为 progress_inner 真实拓扑(替换 commit 8883587 的临时门控 `if(!_firstFrame && !_allplaying)return`):
@@ -54,7 +54,7 @@ if !+480: +1120 += +592; +456 = min(+1120, +1128)   ← G3/G4 真正逻辑
 - 验证: logo render-events 逐事件 byte-identical(5287, 指针归一化); 千恋万花标题渲染正常无死循环(rAF 持续推进, 无 LOOPWRAP-FWD-HANG).
 
 ## 关键勘误 (本端 Player.h)
-- Player.h:665 `_speed` 注释 "Aligned to +1093: bool flag" 是**错的**. +1093 是 motionStopGate (action/sync/align 开关), 不是 speed. speed 倍率在 **+1168 (double)**, 本端无对应字段.
+- 旧 Player.h `_speed` 字段是 off-by-one 误命名，已删除。+1093 是 `syncActive` (align/sync 事件开关)，speed 倍率在 **+1168 (double)**，本端对应 `_speedMul`。
 
 ## 2026-07-19 状态纠正
 旧“整个 node-deque 帧步进核心缺失”已被后续实现证伪：reseek/advance/rewind、

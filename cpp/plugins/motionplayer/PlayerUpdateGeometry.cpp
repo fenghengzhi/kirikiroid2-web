@@ -178,7 +178,7 @@ namespace motion {
                 detail::MotionNode *clipWalk = vn.meshAncestor;
                 while (clipWalk) {
                     auto &cn = *clipWalk;
-                    if (cn.meshControlPointsPrev.size() >= 16) {
+                    if (cn.transformedMeshControlPoints.size() >= 16) {
                         // Apply inverse matrix to get normalized coords (0x6BC858..0x6BC87C)
                         float tx = static_cast<float>(px) + cn.meshInvOffX;
                         float ty = static_cast<float>(py) + cn.meshInvOffY;
@@ -187,7 +187,8 @@ namespace motion {
                         float iy = static_cast<float>(
                             cn.meshInvM21 * tx + cn.meshInvM22 * ty);
                         // Evaluate bezier patch at normalized coords (sub_69B1E8)
-                        const auto *mesh = cn.meshControlPointsPrev.data();
+                        const auto *mesh =
+                            cn.transformedMeshControlPoints.data();
                         const float su = 1.f - ix, sv = 1.f - iy;
                         const float bu[4] = {su*su*su, 3.f*su*su*ix, 3.f*su*ix*ix, ix*ix*ix};
                         const float bv[4] = {sv*sv*sv, 3.f*sv*sv*iy, 3.f*sv*iy*iy, iy*iy*iy};
@@ -231,221 +232,44 @@ namespace motion {
                     vn.vertexPosY = orgY;
                     vn.vertexPosZ = vn.accumulated.posZ;
 
-                    // Save prev mesh (0x6BCB94..0x6BCBAC)
-                    vn.meshControlPointsPrev = vn.meshControlPoints;
-
                     const double cw = vn.source.width;
                     const double ch = vn.source.height;
 
-                    // Mesh vertex construction (0x6BCBBC..0x6BD060)
-                    if (vn.meshType == 1
-                        && !vn.meshControlPoints.empty()
-                        && cw > 0 && ch > 0) {
-                        // meshType=1: Bezier patch mesh
-                        // Compute inverse matrix for mesh (0x6BCBF8..0x6BCC38)
-                        // Compute and store inverse matrix (0x6BCBF8..0x6BCC38)
-                        // det = m11*cw * m22*ch - m12*ch * m21*cw
+                    // Player_updateLayers@0x6BCB94/0x6BCBAC clears the two
+                    // derived vectors without touching the raw +2024 patch.
+                    vn.transformedMeshControlPoints.clear();
+                    vn.compositeMeshPoints.clear();
+
+                    // 0x6BCBBC..0x6BCE24: materialize node+2072 as the
+                    // own-affine-transformed 4x4 patch from raw node+2024.
+                    if(vn.meshType == 1 && !vn.meshControlPoints.empty()) {
                         const double mw11 = m11 * cw, mw12 = m12 * ch;
                         const double mw21 = m21 * cw, mw22 = m22 * ch;
-                        const double det = mw11 * mw22 - mw12 * mw21;
-                        if (std::fabs(det) > 1e-10) {
-                            // node+2096..2120: inverse of [mw11,mw12;mw21,mw22]
+                        vn.transformedMeshControlPoints.resize(16);
+                        for(size_t pointIndex = 0; pointIndex < 16;
+                            ++pointIndex) {
+                            const auto &sourcePoint =
+                                vn.meshControlPoints[pointIndex];
+                            vn.transformedMeshControlPoints[pointIndex] = {
+                                static_cast<float>(
+                                    orgX + mw11 * sourcePoint.x +
+                                    mw12 * sourcePoint.y),
+                                static_cast<float>(
+                                    orgY + mw21 * sourcePoint.x +
+                                    mw22 * sourcePoint.y),
+                            };
+                        }
+
+                        // 0x6BCBD4 gates the inverse write on node+1962.  The
+                        // binary has no singular-matrix guard.
+                        if(vn.hasMeshData) {
+                            const double det = mw11 * mw22 - mw12 * mw21;
                             vn.meshInvM11 = mw22 / det;   // 0x6BCC0C
                             vn.meshInvM12 = -(mw12 / det); // 0x6BCC20
                             vn.meshInvM21 = -(mw21 / det); // 0x6BCC34
                             vn.meshInvM22 = mw11 / det;    // 0x6BCC14
-                            // node+2128/2132: negated origin as float (0x6BCC04/0x6BCC38)
                             vn.meshInvOffX = -static_cast<float>(orgX);
                             vn.meshInvOffY = -static_cast<float>(orgY);
-                        }
-
-                        // Build grid via sub_6BAF68 (0x6BCF6C)
-                        // Grid dimensions: divX = meshDivision * cw/(cw+ch) + 1
-                        int divTotal = vn.meshDivision;
-                        if (divTotal > 50) divTotal = 50;
-                        if (divTotal < 1) divTotal = 4;
-                        const int divX = static_cast<int>(
-                            static_cast<double>(divTotal) * cw / (cw + ch)) + 1;
-                        const int divY = divTotal - divX + 2;
-                        const int numPts = divX * divY;
-                        // Store grid dimensions (node+2012/2016, 0x6BCF5C)
-                        vn.meshDivX = divX;
-                        vn.meshDivY = divY;
-
-                        // sub_6BAF68: build bilinear grid (0x6BAF68)
-                        // NEON version at 0x6BB030..0x6BB138 processes 4 points/iteration.
-                        // Each row interpolates linearly between two edge points:
-                        //   p0 = orgXY + m_col2*ch*tv, p1 = orgXY + m_col1*cw + m_col2*ch*tv
-                        //   grid[gx] = lerp(p0, p1, gx/divX)
-                        vn.meshControlPoints.resize(numPts);
-                        for (int gy = 0; gy < divY; ++gy) {
-                            const double tv = (divY > 1) ? static_cast<double>(gy) / (divY - 1) : 0;
-                            // Row edge points (0x6BB068..0x6BB09C)
-                            const double rowBaseX = orgX + (m12 * ch) * tv;
-                            const double rowBaseY = orgY + (m22 * ch) * tv;
-                            const double rowEndX = rowBaseX + m11 * cw;
-                            const double rowEndY = rowBaseY + m21 * cw;
-                            auto *rowPtr = &vn.meshControlPoints[gy * divX];
-#ifdef __EMSCRIPTEN__
-                            // WASM SIMD: process 4 grid points per iteration
-                            // Aligned to NEON at 0x6BB0CC..0x6BB138
-                            // For each group of 4 gx values: tu = [gx, gx+1, gx+2, gx+3] / divX
-                            // ptX = rowBaseX*(1-tu) + rowEndX*tu
-                            // ptY = rowBaseY*(1-tu) + rowEndY*tu
-                            const v128_t vBaseX = wasm_f64x2_splat(rowBaseX);
-                            const v128_t vBaseY = wasm_f64x2_splat(rowBaseY);
-                            const v128_t vEndX = wasm_f64x2_splat(rowEndX);
-                            const v128_t vEndY = wasm_f64x2_splat(rowEndY);
-                            const double invDivX = (divX > 1) ? 1.0 / (divX - 1) : 0.0;
-                            int gx = 0;
-                            const int simdEnd = divX & ~1;  // process 2 at a time (f64x2)
-                            for (; gx < simdEnd; gx += 2) {
-                                const double t0 = gx * invDivX;
-                                const double t1 = (gx + 1) * invDivX;
-                                const v128_t vt = wasm_f64x2_make(t0, t1);
-                                const v128_t v1mt = wasm_f64x2_sub(wasm_f64x2_splat(1.0), vt);
-                                // X = base*(1-t) + end*t
-                                v128_t vx = wasm_f64x2_add(
-                                    wasm_f64x2_mul(vBaseX, v1mt),
-                                    wasm_f64x2_mul(vEndX, vt));
-                                // Y = base*(1-t) + end*t
-                                v128_t vy = wasm_f64x2_add(
-                                    wasm_f64x2_mul(vBaseY, v1mt),
-                                    wasm_f64x2_mul(vEndY, vt));
-                                // Convert f64→f32 and store interleaved [x0,y0,x1,y1]
-                                float fx0 = static_cast<float>(wasm_f64x2_extract_lane(vx, 0));
-                                float fy0 = static_cast<float>(wasm_f64x2_extract_lane(vy, 0));
-                                float fx1 = static_cast<float>(wasm_f64x2_extract_lane(vx, 1));
-                                float fy1 = static_cast<float>(wasm_f64x2_extract_lane(vy, 1));
-                                rowPtr[gx] = {fx0, fy0};
-                                rowPtr[gx + 1] = {fx1, fy1};
-                            }
-                            // Scalar remainder
-                            for (; gx < divX; ++gx) {
-                                const double tu = (divX > 1) ? static_cast<double>(gx) / (divX-1) : 0;
-                                rowPtr[gx].x = static_cast<float>(
-                                    rowBaseX*(1-tu) + rowEndX*tu);
-                                rowPtr[gx].y = static_cast<float>(
-                                    rowBaseY*(1-tu) + rowEndY*tu);
-                            }
-#else
-                            for (int gx = 0; gx < divX; ++gx) {
-                                const double tu = (divX > 1) ? static_cast<double>(gx) / (divX-1) : 0;
-                                rowPtr[gx].x = static_cast<float>(
-                                    rowBaseX*(1-tu) + rowEndX*tu);
-                                rowPtr[gx].y = static_cast<float>(
-                                    rowBaseY*(1-tu) + rowEndY*tu);
-                            }
-#endif
-                        }
-
-                        // Evaluate each grid point through Bezier patch (0x6BCF80..0x6BCFBC)
-                        // sub_69B1E8 evaluates bezier patch at each mesh point
-                        // This transforms the bilinear grid into a deformed mesh
-                        if (vn.meshControlPointsPrev.size() >= 16) {
-                            auto evalBP = [](const detail::MeshPoint *mesh,
-                                             float u, float v,
-                                             float &outX, float &outY) {
-                                const float su=1.f-u, sv=1.f-v;
-                                const float bu[4]={su*su*su,3.f*su*su*u,3.f*su*u*u,u*u*u};
-                                const float bv[4]={sv*sv*sv,3.f*sv*sv*v,3.f*sv*v*v,v*v*v};
-                                outX=0; outY=0;
-                                for(int i=0;i<16;++i){
-                                    float w=bv[i>>2]*bu[i&3];
-                                    outX+=mesh[i].x*w; outY+=mesh[i].y*w;
-                                }
-                            };
-                            for (int pi = 0; pi < numPts; ++pi) {
-                                float px = vn.meshControlPoints[pi].x;
-                                float py = vn.meshControlPoints[pi].y;
-                                evalBP(vn.meshControlPointsPrev.data(), px, py, px, py);
-                                vn.meshControlPoints[pi] = {px, py};
-                            }
-                        }
-
-                        // Parent clip chain mesh cascade (0x6BD118..0x6BD380)
-                        // Walk node+1968 (meshAncestor), for each mesh-enabled
-                        // ancestor: evaluate all mesh points + origin through its mesh
-                        // Parent clip chain mesh cascade (0x6BD118..0x6BD380)
-                        auto evalBPCascade = [](const detail::MeshPoint *mesh,
-                                                float u, float v,
-                                                float &outX, float &outY) {
-                            const float su=1.f-u, sv=1.f-v;
-                            const float bu[4]={su*su*su,3.f*su*su*u,3.f*su*u*u,u*u*u};
-                            const float bv[4]={sv*sv*sv,3.f*sv*sv*v,3.f*sv*v*v,v*v*v};
-                            outX=0; outY=0;
-                            for(int i=0;i<16;++i){
-                                float w=bv[i>>2]*bu[i&3];
-                                outX+=mesh[i].x*w; outY+=mesh[i].y*w;
-                            }
-                        };
-                        detail::MotionNode *clipWalk = vn.meshAncestor;
-                        double cascadeOrgX = orgX, cascadeOrgY = orgY;
-                        while (clipWalk) {
-                            auto &cn = *clipWalk;
-                            if (cn.meshControlPoints.size() >= 16) {
-                                const auto *cmesh = cn.meshControlPoints.data();
-                                // Evaluate each mesh point through parent mesh (0x6BD148..0x6BD1E8)
-                                for (size_t mi = 0; mi < vn.meshControlPoints.size(); ++mi) {
-                                    float mpx = vn.meshControlPoints[mi].x;
-                                    float mpy = vn.meshControlPoints[mi].y;
-                                    // Transform by parent inverse matrix + offset (0x6BD188)
-                                    // Transform by parent inverse matrix + offset (0x6BD188)
-                                    float tx = mpx + cn.meshInvOffX;  // node+2128
-                                    float ty = mpy + cn.meshInvOffY;  // node+2132
-                                    // Apply inverse matrix: [invM11,invM12;invM21,invM22] × (tx,ty)
-                                    float ix = static_cast<float>(cn.meshInvM11 * tx + cn.meshInvM12 * ty);
-                                    float iy = static_cast<float>(cn.meshInvM21 * tx + cn.meshInvM22 * ty);
-                                    tx = ix; ty = iy;
-                                    // Evaluate through parent bezier (sub_69B1E8)
-                                    float rx, ry;
-                                    evalBPCascade(cmesh, tx, ty, rx, ry);
-                                    vn.meshControlPoints[mi] = {rx, ry};
-                                }
-                                // Evaluate origin through parent mesh (0x6BD218..0x6BD258)
-                                float cox = static_cast<float>(cascadeOrgY) + cn.meshInvOffY;
-                                float coy = static_cast<float>(cascadeOrgX) + cn.meshInvOffX;
-                                float rox, roy;
-                                evalBPCascade(cmesh, coy, cox, rox, roy);
-                                cascadeOrgX = rox;
-                                cascadeOrgY = roy;
-                                _processedMeshVerticesNum += static_cast<int>(
-                                    vn.meshControlPoints.size()) + 1;
-                            }
-                            clipWalk = cn.meshAncestor;
-                        }
-                        // Update origin if cascade changed it (0x6BD330..0x6BD380)
-                        if (cascadeOrgX != orgX || cascadeOrgY != orgY) {
-                            vn.vertexPosX = cascadeOrgX;
-                            vn.vertexPosY = cascadeOrgY;
-                            // Offset all mesh points by delta (0x6BD360..0x6BD380)
-                            const float fdx = static_cast<float>(cascadeOrgX - orgX);
-                            const float fdy = static_cast<float>(cascadeOrgY - orgY);
-                            const size_t totalPoints = vn.meshControlPoints.size();
-                            auto *mp = vn.meshControlPoints.data();
-#ifdef __EMSCRIPTEN__
-                            // WASM SIMD: process 4 floats at a time (2 XY pairs)
-                            // Aligned to NEON at 0x6BD360: vadd with delta vector
-                            const v128_t vdelta = wasm_f32x4_make(fdx, fdy, fdx, fdy);
-                            float *flatPoints = reinterpret_cast<float *>(mp);
-                            const size_t totalFloats = totalPoints * 2;
-                            size_t fi = 0;
-                            for (; fi + 4 <= totalFloats; fi += 4) {
-                                v128_t pts = wasm_v128_load(&flatPoints[fi]);
-                                pts = wasm_f32x4_add(pts, vdelta);
-                                wasm_v128_store(&flatPoints[fi], pts);
-                            }
-                            // Scalar remainder
-                            for (; fi < totalFloats; fi += 2) {
-                                flatPoints[fi] += fdx;
-                                if (fi + 1 < totalFloats) flatPoints[fi+1] += fdy;
-                            }
-#else
-                            for (size_t mi = 0; mi < totalPoints; ++mi) {
-                                mp[mi].x += fdx;
-                                mp[mi].y += fdy;
-                            }
-#endif
                         }
                     }
 
@@ -503,6 +327,155 @@ namespace motion {
                                     vn.vertices[6], vn.vertices[7]),
                                 ok,
                                 "sub_6BC4F0 vertex output diverged from expected corners");
+                        }
+                    }
+
+                    // 0x6BCEF0..0x6BD380: node+2048 only exists when this
+                    // node has a mesh ancestor. sub_6BAF68@0x6BAF68 builds a
+                    // normalized unit-square grid of
+                    // (meshDivX+1)*(meshDivY+1) points, then sub_69B1E8 maps
+                    // every point through the world patch at node+2072.
+                    if(vn.meshAncestor != nullptr && vn.meshType == 1 &&
+                       !vn.meshControlPoints.empty()) {
+                        const auto evaluatePatch = [](
+                            const std::vector<detail::MeshPoint> &patch,
+                            float u, float v) {
+                            const float oneMinusU = 1.0f - u;
+                            const float oneMinusV = 1.0f - v;
+                            const float bu[4] = {
+                                oneMinusU * oneMinusU * oneMinusU,
+                                3.0f * oneMinusU * oneMinusU * u,
+                                3.0f * oneMinusU * u * u,
+                                u * u * u,
+                            };
+                            const float bv[4] = {
+                                oneMinusV * oneMinusV * oneMinusV,
+                                3.0f * oneMinusV * oneMinusV * v,
+                                3.0f * oneMinusV * v * v,
+                                v * v * v,
+                            };
+                            detail::MeshPoint result{};
+                            for(size_t patchIndex = 0; patchIndex < 16;
+                                ++patchIndex) {
+                                const float weight =
+                                    bv[patchIndex >> 2] *
+                                    bu[patchIndex & 3];
+                                result.x += patch[patchIndex].x * weight;
+                                result.y += patch[patchIndex].y * weight;
+                            }
+                            return result;
+                        };
+
+                        auto division = static_cast<unsigned int>(
+                            meshDivisionRatioDupLike_0x6BCF3C() *
+                            static_cast<double>(
+                                static_cast<unsigned int>(vn.meshDivision)));
+                        if(division >= 50u) {
+                            division = 50u;
+                        }
+                        const auto width =
+                            static_cast<unsigned int>(cw);
+                        const auto height =
+                            static_cast<unsigned int>(ch);
+                        const auto denominator = height + width;
+                        // sub_6BC4F0 @0x6BCF4C uses AArch64 UDIV, whose
+                        // zero-divisor result is 0. Preserve that boundary on
+                        // wasm, where native integer division would trap.
+                        const auto splitX = denominator != 0u
+                            ? division * width / denominator
+                            : 0u;
+                        vn.meshDivX = static_cast<int>(splitX + 1u);
+                        vn.meshDivY = static_cast<int>(
+                            division - splitX + 1u);
+
+                        const auto pointColumns =
+                            static_cast<size_t>(vn.meshDivX + 1);
+                        const auto pointRows =
+                            static_cast<size_t>(vn.meshDivY + 1);
+                        vn.compositeMeshPoints.resize(
+                            pointColumns * pointRows);
+                        for(int y = 0; y <= vn.meshDivY; ++y) {
+                            const float v = static_cast<float>(
+                                static_cast<double>(y) /
+                                static_cast<double>(vn.meshDivY));
+                            for(int x = 0; x <= vn.meshDivX; ++x) {
+                                const float u = static_cast<float>(
+                                    static_cast<double>(x) /
+                                    static_cast<double>(vn.meshDivX));
+                                vn.compositeMeshPoints[
+                                    static_cast<size_t>(y) * pointColumns +
+                                    static_cast<size_t>(x)] = evaluatePatch(
+                                        vn.transformedMeshControlPoints, u, v);
+                            }
+                        }
+
+                        const auto mapThroughAncestor = [
+                            &evaluatePatch](detail::MeshPoint point,
+                                            const detail::MotionNode &ancestor) {
+                            const float translatedX =
+                                point.x + ancestor.meshInvOffX;
+                            const float translatedY =
+                                point.y + ancestor.meshInvOffY;
+                            const float u = static_cast<float>(
+                                ancestor.meshInvM11 * translatedX +
+                                ancestor.meshInvM12 * translatedY);
+                            const float v = static_cast<float>(
+                                ancestor.meshInvM21 * translatedX +
+                                ancestor.meshInvM22 * translatedY);
+                            return evaluatePatch(
+                                ancestor.transformedMeshControlPoints, u, v);
+                        };
+
+                        detail::MotionNode *ancestor = vn.meshAncestor;
+                        double cascadeOrgX = orgX;
+                        double cascadeOrgY = orgY;
+                        if(!vn.meshCombineEnabled) {
+                            while(ancestor != nullptr &&
+                                  !ancestor->meshCombineEnabled) {
+                                if(ancestor->hasMeshData) {
+                                    for(auto &point :
+                                        vn.compositeMeshPoints) {
+                                        point = mapThroughAncestor(
+                                            point, *ancestor);
+                                    }
+                                    const auto mappedOrigin =
+                                        mapThroughAncestor(
+                                            {static_cast<float>(cascadeOrgX),
+                                             static_cast<float>(cascadeOrgY)},
+                                            *ancestor);
+                                    cascadeOrgX = mappedOrigin.x;
+                                    cascadeOrgY = mappedOrigin.y;
+                                    _processedMeshVerticesNum +=
+                                        static_cast<int>(
+                                            vn.compositeMeshPoints.size()) + 1;
+                                }
+                                ancestor = ancestor->meshAncestor;
+                            }
+                        }
+                        while(ancestor != nullptr) {
+                            if(ancestor->hasMeshData) {
+                                const auto mappedOrigin = mapThroughAncestor(
+                                    {static_cast<float>(cascadeOrgX),
+                                     static_cast<float>(cascadeOrgY)},
+                                    *ancestor);
+                                cascadeOrgX = mappedOrigin.x;
+                                cascadeOrgY = mappedOrigin.y;
+                                ++_processedMeshVerticesNum;
+                            }
+                            ancestor = ancestor->meshAncestor;
+                        }
+
+                        if(cascadeOrgX != orgX || cascadeOrgY != orgY) {
+                            vn.vertexPosX = cascadeOrgX;
+                            vn.vertexPosY = cascadeOrgY;
+                            const float deltaX = static_cast<float>(
+                                cascadeOrgX - orgX);
+                            const float deltaY = static_cast<float>(
+                                cascadeOrgY - orgY);
+                            for(auto &point : vn.compositeMeshPoints) {
+                                point.x += deltaX;
+                                point.y += deltaY;
+                            }
                         }
                     }
 

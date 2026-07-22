@@ -49,9 +49,11 @@ namespace motion {
         bool findWinSourceGroupLike_0x6948E8(
             detail::LoadedResourceRecord &loadedResource,
             const std::string &group, PSB::PSBRawNode &groupNode) {
+            PSB::PSBRawOwner *owner = loadedResource.file.GetOwner();
+            const PSB::PSBRawNode root(owner,
+                                       owner->GetHeader()->entries);
             const PSB::PSBRawNode sourceRoot =
-                loadedResource.file.GetRoot()
-                    .GetDictionaryValueStrict("source");
+                root.GetDictionaryValueStrict("source");
             // 0x694AEC..0x694B44 uses the non-throwing group lookup and
             // transfers control to the spec-1/fallback route on a miss.
             return sourceRoot.GetDictionaryValue(group.c_str(), groupNode);
@@ -282,19 +284,21 @@ namespace motion {
             detail::LoadedResourceRecord &loadedResource,
             const std::string &requestedGroup,
             const std::string &requestedIcon) {
+            PSB::PSBRawOwner *owner = loadedResource.file.GetOwner();
+            const PSB::PSBRawNode root(owner,
+                                       owner->GetHeader()->entries);
             const PSB::PSBRawNode sourceRoot =
-                loadedResource.file.GetRoot()
-                    .GetDictionaryValueStrict("source");
+                root.GetDictionaryValueStrict("source");
             PSB::PSBRawNode requestedGroupNode;
             if(!sourceRoot.GetDictionaryValue(requestedGroup.c_str(),
-                                              requestedGroupNode)) {
+                                               requestedGroupNode)) {
                 return false;
             }
             const PSB::PSBRawNode requestedIconRoot =
                 requestedGroupNode.GetDictionaryValueStrict("icon");
             PSB::PSBRawNode requestedIconNode;
             if(!requestedIconRoot.GetDictionaryValue(requestedIcon.c_str(),
-                                                     requestedIconNode)) {
+                                                      requestedIconNode)) {
                 return false;
             }
 
@@ -447,8 +451,11 @@ namespace motion {
             static_cast<ttstr>(_findMotionContextVariant);
         detail::LoadedResourceRecord *loadedResource = nullptr;
         if(resourceManager) {
-            loadedResource = resourceManager->findLoadedResourceRecord(
-                motionContext);
+            const auto loadedIt =
+                resourceManager->_loadedModules.find(motionContext);
+            if(loadedIt != resourceManager->_loadedModules.end()) {
+                loadedResource = &loadedIt->second;
+            }
         }
         const int sourceSpec = resourceManager ? resourceManager->_spec : 0;
         const std::string tracePath = motionContext.AsStdString();
@@ -544,36 +551,35 @@ namespace motion {
         if(dst.object.Type() != tvtObject || !dst.object.AsObjectNoAddRef()) {
             return;
         }
-        auto readDispatchNumber = [](iTJSDispatch2 *object,
-                                     const tjs_char *name, double fallback) {
-            if(!object) {
-                return fallback;
-            }
-            tTJSVariant value;
-            return TJS_SUCCEEDED(
-                       object->PropGet(0, name, nullptr, &value, object))
-                ? static_cast<double>(value)
-                : fallback;
-        };
-        iTJSDispatch2 *sourceObject = dst.object.AsObjectNoAddRef();
-        dst.width = readDispatchNumber(sourceObject, TJS_W("width"), 0.0);
-        dst.height = readDispatchNumber(sourceObject, TJS_W("height"), 0.0);
-        dst.originX = readDispatchNumber(sourceObject, TJS_W("originX"), 0.0);
-        dst.originY = readDispatchNumber(sourceObject, TJS_W("originY"), 0.0);
-        dst.blank =
-            readDispatchNumber(sourceObject, TJS_W("blank"), 0.0) != 0.0;
+        dst.width = detail::motionPropGetDouble(
+            dst.object, TJS_W("width"), 0, &detail::widthMemberHint_guess);
+        dst.height = detail::motionPropGetDouble(
+            dst.object, TJS_W("height"), 0, &detail::heightMemberHint_guess);
+        dst.originX = detail::motionPropGetDouble(
+            dst.object, TJS_W("originX"), 0, &detail::originXMemberHint_guess);
+        dst.originY = detail::motionPropGetDouble(
+            dst.object, TJS_W("originY"), 0, &detail::originYMemberHint_guess);
+        dst.blank = detail::motionPropGetBool(
+            dst.object, TJS_W("blank"), 0, &detail::blankMemberHint_guess);
         dst.textureRect = { 0, 0, static_cast<int>(dst.width),
                             static_cast<int>(dst.height) };
-        tTJSVariant clipValue;
-        if(TJS_SUCCEEDED(sourceObject->PropGet(0, TJS_W("clip"), nullptr,
-                                               &clipValue, sourceObject)) &&
-           clipValue.Type() == tvtObject && clipValue.AsObjectNoAddRef()) {
-            iTJSDispatch2 *clipObject = clipValue.AsObjectNoAddRef();
-            dst.clipLeft = readDispatchNumber(clipObject, TJS_W("left"), 0.0);
-            dst.clipTop = readDispatchNumber(clipObject, TJS_W("top"), 0.0);
-            dst.clipRight = readDispatchNumber(clipObject, TJS_W("right"), 1.0);
-            dst.clipBottom =
-                readDispatchNumber(clipObject, TJS_W("bottom"), 1.0);
+        const tTJSVariant clipValue = detail::motionPropGet(
+            dst.object, TJS_W("clip"), 0, &detail::clipMemberHint_guess);
+        if(clipValue.Type() == tvtObject && clipValue.AsObjectNoAddRef()) {
+            dst.clipLeft = detail::motionPropGetDouble(
+                clipValue, TJS_W("left"), 0, &detail::leftMemberHint_guess);
+            dst.clipTop = detail::motionPropGetDouble(
+                clipValue, TJS_W("top"), 0, &detail::topMemberHint_guess);
+            dst.clipRight = detail::motionPropGetDouble(
+                clipValue, TJS_W("right"), 0, &detail::rightMemberHint_guess);
+            dst.clipBottom = detail::motionPropGetDouble(
+                clipValue, TJS_W("bottom"), 0,
+                &detail::bottomMemberHint_guess);
+        } else {
+            dst.clipLeft = 0.0;
+            dst.clipTop = 0.0;
+            dst.clipRight = 1.0;
+            dst.clipBottom = 1.0;
         }
         dst.valid = true;
         detail::logoChainTraceLogf(

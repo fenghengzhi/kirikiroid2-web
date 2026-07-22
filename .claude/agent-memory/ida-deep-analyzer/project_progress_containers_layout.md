@@ -33,7 +33,7 @@ metadata:
 - reseek 路径 layer curTime/nextTime 被 int 截断（`(double)(int)propGetInt`），advance 路径 propGetDouble 不截断——精度差异须保留。
 
 ## 关键 flag（progress_inner）
-+456 clampedEvalTime / +480 gate / +481 firstFrame / +482 emoteMode / +483 motionCompleted / +592 deltaTime(=+1168×dt) / +609 reverseSeek / +1092 completionType(mask 6145/6153) / +1093 motionStopGate(非speed) / +1098 syncWaiting / +1099 loopArmed / +1120 frameTickCount / +1128 totalFrames / +1136 loopTime / +1168 speedMul。
++456 clampedEvalTime / +480 gate / +481 firstFrame / +482 emoteMode / +483 motionCompleted / +592 deltaTime(=+1168×dt) / +609 reverseSeek / +1092 preview(mask 6145/6153) / +1093 syncActive(事件 gate，非 speed 乘子) / +1098 syncWaiting / +1099 playing / +1120 frameTickCount / +1128 totalFrames / +1136 loopTime / +1168 speedMul。
 
 ## inline 移植不可省略
 两 deque 块元素数不同（node=1 因 2632>512、var-track=3 因 512/160=3）。必须各按 max(1,512/sizeof(T)) 算块容量，否则跨块判定 + 随机访问 + reseek size() magic 全错。

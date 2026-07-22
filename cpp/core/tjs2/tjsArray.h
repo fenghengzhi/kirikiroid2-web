@@ -91,8 +91,8 @@ namespace TJS {
         typedef tTJSNativeInstance inherited;
 
     public:
-        typedef std::vector<tTJSVariant>::iterator tArrayItemIterator;
-        std::vector<tTJSVariant> Items;
+        typedef std::deque<tTJSVariant>::iterator tArrayItemIterator;
+        std::deque<tTJSVariant> Items;
 
         tTJSArrayNI();
 
@@ -103,7 +103,7 @@ namespace TJS {
 
     private:
         struct tDictionaryEnumCallback : public tTJSDispatch {
-            std::vector<tTJSVariant> *Items{};
+            std::deque<tTJSVariant> *Items{};
 
             tjs_error FuncCall(tjs_uint32 flag, const tjs_char *membername,
                                tjs_uint32 *hint, tTJSVariant *result,

@@ -284,7 +284,7 @@ TEST_CASE("PerNodeLayerState: default-construct fields are zero / empty",
     REQUIRE(s.scaleX == 1.0);
     REQUIRE(s.scaleY == 1.0);
     REQUIRE_FALSE(static_cast<bool>(s.dispatch_8));
-    REQUIRE_FALSE(static_cast<bool>(s.srcDispatch_44));
+    REQUIRE(s.srcValue_44 == ttstr());
     REQUIRE_FALSE(static_cast<bool>(s.dispatch_288));
     REQUIRE_FALSE(static_cast<bool>(s.dispatch_392));
     REQUIRE_FALSE(static_cast<bool>(s.dispatch_504));

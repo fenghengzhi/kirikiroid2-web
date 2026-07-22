@@ -11,6 +11,8 @@ namespace motion {
 
 namespace motion::detail {
 
+    struct PreparedRenderItem;
+
     class MotionTraceProgressScope {
     public:
         MotionTraceProgressScope(Player *player, void *objthis);
@@ -70,7 +72,8 @@ namespace motion::detail {
     class MotionTraceRenderExecuteScope {
     public:
         MotionTraceRenderExecuteScope(Player *player, void *renderLayerObject,
-                                      bool skipUpdate);
+                                      bool skipUpdate,
+                                      const std::vector<PreparedRenderItem *> &mainList);
         ~MotionTraceRenderExecuteScope();
 
         MotionTraceRenderExecuteScope(const MotionTraceRenderExecuteScope &) = delete;
@@ -83,20 +86,33 @@ namespace motion::detail {
         void *_renderLayerObject = nullptr;
         bool _skipUpdate = false;
         bool _ok = false;
+        const std::vector<PreparedRenderItem *> *_mainList = nullptr;
     };
 
     void motionTraceRenderPrepareEnter(Player *player);
-    void motionTraceRenderPrepareLeave(Player *player, bool ok);
+    void motionTraceRenderPrepareLeave(
+        Player *player, bool ok,
+        const std::vector<PreparedRenderItem *> &mainList,
+        const std::vector<PreparedRenderItem *> &auxList);
     void motionTraceRenderApplyTranslateEnter(Player *player);
-    void motionTraceRenderApplyTranslateLeave(Player *player);
+    void motionTraceRenderApplyTranslateLeave(
+        Player *player,
+        const std::vector<PreparedRenderItem *> &mainList);
     void motionTraceRenderBuildItemsEnter(Player *player);
-    void motionTraceRenderBuildItemsLeave(Player *player);
+    void motionTraceRenderBuildItemsLeave(
+        Player *player,
+        const std::vector<PreparedRenderItem *> &mainList,
+        const std::vector<PreparedRenderItem *> &auxList);
     void motionTraceRenderBuildCommandsEnter(Player *player,
                                              int canvasWidth,
-                                             int canvasHeight);
+                                             int canvasHeight,
+                                             const std::vector<PreparedRenderItem *> &mainList,
+                                             const std::vector<PreparedRenderItem *> &auxList);
     void motionTraceRenderBuildCommandsLeave(Player *player,
                                              int canvasWidth,
-                                             int canvasHeight);
+                                             int canvasHeight,
+                                             const std::vector<PreparedRenderItem *> &mainList,
+                                             const std::vector<PreparedRenderItem *> &auxList);
     void motionTraceRenderImageCheckpoint(Player *player,
                                           void *renderLayerObject,
                                           const char *phase,

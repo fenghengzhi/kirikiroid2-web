@@ -28,7 +28,8 @@ Added to motionplayer/CMakeLists.txt + platforms/wasmtime/CMakeLists.txt.
 
 **3 frame-stream cursors (player-level, FrameStreamCursorLike):**
 - LAYER stream: source +1072 (TJS Array dispatch), cursor=+916, curTime=+920,
-  nextTime=+928. type==1 frame triggers +1093 motionStopGate action/align/sync.
+  nextTime=+928. type==1 frame triggers +1093 `syncActive`-gated align/sync
+  (action remains ungated).
 - ROOT stream: source +548, cursor=+568, curTime=+576, nextTime=+584, current
   frame content snapshot copied to +616 (sub_A0FB64).
 - VARIABLE-TRACK deque: +1312..1368 libstdc++ deque, 160B/track, 3-per-chunk,

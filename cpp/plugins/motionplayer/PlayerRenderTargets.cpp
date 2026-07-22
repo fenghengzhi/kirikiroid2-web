@@ -69,7 +69,7 @@ namespace motion {
             double xOffset,
             double yOffset) {
             std::vector<tTVPPointD> out;
-            if(controlPoints.size() < 16u || divx < 2 || divy < 2) {
+            if(controlPoints.size() < 16u || divx < 1 || divy < 1) {
                 return out;
             }
             const auto cubicBlend = [](double p0, double p1, double p2,
@@ -96,13 +96,14 @@ namespace motion {
                                curve[3].y, v) + yOffset,
                 };
             };
-            out.reserve(static_cast<size_t>(divx) * static_cast<size_t>(divy));
-            for(int y = 0; y < divy; ++y) {
-                const double v = static_cast<double>(y) /
-                    static_cast<double>(divy - 1);
-                for(int x = 0; x < divx; ++x) {
-                    const double u = static_cast<double>(x) /
-                        static_cast<double>(divx - 1);
+            out.reserve(static_cast<size_t>(divx + 1) *
+                        static_cast<size_t>(divy + 1));
+            for(int y = 0; y <= divy; ++y) {
+                const double v =
+                    static_cast<double>(y) / static_cast<double>(divy);
+                for(int x = 0; x <= divx; ++x) {
+                    const double u =
+                        static_cast<double>(x) / static_cast<double>(divx);
                     out.push_back(samplePatch(u, v));
                 }
             }
@@ -123,12 +124,12 @@ namespace motion {
 
         bool shouldQueuePrivateMotionGLLRenderItemLike_0x6DE738(
             const PreparedRenderItem &item,
-            bool preview) {
+            bool priorDraw) {
             if((item.blendMode & 0xF) == 6 || item.skipFlag0 ||
                item.rawFlag16 || item.opacity == 0) {
                 return false;
             }
-            if(preview && !item.skipFlag1) {
+            if(priorDraw && !item.skipFlag1) {
                 return false;
             }
             return !item.sourceKey.empty();
@@ -136,30 +137,34 @@ namespace motion {
 
         int privateMotionGLLOpacityLike_0x6DE738(
             const PreparedRenderItem &item,
-            bool preview) {
+            bool priorDraw) {
             int opacity = item.opacity;
-            if(preview) {
+            if(priorDraw) {
                 opacity = opacity >= 0 ? opacity / 2 : (opacity + 1) / 2;
             }
             return opacity;
         }
 
-        void populatePrivateMotionGLLPointsLike_0x6DE738(
-            const PreparedRenderItem &item,
+        std::vector<detail::MeshPoint> *
+        populatePrivateMotionGLLPointsLike_0x6DE738(
+            PreparedRenderItem &item,
             PrivateMotionGLLRenderItemInputLike_0x6DE738 &queueItem) {
             if(item.meshType == 0) {
-                queueItem.points = {
-                    { item.corners[0], item.corners[1] },
-                    { item.corners[2], item.corners[3] },
-                    { item.corners[6], item.corners[7] },
-                };
-                return;
+                queueItem.affinePoints =
+                    std::array<detail::MeshPoint, 3>{ {
+                        { item.corners[0], item.corners[1] },
+                        { item.corners[2], item.corners[3] },
+                        { item.corners[6], item.corners[7] },
+                    } };
+                return nullptr;
             }
-
-            queueItem.points.reserve(item.meshPoints.size());
-            for(const auto &point : item.meshPoints) {
-                queueItem.points.push_back({point.x, point.y});
+            if(item.meshType == 1) {
+                return &item.meshPoints;
             }
+            if(item.meshType == 2) {
+                return &item.commandCompositeMeshPoints;
+            }
+            return nullptr;
         }
 
         unsigned int d3dPackedColorWithOpacity(
@@ -168,7 +173,9 @@ namespace motion {
             const auto base = item.packedColors[0];
             const auto rgb = base == 0xFF808080u ? 0x00FFFFFFu
                                                  : (base & 0x00FFFFFFu);
-            return rgb | (static_cast<unsigned int>(opacity) << 24u);
+            return rgb |
+                (static_cast<unsigned int>(static_cast<std::uint8_t>(opacity))
+                 << 24u);
         }
 
         tTVPBBBltMethod softwareMethodForD3DBlend(int blendLowNibble) {
@@ -380,8 +387,7 @@ namespace motion {
             bool hasDrawableMaskTarget = false;
             for(auto *ancestor = item; ancestor; ancestor = ancestor->parentItem) {
                 ancestor->stencilMaskRef = ref;
-                if(!ancestor->rawFlag16 && !ancestor->skipFlag0 &&
-                   ancestor->opacity != 0) {
+                if(!ancestor->rawFlag16 && !ancestor->skipFlag0) {
                     hasDrawableMaskTarget = true;
                 }
                 for(auto *child : ancestor->childItems) {
@@ -399,26 +405,92 @@ namespace motion {
         }
 
         int assignStencilRefsLike_0x6ADFBC(
-            std::vector<PreparedRenderItem> &items) {
-            for(auto &item : items) {
+            std::vector<PreparedRenderItem *> &items) {
+            for(auto *itemPtr : items) {
+                if(!itemPtr) {
+                    continue;
+                }
+                auto &item = *itemPtr;
                 item.stencilMaskRef = 0;
                 item.stencilWriteRef = 0;
             }
 
             int stencilCount = 0;
-            for(auto &item : items) {
+            static bool stencilOverflowLogged = false;
+            for(auto *itemPtr : items) {
+                if(!itemPtr) {
+                    continue;
+                }
+                auto &item = *itemPtr;
                 if((item.blendMode & 0xF) == 6 || !item.drawFlag ||
                    item.rawFlag16 || item.opacity == 0 || !item.parentItem) {
                     continue;
                 }
-                if(stencilCount >= 255) {
-                    break;
+                const int previousStencilCount = stencilCount++;
+                if(previousStencilCount >= 255 && !stencilOverflowLogged) {
+                    stencilOverflowLogged = true;
+                    if(auto logger = LOGGER) {
+                        logger->warn(
+                            "MMotionPlayer: StencilCount overflow(256)");
+                    }
                 }
-                const auto ref = static_cast<std::uint8_t>(++stencilCount);
+                const auto ref = static_cast<std::uint8_t>(stencilCount);
                 item.stencilWriteRef = ref;
                 if(!markStencilMaskChainLike_0x6ADFBC(item.parentItem, ref)) {
                     item.stencilWriteRef = 0;
                 }
+            }
+            return stencilCount;
+        }
+
+        bool computeD3DClipLike_0x6ADFBC(
+            const PreparedRenderItem &item,
+            int canvasWidth,
+            int canvasHeight,
+            std::array<float, 4> &out) {
+            float clipLeft = std::max(item.paintBox[0], 0.0f);
+            float clipTop = std::max(item.paintBox[1], 0.0f);
+            float clipRight = std::min(
+                item.paintBox[2], static_cast<float>(canvasWidth));
+            float clipBottom = std::min(
+                item.paintBox[3], static_cast<float>(canvasHeight));
+
+            if(item.viewport[2] >= item.viewport[0] &&
+               item.viewport[3] >= item.viewport[1]) {
+                clipLeft = std::max(clipLeft, std::floor(item.viewport[0]));
+                clipTop = std::max(clipTop, std::floor(item.viewport[1]));
+                clipRight = std::min(clipRight, std::ceil(item.viewport[2]));
+                clipBottom = std::min(clipBottom, std::ceil(item.viewport[3]));
+            }
+
+            out = {clipLeft, clipTop, clipRight, clipBottom};
+            return clipLeft < clipRight && clipTop < clipBottom;
+        }
+
+        int prepareD3DRenderItemsLike_0x6ADFBC(
+            std::vector<PreparedRenderItem *> &items,
+            int width,
+            int height,
+            bool priorDraw) {
+            if(priorDraw) {
+                return 0;
+            }
+
+            const int stencilCount = assignStencilRefsLike_0x6ADFBC(items);
+            for(auto *item : items) {
+                if(!item || !item->drawFlag) {
+                    continue;
+                }
+                std::array<float, 4> clip{};
+                const bool hasClip = computeD3DClipLike_0x6ADFBC(
+                    *item, width, height, clip);
+                if(!hasClip || item->rawFlag16) {
+                    item->rawFlag21 = false;
+                    continue;
+                }
+                item->rawFlag21 = true;
+                item->clipRect = clip;
+                item->leafLayer.Clear();
             }
             return stencilCount;
         }
@@ -492,11 +564,12 @@ namespace motion {
                               const tTVPRect &targetRect,
                               const PreparedRenderItem &item,
                               iTVPTexture2D *sourceTexture,
+                              const std::array<int, 4> &sourceRect,
                               double xOffset,
                               double yOffset) {
             auto dst = makeAffineTargetQuad(
                 item, xOffset + 0.5, yOffset + 0.5);
-            auto src = makeTextureQuad(sourceRectForItem(item, sourceTexture));
+            auto src = makeTextureQuad(sourceRect);
             tRenderTexQuadArray::Element srcTex[] = {
                 tRenderTexQuadArray::Element(sourceTexture, src.data())
             };
@@ -509,36 +582,40 @@ namespace motion {
         bool operateD3DMesh(iTVPRenderMethod *method,
                             iTVPTexture2D *target,
                             const tTVPRect &targetRect,
-                            const PreparedRenderItem &item,
                             iTVPTexture2D *sourceTexture,
-                            const std::vector<tTVPPointD> &meshPoints) {
-            if(item.meshDivX < 2 || item.meshDivY < 2 ||
+                            const std::array<int, 4> &sourceRect,
+                            const std::vector<tTVPPointD> &meshPoints,
+                            int meshDivX,
+                            int meshDivY) {
+            const auto pointColumns = static_cast<size_t>(meshDivX + 1);
+            const auto pointRows = static_cast<size_t>(meshDivY + 1);
+            if(meshDivX < 1 || meshDivY < 1 ||
                meshPoints.size() <
-                   static_cast<size_t>(item.meshDivX) *
-                       static_cast<size_t>(item.meshDivY)) {
+                   pointColumns * pointRows) {
                 return false;
             }
 
-            const auto sourceRect = sourceRectForItem(item, sourceTexture);
             const double srcL = sourceRect[0];
             const double srcT = sourceRect[1];
             const double srcW = sourceRect[2] - sourceRect[0];
             const double srcH = sourceRect[3] - sourceRect[1];
-            for(int y = 0; y < item.meshDivY - 1; ++y) {
-                const double v0 = static_cast<double>(y) /
-                    static_cast<double>(item.meshDivY - 1);
+            for(int y = 0; y < meshDivY; ++y) {
+                const double v0 =
+                    static_cast<double>(y) / static_cast<double>(meshDivY);
                 const double v1 = static_cast<double>(y + 1) /
-                    static_cast<double>(item.meshDivY - 1);
-                for(int x = 0; x < item.meshDivX - 1; ++x) {
-                    const double u0 = static_cast<double>(x) /
-                        static_cast<double>(item.meshDivX - 1);
+                    static_cast<double>(meshDivY);
+                for(int x = 0; x < meshDivX; ++x) {
+                    const double u0 =
+                        static_cast<double>(x) / static_cast<double>(meshDivX);
                     const double u1 = static_cast<double>(x + 1) /
-                        static_cast<double>(item.meshDivX - 1);
-                    const auto &p0 = meshPoints[y * item.meshDivX + x];
-                    const auto &p1 = meshPoints[y * item.meshDivX + x + 1];
-                    const auto &p2 = meshPoints[(y + 1) * item.meshDivX + x];
-                    const auto &p3 =
-                        meshPoints[(y + 1) * item.meshDivX + x + 1];
+                        static_cast<double>(meshDivX);
+                    const auto row = static_cast<size_t>(y) * pointColumns;
+                    const auto nextRow = row + pointColumns;
+                    const auto column = static_cast<size_t>(x);
+                    const auto &p0 = meshPoints[row + column];
+                    const auto &p1 = meshPoints[row + column + 1];
+                    const auto &p2 = meshPoints[nextRow + column];
+                    const auto &p3 = meshPoints[nextRow + column + 1];
                     std::array<tTVPPointD, 6> dst{{
                         p0, p1, p2, p1, p2, p3,
                     }};
@@ -563,18 +640,20 @@ namespace motion {
 
         bool shouldSkipD3DRenderItemLike_0x6ADFBC(
             const PreparedRenderItem &item,
-            bool preview) {
+            bool priorDraw) {
             if((item.blendMode & 0xF) == 6) {
                 return true;
             }
             if(item.skipFlag0 || item.rawFlag16) {
                 return true;
             }
-            return preview && item.skipFlag1;
+            return priorDraw && !item.skipFlag1;
         }
     } // namespace
 
-    bool Player::renderViaSharedD3DAdaptor(iTJSDispatch2 *targetLayerObject) {
+    bool Player::renderViaSharedD3DAdaptor(
+        iTJSDispatch2 *targetLayerObject,
+        detail::PreparedRenderItemList &mainList) {
         if(!targetLayerObject) {
             return false;
         }
@@ -595,7 +674,7 @@ namespace motion {
             return false;
         }
 
-        if(!renderToD3DAdaptor(sharedAdaptor)) {
+        if(!renderFromPlayerLike_0x6ADE24(sharedAdaptor, mainList)) {
             return false;
         }
 
@@ -689,7 +768,9 @@ namespace motion {
     bool Player::renderMotionFrameToTarget(iTJSDispatch2 *renderTargetObject,
                                            tjs_int canvasWidth,
                                            tjs_int canvasHeight,
-                                           const char *traceFunc) {
+                                           const char *traceFunc,
+                                           detail::PreparedRenderItemList &mainList,
+                                           detail::PreparedRenderItemList &auxList) {
         if(!renderTargetObject || canvasWidth <= 0 || canvasHeight <= 0) {
             return false;
         }
@@ -711,36 +792,52 @@ namespace motion {
 
         // Player_ResolveSLATarget @ 0x6D5948 owns PrivateMotionGLL sizing;
         // Player_RenderMotionFrame @ 0x6DE738 only emits render commands.
-        buildRenderCommands(canvasWidth, canvasHeight);
+        buildRenderCommands(canvasWidth, canvasHeight, mainList, auxList);
         if(_sourceCacheNative) {
-            for(const auto &item : _preparedRenderItems) {
+            for(auto *itemPtr : mainList) {
+                if(!itemPtr) {
+                    continue;
+                }
+                auto &item = *itemPtr;
                 if(!shouldQueuePrivateMotionGLLRenderItemLike_0x6DE738(
-                       item, _preview)) {
+                       item, _priorDraw)) {
                     continue;
                 }
                 auto *sourceTexture = item.sourceTexture
                     ? item.sourceTexture
                     : _sourceCacheNative->loadRenderSourceTextureByName(
-                          *this, detail::widen(item.sourceKey), item.srcRef,
+                          *this, detail::widen(item.sourceKey), item.sourceObject,
                           item.blendMode, item.packedColors);
                 PrivateMotionGLLRenderItemInputLike_0x6DE738 queueItem;
                 queueItem.opacity =
-                    privateMotionGLLOpacityLike_0x6DE738(item, _preview);
+                    privateMotionGLLOpacityLike_0x6DE738(item, _priorDraw);
                 queueItem.stencilMaskRef = item.stencilMaskRef;
                 queueItem.stencilWriteRef = item.stencilWriteRef;
                 queueItem.blendMode = item.blendMode;
                 queueItem.geometryType = item.meshType;
-                queueItem.meshDivX = item.meshDivX;
-                queueItem.meshDivY = item.meshDivY;
+                if(item.meshType == 1) {
+                    const auto cellDivisions =
+                        bezierPatchCellDivisionsU32Like_0x6C8E5C(
+                            item.commandPatchDivision,
+                            item.nativeNode->source.width,
+                            item.nativeNode->source.height);
+                    queueItem.meshDivX = cellDivisions[0];
+                    queueItem.meshDivY = cellDivisions[1];
+                } else if(item.meshType == 2) {
+                    queueItem.meshDivX = item.meshDivX;
+                    queueItem.meshDivY = item.meshDivY;
+                }
                 queueItem.packedColors = item.packedColors;
                 if(sourceTexture) {
                     const auto rect = sourceRectForItem(item, sourceTexture);
                     queueItem.sourceRect = {rect[0], rect[1], rect[2], rect[3]};
                     queueItem.sourceTexture = sourceTexture;
                 }
-                populatePrivateMotionGLLPointsLike_0x6DE738(item, queueItem);
+                auto *pointsToSwap =
+                    populatePrivateMotionGLLPointsLike_0x6DE738(item, queueItem);
                 appendPrivateMotionGLLRenderItemLike_0x6DE738(renderTargetObject,
-                                                              queueItem);
+                                                              queueItem,
+                                                              pointsToSwap);
             }
             detail::logoChainTraceLogf(
                 motionPath, "sla.renderMotionFrame.queue", "0x6DE738",
@@ -760,7 +857,9 @@ namespace motion {
         iTJSDispatch2 *slaObject,
         iTJSDispatch2 *targetLayerObject,
         tjs_int canvasWidth,
-        tjs_int canvasHeight) {
+        tjs_int canvasHeight,
+        detail::PreparedRenderItemList &mainList,
+        detail::PreparedRenderItemList &auxList) {
         if(!sla || !slaObject || !targetLayerObject ||
            canvasWidth <= 0 || canvasHeight <= 0 ||
            !hasMotionContent() || !_sourceCacheNative) {
@@ -769,7 +868,7 @@ namespace motion {
 
         const auto motionPath = matchedMotionPath();
 
-        buildRenderCommands(canvasWidth, canvasHeight);
+        buildRenderCommands(canvasWidth, canvasHeight, mainList, auxList);
 
         iTJSDispatch2 *layerTreeOwner = resolveMainWindowOwnerObject();
         if(!layerTreeOwner) {
@@ -799,7 +898,7 @@ namespace motion {
         auto ensureAccurateSlaItemLayer =
             [&](PreparedRenderItem &item,
                 tTVPLayerType layerType) -> AccurateSlaItemLayer {
-            const tjs_int stateLayerId = item.layerId;
+            const tjs_int stateLayerId = item.renderLayerId;
             if(stateLayerId == 0) {
                 return {
                     ensureReusableLayerObject(
@@ -843,7 +942,7 @@ namespace motion {
         };
 
         int renderedItems = 0;
-        for(auto *itemPtr : _preparedRenderItemsTopLevel) {
+        for(auto *itemPtr : mainList) {
             if(!itemPtr || !shouldRenderAccurateSlaItemLike_0x6C9CA8(*itemPtr)) {
                 continue;
             }
@@ -871,7 +970,7 @@ namespace motion {
             if(itemLayerResult.createdOrChanged) {
                 tTJSVariant sourceObject =
                     _sourceCacheNative->loadRenderSourceByName(
-                        *this, detail::widen(item.sourceKey), item.srcRef,
+                        *this, detail::widen(item.sourceKey), item.sourceObject,
                         item.blendMode, item.packedColors,
                         layerTreeOwner, targetLayerObject);
                 if(sourceObject.Type() != tvtObject ||
@@ -902,18 +1001,25 @@ namespace motion {
                     itemLayer->AffineCopy(localPts.data(), sourceImage,
                                           sourceRect, stNearest, true);
                     copied = true;
-                } else if(item.meshType == 1 && item.meshDivX >= 2 &&
-                          item.meshDivY >= 2 && !item.meshPoints.empty()) {
+                } else if(item.meshType == 1 && !item.meshPoints.empty()) {
                     auto localMeshPoints =
                         buildMeshPoints(item.meshPoints, offsetX, offsetY);
+                    const auto cellDivisions =
+                        bezierPatchCellDivisionsU32Like_0x6C8E5C(
+                            item.commandPatchDivision,
+                            static_cast<double>(sourceImage->GetWidth()),
+                            static_cast<double>(sourceImage->GetHeight()));
                     itemLayer->BezierPatchCopy(
-                        localMeshPoints.data(), item.meshDivX, item.meshDivY,
+                        localMeshPoints.data(), cellDivisions[0],
+                        cellDivisions[1],
                         sourceImage, sourceRect, stNearest, true);
                     copied = true;
-                } else if(item.meshType == 2 && item.meshDivX >= 2 &&
-                          item.meshDivY >= 2 && !item.meshPoints.empty()) {
+                } else if(item.meshType == 2 && item.meshDivX >= 1 &&
+                          item.meshDivY >= 1 &&
+                          !item.commandCompositeMeshPoints.empty()) {
                     auto localMeshPoints =
-                        buildMeshPoints(item.meshPoints, offsetX, offsetY);
+                        buildMeshPoints(item.commandCompositeMeshPoints,
+                                        offsetX, offsetY);
                     itemLayer->MeshCopy(localMeshPoints.data(), item.meshDivX,
                                         item.meshDivY, sourceImage, sourceRect,
                                         stNearest, true);
@@ -939,7 +1045,7 @@ namespace motion {
                 motionPath, "sla.accurate.item", "0x6C9CA8",
                 _clampedEvalTime,
                 "nodeIndex={} layerId={} clip=[{},{},{},{}] meshType={} type={} opacity={} source={}",
-                item.nodeIndex, item.layerId,
+                item.nodeIndex, item.renderLayerId,
                 clip.left, clip.top, clip.right, clip.bottom,
                 item.meshType, static_cast<int>(layerType), item.opacity,
                 item.sourceKey);
@@ -972,9 +1078,11 @@ namespace motion {
             "adaptorSize={}x{} route=D3DAdaptor_renderFromPlayer",
             adaptor->getWidth(), adaptor->getHeight());
 
-        prepareRenderItems();
-        applyPreparedRenderItemTranslateOffsets();
-        return renderFromPlayerLike_0x6ADE24(adaptor);
+        detail::PreparedRenderItemList mainList;
+        detail::PreparedRenderItemList auxList;
+        prepareRenderItems(mainList, auxList);
+        applyPreparedRenderItemTranslateOffsets(mainList);
+        return renderFromPlayerLike_0x6ADE24(adaptor, mainList);
     }
 
     // Player_drawToTexture @0x6D5C68. Unlike the script-facing drawCompat
@@ -990,16 +1098,21 @@ namespace motion {
         if(!hasMotionContent()) {
             return false;
         }
-        if(!prepareRenderItems()) {
+        detail::PreparedRenderItemList mainList;
+        detail::PreparedRenderItemList auxList;
+        if(!prepareRenderItems(mainList, auxList)) {
             return false;
         }
-        applyPreparedRenderItemTranslateOffsets();
+        applyPreparedRenderItemTranslateOffsets(mainList);
         return renderItemsToD3DTextureLike_0x6ADFBC(
             target, static_cast<tjs_int>(target->GetWidth()),
-            static_cast<tjs_int>(target->GetHeight()), false, x, y);
+            static_cast<tjs_int>(target->GetHeight()), false, x, y,
+            mainList);
     }
 
-    bool Player::renderFromPlayerLike_0x6ADE24(D3DAdaptor *adaptor) {
+    bool Player::renderFromPlayerLike_0x6ADE24(
+        D3DAdaptor *adaptor,
+        detail::PreparedRenderItemList &mainList) {
         if(!adaptor || adaptor->getWidth() <= 0 || adaptor->getHeight() <= 0) {
             return false;
         }
@@ -1014,10 +1127,13 @@ namespace motion {
         if(adaptor->getClearEnabled()) {
             adaptor->clearTargetTexture();
         }
-        return renderItemsToD3DTextureLike_0x6ADFBC(adaptor);
+        return renderItemsToD3DTextureLike_0x6ADFBC(
+            adaptor, mainList);
     }
 
-    bool Player::renderItemsToD3DTextureLike_0x6ADFBC(D3DAdaptor *adaptor) {
+    bool Player::renderItemsToD3DTextureLike_0x6ADFBC(
+        D3DAdaptor *adaptor,
+        detail::PreparedRenderItemList &mainList) {
         if(!adaptor || !hasMotionContent() ||
            !_sourceCacheNative) {
             return false;
@@ -1029,7 +1145,7 @@ namespace motion {
 
         return renderItemsToD3DTextureLike_0x6ADFBC(
             targetTexture, adaptor->getWidth(), adaptor->getHeight(),
-            adaptor->getAlphaOpAdd(), 0.0f, 0.0f);
+            adaptor->getAlphaOpAdd(), 0.0f, 0.0f, mainList);
     }
 
     bool Player::renderItemsToD3DTextureLike_0x6ADFBC(
@@ -1038,22 +1154,16 @@ namespace motion {
         tjs_int height,
         bool alphaOpAdd,
         float xOffset,
-        float yOffset) {
+        float yOffset,
+        detail::PreparedRenderItemList &mainList) {
         if(!targetTexture || !hasMotionContent() || !_sourceCacheNative ||
            width <= 0 || height <= 0) {
             return false;
         }
 
         const tTVPRect targetRect(0, 0, width, height);
-        buildRenderCommands(width, height);
-
-        int stencilRefs = 0;
-        if(!_preview) {
-            // Mirrors 0x6ADFBC's non-preview prepass: clear item+22/+23,
-            // assign stencil refs, then operate on the freshly clipped items.
-            stencilRefs =
-                assignStencilRefsLike_0x6ADFBC(_preparedRenderItems);
-        }
+        const int stencilRefs = prepareD3DRenderItemsLike_0x6ADFBC(
+            mainList, width, height, _priorDraw);
         const bool stencilEnabled = stencilRefs > 0;
         beginD3DStencilIfNeeded(targetTexture, stencilEnabled);
         struct StencilGuard {
@@ -1065,35 +1175,40 @@ namespace motion {
         detail::logoChainTraceLogf(
             motionPath, "draw.d3d.renderItemsToTexture", "0x6ADFBC",
             _clampedEvalTime,
-            "target={} targetRect=[0,0,{},{}] items={} preview={} stencilRefs={}",
+            "target={} targetRect=[0,0,{},{}] items={} priorDraw={} stencilRefs={}",
             static_cast<const void *>(targetTexture),
-            width, height, _preparedRenderItems.size(),
-            _preview ? 1 : 0, stencilRefs);
+            width, height, mainList.size(),
+            _priorDraw ? 1 : 0, stencilRefs);
 
-        for(auto &item : _preparedRenderItems) {
-            if(shouldSkipD3DRenderItemLike_0x6ADFBC(item, _preview)) {
+        for(auto *itemPtr : mainList) {
+            if(!itemPtr) {
+                continue;
+            }
+            auto &item = *itemPtr;
+            if(shouldSkipD3DRenderItemLike_0x6ADFBC(item, _priorDraw)) {
                 continue;
             }
 
             int opacity = item.opacity;
-            if(_preview) {
+            if(_priorDraw) {
                 opacity = opacity >= 0 ? opacity / 2 : (opacity + 1) / 2;
             }
-            opacity = std::clamp(opacity, 0, 255);
             if(opacity <= 0 && item.stencilMaskRef == 0) {
-                continue;
-            }
-            if(item.sourceKey.empty()) {
                 continue;
             }
 
             auto *sourceTexture = item.sourceTexture
                 ? item.sourceTexture
                 : _sourceCacheNative->loadRenderSourceTextureByName(
-                      *this, detail::widen(item.sourceKey), item.srcRef,
+                      *this, detail::widen(item.sourceKey), item.sourceObject,
                       item.blendMode, item.packedColors);
             if(!sourceTexture || sourceTexture->GetWidth() <= 0 ||
                sourceTexture->GetHeight() <= 0) {
+                continue;
+            }
+            const auto sourceRect = item.sourceRect;
+            if(sourceRect[2] <= sourceRect[0] ||
+               sourceRect[3] <= sourceRect[1]) {
                 continue;
             }
 
@@ -1110,20 +1225,27 @@ namespace motion {
 
             if(item.meshType == 0) {
                 operateD3DAffine(method, targetTexture, targetRect, item,
-                                 sourceTexture, xOffset, yOffset);
+                                 sourceTexture, sourceRect, xOffset, yOffset);
             } else if(item.meshType == 1) {
+                const auto cellDivisions =
+                    bezierPatchCellDivisionsU32Like_0x6C8E5C(
+                        item.commandPatchDivision,
+                        item.nativeNode->source.width,
+                        item.nativeNode->source.height);
                 const auto meshPoints =
-                    tessellateBezierPatch(item.meshPoints, item.meshDivX,
-                                          item.meshDivY, xOffset + 0.5,
+                    tessellateBezierPatch(item.meshPoints, cellDivisions[0],
+                                          cellDivisions[1], xOffset + 0.5,
                                           yOffset + 0.5);
-                operateD3DMesh(method, targetTexture, targetRect, item,
-                               sourceTexture, meshPoints);
+                operateD3DMesh(method, targetTexture, targetRect,
+                               sourceTexture, sourceRect, meshPoints,
+                               cellDivisions[0], cellDivisions[1]);
             } else if(item.meshType == 2) {
                 const auto meshPoints =
-                    buildOffsetMeshPoints(item.meshPoints, xOffset + 0.5,
-                                          yOffset + 0.5);
-                operateD3DMesh(method, targetTexture, targetRect, item,
-                               sourceTexture, meshPoints);
+                    buildOffsetMeshPoints(item.commandCompositeMeshPoints,
+                                          xOffset + 0.5, yOffset + 0.5);
+                operateD3DMesh(method, targetTexture, targetRect,
+                               sourceTexture, sourceRect, meshPoints,
+                               item.meshDivX, item.meshDivY);
             }
         }
 
@@ -1131,7 +1253,10 @@ namespace motion {
     }
 
     bool Player::renderToCanvasLike_0x6C7440(
-        tTJSVariant *target, bool willCallUpdateLayerAfterDraw) {
+        tTJSVariant *target,
+        bool willCallUpdateLayerAfterDraw,
+        detail::PreparedRenderItemList &mainList,
+        detail::PreparedRenderItemList &auxList) {
         if(!target) {
             return false;
         }
@@ -1156,11 +1281,11 @@ namespace motion {
             return false;
         }
 
-        // Player_renderToCanvas @0x6C74E8: non-preview rendering clears the
+        // Player_renderToCanvas @0x6C74E8: non-priorDraw rendering clears the
         // tTVPComplexRect at player+864 before collecting this frame's
         // submitted paint boxes. Player.clear has already consumed the
         // previous frame's bound before this draw begins.
-        if(!_preview) {
+        if(!_priorDraw) {
             _drawRegion.Clear();
         }
 
@@ -1204,8 +1329,8 @@ namespace motion {
             return false;
         }
 
-        buildRenderCommands(canvasWidth, canvasHeight);
-        if(!executeLayerRenderCommands(renderLayerObject, true)) {
+        buildRenderCommands(canvasWidth, canvasHeight, mainList, auxList);
+        if(!executeLayerRenderCommands(renderLayerObject, true, mainList)) {
             return false;
         }
 
@@ -1247,12 +1372,15 @@ namespace motion {
             canvasWidth, canvasHeight, skipUpdate ? 1 : 0,
             _needsInternalAssignImages ? 1 : 0);
 
-        prepareRenderItems();
-        applyPreparedRenderItemTranslateOffsets();
+        detail::PreparedRenderItemList mainList;
+        detail::PreparedRenderItemList auxList;
+        prepareRenderItems(mainList, auxList);
+        applyPreparedRenderItemTranslateOffsets(mainList);
 
         const bool needsInternalAssignBeforeRender =
             _needsInternalAssignImages && !skipUpdate;
-        if(!renderToCanvasLike_0x6C7440(&target, !skipUpdate)) {
+        if(!renderToCanvasLike_0x6C7440(
+               &target, !skipUpdate, mainList, auxList)) {
             return false;
         }
 
@@ -1396,8 +1524,10 @@ namespace motion {
                           ->GetType())
                 : -1);
 
-        prepareRenderItems();
-        applyPreparedRenderItemTranslateOffsets();
+        detail::PreparedRenderItemList mainList;
+        detail::PreparedRenderItemList auxList;
+        prepareRenderItems(mainList, auxList);
+        applyPreparedRenderItemTranslateOffsets(mainList);
 
 #if defined(KRKR2_WASMTIME_HEADLESS)
         struct AccurateSlaRenderTraceScope {
@@ -1422,11 +1552,11 @@ namespace motion {
         if(accurateSla) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
             detail::MotionTraceRenderExecuteScope renderTrace(
-                this, targetLayerObject, false);
+                this, targetLayerObject, false, mainList);
 #endif
             if(!renderAccurateSlaLike_0x6C9CA8(
                    sla, slaObject, targetLayerObject,
-                   canvasWidth, canvasHeight)) {
+                   canvasWidth, canvasHeight, mainList, auxList)) {
                 detail::logoChainTraceSummary(
                     motionPath, "renderToSeparateLayerAdaptor",
                     _clampedEvalTime,
@@ -1447,8 +1577,9 @@ namespace motion {
 #if defined(KRKR2_WASMTIME_HEADLESS)
             renderTrace.setResult(true);
 #endif
-        } else if(!renderMotionFrameToTarget(renderTarget, canvasWidth,
-                                             canvasHeight, "0x6DE738")) {
+        } else if(!renderMotionFrameToTarget(
+                      renderTarget, canvasWidth, canvasHeight, "0x6DE738",
+                      mainList, auxList)) {
             detail::logoChainTraceSummary(
                 motionPath, "renderToSeparateLayerAdaptor", _clampedEvalTime,
                 "fail=renderMotionFrameToTarget");

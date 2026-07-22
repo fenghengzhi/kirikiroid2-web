@@ -47,7 +47,7 @@ NCB 暴露 78 个成员名 (Player_ncb_registerMembers @ 0x6D69C8)。
 | 768 | 8 | refcounted string value* | pending stealthMotion | 0 | Player_play flush + Release/null |
 | 776 | 8 | refcounted string value* | pending stealthChara | 0 | chara-path flush + Release/null |
 | 864..908 | 44 | sub_7E2344 inline container | _? | sub_7E2344 init | dtor sub_7E24AC |
-| 908 | 1 | bool | _preview | 0 | ctor a1[908]=0; initNodeFields writes 1; getPreview reads +1096!? — actually +1096 is the NCB getter |
+| 908 | 1 | bool | skipRootMatrix | 0 | ctor +908=0; `if (!player+908) sub_699940(rootNode, player+528)` |
 | 909 | 1 | bool | _useD3DFlag | 0 | setUseD3DFlag writes +909 |
 | 910/911 | padding | | 0 | |
 | 912 | 4 | int | _pixelateDivision | **100** | ctor +912=100; setPixelateDivision/getPixelateDivision |
@@ -61,27 +61,27 @@ NCB 暴露 78 个成员名 (Player_ncb_registerMembers @ 0x6D69C8)。
 | 1032 | 20 | ttstr | outline (2nd?) | empty | confirmed at +1032 in get/setOutline |
 | 1052 | 20 | ttstr | meshline | empty | get/setMeshline |
 | 1072 | 20 | tTJSVariant | motion `tag` frame-array dispatch | empty | written by initNonEmoteMotion; enumerated by skipToSync/progress |
-| 1092 | 1 | bool | completionType | 0 | ctor +1092=0; get/setCompletionType |
-| 1093 | 1 | u8 | _? (=byte_1AB84A8) | byte_1AB84A8 | ctor *((BYTE*)a1+1093)=v19 |
+| 1092 | 1 | bool | preview | 0 | ctor +1092=0; get/setPreview |
+| 1093 | 1 | bool | syncActive | byte_1AB84A8 | ctor *((BYTE*)a1+1093)=v19; get/setSyncActive |
 | 1094 | 1 | bool | cameraActive | 0 | get/setCameraActive |
 | 1095 | 1 | bool | stereovisionActive | 0 | get/setStereovisionActive |
-| 1096 | 1 | bool | preview | 0 | getPreview→+1096 |
+| 1096 | 1 | bool | priorDraw | 0 | get/setPriorDraw |
 | 1097 | 1 | bool | independentLayerInherit (colorWeightFlag) | 0 | getColorWeightFlag→+1097 |
 | 1098 | 1 | bool | syncWaiting | 0 | getSyncWaiting→+1098 |
 | 1099 | 1 | bool | playing | 0 | getPlaying→+1099 |
-| 1100 | 1 | u8 | hasCamera/cameraFOV (raw flag) | 0 | getCameraFOV→+1100 reads byte |
+| 1100 | 1 | bool | cameraAlive | 0 | getCameraAlive→+1100 |
 | 1104 | 8 | double | cameraPosition | 0 | getCameraPosition |
 | 1112 | 8 | double | coordinate | 0 | getCoordinate |
 | 1120 | 8 | double | _? | 0 | |
 | 1128 | 8 | double | frameLastTime | 0 | getFrameLastTime (NB: resourceManager getter also reads +1128, returns *1000/60) |
 | 1136 | 8 | double | frameLoopTime | 0 | getFrameLoopTime / getLastTime → +1136 |
-| 1144 | 4 | int | project | 0 | get/setProject |
+| 1144 | 4 | int | completionType | 0 | get/setCompletionType |
 | 1148 | 4 | int | maskMode | 0 | get/setMaskMode |
 | 1152 | 4 | _? | | 0 | |
 | 1156 | 4 | u32 (packed ARGB) | colorWeight | 0xFF808080 (-8355712) | ctor +1156=-8355712; get/setColorWeight |
-| 1160 | 8 | double | priorDraw | **1.5** | ctor a1[145]=0x3FF8000000000000; getPriorDraw→+1160 |
-| 1168 | 8 | double | meshDivisionRatio | 1.0 | setMeshDivisionRatio→+1168; ctor a1[146]=0x3FF0000000000000 |
-| 1176 | 8 | double | outsideFactor | **1.0** | ctor a1[147]=0x3FF0000000000000; getOutsideFactor→+1176 |
+| 1160 | 8 | double | outsideFactor | **1.5** | ctor a1[145]=0x3FF8000000000000; get/setOutsideFactor |
+| 1168 | 8 | double | speed | 1.0 | get/setSpeed; ctor a1[146]=0x3FF0000000000000 |
+| 1176 | 8 | double | meshDivisionRatio | **1.0** | ctor a1[147]=0x3FF0000000000000; get/setMeshDivisionRatio |
 | 1184..1240 | 56 | KiriKiri HashMap3 | HM3 (single-linked, sub_6DD018 cleanup) | float load 1.0 ctor +1216=1065353216 | dtor sub_6DD018 chain |
 | 1240..1296 | 56 | KiriKiri HashMap4 | HM4 (dispatch-valued) | float load 1.0 +1272 | dtor Release(v[1]) |
 | 1296..1384 | 88 | KiriKiri std::deque<160B> | _? deque | sub_6F4FD8 init | dtor sub_6CF678 |

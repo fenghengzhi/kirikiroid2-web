@@ -119,7 +119,7 @@
 - **RuntimeSupport.cpp / MotionTraceWeb.cpp**（簇 N）：Web-port MotionSnapshot 资源模型 + logo-trace 诊断 shim，无 1:1 二进制函数（二进制直接 load→TJS dict）。端口宿主层。
 - **D3D 桩**（簇 D）：D3DAdaptor 多数成员 = 二进制 nullsub_81..86，本地空 stub 忠实；removeAllTextures（二进制有真体 sub_6AD8B8）缺 PLATFORM_BOUNDARY 注释（N21 类）。
 - 渲染：无 per-vertex 顶点色 → 4-corner bake、纹理按 (name,color) 缓存。
-- clipRect float[4]（二进制）vs 部分本地 int[4]（簇 J N5 类，J5）。
+- clipRect float[4] 已于 2026-07-23 在生产字段与 Wasmtime harness 同步修正；原簇 J5 类型偏差关闭。
 
 ---
 

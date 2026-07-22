@@ -265,10 +265,10 @@ advance 循环 `for(j = count-2; cursor < j; )`，`+456 < +584` break。每步 `
 | +592 | double | **deltaTime** = speedMul(+1168) × dtFrames(a2)；符号定 forward/reverse |
 | +609 | byte | reverseSeekFlag（一次性反向 seek） |
 | +916/+920/+928/+1072 | — | layer stream（§3.1） |
-| +1092 | byte | completionType（node mask 6145 vs 6153） |
-| +1093 | byte | motionStopGate（layer/reseek type==1 事件 stop/sync/align 门控；本端曾误标 speed） |
+| +1092 | byte | preview（node mask 6145 vs 6153；completionType 是 +1144 int） |
+| +1093 | byte | syncActive（layer/reseek type==1 事件 align/sync 门控；非 +1168 speed 乘子） |
 | +1098 | byte | syncWaiting（置 1 后多处提前 return） |
-| +1099 | byte | loopArmed |
+| +1099 | byte | playing（本地 `_allplaying`） |
 | +1120 | double | **frameTickCount**（主时间游标，无 clamp 累加） |
 | +1128 | double | **totalFrames**（cachedTotalFrames，clamp 上界 / loop 边界） |
 | +1136 | double | **loopTime**（>=0 forward-loop wrap，<0 reset-to-0） |

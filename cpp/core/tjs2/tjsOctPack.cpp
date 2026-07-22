@@ -236,7 +236,7 @@ namespace TJS {
     // TTmp : �ꎞ�I�ɏo�͂���^ variant �͈ꎞ�I�� tjs_int �ɂ��Ȃ��Ƃ����Ȃ��Ȃ�
     template <typename TRet, typename TTmp, int NBYTE, typename TRetTmp>
     static void ReadNumberLE(std::vector<tjs_uint8> &result,
-                             const std::vector<tTJSVariant> &args,
+                             const std::deque<tTJSVariant> &args,
                              tjs_int numargs, tjs_int &argindex, tjs_int len) {
         if(len < 0)
             len = numargs - argindex;
@@ -255,7 +255,7 @@ namespace TJS {
 
     template <typename TRet, typename TTmp, int NBYTE, typename TRetTmp>
     static void ReadNumberBE(std::vector<tjs_uint8> &result,
-                             const std::vector<tTJSVariant> &args,
+                             const std::deque<tTJSVariant> &args,
                              tjs_int numargs, tjs_int &argindex, tjs_int len) {
         if(len < 0)
             len = numargs - argindex;
@@ -377,7 +377,7 @@ namespace TJS {
     }
 
     static tTJSVariantOctet *Pack(const std::vector<OctPackTemplate> &templ,
-                                  const std::vector<tTJSVariant> &args) {
+                                  const std::deque<tTJSVariant> &args) {
         tjs_int numargs = static_cast<tjs_int>(args.size());
         std::vector<tjs_uint8> result;
         tjs_size count = templ.size();
@@ -1000,7 +1000,7 @@ namespace TJS {
     }
 
     tjs_error TJSOctetPack(tTJSVariant **args, tjs_int numargs,
-                           const std::vector<tTJSVariant> &items,
+                           const std::deque<tTJSVariant> &items,
                            tTJSVariant *result) {
         if(numargs < 1)
             return TJS_E_BADPARAMCOUNT;

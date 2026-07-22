@@ -199,6 +199,11 @@ if (item+19 /*drawFlag19*/) {
 - 值域保真策略生效：`requireLayerId`→`node.layerId1` 同值 backing，layerId 值不变，仅物化时机 execute→build。
 
 ### 下一目标：m2logo item+18 (skipFlag1) — frame12+ items[1]
+
+> **2026-07-23 superseded correction：**下文的 port 代码与待办判断是历史状态。
+> 当前 `appendPreparedRenderItems(..., inheritedFlag18)` 直接传递 a6，子 Player
+> 递归传 `inheritedFlag18 || ownerNode.priorDraw != 0`；item+18 按原极性存入
+> 历史遗留名称 `skipFlag1`，harness 直接输出，无侧挂或反相层。
 新 first_mismatch（layerResolved20 修复后浮现）：`mainListSemanticItems.items[1].flags flag18` oracle=0 / port=1。
 - **oracle 逻辑**（sub_6C2334 @ 0x6c3380-0x6c33c0，node stride 2632）：
   ```

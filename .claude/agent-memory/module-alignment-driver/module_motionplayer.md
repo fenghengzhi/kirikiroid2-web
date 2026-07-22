@@ -7,14 +7,14 @@ metadata:
 
 motionplayer 模块（cpp/plugins/motionplayer/，约 24.6K LOC，40+ 文件）当前处于"中等成熟度"对齐阶段。
 
-**Why:** 该模块已有 2026-04-05 的完整 misalignment 报告（analysis/MotionPlayer_EmotePlayer_Misalignment_Report.md），随后做过较大重构——EmotePlayer 现已正确委托给内部 `Player _player`（对应二进制 EmoteObject→Player 关系），setVariable 已实现 9-case 类型分发（对应 sub_671228），多数 P1 字段（outline/meshline 改 ttstr、priorDraw 改 double、setScale 引入 baseScale×userScale）已修复。
+**Why:** 该模块已有 2026-04-05 的完整 misalignment 报告（analysis/MotionPlayer_EmotePlayer_Misalignment_Report.md），随后做过较大重构——EmotePlayer 现已正确委托给内部 `Player _player`（对应二进制 EmoteObject→Player 关系），setVariable 已实现 9-case 类型分发（对应 sub_671228），多数 P1 字段（outline/meshline 改 ttstr、priorDraw 纠正为 Player+1096 bool 并与 node+48 分离、setScale 引入 baseScale×userScale）已修复。
 
 **已完成的对齐里程碑（截至 2026-05-30）：**
 - **5f2c846** "Align motion::Player class layout"（P0 字段顺序基础）
 - **4a2cf6e** "Restore EmotePlayer 4-level heap object pointer chain"（D3DEmotePlayerNativeInstance → EmoteObject → EmoteEngine → Player 拓扑）
 - **75dd72e** "relocate controller/animator containers to EmoteEngine (P0-1)"：5 个 `std::deque<VariableAnimatorState>` @ EmoteEngine +256/+336/+416/+576/+656 + `std::unordered_map<std::string, VariableAnimatorState> _variableAnimators` @ +1384 全部在 EmoteEngine.h:70-78 声明完毕，容器类型与二进制 1:1；Player.h 仅保留 `_engineBack->` 间接访问的 helper 方法，**这些字段在 Player 上 0 残留**
 - **2026-05-29 commit f0fd57** P0 完成：HM2 锚点 + 删除 `_mirrorPositiveCache/Negative` Web 侧 memoization
-- **A8/A9/A10 系列**：把 PlayerRuntime 拆掉，_nodes / _preparedRenderItems / _nodeLabelMap 等容器全部上提到 Player 自身（commits a385aa6 / b6246a0 / 8cee351）
+- **A8/A9/A10 系列（历史）**：曾把 PlayerRuntime 拆掉并把 `_nodes` / `_preparedRenderItems` / `_nodeLabelMap` 等上提到 Player；**2026-07-23 correction:** Player-owned live `_preparedRenderItems` 后来被证伪并删除，现为 node-owned persistent item + caller-stack pointer lists。
 
 **仍未对齐的根本问题（按严重度排序）：**
 
@@ -62,7 +62,7 @@ motionplayer 模块（cpp/plugins/motionplayer/，约 24.6K LOC，40+ 文件）�
 
 ### G. 容器复刻冲突
 - 二进制 `_nodes` 是 `std::deque<MotionNode>` (2632B/element)；**本地 `_nodes` 自 commit 8cee351("A8") 起已是 `std::deque<detail::MotionNode>`**（Player.h:1063；MotionNode.h:3 头注释确认；无 vector-only 操作残留）——容器选型已对齐，2026-06-01 Stage D 评估确认无迁移工作。detail::MotionNode 字节尺寸不与 2632B 对齐属 PLATFORM_BOUNDARY allowed（CLAUDE.md "对象 ABI 偏移永不需对齐"）。**任何称 "本地 std::vector<MotionNode>" 的旧记录（含 M1_plan §1）已过时。**
-- `_preparedRenderItems` 二进制是 `std::vector<RenderItem 56B>` @ Player+936/944；本地用 `std::vector<detail::PreparedRenderItem>`，element 大小未审计
+- `Player+936/+944` 实为独立、恒空的 44B-element DEAD child render aggregate，本地 `_childMotionRenderAggregate` 对齐。live 渲染不是 Player 成员 vector：每个 `MotionNode` 拥有 persistent `PreparedRenderItem*`，draw 在 caller stack 创建 main/aux `vector<PreparedRenderItem*>`。
 
 **How to apply:** 下一次推进该模块时优先级：
 - **P0（验证）**：对 EmoteEngine_ctor (0x67E38C) 全部 10 个 deque + 7 个独立 controller heap 对象做完整反编译，扩充本地 EmoteEngine.h 以包含全部容器
