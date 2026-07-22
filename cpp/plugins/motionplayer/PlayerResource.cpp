@@ -287,18 +287,28 @@ namespace motion {
             PSB::PSBRawOwner *owner = loadedResource.file.GetOwner();
             const PSB::PSBRawNode root(owner,
                                        owner->GetHeader()->entries);
+            // sub_695DE8 initializes one raw-node scratch at 0x6960D4 and
+            // keeps it alive across the requested-icon probe, source
+            // enumeration, and packed-record loop. Later assignments
+            // deliberately release its previous owner before installing the
+            // next node.
+            PSB::PSBRawNode iconNode;
             const PSB::PSBRawNode sourceRoot =
                 root.GetDictionaryValueStrict("source");
-            PSB::PSBRawNode requestedGroupNode;
             if(!sourceRoot.GetDictionaryValue(requestedGroup.c_str(),
-                                               requestedGroupNode)) {
+                                               iconNode)) {
                 return false;
             }
-            const PSB::PSBRawNode requestedIconRoot =
-                requestedGroupNode.GetDictionaryValueStrict("icon");
-            PSB::PSBRawNode requestedIconNode;
-            if(!requestedIconRoot.GetDictionaryValue(requestedIcon.c_str(),
-                                                      requestedIconNode)) {
+            bool requestedIconFound;
+            {
+                const PSB::PSBRawNode requestedIconRoot =
+                    iconNode.GetDictionaryValueStrict("icon");
+                requestedIconFound = requestedIconRoot.GetDictionaryValue(
+                    requestedIcon.c_str(), iconNode);
+            }
+            // 0x69612C..0x696154 releases the temporary icon root before it
+            // tests the lookup result and enters the failure cleanup path.
+            if(!requestedIconFound) {
                 return false;
             }
 
@@ -309,7 +319,7 @@ namespace motion {
                 const PSB::PSBRawNode iconRoot =
                     groupNode.GetDictionaryValueStrict("icon");
                 for(const auto &iconName : iconRoot.GetDictionaryKeys()) {
-                    const PSB::PSBRawNode iconNode =
+                    iconNode =
                         iconRoot.GetDictionaryValueStrict(iconName.c_str());
                     auto record =
                         std::make_unique<KrkrAtlasRecordLike_0x695DE8>();
@@ -387,12 +397,13 @@ namespace motion {
                         static_cast<KrkrAtlasRecordLike_0x695DE8 *>(baseRect);
                     detail::PackedSourceAtlasEntry entry;
                     entry.setTexture(texture);
-                    entry.originX = record->iconNode
-                                        .GetDictionaryValueStrict("originX")
-                                        .GetInt();
-                    entry.originY = record->iconNode
-                                        .GetDictionaryValueStrict("originY")
-                                        .GetInt();
+                    // 0x696914..0x696960 copy-assigns the record node into the
+                    // persistent scratch before any metadata reads.
+                    iconNode = record->iconNode;
+                    entry.originX =
+                        iconNode.GetDictionaryValueStrict("originX").GetInt();
+                    entry.originY =
+                        iconNode.GetDictionaryValueStrict("originY").GetInt();
                     // 0x696A18..0x696A30 stores padded width/height followed
                     // by inclusive right/bottom in the four-int descriptor.
                     entry.textureRect = {
@@ -401,13 +412,15 @@ namespace motion {
                         record->x + record->w - 1,
                         record->y + record->h - 1,
                     };
-                    PSB::PSBRawNode clipNode;
-                    if(record->iconNode.GetDictionaryValue("clip", clipNode)) {
+                    // 0x696A84..0x696A90 passes this same raw-node storage as
+                    // both source and out.  A hit descends iconNode in place;
+                    // a miss leaves it unchanged until the next assignment.
+                    if(iconNode.GetDictionaryValue("clip", iconNode)) {
                         entry.clip = {
-                            clipNode.GetDictionaryValueStrict("left").GetDouble(),
-                            clipNode.GetDictionaryValueStrict("top").GetDouble(),
-                            clipNode.GetDictionaryValueStrict("right").GetDouble(),
-                            clipNode.GetDictionaryValueStrict("bottom").GetDouble(),
+                            iconNode.GetDictionaryValueStrict("left").GetDouble(),
+                            iconNode.GetDictionaryValueStrict("top").GetDouble(),
+                            iconNode.GetDictionaryValueStrict("right").GetDouble(),
+                            iconNode.GetDictionaryValueStrict("bottom").GetDouble(),
                         };
                     }
                     loadedResource.krkrSourceEntries.insert_or_assign(

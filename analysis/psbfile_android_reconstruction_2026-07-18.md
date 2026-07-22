@@ -1,5 +1,43 @@
 # Android `PSBFile.dll` 复原审计（2026-07-18）
 
+## 2026-07-23：raw-node alias、数值 decoder 与 media 可达性复核
+
+- `sub_598D58@0x598D58` 的真实 caller `sub_695DE8@0x696A84..0x696A90`
+  把同一 `&v278` 同时放入 X0（source raw node）和 X2（out raw node），即
+  `sub_598D58(&v278, "clip", &v278)`。这证伪了本文旧有的“没有 alias caller 证据”。
+  callee 不做 self guard，命中后仍按 Release-old→从同一 source 槽重读 owner→AddRef→
+  写 child node 执行；本地 `GetDictionaryValue` 已是同一危险顺序。新增 `ezsave.pimg`
+  回归用例先以 trie 中存在、但 root dictionary 中不存在的 `"name"` 守护第二段查找的
+  alias miss 完全不改 owner/node，再以
+  `node.GetDictionaryValue("layers", node)` 守护 alias hit 的原位下降。该证据只属于
+  try-get 函数本体，仍不能证明通用 `PSBRawNode::operator=` 是否存在或是否带 self guard。
+- caller 本身此前尚未复刻这条 alias 数据流。`sub_695DE8` 在 `0x6960D4` 唯一初始化
+  raw-node scratch，请求探测、icon 枚举与 packed-record loop 持续复用；
+  `0x696914..0x696960` 每轮 Release-old→copy owner/node→AddRef，随后
+  `0x696A90` 以同一 scratch 原位查 `clip`，inner/outer backedge 均不析构。本地
+  `PlayerResource.cpp` 现也用一只持久 `iconNode` 贯穿这几段，不再直接从 record 读 origin
+  后另建空 `clipNode`；scratch 声明在 `sourceRoot` 之前，对齐 `0x6960D4→0x6960E8`
+  的构造顺序，以及正常路径 `sourceRoot@0x697358→scratch@0x697380` 的反向析构顺序。
+  请求 icon 的第二次 lookup 还在 `0x69612C..0x696154` 先释放
+  temporary icon-root owner、后判断 lookup 结果；本地现以显式 scope + bool 恢复相同顺序，
+  不再把该临时 owner 保活到 helper 返回。Android scratch 还跨越该本地 helper 之外的后续阶段并到
+  `0x697380` 才统一 Release；本地仍拆分 `sub_695DE8`，这是尚未闭合的源码边界。
+- `GetInt@0x599438` 与 `GetDouble@0x5992E8` 都呈 outer tag switch 加
+  32-bit integer / 64-bit integer / float / double 四组 nested decoder 的形状。本地此前
+  各写一只 monolithic switch，现抽出四个共享 `_guess` decoder，再由两只 outer wrapper
+  分派。精确 helper 名、member/free 身份以及“inline helper”还是源码显式 nested switch
+  仍不能仅由优化后二进制唯一判定；`_guess` 保留该不确定性。tag `0x0B` 在 64-bit decoder
+  中读取完整 56 位且不扩展 bit55；`GetInt` 机器码只读低 32 位是 wrapper 截断后的优化结果，
+  不再被误记成 decoder 源码只读四字节。
+- fresh decompile `EnsureContainer@0x599E04`、`Resolve@0x59A4B0`、
+  `GetListAt@0x5999F4` 与 `ContainsDictionaryKey@0x5995D8` 未发现新的本地差异。
+  对现有资产的 packed table 做独立只读解析：`ezsave.pimg` root 是 11-key Dictionary，
+  直属八个 `.tlg` 为 Resource、`height/width` 为 Integer、`layers` 为 Array，没有直属
+  Dictionary；未过滤 motion root 是 Resource `0x1A`。Resolve 不暴露 root、每段只允许
+  Dictionary key，且不能以数字段穿过 Array。因此当前两只天然资产均无法通过 PSBMedia
+  public path 到达 dictionary listing 分支；这是一条由函数链和资产结构共同证明的 negative，
+  不是一次空 grep。
+
 ## 2026-07-23：六维逐函数复审纠正
 
 - `PSBValueDispatch::PropGet@0x597854` 的 array `count` 分支在
@@ -28,10 +66,12 @@
   `tTVPMemoryStream` ctor/dtor 反编译证据；测试不读取悬挂 block，也不冒领这项证明。
   因此本文此前“只有一只可加载 container、不能覆盖 replacement/borrowed stream”的断言
   已被证伪并就地纠正；该测试是本地生命周期复刻验证，不冒充 Android runtime oracle。
-- 当前验证：macOS Release 五个相关目标构建成功，`psbfile-dll` **566/566**（9 cases）、
+- 当前验证：macOS Release 五个相关目标构建成功，`psbfile-dll` **575/575**（10 cases）、
   `motionplayer-dll` **1212/1212**（16 cases）、`motionplayer-ttstr-hash-test`
   **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
-  `krkr2_wasmtime_guest` 目标均通过。
+  `krkr2_wasmtime_guest` 目标均通过。现成 motion playback runner 在执行 guest 前因
+  当前 checkout 缺少 `reference/xp3/logo_test_oracle.xp3` 退出；不制造 fixture，记录为
+  运行时差分验证缺口，不冒充 guest 已执行。
 
 ## 2026-07-23：local→Android 调用边界复核
 
@@ -86,7 +126,9 @@
   `Consts.h`、`EMoteCTX.h`、`PSBEnums.h`、`PSBExtension.h`、`PSBHeader.h`。
 - raw node 已删除无 Android 独立/内联调用证据的 array/dictionary convenience API；
   `PSBMedia::GetListAt@0x5999F4`、`GetString@0x598B58`、`GetInt@0x599438`、
-  `GetDouble@0x5992E8` 与 `GetResource@0x5996E4` 均直接展开各自 packed 分支。
+  `GetResource@0x5996E4` 直接展开自身 packed 分支；`GetInt@0x599438` 与
+  `GetDouble@0x5992E8` 则恢复为 outer dispatcher 加四类共享 `_guess` decoder 的
+  高置信源码形状，Release 构建仍由优化器内联这些边界。
   `PSBFile::Load@0x598268` 也已合并 octet/MDF 裸指针生命周期，不再经过本地 `LoadOctet`。
 - `ResourceManager_loadResource@0x6A8D8C` 已恢复完整异常字符串拼接、
   `unordered_map::operator[]@0x6EB9E4` 默认构造 mapped record，以及 selected/loaded
@@ -100,7 +142,7 @@
   `MotionDispatch.h/RuntimeSupport.cpp` 中的进程级共享槽，由 `findSource`、
   `PlayerResource`、`PlayerLayerQuery` 等 caller 共用。本文旧版将这两项列为 OPEN 的
   结论已被当前源码和 fresh 反编译证伪，现就地纠正为 CLOSED。
-- 当前验证：macOS Release `psbfile-dll` 为 566/566（9 cases），完整
+- 当前验证：macOS Release `psbfile-dll` 为 575/575（10 cases），完整
   `motionplayer-dll` 为 1212/1212（16 cases），`motionplayer-ttstr-hash-test` 为
   100/100（22 cases）；显式 `krkr2_wasmtime_guest` 目标与 Web Debug 最终链接均通过，
   `git diff --check` 通过。
@@ -410,7 +452,9 @@ owner，element 1 原样回写 motionKey/project 单槽；不再经过全局 sna
   special member 只是一个保持净语义的表示，不能标成已恢复的唯一源码结构。
 - `sub_598D58@0x598D58` 只证明该 try-get hit 的 out 参数按
   Release-old→copy owner→AddRef→write node 更新，不能单独证明原始类存在通用
-  `PSBRawNode::operator=(const&)`；copy/move self guard 也没有 alias caller 证据。
+  `PSBRawNode::operator=(const&)`。后续已在 `sub_695DE8@0x696A90` 找到同一 raw-node
+  同时作为 source/out 的真实 alias caller，证明 try-get 本体没有 self guard；但这仍不证明
+  未知的通用 copy/move special member 是否存在 self guard。
 - 每个 collection dispatch 有独立 `valid` byte；invalidate 父 dispatch 不会使子 dispatch 失效。
 - TJS object closure 的 Object/ObjThis 各持一份 dispatch 引用，测试中的稳定 refcount 为 2。
 - media 通过带 `__cxa_guard` 的 function-local static 指针只分配一次，保留
@@ -1448,8 +1492,9 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
   `GetInt@0x599438`：整数 tag `0x05..0x0A` 分别执行 signed 8/16/24/32/40/48-bit
   扩展，tag `0x0C` 原样读取 64-bit；但 tag `0x0B` 的 7 字节路径只拼接低 56 位，
   **不**把 bit55 扩展到最高字节。`GetInt@0x599438` 自身对 tag `0x09/0x0A/0x0C`
-  明确物化 X0；只是全部 20 个已观察 caller 都只消费 W0，因此该 quirk 在现有 caller 上
-  不可观察。二进制尚不能唯一闭合其源码签名是 `tjs_int` 还是 `tjs_int64`，不能把 caller
+  明确物化 X0；完整 20 个 direct xref 中 18 个只消费 W0，另两个丢弃返回值，没有 caller
+  消费 X0 高位，因此该 quirk 在现有 caller 上不可观察。二进制尚不能唯一闭合其源码签名
+  是 `tjs_int` 还是 `tjs_int64`，不能把 caller
   截断误写成 callee 的返回宽度；惰性 TJS Integer 与 double 转换仍会观察到差异。本地通用
   reader 已恢复 Android 的 7-byte zero-extension 边界。仓库没有天然 tag `0x0B` 物料，
   按规则未构造 fixture。
@@ -1809,9 +1854,10 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
 
 1. 使用现有天然损坏资产覆盖 MDF zlib 失败及 filter 后 offset 校验失败；MDF 成功路径已
    用本机现有 `.ks.scn` 在 Android oracle 验证，但仓库没有已提交 MDF fixture；media/TJS
-   注册路径已由现有 PIMG 闭合。2026-07-19 已逐文件检查当前 `reference/`/`tests/` 的
-   142 个 MDF 与 222 个解包后 PSB，未发现天然失败样本；没有现成物料时记录验证缺口，
-   不从零伪造 fixture。
+   注册路径已由现有 PIMG 闭合。2026-07-19 曾对当时外部可用的 142 个 MDF 与 222 个
+   解包后 PSB 做只读普查，未发现天然失败样本；它们不在当前 checkout 中，当前
+   `reference/` 为空且 tracked test asset 只有两只 PSB/PIMG，不能把历史外部资产数写成
+   当前仓库物料。没有现成物料时记录验证缺口，不从零伪造 fixture。
 2. packed-table 的 tag/width/stride 分支已逐项反编译；剩余工作是用现有损坏资产或
    Android oracle 核对真实越界/崩溃表现，包括损坏 table、tag `0x0B` 的 7-byte
    zero-extension quirk 与 >4 GiB storage 截断边界；不能为了测试主动构造新 fixture。

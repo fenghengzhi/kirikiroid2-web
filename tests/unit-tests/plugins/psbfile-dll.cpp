@@ -205,6 +205,29 @@ TEST_CASE("raw psb owner and node views retain ezsave.pimg") {
             "@pageup:over");
 }
 
+TEST_CASE("raw psb dictionary lookup accepts an aliased output node") {
+    PSB::PSBFile file;
+    REQUIRE(file.LoadStorage(TEST_FILES_PATH "/emote/ezsave.pimg"));
+    PSB::PSBRawNode node = file.GetRoot();
+    PSB::PSBRawOwner *const owner = node.GetOwner();
+    const std::uint8_t *const rootNode = node.GetNode();
+
+    // sub_695DE8 @ 0x696A84..0x696A90 passes the same raw-node address as
+    // both this and out to sub_598D58.  The callee deliberately has no alias
+    // guard: it releases out, reloads/retains this->owner, then writes child.
+    // "name" exists in the shared trie for layer dictionaries but not in the
+    // root dictionary, so this reaches the second lookup's alias-miss path.
+    REQUIRE_FALSE(node.GetDictionaryValue("name", node));
+    REQUIRE(node.GetOwner() == owner);
+    REQUIRE(node.GetNode() == rootNode);
+    REQUIRE(node.GetDictionaryValue("layers", node));
+    REQUIRE(node.GetOwner() == owner);
+    REQUIRE(node.GetType() == 0x20u);
+    std::uint32_t count = 0;
+    REQUIRE(getArrayCount(node, count));
+    REQUIRE(count == 32u);
+}
+
 TEST_CASE("psb media caches and exposes real ezsave.pimg nodes") {
     const ScopedCoreScriptEngine scriptEngine;
     tTJSVariant scriptInstance;

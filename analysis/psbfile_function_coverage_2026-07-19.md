@@ -100,9 +100,30 @@ source 调 `TJSAlignedDealloc`；三个失败点 `0x598328/0x59840C/0x59869C` �
 的 entry-table 索引也已从 signed host product 改为 W32 product + UXTW。其最终 node
 relative 仍按 `0x59783C..0x597840` 保持 W32 + SXTW；两类扩展没有互相泛化。
 
-`GetInt@0x599438` 对 tag `0x09/0x0A/0x0C` 在函数体内物化 X0，但全部 20 个已观察
-caller 只读取 W0。故现有证据只能证明调用面的 32-bit 消费，尚不能唯一判断源码返回型是
-`tjs_int` 还是 `tjs_int64`；manifest 不把本地 32-bit 签名升格为二进制事实。
+`GetInt@0x599438` 对 tag `0x09/0x0A/0x0C` 在函数体内物化 X0；完整 20 个 direct xref
+中有 18 个只消费 W0，`0x694CA8/0x694CEC` 两处完全丢弃返回值，没有 caller 消费 X0
+高位。故现有证据只能证明 conversion/callsite 的 signed 32-bit 可观察语义，尚不能唯一判断
+外层 method 源码返回型是 `tjs_int` 还是 `tjs_int64`；manifest 不把本地 32-bit 签名升格为
+二进制事实。两只 getter 的 nested CFG 与最小 codegen 对照支持四个共享 decoder-shaped
+边界，本地已用 `_guess` helper 复原；精确名字和“inline helper vs 显式 nested switch”仍开放。
+其中 tag `0x0B` 的共享 64-bit decoder 读取完整 56 位且不扩展 bit55，GetInt 的高字节读取
+被优化掉只说明 wrapper 最终截断，不再被当成源码只读低 32 位的证据。
+
+`sub_598D58@0x598D58` 还有一个此前漏记的真实 alias caller：
+`sub_695DE8@0x696A84..0x696A90` 同时把 `&v278` 传入 X0 与 X2，调用
+`sub_598D58(&v278, "clip", &v278)`。这证明 try-get 命中序列本身没有 self guard，
+仍执行 Release-old→重读 source owner→AddRef→写 child；本地直接序列与之相同。它不证明
+未知的通用 raw-node assignment special member 是否存在 self guard。
+
+同一 caller 还证明该 raw-node 不是一轮一构造的临时量：slot 在 `0x6960D4` 初始化，
+请求探测与枚举持续复用，packed loop 的 inner/outer backedge 均不析构，每轮只在
+`0x696914..0x696960` 覆盖旧值，最终正常清理位于 `0x697380..0x6973A4`。本地 atlas
+路径现已用持久 scratch 复刻到 helper 边界，并让 scratch 先于 `sourceRoot` 构造，使反向
+析构对应 Android `sourceRoot@0x697358` 先、scratch@`0x697380` 后；完整 `sub_695DE8`
+仍被拆成多个本地 helper，
+后半段生命周期/调用边界尚未结构性合并。另一个已闭合的局部差异是请求 icon lookup：
+Android `0x69612C..0x696154` 在测试返回位之前先 Release strict icon-root 临时量；本地现
+用显式 scope 保存 bool，确保 temporary owner 在 `if(!found)` 之前析构。
 
 2026-07-23 逐指令复审还确认 `PSBFile::Load@0x598268` 的 invalid-type throw helper
 若意外返回，`0x5983B0` 显式返回 true；本地此前会继续进入 `AsOctet()`，现已纠正。
@@ -135,6 +156,12 @@ borrowed resource pointer 与 raw-node Resolve 生命周期。
 在 replacement 后仍可用，以及切回首容器。stream 的 borrowed/non-retaining 性质来自
 ctor/dtor 反编译证据，测试不读取悬挂 block。此前“缺少第二容器、无法覆盖 replacement”的
 结论已被证伪并删除；该用例只是本地守护，尚不是 Android runtime oracle。
+
+对 dictionary listing 的天然可达性又做了严格交叉核实：`ezsave.pimg` root 的 11 个直属
+子节点只有八个 Resource、两个 Integer 与一个 Array，没有 Dictionary；未过滤 motion root
+是 Resource `0x1A`。`Resolve@0x59A4B0` 不允许直接返回 root，每个 segment 又必须通过
+`ContainsDictionaryKey@0x5995D8`，后者对 Array/Resource 直接 false。因此当前两只 tracked
+资产都不能触达 `GetListAt` 的 dictionary branch；该缺口不能由现有物料闭合。
 
 ## F. typed NCB 自动注册与尾链（22）
 
@@ -183,7 +210,8 @@ listing 和 CreateAdaptor-null 分支，仍按主分析记录为缺少天然 fix
 borrowed/non-retaining 仍由反编译证据证明，且缺 Android runtime oracle，不能把本地验证
 误记为二进制实测。
 
-本轮修改后 macOS Release `psbfile-dll` 为 **566/566**（9 cases），
+本轮修改后 macOS Release `psbfile-dll` 为 **575/575**（10 cases），
 `motionplayer-dll` 为 **1212/1212**（16 cases），`motionplayer-ttstr-hash-test` 为
 **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
-`krkr2_wasmtime_guest` 目标通过。
+`krkr2_wasmtime_guest` 目标通过。motion playback runner 尚未进入 guest：当前 checkout
+缺少 `reference/xp3/logo_test_oracle.xp3`；按物料规则不从零构造，保留该运行验证缺口。

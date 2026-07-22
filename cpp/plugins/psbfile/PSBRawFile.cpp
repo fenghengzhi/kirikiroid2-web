@@ -23,6 +23,83 @@ namespace PSB {
             TVPThrowExceptionMessage(TJS_W(
                 "psb: internal error: unknown internal type detected.\n"));
         }
+
+        // The nested jump tables in GetDouble @ 0x5992E8 and GetInt @
+        // 0x599438 expose the same four decoder-shaped regions. Shared
+        // inlined helpers reproduce that data flow, but their original names,
+        // member/free-function identity, and exact factorization are not
+        // present in the binary, hence the _guess suffixes.
+        tjs_int DecodeInteger32_guess(const std::uint8_t *node) {
+            switch(node[0]) {
+                case 0x05:
+                    return static_cast<std::int8_t>(node[1]);
+                case 0x06:
+                    return detail::ReadUnaligned_guess<std::int16_t>(node + 1);
+                case 0x07:
+                    return static_cast<tjs_int>(
+                        detail::ReadUnaligned_guess<std::uint16_t>(node + 1) |
+                        (static_cast<std::uint32_t>(
+                             static_cast<std::int8_t>(node[3]))
+                         << 16));
+                case 0x08:
+                    return detail::ReadUnaligned_guess<std::int32_t>(node + 1);
+                default:
+                    return 0;
+            }
+        }
+
+        tjs_int64 DecodeInteger64_guess(const std::uint8_t *node) {
+            switch(node[0]) {
+                case 0x09:
+                    return static_cast<tjs_int64>(
+                        detail::ReadUnaligned_guess<std::uint32_t>(node + 1) |
+                        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+                             static_cast<std::int8_t>(node[5])))
+                         << 32));
+                case 0x0a:
+                    return static_cast<tjs_int64>(
+                        detail::ReadUnaligned_guess<std::uint32_t>(node + 1) |
+                        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+                             detail::ReadUnaligned_guess<std::int16_t>(
+                                 node + 5)))
+                         << 32));
+                case 0x0b:
+                    // GetDouble @ 0x599410..0x599424 materializes all seven
+                    // bytes without extending bit 55. In this shared-helper
+                    // reconstruction GetInt later truncates the result to W32.
+                    return static_cast<tjs_int64>(
+                        detail::ReadUnaligned_guess<std::uint32_t>(node + 1) |
+                        (static_cast<std::uint64_t>(
+                             detail::ReadUnaligned_guess<std::uint16_t>(
+                                 node + 5))
+                         << 32) |
+                        (static_cast<std::uint64_t>(node[7]) << 48));
+                case 0x0c:
+                    return detail::ReadUnaligned_guess<tjs_int64>(node + 1);
+                default:
+                    return 0;
+            }
+        }
+
+        float DecodeFloat_guess(const std::uint8_t *node) {
+            switch(node[0]) {
+                case 0x1d:
+                    return 0.0f;
+                case 0x1e:
+                    return detail::ReadUnaligned_guess<float>(node + 1);
+                default:
+                    return 0.0f;
+            }
+        }
+
+        double DecodeDouble_guess(const std::uint8_t *node) {
+            switch(node[0]) {
+                case 0x1f:
+                    return detail::ReadUnaligned_guess<double>(node + 1);
+                default:
+                    return 0.0;
+            }
+        }
     } // namespace
 
     bool detail::FindNameIndex_guess(const std::uint8_t *names,
@@ -450,53 +527,29 @@ namespace PSB {
     }
 
     tjs_int PSBRawNode::GetInt() const {
-        // sub_599438 @ 0x599438.
+        // sub_599438 @ 0x599438 is the outer tag dispatcher. Its nested
+        // 0x599484/0x5994AC jump tables are the inlined integer decoders above.
         switch(GetType()) {
             case 0x02:
                 return 1;
             case 0x03:
+                return 0;
             case 0x04:
-                return 0;
             case 0x05:
-                return static_cast<std::int8_t>(node_[1]);
             case 0x06:
-                return detail::ReadUnaligned_guess<std::int16_t>(node_ + 1);
             case 0x07:
-                return static_cast<tjs_int>(
-                    detail::ReadUnaligned_guess<std::uint16_t>(node_ + 1) |
-                    (static_cast<std::uint32_t>(
-                         static_cast<std::int8_t>(node_[3]))
-                     << 16));
             case 0x08:
-                return detail::ReadUnaligned_guess<std::int32_t>(node_ + 1);
+                return DecodeInteger32_guess(node_);
             case 0x09:
-                return static_cast<tjs_int>(
-                    detail::ReadUnaligned_guess<std::uint32_t>(node_ + 1) |
-                    (static_cast<std::uint64_t>(static_cast<std::uint32_t>(
-                         static_cast<std::int8_t>(node_[5])))
-                     << 32));
             case 0x0a:
-                return static_cast<tjs_int>(
-                    detail::ReadUnaligned_guess<std::uint32_t>(node_ + 1) |
-                    (static_cast<std::uint64_t>(static_cast<std::uint32_t>(
-                         detail::ReadUnaligned_guess<std::int16_t>(node_ + 5)))
-                     << 32));
             case 0x0b:
-                // sub_599438 deliberately consumes only the low 32 bits of
-                // the seven-byte encoding.
-                return static_cast<tjs_int>(
-                    detail::ReadUnaligned_guess<std::uint32_t>(node_ + 1));
             case 0x0c:
-                return static_cast<tjs_int>(
-                    detail::ReadUnaligned_guess<tjs_int64>(node_ + 1));
+                return static_cast<tjs_int>(DecodeInteger64_guess(node_));
             case 0x1d:
-                return 0;
             case 0x1e:
-                return static_cast<tjs_int>(
-                    detail::ReadUnaligned_guess<float>(node_ + 1));
+                return static_cast<tjs_int>(DecodeFloat_guess(node_));
             case 0x1f:
-                return static_cast<tjs_int>(
-                    detail::ReadUnaligned_guess<double>(node_ + 1));
+                return static_cast<tjs_int>(DecodeDouble_guess(node_));
             default:
                 TVPThrowExceptionMessage(
                     TJS_W("psb: can't convert value to int."));
@@ -505,53 +558,29 @@ namespace PSB {
     }
 
     tjs_real PSBRawNode::GetDouble() const {
-        // sub_5992E8 @ 0x5992E8.
+        // sub_5992E8 @ 0x5992E8 owns the same outer dispatcher and inlines
+        // the same four decoder boundaries before converting to tjs_real.
         switch(GetType()) {
             case 0x02:
                 return 1.0;
             case 0x03:
+                return 0.0;
             case 0x04:
-                return 0.0;
             case 0x05:
-                return static_cast<std::int8_t>(node_[1]);
             case 0x06:
-                return detail::ReadUnaligned_guess<std::int16_t>(node_ + 1);
             case 0x07:
-                return static_cast<std::int32_t>(
-                    detail::ReadUnaligned_guess<std::uint16_t>(node_ + 1) |
-                    (static_cast<std::uint32_t>(
-                         static_cast<std::int8_t>(node_[3]))
-                     << 16));
             case 0x08:
-                return detail::ReadUnaligned_guess<std::int32_t>(node_ + 1);
+                return static_cast<tjs_real>(DecodeInteger32_guess(node_));
             case 0x09:
-                return static_cast<tjs_real>(static_cast<tjs_int64>(
-                    detail::ReadUnaligned_guess<std::uint32_t>(node_ + 1) |
-                    (static_cast<std::uint64_t>(static_cast<std::uint32_t>(
-                         static_cast<std::int8_t>(node_[5])))
-                     << 32)));
             case 0x0a:
-                return static_cast<tjs_real>(static_cast<tjs_int64>(
-                    detail::ReadUnaligned_guess<std::uint32_t>(node_ + 1) |
-                    (static_cast<std::uint64_t>(static_cast<std::uint32_t>(
-                         detail::ReadUnaligned_guess<std::int16_t>(node_ + 5)))
-                     << 32)));
             case 0x0b:
-                return static_cast<tjs_real>(
-                    detail::ReadUnaligned_guess<std::uint32_t>(node_ + 1) |
-                    (static_cast<std::uint64_t>(
-                         detail::ReadUnaligned_guess<std::uint16_t>(node_ + 5))
-                     << 32) |
-                    (static_cast<std::uint64_t>(node_[7]) << 48));
             case 0x0c:
-                return static_cast<tjs_real>(
-                    detail::ReadUnaligned_guess<tjs_int64>(node_ + 1));
+                return static_cast<tjs_real>(DecodeInteger64_guess(node_));
             case 0x1d:
-                return 0.0;
             case 0x1e:
-                return detail::ReadUnaligned_guess<float>(node_ + 1);
+                return static_cast<tjs_real>(DecodeFloat_guess(node_));
             case 0x1f:
-                return detail::ReadUnaligned_guess<double>(node_ + 1);
+                return DecodeDouble_guess(node_);
             default:
                 TVPThrowExceptionMessage(
                     TJS_W("psb: can't convert value to double."));
