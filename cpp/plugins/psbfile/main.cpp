@@ -165,7 +165,10 @@ namespace PSB {
                             count = 0;
                             break;
                     }
-                    *result = static_cast<tjs_int64>(count);
+                    // PSBValueDispatch::PropGet @ 0x5979F8 calls the
+                    // tjs_int32 Variant assignment (sub_A0FF28), whose
+                    // SXTW preserves high-bit packed-count behavior.
+                    *result = static_cast<tjs_int32>(count);
                     return TJS_S_OK;
                 }
                 break;
@@ -676,8 +679,11 @@ namespace PSB {
         }
 
         tTJSVariant name;
-        tTJSVariant memberFlags(static_cast<tjs_int>(0));
+        tTJSVariant memberFlags;
         tTJSVariant memberValue;
+        // PSBValueDispatch::EnumMembers @ 0x596FF0..0x59701C defaults all
+        // three member Variants before assigning flags through sub_A0FF28.
+        memberFlags = static_cast<tjs_int32>(0);
         tTJSVariant callbackResult;
         tTJSVariant *params[3] = { &name, &memberFlags, &memberValue };
         const bool noValue = (flag & TJS_ENUM_NO_VALUE) != 0;
@@ -709,7 +715,9 @@ namespace PSB {
             std::string key;
             for(std::uint32_t index = 0; index < keys.count; ++index) {
                 detail::DecodeName_guess(key, value_.GetOwner(), keys[index]);
-                name = ttstr(key);
+                // 0x597350..0x59735C assigns the decoded narrow buffer
+                // directly; no ttstr temporary participates in this lifetime.
+                name = key.c_str();
                 if(!noValue) {
                     // PSBValueDispatch_EnumMembers @ 0x597388..0x59739C
                     // adds the table-end displacement and entry offset in W8,
@@ -967,8 +975,12 @@ namespace PSB {
                     default:
                         break;
                 }
-                *result = ttstr(reinterpret_cast<const char *>(
-                    header->stringsData + offsets[index]));
+                // sub_59673C @ 0x596AB0 calls the narrow-string Variant
+                // assignment directly, releasing the old result before the
+                // new string allocation.  A ttstr temporary reverses that
+                // exceptional lifetime and adds an AddRef/Release pair.
+                *result = reinterpret_cast<const char *>(
+                    header->stringsData + offsets[index]);
                 return;
             }
             case 0x19:
@@ -1011,8 +1023,8 @@ namespace PSB {
                         default:
                             break;
                     }
-                    data = header->chunkData + offsets[index];
                     size = lengths[index];
+                    data = header->chunkData + offsets[index];
                 } else {
                     data = nullptr;
                 }

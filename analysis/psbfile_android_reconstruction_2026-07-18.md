@@ -1,5 +1,38 @@
 # Android `PSBFile.dll` 复原审计（2026-07-18）
 
+## 2026-07-23：六维逐函数复审纠正
+
+- `PSBValueDispatch::PropGet@0x597854` 的 array `count` 分支在
+  `0x5979F8` 调用 `tTJSVariant::operator=(tjs_int32)@0xA0FF28`；该 helper 在
+  `0xA0FF44` 以 `SXTW` 写入 Integer。此前本地把 `uint32_t count` 直接提升为
+  `tjs_int64`，高位 count 会零扩展；现已恢复 signed 32-bit 赋值边界。
+- `assign@0x59673C` 的 String 分支与 `EnumMembers@0x596F50` 的 dictionary name
+  都直接调用 narrow `tTJSVariant::operator=(const char *)@0xA0FEB4`。此前本地先构造
+  `ttstr`，多出宽字符串 owner、AddRef/Release 和“先分配临时量、后释放旧 result”的
+  异常生命周期；现已恢复直接 narrow 赋值。
+- `EnumMembers@0x596F50` 按顺序 default-construct name、flags、value，随后执行
+  `flags = tjs_int32(0)`，再 default-construct callback result。此前 flags 直接由零构造，
+  少了一次与 Android 相同的赋值调用和旧内容释放边界；现已恢复四只 Variant 的精确时序。
+- `assign@0x59673C`、`getResource_guess@0x596C70`、
+  `PSBRawNode::GetResource@0x5996E4` 与 `PSBMedia::GetResourceData@0x59A0B4`
+  四条 resource 路径都先取得 chunk-offset view、再取得 chunk-length view，索引 entry 时
+  则先读 `lengths[index]`、后读 `offsets[index]`。三个 helper 原本已符合两层顺序；只有
+  `assign` 的 entry 访问反了，现已纠正，保留损坏表输入下的首个越界访问顺序。
+- `PSBFile::Load@0x598268` 对既非 String 也非 Octet 的参数调用异常 helper 后，
+  `0x5983B0` 仍显式返回 true；此前本地在 helper 意外返回时继续执行 `AsOctet()`，现已恢复
+  throw-helper continuation 的精确返回值。
+- 既有加密 motion PSB 可作为第二只有效 raw container。新增测试按
+  `ezsave.pimg → encrypted motion PSB → ezsave.pimg` 驱动 `EnsureContainer@0x599E04`，
+  验证跨-container 替换确实发生、旧 `tTVPMemoryStream` 的自身 metadata/析构在替换后仍可用，
+  以及切回首容器。stream 不保活 owner、block 仅为 borrowed 的事实来自
+  `tTVPMemoryStream` ctor/dtor 反编译证据；测试不读取悬挂 block，也不冒领这项证明。
+  因此本文此前“只有一只可加载 container、不能覆盖 replacement/borrowed stream”的断言
+  已被证伪并就地纠正；该测试是本地生命周期复刻验证，不冒充 Android runtime oracle。
+- 当前验证：macOS Release 五个相关目标构建成功，`psbfile-dll` **566/566**（9 cases）、
+  `motionplayer-dll` **1212/1212**（16 cases）、`motionplayer-ttstr-hash-test`
+  **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
+  `krkr2_wasmtime_guest` 目标均通过。
+
 ## 2026-07-23：local→Android 调用边界复核
 
 - 已消除三类 macOS Release 本地产物中的额外调用边界：
@@ -29,10 +62,11 @@
 
 ## 2026-07-22：当前复核增量
 
-- 对 `0x59641C..0x59B708` 的 111 个 PSBFile.dll 函数重新枚举全部异常 helper
-  continuation，补齐 `assign@0x59673C`、`IsInstanceOf@0x596E24`、
-  `GetDictionaryKeys@0x598E64` 和 `PSBFile::Load@0x598268` 在异常 helper 意外返回时的
-  精确默认值/返回值；其余 continuation 未发现新的确定差异。
+- 对 `0x59641C..0x59B708` 的 111 个 PSBFile.dll 函数重新枚举异常 helper
+  continuation，补齐 `assign@0x59673C`、`IsInstanceOf@0x596E24` 与
+  `GetDictionaryKeys@0x598E64` 的精确默认值。该轮曾误记 `PSBFile::Load@0x598268`
+  已闭合；后续逐指令复核 `0x5983AC..0x5983B0` 发现 throw helper 返回后必须显式 true，
+  本轮已纠正代码和本文结论。
 - ABI 与 AArch64 最小样本证明 `0x598A64` 是带隐藏返回槽、消费 source/this 的按值
   transfer helper，而不是 move constructor 函数本体；但不能证明 helper 的源名字、
   member/free 身份，也不能证明内部复制来自某个用户声明的 move constructor。
@@ -66,9 +100,10 @@
   `MotionDispatch.h/RuntimeSupport.cpp` 中的进程级共享槽，由 `findSource`、
   `PlayerResource`、`PlayerLayerQuery` 等 caller 共用。本文旧版将这两项列为 OPEN 的
   结论已被当前源码和 fresh 反编译证伪，现就地纠正为 CLOSED。
-- 当前验证：macOS Release `psbfile-dll` 为 554/554（8 cases），完整
-  `motionplayer-dll` 为 1197/1197（15 cases）；Wasmtime 默认 Debug build、显式
-  `krkr2_wasmtime_guest` 目标与 Web Debug 最终链接均通过，`git diff --check` 通过。
+- 当前验证：macOS Release `psbfile-dll` 为 566/566（9 cases），完整
+  `motionplayer-dll` 为 1212/1212（16 cases），`motionplayer-ttstr-hash-test` 为
+  100/100（22 cases）；显式 `krkr2_wasmtime_guest` 目标与 Web Debug 最终链接均通过，
+  `git diff --check` 通过。
   guest harness 的 `clipRect` 参数类型已随生产字段一并改为 `std::array<float,4>`。
 
 ## 结论
@@ -360,10 +395,11 @@ owner，element 1 原样回写 motionKey/project 单槽；不再经过全局 sna
 ### 4. 对象生命周期
 
 - owner intrusive refcount 管理 raw allocation；holder、node view 和 dispatch 共享它。
-- `PSBFile` holder 可复制：copy construction 对 owner AddRef；copy assignment 先释放旧
-  owner，再保存并 AddRef 新 owner。ResourceManager 命中与插入均保留原版临时 holder
-  的 AddRef/Release 生命周期，不用 move 消去中间步骤；assignment 不额外加入二进制
-  该调用点不存在的 self-assignment 安全分支。
+- ResourceManager cache hit `0x6A8E94..0x6A8EB8` 可证明一指针 holder 的 copy+AddRef；
+  miss insert `0x6A926C..0x6A92A8` 可证明 mapped record 上的 Release-old→copy→AddRef，
+  两处临时 holder 随后各自 Release。这里只证明具体 callsite 的净序列；优化后二进制不能
+  唯一证明 `PSBFile` 声明了哪种 copy/move special member，也不能证明通用 assignment
+  是否存在 self guard。本地 copy-shaped 表示只负责保留上述已观察生命周期。
 - holder 替换文件只释放自己的 owner 引用，旧 node/dispatch 仍保持 allocation 存活。
 - `0x598A64` 不是 move ctor 函数本体，而是按值返回并消费 source/this 的 transfer helper；
   可证明的是复制 owner、incoming zero-ref 删除和清 source，不能证明其中内联了何种
@@ -425,26 +461,30 @@ typed root getter `sub_5981F8@0x5981F8` 在 holder 为空时返回 null；raw ro
 getter 也不调用该 helper，而是在 guard 后直接构造 dispatch 内的 owner/node。本地旧实现
 曾把 guard 下沉到 raw helper并让 typed getter绕经它，掩盖直接调用空 holder 的崩溃边界、
 增加额外调用层；现已恢复两层职责。
-dispatch ctor `sub_597AD4@0x597AD4` 直接接收 source owner/node，复制字段并在 ctor 内
-AddRef owner；不是先构造 retained `PSBRawNode` 值再 move 进成员。本地 constructor 已改为
-两裸字段输入；typed root getter、ResourceManager load 尾段和 findMotion 两个命中分支
-均由该 ctor 自身建立 dispatch owner 引用，不再经过本地通用 Create factory。
+dispatch ctor `sub_597AD4@0x597AD4` 的 ABI 可观察到 incoming owner-slot value 与 node
+pointer，函数体把二者写入 dispatch 并对 owner AddRef；各调用点产物也没有本地旧版 retained temporary 的
+额外引用计数边界。本地用两个裸参数表达这条净数据流，但二进制不能排除源码参数原本是一只
+零开销 raw-node holder 子对象，因此不把“两裸字段签名”升格为唯一源码形状。typed root
+getter、ResourceManager load 尾段和 findMotion 两个命中分支均由该 ctor 建立 dispatch owner
+引用，不再经过本地通用 Create factory。
 raw node validity `sub_598E44@0x598E44` 独立检查 `owner && node`；类型消费者
 `sub_599554@0x599554`、`sub_5995D8@0x5995D8` 直接读取 `node[0]`。本地 `GetType()` 旧有的
 null→tag0 安全归一化已删除，未先做显式 validity 检查的调用保留原始空指针边界。
 
 ### 6. 边界行为
 
-已覆盖：最小 0x40 字节、`PSB\0` signature、offset 的严格/非严格比较、
+反编译并落实到本地实现：最小 0x40 字节、`PSB\0` signature、offset 的严格/非严格比较、
 MDF 解压失败 fallback、storage invalid-buffer 的原始泄漏边界、unknown tag 抛错、
 known non-dictionary contains=false、strict missing-key 抛错、负数组下标、
 `TJS_MEMBERMUSTEXIST`、dispatch invalidate、no-op normalize、空 locally-accessible name、
 packed value tag `0x11` 与有符号 stride，以及真实加密 motion PSB 的 xorshift filter。
 
 尚不能封口：没有现成 fixture/oracle 覆盖 filter 后 offset 验证失败、MDF zlib 失败的
-runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。现有 PIMG 资产已经覆盖 NCB
-typed class 的真实 TJS 构造、同-container media 复用/miss，以及缺失 container 异常后
-旧缓存保留；尚未覆盖成功跨-container 替换及其 borrowed stream 生命周期。
+runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。现有 PIMG 与加密 motion PSB
+已经覆盖 NCB typed class 的真实 TJS 构造、同-container media 复用/miss、缺失 container
+异常后旧缓存保留、成功跨-container 替换，以及替换后旧 stream metadata/析构的本地守护。
+stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地测试不读取悬挂 block，且
+没有 Android runtime oracle，不能把该守护提升为二进制运行结果。
 
 ## 本轮纠正的既有误差
 
@@ -1334,7 +1374,8 @@ typed class 的真实 TJS 构造、同-container media 复用/miss，以及缺�
   SIMD 边界展开。Mac 四目标与 Web Debug 最终链接通过；`motionplayer-dll`
   **398/398**、`psbfile-dll` **437/437**。该元素拓扑差异已闭合；该时点仍缺 MDF、
   media/TJS 与 packed-table 损坏输入覆盖；下一阶段闭合了 typed TJS 构造、array listing
-  和同-container 缓存分支，跨-container 替换、dictionary listing 与 adaptor-null 仍未覆盖。
+  和同-container 缓存分支，当时跨-container 替换、dictionary listing 与 adaptor-null
+  仍未覆盖。2026-07-23 已用现有加密 PSB 补上前者的本地生命周期覆盖；后两项仍开放。
 
 - 2026-07-19 fresh decompile media singleton/register `0x59849C`、析构/ref/name
   `0x5997F0..0x5998A8`、exists/open/list/local-name `0x5998C4..0x599DD8`、container
@@ -1406,10 +1447,12 @@ typed class 的真实 TJS 构造、同-container media 复用/miss，以及缺�
   `PSBValueDispatch` 惰性转换 `0x59673C`、node `GetDouble@0x5992E8` 与
   `GetInt@0x599438`：整数 tag `0x05..0x0A` 分别执行 signed 8/16/24/32/40/48-bit
   扩展，tag `0x0C` 原样读取 64-bit；但 tag `0x0B` 的 7 字节路径只拼接低 56 位，
-  **不**把 bit55 扩展到最高字节。`GetInt` 最终只消费低 32 位，因此同一 quirk 对其
-  结果无影响；惰性 TJS Integer 与 double 转换则会观察到差异。本地通用 reader 此前把
-  7 字节也按有符号数扩展，现已恢复 Android 的 7-byte zero-extension 边界。仓库没有
-  天然 tag `0x0B` 物料，按规则未构造 fixture。
+  **不**把 bit55 扩展到最高字节。`GetInt@0x599438` 自身对 tag `0x09/0x0A/0x0C`
+  明确物化 X0；只是全部 20 个已观察 caller 都只消费 W0，因此该 quirk 在现有 caller 上
+  不可观察。二进制尚不能唯一闭合其源码签名是 `tjs_int` 还是 `tjs_int64`，不能把 caller
+  截断误写成 callee 的返回宽度；惰性 TJS Integer 与 double 转换仍会观察到差异。本地通用
+  reader 已恢复 Android 的 7-byte zero-extension 边界。仓库没有天然 tag `0x0B` 物料，
+  按规则未构造 fixture。
 
 - 2026-07-19 fresh decompile `resource` helpers `0x596C70/0x5996E4`、惰性 octet
   转换 `0x59673C`、media resource `0x59A0B4`，并复核 motion callers
@@ -1438,9 +1481,10 @@ typed class 的真实 TJS 构造、同-container media 复用/miss，以及缺�
 - `PropGetByNum@0x5976C4`（指令 `0x59777C..0x59778C`）、
   `PSBValueDispatch_EnumMembers@0x596F50` 与 media `GetListAt@0x5999F4`
   交叉确认：数组 count 在 TJS numeric 访问和枚举调用面均折叠成 signed 32-bit，负索引
-  加 count 也执行 32-bit ADD；dictionary count 的循环仍保持 unsigned。本地此前统一使用
-  `uint32_t`/`int64_t`，规避了原版高位 count 和负索引溢出边界；现已按三个调用面分别
-  恢复 signed/unsigned 数据流。
+  加 count 也执行 32-bit ADD；dictionary count 的循环仍保持 unsigned。该轮恢复了上述
+  numeric/枚举调用面，却遗漏 `PropGet@0x597854` 返回 `count` 时也经
+  `operator=(tjs_int32)@0xA0FF28` 做 `SXTW`；后续逐函数复审已把该最后一处从本地
+  `tjs_int64` 零扩展纠正为 signed 32-bit 赋值。
 
 - media 链 fresh decompile `GetResourceData@0x59A0B4`、
   `CheckExistentStorage@0x5998C4`、`Open@0x59993C`：中间 helper 直接返回 borrowed
@@ -1729,8 +1773,10 @@ typed class 的真实 TJS 构造、同-container media 复用/miss，以及缺�
 - source-shape 复核还限定了证据强度：`Transfer_guess@0x598A64` 的 hidden-sret 消费行为、
   `Resolve@0x59A698..0x59A6EC` 的净 owner 生命周期及 `sub_598D58@0x598D58` 的 hit out
   更新顺序可证；helper 原名/member 身份、Resolve 的 move-vs-copy+temporary、显式 special
-  members/self guards、`PackedArrayView_guess` 是否真实源类型及 `memcpy`/unaligned cast
-  写法均不可辨识。代码与本文已删除把其中任一等价形状冒充唯一源码事实的表述。
+  members/self guards、`sub_597AD4` 的两裸参数-vs-零开销 raw-node holder 参数、
+  `GetInt@0x599438` 的 `tjs_int`-vs-`tjs_int64` 返回型、`PackedArrayView_guess` 是否真实源类型，
+  以及 `memcpy`/unaligned cast 写法均不可辨识。代码与本文已删除把其中任一等价形状冒充
+  唯一源码事实的表述。
 
 - 2026-07-22 的最终 local→Android 与生命周期复核又修正四组细节。①
   `LoadStorage@0x598570..0x59858C` 的 placed-path `ttstr` 在 `TVPCreateStream` 返回后立即
@@ -1770,10 +1816,19 @@ typed class 的真实 TJS 构造、同-container media 复用/miss，以及缺�
    Android oracle 核对真实越界/崩溃表现，包括损坏 table、tag `0x0B` 的 7-byte
    zero-extension quirk 与 >4 GiB storage 截断边界；不能为了测试主动构造新 fixture。
 3. media 已覆盖 array listing、空段 miss、同 container miss、缺失 container 异常与旧缓存
-   保留；但现有 fixture 只有一只无需 filter 即可加载的 container，且其可达路径没有
-   dictionary listing 节点，因此成功跨 container 替换、旧 borrowed stream 随后悬挂、
-   dictionary media listing 与 CreateAdaptor-null 仍只有反编译证据，不能凭空制造第二容器。
+   保留。此前“只有一只可加载 container”的断言已被现有加密 motion PSB 证伪；当前测试已
+   覆盖 `ezsave → motion → ezsave` 的成功跨-container replacement，以及旧 stream 在 owner
+   replacement 后自身 metadata/析构仍可用的本地守护。stream 不保活 owner、block 为 borrowed
+   仍由 ctor/dtor 反编译证据证明，测试不读取悬挂 block。仍未由天然可达节点覆盖的是
+   dictionary media listing 与 CreateAdaptor-null；cross-container 路径也仍缺 Android
+   runtime oracle，不能用本地测试替代。
+4. 优化后二进制尚不能唯一恢复若干源码拼写：`sub_597AD4` 是两裸参数还是零开销 raw-node
+   holder 参数、`GetInt@0x599438` 返回 `tjs_int` 还是 `tjs_int64`、PSBFile/raw-node 的显式
+   special members 与 self guards、若干 inline helper 的原名/member 身份、
+   `PackedArrayView_guess` 是否为真实源类型，以及 unaligned read 的具体写法。若要把“尽可能”
+   提升为字面 100%，需要带符号/未优化构建、调试类型或原始源码等新增证据，不能从当前
+   ARM64 优化产物反向唯一指定其中一种等价源码形状。
 
 若把范围扩展到“当前 Web 端到端运行链”，还需继续审计
 `0x6C2334/0x6C4E28/0x6C7440` 的 render-list/build/execute 全链；这不属于 psbfile
-插件自身的闭合条件，不能与上面三项混作同一结论。
+插件自身的闭合条件，不能与上面四项混作同一结论。

@@ -39,6 +39,14 @@ iTJSDispatch2/iTJSNativeInstance 槽和析构包装。
 该分支时析构 holder。本地已删除此前额外的 `ttstr` → `std::string` 转换链，恢复同一
 临时对象数量、数据流和析构边界。
 
+同日更深一轮逐函数复审又纠正三处 Variant 调用边界：`PropGet@0x597854` 的 array
+`count` 通过 `operator=(tjs_int32)@0xA0FF28` 以 `SXTW` 落入 Integer，而不是把
+`uint32_t` 零扩展为 `tjs_int64`；`assign@0x59673C` 的 String 与
+`EnumMembers@0x596F50` 的 dictionary name 直接调用 narrow
+`operator=(const char *)@0xA0FEB4`，不先构造 `ttstr`；Enum 的 flags 先 default-construct，
+再以 `tjs_int32(0)` 赋值，随后才构造 callback result。本地现已按这些 helper call、
+临时 owner 数量和异常析构顺序复刻。
+
 ## B. packed name 反向解码 helper（1）
 
 ```text
@@ -92,6 +100,18 @@ source 调 `TJSAlignedDealloc`；三个失败点 `0x598328/0x59840C/0x59869C` �
 的 entry-table 索引也已从 signed host product 改为 W32 product + UXTW。其最终 node
 relative 仍按 `0x59783C..0x597840` 保持 W32 + SXTW；两类扩展没有互相泛化。
 
+`GetInt@0x599438` 对 tag `0x09/0x0A/0x0C` 在函数体内物化 X0，但全部 20 个已观察
+caller 只读取 W0。故现有证据只能证明调用面的 32-bit 消费，尚不能唯一判断源码返回型是
+`tjs_int` 还是 `tjs_int64`；manifest 不把本地 32-bit 签名升格为二进制事实。
+
+2026-07-23 逐指令复审还确认 `PSBFile::Load@0x598268` 的 invalid-type throw helper
+若意外返回，`0x5983B0` 显式返回 true；本地此前会继续进入 `AsOctet()`，现已纠正。
+同时，`assign@0x59673C`、`getResource_guess@0x596C70`、
+`PSBRawNode::GetResource@0x5996E4` 与 `PSBMedia::GetResourceData@0x59A0B4`
+都先取得 chunk-offset view、再取得 chunk-length view；索引 entry 时再先读 length、后读
+offset。三个 helper 原本已符合这两层顺序，只有 `assign` 的 entry 访问相反；现已纠正，
+使损坏 table 下的第一个 entry 读取边界也与二进制一致。
+
 ## E. media pre-register、singleton 与 psb: gateway（17）
 
 ```text
@@ -108,6 +128,13 @@ borrowed resource pointer 与 raw-node Resolve 生命周期。
 引用 `PSBFile::GetRoot@0x598A3C` 或 `PSBRawNode::GetResource@0x5996E4`。
 `0x59A4B0` 的正常返回位于 `0x59A7D8`，异常 landing pads 延伸到 `0x59A8D4`；
 其真实函数边界在 `0x59A8D8`，后者是下一只独立自动注册入口。
+
+现有加密 motion PSB 已证明可作为第二只有效 raw container；测试通过
+`ezsave.pimg → encrypted motion PSB → ezsave.pimg` 覆盖
+`EnsureContainer@0x599E04` 的成功 replacement、旧 `tTVPMemoryStream` 自身 metadata/析构
+在 replacement 后仍可用，以及切回首容器。stream 的 borrowed/non-retaining 性质来自
+ctor/dtor 反编译证据，测试不读取悬挂 block。此前“缺少第二容器、无法覆盖 replacement”的
+结论已被证伪并删除；该用例只是本地守护，尚不是 Android runtime oracle。
 
 ## F. typed NCB 自动注册与尾链（22）
 
@@ -150,9 +177,13 @@ STL 实例化；没有未归属业务入口。该 manifest 只证明 **Android�
 等价 inline helper，也不改变 111-entry Android manifest。当前 raw owner/node 的若干小方法只有
 上层调用点内联行为证据、没有独立 Android 入口；其名字与是否为原始 inline helper 仍不能
 仅由本地源码宣称。manifest 也不替代损坏输入的 Android runtime oracle；MDF zlib failure、
-filter 后 offset failure、损坏 packed table、tag `0x0B`、>4 GiB storage，以及成功
-跨-container media replacement、旧 borrowed stream 生命周期、dictionary listing 和
-CreateAdaptor-null 分支，仍按主分析记录为缺少天然 fixture 的验证缺口。
+filter 后 offset failure、损坏 packed table、tag `0x0B`、>4 GiB storage、dictionary
+listing 和 CreateAdaptor-null 分支，仍按主分析记录为缺少天然 fixture 的验证缺口。
+成功跨-container replacement 与旧 stream metadata/析构的本地守护已由现有第二容器覆盖；
+borrowed/non-retaining 仍由反编译证据证明，且缺 Android runtime oracle，不能把本地验证
+误记为二进制实测。
 
-本轮修改后 macOS Release `psbfile-dll` 为 **554/554**（8 cases），
-`motionplayer-dll` 为 **1197/1197**（15 cases），Web Debug 最终链接通过。
+本轮修改后 macOS Release `psbfile-dll` 为 **566/566**（9 cases），
+`motionplayer-dll` 为 **1212/1212**（16 cases），`motionplayer-ttstr-hash-test` 为
+**100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
+`krkr2_wasmtime_guest` 目标通过。

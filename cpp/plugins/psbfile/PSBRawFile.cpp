@@ -700,6 +700,9 @@ namespace PSB {
         if(value.Type() != tvtOctet) {
             TVPThrowExceptionMessage(
                 TJS_W("invalid argument for PSBFile.load()"));
+            // sub_598268 @ 0x5983A4..0x5983B0 returns true if the exception
+            // helper unexpectedly returns; it never falls into octet access.
+            return true;
         }
 
         const auto *octet = value.AsOctetNoAddRef();

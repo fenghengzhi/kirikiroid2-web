@@ -10,6 +10,7 @@
 #include "motionplayer/MotionDispatch.h"
 #include "ncbind.hpp"
 #include "psbfile/PSBDispatch.h"
+#include "psbfile/PSBMedia.h"
 #include "psbfile/PSBPackedInternal.h"
 #include "psbfile/PSBRawFile.h"
 #include "test_config.h"
@@ -252,6 +253,59 @@ TEST_CASE("psb media caches and exposes real ezsave.pimg nodes") {
         TVPIsExistentStorageNoSearchNoNormalize(missingContainer));
     REQUIRE(TVPIsExistentStorageNoSearchNoNormalize(resourcePath));
     REQUIRE(TVPGetLocallyAccessibleName(resourcePath).IsEmpty());
+}
+
+TEST_CASE("psb media replacement keeps old stream metadata destructible") {
+    const ScopedCoreScriptEngine scriptEngine;
+    PSB::PSBFile raw;
+    REQUIRE(raw.LoadStorage(TEST_FILES_PATH "/emote/ezsave.pimg"));
+    std::string resourceName;
+    REQUIRE(findFirstResource(raw.GetRoot(), {}, resourceName));
+
+    const AutoPathScope autoPath(TEST_FILES_PATH "/emote/");
+    PSB::PSBFile unfilteredProbe;
+    REQUIRE(unfilteredProbe.LoadStorage(
+        TEST_FILES_PATH "/emote/e-mote3.0バニラパジャマa.psb"));
+    REQUIRE(unfilteredProbe.GetRoot().GetType() == 0x1au);
+    PSB::PSBMedia media;
+    const ttstr firstName =
+        ttstr(TJS_W("ezsave.pimg/")) + ttstr(resourceName);
+    std::unique_ptr<tTJSBinaryStream> borrowed(
+        media.Open(firstName, TJS_BS_READ));
+    REQUIRE(borrowed != nullptr);
+    const tjs_uint64 borrowedSize = borrowed->GetSize();
+    REQUIRE(borrowedSize > 0);
+
+    // Open reaches EnsureContainer @ 0x599E04 first.  The encrypted motion's
+    // raw header is loadable without a filter, while its unfiltered root is a
+    // resource node rather than the ezsave dictionary.  Looking up ezsave's
+    // known resource path must therefore reach the post-replacement
+    // cannot-open branch.  A stale cache would incorrectly return a stream;
+    // a failed second load would return nullptr without throwing.
+    const ttstr secondName =
+        ttstr(TJS_W("e-mote3.0\u30d0\u30cb\u30e9\u30d1\u30b8\u30e3\u30dea.psb/")) +
+        ttstr(resourceName);
+    bool sawCannotOpen = false;
+    try {
+        std::unique_ptr<tTJSBinaryStream> unexpected(
+            media.Open(secondName, TJS_BS_READ));
+    } catch(const eTJSError &error) {
+        REQUIRE(error.GetMessage().AsStdString().find("cannot open psbfile") !=
+                std::string::npos);
+        sawCannotOpen = true;
+    }
+    REQUIRE(sawCannotOpen);
+
+    // Reverse-engineering proves the stream's block is borrowed.  This test
+    // only guards that its own metadata and destructor remain usable after
+    // replacement; do not read the now-invalid block.
+    REQUIRE(borrowed->GetSize() == borrowedSize);
+    borrowed.reset();
+
+    std::unique_ptr<tTJSBinaryStream> reloaded(
+        media.Open(firstName, TJS_BS_READ));
+    REQUIRE(reloaded != nullptr);
+    REQUIRE(reloaded->GetSize() == borrowedSize);
 }
 
 TEST_CASE("raw psb dispatch reads packed values and retains its owner") {
