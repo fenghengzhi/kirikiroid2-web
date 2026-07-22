@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "psbfile/PSBRawFile.h"
+#include "MotionNode.h"
 #include "tjs.h"
 
 class iTVPBaseBitmap;
@@ -29,6 +30,7 @@ namespace motion {
 
     namespace detail {
         struct MotionNode;
+        struct PreparedRenderItem;
         struct PlayerRuntime;
     }
 
@@ -50,13 +52,14 @@ namespace motion {
             tTJSVariant sourceObject;
             std::shared_ptr<tTVPBaseBitmap> backingBitmap;
             iTVPTexture2D *sourceTexture = nullptr;
+            std::uint32_t byteWeight = 0;
         };
 
         SourceCache();
-        SourceCache(tTJSVariant owner, tjs_int layerType);
+        SourceCache(tTJSVariant owner, tjs_int cacheSize);
         ~SourceCache();
 
-        void setLayerOwner(tTJSVariant owner, tjs_int layerType);
+        void setLayerOwner(tTJSVariant owner);
 
         tTJSVariant loadSource(tTJSVariant keyOrSource, tTJSVariant currentSource);
         tTJSVariant loadSourceByName(const Player *player,
@@ -76,6 +79,12 @@ namespace motion {
             const tTJSVariant &currentSource,
             int blendMode,
             const std::array<std::uint32_t, 4> &packedColors);
+        iTVPTexture2D *loadRenderSourceTextureFromItemLike_0x6C1B70(
+            const Player &player,
+            detail::PreparedRenderItem &item);
+        iTVPTexture2D *loadRenderSourceTextureForItemLike_0x6F1060(
+            const Player &player,
+            detail::PreparedRenderItem &item);
         void clearCache();
         void eraseSource(ttstr name);
         tTJSVariant getBufLayer() const;
@@ -93,12 +102,31 @@ namespace motion {
         Entry &ensureEntry(const std::string &key,
                            const std::string &resolvedKey,
                            int blendMode,
-                           const std::array<std::uint32_t, 4> &packedColors);
+                           const std::array<std::uint32_t, 4> &packedColors,
+                           bool &inserted);
+        iTVPTexture2D *loadSourceLike_0x6A7BA8(
+            const Player &player,
+            const tTJSVariant &rawSource,
+            const std::string &key,
+            const std::string &src,
+            int blendMode,
+            const std::array<std::uint32_t, 4> &packedColors);
+        void trimCacheBeforeInsertLike_0x6A6B08();
+        iTVPTexture2D *ensureRenderTextureForEntry(
+            Entry &entry,
+            const Player *player,
+            const std::string &fallbackSource,
+            int blendMode,
+            const std::array<std::uint32_t, 4> &packedColors,
+            const tTJSVariant *rawSourceOverride,
+            bool allowStorageFallback);
         bool ensureEntryBackingBitmap(Entry &entry,
                                       const Player *player,
                                       const std::string &key,
                                       int blendMode,
-                                      const std::array<std::uint32_t, 4> &packedColors);
+                                      const std::array<std::uint32_t, 4> &packedColors,
+                                      const tTJSVariant *rawSourceOverride,
+                                      bool allowStorageFallback);
         void releaseEntryTexture(Entry &entry);
         tTJSVariant loadRawSourceVariant(const Player *player,
                                          const ttstr &name,
@@ -107,7 +135,8 @@ namespace motion {
         tTJSVariant _owner;
         tTJSVariant _primaryLayer;
         tTJSVariant _bufLayer;
-        tjs_int _layerType = 0;
+        std::uint32_t _currentCacheBytes = 0;
+        std::uint32_t _cacheLimitBytes = 0;
         std::list<Entry> _entries;
     };
 
@@ -124,7 +153,8 @@ namespace motion {
     // navigates module["source"][group]["icon"][icon] and wraps the resulting
     // sub-dict in this facade via ncbInstanceAdaptor<ObjSource>::CreateAdaptor
     // (mirrors operator new(0x18) + sub_6EC124). Player_findSource @0x6948E8
-    // and SourceCache_loadSource @0x6A7BA8 now consume this same facade; there
+    // and the production 0x6C1B70 -> 0x6A7BA8 route consume this same facade;
+    // the generic local NCB loadSource remains a documented by-name gap. There
     // is no decoded MotionSnapshot image side path in SourceCache.
     class ObjSource {
     public:

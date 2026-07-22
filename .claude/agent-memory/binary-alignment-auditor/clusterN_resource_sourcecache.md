@@ -15,8 +15,10 @@ Authoritative addr↔semantics (decompiled 2026-06-07):
   +104, RandomGen +144, layerId Rb_tree +168 (pre-inserts {0}, inert), counter +216
   (=0x100000001 low32=1), spec int +224 (1=krkr 2=win).
 - **SourceCache ctor sub_6A78F4 @0x6A78F4**: ONLY caller is RM ctor (no standalone
-  instance). Seeds base: +20 primaryLayer, +40 bufLayer (Layer variant), +64 layerType,
-  +72/+80 intrusive layer-list sentinel.
+  instance). Seeds base: +20 primaryLayer, +40 bufLayer (Layer variant), +60 current
+  cache bytes=0, +64 cache byte limit (the second constructor argument), +72/+80
+  intrusive layer-list sentinel. The older `+64 layerType` label was disproved by
+  trim@0x6A6B08 and corrected 2026-07-23.
 - **RM registrar @0x6AB8BC** (14 members) & **SourceCache registrar @0x6A85A8** (4)
   share SAME callbacks: loadSource=sub_6A7BA8, clearCache=sub_6A8438,
   bufLayer(prop-ro)=sub_6A84FC (reads a1+40). = C++ inheritance signature.
@@ -45,7 +47,7 @@ Authoritative addr↔semantics (decompiled 2026-06-07):
 - **PSB RL decode = sub_695DE8** (analysis/PSB_RL_Decompression_libkrkr2so.md), lives in
   PSB::/PlayerResource.cpp — OUTSIDE the 6 cluster-N files.
 
-## Verdict: CLOSED + PLATFORM BOUNDARY (updated 2026-07-19)
+## Verdict: AUDITED SITES ALIGNED + PLATFORM BOUNDARY (corrected 2026-07-23)
 RM mapped-record topology and lifetime are now restored: both nested maps live with
 the raw PSBFile, use ttstr unordered_map keys, and die on unload. Win/spec=2 source
 navigation now reads raw PSBRawNode and mirrors RGBA8/A8L8 conversion exactly.
@@ -53,7 +55,34 @@ KRKR/spec=1 likewise reads raw nodes and mirrors all-group enumeration, both RL
 formats, palette expansion and transparent-image handling. Its Web full-page atlas
 upload primitive is a platform adaptation. ObjSource no longer uses the former
 MotionSnapshot/TJS side graph: clip, ensureTexture and drawLayer consume raw nodes and
-the local object lifetime matches the binary.
+the local object lifetime matches the binary. The former `CLOSED` verdict was too
+broad: fresh xrefs found the shared `sub_695DE8` render-time caller and direct
+PreparedRenderItem→SourceState alias that the snapshot-based local chain had missed.
+Those sites are now restored, but this document must not be cited as a global 100%
+proof beyond the addresses actually audited.
+
+### 2026-07-23 correction
+`sub_6F1060@0x6F1060` is `sub_695DE8`'s second caller; the item stores a
+`SourceState*` at `sub_6C2334@0x6C360C`, and `sub_6ADFBC@0x6AE154..0x6AE188`
+rereads that same object's rect after the texture getter. The old local
+`sourceObject/sourceTexture/sourceRect` snapshots therefore cannot be authoritative
+for this chain. The shared helper, alias and post-getter reread are now restored,
+together with atlas `{x,y,right,bottom}`, difference-derived dimensions,
+branch-local resource lookups, try-pal, and the single scratch/size-slot behavior.
+The two common-render callers do not share one getter: `0x6D5C68` supplies
+`sub_6F67CC` (direct current texture), whereas `0x6ADE24` supplies `sub_6F1060`.
+The latter and Private `0x6DE738` both send the post-atlas `SourceState.object`
+through `0x6C1B70`; the production local route now uses exact
+`(commandKey,commandSrc,blendMode)` identity and never treats that descriptor key
+as a storage path. The generic NCB/by-name facade remains a documented open
+source-structure difference.
+
+`trim@0x6A6B08` further proves the cache-size boundary: a miss trims only when
+current bytes exceed the limit, retaining the newest prefix up to
+`(limit*99)/100`; the new node then stores `4*width*height`, increments current
+bytes and is inserted at the front. Same-color hits do not move; only a color
+mismatch rebakes and moves to the front. Local production routing now preserves
+that ordering and `clearCache@0x6A8438` resets current bytes to zero.
 
 ## Common port pattern in this cluster
 Binary mapped record declaration order is PSBFile, Win texture map, KRKR descriptor

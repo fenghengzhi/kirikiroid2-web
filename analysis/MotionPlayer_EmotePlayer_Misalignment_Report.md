@@ -491,7 +491,7 @@ setEmotePSBDecryptSeed, setEmotePSBDecryptFunc
 - ✅ D3DAdaptor 方法列表和空桩实现 (setPos/removeAllBg 等)
 - ✅ Motion 命名空间常量 (LayerType/ShapeType/PlayFlag/CoordinateType)
 - ✅ emoteplayer.dll 依赖 motionplayer.dll 的加载顺序
-- ✅ Player 构造函数中 Math.RandomGenerator 创建
+- ⚠️ **2026-07-23 纠正**：旧结论“Player 构造函数中创建 Math.RandomGenerator”已被 fresh 反编译证伪。`Player_ctor@0x6CED30` 的 `+676/+716` 是 render descriptor 及其 `color` 对象（`0x6CF080` 把 `+716` PropSet 到 `+676`）；`Player+992` 是 ResourceManager dispatch，`Player::random@0x6BA7B8` 通过它调用 `random`。真正的 `Math.RandomGenerator` 由 `ResourceManager_ctor@0x6A88CC` 创建并持有于 `RM+144`。
 - ✅ Player.parentColorPacked 默认 0xFF808080
 - ✅ Player._noUpdateYet 标志
 - ✅ Player.updateLayers 分阶段架构（Phase1/2/3 子函数）

@@ -68,6 +68,24 @@ namespace {
                 indexed = true;
             }
             REQUIRE(ncbAutoRegister::LoadModule(TJS_W("motionplayer.dll")));
+
+            // EmoteObject_init @0x67DBAC evaluates global.kag before it
+            // constructs ResourceManager. The application always installs
+            // this owner; make the unit-test script engine model that boundary
+            // instead of relying on the old owner-less port constructor.
+            iTJSDispatch2 *global = TVPScriptEngine->GetGlobalNoAddRef();
+            tTJSVariant kag;
+            if(TJS_FAILED(global->PropGet(
+                   0, TJS_W("kag"), nullptr, &kag, global)) ||
+               kag.Type() == tvtVoid) {
+                iTJSDispatch2 *kagObject = TJSCreateDictionaryObject();
+                REQUIRE(kagObject != nullptr);
+                tTJSVariant kagValue(kagObject, kagObject);
+                kagObject->Release();
+                REQUIRE(TJS_SUCCEEDED(global->PropSet(
+                    TJS_MEMBERENSURE | TJS_IGNOREPROP, TJS_W("kag"),
+                    nullptr, &kagValue, global)));
+            }
         }
     };
 
@@ -1509,9 +1527,9 @@ TEST_CASE("emoteplayer timeline state and todo stubs") {
     REQUIRE(module.Type() == tvtObject);
 
     // Direct C++ construction bypasses the script-facing factory's D3DImage
-    // type check. The former ResourceManager argument was ignored by Android
-    // and has been removed from the shell; this test exercises only the loaded
-    // EmoteObject/engine API below, so an empty owner is sufficient here.
+    // type check. ScopedCoreScriptEngine has already installed global.kag for
+    // EmoteObject's ResourceManager construction; nullptr here is only the
+    // outer D3DImage shell argument.
     motion::D3DEmotePlayer player(nullptr);
     player.setModule(tTJSVariant(motionPath));
     const auto retainedModule = player.getModule();

@@ -750,7 +750,7 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
 | layer/node tree | `buildNodeTree` 从 +528 dispatch 取 `layer` TJS Array，递归 helper 直接消费各 raw layer dispatch；节点独立 CopyRef `frameList/emoteEdit/particleMotionList/stencilCompositeMaskLayerList` | 树形、节点数、label map、标量字段、type 分支及 stencil 指针 vector 均由 raw dispatch 驱动；`snapshotCompatibility` 递归参数、decoded `psbNode/emoteEditDict` owner 已删除 | CLOSED |
 | node label/path | node+0 持有 raw `label` ttstr；Player+24 raw-label map 与 HM3 slash-path map 是两个独立 `ttstr` 键空间；action event 从 node+0 构造 String variant | `MotionNode::layerName`、Player+24 map、HM3 path builder、layer getter、事件和 child/render consumers 均直接传递 `ttstr`；只在日志/JSON 边界 narrow | CLOSED |
 | frame slot/evaluator | `parseFrame@0x6926B4` 接收 raw `frameList+index` 且只 parse；`mergeFrameContent@0x692AB0` 再按 slot index 取 content，保留 raw 字符串/variant、32 数值 mesh 与两槽 merged 状态 | live 节点已按 raw `frameListVariant` 实现 selective reset、parse/merge 分离、raw owner、mesh 32 数值、init/reseek/forward/back/modified 重建；node 0 按 `0x6BB4D4` 始终是 synthetic root 并直接复制 delta。旧 decoded/legacy/test model 已整体删除 | CLOSED |
-| source texture | `0x6948E8/0x695DE8` 从 RM HashMap A 的 record.root 导航；record 内含 Win `group->texture` 与 KRKR `src/group/icon->descriptor` 两张 map；非 atlas 路径经 `RM_findSource@0x6AAB3C → ObjSource_drawLayer@0x69D6D8 → ensureTexture@0x6DA454 → SourceCache_loadSource@0x6A7BA8`；ObjSource 本体是 `{PSBRawOwner*, node*, texture*}`，析构按 texture→raw owner 顺序释放；删除外层节点时按 KRKR→Win→PSBFile 析构 | mapped record、两表拓扑、AddRef/Release 与 unload 生命周期已复原；`findSource` 已恢复 raw 临时生命周期、unchecked split 与 blank Dictionary 的 String/Integer 类型链；RL8/RL32、palette、pitch-copy、`tTVPBitmap→texture` 和尺寸写回已恢复；`0x1AB820C..21C` member hints 已由多个 caller 共用同一进程级槽。整页 CPU 合成后一次 Update 是明确的 Web 纹理 API 边界 | CLOSED + PLATFORM BOUNDARY |
+| source texture | `0x6948E8/0x695DE8` 从 RM HashMap A 的 record.root 导航；`0x695DE8` 同时被 Player 与 render-time getter `0x6F1060` 调用；prepared item 在 `0x6C360C` 直接保存 `SourceState*`，`0x6AE154..0x6AE188` 在 getter 后现场重读 rect；`0x6D5C68` 则使用 direct getter `0x6F67CC`；非 atlas 路径把 `SourceState.object` 经 `0x6C1B70` 送入按 `(key,src,blendMode)` 命中的 `SourceCache_loadSource@0x6A7BA8` | mapped record、两表及 unload 生命周期已复原；2026-07-23 又恢复共享 `0x695DE8` 边界、两种 getter、item→SourceState 直接 alias、getter 后 rect 重读、object-only fallback、精确 cache tuple、分支内重复资源调用与字段写序；atlas rect/尺寸已纠正。整页 CPU Update 是 Web 纹理 API 边界；通用 NCB/by-name facade 仍非原始 `(source,descriptor)` 结构 | AUDITED PRODUCTION SITES + OPEN PUBLIC-FACADE GAP + PLATFORM BOUNDARY |
 | variable query/interpolation | D3D 五个枚举方法是无条件 TODO throw；Emote range/frameList 读取 Engine HM5/+1248，HM5 miss 才递归 Player+384 参数表和所有子 Player；updateLayers 无条件调用 `0x6BBE20` 遍历 +1296 var-track deque | 五个 D3D wrapper、range/frameList 与 updateLayers live 插值均已切到 raw Engine/Player owner；旧 snapshot frame/range 查询及首帧旁路已删除 | CLOSED |
 | Player variableKeys | getter 直接遍历 Player+1296 `std::deque<VariableLabelScope>`，每次分配并返回一个新 Array；没有 setter、Player 缓存或 motion-load 副作用 | 数据源与 owner 已对齐；`createTJSArrayWithItems_guess` 复刻 `sub_704CB8` 的 Array Variant + borrowed Items 组合，getter 直接按 deque 顺序 emplace | CLOSED |
 | Player parameter table | `initNonEmoteMotion` 从 +528 读 `parameterize/parameter`；+384 是 56B vector，+408 是 `multimap<ttstr,entry*>`，并注册到当前 Player 及父链 | helper 已改为 raw `tTJSVariant` 输入，`MotionParameterEntry::id` 已改为 `ttstr`，decoded `motionObject/contentObject` 与其额外 owner 已删除 | CLOSED |
@@ -831,8 +831,9 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
     icon 几何边界。KRKR/spec=1 也已从 `record.file` 的 raw node 恢复
     all-group/icon 枚举、严格 width/height、raw/RL 4-byte 解码、RL 1-byte+
     palette expand、全透明 2x2 与 descriptor 写表。仅“CPU 组整页后一次
-    Update”是已注明的 Web 纹理 API 边界；这关闭 source 像素数据流，不代表
-    整个 psbfile/motionplayer 已 CLOSED。
+    Update”是已注明的 Web 纹理 API 边界；这些 named raw owner/decode 站点已
+    对齐，但不能据此把尚未逐调用者复核的 source 数据流或整个
+    psbfile/motionplayer 记为 CLOSED。
 44. 联合反编译 `Player_findSource@0x6948E8`、
     `ResourceManager_findSource@0x6AAB3C`、`SourceCache_loadSource@0x6A7BA8`、
     `ObjSource_getClip@0x69D35C`、`ObjSource_drawLayer@0x69D6D8` 与
@@ -845,6 +846,51 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
     `findSource/getClip/drawLayer/ensureTexture` 全链改为直接 `PSBRawNode`，同时恢复两次 `pal`
     gate、逐字段 clip 写入、aligned buffer、pitch-copy、`tTVPBitmap→texture` 与析构顺序；
     `SourceCache.cpp` 仍无 `_activeMotion` 或 `MotionSnapshot` 类型消费。
+44a. **2026-07-23 纠正过早 CLOSED：**fresh xref 证明 `sub_695DE8` 除
+    `Player_findSource@0x694BF0` 外还有 `sub_6F1060@0x6F1148` 第二调用者；后者由
+    `D3DAdaptor_renderFromPlayer@0x6ADE24` 传给 `sub_6ADFBC`。prepared item 在
+    `sub_6C2334@0x6C360C` 保存 node 持久 `SourceState*`，纹理 getter 可就地补建 atlas，
+    随后的 `0x6AE154..0x6AE188` 再从同一对象读取 rect。本地原先保存
+    `sourceObject/sourceTexture/sourceRect` 快照，既漏掉第二调用者，也让 getter 后的新
+    rect 不可见；该错误不能归为 Web 平台边界。现已恢复共享 out-of-line helper、直接
+    alias 与现场重读。同期逐指令复核还纠正了 `findSource` 整对象 clear、Win
+    texture/icon 顺序、spec2 伪造 path、fallback 提前返回/valid 时机，以及 KRKR 解码中
+    被错误提升合并的 compress/pixel/resource 调用，把 strict-pal 纠正为 try-pal，
+    并把两个清零 size 槽纠正为单个未初始化 size 槽。
+    最后两条调用边界也已拆清：`D3DImage_draw@0x6D5C68` 传入
+    `sub_6F67CC`，只返回现有 `SourceState.texture`；只有
+    `D3DAdaptor_renderFromPlayer@0x6ADE24` 传入 `sub_6F1060`。
+    `sub_6F1060` 与 PrivateMotionGLL `0x6DE738` 的 fallback 都把 helper 调用后的
+    `SourceState.object` 直接交给 `sub_6C1B70`，不读取 `source.path`。本地生产路径现按
+    `(commandKey,commandSrc,blendMode)` 精确匹配，color 仅触发原节点重烘焙，incoming
+    object 只在 bake 调用期间借用，且禁止把 module key 当 storage path；通用 NCB/by-name
+    facade 仍是公开记录的源码结构差异。
+    因此旧“source texture 整链 CLOSED”表述只可保留为对当时 raw owner/map 拓扑的历史
+    结论，不得再外推为未经逐调用者复核的 100% 证明。
+44b. fresh `Player_ctor@0x6CED30`、`Player_random@0x6BA7B8` 与
+    `ResourceManager_ctor@0x6A88CC` 交叉证伪了旧“Player+676 是 RandomGenerator”：
+    +676/+716 是逐 render item 写入 key/src/blend/color 的 descriptor 与 color 对象；
+    Player+992 才是 ResourceManager dispatch，`Player_random` 对它调用 `random`；真正
+    `Math.RandomGenerator` 由 RM ctor 构造并持有。本地已删除每 Player 重复 RNG 及 child
+    传播，直接沿 `_resourceManager` dispatch 调用。同时保留 ctor 对同一 RM dispatch 的
+    三份独立 Variant owner（findSource / render SourceCache / canonical+random），不再用
+    单 Variant 近似三次 AddRef/Release；三字段声明顺序也按 ctor 的
+    findSource → render SourceCache → canonical 排列，使普通 C++ 逆序析构与
+    `Player_dtor@0x6CFADC` 的 canonical → render SourceCache → findSource Release 顺序一致。
+    相关旧 analysis/memory 同步就地纠正。
+44c. fresh `SourceCache_ctor@0x6A78F4`、`trim@0x6A6B08`、
+    `loadSource@0x6A7BA8`、`clearCache@0x6A8438` 与
+    `EmoteObject_init@0x67DBAC` 证伪了旧“SourceCache ctor 第二参数是 layerType”的标签。
+    它实际是 cache byte limit；cache 另持 current bytes，每节点在 `drawLayer` 后记录
+    `4*width*height`。miss 仅在插入前且 current>limit 时 trim，按新到旧保留不超过
+    `(limit*99)/100` 的前缀，随后烘焙、计重、front 插入；同色 hit 原地返回，只有 color
+    mismatch 才重烘焙并移到 front；clear 重置 current。EmoteObject 先求值
+    `global.kag`，再把包含 `Object/ObjThis` 的完整 `tTJSVariant` 以字面 20 MiB 传给 RM，
+    RM 又把完整 Variant CopyCtor 给 SourceCache base；不再降成 raw dispatch 后重建 closure。
+    production route 的容量、命中顺序、owner/bufLayer 构造链现已复刻。仍有两个明确缺口：
+    通用 NCB/by-name facade 不是原始 `(source,descriptor)` 接口且其 legacy weight 记账不完整；
+    color mismatch 本地以 `splice` 移动同一 list node，Android 则 clone-to-front 后销毁旧 node，
+    最终顺序相同但 node 对象生命周期尚非一比一。
 45. D3DEmotePlayer 的 `countVariables`、`getVariableLabelAt`、
     `countVariableFrameAt`、`getVariableFrameLabelAt`、
     `getVariableFrameValueAt` 曾错误转发到 Player snapshot 查询。
@@ -932,6 +978,12 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
 
 ## 验证
 
+- 2026-07-23 source consumer/cache/RNG 纠正后，Web Debug 从 32 个受影响目标重新编译并
+  最终链接 `index.html` 成功，`git diff --check` 通过；显式
+  `psb_rl_decompress_wasm` 目标为最新。独立 Wasmtime driver 使用仓库现有 8 个
+  `psb_rl_decompress` case 全部完成（8 host calls，无 crash）。标准 LLDB runner 仍因本机
+  缺少 `wasm-objdump` 无法进入 probe；此前隔离 LLDB 尝试又受 macOS attach 权限阻止，
+  因而这 8 项只记作 port-wasm 执行验证，不冒充 LLDB/Android oracle 差分。
 - 当前 macOS Release `psbfile-dll`：5 test cases、437 assertions 全部通过。测试 target
   已链接 `krkr2plugins_ncbind`，补齐 `TVPGetD3DImageNative`/
   `TVPGetD3DImageScaleX` 所属 D3D bridge；这是测试构建接线修复，不改变产品实现。
@@ -1870,6 +1922,14 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
   Wasmtime 默认 Debug build、显式 `krkr2_wasmtime_guest` 目标与 Web Debug 最终链接通过，
   `git diff --check` 通过。默认 build 不包含额外 guest 测试目标；单独重建该目标时也已
   成功，harness 的 `clipRect` 参数类型现与生产字段同为 `array<float,4>`。
+
+- 2026-07-23 最终 SourceCache/Player 生命周期复核补齐 byte-budget trim、同色命中不
+  重排、三份 RM dispatch owner 的 ctor/dtor 相对顺序，以及完整 `global.kag` Variant /
+  20 MiB 构造链后，Web Debug 32 个受影响
+  目标完成并链接 `index.html`；Mac Release `motionplayer-dll`/`psbfile-dll` 完成链接，
+  `psbfile-dll` **575/575 assertions（10 cases）**、`motionplayer-dll`
+  **1214/1214 assertions（16 cases）** 全绿。既有 port-wasm RL driver 的 8 个 case 亦
+  全绿；它不是 Android oracle，不能替代 cache 淘汰边界的运行时差分。
 
 ## 后续闭合条件
 

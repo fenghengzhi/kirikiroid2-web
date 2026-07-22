@@ -79,7 +79,7 @@ EmoteEngine+1456 = HM7(@+1440 unordered_map<ttstr,double>) 的 `_M_before_begin.
 
 RM 全程是 **dispatch 持有 + nativeRM() 经 +8 解出唯一 native** 模型(删了 Player._resourceManagerNative value 成员):
 
-- **ctor 单参对齐**: Player_ctor@0x6CED30 头 `(this, resourceManager_dispatch)` 单参; 同 dispatch 经 sub_A0F5E0 写 +636/+656/+992 三槽(0x6cee9c/0x6ceeb0/0x6cef28)。本地 `Player(const tTJSVariant&)`(PlayerCore.cpp:100) + NCB_CONSTRUCTOR((tTJSVariant))(main.cpp:144) 单 variant 代三槽(同指针)。+992 ctor 里既存 RM dispatch 又随后被 Math.RandomGenerator 覆写→本地拆 _resourceManager + _tjsRandomGenerator 双字段(生命周期独立, 可接受)。
+- **ctor 单参对齐（2026-07-23 纠正）**: Player_ctor@0x6CED30 头 `(this, resourceManager_dispatch)` 单参；同 dispatch 经 sub_A0F5E0 写 +636/+656/+992 三槽（0x6CEE9C/0x6CEEB0/0x6CEF28）。+992 从未被 Math.RandomGenerator 覆写；+676/+716 是 render descriptor/color 对象（0x6CF080 建立 `color` 属性关系）。`Player::random@0x6BA7B8` 对 +992 RM dispatch 调 `random`，真正 RNG 由 `ResourceManager_ctor@0x6A88CC` 持有在 RM+144。旧“本地拆 _resourceManager + _tjsRandomGenerator 可接受”结论作废。
 - **nativeRM() = binary findSource +8 unpack**: findSource@0x694928 = +636 dispatch PropGet→NCB instance→`*(+8)`=native。本地 nativeRM()(PlayerCore.cpp:144) = AsObjectNoAddRef → ncbInstanceAdaptor<RM>::GetNativeInstance(ncbind.hpp:171 返回 adaptor->_instance = +8 native)。忠实等价。
 - **child 继承**: Player_initNodeFields case3 @0x6b43cc `Player_ctor(child, parent+992)` + @0x6b43dc `*(child+8)=parent`(两步: ctor 单参 + 构造后设 parent)。本地 NodeTree.cpp:254/PlayerUpdateParticles.cpp:450 `new Player(getResourceManager())` + setParentPlayerLike_0x6B1ABC。3 条 child 路径全设 parent, 无漏。
 - **EmoteObject ctor refcount（2026-07-18 纠正）**: `CreateAdaptor(_rm, true)` 与 `sub_67E20C(rm,1,0)` 一样令 sticky adaptor 指向 EmoteObject 唯一拥有的 RM，不再创建 state-shared 副本。

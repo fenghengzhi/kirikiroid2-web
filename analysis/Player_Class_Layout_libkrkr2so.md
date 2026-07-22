@@ -49,7 +49,7 @@ sub_6D69C8 (NCB registration)
 | TJS Property | Getter Function | Setter Function | Type | Player Offset | Notes |
 |---|---|---|---|---|---|
 | `defaultSyncActive` | sub_6D93F8 | sub_6D9404 | bool | static byte_1AB84A8 | Class-level static |
-| `defaultTransformOrder` | sub_6D9414 | -- (RO) | ttstr | +992 | Copy via sub_A0F5E0 |
+| `defaultTransformOrder` | sub_6D9414 | -- (RO) | legacy mapping invalid | **非 +992** | **2026-07-23 纠正**：+992 已确认为 ResourceManager dispatch；该属性真实 owner 需独立重查 |
 | `resourceManager` | sub_6D9420 | -- (RO) | double | +1128 | Returns value * 1000/60 if > 0 |
 | `lastTime` | sub_6D9448 | -- (RO) | double | +1136 | Returns value * 1000/60 if > 0 |
 | `loopTime` | sub_6D139C | -- | TJS Array | deque iter | Iterates deque at +1312..1368 |
@@ -190,9 +190,9 @@ Based on constructor (sub_6CED30) initialization and property getter/setter deco
 | +616..636 | 20 | struct | ttstr field | -- | sub_A0F778 release in dtor |
 | +636..656 | 20 | struct | ttstr/variant | -- | sub_A0F5E0 init from constructor arg |
 | +656..676 | 20 | struct | ttstr field | -- | sub_A0F778 release in dtor |
-| +676..696 | 20 | struct | ttstr/variant | -- | sub_A0FCC0 init with random gen |
+| +676..696 | 20 | struct | TJS variant/dispatch | -- | sub_A0FCC0 init with render descriptor；旧 `random gen` 标注已于 2026-07-23 证伪 |
 | +696..716 | 20 | struct | ttstr field | -- | sub_A0F778 release in dtor |
-| +716..736 | 20 | struct | ttstr/variant | -- | sub_A0FCC0 init, "color" param set |
+| +716..736 | 20 | struct | TJS variant/dispatch | -- | sub_A0FCC0 init color object；0x6CF080 以 key `color` PropSet 到 +676 descriptor |
 | +736..756 | 20 | struct | ttstr field | -- | sub_A0F778 release in dtor |
 | +760 | 8 | ptr | d3dAdaptorPtr | 0 (or null) | Deleted in destructor; sub_6CFFB8 cleanup |
 | +768 | 8 | ptr | pending stealthMotion string value | 0 | flushed by Player_play, then released/null |
@@ -213,7 +213,7 @@ Based on constructor (sub_6CED30) initialization and property getter/setter deco
 | +968 | 8 | ptr* | stealthChara string value | -- | NCB stealthChara getter reads this |
 | +976 | 8 | ptr* | primary motion string value | -- | Player_getMotion_ncb reads this |
 | +984 | 8 | ptr* | stealthMotion string value | -- | Player_getStealthMotion reads this |
-| +992 | 20 | ttstr | transformOrderStr | -- | sub_6D9414 getter |
+| +992 | 20 | tTJSVariant | ResourceManager dispatch | ctor arg copy | 0x6CEF28 AddRef copy；Player::random@0x6BA7B8 经此调 `random` |
 | +1012 | 20 | tTJSVariant | motionKey/project findMotion context | -- | sub_695BE0/sub_6B4978 alias |
 | +1032 | 20 | ttstr | outline | -- | sub_6D9730/sub_6D973C |
 | +1052 | 20 | ttstr | meshline | -- | sub_6D9744/sub_6D9750 |
@@ -313,15 +313,15 @@ Player_ctor(player, rmArg):
     // String field inits (all zeroed)
     oword(+936..+984) = 0;
     
-    // Random generator creation
-    v17 = sub_9C8440(0);             // Create TJS object (Math.RandomGenerator?)
-    sub_A0FCC0(player+84, v17);      // Store at +676
+    // Render descriptor creation (2026-07-23: old RandomGenerator guess disproved)
+    v17 = sub_9C8440(0);             // Create render-descriptor TJS object
+    sub_A0FCC0(player+84, v17);      // Store descriptor at +676
     player[2] = 0;                   // +16: objthis = null
     
-    // Color variant setup
-    v18 = sub_9C8440(0);             // Another TJS object
-    sub_A0FCC0(player+89, v18);      // Store at +716
-    // Call vtable[6](v17, 512, L"color", ...) -- set color param
+    // Descriptor color-object setup
+    v18 = sub_9C8440(0);             // Create color TJS object
+    sub_A0FCC0(player+89, v18);      // Store color object at +716
+    // 0x6CF080: PropSet receiver +676, key L"color", value +716
     
     // Flags
     byte(+610) = 0;                  // forceUpdate
@@ -413,7 +413,7 @@ Player_dtor(player):
     sub_A0F778(+1052)  // meshline
     sub_A0F778(+1032)  // outline
     sub_A0F778(+1012)  // motionKey/project findMotion context variant
-    sub_A0F778(+992)   // transformOrderStr
+    sub_A0F778(+992)   // ResourceManager dispatch variant
     
     // 9. Release four independent ttstr value owners. 2026-07-18 NCB/dtor
     // correction: +960 was previously misidentified as variableKeys.

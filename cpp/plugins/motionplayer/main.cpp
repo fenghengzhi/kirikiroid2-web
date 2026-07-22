@@ -572,7 +572,7 @@ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
 // ============================================================
 
 NCB_REGISTER_SUBCLASS(ResourceManager) {
-    NCB_CONSTRUCTOR((iTJSDispatch2 *, tjs_int));
+    NCB_CONSTRUCTOR((tTJSVariant, tjs_int));
     // M9 brick B: expose the binary ResourceManager's 12 members in the
     // ncb_registerMembers @0x6AB8BC registration order. The two
     // setEmotePSBDecrypt* methods are injected later by emoteplayer_entry

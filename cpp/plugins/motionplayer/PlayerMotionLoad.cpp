@@ -103,7 +103,6 @@ namespace motion {
             //   so no native-RM copy is needed here. This site only sets the
             //   parent link (binary 0x6b43dc: `*(child+8) = parent`).
             child->setParentPlayerLike_0x6B1ABC(this);
-            child->_tjsRandomGenerator = _tjsRandomGenerator;
             child->_findMotionContextVariant = _findMotionContextVariant;
             if(true) {
                 detail::ensureRootNodeLike_0x6CED30(*child);

@@ -17,35 +17,6 @@ extern unsigned int TVPMaxTextureSize;
 namespace motion {
 
     namespace {
-        struct WinSourceKeyLike_0x6948E8 {
-            std::string group;
-            std::string icon;
-            std::string path;
-        };
-
-        WinSourceKeyLike_0x6948E8 splitWinSourceKeyLike_0x6948E8(
-            const detail::MotionNode::ClipSlot &slot) {
-            WinSourceKeyLike_0x6948E8 key;
-            std::string src = detail::narrow(slot.srcValue);
-            const std::string icon = detail::narrow(slot.iconValue);
-            if(src.rfind("src/", 0) == 0) {
-                src.erase(0, 4);
-            }
-            const auto slash = src.find('/');
-            if(slash == std::string::npos) {
-                key.group = src;
-                key.icon = icon;
-            } else {
-                key.group = src.substr(0, slash);
-                key.icon =
-                    icon.empty() ? src.substr(slash + 1) : icon;
-            }
-            if(!key.group.empty() && !key.icon.empty()) {
-                key.path = "src/" + key.group + "/" + key.icon;
-            }
-            return key;
-        }
-
         bool findWinSourceGroupLike_0x6948E8(
             detail::LoadedResourceRecord &loadedResource,
             const std::string &group, PSB::PSBRawNode &groupNode) {
@@ -213,52 +184,78 @@ namespace motion {
 
             const size_t pixelCount = static_cast<size_t>(record.contentWidth) *
                 static_cast<size_t>(record.contentHeight);
+            // sub_695DE8 @0x696F90..0x6971A8 keeps one raw-node scratch and
+            // one resource-size stack slot across every branch.  The size is
+            // deliberately not initialized: GetResource is the only writer,
+            // matching the malformed-resource boundary in the Android body.
+            PSB::PSBRawNode scratch;
+            const bool hasPalette = iconNode.ContainsDictionaryKey("pal");
             record.bgra = new std::uint8_t[pixelCount * sizeof(tjs_uint32)];
+            std::uint32_t resourceSize;
 
-            PSB::PSBRawNode compressNode;
-            const bool compressed =
-                iconNode.GetDictionaryValue("compress", compressNode) &&
-                std::strcmp(compressNode.GetString(), "RL") == 0;
-            const PSB::PSBRawNode pixelNode =
-                iconNode.GetDictionaryValueStrict("pixel");
-            std::uint32_t pixelSize = 0;
-            const std::uint8_t *pixelData = pixelNode.GetResource(pixelSize);
-
-            if(iconNode.ContainsDictionaryKey("pal")) {
+            if(hasPalette) {
+                const bool compressed =
+                    iconNode.GetDictionaryValue("compress", scratch) &&
+                    std::strcmp(scratch.GetString(), "RL") == 0;
                 auto *indexes = new std::uint8_t[pixelCount];
                 if(compressed) {
-                    decodeKrkrRL8Like_0x696E40(indexes, pixelData, pixelSize);
+                    const PSB::PSBRawNode pixelNode =
+                        iconNode.GetDictionaryValueStrict("pixel");
+                    const std::uint8_t *pixelData =
+                        pixelNode.GetResource(resourceSize);
+                    decodeKrkrRL8Like_0x696E40(
+                        indexes, pixelData, resourceSize);
                 } else {
                     // 0x6970A8 copies the PSB resource length rather than the
                     // destination pixel count.
-                    std::memcpy(indexes, pixelData, pixelSize);
+                    const PSB::PSBRawNode pixelNode =
+                        iconNode.GetDictionaryValueStrict("pixel");
+                    const std::uint8_t *pixelData =
+                        pixelNode.GetResource(resourceSize);
+                    std::memcpy(indexes, pixelData, resourceSize);
                 }
 
-                const PSB::PSBRawNode paletteNode =
-                    iconNode.GetDictionaryValueStrict("pal");
-                std::uint32_t paletteSize = 0;
-                const std::uint8_t *paletteData =
-                    paletteNode.GetResource(paletteSize);
-                std::vector<tjs_uint32> palette(paletteSize / 4u);
-                TVPReverseRGB(
-                    palette.data(),
-                    reinterpret_cast<const tjs_uint32 *>(paletteData),
-                    static_cast<tjs_int>(paletteSize / 4u));
-                TVPBLExpand8BitTo32BitPal(
-                    reinterpret_cast<tjs_uint32 *>(record.bgra), indexes,
-                    static_cast<tjs_int>(pixelCount), palette.data());
+                // Contains("pal") and try-get("pal") are distinct calls in
+                // the binary.  A damaged dictionary may pass the former and
+                // fail the latter without throwing or expanding the indexes.
+                if(iconNode.GetDictionaryValue("pal", scratch)) {
+                    const std::uint8_t *paletteData =
+                        scratch.GetResource(resourceSize);
+                    std::vector<tjs_uint32> palette(resourceSize / 4u);
+                    TVPReverseRGB(
+                        palette.data(),
+                        reinterpret_cast<const tjs_uint32 *>(paletteData),
+                        static_cast<tjs_int>(resourceSize / 4u));
+                    TVPBLExpand8BitTo32BitPal(
+                        reinterpret_cast<tjs_uint32 *>(record.bgra), indexes,
+                        static_cast<tjs_int>(pixelCount), palette.data());
+                }
                 delete[] indexes;
-            } else if(compressed) {
-                decodeKrkrRL32Like_0x696D00(record.bgra, pixelData, pixelSize);
-                TVPReverseRGB(
-                    reinterpret_cast<tjs_uint32 *>(record.bgra),
-                    reinterpret_cast<const tjs_uint32 *>(record.bgra),
-                    static_cast<tjs_int>(pixelCount));
             } else {
-                TVPReverseRGB(
-                    reinterpret_cast<tjs_uint32 *>(record.bgra),
-                    reinterpret_cast<const tjs_uint32 *>(pixelData),
-                    static_cast<tjs_int>(pixelCount));
+                const bool compressed =
+                    iconNode.GetDictionaryValue("compress", scratch) &&
+                    std::strcmp(scratch.GetString(), "RL") == 0;
+                if(compressed) {
+                    const PSB::PSBRawNode pixelNode =
+                        iconNode.GetDictionaryValueStrict("pixel");
+                    const std::uint8_t *pixelData =
+                        pixelNode.GetResource(resourceSize);
+                    decodeKrkrRL32Like_0x696D00(
+                        record.bgra, pixelData, resourceSize);
+                    TVPReverseRGB(
+                        reinterpret_cast<tjs_uint32 *>(record.bgra),
+                        reinterpret_cast<const tjs_uint32 *>(record.bgra),
+                        static_cast<tjs_int>(pixelCount));
+                } else {
+                    const PSB::PSBRawNode pixelNode =
+                        iconNode.GetDictionaryValueStrict("pixel");
+                    const std::uint8_t *pixelData =
+                        pixelNode.GetResource(resourceSize);
+                    TVPReverseRGB(
+                        reinterpret_cast<tjs_uint32 *>(record.bgra),
+                        reinterpret_cast<const tjs_uint32 *>(pixelData),
+                        static_cast<tjs_int>(pixelCount));
+                }
             }
 
             bool anyAlpha = false;
@@ -404,11 +401,11 @@ namespace motion {
                         iconNode.GetDictionaryValueStrict("originX").GetInt();
                     entry.originY =
                         iconNode.GetDictionaryValueStrict("originY").GetInt();
-                    // 0x696A18..0x696A30 stores padded width/height followed
-                    // by inclusive right/bottom in the four-int descriptor.
+                    // 0x696A54..0x696A7C stores atlas x/y followed by the
+                    // inclusive right/bottom in the four-int descriptor.
                     entry.textureRect = {
-                        record->w,
-                        record->h,
+                        record->x,
+                        record->y,
                         record->x + record->w - 1,
                         record->y + record->h - 1,
                     };
@@ -434,31 +431,69 @@ namespace motion {
             }
             return true;
         }
-
-        const detail::PackedSourceAtlasEntry *
-        findKrkrAtlasSourceLike_0x695DE8(
-            detail::LoadedResourceRecord &loadedResource,
-            const std::string &group, const std::string &icon) {
-            const ttstr sourceKey =
-                detail::widen("src/" + group + "/" + icon);
-            auto sourceIt = loadedResource.krkrSourceEntries.find(sourceKey);
-            if(sourceIt == loadedResource.krkrSourceEntries.end()) {
-                if(!buildKrkrAtlasGroupLike_0x695DE8(
-                       loadedResource, group, icon)) {
-                    return nullptr;
-                }
-                sourceIt = loadedResource.krkrSourceEntries.find(sourceKey);
-            }
-            return sourceIt == loadedResource.krkrSourceEntries.end()
-                ? nullptr
-                : &sourceIt->second;
-        }
     } // namespace
+
+    bool Player::loadKrkrAtlasSourceLike_0x695DE8(
+        detail::MotionNode::SourceState &source,
+        ResourceManager *resourceManager,
+        const ttstr &moduleKey) {
+        // sub_695DE8 @0x695DE8 owns the complete path->module->atlas route and
+        // is shared by Player_findSource and the render-time texture getter.
+        const auto pieces = detail::splitTtstrLike_0x697D34(
+            detail::widen(source.path), TJS_W('/'));
+        if(pieces.empty() || pieces[0] != TJS_W("src")) {
+            return false;
+        }
+
+        // 0x695F04..0x695F8C performs the ResourceManager/map lookup only
+        // after the "src" prefix gate. Do not add a null guard that would
+        // change the malformed native-dispatch boundary.
+        const auto loadedIt = resourceManager->_loadedModules.find(moduleKey);
+        if(loadedIt == resourceManager->_loadedModules.end()) {
+            source.valid = false;
+            return false;
+        }
+        auto &loadedResource = loadedIt->second;
+
+        // 0x695F9C clears only the object variant.  Every other descriptor
+        // field remains live until a later success/failure write reaches it.
+        source.object.Clear();
+        const ttstr sourceKey = detail::widen(source.path);
+        auto sourceIt = loadedResource.krkrSourceEntries.find(sourceKey);
+        if(sourceIt == loadedResource.krkrSourceEntries.end()) {
+            // 0x6960B4..0x6960D0 consumes pieces[1]/pieces[2] without a size
+            // check after the sole first-segment test above.
+            if(!buildKrkrAtlasGroupLike_0x695DE8(
+                   loadedResource, detail::narrow(pieces[1]),
+                   detail::narrow(pieces[2]))) {
+                return false;
+            }
+            sourceIt = loadedResource.krkrSourceEntries.find(sourceKey);
+            if(sourceIt == loadedResource.krkrSourceEntries.end()) {
+                return false;
+            }
+        }
+
+        const auto &packed = sourceIt->second;
+        source.valid = true;
+        source.originX = static_cast<double>(packed.originX);
+        source.originY = static_cast<double>(packed.originY);
+        source.blank = false;
+        source.width = static_cast<double>(
+            packed.textureRect[2] - packed.textureRect[0]);
+        source.height = static_cast<double>(
+            packed.textureRect[3] - packed.textureRect[1]);
+        source.clipLeft = packed.clip[0];
+        source.clipTop = packed.clip[1];
+        source.clipRight = packed.clip[2];
+        source.clipBottom = packed.clip[3];
+        source.textureRect = packed.textureRect;
+        source.texture = packed.texture;
+        return true;
+    }
 
     void Player::findSourceForNodeLike_0x6948E8(detail::MotionNode &node) {
         auto &dst = node.source;
-        dst.clear();
-
         ResourceManager *resourceManager = nativeRM();
         const ttstr motionContext =
             static_cast<ttstr>(_findMotionContextVariant);
@@ -472,98 +507,106 @@ namespace motion {
         }
         const int sourceSpec = resourceManager ? resourceManager->_spec : 0;
         const std::string tracePath = motionContext.AsStdString();
+        const std::string rawSource =
+            detail::narrow(node.activeSlot().srcValue);
+        const std::string rawIcon =
+            detail::narrow(node.activeSlot().iconValue);
 
-        const auto key = splitWinSourceKeyLike_0x6948E8(node.activeSlot());
-        if(sourceSpec == 2 && !key.group.empty() &&
-           !key.icon.empty() && loadedResource) {
-            PSB::PSBRawNode groupNode;
-            if(findWinSourceGroupLike_0x6948E8(
-                   *loadedResource, key.group, groupNode)) {
-                const PSB::PSBRawNode iconNode =
-                    groupNode.GetDictionaryValueStrict("icon")
-                        .GetDictionaryValueStrict(key.icon.c_str());
-                dst.texture = loadWinAtlasTextureLike_0x6948E8(
-                    groupNode, *loadedResource, key.group);
-                dst.width = static_cast<double>(
-                    iconNode.GetDictionaryValueStrict("width").GetInt());
-                dst.height = static_cast<double>(
-                    iconNode.GetDictionaryValueStrict("height").GetInt());
-                dst.originX = static_cast<double>(
-                    iconNode.GetDictionaryValueStrict("originX").GetInt());
-                dst.originY = static_cast<double>(
-                    iconNode.GetDictionaryValueStrict("originY").GetInt());
-                const int left =
-                    iconNode.GetDictionaryValueStrict("left").GetInt();
-                const int top =
-                    iconNode.GetDictionaryValueStrict("top").GetInt();
-                dst.textureRect = {
-                    left, top, left + static_cast<int>(dst.width),
-                    top + static_cast<int>(dst.height)
-                };
-                dst.clipLeft = dst.clipTop = 0.0;
-                dst.clipRight = dst.clipBottom = 1.0;
-                dst.path = key.path;
-                dst.valid = true;
-                dst.blank = false;
-                detail::logoChainTraceLogf(
-                    tracePath, "player.findSource", "0x6948E8",
-                    _clampedEvalTime,
-                    "spec=win group={} icon={} valid=1 atlas={} "
-                    "size={}x{} rect=[{},{},{},{}]",
-                    key.group, key.icon,
-                    static_cast<const void *>(dst.texture), dst.width,
-                    dst.height, dst.textureRect[0], dst.textureRect[1],
-                    dst.textureRect[2], dst.textureRect[3]);
-                return;
+        if(!rawSource.empty() && rawSource != "blank") {
+            if(sourceSpec == 2) {
+                // 0x6949E4 clears only the object Variant on the Win route.
+                // The remaining fields intentionally retain their prior bytes
+                // until the exact branch below overwrites them.
+                dst.object.Clear();
+                if(!loadedResource) {
+                    // 0x694B94 belongs only to the outer module-map miss.
+                    dst.valid = false;
+                } else {
+                    PSB::PSBRawNode groupNode;
+                    if(findWinSourceGroupLike_0x6948E8(
+                           *loadedResource, rawSource, groupNode)) {
+                        // 0x694C74..0x694FC0 completes the cache/load before
+                        // 0x694FFC strictly navigates icon/<rawIcon>.
+                        dst.texture = loadWinAtlasTextureLike_0x6948E8(
+                            groupNode, *loadedResource, rawSource);
+                        const PSB::PSBRawNode iconNode =
+                            groupNode.GetDictionaryValueStrict("icon")
+                                .GetDictionaryValueStrict(rawIcon.c_str());
+                        dst.valid = true;
+                        dst.originX = static_cast<double>(
+                            iconNode.GetDictionaryValueStrict("originX")
+                                .GetInt());
+                        dst.originY = static_cast<double>(
+                            iconNode.GetDictionaryValueStrict("originY")
+                                .GetInt());
+                        dst.width = static_cast<double>(
+                            iconNode.GetDictionaryValueStrict("width")
+                                .GetInt());
+                        dst.height = static_cast<double>(
+                            iconNode.GetDictionaryValueStrict("height")
+                                .GetInt());
+                        dst.blank = false;
+                        dst.clipLeft = 0.0;
+                        dst.clipTop = 0.0;
+                        dst.clipRight = 1.0;
+                        dst.clipBottom = 1.0;
+                        const int left =
+                            iconNode.GetDictionaryValueStrict("left").GetInt();
+                        const int top =
+                            iconNode.GetDictionaryValueStrict("top").GetInt();
+                        dst.textureRect = {
+                            left, top, left + static_cast<int>(dst.width),
+                            top + static_cast<int>(dst.height)
+                        };
+                        detail::logoChainTraceLogf(
+                            tracePath, "player.findSource", "0x6948E8",
+                            _clampedEvalTime,
+                            "spec=win group={} icon={} valid=1 atlas={} "
+                            "size={}x{} rect=[{},{},{},{}]",
+                            rawSource, rawIcon,
+                            static_cast<const void *>(dst.texture), dst.width,
+                            dst.height, dst.textureRect[0], dst.textureRect[1],
+                            dst.textureRect[2], dst.textureRect[3]);
+                        return;
+                    }
+                }
+            } else if(sourceSpec == 1) {
+                // 0x694BA4..0x694BCC stores the raw src owner only on the
+                // KRKR route; spec=2 never synthesizes or overwrites path.
+                dst.path = rawSource;
+                if(_d3dDrawMode && loadKrkrAtlasSourceLike_0x695DE8(
+                       dst, resourceManager, motionContext)) {
+                    // 0x694C0C repeats the success byte written by 0x695DE8.
+                    dst.valid = true;
+                    detail::logoChainTraceLogf(
+                        tracePath, "player.findSource", "0x6948E8",
+                        _clampedEvalTime,
+                        "spec=krkr-atlas path={} valid=1 atlas={} "
+                        "size={}x{} rect=[{},{},{},{}]",
+                        dst.path, static_cast<const void *>(dst.texture),
+                        dst.width, dst.height, dst.textureRect[0],
+                        dst.textureRect[1], dst.textureRect[2],
+                        dst.textureRect[3]);
+                    return;
+                }
             }
         }
 
-        const std::string path = !key.path.empty()
-            ? key.path
-            : detail::narrow(node.activeSlot().srcValue);
-        if(path.empty()) {
-            return;
+        // LABEL_142 / 0x6952E0 first nulls texture, then builds exactly
+        // src + "/" + icon for the dispatch fallback.  When src is empty but
+        // icon is not, the leading slash remains; an empty path also reaches
+        // findSource.
+        dst.texture = nullptr;
+        std::string fallbackPath = rawSource;
+        if(!rawIcon.empty()) {
+            fallbackPath += "/" + rawIcon;
         }
-        dst.path = path;
-
-        // sub_6948E8 @0x694BA0: the krkr atlas route is gated by player+909
-        // (D3D draw mode) and returns immediately on success. It is mutually
-        // exclusive with the ResourceManager.findSource fallback below.
-        if(sourceSpec == 1 && _d3dDrawMode && loadedResource &&
-           !key.group.empty() && !key.icon.empty()) {
-            if(const auto *packed = findKrkrAtlasSourceLike_0x695DE8(
-                   *loadedResource, key.group, key.icon)) {
-                dst.texture = packed->texture;
-                dst.originX = packed->originX;
-                dst.originY = packed->originY;
-                dst.textureRect = packed->textureRect;
-                dst.width = static_cast<double>(packed->textureRect[0]);
-                dst.height = static_cast<double>(packed->textureRect[1]);
-                dst.clipLeft = packed->clip[0];
-                dst.clipTop = packed->clip[1];
-                dst.clipRight = packed->clip[2];
-                dst.clipBottom = packed->clip[3];
-                dst.blank = false;
-                dst.valid = true;
-                detail::logoChainTraceLogf(
-                    tracePath, "player.findSource", "0x6948E8",
-                    _clampedEvalTime,
-                    "spec=krkr-atlas group={} icon={} valid=1 atlas={} "
-                    "size={}x{} rect=[{},{},{},{}]",
-                    key.group, key.icon, static_cast<const void *>(dst.texture),
-                    dst.width, dst.height, dst.textureRect[0],
-                    dst.textureRect[1], dst.textureRect[2], dst.textureRect[3]);
-                return;
-            }
-        }
-
-        // 0x6952DC..0x695720: only an atlas miss/non-D3D route calls the TJS
-        // ResourceManager.findSource facade, then reads every descriptor field
-        // from the returned object rather than mixing it with PSB icon data.
-        dst.object = findSource(detail::widen(path));
+        dst.object = findSource(detail::widen(fallbackPath));
         if(dst.object.Type() != tvtObject || !dst.object.AsObjectNoAddRef()) {
+            dst.valid = false;
             return;
         }
+        dst.valid = true;
         dst.width = detail::motionPropGetDouble(
             dst.object, TJS_W("width"), 0, &detail::widthMemberHint_guess);
         dst.height = detail::motionPropGetDouble(
@@ -574,8 +617,6 @@ namespace motion {
             dst.object, TJS_W("originY"), 0, &detail::originYMemberHint_guess);
         dst.blank = detail::motionPropGetBool(
             dst.object, TJS_W("blank"), 0, &detail::blankMemberHint_guess);
-        dst.textureRect = { 0, 0, static_cast<int>(dst.width),
-                            static_cast<int>(dst.height) };
         const tTJSVariant clipValue = detail::motionPropGet(
             dst.object, TJS_W("clip"), 0, &detail::clipMemberHint_guess);
         if(clipValue.Type() == tvtObject && clipValue.AsObjectNoAddRef()) {
@@ -594,11 +635,12 @@ namespace motion {
             dst.clipRight = 1.0;
             dst.clipBottom = 1.0;
         }
-        dst.valid = true;
+        dst.textureRect = { 0, 0, static_cast<int>(dst.width),
+                            static_cast<int>(dst.height) };
         detail::logoChainTraceLogf(
             tracePath, "player.findSource", "0x6948E8",
             _clampedEvalTime, "spec={} path={} valid=1 blank={} size={}x{}",
-            sourceSpec, path, dst.blank ? 1 : 0, dst.width,
+            sourceSpec, fallbackPath, dst.blank ? 1 : 0, dst.width,
             dst.height);
     }
 

@@ -410,6 +410,7 @@ namespace motion {
                 wrapper.ownerLabel = node.layerName;
                 wrapper.nodeIndex = static_cast<int>(i);
                 wrapper.nativeNode = &node;
+                wrapper.sourceState = &node.source;
                 wrapper.hasOwnSource = false;
                 wrapper.drawFlag = false;
                 wrapper.stencilComposite = node.stencilType;
@@ -474,6 +475,9 @@ namespace motion {
             entry.ownerLabel = node.layerName;
             entry.nodeIndex = static_cast<int>(i);
             entry.nativeNode = &node;
+            // sub_6C2334 @0x6C360C stores a direct pointer to node.source;
+            // sourceObject/texture/rect below are Web-only snapshots.
+            entry.sourceState = &node.source;
             // 0x6C25DC..0x6C2654: item+264 points directly at the visible
             // ancestor's node-owned item. The ancestor item is allocated on
             // demand but is not thereby inserted into either output list.

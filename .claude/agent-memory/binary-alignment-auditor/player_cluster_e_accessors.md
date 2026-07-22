@@ -28,6 +28,6 @@ metadata:
 - `angleDeg` setter = 0x6C0F84(deg-direct), getter = 0x6C1780(raw→deg);`angleRad` setter = 0x6CD0EC(rad*57.29→deg), getter = 0x6CD0C0(deg*0.0174→rad)。本地全对齐(2026-06-03 修正了曾接反的绑定)。
 
 ## ctor 0x6CED30 fresh-verify
-- +992 = **第3份 RM dispatch 拷贝**(sub_A0F5E0 @0x6cef28),**不是 RandomGenerator**。RandomGen(sub_9C8440)在 **+676**(0x6cf024)。本地 `_tjsRandomGenerator // player+992` 注释 **错**(应 +676);+716 第2个 sub_9C8440 对象(设 "color" param)本地无对应。
+- **2026-07-23 纠正被证伪的 RNG 归属**：+992 = 第 3 份 RM dispatch 拷贝（sub_A0F5E0 @0x6CEF28）；+676 也不是 RandomGenerator，而是 render descriptor。+716 是其 color 对象，0x6CF080 把 +716 以 key `color` PropSet 到 +676。`Player::random@0x6BA7B8` 对 +992 调 `random`；真正的 `Math.RandomGenerator` 是 `ResourceManager_ctor@0x6A88CC` 创建的 RM+144。因此旧 `_tjsRandomGenerator` Player 字段归属及“只改偏移注释”的建议都作废。
 - +912=100(pixelateDivision,本地 _pixelateDivision 对齐)、+1092=0(preview,非 completionType,本地 _preview 对齐)、completionType 真身=+1144 int。
 - 4 HM(+264/+320/+1184/+1240)全是 std::unordered_map(std_Prime_rehash_policy_M_next_bkt + 1.0f load),本地 4 map 选型对齐。ctor 只 push 1 个 root node。

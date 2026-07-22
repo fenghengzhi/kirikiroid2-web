@@ -206,18 +206,9 @@ namespace {
 
 } // namespace
 
-// C-1 (2026-06-07): RM : public SourceCache. The implicit SourceCache base
-//   subobject ctor (`SourceCache::SourceCache() = default`) runs before the RM
-//   body — mirroring binary RM ctor sub_6A88CC @0x6A88CC which calls the
-//   SourceCache base ctor sub_6A78F4 FIRST (0x6a88f8), then initialises the
-//   RM-own fields. GAP (oracle-inert, honest): the binary base ctor takes
-//   (this, rmDispatch, layerType=0) and seeds the base _owner / +40 bufLayer
-//   Layer from the RM dispatch; the local default base ctor still leaves _owner
-//   / _bufLayer empty until the first native render call supplies its layer
-//   owner. Player now aliases this inherited SourceCache directly (Player_ctor
-//   @0x6CED30); the remaining difference is construction-time owner/bufLayer
-//   materialisation, not SourceCache object identity or cache-container
-//   lifetime.
+// ResourceManager_ctor @0x6A88CC invokes SourceCache_ctor @0x6A78F4 before
+// initializing its own maps and RandomGenerator. The base receives the KAG
+// owner and byte budget; it owns the primary/buffer Layers and cache list.
 motion::ResourceManager::ResourceManager() {
     // ResourceManager_ctor @0x6A891C initializes HashMap A with 10 buckets
     // before constructing the random generator @0x6A8988..0x6A8994.
@@ -225,29 +216,38 @@ motion::ResourceManager::ResourceManager() {
     initializeRandomGenerator(_randomGenerator);
 }
 
-motion::ResourceManager::ResourceManager(iTJSDispatch2 *kag,
-                                         tjs_int cacheSize) {
+motion::ResourceManager::ResourceManager(tTJSVariant kag,
+                                         tjs_int cacheSize) :
+    SourceCache(kag, cacheSize) {
     _loadedModules.rehash(10);
     initializeRandomGenerator(_randomGenerator);
-    LOGGER->info("kag: {}, cacheSize: {}", static_cast<void *>(kag), cacheSize);
+    const bool hasKagObject = kag.Type() == tvtObject &&
+        kag.AsObjectNoAddRef();
+    tTJSVariantClosure kagClosure;
+    if(hasKagObject) {
+        kagClosure = kag.AsObjectClosureNoAddRef();
+    }
+    LOGGER->info("kag: {}, cacheSize: {}",
+                 hasKagObject ? static_cast<void *>(kagClosure.Object) : nullptr,
+                 cacheSize);
 
     // Pre-define ShortCutInitialPadKeyMap on the KAG window if not already set.
     // The encrypted keybinder.tjs accesses .ShortCutInitialPadKeyMap on the
     // window object. If undefined, it crashes with "Invalid object context".
-    if(kag) {
+    if(hasKagObject) {
         const tjs_char *padKeys[] = { TJS_W("ShortCutInitialPadKeyMap"),
                                       TJS_W("ShortCutInitialGamePadKeyMap"),
                                       TJS_W("_proceedingKeyList"), nullptr };
         for(int i = 0; padKeys[i]; ++i) {
             tTJSVariant existing;
-            if(TJS_FAILED(
-                   kag->PropGet(0, padKeys[i], nullptr, &existing, kag)) ||
+            if(TJS_FAILED(kagClosure.PropGet(
+                   0, padKeys[i], nullptr, &existing, nullptr)) ||
                existing.Type() == tvtVoid) {
                 iTJSDispatch2 *dict = TJSCreateDictionaryObject();
                 if(dict) {
                     tTJSVariant v(dict, dict);
-                    kag->PropSet(TJS_MEMBERENSURE, padKeys[i], nullptr, &v,
-                                 kag);
+                    kagClosure.PropSet(TJS_MEMBERENSURE, padKeys[i], nullptr,
+                                       &v, nullptr);
                     dict->Release();
                 }
             }
@@ -377,11 +377,14 @@ tTJSVariant motion::ResourceManager::load(ttstr path) {
 
 // C-1 (2026-06-07): RM-own loadSource(ttstr)->load(path) forward REMOVED. The
 //   binary RM `loadSource` NCB member (sub_6A7BA8) is the INHERITED
-//   SourceCache::loadSource(keyOrSource, currentSource) base method (the RM
+//   SourceCache::loadSource(source, descriptor) base method (the RM
 //   registrar @0x6AB8BC re-lists the SAME callback address sub_6A7BA8 that the
 //   SourceCache registrar @0x6A85A8 binds). It materialises a Layer into the
 //   SourceCache base +72 list — it is NOT a thin forward to RM::load. The
-//   inherited SourceCache::loadSource now serves the RM NCB binding.
+//   inherited local method serves the RM NCB binding, but its remaining
+//   by-name facade shape is explicitly tracked as an open source-structure gap;
+//   only the prepared-item production wrapper currently restores the exact
+//   source/descriptor cache tuple.
 
 void motion::ResourceManager::unload(ttstr path) const {
     LOGGER->debug("ResourceManager::unload({})", path.AsStdString());

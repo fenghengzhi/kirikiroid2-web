@@ -40,6 +40,9 @@ namespace motion {
         std::array<int, 4> sourceRectForItem(
             const PreparedRenderItem &item,
             const iTVPTexture2D *texture) {
+            if(item.sourceState) {
+                return item.sourceState->textureRect;
+            }
             if(item.sourceTexture && item.sourceRect[2] > item.sourceRect[0] &&
                item.sourceRect[3] > item.sourceRect[1]) {
                 return item.sourceRect;
@@ -803,11 +806,10 @@ namespace motion {
                        item, _priorDraw)) {
                     continue;
                 }
-                auto *sourceTexture = item.sourceTexture
-                    ? item.sourceTexture
-                    : _sourceCacheNative->loadRenderSourceTextureByName(
-                          *this, detail::widen(item.sourceKey), item.sourceObject,
-                          item.blendMode, item.packedColors);
+                auto *sourceTexture =
+                    _sourceCacheNative
+                        ->loadRenderSourceTextureFromItemLike_0x6C1B70(
+                            *this, item);
                 PrivateMotionGLLRenderItemInputLike_0x6DE738 queueItem;
                 queueItem.opacity =
                     privateMotionGLLOpacityLike_0x6DE738(item, _priorDraw);
@@ -819,8 +821,12 @@ namespace motion {
                     const auto cellDivisions =
                         bezierPatchCellDivisionsU32Like_0x6C8E5C(
                             item.commandPatchDivision,
-                            item.nativeNode->source.width,
-                            item.nativeNode->source.height);
+                            item.sourceState
+                                ? item.sourceState->width
+                                : item.nativeNode->source.width,
+                            item.sourceState
+                                ? item.sourceState->height
+                                : item.nativeNode->source.height);
                     queueItem.meshDivX = cellDivisions[0];
                     queueItem.meshDivY = cellDivisions[1];
                 } else if(item.meshType == 2) {
@@ -1104,10 +1110,17 @@ namespace motion {
             return false;
         }
         applyPreparedRenderItemTranslateOffsets(mainList);
+        // sub_6D5C68 @0x6D5E08..0x6D5EA0 passes a type-erased source getter
+        // whose invoke boundary is sub_6F67CC: it returns the persistent
+        // descriptor's current texture without the atlas retry in 0x6F1060.
+        const D3DSourceTextureGetterLike_0x6ADFBC sourceTextureGetter =
+            [](detail::PreparedRenderItem &item) {
+                return item.sourceState->texture;
+            };
         return renderItemsToD3DTextureLike_0x6ADFBC(
             target, static_cast<tjs_int>(target->GetWidth()),
             static_cast<tjs_int>(target->GetHeight()), false, x, y,
-            mainList);
+            mainList, sourceTextureGetter);
     }
 
     bool Player::renderFromPlayerLike_0x6ADE24(
@@ -1143,9 +1156,18 @@ namespace motion {
             return false;
         }
 
+        // D3DAdaptor_renderFromPlayer @0x6ADE64..0x6ADF00 constructs the
+        // other type-erased getter, whose invoke boundary is sub_6F1060.
+        const D3DSourceTextureGetterLike_0x6ADFBC sourceTextureGetter =
+            [this](detail::PreparedRenderItem &item) {
+                return _sourceCacheNative
+                    ->loadRenderSourceTextureForItemLike_0x6F1060(
+                        *this, item);
+            };
         return renderItemsToD3DTextureLike_0x6ADFBC(
             targetTexture, adaptor->getWidth(), adaptor->getHeight(),
-            adaptor->getAlphaOpAdd(), 0.0f, 0.0f, mainList);
+            adaptor->getAlphaOpAdd(), 0.0f, 0.0f, mainList,
+            sourceTextureGetter);
     }
 
     bool Player::renderItemsToD3DTextureLike_0x6ADFBC(
@@ -1155,7 +1177,8 @@ namespace motion {
         bool alphaOpAdd,
         float xOffset,
         float yOffset,
-        detail::PreparedRenderItemList &mainList) {
+        detail::PreparedRenderItemList &mainList,
+        const D3DSourceTextureGetterLike_0x6ADFBC &sourceTextureGetter) {
         if(!targetTexture || !hasMotionContent() || !_sourceCacheNative ||
            width <= 0 || height <= 0) {
             return false;
@@ -1197,16 +1220,15 @@ namespace motion {
                 continue;
             }
 
-            auto *sourceTexture = item.sourceTexture
-                ? item.sourceTexture
-                : _sourceCacheNative->loadRenderSourceTextureByName(
-                      *this, detail::widen(item.sourceKey), item.sourceObject,
-                      item.blendMode, item.packedColors);
+            auto *sourceTexture = sourceTextureGetter(item);
             if(!sourceTexture || sourceTexture->GetWidth() <= 0 ||
                sourceTexture->GetHeight() <= 0) {
                 continue;
             }
-            const auto sourceRect = item.sourceRect;
+            // sub_6ADFBC @0x6AE154..0x6AE188 rereads the descriptor only
+            // after its texture callback returns, so render-time atlas writes
+            // are visible here immediately.
+            const auto sourceRect = sourceRectForItem(item, sourceTexture);
             if(sourceRect[2] <= sourceRect[0] ||
                sourceRect[3] <= sourceRect[1]) {
                 continue;
@@ -1230,8 +1252,12 @@ namespace motion {
                 const auto cellDivisions =
                     bezierPatchCellDivisionsU32Like_0x6C8E5C(
                         item.commandPatchDivision,
-                        item.nativeNode->source.width,
-                        item.nativeNode->source.height);
+                        item.sourceState
+                            ? item.sourceState->width
+                            : item.nativeNode->source.width,
+                        item.sourceState
+                            ? item.sourceState->height
+                            : item.nativeNode->source.height);
                 const auto meshPoints =
                     tessellateBezierPatch(item.meshPoints, cellDivisions[0],
                                           cellDivisions[1], xOffset + 0.5,

@@ -91,14 +91,15 @@ namespace motion {
     // P3-B (2026-06-05): RM dispatch-in. Aligned to Player_ctor @0x6CED30 —
     //   single-param `(this, iTJSDispatch2* rm_dispatch)`. The RM dispatch
     //   arrives from above (EmoteObject wraps the native RM via sub_67E20C and
-    //   flows it down; child Players inherit parent+992). The binary copies the
-    //   SAME dispatch pointer into +636/+656/+992 (sub_A0F5E0 each AddRef'd,
-    //   0x6cee9c/0x6ceeb0/0x6cef28); locally the single `_resourceManager`
-    //   variant stands for all three. Player no longer creates its own RM nor
-    //   owns one by value; the native is reached via nativeRM() (== binary
-    //   findSource unpack `*(dispatch+8)`). parentPlayer is set post-construct
+    //   flows it down; child Players inherit the canonical RM owner). The
+    //   binary retains the SAME dispatch pointer in three independent Variants
+    //   (sub_A0F5E0, each AddRef'd); local Player does the same. Player no longer
+    //   creates its own RM nor owns one by value; the native is reached via
+    //   nativeRM(). parentPlayer is set post-construct
     //   (binary child+8=parent @0x6b43dc).
     Player::Player(const tTJSVariant &rmDispatch) :
+        _findSourceResourceManager(rmDispatch),
+        _sourceCacheObject(rmDispatch),
         _resourceManager(rmDispatch) {
         LOGGER->info("Motion.Player constructor called");
         LOGGER->info("PRTDIAG Player::ctor this={} rmType={}",
@@ -110,21 +111,17 @@ namespace motion {
         _defaultParameterEntry.rangeScale = 1.0;
         _defaultParameterEntry.mode = 0;
         detail::ensureRootNodeLike_0x6CED30(*this);
-        // Player_ctor @0x6CED30 copies the SAME ResourceManager dispatch into
-        // +636/+656/+992. ResourceManager_ctor @0x6A88CC constructs its
-        // SourceCache base at offset zero; no standalone SourceCache exists.
+        // Player_ctor @0x6CED30 copies the same ResourceManager dispatch into
+        // three independent owners. ResourceManager_ctor @0x6A88CC constructs
+        // its SourceCache base; no standalone SourceCache exists.
         _sourceCacheNative = nativeRM();
-        _sourceCacheObject = _resourceManager;
-        // Player_ctor @0x6CED30 creates a TJS Math.RandomGenerator at +676
-        // (0x6CF014..0x6CF024). The +992 slot is the third ResourceManager
-        // dispatch copy initialized earlier in this constructor's local model.
-        try {
-            TVPExecuteExpression(
-                TJS_W("new Math.RandomGenerator()"),
-                &_tjsRandomGenerator);
-        } catch (...) {
-            LOGGER->warn("Player: failed to create Math.RandomGenerator");
-        }
+        // Player_ctor @0x6CED30 creates the render descriptor/color objects at
+        // 0x6CF014..0x6CF080. Their source-level payload is carried locally by
+        // PreparedRenderItem and consumed by the 0x6C1B70/0x6A7BA8 route. The
+        // random generator is owned by ResourceManager_ctor @0x6A88CC; Player
+        // does not create or own another generator. The missing persistent TJS
+        // descriptor/color object topology remains a tracked source-structure
+        // gap; it must not be disguised as a Player RNG field.
     }
 
     // P3-B: dispatch->native unpack. Binary findSource @0x694928 takes the +636
@@ -135,9 +132,10 @@ namespace motion {
     //   RM owner EmoteObject), so it outlives the Player as long as
     //   `_resourceManager` holds the dispatch ref.
     ResourceManager *Player::nativeRM() const {
-        iTJSDispatch2 *dispatch = _resourceManager.Type() == tvtObject
-                                      ? _resourceManager.AsObjectNoAddRef()
-                                      : nullptr;
+        iTJSDispatch2 *dispatch =
+            _findSourceResourceManager.Type() == tvtObject
+                ? _findSourceResourceManager.AsObjectNoAddRef()
+                : nullptr;
         if(!dispatch) {
             return nullptr;
         }
@@ -884,15 +882,13 @@ namespace motion {
 
     // --- Core methods ---
     // Aligned to libkrkr2.so sub_6BA7B8 at 0x6BA7B8:
-    // 1. sub_A0F5E0(v9, a1+992) — read TJS dispatch from player+992
-    // 2. FuncCall(obj, 0, L"random", ...) — call "random" method
-    // 3. Convert result variant to double (case 2→real, case 4→int→double, case 5→raw)
-    //
-    // player+992 is initialized once via "new Math.RandomGenerator()" (sub_6A88CC at 0x6A8988).
-    // Child Players inherit the same object from parent (sub_6CED30 at 0x6CED30: a1+992 = a2).
+    // 1. copy Player's canonical ResourceManager dispatch;
+    // 2. FuncCall(obj, 0, L"random", ...) on that ResourceManager;
+    // 3. convert the result variant to double. ResourceManager_ctor @0x6A88CC
+    //    owns the actual Math.RandomGenerator.
     double Player::random() {
-        if (_tjsRandomGenerator.Type() == tvtObject) {
-            iTJSDispatch2 *obj = _tjsRandomGenerator.AsObjectNoAddRef();
+        if (_resourceManager.Type() == tvtObject) {
+            iTJSDispatch2 *obj = _resourceManager.AsObjectNoAddRef();
             if (obj) {
                 tTJSVariant result;
                 static tjs_uint32 hint = 0;

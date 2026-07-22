@@ -111,7 +111,10 @@ namespace motion::detail {
         int stencilComposite = 0;
 
         ttstr commandKey;
-        const MotionNode *nativeNode = nullptr;
+        // sub_6C2334 @0x6C360C stores a direct pointer to the node's persistent
+        // source descriptor.  The render-time texture getter mutates it and
+        // sub_6ADFBC immediately rereads its rect through the same alias.
+        MotionNode::SourceState *sourceState = nullptr;
         PreparedRenderItem *parentItem = nullptr;
         int coordinateMode = 0;
         int objTriPriority = 0;
@@ -136,6 +139,9 @@ namespace motion::detail {
     // owners die before the uninterrupted native RAII chain above.
     struct PreparedRenderItem final : NativePreparedRenderItemState {
         int nodeIndex = 0;
+        const MotionNode *nativeNode = nullptr; // Web diagnostics/legacy only
+        // These descriptor snapshots remain for Web-only render paths.  The
+        // Android-aligned D3D getter/rect chain treats sourceState as authority.
         tTJSVariant sourceObject;
         std::string sourceKey;
         iTVPTexture2D *sourceTexture = nullptr; // borrowed

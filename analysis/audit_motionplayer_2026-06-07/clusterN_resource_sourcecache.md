@@ -36,8 +36,10 @@ container-choice + GPU-upload platform boundaries, plus a few real STUBs.
   ctor `sub_6A78F4` on `a1`@offset0, THEN inits RM-own fields from +88.
 - SourceCache ctor `sub_6A78F4`: seeds base subobject — +20 primaryLayer
   (sub_A0FB64 from owner.PropGet "primaryLayer"), +40 bufLayer (Layer variant,
-  created via global Layer class CreateNew(owner, primaryLayer)), +64 layerType
-  (a3), +72/+80 intrusive layer-list head/tail sentinel (both = a1+72).
+  created via global Layer class CreateNew(owner, primaryLayer)), +60 current
+  cache bytes=0, +64 cache byte limit (a3), +72/+80 intrusive layer-list
+  head/tail sentinel (both = a1+72). The older `layerType` reading was disproved
+  by `trim@0x6A6B08` and corrected 2026-07-23.
 - `sub_6A78F4` has EXACTLY ONE caller (0x6a88f8, xref-confirmed earlier). No
   standalone SourceCache instance — it is only RM's [0,88) base subobject.
 - NCB proof: RM registrar @0x6AB8BC and SourceCache registrar @0x6A85A8 bind the
@@ -150,24 +152,31 @@ KRKR/spec=1 atlas decode now also reads the record's raw `PSBRawNode` graph and
 mirrors all-group enumeration, raw/RL/palette branches and transparent 2x2
 handling. The Web texture API still requires a full-page KRKR upload instead of
 per-subrect non-zero-offset updates; that upload primitive is the concrete
-platform adaptation. Player_findSource's source pixel chain is otherwise closed.
+platform adaptation. These named raw-owner/map and decode sites are aligned;
+the former claim that Player_findSource's remaining source-pixel chain was
+globally closed was disproven by the later shared-caller, direct-alias and
+field-order audit and must not be reused as a 100% coverage conclusion.
 
 ## 6. SourceCache loadSource/clearCache — CONFIRMED base behavior
 
 - loadSource sub_6A7BA8: reads arg dict "key"/"src"/"blendMode"/"color"[4];
   matches +72 intrusive layer-list node by (key sub_A10428, src ttstr wcscmp,
-  blendMode @node+64); HIT -> if color (node+68..80) changed, rewrite + re-bake
-  via sub_6A6BE0 + clone-to-front (LRU); MISS -> evictLRU + create Layer
-  (global Layer CreateNew(owner, primaryLayer)) + sub_6A6BE0 bake + insert,
-  +60 += widthLike. Output = node+36 Layer variant.
+  blendMode @node+64). A same-color hit returns in place without reordering;
+  color mismatch rewrites/rebakes via sub_6A6BE0 and clone-to-front. A miss calls
+  trim@0x6A6B08 before creating/baking the Layer, stores `4*width*height`, adds
+  that weight to +60 and inserts at the front. Output = node+36 Layer variant.
 - clearCache sub_6A8438: walks +72 list, releases each Layer image (vtbl+112),
   frees nodes, resets +72/+80 sentinel + +60=0. Does NOT touch hashmaps.
-Local SourceCache.cpp: std::list<Entry>, findEntry by (key,blendMode) + splice-
-to-front LRU + per-color re-bake (applyPackedCornerTintLike_0x6A7518 reproduces
-the 128/255-divisor bilinear bake). clearCache clears _entries. Container
-divergence (intrusive list -> std::list) + bitmap-bake-vs-Layer-dispatch; the
-(key,blendMode) match + LRU + color re-bake DATA FLOW matches. ARCH OK modulo
-container.
+Local SourceCache.cpp uses `std::list<Entry>`. The production prepared-item route
+now matches exact `(key,src,blendMode)`, treats color as mutable state, leaves
+same-color hits in place, moves only color-change nodes to the front, runs the
+same pre-insert 99% byte-budget trim, and passes the incoming object only to the
+miss/color-change bake;
+it also forbids storage fallback. The generic NCB/by-name facade still matches a
+requested key or resolved storage alias and does not reproduce the binary
+`(source,descriptor) -> Layer` boundary. Thus the audited production consumer is
+aligned, but SourceCache as a complete public source-level implementation remains
+PARTIAL; the old `(key,blendMode) DATA FLOW matches` verdict was false.
 
 ## 7. SeparateLayerAdaptor @0x6ABFAC — surface CONFIRMED
 
@@ -201,8 +210,8 @@ chain (analysis/SLA_Rendering_Chain_libkrkr2so.md) — not re-decompiled this pa
 | 2 | unloadAll addr | body @0x6A8CF8 | comment says 0x6A8BBC | DOC ERR (fix comment) |
 | 3 | RM findSource | mapped record raw root + ObjSource | mapped record raw root + ObjSource | CLOSED |
 | 4 | ObjSource | raw owner/node/texture; strict/try getters | same, including texture→owner dtor | CLOSED |
-| 5 | Player_findSource | outer record + Win/KRKR nested maps + raw decode/upload | both spec paths raw-aligned; KRKR full-page upload is Web API boundary | CLOSED + BOUNDARY |
-| 6 | SourceCache loadSource | +72 intrusive list, Layer dispatch | std::list, bitmap bake | container dev (OK) |
+| 5 | Player_findSource | outer record + Win/KRKR nested maps + shared `0x695DE8` render-time caller | 2026-07-23 corrected direct SourceState alias, getter-after-write rect flow, branch-local decode calls and atlas geometry; full-page upload remains Web API boundary | AUDITED SITES + BOUNDARY |
+| 6 | SourceCache loadSource | list node keyed by key/src/blend; Layer dispatch | production item route exact; generic NCB/by-name facade still alias-based | PARTIAL |
 | 7 | SLA surface | 5 members @0x6ABFAC | 4+factory | OK |
 | 8 | RuntimeSupport/GLL | direct TJS/Array NI / internal Layer | eager snapshot removed; GLL adapter remains; some Array callers still use vector+`add` | PARTIAL |
 

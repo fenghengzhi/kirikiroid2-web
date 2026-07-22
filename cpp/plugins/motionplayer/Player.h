@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <list>
 #include <memory>
@@ -93,13 +94,12 @@ namespace motion {
         // P3-B (2026-06-05): RM ownership = dispatch-in, aligned to
         //   Player_ctor @0x6CED30 — the binary ctor is SINGLE-PARAM
         //   `(this, iTJSDispatch2* rm_dispatch)`. The same RM dispatch pointer is
-        //   copied (sub_A0F5E0, each AddRef'd) into three tTJSVariant slots
-        //   +636/+656/+992 (0x6cee9c/0x6ceeb0/0x6cef28); locally the single
-        //   `_resourceManager` variant stands for all three (same dispatch
-        //   pointer). Player no longer OWNS a native RM by value — it holds the
-        //   dispatch and reaches the native instance via nativeRM() (the local
-        //   equivalent of the binary's findSource unpack `*(dispatch+8)`,
-        //   0x694928). The dispatch is created once at the RM owner (EmoteObject,
+        //   copied (sub_A0F5E0, each AddRef'd) into three independent
+        //   tTJSVariant owners. Local Player now keeps those three references
+        //   separately for findSource, render SourceCache and the canonical
+        //   resourceManager/random path. Player no longer OWNS a native RM by
+        //   value — it holds the dispatch and reaches the native instance via
+        //   nativeRM(). The dispatch is created once at the RM owner (EmoteObject,
         //   sub_67E20C) and flows down EmoteEngine -> Player -> child Players.
         //   parentPlayer is NOT a ctor param (binary sets child+8=parent
         //   post-construct @0x6b43dc); use setParentPlayerLike_0x6B1ABC().
@@ -370,7 +370,12 @@ namespace motion {
         void setOutsideFactor(double v) { _outsideFactor = v; }
         double getOutsideFactor() const { return _outsideFactor; }
 
-        void setResourceManager(tTJSVariant v) { _resourceManager = v; }
+        void setResourceManager(tTJSVariant v) {
+            _findSourceResourceManager = v;
+            _sourceCacheObject = v;
+            _resourceManager = std::move(v);
+            _sourceCacheNative = nativeRM();
+        }
         tTJSVariant getResourceManager() const { return _resourceManager; }
 
         // Player_setStealthChara @0x6D94B0: when the live +968 slot exists,
@@ -852,6 +857,8 @@ namespace motion {
         bool renderFromPlayerLike_0x6ADE24(
             D3DAdaptor *adaptor,
             detail::PreparedRenderItemList &mainList);
+        using D3DSourceTextureGetterLike_0x6ADFBC =
+            std::function<iTVPTexture2D *(detail::PreparedRenderItem &)>;
         bool renderItemsToD3DTextureLike_0x6ADFBC(
             D3DAdaptor *adaptor,
             detail::PreparedRenderItemList &mainList);
@@ -862,7 +869,8 @@ namespace motion {
             bool alphaOpAdd,
             float xOffset,
             float yOffset,
-            detail::PreparedRenderItemList &mainList);
+            detail::PreparedRenderItemList &mainList,
+            const D3DSourceTextureGetterLike_0x6ADFBC &sourceTextureGetter);
         // M1/P7 step-1: progress-pass cursor-stepping driver.
         // Aligned to libkrkr2.so Player_progress_inner (0x6C106C), the ONLY
         // caller of the advance/rewind/reseek cursor machine. In the binary the
@@ -1024,6 +1032,13 @@ namespace motion {
         // separate src/icon values and rewrites node.source. The module owns
         // group-atlas textures; nodes borrow them.
         void findSourceForNodeLike_0x6948E8(detail::MotionNode &node);
+        // sub_695DE8 @0x695DE8 is one shared out-of-line KRKR atlas resolver.
+        // Both findSource above and the render-time texture getter
+        // sub_6F1060 call it with the persistent node SourceState.
+        static bool loadKrkrAtlasSourceLike_0x695DE8(
+            detail::MotionNode::SourceState &source,
+            ResourceManager *resourceManager,
+            const ttstr &moduleKey);
         // updateLayers sub-phases (aligned to libkrkr2.so sub-functions)
         void updateLayersPhase1_PreLoop(double currentTime);
         void updateLayersPhase2_MainLoop(double currentTime);
@@ -1229,6 +1244,13 @@ namespace motion {
                                      // completionType value). Off-by-one had
                                      // mislabeled the +1092 bool (now _preview)
                                      // as completionType; +1144 is the int.
+        // Player_ctor @0x6CED30 retains the same dispatch in three independent
+        // Variants, in findSource -> SourceCache -> canonical call-routing
+        // order; normal reverse member destruction then matches Player_dtor
+        // @0x6CFADC. Keeping the findSource owner distinct preserves the extra
+        // AddRef/Release and the native-unpack call chain at 0x6948E8.
+        tTJSVariant _findSourceResourceManager;
+        tTJSVariant _sourceCacheObject;
         tTJSVariant _resourceManager;
         // Player pending slots +768/+776.  They are independent owners from
         // the live +984/+968 stealth slots and are released immediately after
@@ -1281,12 +1303,11 @@ namespace motion {
         bool _internalRenderLayerReady = false;
 
         // === Motion / source state ===
-        // sourceCacheNative + sourceCacheObject form the libkrkr2.so
-        // Player+656 SourceCache pair (raw pointer for fast C++ access, TJS
-        // variant for script reach).
-        // libkrkr2.so player+656: SourceCache object variant.
+        // sourceCacheNative is the non-owning render-side fast-path pointer;
+        // its independent TJS dispatch owner is declared with the other two
+        // ResourceManager owners above so their construction/destruction order
+        // follows Player_ctor@0x6CED30 / Player_dtor@0x6CFADC.
         SourceCache *_sourceCacheNative = nullptr;
-        tTJSVariant _sourceCacheObject;
         // libkrkr2.so player+528: the raw motion-content dispatch returned as
         // ResourceManager_findMotion result[0]. Player_playImpl @0x6B2284
         // CopyRefs that result into the Player before the emote/non-emote init
@@ -1578,13 +1599,6 @@ namespace motion {
         OuterForceState _bustOuterForce;
         OuterForceState _hairOuterForce;
         OuterForceState _partsOuterForce;
-
-        // TJS Math.RandomGenerator object. In libkrkr2.so Player_ctor
-        // @0x6CED30 stores it at player+676 (0x6CF014..0x6CF024); player+992 is
-        // instead the third AddRef'd ResourceManager dispatch slot. The port
-        // keeps the generator as a named source-level member and does not force
-        // the ARM64 ABI offset.
-        tTJSVariant _tjsRandomGenerator;  // binary semantic field: player+676
 
         // Aligned to libkrkr2.so player+1012. ResourceManager_findMotion
         // @0x6A9ED4 returns [motion, matchedModuleKey]; Player_playImpl

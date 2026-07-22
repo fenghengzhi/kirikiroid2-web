@@ -12,6 +12,7 @@
 #include "EmotePlayer.h"
 #include "MotionDispatch.h"
 #include "RuntimeSupport.h"
+#include "ScriptMgnIntf.h"
 #include "ncbind.hpp"
 
 #define LOGGER spdlog::get("plugin")
@@ -27,10 +28,12 @@ namespace motion {
     //      -> store EmoteObject+8 (Player+1064 gets the RM dispatch wrapper)
     //   4. ttstrVector_assign_67F0CC(EmoteObject+16, modulePaths)
     EmoteObject::EmoteObject(const std::vector<ttstr> &modulePaths) {
-        // EmoteObject_init @0x67DBAC: operator new(0xE8), construct the sole
-        // ResourceManager from global.kag/default spec, and store its pointer at
-        // EmoteObject+0. It is not copied from the D3DEmotePlayer shell.
-        _rm = new ResourceManager();
+        // EmoteObject_init @0x67DBAC evaluates global.kag before allocating the
+        // sole ResourceManager and passes the literal 20 MiB source-cache byte
+        // budget into ResourceManager_ctor @0x6A88CC.
+        tTJSVariant kag;
+        TVPExecuteExpression(TJS_W("global.kag"), &kag);
+        _rm = new ResourceManager(kag, 0x01400000);
         // P3-B (2026-06-05): step 2 of EmoteObject_init @0x67DBAC —
         //   `sub_67E20C(rm, 1, 0)` wraps that exact native RM and sets the adaptor
         //   sticky flag. The dispatch therefore never deletes RM; EmoteObject

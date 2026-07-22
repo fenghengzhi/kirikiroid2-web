@@ -180,7 +180,9 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 1. **ctor 签名收敛单参**（PlayerCore.cpp:90 → 单参 rm_dispatch）+ parent 设置移出 ctor。
    - 证据：ctor 0x6CED30 单参；child+8=parent 在构造后（0x6b43dc）。
 2. **RM 持有从 native value → dispatch variant 槽**。
-   - 本地 `_resourceManagerNative`(native) + `_resourceManager`(反包 dispatch) 两份合一 → 只保留 dispatch（对齐 +636/+656/+992，本地可暂用单个 _resourceManager variant 承担三槽语义）。
+   - 本地删除 `_resourceManagerNative` native value，改持 dispatch。2026-07-23
+     生命周期复核进一步纠正了当时“单个 Variant 可暂代三槽”的近似：现分别保留
+     findSource、render SourceCache、canonical/random 三份独立 Variant，底层仍指向同一 dispatch。
    - 证据：ctor 0x6cee9c/0x6ceeb0/0x6cef28。
 3. **child 继承 RM**：`child->_native = _native`（MotionLoad:227）/ `new Player(_native, this)`（Particles:447）→ child ctor 收 `parent 的 RM dispatch`，构造后 child._parentPlayer = parent。
    - 证据：0x6b43cc(RM=parent+992) + 0x6b43dc(parent 设置)。
@@ -197,7 +199,7 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 ## ✅ 落地记录（2026-06-05 同 session 续，第一轮完成）
 
 步骤 2/3 + child 继承已实装并验证：
-- `Player` 删 `_resourceManagerNative`(native value 成员)；ctor → 单参 `Player(const tTJSVariant&)`（PlayerCore.cpp，对齐 0x6CED30）；新增 `Player::nativeRM()`=`GetNativeInstance(_resourceManager dispatch)`（= binary +8 解包 0x694928）。所有 native 消费者改 `nativeRM()`。
+- `Player` 删 `_resourceManagerNative`(native value 成员)；ctor → 单参 `Player(const tTJSVariant&)`（PlayerCore.cpp，对齐 0x6CED30）；新增 `Player::nativeRM()`=`GetNativeInstance(findSource dispatch)`（= binary +8 解包 0x694928）。2026-07-23 又补齐三份独立 dispatch owner，各自承担一次 AddRef/Release。
 - RM dispatch 上移到 EmoteObject（EmotePlayer.cpp，对齐 sub_67E20C）→ `EmoteEngine(const tTJSVariant&)`→`Player`。child(NodeTree/Particles) 用 `parent.getResourceManager()`（0x6b43cc）；parent 移到构造后 `setParentPlayerLike_0x6B1ABC`（0x6b43dc）；`inheritChildPlayerStateLike_0x6B3C78` 删 RM 拷贝改设 parent。
 - main.cpp Player NCB ctor `(ResourceManager)`→`(tTJSVariant)`（dispatch-in factory）。
 - 验证：class-layout-auditor 5/5 对齐 0 真实 bug；web debug 240/240、wasmtime guest 276/276、logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS。native catch2 motionplayer-dll 的 4 例失败(resource chain/logo/draw cache/emoteplayer SEGFAULT)经 git stash 对照确认为 **HEAD 既有失败，非 P3-B 回归**。
@@ -229,7 +231,9 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 
 1. **先反编译 layer-id 路径**：定位 binary RM dispatch 上 layer-id 分配/释放的 method 名（本 session 未覆盖）。grep RM ctor sub_6A88CC 内 RB-tree(+176) / refcount(+216)，及 `requireLayerIdForName` 对应。无证据不动 PlayerResource.cpp:93/97。
 2. **ctor 单参收敛**：PlayerCore.cpp:90 改单参 `Player::Player(rm_dispatch)`；parent 设置移到 child 构造点（PlayerUpdateParticles.cpp:447 + PlayerMotionLoad.cpp:227 构造后赋 `child._parentPlayer=this`，对齐 0x6b43dc）。
-3. **RM 持有合一**：删 `_resourceManagerNative`(native value)，统一为 dispatch variant（对齐 +636/+656/+992）。findSource 改经 dispatch 解包（保留 native 快路径混合，对齐 0x694928）。
+3. **RM 持有改为 dispatch**：删 `_resourceManagerNative`(native value)，分别保留
+   +636/+656/+992 三份 Variant owner；findSource 经专用 dispatch 解包（保留 native
+   快路径混合，对齐 0x694928）。旧“统一成单 Variant”只是一阶段近似，已于 2026-07-23 纠正。
 4. **motion 解析路径 dispatch 化**（最大侵入）：resolveMotion/activateMotion → +992 dispatch FuncCall "findMotion"。建议**最后做**，class-layout-auditor 全程守护。
 5. 构建 web debug + wasmtime；m2logo(93)/yuzulogo(243) 差分作**非回归守护**（oracle-inert 风险高，主要靠反编译逐行对照）。
 
@@ -267,7 +271,10 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 - **门控**：仅在 blendMode switch 落到 `v48=2`（mesh/affine type2）或 `completionType(+1144)!=0` 或 `item+264`(子节点链)非空时触发。
 - **+656 vs +992 用途**：+656 = PropGet(L"bufLayer") 取**渲染目标缓冲层**（render target）；+992 = FuncCall(findMotion/loadMotion) 解析**资源**。职责正交，共享同一 dispatch 指针只因 bufLayer 属性挂在 RM 对象上。
 - **本地对照（交叉核实，非漂移空 grep）**：本地 `renderToCanvasLike_0x6C7440`(PlayerRenderTargets.cpp:1087) **完全没有 bufLayer / +656 RM PropGet 这条分支**（`grep bufLayer|_resourceManager|656|completionType` 在 PlayerRenderTargets.cpp/PlayerRenderExecute.cpp 零命中）。这是 completionType!=0 离屏缓冲合成分支，**本地整体未实装**，现有 fixture（logo）走 completionType==0 直绘路径触不到。
-- **裁决**：+656 是 RM dispatch 的**纯读消费方**，不是 RM 容器/所有权本身。**P3-B 本轮保持现状不迁**，本地单 `_resourceManager` variant 充当三槽近似可接受（三槽本就同一 dispatch 指针）。bufLayer 渲染分支列为独立待实装项（无 fixture，oracle 盲区）。
+- **裁决（2026-07-23 更新）**：+656 是 RM dispatch 的**纯读消费方**，不是 RM
+  容器/所有权本身。虽然三槽底层指向同一 dispatch，但每槽独立 AddRef/Release 是对象
+  生命周期的一部分；本地现已保留三份 Variant。bufLayer 渲染分支仍是独立待实装项
+  （无 fixture，oracle 盲区）。
 
 ### 4.3 +636 PropGet 的 `dword_1AB8098` —— **不是属性名，是 PropGet 的 `tjs_uint32 *hint`**
 

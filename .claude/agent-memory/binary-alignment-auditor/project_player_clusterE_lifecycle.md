@@ -35,13 +35,16 @@ Local reads PSB structs and pushes into std::vector _variableLabelEntries (the +
 stride-44 list) — wrong container + wrong sink. scope split "::" only in binary
 (local also tries ":").
 
-**ctor 0x6CED30 confirmed**: RandomGen object @ +676 (sub_A0FCC0); +992 is 3rd
-sub_A0F5E0(rmArg) ttstr copy; +716 second TJS obj has L"color" param set. Local
-ctor builds neither +716 color obj nor +992 ttstr. Exactly 4 inline HMs
+**ctor 0x6CED30（2026-07-23 纠正）**: +676 是 render descriptor（不是
+RandomGen）；+716 是 color 对象，0x6CF080 把 +716 以 L"color" PropSet 到
++676。+992 是第 3 份 RM dispatch 拷贝；`Player::random@0x6BA7B8` 经它调用
+`random`，真正 RNG 在 `ResourceManager_ctor@0x6A88CC` 的 RM+144。Local
+ctor 当时既未复刻 +676/+716 对象拓扑，也没有三个独立 RM variant 槽。Exactly 4 inline HMs
 (+264/+320/+1184/+1240, prime-bucket sub_149EDF8(10), load 1.0f).
 
 **Carried items**: P1-2 (HM2 std::string vs ttstr key) OPEN; P1-3 (6->4 HM map)
-OPEN (ctor confirms exactly 4 HMs); P2-3 (_tjsRandomGenerator comment mislabels
-+992, really +676) OPEN — comment-only fix not done.
+OPEN (ctor confirms exactly 4 HMs); P2-3 的“`_tjsRandomGenerator` 只是从
++992 改标 +676”结论已证伪——这不是 comment-only fix，而是 descriptor/color
+对象拓扑与 RM-owned RNG 的归属问题。
 
 0x6FDE74 = Player_ncb_classInit (new(0xB0), vtbl off_19FD6C8, registers only finalize).

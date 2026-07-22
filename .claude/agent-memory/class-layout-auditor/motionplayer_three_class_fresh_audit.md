@@ -18,7 +18,7 @@ metadata:
 - var-track deque+1296: initVariables@0x6CD750 new(0x1E0)=480B chunk, 元素 stride160B, cascadeKey=scope+"::"+label。本地 VariableLabelScopeDeque 字段序对齐。
 - node deque+184: ctor 0x6cf17c 内联 push 单 root(stride2632B)。本地 std::deque<MotionNode> 对齐。
 - Player dtor@0x6CFADC 逆序: var-track→nodes→HM4→HM3→param-ramp(+408)→HM2→HM1→node-deque→+24map。本地成员声明升序→逆序销毁降序偏移=匹配。HM1 destroy@0x6DD1A0 / HM3 destroy@0x6DD06C 降序 release 由 EvalCascadeState/PerNodeLayerState 升序声明复刻。
-- ctor 单参 dispatch: Player_ctor(this, rm_dispatch), 拷进+636/+656/+992(sub_A0F5E0)。本地单 _resourceManager variant 代表三 slot。
+- ctor 单参 dispatch: Player_ctor(this, rm_dispatch), 拷进+636/+656/+992(sub_A0F5E0)。2026-07-23 已纠正本地单 Variant 近似，现为三份独立 owner，恢复各自 AddRef/Release。
 - ctor 默认值: +1168=1.0/+1160=1.5/+1176=1.0/+912=100/bounds±DBLMAX 全匹配。
 - 无 #pragma pack/static_assert(offsetof==N)/_padN 硬凑 (grep 空; 仅 EmoteWindEmitter _pad1544 是 spring POD 数据契约例外, EmoteBlinkRng static_assert 是 bitcast 检查)。
 - EmoteObject_init@0x67DBAC 4级链: new(0xE8)RM→sub_67E20C dispatch facade(2×AddRef)→new(0x5D8)Engine。dtor@0x67F420 Engine→RM→modules。

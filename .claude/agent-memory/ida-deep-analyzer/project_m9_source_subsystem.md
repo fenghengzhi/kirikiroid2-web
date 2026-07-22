@@ -1,6 +1,6 @@
 ---
 name: m9-source-subsystem
-description: motion source/resource subsystem (cluster K/M9) — ResourceManager public-inherits SourceCache; outer unordered_map mapped record = PSBFile + Win texture map + KRKR descriptor map; Win/KRKR raw pixel and ObjSource chains closed 2026-07-19
+description: motion source/resource subsystem (cluster K/M9) — ResourceManager public-inherits SourceCache; mapped record = PSBFile + Win/KRKR maps; 2026-07-23 corrected shared atlas caller/SourceState alias gaps after the earlier raw-chain closure claim
 metadata:
   type: project
 ---
@@ -12,7 +12,7 @@ metadata:
 ## RM/SourceCache 实例字段布局(单一类)
 - +40  ttstr  bufLayer (NCB property `bufLayer`, getter @0x6A84FC 直接返回 ttstr at +40)
 - +60  int    layer-list LRU/size counter
-- +72/+80  intrusive **doubly-linked list head** (空时 *(this+72)==this+72)。SourceCache layer-image 缓存。node 布局:[0]next [1]prev,[+8](=node+2 qword) key ttstr,[+16]blendMode,[+17..+20]color[4],[+36]Layer variant,[+56](=node[7])src ttstr,[+84]width-like。匹配键=(key ttstr, blendMode)。loadSource/clearCache/evictLRU 操作此 list
+- +72/+80  **doubly-linked list head** (空时 *(this+72)==this+72)。SourceCache layer-image 缓存。node 布局:[0]next [1]prev,[+8](=node+2 qword) key ttstr,[+16]blendMode,[+17..+20]color[4],[+36]Layer variant,[+56](=node[7])src ttstr,[+84]width-like。匹配键严格为 `(key ttstr, src ttstr, blendMode)`；color 命中后另行比较。loadSource/clearCache/evictLRU 操作此 list
 - +88/+96  **outer std::unordered_map**: key=模块 context/path `ttstr`；mapped record 声明顺序为 `PSBFile` + Win 纹理表 + KRKR descriptor 表。构造证据 `sub_6EBCFC @0x6EBCFC`，析构证据 `sub_6DB3E8 @0x6DB3E8`。
 - +104/+112 是同一 libstdc++ unordered_map 的 global node chain/element count，不是独立第二容器。
 - +136  HashMap A 的 inline first-bucket sentinel(`if(v7 && this+136!=v7) delete`)
@@ -31,7 +31,7 @@ bucket = h % bucketCount
 
 ## RM 方法地址(全部重命名完毕)
 - load(loadResource)  `ResourceManager_loadResource`(原名保留) — HashMap A 命中即返回;miss 则 sub_598538 打开 PSB → 校验 id=="motion"/spec(krkr|win)/version<=3.03 → 存入 HashMap A
-- loadSource(SourceCache) `Motion_ResourceManager_loadSource@0x6A7BA8` — 读 source-dispatch 的 key/src/blendMode/color[4],在 +72 layer-list 找 (key,blendMode) 命中复用 Layer,miss 则 Motion.Layer 构造新 Layer,LRU 用 +60
+- loadSource(SourceCache) `Motion_ResourceManager_loadSource@0x6A7BA8` — 读 descriptor-dispatch 的 key/src/blendMode/color[4]，在 +72 list 按 `(key,src,blendMode)` 命中复用 Layer；color mismatch 或 miss 才把独立 source object 交给 `sub_6A6BE0` 重烘焙，LRU 用 +60
 - clearCache  `@0x6A8438` — 只清 +72 layer-list(每个 Layer vtable+112 释放image),不碰 hashmap
 - bufLayer getter `@0x6A84FC` — return ttstr@+40
 - unload      `@0x6A959C` — HashMap A erase(sub_6EBF2C)
@@ -46,7 +46,7 @@ bucket = h % bucketCount
 - 签名:`(out* a1, Player* a2, ttstr** a3=name, ttstr** a4=icon/2nd-name)`
 - a1 输出结构:+0 found bool,+1 blank bool,+4 source variant,+20 ?,+24 **texture handle**,+32 width,+40 height,+48 originX,+56 originY,+64..88 clip(left/top/right/bottom doubles),+96..108 截断rect int,+112 source variant cache
 - 流程:PropGet(player+636 RM-self, idx dword_1AB8098) → v10=RM native。spec(+224): ==2 走 PSB texture 上传路径;==1 走 KAG.findSource 回调路径;其它/blank → 走 player-self dispatch "findSource" 脚本回调(LABEL_142)
-- spec==2 路径:outer map 按模块 context 取 mapped record，再读 raw dict["source"][name]。Win 内表按 name 缓存 texture。miss 严格读 texture{truncated_width/height(丢弃),width,height,type,pixel}；RGBA8 做 TVPReverseRGB(count=pixelBytes/4)，A8L8 按 `[alpha,luminance]→[luminance,luminance,luminance,alpha]` 展开，其他格式抛异常。本地 Win raw 链已对齐；KRKR/spec=1 也已恢复 all-group 枚举、RL8/RL32、palette expand、透明 2x2 与 record 内 descriptor table 生命周期。
+- spec==2 路径:outer map 按模块 context 取 mapped record，再读 raw dict["source"][name]。Win 内表按 name 缓存 texture。miss 严格读 texture{truncated_width/height(丢弃),width,height,type,pixel}；RGBA8 做 TVPReverseRGB(count=pixelBytes/4)，A8L8 按 `[alpha,luminance]→[luminance,luminance,luminance,alpha]` 展开，其他格式抛异常。2026-07-23 纠正：raw owner/map 拓扑虽已对齐，旧结论遗漏了 Win texture-before-icon 顺序、逐字段写序及 spec2 不写 path；KRKR 又遗漏共享第二调用者、SourceState alias 和 branch-local resource lookup。当前这些审计站点已补齐，但不得再把“raw 链闭合”写成未经全调用者复核的全局 100% 证明。
 
 ### nested texture-cache(D1 关键)
 - **缓存键=纯 name ttstr**(a3),不含 blendMode/color。findNode/findOrInsert 第三参都只传 a3,node[1] 只存这一个 ttstr。证据确凿
@@ -64,4 +64,6 @@ bucket = h % bucketCount
 2. Player_findSource 的 Win/KRKR 纹理表已移入 outer map 的 `LoadedResourceRecord`，并恢复 AddRef/Release 与 unload 生命期。它与 SourceCache layer-list 是两条不同缓存链，不得再用 `std::list/shared_ptr` 概括 Player_findSource 的当前差异。
 3. 2026-07-19 纠正：ObjSource 已恢复为 `PSBRawNode + texture*`，六个注册成员、clip、ensureTexture、drawLayer、adaptor 失败泄漏与析构顺序均已按上述地址闭合；旧 dict-facade/open 结论不得继续使用。
 4. RM 继承面、unloadAll/isExistMotion/findMotion/findSource/random NCB 表面已恢复；各方法体继续按独立证据审计。
-5. 2026-07-19 后续纠正：Win/spec=2、KRKR/spec=1 以及非 atlas ObjSource 均已直接消费 `LoadedResourceRecord::file` raw nodes；source 像素导航与 ObjSource 生命周期已关闭，整页上传是单独的 Web API 边界。
+5. 2026-07-19 后续纠正：Win/spec=2、KRKR/spec=1 以及非 atlas ObjSource 均已直接消费 `LoadedResourceRecord::file` raw nodes；这些 named raw 导航站点与 ObjSource 生命周期已对齐，整页上传是单独的 Web API 边界，但该结论不再外推为完整 source 调用链关闭。
+6. 2026-07-23 再纠正：`sub_695DE8@0x695DE8` 有 Player 与 `sub_6F1060@0x6F1060` 两个调用者；prepared item 在 `sub_6C2334@0x6C360C` 保存持久 `SourceState*`，`sub_6ADFBC@0x6AE154..0x6AE188` 在纹理 getter 后从该 alias 重读 rect。本地旧快照链被证伪，现恢复共享 helper、直接 alias、现场 rect、atlas `{x,y,right,bottom}`、right-left/bottom-top 尺寸、单 scratch/未初始化 size 槽及 pal/non-pal 分支内重复 lookup。旧“Win/KRKR 整链 CLOSED”只能说明 raw owner/map 迁移阶段，不再作为全局裁决。
+7. 同轮继续区分两个 type-erased getter：`0x6D5C68` 用 `sub_6F67CC` 只读现有 texture，`0x6ADE24` 才用 `sub_6F1060`；`0x6F1060` 与 Private `0x6DE738` 的 fallback 均把调用后的 `SourceState.object` 直接交给 `0x6C1B70`。生产 item 路径已按 `(commandKey,commandSrc,blendMode)` 精确匹配、只在 bake 期间借用 object，并禁止把 module key 当存储路径；通用 NCB/by-name facade 仍是 legacy alias 路径，不能据此宣称整个 SourceCache 已闭合。

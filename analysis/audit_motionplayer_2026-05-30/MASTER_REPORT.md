@@ -47,7 +47,7 @@
 | M6 | K | doAlphaMaskOperation 0x6AF104 | 缺 / main.cpp:286 | 整个 alpha-mask op 缺失（shader cache + CPU `dst.a=src.a*dst.a/255` + 边界 fillRect）；且本地把它误挂在 Player 而非 namespace | 中 |
 | M7 | H | anchor 0x6C0528（type10） | PlayerUpdateAnchor.cpp:36 | dampPow 公式错：二进制 `dt*(..)/v27/60/node+2432`，v27=player592/player1168；本地用 `abs(frameLastTime)/60/anchorDamping`。且 w/h 走 PSB dispatch，本地走 cache | 中 |
 | M8 | H | calcBounds 0x6C3D04 | PlayerRenderItems.cpp:32 | 二进制**递归** type3 子动作 + type4 粒子子节点；本地是扁平 | 中 |
-| M9 | K | ObjSource 0x69CCB8 / RM 0x6AB8BC / findSource 0x6948E8 | ResourceManager/PlayerResource | **【2026-07-19 后续纠正】** 成员/继承及 mapped record+Win/KRKR 两内表生命周期已复原；两个 spec 与非-atlas ObjSource 均走 raw PSB；clip/ensureTexture/drawLayer、adaptor 失败泄漏及 texture→owner 析构顺序已闭合；KRKR 整页上传为 Web API 边界 | CLOSED + BOUNDARY |
+| M9 | K | ObjSource 0x69CCB8 / RM 0x6AB8BC / findSource 0x6948E8 | ResourceManager/PlayerResource | **【2026-07-23 再纠正】** 2026-07-19 的 raw mapped-record/ObjSource owner 结论保留；旧 CLOSED 漏掉 `0x6F1060→0x695DE8` 第二调用者、item→SourceState alias 与 getter 后 rect 重读。上述链及解码分支边界现已补齐；KRKR 整页上传为 Web API 边界，但未审计余部不得外推为全局 100% | AUDITED SITES + BOUNDARY |
 | M10 | L | particleSystem splice 0x6C1A00 + childMotion 0x6BE2C0（`sub_6F363C` 父←子 drawlist 拼接）| PlayerUpdateParticles.cpp:791 | 二进制把子 drawlist 拼进父 +936；本地无此 splice → 粒子/子精灵可能丢失（除非经 cluster I 渲染路径已覆盖，需核） | 中 |
 | M11 | D | D3DEmotePlayer 成员集 0x52E504 + contains 0x530B5C | main.cpp:496-583 | 54 成员表对不上（TimelinePlayFlagDifference 名错、"clear"绑 create cb、5 处故意 name/cb 别名未复刻、~28 EmotePlayer 风格属性多注册）；contains 本地自造 AABB 重载 | 中 |
 
@@ -71,7 +71,7 @@
 
 | # | 簇 | 摘要 |
 |---|----|------|
-| M23 | E | `_tjsRandomGenerator` 注释标 +992，实为 +676（+992 是 ttstr）；P2-3 仍 open |
+| M23 | E | **2026-07-23 纠正**：旧“`_tjsRandomGenerator` 实为 +676”结论已证伪。+676/+716 是 render descriptor/color 对象；+992 是 RM dispatch，Player::random 经其调 RM.random；真 RNG 在 RM+144 |
 | M24 | B | progress deque 迭代顺序注释 #8/#9 写反；color seed xmmword_14D68D0 未读（TODO）|
 | M25 | I | sub_6CBCE4 本地误名 "buildRenderTree"，实为 acquireLayerById(Rb_tree<int,Layer>)；sub_6C4E28 是 execute 阶段 emitter 非 build |
 | M26 | G | evaluateTimelines_guess 实为 teardown sweep，命名误导 |

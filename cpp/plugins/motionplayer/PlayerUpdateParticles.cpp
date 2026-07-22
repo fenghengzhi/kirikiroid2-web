@@ -495,7 +495,6 @@ namespace motion {
                 using PlayerAdaptor = ncbInstanceAdaptor<Player>;
                 auto *childRaw = new Player(getResourceManager());
                 childRaw->setParentPlayerLike_0x6B1ABC(this);
-                childRaw->_tjsRandomGenerator = _tjsRandomGenerator;
                 iTJSDispatch2 *childDisp = PlayerAdaptor::CreateAdaptor(childRaw);
                 if (!childDisp) { delete childRaw; goto physics_step; }
                 tTJSVariant childVar(childDisp, childDisp);

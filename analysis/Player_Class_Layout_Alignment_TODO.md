@@ -109,9 +109,9 @@
 | +616..636 | ttstr | dtor 释放 | 🔬 | 🔬 | |
 | +636..656 | ttstr/variant | ctor sub_A0F5E0(player+636, rmArg) | `Player::_resourceManager` (tTJSVariant)? | ⚠️🔬 | ctor 从构造参数 a2 拷贝。a2=resourceManager。需确认 |
 | +656..676 | ttstr/variant | ctor sub_A0F5E0(player+656, rmArg) (a1+82) | `PlayerRuntime::sourceCacheObject`? | ⚠️🔬 | Misalignment 称 +656 是 SourceCache。需确认 |
-| +676..696 | variant | ctor sub_A0FCC0(player+676, RandomGen) | `Player::_tjsRandomGenerator` (Player.h:761,标注 player+992) | ❌ | **偏移冲突!** 本地标 +992,二进制 RandomGen 在 +676(ctor `sub_A0FCC0((char*)a1+676, v17=sub_9C8440)`)。**TODO: 修正本地注释 player+992→player+676** 🔬复核 |
+| +676..696 | variant | ctor 将 `sub_9C8440` 创建的对象写入 +676 | render descriptor（非 RandomGenerator） | ✅语义纠正 | **2026-07-23 纠正**：+676 是 render descriptor；0x6CF080 把 +716 color 对象以 key `color` PropSet 到它。旧“RandomGen 在 +676”与“只需修注释”结论已证伪。 |
 | +696..716 | ttstr | dtor 释放 | 🔬 | 🔬 | |
-| +716..736 | variant | ctor sub_A0FCC0(player+716, v18) + 设 "color" 参数 | 🔬 | 🔬 | 第二个 TJS 对象,设了 color param |
+| +716..736 | variant | ctor 将第二个 `sub_9C8440` 对象写入 +716 | render descriptor 的 color 对象 | ✅语义纠正 | 0x6CF080 以 key `color` 把 +716 PropSet 到 +676；不是 RNG 配置。 |
 | +736..756 | ttstr | dtor 释放 | 🔬 | 🔬 | |
 
 ### 1.5 D3D / motion 变体指针 / 相机速度
@@ -141,7 +141,7 @@
 | +968 | refcounted string value* | stealthChara | `Player::_stealthChara` (ttstr) | ✅ | NCB stealthChara getter 0x6D9490 |
 | +976 | refcounted string value* | primary motion | `Player::_motionKey` (ttstr) | ✅ | NCB motion getter 0x6D9544 |
 | +984 | refcounted string value* | stealthMotion | `Player::_stealthMotion` (ttstr) | ✅ | NCB stealthMotion getter 0x6D9564 |
-| +992..1012 | tTJSVariant | ResourceManager dispatch（ctor 第三次 AddRef 拷贝） | 本地统一由 `Player::_resourceManager` 表示 +636/+656/+992 三个同指针槽 | ✅语义 | `Player_ctor@0x6CED30` 的 0x6CEF28 直接 `tTJSVariant_copy_ctor(this+992, resourceManager_dispatch)`；旧“transformOrder/RandomGenerator@992”结论已证伪。RandomGenerator 实在 +676。 |
+| +992..1012 | tTJSVariant | ResourceManager dispatch（ctor 第三次 AddRef 拷贝） | 本地统一由 `Player::_resourceManager` 表示 +636/+656/+992 三个同指针槽 | ✅语义 | `Player_ctor@0x6CED30` 的 0x6CEF28 直接 `tTJSVariant_copy_ctor(this+992, resourceManager_dispatch)`。`Player::random@0x6BA7B8` 对该 dispatch 调 `random`；真正 `Math.RandomGenerator` 在 `ResourceManager_ctor@0x6A88CC` 创建的 RM+144，不在 Player+676。 |
 | +1012..1032 | tTJSVariant | `findMotion` 命中 module key 上下文 | `Player::_findMotionContextVariant` | ✅ | `Player_playImpl@0x6B2284` 取 `findMotion` 返回数组元素1写 +1012；`ResourceManager_findMotion@0x6A9ED4` 的元素1来自命中 HashMap 节点 key@+8；随后 `Player_findSource@0x6948E8` 作为参数0传回 RM。 |
 | +1032..1052 | ttstr | outline | `Player::_outline` (ttstr, Player.h:569) | ✅ | 已对齐(类型已从 bool 改 ttstr) |
 | +1052..1072 | ttstr | meshline | `Player::_meshline` (ttstr, Player.h:613) | ✅ | 已对齐 |
@@ -239,8 +239,8 @@
 | +1096 priorDraw | 0 | false | ✅ |
 | +1144 completionType | 0 | 0 | ✅ |
 | +482 emoteMode | 0 | false | ✅ |
-| RandomGen | sub_A0FCC0(+676) | 误标 +992 | ❌ 修注释 |
-| 第二 TJS 对象 + "color" | sub_A0FCC0(+716) | 🔬 | 需复刻 |
+| render descriptor | sub_A0FCC0(+676) | 旧误标为 `_tjsRandomGenerator` | ❌ 需按 descriptor 语义复刻 |
+| descriptor color 对象 | sub_A0FCC0(+716)，0x6CF080 PropSet 到 +676 | 🔬 | 需复刻对象关系 |
 
 ### dtor (0x6CFADC) 资源释放顺序(权威)
 1. sub_6CDE18 预清理
@@ -251,7 +251,7 @@
 6. sub_6F436C(+184) 节点 deque 销毁; sub_6CF678(+1296)
 7. **HM4(+1240)** 链表清理 + bucket memset + 条件 delete
 8. **HM3(+1184)** 链表清理(sub_6DD018)+ memset + 条件 delete
-9. ttstr 释放: +1072,+1052,+1032,+1012,+992
+9. 20B value 释放: variant +1072/+1012/+992；ttstr +1052/+1032
 10. variant 释放: +984,+976,+968,+960
 11. DEAD render aggregate(+936) 释放每项 2 个 tTJSVariant(stride 44)+ delete
 12. sub_7E24AC(+864)
@@ -287,7 +287,7 @@
 **❌ 审计判断被推翻,移出 P0(需重新分析):**
 - **+912 pixelateDivision 并非"缺失"** — 它是 `static int _pixelateDivision=1` 在 `D3DEmoteModule`(D3DEmoteModule.h:48),NCB 在 main.cpp:573。但二进制 +912 是 **Player 实例字段,默认 100**(ctor `*((_DWORD*)a1+228)=100`)。问题是"在错误的类上、static 而非实例、默认 1 vs 100"。**TODO(P1):** 决定是否把它迁成 Player 实例字段并补实例 NCB getter/setter(0x6D992C/0x6D9934),评估对 D3D 渲染路径的影响。
 - **2026-07-23 关闭：+1144 不是 project 类型冲突** — NCB 字面绑定已证实 +1144 int32 是 `completionType`，本地已由 `_completionType` 承载。TJS `project` 与 `motionKey` 共用 +1012 的 variant/module-key 路径，本地 `_project`/module snapshot 不应再被拿来解释 +1144。旧 TODO 来自 Player NCB 表 off-by-one 命名，已证伪。
-- **+992 / +676 已闭合** — `Player_ctor@0x6CED30`：0x6CEF28 把构造参数 `resourceManager_dispatch` 以 `tTJSVariant` 拷到 +992；0x6CF014..0x6CF024 创建 `Math.RandomGenerator` 并存 +676。旧“+992=transformOrder/RandomGenerator”结论已证伪并修正。
+- **+992 / +676/+716 已重新闭合（2026-07-23 纠正）** — `Player_ctor@0x6CED30`：0x6CEF28 把 `resourceManager_dispatch` 拷到 +992；0x6CF014..0x6CF024 创建的 +676 对象是 render descriptor，第二个对象存在 +716，0x6CF080 把 +716 以 key `color` PropSet 到 +676。旧“+676=Math.RandomGenerator”结论已证伪。`Player::random@0x6BA7B8` 经 +992 RM dispatch 调 `random`，真 RNG 在 `ResourceManager_ctor@0x6A88CC` 的 RM+144。
 
 **⚠️ 结构确证为同一字段,但合并有跨文件行为变更,移出 P0:**
 - **+1156 双字段** — ctor 证实 +1156 是**单个 uint32**(=0xFF808080)。本地 `_colorWeightPacked`(PlayerCore.cpp:146/150 经 sub_6CD710 R-B swap)与 `_parentColorPacked`(父→子传播)都映射 +1156,**应合并为一**。但二进制单字段意味着 colorWeight 设值与父色传播**互相覆盖**,合并会改变本地现行为(目前两字段独立不互扰)。注:NCB "colorWeight" 属性实为 +1097 byte bool(getter sub_6D9768/setter sub_6CC9D4),与 +1156 packed color 是两回事——命名待厘清。**TODO(P1):** 选定权威字段名,统一 3 文件引用,确认互覆盖行为对齐二进制。
@@ -327,7 +327,7 @@
 | +1296 deque | sub_6F4FD8 (160B/项) | 存什么 |
 | +484..548 ttstr 块 | 写入点 + sub_699940(+528) | rootMatrix 字符串语义 |
 | +636/+656 | ctor a2 来源 + 读取点 | resourceManager / sourceCache 确认 |
-| +676/+716 TJS 对象 | sub_9C8440 + "color" 设置 | RandomGen + color 对象语义 |
+| +676/+716 TJS 对象 | `Player_ctor@0x6CED30` + 0x6CF080 | render descriptor + color 对象拓扑（已纠正，非 RandomGen） |
 | +1104 cameraFOV owner | sub_6D9784 + camera-node writer | 收束本地 `_cameraFov` / `_cameraFOV` 双 owner |
 | MotionNode 布局 | clang -fdump-record-layouts | root 属性偏移正确性 |
 | Node +160/+168 init | xmmword_14D68E0 常量 | bounds 初始化常量 |

@@ -100,9 +100,9 @@ HM node = `new(0x20)`=32B：`{_M_nxt@0, ttstr_key@8, value@16, hash@24}`，7 个
 - **位置**：`cpp/plugins/motionplayer/main.cpp:299-301`
 - 二进制 NCB 注册（@ 0x686148）只注册 `finalize` → `sub_6862C8`（return 0，空操作）。本地多注册了 `NCB_CONSTRUCTOR(())`。取决于 ncbind 是否硬性要求 constructor 才能分配 native instance；若为框架要求则保留并加 PLATFORM_BOUNDARY 注释。
 
-#### P2-3: Player `_tjsRandomGenerator` 注释偏移误标
+#### P2-3: Player `_tjsRandomGenerator` 字段归属误判（2026-07-23 已纠正）
 - **位置**：`cpp/plugins/motionplayer/Player.h:947`
-- 注释标 `player+992`，但 +992 实为 `_transformOrder` ttstr，RandomGenerator 实为 +676。字段类型对，仅注释偏移误标。
+- **历史结论已被证伪**：这不是“仅注释偏移误标”。`Player+992` 是 ResourceManager dispatch；`Player_ctor@0x6CED30` 中的 `+676/+716` 是 render descriptor 及其 `color` 对象，`0x6CF080` 把 `+716` 以 key `color` PropSet 到 `+676`。`Player::random@0x6BA7B8` 对 `+992` 调用 `random`，真正的 `Math.RandomGenerator` 是 `ResourceManager_ctor@0x6A88CC` 创建的 `RM+144`。
 
 #### P2-4: EmoteEngine 方法体顺序错（属函数级）
 - `applyVarControllers`(sub_6766E0) 真实顺序 pos→color→scale→angle，本地写反。

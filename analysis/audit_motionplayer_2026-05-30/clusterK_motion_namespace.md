@@ -160,7 +160,7 @@ Verdict: 🔧 architectural divergence. Binary PrivateMotionGLL is a real regist
 
 | id | func@addr | local file:line | sev | one-line |
 |----|-----------|-----------------|-----|----------|
-| K-1 | Motion_Player_findSource @0x6948e8 | ResourceManager/PlayerResource | CLOSED + BOUNDARY | **2026-07-18 superseded**：mapped record、Win/KRKR 两内表、AddRef/Release 与 unload 生命周期已复原；Win/spec=2、KRKR/spec=1 均走 raw PSB。KRKR 整页上传是 Web API 边界 |
+| K-1 | Motion_Player_findSource @0x6948e8 | ResourceManager/PlayerResource | AUDITED SITES + BOUNDARY | **2026-07-23 再纠正**：raw mapped record/两内表结论保留；旧 CLOSED 漏掉 `0x6F1060→0x695DE8`、item→SourceState alias 与 getter 后 rect 重读。该链及解码分支边界现已补齐；KRKR 整页上传是 Web API 边界，未审计余部不得外推为全局 100% |
 | K-2 | Motion_createTextureFromPixels @0x695d04 | SourceCache.cpp:594 | P1 🔧 | Binary = guarded "opengl" backend singleton + vtbl+24 upload into cache slot; local = TVPGetRenderManager()->CreateTexture2D per-call |
 | K-3 | Motion_doAlphaMaskOperation @0x6af104 | (none) / main.cpp:286 | P0 ❌ | Alpha-mask op MISSING: no shader cache, fillRect borders, or CPU dst.a=src.a*dst.a/255 loops; also wrong registration owner |
 | K-4 | Motion_getD3DAvailable @0x6b0960 | main.cpp:285 + Player impl | P1 ⚠️ | Must be `!hasGPUAccel`; registered on Player not namespace |

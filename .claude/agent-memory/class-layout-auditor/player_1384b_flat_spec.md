@@ -39,9 +39,9 @@ NCB 暴露 78 个成员名 (Player_ncb_registerMembers @ 0x6D69C8)。
 | 616 | 20 | ttstr | _? | empty | dtor sub_A0F778(a1+616) |
 | 636 | 20 | ttstr | _? | sub_A0F5E0 from a2 | ctor sub_A0F5E0(a1+636,a2) |
 | 656 | 20 | ttstr | _? | empty | dtor +656 |
-| 676 | 20 | ttstr | "color" | sub_A0FCC0 init | ctor PropGet "color" stored as ttstr; tjsRandomGen? (verify) |
+| 676 | 20 | TJS variant/dispatch | render descriptor | sub_A0FCC0 init from v17 | **2026-07-23 纠正**：不是 tjsRandomGen；0x6CF080 接收 +716 作为 `color` 属性 |
 | 696 | 20 | ttstr | _? | empty | dtor +696 |
-| 716 | 20 | ttstr | _resourceManagerKey | from a2 dispatch via sub_A0FCC0 then PropGet "color" | ctor uses v18 dispatch |
+| 716 | 20 | TJS variant/dispatch | descriptor color object | sub_A0FCC0 init from v18 | 0x6CF080 以 key `color` PropSet 到 +676 |
 | 736 | 20 | ttstr | _? | empty | dtor +736 |
 | 760 | 8 | (something)* (delete-able) | _? | 0 | dtor sub_6CFFB8 + operator delete + clear |
 | 768 | 8 | refcounted string value* | pending stealthMotion | 0 | Player_play flush + Release/null |
@@ -56,7 +56,7 @@ NCB 暴露 78 个成员名 (Player_ncb_registerMembers @ 0x6D69C8)。
 | 968 | 8 | refcounted string value* | stealthChara | 0 | NCB stealthChara getter; dtor Release(+968) |
 | 976 | 8 | refcounted string value* | motion | 0 | NCB motion getter; dtor Release(+976) |
 | 984 | 8 | refcounted string value* | stealthMotion | 0 | NCB stealthMotion getter; dtor Release(+984) |
-| 992 | 20 | ttstr | _transformOrder | empty | dtor +992; initNodeFields copies +1012 oddly |
+| 992 | 20 | tTJSVariant | ResourceManager dispatch | ctor 0x6CEF28 从参数 AddRef 拷贝 | Player::random@0x6BA7B8 经此 dispatch 调 `random`；真正 RNG 在 RM+144 |
 | 1012 | 20 | ttstr | outline | empty | get/setOutline |
 | 1032 | 20 | ttstr | outline (2nd?) | empty | confirmed at +1032 in get/setOutline |
 | 1052 | 20 | ttstr | meshline | empty | get/setMeshline |
@@ -107,10 +107,10 @@ vtable 槽 0 写入 ctor 中 `*a1 = a1`,意味着 **vtable 通过 EmotePlayer �
 13. HM3 init → +1184/+1192/+1200/+1216
 14. HM4 init → +1240/+1248/+1256/+1272
 15. +1296 deque<160B> init (sub_6F4FD8)
-16. v17=sub_9C8440(0) dispatch
-17. ttstr +676 init from v17 (sub_A0FCC0)
-18. v18=sub_9C8440(0) dispatch
-19. ttstr +716 init from v18; PropGet "color" stored at +716
+16. v17=sub_9C8440(0) 创建 render-descriptor dispatch
+17. variant +676 init from v17 (sub_A0FCC0)
+18. v18=sub_9C8440(0) 创建 color-object dispatch
+19. variant +716 init from v18；0x6CF080 在 +676 上 PropSet(L"color", +716)
 20. 最终一段写各 ttstr/double 默认值 + 创建第一个 MotionNode 节点(dword_1AA40D8 写入 deque)
 21. tTJSVariant_Release(v18), Release(v17)
 

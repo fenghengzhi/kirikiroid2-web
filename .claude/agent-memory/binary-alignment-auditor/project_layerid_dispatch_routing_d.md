@@ -25,7 +25,9 @@ layer-id 分配/释放在 libkrkr2.so 全部经 **Player+992 RM dispatch** 的 `
 - 0x14D9014 = `"requireLayerId"`；0x14D9032 = `"releaseLayerId"`。
 
 ## dispatch 源辨析
-- Player+992 = 本地单 `_resourceManager` tTJSVariant（PlayerCore.cpp:144 nativeRM() 同源 unpack via AsObjectNoAddRef）。
+- Player+992 = 本地 canonical `_resourceManager` tTJSVariant，供 layer-id/random/
+  resourceManager 路由；findSource 的 native unpack 现使用另一份独立
+  `_findSourceResourceManager` owner。三份 owner 底层指向同一 dispatch。
 - +676/+716 是邻槽（width/height、key dispatch 等），**非** layer-id；layer-id 专用 +992。
 - FuncCall 经 NCB（main.cpp:589-590 注册 requireLayerId/releaseLayerId）路由到 native ResourceManager::requireLayerId/releaseLayerId，返回同 id —— dispatch wrap native 是 binary 本身的架构，本地复刻它（不 shortcut）即忠实。
 

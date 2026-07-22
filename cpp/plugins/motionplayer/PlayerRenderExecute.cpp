@@ -132,8 +132,13 @@ namespace motion {
             };
             if(item.meshType == 1) {
                 cellDivisions = bezierPatchCellDivisionsLike_0x6C5C00(
-                    item.commandPatchDivision, item.nativeNode->source.width,
-                    item.nativeNode->source.height);
+                    item.commandPatchDivision,
+                    item.sourceState
+                        ? item.sourceState->width
+                        : item.nativeNode->source.width,
+                    item.sourceState
+                        ? item.sourceState->height
+                        : item.nativeNode->source.height);
             } else if(item.meshType == 2) {
                 if(item.meshDivX < 1 || item.meshDivY < 1) {
                     return false;
@@ -1285,8 +1290,12 @@ namespace motion {
                             cellDivisions =
                                 bezierPatchCellDivisionsU32Like_0x6C8E5C(
                                     item.commandPatchDivision,
-                                    item.nativeNode->source.width,
-                                    item.nativeNode->source.height);
+                                    item.sourceState
+                                        ? item.sourceState->width
+                                        : item.nativeNode->source.width,
+                                    item.sourceState
+                                        ? item.sourceState->height
+                                        : item.nativeNode->source.height);
                         } else if(item.meshType == 2) {
                             if(item.meshDivX < 1 || item.meshDivY < 1) {
                                 continue;

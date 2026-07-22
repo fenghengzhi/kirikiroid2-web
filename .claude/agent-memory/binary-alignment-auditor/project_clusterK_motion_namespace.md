@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-2026-05-30 Cluster K audit, corrected 2026-07-19. Ledger: analysis/audit_motionplayer_2026-05-30/clusterK_motion_namespace.md. The source path is CLOSED except for the documented KRKR full-page Web upload boundary.
+2026-05-30 Cluster K audit, corrected 2026-07-19 and 2026-07-23. Ledger: analysis/audit_motionplayer_2026-05-30/clusterK_motion_namespace.md. The former “source path CLOSED” sentence was overbroad; only the explicitly audited raw owner/map/ObjSource sites and the later shared-atlas sites may be treated as aligned.
 
 Confirmed addr↔fn (renamed in IDB):
 - Motion_Player_findSource @0x6948e8 — this is **Player::findSource**, NOT SourceCache. Core = ResourceManager outer unordered_map whose mapped record owns the raw PSB plus a Win `ttstr->texture` map and KRKR flat descriptor map; then raw texture upload or TJS-dispatch fallback. name=="blank" gate; rmState+224==type (2=embedded PSB, 1=KAG layer). Hash = `(1025*h)^(>>6)` then `9*` then `32769*(x^(x>>11))`, 0→-1.
@@ -33,3 +33,11 @@ restored. `SourceCache` layer LRU and `Player_findSource` resource maps are dist
 chains. Win/KRKR and ObjSource now navigate raw `PSBRawNode`; the former decoded
 `MotionSnapshot` side graph no longer participates. Only KRKR's one-shot full-page
 upload is retained as a concrete Web rendering API boundary.
+
+2026-07-23 correction: fresh xrefs found `sub_6F1060@0x6F1060` as a second
+caller of `sub_695DE8`, reached through the D3D texture getter. The prepared item
+stores a direct persistent `SourceState*` (`sub_6C2334@0x6C360C`), and
+`sub_6ADFBC@0x6AE154..0x6AE188` rereads rect after that getter. The old local
+snapshot chain missed this call/lifetime/data-flow boundary. It is now restored,
+along with branch-local decode lookups and atlas geometry, but this does not turn
+the unaudited remainder of Cluster K into a global CLOSED result.

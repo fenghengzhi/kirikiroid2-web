@@ -119,13 +119,11 @@ namespace motion {
     //      The prior 06-04 note ("two unrelated classes that merely SHARE the 3
     //      callback addresses = method-sharing, not class-identity") was WRONG and
     //      is replaced. Fresh decompile proves C++ public inheritance:
-    //        * RM ctor sub_6A88CC @0x6A88CC FIRST instruction (0x6a88f8) calls the
-    //          SourceCache ctor sub_6A78F4 on the SAME `a1` at offset 0 (base
-    //          subobject), which initialises +20 primaryLayer / +40 bufLayer
-    //          (Layer variant) / +64 layerType / +72/+80 intrusive list head-tail
-    //          sentinel; RM ctor THEN initialises its own fields from +88 onward
-    //          (HashMap A, RandomGenerator@+144, layerId set@+168,
-    //          counter@+216, spec@+224).
+    //        * RM ctor sub_6A88CC @0x6A88CC first invokes SourceCache ctor
+    //          sub_6A78F4 on the base subobject. That constructor retains the
+    //          owner, creates primary/buffer Layers, stores the byte budget and
+    //          initializes the intrusive cache list; only then does RM initialize
+    //          its module map, RandomGenerator, layer-id set/counter and spec.
     //        * sub_6A78F4 (SourceCache ctor) is called from EXACTLY ONE site —
     //          0x6a88f8 inside the RM ctor (xrefs_to confirmed). There is NO
     //          standalone SourceCache instance anywhere in the binary; SourceCache
@@ -166,10 +164,13 @@ namespace motion {
     // clearCache / bufLayer with the SAME callback addresses sub_6A7BA8 /
     // sub_6A8438 / sub_6A84FC that SourceCache registrar @0x6A85A8 binds).
     // The inherited loadSource(tTJSVariant,tTJSVariant) / clearCache() /
-    // getBufLayer() now serve the RM NCB bindings, so the former RM-own
+    // getBufLayer() serve the RM NCB bindings, so the former RM-own
     // overrides (loadSource(ttstr)->load forward, clearCache()->module-map clear,
     // getBufLayer()->ttstr) are removed — they were the pre-inheritance
-    // two-class artifacts.
+    // two-class artifacts. The local generic loadSource body is still a
+    // by-name facade rather than Android's `(source, descriptor) -> Layer`
+    // boundary; the exact tuple is currently restored only on the production
+    // prepared-item route.
     class ResourceManager : public SourceCache {
     public:
         ResourceManager();
@@ -178,7 +179,7 @@ namespace motion {
         ResourceManager(const ResourceManager &) = delete;
         ResourceManager &operator=(const ResourceManager &) = delete;
 
-        explicit ResourceManager(iTJSDispatch2 *kag, tjs_int cacheSize);
+        explicit ResourceManager(tTJSVariant kag, tjs_int cacheSize);
 
         tTJSVariant load(ttstr path);
         void unload(ttstr path) const;

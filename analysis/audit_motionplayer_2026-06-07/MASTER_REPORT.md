@@ -92,7 +92,7 @@
 ### P2 — 注释 / 命名 / 顺序 / inert（不影响布局）
 | # | 簇 | 摘要 |
 |---|----|------|
-| N17 | E | Player.h:1622 `_tjsRandomGenerator //player+992` 注释错——实为 +676（+992 是第 3 份 RM dispatch 拷贝，ctor 0x6cef28 实证）；PlayerCore.cpp:535 setChara 注释仍引旧误名 |
+| N17 | E | **2026-07-23 纠正**：旧建议把 `_tjsRandomGenerator` 从 +992 改标 +676 仍然错误。+676/+716 是 render descriptor/color 对象（ctor 0x6CED30，0x6CF080 建立 `color`关系）；+992 是 RM dispatch，真 RNG 在 `ResourceManager_ctor@0x6A88CC` 的 RM+144。PlayerCore.cpp:535 setChara 注释仍引旧误名 |
 | N18 | B | ctor COLOR seed：二进制 xmmword_14D68D0={128,128,128,255}f（get_bytes 确认），本地留零+TODO，现可确认应 seed |
 | N19 | C/D | D3DEmotePlayer NCB property/method 注册顺序：二进制交错，本地 property 提前（ininert，应按 0x52E504 重排）；'progress' #50 cb 二进制是 EmoteEngine_progress 0x52f76c，需确认 wrapper tail-call；MaskModeStencil/Alpha 二进制在 Motion namespace 也注册（0x6d9d24/0x6d9d3c），本地漏 |
 | N20 | A | EmoteBlinkRng.cpp:62-71 next() 用两次独立 nextWord，二进制预减批量取双词（word2 在 v1==2 regen）；624 词边界 regen 时机差一次抽样（墙钟种子无 oracle）|

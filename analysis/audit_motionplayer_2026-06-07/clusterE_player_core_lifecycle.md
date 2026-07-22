@@ -34,9 +34,8 @@ DEVIATION"实为 **IDB off-by-one 误命名**导致的误判,本轮 fresh decomp
   本地 4 map(_evalCascadeMap/_evalResultValues/_perNodeLayerStateMap/_variableSnapshotMap)**选型对齐**。
 - +912=100 ✅ _pixelateDivision、+1092=0(preview)✅ _preview、+1156=0xFF808080 ✅、+600/+1168/+1176/+1160
   默认值 ✅、bounds=±DBL_MAX ✅、ctor push 1 root node ✅。
-- ❌ **+992 = 第3份 RM dispatch 拷贝**(0x6cef28),本地 Player.h:1622 `_tjsRandomGenerator // player+992`
-  注释**错标** — RandomGen(sub_9C8440)实在 **+676**(0x6cf024)。注释级修复(P2)。
-- ⚠️ +716 第2个 TJS 对象(sub_9C8440 + 设 "color" param)本地无对应字段(MISSING,P2,inert)。
+- ❌ **2026-07-23 纠正旧误判**：+992 确为第 3 份 RM dispatch 拷贝（0x6CEF28），但 +676 也不是 RandomGenerator。`Player_ctor@0x6CED30` 中 `sub_9C8440` 为 +676/+716 创建 render descriptor 及其 color 对象，0x6CF080 把 +716 以 key `color` PropSet 到 +676。
+- ⚠️ 本地当时缺少的是 +676/+716 descriptor/color 对象拓扑，而不是 Player 内部 RNG。Player+992 是 ResourceManager dispatch；`Player::random@0x6BA7B8` 经 +992 调 `random`，真正 RNG 在 `ResourceManager_ctor@0x6A88CC` 创建的 RM+144。
 
 dtor: 本地 RAII 逆序析构 vs 二进制手写释放链。功能等价(tTJSVariant 值语义),释放顺序不保证一致。
 ⚠️ 架构级容忍偏差(P3),非本轮 actionable。
@@ -81,8 +80,7 @@ owner 证据删除；`_motionsByKey` 仍是 port-invented decoded snapshot 容�
 - pimpl 拆分 / dtor 释放顺序 / renderList 56B 裸数组 → PreparedRenderItem 膨胀 = 已知 P3 容忍偏差。
 
 ## 7. 修复建议(按优先级)
-1. **P2 注释**: Player.h:1622 `_tjsRandomGenerator // player+992` → `// player+676`(RandomGen 实在 +676;
-   +992 是第3份 RM dispatch 拷贝)。PlayerCore.cpp setChara 注释块(L535-574)仍引"0x6D94B0=chara setter
+1. **P2 历史纠正**: 不应把 `_tjsRandomGenerator` 注释从 `player+992` 改到 `player+676`；该 Player 字段归属本身就是误判。+676/+716 是 descriptor/color 对象，+992 是 RM dispatch，RNG 在 RM+144。PlayerCore.cpp setChara 注释块(L535-574)仍引"0x6D94B0=chara setter
    /sub_6B29C0(16)"应改为"chara setter=0x6C0E9C(mode0);0x6D94B0 是 stealthChara setter"。
 2. ~~setStealthChara/chara 双槽与 pending owner~~：2026-07-18 已闭合。
 3. ~~getVariableKeys 改走 `_variableLabelScopes` cascadeKey~~：2026-07-18 已闭合；

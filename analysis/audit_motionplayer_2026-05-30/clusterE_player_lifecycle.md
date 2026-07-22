@@ -33,11 +33,12 @@ HM2 init (+320, load 1.0f@+352)
 sub_A0F5E0(+636, rmArg); sub_A0F5E0(+656, rmArg)     // 2 ttstr copies of rm arg
 sub_7E2344(+864)                                      // inline container
 +909=0; +984=0; (+912 dword)=100                      // pixelateDivision=100
-sub_A0F5E0(+992, rmArg)                                // 3rd ttstr copy of rm arg
+sub_A0F5E0(+992, rmArg)                                // 3rd ResourceManager-dispatch variant copy
 HM3 init (+1184, load 1.0f@+1216); HM4 init (+1240, load 1.0f@+1272)
 memset(+1296,0,0x50); Player_controllerDeque_init(+1296,0)  // item stride 160
-v17=sub_9C8440(0); sub_A0FCC0(+676,v17)               // RandomGenerator @ +676
-v18=sub_9C8440(0); sub_A0FCC0(+716,v18); v17.vtbl[6](512,L"color",..) // color obj @ +716
+v17=sub_9C8440(0); sub_A0FCC0(+676,v17)               // render descriptor @ +676
+v18=sub_9C8440(0); sub_A0FCC0(+716,v18)               // color object @ +716
+// 0x6CF080: (+676)->PropSet(L"color", +716)
 +610=0;+482=0;+1120=0;+1092=0;+456..463=0
 this[146]=1.0(+1168);+483=0; +1093=byte_1AB84A8(defaultSyncActive)
 +480 word=1; +608 word=1; +1156 dword=0xFF808080
@@ -61,14 +62,14 @@ push initial root node into +184 deque; copy dword_1AA40D8..E4 into root
 | +1156 parentColor | 0xFF808080 | `_colorWeightPacked=0xFF808080` | OK |
 | +1092/+482/+483 | 0 | false | OK |
 | +1093 speed | byte_1AB84A8 (defaultSyncActive) | `_speed=true` | OK (literal default; binary copies the class static) |
-| RandomGen | sub_A0FCC0(**+676**) | created in ctor body via TVPExecuteExpression | OK content; **comment mislabels +992** -> P2-3 STILL OPEN |
-| +716 "color" TJS obj | sub_9C8440 + set L"color" param | NO local equivalent | MISSING (P2) |
-| +992 ttstr | 3rd sub_A0F5E0(rmArg) copy | NO local field | MISSING (P2) |
+| render descriptor + color 对象 | sub_A0FCC0(**+676/+716**) + 0x6CF080 `PropSet(L"color", +716)` on +676 | 历史上误当成 Player RandomGen | **2026-07-23 纠正**；需按 descriptor/color 对象拓扑对齐 |
+| +992 ResourceManager dispatch variant | 3rd sub_A0F5E0(rmArg) copy | local unified `_resourceManager` represents this owner | semantic source confirmed |
 
 Local ctor uses STL containers (deque/unordered_map/vector) instead of the
 6 KiriKiri inline containers (4 HM + 2 deque). Per CLAUDE.md this is a permanent
 container-choice DEVIATION (already tracked, PLATFORM_BOUNDARY-style tolerance).
-The local ctor does NOT build the +716 color dispatch object nor the +992 ttstr.
+The local ctor does NOT build the +676/+716 descriptor/color object topology nor
+three separate ResourceManager-dispatch variant slots.
 
 ## 2. dtor — Player_dtor @ 0x6CFADC  [renamed in IDB]
 
@@ -82,7 +83,7 @@ Reverse-order teardown confirmed (authoritative ordering):
 6. sub_6F436C(+184) node deque destroy; sub_6CF678(+1296)
 7. HM4(+1240) chain delete + bucket memset + cond delete
 8. HM3(+1184) chain Player_HM3_entry_destroy + memset + cond delete
-9. ttstr release: +1072,+1052,+1032,+1012,+992
+9. release 20B values: variants +1072/+1012/+992; ttstr +1052/+1032
 10. variant release: +984,+976,+968,+960  (this+123/122/121/120)
 11. variableList +936 (stride 44, 2 ttstr/item: +24,+4) release + delete
 12. sub_7E24AC(+864)
@@ -196,7 +197,8 @@ Status: **DEVIATION (P1/arch)** — container + dispatch-source mismatch.
 | Player_controllerDeque_init | 0x6F4FD8 | KiriKiri deque, item stride **160** (480/3 per block, +480 block span). This is the +1296 deque used by initVariables. Local std::vector<VariableLabelEntry> (stride mismatch + wrong container). |
 
 ## 7. MISSING (no local counterpart)
-- ctor +716 "color" TJS dispatch object; ctor +992 ttstr (3rd rm-arg copy).
+- ctor +676/+716 descriptor/color TJS object topology; +992 itself is the
+  confirmed 3rd ResourceManager-dispatch variant copy, not a ttstr/RNG slot.
 - NCB properties: flipX, flipY, opacity, visible, slantX, slantY, zoomX, zoomY,
   angleDeg, angleRad, coordinate, transformOrder, bounds, pixelateDivision,
   lastTime, meshDivisionRatio, defaultSyncActive, defaultTransformOrder.
@@ -210,10 +212,11 @@ Status: **DEVIATION (P1/arch)** — container + dispatch-source mismatch.
 - **P1-3** (Player HM 6->4 mapping): STILL OPEN. ctor confirms exactly 4 inline
   HMs (+264/+320/+1184/+1240, all prime-bucket via sub_149EDF8, load factor
   1.0f). Local still has 6 unordered_map. Mapping undefined.
-- **P2-3** (_tjsRandomGenerator comment mislabels player+992): STILL OPEN.
-  ctor re-confirms RandomGen object is `sub_A0FCC0(+676)`; +992 is the 3rd
-  sub_A0F5E0(rmArg) ttstr copy. Player.h:954 + ctor comment (PlayerCore.cpp:243)
-  both still say "player+992". Comment-only fix; not done.
+- **P2-3 历史结论已于 2026-07-23 纠正**：不是 `_tjsRandomGenerator`
+  偏移注释问题。+676 是 render descriptor，+716 是其 color 对象；
+  +992 是第 3 份 RM dispatch 拷贝。`Player::random@0x6BA7B8` 对 +992
+  调 `random`，真正 `Math.RandomGenerator` 在 `ResourceManager_ctor@0x6A88CC`
+  创建的 RM+144。旧“comment-only fix”判断已证伪。
 
 ## 9. IDB changes (saved)
 Renamed (idb_save OK): Player_ctor 0x6CED30, Player_dtor 0x6CFADC,
