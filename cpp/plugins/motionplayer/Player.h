@@ -1244,13 +1244,15 @@ namespace motion {
                                      // completionType value). Off-by-one had
                                      // mislabeled the +1092 bool (now _preview)
                                      // as completionType; +1144 is the int.
-        // Player_ctor @0x6CED30 retains the same dispatch in three independent
-        // Variants, in findSource -> SourceCache -> canonical call-routing
-        // order; normal reverse member destruction then matches Player_dtor
-        // @0x6CFADC. Keeping the findSource owner distinct preserves the extra
-        // AddRef/Release and the native-unpack call chain at 0x6948E8.
+        // Player_ctor @0x6CED30 retains the same ResourceManager dispatch in
+        // three independent Variants. Between its SourceCache and canonical
+        // call-routing owners it creates persistent descriptor/color
+        // Dictionaries and stores descriptor.color = colors. Declaration
+        // order preserves the matching reverse destruction topology.
         tTJSVariant _findSourceResourceManager;
         tTJSVariant _sourceCacheObject;
+        tTJSVariant _sourceDescriptor;
+        tTJSVariant _sourceColors;
         tTJSVariant _resourceManager;
         // Player pending slots +768/+776.  They are independent owners from
         // the live +984/+968 stealth slots and are released immediately after

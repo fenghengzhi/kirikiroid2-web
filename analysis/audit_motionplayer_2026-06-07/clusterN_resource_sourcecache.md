@@ -159,24 +159,24 @@ field-order audit and must not be reused as a 100% coverage conclusion.
 
 ## 6. SourceCache loadSource/clearCache — CONFIRMED base behavior
 
-- loadSource sub_6A7BA8: reads arg dict "key"/"src"/"blendMode"/"color"[4];
-  matches +72 intrusive layer-list node by (key sub_A10428, src ttstr wcscmp,
+- loadSource sub_6A7BA8: reads descriptor "key"/"src"/"blendMode"/"color"[4];
+  matches the +72 libstdc++ `std::list<Entry>` node by (full Variant key via
+  sub_A10428 strict compare, src ttstr wcscmp,
   blendMode @node+64). A same-color hit returns in place without reordering;
   color mismatch rewrites/rebakes via sub_6A6BE0 and clone-to-front. A miss calls
   trim@0x6A6B08 before creating/baking the Layer, stores `4*width*height`, adds
   that weight to +60 and inserts at the front. Output = node+36 Layer variant.
-- clearCache sub_6A8438: walks +72 list, releases each Layer image (vtbl+112),
-  frees nodes, resets +72/+80 sentinel + +60=0. Does NOT touch hashmaps.
+- clearCache sub_6A8438: walks +72 list, calls dispatch `Invalidate` on every
+  Layer with itself as objthis, clears the list and resets +60=0. Does NOT touch hashmaps.
 Local SourceCache.cpp uses `std::list<Entry>`. The production prepared-item route
-now matches exact `(key,src,blendMode)`, treats color as mutable state, leaves
-same-color hits in place, moves only color-change nodes to the front, runs the
-same pre-insert 99% byte-budget trim, and passes the incoming object only to the
-miss/color-change bake;
-it also forbids storage fallback. The generic NCB/by-name facade still matches a
-requested key or resolved storage alias and does not reproduce the binary
-`(source,descriptor) -> Layer` boundary. Thus the audited production consumer is
-aligned, but SourceCache as a complete public source-level implementation remains
-PARTIAL; the old `(key,blendMode) DATA FLOW matches` verdict was false.
+now matches exact `(full Variant key,src,blendMode)`, treats color as mutable
+state, leaves same-color hits in place, and implements color-change as
+`push_front(copy)+erase(old)`. Its trim is the same greedy subsequence scan (not a
+prefix cut), and incoming source is borrowed only for miss/color-change bake.
+The inherited public NCB method now has the exact `(source,descriptor) -> Layer`
+boundary; the separate `Player.loadSource(name)` compatibility helper neither
+aliases nor populates this cache. These named functions are aligned; this does
+not turn the rest of the unaudited subsystem into a global 100% proof.
 
 ## 7. SeparateLayerAdaptor @0x6ABFAC — surface CONFIRMED
 
@@ -211,7 +211,7 @@ chain (analysis/SLA_Rendering_Chain_libkrkr2so.md) — not re-decompiled this pa
 | 3 | RM findSource | mapped record raw root + ObjSource | mapped record raw root + ObjSource | CLOSED |
 | 4 | ObjSource | raw owner/node/texture; strict/try getters | same, including texture→owner dtor | CLOSED |
 | 5 | Player_findSource | outer record + Win/KRKR nested maps + shared `0x695DE8` render-time caller | 2026-07-23 corrected direct SourceState alias, getter-after-write rect flow, branch-local decode calls and atlas geometry; full-page upload remains Web API boundary | AUDITED SITES + BOUNDARY |
-| 6 | SourceCache loadSource | list node keyed by key/src/blend; Layer dispatch | production item route exact; generic NCB/by-name facade still alias-based | PARTIAL |
+| 6 | SourceCache loadSource | std::list keyed by full Variant key/src/blend; Layer dispatch | inherited NCB `(source,descriptor)` and production route exact; separate Web-only `Player.loadSource(name)` helper remains extra compatibility surface | NAMED CHAIN ALIGNED + EXTRA SURFACE |
 | 7 | SLA surface | 5 members @0x6ABFAC | 4+factory | OK |
 | 8 | RuntimeSupport/GLL | direct TJS/Array NI / internal Layer | eager snapshot removed; GLL adapter remains; some Array callers still use vector+`add` | PARTIAL |
 

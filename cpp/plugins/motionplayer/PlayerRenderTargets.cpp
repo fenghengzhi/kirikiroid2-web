@@ -974,11 +974,13 @@ namespace motion {
             }
 
             if(itemLayerResult.createdOrChanged) {
+                if(!item.sourceState) {
+                    continue;
+                }
                 tTJSVariant sourceObject =
-                    _sourceCacheNative->loadRenderSourceByName(
-                        *this, detail::widen(item.sourceKey), item.sourceObject,
-                        item.blendMode, item.packedColors,
-                        layerTreeOwner, targetLayerObject);
+                    _sourceCacheNative
+                        ->loadRenderSourceLayerFromItemLike_0x6C1B70(
+                            *this, item);
                 if(sourceObject.Type() != tvtObject ||
                    !sourceObject.AsObjectNoAddRef()) {
                     continue;

@@ -17,7 +17,8 @@
 ## 关键洞察：两项同源 —— 都是「ResourceManager 对象模型」未对齐
 
 `sub_6A88CC`（EmoteObject +0 的 RM ctor，new 0xE8=232B）本 session 反编译确证 binary RM 单一对象内含：
-- `sub_6A78F4` = SourceCache intrusive 双向链表（head/tail sentinel @+72/+80）—— ✅ 本地 `std::list<Entry>` 已同构
+- `sub_6A78F4` = SourceCache `std::list<Entry>`（libstdc++ sentinel links @+72/+80；
+  2026-07-23 纠正旧“手写 intrusive list”误判）—— ✅ 本地同选型
 - `this+88 = new(8 * _M_next_bkt(0xA))` + `this+96` = **HashMap A（findSource 的 map）** —— ✅ **P3-A 已对齐(2026-06-05)**：fresh decompile 证实它是 **libstdc++ `std::unordered_map` + 自研 FNV functor**（非内联 KiriKiri map），本地 `_state->loadedModules` 已迁为 `unordered_map<ttstr,V,ttstr_hash,ttstr_equal>` 同选型 1:1
 - `new Math.RandomGenerator()` @+144 RNG
 - `+176` std::_Rb_tree（RB-tree）

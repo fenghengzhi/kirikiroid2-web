@@ -1,49 +1,55 @@
 ---
 name: sourcecache-loadsource-0x6A7BA8
-description: loadSource@0x6A7BA8 cache model — (key,src,blendMode) match, color is mutable not a key; one node per (key,blendMode)
+description: Exact SourceCache loadSource descriptor parsing, std::list Entry identity, same-Layer rebake, node-copy lifetime, trim, bake, and clear boundaries
 metadata:
   type: project
 ---
 
-`Motion_ResourceManager_loadSource @0x6A7BA8` (SourceCache) intrusive doubly-linked
-list head = `this+72` (`a1+72`), LRU counter at `this+60` (`+=v65` only on MISS).
+# SourceCache_loadSource @0x6A7BA8
 
-Node layout (verified from match loop 0x6a8004 + clone 0x6EAC60, 0x58 bytes):
-- [0]=next [1]=prev (`__int64*`)
-- +16 (`v27+2`)  = key ttstr (matched via sub_A10428)
-- +36            = Layer variant (the baked source Layer; output to caller a4 via sub_A0FB64)
-- +56 (`v27[7]`) = src ttstr (matched: ptr-eq OR len@+60 eq + sub_9B1ED0 UTF-16 cmp)
-- +64 (`+16 dw`) = blendMode (matched `== v60`)
-- +68..+80 (`+17..+20 dw`) = color[4] — **NOT a match key; mutable**
+Public source signature:
 
-Match key = (key, src, blendMode). color excluded.
-HIT + color UNCHANGED (0x6a80d4 false) → return node as-is, no rebuild.
-HIT + color CHANGED → write new color +68..+80 (0x6a80d8) → re-bake source bitmap
-via sub_6A6BE0 (drawLayer copyRect/fillRect/operateRect/adjustGamma = per-pixel
-color bake @sub_6A7518) → CLONE node to list head (sub_6EAC60+sub_146359C) →
-unhook+delete old node (sub_14635B8 + operator delete). Net: ONE mutable node per
-(key,blendMode), color overwrites in place.
-MISS → evictLRU + create Layer via global Layer.CreateNew → sub_6A6BE0 bake →
-insert at head, `this+60 += v65`.
+```cpp
+tTJSVariant loadSource(iTJSDispatch2 *source,
+                       iTJSDispatch2 *descriptor);
+```
 
-Local SourceCache.cpp aligned 2026-06-06 (C-2/P3): findEntry/const overload/
-ensureEntry match (key|resolvedKey, blendMode) only; color change → update
-packedColors + reset backingBitmap/sourceObject/sourceTexture → re-bake. Fast-return
-in loadRenderSourceByName/...TextureByName gated on `packedColors==packedColors`.
-Was: 3-tuple key (key,blend,color) → N independent immutable entries per color.
+Descriptor parsing:
 
-NOT a platform boundary: local HAS re-bake capability (cloneBitmap32 +
-applyPackedCornerTintLike_0x6A7518). The std::list node clone+delete is container
-ABI detail, not required — same Entry mutated in place is the correct source-level
-equivalent.
+- `key`: ordinary `PropGet`, preserve the full `tTJSVariant`; missing remains void.
+- `src`: probe with `TJS_MEMBERMUSTEXIST`, then read string; missing defaults empty.
+- `blendMode`: same probe/read shape; missing defaults 0.
+- `color`: ordinary `PropGet`; a non-void object is probed at numeric indices 0..3,
+  each missing item defaulting 0. If color itself is void, only `colors[0]` is
+  written (`0xFF808080` when `blend&0xF0`, otherwise `0xFFFFFFFF`); slots 1..3
+  remain genuinely uninitialized.
 
-Residual modeling note (pre-existing, not from this fix): binary compares src
-(+56) as an independent 3rd predicate; local folds src into resolvedKey. Same
-partition for normal key→src maps; not re-modeled (orthogonal to C-2, no divergence
-evidence under logo fixtures).
+Source container is `std::list<Entry>`, proved by libstdc++
+`_List_node_base::_M_hook/_M_unhook` and copier `0x6EAC60`, not a custom
+intrusive list. Entry semantic order is Variant key, Variant Layer, ttstr src,
+blendMode, raw `tjs_int colors[4]`, byteWeight.
 
-Verification: web debug build green; SourceCache.cpp compiles clean. motion_playback
-logo differential (m2logo/yuzulogo) is wasmtime+lldb lane — wasmtime NOT installed
-locally, could not run in-session. Non-regression argued statically: no-color-change
-path (logos use neutral color, oracle shows no per-item color tokens) is
-byte-identical to old behavior; only divergent path is the color-change fix itself.
+Match identity is strict `(full Variant key, src, blendMode)`; color is not a
+key. Same-color hit returns the cached Layer with no callback or promotion.
+Color mismatch updates colors, calls `bake@0x6A6BE0` on the same Layer, then
+`push_front(*it)` and erases the old node. Miss calls trim before Layer creation,
+bakes, adds `4*width*height` to current bytes, and pushes a copy at the front.
+
+`bake@0x6A6BE0` calls `source.drawLayer(entry.layer)`. It reads Layer width/height,
+records weight, applies `tint@0x6A7518`, and only for low blend 1/2 follows the
+`bufLayer.setSize/copyRect -> layer.fillRect/operateRect` path; blend 2 also calls
+`adjustGamma(1,255,0 x3)`. The GPU PrivateMotionGLL gate skips this low-blend
+path. `_bufLayer` is not the drawLayer target.
+
+`tint@0x6A7518` returns for all neutral or bitwise-white colors. Software uses
+literal `(width-1)/(height-1)` bilinear interpolation, RGB divisor 128 or 255,
+and alpha divisor 255. The GPU branch only queries the PrivateMotionGLL native
+instance and discards the result.
+
+`trim@0x6A6B08` keeps a greedy subsequence, not necessarily a prefix.
+`clearCache@0x6A8438` calls Layer dispatch `Invalidate(self)`, clears the list,
+and resets current bytes.
+
+Player ctor `0x6CED30` owns persistent descriptor/color Dictionaries with
+`descriptor.color = colors`; every `0x6C1B70` caller rewrites them and invokes
+the ResourceManager dispatch's `loadSource(source, descriptor)` method.

@@ -81,11 +81,10 @@ namespace motion {
         iTVPBaseBitmap *srcImage = nullptr;
         tjs_int srcW = 0;
         tjs_int srcH = 0;
-        if(!item.sourceKey.empty() && _sourceCacheNative) {
-            sourceObject = _sourceCacheNative->loadRenderSourceByName(
-                *this, detail::widen(item.sourceKey), item.sourceObject,
-                item.blendMode,
-                item.packedColors, scratchOwner, scratchParent);
+        if(item.sourceState && _sourceCacheNative) {
+            sourceObject =
+                _sourceCacheNative
+                    ->loadRenderSourceLayerFromItemLike_0x6C1B70(*this, item);
             if(sourceObject.Type() == tvtObject &&
                sourceObject.AsObjectNoAddRef()) {
                 if(auto *srcLayer =
@@ -711,14 +710,13 @@ namespace motion {
         auto resolveSourceObjectLike_0x6C1B70 =
             [&](const PreparedRenderItem &item) -> ResolvedSourceObject {
             ResolvedSourceObject resolved;
-            if(item.sourceKey.empty() || !_sourceCacheNative) {
+            if(!item.sourceState || !_sourceCacheNative) {
                 return resolved;
             }
 
-            resolved.object = _sourceCacheNative->loadRenderSourceByName(
-                *this, detail::widen(item.sourceKey), item.sourceObject,
-                item.blendMode,
-                item.packedColors, scratchOwner, scratchParent);
+            resolved.object =
+                _sourceCacheNative
+                    ->loadRenderSourceLayerFromItemLike_0x6C1B70(*this, item);
             if(resolved.object.Type() != tvtObject ||
                !resolved.object.AsObjectNoAddRef()) {
                 return resolved;

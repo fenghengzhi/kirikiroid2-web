@@ -1,15 +1,16 @@
 #include "SourceCache.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
-#include <optional>
 #include <vector>
 
 #include "BitmapIntf.h"
-#include "GraphicsLoaderIntf.h"
 #include "LayerBitmapIntf.h"
 #include "LayerIntf.h"
+#include "MotionDispatch.h"
 #include "PlayerInternal.h"
+#include "PrivateMotionGLL.h"
 #include "RenderManager.h"
 #include "ResourceManager.h"
 #include "ScriptMgnIntf.h"
@@ -19,6 +20,8 @@
 
 namespace {
 
+    tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
+
     bool getObjectProperty(const tTJSVariant &object,
                            const tjs_char *name,
                            tTJSVariant &out) {
@@ -27,22 +30,6 @@ namespace {
         }
         return TJS_SUCCEEDED(object.AsObjectNoAddRef()->PropGet(
             0, name, nullptr, &out, object.AsObjectNoAddRef()));
-    }
-
-    std::optional<ttstr> sourceNameFromVariant(const tTJSVariant &value) {
-        if(value.Type() == tvtVoid) {
-            return std::nullopt;
-        }
-        if(value.Type() == tvtObject && value.AsObjectNoAddRef()) {
-            for(const auto *name : { TJS_W("src"), TJS_W("key") }) {
-                tTJSVariant prop;
-                if(getObjectProperty(value, name, prop) && prop.Type() != tvtVoid) {
-                    return ttstr(prop);
-                }
-            }
-            return std::nullopt;
-        }
-        return ttstr(value);
     }
 
     bool packedColorsAreDefault(std::uint32_t c0, std::uint32_t c1,
@@ -56,6 +43,21 @@ namespace {
         return (c0 & c1 & c2 & c3) == 0xFFFFFFFFu;
     }
 
+    bool packedColorsEqual(const tjs_int (&left)[4],
+                           const tjs_int (&right)[4]) {
+        for(std::size_t index = 0; index < 4; ++index) {
+            if(left[index] != right[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void copyPackedColors(tjs_int (&destination)[4],
+                          const tjs_int (&source)[4]) {
+        std::copy_n(source, 4, destination);
+    }
+
     std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor) {
         return {
             static_cast<int>(packedColor & 0xFFu),
@@ -65,33 +67,29 @@ namespace {
         };
     }
 
-    std::shared_ptr<tTVPBaseBitmap> cloneBitmap32(const tTVPBaseBitmap &src) {
-        auto copy = std::make_shared<tTVPBaseBitmap>(
-            static_cast<tjs_uint>(src.GetWidth()),
-            static_cast<tjs_uint>(src.GetHeight()), 32);
-        for(tjs_uint y = 0; y < src.GetHeight(); ++y) {
-            const auto *srcRow = static_cast<const std::uint8_t *>(
-                src.GetScanLine(y));
-            auto *dstRow = static_cast<std::uint8_t *>(
-                copy->GetScanLineForWrite(y));
-            std::memcpy(dstRow, srcRow,
-                        static_cast<size_t>(src.GetWidth()) * 4u);
-        }
-        return copy;
-    }
-
     void applyPackedCornerTintLike_0x6A7518(
-        tTVPBaseBitmap &bitmap,
-        const std::array<std::uint32_t, 4> &packedColors,
+        const tTJSVariant &layer,
+        const tjs_int (&colors)[4],
         bool halfAlphaBlend) {
-        const auto c0 = packedColors[0];
-        const auto c1 = packedColors[1];
-        const auto c2 = packedColors[2];
-        const auto c3 = packedColors[3];
+        const auto c0 = static_cast<std::uint32_t>(colors[0]);
+        const auto c1 = static_cast<std::uint32_t>(colors[1]);
+        const auto c2 = static_cast<std::uint32_t>(colors[2]);
+        const auto c3 = static_cast<std::uint32_t>(colors[3]);
         if(packedColorsAreDefault(c0, c1, c2, c3) ||
            packedColorsAreOpaqueWhite(c0, c1, c2, c3)) {
             return;
         }
+
+        if(!TVPGetRenderManager()->IsSoftware()) {
+            // GPU branch performs this native-instance query and discards its
+            // result; it does not run the software pixel loop.
+            (void)motion::resolvePrivateMotionGLLNativeLike_0x6DE24C(
+                layer.AsObjectNoAddRef());
+            return;
+        }
+
+        auto *nativeLayer = resolveNativeLayer(layer.AsObjectNoAddRef());
+        tTVPBaseTexture &bitmap = *nativeLayer->GetMainImage();
 
         const auto topLeft = unpackPackedRgba(c0);
         const auto topRight = unpackPackedRgba(c1);
@@ -104,12 +102,12 @@ namespace {
         }
 
         const int colorDivisor = halfAlphaBlend ? 128 : 255;
-        const int spanX = std::max(width - 1, 1);
-        const int spanY = std::max(height - 1, 1);
+        // sub_6A7518 uses the literal source expressions width-1/height-1.
+        // Do not add a "safe" one-pixel divisor: the original source leaves
+        // that degenerate boundary to the target compiler/CPU.
+        const int spanX = width - 1;
+        const int spanY = height - 1;
         const auto lerpChannel = [](int a, int b, int pos, int span) -> int {
-            if(span <= 0) {
-                return a;
-            }
             return a + (pos * (b - a)) / span;
         };
 
@@ -150,33 +148,9 @@ namespace {
                 dst[0] = static_cast<std::uint8_t>(std::min(
                     255, tintB * static_cast<int>(dst[0]) / colorDivisor));
                 dst[3] = static_cast<std::uint8_t>(std::min(
-                    255, tintA * static_cast<int>(dst[3]) / colorDivisor));
+                    255, tintA * static_cast<int>(dst[3]) / 255));
             }
         }
-    }
-
-    std::shared_ptr<tTVPBaseBitmap> loadGraphicBitmap(const ttstr &path) {
-        if(path.IsEmpty()) {
-            return nullptr;
-        }
-
-        ttstr loadPath = path;
-        const auto pathString = motion::detail::narrow(path);
-        if(pathString.rfind('.') == std::string::npos ||
-           pathString.rfind('.') < pathString.rfind('/')) {
-            loadPath = path + TJS_W(".png");
-        }
-
-        try {
-            auto bmp = std::make_shared<tTVPBaseBitmap>(1, 1, 32);
-            TVPLoadGraphic(bmp.get(), loadPath, TVP_clNone, 0, 0,
-                           glmNormal, nullptr, nullptr);
-            if(bmp->GetWidth() > 0 && bmp->GetHeight() > 0) {
-                return bmp;
-            }
-        } catch(...) {
-        }
-        return nullptr;
     }
 
     void decodeObjSourceRL8Like_0x6DA454(
@@ -249,7 +223,7 @@ namespace {
     }
 
     iTJSDispatch2 *createLayerObject(const tTJSVariant &owner,
-                                     iTJSDispatch2 *parentLayerObject) {
+                                     const tTJSVariant &parent) {
         if(owner.Type() != tvtObject || !owner.AsObjectNoAddRef()) {
             return nullptr;
         }
@@ -261,9 +235,7 @@ namespace {
 
         iTJSDispatch2 *created = nullptr;
         tTJSVariant ownerArg(owner);
-        tTJSVariant parentArg =
-            parentLayerObject ? tTJSVariant(parentLayerObject, parentLayerObject)
-                              : tTJSVariant();
+        tTJSVariant parentArg(parent);
         tTJSVariant *args[] = { &ownerArg, &parentArg };
         if(TJS_FAILED(layerClassVar.AsObjectNoAddRef()->CreateNew(
                0, nullptr, nullptr, &created, 2, args,
@@ -280,7 +252,10 @@ namespace {
         iTJSDispatch2 *layerObject =
             slot.Type() == tvtObject ? slot.AsObjectNoAddRef() : nullptr;
         if(!layerObject) {
-            layerObject = createLayerObject(owner, parentLayerObject);
+            const tTJSVariant parent = parentLayerObject
+                ? tTJSVariant(parentLayerObject, parentLayerObject)
+                : tTJSVariant();
+            layerObject = createLayerObject(owner, parent);
             if(!layerObject) {
                 return nullptr;
             }
@@ -305,20 +280,13 @@ namespace {
         return layerObject;
     }
 
-    bool assignBitmapToLayerLike_0x6948E8(tTJSNI_BaseLayer *sourceLayer,
-                                          const iTVPBaseBitmap &src) {
-        if(!sourceLayer || src.GetWidth() <= 0 || src.GetHeight() <= 0) {
-            return false;
+    iTVPTexture2D *textureFromLayerVariant(const tTJSVariant &value) {
+        if(value.Type() != tvtObject || !value.AsObjectNoAddRef()) {
+            return nullptr;
         }
-        if(!sourceLayer->GetHasImage()) {
-            sourceLayer->SetHasImage(true);
-        }
-        sourceLayer->SetType(ltAlpha);
-        sourceLayer->AssignMainImageWithUpdate(
-            const_cast<iTVPBaseBitmap *>(&src));
-        sourceLayer->SetSize(src.GetWidth(), src.GetHeight());
-        sourceLayer->SetClip(0, 0, src.GetWidth(), src.GetHeight());
-        return true;
+        auto *layer = resolveNativeLayer(value.AsObjectNoAddRef());
+        auto *image = layer ? layer->GetMainImage() : nullptr;
+        return image ? image->GetTexture() : nullptr;
     }
 
 } // namespace
@@ -510,151 +478,103 @@ namespace motion {
         }
     }
 
-    tTJSVariant SourceCache::loadSource(tTJSVariant keyOrSource,
-                                        tTJSVariant currentSource) {
-        auto name = sourceNameFromVariant(keyOrSource);
-        if(!name || name->IsEmpty()) {
-            name = sourceNameFromVariant(currentSource);
+    tTJSVariant SourceCache::loadSource(iTJSDispatch2 *source,
+                                        iTJSDispatch2 *descriptor) {
+        // SourceCache_loadSource @0x6A7BA8 receives two borrowed dispatches.
+        // ncbPropAccessor supplies the temporary AddRef/Release lifetime seen in
+        // the binary while the cache entry itself never retains `source`.
+        ncbPropAccessor descriptorAccessor(descriptor);
+
+        tTJSVariant key;
+        descriptor->PropGet(0, TJS_W("key"),
+                            &detail::commandKeyMemberHint_guess, &key,
+                            descriptor);
+        const ttstr src = descriptorAccessor.getStrValue(TJS_W("src"), ttstr());
+        const tjs_int blendMode = descriptorAccessor.getIntValue(
+            TJS_W("blendMode"), 0);
+
+        tTJSVariant colorValue;
+        descriptor->PropGet(0, TJS_W("color"),
+                            &detail::colorMemberHint_guess, &colorValue,
+                            descriptor);
+        // Deliberately default-initialized, not value-initialized.  The
+        // color-void branch in 0x6A7BA8 writes only slot zero; slots 1..3 are
+        // genuine uninitialized source behavior and must not be "fixed".
+        tjs_int colors[4];
+        if(colorValue.Type() != tvtVoid) {
+            ncbPropAccessor colorAccessor(colorValue);
+            for(tjs_int index = 0; index < 4; ++index) {
+                colors[static_cast<std::size_t>(index)] =
+                    colorAccessor.getIntValue(index, 0);
+            }
+        } else {
+            colors[0] = (blendMode & 0xF0) != 0
+                ? static_cast<tjs_int>(0xFF808080u)
+                : static_cast<tjs_int>(0xFFFFFFFFu);
         }
-        if(!name || name->IsEmpty()) {
-            return {};
-        }
-        return loadSourceByName(nullptr, *name, currentSource);
+
+        return loadSourceLike_0x6A7BA8(
+            source, key, src, blendMode, colors);
     }
 
     tTJSVariant SourceCache::loadSourceByName(
         const Player *player,
         const ttstr &name,
         const tTJSVariant &currentSource) {
-        const auto key = detail::narrow(name);
-        if(key.empty()) {
-            return {};
+        // Web compatibility boundary for Player.loadSource(name).  It resolves
+        // the raw object but intentionally does not create a second, by-name
+        // cache topology beside Android's descriptor-keyed std::list.
+        if(currentSource.Type() != tvtVoid) {
+            return currentSource;
         }
-
-        if(auto *entry = findEntryByKey(key)) {
-            if(entry->sourceObject.Type() != tvtVoid) {
-                return entry->sourceObject;
-            }
-            return entry->rawSource;
-        }
-
         std::string resolvedKey;
-        tTJSVariant rawSource =
-            currentSource.Type() != tvtVoid
-                ? currentSource
-                : loadRawSourceVariant(player, name, resolvedKey);
-        Entry entry;
-        entry.key = key;
-        entry.resolvedKey = resolvedKey.empty() ? key : resolvedKey;
-        entry.rawSource = rawSource;
-        // This is a legacy by-name Web facade, not SourceCache_loadSource
-        // @0x6A7BA8: the Android NCB method receives (source, descriptor) and
-        // returns a baked Layer. Keep its raw ObjSource out of sourceObject so
-        // the legacy render helpers cannot mistake it for that baked Layer.
-        // The production prepared-item route below restores the exact
-        // (key, src, blendMode) identity and object-to-bake data flow.
-        trimCacheBeforeInsertLike_0x6A6B08();
-        _entries.push_front(std::move(entry));
-        return rawSource;
+        return loadRawSourceVariant(player, name, resolvedKey);
     }
 
-    tTJSVariant SourceCache::loadRenderSourceByName(
-        const Player &player,
-        const ttstr &name,
-        const tTJSVariant &currentSource,
-        int blendMode,
-        const std::array<std::uint32_t, 4> &packedColors,
-        iTJSDispatch2 *layerTreeOwnerObject,
-        iTJSDispatch2 *parentLayerObject) {
-        const auto key = detail::narrow(name);
-        if(key.empty()) {
-            return {};
+    tTJSVariant SourceCache::loadRenderSourceLayerFromItemLike_0x6C1B70(
+        Player &player,
+        const detail::PreparedRenderItem &item) {
+        // Player_ctor @0x6CED30 owns one persistent descriptor Dictionary and
+        // one persistent color Dictionary.  Every 0x6C1B70 caller overwrites
+        // these exact objects before dispatching ResourceManager.loadSource.
+        ncbPropAccessor descriptor(player._sourceDescriptor);
+        descriptor.SetValue(TJS_W("key"), item.commandKey, TJS_MEMBERENSURE,
+                            &detail::commandKeyMemberHint_guess);
+        descriptor.SetValue(TJS_W("src"), item.commandSrc, TJS_MEMBERENSURE,
+                            &detail::commandSrcMemberHint_guess);
+        descriptor.SetValue(TJS_W("blendMode"),
+                            static_cast<tjs_int>(item.blendMode),
+                            TJS_MEMBERENSURE,
+                            &detail::blendModeMemberHint_guess);
+
+        ncbPropAccessor color(player._sourceColors);
+        for(tjs_int index = 0; index < 4; ++index) {
+            color.SetValue(
+                index,
+                static_cast<tjs_int>(item.packedColors[
+                    static_cast<std::size_t>(index)]),
+                TJS_MEMBERENSURE);
         }
 
-        if(layerTreeOwnerObject &&
-           (_owner.Type() != tvtObject || _primaryLayer.Type() != tvtObject)) {
-            setLayerOwner(
-                tTJSVariant(layerTreeOwnerObject, layerTreeOwnerObject));
-        }
-        if(parentLayerObject && _primaryLayer.Type() != tvtObject) {
-            _primaryLayer = tTJSVariant(parentLayerObject, parentLayerObject);
-        }
-
-        // Aligned with loadSource @0x6A7BA8: a cached node may be reused only
-        // when its stored color (node+68..+80) still matches the requested
-        // color. A color change must NOT short-circuit here — the binary always
-        // reaches the 0x6a80d4 color comparison and re-bakes on mismatch — so we
-        // only fast-return when the stored color is unchanged.
-        if(auto *entry = findEntry(key, blendMode, packedColors)) {
-            if(entry->packedColors == packedColors &&
-               entry->sourceObject.Type() == tvtObject &&
-               entry->sourceObject.AsObjectNoAddRef()) {
-                return entry->sourceObject;
-            }
-        }
-
-        std::string resolvedKey;
-        auto rawSource =
-            currentSource.Type() != tvtVoid ? currentSource
-                                            : loadRawSourceVariant(&player, name, resolvedKey);
-        bool inserted = false;
-        auto &entry = ensureEntry(
-            key, resolvedKey.empty() ? key : resolvedKey, blendMode,
-            packedColors, inserted);
-        entry.rawSource = rawSource;
-
-        const bool hasBitmap = ensureEntryBackingBitmap(
-            entry, &player, key, blendMode, packedColors, nullptr, true);
-        if(inserted) {
-            _currentCacheBytes += entry.byteWeight;
-        }
-        if(!hasBitmap) {
-            return entry.rawSource;
-        }
-
-        iTJSDispatch2 *parentLayer =
-            parentLayerObject ? parentLayerObject
-                              : (_primaryLayer.Type() == tvtObject
-                                     ? _primaryLayer.AsObjectNoAddRef()
-                                     : nullptr);
-        const tTJSVariant owner =
-            _owner.Type() == tvtObject
-                ? _owner
-                : (layerTreeOwnerObject ? tTJSVariant(layerTreeOwnerObject,
-                                                      layerTreeOwnerObject)
-                                        : tTJSVariant());
-        auto *sourceLayerObject =
-            ensureLayerObject(entry.sourceObject, owner, parentLayer, false);
-        auto *sourceLayer = resolveNativeLayer(sourceLayerObject);
-        if(!sourceLayerObject || !sourceLayer || !entry.backingBitmap ||
-           !assignBitmapToLayerLike_0x6948E8(sourceLayer, *entry.backingBitmap)) {
-            entry.sourceObject.Clear();
-            return entry.rawSource;
-        }
-
-        return entry.sourceObject;
+        auto &source = *item.sourceState;
+        ncbPropAccessor cache(player._sourceCacheObject);
+        tTJSVariant result;
+        cache.FuncCall(0, TJS_W("loadSource"),
+                       &detail::loadSourceMemberHint_guess, &result,
+                       source.object, player._sourceDescriptor);
+        return result;
     }
 
     iTVPTexture2D *
     SourceCache::loadRenderSourceTextureFromItemLike_0x6C1B70(
-        const Player &player,
+        Player &player,
         detail::PreparedRenderItem &item) {
-        auto &source = *item.sourceState;
-        const std::string key = detail::narrow(item.commandKey);
-        const std::string src = detail::narrow(item.commandSrc);
-
-        // sub_6C1B70 passes the descriptor and source object as independent
-        // arguments to SourceCache_loadSource @0x6A7BA8.  Empty src is a real
-        // cache-key value, not permission to discard a valid source object.
-        // The cache node does not retain the incoming object: 0x6A823C and
-        // 0x6A80FC pass it directly to the bake only on miss/color change.
-        return loadSourceLike_0x6A7BA8(
-            player, source.object, key, src, item.blendMode,
-            item.packedColors);
+        return textureFromLayerVariant(
+            loadRenderSourceLayerFromItemLike_0x6C1B70(player, item));
     }
 
     iTVPTexture2D *SourceCache::loadRenderSourceTextureForItemLike_0x6F1060(
-        const Player &player,
+        Player &player,
         detail::PreparedRenderItem &item) {
         auto &source = *item.sourceState;
         // sub_6F1060 @0x6F1094 observes the persistent descriptor first.
@@ -682,67 +602,24 @@ namespace motion {
         return loadRenderSourceTextureFromItemLike_0x6C1B70(player, item);
     }
 
-    iTVPTexture2D *SourceCache::loadRenderSourceTextureByName(
-        const Player &player,
-        const ttstr &name,
-        const tTJSVariant &currentSource,
-        int blendMode,
-        const std::array<std::uint32_t, 4> &packedColors) {
-        const auto key = detail::narrow(name);
-        if(key.empty()) {
-            return nullptr;
-        }
-
-        // (key, blendMode) single mutable node; a color change invalidates the
-        // baked texture so it is rebuilt below (aligned with 0x6A7BA8 hit path).
-        if(auto *entry = findEntry(key, blendMode, packedColors)) {
-            if(entry->packedColors == packedColors && entry->sourceTexture) {
-                return entry->sourceTexture;
-            }
-        }
-
-        std::string resolvedKey;
-        auto rawSource =
-            currentSource.Type() != tvtVoid ? currentSource
-                                            : loadRawSourceVariant(&player, name, resolvedKey);
-        bool inserted = false;
-        auto &entry = ensureEntry(
-            key, resolvedKey.empty() ? key : resolvedKey, blendMode,
-            packedColors, inserted);
-        entry.rawSource = rawSource;
-
-        auto *texture = ensureRenderTextureForEntry(
-            entry, &player, key, blendMode, packedColors, nullptr, true);
-        if(inserted) {
-            _currentCacheBytes += entry.byteWeight;
-        }
-        return texture;
-    }
-
     void SourceCache::clearCache() {
         for(auto &entry : _entries) {
-            if(entry.sourceObject.Type() == tvtObject &&
-               entry.sourceObject.AsObjectNoAddRef()) {
-                if(auto *layer = resolveNativeLayer(entry.sourceObject.AsObjectNoAddRef())) {
-                    layer->SetHasImage(false);
-                }
+            if(entry.layer.Type() == tvtObject &&
+               entry.layer.AsObjectNoAddRef()) {
+                auto *object = entry.layer.AsObjectNoAddRef();
+                (void)object->Invalidate(0, nullptr, nullptr, object);
             }
-            releaseEntryTexture(entry);
         }
         _entries.clear();
         _currentCacheBytes = 0;
     }
 
     void SourceCache::eraseSource(ttstr name) {
-        const auto key = detail::narrow(name);
-        if(key.empty()) {
-            return;
-        }
-
+        const tTJSVariant key(name);
         for(auto it = _entries.begin(); it != _entries.end();) {
-            if(it->key == key || it->resolvedKey == key) {
-                _currentCacheBytes -= it->byteWeight;
-                releaseEntryTexture(*it);
+            if(it->key.DiscernCompareStrictReal(key) || it->src == name) {
+                _currentCacheBytes -=
+                    static_cast<std::uint32_t>(it->byteWeight);
                 it = _entries.erase(it);
             } else {
                 ++it;
@@ -758,140 +635,98 @@ namespace motion {
         return _entries.size();
     }
 
-    const SourceCache::Entry *SourceCache::findEntry(
-        const std::string &key,
-        int blendMode,
-        const std::array<std::uint32_t, 4> &packedColors) const {
-        // Legacy by-name/storage alias matching. The Android descriptor route
-        // must use loadSourceLike_0x6A7BA8 instead.
-        (void)packedColors;
-        for(const auto &entry : _entries) {
-            if((entry.key == key || entry.resolvedKey == key) &&
-               entry.blendMode == blendMode) {
-                return &entry;
-            }
-        }
-        return nullptr;
-    }
-
-    SourceCache::Entry *SourceCache::findEntry(
-        const std::string &key,
-        int blendMode,
-        const std::array<std::uint32_t, 4> &packedColors) {
-        // Legacy by-name/storage alias matching. It intentionally accepts the
-        // requested key or the placed storage key and therefore is not the
-        // Android 0x6A7BA8 tuple matcher. packedColors is carried only so this
-        // compatibility route can detect a mutable color change.
-        (void)packedColors;
+    tTJSVariant SourceCache::loadSourceLike_0x6A7BA8(
+        iTJSDispatch2 *source,
+        const tTJSVariant &key,
+        const ttstr &src,
+        tjs_int blendMode,
+        const tjs_int (&colors)[4]) {
         for(auto it = _entries.begin(); it != _entries.end(); ++it) {
-            if((it->key == key || it->resolvedKey == key) &&
+            if(it->key.DiscernCompareStrictReal(key) && it->src == src &&
                it->blendMode == blendMode) {
-                // Compatibility route: keep its historic alias-hit promotion.
-                // The production 0x6A7BA8 route promotes only on color change.
-                _entries.splice(_entries.begin(), _entries, it);
-                return &_entries.front();
-            }
-        }
-        return nullptr;
-    }
+                tTJSVariant result(it->layer);
+                if(packedColorsEqual(it->colors, colors)) {
+                    return result;
+                }
 
-    SourceCache::Entry *SourceCache::findEntryByKey(const std::string &key) {
-        for(auto it = _entries.begin(); it != _entries.end(); ++it) {
-            if(it->key == key || it->resolvedKey == key) {
-                _entries.splice(_entries.begin(), _entries, it);
-                return &_entries.front();
+                copyPackedColors(it->colors, colors);
+                bakeSourceLike_0x6A6BE0(source, *it);
+                // 0x6A80D8..0x6A8140 is std::list::push_front(copy) followed
+                // by erase(old), not splice: key/Layer/src all AddRef before
+                // the old node's src -> Layer -> key destruction chain.
+                _entries.push_front(*it);
+                _entries.erase(it);
+                return result;
             }
-        }
-        return nullptr;
-    }
-
-    SourceCache::Entry &SourceCache::ensureEntry(
-        const std::string &key,
-        const std::string &resolvedKey,
-        int blendMode,
-        const std::array<std::uint32_t, 4> &packedColors,
-        bool &inserted) {
-        if(auto *entry = findEntry(key, blendMode, packedColors)) {
-            inserted = false;
-            // This legacy alias node still keeps color mutable. The exact
-            // descriptor route implements the same invalidation independently
-            // in loadSourceLike_0x6A7BA8.
-            if(entry->packedColors != packedColors) {
-                entry->packedColors = packedColors;
-                entry->backingBitmap.reset();
-                entry->sourceObject.Clear();
-                releaseEntryTexture(*entry);
-            }
-            return *entry;
         }
 
         trimCacheBeforeInsertLike_0x6A6B08();
         Entry entry;
         entry.key = key;
-        entry.resolvedKey = resolvedKey.empty() ? key : resolvedKey;
+        entry.src = src;
         entry.blendMode = blendMode;
-        entry.packedColors = packedColors;
-        _entries.push_front(std::move(entry));
-        inserted = true;
-        return _entries.front();
+        copyPackedColors(entry.colors, colors);
+        if(iTJSDispatch2 *created = createLayerObject(_owner, _primaryLayer)) {
+            entry.layer = tTJSVariant(created, created);
+            created->Release();
+        }
+        tTJSVariant result(entry.layer);
+        bakeSourceLike_0x6A6BE0(source, entry);
+        _currentCacheBytes += static_cast<std::uint32_t>(entry.byteWeight);
+        _entries.push_front(entry);
+        return result;
     }
 
-    iTVPTexture2D *SourceCache::loadSourceLike_0x6A7BA8(
-        const Player &player,
-        const tTJSVariant &rawSource,
-        const std::string &key,
-        const std::string &src,
-        int blendMode,
-        const std::array<std::uint32_t, 4> &packedColors) {
-        for(auto it = _entries.begin(); it != _entries.end(); ++it) {
-            if(it->key == key && it->resolvedKey == src &&
-               it->blendMode == blendMode) {
-                auto &entry = *it;
-                if(entry.packedColors == packedColors) {
-                    // 0x6A8098..0x6A80D4 returns the cached Layer directly:
-                    // no source callback, retry, or list promotion occurs.
-                    return entry.sourceTexture;
-                }
+    void SourceCache::bakeSourceLike_0x6A6BE0(iTJSDispatch2 *source,
+                                              Entry &entry) {
+        {
+            ncbPropAccessor sourceAccessor(source);
+            sourceAccessor.FuncCall(0, TJS_W("drawLayer"),
+                                    &detail::drawLayerMemberHint_guess,
+                                    nullptr, entry.layer);
+        }
 
-                entry.packedColors = packedColors;
-                entry.backingBitmap.reset();
-                entry.sourceObject.Clear();
-                releaseEntryTexture(entry);
-                // 0x6A80D8..0x6A8140 invokes the source exactly once, then
-                // replaces the old list node at the front.
-                const bool baked = ensureEntryBackingBitmap(
-                    entry, &player, src, blendMode, packedColors, &rawSource,
-                    false);
-                _entries.splice(_entries.begin(), _entries, it);
-                if(!baked) {
-                    return nullptr;
-                }
-                return ensureRenderTextureForEntry(
-                    entry, &player, src, blendMode, packedColors, &rawSource,
-                    false);
+        ncbPropAccessor layer(entry.layer);
+        const tjs_int width = layer.getIntValue(TJS_W("width"), 0);
+        const tjs_int height = layer.getIntValue(TJS_W("height"), 0);
+        entry.byteWeight = 4 * width * height;
+
+        const bool software = TVPGetRenderManager()->IsSoftware();
+        applyPackedCornerTintLike_0x6A7518(
+            entry.layer, entry.colors, (entry.blendMode & 0xF0) != 0);
+
+        const tjs_int lowBlend = entry.blendMode & 0x0F;
+        if(static_cast<tjs_uint>(lowBlend - 1) < 2u &&
+           (software || !resolvePrivateMotionGLLNativeLike_0x6DE24C(
+                            entry.layer.AsObjectNoAddRef()))) {
+            ncbPropAccessor buffer(_bufLayer);
+            buffer.FuncCall(0, TJS_W("setSize"),
+                            &detail::setSizeMemberHint_guess, nullptr,
+                            tTJSVariant(width), tTJSVariant(height));
+            buffer.FuncCall(0, TJS_W("copyRect"),
+                            &detail::copyRectMemberHint_guess, nullptr,
+                            tTJSVariant(0), tTJSVariant(0), entry.layer,
+                            tTJSVariant(0), tTJSVariant(0),
+                            tTJSVariant(width), tTJSVariant(height));
+            layer.FuncCall(0, TJS_W("fillRect"),
+                           &detail::fillRectMemberHint_guess, nullptr,
+                           tTJSVariant(0), tTJSVariant(0),
+                           tTJSVariant(width), tTJSVariant(height),
+                           tTJSVariant(static_cast<tjs_int>(0xFF000000u)));
+            layer.FuncCall(0, TJS_W("operateRect"),
+                           &detail::operateRectMemberHint_guess, nullptr,
+                           tTJSVariant(0), tTJSVariant(0), _bufLayer,
+                           tTJSVariant(0), tTJSVariant(0),
+                           tTJSVariant(width), tTJSVariant(height),
+                           tTJSVariant(15));
+            if(lowBlend == 2) {
+                layer.FuncCall(0, TJS_W("adjustGamma"),
+                               &detail::adjustGammaMemberHint_guess, nullptr,
+                               tTJSVariant(1), tTJSVariant(255), tTJSVariant(0),
+                               tTJSVariant(1), tTJSVariant(255), tTJSVariant(0),
+                               tTJSVariant(1), tTJSVariant(255), tTJSVariant(0));
             }
         }
-
-        // 0x6A8148 calls the byte-budget trim before creating and baking the
-        // new Layer. The new node is inserted only after its byte weight is
-        // known, so an oversized insertion is trimmed by the next miss.
-        trimCacheBeforeInsertLike_0x6A6B08();
-        Entry entry;
-        entry.key = key;
-        entry.resolvedKey = src;
-        entry.blendMode = blendMode;
-        entry.packedColors = packedColors;
-        const bool baked = ensureEntryBackingBitmap(
-            entry, &player, src, blendMode, packedColors, &rawSource, false);
-        _currentCacheBytes += entry.byteWeight;
-        _entries.push_front(std::move(entry));
-        auto &inserted = _entries.front();
-        if(!baked) {
-            return nullptr;
-        }
-        return ensureRenderTextureForEntry(
-            inserted, &player, src, blendMode, packedColors, &rawSource,
-            false);
     }
 
     void SourceCache::trimCacheBeforeInsertLike_0x6A6B08() {
@@ -903,7 +738,8 @@ namespace motion {
             (_cacheLimitBytes * std::uint32_t{99}) / std::uint32_t{100};
         std::uint32_t keptBytes = 0;
         for(auto it = _entries.begin(); it != _entries.end();) {
-            const std::uint32_t sum = keptBytes + it->byteWeight;
+            const std::uint32_t sum = keptBytes +
+                static_cast<std::uint32_t>(it->byteWeight);
             if(static_cast<std::int32_t>(sum) <=
                static_cast<std::int32_t>(threshold)) {
                 keptBytes = sum;
@@ -911,143 +747,9 @@ namespace motion {
                 continue;
             }
 
-            _currentCacheBytes -= it->byteWeight;
-            releaseEntryTexture(*it);
+            _currentCacheBytes -=
+                static_cast<std::uint32_t>(it->byteWeight);
             it = _entries.erase(it);
-        }
-    }
-
-    iTVPTexture2D *SourceCache::ensureRenderTextureForEntry(
-        Entry &entry,
-        const Player *player,
-        const std::string &fallbackSource,
-        int blendMode,
-        const std::array<std::uint32_t, 4> &packedColors,
-        const tTJSVariant *rawSourceOverride,
-        bool allowStorageFallback) {
-        if(!ensureEntryBackingBitmap(
-               entry, player, fallbackSource, blendMode, packedColors,
-               rawSourceOverride, allowStorageFallback)) {
-            return nullptr;
-        }
-        if(entry.sourceTexture) {
-            return entry.sourceTexture;
-        }
-
-        const auto width = entry.backingBitmap->GetWidth();
-        const auto height = entry.backingBitmap->GetHeight();
-        const auto pitch = entry.backingBitmap->GetPitchBytes();
-        const auto *pixels = entry.backingBitmap->GetScanLine(0);
-        if(!pixels || pitch <= 0 || width <= 0 || height <= 0) {
-            return nullptr;
-        }
-
-        entry.sourceTexture = TVPGetRenderManager()->CreateTexture2D(
-            pixels, pitch, width, height,
-            entry.backingBitmap->Is8BPP() ? TVPTextureFormat::Gray
-                                          : TVPTextureFormat::RGBA,
-            RENDER_CREATE_TEXTURE_FLAG_ANY);
-        return entry.sourceTexture;
-    }
-
-    bool SourceCache::ensureEntryBackingBitmap(
-        Entry &entry,
-        const Player *player,
-        const std::string &key,
-        int blendMode,
-        const std::array<std::uint32_t, 4> &packedColors,
-        const tTJSVariant *rawSourceOverride,
-        bool allowStorageFallback) {
-        if(entry.backingBitmap) {
-            return entry.backingBitmap->GetWidth() > 0 &&
-                entry.backingBitmap->GetHeight() > 0;
-        }
-
-        entry.byteWeight = 0;
-        std::shared_ptr<tTVPBaseBitmap> baseBitmap;
-        const tTJSVariant &rawSource =
-            rawSourceOverride ? *rawSourceOverride : entry.rawSource;
-        // SourceCache_loadSource @0x6A7BA8 calls the raw source facade's
-        // drawLayer(bufLayer). ObjSource_drawLayer @0x69D6D8 owns PSB pixel
-        // decoding; SourceCache only snapshots that temporary Layer before the
-        // 0x6A6BE0 color bake.
-        if(rawSource.Type() == tvtObject &&
-           rawSource.AsObjectNoAddRef() &&
-           _bufLayer.Type() == tvtObject && _bufLayer.AsObjectNoAddRef()) {
-            tTJSVariant bufferArg(_bufLayer);
-            tTJSVariant *args[] = { &bufferArg };
-            if(TJS_SUCCEEDED(rawSource.AsObjectNoAddRef()->FuncCall(
-                   0, TJS_W("drawLayer"), nullptr, nullptr, 1, args,
-                   rawSource.AsObjectNoAddRef()))) {
-                if(auto *bufferLayer =
-                       resolveNativeLayer(_bufLayer.AsObjectNoAddRef())) {
-                    if(auto *image = bufferLayer->GetMainImage();
-                       image && image->GetWidth() > 0 &&
-                       image->GetHeight() > 0) {
-                        baseBitmap = cloneBitmap32(*image);
-                    }
-                }
-            }
-        }
-
-        // ResourceManager_findSource @0x6AAB3C returns a plain dictionary for
-        // blank/W:H:X:Y. It intentionally has no ObjSource.drawLayer method.
-        if(!baseBitmap && rawSource.Type() == tvtObject) {
-            tTJSVariant blankValue;
-            tTJSVariant widthValue;
-            tTJSVariant heightValue;
-            if(getObjectProperty(rawSource, TJS_W("blank"), blankValue) &&
-               static_cast<tjs_int>(blankValue) != 0 &&
-               getObjectProperty(rawSource, TJS_W("width"), widthValue) &&
-               getObjectProperty(rawSource, TJS_W("height"), heightValue)) {
-                const auto width = static_cast<tjs_int>(widthValue);
-                const auto height = static_cast<tjs_int>(heightValue);
-                if(width > 0 && height > 0) {
-                    baseBitmap = std::make_shared<tTVPBaseBitmap>(
-                        static_cast<tjs_uint>(width),
-                        static_cast<tjs_uint>(height), 32);
-                    baseBitmap->Fill(tTVPRect(0, 0, width, height), 0);
-                }
-            }
-        }
-
-        // Non-PSB source names remain ordinary storage graphics. This is the
-        // platform storage boundary after the raw ResourceManager lookup, not
-        // a decoded MotionSnapshot alias graph.
-        if(!baseBitmap && allowStorageFallback) {
-            const ttstr path = detail::widen(
-                entry.resolvedKey.empty() ? key : entry.resolvedKey);
-            baseBitmap = loadGraphicBitmap(path);
-        }
-        if(!baseBitmap || baseBitmap->GetWidth() <= 0 ||
-           baseBitmap->GetHeight() <= 0) {
-            return false;
-        }
-
-        const bool useHalfAlphaTint = (blendMode & 0xF0) == 0x10;
-        const bool needsTint =
-            !packedColorsAreDefault(packedColors[0], packedColors[1],
-                                    packedColors[2], packedColors[3]) &&
-            !packedColorsAreOpaqueWhite(packedColors[0], packedColors[1],
-                                        packedColors[2], packedColors[3]);
-        if(needsTint) {
-            entry.backingBitmap = cloneBitmap32(*baseBitmap);
-            applyPackedCornerTintLike_0x6A7518(*entry.backingBitmap,
-                                              packedColors,
-                                              useHalfAlphaTint);
-        } else {
-            entry.backingBitmap = baseBitmap;
-        }
-        entry.byteWeight = std::uint32_t{4} *
-            static_cast<std::uint32_t>(entry.backingBitmap->GetWidth()) *
-            static_cast<std::uint32_t>(entry.backingBitmap->GetHeight());
-        return true;
-    }
-
-    void SourceCache::releaseEntryTexture(Entry &entry) {
-        if(entry.sourceTexture) {
-            entry.sourceTexture->Release();
-            entry.sourceTexture = nullptr;
         }
     }
 

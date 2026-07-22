@@ -10,9 +10,13 @@ metadata:
 **纠正结论：二进制中是 `class ResourceManager : public SourceCache`，不是两个完全无关的类，也不是“同一个 NCB 类”。** `ResourceManager_ctor @0x6A88CC` 在同一 `this` 上先调 `SourceCache_ctor @0x6A78F4`，再构造派生字段。本地现已恢复 public 继承。
 
 ## RM/SourceCache 实例字段布局(单一类)
-- +40  ttstr  bufLayer (NCB property `bufLayer`, getter @0x6A84FC 直接返回 ttstr at +40)
-- +60  int    layer-list LRU/size counter
-- +72/+80  **doubly-linked list head** (空时 *(this+72)==this+72)。SourceCache layer-image 缓存。node 布局:[0]next [1]prev,[+8](=node+2 qword) key ttstr,[+16]blendMode,[+17..+20]color[4],[+36]Layer variant,[+56](=node[7])src ttstr,[+84]width-like。匹配键严格为 `(key ttstr, src ttstr, blendMode)`；color 命中后另行比较。loadSource/clearCache/evictLRU 操作此 list
+- +40  tTJSVariant bufLayer (NCB property `bufLayer`, getter @0x6A84FC CopyRef)
+- +60  uint32 current cache bytes；+64 uint32 cache byte limit
+- +72/+80 are the libstdc++ sentinel links of SourceCache's source-level
+  `std::list<Entry>`, not a hand-written intrusive container. Entry semantic
+  order is full Variant key, Layer Variant, src ttstr, blendMode, color[4],
+  byteWeight. Match identity is strict `(full Variant key, src, blendMode)`;
+  color is compared separately.
 - +88/+96  **outer std::unordered_map**: key=模块 context/path `ttstr`；mapped record 声明顺序为 `PSBFile` + Win 纹理表 + KRKR descriptor 表。构造证据 `sub_6EBCFC @0x6EBCFC`，析构证据 `sub_6DB3E8 @0x6DB3E8`。
 - +104/+112 是同一 libstdc++ unordered_map 的 global node chain/element count，不是独立第二容器。
 - +136  HashMap A 的 inline first-bucket sentinel(`if(v7 && this+136!=v7) delete`)
@@ -31,16 +35,16 @@ bucket = h % bucketCount
 
 ## RM 方法地址(全部重命名完毕)
 - load(loadResource)  `ResourceManager_loadResource`(原名保留) — HashMap A 命中即返回;miss 则 sub_598538 打开 PSB → 校验 id=="motion"/spec(krkr|win)/version<=3.03 → 存入 HashMap A
-- loadSource(SourceCache) `Motion_ResourceManager_loadSource@0x6A7BA8` — 读 descriptor-dispatch 的 key/src/blendMode/color[4]，在 +72 list 按 `(key,src,blendMode)` 命中复用 Layer；color mismatch 或 miss 才把独立 source object 交给 `sub_6A6BE0` 重烘焙，LRU 用 +60
-- clearCache  `@0x6A8438` — 只清 +72 layer-list(每个 Layer vtable+112 释放image),不碰 hashmap
-- bufLayer getter `@0x6A84FC` — return ttstr@+40
+- loadSource(SourceCache) `Motion_ResourceManager_loadSource@0x6A7BA8` — 读 descriptor-dispatch 的 full-Variant key/src/blendMode/color[4]，在 +72 std::list 按 `(key,src,blendMode)` 命中复用 Layer；color mismatch 或 miss 才把借用 source object 交给 `sub_6A6BE0` 重烘焙，+60 是 current byte count（不是 LRU counter）
+- clearCache  `@0x6A8438` — 每个 Layer dispatch `Invalidate(self)`，清 list，current bytes=0；不碰 hashmap
+- bufLayer getter `@0x6A84FC` — CopyRef Layer Variant@+40
 - unload      `@0x6A959C` — HashMap A erase(sub_6EBF2C)
 - unloadAll   `@0x6A8B94`(IDA误并入 loc_6A8CF8) — 清 +104 list、memset HashMap A buckets、Rb_tree erase、+144 ttstr、+72 layer-list 全清
 - findSource  `@0x6AAB3C` — split name by "/",前缀须=="src"；从 mapped record 的 raw root 导航 `source/group/icon/name`，fixed key strict、dynamic key has+strict；命中后构造 ObjSource(operator new 0x18，字段为 raw owner/node pair + lazy texture)，再以 sticky=false/err=false 创建 adaptor；adaptor 失败只返回 void，不回收新 ObjSource
 - findMotion  `@0x6A9ED4` — HashMap A by motion-name → dict["object"][name]["motion"][label],拷进 caller 的 vector(20B元素)。也 fallback 走 +104 list
 - isExistMotion `@0x6A96F8` — 同 findMotion 的存在性版本,先 HashMap A 后 +104 list
 - random      `@0x6AB56C` — 无关(KAG.random PropGet)
-- evictLRU    `@0x6A6B00`(guess) — loadSource 调,按 99%/lru 清 layer-list
+- trim        `@0x6A6B08` — current>limit 时按 99% 阈值做 greedy subsequence 扫描，不是连续 prefix/LRU cut
 
 ## Motion_Player_findSource @0x6948E8(Player 上的 findSource,非 RM 的)
 - 签名:`(out* a1, Player* a2, ttstr** a3=name, ttstr** a4=icon/2nd-name)`
@@ -66,4 +70,4 @@ bucket = h % bucketCount
 4. RM 继承面、unloadAll/isExistMotion/findMotion/findSource/random NCB 表面已恢复；各方法体继续按独立证据审计。
 5. 2026-07-19 后续纠正：Win/spec=2、KRKR/spec=1 以及非 atlas ObjSource 均已直接消费 `LoadedResourceRecord::file` raw nodes；这些 named raw 导航站点与 ObjSource 生命周期已对齐，整页上传是单独的 Web API 边界，但该结论不再外推为完整 source 调用链关闭。
 6. 2026-07-23 再纠正：`sub_695DE8@0x695DE8` 有 Player 与 `sub_6F1060@0x6F1060` 两个调用者；prepared item 在 `sub_6C2334@0x6C360C` 保存持久 `SourceState*`，`sub_6ADFBC@0x6AE154..0x6AE188` 在纹理 getter 后从该 alias 重读 rect。本地旧快照链被证伪，现恢复共享 helper、直接 alias、现场 rect、atlas `{x,y,right,bottom}`、right-left/bottom-top 尺寸、单 scratch/未初始化 size 槽及 pal/non-pal 分支内重复 lookup。旧“Win/KRKR 整链 CLOSED”只能说明 raw owner/map 迁移阶段，不再作为全局裁决。
-7. 同轮继续区分两个 type-erased getter：`0x6D5C68` 用 `sub_6F67CC` 只读现有 texture，`0x6ADE24` 才用 `sub_6F1060`；`0x6F1060` 与 Private `0x6DE738` 的 fallback 均把调用后的 `SourceState.object` 直接交给 `0x6C1B70`。生产 item 路径已按 `(commandKey,commandSrc,blendMode)` 精确匹配、只在 bake 期间借用 object，并禁止把 module key 当存储路径；通用 NCB/by-name facade 仍是 legacy alias 路径，不能据此宣称整个 SourceCache 已闭合。
+7. 同轮继续区分两个 type-erased getter：`0x6D5C68` 用 `sub_6F67CC` 只读现有 texture，`0x6ADE24` 才用 `sub_6F1060`；`0x6F1060` 与 Private `0x6DE738` 的 fallback 均把调用后的 `SourceState.object` 直接交给 `0x6C1B70`。2026-07-23 后续已恢复 Player 常驻 descriptor/color Dictionaries 与继承 NCB `(source,descriptor)` 调用链；Web-only `Player.loadSource(name)` 是独立额外兼容 helper，不再被误称为 NCB alias 实现。

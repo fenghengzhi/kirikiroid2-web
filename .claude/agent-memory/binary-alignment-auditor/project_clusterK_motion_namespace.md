@@ -29,7 +29,7 @@ PrivateMotionGLL @0x6dd284: real NCB class (ctor delegating @0x6de24c + setSize/
 
 2026-07-19 correction: this cross-cutting diagnosis is superseded. RM public
 inheritance, outer mapped record, Win/KRKR nested maps, and texture ownership are
-restored. `SourceCache` layer LRU and `Player_findSource` resource maps are distinct
+restored. `SourceCache` byte-budgeted std::list and `Player_findSource` resource maps are distinct
 chains. Win/KRKR and ObjSource now navigate raw `PSBRawNode`; the former decoded
 `MotionSnapshot` side graph no longer participates. Only KRKR's one-shot full-page
 upload is retained as a concrete Web rendering API boundary.

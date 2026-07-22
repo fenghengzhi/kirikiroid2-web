@@ -59,7 +59,7 @@ Local counterpart: **NO 1:1 function.** `SourceCache::findSource` (SourceCache.c
 
 Architecture verdict (2026-07-18 corrected): 🔧 PARTIAL. ResourceManager public
 inheritance and each outer-map mapped record's Win/KRKR maps, AddRef/Release ownership,
-reverse destruction and unload lifetime are restored. SourceCache's layer LRU is a
+reverse destruction and unload lifetime are restored. SourceCache's byte-budgeted list is a
 different cache chain and must not be used to characterize Player_findSource's current
 topology. The remaining gap is that pixel metadata/resources are still reached through
 the decoded `MotionSnapshot` side graph instead of raw `PSBRawNode` navigation.
@@ -127,8 +127,10 @@ findSource/0x6948e8). Its layer-list implementation is a separate audit item; it
 does not describe the now-restored per-resource Win/KRKR maps.
 
 ### ObjSource (binary @0x69ccb8) — members: constructor(sub_6E3BC8 base), prop originX RO(sub_69D014), originY RO(sub_69D0D8), width RO(sub_69D19C), height RO(sub_69D27C), clip RO(sub_69D35C), method drawLayer(sub_69D6D8).  [7 members]
-Local (main.cpp:33): `NCB_REGISTER_SUBCLASS_DELAY(ObjSource){ NCB_CONSTRUCTOR(()); }` — **only constructor.**
-Verdict: ❌ MISSING 6 members: originX, originY, width, height, clip (RO props), drawLayer (method). Local ObjSource (SourceCache.h:116) has key/src/blendMode/color getters but they are NOT registered and don't match binary's origin/size/clip/drawLayer shape.
+**Superseding correction (2026-07-19):** this historical local verdict is no
+longer true. ObjSource now owns the exact raw PSB owner/node pair plus lazy
+texture and registers originX/originY/width/height/clip/drawLayer. The former
+key/src/blendMode/color facade was deleted.
 
 ### ResourceManager (binary @0x6ab8bc) — 13 members:
 constructor(base), loadSource(sub_6A7BA8), clearCache(sub_6A8438), bufLayer RO(sub_6A84FC), load(ResourceManager_loadResource), unload(sub_6A959C), unloadAll(loc_6A8CF8), isExistMotion(sub_6A96F8), findMotion(sub_6A9ED4), findSource(sub_6AAB3C), random(sub_6AB56C), requireLayerId(sub_6AB694), releaseLayerId(sub_6AB750).
@@ -136,7 +138,10 @@ Local (main.cpp:307): constructor, load, loadSource, unload, clearCache, findSou
 Verdict: ❌ member-set divergence:
   - MISSING in local: **bufLayer**(RO prop), **unloadAll**, **isExistMotion**, **findMotion**, **random**.
   - EXTRA/non-binary in local: setEmotePSBDecryptSeed, setEmotePSBDecryptFunc (static) — not in this binary registrar (verify they belong elsewhere; otherwise spurious).
-  - Note binary ResourceManager shares loadSource/clearCache/bufLayer impls with SourceCache (same sub addrs) — ResourceManager IS-A/embeds the source-cache surface. Local splits them across two unrelated classes with different containers.
+  - **Superseding correction (2026-06-07/2026-07-23):** local ResourceManager now
+    publicly inherits SourceCache and reuses the same registered methods. The
+    source cache is `std::list<Entry>`; old “unrelated classes/different
+    containers” and “intrusive LRU” descriptions are obsolete.
 
 ### Point (binary @0x690fbc) — members: constructor, type RO(sub_691248), contains(Player_hitTest!), x RO(sub_691250), y RO(sub_691258).  [5]
 Local (main.cpp:36): constructor, type RO, contains, x RO, y RO. ✅ member set MATCHES.
@@ -169,7 +174,7 @@ Verdict: 🔧 architectural divergence. Binary PrivateMotionGLL is a real regist
 | K-7 | motionplayer_ncb_register @0x6d9b08 | main.cpp:285-286,331-378,420 | P1 ⚠️ | doAlphaMaskOperation/getD3DAvailable & MaskModeStencil/Alpha belong on Motion namespace not Player/D3DEmoteModule; Player subclass order/registration diverges |
 | K-8 | Point_ncb_registerMembers @0x690fbc | SourceCache.h:145 | P2 ⚠️ | `contains` = Player_hitTest in binary; local returns false stub (member set otherwise matches) |
 | K-9 | PrivateMotionGLL_CreateClass @0x6dd284 | PrivateMotionGLL.h | P2 🔧 | Binary is a registered TJS class (setSize/visible/absolute + delegating ctor); local has no class, uses free fns + std::vector |
-| K-10 | SourceCache loadSource impl | SourceCache.cpp | P1 🔧 | Separate layer-LRU chain; continue auditing against sub_6A7BA8, independently of Player_findSource's restored mapped-record texture maps |
+| K-10 | SourceCache loadSource impl | SourceCache.cpp | ✅ named chain aligned 2026-07-23 | `std::list<Entry>`; full Variant key+src+blend identity, mutable color, node copy/erase, greedy byte trim, exact descriptor bridge. This remains independent of Player_findSource's mapped-record texture maps. |
 
 ## MISSING (no local counterpart)
 - Motion_doAlphaMaskOperation full body (shader cache + CPU pixel loops + fillRect-border passes).

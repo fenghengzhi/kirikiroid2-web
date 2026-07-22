@@ -70,38 +70,29 @@ namespace motion {
     // R-M9 Phase 1 scaffolding (M9 spike 2026-05-31; architecture confirmed
     // 2026-06-03 by full findSource-chain decompile, cluster K):
     //
-    // PLATFORM_BOUNDARY (phase D parked) — color-consumer LOCATED 2026-06-03
-    // (fresh decompile of the full draw->color chain):
-    //
-    // The 4-corner color consumer is now found — it is NOT per-vertex vertex
-    // color. The chain is:
+    // 2026-07-23 corrected 4-corner color chain:
     //   1. Anchor 0x6C0528 damps + writes the 4 corner RGBA quads to
     //      node+100/104/108/112.
     //   2. 0x6C7440 @0x6c7944 (and identically 0x6C4E28 @0x6c5528) writes those
-    //      4 colors as index-properties 0..3 onto the source-resolver object
-    //      player+716 (via vtbl+56). They are NOT passed to any draw primitive.
-    //   3. Source resolver 0x6C1B70 reads them back into v41[0..3] and calls
-    //      sub_6A7518(v41, bitmap, &dstRect, (blendMode&0xF0)==16).
-    //   4. sub_6A7518 = per-PIXEL 4-corner bilinear gradient MULTIPLY baked into
-    //      the source bitmap (divisor 128 if default-blend (a4&1) else 255); a
-    //      hasGPUAccel branch does the same bake on the locked GPU texture.
+    //      4 colors as index-properties 0..3 onto Player's persistent color
+    //      Dictionary at +716; +676 is the descriptor Dictionary and +656 is
+    //      a ResourceManager dispatch owner.
+    //   3. Source resolver 0x6C1B70 calls the ResourceManager dispatch's
+    //      inherited loadSource(source, descriptor) method.
+    //   4. sub_6A7518 returns for neutral/white colors. Its software branch
+    //      performs the per-pixel bilinear multiply (RGB /128 or /255, alpha
+    //      always /255); its GPU branch only queries and discards the
+    //      PrivateMotionGLL native instance.
     // After the bake the texture is drawn with positions + single blendMode +
     // single opacity only (the vertex builder sub_6C715C appends only (x,y)
     // pairs, tTJSVariant type 5, 20B stride; 0x6C7440/0x6C4E28 carry NO
     // color/opacity/rgba scalar to any operate*/copy primitive).
     //
-    // The port is FAITHFUL to this mechanism, NOT a parked deviation: the local
-    // render stack exposes color only as a single scalar RGBA (no per-vertex),
-    // and SourceCache::applyPackedCornerTintLike_0x6A7518 (SourceCache.cpp:82)
-    // reproduces the per-pixel bilinear bake incl. the 128/255 divisor, keyed by
-    // (name, blendMode, packedColors[4]) (SourceCache.cpp:489 == 0x6C1B70). So
-    // the earlier "per-vertex vertex colors" justification was WRONG in
-    // mechanism (corrected), but the single-scalar-RGBA platform boundary itself
-    // is genuine and is justified by this located consumer (sub_6A7518 per-pixel
-    // bake), not by findSource. The texture-cache topology and lifetime are now
-    // restored on each LoadedResourceRecord; both Win/spec=2 and KRKR/spec=1
-    // now read the record's raw PSBRawNode graph. The former decoded
-    // MotionSnapshot helper was removed with the compatibility subsystem.
+    // SourceCache now mirrors this exact branch split and uses std::list<Entry>
+    // identity `(full Variant key, src, blendMode)`; color is mutable payload,
+    // not part of the key. This is original behavior, not a platform-boundary
+    // approximation. The separate Win/KRKR texture-map topology and lifetime
+    // remain owned by each LoadedResourceRecord.
     // Binary libkrkr2.so ResourceManager (0xE8 bytes, NCB registered at 0x6AB8BC)
     // exposes 12 TJS members and holds 3 internal containers + bufLayer +
     // spec int. CORRECTION 2026-07-18: the earlier phase-1 note that these
@@ -122,7 +113,7 @@ namespace motion {
     //        * RM ctor sub_6A88CC @0x6A88CC first invokes SourceCache ctor
     //          sub_6A78F4 on the base subobject. That constructor retains the
     //          owner, creates primary/buffer Layers, stores the byte budget and
-    //          initializes the intrusive cache list; only then does RM initialize
+    //          initializes the std::list cache; only then does RM initialize
     //          its module map, RandomGenerator, layer-id set/counter and spec.
     //        * sub_6A78F4 (SourceCache ctor) is called from EXACTLY ONE site —
     //          0x6a88f8 inside the RM ctor (xrefs_to confirmed). There is NO
@@ -136,7 +127,7 @@ namespace motion {
     //          method-sharing). bufLayer getter @0x6A84FC reads `a1+40`, the
     //          SourceCache base Layer variant.
     //      So `RM : public SourceCache` makes RM's loadSource/clearCache/bufLayer
-    //      run on the inherited SourceCache base state (+72 layer-list etc).
+    //      run on the inherited SourceCache base state (+72 std::list etc).
     //      Player+656 is NOT a separate SourceCache: Player ctor @0x6CED30 copies
     //      the SAME RM dispatch into +636/+656/+992 (sub_A0F5E0 each) — three
     //      refs to one ResourceManager-which-IS-A-SourceCache. Restored in the
@@ -150,9 +141,10 @@ namespace motion {
     //      no tTJSVariant dispatch owner exists inside ObjSource.
     // ------------------------------------------------------------------
 
-    // C-1 (2026-06-07): the binary's RM +72/+80 intrusive layer-list is the
-    // SourceCache BASE subobject's list (SourceCache::_entries, ctor sub_6A78F4
-    // head/tail sentinel @+72/+80). It is NOT an RM-own container — the former
+    // C-1 (2026-07-23 correction): the binary's RM +72/+80 links are the
+    // libstdc++ std::list sentinel inside the SourceCache BASE subobject
+    // (SourceCache::_entries, ctor sub_6A78F4). They are NOT evidence of a
+    // hand-written intrusive source container and are not an RM-own container. The former
     // RM-local `SourceCacheEntry` + `_sourceCacheList` placeholder was the
     // pre-inheritance two-class split and is removed; the inherited
     // SourceCache::_entries (SourceCache.h) serves it.
@@ -163,14 +155,13 @@ namespace motion {
     // registrar @0x6AB8BC re-lists the SourceCache base members loadSource /
     // clearCache / bufLayer with the SAME callback addresses sub_6A7BA8 /
     // sub_6A8438 / sub_6A84FC that SourceCache registrar @0x6A85A8 binds).
-    // The inherited loadSource(tTJSVariant,tTJSVariant) / clearCache() /
+    // The inherited loadSource(iTJSDispatch2*,iTJSDispatch2*) / clearCache() /
     // getBufLayer() serve the RM NCB bindings, so the former RM-own
     // overrides (loadSource(ttstr)->load forward, clearCache()->module-map clear,
     // getBufLayer()->ttstr) are removed — they were the pre-inheritance
-    // two-class artifacts. The local generic loadSource body is still a
-    // by-name facade rather than Android's `(source, descriptor) -> Layer`
-    // boundary; the exact tuple is currently restored only on the production
-    // prepared-item route.
+    // two-class artifacts. The inherited NCB method now preserves Android's
+    // `(source, descriptor) -> Layer` boundary; Player's legacy by-name helper
+    // is a separate Web compatibility surface and does not populate this list.
     class ResourceManager : public SourceCache {
     public:
         ResourceManager();
@@ -243,7 +234,7 @@ namespace motion {
         // --- R-M9 Phase 1 binary-aligned scaffolding (empty in phase 1) ---
 
         // C-1 (2026-06-07): the binary RM +40 bufLayer (Layer variant) and the
-        // +72/+80 intrusive layer-list both belong to the SourceCache BASE
+        // +72/+80 std::list sentinel links both belong to the SourceCache BASE
         // subobject — now INHERITED (SourceCache::_bufLayer / SourceCache::_entries,
         // SourceCache.h). The former RM-own `ttstr _bufLayer` + `std::list<
         // SourceCacheEntry> _sourceCacheList` placeholders were the

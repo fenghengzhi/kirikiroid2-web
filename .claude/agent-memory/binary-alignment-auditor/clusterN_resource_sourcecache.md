@@ -72,17 +72,20 @@ branch-local resource lookups, try-pal, and the single scratch/size-slot behavio
 The two common-render callers do not share one getter: `0x6D5C68` supplies
 `sub_6F67CC` (direct current texture), whereas `0x6ADE24` supplies `sub_6F1060`.
 The latter and Private `0x6DE738` both send the post-atlas `SourceState.object`
-through `0x6C1B70`; the production local route now uses exact
-`(commandKey,commandSrc,blendMode)` identity and never treats that descriptor key
-as a storage path. The generic NCB/by-name facade remains a documented open
-source-structure difference.
+through `0x6C1B70`; the local route now writes Player's persistent descriptor and
+color Dictionaries and invokes the inherited NCB
+`loadSource(source,descriptor)`. The separate Web-only `Player.loadSource(name)`
+helper remains extra compatibility code, but it is not the NCB method and does
+not create an alias cache topology.
 
 `trim@0x6A6B08` further proves the cache-size boundary: a miss trims only when
-current bytes exceed the limit, retaining the newest prefix up to
-`(limit*99)/100`; the new node then stores `4*width*height`, increments current
-bytes and is inserted at the front. Same-color hits do not move; only a color
-mismatch rebakes and moves to the front. Local production routing now preserves
-that ordering and `clearCache@0x6A8438` resets current bytes to zero.
+current bytes exceed the limit. It scans newest-to-oldest and independently
+keeps an entry when signed `(kept+weight) <= uint32(limit*99/100)`, so the result
+is a greedy subsequence rather than necessarily a prefix. The new node then
+stores `4*width*height`, increments current bytes and is inserted at the front.
+Same-color hits do not move; a color mismatch rebakes the same Layer and uses
+`push_front(copy)+erase(old)`. `clearCache@0x6A8438` dispatch-invalidates each
+Layer and resets current bytes to zero.
 
 ## Common port pattern in this cluster
 Binary mapped record declaration order is PSBFile, Win texture map, KRKR descriptor

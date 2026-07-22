@@ -93,7 +93,9 @@ namespace motion {
     //   arrives from above (EmoteObject wraps the native RM via sub_67E20C and
     //   flows it down; child Players inherit the canonical RM owner). The
     //   binary retains the SAME dispatch pointer in three independent Variants
-    //   (sub_A0F5E0, each AddRef'd); local Player does the same. Player no longer
+    //   (sub_A0F5E0, each AddRef'd); local Player does the same. It also creates
+    //   one persistent source descriptor Dictionary and one persistent color
+    //   Dictionary between the second and third RM owners. Player no longer
     //   creates its own RM nor owns one by value; the native is reached via
     //   nativeRM(). parentPlayer is set post-construct
     //   (binary child+8=parent @0x6b43dc).
@@ -116,12 +118,23 @@ namespace motion {
         // its SourceCache base; no standalone SourceCache exists.
         _sourceCacheNative = nativeRM();
         // Player_ctor @0x6CED30 creates the render descriptor/color objects at
-        // 0x6CF014..0x6CF080. Their source-level payload is carried locally by
-        // PreparedRenderItem and consumed by the 0x6C1B70/0x6A7BA8 route. The
-        // random generator is owned by ResourceManager_ctor @0x6A88CC; Player
-        // does not create or own another generator. The missing persistent TJS
-        // descriptor/color object topology remains a tracked source-structure
-        // gap; it must not be disguised as a Player RNG field.
+        // 0x6CF014..0x6CF080, then assigns descriptor.color = colors. Every
+        // 0x6C1B70 call mutates these same objects before dispatching
+        // ResourceManager.loadSource(source, descriptor).
+        iTJSDispatch2 *descriptor = TJSCreateDictionaryObject();
+        _sourceDescriptor = tTJSVariant(descriptor, descriptor);
+        descriptor->Release();
+
+        iTJSDispatch2 *colors = TJSCreateDictionaryObject();
+        _sourceColors = tTJSVariant(colors, colors);
+        colors->Release();
+
+        descriptor = _sourceDescriptor.AsObjectNoAddRef();
+        (void)descriptor->PropSet(
+            TJS_MEMBERENSURE, TJS_W("color"),
+            &detail::colorMemberHint_guess, &_sourceColors, descriptor);
+        // The random generator is owned by ResourceManager_ctor @0x6A88CC;
+        // Player does not create or own another generator.
     }
 
     // P3-B: dispatch->native unpack. Binary findSource @0x694928 takes the +636

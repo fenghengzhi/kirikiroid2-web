@@ -7,11 +7,9 @@
 //
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <list>
-#include <memory>
 #include <string>
 #include <utility>
 
@@ -37,22 +35,21 @@ namespace motion {
     // Aligned to libkrkr2.so SourceCache:
     //   0x6A78F4 constructor stores owner/primaryLayer/bufLayer/list state.
     //   0x6A7BA8 loadSource scans a list cache before materializing a Layer.
-    //   0x6A8438 clearCache releases cached layer image entries.
+    //   0x6A8438 clearCache dispatch-invalidates cached Layers and clears list state.
     //   0x6A84FC bufLayer returns the cached bufLayer variant.
     class SourceCache {
     public:
         struct Entry {
-            std::string key;
-            std::string resolvedKey;
-            int blendMode = 0;
-            std::array<std::uint32_t, 4> packedColors{
-                0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u
-            };
-            tTJSVariant rawSource;
-            tTJSVariant sourceObject;
-            std::shared_ptr<tTVPBaseBitmap> backingBitmap;
-            iTVPTexture2D *sourceTexture = nullptr;
-            std::uint32_t byteWeight = 0;
+            // SourceCache_loadSource @0x6A7BA8 and the std::list node copier
+            // @0x6EAC60 establish this exact source-level payload order.  ARM64
+            // byte offsets are ABI evidence only and intentionally stay out of
+            // the compiled type.
+            tTJSVariant key;
+            tTJSVariant layer;
+            ttstr src;
+            tjs_int blendMode;
+            tjs_int colors[4];
+            tjs_int byteWeight;
         };
 
         SourceCache();
@@ -61,73 +58,34 @@ namespace motion {
 
         void setLayerOwner(tTJSVariant owner);
 
-        tTJSVariant loadSource(tTJSVariant keyOrSource, tTJSVariant currentSource);
+        tTJSVariant loadSource(iTJSDispatch2 *source,
+                               iTJSDispatch2 *descriptor);
         tTJSVariant loadSourceByName(const Player *player,
                                      const ttstr &name,
                                      const tTJSVariant &currentSource);
-        tTJSVariant loadRenderSourceByName(
-            const Player &player,
-            const ttstr &name,
-            const tTJSVariant &currentSource,
-            int blendMode,
-            const std::array<std::uint32_t, 4> &packedColors,
-            iTJSDispatch2 *layerTreeOwnerObject,
-            iTJSDispatch2 *parentLayerObject);
-        iTVPTexture2D *loadRenderSourceTextureByName(
-            const Player &player,
-            const ttstr &name,
-            const tTJSVariant &currentSource,
-            int blendMode,
-            const std::array<std::uint32_t, 4> &packedColors);
+        tTJSVariant loadRenderSourceLayerFromItemLike_0x6C1B70(
+            Player &player,
+            const detail::PreparedRenderItem &item);
         iTVPTexture2D *loadRenderSourceTextureFromItemLike_0x6C1B70(
-            const Player &player,
+            Player &player,
             detail::PreparedRenderItem &item);
         iTVPTexture2D *loadRenderSourceTextureForItemLike_0x6F1060(
-            const Player &player,
+            Player &player,
             detail::PreparedRenderItem &item);
         void clearCache();
         void eraseSource(ttstr name);
         tTJSVariant getBufLayer() const;
         std::size_t size() const;
 
-        const Entry *findEntry(const std::string &key,
-                               int blendMode,
-                               const std::array<std::uint32_t, 4> &packedColors) const;
-
     private:
-        Entry *findEntry(const std::string &key,
-                         int blendMode,
-                         const std::array<std::uint32_t, 4> &packedColors);
-        Entry *findEntryByKey(const std::string &key);
-        Entry &ensureEntry(const std::string &key,
-                           const std::string &resolvedKey,
-                           int blendMode,
-                           const std::array<std::uint32_t, 4> &packedColors,
-                           bool &inserted);
-        iTVPTexture2D *loadSourceLike_0x6A7BA8(
-            const Player &player,
-            const tTJSVariant &rawSource,
-            const std::string &key,
-            const std::string &src,
-            int blendMode,
-            const std::array<std::uint32_t, 4> &packedColors);
+        tTJSVariant loadSourceLike_0x6A7BA8(
+            iTJSDispatch2 *source,
+            const tTJSVariant &key,
+            const ttstr &src,
+            tjs_int blendMode,
+            const tjs_int (&colors)[4]);
+        void bakeSourceLike_0x6A6BE0(iTJSDispatch2 *source, Entry &entry);
         void trimCacheBeforeInsertLike_0x6A6B08();
-        iTVPTexture2D *ensureRenderTextureForEntry(
-            Entry &entry,
-            const Player *player,
-            const std::string &fallbackSource,
-            int blendMode,
-            const std::array<std::uint32_t, 4> &packedColors,
-            const tTJSVariant *rawSourceOverride,
-            bool allowStorageFallback);
-        bool ensureEntryBackingBitmap(Entry &entry,
-                                      const Player *player,
-                                      const std::string &key,
-                                      int blendMode,
-                                      const std::array<std::uint32_t, 4> &packedColors,
-                                      const tTJSVariant *rawSourceOverride,
-                                      bool allowStorageFallback);
-        void releaseEntryTexture(Entry &entry);
         tTJSVariant loadRawSourceVariant(const Player *player,
                                          const ttstr &name,
                                          std::string &resolvedKey) const;
@@ -153,9 +111,11 @@ namespace motion {
     // navigates module["source"][group]["icon"][icon] and wraps the resulting
     // sub-dict in this facade via ncbInstanceAdaptor<ObjSource>::CreateAdaptor
     // (mirrors operator new(0x18) + sub_6EC124). Player_findSource @0x6948E8
-    // and the production 0x6C1B70 -> 0x6A7BA8 route consume this same facade;
-    // the generic local NCB loadSource remains a documented by-name gap. There
-    // is no decoded MotionSnapshot image side path in SourceCache.
+    // and the production 0x6C1B70 -> 0x6A7BA8 route consume this same facade.
+    // The inherited NCB loadSource has the exact `(source,descriptor)` boundary;
+    // the separate Player by-name helper is Web compatibility code and does not
+    // create a second cache topology. There is no decoded MotionSnapshot image
+    // side path in SourceCache.
     class ObjSource {
     public:
         ObjSource() = default;

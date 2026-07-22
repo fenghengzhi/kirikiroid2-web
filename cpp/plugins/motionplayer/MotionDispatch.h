@@ -47,6 +47,18 @@ namespace motion::detail {
     extern tjs_uint32 typeMemberHint_guess;                // 0x1AB8124, "type"
     extern tjs_uint32 meshMemberHint_guess;                // 0x1AB8188, "mesh"
 
+    // SourceCache_loadSource/bake @0x6A7BA8/@0x6A6BE0 and Player's
+    // descriptor bridge @0x6C1B70. These are distinct process-wide mutable
+    // hint slots in libkrkr2.so even where another call site uses the same
+    // literal member name.
+    extern tjs_uint32 loadSourceMemberHint_guess;  // 0x1AB8444, "loadSource"
+    extern tjs_uint32 drawLayerMemberHint_guess;   // 0x1AB82C0, "drawLayer"
+    extern tjs_uint32 setSizeMemberHint_guess;     // 0x1AB82C4, "setSize"
+    extern tjs_uint32 copyRectMemberHint_guess;    // 0x1AB82C8, "copyRect"
+    extern tjs_uint32 operateRectMemberHint_guess; // 0x1AB82CC, "operateRect"
+    extern tjs_uint32 adjustGammaMemberHint_guess; // 0x1AB82D0, "adjustGamma"
+    extern tjs_uint32 fillRectMemberHint_guess;    // 0x1AB8270, "fillRect"
+
     // sub_697D34 @0x697D34. The input is a source-level ttstr value copied
     // into a mutable remainder; each separator-delimited prefix is pushed as
     // an independently owning ttstr and the final remainder is always pushed

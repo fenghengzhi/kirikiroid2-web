@@ -257,7 +257,7 @@ oracle；测试通过只能证明现有覆盖未回归，不能把未覆盖边�
   其声明、实现及 decoded frame/resource helper 已从仓库整体删除；source texture 的
   Win/spec=2 与 KRKR/spec=1 像素链已经全部切到 mapped record raw nodes；
   `SourceCache` 的非 atlas 路径也已切到 `ResourceManager.findSource → ObjSource →
-  drawLayer(bufLayer)`，并删除 `_activeMotion`/`sourceCandidates` 像素旁路；
+  drawLayer(entry.layer)`，并删除 `_activeMotion`/`sourceCandidates` 像素旁路；
   D3DEmotePlayer 的五个变量枚举接口已恢复为 Android 的精确 TODO 异常边界，
   `EmotePlayer.getVariableRange/getVariableFrameList` 已分别切回 Engine HM5（miss 时递归
   扫 Player+384 参数表）与 Engine+1248 Dictionary，删除对应的 snapshot 查询面；
@@ -750,7 +750,7 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
 | layer/node tree | `buildNodeTree` 从 +528 dispatch 取 `layer` TJS Array，递归 helper 直接消费各 raw layer dispatch；节点独立 CopyRef `frameList/emoteEdit/particleMotionList/stencilCompositeMaskLayerList` | 树形、节点数、label map、标量字段、type 分支及 stencil 指针 vector 均由 raw dispatch 驱动；`snapshotCompatibility` 递归参数、decoded `psbNode/emoteEditDict` owner 已删除 | CLOSED |
 | node label/path | node+0 持有 raw `label` ttstr；Player+24 raw-label map 与 HM3 slash-path map 是两个独立 `ttstr` 键空间；action event 从 node+0 构造 String variant | `MotionNode::layerName`、Player+24 map、HM3 path builder、layer getter、事件和 child/render consumers 均直接传递 `ttstr`；只在日志/JSON 边界 narrow | CLOSED |
 | frame slot/evaluator | `parseFrame@0x6926B4` 接收 raw `frameList+index` 且只 parse；`mergeFrameContent@0x692AB0` 再按 slot index 取 content，保留 raw 字符串/variant、32 数值 mesh 与两槽 merged 状态 | live 节点已按 raw `frameListVariant` 实现 selective reset、parse/merge 分离、raw owner、mesh 32 数值、init/reseek/forward/back/modified 重建；node 0 按 `0x6BB4D4` 始终是 synthetic root 并直接复制 delta。旧 decoded/legacy/test model 已整体删除 | CLOSED |
-| source texture | `0x6948E8/0x695DE8` 从 RM HashMap A 的 record.root 导航；`0x695DE8` 同时被 Player 与 render-time getter `0x6F1060` 调用；prepared item 在 `0x6C360C` 直接保存 `SourceState*`，`0x6AE154..0x6AE188` 在 getter 后现场重读 rect；`0x6D5C68` 则使用 direct getter `0x6F67CC`；非 atlas 路径把 `SourceState.object` 经 `0x6C1B70` 送入按 `(key,src,blendMode)` 命中的 `SourceCache_loadSource@0x6A7BA8` | mapped record、两表及 unload 生命周期已复原；2026-07-23 又恢复共享 `0x695DE8` 边界、两种 getter、item→SourceState 直接 alias、getter 后 rect 重读、object-only fallback、精确 cache tuple、分支内重复资源调用与字段写序；atlas rect/尺寸已纠正。整页 CPU Update 是 Web 纹理 API 边界；通用 NCB/by-name facade 仍非原始 `(source,descriptor)` 结构 | AUDITED PRODUCTION SITES + OPEN PUBLIC-FACADE GAP + PLATFORM BOUNDARY |
+| source texture | `0x6948E8/0x695DE8` 从 RM HashMap A 的 record.root 导航；`0x695DE8` 同时被 Player 与 render-time getter `0x6F1060` 调用；prepared item 在 `0x6C360C` 直接保存 `SourceState*`，`0x6AE154..0x6AE188` 在 getter 后现场重读 rect；`0x6D5C68` 则使用 direct getter `0x6F67CC`；非 atlas 路径把 `SourceState.object` 经 `0x6C1B70` 送入按 `(full Variant key,src,blendMode)` 命中的 `SourceCache_loadSource@0x6A7BA8` | mapped record、两表及 unload 生命周期已复原；2026-07-23 又恢复共享 `0x695DE8` 边界、两种 getter、item→SourceState 直接 alias、getter 后 rect 重读、object-only fallback、精确 cache tuple、Player 常驻 descriptor/color Dictionaries、公开 NCB `(source,descriptor)`、分支内重复资源调用与字段写序；atlas rect/尺寸已纠正。整页 CPU Update 是 Web 纹理 API 边界；`Player.loadSource(name)` 仅是额外 Web compatibility helper，不污染精确 cache | AUDITED PRODUCTION SITES + EXTRA COMPATIBILITY SURFACE + PLATFORM BOUNDARY |
 | variable query/interpolation | D3D 五个枚举方法是无条件 TODO throw；Emote range/frameList 读取 Engine HM5/+1248，HM5 miss 才递归 Player+384 参数表和所有子 Player；updateLayers 无条件调用 `0x6BBE20` 遍历 +1296 var-track deque | 五个 D3D wrapper、range/frameList 与 updateLayers live 插值均已切到 raw Engine/Player owner；旧 snapshot frame/range 查询及首帧旁路已删除 | CLOSED |
 | Player variableKeys | getter 直接遍历 Player+1296 `std::deque<VariableLabelScope>`，每次分配并返回一个新 Array；没有 setter、Player 缓存或 motion-load 副作用 | 数据源与 owner 已对齐；`createTJSArrayWithItems_guess` 复刻 `sub_704CB8` 的 Array Variant + borrowed Items 组合，getter 直接按 deque 顺序 emplace | CLOSED |
 | Player parameter table | `initNonEmoteMotion` 从 +528 读 `parameterize/parameter`；+384 是 56B vector，+408 是 `multimap<ttstr,entry*>`，并注册到当前 Player 及父链 | helper 已改为 raw `tTJSVariant` 输入，`MotionParameterEntry::id` 已改为 `ttstr`，decoded `motionObject/contentObject` 与其额外 owner 已删除 | CLOSED |
@@ -840,7 +840,8 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
     `ObjSource_ensureTexture@0x6DA454`，确认非 atlas source 不从 decoded motion
     side graph 取像素：RM 直接包装 raw icon node，ObjSource 惰性读取 width/height/
     pixel/compress/pal，执行 RL8/RL32、palette expand 或 ReverseRGB，仅持有一只 texture；
-    SourceCache 只调用 `drawLayer(bufLayer)` 后进入颜色 bake。**2026-07-19 纠错：**此前虽删除
+    SourceCache 对目标 cache entry Layer 调 `drawLayer(entry.layer)` 后进入颜色 bake；
+    `_bufLayer` 只参与低四位 blend 1/2 的后处理。**2026-07-19 纠错：**此前虽删除
     decoded 旁路，却把 ObjSource 内部误写成 `tTJSVariant` dict facade，并据此过早标为
     CLOSED；fresh xref/构造/析构审计证实其真实字段是 raw owner/node pair + texture。现已把
     `findSource/getClip/drawLayer/ensureTexture` 全链改为直接 `PSBRawNode`，同时恢复两次 `pal`
@@ -863,8 +864,9 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
     `sub_6F1060` 与 PrivateMotionGLL `0x6DE738` 的 fallback 都把 helper 调用后的
     `SourceState.object` 直接交给 `sub_6C1B70`，不读取 `source.path`。本地生产路径现按
     `(commandKey,commandSrc,blendMode)` 精确匹配，color 仅触发原节点重烘焙，incoming
-    object 只在 bake 调用期间借用，且禁止把 module key 当 storage path；通用 NCB/by-name
-    facade 仍是公开记录的源码结构差异。
+    object 只在 bake 调用期间借用，且禁止把 module key 当 storage path。后续 fresh 证据已
+    恢复公开 NCB `(source,descriptor)`；剩余 `Player.loadSource(name)` 是独立 Web-only 兼容 helper，
+    不是 alias cache 或 NCB 替代实现。
     因此旧“source texture 整链 CLOSED”表述只可保留为对当时 raw owner/map 拓扑的历史
     结论，不得再外推为未经逐调用者复核的 100% 证明。
 44b. fresh `Player_ctor@0x6CED30`、`Player_random@0x6BA7B8` 与
@@ -873,24 +875,30 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
     Player+992 才是 ResourceManager dispatch，`Player_random` 对它调用 `random`；真正
     `Math.RandomGenerator` 由 RM ctor 构造并持有。本地已删除每 Player 重复 RNG 及 child
     传播，直接沿 `_resourceManager` dispatch 调用。同时保留 ctor 对同一 RM dispatch 的
-    三份独立 Variant owner（findSource / render SourceCache / canonical+random），不再用
-    单 Variant 近似三次 AddRef/Release；三字段声明顺序也按 ctor 的
-    findSource → render SourceCache → canonical 排列，使普通 C++ 逆序析构与
-    `Player_dtor@0x6CFADC` 的 canonical → render SourceCache → findSource Release 顺序一致。
+    三份独立 Variant owner（findSource / render SourceCache / canonical+random），并在
+    第二、三份 RM owner 之间持有 descriptor/color 两只 Dictionary，构造时执行
+    `descriptor.color = colors`。声明顺序为 findSource → render SourceCache → descriptor
+    → colors → canonical，使普通 C++ 逆序析构恢复 canonical → colors → descriptor →
+    render SourceCache → findSource 的对象生命周期。
     相关旧 analysis/memory 同步就地纠正。
 44c. fresh `SourceCache_ctor@0x6A78F4`、`trim@0x6A6B08`、
     `loadSource@0x6A7BA8`、`clearCache@0x6A8438` 与
     `EmoteObject_init@0x67DBAC` 证伪了旧“SourceCache ctor 第二参数是 layerType”的标签。
     它实际是 cache byte limit；cache 另持 current bytes，每节点在 `drawLayer` 后记录
-    `4*width*height`。miss 仅在插入前且 current>limit 时 trim，按新到旧保留不超过
-    `(limit*99)/100` 的前缀，随后烘焙、计重、front 插入；同色 hit 原地返回，只有 color
-    mismatch 才重烘焙并移到 front；clear 重置 current。EmoteObject 先求值
+    `4*width*height`。miss 仅在插入前且 current>limit 时 trim：按新到旧扫描，以有符号
+    比较决定逐节点保留或删除，因此结果是 greedy subsequence，并不保证是连续前缀；阈值
+    为 uint32 `limit*99/100`。随后烘焙、计重、front 插入；同色 hit 原地返回，只有 color
+    mismatch 才在同一 Layer 上重烘焙，再 `push_front(copy)+erase(old)`。clear 对每个 Layer
+    调 dispatch `Invalidate(self)`，清 list 并把 current 归零。EmoteObject 先求值
     `global.kag`，再把包含 `Object/ObjThis` 的完整 `tTJSVariant` 以字面 20 MiB 传给 RM，
     RM 又把完整 Variant CopyCtor 给 SourceCache base；不再降成 raw dispatch 后重建 closure。
-    production route 的容量、命中顺序、owner/bufLayer 构造链现已复刻。仍有两个明确缺口：
-    通用 NCB/by-name facade 不是原始 `(source,descriptor)` 接口且其 legacy weight 记账不完整；
-    color mismatch 本地以 `splice` 移动同一 list node，Android 则 clone-to-front 后销毁旧 node，
-    最终顺序相同但 node 对象生命周期尚非一比一。
+    production route 的容量、命中顺序、owner/bufLayer 构造链现已复刻。2026-07-23 fresh
+    `loadSource@0x6A7BA8`、节点 copier `0x6EAC60`、bake `0x6A6BE0` 与 Player caller
+    `0x6C1B70` 又纠正了两项旧结论：源码容器是 `std::list<Entry>`，不是手写 intrusive
+    list；Entry 身份是完整 `tTJSVariant key + ttstr src + blendMode`，color 仅为 mutable
+    payload。公开 NCB 签名现为 `(iTJSDispatch2 *source, iTJSDispatch2 *descriptor) -> Layer`，
+    color mismatch 的节点复制/旧节点析构和 Player 常驻 descriptor/color Dictionary 均已落地。
+    `Player.loadSource(name)` 的 by-name helper 仍是独立 Web 兼容面，但不再污染精确 cache。
 45. D3DEmotePlayer 的 `countVariables`、`getVariableLabelAt`、
     `countVariableFrameAt`、`getVariableFrameLabelAt`、
     `getVariableFrameValueAt` 曾错误转发到 Player snapshot 查询。

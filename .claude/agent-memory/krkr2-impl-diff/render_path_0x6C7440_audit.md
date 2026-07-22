@@ -53,12 +53,13 @@ gated on a1+1048/a1+1068. Final setClip(reset).
 **4-corner color consumption (M9 phase-D question — RESOLVED, no GPU per-vertex):**
 Per item, binary sets a 4-element color-array object at player+716 via vtable+56
 (PropSetByNum idx 0..3) from item+168/172/176/180 (the 4 packed corner colors),
-then sub_6C1B70/sub_6A7518 BAKES that 4-corner tint into the source bitmap
-(bilinear lerp, /128 if (blend&0xF0)==0x10 else /255) and caches by (name,color,
-defaultBlend). sub_6C715C builder appends ONLY (x,y) position pairs (stride 20,
-type tag 5) — NO color. So per-vertex GPU color is FALSE; the boundary is a real
-CPU bake. Local mirror = SourceCache::applyPackedCornerTintLike_0x6A7518
-(SourceCache.cpp:82) keyed by (key,blendMode,packedColors). FAITHFUL.
+then sub_6C1B70 calls inherited `SourceCache.loadSource(source,descriptor)`.
+SourceCache identity is strict `(full Variant key, src, blendMode)`; color is
+mutable payload, not part of the key. In software, sub_6A7518 bakes the 4-corner
+tint into the Layer bitmap (RGB divisor 128 for high blend bits, otherwise 255;
+alpha always 255). The GPU branch only performs and discards a PrivateMotionGLL
+native-instance query. sub_6C715C appends only (x,y) position pairs. Local now
+mirrors this descriptor topology, cache identity and branch split.
 
 **Anchor color base index: CONFIRMED CORRECT.** qword_14D7C50 bytes verified =
 {255.0(idx0), 128.0(idx1)} @0x14D7C50. `qword_14D7C50[(blend&0xF0)==0x10]` so

@@ -197,6 +197,13 @@ namespace motion::detail {
     tjs_uint32 divyMemberHint_guess = 0;
     tjs_uint32 typeMemberHint_guess = 0;
     tjs_uint32 meshMemberHint_guess = 0;
+    tjs_uint32 loadSourceMemberHint_guess = 0;
+    tjs_uint32 drawLayerMemberHint_guess = 0;
+    tjs_uint32 setSizeMemberHint_guess = 0;
+    tjs_uint32 copyRectMemberHint_guess = 0;
+    tjs_uint32 operateRectMemberHint_guess = 0;
+    tjs_uint32 adjustGammaMemberHint_guess = 0;
+    tjs_uint32 fillRectMemberHint_guess = 0;
 
     namespace {
 
