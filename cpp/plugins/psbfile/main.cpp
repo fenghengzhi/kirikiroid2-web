@@ -604,9 +604,9 @@ namespace PSB {
         if(!valid_ || value_.GetOwner() == nullptr) {
             return TJS_E_INVALIDOBJECT;
         }
-        // PSBValueDispatch_EnumMembers @ 0x596F98 classifies the
-        // raw tag in this function.  category is initialized to null's
-        // category so the throw-helper-return boundary keeps value zero.
+        // PSBValueDispatch_EnumMembers @ 0x596F98 classifies the raw tag in
+        // this function.  The unknown-tag block @ 0x59748C..0x59749C writes
+        // -1 after the throw helper if that helper unexpectedly returns.
         int category = 0;
         switch(value_.GetNode()[0]) {
             case 0x01:
@@ -675,6 +675,7 @@ namespace PSB {
                 break;
             default:
                 detail::throwUnknownType();
+                category = -1;
                 break;
         }
 

@@ -110,15 +110,39 @@ namespace motion {
             return cached->second.texture;
         }
 
-        struct KrkrAtlasRecordLike_0x695DE8 : ImagePacker::rect_xywhf {
-            std::string iconName;
-            std::string sourceKey;
-            PSB::PSBRawNode iconNode;
-            std::uint8_t *bgra = nullptr;
-            int contentWidth = 0;
-            int contentHeight = 0;
+        struct KrkrAtlasRecordLike_0x695DE8;
 
-            ~KrkrAtlasRecordLike_0x695DE8() { delete[] bgra; }
+        // sub_695DE8 stores a rect subobject at record+0x10, passes that
+        // subobject to ImagePacker, and recovers the containing record through
+        // the explicit pointer immediately following the rect.  The tail
+        // scalars are deliberately left uninitialized until the second pass.
+        struct KrkrAtlasRectLike_0x695DE8 : ImagePacker::rect_xywhf {
+            KrkrAtlasRecordLike_0x695DE8 *record;
+            int contentWidth;
+            int contentHeight;
+            std::uint8_t *bgra;
+
+            KrkrAtlasRectLike_0x695DE8(
+                int x, int y, int width, int height) :
+                ImagePacker::rect_xywhf(x, y, width, height) {}
+        };
+
+        // sub_698074 @ 0x698074 walks a contiguous value vector, destroys the
+        // sole sourceKey string and releases iconNode, but never reads/frees
+        // rect.bgra.  A user-declared default destructor also keeps vector
+        // growth copy-shaped instead of introducing a noexcept move path.
+        struct KrkrAtlasRecordLike_0x695DE8 {
+            PSB::PSBRawNode iconNode;
+            KrkrAtlasRectLike_0x695DE8 rect;
+            std::string sourceKey;
+
+            KrkrAtlasRecordLike_0x695DE8(
+                const PSB::PSBRawNode &node, int width, int height,
+                std::string key) :
+                iconNode(node), rect(0, 0, width + 1, height + 1),
+                sourceKey(std::move(key)) {}
+
+            ~KrkrAtlasRecordLike_0x695DE8() = default;
         };
 
         void decodeKrkrRL8Like_0x696E40(
@@ -165,60 +189,47 @@ namespace motion {
         }
 
         void decodeKrkrAtlasRecordLike_0x695DE8(
-            const std::string &group, const std::string &iconName,
-            const PSB::PSBRawNode &iconNode,
+            PSB::PSBRawNode &persistentNode,
             KrkrAtlasRecordLike_0x695DE8 &record) {
-            record.iconName = iconName;
-            record.sourceKey = "src/" + group + "/" + iconName;
-            record.iconNode = iconNode;
-
-            const int width = iconNode.GetDictionaryValueStrict("width").GetInt();
-            const int height =
-                iconNode.GetDictionaryValueStrict("height").GetInt();
-            record.contentWidth = width;
-            record.contentHeight = height;
-            record.x = 0;
-            record.y = 0;
-            record.w = width + 1;
-            record.h = height + 1;
-
-            const size_t pixelCount = static_cast<size_t>(record.contentWidth) *
-                static_cast<size_t>(record.contentHeight);
-            // sub_695DE8 @0x696F90..0x6971A8 keeps one raw-node scratch and
-            // one resource-size stack slot across every branch.  The size is
-            // deliberately not initialized: GetResource is the only writer,
-            // matching the malformed-resource boundary in the Android body.
+            auto &rect = record.rect;
+            // 0x696F90 constructs this per-record lookup result while the
+            // function-wide persistent node remains live.  0x696F94 checks
+            // "pal" on that previous persistent value before 0x696FC0 copies
+            // the current record node into it; this one-record-lagged gate is
+            // intentional Android data flow, not a compiler scheduling artifact.
             PSB::PSBRawNode scratch;
-            const bool hasPalette = iconNode.ContainsDictionaryKey("pal");
-            record.bgra = new std::uint8_t[pixelCount * sizeof(tjs_uint32)];
+            const bool hasPalette =
+                persistentNode.ContainsDictionaryKey("pal");
+            const size_t pixelCount = static_cast<size_t>(rect.contentWidth) *
+                static_cast<size_t>(rect.contentHeight);
+            rect.bgra = new std::uint8_t[pixelCount * sizeof(tjs_uint32)];
             std::uint32_t resourceSize;
+            persistentNode = record.iconNode;
 
             if(hasPalette) {
                 const bool compressed =
-                    iconNode.GetDictionaryValue("compress", scratch) &&
+                    persistentNode.GetDictionaryValue("compress", scratch) &&
                     std::strcmp(scratch.GetString(), "RL") == 0;
                 auto *indexes = new std::uint8_t[pixelCount];
                 if(compressed) {
-                    const PSB::PSBRawNode pixelNode =
-                        iconNode.GetDictionaryValueStrict("pixel");
                     const std::uint8_t *pixelData =
-                        pixelNode.GetResource(resourceSize);
+                        persistentNode.GetDictionaryValueStrict("pixel")
+                            .GetResource(resourceSize);
                     decodeKrkrRL8Like_0x696E40(
                         indexes, pixelData, resourceSize);
                 } else {
                     // 0x6970A8 copies the PSB resource length rather than the
                     // destination pixel count.
-                    const PSB::PSBRawNode pixelNode =
-                        iconNode.GetDictionaryValueStrict("pixel");
                     const std::uint8_t *pixelData =
-                        pixelNode.GetResource(resourceSize);
+                        persistentNode.GetDictionaryValueStrict("pixel")
+                            .GetResource(resourceSize);
                     std::memcpy(indexes, pixelData, resourceSize);
                 }
 
                 // Contains("pal") and try-get("pal") are distinct calls in
                 // the binary.  A damaged dictionary may pass the former and
                 // fail the latter without throwing or expanding the indexes.
-                if(iconNode.GetDictionaryValue("pal", scratch)) {
+                if(persistentNode.GetDictionaryValue("pal", scratch)) {
                     const std::uint8_t *paletteData =
                         scratch.GetResource(resourceSize);
                     std::vector<tjs_uint32> palette(resourceSize / 4u);
@@ -227,32 +238,30 @@ namespace motion {
                         reinterpret_cast<const tjs_uint32 *>(paletteData),
                         static_cast<tjs_int>(resourceSize / 4u));
                     TVPBLExpand8BitTo32BitPal(
-                        reinterpret_cast<tjs_uint32 *>(record.bgra), indexes,
+                        reinterpret_cast<tjs_uint32 *>(rect.bgra), indexes,
                         static_cast<tjs_int>(pixelCount), palette.data());
                 }
                 delete[] indexes;
             } else {
                 const bool compressed =
-                    iconNode.GetDictionaryValue("compress", scratch) &&
+                    persistentNode.GetDictionaryValue("compress", scratch) &&
                     std::strcmp(scratch.GetString(), "RL") == 0;
                 if(compressed) {
-                    const PSB::PSBRawNode pixelNode =
-                        iconNode.GetDictionaryValueStrict("pixel");
                     const std::uint8_t *pixelData =
-                        pixelNode.GetResource(resourceSize);
+                        persistentNode.GetDictionaryValueStrict("pixel")
+                            .GetResource(resourceSize);
                     decodeKrkrRL32Like_0x696D00(
-                        record.bgra, pixelData, resourceSize);
+                        rect.bgra, pixelData, resourceSize);
                     TVPReverseRGB(
-                        reinterpret_cast<tjs_uint32 *>(record.bgra),
-                        reinterpret_cast<const tjs_uint32 *>(record.bgra),
+                        reinterpret_cast<tjs_uint32 *>(rect.bgra),
+                        reinterpret_cast<const tjs_uint32 *>(rect.bgra),
                         static_cast<tjs_int>(pixelCount));
                 } else {
-                    const PSB::PSBRawNode pixelNode =
-                        iconNode.GetDictionaryValueStrict("pixel");
                     const std::uint8_t *pixelData =
-                        pixelNode.GetResource(resourceSize);
+                        persistentNode.GetDictionaryValueStrict("pixel")
+                            .GetResource(resourceSize);
                     TVPReverseRGB(
-                        reinterpret_cast<tjs_uint32 *>(record.bgra),
+                        reinterpret_cast<tjs_uint32 *>(rect.bgra),
                         reinterpret_cast<const tjs_uint32 *>(pixelData),
                         static_cast<tjs_int>(pixelCount));
                 }
@@ -260,7 +269,7 @@ namespace motion {
 
             bool anyAlpha = false;
             for(size_t i = 0; i < pixelCount; ++i) {
-                if(record.bgra[i * 4u + 3u] != 0) {
+                if(rect.bgra[i * 4u + 3u] != 0) {
                     anyAlpha = true;
                     break;
                 }
@@ -268,12 +277,11 @@ namespace motion {
             if(!anyAlpha) {
                 // 0x697210..0x697248: an entirely transparent image drops its
                 // pixel buffer and replaces the padded rectangle with 2x2.
-                delete[] record.bgra;
-                record.bgra = nullptr;
-                record.contentWidth = 1;
-                record.contentHeight = 1;
-                record.w = 2;
-                record.h = 2;
+                // contentWidth/contentHeight at record+0x28 are not rewritten.
+                delete[] rect.bgra;
+                rect.bgra = nullptr;
+                rect.w = 2;
+                rect.h = 2;
             }
         }
 
@@ -309,7 +317,10 @@ namespace motion {
                 return false;
             }
 
-            std::vector<std::unique_ptr<KrkrAtlasRecordLike_0x695DE8>> records;
+            // 0x69659C..0x696704 appends 0x40-byte records by value.  Growth
+            // copies each raw owner/string, then destroys the old range; there
+            // is no per-record heap allocation or unique_ptr owner layer.
+            std::vector<KrkrAtlasRecordLike_0x695DE8> records;
             for(const auto &group : sourceRoot.GetDictionaryKeys()) {
                 const PSB::PSBRawNode groupNode =
                     sourceRoot.GetDictionaryValueStrict(group.c_str());
@@ -318,80 +329,56 @@ namespace motion {
                 for(const auto &iconName : iconRoot.GetDictionaryKeys()) {
                     iconNode =
                         iconRoot.GetDictionaryValueStrict(iconName.c_str());
-                    auto record =
-                        std::make_unique<KrkrAtlasRecordLike_0x695DE8>();
-                    decodeKrkrAtlasRecordLike_0x695DE8(
-                        group, iconName, iconNode, *record);
-                    records.push_back(std::move(record));
+                    const int width =
+                        iconNode.GetDictionaryValueStrict("width").GetInt();
+                    const int height =
+                        iconNode.GetDictionaryValueStrict("height").GetInt();
+                    records.emplace_back(
+                        iconNode, width, height,
+                        "src/" + group + "/" + iconName);
                 }
             }
 
-            if(records.empty()) {
-                return true;
-            }
-
+            // Android completes every potentially reallocating value-vector
+            // append before publishing rect subobject pointers.  It then
+            // decodes all records in a second, encounter-order pass.
             std::vector<ImagePacker::rect_xywhf *> recordPointers;
-            recordPointers.reserve(records.size());
-            for(const auto &record : records) {
-                recordPointers.push_back(record.get());
+            for(auto &record : records) {
+                record.rect.record = &record;
+                record.rect.contentWidth = record.rect.w - 1;
+                record.rect.contentHeight = record.rect.h - 1;
+                recordPointers.push_back(&record.rect);
+                decodeKrkrAtlasRecordLike_0x695DE8(iconNode, record);
             }
 
             std::vector<ImagePacker::bin> bins;
             const int maxSide = static_cast<int>(TVPMaxTextureSize);
-            const bool packed = ImagePacker::pack(
+            // sub_A6E50C @ 0xA6E50C returns a bool in W0, but 0x6968B4
+            // immediately calls the zero-argument render-backend getter and
+            // never tests it.  A pack failure therefore proceeds to the same
+            // unchecked cache lookup below.
+            (void)ImagePacker::pack(
                 recordPointers.data(), static_cast<int>(recordPointers.size()),
                 maxSide, bins);
-            if(!packed) {
-                return false;
-            }
 
             for(auto &bin : bins) {
-                if(bin.size.w <= 0 || bin.size.h <= 0) {
-                    continue;
-                }
+                // ImagePacker::pack @ 0xA6E50C appends one 0x0 bin for an
+                // empty record set.  sub_695DE8 @ 0x6968C0..0x696C20 still
+                // creates that empty texture and releases its construction
+                // reference; do not skip the zero-size lifecycle here.
                 const size_t atlasStride = static_cast<size_t>(bin.size.w) * 4u;
-                std::vector<std::uint8_t> atlas(
-                    atlasStride * static_cast<size_t>(bin.size.h), 0);
-                for(auto *baseRect : bin.rects) {
-                    auto *record =
-                        static_cast<KrkrAtlasRecordLike_0x695DE8 *>(baseRect);
-                    if(record->bgra == nullptr) {
-                        continue;
-                    }
-                    const size_t sourceStride =
-                        static_cast<size_t>(record->contentWidth) * 4u;
-                    for(int y = 0; y < record->contentHeight; ++y) {
-                        const size_t destinationOffset =
-                            (static_cast<size_t>(record->y + y) *
-                                 static_cast<size_t>(bin.size.w) +
-                             static_cast<size_t>(record->x)) *
-                            4u;
-                        std::memcpy(atlas.data() + destinationOffset,
-                                    record->bgra +
-                                        static_cast<size_t>(y) * sourceStride,
-                                    sourceStride);
-                    }
-                }
-
-                // Android sub_695DE8 creates an owned empty page, then uploads
-                // each packed sub-rect through iTVPTexture2D::Update. The Web
-                // software texture cannot update a non-zero left offset, so
-                // assemble the identical page in CPU memory and perform one
-                // full-page Update. Passing atlas.data() to CreateTexture2D
-                // would retain a dangling external pointer after this return.
+                // 0x6968D4 creates an owned empty page. Each record below
+                // writes metadata, uploads its own packed sub-rect, and frees
+                // its BGRA buffer before advancing to the next record.
                 auto *texture = TVPGetRenderManager()->CreateTexture2D(
                     nullptr, static_cast<int>(atlasStride),
                     static_cast<unsigned int>(bin.size.w),
                     static_cast<unsigned int>(bin.size.h),
                     TVPTextureFormat::RGBA, RENDER_CREATE_TEXTURE_FLAG_ANY);
-                if(texture) {
-                    texture->Update(atlas.data(), TVPTextureFormat::RGBA,
-                                    static_cast<int>(atlasStride),
-                                    tTVPRect(0, 0, bin.size.w, bin.size.h));
-                }
                 for(auto *baseRect : bin.rects) {
-                    auto *record =
-                        static_cast<KrkrAtlasRecordLike_0x695DE8 *>(baseRect);
+                    auto *rect =
+                        static_cast<KrkrAtlasRectLike_0x695DE8 *>(baseRect);
+                    auto *record = rect->record;
                     detail::PackedSourceAtlasEntry entry;
                     entry.setTexture(texture);
                     // 0x696914..0x696960 copy-assigns the record node into the
@@ -404,10 +391,10 @@ namespace motion {
                     // 0x696A54..0x696A7C stores atlas x/y followed by the
                     // inclusive right/bottom in the four-int descriptor.
                     entry.textureRect = {
-                        record->x,
-                        record->y,
-                        record->x + record->w - 1,
-                        record->y + record->h - 1,
+                        rect->x,
+                        rect->y,
+                        rect->x + rect->w - 1,
+                        rect->y + rect->h - 1,
                     };
                     // 0x696A84..0x696A90 passes this same raw-node storage as
                     // both source and out.  A hit descends iconNode in place;
@@ -422,12 +409,22 @@ namespace motion {
                     }
                     loadedResource.krkrSourceEntries.insert_or_assign(
                         detail::widen(record->sourceKey), std::move(entry));
+                    if(rect->bgra != nullptr) {
+                        // 0x696BE0..0x696C0C uses content width for pitch,
+                        // passes the packed descriptor as a tTVPRect, then
+                        // frees record+0x30 without clearing the field.
+                        texture->Update(
+                            rect->bgra, TVPTextureFormat::RGBA,
+                            rect->contentWidth * 4,
+                            tTVPRect(rect->x, rect->y,
+                                     rect->x + rect->w - 1,
+                                     rect->y + rect->h - 1));
+                        delete[] rect->bgra;
+                    }
                 }
                 // Each cached icon entry took its own AddRef above.  Release
                 // the page-construction reference like 0x696C20.
-                if(texture) {
-                    texture->Release();
-                }
+                texture->Release();
             }
             return true;
         }
@@ -469,9 +466,10 @@ namespace motion {
                 return false;
             }
             sourceIt = loadedResource.krkrSourceEntries.find(sourceKey);
-            if(sourceIt == loadedResource.krkrSourceEntries.end()) {
-                return false;
-            }
+            // 0x696274..0x696290 converts a missing second lookup to a null
+            // record pointer and then immediately dereferences record+0x18.
+            // Do not add an end guard: pack failure/empty output is a native
+            // invalid-access boundary, not a recoverable false result.
         }
 
         const auto &packed = sourceIt->second;

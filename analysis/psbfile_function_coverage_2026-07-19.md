@@ -58,6 +58,11 @@ data xref。
 再以 `tjs_int32(0)` 赋值，随后才构造 callback result。本地现已按这些 helper call、
 临时 owner 数量和异常析构顺序复刻。
 
+同一 `EnumMembers` 的 unknown-tag block `0x59748C..0x59749C` 还会在异常 helper
+意外返回后把 category 写成 `-1`，再完成四只 Variant 的生命周期并返回
+`TJS_E_NOTIMPL`。本地此前错误保留初始化值 `0`，现已纠正；对 PSBFile 范围内其余
+`sub_95440C/sub_95458C` continuation 的独立扫描没有发现第二处差异。
+
 2026-07-23 的 fresh decompile 与尾部反汇编还确认，`assign@0x59673C` 在入口
 `0x596764` 保存 destination 到 `X19`，所有正常/throw-helper-return 分支汇入共同尾部，
 并在 `0x596B88` 以 `MOV X0,X19` 返回同一 destination 地址。四个直接 caller
@@ -84,7 +89,11 @@ data xref。
 0x597F08 0x597F24 0x597F38 0x5980F4 0x5981F8
 ```
 
-本地对应 `PSBFileConvertor`、`PSBFileFactory`、factory 异常清理和 guarded root getter。
+本地对应 `ncbClassInfo<PSBFile>` 的 typed-class 状态读取、一次性安装与清理，
+`NCB_REGISTER_CLASS(PSBFile)` 的 Factory→root→load 注册体、`PSBFileFactory`
+（含 load 异常清理）以及 guarded root getter。这 10 个入口不构成
+`PSBFileConvertor` 独立 emitted 边界的证据；convertor 是否存在或完全内联，仍不能由该
+地址组唯一判定。
 
 ## D. raw PSBFile / owner / node / packed table（19）
 
@@ -132,15 +141,33 @@ relative 仍按 `0x59783C..0x597840` 保持 W32 + SXTW；两类扩展没有互�
 仍执行 Release-old→重读 source owner→AddRef→写 child；本地直接序列与之相同。它不证明
 未知的通用 raw-node assignment special member 是否存在 self guard。
 
-同一 caller 还证明该 raw-node 不是一轮一构造的临时量：slot 在 `0x6960D4` 初始化，
-请求探测与枚举持续复用，packed loop 的 inner/outer backedge 均不析构，每轮只在
-`0x696914..0x696960` 覆盖旧值，最终正常清理位于 `0x697380..0x6973A4`。本地 atlas
-路径现已用持久 scratch 复刻到 helper 边界，并让 scratch 先于 `sourceRoot` 构造，使反向
-析构对应 Android `sourceRoot@0x697358` 先、scratch@`0x697380` 后；完整 `sub_695DE8`
-仍被拆成多个本地 helper，
-后半段生命周期/调用边界尚未结构性合并。另一个已闭合的局部差异是请求 icon lookup：
-Android `0x69612C..0x696154` 在测试返回位之前先 Release strict icon-root 临时量；本地现
-用显式 scope 保存 bool，确保 temporary owner 在 `if(!found)` 之前析构。
+完整 `sub_695DE8` 进一步证明这里有两只不同 raw node。持久 `var_B0` 在 `0x6960D4`
+初始化，持续跨越请求探测、枚举、第二遍 decode、packed metadata 与 self-alias clip，
+最终在 `0x697380..0x6973A4` 清理；每记录 lookup 临时 `p` 则在 `0x696F90` 构造、
+`0x69724C..0x697274` 析构。Android 先按 encounter order 把所有 0x40-byte record 写入
+连续 value vector，再发布 `record+0x10` rect 子对象指针并第二遍 decode。每轮先在
+`0x696F94` 对上一状态的 `var_B0` 查 `pal`，后在 `0x696FC0..0x697004` 才赋当前 record，
+所以 palette gate 是 `record[0]←last`、`record[i]←record[i-1]`，不是当前 record 自查。
+
+record 的已证实拓扑是 raw node + 内嵌 rect payload + 单一 sourceKey；rect tail 保存
+parent backpointer、content w/h 和 BGRA，packer 只持 rect 指针，再经 backpointer 取回
+record。`sub_698074@0x698074` 只析构 sourceKey/Release raw owner，不释放 BGRA；正常
+upload 后现场 free 且不清指针，全透明分支现场 free+清零并仅改 rect 为 2×2。本地已从
+`vector<unique_ptr<Record>>`、整 record 继承 rect、双 string 与 destructor-owned BGRA
+改成相同 value-vector/composition/lifetime 数据流。`ImagePacker::pack@0xA6E50C` 的 bool
+结果被 Android caller 忽略，第二次 cache lookup 也无 end guard；本地同步恢复。Android
+`pack(n=0)` 仍追加 `_rect2D@0xA6DAB0` 返回的 0×0 bin，caller 在
+`0x6968C0..0x696C20` 仍创建 0×0 texture、经过空 rect loop 并无条件 Release；本地已删除
+原有的零尺寸 bin skip，恢复这条调用链与 construction-reference 生命周期。Android
+逐 record 执行 metadata→subrect Update→free；本地 software texture 的既有 rect 接口
+现已实现 left/top 目标偏移，atlas loop 同步恢复逐记录顺序；由整页 batch 引入的已知
+时序差异已在源码结构上消除，真实 Android atlas runtime 边界仍待设备 oracle 验证。
+是否把 atlas build 写成独立 inline helper不能由优化后二进制唯一判定，不再把 helper
+源码拼写冒充成未闭合生命周期。
+
+请求 icon lookup 的另一项已闭合差异仍成立：Android `0x69612C..0x696154` 在测试返回位
+之前先 Release strict icon-root 临时量；本地用显式 scope 保存 bool，确保 temporary owner
+在 `if(!found)` 之前析构。
 
 2026-07-23 逐指令复审还确认 `PSBFile::Load@0x598268` 的 invalid-type throw helper
 若意外返回，`0x5983B0` 显式返回 true；本地此前会继续进入 `AsOctet()`，现已纠正。
@@ -178,8 +205,10 @@ ctor/dtor 反编译证据，测试不读取悬挂 block。此前“缺少第二�
 两只 tracked 资产执行 `ezsave → raw motion → ezsave`，观察 PSBMedia 的 Android ABI 状态，
 并在 replacement 后只读取旧 stream 自身 metadata，再调用 deleting destructor
 `0x8F7D68`；不会解引用悬挂 Block。Frida target 同步覆盖 `0x59993C/0x599E04/
-0x59A0B4/0x59A330/0x59A4B0/0x8F7C74/0x8F7D68`。离线 fake-engine/RPC 路径已通过
-（没有伪造 `adb`、没有启动 Android、没有执行 `libkrkr2.so`），
+0x59A0B4/0x59A330/0x59A4B0/0x8F7C74/0x8F7D68`。开发时仅用一次性、未入库的
+in-memory engine test double 直接 smoke 过 host-side adapter 状态机；它绕过 runner，
+没有模拟或验证 ADB 命令、TCP/RPC transport，也没有启动 Android 或执行 `libkrkr2.so`，
+因此不记作可复现测试结果。
 但本轮无连接 Android 设备，所以这仍是“oracle 已实现、真机结果待取得”，不是二进制实测通过。
 fresh IDA 也已把原来合并的 `0x8F7D04..0x8F7DC0` 拆为 complete destructor
 `0x8F7D04` 与独立 deleting destructor `0x8F7D68`，补类型/注释并保存 IDB。
@@ -231,7 +260,9 @@ fresh IDA 也已把原来合并的 `0x8F7D04..0x8F7DC0` 拆为 complete destruct
 PLT thunk，但 `GetDictionaryKeys@0x598E64` 的 `0x598FF4..0x598FFC` 明确在
 `finish == end_of_storage` 时调用该 thunk；非满容量分支则在 `0x598FD0..0x598FF0`
 内联构造元素。本地 `result.emplace_back(key)` 保留同一 reusable lvalue string、
-vector 容器和快/慢路径语义；Android libstdc++ 与本地 libc++ 的模板实体机器边界不要求同址。
+vector 容器和快/慢路径语义；Android 旧 libstdc++ 的 string 呈 COW refcount 路径，
+本地 libc++ 的 `std::string` 并非 COW。这里对齐 source-level copy token、元素构造与
+临时对象边界，不宣称跨标准库复刻 COW 内部布局或模板实体机器地址。
 
 ## 覆盖结论
 
@@ -248,10 +279,10 @@ filter 后 offset failure、损坏 packed table、tag `0x0B`、>4 GiB storage、
 listing 和 CreateAdaptor-null 分支，仍按主分析记录为缺少天然 fixture 的验证缺口。
 成功跨-container replacement 与旧 stream metadata/析构的本地守护已由现有第二容器覆盖；
 Android runtime oracle 路径也已实现，但本轮无设备、尚未取得真实执行结果。borrowed/
-non-retaining 仍由反编译证据证明，不能把本地测试或离线 fake-engine/RPC 验证误记为二进制实测。
+non-retaining 仍由反编译证据证明，不能把本地测试或一次性 adapter smoke 误记为 ADB/RPC 或二进制实测。
 
 本轮修改后 macOS Release `psbfile-dll` 为 **575/575**（10 cases），
-`motionplayer-dll` 为 **1212/1212**（16 cases），`motionplayer-ttstr-hash-test` 为
+`motionplayer-dll` 为 **1231/1231**（17 cases），`motionplayer-ttstr-hash-test` 为
 **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
 `krkr2_wasmtime_guest` 目标通过。motion playback runner 尚未进入 guest：当前 checkout
 缺少 `reference/xp3/logo_test_oracle.xp3`；按物料规则不从零构造，保留该运行验证缺口。

@@ -868,6 +868,45 @@ TEST_CASE("D3DAdaptor captureCanvas reads back target texture rows") {
                        dstRow0 + dstPitch));
 }
 
+TEST_CASE("software texture updates packed atlas sub-rects in place") {
+    auto *texture = TVPGetRenderManager()->CreateTexture2D(
+        nullptr, 4 * 4, 4, 4, TVPTextureFormat::RGBA,
+        RENDER_CREATE_TEXTURE_FLAG_ANY);
+    REQUIRE(texture != nullptr);
+
+    constexpr tjs_uint32 untouched = 0xA5A5A5A5u;
+    for(int y = 0; y < 4; ++y) {
+        for(int x = 0; x < 4; ++x)
+            texture->SetPoint(x, y, untouched);
+    }
+
+    const std::array<tjs_uint32, 6> pixelsWithRowPadding = {
+        0x01020304u, 0x11121314u, 0xDEADBEEFu,
+        0x21222324u, 0x31323334u, 0xBAADF00Du,
+    };
+    // sub_695DE8 @ 0x696BE0..0x696C0C passes the packed atlas x/y as
+    // tTVPRect left/top while the source pointer starts at its own (0,0).
+    texture->Update(pixelsWithRowPadding.data(), TVPTextureFormat::RGBA,
+                    3 * 4,
+                    tTVPRect(1, 1, 3, 3));
+
+    for(int y = 0; y < 4; ++y) {
+        for(int x = 0; x < 4; ++x) {
+            tjs_uint32 expected = untouched;
+            if(x == 1 && y == 1)
+                expected = pixelsWithRowPadding[0];
+            else if(x == 2 && y == 1)
+                expected = pixelsWithRowPadding[1];
+            else if(x == 1 && y == 2)
+                expected = pixelsWithRowPadding[3];
+            else if(x == 2 && y == 2)
+                expected = pixelsWithRowPadding[4];
+            REQUIRE(texture->GetPoint(x, y) == expected);
+        }
+    }
+    texture->Release();
+}
+
 TEST_CASE("Player variableKeys returns a fresh var-track array") {
     motion::Player player;
 

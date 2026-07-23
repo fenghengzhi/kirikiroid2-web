@@ -1182,13 +1182,24 @@ public:
     }
     void Update(const void *pixel, TVPTextureFormat::e format, int pitch,
                 const tTVPRect &rc) override {
-        assert(rc.left == 0);
+        const bool originUpdate = rc.left == 0 && rc.top == 0;
+        assert(rc.left >= 0 && rc.top >= 0);
+        assert(originUpdate ||
+               (rc.left <= rc.right &&
+                rc.right <= static_cast<int>(Bitmap->GetWidth()) &&
+                rc.top <= rc.bottom &&
+                rc.bottom <= static_cast<int>(Bitmap->GetHeight())));
         unsigned char *src = (unsigned char *)pixel;
-        tjs_uint8 *dst = (tjs_uint8 *)Bitmap->GetScanLine(rc.top);
+        const int destinationBytesPerPixel = Bitmap->GetBPP() / 8;
+        tjs_uint8 *dst =
+            (tjs_uint8 *)Bitmap->GetScanLine(rc.top) +
+            rc.left * destinationBytesPerPixel;
         int dstPitch = Bitmap->GetPitch();
-        int h = std::min(rc.get_height(), (int)Bitmap->GetHeight()) - rc.top;
+        int h = originUpdate
+            ? std::min(rc.get_height(), static_cast<int>(Bitmap->GetHeight()))
+            : rc.get_height();
         int w = rc.get_width();
-        if(w == Bitmap->GetWidth() && pitch == dstPitch)
+        if(rc.left == 0 && w == Bitmap->GetWidth() && pitch == dstPitch)
             memcpy(dst, src, pitch * h);
         else if(format == TVPTextureFormat::RGB) {
             for(int y = 0; y < h; ++y) {
@@ -1197,7 +1208,9 @@ public:
                 src += pitch;
             }
         } else {
-            int linesize = std::min(pitch, dstPitch);
+            int linesize = originUpdate
+                ? std::min(pitch, dstPitch)
+                : std::min(pitch, w * destinationBytesPerPixel);
             for(int y = 0; y < h; ++y) {
                 memcpy(dst, src, linesize);
                 dst += dstPitch;

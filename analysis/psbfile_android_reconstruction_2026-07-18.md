@@ -11,17 +11,36 @@
   alias miss 完全不改 owner/node，再以
   `node.GetDictionaryValue("layers", node)` 守护 alias hit 的原位下降。该证据只属于
   try-get 函数本体，仍不能证明通用 `PSBRawNode::operator=` 是否存在或是否带 self guard。
-- caller 本身此前尚未复刻这条 alias 数据流。`sub_695DE8` 在 `0x6960D4` 唯一初始化
-  raw-node scratch，请求探测、icon 枚举与 packed-record loop 持续复用；
-  `0x696914..0x696960` 每轮 Release-old→copy owner/node→AddRef，随后
-  `0x696A90` 以同一 scratch 原位查 `clip`，inner/outer backedge 均不析构。本地
-  `PlayerResource.cpp` 现也用一只持久 `iconNode` 贯穿这几段，不再直接从 record 读 origin
-  后另建空 `clipNode`；scratch 声明在 `sourceRoot` 之前，对齐 `0x6960D4→0x6960E8`
-  的构造顺序，以及正常路径 `sourceRoot@0x697358→scratch@0x697380` 的反向析构顺序。
-  请求 icon 的第二次 lookup 还在 `0x69612C..0x696154` 先释放
-  temporary icon-root owner、后判断 lookup 结果；本地现以显式 scope + bool 恢复相同顺序，
-  不再把该临时 owner 保活到 helper 返回。Android scratch 还跨越该本地 helper 之外的后续阶段并到
-  `0x697380` 才统一 Release；本地仍拆分 `sub_695DE8`，这是尚未闭合的源码边界。
+- 对 `sub_695DE8` 的完整反汇编复核证伪了“只有一只 raw-node scratch”的旧结论。
+  `var_B0` 在 `0x6960D4` 构造，贯穿请求探测、icon 枚举、第二遍 decode、packed metadata
+  与 self-alias `clip` 查找，最终在 `0x697380..0x6973A4` 析构；另有一只每记录临时节点
+  `p` 在 `0x696F90` 构造，仅承接 `compress/pal` lookup，并在
+  `0x69724C..0x697274` 析构。Android 先把所有 icon 按 encounter order 写入连续的
+  `vector<Record>`，再做第二遍 decode；每轮在 `0x696F94` 先对上一状态的 `var_B0`
+  查询 `pal`，到 `0x696FC0..0x697004` 才把当前 record node 赋给它。由于枚举结束时
+  `var_B0` 留在最后一个 icon，实际 gate 是 `record[0]←last`、`record[i]←record[i-1]`。
+  本地现已恢复这条看似反常的一记录滞后数据流，而不是按当前 record 直接判断 palette。
+- 同一函数的 record 是按 `0x40` stride 生长/析构的值对象：raw node 后内嵌 rect payload，
+  rect 后带 parent backpointer、content w/h 与 BGRA pointer，尾部只有一只 sourceKey
+  `std::string`。packer 接收 rect 子对象地址，packed loop 再经显式 backpointer 找回 record；
+  `sub_698074@0x698074` 只析构 sourceKey 并 Release raw owner，从不释放 BGRA。正常 upload
+  后 `0x696C08..0x696C0C` 现场释放 BGRA 且不清指针；全透明分支则释放、清零并只把 rect
+  改成 2×2，不重写 content w/h。本地已从 `vector<unique_ptr<Record>>`、整 record 继承
+  rect、两只 string 与析构持有 BGRA，改为上述 value-vector/composition/backpointer/
+  单-string/现场释放拓扑。
+- `ImagePacker::pack@0xA6E50C` 在 `n=0` 时仍由 do-while 追加一只 bin；内部
+  `_rect2D@0xA6DAB0` 返回 `{0,0}`。`sub_695DE8@0x6968C0..0x696C20` 不检查 bin 尺寸，
+  仍执行 `CreateTexture2D(nullptr,0,0,0,RGBA,1)`、空 rect loop、无条件 Release。本地
+  `ImagePacker` 原本已有相同零-bin 拓扑，但 atlas caller 额外跳过 `w/h<=0`；该 guard
+  已删除，零记录损坏字典下的 texture 调用链与 construction-reference 生命周期现已恢复。
+- 请求 icon 的第二次 lookup 在 `0x69612C..0x696154` 先释放 temporary icon-root owner、
+  后判断结果；本地显式 scope + bool 保留该析构时点。`ImagePacker::pack@0xA6E50C`
+  的 bool 返回在 caller 中被忽略，cache miss 后的第二次 lookup 也无 end guard；两项边界
+  均已恢复。优化后二进制不能唯一判定 atlas build 是否原本写成独立 inline helper，
+  因此不再把本地 helper 边界本身错误标成“持久节点生命周期尚未闭合”。Android 逐 record
+  执行 metadata→subrect Update→free；本地 software texture 的既有 rect 接口现已实现
+  left/top 目标偏移，atlas loop 也恢复同一逐记录顺序；由整页 batch 引入的已知时序差异
+  已在源码结构上消除，真实 Android atlas runtime 边界仍待设备 oracle 验证。
 - `GetInt@0x599438` 与 `GetDouble@0x5992E8` 都呈 outer tag switch 加
   32-bit integer / 64-bit integer / float / double 四组 nested decoder 的形状。本地此前
   各写一只 monolithic switch，现抽出四个共享 `_guess` decoder，再由两只 outer wrapper
@@ -56,6 +75,10 @@
 - `EnumMembers@0x596F50` 按顺序 default-construct name、flags、value，随后执行
   `flags = tjs_int32(0)`，再 default-construct callback result。此前 flags 直接由零构造，
   少了一次与 Android 相同的赋值调用和旧内容释放边界；现已恢复四只 Variant 的精确时序。
+- 同一 `EnumMembers` 的 unknown-tag block `0x59748C..0x59749C` 先调用异常 helper；若
+  helper 意外返回，仍把 category 写成 `-1`，随后构造完四只 Variant 并返回
+  `TJS_E_NOTIMPL`。本地此前保留初始化值 `0`，现已恢复该 throw-helper continuation；
+  对其余 `sub_95440C/sub_95458C` 调用点的独立复核没有发现第二处 continuation 偏差。
 - `assign@0x59673C`、`getResource_guess@0x596C70`、
   `PSBRawNode::GetResource@0x5996E4` 与 `PSBMedia::GetResourceData@0x59A0B4`
   四条 resource 路径都先取得 chunk-offset view、再取得 chunk-length view，索引 entry 时
@@ -84,8 +107,10 @@
   `Open(ezsave/2036.tlg) → CheckExistentStorage(raw-motion/2036.tlg) →
   delete old stream → Open(ezsave/2036.tlg)`。它同时核对 `_file/_container` 确实替换、
   adaptor 地址变化、旧 stream 的 Block 指针值/Reference/Size/AllocSize/CurrentPos 不变，
-  且绝不读取 replacement 后的悬挂 Block。离线 fake-engine/RPC 协议测试已通过；它没有
-  伪造 `adb` 可执行文件、没有启动 Android，也没有执行 `libkrkr2.so`。本轮
+  且绝不读取 replacement 后的悬挂 Block。开发时曾用一次性、未入库的 in-memory
+  engine test double 直接 smoke `run_media_lifecycle_case` 的 host-side adapter 状态机；
+  它绕过了 runner，并未模拟或验证 ADB 命令、TCP/RPC transport、Android/APK 启动或
+  `libkrkr2.so` 执行，不能记作可复现测试结果。本轮
   `adb devices -l` 无连接设备，因此尚不把真实 Android 执行记为通过。
 - fresh IDA 曾把 `0x8F7D04..0x8F7DC0` 合成一只函数；`0x8F7D68` 有独立 ARM64 序言，
   并在同一 `Block && !Reference` 清理后 tail-call `operator delete(self)`。IDB 已拆为
@@ -93,7 +118,7 @@
   `0x8F7D68..0x8F7DC0`、补 `_guess` 名称/类型/注释并保存。Android oracle 调用
   deleting entry `0x8F7D68`，与源码 `delete stream` 的完整对象生命周期一致。
 - 当前验证：macOS Release 五个相关目标构建成功，`psbfile-dll` **575/575**（10 cases）、
-  `motionplayer-dll` **1212/1212**（16 cases）、`motionplayer-ttstr-hash-test`
+  `motionplayer-dll` **1231/1231**（17 cases）、`motionplayer-ttstr-hash-test`
   **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
   `krkr2_wasmtime_guest` 目标均通过。现成 motion playback runner 在执行 guest 前因
   当前 checkout 缺少 `reference/xp3/logo_test_oracle.xp3` 退出；不制造 fixture，记录为
@@ -169,7 +194,7 @@
   `PlayerResource`、`PlayerLayerQuery` 等 caller 共用。本文旧版将这两项列为 OPEN 的
   结论已被当前源码和 fresh 反编译证伪，现就地纠正为 CLOSED。
 - 当前验证：macOS Release `psbfile-dll` 为 575/575（10 cases），完整
-  `motionplayer-dll` 为 1212/1212（16 cases），`motionplayer-ttstr-hash-test` 为
+  `motionplayer-dll` 为 1231/1231（17 cases），`motionplayer-ttstr-hash-test` 为
   100/100（22 cases）；显式 `krkr2_wasmtime_guest` 目标与 Web Debug 最终链接均通过，
   `git diff --check` 通过。
   guest harness 的 `clipRect` 参数类型已随生产字段一并改为 `std::array<float,4>`。
@@ -521,7 +546,9 @@ layer id 使用 `std::set<tjs_int>`，没有用 Web 自造容器替代。
 `sub_597B1C@0x597B1C` 的 name decode 直接写调用者提供的 `std::string&`；
 `sub_598E64@0x598E64` 在整个 dictionary 枚举期间只复用一只 string，并把它逐次复制进
 预留容量的 vector。本地旧实现的按值返回、逐轮新建 string 和 move-emplace 已纠正，
-保留原版 COW string copy/refcount 与临时对象生命周期。
+恢复了 `std::string` lvalue copy 与临时对象生命周期。Android 旧 libstdc++ 的 string
+实体呈 COW refcount 机器路径，而当前 Web/macOS libc++ 的 `std::string` 实现并非 COW；
+这里对齐的是源码容器类型、copy token 和对象边界，不宣称跨标准库复刻内部 COW 布局。
 trie 查找 `sub_59641C@0x59641C` 只接收裸 UTF-8 指针；packed dictionary 二分
 `sub_59659C@0x59659C` 是独立 helper，并通过 out 参数返回相对 `node+1` 的 32-bit
 value offset。本地旧实现曾让前者持有 `std::string&`、把后者内联成直接指针结果；现已
@@ -548,7 +575,8 @@ null→tag0 安全归一化已删除，未先做显式 validity 检查的调用�
 ### 6. 边界行为
 
 反编译并落实到本地实现：最小 0x40 字节、`PSB\0` signature、offset 的严格/非严格比较、
-MDF 解压失败 fallback、storage invalid-buffer 的原始泄漏边界、unknown tag 抛错、
+MDF 解压失败 fallback、storage invalid-buffer 的原始泄漏边界、unknown tag 抛错及
+`EnumMembers` helper-return 后 category=`-1` continuation、
 known non-dictionary contains=false、strict missing-key 抛错、负数组下标、
 `TJS_MEMBERMUSTEXIST`、dispatch invalidate、no-op normalize、空 locally-accessible name、
 packed value tag `0x11` 与有符号 stride，以及真实加密 motion PSB 的 xorshift filter。
@@ -559,7 +587,7 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。现有
 异常后旧缓存保留、成功跨-container 替换，以及替换后旧 stream metadata/析构的本地守护。
 stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地测试不读取悬挂 block，且
 Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结果，不能把本地守护或
-离线 fake-engine/RPC 验证提升为二进制运行结果。
+该一次性 adapter smoke 提升为 ADB/RPC 或二进制运行结果。
 
 ## 本轮纠正的既有误差
 
@@ -764,7 +792,7 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
 | layer/node tree | `buildNodeTree` 从 +528 dispatch 取 `layer` TJS Array，递归 helper 直接消费各 raw layer dispatch；节点独立 CopyRef `frameList/emoteEdit/particleMotionList/stencilCompositeMaskLayerList` | 树形、节点数、label map、标量字段、type 分支及 stencil 指针 vector 均由 raw dispatch 驱动；`snapshotCompatibility` 递归参数、decoded `psbNode/emoteEditDict` owner 已删除 | CLOSED |
 | node label/path | node+0 持有 raw `label` ttstr；Player+24 raw-label map 与 HM3 slash-path map 是两个独立 `ttstr` 键空间；action event 从 node+0 构造 String variant | `MotionNode::layerName`、Player+24 map、HM3 path builder、layer getter、事件和 child/render consumers 均直接传递 `ttstr`；只在日志/JSON 边界 narrow | CLOSED |
 | frame slot/evaluator | `parseFrame@0x6926B4` 接收 raw `frameList+index` 且只 parse；`mergeFrameContent@0x692AB0` 再按 slot index 取 content，保留 raw 字符串/variant、32 数值 mesh 与两槽 merged 状态 | live 节点已按 raw `frameListVariant` 实现 selective reset、parse/merge 分离、raw owner、mesh 32 数值、init/reseek/forward/back/modified 重建；node 0 按 `0x6BB4D4` 始终是 synthetic root 并直接复制 delta。旧 decoded/legacy/test model 已整体删除 | CLOSED |
-| source texture | `0x6948E8/0x695DE8` 从 RM HashMap A 的 record.root 导航；`0x695DE8` 同时被 Player 与 render-time getter `0x6F1060` 调用；prepared item 在 `0x6C360C` 直接保存 `SourceState*`，`0x6AE154..0x6AE188` 在 getter 后现场重读 rect；`0x6D5C68` 则使用 direct getter `0x6F67CC`；非 atlas 路径把 `SourceState.object` 经 `0x6C1B70` 送入按 `(full Variant key,src,blendMode)` 命中的 `SourceCache_loadSource@0x6A7BA8` | mapped record、两表及 unload 生命周期已复原；2026-07-23 又恢复共享 `0x695DE8` 边界、两种 getter、item→SourceState 直接 alias、getter 后 rect 重读、object-only fallback、精确 cache tuple、Player 常驻 descriptor/color Dictionaries、公开 NCB `(source,descriptor)`、分支内重复资源调用与字段写序；atlas rect/尺寸已纠正。整页 CPU Update 是 Web 纹理 API 边界；`Player.loadSource(name)` 仅是额外 Web compatibility helper，不污染精确 cache | AUDITED PRODUCTION SITES + EXTRA COMPATIBILITY SURFACE + PLATFORM BOUNDARY |
+| source texture | `0x6948E8/0x695DE8` 从 RM HashMap A 的 record.root 导航；`0x695DE8` 同时被 Player 与 render-time getter `0x6F1060` 调用；prepared item 在 `0x6C360C` 直接保存 `SourceState*`，`0x6AE154..0x6AE188` 在 getter 后现场重读 rect；`0x6D5C68` 则使用 direct getter `0x6F67CC`；非 atlas 路径把 `SourceState.object` 经 `0x6C1B70` 送入按 `(full Variant key,src,blendMode)` 命中的 `SourceCache_loadSource@0x6A7BA8` | mapped record、两表及 unload 生命周期已复原；2026-07-23 又恢复共享 `0x695DE8` 边界、两种 getter、item→SourceState 直接 alias、getter 后 rect 重读、object-only fallback、精确 cache tuple、Player 常驻 descriptor/color Dictionaries、公开 NCB `(source,descriptor)`、分支内重复资源调用与字段写序；atlas value-record/rect/backpointer、两阶段 decode、逐 record Update/free 与尺寸均已纠正。`Player.loadSource(name)` 仅是额外 Web compatibility helper，不污染精确 cache | AUDITED PRODUCTION SITES + EXTRA COMPATIBILITY SURFACE |
 | variable query/interpolation | D3D 五个枚举方法是无条件 TODO throw；Emote range/frameList 读取 Engine HM5/+1248，HM5 miss 才递归 Player+384 参数表和所有子 Player；updateLayers 无条件调用 `0x6BBE20` 遍历 +1296 var-track deque | 五个 D3D wrapper、range/frameList 与 updateLayers live 插值均已切到 raw Engine/Player owner；旧 snapshot frame/range 查询及首帧旁路已删除 | CLOSED |
 | Player variableKeys | getter 直接遍历 Player+1296 `std::deque<VariableLabelScope>`，每次分配并返回一个新 Array；没有 setter、Player 缓存或 motion-load 副作用 | 数据源与 owner 已对齐；`createTJSArrayWithItems_guess` 复刻 `sub_704CB8` 的 Array Variant + borrowed Items 组合，getter 直接按 deque 顺序 emplace | CLOSED |
 | Player parameter table | `initNonEmoteMotion` 从 +528 读 `parameterize/parameter`；+384 是 56B vector，+408 是 `multimap<ttstr,entry*>`，并注册到当前 Player 及父链 | helper 已改为 raw `tTJSVariant` 输入，`MotionParameterEntry::id` 已改为 `ttstr`，decoded `motionObject/contentObject` 与其额外 owner 已删除 | CLOSED |
@@ -844,8 +872,10 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
     A8L8 `[alpha,luminance]→[luminance,luminance,luminance,alpha]`、异常与
     icon 几何边界。KRKR/spec=1 也已从 `record.file` 的 raw node 恢复
     all-group/icon 枚举、严格 width/height、raw/RL 4-byte 解码、RL 1-byte+
-    palette expand、全透明 2x2 与 descriptor 写表。仅“CPU 组整页后一次
-    Update”是已注明的 Web 纹理 API 边界；这些 named raw owner/decode 站点已
+    palette expand、全透明 2x2 与 descriptor 写表。后续又补齐 value-record/
+    embedded-rect/backpointer 拓扑、两阶段 decode、滞后一记录的 palette gate，以及
+    metadata→subrect Update→free 顺序；software texture 已实现非零 left/top 写入，
+    不再以整页 CPU batch 作为平台边界。这些 named raw owner/decode 站点已
     对齐，但不能据此把尚未逐调用者复核的 source 数据流或整个
     psbfile/motionplayer 记为 CLOSED。
 44. 联合反编译 `Player_findSource@0x6948E8`、
@@ -1824,8 +1854,11 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
   `0x598B58/0x598C58/0x598D58/0x598E44/0x598E64/0x5992E8/0x599438/0x599554/
   0x5995D8/0x5996E4`、dispatch `0x59673C/0x596E24/0x596F50/0x5975E0/
   0x5976C4/0x597854`、media `0x5998C4..0x59A4B0` 及 typed registration
-  `0x597E98..0x5980F4/0x59A8D8..0x59B708`，当前实现的分支、输出覆盖时机、AddRef/Release 顺序、
-  invalid-object/member-miss 错误码与 callback 参数数均未发现新偏差。此次复核同时纠正了
+  `0x597E98..0x5980F4/0x59A8D8..0x59B708`，当时记录为分支、输出覆盖时机、
+  AddRef/Release 顺序、invalid-object/member-miss 错误码与 callback 参数数均未发现新偏差。
+  后续逐指令复核证伪了其中一项：`EnumMembers@0x59748C..0x59749C` 的 unknown-tag
+  throw-helper-return 路径必须把 category 写成 `-1`，本地当时仍为 `0`；现已纠正，且
+  独立扫描其余 throw-helper continuation 未发现第二处差异。此次复核同时纠正了
   `.claude/agent-memory/ida-deep-analyzer/project_m9_source_subsystem.md` 中仍把 ObjSource
   写成 `tTJSVariant` facade、把 KRKR/raw pixel 标为 open 的过期结论。
 
