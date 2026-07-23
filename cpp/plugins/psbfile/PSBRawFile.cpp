@@ -529,6 +529,10 @@ namespace PSB {
     tjs_int PSBRawNode::GetInt() const {
         // sub_599438 @ 0x599438 is the outer tag dispatcher. Its nested
         // 0x599484/0x5994AC jump tables are the inlined integer decoders above.
+        // LDRSB/LDURSH/FCVTZS write W0 on negative/numeric paths; 18 direct
+        // consumers read W0 (four via signed SCVTF D0,W0) and two discard it.
+        // This closes the return semantics as signed 32-bit even though some
+        // wide-tag paths incidentally leave additional bits in X0.
         switch(GetType()) {
             case 0x02:
                 return 1;
@@ -676,8 +680,8 @@ namespace PSB {
     }
 
     const std::uint8_t *PSBRawNode::GetResource(std::uint32_t &size) const {
-        // PSB_getResourceData @ 0x5996E4 leaves size untouched when chunkData
-        // is null and only recognizes the resource-index tag family.
+        // PSBRawNode_GetResource_guess @ 0x5996E4 leaves size untouched when
+        // chunkData is null and only recognizes the resource-index tag family.
         const PSBRawHeader *header = owner_->GetHeader();
         if(header->chunkData == nullptr) {
             return nullptr;

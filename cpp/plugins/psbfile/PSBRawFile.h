@@ -147,6 +147,9 @@ namespace PSB {
         [[nodiscard]] bool ContainsDictionaryKey(const char *key) const;
         [[nodiscard]] std::vector<std::string> GetDictionaryKeys() const;
         [[nodiscard]] int GetTypeCategory() const;
+        // sub_599438 @ 0x599438 returns a signed 32-bit TJS integer.  Narrow
+        // negative paths write W0 directly and every consuming caller reads
+        // W0; full X0 left by some wide-tag paths is not part of the ABI value.
         [[nodiscard]] tjs_int GetInt() const;
         [[nodiscard]] tjs_real GetDouble() const;
         [[nodiscard]] const char *GetString() const;

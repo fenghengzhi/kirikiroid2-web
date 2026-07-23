@@ -10,6 +10,11 @@ Android 12 / API 31 `userdebug` arm64-v8a AVD 上的正式 ADB/RPC/Frida runner 
   refresh；当前 `reference/` 的 142 只天然 MDF 全部可正常解压，没有 failure 样本；
 - seed filter：203,302 字节与独立 host xorshift 全量一致，Frida 捕获
   `0x598268 → 0x598708 → 0x6863CC → 0x598960`；
+- tag `0x09` 整数边界：天然 `m2logo.mtn@0x36F8` 的
+  `09 00 00 00 ff 00` 经公开 `new PSBFile(path).root[...]` 路径得到
+  `tvtInteger(4)`/`4278190080`，raw `GetInt@0x599438` 得到相同 X0、W32 为
+  `-16777216`，`GetDouble@0x5992E8` 为 `4278190080.0`；Frida 捕获 factory、
+  storage load、root NCB wrapper、Dictionary/Array dispatch、assign-int64 与两只 raw getter；
 - media：singleton/class/Full TJS 均就绪，`ezsave → encrypted motion → ezsave` 的
   dispatch 替换、旧 borrowed stream metadata、`0x8F7D68` deleting destructor 与 roundtrip
   全部 `status=ok`；Frida 捕获 `0x59849C/0x59993C/0x599E04/0x598538/0x598708/`
@@ -45,7 +50,8 @@ data xref。
 
 本地对应 `cpp/plugins/psbfile/PSBDispatch.h` 的完整类声明和
 `cpp/plugins/psbfile/main.cpp` 的 37 个 out-of-line `PSBValueDispatch` 定义
-（32 个接口槽、构造器、`assign` 与 3 个私有 helper），以及相关析构包装。
+（32 个接口槽、构造器、`assign` 与 3 个私有 helper），以及多继承生成的三组
+secondary-base 重复入口。
 
 ```text
 0x59641C 0x59659C 0x59673C 0x596BC4 0x596C70
@@ -56,6 +62,12 @@ data xref。
 0x597854 0x597A18 0x597A20 0x597A28 0x597A2C 0x597A30 0x597A38
 0x597A40 0x597AC0 0x597AD4
 ```
+
+三组重复入口分别是 `Construct@0x597A30/0x597A38`、native
+`Invalidate@0x596F38/0x596F3C` 与 native `Destruct@0x597A28/0x597A2C`：每组前者属于
+main vtable 追加槽，后者属于 secondary `iTJSNativeInstance` vtable；它们不是三只析构
+wrapper。本地每组共享同一源码方法，正是多继承 thunk/重复入口应还原的 source-level 形状；
+六个 IDB 入口已分别补 main/secondary 配对注释并保存。
 
 其中 `0x596F50` 已由完整 tag switch、四 Variant 生命周期、array/dictionary packed
 遍历和 callback 三参数调用确认命名为 `PSBValueDispatch_EnumMembers`；不再是 guess。
@@ -87,6 +99,28 @@ data xref。
 并在 `0x596B88` 以 `MOV X0,X19` 返回同一 destination 地址。四个直接 caller
 `0x5971B4/0x5973A4/0x597848/0x5979B4` 均忽略返回值。本地已从 `void` 恢复为返回
 现有 destination pointer；原源码是 pointer 还是 reference 在 ARM64 ABI 上不可区分。
+
+同日纯静态复核（未运行或修改 oracle runner、未使用 Frida）又把 dispatch 三个容易被
+Hex-Rays 折叠的尾边界逐指令钉死：`GetCount@0x5975E0` 只有 tag `0x20` 且 member name
+为空时才写 out/返回 0，已知非 Array tag 与未知-tag helper-return 均为
+`TJS_E_NOTIMPL(-1002)`；`PropGetByNum@0x5976C4` 的已知非 Array tag为
+`TJS_E_MEMBERNOTFOUND(-1001)`，越界 miss 只在非 MUSTEXIST 时清 result；
+`PropGet@0x597854` 的 unknown-tag helper-return 在 `0x5978EC` 重新检查 MUSTEXIST，
+与普通 miss 一样选择清 result/0 或 `-1001`。这些写/清站点均没有 result-null guard。
+本地控制流和错误码已经一致，无需修改生产行为。IDB 同步补入
+`PSBValueDispatch` ARM64 语义布局、五只函数签名和 vtable/尾路径注释；私有转换 helper
+命名为 `PSBValueDispatch_assign_guess`，接口槽保留确定的
+`EnumMembers/GetCount/PropGetByNum/PropGet` 名称后保存。
+
+`assign` 的两只复杂临时量也已沿公共 TJS helper 静态闭合。Octet 路径
+`0x596B50..0x596B74 → 0xA0E0F4/0xA0FB64/0xA0F778/0xA0F790` 的引用数为
+`1 → 2 → 1`；Array/Dictionary child dispatch 路径 `0x5968F8..0x596958` 的引用数为
+`1 → 3 → 5 → 3 → 2`，最终两次引用分别属于 result 的 Object 与 ObjThis。
+本地 `tTJSVariant(data,size)`、`tTJSVariant(dispatch,dispatch)`、Variant 赋值、临时析构和
+显式 construction-reference Release 的对象数量与顺序均一致，不再把这两条列为未闭合
+生命周期。IDB 对 stripped binary 中没有字面原名的两只公共 helper 使用
+`TJSAllocVariantOctet_guess` / `tTJSVariant_ReleaseContent_guess`，不把本地源码拼写冒充
+二进制自身的名字证据。
 
 ## B. packed name 反向解码 helper（1）
 
@@ -145,14 +179,23 @@ source 调 `TJSAlignedDealloc`；三个失败点 `0x598328/0x59840C/0x59869C` �
 的 entry-table 索引也已从 signed host product 改为 W32 product + UXTW。其最终 node
 relative 仍按 `0x59783C..0x597840` 保持 W32 + SXTW；两类扩展没有互相泛化。
 
-`GetInt@0x599438` 对 tag `0x09/0x0A/0x0C` 在函数体内物化 X0；完整 20 个 direct xref
-中有 18 个只消费 W0，`0x694CA8/0x694CEC` 两处完全丢弃返回值，没有 caller 消费 X0
-高位。故现有证据只能证明 conversion/callsite 的 signed 32-bit 可观察语义，尚不能唯一判断
-外层 method 源码返回型是 `tjs_int` 还是 `tjs_int64`；manifest 不把本地 32-bit 签名升格为
-二进制事实。两只 getter 的 nested CFG 与最小 codegen 对照支持四个共享 decoder-shaped
+`GetInt@0x599438` 对 tag `0x09/0x0A/0x0C` 在函数体内会留下完整 X0；完整 20 个 direct xref
+中有 18 个只消费 W0，`0x694CA8/0x694CEC` 两处完全丢弃返回值。fresh callee disasm 又显示
+负 8/16 位路径直接 `LDRSB/LDURSH W0; RET`，float/double 路径也以 `FCVTZS W0` 返回；若
+接口返回有符号 64 位，这些负值路径在 X0 中会变成错误的正数。四个 direct caller 另以
+`SCVTF D0,W0` 明确做 signed-32 转换。因此返回类型语义现已闭合为有符号 32 位，本地
+`tjs_int` 签名正确；宽 tag 路径遗留的 X0 高半部不属于 32 位 ABI 结果。两只 getter的
+nested CFG 与最小 codegen 对照支持四个共享 decoder-shaped
 边界，本地已用 `_guess` helper 复原；精确名字和“inline helper vs 显式 nested switch”仍开放。
 其中 tag `0x0B` 的共享 64-bit decoder 读取完整 56 位且不扩展 bit55，GetInt 的高字节读取
 被优化掉只说明 wrapper 最终截断，不再被当成源码只读低 32 位的证据。
+
+2026-07-23 的真实 arm64 oracle 进一步闭合天然 tag `0x09`：固定 SHA-256 的
+`m2logo.mtn` 节点在公开 TJS Dictionary/Array 路径得到 type 4、payload `4278190080`；
+同节点的原始 `GetInt` 返回寄存器 X0 为 `0x00000000FF000000`，正式 W32 结果为
+`-16777216`，`GetDouble` 为 `4278190080.0`。这证明 40-bit positive 在惰性 dispatch
+赋值时保留 64 位，而 raw getter 按 signed-32 返回；X0 高半部是 incidental register state，
+不再保留 `tjs_int64` 候选。
 
 `sub_598D58@0x598D58` 还有一个此前漏记的真实 alias caller：
 `sub_695DE8@0x696A84..0x696A90` 同时把 `&v278` 传入 X0 与 X2，调用
@@ -219,6 +262,11 @@ offset。三个 helper 原本已符合这两层顺序，只有 `assign` 的 entr
 本地对应 `PSBMediaRegistry.cpp` 与 `PSBMedia.cpp/.h`：process-lifetime singleton、
 非原子 refcount、normalize nullsub、exists/open/list/local-name、container replacement、
 borrowed resource pointer 与 raw-node Resolve 生命周期。
+2026-07-23 的纯静态 fresh decompile 加上 `off_1A0B510` vtable 槽序再次逐项确认该 17-entry
+归属；在不运行 oracle runner、不使用 Frida 的本轮复审中，本地字段顺序、析构逆序、
+adaptor-null 泄漏/缓存更新、borrowed stream 和 delayed Resolve out 均未发现新偏差。
+IDB 已把除两只既有 nullsub 外的 media/辅助边界按证据强度命名为 `_guess`，补入 ARM64
+语义类型与函数头证据注释后保存；后缀明确表示 vtable/调用链映射不是二进制字面原名。
 2026-07-23 的对象审计确认 `Resolve@0x59A4B0` 已直接建立 root raw node，
 `GetResourceData@0x59A0B4` 已直接展开 resource/chunk table 解码；`PSBMedia.cpp.o` 不再
 引用 `PSBFile::GetRoot@0x598A3C` 或 `PSBRawNode::GetResource@0x5996E4`。
@@ -318,7 +366,12 @@ ADB/RPC/Frida oracle 覆盖。borrowed/non-retaining 的“stream 不保活 owne
 反编译证据证明；运行时只观察 stream 自身 metadata，刻意不解引用 replacement 后的悬挂
 Block。一次性 adapter smoke 仍不计入二进制实测。
 
-本轮修改后 macOS Release `psbfile-dll` 为 **575/575**（10 cases），
+本轮又用现成 `ezsave.pimg` 加固了 child-dispatch owner 生命周期：先销毁
+`PSBFile`，再清空 root closure，Array 仍可 `GetCount/PropGetByNum`；随后清空 Array
+closure，返回的 Dictionary 仍可 `PropGet("name")`。这直接守护
+`assign@0x59673C` 已反编译确认的 Object/ObjThis 双引用与 raw-owner 独立保活链，不构造
+新 fixture，也不冒充 Android runtime oracle。macOS Release `psbfile-dll` 现为
+**577/577**（10 cases）。此前同一 checkpoint 的
 `motionplayer-dll` 为 **1376/1376**（21 cases），`motionplayer-ttstr-hash-test` 为
 **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
 `krkr2_wasmtime_guest` 目标通过。motion playback runner 在当轮尚未进入 guest，当时的

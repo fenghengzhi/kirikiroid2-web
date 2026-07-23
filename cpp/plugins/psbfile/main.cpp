@@ -767,16 +767,19 @@ namespace PSB {
     }
 
     tjs_error PSBValueDispatch::Construct(tjs_int, tTJSVariant **, iTJSDispatch2 *) {
-        // sub_597A38 @ 0x597A38.
+        // sub_597A30 @ 0x597A30 is the main-vtable entry; sub_597A38 @
+        // 0x597A38 is the secondary iTJSNativeInstance duplicate entry.
         return TJS_S_OK;
     }
 
     void PSBValueDispatch::Invalidate() {
-        // nullsub_259 @ 0x596F3C.
+        // nullsub_258 @ 0x596F38 is the main-vtable entry; nullsub_259 @
+        // 0x596F3C is the secondary iTJSNativeInstance duplicate entry.
     }
 
     void PSBValueDispatch::Destruct() {
-        // nullsub_261 @ 0x597A2C.
+        // nullsub_260 @ 0x597A28 is the main-vtable entry; nullsub_261 @
+        // 0x597A2C is the secondary iTJSNativeInstance duplicate entry.
     }
 
     tjs_error PSBValueDispatch::IsValid(tjs_uint32, const tjs_char *, tjs_uint32 *,
@@ -1034,6 +1037,13 @@ namespace PSB {
                 } else {
                     data = nullptr;
                 }
+                // PSBValueDispatch_assign_guess @ 0x596B50..0x596B74 calls
+                // TJSAllocVariantOctet_guess @ 0xA0E0F4; for non-null,
+                // non-empty data it starts at ref=1.  Then
+                // tTJSVariant_CopyRef_guess @ 0xA0FB64 retains it before
+                // releasing the old result.  Destruction of the temporary
+                // through 0xA0F778/0xA0F790 drops that extra reference,
+                // leaving the copied result as the sole non-null Octet owner.
                 *result = tTJSVariant(data, size);
                 break;
             }
@@ -1051,6 +1061,11 @@ namespace PSB {
             case 0x21: {
                 auto *dispatch = new PSBValueDispatch(
                     value_.GetOwnerSlotAddress_guess(), node);
+                // 0x5968F8..0x596958 starts at ref=1, installs the same
+                // dispatch in Object and ObjThis (ref=3), CopyRefs both slots
+                // into result (ref=5), destroys the temporary (ref=3), then
+                // releases the construction reference below (ref=2).  Those
+                // final two references belong exactly to result's closure.
                 *result = tTJSVariant(dispatch, dispatch);
                 dispatch->Release();
                 break;

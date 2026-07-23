@@ -51,16 +51,51 @@ saved.
   address through `MOV X0,X19@0x596B88`; all four direct callers ignore it.
   Local code now returns its existing destination pointer instead of `void`.
   Pointer versus reference source spelling remains ABI-indistinguishable.
+- A fresh static-only dispatch audit (no oracle runner and no Frida) fixed the
+  exact tail semantics that Hex-Rays can hide. `GetCount@0x5975E0` writes its
+  out pointer only for Array and returns -1002 for every known non-Array tag and
+  for an unknown-tag helper-return. `PropGetByNum@0x5976C4` returns -1001 for a
+  known non-Array tag; an out-of-range lookup clears result only without
+  MEMBERMUSTEXIST. `PropGet@0x597854` rejoins the same flag gate after an
+  unknown-tag helper-return, clearing result/returning 0 or returning -1001.
+  None of the successful/clear sites guards a null result pointer. Local code
+  matches these branches. IDB now has the semantic PSBValueDispatch layout,
+  signatures/comments for all five audited functions, and the private helper
+  name `PSBValueDispatch_assign_guess`; interface slot names remain exact.
+- The A-group's three extra entries are secondary-base duplicates, not
+  destructor wrappers: Construct `0x597A30/0x597A38`, native Invalidate
+  `0x596F38/0x596F3C`, and native Destruct `0x597A28/0x597A2C`. In each pair
+  the first is the main-vtable slot and the second is the secondary
+  `iTJSNativeInstance` entry; local source correctly shares one method body.
+  All six IDB entries now carry paired main/secondary comments and the IDB is
+  saved.
+- `PSBValueDispatch_assign_guess` complex temporary lifetimes are now closed
+  through fresh decompile of `TJSAllocVariantOctet_guess@0xA0E0F4`,
+  `tTJSVariant_CopyRef_guess@0xA0FB64`, and destructor wrapper
+  `0xA0F778`/`tTJSVariant_ReleaseContent_guess@0xA0F790`. Non-null, non-empty
+  Octet refcounts are 1 -> 2 -> 1. A new child dispatch goes 1 -> 3
+  (temporary Object/ObjThis) -> 5 (result CopyRef) -> 3 (temporary destruction)
+  -> 2 (construction-reference Release),
+  leaving exactly result's two closure references. Local expression-temporary
+  and explicit-Release ordering matches this chain.
+- The existing `ezsave.pimg` unit test now destroys `PSBFile`, clears the root
+  closure, exercises the child Array, clears the Array closure, and then
+  exercises its child Dictionary. This is a local non-oracle guard for each
+  dispatch independently retaining the raw owner; macOS Release passes
+  577/577 assertions in 10 cases.
 - Resource access in `0x59673C`, `0x596C70`, `0x5996E4`, and `0x59A0B4`
   constructs/loads offset-view metadata before length-view metadata, then reads
   the indexed length entry before the indexed offset entry. Only `0x59673C`
   needed an entry-order fix; the three helpers were already correct.
 - `PSBFile::Load@0x598268` returns true at `0x5983B0` if the invalid-type throw
   helper unexpectedly returns; it must not continue into `AsOctet()`.
-- `GetInt@0x599438` materializes X0 for tags 09/0A/0C. Of 20 complete direct
-  xrefs, 18 consume only W0 and two discard the result; none consumes the X0
-  high half. Signed-32 conversion/callsite semantics are proven, but the outer
-  method source return type (`tjs_int` vs `tjs_int64`) remains unclosed.
+- `GetInt@0x599438` leaves full X0 on some wide-tag paths, but negative 8/16-bit
+  paths return directly through `LDRSB/LDURSH W0` and float/double conversion
+  uses `FCVTZS W0`. Eighteen consuming callers read W0 (four use signed
+  `SCVTF D0,W0`) and two discard it. A signed-int64 interface would return the
+  wrong positive value on negative narrow tags, so the interface is proven
+  signed 32-bit; local `tjs_int` is correct and incidental X0 high bits are not
+  part of the return value.
 - `GetInt@0x599438` and `GetDouble@0x5992E8` have an outer tag dispatcher plus
   nested 32-bit integer, 64-bit integer, float, and double decoder shapes. Local
   code now shares four `_guess` decoders. Exact names/member identity and inline
@@ -72,14 +107,18 @@ saved.
   lookup. The try-get body has no self guard and performs release-old, reload
   source owner, AddRef, then child-node write. This does not prove the shape or
   self guard of any general raw-node assignment special member.
-- The same raw-node scratch is initialized at 0x6960D4, reused through request
-  probing, enumeration, and all packed-record loop backedges, then released on
-  the normal path at 0x697380. Local PlayerResource now preserves this scratch
-  through its request/enumeration/atlas helper, including copy-assignment and
-  in-place clip descent. It declares the scratch before sourceRoot, matching
-  0x6960D4 -> 0x6960E8 construction and reverse 0x697358 -> 0x697380 cleanup.
-  The Android long function remains split across local
-  helpers, so the full post-atlas lifetime/call boundary is still open.
+- A later full-function audit disproved the old "one raw-node scratch" model.
+  Persistent `var_B0` is constructed at 0x6960D4, survives request probing,
+  enumeration, second-pass decode, packed metadata and the self-aliased `clip`
+  descent, then dies at 0x697380..0x6973A4. A separate per-record node `p` is
+  constructed at 0x696F90 for `compress`/`pal` lookup and dies at
+  0x69724C..0x697274. The record container is a contiguous value-vector with an
+  embedded rect, rect-to-record backpointer, one sourceKey string and BGRA freed
+  at the use site. Local PlayerResource now preserves both node lifetimes, the
+  one-record-lagged palette gate and that value-vector/backpointer/free topology.
+  Optimized code cannot uniquely decide whether the atlas helper was originally
+  a source-level inline helper, so helper splitting is not evidence that the
+  persistent-node lifetime remains open.
 - `sub_695DE8@0x69612C..0x696154` releases the strict `icon` temporary owner
   after the second try-get but before branching on its saved result. Local code
   now uses an explicit scope plus bool so this temporary is not retained until
@@ -93,8 +132,11 @@ saved.
   The former claim that no second loadable container existed was false and has
   been corrected in the analysis. This remains local lifecycle validation, not
   an Android runtime oracle.
-- Current tracked media fixtures cannot reach dictionary listing: ezsave's
-  root has only Resource/Integer/Array children, the unfiltered motion root is
-  Resource tag 0x1A, Resolve cannot return the root, and every path segment
-  requires a Dictionary. This is a packed-asset plus call-chain negative, not
-  a single empty search.
+- The two committed media fixtures still cannot reach dictionary listing:
+  ezsave's root has only Resource/Integer/Array children, the unfiltered motion
+  root is Resource tag 0x1A, Resolve cannot return the root, and every path
+  segment requires a Dictionary. This narrow fixture statement must not be used
+  as the current overall reachability status: the restored ignored
+  `reference/autoskip.psb` has a reachable `source/main/icon` Dictionary with
+  the ordered keys `arrow/auto/skip`, so the dictionary branch is now closed by
+  an existing natural asset.

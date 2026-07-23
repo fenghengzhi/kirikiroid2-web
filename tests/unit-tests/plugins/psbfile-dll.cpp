@@ -353,13 +353,21 @@ TEST_CASE("raw psb dispatch reads packed values and retains its owner") {
     tTJSVariant layersValue;
     REQUIRE(root->PropGet(0, TJS_W("layers"), nullptr, &layersValue, root) ==
             TJS_S_OK);
+    // PSBFile has already been destroyed. Drop the root closure's Object and
+    // ObjThis references; the child Array dispatch must retain the raw owner.
+    rootValue.Clear();
     auto *layers = layersValue.AsObjectNoAddRef();
+    REQUIRE(layers != nullptr);
     tjs_int count = 0;
     REQUIRE(layers->GetCount(&count, nullptr, nullptr, layers) == TJS_S_OK);
     REQUIRE(count == 32);
     tTJSVariant lastLayerValue;
     REQUIRE(layers->PropGetByNum(0, -1, &lastLayerValue, layers) == TJS_S_OK);
+    // Drop the parent Array closure. The child Dictionary dispatch must
+    // independently retain the same raw owner.
+    layersValue.Clear();
     auto *lastLayer = lastLayerValue.AsObjectNoAddRef();
+    REQUIRE(lastLayer != nullptr);
     tTJSVariant lastName;
     REQUIRE(lastLayer->PropGet(0, TJS_W("name"), nullptr, &lastName,
                                lastLayer) == TJS_S_OK);

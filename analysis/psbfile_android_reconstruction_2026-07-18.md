@@ -27,8 +27,21 @@
   `Refresh@0x598960` 八项 offset 条件、section/packed-table/dictionary/reference 检查，
   没有损坏 header/table 或 unknown tag。天然 `0x0A/0x0B/0x0C` 节点均为 0；73/112
   内容天然覆盖 `offsetChunkData == size`。另有 31,186 个 tag `0x09` 正数全部大于
-  `INT32_MAX`，可用于后续 5-byte positive / wrapper 截断边界 oracle，但本条只记录
-  物料结构，不冒充 Android runtime 结果。
+  `INT32_MAX`；其中下述 `m2logo.mtn` 节点现已完成真实 Android runtime oracle，其余统计
+  仍只表示物料结构。
+- 天然 `reference/xp3/logo_test/m2logo.mtn`（SHA-256
+  `4382de8283cc0782fd269b16d3157bf3a9ec28916440f9192690eb178c0c18fe`）在文件偏移
+  `0x36F8` 保存 `09 00 00 00 ff 00`，即正数 `0xFF000000 = 4278190080`。真实 Full TJS
+  通过公开路径
+  `new PSBFile(path).root["object"]["m2cheeseware_logo"]["motion"]["back_white"]`
+  `...["frameList"][3]["content"]["color"]` 得到 type `tvtInteger(4)`、64-bit payload
+  `4278190080`；同节点直接调用原始 `GetInt@0x599438` 得到
+  `X0=0x00000000FF000000`，按现有 caller 的 W32 边界观察为 `-16777216`，
+  `GetDouble@0x5992E8` 得到 `4278190080.0`。Frida 实测主链为
+  `0x59B14C → 0x5980F4 → 0x598268 → 0x598538 → 0x598708 → 0x59B28C → 0x59B48C →`
+  `0x5981F8 → 0x597854/0x5976C4 → 0x59673C → 0xA0FF60`，随后独立 raw getter
+  探针进入 `0x599438/0x5992E8`。这闭合了 5-byte positive 的 TJS/runtime 边界；后续纯静态
+  callee/caller 指令审计又确认 `GetInt` 的 ABI 结果是有符号 32 位，X0 高半部不属于返回值。
 - process-lifetime PSBMedia 的真实 Android 生命周期也为 `status=ok`：Full TJS、singleton、
   class object 均就绪；`ezsave/2036.tlg` 首次打开得到 48,265-byte borrowed stream；切到
   encrypted motion container 后 lookup=false，但 `_file/_container` 与 dispatch 已替换，旧
@@ -298,11 +311,32 @@
   helper 意外返回，仍把 category 写成 `-1`，随后构造完四只 Variant 并返回
   `TJS_E_NOTIMPL`。本地此前保留初始化值 `0`，现已恢复该 throw-helper continuation；
   对其余 `sub_95440C/sub_95458C` 调用点的独立复核没有发现第二处 continuation 偏差。
+- 本轮在**不运行或修改 oracle runner、也不使用 Frida**的条件下，对
+  `assign@0x59673C`、`EnumMembers@0x596F50`、`GetCount@0x5975E0`、
+  `PropGetByNum@0x5976C4`、`PropGet@0x597854` 再做 fresh decompile，并对容易被
+  Hex-Rays 省略的尾路径逐指令复核。`GetCount` 的精确边界为：invalid owner/valid byte
+  返回 `TJS_E_INVALIDOBJECT(-1006)`；非空 member name 返回 `TJS_E_NOTIMPL(-1002)`；
+  所有已知非 Array tag 原样返回 `-1002` 且不写 out；Array 才在 `0x59763C..0x5976AC`
+  解码 count、无条件写 out 并返回 0，未知 count tag 写 0；未知 value tag 的异常 helper
+  若返回仍为 `-1002`。`PropGetByNum` 对已知非 Array tag返回
+  `TJS_E_MEMBERNOTFOUND(-1001)`，越界仅在未置 `TJS_MEMBERMUSTEXIST` 时无条件清 result；
+  `PropGet` 的 unknown-tag continuation `0x5978E0..0x5978F0` 与普通 miss 共用同一
+  flag gate，即未置该位时清 result/返回 0，否则返回 `-1001`。三处成功/清空站点都没有
+  result-null guard。本地逐分支、写入时点与错误码均一致，未发现新的行为差异。
 - `assign@0x59673C`、`getResource_guess@0x596C70`、
   `PSBRawNode::GetResource@0x5996E4` 与 `PSBMedia::GetResourceData@0x59A0B4`
   四条 resource 路径都先取得 chunk-offset view、再取得 chunk-length view，索引 entry 时
   则先读 `lengths[index]`、后读 `offsets[index]`。三个 helper 原本已符合两层顺序；只有
   `assign` 的 entry 访问反了，现已纠正，保留损坏表输入下的首个越界访问顺序。
+- fresh decompile `TJSAllocVariantOctet_guess@0xA0E0F4`、
+  `tTJSVariant_CopyRef_guess@0xA0FB64`、析构 wrapper
+  `0xA0F778`/`tTJSVariant_ReleaseContent_guess@0xA0F790` 又闭合了
+  `PSBValueDispatch_assign_guess@0x59673C` 两条临时对象链。非空、非零长度 Octet 先以
+  ref=1 分配并复制 bytes，CopyRef 先增到 2、再释放旧 result 并
+  安装，临时 Variant 析构后回到 1。Array/Dictionary child dispatch 则从 ref=1 开始，
+  临时 Object/ObjThis 两槽使其到 3，CopyRef 到 result 后为 5，临时量析构两次 Release
+  回到 3，最后显式释放 construction reference 后为 2；剩余两次引用恰由 result closure
+  持有。本地两条表达式及显式 `dispatch->Release()` 与该顺序完全一致，并已补地址注释。
 - `PSBFile::Load@0x598268` 对既非 String 也非 Octet 的参数调用异常 helper 后，
   `0x5983B0` 仍显式返回 true；此前本地在 helper 意外返回时继续执行 `AsOctet()`，现已恢复
   throw-helper continuation 的精确返回值。
@@ -388,8 +422,10 @@
   `ResourceManager_loadResource@0x6A9204..0x6A92F8` 的 selected/loaded/root 生命周期按
   callsite 证据复原，不把本地 special-member 写法升格为二进制事实。
 - 删除无 Android 独立入口的 `CreatePSBValueDispatch/CreatePSBValueVariant`；
-  `PSBValueDispatch` 的完整类声明位于 `PSBDispatch.h`，35 个方法仍在 `main.cpp`
-  out-of-line 定义。`load@0x6A92FC..0x6A9358` 直接从 selected owner/root 构造 dispatch，
+  `PSBValueDispatch` 的完整类声明位于 `PSBDispatch.h`，37 个定义仍在 `main.cpp`
+  out-of-line（32 个接口槽、构造器、`assign` 与 3 个私有 helper）。此前“35 个方法”是
+  已过期的统计口径，现已与 112-entry manifest 纠正一致。`load@0x6A92FC..0x6A9358`
+  直接从 selected owner/root 构造 dispatch，
   不再生成 retained `PSBRawNode` 临时量。
 - fresh decompile `isExistMotion@0x6A96F8` 与 `findMotion@0x6A9ED4` 纠正了旧的 TJS root
   导航：前者全程 raw-node；后者只在命中最终 motion node 后构造 dispatch。direct/fallback
@@ -1844,12 +1880,19 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `GetInt@0x599438`：整数 tag `0x05..0x0A` 分别执行 signed 8/16/24/32/40/48-bit
   扩展，tag `0x0C` 原样读取 64-bit；但 tag `0x0B` 的 7 字节路径只拼接低 56 位，
   **不**把 bit55 扩展到最高字节。`GetInt@0x599438` 自身对 tag `0x09/0x0A/0x0C`
-  明确物化 X0；完整 20 个 direct xref 中 18 个只消费 W0，另两个丢弃返回值，没有 caller
-  消费 X0 高位，因此该 quirk 在现有 caller 上不可观察。二进制尚不能唯一闭合其源码签名
-  是 `tjs_int` 还是 `tjs_int64`，不能把 caller
-  截断误写成 callee 的返回宽度；惰性 TJS Integer 与 double 转换仍会观察到差异。本地通用
+  会留下完整 X0，但完整 20 个 direct xref 中 18 个只消费 W0，另两个丢弃返回值。后续逐指令
+  复核进一步闭合了返回宽度：负 8 位路径是 `LDRSB W0; RET`，负 16 位路径是
+  `LDURSH W0; RET`，float/double 转换也分别以 `FCVTZS W0` 返回；若源码返回有符号
+  `tjs_int64`，这些路径会错误地产生正的 64 位值。四个 caller 又以 `SCVTF D0,W0` 明确按
+  signed-32 消费。因此原接口的类型语义可确认是有符号 32 位（本地 `tjs_int`），宽 tag
+  路径遗留的 X0 高半部只是 32 位返回 ABI 的非结果状态。惰性 TJS Integer 与 double 转换仍会
+  观察到差异。本地通用
   reader 已恢复 Android 的 7-byte zero-extension 边界。仓库没有天然 tag `0x0B` 物料，
-  按规则未构造 fixture。
+  按规则未构造 fixture。2026-07-23 又用天然 `m2logo.mtn` 的 tag `0x09` 正数
+  `0xFF000000` 做真实 arm64 oracle：惰性 TJS Variant 为 type 4、payload `4278190080`，
+  raw `GetInt` 的 X0 为同值、W32 为 `-16777216`，`GetDouble` 为 `4278190080.0`。
+  因此 40-bit positive 的两层可观察边界已闭合；其中 raw getter 的正式结果是 W0 的
+  `-16777216`，不能再把 incidental X0 高半部解释成 64 位返回型证据。
 
 - 2026-07-19 fresh decompile `resource` helpers `0x596C70/0x5996E4`、惰性 octet
   转换 `0x59673C`、media resource `0x59A0B4`，并复核 motion callers
@@ -2178,7 +2221,7 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   `Resolve@0x59A698..0x59A6EC` 的净 owner 生命周期及 `sub_598D58@0x598D58` 的 hit out
   更新顺序可证；helper 原名/member 身份、Resolve 的 move-vs-copy+temporary、显式 special
   members/self guards、`sub_597AD4` 的两裸参数-vs-零开销 raw-node holder 参数、
-  `GetInt@0x599438` 的 `tjs_int`-vs-`tjs_int64` 返回型、`PackedArrayView_guess` 是否真实源类型，
+  `PackedArrayView_guess` 是否真实源类型，
   以及 `memcpy`/unaligned cast 写法均不可辨识。代码与本文已删除把其中任一等价形状冒充
   唯一源码事实的表述。
 
@@ -2217,6 +2260,46 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   **1214/1214 assertions（16 cases）** 全绿。既有 port-wasm RL driver 的 8 个 case 亦
   全绿；它不是 Android oracle，不能替代 cache 淘汰边界的运行时差分。
 
+- 2026-07-23 在不运行 oracle runner、也不使用 Frida 的条件下，对 media 17-entry 组和
+  `PSBFile::Transfer_guess@0x598A64` 又做了一轮纯静态 fresh decompile/vtable/xref 复审。
+  `off_1A0B510` 的连续槽严格为 complete/deleting destructor、AddRef、Release、GetName、
+  两只 normalize nullsub、CheckExistentStorage、Open、GetListAt、
+  GetLocallyAccessibleName；`0x599E04/0x59A0B4/0x59A4B0` 则分别保持 container cache、
+  inline chunk-table resource lookup 与分段 Dictionary resolve。关键 cache 伪代码为：
+
+  ```text
+  slash = name.IndexOf('/', 0); if (slash < 0) return false
+  container = name.SubString(0, slash); if (object && cached == container) return true
+  file = new PSBFile; if (!file->LoadStorage(container)) { delete file; return false; }
+  adaptor = CreateAdaptor(file, false, false); next = adaptor ? Object(adaptor) : Void
+  _file = next; _container = container; return true
+  ```
+
+  本地 `PSBMedia` 的字段顺序、非原子 refcount、ttstr/Variant 析构逆序、adaptor-null 时未认领
+  `file` 且仍更新 container 的边界、borrowed stream 与 delayed resolve-out 均逐项一致，未发现
+  需要修改 `cpp/` 的新差异。`0x598A64` 的唯一 code xref 仍是
+  `ResourceManager_loadResource@0x6A920C`：source 由 X0 传入、non-trivial return slot 由 X8
+  传入，函数复制 owner、保留 incoming refcount==0 删除分支并清 source；这进一步限定其为
+  一只 consuming by-value helper，但仍不能唯一判断原名、member/free 身份或 special-member
+  拼写。IDB 已为上述 16 只已确认边界补 `_guess` 名、ARM64 语义类型和证据注释并保存。
+  同轮还纠正了 agent memory 中已被后续证据推翻的“一只 raw-node scratch / post-atlas
+  lifetime open”记录，以及只对最初两只 fixture 成立却被当成当前总体状态的 dictionary
+  listing 可达性记录。
+
+- 2026-07-24 继续只走静态反编译与本地非 oracle 验证。
+  `PSBValueDispatch_assign_guess@0x59673C` 的复杂临时量
+  生命周期已通过 `TJSAllocVariantOctet_guess@0xA0E0F4`、
+  `tTJSVariant_CopyRef_guess@0xA0FB64`、析构 wrapper `0xA0F778` 和
+  `tTJSVariant_ReleaseContent_guess@0xA0F790` 闭合：非空、非零长度 Octet 为
+  `1 → 2 → 1`；新 child dispatch 为构造引用 1，经临时 Object/ObjThis 到 3、
+  result CopyRef 到 5、临时析构回到 3，最后显式 Release 到 2，恰好只剩 result closure
+  的两份引用。本地表达式临时量与显式 `dispatch->Release()` 顺序一致。现有
+  `ezsave.pimg` 单元测试又在 `PSBFile` 与 root closure 均销毁后调用 child Array，随后
+  销毁 Array closure 再调用其返回的 Dictionary，为每级 child 独立保活同一 raw owner
+  提供本地非 oracle 守护；精确引用数仍由上述静态反编译证据承担。
+  macOS Release `psbfile-dll` 为 **577/577 assertions（10 cases）**。该轮没有运行或修改
+  oracle runner，也没有使用 Frida。
+
 ## 后续闭合条件
 
 要对“psbfile 插件自身”给出 100% 结论，至少还需要：
@@ -2229,7 +2312,8 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
    没有现成失败物料时记录验证缺口，不从零伪造 fixture。
 2. packed-table 的 tag/width/stride 分支已逐项反编译；剩余工作是用现有损坏资产或
    Android oracle 核对真实越界/崩溃表现，包括损坏 table、tag `0x0B` 的 7-byte
-   zero-extension quirk 与 >4 GiB storage 截断边界；不能为了测试主动构造新 fixture。
+   zero-extension quirk 与 >4 GiB storage 截断边界；tag `0x09` 的 5-byte positive 已由
+   天然 `m2logo.mtn` 在 TJS/raw 两层闭合。不能为了测试主动构造新 fixture。
 3. media 已覆盖 array listing、空段 miss、同 container miss、缺失 container 异常与旧缓存
    保留。此前“只有一只可加载 container”的断言已被现有加密 motion PSB 证伪；当前测试已
    覆盖 `ezsave → motion → ezsave` 的成功跨-container replacement，以及旧 stream 在 owner
@@ -2239,7 +2323,7 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
    ADB/RPC/Frida `status=ok`；仍未覆盖的是 CreateAdaptor-null。上述结果均来自真实
    `libkrkr2.so`，不再由离线协议模拟替代。
 4. 优化后二进制尚不能唯一恢复若干源码拼写：`sub_597AD4` 是两裸参数还是零开销 raw-node
-   holder 参数、`GetInt@0x599438` 返回 `tjs_int` 还是 `tjs_int64`、PSBFile/raw-node 的显式
+   holder 参数、PSBFile/raw-node 的显式
    special members 与 self guards、若干 inline helper 的原名/member 身份、
    `PackedArrayView_guess` 是否为真实源类型，以及 unaligned read 的具体写法。若要把“尽可能”
    提升为字面 100%，需要带符号/未优化构建、调试类型或原始源码等新增证据，不能从当前

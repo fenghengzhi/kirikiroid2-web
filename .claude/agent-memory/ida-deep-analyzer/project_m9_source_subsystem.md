@@ -39,10 +39,11 @@ bucket = h % bucketCount
 - clearCache  `@0x6A8438` — 每个 Layer dispatch `Invalidate(self)`，清 list，current bytes=0；不碰 hashmap
 - bufLayer getter `@0x6A84FC` — CopyRef Layer Variant@+40
 - unload      `@0x6A959C` — HashMap A erase(sub_6EBF2C)
-- unloadAll   `@0x6A8B94`(IDA误并入 loc_6A8CF8) — 清 +104 list、memset HashMap A buckets、Rb_tree erase、+144 ttstr、+72 layer-list 全清
+- destructor `@0x6A8B94` — 依次销毁 raw-owner map、layer-id set、random Variant 和 SourceCache 基类状态；它不是 `unloadAll`。
+- unloadAll   `@0x6A8CF8`（独立序言，注册点 `0x6AB8BC` 字面绑定 `unloadAll`）— 只沿同一 unordered_map 的 +104 global node chain 删除 mapped records、memset +88 buckets，并清零 +104/+112；不清 Rb_tree、random 或 +72 layer-list。
 - findSource  `@0x6AAB3C` — split name by "/",前缀须=="src"；从 mapped record 的 raw root 导航 `source/group/icon/name`，fixed key strict、dynamic key has+strict；命中后构造 ObjSource(operator new 0x18，字段为 raw owner/node pair + lazy texture)，再以 sticky=false/err=false 创建 adaptor；adaptor 失败只返回 void，不回收新 ObjSource
-- findMotion  `@0x6A9ED4` — HashMap A by motion-name → dict["object"][name]["motion"][label],拷进 caller 的 vector(20B元素)。也 fallback 走 +104 list
-- isExistMotion `@0x6A96F8` — 同 findMotion 的存在性版本,先 HashMap A 后 +104 list
+- findMotion  `@0x6A9ED4` — HashMap A by motion-name → dict["object"][name]["motion"][label],拷进 caller 的 vector(20B元素)。后备扫描走同一 unordered_map 的 +104 global node chain，不是独立 list。
+- isExistMotion `@0x6A96F8` — 同 findMotion 的存在性版本；bucket 路径后的 +104 扫描仍属于同一 unordered_map，不是第二容器。
 - random      `@0x6AB56C` — 无关(KAG.random PropGet)
 - trim        `@0x6A6B08` — current>limit 时按 99% 阈值做 greedy subsequence 扫描，不是连续 prefix/LRU cut
 
@@ -69,5 +70,5 @@ bucket = h % bucketCount
 3. 2026-07-19 纠正：ObjSource 已恢复为 `PSBRawNode + texture*`，六个注册成员、clip、ensureTexture、drawLayer、adaptor 失败泄漏与析构顺序均已按上述地址闭合；旧 dict-facade/open 结论不得继续使用。
 4. RM 继承面、unloadAll/isExistMotion/findMotion/findSource/random NCB 表面已恢复；各方法体继续按独立证据审计。
 5. 2026-07-19 后续纠正：Win/spec=2、KRKR/spec=1 以及非 atlas ObjSource 均已直接消费 `LoadedResourceRecord::file` raw nodes；这些 named raw 导航站点与 ObjSource 生命周期已对齐，整页上传是单独的 Web API 边界，但该结论不再外推为完整 source 调用链关闭。
-6. 2026-07-23 再纠正：`sub_695DE8@0x695DE8` 有 Player 与 `sub_6F1060@0x6F1060` 两个调用者；prepared item 在 `sub_6C2334@0x6C360C` 保存持久 `SourceState*`，`sub_6ADFBC@0x6AE154..0x6AE188` 在纹理 getter 后从该 alias 重读 rect。本地旧快照链被证伪，现恢复共享 helper、直接 alias、现场 rect、atlas `{x,y,right,bottom}`、right-left/bottom-top 尺寸、单 scratch/未初始化 size 槽及 pal/non-pal 分支内重复 lookup。旧“Win/KRKR 整链 CLOSED”只能说明 raw owner/map 迁移阶段，不再作为全局裁决。
+6. 2026-07-23 再纠正：`sub_695DE8@0x695DE8` 有 Player 与 `sub_6F1060@0x6F1060` 两个调用者；prepared item 在 `sub_6C2334@0x6C360C` 保存持久 `SourceState*`，`sub_6ADFBC@0x6AE154..0x6AE188` 在纹理 getter 后从该 alias 重读 rect。本地旧快照链被证伪，现恢复共享 helper、直接 alias、现场 rect、atlas `{x,y,right,bottom}`、right-left/bottom-top 尺寸、持久 `var_B0` + per-record `p` 两只 raw node、未初始化 size 槽及 pal/non-pal 分支内重复 lookup。旧“Win/KRKR 整链 CLOSED”只能说明 raw owner/map 迁移阶段，不再作为全局裁决。
 7. 同轮继续区分两个 type-erased getter：`0x6D5C68` 用 `sub_6F67CC` 只读现有 texture，`0x6ADE24` 才用 `sub_6F1060`；`0x6F1060` 与 Private `0x6DE738` 的 fallback 均把调用后的 `SourceState.object` 直接交给 `0x6C1B70`。2026-07-23 后续已恢复 Player 常驻 descriptor/color Dictionaries 与继承 NCB `(source,descriptor)` 调用链；Web-only `Player.loadSource(name)` 是独立额外兼容 helper，不再被误称为 NCB alias 实现。
