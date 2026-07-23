@@ -41,7 +41,7 @@ namespace PSB {
     const char *
     PSBValueDispatch::getString_guess(const std::uint8_t *node) const {
         // sub_596BC4 @ 0x596BC4 is a distinct dispatch member even though no
-        // code xref survives in libkrkr2.so.  It reads owner from this+24.
+        // code xref survives in libkrkr2.so. It reads owner from value_.
         const PSBRawHeader *header = value_.GetOwner()->GetHeader();
         const detail::PackedArrayView_guess offsets(header->strings);
         std::uint32_t index = 0;

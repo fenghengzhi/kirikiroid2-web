@@ -8,7 +8,8 @@
 
 namespace PSB {
     // Raw collection dispatch reconstructed from sub_597AD4 @ 0x597AD4.
-    // PSBRawNode is exactly the owner+node pair retained by that constructor;
+    // PSBRawNode is the local semantic holder for the retained owner+node pair;
+    // optimized code cannot distinguish that source shape from two raw fields.
     // valid_ is the independent byte toggled by sub_596F0C @ 0x596F0C.
     class PSBValueDispatch final : public iTJSDispatch2,
                                    public iTJSNativeInstance {
@@ -20,9 +21,10 @@ namespace PSB {
 
         tjs_uint Release() override;
 
-        // The one-instruction vtable entries in 0x596D78..0x597A20 return
-        // TJS_E_NOTIMPL unconditionally.  This differs from tTJSDispatch's
-        // member-name-sensitive defaults.
+        // Unsupported one-instruction vtable entries in
+        // 0x596D78..0x597A20 return TJS_E_NOTIMPL unconditionally.  Construct
+        // returns TJS_S_OK, while the native Invalidate/Destruct slots are
+        // nullsubs; all differ from tTJSDispatch's member-sensitive defaults.
         tjs_error FuncCall(tjs_uint32, const tjs_char *, tjs_uint32 *,
                            tTJSVariant *, tjs_int, tTJSVariant **,
                            iTJSDispatch2 *) override;

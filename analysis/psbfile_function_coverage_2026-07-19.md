@@ -25,8 +25,8 @@ data xref。
 ## A. PSBValueDispatch 与 packed dispatch ABI（42）
 
 本地对应 `cpp/plugins/psbfile/PSBDispatch.h` 的完整类声明和
-`cpp/plugins/psbfile/main.cpp` 的 35 个 out-of-line `PSBValueDispatch` 定义、
-iTJSDispatch2/iTJSNativeInstance 槽和析构包装。
+`cpp/plugins/psbfile/main.cpp` 的 37 个 out-of-line `PSBValueDispatch` 定义
+（32 个接口槽、构造器、`assign` 与 3 个私有 helper），以及相关析构包装。
 
 ```text
 0x59641C 0x59659C 0x59673C 0x596BC4 0x596C70
