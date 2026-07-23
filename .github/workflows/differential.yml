@@ -25,6 +25,11 @@ env:
   ANDROID_CMDLINE_TOOLS_VERSION: "11076708"
   LEGACY_NDK_BASENAME: "android-ndk-r17c"
   LEGACY_NDK_SHA1: "12cacc70c3fd2f40574015631c00f41fb8a39048"
+  # Google Drive references are mutable; pin the exact oracle inputs each job consumes.
+  REFERENCE_LIBKRKR2_SHA256: "ded611b9018cfca425e97d5f8aaaa5dff809c4bacefb66ba77806372ddb52b38"
+  REFERENCE_APK_SHA256: "262bab07722b95d76e3e10170744d88f80141260502e3d0a7b4e005ed3090379"
+  REFERENCE_YUZULOGO_XP3_SHA256: "edb465666eda7ad5be538d1ca0c2d9874e9ecc59836560e6310e8711b8a1067e"
+  REFERENCE_M2LOGO_XP3_SHA256: "e6f92c31186e081ef660bc17bc22d8f355ca0210d5bec99e7ae7ddc69fa6b4b0"
 
 jobs:
   # ── Port vs libkrkr2 value diff under Wasmtime LLDB guest-debug.
@@ -59,13 +64,22 @@ jobs:
             fi
           done
           brew install rclone
-          mkdir -p reference
-          rclone copy gdrive:reference reference \
-            --checksum \
-            --transfers 8 \
-            --checkers 16 \
-            --progress
-          test -f reference/libkrkr2/libkrkr2.so
+          mkdir -p reference/xp3
+          for case in yuzulogo m2logo; do
+            rclone copyto \
+              "gdrive:reference/xp3/logo_test_oracle_${case}.xp3" \
+              "reference/xp3/logo_test_oracle_${case}.xp3" \
+              --checksum \
+              --drive-acknowledge-abuse
+          done
+          {
+            printf '%s  %s\n' \
+              "${REFERENCE_YUZULOGO_XP3_SHA256}" \
+              "reference/xp3/logo_test_oracle_yuzulogo.xp3"
+            printf '%s  %s\n' \
+              "${REFERENCE_M2LOGO_XP3_SHA256}" \
+              "reference/xp3/logo_test_oracle_m2logo.xp3"
+          } | shasum -a 256 -c -
 
       - name: Cache Emscripten SDK
         uses: actions/cache@v4
@@ -262,13 +276,16 @@ jobs:
           done
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends rclone
-          mkdir -p reference
-          rclone copy gdrive:reference reference \
+          mkdir -p reference/libkrkr2
+          rclone copyto \
+            gdrive:reference/libkrkr2/libkrkr2.so \
+            reference/libkrkr2/libkrkr2.so \
             --checksum \
-            --transfers 8 \
-            --checkers 16 \
-            --progress
-          test -f reference/libkrkr2/libkrkr2.so
+            --drive-acknowledge-abuse
+          printf '%s  %s\n' \
+            "${REFERENCE_LIBKRKR2_SHA256}" \
+            "reference/libkrkr2/libkrkr2.so" \
+            | sha256sum -c -
 
       - name: Install harness build tools
         run: |
@@ -365,13 +382,38 @@ jobs:
           done
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends rclone
-          mkdir -p reference
-          rclone copy gdrive:reference reference \
+          mkdir -p reference/libkrkr2 reference/apk reference/xp3
+          rclone copyto \
+            gdrive:reference/libkrkr2/libkrkr2.so \
+            reference/libkrkr2/libkrkr2.so \
             --checksum \
-            --transfers 8 \
-            --checkers 16 \
-            --progress
-          test -f reference/libkrkr2/libkrkr2.so
+            --drive-acknowledge-abuse
+          rclone copyto \
+            "gdrive:reference/apk/krkr2 1.4.4.apk" \
+            "reference/apk/krkr2 1.4.4.apk" \
+            --checksum \
+            --drive-acknowledge-abuse
+          for case in yuzulogo m2logo; do
+            rclone copyto \
+              "gdrive:reference/xp3/logo_test_oracle_${case}.xp3" \
+              "reference/xp3/logo_test_oracle_${case}.xp3" \
+              --checksum \
+              --drive-acknowledge-abuse
+          done
+          {
+            printf '%s  %s\n' \
+              "${REFERENCE_LIBKRKR2_SHA256}" \
+              "reference/libkrkr2/libkrkr2.so"
+            printf '%s  %s\n' \
+              "${REFERENCE_APK_SHA256}" \
+              "reference/apk/krkr2 1.4.4.apk"
+            printf '%s  %s\n' \
+              "${REFERENCE_YUZULOGO_XP3_SHA256}" \
+              "reference/xp3/logo_test_oracle_yuzulogo.xp3"
+            printf '%s  %s\n' \
+              "${REFERENCE_M2LOGO_XP3_SHA256}" \
+              "reference/xp3/logo_test_oracle_m2logo.xp3"
+          } | sha256sum -c -
 
       # Redroid needs the Android binder driver. Azure kernels don't
       # ship binder in the default module set — try linux-modules-extra

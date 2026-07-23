@@ -4,6 +4,8 @@ project(krkr2_wasmtime LANGUAGES CXX)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 add_library(krkr2_wasmtime_guest_objects OBJECT
+    ${KRKR2PLUGIN_PATH}/BinaryAccessor.cpp
+    ${KRKR2PLUGIN_PATH}/DrawDeviceD3D.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/main.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/EmotePlayer.cpp
     ${KRKR2PLUGIN_PATH}/motionplayer/EmoteEngine.cpp
@@ -200,6 +202,11 @@ target_link_options(krkr2_wasmtime_guest PRIVATE
     "SHELL:-sUSE_SDL_TTF=2"
     "SHELL:-sFORCE_FILESYSTEM=1"
     "SHELL:-sALLOW_UNIMPLEMENTED_SYSCALLS=0"
+    # unrar/libarchive retain POSIX-only branches (flock, getpwnam, vfork,
+    # execve, and related syscalls) that cannot run in the Wasmtime guest.
+    # Keep those platform imports linkable; the full-guest provider rejects
+    # unexpected imports at instantiation.  Production C++ dependencies must
+    # still be linked above rather than implemented as host-side substitutes.
     "SHELL:-sERROR_ON_UNDEFINED_SYMBOLS=0"
     "SHELL:-sALLOW_MEMORY_GROWTH=1"
     "SHELL:-sINITIAL_MEMORY=268435456"
