@@ -1,5 +1,48 @@
 # Android `PSBFile.dll` 复原审计（2026-07-18）
 
+## 2026-07-23：真实 arm64 Android ADB/RPC/Frida oracle 闭合
+
+- 本轮在 Android 12 / API 31 `userdebug` arm64-v8a AVD
+  `emulator-5554` 上安装重打包 APK，APK 内运行 ABI-matched `libharness.so` 与原始
+  `libkrkr2.so`（SHA-256
+  `ded611b9018cfca425e97d5f8aaaa5dff809c4bacefb66ba77806372ddb52b38`）。所有下列
+  结果都经真实 ADB、TCP/RPC、APK 进程和 arm64 二进制取得，不是 Qiling、host fake engine
+  或离线协议模拟。
+- `ezsave.pimg` 的 octet 与 storage 两个入口均为 `status=ok`：输入、声明与 owner size
+  都是 64,585，初始 refcount=1，header 为 owner 内联 view，magic=`PSB\0`，strict
+  refresh=true。Frida 实测调用链分别为
+  `0x598268 → 0x598708 → 0x598960` 与
+  `0x598538 → 0x598708 → 0x598960`。
+- 现有加密 motion PSB 的 seed `742877301` 路径为 `status=ok`：输入/owner size
+  5,366,313，过滤区 203,302 字节与独立 host xorshift 逐字节相等，strict refresh=true，
+  root type=`0x21`。Frida 链为
+  `0x598268 → 0x598708 → 0x6863CC → 0x598960`。
+- 当前普通、ignored 的 `reference/` 中有 142 只天然 `mdf\0` 文件；只读普查得到
+  `142/142` zlib 成功、声明长度一致且输出均为 `PSB\0`，没有天然 failure 样本。抽取
+  `ニコラ－その２（デビュー）.ks.scn` 的 octet/storage Android oracle 均为
+  `status=ok`：50,708 字节 MDF 解为 700,308 字节 PSB，owner/header/refcount/strict
+  refresh 全部一致，Frida 链与 raw 两入口相同。
+- process-lifetime PSBMedia 的真实 Android 生命周期也为 `status=ok`：Full TJS、singleton、
+  class object 均就绪；`ezsave/2036.tlg` 首次打开得到 48,265-byte borrowed stream；切到
+  encrypted motion container 后 lookup=false，但 `_file/_container` 与 dispatch 已替换，旧
+  stream metadata 不变；deleting destructor 返回；再切回 ezsave 后仍得到同尺寸、
+  `Reference=true/AllocSize=48265/CurrentPos=0` 的 stream。完整 Frida 主链为
+  `0x59849C → 0x59993C → 0x599E04 → 0x598538 → 0x598708 → 0x59A330 →`
+  `0x59A0B4 → 0x59A4B0 → 0x8F7C74`，replacement 经过 `0x5998C4`，两次释放均进入
+  deleting destructor `0x8F7D68`。
+- 真实运行还证伪了 oracle runner 的两个旧假设：RPC `READY` 只表示 so base + guest heap，
+  不表示 Full TJS；必须先 `TVPMainScene::startupFrom`，再等待
+  `libkrkr2+0x1AE2FD0` 非零，最后才能 `TJS_INIT`，否则 harness 会永久缓存 bare TJS。
+  其次，`/data/local/tmp` 虽可由 root ADB 写入，却不是 `untrusted_app` 可用的 KiriKiri
+  storage 路径；旧 runner 在 `Open@0x59993C` 首次加载时沿
+  `0x599E04 → 0x598538 → 0x8ED920` 抛 storage 异常，并因异常跨 runtime 触发
+  `std::terminate`。runner 现显式启动一只现有 self-contained XP3，并把 storage/media
+  输入 staging 到 app-private files 目录、继承 app UID；正式 CLI 与 Frida 重跑均通过。
+- 尚未获得天然 runtime 覆盖的只剩损坏 MDF/zlib failure、filter 后 offset failure、损坏
+  packed table、tag `0x0B` 极端值、>4 GiB storage、PSBMedia dictionary listing 与
+  CreateAdaptor-null。当前资产没有相应可达样本；按物料规则不制造 fixture。这些验证缺口
+  不推翻 112 个函数的静态归属与本轮正常/替换生命周期实测，但也不能被误写成已闭合。
+
 ## 2026-07-23：Player 内部 source resolver、四角颜色与 execute gate 纠正
 
 - fresh decompile/disasm `sub_6C2334@0x6C2334` 与 `sub_698188@0x698188`
@@ -265,8 +308,9 @@
   且绝不读取 replacement 后的悬挂 Block。开发时曾用一次性、未入库的 in-memory
   engine test double 直接 smoke `run_media_lifecycle_case` 的 host-side adapter 状态机；
   它绕过了 runner，并未模拟或验证 ADB 命令、TCP/RPC transport、Android/APK 启动或
-  `libkrkr2.so` 执行，不能记作可复现测试结果。本轮
-  `adb devices -l` 无连接设备，因此尚不把真实 Android 执行记为通过。
+  `libkrkr2.so` 执行，不能记作可复现测试结果。后续同日已在 arm64 API 31 AVD 上补齐
+  真正的 `startupFrom` 与 app-private staging，并取得上述正式 CLI + Frida `status=ok`；
+  fake smoke 仍只保留为历史说明，不再代表当前验证上限。
 - fresh IDA 曾把 `0x8F7D04..0x8F7DC0` 合成一只函数；`0x8F7D68` 有独立 ARM64 序言，
   并在同一 `Block && !Reference` 清理后 tail-call `operator delete(self)`。IDB 已拆为
   complete destructor `0x8F7D04..0x8F7D68` 与 deleting destructor
@@ -740,9 +784,9 @@ packed value tag `0x11` 与有符号 stride，以及真实加密 motion PSB 的 
 runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。现有 PIMG 与加密 motion PSB
 已经覆盖 NCB typed class 的真实 TJS 构造、同-container media 复用/miss、缺失 container
 异常后旧缓存保留、成功跨-container 替换，以及替换后旧 stream metadata/析构的本地守护。
-stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地测试不读取悬挂 block，且
-Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结果，不能把本地守护或
-该一次性 adapter smoke 提升为 ADB/RPC 或二进制运行结果。
+stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地测试和 Android oracle
+都不读取悬挂 block。后续真实 arm64 AVD 已取得 replacement、metadata、deleting dtor 与
+roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 仍不计入该结果。
 
 ## 本轮纠正的既有误差
 
@@ -1897,8 +1941,7 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
   通过。该轮覆盖后来发现漏计 `0x59AA84..0x59B708` 的 NCB tail；后续 manifest
   先补到 108，2026-07-22 再拆出三个被 IDA 合并的入口并纠正为 111 个业务/NCB函数；
   2026-07-23 又沿 PLT 调用链补回 `0x59B7E8` 的 vector 扩容慢路径，当前为 112。
-  `adb devices -l`
-  当前为空，本轮 Android oracle 未执行；这是外部验证缺口，不是
+  该历史阶段当时 `adb devices -l` 为空，Android oracle 未执行；这是外部验证缺口，不是
   实现失败，也不替代此前在线 AVD 的 `status=ok` 历史证据。
 
 - 2026-07-19 fresh decompile `sub_59673C@0x59673C`、
@@ -1911,7 +1954,7 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
   `{owner,null-node}` 并额外 AddRef。Enum callback result 忽略、closure ObjThis 选择、
   `TJS_ENUM_NO_VALUE` argc 与四只 Variant 析构顺序经逐指令复核无需修改。Mac 四目标构建、
   `psbfile-dll` **484/484**、`motionplayer-dll` **398/398** 与 Web Debug 最终链接全部
-  通过。ADB 列表仍为空，边界 oracle 本轮未执行且未伪造崩溃 fixture。
+  通过。该历史阶段当时 ADB 列表仍为空，边界 oracle 未执行且未伪造崩溃 fixture。
 
 - 2026-07-19 再次 fresh decompile `PSBMedia::Resolve@0x59A4B0`、strict getter
   `sub_598C58@0x598C58` 并逐指令复核 `0x59A694..0x59A704`，纠正上一阶段写反的生命周期
@@ -2156,9 +2199,9 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
 1. 使用现有天然损坏资产覆盖 MDF zlib 失败及 filter 后 offset 校验失败；MDF 成功路径已
    用本机现有 `.ks.scn` 在 Android oracle 验证，但仓库没有已提交 MDF fixture；media/TJS
    注册路径已由现有 PIMG 闭合。2026-07-19 曾对当时外部可用的 142 个 MDF 与 222 个
-   解包后 PSB 做只读普查，未发现天然失败样本；它们不在当前 checkout 中，当前
-   `reference/` 为空且 tracked test asset 只有两只 PSB/PIMG，不能把历史外部资产数写成
-   当前仓库物料。没有现成物料时记录验证缺口，不从零伪造 fixture。
+   解包后 PSB 做只读普查，未发现天然失败样本。`reference/` 后续已由用户改为普通、ignored
+   本地目录并恢复物料；当前重新普查到 142 只天然 MDF，全部成功且无 failure 样本。
+   没有现成失败物料时记录验证缺口，不从零伪造 fixture。
 2. packed-table 的 tag/width/stride 分支已逐项反编译；剩余工作是用现有损坏资产或
    Android oracle 核对真实越界/崩溃表现，包括损坏 table、tag `0x0B` 的 7-byte
    zero-extension quirk 与 >4 GiB storage 截断边界；不能为了测试主动构造新 fixture。
@@ -2167,8 +2210,9 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
    覆盖 `ezsave → motion → ezsave` 的成功跨-container replacement，以及旧 stream 在 owner
    replacement 后自身 metadata/析构仍可用的本地守护。stream 不保活 owner、block 为 borrowed
    仍由 ctor/dtor 反编译证据证明，测试不读取悬挂 block。仍未由天然可达节点覆盖的是
-   dictionary media listing 与 CreateAdaptor-null。cross-container Android runner 已实现，
-   但本轮没有连接设备，真实 libkrkr2.so 执行结果仍待取得；不能用离线协议模拟替代。
+   dictionary media listing 与 CreateAdaptor-null。cross-container Android runner 已在真实
+   arm64 API 31 AVD 上取得 ADB/RPC/Frida `status=ok`；该结果来自真实 `libkrkr2.so`，
+   不再由离线协议模拟替代。
 4. 优化后二进制尚不能唯一恢复若干源码拼写：`sub_597AD4` 是两裸参数还是零开销 raw-node
    holder 参数、`GetInt@0x599438` 返回 `tjs_int` 还是 `tjs_int64`、PSBFile/raw-node 的显式
    special members 与 self guards、若干 inline helper 的原名/member 身份、

@@ -193,12 +193,12 @@ APK_RPC_PORT = 5039
 class AdbHarnessEngine:
     """Oracle engine backed by adb + HarnessActivity in krkr2-harness.apk.
 
-    HarnessActivity extends ``Cocos2dxActivity`` and, inside
-    ``System.loadLibrary("krkr2")``'s init chain, populates the
-    ``TVPScriptEngine`` global — so by the time we arrive here TJS has
-    every NCB class (Motion.Player etc.) registered. The Activity opens
-    a ``ServerSocket`` on port 5039; we connect to it via
-    ``adb forward tcp:5039 tcp:5039``.
+    HarnessActivity extends ``Cocos2dxActivity`` and opens a ``ServerSocket``
+    on port 5039 as soon as its class loads.  ``READY`` therefore proves only
+    that libkrkr2's base and the RPC heap are available.  Full TJS and its NCB
+    classes are initialized later by ``startup_from()``; callers that need
+    them must trigger startup and wait for the relevant native global first.
+    The host connects through ``adb forward tcp:5039 tcp:5039``.
     """
 
     def __init__(

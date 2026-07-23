@@ -231,7 +231,9 @@ python3 tests/differential/python/run_psbfile_load_adb.py \
   --decrypt-seed 742877301 --trace
 
 python3 tests/differential/python/run_psbfile_load_adb.py \
-  --media-lifecycle --trace
+  --media-lifecycle \
+  --startup-xp3 reference/xp3/caution_minimal/caution_minimal.xp3 \
+  --trace
 ```
 
 The return-value checks cover the decoded `PSB\0` buffer size, intrusive owner
@@ -258,6 +260,17 @@ When combined with `--trace`, the Frida target set additionally includes
 `Open` (0x59993C), `EnsureContainer` (0x599E04), `GetResourceData` (0x59A0B4),
 `Resolve` (0x59A4B0), adaptor creation (0x59A330), and the stream constructor /
 deleting destructor (0x8F7C74 / 0x8F7D68).
+
+This mode needs the APK's Full TJS/NCB startup, so the runner first copies the
+existing `--startup-xp3` into the app-private files directory and calls
+`TVPMainScene::startupFrom`. It waits for the real `TVPScriptEngine` global
+before issuing `TJS_INIT`; calling `TJS_INIT` earlier would permanently select
+the harness's bare-TJS fallback. Storage and media inputs are likewise staged
+under `/data/user/0/org.github.krkr2/files` with the app UID. Android SELinux
+does not let the untrusted APK consume KiriKiri storage directly from
+`/data/local/tmp`, even though rooted ADB can write there. `--remote-dir` or
+`KRKR2_DEVICE_DIR` remains available for an explicitly supplied app-readable
+directory; when neither is set, app-private staging is the safe default.
 
 The two tracked files do not provide a PSBMedia-reachable Dictionary node:
 `ezsave.pimg` exposes resources, integers, and an Array at its root, while the

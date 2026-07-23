@@ -1,5 +1,24 @@
 # PSBFile.dll 函数覆盖 manifest（2026-07-19）
 
+## 2026-07-23 真实 Android oracle 状态
+
+Android 12 / API 31 `userdebug` arm64-v8a AVD 上的正式 ADB/RPC/Frida runner 已闭合
+正常 raw、storage、MDF、seed filter 与 cross-container PSBMedia 生命周期：
+
+- raw octet/storage：`0x598268/0x598538 → 0x598708 → 0x598960`，均 `status=ok`；
+- MDF：现有 50,708-byte `.ks.scn` 经两入口均解为 700,308-byte PSB 并通过 strict
+  refresh；当前 `reference/` 的 142 只天然 MDF 全部可正常解压，没有 failure 样本；
+- seed filter：203,302 字节与独立 host xorshift 全量一致，Frida 捕获
+  `0x598268 → 0x598708 → 0x6863CC → 0x598960`；
+- media：singleton/class/Full TJS 均就绪，`ezsave → encrypted motion → ezsave` 的
+  dispatch 替换、旧 borrowed stream metadata、`0x8F7D68` deleting destructor 与 roundtrip
+  全部 `status=ok`；Frida 捕获 `0x59849C/0x59993C/0x599E04/0x598538/0x598708/`
+  `0x59A330/0x59A0B4/0x59A4B0/0x8F7C74/0x5998C4/0x8F7D68`。
+
+runner 同步纠正了两项被实机证伪的前提：`READY` 不是 Full-TJS-ready，media 必须先
+`startupFrom`；`/data/local/tmp` 也不是 app-readable storage，输入现 staging 到 APK 私有
+files 目录并继承 app UID。此前的一次性 in-memory adapter smoke 仍不计作 Android 结果。
+
 ## 边界纠正
 
 IDA 枚举证明 PSBFile 的业务/NCB 入口覆盖 `0x59641C..0x59B708`，共 111 个
@@ -211,7 +230,7 @@ borrowed resource pointer 与 raw-node Resolve 生命周期。
 `EnsureContainer@0x599E04` 的成功 replacement、旧 `tTVPMemoryStream` 自身 metadata/析构
 在 replacement 后仍可用，以及切回首容器。stream 的 borrowed/non-retaining 性质来自
 ctor/dtor 反编译证据，测试不读取悬挂 block。此前“缺少第二容器、无法覆盖 replacement”的
-结论已被证伪并删除；该用例只是本地守护，尚不是 Android runtime oracle。
+结论已被证伪并删除；该用例的本地守护和后续真实 Android oracle 现均已通过。
 
 2026-07-23 已补 `run_psbfile_load_adb.py --media-lifecycle`：真实 APK harness 会用相同
 两只 tracked 资产执行 `ezsave → raw motion → ezsave`，观察 PSBMedia 的 Android ABI 状态，
@@ -220,8 +239,8 @@ ctor/dtor 反编译证据，测试不读取悬挂 block。此前“缺少第二�
 0x59A0B4/0x59A330/0x59A4B0/0x8F7C74/0x8F7D68`。开发时仅用一次性、未入库的
 in-memory engine test double 直接 smoke 过 host-side adapter 状态机；它绕过 runner，
 没有模拟或验证 ADB 命令、TCP/RPC transport，也没有启动 Android 或执行 `libkrkr2.so`，
-因此不记作可复现测试结果。
-但本轮无连接 Android 设备，所以这仍是“oracle 已实现、真机结果待取得”，不是二进制实测通过。
+因此不记作可复现测试结果。后续正式 runner 已在真实 arm64 AVD 上取得上述二进制实测，
+两类结果没有混记。
 fresh IDA 也已把原来合并的 `0x8F7D04..0x8F7DC0` 拆为 complete destructor
 `0x8F7D04` 与独立 deleting destructor `0x8F7D68`，补类型/注释并保存 IDB。
 
@@ -289,9 +308,10 @@ STL 实例化；没有未归属业务入口。该 manifest 只证明 **Android�
 仅由本地源码宣称。manifest 也不替代损坏输入的 Android runtime oracle；MDF zlib failure、
 filter 后 offset failure、损坏 packed table、tag `0x0B`、>4 GiB storage、dictionary
 listing 和 CreateAdaptor-null 分支，仍按主分析记录为缺少天然 fixture 的验证缺口。
-成功跨-container replacement 与旧 stream metadata/析构的本地守护已由现有第二容器覆盖；
-Android runtime oracle 路径也已实现，但本轮无设备、尚未取得真实执行结果。borrowed/
-non-retaining 仍由反编译证据证明，不能把本地测试或一次性 adapter smoke 误记为 ADB/RPC 或二进制实测。
+成功跨-container replacement 与旧 stream metadata/析构已同时由本地守护和真实 Android
+ADB/RPC/Frida oracle 覆盖。borrowed/non-retaining 的“stream 不保活 owner”性质仍由
+反编译证据证明；运行时只观察 stream 自身 metadata，刻意不解引用 replacement 后的悬挂
+Block。一次性 adapter smoke 仍不计入二进制实测。
 
 本轮修改后 macOS Release `psbfile-dll` 为 **575/575**（10 cases），
 `motionplayer-dll` 为 **1376/1376**（21 cases），`motionplayer-ttstr-hash-test` 为
