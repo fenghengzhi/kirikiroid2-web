@@ -43,4 +43,5 @@ tests/differential/artifacts/
 # are fast (~10s with NDK clang).
 tests/differential/oracle_runner/harness/prebuilt/libharness.so
 
-reference/
+/reference/
+/reference

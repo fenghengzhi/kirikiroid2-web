@@ -41,12 +41,31 @@ jobs:
         with:
           submodules: false
 
-      - name: Init submodules (public + private reference)
+      - name: Init public submodules
+        run: git submodule update --init --recursive
+
+      - name: Download reference files from Google Drive
         env:
-          PRIVATE_SUBMODULE_PAT: ${{ secrets.PRIVATE_SUBMODULE_PAT }}
+          RCLONE_CONFIG_GDRIVE_TYPE: drive
+          RCLONE_CONFIG_GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          RCLONE_CONFIG_GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          RCLONE_CONFIG_GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
         run: |
-          git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
-          git -c submodule.reference.update=checkout submodule update --init --recursive
+          set -euo pipefail
+          for name in RCLONE_CONFIG_GDRIVE_CLIENT_ID RCLONE_CONFIG_GDRIVE_CLIENT_SECRET RCLONE_CONFIG_GDRIVE_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing GitHub Actions secret: GDRIVE_${name#RCLONE_CONFIG_GDRIVE_}"
+              exit 1
+            fi
+          done
+          brew install rclone
+          mkdir -p reference
+          rclone copy gdrive:reference reference \
+            --checksum \
+            --transfers 8 \
+            --checkers 16 \
+            --progress
+          test -f reference/libkrkr2/libkrkr2.so
 
       - name: Cache Emscripten SDK
         uses: actions/cache@v4
@@ -224,12 +243,32 @@ jobs:
         with:
           submodules: false
 
-      - name: Init submodules (public + private reference)
+      - name: Init public submodules
+        run: git submodule update --init --recursive
+
+      - name: Download reference files from Google Drive
         env:
-          PRIVATE_SUBMODULE_PAT: ${{ secrets.PRIVATE_SUBMODULE_PAT }}
+          RCLONE_CONFIG_GDRIVE_TYPE: drive
+          RCLONE_CONFIG_GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          RCLONE_CONFIG_GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          RCLONE_CONFIG_GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
         run: |
-          git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
-          git -c submodule.reference.update=checkout submodule update --init --recursive
+          set -euo pipefail
+          for name in RCLONE_CONFIG_GDRIVE_CLIENT_ID RCLONE_CONFIG_GDRIVE_CLIENT_SECRET RCLONE_CONFIG_GDRIVE_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing GitHub Actions secret: GDRIVE_${name#RCLONE_CONFIG_GDRIVE_}"
+              exit 1
+            fi
+          done
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rclone
+          mkdir -p reference
+          rclone copy gdrive:reference reference \
+            --checksum \
+            --transfers 8 \
+            --checkers 16 \
+            --progress
+          test -f reference/libkrkr2/libkrkr2.so
 
       - name: Install harness build tools
         run: |
@@ -307,12 +346,32 @@ jobs:
         with:
           submodules: false
 
-      - name: Init submodules (public + private reference)
+      - name: Init public submodules
+        run: git submodule update --init --recursive
+
+      - name: Download reference files from Google Drive
         env:
-          PRIVATE_SUBMODULE_PAT: ${{ secrets.PRIVATE_SUBMODULE_PAT }}
+          RCLONE_CONFIG_GDRIVE_TYPE: drive
+          RCLONE_CONFIG_GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          RCLONE_CONFIG_GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          RCLONE_CONFIG_GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
         run: |
-          git config --global url."https://x-access-token:${PRIVATE_SUBMODULE_PAT}@github.com/".insteadOf "https://github.com/"
-          git -c submodule.reference.update=checkout submodule update --init --recursive
+          set -euo pipefail
+          for name in RCLONE_CONFIG_GDRIVE_CLIENT_ID RCLONE_CONFIG_GDRIVE_CLIENT_SECRET RCLONE_CONFIG_GDRIVE_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing GitHub Actions secret: GDRIVE_${name#RCLONE_CONFIG_GDRIVE_}"
+              exit 1
+            fi
+          done
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rclone
+          mkdir -p reference
+          rclone copy gdrive:reference reference \
+            --checksum \
+            --transfers 8 \
+            --checkers 16 \
+            --progress
+          test -f reference/libkrkr2/libkrkr2.so
 
       # Redroid needs the Android binder driver. Azure kernels don't
       # ship binder in the default module set — try linux-modules-extra
