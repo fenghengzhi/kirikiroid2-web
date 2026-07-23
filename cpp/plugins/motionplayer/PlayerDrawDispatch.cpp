@@ -66,14 +66,25 @@ namespace motion {
             return TJS_E_BADPARAMCOUNT;
         }
 
-        nativeInstance->_drawAffineMatrix = matrix;
-        const auto motionPath = nativeInstance->matchedMotionPath();
+        // Player_setDrawAffineTranslateMatrix@0x6D4F14 stores m14 as float
+        // first, then m11/m12/m21/m22 as doubles, then m24 as float.  Its
+        // identity decision still compares the original double arguments.
+        const float m14 = static_cast<float>(matrix[4]);
+        nativeInstance->_drawAffineM14 = m14;
+        nativeInstance->_drawAffineM11 = matrix[0];
+        const bool m11IsIdentity = matrix[0] == 1.0;
+        const float m24 = static_cast<float>(matrix[5]);
+        nativeInstance->_drawAffineM12 = matrix[2];
+        nativeInstance->_drawAffineM21 = matrix[1];
+        nativeInstance->_drawAffineM22 = matrix[3];
+        nativeInstance->_drawAffineM24 = m24;
         const bool isIdentity =
-            matrix[0] == 1.0 && matrix[1] == 0.0 && matrix[2] == 0.0 &&
+            m11IsIdentity && matrix[1] == 0.0 && matrix[2] == 0.0 &&
             matrix[3] == 1.0 && matrix[4] == 0.0 && matrix[5] == 0.0;
-        // Player_setDrawAffineTranslateMatrix @ 0x6D4F50 writes Player+611
-        // from the same exact six-component identity comparison.
+        // Player_setDrawAffineTranslateMatrix @0x6D4F6C/0x6D4F7C writes
+        // Player+611 from the same exact six-component identity comparison.
         nativeInstance->_drawAffineMatrixNonIdentity = !isIdentity;
+        const auto motionPath = nativeInstance->matchedMotionPath();
         detail::logoChainTraceLogf(
             motionPath, "setDrawAffine", "0x6D4F14",
             nativeInstance->_clampedEvalTime,
@@ -144,12 +155,12 @@ namespace motion {
                 _clampedEvalTime,
                 "route={} drawAffine=[{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}] cameraOffset=({:.3f},{:.3f}) sampleExpectedYuzu=[1,0,0,1,960,540]",
                 route ? route : "",
-                _drawAffineMatrix[0],
-                _drawAffineMatrix[1],
-                _drawAffineMatrix[2],
-                _drawAffineMatrix[3],
-                _drawAffineMatrix[4],
-                _drawAffineMatrix[5],
+                _drawAffineM11,
+                _drawAffineM21,
+                _drawAffineM12,
+                _drawAffineM22,
+                _drawAffineM14,
+                _drawAffineM24,
                 _cameraOffsetX, _cameraOffsetY);
         };
 

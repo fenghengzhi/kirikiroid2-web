@@ -923,11 +923,6 @@ namespace motion {
 
         buildRenderCommands(canvasWidth, canvasHeight, mainList, auxList);
 
-        iTJSDispatch2 *layerTreeOwner = resolveMainWindowOwnerObject();
-        if(!layerTreeOwner) {
-            layerTreeOwner = targetLayerObject;
-        }
-
         struct AccurateSlaStateScope {
             SeparateLayerAdaptor *sla = nullptr;
             explicit AccurateSlaStateScope(SeparateLayerAdaptor *value)
@@ -951,18 +946,11 @@ namespace motion {
         auto ensureAccurateSlaItemLayer =
             [&](PreparedRenderItem &item,
                 tTVPLayerType layerType) -> AccurateSlaItemLayer {
-            const tjs_int stateLayerId = item.renderLayerId;
-            if(stateLayerId == 0) {
-                return {
-                    ensureReusableLayerObject(
-                        item.leafLayer,
-                        layerTreeOwner,
-                        targetLayerObject,
-                        layerType,
-                        false),
-                    true
-                };
-            }
+            // Player_renderAccurateSLA @0x6CA09C reads item+52, the first
+            // layer id copied from MotionNode, then 0x6CA0B0 acquires through
+            // the SLA map unconditionally.  item+424/renderLayerId belongs to
+            // the separate 0x6C4E28 build path.
+            const tjs_int stateLayerId = item.layerId1;
 
             NativeSLAPayloadLike_0x6DCD0C payload;
             payload.type = static_cast<tjs_int>(layerType);
@@ -986,11 +974,9 @@ namespace motion {
                 return {};
             }
 
-            // libkrkr2.so sub_6C4E28 @0x6C5DBC latches item+20 in the BUILD
-            // loop (LABEL_28), never in the accurate-SLA execute path. The
-            // build pass already materialized rawFlag20/layerId under the
-            // oracle gate, so this path only consumes them.
-            item.leafLayer = layerVariant;
+            // layerVariant is a per-iteration local in 0x6C9CA8 and is
+            // destroyed at 0x6CB4D8.  Do not persist it in item+304: that slot
+            // is owned by the distinct 0x6C4E28 build pipeline.
             return { layerObject, createdOrChanged };
         };
 
@@ -1100,7 +1086,7 @@ namespace motion {
                 motionPath, "sla.accurate.item", "0x6C9CA8",
                 _clampedEvalTime,
                 "nodeIndex={} layerId={} clip=[{},{},{},{}] meshType={} type={} opacity={} source={}",
-                item.nodeIndex, item.renderLayerId,
+                item.nodeIndex, item.layerId1,
                 clip.left, clip.top, clip.right, clip.bottom,
                 item.meshType, static_cast<int>(layerType), item.opacity,
                 item.sourceKey);

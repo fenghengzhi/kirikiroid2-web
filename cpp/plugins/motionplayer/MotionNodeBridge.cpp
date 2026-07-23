@@ -5,7 +5,8 @@
 // Player.h or ncbind.hpp, but these helpers need both.
 //
 // Aligned to libkrkr2.so:
-//   - node+1912: shared_ptr<tTJSVariant> wrapping iTJSDispatch2 Player (nodeType=3)
+//   - node+1912: direct tTJSVariant owner wrapping iTJSDispatch2 Player
+//                (nodeType=3; CopyRef at 0x6B46E0)
 //   - node+2296: tTJSVariant wrapping TJS Array of Players (nodeType=4)
 //   - sub_6C1678: Array[i] + NativeInstanceSupport → native Player*
 //   - sub_56C694: Array.count

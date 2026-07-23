@@ -491,24 +491,23 @@ namespace motion {
                 // Aligned to binary: new Player → CreateAdaptor → Array.add
                 // P3-B: child RM = parent's RM dispatch (single-param
                 //   dispatch-in, binary 0x6b43cc passes parent+992). parent link
-                //   set post-construct (binary 0x6b43dc child+8=parent).
+                //   and shared root link are set post-construct, before the
+                //   adaptor (binary 0x6BF950 child+0=parent+0, child+8=parent).
                 using PlayerAdaptor = ncbInstanceAdaptor<Player>;
                 auto *childRaw = new Player(getResourceManager());
-                childRaw->setParentPlayerLike_0x6B1ABC(this);
+                childRaw->_rootPlayer = _rootPlayer;
+                childRaw->_parentPlayer = this;
                 iTJSDispatch2 *childDisp = PlayerAdaptor::CreateAdaptor(childRaw);
-                if (!childDisp) { delete childRaw; goto physics_step; }
-                tTJSVariant childVar(childDisp, childDisp);
-                childDisp->Release();
+                tTJSVariant childVar;
+                if(childDisp) {
+                    childVar = tTJSVariant(childDisp, childDisp);
+                    childDisp->Release();
+                }
                 auto *child = childRaw;  // native pointer for subsequent use
-                // Binary: chara comes from the split path, not parent chara
-                child->setChara(particleChara.empty() ? _chara : detail::widen(particleChara));
-                child->onFindMotion(detail::widen(motionPath));
-                // 0x6BFA08..0x6BFA40 only flushes the new child's own +776
-                // pending stealthChara after the primary chara write. It does
-                // not copy either live stealth slot from the parent. The later
-                // 0x6BFA68..0x6BFA94 similarly flushes child+768; onFindMotion
-                // routes through Player_play and owns that pending motion step.
-                // _colorWeightPacked propagation (0x6BF9B4)
+                // The native continues through initialization even when the
+                // adaptor/Variant is void (0x6BF9AC falls through to 0x6BF9B4).
+                // _colorWeightPacked propagation (0x6BF9B4) precedes context,
+                // zFactor, chara and play in the binary.
                 // (R1.H5: parent/child share +1156; was duplicated as
                 // `_parentColorPacked` in the port — same binary offset.)
                 {
@@ -518,8 +517,15 @@ namespace motion {
                 }
                 // emoteEdit propagation (0x6BF9C0..0x6BF9D4)
                 child->_findMotionContextVariant = _findMotionContextVariant;
-                child->_zFactor = _zFactor;
-                child->_independentLayerInherit = _independentLayerInherit;
+                child->setZFactor(_zFactor);  // Player_setZFactor @0x6BF9E0
+                // Binary: chara comes from the split path, not parent chara.
+                child->setChara(particleChara.empty() ? _chara : detail::widen(particleChara));
+                child->onFindMotion(detail::widen(motionPath));
+                // 0x6BFA08..0x6BFA40 only flushes the new child's own +776
+                // pending stealthChara after the primary chara write. It does
+                // not copy either live stealth slot from the parent. The later
+                // 0x6BFA68..0x6BFA94 similarly flushes child+768; onFindMotion
+                // routes through Player_play and owns that pending motion step.
 
                 // Set blendMode on child root node accumulated state (0x6BFAA8..0x6BFAC4)
                 // Binary writes to *(v99+1656) = root node accumulated blendMode, not activeSlot.

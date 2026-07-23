@@ -101,8 +101,8 @@ namespace motion {
         //   value — it holds the dispatch and reaches the native instance via
         //   nativeRM(). The dispatch is created once at the RM owner (EmoteObject,
         //   sub_67E20C) and flows down EmoteEngine -> Player -> child Players.
-        //   parentPlayer is NOT a ctor param (binary sets child+8=parent
-        //   post-construct @0x6b43dc); use setParentPlayerLike_0x6B1ABC().
+        //   parentPlayer is NOT a ctor param (binary sets child+0=root owner and
+        //   child+8=parent post-construct @0x6B43DC).
         explicit Player(const tTJSVariant &rmDispatch = tTJSVariant{});
         ~Player();
 
@@ -530,9 +530,6 @@ namespace motion {
         // (EmoteEngine_progress @0x67d408 passes v12=ORIGINAL frame-dt). Distinct
         // from progressMsLike_0x6D2A54 which takes MILLISECONDS and converts.
         void progressFramesLike_0x6D2A54(double frameDt);
-        void setParentPlayerLike_0x6B1ABC(Player *parentPlayer) {
-            _parentPlayer = parentPlayer;
-        }
         Player *parentPlayerForDiag() const { return _parentPlayer; }  // CREATESITE (temp)
         // Aligned to libkrkr2.so 0x681CAC: motion property as raw callback
         // so we have objthis to call onFindMotion TJS callback.
@@ -708,10 +705,14 @@ namespace motion {
         void setLeft(double v) { setX(v); }
         void setTop(double v) { setY(v); }
 
-        // Internal node-construction hook used by detail::buildNodeTree().
-        // Not registered to TJS; keeps child Player init ordering aligned with
-        // Player_initNodeFields case 3 (0x6B3C78).
-        void inheritChildPlayerStateLike_0x6B3C78(detail::MotionNode &node);
+        // Internal node-construction hooks used by detail::buildNodeTree().
+        // They are split at the PSB property read so C++ argument evaluation
+        // cannot move that read before the two pointer stores performed by
+        // Player_initNodeFields case 3 (0x6B43D0..0x6B4404).
+        void linkType3ChildPlayerLike_0x6B43DC(Player &child);
+        void initializeType3ChildStateLike_0x6B4604(
+            Player &child, detail::MotionNode &node,
+            bool independentLayerInherit);
 
     private:
         bool ensureMotionLoaded();
@@ -1106,7 +1107,14 @@ namespace motion {
         void dispatchReleaseLayerId(tjs_int id) const;
 
     private:
-        Player *_parentPlayer = nullptr; // non-owning, for 0x6B1ABC lookup
+        // Player+0/+8 are two independent, non-owning Player links.  The
+        // constructor writes `this` to +0 and null to +8 at 0x6CED70.  Type-3
+        // children copy parent+0 into child+0 and write the immediate parent to
+        // child+8 at 0x6B43D0..0x6B43DC; particle children do the same at
+        // 0x6BF950.  Render/camera code dereferences +0 before reading the
+        // draw-affine matrix, while parameter lookup walks +8.
+        Player *_rootPlayer = nullptr;
+        Player *_parentPlayer = nullptr;
         // libkrkr2.so +1092: 1-byte bool = the "preview" NCB property (getter
         // Player_getPreview reads *(u8*)(this+1092)). NOT completionType — the
         // Player-table off-by-one IDB symbol had mislabeled +1092 as
@@ -1242,6 +1250,12 @@ namespace motion {
         double _cameraFOV = 60.0;
         bool _cameraAlive = false;
         bool _canvasCaptureEnabled = false;
+        // Player+908 has exactly three binary accesses: ctor clears it
+        // (0x6CF114), type-3 construction sets it (0x6B4620), and
+        // updateLayers tests it (0x6BB4F0) before rebuilding the root 2x2.
+        // Particle children deliberately retain false.  It immediately
+        // precedes the proven Player+909 D3D byte in source field order.
+        bool _type3RootTransformAlreadyPropagated = false;
         bool _d3dDrawMode = false; // libkrkr2.so player+909
         double _hitThreshold = 0.0;
         tjs_int _completionType = 0; // libkrkr2.so +1144: int (the real NCB
@@ -1355,12 +1369,20 @@ namespace motion {
         // dispatch.
         tTJSVariant _lastCanvas;
         tTJSVariant _lastViewParam;
-        std::array<double, 6> _drawAffineMatrix{1.0, 0.0, 0.0,
-                                                1.0, 0.0, 0.0};
+        // Player_setDrawAffineTranslateMatrix@0x6D4F14 proves the exact source
+        // types/order: four double linear components at +808..832 followed by
+        // two float translations at +840/+844.  The member names come from the
+        // registered matrix-object keys read by the same setter.
+        double _drawAffineM11 = 1.0;
+        double _drawAffineM12 = 0.0;
+        double _drawAffineM21 = 0.0;
+        double _drawAffineM22 = 1.0;
+        float _drawAffineM14 = 0.0f;
+        float _drawAffineM24 = 0.0f;
         // libkrkr2.so Player+611. Player_ctor@0x6CED30 initializes it to
-        // false; Player_setDrawAffineTranslateMatrix@0x6D4F50 updates it by
-        // exact comparison with the identity matrix. sub_6C2334 consumes it
-        // to gate viewport/corner transforms.
+        // false; Player_setDrawAffineTranslateMatrix@0x6D4F6C/0x6D4F7C
+        // updates it by exact comparison with the identity matrix. sub_6C2334
+        // consumes it to gate viewport/corner transforms.
         bool _drawAffineMatrixNonIdentity = false;
 
         // === Extension fields (Phase A7) ===

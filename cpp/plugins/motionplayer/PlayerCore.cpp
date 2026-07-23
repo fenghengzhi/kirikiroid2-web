@@ -81,10 +81,13 @@ namespace motion {
             return;
         }
 
-        _independentLayerInherit = v;
-        // libkrkr2.so 0x6CC9D4 compares player+1097 and marks node+1584 dirty.
+        // Player_setIndependentLayerInherit@0x6CC9D4 compares Player+1097 and
+        // marks node+1584 dirty across the deque, but its complete 24-
+        // instruction body never writes Player+1097.  Preserve that observable
+        // boundary behavior; the type-3 construction path has its own direct
+        // flag write at 0x6B4614.
         for(auto &node : _nodes) {
-            node.accumulated.dirty = true;
+            node.delta.dirty = true;
         }
     }
 
@@ -98,9 +101,10 @@ namespace motion {
     //   internal Layer Variant slots and one persistent color Dictionary
     //   between the second and third RM owners. Player no longer creates its own
     //   RM nor owns one by value; the native is reached via nativeRM().
-    //   parentPlayer is set post-construct
-    //   (binary child+8=parent @0x6b43dc).
+    //   root owner and parent are set post-construct
+    //   (binary child+0=parent+0, child+8=parent @0x6B43DC).
     Player::Player(const tTJSVariant &rmDispatch) :
+        _rootPlayer(this),
         _findSourceResourceManager(rmDispatch),
         _sourceCacheObject(rmDispatch),
         _resourceManager(rmDispatch) {

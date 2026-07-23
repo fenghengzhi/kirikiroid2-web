@@ -624,12 +624,16 @@ namespace motion {
                 + camNode.accumulated.posZ
                 - (rootAcc.posY * _zFactor + rootAcc.posZ));
 
-            // Transform by drawAffineMatrix (player+808..832)
-            const auto &dam = _drawAffineMatrix;
+            // sub_6BDA28@0x6BDB88 dereferences Player+0, then
+            // 0x6BDB9C..0x6BDBC0 reads +808..832, matching the render path's
+            // shared owner.
+            const auto &drawAffineOwner = *_rootPlayer;
             _cameraOffsetX = static_cast<float>(
-                static_cast<int>(dam[0] * dx + dam[2] * dy + 0.5));
+                static_cast<int>(drawAffineOwner._drawAffineM11 * dx +
+                                 drawAffineOwner._drawAffineM12 * dy + 0.5));
             _cameraOffsetY = static_cast<float>(
-                static_cast<int>(dam[1] * dx + dam[3] * dy + 0.5));
+                static_cast<int>(drawAffineOwner._drawAffineM21 * dx +
+                                 drawAffineOwner._drawAffineM22 * dy + 0.5));
 
             // Camera-to-target angle (0x6BDC04..0x6BDCB0)
             // When stereovisionActive (a1+1094): compute camera angle for 3D effect.

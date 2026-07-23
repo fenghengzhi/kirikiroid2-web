@@ -104,22 +104,21 @@ namespace motion::detail {
             }
 
             auto *childNative = new Player(player.getResourceManager());
+            player.linkType3ChildPlayerLike_0x6B43DC(*childNative);
+            const bool independentLayerInherit = rawBool(
+                rawLayer, TJS_W("motionIndependentLayerInherit"), false);
+            player.initializeType3ChildStateLike_0x6B4604(
+                *childNative, node, independentLayerInherit);
+            // 0x6B4688..0x6B46E0 always CopyRefs a local Variant into
+            // node+1912.  If CreateAdaptor returns null, that Variant remains
+            // void and the just-constructed native is deliberately not
+            // deleted; sub_6F1794@0x6F1794 never owns the native argument.
+            tTJSVariant childVariant;
             if(auto *dispatch = PlayerAdaptor::CreateAdaptor(childNative)) {
-                node.childPlayerVar = tTJSVariant(dispatch, dispatch);
+                childVariant = tTJSVariant(dispatch, dispatch);
                 dispatch->Release();
-            } else {
-                delete childNative;
-                return;
             }
-
-            player.inheritChildPlayerStateLike_0x6B3C78(node);
-            if(auto *child = node.getChildPlayer()) {
-                // 0x6B4404..0x6B4654: optional bool defaults to false, then
-                // inherit project context/coordinate/order and parent zFactor.
-                child->setIndependentLayerInherit(rawBool(
-                    rawLayer, TJS_W("motionIndependentLayerInherit"), false));
-                child->setZFactor(player.getZFactor());
-            }
+            node.childPlayerVar = childVariant;
         }
 
         void initNodeFieldsLike_0x6B3C78(Player &player, MotionNode &node,

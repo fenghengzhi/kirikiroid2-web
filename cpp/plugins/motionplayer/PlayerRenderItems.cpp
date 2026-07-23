@@ -353,12 +353,22 @@ namespace motion {
         std::uint32_t inheritedColor,
         bool inheritedDrawFlag19,
         bool inheritedFlag18) {
-        // sub_6D5164 @ 0x6D5178: the first instruction of the libkrkr2.so
-        // build+sort wrapper is `if (!*(DWORD*)(player+544)) return 0;`.
-        // _motionContentVariant.Type() is the source-level +544 type-tag gate.
-        if(!hasMotionContent()) {
-            return;
-        }
+#if defined(KRKR2_WASMTIME_HEADLESS)
+        // Android's Frida probe hooks sub_6C2334 itself, so every recursive
+        // call has its own enter/leave pair.  Keep the probe on this exact
+        // source-level boundary rather than on the 0x6D5164 build+sort wrapper.
+        detail::motionTraceRenderBuildItemsEnter(
+            this, inheritedColor, inheritedDrawFlag19, inheritedFlag18);
+        struct MotionTraceBuildItemsScope {
+            Player *player;
+            const std::vector<detail::PreparedRenderItem *> &mainList;
+            const std::vector<detail::PreparedRenderItem *> &auxList;
+            ~MotionTraceBuildItemsScope() {
+                detail::motionTraceRenderBuildItemsLeave(
+                    player, mainList, auxList);
+            }
+        } motionTraceBuildItemsScope{this, mainList, auxList};
+#endif
 
         auto &entries = mainList;
         const auto &nodes = _nodes;
@@ -366,9 +376,13 @@ namespace motion {
         // sub_6C2334@0x6C31C8/0x6C337C/0x6C38A0 reads Player+1092,
         // the script-visible preview property, for these node-type masks.
         const int bitmask = _preview ? 5193 : 5185;
-        const auto &dam = _drawAffineMatrix;
+        // sub_6C2334@0x6C2804/0x6C2B8C dereferences Player+0 before every
+        // Player+808..844 draw-affine read.  Recursive child Players therefore
+        // consume the top-level render owner's matrix, not their own ctor
+        // identity matrix.
+        const auto &drawAffineOwner = *_rootPlayer;
         const bool drawAffineMatrixNonIdentity =
-            _drawAffineMatrixNonIdentity;
+            drawAffineOwner._drawAffineMatrixNonIdentity;
         const std::uint32_t effectiveColor =
             multiplyPackedColorWeightsLike_0x6C2334(
                 inheritedColor, _colorWeightPacked);
@@ -427,10 +441,14 @@ namespace motion {
         };
 
         auto transformPoint = [&](float x, float y) -> tTVPPointD {
-            return { dam[0] * static_cast<double>(x) +
-                         dam[2] * static_cast<double>(y) + dam[4],
-                     dam[1] * static_cast<double>(x) +
-                         dam[3] * static_cast<double>(y) + dam[5] };
+            return {
+                drawAffineOwner._drawAffineM11 * static_cast<double>(x) +
+                    drawAffineOwner._drawAffineM12 * static_cast<double>(y) +
+                    drawAffineOwner._drawAffineM14,
+                drawAffineOwner._drawAffineM21 * static_cast<double>(x) +
+                    drawAffineOwner._drawAffineM22 * static_cast<double>(y) +
+                    drawAffineOwner._drawAffineM24
+            };
         };
 
         auto transformRectLike_0x6C2334 =
@@ -772,46 +790,46 @@ namespace motion {
 
             if(detail::logoChainTraceEnabledForPath(motionPath)) {
                 const std::array<float, 8> expectedCorners = {
-                    static_cast<float>(dam[0] *
+                    static_cast<float>(drawAffineOwner._drawAffineM11 *
                                            static_cast<double>(node.vertices[0]) +
-                                       dam[2] *
+                                       drawAffineOwner._drawAffineM12 *
                                            static_cast<double>(node.vertices[1]) +
-                                       dam[4]),
-                    static_cast<float>(dam[1] *
+                                       drawAffineOwner._drawAffineM14),
+                    static_cast<float>(drawAffineOwner._drawAffineM21 *
                                            static_cast<double>(node.vertices[0]) +
-                                       dam[3] *
+                                       drawAffineOwner._drawAffineM22 *
                                            static_cast<double>(node.vertices[1]) +
-                                       dam[5]),
-                    static_cast<float>(dam[0] *
+                                       drawAffineOwner._drawAffineM24),
+                    static_cast<float>(drawAffineOwner._drawAffineM11 *
                                            static_cast<double>(node.vertices[2]) +
-                                       dam[2] *
+                                       drawAffineOwner._drawAffineM12 *
                                            static_cast<double>(node.vertices[3]) +
-                                       dam[4]),
-                    static_cast<float>(dam[1] *
+                                       drawAffineOwner._drawAffineM14),
+                    static_cast<float>(drawAffineOwner._drawAffineM21 *
                                            static_cast<double>(node.vertices[2]) +
-                                       dam[3] *
+                                       drawAffineOwner._drawAffineM22 *
                                            static_cast<double>(node.vertices[3]) +
-                                       dam[5]),
-                    static_cast<float>(dam[0] *
+                                       drawAffineOwner._drawAffineM24),
+                    static_cast<float>(drawAffineOwner._drawAffineM11 *
                                            static_cast<double>(node.vertices[4]) +
-                                       dam[2] *
+                                       drawAffineOwner._drawAffineM12 *
                                            static_cast<double>(node.vertices[5]) +
-                                       dam[4]),
-                    static_cast<float>(dam[1] *
+                                       drawAffineOwner._drawAffineM14),
+                    static_cast<float>(drawAffineOwner._drawAffineM21 *
                                            static_cast<double>(node.vertices[4]) +
-                                       dam[3] *
+                                       drawAffineOwner._drawAffineM22 *
                                            static_cast<double>(node.vertices[5]) +
-                                       dam[5]),
-                    static_cast<float>(dam[0] *
+                                       drawAffineOwner._drawAffineM24),
+                    static_cast<float>(drawAffineOwner._drawAffineM11 *
                                            static_cast<double>(node.vertices[6]) +
-                                       dam[2] *
+                                       drawAffineOwner._drawAffineM12 *
                                            static_cast<double>(node.vertices[7]) +
-                                       dam[4]),
-                    static_cast<float>(dam[1] *
+                                       drawAffineOwner._drawAffineM14),
+                    static_cast<float>(drawAffineOwner._drawAffineM21 *
                                            static_cast<double>(node.vertices[6]) +
-                                       dam[3] *
+                                       drawAffineOwner._drawAffineM22 *
                                            static_cast<double>(node.vertices[7]) +
-                                       dam[5])
+                                       drawAffineOwner._drawAffineM24)
                 };
                 const auto effectiveColor = unpackPackedRgba(entry.packedColors[0]);
                 detail::logoChainTraceLogf(
@@ -978,11 +996,17 @@ namespace motion {
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderPrepareEnter(this);
 #endif
+        // sub_6D5164 @0x6D5178 owns the motion-content type-tag gate.  The
+        // recursive sub_6C2334 body has no equivalent early return.
+        if(!hasMotionContent()) {
+#if defined(KRKR2_WASMTIME_HEADLESS)
+            detail::motionTraceRenderPrepareLeave(
+                this, false, mainList, auxList);
+#endif
+            return false;
+        }
         const auto motionPath = matchedMotionPath();
 
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderBuildItemsEnter(this);
-#endif
         // sub_6D5164 @0x6D5184..0x6D5198 passes neutral color and two false
         // lineage flags into sub_6C2334. Callers construct both vectors empty.
         appendPreparedRenderItems(
@@ -1022,10 +1046,6 @@ namespace motion {
                 afterSort.str());
         }
 
-#if defined(KRKR2_WASMTIME_HEADLESS)
-        detail::motionTraceRenderBuildItemsLeave(this, mainList, auxList);
-#endif
-
         if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
            motionPath.find("m2logo.mtn") != std::string::npos &&
             _clampedEvalTime >= 43.0 && _clampedEvalTime <= 50.0) {
@@ -1053,7 +1073,7 @@ namespace motion {
         }
         // sub_6D5164 returns 1 whenever the motion-content type tag is nonzero,
         // even when mainList is empty.
-        const bool ok = hasMotionContent();
+        const bool ok = true;
 #if defined(KRKR2_WASMTIME_HEADLESS)
         detail::motionTraceRenderPrepareLeave(this, ok, mainList, auxList);
 #endif

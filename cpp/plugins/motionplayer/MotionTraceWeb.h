@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #if defined(KRKR2_WASMTIME_HEADLESS)
 #include <string>
 #include <vector>
@@ -98,7 +100,10 @@ namespace motion::detail {
     void motionTraceRenderApplyTranslateLeave(
         Player *player,
         const std::vector<PreparedRenderItem *> &mainList);
-    void motionTraceRenderBuildItemsEnter(Player *player);
+    void motionTraceRenderBuildItemsEnter(Player *player,
+                                          std::uint32_t inheritedColor,
+                                          bool inheritedDrawFlag19,
+                                          bool inheritedFlag18);
     void motionTraceRenderBuildItemsLeave(
         Player *player,
         const std::vector<PreparedRenderItem *> &mainList,

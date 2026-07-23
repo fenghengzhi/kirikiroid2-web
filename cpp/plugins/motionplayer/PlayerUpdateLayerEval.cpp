@@ -1395,14 +1395,6 @@ namespace motion {
                 0xFF808080u, 0xFF808080u, 0xFF808080u, 0xFF808080u};
             copyPackedColorsToBytes(root.colorBytes, rootColors);
 
-            // Step 3: Build root local 2x2 matrix via sub_699940
-            // Reuse applyLocalTransform logic but on raw 2x2
-            Affine2x3 rootAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
-            applyLocalTransform(rootAffine, root);
-            root.accumulated.m11 = rootAffine[0];
-            root.accumulated.m21 = rootAffine[1];
-            root.accumulated.m12 = rootAffine[2];
-            root.accumulated.m22 = rootAffine[3];
         }
 
         // Player_updateLayers @0x6BB33C calls this unconditionally at
@@ -1410,6 +1402,18 @@ namespace motion {
         // Player_interpolateVarTrackValues @0x6BBE20 walks Player+1296's
         // VariableLabelScope deque, writes item+16 and binds each live value.
         interpolateVarTrackValuesLike_0x6BBE20(_clampedEvalTime);
+
+        // 0x6BB4F0 calls sub_699940 only when Player+908 is zero.  A type-3
+        // child's root 2x2 was already propagated by the parent motion pass;
+        // particle children retain the ctor's zero flag and rebuild normally.
+        if(!_type3RootTransformAlreadyPropagated) {
+            Affine2x3 rootAffine = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+            applyLocalTransform(rootAffine, root);
+            root.accumulated.m11 = rootAffine[0];
+            root.accumulated.m21 = rootAffine[1];
+            root.accumulated.m12 = rootAffine[2];
+            root.accumulated.m22 = rootAffine[3];
+        }
 
     }
 

@@ -96,23 +96,31 @@ namespace motion {
         detail::resetNodeTreeKeepRootLike_0x6B56F8(*this);
     }
 
-    void Player::inheritChildPlayerStateLike_0x6B3C78(detail::MotionNode &node) {
-        if(auto *child = node.getChildPlayer()) {
-            // P3-B: the child already received the parent's RM dispatch at
-            //   construction (binary 0x6b43cc: `Player_ctor(child, parent+992)`),
-            //   so no native-RM copy is needed here. This site only sets the
-            //   parent link (binary 0x6b43dc: `*(child+8) = parent`).
-            child->setParentPlayerLike_0x6B1ABC(this);
-            child->_findMotionContextVariant = _findMotionContextVariant;
-            if(true) {
-                detail::ensureRootNodeLike_0x6CED30(*child);
-                auto &root = child->_nodes.front();
-                root.coordinateMode = node.coordinateMode;
-                for(int i = 0; i < 4; ++i) {
-                    root.transformOrder[i] = node.transformOrder[i];
-                }
-                root.delta.dirty = true;
-            }
+    void Player::linkType3ChildPlayerLike_0x6B43DC(Player &child) {
+        // 0x6B43D0..0x6B43DC precedes the
+        // "motionIndependentLayerInherit" PropGet at 0x6B4404.
+        child._rootPlayer = _rootPlayer;
+        child._parentPlayer = this;
+    }
+
+    void Player::initializeType3ChildStateLike_0x6B4604(
+        Player &child, detail::MotionNode &node,
+        bool independentLayerInherit) {
+        // Player_initNodeFields@0x6B4604..0x6B4688 performs the remaining
+        // native-Player initialization before CreateAdaptor.  This path
+        // directly writes +1097 after dirtying the sole root node; it does not
+        // call the public NCB setter callback at 0x6CC9D4.
+        auto &root = child._nodes.front();
+        if(child._independentLayerInherit != independentLayerInherit) {
+            root.delta.dirty = true;
+            child._independentLayerInherit = independentLayerInherit;
+        }
+        child._type3RootTransformAlreadyPropagated = true;
+        child._findMotionContextVariant = _findMotionContextVariant;
+        root.coordinateMode = node.coordinateMode;
+        child.setZFactor(_zFactor);
+        for(int i = 0; i < 4; ++i) {
+            root.transformOrder[i] = node.transformOrder[i];
         }
     }
 

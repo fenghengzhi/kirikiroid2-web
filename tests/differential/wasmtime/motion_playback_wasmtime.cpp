@@ -1898,10 +1898,24 @@ void motionTraceRenderApplyTranslateLeave(
                       payload, diagnostics);
 }
 
-void motionTraceRenderBuildItemsEnter(Player *player) {
+void motionTraceRenderBuildItemsEnter(Player *player,
+                                      std::uint32_t inheritedColor,
+                                      bool inheritedDrawFlag19,
+                                      bool inheritedFlag18) {
+    if(!traceState().inRender) return;
     std::string diagnostics = playerDiagnostics(player);
-    appendRenderEvent(player, "render_commands", "build_items_enter",
-                      "Player::buildPreparedRenderItems.enter", "",
+    if(!diagnostics.empty() && diagnostics.back() == '}') {
+        diagnostics.pop_back();
+    }
+    diagnostics += ",\"defaultColor\":";
+    diagnostics += std::to_string(static_cast<std::int32_t>(inheritedColor));
+    diagnostics += ",\"arg4\":";
+    diagnostics += inheritedDrawFlag19 ? "1" : "0";
+    diagnostics += ",\"arg5\":";
+    diagnostics += inheritedFlag18 ? "1" : "0";
+    diagnostics += "}";
+    appendRenderEvent(nullptr, "render_commands", "build_items_enter",
+                      "sub_6C2334.enter", "",
                       diagnostics);
 }
 
@@ -1909,11 +1923,12 @@ void motionTraceRenderBuildItemsLeave(
     Player *player,
     const PreparedItemList &mainList,
     const PreparedItemList &auxList) {
+    if(!traceState().inRender) return;
     std::string payload;
     appendPreparedRenderListsPayload(payload, &mainList, &auxList);
     std::string diagnostics = playerDiagnostics(player);
-    appendRenderEvent(player, "render_commands", "build_items_leave",
-                      "Player::buildPreparedRenderItems.leave", payload,
+    appendRenderEvent(nullptr, "render_commands", "build_items_leave",
+                      "sub_6C2334.leave", payload,
                       diagnostics);
 }
 

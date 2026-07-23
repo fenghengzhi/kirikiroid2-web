@@ -312,7 +312,8 @@ NCB_REGISTER_CLASS(Player) {
     // independentLayerInherit: distinct binary RW property @0x6D69C8 (name
     // xref @0x6d77b8).
     //   get = Player_getColorWeightFlag (sub_6D9768): reads Player+1097 bool.
-    //   set = sub_6CC9D4: writes +1097, marks each node+1584 dirty if changed.
+    //   set = sub_6CC9D4: if the argument differs from +1097, marks every
+    //         node+1584 dirty; its complete body does not write +1097.
     // Maps to getIndependentLayerInherit/setIndependentLayerInherit.
     NCB_PROPERTY(independentLayerInherit, getIndependentLayerInherit,
                  setIndependentLayerInherit);
