@@ -162,8 +162,20 @@ upload 后现场 free 且不清指针，全透明分支现场 free+清零并仅�
 逐 record 执行 metadata→subrect Update→free；本地 software texture 的既有 rect 接口
 现已实现 left/top 目标偏移，atlas loop 同步恢复逐记录顺序；由整页 batch 引入的已知
 时序差异已在源码结构上消除，真实 Android atlas runtime 边界仍待设备 oracle 验证。
-是否把 atlas build 写成独立 inline helper不能由优化后二进制唯一判定，不再把 helper
+是否把 atlas build 写成独立 inline helper 不能由优化后二进制唯一判定，不再把 helper
 源码拼写冒充成未闭合生命周期。
+
+后续 fresh 指令复核又闭合了同一 source decode 的 allocator/整数边界。Win
+`0x694E44..0x694FBC` 使用 W32 pitch/bytes、`TJSAlignedAlloc(bytes,4)`、unsupported
+分支先 free、正常 CreateTexture 后立即 free，再进入 map；CreateTexture null 也没有
+guard，slot 操作后无条件 Release。resource size 槽未初始化，RGBA count 是 S32 `/4`，
+A8L8 是 signed W32 do-loop，正奇数长度保留末次越界读。KRKR `0x696FA8..0x697248`
+以 S64 dimension product、低 W32 allocator/count 和低 S32 alpha gate 混用，BGRA/index
+均走 aligned family；upload `0x696BE0..0x696C0C` free 后不清字段。两处 texture call 的
+最后参数均是 literal 1。本地已逐项恢复，并用显式 W32 模运算避免 host `size_t` 扩宽、
+implementation-defined high-bit signed cast 和 signed-overflow 改写损坏输入边界；palette
+vector 仍保留普通 allocator。software renderer 的 nonnull-pixel borrowed view 与
+Android/OGL upload-copy 合同仍单独记录为 backend 差异，不反向改变插件生命周期。
 
 请求 icon lookup 的另一项已闭合差异仍成立：Android `0x69612C..0x696154` 在测试返回位
 之前先 Release strict icon-root 临时量；本地用显式 scope 保存 bool，确保 temporary owner
@@ -282,7 +294,7 @@ Android runtime oracle 路径也已实现，但本轮无设备、尚未取得真
 non-retaining 仍由反编译证据证明，不能把本地测试或一次性 adapter smoke 误记为 ADB/RPC 或二进制实测。
 
 本轮修改后 macOS Release `psbfile-dll` 为 **575/575**（10 cases），
-`motionplayer-dll` 为 **1231/1231**（17 cases），`motionplayer-ttstr-hash-test` 为
+`motionplayer-dll` 为 **1244/1244**（18 cases），`motionplayer-ttstr-hash-test` 为
 **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
 `krkr2_wasmtime_guest` 目标通过。motion playback runner 尚未进入 guest：当前 checkout
 缺少 `reference/xp3/logo_test_oracle.xp3`；按物料规则不从零构造，保留该运行验证缺口。

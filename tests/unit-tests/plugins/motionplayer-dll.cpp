@@ -36,6 +36,7 @@
 #include "tvpgl.h"
 
 extern tTJS *TVPScriptEngine;
+extern unsigned int TVPMaxTextureSize;
 
 namespace {
 
@@ -473,15 +474,30 @@ namespace {
         tTJSNI_Layer *native = nullptr;
     };
 
+    void ensureTVPGLInitialized() {
+        static const bool initialized = [] {
+            TVPInitTVPGL();
+            return true;
+        }();
+        (void)initialized;
+    }
+
+    struct ScopedMaxTextureSize {
+        explicit ScopedMaxTextureSize(unsigned int value) :
+            previous(TVPMaxTextureSize) {
+            TVPMaxTextureSize = value;
+        }
+
+        ~ScopedMaxTextureSize() { TVPMaxTextureSize = previous; }
+
+        unsigned int previous;
+    };
+
     TestLayerHandle
     createRegisteredTestLayer(iTVPLayerTreeOwner *treeOwner,
                               tTJSNI_BaseLayer *parent,
                               const tTJSVariantClosure &ownerClosure) {
-        static const bool graphicsInitialized = [] {
-            TVPInitTVPGL();
-            return true;
-        }();
-        (void)graphicsInitialized;
+        ensureTVPGLInitialized();
 
         if(tTJSNC_Layer::ClassID == static_cast<tjs_uint32>(-1)) {
             tTJSNC_Layer::ClassID = TJSRegisterNativeClass(TJS_W("Layer"));
@@ -905,6 +921,75 @@ TEST_CASE("software texture updates packed atlas sub-rects in place") {
         }
     }
     texture->Release();
+}
+
+TEST_CASE("KRKR D3D source path builds and uploads the production atlas") {
+    ScopedCoreScriptEngine scriptEngine;
+    ScopedMaxTextureSize maxTextureSize(
+        std::max(TVPMaxTextureSize, 4096u));
+    ensureTVPGLInitialized();
+    setEmoteSeed();
+
+    const auto motionPath = motionFixturePath();
+    motion::ResourceManager manager;
+    (void)manager.load(motionPath);
+
+    const auto managerDispatch = makeResourceManagerDispatch(manager);
+    motion::Player player(managerDispatch);
+    player.setProject(tTJSVariant(motionPath));
+    player.setChara(TJS_W("body_parts"));
+    player.setUseD3D(true);
+    REQUIRE(player.playMotionLike_0x6B2284(
+        TJS_W("下半身変形基礎"), motion::PlayFlagForce));
+
+    // The KRKR atlas miss in sub_695DE8 enumerates and decodes every source
+    // icon before publishing the requested entry.  This fixture contains 42
+    // fully-transparent icons and 72 mixed-alpha icons, so one ordinary source
+    // resolution executes both the transparent early-free path and the packed
+    // sub-rect Update/free path without manufacturing test data.
+    player.progressMsLike_0x6D2A54(16.0);
+
+    const motion::detail::MotionNode::SourceState *mixedAlpha = nullptr;
+    for(const auto &node : player.nodes()) {
+        const auto &source = node.source;
+        if(!source.valid || source.texture == nullptr) {
+            continue;
+        }
+
+        const int left = source.textureRect[0];
+        const int top = source.textureRect[1];
+        const int right = source.textureRect[2];
+        const int bottom = source.textureRect[3];
+        const int width = right - left;
+        const int height = bottom - top;
+        REQUIRE(width > 0);
+        REQUIRE(height > 0);
+        REQUIRE(left >= 0);
+        REQUIRE(top >= 0);
+        REQUIRE(right <= static_cast<int>(source.texture->GetWidth()));
+        REQUIRE(bottom <= static_cast<int>(source.texture->GetHeight()));
+
+        bool hasTransparentPixel = false;
+        bool hasVisiblePixel = false;
+        for(int y = 0; y < height; ++y) {
+            for(int x = 0; x < width; ++x) {
+                const auto pixel =
+                    source.texture->GetPoint(left + x, top + y);
+                const auto alpha =
+                    static_cast<std::uint8_t>(pixel >> 24u);
+                hasTransparentPixel |= alpha == 0;
+                hasVisiblePixel |= alpha != 0;
+            }
+        }
+        if(hasTransparentPixel && hasVisiblePixel) {
+            mixedAlpha = &source;
+            break;
+        }
+    }
+
+    REQUIRE(mixedAlpha != nullptr);
+    REQUIRE(mixedAlpha->path.rfind("src/", 0) == 0);
+    REQUIRE(mixedAlpha->texture != nullptr);
 }
 
 TEST_CASE("Player variableKeys returns a fresh var-track array") {

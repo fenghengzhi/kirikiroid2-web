@@ -41,6 +41,45 @@
   执行 metadata→subrect Update→free；本地 software texture 的既有 rect 接口现已实现
   left/top 目标偏移，atlas loop 也恢复同一逐记录顺序；由整页 batch 引入的已知时序差异
   已在源码结构上消除，真实 Android atlas runtime 边界仍待设备 oracle 验证。
+- fresh decompile/disasm `Motion_Player_findSource@0x6948E8`、`sub_695DE8@0x695DE8`
+  与 `TJSAlignedAlloc/TJSAlignedDealloc@0xA0DE48/0xA0DE90` 又纠正了像素暂存区的
+  allocator/lifetime。Win 路在 `0x694E44..0x694E54` 以 W32 回绕计算 pitch/bytes 后
+  `TJSAlignedAlloc(bytes,4)`；unsupported format 在异常参数构造前释放，正常路径则在
+  CreateTexture 返回后、cache 插入前立即释放。Android 没有 texture-null guard：仍建立/
+  替换 cache slot，最终在 `0x694FB0..0x694FBC` 无条件解引用并 Release。本地此前的
+  `size_t + unique_ptr/new[]` 既改变分配族，又把 buffer 保活跨过 cache 操作，并安全返回
+  null；现已改回 raw aligned owner、相同释放时点和 unchecked null 边界。两处 raw texture
+  call 也从本地 flags=0 恢复 Android literal `RGBA=4, flags=1`。
+- Win resource-size 槽在 `0x694E08` 未初始化；`GetResource@0x5996E4` 的 null-chunk 路径
+  不写它。RGBA8 在 `0x694EBC..0x694EE0` 按 S32 `size/4` 向零截断，A8L8 在
+  `0x694EE8..0x694F30` 以 signed W32 gate/回边，并在正奇数长度最后一次故意多读一字节；
+  两次 `strcmp(type,...)` 也没有 null guard。本地旧 unsigned `/4u`/loop、size 零初始化和
+  null-safe type 判断均已删除。显式 `signedW32/addW32/subtractW32` 只表达 ARM W-register
+  的模运算/位型解释，避免把高位损坏输入交给 C++ implementation-defined signed cast 或
+  signed-overflow UB；它不是另造业务抽象。
+- KRKR 路在 `0x696FA8..0x696FBC` 先把 content w/h 由 S32 扩成 S64 相乘，只把低 W32
+  左移两位传给 aligned allocator；palette index 同样只按低 W32 分配。透明判断先在
+  `0x69720C` 把低 W32 当 S32 gate，随后却以完整 S64 product 作扫描上界。本地现同时保留
+  `pixelCountS64/W32/S32` 三种视图，BGRA/index、全透明和 upload 四类释放均恢复 aligned
+  family；全透明仍 free+clear+2×2，upload 后仍 free 但故意不清 record 字段。RL8/RL32
+  resource end、raw index memcpy 与 palette count 也恢复各自的 S32 解释；palette
+  `std::vector<uint32_t>` 自身的普通 allocator/delete 保持不变。
+- 当前 software render manager 对 `pixel!=nullptr` 的 raw texture 建立 borrowed static
+  view，而 Android/OGL CreateTexture 是上传/复制语义；因此 Win 路的原版“Create 返回即
+  free”会让 software-only 后续采样看见悬空指针。旧 `unique_ptr` 在函数返回时同样会造成
+  悬空，这不是本轮新回归，也不能作为保留错误插件生命周期的理由；该 backend 合同差异
+  仍需独立反编译/平台实现证据后处理。KRKR atlas 以 `pixel=nullptr` 创建 owned texture，
+  software backend 忽略 flags 并允许 subrect Update，不受这一差异影响。
+- 新增生产链回归使用现成加密 motion fixture、`spec=krkr`、`useD3D=true`，经
+  `progressMsLike_0x6D2A54 → reseekTimelineCursors → findSource@0x6948E8 →
+  sub_695DE8` 构建 atlas。测试显式补齐应用启动时已有、单测进程默认没有的 TVPGL 函数表
+  与 `TVPMaxTextureSize` 前置，然后从真实节点直接守护 non-empty rect、atlas 边界和
+  mixed-alpha 上传像素可采样。独立 fixture inspection 统计 114 个 raw/non-palette icon
+  为 42 个全透明、72 个 mixed-alpha；isolated LLDB 又在同一 case 中记录 decode allocation、
+  transparent-free、upload-free 站点分别命中 114/42/72 次。因此控制流证据确认两条释放
+  分支都执行，但 committed assertions 不冒充 allocator family/释放时点的直接验证；后两项
+  仍由 IDA 指令和源码对照证明。该 fixture 不覆盖 Win RGBA8/A8L8、KRKR palette 或 RL
+  分支；仓库没有相应现成 fixture，本轮不制造物料。
 - `GetInt@0x599438` 与 `GetDouble@0x5992E8` 都呈 outer tag switch 加
   32-bit integer / 64-bit integer / float / double 四组 nested decoder 的形状。本地此前
   各写一只 monolithic switch，现抽出四个共享 `_guess` decoder，再由两只 outer wrapper
@@ -118,7 +157,7 @@
   `0x8F7D68..0x8F7DC0`、补 `_guess` 名称/类型/注释并保存。Android oracle 调用
   deleting entry `0x8F7D68`，与源码 `delete stream` 的完整对象生命周期一致。
 - 当前验证：macOS Release 五个相关目标构建成功，`psbfile-dll` **575/575**（10 cases）、
-  `motionplayer-dll` **1231/1231**（17 cases）、`motionplayer-ttstr-hash-test`
+  `motionplayer-dll` **1244/1244**（18 cases）、`motionplayer-ttstr-hash-test`
   **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
   `krkr2_wasmtime_guest` 目标均通过。现成 motion playback runner 在执行 guest 前因
   当前 checkout 缺少 `reference/xp3/logo_test_oracle.xp3` 退出；不制造 fixture，记录为
@@ -194,7 +233,7 @@
   `PlayerResource`、`PlayerLayerQuery` 等 caller 共用。本文旧版将这两项列为 OPEN 的
   结论已被当前源码和 fresh 反编译证伪，现就地纠正为 CLOSED。
 - 当前验证：macOS Release `psbfile-dll` 为 575/575（10 cases），完整
-  `motionplayer-dll` 为 1231/1231（17 cases），`motionplayer-ttstr-hash-test` 为
+  `motionplayer-dll` 为 1244/1244（18 cases），`motionplayer-ttstr-hash-test` 为
   100/100（22 cases）；显式 `krkr2_wasmtime_guest` 目标与 Web Debug 最终链接均通过，
   `git diff --check` 通过。
   guest harness 的 `clipRect` 参数类型已随生产字段一并改为 `std::array<float,4>`。
@@ -873,8 +912,11 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
     icon 几何边界。KRKR/spec=1 也已从 `record.file` 的 raw node 恢复
     all-group/icon 枚举、严格 width/height、raw/RL 4-byte 解码、RL 1-byte+
     palette expand、全透明 2x2 与 descriptor 写表。后续又补齐 value-record/
-    embedded-rect/backpointer 拓扑、两阶段 decode、滞后一记录的 palette gate，以及
-    metadata→subrect Update→free 顺序；software texture 已实现非零 left/top 写入，
+    embedded-rect/backpointer 拓扑、两阶段 decode、滞后一记录的 palette gate、aligned
+    BGRA/index allocator family、S64/W32/S32 混合计数，以及
+    metadata→subrect Update→aligned-free 顺序；Win path 也恢复未初始化/S32 resource size、
+    W32 pitch/bytes、Create 后即 free、unchecked texture null 与 flags=1。software texture
+    已实现非零 left/top 写入，
     不再以整页 CPU batch 作为平台边界。这些 named raw owner/decode 站点已
     对齐，但不能据此把尚未逐调用者复核的 source 数据流或整个
     psbfile/motionplayer 记为 CLOSED。

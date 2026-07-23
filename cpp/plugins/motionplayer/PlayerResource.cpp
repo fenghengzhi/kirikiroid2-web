@@ -5,10 +5,10 @@
 #include "EmotePlayer.h" // for EmoteEngine (back-pointer deref)
 #include "RenderManager.h"
 #include "SourceCache.h"
+#include "tjsUtils.h"
 #include "../../core/visual/ogl/imagepacker.h"
 
 #include <algorithm>
-#include <memory>
 
 using namespace motion::internal;
 
@@ -17,6 +17,26 @@ extern unsigned int TVPMaxTextureSize;
 namespace motion {
 
     namespace {
+        static_assert(sizeof(tjs_uint) == 4 && sizeof(tjs_int) == 4);
+
+        // Express an ARM W-register reinterpretation without relying on the
+        // implementation-defined unsigned-to-signed conversion above INT_MAX.
+        constexpr tjs_int signedW32(tjs_uint bits) noexcept {
+            return bits <= 0x7fffffffu
+                ? static_cast<tjs_int>(bits)
+                : -1 - static_cast<tjs_int>(~bits);
+        }
+
+        constexpr tjs_int addW32(tjs_int left, tjs_int right) noexcept {
+            return signedW32(
+                static_cast<tjs_uint>(left) + static_cast<tjs_uint>(right));
+        }
+
+        constexpr tjs_int subtractW32(tjs_int left, tjs_int right) noexcept {
+            return signedW32(
+                static_cast<tjs_uint>(left) - static_cast<tjs_uint>(right));
+        }
+
         bool findWinSourceGroupLike_0x6948E8(
             detail::LoadedResourceRecord &loadedResource,
             const std::string &group, PSB::PSBRawNode &groupNode) {
@@ -56,50 +76,66 @@ namespace motion {
                 textureNode.GetDictionaryValueStrict("type").GetString();
             const PSB::PSBRawNode pixelNode =
                 textureNode.GetDictionaryValueStrict("pixel");
-            std::uint32_t sourceSize = 0;
+            // 0x694E08 passes an uninitialized 32-bit stack slot.  A null
+            // resource chunk leaves it untouched in PSB_getResourceData.
+            std::uint32_t sourceSize;
             const std::uint8_t *sourcePixels =
                 pixelNode.GetResource(sourceSize);
 
-            const size_t destinationSize =
-                static_cast<size_t>(4) * static_cast<size_t>(width) *
-                static_cast<size_t>(height);
-            // sub_A0DE48 in 0x694E64 returns an uninitialised allocation. The
-            // binary transforms only the raw resource byte count, so do not
-            // zero-fill the unused tail here.
-            std::unique_ptr<std::uint8_t[]> bgra(
-                new std::uint8_t[destinationSize]);
-            if(type != nullptr && std::strcmp(type, "RGBA8") == 0) {
+            // 0x694E44..0x694E54 performs both operations in W registers,
+            // then calls TJSAlignedAlloc(bytes, 4).  Keep the wrap before the
+            // allocator rather than widening through host size_t.
+            const tjs_uint pitch = static_cast<tjs_uint>(width) << 2;
+            const tjs_uint destinationSize =
+                pitch * static_cast<tjs_uint>(height);
+            auto *bgra = static_cast<std::uint8_t *>(
+                TJS::TJSAlignedAlloc(destinationSize, 4));
+            const tjs_int signedSourceSize = signedW32(sourceSize);
+            if(std::strcmp(type, "RGBA8") == 0) {
                 TVPReverseRGB(
-                              reinterpret_cast<tjs_uint32 *>(bgra.get()),
-                              reinterpret_cast<const tjs_uint32 *>(sourcePixels),
-                              static_cast<tjs_int>(sourceSize / 4u));
-            } else if(type != nullptr && std::strcmp(type, "A8L8") == 0) {
-                // 0x694EBC..0x694F10 reads [alpha,luminance] and writes
-                // [luminance,luminance,luminance,alpha].
-                size_t destinationOffset = 0;
-                for(std::uint32_t sourceOffset = 0;
-                    sourceOffset < sourceSize; sourceOffset += 2) {
-                    const std::uint8_t alpha = sourcePixels[sourceOffset];
-                    const std::uint8_t luminance =
-                        sourcePixels[sourceOffset + 1];
-                    bgra[destinationOffset + 0] = luminance;
-                    bgra[destinationOffset + 1] = luminance;
-                    bgra[destinationOffset + 2] = luminance;
-                    bgra[destinationOffset + 3] = alpha;
-                    destinationOffset += 4;
-                }
+                    reinterpret_cast<tjs_uint32 *>(bgra),
+                    reinterpret_cast<const tjs_uint32 *>(sourcePixels),
+                    signedSourceSize / 4);
             } else {
-                TVPThrowExceptionMessage(
-                    TJS_W("MotionPlayer.findSource: Unsupported texture format '%1'"),
-                    ttstr(type != nullptr ? type : ""));
+                if(std::strcmp(type, "A8L8") != 0) {
+                    // 0x694E84..0x694E94 frees before constructing the
+                    // unsupported-format exception argument.
+                    TJS::TJSAlignedDealloc(bgra);
+                    TVPThrowExceptionMessage(
+                        TJS_W("MotionPlayer.findSource: Unsupported texture format '%1'"),
+                        ttstr(type));
+                }
+                // 0x694EFC..0x694F30 reads [alpha,luminance] and writes
+                // [luminance,luminance,luminance,alpha].  Its signed W32
+                // comparison deliberately performs one final out-of-range
+                // byte read for a positive odd resource length.
+                tjs_uint64 sourceOffset = 0;
+                std::uint8_t *destination = bgra;
+                if(signedSourceSize >= 1) {
+                    do {
+                        const std::uint8_t alpha =
+                            sourcePixels[sourceOffset];
+                        const std::uint8_t luminance =
+                            sourcePixels[sourceOffset + 1];
+                        destination[0] = luminance;
+                        destination[1] = luminance;
+                        destination[2] = luminance;
+                        destination[3] = alpha;
+                        sourceOffset += 2;
+                        destination += 4;
+                    } while(signedW32(static_cast<tjs_uint>(sourceOffset)) <
+                            signedSourceSize);
+                }
             }
 
             auto *texture = TVPGetRenderManager()->CreateTexture2D(
-                bgra.get(), width * 4, width, height, TVPTextureFormat::RGBA,
-                RENDER_CREATE_TEXTURE_FLAG_ANY);
-            if(!texture) {
-                return nullptr;
-            }
+                bgra, signedW32(pitch),
+                static_cast<tjs_uint>(width), static_cast<tjs_uint>(height),
+                TVPTextureFormat::RGBA, RENDER_CREATE_TEXTURE_FLAG_STATIC);
+            // 0x694F60..0x694F64 frees before map insertion.  The Android
+            // path has no texture-null guard and will still insert/replace the
+            // slot before its unconditional construction-reference Release.
+            TJS::TJSAlignedDealloc(bgra);
             auto [cached, inserted] =
                 loadedResource.winSourceTextures.try_emplace(groupKey);
             (void)inserted;
@@ -139,7 +175,8 @@ namespace motion {
             KrkrAtlasRecordLike_0x695DE8(
                 const PSB::PSBRawNode &node, int width, int height,
                 std::string key) :
-                iconNode(node), rect(0, 0, width + 1, height + 1),
+                iconNode(node),
+                rect(0, 0, addW32(width, 1), addW32(height, 1)),
                 sourceKey(std::move(key)) {}
 
             ~KrkrAtlasRecordLike_0x695DE8() = default;
@@ -148,8 +185,13 @@ namespace motion {
         void decodeKrkrRL8Like_0x696E40(
             std::uint8_t *destination, const std::uint8_t *source,
             std::uint32_t sourceSize) {
-            const std::uint8_t *const sourceEnd = source + sourceSize;
-            while(source < sourceEnd) {
+            const tjs_int signedSourceSize = signedW32(sourceSize);
+            if(signedSourceSize < 1) {
+                return;
+            }
+            const std::uint8_t *const sourceEnd =
+                source + signedSourceSize;
+            do {
                 const std::uint8_t marker = *source++;
                 if((marker & 0x80u) != 0) {
                     const size_t count = (marker & 0x7fu) + 3u;
@@ -161,15 +203,20 @@ namespace motion {
                     destination += count;
                     source += count;
                 }
-            }
+            } while(source < sourceEnd);
         }
 
         void decodeKrkrRL32Like_0x696D00(
             std::uint8_t *destination, const std::uint8_t *source,
             std::uint32_t sourceSize) {
-            const std::uint8_t *const sourceEnd = source + sourceSize;
+            const tjs_int signedSourceSize = signedW32(sourceSize);
+            if(signedSourceSize < 1) {
+                return;
+            }
+            const std::uint8_t *const sourceEnd =
+                source + signedSourceSize;
             auto *output = reinterpret_cast<tjs_uint32 *>(destination);
-            while(source < sourceEnd) {
+            do {
                 const std::uint8_t marker = *source++;
                 if((marker & 0x80u) != 0) {
                     tjs_uint32 pixel;
@@ -185,7 +232,7 @@ namespace motion {
                     output += count;
                     source += byteCount;
                 }
-            }
+            } while(source < sourceEnd);
         }
 
         void decodeKrkrAtlasRecordLike_0x695DE8(
@@ -200,9 +247,16 @@ namespace motion {
             PSB::PSBRawNode scratch;
             const bool hasPalette =
                 persistentNode.ContainsDictionaryKey("pal");
-            const size_t pixelCount = static_cast<size_t>(rect.contentWidth) *
-                static_cast<size_t>(rect.contentHeight);
-            rect.bgra = new std::uint8_t[pixelCount * sizeof(tjs_uint32)];
+            // 0x696FA8 sign-extends both dimensions and multiplies in X21.
+            // Allocation sizes then deliberately truncate that product to W.
+            const tjs_int64 pixelCount =
+                static_cast<tjs_int64>(rect.contentWidth) *
+                static_cast<tjs_int64>(rect.contentHeight);
+            const tjs_uint pixelCountW32 =
+                static_cast<tjs_uint>(pixelCount);
+            const tjs_int pixelCountS32 = signedW32(pixelCountW32);
+            rect.bgra = static_cast<std::uint8_t *>(
+                TJS::TJSAlignedAlloc(pixelCountW32 << 2, 4));
             std::uint32_t resourceSize;
             persistentNode = record.iconNode;
 
@@ -210,7 +264,8 @@ namespace motion {
                 const bool compressed =
                     persistentNode.GetDictionaryValue("compress", scratch) &&
                     std::strcmp(scratch.GetString(), "RL") == 0;
-                auto *indexes = new std::uint8_t[pixelCount];
+                auto *indexes = static_cast<std::uint8_t *>(
+                    TJS::TJSAlignedAlloc(pixelCountW32, 4));
                 if(compressed) {
                     const std::uint8_t *pixelData =
                         persistentNode.GetDictionaryValueStrict("pixel")
@@ -223,7 +278,10 @@ namespace motion {
                     const std::uint8_t *pixelData =
                         persistentNode.GetDictionaryValueStrict("pixel")
                             .GetResource(resourceSize);
-                    std::memcpy(indexes, pixelData, resourceSize);
+                    std::memcpy(
+                        indexes, pixelData,
+                        static_cast<std::size_t>(
+                            signedW32(resourceSize)));
                 }
 
                 // Contains("pal") and try-get("pal") are distinct calls in
@@ -232,16 +290,19 @@ namespace motion {
                 if(persistentNode.GetDictionaryValue("pal", scratch)) {
                     const std::uint8_t *paletteData =
                         scratch.GetResource(resourceSize);
-                    std::vector<tjs_uint32> palette(resourceSize / 4u);
+                    const tjs_int paletteCount =
+                        signedW32(resourceSize) / 4;
+                    std::vector<tjs_uint32> palette(
+                        static_cast<std::size_t>(paletteCount));
                     TVPReverseRGB(
                         palette.data(),
                         reinterpret_cast<const tjs_uint32 *>(paletteData),
-                        static_cast<tjs_int>(resourceSize / 4u));
+                        paletteCount);
                     TVPBLExpand8BitTo32BitPal(
                         reinterpret_cast<tjs_uint32 *>(rect.bgra), indexes,
-                        static_cast<tjs_int>(pixelCount), palette.data());
+                        pixelCountS32, palette.data());
                 }
-                delete[] indexes;
+                TJS::TJSAlignedDealloc(indexes);
             } else {
                 const bool compressed =
                     persistentNode.GetDictionaryValue("compress", scratch) &&
@@ -255,7 +316,7 @@ namespace motion {
                     TVPReverseRGB(
                         reinterpret_cast<tjs_uint32 *>(rect.bgra),
                         reinterpret_cast<const tjs_uint32 *>(rect.bgra),
-                        static_cast<tjs_int>(pixelCount));
+                        pixelCountS32);
                 } else {
                     const std::uint8_t *pixelData =
                         persistentNode.GetDictionaryValueStrict("pixel")
@@ -263,22 +324,29 @@ namespace motion {
                     TVPReverseRGB(
                         reinterpret_cast<tjs_uint32 *>(rect.bgra),
                         reinterpret_cast<const tjs_uint32 *>(pixelData),
-                        static_cast<tjs_int>(pixelCount));
+                        pixelCountS32);
                 }
             }
 
             bool anyAlpha = false;
-            for(size_t i = 0; i < pixelCount; ++i) {
-                if(rect.bgra[i * 4u + 3u] != 0) {
-                    anyAlpha = true;
-                    break;
-                }
+            // 0x69720C first gates on signed low-W21, but 0x69722C compares
+            // the scan index against the full signed X21 product.
+            if(pixelCountS32 > 0) {
+                tjs_int64 index = 0;
+                do {
+                    if(rect.bgra[static_cast<std::size_t>(index) * 4u + 3u] !=
+                       0) {
+                        anyAlpha = true;
+                        break;
+                    }
+                    ++index;
+                } while(index < pixelCount);
             }
             if(!anyAlpha) {
                 // 0x697210..0x697248: an entirely transparent image drops its
                 // pixel buffer and replaces the padded rectangle with 2x2.
                 // contentWidth/contentHeight at record+0x28 are not rewritten.
-                delete[] rect.bgra;
+                TJS::TJSAlignedDealloc(rect.bgra);
                 rect.bgra = nullptr;
                 rect.w = 2;
                 rect.h = 2;
@@ -345,8 +413,8 @@ namespace motion {
             std::vector<ImagePacker::rect_xywhf *> recordPointers;
             for(auto &record : records) {
                 record.rect.record = &record;
-                record.rect.contentWidth = record.rect.w - 1;
-                record.rect.contentHeight = record.rect.h - 1;
+                record.rect.contentWidth = subtractW32(record.rect.w, 1);
+                record.rect.contentHeight = subtractW32(record.rect.h, 1);
                 recordPointers.push_back(&record.rect);
                 decodeKrkrAtlasRecordLike_0x695DE8(iconNode, record);
             }
@@ -366,15 +434,17 @@ namespace motion {
                 // empty record set.  sub_695DE8 @ 0x6968C0..0x696C20 still
                 // creates that empty texture and releases its construction
                 // reference; do not skip the zero-size lifecycle here.
-                const size_t atlasStride = static_cast<size_t>(bin.size.w) * 4u;
+                const tjs_uint atlasStride =
+                    static_cast<tjs_uint>(bin.size.w) << 2;
                 // 0x6968D4 creates an owned empty page. Each record below
                 // writes metadata, uploads its own packed sub-rect, and frees
                 // its BGRA buffer before advancing to the next record.
                 auto *texture = TVPGetRenderManager()->CreateTexture2D(
-                    nullptr, static_cast<int>(atlasStride),
+                    nullptr, signedW32(atlasStride),
                     static_cast<unsigned int>(bin.size.w),
                     static_cast<unsigned int>(bin.size.h),
-                    TVPTextureFormat::RGBA, RENDER_CREATE_TEXTURE_FLAG_ANY);
+                    TVPTextureFormat::RGBA,
+                    RENDER_CREATE_TEXTURE_FLAG_STATIC);
                 for(auto *baseRect : bin.rects) {
                     auto *rect =
                         static_cast<KrkrAtlasRectLike_0x695DE8 *>(baseRect);
@@ -393,8 +463,8 @@ namespace motion {
                     entry.textureRect = {
                         rect->x,
                         rect->y,
-                        rect->x + rect->w - 1,
-                        rect->y + rect->h - 1,
+                        subtractW32(addW32(rect->x, rect->w), 1),
+                        subtractW32(addW32(rect->y, rect->h), 1),
                     };
                     // 0x696A84..0x696A90 passes this same raw-node storage as
                     // both source and out.  A hit descends iconNode in place;
@@ -415,11 +485,14 @@ namespace motion {
                         // frees record+0x30 without clearing the field.
                         texture->Update(
                             rect->bgra, TVPTextureFormat::RGBA,
-                            rect->contentWidth * 4,
+                            signedW32(
+                                static_cast<tjs_uint>(rect->contentWidth) << 2),
                             tTVPRect(rect->x, rect->y,
-                                     rect->x + rect->w - 1,
-                                     rect->y + rect->h - 1));
-                        delete[] rect->bgra;
+                                     subtractW32(
+                                         addW32(rect->x, rect->w), 1),
+                                     subtractW32(
+                                         addW32(rect->y, rect->h), 1)));
+                        TJS::TJSAlignedDealloc(rect->bgra);
                     }
                 }
                 // Each cached icon entry took its own AddRef above.  Release
