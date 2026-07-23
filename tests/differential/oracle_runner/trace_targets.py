@@ -61,6 +61,22 @@ PSBFILE_LOAD_TARGETS = [
     0x6863CC,   # Emote PSB seed-filter call operator
 ]
 
+# --- psbfile_media: PSBMedia replacement + borrowed stream lifecycle -------
+# This extends the load targets because EnsureContainer enters 0x598538 for
+# each container switch.  The adapter observes the old stream's fields but
+# deliberately never dereferences its borrowed Block after replacement.
+PSBFILE_MEDIA_TARGETS = PSBFILE_LOAD_TARGETS + [
+    0x59849C,   # PSBMedia process-lifetime singleton pre-register callback
+    0x5998C4,   # PSBMedia::CheckExistentStorage
+    0x59993C,   # PSBMedia::Open
+    0x599E04,   # PSBMedia::EnsureContainer
+    0x59A0B4,   # PSBMedia::GetResourceData
+    0x59A330,   # PSBFile NCB adaptor creation
+    0x59A4B0,   # PSBMedia::Resolve
+    0x8F7C74,   # tTVPMemoryStream borrowed-block ctor
+    0x8F7D68,   # tTVPMemoryStream deleting dtor
+]
+
 
 ADDR_NAMES = {
     0x69A754: "sub_69A754",
@@ -75,6 +91,15 @@ ADDR_NAMES = {
     0x598708: "PSBFile_adoptRaw",
     0x598960: "PSBRawOwner_refresh",
     0x6863CC: "EmotePSBDecrypt_call",
+    0x59849C: "PSBMedia_register",
+    0x5998C4: "PSBMedia_checkStorage",
+    0x59993C: "PSBMedia_open",
+    0x599E04: "PSBMedia_ensureContainer",
+    0x59A0B4: "PSBMedia_getResourceData",
+    0x59A330: "PSBFile_createAdaptor",
+    0x59A4B0: "PSBMedia_resolve",
+    0x8F7C74: "tTVPMemoryStream_ctorBorrowed",
+    0x8F7D68: "tTVPMemoryStream_deletingDtor",
 }
 
 # (n_int_args, n_double_args) per target — AAPCS64 arg count cap of 8
@@ -109,6 +134,25 @@ ARG_COUNTS: dict[int, tuple[int, int]] = {
     0x598960: (2, 0),
     # EmotePSBDecrypt_call(seed closure slot, PSBRawOwner *)
     0x6863CC: (2, 0),
+    # PSBMedia process-lifetime pre-register callback (source-level void)
+    0x59849C: (0, 0),
+    # PSBMedia::CheckExistentStorage(this, ttstr const&)
+    0x5998C4: (2, 0),
+    # PSBMedia::Open(this, ttstr const&, flags); flags is source-level ABI
+    # even though the optimized body does not consume x2.
+    0x59993C: (3, 0),
+    # PSBMedia::EnsureContainer(this, ttstr const&)
+    0x599E04: (2, 0),
+    # PSBMedia::GetResourceData(this, ttstr const&, uint32_t *size)
+    0x59A0B4: (3, 0),
+    # CreateAdaptor(PSBFile **holder, bool takeOwnership, bool throwOnError)
+    0x59A330: (3, 0),
+    # PSBMedia::Resolve(this, ttstr const&, PSBRawNode *out)
+    0x59A4B0: (3, 0),
+    # tTVPMemoryStream(this, const void *block, uint32_t size)
+    0x8F7C74: (3, 0),
+    # deleting ~tTVPMemoryStream(this): dtor body + operator delete(this)
+    0x8F7D68: (1, 0),
 }
 
 # Return kind per target: "int", "double", "void". Drives exit-event
@@ -127,6 +171,15 @@ RETURN_KINDS: dict[int, str] = {
     0x598708: "int",
     0x598960: "int",
     0x6863CC: "int",
+    0x59849C: "void",
+    0x5998C4: "int",
+    0x59993C: "int",
+    0x599E04: "int",
+    0x59A0B4: "int",
+    0x59A330: "int",
+    0x59A4B0: "int",
+    0x8F7C74: "void",
+    0x8F7D68: "void",
 }
 
 

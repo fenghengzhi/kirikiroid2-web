@@ -174,6 +174,16 @@ borrowed resource pointer 与 raw-node Resolve 生命周期。
 ctor/dtor 反编译证据，测试不读取悬挂 block。此前“缺少第二容器、无法覆盖 replacement”的
 结论已被证伪并删除；该用例只是本地守护，尚不是 Android runtime oracle。
 
+2026-07-23 已补 `run_psbfile_load_adb.py --media-lifecycle`：真实 APK harness 会用相同
+两只 tracked 资产执行 `ezsave → raw motion → ezsave`，观察 PSBMedia 的 Android ABI 状态，
+并在 replacement 后只读取旧 stream 自身 metadata，再调用 deleting destructor
+`0x8F7D68`；不会解引用悬挂 Block。Frida target 同步覆盖 `0x59993C/0x599E04/
+0x59A0B4/0x59A330/0x59A4B0/0x8F7C74/0x8F7D68`。离线 fake-engine/RPC 路径已通过
+（没有伪造 `adb`、没有启动 Android、没有执行 `libkrkr2.so`），
+但本轮无连接 Android 设备，所以这仍是“oracle 已实现、真机结果待取得”，不是二进制实测通过。
+fresh IDA 也已把原来合并的 `0x8F7D04..0x8F7DC0` 拆为 complete destructor
+`0x8F7D04` 与独立 deleting destructor `0x8F7D68`，补类型/注释并保存 IDB。
+
 对 dictionary listing 的天然可达性又做了严格交叉核实：`ezsave.pimg` root 的 11 个直属
 子节点只有八个 Resource、两个 Integer 与一个 Array，没有 Dictionary；未过滤 motion root
 是 Resource `0x1A`。`Resolve@0x59A4B0` 不允许直接返回 root，每个 segment 又必须通过
@@ -237,8 +247,8 @@ STL 实例化；没有未归属业务入口。该 manifest 只证明 **Android�
 filter 后 offset failure、损坏 packed table、tag `0x0B`、>4 GiB storage、dictionary
 listing 和 CreateAdaptor-null 分支，仍按主分析记录为缺少天然 fixture 的验证缺口。
 成功跨-container replacement 与旧 stream metadata/析构的本地守护已由现有第二容器覆盖；
-borrowed/non-retaining 仍由反编译证据证明，且缺 Android runtime oracle，不能把本地验证
-误记为二进制实测。
+Android runtime oracle 路径也已实现，但本轮无设备、尚未取得真实执行结果。borrowed/
+non-retaining 仍由反编译证据证明，不能把本地测试或离线 fake-engine/RPC 验证误记为二进制实测。
 
 本轮修改后 macOS Release `psbfile-dll` 为 **575/575**（10 cases），
 `motionplayer-dll` 为 **1212/1212**（16 cases），`motionplayer-ttstr-hash-test` 为

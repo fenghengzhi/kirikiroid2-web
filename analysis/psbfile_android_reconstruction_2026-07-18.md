@@ -79,6 +79,19 @@
   `tTVPMemoryStream` ctor/dtor 反编译证据；测试不读取悬挂 block，也不冒领这项证明。
   因此本文此前“只有一只可加载 container、不能覆盖 replacement/borrowed stream”的断言
   已被证伪并就地纠正；该测试是本地生命周期复刻验证，不冒充 Android runtime oracle。
+- 2026-07-23 新增 `run_psbfile_load_adb.py --media-lifecycle`，把同两只 tracked 资产
+  以 ASCII alias 推入 Android，并直接驱动 process-lifetime PSBMedia singleton：
+  `Open(ezsave/2036.tlg) → CheckExistentStorage(raw-motion/2036.tlg) →
+  delete old stream → Open(ezsave/2036.tlg)`。它同时核对 `_file/_container` 确实替换、
+  adaptor 地址变化、旧 stream 的 Block 指针值/Reference/Size/AllocSize/CurrentPos 不变，
+  且绝不读取 replacement 后的悬挂 Block。离线 fake-engine/RPC 协议测试已通过；它没有
+  伪造 `adb` 可执行文件、没有启动 Android，也没有执行 `libkrkr2.so`。本轮
+  `adb devices -l` 无连接设备，因此尚不把真实 Android 执行记为通过。
+- fresh IDA 曾把 `0x8F7D04..0x8F7DC0` 合成一只函数；`0x8F7D68` 有独立 ARM64 序言，
+  并在同一 `Block && !Reference` 清理后 tail-call `operator delete(self)`。IDB 已拆为
+  complete destructor `0x8F7D04..0x8F7D68` 与 deleting destructor
+  `0x8F7D68..0x8F7DC0`、补 `_guess` 名称/类型/注释并保存。Android oracle 调用
+  deleting entry `0x8F7D68`，与源码 `delete stream` 的完整对象生命周期一致。
 - 当前验证：macOS Release 五个相关目标构建成功，`psbfile-dll` **575/575**（10 cases）、
   `motionplayer-dll` **1212/1212**（16 cases）、`motionplayer-ttstr-hash-test`
   **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
@@ -545,7 +558,8 @@ runtime 路径，以及损坏 packed table 的实际越界/崩溃表现。现有
 已经覆盖 NCB typed class 的真实 TJS 构造、同-container media 复用/miss、缺失 container
 异常后旧缓存保留、成功跨-container 替换，以及替换后旧 stream metadata/析构的本地守护。
 stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地测试不读取悬挂 block，且
-没有 Android runtime oracle，不能把该守护提升为二进制运行结果。
+Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结果，不能把本地守护或
+离线 fake-engine/RPC 验证提升为二进制运行结果。
 
 ## 本轮纠正的既有误差
 
@@ -1827,7 +1841,8 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
   `PSBValueDispatch_EnumMembers_guess` 改为 `PSBValueDispatch_EnumMembers` 并保存。
 
 - 2026-07-19 fresh decompile `PSBMedia::Open@0x59993C`、
-  `tTVPMemoryStream` block ctor `0x8F7C74` 与析构 `0x8F7D04`，闭合了 `psb:`
+  `tTVPMemoryStream` block ctor `0x8F7C74`、complete destructor `0x8F7D04`
+  与 deleting destructor `0x8F7D68`，闭合了 `psb:`
   resource stream 的跨对象生命周期：Open 从当前 cached PSBFile 取 raw resource pointer
   与 size 后直接交给 0x20-byte memory stream；非空 block 不复制，ctor 置
   `Reference=true`，也不对 raw owner/PSBFile 做 AddRef。析构仅在 `block != null &&
@@ -1957,8 +1972,8 @@ stream 的 borrowed/non-retaining 性质仍由反编译构造链证明；本地�
    覆盖 `ezsave → motion → ezsave` 的成功跨-container replacement，以及旧 stream 在 owner
    replacement 后自身 metadata/析构仍可用的本地守护。stream 不保活 owner、block 为 borrowed
    仍由 ctor/dtor 反编译证据证明，测试不读取悬挂 block。仍未由天然可达节点覆盖的是
-   dictionary media listing 与 CreateAdaptor-null；cross-container 路径也仍缺 Android
-   runtime oracle，不能用本地测试替代。
+   dictionary media listing 与 CreateAdaptor-null。cross-container Android runner 已实现，
+   但本轮没有连接设备，真实 libkrkr2.so 执行结果仍待取得；不能用离线协议模拟替代。
 4. 优化后二进制尚不能唯一恢复若干源码拼写：`sub_597AD4` 是两裸参数还是零开销 raw-node
    holder 参数、`GetInt@0x599438` 返回 `tjs_int` 还是 `tjs_int64`、PSBFile/raw-node 的显式
    special members 与 self guards、若干 inline helper 的原名/member 身份、

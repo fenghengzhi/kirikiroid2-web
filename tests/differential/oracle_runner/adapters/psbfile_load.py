@@ -8,18 +8,30 @@ construct or check in a damaged PSB/MDF fixture: it only forwards an existing
 from __future__ import annotations
 
 import struct
+import time
 from pathlib import Path
 
 
 PSBFILE_LOAD_VARIANT_OFFSET = 0x598268
 PSBFILE_LOAD_STORAGE_OFFSET = 0x598538
 PSBRAWOWNER_REFRESH_OFFSET = 0x598960
+PSBMEDIA_CHECK_STORAGE_OFFSET = 0x5998C4
+PSBMEDIA_OPEN_OFFSET = 0x59993C
+TVP_ADD_AUTO_PATH_OFFSET = 0x8EB4B4
+TVP_MEMORY_STREAM_DELETING_DTOR_OFFSET = 0x8F7D68
+TJS_VARIANT_STRING_RELEASE_OFFSET = 0xA13274
 TTSTR_FROM_ASCII_OFFSET = 0xA13878
 EMOTE_PSB_DECRYPT_OFFSET = 0x6863CC
+
+PSBMEDIA_SINGLETON_SLOT_OFFSET = 0x1AB50E8
+PSBFILE_CLASS_SLOT_OFFSET = 0x1AB5110
+TVP_SCRIPT_ENGINE_SLOT_OFFSET = 0x1AE2FD0
 
 MDF_MAGIC = b"mdf\0"
 PSB_MAGIC = b"PSB\0"
 OWNER_SIZE = 0x68
+PSBMEDIA_SIZE = 0x28
+MEMORY_STREAM_SIZE = 0x20
 
 
 def _input_info(input_path: Path) -> tuple[bytes, str, int]:
@@ -207,3 +219,310 @@ def run_storage_case(engine, input_path: Path, remote_path: str) -> dict:
         engine, input_path=input_path, entry="storage", input_size=len(data),
         input_format=input_format, declared_size=declared_size, loaded=loaded,
         holder_addr=holder_addr)
+
+
+def _read_pointer(engine, addr: int) -> int:
+    return struct.unpack("<Q", engine.ql.mem.read(addr, 8))[0]
+
+
+def _wait_for_pointer(engine, offset: int, timeout: float = 30.0) -> int:
+    deadline = time.monotonic() + timeout
+    while True:
+        value = _read_pointer(engine, engine.offset(offset))
+        if value != 0 or time.monotonic() >= deadline:
+            return value
+        time.sleep(0.25)
+
+
+def _ensure_psbfile_registered(
+    engine, timeout: float = 30.0,
+) -> tuple[int, int]:
+    deadline = time.monotonic() + timeout
+    while True:
+        singleton_addr = _read_pointer(
+            engine, engine.offset(PSBMEDIA_SINGLETON_SLOT_OFFSET))
+        class_object = _read_pointer(
+            engine, engine.offset(PSBFILE_CLASS_SLOT_OFFSET))
+        if singleton_addr != 0 and class_object != 0:
+            return singleton_addr, class_object
+
+        # Plugins may become visible shortly after TVPScriptEngine itself.
+        # The TJS catch keeps that startup window retryable without letting a
+        # script exception escape across the harness RPC boundary.
+        engine.tjs_exec(
+            'try { Plugins.link("PSBFile.dll"); } catch(e) {}')
+        singleton_addr = _read_pointer(
+            engine, engine.offset(PSBMEDIA_SINGLETON_SLOT_OFFSET))
+        class_object = _read_pointer(
+            engine, engine.offset(PSBFILE_CLASS_SLOT_OFFSET))
+        if singleton_addr != 0 and class_object != 0:
+            return singleton_addr, class_object
+        if time.monotonic() >= deadline:
+            return singleton_addr, class_object
+        time.sleep(0.25)
+
+
+def _make_ttstr(engine, value: str) -> tuple[int, int]:
+    encoded = value.encode("ascii")
+    cstr_addr = engine.heap.write(encoded + b"\0", align=8)
+    payload = engine.call(
+        engine.offset(TTSTR_FROM_ASCII_OFFSET),
+        ints=(cstr_addr,), ret="ptr",
+    )
+    if payload == 0:
+        raise RuntimeError(f"failed to construct ttstr for {value!r}")
+    try:
+        slot = engine.heap.write(struct.pack("<Q", payload), align=8)
+    except Exception:
+        # Ownership has not reached the caller yet, so release it here.  A
+        # lost cleanup reply is not retried because Release may have executed.
+        try:
+            _release_ttstr(engine, payload)
+        except Exception:
+            pass
+        raise
+    return payload, slot
+
+
+def _release_ttstr(engine, payload: int) -> None:
+    engine.call(
+        engine.offset(TJS_VARIANT_STRING_RELEASE_OFFSET),
+        ints=(payload,), ret="void",
+    )
+
+
+def _read_ttstr(engine, payload: int) -> str:
+    if payload == 0:
+        return ""
+    length = struct.unpack(
+        "<I", engine.ql.mem.read(payload + 60, 4))[0]
+    if length > 4096:
+        raise RuntimeError(f"unreasonable Android ttstr length: {length}")
+    if length < 22:
+        chars_addr = payload + 16
+    else:
+        chars_addr = _read_pointer(engine, payload + 8)
+    return engine.ql.mem.read(chars_addr, length * 2).decode("utf-16-le")
+
+
+def _inspect_media(engine, media_addr: int) -> dict:
+    # Android aarch64 ABI observation only.  These offsets are deliberately
+    # confined to the oracle adapter; production C++ follows source fields.
+    raw = engine.ql.mem.read(media_addr, PSBMEDIA_SIZE)
+    return {
+        "file_object": struct.unpack_from("<Q", raw, 12)[0],
+        "file_objthis": struct.unpack_from("<Q", raw, 20)[0],
+        "file_type": struct.unpack_from("<I", raw, 28)[0],
+        "container": _read_ttstr(
+            engine, struct.unpack_from("<Q", raw, 32)[0]),
+    }
+
+
+def _inspect_memory_stream(engine, stream_addr: int) -> dict:
+    # tTVPMemoryStream block ctor @0x8F7C74 writes this 0x20-byte Android
+    # layout.  Reading Block's pointer value is safe; never dereference it
+    # after PSBMedia replaces the owning container.
+    raw = engine.ql.mem.read(stream_addr, MEMORY_STREAM_SIZE)
+    return {
+        "block": struct.unpack_from("<Q", raw, 8)[0],
+        "reference": bool(raw[16]),
+        "size": struct.unpack_from("<I", raw, 20)[0],
+        "alloc_size": struct.unpack_from("<I", raw, 24)[0],
+        "current_pos": struct.unpack_from("<I", raw, 28)[0],
+    }
+
+
+def run_media_lifecycle_case(
+    engine,
+    *,
+    first_input: Path,
+    replacement_input: Path,
+    remote_dir: str,
+    first_container: str,
+    replacement_container: str,
+    resource_name: str,
+    expected_size: int,
+) -> dict:
+    """Exercise PSBMedia replacement and its borrowed-stream boundary.
+
+    Both files are existing operator/repository inputs.  The first must expose
+    ``resource_name``; the replacement must load as a PSB container but miss
+    that resource.  No bytes are read through the old stream after replacement.
+    """
+    _input_info(first_input)
+    _input_info(replacement_input)
+    for value in (remote_dir, first_container, replacement_container,
+                  resource_name):
+        value.encode("ascii")
+
+    engine.reset_heap()
+    script_engine = _wait_for_pointer(
+        engine, TVP_SCRIPT_ENGINE_SLOT_OFFSET)
+
+    result = {
+        "input": str(first_input),
+        "replacement_input": str(replacement_input),
+        "entry": "media-lifecycle",
+        "script_engine_ready": script_engine != 0,
+    }
+    if script_engine == 0:
+        result["status"] = "setup-failed"
+        return result
+
+    # TJS_INIT must run only after the APK's full TVPScriptEngine exists.
+    # Otherwise the harness permanently chooses its bare-TJS fallback, which
+    # has no Plugins object or NCB classes and cannot serve as a media oracle.
+    engine.tjs_init()
+
+    singleton_addr, class_object = _ensure_psbfile_registered(engine)
+
+    result.update({
+        "singleton_ready": singleton_addr != 0,
+        "class_object_ready": class_object != 0,
+    })
+    if singleton_addr == 0 or class_object == 0:
+        result["status"] = "setup-failed"
+        return result
+
+    payloads: list[int] = []
+    live_streams: list[int] = []
+    try:
+        auto_path = remote_dir.rstrip("/") + "/"
+        auto_path_payload, auto_path_slot = _make_ttstr(engine, auto_path)
+        payloads.append(auto_path_payload)
+        engine.call(
+            engine.offset(TVP_ADD_AUTO_PATH_OFFSET),
+            ints=(auto_path_slot,), ret="void",
+        )
+
+        first_name = f"{first_container}/{resource_name}"
+        replacement_name = f"{replacement_container}/{resource_name}"
+        first_payload, first_slot = _make_ttstr(engine, first_name)
+        payloads.append(first_payload)
+        replacement_payload, replacement_slot = _make_ttstr(
+            engine, replacement_name)
+        payloads.append(replacement_payload)
+
+        first_stream = engine.call(
+            engine.offset(PSBMEDIA_OPEN_OFFSET),
+            ints=(singleton_addr, first_slot, 0), ret="ptr",
+        )
+        result["first_opened"] = first_stream != 0
+        if first_stream == 0:
+            result["status"] = "mismatch"
+            return result
+        live_streams.append(first_stream)
+
+        first_media = _inspect_media(engine, singleton_addr)
+        first_metadata = _inspect_memory_stream(engine, first_stream)
+        result.update({
+            "first_container": first_media["container"],
+            "first_resource_size": first_metadata["size"],
+            "borrowed_reference": first_metadata["reference"],
+        })
+
+        replacement_exists = engine.call(
+            engine.offset(PSBMEDIA_CHECK_STORAGE_OFFSET),
+            ints=(singleton_addr, replacement_slot), ret="bool",
+        )
+        replacement_media = _inspect_media(engine, singleton_addr)
+        preserved_metadata = _inspect_memory_stream(engine, first_stream)
+        result.update({
+            "replacement_exists": bool(replacement_exists),
+            "replacement_container": replacement_media["container"],
+            "file_dispatch_changed": (
+                first_media["file_object"]
+                != replacement_media["file_object"]),
+            "metadata_preserved_after_replacement": (
+                preserved_metadata == first_metadata),
+        })
+
+        # 0x8F7D68 is the deleting destructor split from IDA's formerly merged
+        # 0x8F7D04 body. Reference=true means it does not free or dereference
+        # the now-dangling borrowed Block, then calls operator delete(this).
+        # Remove ownership before RPC: a lost reply must not trigger a second
+        # destructor call from finally and turn cleanup into a use-after-free.
+        live_streams.remove(first_stream)
+        engine.call(
+            engine.offset(TVP_MEMORY_STREAM_DELETING_DTOR_OFFSET),
+            ints=(first_stream,), ret="void",
+        )
+        result["stream_delete_returned"] = True
+
+        roundtrip_stream = engine.call(
+            engine.offset(PSBMEDIA_OPEN_OFFSET),
+            ints=(singleton_addr, first_slot, 0), ret="ptr",
+        )
+        result["roundtrip_opened"] = roundtrip_stream != 0
+        if roundtrip_stream != 0:
+            live_streams.append(roundtrip_stream)
+        roundtrip_media = _inspect_media(engine, singleton_addr)
+        result["roundtrip_container"] = roundtrip_media["container"]
+        if roundtrip_stream != 0:
+            roundtrip_metadata = _inspect_memory_stream(
+                engine, roundtrip_stream)
+            result["roundtrip_size"] = roundtrip_metadata["size"]
+            result["roundtrip_reference"] = roundtrip_metadata["reference"]
+            result["roundtrip_alloc_size"] = roundtrip_metadata["alloc_size"]
+            result["roundtrip_current_pos"] = roundtrip_metadata["current_pos"]
+            live_streams.remove(roundtrip_stream)
+            engine.call(
+                engine.offset(TVP_MEMORY_STREAM_DELETING_DTOR_OFFSET),
+                ints=(roundtrip_stream,), ret="void",
+            )
+        else:
+            result["roundtrip_size"] = 0
+            result["roundtrip_reference"] = False
+            result["roundtrip_alloc_size"] = 0
+            result["roundtrip_current_pos"] = 0
+
+        ok = (
+            first_media["file_type"] == 1
+            and first_media["file_object"] != 0
+            and first_media["file_object"] == first_media["file_objthis"]
+            and first_media["container"] == first_container
+            and first_metadata["block"] != 0
+            and first_metadata["reference"]
+            and first_metadata["size"] == expected_size
+            and first_metadata["alloc_size"] == expected_size
+            and first_metadata["current_pos"] == 0
+            and not replacement_exists
+            and replacement_media["file_type"] == 1
+            and replacement_media["file_object"] != 0
+            and replacement_media["file_object"]
+            == replacement_media["file_objthis"]
+            and replacement_media["container"] == replacement_container
+            and first_media["file_object"] != replacement_media["file_object"]
+            and preserved_metadata == first_metadata
+            and roundtrip_stream != 0
+            and roundtrip_media["container"] == first_container
+            and result["roundtrip_size"] == expected_size
+            and result["roundtrip_reference"]
+            and result["roundtrip_alloc_size"] == expected_size
+            and result["roundtrip_current_pos"] == 0
+        )
+        result["status"] = "ok" if ok else "mismatch"
+        return result
+    finally:
+        cleanup_errors = []
+        while live_streams:
+            stream = live_streams.pop()
+            try:
+                engine.call(
+                    engine.offset(TVP_MEMORY_STREAM_DELETING_DTOR_OFFSET),
+                    ints=(stream,), ret="void",
+                )
+            except Exception as exc:  # Preserve the primary RPC failure.
+                cleanup_errors.append(
+                    f"stream 0x{stream:x}: {exc!r}")
+        while payloads:
+            payload = payloads.pop()
+            try:
+                _release_ttstr(engine, payload)
+            except Exception as exc:  # Preserve the primary RPC failure.
+                cleanup_errors.append(
+                    f"ttstr 0x{payload:x}: {exc!r}")
+        if cleanup_errors:
+            result["cleanup_errors"] = cleanup_errors
+            if result.get("status") in {"ok", "mismatch"}:
+                result["status"] = "error"

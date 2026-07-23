@@ -33,7 +33,7 @@ pixel output.
 | `local_transform` | **✓ 8/8** | **✓ 8** | `sub_699940` (0x699940), libm sin/cos used by `rotate_90` |
 | `bezier_curve` | **✓ 6/6** | **✓ 6** | `sub_69A754` (0x69A754). `empty_curve` + `size_mismatch` specs dropped — UB inputs (empty or mismatched arrays) where libkrkr2's behaviour is an OOB-read side effect / infinite loop rather than a designed contract; oracle doesn't apply |
 | `position_interp` | **✓ 5/5** | **✓ 5** | `sub_69A4D4` (0x69A4D4). Adapter had `src_addr`/`dst_addr` wired into a2/a3 — libkrkr2's convention (matching port's `interpolatePosition69A4D4` signature) is a2=dst (returned at t=1), a3=src (returned at t=0). `rotation_coord*` specs dropped — empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (latent libkrkr2 bug, never hit by real assets); port's defensive sanitisation is intentionally non-matching |
-| `psbfile_load` | committed raw PSB or operator-supplied MDF | — | Directly invokes `PSBFile.load(octet)` (0x598268), verifies the 0x68 raw owner and strict header refresh (0x598960); optional `--storage` covers 0x598538 and `--trace` records the native call chain. No damaged fixture is generated or checked in |
+| `psbfile_load` | committed raw PSB or operator-supplied MDF | — | Directly invokes `PSBFile.load(octet)` (0x598268), verifies the 0x68 raw owner and strict header refresh (0x598960); optional `--storage` covers 0x598538. `--media-lifecycle` uses the two tracked Emote files to cover PSBMedia cross-container replacement plus the old borrowed stream's metadata/deleting destructor. With that mode, `--trace` also records the complete media/resolve/stream call chain. No damaged fixture is generated or checked in |
 | `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
 | `motion_playback` | libkrkr2 record + Wasmtime verify | **✓ 2** | Uses `STARTUP_FROM` to schedule `reference/xp3/logo_test_oracle.xp3` inside libkrkr2, then Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record per-frame Motion node state for `yuzulogo.mtn` and `m2logo.mtn`. Checked-in goldens exist under `tests/differential/traces/motion_playback/*.oracle.json`; the port-side verifier runs the Wasmtime guest, executing the same `startup.tjs` path with a headless Window stub. This is not yet a full visual oracle; see "Motion playback visual oracle status" below. |
 
@@ -229,6 +229,9 @@ python3 tests/differential/python/run_psbfile_load_adb.py \
 python3 tests/differential/python/run_psbfile_load_adb.py \
   --input tests/test_files/emote/e-mote3.0バニラパジャマa.psb \
   --decrypt-seed 742877301 --trace
+
+python3 tests/differential/python/run_psbfile_load_adb.py \
+  --media-lifecycle --trace
 ```
 
 The return-value checks cover the decoded `PSB\0` buffer size, intrusive owner
@@ -238,6 +241,30 @@ also pushes a temporary copy to the configured device directory and exercises
 without creating a golden. For an encrypted raw PSB, `--decrypt-seed` invokes
 the Android filter call operator at 0x6863CC and compares every decrypted byte
 with an independent host-side xorshift implementation before strict refresh.
+
+`--media-lifecycle` pushes the repository's existing `ezsave.pimg` and encrypted
+motion PSB under ASCII-only device aliases. It opens
+`psb-media-ezsave.pimg/2036.tlg`, then asks the same process-lifetime PSBMedia
+singleton for the resource under the second container. The second container is
+loadable without a filter but has a raw Resource root, so the lookup returns
+false only after `EnsureContainer` (0x599E04) has replaced `_file` and
+`_container`. The oracle then verifies the old `tTVPMemoryStream` still exposes
+its unchanged size/reference metadata, invokes its deleting destructor at
+0x8F7D68, and opens the first container again. This deleting entry executes the
+same `Reference`-gated body as the complete destructor at 0x8F7D04, then calls
+`operator delete` on the stream object. It deliberately never
+dereferences the old stream's borrowed `Block` after replacement.
+When combined with `--trace`, the Frida target set additionally includes
+`Open` (0x59993C), `EnsureContainer` (0x599E04), `GetResourceData` (0x59A0B4),
+`Resolve` (0x59A4B0), adaptor creation (0x59A330), and the stream constructor /
+deleting destructor (0x8F7C74 / 0x8F7D68).
+
+The two tracked files do not provide a PSBMedia-reachable Dictionary node:
+`ezsave.pimg` exposes resources, integers, and an Array at its root, while the
+unfiltered motion root is itself a Resource. Consequently this mode does not
+claim runtime coverage of the Dictionary-listing arm. It also does not mutate
+the initialized APK's global NCB registration state to manufacture a
+`CreateAdaptor == nullptr` case.
 
 ### With Frida trace verification (recommended in CI)
 
