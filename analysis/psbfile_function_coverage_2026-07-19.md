@@ -244,11 +244,15 @@ in-memory engine test double 直接 smoke 过 host-side adapter 状态机；它�
 fresh IDA 也已把原来合并的 `0x8F7D04..0x8F7DC0` 拆为 complete destructor
 `0x8F7D04` 与独立 deleting destructor `0x8F7D68`，补类型/注释并保存 IDB。
 
-对 dictionary listing 的天然可达性又做了严格交叉核实：`ezsave.pimg` root 的 11 个直属
+对最初两只资产的 dictionary listing 可达性做了严格交叉核实：`ezsave.pimg` root 的 11 个直属
 子节点只有八个 Resource、两个 Integer 与一个 Array，没有 Dictionary；未过滤 motion root
 是 Resource `0x1A`。`Resolve@0x59A4B0` 不允许直接返回 root，每个 segment 又必须通过
-`ContainsDictionaryKey@0x5995D8`，后者对 Array/Resource 直接 false。因此当前两只 tracked
-资产都不能触达 `GetListAt` 的 dictionary branch；该缺口不能由现有物料闭合。
+`ContainsDictionaryKey@0x5995D8`，后者对 Array/Resource 直接 false。因此这两只 tracked
+资产确实不能触达 `GetListAt` 的 dictionary branch。恢复为普通 ignored 目录后的
+`reference/` 另有现成 `autoskip.psb`，其 `source/main/icon` 是按纯 Dictionary key 可达的
+三键 Dictionary；真实 Android oracle 已按顺序收到 `arrow/auto/skip`，Frida 链命中
+`0x59849C → 0x5999F4 → 0x599E04 → 0x598538 → 0x598708 → 0x59A330 → 0x59A4B0`。
+因此旧的“现有物料不能闭合”结论已被资料恢复后的完整扫描证伪并纠正。
 
 ## F. typed NCB 自动注册与尾链（22）
 
@@ -306,8 +310,9 @@ STL 实例化；没有未归属业务入口。该 manifest 只证明 **Android�
 等价 inline helper。当前 raw owner/node 的若干小方法只有
 上层调用点内联行为证据、没有独立 Android 入口；其名字与是否为原始 inline helper 仍不能
 仅由本地源码宣称。manifest 也不替代损坏输入的 Android runtime oracle；MDF zlib failure、
-filter 后 offset failure、损坏 packed table、tag `0x0B`、>4 GiB storage、dictionary
-listing 和 CreateAdaptor-null 分支，仍按主分析记录为缺少天然 fixture 的验证缺口。
+filter 后 offset failure、损坏 packed table、tag `0x0B`、>4 GiB storage 和
+CreateAdaptor-null 分支，仍按主分析记录为缺少天然 fixture 的验证缺口。dictionary listing
+已由恢复后的天然 `autoskip.psb` 在真实 Android 闭合。
 成功跨-container replacement 与旧 stream metadata/析构已同时由本地守护和真实 Android
 ADB/RPC/Frida oracle 覆盖。borrowed/non-retaining 的“stream 不保活 owner”性质仍由
 反编译证据证明；运行时只观察 stream 自身 metadata，刻意不解引用 replacement 后的悬挂
@@ -316,5 +321,9 @@ Block。一次性 adapter smoke 仍不计入二进制实测。
 本轮修改后 macOS Release `psbfile-dll` 为 **575/575**（10 cases），
 `motionplayer-dll` 为 **1376/1376**（21 cases），`motionplayer-ttstr-hash-test` 为
 **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
-`krkr2_wasmtime_guest` 目标通过。motion playback runner 尚未进入 guest：当前 checkout
-缺少 `reference/xp3/logo_test_oracle.xp3`；按物料规则不从零构造，保留该运行验证缺口。
+`krkr2_wasmtime_guest` 目标通过。motion playback runner 在当轮尚未进入 guest，当时的
+checkout 缺少 `reference/xp3/logo_test_oracle.xp3`。2026-07-23 `reference/` 改为普通
+ignored 本地资料目录并恢复该现成文件（SHA-256
+`9d9f336dcccb5370a433f87b81054c74ff5099e2bd18a499e0f1ccf769158a7f`）；因此“当前缺少
+物料”不再成立。该变化只闭合输入可用性，不能倒推当轮 runner 已实际进入 guest；如需引用
+motion playback 运行结果，仍须以恢复后的独立执行记录为准。

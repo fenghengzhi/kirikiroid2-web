@@ -69,6 +69,7 @@ PSBFILE_MEDIA_TARGETS = PSBFILE_LOAD_TARGETS + [
     0x59849C,   # PSBMedia process-lifetime singleton pre-register callback
     0x5998C4,   # PSBMedia::CheckExistentStorage
     0x59993C,   # PSBMedia::Open
+    0x5999F4,   # PSBMedia::GetListAt
     0x599E04,   # PSBMedia::EnsureContainer
     0x59A0B4,   # PSBMedia::GetResourceData
     0x59A330,   # PSBFile NCB adaptor creation
@@ -94,6 +95,7 @@ ADDR_NAMES = {
     0x59849C: "PSBMedia_register",
     0x5998C4: "PSBMedia_checkStorage",
     0x59993C: "PSBMedia_open",
+    0x5999F4: "PSBMedia_getListAt",
     0x599E04: "PSBMedia_ensureContainer",
     0x59A0B4: "PSBMedia_getResourceData",
     0x59A330: "PSBFile_createAdaptor",
@@ -141,6 +143,8 @@ ARG_COUNTS: dict[int, tuple[int, int]] = {
     # PSBMedia::Open(this, ttstr const&, flags); flags is source-level ABI
     # even though the optimized body does not consume x2.
     0x59993C: (3, 0),
+    # PSBMedia::GetListAt(this, ttstr const&, iTVPStorageLister *)
+    0x5999F4: (3, 0),
     # PSBMedia::EnsureContainer(this, ttstr const&)
     0x599E04: (2, 0),
     # PSBMedia::GetResourceData(this, ttstr const&, uint32_t *size)
@@ -174,6 +178,7 @@ RETURN_KINDS: dict[int, str] = {
     0x59849C: "void",
     0x5998C4: "int",
     0x59993C: "int",
+    0x5999F4: "void",
     0x599E04: "int",
     0x59A0B4: "int",
     0x59A330: "int",

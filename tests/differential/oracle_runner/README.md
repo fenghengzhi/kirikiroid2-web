@@ -33,7 +33,7 @@ pixel output.
 | `local_transform` | **✓ 8/8** | **✓ 8** | `sub_699940` (0x699940), libm sin/cos used by `rotate_90` |
 | `bezier_curve` | **✓ 6/6** | **✓ 6** | `sub_69A754` (0x69A754). `empty_curve` + `size_mismatch` specs dropped — UB inputs (empty or mismatched arrays) where libkrkr2's behaviour is an OOB-read side effect / infinite loop rather than a designed contract; oracle doesn't apply |
 | `position_interp` | **✓ 5/5** | **✓ 5** | `sub_69A4D4` (0x69A4D4). Adapter had `src_addr`/`dst_addr` wired into a2/a3 — libkrkr2's convention (matching port's `interpolatePosition69A4D4` signature) is a2=dst (returned at t=1), a3=src (returned at t=0). `rotation_coord*` specs dropped — empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (latent libkrkr2 bug, never hit by real assets); port's defensive sanitisation is intentionally non-matching |
-| `psbfile_load` | committed raw PSB or operator-supplied MDF | — | Directly invokes `PSBFile.load(octet)` (0x598268), verifies the 0x68 raw owner and strict header refresh (0x598960); optional `--storage` covers 0x598538. `--media-lifecycle` uses the two tracked Emote files to cover PSBMedia cross-container replacement plus the old borrowed stream's metadata/deleting destructor. With that mode, `--trace` also records the complete media/resolve/stream call chain. No damaged fixture is generated or checked in |
+| `psbfile_load` | committed raw PSB or operator-supplied MDF | — | Directly invokes `PSBFile.load(octet)` (0x598268), verifies the 0x68 raw owner and strict header refresh (0x598960); optional `--storage` covers 0x598538. `--media-lifecycle` covers PSBMedia cross-container replacement and borrowed-stream destruction; `--media-dictionary` uses an existing `autoskip.psb` to verify the exact Dictionary listing order through 0x5999F4. `--trace` records the corresponding native call chains. No damaged fixture is generated or checked in |
 | `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
 | `motion_playback` | libkrkr2 record + Wasmtime verify | **✓ 2** | Uses `STARTUP_FROM` to schedule `reference/xp3/logo_test_oracle.xp3` inside libkrkr2, then Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record per-frame Motion node state for `yuzulogo.mtn` and `m2logo.mtn`. Checked-in goldens exist under `tests/differential/traces/motion_playback/*.oracle.json`; the port-side verifier runs the Wasmtime guest, executing the same `startup.tjs` path with a headless Window stub. This is not yet a full visual oracle; see "Motion playback visual oracle status" below. |
 
@@ -234,6 +234,11 @@ python3 tests/differential/python/run_psbfile_load_adb.py \
   --media-lifecycle \
   --startup-xp3 reference/xp3/caution_minimal/caution_minimal.xp3 \
   --trace
+
+python3 tests/differential/python/run_psbfile_load_adb.py \
+  --media-dictionary \
+  --startup-xp3 reference/xp3/caution_minimal/caution_minimal.xp3 \
+  --trace
 ```
 
 The return-value checks cover the decoded `PSB\0` buffer size, intrusive owner
@@ -261,6 +266,20 @@ When combined with `--trace`, the Frida target set additionally includes
 `Resolve` (0x59A4B0), adaptor creation (0x59A330), and the stream constructor /
 deleting destructor (0x8F7C74 / 0x8F7D68).
 
+`--media-dictionary` stages the already-existing
+`reference/xp3/caution_test/DRACU-RIOT/data/motion/autoskip.psb` under an
+ASCII device alias. Its SHA-256 is pinned to
+`131b436405c0aa8cd137a496c98fb77a77da95ca29e8af4597da1f7a42fd4a5d`.
+The harness supplies an ABI-matched, vtable/layout-compatible lister surrogate,
+calls the original `PSBMedia::GetListAt` at 0x5999F4, and returns the callback
+strings; it does not implement PSB traversal itself. Its length-prefixed wire
+format preserves embedded U+0000 and isolated UTF-16 surrogates, with a 32 KiB
+aggregate binary-payload cap before hex encoding (UTF-8 `surrogatepass`/WTF-8).
+The oracle requires the exact ordered result `arrow`, `auto`, `skip` for
+`source/main/icon`. With `--trace`,
+the observed native chain is 0x59849C → 0x5999F4 → 0x599E04 → 0x598538 →
+0x598708 → 0x59A330 → 0x59A4B0.
+
 This mode needs the APK's Full TJS/NCB startup, so the runner first copies the
 existing `--startup-xp3` into the app-private files directory and calls
 `TVPMainScene::startupFrom`. It waits for the real `TVPScriptEngine` global
@@ -272,11 +291,12 @@ does not let the untrusted APK consume KiriKiri storage directly from
 `KRKR2_DEVICE_DIR` remains available for an explicitly supplied app-readable
 directory; when neither is set, app-private staging is the safe default.
 
-The two tracked files do not provide a PSBMedia-reachable Dictionary node:
-`ezsave.pimg` exposes resources, integers, and an Array at its root, while the
-unfiltered motion root is itself a Resource. Consequently this mode does not
-claim runtime coverage of the Dictionary-listing arm. It also does not mutate
-the initialized APK's global NCB registration state to manufacture a
+The two lifecycle files themselves still do not provide a PSBMedia-reachable
+Dictionary node: `ezsave.pimg` exposes resources, integers, and an Array at its
+root, while the unfiltered motion root is itself a Resource. Dictionary-listing
+coverage therefore comes specifically from `--media-dictionary` and the
+restored natural `autoskip.psb`, not from the lifecycle case. Neither mode
+mutates the initialized APK's global NCB registration state to manufacture a
 `CreateAdaptor == nullptr` case.
 
 ### With Frida trace verification (recommended in CI)

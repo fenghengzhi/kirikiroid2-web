@@ -22,6 +22,13 @@
   `ニコラ－その２（デビュー）.ks.scn` 的 octet/storage Android oracle 均为
   `status=ok`：50,708 字节 MDF 解为 700,308 字节 PSB，owner/header/refcount/strict
   refresh 全部一致，Frida 链与 raw 两入口相同。
+- 恢复资料后的完整只读普查覆盖 222 份物理 PSB/MDF、112 份去重 decoded 内容和
+  23,445,961 个语义可达节点：142/142 MDF 完整解压且无 tail，112/112 均通过
+  `Refresh@0x598960` 八项 offset 条件、section/packed-table/dictionary/reference 检查，
+  没有损坏 header/table 或 unknown tag。天然 `0x0A/0x0B/0x0C` 节点均为 0；73/112
+  内容天然覆盖 `offsetChunkData == size`。另有 31,186 个 tag `0x09` 正数全部大于
+  `INT32_MAX`，可用于后续 5-byte positive / wrapper 截断边界 oracle，但本条只记录
+  物料结构，不冒充 Android runtime 结果。
 - process-lifetime PSBMedia 的真实 Android 生命周期也为 `status=ok`：Full TJS、singleton、
   class object 均就绪；`ezsave/2036.tlg` 首次打开得到 48,265-byte borrowed stream；切到
   encrypted motion container 后 lookup=false，但 `_file/_container` 与 dispatch 已替换，旧
@@ -30,6 +37,19 @@
   `0x59849C → 0x59993C → 0x599E04 → 0x598538 → 0x598708 → 0x59A330 →`
   `0x59A0B4 → 0x59A4B0 → 0x8F7C74`，replacement 经过 `0x5998C4`，两次释放均进入
   deleting destructor `0x8F7D68`。
+- 恢复后的现成 `autoskip.psb`（SHA-256
+  `131b436405c0aa8cd137a496c98fb77a77da95ca29e8af4597da1f7a42fd4a5d`）使
+  PSBMedia dictionary listing 可天然触达：`source/main/icon` 是三键 Dictionary。真实
+  Android `--media-dictionary --trace` 精确收到 `arrow → auto → skip`，Full TJS、singleton、
+  class adaptor 与 container 状态均正常；Frida 主链为
+  `0x59849C → 0x5999F4 → 0x599E04 → 0x598538 → 0x598708 → 0x59A330 → 0x59A4B0`。
+  ABI-matched harness 只提供 vtable/layout-compatible lister surrogate，并在回调期间
+  复制 `ttstr`；遍历、raw tag switch、packed-name 解码与回调顺序全部由原始
+  `libkrkr2.so` 执行。
+  曾尝试用 TJS `Storages.addAutoPath/getPlacedPath` 间接取得列表，但 Frida 证明该路径在
+  storage existence/autopath 重建中命中 `0x599E04 → 0x598538 → 0x598708` 后经
+  `0xA0AA34` 抛异常，尚未进入 `0x5999F4`，故该结果被明确丢弃、不计 coverage；最终
+  `STORAGE_LIST` 直接调用才是上述有效证据。
 - 真实运行还证伪了 oracle runner 的两个旧假设：RPC `READY` 只表示 so base + guest heap，
   不表示 Full TJS；必须先 `TVPMainScene::startupFrom`，再等待
   `libkrkr2+0x1AE2FD0` 非零，最后才能 `TJS_INIT`，否则 harness 会永久缓存 bare TJS。
@@ -39,8 +59,8 @@
   `std::terminate`。runner 现显式启动一只现有 self-contained XP3，并把 storage/media
   输入 staging 到 app-private files 目录、继承 app UID；正式 CLI 与 Frida 重跑均通过。
 - 尚未获得天然 runtime 覆盖的只剩损坏 MDF/zlib failure、filter 后 offset failure、损坏
-  packed table、tag `0x0B` 极端值、>4 GiB storage、PSBMedia dictionary listing 与
-  CreateAdaptor-null。当前资产没有相应可达样本；按物料规则不制造 fixture。这些验证缺口
+  packed table、tag `0x0B` 极端值、>4 GiB storage 与 CreateAdaptor-null。当前资产没有
+  相应可达样本；按物料规则不制造 fixture。这些验证缺口
   不推翻 112 个函数的静态归属与本轮正常/替换生命周期实测，但也不能被误写成已闭合。
 
 ## 2026-07-23：Player 内部 source resolver、四角颜色与 execute gate 纠正
@@ -251,9 +271,10 @@
   对现有资产的 packed table 做独立只读解析：`ezsave.pimg` root 是 11-key Dictionary，
   直属八个 `.tlg` 为 Resource、`height/width` 为 Integer、`layers` 为 Array，没有直属
   Dictionary；未过滤 motion root 是 Resource `0x1A`。Resolve 不暴露 root、每段只允许
-  Dictionary key，且不能以数字段穿过 Array。因此当前两只天然资产均无法通过 PSBMedia
-  public path 到达 dictionary listing 分支；这是一条由函数链和资产结构共同证明的 negative，
-  不是一次空 grep。
+  Dictionary key，且不能以数字段穿过 Array。因此这两只最初使用的资产均无法通过 PSBMedia
+  public path 到达 dictionary listing 分支；该局部 negative 仍成立，但不能外推为整个
+  `reference/` 无可达 Dictionary。资料恢复后已找到上述 `autoskip.psb/source/main/icon`，
+  并由真实 Android `GetListAt@0x5999F4` oracle 闭合该分支。
 
 ## 2026-07-23：六维逐函数复审纠正
 
@@ -319,9 +340,12 @@
 - 当前验证：macOS Release 相关目标构建成功，`psbfile-dll` **575/575**（10 cases）、
   `motionplayer-dll` **1376/1376**（21 cases）、`motionplayer-ttstr-hash-test`
   **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
-  `krkr2_wasmtime_guest` 目标均通过。现成 motion playback runner 在执行 guest 前因
-  当前 checkout 缺少 `reference/xp3/logo_test_oracle.xp3` 退出；不制造 fixture，记录为
-  运行时差分验证缺口，不冒充 guest 已执行。
+  `krkr2_wasmtime_guest` 目标均通过。现成 motion playback runner 在当轮执行 guest 前因
+  当时的 checkout 缺少 `reference/xp3/logo_test_oracle.xp3` 退出；不冒充 guest 已执行。
+  2026-07-23 `reference/` 改为普通 ignored 本地资料目录后，该现成文件已经恢复
+  （SHA-256 `9d9f336dcccb5370a433f87b81054c74ff5099e2bd18a499e0f1ccf769158a7f`），故旧的
+  “当前缺少物料”前提已经失效；这只消除输入可用性缺口，恢复后的 runner 结果需由新的
+  独立执行记录证明。
 
 ## 2026-07-23：local→Android 调用边界复核
 
@@ -1746,7 +1770,8 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   **398/398**、`psbfile-dll` **437/437**。该元素拓扑差异已闭合；该时点仍缺 MDF、
   media/TJS 与 packed-table 损坏输入覆盖；下一阶段闭合了 typed TJS 构造、array listing
   和同-container 缓存分支，当时跨-container 替换、dictionary listing 与 adaptor-null
-  仍未覆盖。2026-07-23 已用现有加密 PSB 补上前者的本地生命周期覆盖；后两项仍开放。
+  仍未覆盖。2026-07-23 已用现有加密 PSB 补上前者，并用恢复后的天然 `autoskip.psb`
+  在真实 Android 补上 dictionary listing；现仅 adaptor-null 仍开放。
 
 - 2026-07-19 fresh decompile media singleton/register `0x59849C`、析构/ref/name
   `0x5997F0..0x5998A8`、exists/open/list/local-name `0x5998C4..0x599DD8`、container
@@ -2209,10 +2234,10 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
    保留。此前“只有一只可加载 container”的断言已被现有加密 motion PSB 证伪；当前测试已
    覆盖 `ezsave → motion → ezsave` 的成功跨-container replacement，以及旧 stream 在 owner
    replacement 后自身 metadata/析构仍可用的本地守护。stream 不保活 owner、block 为 borrowed
-   仍由 ctor/dtor 反编译证据证明，测试不读取悬挂 block。仍未由天然可达节点覆盖的是
-   dictionary media listing 与 CreateAdaptor-null。cross-container Android runner 已在真实
-   arm64 API 31 AVD 上取得 ADB/RPC/Frida `status=ok`；该结果来自真实 `libkrkr2.so`，
-   不再由离线协议模拟替代。
+   仍由 ctor/dtor 反编译证据证明，测试不读取悬挂 block。dictionary media listing 已由天然
+   `autoskip.psb/source/main/icon` 在真实 arm64 API 31 AVD 上取得精确三键回调及
+   ADB/RPC/Frida `status=ok`；仍未覆盖的是 CreateAdaptor-null。上述结果均来自真实
+   `libkrkr2.so`，不再由离线协议模拟替代。
 4. 优化后二进制尚不能唯一恢复若干源码拼写：`sub_597AD4` 是两裸参数还是零开销 raw-node
    holder 参数、`GetInt@0x599438` 返回 `tjs_int` 还是 `tjs_int64`、PSBFile/raw-node 的显式
    special members 与 self guards、若干 inline helper 的原名/member 身份、

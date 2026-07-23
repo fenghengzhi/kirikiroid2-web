@@ -507,6 +507,39 @@ class AdbHarnessEngine:
             return x0 - (1 << 64) if (x0 & (1 << 63)) else x0
         return x0
 
+    def storage_list(
+        self, fn_addr: int, media_addr: int, name_slot_addr: int,
+    ) -> list[str]:
+        """Invoke iTVPStorageMedia::GetListAt with the harness lister."""
+        self._writeline(
+            f"STORAGE_LIST {fn_addr:x} {media_addr:x} {name_slot_addr:x}")
+        reply = self._readline()
+        if reply.startswith("ERR "):
+            raise RuntimeError(f"harness error: {reply[4:]}")
+        parts = reply.split(" ", 2)
+        if len(parts) != 3 or parts[0] != "OK_LIST":
+            raise RuntimeError(f"unexpected STORAGE_LIST reply: {reply!r}")
+        count = int(parts[1], 10)
+        if count < 0:
+            raise RuntimeError(f"STORAGE_LIST returned negative count: {count}")
+        raw = b"" if parts[2] == "-" else bytes.fromhex(parts[2])
+        entries: list[str] = []
+        pos = 0
+        for _ in range(count):
+            if pos + 4 > len(raw):
+                raise RuntimeError("STORAGE_LIST result lacks a length prefix")
+            length = int.from_bytes(raw[pos:pos + 4], "little")
+            pos += 4
+            if pos + length > len(raw):
+                raise RuntimeError("STORAGE_LIST entry exceeds the payload")
+            entries.append(
+                raw[pos:pos + length].decode("utf-8", errors="surrogatepass"))
+            pos += length
+        if pos != len(raw):
+            raise RuntimeError(
+                f"STORAGE_LIST has {len(raw) - pos} trailing payload bytes")
+        return entries
+
     # ---------------------------------------------------------------- TJS helpers
     def tjs_init(self) -> int:
         """Construct the harness-private tTJS instance. Idempotent. Returns

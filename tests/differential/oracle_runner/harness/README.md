@@ -22,6 +22,7 @@ Commands (host → harness, one per line):
 CALL <fn_hex> <ret> <nints> <int_hex>* <ndbls> <dbl_bits_hex>*
 READ <addr_hex> <n_dec>
 WRITE <addr_hex> <n_dec> <hex_bytes>
+STORAGE_LIST <fn_hex> <media_hex> <ttstr_slot_hex>
 TJS_INIT
 TJS_EXEC     <ascii_hex>
 TJS_EXEC_STR <ascii_hex>
@@ -38,12 +39,22 @@ OK_DOUBLE <bits_hex>     # IEEE754 bit pattern
 OK_VOID                  # void call, WRITE, TJS_EXEC, TJS_RESET, or QUIT
 OK_DATA <hex_bytes>      # READ
 OK_STR  <utf8_hex>       # TJS_EXEC_STR
+OK_LIST <count> <u32le_length_prefixed_utf8_surrogatepass_hex_or_dash> # STORAGE_LIST
 ERR <message>
 ```
 
 `ret` is one of `{int,uint,bool,ptr,double,void}`. Ints and doubles go
 through AAPCS64 x0..x7 / d0..d7 using a "universal signature" function
 pointer: up to 8 ints and 8 doubles, matching `arm64_abi.pack_args`.
+
+`STORAGE_LIST` invokes a supplied `iTVPStorageMedia::GetListAt` entry with a
+small vtable/layout-compatible lister surrogate compiled into the ABI-matched
+harness. It copies each callback's `ttstr` to UTF-8 during the call and returns
+the ordered names; it never retains or transfers a libkrkr2-owned C++ object.
+Each name is prefixed by a little-endian `u32` byte length, so embedded U+0000
+and isolated UTF-16 surrogates remain representable (UTF-8 `surrogatepass`, or
+WTF-8, on the host). The aggregate length-prefixed binary payload is capped at
+32 KiB; its hex-encoded line response can approach 64 KiB.
 
 ## Building
 
@@ -57,6 +68,10 @@ downloads that artifact before repacking the APK. Locally:
 export KRKR2_LEGACY_NDK=/path/to/android-ndk-r17c
 ./build_legacy.sh
 ```
+
+On Apple Silicon, r17c's wrapper rejects an arm64 host even though Rosetta can
+run its x86_64 tools. `build_legacy.sh` detects that combination and re-executes
+itself through `arch -x86_64`; Rosetta must already be available.
 
 This must use Android NDK r17c with `APP_STL := gnustl_static`; modern
 NDK r27/libc++ builds create a second C++ runtime with incompatible

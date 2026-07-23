@@ -17,6 +17,7 @@ PSBFILE_LOAD_STORAGE_OFFSET = 0x598538
 PSBRAWOWNER_REFRESH_OFFSET = 0x598960
 PSBMEDIA_CHECK_STORAGE_OFFSET = 0x5998C4
 PSBMEDIA_OPEN_OFFSET = 0x59993C
+PSBMEDIA_GET_LIST_AT_OFFSET = 0x5999F4
 TVP_ADD_AUTO_PATH_OFFSET = 0x8EB4B4
 TVP_MEMORY_STREAM_DELETING_DTOR_OFFSET = 0x8F7D68
 TJS_VARIANT_STRING_RELEASE_OFFSET = 0xA13274
@@ -330,6 +331,100 @@ def _inspect_memory_stream(engine, stream_addr: int) -> dict:
         "alloc_size": struct.unpack_from("<I", raw, 24)[0],
         "current_pos": struct.unpack_from("<I", raw, 28)[0],
     }
+
+
+def run_media_dictionary_case(
+    engine,
+    *,
+    input_path: Path,
+    remote_dir: str,
+    container: str,
+    dictionary_path: str,
+    expected_keys: tuple[str, ...],
+) -> dict:
+    """Exercise PSBMedia::GetListAt with an existing Dictionary node.
+
+    The ABI-matched Android harness supplies only a vtable/layout-compatible
+    lister surrogate; traversal, tag dispatch, packed-key decoding and callback
+    order all execute inside libkrkr2's PSBMedia::GetListAt.
+    """
+    _input_info(input_path)
+    normalized_path = dictionary_path.strip("/")
+    if not normalized_path or not expected_keys:
+        raise ValueError("dictionary path and expected keys must be non-empty")
+    if len(set(expected_keys)) != len(expected_keys):
+        raise ValueError("dictionary expected keys must be unique")
+    storage_auto_path = remote_dir.rstrip("/") + "/"
+    list_name = f"{container}/{normalized_path}"
+    for value in (storage_auto_path, list_name, *expected_keys):
+        value.encode("ascii")
+
+    engine.reset_heap()
+    script_engine = _wait_for_pointer(engine, TVP_SCRIPT_ENGINE_SLOT_OFFSET)
+    result = {
+        "input": str(input_path),
+        "entry": "media-dictionary-list",
+        "container": container,
+        "dictionary_path": normalized_path,
+        "expected_keys": list(expected_keys),
+        "script_engine_ready": script_engine != 0,
+    }
+    if script_engine == 0:
+        result["status"] = "setup-failed"
+        return result
+
+    engine.tjs_init()
+    singleton_addr, class_object = _ensure_psbfile_registered(engine)
+    result.update({
+        "singleton_ready": singleton_addr != 0,
+        "class_object_ready": class_object != 0,
+    })
+    if singleton_addr == 0 or class_object == 0:
+        result["status"] = "setup-failed"
+        return result
+
+    payloads: list[int] = []
+    try:
+        storage_payload, storage_slot = _make_ttstr(
+            engine, storage_auto_path)
+        payloads.append(storage_payload)
+        engine.call(
+            engine.offset(TVP_ADD_AUTO_PATH_OFFSET),
+            ints=(storage_slot,), ret="void",
+        )
+        list_payload, list_slot = _make_ttstr(engine, list_name)
+        payloads.append(list_payload)
+        listed_keys = engine.storage_list(
+            engine.offset(PSBMEDIA_GET_LIST_AT_OFFSET),
+            singleton_addr,
+            list_slot,
+        )
+        media = _inspect_media(engine, singleton_addr)
+        result.update({
+            "listed_keys": listed_keys,
+            "file_object": media["file_object"],
+            "file_objthis": media["file_objthis"],
+            "file_type": media["file_type"],
+            "loaded_container": media["container"],
+        })
+        ok = (
+            listed_keys == list(expected_keys)
+            and media["file_type"] == 1
+            and media["file_object"] != 0
+            and media["file_object"] == media["file_objthis"]
+            and media["container"] == container
+        )
+        result["status"] = "ok" if ok else "mismatch"
+        return result
+    finally:
+        while payloads:
+            payload = payloads.pop()
+            try:
+                _release_ttstr(engine, payload)
+            except Exception as exc:
+                result.setdefault("cleanup_errors", []).append(repr(exc))
+                if result.get("status") in {"ok", "mismatch"}:
+                    result["status"] = "error"
 
 
 def run_media_lifecycle_case(

@@ -22,6 +22,9 @@
  *         as their IEEE754 bit pattern in hex u64 (avoids parsing issues).
  *     READ <addr_hex> <n_dec>
  *     WRITE <addr_hex> <n_dec> <hex_bytes>
+ *     STORAGE_LIST <fn_hex> <media_hex> <ttstr_slot_hex>
+ *                                                -- invoke GetListAt with an
+ *                                                   ABI-compatible lister surrogate
  *     TJS_INIT                                -- build a private tTJS instance
  *     TJS_EXEC <ascii_hex>                    -- tTJS::ExecScript on the private tTJS
  *     TJS_EXEC_STR <ascii_hex>                -- ExecScript that yields a String;
@@ -38,6 +41,7 @@
  *     OK_VOID                  // CALL with void return, or QUIT, WRITE, TJS_EXEC
  *     OK_DATA <hex_bytes>      // READ
  *     OK_STR  <utf8_hex>       // TJS_EXEC_STR
+ *     OK_LIST <count> <u32le_length_prefixed_utf8_surrogatepass_hex_or_dash>
  *     ERR <message>            // any failure
  *
  * AAPCS64 dispatch: we use a "universal signature" trick — declare a function
@@ -329,6 +333,141 @@ static int      g_tjs_inited = 0;
 
 static inline void *libkrkr2_fn(uint64_t off) {
     return (void *)(uintptr_t)(g_so_base + off);
+}
+
+/* Opaque one-pointer ttstr view used only for the iTVPStorageLister callback.
+ * The callback receives a `const ttstr&`; ownership stays entirely inside
+ * libkrkr2.so and the harness copies characters during the call. */
+struct opaque_ttstr {
+    void *payload;
+};
+
+static bool ttstr_payload_to_utf8(void *payload, char *out, size_t capacity,
+                                  size_t *out_len) {
+    if (!payload) {
+        *out_len = 0;
+        return true;
+    }
+    uint32_t length = *(const uint32_t *)((const uint8_t *)payload + 60);
+    if (length > 65536) return false;
+    const uint16_t *u16;
+    if (length < 22) {
+        u16 = (const uint16_t *)((const uint8_t *)payload + 16);
+    } else {
+        u16 = *(const uint16_t **)((const uint8_t *)payload + 8);
+        if (!u16) return false;
+    }
+
+    size_t used = 0;
+    for (uint32_t i = 0; i < length;) {
+        uint32_t cp = u16[i++];
+        if (cp >= 0xD800 && cp <= 0xDBFF && i < length) {
+            uint32_t low = u16[i];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                ++i;
+            }
+        }
+        size_t needed = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+        if (used + needed > capacity) return false;
+        if (needed == 1) {
+            out[used++] = (char)cp;
+        } else if (needed == 2) {
+            out[used++] = (char)(0xC0 | (cp >> 6));
+            out[used++] = (char)(0x80 | (cp & 0x3F));
+        } else if (needed == 3) {
+            out[used++] = (char)(0xE0 | (cp >> 12));
+            out[used++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[used++] = (char)(0x80 | (cp & 0x3F));
+        } else {
+            out[used++] = (char)(0xF0 | (cp >> 18));
+            out[used++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            out[used++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[used++] = (char)(0x80 | (cp & 0x3F));
+        }
+    }
+    *out_len = used;
+    return true;
+}
+
+class harness_storage_lister {
+public:
+    harness_storage_lister() : size_(0), count_(0), failed_(false) {}
+
+    virtual void Add(const opaque_ttstr &file) {
+        size_t added = 0;
+        if (failed_ || size_ > sizeof(data_) - 4 ||
+            !ttstr_payload_to_utf8(file.payload, data_ + size_ + 4,
+                                   sizeof(data_) - size_ - 4, &added)) {
+            failed_ = true;
+            return;
+        }
+        data_[size_ + 0] = (char)(added & 0xFF);
+        data_[size_ + 1] = (char)((added >> 8) & 0xFF);
+        data_[size_ + 2] = (char)((added >> 16) & 0xFF);
+        data_[size_ + 3] = (char)((added >> 24) & 0xFF);
+        size_ += 4 + added;
+        ++count_;
+    }
+
+    char data_[32768];
+    size_t size_;
+    uint32_t count_;
+    bool failed_;
+};
+
+static void handle_storage_list(const char *args) {
+    unsigned long long fn_addr = 0;
+    unsigned long long media_addr = 0;
+    unsigned long long name_slot_addr = 0;
+    char tail = 0;
+    if (sscanf(args, "%llx %llx %llx %c", &fn_addr, &media_addr,
+               &name_slot_addr, &tail) != 3 || !fn_addr || !media_addr ||
+        !name_slot_addr) {
+        println("ERR bad STORAGE_LIST args");
+        return;
+    }
+
+    harness_storage_lister lister;
+    try {
+        typedef void (*get_list_fn)(void *media, const void *name,
+                                    harness_storage_lister *lister);
+        ((get_list_fn)(uintptr_t)fn_addr)(
+            (void *)(uintptr_t)media_addr,
+            (const void *)(uintptr_t)name_slot_addr,
+            &lister);
+    } catch (std::exception &e) {
+        char err[256];
+        snprintf(err, sizeof(err),
+                 "ERR STORAGE_LIST threw std::exception: %.180s", e.what());
+        println(err);
+        return;
+    } catch (...) {
+        println("ERR STORAGE_LIST threw unknown exception");
+        return;
+    }
+    if (lister.failed_) {
+        println("ERR STORAGE_LIST output too large or invalid ttstr");
+        return;
+    }
+
+    static char response[2 * sizeof(lister.data_) + 64];
+    static const char hex_digits[] = "0123456789abcdef";
+    int prefix = snprintf(response, sizeof(response), "OK_LIST %u ",
+                          lister.count_);
+    if (prefix < 0 || (size_t)prefix >= sizeof(response)) {
+        println("ERR STORAGE_LIST response prefix");
+        return;
+    }
+    size_t pos = (size_t)prefix;
+    if (lister.size_ == 0) response[pos++] = '-';
+    for (size_t i = 0; i < lister.size_; ++i) {
+        uint8_t byte = (uint8_t)lister.data_[i];
+        response[pos++] = hex_digits[(byte >> 4) & 0xF];
+        response[pos++] = hex_digits[byte & 0xF];
+    }
+    response[pos] = 0;
+    println(response);
 }
 
 /* Crash diagnostics for the Full-TJS init path — `TVPInitScriptEngine`
@@ -813,6 +952,8 @@ extern "C" int harness_rpc_main_fd(const char *so_path, int fd) {
 
         if (strncmp(line, "CALL ", 5) == 0) {
             handle_call(line + 5);
+        } else if (strncmp(line, "STORAGE_LIST ", 13) == 0) {
+            handle_storage_list(line + 13);
         } else if (strncmp(line, "READ ", 5) == 0) {
             handle_read(line + 5);
         } else if (strncmp(line, "WRITE ", 6) == 0) {

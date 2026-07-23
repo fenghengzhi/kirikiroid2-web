@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -33,6 +34,16 @@ MEDIA_REPLACEMENT_CONTAINER = "psb-media-encrypted.psb"
 MEDIA_RESOURCE_NAME = "2036.tlg"
 MEDIA_RESOURCE_SIZE = 48265
 MEDIA_STARTUP_REMOTE_NAME = "psbfile-oracle-bootstrap.xp3"
+MEDIA_DICTIONARY_INPUT = (
+    REPO_ROOT
+    / "reference/xp3/caution_test/DRACU-RIOT/data/motion/autoskip.psb"
+)
+MEDIA_DICTIONARY_SHA256 = (
+    "131b436405c0aa8cd137a496c98fb77a77da95ca29e8af4597da1f7a42fd4a5d"
+)
+MEDIA_DICTIONARY_CONTAINER = "psb-media-autoskip.psb"
+MEDIA_DICTIONARY_PATH = "source/main/icon"
+MEDIA_DICTIONARY_KEYS = ("arrow", "auto", "skip")
 
 
 def _adb_prefix(engine) -> list[str]:
@@ -167,22 +178,42 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--media-dictionary", action="store_true",
+        help=(
+            "exercise PSBMedia dictionary listing with the existing "
+            "autoskip.psb reference input"
+        ),
+    )
+    parser.add_argument(
         "--startup-xp3", type=Path, default=MEDIA_STARTUP_XP3,
         help=(
             "existing self-contained XP3 used to initialize Full TJS before "
-            "--media-lifecycle (default: reference/xp3/caution_minimal/"
+            "the PSBMedia modes (default: reference/xp3/caution_minimal/"
             "caution_minimal.xp3)"
         ),
     )
     args = parser.parse_args()
-    if not args.input and not args.media_lifecycle:
-        parser.error("provide --input and/or --media-lifecycle")
+    media_mode = args.media_lifecycle or args.media_dictionary
+    if not args.input and not media_mode:
+        parser.error(
+            "provide --input, --media-lifecycle, and/or --media-dictionary")
     if not args.input and (args.storage or args.decrypt_seed is not None):
         parser.error("--storage and --decrypt-seed require at least one --input")
-    if args.media_lifecycle and not args.startup_xp3.is_file():
+    if media_mode and not args.startup_xp3.is_file():
         parser.error(
-            f"--media-lifecycle startup XP3 does not exist: "
+            f"media oracle startup XP3 does not exist: "
             f"{args.startup_xp3}")
+    if args.media_dictionary:
+        if not MEDIA_DICTIONARY_INPUT.is_file():
+            parser.error(
+                f"--media-dictionary input does not exist: "
+                f"{MEDIA_DICTIONARY_INPUT}")
+        dictionary_digest = hashlib.sha256(
+            MEDIA_DICTIONARY_INPUT.read_bytes()).hexdigest()
+        if dictionary_digest != MEDIA_DICTIONARY_SHA256:
+            parser.error(
+                "--media-dictionary input digest changed: "
+                f"expected {MEDIA_DICTIONARY_SHA256}, got {dictionary_digest}")
 
     failed = False
     tracer = None
@@ -197,7 +228,7 @@ def main() -> int:
 
             targets = (
                 PSBFILE_MEDIA_TARGETS
-                if args.media_lifecycle else PSBFILE_LOAD_TARGETS
+                if media_mode else PSBFILE_LOAD_TARGETS
             )
             tracer = FridaTracerEngine(engine, targets)
             tracer.attach()
@@ -250,12 +281,23 @@ def main() -> int:
                     result["runner"] = "android-adb-oracle"
                     print(json.dumps(result, ensure_ascii=True))
 
+            media_startup_error = None
+            if media_mode:
+                try:
+                    remote_startup = _push_app_file(
+                        engine, args.startup_xp3, MEDIA_STARTUP_REMOTE_NAME)
+                    _trigger_startup(engine, remote_startup)
+                except Exception as exc:
+                    media_startup_error = exc
+
             if args.media_lifecycle:
                 trace = None
                 trace_started = False
                 try:
-                    remote_startup = _push_app_file(
-                        engine, args.startup_xp3, MEDIA_STARTUP_REMOTE_NAME)
+                    if media_startup_error is not None:
+                        raise RuntimeError(
+                            f"media startup failed: {media_startup_error!r}"
+                        ) from media_startup_error
                     _push_readable_input(
                         engine,
                         MEDIA_FIRST_INPUT,
@@ -268,7 +310,6 @@ def main() -> int:
                         readable_remote_dir,
                         MEDIA_REPLACEMENT_CONTAINER,
                     )
-                    _trigger_startup(engine, remote_startup)
                     if tracer is not None:
                         tracer.start_case()
                         trace_started = True
@@ -289,6 +330,51 @@ def main() -> int:
                         "input": str(MEDIA_FIRST_INPUT),
                         "replacement_input": str(MEDIA_REPLACEMENT_INPUT),
                         "entry": "media-lifecycle",
+                        "status": "error",
+                        "error": repr(exc),
+                    }
+                finally:
+                    if tracer is not None and trace_started:
+                        trace = tracer.stop_case()
+                if result["status"] != "ok":
+                    failed = True
+                if trace is not None:
+                    result["trace"] = trace
+                result["runner"] = "android-adb-oracle"
+                print(json.dumps(result, ensure_ascii=True))
+
+            if args.media_dictionary:
+                trace = None
+                trace_started = False
+                try:
+                    if media_startup_error is not None:
+                        raise RuntimeError(
+                            f"media startup failed: {media_startup_error!r}"
+                        ) from media_startup_error
+                    _push_readable_input(
+                        engine,
+                        MEDIA_DICTIONARY_INPUT,
+                        readable_remote_dir,
+                        MEDIA_DICTIONARY_CONTAINER,
+                    )
+                    if tracer is not None:
+                        tracer.start_case()
+                        trace_started = True
+                    result = adapter.run_media_dictionary_case(
+                        engine,
+                        input_path=MEDIA_DICTIONARY_INPUT,
+                        remote_dir=readable_remote_dir,
+                        container=MEDIA_DICTIONARY_CONTAINER,
+                        dictionary_path=MEDIA_DICTIONARY_PATH,
+                        expected_keys=MEDIA_DICTIONARY_KEYS,
+                    )
+                    result["input_sha256"] = MEDIA_DICTIONARY_SHA256
+                    result["startup_xp3"] = str(args.startup_xp3)
+                except Exception as exc:
+                    failed = True
+                    result = {
+                        "input": str(MEDIA_DICTIONARY_INPUT),
+                        "entry": "media-dictionary-list",
                         "status": "error",
                         "error": repr(exc),
                     }

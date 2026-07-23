@@ -4,6 +4,15 @@
 
 set -euo pipefail
 
+# NDK r17c ships an x86_64-only Darwin host toolchain and its ndk-build
+# wrapper rejects `uname -m == arm64` before Rosetta can translate the tools.
+# Re-enter the same script under an x86_64 shell on Apple Silicon.
+if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" &&
+      "${KRKR2_NDK_ROSETTA_REEXEC:-0}" != "1" ]]; then
+    export KRKR2_NDK_ROSETTA_REEXEC=1
+    exec arch -x86_64 /bin/bash "$0" "$@"
+fi
+
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$HERE/../../../.." && pwd)
 
