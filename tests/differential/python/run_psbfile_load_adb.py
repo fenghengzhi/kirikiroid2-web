@@ -44,6 +44,20 @@ MEDIA_DICTIONARY_SHA256 = (
 MEDIA_DICTIONARY_CONTAINER = "psb-media-autoskip.psb"
 MEDIA_DICTIONARY_PATH = "source/main/icon"
 MEDIA_DICTIONARY_KEYS = ("arrow", "auto", "skip")
+INTEGER_BOUNDARY_INPUT = REPO_ROOT / "reference/xp3/logo_test/m2logo.mtn"
+INTEGER_BOUNDARY_SHA256 = (
+    "4382de8283cc0782fd269b16d3157bf3a9ec28916440f9192690eb178c0c18fe"
+)
+INTEGER_BOUNDARY_REMOTE_NAME = "psbfile-tag09-m2logo.mtn"
+INTEGER_BOUNDARY_NODE_OFFSET = 0x36F8
+INTEGER_BOUNDARY_NODE_BYTES = bytes.fromhex("09 00 00 00 ff 00")
+INTEGER_BOUNDARY_VALUE = 0xFF000000
+INTEGER_BOUNDARY_EXPRESSION = (
+    'oracle_psb_tag09_file.root["object"]["m2cheeseware_logo"]'
+    '["motion"]["back_white"]["layer"][1]["children"][0]'
+    '["children"][3]["children"][1]["frameList"][3]'
+    '["content"]["color"]'
+)
 
 
 def _adb_prefix(engine) -> list[str]:
@@ -185,24 +199,45 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--integer-boundary", action="store_true",
+        help=(
+            "exercise the natural PSB tag-0x09 value in m2logo.mtn through "
+            "both PSBValueDispatch and raw scalar getters"
+        ),
+    )
+    parser.add_argument(
         "--startup-xp3", type=Path, default=MEDIA_STARTUP_XP3,
         help=(
             "existing self-contained XP3 used to initialize Full TJS before "
-            "the PSBMedia modes (default: reference/xp3/caution_minimal/"
+            "the TJS-backed PSBFile/PSBMedia modes (default: "
+            "reference/xp3/caution_minimal/"
             "caution_minimal.xp3)"
         ),
     )
     args = parser.parse_args()
     media_mode = args.media_lifecycle or args.media_dictionary
-    if not args.input and not media_mode:
+    tjs_mode = media_mode or args.integer_boundary
+    if not args.input and not tjs_mode:
         parser.error(
-            "provide --input, --media-lifecycle, and/or --media-dictionary")
+            "provide --input, --integer-boundary, --media-lifecycle, and/or "
+            "--media-dictionary")
     if not args.input and (args.storage or args.decrypt_seed is not None):
         parser.error("--storage and --decrypt-seed require at least one --input")
-    if media_mode and not args.startup_xp3.is_file():
+    if tjs_mode and not args.startup_xp3.is_file():
         parser.error(
-            f"media oracle startup XP3 does not exist: "
+            f"TJS-backed oracle startup XP3 does not exist: "
             f"{args.startup_xp3}")
+    if args.integer_boundary:
+        if not INTEGER_BOUNDARY_INPUT.is_file():
+            parser.error(
+                f"--integer-boundary input does not exist: "
+                f"{INTEGER_BOUNDARY_INPUT}")
+        integer_digest = hashlib.sha256(
+            INTEGER_BOUNDARY_INPUT.read_bytes()).hexdigest()
+        if integer_digest != INTEGER_BOUNDARY_SHA256:
+            parser.error(
+                "--integer-boundary input digest changed: "
+                f"expected {INTEGER_BOUNDARY_SHA256}, got {integer_digest}")
     if args.media_dictionary:
         if not MEDIA_DICTIONARY_INPUT.is_file():
             parser.error(
@@ -222,14 +257,17 @@ def main() -> int:
         if args.trace:
             from oracle_runner.frida_tracer import FridaTracerEngine
             from oracle_runner.trace_targets import (
+                PSBFILE_INTEGER_TARGETS,
                 PSBFILE_LOAD_TARGETS,
                 PSBFILE_MEDIA_TARGETS,
             )
 
-            targets = (
-                PSBFILE_MEDIA_TARGETS
-                if media_mode else PSBFILE_LOAD_TARGETS
-            )
+            targets = list(dict.fromkeys(
+                PSBFILE_LOAD_TARGETS
+                + (PSBFILE_INTEGER_TARGETS
+                   if args.integer_boundary else [])
+                + (PSBFILE_MEDIA_TARGETS if media_mode else [])
+            ))
             tracer = FridaTracerEngine(engine, targets)
             tracer.attach()
         try:
@@ -281,23 +319,69 @@ def main() -> int:
                     result["runner"] = "android-adb-oracle"
                     print(json.dumps(result, ensure_ascii=True))
 
-            media_startup_error = None
-            if media_mode:
+            tjs_startup_error = None
+            if tjs_mode:
                 try:
                     remote_startup = _push_app_file(
                         engine, args.startup_xp3, MEDIA_STARTUP_REMOTE_NAME)
                     _trigger_startup(engine, remote_startup)
                 except Exception as exc:
-                    media_startup_error = exc
+                    tjs_startup_error = exc
+
+            if args.integer_boundary:
+                trace = None
+                trace_started = False
+                try:
+                    if tjs_startup_error is not None:
+                        raise RuntimeError(
+                            f"Full TJS startup failed: {tjs_startup_error!r}"
+                        ) from tjs_startup_error
+                    remote_integer_input = _push_readable_input(
+                        engine,
+                        INTEGER_BOUNDARY_INPUT,
+                        readable_remote_dir,
+                        INTEGER_BOUNDARY_REMOTE_NAME,
+                    )
+                    if tracer is not None:
+                        tracer.start_case()
+                        trace_started = True
+                    result = adapter.run_integer_boundary_case(
+                        engine,
+                        input_path=INTEGER_BOUNDARY_INPUT,
+                        remote_path=remote_integer_input,
+                        node_offset=INTEGER_BOUNDARY_NODE_OFFSET,
+                        expected_node_bytes=INTEGER_BOUNDARY_NODE_BYTES,
+                        tjs_expression=INTEGER_BOUNDARY_EXPRESSION,
+                        expected_value=INTEGER_BOUNDARY_VALUE,
+                    )
+                    result["input_sha256"] = INTEGER_BOUNDARY_SHA256
+                    result["startup_xp3"] = str(args.startup_xp3)
+                except Exception as exc:
+                    failed = True
+                    result = {
+                        "input": str(INTEGER_BOUNDARY_INPUT),
+                        "entry": "tag09-integer-boundary",
+                        "status": "error",
+                        "error": repr(exc),
+                    }
+                finally:
+                    if tracer is not None and trace_started:
+                        trace = tracer.stop_case()
+                if result["status"] != "ok":
+                    failed = True
+                if trace is not None:
+                    result["trace"] = trace
+                result["runner"] = "android-adb-oracle"
+                print(json.dumps(result, ensure_ascii=True))
 
             if args.media_lifecycle:
                 trace = None
                 trace_started = False
                 try:
-                    if media_startup_error is not None:
+                    if tjs_startup_error is not None:
                         raise RuntimeError(
-                            f"media startup failed: {media_startup_error!r}"
-                        ) from media_startup_error
+                            f"Full TJS startup failed: {tjs_startup_error!r}"
+                        ) from tjs_startup_error
                     _push_readable_input(
                         engine,
                         MEDIA_FIRST_INPUT,
@@ -347,10 +431,10 @@ def main() -> int:
                 trace = None
                 trace_started = False
                 try:
-                    if media_startup_error is not None:
+                    if tjs_startup_error is not None:
                         raise RuntimeError(
-                            f"media startup failed: {media_startup_error!r}"
-                        ) from media_startup_error
+                            f"Full TJS startup failed: {tjs_startup_error!r}"
+                        ) from tjs_startup_error
                     _push_readable_input(
                         engine,
                         MEDIA_DICTIONARY_INPUT,

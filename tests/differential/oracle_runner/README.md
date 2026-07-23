@@ -33,7 +33,7 @@ pixel output.
 | `local_transform` | **✓ 8/8** | **✓ 8** | `sub_699940` (0x699940), libm sin/cos used by `rotate_90` |
 | `bezier_curve` | **✓ 6/6** | **✓ 6** | `sub_69A754` (0x69A754). `empty_curve` + `size_mismatch` specs dropped — UB inputs (empty or mismatched arrays) where libkrkr2's behaviour is an OOB-read side effect / infinite loop rather than a designed contract; oracle doesn't apply |
 | `position_interp` | **✓ 5/5** | **✓ 5** | `sub_69A4D4` (0x69A4D4). Adapter had `src_addr`/`dst_addr` wired into a2/a3 — libkrkr2's convention (matching port's `interpolatePosition69A4D4` signature) is a2=dst (returned at t=1), a3=src (returned at t=0). `rotation_coord*` specs dropped — empty `segments` arrays SIGSEGV inside libkrkr2's `sub_698454` (latent libkrkr2 bug, never hit by real assets); port's defensive sanitisation is intentionally non-matching |
-| `psbfile_load` | committed raw PSB or operator-supplied MDF | — | Directly invokes `PSBFile.load(octet)` (0x598268), verifies the 0x68 raw owner and strict header refresh (0x598960); optional `--storage` covers 0x598538. `--media-lifecycle` covers PSBMedia cross-container replacement and borrowed-stream destruction; `--media-dictionary` uses an existing `autoskip.psb` to verify the exact Dictionary listing order through 0x5999F4. `--trace` records the corresponding native call chains. No damaged fixture is generated or checked in |
+| `psbfile_load` | committed raw PSB or existing reference material | — | Directly invokes `PSBFile.load(octet)` (0x598268), verifies the 0x68 raw owner and strict header refresh (0x598960); optional `--storage` covers 0x598538. `--integer-boundary` walks a natural tag-0x09 value through public TJS dispatch and the raw scalar getters. `--media-lifecycle` covers PSBMedia cross-container replacement and borrowed-stream destruction; `--media-dictionary` uses an existing `autoskip.psb` to verify the exact Dictionary listing order through 0x5999F4. `--trace` records the corresponding native call chains. No damaged fixture is generated or checked in |
 | `psb_rl_decompress` | — | — | RL loop is inlined in a 53 KB PSB loader; no standalone entry, no adapter |
 | `motion_playback` | libkrkr2 record + Wasmtime verify | **✓ 2** | Uses `STARTUP_FROM` to schedule `reference/xp3/logo_test_oracle.xp3` inside libkrkr2, then Frida hooks `Motion.Player.progress` / `Player_updateLayers` to record per-frame Motion node state for `yuzulogo.mtn` and `m2logo.mtn`. Checked-in goldens exist under `tests/differential/traces/motion_playback/*.oracle.json`; the port-side verifier runs the Wasmtime guest, executing the same `startup.tjs` path with a headless Window stub. This is not yet a full visual oracle; see "Motion playback visual oracle status" below. |
 
@@ -231,6 +231,11 @@ python3 tests/differential/python/run_psbfile_load_adb.py \
   --decrypt-seed 742877301 --trace
 
 python3 tests/differential/python/run_psbfile_load_adb.py \
+  --integer-boundary \
+  --startup-xp3 reference/xp3/caution_minimal/caution_minimal.xp3 \
+  --trace
+
+python3 tests/differential/python/run_psbfile_load_adb.py \
   --media-lifecycle \
   --startup-xp3 reference/xp3/caution_minimal/caution_minimal.xp3 \
   --trace
@@ -248,6 +253,24 @@ also pushes a temporary copy to the configured device directory and exercises
 without creating a golden. For an encrypted raw PSB, `--decrypt-seed` invokes
 the Android filter call operator at 0x6863CC and compares every decrypted byte
 with an independent host-side xorshift implementation before strict refresh.
+
+`--integer-boundary` uses the existing natural
+`reference/xp3/logo_test/m2logo.mtn`, pinned by SHA-256
+`4382de8283cc0782fd269b16d3157bf3a9ec28916440f9192690eb178c0c18fe`.
+At file offset `0x36F8`, bytes `09 00 00 00 ff 00` encode the positive tag-0x09
+value `0xFF000000` (`4278190080`). The oracle constructs `new PSBFile(path)` and
+walks the real root Dictionary/Array adaptors to the natural
+`object/m2cheeseware_logo/motion/back_white/.../frameList[3]/content/color`
+node. It requires a real `tTJSVariant` with type `tvtInteger` (`4`) and signed
+64-bit payload `4278190080`. An independent raw load then invokes the original
+`PSBRawNode::GetInt` (0x599438) and `GetDouble` (0x5992E8) on the same pinned
+node: X0 must be `0x00000000FF000000`, its W32 interpretation must be
+`-16777216`, and D0 must be `4278190080.0`. With `--trace`, the observed public
+chain includes 0x59B14C → 0x5980F4 → 0x598268 → 0x598538 → 0x598708 → 0x59B28C →
+0x59B48C → 0x5981F8 → 0x597854/0x5976C4 → 0x59673C → 0xA0FF60, followed by
+the two direct raw getter probes. These observations intentionally do not claim
+that optimized ARM64 alone uniquely reveals whether GetInt's source return type
+was spelled `tjs_int` or `tjs_int64`.
 
 `--media-lifecycle` pushes the repository's existing `ezsave.pimg` and encrypted
 motion PSB under ASCII-only device aliases. It opens
@@ -280,7 +303,8 @@ The oracle requires the exact ordered result `arrow`, `auto`, `skip` for
 the observed native chain is 0x59849C → 0x5999F4 → 0x599E04 → 0x598538 →
 0x598708 → 0x59A330 → 0x59A4B0.
 
-This mode needs the APK's Full TJS/NCB startup, so the runner first copies the
+The TJS-backed modes (`--integer-boundary`, `--media-lifecycle`, and
+`--media-dictionary`) need the APK's Full TJS/NCB startup, so the runner first copies the
 existing `--startup-xp3` into the app-private files directory and calls
 `TVPMainScene::startupFrom`. It waits for the real `TVPScriptEngine` global
 before issuing `TJS_INIT`; calling `TJS_INIT` earlier would permanently select

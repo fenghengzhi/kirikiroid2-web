@@ -7,6 +7,7 @@ construct or check in a damaged PSB/MDF fixture: it only forwards an existing
 
 from __future__ import annotations
 
+import json
 import struct
 import time
 from pathlib import Path
@@ -15,12 +16,16 @@ from pathlib import Path
 PSBFILE_LOAD_VARIANT_OFFSET = 0x598268
 PSBFILE_LOAD_STORAGE_OFFSET = 0x598538
 PSBRAWOWNER_REFRESH_OFFSET = 0x598960
+PSBRAWNODE_GET_DOUBLE_OFFSET = 0x5992E8
+PSBRAWNODE_GET_INT_OFFSET = 0x599438
+PSBRAWOWNER_HOLDER_RELEASE_OFFSET = 0x695CBC
 PSBMEDIA_CHECK_STORAGE_OFFSET = 0x5998C4
 PSBMEDIA_OPEN_OFFSET = 0x59993C
 PSBMEDIA_GET_LIST_AT_OFFSET = 0x5999F4
 TVP_ADD_AUTO_PATH_OFFSET = 0x8EB4B4
 TVP_MEMORY_STREAM_DELETING_DTOR_OFFSET = 0x8F7D68
 TJS_VARIANT_STRING_RELEASE_OFFSET = 0xA13274
+TJS_VARIANT_DTOR_OFFSET = 0xA0F778
 TTSTR_FROM_ASCII_OFFSET = 0xA13878
 EMOTE_PSB_DECRYPT_OFFSET = 0x6863CC
 
@@ -33,6 +38,8 @@ PSB_MAGIC = b"PSB\0"
 OWNER_SIZE = 0x68
 PSBMEDIA_SIZE = 0x28
 MEMORY_STREAM_SIZE = 0x20
+TJS_VARIANT_SIZE = 0x18
+TJS_VARIANT_INTEGER_TYPE = 4
 
 
 def _input_info(input_path: Path) -> tuple[bytes, str, int]:
@@ -220,6 +227,182 @@ def run_storage_case(engine, input_path: Path, remote_path: str) -> dict:
         engine, input_path=input_path, entry="storage", input_size=len(data),
         input_format=input_format, declared_size=declared_size, loaded=loaded,
         holder_addr=holder_addr)
+
+
+def run_integer_boundary_case(
+    engine,
+    *,
+    input_path: Path,
+    remote_path: str,
+    node_offset: int,
+    expected_node_bytes: bytes,
+    tjs_expression: str,
+    expected_value: int,
+) -> dict:
+    """Observe one natural tag-0x09 value through raw and TJS paths.
+
+    The public TJS expression exercises PSBFile factory/load/root, Dictionary
+    PropGet, Array PropGetByNum and PSBValueDispatch::assign.  A second load
+    builds only the two-pointer Android PSBRawNode view needed to invoke the
+    original raw GetInt/GetDouble entries at the same pinned file offset.
+    """
+    data, input_format, declared_size = _input_info(input_path)
+    if input_format != "psb":
+        raise ValueError("integer boundary mode requires a raw PSB input")
+    if node_offset < 0 or node_offset + len(expected_node_bytes) > len(data):
+        raise ValueError("integer boundary node lies outside the input")
+    if len(expected_node_bytes) != 6 or expected_node_bytes[0] != 0x09:
+        raise ValueError(
+            "integer boundary node must pin one complete 6-byte tag-0x09 "
+            "payload")
+    if data[node_offset:node_offset + len(expected_node_bytes)] \
+            != expected_node_bytes:
+        raise ValueError("integer boundary input bytes do not match the pin")
+    remote_path.encode("ascii")
+    tjs_expression.encode("ascii")
+
+    engine.reset_heap()
+    script_engine = _wait_for_pointer(engine, TVP_SCRIPT_ENGINE_SLOT_OFFSET)
+    result = {
+        "input": str(input_path),
+        "entry": "tag09-integer-boundary",
+        "input_format": input_format,
+        "input_size": len(data),
+        "declared_size": declared_size,
+        "node_offset": node_offset,
+        "expected_node_bytes": expected_node_bytes.hex(),
+        "expected_value": expected_value,
+        "script_engine_ready": script_engine != 0,
+    }
+    if script_engine == 0:
+        result["status"] = "setup-failed"
+        return result
+
+    tjs_initialized = False
+    globals_created = False
+    variant_addr = 0
+    raw_holder_addr = 0
+    try:
+        engine.tjs_init()
+        tjs_initialized = True
+        singleton_addr, class_object = _ensure_psbfile_registered(engine)
+        result.update({
+            "singleton_ready": singleton_addr != 0,
+            "class_object_ready": class_object != 0,
+        })
+        if singleton_addr == 0 or class_object == 0:
+            result["status"] = "setup-failed"
+            return result
+
+        script = (
+            "var oracle_psb_tag09_file = new PSBFile("
+            f"{json.dumps(remote_path)});\n"
+            "var oracle_psb_tag09_value = "
+            f"{tjs_expression};"
+        )
+        # The first statement may publish the PSBFile global before a later
+        # property lookup throws, so enable best-effort cleanup before Exec.
+        globals_created = True
+        engine.tjs_exec(script)
+        variant_addr = engine.tjs_global("oracle_psb_tag09_value")
+        variant = engine.ql.mem.read(variant_addr, TJS_VARIANT_SIZE)
+        variant_value = struct.unpack_from("<q", variant, 0)[0]
+        variant_type = struct.unpack_from("<I", variant, 16)[0]
+
+        loaded, raw_holder_addr = _load_octet(engine, data)
+        owner_addr = _read_pointer(engine, raw_holder_addr)
+        result["raw_loaded"] = bool(loaded)
+        if not loaded or owner_addr == 0:
+            result["status"] = "load-failed"
+            return result
+
+        owner = engine.ql.mem.read(owner_addr, OWNER_SIZE)
+        raw_addr = struct.unpack_from("<Q", owner, 88)[0]
+        raw_size = struct.unpack_from("<Q", owner, 96)[0]
+        if node_offset + len(expected_node_bytes) > raw_size:
+            raise RuntimeError("loaded owner is shorter than the pinned node")
+        node_addr = raw_addr + node_offset
+        node_bytes = engine.ql.mem.read(
+            node_addr, len(expected_node_bytes))
+
+        # The Android PSBRawNode data view is two pointers: owner, then raw
+        # node.  This surrogate borrows both while raw_holder_addr keeps the
+        # owner alive; the getters consume it synchronously, and finally
+        # releases the separate owning holder.
+        raw_node_addr = engine.heap.write(
+            struct.pack("<QQ", owner_addr, node_addr), align=8)
+        raw_get_int_x0 = engine.call(
+            engine.offset(PSBRAWNODE_GET_INT_OFFSET),
+            ints=(raw_node_addr,), ret="ptr",
+        )
+        raw_get_int_w32 = struct.unpack(
+            "<i", struct.pack("<I", raw_get_int_x0 & 0xFFFFFFFF))[0]
+        raw_get_double = engine.call(
+            engine.offset(PSBRAWNODE_GET_DOUBLE_OFFSET),
+            ints=(raw_node_addr,), ret="double",
+        )
+        expected_w32 = struct.unpack(
+            "<i", struct.pack("<I", expected_value & 0xFFFFFFFF))[0]
+
+        result.update({
+            "variant_type": variant_type,
+            "variant_value": variant_value,
+            "raw_node_bytes": node_bytes.hex(),
+            "raw_get_int_x0": raw_get_int_x0,
+            "raw_get_int_w32": raw_get_int_w32,
+            "expected_w32": expected_w32,
+            "raw_get_double": raw_get_double,
+        })
+        ok = (
+            expected_value > 0x7FFFFFFF
+            and variant_type == TJS_VARIANT_INTEGER_TYPE
+            and variant_value == expected_value
+            and node_bytes == expected_node_bytes
+            and raw_get_int_x0 == expected_value
+            and raw_get_int_w32 == expected_w32
+            and raw_get_double == float(expected_value)
+        )
+        result["status"] = "ok" if ok else "mismatch"
+        return result
+    finally:
+        cleanup_errors = []
+        if raw_holder_addr:
+            try:
+                # sub_695CBC is the emitted raw-node owner-release sequence:
+                # decrement refcount, run 0x598B3C and operator delete at zero.
+                engine.call(
+                    engine.offset(PSBRAWOWNER_HOLDER_RELEASE_OFFSET),
+                    ints=(raw_holder_addr,), ret="void",
+                )
+            except Exception as exc:
+                cleanup_errors.append(f"raw owner: {exc!r}")
+        if variant_addr:
+            try:
+                # TJS_RESET only rewinds the harness allocator.  Destroy the
+                # actual output Variant first so mismatch types cannot retain
+                # Object/String/Octet payloads until process exit.
+                engine.call(
+                    engine.offset(TJS_VARIANT_DTOR_OFFSET),
+                    ints=(variant_addr,), ret="void",
+                )
+            except Exception as exc:
+                cleanup_errors.append(f"TJS output Variant: {exc!r}")
+        if globals_created:
+            try:
+                engine.tjs_exec(
+                    "try { oracle_psb_tag09_value = void; } catch(e) {} "
+                    "try { oracle_psb_tag09_file = void; } catch(e) {}")
+            except Exception as exc:
+                cleanup_errors.append(f"TJS globals: {exc!r}")
+        if tjs_initialized:
+            try:
+                engine.tjs_reset()
+            except Exception as exc:
+                cleanup_errors.append(f"TJS variant heap: {exc!r}")
+        if cleanup_errors:
+            result["cleanup_errors"] = cleanup_errors
+            if result.get("status") in {"ok", "mismatch"}:
+                result["status"] = "error"
 
 
 def _read_pointer(engine, addr: int) -> int:

@@ -61,6 +61,25 @@ PSBFILE_LOAD_TARGETS = [
     0x6863CC,   # Emote PSB seed-filter call operator
 ]
 
+# --- psbfile_integer: natural tag-0x09 raw + TJS conversion boundary --------
+# The public script constructs PSBFile(path), walks Dictionary/Array adaptors,
+# and leaves the value in a real tTJSVariant.  The adapter then invokes the two
+# raw getters on the same pinned node to separate 64-bit TJS Integer semantics
+# from GetInt's W32-observable boundary.
+PSBFILE_INTEGER_TARGETS = PSBFILE_LOAD_TARGETS + [
+    0x59B14C,   # NCB PSBFile factory FuncCall wrapper
+    0x5980F4,   # PSBFile NCB factory
+    0x5981F8,   # PSBFile::GetRootDispatch
+    0x59B28C,   # NCB root property getter wrapper
+    0x59B48C,   # NCB root property native invoker
+    0x597854,   # PSBValueDispatch::PropGet (Dictionary)
+    0x5976C4,   # PSBValueDispatch::PropGetByNum (Array)
+    0x59673C,   # PSBValueDispatch::assign
+    0xA0FF60,   # tTJSVariant::operator=(tjs_int64)
+    0x599438,   # PSBRawNode::GetInt
+    0x5992E8,   # PSBRawNode::GetDouble
+]
+
 # --- psbfile_media: PSBMedia replacement + borrowed stream lifecycle -------
 # This extends the load targets because EnsureContainer enters 0x598538 for
 # each container switch.  The adapter observes the old stream's fields but
@@ -92,6 +111,17 @@ ADDR_NAMES = {
     0x598708: "PSBFile_adoptRaw",
     0x598960: "PSBRawOwner_refresh",
     0x6863CC: "EmotePSBDecrypt_call",
+    0x59B14C: "PSBFile_factoryFuncCall",
+    0x5980F4: "PSBFile_factory",
+    0x5981F8: "PSBFile_getRootDispatch",
+    0x59B28C: "PSBFile_rootNcbGetter",
+    0x59B48C: "PSBFile_rootNativeInvoker",
+    0x597854: "PSBValueDispatch_propGet",
+    0x5976C4: "PSBValueDispatch_propGetByNum",
+    0x59673C: "PSBValueDispatch_assign",
+    0xA0FF60: "tTJSVariant_assignInt64",
+    0x599438: "PSBRawNode_getInt",
+    0x5992E8: "PSBRawNode_getDouble",
     0x59849C: "PSBMedia_register",
     0x5998C4: "PSBMedia_checkStorage",
     0x59993C: "PSBMedia_open",
@@ -136,6 +166,24 @@ ARG_COUNTS: dict[int, tuple[int, int]] = {
     0x598960: (2, 0),
     # EmotePSBDecrypt_call(seed closure slot, PSBRawOwner *)
     0x6863CC: (2, 0),
+    # NCB iTJSDispatch2::FuncCall(..., result, argc, argv, objthis)
+    0x59B14C: (8, 0),
+    # PSBFileFactory(PSBFile **result, int argc, tTJSVariant **argv, objthis)
+    0x5980F4: (4, 0),
+    # PSBFile::GetRootDispatch(this)
+    0x5981F8: (1, 0),
+    # NCB root property wrapper/native invoker
+    0x59B28C: (6, 0),
+    0x59B48C: (3, 0),
+    # iTJSDispatch2 Dictionary/Array property accessors
+    0x597854: (6, 0),
+    0x5976C4: (5, 0),
+    # assign(this, result, rawNode), Variant::operator=(int64)
+    0x59673C: (3, 0),
+    0xA0FF60: (2, 0),
+    # PSBRawNode scalar getters
+    0x599438: (1, 0),
+    0x5992E8: (1, 0),
     # PSBMedia process-lifetime pre-register callback (source-level void)
     0x59849C: (0, 0),
     # PSBMedia::CheckExistentStorage(this, ttstr const&)
@@ -175,6 +223,17 @@ RETURN_KINDS: dict[int, str] = {
     0x598708: "int",
     0x598960: "int",
     0x6863CC: "int",
+    0x59B14C: "int",
+    0x5980F4: "int",
+    0x5981F8: "int",
+    0x59B28C: "int",
+    0x59B48C: "int",
+    0x597854: "int",
+    0x5976C4: "int",
+    0x59673C: "int",
+    0xA0FF60: "int",
+    0x599438: "int",
+    0x5992E8: "double",
     0x59849C: "void",
     0x5998C4: "int",
     0x59993C: "int",
