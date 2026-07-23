@@ -244,48 +244,63 @@ namespace motion {
             return out.left < out.right && out.top < out.bottom;
         }
 
-        iTJSDispatch2 *resolveLayerWindowObjectLike_0x6CE19C(
-            iTJSDispatch2 *targetLayerObject,
-            tTJSVariant &ownerStorage) {
-            ownerStorage.Clear();
-            if(!targetLayerObject) {
-                return nullptr;
-            }
-            if(TJS_FAILED(targetLayerObject->PropGet(
-                   0, TJS_W("window"), nullptr, &ownerStorage,
-                   targetLayerObject))) {
-                return nullptr;
-            }
-            return ownerStorage.Type() == tvtObject
-                ? ownerStorage.AsObjectNoAddRef()
-                : nullptr;
-        }
-
-        bool setLayerSizeLike_0x6CE19C(iTJSDispatch2 *layerObject,
-                                       int width,
-                                       int height) {
-            if(!layerObject || width <= 0 || height <= 0) {
+        bool trySetAccurateSlaLayerSize(iTJSDispatch2 *layerObject,
+                                        int width,
+                                        int height) {
+            if(!layerObject) {
                 return false;
             }
             tTJSVariant widthArg(width);
             tTJSVariant heightArg(height);
             tTJSVariant *args[] = { &widthArg, &heightArg };
             return TJS_SUCCEEDED(layerObject->FuncCall(
-                0, TJS_W("setSize"), nullptr, nullptr, 2, args, layerObject));
+                0, TJS_W("setSize"), &detail::setSizeMemberHint_guess,
+                nullptr, 2, args, layerObject));
         }
 
-        bool piledCopyLayerLike_0x6CE938(iTJSDispatch2 *destinationObject,
-                                         iTJSDispatch2 *sourceObject,
-                                         int width,
-                                         int height) {
-            auto *destination = resolveNativeLayer(destinationObject);
-            auto *source = resolveNativeLayer(sourceObject);
-            if(!destination || !source || width <= 0 || height <= 0) {
-                return false;
+        void setLayerSizeLike_0x6CE19C(iTJSDispatch2 *layerObject,
+                                       int width,
+                                       int height) {
+            tTJSVariant widthArg(width);
+            tTJSVariant heightArg(height);
+            tTJSVariant *args[] = { &widthArg, &heightArg };
+            (void)layerObject->FuncCall(
+                0, TJS_W("setSize"), &detail::setSizeMemberHint_guess,
+                nullptr, 2, args, layerObject);
+        }
+
+        tTJSVariant createLayerVariantLike_0x6CE19C(
+            const tTJSVariant &owner,
+            const tTJSVariant &parent) {
+            iTJSDispatch2 *global = TVPGetScriptDispatch();
+            iTJSDispatch2 *created = nullptr;
+            tTJSVariant *args[] = {
+                const_cast<tTJSVariant *>(&owner),
+                const_cast<tTJSVariant *>(&parent)
+            };
+            (void)global->CreateNew(
+                0, TJS_W("Layer"), &detail::layerClassMemberHint_guess,
+                &created, 2, args, global);
+            tTJSVariant createdVariant(created, created);
+            created->Release();
+            global->Release();
+            return createdVariant;
+        }
+
+        tjs_int propGetIntAfterProbeLike_0x6CE19C(
+            iTJSDispatch2 *object,
+            const tjs_char *member,
+            tjs_uint32 *hint) {
+            {
+                tTJSVariant probe;
+                if(TJS_FAILED(object->PropGet(
+                       TJS_MEMBERMUSTEXIST, member, hint, &probe, object))) {
+                    return 0;
+                }
             }
-            const tTVPRect sourceRect(0, 0, width, height);
-            destination->PiledCopy(0, 0, source, sourceRect);
-            return true;
+            tTJSVariant value;
+            (void)object->PropGet(0, member, hint, &value, object);
+            return static_cast<tjs_int>(value.AsInteger());
         }
 
         iTJSDispatch2 *ensureAccurateSlaStateLayerLike_0x6C6B48(
@@ -654,6 +669,38 @@ namespace motion {
         }
     } // namespace
 
+    void Player::materializeInternalRenderLayersLike_0x6CE19C_guess(
+        const tTJSVariant &target) {
+        // Player_materializeRenderLayer_guess @0x6CE19C gates only on the
+        // primary internal Layer Variant. Once it exists, the work Layer is
+        // never repaired or resized independently.
+        if(_internalRenderLayer.Type() != tvtVoid) {
+            return;
+        }
+
+        ncbPropAccessor targetAccessor{tTJSVariant(target)};
+        tTJSVariant owner = targetAccessor.GetValue(
+            TJS_W("window"), ncbTypedefs::Tag<tTJSVariant>(), 0,
+            &detail::windowMemberHint_guess);
+
+        ncbPropAccessor internal{tTJSVariant(
+            _internalRenderLayer =
+                createLayerVariantLike_0x6CE19C(owner, target))};
+
+        const tjs_int height = propGetIntAfterProbeLike_0x6CE19C(
+            targetAccessor.GetDispatch(), TJS_W("height"),
+            &detail::heightMemberHint_guess);
+        const tjs_int width = propGetIntAfterProbeLike_0x6CE19C(
+            targetAccessor.GetDispatch(), TJS_W("width"),
+            &detail::widthMemberHint_guess);
+        setLayerSizeLike_0x6CE19C(internal.GetDispatch(), width, height);
+
+        ncbPropAccessor work{tTJSVariant(
+            _internalSourceWorkLayer_guess =
+                createLayerVariantLike_0x6CE19C(owner, target))};
+        setLayerSizeLike_0x6CE19C(work.GetDispatch(), width, height);
+    }
+
     bool Player::renderViaSharedD3DAdaptor(
         iTJSDispatch2 *targetLayerObject,
         detail::PreparedRenderItemList &mainList) {
@@ -991,8 +1038,8 @@ namespace motion {
                                                 : nullptr;
                 if(!sourceImage || sourceImage->GetWidth() <= 0 ||
                    sourceImage->GetHeight() <= 0 ||
-                   !setLayerSizeLike_0x6CE19C(itemLayerObject, clipWidth,
-                                              clipHeight)) {
+                   !trySetAccurateSlaLayerSize(itemLayerObject, clipWidth,
+                                               clipHeight)) {
                     continue;
                 }
 
@@ -1282,7 +1329,6 @@ namespace motion {
 
     bool Player::renderToCanvasLike_0x6C7440(
         tTJSVariant *target,
-        bool willCallUpdateLayerAfterDraw,
         detail::PreparedRenderItemList &mainList,
         detail::PreparedRenderItemList &auxList) {
         if(!target) {
@@ -1324,31 +1370,14 @@ namespace motion {
             return false;
         }
 
-        const bool useInternalRenderLayer =
-            _needsInternalAssignImages && willCallUpdateLayerAfterDraw;
         detail::logoChainTraceLogf(
             motionPath, "draw.renderToCanvas", "0x6C7440", _clampedEvalTime,
-            "targetLayerCanvas={}x{} willCallUpdateLayerAfterDraw={} needsInternalAssignImages={} useInternalRenderLayer={}",
+            "targetLayerCanvas={}x{} needsInternalAssignImages={} route=callerTarget",
             canvasWidth, canvasHeight,
-            willCallUpdateLayerAfterDraw ? 1 : 0,
-            _needsInternalAssignImages ? 1 : 0,
-            useInternalRenderLayer ? 1 : 0);
+            _needsInternalAssignImages ? 1 : 0);
 
         iTJSDispatch2 *renderLayerObject = resolvedLayerObject;
-        if(useInternalRenderLayer) {
-            renderLayerObject = ensureReusableLayerObject(
-                _internalRenderLayer,
-                resolveMainWindowOwnerObject(),
-                resolvedLayerObject,
-                static_cast<tTVPLayerType>(ltAlpha),
-                false);
-        }
-        if(renderLayerObject != resolvedLayerObject) {
-            if(!prepareLayerForRender(renderLayerObject, canvasWidth, canvasHeight,
-                                      0x00000000)) {
-                return false;
-            }
-        } else if(auto *targetLayer = resolveNativeLayer(resolvedLayerObject)) {
+        if(auto *targetLayer = resolveNativeLayer(resolvedLayerObject)) {
             if(targetLayer->GetWidth() != canvasWidth ||
                targetLayer->GetHeight() != canvasHeight) {
                 targetLayer->SetSize(canvasWidth, canvasHeight);
@@ -1366,8 +1395,7 @@ namespace motion {
             tTJSVariant(resolvedLayerObject, resolvedLayerObject);
         detail::logoChainTraceSummary(
             motionPath, "renderToCanvasLike_0x6C7440", _clampedEvalTime,
-            useInternalRenderLayer ? "internalRenderLayer=1"
-                                   : "internalRenderLayer=0");
+            "callerTarget=1");
         return true;
     }
 
@@ -1406,16 +1434,20 @@ namespace motion {
         applyPreparedRenderItemTranslateOffsets(mainList);
 
         const bool needsInternalAssignBeforeRender =
-            _needsInternalAssignImages && !skipUpdate;
-        if(!renderToCanvasLike_0x6C7440(
-               &target, !skipUpdate, mainList, auxList)) {
+            _needsInternalAssignImages;
+        if(!renderToCanvasLike_0x6C7440(&target, mainList, auxList)) {
             return false;
         }
 
         if(!skipUpdate) {
-            if(needsInternalAssignBeforeRender) {
-                updateLayerAfterDrawLike_0x6CE7D8(&target);
-            } else if(auto *layer = resolveNativeLayer(resolvedLayerObject)) {
+            if(!updateLayerAfterDrawLike_0x6CE7D8(target)) {
+                return false;
+            }
+            if(!needsInternalAssignBeforeRender) {
+                auto *layer = resolveNativeLayer(resolvedLayerObject);
+                if(!layer) {
+                    return false;
+                }
                 if(detail::logoSnapshotMarkEnabledForPath(motionPath) &&
                    motionPath.find("m2logo.mtn") != std::string::npos &&
                    _clampedEvalTime >= 30.0 && _clampedEvalTime <= 50.0) {
@@ -1597,7 +1629,7 @@ namespace motion {
                 "target={} canvas={}x{}",
                 static_cast<const void *>(targetLayerObject),
                 canvasWidth, canvasHeight);
-            updateAccurateSLAAfterDraw(targetLayerObject);
+            updateAccurateSLAAfterDraw(sla->getTargetLayer());
             detail::logoChainTraceLogf(
                 motionPath, "sla.accurate.end", "0x6CE938",
                 _clampedEvalTime,
@@ -1636,12 +1668,13 @@ namespace motion {
         return true;
     }
 
-    bool Player::updateLayerAfterDrawLike_0x6CE7D8(tTJSVariant *target) {
+    bool Player::updateLayerAfterDrawLike_0x6CE7D8(
+        const tTJSVariant &target) {
 #if defined(KRKR2_WASMTIME_HEADLESS)
         iTJSDispatch2 *rawProbeLayerObject =
-            target ? tryResolveLayerDispatch(*target) : nullptr;
-        if(!rawProbeLayerObject && target && target->Type() == tvtObject) {
-            rawProbeLayerObject = target->AsObjectNoAddRef();
+            tryResolveLayerDispatch(target);
+        if(!rawProbeLayerObject && target.Type() == tvtObject) {
+            rawProbeLayerObject = target.AsObjectNoAddRef();
         }
         detail::motionTraceRenderImageCheckpoint(
             this, rawProbeLayerObject, "updateLayerAfterDraw_pre",
@@ -1661,59 +1694,33 @@ namespace motion {
             }
         } updateLayerAfterDrawTraceLeave{this, rawProbeLayerObject};
 #endif
-        // 0x6CE7F4 first action: unconditional +612 = +613 snapshot (runs every
-        // post-draw, even when +613 is clear). anchor type-10 (0x6C0528) reads
-        // this next frame to gate on the internal render Layer being ready.
+        // 0x6CE7F4 first action: unconditionally snapshot the producer flag,
+        // even when it is clear. Anchor type-10 (0x6C0528) reads this next frame
+        // to gate on the internal render Layer being ready.
         _internalRenderLayerReady = _needsInternalAssignImages;
         if(!_needsInternalAssignImages) {
             return true;
         }
         const auto motionPath = matchedMotionPath();
 
-        _needsInternalAssignImages = false;
-        if(!target) {
-            return false;
-        }
+        materializeInternalRenderLayersLike_0x6CE19C_guess(target);
 
-        iTJSDispatch2 *renderLayerObject =
-            _internalRenderLayer.Type() == tvtObject
-                ? _internalRenderLayer.AsObjectNoAddRef()
-                : nullptr;
-        if(!renderLayerObject) {
-            return false;
-        }
-
-        try {
-            tTJSVariant targetVar;
-            targetVar = *target;
-            tTJSVariant *args[] = { &targetVar };
-            const bool ok = TJS_SUCCEEDED(renderLayerObject->FuncCall(
-                0, TJS_W("assignImages"), nullptr, nullptr, 1, args,
-                renderLayerObject));
+        ncbPropAccessor internal{tTJSVariant(_internalRenderLayer)};
+        (void)internal.FuncCall(
+            0, TJS_W("assignImages"),
+            &detail::assignImagesMemberHint_guess, nullptr, target);
 #if defined(KRKR2_WASMTIME_HEADLESS)
-            if(ok) {
-                detail::motionTraceRecordPostDrawLayerCandidate(
-                    this, renderLayerObject,
-                    "Player::updateLayerAfterDraw_0x6CE7D8.afterAssignImages");
-            }
+        detail::motionTraceRecordPostDrawLayerCandidate(
+            this, internal.GetDispatch(),
+            "Player::updateLayerAfterDraw_0x6CE7D8.afterAssignImages");
 #endif
-            detail::logoChainTraceCheck(
-                motionPath, "post.assignImages", "0x6CE7D8",
-                _clampedEvalTime,
-                "internal render layer assignImages(original target variant)",
-                ok ? "assignImages(target)" : "assignImages(failed)",
-                ok,
-                "sub_6CE7D8 failed to assign internal render layer to target");
-            return ok;
-        } catch(...) {
-            detail::logoChainTraceCheck(
-                motionPath, "post.assignImages", "0x6CE7D8",
-                _clampedEvalTime,
-                "internal render layer assignImages(original target variant)",
-                "assignImages(threw)", false,
-                "sub_6CE7D8 threw while assigning internal render layer");
-            return false;
-        }
+        detail::logoChainTraceCheck(
+            motionPath, "post.assignImages", "0x6CE7D8",
+            _clampedEvalTime,
+            "materialize internal/work Layers, then internal.assignImages(original target)",
+            "assignImages(target)", true,
+            "sub_6CE7D8 internal Layer snapshot dispatched");
+        return true;
     }
 
     bool Player::updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject) {
@@ -1721,15 +1728,15 @@ namespace motion {
             return !_needsInternalAssignImages;
         }
         tTJSVariant target(targetLayerObject, targetLayerObject);
-        return updateLayerAfterDrawLike_0x6CE7D8(&target);
+        return updateLayerAfterDrawLike_0x6CE7D8(target);
     }
 
-    bool Player::updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject) {
-        if(!targetLayerObject) {
-            return false;
-        }
+    bool Player::updateAccurateSLAAfterDraw(const tTJSVariant &target) {
         const auto motionPath = matchedMotionPath();
 
+        // sub_6CE938 @0x6CE938 mirrors 0x6CE7D8: snapshot the producer flag
+        // unconditionally and leave the producer untouched.
+        _internalRenderLayerReady = _needsInternalAssignImages;
         if(!_needsInternalAssignImages) {
             detail::logoChainTraceLogf(
                 motionPath, "post.sla.accurate", "0x6CE938",
@@ -1737,63 +1744,29 @@ namespace motion {
             return true;
         }
 
-        int canvasWidth = 0;
-        int canvasHeight = 0;
-        if(!queryLayerCanvasSize(targetLayerObject, canvasWidth, canvasHeight)) {
-            detail::logoChainTraceCheck(
-                motionPath, "post.sla.accurate", "0x6CE938",
-                _clampedEvalTime,
-                "target layer width/height should be readable before piledCopy",
-                "target-size=0", false,
-                "sub_6CE938 failed to query target Layer width/height");
-            return false;
-        }
+        ncbPropAccessor targetAccessor{tTJSVariant(target)};
+        materializeInternalRenderLayersLike_0x6CE19C_guess(target);
+        ncbPropAccessor internal{tTJSVariant(_internalRenderLayer)};
 
-        tTJSVariant ownerStorage;
-        iTJSDispatch2 *layerTreeOwner =
-            resolveLayerWindowObjectLike_0x6CE19C(targetLayerObject,
-                                                  ownerStorage);
-        if(!layerTreeOwner) {
-            layerTreeOwner = resolveMainWindowOwnerObject();
-        }
-
-        iTJSDispatch2 *internalLayerObject = ensureReusableLayerObject(
-            _internalRenderLayer, layerTreeOwner, targetLayerObject,
-            static_cast<tTVPLayerType>(ltAlpha), false);
-        if(!internalLayerObject ||
-           !setLayerSizeLike_0x6CE19C(internalLayerObject, canvasWidth,
-                                      canvasHeight)) {
-            detail::logoChainTraceCheck(
-                motionPath, "post.sla.accurate", "0x6CE19C/0x6CE938",
-                _clampedEvalTime,
-                "player+696 internal Layer should exist and match target size",
-                "internal-layer-setup-failed", false,
-                "sub_6CE19C failed to create/size the internal render layer");
-            return false;
-        }
-
-        try {
-            const bool ok = piledCopyLayerLike_0x6CE938(
-                internalLayerObject, targetLayerObject, canvasWidth,
-                canvasHeight);
-            detail::logoChainTraceCheck(
-                motionPath, "post.sla.accurate", "0x6CE938",
-                _clampedEvalTime,
-                fmt::format(
-                    "internalLayer.piledCopy(0,0,target,0,0,{},{})",
-                    canvasWidth, canvasHeight),
-                ok ? "piledCopy" : "piledCopy-failed", ok,
-                "sub_6CE938 accurate SLA post-copy diverged");
-            return ok;
-        } catch(...) {
-            detail::logoChainTraceCheck(
-                motionPath, "post.sla.accurate", "0x6CE938",
-                _clampedEvalTime,
-                "internalLayer.piledCopy should not throw",
-                "piledCopy-threw", false,
-                "sub_6CE938 threw while copying target into player+696");
-            return false;
-        }
+        const tjs_int height = propGetIntAfterProbeLike_0x6CE19C(
+            targetAccessor.GetDispatch(), TJS_W("height"),
+            &detail::heightMemberHint_guess);
+        const tjs_int width = propGetIntAfterProbeLike_0x6CE19C(
+            targetAccessor.GetDispatch(), TJS_W("width"),
+            &detail::widthMemberHint_guess);
+        (void)internal.FuncCall(
+            0, TJS_W("piledCopy"), &detail::piledCopyMemberHint_guess,
+            nullptr, tTJSVariant(0), tTJSVariant(0), target,
+            tTJSVariant(0), tTJSVariant(0), tTJSVariant(width),
+            tTJSVariant(height));
+        detail::logoChainTraceCheck(
+            motionPath, "post.sla.accurate", "0x6CE938",
+            _clampedEvalTime,
+            fmt::format("internal.piledCopy(0,0,target,0,0,{},{})",
+                        width, height),
+            "piledCopy", true,
+            "sub_6CE938 accurate SLA post-copy dispatched");
+        return true;
     }
 
 } // namespace motion

@@ -204,6 +204,10 @@ namespace motion::detail {
     tjs_uint32 operateRectMemberHint_guess = 0;
     tjs_uint32 adjustGammaMemberHint_guess = 0;
     tjs_uint32 fillRectMemberHint_guess = 0;
+    tjs_uint32 windowMemberHint_guess = 0;
+    tjs_uint32 piledCopyMemberHint_guess = 0;
+    tjs_uint32 assignImagesMemberHint_guess = 0;
+    tjs_uint32 layerClassMemberHint_guess = 0;
 
     namespace {
 

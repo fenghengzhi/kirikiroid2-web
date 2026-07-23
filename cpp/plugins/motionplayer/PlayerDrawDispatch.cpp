@@ -281,14 +281,14 @@ namespace motion {
         targetCopy = *arg;
         const bool rendered =
             renderToCanvasLike_0x6C7440(
-                &targetCopy, true, mainList, auxList);
+                &targetCopy, mainList, auxList);
 #if defined(KRKR2_WASMTIME_HEADLESS)
         renderTrace.recordRenderToCanvas(rendered);
 #endif
         const bool internalAssignRequested =
             rendered && _needsInternalAssignImages;
         const bool updated =
-            rendered && updateLayerAfterDrawLike_0x6CE7D8(arg);
+            rendered && updateLayerAfterDrawLike_0x6CE7D8(*arg);
 #if defined(KRKR2_WASMTIME_HEADLESS)
         if(rendered) {
             renderTrace.recordUpdateLayerAfterDraw(

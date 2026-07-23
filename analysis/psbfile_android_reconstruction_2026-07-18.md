@@ -1,6 +1,6 @@
 # Android `PSBFile.dll` 复原审计（2026-07-18）
 
-## 2026-07-23：render-list source-clip 四角颜色复原与 execute gate 纠正
+## 2026-07-23：Player 内部 source resolver、四角颜色与 execute gate 纠正
 
 - fresh decompile/disasm `sub_6C2334@0x6C2334` 与 `sub_698188@0x698188`
   确认，`0x6C34A4..0x6C3588` 先把四只 node packed color 分别乘以
@@ -34,10 +34,50 @@
   resolve source，强制进入持久 `SourceCache.bufLayer`，沿 ancestor 链逐层调
   `Motion_doAlphaMaskOperation@0x6C8390`，再以 `operateRect@0x6C8558` 提交。
   此缺口不能只靠删除 `continue` 修复。
-- 另一个已取证但本轮未改的边界位于 `sub_6C4E28@0x6C4E28`：
-  leaf source descriptor 在 `0x6C52AC/0x6C5300..0x6C5304` 使用 blend `0` 和四只
-  `0xFFFFFFFF`，而本地 `SourceCache.cpp` 当前传入 item blend/colors。该修正必须
-  只作用于 `0x6C4E28` leaf 边界，不得未取证地改变其他 source-cache caller。
+- `sub_6C4E28@0x6C4E28` 的 leaf source descriptor 边界现已闭合：
+  `0x6C52AC/0x6C5300..0x6C5304` 先形成 blend `0` 和四只 `0xFFFFFFFF`，
+  `0x6C5404..0x6C5648` 再把 item key/src 与该 neutral payload 写进 Player
+  常驻 descriptor/color Dictionaries，随后 `0x6C5654..0x6C5664` 只把
+  `item.sourceState.object` 交给 Player 自身的 `sub_6C1B70`。本地现把完整 resolver
+  从原 item wrapper 抽回 Player，leaf caller 现场写 neutral payload；原 wrapper 仍为
+  `0x6C7440/0x6C9CA8/0x6DE738/0x6F1060` 写 item blend/colors，未把 leaf policy
+  扩散到其他 caller，也未临时改写 item 本体。
+- fresh `sub_6C1B70@0x6C1B70` 证明它不是单纯的 SourceCache fallback：只有 source 与
+  Player 内部 Layer 都是 Object 且两者 **Object dispatch 指针**相等时才走 fast path；
+  比较不含 ObjThis，也没有 typed-null 防护。fallback 才调用第二份 ResourceManager owner 的
+  `loadSource(source,descriptor)`。fast path 对 blendMode 只做一次 raw PropGet，对四色各做
+  一次 raw `PropGetByNum`；随后 work Layer `assignImages(internal)` 直接写返回 Variant，按
+  height→width 各 probe 后再 raw read，并以 `{0,0,width,height}` 调 `sub_6A7518`。
+- fresh decompile/disasm `sub_6A7518@0x6A7518` 又确认其矩形参数不是 edge rect，而是
+  `{x,y,width,height}`：先按值快照 Layer ClipRect 四字段，再取得 write pixel buffer 与
+  signed pitch；`right=x+width`、`bottom=y+height`、span、相对坐标和插值乘加都按 ARM W32
+  回绕，插值使用 `SDIV`（除数 0 返回 0，`INT_MIN/-1` 返回 `INT_MIN`），像素乘法后使用
+  `UDIV` 和 unsigned `>=255` 饱和。外层只以 `top<bottom` 为 gate；`left>=right` 时不写像素，
+  但仍逐行推进 signed pitch。首行偏移先分别把 W32 `top*pitch`、`left*4` 符号扩展后再相加，
+  写指针落在每像素 G byte，按 `+1:R/+0:G/-1:B/+2:A`
+  写回 BGRA。软件分支现逐步复刻这些顺序和边界，GPU 分支仍只查询并丢弃
+  PrivateMotionGLL native instance。
+- fresh `sub_6A6BE0@0x6A6BE0` 确认 bake 的调用顺序是先调用 `sub_6A7518`，再仅在
+  `lowBlend ∈ {1,2}` 时第二次查询 `IsSoftware()`；本地不再在 tint 前无条件预取并缓存
+  renderer 状态。
+- `sub_6CE19C@0x6CE19C` 只在内部 Layer Variant 为 Void 时运行：从 `target.window` 得 owner，
+  连续创建 `Layer(owner,target)` 两次，分别成为内部 Layer 和 work Layer；target 的
+  height→width 只读取一轮，两层均 `setSize(width,height)`。一旦第一层存在，第二层缺失也
+  不修复，target 改尺寸也不重设；CreateNew/setSize 返回值没有额外恢复分支。
+- `Player_updateLayers@0x6BB33C` 在所有 phase 前清 producer flag；普通/accurate post-draw
+  `0x6CE7D8/0x6CE938` 每次无条件把它快照到 consumer flag，producer=true 时才 one-shot
+  materialize 并执行 `assignImages`/`piledCopy`，post-draw 自身不清 producer。锚点
+  `0x6C0528` 在 gate 成功后把同一内部 Layer CopyRef 到 node source，令下一次
+  `0x6C1B70` 的对象身份 fast path 真正可达。
+- fresh `sub_6C7440@0x6C7440` 没有读取两只内部 Layer，也不调用 materializer/post-draw；
+  因而已删除本地发明的 pre-draw 改投内部 Layer 分支，主循环始终渲染 caller target，
+  内部快照只发生在 drawCompat/SLA 的既有 post-draw 调用链。
+- descriptor accessor 先构造、color accessor 后构造，source result Variant 与由其
+  Variant-copy 建立的 source accessor 再依次构造；因而正常/early-return 都按
+  `0x6C5D38..0x6C5D70` 的 source-accessor→result→color→descriptor 反向顺序清理，
+  并把三只 accessor 保活到 leaf copy 完成。现有 logo fixtures 的
+  `drawFlag19=0`，该路径仍属差分 oracle-inert；不制造 fixture，完整原生/Web/Wasmtime
+  只作为非回归验证，不冒充 Android leaf runtime oracle。
 - 当前验证：macOS Release `motionplayer-dll` **1260/1260**（18 cases）；
   Web Debug 最终 `index.html/index.wasm` 链接通过；`out/wasmtime/debug` 的显式
   `krkr2_wasmtime_guest` 目标通过。第一次在 `out/web/debug` 查找同名 target
@@ -875,7 +915,7 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
 | layer/node tree | `buildNodeTree` 从 +528 dispatch 取 `layer` TJS Array，递归 helper 直接消费各 raw layer dispatch；节点独立 CopyRef `frameList/emoteEdit/particleMotionList/stencilCompositeMaskLayerList` | 树形、节点数、label map、标量字段、type 分支及 stencil 指针 vector 均由 raw dispatch 驱动；`snapshotCompatibility` 递归参数、decoded `psbNode/emoteEditDict` owner 已删除 | CLOSED |
 | node label/path | node+0 持有 raw `label` ttstr；Player+24 raw-label map 与 HM3 slash-path map 是两个独立 `ttstr` 键空间；action event 从 node+0 构造 String variant | `MotionNode::layerName`、Player+24 map、HM3 path builder、layer getter、事件和 child/render consumers 均直接传递 `ttstr`；只在日志/JSON 边界 narrow | CLOSED |
 | frame slot/evaluator | `parseFrame@0x6926B4` 接收 raw `frameList+index` 且只 parse；`mergeFrameContent@0x692AB0` 再按 slot index 取 content，保留 raw 字符串/variant、32 数值 mesh 与两槽 merged 状态 | live 节点已按 raw `frameListVariant` 实现 selective reset、parse/merge 分离、raw owner、mesh 32 数值、init/reseek/forward/back/modified 重建；node 0 按 `0x6BB4D4` 始终是 synthetic root 并直接复制 delta。旧 decoded/legacy/test model 已整体删除 | CLOSED |
-| source texture | `0x6948E8/0x695DE8` 从 RM HashMap A 的 record.root 导航；`0x695DE8` 同时被 Player 与 render-time getter `0x6F1060` 调用；prepared item 在 `0x6C360C` 直接保存 `SourceState*`，`0x6AE154..0x6AE188` 在 getter 后现场重读 rect；`0x6D5C68` 则使用 direct getter `0x6F67CC`；非 atlas 路径把 `SourceState.object` 经 `0x6C1B70` 送入按 `(full Variant key,src,blendMode)` 命中的 `SourceCache_loadSource@0x6A7BA8` | mapped record、两表及 unload 生命周期已复原；2026-07-23 又恢复共享 `0x695DE8` 边界、两种 getter、item→SourceState 直接 alias、getter 后 rect 重读、object-only fallback、精确 cache tuple、Player 常驻 descriptor/color Dictionaries、公开 NCB `(source,descriptor)`、分支内重复资源调用与字段写序；atlas value-record/rect/backpointer、两阶段 decode、逐 record Update/free 与尺寸均已纠正。`Player.loadSource(name)` 仅是额外 Web compatibility helper，不污染精确 cache | AUDITED PRODUCTION SITES + EXTRA COMPATIBILITY SURFACE |
+| source texture | `0x6948E8/0x695DE8` 从 RM HashMap A 的 record.root 导航；`0x695DE8` 同时被 Player 与 render-time getter `0x6F1060` 调用；prepared item 在 `0x6C360C` 直接保存 `SourceState*`，`0x6AE154..0x6AE188` 在 getter 后现场重读 rect；`0x6D5C68` 则使用 direct getter `0x6F67CC`；非 atlas 的 `0x6C1B70` 先按 Object dispatch identity 分流：内部 Layer 命中时 clone 到 work Layer 并现场 tint，否则才进入按 `(full Variant key,src,blendMode)` 命中的 `SourceCache_loadSource@0x6A7BA8` | mapped record、两表及 unload 生命周期已复原；2026-07-23 又恢复共享 `0x695DE8` 边界、两种 getter、item→SourceState 直接 alias、getter 后 rect 重读、完整 Player resolver、精确 cache tuple、Player 常驻 descriptor/color Dictionaries、两只 one-shot 内部 Layer、公开 NCB `(source,descriptor)`、分支内重复资源调用与字段写序；atlas value-record/rect/backpointer、两阶段 decode、逐 record Update/free 与尺寸均已纠正。`Player.loadSource(name)` 仅是额外 Web compatibility helper，不污染精确 cache | AUDITED PRODUCTION SITES + EXTRA COMPATIBILITY SURFACE |
 | variable query/interpolation | D3D 五个枚举方法是无条件 TODO throw；Emote range/frameList 读取 Engine HM5/+1248，HM5 miss 才递归 Player+384 参数表和所有子 Player；updateLayers 无条件调用 `0x6BBE20` 遍历 +1296 var-track deque | 五个 D3D wrapper、range/frameList 与 updateLayers live 插值均已切到 raw Engine/Player owner；旧 snapshot frame/range 查询及首帧旁路已删除 | CLOSED |
 | Player variableKeys | getter 直接遍历 Player+1296 `std::deque<VariableLabelScope>`，每次分配并返回一个新 Array；没有 setter、Player 缓存或 motion-load 副作用 | 数据源与 owner 已对齐；`createTJSArrayWithItems_guess` 复刻 `sub_704CB8` 的 Array Variant + borrowed Items 组合，getter 直接按 deque 顺序 emplace | CLOSED |
 | Player parameter table | `initNonEmoteMotion` 从 +528 读 `parameterize/parameter`；+384 是 56B vector，+408 是 `multimap<ttstr,entry*>`，并注册到当前 Player 及父链 | helper 已改为 raw `tTJSVariant` 输入，`MotionParameterEntry::id` 已改为 `ttstr`，decoded `motionObject/contentObject` 与其额外 owner 已删除 | CLOSED |
@@ -992,10 +1032,12 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
     `sub_6F67CC`，只返回现有 `SourceState.texture`；只有
     `D3DAdaptor_renderFromPlayer@0x6ADE24` 传入 `sub_6F1060`。
     `sub_6F1060` 与 PrivateMotionGLL `0x6DE738` 的 fallback 都把 helper 调用后的
-    `SourceState.object` 直接交给 `sub_6C1B70`，不读取 `source.path`。本地生产路径现按
-    `(commandKey,commandSrc,blendMode)` 精确匹配，color 仅触发原节点重烘焙，incoming
-    object 只在 bake 调用期间借用，且禁止把 module key 当 storage path。后续 fresh 证据已
-    恢复公开 NCB `(source,descriptor)`；剩余 `Player.loadSource(name)` 是独立 Web-only 兼容 helper，
+    `SourceState.object` 直接交给 `sub_6C1B70`，不读取 `source.path`。2026-07-23 对该函数的
+    完整复核又证明它先按 source/internal Layer 的 Object dispatch identity 分流：命中时
+    `work.assignImages(internal)` 并现场四角 tint，只有 fallback 才按
+    `(commandKey,commandSrc,blendMode)` 精确命中 SourceCache；color 仅触发原 cache 节点重烘焙，
+    incoming object 只在 bake 调用期间借用，且禁止把 module key 当 storage path。公开 NCB
+    `(source,descriptor)` 已恢复；剩余 `Player.loadSource(name)` 是独立 Web-only 兼容 helper，
     不是 alias cache 或 NCB 替代实现。
     因此旧“source texture 整链 CLOSED”表述只可保留为对当时 raw owner/map 拓扑的历史
     结论，不得再外推为未经逐调用者复核的 100% 证明。
@@ -1006,10 +1048,10 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
     `Math.RandomGenerator` 由 RM ctor 构造并持有。本地已删除每 Player 重复 RNG 及 child
     传播，直接沿 `_resourceManager` dispatch 调用。同时保留 ctor 对同一 RM dispatch 的
     三份独立 Variant owner（findSource / render SourceCache / canonical+random），并在
-    第二、三份 RM owner 之间持有 descriptor/color 两只 Dictionary，构造时执行
-    `descriptor.color = colors`。声明顺序为 findSource → render SourceCache → descriptor
-    → colors → canonical，使普通 C++ 逆序析构恢复 canonical → colors → descriptor →
-    render SourceCache → findSource 的对象生命周期。
+    第二、三份 RM owner 之间依次持有 descriptor、内部 Layer、color Dictionary、work Layer；
+    ctor 将两只 Layer slot 置 Void，并执行 `descriptor.color = colors`，实际 Layer 由
+    `sub_6CE19C` one-shot 创建。相关 owner 的语义顺序为 findSource → render SourceCache →
+    descriptor → internal → colors → work → canonical；dtor 以相反相对顺序释放。
     相关旧 analysis/memory 同步就地纠正。
 44c. fresh `SourceCache_ctor@0x6A78F4`、`trim@0x6A6B08`、
     `loadSource@0x6A7BA8`、`clearCache@0x6A8438` 与
@@ -1024,10 +1066,12 @@ Android runtime oracle 已实现但本轮无连接设备、尚未取得真实结
     RM 又把完整 Variant CopyCtor 给 SourceCache base；不再降成 raw dispatch 后重建 closure。
     production route 的容量、命中顺序、owner/bufLayer 构造链现已复刻。2026-07-23 fresh
     `loadSource@0x6A7BA8`、节点 copier `0x6EAC60`、bake `0x6A6BE0` 与 Player caller
-    `0x6C1B70` 又纠正了两项旧结论：源码容器是 `std::list<Entry>`，不是手写 intrusive
+    `0x6C1B70` 又纠正了三项旧结论：源码容器是 `std::list<Entry>`，不是手写 intrusive
     list；Entry 身份是完整 `tTJSVariant key + ttstr src + blendMode`，color 仅为 mutable
-    payload。公开 NCB 签名现为 `(iTJSDispatch2 *source, iTJSDispatch2 *descriptor) -> Layer`，
-    color mismatch 的节点复制/旧节点析构和 Player 常驻 descriptor/color Dictionary 均已落地。
+    payload；`0x6C1B70` 本身属于 Player 且含内部 Layer identity fast path，并非
+    SourceCache fallback wrapper。公开 NCB 签名现为
+    `(iTJSDispatch2 *source, iTJSDispatch2 *descriptor) -> Layer`，color mismatch 的节点复制/
+    旧节点析构、Player 常驻 descriptor/color Dictionary 与内部/work Layer 链均已落地。
     `Player.loadSource(name)` 的 by-name helper 仍是独立 Web 兼容面，但不再污染精确 cache。
 45. D3DEmotePlayer 的 `countVariables`、`getVariableLabelAt`、
     `countVariableFrameAt`、`getVariableFrameLabelAt`、

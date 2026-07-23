@@ -61,7 +61,7 @@ libkrkr2.so RenderNode 的字段偏移在 `node` 结构上（Motion 节点本体
 | **`sub_6D5164` @ 0x6D5164** | 调 `sub_6C2334` 构建 mainList + 用 `sub_6D4F00` 做 sort | `PlayerRenderItems.cpp::prepareRenderItems()` | build + sort + bool 返回均已建模；`player+544` type-tag gate 映射为 `hasMotionContent()` |
 | **`sub_6C2334` @ 0x6C2334** | 遍历 node deque，按 nodeType mask 构建 flat mainList + 特殊 auxList | `PlayerRenderItems.cpp::appendPreparedRenderItems()` | **主体已实现** — mask 为 `_preview ? 0x1449 : 0x1441`；type3 Branch A wrapper、普通 item、type12 aux/child list 和持久 node-owned item 均已落地；main/aux 由 caller-stack 持有 |
 | `sub_6D5264` Player_applyTranslateOffset | 给 mainList 每项加 cameraOffset | `PlayerRenderItems.cpp::applyPreparedRenderItemTranslateOffsets(mainList)` | 已实现为独立后处理，只遍历 mainList |
-| **`sub_6C4E28` @ 0x6C4E28** | 两 pass：leafLayer 渲染 + auxList 复合聚合 | `PlayerRenderExecute.cpp::buildRenderCommands()` | leaf 与 aux 复合 pass 已拆开；aux 来源已包含 type3 Branch A 与 type12 |
+| **`sub_6C4E28` @ 0x6C4E28** | 两 pass：leafLayer 渲染 + auxList 复合聚合 | `PlayerRenderExecute.cpp::buildRenderCommands()` | leaf 与 aux 复合 pass 已拆开；aux 来源已包含 type3 Branch A 与 type12；leaf source caller 现场写 blend=0/四色白，再进入 Player-owned 完整 `0x6C1B70`（内部 Layer identity fast path / ResourceManager fallback），未污染普通 execute 的 item payload |
 | **`sub_6C7440` @ 0x6C7440** | 最终合成主循环，迭代 mainList，direct / buffered 后提交 | `PlayerRenderExecute.cpp::executeLayerRenderCommands()` | **部分实现** — fresh `0x6C7B44..0x6C7B9C` 证据表明结构 gate 是 blend 低位分流，随后 `clearEnabled || item+264 != 0` 强制 buffered；`meshType` 和 `item+244` 不是这个 gate。本地仍在外层对 `parentItem` 直接 `continue`，且内层 direct 判据混入 `hasChildren/visibleAncestorIndex`，导致原生的 parent buffered→祖先 mask→`operateRect` 链不可达（见 §7.3） |
 
 ---

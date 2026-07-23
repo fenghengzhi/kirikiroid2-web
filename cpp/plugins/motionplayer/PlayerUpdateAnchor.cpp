@@ -13,12 +13,9 @@ namespace motion {
             auto &an = nodes[ai];
             if (an.nodeType != 10 || !an.accumulated.active) continue;
             _needsInternalAssignImages = true;
-            // 0x6C06E8 gate: binary tests `Player+592 == 0.0 || !*(Player+612)`.
-            // Player+592 = _deltaTime (NOT _frameLastTime; Player+904 is a dead
-            // field — ctor-zeroed only, no binary backing, see Player.h). Player+612
-            // = the post-draw snapshot of +613 (_internalRenderLayerReady, written
-            // by updateLayerAfterDrawLike_0x6CE7D8) — "the internal render Layer
-            // was materialized last frame", which the w/h read below depends on.
+            // 0x6C06E8 gates on a zero delta or a clear post-draw snapshot.
+            // The snapshot records whether the internal render Layer was
+            // materialized last frame, which the width/height read below needs.
             // type-10 anchors are absent from the logo fixtures, so this path is
             // inert there.
             if (_deltaTime == 0.0 || !_internalRenderLayerReady) {
@@ -27,34 +24,44 @@ namespace motion {
                 continue;
             }
             an.anchorEnabled = true;
-            an.source.valid = true;
-            // Read width/height (0x6C0790..0x6C0848): the binary reads them from
-            // the per-PLAYER internal render Layer — sub_A0F5E0(player+696) then
-            // PropGet(L"width"/L"height") — so all anchor nodes share ONE w/h =
-            // that Layer's size (set to the window size by setLayerSizeLike_
-            // 0x6CE19C). The port's mirror is _internalRenderLayer; the +612 gate
-            // above guarantees it was materialized last frame. NO `<=0?32` clamp
-            // (the binary has none; a failed PropGet yields w=0 -> pow(scale*32/0)
-            // = inf, the real binary behavior).
-            double cw = 0.0;
-            double ch = 0.0;
-            if (_internalRenderLayer.Type() == tvtObject) {
-                iTJSDispatch2 *rl = _internalRenderLayer.AsObjectNoAddRef();
-                tTJSVariant wv;
-                tTJSVariant hv;
-                if (rl && TJS_SUCCEEDED(rl->PropGet(0, TJS_W("width"), nullptr,
-                                                    &wv, rl))) {
-                    cw = static_cast<double>(static_cast<tjs_int>(wv));
-                }
-                if (rl && TJS_SUCCEEDED(rl->PropGet(0, TJS_W("height"), nullptr,
-                                                    &hv, rl))) {
-                    ch = static_cast<double>(static_cast<tjs_int>(hv));
-                }
+            {
+                ncbPropAccessor internal{tTJSVariant(_internalRenderLayer)};
+                // sub_6C0528 @0x6C075C CopyRefs the Player-owned internal Layer
+                // into the node source before publishing source.valid. This
+                // exact object identity is sub_6C1B70's fast-path predicate.
+                an.source.object = _internalRenderLayer;
+                an.source.valid = true;
+                // The two dimensions are independently probed and then read
+                // once; a failed probe yields zero. There is deliberately no
+                // positive-size clamp, so the later scale calculation retains
+                // the original divide-by-zero boundary.
+                const auto readDimension = [&](const tjs_char *member) -> tjs_int {
+                    {
+                        tTJSVariant probe;
+                        if(TJS_FAILED(internal.GetDispatch()->PropGet(
+                               TJS_MEMBERMUSTEXIST, member, nullptr, &probe,
+                               internal.GetDispatch()))) {
+                            return 0;
+                        }
+                    }
+                    tTJSVariant value;
+                    (void)internal.GetDispatch()->PropGet(
+                        0, member, nullptr, &value, internal.GetDispatch());
+                    return static_cast<tjs_int>(value.AsInteger());
+                };
+                an.source.width = static_cast<double>(
+                    readDimension(TJS_W("width")));
+                const double height = static_cast<double>(
+                    readDimension(TJS_W("height")));
+                const double originX = an.source.width * 0.5;
+                an.source.clipLeft = 0.0;
+                an.source.clipTop = 0.0;
+                an.source.height = height;
+                an.source.originX = originX;
+                an.source.originY = height * 0.5;
+                an.source.clipRight = 1.0;
+                an.source.clipBottom = 1.0;
             }
-            an.source.width = cw;
-            an.source.height = ch;
-            an.source.originX = cw * 0.5;
-            an.source.originY = ch * 0.5;
 
             // Damping exponent — byte-verified disasm @0x6C0884-0x6C08B8:
             //   v27     = (*a1+592)/(*a1+1168) = _deltaTime / _speedMul
@@ -80,9 +87,9 @@ namespace motion {
 
             // Scale damping (0x6C08E0..0x6C0924)
             an.accumulated.scaleX = std::pow(
-                an.accumulated.scaleX * 32.0 / cw, dampPow);
+                an.accumulated.scaleX * 32.0 / an.source.width, dampPow);
             an.accumulated.scaleY = std::pow(
-                an.accumulated.scaleY * 32.0 / ch, dampPow);
+                an.accumulated.scaleY * 32.0 / an.source.height, dampPow);
 
             // Slant damping (0x6C0924..0x6C0938)
             an.accumulated.slantX *= dampPow;

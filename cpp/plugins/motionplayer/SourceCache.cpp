@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 
@@ -19,6 +21,66 @@
 #include "tjsUtils.h"
 
 namespace {
+
+    static_assert(sizeof(tjs_uint) == 4 && sizeof(tjs_int) == 4);
+
+    struct TintRectLike_0x6A7518 {
+        tjs_int x;
+        tjs_int y;
+        tjs_int width;
+        tjs_int height;
+    };
+
+    constexpr tjs_int signedW32(tjs_uint bits) noexcept {
+        return bits <= 0x7fffffffu
+            ? static_cast<tjs_int>(bits)
+            : -1 - static_cast<tjs_int>(~bits);
+    }
+
+    constexpr tjs_int addW32(tjs_int left, tjs_int right) noexcept {
+        return signedW32(
+            static_cast<tjs_uint>(left) + static_cast<tjs_uint>(right));
+    }
+
+    constexpr tjs_int subtractW32(tjs_int left, tjs_int right) noexcept {
+        return signedW32(
+            static_cast<tjs_uint>(left) - static_cast<tjs_uint>(right));
+    }
+
+    constexpr tjs_int multiplyW32(tjs_int left, tjs_int right) noexcept {
+        return signedW32(
+            static_cast<tjs_uint>(left) * static_cast<tjs_uint>(right));
+    }
+
+    tjs_int divideSignedW32LikeArm(tjs_int dividend,
+                                    tjs_int divisor) noexcept {
+        if(divisor == 0) {
+            return 0;
+        }
+        if(dividend == signedW32(0x80000000u) && divisor == -1) {
+            return dividend;
+        }
+        return dividend / divisor;
+    }
+
+    tjs_int lerpChannelLike_0x6A7518(tjs_int from,
+                                     tjs_int to,
+                                     tjs_int position,
+                                     tjs_int span) noexcept {
+        const tjs_int scaled = multiplyW32(
+            position, subtractW32(to, from));
+        return addW32(from, divideSignedW32LikeArm(scaled, span));
+    }
+
+    std::uint8_t multiplyTintChannelLike_0x6A7518(
+        tjs_int tint,
+        std::uint8_t pixel,
+        tjs_uint divisor) noexcept {
+        const tjs_uint product =
+            static_cast<tjs_uint>(tint) * static_cast<tjs_uint>(pixel);
+        const tjs_uint value = product / divisor;
+        return static_cast<std::uint8_t>(value >= 255u ? 255u : value);
+    }
 
     tTJSNI_BaseLayer *resolveNativeLayer(iTJSDispatch2 *layerObject);
 
@@ -67,9 +129,33 @@ namespace {
         };
     }
 
+    tjs_int propGetIntOnceLike_0x6635DC(iTJSDispatch2 *object,
+                                        const tjs_char *member,
+                                        tjs_uint32 flags,
+                                        tjs_uint32 *hint) {
+        tTJSVariant value;
+        (void)object->PropGet(flags, member, hint, &value, object);
+        return static_cast<tjs_int>(value.AsInteger());
+    }
+
+    tjs_int propGetIntAfterProbeLike_0x6C1B70(
+        iTJSDispatch2 *object,
+        const tjs_char *member,
+        tjs_uint32 *hint) {
+        {
+            tTJSVariant probe;
+            if(TJS_FAILED(object->PropGet(
+                   TJS_MEMBERMUSTEXIST, member, hint, &probe, object))) {
+                return 0;
+            }
+        }
+        return propGetIntOnceLike_0x6635DC(object, member, 0, hint);
+    }
+
     void applyPackedCornerTintLike_0x6A7518(
         const tTJSVariant &layer,
         const tjs_int (&colors)[4],
+        const TintRectLike_0x6A7518 &rect,
         bool halfAlphaBlend) {
         const auto c0 = static_cast<std::uint32_t>(colors[0]);
         const auto c1 = static_cast<std::uint32_t>(colors[1]);
@@ -89,67 +175,88 @@ namespace {
         }
 
         auto *nativeLayer = resolveNativeLayer(layer.AsObjectNoAddRef());
-        tTVPBaseTexture &bitmap = *nativeLayer->GetMainImage();
+        const tTVPRect clip = nativeLayer->GetClip();
+        auto *pixelBuffer = static_cast<std::uint8_t *>(
+            nativeLayer->GetMainImagePixelBufferForWrite());
+        const tjs_int pitch = nativeLayer->GetMainImagePixelBufferPitch();
+
+        const tjs_int left = std::max(clip.left, rect.x);
+        const tjs_int top = std::max(clip.top, rect.y);
+        const tjs_int right =
+            std::min(clip.right, addW32(rect.x, rect.width));
+        const tjs_int bottom =
+            std::min(clip.bottom, addW32(rect.y, rect.height));
+        const tjs_uint colorDivisor = halfAlphaBlend ? 128u : 255u;
+        if(top >= bottom) {
+            return;
+        }
 
         const auto topLeft = unpackPackedRgba(c0);
         const auto topRight = unpackPackedRgba(c1);
         const auto bottomRight = unpackPackedRgba(c2);
         const auto bottomLeft = unpackPackedRgba(c3);
-        const int width = static_cast<int>(bitmap.GetWidth());
-        const int height = static_cast<int>(bitmap.GetHeight());
-        if(width <= 0 || height <= 0) {
-            return;
-        }
+        const tjs_int spanX = subtractW32(rect.width, 1);
+        const tjs_int spanY = subtractW32(rect.height, 1);
+        const std::int64_t firstRowOffset =
+            static_cast<std::int64_t>(multiplyW32(top, pitch)) +
+            static_cast<std::int64_t>(multiplyW32(left, 4));
+        auto *row = reinterpret_cast<std::uint8_t *>(
+            reinterpret_cast<std::uintptr_t>(pixelBuffer) +
+            static_cast<std::uintptr_t>(firstRowOffset) + 1u);
 
-        const int colorDivisor = halfAlphaBlend ? 128 : 255;
-        // sub_6A7518 uses the literal source expressions width-1/height-1.
-        // Do not add a "safe" one-pixel divisor: the original source leaves
-        // that degenerate boundary to the target compiler/CPU.
-        const int spanX = width - 1;
-        const int spanY = height - 1;
-        const auto lerpChannel = [](int a, int b, int pos, int span) -> int {
-            return a + (pos * (b - a)) / span;
-        };
+        tjs_int y = top;
+        for(;;) {
+            // 0x6A76FC skips only the per-pixel body when left >= right; the
+            // outer row loop still advances until bottom.
+            if(left < right) {
+                const tjs_int rowPosition = subtractW32(y, rect.y);
+                const tjs_int rowLeftR = lerpChannelLike_0x6A7518(
+                    topLeft[0], bottomLeft[0], rowPosition, spanY);
+                const tjs_int rowLeftG = lerpChannelLike_0x6A7518(
+                    topLeft[1], bottomLeft[1], rowPosition, spanY);
+                const tjs_int rowLeftB = lerpChannelLike_0x6A7518(
+                    topLeft[2], bottomLeft[2], rowPosition, spanY);
+                const tjs_int rowLeftA = lerpChannelLike_0x6A7518(
+                    topLeft[3], bottomLeft[3], rowPosition, spanY);
+                const tjs_int rowRightR = lerpChannelLike_0x6A7518(
+                    topRight[0], bottomRight[0], rowPosition, spanY);
+                const tjs_int rowRightG = lerpChannelLike_0x6A7518(
+                    topRight[1], bottomRight[1], rowPosition, spanY);
+                const tjs_int rowRightB = lerpChannelLike_0x6A7518(
+                    topRight[2], bottomRight[2], rowPosition, spanY);
+                const tjs_int rowRightA = lerpChannelLike_0x6A7518(
+                    topRight[3], bottomRight[3], rowPosition, spanY);
 
-        for(int y = 0; y < height; ++y) {
-            auto *row = static_cast<std::uint8_t *>(
-                bitmap.GetScanLineForWrite(static_cast<tjs_uint>(y)));
-            const int rowLeftR =
-                lerpChannel(topLeft[0], bottomLeft[0], y, spanY);
-            const int rowLeftG =
-                lerpChannel(topLeft[1], bottomLeft[1], y, spanY);
-            const int rowLeftB =
-                lerpChannel(topLeft[2], bottomLeft[2], y, spanY);
-            const int rowLeftA =
-                lerpChannel(topLeft[3], bottomLeft[3], y, spanY);
-            const int rowRightR =
-                lerpChannel(topRight[0], bottomRight[0], y, spanY);
-            const int rowRightG =
-                lerpChannel(topRight[1], bottomRight[1], y, spanY);
-            const int rowRightB =
-                lerpChannel(topRight[2], bottomRight[2], y, spanY);
-            const int rowRightA =
-                lerpChannel(topRight[3], bottomRight[3], y, spanY);
-
-            for(int x = 0; x < width; ++x) {
-                auto *dst = row + static_cast<size_t>(x) * 4u;
-                const int tintR =
-                    lerpChannel(rowLeftR, rowRightR, x, spanX);
-                const int tintG =
-                    lerpChannel(rowLeftG, rowRightG, x, spanX);
-                const int tintB =
-                    lerpChannel(rowLeftB, rowRightB, x, spanX);
-                const int tintA =
-                    lerpChannel(rowLeftA, rowRightA, x, spanX);
-                dst[2] = static_cast<std::uint8_t>(std::min(
-                    255, tintR * static_cast<int>(dst[2]) / colorDivisor));
-                dst[1] = static_cast<std::uint8_t>(std::min(
-                    255, tintG * static_cast<int>(dst[1]) / colorDivisor));
-                dst[0] = static_cast<std::uint8_t>(std::min(
-                    255, tintB * static_cast<int>(dst[0]) / colorDivisor));
-                dst[3] = static_cast<std::uint8_t>(std::min(
-                    255, tintA * static_cast<int>(dst[3]) / 255));
+                auto *dst = row;
+                tjs_int x = left;
+                do {
+                    const tjs_int columnPosition = subtractW32(x, rect.x);
+                    const tjs_int tintR = lerpChannelLike_0x6A7518(
+                        rowLeftR, rowRightR, columnPosition, spanX);
+                    const tjs_int tintG = lerpChannelLike_0x6A7518(
+                        rowLeftG, rowRightG, columnPosition, spanX);
+                    const tjs_int tintB = lerpChannelLike_0x6A7518(
+                        rowLeftB, rowRightB, columnPosition, spanX);
+                    const tjs_int tintA = lerpChannelLike_0x6A7518(
+                        rowLeftA, rowRightA, columnPosition, spanX);
+                    dst[1] = multiplyTintChannelLike_0x6A7518(
+                        tintR, dst[1], colorDivisor);
+                    dst[0] = multiplyTintChannelLike_0x6A7518(
+                        tintG, dst[0], colorDivisor);
+                    dst[-1] = multiplyTintChannelLike_0x6A7518(
+                        tintB, dst[-1], colorDivisor);
+                    dst[2] = multiplyTintChannelLike_0x6A7518(
+                        tintA, dst[2], 255u);
+                    x = addW32(x, 1);
+                    dst += 4;
+                } while(x < right);
             }
+
+            y = addW32(y, 1);
+            if(y >= bottom) {
+                break;
+            }
+            row += static_cast<std::ptrdiff_t>(pitch);
         }
     }
 
@@ -531,13 +638,64 @@ namespace motion {
         return loadRawSourceVariant(player, name, resolvedKey);
     }
 
+    tTJSVariant Player::resolveRenderSourceLike_0x6C1B70_guess(
+        const tTJSVariant &sourceObject) {
+        tTJSVariant result;
+        // sub_6C1B70 @0x6C1BAC compares only the two Variant Object dispatch
+        // pointers.  Typed-null Objects therefore also compare equal; do not
+        // add a non-null safety gate that the binary does not have.
+        if(sourceObject.Type() == tvtObject &&
+           _internalRenderLayer.Type() == tvtObject &&
+           sourceObject.AsObjectNoAddRef() ==
+               _internalRenderLayer.AsObjectNoAddRef()) {
+            ncbPropAccessor descriptor{tTJSVariant(_sourceDescriptor)};
+            const tjs_int blendMode = propGetIntOnceLike_0x6635DC(
+                descriptor.GetDispatch(), TJS_W("blendMode"), 0,
+                &detail::blendModeMemberHint_guess);
+
+            ncbPropAccessor color{tTJSVariant(_sourceColors)};
+            tjs_int colors[4];
+            for(tjs_int index = 0; index < 4; ++index) {
+                tTJSVariant value;
+                (void)color.GetDispatch()->PropGetByNum(
+                    0, index, &value, color.GetDispatch());
+                colors[static_cast<std::size_t>(index)] =
+                    static_cast<tjs_int>(value.AsInteger());
+            }
+
+            ncbPropAccessor work{
+                tTJSVariant(_internalSourceWorkLayer_guess)};
+            work.FuncCall(0, TJS_W("assignImages"),
+                          &detail::assignImagesMemberHint_guess, &result,
+                          _internalRenderLayer);
+            const tjs_int height = propGetIntAfterProbeLike_0x6C1B70(
+                work.GetDispatch(), TJS_W("height"),
+                &detail::heightMemberHint_guess);
+            const tjs_int width = propGetIntAfterProbeLike_0x6C1B70(
+                work.GetDispatch(), TJS_W("width"),
+                &detail::widthMemberHint_guess);
+            applyPackedCornerTintLike_0x6A7518(
+                _internalSourceWorkLayer_guess, colors,
+                TintRectLike_0x6A7518{0, 0, width, height},
+                (blendMode & 0xF0) == 0x10);
+            return result;
+        }
+
+        ncbPropAccessor cache{tTJSVariant(_sourceCacheObject)};
+        cache.FuncCall(0, TJS_W("loadSource"),
+                       &detail::loadSourceMemberHint_guess, &result,
+                       sourceObject, _sourceDescriptor);
+        return result;
+    }
+
     tTJSVariant SourceCache::loadRenderSourceLayerFromItemLike_0x6C1B70(
         Player &player,
         const detail::PreparedRenderItem &item) {
         // Player_ctor @0x6CED30 owns one persistent descriptor Dictionary and
         // one persistent color Dictionary.  Every 0x6C1B70 caller overwrites
-        // these exact objects before dispatching ResourceManager.loadSource.
-        ncbPropAccessor descriptor(player._sourceDescriptor);
+        // these exact objects before entering the Player resolver; only its
+        // fallback branch dispatches ResourceManager.loadSource.
+        ncbPropAccessor descriptor{tTJSVariant(player._sourceDescriptor)};
         descriptor.SetValue(TJS_W("key"), item.commandKey, TJS_MEMBERENSURE,
                             &detail::commandKeyMemberHint_guess);
         descriptor.SetValue(TJS_W("src"), item.commandSrc, TJS_MEMBERENSURE,
@@ -547,7 +705,7 @@ namespace motion {
                             TJS_MEMBERENSURE,
                             &detail::blendModeMemberHint_guess);
 
-        ncbPropAccessor color(player._sourceColors);
+        ncbPropAccessor color{tTJSVariant(player._sourceColors)};
         for(tjs_int index = 0; index < 4; ++index) {
             color.SetValue(
                 index,
@@ -557,12 +715,7 @@ namespace motion {
         }
 
         auto &source = *item.sourceState;
-        ncbPropAccessor cache(player._sourceCacheObject);
-        tTJSVariant result;
-        cache.FuncCall(0, TJS_W("loadSource"),
-                       &detail::loadSourceMemberHint_guess, &result,
-                       source.object, player._sourceDescriptor);
-        return result;
+        return player.resolveRenderSourceLike_0x6C1B70_guess(source.object);
     }
 
     iTVPTexture2D *
@@ -691,40 +844,45 @@ namespace motion {
         const tjs_int height = layer.getIntValue(TJS_W("height"), 0);
         entry.byteWeight = 4 * width * height;
 
-        const bool software = TVPGetRenderManager()->IsSoftware();
         applyPackedCornerTintLike_0x6A7518(
-            entry.layer, entry.colors, (entry.blendMode & 0xF0) != 0);
+            entry.layer, entry.colors,
+            TintRectLike_0x6A7518{0, 0, width, height},
+            (entry.blendMode & 0xF0) != 0);
 
         const tjs_int lowBlend = entry.blendMode & 0x0F;
-        if(static_cast<tjs_uint>(lowBlend - 1) < 2u &&
-           (software || !resolvePrivateMotionGLLNativeLike_0x6DE24C(
-                            entry.layer.AsObjectNoAddRef()))) {
-            ncbPropAccessor buffer(_bufLayer);
-            buffer.FuncCall(0, TJS_W("setSize"),
-                            &detail::setSizeMemberHint_guess, nullptr,
-                            tTJSVariant(width), tTJSVariant(height));
-            buffer.FuncCall(0, TJS_W("copyRect"),
-                            &detail::copyRectMemberHint_guess, nullptr,
-                            tTJSVariant(0), tTJSVariant(0), entry.layer,
-                            tTJSVariant(0), tTJSVariant(0),
-                            tTJSVariant(width), tTJSVariant(height));
-            layer.FuncCall(0, TJS_W("fillRect"),
-                           &detail::fillRectMemberHint_guess, nullptr,
-                           tTJSVariant(0), tTJSVariant(0),
-                           tTJSVariant(width), tTJSVariant(height),
-                           tTJSVariant(static_cast<tjs_int>(0xFF000000u)));
-            layer.FuncCall(0, TJS_W("operateRect"),
-                           &detail::operateRectMemberHint_guess, nullptr,
-                           tTJSVariant(0), tTJSVariant(0), _bufLayer,
-                           tTJSVariant(0), tTJSVariant(0),
-                           tTJSVariant(width), tTJSVariant(height),
-                           tTJSVariant(15));
-            if(lowBlend == 2) {
-                layer.FuncCall(0, TJS_W("adjustGamma"),
-                               &detail::adjustGammaMemberHint_guess, nullptr,
-                               tTJSVariant(1), tTJSVariant(255), tTJSVariant(0),
-                               tTJSVariant(1), tTJSVariant(255), tTJSVariant(0),
-                               tTJSVariant(1), tTJSVariant(255), tTJSVariant(0));
+        if(static_cast<tjs_uint>(lowBlend - 1) < 2u) {
+            const bool software = TVPGetRenderManager()->IsSoftware();
+            if(software || !resolvePrivateMotionGLLNativeLike_0x6DE24C(
+                               entry.layer.AsObjectNoAddRef())) {
+                ncbPropAccessor buffer(_bufLayer);
+                buffer.FuncCall(0, TJS_W("setSize"),
+                                &detail::setSizeMemberHint_guess, nullptr,
+                                tTJSVariant(width), tTJSVariant(height));
+                buffer.FuncCall(0, TJS_W("copyRect"),
+                                &detail::copyRectMemberHint_guess, nullptr,
+                                tTJSVariant(0), tTJSVariant(0), entry.layer,
+                                tTJSVariant(0), tTJSVariant(0),
+                                tTJSVariant(width), tTJSVariant(height));
+                layer.FuncCall(0, TJS_W("fillRect"),
+                               &detail::fillRectMemberHint_guess, nullptr,
+                               tTJSVariant(0), tTJSVariant(0),
+                               tTJSVariant(width), tTJSVariant(height),
+                               tTJSVariant(
+                                   static_cast<tjs_int>(0xFF000000u)));
+                layer.FuncCall(0, TJS_W("operateRect"),
+                               &detail::operateRectMemberHint_guess, nullptr,
+                               tTJSVariant(0), tTJSVariant(0), _bufLayer,
+                               tTJSVariant(0), tTJSVariant(0),
+                               tTJSVariant(width), tTJSVariant(height),
+                               tTJSVariant(15));
+                if(lowBlend == 2) {
+                    layer.FuncCall(
+                        0, TJS_W("adjustGamma"),
+                        &detail::adjustGammaMemberHint_guess, nullptr,
+                        tTJSVariant(1), tTJSVariant(255), tTJSVariant(0),
+                        tTJSVariant(1), tTJSVariant(255), tTJSVariant(0),
+                        tTJSVariant(1), tTJSVariant(255), tTJSVariant(0));
+                }
             }
         }
     }

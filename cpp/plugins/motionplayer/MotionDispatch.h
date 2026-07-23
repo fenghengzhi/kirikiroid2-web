@@ -58,6 +58,10 @@ namespace motion::detail {
     extern tjs_uint32 operateRectMemberHint_guess; // 0x1AB82CC, "operateRect"
     extern tjs_uint32 adjustGammaMemberHint_guess; // 0x1AB82D0, "adjustGamma"
     extern tjs_uint32 fillRectMemberHint_guess;    // 0x1AB8270, "fillRect"
+    extern tjs_uint32 windowMemberHint_guess;      // 0x1AB84A0, "window"
+    extern tjs_uint32 piledCopyMemberHint_guess;   // 0x1AB84A4, "piledCopy"
+    extern tjs_uint32 assignImagesMemberHint_guess; // 0x1AB844C, "assignImages"
+    extern tjs_uint32 layerClassMemberHint_guess;  // 0x1AB853C, "Layer"
 
     // sub_697D34 @0x697D34. The input is a source-level ttstr value copied
     // into a mutable remainder; each separator-delimited prefix is pushed as

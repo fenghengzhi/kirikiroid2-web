@@ -70,29 +70,37 @@ namespace motion {
     // R-M9 Phase 1 scaffolding (M9 spike 2026-05-31; architecture confirmed
     // 2026-06-03 by full findSource-chain decompile, cluster K):
     //
-    // 2026-07-23 corrected 4-corner color chain:
+    // 2026-07-23 corrected internal-source and 4-corner color chain:
     //   1. Anchor 0x6C0528 damps + writes the 4 corner RGBA quads to
-    //      node+100/104/108/112.
-    //   2. 0x6C7440 @0x6c7944 (and identically 0x6C4E28 @0x6c5528) writes those
-    //      4 colors as index-properties 0..3 onto Player's persistent color
-    //      Dictionary at +716; +676 is the descriptor Dictionary and +656 is
-    //      a ResourceManager dispatch owner.
-    //   3. Source resolver 0x6C1B70 calls the ResourceManager dispatch's
-    //      inherited loadSource(source, descriptor) method.
+    //      the persistent node colors and publishes the Player-owned internal
+    //      Layer as that node's source object.
+    //   2. 0x6C7440 writes those four item colors as index-properties
+    //      0..3 onto Player's persistent color Dictionary.  The leaf-build
+    //      caller 0x6C4E28 is intentionally different: 0x6C52AC and
+    //      0x6C5300..0x6C5304 prepare blendMode=0 plus four 0xFFFFFFFF colors,
+    //      then 0x6C5480..0x6C5648 publishes that neutral payload.  The
+    //      descriptor and ResourceManager dispatch remain Player-owned.
+    //   3. Source resolver 0x6C1B70 compares source object identity with the
+    //      internal Layer. A match clones its images into the work Layer and
+    //      applies the prepared colors; otherwise it dispatches the inherited
+    //      ResourceManager/SourceCache loadSource(source, descriptor) method.
     //   4. sub_6A7518 returns for neutral/white colors. Its software branch
-    //      performs the per-pixel bilinear multiply (RGB /128 or /255, alpha
-    //      always /255); its GPU branch only queries and discards the
-    //      PrivateMotionGLL native instance.
+    //      consumes an XYWH rect, snapshots ClipRect before obtaining the
+    //      write buffer/pitch, and performs the W32 per-pixel bilinear
+    //      multiply (RGB /128 or /255, alpha always /255). A vertically
+    //      non-empty but horizontally empty intersection still advances each
+    //      row. Its GPU branch only queries and discards the PrivateMotionGLL
+    //      native instance.
     // After the bake the texture is drawn with positions + single blendMode +
     // single opacity only (the vertex builder sub_6C715C appends only (x,y)
     // pairs, tTJSVariant type 5, 20B stride; 0x6C7440/0x6C4E28 carry NO
     // color/opacity/rgba scalar to any operate*/copy primitive).
     //
-    // SourceCache now mirrors this exact branch split and uses std::list<Entry>
-    // identity `(full Variant key, src, blendMode)`; color is mutable payload,
-    // not part of the key. This is original behavior, not a platform-boundary
-    // approximation. The separate Win/KRKR texture-map topology and lifetime
-    // remain owned by each LoadedResourceRecord.
+    // Player owns the source-identity branch; SourceCache owns only the fallback
+    // cache and uses std::list<Entry> identity `(full Variant key, src,
+    // blendMode)`. Color is mutable payload, not part of the key. The separate
+    // Win/KRKR texture-map topology and lifetime remain owned by each
+    // LoadedResourceRecord.
     // Binary libkrkr2.so ResourceManager (0xE8 bytes, NCB registered at 0x6AB8BC)
     // exposes 12 TJS members and holds 3 internal containers + bufLayer +
     // spec int. CORRECTION 2026-07-18: the earlier phase-1 note that these

@@ -775,7 +775,6 @@ namespace motion {
                            bool skipUpdate = false);
         bool renderToCanvasLike_0x6C7440(
             tTJSVariant *target,
-            bool willCallUpdateLayerAfterDraw,
             detail::PreparedRenderItemList &mainList,
             detail::PreparedRenderItemList &auxList);
         bool renderToSeparateLayerAdaptor(iTJSDispatch2 *slaObject);
@@ -851,9 +850,14 @@ namespace motion {
         bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
                                         bool skipUpdate,
                                         detail::PreparedRenderItemList &mainList);
-        bool updateLayerAfterDrawLike_0x6CE7D8(tTJSVariant *target);
+        tTJSVariant resolveRenderSourceLike_0x6C1B70_guess(
+            const tTJSVariant &sourceObject);
+        void materializeInternalRenderLayersLike_0x6CE19C_guess(
+            const tTJSVariant &target);
+        bool updateLayerAfterDrawLike_0x6CE7D8(
+            const tTJSVariant &target);
         bool updateLayerAfterDraw(iTJSDispatch2 *targetLayerObject);
-        bool updateAccurateSLAAfterDraw(iTJSDispatch2 *targetLayerObject);
+        bool updateAccurateSLAAfterDraw(const tTJSVariant &target);
         bool renderFromPlayerLike_0x6ADE24(
             D3DAdaptor *adaptor,
             detail::PreparedRenderItemList &mainList);
@@ -1245,15 +1249,17 @@ namespace motion {
                                      // mislabeled the +1092 bool (now _preview)
                                      // as completionType; +1144 is the int.
         // Player_ctor @0x6CED30 retains the same ResourceManager dispatch in
-        // three independent Variants. Between its SourceCache and canonical
-        // call-routing owners it creates persistent descriptor/color
-        // Dictionaries and stores descriptor.color = colors. Declaration
-        // order preserves the matching reverse destruction topology.
+        // three independent Variants. This declaration sequence preserves the
+        // relative ownership order of the first two dispatches, descriptor,
+        // internal Layer, color Dictionary and internal-source work Layer.
+        // Player_dtor @0x6CFADC releases those six owners in reverse order;
+        // descriptor.color points to the persistent color Dictionary.
         tTJSVariant _findSourceResourceManager;
         tTJSVariant _sourceCacheObject;
         tTJSVariant _sourceDescriptor;
+        tTJSVariant _internalRenderLayer;
         tTJSVariant _sourceColors;
-        tTJSVariant _resourceManager;
+        tTJSVariant _internalSourceWorkLayer_guess;
         // Player pending slots +768/+776.  They are independent owners from
         // the live +984/+968 stealth slots and are released immediately after
         // Player_play/Player_setChara flush them.
@@ -1263,9 +1269,13 @@ namespace motion {
         // +960/+976 are `_chara`/`_motionKey` above.
         ttstr _stealthChara;
         ttstr _stealthMotion;
-        tTJSVariant _tags;
-        ttstr _meshline;  // Aligned to libkrkr2.so +1052: ttstr
+        // The third/canonical ResourceManager Variant follows the two live
+        // stealth strings, matching their relative reverse-destruction order in
+        // Player_dtor @0x6CFADC.
+        tTJSVariant _resourceManager;
         bool _busy = false;
+        ttstr _meshline;
+        tTJSVariant _tags;
 
         // Aligned to libkrkr2.so Player_updateLayers (0x6BB33C):
         // Camera velocity at player+784/792/800, damping at player+600
@@ -1297,11 +1307,10 @@ namespace motion {
         // (0x6C7440). Player.clear (0x6D2D80) consumes its bound before the
         // next draw resets and repopulates it.
         tTVPComplexRect _drawRegion;
-        bool _needsInternalAssignImages = false; // flag +613 for updateLayerAfterDraw
-        // +612: post-draw snapshot of +613. The binary updateLayerAfterDraw
-        // @0x6CE7F4 unconditionally copies +613 -> +612 each frame; anchor
-        // type-10 (0x6C0528) gates on it ("internal render Layer was materialized
-        // last frame") and reads its width/height as the per-player source size.
+        bool _needsInternalAssignImages = false;
+        // updateLayerAfterDraw @0x6CE7D8 unconditionally snapshots the producer
+        // flag each frame. Anchor type-10 (0x6C0528) gates on that snapshot and
+        // reads the internal Layer dimensions as its per-player source size.
         bool _internalRenderLayerReady = false;
 
         // === Motion / source state ===
@@ -1341,14 +1350,11 @@ namespace motion {
 
         // === TJS variant slots (Phase A6) ===
         // lastCanvas / lastViewParam cache the most recent draw target / view
-        // parameters. internalRenderLayer mirrors libkrkr2.so player+696 and
-        // is consumed by sub_6CE7D8 / sub_6CE938 post-draw paths.
-        // scratchWorkLayer is reused per-frame for sub_6C4E28-style clipping.
-        // drawAffineMatrix is the 2x3 affine applied during draw dispatch.
+        // parameters. The two internal Layers live in the constructor-order
+        // cluster above; drawAffineMatrix is the 2x3 affine applied during draw
+        // dispatch.
         tTJSVariant _lastCanvas;
         tTJSVariant _lastViewParam;
-        tTJSVariant _internalRenderLayer;
-        tTJSVariant _scratchWorkLayer;
         std::array<double, 6> _drawAffineMatrix{1.0, 0.0, 0.0,
                                                 1.0, 0.0, 0.0};
         // libkrkr2.so Player+611. Player_ctor@0x6CED30 initializes it to

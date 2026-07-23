@@ -12,6 +12,10 @@ namespace motion {
     // Operates on persistent MotionNode deque instead of re-walking PSB tree.
     void Player::updateLayers() {
         detail::motionTraceRecordUpdatePlayer(this);
+        // Player_updateLayers @0x6BB33C clears the producer flag before any
+        // phase can set it again. Post-draw only snapshots it; post-draw never
+        // clears the producer.
+        _needsInternalAssignImages = false;
         auto &nodes = _nodes;
         if (nodes.empty()) return;
         const auto motionPath = matchedMotionPath();

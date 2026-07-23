@@ -19,6 +19,15 @@ namespace motion {
                 static_cast<int>(rect[2]), static_cast<int>(rect[3])
             };
         }
+
+        tjs_int propGetIntOnceLike_0x6635DC(ncbPropAccessor &accessor,
+                                            const tjs_char *member,
+                                            tjs_uint32 *hint) {
+            tTJSVariant value;
+            iTJSDispatch2 *dispatch = accessor.GetDispatch();
+            (void)dispatch->PropGet(0, member, hint, &value, dispatch);
+            return static_cast<tjs_int>(value.AsInteger());
+        }
     }
 
     // libkrkr2.so sub_6C4E28 @0x6C5264..0x6C5D98 Loop A drawable body (J1/J7):
@@ -49,6 +58,11 @@ namespace motion {
             return false;
         }
 
+        const tjs_int leafBlendMode = 0;
+        const std::array<std::uint32_t, 4> leafColors{
+            0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu
+        };
+
         // sub_6C6B48(player+760, item+424, ...) -> item+304 leaf layer. The SLA
         // resolve mirrors 0x6C6B48: Rb_tree get-or-create keyed by the layerId,
         // reuse-from-retired, create Layer via Window.mainWindow Layer ctor,
@@ -75,28 +89,41 @@ namespace motion {
             return false;
         }
 
-        // Resolve the source object exactly as 0x6C4E28 @0x6c5664 (sub_6C1B70
-        // loadSource on the per-item source descriptor) and the execute pass do.
-        tTJSVariant sourceObject;
-        iTVPBaseBitmap *srcImage = nullptr;
-        tjs_int srcW = 0;
-        tjs_int srcH = 0;
-        if(item.sourceState && _sourceCacheNative) {
-            sourceObject =
-                _sourceCacheNative
-                    ->loadRenderSourceLayerFromItemLike_0x6C1B70(*this, item);
-            if(sourceObject.Type() == tvtObject &&
-               sourceObject.AsObjectNoAddRef()) {
-                if(auto *srcLayer =
-                       resolveNativeLayer(sourceObject.AsObjectNoAddRef())) {
-                    srcImage = srcLayer->GetMainImage();
-                    if(srcImage) {
-                        srcW = static_cast<tjs_int>(srcImage->GetWidth());
-                        srcH = static_cast<tjs_int>(srcImage->GetHeight());
-                    }
-                }
-            }
+        // 0x6C4E28 initializes a caller-local neutral descriptor payload before
+        // resolving this leaf source: blendMode=0 @0x6C52AC and four opaque-white
+        // colors @0x6C5300..0x6C5304.  It then writes key/src from the item and
+        // calls the shared sub_6C1B70 resolver @0x6C5664.  The ordinary execute
+        // caller instead writes the item's blend/colors, so do not mutate the
+        // item or move this leaf policy into the shared resolver.
+        ncbPropAccessor descriptor{tTJSVariant(_sourceDescriptor)};
+        descriptor.SetValue(TJS_W("key"), item.commandKey,
+                            TJS_MEMBERENSURE,
+                            &detail::commandKeyMemberHint_guess);
+        descriptor.SetValue(TJS_W("src"), item.commandSrc,
+                            TJS_MEMBERENSURE,
+                            &detail::commandSrcMemberHint_guess);
+        descriptor.SetValue(TJS_W("blendMode"), leafBlendMode,
+                            TJS_MEMBERENSURE,
+                            &detail::blendModeMemberHint_guess);
+
+        ncbPropAccessor color{tTJSVariant(_sourceColors)};
+        for(tjs_int index = 0; index < 4; ++index) {
+            color.SetValue(
+                index,
+                leafColors[static_cast<std::size_t>(index)],
+                TJS_MEMBERENSURE);
         }
+
+        const tTJSVariant sourceObject =
+            resolveRenderSourceLike_0x6C1B70_guess(
+                item.sourceState->object);
+        ncbPropAccessor sourceAccessor{tTJSVariant(sourceObject)};
+        const tjs_int srcW = propGetIntOnceLike_0x6635DC(
+            sourceAccessor, TJS_W("width"),
+            &detail::widthMemberHint_guess);
+        const tjs_int srcH = propGetIntOnceLike_0x6635DC(
+            sourceAccessor, TJS_W("height"),
+            &detail::heightMemberHint_guess);
 
         // sub_6C4E28 sets neutralColor then setSize(clip) on the leaf layer
         // before the copy; prepareLayerForRender folds the size + transparent
@@ -105,11 +132,6 @@ namespace motion {
         if(!prepareLayerForRender(leafLayerObject, clipWidth, clipHeight,
                                   0x00000000)) {
             return false;
-        }
-        if(!srcImage || srcW <= 0 || srcH <= 0) {
-            // Leaf layer was sized but has no drawable source: still counts as
-            // materialized (binary writes the leaf node regardless).
-            return true;
         }
         const tTVPRect sourceRect(0, 0, srcW, srcH);
 
