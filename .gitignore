@@ -42,3 +42,5 @@ tests/differential/artifacts/
 # Do not commit .so binaries — they bloat the repo history and rebuilds
 # are fast (~10s with NDK clang).
 tests/differential/oracle_runner/harness/prebuilt/libharness.so
+
+reference/
