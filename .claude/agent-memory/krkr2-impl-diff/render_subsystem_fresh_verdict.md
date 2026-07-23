@@ -19,8 +19,8 @@ resolver / 0x6A7518 bake)。本次 supersede 06-05 的 "setClip 半迁移 D-1" �
 - draw 入口路由 drawCompat @PlayerDrawDispatch.cpp:117 = sub_6D5FB8 (D3DAdaptor/SLA/ordinary 三路由 ✅)
 
 **六维裁决 (2026-06-07):**
-1. TJS-dispatch ✅: 12 draw 原语全经 `(*(vtbl+16))(L"...")` = iTJSDispatch2::FuncCall + UTF-16LE 键。本地 callLayer*Like_0x6C7440 全 FuncCall(0,TJS_W(...)). argc 逐项: operateAffine 15 / affineCopy 14 / operateRect 9 / operateMesh,operateBezierPatch 11 / meshCopy,bezierPatchCopy 10 / setClip 4(set)或0(reset). 全对齐。
-2. **setClip 已全迁移 ✅ (06-05 D-1 半迁移 RESOLVED)**: callLayerSetClipLike_0x6C7440(PlayerRenderInternal.cpp:171)+callLayerResetClipLike(:193) 都用 renderLayerObject->FuncCall(0,TJS_W("setClip"),...). 调用点 PlayerRenderExecute.cpp:774/779/1291. binary 0x6c78dc(argc4)/0x6c7620(argc0)/0x6c8fcc(post-walk reset) 全对齐. PlayerRenderExecute.cpp:782 GetClip() 仅读回结果(非派发,可接受). PlayerRenderInternal.cpp:609 SetClip 是另一非 render-path 用途.
+1. TJS-dispatch ✅: draw 原语均经 `iTJSDispatch2::FuncCall` + UTF-16LE 键，但 receiver 不是统一 instance。Target width/height、setClip、direct operate*、operateRect 走 Layer class receiver + target objthis；leaf/composed/buf copy/setup 走 instance/self。argc 逐项: operateAffine 15 / affineCopy 14 / operateRect 9 / operateMesh,operateBezierPatch 11 / meshCopy,bezierPatchCopy 10 / setClip 4(set)或0(reset)。
+2. **setClip 已全迁移 ✅，且 2026-07-23 receiver 纠正**: callLayerSetClipLike/callLayerResetClipLike 通过 Layer class accessor dispatch，target 仅作 objthis；不存在旧文所称 native `GetClip()` 回读。
 3. **2026-07-23 correction:** Player+676 is a persistent descriptor Dictionary,
    Player+716 its persistent numeric color Dictionary, and Player+656 the RM
    dispatch owner—not three work Layers. `0x6C1B70` writes descriptor/color and
@@ -38,7 +38,10 @@ resolver / 0x6A7518 bake)。本次 supersede 06-05 的 "setClip 半迁移 D-1" �
 - ~~C-2 SourceCache cache topology~~ **CLOSED 2026-07-23**: both sides use
   `std::list<Entry>`, strict full-Variant `(key,src,blendMode)` identity, mutable
   colors, same-Layer rebake and `push_front(copy)+erase(old)` lifetime.
-- MAJOR-DATAFLOW(架构,非平台边界但语义等价): binary 单 flat loop + per-player scratch(+716 color array / +656 bufLayer / +736 bake target) vs 本地 vector<PreparedRenderItem>+map+lambda recursion(buildItemOutput). TJS primitive dispatch 本身忠实. 这是 build-path 重组, 非 draw 原语偏离.
+- 2026-07-23：旧 `buildItemOutput` recursion 与普通路径 `_renderLayerStates`
+  代理已删除。普通 0x6C4E28→0x6C7440 主干、RM.bufLayer、ancestor mask、
+  float/Real/FCVTZS、owner/异常边界已恢复；仍开放 acquire caller payload、
+  accurate-SLA 持久树与 wrapper/executor 源码拆分。
 - D-2/D-3(P3, oracle-inert): debug overlay 4 原语缺失(drawLine/drawMeshFrame/drawBezierPatchFrame/drawBezierPatchMeshFrame, binary a1+1048||1068 门控, logo 不走). 本地 grep 0 hits 确认缺失. alpha-mask 非GPU边缘 FuncCall("fillRect"+"update") vs 本地 FillMask 直写(CPU 核已对齐).
 - PropGet flag(P3,inert): anchor w/h binary flag1024 vs 本地 PlayerUpdateAnchor.cpp:44/48 flag0. width/height 在 Layer 上两边都成功, inert.
 
@@ -47,7 +50,7 @@ resolver / 0x6A7518 bake)。本次 supersede 06-05 的 "setClip 半迁移 D-1" �
   software bake and GPU native-query-only split directly.
 - alpha-mask GPU shader 分支(0x6AF104 5种 GLProgram) → 本地无自定义 fragment shader 提交能力, CPU 像素核对齐非GPU分支.
 
-**结论: 该子系统 draw 原语 dispatch / anchor 物理 / color bake 边界全部 1:1 忠实或正当平台边界。
+**结论: 该子系统 draw 原语 dispatch / anchor 物理 / color bake 的已审计站点已按 fresh evidence 修正。
 06-05 的 setClip 半迁移已修复，SourceCache C-2 也由 fresh evidence 闭合。
-剩余 open 是 build-path vector/map/lambda 重组和 debug overlay 等本文列出的独立项；
+剩余 open 是 acquire payload、accurate-SLA、函数拆分和 debug overlay 等独立项；
 不能把这份局部审计外推成整个插件 100% 证明。**

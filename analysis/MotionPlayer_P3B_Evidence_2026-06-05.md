@@ -3,6 +3,14 @@
 > 只读证据核实。为 P3-B 架构重构（RM ownership: native value → dispatch-in + parentPlayer 链）
 > 备齐反编译证据，供下一 session 直接动手。权威：libkrkr2.so 反编译，本 session 亲自取得。
 > **本 dossier 不改任何 cpp/ 代码，不改 IDB。**
+>
+> **2026-07-23 CURRENT CORRECTION：** 本文的“待下一 session / defer”是
+> 2026-06-05 的实施前快照，不再代表当前工作树。Player+992
+> `findMotion/loadMotion` FuncCall、零参 layer-id dispatch/set、Player+656
+> `ResourceManager.bufLayer` buffered 路径，以及普通渲染 SLA active/retired
+> 双树 pass 生命周期均已落地。仍 open 的是 SLA payload/compare 与 J8
+> accurate-SLA 状态、完整 alpha-mask 行为等更细的渲染复原；不能据已落地项
+> 推导为整体 100% 完成。
 
 ---
 
@@ -217,24 +225,35 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 - 删 Player 3 个死字段 `_layerIdsByName`/`_layerNamesById`/`_nextLayerId`（全 cpp/+tests/ 交叉核实仅 decl/clear 无读写）。
 - 验证：class-layout-auditor 6/6 忠实 0 真实 bug；web debug 248/248、wasmtime guest 链接、logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS；native catch2 同 4 例既有失败（无新回归）。
 
-**layer-id 仍 defer 的子项**：
-- (a) ctor 预占 id 0（binary 0x6A88CC 末尾 new(0x28) key=0）—— 当前 inert（counter 从 1 起）。
+**layer-id 后续账本（当前均已闭合）**：
+- (a) ✅ ctor 预占 id 0 已由 `std::set<tjs_int> _usedLayerIds{0}` 表达；
+  counter 从 1 起。
 - (b) ✅ **再纠正(2026-07-18)**：此前 IDA 把两个函数合并，导致本段把析构行为误归给 `unloadAll`。重新按独立 `SUB SP` 序言拆分后确认：`clearCache@0x6A8438` 只清 +72 layer-list；`unloadAll@0x6A8CF8` 只清 HashMap A；`0x6A8B94` 才是析构函数，其中 `_Rb_tree::_M_erase(a1+168)@0x6A8C04` 清 layer-id set。三者都不重置 counter(+216)，且 binary 根本没有本地曾维护的 lastLoaded 字段。本地 `unloadAll` 现只清 `loadedModules`，不得清 `usedLayerIds`。
   - 衍生 (b')（**已纠正**）：binary clearCache 不碰 HashMap A；本地已由继承的 SourceCache 实现承接。原 `lastLoaded` 字段/getter/兜底路径已删除。
 - (c) ✅ **已修(2026-06-05 续)**：render 侧 reuse-by-name → allocate-fresh。PlayerRenderExecute.cpp rawFlag20(=item+20) latch 块从「按 node name 复用 node.layerId1」改为「无条件零参 `dispatchRequireLayerId()` fresh 分配」，逐行对齐 `Player_emitRenderItem_requireLayer@0x6C4E28` LABEL_28（0x6c51cc FuncCall numparams=0 → item+424 → item+20 latch，无 name/node 检查）；删 port-invented `Player::requireLayerId(ttstr name)`（binary 无 by-name，"requireLayerIdForName" 0 命中）；测试 539/542 改用 `dispatchRequireLayerId()`。binary-alignment-auditor 5/5 忠实无需修复；web 240 + wasmtime guest + logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS（render 热路径，确证 fresh id 不破坏捕获输出）；native 同 4 例既有失败。
-  - 🔧 **审计新发现的独立既存 open 项（非 (c) 回归）**：binary `sub_6C6B48@0x6C6B48`（per-id render-layer 解析）是**双 Rb-tree 跨帧复用池**（pending @+120/+128 → active @+64/+80 命中迁移 + `absolute = +160 base + +164 counter++`、`hitThreshold=256`、未命中建 L"Layer"），本地 `ensureLeafItemLayer`(PlayerRenderExecute.cpp:391-405) 是**单 `unordered_map<tjs_int,LayerRenderState> _renderLayerStates` 一次性初始化 + 单 `_nextLayerAbsolute++`**，无 pending→active 跨帧迁移、无双树、absolute 计数语义未逐位对齐。属容器选型⑤+对象生命周期④级架构偏差，需先反编译 pending 树「帧末回填」站点再立项对齐。
+  - ✅ **2026-07-23 纠正旧单-map 结论**：production 普通渲染已由
+    `SeparateLayerAdaptor::_managedTargets/_assignTargets` 两只 ordered tree
+    承接 `sub_6C6B48@0x6C6B48`。`0x6C4E28` pass 入口交换
+    active/retired 并重置 sequence；同 key 从 retired 搬到 active 复用；正常
+    尾部只 Invalidate/清除未复用的 retired 节点。`_renderLayerStates` 只残留于
+    `KRKR2_WASMTIME_HEADLESS` 诊断兼容 helper，不再是 production 架构。
+    仍 open：payload 的完整字段/比较/复制语义，以及 accurate-SLA J8 状态。
 - (d) ✅ **已修(2026-06-05 续)**：调用方 native→dispatch FuncCall 路由（维度③）。新增 Player `dispatchRequireLayerId()`/`dispatchReleaseLayerId(id)`（对 `_resourceManager`=Player+992 调 `FuncCall(0,L"requireLayerId",hint,&result,0,NULL,rm)` / `FuncCall(0,L"releaseLayerId",hint,NULL,1,{id},rm)`，vtable+16）；5 站点（buildNodeTree×2 / Player::requireLayerId fallback / Player::releaseLayerId / resetNodeTreeForBuild / activateMotion release）全改 dispatch；连带删 NodeTree+activateMotion 全死的 `ResourceManager*` 参 + 同步 friend/前向声明。binary-alignment-auditor 全维对齐 0 真实 bug；构建 web 240 + wasmtime guest + logo 差分 m2logo(93)/yuzulogo(243) 逐位 PASS（dispatch 经 buildNodeTree 热路径，确证 FuncCall 返回同 id）；native 同 4 例既有失败。
 
-**整体 P3-B 仍 defer**：findMotion/loadMotion→+992 FuncCall（最大侵入，RM findMotion@0x6A9ED4 桩为硬 blocker）、+656 bufLayer 渲染分支（本地未实装，块4.2）。
+**2026-07-23 当前状态**：旧“整体 P3-B 仍 defer”结论已失效。
+findMotion/loadMotion 已走 Player+992 RM dispatch `FuncCall(L"findMotion")`；
+Player+656 `bufLayer` buffered/ancestor-mask 路径也已实装（见块 4.2 当前
+纠正）。剩余 SLA payload/J8 与完整 alpha-mask 是后续渲染对齐项，不是
+RM ownership 迁移的 blocker。
 
-## 原「下次 session 动手步骤清单」（步骤 2/3 已落地，存档）
+## 原「下次 session 动手步骤清单」（实施前历史快照，存档）
 
 1. **先反编译 layer-id 路径**：定位 binary RM dispatch 上 layer-id 分配/释放的 method 名（本 session 未覆盖）。grep RM ctor sub_6A88CC 内 RB-tree(+176) / refcount(+216)，及 `requireLayerIdForName` 对应。无证据不动 PlayerResource.cpp:93/97。
 2. **ctor 单参收敛**：PlayerCore.cpp:90 改单参 `Player::Player(rm_dispatch)`；parent 设置移到 child 构造点（PlayerUpdateParticles.cpp:447 + PlayerMotionLoad.cpp:227 构造后赋 `child._parentPlayer=this`，对齐 0x6b43dc）。
 3. **RM 持有改为 dispatch**：删 `_resourceManagerNative`(native value)，分别保留
    +636/+656/+992 三份 Variant owner；findSource 经专用 dispatch 解包（保留 native
    快路径混合，对齐 0x694928）。旧“统一成单 Variant”只是一阶段近似，已于 2026-07-23 纠正。
-4. **motion 解析路径 dispatch 化**（最大侵入）：resolveMotion/activateMotion → +992 dispatch FuncCall "findMotion"。建议**最后做**，class-layout-auditor 全程守护。
+4. ~~**motion 解析路径 dispatch 化**（最大侵入）：resolveMotion/activateMotion → +992 dispatch FuncCall "findMotion"。~~ **已落地；此句仅保留原实施顺序。**
 5. 构建 web debug + wasmtime；m2logo(93)/yuzulogo(243) 差分作**非回归守护**（oracle-inert 风险高，主要靠反编译逐行对照）。
 
 ## 风险点
@@ -270,11 +289,16 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 - **+656 唯一渲染消费点 = `renderToCanvas@0x6C7440`**（真函数入口 0x6C7440，0x6c75ac 只是其循环体；`X22=this`，`X22+0x290`=字节 656）。拷贝点 0x6c7bb0：`sub_A0F5E0(v343, a1+656)` → `sub_A0E48C(v343,1)` 强转 object → 取 dispatch v49 AddRef → `v49->vtable[+0x20](v49, 0, L"bufLayer", &hint, &result, v49)`（**vtable+0x20=PropGet**，对照同函数 +0x10=FuncCall/+0x30=PropSet）→ 拿到一个 Layer dispatch 作为本帧离屏**绘制目标缓冲**（后续 setSize + meshCopy/affineCopy/bezierPatchCopy 全画到它上）。
 - **门控**：仅在 blendMode switch 落到 `v48=2`（mesh/affine type2）或 `completionType(+1144)!=0` 或 `item+264`(子节点链)非空时触发。
 - **+656 vs +992 用途**：+656 = PropGet(L"bufLayer") 取**渲染目标缓冲层**（render target）；+992 = FuncCall(findMotion/loadMotion) 解析**资源**。职责正交，共享同一 dispatch 指针只因 bufLayer 属性挂在 RM 对象上。
-- **本地对照（交叉核实，非漂移空 grep）**：本地 `renderToCanvasLike_0x6C7440`(PlayerRenderTargets.cpp:1087) **完全没有 bufLayer / +656 RM PropGet 这条分支**（`grep bufLayer|_resourceManager|656|completionType` 在 PlayerRenderTargets.cpp/PlayerRenderExecute.cpp 零命中）。这是 completionType!=0 离屏缓冲合成分支，**本地整体未实装**，现有 fixture（logo）走 completionType==0 直绘路径触不到。
-- **裁决（2026-07-23 更新）**：+656 是 RM dispatch 的**纯读消费方**，不是 RM
-  容器/所有权本身。虽然三槽底层指向同一 dispatch，但每槽独立 AddRef/Release 是对象
-  生命周期的一部分；本地现已保留三份 Variant。bufLayer 渲染分支仍是独立待实装项
-  （无 fixture，oracle 盲区）。
+- **本地当前对照（2026-07-23 纠正旧 negative-grep 结论）**：
+  `executeLayerRenderCommands` 的 buffered 分支已按 +656 语义从 RM dispatch
+  `PropGet(L"bufLayer")`，保留 RM owner → property Variant → buffer dispatch
+  三层 owner，再执行 setSize、affine/Bezier/mesh copy、ancestor-mask 与最终
+  `operateRect`。该 Layer 由 ResourceManager/SourceCache 持久持有，不是
+  `item+304/+324`，也不是临时 per-item work layer。
+- **裁决（current）**：+656 是 RM dispatch 的纯读消费槽；三份 RM Variant
+  各自 AddRef/Release，bufLayer buffered 路径已恢复。完整
+  `Motion_doAlphaMaskOperation@0x6AF104` 分支与边界仍 open，不能由
+  “已取得 bufLayer”外推为 alpha-mask 已完全对齐。
 
 ### 4.3 +636 PropGet 的 `dword_1AB8098` —— **不是属性名，是 PropGet 的 `tjs_uint32 *hint`**
 
@@ -286,5 +310,9 @@ v27 = *a1;                                    // parent+0 (self-ptr)
 
 ### 块 4 小结（对 P3-B 范围的影响）
 - **疑点 2（+656）+ 疑点 3（dword_1AB8098）已解，确认 findSource 是 dispatch-facade-over-native 混合**（PropGet hint+NULL → NCB instance +8 → native 直读 HashMap A）：本地用 `GetNativeInstance` 解包 = 忠实等价。findSource 迁移**勿全改纯 dispatch**（约束 2）。
-- **疑点 1（layer-id）已解但移出 P3-B 范围**：binary `requireLayerId` 无 name 参，本地 name-keyed 是新增语义；属维度①⑤偏差 + 调用方路由未取证 → **本轮不动 PlayerResource.cpp:93/97**，独立 open 项。
-- **P3-B 本轮可动手的、证据充分的范围**：(2) ctor 单参 dispatch-in 收敛 + parent 设置移出 ctor；(3) RM 持有从 native value → dispatch variant（findSource/native 消费者经 `GetNativeInstance` 解包，混合保留）；child 继承 parent 的 RM dispatch + 构造后 `child._parentPlayer=parent`。**defer**：(4) findMotion/loadMotion FuncCall 化（最大侵入，建议最后做）、+656 bufLayer 渲染分支、layer-id 容器/签名。
+- **疑点 1（layer-id）当前状态**：零参 `requireLayerId`、`std::set<tjs_int>`
+  占用集合及 Player+992 FuncCall 路由均已落地；旧 name-keyed 三容器已删除。
+- **P3-B 当前小结**：ctor 单参 dispatch-in、三份独立 RM Variant owner、
+  child 构造后 parent 链、findSource dispatch→native 解包、findMotion/loadMotion
+  FuncCall、layer-id dispatch，以及 +656 bufLayer 消费均已落地。本文不据此
+  宣称插件整体复原完成；剩余 gap 以当前 render/容器审计文档为准。

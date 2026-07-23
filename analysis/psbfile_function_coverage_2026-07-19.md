@@ -294,7 +294,7 @@ Android runtime oracle 路径也已实现，但本轮无设备、尚未取得真
 non-retaining 仍由反编译证据证明，不能把本地测试或一次性 adapter smoke 误记为 ADB/RPC 或二进制实测。
 
 本轮修改后 macOS Release `psbfile-dll` 为 **575/575**（10 cases），
-`motionplayer-dll` 为 **1244/1244**（18 cases），`motionplayer-ttstr-hash-test` 为
+`motionplayer-dll` 为 **1376/1376**（21 cases），`motionplayer-ttstr-hash-test` 为
 **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
 `krkr2_wasmtime_guest` 目标通过。motion playback runner 尚未进入 guest：当前 checkout
 缺少 `reference/xp3/logo_test_oracle.xp3`；按物料规则不从零构造，保留该运行验证缺口。

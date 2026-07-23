@@ -983,14 +983,14 @@ drawAffine中的渲染目标选择逻辑(非D3D路径):
 ### Player渲染链
 | 地址 | 名称 | 说明 |
 |------|------|------|
-| 0x6C7440 | Player_renderToCanvas_guess | 渲染到画布(62KB大函数) |
+| 0x6C7440 | Player_renderToCanvas | 渲染到画布(62KB大函数) |
 | 0x6D5264 | Player_applyTranslateOffset_guess | 应用平移偏移 |
 | 0x6CE7D8 | Player_updateLayerAfterDraw_guess | draw后更新Layer(assignImages) |
 | 0x6D2D80 | Player_drawToLayerCompat | 非D3D路径Layer渲染 |
 | 0x6D5B90 | Player_drawToD3DAdaptor_guess | D3D路径渲染 |
 | 0x6D5658 | Player_DrawSLA | SLA路径渲染 |
-| 0x6CBCE4 | Player_buildRenderTree_guess | 构建渲染树 |
-| 0x6C72E4 | Player_evaluateTimelines_guess | 评估timeline状态 |
+| 0x6CBCE4 | Player_acquireComposedLayerById | accurate-SLA composed Rb_tree acquire |
+| 0x6C72E4 | SeparateLayerAdaptor_ClearRetiredLayerMap_guess | 正常尾部 Invalidate/清理未复用 retired Layer 树；非 timeline |
 | 0x6AC27C | Player_resetRenderState_guess | 重置渲染状态 |
 | 0x6D4F14 | Player_setDrawAffineTranslateMatrix | 存储6个仿射矩阵值 |
 | 0x6D5164 | Player_sortRenderNodes_guess | 排序渲染节点 |

@@ -421,6 +421,39 @@ namespace {
         }
     };
 
+    struct FuncCallRecorder final : tTJSDispatch {
+        ttstr member;
+        std::vector<tTJSVariant> arguments;
+        iTJSDispatch2 *receivedObjThis = nullptr;
+        tjs_int propertyInteger = 0;
+
+        tjs_error FuncCall(tjs_uint32, const tjs_char *membername,
+                           tjs_uint32 *, tTJSVariant *, tjs_int numparams,
+                           tTJSVariant **param,
+                           iTJSDispatch2 *objthis) override {
+            member = membername ? ttstr(membername) : ttstr();
+            receivedObjThis = objthis;
+            arguments.clear();
+            arguments.reserve(static_cast<std::size_t>(numparams));
+            for(tjs_int index = 0; index < numparams; ++index) {
+                arguments.emplace_back(*param[index]);
+            }
+            return TJS_S_OK;
+        }
+
+        tjs_error PropGet(tjs_uint32, const tjs_char *membername,
+                          tjs_uint32 *, tTJSVariant *result,
+                          iTJSDispatch2 *objthis) override {
+            member = membername ? ttstr(membername) : ttstr();
+            receivedObjThis = objthis;
+            arguments.clear();
+            if(result) {
+                *result = propertyInteger;
+            }
+            return TJS_S_OK;
+        }
+    };
+
     struct FakeLayerOwnerDispatch : tTJSDispatch {
         iTVPLayerTreeOwner *treeOwner = nullptr;
 
@@ -514,6 +547,199 @@ namespace {
     }
 
 } // namespace
+
+TEST_CASE("Player_renderToCanvas direct gate only consumes binary fields") {
+    using motion::detail::PreparedRenderItem;
+    using motion::internal::render_detail::
+        shouldUseDirectRenderPathLike_0x6C7440;
+
+    PreparedRenderItem item;
+    PreparedRenderItem child;
+    PreparedRenderItem parent;
+
+    // These Web-side topology/diagnostic values deliberately differ from the
+    // simple case. Player_renderToCanvas @0x6C7B44 does not consume either.
+    item.visibleAncestorIndex = 37;
+    item.childItems.push_back(&child);
+
+    item.blendMode = 0;
+    REQUIRE(shouldUseDirectRenderPathLike_0x6C7440(item, 0));
+    item.blendMode = 6;
+    REQUIRE(shouldUseDirectRenderPathLike_0x6C7440(item, 0));
+
+    for(int blend = 1; blend <= 5; ++blend) {
+        item.blendMode = blend;
+        REQUIRE_FALSE(shouldUseDirectRenderPathLike_0x6C7440(item, 0));
+    }
+
+    item.blendMode = 0;
+    REQUIRE_FALSE(shouldUseDirectRenderPathLike_0x6C7440(item, 7));
+    item.parentItem = &parent;
+    REQUIRE_FALSE(shouldUseDirectRenderPathLike_0x6C7440(item, 0));
+}
+
+TEST_CASE("Player_renderToCanvas helpers preserve exact TJS argv contracts") {
+    using namespace motion::internal::render_detail;
+
+    FuncCallRecorder instanceRecorder;
+    FuncCallRecorder layerClassRecorder;
+    FakeObjectDispatch targetDispatch;
+    FakeObjectDispatch sourceDispatch;
+    tTJSVariant sourceObject(&sourceDispatch, &sourceDispatch);
+
+    REQUIRE(callLayerSetSizeRealLike_0x6C7440(
+                &instanceRecorder, 1.25, -2.75) == TJS_S_OK);
+    REQUIRE(instanceRecorder.member == TJS_W("setSize"));
+    REQUIRE(instanceRecorder.receivedObjThis == &instanceRecorder);
+    REQUIRE(instanceRecorder.arguments.size() == 2);
+    REQUIRE(instanceRecorder.arguments[0].Type() == tvtReal);
+    REQUIRE(instanceRecorder.arguments[0].AsReal() == Catch::Approx(1.25));
+    REQUIRE(instanceRecorder.arguments[1].Type() == tvtReal);
+    REQUIRE(instanceRecorder.arguments[1].AsReal() == Catch::Approx(-2.75));
+
+    REQUIRE(callLayerFillRect4Like_0x6C7440(
+                &instanceRecorder, 7.5, 8.5) == TJS_S_OK);
+    REQUIRE(instanceRecorder.member == TJS_W("fillRect"));
+    REQUIRE(instanceRecorder.receivedObjThis == &instanceRecorder);
+    REQUIRE(instanceRecorder.arguments.size() == 4);
+    REQUIRE(instanceRecorder.arguments[0].Type() == tvtInteger);
+    REQUIRE(instanceRecorder.arguments[0].AsInteger() == 0);
+    REQUIRE(instanceRecorder.arguments[1].Type() == tvtReal);
+    REQUIRE(instanceRecorder.arguments[1].AsReal() == Catch::Approx(7.5));
+    REQUIRE(instanceRecorder.arguments[2].Type() == tvtReal);
+    REQUIRE(instanceRecorder.arguments[2].AsReal() == Catch::Approx(8.5));
+    REQUIRE(instanceRecorder.arguments[3].Type() == tvtInteger);
+    REQUIRE(instanceRecorder.arguments[3].AsInteger() == 0);
+
+    REQUIRE(callLayerFillRect5Like_0x6C4E28(
+                &instanceRecorder, -0.25, 0.0) == TJS_S_OK);
+    REQUIRE(instanceRecorder.member == TJS_W("fillRect"));
+    REQUIRE(instanceRecorder.receivedObjThis == &instanceRecorder);
+    REQUIRE(instanceRecorder.arguments.size() == 5);
+    const std::array<tTJSVariantType, 5> fillRect5Types{
+        tvtInteger, tvtInteger, tvtReal, tvtReal, tvtInteger,
+    };
+    for(std::size_t index = 0; index < fillRect5Types.size(); ++index) {
+        REQUIRE(instanceRecorder.arguments[index].Type() ==
+                fillRect5Types[index]);
+    }
+    REQUIRE(instanceRecorder.arguments[0].AsInteger() == 0);
+    REQUIRE(instanceRecorder.arguments[1].AsInteger() == 0);
+    REQUIRE(instanceRecorder.arguments[2].AsReal() == Catch::Approx(-0.25));
+    REQUIRE(instanceRecorder.arguments[3].AsReal() == Catch::Approx(0.0));
+    REQUIRE(instanceRecorder.arguments[4].AsInteger() == 0);
+
+    const std::array<tTVPPointD, 3> affinePoints{{
+        {1.0, 2.0}, {3.0, 4.0}, {5.0, 6.0},
+    }};
+    REQUIRE(callLayerAffineCopyLike_0x6C7440(
+                &instanceRecorder, affinePoints.data(), sourceObject,
+                tTVPRect(0, 0, 11, 13),
+                static_cast<tTVPBBStretchType>(7), true) == TJS_S_OK);
+    REQUIRE(instanceRecorder.member == TJS_W("affineCopy"));
+    REQUIRE(instanceRecorder.receivedObjThis == &instanceRecorder);
+    REQUIRE(instanceRecorder.arguments.size() == 14);
+    REQUIRE(instanceRecorder.arguments[12].Type() == tvtInteger);
+    REQUIRE(instanceRecorder.arguments[12].AsInteger() == 7);
+    REQUIRE(instanceRecorder.arguments[13].Type() == tvtInteger);
+    REQUIRE(instanceRecorder.arguments[13].AsInteger() == 1);
+
+    REQUIRE(callLayerOperateAffineLike_0x6C7440(
+                &layerClassRecorder, &targetDispatch, affinePoints.data(),
+                sourceObject, tTVPRect(0, 0, 11, 13), omPsScreen,
+                -7) == TJS_S_OK);
+    REQUIRE(layerClassRecorder.member == TJS_W("operateAffine"));
+    REQUIRE(layerClassRecorder.receivedObjThis == &targetDispatch);
+    REQUIRE(layerClassRecorder.arguments.size() == 15);
+    REQUIRE(layerClassRecorder.arguments[14].Type() == tvtInteger);
+    REQUIRE(layerClassRecorder.arguments[14].AsInteger() == 0);
+
+    REQUIRE(callLayerOperateMeshLike_0x6C7440(
+                &layerClassRecorder, &targetDispatch, sourceObject,
+                tTVPRect(0, 0, 11, 13),
+                &sourceDispatch, 2, 3, omPsScreen, -7, false) == TJS_S_OK);
+    REQUIRE(layerClassRecorder.member == TJS_W("operateMesh"));
+    REQUIRE(layerClassRecorder.receivedObjThis == &targetDispatch);
+    REQUIRE(layerClassRecorder.arguments.size() == 11);
+    REQUIRE(layerClassRecorder.arguments[8].AsInteger() == omPsScreen);
+    REQUIRE(layerClassRecorder.arguments[9].AsInteger() == -7);
+    REQUIRE(layerClassRecorder.arguments[10].Type() == tvtInteger);
+    REQUIRE(layerClassRecorder.arguments[10].AsInteger() == 0);
+
+    REQUIRE(callLayerOperateRectLike_0x6C7440(
+                &layerClassRecorder, &targetDispatch, 1.25, -2.75,
+                sourceObject, 7.5, 8.5,
+                omPsScreen, -7) == TJS_S_OK);
+    REQUIRE(layerClassRecorder.member == TJS_W("operateRect"));
+    REQUIRE(layerClassRecorder.receivedObjThis == &targetDispatch);
+    REQUIRE(layerClassRecorder.arguments.size() == 9);
+    const std::array<tTJSVariantType, 9> expectedTypes{
+        tvtReal, tvtReal, tvtObject, tvtInteger, tvtInteger,
+        tvtReal, tvtReal, tvtInteger, tvtInteger,
+    };
+    for(std::size_t index = 0; index < expectedTypes.size(); ++index) {
+        REQUIRE(layerClassRecorder.arguments[index].Type() == expectedTypes[index]);
+    }
+    REQUIRE(layerClassRecorder.arguments[0].AsReal() == Catch::Approx(1.25));
+    REQUIRE(layerClassRecorder.arguments[1].AsReal() == Catch::Approx(-2.75));
+    REQUIRE(layerClassRecorder.arguments[2].AsObjectNoAddRef() == &sourceDispatch);
+    REQUIRE(layerClassRecorder.arguments[3].AsInteger() == 0);
+    REQUIRE(layerClassRecorder.arguments[4].AsInteger() == 0);
+    REQUIRE(layerClassRecorder.arguments[5].AsReal() == Catch::Approx(7.5));
+    REQUIRE(layerClassRecorder.arguments[6].AsReal() == Catch::Approx(8.5));
+    REQUIRE(layerClassRecorder.arguments[7].AsInteger() == omPsScreen);
+    REQUIRE(layerClassRecorder.arguments[8].AsInteger() == -7);
+
+    REQUIRE(callLayerSetClipLike_0x6C7440(
+                &layerClassRecorder, &targetDispatch,
+                0.25, -0.5, 9.75, 10.5) == TJS_S_OK);
+    REQUIRE(layerClassRecorder.member == TJS_W("setClip"));
+    REQUIRE(layerClassRecorder.receivedObjThis == &targetDispatch);
+    REQUIRE(layerClassRecorder.arguments.size() == 4);
+    for(const auto &argument : layerClassRecorder.arguments) {
+        REQUIRE(argument.Type() == tvtReal);
+    }
+    REQUIRE(layerClassRecorder.arguments[0].AsReal() == Catch::Approx(0.25));
+    REQUIRE(layerClassRecorder.arguments[1].AsReal() == Catch::Approx(-0.5));
+    REQUIRE(layerClassRecorder.arguments[2].AsReal() == Catch::Approx(9.75));
+    REQUIRE(layerClassRecorder.arguments[3].AsReal() == Catch::Approx(10.5));
+
+    layerClassRecorder.propertyInteger = 37;
+    REQUIRE(callLayerPropGetIntLike_0x6C99B8(
+                &layerClassRecorder, &targetDispatch, TJS_W("width"),
+                nullptr) == 37);
+    REQUIRE(layerClassRecorder.member == TJS_W("width"));
+    REQUIRE(layerClassRecorder.receivedObjThis == &targetDispatch);
+
+    REQUIRE(callLayerResetClipLike_0x6C7440(
+                &layerClassRecorder, &targetDispatch) == TJS_S_OK);
+    REQUIRE(layerClassRecorder.member == TJS_W("setClip"));
+    REQUIRE(layerClassRecorder.receivedObjThis == &targetDispatch);
+    REQUIRE(layerClassRecorder.arguments.empty());
+}
+
+TEST_CASE("Player_emitRenderItem keeps fractional clip until TJS boundary") {
+    using namespace motion::internal::render_detail;
+
+    motion::detail::PreparedRenderItem item;
+    item.paintBox = {-1.25f, 2.5f, 10.75f, 30.25f};
+    item.viewport = {1.0f, 1.0f, -1.0f, -1.0f};
+
+    RenderClipRect clip;
+    REQUIRE(computeRenderClipRect(item, 8, 20, clip));
+    REQUIRE(clip.left == Catch::Approx(0.0f));
+    REQUIRE(clip.top == Catch::Approx(2.5f));
+    REQUIRE(clip.right == Catch::Approx(8.0f));
+    REQUIRE(clip.bottom == Catch::Approx(20.0f));
+
+    item.paintBox = {0.25f, 0.5f, 7.75f, 19.5f};
+    item.viewport = {1.2f, 2.2f, 6.2f, 18.2f};
+    REQUIRE(computeRenderClipRect(item, 8, 20, clip));
+    REQUIRE(clip.left == Catch::Approx(1.0f));
+    REQUIRE(clip.top == Catch::Approx(2.0f));
+    REQUIRE(clip.right == Catch::Approx(7.0f));
+    REQUIRE(clip.bottom == Catch::Approx(19.0f));
+}
 
 TEST_CASE("setEmotePSBDecryptSeed follows the Android raw callback boundary") {
     REQUIRE(motion::ResourceManager::setEmotePSBDecryptSeed(

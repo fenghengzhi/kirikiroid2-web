@@ -4,6 +4,14 @@
 > 已被后续 fresh decompile 证伪。当前实现与二进制均为 mapped `PSBFile` raw
 > root → retained raw owner/node + lazy texture；strict/try 读取、clip、纹理物化、
 > drawLayer、adaptor 失败泄漏与析构顺序均已闭合。正文相关旧表项只表示当时状态。
+>
+> **2026-07-23 P3-B/render CURRENT CORRECTION：** 本文把 Player+992
+> `findMotion/loadMotion`、Player+656 `ResourceManager.bufLayer` 和 layer-id
+> dispatch 列作 defer 的文字也已过时：三者均已恢复。普通渲染 SLA 已改为
+> active/retired 双树 pass，并由 `0x6C4E28` Loop A leaf + Loop B
+> group/composed 产出供 `0x6C7440` 消费。仍 open 的是 SLA payload/J8、完整
+> alpha-mask 等后续对齐项；本文作为 06-05 历史 review，不能用于证明整体
+> 100% 完成。
 
 > 方法：以 [MotionPlayer_Restoration_Review_2026-06-03.md](MotionPlayer_Restoration_Review_2026-06-03.md) 为基线，
 >   对自 06-03 以来 dev/motion 的 **35 个提交** delta（M1 帧步进 4 函数边界收敛 / NCB 注册表 1:1 收敛 /
@@ -141,7 +149,7 @@ fresh decompile ctor `0x6CED30`、dtor `0x6CFADC`，逐字段比对 `player_cont
 | # | 偏差 | 严重度 |
 |---|------|--------|
 | ~~EmoteObject +0 scriptObject 槽缺失~~ **✅ 误判已证伪**：sub_6A88CC=RM ctor；2026-07-18 又纠正旧 by-value/shared-state 适配，现为唯一 owning RM 指针 | ~~低(inert)~~ closed |
-| ~~ctor 签名多 parentPlayer + RM native 非 dispatch~~ **✅ P3-B 第一轮已解(2026-06-05)**：ctor 单参 dispatch-in(0x6CED30)、删 native value RM、nativeRM() 解包(0x694928)、parent 移出 ctor(0x6b43dc)、child 继承 parent dispatch(0x6b43cc)。auditor 0 bug + logo 逐位 PASS。残 defer：findMotion +992 FuncCall / +656 / layer-id 签名 | ~~中~~ 大部 closed |
+| ~~ctor 签名多 parentPlayer + RM native 非 dispatch~~ **✅ P3-B 已解**：ctor 单参 dispatch-in(0x6CED30)、删 native value RM、nativeRM() 解包(0x694928)、parent 移出 ctor(0x6b43dc)、child 继承 parent dispatch(0x6b43cc)；后续又补齐 findMotion/loadMotion +992 FuncCall、+656 RM.bufLayer buffered 分支及零参 layer-id dispatch/set。SLA payload/J8/完整 alpha-mask 属独立 render open 项 | ~~中~~ closed（限本行 P3-B 范围） |
 | port-invented map：`_timelines/_playingTimelineLabels` 已于 2026-07-19 删除；`_motionsByKey` 等其余 snapshot/host map 仍待迁移 | 中 |
 
 ---
@@ -172,7 +180,7 @@ color 消费链 `0x6C7440→0x6C1B70→0x6A7518`、findSource。
 | 3 | blend 源单值 vs active-slot `node+536*activeSlotIndex+44` | ⑥ | 中 | **✅ 已修复(2026-06-05 后续)**（PlayerUpdateAnchor.cpp:144-152 改读 `activeSlot().blendMode`）|
 | 4 | ~~findSource 容器替换（SourceCache）~~ **类归属误判已纠正** → 真目标=ResourceManager::findSource@0x6AAB3C(FNV map→ObjSource)，已忠实重写函数体；SourceCache list 同构忠实不动；残留=RM 第一层容器 STL→内联 FNV bucket map(phase-D) | ⑤ | 中→低 | 函数体✅；容器选型 open(phase-D) |
 | 5 | `_type4..8ControllerAnimators`（LegacyVariableAnimatorState）死路径残骸 + 误导注释 | ① | 低 | **✅ 已移除**（反编译 0x67D01C/0x671228 证伪：二进制无独立 Player animator bucket；删 5 deque+map+6 访问器+死 loop+legacy_variable_state.h；差分逐位 PASS，见下 §七）|
-| 6 | EmoteObject +0 槽 / ctor 签名 / D3DEmotePlayer 4 常量类归属 | ④ | 低(inert) | **基本处理**：(A) D3DEmotePlayer 4 常量已移到 D3DEmotePlayer 类(main.cpp，0x52E504 证据)✅；(B) EmoteObject「scriptObject 槽缺失」**误判已证伪**，且 2026-07-18 已把旧 by-value/shared-state RM 纠正为唯一 owning RM 指针 + sticky adaptor✅；(C) **Player ctor 签名 = P3-B 第一轮已收敛单参 dispatch-in(2026-06-05)**✅。defer：D3DEmotePlayer 壳层 `_rm`、findMotion +992 FuncCall / +656 渲染 / layer-id 无 name 签名 |
+| 6 | EmoteObject +0 槽 / ctor 签名 / D3DEmotePlayer 4 常量类归属 | ④ | 低(inert) | **基本处理**：(A) D3DEmotePlayer 4 常量已移到 D3DEmotePlayer 类(main.cpp，0x52E504 证据)✅；(B) EmoteObject「scriptObject 槽缺失」**误判已证伪**，且 2026-07-18 已把旧 by-value/shared-state RM 纠正为唯一 owning RM 指针 + sticky adaptor✅；(C) Player ctor 单参 dispatch-in、findMotion/loadMotion +992 FuncCall、+656 RM.bufLayer 和零参 layer-id dispatch/set 均已收敛✅。D3DEmotePlayer 壳层 `_rm` 仍需按独立证据审计；SLA payload/J8/完整 alpha-mask 是 render open 项 |
 
 **需就地纠正的被证伪注释（CLAUDE.md 硬规则）**：
 - ~~PlayerFrameProgress.cpp:1022「无反向 root scan」~~ **✅ 已纠正**（#1 实装时引用 0x6B9A3C/0x6B9E84）

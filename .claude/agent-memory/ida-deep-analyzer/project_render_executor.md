@@ -9,7 +9,7 @@ type: project
 Function addresses:
 - `sub_6C2334 @ 0x6C2334` — build render item tree (flat mainList + special auxList)
 - `sub_6C4E28 @ 0x6C4E28` — render each item's source into its own leafLayer (item+304), then aux pass for type12 composite parents composes children into composedLayer (item+324)
-- `sub_6C7440 @ 0x6C7440` — final composite loop over mainList: either direct affineCopy to renderLayer OR via scratch "bufLayer" with alpha-mask chain walk
+- `sub_6C7440 @ 0x6C7440` — final composite loop over mainList: either direct operateAffine/operateMesh/operateBezierPatch to target OR via persistent RM.bufLayer with alpha-mask chain walk
 
 ## Top-Level Call Site — Player_drawCompat @ 0x6D5FB8
 
@@ -144,9 +144,9 @@ For each item:
    - Intersect item+184..196 with item+200..212 viewport
    - Compute `v31,v32,v36,v37 = effective bbox`
    - If empty: skip
-3. **setClip** on `v370` (target renderLayer = layerArg)
+3. **setClip** through `v370` = global Layer class accessor dispatch；target renderLayer 仅作 objthis
 4. **PriorDraw gate** (0x6c7628): `if (player+1096 && !item+18) skip` (+1096 is the Player NCB `priorDraw` bool; preview is +1092)
-5. **Color setup**: item+168..180 copied as 4 color channels on `v27 = player+676`'s "stencil" object
+5. **Source descriptor/color setup**: `player+676` 是 persistent descriptor Dictionary（key/src/blendMode），`player+716` 是四角 packed-color Dictionary；两只 accessor 保活到该 item 提交完成
 6. **Source load** (0x6c7a90): `sub_6C1B70(v349, player, item+256+4)` → v349 = source texture Layer
 7. **Select render path** (0x6c7b70, switch on `item+48 & 0xF`):
    - case 1: `v48=14`, goto LABEL_63 (composed)
@@ -154,22 +154,22 @@ For each item:
    - case 3: `v48=16`, goto LABEL_63
    - case 4: `v48=17`, goto LABEL_63
    - case 0: 
-     - If `player+1144` (stencilType): goto LABEL_60 (v48=2, composed)
+     - If `player+1144` (`completionType` int): goto LABEL_60 (v48=2, buffered)
      - Else goto LABEL_59:
        - If `item+264 != 0`: goto LABEL_60 (v48=2, composed)
        - Else fall through to direct path (v48=14)
-   - default: If stencilType: goto LABEL_60. Else goto LABEL_59.
-8. **LABEL_63 Composed Path** (0x6c7bb0-0x6c85bc):
-   - `v49 = player+656` (findLayer) → returns layer with "bufLayer" sub-layer
+   - default: If completionType: goto LABEL_60. Else goto LABEL_59.
+8. **LABEL_63 Buffered Path** (0x6c7bb0-0x6c85bc):
+   - `v49 = player+656` ResourceManager dispatch → PropGet its persistent `bufLayer`
    - `v342 = v49.bufLayer`  — a cached work/scratch layer
    - `v50 = v342` (object)
    - Compute setSize rect: `v57=max(item+184,0), v58=min(item+192, target.w), v61=max(item+188,0), v53=min(item+196, target.h)`
-   - If empty: skip  
+   - only `v58 < v57` skips；纵向反转/零尺寸仍继续
    - `v50.setSize(v58-v57, v53-v61)`
    - Dispatch on meshType:
-     - `item+280 == 0`: `v50.operateAffine(v349, 0, 0, srcW, srcH, 0, vertex coords - [v57,v61] - 0.5, v48, blendMode, stNearest=1)` — renders source to bufLayer
-     - `item+280 == 1`: operateBezierPatch
-     - `item+280 == 2`: operateMesh
+     - `item+280 == 0`: `v50.affineCopy(..., type=completionType, clear=1)`
+     - `item+280 == 1`: bezierPatchCopy(type=completionType,clear=1)
+     - `item+280 == 2`: meshCopy(type=completionType,clear=1)
    - **LABEL_97 Alpha-mask chain walk** (0x6c82dc-0x6c83b0):
      ```c
      v87 = item+264;  // ancestor
@@ -183,14 +183,17 @@ For each item:
            64, player+1148, v87+244);
          v87 = v87+264; if (!v87) break;
        }
-       if (v87 && (v87+244 & 3) == 1) break;  // alpha-mask type
+       if (v87 && (v87+244 & 3) == 1) {
+         v342.fillRect(argc=4: 0, RealW, RealH, 0); // BADPARAMCOUNT ignored
+         break;
+       }
        v87 = v87+264;
      }
-     // Then: fillRect (clear mask region) and final blit:
-     v370.operateRect(v57, v61, v342, 0, 0, w, h, v48, blendMode)  // blit bufLayer to renderLayer
+     // Always final blit through Layer class accessor, target as objthis:
+     v370.operateRect(v57, v61, v342, 0, 0, w, h, v48, opacity)
      ```
-9. **Direct Path** (0x6c8bdc-0x6c8df0): Only meshType=0 case 0 with no stencil and no parent+264:
-   - `v370.operateAffine(v349 /*source*/, 0, 0, srcW, srcH, 0, item+136..164 vertices - 0.5, v48=14, blendMode, stNearest=2)`
+9. **Direct Path**：gate 是 `(blendLow==0 || blendLow>5) && completionType==0 && parent+264==null`，随后再按 meshType 分发：
+   - meshType 0：`v370.operateAffine(v349 /*source*/, 0, 0, srcW, srcH, 0, item+136..164 vertices - 0.5, mode, opacity, Integer 0)`
    - Draws source texture directly to target renderLayer with world-space vertices.
    - Similar for meshType=1 (operateBezierPatch) and meshType=2 (operateMesh) at 0x6c8e00/0x6c8a68.
 
@@ -200,7 +203,7 @@ For each item:
 |---|---|---|---|
 | +16 | Tree-filter flag (copy of node+201) | sub_6C2334 @ 0x6c33a8 | sub_6C7440 @ 0x6c75c8, 0x6c82f4 |
 | +17 | Node-type bitmask filter | sub_6C2334 @ 0x6c33a0 | sub_6C7440 @ 0x6c75c8 |
-| +18 | Preview-mode filter | sub_6C2334 @ 0x6c33c0 | sub_6C7440 @ 0x6c7630 |
+| +18 | priorDraw item gate bit（由 recursive flag / node+48 形成） | sub_6C2334 @ 0x6c33c0 | sub_6C7440 @ 0x6c7630 |
 | +19 | First-pass entry (drawFlag) | sub_6C2334 @ 0x6c2a8c | sub_6C4E28 @ 0x6c5dc0 |
 | +20 | Layer-id resolved flag | sub_6C4E28 @ 0x6c5240 | sub_6C4E28 @ 0x6c5144 |
 | +21 | Clip-valid flag (1=renderable, 0=degenerate/empty) | sub_6C4E28 @ 0x6c4f88/0x6c5e6c | sub_6C7440 @ 0x6c82f4, sub_6C4E28 aux @ 0x6c5eb0 |
@@ -208,7 +211,7 @@ For each item:
 | +184..196 | paintBox (world AABB) | sub_6C2334 @ 0x6c27e8 | sub_6C4E28 clip, sub_6C7440 setClip |
 | +200..212 | viewport AABB (inherited from Shape AABB chain) | sub_6C2334 | sub_6C4E28, sub_6C7440 |
 | +216..228 | clipped render rect (after clip intersection) | sub_6C4E28 @ 0x6c4f8c | sub_6C7440 LABEL_97 |
-| +232 | sourceW int flag (nonzero = drawable) | sub_6C2334 | sub_6C7440 @ 0x6c75c8 |
+| +232 | opacity int（raw zero = skip；其余值保留） | sub_6C2334 | sub_6C7440 @ 0x6c75c8/0x6c764c |
 | +244 | stencil / composite flags (from node+52) | sub_6C2334 @ 0x6c2a90 | sub_6C7440 alpha-mask, sub_6C4E28 |
 | +248 | tTJSVariant k context | sub_6C2334 | sub_6C7440 "k" propset |
 | +256 | source key/data pointer | sub_6C2334 | sub_6C1B70 |
@@ -224,7 +227,7 @@ For each item:
 
 1. **mainList is flat.** All renderable items (type0 with source, type3 motions, type12) sit in mainList as sequential top-level entries. Child-parent relationships are NOT implicit in list structure.
 
-2. **Children render as INDEPENDENT top-level items.** moji_y / moji_f / etc. are type0 leaf nodes whose vertices (node+1856..1884) are already in WORLD space after `Player_updateLayers` bakes in parent transforms. They appear in mainList and are rendered via direct affineCopy (case 0, no stencil, item+264==0 → LABEL_59 falls through to direct path).
+2. **Children render as INDEPENDENT top-level items.** moji_y / moji_f / etc. are type0 leaf nodes whose vertices (node+1856..1884) are already in WORLD space after `Player_updateLayers` bakes in parent transforms. They appear in mainList and are rendered via direct `operateAffine` (case 0, item+264==0 and the remaining direct gate holds).
 
 3. **item+264 is a special ancestor-chain pointer**, not a general parent pointer. It is ONLY set when:
    - Branch A (nodeType=3 sub-player parent wrapper): parent.item+264 = visibleAncestor.item
@@ -235,50 +238,14 @@ For each item:
 
 5. **No scratch-layer aggregation for normal slide→letters.** Slide itself has node+200==0 (no source), so it's skipped at sub_6C2334 line 762 and creates NO item. Its letter children render flat with their world-space vertices.
 
-6. **bufLayer is a PER-ITEM scratch at `player+656["bufLayer"]`** (accessed via TJS findLayer on player's layer property). Reused across items with setSize. Blitted to renderLayer via operateRect in composed path. This is the ONLY scratch layer path — used when item+264 != 0 OR stencil != 0 OR meshType != 0.
+6. **bufLayer 是 ResourceManager 持有的 persistent shared scratch**（`player+656` dispatch 的 `bufLayer` 属性），逐 item setSize/覆盖并经 operateRect 提交。路由由 blend 低4位、`completionType(+1144)`、`item+264 parent` 决定；meshType 本身不强制 buffered，direct 也有 mesh/Bezier 分支。
 
-## Local Web Port Misalignments (what to fix)
+## 2026-07-23 本地状态（取代旧修复清单）
 
-**Key local code bug at `PlayerRenderPrepare.cpp:820-837`:**
-```cpp
-for(auto &item : _runtime->preparedRenderItems) {
-    const int parentNodeIndex = item.visibleAncestorIndex;
-    // ... unconditionally sets item.parentItem for ANY visibleAncestor
-    item.parentItem = it->second;
-    it->second->childItems.push_back(&item);
-}
-```
-
-This sets `parentItem` for EVERY item whose visibleAncestorIndex matches a prepared item. That is NOT aligned with binary's item+264 write rules (binary only writes item+264 for nodeType=3 sub-player parents and type12 composites).
-
-**Downstream effect** (in `PlayerRender.cpp:1151-1165`):
-- All child items get `hasRenderParent = true`
-- At line 1851 `if(command.hasRenderParent) continue;` — they're SKIPPED from the top-level execute loop
-- The parent (slide) is invisible (no source) so it never enters mainList either in our local logic (or it's wrongly marked something)
-- Result: NOTHING renders the letter children, because:
-  - They're filtered out as "children" in execute loop
-  - Their parent (slide) has no source bitmap to render them through the composed path
-  - The `buildCommandOutput` composed branch never triggers because the would-be "parent" slide never enters the top-level walk
-
-## Minimal Local Fix Set
-
-1. **`PlayerRenderPrepare.cpp:820-837`**: Only set `parentItem` following the binary's item+264 write conditions:
-   - Set for nodeType=3 sub-player parent wrappers (the type3 node's parent_item → visibleAncestor's item). These correspond to Branch A in sub_6C2334 at 0x6c2aa4.
-   - Set for type12 composite aggregation. These correspond to the secondary loop at 0x6c3754.
-   - **Do NOT set for ordinary type0 leaves under type0 transforms.**
-
-2. **`PlayerRender.cpp:1851`**: The `if(command.hasRenderParent) continue;` filter becomes almost never triggered once parentItem is correctly scoped. Children (moji_y) will go through to `buildCommandOutput`, which for them — with meshType=0, stencilType=0, no item+264 set — takes the **direct path** (`executedDirect = true`), doing `renderLayer.OperateAffine(worldCorners, source, ...)`. This is already present at `PlayerRender.cpp:1672-1679`. 
-
-3. **Verify `shouldUseDirectRenderPathLike_0x6C7440`** at `PlayerRender.cpp:1672`: Must return true for: `meshType==0 && stencilType==0 && item+264==0`. That's the binary's case 0 + LABEL_59 fall-through condition.
-
-4. **The `buildCommandOutput` composed branch is correctly architected** for type3/type12 cases — it's just never triggered for the yuzulogo letter scene because those don't involve type3/type12 composition. Leave it as-is.
-
-## Verification Steps
-
-After fix, expected behavior for yuzulogo:
-- `renderCommands` contains: bg (1 item) + moji_y/f/o/s/t/u1/u2/z (~8 items) + potentially a few more = ~9-10 items
-- `renderCommandsTopLevel` should be the SAME as `renderCommands` (all are top-level, none have parentItem)
-- Execute loop processes all ~10 items
-- Each takes `executedDirect=true` path → `renderLayer.OperateAffine(...)` 
-- Expected ~10 `execute.copy` entries in log per frame (vs current 1)
-- `buffered.operateRect.composed` should remain 0 for yuzulogo (no type12/type3 in play)
+旧 `PlayerRenderPrepare.cpp` / `PlayerRender.cpp::buildCommandOutput` 路径已经
+删除，不能再按历史行号修补。当前实现为：0x6C2334 persistent item build →
+0x6C4E28 leaf/group pre-walk → 0x6C7440 flat submit；direct gate 仅消费
+blend低4位、completionType(+1144)、parentItem；buffered 使用同一次 source
+resolve + RM.bufLayer + ancestor walk。目标 Layer 操作通过进程级 Layer class
+accessor dispatch、目标实例作 objthis；source/RM/bufLayer 为实例 dispatch。
+现有 logo 只覆盖 direct 非回归，不能充当 parent-buffered/ancestor-mask oracle。

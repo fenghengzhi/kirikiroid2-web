@@ -6,10 +6,17 @@
 >       0x6D5658(SLA dispatcher) / 0x6D5948(ResolveSLATarget) / 0x6C9CA8(accurate SLA) /
 >       0x6CBCE4(acquireLayerById) / 0x6DCD0C(map insert) / 0x6CE7D8(updateLayerAfterDraw)。
 
-## 审计结论: ⚠️ 部分偏差(单一 standing P1-I3 phase-divergence) — 容器选型/逻辑/字段映射均已对齐
+> **2026-07-23 superseded correction：**旧 P1-I3 “build→execute phase
+> divergence” 已证伪：本地 `buildRenderCommands` 现在就是
+> `renderToCanvasLike_0x6C7440` 在 `!priorDraw` 下执行的 `0x6C4E28` pre-walk，
+> 并未回到 `0x6C2334`。Loop B union 的是 group/child paintBox，而非 child clip。
+> 当前剩余缺口以 clusterJ 的 acquire caller payload、accurate-SLA 和函数拆分为准。
 
-本轮无新发现的局部分支/常量/默认值偏差。唯一未消除偏差是**跨簇 standing** 的
-P1-I3 (requireLayerId/item+20 phase placement)，与 cluster I 报告同一条，**未连续两轮恶化**，不触发停滞警告。
+## 当前审计结论（2026-07-23）：⚠️ 部分偏差，但 P1-I3 phase-divergence 已证伪
+
+`buildRenderCommands` 是本地 `0x6C4E28` pre-walk，而不是 `0x6C2334` build；因此
+requireLayerId/item+20 已处于正确函数阶段。当前开放项是 acquire caller payload 专用值类型、
+accurate-SLA 持久树、0x6C7440 wrapper/executor 源码函数边界及 item 源码结构，不再包含 P1-I3。
 
 ---
 
@@ -18,7 +25,8 @@ P1-I3 (requireLayerId/item+20 phase placement)，与 cluster I 报告同一条�
 ### build: sub_6C2334 @0x6C2334 (item alloc 0x1B0=432B)
 - item 字段写入 +16/+17/+18/+19 等已由 cluster I/RenderItem_Field_Mapping 详尽核实。
 - **本轮关键负证: 0x6C2334 内 grep `+424`=0 hits, `requireLayer`=0 hits, `sub_6C4E28`=0 hits。**
-  → item+424(layerId from requireLayerId) 与 item+20 闩绝**不在 build 阶段写入**。证实 P1-I3。
+  → item+424 与 item+20 不在 `0x6C2334` 写入；本地同样由独立的
+  `buildRenderCommands`（`0x6C4E28` counterpart）写入，因此这项负证不构成 phase 偏差。
 
 ### execute requireLayer: sub_6C4E28 @0x6C4E28 (= Player_emitRenderItem_requireLayer)
 ```
@@ -35,7 +43,7 @@ Loop A (a2 mainList): for item:
     setSize/fillRect + switch(item+280): affineCopy/meshCopy/bezierPatchCopy
   else: item+21 = 0                                        // @0x6c5e6c
 Loop B (a3 boundsList/composed): for item:
-  union child clip (item+184 then narrow by children +216..228)
+  seed group paintBox(+184); union visible child paintBox(+184), then camera/viewport narrow
   if (!item+340) create composed Layer (L"Layer" via Window.mainWindow) -> item+324
   setSize/fillRect; child alpha-mask loop gate (child+21 && child+320):
     Motion_doAlphaMaskOperation(... item+244)
@@ -94,8 +102,8 @@ for item (gate item+17||item+16||!item+232 skip; clip vs viewport):
 | ①item +16 rawFlag16 | node+201 @0x6c33a8 | :474 `entry.rawFlag16=node.renderTreeFlag201` | ✅ |
 | ①item +17 skipFlag0 | ((preview?1097:1089)&(1<<type))==0 | :475-476 同式 | ✅ |
 | ①item +52/+56 layerId/layerId2 | node+16/node+20 @0x6c341c/0x6c3428 | :482-483 layerId/layerId2 | ✅ |
-| ①item +424 requireLayerId | EXECUTE-only @0x6c5234(0x6C4E28) | build-loop(PlayerRenderExecute.cpp:83+) | 🔧 P1-I3 |
-| ②build flag +20 latch | EXECUTE LABEL_28 @0x6c5240 | build-loop rawFlag20 (value-eq, trace 0-diff) | 🔧 P1-I3 |
+| ①item +424 requireLayerId | 0x6C4E28-only @0x6c5234 | `buildRenderCommands`（0x6C4E28 counterpart） | ✅ phase aligned |
+| ②flag +20 latch | 0x6C4E28 LABEL_28 @0x6c5240 | `buildRenderCommands` rawFlag20 | ✅ phase aligned |
 | ②build +19 drawFlag | node+1960?1:(a5|node+1961) | :471-473 +needsGroupEntry term | ✅ |
 | ②item alloc 432B raw | operator new(0x1B0) 单块 | PreparedRenderItem+NativeRenderItemFields STL 拆分 | ⚠ container(I4) |
 | ③render target 容器(SLA map) | std::map<int,node> Rb_tree(0xD0节点 0x6DCD0C) | SeparateLayerAdaptor.h:41 `std::map<tjs_uint32,NativeSLANodeLike>` | ✅ |
@@ -111,14 +119,13 @@ for item (gate item+17||item+16||!item+232 skip; clip vs viewport):
 
 ## 偏差详情
 
-### 🔧 P1-I3 (standing, 跨簇): requireLayerId/item+20 phase placement
-- 二进制 item+424(layerId via L"requireLayerId" dispatch) 与 item+20 闩锁**只在 execute 阶段**
-  (sub_6C4E28 @0x6c5234/0x6c5240, LABEL_28)写入; build(sub_6C2334)从不碰这两个偏移
-  (本轮 grep 负证: 0x6C2334 `+424`/`requireLayer`/`sub_6C4E28` 全 0 hits)。
-- 本地把它移到 build loop(PlayerRenderExecute.cpp:83+, commit d51cce9)。值匹配(trace 0-diff,
-  build_flow yuzulogo 242->0), 但 phase 位置不 1:1。
-- 这是**架构性**偏差(非局部 patch 可修): 需(a)单一 raw-ish item POD, (b)把 requireLayerId
-  恢复到 execute pass。高回归风险, 应在 CI 下做。与 cluster I I1/I3 同一条, 不重复展开。
+### ✅ P1-I3 已证伪：requireLayerId/item+20 phase placement
+- 二进制 item+424 与 item+20 只由 `sub_6C4E28 @0x6c5234/0x6c5240` 写入；
+  `0x6C2334` 不碰它们。
+- 本地曾因把函数名 `buildRenderCommands` 误当 `0x6C2334 build` 而报告 phase 偏差；实际
+  该函数正是 `0x6C4E28` counterpart，并由 `renderToCanvasLike_0x6C7440` 在
+  `!priorDraw` 时调用，所以阶段已对齐。旧“移回 execute”的建议删除。
+- item 源码结构仍可独立审计，但不能用 ARM64 0x1B0 对象尺寸要求 wasm32 硬凑布局。
 
 ### ⚠ I4 (standing, container-class): item 拆分为两个 STL struct
 - 二进制 item = 单块 operator new(0x1B0)=432B raw, build/execute 跨阶段就地消费。
@@ -141,8 +148,10 @@ for item (gate item+17||item+16||!item+232 skip; clip vs viewport):
 ---
 
 ## 架构性偏差(🔧)
-- **P1-I3** (requireLayerId/item+20 build→execute phase move) — 见上, standing 跨簇。
-  继续打补丁只会越改越歪; 需先把 item 收敛成单块 POD 并把 requireLayerId 还回 execute pass。
+- **P1-I3 已于 2026-07-23 证伪**：`buildRenderCommands` 是当前
+  `0x6C7440` 内 `!priorDraw` pre-walk 的本地 helper，不是 `0x6C2334` item-build；
+  requireLayerId/item+20 已在正确阶段。ARM64 的 0x1B0 尺寸也不要求 wasm32
+  收敛成手工 padding 的 POD。
 
 ## 子函数对齐状态
 - ✅ Player_acquireLayerById @0x6CBCE4 — std::map<int,Layer> Rb_tree, 本地 SLA Map 对齐。已 rename+comment。
@@ -151,7 +160,7 @@ for item (gate item+17||item+16||!item+232 skip; clip vs viewport):
 - ✅ sub_6D5658 SLA dispatcher — accurate/non 双路 gate, 本地对齐。
 - ✅ sub_6CE7D8 updateLayerAfterDraw — +612/+613 + assignImages@696, 本地精确对齐。
 - ⚠ sub_6C9CA8 accurate SLA — leaf 路径对齐; composite drawMeshFrame/acquireLayerById 子路径本地缺(见偏差详情)。
-- 🔧 sub_6C4E28 emitRenderItem_requireLayer — execute 阶段权威; 本地把 requireLayerId/item+20 提前到 build(P1-I3)。
+- ⚠ sub_6C4E28 emitRenderItem_requireLayer — pre-walk/float/leaf/group/refresh gate 已接入；`0x6C5264..0x6C532C` acquire caller payload 专用值类型仍开放。
 - ✅ Motion_doAlphaMaskOperation — 两处 child alpha-mask loop(Loop B + composite)gate child+21&&child+320 / child+21&&!child+16, 本地 markStencilMaskChain 对齐。
 
 ## 平台边界标注
@@ -160,9 +169,8 @@ for item (gate item+17||item+16||!item+232 skip; clip vs viewport):
   GL 调用, 属构建配置门控而非平台边界声明(逻辑本身已对齐 0x6ADFBC), 不计偏差。
 
 ## 修复建议
-1. P1-I3: 不做局部 patch。择期(CI 下)把 PreparedRenderItem+NativeRenderItemFields 收敛为单块
-   POD, 并把 requireLayerId/item+20 闩锁从 PlayerRenderExecute build-loop 移回 emitRenderItem
-   execute pass(对齐 0x6C4E28 LABEL_28)。
+1. P1-I3 已关闭；不得再按 ARM64 0x1B0 尺寸硬凑本地 POD，也不得把当前
+   `0x6C4E28` helper 误移到其他阶段。下一步应反编译并复原 acquire caller payload。
 2. accurate composite 子路径: 在 renderAccurateSlaLike_0x6C9CA8 补 visible-gated composite
    分支(Player_acquireLayerById 等价 + assignImages + child alpha-mask +
    drawMeshFrame/drawBezierPatchFrame/drawLine), 对齐 sub_6C9CA8 LABEL_85 后。标 MISSING,

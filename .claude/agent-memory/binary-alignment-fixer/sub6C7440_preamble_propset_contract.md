@@ -20,8 +20,11 @@ and `0x6C1B70` caller disassembly prove:
 Each render item writes `key`, `src`, and `blendMode` onto the descriptor and
 indices 0..3 onto the color Dictionary with `TJS_MEMBERENSURE`. `0x6C1B70` then
 dispatches `ResourceManager.loadSource(sourceObject, descriptor)` and receives a
-baked Layer. The ResourceManager's inherited SourceCache owns its separate
-`bufLayer`; that Layer participates only in the low-blend 1/2 bake path.
+baked Layer. The ResourceManager's inherited SourceCache owns its persistent
+`bufLayer`. The old limitation “bufLayer is used only by SourceCache's
+low-blend 1/2 bake” is false: `0x6C7440` buffered submit also reads that same
+Layer from the RM owner, performs setSize + copy + ancestor mask, and then passes
+it as the operateRect source.
 
 Local Player now owns these two persistent Dictionaries in the matching field
 order, and all production 0x6C1B70 call sites mutate and dispatch through them.

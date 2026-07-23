@@ -11,19 +11,18 @@ extern "C" void TVPResetSoftwareAffineDiagnosticsForWasmtime();
 
 bool getLayerClassDispatchVariantLike_0x5CB08C(tTJSVariant &layerClassVar);
 tjs_error callLayerOperateAffineLike_0x6C7440(
-    const tTJSVariant &layerClassObject,
+    iTJSDispatch2 *layerClassObject,
     iTJSDispatch2 *renderLayerObject,
     const tTVPPointD *points,
     const tTJSVariant &sourceObject,
     const tTVPRect &sourceRect,
     tTVPBlendOperationMode blendMode,
-    tjs_int opacity,
-    tTVPBBStretchType type);
+    tjs_int opacity);
 // Generalized per-primitive dispatch helpers mirroring sub_6C7440 @ 0x6C7440
-// and Player_emitRenderItem_requireLayer @ 0x6C4E28: each builds the exact
-// tTJSVariant arg array the binary packs and routes through
-// iTJSDispatch2::FuncCall on the render-layer INSTANCE (objthis = same
-// instance), not the Layer class object.
+// and Player_emitRenderItem_requireLayer @ 0x6C4E28. Copy/setSize/fillRect use
+// the source/buffer Layer instance as both receiver and objthis; target
+// operate*/setClip calls instead use the Layer class receiver with the target
+// Layer as objthis.
 //
 // buildMeshPointTJSArrayLike_0x6C715C builds a TJS Array of interleaved
 // doubles (x,y,x,y,...) translated by (xOffset,yOffset), exactly as
@@ -73,7 +72,30 @@ tjs_error callLayerBezierPatchCopyLike_0x6C7440(
     tjs_int divy,
     tTVPBBStretchType type,
     bool clear);
+
+// Both Player_emitRenderItem_requireLayer @0x6C57B4 and
+// Player_renderToCanvas @0x6C7D54 dispatch setSize with two Real Variants.
+tjs_error callLayerSetSizeRealLike_0x6C7440(
+    iTJSDispatch2 *layerObject,
+    tjs_real width,
+    tjs_real height);
+
+// Player_renderToCanvas @0x6C83B0 deliberately calls Layer.fillRect with only
+// four arguments [Integer 0, Real width, Real height, Integer 0].  Android's
+// Layer_fillRect_ncb @0x81D6E0 requires five, returns TJS_E_BADPARAMCOUNT, and
+// the caller ignores that result before terminating the ancestor walk.
+tjs_error callLayerFillRect4Like_0x6C7440(
+    iTJSDispatch2 *layerObject,
+    tjs_real width,
+    tjs_real height);
+// Player_emitRenderItem_requireLayer @0x6C6274 dispatches the normal five-arg
+// form [Integer 0, Integer 0, Real width, Real height, Integer 0].
+tjs_error callLayerFillRect5Like_0x6C4E28(
+    iTJSDispatch2 *layerObject,
+    tjs_real width,
+    tjs_real height);
 tjs_error callLayerOperateMeshLike_0x6C7440(
+    iTJSDispatch2 *layerClassObject,
     iTJSDispatch2 *renderLayerObject,
     const tTJSVariant &sourceObject,
     const tTVPRect &sourceRect,
@@ -84,6 +106,7 @@ tjs_error callLayerOperateMeshLike_0x6C7440(
     tjs_int opacity,
     bool clear);
 tjs_error callLayerOperateBezierPatchLike_0x6C7440(
+    iTJSDispatch2 *layerClassObject,
     iTJSDispatch2 *renderLayerObject,
     const tTJSVariant &sourceObject,
     const tTVPRect &sourceRect,
@@ -95,23 +118,32 @@ tjs_error callLayerOperateBezierPatchLike_0x6C7440(
     bool clear);
 
 // operateRect (argc=9): [dx, dy, src, sx, sy, sw, sh, mode, opa]. Dispatched
-//   on the render-layer instance, matching sub_6C7440's L"operateRect" block.
+//   through the Layer class accessor with the render-layer as objthis, matching
+//   sub_6C7440's L"operateRect" block.
 tjs_error callLayerOperateRectLike_0x6C7440(
+    iTJSDispatch2 *layerClassObject,
     iTJSDispatch2 *renderLayerObject,
-    tjs_int destX,
-    tjs_int destY,
+    tjs_real destX,
+    tjs_real destY,
     const tTJSVariant &sourceObject,
-    const tTVPRect &sourceRect,
+    tjs_real sourceWidth,
+    tjs_real sourceHeight,
     tTVPBlendOperationMode blendMode,
     tjs_int opacity);
 
 // libkrkr2.so sub_6C7440 L"setClip" dispatch points (target work-layer v370):
 //   - 0x6c78dc: argc=4 [left, top, width, height]  → set clip rect
 //   - 0x6c7620: argc=0                              → reset clip (same method)
-tjs_error callLayerSetClipLike_0x6C7440(iTJSDispatch2 *renderLayerObject,
-                                        tjs_int left, tjs_int top,
-                                        tjs_int width, tjs_int height);
-tjs_error callLayerResetClipLike_0x6C7440(iTJSDispatch2 *renderLayerObject);
+tjs_error callLayerSetClipLike_0x6C7440(iTJSDispatch2 *layerClassObject,
+                                        iTJSDispatch2 *renderLayerObject,
+                                        tjs_real left, tjs_real top,
+                                        tjs_real width, tjs_real height);
+tjs_error callLayerResetClipLike_0x6C7440(iTJSDispatch2 *layerClassObject,
+                                          iTJSDispatch2 *renderLayerObject);
+tjs_int callLayerPropGetIntLike_0x6C99B8(iTJSDispatch2 *layerClassObject,
+                                         iTJSDispatch2 *layerObject,
+                                         const tjs_char *memberName,
+                                         tjs_uint32 *memberHint);
 
 std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor);
 iTJSDispatch2 *resolvePrimaryLayerObject(iTJSDispatch2 *layerTreeOwnerObject);
@@ -141,7 +173,7 @@ bool prepareLayerForRender(iTJSDispatch2 *layerObject,
 std::string summarizeLayerChildren(tTJSNI_BaseLayer *layer, int maxChildren = 12);
 bool shouldUseDirectRenderPathLike_0x6C7440(
     const motion::detail::PreparedRenderItem &item,
-    bool clearEnabled);
+    tjs_int completionType);
 
 tTVPBlendOperationMode resolveBlendOperationModeLike_0x6C7440(int rawBlendMode);
 
@@ -157,10 +189,10 @@ std::vector<tTVPPointD> buildMeshPoints(
 motion::D3DAdaptor *ensureSharedD3DAdaptor(iTJSDispatch2 *targetLayerObject);
 
 struct RenderClipRect {
-    int left = 0;
-    int top = 0;
-    int right = 0;
-    int bottom = 0;
+    float left = 0.0f;
+    float top = 0.0f;
+    float right = 0.0f;
+    float bottom = 0.0f;
 };
 
 bool computeRenderClipRect(

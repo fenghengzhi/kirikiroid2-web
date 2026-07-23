@@ -132,16 +132,20 @@ longer true. ObjSource now owns the exact raw PSB owner/node pair plus lazy
 texture and registers originX/originY/width/height/clip/drawLayer. The former
 key/src/blendMode/color facade was deleted.
 
-### ResourceManager (binary @0x6ab8bc) — 13 members:
-constructor(base), loadSource(sub_6A7BA8), clearCache(sub_6A8438), bufLayer RO(sub_6A84FC), load(ResourceManager_loadResource), unload(sub_6A959C), unloadAll(loc_6A8CF8), isExistMotion(sub_6A96F8), findMotion(sub_6A9ED4), findSource(sub_6AAB3C), random(sub_6AB56C), requireLayerId(sub_6AB694), releaseLayerId(sub_6AB750).
-Local (main.cpp:307): constructor, load, loadSource, unload, clearCache, findSource, requireLayerId, releaseLayerId, +static setEmotePSBDecryptSeed/Func.
-Verdict: ❌ member-set divergence:
-  - MISSING in local: **bufLayer**(RO prop), **unloadAll**, **isExistMotion**, **findMotion**, **random**.
-  - EXTRA/non-binary in local: setEmotePSBDecryptSeed, setEmotePSBDecryptFunc (static) — not in this binary registrar (verify they belong elsewhere; otherwise spurious).
-  - **Superseding correction (2026-06-07/2026-07-23):** local ResourceManager now
-    publicly inherits SourceCache and reuses the same registered methods. The
-    source cache is `std::list<Entry>`; old “unrelated classes/different
-    containers” and “intrusive LRU” descriptions are obsolete.
+### ResourceManager (binary @0x6ab8bc) — constructor + 12 exposed members:
+loadSource(sub_6A7BA8), clearCache(sub_6A8438), bufLayer RO(sub_6A84FC), load(ResourceManager_loadResource), unload(sub_6A959C), unloadAll(0x6A8CF8), isExistMotion(sub_6A96F8), findMotion(sub_6A9ED4), findSource(sub_6AAB3C), random(sub_6AB56C), requireLayerId(sub_6AB694), releaseLayerId(sub_6AB750).
+
+**2026-07-23 current local verdict:** `NCB_REGISTER_SUBCLASS(ResourceManager)`
+registers those same 12 methods/properties in binary order, including inherited
+`loadSource`/`clearCache`/`bufLayer` and RM-own `unloadAll`/`isExistMotion`/
+`findMotion`/`findSource`/`random`/layer-id methods. `ResourceManager` publicly
+inherits `SourceCache`, whose source-level container is `std::list<Entry>`; the
+old “unrelated classes/different containers” and “hand-written intrusive LRU”
+descriptions are obsolete. `setEmotePSBDecryptSeed/Func` are injected by the
+separate emoteplayer registration path rather than belonging to this 12-member
+table, so they are not evidence of a motionplayer ResourceManager registrar
+divergence. This member-set closure does not prove every method body globally
+100%; use the per-function audits for remaining behavioral gaps.
 
 ### Point (binary @0x690fbc) — members: constructor, type RO(sub_691248), contains(Player_hitTest!), x RO(sub_691250), y RO(sub_691258).  [5]
 Local (main.cpp:36): constructor, type RO, contains, x RO, y RO. ✅ member set MATCHES.
@@ -170,7 +174,7 @@ Verdict: 🔧 architectural divergence. Binary PrivateMotionGLL is a real regist
 | K-3 | Motion_doAlphaMaskOperation @0x6af104 | (none) / main.cpp:286 | P0 ❌ | Alpha-mask op MISSING: no shader cache, fillRect borders, or CPU dst.a=src.a*dst.a/255 loops; also wrong registration owner |
 | K-4 | Motion_getD3DAvailable @0x6b0960 | main.cpp:285 + Player impl | P1 ⚠️ | Must be `!hasGPUAccel`; registered on Player not namespace |
 | K-5 | ObjSource_ncb_registerMembers @0x69ccb8 | main.cpp:33 | P0 ❌ | Local registers only constructor; binary has originX/originY/width/height/clip RO + drawLayer method (6 missing) |
-| K-6 | ResourceManager_ncb_registerMembers @0x6ab8bc | main.cpp:307 | P1 ❌ | Missing bufLayer/unloadAll/isExistMotion/findMotion/random; extra setEmotePSBDecrypt*; RM shares source-cache surface with SourceCache in binary |
+| K-6 | ResourceManager_ncb_registerMembers @0x6ab8bc | main.cpp ResourceManager registrar | ✅ member set | Constructor + 12 exposed members match, including bufLayer/unloadAll/isExistMotion/findMotion/random; setEmotePSBDecrypt* belongs to the separate emoteplayer injection path |
 | K-7 | motionplayer_ncb_register @0x6d9b08 | main.cpp:285-286,331-378,420 | P1 ⚠️ | doAlphaMaskOperation/getD3DAvailable & MaskModeStencil/Alpha belong on Motion namespace not Player/D3DEmoteModule; Player subclass order/registration diverges |
 | K-8 | Point_ncb_registerMembers @0x690fbc | SourceCache.h:145 | P2 ⚠️ | `contains` = Player_hitTest in binary; local returns false stub (member set otherwise matches) |
 | K-9 | PrivateMotionGLL_CreateClass @0x6dd284 | PrivateMotionGLL.h | P2 🔧 | Binary is a registered TJS class (setSize/visible/absolute + delegating ctor); local has no class, uses free fns + std::vector |
@@ -179,7 +183,6 @@ Verdict: 🔧 architectural divergence. Binary PrivateMotionGLL is a real regist
 ## MISSING (no local counterpart)
 - Motion_doAlphaMaskOperation full body (shader cache + CPU pixel loops + fillRect-border passes).
 - ObjSource: originX/originY/width/height/clip RO props + drawLayer.
-- ResourceManager: bufLayer / unloadAll / isExistMotion / findMotion / random.
 - Player::findSource 的 raw PSBRawNode 像素导航（容器/生命周期已在 2026-07-18 复原）。
 - Motion namespace MaskModeStencil/MaskModeAlpha constants.
 - PrivateMotionGLL as a registered NCB class (setSize/visible/absolute).

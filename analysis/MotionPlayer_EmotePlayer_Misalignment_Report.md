@@ -291,16 +291,18 @@ double getTickCount() const { return _tickCount; }
 > 命名的历史快照。当前字节验证映射为 +1092 preview bool、+1093
 > syncActive bool、+1096 priorDraw bool、+1144 completionType int、+1160
 > outsideFactor double、+1168 speed double、+1176 meshDivisionRatio double。
-> 下表的 speed/project/priorDraw 行已被此纠正取代。
+> 下表已就地删除旧错位结论；`project`/`speed`/`priorDraw`/`completionType`
+> 现在列出经 NCB 字面绑定和字段读点复核后的映射。
 
 | 属性 | 二进制类型 | 本地类型 | 问题 |
 |------|-----------|---------|------|
 | `outline` | ttstr (+1032, 20 bytes) | bool | 二进制是字符串，本地是布尔 |
 | `meshline` | ttstr (+1052, 20 bytes) | bool | 同上 |
-| `speed` | bool/byte (+1093) | double | 二进制是布尔标志，本地是浮点数 |
-| `colorWeight` | bool/byte (+1097) | double | 二进制是布尔标志，本地是浮点数 |
-| `project` | int (+1144) | tTJSVariant | 二进制是整数，本地是变体类型 |
-| `priorDraw` | double (+1160) | int | 二进制是浮点，本地是整数 |
+| `speed` | double (+1168) | double | 当前映射一致；旧报告把 +1093 bool 误命名为 speed |
+| `colorWeight` | packed uint32 (+1156) | packed uint32 | 当前映射一致；+1097 是独立 bool 字段，不是该属性值 |
+| `project` | tTJSVariant / motion-key context (+1012) | tTJSVariant | +1144 归属 project 的旧结论已证伪 |
+| `priorDraw` | bool/byte (+1096) | bool | 当前映射一致；旧 +1160 double 归属错误 |
+| `completionType` | int (+1144) | int | 当前映射一致；0x6C7440 direct/buffered gate 的实际消费者 |
 | `opacity` | int (root+1656) | double | 二进制是 int32，本地代码 setOpacity 接受 double |
 
 ---
@@ -389,7 +391,7 @@ Function: assign
 
 ---
 
-### 3.3 [P2-MEDIUM] ResourceManager 注册不完整
+### 3.3 [已纠正] ResourceManager 12 成员注册已补齐
 
 **二进制** (0x6AB8BC) — 继承 SourceCache 成员:
 ```
@@ -399,13 +401,20 @@ isExistMotion, findMotion, findSource,
 random, requireLayerId, releaseLayerId
 ```
 
-**本地代码 NCB**:
+**当前本地代码 NCB**:
 ```
-load, unload, clearCache,
-setEmotePSBDecryptSeed, setEmotePSBDecryptFunc
+loadSource, clearCache, bufLayer (RO),
+load, unload, unloadAll,
+isExistMotion, findMotion, findSource,
+random, requireLayerId, releaseLayerId
 ```
 
-**缺少**: loadSource, bufLayer, unloadAll, isExistMotion, findMotion, findSource, random, requireLayerId, releaseLayerId
+**2026-07-23 纠正**：旧“注册不完整”结论已被当前
+`NCB_REGISTER_SUBCLASS(ResourceManager)` 证伪。上述 12 个暴露成员已经按
+`0x6AB8BC` 的顺序注册；`loadSource`/`clearCache`/`bufLayer` 来自公开继承的
+`SourceCache`。`setEmotePSBDecryptSeed/Func` 由 emoteplayer 的独立入口注入，
+不属于这张 motionplayer ResourceManager 12 成员表。这里仅闭合成员集合，
+不把未逐函数审计的行为外推为全局 100%。
 
 ---
 
@@ -475,7 +484,7 @@ setEmotePSBDecryptSeed, setEmotePSBDecryptFunc
 11. **补全 Point/Circle/Rect/Quad/LayerGetter 子类**
 
 ### 第三优先级（P2 完善）
-12. 补全 ResourceManager/SeparateLayerAdaptor 方法
+12. 继续复核 SeparateLayerAdaptor 深层渲染行为（ResourceManager 12 成员注册缺口已闭合）
 13. 补全 Player 缺少的属性 (angleDeg/angleRad/flipX/flipY 等)
 14. setCoord/setRot/setColor animator 委托
 15. RO 属性修正

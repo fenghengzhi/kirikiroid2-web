@@ -61,8 +61,8 @@ libkrkr2.so RenderNode 的字段偏移在 `node` 结构上（Motion 节点本体
 | **`sub_6D5164` @ 0x6D5164** | 调 `sub_6C2334` 构建 mainList + 用 `sub_6D4F00` 做 sort | `PlayerRenderItems.cpp::prepareRenderItems()` | build + sort + bool 返回均已建模；`player+544` type-tag gate 映射为 `hasMotionContent()` |
 | **`sub_6C2334` @ 0x6C2334** | 遍历 node deque，按 nodeType mask 构建 flat mainList + 特殊 auxList | `PlayerRenderItems.cpp::appendPreparedRenderItems()` | **主体已实现** — mask 为 `_preview ? 0x1449 : 0x1441`；type3 Branch A wrapper、普通 item、type12 aux/child list 和持久 node-owned item 均已落地；main/aux 由 caller-stack 持有 |
 | `sub_6D5264` Player_applyTranslateOffset | 给 mainList 每项加 cameraOffset | `PlayerRenderItems.cpp::applyPreparedRenderItemTranslateOffsets(mainList)` | 已实现为独立后处理，只遍历 mainList |
-| **`sub_6C4E28` @ 0x6C4E28** | 两 pass：leafLayer 渲染 + auxList 复合聚合 | `PlayerRenderExecute.cpp::buildRenderCommands()` | leaf 与 aux 复合 pass 已拆开；aux 来源已包含 type3 Branch A 与 type12；leaf source caller 现场写 blend=0/四色白，再进入 Player-owned 完整 `0x6C1B70`（内部 Layer identity fast path / ResourceManager fallback），未污染普通 execute 的 item payload |
-| **`sub_6C7440` @ 0x6C7440** | 最终合成主循环，迭代 mainList，direct / buffered 后提交 | `PlayerRenderExecute.cpp::executeLayerRenderCommands()` | **部分实现** — fresh `0x6C7B44..0x6C7B9C` 证据表明结构 gate 是 blend 低位分流，随后 `clearEnabled || item+264 != 0` 强制 buffered；`meshType` 和 `item+244` 不是这个 gate。本地仍在外层对 `parentItem` 直接 `continue`，且内层 direct 判据混入 `hasChildren/visibleAncestorIndex`，导致原生的 parent buffered→祖先 mask→`operateRect` 链不可达（见 §7.3） |
+| **`sub_6C4E28` @ 0x6C4E28** | 两 pass：leafLayer 渲染 + auxList 复合聚合 | `PlayerRenderExecute.cpp::buildRenderCommands()` | 主链已拆开；camera/viewport/clip 全程保留 float，leaf/composed 以 Real setSize，Loop B 使用 child paintBox、双 tuple empty/size 语义、argc5 fillRect 与最终 FCVTZS；leaf source owner 与 acquire refresh gate已恢复。仍缺 `0x6C5264..0x6C532C` caller-local command payload 的同构专用值类型。 |
+| **`sub_6C7440` @ 0x6C7440** | 最终合成主循环，迭代 mainList，direct / buffered 后提交 | `renderToCanvasLike_0x6C7440()` + `executeLayerRenderCommands()` | 主循环/边界已对齐：blend/completionType/parent gate、priorDraw-only prewalk、Layer class receiver + target objthis、一次 source resolve、item-scope owner 链、RM `bufLayer`、ancestor mask、argc4 fillRect 返回忽略、异常 unwind 与 operateRect 均已复刻；仍保留一个二进制函数→本地 wrapper+executor 的源码边界差异。 |
 
 ---
 
@@ -121,7 +121,7 @@ LABEL_8:
 4. **mainList flat**。type0 叶节点（如 moji_y）就是 top-level item，vertices 已 world-space。
 5. **auxList 只装 type12 复合父 + type3 wrapper**，`sub_6C7440` 不直接迭代，仅 `sub_6C4E28` Pass 2 用于 composedLayer 聚合。
 6. **type12 secondary loop**：`node+28==12 && (node+52 & 4) && node+1944` → push auxList + self-seed `item+24` + 按子 nodeType (0 直 append / 3 preview 直 append, 非 preview splice grandchildren) 分流。
-7. **direct vs buffered**：fresh `sub_6C7440` 指令证据证伪了旧结论。`meshType` 和 `item+244_stencil` 不属于结构 gate；先按 blend 低 4 位分流，再以 `clearEnabled || item+264!=0` 进入 buffered。`item+264` 非空不是 skip，而是后续祖先 alpha-mask 链的起点。
+7. **direct vs buffered**：fresh `sub_6C7440` 指令证据证伪了旧结论。`meshType` 和 `item+244_stencil` 不属于结构 gate；先按 blend 低 4 位分流，再以 `completionType(+1144)!=0 || item+264!=0` 进入 buffered。这里的 +1144 也是三种 copy 的 `type` 参数；`clear` 是独立常量（buffered/leaf 为 1、direct mesh 为 0）。`item+264` 非空不是 skip，而是后续祖先 alpha-mask 链的起点。
 
 ---
 
@@ -163,7 +163,7 @@ LABEL_8:
 - 原生 `mainList` 与 `auxList` 已恢复为 draw caller 栈上的两个临时 `std::vector<PreparedRenderItem *>`；build 只排序 main，translate 只遍历 main，build-command 阶段接收 main/aux，最终 execute 只提交 main。
 - `NativePreparedRenderItemState` 的 owner 声明顺序已使 C++ 逆序析构与 `sub_6F4DFC @ 0x6F4DFC` 一致；Web 平台附加状态位于派生 `PreparedRenderItem`，在 native semantic base 之前析构。这是源码声明顺序/生命周期复原，不是 ARM64 数值偏移复原。
 - fresh `sub_6C7440@0x6C7440` 已纠正旧文档：direct/buffered 结构 gate 不包含 `meshType==0` 或 `stencilComposite==0`。`meshType` 在分流后选 affine/Bezier/mesh，`item+244` 在祖先 mask 处消费。
-- 当前真实缺口是 parented item 的调用链：原生先解析 source，因 `item+264!=0` 强制使用持久 `SourceCache.bufLayer`，再沿 `item+264` 链逐层调 `Motion_doAlphaMaskOperation@0x6C8390`，最后 `operateRect@0x6C8558`。本地外层 `if(item.parentItem) continue` 使这条链整体不可达；只删 `continue` 也不足以复原中间 layer/mask 生命期。
+- 2026-07-23 本轮已闭合 parented item 调用链：同一次 source resolve 的 Variant owner 横跨分流；`item+264!=0` 强制使用经 `_sourceCacheObject.PropGet("bufLayer")` 取得的持久 Layer；每层 ancestor 按 dst/source 两只 CopyRef 的逆序析构调用 `Motion_doAlphaMaskOperation@0x6C8390`；最终以 Real L/T/W/H 和未 clamp opacity 调 `operateRect@0x6C8558`。RM dispatch、buf Variant、buf dispatch 的退出顺序也与 `0x6C85B4..0x6C85D8` 一致。
 
 ---
 

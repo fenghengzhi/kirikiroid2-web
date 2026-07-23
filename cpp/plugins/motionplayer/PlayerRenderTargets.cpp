@@ -1341,19 +1341,20 @@ namespace motion {
         }
         const auto motionPath = matchedMotionPath();
 
-        iTJSDispatch2 *resolvedLayerObject = tryResolveLayerDispatch(*target);
-        if(!resolvedLayerObject && target->Type() == tvtObject) {
-            resolvedLayerObject = target->AsObjectNoAddRef();
-        }
-        if(!resolvedLayerObject) {
-            detail::logoChainTraceCheck(
-                motionPath, "draw.renderToCanvas", "0x6C7440",
-                _clampedEvalTime,
-                "target variant should resolve to a Layer object",
-                "target did not resolve", false,
-                "Player_renderToCanvas_guess could not resolve target variant");
+        // Player_renderToCanvas @0x6C7498 constructs one ncbPropAccessor for
+        // the global Layer class before coercing the target.  It owns the
+        // dispatch across target size reads, 0x6C4E28, the submit loop and the
+        // final setClip(argc=0), and dies after the target object owner.
+        ncbPropAccessor layerClass{TJS_W("Layer")};
+        iTJSDispatch2 *layerClassObject = layerClass.GetDispatch();
+        if(!layerClassObject) {
             return false;
         }
+
+        // 0x6C74A0..0x6C74E4 converts the supplied Variant directly to one raw
+        // object owner. It does not probe NativeInstanceSupport first.
+        ncbPropAccessor renderTargetOwner{*target};
+        iTJSDispatch2 *resolvedLayerObject = renderTargetOwner.GetDispatch();
 
         // Player_renderToCanvas @0x6C74E8: non-priorDraw rendering clears the
         // tTVPComplexRect at player+864 before collecting this frame's
@@ -1363,12 +1364,14 @@ namespace motion {
             _drawRegion.Clear();
         }
 
-        int canvasWidth = 0;
-        int canvasHeight = 0;
-        queryLayerCanvasSize(resolvedLayerObject, canvasWidth, canvasHeight);
-        if(canvasWidth <= 0 || canvasHeight <= 0) {
-            return false;
-        }
+        // 0x6C7524 then 0x6C7548: class dispatch, target as objthis, width
+        // strictly before height. No positive-size gate exists here.
+        const int canvasWidth = callLayerPropGetIntLike_0x6C99B8(
+            layerClassObject, resolvedLayerObject, TJS_W("width"),
+            &detail::widthMemberHint_guess);
+        const int canvasHeight = callLayerPropGetIntLike_0x6C99B8(
+            layerClassObject, resolvedLayerObject, TJS_W("height"),
+            &detail::heightMemberHint_guess);
 
         detail::logoChainTraceLogf(
             motionPath, "draw.renderToCanvas", "0x6C7440", _clampedEvalTime,
@@ -1377,17 +1380,16 @@ namespace motion {
             _needsInternalAssignImages ? 1 : 0);
 
         iTJSDispatch2 *renderLayerObject = resolvedLayerObject;
-        if(auto *targetLayer = resolveNativeLayer(resolvedLayerObject)) {
-            if(targetLayer->GetWidth() != canvasWidth ||
-               targetLayer->GetHeight() != canvasHeight) {
-                targetLayer->SetSize(canvasWidth, canvasHeight);
-            }
-        } else {
-            return false;
-        }
 
-        buildRenderCommands(canvasWidth, canvasHeight, mainList, auxList);
-        if(!executeLayerRenderCommands(renderLayerObject, true, mainList)) {
+        // 0x6C7554 calls the 0x6C4E28 leaf/composed pre-walk only when
+        // priorDraw is false. Prior-draw submission consumes the retained item
+        // state directly.
+        if(!_priorDraw) {
+            buildRenderCommands(canvasWidth, canvasHeight, mainList, auxList);
+        }
+        if(!executeLayerRenderCommands(
+               layerClassObject, renderLayerObject, canvasWidth, canvasHeight,
+               true, mainList)) {
             return false;
         }
 

@@ -709,8 +709,10 @@ namespace motion {
         for(tjs_int index = 0; index < 4; ++index) {
             color.SetValue(
                 index,
-                static_cast<tjs_int>(item.packedColors[
-                    static_cast<std::size_t>(index)]),
+                // Player_renderToCanvas @0x6C7944..0x6C7A40 loads each
+                // packed color through W8 then stores X8, i.e. zero-extended
+                // uint32_t into the 64-bit TJS Integer payload.
+                item.packedColors[static_cast<std::size_t>(index)],
                 TJS_MEMBERENSURE);
         }
 

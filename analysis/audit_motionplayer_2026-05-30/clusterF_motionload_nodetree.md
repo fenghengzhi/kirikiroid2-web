@@ -30,7 +30,7 @@
 | F11 | Player_nodesDeque_destroyAll @0x6CF9B4 / _destroy @0x6F436C | (Player dtor / clear) | P2 | binary manually iterates deque map-blocks calling MotionNode_destroy_guess per 2632B node then operator delete each 0xA48 block. Port relies on std::deque<MotionNode> RAII. Container-model divergence. |
 | F12 | MotionNode_destroy_guess @0x6F4C8C | (~MotionNode) | P2 | binary: ordered manual teardown (node+1904 sub_6F4DFC+delete, node+2600 delete, A0F778 ttstr releases, tTJSVariant_Release node+2384/+312/+0, HM3_value_destroy node+856/+320, operator delete frameList blocks node+2024/+2048/+2072). Port ~MotionNode RAII. Verify all owned handles released in same order. |
 | F13 | Player_resetMotionState_clearAndRebuild @0x6B2B7C | PlayerMotionLoad.cpp (reset path) | P1 | after rebuild: loop3 gate `nodeType<=8 && ((1<<type)&0x19D)` -> Player_buildNodePathKey -> HM3_upsert_perNodeLayerState(player+1184) keyed by PATH. Depends on F2 (MISSING path-key builder). Also loop1 node+44=1/evaluateTimeline, loop2 player+1240 label->value upsert. |
-| F14 | Player_initNodeTimeline_guess @0x6B64AC | PlayerMotionLoad.cpp parseFrame | P2 | binary binary-searches frameList by L"time" to find frame index v12, then Player_parseFrame/mergeFrameContent on node+320 & node+856 (two clip slots), node+44=1, cond Motion_Player_findSource gate `(1<<type)&(completionType?6153:6145)`. Verify port replicates the (1<<type)&mask completion-gated findSource. |
+| F14 | Player_initNodeTimeline_guess @0x6B64AC | PlayerMotionLoad.cpp parseFrame | P2 | binary binary-searches frameList by L"time" to find frame index v12, then Player_parseFrame/mergeFrameContent on node+320 & node+856 (two clip slots), node+44=1, cond Motion_Player_findSource gate `(1<<type)&(preview(+1092)?6153:6145)`. Verify port replicates the (1<<type)&mask preview-gated findSource. |
 
 ---
 
@@ -102,7 +102,8 @@ MotionNode_initFields / MotionNode_destroy_guess. Port uses std::deque<MotionNod
 - `Player_resetMotionState_clearAndRebuild` 0x6B2B7C — decompiled; loop3 path-key
   dependency (F13).
 - `Player_initNodeTimeline_guess` 0x6B64AC — decompiled; frame binary-search +
-  completion-gated findSource (F14).
+  preview(+1092)-gated findSource (F14). TJS `completionType` is +1144 and does
+  not select this mask.
 - Player_loadMotion 0x6B0F10 / findMotion 0x6D004C / setMotion 0x6C1B20 /
   initEmoteMotion 0x6B2E90 / initNonEmoteMotion 0x6B365C — NOT decompiled this pass
   (entry-point wrappers; recommend a follow-up cluster for the load dispatch chain).

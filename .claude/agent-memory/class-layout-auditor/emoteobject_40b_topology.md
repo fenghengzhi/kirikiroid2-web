@@ -86,7 +86,14 @@ RM 全程是 **dispatch 持有 + nativeRM() 经 +8 解出唯一 native** 模型(
 - **EmoteObject dtor 序**: binary `0x67F420` = engine → RM → vector；本地先 delete engine、清 sticky facade、delete RM，函数体结束后 vector 析构，顺序已闭合。
 - **EmoteEngine dtor**: delete _player **最后**(EmoteEngine.cpp:243, _engineBack 反指针要求 engine 其他字段先死)。
 
-**残留**(非本轮): +656 渲染槽 bufLayer 本地未实装(defer); findMotion/loadMotion 未迁 +992 FuncCall(defer); EmoteEngine 4 variant-vector dtor 缺 per-element Release(当前 inert, vector 恒空, TODO@EmoteEngine.cpp:129)。
+**2026-07-23 当前纠正**：旧“+656 bufLayer 未实装 / findMotion 未迁 +992
+FuncCall”残留项已失效。findMotion/loadMotion 已走 Player+992 RM dispatch
+FuncCall；`0x6C7440` buffered 路径已从 Player+656 RM dispatch 取得持久
+`bufLayer`，并接入 ancestor-mask / `operateRect` 提交。普通渲染 SLA 也已使用
+active/retired 双 ordered-tree pass。仍 open：SLA payload/compare 与 accurate-SLA
+J8 状态、完整 `Motion_doAlphaMaskOperation@0x6AF104` 行为；另有 EmoteEngine
+4 variant-vector dtor 缺 per-element Release（当前 inert，vector 恒空，
+TODO@EmoteEngine.cpp:129）。这些 open 项不反向否定本节已经闭合的 RM ownership。
 
 ## 关键引用
 - EmoteEngine 字段表: [[emoteengine-1496b-layout]]

@@ -4,6 +4,15 @@
 > Date: 2026-04-06
 > Method: IDA Pro MCP 完整调用链反编译
 
+> **已被 2026-07-23 fresh decompile 部分取代：**本文对 `0x6C7440` 的
+> “所有 item 无条件走 bufLayer/affineCopy”以及部分 item 偏移解释是早期结论，
+> 不再作为当前实现权威。真实路径按 blend/completionType/parent 分成 direct
+> `operateAffine/operateMesh/operateBezierPatch` 与 buffered
+> `bufLayer copy → ancestor mask → operateRect`；当前裁决见
+> `analysis/audit_motionplayer_2026-06-07/clusterJ_render_execute.md` 和
+> `analysis/RenderPipeline_Path_A_ImplRef.md`。本文其余 progress/geometry 记录只作
+> 历史索引，引用前必须重新核对对应 fresh 反编译证据。
+
 ---
 
 ## 1. 完整调用时序
@@ -113,7 +122,7 @@ Player_draw (0x6D5FB8) — TJS "draw" NCB 入口
     v58 = min(renderNode+192, bufW) // clip maxX
     v53 = min(renderNode+196, bufH) // clip maxY
     
-    if (v58 < v57 || v53 < v61): skip  // 无效裁剪
+    if (v58 < v57): skip  // 仅横向反转会退出；纵向反转/零尺寸仍继续
 
     bufLayer.setSize(v58-v57, v53-v61)
 

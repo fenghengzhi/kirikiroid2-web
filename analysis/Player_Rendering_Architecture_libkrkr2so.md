@@ -1,8 +1,19 @@
-# Player Rendering Architecture — libkrkr2.so Complete Analysis
+# Player Rendering Architecture — libkrkr2.so Analysis
 
 > Analysis target: libkrkr2.so (kirikiroid2 Android, arm64-v8a)
 > Analysis method: IDA Pro MCP decompilation of all functions in the Player render pipeline
-> Date: 2026-04-04 (revised with corrections)
+> Date: 2026-04-04 (current render-path correction: 2026-07-23)
+>
+> **2026-07-23 CURRENT CORRECTION:** this file began as an early reconstruction
+> snapshot and is not proof that the full renderer is complete.  In particular,
+> the old “single build loop / one work layer / affine-only port” description is
+> superseded.  Current evidence and code have `0x6C4E28` Loop A (leaf output)
+> followed by Loop B (group/composed output), an ordinary-render SLA
+> active/retired ordered-tree lifecycle, and `0x6C7440` direct submission plus a
+> persistent `ResourceManager.bufLayer` buffered/ancestor-mask path.  Mesh,
+> Bezier, and four-corner color paths are present locally.  Exact SLA payload/J8
+> state and the complete `Motion_doAlphaMaskOperation@0x6AF104` behavior remain
+> open, so none of these corrections should be read as “100% restored”.
 
 ---
 
@@ -397,42 +408,48 @@ sub_6BAA10(player, childNode, parentNode):
 
 ### 5.1 sub_6C4E28 — Build Render Commands
 
-Called from `Player_renderToCanvas`. Iterates the node deque and builds render commands:
+Called before `Player_renderToCanvas@0x6C7440` submission.  It is a two-loop
+materialization pass over persistent prepared render items, not one flat loop:
 
 ```
-sub_6C4E28(player, renderList, boundsList, clipRect):
-    for each renderItem in renderList:
-        node = renderItem.nodePtr
-        
-        // Clip against viewport
-        computeClipRect(node.vertices, clipRect) → drawRect
-        if drawRect is empty: skip
-        
-        // Acquire TJS Layer for this node
-        layerId = requireLayerId(node)
-        layer = getLayerById(layerId)
-        
-        // Set layer properties
-        layer.setSize(drawRect.width, drawRect.height)
-        layer.fillRect(0, 0, w, h, neutralColor=0)
-        
-        // Render based on meshType
-        switch(node.meshType):
-            case 0: // No mesh — affine copy
-                layer.affineCopy(source, 0, 0, srcW, srcH,
-                    vertex0-offset, vertex1-offset, vertex2-offset,
-                    blendMode, stNearest)
-            
-            case 1: // Bezier patch mesh
-                layer.bezierPatchCopy(source, 0, 0, srcW, srcH,
-                    meshPoints, subdivU, subdivV,
-                    blendMode, stNearest)
-            
-            case 2: // Mesh deformation
-                layer.meshCopy(source, 0, 0, srcW, srcH,
-                    meshPoints, meshDivX, meshDivY,
-                    blendMode, stNearest)
+sub_6C4E28(player, mainItems, groupItems, cameraRect):
+    if SLA already exists:
+        swap(activeTree, retiredTree)
+        assignSequence = 0
+
+    // Loop A: materialize each eligible leaf output (item+304).
+    for item in mainItems:
+        clip = intersect(item.paintBox, cameraRect)
+        clamp/replace from item.viewport when its native gates select it
+        write item.rawFlag21 and item.clipRect
+        if item.rawFlag20 is not latched:
+            item.renderLayerId = RM.requireLayerId()  // zero arguments
+            item.rawFlag20 = 1
+        if SLA is created lazily here:
+            perform the same active/retired swap and sequence reset
+        leaf = acquire-or-reuse activeTree[item.renderLayerId]
+        leaf.setSize(clip.width, clip.height)
+        leaf.fillRect(...)
+        affineCopy / bezierPatchCopy / meshCopy into leaf
+        item.leafLayer = leaf
+
+    // Loop B: materialize group/composed output (item+324).
+    for group in groupItems:
+        union valid child paintBox values
+        acquire-or-reuse a composed target from the same SLA state
+        size/fill it and compose the selected child leaf/composed outputs
+        group.composedLayer = composed
+
+    // Normal return only: invalidate/destroy retired entries not reused above.
+    clearRetiredTreeWithInvalidate()
 ```
+
+The ordinary-render adaptor therefore owns two ordered maps: the new active
+tree and the previous pass's retired tree.  A reused key is moved out of the
+retired tree; only entries left behind reach the normal-tail invalidation.  The
+local pass deliberately does not hide this boundary in an RAII guard because a
+native exception bypasses that normal-tail cleanup.  Exact payload comparison
+and the separate accurate-SLA/J8 state are still incomplete.
 
 ### 5.2 sub_6C2334 — Render Tree Traverse
 
@@ -444,12 +461,19 @@ Huge function (~55K chars decompiled). Builds the final render tree from the nod
 
 ### 5.3 sub_6C7440 — Final Render Loop
 
-Huge function (~61K chars decompiled). Actually composites render items onto the target:
-1. For each render item in the render tree:
-   - Load source texture (via findSource → PSB resource or external file)
-   - Apply drawAffineMatrix transform
-   - Call appropriate copy method (affineCopy / meshCopy / bezierPatchCopy)
-   - Handle blendMode, opacity, color tint
+Huge function (~61K chars decompiled). It consumes the persistent item outputs
+created by `0x6C4E28` and has two materially different submission routes:
+
+1. The direct gate submits with the matching `operateAffine` / `operateBezier`
+   / `operateMesh` primitive on the target.
+2. The buffered gate obtains the persistent work target through Player's
+   `+656` ResourceManager dispatch property `bufLayer`, renders into that layer,
+   walks the ancestor-mask chain, and finally submits it with `operateRect`.
+
+`item+304` and `item+324` are leaf/composed outputs, respectively; neither is
+the `0x6C7440` buffered work target.  Geometry selection, opacity/blend gates,
+and four-corner color handling are part of the current local implementation,
+although the full alpha-mask helper remains open.
 
 ## 6. Node Type System
 
@@ -595,6 +619,24 @@ draw(D3DAdaptor) → Player_drawD3D → renders to D3DAdaptor pixel buffer → c
 
 ## 9. What Current Project Implements vs. libkrkr2.so
 
+### Current render-path correction (2026-07-23)
+
+- `0x6C4E28` is represented as Loop A leaf materialization followed by Loop B
+  group/composed materialization.
+- Ordinary rendering uses the SLA active/retired ordered-tree pass lifecycle;
+  the old production single `_renderLayerStates` map description is obsolete.
+- `0x6C7440` includes both direct `operate*` submission and persistent
+  `ResourceManager.bufLayer` buffered/ancestor-mask submission.
+- Affine, mesh, Bezier, and four-corner color paths are present locally.
+- Still open: exact SLA payload/compare semantics, the accurate-SLA J8
+  persistent state, and the complete alpha-mask dispatch/GPU behavior.
+
+The April checklist below is retained only as history.  Its render-specific
+“missing mesh/Bezier/color” entries are superseded by the correction above and
+must not be used as a current gap list.
+
+### Historical 2026-04 snapshot (superseded)
+
 ### Fully Implemented ✅
 - Sub_692AB0: All mask-gated property reads (all 21 mask bits)
 - Sub_699AE4: Dual-slot interpolation with bezier curves (acc/ccc/zcc/scc/occ)
@@ -605,9 +647,11 @@ draw(D3DAdaptor) → Player_drawD3D → renders to D3DAdaptor pixel buffer → c
 - Angle 360° wrap-around interpolation
 
 ### Partially Implemented ⚠️
-- Sub_6C4E28/sub_6C7440: We do affineCopy but not meshCopy/bezierPatchCopy
+- ~~Sub_6C4E28/sub_6C7440: We do affineCopy but not meshCopy/bezierPatchCopy~~
+  **Superseded:** affine, mesh, and Bezier paths are now present.
 - Sub_6BDA28: Camera offset is supported but not computed from camera node position
-- Color: RGBA values read but not applied to rendering (no color tint)
+- ~~Color: RGBA values read but not applied to rendering (no color tint)~~
+  **Superseded:** four-corner color remap/consumption is now present.
 - Inheritance: Simple parent inheritance works, but inheritFlags per-property control (node+40 bits 2-8) and independentLayerInherit (player+1097) 3-phase process NOT implemented
 
 ### Not Implemented ❌
@@ -621,9 +665,11 @@ draw(D3DAdaptor) → Player_drawD3D → renders to D3DAdaptor pixel buffer → c
 - **Sub_6BD8DC (Visibility flags)**: Per-node draw flag computation with emote mode bitmask
 - **Sub_69AE74 (Mesh position deformation)**: Child position deformation on parent mesh
 - **Sub_6BAA10 (Ground correction)**: TJS onGroundCorrection callback
-- **Mesh deformation**: bezierPatchCopy and meshCopy in sub_6C4E28
+- ~~**Mesh deformation**: bezierPatchCopy and meshCopy in sub_6C4E28~~
+  **Superseded for this render-path claim.**
 - **Render tree**: sub_6C2334 render tree building with priority/priorDraw
-- **Color tint**: Applying RGBA color to rendered output
+- ~~**Color tint**: Applying RGBA color to rendered output~~
+  **Superseded for this render-path claim.**
 - **inheritFlags system**: Per-property inheritance control (node+40)
 
 ## 10. Architecture Gap: Child Player Instances

@@ -28,12 +28,27 @@
   指令公式独立算得，不是调用生产 helper 自证。
 - 同轮 fresh `Player_renderToCanvas@0x6C7440` 证伪了旧文档中
   “direct gate 包含 `meshType==0/stencilComposite==0`”的结论。`0x6C7B44..0x6C7B9C`
-  的结构 gate 是 blend 低位分流之后的 `clearEnabled || item+264!=0`；mesh
-  类型在分流后消费，`item+244` 用于祖先 mask。相关 analysis 已就地纠正。
-  当前未闭合的 P0 是本地 `if(item.parentItem) continue`：Android 实际会先
-  resolve source，强制进入持久 `SourceCache.bufLayer`，沿 ancestor 链逐层调
-  `Motion_doAlphaMaskOperation@0x6C8390`，再以 `operateRect@0x6C8558` 提交。
-  此缺口不能只靠删除 `continue` 修复。
+  的结构 gate 是 blend 低位分流之后的
+  `completionType(+1144)!=0 || item+264!=0`；mesh 类型在分流后消费，
+  `item+244` 用于祖先 mask。此前把 +1144 误叫 `clearEnabled` 的记录已就地纠正：
+  NCB 字面绑定 `"completionType"`→`0x6D9624/0x6D962C` 是权威证据。
+  2026-07-23 本轮已闭合原 P0：移除 `if(item.parentItem) continue` 及本地
+  `hasChildren/visibleAncestorIndex` 代理；每项只 resolve source 一次，经 TJS
+  PropGet 取得持久 `SourceCache.bufLayer`，按 Real setSize + completionType/clear=1
+  复制 current source，沿 ancestor 链逐层调 `Motion_doAlphaMaskOperation@0x6C8390`，
+  再以精确 9-Variant `operateRect@0x6C8558` 提交。RM/buf/mask CopyRef 析构顺序、
+  仅 `right<left` 的 buffer gate、argc=4 fillRect 失败仍 break、未 clamp opacity
+  均按 fresh 反编译保留。target width/height、setClip、direct operate*、operateRect
+  统一经 Layer class receiver、target objthis；入口不再做 NativeInstanceSupport 探测。
+  per-item `catch(...)` 也已删除，TJS/C++ 异常按 landing pad 继续 unwind；只有明确
+  返回 `TJS_E_BADPARAMCOUNT` 的 argc=4 fillRect 仍被忽略。
+- fresh `sub_6C4E28@0x6C5DBC..0x6C638C` 进一步纠正了整个 float 几何链：Loop A
+  先取 camera(a4)∩paintBox，只有 valid viewport 才 floor/ceil 收窄；无 viewport
+  时 fractional origin/extent 原样写 item+216..228，并以 Real W/H 调 leaf setSize。
+  Loop B 以 group paintBox 为 seed union child paintBox；camera-clamped tuple 独自负责
+  empty gate，viewport-narrowed tuple即使 zero/inverted也继续 Real setSize + 正常 argc=5
+  `fillRect(0,0,W,H,0)`。child mask 的 origin/W/H 在 float 相减后才 FCVTZS，不再提前
+  截断，也没有本地 positive-size 恢复 gate。
 - `sub_6C4E28@0x6C4E28` 的 leaf source descriptor 边界现已闭合：
   `0x6C52AC/0x6C5300..0x6C5304` 先形成 blend `0` 和四只 `0xFFFFFFFF`，
   `0x6C5404..0x6C5648` 再把 item key/src 与该 neutral payload 写进 Player
@@ -78,11 +93,28 @@
   并把三只 accessor 保活到 leaf copy 完成。现有 logo fixtures 的
   `drawFlag19=0`，该路径仍属差分 oracle-inert；不制造 fixture，完整原生/Web/Wasmtime
   只作为非回归验证，不冒充 Android leaf runtime oracle。
-- 当前验证：macOS Release `motionplayer-dll` **1260/1260**（18 cases）；
-  Web Debug 最终 `index.html/index.wasm` 链接通过；`out/wasmtime/debug` 的显式
-  `krkr2_wasmtime_guest` 目标通过。第一次在 `out/web/debug` 查找同名 target
-  失败只因为该 target 属于独立 `out/wasmtime/debug` 配置；后续已在正确
-  build tree 完成，不是源码编译失败。
+- `0x6C7440` execute 也把 descriptor/color 从 SourceCache wrapper 内联回 item scope，
+  所以构造顺序同为 descriptor→color→source result→source accessor，单项 direct/buffered
+  完成或 `continue` 时按 accessor→result→color→descriptor 逆序释放；不再以 helper
+  提前析构前两只 accessor，也不再用 `unique_ptr` 为 accessor 额外 heap 分配。
+- `0x6C4E28` 的普通 SLA 帧生命周期已按入口/尾部指令恢复：入口或 loop 内首次 lazy-create
+  后均 swap active/retired Rb_tree、sequence=0；acquire 优先从 retired 搬回同 key 节点，
+  正常尾部才逐个 Invalidate 并清空未复用 retired。异常从两个 loop 直接 unwind，不执行
+  该尾部，所以本地刻意使用显式 begin/end 而非 RAII。另按 `0x6C5EC0..0x6C5EDC`
+  调整 group union 的 FCSEL fallback，使 equal/unordered 保留 child 的 NaN payload/零符号；
+  `0x6C75D8..0x6C75EC` target viewport 也只拒绝 ordered inverted，NaN 仍走 valid 分支。
+  `0x6C7944..0x6C7A40` 四色的 W-load→X-store 零扩展已恢复，`0xFFFFFFFF` 写入 TJS
+  Integer 为 `4294967295` 而非 `-1`。
+- 尚未闭合的是 `0x6C5264..0x6C532C` 传给 acquire 的 caller-local
+  command/completion/geometry payload 专用值类型：本地已删除从旧 Layer 反查
+  type/visible/left/top/width/height 的错误 TJS 副作用，并恢复 acquire out-byte refresh gate，
+  但目前只传 value-initialized placeholder，不能把 0x6C4E28 整体标成 100%。另有 J8
+  accurate-SLA 持久树与 0x6C7440 wrapper/executor 源码函数拆分仍开放。
+- 当前 checkpoint 已完成完整验证：macOS Release `psbfile-dll` 为 **575/575**
+  （10 cases）、`motionplayer-dll` 为 **1376/1376**（21 cases）、
+  `motionplayer-ttstr-hash-test` 为 **100/100**（22 cases）；Web Debug 最终链接与显式
+  Wasmtime `krkr2_wasmtime_guest` 目标均通过。上述结果是本地非回归守护，不冒充
+  Android runtime oracle。
 
 ## 2026-07-23：raw-node alias、数值 decoder 与 media 可达性复核
 
@@ -240,8 +272,8 @@
   complete destructor `0x8F7D04..0x8F7D68` 与 deleting destructor
   `0x8F7D68..0x8F7DC0`、补 `_guess` 名称/类型/注释并保存。Android oracle 调用
   deleting entry `0x8F7D68`，与源码 `delete stream` 的完整对象生命周期一致。
-- 当前验证：macOS Release 五个相关目标构建成功，`psbfile-dll` **575/575**（10 cases）、
-  `motionplayer-dll` **1244/1244**（18 cases）、`motionplayer-ttstr-hash-test`
+- 当前验证：macOS Release 相关目标构建成功，`psbfile-dll` **575/575**（10 cases）、
+  `motionplayer-dll` **1376/1376**（21 cases）、`motionplayer-ttstr-hash-test`
   **100/100**（22 cases）；Web Debug 最终链接与显式 Wasmtime
   `krkr2_wasmtime_guest` 目标均通过。现成 motion playback runner 在执行 guest 前因
   当前 checkout 缺少 `reference/xp3/logo_test_oracle.xp3` 退出；不制造 fixture，记录为
@@ -317,7 +349,7 @@
   `PlayerResource`、`PlayerLayerQuery` 等 caller 共用。本文旧版将这两项列为 OPEN 的
   结论已被当前源码和 fresh 反编译证伪，现就地纠正为 CLOSED。
 - 当前验证：macOS Release `psbfile-dll` 为 575/575（10 cases），完整
-  `motionplayer-dll` 为 1244/1244（18 cases），`motionplayer-ttstr-hash-test` 为
+  `motionplayer-dll` 为 1376/1376（21 cases），`motionplayer-ttstr-hash-test` 为
   100/100（22 cases）；显式 `krkr2_wasmtime_guest` 目标与 Web Debug 最终链接均通过，
   `git diff --check` 通过。
   guest harness 的 `clipRect` 参数类型已随生产字段一并改为 `std::array<float,4>`。

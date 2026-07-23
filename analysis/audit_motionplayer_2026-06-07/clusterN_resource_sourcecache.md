@@ -21,12 +21,15 @@
 > Protocol: decompile -> pseudocode -> local compare -> 6-dim verdict. IDB
 > renamed (Motion_Player_findSource) + 2 comments + idb_save OK.
 
-## Verdict: PARTIAL DEVIATION (container/lifetime divergences; architecture topology now CONFIRMED correct in headers)
+## Verdict: AUDITED CONTAINER/LIFETIME TOPOLOGY ALIGNED; SCOPED GAPS REMAIN
 
-The four priority items the prompt flagged are ALL re-verified against fresh
-decompiles. The header notes (esp. the C-1 2026-06-07 RM:public SourceCache
-correction) are ACCURATE. The remaining gaps are the known, documented
-container-choice + GPU-upload platform boundaries, plus a few real STUBs.
+The four priority items the prompt flagged are re-verified against fresh
+decompiles. RM's public SourceCache base, the base `std::list<Entry>`, the outer
+loaded-module unordered_map, each mapped record's two nested source maps, and
+their owner/destruction order are represented by the current source. The former
+container-choice/lifetime divergence verdict is obsolete. Named Web GPU-upload
+adaptations and separately documented unaudited or incomplete call sites remain,
+so this is not a global 100% claim.
 
 ---
 
@@ -37,8 +40,10 @@ container-choice + GPU-upload platform boundaries, plus a few real STUBs.
 - SourceCache ctor `sub_6A78F4`: seeds base subobject — +20 primaryLayer
   (sub_A0FB64 from owner.PropGet "primaryLayer"), +40 bufLayer (Layer variant,
   created via global Layer class CreateNew(owner, primaryLayer)), +60 current
-  cache bytes=0, +64 cache byte limit (a3), +72/+80 intrusive layer-list
-  head/tail sentinel (both = a1+72). The older `layerType` reading was disproved
+  cache bytes=0, +64 cache byte limit (a3), +72/+80 libstdc++ `std::list`
+  sentinel links (empty state points back to the sentinel at a1+72). These are
+  the inlined implementation of a source-level `std::list<Entry>`, not a
+  hand-written intrusive container. The older `layerType` reading was disproved
   by `trim@0x6A6B08` and corrected 2026-07-23.
 - `sub_6A78F4` has EXACTLY ONE caller (0x6a88f8, xref-confirmed earlier). No
   standalone SourceCache instance — it is only RM's [0,88) base subobject.
@@ -48,17 +53,19 @@ container-choice + GPU-upload platform boundaries, plus a few real STUBs.
 - bufLayer getter sub_6A84FC = `sub_A0F5E0(out, a1+40)` (base Layer variant). NOT
   a ttstr name.
 
-Local: `class ResourceManager : public SourceCache` (RM.h:117). Default base ctor
-runs first (mirrors order). The base _owner/_bufLayer left empty — GAP documented
-(RM.cpp:57): binary base ctor seeds owner/bufLayer Layer from the RM dispatch;
-wiring it is the larger P3-B ownership refactor, and the RM NCB instance's
-inherited members are not exercised by any fixture (Player's standalone
-`_sourceCacheNative` is the live path). Topology aligned; field-seed deferred.
-Status: ARCH OK, field-seed gap (P3, oracle-inert).
+Local: `class ResourceManager : public SourceCache`. The NCB constructor selects
+`ResourceManager(tTJSVariant kag, tjs_int cacheSize)`, whose initializer invokes
+`SourceCache(kag, cacheSize)` before RM-own map/random state. That base
+constructor retains the owner, resolves `primaryLayer`, creates persistent
+`bufLayer`, stores the byte budget and initializes `_entries`. Player's native
+source-cache route aliases its ResourceManager base; the old claim that a
+separate, standalone `_sourceCacheNative` object was the live path is false.
+The parameterless C++ constructor remains a local construction helper and must
+not be used to infer the NCB object's initialized state.
 
-## 2. RM NCB member set — CORRECTED vs header (minor)
+## 2. RM NCB member set — CURRENT 12-MEMBER SURFACE
 
-RM registrar @0x6AB8BC binds 14 members (ctor dispatch + 13):
+RM registrar @0x6AB8BC binds a constructor plus 12 exposed members:
 loadSource, clearCache, bufLayer (all 3 inherited), load(=ResourceManager_loadResource),
 unload(=sub_6A959C), unloadAll(=**loc_6A8CF8**), isExistMotion(=sub_6A96F8),
 findMotion(=sub_6A9ED4), findSource(=sub_6AAB3C), random(=sub_6AB56C),
@@ -206,8 +213,8 @@ chain (analysis/SLA_Rendering_Chain_libkrkr2so.md) — not re-decompiled this pa
 
 | # | Item | Binary | Local | Status |
 |---|------|--------|-------|--------|
-| 1 | RM:SourceCache | public inherit, base ctor seeds owner/bufLayer | inherit OK, base fields empty | P3 ARCH OK / field gap |
-| 2 | unloadAll addr | body @0x6A8CF8 | comment says 0x6A8BBC | DOC ERR (fix comment) |
+| 1 | RM:SourceCache | public inherit, NCB ctor seeds owner/primaryLayer/bufLayer/list | same parameterized base-construction path; Player aliases RM base | ALIGNED AT AUDITED SITES |
+| 2 | unloadAll addr | body @0x6A8CF8 | code/comments use 0x6A8CF8 and clear `_loadedModules` | CLOSED |
 | 3 | RM findSource | mapped record raw root + ObjSource | mapped record raw root + ObjSource | CLOSED |
 | 4 | ObjSource | raw owner/node/texture; strict/try getters | same, including texture→owner dtor | CLOSED |
 | 5 | Player_findSource | outer record + Win/KRKR nested maps + shared `0x695DE8` render-time caller | 2026-07-23 corrected direct SourceState alias, getter-after-write rect flow, branch-local decode calls and atlas geometry; full-page upload remains Web API boundary | AUDITED SITES + BOUNDARY |
@@ -221,7 +228,8 @@ chain (analysis/SLA_Rendering_Chain_libkrkr2so.md) — not re-decompiled this pa
   inheritance proof). idb_save OK.
 
 ## Follow-ups for reviewer
-- FIX the unloadAll address in RM.h:147 + RM.cpp:372 comments: 0x6A8BBC -> 0x6A8CF8.
+- ResourceManager `unloadAll` 的权威入口是 0x6A8CF8；旧 0x6A8BBC 注释已纠正，
+  不要重新传播该文档缺口。
 - ObjSource raw navigation and lifecycle are closed; do not reintroduce the old
   dict-facade/PropGet side graph.
 - Player_findSource Win/KRKR raw chains are restored. KRKR full-page upload is a

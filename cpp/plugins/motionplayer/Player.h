@@ -358,8 +358,6 @@ namespace motion {
         void setCanvasCaptureEnabled(bool v) { _canvasCaptureEnabled = v; }
         bool getCanvasCaptureEnabled() const { return _canvasCaptureEnabled; }
 
-        void setClearEnabled(bool v) { _clearEnabled = v; }
-        bool getClearEnabled() const { return _clearEnabled; }
 
         void setHitThreshold(double v) { _hitThreshold = v; }
         double getHitThreshold() const { return _hitThreshold; }
@@ -835,7 +833,7 @@ namespace motion {
             iTJSDispatch2 *scratchParent,
             const std::string &motionPath);
         // libkrkr2.so sub_6C4E28 @0x6C5E7C..0x6C63AC Loop B: for each group
-        // item, union the visible child clip rects, intersect with the camera
+        // item, union the visible child paint boxes, intersect with the camera
         // clip, and (if non-empty) create/refresh the COMPOSED layer (item+324)
         // via Window.mainWindow Layer ctor, fillRect(0), then apply each
         // visible child's leaf as an alpha mask. Inert for the logo fixtures
@@ -847,7 +845,10 @@ namespace motion {
             iTJSDispatch2 *scratchOwner,
             iTJSDispatch2 *scratchParent,
             const std::string &motionPath);
-        bool executeLayerRenderCommands(iTJSDispatch2 *renderLayerObject,
+        bool executeLayerRenderCommands(iTJSDispatch2 *layerClassObject,
+                                        iTJSDispatch2 *renderLayerObject,
+                                        tjs_int canvasWidth,
+                                        tjs_int canvasHeight,
                                         bool skipUpdate,
                                         detail::PreparedRenderItemList &mainList);
         tTJSVariant resolveRenderSourceLike_0x6C1B70_guess(
@@ -1241,7 +1242,6 @@ namespace motion {
         double _cameraFOV = 60.0;
         bool _cameraAlive = false;
         bool _canvasCaptureEnabled = false;
-        bool _clearEnabled = false;
         bool _d3dDrawMode = false; // libkrkr2.so player+909
         double _hitThreshold = 0.0;
         tjs_int _completionType = 0; // libkrkr2.so +1144: int (the real NCB

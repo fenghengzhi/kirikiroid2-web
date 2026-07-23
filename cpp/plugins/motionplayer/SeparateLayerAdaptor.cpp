@@ -280,9 +280,13 @@ namespace motion {
 
     void SeparateLayerAdaptor::clear() { clearPrivateRenderState(); }
 
-    void SeparateLayerAdaptor::beginAccurateRenderPassLike_0x6C9CA8() {
+    void SeparateLayerAdaptor::beginRenderLayerPassLike_0x6C4E28() {
+        // Player_emitRenderItem_requireLayer @0x6C4E74..0x6C4F14 swaps the
+        // complete +64/+112 std::map states and resets SLA+164. It does not
+        // clear the new active map here; the prior normal tail already cleared
+        // retired, while an exceptional prior exit deliberately leaves state
+        // for the next swap.
         _managedTargets.swapWith(_assignTargets);
-        _managedTargets.clear(true);
         _assignSequence = 0;
     }
 
@@ -295,8 +299,19 @@ namespace motion {
             ordinal, sourcePayload, objthis, createdOrChanged);
     }
 
-    void SeparateLayerAdaptor::endAccurateRenderPassLike_0x6C9CA8() {
+    void SeparateLayerAdaptor::endRenderLayerPassLike_0x6C4E28() {
+        // 0x6C63B0..0x6C63B8 -> sub_6C72E4 invalidates every object left in
+        // SLA+112 and destroys that Rb_tree. Reused keys were erased from this
+        // retired map by 0x6C6B48, so only unused layers remain here.
         _assignTargets.clear(true);
+    }
+
+    void SeparateLayerAdaptor::beginAccurateRenderPassLike_0x6C9CA8() {
+        beginRenderLayerPassLike_0x6C4E28();
+    }
+
+    void SeparateLayerAdaptor::endAccurateRenderPassLike_0x6C9CA8() {
+        endRenderLayerPassLike_0x6C4E28();
     }
 
     tjs_error SeparateLayerAdaptor::getLayerTreeOwnerInterfaceCompat(

@@ -11,15 +11,20 @@ Authoritative addr↔semantics (decompiled 2026-06-07):
 
 - **RM ctor sub_6A88CC @0x6A88CC**: RM : public SourceCache CONFIRMED. First insn
   (0x6a88f8) calls base ctor sub_6A78F4 @offset0. RM-own fields from +88: HashMap A
-  (+88 bucket array / +96 count, std::unordered_map via _M_next_bkt(10)), motion-list
-  +104, RandomGen +144, layerId Rb_tree +168 (pre-inserts {0}, inert), counter +216
-  (=0x100000001 low32=1), spec int +224 (1=krkr 2=win).
+  (+88 bucket array / +96 bucket count / +104 `_M_before_begin._M_nxt` global
+  node-chain head / +112 element count, `std::unordered_map` via
+  `_M_next_bkt(10)`), RandomGen +144, layerId Rb_tree +168 (pre-inserts {0},
+  inert), counter +216 (=0x100000001 low32=1), spec int +224 (1=krkr 2=win).
+  The old “+104 independent motion-list” label was an STL-layout misread.
 - **SourceCache ctor sub_6A78F4 @0x6A78F4**: ONLY caller is RM ctor (no standalone
   instance). Seeds base: +20 primaryLayer, +40 bufLayer (Layer variant), +60 current
   cache bytes=0, +64 cache byte limit (the second constructor argument), +72/+80
-  intrusive layer-list sentinel. The older `+64 layerType` label was disproved by
-  trim@0x6A6B08 and corrected 2026-07-23.
-- **RM registrar @0x6AB8BC** (14 members) & **SourceCache registrar @0x6A85A8** (4)
+  libstdc++ `std::list<Entry>` sentinel links. This is source-level `std::list`,
+  not a hand-written intrusive list. The older `+64 layerType` label was
+  disproved by trim@0x6A6B08 and corrected 2026-07-23. Local NCB construction
+  uses the parameterized RM ctor and seeds this base; Player aliases the RM base,
+  not a separate standalone SourceCache object.
+- **RM registrar @0x6AB8BC** (constructor + 12 exposed members) & **SourceCache registrar @0x6A85A8** (4)
   share SAME callbacks: loadSource=sub_6A7BA8, clearCache=sub_6A8438,
   bufLayer(prop-ro)=sub_6A84FC (reads a1+40). = C++ inheritance signature.
 - **unloadAll body = 0x6A8CF8 / Motion_ResourceManager_unloadAll** — NOT

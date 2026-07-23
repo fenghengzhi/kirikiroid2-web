@@ -4,6 +4,15 @@
 > renames/comments applied + idb_save. No cpp/ edits.
 > Method: per-function decompile -> pseudocode -> local counterpart -> compare.
 
+> **2026-07-23 现状纠正（取代本文的 phase/container 旧裁决）：**
+> `0x6C4E28` 是 `0x6C7440` 在 `!priorDraw` 时调用的 leaf/group pre-walk；
+> 本地虽仍沿用 `buildRenderCommands` 这个历史函数名，但现在就在该调用点执行，
+> `requireLayerId`、item+20/+21、leaf copy 与 group compose 均在这次 pre-walk 内完成，
+> 不再存在本文所称的 build→execute 相位搬移。Loop B 以 group 自身 paintBox 为
+> seed，union 的也是有效 child 的 paintBox，不是 child clipRect。Android item 的
+> 432B 是 ARM64 ABI 结果，不是 wasm32 应硬凑的对象布局；当前权威实现裁决见
+> `analysis/audit_motionplayer_2026-06-07/clusterJ_render_execute.md`。
+
 ## Draw-dispatch call graph (verified)
 
 ```
@@ -27,25 +36,28 @@ Player.draw (NCB)  = Player_draw_NCBWrapper @0x6818D0
 - **Player_updateLayerAfterDraw_assignImages @0x6CE7D8**: gate `player+613` (copied to +612). If set: sub_6CE19C + dispatch `assignImages(arg)` on layer player+696.
 - **Player_drawToLayerCompat @0x6D2D80**: gate `*(player+544)`. nodeType==3 recursive child-draw with fillRect + recursion over child Players (drawToLayerCompat self-call).
 
-## CRITICAL re-mapping: sub_6C4E28 is NOT a build-tree fn
+## CRITICAL re-mapping: sub_6C4E28 is renderToCanvas 的 pre-walk
 
-`sub_6C4E28` (renamed **Player_emitRenderItem_requireLayer**) is a PER-RENDER-ITEM
-executor called from:
+`sub_6C4E28` (renamed **Player_emitRenderItem_requireLayer**) is a render pre-walk
+called from:
   - Player_renderToCanvas_guess @0x6c756c  (non-accurate layer path)
   - sub_6C9CA8 @0x6c9e74                    (accurate SLA path)
 
-It runs DURING the execute/renderToCanvas phase (not the build phase). Two loops:
+It runs inside execute/renderToCanvas before the submit loop. Two loops:
   - Loop A (over a2 mainList): per item, clip vs paintBox(+184)/viewport(+200),
     if drawable -> set item+21=1, write clipRect item+216..228, requireLayerId
     (LABEL_28) -> item+424=layerId, item+20=1, then emit affineCopy/meshCopy/
     bezierPatchCopy via TJS dispatch on the acquired Layer.
-  - Loop B (over a3 boundsList): per group item, union child clip rects, acquire
+  - Loop B (over a3 boundsList): per group item, seed with group paintBox and
+    union visible child paintBox values, acquire
     composed Layer (item+324 via Window.mainWindow.Layer ctor), setSize/fillRect,
     alpha-mask child loop (Motion_doAlphaMaskOperation), set item+21/16/216..228.
 
-So the requireLayerId / item+20 materialization is an EXECUTE-phase action in the
-binary. The local port moved it into the build loop (commit d51cce9) as a fidelity
-trade; values match (trace 0-diff) but the phase placement is divergent. See P1-I3.
+The current local `renderToCanvasLike_0x6C7440` calls `buildRenderCommands` only
+under the same `!priorDraw` gate; that helper now owns the two `0x6C4E28` loops.
+Thus the old P1-I3 phase-divergence verdict below is superseded; the helper name
+does not move the operation to the earlier render-item construction function
+`0x6C2334`.
 
 `Player_buildRenderTree_guess @0x6CBCE4` is mis-named: it is actually
 **get/acquireLayerById** — a std::map<int,LayerVariant> (Rb_tree keyed by layerId)
@@ -88,15 +100,15 @@ item+18 = v298;                              // == inheritedFlag18 || (node+48!=
   node+1996/priorDraw value timing difference between frames. Needs runtime trace
   of node.priorDraw + inheritedFlag18 + forceVisible at m2logo items[1] frame12.
 
-## rawFlag20 (item+20) VERDICT — ALIGNED (value), phase-divergent (P1-I3)
+## rawFlag20 (item+20) VERDICT — ALIGNED in the 0x6C4E28 pre-walk
 
 Binary: item+20 latched =1 ONLY at LABEL_28 in Player_emitRenderItem_requireLayer
 (execute phase), gated `drawFlag19 && drawable(v80<v84 && v83<v85 && !item+16) &&
 item+20==0`. item+424=layerId from requireLayerId dispatch. Other paths never
 touch item+20.
-Local: latched in build loop (commit d51cce9) when same gate holds; value matches
-(trace 0-diff, build_flow yuzulogo 242->0). Phase moved execute->build = fidelity
-trade, see P1-I3.
+Local: latched by `buildRenderCommands`, which is now the local source-level body
+for the `0x6C4E28` pre-walk and is called from `renderToCanvasLike_0x6C7440` under
+the same `!priorDraw` gate. The historical function name is not a phase change.
 
 ## Render-item offset table (binary item = operator new(0x1B0)=432B; sub_6C2334 alloc @0x6c2754)
 
@@ -128,9 +140,9 @@ trade, see P1-I3.
 | +280 | int | meshType = node+2000 (0x6c2684); switch 0/1/2 | meshType | ✅ |
 | +300 | int | (memset 0 @0x6c2770) | — | ❓ |
 | +304 | tTJSVariant | leaf layer (sub_A0FB64 v79+304 @0x6c533c) | leafLayer | ✅ |
-| +320 | int | composed flag/count (memset @0x6c2774; tested @0x6c62e0 item+320) | composedBuilt-ish | ❓ verify |
+| +320 | `tTJSVariant` internal tag | `item+304` leafLayer 的 type/tag word；0x6C62E0 测试后 CopyRef 同一 +304 Variant | `leafLayer.Type()` | ✅ 2026-07-23 纠错：不是独立 flag/count |
 | +324 | tTJSVariant | composed Layer (Loud B sub_A0FB64 v94+324 @0x6c6114) | composedLayer | ✅ |
-| +340 | int/_OWORD | composed-built flag (tested !item+340 @0x6c5f94) | composedBuilt | ❓ verify int vs bool |
+| +340 | `tTJSVariant` internal tag | `item+324` composedLayer 的 type/tag word；`!item+340` 即 Variant 未初始化 | `composedLayer.Type()` | ✅ 2026-07-23 纠错：不是独立 bool |
 | +344..  | deque | mesh vertices (meshCopy src node+344) | meshPoints | ⚠ STL |
 | +364 | int | (memset region) | — | — |
 | +368 | int | bezier precision = node+368 (0x6c5bac) | meshPoints precision | ❓ |
@@ -144,10 +156,10 @@ trade, see P1-I3.
 
 | id | func@addr | local file:line | sev | one-line |
 |----|-----------|-----------------|-----|----------|
-| I1 | Player_emitRenderItem_requireLayer@0x6C4E28 | PlayerRenderItems/Execute/Targets | P1 | requireLayerId+item+20 live in EXECUTE phase (called from renderToCanvas/sub_6C9CA8), local moved to build loop — value-equiv, phase-divergent |
+| I1 | Player_emitRenderItem_requireLayer@0x6C4E28 | PlayerRenderExecute/Targets | CLOSED 2026-07-23 | local helper name remains `buildRenderCommands`, but it is invoked from `0x6C7440`'s `!priorDraw` pre-walk and now contains requireLayerId/item+20 plus leaf/group emission |
 | I2 | sub_6C2334@0x6c33c0 | PlayerRenderItems.cpp:477 | OK | skipFlag1 = !(inherited18||priorDraw) EXACT; node+48=priorDraw PROVEN @0x6bc6c4 |
 | I3 | sub_6C2334@0x6c5240/0x6c5e6c | RuntimeSupport.h:257 | OK | rawFlag20 latch gate matches; value-aligned (trace 0-diff) |
-| I4 | sub_6C2334 item alloc 0x1B0 | RuntimeSupport.h:252-321 | P2 | item is raw 432B new; local NativeRenderItemFields+PreparedRenderItem = STL structs (vector/variant/string) — PLATFORM-class container divergence, always ⚠ per CLAUDE.md |
+| I4 | sub_6C2334 item alloc 0x1B0 | RuntimeSupport.h / MotionNode owner | ABI evidence | 0x1B0 is Android ARM64 object size, not a cross-ABI layout target；container topology must be judged from constructors/mutators, not byte size alone |
 | I5 | item+216..228 clipRect | RuntimeSupport.h | CLOSED 2026-07-23 | binary 与 local 均为 float[4]；harness 同步使用 `std::array<float,4>` |
 | I6 | Player_drawCompat@0x6D5FB8 D3D path | PlayerDrawDispatch.cpp | P1? | player+909(wasD3DMode) re-render-to-D3DAdaptor + captureCanvas path — verify local has this branch (Web D3D stub) |
 | I7 | Player_DrawSLA@0x6D5658 | SeparateLayerAdaptor/PlayerRenderTargets | P1 | two SLA sub-paths gated by ogl_accurate_render (byte_1AB84F4): RenderMotionFrame vs sub_6C9CA8+sub_6CE938 — verify local distinguishes accurate vs non-accurate |
@@ -155,26 +167,22 @@ trade, see P1-I3.
 | I9 | Player_renderToCanvas@0x6c7440 first skip | PlayerRenderExecute.cpp:~462-528 | OK→verify | skip = item+17||item+16||!item+232; item+18 skip preview-gated @a1+1096 — confirm local replicates preview gate |
 | I10| Player_emitRenderItem mesh switch | PlayerRenderExecute.cpp | P2 | meshType 0/1/2 -> affineCopy/bezierPatchCopy/meshCopy via TJS dispatch; verify local emits all three (analysis notes only affineCopy historically) |
 
-## MISSING (binary present, local absent/unverified)
+## 2026-07-23 current open items（取代旧 MISSING 清单）
 
-- Player_drawToLayerCompat @0x6D2D80 nodeType==3 recursive child fillRect path
-  (gate player+544) — confirm local has a drawToLayer/nodeType-3 recursion.
-- Player_DrawSLA accurate-render sub_6C9CA8 + sub_6CE938 branch (ogl_accurate_render).
-- Player_ResolveSLATarget PrivateMotionGLL lazy-create + SetSize.
-- Player_renderToCanvas alpha-mask child loop (Motion_doAlphaMaskOperation, item+244&...)
-  in Loop B of Player_emitRenderItem (composed/group items).
-- item internal offsets +52/+56/+300/+320/+340/+368 local mapping unconfirmed.
+- `0x6C9CA8` accurate-SLA persistent child-Layer tree remains unimplemented outside
+  HEADLESS diagnostics.
+- `0x6C5264..0x6C532C` caller-local payload passed to `0x6C6B48` still has only a
+  value-initialized local placeholder, not a reconstructed dedicated value type.
+- `0x6C7440` remains split into a wrapper and executor helper locally; this is a
+  source-structure gap even though the current submit dataflow is aligned.
 
-## Architecture-level (🔧)
+## Architecture-level（2026-07-23 correction）
 
-- I1/I4: The binary render item is a single 432B raw `new(0x1B0)` block consumed
-  in-place across build(sub_6C2334) and execute(sub_6C4E28/6C7440). The local port
-  splits it across two STL structs (NativeRenderItemFields + PreparedRenderItem)
-  with std::vector/std::string/tTJSVariant members and moves requireLayerId from
-  execute->build. This is the standing "container + phase" divergence; trace is
-  0-diff so behaviour is preserved, but it is not byte/phase 1:1. Reconciling
-  requires (a) a single raw-ish item POD, (b) restoring requireLayerId to the
-  execute pass. High regression risk; do under CI per prior review guidance.
+- 432B is the NDK/ARM64 compiler's object layout evidence. The wasm32 source port
+  must reproduce C++ fields, ownership and container selection, not `_padN` or
+  `offsetof` values. Current standing gaps are the acquire caller payload,
+  accurate-SLA tree, and wrapper/executor source-function split—not ARM64 padding
+  and not a requireLayerId phase move.
 
 ## IDB changes applied (idb_save done)
 

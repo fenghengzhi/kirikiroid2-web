@@ -234,7 +234,7 @@ namespace motion {
 
             // Aligned to Player_calcBounds @ 0x6C40B0 (libkrkr2.so):
             //   v30 = 1 << nodeType
-            //   v31 = completionType ? 0x1449 : 0x1441
+            //   v31 = preview ? 0x1449 : 0x1441
             //   if ((v31 & v30) == 0 || !*(BYTE*)(node+200)) skip
             // The actual native gate is the Path A nodeType mask PLUS
             // node.source.valid (node+0xC8) — NOT drawFlag (Path B) and

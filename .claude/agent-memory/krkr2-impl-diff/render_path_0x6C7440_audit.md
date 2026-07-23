@@ -13,12 +13,14 @@ of sub_6C7440 — that loose wording (still in ResourceManager.h:25 comments) is
 structurally FALSE. 6C4E28 is a DISTINCT binary function = the SLA-build path
 (per-item affineCopy/meshCopy/bezierPatchCopy with requireLayerId +
 SeparateLayerAdaptor materialization, then per-group setSize/fillRect/
-Motion_doAlphaMaskOperation, ends in Player_evaluateTimelines_guess). Called by
+Motion_doAlphaMaskOperation, and on normal return ends in
+SeparateLayerAdaptor_ClearRetiredLayerMap_guess @0x6C72E4). Called by
 BOTH sub_6C7440 and sub_6C9CA8. It shares only the LEAF helpers (sub_6C715C
 vertex builder, sub_6C1B70 source resolver, sub_6AF104 alpha mask) with 6C7440.
-Local has NO single fn mirroring 6C4E28 (logic scattered in PlayerRenderExecute
-clip/latch + persistNativeRenderItemFieldLifetimeLike_0x6C4E28) → MISSING/
-mis-modeled.
+**2026-07-23 correction:** local `buildRenderCommands` now mirrors 6C4E28 with
+an explicit leaf emitter + group compose pass, SLA ordered-map ownership,
+leaf/composed Variants and their real type-tag gates. The former MISSING verdict
+is superseded.
 
 **Render-path decomposition map (binary ground truth):**
 Player_drawCompat 0x6D5FB8 dispatches 3 ways: Player_drawD3D 0x6D5B90 →
@@ -30,9 +32,10 @@ Player_drawCompat 0x6D5FB8 dispatches 3 ways: Player_drawD3D 0x6D5B90 →
   sub_6C1B70+6A7518, sub_6AF104, sub_6ADFBC, sub_6ADE24, sub_6CE7D8, the 10
   Phase3 callees (6BC000/6BC4F0/6BD8DC/6BDA28/6BDCC0/6BDE94/6BE0C0/6BEDD0/6BF0DC/
   6C0528 — binary genuinely has 10 separate phase-3 fns, local split FAITHFUL).
-- SPLIT (1 binary fn → many local): sub_6C7440 → buildRenderCommands +
-  executeLayerRenderCommands + renderToCanvasLike (+invented PreparedRenderItem
-  vector / _renderLayerStates map / lambda recursion); sub_6C2334 (monolithic
+- SPLIT (1 binary fn → local wrapper+executor): sub_6C7440 →
+  renderToCanvasLike + executeLayerRenderCommands；旧 `buildItemOutput` lambda
+  recursion 已删除，`buildRenderCommands` 是独立二进制 0x6C4E28 的 counterpart，
+  不再错误计入 0x6C7440；sub_6C2334 (monolithic
   recursive tree-build) → appendPreparedRenderItems + prepareRenderItems +
   applyPreparedRenderItemTranslateOffsets; Player_updateLayers 0x6BB33C (P1+P2
   INLINE in one fn) → updateLayersPhase1_PreLoop + updateLayersPhase2_MainLoop.
@@ -43,10 +46,12 @@ Authoritative addrs confirmed:
 
 **sub_6C7440 = Player_renderToCanvas_guess (the real draw).** Single monolithic
 loop over render-item list `a3` (item stride drives `*a3..a3[1]`). For EACH item
-it directly dispatches TJS FuncCall on the render-layer INSTANCE (v370): setClip →
+it dispatches target operations through the global Layer class accessor (v370),
+with target render-layer as objthis: setClip →
 loadSource(sub_6C1B70) → operateAffine/operateMesh/operateBezierPatch (item+280
-selects: 0=affine,1=bezier,2=mesh) OR the buffered bufLayer path (when blend&0xF
-or item+264 children) using setSize/affineCopy/meshCopy/bezierPatchCopy/fillRect
+selects: 0=affine,1=bezier,2=mesh) OR the buffered bufLayer path (blend low nibble
+1..5，或 completionType!=0，或 item+264 parent 非空) using
+setSize/affineCopy/meshCopy/bezierPatchCopy/fillRect
 then operateRect. Also drawMeshFrame/drawBezierPatchFrame/drawLine debug overlays
 gated on a1+1048/a1+1068. Final setClip(reset).
 
@@ -77,15 +82,16 @@ use flag 1024). Local PlayerUpdateAnchor.cpp:44/48 passes flag 0. Real gap but
 inert (PropGet flag 1024 = TJS_IGNOREPROP-ish; width/height succeed either way on
 Layer). Severity LOW.
 
-**MAJOR ARCHITECTURE DIVERGENCE (the headline):** Binary sub_6C7440 is a single
-in-place loop that dispatches drawing primitives through the render-LAYER instance
-via TJS FuncCall, with a per-player color-array object (+716) and bufLayer pulled
-from +656. Local splits into buildRenderCommands (PlayerRenderExecute.cpp:13) +
-executeLayerRenderCommands (:249) using std::vector<PreparedRenderItem>,
-per-item reusable leaf/composed Layer slots, _renderLayerStates map, lambdas
-(buildItemOutput recursion). The local "direct vs buffered" split and the
-recursion over childItems is a reorganization, not the binary's flat loop. The
-TJS dispatch primitives themselves (operateAffine/operateRect/affineCopy via
-FuncCall on the right instance) ARE preserved via callLayer*Like_0x6C7440 helpers.
-Verdict: data-flow/容器 NOT 1:1 (vector+map+lambda recursion vs flat loop +
-per-player scratch objects); call-chain to TJS primitives IS faithful.
+**2026-07-23 current verdict:** 0x6C7440 的 flat item loop、priorDraw-only prewalk、
+direct/buffered gate、一次 source resolve、RM.bufLayer、ancestor walk、Variant owners、
+参数类型、异常 unwind 和边界分支已落地。descriptor→color→source→accessor 保持
+item-scope 生命区间。目标 width/height、setClip、operate*、operateRect 经同一个 Layer
+class accessor dispatch，target 仅作 objthis且不再先探测 native instance；
+source/RM/bufLayer 保持实例调用。
+旧 child recursion / leaf-as-buffered-source / `_renderLayerStates` 普通路径均已
+删除。仍有源代码函数边界差异：本地把入口/尺寸/prewalk 放在
+`renderToCanvasLike_0x6C7440`，提交循环放在 `executeLayerRenderCommands`；
+`Player::_renderLayerStates` 也仍只存在于 HEADLESS accurate-SLA 诊断（J8）。
+普通 0x6C4E28 SLA pass 已恢复 active/retired Rb_tree swap、sequence reset、acquire 搬回
+复用，以及仅正常尾部 Invalidate/clear retired 的非 RAII 生命周期；异常路径故意跳过尾清理。
+0x6C4E28 的 acquire caller payload 专用值类型仍未同构，不能把普通渲染簇整体标成 100%。

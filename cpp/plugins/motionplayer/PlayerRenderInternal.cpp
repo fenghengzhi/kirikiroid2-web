@@ -48,17 +48,14 @@ namespace motion::internal::render_detail {
     }
 
     tjs_error callLayerOperateAffineLike_0x6C7440(
-        const tTJSVariant &layerClassObject,
+        iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *renderLayerObject,
         const tTVPPointD *points,
         const tTJSVariant &sourceObject,
         const tTVPRect &sourceRect,
         tTVPBlendOperationMode blendMode,
-        tjs_int opacity,
-        tTVPBBStretchType type) {
-        if(!renderLayerObject || !points ||
-           layerClassObject.Type() != tvtObject ||
-           !layerClassObject.AsObjectNoAddRef()) {
+        tjs_int opacity) {
+        if(!layerClassObject || !renderLayerObject || !points) {
             return TJS_E_FAIL;
         }
         if(sourceObject.Type() != tvtObject ||
@@ -80,7 +77,9 @@ namespace motion::internal::render_detail {
         tTJSVariant y2(points[2].y);
         tTJSVariant mode(static_cast<tjs_int32>(blendMode));
         tTJSVariant opa(static_cast<tjs_int32>(opacity));
-        tTJSVariant stretchType(static_cast<tjs_int32>(type));
+        // 0x6C8D38 materializes this final type argument as a literal Integer 0;
+        // completionType is only part of the direct-branch gate.
+        tTJSVariant stretchType(static_cast<tjs_int>(0));
 
         tTJSVariant *args[] = {
             &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
@@ -91,7 +90,7 @@ namespace motion::internal::render_detail {
         static tjs_uint32 operateAffineHint = 0;
         // libkrkr2.so 0x6C7440 dispatches through the Layer class object and
         // passes the render layer only as objthis.
-        return layerClassObject.AsObjectNoAddRef()->FuncCall(
+        return layerClassObject->FuncCall(
             0, TJS_W("operateAffine"), &operateAffineHint, nullptr, 15, args,
             renderLayerObject);
     }
@@ -130,70 +129,134 @@ namespace motion::internal::render_detail {
             &useAffineMatrix, &x0, &y0, &x1, &y1, &x2, &y2,
             &typeArg, &clearArg,
         };
-        tjs_uint32 hint = 0;
-        return renderLayerObject->FuncCall(0, TJS_W("affineCopy"), &hint,
-                                           nullptr, 14, args,
-                                           renderLayerObject);
+        return renderLayerObject->FuncCall(
+            0, TJS_W("affineCopy"),
+            &motion::detail::affineCopyMemberHint_guess, nullptr, 14, args,
+            renderLayerObject);
     }
 
     tjs_error callLayerOperateRectLike_0x6C7440(
+        iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *renderLayerObject,
-        tjs_int destX,
-        tjs_int destY,
+        tjs_real destX,
+        tjs_real destY,
         const tTJSVariant &sourceObject,
-        const tTVPRect &sourceRect,
+        tjs_real sourceWidth,
+        tjs_real sourceHeight,
         tTVPBlendOperationMode blendMode,
         tjs_int opacity) {
-        if(!renderLayerObject || sourceObject.Type() != tvtObject ||
+        if(!layerClassObject || !renderLayerObject ||
+           sourceObject.Type() != tvtObject ||
            !sourceObject.AsObjectNoAddRef()) {
             return TJS_E_FAIL;
         }
         // libkrkr2.so sub_6C7440 L"operateRect" block (argc=9):
         // [dx, dy, src, sx, sy, sw, sh, mode, opa]. Dispatched on the
-        // render-layer instance. The registered Layer.operateRect method
-        // resolves the source object's main image internally.
+        // Layer class accessor with the target render-layer as objthis. The
+        // registered Layer.operateRect method resolves the source object's
+        // main image internally.
         tTJSVariant dx(destX);
         tTJSVariant dy(destY);
         tTJSVariant sourceArg(sourceObject);
-        tTJSVariant srcLeft(sourceRect.left);
-        tTJSVariant srcTop(sourceRect.top);
-        tTJSVariant srcWidth(sourceRect.get_width());
-        tTJSVariant srcHeight(sourceRect.get_height());
+        tTJSVariant srcLeft(static_cast<tjs_int>(0));
+        tTJSVariant srcTop(static_cast<tjs_int>(0));
+        tTJSVariant srcWidth(sourceWidth);
+        tTJSVariant srcHeight(sourceHeight);
         tTJSVariant mode(static_cast<tjs_int32>(blendMode));
         tTJSVariant opa(static_cast<tjs_int32>(opacity));
         tTJSVariant *args[] = {
             &dx, &dy, &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
             &mode, &opa,
         };
-        tjs_uint32 hint = 0;
-        return renderLayerObject->FuncCall(0, TJS_W("operateRect"), &hint,
-                                           nullptr, 9, args, renderLayerObject);
+        return layerClassObject->FuncCall(
+            0, TJS_W("operateRect"),
+            &motion::detail::operateRectMemberHint_guess, nullptr, 9, args,
+            renderLayerObject);
     }
 
-    tjs_error callLayerSetClipLike_0x6C7440(iTJSDispatch2 *renderLayerObject,
-                                            tjs_int left, tjs_int top,
-                                            tjs_int width, tjs_int height) {
-        if(!renderLayerObject) {
+    tjs_error callLayerSetSizeRealLike_0x6C7440(
+        iTJSDispatch2 *layerObject,
+        tjs_real width,
+        tjs_real height) {
+        if(!layerObject) {
+            return TJS_E_FAIL;
+        }
+        tTJSVariant widthArg(width);
+        tTJSVariant heightArg(height);
+        tTJSVariant *args[] = {&widthArg, &heightArg};
+        return layerObject->FuncCall(
+            0, TJS_W("setSize"), &motion::detail::setSizeMemberHint_guess,
+            nullptr, 2, args, layerObject);
+    }
+
+    tjs_error callLayerFillRect4Like_0x6C7440(
+        iTJSDispatch2 *layerObject,
+        tjs_real width,
+        tjs_real height) {
+        if(!layerObject) {
+            return TJS_E_FAIL;
+        }
+        tTJSVariant zeroX(static_cast<tjs_int>(0));
+        tTJSVariant widthArg(width);
+        tTJSVariant heightArg(height);
+        tTJSVariant zeroColor(static_cast<tjs_int>(0));
+        tTJSVariant *args[] = {
+            &zeroX, &widthArg, &heightArg, &zeroColor,
+        };
+        return layerObject->FuncCall(
+            0, TJS_W("fillRect"), &motion::detail::fillRectMemberHint_guess,
+            nullptr, 4, args, layerObject);
+    }
+
+    tjs_error callLayerFillRect5Like_0x6C4E28(
+        iTJSDispatch2 *layerObject,
+        tjs_real width,
+        tjs_real height) {
+        if(!layerObject) {
+            return TJS_E_FAIL;
+        }
+        tTJSVariant zeroX(static_cast<tjs_int>(0));
+        tTJSVariant zeroY(static_cast<tjs_int>(0));
+        tTJSVariant widthArg(width);
+        tTJSVariant heightArg(height);
+        tTJSVariant zeroColor(static_cast<tjs_int>(0));
+        tTJSVariant *args[] = {
+            &zeroX, &zeroY, &widthArg, &heightArg, &zeroColor,
+        };
+        return layerObject->FuncCall(
+            0, TJS_W("fillRect"), &motion::detail::fillRectMemberHint_guess,
+            nullptr, 5, args, layerObject);
+    }
+
+    tjs_error callLayerSetClipLike_0x6C7440(
+        iTJSDispatch2 *layerClassObject,
+        iTJSDispatch2 *renderLayerObject,
+        tjs_real left,
+        tjs_real top,
+        tjs_real width,
+        tjs_real height) {
+        if(!layerClassObject || !renderLayerObject) {
             return TJS_E_FAIL;
         }
         // libkrkr2.so sub_6C7440 @ 0x6c78dc: viewport-clip branch dispatches
         // (*(vtbl+16))(v370, 0, L"setClip", &hint, 0, 4, &v371, objthis) with
-        // argv = [left, top, width, height]. The argv floats are produced as
-        // v31/v32 (clip min) and (v36-v31)/(v37-v32) (clip extents); the
-        // registered Layer.setClip truncates to int (cpp/core/visual/
-        // LayerIntf.cpp:8889), so pass tjs_int directly.
+        // argv = [left, top, width, height]. 0x6C7820..0x6C78B0 constructs
+        // four type-5 Real Variants; integer conversion belongs to the
+        // registered Layer.setClip boundary and must not happen here.
         tTJSVariant l(left);
         tTJSVariant t(top);
         tTJSVariant w(width);
         tTJSVariant h(height);
         tTJSVariant *args[] = {&l, &t, &w, &h};
         static tjs_uint32 setClipHint = 0;
-        return renderLayerObject->FuncCall(0, TJS_W("setClip"), &setClipHint,
-                                           nullptr, 4, args, renderLayerObject);
+        return layerClassObject->FuncCall(0, TJS_W("setClip"), &setClipHint,
+                                          nullptr, 4, args, renderLayerObject);
     }
 
-    tjs_error callLayerResetClipLike_0x6C7440(iTJSDispatch2 *renderLayerObject) {
-        if(!renderLayerObject) {
+    tjs_error callLayerResetClipLike_0x6C7440(
+        iTJSDispatch2 *layerClassObject,
+        iTJSDispatch2 *renderLayerObject) {
+        if(!layerClassObject || !renderLayerObject) {
             return TJS_E_FAIL;
         }
         // libkrkr2.so sub_6C7440 @ 0x6c7620 (and the post-walk reset @ 0x6c8fcc):
@@ -201,9 +264,23 @@ namespace motion::internal::render_detail {
         // Same method name as the set branch; numparams==0 routes to
         // Layer.setClip's ResetClip() path (cpp/core/visual/LayerIntf.cpp:8882).
         static tjs_uint32 resetClipHint = 0;
-        return renderLayerObject->FuncCall(0, TJS_W("setClip"), &resetClipHint,
-                                           nullptr, 0, nullptr,
-                                           renderLayerObject);
+        return layerClassObject->FuncCall(0, TJS_W("setClip"), &resetClipHint,
+                                          nullptr, 0, nullptr,
+                                          renderLayerObject);
+    }
+
+    tjs_int callLayerPropGetIntLike_0x6C99B8(
+        iTJSDispatch2 *layerClassObject,
+        iTJSDispatch2 *layerObject,
+        const tjs_char *memberName,
+        tjs_uint32 *memberHint) {
+        if(!layerClassObject || !layerObject) {
+            return 0;
+        }
+        tTJSVariant value;
+        (void)layerClassObject->PropGet(
+            0, memberName, memberHint, &value, layerObject);
+        return static_cast<tjs_int>(value.AsInteger());
     }
 
     iTJSDispatch2 *buildMeshPointTJSArrayLike_0x6C715C(
@@ -213,9 +290,6 @@ namespace motion::internal::render_detail {
         // doubles (x,y,x,y,...) with each coordinate translated by the
         // (xOffset,yOffset) the binary applies before the copy/operate call.
         iTJSDispatch2 *array = TJSCreateArrayObject();
-        if(!array) {
-            return nullptr;
-        }
         tjs_int index = 0;
         for(const auto &point : points) {
             tTJSVariant x(static_cast<tjs_real>(point.x + xOffset));
@@ -265,6 +339,8 @@ namespace motion::internal::render_detail {
     //   operate: [src, sx=0, sy=0, sw, sh, points, divx, divy, mode, opa, clear]
     static tjs_error callLayerMeshFamilyLike_0x6C7440(
         const tjs_char *methodName,
+        tjs_uint32 *memberHint,
+        iTJSDispatch2 *dispatchObject,
         iTJSDispatch2 *renderLayerObject,
         const tTJSVariant &sourceObject,
         const tTVPRect &sourceRect,
@@ -276,7 +352,7 @@ namespace motion::internal::render_detail {
         tjs_int opacity,
         tTVPBBStretchType type,
         bool clear) {
-        if(!renderLayerObject || !meshPointArray ||
+        if(!dispatchObject || !renderLayerObject ||
            sourceObject.Type() != tvtObject ||
            !sourceObject.AsObjectNoAddRef()) {
             return TJS_E_FAIL;
@@ -300,9 +376,8 @@ namespace motion::internal::render_detail {
                 &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
                 &pointsArg, &divxArg, &divyArg, &modeArg, &opaArg, &clearArg,
             };
-            tjs_uint32 hint = 0;
-            return renderLayerObject->FuncCall(0, methodName, &hint, nullptr,
-                                               11, args, renderLayerObject);
+            return dispatchObject->FuncCall(0, methodName, memberHint, nullptr,
+                                            11, args, renderLayerObject);
         }
 
         // meshCopy / bezierPatchCopy: argc=10
@@ -312,9 +387,8 @@ namespace motion::internal::render_detail {
             &sourceArg, &srcLeft, &srcTop, &srcWidth, &srcHeight,
             &pointsArg, &divxArg, &divyArg, &typeArg, &clearArg,
         };
-        tjs_uint32 hint = 0;
-        return renderLayerObject->FuncCall(0, methodName, &hint, nullptr, 10,
-                                           args, renderLayerObject);
+        return dispatchObject->FuncCall(0, methodName, memberHint, nullptr, 10,
+                                        args, renderLayerObject);
     }
 
     tjs_error callLayerMeshCopyLike_0x6C7440(
@@ -322,7 +396,8 @@ namespace motion::internal::render_detail {
         const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
         tjs_int divy, tTVPBBStretchType type, bool clear) {
         return callLayerMeshFamilyLike_0x6C7440(
-            TJS_W("meshCopy"), renderLayerObject, sourceObject, sourceRect,
+            TJS_W("meshCopy"), &motion::detail::meshCopyMemberHint_guess,
+            renderLayerObject, renderLayerObject, sourceObject, sourceRect,
             meshPointArray, divx, divy, false, omAlpha, 255, type, clear);
     }
 
@@ -331,31 +406,37 @@ namespace motion::internal::render_detail {
         const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
         tjs_int divy, tTVPBBStretchType type, bool clear) {
         return callLayerMeshFamilyLike_0x6C7440(
-            TJS_W("bezierPatchCopy"), renderLayerObject, sourceObject,
-            sourceRect, meshPointArray, divx, divy, false, omAlpha, 255, type,
-            clear);
+            TJS_W("bezierPatchCopy"),
+            &motion::detail::bezierPatchCopyMemberHint_guess,
+            renderLayerObject, renderLayerObject, sourceObject, sourceRect,
+            meshPointArray, divx, divy, false, omAlpha, 255, type, clear);
     }
 
     tjs_error callLayerOperateMeshLike_0x6C7440(
+        iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *renderLayerObject, const tTJSVariant &sourceObject,
         const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
         tjs_int divy, tTVPBlendOperationMode blendMode, tjs_int opacity,
         bool clear) {
+        static tjs_uint32 operateMeshHint = 0;
         return callLayerMeshFamilyLike_0x6C7440(
-            TJS_W("operateMesh"), renderLayerObject, sourceObject, sourceRect,
-            meshPointArray, divx, divy, true, blendMode, opacity, stNearest,
-            clear);
+            TJS_W("operateMesh"), &operateMeshHint, layerClassObject,
+            renderLayerObject, sourceObject, sourceRect, meshPointArray, divx,
+            divy, true, blendMode, opacity, stNearest, clear);
     }
 
     tjs_error callLayerOperateBezierPatchLike_0x6C7440(
+        iTJSDispatch2 *layerClassObject,
         iTJSDispatch2 *renderLayerObject, const tTJSVariant &sourceObject,
         const tTVPRect &sourceRect, iTJSDispatch2 *meshPointArray, tjs_int divx,
         tjs_int divy, tTVPBlendOperationMode blendMode, tjs_int opacity,
         bool clear) {
+        static tjs_uint32 operateBezierPatchHint = 0;
         return callLayerMeshFamilyLike_0x6C7440(
-            TJS_W("operateBezierPatch"), renderLayerObject, sourceObject,
-            sourceRect, meshPointArray, divx, divy, true, blendMode, opacity,
-            stNearest, clear);
+            TJS_W("operateBezierPatch"), &operateBezierPatchHint,
+            layerClassObject, renderLayerObject, sourceObject, sourceRect,
+            meshPointArray, divx, divy, true, blendMode, opacity, stNearest,
+            clear);
     }
 
     std::array<int, 4> unpackPackedRgba(std::uint32_t packedColor) {
@@ -621,11 +702,10 @@ namespace motion::internal::render_detail {
 
     bool shouldUseDirectRenderPathLike_0x6C7440(
         const motion::detail::PreparedRenderItem &item,
-        bool clearEnabled) {
+        tjs_int completionType) {
         const unsigned lowNibble =
             static_cast<unsigned>(item.blendMode) & 0x0Fu;
-        return !clearEnabled &&
-            item.visibleAncestorIndex < 0 &&
+        return completionType == 0 && item.parentItem == nullptr &&
             (lowNibble == 0u || lowNibble > 5u);
     }
 
@@ -692,23 +772,38 @@ namespace motion::internal::render_detail {
                                int canvasWidth, int canvasHeight,
                                RenderClipRect &out,
                                std::string *failureReason) {
-        (void)canvasWidth;
-        (void)canvasHeight;
-        // sub_6C4E28 writes the render item's own paint/viewport bounds to
-        // the build-stage clip rect. It does not clamp this intermediate
-        // Layer rect to the final target canvas; final target clipping
-        // happens when the prepared Layer is submitted by sub_6C7440.
-        float clipLeft = entry.paintBox[0];
-        float clipTop = entry.paintBox[1];
-        float clipRight = entry.paintBox[2];
-        float clipBottom = entry.paintBox[3];
+        // sub_6C4E28 @0x6C5DBC..0x6C5E50 first intersects the four float
+        // paint-box values with a4 (the target/camera rect).  Only a valid
+        // viewport is rounded; without one, fractional paint-box edges remain
+        // fractional all the way into item+216..228.
+        const float cameraLeft = 0.0f;
+        const float cameraTop = 0.0f;
+        const float cameraRight = static_cast<float>(canvasWidth);
+        const float cameraBottom = static_cast<float>(canvasHeight);
+        float clipLeft = cameraLeft < entry.paintBox[0]
+            ? entry.paintBox[0]
+            : cameraLeft;
+        float clipTop = cameraTop < entry.paintBox[1]
+            ? entry.paintBox[1]
+            : cameraTop;
+        float clipRight = entry.paintBox[2] < cameraRight
+            ? entry.paintBox[2]
+            : cameraRight;
+        float clipBottom = entry.paintBox[3] < cameraBottom
+            ? entry.paintBox[3]
+            : cameraBottom;
 
-        if(entry.hasViewport && entry.viewport[2] >= entry.viewport[0]
-           && entry.viewport[3] >= entry.viewport[1]) {
-            clipLeft = std::max(clipLeft, floorf(entry.viewport[0]));
-            clipTop = std::max(clipTop, floorf(entry.viewport[1]));
-            clipRight = std::min(clipRight, ceilf(entry.viewport[2]));
-            clipBottom = std::min(clipBottom, ceilf(entry.viewport[3]));
+        if(entry.viewport[2] >= entry.viewport[0] &&
+           entry.viewport[3] >= entry.viewport[1]) {
+            const float viewportLeft = floorf(entry.viewport[0]);
+            const float viewportTop = floorf(entry.viewport[1]);
+            const float viewportRight = ceilf(entry.viewport[2]);
+            const float viewportBottom = ceilf(entry.viewport[3]);
+            clipLeft = viewportLeft < clipLeft ? clipLeft : viewportLeft;
+            clipTop = viewportTop < clipTop ? clipTop : viewportTop;
+            clipRight = clipRight < viewportRight ? clipRight : viewportRight;
+            clipBottom = clipBottom < viewportBottom ? clipBottom
+                                                     : viewportBottom;
         }
 
         if(!(clipLeft < clipRight && clipTop < clipBottom)) {
@@ -726,10 +821,10 @@ namespace motion::internal::render_detail {
             return false;
         }
 
-        out.left = static_cast<int>(floorf(clipLeft));
-        out.top = static_cast<int>(floorf(clipTop));
-        out.right = static_cast<int>(ceilf(clipRight));
-        out.bottom = static_cast<int>(ceilf(clipBottom));
+        out.left = clipLeft;
+        out.top = clipTop;
+        out.right = clipRight;
+        out.bottom = clipBottom;
         if(failureReason) {
             failureReason->clear();
         }

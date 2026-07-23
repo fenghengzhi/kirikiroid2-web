@@ -239,9 +239,10 @@ namespace motion {
     // binary callback is a gated draw-to-layer routine: param[0] is the target
     // Layer object, param[1] is the fill value (a3 in the binary, switched on
     // its variant type at *(a3+16)). The whole body is gated on the player+544
-    // dword, which is the type tag of the motion tTJSVariant at player+528, not the
-    // independent clearEnabled property at player+1144. If no motion is
-    // loaded, the binary returns immediately doing nothing.
+    // dword, which is the type tag of the motion tTJSVariant at player+528, not
+    // Player+1144 `completionType`. If no motion is loaded, the binary returns
+    // immediately doing nothing. (Corrected after the 0x6D9624/0x6D962C NCB
+    // literal binding disproved the former clearEnabled label.)
     tjs_error Player::clearCompat(tTJSVariant *result, tjs_int numparams,
                                   tTJSVariant **param, iTJSDispatch2 *objthis) {
         auto *self = ncbInstanceAdaptor<Player>::GetNativeInstance(objthis, true);
