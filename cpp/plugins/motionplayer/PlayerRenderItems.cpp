@@ -51,6 +51,110 @@ namespace {
         return result;
     }
 
+    // FCVTZS Wn, Dn, #8 as emitted by sub_698188.  Spell out the AArch64
+    // NaN/saturation boundary so malformed clip values do not fall through a
+    // C++ floating-to-integer conversion with undefined behavior.
+    inline std::uint32_t clipWeightW32Like_0x698188(double clip) {
+        if(std::isnan(clip)) return 0;
+        if(clip >= 8388608.0) return 0x7FFFFFFFu;
+        if(clip <= -8388608.0) return 0x80000000u;
+        return static_cast<std::uint32_t>(
+            static_cast<std::int32_t>(std::trunc(clip * 256.0)));
+    }
+
+    inline std::uint32_t interpolatePackedColorLike_0x698188(
+        std::uint32_t from, std::uint32_t to, std::uint32_t weight) {
+        constexpr std::uint32_t pairMask = 0x00FF00FFu;
+        const std::uint32_t inverseWeight = 256u - weight;
+        const std::uint32_t highPairs =
+            (((from >> 8) & pairMask) * inverseWeight)
+            + (((to >> 8) & pairMask) * weight);
+        const std::uint32_t lowPairs =
+            ((from & pairMask) * inverseWeight)
+            + ((to & pairMask) * weight);
+        return highPairs
+            ^ ((highPairs ^ (lowPairs >> 8)) & pairMask);
+    }
+
+    // sub_698188 @0x698188: remap the four accumulated corner colors through
+    // the source descriptor's normalized clip rectangle.  The two early
+    // returns precede the otherwise-unused Variant's lifetime in the binary.
+    inline void remapPackedColorsForSourceClipLike_0x698188(
+        const motion::detail::MotionNode::SourceState &source,
+        std::array<std::uint32_t, 4> &colors) {
+        if(source.clipLeft == 0.0 && source.clipTop == 0.0
+           && source.clipRight == 1.0 && source.clipBottom == 1.0) {
+            return;
+        }
+        if(colors[0] == colors[1] && colors[1] == colors[2]
+           && colors[2] == colors[3]) {
+            return;
+        }
+
+        tTJSVariant unusedVariant;
+        (void)unusedVariant;
+
+        std::uint32_t topLeft;
+        std::uint32_t topRight;
+        if(colors[0] == colors[1]) {
+            topLeft = colors[1];
+            topRight = colors[1];
+        } else {
+            topLeft = interpolatePackedColorLike_0x698188(
+                colors[0], colors[1],
+                clipWeightW32Like_0x698188(source.clipLeft));
+            topRight = interpolatePackedColorLike_0x698188(
+                colors[0], colors[1],
+                clipWeightW32Like_0x698188(source.clipRight));
+        }
+
+        std::uint32_t bottomLeft;
+        std::uint32_t bottomRight;
+        if(colors[2] == colors[3]) {
+            bottomLeft = colors[2];
+            bottomRight = colors[2];
+        } else {
+            bottomLeft = interpolatePackedColorLike_0x698188(
+                colors[2], colors[3],
+                clipWeightW32Like_0x698188(source.clipLeft));
+            bottomRight = interpolatePackedColorLike_0x698188(
+                colors[2], colors[3],
+                clipWeightW32Like_0x698188(source.clipRight));
+        }
+
+        std::uint32_t outputColor = topLeft;
+        if(topLeft != bottomLeft) {
+            outputColor = interpolatePackedColorLike_0x698188(
+                topLeft, bottomLeft,
+                clipWeightW32Like_0x698188(source.clipTop));
+        }
+        colors[0] = outputColor;
+
+        outputColor = topRight;
+        if(topRight != bottomRight) {
+            outputColor = interpolatePackedColorLike_0x698188(
+                topRight, bottomRight,
+                clipWeightW32Like_0x698188(source.clipTop));
+        }
+        colors[1] = outputColor;
+
+        outputColor = topLeft;
+        if(topLeft != bottomLeft) {
+            outputColor = interpolatePackedColorLike_0x698188(
+                topLeft, bottomLeft,
+                clipWeightW32Like_0x698188(source.clipBottom));
+        }
+        colors[2] = outputColor;
+
+        outputColor = topRight;
+        if(topRight != bottomRight) {
+            outputColor = interpolatePackedColorLike_0x698188(
+                topRight, bottomRight,
+                clipWeightW32Like_0x698188(source.clipBottom));
+        }
+        colors[3] = outputColor;
+    }
+
 } // anonymous namespace
 
 namespace motion {
@@ -542,6 +646,10 @@ namespace motion {
                 packedColor = multiplyPackedColorWeightsLike_0x6C2334(
                     packedColor, effectiveColor);
             }
+            // sub_6C2334 @0x6C3594 immediately passes the persistent source
+            // descriptor and the accumulated four-color array to sub_698188.
+            remapPackedColorsForSourceClipLike_0x698188(
+                node.source, entry.packedColors);
             entry.opacity = node.accumulated.opacity;
             entry.stencilComposite = node.stencilType;
             entry.coordinateMode = node.coordinateMode;

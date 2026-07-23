@@ -2,6 +2,7 @@
 
 ## Scope
 - Binary item builder: `sub_6C2334 @ 0x6C2334`
+- Binary source-clip color remap: `sub_698188 @ 0x698188`
 - Binary local-clip / layer-state stage: `sub_6C4E28 @ 0x6C4E28`
 - Binary final execute / compose stage: `sub_6C7440 @ 0x6C7440`
 - Binary child-list helpers: `sub_6C3B04 @ 0x6C3B04`, `sub_6C3C04 @ 0x6C3C04`
@@ -33,6 +34,7 @@
 | `+21` `BYTE` | Write: set `1` when clip intersection succeeds at `0x6C4F88`; set `0` when it fails at `0x6C5E6C`. `0x6C4E28` first pass skips item+19==0 entries at `0x6C5DC0` without writing this byte. Read: second pass child traversal in `0x6C7440` requires `child+21` at `0x6C82F4`; parent union in `0x6C4E28` also reads it in the second half. | Native partial-lifetime clip-valid byte: current-frame valid/invalid only when the 0x6C4E28 writer is reached; otherwise the persistent item retains its previous value. | `PreparedRenderItem::rawFlag21` lives on the persistent item owned by `MotionNode::preparedRenderItem`. item+19==0 leaves it untouched; failed intersections write only `rawFlag21=0`; successful intersections write `rawFlag21=1` plus `clipRect`. The old `renderItemNativeFieldLifetimeByNode` / `nativeLifetime*` side map has been deleted. | `Captured` |
 | `+52` `DWORD` | Write: `item+52 = node+16` at `0x6C341C`. | First `requireLayerId` result copied from node. | `PreparedRenderItem::layerId`. | `Exact` |
 | `+56` `DWORD` | Write: `item+56 = node+20` at `0x6C3428`. | Second `requireLayerId` result copied from node. | `PreparedRenderItem::layerId2`. | `Exact` |
+| `+168..180` `DWORD[4]` | `0x6C34A4..0x6C3588` first multiplies the four node colors by the inherited/player color. `0x6C358C..0x6C3594` then passes `item+0xA8` and the persistent source descriptor to `sub_698188`. That helper returns immediately for clip `{0,0,1,1}` or four equal colors; otherwise it performs horizontal L/R then vertical T/B packed interpolation with `FCVTZS #8`, `0x00FF00FF` W32 lanes, and branch-local conversions/writes. Its default `tTJSVariant` local exists only on the non-return path. | Accumulated four-corner color array after source-clip remapping. The source clip is a color-domain remap here, independent of the later target paint-box/viewport clip. | `PreparedRenderItem::packedColors`; `appendPreparedRenderItems` first applies `multiplyPackedColorWeightsLike_0x6C2334`, then calls `remapPackedColorsForSourceClipLike_0x698188(node.source, entry.packedColors)` in place. The helper preserves the two early returns, W32 saturation/wrap boundary, per-branch conversion order, and otherwise-unused Variant lifetime. | `Captured` |
 | `+184..196` `float[4]` | Write: from node bounds / child unions in `0x6C2334`. Read: `0x6C4E28` starts clip computation from `item+184..196`. | Paint box / current frame world AABB. | `PreparedRenderItem::paintBox`，build 由此原地计算 `clipRect`。 | `Exact` |
 | `+200..212` `float[4]` | Write: `item+200 = *node->1936 else invalid sentinel` at `0x6C2674`; later read in `0x6C4E28` as viewport clamp (`item+200..212`). | Viewport / clip rect inherited from `parentClipIndex` chain. | `PreparedRenderItem::viewport` + `hasViewport`. | `Exact` for normal source-backed items. Synthetic parent handling was recently corrected to stop inheriting this blindly. |
 | `+232` `DWORD` | Write: `0x6C2334` loads `node+0x628` at `0x6C3608` and stores it to `item+0xE8` at `0x6C3610`. Read: `0x6C7440` top-level gate skips when zero at `0x6C75C8`; later the same value is used as the opacity argument, including the priorDraw half-opacity path at `0x6C7638..0x6C7668`. | Top-level opacity / nonzero draw gate, not a source-object gate. | `NativePreparedRenderItemState::opacity` / `PreparedRenderItem::opacity`. Source existence remains platform/source-cache state, not item+232. | `Captured` |
@@ -110,6 +112,7 @@
 - Recently aligned:
   - independent `ownerLabel(+0)` and `commandSrc(+8)` ttstr owners
   - `layerId/layerId2`
+  - source-clip-driven four-corner color remap at `sub_698188`
   - `paintBox`
   - `viewport`
   - `stencilComposite(+244)`

@@ -1,5 +1,49 @@
 # Android `PSBFile.dll` 复原审计（2026-07-18）
 
+## 2026-07-23：render-list source-clip 四角颜色复原与 execute gate 纠正
+
+- fresh decompile/disasm `sub_6C2334@0x6C2334` 与 `sub_698188@0x698188`
+  确认，`0x6C34A4..0x6C3588` 先把四只 node packed color 分别乘以
+  inherited/player effective color；紧接着 `0x6C358C..0x6C3594` 把持久 source
+  descriptor 与 item 四色数组传给 `sub_698188`。本地原本在第一步后直接
+  继续，因此非单位 source clip 下丢失了一条真实颜色数据流。
+- helper 先对 clip `{0,0,1,1}` 精确比较并 early-return，再对四色全等
+  early-return。非平凡路径先对 `c0/c1` 与 `c2/c3` 分别按 L/R 横向
+  插值，再对左/右列分别按 T/B 纵向插值并依次写回 `c0..c3`。
+  每次权重是 `FCVTZS W,D,#8`，packed lane 用 `0x00FF00FF` 和 W32
+  乘加/回绕合并。权重转换只在对应端点不等的分支执行；clipTop/
+  clipBottom 对左右列也各自转换，不是预先统一计算。
+- `0x6981FC/0x69820C` 在两次 early-return 之后才内联初始化一只默认
+  `tTJSVariant`，`0x698424..0x69842C` 在最后一只颜色写回后析构；其值
+  未被业务消费。本地 helper 保留了这只看似 no-op 的局部 owner 及相同
+  生命区间，没有因 oracle 不可见而省略。
+- 本地对 `FCVTZS #8` 的 NaN→0、正溢出→`INT_MAX`、负溢出→`INT_MIN`
+  与向零截断做了显式处理，再以 unsigned W32 运算保留回绕。这些
+  边界除了 IDA 指令证据，还用当前 ARM64 macOS 主机上的直接
+  `FCVTZS` 最小探针交叉核对；该探针只验证 ISA 边界，不冒充 Android
+  `libkrkr2.so` 运行时 oracle。
+- 现有 tracked motion fixture 的 `getCommandList` 生产链回归现在显式设置
+  clip `{0.25,0.25,0.75,0.75}` 与四只非均匀颜色，守护
+  `appendPreparedRenderItems → source-clip remap → command.color`；期望四色由二进制
+  指令公式独立算得，不是调用生产 helper 自证。
+- 同轮 fresh `Player_renderToCanvas@0x6C7440` 证伪了旧文档中
+  “direct gate 包含 `meshType==0/stencilComposite==0`”的结论。`0x6C7B44..0x6C7B9C`
+  的结构 gate 是 blend 低位分流之后的 `clearEnabled || item+264!=0`；mesh
+  类型在分流后消费，`item+244` 用于祖先 mask。相关 analysis 已就地纠正。
+  当前未闭合的 P0 是本地 `if(item.parentItem) continue`：Android 实际会先
+  resolve source，强制进入持久 `SourceCache.bufLayer`，沿 ancestor 链逐层调
+  `Motion_doAlphaMaskOperation@0x6C8390`，再以 `operateRect@0x6C8558` 提交。
+  此缺口不能只靠删除 `continue` 修复。
+- 另一个已取证但本轮未改的边界位于 `sub_6C4E28@0x6C4E28`：
+  leaf source descriptor 在 `0x6C52AC/0x6C5300..0x6C5304` 使用 blend `0` 和四只
+  `0xFFFFFFFF`，而本地 `SourceCache.cpp` 当前传入 item blend/colors。该修正必须
+  只作用于 `0x6C4E28` leaf 边界，不得未取证地改变其他 source-cache caller。
+- 当前验证：macOS Release `motionplayer-dll` **1260/1260**（18 cases）；
+  Web Debug 最终 `index.html/index.wasm` 链接通过；`out/wasmtime/debug` 的显式
+  `krkr2_wasmtime_guest` 目标通过。第一次在 `out/web/debug` 查找同名 target
+  失败只因为该 target 属于独立 `out/wasmtime/debug` 配置；后续已在正确
+  build tree 完成，不是源码编译失败。
+
 ## 2026-07-23：raw-node alias、数值 decoder 与 media 可达性复核
 
 - `sub_598D58@0x598D58` 的真实 caller `sub_695DE8@0x696A84..0x696A90`

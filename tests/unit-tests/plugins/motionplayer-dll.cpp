@@ -1176,6 +1176,16 @@ TEST_CASE("getCommandList keeps persistent aliases and native array order") {
 
     configureRenderable(childA, 2, TJS_W("子A/α.png"), 20.0, 0);
     configureRenderable(childB, 3, TJS_W("子B/β.png"), -20.0, 3);
+    // sub_698188 @0x698188: a non-unit source clip bilinearly remaps the
+    // accumulated four corner colors with 8-bit fixed-point W32 arithmetic.
+    const std::uint32_t childAColors[4] = {
+        0x00000000u, 0x40404040u, 0x80808080u, 0xFFFFFFFFu
+    };
+    std::memcpy(childA.colorBytes, childAColors, sizeof(childAColors));
+    childA.source.clipLeft = 0.25;
+    childA.source.clipTop = 0.25;
+    childA.source.clipRight = 0.75;
+    childA.source.clipBottom = 0.75;
     childA.stencilCompositeMaskReferenced = true;
     childB.stencilCompositeMaskReferenced = true;
     childA.visibleAncestorIndex = parent.index;
@@ -1230,8 +1240,15 @@ TEST_CASE("getCommandList keeps persistent aliases and native array order") {
                 Items.size() == 3);
     REQUIRE(requireArrayNI(getProp(commandA, TJS_W("mtx")))->
                 Items.size() == 4);
-    REQUIRE(requireArrayNI(getProp(commandA, TJS_W("color")))->
-                Items.size() == 4);
+    const auto commandAColor = getProp(commandA, TJS_W("color"));
+    REQUIRE(requireArrayNI(commandAColor)->Items.size() == 4);
+    const std::uint32_t clippedColors[4] = {
+        0x33333333u, 0x5B5B5B5Bu, 0x7B7B7B7Bu, 0xB3B3B3B3u
+    };
+    for(tjs_int i = 0; i < 4; ++i) {
+        REQUIRE(getIndex(commandAColor, i).AsInteger() ==
+                static_cast<tjs_int64>(clippedColors[i]));
+    }
 
     const auto chain = getProp(commandB, TJS_W("stencilChain"));
     const auto &chainItems = requireArrayNI(chain)->Items;

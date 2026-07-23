@@ -16,7 +16,7 @@
 
 **libkrkr2.so Path A**：`Player_drawCompat (0x6D5FB8)` → `sub_6D5164 (0x6D5164)` → `sub_6C2334 (0x6C2334)` 按 `nodeType` 位掩码（`0x1441 / 0x1449`，bits {0,6,10,12} 或 {0,3,6,10,12}）决定节点是否进入 `mainList`，**完全不看 `stencilType`**。选择 `0x1441` 还是 `0x1449` 的 `Player+1092` 字节经 NCB 绑定复核后已确认是 `preview`，不是 `completionType`；TJS `completionType` 是独立的 `Player+1144 int`。每个入列节点在 `node+1904` 持有持久 RenderNode 指针、在 `node+1944` 置 `drawnThisFrame=1`；后续 `Player_renderToCanvas → sub_6C7440` 迭代 `mainList`。
 
-**当前 port 状态（2026-07-22）**：早期实现曾误把 Path B 的 `node+1960 drawFlag` 当作 Path A 入列门；当前 `PlayerRenderItems.cpp::appendPreparedRenderItems` 已按 `preview ? 0x1449 : 0x1441` 独立入列，并在 `MotionNode` 上持有 `preparedRenderItem` / `drawnThisFrame`。type3 Branch A wrapper、`item+264` 祖先链、type12 aux/child list、`stencilComposite` 以及 item/node 三组 mesh vector 均已实现。每个 draw caller 现在在栈上创建独立的 `PreparedRenderItemList mainList/auxList`，只对 main 排序并将两表沿 build/execute 调用链传递；`Player` 不再持有这些临时指针表，也不存在诊断 union。
+**当前 port 状态（2026-07-23）**：早期实现曾误把 Path B 的 `node+1960 drawFlag` 当作 Path A 入列门；当前 `PlayerRenderItems.cpp::appendPreparedRenderItems` 已按 `preview ? 0x1449 : 0x1441` 独立入列，并在 `MotionNode` 上持有 `preparedRenderItem` / `drawnThisFrame`。type3 Branch A wrapper、`item+264` 祖先链、type12 aux/child list、`stencilComposite`、item/node 三组 mesh vector，以及 `sub_698188` source-clip 四角颜色重映射均已实现。每个 draw caller 现在在栈上创建独立的 `PreparedRenderItemList mainList/auxList`，只对 main 排序并将两表沿 build/execute 调用链传递；`Player` 不再持有这些临时指针表，也不存在诊断 union。
 
 ---
 
@@ -45,6 +45,7 @@ libkrkr2.so RenderNode 的字段偏移在 `node` 结构上（Motion 节点本体
 | item+19 | drawFlag first-pass | `drawFlag`（在 `PlayerRenderItems.cpp` population 时赋值） | 已实现；不作为普通 Path A 入列门 |
 | item+21 | clip-valid，保留持久 item 的部分写生命周期 | `rawFlag21` | 已实现于节点持有的持久 item；无旁路 lifetime map |
 | item+24/+32 | children vector（仅 type12/type3 填） | `childItems` | 已有 |
+| item+168..180 | 继承/player 颜色乘算后，再由 `sub_698188` 按 source clip 重映射的四角 packed colors | `packedColors` | 已按两次 early-return、分支内 `FCVTZS #8`、W32 lane 插值与 Variant 局部生命期实现 |
 | **item+244** | stencil/composite 标志（node+52 拷贝） | `stencilComposite` | 已实现并完成语义命名 |
 | **item+264** | ancestor-chain 指针；wrapper/普通 item population 按可见祖先写入 | `parentItem` | 已实现；type12 post-pass 不反推子 item 的 parent |
 | item+344/+376/+400 | composite / raw Bezier patch / affine-transformed patch 三个独立 `std::vector<MeshPoint>` | `commandCompositeMeshPoints` / `commandBezierPatchPoints` / `meshPoints` | 已实现；不是同一 vector 的别名 |
@@ -61,7 +62,7 @@ libkrkr2.so RenderNode 的字段偏移在 `node` 结构上（Motion 节点本体
 | **`sub_6C2334` @ 0x6C2334** | 遍历 node deque，按 nodeType mask 构建 flat mainList + 特殊 auxList | `PlayerRenderItems.cpp::appendPreparedRenderItems()` | **主体已实现** — mask 为 `_preview ? 0x1449 : 0x1441`；type3 Branch A wrapper、普通 item、type12 aux/child list 和持久 node-owned item 均已落地；main/aux 由 caller-stack 持有 |
 | `sub_6D5264` Player_applyTranslateOffset | 给 mainList 每项加 cameraOffset | `PlayerRenderItems.cpp::applyPreparedRenderItemTranslateOffsets(mainList)` | 已实现为独立后处理，只遍历 mainList |
 | **`sub_6C4E28` @ 0x6C4E28** | 两 pass：leafLayer 渲染 + auxList 复合聚合 | `PlayerRenderExecute.cpp::buildRenderCommands()` | leaf 与 aux 复合 pass 已拆开；aux 来源已包含 type3 Branch A 与 type12 |
-| **`sub_6C7440` @ 0x6C7440** | 最终合成主循环，迭代 mainList，LABEL_59 direct path / LABEL_63 composed path | `PlayerRender.cpp:1810` 附近外层循环 + `PlayerRender.cpp:1863`(direct) / `PlayerRender.cpp:1670+`(buffered) | **部分实现** — direct/buffered 分支均在，但 `shouldUseDirectRenderPathLike_0x6C7440` (L495) 的判据是 `visibleAncestorIndex<0 && blend.lowNibble ∈ {0} ∪ {6..15}`，**少了 "stencilType!=0 ⇒ composed" 和 "item+264!=0 ⇒ composed"** 两个原生 gate（见 §7.3） |
+| **`sub_6C7440` @ 0x6C7440** | 最终合成主循环，迭代 mainList，direct / buffered 后提交 | `PlayerRenderExecute.cpp::executeLayerRenderCommands()` | **部分实现** — fresh `0x6C7B44..0x6C7B9C` 证据表明结构 gate 是 blend 低位分流，随后 `clearEnabled || item+264 != 0` 强制 buffered；`meshType` 和 `item+244` 不是这个 gate。本地仍在外层对 `parentItem` 直接 `continue`，且内层 direct 判据混入 `hasChildren/visibleAncestorIndex`，导致原生的 parent buffered→祖先 mask→`operateRect` 链不可达（见 §7.3） |
 
 ---
 
@@ -120,7 +121,7 @@ LABEL_8:
 4. **mainList flat**。type0 叶节点（如 moji_y）就是 top-level item，vertices 已 world-space。
 5. **auxList 只装 type12 复合父 + type3 wrapper**，`sub_6C7440` 不直接迭代，仅 `sub_6C4E28` Pass 2 用于 composedLayer 聚合。
 6. **type12 secondary loop**：`node+28==12 && (node+52 & 4) && node+1944` → push auxList + self-seed `item+24` + 按子 nodeType (0 直 append / 3 preview 直 append, 非 preview splice grandchildren) 分流。
-7. **direct vs composed**：`sub_6C7440` direct path 的结构门包含 `meshType==0 && item+244_stencil==0 && item+264==0`；`parentItem` 已进入本地 gate，但 mesh/stencil 的最终 direct 判据仍应继续逐分支核对，不能因 Branch A 已实现就宣告整个 execute path 完全一致。
+7. **direct vs buffered**：fresh `sub_6C7440` 指令证据证伪了旧结论。`meshType` 和 `item+244_stencil` 不属于结构 gate；先按 blend 低 4 位分流，再以 `clearEnabled || item+264!=0` 进入 buffered。`item+264` 非空不是 skip，而是后续祖先 alpha-mask 链的起点。
 
 ---
 
@@ -137,7 +138,7 @@ LABEL_8:
 
 ---
 
-## 7. 当前对齐状态（2026-07-22）
+## 7. 当前对齐状态（2026-07-23）
 
 ### 7.1 已纠正的旧结论
 
@@ -161,7 +162,8 @@ LABEL_8:
 
 - 原生 `mainList` 与 `auxList` 已恢复为 draw caller 栈上的两个临时 `std::vector<PreparedRenderItem *>`；build 只排序 main，translate 只遍历 main，build-command 阶段接收 main/aux，最终 execute 只提交 main。
 - `NativePreparedRenderItemState` 的 owner 声明顺序已使 C++ 逆序析构与 `sub_6F4DFC @ 0x6F4DFC` 一致；Web 平台附加状态位于派生 `PreparedRenderItem`，在 native semantic base 之前析构。这是源码声明顺序/生命周期复原，不是 ARM64 数值偏移复原。
-- 仍需继续核对 `sub_6C7440` 的 direct/composed 最终 gate：`meshType`、`stencilComposite`、`parentItem` 三项的逐分支行为不能由 Branch A 已实现外推为整条最终提交路径完全对齐。
+- fresh `sub_6C7440@0x6C7440` 已纠正旧文档：direct/buffered 结构 gate 不包含 `meshType==0` 或 `stencilComposite==0`。`meshType` 在分流后选 affine/Bezier/mesh，`item+244` 在祖先 mask 处消费。
+- 当前真实缺口是 parented item 的调用链：原生先解析 source，因 `item+264!=0` 强制使用持久 `SourceCache.bufLayer`，再沿 `item+264` 链逐层调 `Motion_doAlphaMaskOperation@0x6C8390`，最后 `operateRect@0x6C8558`。本地外层 `if(item.parentItem) continue` 使这条链整体不可达；只删 `continue` 也不足以复原中间 layer/mask 生命期。
 
 ---
 
@@ -171,3 +173,4 @@ LABEL_8:
 2. type3 motion：确认 wrapper 只在原生 Branch A 条件下创建，`parentItem` 指向可见祖先的持久 item。
 3. type12 motion：确认同一持久 parent item 同时进入 main/aux，并按 preview 分支直接 append 或 splice child list。
 4. meshType 1/2 motion：分别核对 raw patch、transformed patch、composite grid 三个 vector 的 owner、swap/copy 与 division 参数。
+5. parented item：确认 source resolve 在 parent gate 之前，复用 `SourceCache.bufLayer`，按 `parentItem` 链逐层 mask，并以 `operateRect` 提交。
