@@ -8,7 +8,10 @@ Android 12 / API 31 `userdebug` arm64-v8a AVD 上的正式 ADB/RPC/Frida runner 
 - raw octet/storage：`0x598268/0x598538 → 0x598708 → 0x598960`，均 `status=ok`；
 - MDF：2026-07-23 外部物料快照中的 50,708-byte `.ks.scn` 经两入口均解为
   700,308-byte PSB 并通过 strict refresh；该快照的 142 只天然 MDF 全部可正常解压，
-  没有 failure 样本；2026-07-24 当前 checkout 的 `reference/` 含 0 个普通文件；
+  没有 failure 样本。2026-07-24 后续恢复的当前 `reference/` 再次包含 142 只 `mdf\0`
+  `.scn`；只读 zlib 全量复扫为 142/142 成功、0 failure、71 份去重 decoded 内容。对当前
+  220 只 PSB/MDF candidate 去重并从 root 递归遍历 packed Array/Dictionary 后，110 份唯一
+  内容、23,414,992 个可达节点全部解析成功，tag `0x0B` 仍为 0；
 - seed filter：203,302 字节与独立 host xorshift 全量一致，Frida 捕获
   `0x598268 → 0x598708 → 0x6863CC → 0x598960`；
 - tag `0x09` 整数边界：天然 `m2logo.mtn@0x36F8` 的
@@ -227,8 +230,11 @@ raw-node 侧 `0x598B58/0x598C58/0x598D58/0x598E44/0x598E64/0x5992E8/
 0x599438/0x599554/0x5995D8/0x5996E4` 逐项确认：try miss 不写 out、hit 先 Release
 目标再安装/AddRef；strict helper-return 清空 sret；contains 在 tag switch 前构造临时 raw
 node；keys 仅在 Dictionary gate 后构造 reusable string。String 的 `0x2C` 和 Resource 的
-非资源 tag 都刻意使用 index 0，resource chunkData-null 不写 size；数值截断、tag `0x0B`
-不扩 bit55、packed W32 wrap 与 UXTW/SXTW 也全部一致。剩余只有 helper/source spelling
+非资源 tag 都刻意使用 index 0，resource chunkData-null 不写 size；数值截断、packed W32
+wrap 与 UXTW/SXTW 也全部一致。2026-07-24 fresh disasm 又纠正了 tag `0x0B`：
+`GetDouble`/dispatch assign 读取完整 7 字节且不扩 bit55，但 `GetInt@0x599544` 只执行一次
+4 字节 `LDUR W0,[X8,#1]`，不会读取 `node+5..7`；本地现已拆开这两条 fault/data-flow
+边界。剩余只有 helper/source spelling
 无法由 stripped binary 唯一判定，不构成实现差异。
 
 2026-07-22 的 allocator-family 复核补充：`0x598268/0x598538` 的四个 raw/MDF
@@ -252,11 +258,12 @@ relative 仍按 `0x59783C..0x597840` 保持 W32 + SXTW；两类扩展没有互�
 负 8/16 位路径直接 `LDRSB/LDURSH W0; RET`，float/double 路径也以 `FCVTZS W0` 返回；若
 接口返回有符号 64 位，这些负值路径在 X0 中会变成错误的正数。四个 direct caller 另以
 `SCVTF D0,W0` 明确做 signed-32 转换。因此返回类型语义现已闭合为有符号 32 位，本地
-`tjs_int` 签名正确；宽 tag 路径遗留的 X0 高半部不属于 32 位 ABI 结果。两只 getter的
-nested CFG 与最小 codegen 对照支持四个共享 decoder-shaped
-边界，本地已用 `_guess` helper 复原；精确名字和“inline helper vs 显式 nested switch”仍开放。
-其中 tag `0x0B` 的共享 64-bit decoder 读取完整 56 位且不扩展 bit55，GetInt 的高字节读取
-被优化掉只说明 wrapper 最终截断，不再被当成源码只读低 32 位的证据。
+`tjs_int` 签名正确；宽 tag 路径遗留的 X0 高半部不属于 32 位 ABI 结果。两只 getter 的
+nested CFG 与最小 codegen 对照支持 decoder-shaped 边界；精确名字和“inline helper vs
+显式 nested switch”仍开放。此前据此把 tag `0x0B` 也并入共享 64-bit decoder 是错误的：
+fresh `GetInt@0x599438` 逐指令结果在 `0x599544..0x599548` 明确只有低 4 字节 load+return，
+不存在可被 wrapper 优化掉的 `node+5..7` 读取。本地因此只让 `GetDouble` 使用完整 56-bit
+decoder，`GetInt` 保留独立低字读取。
 
 2026-07-23 的真实 arm64 oracle 进一步闭合天然 tag `0x09`：固定 SHA-256 的
 `m2logo.mtn` 节点在公开 TJS Dictionary/Array 路径得到 type 4、payload `4278190080`；
@@ -507,6 +514,7 @@ closure，返回的 Dictionary 仍可 `PropGet("name")`。这直接守护
 checkout 缺少 `reference/xp3/logo_test_oracle.xp3`。2026-07-23 曾在外部 ignored
 `reference/` 快照恢复该现成文件（SHA-256
 `9d9f336dcccb5370a433f87b81054c74ff5099e2bd18a499e0f1ccf769158a7f`），只闭合了当时的输入
-可用性，不能倒推当轮 runner 已实际进入 guest。2026-07-24 当前 checkout 的
-`reference/` 又是空目录；如需引用 motion playback 运行结果，必须以物料实际存在时的独立
-执行记录为准。
+可用性，不能倒推当轮 runner 已实际进入 guest。后续恢复后的当前 `reference/` 已重新包含
+该物料；提交 `9d731e0b21498d47886a0993a0bac03759b82bc9` 对应的独立 Differential run
+`30084689336` 已实际完成 Wasmtime guest、Android oracle 与最终 trace/PNG hash compare，
+workflow conclusion 为 success。

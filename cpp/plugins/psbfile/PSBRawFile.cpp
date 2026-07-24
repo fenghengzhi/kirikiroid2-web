@@ -24,8 +24,9 @@ namespace PSB {
         }
 
         // The nested jump tables in GetDouble @ 0x5992E8 and GetInt @
-        // 0x599438 expose the same four decoder-shaped regions. Shared
-        // inlined helpers reproduce that data flow, but their original names,
+        // 0x599438 expose corresponding decoder-shaped regions except for
+        // GetInt's tag-0x0b low-word-only path @ 0x599544. Shared inlined
+        // helpers reproduce only the common data flow; their original names,
         // member/free-function identity, and exact factorization are not
         // present in the binary, hence the _guess suffixes.
         tjs_int DecodeInteger32_guess(const std::uint8_t *node) {
@@ -64,8 +65,9 @@ namespace PSB {
                          << 32));
                 case 0x0b:
                     // GetDouble @ 0x599410..0x599424 materializes all seven
-                    // bytes without extending bit 55. In this shared-helper
-                    // reconstruction GetInt later truncates the result to W32.
+                    // bytes without extending bit 55. GetInt has a distinct
+                    // low-word-only path @ 0x599544 and does not use this
+                    // decoder for tag 0x0b.
                     return static_cast<tjs_int64>(
                         detail::ReadUnaligned_guess<std::uint32_t>(node + 1) |
                         (static_cast<std::uint64_t>(
@@ -527,7 +529,9 @@ namespace PSB {
 
     tjs_int PSBRawNode::GetInt() const {
         // sub_599438 @ 0x599438 is the outer tag dispatcher. Its nested
-        // 0x599484/0x5994AC jump tables are the inlined integer decoders above.
+        // 0x599484/0x5994AC jump tables inline the integer decoders. Tag 0x0b
+        // is a distinct low-word-only load @ 0x599544; unlike GetDouble, it
+        // must not read the remaining three encoded bytes.
         // LDRSB/LDURSH/FCVTZS write W0 on negative/numeric paths; 18 direct
         // consumers read W0 (four via signed SCVTF D0,W0) and two discard it.
         // This closes the return semantics as signed 32-bit even though some
@@ -545,9 +549,10 @@ namespace PSB {
                 return DecodeInteger32_guess(node_);
             case 0x09:
             case 0x0a:
-            case 0x0b:
             case 0x0c:
                 return static_cast<tjs_int>(DecodeInteger64_guess(node_));
+            case 0x0b:
+                return detail::ReadUnaligned_guess<std::int32_t>(node_ + 1);
             case 0x1d:
             case 0x1e:
                 return static_cast<tjs_int>(DecodeFloat_guess(node_));

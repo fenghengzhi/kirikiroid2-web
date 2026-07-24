@@ -272,13 +272,13 @@
   分支都执行，但 committed assertions 不冒充 allocator family/释放时点的直接验证；后两项
   仍由 IDA 指令和源码对照证明。该 fixture 不覆盖 Win RGBA8/A8L8、KRKR palette 或 RL
   分支；仓库没有相应现成 fixture，本轮不制造物料。
-- `GetInt@0x599438` 与 `GetDouble@0x5992E8` 都呈 outer tag switch 加
-  32-bit integer / 64-bit integer / float / double 四组 nested decoder 的形状。本地此前
-  各写一只 monolithic switch，现抽出四个共享 `_guess` decoder，再由两只 outer wrapper
-  分派。精确 helper 名、member/free 身份以及“inline helper”还是源码显式 nested switch
-  仍不能仅由优化后二进制唯一判定；`_guess` 保留该不确定性。tag `0x0B` 在 64-bit decoder
-  中读取完整 56 位且不扩展 bit55；`GetInt` 机器码只读低 32 位是 wrapper 截断后的优化结果，
-  不再被误记成 decoder 源码只读四字节。
+- `GetInt@0x599438` 与 `GetDouble@0x5992E8` 都呈 outer tag switch 加 decoder-shaped
+  nested CFG；精确 helper 名、member/free 身份以及“inline helper”还是源码显式 nested
+  switch 仍不能仅由优化后二进制唯一判定。2026-07-24 fresh disasm 纠正了此前把 tag
+  `0x0B` 强行归入共享 64-bit decoder 的结论：`GetDouble` 会读取完整 7 字节且不扩展
+  bit55，但 `GetInt@0x599544..0x599548` 只读取 `node+1` 的低 4 字节并返回 W0，没有任何
+  `node+5..7` 读取。该差异影响损坏/页边界节点的 first-fault 行为，不能用健康输入数值相同
+  或“wrapper 截断优化”抹平；本地现已拆分这两条数据流。
 - fresh decompile `EnsureContainer@0x599E04`、`Resolve@0x59A4B0`、
   `GetListAt@0x5999F4` 与 `ContainsDictionaryKey@0x5995D8` 未发现新的本地差异。
   对现有资产的 packed table 做独立只读解析：`ezsave.pimg` root 是 11-key Dictionary，
@@ -1903,19 +1903,21 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
   本地此前把第二次结果保存为 `size_t`，会让超过 4 GiB 的 storage 边界偏离 Android。
   现已恢复为 `std::uint32_t` 局部量，同时保留先做 64-bit 最小尺寸检查的调用顺序。
 
-- 2026-07-19 fresh decompile 并核对 ARM64 指令
+- 2026-07-19 fresh decompile 并核对 ARM64 指令，2026-07-24 又以完整函数 disasm 纠正
+  tag `0x0B` 的读取范围：
   `PSBValueDispatch` 惰性转换 `0x59673C`、node `GetDouble@0x5992E8` 与
   `GetInt@0x599438`：整数 tag `0x05..0x0A` 分别执行 signed 8/16/24/32/40/48-bit
-  扩展，tag `0x0C` 原样读取 64-bit；但 tag `0x0B` 的 7 字节路径只拼接低 56 位，
-  **不**把 bit55 扩展到最高字节。`GetInt@0x599438` 自身对 tag `0x09/0x0A/0x0C`
+  扩展，tag `0x0C` 原样读取 64-bit。dispatch assign 与 `GetDouble` 的 tag `0x0B`
+  7 字节路径只拼接低 56 位，**不**把 bit55 扩展到最高字节；`GetInt` 的 tag `0x0B`
+  则在 `0x599544` 仅加载低 32 位。`GetInt@0x599438` 自身对 tag `0x09/0x0A/0x0C`
   会留下完整 X0，但完整 20 个 direct xref 中 18 个只消费 W0，另两个丢弃返回值。后续逐指令
   复核进一步闭合了返回宽度：负 8 位路径是 `LDRSB W0; RET`，负 16 位路径是
   `LDURSH W0; RET`，float/double 转换也分别以 `FCVTZS W0` 返回；若源码返回有符号
   `tjs_int64`，这些路径会错误地产生正的 64 位值。四个 caller 又以 `SCVTF D0,W0` 明确按
   signed-32 消费。因此原接口的类型语义可确认是有符号 32 位（本地 `tjs_int`），宽 tag
-  路径遗留的 X0 高半部只是 32 位返回 ABI 的非结果状态。惰性 TJS Integer 与 double 转换仍会
-  观察到差异。本地通用
-  reader 已恢复 Android 的 7-byte zero-extension 边界。仓库没有天然 tag `0x0B` 物料，
+  路径遗留的 X0 高半部只是 32 位返回 ABI 的非结果状态。惰性 TJS Integer、double 与 raw
+  GetInt 的三条 tag `0x0B` 数据流并不相同；本地完整 7-byte decoder 只服务前两条，raw
+  GetInt 另走 4-byte load。仓库没有天然 tag `0x0B` 物料，
   按规则未构造 fixture。2026-07-23 又用天然 `m2logo.mtn` 的 tag `0x09` 正数
   `0xFF000000` 做真实 arm64 oracle：惰性 TJS Variant 为 type 4、payload `4278190080`，
   raw `GetInt` 的 X0 为同值、W32 为 `-16777216`，`GetDouble` 为 `4278190080.0`。
@@ -2425,13 +2427,17 @@ roundtrip 全部 `status=ok` 的 ADB/RPC/Frida 结果；一次性 adapter smoke 
 1. 使用现有天然损坏资产覆盖 MDF zlib 失败及 filter 后 offset 校验失败；MDF 成功路径已
    用本机现有 `.ks.scn` 在 Android oracle 验证，但仓库没有已提交 MDF fixture；media/TJS
    注册路径已由现有 PIMG 闭合。2026-07-19 曾对当时外部可用的 142 个 MDF 与 222 个
-   解包后 PSB 做只读普查，未发现天然失败样本。那是 2026-07-23 外部物料快照；截至
-   2026-07-24 当前 checkout 的 `reference/` 含 0 个普通文件，不能再写成“当前有 142 只”。
-   没有现成失败物料时记录验证缺口，不从零伪造 fixture。
+   解包后 PSB 做只读普查，未发现天然失败样本。2026-07-24 后续恢复后的当前
+   `reference/` 已重新包含 142 只 `mdf\0` `.scn`；本轮只读 zlib 全量复扫再次得到
+   142/142 成功、0 failure、71 份去重 decoded 内容。当前 220 只 PSB/MDF candidate
+   去重后的 110 份内容又从 root 递归遍历了 23,414,992 个 packed 可达节点，全部解析成功。
+   因此物料已恢复，但仍不存在天然 zlib failure 样本；记录验证缺口，不从零伪造 fixture。
 2. packed-table 的 tag/width/stride 分支已逐项反编译；剩余工作是用现有损坏资产或
-   Android oracle 核对真实越界/崩溃表现，包括损坏 table、tag `0x0B` 的 7-byte
-   zero-extension quirk 与 >4 GiB storage 截断边界；tag `0x09` 的 5-byte positive 已由
-   天然 `m2logo.mtn` 在 TJS/raw 两层闭合。不能为了测试主动构造新 fixture。
+   Android oracle 核对真实越界/崩溃表现，包括损坏 table、tag `0x0B` 在 dispatch/
+   GetDouble 的 7-byte zero-extension 与 raw GetInt 的 4-byte-only first-fault 分歧，以及
+   >4 GiB storage 截断边界；tag `0x09` 的 5-byte positive 已由
+   天然 `m2logo.mtn` 在 TJS/raw 两层闭合。当前恢复物料的 23,414,992 个可达节点中仍没有
+   tag `0x0B`，不能为了测试主动构造新 fixture。
 3. media 已覆盖 array listing、空段 miss、同 container miss、缺失 container 异常与旧缓存
    保留。此前“只有一只可加载 container”的断言已被现有加密 motion PSB 证伪；当前测试已
    覆盖 `ezsave → motion → ezsave` 的成功跨-container replacement，以及旧 stream 在 owner
